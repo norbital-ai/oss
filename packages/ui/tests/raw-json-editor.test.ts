@@ -6,7 +6,7 @@ import { browser } from './view-fixture.ts';
 import { EditorView } from '@codemirror/view';
 import { StateEffect } from '@codemirror/state';
 import type { Value } from '../src/kinds/kind.ts';
-import { readViewUrl } from '../src/filter/filter.ts';
+import { readViewUrl } from '../src/filter/view-state.svelte.ts';
 const { mount, flushSync, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./json-schema-harness.svelte');
 const settle = async () => {

@@ -11,7 +11,6 @@ import type {
 	Where,
 	WorkspaceQuery
 } from '../../src/index.ts';
-import type { ReadFailed } from '../../src/decl/errors.ts';
 import type { ReadableName } from '../../src/decl/names.ts';
 import type { ModelWhere } from '../../src/decl/where.ts';
 import type { Eff } from '../../src/decl/ctx.ts';
@@ -21,7 +20,7 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(value: T): T => value;
 type Answer<X> = X extends Eff<infer A, unknown> ? A : never;
 
-declare const caller: CallerQuery<ReadFailed>;
+declare const caller: CallerQuery;
 declare const db: WorkspaceQuery;
 /** A template's reader over both native reads (hr-payroll's `Read`): one read request, either answer. */
 declare const both: <const R extends ReadRequestBase>(
@@ -32,8 +31,7 @@ declare const after: Cursor;
 
 // ── a read request answers each root's own rows; a named ref layer replaces its FK ──
 const layered = caller.query({
-	orders: { where: { status: { eq: 'draft' } }, fields: ['number', 'due', 'customer'] },
-	'orders.customer': { fields: ['name'] },
+	orders: { where: { status: { eq: 'draft' } }, fields: ['number', 'due', 'customer'], customer: { fields: ['name'] } },
 	customers: { where: { id: { eq: customer } }, limit: 5, after }
 });
 type LayeredOrder = Answer<typeof layered>['orders']['rows'][number];
@@ -85,9 +83,9 @@ caller.query({ orders: { all: true } });
 // @ts-expect-error K7 an absent optional is absent, not `undefined` (exactOptionalPropertyTypes)
 caller.query({ orders: { limit: 1, after: undefined } });
 // @ts-expect-error K8 a layer the root does not declare
-caller.query({ orders: {}, 'orders.owner': {} });
+caller.query({ orders: { owner: {} } });
 // @ts-expect-error K10 `after` belongs to a root
-caller.query({ orders: {}, 'orders.lines': { after } });
+caller.query({ orders: { lines: { after } } });
 // @ts-expect-error K11 the keyed `{ alias: { from } }` form is gone
 caller.query({ o: { from: 'orders' } });
 declare const answer: Answer<typeof layered>;
@@ -102,7 +100,7 @@ db.query({ orders: { all: true } });
 // @ts-expect-error K7 workspace
 db.query({ orders: { limit: 1, after: undefined } });
 // @ts-expect-error K8 workspace
-db.query({ orders: {}, 'orders.owner': {} });
+db.query({ orders: { owner: {} } });
 // @ts-expect-error K2 joint
 both({ nope: {} });
 // @ts-expect-error K4 joint
@@ -112,4 +110,4 @@ both({ orders: { all: true } });
 // @ts-expect-error K7 joint
 both({ orders: { limit: 1, after: undefined } });
 // @ts-expect-error K8 joint
-both({ orders: {}, 'orders.owner': {} });
+both({ orders: { owner: {} } });

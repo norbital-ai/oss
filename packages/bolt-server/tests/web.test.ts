@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { FacilityFailure } from '@norbital-ai/bolt/errors';
-import { isPublicWebAddress, makeRequestPage, WEB_PAGE_BYTE_LIMIT } from '@norbital-ai/bolt/node';
+import { is_public_web_address, make_request_page, WEB_PAGE_BYTE_LIMIT } from '@norbital-ai/bolt/node';
 import { readPublicPage } from '../src/web.ts';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
@@ -38,9 +38,9 @@ describe('public web connector', () => {
 			'2001:db8::1',
 			'2002:7f00:1::'
 		])
-			expect(isPublicWebAddress(address), address).toBe(false);
+			expect(is_public_web_address(address), address).toBe(false);
 		for (const address of ['1.1.1.1', '8.8.8.8', '2606:4700:4700::1111'])
-			expect(isPublicWebAddress(address), address).toBe(true);
+			expect(is_public_web_address(address), address).toBe(true);
 	});
 
 	it.live('pins a checked address and returns the final URL after public redirects', () =>
@@ -230,7 +230,7 @@ describe('public web connector address selection', () => {
 					: '<h1>Thuế thu nhập cá nhân</h1>';
 				const binding: Options = {
 					resolve: async () => [{ address: '1.1.1.1', family: 4 }],
-					request: makeRequestPage(
+					request: make_request_page(
 						makeFakeRequest([], gzipSync(body), () => false, {
 							'content-encoding': 'gzip',
 							'content-type': 'text/html; charset=utf-8'
@@ -290,7 +290,7 @@ describe('public web connector address selection', () => {
 						{ address: '2606:4700:4700::1111', family: 6 },
 						{ address: '1.1.1.1', family: 4 }
 					],
-					request: makeRequestPage(makeFakeRequest(attempts))
+					request: make_request_page(makeFakeRequest(attempts))
 				};
 				const result = yield* read(binding, 'https://example.test/');
 				expect(result._tag, JSON.stringify(result)).toBe('Success');
@@ -308,7 +308,7 @@ describe('public web connector address selection', () => {
 					{ address: '1.0.0.1', family: 4 },
 					{ address: '1.1.1.1', family: 4 }
 				],
-				request: makeRequestPage(
+				request: make_request_page(
 					makeFakeRequest(attempts, '<h1>reached</h1>', (address) => address !== '1.1.1.1')
 				)
 			};
@@ -325,7 +325,7 @@ describe('public web connector address selection', () => {
 			const attempts: Array<Attempt> = [];
 			const binding: Options = {
 				resolve: async () => [{ address: '2606:4700:4700::1111', family: 6 }],
-				request: makeRequestPage(makeFakeRequest(attempts))
+				request: make_request_page(makeFakeRequest(attempts))
 			};
 			const result = yield* read(binding, 'https://example.test/');
 			expect(result).toMatchObject({
@@ -366,7 +366,7 @@ describe('public web connector address selection', () => {
 				const address = server.address();
 				if (address === null || typeof address === 'string') throw new Error('no port');
 				const url = new URL(`https://localhost:${address.port}/`);
-				const requestPage = makeRequestPage();
+				const requestPage = make_request_page();
 				expect(
 					yield* Effect.flip(
 						requestPage(url, [{ address: '127.0.0.1', family: 4 }]).pipe(

@@ -11,26 +11,20 @@
 	import { cn } from '../primitives/utils.js';
 	import type { Json } from '../client/contract.js';
 	import { useBolt } from '../client/context.js';
-	import {
-		fromWhere,
-		nodeParts,
-		ORDER_MAX_KEYS,
-		pathLabel,
-		pathOf,
-		sortText,
-		type Node as FilterRow,
-		type Part,
-		type SortKey
-	} from './filter.js';
+	import { fromWhere } from './where.js';
+	import { nodeParts, pathLabel, sortText, type Part } from './text.js';
+	import { ORDER_MAX_KEYS, type SortKey } from './order.js';
+	import { pathOf } from './catalog.js';
+	import type { Node as FilterRow } from './node.js';
 	import FilterNode from './FilterNode.svelte';
 	import AddFilter from './AddFilter.svelte';
 	import FilterSummary from './FilterSummary.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
-	import { recordLabels } from '../record/labels.svelte.js';
+	import { record_labels } from '../record/labels.svelte.js';
 	import { humanize, msg } from '../text/messages.js';
 	import { useKinds } from '../kinds/context.js';
 	import type { ViewState } from './view-state.svelte.js';
-	import type { FilterVariables } from './filter.js';
+	import type { FilterVariables } from './operators.js';
 	import { watch } from 'runed';
 
 	let {
@@ -69,7 +63,7 @@
 	} = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
-	const named = recordLabels(bolt, () => kinds.catalog ?? catalog);
+	const named = record_labels(bolt, () => kinds.catalog ?? catalog);
 	let text = $state(''),
 		busy = $state(false),
 		applied = $state(false),
@@ -102,9 +96,15 @@
 		view.setOrder(view.order.map((x, j) => (j === i ? k : x)));
 	const move = (i: number, d: -1 | 1) => {
 		const o = [...view.order];
-		[o[i], o[i + d]] = [o[i + d]!, o[i]!];
+		const selected = o[i], neighbor = o[i + d];
+		if (selected === undefined || neighbor === undefined) return;
+		[o[i], o[i + d]] = [neighbor, selected];
 		view.setOrder(o);
 	};
+	function addSort(): void {
+		const field = sortable.find((f) => !view.order.some((o) => o.field === f));
+		if (field !== undefined) view.setOrder([...view.order, { field, dir: 'asc' }]);
+	}
 	function describe(e?: Event) {
 		e?.preventDefault();
 		if (busy || text.trim() === '') return;
@@ -142,15 +142,15 @@
 						if (event.key === 'Enter') describe(event);
 					}}
 					disabled={busy}
-					placeholder={msg(bolt, 'view.describe', 'Describe what to show…')}
-					aria-label={msg(bolt, 'view.describe', 'Describe what to show…')}
+					placeholder={msg(bolt, 'view.describe')}
+					aria-label={msg(bolt, 'view.describe')}
 				/>
 				<button
 					type="button"
 					onclick={() => describe()}
 					disabled={busy || text.trim() === ''}
 					class="bg-primary text-primary-foreground grid size-8 shrink-0 place-items-center rounded-md disabled:opacity-50"
-					aria-label={msg(bolt, 'view.apply', 'Apply filter and sort')}
+					aria-label={msg(bolt, 'view.apply')}
 				>
 					<Icon
 						icon={busy ? 'lucide:loader-circle' : 'lucide:arrow-right'}
@@ -159,22 +159,22 @@
 				</button>
 			</div>
 		{:else}<p class="flex-1 text-sm font-medium">
-				{msg(bolt, 'view.title', 'Filters & sort')}
+				{msg(bolt, 'view.title')}
 			</p>{/if}
 		{#if !readonly && view.rows.length + view.order.length > 0}
 			<button
 				type="button"
 				class="text-muted-foreground hover:text-foreground shrink-0 text-xs"
 				data-clear
-				onclick={() => view.clear()}>{msg(bolt, 'view.clearAll', 'Clear all')}</button
+				onclick={() => view.clear()}>{msg(bolt, 'view.clearAll')}</button
 			>
 		{/if}
 	</header>
 	{#if busy}<p role="status" class="text-muted-foreground text-xs" data-view-loading>
-			{msg(bolt, 'view.applying', 'Applying filter and sort…')}
+			{msg(bolt, 'view.applying')}
 		</p>
 	{:else if applied}<p role="status" class="text-xs text-primary" data-view-applied>
-			{msg(bolt, 'view.applied', 'Filter and sort applied')}
+			{msg(bolt, 'view.applied')}
 		</p>{/if}
 	<!-- a description that built nothing is an error the person must act on, never a quiet note beside "applied" -->
 	{#if failed && view.notice}<p
@@ -190,8 +190,8 @@
 	{#if authorParts !== null}
 		<p class="text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs" data-author-where>
 			<Glyph name="lock" class="size-3 shrink-0" /><span class="shrink-0"
-				>{msg(bolt, 'view.always', 'Always')}:<span class="sr-only"
-					>{msg(bolt, 'view.prefilter', 'Prefilter · read only')}</span
+				>{msg(bolt, 'view.always')}:<span class="sr-only"
+					>{msg(bolt, 'view.prefilter')}</span
 				></span
 			>
 			<FilterSummary parts={authorParts} class="whitespace-normal break-words overflow-visible [&_[data-part=field]]:font-normal" />
@@ -207,7 +207,7 @@
 				icon="lucide:chevron-right"
 				class="size-3.5 transition-transform group-open:rotate-90"
 			/>
-			{msg(bolt, 'view.matchAll', 'Show records that match all of:')}
+			{msg(bolt, 'view.matchAll')}
 		</summary>
 		<div class="compact-controls mt-2 flex flex-col gap-2" data-view-builder>
 			<section class="flex flex-col gap-1.5" data-filter-rows>
@@ -225,15 +225,15 @@
 							offers={view.offers}
 							{variables}
 							top
-							onChange={(x) => setRow(i, x)}
-							onRemove={() => view.setRows(view.rows.filter((_, j) => j !== i))}
+							on_change={(x) => setRow(i, x)}
+							on_remove={() => view.setRows(view.rows.filter((_, j) => j !== i))}
 						/>
 					{/if}
 				{/each}
 				{#if !readonly}
 					<AddFilter
-						onCondition={() => view.setRows([...view.rows, blank])}
-						onGroup={() => view.setRows([...view.rows, { t: 'group', join: 'or', of: [blank] }])}
+						on_condition={() => view.setRows([...view.rows, blank])}
+						on_group={() => view.setRows([...view.rows, { t: 'group', join: 'or', of: [blank] }])}
 					/>
 				{/if}
 			</section>
@@ -241,7 +241,7 @@
 			{#if sortable.length > 0 || view.order.length > 0}
 				<details class="border-t pt-2" data-sort-rows>
 					<summary class="text-muted-foreground cursor-pointer text-xs"
-						>{msg(bolt, 'view.sort', 'Sort')} ({view.order.length})</summary
+						>{msg(bolt, 'view.sort')} ({view.order.length})</summary
 					>
 					<div class="mt-2 flex flex-col gap-1.5">
 						{#each view.order as k, i (k.field)}
@@ -253,9 +253,9 @@
 								{:else}
 									<Combobox
 										class="w-auto"
-										aria-label={msg(bolt, 'view.sortField', 'Sort by')}
+										aria-label={msg(bolt, 'view.sortField')}
 										value={k.field}
-										onChange={(f) => {
+										on_change={(f) => {
 											if (f !== null) setKey(i, { ...k, field: f });
 										}}
 										options={sortable
@@ -267,14 +267,14 @@
 									/>
 									<Combobox
 										class="w-auto"
-										aria-label={msg(bolt, 'view.direction', 'Direction')}
+										aria-label={msg(bolt, 'view.direction')}
 										value={k.dir}
-										onChange={(d) => {
+										on_change={(d) => {
 											if (d !== null) setKey(i, { ...k, dir: d });
 										}}
 										options={[
-											{ value: 'asc' as const, label: msg(bolt, 'view.asc', 'Ascending') },
-											{ value: 'desc' as const, label: msg(bolt, 'view.desc', 'Descending') }
+											{ value: 'asc' as const, label: msg(bolt, 'view.asc') },
+											{ value: 'desc' as const, label: msg(bolt, 'view.desc') }
 										]}
 									/>
 								{/if}
@@ -283,21 +283,21 @@
 										type="button"
 										class="text-muted-foreground hover:bg-muted grid size-8 place-items-center rounded-sm disabled:opacity-40"
 										disabled={i === 0}
-										aria-label={msg(bolt, 'view.up', 'Move up')}
+										aria-label={msg(bolt, 'view.up')}
 										onclick={() => move(i, -1)}>↑</button
 									>
 									<button
 										type="button"
 										class="text-muted-foreground hover:bg-muted grid size-8 place-items-center rounded-sm disabled:opacity-40"
 										disabled={i === view.order.length - 1}
-										aria-label={msg(bolt, 'view.down', 'Move down')}
+										aria-label={msg(bolt, 'view.down')}
 										onclick={() => move(i, 1)}>↓</button
 									>
 									<span class="flex-1"></span>
 									<button
 										type="button"
 										class="text-muted-foreground hover:bg-muted grid size-8 place-items-center rounded-sm"
-										aria-label={msg(bolt, 'view.removeRow', 'Remove')}
+										aria-label={msg(bolt, 'view.removeRow')}
 										data-remove
 										onclick={() => view.setOrder(view.order.filter((_, j) => j !== i))}>×</button
 									>
@@ -309,14 +309,7 @@
 								type="button"
 								class="text-muted-foreground hover:text-foreground self-start text-xs"
 								data-add-sort
-								onclick={() =>
-									view.setOrder([
-										...view.order,
-										{
-											field: sortable.find((f) => !view.order.some((o) => o.field === f))!,
-											dir: 'asc'
-										}
-									])}>+ {msg(bolt, 'view.addSort', 'Add sort')}</button
+								onclick={addSort}>+ {msg(bolt, 'view.addSort')}</button
 							>
 						{/if}
 					</div>

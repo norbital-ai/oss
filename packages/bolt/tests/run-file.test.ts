@@ -5,14 +5,14 @@ import { Effect } from 'effect';
 import { resolver } from '../src/node/bundler/resolver.ts';
 import { bundler } from '../src/node/bundler/index.ts';
 import type { Bundled } from '../src/engine/contracts.ts';
-import { treeDigest } from '../src/engine/artifact/read.ts';
-import { BROKEN, filesOf, RENDER, REPORT, type Tree } from './support/run-file-trees.ts';
+import { tree_digest } from '../src/engine/artifact/read.ts';
+import { BROKEN, files_of, RENDER, REPORT, type Tree } from './support/run-file-trees.ts';
 
 const mounted = (tree: Tree) =>
-	new Map(filesOf(tree).map(([path, bytes]) => [`/app/${path}`, bytes] as const));
+	new Map(files_of(tree).map(([path, bytes]) => [`/app/${path}`, bytes] as const));
 const request = (tree: Tree, entry: string) => {
-	const files = filesOf(tree);
-	return { digest: treeDigest(files), entry, files };
+	const files = files_of(tree);
+	return { digest: tree_digest(files), entry, files };
 };
 const errorsOf = (bundled: Bundled) => ('errors' in bundled ? bundled.errors : []);
 

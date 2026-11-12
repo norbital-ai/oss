@@ -7,14 +7,14 @@
 	let {
 		provider,
 		value,
-		onChange,
+		on_change,
 		busy = false,
 		t,
 		locale
 	}: {
 		provider: ProviderChoice;
 		value: ImportStartInput;
-		onChange: (value: ImportStartInput) => void;
+		on_change: (value: ImportStartInput) => void;
 		busy?: boolean;
 		t: (key: string) => string;
 		locale?: string | undefined;
@@ -26,8 +26,8 @@
 			: Intl.DateTimeFormat().resolvedOptions().timeZone
 	);
 	function choose(kind: string | null): void {
-		if (kind === 'all') onChange({ kind });
-		else if (kind === 'now') onChange({ kind, zone: timeZone });
+		if (kind === 'all') on_change({ kind });
+		else if (kind === 'now') on_change({ kind, zone: timeZone });
 		else if (kind === 'since') {
 			let date = new Date().toISOString().slice(0, 10);
 			try {
@@ -35,24 +35,24 @@
 			} catch {
 				/* The zone stays editable; Connect waits for a valid one. */
 			}
-			onChange({ kind, date: value.kind === 'since' ? value.date : date, zone: timeZone });
+			on_change({ kind, date: value.kind === 'since' ? value.date : date, zone: timeZone });
 		}
 	}
 	function native(name: string, content: string): void {
 		if (value.kind === 'native')
-			onChange({ ...value, values: { ...value.values, [name]: content } });
+			on_change({ ...value, values: { ...value.values, [name]: content } });
 	}
 </script>
 
-{#if provider.importStart !== undefined}
+{#if provider.import_start !== undefined}
 	<fieldset class="flex min-w-0 flex-col gap-3" disabled={busy} data-import-start>
 		<legend class="mb-2 text-sm font-medium">{t('Import start')}</legend>
-		{#if provider.importStart.kind === 'timestamp'}
+		{#if provider.import_start.kind === 'timestamp'}
 			<Combobox
 				aria-label={t('Import start')}
 				disabled={busy}
 				value={value.kind}
-				onChange={choose}
+				on_change={choose}
 				options={[
 					{ value: 'now', label: t('From now') },
 					{ value: 'since', label: t('Since a chosen date') },
@@ -68,7 +68,7 @@
 						required
 						value={value.date}
 						oninput={(event) =>
-							value.kind === 'since' && onChange({ ...value, date: event.currentTarget.value })}
+							value.kind === 'since' && on_change({ ...value, date: event.currentTarget.value })}
 					/>
 				</label>
 			{/if}
@@ -81,17 +81,17 @@
 						value={timeZone}
 						oninput={(event) =>
 							(value.kind === 'since' || value.kind === 'now') &&
-							onChange({ ...value, zone: event.currentTarget.value })}
+							on_change({ ...value, zone: event.currentTarget.value })}
 					/>
 				</label>
 				<p class="text-meta">
 					{value.kind === 'since'
 						? t('The chosen date starts at midnight in this IANA time zone.')
-						: provider.importStart.precision === 'second'
+						: provider.import_start.precision === 'second'
 							? t('The import start is saved when you connect or apply.')
 							: t('The host saves the current instant when you connect or apply.')}
 				</p>
-				{#if value.kind === 'now' && provider.importStart.precision === 'second'}
+				{#if value.kind === 'now' && provider.import_start.precision === 'second'}
 					<p class="text-meta" data-import-start-precision>
 						{t(
 							'This source timestamps messages to the second; the whole starting second is included.'
@@ -103,7 +103,7 @@
 				</p>
 			{/if}
 		{:else if value.kind === 'native'}
-			{#each provider.importStart.fields as field (field.name)}
+			{#each provider.import_start.fields as field (field.name)}
 				<label class="flex flex-col gap-1 text-sm">
 					<span class="text-label">{say(field.label)}</span>
 					{#if field.options !== undefined}
@@ -111,7 +111,7 @@
 							disabled={busy}
 							aria-label={say(field.label)}
 							value={value.values[field.name] ?? field.options[0]?.value ?? null}
-							onChange={(selected) => selected !== null && native(field.name, selected)}
+							on_change={(selected) => selected !== null && native(field.name, selected)}
 							options={field.options.map((option) => ({
 								value: option.value,
 								label: say(option.label)

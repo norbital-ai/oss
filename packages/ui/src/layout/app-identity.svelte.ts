@@ -26,12 +26,12 @@ export type AppIdentitySlot = { current: AppIdentity | null };
 const APP_IDENTITY_KEY = Symbol.for('norbital.ui.app-identity');
 
 /** Opens the slot for everything rendered beneath the shell. */
-export const setAppIdentitySlot = (slot: AppIdentitySlot): AppIdentitySlot =>
+export const set_app_identity_slot = (slot: AppIdentitySlot): AppIdentitySlot =>
 	setContext(APP_IDENTITY_KEY, slot);
 
 /**
  * `null` when no shell is above this component — an app mounted standalone in a test or a story.
  * Callers fall back to static metadata in that case rather than dropping identity on the floor.
  */
-export const getAppIdentitySlot = (): AppIdentitySlot | null =>
+export const get_app_identity_slot = (): AppIdentitySlot | null =>
 	getContext<AppIdentitySlot | undefined>(APP_IDENTITY_KEY) ?? null;

@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { tcpPort } from '@norbital-ai/bolt/node';
+import { tcp_port } from '@norbital-ai/bolt/node';
 import { imap } from '../src/imap-smtp/mailbox-watch.ts';
 import { mailCall, type Mailbox, type MailNet } from '../src/imap-smtp/model.ts';
 import { smtp } from '../src/imap-smtp/submit.ts';
@@ -20,7 +20,7 @@ const box = (host: string): Mailbox => ({
 });
 const login = { user: 'fixture', pass: 'fixture' };
 /** The production network: the host's public TCP/TLS port. */
-const net: MailNet = { tcp: tcpPort, plain: false };
+const net: MailNet = { tcp: tcp_port, plain: false };
 
 it.live(
 	'IMAP over the host port refuses private and metadata destinations',

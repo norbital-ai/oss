@@ -1,4 +1,5 @@
-import { withEnvoys } from './support/envoys.ts';
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // The smart throttle (P31, P33, rule 60a; §11.2 G12 (10)) through the engine entry and the test kit: a scripted `sys_1`
 // (no vendor) decides whether admitted envoy and in-app messages hold or, in an envoy's group, are filtered. It holds at
 // most 3 s and once, never filters a direct conversation, and never wedges: whatever happens to a decision, every pending
@@ -21,14 +22,18 @@ import {
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Agents } from '../src/engine/services.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
 import { HOLD_MAX_MS, SmartThrottle, TAKEOVER_MS } from '../src/engine/agent/throttle.ts';
-import type { DecisionResult, System1Request } from '../src/engine/decisions/index.ts';
+import type { DecisionResult, System1Request } from '../src/engine/decision.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
+const runtime_accounts = [
+	{ id: 'field_wa', integration: 'whatsapp', status: { state: 'connected' } },
+] as const;
+
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			jobs: {
@@ -52,13 +57,11 @@ const manifest = Result.getOrThrow(
 		},
 		teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },
 		automations: {},
-		connections: {
-			field_wa: { integration: 'whatsapp' }
-		},
+		
 
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { internal: 'Staff brief.', skills: {} }
 	})
 );
@@ -66,7 +69,7 @@ const fieldOpsEnvoy = '0199a000-0000-7000-8000-0000000000e1';
 const runtimeEnvoys = [
 	{
 		id: fieldOpsEnvoy,
-		connections: ['field_wa'],
+		accounts: ['field_wa'],
 		audience: 'private',
 		name: 'Norbius',
 		policies: ['desk'],
@@ -211,7 +214,7 @@ function decider() {
 							probabilities: {}
 						};
 				}
-				return { answers, costUsd: 0.0002, provider: 'scripted' };
+				return { answers, cost_usd: 0.0002, provider: 'scripted' };
 			})
 	};
 	return port;
@@ -240,8 +243,8 @@ const shared = Effect.runSync(
 	Effect.cached(
 		Effect.gen(function* () {
 			const context = yield* Layer.build(
-				withEnvoys(
-					TestWorkspace.layer({
+				with_envoys(
+					with_accounts(TestWorkspace.layer({
 						manifest,
 						ports: Layer.succeed(Ai, {
 							...ai,
@@ -250,7 +253,7 @@ const shared = Effect.runSync(
 							catalog: Port.unavailable('ai.catalog'),
 							embed: () => Port.unavailable('ai.embed')
 						})
-					}),
+					}), runtime_accounts),
 					runtimeEnvoys
 				)
 			);
@@ -289,7 +292,7 @@ const say = (from: string, body: string, over: { [k: string]: Json } = {}, insta
 	t.receive(instance, {
 		id: `m${++seq}`,
 		thread: from,
-		sentAt: t.clock.now(),
+		sent_at: t.clock.now(),
 		from: { handle: from, name: null },
 		text: body,
 		attachments: [],
@@ -366,7 +369,7 @@ describe('hold: at most 3 s, once', () => {
 			yield* covered();
 			expect(port.inputs).toHaveLength(1);
 			t.clock.advance('1s');
-			yield* t.runDue();
+			yield* t.run_due();
 			yield* t.settled();
 			expect(port.inputs).toHaveLength(1); // a hold is spent once: nothing is left to ask a direct conversation
 			expect(ai.requests).toHaveLength(1);
@@ -383,7 +386,7 @@ describe('hold: at most 3 s, once', () => {
 				(yield* q(`SELECT $1::timestamptz::text AS due`, until(HOLD_MAX_MS / 1000)))[0]?.['due']
 			);
 			t.clock.advance('3s');
-			yield* t.runDue();
+			yield* t.run_due();
 			yield* t.settled();
 			expect((yield* row('one long'))['delivered_turn']).not.toBeNull();
 		})
@@ -491,11 +494,21 @@ describe('filter: only an envoy group', () => {
 		Effect.gen(function* () {
 			yield* open();
 			port.script = ['ignore'];
+			const sentBefore = t.fakes.links.sent.length;
 			yield* say(DM, '@bot the Kismis job needs a contractor', {
 				...group(2),
 				invocation: 'mention'
 			});
 			yield* t.settled();
+			const question = 'Want me to assign a contractor to them?';
+			expect(t.fakes.links.sent.slice(sentBefore)).toContainEqual(expect.objectContaining({
+				instance: 'field_wa', message: expect.objectContaining({ text: question })
+			}));
+			expect(yield* q(
+				`SELECT status, sent_at IS NOT NULL AS accepted FROM sys_message
+				WHERE integration = 'field_wa' AND direction = 'outbound' AND text = $1 ORDER BY seq DESC LIMIT 1`,
+				question
+			)).toEqual([{ status: 'sent', accepted: true }]);
 			t.clock.advance('1min');
 			yield* say(DM, 'Ya put bob under them', group(2));
 			yield* t.settled();
@@ -575,7 +588,7 @@ describe('never wedged', () => {
 			yield* open();
 			yield* orphan('lost hello');
 			t.clock.advance(`${TAKEOVER_MS / 1000}s`);
-			yield* t.runDue();
+			yield* t.run_due();
 			yield* t.settled();
 			expect((yield* row('lost hello'))['delivered_turn']).not.toBeNull();
 			expect(yield* queued()).toEqual([]);
@@ -591,7 +604,7 @@ describe('never wedged', () => {
 				params: [id, conversation]
 			});
 			t.clock.advance(`${TAKEOVER_MS / 1000}s`);
-			yield* t.runDue();
+			yield* t.run_due();
 			yield* t.db.write({
 				text: `UPDATE sys_conversation SET inputs = '[]'::jsonb WHERE id = $1 RETURNING id`,
 				params: [conversation]
@@ -632,7 +645,7 @@ describe('never wedged', () => {
 				)
 			);
 			t.clock.advance('1s');
-			yield* t.runDue();
+			yield* t.run_due();
 			yield* t.settled();
 			expect(yield* queued()).toEqual([]);
 			expect(port.inputs).toHaveLength(1);

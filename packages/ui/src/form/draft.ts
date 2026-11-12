@@ -5,71 +5,54 @@ import type { ChildInput } from '../kinds/context.js';
 import {
 	initial,
 	problems,
-	valueObject,
+	value_object,
 	type Fields,
 	type Value,
 	type Kind
 } from '../kinds/kind.js';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { matchesLock } from '../record/lock.js';
+import { encode_wire } from '@norbital-ai/std/wire';
+import { UUID_PATTERN } from '@norbital-ai/std/id';
 import type { Where } from '@norbital-ai/std/kind';
 import { Equal } from 'effect';
+import type { Outcome } from '../client/contract.js';
 
 /** A row's values by field name. */
 export type Row = { readonly [field: string]: Value };
-/** A write outcome as a form settles it: committed, pending approval, refused, conflict, unknown or still running. */
-export type Outcome =
-	| {
-			kind: 'committed';
-			output: Value;
-			records: readonly { model: string; id: string; revision: number }[];
-	  }
-	| {
-			kind: 'pending_approval';
-			requestId: string;
-			records: readonly { model: string; id: string; revision: number }[];
-	  }
-	| { kind: 'refused'; code: string; message: string; field?: string; row?: number }
-	| {
-			kind: 'conflict';
-			records: readonly { model: string; id: string; fields: readonly string[] }[];
-	  }
-	| { kind: 'unknown'; invocation: string }
-	| { kind: 'running'; run: string };
-
 /** What a `Form` edits: a model's create or update allowlist, or an automation's input. */
 type FormTarget =
 	| { of: 'model'; model: string; mode: 'create' | 'update'; id?: string }
 	| { of: 'automation'; automation: string };
 export type FormSpec = {
+	locks?: ModelExposure['locks'];
 	target: FormTarget;
 	/** Editable fields in order, each with its kind (a relation FK carries its targets). */
 	fields: readonly {
 		name: string;
 		kind: Kind;
 		readonly?: true;
-		reason?: 'syncOwned' | 'ownedParent';
+		reason?: 'sync_owned' | 'owned_parent';
 		relation?: { targets: readonly string[]; where?: Where | undefined };
 	}[];
 	callable: string;
 	/** An update the caller may read but not make: every field shown locked, no submit. */
 	readonly?: true;
-	proposalOnly?: true;
+	proposal_only?: true;
 	children?: Readonly<Record<string, ChildInput>>;
 };
 
 /** The form one `of` describes, from the model's exposure; `null` when the caller has no such verb. An update the
  * caller cannot make but can read is the read-only form of the readable fields. */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
  * Where a draft waits in this browser: its page, its author and its record. A create keeps one draft per record its
  * prefill names, so a project's unfinished new trial never surfaces under another project.
  */
 export function draftKey(actor: unknown, spec: FormSpec, prefill: Row): string | undefined {
 	if (typeof location === 'undefined') return undefined;
-	const member = valueObject(actor) && typeof actor['id'] === 'string' ? actor['id'] : 'anonymous';
+	const member = value_object(actor) && typeof actor['id'] === 'string' ? actor['id'] : 'anonymous';
 	const id = spec.target.of === 'model' ? spec.target.id : undefined;
 	const parents = Object.entries(prefill)
-		.flatMap(([f, v]) => (typeof v === 'string' && UUID.test(v) ? [`${f}=${v}`] : []))
+		.flatMap(([f, v]) => (typeof v === 'string' && UUID_PATTERN.test(v) ? [`${f}=${v}`] : []))
 		.sort();
 	return `norbital.form:${location.pathname}:${member}:${spec.callable}:${id ?? ['new', ...parents].join(':')}`;
 }
@@ -98,6 +81,7 @@ export function formSpec(
 	const children = exposure[mode]?.with;
 	return {
 		...(readOnly ? { readonly: true as const } : {}),
+		...(exposure.locks === undefined ? {} : { locks: exposure.locks }),
 		target: { of: 'model', model: of, mode, ...(id === undefined ? {} : { id }) },
 		fields: [
 			...allow.columns,
@@ -107,7 +91,7 @@ export function formSpec(
 					)
 				: [])
 		].flatMap<FormSpec['fields'][number]>((name) => {
-			const reason = mode === 'update' ? exposure.readonlyFields?.[name] : undefined;
+			const reason = mode === 'update' ? exposure.readonly_fields?.[name] : undefined;
 			const readonly =
 				mode === 'update' && (readOnly || !allow.columns.includes(name) || reason !== undefined)
 					? { readonly: true as const, ...(reason === undefined ? {} : { reason }) }
@@ -136,8 +120,8 @@ export function formSpec(
 		}),
 		callable: `${of}.${mode}`,
 		...(children === undefined ? {} : { children }),
-		...(mode === 'create' && exposure.create?.proposalOnly === true
-			? { proposalOnly: true as const }
+		...(mode === 'create' && exposure.create?.proposal_only === true
+			? { proposal_only: true as const }
 			: {})
 	};
 }
@@ -164,13 +148,13 @@ export function startValues(
 
 const same = (a: Value | undefined, b: Value | undefined) =>
 	// Equal caches object comparisons; wire snapshots keep mutable drafts and exact decimals current.
-	Equal.equals(encodeWire(a ?? null), encodeWire(b ?? null));
+	Equal.equals(encode_wire(a ?? null), encode_wire(b ?? null));
 /** Only changed fields are sent (§5.10): a field no one touched never overwrites a concurrent change. */
 export const changed = (base: Row, draft: Row): Record<string, Value> =>
 	Object.fromEntries(Object.entries(draft).filter(([k, v]) => !same(base[k], v)));
 
 /** The act's input for the draft; `null` when an update has nothing to send. */
-export function payload(spec: FormSpec, base: Row, draft: Row): Value | null {
+export function payload(spec: FormSpec, base: Row, draft: Row, revision?: number): Value | null {
 	const t = spec.target;
 	// an absent optional input and a null are the same to decode; absent lets a default apply
 	const present = (row: Row) =>
@@ -182,7 +166,7 @@ export function payload(spec: FormSpec, base: Row, draft: Row): Value | null {
 				spec.fields.some((f) => f.name === name && !f.readonly)
 			)
 		);
-		return Object.keys(set).length === 0 ? null : { target: t.id ?? null, set };
+		return Object.keys(set).length === 0 ? null : { target: { id: t.id ?? null, ...(revision === undefined ? {} : { revision }) }, set };
 	}
 	return present(draft);
 }
@@ -265,16 +249,14 @@ export function settle(
 				newKey: true
 			};
 		}
-		case 'conflict': {
-			const fields = outcome.records.flatMap((r) => r.fields);
+		case 'conflict':
 			return {
 				draft: null,
 				base: { ...base },
-				errors: new Map(fields.filter((f) => f in sent).map((f) => [f, text.conflict])),
+				errors: new Map(),
 				notice: { tone: 'warning', text: text.conflict },
 				newKey: true
 			};
-		}
 		case 'unknown':
 			return {
 				draft: null,
@@ -295,19 +277,17 @@ export function settle(
 	}
 }
 
-/** The fields a state lock leaves editable (advice from the model's `state.edit`; the host enforces it, rule 40). */
-export function locked(fields: Fields, record: Row | null): (field: string) => boolean {
+/** Client advice combines terminal-state transitions with the model's constraint predicates. */
+export function locked(
+	fields: Fields,
+	record: Row | null,
+	locks: ModelExposure['locks'] = []
+): (field: string) => boolean {
 	if (record === null) return () => false;
-	const state = Object.entries(fields).find(([, k]) => k.kind === 'state');
-	if (state === undefined) return () => false;
-	const [name, kind] = state;
-	if (kind.kind !== 'state') return () => false;
-	const at = kind.states[String(record[name] ?? null)];
-	const e = at?.edit ?? 'all';
-	// the state field itself moves along `to` whatever `edit` says (the host's rule 40 check exempts it); a final state has
-	// no move left, so it is read-only
-	return (field) =>
-		field === name
-			? (at?.to ?? []).length === 0
-			: e === 'none' || (e !== 'all' && !e.includes(field));
+	const state = Object.entries(fields).find(([, kind]) => kind.kind === 'state');
+	return (field) => {
+		if (state !== undefined && state[0] === field && state[1].kind === 'state')
+			if ((state[1].states[String(record[field] ?? null)]?.to ?? []).length === 0) return true;
+		return locks.some((rule) => !rule.except?.includes(field) && matchesLock(record, rule.where));
+	};
 }

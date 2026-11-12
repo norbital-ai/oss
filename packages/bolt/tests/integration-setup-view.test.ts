@@ -3,9 +3,10 @@
 // publishes — the provider choice, a form whose refusal is shown verbatim, a QR and a code — and a definition drawn by
 // the workspace's own `+integration.svelte` when it has one. Connect and disconnect in a real browser:
 // integration-setup.browser.test.ts.
+import { required } from './support/required.ts';
 import '../../bolt-cli/src/test/dom.ts';
 import { Deferred, Effect, Layer, ManagedRuntime } from 'effect';
-import { mountEdge, run } from '@norbital-ai/ui/effect';
+import { mount_edge, run } from '@norbital-ai/ui/effect';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { beforeEach, afterEach, expect, it, vi } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
@@ -21,7 +22,7 @@ import { reactive } from './support/reactive.svelte.ts';
 const views: (() => Promise<void>)[] = [];
 let dispose: (() => Promise<void>) | undefined;
 beforeEach(() => {
-	dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 });
 afterEach(async () => {
 	for (const close of views.splice(0)) await close();
@@ -41,7 +42,7 @@ const OFFICIAL: ProviderChoice = {
 		webhook: true,
 		steps: [
 			{ text: 'Create an account', href: 'https://provider.example/console' },
-			{ text: 'Paste this webhook URL', copy: 'webhookUrl' }
+			{ text: 'Paste this webhook URL', copy: 'webhook_url' }
 		],
 		fields: [
 			{ name: 'accountSid', label: 'Account' },
@@ -67,7 +68,7 @@ const base = (more: Partial<InstanceStatus> = {}): InstanceStatus => ({
 	state: 'unpaired',
 	stored: false,
 	providers: [OFFICIAL, LINKED],
-	about: { webhookUrl: HOOK },
+	about: { webhook_url: HOOK },
 	...more
 });
 
@@ -104,7 +105,7 @@ function show(props: {
 				}),
 			unpair: () => Effect.void,
 			test: () => Effect.void,
-			importStart: (input: ImportStartInput) =>
+			import_start: (input: ImportStartInput) =>
 				Effect.sync(() => {
 					boundaries.push(input);
 					return true;
@@ -140,33 +141,33 @@ it('collects an import date on the standalone pairing view only when explicitly 
 				{
 					id: 'google',
 					label: 'Gmail',
-					importStart: { kind: 'timestamp' },
+					import_start: { kind: 'timestamp' },
 					setup: { kind: 'oauth', steps: [] }
 				}
 			],
-			importStart: null
+			import_start: null
 		})
 	});
 	await settle();
 	expect(paired).toEqual([]);
-	el.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Import start"]')!.click();
+	required(el.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Import start"]')).click();
 	await settle();
-	document.querySelector<HTMLButtonElement>('[role=option][data-value=since] button')!.click();
+	required(document.querySelector<HTMLButtonElement>('[role=option][data-value=since] button')).click();
 	await settle();
-	type(el.querySelector<HTMLInputElement>('input[name=import-start-date]')!, '2026-10-21');
-	type(el.querySelector<HTMLInputElement>('input[name=import-start-zone]')!, 'Asia/Singapore');
+	type(required(el.querySelector<HTMLInputElement>('input[name=import-start-date]')), '2026-10-21');
+	type(required(el.querySelector<HTMLInputElement>('input[name=import-start-zone]')), 'Asia/Singapore');
 	await settle();
-	button(el, 'Gmail')!.click();
+	required(button(el, 'Gmail')).click();
 	await waitPair();
 	expect(paired).toEqual([
-		{ importStart: { kind: 'since', date: '2026-10-21', zone: 'Asia/Singapore' } }
+		{ import_start: { kind: 'since', date: '2026-10-21', zone: 'Asia/Singapore' } }
 	]);
 });
 
 it('sends the form’s fields with the chosen provider, and shows the host’s refusal verbatim', async () => {
 	const { el, paired, state, waitPair } = show({ connection: base() });
 	await settle();
-	button(el, 'Official')!.click();
+	required(button(el, 'Official')).click();
 	await settle();
 	const inputs = [...el.querySelectorAll<HTMLInputElement>('[data-setup-form] input')];
 	expect(inputs.map((i) => [i.name, i.type, i.required])).toEqual([
@@ -174,19 +175,19 @@ it('sends the form’s fields with the chosen provider, and shows the host’s r
 		['authToken', 'password', true],
 		['from', 'text', true]
 	]);
-	type(inputs[0]!, ' AC1 ');
-	type(inputs[1]!, 'secret');
-	type(inputs[2]!, '+6500000000');
-	el.querySelector<HTMLFormElement>('[data-setup-form]')!.requestSubmit();
+	type(required(inputs[0]), ' AC1 ');
+	type(required(inputs[1]), 'secret');
+	type(required(inputs[2]), '+6500000000');
+	required(el.querySelector<HTMLFormElement>('[data-setup-form]')).requestSubmit();
 	await waitPair();
 	await settle();
 	expect(paired).toEqual([
 		{ provider: 'official', accountSid: 'AC1', authToken: 'secret', from: '+6500000000' }
 	]);
-	expect(inputs[1]!.value).toBe(''); // a secret is not left in the page
+	expect(required(inputs[1]).value).toBe(''); // a secret is not left in the page
 	state.error = 'The auth token does not match the account (20003).';
 	await settle();
-	expect(el.querySelector('[data-connection-error]')!.textContent).toBe(
+	expect(required(el.querySelector('[data-connection-error]')).textContent).toBe(
 		'The auth token does not match the account (20003).'
 	);
 });
@@ -204,8 +205,8 @@ it('sends a single provider’s fields alone, with no provider key', async () =>
 	const { el, paired, waitPair } = show({ connection: base({ providers: [bot] }) });
 	await settle();
 	expect(el.querySelector('[data-provider-choice]')).toBeNull();
-	type(el.querySelector<HTMLInputElement>('[data-setup-form] input')!, '123:AA');
-	el.querySelector<HTMLFormElement>('[data-setup-form]')!.requestSubmit();
+	type(required(el.querySelector<HTMLInputElement>('[data-setup-form] input')), '123:AA');
+	required(el.querySelector<HTMLFormElement>('[data-setup-form]')).requestSubmit();
 	await waitPair();
 	await settle();
 	expect(paired).toEqual([{ token: '123:AA' }]);
@@ -214,10 +215,10 @@ it('sends a single provider’s fields alone, with no provider key', async () =>
 it('draws the QR, then the code, the provider publishes while pairing; an optional field left empty is not sent', async () => {
 	const { el, paired, state, waitPair } = show({ connection: base({ provider: 'linked' }) });
 	await settle();
-	expect(el.querySelector<HTMLInputElement>('[data-setup-form] input[name=phone]')!.required).toBe(
+	expect(required(el.querySelector<HTMLInputElement>('[data-setup-form] input[name=phone]')).required).toBe(
 		false
 	);
-	el.querySelector<HTMLFormElement>('[data-setup-form]')!.requestSubmit();
+	required(el.querySelector<HTMLFormElement>('[data-setup-form]')).requestSubmit();
 	await waitPair();
 	await settle();
 	expect(paired).toEqual([{ provider: 'linked' }]);
@@ -237,7 +238,7 @@ it('draws the QR, then the code, the provider publishes while pairing; an option
 		pairing: { kind: 'code', value: 'ABCD-1234' }
 	});
 	await settle();
-	expect(el.querySelector('[data-pairing=code] code')!.textContent).toBe('ABCD-1234');
+	expect(required(el.querySelector('[data-pairing=code] code')).textContent).toBe('ABCD-1234');
 });
 
 it('draws a definition with the workspace’s own file in place of the generic views, loading it once', async () => {

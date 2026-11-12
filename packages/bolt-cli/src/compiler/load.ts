@@ -6,7 +6,7 @@ import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
 import { writeDeclarations } from './declarations.ts';
 import { ROLES, type LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
 import { SYSTEM_COLUMNS } from '@norbital-ai/store'; // hook:write
-import { treeDigest } from '@norbital-ai/bolt/artifact';
+import { tree_digest } from '@norbital-ai/bolt/artifact';
 import { SKILL_BYTES, SKILL_FILE } from '@norbital-ai/bolt/engine';
 
 export type { LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
@@ -54,7 +54,7 @@ const skillTree = Effect.fnUntraced(function* (
 			file,
 			`a skill is at most ${SKILL_BYTES / 1024 / 1024} MiB (this one is ${bytes} bytes)`
 		);
-	return { text, digest: treeDigest(files), files: files.map(([name]) => name).sort() };
+	return { text, digest: tree_digest(files), files: files.map(([name]) => name).sort() };
 });
 
 export const load = Effect.fn('bolt.load')(function* (root: string, files: readonly Discovered[]) {
@@ -62,7 +62,12 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
 	const path = yield* Path.Path;
 	if (files.some((file) => file.role === 'model' || file.role === 'integration_definition'))
 		yield* writeDeclarations(root, files);
-	const manifest = Object.fromEntries(ROLES.map((r) => [r.role, {}])) as Manifest;
+	const manifest: Manifest = Schema.decodeUnknownSync(
+		Schema.Record(
+			Schema.Literals(ROLES.map((r) => r.role)),
+			Schema.Record(Schema.String, Schema.Unknown)
+		)
+	)(Object.fromEntries(ROLES.map((r) => [r.role, {}])));
 	const errors: Diagnostic[] = [];
 	const fail = (code: Diagnostic['code'], path: string, message: string) =>
 		errors.push({ code, path, message: `${path}: ${message}` });
@@ -162,30 +167,33 @@ export function manifestErrors(
 		else {
 			const parents = new Map<string, string>();
 			for (const [handle, entry] of Object.entries(teams)) {
-				const policies = Array.isArray(entry)
-					? entry
-					: Predicate.isObject(entry)
-						? entry['policies']
-						: undefined;
-				if (!handle.trim() || !Array.isArray(policies) || !policies.every(Predicate.isString)) {
+				if (!Predicate.isReadonlyObject(entry) || Array.isArray(entry)) {
+					fail('load/team-shape', path, `team '${handle}' declares an object with its policy list`);
+					continue;
+				}
+				const policies = entry['policies'];
+				if (
+					!handle.trim() ||
+					!Array.isArray(policies) ||
+					!policies.every(Predicate.isString) ||
+					Object.keys(entry).some((key) => key !== 'name' && key !== 'parent' && key !== 'policies')
+				) {
 					fail('load/team-shape', path, `team '${handle}' declares its policy list`);
 					continue;
 				}
 				for (const policy of policies)
 					if (!Object.hasOwn(manifest.policy, policy))
 						fail('load/team-policy', path, `team '${handle}' names unknown policy '${policy}'`);
-				if (Predicate.isObject(entry)) {
-					if (
-						entry['name'] !== undefined &&
-						(typeof entry['name'] !== 'string' || !entry['name'].trim())
-					)
-						fail('load/team-name', path, `team '${handle}' has a nonempty display name`);
-					const parent = entry['parent'];
-					if (parent !== undefined && parent !== null) {
-						if (typeof parent !== 'string' || !Object.hasOwn(teams, parent))
-							fail('load/team-parent', path, `team '${handle}' names an existing parent handle`);
-						else parents.set(handle, parent);
-					}
+				if (
+					entry['name'] !== undefined &&
+					(typeof entry['name'] !== 'string' || !entry['name'].trim())
+				)
+					fail('load/team-name', path, `team '${handle}' has a nonempty display name`);
+				const parent = entry['parent'];
+				if (parent !== undefined && parent !== null) {
+					if (typeof parent !== 'string' || !Object.hasOwn(teams, parent))
+						fail('load/team-parent', path, `team '${handle}' names an existing parent handle`);
+					else parents.set(handle, parent);
 				}
 			}
 			for (const handle of parents.keys()) {
@@ -263,8 +271,8 @@ export function manifestErrors(
 
 /** The literal of a body declaration, or the export itself. */
 export function spec(d: unknown): { readonly [key: string]: unknown } {
-	const o = (d ?? {}) as { spec?: object };
-	return (o.spec ?? o) as { readonly [key: string]: unknown };
+	if (!Predicate.isReadonlyObject(d)) return {};
+	return Predicate.isReadonlyObject(d['spec']) ? d['spec'] : d;
 }
 
 /** Roles whose generated declaration binding carries a path identity. */

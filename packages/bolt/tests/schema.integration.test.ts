@@ -1,24 +1,29 @@
 /// <reference types="node" />
 // Schema on a real Postgres (PGlite 18): verified SQL migrations, one test per §5.2 / rule 68–69 guarantee.
 import { describe, expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { fromStore } from '../src/protocol/errors.ts';
+import { from_store } from '../src/protocol/errors.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { constraintIndex } from '@norbital-ai/store';
-import { plan, readApplied, type SchemaSlice } from '../src/engine/schema/plan.ts';
-import { applyMigrations } from '../src/engine/schema/migrations.ts';
+import { constraint_index } from '@norbital-ai/store';
+import { plan, read_applied, type SchemaSlice } from '../src/engine/schema/plan.ts';
+import { apply_migrations } from '../src/engine/schema/migrations.ts';
 import { refusalOf } from '../src/engine/schema/refusal.ts';
 import { slice } from './schema-fixture.ts';
+
+const present = <A>(value: A | null | undefined): A => {
+	if (value === null || value === undefined) throw new Error('Missing fixture value');
+	return value;
+};
 let db: TenantDb;
 const U = (n: number) => `00000000-0000-7000-8000-${String(n).padStart(12, '0')}`;
 const exec = (text: string, params: readonly (string | number | null)[] = []) =>
 	db.write({ text, params });
 // the slice's constraint index, built once: the writer's own map is per manifest, not per refusal
 const index = Effect.runSync(
-	Effect.cached(constraintIndex(slice()).pipe(Effect.mapError(fromStore)))
+	Effect.cached(constraint_index(slice()).pipe(Effect.mapError(from_store)))
 );
 const refusal = Effect.fnUntraced(function* (p: Effect.Effect<unknown, DbError>) {
 	const e = yield* Effect.flip(p);
@@ -26,7 +31,7 @@ const refusal = Effect.fnUntraced(function* (p: Effect.Effect<unknown, DbError>)
 	return refusalOf(e, yield* index);
 });
 const migrate = Effect.fnUntraced(function* (s: SchemaSlice, accept?: true | readonly string[]) {
-	const p = yield* plan(yield* readApplied(db), s);
+	const p = yield* plan(yield* read_applied(db), s);
 	yield* TestDb.migrate(db, s, accept === undefined ? {} : { accept });
 	return p;
 });
@@ -49,8 +54,9 @@ describe('next schema on PGlite', () => {
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
-				expect(yield* readApplied(db)).toEqual(JSON.parse(JSON.stringify(slice())));
-				expect((yield* plan(yield* readApplied(db), slice())).steps).toEqual([]);
+				const applied = present(yield* read_applied(db)), held = JSON.parse(JSON.stringify(slice()));
+				expect({ original: applied.original, schema: applied.schema }).toEqual({ original: held, schema: held });
+				expect((yield* plan(yield* read_applied(db), slice())).steps).toEqual([]);
 
 				const [t] = yield* db.read([
 					{
@@ -85,12 +91,9 @@ describe('next schema on PGlite', () => {
 				placed: expect.stringMatching(/^\d{4}-\d\d-\d\d$/),
 				at: expect.stringMatching(/Z$/)
 			});
-			const row = r?.rows[0] as {
-				placed: string;
-				due: string;
-				month: string;
-				label: string;
-			};
+			const row = Schema.decodeUnknownSync(Schema.Struct({
+				placed: Schema.String, due: Schema.String, month: Schema.String, label: Schema.String
+			}))(r?.rows[0]);
 			expect(row.label).toBe(`SO-1 / ${row.placed} / 3`);
 			expect(row.month).toBe(`${row.placed.slice(0, 8)}01`);
 			const [c] = yield* db.read([
@@ -133,7 +136,7 @@ describe('next schema on PGlite', () => {
 						[U(11), U(99)]
 					)
 				)
-			).toMatchObject({ code: 'missingRef', field: 'customer' });
+			).toMatchObject({ code: 'missing_ref', field: 'customer' });
 			// Orders are owned and cascade; a non-owned term is the referer that restricts deletion.
 			yield* exec(
 				`insert into terms (id, customer, period) values ($1, $2, daterange('2026-01-01', '2026-01-02'))`,
@@ -215,135 +218,42 @@ describe('next schema on PGlite', () => {
 			})
 	);
 });
-describe('source:connections: a connection is its named instance', () => {
-	const rows = Effect.fnUntraced(function* () {
-		return (yield* db.read([
-			{
-				text: `select id, integration, name, named, envoy, active, configuration from sys_integration order by id`,
-				params: []
-			}
-		]))[0]!.rows;
-	});
-	const c = {};
-	const run = U(90);
-	it.live(
-		'inserts each slot once with its configuration, keeps run-time edits and unnamed instances, deletes a dropped slot and replaces a slot moved to another definition',
-		() =>
-			Effect.gen(function* () {
-				yield* setup();
-				yield* migrate({
-					...slice(),
-					connections: {
-						mail: { integration: 'email', configuration: c },
-						desk: { integration: 'whatsapp', configuration: c },
-						ops: { integration: 'telegram', configuration: { lag: 15 } }
-					}
-				});
-				expect(yield* rows()).toEqual([
-					{
-						id: 'desk',
-						integration: 'whatsapp',
-						name: 'desk',
-						named: true,
-						envoy: null,
-						active: true,
-						configuration: {}
-					},
-					{
-						id: 'mail',
-						integration: 'email',
-						name: 'mail',
-						named: true,
-						envoy: null,
-						active: true,
-						configuration: {}
-					},
-					{
-						id: 'ops',
-						integration: 'telegram',
-						name: 'ops',
-						named: true,
-						envoy: null,
-						active: true,
-						configuration: { lag: 15 }
-					}
-				]);
-				// run time: an instance created in the UI, and the name and configuration of a named one changed
-				yield* exec(
-					`insert into sys_integration (id, integration, name) values ($1, 'whatsapp', 'Sales line')`,
-					[run]
-				);
-				yield* exec(
-					`update sys_integration set envoy = null, name = 'Support inbox', configuration = '{"folder":"in"}' where id = 'mail'`
-				);
-				const p = yield* migrate({
-					...slice(),
-					connections: {
-						mail: { integration: 'email', configuration: { folder: 'all' } },
-						ops: { integration: 'slack', configuration: c },
-						alerts: { integration: 'telegram', configuration: c }
-					}
-				});
-				expect(p.steps.map((s) => s.id)).toEqual(['replace:source:connections']);
-				expect(yield* rows()).toEqual(
-					[
-						{
-							id: run,
-							integration: 'whatsapp',
-							name: 'Sales line',
-							named: false,
-							envoy: null,
-							active: true,
-							configuration: {}
-						},
-						{
-							id: 'alerts',
-							integration: 'telegram',
-							name: 'alerts',
-							named: true,
-							envoy: null,
-							active: true,
-							configuration: {}
-						},
-						{
-							id: 'mail',
-							integration: 'email',
-							name: 'Support inbox',
-							named: true,
-							envoy: null,
-							active: true,
-							configuration: { folder: 'in' }
-						},
-						{
-							id: 'ops',
-							integration: 'slack',
-							name: 'ops',
-							named: true,
-							envoy: null,
-							active: true,
-							configuration: {}
-						}
-					].sort((a, b) => (a.id < b.id ? -1 : 1))
-				);
-				// no connections at all: every named row goes with its credentials and messages; the run-time instance stays
-				yield* exec(
-					`insert into bolt_credential (instance, name, sealed) values ('mail', 'creds', 'x')`
-				);
-				yield* exec(`insert into sys_conversation (id, integration) values ('c1', 'mail')`);
-				yield* exec(
-					`insert into sys_message (id, conversation, seq, integration) values ('m1', 'c1', 1, 'mail')`
-				);
-				yield* migrate(slice());
-				expect((yield* rows()).map((r) => r['id'])).toEqual([run]);
-				const [left] = yield* db.read([
-					{
-						text: `select (select count(*) from bolt_credential)::int
-			+ (select count(*) from sys_conversation)::int + (select count(*) from sys_message)::int as n`,
-						params: []
-					}
-				]);
-				expect(left?.rows[0]?.n).toBe(0);
-			})
+describe('runtime connections survive source schema changes', () => {
+	it.live('preserves every account and its state instead of reconstructing source slots', () =>
+		Effect.gen(function* () {
+			yield* setup();
+			yield* exec(`INSERT INTO sys_integration (id,integration,name,active,configuration) VALUES
+				('mail','email','Support inbox',true,'{"folder":"in"}'),
+				('desk','whatsapp','Sales line',true,'{}'),
+				('ops','telegram','Operations',false,'{"lag":15}')`);
+			yield* exec(`INSERT INTO bolt_credential (instance,name,sealed) VALUES ('mail','creds','sealed-original')`);
+			yield* exec(`INSERT INTO sys_conversation (id,integration) VALUES ('c1','mail')`);
+			yield* exec(`INSERT INTO sys_message (id,conversation,seq,integration) VALUES ('m1','c1',1,'mail')`);
+			const rows = () => db.rows(
+				Schema.Struct({ id: Schema.String, integration: Schema.String, name: Schema.String, active: Schema.Boolean, configuration: Schema.Json }),
+				{ text: 'SELECT id,integration,name,active,configuration FROM sys_integration ORDER BY id', params: [] }
+			);
+			const before = yield* rows();
+			const current = slice(), notes = current.tables.notes;
+			if (notes === undefined) throw new Error('Missing notes schema');
+			yield* migrate({
+				...current,
+				tables: { ...current.tables, notes: { ...notes, fields: { ...notes.fields, reviewed: { kind: 'bool', default: false } } } }
+			});
+			expect(yield* rows()).toEqual(before);
+			expect(yield* db.rows(Schema.Struct({ sealed: Schema.String }), {
+				text: "SELECT sealed FROM bolt_credential WHERE instance='mail'", params: []
+			})).toEqual([{ sealed: 'sealed-original' }]);
+			expect(yield* db.value(Schema.Number, {
+				text: "SELECT count(*)::int FROM sys_message WHERE id='m1' AND integration='mail' AND conversation='c1'", params: []
+			})).toBe(1);
+			// Reapplying the same source cannot activate, rename, delete or reset any runtime account.
+			yield* migrate({
+				...current,
+				tables: { ...current.tables, notes: { ...notes, fields: { ...notes.fields, reviewed: { kind: 'bool', default: false } } } }
+			});
+			expect(yield* rows()).toEqual(before);
+		})
 	);
 });
 // Last: its DDL changes the catalogs, so the pooled database reloads afresh for whatever runs after it.
@@ -360,8 +270,8 @@ describe('schema changes on a populated database', () => {
 					tables: {
 						...s.tables,
 						notes: {
-							...s.tables.notes!,
-							fields: { ...s.tables.notes!.fields, pinned: { kind: 'bool' } }
+							...present(s.tables.notes),
+							fields: { ...present(s.tables.notes).fields, pinned: { kind: 'bool' } }
 						}
 					}
 				};
@@ -369,22 +279,23 @@ describe('schema changes on a populated database', () => {
 					`insert into notes (id, body, about__customers) values ($1, 'a', $2), ($3, 'b', $2)`,
 					[U(40), U(1), U(41)]
 				);
-				const p = yield* plan(yield* readApplied(db), next);
+				const p = yield* plan(yield* read_applied(db), next);
 				expect(p.steps.find((x) => x.id === 'create:notNull:notes.pinned')?.class).toBe(
 					'validating'
 				);
 				const e = yield* Effect.flip(TestDb.migrate(db, next));
 				expect(e).toBeInstanceOf(DbError);
 				expect(e.message).toContain('notNull:notes.pinned refuses 2 existing row');
-				expect(yield* readApplied(db)).toEqual(JSON.parse(JSON.stringify(s)));
+				const kept = present(yield* read_applied(db)), before = JSON.parse(JSON.stringify(s));
+				expect({ original: kept.original, schema: kept.schema }).toEqual({ original: before, schema: before });
 				// with a default the same change applies
 				const withDefault: SchemaSlice = {
 					...s,
 					tables: {
 						...s.tables,
 						notes: {
-							...s.tables.notes!,
-							fields: { ...s.tables.notes!.fields, pinned: { kind: 'bool', default: false } }
+							...present(s.tables.notes),
+							fields: { ...present(s.tables.notes).fields, pinned: { kind: 'bool', default: false } }
 						}
 					}
 				};
@@ -395,10 +306,10 @@ describe('schema changes on a populated database', () => {
 				expect(r?.rows[0]?.n).toBe(2);
 				// A prepared SQL history refuses a database that applied a different successor in the meantime.
 				const target = { ...withDefault, tz: 'UTC' };
-				const stale = yield* TestDb.prepareMigrations(db, target);
+				const stale = yield* TestDb.prepare_migrations(db, target);
 				yield* migrate({ ...withDefault, tz: 'Europe/Paris' });
-				expect(yield* Effect.flip(applyMigrations(db, target, stale))).toMatchObject({
-					code: 'migrationChanged'
+				expect(yield* Effect.flip(apply_migrations(db, target, stale))).toMatchObject({
+					code: 'migration_changed'
 				});
 			})
 	);

@@ -2,10 +2,10 @@
 // faked behind `fetch`.
 import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { qq } from '../../src/chat/qq/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { appId: '1024', clientSecret: 'naOC0ocQE3shWLAf' };
@@ -45,7 +45,7 @@ describe('QQ', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(qq, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: '1024' });
-			const acked = yield* h.link.webhook!(webhook(c2c, signed(c2c)));
+			const acked = yield* required(h.link.webhook)(webhook(c2c, signed(c2c)));
 			expect(acked.status).toBe(200);
 			expect(yield* Effect.promise(() => acked.json())).toEqual({ op: 12, d: {} });
 			expect(h.events).toEqual([
@@ -55,11 +55,11 @@ describe('QQ', () => {
 						{
 							id: 'm1',
 							thread: 'c2c:U1',
-							sentAt: '2026-09-21T14:13:20.000Z',
+							sent_at: '2026-09-21T14:13:20.000Z',
 							from: { handle: 'U1', name: null },
 							text: 'hello',
 							group: false,
-							replyTo: null,
+							reply_to: null,
 							attachments: [],
 							invocation: 'direct'
 						}
@@ -77,8 +77,8 @@ describe('QQ', () => {
 				d: { plain_token: 'Arq0D5A61EgUu4OxUvOp', event_ts: '1725442341' }
 			});
 			const signature = yield* Effect.promise(async () => {
-				const answered = await Effect.runPromise(h.link.webhook!(webhook(body, {})));
-				return (await answered.json()) as { plain_token: string; signature: string };
+				const answered = await Effect.runPromise(required(h.link.webhook)(webhook(body, {})));
+				return Schema.decodeUnknownSync(Schema.Struct({ plain_token: Schema.String, signature: Schema.String }))(await answered.json());
 			});
 			expect(signature.plain_token).toBe('Arq0D5A61EgUu4OxUvOp');
 			expect(
@@ -96,7 +96,7 @@ describe('QQ', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(qq, settings);
 			const body = JSON.stringify({ op: 13, d: { plain_token: c2c, event_ts: '1790000000' } });
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -105,10 +105,10 @@ describe('QQ', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(qq, settings);
 			const tampered = event('C2C_MESSAGE_CREATE', { author: { user_openid: 'U2' } });
-			expect((yield* h.link.webhook!(webhook(tampered, signed(c2c)))).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(c2c, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(tampered, signed(c2c)))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(c2c, {}))).status).toBe(401);
 			expect(
-				(yield* h.link.webhook!(
+				(yield* required(h.link.webhook)(
 					webhook(c2c, { 'x-signature-timestamp': '1', 'x-signature-ed25519': 'forged' })
 				)).status
 			).toBe(401);
@@ -121,7 +121,7 @@ describe('QQ', () => {
 			const h = yield* connected(qq, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(webhook(c2c, signed(c2c)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(c2c, signed(c2c)))).status).toBe(500);
 		})
 	);
 	it.live('reads each scene, its mention, and skips a bot and an unknown event', () =>
@@ -140,7 +140,7 @@ describe('QQ', () => {
 				event('AT_MESSAGE_CREATE', { channel_id: 'CH1', author: { id: 'B1', bot: true } }),
 				event('GUILD_CREATE', { author: { id: 'A1' } })
 			])
-				expect((yield* h.link.webhook!(webhook(body, signed(body)))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, signed(body)))).status).toBe(200);
 			expect(h.events.map((one) => (one.kind === 'messages' ? one.messages[0] : null))).toEqual([
 				expect.objectContaining({ thread: 'group:G1', group: true, invocation: 'mention' }),
 				expect.objectContaining({
@@ -165,7 +165,7 @@ describe('QQ', () => {
 					{ content_type: 'image/png', filename: 'a.png', url: '/download?id=1', size: 3 }
 				]
 			});
-			yield* h.link.webhook!(webhook(body, signed(body)));
+			yield* required(h.link.webhook)(webhook(body, signed(body)));
 			expect(h.events[0]).toMatchObject({
 				messages: [{ attachments: [{ name: 'a.png', mime: 'image/png', bytes: 3, bin: 0 }] }],
 				bins: [new Uint8Array([1, 2, 3])]
@@ -176,9 +176,9 @@ describe('QQ', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(qq, settings);
-			yield* h.link.webhook!(webhook(c2c, signed(c2c)));
+			yield* required(h.link.webhook)(webhook(c2c, signed(c2c)));
 			for (const expected of [1, 2]) {
-				yield* h.link.send!({ to: 'c2c:U1', text: 'Hello' }, []);
+				yield* required(h.link.send)({ to: 'c2c:U1', text: 'Hello' }, []);
 				expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toMatchObject({
 					msg_id: JSON.parse(c2c).d.id,
 					msg_seq: expected
@@ -190,14 +190,14 @@ describe('QQ', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(qq, settings);
-			expect(yield* h.link.send!({ to: 'c2c:U1', text: 'Hello' }, [])).toMatchObject({
-				providerId: 'out1'
+			expect(yield* required(h.link.send)({ to: 'c2c:U1', text: 'Hello' }, [])).toMatchObject({
+				provider_id: 'out1'
 			});
 			const call = api.calls.at(-1);
 			expect(call?.headers.get('authorization')).toBe('QQBot tok');
 			expect(JSON.parse(call?.body ?? '')).toEqual({ content: 'Hello', msg_type: 0 });
 			for (const to of ['group:G1', 'channel:CH1', 'direct:GU2'])
-				yield* h.link.send!({ to, text: 'Hello' }, []);
+				yield* required(h.link.send)({ to, text: 'Hello' }, []);
 			expect(api.calls.map((one) => one.url)).toEqual([
 				'https://bots.qq.com/app/getAppAccessToken',
 				'https://api.sgroup.qq.com/v2/users/U1/messages',
@@ -214,11 +214,11 @@ describe('QQ', () => {
 				refusing ? json({ code: 304082, message: 'no' }) : answer(call)
 			);
 			const h = yield* connected(qq, settings);
-			expect(yield* Effect.flip(h.link.send!({ to: 'U1', text: 'Hello' }, []))).toMatchObject({
+			expect(yield* Effect.flip(required(h.link.send)({ to: 'U1', text: 'Hello' }, []))).toMatchObject({
 				_tag: 'ProviderRefused'
 			});
 			refusing = true;
-			expect(yield* Effect.flip(h.link.send!({ to: 'c2c:U1', text: 'Hello' }, []))).toMatchObject({
+			expect(yield* Effect.flip(required(h.link.send)({ to: 'c2c:U1', text: 'Hello' }, []))).toMatchObject({
 				_tag: 'ProviderRefused'
 			});
 		})
@@ -227,7 +227,7 @@ describe('QQ', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(qq, settings);
-			yield* h.link.test!({ to: 'U1' });
+			yield* required(h.link.test)({ to: 'U1' });
 			expect(api.calls.at(-1)?.url).toBe('https://api.sgroup.qq.com/v2/users/U1/messages');
 		})
 	);
@@ -235,7 +235,7 @@ describe('QQ', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ code: 100016, message: 'invalid appid or secret' }));
 			const h = yield* host(chatProvider(qq), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

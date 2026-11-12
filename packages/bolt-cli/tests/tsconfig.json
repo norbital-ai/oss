@@ -7,6 +7,7 @@
 		// Bolt's source, as the suite's Vite aliases it (`vitest.config.ts`): one copy of every Bolt module
 		"paths": {
 			"@norbital-ai/bolt": ["../../bolt/src/index.ts"],
+			"@norbital-ai/bolt/declarations": ["../../bolt/src/declarations.ts"],
 			"@norbital-ai/bolt/artifact": ["../../bolt/src/engine/artifact/read.ts"],
 			"@norbital-ai/bolt/engine": ["../../bolt/src/engine/index.ts"],
 			"@norbital-ai/bolt/errors": ["../../bolt/src/decl/errors.ts"],

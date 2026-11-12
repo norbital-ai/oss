@@ -23,21 +23,21 @@
 	// Mounts one kit part under a scripted `bolt` and catalog, for the kit's default display (the template UI audit).
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
-	import { provideKinds } from '../src/kinds/context.js';
+	import { mount_edge } from '../src/effect/index.js';
+	import { provide_kinds } from '../src/kinds/context.js';
 	import Show from '../src/kinds/show.svelte';
 	import Form from '../src/form/form.svelte';
 	import ReadonlyMarkdown from '../src/editors/readonly-markdown.svelte';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
-	import { provideBolt } from '../src/client/context.js';
+	import { provide_bolt } from '../src/client/context.js';
 	import CustomView from '../src/model/CustomView.svelte';
 	import RecordShell from '../src/record/RecordShell.svelte';
 
 	let fixture: DefaultsHarnessProps = $props();
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(() => fixture.bolt);
-	provideKinds({
+	provide_bolt(() => fixture.bolt);
+	provide_kinds({
 		get catalog() {
 			return fixture.catalog;
 		},

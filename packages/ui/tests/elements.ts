@@ -10,7 +10,7 @@ const labelled = (dialog: HTMLElement, by: string) => {
 	const id = dialog.getAttribute(by);
 	return id === null ? undefined : document.getElementById(id)?.textContent?.trim();
 };
-/** The open in-app confirmation (`confirmAction`'s real dialog): its title, body and its two answers. */
+/** The open in-app confirmation (`confirm_action`'s real dialog): its title, body and its two answers. */
 export function confirmDialog() {
 	const open = document.querySelector<HTMLElement>('[data-confirm-dialog][data-state=open]');
 	if (open === null) return undefined;

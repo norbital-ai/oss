@@ -2,9 +2,9 @@
 // The path supplies an app or group's name and the compiler checks its child declarations.
 import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
-import type { AppName, ModelName, IntegrationName, PolicyName } from '../names.ts';
+import type { AppName, ModelName, PolicyName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, Msg, NonEmpty } from '../values.ts';
-import type { AiModelClass, ChildName, GroupName, PageName } from './names.ts';
+import type { ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
 
 /** One secret: the label and help Settings shows; its value is supplied at runtime and sealed in the tenant store. */
@@ -13,7 +13,7 @@ type SecretDecl = { label: string; description?: string };
  * Declares secret names and their Settings labels in `src/+secrets.ts`. This is metadata, never a place for values.
  * Administrators supply values at runtime; the host seals them in the tenant store. Refer to a declared name when
  * configuring an integration or MCP connection rather than copying its value into source or browser code. Once the
- * declaration is live, `navigate { configure: { capability: 'secret.set', record: '<NAME>' } }` opens the native
+ * declaration is live, `page { configure: { capability: 'secret.set', record: '<NAME>' } }` in a web conversation opens the native
  * write-only form; the value is never read back or sent through chat.
  * @param spec UPPER_SNAKE names with labels and optional help text.
  * @returns The declaration unchanged; declaring a name neither supplies nor verifies its runtime value.
@@ -42,8 +42,8 @@ type WorkspaceBase = {
 	currency?: CurrencyCode;
 	/** App order in the launcher. */
 	apps?: readonly string[];
-	/** The model classes agents may use, the default one, and the embedding models. */
-	ai?: { models: readonly AiModelClass[]; default: AiModelClass; embeddings?: readonly string[] };
+	/** Requires AI facilities and declares embedding models; administrators choose allowed chat models at runtime. */
+	ai?: { embeddings?: readonly string[] };
 	/**
 	 * The document formats Markdown or HTML converts to (`ctx.convert.document`, notice attachments, a
 	 * file sync's document export); the host must serve each.
@@ -55,8 +55,6 @@ type WorkspaceBase = {
 	agent?: { triage?: false }; // hook:triage
 	/** Who may join without an invitation (§5.11.2); absent, only invited members join. */
 	signup?: Signup;
-	/** Named instances source addresses: each slot is a `sys_integration` row of `integration`, its id the slot name. */
-	connections?: { readonly [slot: string]: { integration: string } };
 };
 /**
  * Self sign-up: a newcomer proves an address (`via`: a code by email, by SMS to a mobile number, or either) and becomes
@@ -78,17 +76,13 @@ type SignupFor = {
 	party?: { model: ModelName; match: { email?: string; phone?: string } };
 	challenge?: 'turnstile';
 };
-type WorkspaceFor<S> = {
+type WorkspaceFor = {
 	tz: IanaZone;
 	locale: string;
 	currency?: CurrencyCode;
 	/** App order in the launcher. */
 	apps?: readonly AppName[];
-	ai?: {
-		models: readonly AiModelClass[];
-		default: Part<Part<S, 'ai'>, 'models'> extends readonly (infer M)[] ? M : AiModelClass;
-		embeddings?: readonly string[];
-	};
+	ai?: { embeddings?: readonly string[] };
 	/** The document formats the converter produces; each is a type-checked target with its own options. */
 	convert?: { to: readonly ConvertTarget[] };
 	/** Origins pages may fetch (model weights); scripts stay same-origin. */
@@ -97,26 +91,18 @@ type WorkspaceFor<S> = {
 	agent?: { triage?: false };
 	/** Self sign-up by a proven email or mobile number; the build checks `party.match` names text fields. */
 	signup?: SignupFor;
-	/**
-	 * Named instances: the slot name is the instance id (`ctx.send('mail', …)`, a notice's `via`, the instance a remote
-	 * sync writes through). The row's existence is source's; its pairing, configuration, envoy and `active` are run-time.
-	 */
-	connections?: {
-		[K in keyof Part<S, 'connections'>]: { integration: IntegrationName };
-	};
+
 };
-type Part<S, K extends string> = S extends { [P in K]: infer V } ? V : {};
 
 /**
- * `src/+workspace.ts`, exactly one: the workspace's timezone and locale, the app order in the nav, AI settings, and
- * `connections` (named integration instances).
- * @param spec Workspace settings and named connection slots; credentials are supplied separately at runtime.
+ * `src/+workspace.ts`, exactly one: timezone, locale, app order and workspace capabilities.
+ * @param spec Workspace settings; integration accounts and credentials are created at runtime.
  * @returns The typed declaration unchanged. Compilation validates its references against this workspace's names.
  * @example
  * export default workspace({ tz: 'Asia/Singapore', locale: 'en-SG', apps: ['crm'] });
  */
 export function workspace<const S extends WorkspaceBase>(
-	spec: S & Checked<WorkspaceBase, S, Exact<S, WorkspaceFor<S>>>
+	spec: S & Checked<WorkspaceBase, S, Exact<S, WorkspaceFor>>
 ): S {
 	return spec;
 }
@@ -208,7 +194,11 @@ export function app<const S extends AppSpec>(
 }
 
 /** A group literal: its title, description, icon and the child it opens. */
-export type GroupSpec = { title: Msg; description?: Msg; icon: IconName; default_child: string };
+export const GroupSpec = Schema.Struct({
+	title: Schema.String, description: Schema.optionalKey(Schema.String),
+	icon: Schema.String, default_child: Schema.String
+});
+export type GroupSpec = typeof GroupSpec.Type;
 /**
  * `src/app/<g>/+group.ts`: a folder of apps shown as one entry in the nav, opening `default_child`.
  * A policy's `capabilities.apps` naming the group reaches every app under it.

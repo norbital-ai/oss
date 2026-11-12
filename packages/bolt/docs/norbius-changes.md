@@ -38,10 +38,10 @@ appears as a folded list, errors in red. Times are the workspace's.
 
 ## 4. Approve
 
-Back in the chat, ask Norbius to merge it. A merge needs no uncommitted edits, commits on top of live, a passed diagnosis
-and passed tests on the last commit, and a preview of that commit; Norbius runs the diagnosis and the tests by hand, and
-the merge runs neither. If another person's merge moved live, the merge refuses until Norbius rebases its commits on top
-of live and runs both again. It shows a card naming what will happen, with
+Back in the chat, ask Norbius to merge it. A merge needs no uncommitted edits and a preview of the last commit;
+a known failed diagnosis or failed tests must be resolved. The merge queue replays the commits on live as it stands
+and runs any diagnosis or tests that head lacks. A real conflict or failed check leaves live untouched.
+The request shows a card naming what will happen, with
 **Approve** and **Reject**. Nothing changes until you press Approve. Only an administrator can approve.
 
 **The approval rule.** Every change to what the workspace's users get — merging, rolling back — waits for an
@@ -99,3 +99,17 @@ The same path without Norbius is [Workspace Studio](./studio-changes.md).
 | `norbius-flow-6.jpg` | After the switch-over: the "Applied — …" line with View live, then Norbius's closing reply.          |
 | `norbius-flow-7.jpg` | A merge card before Approve: plain title, the summary below it, then the last commit's message.      |
 | `norbius-flow-8.jpg` | A rollback card: the summary, "Checkpoint: <time> — <description>" and the red discard warning.      |
+
+## Questions and queued instructions
+
+When Norbius needs a decision, its question appears in a card with selectable choices and a field for your own answer. Choose an answer and send it; answering resumes the conversation. You can also continue in the ordinary composer. A question accepts one submitted card answer, and another tab cannot submit a second answer. Editing a queued answer updates the message itself; removing it before admission reopens its question.
+
+Messages sent while Norbius works appear in the queue above the composer. They steer the current task at the next step. Open the queue to read its previews, edit or remove an instruction, and change their order by dragging or using the reorder control's arrow keys. This queue does not wait for the whole task to finish; scheduled messages retain their separate timing controls.
+
+Norbius receives the actual available skill files and uses the generated contract card for each listed role. If a role has no card, it reads the exported type instead of inventing a filename. Pairing and other credential entry use native Settings forms.
+
+Files use the same native attachment cards in the composer, queued messages and transcript.
+Each chat keeps its own draft text, attachments and plan mode while the workspace client remains
+open. Restart in a new chat copies the selected message into a fresh draft and retains the
+original conversation. The transcript opens at its latest message and follows new content while
+you remain at the bottom; scrolling up keeps your reading position until you choose Latest.

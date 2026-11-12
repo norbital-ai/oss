@@ -5,7 +5,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Callables } from '../src/engine/services.ts';
-import { routeFixture } from './support/route-fixture.ts';
+import { act_reply, route_fixture } from './support/route-fixture.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -49,28 +49,30 @@ const manifest: EngineManifest = {
 		place: {
 			description: 'Generated create',
 			input: { title: { kind: 'text' } },
+			output: { kind: 'json' },
 			policies: ['operator']
 		},
 		queryplace: {
 			description: 'Read request pricing',
 			input: { title: { kind: 'text' } },
+			output: { kind: 'json' },
 			policies: ['operator']
 		}
 	},
 	integrations: {},
 	teams: {},
-	customFields: {},
-	connections: {},
+	custom_fields: {},
 	mcp: {},
 	agent: { skills: {} }
 };
 const guest = program(`import { Effect } from 'effect';
 const conflict = (effect) => effect.pipe(Effect.catchTag('ActConflict', error =>
  Effect.succeed({kind:'conflict',records:error.records})));
-const place = (input,ctx) => ctx.act('orders.create',[input]);
+const place = (input,ctx) => ctx.act({'orders.create':[input]});
 export default {
  model:{orders:{bodies:{
-  create:function*(inputs,ctx){
+  create:function*(changes,ctx){
+   const inputs=changes.map(({set})=>set);
    if(inputs.every(input=>input.title==='querypriced'))return inputs.map(input=>({...input,derived:'priced'}));
    const {quota:source}=yield* ctx.query({quota:{fields:['cap']}});
    if(source.rows[0].cap===0)return yield* ctx.refuse('source changed');
@@ -82,7 +84,7 @@ export default {
   queryplace:{body:function*(input,ctx){
    const {quota}=yield* ctx.query({quota:{fields:['cap']}});
    if(quota.rows[0].cap===0)return 'source changed';
-   return yield* conflict(ctx.act('orders.create',[{title:'querypriced'}]));
+   return yield* conflict(ctx.act({'orders.create':[{title:'querypriced'}]}));
   }}
  }
 };`);
@@ -140,22 +142,19 @@ const fixture = () =>
 		);
 		const t = Context.get(context, TestWorkspace),
 			calls = Context.get(context, Callables);
-		const caller = t.as(t.member(['operator']));
-		const route = yield* routeFixture(context);
+		const caller = yield* t.as(t.member(['operator']));
+		const route = yield* route_fixture(context);
 		const bindings = () => ({
 			now: t.clock.now(),
 			today: t.clock.now().slice(0, 10),
 			tz: 'UTC'
 		});
 		const act = (callable: string, input: Json) =>
-			route.dispatch(
-				{ callable, input, key: randomUUID(), issuedAt: t.clock.now() },
-				caller.authority
-			);
+			act_reply(route, caller.authority, { acts: { [callable]: input }, issued_at: t.clock.now() });
 		const batch = (acts: Parameters<typeof calls.acts>[0]['acts']) => {
 			const key = randomUUID();
 			return calls.acts({
-				name: 'act.many',
+				name: 'act',
 				acts,
 				authority: caller.authority,
 				bindings: bindings(),
@@ -211,12 +210,12 @@ it.live(
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture();
-				assert.equal(
-					(yield* f.act('orders.create', [{ title: 'priced against old source' }])).outcome.kind,
-					'conflict'
-				);
+				// a generated write over HTTP is a one-entry map: its replay rereads the moved source, as a batch's does
+				const direct = (yield* f.act('orders.create', [{ title: 'priced against old source' }])).outcome;
+				if (direct.kind !== 'refused') throw new Error(JSON.stringify(direct));
+				assert.equal(direct.message, 'source changed');
 				assert.equal(f.moved(), true);
-				assert.equal(f.sourcePasses(), 1, 'the direct replay retains its first read answer');
+				assert.equal(f.sourcePasses(), 2, 'the replay rechecks the current source once');
 				assert.equal(yield* f.count(), 0);
 				yield* f.rearm;
 				const result = yield* f.batch([
@@ -229,18 +228,26 @@ it.live(
 				assert.equal(f.sourcePasses(), 2, 'the atomic batch rechecks the current source once');
 				assert.deepEqual(result.captured, []);
 				assert.equal(yield* f.count(), 0);
-				// a callback fingerprint and a prior-query fingerprint
-				for (const automation of ['place', 'queryplace']) {
-					yield* f.rearm;
-					const started = yield* f.start(automation, { title: 'priced against old source' });
-					assert.equal(started.outcome.kind, 'committed');
-					yield* f.t.runDue();
-					const run = required(yield* f.run(started.id));
-					assert.equal(f.moved(), true, 'mutation must occur after the actual source read');
-					assert.equal(run.state, 'succeeded');
-					assert.deepEqual((yield* Schema.decodeUnknownEffect(Conflict)(run.output)).records, []);
-					assert.equal(yield* f.count(), 0);
-				}
+				const queued = (automation: string) =>
+					Effect.gen(function* () {
+						yield* f.rearm;
+						const started = yield* f.start(automation, { title: 'priced against old source' });
+						assert.equal(started.outcome.kind, 'committed');
+						yield* f.t.run_due();
+						const run = required(yield* f.run(started.id));
+						assert.equal(f.moved(), true, 'mutation must occur after the actual source read');
+						assert.equal(yield* f.count(), 0);
+						return run;
+					});
+				// a callback fingerprint: the queued act's replay rereads the moved source, and its transform refuses
+				const callback = yield* queued('place');
+				assert.equal(callback.state, 'failed');
+				assert.deepEqual(callback.error, { code: 'refused', message: 'source changed' });
+				assert.equal(f.sourcePasses(), 2, 'the queued act rechecks the current source once');
+				// a prior-query fingerprint: the body's own read moved, which no act replay can refresh
+				const prior = yield* queued('queryplace');
+				assert.equal(prior.state, 'succeeded', JSON.stringify(prior));
+				assert.deepEqual((yield* Schema.decodeUnknownEffect(Conflict)(prior.output)).records, []);
 			})
 		)
 );

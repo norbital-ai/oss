@@ -99,24 +99,24 @@ export const linq: ChatPlatform = {
 			throw error;
 		};
 		const download = (url: string) => downloadFile(host.fetch, url);
-		const received = async (data: typeof Received.Type, sentAt: string): Promise<Incoming> => {
+		const received = async (data: typeof Received.Type, sent_at: string): Promise<Incoming> => {
 			const group = data.chat.is_group ?? (await client.chats.retrieve(data.chat.id)).is_group,
-				replyTo = data.reply_to?.message_id ?? null,
+				reply_to = data.reply_to?.message_id ?? null,
 				owner = data.chat.owner_handle?.handle;
 			return {
 				id: data.id,
 				thread: data.chat.id,
-				sentAt,
+				sent_at,
 				from: { handle: data.sender_handle.handle, name: null },
 				group,
-				replyTo,
+				reply_to,
 				mentioned: data.parts.some(
 					(part) => part.type === 'text' && part.mention != null && part.mention === owner
 				),
-				repliedTo:
+				replied_to:
 					group &&
-					replyTo !== null &&
-					(await client.messages.retrieve(replyTo).then(
+					reply_to !== null &&
+					(await client.messages.retrieve(reply_to).then(
 						(found) => found.is_from_me,
 						() => false
 					)),
@@ -140,7 +140,7 @@ export const linq: ChatPlatform = {
 							{
 								id: data.id,
 								thread: data.chat.id,
-								sentAt: data.edited_at,
+								sent_at: data.edited_at,
 								version: data.edited_at,
 								from: { handle: data.sender_handle.handle, name: null },
 								text: data.part.text,
@@ -175,15 +175,15 @@ export const linq: ChatPlatform = {
 				let seen = 0;
 				for await (const message of client.chats.messages.list(thread)) {
 					if (++seen > HISTORY_MAX) return { messages, complete: false };
-					const sentAt = message.sent_at ?? message.created_at;
-					if (message.is_from_me || Date.parse(sentAt) < from) continue;
+					const sent_at = message.sent_at ?? message.created_at;
+					if (message.is_from_me || Date.parse(sent_at) < from) continue;
 					messages.push({
 						id: message.id,
 						thread,
-						sentAt,
+						sent_at,
 						from: { handle: message.from_handle?.handle ?? '', name: null },
 						group,
-						replyTo: message.reply_to?.message_id ?? null,
+						reply_to: message.reply_to?.message_id ?? null,
 						...contentOf(message.parts ?? [], download)
 					});
 				}

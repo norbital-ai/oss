@@ -142,7 +142,7 @@ it.live('tenant custom shapes and built-in phone resolve through the host regist
 		const tenant = await show({
 			schema: { type: 'string', 'x-norbital': { datatype: 'reference' } },
 			initial: 'A',
-			host: { customFields: { reference: { shape: { kind: 'text' } } } }
+			host: { custom_fields: { reference: { shape: { kind: 'text' } } } }
 		});
 		assert.ok(tenant.target.querySelector('input'));
 		const phone = await show({

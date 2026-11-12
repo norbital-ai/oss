@@ -3,11 +3,9 @@
 	// infinite loading); the "Load more" button is the same step for a keyboard or where nothing observes the scroll.
 	import { watch } from 'runed';
 	import { Button } from '../primitives/button/index.js';
-	import type { ModelKey, RowOf } from '../model/types.js';
-	import type { Json } from '../client/contract.js';
+	import type { ModelKey } from '../model/types.js';
 	import { useBolt } from '../client/context.js';
-	import type { BoardProps } from './Board.svelte';
-	import BoardPage from './BoardPage.svelte';
+	import BoardPage, { type BoardPageProps } from './BoardPage.svelte';
 	import { msg } from '../text/messages.js';
 
 	let {
@@ -17,32 +15,16 @@
 		where,
 		order_by,
 		search,
-		pageSize,
+		page_size,
 		selectable = false,
 		selected,
-		onSelect,
-		onRows,
-		onChange,
+		on_select,
+		on_rows,
+		on_change,
 		grid = false,
-		onOpen,
+		on_open,
 		moves
-	}: Pick<BoardProps<C>, 'of' | 'card'> & {
-		lane: string;
-		where: Json | undefined;
-		order_by: Json | undefined;
-		search?: string;
-		pageSize: number;
-		selectable?: boolean;
-		selected?: ReadonlySet<RowOf<C>['id']>;
-		onSelect?: (id: RowOf<C>['id'], selected: boolean) => void;
-		onRows?: (page: symbol, ids: readonly RowOf<C>['id'][]) => () => void;
-		onChange?: () => void;
-		/** The expanded lane's grid of cards. */
-		grid?: boolean;
-		onOpen?: (id: string) => void;
-		/** The other lanes a card may move to, where a finger cannot drag it. */
-		moves?: readonly { label: string; move: (id: string) => void }[];
-	} = $props();
+	}: Omit<BoardPageProps<C>, 'index' | 'after' | 'on_next'> = $props();
 	const bolt = useBolt();
 	let pages = $state<(string | null)[]>([null]);
 	let nexts = $state<(string | null)[]>([]);
@@ -84,18 +66,18 @@
 		{where}
 		{order_by}
 		{search}
-		{pageSize}
+		{page_size}
 		{selectable}
 		{selected}
-		{onSelect}
-		{onRows}
-		{onChange}
+		{on_select}
+		{on_rows}
+		{on_change}
 		{grid}
-		{onOpen}
+		{on_open}
 		{moves}
 		index={i}
 		{after}
-		onNext={(n) => (nexts[i] = n)}
+		on_next={(n) => (nexts[i] = n)}
 	/>
 {/each}
 {#if more !== null}
@@ -104,6 +86,6 @@
 		class={grid ? 'col-span-full' : undefined}
 		onclick={load}
 		data-lane-more
-		{@attach nearEnd}>{msg(bolt, 'board.more', 'Load more')}</Button
+		{@attach nearEnd}>{msg(bolt, 'board.more')}</Button
 	>
 {/if}

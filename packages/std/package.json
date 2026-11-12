@@ -58,6 +58,10 @@
 			"types": "./build/host-op.d.ts",
 			"default": "./build/host-op.js"
 		},
+		"./id": {
+			"types": "./build/id.d.ts",
+			"default": "./build/id.js"
+		},
 		"./json": {
 			"types": "./build/json.d.ts",
 			"default": "./build/json.js"
@@ -81,6 +85,10 @@
 		"./sheet": {
 			"types": "./build/sheet.d.ts",
 			"default": "./build/sheet.js"
+		},
+		"./sql": {
+			"types": "./build/sql.d.ts",
+			"default": "./build/sql.js"
 		},
 		"./vars": {
 			"types": "./build/vars.d.ts",

@@ -6,6 +6,7 @@ import { teamEntries } from '../manifest.ts';
 import { Effect, Result, Schema } from 'effect';
 import { LIMITS, type Outcome, type RowData, type Sql } from '../contracts.ts';
 import { canonical, sha256, type ConstraintMeta } from '@norbital-ai/store';
+import { literal } from '@norbital-ai/std/sql';
 import {
 	TenantDb,
 	type RawDb,
@@ -14,10 +15,11 @@ import {
 } from '../db/tenant-db.ts';
 import { DbError } from '../errors.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
-import { copiedSql, dbError, inline } from '../db/wire.ts';
+import { copiedSql, db_error, inline } from '../db/wire.ts';
 import { composable } from '../query/reader.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { refusalOf } from '../schema/refusal.ts';
+import { noticePiece } from '../notifications/queue.ts';
 
 /** The idempotency gate's condition (rule 20): every data-modifying piece reads its rows through it. */
 export const GATED = 'EXISTS (SELECT 1 FROM idem)';
@@ -41,7 +43,6 @@ export const noticeInsert = (
 		)
 	);
 	return (
-		c.notices.push(name),
 		c.cte(
 			`${name}_source`,
 			`SELECT * FROM jsonb_to_recordset(${c.p(rows)}::jsonb)
@@ -62,55 +63,50 @@ export const noticeInsert = (
 		v.title, v.body, v.link, v.once || ':' || ch, v.attachments
 	FROM ${name}_source v CROSS JOIN LATERAL jsonb_array_elements_text(v.via) ch`
 		),
-		c.cte(
+		noticePiece(c,
 			name,
 			`INSERT INTO sys_notification (id, recipient, member, title, body, link, once, attachments, at)
-	SELECT id, "to", member, title, body, link, once, attachments, ${c.p(now)}::timestamptz FROM ${name}_to
-	WHERE (member IS NOT NULL OR "to"->>'channel' <> 'inbox') AND (${when}) ON CONFLICT (once) DO NOTHING
-	RETURNING id, member, to_jsonb(sys_notification) AS image`
+	SELECT id, "to", member, title, body, link, once, attachments, ${c.shared('now', now)}::timestamptz FROM ${name}_to
+	WHERE (member IS NOT NULL OR "to"->>'channel' <> 'inbox') AND (${when}) ON CONFLICT (once) DO NOTHING`
 		)
 	);
 };
-/** The chain's inserted inbox notices as `Captured` rows (JSON), for the statement's select to hand to the live lane. */
-export const noticeCaptures = (c: Chain): string =>
-	c.notices.length === 0
-		? `'[]'::jsonb`
-		: `(SELECT coalesce(jsonb_agg(jsonb_build_object('model', 'sys_notification', 'id', x.id, 'op', 'create', 'revision', 0, 'old', NULL, 'new', x.image,
-		'cause', 'direct')), '[]'::jsonb) FROM (${c.notices.map((n) => `SELECT r.id, r.image FROM ${n} r WHERE r.member IS NOT NULL`).join(' UNION ALL ')}) x)`;
-
 /**
  * One `WITH` chain. Pieces keep definition order (a non-recursive `WITH` refers only backwards); every data-modifying
  * piece runs whether or not it is referenced, and every assert is referenced by the final select so it always runs.
  */
 export class Chain {
 	readonly params: Json[] = [];
-	/** The `noticeInsert` pieces in this chain (`noticeCaptures`). */
-	readonly notices: string[] = [];
+	/** Native mutation pieces returning their actual pre/post capture as __bolt_capture. */
+	readonly captures: string[] = [];
 	private readonly ctes: string[] = [];
 	private readonly asserts: string[] = [];
+	private readonly roles = new Map<string, { value: Json; name: string }>();
 	/** A positional parameter; objects and arrays travel as JSON text (`$n::jsonb`). */
 	p(v: Json): string {
-		this.params.push(v !== null && typeof v === 'object' ? JSON.stringify(v) : v);
-		return `$${this.params.length}`;
+		return `$${this.params.push(v !== null && typeof v === 'object' ? JSON.stringify(v) : v)}`;
+	}
+	/** An act-wide value (`now`, the key, the actor) sent once however many pieces name it, by its role. */
+	shared(role: string, v: Json): string {
+		const known = this.roles.get(role);
+		if (known !== undefined && known.value === v) return known.name;
+		const name = this.p(v);
+		if (known === undefined) this.roles.set(role, { value: v, name });
+		return name;
 	}
 	cte(name: string, sql: string): string {
 		this.ctes.push(`${name} AS (${sql})`);
 		return name;
 	}
-	/** Fails the whole statement with `code` unless `ok`; vacuous when the gate is closed (a replay writes nothing). */
-	assert(ok: string, code: string, detail: Json = null): string {
-		const name = `a${this.asserts.length}`;
-		this.ctes.push(
-			`${name} AS MATERIALIZED (SELECT bolt_assert(NOT ${GATED} OR (${ok}), ${this.p(code)}, ${this.p(detail)}))`
-		);
-		this.asserts.push(name);
-		return name;
+	/** Fails unless `ok` while its gate is open; native statements may supply their own admission gate. */
+	assert(ok: string, code: string, detail: Json = null, when = GATED): string {
+		return this.assertWith(ok, code, detail === null ? 'NULL' : literal(typeof detail === 'string' ? detail : JSON.stringify(detail)), when);
 	}
-	/** `assert` whose detail is computed in the statement (`detail` is SQL text). */
-	assertWith(ok: string, code: string, detail: string): string {
+	/** `assert` whose detail is computed in the statement (`detail` is SQL text, evaluated only on failure). */
+	assertWith(ok: string, code: string, detail: string, when = GATED): string {
 		const name = `a${this.asserts.length}`;
 		this.ctes.push(
-			`${name} AS MATERIALIZED (SELECT bolt_assert(NOT ${GATED} OR (${ok}), ${this.p(code)}, ${detail}))`
+			`${name} AS MATERIALIZED (SELECT bolt_assert(false, ${literal(code)}, ${detail}) WHERE (${when}) AND NOT coalesce((${ok}), false))`
 		);
 		this.asserts.push(name);
 		return name;
@@ -124,28 +120,42 @@ export class Chain {
 	}
 }
 
-/** The gate piece and the outcome piece (rule 20); `expr` builds the new outcome from the other pieces' RETURNING. */
-export function gate(c: Chain, key: string, digest: string, issuedAt: string): void {
+/**
+ * The gate piece (rule 20). `context` (a write statement's) is set before any gated row is written: `store.write`
+ * stamps the row trigger reads, and `bolt.write`, this statement's own marker, so the raw-SQL audit trigger leaves its
+ * rows to the statement's history.
+ */
+export function gate(
+	c: Chain,
+	key: string,
+	digest: string,
+	issuedAt: string,
+	context?: { store: string; anonymise?: string }
+): void {
+	const from =
+		context === undefined
+			? ''
+			: ` FROM (SELECT set_config('store.write', ${context.store}::text, true), set_config('bolt.write', statement_timestamp()::text, true)${context.anonymise === undefined ? '' : `, set_config('bolt.anonymise', ${context.anonymise}::text, true)`}) context`;
 	c.cte(
 		'idem',
-		`INSERT INTO bolt_idem (key, digest, issued_at) VALUES (${c.p(key)}, ${c.p(digest)}, ${c.p(issuedAt)}::timestamptz)
+		`INSERT INTO bolt_idem (key, digest, issued_at) SELECT ${c.shared('key', key)}, ${c.shared('digest', digest)}, ${c.p(issuedAt)}::timestamptz${from}
 	ON CONFLICT (key) DO UPDATE SET digest = excluded.digest, issued_at = excluded.issued_at
 	WHERE bolt_idem.issued_at < excluded.issued_at - interval '24 hours'
 	AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL) RETURNING key`
 	);
 }
-/** The statement's answer: the new outcome, or the stored one when the digest matches, else `keyReuse` (rule 31). */
+/** The statement's answer: the new outcome, or the stored one when the digest matches, else `key_reuse` (rule 31). */
 export function answer(c: Chain, key: string, digest: string, expr: string): string {
 	c.cte(
 		'out',
 		`INSERT INTO bolt_idem_outcome (key, outcome) SELECT key, ${expr} FROM idem
 	ON CONFLICT (key) DO UPDATE SET outcome = excluded.outcome RETURNING outcome`
 	);
-	return `coalesce((SELECT outcome FROM out), ${storedOutcome(c.p(key), c.p(digest))}) AS outcome`;
+	return `coalesce((SELECT outcome FROM out), ${storedOutcome(c.shared('key', key), c.shared('digest', digest))}) AS outcome`;
 }
 export const KEY_REUSE: Outcome = {
 	kind: 'refused',
-	code: 'keyReuse',
+	code: 'key_reuse',
 	message: 'This key was used for a different request.'
 };
 export const storedOutcome = (
@@ -161,16 +171,18 @@ export function rate(
 ): void {
 	if (charges.length === 0) return;
 	c.cte(
+		'charges',
+		`SELECT * FROM jsonb_to_recordset(${c.p(charges.map((x) => ({ rule: x.rule, bucket: x.bucket, window_start: x.windowStart, lim: x.limit })))}::jsonb)
+		AS v(rule text, bucket text, window_start timestamptz, lim int)`
+	);
+	c.cte(
 		'rate',
-		`INSERT INTO bolt_rate (rule, bucket, window_start, n)
-	SELECT v.rule, v.bucket, v.window_start, 1 FROM jsonb_to_recordset(${c.p(charges.map((x) => ({ rule: x.rule, bucket: x.bucket, window_start: x.windowStart })))}::jsonb)
-		AS v(rule text, bucket text, window_start timestamptz) WHERE ${GATED}
+		`INSERT INTO bolt_rate (rule, bucket, window_start, n) SELECT rule, bucket, window_start, 1 FROM charges WHERE ${GATED}
 	ON CONFLICT (rule, bucket, window_start) DO UPDATE SET n = bolt_rate.n + 1 RETURNING rule, bucket, n`
 	);
-	const limits = c.p(charges.map((x) => ({ rule: x.rule, bucket: x.bucket, lim: x.limit })));
 	c.assert(
-		`NOT EXISTS (SELECT 1 FROM rate JOIN jsonb_to_recordset(${limits}::jsonb) AS l(rule text, bucket text, lim int) USING (rule, bucket) WHERE rate.n > l.lim)`,
-		'rateLimited'
+		'NOT EXISTS (SELECT 1 FROM rate JOIN charges l USING (rule, bucket) WHERE rate.n > l.lim)',
+		'rate_limited'
 	);
 }
 
@@ -192,28 +204,28 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, ConstraintM
 		// rule 26: a transform read moved between the read and the commit: replayed once, then `conflict`
 		if (code === 'fingerprint')
 			return { outcome: { kind: 'conflict', records: [] }, record: true, replay: true };
-		// a recorded `rateLimited` would answer the client's resend after `retryAfter` for 24 h (rule 20)
-		if (code === 'rateLimited')
+		// a recorded `rate_limited` would answer the client's resend after `retryAfter` for 24 h (rule 20)
+		if (code === 'rate_limited')
 			return {
 				outcome: { kind: 'refused', code, message: RATE_LIMITED },
 				record: false,
 				replay: false
 			};
 		// the approval lock (lock.ts): `<request id> <who may change it>`
-		if (code === 'underApproval') {
+		if (code === 'under_approval') {
 			const at = detail.indexOf(' ');
 			return {
 				outcome: {
 					kind: 'refused',
 					code: 'locked',
 					message: detail.slice(at + 1),
-					data: { requestId: detail.slice(0, at) }
+					data: { request_id: detail.slice(0, at) }
 				},
 				record: true,
 				replay: false
 			};
 		}
-		if (code === 'sourceChanged')
+		if (code === 'source_changed')
 			return {
 				outcome: {
 					kind: 'refused',
@@ -239,15 +251,21 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, ConstraintM
 		? { outcome: { kind: 'conflict', records: [] }, record: true, replay: true }
 		: { outcome: r, record: true, replay: false };
 }
+/** The native Effect boundary for SQL decisions, retaining typed Bolt failures and the original bug context. */
+export const decideError = (error: unknown, constraints: ReadonlyMap<string, ConstraintMeta>) =>
+	Effect.try({
+		try: () => decided(error, constraints),
+		catch: (cause) => cause instanceof BoltError ? cause : BoltError.make('bug', 'commit', String(cause), cause)
+	});
 const ConflictDetail = Schema.fromJsonString(
 	Schema.Struct({
 		model: Schema.String,
 		ids: Schema.Array(Schema.String)
 	})
 );
-const conflictRecords = (detail: string): { model: string; id: string; fields: string[] }[] =>
+const conflictRecords = (detail: string): { model: string; id: string }[] =>
 	Result.match(Schema.decodeUnknownResult(ConflictDetail)(detail), {
-		onSuccess: ({ model, ids }) => ids.map((id) => ({ model, id, fields: [] })),
+		onSuccess: ({ model, ids }) => ids.map((id) => ({ model, id })),
 		onFailure: () => []
 	});
 
@@ -266,12 +284,10 @@ export function minter(invocationId: string, now: string): () => string {
 		const b = seed.slice(0, 16);
 		for (let i = 0; i < 6; i++) b[i] = Math.floor(ms / 2 ** (8 * (5 - i))) & 0xff;
 		const k = n++;
-		b[12]! ^= (k >>> 24) & 0xff;
-		b[13]! ^= (k >>> 16) & 0xff;
-		b[14]! ^= (k >>> 8) & 0xff;
-		b[15]! ^= k & 0xff;
-		b[6] = (b[6]! & 0x0f) | 0x70;
-		b[8] = (b[8]! & 0x3f) | 0x80;
+		const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+		view.setUint32(12, view.getUint32(12) ^ k);
+		view.setUint8(6, (view.getUint8(6) & 0x0f) | 0x70);
+		view.setUint8(8, (view.getUint8(8) & 0x3f) | 0x80);
 		const h = hex(b);
 		return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 	};
@@ -301,7 +317,7 @@ const readFingerprints = Effect.fn('Bolt.readFingerprints')(function* (
 ) {
 	const originals = yield* Effect.try({
 		try: () => Array.from(statements, copiedSql),
-		catch: dbError
+		catch: db_error
 	});
 	const answers = yield* execute(
 		originals.map((s) =>
@@ -397,7 +413,7 @@ export function makeReadGuards(sourceEpoch: string) {
 						encoder.encode(canonical([...heldTables].sort())).byteLength;
 					if (next.size > LIMITS.readGuards.count || bytes > LIMITS.readGuards.bytes)
 						throw BoltError.make(
-							'readBudgetExceeded',
+							'read_budget_exceeded',
 							'admission',
 							`retained native reads exceed ${LIMITS.readGuards.count} statements or ${LIMITS.readGuards.bytes} bytes`
 						);
@@ -444,6 +460,6 @@ export function fingerprinting(db: TenantDbShape): {
 	};
 }
 /** One assert per fingerprint: the rows read then are the rows now (rule 26). */
-export function fingerprintAsserts(c: Chain, fps: readonly Fingerprint[]): void {
-	for (const f of fps) c.assert(`${digestOf(inline(f.sql))} = ${c.p(f.digest)}`, 'fingerprint');
+export function fingerprintAsserts(c: Chain, fps: readonly Fingerprint[], when = GATED): void {
+	for (const f of fps) c.assert(`${digestOf(inline(f.sql))} = ${c.p(f.digest)}`, 'fingerprint', null, when);
 }

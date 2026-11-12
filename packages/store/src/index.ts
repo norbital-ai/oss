@@ -11,11 +11,11 @@ export * from './limits.ts';
 export * from './values.ts';
 export {
 	compile,
-	compileGets,
-	encodeCursor,
-	grantSql,
+	compile_gets,
+	encode_cursor,
+	grant_sql,
 	OVER,
-	whereSql,
+	where_sql,
 	type Compiled,
 	type CompileOptions,
 	type Probe,
@@ -25,26 +25,27 @@ export {
 export * from './read/values.ts';
 export * from './write/predicate.ts';
 export * from './schema/spec.ts';
+export { schema_snapshot, type SchemaSnapshot } from './schema/snapshot.ts';
 export {
-	checkOf,
+	check_of,
 	RANK,
 	SchemaObjectSchema,
 	MINOR_FN,
 	PG,
-	colType,
-	schemaObjects,
-	pathText,
-	constraintIndex,
+	col_type,
+	schema_objects,
+	path_text,
+	constraint_index,
 	type ConstraintMeta,
 	type SchemaObject,
 	type Json
 } from './schema/ddl.ts';
 export * from './schema/plan.ts';
-export { searchFunctions } from './schema/search.ts';
-export { answer, armsFit, totalOf } from './read/page.ts';
-export { nullRowSql } from './write/row.ts';
+export { search_functions } from './schema/search.ts';
+export { answer, arms_fit, total_of } from './read/page.ts';
+export { null_row_sql } from './write/row.ts';
 export {
-	compileWrite,
+	compile_write,
 	type CompiledWrite,
 	type InlineChange,
 	type WireRow,

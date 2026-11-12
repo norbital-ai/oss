@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { wecom } from '../../src/chat/wecom/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, type Call } from './kit.ts';
 
 const encodingAESKey = Buffer.alloc(32, 7).toString('base64').slice(0, 43);
@@ -65,14 +65,14 @@ describe('WeCom', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(wecom, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'corp1' });
-			expect((yield* h.link.webhook!(delivery(text))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(text))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'm1',
 						thread: 'zhang',
-						sentAt: new Date(1_790_000_000_000).toISOString(),
+						sent_at: new Date(1_790_000_000_000).toISOString(),
 						from: { handle: 'zhang' },
 						text: '你好',
 						group: false,
@@ -87,7 +87,7 @@ describe('WeCom', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(wecom, settings),
 				echostr = seal('echo-123');
-			const response = yield* h.link.webhook!(
+			const response = yield* required(h.link.webhook)(
 				new Request(`https://hook.test/?${query(echostr, { echostr })}`)
 			);
 			expect(response.status).toBe(200);
@@ -99,12 +99,12 @@ describe('WeCom', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(wecom, settings);
-			expect((yield* h.link.webhook!(delivery(text, undefined, true))).status).toBe(401);
-			expect((yield* h.link.webhook!(delivery(text, 'corp2'))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(delivery(text, undefined, true))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(delivery(text, 'corp2'))).status).toBe(401);
 			const forgedEcho = seal('echo');
 			const params = query(forgedEcho, { echostr: forgedEcho });
 			params.set('msg_signature', 'forged');
-			expect((yield* h.link.webhook!(new Request(`https://hook.test/?${params}`))).status).toBe(
+			expect((yield* required(h.link.webhook)(new Request(`https://hook.test/?${params}`))).status).toBe(
 				401
 			);
 			expect(h.events).toEqual([]);
@@ -116,7 +116,7 @@ describe('WeCom', () => {
 			const h = yield* connected(wecom, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(delivery(text))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(delivery(text))).status).toBe(500);
 		})
 	);
 	it.live('reads an image by its media id, and an event is nothing', () =>
@@ -125,8 +125,8 @@ describe('WeCom', () => {
 			const h = yield* connected(wecom, settings);
 			const image = `<xml><FromUserName><![CDATA[zhang]]></FromUserName><CreateTime>1790000000</CreateTime><MsgType><![CDATA[image]]></MsgType><PicUrl><![CDATA[https://p.test/1]]></PicUrl><MediaId><![CDATA[media1]]></MediaId><MsgId>m2</MsgId></xml>`;
 			const event = `<xml><FromUserName><![CDATA[zhang]]></FromUserName><CreateTime>1790000000</CreateTime><MsgType><![CDATA[event]]></MsgType><Event><![CDATA[enter_agent]]></Event></xml>`;
-			yield* h.link.webhook!(delivery(image));
-			yield* h.link.webhook!(delivery(event));
+			yield* required(h.link.webhook)(delivery(image));
+			yield* required(h.link.webhook)(delivery(event));
 			expect(h.events.length).toBe(1);
 			expect(h.events[0]).toMatchObject({
 				bins: [new Uint8Array([1, 2])],
@@ -146,8 +146,8 @@ describe('WeCom', () => {
 					: answer(call)
 			);
 			const h = yield* connected(wecom, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: 'zhang', text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: 'zhang', text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1);
 			expect(new URL(call?.url ?? '').searchParams.get('access_token')).toBe('app-token');
 			expect(JSON.parse(call?.body ?? '')).toEqual({
@@ -156,13 +156,13 @@ describe('WeCom', () => {
 				msgtype: 'text',
 				text: { content: 'Hello' }
 			});
-			yield* h.link.send!({ id: 'r2', to: 'zhang', text: 'Again' }, []);
+			yield* required(h.link.send)({ id: 'r2', to: 'zhang', text: 'Again' }, []);
 			const tokens = () => api.calls.filter(({ url }) => url.includes('/gettoken')).length;
 			expect(tokens()).toBe(1);
 			refuse = true;
-			yield* Effect.flip(h.link.send!({ id: 'r3', to: 'zhang', text: 'No' }, []));
+			yield* Effect.flip(required(h.link.send)({ id: 'r3', to: 'zhang', text: 'No' }, []));
 			refuse = false;
-			yield* h.link.send!({ id: 'r4', to: 'zhang', text: 'Yes' }, []);
+			yield* required(h.link.send)({ id: 'r4', to: 'zhang', text: 'Yes' }, []);
 			expect(tokens()).toBe(2);
 		})
 	);
@@ -170,8 +170,8 @@ describe('WeCom', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ errcode: 40001, errmsg: 'invalid credential' }));
 			const h = yield* host(chatProvider(wecom), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
-			yield* Effect.flip(h.link.pair!({ ...settings, encodingAESKey: 'short' }));
+			yield* Effect.flip(required(h.link.pair)(settings));
+			yield* Effect.flip(required(h.link.pair)({ ...settings, encodingAESKey: 'short' }));
 			expect(h.values.size).toBe(0);
 		})
 	);

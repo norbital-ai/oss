@@ -117,13 +117,13 @@ export const zernio: ChatPlatform = {
 			return {
 				id,
 				thread: `${account.id}:${message.conversationId}`,
-				sentAt: message.sentAt,
+				sent_at: message.sentAt,
 				from: {
 					handle: message.sender.id,
 					name: message.sender.name ?? message.sender.username ?? null
 				},
 				text: message.text ?? '',
-				replyTo: metadata?.quotedMessageId ?? null,
+				reply_to: metadata?.quotedMessageId ?? null,
 				files: (message.attachments ?? []).flatMap((one, index) => file(id, one, index))
 			};
 		};
@@ -189,7 +189,7 @@ export const zernio: ChatPlatform = {
 							messages.push({
 								id: row.platformMessageId ?? row.id,
 								thread,
-								sentAt: new Date(at(row)).toISOString(),
+								sent_at: new Date(at(row)).toISOString(),
 								from: { handle: row.senderId ?? '', name: row.senderName ?? null },
 								text: row.text ?? row.message ?? ''
 							});

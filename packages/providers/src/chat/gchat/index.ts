@@ -141,7 +141,7 @@ export const gchat: ChatPlatform = {
 				.catch(() => null);
 			if (byNumber !== null) return;
 			const ticket = await verifier
-				.verifyIdToken({ idToken: token, audience: host.webhookUrl })
+				.verifyIdToken({ idToken: token, audience: host.webhook_url })
 				.catch(() => null);
 			const claims = ticket?.getPayload();
 			if (
@@ -165,11 +165,11 @@ export const gchat: ChatPlatform = {
 			return {
 				id: name,
 				thread,
-				sentAt: createTime,
+				sent_at: createTime,
 				from: { handle: sender.name, name: sender.displayName ?? null },
 				text: message.argumentText?.trim() ?? message.text ?? '',
 				group,
-				replyTo: message.quotedMessageMetadata?.name ?? null,
+				reply_to: message.quotedMessageMetadata?.name ?? null,
 				...(message.lastUpdateTime ? { version: message.lastUpdateTime } : {}),
 				files: (message.attachment ?? []).map((file) => {
 					const resource = file.attachmentDataRef?.resourceName;

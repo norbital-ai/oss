@@ -1,4 +1,4 @@
-// Type corpus for gaps found migrating real templates (CTX-TYPES): query refusal and search indexes, `ctx.act` upsert with
+// Type corpus for gaps found migrating real templates (CTX-TYPES): query refusal and search indexes, atomic imports with
 // `on_conflict`, transform-filled create fields, custom `default`/`many`, untagged unions. Each `@ts-expect-error` is a
 // planted mistake.
 import { Effect } from 'effect';
@@ -25,8 +25,10 @@ automation({
 				fields: ['note']
 			}
 		});
-		const d: number = near.orders.rows[0]!.$distance;
-		const n: string | null = near.orders.rows[0]!.note;
+		const first = near.orders.rows[0];
+		if (first === undefined) return;
+		const d: number = first.$distance;
+		const n: string | null = first.note;
 		void d;
 		void n;
 		// @ts-expect-error S1 an undeclared similarity
@@ -44,47 +46,30 @@ automation({
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
-		yield* ctx.act('orders.update', [{ target: target.id, set: { note: 'observed' } }], {
-			observed: { [target.id]: target.revision }
-		});
-		yield* ctx.act(
-			'orders.update',
-			[{ target: target.id, set: { note: 'invalid' } }],
-			// @ts-expect-error an observed revision is numeric
-			{ observed: { [target.id]: '1' } }
-		);
+		yield* ctx.act({ 'orders.update': [{ target, set: { note: 'observed' } }] });
+		// @ts-expect-error write options reject the retired observed map
+		yield* ctx.act({ 'orders.update': [{ target, set: { note: 'invalid' } }] }, { observed: { [target.id]: '1' } });
 	}
 });
 
-// (2) upsert from an automation takes on_conflict
+// (2) imports name their conflict policy in their own input.
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		const [notices, notes] = yield* Effect.all([
-			ctx.query({ notices: { fields: ['id'] } }),
-			ctx.query({ notice_notes: { fields: ['id'] } })
-		]);
-		const notice = notices.notices.rows[0],
-			note = notes.notice_notes.rows[0];
-		if (notice !== undefined)
-			yield* ctx.act('notice_notes.upsert', [{ notice: notice.id, note: 'x' }], {
-				on_conflict: 'update'
-			});
-		if (note !== undefined)
-			yield* ctx.act('notice_notes.upsert', [{ id: note.id, note: 'y' }], {
-				on_conflict: 'update'
-			});
+		const { notices, notice_notes } = yield* ctx.query({ notices: { fields: ['id'] }, notice_notes: { fields: ['id', 'revision'] } });
+		const notice = notices.rows[0], note = notice_notes.rows[0];
+		if (notice !== undefined) yield* ctx.act({ 'notice_notes.import': {
+			rows: [{ notice: notice.id, note: 'x' }], on_conflict: 'update'
+		} });
+		if (note !== undefined) yield* ctx.act({ 'notice_notes.update': [{ target: note, set: { note: 'y' } }] });
 		return 1;
 	}
 });
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		const notices = yield* ctx.query({ notices: { fields: ['id'] } });
-		const notice = notices.notices.rows[0];
-		if (notice !== undefined)
-			// @ts-expect-error U1 upsert without on_conflict (rule 28)
-			yield* ctx.act('notice_notes.upsert', [{ notice: notice.id, note: 'x' }]);
+		// @ts-expect-error U1 upsert is retired
+		yield* ctx.act({ 'notice_notes.upsert': [] });
 		return 1;
 	}
 });
@@ -99,7 +84,7 @@ is<
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		yield* ctx.act('customers.create', [{ email: 'a@b.c' }]);
+		yield* ctx.act({ 'customers.create': [{ email: 'a@b.c' }] });
 		return 1;
 	}
 });

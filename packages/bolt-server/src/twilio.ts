@@ -79,7 +79,7 @@ export const twilioMessages = Effect.fn('Twilio.messages')(function* (account: T
 				`https://api.twilio.com/2010-04-01/Accounts/${account.accountSid}/Messages.json`,
 				{ To: text.to, Body: text.text, ...from }
 			);
-			return { providerId: sent.sid };
+			return { provider_id: sent.sid };
 		})
 	} satisfies TransportDef;
 });

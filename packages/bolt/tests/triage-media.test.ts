@@ -5,7 +5,7 @@ import { triageAttachments } from '../src/engine/agent/attachments.ts';
 import { Files, Images, Logs } from '../src/engine/ports.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { imagesPort } from '../src/node/images.ts';
+import { images_port } from '../src/node/images.ts';
 
 const fixture = (name: string, mime: string, bytes: Uint8Array) => {
 	const row = { id: 'f', name, mime, size: bytes.length, key: 'original', sha256: 'a'.repeat(64) };
@@ -29,7 +29,7 @@ const fixture = (name: string, mime: string, bytes: Uint8Array) => {
 	const logs = Logs.of({ write: () => Effect.void, query: () => Effect.succeed([]) });
 	return { db, files, logs, reads: () => reads };
 };
-const images = Effect.map(Layer.build(Images.fromAbi(imagesPort)), (c) => Context.get(c, Images));
+const images = Effect.map(Layer.build(Images.fromAbi(images_port)), (c) => Context.get(c, Images));
 const context = { now: '2026-10-30T00:00:00.000Z', conversation: 'conversation' };
 const messages = [{ id: 'm0', files: [{ id: 'f' }] }];
 describe('triage media evidence', () => {

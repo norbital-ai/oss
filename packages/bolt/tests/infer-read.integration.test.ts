@@ -12,9 +12,9 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 import { Ai } from '../src/engine/ports.ts';
-import { TestWorkspace, respondSystem1, type Kit } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, respond_system_1, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -49,9 +49,8 @@ const manifest = {
 	exposures: {
 		invoices: {
 			outputs: { default: { invoices: { fields: 'all' } } },
-			create: { columns: { invoices: ['number', 'supplier', 'amount'] } },
-			update: { columns: { invoices: ['note'] } },
-			effect: { created: true }
+			create: { columns: { invoices: ['number', 'supplier', 'amount'] }, effect: true },
+			update: { columns: { invoices: ['note'] } }
 		},
 		purchase_orders: {
 			outputs: {
@@ -98,10 +97,10 @@ const manifest = {
 	},
 	integrations: {},
 	teams: {},
-	connections: {},
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -109,20 +108,20 @@ const guest = program(`import { Effect, Result } from 'effect';
 const output = { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text' } } };
 const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match invoice ' + inv.number, output, tools: ['read'], steps: 2 }));
 export default {
-model: { invoices: { bodies: { effect: { created: function* (rows, ctx) {
-	yield* ctx.schedule('match', { ids: rows.map((row) => row.id) });
+model: { invoices: { bodies: { effect: { create: function* (changes, ctx) {
+	yield* ctx.schedule('match', { ids: changes.map((change) => change.after.id) });
 } } } } },
 automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
 			const inv = (yield* ctx.query({ invoices: { where: { id: { eq: id } } } })).invoices.rows[0];
 			const r = yield* infer(ctx, inv);
-			yield* ctx.act('invoices.update', [{ target: id, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } }]);
+			yield* ctx.act({ 'invoices.update': [{ target: inv, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } }] });
 		}
 	} },
 	relay: { body: function* (input, ctx) {
 		const r = yield* infer(ctx, { number: input.id });
-		yield* ctx.act('ledgers.create', [{ title: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' }]);
+		yield* ctx.act({ 'ledgers.create': [{ title: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' }] });
 	} }
 } };`);
 
@@ -139,7 +138,7 @@ const cassette = () => {
 	const requests: AiRequest[] = [];
 	const script: { steps: readonly Step[]; index: number } = { steps: [], index: 0 };
 	const port: Ai['Service'] = {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Effect.succeed({ models: [{ id: 'default', label: 'Default' }], default: 'default' }),
@@ -175,7 +174,7 @@ const shared = Effect.runSync(
 					ports: Layer.succeed(Ai, ai.port)
 				})
 			);
-			return { t: Context.get(context, TestWorkspace), route: yield* routeFixture(context), ai };
+			return { t: Context.get(context, TestWorkspace), route: yield* route_fixture(context), ai };
 		}).pipe(Scope.provide(fileScope))
 	)
 );
@@ -184,9 +183,9 @@ const open = (steps: readonly Step[]) =>
 		ai.arm(steps);
 		return fixture;
 	});
-const clerk = (t: Kit) => t.as(t.member(['clerk'])).authority;
+const clerk = (t: Kit) => t.as(t.member(['clerk'])).pipe(Effect.map((clerk) => clerk.authority));
 const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
-	actReply(route, clerk(t), { callable, input, issuedAt: t.clock.now() }).pipe(
+	clerk(t).pipe(Effect.flatMap((authority) => act_reply(route, authority, { acts: { [callable]: input }, issued_at: t.clock.now() })),
 		Effect.map((reply) => {
 			const outcome: Outcome = reply.outcome;
 			if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
@@ -194,9 +193,9 @@ const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
 		})
 	);
 const note = (t: Kit, route: FixtureRoute, id: string) =>
-	qReply(route, clerk(t), {
+	clerk(t).pipe(Effect.flatMap((authority) => q_reply(route, authority, {
 		reads: [{ m: 'query', a: [{ invoices: { where: { id: { eq: id } }, fields: ['note'] } }] }]
-	}).pipe(
+	})),
 		Effect.map(
 			(reply) =>
 				Schema.decodeUnknownSync(
@@ -264,7 +263,7 @@ describe("sys_2.infer tools: ['read']", () => {
 							amount: 120
 						}
 					]);
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(yield* note(t, route, id)).toBe(JSON.stringify({ matched: true, po: 'PO-1' }));
 					expect(ai.requests).toHaveLength(3);
 					const offered = ai.requests[0]!.tools!;
@@ -328,16 +327,16 @@ describe("sys_2.infer tools: ['read']", () => {
 						amount: 1
 					}
 				]);
-				yield* t.runDue();
+				yield* t.run_due();
 				expect(yield* note(t, route, id)).toBe('failed');
 				const asked = ai.requests.length;
-				yield* actReply(route, clerk(t), {
-					callable: 'start',
+				yield* act_reply(route, yield* clerk(t), {
+					callable: 'run',
 					input: { automation: 'relay', input: { id }, id: uuidv7(Date.parse(t.clock.now())) },
-					issuedAt: t.clock.now()
+					issued_at: t.clock.now()
 				});
-				yield* t.runDue();
-				const ledgers = yield* qReply(route, clerk(t), {
+				yield* t.run_due();
+				const ledgers = yield* q_reply(route, yield* clerk(t), {
 					reads: [{ m: 'query', a: [{ ledgers: { fields: ['title'] } }] }]
 				});
 				expect(JSON.stringify(ledgers.answers[0])).toContain(

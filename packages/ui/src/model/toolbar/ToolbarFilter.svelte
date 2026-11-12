@@ -10,8 +10,8 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 		open?: boolean;
 		count?: number;
 		label?: string;
-		panelClass?: string;
-		onOpenChange?: (open: boolean) => void;
+		panel_class?: string;
+		on_open_change?: (open: boolean) => void;
 		children: Snippet;
 	};
 </script>
@@ -24,13 +24,13 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 		open = $bindable(false),
 		count = 0,
 		label = 'Filter and sort',
-		panelClass,
-		onOpenChange,
+		panel_class,
+		on_open_change,
 		children
 	}: ToolbarFilterProps = $props();
 </script>
 
-<Popover.Root bind:open onOpenChange={(value) => onOpenChange?.(value)}>
+<Popover.Root bind:open on_open_change={(value) => on_open_change?.(value)}>
 	<Popover.Trigger>
 		{#snippet child({ props })}
 			<button
@@ -71,7 +71,7 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 		class={cn(
 			'flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-3 p-3',
 			'[&_input:not([type=checkbox])]:min-h-(--hit-target) [&_select]:min-h-(--hit-target)',
-			panelClass
+			panel_class
 		)}
 		data-view-panel
 	>

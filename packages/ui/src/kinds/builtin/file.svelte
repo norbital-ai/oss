@@ -4,14 +4,14 @@ The built-in `file` custom field's renderer: an upload input when edited and a c
 -->
 <script lang="ts">
 	import { Array as Arr } from 'effect';
-	import { uiText } from '../../primitives/utils.js';
+	import { ui_text } from '../../primitives/utils.js';
 	import type { KindView } from '../context.js';
 	import FileInput from '../file-input.svelte';
 	import FileCollection from '../file-collection.svelte';
 	import { isFile, type KindOf } from '../kind.js';
 
 	let { view }: { view: KindView } = $props();
-	const t = uiText();
+	const t = ui_text();
 	const kind = $derived<KindOf<'file'>>(
 		view.kind?.kind === 'file' ? view.kind : { kind: 'file', accept: ['*/*'], max: '20MiB' }
 	);
@@ -22,7 +22,7 @@ The built-in `file` custom field's renderer: an upload input when edited and a c
 	<FileInput
 		{kind}
 		value={view.value}
-		onChange={view.onChange}
+		on_change={view.on_change}
 		name={view.name}
 		id={view.id}
 		disabled={view.disabled}

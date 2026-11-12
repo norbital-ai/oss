@@ -4,8 +4,9 @@ import { Result } from 'effect';
 import { children } from './cel-ast.ts';
 import type { Value } from './kind.ts';
 import { Decimal } from './decimal.ts';
+import { literal } from './sql.ts';
+import { UUID_PATTERN } from './id.ts';
 
-const literal = (s: string) => `'${s.replaceAll("'", "''")}'`;
 const string = (sql: string) => `(${sql} #>> '{}')`;
 const bool = (sql: string) =>
 	`(CASE WHEN jsonb_typeof(${sql}) = 'boolean' THEN ${string(sql)} END)::boolean`;
@@ -46,10 +47,20 @@ export type LabelProgram = {
 	readonly evaluate: (row: { readonly [field: string]: Value }) => unknown;
 	readonly sql: (read: (path: string) => string) => string;
 };
+
+/** Native label text uses the same scalar/fallback rules as the browser; `from` supplies a materializer's row. */
+export const label_text_sql = (expression: string, from?: string): string => `SELECT CASE
+		WHEN value ~* '${UUID_PATTERN.source}' THEN NULL
+		WHEN left(value, 1) IN ('{', '[') AND pg_input_is_valid(value, 'jsonb') THEN NULL
+		WHEN value ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}([.]\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$' THEN
+			CASE WHEN (value::timestamptz AT TIME ZONE 'UTC')::time = '00:00:00'::time THEN to_char(value::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+			ELSE to_char(value::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') END
+		ELSE nullif(btrim(value), '') END
+		FROM (SELECT (${expression} #>> '{}') AS value${from === undefined ? '' : ` FROM ${from}`}) label_value`;
 const cache = new Map<string, LabelProgram | { readonly error: string }>();
 
 /** Compile pure CEL over `record` (bare field names also work). Unsupported native operators fail at authoring. */
-export function labelExpression(expression: string): LabelProgram | { readonly error: string } {
+export function label_expression(expression: string): LabelProgram | { readonly error: string } {
 	const hit = cache.get(expression);
 	if (hit !== undefined) return hit;
 	const result = Result.try(() => {

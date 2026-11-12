@@ -5,6 +5,7 @@
 // table's columns, refs and inverses are computed once per schema and then read by indexed access. Positions that take
 // a literal (`where`, `select`, `with`) are plain object types over a known table, so an unknown key is an excess
 // property, and TS checks a fresh literal against the instantiated type, not a constraint over every table.
+import type { InitialStampFields } from '@norbital-ai/std/kind';
 import type { Decimal, Duration, Instant, PlainDate } from './values.ts';
 import type {
 	DatePeriod,
@@ -357,14 +358,14 @@ export type RollupQuery<S extends AnySchema, T, By extends readonly Sortable<S, 
 	/** Combine independent writers by sum, or one shared reading by max, before summarizing time. */
 	readonly combine?: 'sum' | 'max';
 } & (
-	| { readonly stepMillis?: number; readonly latestPer?: never; readonly carry?: never }
+	| { readonly step_millis?: number; readonly latest_per?: never; readonly carry?: never }
 	| {
-			readonly latestPer: readonly Sortable<S, T>[];
-			readonly stepMillis?: never;
+			readonly latest_per: readonly Sortable<S, T>[];
+			readonly step_millis?: never;
 			readonly carry?: {
 				readonly from: Instant;
 				readonly until: Instant;
-				readonly stepMillis: number;
+				readonly step_millis: number;
 			};
 	  }
 );
@@ -387,7 +388,7 @@ export type RollupResult<S extends AnySchema, T, Q> = Q extends {
 			S,
 			T,
 			By,
-			Q extends { readonly stepMillis: number } | { readonly carry: object } ? number : null
+			Q extends { readonly step_millis: number } | { readonly carry: object } ? number : null
 		>
 	: never;
 
@@ -411,11 +412,11 @@ type NewValue<S extends AnySchema, K, InitialOnly extends boolean> = InitialOnly
 type NewRow<S extends AnySchema, T, InitialOnly extends boolean> = Simplify<
 	{
 		readonly [
-			P in Writable<S, T> & keyof Kinds<S, T> as Omittable<Kinds<S, T>[P]> extends true ? never : P
+			P in Writable<S, T> & keyof Kinds<S, T> as P extends InitialStampFields<Kinds<S, T>> ? never : Omittable<Kinds<S, T>[P]> extends true ? never : P
 		]: Loose<NewValue<S, Kinds<S, T>[P], InitialOnly>>;
 	} & {
 		readonly [
-			P in Writable<S, T> & keyof Kinds<S, T> as Omittable<Kinds<S, T>[P]> extends true ? P : never
+			P in Writable<S, T> & keyof Kinds<S, T> as P extends InitialStampFields<Kinds<S, T>> ? P : Omittable<Kinds<S, T>[P]> extends true ? P : never
 		]?: Loose<NewValue<S, Kinds<S, T>[P], InitialOnly>>;
 	} & (Spec<S, T> extends { key: readonly string[] }
 			? {}
@@ -530,7 +531,6 @@ type ScalarOps<K, X extends Operands> = {
 	readonly eq?: Val<K, X>;
 	readonly ne?: Val<K, X>;
 	readonly in?: readonly Literal<K>[];
-	readonly nin?: readonly Literal<K>[];
 	readonly is_null?: boolean;
 } & (K extends Ordered
 	? {
@@ -551,41 +551,50 @@ type PeriodArg<K> = K extends { of: 'date' }
  * A predicate inside an inline value, by its shape: an object's fields by name, a list's items quantified, a scalar by
  * its kind's operators; the whole value by containment (`@>`).
  */
-export type ShapeWhere<K, X extends Operands = Plain> = K extends { many: true }
+export type ShapeWhere<K, X extends Operands = Plain> = K extends { kind: 'json'; shape: infer Sh }
+	? ShapeWhere<Sh, X>
+	: ShapeNode<K, X> & (K extends { kind: 'object'; fields: infer F } ? Omit<ShapeLogic<K, X>, keyof F>
+		: K extends { kind: 'record' } ? {} : ShapeLogic<K, X>);
+type ShapeLogic<K, X extends Operands> = {
+	readonly and?: readonly ShapeWhere<K, X>[];
+	readonly or?: readonly ShapeWhere<K, X>[];
+	readonly not?: ShapeWhere<K, X>;
+};
+type ShapeNode<K, X extends Operands> = K extends { many: true }
 	? {
 			readonly some?: ShapeWhere<Omit<K, 'many'>, X>;
 			readonly every?: ShapeWhere<Omit<K, 'many'>, X>;
 			readonly none?: ShapeWhere<Omit<K, 'many'>, X>;
-			readonly isEmpty?: boolean;
 			readonly contains?: Json;
+			readonly eq?: readonly Json[];
+			readonly ne?: readonly Json[];
+			readonly is_null?: boolean;
 		}
-	: K extends { kind: 'json'; shape: infer Sh }
-		? ShapeWhere<Sh, X>
-		: K extends { kind: 'object'; fields: infer F }
+	: K extends { kind: 'object'; fields: infer F }
 			? { readonly [P in keyof F]?: ShapeWhere<F[P], X> } & {
 					readonly contains?: Json;
 					readonly is_null?: boolean;
 				}
 			: K extends { kind: 'record' | 'union' | 'json' | 'custom' }
-				? { readonly contains?: Json; readonly is_null?: boolean; readonly isEmpty?: boolean }
+				? { readonly contains?: Json; readonly is_null?: boolean; readonly eq?: readonly Json[]; readonly ne?: readonly Json[] }
 				: ScalarKindOps<K, X>;
 /** Operators without an inline-shape branch, so shape traversal only recurses into an actual child kind. */
 type ScalarKindOps<K, X extends Operands> = K extends { kind: 'text' | 'enum'; many: true }
 	? {
 			readonly has?: Literal<K>;
-			readonly hasAny?: readonly Literal<K>[];
-			readonly hasAll?: readonly Literal<K>[];
-			readonly isEmpty?: boolean;
+			readonly eq?: readonly Literal<K>[];
+			readonly ne?: readonly Literal<K>[];
+			readonly is_null?: boolean;
 		}
 	: K extends { kind: 'period' }
 		? {
 				readonly contains?: Literal<{ kind: K extends { of: 'date' } ? 'date' : 'instant' }>;
 				readonly overlaps?: PeriodArg<K>;
-				readonly within?: PeriodArg<K>;
+				readonly contained_by?: PeriodArg<K>;
 				/** The period's first day (start instant) falls in this span: "joined in January". */
-				readonly startsWithin?: PeriodArg<K>;
+				readonly starts_within?: PeriodArg<K>;
 				/** The period's last day (end instant) falls in this span; an open-ended period never does. */
-				readonly endsWithin?: PeriodArg<K>;
+				readonly ends_within?: PeriodArg<K>;
 				readonly is_null?: boolean;
 			}
 		: K extends { kind: 'point' }
@@ -609,7 +618,7 @@ export type Ops<K, X extends Operands = Plain> = K extends {
 		  }
 		? ShapeWhere<K, X>
 		: ScalarKindOps<K, X>;
-type RefOps<K, X extends Operands> = Pick<ScalarOps<K, X>, 'eq' | 'ne' | 'in' | 'nin' | 'is_null'>;
+type RefOps<K, X extends Operands> = Pick<ScalarOps<K, X>, 'eq' | 'ne' | 'in' | 'is_null'>;
 type RefWhere<S extends AnySchema, T, R, X extends Operands> =
 	IsUnion<OneTarget<S, T, R>> extends true
 		? {
@@ -649,7 +658,7 @@ export type Where<S extends AnySchema, T, X extends Operands = Plain> = {
 		(Columns<S, T>[P] extends { kind: 'text' }
 			? { readonly folded?: string; readonly digits?: string }
 			: Columns<S, T>[P] extends { kind: 'instant' }
-				? { readonly olderThan?: Duration }
+				? { readonly older_than?: Duration }
 				: {});
 } & {
 	readonly [R in RefName<S, T>]?: RefWhere<S, T, R, X>;

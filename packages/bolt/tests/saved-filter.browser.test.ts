@@ -1,12 +1,13 @@
+import { required } from './support/required.ts';
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { mount, unmount } from 'svelte';
 import { page } from 'vitest/browser';
 import { scriptedBolt } from '../../ui/tests/scripted-bolt.ts';
-import { filterOffers as fields } from './support/filter-catalog.ts';
+import { filter_offers as fields } from './support/filter-catalog.ts';
 import Editor from './support/saved-filter.svelte';
-import { filterCatalog } from './support/filter-catalog.ts';
-import type { FilterVariables } from '../../ui/src/filter/filter.ts';
+import { filter_catalog } from './support/filter-catalog.ts';
+import type { FilterVariables } from '../../ui/src/filter/operators.ts';
 import type { ModelExposure } from '../../ui/src/kinds/context.ts';
 import './support/filter-editor.css';
 
@@ -58,7 +59,7 @@ const captured: FilterVariables = {
 			: 'Choose a captured event field.'
 };
 const ruleCatalog: Record<string, ModelExposure> = {
-	...filterCatalog,
+	...filter_catalog,
 	obligation: {
 		label: [],
 		fields: {
@@ -121,7 +122,7 @@ it('saved event filters edit hidden bindings and empty relations with the table 
 						if (!operator) throw Error('The empty relation is an editable condition.');
 						await page.elementLocator(operator).click();
 						await page
-							.elementLocator(document.querySelector('[data-value=notNull] button')!)
+							.elementLocator(required(document.querySelector('[data-value=not_null] button')))
 							.click();
 						await expect
 							.poll(() => document.querySelector('output[data-saved-filter]')?.textContent)

@@ -1,22 +1,24 @@
 // A model declaration (§1, §2): one entity in `src/data/model/<name>/+model.ts`: what it stores (fields, `ref` fields,
 // keys, checks, computed fields, search), what callers see and send (`outputs`, `create`, `update`, `delete`), and its code
-// (write callbacks, search indexes, `notify`, syncs), every callback inside the literal. The data part is
+// (write transforms/effects, search indexes, syncs), every callback inside the literal. The data part is
 // checked against the literal itself; each body is typed from the generated names by the model's `name`, never from the
 // literal, so no type reads its own file. Cross-model names (an inverse, a roll-up, a FK in `record_label`) are checked by `Verify`.
-// `splitModel` turns a literal into the engine's three manifest parts: storage, relationships, exposure; `layerModels`
+// `split_model` turns a literal into the engine's three manifest parts: storage, relationships, exposure; `layer_models`
 // resolves each declared layer path (`'orders.lines.product'`) to the model behind it.
-import type { CatalogExposure } from '@norbital-ai/store';
-import { Schema } from 'effect';
-import { attached, type Body } from './body.ts';
+import type { CatalogExposure, ComputedKind, Expr, KindSpec } from '@norbital-ai/store';
+export type { ComputedKind, Expr } from '@norbital-ai/store';
+import type { ConstraintData, ModelData, SyncData } from './model-data.ts';
+import { Predicate, Schema } from 'effect';
+import { attached, type Body, type GeneratorBody } from './body.ts';
 import type {
 	BodyReturn,
-	Carried,
 	CreatedRow,
-	CreateTransformRow,
-	NotifyCtx,
-	NotifyEvent,
+	ProposedTree,
+	StoredTree,
+	CreateSet,
+	Change,
 	TransformAnswer,
-	UpdateTransformSet,
+	UpdateSet,
 	WriteCtx
 } from './ctx.ts';
 import type {
@@ -45,54 +47,17 @@ import type {
 } from './names.ts';
 import type { MediaType } from './media-types.ts';
 import type { EffectCtx } from './runtime/automation.ts';
-import type { Notice } from './runtime/facilities.ts';
 import type { EmbeddingModelName } from './runtime/names.ts';
 import type { BuiltinParser, FileSync, RemoteSync } from './runtime/sync.ts';
-import type { Duration, IconName, Json, Vector } from './values.ts';
+import type { Duration, Json, Vector } from './values.ts';
 import type { StaticWhere, Where } from './where.ts';
 
-/** The kinds a computed field's expression may produce. */
-export type ComputedKind = 'text' | 'int' | 'decimal' | 'money' | 'bool' | 'date' | 'instant';
 type ComputedField = {
 	readonly kind: ComputedKind;
 	readonly computed: Expr;
 	readonly scale?: number;
 };
-type Unit = 'day' | 'week' | 'month' | 'quarter' | 'year';
-type E = Expr;
-/** A computed expression: an operator tree over the model's own fields (§3.3.2, rule 3). */
-export type Expr =
-	| { field: string }
-	| number
-	| string
-	| boolean
-	| { plus: readonly [E, E] }
-	| { minus: readonly [E, E] }
-	| { times: readonly [E, E] }
-	| { div: readonly [E, E] }
-	| { round: readonly [E, number] }
-	| { concat: readonly E[] }
-	| { plusDays: readonly [E, E] }
-	| { startOf: readonly [E, Unit] }
-	| { text: E }
-	| { lower: E }
-	| { upper: E }
-	| { trim: E }
-	| { substring: readonly [E, E] | readonly [E, E, E] }
-	| { regexReplace: readonly [E, string, string] }
-	/** A json field's member as text (`party->>'id'`). */
-	| { jsonText: readonly [E, string] }
-	| { eq: readonly [E, E] }
-	| { ne: readonly [E, E] }
-	| { gt: readonly [E, E] }
-	| { gte: readonly [E, E] }
-	| { lt: readonly [E, E] }
-	| { lte: readonly [E, E] }
-	| { and: readonly E[] }
-	| { or: readonly E[] }
-	| { not: E }
-	| { when: readonly [E, E, E] }
-	| { coalesce: readonly E[] };
+type Unit = Extract<Expr, { readonly start_of: unknown }>['start_of'][1];
 
 type AnyNullable<Xs, F, C, Seen> = Xs extends readonly unknown[]
 	? true extends NullableOfExpr<Xs[number], F, C, Seen>
@@ -147,9 +112,9 @@ type NullableOperation<X, F, C, Seen> = X extends { plus: infer Args }
 					? NullableOfExpr<A, F, C, Seen>
 					: X extends { concat: readonly unknown[] }
 						? false
-						: X extends { plusDays: infer Args }
+						: X extends { plus_days: infer Args }
 							? AnyNullable<Args, F, C, Seen>
-							: X extends { startOf: readonly [infer A, Unit] }
+							: X extends { start_of: readonly [infer A, Unit] }
 								? NullableOfExpr<A, F, C, Seen>
 								: X extends { text: infer A }
 									? NullableOfExpr<A, F, C, Seen>
@@ -161,11 +126,13 @@ type NullableOperation<X, F, C, Seen> = X extends { plus: infer Args }
 												? NullableOfExpr<A, F, C, Seen>
 												: X extends { substring: infer Args }
 													? AnyNullable<Args, F, C, Seen>
-													: X extends { regexReplace: readonly [infer A, string, string] }
+													: X extends { regex_replace: readonly [infer A, string, string] }
 														? NullableOfExpr<A, F, C, Seen>
-														: X extends { jsonText: readonly unknown[] }
+														: X extends { json_text: readonly unknown[] }
 															? true
-															: X extends { eq: infer Args }
+															: X extends { json_length: infer A }
+																? NullableOfExpr<A, F, C, Seen>
+																: X extends { eq: infer Args }
 																? AnyNullable<Args, F, C, Seen>
 																: X extends { ne: infer Args }
 																	? AnyNullable<Args, F, C, Seen>
@@ -204,12 +171,10 @@ type NullableOperation<X, F, C, Seen> = X extends { plus: infer Args }
 																										: true;
 
 /** The same NULL guarantees as NullableOfExpr, over the declared expression used by generated SQL. */
-export function nullableOfExpr(
+export function nullable_of_expr(
 	expr: Expr,
 	model: {
-		readonly fields: {
-			readonly [name: string]: { readonly kind: string; readonly optional?: true };
-		};
+		readonly fields: Readonly<Record<string, Pick<KindSpec, 'kind' | 'optional'>>>;
 		readonly computed?: { readonly [name: string]: { readonly expr: Expr } };
 	}
 ): boolean {
@@ -229,15 +194,16 @@ export function nullableOfExpr(
 		if ('div' in x) return typeof x.div[1] !== 'number' || x.div[1] === 0 || nullable(x.div[0]);
 		if ('round' in x) return nullable(x.round[0]);
 		if ('concat' in x) return false;
-		if ('plusDays' in x) return x.plusDays.some(nullable);
-		if ('startOf' in x) return nullable(x.startOf[0]);
+		if ('plus_days' in x) return x.plus_days.some(nullable);
+		if ('start_of' in x) return nullable(x.start_of[0]);
 		if ('text' in x) return nullable(x.text);
 		if ('lower' in x) return nullable(x.lower);
 		if ('upper' in x) return nullable(x.upper);
 		if ('trim' in x) return nullable(x.trim);
 		if ('substring' in x) return x.substring.some(nullable);
-		if ('regexReplace' in x) return nullable(x.regexReplace[0]);
-		if ('jsonText' in x) return true;
+		if ('regex_replace' in x) return nullable(x.regex_replace[0]);
+		if ('json_text' in x) return true;
+		if ('json_length' in x) return nullable(x.json_length);
 		if ('eq' in x) return x.eq.some(nullable);
 		if ('ne' in x) return x.ne.some(nullable);
 		if ('gt' in x) return x.gt.some(nullable);
@@ -359,6 +325,15 @@ type Text1<A, Op extends string> = A extends Err
 	: A extends 'text'
 		? 'text'
 		: `error: ${Op} needs text`;
+// Store col_type keeps text/enum lists in native arrays; other lists and these scalar kinds use JSONB.
+type JsonColumn<K> = K extends { many: true; kind: 'text' | 'enum' }
+	? false
+	: K extends { many: true } | { kind: 'json' | 'object' | 'file' | 'custom' } ? true : false;
+type JsonLengthKind<X, F> = X extends { field: infer N }
+	? N extends keyof F
+		? JsonColumn<F[N]> extends true ? 'int' : 'error: json_length reads a JSON array column'
+		: `error: unknown field '${N & string}'`
+	: 'error: json_length reads a JSON array column';
 /** The kind an expression evaluates to over fields `F`. */
 export type KindOfExpr<X, F> = X extends number
 	? `${X}` extends `${string}.${string}`
@@ -393,21 +368,21 @@ export type KindOfExpr<X, F> = X extends number
 												'text',
 												'concat needs text (cast with `text`)'
 											>
-										: X extends { plusDays: readonly [infer A, infer B] }
+										: X extends { plus_days: readonly [infer A, infer B] }
 											? Two<
 													KindOfExpr<A, F>,
 													KindOfExpr<B, F>,
 													KindOfExpr<A, F> extends 'date'
 														? KindOfExpr<B, F> extends 'int'
 															? 'date'
-															: 'error: plusDays needs an int'
-														: 'error: plusDays needs a date'
+															: 'error: plus_days needs an int'
+														: 'error: plus_days needs a date'
 												>
-											: X extends { startOf: readonly [infer A, Unit] }
+											: X extends { start_of: readonly [infer A, Unit] }
 												? KindOfExpr<A, F> extends infer K
 													? K extends Err | 'date' | 'instant'
 														? K
-														: 'error: startOf needs a date or an instant'
+														: 'error: start_of needs a date or an instant'
 													: never
 												: X extends { text: infer A }
 													? KindOfExpr<A, F> extends infer K
@@ -425,17 +400,19 @@ export type KindOfExpr<X, F> = X extends number
 																? Text1<KindOfExpr<A, F>, 'trim'>
 																: X extends { substring: readonly [infer A, ...unknown[]] }
 																	? Text1<KindOfExpr<A, F>, 'substring'>
-																	: X extends { regexReplace: readonly [infer A, string, string] }
-																		? Text1<KindOfExpr<A, F>, 'regexReplace'>
-																		: X extends { jsonText: readonly [infer A, string] }
+																	: X extends { regex_replace: readonly [infer A, string, string] }
+																		? Text1<KindOfExpr<A, F>, 'regex_replace'>
+																		: X extends { json_text: readonly [infer A, string] }
 																			? KindOfExpr<A, F> extends infer K
 																				? K extends Err
 																					? K
 																					: K extends 'json'
 																						? 'text'
-																						: 'error: jsonText needs a json field'
+																						: 'error: json_text needs a json field'
 																				: never
-																			: X extends
+																			: X extends { json_length: infer A }
+																				? JsonLengthKind<A, F>
+																				: X extends
 																						| { eq: readonly [infer A, infer B] }
 																						| { ne: readonly [infer A, infer B] }
 																				? Comparable<KindOfExpr<A, F>, KindOfExpr<B, F>>
@@ -504,7 +481,6 @@ type OwnOps<F, K> = {
 	eq?: OwnVal<F, K>;
 	ne?: OwnVal<F, K>;
 	in?: readonly Literal<K>[];
-	nin?: readonly Literal<K>[];
 	is_null?: boolean;
 	lt?: OwnVal<F, K>;
 	lte?: OwnVal<F, K>;
@@ -613,7 +589,7 @@ export type RefField = {
 	/** What deleting the target does: refuse (`restrict`, default), delete this row (`cascade`), or clear the ref (`set_null`). */
 	on_delete?: 'restrict' | 'cascade' | 'set_null';
 	/** Which target rows the ref may name: a static predicate over the target's own fields (`{ integration: { eq } }` for an instance). */
-	where?: object;
+	where?: Readonly<Record<string, Json>>;
 	/** Filled from the writer when omitted: their member id (`sys_user` refs) or their party. */
 	default?: { var: 'requestor.id' | 'requestor.party' };
 };
@@ -634,41 +610,21 @@ type OwnedRef<F> = OfKind<F, { kind: 'ref'; owned: true }>;
 type Exposed<S, X> = S extends { outputs: { default: unknown } }
 	? X
 	: 'error: a model without outputs.default is not exposed: declare it first';
-/** One `attaches` target: an optional ref of another model that points back at this model. */
-type AttachTarget<K> = {
-	[M in TargetName]: {
-		[F in keyof OneRels<M>]: OneRels<M>[F] extends { optional: true }
-			? K extends TargetsOf<OneRels<M>[F]>
-				? { readonly model: M; readonly field: F }
-				: never
-			: never;
-	}[keyof OneRels<M>];
-}[TargetName];
-/** The literal's layer paths below its root `K`. */
-type Below<K, L> = { [P in keyof L]: P extends `${K & string}.${string}` ? P : never }[keyof L];
-/** A layer map over the literal `L`: the root `K` takes `Root`, each deeper path `Deep`; any other key is refused. */
-type Layers<K, L, Root, Deep> = { [P in K & string]: Root } & { [P in Below<K, L>]: Deep };
-type LayersOf<S, V extends string, X extends string> = S extends { [P in V]: { [Q in X]: infer L } }
-	? L
-	: {};
-interface CreateFor<K, S, F> {
-	/** The columns a writer sends, per layer: the root's own, and each child layer's (a many-relation's rows). */
-	columns: Layers<K, LayersOf<S, 'create', 'columns'>, readonly Writable<F>[], readonly string[]>;
-	/** Columns the `transform` fills when the writer omits them, per layer. */
-	filled?: Partial<
-		Layers<K, LayersOf<S, 'create', 'filled'>, readonly Writable<F>[], readonly string[]>
-	>;
+type LayersOf<S, V extends string, X extends string> = S extends { [P in V]: { [Q in X]: infer L } } ? L : {};
+type ColumnTreeFor<L, Field extends string> = { readonly fields: readonly Field[] } & {
+	readonly [R in Exclude<keyof L, 'fields'>]: ColumnTreeFor<L[R], string>;
+};
+interface CreateFor<S, F> {
+	columns: ColumnTreeFor<LayersOf<S, 'create', 'columns'>, Writable<F>>;
+	/** Columns the transform fills when the writer omits them, in the same tree. */
+	filled?: ColumnTreeFor<LayersOf<S, 'create', 'filled'>, Writable<F>>;
 	transform?: unknown;
+	effect?: unknown;
 }
-interface UpdateFor<K, S, F> {
-	/** The columns a writer changes, per layer; a child layer's rows are created, updated, deleted, linked or unlinked. */
-	columns: Layers<
-		K,
-		LayersOf<S, 'update', 'columns'>,
-		readonly Exclude<Writable<F>, OwnedRef<F>>[],
-		readonly string[]
-	>;
+interface UpdateFor<S, F> {
+	columns: ColumnTreeFor<LayersOf<S, 'update', 'columns'>, Exclude<Writable<F>, OwnedRef<F>>>;
 	transform?: unknown;
+	effect?: unknown;
 }
 type OutputFields<Field extends string = string> = 'all' | readonly Field[];
 /** A model output names its fields, then one nested output per related model. */
@@ -684,26 +640,13 @@ type OutputsFor<O, F, C> = {
 };
 type Part<S, K extends string> = S extends { [P in K]: infer V } ? V : {};
 
-const ConstraintData = /* @__PURE__ */ (() => {
-	const where = Schema.Record(Schema.String, Schema.Json);
-	const optionalWhere = Schema.optionalKey(where);
-	const fields = Schema.Array(Schema.String);
-	return Schema.Record(
-		Schema.String,
-		Schema.Union([
-			Schema.Struct({ unique: Schema.NonEmptyArray(Schema.String), where: optionalWhere }),
-			Schema.Struct({ check: where }),
-			Schema.Struct({ no_overlap: Schema.String, per: fields, where: optionalWhere }),
-			Schema.Struct({ locked: where, except: Schema.optionalKey(fields) })
-		])
-	);
-})();
 type Constraint = (typeof ConstraintData.Type)[string];
-const decodeConstraints = /* @__PURE__ */ Schema.decodeUnknownSync(ConstraintData, {
-	onExcessProperty: 'error'
-});
 type ConstraintFor<Rule, F, All> = Rule extends { unique: infer Columns }
-	? { unique: ColRefs<F, Columns>; where?: OwnWhere<All> }
+	? {
+			unique: ColRefs<F, Columns>;
+			where?: Rule extends { import_key: true } ? never : OwnWhere<All>;
+			import_key?: true;
+		}
 	: Rule extends { check: unknown }
 		? { check: OwnWhere<All> }
 		: Rule extends { no_overlap: string; per: infer Columns }
@@ -722,7 +665,7 @@ type SemanticIndex = { fields: readonly string[]; model: EmbeddingModelName; dim
 type NativeIndex = {
 	on: readonly (string | { lower: string })[];
 	unique?: true;
-	where?: object;
+	where?: Readonly<Record<string, Json>>;
 };
 type CustomIndex = {
 	description: string;
@@ -794,8 +737,8 @@ interface SyncFor<X> {
 	write?: unknown;
 }
 
+type ModelMetadata = Pick<ModelSpec, 'description' | 'was' | 'icon' | 'record_label'>;
 interface ModelFor<
-	K,
 	S,
 	F = FieldsIn<S>,
 	C = ComputedIn<S>,
@@ -803,12 +746,7 @@ interface ModelFor<
 	CK = { [P in keyof C]: { kind: C[P] extends { kind: infer X } ? X : never } },
 	All = Own & CK,
 	ReservedKeys = ReservedIn<S>
-> {
-	description: string;
-	was?: string;
-	icon?: IconName;
-	/** Optional pure CEL identifier over `record`; shared by record views, live approval references and automatic text search. */
-	record_label?: string;
+> extends ModelMetadata {
 	fields: {
 		[P in keyof F]: P extends ReservedKeys
 			? `error: '${P & string}' is a system column`
@@ -816,23 +754,14 @@ interface ModelFor<
 				? RefFor<F[P]>
 				: ValidField<F[P], Own>;
 	} & ComputedFields<Own, C, keyof F | SystemColumn>;
-	key?: S extends { key: infer L } ? ColRefs<F & CK, L> : never;
 	constraints?: {
 		[R in keyof Part<S, 'constraints'>]: ConstraintFor<Part<S, 'constraints'>[R], F & CK, All>;
 	};
 	indexes?: IndexesFor<F & CK, Part<S, 'indexes'>>;
-	table?: {
-		primary: 'text' | 'uuid' | 'identity' | { field: keyof Own & string };
-		identity?: OfKind<Own, { kind: 'int' }>;
-	};
 	outputs?: OutputsFor<Part<S, 'outputs'>, F, C>;
-	create?: Exposed<S, CreateFor<K, S, F>>;
-	update?: Exposed<S, UpdateFor<K, S, F>>;
-	/** Create-payload layers that set an existing row's optional ref to the new row, in the same commit. */
-	attaches?: Exposed<S, { readonly [A in keyof Part<S, 'attaches'>]: AttachTarget<K> }>;
-	delete?: Exposed<S, { check?: unknown }>;
-	notify?: Exposed<S, unknown>;
-	effect?: Exposed<S, { created?: unknown; updated?: unknown; deleted?: unknown }>;
+	create?: Exposed<S, CreateFor<S, F>>;
+	update?: Exposed<S, UpdateFor<S, F>>;
+	delete?: Exposed<S, { effect?: unknown }>;
 	syncs?: Exposed<S, { [N in keyof Part<S, 'syncs'>]: SyncFor<Part<S, 'syncs'>[N]> }>;
 }
 
@@ -853,13 +782,14 @@ interface BodiesFor<K> {
 		 * `ctx.act` in an automation; a sync's `read` and a file import; an upsert's creates; and a child created
 		 * through its parent's write layers, after the parent's own callback, in the same statement. One call per batch (up
 		 * to 1,000 rows), never per row: each row carries the `id` it will have; returns the rows to insert with derived
-		 * values filled, or refuses. It may instead return `{ rows, with, onApproved }`, carrying rows of other models in the
+		 * values filled, or refuses. It may instead return `{ sets, with, on_approved }`, carrying rows of other models in the
 		 * same commit (`Carried`). Seed packs (restored data) and derived roll-ups do not run it.
 		 */
 		transform?: (
-			rows: readonly CreatedRow<K>[],
+			changes: readonly Change<null, CreateSet<K>, CreatedRow<K>>[],
 			ctx: WriteCtx<K>
-		) => BodyReturn<TransformAnswer<CreateTransformRow<K>>>;
+		) => BodyReturn<TransformAnswer<CreateSet<K>>>;
+		effect?: (changes: readonly Change<null, Partial<Row<K>>, Row<K>>[], ctx: EffectCtx<K>) => BodyReturn<void>;
 	};
 	update?: {
 		/**
@@ -871,44 +801,13 @@ interface BodiesFor<K> {
 		 * derived roll-ups do not run it; nor does an upsert that keeps a matched row (`on_conflict: 'keep'`).
 		 */
 		transform?: (
-			changes: readonly { readonly before: StoredRow<K>; readonly set: UpdateTransformSet<K> }[],
+			changes: readonly Change<StoredTree<K, 'update'>, UpdateSet<K>, ProposedTree<K>>[],
 			ctx: WriteCtx<K>
-		) => BodyReturn<TransformAnswer<UpdateTransformSet<K>>>;
+		) => BodyReturn<TransformAnswer<UpdateSet<K>>>;
+		effect?: (changes: readonly Change<Row<K>, Partial<Row<K>>, Row<K>>[], ctx: EffectCtx<K>) => BodyReturn<void>;
 	};
 	delete?: {
-		/**
-		 * Runs before every row of this model is deleted, by every path: a page, the agent, and `ctx.act` in an automation;
-		 * a sync's `read` and a file import's prune; and a child deleted through its parent's write layers. Receives
-		 * the stored rows and may refuse, or return `{ with, onApproved }` rows of other models that commit with the delete.
-		 * Seed packs and derived roll-ups do not run it.
-		 */
-		check?: (rows: readonly StoredRow<K>[], ctx: WriteCtx<K>) => BodyReturn<void | Carried>;
-	};
-	/**
-	 * Runs after the commit for every write and approval event of this model (the event says which) and returns the notices
-	 * to send: who (`to`), what (`title`, `description`), how (`via` conversation connections; the inbox always), files.
-	 * It reads as the workspace and does no I/O, so a notification never delays or fails a write.
-	 */
-	notify?: (event: NotifyEvent<K>, ctx: NotifyCtx) => BodyReturn<readonly Notice[]>;
-	/**
-	 * Runs after the commit, once per committed batch of each verb, as a durable run (`<model>.effect.<verb>`: queued,
-	 * retried on a transient failure, shown in the Command center's runs). It holds no policy of its own: it runs with the
-	 * writer's authority — the member, envoy, visitor, or automation run (its declared policies) whose write committed —
-	 * and its rows are the root fields of the writer's output of the model (`default` when it holds it, else the first
-	 * named output it holds). Writes it makes run effects in turn, at most 8 deep. Never rate limited. It also runs for a
-	 * write an approval only holds, and again, as the approver, for the restore when that approval is rejected: nothing
-	 * irreversible (a mail, a payment) belongs here unless it checks the row's state first.
-	 */
-	effect?: {
-		/** The created rows. */
-		created?: (rows: readonly Row<K>[], ctx: EffectCtx) => BodyReturn<void>;
-		/** Each updated row before and after the write; only writes that change a stored field. */
-		updated?: (
-			changes: readonly { readonly before: Row<K>; readonly after: Row<K> }[],
-			ctx: EffectCtx
-		) => BodyReturn<void>;
-		/** The deleted rows as they were stored. */
-		deleted?: (rows: readonly Row<K>[], ctx: EffectCtx) => BodyReturn<void>;
+		effect?: (changes: readonly Change<Row<K>, Readonly<Record<string, never>>, null>[], ctx: EffectCtx<K>) => BodyReturn<void>;
 	};
 	indexes?: { [I in IndexName<K>]?: IndexBodies<K, InputOf<IndexInput<K, I>>> };
 	syncs?: { [Sy in SyncName<K>]?: FileSync<K, Sy> | RemoteSync<K, Sy> };
@@ -919,177 +818,87 @@ interface BodiesFor<K> {
 export type ReadLayers = CatalogExposure['outputs']['default'];
 /** A write layer map as the engine holds it: per path, the columns a writer may send. */
 export type LayerColumns = { readonly [path: string]: readonly string[] };
-/** A model literal as `model()` takes it in general: bodies are functions, or the `true` the check serializer writes. */
-export type ModelLiteral = {
-	/** What a record is, for people and the agent. */
-	description: string;
-	/** The previous model name: a schema migration renames its table instead of replacing it. */
-	was?: string;
-	/** The model's icon (an Iconify name). */
-	icon?: IconName;
-	/** Optional CEL over `record` returning its human-readable identifier, e.g. `record.code + ' · ' + record.name`.
-	 * Reused implicitly by RecordShell titles, table/list titles, pickers, references and scoped search results.
-	 * The engine materializes it as generated text and includes it in the model's GIN text index automatically;
-	 * `search.text` adds other searchable fields. It recalculates on writes, including sequence and computed values.
-	 * Approval requests search and display it through their existing target reference, without copying the value. Use own stored/computed fields
-	 * or nested inline values; cross-record lookups, clocks and authority are excluded so the index remains correct.
-	 * Use conditionals for optional fields. Explicit authored title/cell overrides still win.
-	 * If omitted, consumers use the record id (UUID); text search still needs explicit `search.text`.
-	 */
-	record_label?: string;
-
+/** A write's column tree: the root's fields followed by one nested tree per child relation. */
+export type ColumnTree = {
+	readonly fields: readonly string[];
+	readonly [relation: string]: readonly string[] | ColumnTree;
+};
+/** Lower a proved author tree once; engine admission and storage continue to address resolved paths. */
+export function column_layers(root: string, tree: unknown): LayerColumns {
+	const layers = new Map<string, readonly string[]>();
+	// built per call, not at module scope, where it keeps this module and Effect in a guest bundle without bodies
+	const columns = Schema.decodeUnknownSync(Schema.Array(Schema.String));
+	const visit = (path: string, node: unknown, depth: number) => {
+		if (depth > LAYER_MAX_DEPTH || !Predicate.isObject(node) || Array.isArray(node))
+			throw new Error(`${path}: expected a column tree at most ${LAYER_MAX_DEPTH} levels deep`);
+		layers.set(path, columns(node['fields']));
+		for (const [relation, child] of Object.entries(node)) {
+			if (relation === 'fields') continue;
+			if (relation.includes('.')) throw new Error(`${path}.${relation}: use a nested column tree`);
+			visit(`${path}.${relation}`, child, depth + 1);
+		}
+	};
+	visit(root, tree, 1);
+	return Object.fromEntries(layers);
+}
+/** A model literal as `model()` takes it: shared data derives from the native codec, trees and bodies retain their author types. */
+export type ModelLiteral = ModelMetadata & {
 	/** The stored fields, `ref` fields included. Every row also carries the system columns (see `ModelSpec.fields`). */
 	fields: {
 		readonly [name: string]: Exclude<FieldKind, { kind: 'ref' }> | RefField | ComputedField;
 	};
-	key?: readonly string[];
 	/** Named unique, check, period exclusion and write-lock rules. */
 	constraints?: Readonly<Record<string, Constraint>>;
 	/** Named physical, text, semantic and custom-vector indexes. */
 	indexes?: Readonly<Record<string, IndexLiteral>>;
-	table?: TableSpec;
 	/** A default read output and optional named outputs. A policy grants an output and scopes its rows. */
 	outputs?: { readonly default: ReadOutput; readonly [output: string]: ReadOutput };
 	/** The generated `create`: per layer the columns a writer sends and those its `transform` fills (`filled`). */
-	create?: { columns: LayerColumns; filled?: LayerColumns; transform?: unknown };
+	create?: { columns: ColumnTree; filled?: ColumnTree; transform?: GeneratorBody; effect?: GeneratorBody };
 	/** The generated `update`: per layer the columns a writer changes, and its `transform`. */
-	update?: { columns: LayerColumns; transform?: unknown };
-	/** The generated `delete`, with an optional `check`. */
-	delete?: { check?: unknown };
-	/**
-	 * Write-only attach layers: the parent's create payload names existing rows of another model by id, and the engine sets
-	 * the named foreign key in the same commit. Each row's ref must be optional and still empty, or the write is refused.
-	 * No inverse is declared on the child model and no read layer is exposed.
-	 */
-	attaches?: {
-		readonly [layer: string]: { readonly model: string; readonly field: string };
-	};
-	/** The notices each write and approval event sends. */
-	notify?: unknown;
-	/** The work after each committed write, as the writer: `function* (rows, ctx)`, its parameters typed by the model, `updated` taking `{ before, after }` changes; `t.runDue()` runs it in a test. */
-	effect?: { created?: unknown; updated?: unknown; deleted?: unknown };
+	update?: { columns: ColumnTree; transform?: GeneratorBody; effect?: GeneratorBody };
+	/** The generated delete and its optional post-commit effect. */
+	delete?: { effect?: GeneratorBody };
 	/** How rows are exchanged with a file or another system: `read` brings rows in, `write` sends changes out. */
 	syncs?: {
 		readonly [sync: string]: {
 			with: string;
 			parser?: readonly (
-				string | { type: string; extensions: readonly string[]; parse: unknown }
+				string | { type: string; extensions: readonly string[]; parse: GeneratorBody }
 			)[];
 			schema?: InputFields;
 			context?: InputFields;
 			every?: string;
 			partitions?: string;
-			read?: unknown;
-			write?: unknown;
+			read?: GeneratorBody;
+			write?: GeneratorBody;
 		};
 	};
 };
 
-/**
- * A system table's physical row: the built-in layer's models only (`src/system/**`; a workspace model that sets it is
- * refused, `load/system-only`). Its primary key, a database-numbered field, and the indexes the model options cannot state
- * (a lowercased column, a plain partial index). A system row carries no engine columns beyond its key: `revision`,
- * `created_at` and the like are its own fields, and its uniques are plain (an `on conflict` arbiter), not deferrable.
- */
-export type TableSpec = {
-	/** An `id` column of this type (`identity`: a bigint the database numbers), or the field that is the key. */
-	primary: 'text' | 'uuid' | 'identity' | { field: string };
-	/** An `int` field the database numbers (`bigint generated by default as identity`): a transcript's order. */
-	identity?: string;
-};
 /**
  * One custom search index as the engine keeps it: a hidden vector column (`dim`, `metric`) with an HNSW index, filled by
  * the guest's `vector` on every committed write, or read from the `vector` field `field`; `input` is the probe's form,
  * `candidates` the page multiple `rerank` (when `rerank`) re-scores.
  */
-export type SearchIndexSpec = {
-	description: string;
-	dim: number;
-	metric: Metric;
-	field?: string;
-	input: InputFields;
-	candidates?: Candidates;
-	rerank?: true;
-};
+export type SearchIndexSpec = NonNullable<NonNullable<typeof ModelData.Type.search>['indexes']>[string];
 /** A model's storage as the engine's `models` part holds it: no refs (they are `relationships`), no bodies. */
-export type ModelSpec = {
-	/** What a record is, for people and the agent. */
-	description: string;
-	/** The previous model name: a schema migration renames its table instead of replacing it. */
-	was?: string;
-	/** The model's icon (an Iconify name). */
-	icon?: IconName;
-	/** Optional pure CEL identifier over `record`, shared by clients and live approval references; automatically indexed when declared. */
-	record_label?: string;
-
-	/**
-	 * The stored fields. Every row also carries the system columns `id revision created_at created_by
-	 * updated_at updated_by`, which are not field names: `revision` is the row version every update checks (rule 25), so a
-	 * document's own revision mark is a field such as `document_revision` (`bolt check`: `load/reserved-field`).
-	 */
-	fields: { readonly [name: string]: FieldKind };
-	/** The natural key (never null): what imports match rows by. Upsert matches by `id`. */
-	key?: readonly string[];
-	/** Unique field sets, optionally partial (`where`). */
-	unique?: readonly { fields: readonly string[]; where?: object; name?: string }[];
-	/** Physical indexes lowered from the named author declarations. */
-	indexes?: readonly NativeIndex[];
-	/** Named row checks: a `Where` every row must match. */
-	check?: { readonly [name: string]: object };
-	/** Matching rows cannot be deleted. Updates may change only fields excepted by every matching rule. */
-	locks?: Readonly<
-		Record<string, { where: Readonly<Record<string, Json>>; except?: readonly string[] }>
-	>;
-	/** Rows with equal `key` fields may not have overlapping `period`s. */
-	noOverlap?: readonly { key: readonly string[]; period: string; where?: object; name?: string }[];
-	/** Computed fields: an expression over the row's own fields, stored and kept current. */
-	computed?: { readonly [name: string]: { kind: ComputedKind; scale?: number; expr: Expr } };
-	/** Text search over `text` fields, semantic (embedding) search over `semantic.fields`, and custom `indexes`. */
-	search?: {
-		text: readonly string[];
-		semantic?: {
-			fields: readonly string[];
-			model: EmbeddingModelName;
-			/** The embedding column's width: the model class is asked for exactly this many numbers, stored or probed. Required — a
-			 * workspace states it, so the host's binding is a conformance question, not a guess bolt makes for it. */
-			dim: number;
-		};
-		indexes?: { readonly [index: string]: SearchIndexSpec };
-	};
-	/** A system table's physical row (the built-in layer only). */
-	table?: TableSpec;
-};
-/**
- * A sync as the engine reads it: `with` a file or an integration, its parsers (a custom one by media type and
- * extensions), the sheet's `schema` and page `context`, the read cadence and partition key, and which bodies exist.
- */
-export type SyncEntry = {
-	with: string;
-	parser?: readonly (string | { type: string; extensions: readonly string[] })[];
-	schema?: InputFields;
-	context?: InputFields;
-	every?: string;
-	partitions?: string;
-	read?: true;
-	write?: true;
-};
+export type ModelSpec = typeof ModelData.Type;
+export type SyncEntry = typeof SyncData.Type;
 /**
  * A model's exposure as the engine's `exposures` part holds it: its outputs (each root key is the model), the
- * `create`/`update` column layers, `delete` and syncs; `true` marks a body the model declares (`transform`, `check`,
- * `notify`, an `effect` verb), which runs in the guest. Each path's model is `layerModels`'.
+ * `create`/`update` column layers, `delete` and syncs; `true` marks a body the model declares (`transform`,
+	 * an `effect` verb), which runs in the guest. Each path's model is `layer_models`'.
  */
 export type ExposureSpec = CatalogExposure & {
 	create?: {
 		columns: LayerColumns;
 		filled?: LayerColumns;
 		transform?: true;
-		/** Write-only layers the create payload may attach by id, setting the target's named ref to the new row. */
-		attaches?: { readonly [layer: string]: { readonly model: string; readonly field: string } };
+		effect?: true;
 	};
-	update?: { columns: LayerColumns; transform?: true };
-	delete?: { check?: true };
-	notify?: true;
-	effect?: { created?: true; updated?: true; deleted?: true };
+	update?: { columns: LayerColumns; transform?: true; effect?: true };
+	delete?: { effect?: true };
 	syncs?: { readonly [sync: string]: SyncEntry };
 };
 
@@ -1097,9 +906,7 @@ export type ExposureSpec = CatalogExposure & {
 export type ModelBodies = {
 	readonly create?: Body;
 	readonly update?: Body;
-	readonly delete?: Body;
-	readonly notify?: Body;
-	readonly effect: { readonly created?: Body; readonly updated?: Body; readonly deleted?: Body };
+	readonly effect: { readonly create?: Body; readonly update?: Body; readonly delete?: Body };
 	readonly indexes: {
 		readonly [index: string]: {
 			readonly vector?: Body;
@@ -1124,27 +931,24 @@ export type Model<K extends string, S> = {
 
 const isBody = (x: unknown): x is Body => typeof x === 'function';
 /** A ctx-bearing body (its ctx the second argument) through the guest edge. */
-const guest = (x: unknown): Body | undefined => (isBody(x) ? attached(x, 1) : undefined);
+const guest = <A extends readonly unknown[], O>(body: GeneratorBody<A, O> | undefined) =>
+	body === undefined ? undefined : attached(body, 1);
 const mapValues = <V, R>(
 	o: { readonly [key: string]: V },
 	f: (value: V) => R
 ): { [key: string]: R } => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v)]));
 
 /** The verbs a model `effect` declares, in their run names' order (`<model>.effect.<verb>`). */
-export const EFFECT_VERBS = ['created', 'updated', 'deleted'] as const;
+export const EFFECT_VERBS = ['create', 'update', 'delete'] as const;
 function bodiesOf(m: ModelLiteral): ModelBodies {
 	const create = guest(m.create?.transform),
-		update = guest(m.update?.transform),
-		check = guest(m.delete?.check),
-		notify = guest(m.notify);
+		update = guest(m.update?.transform);
 	return {
 		...(create === undefined ? {} : { create }),
 		...(update === undefined ? {} : { update }),
-		...(check === undefined ? {} : { delete: check }),
-		...(notify === undefined ? {} : { notify }),
 		effect: Object.fromEntries(
 			EFFECT_VERBS.flatMap((verb) => {
-				const body = guest(m.effect?.[verb]);
+				const body = guest(m[verb]?.effect);
 				return body === undefined ? [] : [[verb, body]];
 			})
 		),
@@ -1185,13 +989,13 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
 
 /**
  * `src/data/model/<name>/+model.ts`: one entity. Its storage (`fields`, `ref` fields that relate it to other models, keys,
- * checks, computed fields, `search`), its exposure (`outputs`; `create`, `update` and `delete` with their column
- * layers and write callbacks), `notify`, `effect` and `syncs`. Every callback sits on what triggers it, inside the literal, and is
+ * constraints, computed fields and indexes), its exposure (`outputs`; `create`, `update` and `delete` with their column
+ * trees, transforms and effects) and `syncs`. Every callback sits on what triggers it, inside the literal, and is
  * typed by the binding generated for this file. Until the next sync a body does not see a field just added.
  * Declaring an exposure makes the operation available; policies still decide which callers and rows may use it.
  * Native surfaces derive from this one declaration: `Table` and `Form` render the permitted columns and defaults, a
- * declared file sync adds Import/Export/Template to the toolbar, record history is automatic, `notify` receives every
- * write and approval event, and a policy check returning `ctx.approve` holds the write for its flow. Pages and agents
+ * declared file sync adds Import/Export/Template to the toolbar, record history is automatic, effects receive write and
+ * approval events, and a policy verdict returning `ctx.approve` holds the write for its flow. Pages and agents
  * must not wire those again.
  * @returns Declaration metadata and attached callback bodies. Calling model does not read or write records.
  * @example
@@ -1206,13 +1010,13 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
  * 	},
  * 	outputs: { default: { fields: 'all', customer: { fields: ['name'] } } },
  * 	create: {
- * 		columns: { orders: ['customer', 'notes'] },
- * 		transform: function* (rows, ctx) {
- * 			const { customers } = yield* ctx.query({ customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['id', 'blocked'], all: true } });
+ * 		columns: { fields: ['customer', 'notes'] },
+ * 		transform: function* (changes, ctx) {
+ * 			const { customers } = yield* ctx.query({ customers: { where: { id: { in: changes.map((c) => c.after.customer) } }, fields: ['id', 'blocked'], all: true } });
  * 			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
- * 			const at = rows.findIndex((r) => blocked.has(r.customer));
- * 			if (at >= 0) return yield* ctx.refuse('This customer is blocked.', { field: 'customer', row: at });
- * 			return rows;
+ * 			const at = changes.find((c) => blocked.has(c.after.customer));
+ * 			if (at !== undefined) return yield* ctx.refuse('errors.customer_blocked', { field: 'customer', at });
+ * 			return changes.map((c) => c.set);
  * 		}
  * 	}
  * });
@@ -1224,16 +1028,33 @@ export interface ModelDeclaration<K extends string> {
 
 /** A model binding's literal with its model-specific checks and callback context. */
 export type ModelLiteralInput<K, S extends ModelLiteral> = S &
-	NoInfer<Checked<ModelLiteral, S, Exact<S, ModelFor<K, S>>>> &
+	NoInfer<Checked<ModelLiteral, S, Exact<S, ModelFor<S>>>> &
 	NoInfer<BodiesFor<K>>;
 
-/** Binds the discovered model path for generated declarations and the built-in layer. */
+/** Binds a workspace model's discovered path for its generated declaration. */
 /* @__NO_SIDE_EFFECTS__ */
 export function bind_model<const K extends string>(name: K): ModelDeclaration<K> {
 	return /* @__NO_SIDE_EFFECTS__ */ (spec) => ({ name, spec, bodies: bodiesOf(spec) });
 }
 
-/** The engine's three manifest parts of one model literal (`projectManifest` and the names generator both read it). */
+type SystemTable = NonNullable<ModelSpec['table']>;
+type SystemModelLiteral = ModelLiteral & { table: SystemTable };
+interface SystemModelDeclaration<K extends string> {
+	<const S extends SystemModelLiteral>(spec: S &
+		NoInfer<Checked<SystemModelLiteral, S, Exact<S, ModelFor<S> & {
+			table: {
+				primary: Exclude<SystemTable['primary'], { field: string }> | { field: keyof OwnFields<FieldsIn<S>> & string };
+				identity?: OfKind<OwnFields<FieldsIn<S>>, { kind: 'int' }>;
+			};
+		}>>> & NoInfer<BodiesFor<K>>): Model<K, S>;
+}
+/** Built-in physical tables only; deliberately absent from the public declaration entry. */
+/* @__NO_SIDE_EFFECTS__ */
+export function bind_system_model<const K extends string>(name: K): SystemModelDeclaration<K> {
+	return /* @__NO_SIDE_EFFECTS__ */ (spec) => ({ name, spec, bodies: bodiesOf(spec) });
+}
+
+/** The engine's three manifest parts of one model literal (`project_manifest` and the names generator both read it). */
 export type ModelParts = {
 	readonly model: ModelSpec;
 	/** Each ref field, keyed `'<model>.<field>'`. */
@@ -1242,224 +1063,12 @@ export type ModelParts = {
 	readonly exposure?: ExposureSpec;
 };
 /**
- * Splits a model literal into storage (`ModelSpec`, refs removed), its refs (`RelationshipSpec` by `'<name>.<field>'`) and,
- * when it declares `outputs.default`, its exposure (`ExposureSpec`). Output trees become native read paths and
- * a body (a function or the check serializer's `true`) becomes its marker.
- */
-export function splitModel(name: string, literal: ModelLiteral): ModelParts {
-	if (Object.hasOwn(literal, 'label')) throw new Error("model '" + name + "': use record_label");
-	if (Object.hasOwn(literal, 'computed'))
-		throw new Error("model '" + name + "': declare computed on its field");
-	if (
-		Object.hasOwn(literal, 'index') ||
-		Object.hasOwn(literal, 'search') ||
-		Object.hasOwn(literal.table ?? {}, 'indexes')
-	)
-		throw new Error("model '" + name + "': declare named indexes");
-	for (const key of ['unique', 'check', 'noOverlap', 'locked'])
-		if (Object.hasOwn(literal, key))
-			throw new Error(`model '${name}': declare '${key}' in constraints`);
-	const {
-		fields,
-		constraints,
-		indexes,
-		outputs,
-		create,
-		update,
-		delete: del,
-		attaches,
-		notify,
-		effect,
-		syncs,
-		...storage
-	} = literal;
-	const own: { [field: string]: FieldKind } = {};
-	const computed: Record<string, NonNullable<ModelSpec['computed']>[string]> = {};
-	const relationships: { [key: string]: RelationshipSpec } = {};
-	for (const [field, kind] of Object.entries(fields)) {
-		if ('computed' in kind)
-			computed[field] = {
-				kind: kind.kind,
-				expr: kind.computed,
-				...(kind.scale === undefined ? {} : { scale: kind.scale })
-			};
-		else if (kind.kind !== 'ref') own[field] = kind;
-		else if (kind.many === true) {
-			const { on_delete, owned, inverse, where, ...value } = kind;
-			if (on_delete !== undefined || owned === true || inverse !== undefined)
-				throw new Error(`'${name}.${field}': many references are inline values`);
-			own[field] = {
-				...value,
-				...(where === undefined
-					? {}
-					: { where: Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(where) })
-			};
-		} else {
-			if (Object.hasOwn(kind, 'onDelete')) throw new Error(`'${name}.${field}' uses on_delete`);
-			const { kind: _ref, on_delete, ...relationship } = kind;
-			relationships[`${name}.${field}`] = {
-				...relationship,
-				...(on_delete === undefined
-					? {}
-					: { onDelete: on_delete === 'set_null' ? 'setNull' : on_delete })
-			};
-		}
-	}
-	const rules: Pick<ModelSpec, 'unique' | 'check' | 'noOverlap' | 'locks'> = {};
-	if (constraints !== undefined) {
-		const unique: NonNullable<ModelSpec['unique']>[number][] = [];
-		const check: Record<string, object> = {};
-		const noOverlap: NonNullable<ModelSpec['noOverlap']>[number][] = [];
-		const locks: Record<string, NonNullable<ModelSpec['locks']>[string]> = {};
-		for (const [rule, constraint] of Object.entries(decodeConstraints(constraints))) {
-			if ('unique' in constraint) {
-				const { unique: fields, where } = constraint;
-				unique.push({ fields, name: rule, ...(where === undefined ? {} : { where }) });
-			} else if ('check' in constraint) {
-				check[rule] = constraint.check;
-			} else if ('no_overlap' in constraint) {
-				const { no_overlap: period, per: key, where } = constraint;
-				noOverlap.push({ key, period, name: rule, ...(where === undefined ? {} : { where }) });
-			} else {
-				const { locked: where, except } = constraint;
-				locks[rule] = { where, ...(except === undefined ? {} : { except }) };
-			}
-		}
-		if (unique.length > 0) rules.unique = unique;
-		if (Object.keys(check).length > 0) rules.check = check;
-		if (noOverlap.length > 0) rules.noOverlap = noOverlap;
-		if (Object.keys(locks).length > 0) rules.locks = locks;
-	}
-	const physical: NativeIndex[] = [];
-	const text = new Set<string>();
-	let semantic: SemanticIndex | undefined;
-	const searches: Record<string, SearchIndexSpec> = {};
-	for (const [index, entry] of Object.entries(indexes ?? {})) {
-		if ('on' in entry) physical.push(entry);
-		else if ('text' in entry) for (const field of entry.text) text.add(field);
-		else if ('semantic' in entry) {
-			if (semantic !== undefined) throw new Error(name + ': declare one semantic index');
-			semantic = entry.semantic;
-		} else {
-			if (index === 'semantic')
-				throw new Error(name + ": 'semantic' is reserved for semantic search");
-			searches[index] = {
-				description: entry.description,
-				dim: entry.dim,
-				metric: entry.metric,
-				input: entry.input,
-				...(typeof entry.vector === 'string' ? { field: entry.vector } : {}),
-				...(entry.candidates === undefined ? {} : { candidates: entry.candidates }),
-				...(entry.rerank === undefined ? {} : { rerank: true })
-			};
-		}
-	}
-	const stored: ModelSpec = {
-		...storage,
-		...rules,
-		fields: own,
-		...(Object.keys(computed).length === 0 ? {} : { computed }),
-		...(physical.length === 0 ? {} : { indexes: physical }),
-		...(text.size === 0 && semantic === undefined && Object.keys(searches).length === 0
-			? {}
-			: {
-					search: {
-						text: [...text],
-						...(semantic === undefined ? {} : { semantic }),
-						...(Object.keys(searches).length === 0 ? {} : { indexes: searches })
-					}
-				})
-	};
-	if (outputs === undefined) return { model: stored, relationships };
-	const { default: defaultOutput, ...named } = outputs;
-	const layersOf = (output: ReadOutput): ReadLayers => {
-		const layers: Record<string, { fields: OutputFields }> = {};
-		const add = (path: string, layer: ReadOutput) => {
-			if (
-				typeof layer !== 'object' ||
-				layer === null ||
-				(layer.fields !== 'all' &&
-					(!Array.isArray(layer.fields) || !layer.fields.every((f) => typeof f === 'string')))
-			)
-				throw new Error(`'${path}' must list its output fields or declare fields: 'all'`);
-			layers[path] = { fields: layer.fields };
-			for (const [relation, child] of Object.entries(layer)) {
-				if (relation === 'fields') continue;
-				if (
-					typeof child !== 'object' ||
-					child === null ||
-					!('fields' in child) ||
-					relation.includes('.')
-				)
-					throw new Error(`'${path}.${relation}' must be a nested output with fields`);
-				add(`${path}.${relation}`, child);
-			}
-		};
-		add(name, output);
-		return layers;
-	};
-	const exposure: ExposureSpec = {
-		outputs: { default: layersOf(defaultOutput), ...mapValues(named, layersOf) },
-		...(create === undefined
-			? {}
-			: {
-					create: {
-						columns: create.columns,
-						...(create.filled === undefined ? {} : { filled: create.filled }),
-						...(create.transform === undefined ? {} : { transform: true }),
-						...(attaches === undefined ? {} : { attaches })
-					}
-				}),
-		...(update === undefined
-			? {}
-			: {
-					update: {
-						columns: update.columns,
-						...(update.transform === undefined ? {} : { transform: true })
-					}
-				}),
-		...(del === undefined ? {} : { delete: del.check === undefined ? {} : { check: true } }),
-		...(notify === undefined ? {} : { notify: true }),
-		...(effect === undefined
-			? {}
-			: {
-					effect: Object.fromEntries(
-						EFFECT_VERBS.flatMap((verb) =>
-							effect[verb] === undefined ? [] : [[verb, true] as const]
-						)
-					)
-				}),
-		...(syncs === undefined
-			? {}
-			: {
-					syncs: mapValues(syncs, (x): SyncEntry => ({
-						with: x.with,
-						...(x.parser === undefined
-							? {}
-							: {
-									parser: x.parser.map((p) =>
-										typeof p === 'string' ? p : { type: p.type, extensions: p.extensions }
-									)
-								}),
-						...(x.schema === undefined ? {} : { schema: x.schema }),
-						...(x.context === undefined ? {} : { context: x.context }),
-						...(x.every === undefined ? {} : { every: x.every }),
-						...(x.partitions === undefined ? {} : { partitions: x.partitions }),
-						...(x.read === undefined ? {} : { read: true }),
-						...(x.write === undefined ? {} : { write: true })
-					}))
-				})
-	};
-	return { model: stored, relationships, exposure };
-}
-
-/**
  * The model behind each path `root`'s exposure declares (the root itself included), and what is wrong with the others:
  * a path that does not start at the root, is deeper than `LAYER_MAX_DEPTH`, lacks its parent in the same map, crosses an
  * arc (a ref to several models) or names no relation; a write layer must be a many-relation (its rows' parent is the
  * layer above). `relationships` holds every ref field (`'<model>.<field>'`), the built-in layer's included.
  */
-export function layerModels(
+export function layer_models(
 	root: string,
 	c: ExposureSpec,
 	relationships: { readonly [key: string]: RelationshipSpec }
@@ -1514,7 +1123,7 @@ export function layerModels(
 				errors.push(`${where}: '${path}' needs its parent layer '${parent}'`);
 				continue;
 			}
-			const next = step(above, segments.at(-1)!);
+			const next = step(above, path.slice(path.lastIndexOf('.') + 1));
 			if (typeof next === 'string') errors.push(`${where}: ${path}: ${next}`);
 			else if (write && !next.many)
 				errors.push(

@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from '@effect/vitest';
 import { Result } from 'effect';
 import type { ExposureSpec } from '../src/decl/model.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { inboxPiece, reportRowsPiece } from '../src/engine/sync/hint.ts';
 import { Chain } from '../src/engine/write/sql.ts';
 
 const NOW = '2026-10-24T08:00:00.000Z';
 const manifest = (syncs: ExposureSpec['syncs']) =>
 	Result.getOrThrow(
-		decodeProjectedManifest({
+		decode_projected_manifest({
 			workspace: { tz: 'UTC', locale: 'en' },
 			models: {
 				contacts: {
@@ -20,16 +20,16 @@ const manifest = (syncs: ExposureSpec['syncs']) =>
 			relationships: {},
 			exposures: { contacts: { outputs: { default: { contacts: { fields: 'all' } } }, syncs } },
 			integrations: {
-				crm: { description: 'CRM', driver: 'http', http: { baseUrl: 'https://crm.test' } },
-				other: { description: 'Other', driver: 'http', http: { baseUrl: 'https://other.test' } }
+				crm: { description: 'CRM', driver: 'http', http: { base_url: 'https://crm.test' } },
+				other: { description: 'Other', driver: 'http', http: { base_url: 'https://other.test' } }
 			},
-			connections: { crm: { integration: 'crm' }, other: { integration: 'other' } },
+
 			policies: {},
 			teams: {},
 			automations: {},
 			mcp: {},
 			apps: {},
-			customFields: {},
+			custom_fields: {},
 			agent: { skills: {} }
 		})
 	);

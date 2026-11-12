@@ -4,7 +4,10 @@ install();
 // body inline. `../registry.ts` is what `bolt sync` prints for them: each body is typed from it by the model's name.
 import { custom_field } from '../../../src/index.ts';
 import { bind_model } from '../../../src/declarations.ts';
-import type { Finding, Notice, SyncRow } from '../../../src/index.ts';
+import type { Finding, InstanceId, SyncRow } from '../../../src/index.ts';
+
+// a runtime conversation instance (never evaluated here)
+declare const whatsapp_account: InstanceId<'whatsapp'>;
 
 export const customers = bind_model('customers')({
 	description: 'Buyers',
@@ -30,13 +33,14 @@ export const customers = bind_model('customers')({
 
 	outputs: { default: { fields: 'all' }, directory: { fields: ['name', 'tier'] } },
 	create: {
-		columns: { customers: ['name', 'email', 'tier'] },
-		filled: { customers: ['name'] },
+		columns: { fields: ['name', 'email', 'tier'] },
+		filled: { fields: ['name'] },
 		transform: function* (rows) {
-			return rows.map((r) => (r.name === undefined ? { ...r, name: r.email ?? 'unknown' } : r));
+			return rows.map(({ set }) => (set.name === undefined ? { ...set, name: set.email ?? 'unknown' } : set));
 		}
 	},
-	update: { columns: { customers: ['name', 'email', 'tier', 'tags'] } },
+	update: { columns: { fields: ['name', 'email', 'tier', 'tags'] } },
+	delete: {},
 	syncs: {
 		// two ways with the ERP: `read` pulls changed customers, `write` sends each committed change
 		crm: {
@@ -93,8 +97,8 @@ export const orders = bind_model('orders')({
 			initial: 'draft',
 			states: {
 				draft: { to: ['submitted'] },
-				submitted: { to: ['ordered', 'draft'], edit: ['status', 'note', 'lines'] },
-				ordered: { edit: 'none' }
+				submitted: { to: ['ordered', 'draft'] },
+				ordered: {}
 			}
 		},
 		note: { kind: 'text', optional: true },
@@ -103,83 +107,69 @@ export const orders = bind_model('orders')({
 		total: { kind: 'sum', of: 'lines.amount', where: { qty: { gt: 0 } } },
 		line_count: { kind: 'count', of: 'lines' },
 		colour: { kind: 'vector', dim: 3, metric: 'l2', optional: true },
-		due_soon: { kind: 'date', computed: { plusDays: [{ field: 'due' }, -7] } }
+		due_soon: { kind: 'date', computed: { plus_days: [{ field: 'due' }, -7] } }
 	},
 
-	constraints: { has_customer: { check: { customer: { is_null: false } } } },
+	constraints: {
+		has_customer: { check: { customer: { is_null: false } } },
+		submitted: { locked: { status: { eq: 'submitted' } }, except: ['status', 'note', 'lines'] },
+		ordered: { locked: { status: { eq: 'ordered' } } }
+	},
 
 	outputs: {
 		default: { fields: 'all', customer: { fields: ['name', 'tier'] }, lines: { fields: 'all' } },
 		logistics: { fields: ['number', 'status', 'customer'], lines: { fields: ['item', 'qty'] } }
 	},
 	create: {
-		columns: { orders: ['customer', 'note', 'due'], 'orders.lines': ['item', 'qty', 'price'] },
+		columns: { fields: ['customer', 'note', 'due'], lines: { fields: ['item', 'qty', 'price'] } },
 		transform: function* (rows, ctx) {
 			const known = yield* ctx.query({
 				customers: {
-					where: { id: { in: rows.map((r) => r.customer) } },
+					where: { id: { in: rows.map((r) => r.after.customer) } },
 					fields: ['tier']
 				}
 			});
-			const at = rows.findIndex((r) => !known.customers.rows.some((c) => c.id === r.customer));
+			const at = rows.findIndex((r) => !known.customers.rows.some((c) => c.id === r.after.customer));
 			if (at >= 0) return yield* ctx.refuse('Unknown customer.', { field: 'customer', row: at });
-			return rows.map((r) => ({ ...r, placed_at: ctx.now }));
+			return rows.map(({ set }) => ({ ...set, placed_at: ctx.now }));
+		},
+		effect: function* (changes, ctx) {
+			if (ctx.event.kind !== 'write') return;
+			const buyers = yield* ctx.query({ customers: {
+				where: { id: { in: changes.map(({ after }) => after.customer) } }, fields: ['name']
+			} });
+			for (const { after } of changes) yield* ctx.notify({
+				title: `New order ${after.number}`,
+				description: buyers.customers.rows.find((c) => c.id === after.customer)?.name ?? '',
+				to: [{ team: 'finance' }, 'requester'], via: [whatsapp_account],
+				attachments: [{ document: { html: `<h1>${after.number}</h1>` }, to: 'pdf', name: 'order.pdf' }],
+				link: { model: 'orders', id: after.id }
+			});
+			if (changes[0]?.after.number !== undefined && ctx.actor.kind === 'member')
+				yield* ctx.schedule('nightly', {});
 		}
 	},
 	update: {
-		columns: {
-			orders: ['status', 'note', 'due', 'placed_at'],
-			'orders.lines': ['item', 'qty', 'price']
-		},
+		columns: { fields: ['status', 'note', 'due', 'placed_at'], lines: { fields: ['item', 'qty', 'price'] } },
 		transform: function* (changes, ctx) {
 			return changes.map(({ before, set }) =>
 				set.status === 'submitted' && before.status !== 'submitted'
 					? { ...set, placed_at: ctx.now }
 					: set
 			);
+		},
+		effect: function* (changes, ctx) {
+			const moved = changes.filter(({ before, after }) => before.status !== after.status);
+			if (moved.length > 0) yield* ctx.act({
+				'orders.update': moved.map(({ after }) => ({ target: after, set: { note: 'moved' } }))
+			});
 		}
 	},
 	delete: {
-		check: function* (rows, ctx) {
-			const at = rows.findIndex((r) => r.status === 'ordered');
-			if (at >= 0) return yield* ctx.refuse('An ordered order stays.', { row: at });
-		}
-	},
-	notify: function* (event, ctx) {
-		if (event.kind !== 'write' || event.action !== 'create') return [];
-		const buyers = yield* ctx.query({
-			customers: {
-				where: { id: { in: event.records.map((o) => o.customer) } },
-				fields: ['name']
-			}
-		});
-		return event.records.map((o): Notice => ({
-			title: `New order ${o.number}`,
-			description: buyers.customers.rows.find((c) => c.id === o.customer)?.name ?? '',
-			to: [{ team: 'finance' }, 'requester'],
-			via: ['whatsapp'],
-			attachments: [{ document: { html: `<h1>${o.number}</h1>` }, to: 'pdf', name: 'order.pdf' }],
-			link: { model: 'orders', id: o.id }
-		}));
-	},
-	effect: {
-		created: function* (rows, ctx) {
-			const first: string | undefined = rows[0]?.number;
-			const actor: 'member' | 'envoy' | 'visitor' | 'api_key' | 'system' = ctx.actor.kind;
-			if (first !== undefined && actor === 'member') yield* ctx.schedule('nightly', {});
-		},
-		updated: function* (changes, ctx) {
-			const moved = changes.filter(({ before, after }) => before.status !== after.status);
-			if (moved.length > 0)
-				yield* ctx.act(
-					'orders.update',
-					moved.map(({ after }) => ({ target: after.id, set: { note: 'moved' } }))
-				);
-		},
-		deleted: function* (rows, ctx) {
-			yield* ctx.notify(
-				rows.map((o) => ({ title: `Order ${o.number} removed`, to: [{ team: 'finance' }] }))
-			);
+		effect: function* (changes, ctx) {
+			yield* ctx.notify(changes.map(({ before }) => ({
+				title: `Order ${before.number} removed`, to: [{ team: 'finance' }]
+			})));
 		}
 	},
 	syncs: {
@@ -214,7 +204,7 @@ export const orders = bind_model('orders')({
 				}
 			],
 			schema: {
-				customer: { kind: 'text', label: 'Customer' },
+				customer: { kind: 'text' },
 				note: { kind: 'text', optional: true }
 			},
 			context: { since: { kind: 'date' } },
@@ -289,7 +279,7 @@ export const order_lines = bind_model('order_lines')({
 export const notices = bind_model('notices')({
 	description: 'Supplier notices mirrored from the inbox',
 	record_label: 'record.subject',
-	key: ['inbox', 'message_id'],
+	constraints: { one_message: { unique: ['inbox', 'message_id'], import_key: true } },
 	fields: {
 		inbox: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'support_mail' } } },
 		message_id: { kind: 'text' },
@@ -315,7 +305,7 @@ export const notices = bind_model('notices')({
 											$version: d.message.version,
 											message_id: d.message.id,
 											subject: d.message.subject || '(no subject)',
-											received_at: d.message.sentAt
+											received_at: d.message.sent_at
 										}
 									]
 					)
@@ -337,10 +327,10 @@ export const notice_notes = bind_model('notice_notes')({
 		integration: { kind: 'ref', to: 'sys_integration', optional: true },
 		note: { kind: 'text' }
 	},
-	constraints: { one_notice: { unique: ['notice'] } },
+	constraints: { one_notice: { unique: ['notice'], import_key: true } },
 	outputs: { default: { fields: 'all' } },
-	create: { columns: { notice_notes: ['notice', 'note'] } },
-	update: { columns: { notice_notes: ['note'] } }
+	create: { columns: { fields: ['notice', 'note'] } },
+	update: { columns: { fields: ['note'] } }
 });
 
 export const sites = bind_model('sites')({
@@ -382,13 +372,13 @@ export const sites = bind_model('sites')({
 		default: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] },
 		summary: { fields: ['name', 'open'] }
 	},
-	update: { columns: { sites: ['name', 'location'] } }
+	update: { columns: { fields: ['name', 'location'] } }
 });
 
 export const products = bind_model('products')({
 	description: 'Products from the ledger',
 	record_label: 'record.name',
-	key: ['source', 'external_code'],
+	constraints: { one_external: { unique: ['source', 'external_code'], import_key: true } },
 	fields: {
 		source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'kingdee' } } },
 		external_code: { kind: 'text' },
@@ -398,7 +388,7 @@ export const products = bind_model('products')({
 		commission_factor: { kind: 'decimal', scale: 4, optional: true }
 	},
 	outputs: { default: { fields: 'all' } },
-	update: { columns: { products: ['commission_factor'] } },
+	update: { columns: { fields: ['commission_factor'] } },
 	syncs: {
 		// one way in from the ledger database, every 15 minutes by default
 		ledger: {
@@ -426,7 +416,7 @@ export const products = bind_model('products')({
 export const entries = bind_model('entries')({
 	description: "Calendar entries mirrored from members' calendars",
 	record_label: 'record.subject',
-	key: ['account', 'calendar_id', 'external_id'],
+	constraints: { one_event: { unique: ['account', 'calendar_id', 'external_id'], import_key: true } },
 	fields: {
 		account: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'calendar' } } },
 		calendar_id: { kind: 'text' },
@@ -436,7 +426,7 @@ export const entries = bind_model('entries')({
 		filed: { kind: 'bool', default: false }
 	},
 	outputs: { default: { fields: 'all' } },
-	update: { columns: { entries: ['filed'] } },
+	update: { columns: { fields: ['filed'] } },
 	syncs: {
 		// the calendar driver pushes events; one cursor per chosen calendar
 		calendar: {

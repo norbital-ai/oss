@@ -14,7 +14,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		name: string;
 		disabled: boolean;
 		error?: string;
-		onChange(next: Value): void;
+		on_change(next: Value): void;
 		/** The id the field's label points at: give it to the control the snippet renders, so it is named by the label. */
 		id: string;
 		/** The enclosing form: a custom editor reads sibling fields (a schema version, a currency) through it. */
@@ -48,14 +48,14 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 </script>
 
 <script lang="ts">
-	import { cn, provideControls, provideFieldControl, uiText } from '../primitives/utils.js';
+	import { cn, provideControls, provideFieldControl, ui_text } from '../primitives/utils.js';
 	import Editor from '../kinds/editor.svelte';
 	import FieldControl from './field-control.svelte';
 	import Show from '../kinds/show.svelte';
-	import { useForm, type FormState } from './form-state.svelte.js';
+	import { use_form, type FormState } from './form-state.svelte.js';
 	import { claimSectionField } from './section.svelte';
 	import { useBolt } from '../client/context.js';
-	import { useFieldLabel } from '../model/context.js';
+	import { use_field_label, use_field_help } from '../model/context.js';
 
 	let {
 		name,
@@ -69,13 +69,14 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		disabled,
 		dense
 	}: FieldProps = $props();
-	const form = useForm();
+	const form = use_form();
 	// svelte-ignore state_referenced_locally -- a field's name is fixed for its life
 	claimSectionField(name);
-	const t = uiText();
+	const t = ui_text();
 	const bolt = useBolt();
-	const fieldLabel = useFieldLabel();
-	const errors = $derived(form?.fieldErrors);
+	const fieldLabel = use_field_label();
+	const field_help = use_field_help();
+	const errors = $derived(form?.field_errors);
 	const rawError = $derived(errors?.get(name));
 	const error = $derived(rawError === undefined ? undefined : bolt.t(rawError));
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));
@@ -112,7 +113,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	<FieldControl
 		id={`${id}-${name}`}
 		label={label ?? fieldLabel(name, field.kind.label)}
-		help={help ?? field.kind.help}
+		help={help ?? field_help(name, field.kind.help)}
 		{error}
 		{dense}
 		readonly
@@ -148,11 +149,11 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	<FieldControl
 		id={`${id}-${name}`}
 		label={label ?? fieldLabel(name, field.kind.label)}
-		help={help ?? field.kind.help}
+		help={help ?? field_help(name, field.kind.help)}
 		{error}
 		{dense}
 		required={mandatory}
-		dirty={form.fieldDirty(name)}
+		dirty={form.field_dirty(name)}
 		class={cn(wide && 'col-span-full', className)}
 		data-field={name}
 		data-field-large={wide || undefined}
@@ -165,14 +166,14 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 				id: `${id}-${name}`,
 				disabled,
 				error,
-				onChange: (v) => form.set(name, v),
+				on_change: (v) => form.set(name, v),
 				form
 			})}
 		{:else}
 			<Editor
 				kind={field.kind}
 				value={form.get(name)}
-				onChange={(v) => form.set(name, v)}
+				on_change={(v) => form.set(name, v)}
 				{name}
 				id={`${id}-${name}`}
 				labelledby={`${id}-${name}-label`}
@@ -181,7 +182,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 				row={form.row}
 				relation={field.relation}
 				{address}
-				onAddress={address === undefined ? undefined : (a) => form.set(address, a)}
+				on_address={address === undefined ? undefined : (a) => form.set(address, a)}
 			/>
 		{/if}
 	</FieldControl>

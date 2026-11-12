@@ -52,11 +52,11 @@ const typeDiagnostics = Effect.fn('bolt.typeDiagnostics')(function* (
 	files: ReadonlyMap<string, string>
 ) {
 	// a build needs no checker: load its TypeScript 7 API only when a check asks for it
-	const { checkWorkspace } = yield* Effect.tryPromise({
+	const { check_workspace } = yield* Effect.tryPromise({
 		try: () => import('@norbital-ai/bolt/node'),
 		catch: (cause) => new ToolFailure({ message: `the type check: ${String(cause)}` })
 	});
-	const answer = yield* checkWorkspace(files, `${root}/node_modules`).pipe(
+	const answer = yield* check_workspace(files, `${root}/node_modules`).pipe(
 		Effect.mapError((e) => new ToolFailure({ message: `the type check: ${e.message}` }))
 	);
 	return answer

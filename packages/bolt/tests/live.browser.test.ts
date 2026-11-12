@@ -1,3 +1,4 @@
+import { required } from './support/required.ts';
 import { Effect, Stream } from 'effect';
 import { expect, it } from '@effect/vitest';
 import { page } from 'vitest/browser';
@@ -85,7 +86,7 @@ it.live('two shared sources on one page hold one EventSource and both hear its f
 			);
 			expect(opened).toBe(1);
 			expect(first).toEqual(second);
-			expect(JSON.parse(first[0]!)).toEqual({ t: 'hello', conn: 'browser', v: 0 });
+			expect(JSON.parse(required(first[0]))).toEqual({ t: 'hello', conn: 'browser', v: 0 });
 		})
 	)
 );

@@ -13,8 +13,8 @@
 	export type PackagingHarnessProps = PackagingPart & {
 		bolt: ViewBolt;
 		catalog: NonNullable<KindsHost['catalog']>;
-		customFields?: KindsHost['customFields'];
-		representations?: Parameters<typeof provideRepresentations>[0];
+		customFields?: KindsHost['custom_fields'];
+		representations?: Parameters<typeof provide_representations>[0];
 	};
 </script>
 
@@ -22,31 +22,31 @@
 	// Mounts one kit part under a scripted `bolt`, catalog, custom fields and representation registry.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
-	import { provideKinds } from '../src/kinds/context.js';
+	import { mount_edge } from '../src/effect/index.js';
+	import { provide_kinds } from '../src/kinds/context.js';
 	import Show from '../src/kinds/show.svelte';
 	import Controls from './controls-harness.svelte';
 	import Form from '../src/form/form.svelte';
-	import { provideBolt } from '../src/client/context.js';
-	import { provideRepresentations } from '../src/record/context.js';
+	import { provide_bolt } from '../src/client/context.js';
+	import { provide_representations } from '../src/record/context.js';
 	import RecordShell from '../src/record/RecordShell.svelte';
 
 	let fixture: PackagingHarnessProps = $props();
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(() => fixture.bolt);
+	provide_bolt(() => fixture.bolt);
 	// svelte-ignore state_referenced_locally
-	provideKinds({
+	provide_kinds({
 		get catalog() {
 			return fixture.catalog;
 		},
-		get customFields() {
+		get custom_fields() {
 			return fixture.customFields;
 		},
 		query: (request) => fixture.bolt.query(request)
 	});
 	// svelte-ignore state_referenced_locally
-	provideRepresentations(fixture.representations ?? {});
+	provide_representations(fixture.representations ?? {});
 </script>
 
 {#if fixture.part === 'form'}<Form {...fixture.props} />

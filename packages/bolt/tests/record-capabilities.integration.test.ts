@@ -6,10 +6,10 @@ import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, Invocation } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { readEngine } from '../src/engine/query/engine.ts';
+import { read_engine } from '../src/engine/query/engine.ts';
 import { toPred } from '../src/engine/access/pred.ts';
-import { act, recordCapabilities, type WriteEngine } from '../src/engine/write/act.ts';
-import { admin, arm, authority, grants, manifest, NOW, TODAY, writeArm } from './write-fixture.ts';
+import { act, record_capabilities, type WriteEngine } from '../src/engine/write/act.ts';
+import { admin, arm, authority, grants, manifest, NOW, TODAY, write_arm } from './write-fixture.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import type { RecordParentContext } from '../src/protocol/record-contracts.ts';
 
@@ -82,8 +82,8 @@ const withDb = (db: TenantDbShape) =>
 			output?: string
 		) => {
 			const engine: WriteEngine = { manifest, db, ...options };
-			const reads = readEngine({ manifest: engine.manifest, db });
-			return recordCapabilities(
+			const reads = read_engine({ manifest: engine.manifest, db });
+			return record_capabilities(
 				engine,
 				model,
 				id,
@@ -125,7 +125,7 @@ it.live(
 			const readOnly = grants('lines', { create: [], update: [], delete: [] });
 			const layer = { 'orders.lines': ['label', 'amount'] };
 			const auth = authority({
-				orders: grants('orders', { update: [writeArm(layer)] }),
+				orders: grants('orders', { update: [write_arm(layer)] }),
 				lines: readOnly
 			});
 			const context = { model: 'orders', id: parent, relation: 'lines', revision: 1 };
@@ -135,12 +135,12 @@ it.live(
 			const nested = yield* capabilities('lines', child, auth, { manifest: source }, context);
 			expect(nested?.fields['amount']).toEqual({ writable: true, proposal: false, reasons: [] });
 			expect(nested?.delete.allowed).toBe(true);
-			expect(exposure(source, auth)['orders']?.update?.with?.['lines']).toMatchObject({
+			expect((yield* exposure(source, auth))['orders']?.update?.with?.['lines']).toMatchObject({
 				update: { columns: ['label', 'amount'] },
 				delete: true
 			});
 			const denied = authority({
-				orders: grants('orders', { update: [writeArm({ orders: ['note'] })] }),
+				orders: grants('orders', { update: [write_arm({ orders: ['note'] })] }),
 				lines: readOnly
 			});
 			expect(
@@ -148,7 +148,7 @@ it.live(
 			).toBe(false);
 			// the root's layer narrows the child; the child's own update grant (every column) is never consulted
 			const restrictedChild = authority({
-				orders: grants('orders', { update: [writeArm({ 'orders.lines': ['label'] })] }),
+				orders: grants('orders', { update: [write_arm({ 'orders.lines': ['label'] })] }),
 				lines: grants('lines')
 			});
 			expect(
@@ -157,7 +157,7 @@ it.live(
 			).toBe(false);
 			// the update check's dry run approves: the child's columns are proposals
 			const proposer = authority({
-				orders: grants('orders', { update: [writeArm(layer, true)] }),
+				orders: grants('orders', { update: [write_arm(layer, true)] }),
 				lines: readOnly
 			});
 			const approving = checks(() => ({
@@ -176,7 +176,7 @@ it.live(
 			const hidden = authority({
 				orders: grants('orders', {
 					read: { default: { orders: [arm()], 'orders.lines': [arm(FALSE)] } },
-					update: [writeArm(layer)]
+					update: [write_arm(layer)]
 				}),
 				lines: readOnly
 			});
@@ -186,10 +186,10 @@ it.live(
 					read: {
 						default: {
 							orders: [arm()],
-							'orders.lines': [arm(toPred(source, 'lines', { order: { is: { title: { eq: 'Desk' } } } }))]
+							'orders.lines': [arm(yield* toPred(source, 'lines', { order: { is: { title: { eq: 'Desk' } } } }))]
 						}
 					},
-					update: [writeArm(layer)]
+					update: [write_arm(layer)]
 				}),
 				lines: readOnly
 			});
@@ -243,7 +243,7 @@ it.live(
 					{ manifest: source },
 					{ ...context, revision: current.revision }
 				))?.fields['amount']?.reasons
-			).toContain('ownedParentLocked');
+			).toContain('owned_parent_locked');
 		})
 );
 
@@ -262,7 +262,7 @@ it.live('free links and declared unlinks gain only their nested foreign-key capa
 		const tag = records.find((row) => row.model === 'tags');
 		if (tag === undefined) throw new Error('missing tag');
 		const auth = authority({
-			orders: grants('orders', { update: [writeArm({ 'orders.tags': [] })] }),
+			orders: grants('orders', { update: [write_arm({ 'orders.tags': [] })] }),
 			tags: grants('tags', { create: [], update: [], delete: [] })
 		});
 		const context = { model: 'orders', id: parent, relation: 'tags', revision: 1 };
@@ -300,7 +300,7 @@ it.live('publishes the fields of the output the caller reads; an output it lacks
 		const auth = authority({
 			orders: grants('orders', {
 				read: { brief: { orders: [arm()] } },
-				update: [writeArm({ orders: ['note'] })]
+				update: [write_arm({ orders: ['note'] })]
 			})
 		});
 		const caps = yield* capabilities(
@@ -313,10 +313,10 @@ it.live('publishes the fields of the output the caller reads; an output it lacks
 		);
 		expect(caps?.fields).toEqual({
 			note: { writable: true, proposal: false, reasons: [] },
-			status: { writable: false, proposal: false, reasons: ['noGrant'] },
+			status: { writable: false, proposal: false, reasons: ['no_grant'] },
 			// the declared update layers: the arm names neither
-			lines: { writable: false, proposal: false, reasons: ['noGrant'] },
-			tags: { writable: false, proposal: false, reasons: ['noGrant'] }
+			lines: { writable: false, proposal: false, reasons: ['no_grant'] },
+			tags: { writable: false, proposal: false, reasons: ['no_grant'] }
 		});
 		expect(caps?.update.allowed).toBe(true);
 		expect(JSON.stringify(caps)).not.toContain('number');
@@ -339,7 +339,7 @@ it.live(
 			const { db, create, capabilities } = yield* setup();
 			const { child } = yield* create();
 			const auth = authority({
-				lines: grants('lines', { update: [writeArm({ lines: ['amount'] }, true)] })
+				lines: grants('lines', { update: [write_arm({ lines: ['amount'] }, true)] })
 			});
 			// the check stands in for a read of the parent's note
 			let editable = false;
@@ -356,7 +356,7 @@ it.live(
 			expect(calls[0]).toMatchObject({
 				kind: 'policy',
 				target: 'p.lines.update',
-				input: [{ before: { id: child }, set: {} }]
+				input: [{ before: { id: child }, set: {}, after: { id: child } }]
 			});
 			editable = true;
 			expect((yield* capabilities('lines', child, auth, engine))?.fields['amount']).toEqual({
@@ -381,12 +381,12 @@ it.live(
 			const auth = authority({
 				orders: grants('orders', {
 					read: {
-						default: { orders: [arm(toPred(manifest, 'orders', { title: { eq: 'Desk' } }))] }
+						default: { orders: [arm(yield* toPred(manifest, 'orders', { title: { eq: 'Desk' } }))] }
 					}
 				})
 			});
-			const reads = readEngine({ manifest, db });
-			const result = yield* recordCapabilities(
+			const reads = read_engine({ manifest, db });
+			const result = yield* record_capabilities(
 				{ manifest, db },
 				'orders',
 				parent,
@@ -411,16 +411,16 @@ it.live('rechecks a many-relation read scope before exposing record capabilities
 	Effect.gen(function* () {
 		const { db, write, create, capabilities } = yield* setup();
 		const { parent, child } = yield* create();
-		const predicate = toPred(manifest, 'orders', { lines: { some: { amount: { gte: 1 } } } });
+		const predicate = yield* toPred(manifest, 'orders', { lines: { some: { amount: { gte: 1 } } } });
 		const auth = authority({
 			orders: grants('orders', {
 				read: { default: { orders: [arm(predicate)] } },
-				update: [writeArm({ orders: ['note'] })]
+				update: [write_arm({ orders: ['note'] })]
 			})
 		});
 		expect((yield* capabilities('orders', parent, auth))?.fields['note']?.writable).toBe(true);
-		const reads = readEngine({ manifest, db });
-		const result = yield* recordCapabilities(
+		const reads = read_engine({ manifest, db });
+		const result = yield* record_capabilities(
 			{ manifest, db },
 			'orders',
 			parent,
@@ -468,11 +468,11 @@ it.live(
 				}
 			]);
 			const parentCaps = yield* capabilities('orders', parent);
-			expect(parentCaps?.fields['title']?.reasons).toContain('stateLocked');
+			expect(parentCaps?.fields['title']?.reasons).toContain('state_locked');
 			expect(parentCaps?.fields['note']?.writable).toBe(true);
 			const childCaps = yield* capabilities('lines', child);
-			expect(childCaps?.fields['order']?.reasons).toContain('ownedParent');
-			expect(childCaps?.fields['amount']?.reasons).toContain('ownedParentLocked');
+			expect(childCaps?.fields['order']?.reasons).toContain('owned_parent');
+			expect(childCaps?.fields['amount']?.reasons).toContain('owned_parent_locked');
 			expect(childCaps?.update.allowed).toBe(false);
 			expect(
 				(yield* capabilities('tags', tag.id, admin, { manifest: source }))?.fields['name']?.writable
@@ -485,7 +485,7 @@ it.live('ordinary writable masks remain precise without provisional approval sta
 		const { create, capabilities } = yield* setup();
 		const { parent } = yield* create();
 		const auth = authority({
-			orders: grants('orders', { update: [writeArm({ orders: ['note'] })] })
+			orders: grants('orders', { update: [write_arm({ orders: ['note'] })] })
 		});
 		const caps = yield* capabilities('orders', parent, auth);
 		expect(caps?.fields['note']?.writable).toBe(true);
@@ -520,17 +520,17 @@ it.live('sync-owned fields stay readable and local fields remain writable', () =
 		expect(caps?.fields['title']).toEqual({
 			writable: false,
 			proposal: false,
-			reasons: ['noGrant', 'syncOwned']
+			reasons: ['no_grant', 'sync_owned']
 		});
 		expect(caps?.fields['note']).toEqual({ writable: true, proposal: false, reasons: [] });
-		expect(exposure(source, admin)['orders']).toMatchObject({
-			readonlyFields: { title: 'syncOwned' },
+		expect((yield* exposure(source, admin))['orders']).toMatchObject({
+			readonly_fields: { title: 'sync_owned' },
 			syncs: { erp: { kind: 'remote', with: 'erp' } }
 		});
 		const reader = authority({ orders: grants('orders') });
-		expect(exposure(source, reader)['orders']?.syncs).toBeUndefined();
+		expect((yield* exposure(source, reader))['orders']?.syncs).toBeUndefined();
 		expect(
-			exposure(source, { ...reader, automations: ['orders.sync.erp'] })['orders']?.syncs
+			(yield* exposure(source, { ...reader, capabilities: { ...reader.capabilities, syncs: ['orders.erp'] } }))['orders']?.syncs
 		).toEqual({ erp: { kind: 'remote', with: 'erp' } });
 	})
 );

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import './setup-happy-dom.js';
 import { afterEach, expect, it, vi } from '@effect/vitest';
-import { initializeShellAssets, INITIAL_MODULES_ID } from '../src/shell/mount.ts';
+import { initialize_shell_assets, INITIAL_MODULES_ID } from '../src/shell/mount.ts';
 
 afterEach(() => {
 	document.getElementById(INITIAL_MODULES_ID)?.remove();
@@ -13,7 +13,7 @@ const initial = (css = ['assets/readiness.css'], nativeModules: string[] = []) =
 	const inventory = document.createElement('script');
 	inventory.id = INITIAL_MODULES_ID;
 	inventory.type = 'application/json';
-	inventory.textContent = JSON.stringify({ css, nativeModules });
+	inventory.textContent = JSON.stringify({ css, native_modules: nativeModules });
 	document.head.append(inventory);
 };
 const requested = () =>
@@ -24,7 +24,7 @@ const requested = () =>
 it('keeps target asset readiness pending until the declared stylesheet loads', async () => {
 	initial();
 	let settled = false;
-	const ready = initializeShellAssets('http://localhost/release/assets/shell.js').then(() => {
+	const ready = initialize_shell_assets('http://localhost/release/assets/shell.js').then(() => {
 		settled = true;
 	});
 	await vi.waitFor(() => expect(requested()).not.toBeUndefined());
@@ -38,7 +38,7 @@ it('keeps target asset readiness pending until the declared stylesheet loads', a
 
 it('rejects target asset readiness on a stylesheet failure instead of exposing a partial workspace', async () => {
 	initial();
-	const ready = initializeShellAssets('http://localhost/release/assets/shell.js');
+	const ready = initialize_shell_assets('http://localhost/release/assets/shell.js');
 	const refused = expect(ready).rejects.toThrow('Workspace stylesheet failed to load');
 	await vi.waitFor(() => expect(requested()).not.toBeUndefined());
 	const link = requested();
@@ -50,14 +50,14 @@ it('rejects target asset readiness on a stylesheet failure instead of exposing a
 it('warms the optional module inventory only in the native mobile app', async () => {
 	initial([], ['../outside-release.js']);
 	const entry = 'http://localhost/release/assets/shell.js';
-	await expect(initializeShellAssets(entry)).resolves.toBeUndefined();
-	Object.defineProperty(window, 'boltDevice', { configurable: true, value: { platform: 'ios' } });
+	await expect(initialize_shell_assets(entry)).resolves.toBeUndefined();
+	Object.defineProperty(window, 'bolt_device', { configurable: true, value: { platform: 'ios' } });
 	try {
-		await expect(initializeShellAssets(entry)).rejects.toHaveProperty(
+		await expect(initialize_shell_assets(entry)).rejects.toHaveProperty(
 			'cause.message',
 			'Initial workspace asset is outside this release.'
 		);
 	} finally {
-		Reflect.deleteProperty(window, 'boltDevice');
+		Reflect.deleteProperty(window, 'bolt_device');
 	}
 });

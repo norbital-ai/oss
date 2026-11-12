@@ -3,38 +3,38 @@ import { Effect, FileSystem, Schema } from 'effect';
 import { join } from 'node:path';
 import {
 	canonical,
-	checksumOf,
-	sha256Hex,
+	checksum_of,
+	sha256_hex,
 	APPLIED,
 	AppliedRow,
 	type Applied
 } from '@norbital-ai/store';
 import {
-	applyMigrations,
-	readApplied,
+	apply_migrations,
+	read_applied,
 	MigrationBundleSchema,
-	readMigrations,
+	read_migrations,
 	BoltError,
 	type EngineManifest,
 	type MigrationBundle,
 	type TenantDbShape
 } from '@norbital-ai/bolt/engine';
-import { schemaSlice, type SchemaSlice } from '@norbital-ai/bolt/tooling';
-import { prepareMigrations } from '../compiler/migrations.ts';
+import { schema_slice, type SchemaSlice } from '@norbital-ai/bolt/tooling';
+import { prepare_migrations } from '../compiler/migrations.ts';
 import { CHECKPOINTS, inputs, keep } from './checkpoint.ts';
 
 export type MigrationOptions = { readonly accept?: true | readonly string[] };
 const decode = (text: string) =>
 	Schema.decodeUnknownEffect(Schema.fromJsonString(MigrationBundleSchema))(text).pipe(
-		Effect.mapError((cause) => BoltError.make('migrationChanged', 'decode', cause.message, cause))
+		Effect.mapError((cause) => BoltError.make('migration_changed', 'decode', cause.message, cause))
 	);
 const directory = join(CHECKPOINTS, 'migrations');
-const ledgerKey = (files: readonly Applied[]) => sha256Hex(canonical(files));
+const ledgerKey = (files: readonly Applied[]) => sha256_hex(canonical(files));
 export const rememberMigrations = (
 	bundle: MigrationBundle,
 	ledger: readonly Applied[] = bundle.files.map((file) => ({
 		name: file.name,
-		checksum: checksumOf(file)
+		checksum: checksum_of(file)
 	}))
 ) => keep(join(directory, `${ledgerKey(ledger)}.json`), JSON.stringify(bundle));
 const read = (file: string) =>
@@ -51,8 +51,8 @@ export const generatedMigrations = Effect.fn('TestDb.generatedMigrations')(funct
 	previous?: MigrationBundle,
 	options: MigrationOptions = {}
 ) {
-	const slice = 'workspace' in next ? schemaSlice(next) : next;
-	const key = sha256Hex(
+	const slice = 'workspace' in next ? schema_slice(next) : next;
+	const key = sha256_hex(
 		canonical([yield* inputs.image, previous?.lock ?? null, slice, options.accept ?? []])
 	);
 	const file = join(directory, `generated-${key}.json`);
@@ -77,7 +77,7 @@ export const generatedMigrations = Effect.fn('TestDb.generatedMigrations')(funct
 						const file = previous.files.find((file) => file.name === saved.name);
 						if (file === undefined)
 							return yield* BoltError.make(
-								'migrationChanged',
+								'migration_changed',
 								'decode',
 								'The retained migration archive is incomplete.'
 							);
@@ -86,7 +86,7 @@ export const generatedMigrations = Effect.fn('TestDb.generatedMigrations')(funct
 					const squash = previous.squashes.find((file) => file.name === receipt.file);
 					if (squash === undefined)
 						return yield* BoltError.make(
-							'migrationChanged',
+							'migration_changed',
 							'decode',
 							'The retained squash source is missing.'
 						);
@@ -103,8 +103,8 @@ export const generatedMigrations = Effect.fn('TestDb.generatedMigrations')(funct
 					JSON.stringify(previous.physical)
 				);
 			}
-			yield* prepareMigrations(root, slice, 'generate', options);
-			const bundle = yield* readMigrations(migrations);
+			yield* prepare_migrations(root, slice, 'generate', options);
+			const bundle = yield* read_migrations(migrations);
 			yield* rememberMigrations(bundle);
 			yield* keep(file, JSON.stringify(bundle));
 			return bundle;
@@ -113,12 +113,12 @@ export const generatedMigrations = Effect.fn('TestDb.generatedMigrations')(funct
 });
 
 /** Prepare a verified source history against the database's exact applied prefix. */
-export const prepareTestMigrations = Effect.fn('TestDb.prepareMigrations')(function* (
+export const prepareTestMigrations = Effect.fn('TestDb.prepare_migrations')(function* (
 	db: TenantDbShape,
 	next: EngineManifest | SchemaSlice,
 	options: MigrationOptions = {}
 ) {
-	const previous = yield* readApplied(db);
+	const previous = yield* read_applied(db);
 	let source: MigrationBundle | undefined;
 	if (previous !== null) {
 		const tracked = yield* db.value(Schema.Boolean, {
@@ -127,21 +127,21 @@ export const prepareTestMigrations = Effect.fn('TestDb.prepareMigrations')(funct
 		});
 		if (!tracked)
 			return yield* BoltError.make(
-				'migrationChanged',
+				'migration_changed',
 				'admission',
 				'The test database has no SQL migration history.'
 			);
 		const ledger = yield* db.rows(AppliedRow, { text: APPLIED, params: [] });
 		source = yield* read(join(directory, `${ledgerKey(ledger)}.json`));
 		if (source === undefined) {
-			const baseline = yield* generatedMigrations(previous, undefined, { accept: true });
+			const baseline = yield* generatedMigrations(previous.schema, undefined, { accept: true });
 			if (
 				ledgerKey(
-					baseline.files.map((file) => ({ name: file.name, checksum: checksumOf(file) }))
+					baseline.files.map((file) => ({ name: file.name, checksum: checksum_of(file) }))
 				) !== ledgerKey(ledger)
 			)
 				return yield* BoltError.make(
-					'migrationChanged',
+					'migration_changed',
 					'admission',
 					'The test database migration sources are missing.'
 				);
@@ -159,7 +159,7 @@ export const migrate = Effect.fn('TestDb.migrate')(function* (
 	options: MigrationOptions = {}
 ) {
 	const bundle = yield* prepareTestMigrations(db, next, options);
-	const impact = yield* applyMigrations(db, next, bundle);
+	const impact = yield* apply_migrations(db, next, bundle);
 	yield* rememberMigrations(bundle, yield* db.rows(AppliedRow, { text: APPLIED, params: [] }));
 	return impact;
 });

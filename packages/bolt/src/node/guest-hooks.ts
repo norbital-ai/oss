@@ -1,14 +1,14 @@
 /// <reference types="node" />
 // The prelude's host hooks and the guest module as a classic script: what every guest runner serves (`GuestIsolatesPort`)
 // and `bolt check`'s declaration evaluation reuse. Bolt runs no guest itself: each host owns its runner as
-// `HostPorts.guests` (bolt-cli's `nodeGuests`, which bolt-server and `bolt dev` use; Colony's isolated-vm).
+// `HostPorts.guests` (bolt-cli's `node_guests`, which bolt-server and `bolt dev` use; Colony's isolated-vm).
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { parseSync } from 'rolldown/utils';
 import type { GuestProgram } from '../engine/guest/runner.ts';
 
 /** The prelude's `$3`: a `?bytes` import's bytes by sha256, or undefined (the guest then throws naming the sha). */
-export const assetHook =
+export const asset_hook =
 	(assets: GuestProgram['assets']) =>
 	(sha: unknown): Uint8Array | undefined =>
 		assets !== undefined && typeof sha === 'string' && Object.hasOwn(assets, sha)
@@ -32,7 +32,7 @@ export function digest(name: unknown, bytes: unknown): Uint8Array {
 }
 
 /** The invocation's entropy: SHA-256 blocks of its seed, so a replay with the same seed draws the same values. */
-export function randomStream(seed: string): (n: unknown) => Uint8Array {
+export function random_stream(seed: string): (n: unknown) => Uint8Array {
 	let counter = 0;
 	let pool = Buffer.alloc(0);
 	return (n) => {
@@ -60,7 +60,7 @@ const nameOf = (name: ExportName) => (name.type === 'Literal' ? name.value : nam
  * `guest.mjs` as a classic script whose completion value is its namespace, for a runner that evaluates scripts only.
  * An import becomes `imports`' statement, `import.meta` an empty object; exports stay live bindings. Replacements keep their spans' columns, and the wrapper is a line of its own (`lineOffset: -1`).
  */
-export const moduleScript = (source: string, imports: (node: ImportDeclaration) => string) => {
+export const module_script = (source: string, imports: (node: ImportDeclaration) => string) => {
 	const { program, module, errors } = parseSync('guest.mjs', source);
 	const error = errors[0];
 	if (error !== undefined) {

@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { kapso } from '../../src/chat/kapso/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { apiKey: 'key', phoneNumberId: '1001', webhookSecret: 'hook' },
@@ -49,17 +49,17 @@ describe('Kapso', () => {
 			const h = yield* connected(kapso, settings),
 				body = JSON.stringify(event({ context: { id: 'wamid.0' } }));
 			expect(h.status).toMatchObject({ state: 'connected', account: '1001' });
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'wamid.1',
 						thread: person,
-						sentAt: new Date(1_790_000_000_000).toISOString(),
+						sent_at: new Date(1_790_000_000_000).toISOString(),
 						text: 'Hello',
 						from: { handle: person, name: 'Ann' },
-						replyTo: 'wamid.0',
+						reply_to: 'wamid.0',
 						group: false,
 						invocation: 'direct'
 					}
@@ -72,8 +72,8 @@ describe('Kapso', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(kapso, settings),
 				body = JSON.stringify(event());
-			expect((yield* h.link.webhook!(webhook(body, sign(body, 'forged')))).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body, 'forged')))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -84,7 +84,7 @@ describe('Kapso', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = JSON.stringify(event());
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(500);
 		})
 	);
 	it.live('a batch stores each message, and a missing sender comes from the conversation', () =>
@@ -97,7 +97,7 @@ describe('Kapso', () => {
 					event({ id: 'wamid.3', from: undefined, kapso: {} }, { kapso: { contactName: 'Bo' } })
 				]
 			});
-			yield* h.link.webhook!(webhook(body, sign(body)));
+			yield* required(h.link.webhook)(webhook(body, sign(body)));
 			expect(h.events).toHaveLength(2);
 			expect(h.events[1]).toMatchObject({
 				messages: [{ id: 'wamid.3', thread: person, from: { handle: person, name: 'Bo' } }]
@@ -113,9 +113,9 @@ describe('Kapso', () => {
 				JSON.stringify(event({ type: 'reaction' })),
 				JSON.stringify({ ...event(), phone_number_id: '2002' })
 			])
-				expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(200);
 			const sent = JSON.stringify(event());
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				webhook(sent, { ...sign(sent), 'x-webhook-event': 'whatsapp.message.sent' })
 			);
 			expect(h.events).toEqual([]);
@@ -131,7 +131,7 @@ describe('Kapso', () => {
 				{ text: undefined, interactive: { button_reply: { title: 'Yes' } } }
 			]) {
 				const body = JSON.stringify(event(extra));
-				yield* h.link.webhook!(webhook(body, sign(body)));
+				yield* required(h.link.webhook)(webhook(body, sign(body)));
 			}
 			expect(h.events).toMatchObject([
 				{ messages: [{ text: 'Clip' }] },
@@ -160,8 +160,8 @@ describe('Kapso', () => {
 			const linked = JSON.stringify(
 				event({ id: 'wamid.2', type: 'image', text: undefined, image: { id: 'media2' } })
 			);
-			yield* h.link.webhook!(webhook(hosted, sign(hosted)));
-			yield* h.link.webhook!(webhook(linked, sign(linked)));
+			yield* required(h.link.webhook)(webhook(hosted, sign(hosted)));
+			yield* required(h.link.webhook)(webhook(linked, sign(linked)));
 			expect(h.events[0]).toMatchObject({
 				bins: [new Uint8Array([1, 2, 3])],
 				messages: [
@@ -185,8 +185,8 @@ describe('Kapso', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(kapso, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: person, text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'wamid.out' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: person, text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'wamid.out' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe(`${API}/1001/messages`);
 			expect(call?.headers.get('x-api-key')).toBe('key');
@@ -200,7 +200,7 @@ describe('Kapso', () => {
 			const connection = yield* Effect.promise(() =>
 				kapso.connect(settings, {
 					fetch,
-					webhookUrl: 'https://hook.test/',
+					webhook_url: 'https://hook.test/',
 					receive: () => Promise.resolve()
 				})
 			);
@@ -217,11 +217,11 @@ describe('Kapso', () => {
 					: answer(call)
 			);
 			const h = yield* connected(kapso, settings);
-			const refused = yield* Effect.flip(h.link.send!({ to: person, text: 'Hello' }, []));
+			const refused = yield* Effect.flip(required(h.link.send)({ to: person, text: 'Hello' }, []));
 			expect(refused).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			status = 429;
-			const later = yield* Effect.flip(h.link.send!({ to: person, text: 'Hello' }, []));
-			expect(later).toMatchObject({ _tag: 'ProviderUnavailable', retryAfterMs: 3000 });
+			const later = yield* Effect.flip(required(h.link.send)({ to: person, text: 'Hello' }, []));
+			expect(later).toMatchObject({ _tag: 'ProviderUnavailable', retry_after_ms: 3000 });
 		})
 	);
 	it.live('reads a number back since a time, keeping the thread and paging to the end', () =>
@@ -238,7 +238,7 @@ describe('Kapso', () => {
 			const connection = yield* Effect.promise(() =>
 				kapso.connect(settings, {
 					fetch,
-					webhookUrl: 'https://hook.test/',
+					webhook_url: 'https://hook.test/',
 					receive: () => Promise.resolve()
 				})
 			);
@@ -267,7 +267,7 @@ describe('Kapso', () => {
 			const connection = yield* Effect.promise(() =>
 				kapso.connect(settings, {
 					fetch,
-					webhookUrl: 'https://hook.test/',
+					webhook_url: 'https://hook.test/',
 					receive: () => Promise.resolve()
 				})
 			);
@@ -281,7 +281,7 @@ describe('Kapso', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ error: 'unauthorized' }, 401));
 			const h = yield* host(chatProvider(kapso), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

@@ -1,17 +1,12 @@
 <script lang="ts">
 	import { Tabs } from 'bits-ui';
 	import type { Snippet } from 'svelte';
-	import { provisionalInset } from '../../layout/inset.svelte.js';
+	import { provisional_inset } from '../../layout/inset.svelte.js';
 	import { INSET_X_CLASS } from '../../layout/layout.shared.js';
 	import { cn } from '../utils.js';
 
-	let {
-		value,
-		label,
-		children,
-		class: className
-	}: { value: string; label: string; children: Snippet; class?: string } = $props();
-	const inset = provisionalInset();
+	let { value, label, children }: { value: string; label: string; children: Snippet } = $props();
+	const inset = provisional_inset();
 </script>
 
 <Tabs.Content

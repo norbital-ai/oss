@@ -4,10 +4,12 @@
 	before any page chunk loads.
 -->
 <script lang="ts">
+	import { page_live_mode } from '../page/bolt.ts';
+	import { view_client } from '../page/view-client.ts';
 	import { attach, fork, run } from '@norbital-ai/ui/effect';
-	import { Effect, Exit, FiberHandle, Option, Scope, Stream, SubscriptionRef } from 'effect';
+	import { Effect, Exit, FiberHandle, Option, Schema, Scope, Stream, SubscriptionRef } from 'effect';
 	import { updating } from '../protocol/client.ts';
-	import { setContext, tick, type Component } from 'svelte';
+	import { onMount, setContext, tick, type Component } from 'svelte';
 	import { watch } from 'runed';
 	import { PersistedState } from 'runed';
 	import { MediaQuery, SvelteMap } from 'svelte/reactivity';
@@ -19,7 +21,7 @@
 		INSET_X_CLASS,
 		Inline,
 		Stack,
-		setAppIdentitySlot,
+		set_app_identity_slot,
 		type AppIdentitySlot
 	} from '@norbital-ai/ui/layout';
 	import {
@@ -33,41 +35,41 @@
 		TableSkeleton,
 		Toaster,
 		cn,
-		confirmAction,
-		openRecord,
-		provideBolt,
-		provideKinds,
-		provideRepresentations,
-		setUiText,
-		uiTextFor
+		open_record,
+		provide_bolt,
+		provide_kinds,
+		provide_representations,
+		set_ui_text,
+		ui_text_for
 	} from '@norbital-ai/ui';
 	import { NorbiusStrip } from '@norbital-ai/ui/brand';
 	import type { ShellMountConfig } from './mount.ts';
 	import {
 		based,
-		commandCenterTabs,
-		isOpenRoute,
+		command_center_tabs,
+		is_open_route,
 		logical,
-		navApps,
-		navigationPaths,
-		previewRoute,
-		recordsOf,
+		nav_apps,
+		navigation_paths,
+		page_chunk_key,
+		preview_route,
+		records_of,
 		route,
-		withRecords,
+		with_records,
 		type ShellBoot
 	} from './nav.ts';
-	import { chosenLocale, frameworkText, setLocale } from './i18n.ts';
+	import { chosenLocale, framework_text, setLocale } from './i18n.ts';
 	import type { SyncStatus } from '../page/bolt.ts';
-	import type { FinderAnswer } from './finder/model.ts';
-	import { activeApp, media, navigationModel, NORBIUS } from './model.ts';
+	import { active_app, media, navigation_model, NORBIUS } from './model.ts';
 	import { applyTheme, storedTheme, storeTheme, type Theme } from './theme.ts';
 	import {
-		agentPanel,
-		challengeQueue,
-		shellApi,
-		shellBolt,
+		agent_panel,
+		challenge_queue,
+		shell_api,
+		shell_bolt,
 		type AgentRequest,
-		type ShellBolt
+		type ShellBolt,
+		type ShellPageContext
 	} from './runtime.ts';
 	import Access from './auth/Access.svelte';
 	import SignIn from './auth/SignIn.svelte';
@@ -79,21 +81,10 @@
 	import { createSounds, SOUNDS, type SoundKind, type SoundStatus } from './sounds.ts';
 	import SoundSettings from './settings/Sounds.svelte';
 	import { CLIENT_NAVIGATION, type ClientNavigation } from './agent/navigation.ts';
-	import { CLIENT_PAGE_ACTION, type ClientPageAction } from './agent/navigation.ts';
-	import {
-		fillField,
-		pageClickable,
-		pageField,
-		pageFieldLabel,
-		pageCovered,
-		pageLabel,
-		pageMark,
-		pageScreen,
-		ringOn
-	} from './agent/page.ts';
+	import { CLIENT_PAGE_ACTION } from './agent/navigation.ts';
+	import { clientPageAction } from './agent/page.ts';
 	import Inbox from './inbox/Inbox.svelte';
 	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
-	import type { PageResult } from '../protocol/schema.ts';
 	import StudioSlot from './studio/StudioSlot.svelte';
 	import RecordSheet from './RecordSheet.svelte';
 	import Turnstile from './auth/Turnstile.svelte';
@@ -103,27 +94,31 @@
 	import Bell from './Bell.svelte';
 	import DeviceWall from './DeviceWall.svelte';
 	import { deviceAccess } from './device-access.ts';
-	import { resolveDevice } from '../page/device.ts';
-	import { deviceSession, openExternal } from './device-session.ts';
+	import { resolve_device } from '../page/device.ts';
+	import { deviceSession, open_external } from './device-session.ts';
+	import { NoticesReadAnswer } from './api-types.ts';
 	import { commandKey } from './keyboard.ts';
+	import { readPreference, writePreference } from './preferences.ts';
 
 	let { config }: { config: ShellMountConfig } = $props();
 
 	// svelte-ignore state_referenced_locally
-	const api = shellApi(config.fetch);
-	const agent = agentPanel();
+	const api = shell_api(config.fetch, {
+		after_mutation: () => page_live_mode() === 'snapshot' && bolt !== null ? bolt.refresh() : Effect.void
+	});
+	const agent = agent_panel();
 	// Studio's Take control: the person hands the preview back by steering this conversation, as themselves
-	$effect(() => {
+	const previewRelease = Schema.decodeUnknownOption(Schema.Struct({
+		type: Schema.Literal('norbital:preview-release'),
+		id: Schema.optionalKey(Schema.Unknown)
+	}));
+	onMount(() => {
 		const onMessage = (event: MessageEvent) => {
 			if (event.origin !== location.origin) return;
-			const data = event.data as { type?: unknown; id?: unknown } | null;
-			if (data?.type !== 'norbital:preview-release') return;
-			let conversation: string | null = null;
-			try {
-				if (agentMemory !== undefined) conversation = localStorage.getItem(agentMemory);
-			} catch {
-				conversation = null;
-			}
+			const decoded = previewRelease(event.data);
+			if (Option.isNone(decoded)) return;
+			const data = decoded.value;
+			const conversation = readPreference(agentMemory);
 			if (conversation === null) return;
 			fork(
 				api.agent
@@ -146,10 +141,10 @@
 	// the framework's own copy in the viewer's locale (their choice, else the workspace's); the workspace's messages win
 	// svelte-ignore state_referenced_locally
 	const locale = chosenLocale(config.manifest.workspace.locale);
-	const framework = frameworkText(locale);
+	const framework = framework_text(locale);
 	const t = (key: string) => config.messages?.[key] ?? framework[key] ?? key;
-	const uiText = uiTextFor(locale);
-	setUiText(uiText);
+	const ui_text = ui_text_for(locale);
+	set_ui_text(ui_text);
 	// the appearance: the document applied the stored choice before paint; a change of choice or of the system's follows
 	let theme = $state<Theme>('system');
 	fork(
@@ -194,14 +189,7 @@
 	watch(
 		() => chimeKey,
 		(key) => {
-			try {
-				chimes =
-					key !== null &&
-					(localStorage.getItem(key) ??
-						localStorage.getItem(key.replace('bolt.sounds:', 'bolt.norbius.sounds:'))) !== 'off';
-			} catch {
-				chimes = true;
-			}
+			chimes = key !== null && readPreference(key) !== 'off';
 		}
 	);
 	const sounds = createSounds(
@@ -213,14 +201,10 @@
 	setContext(SOUNDS, sounds);
 	const chooseChimes = (enabled: boolean) => {
 		chimes = enabled;
-		try {
-			if (chimeKey !== null) localStorage.setItem(chimeKey, enabled ? 'on' : 'off');
-		} catch {
-			/* Device storage may be disabled. */
-		}
+		writePreference(chimeKey, enabled ? 'on' : 'off');
 		if (enabled) void sounds.test();
 	};
-	$effect(() => {
+	onMount(() => {
 		const unlock = () => {
 			void sounds.unlock();
 		};
@@ -233,27 +217,36 @@
 		};
 	});
 	let bolt = $state.raw<ShellBolt | null>(null);
-	const pageContext = () => {
+	const pageContext = (): ShellPageContext => {
 		if (bolt === null) throw new Error('The workspace shell has not booted.');
-		return bolt;
+		const { native_query: _native, observe: _observe, closed: _closed, sync: _sync, ...authored } = bolt;
+		return authored;
+	};
+	const viewContext = () => {
+		if (bolt === null || boot === null) throw new Error('The workspace shell has not booted.');
+		return view_client(bolt, boot.read_catalog, boot.catalog);
 	};
 	let failure = $state<{ code: string; message: string; status: number } | null>(null);
 	let agentRequest = $state<AgentRequest | null>(null);
 	// Norbius is `?agent=<conversation>` (`new`: a new one) beside any `?record=` stack, as the record sheets are: opening
 	// it pushes the param, closing removes it, a switch of conversation replaces it; a reload, back, forward or a shared
 	// link reopens it on that conversation
-	function agentUrl(value: string | null, replace = false): void {
+	function setSearchParam(
+		key: string,
+		value: string | null,
+		options: { replace?: boolean; pushUnchanged?: boolean } = {}
+	): void {
 		const next = here();
-		if (value === null) next.searchParams.delete('agent');
-		else next.searchParams.set('agent', value);
-		if (next.href !== here().href) navigate(next.href, replace);
+		if (value === null) next.searchParams.delete(key);
+		else next.searchParams.set(key, value);
+		if (options.pushUnchanged || next.href !== here().href) navigate(next.href, options.replace);
 	}
 	agent.subscribe((r) => {
 		if (r === agentRequest) return; // the subscription's first call: the URL decides (below)
 		agentRequest = r;
 		const open = new URL(location.href).searchParams.get('agent');
-		if (r === null && open !== null) agentUrl(null);
-		else if (r !== null && open === null) agentUrl(r.conversation ?? 'new');
+		if (r === null && open !== null) setSearchParam('agent', null);
+		else if (r !== null && open === null) setSearchParam('agent', r.conversation ?? 'new');
 	});
 	/** What Norbius left for the person while its panel was closed: the dot on its icon, cleared on opening it. */
 	let awaiting = $state<AwaitingKind | null>(null);
@@ -283,10 +276,10 @@
 	/** The panel switched conversation: the URL follows without a history entry. */
 	function agentConversation(id: string | null): void {
 		if (agentRequest !== null) agentRequest = { ...agentRequest, conversation: id };
-		agentUrl(id ?? 'new', true);
+		setSearchParam('agent', id ?? 'new', { replace: true });
 	}
 	// ui's generated forms and record views: the caller's exposure from the boot, pickers paging through `bolt.read`
-	provideKinds({
+	provide_kinds({
 		get catalog() {
 			return boot?.catalog;
 		},
@@ -303,41 +296,41 @@
 		get currency() {
 			return config.manifest.workspace.currency;
 		},
-		query: (request) => pageContext().query(request),
+		query: (request) => viewContext().query(request),
 		// a generated form's file field: bytes to `<model>.<field>`, links to the stored file
 		upload: (file, target) =>
 			pageContext()
 				.upload(file, target)
 				.pipe(Effect.map((ref) => ({ id: ref.id, name: ref.name, mime: ref.mime }))),
 		file_url: (ref, options) => pageContext().file_url(ref, options),
-		get customFields() {
-			return config.customFields;
+		get custom_fields() {
+			return config.custom_fields;
 		}
 	});
 	// the record views of every `RecordShell` under the shell, the `?record=` sheet's and a page's alike
 	// a page's AppShell publishes its identity and actions here; the hero above the page renders them
 	const identity = $state<AppIdentitySlot>({ current: null });
-	setAppIdentitySlot(identity);
+	set_app_identity_slot(identity);
 	// svelte-ignore state_referenced_locally
-	provideRepresentations(config.representations ?? {});
+	provide_representations(config.representations ?? {});
 
 	// The UI kit's controls share the client of this shell mount.
-	provideBolt(pageContext);
+	provide_bolt(viewContext);
 
 	// a preview environment drops the meta tools: Norbius and Studio (`surfaces`), People, Integrations and preview-as
 	const previewEnv = $derived(boot?.workspace.live !== undefined);
-	const current = $derived(previewRoute(route(config.manifest, url), previewEnv));
+	const current = $derived(preview_route(route(config.manifest, url), previewEnv));
 	const commandTabs = $derived(
-		boot === null ? [] : commandCenterTabs(boot.surfaces, boot.admin, previewEnv)
+		boot === null ? [] : command_center_tabs(boot.surfaces, boot.admin, previewEnv)
 	);
 	// the record-sheet stack (rule 10): every `?record=`, the last on top
-	const records = $derived(recordsOf(url));
+	const records = $derived(records_of(url));
 	// a `portal: true` page or any kiosk page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
 	// the device access the open app declares (`requires`); its pages wait behind the wall until it is granted
 	const requires = $derived(
 		current.kind === 'page' ? (config.manifest.apps[current.app]?.requires ?? []) : []
 	);
-	const device = $derived(bolt?.device ?? resolveDevice(config.device));
+	const device = $derived(bolt?.device ?? resolve_device(config.device));
 	const access = $derived(deviceAccess(device));
 	const portal = $derived(
 		current.kind === 'kiosk' ||
@@ -345,7 +338,7 @@
 				config.manifest.apps[current.app]?.pages[current.page]?.portal === true)
 	);
 	const publicApp = $derived(
-		current.kind === 'page' && isOpenRoute(config.manifest, current) ? current.app : undefined
+		current.kind === 'page' && is_open_route(config.manifest, current) ? current.app : undefined
 	);
 	let firstPageReady = $state(false);
 	const initialPageMounted = attach(() =>
@@ -365,7 +358,7 @@
 					firstPageReady ||
 					pageKey === null ||
 					config.pages[pageKey] === undefined)) ||
-			current.kind === 'signIn' ||
+			current.kind === 'sign_in' ||
 			current.kind === 'invite',
 		(ready) => {
 			if (ready)
@@ -378,15 +371,11 @@
 	/** `href` is a workspace URL (`/inbox`); the history entry carries the base path. */
 	function navigate(href: string, replace = false): void {
 		const next = new URL(href, url);
-		if (next.origin !== location.origin) return void fork(openExternal(device, next.href));
+		if (next.origin !== location.origin) return void fork(open_external(device, next.href));
 		const destination = route(config.manifest, next);
-		const publicKey =
-			destination.kind === 'page'
-				? `app/${destination.app}/${destination.page}`
-				: destination.kind === 'kiosk'
-					? `kiosk/${destination.kiosk}/${destination.page}`
-					: null;
-		if (publicKey !== null && config.publicRoutes?.includes(publicKey)) {
+		const chunk = page_chunk_key(destination);
+		const publicKey = chunk === null ? null : destination.kind === 'page' ? `app/${chunk}` : chunk;
+		if (publicKey !== null && config.public_routes?.includes(publicKey)) {
 			location.assign(`${based(next.pathname)}${next.search}${next.hash}`);
 			return;
 		}
@@ -399,10 +388,7 @@
 	}
 	/** The command center's open automation run is `?run=<id>`, beside whatever the table keeps in the URL. */
 	function openRun(id: string | null): void {
-		const next = here();
-		if (id === null) next.searchParams.delete('run');
-		else next.searchParams.set('run', id);
-		navigate(next.href);
+		setSearchParam('run', id, { pushUnchanged: true });
 	}
 	// in-app links are plain anchors; the shell keeps them in the page
 	function intercept(event: MouseEvent): void {
@@ -417,7 +403,7 @@
 			new URL(a.href, location.href).origin !== location.origin
 		) {
 			event.preventDefault();
-			fork(openExternal(device, a.href));
+			fork(open_external(device, a.href));
 			return;
 		}
 		if (
@@ -447,7 +433,7 @@
 	 */
 	let pageScope: Scope.Closeable | null = null;
 	/** A signed-in staff member's device environment (notices, push, the shell's notice service). */
-	let environment: { readonly signOut: Effect.Effect<void> } | null = null;
+	let environment: { readonly sign_out: Effect.Effect<void> } | null = null;
 	let requestLoad: ((app: string | undefined, kiosk: string | null) => void) | null = null;
 	const load = (app: string | undefined, kiosk: string | null) =>
 		Effect.gen(function* () {
@@ -455,11 +441,11 @@
 			if (result._tag === 'Failure') {
 				boot = null;
 				guest = result.failure.workspace ?? null;
-				if (result.failure.status === 401 && !isOpenRoute(config.manifest, current))
+				if (result.failure.status === 401 && !is_open_route(config.manifest, current))
 					navigate(`/sign-in?next=${encodeURIComponent(url.pathname + url.search)}`, true);
 				else if (
 					result.failure.status !== 401 ||
-					(current.kind !== 'signIn' && current.kind !== 'invite')
+					(current.kind !== 'sign_in' && current.kind !== 'invite')
 				)
 					failure = {
 						code: result.failure.code,
@@ -471,11 +457,11 @@
 			if (pageScope !== null) yield* Scope.close(pageScope, Exit.void);
 			const scope = yield* Scope.make();
 			pageScope = scope;
-			const client = yield* shellBolt(result.success, {
+			const client = yield* shell_bolt(result.success, {
 				messages: { ...framework, ...config.messages },
-				...(config.integrationSetups === undefined
+				...(config.integration_setups === undefined
 					? {}
-					: { integrationSetups: config.integrationSetups }),
+					: { integration_setups: config.integration_setups }),
 				...(config.device === undefined ? {} : { device: config.device }),
 				...(challenge === null ? {} : { challenge }),
 				agent,
@@ -484,7 +470,7 @@
 					return next.kind === 'kiosk' ? next.kiosk : null;
 				},
 				...(config.fetch === undefined ? {} : { fetch: config.fetch }),
-				...(config.openStream === undefined ? {} : { openStream: config.openStream })
+				...(config.open_stream === undefined ? {} : { open_stream: config.open_stream })
 			}).pipe(Effect.provideService(Scope.Scope, scope));
 			// a preview shows only in Studio's or Norbius's frame (Norbius's own browser marks its view `?frame`);
 			// opened as a page of its own it goes to the live workspace's Studio, which frames it
@@ -497,7 +483,7 @@
 			bolt = client;
 			environment = result.success.surfaces.inbox
 				? yield* deviceSession(client.device, {
-						inbox: client.observe({ read: { m: 'inbox', a: [] } }),
+						inbox: client.observe({ read: { m: 'inbox', a: [] } }, NoticesReadAnswer),
 						vapid: result.success.push,
 						navigate,
 						store: (body) => api.push(body)
@@ -526,10 +512,21 @@
 				),
 				Effect.forkIn(scope)
 			);
-		});
+		}).pipe(
+			// a malformed host answer while booting is the same unexpected-response failure the shell API reports
+			Effect.catchTag('ProtocolFailed', () =>
+				Effect.sync(() => {
+					failure = {
+						code: 'protocol',
+						message: 'The server returned an unexpected response. Reload the page and try again.',
+						status: 200
+					};
+				})
+			)
+		);
 	const mountLifecycle = attach(() =>
 		Effect.gen(function* () {
-			challenge = yield* challengeQueue();
+			challenge = yield* challenge_queue();
 			const submit = yield* FiberHandle.makeRuntime<never, never, void>();
 			requestLoad = (app, kiosk) => {
 				submit(load(app, kiosk));
@@ -572,26 +569,19 @@
 			() => {}
 		);
 
-	function pageOf(key: string): Promise<Component<{ ctx: ShellBolt }>> | null {
+	function pageOf(key: string): Promise<Component<{ ctx: ShellPageContext }>> | null {
 		const chunk = config.pages[key];
 		return chunk === undefined ? null : chunk().then((m) => m.default);
 	}
 	// keyed by a string: a query change (`?record=`) re-derives `current` but must not remount the page
 	// a member's page outside their nav (another audience's app, or one no policy names) is no access, not rendered
 	const pageKey = $derived(
-		bolt === null
-			? null
-			: current.kind === 'page'
-				? boot?.visitor === null && !navApps(boot.nav).includes(current.app)
-					? null
-					: `${current.app}/${current.page}`
-				: current.kind === 'kiosk'
-					? `kiosk/${current.kiosk}/${current.page}`
-					: null
+		bolt === null || (current.kind === 'page' && boot?.visitor === null && !nav_apps(boot.nav).includes(current.app))
+			? null : page_chunk_key(current)
 	);
 	// a page chunk loads once: switching between an app's pages keeps its banner and tabs mounted, shows the page at once
 	// when it has loaded before, and keeps the previous page of the same app on screen until a new chunk arrives
-	const loaded = new SvelteMap<string, Component<{ ctx: ShellBolt }>>();
+	const loaded = new SvelteMap<string, Component<{ ctx: ShellPageContext }>>();
 	const unloadable = new SvelteMap<string, unknown>();
 	const loading = new Set<string>();
 	const loadPage = (key: string) => {
@@ -609,7 +599,7 @@
 			if (key !== null) loadPage(key);
 		}
 	);
-	let held: { key: string; Page: Component<{ ctx: ShellBolt }> } | undefined;
+	let held: { key: string; Page: Component<{ ctx: ShellPageContext }> } | undefined;
 	const Page = $derived.by(() => {
 		const ready = pageKey === null ? undefined : loaded.get(pageKey);
 		if (pageKey !== null && ready !== undefined) held = { key: pageKey, Page: ready };
@@ -619,9 +609,9 @@
 
 	const pageIdentity = $derived(Page === undefined ? null : identity.current);
 
-	const signOut = Effect.fn('Shell.signOut')(function* () {
-		if (environment !== null) yield* environment.signOut;
-		yield* Effect.result(api.signOut());
+	const sign_out = Effect.fn('Shell.sign_out')(function* () {
+		if (environment !== null) yield* environment.sign_out;
+		yield* Effect.result(api.sign_out());
 		location.assign(based('/sign-in'));
 	});
 	const endPreview = Effect.fn('Shell.endPreview')(function* () {
@@ -665,16 +655,16 @@
 	const model = $derived(
 		boot === null
 			? null
-			: navigationModel(waiting === null ? boot : { ...boot, inbox: waiting }, url.pathname, t)
+			: navigation_model(waiting === null ? boot : { ...boot, inbox: waiting }, url.pathname, t)
 	);
 	const sessions = $derived(
 		boot?.visitor === null
-			? navApps(boot.nav).flatMap((name) =>
+			? nav_apps(boot.nav).flatMap((name) =>
 					config.sessions?.[name] === undefined ? [] : [{ name, component: config.sessions[name] }]
 				)
 			: []
 	);
-	const app = $derived(model === null ? null : activeApp(model));
+	const app = $derived(model === null ? null : active_app(model));
 	// the open app's pages strip is tab level 1 (ui's `TAB_LEVEL` context): a page's own Tabs nest under it as level 2
 	const strip = $derived(
 		current.kind === 'page' && !portal && boot?.visitor === null ? (app?.pages ?? null) : null
@@ -732,14 +722,14 @@
 		navOpen = false;
 		agent.open();
 	};
+	const navigationBoot = () =>
+		boot !== null && boot.actor?.kind === 'member' && !boot.actor.external && !previewEnv ? boot : null;
 	setContext<ClientNavigation>(CLIENT_NAVIGATION, {
 		open(path, conversation) {
+			const allowed = navigationBoot();
 			if (
-				boot === null ||
-				boot.actor?.kind !== 'member' ||
-				boot.actor.external ||
-				previewEnv ||
-				!clientNavigationPath(path, navigationPaths(boot.nav, boot.admin), boot.admin)
+				allowed === null ||
+				!clientNavigationPath(path, navigation_paths(allowed.nav, allowed.admin), allowed.admin)
 			)
 				return;
 			const next = new URL(path, url);
@@ -753,162 +743,16 @@
 		}
 	});
 	// closing a sheet closes every sheet stacked on it
-	const closeRecord = (depth: number) => navigate(withRecords(url, depth).href);
+	const closeRecord = (depth: number) => navigate(with_records(url, depth).href);
 
-	/** The active tab's claim on a page action: the server lets exactly one tab own it, across windows and devices. */
-	const claimedBy = (output: unknown): boolean =>
-		typeof output === 'object' && output !== null && 'claimed' in output && output.claimed === true;
-
-	/** The page settles first: what it then shows reaches Norbius with the answer. */
-	const answerPage = (step: string, result: PageResult) =>
-		setTimeout(() => {
-			void run(api.agent.pageResult(step, { ...result, screen: pageScreen() })).catch(() => {});
-		}, 700);
-	setContext<ClientPageAction>(CLIENT_PAGE_ACTION, {
-		arrived(step) {
-			if (document.visibilityState === 'visible') answerPage(step, { ok: true });
-		},
-		run(action, _conversation, step) {
-			const ack = (result: PageResult) => answerPage(step, result);
-			// a hidden or ineligible tab stays silent: a second tab must never overwrite the acting tab's result
-			if (
-				boot === null ||
-				boot.actor?.kind !== 'member' ||
-				boot.actor.external ||
-				previewEnv ||
-				document.visibilityState !== 'visible'
-			)
-				return;
-			const act = () => {
-				if (action.highlight !== undefined) {
-					const target = pageMark(action.highlight);
-					if (target === null) {
-						ack({ ok: false, note: `Nothing visible reads “${action.highlight}”.` });
-						return;
-					}
-					target.scrollIntoView({ block: 'center' });
-					// the panel must not sit over what it points at
-					if (pageCovered(target)) agent.close();
-					ringOn(target);
-					ack({ ok: true, note: `Highlighted “${action.highlight}”.` });
-					return;
-				}
-				if (action.scroll !== undefined) {
-					let scroller: HTMLElement | null = document.querySelector<HTMLElement>('main');
-					while (scroller !== null && scroller.scrollHeight <= scroller.clientHeight + 1)
-						scroller = scroller.parentElement;
-					(scroller ?? document.scrollingElement ?? window).scrollBy({
-						top: action.scroll,
-						behavior: 'smooth'
-					});
-					ack({ ok: true, note: `Scrolled ${action.scroll}px.` });
-					return;
-				}
-				if (action.go !== undefined) {
-					if (action.go === 'back') history.back();
-					else history.forward();
-					ack({ ok: true, note: `Went ${action.go}.` });
-					return;
-				}
-				if (action.type !== undefined) {
-					const fill = action.type;
-					const field = pageField(fill.label);
-					if (field === null) {
-						ack({ ok: false, note: `No visible field “${fill.label}”.` });
-						return;
-					}
-					const shown = fill.text.length > 120 ? `${fill.text.slice(0, 120)}…` : fill.text;
-					fork(
-						confirmAction({
-							title: t('Norbius wants to type into this page'),
-							body: t('Fill “{field}” with “{value}”? It can change your workspace.')
-								.replace('{field}', pageFieldLabel(field) || fill.label)
-								.replace('{value}', shown),
-							confirmLabel: t('Fill it'),
-							destructive: true
-						}).pipe(
-							Effect.tap((yes) =>
-								Effect.sync(() => {
-									if (yes) {
-										fillField(field, fill.text, fill.submit === true);
-										ack({ ok: true, note: `Filled “${pageFieldLabel(field) || fill.label}”.` });
-									} else ack({ ok: false, note: 'The person declined.' });
-								})
-							)
-						)
-					);
-					return;
-				}
-				if (action.click === undefined) return;
-				const control = pageClickable(action.click);
-				if (control === null) {
-					ack({ ok: false, note: `No visible control “${action.click}”.` });
-					return;
-				}
-				// a board card is a record opener, not a mutation: it is the card the person sees.
-				if (control.matches('[data-board-card]')) {
-					control.click();
-					ack({ ok: true, note: `Opened “${pageLabel(control)}”.` });
-					return;
-				}
-				const link = control.closest<HTMLAnchorElement>('a[href]');
-				if (link !== null && !link.hasAttribute('download')) {
-					const next = logical(link.href);
-					if (next !== null && !next.pathname.startsWith('/__bolt/')) {
-						navigate(next.href);
-						ack({ ok: true, url: next.href });
-						return;
-					}
-					if (new URL(link.href, location.href).origin !== location.origin) {
-						fork(
-							confirmAction({
-								title: t('Norbius wants to open a link'),
-								body: t('Open “{link}” in your browser?').replace('{link}', link.href),
-								confirmLabel: t('Open it')
-							}).pipe(
-								Effect.tap((yes) =>
-									Effect.sync(() => {
-										if (yes) {
-											fork(openExternal(device, link.href));
-											ack({ ok: true, note: 'Opened the external link.' });
-										} else ack({ ok: false, note: 'The person declined.' });
-									})
-								)
-							)
-						);
-						return;
-					}
-					ack({ ok: false, note: 'That link is outside the workspace.' });
-					return;
-				}
-				fork(
-					confirmAction({
-						title: t('Norbius wants to use this page'),
-						body: t('Press “{control}”? It can change your workspace.').replace(
-							'{control}',
-							pageLabel(control) || action.click
-						),
-						confirmLabel: t('Press it'),
-						destructive: true
-					}).pipe(
-						Effect.tap((yes) =>
-							Effect.sync(() => {
-								if (yes) {
-									control.click();
-									ack({ ok: true, note: `Pressed “${pageLabel(control)}”.` });
-								} else ack({ ok: false, note: 'The person declined.' });
-							})
-						)
-					)
-				);
-			};
-			void run(api.agent.claimPageAction(step))
-				.then((answer) => {
-					if (answer.kind === 'committed' && claimedBy(answer.output)) act();
-				})
-				.catch(() => {});
-		}
-	});
+	setContext(CLIENT_PAGE_ACTION, clientPageAction({
+		api: api.agent,
+		eligible: () => navigationBoot() !== null && document.visibilityState === 'visible',
+		navigate,
+		open_external: (href) => fork(open_external(device, href)),
+		closePanel: () => agent.close(),
+		t
+	}));
 </script>
 
 <svelte:head
@@ -950,13 +794,13 @@
 		<Home
 			{model}
 			{t}
-			onNavigate={navigate}
-			onAsk={boot?.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
+			on_navigate={navigate}
+			on_ask={boot?.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
 		/>
 	{:else if current.kind === 'page' || current.kind === 'kiosk'}
 		<!-- the open app's banner and its pages as tabs; on a phone the shell's top bar carries the banner, except a visitor's -->
 		{#if hero !== null && (!narrow.current || boot?.visitor !== null)}
-			<AppHeader {...hero} compact={narrow.current} actionsLabel={t('Page scope')} />
+			<AppHeader {...hero} compact={narrow.current} actions_label={t('Page scope')} />
 		{/if}
 		{#if strip !== null}
 			<div class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
@@ -1017,7 +861,7 @@
 			</svelte:boundary>
 		{/if}
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
-		<Inbox {bolt} {t} onCount={(n) => (waiting = n)} />
+		<Inbox {bolt} {t} on_count={(n) => (waiting = n)} />
 	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
 		{#await import('./settings/Settings.svelte')}
 			{@render openingFeature()}
@@ -1029,18 +873,19 @@
 				{t}
 				tab={current.tab}
 				workspace={boot.workspace}
-				integrationSetups={config.integrationSetups}
+				read_catalog={boot.read_catalog}
+				integration_setups={config.integration_setups}
 			/>
 		{:catch}
 			{@render failedFeature()}
 		{/await}
-	{:else if current.kind === 'commandCenter' && commandTabs.length > 0 && boot !== null && bolt}
+	{:else if current.kind === 'command_center' && commandTabs.length > 0 && boot !== null && bolt}
 		{#await import('./command-center/CommandCenter.svelte')}
 			{@render openingFeature()}
 		{:then { default: CommandCenter }}
 			<CommandCenter
 				automation={url.searchParams.get('automation')}
-				onAutomationClose={() => {
+				on_automation_close={() => {
 					if (url.searchParams.has('automation')) {
 						const next = new URL(url);
 						next.searchParams.delete('automation');
@@ -1053,25 +898,25 @@
 				{t}
 				tabs={commandTabs}
 				tab={current.tab}
-				onTab={(x) => navigate(`/command-center/${x}`)}
+				on_tab={(x) => navigate(`/command-center/${x}`)}
 				admin={boot.admin}
 				startable={boot.startable ?? []}
 				run={url.searchParams.get('run')}
-				onRun={openRun}
-				onConversation={boot.surfaces.agent ? (conversation) => agent.open({ conversation }) : null}
+				on_run={openRun}
+				on_conversation={boot.surfaces.agent ? (conversation) => agent.open({ conversation }) : null}
 			/>
 		{:catch}
 			{@render failedFeature()}
 		{/await}
 	{:else if current.kind === 'studio' && boot?.surfaces.studio}
 		<StudioSlot
-			bundle={boot.studioBundle}
+			bundle={boot.studio_bundle}
 			props={{
 				t,
 				locale,
-				uiText,
+				ui_text,
 				file: url.searchParams.get('file'),
-				onFile: (path) => {
+				on_file: (path) => {
 					const next = new URL(url);
 					next.pathname = '/studio';
 					next.searchParams.set('file', path);
@@ -1079,8 +924,8 @@
 				},
 				admin: boot.admin,
 				tab: current.tab ?? 'workbench',
-				onTab: (x) => navigate(x === 'workbench' ? '/studio' : `/studio/${x}`),
-				onAsk: boot.surfaces.agent
+				on_tab: (x) => navigate(x === 'workbench' ? '/studio' : `/studio/${x}`),
+				on_ask: boot.surfaces.agent
 					? (prompt) => agent.open({ prompt, send: crypto.randomUUID() })
 					: null
 			}}
@@ -1090,7 +935,7 @@
 	{/if}
 	{#if bolt !== null}
 		{#each records as r, i (`${i}:${r.model}/${r.id}`)}
-			<RecordSheet model={r.model} id={r.id} onClose={() => closeRecord(i)} />
+			<RecordSheet model={r.model} id={r.id} on_close={() => closeRecord(i)} />
 		{/each}
 	{/if}
 {/snippet}
@@ -1115,10 +960,10 @@
 			{t}
 			environment={workspace?.environment}
 			{locale}
-			onLocale={(locale) => fork(setLocale(locale))}
+			on_locale={(locale) => fork(setLocale(locale))}
 			apex={device.pinned ? undefined : workspace?.apex}
 			{dark}
-			onTheme={() => chooseTheme(dark ? 'light' : 'dark')}
+			on_theme={() => chooseTheme(dark ? 'light' : 'dark')}
 		>
 			<Stack gap="lg" role="alert">
 				<Stack gap="sm">
@@ -1131,22 +976,22 @@
 				<Button onclick={() => location.reload()}>{t('Try again')}</Button>
 			</Stack>
 		</Access>
-	{:else if current.kind === 'signIn' || current.kind === 'invite'}
+	{:else if current.kind === 'sign_in' || current.kind === 'invite'}
 		<Access
 			{t}
 			environment={workspace?.environment}
 			{locale}
-			onLocale={(locale) => fork(setLocale(locale))}
+			on_locale={(locale) => fork(setLocale(locale))}
 			apex={device.pinned ? undefined : workspace?.apex}
 			{dark}
-			onTheme={() => chooseTheme(dark ? 'light' : 'dark')}
+			on_theme={() => chooseTheme(dark ? 'light' : 'dark')}
 		>
-			{#if current.kind === 'signIn'}
+			{#if current.kind === 'sign_in'}
 				<SignIn
 					{api}
 					{t}
 					next={current.next ?? '/'}
-					workspace={workspace?.name ?? config.workspaceName}
+					workspace={workspace?.name ?? config.workspace_name}
 					handle={workspace?.handle}
 				/>
 			{:else}
@@ -1154,8 +999,8 @@
 					{api}
 					{t}
 					id={current.id}
-					signedIn={boot?.actor?.kind === 'member'}
-					workspace={workspace?.name ?? config.workspaceName}
+					signed_in={boot?.actor?.kind === 'member'}
+					workspace={workspace?.name ?? config.workspace_name}
 				/>
 			{/if}
 		</Access>
@@ -1165,8 +1010,8 @@
 		<!-- a visitor page: only its own app, no switcher, inbox, agent, settings or runs -->
 		<Cover as="main" class="min-h-dvh pb-[env(safe-area-inset-bottom)]">
 			{@render content()}
-			{#if boot.visitor.siteKey !== undefined}
-				{#if challenge !== null}<Turnstile siteKey={boot.visitor.siteKey} queue={challenge} />{/if}
+			{#if boot.visitor.site_key !== undefined}
+				{#if challenge !== null}<Turnstile site_key={boot.visitor.site_key} queue={challenge} />{/if}
 			{/if}
 		</Cover>
 	{:else if portal}
@@ -1178,53 +1023,55 @@
 		</div>
 	{:else}
 		{#snippet navigation(open: boolean)}
+			{#if model !== null}
 			<Nav
 				pinned={device.pinned === true}
-				model={model!}
+				{model}
 				expanded={open}
 				mobile={narrow.current}
 				{t}
 				environment={boot?.workspace.environment ?? null}
 				{locale}
-				onLocale={(locale) => fork(setLocale(locale))}
+				on_locale={(locale) => fork(setLocale(locale))}
 				{theme}
-				onTheme={chooseTheme}
+				on_theme={chooseTheme}
 				{chimes}
 				{awaiting}
-				onSounds={() => {
+				on_sounds={() => {
 					navOpen = false;
 					soundsOpen = true;
 				}}
 				{sync}
 				previewing={boot?.preview !== null}
-				onEndPreview={() => fork(endPreview())}
+				on_end_preview={() => fork(endPreview())}
 				{...boot?.admin && boot.surfaces.settings && boot.preview === null && !previewEnv
 					? {
-							loadTeams: () => run(teams()),
-							onPreviewTeam: (team: string) => fork(previewTeam(team))
+							load_teams: () => run(teams()),
+							on_preview_team: (team: string) => fork(previewTeam(team))
 						}
 					: {}}
-				onSearch={() => {
+				on_search={() => {
 					navOpen = false;
 					finding = true;
 				}}
-				onNavigate={go}
-				onSignOut={signOut}
+				on_navigate={go}
+				on_sign_out={sign_out}
 				notice={(refreshed ?? boot)?.notice}
-				{...narrow.current ? {} : { onToggle: () => (expanded.current = !expanded.current) }}
+				{...narrow.current ? {} : { on_toggle: () => (expanded.current = !expanded.current) }}
 			>
 				{#snippet bell(wide)}{#if bolt !== null && !narrow.current}<Bell
 							{api}
 							{bolt}
 							{t}
 							expanded={wide}
-							onArrival={refreshNotice}
-							onNavigate={(href) => {
+							on_arrival={refreshNotice}
+							on_navigate={(href) => {
 								navOpen = false;
 								navigate(href);
 							}}
 						/>{/if}{/snippet}
 			</Nav>
+			{/if}
 		{/snippet}
 		<Toaster />
 		<!-- relative: an out-of-flow descendant without a positioned ancestor (an sr-only label deep in a scroll port) is
@@ -1262,7 +1109,7 @@
 							title={mobileTitle}
 							description={mobileDescription}
 							actions={hero?.actions}
-							actionsLabel={t('Page scope')}
+							actions_label={t('Page scope')}
 						>
 							{#snippet leading()}
 								<Button
@@ -1282,8 +1129,8 @@
 										{t}
 										expanded={false}
 										header
-										onArrival={refreshNotice}
-										onNavigate={navigate}
+										on_arrival={refreshNotice}
+										on_navigate={navigate}
 									/>{/if}
 								{#if boot?.surfaces.agent}
 									<Button
@@ -1338,8 +1185,8 @@
 			<Finder
 				bind:open={finding}
 				entries={boot.search ?? []}
-				initialScope={url.searchParams.get('find')}
-				onClose={() => {
+				initial_scope={url.searchParams.get('find')}
+				on_close={() => {
 					if (url.searchParams.has('find')) {
 						const next = new URL(url);
 						next.searchParams.delete('find');
@@ -1348,29 +1195,30 @@
 				}}
 				nav={boot.nav}
 				catalog={boot.catalog}
-				read={(request) => bolt!.query<FinderAnswer>(request)}
+				read={(request) => viewContext().query(request)}
 				{t}
-				onNavigate={navigate}
-				onOpenRecord={(c, id) => openRecord(c, id)}
-				onAsk={boot.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
+				on_navigate={navigate}
+				on_open_record={(c, id) => open_record(c, id)}
+				on_ask={boot.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
 			/>
 		{/if}
 		{#if boot.surfaces.inbox && bolt !== null}
-			<Waiting {bolt} onCount={(n) => (waiting = n)} />
+			<Waiting {bolt} on_count={(n) => (waiting = n)} />
 		{/if}
 		{#if boot.surfaces.agent && bolt !== null}
-			<Attention {bolt} active={agentRequest?.conversation ?? null} onEnded={ended} />
+			<Attention {bolt} active={agentRequest?.conversation ?? null} on_ended={ended} />
 			<!-- non-modal, as every side sheet: the page stays usable; only Esc or × closes it -->
 			<Sheet
 				open={agentRequest !== null}
+				class="[--sheet-w:68rem]"
 				title={t('Norbius')}
-				onOpenChange={(open) => {
+				on_open_change={(open) => {
 					if (!open) agent.close();
 				}}
 			>
 				{#if agentRequest !== null && config.agent !== undefined}
 					{@const Agent = config.agent}
-					<Agent {bolt} request={agentRequest} onClose={() => agent.close()} />
+					<Agent {bolt} request={agentRequest} on_close={() => agent.close()} />
 				{:else if agentRequest !== null}
 					{#await import('./agent/Agent.svelte')}
 						{@render openingFeature()}
@@ -1378,18 +1226,18 @@
 						<AgentPanel
 							{api}
 							{bolt}
+							read={(request) => viewContext().query(request)}
 							{t}
 							catalog={bolt.catalog}
 							zone={bolt.tz}
 							nav={boot.nav}
 							entries={boot.search ?? []}
 							request={agentRequest}
-							unconfigured={boot.aiUnconfigured === true}
+							unconfigured={boot.ai_unconfigured === true}
 							admin={boot.admin}
 							envoys={boot.envoys ?? {}}
-							onClose={() => agent.close()}
-							onConversation={agentConversation}
-							storageKey={agentMemory}
+							on_conversation={agentConversation}
+							storage_key={agentMemory}
 						/>
 					{:catch}
 						{@render failedFeature()}
@@ -1397,12 +1245,12 @@
 				{/if}
 			</Sheet>
 		{/if}
-		<Sheet open={soundsOpen} title={t('Sounds')} onOpenChange={(open) => (soundsOpen = open)}>
+		<Sheet open={soundsOpen} title={t('Sounds')} on_open_change={(open) => (soundsOpen = open)}>
 			<SoundSettings
 				enabled={chimes}
 				status={soundStatus}
-				onChange={chooseChimes}
-				onTest={() => {
+				on_change={chooseChimes}
+				on_test={() => {
 					void sounds.test();
 				}}
 				{t}

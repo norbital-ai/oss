@@ -9,7 +9,7 @@ import {
 	type IngestPort
 } from './contracts.ts';
 import type { Convert } from './ports.ts';
-import { ingestAnswer } from './media.ts';
+import { ingest_answer } from './media.ts';
 import { fromBase64, toBase64 } from './crypto.ts';
 import { Port } from './port.ts';
 
@@ -128,14 +128,14 @@ const submit = <A>(
 			: { result: seen.result };
 	});
 
-export function documentConverter(
+export function document_converter(
 	config: DocumentConverterConfig
 ): Convert['Service'] & Required<Pick<Convert['Service'], 'previewPdf'>> {
 	const input = (source: Parameters<Convert['Service']['convert']>[0]) =>
 		'markdown' in source
 			? { from: 'markdown', source: source.markdown }
-			: 'layoutHtml' in source
-				? { from: 'layout-html', source: source.layoutHtml }
+			: 'layout_html' in source
+				? { from: 'layout-html', source: source.layout_html }
 				: { from: 'html', source: source.html };
 	return {
 		targets: CONVERT_TARGETS,
@@ -189,7 +189,7 @@ export function documentConverter(
 	};
 }
 
-const WireIngest = ingestAnswer(Schema.Uint8ArrayFromBase64);
+const WireIngest = ingest_answer(Schema.Uint8ArrayFromBase64);
 const WireResult = Schema.fromJsonString(WireIngest);
 const settled = (job: typeof Job.Type) => job.state === 'succeeded' || job.state === 'failed';
 
@@ -300,7 +300,7 @@ const ingestJob = (
  * The `IngestPort` over Norbital Convert's job routes (plan 12): a host constructs it from Convert's URL and key. A
  * converter with no transcription model rejects audio as `unavailable`.
  */
-export function documentIngester(config: DocumentConverterConfig): IngestPort {
+export function document_ingester(config: DocumentConverterConfig): IngestPort {
 	return {
 		ingest: (file, options, signal) =>
 			Effect.runPromise(

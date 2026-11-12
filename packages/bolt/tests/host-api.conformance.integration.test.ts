@@ -1,4 +1,4 @@
-// HOST_API conformance (D10a): one black-box slice through HOST_API over `nodePorts()` and a `Facilities` record — sign
+// HOST_API conformance (D10a): one black-box slice through HOST_API over `node_ports()` and a `Facilities` record — sign
 // in, q, act, live register, a deadline wake, the host clock's crons and fire, close — over one PGlite; the needs
 // check refuses a bundle whose need the host leaves `off`.
 import { cpSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -21,10 +21,10 @@ import {
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { HttpServerResponse } from 'effect/http';
 import {
-	artifactHash,
+	artifact_hash,
 	CONTRACT,
-	readArtifact,
-	treeHash,
+	read_artifact,
+	tree_hash,
 	type Artifact
 } from '../src/engine/artifact/read.ts';
 import type {
@@ -38,22 +38,24 @@ import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts'
 import { BoltError } from '../src/protocol/errors.ts';
 import { DbError, Interrupted } from '../src/engine/errors.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { fingerprint, schemaSlice } from '../src/engine/schema/plan.ts';
-import { sha256Hex } from '@norbital-ai/store';
+import { fingerprint, schema_slice } from '../src/engine/schema/plan.ts';
+import { sha256_hex } from '@norbital-ai/store';
 import { HOST_API, HostFailure, type HostPorts } from '../src/protocol/host-api.ts';
 import { off, type Facilities } from '../src/facilities/index.ts';
-import { memoryAudit } from '../../bolt-cli/src/test/audit.ts';
-import { responseError } from '../src/protocol/http.ts';
+import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
+import { Frame } from '../src/protocol/schema.ts';
+import { response_error } from '../src/protocol/http.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { prepareMigrations } from '../../bolt-cli/src/compiler/migrations.ts';
-import { artifactPort } from '../src/node/artifact.ts';
-import { tenantDbPort } from '../src/node/db/port.ts';
-import { keysPort } from '../src/node/keys.ts';
-import { nodePorts, type NodePorts } from '../src/node/ports.ts';
+import { prepare_migrations } from '../../bolt-cli/src/compiler/migrations.ts';
+import { artifact_port } from '../src/node/artifact.ts';
+import { tenant_db_port } from '../src/node/db/port.ts';
+import { keys_port } from '../src/node/keys.ts';
+import { node_ports, type NodePorts } from '../src/node/ports.ts';
 import { guests } from './support/guests.ts';
 import { callbacks, guest } from './engine-fixture.ts';
 import { CHECKPOINTS } from '../../bolt-cli/src/test/checkpoint.ts';
-import { moduleHash } from '../src/node/module-hash.ts';
+import { module_hash } from '../src/node/module-hash.ts';
+import { client_contract } from '../src/engine/access/operation-outputs.ts';
 
 const ORIGIN = 'https://acme.example',
 	PUBLIC_URL = `${ORIGIN}/acme`,
@@ -71,9 +73,9 @@ const files: FilesPort = {
 };
 /** Every deadline call, so both sides' scheduling compares too. */
 const deadlines = (calls: string[]): DeadlinesPort => ({
-	announce: (scope, at) => void calls.push(`announce ${scope} ${at}`),
-	settle: (scope, next) => void calls.push(`settle ${scope} ${next}`),
-	teardown: (scope) => void calls.push(`teardown ${scope}`)
+	announce: async (scope, at) => void calls.push(`announce ${scope} ${at}`),
+	settle: async (scope, next) => void calls.push(`settle ${scope} ${next}`),
+	teardown: async (scope) => void calls.push(`teardown ${scope}`)
 });
 
 /** The fixture workspace's artifact: the descriptor, the manifest and the guest, digests recorded. */
@@ -92,7 +94,7 @@ afterAll(async () => {
 /** The same-graph host's ports (guest isolates, http, images, mcp), built once and alive until the suite ends. */
 let ports: Promise<NodePorts> | undefined;
 const hostPorts = (): Promise<NodePorts> =>
-	(ports ??= Effect.runPromise(nodePorts().pipe(Scope.provide(hosts))));
+	(ports ??= Effect.runPromise(node_ports().pipe(Scope.provide(hosts))));
 class NativeDatabase extends Context.Service<NativeDatabase, PgliteClient>()(
 	'test/HostApiPglite'
 ) {}
@@ -113,7 +115,7 @@ const sliceManifest = {
 	},
 	automations: {
 		stamp: { description: 'Files a customer', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },
-		peek: { description: 'Counts customers', on: [{ cron: '0 6 * * *' }], policies: ['ops'] }
+		peek: { description: 'Counts customers', on: [{ cron: '0 6 * * *' }], output: { kind: 'int' }, policies: ['ops'] }
 	}
 } satisfies EngineManifest;
 const sliceSource = guest.source.replace(
@@ -129,21 +131,23 @@ const history = async (m: EngineManifest): Promise<string> => {
 	const at = join(
 		CHECKPOINTS,
 		'host-api',
-		sha256Hex(
+		sha256_hex(
 			JSON.stringify([
 				await native.runPromise(
-					moduleHash(
-						fileURLToPath(new URL('../../bolt-cli/src/compiler/migrations.ts', import.meta.url))
+					// the generator reaches the engine's own objects by package import, which its closure does not follow
+					module_hash(
+						fileURLToPath(new URL('../../bolt-cli/src/compiler/migrations.ts', import.meta.url)),
+						fileURLToPath(new URL('../src/engine/schema/engine.ts', import.meta.url))
 					)
 				),
-				schemaSlice(m)
+				schema_slice(m)
 			])
 		)
 	);
 	if (existsSync(join(at, 'migrations'))) return at;
 	const scratch = mkdtempSync(join(tmpdir(), 'bolt-host-api-history-'));
 	await native.runPromise(
-		prepareMigrations(scratch, m, 'generate').pipe(Effect.provide(Pristine.layer))
+		prepare_migrations(scratch, m, 'generate').pipe(Effect.provide(Pristine.layer))
 	);
 	// written whole, then renamed: a parallel process never reads half a history
 	const temporary = `${at}.${randomUUID()}`;
@@ -166,34 +170,34 @@ const built = async (at: string, m: EngineManifest, migrations?: string): Promis
 	const compiled = await compiledSlice;
 	writeFileSync(join(at, 'manifest.json'), manifestText);
 	writeFileSync(join(at, 'guest.mjs'), compiled.source);
-	if (compiled.sourceMap !== undefined)
-		writeFileSync(join(at, 'guest.mjs.map'), compiled.sourceMap);
+	if (compiled.source_map !== undefined)
+		writeFileSync(join(at, 'guest.mjs.map'), compiled.source_map);
 	const body = {
 		format: 1 as const,
 		contract: CONTRACT,
 		handle: 'acme',
 		name: 'Acme',
-		schema: fingerprint(schemaSlice(m)),
+		schema: fingerprint(schema_slice(m)),
 		client: { entry: 'index.js', css: [] },
 		pages: {},
 		hashes: {
-			manifest: sha256Hex(manifestText),
-			guest: sha256Hex(compiled.source),
-			client: await native.runPromise(treeHash(join(at, 'client'))),
-			server: await native.runPromise(treeHash(join(at, 'server')))
+			manifest: sha256_hex(manifestText),
+			guest: sha256_hex(compiled.source),
+			client: await native.runPromise(tree_hash(join(at, 'client'))),
+			server: await native.runPromise(tree_hash(join(at, 'server')))
 		}
 	};
 	writeFileSync(
 		join(at, 'artifact.json'),
-		JSON.stringify({ ...body, hash: await native.runPromise(artifactHash(at, body)) })
+		JSON.stringify({ ...body, hash: await native.runPromise(artifact_hash(at, body)) })
 	);
-	return await native.runPromise(readArtifact(at));
+	return await native.runPromise(read_artifact(at));
 };
 
 type Side = {
 	handle(r: Request): Promise<Response>;
 	wake(): Promise<void>;
-	park(automationsMs: number): Promise<void> | undefined;
+	park(automations_ms: number): Promise<void>;
 	crons(): Promise<readonly CronEntry[]>;
 	fire(id: string, slot: string): Promise<CronFired>;
 	close(): Promise<void>;
@@ -207,17 +211,17 @@ const facilitiesOf = (database: Facilities['storage']['database'], sent: string[
 	const mail: TransportPort = {
 		send: async (_kind, message) => {
 			sent.push(JSON.stringify(message));
-			return { providerId: `mail:${sent.length}` };
+			return { provider_id: `mail:${sent.length}` };
 		}
 	};
 	return {
 		storage: { database, files },
-		logs: { runtime: { write: () => {}, query: async () => [] }, audit: memoryAudit().port },
-		transactional: { mail, sms: off, phone: off, push: off, challenge: off, fixedCodes: false },
+		logs: { runtime: { write: () => {}, query: async () => [] }, audit: memory_audit().port },
+		transactional: { mail, sms: off, phone: off, push: off, challenge: off, fixed_codes: false },
 		intelligence: { system1: off, system2: off, embed: off },
 		ports: { webhooks: off, websockets: off, outbound: off },
 		sandbox: off,
-		keys: keysPort(randomBytes(32))
+		keys: keys_port(randomBytes(32))
 	};
 };
 /** Everything around the facilities this host serves: the release, its scope and URL, the kernel ports, the rest `off`. */
@@ -230,7 +234,7 @@ const portsOf = (
 	facilities,
 	scope: SCOPE,
 	release,
-	publicUrl: PUBLIC_URL,
+	public_url: PUBLIC_URL,
 	guests,
 	deadlines: deadlines(calls),
 	images: host.images,
@@ -251,8 +255,8 @@ const viaHostApi = async (client: PgliteClient, at: string): Promise<Side> => {
 	const calls: string[] = [],
 		sent: string[] = [];
 	const host = await hostPorts();
-	const release = { id: RELEASE_ID, artifact: artifactPort(at) };
-	const database = tenantDbPort(PgliteDb.make(client));
+	const release = { id: RELEASE_ID, artifact: artifact_port(at) };
+	const database = tenant_db_port(PgliteDb.make(client));
 	const facilities = facilitiesOf(database, sent);
 	const branch = await HOST_API.branch(
 		{ release, database, audit: facilities.logs.audit },
@@ -277,12 +281,12 @@ const viaHostApi = async (client: PgliteClient, at: string): Promise<Side> => {
 					phase: 'admission',
 					message: 'The workspace generation is closed.'
 				});
-				return HttpServerResponse.toWeb(responseError(new Interrupted()));
+				return HttpServerResponse.toWeb(response_error(new Interrupted()));
 			});
 			return response ?? new Response(null, { status: 404 });
 		},
 		wake: () => workspace.wake({ signal }),
-		park: (automationsMs: number) => workspace.park?.({ signal, automationsMs }),
+		park: (automations_ms: number) => workspace.park({ signal, automations_ms }),
 		crons: () => workspace.crons(),
 		fire: (id, slot) => workspace.fire(id, slot, { signal }),
 		close: () => workspace.close()
@@ -412,7 +416,8 @@ describe('HOST_API conformance (D10a)', () => {
 				const client = await freshClient();
 				const side = await viaHostApi(client, dir);
 				const issuedAt = new Date().toISOString();
-				const contract = fingerprint(schemaSlice(artifact.manifest));
+				// the page states its client contract: the operations and outputs it was built against
+				const contract = client_contract(artifact.manifest);
 
 				// sign in: the emailed code, then the session cookie
 				expect(
@@ -430,8 +435,8 @@ describe('HOST_API conformance (D10a)', () => {
 				// q
 				const read = { m: 'query', a: [{ customers: {} }] };
 				expect((await post('/__bolt/q', { reads: [read] })).status).toBe(200);
-				// act: a create under the booted contract commits; a retired one is refused releaseChanged (L-BOLT-171)
-				const create = { callable: 'customers.create', input: [{ name: 'Acme' }], issuedAt };
+				// act: a create under the booted contract commits; a retired one is refused release_changed (L-BOLT-171)
+				const create = { acts: { 'customers.create': [{ name: 'Acme' }] }, issued_at: issuedAt };
 				expect(
 					(
 						await post('/__bolt/act', create, {
@@ -464,9 +469,11 @@ describe('HOST_API conformance (D10a)', () => {
 				expect(r.headers.get('content-type')).toContain('text/event-stream');
 				const reader = (r.body ?? new ReadableStream<Uint8Array>()).getReader();
 				const hello = await frames(reader, (f) => f.some((x) => x.includes('"hello"')));
-				const conn = Schema.decodeUnknownSync(
-					Schema.fromJsonString(Schema.Struct({ conn: Schema.String }))
-				)(hello.find((x) => x.includes('"hello"')) ?? '{}').conn;
+				const frame = Schema.decodeUnknownSync(Schema.fromJsonString(Frame))(
+					hello.find((x) => x.includes('"hello"')) ?? '{}'
+				);
+				if (frame.t !== 'hello') throw new Error('The live stream did not greet its connection');
+				const conn = frame.conn;
 				expect(
 					(await post('/__bolt/live', { conn, add: [{ view: 'customers', read }] })).status
 				).toBe(200);
@@ -501,9 +508,8 @@ describe('HOST_API conformance (D10a)', () => {
 				// close: the generation's guest bodies are interrupted (an order's transform runs one)
 				await side.close();
 				const order = {
-					callable: 'orders.create',
-					input: [{ title: 'desk', region: 'north' }],
-					issuedAt
+					acts: { 'orders.create': [{ title: 'desk', region: 'north' }] },
+					issued_at: issuedAt
 				};
 				expect(
 					(await post('/__bolt/act', order, { 'Idempotency-Key': 'k3', 'Bolt-Contract': contract }))
@@ -513,8 +519,8 @@ describe('HOST_API conformance (D10a)', () => {
 				// the needs check refuses a bundle whose need the host leaves off, before it reads the database
 				await built(needsDir, { ...sliceManifest, needs: ['outbound'] }, dir);
 				// a release id names its contents: this bundle differs, so it is its own release
-				const release = { id: `${RELEASE_ID}-needs`, artifact: artifactPort(needsDir) };
-				const database = tenantDbPort(PgliteDb.make(client));
+				const release = { id: `${RELEASE_ID}-needs`, artifact: artifact_port(needsDir) };
+				const database = tenant_db_port(PgliteDb.make(client));
 				const refused = await HOST_API.activate(
 					portsOf(facilitiesOf(database, []), release, await hostPorts(), []),
 					{ signal }
@@ -530,7 +536,7 @@ describe('HOST_API conformance (D10a)', () => {
 				});
 
 				// a cell reads a release once, however many static calls arrive together (each page load makes one)
-				const files = artifactPort(needsDir);
+				const files = artifact_port(needsDir);
 				let reads = 0;
 				const counted = {
 					id: `${RELEASE_ID}-counted`,
@@ -543,8 +549,8 @@ describe('HOST_API conformance (D10a)', () => {
 					}
 				};
 				await Promise.all([
-					HOST_API.framePolicy(counted, '/', { signal }),
-					HOST_API.framePolicy(counted, '/app', { signal }),
+					HOST_API.frame_policy(counted, '/', { signal }),
+					HOST_API.frame_policy(counted, '/app', { signal }),
 					HOST_API.schema.slice(counted, { signal })
 				]);
 				await HOST_API.verify(counted, { signal });
@@ -552,7 +558,7 @@ describe('HOST_API conformance (D10a)', () => {
 
 				// failures cross as encoded data, never this release's class
 				const missing = await HOST_API.verify(
-					{ id: 'x', artifact: artifactPort(join(dir, 'missing')) },
+					{ id: 'x', artifact: artifact_port(join(dir, 'missing')) },
 					{ signal }
 				).then(
 					() => null,
@@ -560,7 +566,7 @@ describe('HOST_API conformance (D10a)', () => {
 				);
 				expect(missing).toEqual({
 					_tag: 'HostFailure',
-					code: 'notFound',
+					code: 'not_found',
 					phase: 'admission',
 					message: expect.stringContaining('artifact.json')
 				});

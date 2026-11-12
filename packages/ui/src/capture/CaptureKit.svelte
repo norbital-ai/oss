@@ -23,17 +23,17 @@ A guided face capture: prompts through `poses`, holds each until the face engine
 	export type CaptureKitProps = {
 		poses?: readonly Pose[];
 		analyse: (frame: HTMLCanvasElement) => Promise<FaceFrame | null>;
-		/** Anti-spoof score in 0–1 over the face box; a frame under `livenessMin` is refused and the pose held again. */
+		/** Anti-spoof score in 0–1 over the face box; a frame under `liveness_min` is refused and the pose held again. */
 		liveness?: (
 			frame: HTMLCanvasElement,
 			box: readonly [number, number, number, number]
 		) => Promise<number>;
-		livenessMin?: number;
+		liveness_min?: number;
 		/** Phrases: each pose's name, `done`, `spoof`, `noFace`; clips under the workspace's `assets/`. */
 		voice?: Voice;
 		locale?: string;
-		onCapture: (c: Captured) => void;
-		onDone?: () => void;
+		on_capture: (c: Captured) => void;
+		on_done?: () => void;
 	};
 </script>
 
@@ -52,11 +52,11 @@ A guided face capture: prompts through `poses`, holds each until the face engine
 		poses = ['straight'],
 		analyse,
 		liveness,
-		livenessMin = 0.5,
+		liveness_min = 0.5,
 		voice = {},
 		locale = 'en',
-		onCapture,
-		onDone
+		on_capture,
+		on_done
 	}: CaptureKitProps = $props();
 	let flow = $state(untrack(() => guided(poses)));
 	let hold = $state(0);
@@ -107,7 +107,7 @@ A guided face capture: prompts through `poses`, holds each until the face engine
 									catch: (cause) => new LivenessFailed({ cause })
 								})
 							: null;
-					if (score !== null && score < livenessMin) {
+					if (score !== null && score < liveness_min) {
 						yield* prompts.say('spoof');
 						flow = { ...flow, heldSince: null };
 					} else {
@@ -116,7 +116,7 @@ A guided face capture: prompts through `poses`, holds each until the face engine
 						canvas.toBlob(
 							(b) =>
 								b &&
-								onCapture({
+								on_capture({
 									pose,
 									file: new File([b], `${pose}.jpg`, { type: 'image/jpeg' }),
 									descriptor: f.descriptor ? Array.from(f.descriptor) : null,
@@ -125,7 +125,7 @@ A guided face capture: prompts through `poses`, holds each until the face engine
 							'image/jpeg',
 							0.9
 						);
-						if (target(flow) === null) onDone?.();
+						if (target(flow) === null) on_done?.();
 					}
 				} else {
 					if (!step.state.facePresent && flow.facePresent) yield* prompts.say('noFace');

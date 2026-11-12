@@ -9,8 +9,11 @@ import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
 
+const order_model = base.models.orders;
+if (order_model === undefined) throw new Error('The callback fixture needs the orders model.');
 const manifest: EngineManifest = {
 	...base,
+	models: { ...base.models, orders: { ...order_model, key: ['title'], unique: [{ fields: ['title'], name: 'orders_title_key', import_key: true }] } },
 	exposures: Object.fromEntries(
 		Object.entries(base.exposures).map(([name, model]) => [
 			name,
@@ -22,14 +25,12 @@ const manifest: EngineManifest = {
 				...(model.update === undefined
 					? {}
 					: { update: { ...model.update, transform: true as const } }),
-				...(model.delete === undefined ? {} : { delete: { check: true as const } })
 			}
 		])
 	)
 };
 const Row = Schema.Record(Schema.String, Schema.Json);
-const Rows = Schema.Array(Row);
-const Updates = Schema.Array(Schema.Struct({ before: Row, set: Row }));
+const Changes = Schema.Array(Schema.Struct({ before: Schema.NullOr(Row), set: Row, after: Row }));
 const setup = Effect.gen(function* () {
 	const { db } = yield* open(manifest),
 		calls: Invocation[] = [];
@@ -55,13 +56,7 @@ const setup = Effect.gen(function* () {
 			invoke: (invocation) =>
 				Effect.gen(function* () {
 					calls.push(invocation);
-					const rows: readonly (typeof Row.Type)[] =
-						invocation.kind === 'update'
-							? (yield* Schema.decodeUnknownEffect(Updates)(invocation.input).pipe(
-									Effect.orDie
-								)).map((change) => change.set)
-							: yield* Schema.decodeUnknownEffect(Rows)(invocation.input).pipe(Effect.orDie);
-					if (invocation.kind === 'delete') return { kind: 'ok' as const, output: null };
+                    const rows = (yield* Schema.decodeUnknownEffect(Changes)(invocation.input).pipe(Effect.orDie)).map((change) => change.set);
 					return {
 						kind: 'ok' as const,
 						output: rows.map((values) => {
@@ -108,6 +103,16 @@ describe('per-verb write callbacks', () => {
 					['orders', 'create'],
 					['lines', 'create']
 				]);
+                const changes = yield* Schema.decodeUnknownEffect(Changes)(calls[0]?.input).pipe(Effect.orDie);
+                const root = changes[0];
+                if (root === undefined) throw new Error('The root callback needs its change.');
+                expect(root.before).toBeNull();
+                expect(root.set).toMatchObject({ title: 'desk', lines: [{ label: 'tile' }] });
+                expect(root.after).toMatchObject({ id: expect.any(String), title: 'desk', lines: [{ id: expect.any(String), label: 'tile' }] });
+                expect(root.after['number']).toBeUndefined();
+                expect(root.after['total']).toBeUndefined();
+                const children = yield* Schema.decodeUnknownEffect(Schema.Array(Row))(root.after['lines']).pipe(Effect.orDie);
+                expect(children[0]).not.toHaveProperty('revision');
 				expect(writes()).toBe(1);
 				const order = created.find((record) => record.model === 'orders');
 				if (order === undefined)
@@ -115,11 +120,11 @@ describe('per-verb write callbacks', () => {
 				ids(
 					yield* run({ verb: 'update', input: [{ target: order.id, set: { title: 'measured' } }] })
 				);
-				const update = yield* Schema.decodeUnknownEffect(Rows)(calls.at(-1)?.input).pipe(
+				const update = yield* Schema.decodeUnknownEffect(Changes)(calls.at(-1)?.input).pipe(
 					Effect.orDie
 				);
 				expect(update).toMatchObject([
-					{ before: { id: order.id, title: 'desk' }, set: { title: 'measured' } }
+					{ before: { id: order.id, title: 'desk', lines: [{ label: 'TILE' }] }, set: { title: 'measured' }, after: { id: order.id, title: 'measured', lines: [{ label: 'TILE' }] } }
 				]);
 				expect(
 					yield* db.rows(Schema.Struct({ label: Schema.String }), {
@@ -127,9 +132,10 @@ describe('per-verb write callbacks', () => {
 						params: []
 					})
 				).toEqual([{ label: 'TILE' }]);
+				const callback_count = calls.length;
 				ids(yield* run({ verb: 'delete', input: [{ target: order.id }] }));
-				expect(calls.at(-1)?.kind).toBe('delete');
-				expect(calls.at(-1)?.input).toMatchObject([{ id: order.id, title: 'measured' }]);
+				expect(calls).toHaveLength(callback_count);
+				expect(yield* db.rows(Schema.Struct({ id: Schema.String }), { text: 'SELECT id FROM orders UNION ALL SELECT id FROM lines', params: [] })).toEqual([]);
 			})
 	);
 
@@ -238,8 +244,38 @@ describe('per-verb write callbacks', () => {
 				);
 				const child = calls.find((call) => call.target === 'lines' && call.kind === 'update');
 				expect(child?.input).toMatchObject([
-					{ before: { id: line.id, label: 'TILE' }, set: { label: 'oak' } }
+					{ before: { id: line.id, label: 'TILE' }, set: { label: 'oak' }, after: { id: line.id, label: 'oak' } }
 				]);
 			})
 	);
+ it.effect('a changed native callback input conflicts even when the callback makes no query', () =>
+  Effect.gen(function* () {
+   const {db} = yield* open(manifest);
+   let armed=false, moved=false;
+   const engine: WriteEngine={manifest,db,guest:{
+    invokeProgram:()=>Effect.die('This case invokes only native callbacks.'),
+    invoke:(inv)=>Effect.gen(function*(){
+     const changes=yield* Schema.decodeUnknownEffect(Changes)(inv.input).pipe(Effect.orDie);
+     // An independent writer commits after the native input snapshot has crossed into the guest.
+     if(armed&&!moved){
+      moved=true;
+      yield* db.write({text:"UPDATE orders SET note='concurrent',revision=revision+1",params:[]}).pipe(Effect.orDie);
+     }
+     return {kind:'ok',output:changes.map(({set})=>set)};
+    })
+   }};
+   const write=(verb:'create'|'update',input:Json,key:string)=>act(engine,{
+    model:'orders',verb,input,key,invocationId:key,issuedAt:NOW,authority:admin,
+    mode:{_tag:'Direct'},bindings:{now:NOW,today:TODAY,tz:'UTC'}
+   });
+   const made=ids(yield* write('create',[{title:'snapshot'}],'input-baseline'));
+   const order=made.find(({model})=>model==='orders');
+   if(order===undefined)throw new Error('The baseline order is required.');
+   armed=true;
+   expect((yield* write('update',[{target:order.id,set:{title:'stale proposal'}}],'input-race')).outcome).toMatchObject({kind:'conflict'});
+   expect(moved).toBe(true);
+   expect(yield* db.rows(Schema.Struct({title:Schema.String,note:Schema.String}),{text:'SELECT title,note FROM orders',params:[]})).toEqual([{title:'snapshot',note:'concurrent'}]);
+  })
+ );
+
 });

@@ -73,7 +73,7 @@ export function slack(): ProviderDef {
 						en: 'Event Subscriptions: turn them on and paste this Request URL; subscribe to the bot events message.channels, message.groups, message.im and message.mpim.',
 						zh: 'Event Subscriptions：开启后粘贴此 Request URL；订阅机器人事件 message.channels、message.groups、message.im 和 message.mpim。'
 					},
-					copy: 'webhookUrl'
+					copy: 'webhook_url'
 				},
 				{
 					text: {
@@ -260,7 +260,7 @@ export function slack(): ProviderDef {
 								...(thread === undefined ? {} : { thread_ts: thread })
 							})
 						);
-					return { providerId: `${sent.channel}:${sent.ts}` };
+					return { provider_id: `${sent.channel}:${sent.ts}` };
 				}),
 				webhook: Effect.fn('Slack.webhook')(function* (request: Request) {
 					const body = yield* hostCall('read Slack body', () => request.text());
@@ -442,12 +442,12 @@ function slackMessage(e: Readonly<Record<string, unknown>>, botUser: string): Sl
 		message: {
 			id: `${channel}:${ts}`,
 			thread: thread === null || thread === ts ? channel : `${channel}:${thread}`,
-			sentAt: instant(ts),
+			sent_at: instant(ts),
 			from: { handle: user, name: null },
 			text,
 			group,
 			invocation,
-			replyTo: thread === null || thread === ts ? null : `${channel}:${thread}`,
+			reply_to: thread === null || thread === ts ? null : `${channel}:${thread}`,
 			...(edited === null ? {} : { version: instant(edited) }),
 			attachments: files.map(({ url: _url, ...file }) => file)
 		},

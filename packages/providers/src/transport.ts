@@ -13,11 +13,12 @@ export const Email = Schema.Struct({
 	to: Address,
 	subject: Schema.String,
 	cc: Schema.optionalKey(Address),
+	bcc: Schema.optionalKey(Address),
 	from: Schema.optionalKey(Schema.String),
 	text: Schema.optionalKey(Schema.String),
 	html: Schema.optionalKey(Schema.String),
 	thread: Schema.optionalKey(Schema.String),
-	inReplyTo: Schema.optionalKey(Schema.String),
+	reply_to: Schema.optionalKey(Schema.String),
 	references: Schema.optionalKey(Address)
 });
 export const Text = Schema.Struct({

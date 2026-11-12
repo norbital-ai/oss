@@ -56,26 +56,26 @@ numbers (`count`, `sum.amount`).
 		'var(--chart-5, #f59e0b)'
 	];
 	const lines = $derived(
-		ys.map((key, i) => ({
-			key,
-			label: humanize(key),
-			value: key,
-			color: COLORS[i % COLORS.length]!
-		}))
+		ys.map((key, i) => {
+			const color = COLORS[i % COLORS.length];
+			if (color === undefined) throw new Error('The chart series has no palette color.');
+			return { key, label: humanize(key), value: key, color };
+		})
 	);
 </script>
 
 <figure class="flex min-w-0 flex-col gap-2" data-view="chart">
 	{#if title}<figcaption class="text-sm font-semibold">{title}</figcaption>{/if}
-	<ReadGate state={read} what={title ?? msg(bolt, 'chart.data', 'this chart')}>
+	<ReadGate state={read} what={title ?? msg(bolt, 'chart.data')}>
 		{#snippet children(value)}
 			{@const data = series(value, x, ys)}
+			{@const first_y = ys[0]}
 			{#if data.length === 0}
 				<p
 					class="text-muted-foreground rounded-md border border-dashed p-4 text-sm"
 					data-read="empty"
 				>
-					{msg(bolt, 'chart.empty', 'No data')}
+					{msg(bolt, 'chart.empty')}
 				</p>
 			{:else}
 				{#await loadPlots()}
@@ -84,7 +84,7 @@ numbers (`count`, `sum.amount`).
 					{#if kind === 'donut'}
 						<div class="h-56">
 							<PieChart
-								data={data.map((d) => ({ key: String(d[x]), value: Number(d[ys[0]!] ?? 0) }))}
+								data={data.map((d) => ({ key: String(d[x]), value: first_y === undefined ? 0 : Number(d[first_y] ?? 0) }))}
 								key="key"
 								value="value"
 								label="key"
@@ -147,7 +147,7 @@ numbers (`count`, `sum.amount`).
 					{/if}
 				{:catch}
 					<p class="text-muted-foreground rounded-md border border-dashed p-4 text-sm" role="alert">
-						{msg(bolt, 'chart.unavailable', 'The chart could not load. Reload to try again.')}
+						{msg(bolt, 'chart.unavailable')}
 					</p>
 				{/await}
 			{/if}

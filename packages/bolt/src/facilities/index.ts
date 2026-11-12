@@ -31,8 +31,8 @@ import {
 } from '../protocol/host-api.ts';
 import type { Off } from './off.ts';
 
-export { off, isOff, type Off } from './off.ts';
-export { needsOf, unmet, NEEDS, type Need } from './needs.ts';
+export { off, is_off, type Off } from './off.ts';
+export { needs_of, unmet, NEEDS, type Need } from './needs.ts';
 
 /** A member the host may leave out, explicitly. */
 export type Optional<T> = T | Off;
@@ -62,7 +62,7 @@ export type Push = (database: Database) => TransportPort;
 export type FixedCodes = boolean;
 /** Turnstile-style bot protection: the public site key the widget renders, and the server-side check. */
 export interface Challenge {
-	readonly siteKey: string;
+	readonly site_key: string;
 	verify(token: string, ip: string, signal: AbortSignal): Promise<boolean>;
 }
 
@@ -77,7 +77,7 @@ export type Embed = EmbeddingsPort;
 // ── 5. ports: how Bolt reaches the outside ──
 /** Inbound: the public URL under which the host routes `/hooks/integration/<instance>` and OAuth callbacks into Bolt. */
 export interface Webhooks {
-	readonly publicUrl: string;
+	readonly public_url: string;
 }
 /** A client WebSocket (Discord, WhatsApp, CDP): the platform's standard `WebSocket`. */
 export interface Websockets {
@@ -98,12 +98,12 @@ export interface Outbound {
 
 // ── 6. sandbox ──
 export type SandboxLimits = {
-	readonly cpuMs: number;
-	readonly memoryMiB: number;
-	readonly wallMs: number;
+	readonly cpu_ms: number;
+	readonly memory_mib: number;
+	readonly wall_ms: number;
 };
 export type SandboxResult = {
-	readonly exitCode: number;
+	readonly exit_code: number;
 	readonly stdout: string;
 	readonly stderr: string;
 	/** The working tree after the command, by path. */
@@ -132,7 +132,7 @@ export type Facilities = {
 		readonly phone: Optional<Phone>;
 		readonly push: Optional<Push>;
 		readonly challenge: Optional<Challenge>;
-		readonly fixedCodes: FixedCodes;
+		readonly fixed_codes: FixedCodes;
 	};
 	readonly intelligence: {
 		readonly system1: Optional<System1>;
@@ -153,14 +153,14 @@ export type Facilities = {
  * untethered host serves around them. Each one absent is off; `close` ends what the file opened when its host stops.
  */
 export type Serving = {
-	/** The integration drivers the workspace's links open (`toDrivers` from `@norbital-ai/providers/abi`). */
+	/** The integration drivers the workspace's links open (`to_drivers` from `@norbital-ai/providers/abi`). */
 	readonly providers?: readonly Provider[];
 	readonly oauth?: LinkHost['oauth'];
 	readonly convert?: ConvertPort;
-	/** Norbital Convert's `documentIngester`: a file as sanitised HTML and its images, for the agent and `ctx.convert.ingest`. */
+	/** Norbital Convert's `document_ingester`: a file as sanitised HTML and its images, for the agent and `ctx.convert.ingest`. */
 	readonly ingest?: AgentPorts['ingest'];
 	/** Capabilities the host supplies to agent turns and `ctx.ai.sys_2.infer` (`web_search`); a policy still has to name each. */
-	readonly hostTools?: AgentPorts['hostTools'];
+	readonly host_tools?: AgentPorts['host_tools'];
 	readonly geocoder?: GeocoderPort;
 	readonly web?: WebReadPort;
 	readonly browser?: BrowserPort;

@@ -1,17 +1,10 @@
 import { expect, it } from '@effect/vitest';
 import { compile, context } from '@norbital-ai/std/formula';
-import {
-	fromWhere,
-	operandsFor,
-	resolve,
-	rowsWhere,
-	savedFilterCatalog,
-	selectField,
-	selectOperator,
-	variablesFor,
-	type FilterVariables,
-	type Node
-} from '../src/filter/filter.ts';
+import { fromWhere, rowsWhere } from '../src/filter/where.ts';
+import { operandsFor, variablesFor, type FilterVariables } from '../src/filter/operators.ts';
+import { resolve, savedFilterCatalog } from '../src/filter/catalog.ts';
+import { selectField, selectOperator } from '../src/filter/edit.ts';
+import { type Node } from '../src/filter/node.ts';
 import type { Json } from '../src/client/contract.ts';
 import type { ModelExposure } from '../src/kinds/context.ts';
 
@@ -47,7 +40,7 @@ const variables: FilterVariables = {
 		const result = compile(
 			scope,
 			text,
-			op === 'in' || op === 'nin'
+			op === 'in' || op === 'not_in'
 				? 'json'
 				: position.leaf === 'field' && position.kind.kind === 'number'
 					? 'money'

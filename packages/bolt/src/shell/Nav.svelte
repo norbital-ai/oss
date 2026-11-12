@@ -17,7 +17,7 @@
 		Popover,
 		Spinner,
 		Tooltip,
-		beginWorkspaceNavigation,
+		begin_workspace_navigation,
 		cn,
 		type ComboboxOption
 	} from '@norbital-ai/ui';
@@ -40,21 +40,21 @@
 		t,
 		environment = null,
 		locale = 'en',
-		onLocale,
+		on_locale,
 		theme = 'system',
-		onTheme,
+		on_theme,
 		chimes = true,
 		awaiting = null,
-		onSounds,
+		on_sounds,
 		sync = 'idle',
 		previewing = false,
-		loadTeams,
-		onPreviewTeam,
-		onEndPreview,
-		onSearch,
-		onToggle,
-		onNavigate,
-		onSignOut,
+		load_teams,
+		on_preview_team,
+		on_end_preview,
+		on_search,
+		on_toggle,
+		on_navigate,
+		on_sign_out,
 		bell,
 		notice
 	}: {
@@ -66,23 +66,23 @@
 		t: Translate;
 		environment?: string | null;
 		locale?: string;
-		onLocale?: (locale: string) => void;
+		on_locale?: (locale: string) => void;
 		theme?: Theme;
-		onTheme?: (theme: Theme) => void;
+		on_theme?: (theme: Theme) => void;
 		chimes?: boolean;
 		/** What Norbius left unseen: a dot on its icon. */
 		awaiting?: AwaitingKind | null;
-		onSounds?: () => void;
+		on_sounds?: () => void;
 		sync?: SyncStatus;
-		/** A preview runs: the menu offers its end. `loadTeams` is an administrator's: the teams a preview may take. */
+		/** A preview runs: the menu offers its end. `load_teams` is an administrator's: the teams a preview may take. */
 		previewing?: boolean;
-		loadTeams?: () => Promise<readonly { id: string; name: string }[]>;
-		onPreviewTeam?: (team: string) => void;
-		onEndPreview?: () => void;
-		onSearch?: () => void;
-		onToggle?: () => void;
-		onNavigate: (href: string) => void;
-		onSignOut: () => Effect.Effect<void>;
+		load_teams?: () => Promise<readonly { id: string; name: string }[]>;
+		on_preview_team?: (team: string) => void;
+		on_end_preview?: () => void;
+		on_search?: () => void;
+		on_toggle?: () => void;
+		on_navigate: (href: string) => void;
+		on_sign_out: () => Effect.Effect<void>;
 		/** The notification bell (it reads the live inbox the shell owns). */
 		bell?: Snippet<[boolean]>;
 		/** The host's notice (a billing reminder): a footer line here, so it never takes the page's height. */
@@ -90,7 +90,7 @@
 	} = $props();
 
 	const base = $derived(LOCALES.find((l) => locale.startsWith(l)) ?? 'en');
-	const nextLocale = $derived(LOCALES[(LOCALES.indexOf(base) + 1) % LOCALES.length]!);
+	const nextLocale = $derived(LOCALES[(LOCALES.indexOf(base) + 1) % LOCALES.length] ?? LOCALES[0]);
 	// the versions `bolt build` bakes into the client (L-BOLT-073); absent when the shell is mounted unbuilt (tests)
 	const build = typeof __BOLT_BUILD__ === 'undefined' ? null : __BOLT_BUILD__;
 	const mod = shortcutLabel('');
@@ -115,15 +115,15 @@
 
 	const follow = (event: MouseEvent, href: string) => {
 		event.preventDefault();
-		onNavigate(href);
+		on_navigate(href);
 	};
 	/** The avatar fallback's hue comes from the member identifier. */
 	const hue = (s: string) =>
 		`hsl(${Math.abs([...s].reduce((h, c) => c.charCodeAt(0) + ((h << 5) - h), 0)) % 360} 65% 55%)`;
 	const initials = (name: string) => {
-		const words = name.trim().split(/\s+/).filter(Boolean);
+		const [first, second] = name.trim().split(/\s+/).filter(Boolean);
 		return (
-			(words.length > 1 ? `${words[0]![0]}${words[1]![0]}` : name.slice(0, 2)).toUpperCase() || '?'
+			(first !== undefined && second !== undefined ? first.charAt(0) + second.charAt(0) : name.slice(0, 2)).toUpperCase() || '?'
 		);
 	};
 	// the current workspace heads the list, so the switcher shows which one is open
@@ -137,7 +137,7 @@
 	const switchWorkspace = (handle: string | null) => {
 		const next = model.workspace.others.find((w) => w.handle === handle);
 		if (next === undefined) return;
-		beginWorkspaceNavigation(t('Opening workspace…'));
+		begin_workspace_navigation(t('Opening workspace…'));
 		location.assign(next.href);
 	};
 
@@ -162,10 +162,10 @@
 		moreOpen = $state(false);
 	let teams = $state<Promise<readonly { id: string; name: string }[]> | null>(null);
 	let signingOut = $state(false);
-	function signOut(): void {
+	function sign_out(): void {
 		signingOut = true;
 		fork(
-			Effect.suspend(onSignOut).pipe(
+			Effect.suspend(on_sign_out).pipe(
 				Effect.ensuring(
 					Effect.sync(() => {
 						signingOut = false;
@@ -196,7 +196,7 @@
 {/snippet}
 
 {#snippet tile(item: NavItem)}
-	{@const color = item.featureColor === undefined ? null : FEATURE_COLORS[item.featureColor]}
+	{@const color = item.feature_color === undefined ? null : FEATURE_COLORS[item.feature_color]}
 	<!-- relative: a Frame fits its children, so the pill sits on this wrapper, over the tile's corner -->
 	<span class="relative inline-flex shrink-0">
 		<Frame
@@ -211,7 +211,7 @@
 				>
 			{:else}<Icon
 					name={item.icon ?? 'lucide:layout-grid'}
-					class={cn('size-3.5', color?.iconClass)}
+					class={cn('size-3.5', color?.icon_class)}
 				/>{/if}
 		</Frame>
 		{#if item.badge}
@@ -236,117 +236,86 @@
 	<Tooltip {side} {text} {disabled} {trigger} />
 {/snippet}
 
-{#snippet row(item: NavItem)}
-	<li class="relative">
-		{#snippet link({ props }: { props: Record<string, unknown> })}
-			{@const disclosure = expanded && item.children !== undefined}
-			<svelte:element
-				this={disclosure ? 'button' : 'a'}
-				{...props}
-				type={disclosure ? 'button' : undefined}
-				href={disclosure ? undefined : based(item.href)}
-				aria-current={!disclosure && item.active ? 'page' : undefined}
-				aria-expanded={disclosure ? open[item.key] === true : undefined}
-				aria-haspopup={item.href === NORBIUS ? 'dialog' : undefined}
-				data-active={!disclosure && item.active ? 'true' : undefined}
-				data-testid={item.href === NORBIUS ? 'workspace-agent-trigger' : undefined}
-				class={cn(ROW, expanded ? 'h-7 p-2 pr-7' : 'size-8 justify-center p-1')}
-				onclick={(e: MouseEvent) =>
-					disclosure ? (open[item.key] = !open[item.key]) : follow(e, item.href)}
+{#snippet itemControl(item: NavItem, nested: boolean, props: Record<string, unknown>)}
+	{@const disclosure = (nested || expanded) && item.children !== undefined}
+	<svelte:element
+		this={disclosure ? 'button' : 'a'}
+		{...props}
+		type={disclosure ? 'button' : undefined}
+		href={disclosure ? undefined : based(item.href)}
+		aria-current={!disclosure && item.active ? 'page' : undefined}
+		aria-expanded={disclosure ? open[item.key] === true : undefined}
+		aria-haspopup={!nested && item.href === NORBIUS ? 'dialog' : undefined}
+		data-active={item.active && (nested || !disclosure) ? 'true' : undefined}
+		data-testid={!nested && item.href === NORBIUS ? 'workspace-agent-trigger' : undefined}
+		class={nested ? SUB : cn(ROW, expanded ? 'h-7 p-2 pr-7' : 'size-8 justify-center p-1')}
+		onclick={(e: MouseEvent) => {
+			if (nested) moreOpen = false;
+			if (disclosure) open[item.key] = !open[item.key];
+			else follow(e, item.href);
+		}}
+	>
+		{#if !nested && item.active && !disclosure}<span
+				class="absolute top-1/4 left-0.5 h-1/2 w-0.5 rounded-lg bg-brand"
+				aria-hidden="true"
+			></span>{/if}
+		{#if nested}
+			<Frame as="span" ratio="square" class="size-6"
+				><Icon name={item.icon ?? (disclosure ? 'lucide:folder' : 'lucide:file')} class="size-3.5" /></Frame
 			>
-				{#if item.active && !disclosure}<span
-						class="absolute top-1/4 left-0.5 h-1/2 w-0.5 rounded-lg bg-brand"
-						aria-hidden="true"
-					></span>{/if}
-				{@render tile(item)}
-				{#if expanded}
-					<span class={LABEL}>{item.label}</span>
-					{#if item.href === NORBIUS}
-						<kbd
-							class="pointer-events-none absolute top-1/2 right-2 hidden h-5 -translate-y-1/2 rounded-md border border-border bg-muted px-1.5 py-px font-mono text-tiny leading-4 font-medium text-muted-foreground select-none sm:inline-block"
-							aria-hidden="true">{mod}K</kbd
-						>
-					{:else if item.children !== undefined}
-						<Icon
-							name="lucide:chevron-right"
-							class={cn(
-								'pointer-events-none absolute top-1/2 right-2 size-3.5 -translate-y-1/2 transition-transform duration-150',
-								open[item.key] && 'rotate-90'
-							)}
-						/>
-					{/if}
-				{/if}
-			</svelte:element>
-		{/snippet}
-		{@render tip(
-			item.href === NORBIUS ? withKey(item.label, 'K') : item.label,
-			'right',
-			expanded || mobile,
-			link
-		)}
-		{#if expanded && item.children !== undefined && open[item.key]}
-			<Stack as="ul" gap="xs" class="mr-0 ml-5 border-l border-sidebar-border py-0.5 pr-0 pl-2">
-				{#each item.children as child (child.key)}{@render sub(child)}{/each}
+		{:else}{@render tile(item)}{/if}
+		{#if nested || expanded}
+			<span class={LABEL}>{item.label}</span>
+			{#if !nested && item.href === NORBIUS}
+				<kbd
+					class="pointer-events-none absolute top-1/2 right-2 hidden h-5 -translate-y-1/2 rounded-md border border-border bg-muted px-1.5 py-px font-mono text-tiny leading-4 font-medium text-muted-foreground select-none sm:inline-block"
+					aria-hidden="true">{mod}K</kbd
+				>
+			{:else if item.children !== undefined}
+				<Icon
+					name="lucide:chevron-right"
+					class={cn(
+						nested
+							? 'ml-auto size-3 transition-transform duration-150'
+							: 'pointer-events-none absolute top-1/2 right-2 size-3.5 -translate-y-1/2 transition-transform duration-150',
+						open[item.key] && 'rotate-90'
+					)}
+				/>
+			{/if}
+			{#if nested && !disclosure && item.badge}<Badge variant="outline" class="px-1.5 py-0 text-tiny leading-4 font-medium"
+					>{item.badge}</Badge
+				>{/if}
+		{/if}
+	</svelte:element>
+{/snippet}
+
+{#snippet branch(item: NavItem, nested = false)}
+	<li class={nested ? undefined : 'relative'}>
+		{#if nested}
+			{@render itemControl(item, true, {})}
+		{:else}
+			{#snippet link({ props }: { props: Record<string, unknown> })}
+				{@render itemControl(item, false, props)}
+			{/snippet}
+			{@render tip(
+				item.href === NORBIUS ? withKey(item.label, 'K') : item.label,
+				'right',
+				expanded || mobile,
+				link
+			)}
+		{/if}
+		{#if (nested || expanded) && item.children !== undefined && open[item.key]}
+			<Stack as="ul" gap="xs" class={nested
+				? 'mr-0 ml-4 border-l border-sidebar-border py-0.5 pr-0 pl-2'
+				: 'mr-0 ml-5 border-l border-sidebar-border py-0.5 pr-0 pl-2'}>
+				{#each item.children as child (child.key)}{@render branch(child, true)}{/each}
 			</Stack>
 		{/if}
 	</li>
 {/snippet}
 
-{#snippet sub(item: NavItem)}
-	<li>
-		{#if item.children !== undefined}
-			<button
-				type="button"
-				aria-expanded={open[item.key] === true}
-				data-active={item.active ? 'true' : undefined}
-				class={SUB}
-				onclick={() => {
-					moreOpen = false;
-					open[item.key] = !open[item.key];
-				}}
-			>
-				<Frame as="span" ratio="square" class="size-6"
-					><Icon name={item.icon ?? 'lucide:folder'} class="size-3.5" /></Frame
-				>
-				<span class={LABEL}>{item.label}</span>
-				<Icon
-					name="lucide:chevron-right"
-					class={cn(
-						'ml-auto size-3 transition-transform duration-150',
-						open[item.key] && 'rotate-90'
-					)}
-				/>
-			</button>
-			{#if open[item.key]}
-				<Stack as="ul" gap="xs" class="mr-0 ml-4 border-l border-sidebar-border py-0.5 pr-0 pl-2">
-					{#each item.children as child (child.key)}{@render sub(child)}{/each}
-				</Stack>
-			{/if}
-		{:else}
-			<a
-				href={based(item.href)}
-				aria-current={item.active ? 'page' : undefined}
-				data-active={item.active ? 'true' : undefined}
-				class={SUB}
-				onclick={(e) => {
-					moreOpen = false;
-					follow(e, item.href);
-				}}
-			>
-				<Frame as="span" ratio="square" class="size-6"
-					><Icon name={item.icon ?? 'lucide:file'} class="size-3.5" /></Frame
-				>
-				<span class={LABEL}>{item.label}</span>
-				{#if item.badge}<Badge variant="outline" class="px-1.5 py-0 text-tiny leading-4 font-medium"
-						>{item.badge}</Badge
-					>{/if}
-			</a>
-		{/if}
-	</li>
-{/snippet}
-
 {#snippet searchButton(extra: string)}
-	{#if onSearch !== undefined}
+	{#if on_search !== undefined}
 		{#snippet trigger({ props }: { props: Record<string, unknown> })}
 			<Button
 				{...props}
@@ -355,7 +324,7 @@
 				size="icon"
 				class={cn('shrink-0', extra)}
 				aria-label={`${t('Find')} (${mod}/)`}
-				onclick={onSearch}
+				onclick={on_search}
 				data-testid="workspace-omni-trigger"
 			>
 				<Icon name="lucide:search" class="size-4" />
@@ -366,7 +335,7 @@
 {/snippet}
 
 {#snippet toggle(extra: string, tabindex: number | undefined)}
-	{#if onToggle !== undefined}
+	{#if on_toggle !== undefined}
 		{#snippet trigger({ props }: { props: Record<string, unknown> })}
 			<Button
 				{...props}
@@ -377,7 +346,7 @@
 				class={cn('shrink-0', extra)}
 				data-sidebar="trigger"
 				aria-label={t(expanded ? 'Collapse sidebar' : 'Expand sidebar')}
-				onclick={onToggle}
+				onclick={on_toggle}
 			>
 				<Icon name="lucide:panel-left" class="size-4" />
 			</Button>
@@ -418,7 +387,7 @@
 			searchable
 			aria-label={t('Switch workspace')}
 			class={expanded ? 'h-8 w-full px-2' : 'size-8 shrink-0 justify-center gap-0 p-0'}
-			onChange={switchWorkspace}
+			on_change={switchWorkspace}
 		>
 			{#snippet trigger(option)}
 				{@render avatar(
@@ -490,9 +459,7 @@
 					</p>
 					<!-- a phone's top bar carries Norbius; the drawer does not repeat it -->
 					<Stack as="ul" gap="xs" class="w-full"
-						>{#each section.items.filter((i) => !(mobile && i.href === NORBIUS)) as item (item.key)}{@render row(
-								item
-							)}{/each}</Stack
+						>{#each section.items.filter((i) => !(mobile && i.href === NORBIUS)) as item (item.key)}{@render branch(item)}{/each}</Stack
 					>
 				</Stack>
 			{/if}
@@ -589,7 +556,7 @@
 			<Popover.Content
 				side={expanded ? 'top' : 'right'}
 				align={expanded ? 'end' : 'start'}
-				sideOffset={8}
+				side_offset={8}
 				class="w-64 p-2"
 			>
 				<Stack gap="sm">
@@ -597,9 +564,7 @@
 						<div>
 							<p class="px-1.5 pb-1 text-overline">{group.label}</p>
 							<Stack as="ul" gap="xs"
-								>{#each group.children ?? [group] as item (item.key)}{@render sub(
-										item
-									)}{/each}</Stack
+								>{#each group.children ?? [group] as item (item.key)}{@render branch(item, true)}{/each}</Stack
 							>
 						</div>
 					{/each}
@@ -612,8 +577,8 @@
 {#snippet account()}
 	<Popover.Root
 		bind:open={menuOpen}
-		onOpenChange={(o) => {
-			if (o && loadTeams !== undefined && teams === null) teams = loadTeams();
+		on_open_change={(o) => {
+			if (o && load_teams !== undefined && teams === null) teams = load_teams();
 		}}
 	>
 		<Popover.Trigger>
@@ -647,8 +612,8 @@
 		<Popover.Content
 			side={expanded ? 'top' : 'right'}
 			align={expanded ? 'center' : 'start'}
-			sideOffset={8}
-			sameWidth={expanded}
+			side_offset={8}
+			same_width={expanded}
 			class={expanded ? 'p-1' : 'w-60 p-1'}
 		>
 			<div class="px-2 py-1.5">
@@ -666,20 +631,20 @@
 					</p>{/if}
 			</div>
 			<div class="-mx-1 my-1 h-px bg-border"></div>
-			{#if onLocale !== undefined}
+			{#if on_locale !== undefined}
 				<Button
 					type="button"
 					variant="ghost"
 					class="h-9 w-full justify-start px-2 text-xs font-normal"
 					aria-label={t('Switch language')}
-					onclick={() => onLocale(nextLocale)}
+					onclick={() => on_locale(nextLocale)}
 				>
 					<Icon name="lucide:languages" class="size-3.5" /><span>{t('Language')}</span><span
 						class="ml-auto text-muted-foreground">{LANGUAGE[nextLocale]}</span
 					>
 				</Button>
 			{/if}
-			{#if onTheme !== undefined}
+			{#if on_theme !== undefined}
 				<Inline gap="sm" class="h-9 w-full px-2 text-xs font-normal">
 					<Icon name={THEME_ICON[theme]} class="size-3.5" /><span class="flex-1"
 						>{t('Appearance')}</span
@@ -698,7 +663,7 @@
 								aria-checked={theme === x}
 								aria-label={t(THEME_LABEL[x])}
 								title={t(THEME_LABEL[x])}
-								onclick={() => onTheme(x)}
+								onclick={() => on_theme(x)}
 								class={cn(
 									'grid size-7 place-items-center rounded-sm text-muted-foreground hover:text-foreground',
 									theme === x && 'bg-background text-foreground shadow-sm'
@@ -710,7 +675,7 @@
 					</Inline>
 				</Inline>
 			{/if}
-			{#if onSounds !== undefined}
+			{#if on_sounds !== undefined}
 				<Button
 					type="button"
 					variant="ghost"
@@ -718,7 +683,7 @@
 					aria-label={t('Sounds')}
 					onclick={() => {
 						menuOpen = false;
-						onSounds();
+						on_sounds();
 					}}
 				>
 					<Icon name={chimes ? 'lucide:volume-1' : 'lucide:volume-x'} class="size-3.5" />
@@ -742,8 +707,8 @@
 								placeholder={t('Choose a team')}
 								aria-label={t('Preview as a team')}
 								options={list.map((x) => ({ value: x.id, label: x.name }))}
-								onChange={(id) => {
-									if (id !== null) onPreviewTeam?.(id);
+								on_change={(id) => {
+									if (id !== null) on_preview_team?.(id);
 								}}
 							/>
 						</div>
@@ -754,7 +719,7 @@
 						type="button"
 						variant="ghost"
 						class="h-9 w-full justify-start px-2 text-xs font-normal text-destructive hover:bg-destructive/10 hover:text-destructive"
-						onclick={onEndPreview}
+						onclick={on_end_preview}
 					>
 						<Icon name="lucide:user-x" class="size-3.5" /><span>{t('End preview')}</span>
 					</Button>
@@ -766,7 +731,7 @@
 				variant="ghost"
 				class="h-9 w-full justify-start px-2 text-xs font-normal hover:bg-destructive/10 hover:text-destructive"
 				disabled={signingOut}
-				onclick={signOut}
+				onclick={sign_out}
 			>
 				<Icon name="lucide:log-out" class="size-3.5" /><span>{t('Sign out')}</span>
 				{#if signingOut}<Spinner class="ml-auto size-3.5" />{/if}

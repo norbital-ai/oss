@@ -23,7 +23,7 @@ const encoder = new TextEncoder();
  * the TLS socket as if the greeting had come over it, and opens its session with a fresh EHLO; anything the server sent
  * after its 220 is discarded.
  */
-const startTls = async (plain: TcpSocket, name: string, signal: AbortSignal): Promise<TcpSocket> => {
+const start_tls = async (plain: TcpSocket, name: string, signal: AbortSignal): Promise<TcpSocket> => {
 	const reader = plain.readable.getReader(),
 		writer = plain.writable.getWriter(),
 		decoder = new TextDecoder();
@@ -57,7 +57,7 @@ const startTls = async (plain: TcpSocket, name: string, signal: AbortSignal): Pr
 	await expect('220', 'STARTTLS');
 	reader.releaseLock();
 	writer.releaseLock();
-	const secure = await plain.startTls(signal);
+	const secure = await plain.start_tls(signal);
 	return {
 		readable: secure.readable.pipeThrough(
 			new TransformStream<Uint8Array, Uint8Array>({
@@ -66,7 +66,7 @@ const startTls = async (plain: TcpSocket, name: string, signal: AbortSignal): Pr
 		),
 		writable: secure.writable,
 		close: () => secure.close(),
-		startTls: (again) => secure.startTls(again)
+		start_tls: (again) => secure.start_tls(again)
 	};
 };
 
@@ -78,7 +78,7 @@ const connect = async (server: Server, name: string, net: MailNet, signal: Abort
 	);
 	return net.plain || server.port === 465
 		? socket
-		: startTls(socket, name, signal).catch((error: unknown) =>
+		: start_tls(socket, name, signal).catch((error: unknown) =>
 				socket.close().then(() => Promise.reject(error))
 			);
 };
@@ -129,7 +129,8 @@ export const smtp = (box: Mailbox, auth: Login, net: MailNet) =>
 				})
 			),
 			(transport) =>
-				Effect.promise(() => Promise.all([...sockets].map((socket) => socket.close()))).pipe(
+				Effect.tryPromise(() => Promise.all([...sockets].map((socket) => socket.close()))).pipe(
+					Effect.ignore,
 					Effect.ensuring(Effect.sync(() => transport.close()))
 				)
 		);
@@ -147,19 +148,20 @@ export const submit = (
 	Effect.scoped(
 		Effect.gen(function* () {
 			const transport = yield* smtp(box, auth, net);
-			const inReplyTo = msgid(wire.inReplyTo) ? wire.inReplyTo : undefined,
+			const reply_to = msgid(wire.reply_to) ? wire.reply_to : undefined,
 				references = (wire.references ?? []).filter(msgid);
 			yield* mailCall(`SMTP ${box.smtp?.host}`, () =>
 				transport.sendMail({
 					from: { name: box.fromName ?? '', address: box.address },
 					to: [...wire.to],
 					...(wire.cc === undefined ? {} : { cc: [...wire.cc] }),
+					...(wire.bcc === undefined ? {} : { bcc: [...wire.bcc] }),
 					subject: wire.subject,
 					...(wire.text === undefined ? {} : { text: wire.text }),
 					...(wire.html === undefined ? {} : { html: wire.html }),
 					messageId: mid,
 					headers,
-					...(inReplyTo === undefined ? {} : { inReplyTo }),
+					...(reply_to === undefined ? {} : { inReplyTo: reply_to }),
 					...(references.length === 0 ? {} : { references }),
 					...(files.length === 0
 						? {}

@@ -18,11 +18,12 @@ export const publicWrapper = Effect.fn('bolt.publicWrapper')(function* (
 	const source = `<script lang="ts">
 import type { PublicBoot } from ${key(join(BOLT, 'protocol', `public-page${EXT}`))};
 import type { PublicClient } from ${key(join(BOLT, 'shell', 'public', `client${EXT}`))};
+import type { ViewBolt } from '@norbital-ai/ui';
 import PublicPage from ${key(join(BOLT, 'shell', 'public', 'PublicPage.svelte'))};
 import Page from ${key(join(root, file.path))};
-let { boot, ctx }: { boot: PublicBoot; ctx: PublicClient } = $props();
+let { boot, ctx, views }: { boot: PublicBoot; ctx: PublicClient; views: ViewBolt } = $props();
 </script>
-<PublicPage {boot} {ctx}><Page {ctx} /></PublicPage>
+<PublicPage {boot} {ctx} {views}><Page {ctx} /></PublicPage>
 `;
 	yield* fs.makeDirectory(dirname(path), { recursive: true });
 	yield* fs.writeFileString(path, source);

@@ -17,7 +17,7 @@ import { TenantDb, type DbBatch, type TenantDbShape } from '../../engine/db/tena
 import {
 	cancelled,
 	copiedBatch,
-	dbError,
+	db_error,
 	lockStatements,
 	param,
 	parse,
@@ -120,7 +120,7 @@ const namedRunner = (
 // keyed by the session's own parser table: every client wrapping one PGlite shares its prepared statements
 const runners = new WeakMap<PgliteClient['parsers'], (s: NativeSql) => Promise<NativeRows>>();
 const closed = (pg: PGlite) =>
-	Effect.tryPromise({ try: () => pg.close(), catch: dbError }).pipe(
+	Effect.tryPromise({ try: () => pg.close(), catch: db_error }).pipe(
 		Effect.uninterruptible,
 		Effect.tapCause(Effect.logWarning),
 		Effect.orDie
@@ -135,7 +135,7 @@ const checkpointed = (pg: PGlite) =>
 			await pg.exec('checkpoint');
 			return pg.dumpDataDir('none');
 		},
-		catch: dbError
+		catch: db_error
 	}).pipe(Effect.uninterruptible);
 // The smallest data directory to unpack per open: 1 MiB WAL segments (16 MiB by default), a checkpoint removes spent
 // segments instead of keeping them as future ones, and no template databases (PGlite serves its one database; nothing
@@ -155,7 +155,7 @@ const TEMPLATES = [
 const initdb = Effect.acquireUseRelease(
 	Effect.tryPromise({
 		try: () => PGlite.create({ extensions, initDbStartParams: INITDB }),
-		catch: dbError
+		catch: db_error
 	}),
 	(pg) =>
 		Effect.tryPromise({
@@ -163,7 +163,7 @@ const initdb = Effect.acquireUseRelease(
 			try: async () => {
 				for (const statement of TEMPLATES) await pg.exec(statement);
 			},
-			catch: dbError
+			catch: db_error
 		}).pipe(Effect.andThen(checkpointed(pg))),
 	closed
 );
@@ -181,7 +181,7 @@ const pristineFile = async () => {
 };
 // The machine's dump, else initdb once and keep it (written whole, then renamed, so no process reads half of one).
 const dump = Effect.gen(function* () {
-	const file = yield* Effect.tryPromise({ try: pristineFile, catch: dbError });
+	const file = yield* Effect.tryPromise({ try: pristineFile, catch: db_error });
 	const kept = yield* Effect.tryPromise(() => readFile(file)).pipe(Effect.option);
 	if (Option.isSome(kept)) return new Blob([new Uint8Array(kept.value)]);
 	const blob = yield* initdb;
@@ -192,7 +192,7 @@ const dump = Effect.gen(function* () {
 			await writeFile(temporary, new Uint8Array(await blob.arrayBuffer()));
 			await rename(temporary, file);
 		},
-		catch: dbError
+		catch: db_error
 	});
 	return blob;
 });
@@ -230,7 +230,7 @@ const create = (from: PgliteSource | undefined): Effect.Effect<PGlite, DbError, 
 				await pg.waitReady;
 				return pg;
 			},
-			catch: dbError
+			catch: db_error
 		});
 	});
 
@@ -252,7 +252,7 @@ export const PgliteDb = {
 						rollback: prepared.rollback === true
 					};
 				},
-				catch: dbError
+				catch: db_error
 			}).pipe(
 				Effect.flatMap((prepared) =>
 					Effect.uninterruptibleMask((restore) =>
@@ -289,7 +289,7 @@ export const PgliteDb = {
 									if (error instanceof RolledBack) return error.rows;
 									throw error;
 								});
-							return restore(Effect.tryPromise({ try: () => pending, catch: dbError })).pipe(
+							return restore(Effect.tryPromise({ try: () => pending, catch: db_error })).pipe(
 								Effect.onInterrupt(() =>
 									Effect.sync(() => {
 										aborted = true;
@@ -304,7 +304,7 @@ export const PgliteDb = {
 												() => undefined,
 												() => undefined
 											),
-										catch: dbError
+										catch: db_error
 									}).pipe(Effect.ignore)
 								)
 							);
@@ -323,7 +323,7 @@ export const PgliteDb = {
 								const rows = rowsOf(result.rows);
 								return { rows, affected: result.affected ?? rows.length };
 							}),
-						catch: dbError
+						catch: db_error
 					})
 				)
 			);
@@ -342,7 +342,7 @@ export const PgliteDb = {
 	open: (from?: PgliteSource): Effect.Effect<PGlite, DbError, Pristine | Scope.Scope> =>
 		Effect.acquireRelease(create(from), closed).pipe(
 			Effect.tap((pg) =>
-				Effect.tryPromise({ try: () => pg.exec(`set time zone 'UTC'`), catch: dbError }).pipe(
+				Effect.tryPromise({ try: () => pg.exec(`set time zone 'UTC'`), catch: db_error }).pipe(
 					Effect.uninterruptible
 				)
 			)

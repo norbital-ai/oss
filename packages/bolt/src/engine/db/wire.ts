@@ -1,21 +1,21 @@
 // What both `TenantDb` adapters share: values cross as JSON, so every row
 // value is parsed from Postgres text the same way on PGlite and node-postgres, and every parameter is sent as text.
 import { Predicate } from 'effect';
+import { q, literal as quote_literal } from '@norbital-ai/std/sql';
 import * as EffectArray from 'effect/Array';
 import type { DbBatch } from './tenant-db.ts';
 import type { Json } from '../../decl/values.ts';
 import type { Lock, Sql } from '../contracts.ts';
 import { DbError } from '../errors.ts';
 
-const q = (id: string): string => `"${id.replaceAll('"', '""')}"`;
 const int = (s: string): Json => (Number.isSafeInteger(Number(s)) ? Number(s) : s);
-/** ISO in UTC; microseconds are kept when the session zone is UTC (both adapters set it), else rounded to ms. */
-const instant = (s: string): Json => {
-	if (!/^\d/.test(s)) return s; // infinity
-	const iso = s.replace(' ', 'T');
-	return iso.endsWith('+00')
-		? `${iso.slice(0, -3)}Z`
-		: new Date(iso.replace(/([+-]\d\d)$/, '$1:00')).toISOString();
+/** Canonical UTC text preserves sub-millisecond digits from either database adapter. */
+export const storedInstant = (value: string): string => {
+	if (!/^\d{4}-\d\d-\d\d[ T]/.test(value)) return value;
+	const at = Date.parse(value.replace(' ', 'T').replace(/([+-]\d\d)$/, '$1:00'));
+	if (!Number.isFinite(at)) return value;
+	const tail = (/\.(\d+)/.exec(value)?.[1] ?? '').slice(3).replace(/0+$/, '');
+	return `${new Date(at).toISOString().slice(0, -1)}${tail}Z`;
 };
 
 /** A one-dimensional array literal (`{a,"b c",NULL}`), the only arrays the schema declares. */
@@ -48,7 +48,7 @@ const SCALAR: { readonly [oid: number]: (s: string) => Json } = {
 	114: json,
 	3802: json,
 	1114: (s) => s.replace(' ', 'T'),
-	1184: instant
+	1184: storedInstant
 };
 const ARRAY: { readonly [oid: number]: number } = {
 	1000: 16,
@@ -62,6 +62,11 @@ const ARRAY: { readonly [oid: number]: number } = {
 	1185: 1184,
 	3807: 3802
 };
+/** Match jsonb's existing key order when a wire object is constructed outside SQL. */
+export const jsonbOrder = (value: Readonly<Record<string, Json>>): Record<string, Json> =>
+	Object.fromEntries(Object.entries(value).sort(([a], [b]) =>
+		a.length - b.length || (a < b ? -1 : a > b ? 1 : 0)
+	));
 /** Postgres text → JSON: numbers and booleans as JSON, json as itself, everything else (numeric, date, uuid, ranges) as text. */
 export function parse(oid: number, s: string): Json {
 	const el = ARRAY[oid];
@@ -155,13 +160,13 @@ export function lockStatements(lock: Lock | undefined): string[] {
 			: [`lock table ${tables.map(q).join(', ')} in ${lock.mode ?? 'SHARE ROW EXCLUSIVE'} mode`]),
 		...[...(lock.advisory ?? [])]
 			.sort()
-			.map((k) => `select pg_advisory_xact_lock(hashtext('${k.replaceAll("'", "''")}'))`)
+			.map((k) => `select pg_advisory_xact_lock(hashtext(${quote_literal(k)}))`)
 	];
 }
 
 /** A driver failure as a `DbError`: a SQLSTATE when the server gave one, else a connection failure. Call it only on
  * what the driver threw, never on an error the caller's own code raised inside a transaction. */
-export function dbError(e: unknown): DbError {
+export function db_error(e: unknown): DbError {
 	if (e instanceof DbError) return e;
 	const field = (key: string): unknown => (Predicate.isObject(e) ? e[key] : undefined);
 	// a driver's error names its SQLSTATE `code`; a DbError of another copy (another module graph, or one that crossed
@@ -170,12 +175,13 @@ export function dbError(e: unknown): DbError {
 		code = field('sqlstate') ?? field('code'),
 		constraint = field('constraint'),
 		column = field('column');
-	return DbError.make(
-		Predicate.isString(code) && /^[0-9A-Z]{5}$/.test(code) ? code : '08006',
-		Predicate.isString(message) ? message : String(e),
-		Predicate.isString(constraint) ? constraint : undefined,
-		Predicate.isString(column) ? column : undefined
-	);
+	const fields = {
+		sqlstate: Predicate.isString(code) && /^[0-9A-Z]{5}$/.test(code) ? code : '08006',
+		message: Predicate.isString(message) ? message : String(e),
+		constraint: Predicate.isString(constraint) ? constraint : undefined,
+		column: Predicate.isString(column) ? column : undefined
+	};
+	return field('outcome_unknown') === true ? DbError.make({ ...fields, outcome_unknown: true }) : DbError.make(fields);
 }
 /** What a call the database wall (or its caller) cancelled fails with: `refusalOf` answers it `timeout`. */
 export const cancelled = (): DbError =>
@@ -183,7 +189,7 @@ export const cancelled = (): DbError =>
 
 export const literal = (v: Json): string => {
 	const p = param(v);
-	return p === null ? 'null' : `'${p.replaceAll("'", "''")}'`;
+	return p === null ? 'null' : quote_literal(p);
 };
 /** `$n` → its literal, outside quoted strings and identifiers. Needs `standard_conforming_strings` (the default). */
 export function inline(s: Sql): string {

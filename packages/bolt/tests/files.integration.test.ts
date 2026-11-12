@@ -7,16 +7,17 @@ import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { HttpServerRequest } from 'effect/http';
 import { Agents } from '../src/engine/services.ts';
 import { Files } from '../src/engine/ports.ts';
-import { actReply, json, routeFixture } from './support/route-fixture.ts';
+import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import type { Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { actorRef } from '../src/engine/write/commit.ts';
-import { filesRoutes } from '../src/protocol/files.ts';
+import { actor_ref } from '../src/engine/access/actor.ts';
+import { files_routes } from '../src/protocol/files.ts';
 import { ImagePreviewsLive } from '../src/protocol/image-previews.ts';
 import { RateLimits } from '../src/protocol/http.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
+import { with_accounts } from './support/accounts.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -33,20 +34,19 @@ const manifest = {
 	integrations: {},
 	teams: {},
 	automations: {},
-	connections: { whatsapp: { integration: 'whatsapp' } },
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	needs: []
 } satisfies EngineManifest;
 
 it.live('message attachments download for the conversation, not for every member', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
-			const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
+			const context = yield* Layer.build(with_accounts(TestWorkspace.layer({ manifest }), [{ id: 'whatsapp', integration: 'whatsapp' }]));
 			const t = Context.get(context, TestWorkspace),
 				agents = Context.get(context, Agents),
-				route = yield* routeFixture(context);
+				route = yield* route_fixture(context);
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ('root', 'r@x.test', 'Root', 'staff', true), ('ann', 'a@x.test', 'Ann', 'staff', false),
 		('bob', 'b@x.test', 'Bob', 'staff', false), ('eve', 'e@x.test', 'Eve', 'external', false)`,
@@ -54,7 +54,7 @@ it.live('message attachments download for the conversation, not for every member
 			});
 			const who: { [id: string]: Authority } = {};
 			for (const id of ['root', 'ann', 'bob', 'eve']) {
-				const authority = yield* new Authorities(manifest, 'test').member(t.db, id);
+				const authority = yield* new Authorities(manifest, 'test').member(t.db, 'bootstrap', id);
 				if (authority === null) throw new Error(`Missing ${id}`);
 				who[id] = authority;
 			}
@@ -95,7 +95,7 @@ it.live('message attachments download for the conversation, not for every member
 
 			expect(
 				Option.isNone(
-					yield* filesRoutes(HttpServerRequest.fromWeb(new Request('http://cell/__bolt/q'))).pipe(
+					yield* files_routes(HttpServerRequest.fromWeb(new Request('http://cell/__bolt/q'))).pipe(
 						Effect.provide(ImagePreviewsLive),
 						Effect.provide(RateLimits.layer),
 						Effect.provide(context)
@@ -251,7 +251,7 @@ it.live(
 				} satisfies EngineManifest;
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest: filed }));
 				const t = Context.get(context, TestWorkspace),
-					route = yield* routeFixture(context);
+					route = yield* route_fixture(context);
 				yield* t.db.write({
 					text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ('root', 'r@x.test', 'Root', 'staff', true), ('ann', 'a@x.test', 'Ann', 'staff', false),
 		('bob', 'b@x.test', 'Bob', 'staff', false)`,
@@ -259,7 +259,7 @@ it.live(
 				});
 				const who: { [id: string]: Authority } = {};
 				for (const id of ['root', 'ann', 'bob']) {
-					const authority = yield* new Authorities(filed, 'test').member(t.db, id);
+					const authority = yield* new Authorities(filed, 'test').member(t.db, 'bootstrap', id);
 					if (authority === null) throw new Error(`Missing ${id}`);
 					who[id] = authority;
 				}
@@ -285,10 +285,9 @@ it.live(
 					)
 				);
 				expect((yield* call('root', 'GET', photo.id)).status).toBe(404); // Ann's, in no conversation the administrator reads
-				const o = (yield* actReply(route, t.as(t.admin).authority, {
-					callable: 'photos.create',
-					input: [{ name: 'pump', photo: { id: photo.id, name: photo.name, mime: photo.mime } }],
-					issuedAt: t.clock.now()
+				const o = (yield* act_reply(route, (yield* t.as(t.admin)).authority, {
+					acts: { 'photos.create': [{ name: 'pump', photo: { id: photo.id, name: photo.name, mime: photo.mime } }] },
+					issued_at: t.clock.now()
 				})).outcome;
 				expect(o.kind).toBe('committed');
 				expect((yield* call('root', 'GET', photo.id)).status).toBe(200); // the record's reader
@@ -338,16 +337,16 @@ it.live(
 				} satisfies EngineManifest;
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest: handover }));
 				const t = Context.get(context, TestWorkspace),
-					route = yield* routeFixture(context),
+					route = yield* route_fixture(context),
 					files = Context.get(context, Files);
 				const starter = t.member([]),
 					controller = t.member(['controller']),
 					stranger = t.member([]);
 				const who = {
-					starter: t.as(starter).authority,
-					controller: t.as(controller).authority,
-					stranger: t.as(stranger).authority,
-					admin: t.as(t.admin).authority
+					starter: (yield* t.as(starter)).authority,
+					controller: (yield* t.as(controller)).authority,
+					stranger: (yield* t.as(stranger)).authority,
+					admin: (yield* t.as(t.admin)).authority
 				};
 				const put = Effect.fnUntraced(function* (name: string, owner = 'handover') {
 					const bytes = new Uint8Array([1, 2, 3]);
@@ -369,10 +368,10 @@ it.live(
 					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, output, actor, starter) VALUES ('handover-run','handover','{}',now(),'manual',0,'succeeded',$1::jsonb,$2,$3::jsonb), ('actor-only-run','handover','{}',now(),'manual',0,'succeeded',$4::jsonb,$5,$3::jsonb)`,
 					params: [
 						JSON.stringify({ files: [returned, wrongOwner], opaque, lookalike }),
-						actorRef(starter.actor),
+						actor_ref(starter.actor),
 						JSON.stringify(starter),
 						JSON.stringify({ files: [actorOnly] }),
-						actorRef(stranger.actor)
+						actor_ref(stranger.actor)
 					]
 				});
 				// An earlier matching id in opaque JSON must not hide a later declared, readable file.
@@ -440,12 +439,12 @@ it.live("a file sync's upload keeps its dotted field: `<model>.$import.<sync>`",
 			} satisfies EngineManifest;
 			const context = yield* Layer.build(TestWorkspace.layer({ manifest: synced }));
 			const t = Context.get(context, TestWorkspace),
-				route = yield* routeFixture(context);
+				route = yield* route_fixture(context);
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ('root', 'r@x.test', 'Root', 'staff', true)`,
 				params: []
 			});
-			const root = present(yield* new Authorities(synced, 'test').member(t.db, 'root'));
+			const root = present(yield* new Authorities(synced, 'test').member(t.db, 'bootstrap', 'root'));
 			const response = yield* route.handle(
 				root,
 				new Request('http://cell/__bolt/files/documents.%24import.sheet', {

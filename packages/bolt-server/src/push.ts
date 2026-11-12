@@ -1,5 +1,5 @@
 import { connect } from 'node:http2';
-import { createPrivateKey, sign } from 'node:crypto';
+import { createHash, createPrivateKey, sign } from 'node:crypto';
 import webpush from 'web-push';
 import { Clock, Effect, Option, Schema } from 'effect';
 import { Port, Transport } from '@norbital-ai/bolt/engine';
@@ -11,6 +11,12 @@ const Subscription = Schema.Struct({
 	keys: Schema.Struct({ p256dh: Schema.String, auth: Schema.String })
 });
 const Status = Schema.Struct({ statusCode: Schema.Number });
+const refused = (message: string, status?: number) =>
+	Port.failure('push')({
+		kind: status === 408 ? 'timeout' : status === 429 ? 'rate_limited' : status === undefined || status >= 500 ? 'upstream' : 'invalid',
+		message,
+		...(status === undefined ? {} : { status })
+	});
 class PushFailure extends Schema.TaggedError<PushFailure>()('PushFailure', {
 	cause: Schema.Defect(),
 	status: Schema.optionalKey(Schema.Number)
@@ -21,23 +27,23 @@ const forget = <E>(db: Db<E>, endpoint: string) =>
 		.pipe(Effect.mapError(Port.failure('push')));
 export function push<E>(
 	db: Db<E>,
-	vapid: { publicKey: string; privateKey: string },
+	vapid: { public_key: string; private_key: string },
 	subject: string,
 	send: typeof webpush.sendNotification = webpush.sendNotification.bind(webpush)
 ): Transport['Service'] {
-	const vapidDetails = { subject, ...vapid };
+	const vapidDetails = { subject, publicKey: vapid.public_key, privateKey: vapid.private_key };
 	return {
 		send: Effect.fn('server.push')(function* (message) {
 			if (message._tag !== 'Push')
 				return yield* Port.unavailable('push', 'This transport sends inbox notices.');
 			const subscription = yield* Schema.decodeUnknownEffect(Subscription)(
 				message.subscription
-			).pipe(Effect.mapError(Port.failure('push')));
+			).pipe(Effect.mapError(() => refused('The web push subscription is invalid.', 400)));
 			const result = yield* Effect.tryPromise({
 				try: () =>
 					send(
 						subscription,
-						JSON.stringify({ title: message.title, body: message.body, path: message.path }),
+						JSON.stringify({ id: message.id, title: message.title, body: message.body, path: message.path }),
 						{ vapidDetails, TTL: 86_400 }
 					),
 				catch: (cause) => {
@@ -52,11 +58,11 @@ export function push<E>(
 					Effect.gen(function* () {
 						if (failure.status === 404 || failure.status === 410)
 							yield* forget(db, subscription.endpoint);
-						return yield* Effect.fail(Port.failure('push')(failure.cause));
+						return yield* Effect.fail(refused(Port.failure('push')(failure.cause).message, failure.status));
 					})
 				)
 			);
-			return { providerId: result.headers['location'] ?? `push:${result.statusCode}` };
+			return { provider_id: result.headers['location'] ?? `push:${result.statusCode}` };
 		})
 	};
 }
@@ -66,7 +72,7 @@ const ApnsSubscription = Schema.Struct({
 	keys: Schema.Struct({
 		topic: Schema.String,
 		environment: Schema.Literals(['development', 'production']),
-		teamId: Schema.String
+		team_id: Schema.String
 	})
 });
 const ApnsReason = Schema.fromJsonString(Schema.Struct({ reason: Schema.String }));
@@ -126,7 +132,7 @@ export function apns<E>(
 		const now = yield* Clock.currentTimeMillis;
 		const cached = tokens.get(teamId);
 		if (cached !== undefined && now - cached.at < TOKEN_MS) return cached.token;
-		const header = base64url(JSON.stringify({ alg: 'ES256', kid: team.keyId })),
+		const header = base64url(JSON.stringify({ alg: 'ES256', kid: team.key_id })),
 			claims = base64url(JSON.stringify({ iss: teamId, iat: Math.floor(now / 1000) }));
 		const unsigned = `${header}.${claims}`;
 		const signature = yield* Effect.try({
@@ -135,7 +141,7 @@ export function apns<E>(
 					key: createPrivateKey(team.key),
 					dsaEncoding: 'ieee-p1363'
 				}),
-			catch: Port.failure('push')
+			catch: (cause) => refused(`The APNs signing key is invalid: ${Port.failure('push')(cause).message}`, 400)
 		});
 		const signed = `${unsigned}.${base64url(signature)}`;
 		tokens.set(teamId, { token: signed, at: now });
@@ -146,7 +152,7 @@ export function apns<E>(
 			if (message._tag !== 'Push')
 				return yield* Port.unavailable('push', 'This transport sends inbox notices.');
 			const device = yield* Schema.decodeUnknownEffect(ApnsSubscription)(message.subscription).pipe(
-				Effect.mapError(Port.failure('push'))
+				Effect.mapError(() => refused('The APNs subscription is invalid.', 400))
 			);
 			const origin =
 				device.keys.environment === 'production'
@@ -156,13 +162,14 @@ export function apns<E>(
 				origin,
 				{
 					':path': `/3/device/${device.endpoint}`,
-					authorization: `bearer ${yield* token(device.keys.teamId)}`,
+					authorization: `bearer ${yield* token(device.keys.team_id)}`,
 					'apns-topic': device.keys.topic,
-					'apns-push-type': 'alert'
+					'apns-push-type': 'alert',
+					'apns-collapse-id': createHash('sha256').update(message.id).digest('hex')
 				},
 				JSON.stringify(apnsPayload(message))
-			).pipe(Effect.mapError((failure) => Port.failure('push')(failure.cause)));
-			if (answer.status === 200) return { providerId: `apns:${answer.status}` };
+			).pipe(Effect.mapError((failure) => refused(Port.failure('push')(failure.cause).message)));
+			if (answer.status === 200) return { provider_id: `apns:${answer.status}` };
 			const reason = Schema.decodeUnknownOption(ApnsReason)(answer.body).pipe(
 				Option.map((x) => x.reason),
 				Option.getOrElse(() => `status ${answer.status}`)
@@ -170,13 +177,14 @@ export function apns<E>(
 			if (answer.status === 410 || reason === 'BadDeviceToken' || reason === 'Unregistered')
 				yield* forget(db, device.endpoint);
 			return yield* Effect.fail(
-				Port.failure('push')(new Error(`APNs refused the notice: ${reason}`))
+				refused(`APNs refused the notice: ${reason}`, answer.status)
 			);
 		})
 	};
 }
 /** The alert APNs shows, and the workspace path the app opens when it is tapped. */
 const apnsPayload = (message: PushMessage) => ({
+	id: message.id,
 	aps: {
 		alert: { title: message.title, ...(message.body === null ? {} : { body: message.body }) },
 		sound: 'default'

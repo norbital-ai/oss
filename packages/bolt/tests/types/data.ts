@@ -15,7 +15,8 @@ import type {
 	Where
 } from '../../src/index.ts';
 import type { DateLiteral, Exact, ValidInput, ValueOf } from '../../src/decl/fields.ts';
-import type { KindOfExpr } from '../../src/decl/model.ts';
+import type { Expr, KindOfExpr, NullableOfExpr } from '../../src/decl/model.ts';
+import type { Expr as StoreExpr } from '@norbital-ai/store';
 import type { Columns, ColumnValue, StoredRow } from '../../src/decl/names.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
@@ -23,6 +24,26 @@ import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
+
+is<Eq<Expr, StoreExpr>>();
+type ArrayMetadata = {
+	required: { kind: 'json' };
+	optional: { kind: 'json'; optional: true };
+	explicit_required: { kind: 'json'; optional: false };
+	numbers: { kind: 'int'; many: true };
+	text_list: { kind: 'text'; many: true };
+	title: { kind: 'text' };
+};
+is<Eq<KindOfExpr<{ json_length: { field: 'required' } }, ArrayMetadata>, 'int'>>();
+is<Eq<KindOfExpr<{ json_length: { field: 'numbers' } }, ArrayMetadata>, 'int'>>();
+is<Eq<KindOfExpr<{ plus: readonly [{ json_length: { field: 'optional' } }, 1] }, ArrayMetadata>, 'int'>>();
+is<Eq<NullableOfExpr<{ json_length: { field: 'required' } }, ArrayMetadata>, false>>();
+is<Eq<NullableOfExpr<{ json_length: { field: 'explicit_required' } }, ArrayMetadata>, false>>();
+is<Eq<NullableOfExpr<{ json_length: { field: 'optional' } }, ArrayMetadata>, true>>();
+is<Eq<NullableOfExpr<{ coalesce: readonly [{ json_length: { field: 'optional' } }, 0] }, ArrayMetadata>, false>>();
+is<Eq<NullableOfExpr<{ when: readonly [false, { json_length: { field: 'optional' } }, { json_length: { field: 'required' } }] }, ArrayMetadata>, false>>();
+is<Eq<KindOfExpr<{ json_length: { field: 'title' } }, ArrayMetadata>, 'error: json_length reads a JSON array column'>>();
+is<Eq<KindOfExpr<{ json_length: { field: 'text_list' } }, ArrayMetadata>, 'error: json_length reads a JSON array column'>>();
 
 // Non-primitive values on unknown keys still become never, regardless of their shape.
 is<
@@ -259,7 +280,7 @@ bind_model('data_case')({
 	fields: {
 		a: { kind: 'date' },
 		// @ts-expect-error M11 computed kind differs from the tree's result kind
-		b: { kind: 'text', computed: { plusDays: [{ field: 'a' }, 1] } }
+		b: { kind: 'text', computed: { plus_days: [{ field: 'a' }, 1] } }
 	}
 });
 bind_model('data_case')({
@@ -268,7 +289,7 @@ bind_model('data_case')({
 	fields: {
 		a: { kind: 'text' },
 		// @ts-expect-error M12 plusDays on a non-date
-		b: { kind: 'date', computed: { plusDays: [{ field: 'a' }, 1] } }
+		b: { kind: 'date', computed: { plus_days: [{ field: 'a' }, 1] } }
 	}
 });
 bind_model('data_case')({
@@ -493,15 +514,15 @@ bind_model('products')({
 	}
 });
 // @ts-expect-error C6 a misspelt create column
-bind_model('orders')({ ...m.orders.spec, create: { columns: { orders: ['nte'] } } });
+bind_model('orders')({ ...m.orders.spec, create: { columns: { fields: ['nte'] } } });
 // @ts-expect-error C7 a derived field in an allowlist
-bind_model('orders')({ ...m.orders.spec, update: { columns: { orders: ['total'] } } });
+bind_model('orders')({ ...m.orders.spec, update: { columns: { fields: ['total'] } } });
 // @ts-expect-error C8 a flat column list: write columns are a layer map
 bind_model('orders')({ ...m.orders.spec, update: { columns: ['note'] } });
 bind_model('orders')({
 	...m.orders.spec,
 	// @ts-expect-error C9 `with` relation-action allowlists are gone: a write layer is a `columns` path
-	update: { columns: { orders: [] }, with: { lines: {} } }
+	update: { columns: { fields: [] }, with: { lines: {} } }
 });
 // @ts-expect-error C10 an unexposable read field
 bind_model('orders')({ ...m.orders.spec, outputs: { default: { fields: ['nope'] } } });
@@ -519,17 +540,17 @@ bind_model('orders')({
 });
 bind_model('orders')({
 	...m.orders.spec,
-	// @ts-expect-error C15 a notification team must be a source handle
-	notify: function* () {
-		return [{ title: 't', to: [{ team: 42 }] }];
-	}
+	create: { ...m.orders.spec.create, effect: function* (_, ctx) {
+		// @ts-expect-error C15 a notification team must be a source handle
+		yield* ctx.notify({ title: 't', to: [{ team: 42 }] });
+	} }
 });
 bind_model('orders')({
 	...m.orders.spec,
-	// @ts-expect-error C16 a field name is not a user's branded id
-	notify: function* () {
-		return [{ title: 't', to: [{ user: 'customer' }] }];
-	}
+	create: { ...m.orders.spec.create, effect: function* (_, ctx) {
+		// @ts-expect-error C16 a field name is not a user's branded id
+		yield* ctx.notify({ title: 't', to: [{ user: 'customer' }] });
+	} }
 });
 // @ts-expect-error C18 an unknown model option
 bind_model('orders')({ ...m.orders.spec, hooks: {} });
@@ -547,12 +568,10 @@ bind_model('orders')({
 			);
 		}
 	},
-	delete: {
-		check: function* (rows, ctx) {
-			if (rows.some((row) => row.status === 'ordered'))
-				return yield* ctx.refuse('An ordered order stays.');
-		}
-	},
+	delete: { effect: function* (changes, ctx) {
+		if (changes.some(({ before }) => before.status === 'ordered'))
+			yield* ctx.notify({ title: 'Ordered order removed', to: [{ team: 'finance' }] });
+	} },
 	indexes: {
 		...m.orders.spec.indexes,
 		by_colour: {
@@ -563,17 +582,18 @@ bind_model('orders')({
 });
 automation({
 	...rt.orders_submit.spec,
-	run: function* ({ target }, ctx) {
-		yield* ctx.act('orders.update', [
+	run: function* ({ target: id }, ctx) {
+		const target = (yield* ctx.query({ orders: { where: { id: { eq: id } }, limit: 1 } })).orders.rows[0];
+		if (target === undefined) return;
+		yield* ctx.act({ 'orders.update': [
 			{
 				target: target,
 				set: { status: 'submitted' }
 			}
-		]);
+		] });
 		// a named ref layer (orders.customer) replaces its FK with the row or null
 		const open = yield* ctx.query({
-			orders: { where: { status: { ne: 'ordered' } }, fields: ['total', 'customer'] },
-			'orders.customer': { fields: ['name'] }
+			orders: { where: { status: { ne: 'ordered' } }, fields: ['total', 'customer'], customer: { fields: ['name'] } }
 		});
 		const first = open.orders.rows[0];
 		if (first !== undefined && first.customer !== null) {
@@ -591,10 +611,8 @@ automation({
 automation({
 	...rt.orders_renote.spec,
 	run: function* ({ ids, note }, ctx) {
-		yield* ctx.act(
-			'orders.update',
-			ids.map((id) => ({ target: id, set: { note } }))
-		);
+		const selected = (yield* ctx.query({ orders: { where: { id: { in: ids } } } })).orders.rows;
+		yield* ctx.act({ 'orders.update': selected.map((target) => ({ target, set: { note } })) });
 		const id = ids[0];
 		const order =
 			id === undefined
@@ -603,12 +621,12 @@ automation({
 						orders: { where: { id: { eq: id } }, fields: ['customer'], limit: 1 }
 					})).orders.rows[0];
 		if (order !== undefined)
-			yield* ctx.act('orders.create', [
+			yield* ctx.act({ 'orders.create': [
 				{
 					customer: order.customer,
 					lines: [{ item: 'x', qty: Decimal.of(1), price: Decimal.of(2) }]
 				}
-			]);
+			] });
 		const { customers } = yield* ctx.query({ customers: { where: { tier: { eq: 'gold' } } } });
 		return customers.rows.length;
 	}
@@ -617,7 +635,7 @@ automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
 		// @ts-expect-error B4 act on an unknown callable
-		yield* ctx.act('orders.shred', { target: target });
+		yield* ctx.act({ 'orders.shred': { target: target } });
 	}
 });
 automation({
@@ -627,20 +645,20 @@ automation({
 			(yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders.rows[0] ??
 			null;
 		if (order === null) return;
-		yield* ctx.act('orders.update', [
+		yield* ctx.act({ 'orders.update': [
+			// @ts-expect-error B5 a field outside the update allowlist
 			{
-				target: target,
-				// @ts-expect-error B5 a field outside the update allowlist
+				target: order,
 				set: { customer: order.customer }
 			}
-		]);
+		] });
 	}
 });
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error B6 a create missing a required field
-		yield* ctx.act('orders.create', [{ note: 'x' }]);
+		yield* ctx.act({ 'orders.create': [{ note: 'x' }] });
 		return 1;
 	}
 });
@@ -649,8 +667,8 @@ automation({
 	run: function* ({ ids }, ctx) {
 		const id = ids[0];
 		if (id !== undefined) {
-			// @ts-expect-error B7 an upsert requires an explicit conflict policy
-			yield* ctx.act('orders.upsert', [{ id, note: 'x' }]);
+			// @ts-expect-error B7 upsert is retired; imports carry their conflict policy
+			yield* ctx.act({ 'orders.upsert': [{ id, note: 'x' }] });
 		}
 		return 1;
 	}
@@ -674,7 +692,7 @@ automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error B11 a model without a create exposure has no create callable
-		yield* ctx.act('notices.create', [{}]);
+		yield* ctx.act({ 'notices.create': [{}] });
 		return 1;
 	}
 });
@@ -686,18 +704,22 @@ bind_model('orders')({
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
 			const labels = yield* ctx.query({ orders: { fields: ['number'] } });
-			const number: string = labels.orders.rows[0]!.number;
+			const first = labels.orders.rows[0];
+			if (first === undefined) return inputs.map(({ set }) => set);
+			const number: string = first.number;
 			void number;
 			// a workspace read request reads the root layer's declared fields, unmasked: the sequence label, roll-ups and
 			// computed fields included (`read: 'all'` declares them)
 			const ordinary = yield* ctx.query({ orders: {} });
-			const label: string = ordinary.orders.rows[0]!.number;
-			const total: Decimal = ordinary.orders.rows[0]!.total;
-			const soon: PlainDate | null = ordinary.orders.rows[0]!.due_soon;
+			const row = ordinary.orders.rows[0];
+			if (row === undefined) return inputs.map(({ set }) => set);
+			const label: string = row.number;
+			const total: Decimal = row.total;
+			const soon: PlainDate | null = row.due_soon;
 			void [label, total, soon];
 			// @ts-expect-error a field the root layer does not declare
 			yield* ctx.query({ orders: { fields: ['nope'] } });
-			return inputs;
+			return inputs.map(({ set }) => set);
 		}
 	}
 });
@@ -714,3 +736,11 @@ bind_model('probe')({ description: 'x', record_label: "record.a", fields: { a: {
 // prettier-ignore
 // @ts-expect-error O3 outputs need the model's `read`
 bind_model('probe')({ description: 'x', record_label: "record.a", fields: { a: { kind: 'text' } }, outputs: { narrow: { probe: { fields: ['a'] } } } });
+
+// Display catalogues own model field text; inline descriptor labels are retired.
+bind_model('probe')({
+	description: 'x', fields: {
+		// @ts-expect-error field labels come from the message catalogue
+		a: { kind: 'text', label: 'A' }
+	}
+});

@@ -1,4 +1,5 @@
 // The persisted JSON structure follows std's kind codecs; file bytes and reference visibility belong to the host.
+import { UUID_PATTERN } from '@norbital-ai/std/id';
 export const JSON_VALID = `create or replace function store_json_valid(value jsonb, spec jsonb) returns boolean
 language plpgsql immutable parallel safe set timezone = 'UTC' set datestyle = 'ISO,YMD' as $store_json$
 declare
@@ -139,7 +140,7 @@ begin
 			end if;
 			return spec->>'format' is distinct from 'email' or text_value ~ '^[^@\\s]+@[^@\\s]+$';
 		when 'currency' then return true;
-		when 'id' then return text_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+		when 'id' then return text_value ~* '${UUID_PATTERN.source}';
 		when 'enum' then return spec->'values' ? text_value;
 		when 'state' then return spec->'states' ? text_value;
 		when 'time' then return text_value ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\\.[0-9]+)?)?$';

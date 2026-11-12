@@ -1,17 +1,16 @@
-// Member administration (rules 38b, 38c): invitations, the admin flag with its `lastAdmin` guard, (de)activation,
+// Member administration (rules 38b, 38c): invitations, the admin flag with its `last_admin` guard, (de)activation,
 // member team selection and API keys. Definitions and policy grants remain source declarations.
 import type { Json } from '../../decl/values.ts';
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import type { AuditActor } from '../../protocol/audit.ts';
 import { fromHex, timingSafeEqual, toBase64url } from '../crypto.ts';
-import { toHex } from '@norbital-ai/store';
+import { to_hex } from '@norbital-ai/store';
 import { under } from '../../protocol/wire.ts';
 import { Effect, Result, Schema } from 'effect';
 import {
 	LIMITS,
 	type Authority,
-	type RowData,
 	type Lock,
 	type MembershipPort
 } from '../contracts.ts';
@@ -19,7 +18,8 @@ import type { EngineManifest } from '../manifest.ts';
 import { Port } from '../port.ts';
 import { DbError, IdentityRefusal, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { ADDRESS_HINT, digits, parseAddress, type Address } from './address.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
+import { ADDRESS_HINT, digits, parse_address, type Address } from './address.ts';
 import {
 	identityPort,
 	identityRow,
@@ -29,7 +29,7 @@ import {
 	by,
 	MEMBERSHIP,
 	identityHistory,
-	IMAGES,
+	identityPiece,
 	jsonb,
 	newId,
 	projection,
@@ -43,27 +43,15 @@ import {
 const INVITE_MS = 7 * 24 * 3600000;
 /** Serializes every change to who is an active admin, so the count assert sees the other writer (rule 38c race). */
 const ADMINS: Lock = { advisory: ['sys_user.admins'] };
-function write(
+function write<A extends typeof CapturedResult.Type>(
 	h: IdentityHost,
 	s: IdentityStatement,
-	text: string,
+	schema: Schema.Decoder<A>,
+	select = '',
 	lock?: Lock
-): Effect.Effect<null, EngineError>;
-function write<T>(
-	h: IdentityHost,
-	s: IdentityStatement,
-	text: string,
-	lock: Lock | undefined,
-	read: (row: RowData | undefined) => T | IdentityRefusal
-): Effect.Effect<T, EngineError>;
-function write<T>(
-	h: IdentityHost,
-	s: IdentityStatement,
-	text: string,
-	lock?: Lock,
-	read?: (row: RowData | undefined) => T | IdentityRefusal
-): Effect.Effect<T | null, EngineError> {
-	return Effect.gen(function* (): Effect.fn.Return<T | null, EngineError> {
+): Effect.Effect<A, EngineError> {
+	return Effect.gen(function* (): Effect.fn.Return<A, EngineError> {
+		const text = s.sql('1').text;
 		const audit = h.audit ?? (yield* Audit);
 		const member = s.params.find(
 			(value) => typeof value === 'string' && value.startsWith('member:')
@@ -79,7 +67,8 @@ function write<T>(
 				? '[credential redacted]'
 				: value
 		);
-		const out = yield* audited(
+		let out: A | undefined;
+		yield* audited(
 			h.db,
 			{
 				category: 'identity',
@@ -88,12 +77,16 @@ function write<T>(
 				actor,
 				payload: { parameters: safe }
 			},
-			h.db.write({ text, params: s.params }, lock)
+			nativeCommit((statement) => h.db.write(statement, lock), h.publication, s, schema, select).pipe(
+				Effect.tap((answer) => Effect.sync(() => { out = answer; })),
+				// Captures can contain credential hashes; the audit keeps the redacted request metadata.
+				Effect.as(null)
+			)
 		).pipe(Effect.provideService(Audit, audit));
-		if (h.events !== undefined) yield* h.events.announce;
+		if (out === undefined)
+			return yield* Effect.fail(BoltError.make('corrupt', 'commit', 'an identity mutation returned no answer'));
 		if (s.params.includes(MEMBERSHIP)) yield* announceMembership(h);
-		const value = read === undefined ? null : read(out.rows[0]);
-		return value instanceof IdentityRefusal ? yield* Effect.fail(value) : value;
+		return out;
 	}).pipe(
 		Effect.catchTag('DbError', (error): Effect.Effect<never, DbError | IdentityRefusal> =>
 			error.sqlstate === '23514'
@@ -139,7 +132,7 @@ const deliver = Effect.fn('Bolt.deliver')(function* (
 	to: readonly Address[],
 	id: string
 ) {
-	const link = under(h.publicUrl, `/invite/${id}`);
+	const link = under(h.public_url, `/invite/${id}`);
 	for (const a of to) {
 		const sent =
 			a.kind === 'email'
@@ -176,13 +169,13 @@ function addressesOf(input: { email?: string | null; phone?: string | null }): A
 	const typed = [input.email, input.phone].filter(
 		(x): x is string => typeof x === 'string' && x.trim() !== ''
 	);
-	const parsed = typed.map(parseAddress);
-	return parsed.length === 0 ||
-		parsed.some((a) => a === null) ||
-		parsed.filter((a) => a!.kind === 'email').length > 1 ||
-		parsed.filter((a) => a!.kind === 'phone').length > 1
-		? null
-		: (parsed as Address[]);
+	const parsed: Address[] = [];
+	for (const value of typed) {
+		const address = parse_address(value);
+		if (address === null || parsed.some((other) => other.kind === address.kind)) return null;
+		parsed.push(address);
+	}
+	return parsed.length === 0 ? null : parsed;
 }
 /** Admin-only; never sets `admin`. The notice's link is built from the host's public origin (§5.11.6). */
 export const invite = Effect.fn('Bolt.invite')(function* (
@@ -199,7 +192,9 @@ export const invite = Effect.fn('Bolt.invite')(function* (
 				'The invitation was saved, but delivery failed. Resend it from Invitations.'
 			)
 		);
-	return { id: result.ids[0]! };
+	const id = result.ids[0];
+	if (id === undefined) return yield* Effect.fail(BoltError.make('corrupt', 'commit', 'an invitation returned no id'));
+	return { id };
 });
 /** Validate the entire batch before saving; all invitations commit together. */
 export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
@@ -208,8 +203,7 @@ export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 	auth: Authority,
 	inputs: readonly InviteInput[]
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
+	yield* requireAdmin(auth);
 	if (inputs.length === 0 || inputs.length > 1000)
 		return yield* Effect.fail(refuse('check', 'Invite between 1 and 1000 people at once.'));
 	const prepared: { input: InviteInput; to: Address[]; id: string }[] = [];
@@ -226,11 +220,11 @@ export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 			seen.add(key);
 		}
 		if (unknownTeam(m, input.team))
-			return yield* Effect.fail(refuse('notFound', `There is no source team '${input.team}'.`));
+			return yield* Effect.fail(refuse('not_found', `There is no source team '${input.team}'.`));
 		prepared.push({ input, to, id: yield* newId(h.crypto) });
 	}
 	const now = yield* h.now,
-		s = new IdentityStatement({ ...h, events: h.events ?? { announce: Effect.void } });
+		s = new IdentityStatement();
 	const values = prepared.map(
 		({
 			input,
@@ -240,22 +234,17 @@ export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 		${s.p(input.team ?? null)}, ${s.p(input.external === true)}, ${s.p(jsonb(input.party))}::jsonb,
 		${s.p(auth.actor.kind === 'member' ? auth.actor.id : null)}, ${s.p(new Date(now.getTime() + INVITE_MS).toISOString())}::timestamptz)`
 	);
-	yield* write(
-		h,
-		s,
-		`WITH ins AS (INSERT INTO sys_invitation (id, email, phone, team, external, party, invited_by, expires_at)
-	VALUES ${values.join(',')} ${IMAGES}), ${identityHistory(s, 'sys_invitation', 'ins', now, by(auth))} SELECT 1`
-	);
+	identityPiece(s, 'ins', 'sys_invitation', `INSERT INTO sys_invitation (id, email, phone, team, external, party, invited_by, expires_at)
+	VALUES ${values.join(',')}`);
+	identityHistory(s, 'sys_invitation', 'ins', now, by(auth));
+	yield* write(h, s, CapturedResult);
 	const failed: string[] = [];
 	for (let offset = 0; offset < prepared.length; offset += 20) {
 		const batch = prepared.slice(offset, offset + 20);
-		const deliveries = yield* Effect.all(
-			batch.map(({ to, id }) => deliver(h, to, id)),
-			{ concurrency: 'unbounded', mode: 'result' }
-		);
-		deliveries.forEach((delivery, index) => {
-			if (Result.isFailure(delivery)) failed.push(batch[index]!.id);
-		});
+		const deliveries = yield* Effect.forEach(batch, ({ to, id }) =>
+			Effect.result(deliver(h, to, id)).pipe(Effect.map((result) => ({ id, result }))),
+			{ concurrency: 'unbounded' });
+		for (const { id, result } of deliveries) if (Result.isFailure(result)) failed.push(id);
 	}
 	return { ids: prepared.map(({ id }) => id), failed };
 });
@@ -270,6 +259,8 @@ export const inspectInvitation = Effect.fn('Bolt.inspectInvitation')(function* (
 			params: [id]
 		}
 	]);
+	if (rows === undefined)
+		return yield* BoltError.make('corrupt', 'decode', 'The invitation query returned no result.');
 	const r = yield* identityRow(
 		Schema.UndefinedOr(
 			Schema.Struct({
@@ -282,7 +273,7 @@ export const inspectInvitation = Effect.fn('Bolt.inspectInvitation')(function* (
 				revoked_at: Schema.NullOr(Schema.String)
 			})
 		),
-		rows!.rows[0]
+		rows.rows[0]
 	);
 	if (r === undefined) return null;
 	const status =
@@ -314,6 +305,8 @@ export const acceptInvitation = Effect.fn('Bolt.acceptInvitation')(function* (
 		},
 		{ text: 'SELECT email, phone FROM sys_user WHERE id = $1 AND active', params: [session.user] }
 	]);
+	if (invs === undefined || users === undefined)
+		return yield* BoltError.make('corrupt', 'decode', 'The invitation acceptance query returned no result.');
 	const inv = yield* identityRow(
 		Schema.UndefinedOr(
 			Schema.Struct({
@@ -323,15 +316,15 @@ export const acceptInvitation = Effect.fn('Bolt.acceptInvitation')(function* (
 				revoked_at: Schema.NullOr(Schema.String)
 			})
 		),
-		invs!.rows[0]
+		invs.rows[0]
 	);
 	const member = yield* identityRow(
 		Schema.UndefinedOr(
 			Schema.Struct({ email: Schema.NullOr(Schema.String), phone: Schema.NullOr(Schema.String) })
 		),
-		users!.rows[0]
+		users.rows[0]
 	);
-	if (inv === undefined) return yield* Effect.fail(refuse('notFound', 'No such invitation.'));
+	if (inv === undefined) return yield* Effect.fail(refuse('not_found', 'No such invitation.'));
 	const sameEmail =
 		member?.email != null &&
 		inv.email !== null &&
@@ -346,32 +339,28 @@ export const acceptInvitation = Effect.fn('Bolt.acceptInvitation')(function* (
 		Date.parse(inv.expires_at) <= now.getTime()
 	)
 		return yield* Effect.fail(refuse('expired', 'This invitation has expired.'));
-	const s = new IdentityStatement(h);
-	return yield* write(
-		h,
-		s,
-		`WITH ${acceptPieces(s, inv, session.user, now, 'true', false)}${projection(h, s, 'member', now)} SELECT (SELECT count(*) FROM member)::int AS n`,
-		undefined,
-		(r) => (r?.n === 1 ? null : refuse('expired', 'This invitation has expired.'))
-	);
+	const s = new IdentityStatement();
+	acceptPieces(s, inv, session.user, now, 'true', false);
+	projection(h, s, 'member', now);
+	const result = yield* write(h, s, CapturedResult);
+	if (!result.captured.some((row) => row.model === 'sys_user'))
+		return yield* Effect.fail(refuse('expired', 'This invitation has expired.'));
+	return null;
 });
 export const revokeInvitation = Effect.fn('Bolt.revokeInvitation')(function* (
 	h: IdentityHost,
 	auth: Authority,
 	id: string
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
-	const s = new IdentityStatement(h),
+	yield* requireAdmin(auth);
+	const s = new IdentityStatement(),
 		now = yield* h.now;
-	return yield* write(
-		h,
-		s,
-		`WITH u AS (UPDATE sys_invitation SET revoked_at = ${s.p(now.toISOString())}::timestamptz, revision = revision + 1
-WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL ${IMAGES}), ${identityHistory(s, 'sys_invitation', 'u', now, by(auth))} SELECT id FROM u`,
-		undefined,
-		(r) => (r === undefined ? refuse('notFound', 'No open invitation.') : null)
-	);
+	identityPiece(s, 'u', 'sys_invitation', `UPDATE sys_invitation SET revoked_at = ${s.p(now.toISOString())}::timestamptz, revision = revision + 1
+	WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL`);
+	identityHistory(s, 'sys_invitation', 'u', now, by(auth));
+	const result = yield* write(h, s, CapturedResult);
+	if (result.captured.length === 0) return yield* Effect.fail(refuse('not_found', 'No open invitation.'));
+	return null;
 });
 /**
  * `sys_invitation.resend` (rule 38c): an invitation not yet accepted or revoked (expired included) gets a fresh 7-day
@@ -382,25 +371,18 @@ export const resendInvitation = Effect.fn('Bolt.resendInvitation')(function* (
 	auth: Authority,
 	id: string
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
-	const s = new IdentityStatement(h),
+	yield* requireAdmin(auth);
+	const s = new IdentityStatement(),
 		now = yield* h.now;
-	const r = yield* write(
-		h,
-		s,
-		`WITH u AS (UPDATE sys_invitation SET expires_at = ${s.p(new Date(now.getTime() + INVITE_MS).toISOString())}::timestamptz, revision = revision + 1
-WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL ${IMAGES}), ${identityHistory(s, 'sys_invitation', 'u', now, by(auth))} SELECT n->>'email' AS email, n->>'phone' AS phone FROM u`,
-		undefined,
-		(row) =>
-			row === undefined
-				? refuse('notFound', 'No open invitation.')
-				: (addressesOf({
-						email: row['email'] as string | null,
-						phone: row['phone'] as string | null
-					}) ?? [])
-	);
-	yield* deliver(h, r, id);
+	identityPiece(s, 'u', 'sys_invitation', `UPDATE sys_invitation SET expires_at = ${s.p(new Date(now.getTime() + INVITE_MS).toISOString())}::timestamptz, revision = revision + 1
+	WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL`);
+	identityHistory(s, 'sys_invitation', 'u', now, by(auth));
+	const result = yield* write(h, s, Schema.Struct({ ...CapturedResult.fields,
+		rows: Schema.Array(Schema.Struct({ email: Schema.NullOr(Schema.String), phone: Schema.NullOr(Schema.String) }))
+	}), "(SELECT coalesce(jsonb_agg(jsonb_build_object('email', n->>'email', 'phone', n->>'phone')), '[]'::jsonb) FROM u) AS rows");
+	const row = result.rows[0];
+	if (row === undefined) return yield* Effect.fail(refuse('not_found', 'No open invitation.'));
+	yield* deliver(h, addressesOf(row) ?? [], id);
 	return null;
 });
 /**
@@ -412,18 +394,14 @@ export const setSignup = Effect.fn('Bolt.setSignup')(function* (
 	auth: Authority,
 	open: boolean
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
+	yield* requireAdmin(auth);
 	if (h.signup === undefined)
-		return yield* Effect.fail(refuse('notFound', 'This workspace declares no sign-up.'));
-	yield* h.db.write(
-		open
-			? { text: `DELETE FROM sys_config WHERE key = '${SIGNUP_KEY}'`, params: [] }
-			: {
-					text: `INSERT INTO sys_config (key, value) VALUES ('${SIGNUP_KEY}', 'closed') ON CONFLICT (key) DO UPDATE SET value = 'closed'`,
-					params: []
-				}
-	);
+		return yield* Effect.fail(refuse('not_found', 'This workspace declares no sign-up.'));
+	const s = new IdentityStatement();
+	s.cte('signup', open
+		? `DELETE FROM sys_config WHERE key = '${SIGNUP_KEY}' RETURNING key`
+		: `INSERT INTO sys_config (key, value) VALUES ('${SIGNUP_KEY}', 'closed') ON CONFLICT (key) DO UPDATE SET value = 'closed' RETURNING key`);
+	yield* nativeCommit(h.db.write, h.publication, s, CapturedResult);
 	return null;
 });
 const setFlag = Effect.fn('Bolt.setFlag')(function* (
@@ -433,33 +411,25 @@ const setFlag = Effect.fn('Bolt.setFlag')(function* (
 	flag: 'admin' | 'active',
 	value: boolean
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
-	const s = new IdentityStatement(h),
+	yield* requireAdmin(auth);
+	const s = new IdentityStatement(),
 		u = s.p(user),
 		now = yield* h.now;
 	const keep = value
 		? 'true'
 		: `EXISTS (SELECT 1 FROM sys_user WHERE admin AND active AND id <> ${u})`;
-	const push =
-		flag === 'active' && !value
-			? `, push AS (DELETE FROM bolt_push_subscriptions WHERE "user" = ${u} AND EXISTS (SELECT 1 FROM changed))`
-			: '';
-	const project = flag === 'active' ? projection(h, s, 'changed', now) : '';
-	return yield* write(
-		h,
-		s,
-		`WITH changed AS (UPDATE sys_user SET ${flag} = ${s.p(value)}, revision = revision + 1 WHERE id = ${u} AND (NOT (admin AND active) OR ${keep}) ${IMAGES}),
-${identityHistory(s, 'sys_user', 'changed', now, by(auth))}${push}${project}
-SELECT (SELECT count(*) FROM changed)::int AS n, EXISTS (SELECT 1 FROM sys_user WHERE id = ${u}) AS found`,
-		ADMINS,
-		(r) =>
-			r?.n === 1
-				? null
-				: r?.found
-					? refuse('lastAdmin', 'The workspace must keep an active administrator.')
-					: refuse('notFound', 'No such member.')
-	);
+	identityPiece(s, 'changed', 'sys_user', `UPDATE sys_user SET ${flag} = ${s.p(value)}, revision = revision + 1
+	WHERE id = ${u} AND (NOT (admin AND active) OR ${keep})`);
+	identityHistory(s, 'sys_user', 'changed', now, by(auth));
+	if (flag === 'active' && !value)
+		s.cte('push', `DELETE FROM bolt_push_subscriptions WHERE "user" = ${u} AND EXISTS (SELECT 1 FROM changed)`);
+	if (flag === 'active') projection(h, s, 'changed', now);
+	const result = yield* write(h, s, Schema.Struct({ ...CapturedResult.fields, found: Schema.Boolean }),
+		`EXISTS (SELECT 1 FROM sys_user WHERE id = ${u}) AS found`, ADMINS);
+	if (result.captured.some((row) => row.model === 'sys_user')) return null;
+	return yield* Effect.fail(result.found
+		? refuse('last_admin', 'The workspace must keep an active administrator.')
+		: refuse('not_found', 'No such member.'));
 });
 export const setAdmin = (h: IdentityHost, auth: Authority, user: string, admin: boolean) =>
 	setFlag(h, auth, user, 'admin', admin);
@@ -467,26 +437,25 @@ export const deactivate = (h: IdentityHost, auth: Authority, user: string) =>
 	setFlag(h, auth, user, 'active', false);
 export const reactivate = (h: IdentityHost, auth: Authority, user: string) =>
 	setFlag(h, auth, user, 'active', true);
-export const assignTeam = Effect.fn('Bolt.assignTeam')(function* (
+export const assign_team = Effect.fn('Bolt.assign_team')(function* (
 	h: IdentityHost,
 	m: EngineManifest,
 	auth: Authority,
 	user: string,
 	team: string | null
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
+	yield* requireAdmin(auth);
 	if (unknownTeam(m, team))
-		return yield* Effect.fail(refuse('notFound', `There is no source team '${team}'.`));
-	const s = new IdentityStatement(h);
-	return yield* write(
-		h,
-		s,
-		`WITH u AS (UPDATE sys_user SET team = ${s.p(team)}, revision = revision + 1 WHERE id = ${s.p(user)} ${IMAGES}),
-${identityHistory(s, 'sys_user', 'u', yield* h.now, by(auth))}${projection(h, s, 'u', yield* h.now)} SELECT id FROM u`,
-		undefined,
-		(r) => (r === undefined ? refuse('notFound', 'No such member.') : null)
-	);
+		return yield* Effect.fail(refuse('not_found', `There is no source team '${team}'.`));
+	const s = new IdentityStatement();
+	identityPiece(s, 'u', 'sys_user', `UPDATE sys_user SET team = ${s.p(team)}, revision = revision + 1 WHERE id = ${s.p(user)}`);
+	const now = yield* h.now;
+	identityHistory(s, 'sys_user', 'u', now, by(auth));
+	projection(h, s, 'u', now);
+	const result = yield* write(h, s, CapturedResult);
+	if (!result.captured.some((row) => row.model === 'sys_user'))
+		return yield* Effect.fail(refuse('not_found', 'No such member.'));
+	return null;
 });
 /**
  * Sets a member's conversation handles (rule 57): the mobile number a private envoy knows them by on WhatsApp (international
@@ -502,30 +471,29 @@ export const setHandles = Effect.fn('Bolt.setHandles')(function* (
 		telegram?: string | null;
 	}
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
+	yield* requireAdmin(auth);
 	const typed = input.phone?.trim() ?? '';
-	const phone = typed === '' ? null : parseAddress(typed);
+	const phone = typed === '' ? null : parse_address(typed);
 	if (typed !== '' && phone?.kind !== 'phone')
 		return yield* Effect.fail(
 			refuse('check', 'Enter a mobile number with its country code (+65 8123 4567).')
 		);
 	const telegram = input.telegram?.trim().replace(/^@/, '') || null;
-	const s = new IdentityStatement(h);
+	const s = new IdentityStatement();
 	const set = [
 		...(input.phone === undefined ? [] : [`phone = ${s.p(phone?.value ?? null)}`]),
 		...(input.telegram === undefined ? [] : [`telegram = ${s.p(telegram)}`])
 	];
 	if (set.length === 0) return yield* Effect.fail(refuse('check', 'Nothing to change.'));
 	return yield* Effect.gen(function* () {
-		return yield* write(
-			h,
-			s,
-			`WITH u AS (UPDATE sys_user SET ${set.join(', ')}, revision = revision + 1 WHERE id = ${s.p(user)} ${IMAGES}),
-${identityHistory(s, 'sys_user', 'u', yield* h.now, by(auth))}${projection(h, s, 'u', yield* h.now)} SELECT id FROM u`,
-			undefined,
-			(r) => (r === undefined ? refuse('notFound', 'No such member.') : null)
-		);
+		identityPiece(s, 'u', 'sys_user', `UPDATE sys_user SET ${set.join(', ')}, revision = revision + 1 WHERE id = ${s.p(user)}`);
+		const now = yield* h.now;
+		identityHistory(s, 'sys_user', 'u', now, by(auth));
+		projection(h, s, 'u', now);
+		const result = yield* write(h, s, CapturedResult);
+		if (!result.captured.some((row) => row.model === 'sys_user'))
+			return yield* Effect.fail(refuse('not_found', 'No such member.'));
+		return null;
 	}).pipe(
 		Effect.catch((e) =>
 			Effect.gen(function* () {
@@ -538,7 +506,7 @@ ${identityHistory(s, 'sys_user', 'u', yield* h.now, by(auth))}${projection(h, s,
 });
 // ── API keys (§5.11.2): `nbk_<prefix>_<secret>`, stored as SHA-256, shown once ──
 const secret = () => toBase64url(crypto.getRandomValues(new Uint8Array(32)));
-const prefixOf = () => toHex(crypto.getRandomValues(new Uint8Array(6)));
+const prefixOf = () => to_hex(crypto.getRandomValues(new Uint8Array(6)));
 export const issueKey = Effect.fn('Bolt.issueKey')(function* (
 	h: IdentityHost,
 	m: EngineManifest,
@@ -546,22 +514,17 @@ export const issueKey = Effect.fn('Bolt.issueKey')(function* (
 	name: string,
 	team: string | null = null
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
+	yield* requireAdmin(auth);
 	if (unknownTeam(m, team))
-		return yield* Effect.fail(refuse('notFound', `There is no source team '${team}'.`));
+		return yield* Effect.fail(refuse('not_found', `There is no source team '${team}'.`));
 	const id = yield* newId(h.crypto),
 		prefix = prefixOf(),
 		key = `nbk_${prefix}_${secret()}`,
-		s = new IdentityStatement(h, auth.actor);
-	return yield* write(
-		h,
-		s,
-		`INSERT INTO sys_api_key (id, name, prefix, hash, team, created_by)
-VALUES (${s.p(id)}, ${s.p(name)}, ${s.p(prefix)}, ${s.p(sha256(key))}, ${s.p(team)}, ${s.p(auth.actor.kind === 'member' ? auth.actor.id : null)})`,
-		undefined,
-		() => ({ id, key })
-	);
+		s = new IdentityStatement(auth.actor);
+	capturePiece(s, 'issued', 'sys_api_key', `INSERT INTO sys_api_key (id, name, prefix, hash, team, created_by)
+	VALUES (${s.p(id)}, ${s.p(name)}, ${s.p(prefix)}, ${s.p(sha256(key))}, ${s.p(team)}, ${s.p(auth.actor.kind === 'member' ? auth.actor.id : null)})`);
+	yield* write(h, s, CapturedResult);
+	return { id, key };
 });
 /** A new secret under the same principal; the revision moves, so a cached Authority for the old one is never hit. */
 export const rotateKey = Effect.fn('Bolt.rotateKey')(function* (
@@ -569,53 +532,47 @@ export const rotateKey = Effect.fn('Bolt.rotateKey')(function* (
 	auth: Authority,
 	id: string
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
+	yield* requireAdmin(auth);
 	const prefix = prefixOf(),
 		key = `nbk_${prefix}_${secret()}`,
-		s = new IdentityStatement(h, auth.actor);
-	return yield* write(
-		h,
-		s,
-		`UPDATE sys_api_key SET prefix = ${s.p(prefix)}, hash = ${s.p(sha256(key))}, revision = revision + 1
-WHERE id = ${s.p(id)} AND revoked_at IS NULL RETURNING id`,
-		undefined,
-		(r) => (r === undefined ? refuse('notFound', 'No such key.') : { key })
-	);
+		s = new IdentityStatement(auth.actor);
+	capturePiece(s, 'rotated', 'sys_api_key', `UPDATE sys_api_key SET prefix = ${s.p(prefix)}, hash = ${s.p(sha256(key))}, revision = revision + 1
+	WHERE id = ${s.p(id)} AND revoked_at IS NULL`);
+	const result = yield* write(h, s, CapturedResult);
+	if (result.captured.length === 0) return yield* Effect.fail(refuse('not_found', 'No such key.'));
+	return { key };
 });
 export const revokeKey = Effect.fn('Bolt.revokeKey')(function* (
 	h: IdentityHost,
 	auth: Authority,
 	id: string
 ) {
-	const denied = requireAdmin(auth);
-	if (denied) return yield* Effect.fail(denied);
-	const s = new IdentityStatement(h, auth.actor);
-	return yield* write(
-		h,
-		s,
-		`UPDATE sys_api_key SET revoked_at = ${s.p((yield* h.now).toISOString())}::timestamptz, revision = revision + 1
-WHERE id = ${s.p(id)} AND revoked_at IS NULL RETURNING id`,
-		undefined,
-		(r) => (r === undefined ? refuse('notFound', 'No such key.') : null)
-	);
+	yield* requireAdmin(auth);
+	const s = new IdentityStatement(auth.actor);
+	capturePiece(s, 'revoked', 'sys_api_key', `UPDATE sys_api_key SET revoked_at = ${s.p((yield* h.now).toISOString())}::timestamptz, revision = revision + 1
+	WHERE id = ${s.p(id)} AND revoked_at IS NULL`);
+	const result = yield* write(h, s, CapturedResult);
+	if (result.captured.length === 0) return yield* Effect.fail(refuse('not_found', 'No such key.'));
+	return null;
 });
 /** `Authorization: Bearer nbk_<prefix>_<secret>` → the key's id, or `null` (unknown, revoked or wrong secret). */
 export const authenticateKey = Effect.fn('Bolt.authenticateKey')(function* (
 	h: IdentityHost,
 	bearer: string
 ) {
-	const m = /^nbk_([0-9a-f]{12})_[A-Za-z0-9_-]{43}$/.exec(bearer);
-	if (m === null) return null;
+	const prefix = /^nbk_([0-9a-f]{12})_[A-Za-z0-9_-]{43}$/.exec(bearer)?.[1];
+	if (prefix === undefined) return null;
 	const [rows] = yield* h.db.read([
 		{
 			text: 'SELECT id, hash FROM sys_api_key WHERE prefix = $1 AND revoked_at IS NULL',
-			params: [m[1]!]
+			params: [prefix]
 		}
 	]);
+	if (rows === undefined)
+		return yield* BoltError.make('corrupt', 'decode', 'The API key authentication query returned no result.');
 	const r = yield* identityRow(
 		Schema.UndefinedOr(Schema.Struct({ id: Schema.String, hash: Schema.String })),
-		rows!.rows[0]
+		rows.rows[0]
 	);
 	return r !== undefined && timingSafeEqual(fromHex(sha256(bearer)), fromHex(r.hash)) ? r.id : null;
 });
@@ -632,10 +589,10 @@ const MembershipInput = Schema.Struct({
 	team: Schema.NullOr(Schema.String),
 	state: Schema.Literals(['active', 'inactive'])
 });
-export function membershipRun(port: MembershipPort) {
+export function membership_run(port: MembershipPort) {
 	return Effect.fn('Bolt.membership')(function* (input: Json) {
 		const value = yield* Schema.decodeUnknownEffect(MembershipInput)(input).pipe(
-			Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message, error))
+			Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
 		);
 		yield* Port.attempt('membership', (signal) => port.project(value, signal)).pipe(
 			Port.call('membership', LIMITS.callMs.other),

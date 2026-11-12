@@ -20,6 +20,7 @@ const EVENT_FIELDS =
 	'conversation_id,conversation_token,created_at,encoded_event,id,sender_id,message_event_signature';
 const SIGNING_FIELDS =
 	'public_key_version,public_key,signing_public_key,identity_public_key_signature';
+const MessageIds = Schema.decodeUnknownOption(Schema.Array(Schema.String));
 const PublicKey = Schema.Struct({
 	public_key_version: Schema.optionalKey(Schema.String),
 	version: Schema.optionalKey(Schema.String),
@@ -217,22 +218,19 @@ export const xchat: ChatPlatform = {
 		const parse = (event: Event, thread: string, keys: ConversationKeyMap): readonly Incoming[] => {
 			const sender = event.senderId ?? '';
 			if (sender === me) return [];
-			const sentAt = new Date(event.createdAtMsec ?? 0).toISOString();
+			const sent_at = new Date(event.createdAtMsec ?? 0).toISOString();
 			const base = {
 				thread,
-				sentAt,
+				sent_at,
 				from: { handle: sender, name: null },
 				group: thread.startsWith('g')
 			};
-			if (event.type === 'messageDeleted')
-				return event['deleteForAll'] === true
-					? (event['messageIds'] as readonly string[]).map((id) => ({
-							...base,
-							id,
-							text: '',
-							deleted: true
-						}))
+			if (event.type === 'messageDeleted') {
+				const ids = MessageIds(event['messageIds']);
+				return event['deleteForAll'] === true && ids._tag === 'Some'
+					? ids.value.map((id) => ({ ...base, id, text: '', deleted: true }))
 					: [];
+			}
 			if (event.type !== 'message') return [];
 			const content = event.content ?? {};
 			if (content['content_type'] === 'edit')
@@ -241,7 +239,7 @@ export const xchat: ChatPlatform = {
 						...base,
 						id: String(content['target_message_id']),
 						text: String(content['new_text'] ?? ''),
-						version: sentAt
+						version: sent_at
 					}
 				];
 			const key = keys[event.keyVersion ?? ''],
@@ -276,8 +274,8 @@ export const xchat: ChatPlatform = {
 					id: event.sequenceId ?? event.id ?? '',
 					text,
 					mentioned: named.test(text),
-					repliedTo: preview?.senderId === me && event.replyPreviewValidation !== 'invalid',
-					replyTo: preview?.replyingToMessageSequenceId ?? null,
+					replied_to: preview?.senderId === me && event.replyPreviewValidation !== 'invalid',
+					reply_to: preview?.replyingToMessageSequenceId ?? null,
 					files
 				}
 			];

@@ -3,10 +3,10 @@
 // relation the root's output does not declare is refused, and a layer exposes only its declared fields.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { catalogOf, compile, read, type Scope } from '../src/index.ts';
+import { catalog_of, compile, read, type Scope } from '../src/index.ts';
 import { shop } from './fixture.ts';
 
-const cat = catalogOf(shop, {
+const cat = catalog_of(shop, {
 	order: {
 		outputs: { default: {
 			order: { fields: 'all' },

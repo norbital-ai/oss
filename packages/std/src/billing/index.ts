@@ -5,7 +5,6 @@ import type {
 } from './schemas.js';
 import {
 	AI_SGD_PER_PROVIDER_USD,
-	BILLING_CURRENCY,
 	COMPUTE_SGD_PER_SECOND,
 	DISC_SGD_PER_GB_MONTH,
 	FILES_SGD_PER_GB_MONTH,
@@ -56,32 +55,11 @@ export const USAGE_METER_IDS = {
  * The single conversion for AI spend: the ledger prices an observation with it, the Stripe meter
  * reports the quantity it returns, and the agent panel shows a conversation's total through it.
  */
-export function aiProviderCostSgdMicros(providerCostUsd: number): number {
+export function ai_provider_cost_sgd_micros(providerCostUsd: number): number {
 	if (!Number.isFinite(providerCostUsd) || providerCostUsd < 0) {
 		throw new Error('AI provider cost must be a finite non-negative USD amount');
 	}
 	return Math.round(providerCostUsd * AI_SGD_PER_PROVIDER_USD * 1_000_000);
-}
-
-/**
- * An amount in cents as display text in the billing currency.
- * @example
- * formatBillingAmountFromMinorUnits(1000) // 'SGD 10'
- */
-export function formatBillingAmountFromMinorUnits(
-	amountMinorUnits: string | number,
-	options?: {
-		minimumFractionDigits?: number;
-		maximumFractionDigits?: number;
-	}
-): string {
-	const numericAmount =
-		typeof amountMinorUnits === 'number' ? amountMinorUnits : Number(amountMinorUnits);
-
-	return `${BILLING_CURRENCY} ${new Intl.NumberFormat('en-SG', {
-		minimumFractionDigits: options?.minimumFractionDigits ?? 0,
-		maximumFractionDigits: options?.maximumFractionDigits ?? 2
-	}).format(numericAmount / CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT)}`;
 }
 
 /**
@@ -97,7 +75,7 @@ export const PLATFORM_FLAT_PRICES = [
 		model: 'flat',
 		interval: 'month',
 		checkout: true,
-		stripePriceIds: {
+		stripe_price_ids: {
 			sandbox: 'price_1U97ONLvWjJB44nUrKDVveY3',
 			production: null
 		},
@@ -116,12 +94,12 @@ export const AI_METERED_PRICES = [
 		description:
 			'Provider-reported request cost converted from USD to micro-SGD at the published billing rate, which loads provider credit fees, FX, payment processing and margin onto the conversion. Token counts and model remain attached to every event for audit.',
 		model: 'metered',
-		meterId: AI_USAGE_METER_ID,
-		stripePriceIds: {
+		meter_id: AI_USAGE_METER_ID,
+		stripe_price_ids: {
 			sandbox: 'price_1Ty8XqLvWjJB44nUyTvOAuYp',
 			production: 'price_1TyCvvLlQVSVzCBMS9rUyU0V'
 		},
-		unitAmountDecimal: '0.0001',
+		unit_amount_decimal: '0.0001',
 		interval: 'month',
 		checkout: true
 	}
@@ -144,50 +122,50 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 				description:
 					'SGD 0.0005 per worker-thread ELU active second. Memory infrastructure cost is included in the price; memory is not separately metered or hard-walled per worker. Stripe records milliseconds.',
 				model: 'metered',
-				meterId: USAGE_METER_IDS.compute,
+				meter_id: USAGE_METER_IDS.compute,
 				interval: 'month',
 				checkout: true,
-				stripePriceIds: {
+				stripe_price_ids: {
 					sandbox: 'price_1U5gO4LvWjJB44nUCUzkwD61',
 					production: 'price_1U5gPrLlQVSVzCBMefEfyUnM'
 				},
-				unitAmountDecimal: USAGE_METER_UNIT_AMOUNT_CENTS.compute
+				unit_amount_decimal: USAGE_METER_UNIT_AMOUNT_CENTS.compute
 			},
 			{
 				id: 'disc-gb-hour-monthly',
 				name: 'Disc usage',
 				description: 'SGD 3.00 per GB-month for tenant database storage, measured in GB-hours.',
 				model: 'metered',
-				meterId: USAGE_METER_IDS.disc,
+				meter_id: USAGE_METER_IDS.disc,
 				interval: 'month',
 				checkout: true,
-				stripePriceIds: {
+				stripe_price_ids: {
 					sandbox: 'price_1U5gOQLvWjJB44nUkHqcqjGn',
 					production: 'price_1U5gPrLlQVSVzCBM3ctzic6b'
 				},
-				unitAmountDecimal: USAGE_METER_UNIT_AMOUNT_CENTS.disc
+				unit_amount_decimal: USAGE_METER_UNIT_AMOUNT_CENTS.disc
 			},
 			{
 				id: 'files-gb-hour-monthly',
 				name: 'Files usage',
 				description: 'SGD 0.25 per GB-month for tenant object storage, measured in GB-hours.',
 				model: 'metered',
-				meterId: USAGE_METER_IDS.files,
+				meter_id: USAGE_METER_IDS.files,
 				interval: 'month',
 				checkout: true,
-				stripePriceIds: {
+				stripe_price_ids: {
 					sandbox: 'price_1U5gORLvWjJB44nUzycz1ITJ',
 					production: 'price_1U5gPsLlQVSVzCBMHKfK5Ker'
 				},
-				unitAmountDecimal: USAGE_METER_UNIT_AMOUNT_CENTS.files
+				unit_amount_decimal: USAGE_METER_UNIT_AMOUNT_CENTS.files
 			},
 			...AI_METERED_PRICES
 		],
 		plans: [
 			{
 				id: PLATFORM_PRODUCT_ID,
-				trialDays: DEFAULT_BILLING_TRIAL_DAYS,
-				allowPromotionCodes: true
+				trial_days: DEFAULT_BILLING_TRIAL_DAYS,
+				allow_promotion_codes: true
 			}
 		]
 	}
@@ -200,28 +178,25 @@ export const LATEST_CATALOGUE_PRICES = LATEST_CATALOGUE_PRODUCTS[0]
 /**
  * The cost in micro-SGD of `quantity` units of a meter at the current catalogue's unit price; throws on a negative or fractional quantity or an unknown meter.
  */
-export function calculateCatalogueMeterCostSgdMicros(meterId: string, quantity: number): number {
+export function calculate_catalogue_meter_cost_sgd_micros(meter_id: string, quantity: number): number {
 	if (!Number.isSafeInteger(quantity) || quantity < 0) {
 		throw new Error('Meter quantity must be a non-negative safe integer');
 	}
-	const price = LATEST_CATALOGUE_PRICES.find((candidate) => candidate.meterId === meterId);
-	if (!price?.unitAmountDecimal) {
-		throw new Error(`Catalogue meter price is missing for ${meterId}`);
+	const price = LATEST_CATALOGUE_PRICES.find((candidate) => candidate.meter_id === meter_id);
+	if (!price?.unit_amount_decimal) {
+		throw new Error(`Catalogue meter price is missing for ${meter_id}`);
 	}
-	return Math.round(quantity * Number(price.unitAmountDecimal) * 10_000);
+	return Math.round(quantity * Number(price.unit_amount_decimal) * 10_000);
 }
 
 export {
 	AI_SGD_PER_PROVIDER_USD,
 	BILLING_ACCESS_TIERS,
 	BILLING_CURRENCY,
-	BILLING_RATE_CARD_VERSION,
 	COMPUTE_SGD_PER_SECOND,
 	DISC_SGD_PER_GB_MONTH,
-	EXTERNAL_CLOUD_RATE_CARD_USD,
 	FILES_SGD_PER_GB_MONTH,
 	HOURS_PER_BILLING_MONTH,
-	LOCAL_CLOUD_RATE_CARD,
 	type BillingAccessTier
 } from './rate-card.js';
 

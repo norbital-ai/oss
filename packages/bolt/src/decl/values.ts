@@ -44,7 +44,7 @@ export type IanaZone = string;
 export type LocaleTag = string;
 /** A path under the workspace `assets/` directory (an app `banner`). */
 export type AssetPath = string;
-/** An approval request's id (`PendingApproval.requestId`, `ApprovalHeld`). */
+/** An approval request's id (`PendingApproval.request_id`, `ApprovalHeld`). */
 export type RequestId = string;
 /** A MIME type or wildcard a `file` field accepts (`image/*`, `application/pdf`). */
 export type MimePattern = `${string}/${string}`;

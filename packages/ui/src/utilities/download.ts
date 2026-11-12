@@ -7,7 +7,7 @@ const basename = (name: string) => {
 };
 
 /** One text file downloads directly; a batch downloads as one ZIP, retaining duplicate names. */
-export function downloadTextFiles(
+export function download_text_files(
 	files: readonly { name: string; content: string }[],
 	archiveName = 'export.zip'
 ): void {

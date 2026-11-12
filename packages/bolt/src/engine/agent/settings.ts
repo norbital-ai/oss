@@ -41,7 +41,7 @@ export const saveAgentSettings = (db: TenantDbShape, s: AgentSettings) =>
 export const spent = (db: TenantDbShape, member: string | null) =>
 	db.value(Schema.Number, {
 		text: `SELECT coalesce(sum((m.meta->'usage'->>'cost')::float8), 0)::float8 FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation
-			WHERE m.meta->>'tag' IN ('reply', 'failed') AND m.created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR c.owner = $1)`,
+			WHERE m.copied_from IS NULL AND m.meta->>'tag' IN ('reply', 'failed') AND m.created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR c.owner = $1)`,
 		params: [member]
 	});
 
@@ -66,5 +66,7 @@ export const overLimit = Effect.fn('Agents.overLimit')(function* (
 });
 
 /** A model a turn may run: its own when allowed (or every model is), else the first allowed. */
-export const allowedModel = (s: AgentSettings, model: string) =>
-	s.models.length === 0 || s.models.includes(model) ? model : s.models[0]!;
+export const allowedModel = (s: AgentSettings, model: string) => {
+	const [first] = s.models;
+	return first === undefined || s.models.includes(model) ? model : first;
+};

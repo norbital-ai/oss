@@ -17,14 +17,13 @@ const decode = <A>(schema: Schema.Decoder<A>, rows: unknown) =>
  * An instance's raw messages (§5.9 built-in reads): every inbound and outbound `sys_message` on it, newest first, a page of
  * 100 before `seq`; an administrator's, like the rest of Settings.
  */
-export const instanceMessages = Effect.fn('shell.instanceMessages')(function* (
+export const instance_messages = Effect.fn('shell.instance_messages')(function* (
 	db: TenantDbShape,
 	auth: Authority,
 	instance: string,
 	before?: string
 ) {
-	const refusal = requireAdmin(auth);
-	if (refusal !== null) return yield* Effect.fail(refusal);
+	yield* requireAdmin(auth);
 	const [known, rows] = yield* db.read([
 		sql('SELECT 1 FROM sys_integration WHERE id = $1', instance),
 		sql(
@@ -40,7 +39,7 @@ export const instanceMessages = Effect.fn('shell.instanceMessages')(function* (
 	]);
 	if ((known?.rows.length ?? 0) === 0)
 		return yield* Effect.fail(
-			BoltError.make('notFound', 'decode', `No integration instance '${instance}'.`)
+			BoltError.make('not_found', 'decode', `No integration instance '${instance}'.`)
 		);
 	return yield* decode(InstanceMessage, rows?.rows ?? []);
 });

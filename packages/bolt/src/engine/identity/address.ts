@@ -10,7 +10,7 @@ export type Address =
  * Reads what a person typed: an email address, or a mobile number with its country code (`+65 8123 4567`; spaces,
  * dashes, dots and brackets are ignored). `null` for anything else — a number without its country code is ambiguous.
  */
-export function parseAddress(raw: string): Address | null {
+export function parse_address(raw: string): Address | null {
 	const text = raw.trim();
 	if (text.includes('@'))
 		return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text) ? { kind: 'email', value: text } : null;
@@ -20,7 +20,7 @@ export function parseAddress(raw: string): Address | null {
 
 /** One number, one spelling, wherever it is stored: an international number in the form a sign-in proves; anything else as typed. */
 export const canonicalPhone = (typed: string): string => {
-	const a = parseAddress(typed);
+	const a = parse_address(typed);
 	return a?.kind === 'phone' ? a.value : typed;
 };
 
@@ -32,10 +32,10 @@ export const addressKey = (a: Address): string =>
 export const digits = (phone: string): string => phone.replace(/\D/g, '');
 
 /** The member column an address is found by, and the SQL that compares it with a bound `$`. */
-export const memberColumn = (a: Address, param: string): string =>
+export const member_column = (a: Address, param: string): string =>
 	a.kind === 'email' ? `lower(email) = ${param}` : `phone_key = ${param}`;
-/** The bound value `memberColumn` compares with. */
-export const memberValue = (a: Address): string =>
+/** The bound value `member_column` compares with. */
+export const member_value = (a: Address): string =>
 	a.kind === 'email' ? a.value.toLowerCase() : digits(a.value);
 
 export const ADDRESS_HINT =

@@ -21,11 +21,12 @@ import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import * as Headers from 'effect/http/Headers';
 import { Unavailable } from '../decl/errors.ts';
 import type { Challenge } from '../facilities/index.ts';
-import { isOff, type Off } from '../facilities/off.ts';
+import { is_off, type Off } from '../facilities/off.ts';
 import {
 	Activation,
 	Agents,
 	Guest,
+	Live,
 	Manifest,
 	Identity,
 	HostIdentity,
@@ -34,7 +35,7 @@ import {
 } from '../engine/services.ts';
 import { Syncs } from '../engine/sync/index.ts';
 import { mayUpdate } from '../engine/write/act.ts';
-import { localOf } from '@norbital-ai/std/zone';
+import { local_of } from '@norbital-ai/std/zone';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { Logs } from '../engine/ports.ts';
@@ -48,7 +49,7 @@ import {
 	wireReadAdmitted,
 	requestBody,
 	requestUrl,
-	responseError,
+	response_error,
 	SessionAuthority
 } from '../protocol/http.ts';
 import { QBody, ActBody, SessionCode } from '../protocol/schema.ts';
@@ -59,9 +60,9 @@ import type { EngineManifest } from '../engine/manifest.ts';
 import type { Authority, LogQuery } from '../engine/contracts.ts';
 import { type EngineError } from '../engine/errors.ts';
 import { BoltError, CODES, PHASES } from '../protocol/errors.ts';
-import { addressBucket, chargesFor, macKey, type RateKind } from '../engine/access/rate.ts';
-import { admitVisitor } from '../engine/callables/index.ts';
-import { Authorities, previewAs } from '../engine/identity/actor.ts';
+import { addressBucket, charges_for, macKey, type RateKind } from '../engine/access/rate.ts';
+import { admit_visitor } from '../engine/callables/index.ts';
+import { Authorities, preview_as } from '../engine/identity/actor.ts';
 import {
 	acceptInvitation,
 	authenticateKey,
@@ -73,37 +74,38 @@ import {
 	mintAnonymous,
 	requireAdmin,
 	revokeSession,
-	sendCode,
+	send_code,
 	SIGNUP_KEY,
-	verifyCode,
+	verify_code,
 	type IdentityHost,
 	keysOf
 } from '../engine/identity/session.ts';
-import { BOLT, HEADERS, PATHS, SW, basePath, canonicalPath, under } from '../protocol/wire.ts';
-import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
+import { BOLT, HEADERS, PATHS, SW, base_path, canonical_path, under } from '../protocol/wire.ts';
+import { fingerprint, schema_slice } from '../engine/schema/plan.ts';
 import { inbox } from './inbox/data.ts';
-import { instanceMessages } from './integration/messages.ts';
-import { runList } from '../engine/runs/index.ts';
+import { instance_messages } from './integration/messages.ts';
+import { runList, visible_run_names } from '../engine/runs/rows.ts';
 import { outputFiles } from '../engine/runs/output-files.ts';
 import { settings, SettingsOp, applySettings } from './settings/data.ts';
-import { exposure } from '../engine/access/exposure.ts';
+import { exposure, read_catalog } from '../engine/access/exposure.ts';
+import { operation_output_catalog } from '../engine/access/operation-outputs.ts';
 import { manifestItems } from './finder/manifest.ts';
-import { StudioOp, studioView, type StudioPort } from './studio/model.ts';
+import { StudioOp, studio_view, type StudioPort } from './studio/model.ts';
 import { StudioInspectInput } from './studio/inspection.ts';
 import {
-	audienceOf,
-	canOpen,
-	challengeOf,
-	kioskOf,
-	holdsPublic,
-	isOpenRoute,
-	kioskNav,
+	audience_of,
+	can_open,
+	challenge_of,
+	kiosk_of,
+	holds_public,
+	is_open_route,
+	kiosk_nav,
 	route,
-	startableAutomations,
-	automationInputs,
-	cookieNames,
-	cookieSite,
-	environmentLabel,
+	startable_automations,
+	automation_inputs,
+	cookie_names,
+	cookie_site,
+	environment_label,
 	nav,
 	SHELL,
 	surfaces,
@@ -116,21 +118,13 @@ import { readLog, runLog } from '../engine/guest/telemetry.ts';
 import { Audit } from '../engine/audit.ts';
 import { AuditQuery } from '../protocol/audit.ts';
 import { audited, auditActor } from '../engine/audit-operation.ts';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/std/wire';
+import { canonical } from '@norbital-ai/store';
+import { fromBase64, timingSafeEqual } from '../engine/crypto.ts';
+import { PUSH_WORKER } from './push-worker.ts';
 
 const SESSION_S = 7 * 86_400,
 	VISITOR_S = 30 * 86_400;
-/** The service worker's source: it shows a pushed notice (a visible page toasts its own) and opens its link. */
-const WORKER = `self.addEventListener('push', (e) => {
-	const n = e.data ? e.data.json() : {};
-	e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => windows.some((w) => w.visibilityState === 'visible') ? undefined : self.registration.showNotification(n.title || '', { body: n.body || undefined, data: { url: new URL((n.path || '/inbox').replace(/^[/]/, ''), self.registration.scope).href } })));
-});
-self.addEventListener('notificationclick', (e) => {
-	e.notification.close();
-	e.waitUntil(self.clients.openWindow(e.notification.data.url));
-});
-`;
-
 /** How a workspace signs people in (`GET /__bolt/session/methods`): by email, by mobile number, and who may sign up by which. */
 export type SignInMethods = {
 	email: boolean;
@@ -142,21 +136,21 @@ export type SignInMethods = {
 	locale: string;
 };
 export type TurnstileShape = {
-	readonly siteKey: string | undefined;
+	readonly site_key: string | undefined;
 	readonly verify: (token: string, ip: string) => Effect.Effect<boolean, Unavailable>;
 };
 export class Turnstile extends Context.Service<Turnstile, TurnstileShape>()('bolt/Turnstile') {
 	static readonly dev = Layer.succeed(Turnstile, {
-		siteKey: 'dev',
+		site_key: 'dev',
 		verify: (token: string) => Effect.succeed(token === 'dev-pass')
 	});
 	/** The host's challenge facility; `off` verifies none (a challenged app's visitors are refused). */
 	static fromAbi(challenge: Challenge | Off): Layer.Layer<Turnstile> {
 		return Layer.succeed(
 			Turnstile,
-			isOff(challenge)
+			is_off(challenge)
 				? {
-						siteKey: undefined,
+						site_key: undefined,
 						verify: () =>
 							Effect.fail(
 								new Unavailable({
@@ -166,7 +160,7 @@ export class Turnstile extends Context.Service<Turnstile, TurnstileShape>()('bol
 							)
 					}
 				: {
-						siteKey: challenge.siteKey,
+						site_key: challenge.site_key,
 						verify: (token, ip) =>
 							Effect.tryPromise((signal) => challenge.verify(token, ip, signal)).pipe(
 								Effect.catch(() => Effect.succeed(false))
@@ -176,7 +170,7 @@ export class Turnstile extends Context.Service<Turnstile, TurnstileShape>()('bol
 	}
 }
 export type ShellHostConfig = {
-	readonly publicUrl: string;
+	readonly public_url: string;
 	/** Read on every request: the host may rename or rebrand the workspace while it serves. */
 	readonly workspace: () => {
 		readonly name: string;
@@ -187,7 +181,7 @@ export type ShellHostConfig = {
 			readonly type: string;
 		}[];
 	};
-	readonly push?: { readonly publicKey: string };
+	readonly push?: { readonly public_key: string };
 	readonly studio?: StudioPort;
 	readonly secure?: boolean;
 	readonly ai?: boolean;
@@ -332,30 +326,35 @@ const bootFor = (
 	workspace: ShellBoot['workspace'],
 	authority: Authority,
 	studio = false
-): ShellBoot => ({
-	workspace,
-	actor: authority.actor,
-	name: null,
-	admin: authority.admin,
-	preview: null,
-	nav: nav(manifest, authority),
-	kiosks: kioskNav(manifest, authority),
-	startable: startableAutomations(manifest, authority),
-	surfaces: surfaces(
-		manifest,
-		authority.actor,
-		authority.admin,
-		studio,
-		workspace.live !== undefined
-	),
-	inbox: 0,
-	push: null,
-	visitor: null,
-	catalog: exposure(manifest, authority),
-	automations: automationInputs(manifest, authority),
-	search: manifestItems(manifest, authority, studio),
-	contract: fingerprint(schemaSlice(manifest))
-});
+): Effect.Effect<ShellBoot, BoltError> =>
+	Effect.gen(function* () {
+		return {
+			workspace,
+			actor: authority.actor,
+			name: null,
+			admin: authority.admin,
+			preview: null,
+			nav: nav(manifest, authority),
+			kiosks: kiosk_nav(manifest, authority),
+			startable: startable_automations(manifest, authority),
+			surfaces: surfaces(
+				manifest,
+				authority.actor,
+				authority.admin,
+				studio,
+				workspace.live !== undefined
+			),
+			inbox: 0,
+			push: null,
+			visitor: null,
+			catalog: yield* exposure(manifest, authority),
+			read_catalog: yield* read_catalog(manifest, authority),
+			automations: automation_inputs(manifest, authority),
+			operation_outputs: operation_output_catalog(manifest, authority),
+			search: manifestItems(manifest, authority, studio),
+			contract: fingerprint(schema_slice(manifest))
+		};
+	});
 const makeShell = Effect.gen(function* () {
 	const c = yield* ShellConfig,
 		h = yield* HostIdentity,
@@ -364,26 +363,29 @@ const makeShell = Effect.gen(function* () {
 		db = yield* TenantDb,
 		guest = yield* Guest,
 		runs = yield* Runs,
+		live = yield* Live,
 		syncs = yield* Syncs,
 		secrets = yield* Secrets,
 		turnstile = yield* Turnstile,
 		rateLimits = yield* RateLimits,
 		logs = yield* Logs,
 		audit = yield* Audit;
-	const authorities = new Authorities(m, (yield* Activation).release, { remember: true });
+	const release = (yield* Activation).release;
+	const authorities = new Authorities(m, release, { remember: true });
+	// Run reader columns are immutable. A grant is usable only under the same release and current authority.
+	const runLogAccess = (auth: Authority, id: string) => keysOf(h).pipe(
+		Effect.map((keys) => macKey(keys.ipMac, `run-log:${canonical({ release, id, authority: auth })}`))
+	);
 
-	h.events = {
-		announce: h.now.pipe(Effect.flatMap((now) => runs.nudge(now.toISOString())))
-	};
 	const secure = c.secure ?? true;
-	const names = cookieNames(secure);
+	const names = cookie_names(secure);
 	const credentialNames: ReadonlySet<string> = new Set(Object.values(names));
 	const crypto = yield* Crypto.Crypto;
 	const newId = uuid(crypto);
 	const cookie = (name: string, value: string, maxAge: number | null) =>
-		`${name}=${encodeURIComponent(value)}; Path=${basePath(c.publicUrl) || '/'}; HttpOnly; ${cookieSite(secure)}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
+		`${name}=${encodeURIComponent(value)}; Path=${base_path(c.public_url) || '/'}; HttpOnly; ${cookie_site(secure)}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
 	const publicApp = (name: string | null): string | null =>
-		name !== null && m.apps[name]?.shell !== 'kiosk' && audienceOf(m.apps[name]) === 'public'
+		name !== null && m.apps[name]?.shell !== 'kiosk' && audience_of(m.apps[name]) === 'public'
 			? name
 			: null;
 	const queryScopedRequest = Effect.fn('shell.queryScopedRequest')(function* (
@@ -421,8 +423,8 @@ const makeShell = Effect.gen(function* () {
 			return request.modify({ headers: Headers.set(request.headers, VISITOR_APP, app) });
 		}
 		if (kiosk !== undefined) {
-			const spec = kioskOf(m, kiosk);
-			if (!KIOSK_PATH.test(kiosk) || spec === undefined || (file && audienceOf(spec) === 'members'))
+			const spec = kiosk_of(m, kiosk);
+			if (!KIOSK_PATH.test(kiosk) || spec === undefined || (file && audience_of(spec) === 'members'))
 				return yield* Effect.fail(
 					BoltError.make('forbidden', 'admission', 'This public kiosk is not declared.')
 				);
@@ -472,7 +474,7 @@ const makeShell = Effect.gen(function* () {
 	) {
 		const ip = yield* rateLimits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'));
 		const verdict = yield* rateLimits.charge(
-			chargesFor(auth, ['register'], { ip }),
+			charges_for(auth, ['register'], { ip }),
 			yield* Clock.currentTimeMillis
 		);
 		if (!verdict.ok) return null;
@@ -517,13 +519,13 @@ const makeShell = Effect.gen(function* () {
 		// policy naming that app (a customer who verified their number on the portal): they run as themselves
 		if (app !== null) {
 			const s = yield* signedIn(request);
-			const member = s === null ? null : yield* authorities.member(h.db, s.user);
+			const member = s === null ? null : yield* authorities.member(h.db, h.publication, s.user);
 			const me = s === null || member === null ? null : marked(s, member);
-			if (s !== null && me !== null && holdsPublic(me, app))
+			if (s !== null && me !== null && holds_public(me, app))
 				return { authority: me, real: me, token: s.token, preview: null, expiresAt: s.expiresAt };
 			const v = yield* visitorOf(request);
 			return {
-				authority: authorities.visitor(app, v.id, v.anonymous),
+				authority: yield* authorities.visitor(app, v.id, v.anonymous),
 				real: null,
 				token: null,
 				preview: null
@@ -538,15 +540,15 @@ const makeShell = Effect.gen(function* () {
 		const s = yield* signedIn(request),
 			token = s?.token ?? null;
 		const expiresAt = s === null ? {} : { expiresAt: s.expiresAt };
-		const member = s === null ? null : yield* authorities.member(h.db, s.user);
+		const member = s === null ? null : yield* authorities.member(h.db, h.publication, s.user);
 		const real = s === null || member === null ? null : marked(s, member);
 		const target = jar.get(names.preview);
 		if (real !== null && target !== undefined && real.admin) {
 			{
 				const team = target.startsWith(TEAM) ? target.slice(TEAM.length) : null;
-				const p = yield* previewAs(real, authorities, h.db, team === null ? target : { team }).pipe(
+				const p = yield* preview_as(real, authorities, h.db, h.publication, team === null ? target : { team }).pipe(
 					Effect.catchTag('BoltError', (error) =>
-						error.code === 'forbidden' || error.code === 'notFound'
+						error.code === 'forbidden' || error.code === 'not_found'
 							? Effect.succeed(null)
 							: Effect.fail(error)
 					)
@@ -588,15 +590,15 @@ const makeShell = Effect.gen(function* () {
 			app = auth.actor.app;
 		const charge = Effect.fn('shell.visitorCharge')(function* (kind: RateKind) {
 			const verdict = yield* rateLimits.charge(
-				chargesFor(auth, [kind], { ip: macKey((yield* keysOf(h)).ipMac, addressBucket(ip)) }),
+				charges_for(auth, [kind], { ip: macKey((yield* keysOf(h)).ipMac, addressBucket(ip)) }),
 				yield* Clock.currentTimeMillis
 			);
 			return verdict.ok ? null : rateLimitedResponse(verdict.retryAfter);
 		});
 		const challenge = Effect.gen(function* () {
-			if (challengeOf(m, app) === undefined) return null;
+			if (challenge_of(m, app) === undefined) return null;
 			const token = getHeader(request, HEADERS.challenge);
-			if (turnstile.siteKey === undefined)
+			if (turnstile.site_key === undefined)
 				return refused('unavailable', 'This host verifies no challenge.', 503);
 			return token !== null && token !== '' && (yield* turnstile.verify(token, ip))
 				? null
@@ -625,15 +627,12 @@ const makeShell = Effect.gen(function* () {
 				: rateLimitedResponse(admission.verdict.retryAfter);
 			const checked = limited ?? (yield* challenge);
 			if (checked !== null) return checked;
-			const body = yield* requestBody(request, ActBody),
-				dot = body.callable.lastIndexOf('.');
-			return dot > 0 &&
-				admitVisitor(auth, {
-					act: body.callable.slice(0, dot),
-					verb: body.callable.slice(dot + 1)
-				}) === null
-				? null
-				: forbidden;
+			const body = yield* requestBody(request, ActBody);
+			if (!('acts' in body)) return forbidden;
+			return Object.keys(body.acts).every((callable) => {
+				const dot = callable.lastIndexOf('.');
+				return dot > 0 && admit_visitor(auth, { act: callable.slice(0, dot), verb: callable.slice(dot + 1) }) === null;
+			}) ? null : forbidden;
 		}
 		if (path.startsWith(PATHS.files) && request.method === 'PUT') {
 			const limited = yield* charge('upload');
@@ -659,7 +658,7 @@ const makeShell = Effect.gen(function* () {
 		const app = publicApp(url.searchParams.get('app'));
 		const workspace = c.workspace(),
 			logo = workspace.icons?.[0]?.src;
-		const env = environmentLabel(c.environment);
+		const env = environment_label(c.environment);
 		const ws: ShellBoot['workspace'] = {
 			name: workspace.name,
 			handle: workspace.handle,
@@ -685,7 +684,7 @@ const makeShell = Effect.gen(function* () {
 				const minted = yield* mintVisitor(request, opened.authority);
 				if (minted !== null) opened = yield* open((v = minted));
 			}
-			if (opened._tag === 'Unknown') return rejected(refused('notFound', 'No such kiosk.', 404));
+			if (opened._tag === 'Unknown') return rejected(refused('not_found', 'No such kiosk.', 404));
 			if (opened._tag === 'SignIn')
 				return rejected(
 					json(
@@ -702,7 +701,7 @@ const makeShell = Effect.gen(function* () {
 			if (me !== null) {
 				const kioskAuth = opened.authority;
 				const b = {
-					...bootFor(m, ws, me.auth, c.studio !== undefined),
+					...(yield* bootFor(m, ws, me.auth, c.studio !== undefined)),
 					name:
 						Option.getOrNull(
 							yield* db.one(Schema.Struct({ name: Schema.NullOr(Schema.String) }), {
@@ -711,40 +710,42 @@ const makeShell = Effect.gen(function* () {
 							})
 						)?.name ?? null,
 					preview: x.preview,
-					catalog: exposure(m, kioskAuth),
-					automations: automationInputs(m, kioskAuth),
+					catalog: yield* exposure(m, kioskAuth),
+					read_catalog: yield* read_catalog(m, kioskAuth),
+					automations: automation_inputs(m, kioskAuth),
+					operation_outputs: operation_output_catalog(m, kioskAuth),
 					search: manifestItems(m, kioskAuth, false)
 				};
 				return ready(b, kioskAuth);
 			}
 			const auth = opened.authority;
-			const siteKey =
-				(challengeOf(m, kioskName) ?? m.workspace.signup?.challenge) === undefined
+			const site_key =
+				(challenge_of(m, kioskName) ?? m.workspace.signup?.challenge) === undefined
 					? undefined
-					: turnstile?.siteKey;
+					: turnstile?.site_key;
 			const b = {
-				...bootFor(m, ws, auth),
+				...(yield* bootFor(m, ws, auth)),
 				nav: [],
-				visitor: { app: kioskName, ...(siteKey === undefined ? {} : { siteKey }) }
+				visitor: { app: kioskName, ...(site_key === undefined ? {} : { site_key }) }
 			};
 			return ready(b, auth, visitorCookie(v));
 		}
 		// a visitor page (unless the member signed in holds it): an anonymous user is minted when absent, and the page sees
 		// only its own app
-		if (app !== null && !(x.authority !== null && holdsPublic(x.authority, app))) {
+		if (app !== null && !(x.authority !== null && holds_public(x.authority, app))) {
 			let v = yield* visitorOf(request);
-			let auth = authorities.visitor(app, v.id, v.anonymous);
+			let auth = yield* authorities.visitor(app, v.id, v.anonymous);
 			if (!v.anonymous) {
 				const minted = yield* mintVisitor(request, auth);
-				if (minted !== null) auth = authorities.visitor(app, (v = minted).id, true);
+				if (minted !== null) auth = yield* authorities.visitor(app, (v = minted).id, true);
 			}
-			const siteKey =
-				(challengeOf(m, app) ?? m.workspace.signup?.challenge) === undefined
+			const site_key =
+				(challenge_of(m, app) ?? m.workspace.signup?.challenge) === undefined
 					? undefined
-					: turnstile?.siteKey;
+					: turnstile?.site_key;
 			const b = {
-				...bootFor(m, ws, auth),
-				visitor: { app, ...(siteKey === undefined ? {} : { siteKey }) }
+				...(yield* bootFor(m, ws, auth)),
+				visitor: { app, ...(site_key === undefined ? {} : { site_key }) }
 			};
 			return ready(b, auth, visitorCookie(v));
 		}
@@ -770,19 +771,19 @@ const makeShell = Effect.gen(function* () {
 				: [];
 		const runtimeEnvoys = yield* activeEnvoys(h.db);
 		const bundlePort = c.studio?.bundle?.bind(c.studio);
-		const studioBundle =
+		const studio_bundle =
 			s.studio && bundlePort !== undefined ? yield* hostCall(() => bundlePort()) : null;
 		const b: ShellBoot = {
-			...bootFor(m, ws, auth, c.studio !== undefined),
+			...(yield* bootFor(m, ws, auth, c.studio !== undefined)),
 			name: Option.getOrNull(user)?.name ?? null,
 			preview: x.preview,
 			surfaces: s,
 			inbox: box === null ? 0 : box.requests.filter((r) => r.canDecide).length,
-			push: s.inbox ? (c.push?.publicKey ?? null) : null,
-			...(c.ai === false ? { aiUnconfigured: true as const } : {}),
+			push: s.inbox ? (c.push?.public_key ?? null) : null,
+			...(c.ai === false ? { ai_unconfigured: true as const } : {}),
 			...(notice === null ? {} : { notice }),
 			...(c.client === undefined ? {} : { client: c.client }),
-			...(studioBundle === null ? {} : { studioBundle }),
+			...(studio_bundle === null ? {} : { studio_bundle }),
 			...(workspaces.length === 0 ? {} : { workspaces }),
 			envoys: Object.fromEntries(runtimeEnvoys.map(({ id, name }) => [id, name]))
 		};
@@ -825,21 +826,21 @@ const makeShell = Effect.gen(function* () {
 		const selected = request.modify({ url: url.pathname + url.search, headers });
 		const x = yield* baseCaller(selected);
 		// a page that needs sign-in sends a signed-out caller to sign in (or sign up), and back to it after
-		if (x.authority === null && !isOpenRoute(m, route(m, url)))
+		if (x.authority === null && !is_open_route(m, route(m, url)))
 			return rejected(
 				HttpServerResponse.redirect(
-					under(c.publicUrl, `/sign-in?next=${encodeURIComponent(next)}`),
+					under(c.public_url, `/sign-in?next=${encodeURIComponent(next)}`),
 					{ status: 303 }
 				)
 			);
 		const state = yield* bootState(selected, x);
 		if (state._tag === 'Refused') return state;
-		if (target.kind === 'app' && !canOpen(m, state.authority, target.app))
+		if (target.kind === 'app' && !can_open(m, state.authority, target.app))
 			return rejected(refused('forbidden', 'This page is not open to you.', 403));
 		return {
 			...state,
 			request: selected,
-			base: new URL(c.publicUrl).pathname.replace(/\/$/, ''),
+			base: new URL(c.public_url).pathname.replace(/\/$/, ''),
 			headers: state.headers
 		};
 	});
@@ -869,7 +870,7 @@ const makeShell = Effect.gen(function* () {
 						open &&
 						h.signup !== undefined &&
 						(m.workspace.signup?.challenge === undefined ||
-							(turnstile.siteKey === undefined && h.devSink === true))
+							(turnstile.site_key === undefined && h.dev_sink === true))
 							? h.signup.via.filter((via) => (via === 'email' ? h.mail !== undefined : phone))
 							: []
 				};
@@ -880,14 +881,14 @@ const makeShell = Effect.gen(function* () {
 				const body = yield* requestBody(request, SessionCode);
 				const ip = Option.getOrElse(request.remoteAddress, () => '0.0.0.0'),
 					token = getHeader(request, HEADERS.challenge);
-				yield* sendCode(
+				yield* send_code(
 					h,
 					body.address,
 					ip,
 					body.via === 'whatsapp' ? 'whatsapp' : 'sms',
 					// a local host sends nothing real and has no check to run
 					m.workspace.signup?.challenge === undefined ||
-						(turnstile.siteKey === undefined && h.devSink === true)
+						(turnstile.site_key === undefined && h.dev_sink === true)
 						? Effect.succeed(true)
 						: token === null || token === ''
 							? Effect.succeed(false)
@@ -903,7 +904,7 @@ const makeShell = Effect.gen(function* () {
 				);
 				// the visitor's anonymous user links to the account: a newcomer becomes it, an existing account absorbs it
 				const v = yield* visitorOf(request);
-				const session = yield* verifyCode(
+				const session = yield* verify_code(
 					h,
 					body.address,
 					body.code,
@@ -922,7 +923,7 @@ const makeShell = Effect.gen(function* () {
 									names.visitor,
 									'',
 									{
-										path: basePath(c.publicUrl) || '/',
+										path: base_path(c.public_url) || '/',
 										httpOnly: true,
 										secure,
 										partitioned: secure,
@@ -945,7 +946,7 @@ const makeShell = Effect.gen(function* () {
 							names.session,
 							'',
 							{
-								path: basePath(c.publicUrl) || '/',
+								path: base_path(c.public_url) || '/',
 								httpOnly: true,
 								secure,
 								partitioned: secure,
@@ -957,7 +958,7 @@ const makeShell = Effect.gen(function* () {
 							names.preview,
 							'',
 							{
-								path: basePath(c.publicUrl) || '/',
+								path: base_path(c.public_url) || '/',
 								httpOnly: true,
 								secure,
 								partitioned: secure,
@@ -979,7 +980,7 @@ const makeShell = Effect.gen(function* () {
 				});
 				const view = yield* inspectInvitation(h, id);
 				return view === null
-					? refused('notFound', 'No such invitation.', 404)
+					? refused('not_found', 'No such invitation.', 404)
 					: json({ value: view });
 			}),
 		[`POST ${PATHS.session.invitation}`]: (request, current) =>
@@ -1020,14 +1021,14 @@ const makeShell = Effect.gen(function* () {
 			auth,
 			{
 				now: at.toISOString(),
-				today: localOf(at.getTime(), m.workspace.tz).date,
+				today: local_of(at.getTime(), m.workspace.tz).date,
 				tz: m.workspace.tz
 			}
 		);
 		if (allowed !== true)
 			return yield* Effect.fail(
 				BoltError.make(
-					allowed === null ? 'notFound' : 'forbidden',
+					allowed === null ? 'not_found' : 'forbidden',
 					'admission',
 					allowed === null
 						? 'No such integration instance.'
@@ -1056,7 +1057,7 @@ const makeShell = Effect.gen(function* () {
 				const one = url.searchParams.get('automation') ?? undefined;
 				if (
 					!s.runs &&
-					!(one !== undefined && auth.automations.includes(one)) &&
+					!(one !== undefined && visible_run_names(auth).includes(one)) &&
 					url.searchParams.get('id') === null
 				)
 					return refused('forbidden', 'No runs for this member.', 403);
@@ -1072,7 +1073,7 @@ const makeShell = Effect.gen(function* () {
 					});
 				const run = yield* runs.view(auth, id).pipe(Effect.map(Option.getOrNull));
 				return run === null
-					? refused('notFound', 'Not found or no access.', 404)
+					? refused('not_found', 'Not found or no access.', 404)
 					: json({
 							value: {
 								...run,
@@ -1082,27 +1083,38 @@ const makeShell = Effect.gen(function* () {
 											files: outputFiles(
 												m.automations[run.automation]?.output,
 												run.result,
-												m.customFields,
+												m.custom_fields,
 												m.models
 											)
 										}),
 								// who reads the run's input reads its log: what it printed can hold no less
-								...(run.input === undefined ? {} : { logs: yield* runLog(logs, run.id) })
+								...(run.input === undefined ? {} : {
+									logs: yield* runLog(logs, run.id),
+									log_access: yield* runLogAccess(auth, run.id)
+								})
 							}
 						});
+			}
+			case 'GET /runs/log': {
+				const id = url.searchParams.get('id') ?? '';
+				const access = url.searchParams.get('access') ?? '';
+				const expected = yield* runLogAccess(auth, id);
+				if (access.length !== expected.length || !timingSafeEqual(fromBase64(access), fromBase64(expected)))
+					return refused('forbidden', 'Reopen the run to read its logs under your current access.', 403);
+				return json({ value: yield* runLog(logs, id, url.searchParams.get('after') ?? undefined) });
 			}
 			case 'POST /runs/stop': {
 				// hook:runtime — rule 56: whoever reads the run in full may stop it
 				const { id } = yield* requestBody(request, RunId);
 				const run = yield* runs.stop(auth, id).pipe(Effect.map(Option.getOrNull));
 				return run === null
-					? refused('notFound', 'Not found or no access.', 404)
+					? refused('not_found', 'Not found or no access.', 404)
 					: json({ value: run });
 			}
 			case 'GET /instance-messages': {
 				const p = url.searchParams;
 				return json({
-					value: yield* instanceMessages(
+					value: yield* instance_messages(
 						h.db,
 						auth,
 						p.get('instance') ?? '',
@@ -1163,7 +1175,7 @@ const makeShell = Effect.gen(function* () {
 							category: 'identity',
 							action: op.op,
 							actor: auditActor(auth.actor),
-							payload: encodeWire(
+							payload: encode_wire(
 								op.op === 'setSecret'
 									? { op: op.op, input: { name: op.input.name, value: '[credential redacted]' } }
 									: op
@@ -1202,10 +1214,9 @@ const makeShell = Effect.gen(function* () {
 					.find((v) => v !== null && v !== '' && Number.isNaN(Date.parse(v)));
 				if (bad !== undefined)
 					return yield* Effect.fail(
-						BoltError.make('invalidInput', 'decode', `'${bad}' is not an instant`)
+						BoltError.make('invalid_input', 'decode', `'${bad}' is not an instant`)
 					);
-				const refusal = requireAdmin(auth);
-				if (refusal !== null) return yield* Effect.fail(refusal);
+				yield* requireAdmin(auth);
 				const query: LogQuery = {
 					...given('before'),
 					...given('after'),
@@ -1225,8 +1236,8 @@ const makeShell = Effect.gen(function* () {
 					return refused('forbidden', 'Studio is for staff members on a host that serves it.', 403);
 				const studio = c.studio;
 				if (request.method === 'GET')
-					return json({ value: studioView(yield* hostCall(() => studio.state(auth))) });
-				const op = Schema.decodeUnknownOption(StudioOp)(
+					return json({ value: studio_view(yield* hostCall(() => studio.state(auth))) });
+				const op = Schema.decodeUnknownOption(StudioOp, { onExcessProperty: 'error' })(
 					(yield* requestBody(request, Body))['op'] ?? null
 				);
 				if (Option.isNone(op)) return refused('check', 'The Studio operation is malformed.', 422);
@@ -1263,7 +1274,7 @@ const makeShell = Effect.gen(function* () {
 							)
 						);
 				}
-				return json({ value: studioView(value) });
+				return json({ value: studio_view(value) });
 			}
 			case 'GET /studio/file': {
 				// one file's text on its own: a state carries the tree's sizes, never its contents
@@ -1275,14 +1286,6 @@ const makeShell = Effect.gen(function* () {
 				if (commit === null || commit === '' || path === null || path === '')
 					return refused('check', 'Give commit and path.', 422);
 				return json({ value: yield* hostCall(() => studio.file(auth, commit, path)) });
-			}
-			case 'GET /studio/build': {
-				const read = c.studio?.build?.bind(c.studio),
-					commit = url.searchParams.get('commit');
-				if (!s.studio || read === undefined)
-					return refused('forbidden', 'Studio is for staff members on a host that serves it.', 403);
-				if (commit === null || commit === '') return refused('check', 'Give commit.', 422);
-				return json({ value: yield* hostCall(() => read(auth, commit)) });
 			}
 			case 'GET /studio/inspect': {
 				const studio = c.studio;
@@ -1298,12 +1301,6 @@ const makeShell = Effect.gen(function* () {
 				if (Option.isNone(input))
 					return refused('check', 'The inspection scope is malformed.', 422);
 				return json({ value: yield* hostCall(() => studio.inspect(auth, input.value)) });
-			}
-			case 'GET /studio/usage': {
-				const read = c.studio?.usage?.bind(c.studio);
-				if (!s.studio || read === undefined || !auth.admin)
-					return refused('forbidden', 'Usage is for administrators on a host that meters it.', 403);
-				return json({ value: yield* hostCall(() => read(auth)) });
 			}
 			case 'GET /studio/events': {
 				// pushed authoring frames (build log lines, a moved head); nothing is polled
@@ -1342,7 +1339,7 @@ const makeShell = Effect.gen(function* () {
 						headers: { 'set-cookie': cookie(names.preview, '', 0) }
 					});
 				if (typeof team === 'string') {
-					yield* previewAs(x.real, authorities, h.db, { team });
+					yield* preview_as(x.real, authorities, h.db, h.publication, { team });
 					return HttpServerResponse.empty({
 						status: 204,
 						headers: { 'set-cookie': cookie(names.preview, `${TEAM}${team}`, null) }
@@ -1352,7 +1349,7 @@ const makeShell = Effect.gen(function* () {
 					return yield* Effect.fail(
 						BoltError.make('invalid', 'decode', 'the body is { user } or { team }')
 					);
-				yield* previewAs(x.real, authorities, h.db, user);
+				yield* preview_as(x.real, authorities, h.db, h.publication, user);
 				return HttpServerResponse.empty({
 					status: 204,
 					headers: { 'set-cookie': cookie(names.preview, user, null) }
@@ -1370,7 +1367,7 @@ const makeShell = Effect.gen(function* () {
 							'Only an administrator can explain another member or team.',
 							403
 						);
-					a = (yield* previewAs(x.real, authorities, h.db, team !== null ? { team } : (user ?? '')))
+					a = (yield* preview_as(x.real, authorities, h.db, h.publication, team !== null ? { team } : (user ?? '')))
 						.authority;
 				}
 				const { key: _key, ...explained } = a;
@@ -1381,7 +1378,7 @@ const makeShell = Effect.gen(function* () {
 	});
 	/** `GET /manifest.webmanifest` (§5.10, L-BOLT-295): scope and start_url from the configured public origin, never `Host`. */
 	function webmanifest(): HttpServerResponse.HttpServerResponse {
-		const scope = under(h.publicUrl, '/'),
+		const scope = under(h.public_url, '/'),
 			workspace = c.workspace();
 		return HttpServerResponse.text(
 			JSON.stringify({
@@ -1410,10 +1407,10 @@ const makeShell = Effect.gen(function* () {
 			// the request line as sent: `//x` would parse as an authority
 			const at = request.url.indexOf('?'),
 				sent = at < 0 ? request.url : request.url.slice(0, at);
-			if (sent.startsWith('/') && canonicalPath(sent) !== sent)
+			if (sent.startsWith('/') && canonical_path(sent) !== sent)
 				return Option.some(
 					HttpServerResponse.redirect(
-						`${under(c.publicUrl, canonicalPath(sent))}${at < 0 ? '' : request.url.slice(at)}`,
+						`${under(c.public_url, canonical_path(sent))}${at < 0 ? '' : request.url.slice(at)}`,
 						{ status: 308 }
 					)
 				);
@@ -1425,17 +1422,17 @@ const makeShell = Effect.gen(function* () {
 				!['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
 				(site === 'cross-site' ||
 					site === 'same-site' ||
-					(origin !== null && origin !== new URL(c.publicUrl).origin))
+					(origin !== null && origin !== new URL(c.public_url).origin))
 			)
 				return Option.some(refused('forbidden', 'A write from another site is refused.', 403));
 			if (path === '/manifest.webmanifest' && request.method === 'GET')
 				return Option.some(webmanifest());
 			if (path === SW && request.method === 'GET')
 				return Option.some(
-					HttpServerResponse.text(WORKER, {
+					HttpServerResponse.text(PUSH_WORKER, {
 						headers: {
 							'content-type': 'text/javascript',
-							'service-worker-allowed': `${basePath(h.publicUrl)}/`,
+							'service-worker-allowed': `${base_path(h.public_url)}/`,
 							'cache-control': 'no-cache'
 						}
 					})
@@ -1457,16 +1454,16 @@ const makeShell = Effect.gen(function* () {
 				return Option.fromNullishOr(yield* shell(request, path, yield* x));
 			return Option.none();
 		}).pipe(
-			Effect.catch((e) => Effect.succeed(Option.some(responseError(e)))),
+			Effect.catch((e) => Effect.succeed(Option.some(response_error(e)))),
 			Effect.catchCause((cause) =>
-				Effect.logWarning(cause).pipe(Effect.as(Option.some(responseError(cause))))
+				Effect.logWarning(cause).pipe(Effect.as(Option.some(response_error(cause))))
 			)
 		);
 	return { authority, handle, publicPage };
 });
 /** The one shell's way to resolve a caller: what it remembers of them lives as long as the shell does. */
-export const sessionAuthority = Effect.map(makeShell, (shell) => shell.authority);
-export const authorityOf = (request: HttpServerRequest.HttpServerRequest) =>
+export const session_authority = Effect.map(makeShell, (shell) => shell.authority);
+export const authority_of = (request: HttpServerRequest.HttpServerRequest) =>
 	Effect.flatMap(SessionAuthority, (session) => session.of(request)).pipe(
 		Effect.map(Option.getOrNull)
 	);

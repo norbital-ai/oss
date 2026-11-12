@@ -1,12 +1,13 @@
 // The draft of one mounted `Form`, shared with its `Field`s by context. A field reads and writes the draft; unmounting
 // a field (a lazy tab, a collapsed section) never drops its value, because the value lives here (§5.10).
-import { Effect, Fiber, FiberSet } from 'effect';
+import { Effect, Fiber, FiberSet, Option, Schema } from 'effect';
 import { flushSync, getContext, setContext } from 'svelte';
-import { encodeWire, reviveWire } from '@norbital-ai/std/wire';
-import { valueObject, type Value } from '../kinds/kind.js';
+import { encode_wire, revive_wire } from '@norbital-ai/std/wire';
+import { value_object, type Value } from '../kinds/kind.js';
 import type { IdOf } from '../model/types.js';
 import type { RecordCapabilities, RecordRestriction } from '../record/types.js';
-import type { RunHandle, ViewBolt } from '../client/contract.js';
+import { actOutcome, automation_outcome } from '../actions/outcome.js';
+import type { AutomationHandle, Outcome, RunHandle, ViewBolt } from '../client/contract.js';
 import {
 	changed,
 	check,
@@ -16,14 +17,17 @@ import {
 	type FormSpec,
 	type Notice,
 	type NoticeText,
-	type Outcome,
 	type Row
 } from './draft.js';
-import { childOperations, type ChildOperation } from './child-operations.js';
+import { ChildOperationSchema, childOperations, type ChildOperation } from './child-operations.js';
 import { resubmits } from '../approval/row.js';
 
+const decodeDraftChildren = Schema.decodeUnknownOption(
+	Schema.Record(Schema.String, Schema.Array(ChildOperationSchema))
+);
+
 /** Narrows string ids to a model's id type (e.g. for `where: { id: { in: … } }`). */
-export function idsOf<C extends string>(ids: readonly string[]): readonly IdOf<C>[] {
+export function ids_of<C extends string>(ids: readonly string[]): readonly IdOf<C>[] {
 	return ids as readonly IdOf<C>[];
 }
 
@@ -94,10 +98,10 @@ export class FormState {
 	capabilities = $state<RecordCapabilities | null | undefined>(undefined);
 	children = $state<Record<string, readonly ChildOperation[]>>({});
 	/** Native child controllers survive a custom body or historical snapshot unmounting. */
-	childForms = new Map<string, FormState>();
+	child_forms = new Map<string, FormState>();
 	/** A draft restored from this browser's storage, so a page does not replace it with fresh defaults. */
 	restored = false;
-	readonly #childSeeds: Readonly<Record<string, readonly Row[]>>;
+	readonly #child_seeds: Readonly<Record<string, readonly Row[]>>;
 	readonly #storageKey: string | undefined;
 	#capabilitiesRequired = false;
 	/** Fields the row's state lock leaves read-only (advice; the host enforces). */
@@ -115,7 +119,7 @@ export class FormState {
 	#act: Act;
 	#start: ViewBolt['run'] | undefined;
 	#startAttempt:
-		{ readonly key: string; readonly input: string; readonly handle: RunHandle } | undefined;
+		{ readonly key: string; readonly input: string; readonly handle: AutomationHandle } | undefined;
 	#text: NoticeText;
 	/** Uploads in flight (a file field's bytes going to the host): a submit waits for them. */
 	#uploads = new Set<FiberSet.FiberSet<unknown, Error>>();
@@ -126,14 +130,14 @@ export class FormState {
 	#confirms = new Set<() => Effect.Effect<boolean>>();
 	#rules = $state.raw<readonly (() => readonly SemanticIssue[])[]>([]);
 	/** Every registered rule's current issues; kept apart from `errors` so fixing a value clears its issue at once. */
-	readonly semanticErrors: readonly SemanticIssue[] = $derived(
+	readonly semantic_errors: readonly SemanticIssue[] = $derived(
 		this.#rules.flatMap((rule) => rule())
 	);
 	/** Explicit check/refusal errors take precedence over semantic issues on the same field. */
-	readonly fieldErrors: ReadonlyMap<string, string> = $derived.by(() => {
-		if (this.semanticErrors.length === 0) return this.errors;
+	readonly field_errors: ReadonlyMap<string, string> = $derived.by(() => {
+		if (this.semantic_errors.length === 0) return this.errors;
 		const all = new Map(this.errors);
-		for (const issue of this.semanticErrors)
+		for (const issue of this.semantic_errors)
 			if (!all.has(issue.field)) all.set(issue.field, issue.message);
 		return all;
 	});
@@ -160,12 +164,12 @@ export class FormState {
 		this.#text = text;
 		this.#storageKey = storageKey;
 		// a create form's child rows can be seeded from values (`components`), the same way its scalar fields are
-		this.#childSeeds =
+		this.#child_seeds =
 			spec.target.of === 'model' && spec.target.mode === 'create'
 				? Object.fromEntries(
 						Object.entries(spec.children ?? {}).flatMap(([relation]) => {
 							const seeded = prefill[relation];
-							return Array.isArray(seeded) ? [[relation, seeded.filter(valueObject)] as const] : [];
+							return Array.isArray(seeded) ? [[relation, seeded.filter(value_object)] as const] : [];
 						})
 					)
 				: {};
@@ -173,7 +177,7 @@ export class FormState {
 			locked(field) ||
 			(this.#capabilitiesRequired &&
 				(this.capabilities == null ||
-					!this.canSubmit ||
+					!this.can_submit ||
 					!(
 						this.capabilities.fields[field]?.writable || this.capabilities.fields[field]?.proposal
 					)));
@@ -182,13 +186,13 @@ export class FormState {
 	}
 
 	/** The storage key for one child row's draft: the parent form's key, the relation and the row id. */
-	childStorageKey(relation: string, key: string): string | undefined {
+	child_storage_key(relation: string, key: string): string | undefined {
 		return this.#storageKey === undefined ? undefined : `${this.#storageKey}/${relation}/${key}`;
 	}
 
 	/** The child rows a create form was opened with (the previous trial's pigments, say). */
-	childSeeds(relation: string): readonly Row[] {
-		return this.#childSeeds[relation] ?? [];
+	child_seeds(relation: string): readonly Row[] {
+		return this.#child_seeds[relation] ?? [];
 	}
 
 	#storage(): Storage | null {
@@ -205,9 +209,9 @@ export class FormState {
 		const raw = this.#storage()?.getItem(this.#storageKey);
 		if (raw == null) return;
 		try {
-			const saved: unknown = JSON.parse(raw, reviveWire);
-			if (!valueObject(saved)) return;
-			const values = valueObject(saved['values']) ? saved['values'] : {};
+			const saved: unknown = JSON.parse(raw, revive_wire);
+			if (!value_object(saved)) return;
+			const values = value_object(saved['values']) ? saved['values'] : {};
 			this.values = {
 				...this.values,
 				...Object.fromEntries(
@@ -216,19 +220,11 @@ export class FormState {
 					)
 				)
 			};
-			const children = saved['children'];
-			if (valueObject(children))
+			const children = Option.getOrUndefined(decodeDraftChildren(saved['children']));
+			if (children !== undefined)
 				this.children = Object.fromEntries(
-					Object.entries(children).filter(([relation, operations]) => {
-						return (
-							this.spec.children?.[relation] !== undefined &&
-							Array.isArray(operations) &&
-							operations.every(
-								(operation) => valueObject(operation) && typeof operation['action'] === 'string'
-							)
-						);
-					})
-				) as Record<string, readonly ChildOperation[]>;
+					Object.entries(children).filter(([relation]) => this.spec.children?.[relation] !== undefined)
+				);
 			this.restored = true;
 		} catch {
 			// a draft from an older build or another origin: ignore it rather than break the form
@@ -248,14 +244,14 @@ export class FormState {
 			if (
 				Object.keys(values).length === 0 &&
 				Object.keys(children).length === 0 &&
-				Object.keys(this.#childSeeds).length === 0
+				Object.keys(this.#child_seeds).length === 0
 			) {
 				storage.removeItem(this.#storageKey);
 				return;
 			}
 			storage.setItem(
 				this.#storageKey,
-				JSON.stringify({ values: encodeWire(values), children: encodeWire(children) })
+				JSON.stringify({ values: encode_wire(values), children: encode_wire(children) })
 			);
 		} catch {
 			// storage full or denied: the form still works, the draft is simply not remembered
@@ -297,7 +293,7 @@ export class FormState {
 		});
 	}
 	/** Whether this one field differs from what the form opened with (the row, else the defaults). */
-	fieldDirty(name: string): boolean {
+	field_dirty(name: string): boolean {
 		return (
 			this.mode !== 'view' &&
 			Object.keys(
@@ -305,11 +301,11 @@ export class FormState {
 			).length > 0
 		);
 	}
-	expectCapabilities(): void {
+	expect_capabilities(): void {
 		this.#capabilitiesRequired = true;
 		this.capabilities = undefined;
 	}
-	get canSubmit(): boolean {
+	get can_submit(): boolean {
 		return (
 			!this.#capabilitiesRequired ||
 			this.capabilities?.update.allowed === true ||
@@ -317,28 +313,28 @@ export class FormState {
 		);
 	}
 	/** Permission plus validity: Save stays disabled while any error or broken invariant remains. */
-	get canSave(): boolean {
+	get can_save(): boolean {
 		return (
-			this.canSubmit && !this.pending && this.errors.size === 0 && this.semanticErrors.length === 0
+			this.can_submit && !this.pending && this.errors.size === 0 && this.semantic_errors.length === 0
 		);
 	}
 	/** Registers a synchronous invariant rule, re-evaluated reactively; returns its unregister. */
-	addValidation(rule: () => readonly SemanticIssue[]): () => void {
+	add_validation(rule: () => readonly SemanticIssue[]): () => void {
 		this.#rules = [...this.#rules, rule];
 		return () => {
 			this.#rules = this.#rules.filter((r) => r !== rule);
 		};
 	}
 	/** The first broken invariant's message for exactly this key. */
-	semanticError(field: string): string | undefined {
-		return this.semanticErrors.find((issue) => issue.field === field)?.message;
+	semantic_error(field: string): string | undefined {
+		return this.semantic_errors.find((issue) => issue.field === field)?.message;
 	}
 	/** The row's request asks for changes and this draft is its requester's: saving resubmits it (Save reads "Resubmit"). */
 	get resubmitting(): boolean {
-		return this.canSubmit && resubmits(this.#around);
+		return this.can_submit && resubmits(this.#around);
 	}
-	get requestingApproval(): boolean {
-		if (this.spec.proposalOnly === true) return true;
+	get requesting_approval(): boolean {
+		if (this.spec.proposal_only === true) return true;
 		if (
 			Object.values(this.children).some((operations) =>
 				operations.some((operation) => operation.proposal === true)
@@ -369,7 +365,7 @@ export class FormState {
 
 	get(name: string): Value {
 		return this.spec.fields.find((f) => f.name === name)?.readonly ||
-			this.restrictions(name).includes('syncOwned')
+			this.restrictions(name).includes('sync_owned')
 			? (this.#around[name] ?? null)
 			: (this.values[name] ?? null);
 	}
@@ -419,31 +415,31 @@ export class FormState {
 		}
 	});
 
-	onOutcome(receive: (outcome: Outcome) => void): () => void {
+	on_outcome(receive: (outcome: Outcome) => void): () => void {
 		this.#outcomes.add(receive);
 		return () => this.#outcomes.delete(receive);
 	}
-	onReset(reset: () => void): () => void {
+	on_reset(reset: () => void): () => void {
 		this.#resets.add(reset);
 		return () => this.#resets.delete(reset);
 	}
-	beforeOutcome(receive: (outcome: Outcome) => void): () => void {
+	before_outcome(receive: (outcome: Outcome) => void): () => void {
 		this.#beforeOutcomes.add(receive);
 		return () => this.#beforeOutcomes.delete(receive);
 	}
-	beforeSubmit(validate: () => Effect.Effect<boolean>): () => void {
+	before_submit(validate: () => Effect.Effect<boolean>): () => void {
 		this.#validators.add(validate);
 		return () => this.#validators.delete(validate);
 	}
 	/** Asked once the draft is valid, before it is sent: `false` (the person declined) sends nothing. */
-	confirmSubmit(ask: () => Effect.Effect<boolean>): () => void {
+	confirm_submit(ask: () => Effect.Effect<boolean>): () => void {
 		this.#confirms.add(ask);
 		return () => this.#confirms.delete(ask);
 	}
 	get revision(): number | undefined {
 		return this.#revision;
 	}
-	queueChildren(relation: string, operations: readonly ChildOperation[]): void {
+	queue_children(relation: string, operations: readonly ChildOperation[]): void {
 		const input = this.spec.children?.[relation];
 		if (
 			input === undefined ||
@@ -455,13 +451,13 @@ export class FormState {
 	}
 	validate(): boolean {
 		this.errors = check(this.spec, this.values);
-		return this.errors.size === 0 && this.semanticErrors.length === 0;
+		return this.errors.size === 0 && this.semantic_errors.length === 0;
 	}
 	prepare(): Effect.Effect<boolean> {
 		return Effect.gen({ self: this }, function* () {
 			this.pending = true;
 			yield* this.#drain;
-			return this.canSubmit && this.validate();
+			return this.can_submit && this.validate();
 		}).pipe(
 			Effect.ensuring(
 				Effect.sync(() => {
@@ -502,7 +498,7 @@ export class FormState {
 	submit(): Effect.Effect<Outcome | null> {
 		return Effect.gen({ self: this }, function* () {
 			if (this.pending) return null;
-			if (!this.canSubmit) return null;
+			if (!this.can_submit) return null;
 			this.pending = true;
 			yield* this.#drain;
 			const valid = yield* Effect.forEach([...this.#validators], (validate) => validate(), {
@@ -510,7 +506,7 @@ export class FormState {
 			});
 			if (!this.validate() || valid.some((value) => !value)) return null;
 			for (const ask of this.#confirms) if (!(yield* ask())) return null;
-			const scalar = payload(this.spec, this.base, this.values);
+			const scalar = payload(this.spec, this.base, this.values, this.#revision);
 			const target = this.spec.target;
 			if (target.of === 'automation') {
 				if (scalar === null) return null;
@@ -519,66 +515,52 @@ export class FormState {
 					throw new Error('An automation form requires a start implementation.');
 				this.notice = null;
 				const sent = { ...this.values };
-				const input = JSON.stringify(encodeWire(scalar));
+				const input = JSON.stringify(encode_wire(scalar));
 				const handle =
 					this.#startAttempt?.key === this.#key && this.#startAttempt.input === input
 						? this.#startAttempt.handle
 						: start(target.automation, scalar);
 				this.#startAttempt = { key: this.#key, input, handle };
-				const outcome = yield* handle;
+				const result = yield* Effect.result(automation_outcome(handle));
+				if (result._tag === 'Failure') {
+					this.notice = { tone: 'danger', text: result.failure.message };
+					return null;
+				}
+				const outcome = result.success;
 				this.run =
-					outcome.kind === 'committed' || outcome.kind === 'running' || outcome.kind === 'unknown'
+					handle.mode === 'job' && (outcome.kind === 'committed' || outcome.kind === 'running' || outcome.kind === 'unknown')
 						? handle
 						: null;
 				this.accept(outcome, sent);
-				if (outcome.kind === 'committed')
+				if (outcome.kind === 'committed' && handle.mode === 'job')
 					this.notice = { tone: 'info', text: this.#text.running, run: handle.id };
 				return outcome;
 			}
-			const nested = childOperations(this.children);
+			const nested = childOperations(this.children, target.mode);
 			const hasChildren = Object.keys(nested.set).length > 0;
 			const input = !hasChildren
 				? scalar
 				: target.of === 'model' && target.mode === 'create'
-					? { ...(valueObject(scalar) ? scalar : {}), ...nested.set }
+					? { ...(value_object(scalar) ? scalar : {}), ...nested.set }
 					: {
-							target: target.id ?? null,
+							target: { id: target.id ?? null, ...(this.#revision === undefined ? {} : { revision: this.#revision }) },
 							set: {
-								...(valueObject(scalar) && valueObject(scalar['set']) ? scalar['set'] : {}),
+								...(value_object(scalar) && value_object(scalar['set']) ? scalar['set'] : {}),
 								...nested.set
 							}
 						};
 			if (input === null) return null;
 			this.notice = null;
 			const sent = { ...this.values };
-			const observed = {
-				...nested.observed,
-				...(target.of === 'model' &&
-				target.mode === 'update' &&
-				target.id !== undefined &&
-				this.#revision !== undefined
-					? { [target.id]: this.#revision }
-					: {})
-			};
 			const result = yield* Effect.result(
-				this.#act(this.spec.callable, [input], {
-					key: this.#key,
-					...(Object.keys(observed).length === 0 ? {} : { observed })
-				})
+				actOutcome(this.#act({ [this.spec.callable]: [input] }, { key: this.#key }))
 			);
-			const outcome: Outcome =
-				result._tag === 'Success'
-					? result.success
-					: result.failure._tag === 'ActRefused'
-						? {
-								kind: 'refused',
-								code: result.failure.code,
-								message: result.failure.message,
-								...(result.failure.field === undefined ? {} : { field: result.failure.field })
-							}
-						: result.failure._tag === 'ActConflict'
-							? { kind: 'conflict', records: result.failure.records }
-							: { kind: 'unknown', invocation: result.failure.invocation };
+			// A confirmed action's unreadable output is not a retryable unknown outcome.
+			if (result._tag === 'Failure') {
+				this.notice = { tone: 'danger', text: result.failure.message };
+				return null;
+			}
+			const outcome = result.success;
 			this.accept(outcome, sent);
 			return outcome;
 		}).pipe(
@@ -598,8 +580,8 @@ export class FormState {
 		this.#startAttempt = undefined;
 		this.children = {};
 		this.restored = false;
-		for (const form of this.childForms.values()) form.reset();
-		this.childForms.clear();
+		for (const form of this.child_forms.values()) form.reset();
+		this.child_forms.clear();
 		this.#clearStorage();
 		for (const reset of this.#resets) reset();
 	}
@@ -623,7 +605,7 @@ export class FormState {
 const KEY = Symbol.for('norbital.ui.form');
 export const provideForm = (form: FormState) => setContext(KEY, form);
 /** The enclosing `Form`'s state, or `undefined` outside a form. */
-export const useForm = (): FormState | undefined => getContext<FormState | undefined>(KEY);
+export const use_form = (): FormState | undefined => getContext<FormState | undefined>(KEY);
 
 const RECORD_CONTROLLER = Symbol.for('norbital.ui.recordController');
 /** The enclosing record's shared form state and historical-view guard. */
@@ -634,5 +616,5 @@ export type RecordControllerScope = {
 export const provideRecordController = (scope: RecordControllerScope) =>
 	setContext(RECORD_CONTROLLER, scope);
 /** The enclosing native record controller; check `historical` before refreshing or entering edit mode after an action. */
-export const useRecordController = () =>
+export const use_record_controller = () =>
 	getContext<RecordControllerScope | undefined>(RECORD_CONTROLLER);

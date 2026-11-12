@@ -1,0 +1,18 @@
+[
+	{
+		"id": "0199a000-0000-4000-8000-000000000101",
+		"integration": "erp",
+		"name": "ERP",
+		"owner": null,
+		"active": true,
+		"configuration": {}
+	},
+	{
+		"id": "0199a000-0000-4000-8000-000000000102",
+		"integration": "mail",
+		"name": "Support",
+		"owner": null,
+		"active": true,
+		"configuration": {}
+	}
+]

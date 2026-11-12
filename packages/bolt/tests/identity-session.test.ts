@@ -5,7 +5,7 @@ import { RateWindows } from '../src/engine/access/rate.ts';
 import type { RowData } from '../src/engine/contracts.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { authenticate, defaultName, makeIdentityHost } from '../src/engine/identity/session.ts';
+import { authenticate, defaultName, make_identity_host } from '../src/engine/identity/session.ts';
 
 /** An identity host whose native database answers one session row (or fails), counting reads. */
 const host = Effect.fnUntraced(function* (
@@ -21,12 +21,12 @@ const host = Effect.fnUntraced(function* (
 		write: () => Effect.succeed({ rows: [], affected: 0 }),
 		transaction: () => Effect.die(new Error('unused'))
 	});
-	const h = yield* makeIdentityHost({
+	const h = yield* make_identity_host({
 		db,
 		now: Effect.sync(() => new Date('2026-09-26T00:00:00Z')),
 		windows: new RateWindows(),
 		keys: { session: Buffer.alloc(32), ipMac: Buffer.alloc(32) },
-		publicUrl: 'https://w.test'
+		public_url: 'https://w.test'
 	}).pipe(Effect.provide(NodeCrypto.layer));
 	return { h, reads: () => reads };
 });
@@ -56,7 +56,7 @@ describe('session authentication', () => {
 			expect(t.reads()).toBe(1);
 			rows = [];
 			expect(t.h.db.identityWrites()).toBe(0);
-			expect(yield* Effect.flip(authenticate(t.h, 'tok'))).toMatchObject({ code: 'notMember' });
+			expect(yield* Effect.flip(authenticate(t.h, 'tok'))).toMatchObject({ code: 'not_member' });
 			expect(t.reads()).toBe(2);
 		})
 	);
@@ -68,7 +68,7 @@ describe('session authentication', () => {
 			const absent = yield* Effect.result(authenticate(t.h, 'tok'));
 			expect(Result.isFailure(absent) && absent.failure).toMatchObject({
 				_tag: 'IdentityRefusal',
-				code: 'notMember'
+				code: 'not_member'
 			});
 			const failure = DbError.make('08006', 'db down');
 			answer = () => Effect.fail(failure);
@@ -88,7 +88,7 @@ describe('session authentication', () => {
 			const absent = yield* Effect.result(authenticate(b.h, 'tok'));
 			expect(Result.isFailure(absent) && absent.failure).toMatchObject({
 				_tag: 'IdentityRefusal',
-				code: 'notMember'
+				code: 'not_member'
 			});
 		})
 	);

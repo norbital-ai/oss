@@ -26,7 +26,7 @@
 	<div
 		role="status"
 		aria-busy="true"
-		aria-label={msg(bolt, 'view.loading', 'Loading')}
+		aria-label={msg(bolt, 'view.loading')}
 		data-read="loading"
 	>
 		{#if skeleton}{@render skeleton()}
@@ -39,17 +39,17 @@
 		icon="lock"
 		read="noAccess"
 		variant="card"
-		title={msg(bolt, 'view.noAccess', 'No access to {what}', { what })}
+		title={msg(bolt, 'view.noAccess', { what })}
 	/>
 {:else if state.kind === 'error'}
 	<Alert variant="destructive" data-read="error">
 		<Glyph name="alert" class="size-4" />
 		<div class="flex flex-col gap-1 text-sm">
 			<p class="font-medium">
-				{msg(bolt, 'view.errorTitle', '{what} could not be loaded', { what })}
+				{msg(bolt, 'view.errorTitle', { what })}
 			</p>
 			<p class="break-words opacity-90">
-				{msg(bolt, 'view.error', '{what} could not be read ({code}): {message}', {
+				{msg(bolt, 'view.error', {
 					what,
 					code: state.code,
 					message: state.message

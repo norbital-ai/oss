@@ -48,10 +48,9 @@ const base: EngineManifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const findings = (over: Partial<EngineManifest>) =>
@@ -111,7 +110,7 @@ describe('layer maps at compile time (bolt check)', () => {
 		const deep = Array.from({ length: LAYER_MAX_DEPTH + 1 }, (_, i) =>
 			['nodes', ...Array.from({ length: i }, () => 'parent')].join('.')
 		);
-		const sixth = deep.at(-1)!;
+		const sixth = present(deep.at(-1));
 		expect(sixth.split('.')).toHaveLength(LAYER_MAX_DEPTH + 1);
 		expect(
 			findings({

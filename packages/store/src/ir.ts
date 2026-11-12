@@ -30,8 +30,7 @@ export type PathTest =
 	| { readonly op: Cmp | 'like'; readonly arg: Json }
 	| { readonly op: 'in'; readonly args: readonly Json[]; readonly negated: boolean }
 	| { readonly op: 'null'; readonly is: boolean }
-	| { readonly op: 'contains'; readonly arg: Json }
-	| { readonly op: 'isEmpty'; readonly is: boolean };
+	| { readonly op: 'contains'; readonly arg: Json };
 /** The element an `each` quantifies over, as a `path` names its field. */
 export const ELEMENT = '$e';
 /** The normalized `Where` (K3): one evaluator in SQL, one in JS (live routing). */
@@ -55,18 +54,13 @@ export type Pred =
 			readonly args: readonly Json[] | Operand | MemberRef;
 	  }
 	| { readonly t: 'null'; readonly field: string; readonly is: boolean }
-	| {
-			readonly t: 'list';
-			readonly field: string;
-			readonly op: 'has' | 'hasAny' | 'hasAll' | 'isEmpty';
-			readonly arg: Json;
-	  }
+	| { readonly t: 'has'; readonly field: string; readonly arg: Json }
 	| { readonly t: 'period'; readonly field: string; readonly op: 'contains'; readonly arg: Arg }
 	/** A period against a span: its ends, each a literal or an operand; a null literal `hi` is open. */
 	| {
 			readonly t: 'period';
 			readonly field: string;
-			readonly op: 'overlaps' | 'within' | 'startsWithin' | 'endsWithin';
+			readonly op: 'overlaps' | 'contained_by' | 'starts_within' | 'ends_within';
 			readonly lo: Arg;
 			readonly hi: Arg;
 	  }
@@ -121,7 +115,6 @@ export type Pred =
 			readonly pred: Pred;
 	  }
 	| { readonly t: 'json'; readonly field: string; readonly contains: Json }
-	| { readonly t: 'json'; readonly field: string; readonly isEmpty: boolean }
 	/**
 	 * `$search`: the model's `search.text` document holds every word of `text`, or a link it names reaches a row whose own
 	 * search does; `via` is the models already searched on the way, so a cycle of links stops.
@@ -195,7 +188,7 @@ export type ListRead = {
 	readonly order?: Order | undefined;
 	readonly search?: string | undefined;
 	/** First row of each group, in the declared order; grouping precedes cursor seeking. */
-	readonly firstPer?: readonly string[] | undefined;
+	readonly first_per?: readonly string[] | undefined;
 	readonly page: PageIR;
 	/** Also count every row the read matches (scope, `where`, search), its page and cursor aside: the answer's `total`. */
 	readonly total?: true | undefined;

@@ -19,11 +19,11 @@ export type IncomingFile = {
 	readonly fetch?: () => Promise<Uint8Array>;
 };
 /** One message in a platform's delivery, parsed by its adapter. `id` is the platform's and deduplicates. */
-export type Incoming = Pick<ChatMessage, 'id' | 'thread' | 'sentAt' | 'from' | 'text'> &
+export type Incoming = Pick<ChatMessage, 'id' | 'thread' | 'sent_at' | 'from' | 'text'> &
 	Partial<
 		Pick<
 			ChatMessage,
-			'group' | 'mentioned' | 'repliedTo' | 'replyTo' | 'title' | 'version' | 'deleted'
+			'group' | 'mentioned' | 'replied_to' | 'reply_to' | 'title' | 'version' | 'deleted'
 		>
 	> & { readonly files?: readonly IncomingFile[] };
 /**
@@ -60,11 +60,11 @@ export const recent = <V>(limit = 1000) => {
 /** The platform's refusal of a call: its status decides whether a send retries. */
 export class PlatformError extends Error {
 	readonly status: number;
-	readonly retryAfterMs: number | undefined;
-	constructor(message: string, status: number, retryAfterMs?: number) {
+	readonly retry_after_ms: number | undefined;
+	constructor(message: string, status: number, retry_after_ms?: number) {
 		super(message);
 		this.status = status;
-		this.retryAfterMs = retryAfterMs;
+		this.retry_after_ms = retry_after_ms;
 	}
 }
 /** A delivery that fails its signature. */
@@ -136,7 +136,7 @@ export type ChatPlatform = {
 };
 /** What a connection gets from its host. `receive` is for a platform that pushes over a socket or a long poll: it stores
  * before it resolves, and a rejection means the platform's message must not be acknowledged. */
-export type ChatHost = Pick<DriverOpen, 'fetch' | 'webhookUrl'> & {
+export type ChatHost = Pick<DriverOpen, 'fetch' | 'webhook_url'> & {
 	receive(messages: readonly Incoming[]): Promise<void>;
 };
 
@@ -149,7 +149,7 @@ const Message = Schema.Struct({
 const failure = (name: string, error: unknown) => {
 	const message = `${name}: ${error instanceof Error ? error.message : 'failed'}`;
 	return error instanceof PlatformError
-		? answerFailure(message, error.status, undefined, error.retryAfterMs)
+		? answerFailure(message, error.status, undefined, error.retry_after_ms)
 		: new ProviderUnavailable({ message });
 };
 
@@ -188,15 +188,15 @@ const stored = async (message: Incoming, fetched = true) => {
 			...(kept ? { bin: bins.length - 1 } : {})
 		});
 	}
-	const { files: _files, group, mentioned, repliedTo, replyTo, ...rest } = message;
+	const { files: _files, group, mentioned, replied_to, reply_to, ...rest } = message;
 	return {
 		bins,
 		wire: inbound({
 			...rest,
 			group: group ?? false,
 			mentioned: mentioned ?? false,
-			repliedTo: repliedTo ?? false,
-			replyTo: replyTo ?? null,
+			replied_to: replied_to ?? false,
+			reply_to: reply_to ?? null,
 			attachments
 		})
 	};
@@ -210,7 +210,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 	name: platform.name,
 	label: platform.via,
 	description: platform.description,
-	...(platform.idempotent === undefined ? {} : { idempotentSends: true }),
+	...(platform.idempotent === undefined ? {} : { idempotent_sends: true }),
 	...(platform.icon === undefined ? {} : { icon: platform.icon }),
 	setup: {
 		kind: 'form',
@@ -251,7 +251,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 			call('connect', async () => {
 				const made = await platform.connect(settings, {
 					fetch: ctx.fetch,
-					webhookUrl: ctx.webhookUrl,
+					webhook_url: ctx.webhook_url,
 					receive: store
 				});
 				const level = made.changes ? 'changes' : made.history ? 'history' : 'webhook';
@@ -276,7 +276,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 			);
 		else yield* report({ state: 'unpaired' });
 		const close = (connection: ChatConnection | null) =>
-			Effect.promise(async () => connection?.close?.()).pipe(Effect.ignore);
+			Effect.tryPromise(async () => connection?.close?.()).pipe(Effect.ignore);
 		// the cursor moves only once what it covers is stored, so a failure repeats the same catch-up
 		const held = yield* hostCall(`read ${name} cursor`, () => ctx.credentials.load());
 		const kept = held.get('cursor');
@@ -383,7 +383,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 				const sent = yield* call('send', () =>
 					connection.send(m.to, m.text, m.id ?? `${m.to}:${m.text}`, files)
 				);
-				return { providerId: sent.id };
+				return { provider_id: sent.id };
 			}),
 			reconcile:
 				platform.consistency === 'webhook'

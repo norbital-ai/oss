@@ -1,3 +1,4 @@
+import { committed, single_act } from './act-envelope.ts';
 // Semantic (invariant) validation: a registered rule's issues disable Save and block submit without locking the
 // field, and fixing the value clears them reactively.
 import './dom.ts';
@@ -49,11 +50,13 @@ const settle = async () => {
 async function show(part: 'record' | 'create' | 'sheet') {
 	const acts: Json[] = [];
 	const { bolt } = await viewFixture({
+		catalog,
 		get: (c, id) =>
 			c === 'jobs' && id === 'j1' ? { id: 'j1', revision: 1, title: 'Paint' } : null,
-		act: (_callable, input) => {
+		act: (body) => {
+			const { input } = single_act(body);
 			acts.push(input);
-			return { kind: 'committed', output: null, records: [] };
+			return committed(body);
 		}
 	});
 	const target = document.body.appendChild(document.createElement('div'));
@@ -125,7 +128,7 @@ it.live('Clear resets a create form and its saved draft without submitting or cl
 		assert.ok(v.target.querySelector('[role=dialog]'));
 		assert.equal(v.form().get('title'), null);
 		assert.equal(v.form().dirty, false);
-		assert.equal(v.form().fieldErrors.size, 0);
+		assert.equal(v.form().field_errors.size, 0);
 		assert.equal(localStorage.length, 0);
 		assert.deepEqual(v.acts, []);
 	})
@@ -181,32 +184,34 @@ it.live('submit sends nothing while an issue exists; unregister removes the rule
 		const acts: Json[] = [];
 		const { bolt } = yield* browser(() =>
 			viewFixture({
-				act: (_callable, input) => {
+				catalog,
+				act: (body) => {
+					const { input } = single_act(body);
 					acts.push(input);
-					return { kind: 'committed', output: null, records: [] };
+					return committed(body);
 				}
 			})
 		);
 		const form = new FormState(specOf('jobs', catalog.jobs, 'create'), null, {}, bolt.act, text);
-		const unregister = form.addValidation(notBad(form));
+		const unregister = form.add_validation(notBad(form));
 		form.set('title', 'bad');
-		assert.deepEqual(form.semanticErrors, [{ field: 'title', message: 'Title cannot be bad' }]);
-		assert.equal(form.fieldErrors.get('title'), 'Title cannot be bad');
+		assert.deepEqual(form.semantic_errors, [{ field: 'title', message: 'Title cannot be bad' }]);
+		assert.equal(form.field_errors.get('title'), 'Title cannot be bad');
 		form.errors = new Map([['title', 'The server refused this title']]);
-		assert.equal(form.fieldErrors.get('title'), 'The server refused this title');
+		assert.equal(form.field_errors.get('title'), 'The server refused this title');
 		form.errors = new Map();
-		assert.equal(form.semanticError('title'), 'Title cannot be bad');
-		assert.equal(form.semanticError('other'), undefined);
-		assert.equal(form.canSubmit, true, 'permission is unaffected');
+		assert.equal(form.semantic_error('title'), 'Title cannot be bad');
+		assert.equal(form.semantic_error('other'), undefined);
+		assert.equal(form.can_submit, true, 'permission is unaffected');
 		assert.equal(form.locked('title'), false);
-		assert.equal(form.canSave, false);
+		assert.equal(form.can_save, false);
 		assert.equal(form.validate(), false);
 		assert.equal(yield* form.submit(), null);
 		assert.equal(yield* form.prepare(), false);
 		assert.deepEqual(acts, []);
 		unregister();
-		assert.deepEqual(form.semanticErrors, []);
-		assert.equal(form.canSave, true);
+		assert.deepEqual(form.semantic_errors, []);
+		assert.equal(form.can_save, true);
 		assert.equal((yield* form.submit())?.kind, 'committed');
 		assert.deepEqual(acts, [[{ title: 'bad' }]]);
 	})

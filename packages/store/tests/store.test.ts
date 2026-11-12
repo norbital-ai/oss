@@ -3,7 +3,7 @@ import { Effect, Exit } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
 import {
 	build,
-	compileWrite,
+	compile_write,
 	read,
 	schema,
 	store,
@@ -169,7 +169,7 @@ describe('Store over a schema value', () => {
 				])
 			);
 			const query = {
-				firstPer: ['tenant'],
+				first_per: ['tenant'],
 				order_by: { generation: 'desc' },
 				where: { generation: { lt: 4 } },
 				limit: 1
@@ -492,7 +492,7 @@ describe('Store over a schema value', () => {
 				yield* script(pg, 'COMMIT');
 				for (const name of ['template', 'missing', 'ready_at.nested']) {
 					const refused = yield* Effect.flip(
-						compileWrite(releases.catalog, {
+						compile_write(releases.catalog, {
 							kind: 'update',
 							table: 'release',
 							where: { t: 'const', value: true },

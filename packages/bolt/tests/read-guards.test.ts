@@ -70,12 +70,12 @@ describe('native read guards', () => {
 				const error = yield* Effect.flip(
 					Effect.gen(function* () {
 						yield* failed.capture.read([statement(99)], answer('unpublished'));
-						return yield* Effect.fail(BoltError.make('badAnswer', 'decode', 'crossing refused'));
+						return yield* Effect.fail(BoltError.make('bad_answer', 'decode', 'crossing refused'));
 					})
 				);
 				expect(error).toBeInstanceOf(BoltError);
 				if (!(error instanceof BoltError)) throw error;
-				expect(error.code).toBe('badAnswer');
+				expect(error.code).toBe('bad_answer');
 				expect(recorder.snapshot()).toEqual(beforeFailure);
 				const failedRead = recorder.begin(new Set(['customers']));
 				expect(
@@ -215,7 +215,7 @@ describe('native read guards', () => {
 					Array.from({ length: LIMITS.readGuards.count }, (_, i) => statement(i + 1)),
 					answer('overflow')
 				);
-				expect(yield* Effect.flip(finish(overflow))).toMatchObject({ code: 'readBudgetExceeded' });
+				expect(yield* Effect.flip(finish(overflow))).toMatchObject({ code: 'read_budget_exceeded' });
 				expect(recorder.snapshot()).toEqual(before);
 			})
 	);
@@ -239,7 +239,7 @@ describe('native read guards', () => {
 					[{ text: sql.text, params: ['界'.repeat(Math.floor(LIMITS.readGuards.bytes / 3))] }],
 					answer('overflow')
 				);
-				expect(yield* Effect.flip(finish(overflow))).toMatchObject({ code: 'readBudgetExceeded' });
+				expect(yield* Effect.flip(finish(overflow))).toMatchObject({ code: 'read_budget_exceeded' });
 				expect(recorder.snapshot()).toEqual(before);
 			})
 	);

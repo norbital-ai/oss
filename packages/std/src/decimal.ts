@@ -1,9 +1,9 @@
 // std/decimal (§3.7, rule 68): exact decimals. A value is a bigint coefficient and a scale, so no amount ever passes
-// through a float; `Decimal.fromNumber` is the one explicit door from a double. `valueOf` throws, so `a + b` on two
+// through a float; `Decimal.from_number` is the one explicit door from a double. `valueOf` throws, so `a + b` on two
 // decimals fails loudly instead of concatenating strings (`>` on Decimal is doctor DR-1).
 
-/** The rounding modes; `halfUp` is Postgres `round(numeric)`: half away from zero. */
-export const Rounding = ['halfUp', 'halfEven', 'down', 'up', 'floor', 'ceil'] as const;
+/** The rounding modes; `half_up` is Postgres `round(numeric)`: half away from zero. */
+export const Rounding = ['half_up', 'half_even', 'down', 'up', 'floor', 'ceil'] as const;
 export type Rounding = (typeof Rounding)[number];
 /** An ISO 4217 currency code, branded. */
 export type CurrencyCode = string & { readonly __currency: unique symbol };
@@ -32,9 +32,9 @@ function divRound(n: bigint, d: bigint, mode: Rounding): bigint {
 			return neg ? away : q;
 		case 'ceil':
 			return neg ? q : away;
-		case 'halfUp':
+		case 'half_up':
 			return twice >= d ? away : q;
-		case 'halfEven':
+		case 'half_even':
 			return twice > d || (twice === d && q % 2n !== 0n) ? away : q;
 	}
 }
@@ -47,7 +47,7 @@ const BRAND: unique symbol = Symbol.for('norbital.std.decimal');
  * `dec`); arithmetic is `plus`, `minus`, `times`, `div` with a rounding mode, comparison is `cmp`. `valueOf` throws, so
  * `a + b` on decimals fails loudly.
  * @example
- * dec('19.90').times(3).round(2, 'halfUp').toString() // '59.70'
+ * dec('19.90').times(3).round(2, 'half_up').toString() // '59.70'
  */
 export class Decimal {
 	readonly #c: bigint;
@@ -70,23 +70,25 @@ export class Decimal {
 		if (typeof v === 'bigint') return new Decimal(v, 0);
 		if (typeof v === 'number') {
 			if (!Number.isSafeInteger(v))
-				throw new RangeError(`${v} is not an integer; use Decimal.fromNumber(x, scale)`);
+				throw new RangeError(`${v} is not an integer; use Decimal.from_number(x, scale)`);
 			return new Decimal(BigInt(v), 0);
 		}
 		// another copy's Decimal (two std builds on one page) crosses as its exact text
 		const text = typeof v === 'string' ? v : '$dec' in v ? v.$dec : String(v);
 		const m = TEXT.exec(typeof text === 'string' ? text.trim() : '');
-		if (m === null) throw new RangeError(`'${String(text)}' is not a decimal`);
+		const whole = m?.[2];
+		if (m === null || whole === undefined) throw new RangeError(`'${String(text)}' is not a decimal`);
 		const frac = m[3] ?? '';
-		const c = BigInt(m[2]! + frac);
+		const c = BigInt(whole + frac);
 		return new Decimal(m[1] === '-' ? -c : c, frac.length);
 	}
 
 	/** The only door from a float: its shortest round-trip digits, rounded to `scale`. */
-	static fromNumber(v: number, scale: number, mode: Rounding = 'halfUp'): Decimal {
+	static from_number(v: number, scale: number, mode: Rounding = 'half_up'): Decimal {
 		const m = Number.isFinite(v) ? FLOAT.exec(String(v)) : null;
-		if (m === null) throw new RangeError(`${v} is not a finite number`);
-		const digits = m[2]! + (m[3] ?? ''),
+		const whole = m?.[2];
+		if (m === null || whole === undefined) throw new RangeError(`${v} is not a finite number`);
+		const digits = whole + (m[3] ?? ''),
 			exp = Number(m[4] ?? 0) - (m[3] ?? '').length;
 		const c = (m[1] === '-' ? -1n : 1n) * BigInt(digits);
 		const d = exp >= 0 ? new Decimal(c * pow10(exp), 0) : new Decimal(c, -exp);
@@ -115,7 +117,7 @@ export class Decimal {
 		return new Decimal(this.#c * b.#c, this.#s + b.#s);
 	}
 	/** Division needs a scale: the result is rounded to it. */
-	div(o: DecimalLike, scale: number, mode: Rounding = 'halfUp'): Decimal {
+	div(o: DecimalLike, scale: number, mode: Rounding = 'half_up'): Decimal {
 		const b = Decimal.of(o);
 		if (b.#c === 0n) throw new RangeError('division by zero');
 		// (a / 10^sa) / (b / 10^sb) = a·10^(sb + scale − sa) / b, then / 10^scale.
@@ -128,15 +130,15 @@ export class Decimal {
 		}
 		return new Decimal(divRound(n, d, mode), scale);
 	}
-	round(scale: number, mode: Rounding = 'halfUp'): Decimal {
+	round(scale: number, mode: Rounding = 'half_up'): Decimal {
 		if (!Number.isInteger(scale) || scale < 0)
 			throw new RangeError(`scale ${scale} is not a whole number ≥ 0`);
 		if (scale >= this.#s) return new Decimal(this.#at(scale), scale);
 		return new Decimal(divRound(this.#c, pow10(this.#s - scale), mode), scale);
 	}
 	/** Rounded to the currency's minor unit (JPY 0, SGD 2, KWD 3). */
-	roundTo(c: CurrencyCode | string, mode: Rounding = 'halfUp'): Decimal {
-		return this.round(minorDigits(c), mode);
+	round_to(c: CurrencyCode | string, mode: Rounding = 'half_up'): Decimal {
+		return this.round(minor_digits(c), mode);
 	}
 	neg(): Decimal {
 		return new Decimal(-this.#c, this.#s);
@@ -147,7 +149,7 @@ export class Decimal {
 	sign(): -1 | 0 | 1 {
 		return this.#c < 0n ? -1 : this.#c > 0n ? 1 : 0;
 	}
-	isZero(): boolean {
+	is_zero(): boolean {
 		return this.#c === 0n;
 	}
 	/** The number of digits after the point, as stored (`1.20` → 2). */
@@ -184,12 +186,12 @@ export class Decimal {
 		return { $dec: this.toString() };
 	}
 	/** Lossy, and named so. */
-	toNumber(): number {
+	to_number(): number {
 		return Number(this.toString());
 	}
 	valueOf(): never {
 		throw new TypeError(
-			'Decimal has no primitive value: use plus/minus/cmp, or toNumber() explicitly'
+			'Decimal has no primitive value: use plus/minus/cmp, or to_number() explicitly'
 		);
 	}
 }
@@ -235,5 +237,5 @@ export function currency(code: string): CurrencyCode {
 	return code as CurrencyCode;
 }
 /** ISO 4217 minor-unit digits. */
-export const minorDigits = (c: CurrencyCode | string): 0 | 2 | 3 =>
+export const minor_digits = (c: CurrencyCode | string): 0 | 2 | 3 =>
 	ZERO.has(c) ? 0 : THREE.has(c) ? 3 : 2;

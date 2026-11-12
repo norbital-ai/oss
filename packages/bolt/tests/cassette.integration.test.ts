@@ -11,17 +11,16 @@ import { Context, Effect, Layer, Result } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/index.ts';
 import { Agents } from '../src/engine/services.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import type { AiResponse } from '../src/engine/contracts.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import type { AiPortResponse } from '../src/engine/contracts.ts';
 import { TestWorkspace, type TestOptions } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: {
 			tz: 'UTC',
 			locale: 'en',
-			agent: { triage: false },
-			ai: { models: ['default', 'fast'], default: 'default' }
+			agent: { triage: false }
 		},
 		models: {},
 		relationships: {},
@@ -31,15 +30,15 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		teams: {},
 		automations: {},
-		connections: {},
+
 		mcp: {},
 		apps: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
-const reply = (content: string): AiResponse => ({
+const reply = (content: string): AiPortResponse => ({
 	content,
-	toolCalls: [],
+	tool_calls: [],
 	finish: 'stop',
 	usage: { input: 10, output: 5 }
 });
@@ -120,7 +119,7 @@ describe('Fakes.ai.cassette', () => {
 						TestWorkspace.layer({ manifest, fakes: { ai: { cassette: { default: file } } } })
 					)
 				);
-				expect(malformed.message).toMatch(/'default' turn 0 is not an AiResponse/);
+				expect(malformed.message).toMatch(/'default' turn 0 is not an AiPortResponse/);
 				const ambiguous = yield* Effect.flip(
 					Layer.build(
 						TestWorkspace.layer({

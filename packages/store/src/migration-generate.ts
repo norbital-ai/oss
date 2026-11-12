@@ -1,14 +1,16 @@
 // Migration file authoring is separate from runtime validation, so a cell applying files carries no SQL generator.
 import { Effect } from 'effect';
+import { q, literal as lit } from '@norbital-ai/std/sql';
 import { StoreError } from './errors.ts';
 import { canonical } from '@norbital-ai/std/hash';
 import {
-	archiveOf,
-	checkSquashSources,
-	checksumOf,
-	snapshotOf,
+	archive_of,
+	check_squash_sources,
+	checksum_of,
+	snapshot_of,
 	type MigrationFile
 } from './migrate.ts';
+import type { SchemaSnapshot } from './schema/snapshot.ts';
 import {
 	plan,
 	statements,
@@ -22,17 +24,15 @@ import type { SchemaObject } from './schema/ddl.ts';
 import type { Sql } from './read/sql.ts';
 
 /** Explicit factory reset of a dedicated namespace, including objects left by older declarations. */
-export const destroyNamespace = (namespace: string): readonly Sql[] => [
+export const destroy_namespace = (namespace: string): readonly Sql[] => [
 	{ text: `DROP SCHEMA IF EXISTS ${q(namespace)} CASCADE`, params: [] },
 	{ text: `CREATE SCHEMA ${q(namespace)}`, params: [] }
 ];
 
-const refuse = (code: 'migrationInvalid', message: string) =>
+const refuse = (code: 'migration_invalid', message: string) =>
 	Effect.fail(StoreError.of(code, 'admission', message));
 
 // ── inline shapes ──
-const q = (id: string): string => `"${id.replaceAll('"', '""')}"`;
-const lit = (v: string): string => `'${v.replaceAll("'", "''")}'`;
 const marker = (id: string): string =>
 	id.replace(/[%\s()]/g, (char) =>
 		char === '(' ? '%28' : char === ')' ? '%29' : encodeURIComponent(char)
@@ -42,153 +42,6 @@ function validation(name: string, violations: string): string {
 	let delimiter = '$store$';
 	while (body.includes(delimiter)) delimiter = `${delimiter.slice(0, -1)}_$`;
 	return `do ${delimiter} ${body} ${delimiter};`;
-}
-const DATE = `'^\\d{4}-\\d{2}-\\d{2}$'`;
-/** A SQL condition true where the json value `x` is no value of shape `k` (null admitted where `k` is optional). */
-export function shapeViolation(x: string, k: FieldSpec, depth = 0): string {
-	const v = `v${depth}`;
-	const not = (cond: string) => `NOT coalesce(${cond}, false)`;
-	const absent = `(${x} IS NULL OR ${x} = 'null'::jsonb)`;
-	const body = (): string => {
-		if (k.many === true) {
-			const { many: _many, optional: _optional, min_items, max_items, key: _key, ...item } = k;
-			return `CASE WHEN jsonb_typeof(${x}) = 'array' THEN (${min_items === undefined ? '' : `jsonb_array_length(${x}) < ${min_items} OR `}${max_items === undefined ? '' : `jsonb_array_length(${x}) > ${max_items} OR `}EXISTS (SELECT 1 FROM jsonb_array_elements(${x}) ${v}(e) WHERE ${shapeViolation(`${v}.e`, item, depth + 1)})) ELSE true END`;
-		}
-
-		switch (k.kind) {
-			case 'text':
-			case 'currency':
-				return not(
-					`jsonb_typeof(${x}) = 'string'${k.kind === 'text' && k.max !== undefined ? ` AND length(${x} #>> '{}') <= ${k.max}` : ''}${k.kind === 'text' && k.format === 'email' ? ` AND ${x} #>> '{}' ~ '^[^@[:space:]]+@[^@[:space:]]+$'` : ''}`
-				);
-			case 'time':
-				return not(
-					`jsonb_typeof(${x}) = 'string' AND ${x} #>> '{}' ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]+)?)?$'`
-				);
-			case 'enum':
-				return not(
-					`jsonb_typeof(${x}) = 'string' AND ${k.values.length === 0 ? 'false' : `${x} #>> '{}' IN (${k.values.map(lit).join(', ')})`}`
-				);
-			case 'state':
-				return not(
-					`jsonb_typeof(${x}) = 'string' AND ${Object.keys(k.states).length === 0 ? 'false' : `${x} #>> '{}' IN (${Object.keys(k.states).sort().map(lit).join(', ')})`}`
-				);
-			case 'int':
-			case 'count':
-				return `CASE WHEN jsonb_typeof(${x}) = 'number' THEN NOT ((${x} #>> '{}')::numeric % 1 = 0${k.kind === 'count' ? ` AND (${x} #>> '{}')::numeric >= 0` : ''}${k.kind === 'int' && k.min !== undefined ? ` AND (${x} #>> '{}')::numeric >= ${k.min}` : ''}${k.kind === 'int' && k.max !== undefined ? ` AND (${x} #>> '{}')::numeric <= ${k.max}` : ''}) ELSE true END`;
-			case 'number':
-				return `CASE WHEN jsonb_typeof(${x}) = 'number' THEN NOT (true${k.min === undefined ? '' : ` AND (${x} #>> '{}')::numeric >= ${k.min}`}${k.max === undefined ? '' : ` AND (${x} #>> '{}')::numeric <= ${k.max}`}) ELSE true END`;
-			case 'decimal':
-			case 'money':
-			case 'sum':
-				return not(
-					`jsonb_typeof(${x}) = 'number' OR (jsonb_typeof(${x}) = 'string' AND ${x} #>> '{}' ~ '^-?[0-9]+([.][0-9]+)?$') OR (jsonb_typeof(${x} -> '$dec') = 'string' AND ${x} ->> '$dec' ~ '^-?[0-9]+([.][0-9]+)?$')`
-				);
-			case 'bool':
-				return `jsonb_typeof(${x}) <> 'boolean'`;
-			case 'date':
-				return not(
-					`jsonb_typeof(${x}) = 'string' AND ${x} #>> '{}' ~ ${DATE} AND pg_input_is_valid(${x} #>> '{}', 'date')`
-				);
-			case 'instant':
-				return not(
-					`jsonb_typeof(${x}) = 'string' AND pg_input_is_valid(${x} #>> '{}', 'timestamptz')`
-				);
-			case 'object': {
-				const fields = Object.entries(k.fields).map(([f, sub]) =>
-					shapeViolation(
-						`(${x} -> ${lit(f)})`,
-						sub.default === undefined ? sub : { ...sub, optional: true },
-						depth + 1
-					)
-				);
-				if (k.rest !== undefined) {
-					const names = Object.keys(k.fields);
-					fields.push(
-						`CASE WHEN jsonb_typeof(${x}) = 'object' THEN EXISTS (SELECT 1 FROM jsonb_each(${x}) ${v}(k, e) WHERE ${names.length === 0 ? '' : `${v}.k NOT IN (${names.map(lit).join(', ')}) AND `}${shapeViolation(`${v}.e`, k.rest, depth + 1)}) ELSE true END`
-					);
-				}
-				return fields.length === 0
-					? `jsonb_typeof(${x}) <> 'object'`
-					: `(jsonb_typeof(${x}) <> 'object' OR ${fields.join(' OR ')})`;
-			}
-			case 'record':
-				return `CASE WHEN jsonb_typeof(${x}) = 'object' THEN EXISTS (SELECT 1 FROM jsonb_each(${x}) ${v}(k, e) WHERE ${shapeViolation(`${v}.e`, k.of, depth + 1)}) ELSE true END`;
-			case 'json':
-				return k.shape === undefined ? 'false' : shapeViolation(x, k.shape, depth + 1);
-			case 'union':
-				return 'of' in k
-					? k.of.length === 0
-						? 'true'
-						: `(${k.of.map((arm) => shapeViolation(x, arm, depth + 1)).join(' AND ')})`
-					: Object.keys(k.arms).length === 0
-						? 'true'
-						: `(${Object.entries(k.arms)
-								.map(
-									([tag, fields]) =>
-										`(${not(`${x} ->> ${lit(k.by)} = ${lit(tag)}`)} OR ${shapeViolation(x, { kind: 'object', fields }, depth + 1)})`
-								)
-								.join(' AND ')})`;
-			case 'ref':
-				return typeof k.to === 'string'
-					? not(`jsonb_typeof(${x}) = 'string'`)
-					: shapeViolation(
-							x,
-							{
-								kind: 'object',
-								fields: { model: { kind: 'enum', values: k.to }, id: { kind: 'text' } }
-							},
-							depth + 1
-						);
-			case 'point':
-				return shapeViolation(
-					x,
-					{ kind: 'object', fields: { lat: { kind: 'number' }, lng: { kind: 'number' } } },
-					depth + 1
-				);
-			case 'vector':
-				return shapeViolation(
-					x,
-					{ kind: 'number', many: true, min_items: k.dim, max_items: k.dim },
-					depth + 1
-				);
-			case 'file': {
-				const file: FieldSpec = {
-					kind: 'object',
-					fields: {
-						id: { kind: 'text' },
-						name: { kind: 'text' },
-						mime: { kind: 'text' },
-						size: { kind: 'int', optional: true }
-					}
-				};
-				return shapeViolation(x, file, depth + 1);
-			}
-			case 'seq':
-				return shapeViolation(x, { kind: k.pattern === undefined ? 'int' : 'text' }, depth + 1);
-			case 'period': {
-				const bad = shapeViolation(
-					x,
-					{
-						kind: 'object',
-						fields:
-							k.of === 'date'
-								? { from: { kind: 'date' }, to: { kind: 'date', optional: true } }
-								: { start: { kind: 'instant' }, end: { kind: 'instant', optional: true } }
-					},
-					depth + 1
-				);
-				return `CASE WHEN ${bad} THEN true ELSE coalesce(${
-					k.of === 'date'
-						? `(${x} ->> 'from')::date > (${x} ->> 'to')::date`
-						: `(${x} ->> 'start')::timestamptz >= (${x} ->> 'end')::timestamptz`
-				}, false) END`;
-			}
-			default:
-				return 'false';
-		}
-	};
-	return k.optional === true ? `(NOT ${absent} AND ${body()})` : `(${absent} OR ${body()})`;
 }
 const INLINE = /*#__PURE__*/ new Set(['json', 'object', 'record']);
 /** Inline fields whose shape changed from `before` to `after`: each a data step and the check that follows it. */
@@ -205,10 +58,7 @@ function shapeSteps(before: SchemaSpec | null, after: SchemaSpec): string[] {
 				canonical(was) === canonical(k)
 			)
 				continue;
-			const condition =
-				spec.nativeRules !== undefined
-					? `${q(f)} is ${k.optional === true ? 'not ' : ''}null ${k.optional === true ? 'and' : 'or'} store_json_valid(${q(f)}, ${lit(canonical(k))}::jsonb) is not true`
-					: shapeViolation(q(f), k);
+			const condition = `${q(f)} is ${k.optional === true ? 'not ' : ''}null ${k.optional === true ? 'and' : 'or'} store_json_valid(${q(f)}, ${lit(canonical(k))}::jsonb) is not true`;
 			const bad = `select count(*) from ${q(t)} where ${condition}`;
 			out.push(
 				[
@@ -318,23 +168,25 @@ function compactStatements(p: Plan): PlannedStatement[] {
  * the file is refused until someone adds it.
  */
 export const generate = /*#__PURE__*/ (() =>
-	Effect.fn('Store.generate')(function* (
-		previous: SchemaSpec | null,
+	Effect.fn('Store.generate')(function* <E = never>(
+		previous: SchemaSnapshot | null,
 		next: SchemaSpec,
 		file: { readonly number: number; readonly name: string; readonly accept?: readonly string[] },
-		extra: (schema: SchemaSpec) => readonly SchemaObject[] = () => []
+		extra: (schema: SchemaSpec) => Effect.Effect<readonly SchemaObject[], E> = () => Effect.succeed([])
 	) {
 		if (!Number.isInteger(file.number) || file.number < 1 || file.number > 9999)
 			return yield* refuse(
-				'migrationInvalid',
+				'migration_invalid',
 				'migration number must be an integer from 1 to 9999'
 			);
 		const slug = file.name
 			.replace(/[^a-z0-9]+/gi, '_')
 			.replace(/^_+|_+$/g, '')
 			.toLowerCase();
-		if (slug === '') return yield* refuse('migrationInvalid', 'a migration needs a name');
-		const p = yield* plan(previous, next, extra);
+		if (slug === '') return yield* refuse('migration_invalid', 'a migration needs a name');
+		const before = previous?.schema ?? null;
+		const planned = yield* plan(before, next, extra);
+		const p = { ...planned, from: previous?.fingerprint ?? null };
 		const name = `${String(file.number).padStart(4, '0')}_${slug}.sql`;
 		// A replacement's drop and create belong at different ranks; grouping all of a step's statements reorders them.
 		const groups: { id: string; list: PlannedStatement[] }[] = [];
@@ -343,7 +195,7 @@ export const generate = /*#__PURE__*/ (() =>
 			if (last?.id === s.step) last.list.push(s);
 			else groups.push({ id: s.step, list: [s] });
 		}
-		const data = shapeSteps(previous, next);
+		const data = shapeSteps(before, next);
 		const dataAt = groups.findIndex(({ id, list }) => {
 			const create = p.steps.find((step) => step.id === id)?.create;
 			return (
@@ -386,19 +238,19 @@ export const generate = /*#__PURE__*/ (() =>
 			''
 		].join('\n');
 		const migration: MigrationFile = { name, sql: text };
-		return { file: migration, plan: p, snapshot: snapshotOf(next) };
+		return { file: migration, plan: p, snapshot: snapshot_of(next) };
 	}))();
 
 /** An editable fresh-database baseline. The host must replay it and its exact archive before recording a receipt. */
-export const generateSquash = /*#__PURE__*/ (() =>
-	Effect.fn('Store.generateSquash')(function* (
+export const generate_squash = /*#__PURE__*/ (() =>
+	Effect.fn('Store.generate_squash')(function* <E = never>(
 		originals: readonly MigrationFile[],
 		schema: SchemaSpec,
 		options: { readonly name?: string } = {},
-		extra: (schema: SchemaSpec) => readonly SchemaObject[] = () => []
+		extra: (schema: SchemaSpec) => Effect.Effect<readonly SchemaObject[], E> = () => Effect.succeed([])
 	) {
-		const ordered = yield* checkSquashSources(originals);
-		const archive = archiveOf(ordered);
+		const ordered = yield* check_squash_sources(originals);
+		const archive = archive_of(ordered);
 		const baseline = yield* generate(
 			null,
 			schema,
@@ -410,12 +262,12 @@ export const generateSquash = /*#__PURE__*/ (() =>
 		);
 		if (ordered.some((file) => file.name === baseline.file.name))
 			return yield* refuse(
-				'migrationInvalid',
+				'migration_invalid',
 				'the squash filename must differ from every original migration'
 			);
 		return {
 			file: baseline.file,
-			replaces: ordered.map((file) => ({ name: file.name, checksum: checksumOf(file) })),
+			replaces: ordered.map((file) => ({ name: file.name, checksum: checksum_of(file) })),
 			archive,
 			snapshot: baseline.snapshot
 		};

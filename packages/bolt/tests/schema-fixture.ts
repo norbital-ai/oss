@@ -1,12 +1,12 @@
 // A small workspace slice exercising every kind and constraint the DDL renders (shared by the schema tests), beside the
 // built-in layer every slice carries (`schemaSlice`).
-import { tablesOf } from '../src/protocol/catalog.ts';
+import { tables_of } from '../src/protocol/catalog.ts';
 import type { SchemaSlice } from '../src/engine/schema/plan.ts';
 
 export const slice = (): SchemaSlice => ({
 	tz: 'Asia/Singapore',
 	currency: 'SGD',
-	tables: tablesOf(
+	tables: tables_of(
 		{
 			customers: {
 				description: 'customers',
@@ -21,6 +21,7 @@ export const slice = (): SchemaSlice => ({
 					colour: { kind: 'vector', dim: 3, metric: 'l2', optional: true }
 				},
 				key: ['name'],
+				unique: [{ fields: ['name'], name: 'one_name', import_key: true }],
 				search: { text: ['name', 'tags', 'shout'] },
 				computed: { shout: { kind: 'text', expr: { upper: { field: 'name' } } } }
 			},
@@ -32,7 +33,7 @@ export const slice = (): SchemaSlice => ({
 					status: {
 						kind: 'state',
 						initial: 'open',
-						states: { open: { to: ['closed'] }, closed: { edit: 'none' } }
+						states: { open: { to: ['closed'] }, closed: {} }
 					},
 					total: { kind: 'money' },
 					jpy: { kind: 'money', currency: 'JPY', optional: true },
@@ -42,10 +43,11 @@ export const slice = (): SchemaSlice => ({
 					at: { kind: 'instant', default: { var: 'now' } },
 					note: { kind: 'json', optional: true }
 				},
+				locks: { closed: { where: { status: { eq: 'closed' } } } },
 				check: { closed_has_qty: { or: [{ status: { eq: 'open' } }, { qty: { gt: 0 } }] } },
 				computed: {
 					gross: { kind: 'money', expr: { round: [{ times: [{ field: 'total' }, 1.09] }, 2] } },
-					due: { kind: 'date', expr: { plusDays: [{ field: 'placed' }, 30] } },
+					due: { kind: 'date', expr: { plus_days: [{ field: 'placed' }, 30] } },
 					label: {
 						kind: 'text',
 						expr: {
@@ -58,12 +60,12 @@ export const slice = (): SchemaSlice => ({
 							]
 						}
 					},
-					month: { kind: 'date', expr: { startOf: [{ field: 'placed' }, 'month'] } },
+					month: { kind: 'date', expr: { start_of: [{ field: 'placed' }, 'month'] } },
 					big: { kind: 'bool', expr: { when: [{ gt: [{ field: 'qty' }, 10] }, true, false] } },
 					per: { kind: 'decimal', expr: { div: [{ field: 'total' }, { field: 'qty' }] } },
 					slug: {
 						kind: 'text',
-						expr: { lower: { regexReplace: [{ trim: { field: 'code' } }, '[^A-Za-z0-9]+', '-'] } }
+						expr: { lower: { regex_replace: [{ trim: { field: 'code' } }, '[^A-Za-z0-9]+', '-'] } }
 					},
 					head: {
 						kind: 'text',
@@ -79,7 +81,7 @@ export const slice = (): SchemaSlice => ({
 					period: { kind: 'period', of: 'date' },
 					scope: { kind: 'text', optional: true }
 				},
-				noOverlap: [{ key: ['customer', 'scope'], period: 'period' }],
+				no_overlap: [{ key: ['customer', 'scope'], period: 'period' }],
 				unique: [
 					{ fields: ['customer', 'grade'] },
 					{ fields: ['grade'], where: { scope: { eq: 'x' } }, name: 'one_x_grade' }

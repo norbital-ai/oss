@@ -74,7 +74,7 @@ export const exportOptions = (config: AppConfig, destination: 'export' | 'upload
 		'\t<key>destination</key>',
 		`\t<string>${destination}</string>`,
 		'\t<key>teamID</key>',
-		`\t<string>${config.ios.teamId}</string>`,
+		`\t<string>${config.ios.team_id}</string>`,
 		'\t<key>signingStyle</key>',
 		'\t<string>automatic</string>',
 		'\t<key>uploadSymbols</key>',

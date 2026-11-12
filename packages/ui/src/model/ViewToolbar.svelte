@@ -54,7 +54,7 @@
 		description?: string;
 		run: (selected: IdIn<R>[]) => Effect.Effect<unknown, Error> | void;
 		/** Turns row selection on; the item is disabled until records are selected. */
-		requiresSelection?: true;
+		requires_selection?: true;
 		/** Why the item cannot run now (over this selection), or null when it can; shown instead of `description`. */
 		disabled?: (selected: IdIn<R>[]) => string | null;
 	};
@@ -108,7 +108,7 @@
 			editableFields(exposure).length > 0 ||
 			editableRelations(exposure).length > 0 ||
 			(config?.actions ?? []).some(
-				(item) => item.requiresSelection || typeof item.disabled === 'function'
+				(item) => item.requires_selection || typeof item.disabled === 'function'
 			)
 		);
 	}
@@ -135,25 +135,28 @@
 
 <script lang="ts" generics="R extends object = Row">
 	import { FiberSet, Predicate, Schema } from 'effect';
-	import { encodeWire } from '@norbital-ai/std/wire';
+	import { encode_wire } from '@norbital-ai/std/wire';
 	import { fork, attach } from '../effect/index.js';
+	import { by_id, first_of, page_of, request_json } from '../read/request.js';
 	import { Button } from '../primitives/button/index.js';
-	import { confirmAction } from '../primitives/dialog/confirm.js';
+	import { confirm_action } from '../primitives/dialog/confirm.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { useKinds } from '../kinds/context.js';
 	import BulkRelation, { childFields, NO_LINKS, type Links } from './BulkRelation.svelte';
 	import { getAllContexts, tick, untrack, onDestroy } from 'svelte';
 	import Editor from '../kinds/editor.svelte';
-	import { enumText, initial, likeWhere, problems } from '../kinds/kind.js';
-	import { cn, uiText, stepActive } from '../primitives/utils.js';
-	import { offerContexts, openRecord } from '../record/navigation.js';
+	import { enum_text, initial, likeWhere, problems } from '../kinds/kind.js';
+	import { cn, ui_text, stepActive } from '../primitives/utils.js';
+	import { offerContexts, open_record } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
-	import { type Outcome, type RunHandle } from '../client/contract.js';
-	import { complete, nodeParts, pathLabel, pathOf, sortText } from '../filter/filter.js';
+	import { type Outcome, type ProtocolFailure, type RunHandle } from '../client/contract.js';
+	import { complete } from '../filter/node.js';
+	import { nodeParts, pathLabel, sortText } from '../filter/text.js';
+	import { pathOf } from '../filter/catalog.js';
 	import { CSV_BOM, csvCell } from '../table/csv.js';
 	import { filesOf } from '../cell/value.js';
-	import { humanize, label, msg } from '../text/messages.js';
+	import { humanize, label, msg, catalogText } from '../text/messages.js';
 	import { actOutcome, notify, outcomeText } from '../actions/outcome.js';
 	import { searchIndexes, SLASH, type SearchIndex } from '../table/model.js';
 	import { and } from '../filter/scope.js';
@@ -165,10 +168,10 @@
 	import ViewPopover from '../filter/ViewPopover.svelte';
 	import FilterSummary from '../filter/FilterSummary.svelte';
 	import ToolbarSearch from './toolbar/ToolbarSearch.svelte';
-	import { downloadTextFiles } from '../utilities/download.js';
+	import { download_text_files } from '../utilities/download.js';
 	import { toast } from '../toast/toast.svelte.js';
 	import Spinner from '../primitives/spinner/spinner.svelte';
-	import { recordLabels } from '../record/labels.svelte.js';
+	import { record_labels } from '../record/labels.svelte.js';
 	import { watch as live } from '../read/live.svelte.js';
 	import { watch } from 'runed';
 
@@ -179,15 +182,15 @@
 		catalog,
 		source = model,
 		author,
-		hiddenAuthor,
+		hidden_author,
 		sortable = [],
 		q = $bindable(''),
 		searchable = false,
 		selected,
-		onSettled,
+		on_settled,
 		exporter,
-		onAdd,
-		onProbe
+		on_add,
+		on_probe
 	}: {
 		config?: Toolbar<R> | undefined;
 		/** The model the defaults come from; `''` for a source without one. */
@@ -198,19 +201,19 @@
 		source?: string;
 		author?: Json;
 		/** A fixed scope included in the view's rows but never shown in the view popover. */
-		hiddenAuthor?: Json;
+		hidden_author?: Json;
 		sortable?: readonly string[];
 		q?: string;
 		searchable?: boolean;
 		/** The selected ids when the view selects rows (then a record action runs over one of them). */
 		selected?: readonly IdIn<R>[] | undefined;
 		/** After an act over the selection settles. */
-		onSettled?: () => void;
+		on_settled?: () => void;
 		exporter?: Exporter;
 		/** A local array's "Add row", in New's place. */
-		onAdd?: () => void;
+		on_add?: () => void;
 		/** A search index's search (`/<index>` and its input, `/semantic` and its text), or `null` back to the box's text; absent: the view shows no ranked rows. */
-		onProbe?: (probe: { index: string; input: Json } | null) => void;
+		on_probe?: (probe: { index: string; input: Json } | null) => void;
 	} = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
@@ -226,7 +229,7 @@
 	// L-BOLT-495: `/` at the start of the box lists the model's search modes; the picked one is a chip. `semantic` keeps
 	// the box as its text, searched on Enter; a search index swaps the box for its input's editors (custom datatypes in
 	// their own renderers) and hands the view its probe. Backspace on an empty box (or the chip's ×) is back to the text search.
-	const t = uiText();
+	const t = ui_text();
 	// the model's declared search fields, else its label's text fields (the Table searches those by `like`)
 	const lexicalFields = $derived(
 		(x?.search?.length ?? 0) > 0
@@ -238,7 +241,7 @@
 	const lexical = $derived(local || lexicalFields.length > 0);
 	const indexes = $derived(
 		offered && !local
-			? searchIndexes(x, onProbe !== undefined, {
+			? searchIndexes(x, on_probe !== undefined, {
 					meaning: t('searchMeaning'),
 					raw: t('searchRaw'),
 					view: t('searchView')
@@ -275,7 +278,7 @@
 	const send = () => (q = index === null && lexical && !SLASH.test(text) ? text : '');
 	/** `/semantic`: the box's text, nearest in meaning, on Enter. */
 	const meaning = () =>
-		onProbe?.(text.trim() === '' ? null : { index: 'semantic', input: text.trim() });
+		on_probe?.(text.trim() === '' ? null : { index: 'semantic', input: text.trim() });
 	// repository-health:allow EFF3 -- D13: this selection helper only updates presentation state and focuses the rendered input.
 	async function pick(i: SearchIndex) {
 		if (i.why !== null) return;
@@ -288,7 +291,7 @@
 		box?.focus();
 	}
 	function clear() {
-		if (index !== null) onProbe?.(null);
+		if (index !== null) on_probe?.(null);
 		index = null;
 		send();
 	}
@@ -325,7 +328,7 @@
 	const canFilter = $derived(view !== undefined && cfg?.filter !== false);
 	const canNew = $derived(
 		cfg?.new !== false &&
-			(onAdd !== undefined ||
+			(on_add !== undefined ||
 				typeof cfg?.new === 'function' ||
 				(model !== '' && x?.create !== undefined))
 	);
@@ -334,22 +337,22 @@
 	// svelte-ignore state_referenced_locally
 	onDestroy(model === '' ? () => {} : offerContexts(model, contexts));
 	const create = () =>
-		onAdd
-			? onAdd()
+		on_add
+			? on_add()
 			: typeof cfg?.new === 'function'
 				? cfg.new()
-				: openRecord(model, 'new', contexts);
+				: open_record(model, 'new', contexts);
 	const searchHint = $derived.by(() => {
 		const f = fieldsSearched.slice(0, 3);
 		return f.length === 0
-			? msg(bolt, 'table.search', 'Search')
-			: msg(bolt, 'table.searchIn', 'Search {fields}', { fields: f.join(', ') });
+			? msg(bolt, 'table.search')
+			: msg(bolt, 'table.searchIn', { fields: f.join(', ') });
 	});
 
 	// ── the actions menu: the model's syncs (Sync now; Import, Download template, Export), export, delete-selected, the author's items ──
 	const picked = $derived(selected ?? []);
 	const items = $derived(cfg?.actions === false || cfg?.actions === undefined ? [] : cfg.actions);
-	// the model's syncs the viewer may run, each a `<c>.sync.<name>` run: a remote read's Sync now; a file sync's import
+	// native sync controls: a remote read's Sync now; a file sync's import
 	// (its picker accepting exactly its parsers), template and export in each declared format
 	const syncs = $derived(cfg?.actions === false ? [] : Object.entries(x?.syncs ?? {}));
 	const remotes = $derived(
@@ -462,8 +465,8 @@
 	};
 	const entries = $derived.by((): Entry[] => {
 		const ids = [...picked];
-		const selectFirst = msg(bolt, 'view.selectRows', 'Select records first');
-		const run = msg(bolt, 'view.run', 'Run');
+		const selectFirst = msg(bolt, 'view.selectRows');
+		const run = msg(bolt, 'view.run');
 		return [
 			...items.map((item): Entry => ({
 				key: `item:${item.name}`,
@@ -473,7 +476,7 @@
 				text: item.name,
 				why:
 					item.disabled?.(ids) ??
-					(item.requiresSelection && picked.length === 0 ? selectFirst : null),
+					(item.requires_selection && picked.length === 0 ? selectFirst : null),
 				button: run,
 				act: () => item.run([...picked]),
 				...(item.description === undefined ? {} : { hint: item.description })
@@ -482,13 +485,13 @@
 				key: `sync:${r.name}`,
 				group: 'import',
 				glyph: 'sync',
-				text: told(msg(bolt, 'view.sync', 'Sync now'), r.name, remotes),
-				hint: msg(bolt, 'view.syncFrom', 'Pull the latest records from {source}', {
+				text: told(msg(bolt, 'view.sync'), r.name, remotes),
+				hint: msg(bolt, 'view.syncFrom', {
 					source: humanize(r.with)
 				}),
 				why: null,
-				button: msg(bolt, 'view.syncButton', 'Sync'),
-				act: () => bolt.run(`${model}.sync.${r.name}`, {})
+				button: msg(bolt, 'view.syncButton'),
+				act: () => bolt.sync_control(model, r.name, {})
 			})),
 			...files.flatMap((f): Entry[] => [
 				...(f.import
@@ -497,9 +500,9 @@
 								key: importKey(f.name),
 								group: 'import',
 								glyph: 'upload',
-								text: told(msg(bolt, 'view.import', 'Import…'), f.name, files),
+								text: told(msg(bolt, 'view.import'), f.name, files),
 								why: null,
-								button: msg(bolt, 'view.upload', 'Upload'),
+								button: msg(bolt, 'view.upload'),
 								act: () => void pickers[f.name]?.click(),
 								sync: f.name
 							} satisfies Entry,
@@ -508,11 +511,11 @@
 								key: `template:${f.name}`,
 								group: 'import',
 								glyph: 'download',
-								text: told(msg(bolt, 'view.template', 'Download template'), f.name, files),
-								hint: msg(bolt, 'view.templateHint', "The import's columns as a spreadsheet"),
+								text: told(msg(bolt, 'view.template'), f.name, files),
+								hint: msg(bolt, 'view.templateHint'),
 								why: null,
-								button: msg(bolt, 'view.download', 'Download'),
-								act: () => bolt.run(`${model}.sync.${f.name}`, { mode: 'template', ...scoped() })
+								button: msg(bolt, 'view.download'),
+								act: () => bolt.sync_control(model, f.name, { mode: 'template', ...scoped() })
 							} satisfies Entry
 						]
 					: []),
@@ -522,17 +525,17 @@
 					glyph: 'download',
 					text: told(
 						f.export.length > 1
-							? msg(bolt, 'view.exportAs', 'Export as {format}', { format: to.toUpperCase() })
-							: msg(bolt, 'view.export', 'Export'),
+							? msg(bolt, 'view.exportAs', { format: to.toUpperCase() })
+							: msg(bolt, 'view.export'),
 						f.name,
 						files
 					),
-					hint: msg(bolt, 'view.exportHint', 'The rows in view, as shown'),
+					hint: msg(bolt, 'view.exportHint'),
 					why: null,
-					button: msg(bolt, 'view.download', 'Download'),
+					button: msg(bolt, 'view.download'),
 					act: () => {
 						const where = shown();
-						return bolt.run(`${model}.sync.${f.name}`, {
+						return bolt.sync_control(model, f.name, {
 							mode: 'export',
 							to,
 							...scoped(),
@@ -547,10 +550,10 @@
 							key: 'export',
 							group: 'import',
 							glyph: 'download',
-							text: msg(bolt, 'table.export', 'Export CSV'),
-							hint: msg(bolt, 'view.exportHint', 'The rows in view, as shown'),
+							text: msg(bolt, 'table.export'),
+							hint: msg(bolt, 'view.exportHint'),
 							why: null,
-							button: msg(bolt, 'view.download', 'Download'),
+							button: msg(bolt, 'view.download'),
 							act: exportCsv
 						} satisfies Entry
 					]
@@ -561,14 +564,11 @@
 							key: 'update',
 							group: 'bulk',
 							glyph: 'play',
-							text: msg(bolt, 'view.editSelected', 'Update selected records'),
-							hint: msg(
-								bolt,
-								'view.editSelectedHint',
-								'Choose the fields to change on every selected record'
+							text: msg(bolt, 'view.editSelected'),
+							hint: msg(bolt, 'view.editSelectedHint'
 							),
 							why: picked.length === 0 ? selectFirst : null,
-							button: msg(bolt, 'view.editButton', 'Edit'),
+							button: msg(bolt, 'view.editButton'),
 							act: () => {
 								if (form === `${model}.update`) form = null;
 								else {
@@ -587,9 +587,9 @@
 							key: 'delete',
 							group: 'bulk',
 							glyph: 'trash',
-							text: msg(bolt, 'table.delete', 'Delete selected records'),
+							text: msg(bolt, 'table.delete'),
 							why: picked.length === 0 ? selectFirst : null,
-							button: msg(bolt, 'view.deleteButton', 'Delete'),
+							button: msg(bolt, 'view.deleteButton'),
 							act: remove,
 							danger: true
 						} satisfies Entry
@@ -600,10 +600,10 @@
 	const groups = $derived(
 		(
 			[
-				['bulk', msg(bolt, 'view.group.bulk', 'Bulk')],
-				['actions', msg(bolt, 'view.group.actions', 'Actions')],
-				['import', msg(bolt, 'view.group.import', 'Import & export')],
-				['general', msg(bolt, 'view.group.general', 'General')]
+				['bulk', msg(bolt, 'view.group.bulk')],
+				['actions', msg(bolt, 'view.group.actions')],
+				['import', msg(bolt, 'view.group.import')],
+				['general', msg(bolt, 'view.group.general')]
 			] as const
 		)
 			.map(([g, title]) => ({ g, title, of: entries.filter((e) => e.group === g) }))
@@ -670,7 +670,7 @@
 		if (outcome.kind === 'committed')
 			for (const file of filesOf(outcome.output))
 				window.open(bolt.file_url(file), '_blank', 'noopener');
-		if (ok(outcome)) onSettled?.();
+		if (ok(outcome)) on_settled?.();
 	};
 	const track = (handle: RunHandle) =>
 		Effect.suspend(() => {
@@ -713,7 +713,7 @@
 					message: cause instanceof Error ? cause.message : String(cause)
 				})
 		}).pipe(
-			Effect.flatMap((output) => {
+			Effect.flatMap((output): Effect.Effect<void, E | ProtocolFailure> => {
 				if (output === undefined) {
 					menuOpen = false;
 					return Effect.void;
@@ -795,15 +795,12 @@
 		if (r.status !== 'succeeded')
 			return {
 				state: 'failed',
-				message: r.error?.message ?? r.error?.code ?? msg(bolt, `run.status.${r.status}`, r.status)
+				message: r.error?.message ?? r.error?.code ?? catalogText(bolt, `run.status.${r.status}`, r.status)
 			};
 		if (importOut?.['applied'] === false)
 			return {
 				state: 'failed',
-				message: msg(
-					bolt,
-					'view.importRefused',
-					'Nothing was imported: fix the rows below and upload the file again.'
+				message: msg(bolt, 'view.importRefused'
 				)
 			};
 		return { state: 'done' };
@@ -815,7 +812,7 @@
 	);
 	const counts = $derived(
 		importOut?.['applied'] === true
-			? msg(bolt, 'view.imported', '{created} created, {updated} updated, {deleted} deleted', {
+			? msg(bolt, 'view.imported', {
 					created: Number(importOut['created'] ?? 0),
 					updated: Number(importOut['updated'] ?? 0),
 					deleted: Number(importOut['deleted'] ?? 0)
@@ -839,9 +836,9 @@
 	const scoped = (): { readonly [k: string]: Json } =>
 		cfg?.context === undefined ? {} : { context: cfg.context };
 	/** What the page shows: the author's scope and the viewer's filter. */
-	const shown = () => and(and(author, hiddenAuthor), view?.where);
+	const shown = () => and(and(author, hidden_author), view?.where);
 	function startImport(sync: string, file: string) {
-		const h = bolt.run(`${model}.sync.${sync}`, { mode: 'import', file, ...scoped() });
+		const h = bolt.sync_control(model, sync, { mode: 'import', file, ...scoped() });
 		if (bolt.runs === undefined) return track(h); // no run reads here: RunStatus says so
 		return h.pipe(
 			Effect.map((outcome) => {
@@ -872,14 +869,20 @@
 	 * Asks in-app first, then deletes each record on its own so one refusal keeps only that record: the outcome says how
 	 * many were deleted and why the first kept one was refused ("3 deleted, 1 kept: …").
 	 */
+	/** An audited record is written at the revision it was read at; nothing else of the row is a target. */
+	const stamp = $derived(x?.audit === false ? [] : ['revision']);
+	const targetOf = (row: { readonly id: string; readonly [field: string]: Value }) => {
+		const revision = row['revision'];
+		return { id: row.id, ...(typeof revision === 'number' ? { revision } : {}) };
+	};
 	function remove(): void {
 		const target = [...picked];
 		fork(
-			confirmAction({
-				title: msg(bolt, 'table.confirmDelete', 'Delete {n} records?', { n: target.length }),
-				body: msg(bolt, 'view.deleteBody', 'This cannot be undone.'),
-				confirmLabel: msg(bolt, 'view.deleteButton', 'Delete'),
-				cancelLabel: msg(bolt, 'record.cancel', 'Cancel'),
+			confirm_action({
+				title: msg(bolt, 'table.confirmDelete', { n: target.length }),
+				body: msg(bolt, 'view.deleteBody'),
+				confirm_label: msg(bolt, 'view.deleteButton'),
+				cancel_label: msg(bolt, 'record.cancel'),
 				destructive: true
 			}).pipe(
 				Effect.tap((confirmed) =>
@@ -890,13 +893,18 @@
 								() =>
 									// ponytail: one act per record, in order; batch when bulk deletes outgrow it
 									Effect.forEach(target, (id) =>
-										actOutcome(bolt.act(`${model}.delete`, [{ target: id }]))
+										bolt.query(by_id(model, id, stamp)).pipe(Effect.flatMap((answer) => {
+											const row = first_of(answer, model);
+											return row === null
+												? Effect.succeed<Outcome>({ kind: 'refused', code: 'not_found', message: msg(bolt, 'record.not_found') })
+												: actOutcome(bolt.act({ [`${model}.delete`]: [{ target: targetOf(row) }] }));
+										}))
 									).pipe(
 										// some went: the view refreshes (and drops the selection) though the outcome is a refusal
 										Effect.tap((outcomes) =>
 											Effect.sync(() => {
 												const kept = outcomes.filter((o) => !ok(o)).length;
-												if (kept > 0 && kept < outcomes.length) onSettled?.();
+												if (kept > 0 && kept < outcomes.length) on_settled?.();
 											})
 										),
 										Effect.map((outcomes): Outcome => {
@@ -913,10 +921,7 @@
 											return {
 												kind: 'refused',
 												code: 'kept',
-												message: msg(
-													bolt,
-													'view.deleteKept',
-													'{deleted} deleted, {kept} kept: {reason}',
+												message: msg(bolt, 'view.deleteKept',
 													{
 														deleted: outcomes.length - kept.length,
 														kept: kept.length,
@@ -926,7 +931,7 @@
 											};
 										})
 									),
-								msg(bolt, 'view.deleted', '{n} deleted', { n: target.length })
+								msg(bolt, 'view.deleted', { n: target.length })
 							);
 					})
 				)
@@ -939,12 +944,13 @@
 		const target = [...picked],
 			set = editSet;
 		perform('update', () =>
-			bolt
-				.act(
-					`${model}.update`,
-					target.map((id) => ({ target: id, set }))
-				)
-				.pipe(
+			bolt.query(request_json({ [model]: { where: { id: { in: target } }, fields: stamp, limit: target.length } })).pipe(
+					Effect.flatMap((answer) => {
+						const rows = page_of(answer, model)?.rows ?? [];
+						return rows.length !== target.length
+							? Effect.succeed<Outcome>({ kind: 'refused', code: 'not_found', message: msg(bolt, 'record.not_found') })
+							: actOutcome(bolt.act({ [`${model}.update`]: rows.map((row) => ({ target: targetOf(row), set })) }));
+					}),
 					Effect.tap((outcome) =>
 						Effect.sync(() => {
 							if (ok(outcome)) {
@@ -968,7 +974,7 @@
 			const kindOf = (f: string) =>
 				exporter.kinds?.[f] ?? (kinds.catalog?.[model] ?? catalog[source])?.fields[f];
 			const words = (f: string) => (v: string) =>
-				enumText(v, { t: (k) => bolt.t(k), model, field: f });
+				enum_text(v, { t: (k) => bolt.t(k), model, field: f });
 			const text =
 				CSV_BOM +
 				[
@@ -979,10 +985,10 @@
 				]
 					.map((line) => line.map(cell).join(','))
 					.join('\r\n');
-			downloadTextFiles([{ name: `${model || 'rows'}.csv`, content: text }]);
+			download_text_files([{ name: `${model || 'rows'}.csv`, content: text }]);
 		});
 	}
-	const named = recordLabels(bolt, () => kinds.catalog ?? catalog);
+	const named = record_labels(bolt, () => kinds.catalog ?? catalog);
 	/** The catalogue's words for an operator on a path (the fallback is the machine operator). */
 	const opWords = (op: string, path: string) =>
 		view?.offers.find((o) => o.op === op && pathOf(o.path).endsWith(path))?.opLabel ?? op;
@@ -1049,10 +1055,10 @@
 		>
 			{#if st?.state === 'pending'}<Spinner
 					class="size-3.5"
-					label={msg(bolt, 'view.running', 'Running')}
+					label={msg(bolt, 'view.running')}
 				/>
 			{:else if st?.state === 'done'}<Glyph name="check" class="size-3.5" />{/if}
-			{st?.state === 'done' ? msg(bolt, 'view.done', 'Done') : e.button}
+			{st?.state === 'done' ? msg(bolt, 'view.done') : e.button}
 		</Button>
 	</div>
 	{#if watching(e) && imported !== null && findings.length > 0 && (st?.state === 'done' || st?.state === 'failed')}
@@ -1061,7 +1067,7 @@
 			<ul class="grid max-h-48 gap-1 overflow-y-auto text-xs">
 				{#each findings as f, i (i)}
 					{@const at = [
-						f.at === 0 ? '' : msg(bolt, 'view.row', 'Row {row}', { row: f.at }),
+						f.at === 0 ? '' : msg(bolt, 'view.row', { row: f.at }),
 						f.field === null ? '' : pathLabel(catalog, model, f.field, humanize)
 					]
 						.filter((x) => x !== '')
@@ -1108,7 +1114,7 @@
 							'hover:bg-accent hover:text-foreground grid size-8 [--hit-target:2rem] shrink-0 place-items-center rounded-sm',
 							cfg.error ? 'text-destructive' : 'text-muted-foreground'
 						]}
-						aria-label={msg(bolt, 'view.about', 'About {what}', {
+						aria-label={msg(bolt, 'view.about', {
 							what: title || label(bolt, model)
 						})}
 						title={about}
@@ -1132,10 +1138,10 @@
 					bind:open={searchOpen}
 					active={searching}
 					label={searchHint}
-					panelClass={chosen?.input === undefined
+					panel_class={chosen?.input === undefined
 						? 'w-[min(26rem,calc(100vw-1rem))]'
 						: 'w-[min(36rem,calc(100vw-1rem))]'}
-					onOpenAutoFocus={(e) => {
+					on_open_auto_focus={(e) => {
 						e.preventDefault();
 						box?.focus();
 					}}
@@ -1166,7 +1172,7 @@
 								data-similar-input={index}
 								onsubmit={(e) => {
 									e.preventDefault();
-									if (ready) onProbe?.({ index: index ?? '', input: encodeWire(values) });
+									if (ready) on_probe?.({ index: index ?? '', input: encode_wire(values) });
 								}}
 							>
 								{#each Object.entries(chosen.input) as [f, k] (f)}
@@ -1178,7 +1184,7 @@
 										<Editor
 											kind={k}
 											value={values[f] ?? null}
-											onChange={(v) => (values = { ...values, [f]: v })}
+											on_change={(v) => (values = { ...values, [f]: v })}
 											name={f}
 										/>
 									</div>
@@ -1191,6 +1197,7 @@
 								>
 							</form>
 						{:else}
+							{@const activeOption = menuOf[searchActive]}
 							<input
 								bind:this={box}
 								class="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none"
@@ -1199,8 +1206,8 @@
 								aria-autocomplete="list"
 								aria-controls="search-indexes"
 								aria-expanded={picking}
-								aria-activedescendant={picking && menuOf[searchActive] !== undefined
-									? `search-option-${menuOf[searchActive]!.name}`
+								aria-activedescendant={picking && activeOption !== undefined
+									? `search-option-${activeOption.name}`
 									: undefined}
 								placeholder={index === 'semantic'
 									? t('searchMeaning')
@@ -1302,12 +1309,12 @@
 								{...props}
 								size="icon"
 								variant="ghost"
-								hint={msg(bolt, 'view.actions', 'Actions')}
-								aria-label={msg(bolt, 'view.actions', 'Actions')}
+								hint={msg(bolt, 'view.actions')}
+								aria-label={msg(bolt, 'view.actions')}
 								aria-busy={pending}
 								data-view-actions
 							>
-								{#if pending}<Spinner label={msg(bolt, 'view.running', 'Running')} />{:else}<Glyph
+								{#if pending}<Spinner label={msg(bolt, 'view.running')} />{:else}<Glyph
 										name="zap"
 										class="size-3.5"
 									/>{/if}
@@ -1343,8 +1350,8 @@
 											}}
 										>
 											<p class="text-meta" data-bulk-update-count>
-												{msg(bolt, 'table.selected', '{n} selected', { n: picked.length })}.
-												{msg(bolt, 'view.editOnlyChosen', 'Only checked fields will change.')}
+												{msg(bolt, 'table.selected', { n: picked.length })}.
+												{msg(bolt, 'view.editOnlyChosen')}
 											</p>
 											{#each editFields as field (field.name)}
 												{@const chosen = Object.hasOwn(editValues, field.name)}
@@ -1356,7 +1363,7 @@
 															id={`${editorId}-${field.name}-choose`}
 															checked={chosen}
 															disabled={status['update']?.state === 'pending'}
-															onCheckedChange={(checked) => chooseEdit(field, checked)}
+															on_checked_change={(checked) => chooseEdit(field, checked)}
 															data-bulk-update-choose={field.name}
 														/>
 														<label
@@ -1375,7 +1382,7 @@
 														<Editor
 															kind={field.kind}
 															value={editValues[field.name] ?? null}
-															onChange={(value) =>
+															on_change={(value) =>
 																(editValues = { ...editValues, [field.name]: value })}
 															name={field.name}
 															id={`${editorId}-${field.name}`}
@@ -1393,7 +1400,7 @@
 																disabled={status['update']?.state === 'pending'}
 																onclick={() => (editValues = { ...editValues, [field.name]: null })}
 															>
-																{msg(bolt, 'view.clearValue', 'Clear value')}
+																{msg(bolt, 'view.clearValue')}
 															</Button>
 														{/if}
 														{#if editProblems.get(field.name)}
@@ -1414,7 +1421,7 @@
 															id={`${editorId}-${name}-choose`}
 															checked={chosen}
 															disabled={status['update']?.state === 'pending'}
-															onCheckedChange={(checked) => chooseLinks(name, checked)}
+															on_checked_change={(checked) => chooseLinks(name, checked)}
 															data-bulk-update-choose={name}
 														/>
 														<label
@@ -1428,9 +1435,9 @@
 														<BulkRelation
 															{name}
 															{child}
-															parentId={editParent}
+															parent_id={editParent}
 															value={editLinks[name] ?? NO_LINKS}
-															onChange={(next) => (editLinks = { ...editLinks, [name]: next })}
+															on_change={(next) => (editLinks = { ...editLinks, [name]: next })}
 															id={`${editorId}-${name}`}
 															errors={editProblems}
 															disabled={status['update']?.state === 'pending'}
@@ -1446,9 +1453,9 @@
 												data-bulk-update-submit
 											>
 												{#if status['update']?.state === 'pending'}<Spinner
-														label={msg(bolt, 'view.running', 'Running')}
+														label={msg(bolt, 'view.running')}
 													/>{/if}
-												{msg(bolt, 'view.applySelected', 'Apply to {n} selected', {
+												{msg(bolt, 'view.applySelected', {
 													n: picked.length
 												})}
 											</Button>
@@ -1467,12 +1474,12 @@
 				<Button
 					size="default"
 					class={cfg.trailing ? 'px-2.5 @xl:px-3' : 'ml-auto px-2.5 @xl:px-3'}
-					aria-label={msg(bolt, 'table.new', 'New')}
+					aria-label={msg(bolt, 'table.new')}
 					data-view-new
 					onclick={create}
 				>
 					<Glyph name="plus" /><span class="hidden @xl:inline"
-						>{onAdd ? msg(bolt, 'table.add', 'Add row') : msg(bolt, 'table.new', 'New')}</span
+						>{on_add ? msg(bolt, 'table.add') : msg(bolt, 'table.new')}</span
 					>
 				</Button>
 			{/if}
@@ -1488,7 +1495,7 @@
 						<button
 							type="button"
 							class="hover:bg-accent grid size-4 place-items-center rounded-full"
-							aria-label={msg(bolt, 'view.removeFilter', 'Remove filter')}
+							aria-label={msg(bolt, 'view.removeFilter')}
 							onclick={() => view?.setRows(view.rows.filter((_, j) => j !== c.i))}
 							><Glyph name="x" class="size-3" /></button
 						>
@@ -1507,7 +1514,7 @@
 						<button
 							type="button"
 							class="hover:bg-accent grid size-4 place-items-center rounded-full"
-							aria-label={msg(bolt, 'view.removeSort', 'Remove sort')}
+							aria-label={msg(bolt, 'view.removeSort')}
 							onclick={() => view?.setOrder(view.order.filter((_, j) => j !== i))}
 							><Glyph name="x" class="size-3" /></button
 						>

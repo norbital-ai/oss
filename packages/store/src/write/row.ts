@@ -2,7 +2,7 @@
 import { q } from '../catalog.ts';
 
 /** A typed null from the relation itself: a table's name may also name a built-in type. */
-export const nullRowSql = (table: string, columns: Iterable<string>): string => {
+export const null_row_sql = (table: string, columns: Iterable<string>): string => {
 	const names = new Set(columns);
 	let alias = '__store_row';
 	while (names.has(alias)) alias += '_';

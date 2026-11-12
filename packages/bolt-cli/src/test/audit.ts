@@ -1,6 +1,6 @@
 // A complete process-local audit facility for tests. Production hosts must supply a durable separate store.
 import { Schema } from 'effect';
-import { canonical, sha256Hex } from '@norbital-ai/store';
+import { canonical, sha256_hex } from '@norbital-ai/store';
 import { FacilityFailure } from '@norbital-ai/bolt/errors';
 import {
 	AuditEvent,
@@ -10,14 +10,14 @@ import {
 } from '@norbital-ai/bolt/engine';
 const Cursor = Schema.Tuple([Schema.String, Schema.String]);
 /** A complete process-local audit facility for tests; production hosts must supply a durable separate store. */
-export const memoryAudit = () => {
+export const memory_audit = () => {
 	const records = new Map<string, AuditRecord>();
 	const summary = (record: AuditRecord): AuditSummary => {
 		const { payload: _payload, ...row } = record;
 		return row;
 	};
 	const cursor = (after: string | undefined, query: unknown) => {
-		const hash = sha256Hex(canonical(query));
+		const hash = sha256_hex(canonical(query));
 		if (after === undefined) return { hash, id: undefined };
 		try {
 			const [bound, id] = Schema.decodeUnknownSync(Schema.fromJsonString(Cursor))(
@@ -68,7 +68,7 @@ export const memoryAudit = () => {
 			for (const event of prepared) {
 				const previous = records.get(event.id);
 				if (previous !== undefined) {
-					const { recordedAt: _at, payloadBytes: _bytes, ...old } = previous;
+					const { recorded_at: _at, payload_bytes: _bytes, ...old } = previous;
 					if (canonical(old) !== canonical(event))
 						throw new Error('Audit event id reused for changed content.');
 				}
@@ -77,8 +77,8 @@ export const memoryAudit = () => {
 				if (!records.has(event.id))
 					records.set(event.id, {
 						...event,
-						recordedAt: new Date().toISOString(),
-						payloadBytes: new TextEncoder().encode(JSON.stringify(event.payload)).length
+						recorded_at: new Date().toISOString(),
+						payload_bytes: new TextEncoder().encode(JSON.stringify(event.payload)).length
 					});
 		},
 		query: async (query, signal) => {
@@ -90,8 +90,8 @@ export const memoryAudit = () => {
 					(row) =>
 						(query.since === undefined || row.at >= query.since) &&
 						(query.until === undefined || row.at <= query.until) &&
-						(query.actorKind === undefined || row.actor.kind === query.actorKind) &&
-						(query.actorId === undefined || row.actor.id === query.actorId) &&
+						(query.actor_kind === undefined || row.actor.kind === query.actor_kind) &&
+						(query.actor_id === undefined || row.actor.id === query.actor_id) &&
 						(query.category === undefined || row.category === query.category) &&
 						(query.action === undefined || row.action === query.action) &&
 						(query.status === undefined || row.status === query.status) &&
@@ -124,7 +124,7 @@ export const memoryAudit = () => {
 			const { after, ...filters } = query;
 			const rows = [...records.values()]
 				.flatMap((row) => {
-					const terminal = records.get(`${row.operationId}:terminal`);
+					const terminal = records.get(`${row.operation_id}:terminal`);
 					return row.status === 'prepared' &&
 						(terminal === undefined ||
 							terminal.status === 'unknown' ||
@@ -132,13 +132,13 @@ export const memoryAudit = () => {
 						? [{ ...row, status: 'prepared' as const }]
 						: [];
 				})
-				.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt) || a.id.localeCompare(b.id));
+				.sort((a, b) => a.recorded_at.localeCompare(b.recorded_at) || a.id.localeCompare(b.id));
 			return page(
 				rows,
 				query.limit ?? 200,
 				after,
 				filters,
-				(row) => `${row.recordedAt}\u0000${row.id}`,
+				(row) => `${row.recorded_at}\u0000${row.id}`,
 				1
 			);
 		}

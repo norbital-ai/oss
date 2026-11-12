@@ -161,9 +161,13 @@ class TextDecoder {
 		const u8 = this.#pending.length === 0 ? fresh : new Uint8Array([...this.#pending, ...fresh]);
 		this.#pending = new Uint8Array(0);
 		const codes: number[] = [];
-		if (this.#encoding === 'windows-1252')
-			for (const b of u8) codes.push(b >= 0x80 && b <= 0x9f ? CP1252_HIGH[b - 0x80]! : b);
-		else {
+		if (this.#encoding === 'windows-1252') {
+			for (const b of u8) {
+				const code = b >= 0x80 && b <= 0x9f ? CP1252_HIGH[b - 0x80] : b;
+				if (code === undefined) throw new Error('The windows-1252 table is incomplete.');
+				codes.push(code);
+			}
+		} else {
 			const fatal = this.#fatal;
 			const bad = () => {
 				if (fatal) throw new TypeError('The encoded data was not valid utf-8');
@@ -175,8 +179,9 @@ class TextDecoder {
 				start = 0,
 				lower = 0x80,
 				upper = 0xbf;
+			const input = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
 			for (let i = 0; i < u8.length; i++) {
-				const byte = u8[i]!;
+				const byte = input.getUint8(i);
 				if (need === 0) {
 					start = i;
 					if (byte <= 0x7f) codes.push(byte);
@@ -240,10 +245,10 @@ const btoa = (input: unknown) => {
 			throw named('InvalidCharacterError', 'btoa: the string holds characters outside Latin1');
 		const v = (a << 16) | (b << 8) | c;
 		out +=
-			B64[(v >> 18) & 63]! +
-			B64[(v >> 12) & 63]! +
-			(n > 1 ? B64[(v >> 6) & 63]! : '=') +
-			(n > 2 ? B64[v & 63]! : '=');
+			B64.charAt((v >> 18) & 63) +
+			B64.charAt((v >> 12) & 63) +
+			(n > 1 ? B64.charAt((v >> 6) & 63) : '=') +
+			(n > 2 ? B64.charAt(v & 63) : '=');
 	}
 	return out;
 };
@@ -309,7 +314,8 @@ const hex2 = (byte: number) => '%' + (byte < 16 ? '0' : '') + byte.toString(16).
 const percentEncode = (input: string, set: EncodeSet) => {
 	let out = '';
 	for (const ch of input) {
-		const code = ch.codePointAt(0)!;
+		const code = ch.codePointAt(0);
+		if (code === undefined) throw new TypeError('A URL character is empty.');
 		if (!set(code)) out += ch;
 		else for (const byte of encodeUtf8(ch)) out += hex2(byte);
 	}
@@ -318,8 +324,9 @@ const percentEncode = (input: string, set: EncodeSet) => {
 const percentDecode = (input: string): Uint8Array => {
 	const bytes = encodeUtf8(input),
 		out: number[] = [];
+	const source = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	for (let i = 0; i < bytes.length; i++) {
-		const byte = bytes[i]!;
+		const byte = source.getUint8(i);
 		const pair = byte === 0x25 ? String.fromCharCode(bytes[i + 1] ?? 0, bytes[i + 2] ?? 0) : '';
 		if (/^[0-9a-fA-F]{2}$/.test(pair)) {
 			out.push(parseInt(pair, 16));
@@ -353,8 +360,8 @@ const ipv4 = (domain: string, input: string) => {
 	if (parts.at(-1) === '' && parts.length > 1) parts.pop();
 	if (parts.length > 4) throw invalid(input);
 	const numbers = parts.map((part) => ipv4Part(part, input));
-	const last = numbers.pop()!;
-	if (numbers.some((n) => n > 255) || last >= 256 ** (4 - numbers.length)) throw invalid(input);
+	const last = numbers.pop();
+	if (last === undefined || numbers.some((n) => n > 255) || last >= 256 ** (4 - numbers.length)) throw invalid(input);
 	let address = last;
 	numbers.forEach((n, i) => (address += n * 256 ** (3 - i)));
 	return [24, 16, 8, 0].map((shift) => Math.floor(address / 2 ** shift) % 256).join('.');
@@ -465,7 +472,7 @@ const parse = (raw: string, base?: Parts): Parts => {
 		if (base === undefined) throw invalid(raw);
 		return relative(input, base, raw);
 	}
-	const name = scheme[1]!.toLowerCase() + ':',
+	const name = scheme[0].toLowerCase(),
 		rest = input.slice(scheme[0].length);
 	if (name === 'file:') {
 		if (/^[/\\]{2}/.test(rest)) {
@@ -1537,8 +1544,9 @@ const install = (): CellGlobals => {
 	};
 	const randomUUID = () => {
 		const b = random(16).slice();
-		b[6] = (b[6]! & 0x0f) | 0x40;
-		b[8] = (b[8]! & 0x3f) | 0x80;
+		const bytes = new DataView(b.buffer, b.byteOffset, b.byteLength);
+		bytes.setUint8(6, (bytes.getUint8(6) & 0x0f) | 0x40);
+		bytes.setUint8(8, (bytes.getUint8(8) & 0x3f) | 0x80);
 		const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 		return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 	};

@@ -3,21 +3,21 @@
 import { Schema } from 'effect';
 
 export const STORE_CODES = [
-	'badCursor',
-	'destructiveNotAccepted',
+	'bad_cursor',
+	'destructive_not_accepted',
 	'forbidden',
 	'internal',
 	'invalid',
-	'invalidInput',
-	'invalidWhere',
-	'migrationChanged',
-	'migrationInvalid',
-	'notFound',
+	'invalid_input',
+	'invalid_where',
+	'migration_changed',
+	'migration_invalid',
+	'not_found',
 	'schema',
-	'schemaInvalid',
-	'schemaMoved',
+	'schema_invalid',
+	'schema_moved',
 	'stale',
-	'tooLarge'
+	'too_large'
 ] as const;
 export type StoreCode = (typeof STORE_CODES)[number];
 export const STORE_PHASES = ['decode', 'admission', 'derive', 'commit', 'deliver'] as const;

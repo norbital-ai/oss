@@ -15,12 +15,12 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 		as?: LayoutElement;
 		/**
 		 * `content` (default): its own height — a clip or inset boundary; `fill`: the space left in
-		 * its parent, down to `minHeight`; `viewport`: `min(42rem, 100dvh − 14rem)` with a 28rem floor,
+		 * its parent, down to `min_height`; `viewport`: `min(42rem, 100dvh − 14rem)` with a 28rem floor,
 		 * so a view in a page that scrolls claims the space below a ~14rem chrome band.
 		 */
 		size?: BoundSize;
 		/** A `fill` bound's floor (a CSS length; default 0). */
-		minHeight?: string;
+		min_height?: string;
 		pad?: LayoutPad;
 		inset?: boolean;
 		clip?: boolean;
@@ -32,13 +32,13 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 	import { untrack } from 'svelte';
 	import { cn } from '../primitives/utils.js';
 	import { INSET_CLASS, PAD_CLASSES, SIZE_CLASSES } from './layout.shared.js';
-	import { ownInset } from './inset.svelte.js';
+	import { own_inset } from './inset.svelte.js';
 
 	let {
 		as = 'div',
 		ref = $bindable(null),
 		size = 'content',
-		minHeight,
+		min_height,
 		pad = 'none',
 		inset = false,
 		clip = false,
@@ -47,7 +47,7 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 		...restProps
 	}: BoundProps = $props();
 	// Read at init, like every context: an inset is a layout fact, not a toggled state.
-	const padsInset = untrack(() => inset) ? ownInset() : false;
+	const padsInset = untrack(() => inset) ? own_inset() : false;
 	const sizeClasses: Record<BoundSize, string> = {
 		...SIZE_CLASSES,
 		viewport: 'h-[min(42rem,calc(100dvh-14rem))] min-h-[28rem] flex-none'
@@ -65,7 +65,7 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
-	style:min-height={size === 'fill' ? minHeight : undefined}
+	style:min-height={size === 'fill' ? min_height : undefined}
 	data-layout="bound"
 	data-bound-clip={clip || undefined}
 	data-bound-inset={padsInset || undefined}

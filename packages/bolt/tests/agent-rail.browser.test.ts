@@ -1,14 +1,16 @@
 /// <reference types="@vitest/browser-playwright" />
 import { expect, it } from '@effect/vitest';
 import { Effect, Layer, ManagedRuntime, Schema } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { page, userEvent } from 'vitest/browser';
 import { vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import Agent from '../src/shell/agent/Agent.svelte';
-import { createBolt } from '../src/page/bolt.ts';
+import { create_bolt } from '../src/page/bolt.ts';
 import { QBody, type AgentConversation, type AgentRow } from '../src/protocol/schema.ts';
-import { shellApi } from '../src/shell/runtime.ts';
+import { shell_api } from '../src/shell/runtime.ts';
+import type { FinderRead } from '../src/shell/finder/model.ts';
+import { view_client } from '../src/page/view-client.ts';
 import AgentSheet from './support/agent-sheet.svelte';
 import './support/shell.css';
 
@@ -73,7 +75,7 @@ const fixture = (preview = false) => {
 				...row(`${id}-step`, 2, ''),
 				role: 'tool',
 				at,
-				tool: { name: 'read', failed: false, args: '{"documents":{}}', ms: 200 }
+				tool: { behavior: {}, name: 'read', failed: false, args: '{"documents":{}}', ms: 200 }
 			});
 		else
 			rows.push({
@@ -84,13 +86,16 @@ const fixture = (preview = false) => {
 			});
 		return { id, rows, status: index === 5 ? 'stopped' : index < 3 ? 'running' : 'idle' };
 	});
-	const rows: AgentRow[] = [row('rail-prompt', 1, 'Coordinate the workspace migration.')];
+	const rows: AgentRow[] = [{ ...row('rail-prompt', 1, 'Coordinate the workspace migration.'), files: [
+		{ id: 'image-input', name: 'workspace-reference.png', mime: 'image/png' },
+		{ id: 'input', name: 'workspace-migration-requirements.pdf', mime: 'application/pdf' }
+	] }];
 	for (const [index, child] of children.entries())
 		rows.push({
 			...row(`spawn-${index}`, index + 2, ''),
 			role: 'tool',
 			at,
-			tool: {
+			tool: { behavior: {},
 				name: 'subagent',
 				failed: false,
 				child: child.id,
@@ -106,7 +111,7 @@ const fixture = (preview = false) => {
 			...row(`subagent-action-${index}`, index + 10, ''),
 			role: 'tool',
 			at,
-			tool: { name: 'subagent', failed: false, ms: 20, args: JSON.stringify(args) }
+			tool: { behavior: {}, name: 'subagent', failed: false, ms: 20, args: JSON.stringify(args) }
 		});
 	rows.push({
 		...row(
@@ -123,7 +128,7 @@ const fixture = (preview = false) => {
 		rows.push({
 			...row('preview-ready', 14, ''),
 			role: 'tool',
-			tool: {
+			tool: { behavior: {},
 				name: 'workspace_preview',
 				studio: 'preview',
 				failed: false,
@@ -176,7 +181,7 @@ const fixture = (preview = false) => {
 			});
 		const child = children.find((child) => child.id === id);
 		if (child === undefined) throw new Error(`Unexpected rail read: ${String(id)}`);
-		return Response.json({ answers: [child] });
+		return Response.json({ answers: [{ rows: child.rows, status: child.status }] });
 	};
 	return fetch;
 };
@@ -218,25 +223,33 @@ const withComposer = async (
 	if (!sheet) target.style.cssText = 'height:100dvh;padding:16px;box-sizing:border-box';
 	document.body.replaceChildren(target);
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	try {
 		await runtime.runPromise(
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fetch = fixture(preview);
-					const client = yield* createBolt({
+					const client = yield* create_bolt({
 						actor: null,
+						operation_outputs: { automations: {} },
 						locale: 'en',
 						base: location.origin,
 						fetch,
-						poll: '1 hour'
+						live: 'snapshot'
 					});
+					const api = shell_api(fetch, { base: location.origin });
+					// the rail searches no records: a finder read over no models
+					const view = view_client(client, {}, {});
 					const bolt: typeof client = {
 						...client,
 						file_url: (file, options) => imageFixtures.get(file.id) ?? client.file_url(file, options)
 					};
 					yield* Effect.promise(async () => {
-						const props = { api: shellApi(fetch, { base: location.origin }), bolt };
+						const props = {
+							api,
+							bolt,
+							read: (request: Parameters<FinderRead>[0]) => view.query(request)
+						};
 						const view = sheet
 							? mount(AgentSheet, { target, props })
 							: mount(Agent, {
@@ -244,8 +257,7 @@ const withComposer = async (
 									props: {
 										...props,
 										t: (key: string) => key,
-										request: { conversation: 'rail-root' },
-										onClose: () => {}
+										request: { conversation: 'rail-root' }
 									}
 								});
 						try {
@@ -444,4 +456,26 @@ it('Preview opens as a separate panel, Session stays separate, and Escape restor
 		},
 		true
 	);
+});
+
+
+it('shows compact attachment cards with independent preview and download controls', async () => {
+	await withComposer(false, async (target) => {
+		const card = element(target, '[data-role="user"] [data-attachment="workspace-reference.png"]');
+		const image = element<HTMLImageElement>(card, 'img');
+		await expect.poll(() => image.complete && image.naturalWidth > 0).toBe(true);
+		expect(image.getBoundingClientRect().height).toBeLessThanOrEqual(100);
+		expect(image.getBoundingClientRect().width).toBeLessThanOrEqual(150);
+		expect(card.textContent).not.toContain('Attached:');
+		const download = page.getByRole('link', { name: 'Download workspace-reference.png', exact: true });
+		await expect.element(download).toHaveAttribute('download', 'workspace-reference.png');
+		await page.getByRole('button', { name: 'Preview workspace-reference.png', exact: true }).click();
+		await expect.element(page.getByRole('dialog', { name: 'workspace-reference.png', exact: true })).toBeVisible();
+		await userEvent.keyboard('{Escape}');
+		await expect.element(page.getByRole('button', { name: 'Preview workspace-reference.png', exact: true })).toHaveFocus();
+		const viewport = element(target, '[data-agent-transcript]');
+		const steps = element(target, '[data-role="steps"] > details');
+		expect(steps.getBoundingClientRect().width).toBeGreaterThan(viewport.getBoundingClientRect().width * 0.65);
+		expect(steps.getBoundingClientRect().width).toBeLessThanOrEqual(1200);
+	});
 });

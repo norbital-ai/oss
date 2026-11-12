@@ -32,7 +32,7 @@ const marked = new Marked({
 	}
 });
 /** Markdown to HTML with `ReadonlyMarkdown`'s settings: raw HTML shown as text, links only to http(s), mailto or relative. */
-export const markdownHtml = (text: string): string => marked.parse(text, { async: false });
+export const markdown_html = (text: string): string => marked.parse(text, { async: false });
 
 /** The default `/` blocks of `MarkdownEditor`, each the Markdown that starts it (typed at a line's start). */
 export const BLOCKS: readonly CommandItem[] = [

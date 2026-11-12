@@ -1,12 +1,12 @@
 <!--
 @component
-Takes a photo with the device camera (front or back) and hands it to `onCapture` as a `File`.
+Takes a photo with the device camera (front or back) and hands it to `on_capture` as a `File`.
 -->
 <script lang="ts" module>
 	/** The props of `CameraCapture`. */
 	export type CameraCaptureProps = {
 		facing?: 'user' | 'environment';
-		onCapture: (file: File) => void;
+		on_capture: (file: File) => void;
 		label?: string;
 	};
 </script>
@@ -19,7 +19,7 @@ Takes a photo with the device camera (front or back) and hands it to `onCapture`
 	import { useBolt } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 
-	let { facing = 'environment', onCapture, label }: CameraCaptureProps = $props();
+	let { facing = 'environment', on_capture, label }: CameraCaptureProps = $props();
 	const bolt = useBolt();
 	let video = $state<HTMLVideoElement>();
 	let failed = $state(false);
@@ -70,7 +70,7 @@ Takes a photo with the device camera (front or back) and hands it to `onCapture`
 						canvas.toBlob(
 							(blob) => {
 								if (blob !== null)
-									onCapture(
+									on_capture(
 										new File(
 											[blob],
 											`photo-${new Date(millis).toISOString().replace(/[:.]/g, '-')}.jpg`,
@@ -92,7 +92,7 @@ Takes a photo with the device camera (front or back) and hands it to `onCapture`
 	{#if failed}
 		<label class="text-sm">
 			<span class="text-muted-foreground"
-				>{msg(bolt, 'camera.unavailable', 'No camera here; choose or take a photo')}</span
+				>{msg(bolt, 'camera.unavailable')}</span
 			>
 			<input
 				type="file"
@@ -100,7 +100,7 @@ Takes a photo with the device camera (front or back) and hands it to `onCapture`
 				capture={facing}
 				onchange={(e) => {
 					const f = e.currentTarget.files?.[0];
-					if (f) onCapture(f);
+					if (f) on_capture(f);
 				}}
 			/>
 		</label>
@@ -113,6 +113,6 @@ Takes a photo with the device camera (front or back) and hands it to `onCapture`
 			muted
 			class={['w-full rounded-md bg-black', facing === 'user' && '-scale-x-100']}
 		></video>
-		<Button onclick={snap}>{label ?? msg(bolt, 'camera.capture', 'Take photo')}</Button>
+		<Button onclick={snap}>{label ?? msg(bolt, 'camera.capture')}</Button>
 	{/if}
 </div>

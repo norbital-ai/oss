@@ -1,3 +1,3 @@
-import { bind_integration } from '../../../../../../src/declarations.ts';
+import { integration } from '../../../.norbital/integrations/mail.ts';
 
-export default bind_integration('mail')({ description: 'The notices mailbox', driver: 'email' });
+export default integration({ description: 'The notices mailbox', driver: 'email' });

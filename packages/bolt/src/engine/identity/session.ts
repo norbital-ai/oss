@@ -3,29 +3,32 @@
 // one write statement that also persists its rate increments; reads and pre-statement refusals are memory-only.
 import type { Json } from '../../decl/values.ts';
 import { Audit } from '../audit.ts';
-import { audited } from '../audit-operation.ts';
+import { audited, type AuditIntent } from '../audit-operation.ts';
 import { fromHex, hmacSha256, timingSafeEqual, toBase64url } from '../crypto.ts';
-import { canonical, sha256 as sha256Bytes, toHex } from '@norbital-ai/store';
+import { canonical, sha256 as sha256Bytes, to_hex } from '@norbital-ai/store';
 import { addressBucket, macKey, ratePiece, type Charge, type RateWindows } from '../access/rate.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { LIMITS, type Authority, type Lock, type TransportPort } from '../contracts.ts';
 import { Clock, Crypto, Effect, Layer, Option, Result, Schema } from 'effect';
 import { relations, type EngineManifest } from '../manifest.ts';
 import { TenantDb as TenantDbService, type TenantDbShape as TenantDb } from '../db/tenant-db.ts';
-import { Activation, Identity, Manifest, type Authenticated } from '../services.ts';
+import { CapturedResult, capturePiece, nativeCommit, type CommitPublication } from '../db/captured.ts';
+import { storedRowSql } from '../db/stored.ts';
+import { Activation, HostIdentity, Identity, Live, Manifest, type Authenticated } from '../services.ts';
+import { catalog_of, toOwnSql } from '../access/pred.ts';
 import { Authorities } from './actor.ts';
 import { RateWindows as Windows } from '../access/rate.ts';
-import { Port } from '../port.ts';
+import { Port, type PortFailure } from '../port.ts';
 import { DbError, IdentityRefusal } from '../errors.ts';
 import { answer, Chain, GATED, gate } from '../write/sql.ts';
-import { historyPiece } from '../write/commit.ts';
+import { history_piece } from '../write/commit.ts';
 import { enqueue } from '../runs/queue.ts';
 import {
 	ADDRESS_HINT,
 	addressKey,
-	memberColumn,
-	memberValue,
-	parseAddress,
+	member_column,
+	member_value,
+	parse_address,
 	type Address
 } from './address.ts';
 /**
@@ -44,7 +47,7 @@ export type Signup = {
 	};
 };
 /** The workspace's declared self sign-up, as identity hosts take it. */
-export const signupOf = (m: Pick<EngineManifest, 'workspace'>): Signup | undefined =>
+export const signup_of = (m: Pick<EngineManifest, 'workspace'>): Signup | undefined =>
 	m.workspace.signup;
 /** The `sys_config` key an administrator closes self sign-up with (`'closed'`); absent, a declared sign-up is open. */
 export const SIGNUP_KEY = 'signup';
@@ -70,7 +73,7 @@ export type TransactionalProvider = {
  * A local host's phone verifier: its own code, printed by `log` as `(sign-in code 123456)` (bolt dev, a local host,
  * tests). `fixed` is 38a(f)'s `123456`.
  */
-export function loggedPhone(log: (line: string) => void, fixed = false): PhoneVerifier {
+export function logged_phone(log: (line: string) => void, fixed = false): PhoneVerifier {
 	const codes = new Map<string, { code: string; until: number }>();
 	return {
 		via: ['sms', 'whatsapp'],
@@ -90,14 +93,13 @@ export function loggedPhone(log: (line: string) => void, fixed = false): PhoneVe
 /**
  * What identity needs from its host (its `TransactionalProvider`'s parts): `mail` sends emailed codes and
  * invitations, `sms` texted invitations, `phone` sends and checks a mobile number's code — without it, numbers
- * cannot sign in. `devSink` is a local host's (its facilities' `fixedCodes`) and the test kit's: the fixed code `123456` (38a(f)).
+ * cannot sign in. `dev_sink` is a local host's (its facilities' `fixed_codes`) and the test kit's: the fixed code `123456` (38a(f)).
  */
 export type IdentityHost = {
 	readonly audit?: import('../audit.ts').AuditShape;
 	crypto: Crypto.Crypto;
-	events?: {
-		announce: Effect.Effect<void>;
-	};
+	/** Bootstrap has no subscriptions; activation binds the actual live lane before admitting requests. */
+	publication: CommitPublication;
 	db: TenantDb;
 	now: Effect.Effect<Date>;
 	windows: RateWindows;
@@ -106,8 +108,8 @@ export type IdentityHost = {
 	mail?: TransportPort | undefined;
 	sms?: TransportPort | undefined;
 	phone?: PhoneVerifier | undefined;
-	devSink?: boolean | undefined;
-	publicUrl: string;
+	dev_sink?: boolean | undefined;
+	public_url: string;
 	/** The workspace's `signup` declaration; absent, only invited members join. */
 	signup?: Signup | undefined;
 	/**
@@ -130,26 +132,13 @@ export const refuse = (
 	new IdentityRefusal({ code, message, ...(retryAfter === undefined ? {} : { retryAfter }) });
 /** Native identity statements bind through the same Chain as domain statements. */
 export class IdentityStatement extends Chain {
-	readonly host: IdentityHost | undefined;
 	readonly auditActor: import('../contracts.ts').EngineActor | undefined;
-	private readonly fragments: string[] = [];
-	constructor(host?: IdentityHost, actor?: import('../contracts.ts').EngineActor) {
+	constructor(actor?: import('../contracts.ts').EngineActor) {
 		super();
-		this.host = host;
 		this.auditActor = actor;
 	}
-	override cte(name: string, body: string): string {
-		this.fragments.push(`${name} AS (${body})`);
-		return super.cte(name, body);
-	}
-	/** Fragments share this statement's parameters and run-queue naming registry. */
-	pieces(build: (chain: Chain) => void): string {
-		const start = this.fragments.length;
-		build(this);
-		return this.fragments.slice(start).join(',\n');
-	}
 }
-export const sha256 = (s: string) => toHex(sha256Bytes(s));
+export const sha256 = (s: string) => to_hex(sha256Bytes(s));
 const randomToken = () => toBase64url(crypto.getRandomValues(new Uint8Array(32)));
 export const newId = (crypto: Crypto.Crypto) =>
 	crypto
@@ -167,10 +156,12 @@ const CODE_MS = 10 * 60000,
 export const SIGNUP_TEXTS = 50;
 /** What one address may spend of them, so no single caller can close sign-up for the hour. */
 export const SIGNUP_TEXTS_PER_IP = 10;
-export const requireAdmin = (auth: Authority): IdentityRefusal | null =>
+export const requireAdmin = (auth: Authority): Effect.Effect<void, IdentityRefusal> =>
 	auth.admin && auth.actor.kind === 'member'
-		? null
-		: refuse('forbidden', 'Only an administrator can do this.');
+		? Effect.void
+		: Effect.fail(refuse('forbidden', 'Only an administrator can do this.'));
+const portRefusal = (error: PortFailure, message: string) =>
+	refuse(error._tag === 'Unavailable' ? 'unavailable' : error.kind === 'timeout' ? 'timeout' : 'upstream', message);
 /**
  * Rule 38a(e): the session secret and `ip_mac` are 32 host-random bytes, written with `ON CONFLICT DO NOTHING` and
  * re-read, so two cells racing agree. Existing persisted keys need no initialization write.
@@ -179,7 +170,7 @@ const StoredKey = Schema.Struct({
 	key: Schema.Literals(['session', 'ip_mac']),
 	value: Schema.String.check(Schema.isPattern(/^[0-9a-fA-F]{64}$/))
 });
-export const loadKeys = Effect.fn('Bolt.loadKeys')(function* (db: TenantDb) {
+export const load_keys = Effect.fn('Bolt.load_keys')(function* (db: TenantDb) {
 	const read = () =>
 		db
 			.rows(StoredKey, {
@@ -195,7 +186,7 @@ export const loadKeys = Effect.fn('Bolt.loadKeys')(function* (db: TenantDb) {
 			);
 	let rows = yield* read();
 	if (!rows.some((row) => row.key === 'session') || !rows.some((row) => row.key === 'ip_mac')) {
-		const hex = () => toHex(crypto.getRandomValues(new Uint8Array(32)));
+		const hex = () => to_hex(crypto.getRandomValues(new Uint8Array(32)));
 		yield* db.write({
 			text: `INSERT INTO sys_config (key, value) VALUES ('session', $1), ('ip_mac', $2) ON CONFLICT (key) DO NOTHING`,
 			params: [hex(), hex()]
@@ -216,7 +207,7 @@ export const lazyKeys = (db: TenantDb) => {
 	let loaded: Keys | undefined;
 	return Effect.suspend(() =>
 		loaded === undefined
-			? Effect.tap(loadKeys(db), (keys) =>
+			? Effect.tap(load_keys(db), (keys) =>
 					Effect.sync(() => {
 						loaded = keys;
 					})
@@ -228,7 +219,7 @@ export const keysOf = (h: Pick<IdentityHost, 'keys'>) =>
 	Effect.isEffect(h.keys) ? h.keys : Effect.succeed(h.keys);
 function preSignIn(
 	keys: Keys,
-	rule: 'session.sendCode' | 'session.verifyCode',
+	rule: 'session.send_code' | 'session.verify_code',
 	a: Address,
 	ip: string
 ): Charge[] {
@@ -236,7 +227,7 @@ function preSignIn(
 		{
 			rule,
 			bucket: macKey(keys.ipMac, addressKey(a)),
-			limit: rule === 'session.sendCode' ? 5 : 20,
+			limit: rule === 'session.send_code' ? 5 : 20,
 			windowMs: HOUR
 		},
 		{
@@ -253,16 +244,16 @@ function admitMemory(
 	nowMs: number
 ): IdentityRefusal | null {
 	const v = h.windows.charge(charges, nowMs);
-	return v.ok ? null : refuse('rateLimited', RATE_LIMITED, v.retryAfter);
+	return v.ok ? null : refuse('rate_limited', RATE_LIMITED, v.retryAfter);
 }
 const retryAfter = (now: Date) => Math.ceil((HOUR - (now.getTime() % HOUR)) / 1000);
 const codeMac = (keys: Keys, a: Address, code: string) =>
-	toHex(hmacSha256(keys.session, `${addressKey(a)}\u0000${code}`));
+	to_hex(hmacSha256(keys.session, `${addressKey(a)}\u0000${code}`));
 /** Six digits from the host's CSPRNG (38a(d)), unbiased by rejection. */
 function sixDigits(): string {
 	for (;;) {
-		const n = crypto.getRandomValues(new Uint32Array(1))[0]!;
-		if (n < 4294000000) return String(n % 1000000).padStart(6, '0');
+		for (const n of crypto.getRandomValues(new Uint32Array(1)))
+			if (n < 4294000000) return String(n % 1000000).padStart(6, '0');
 	}
 }
 /** The sign-in mail's HTML body: tables and inline styles only, so every client renders it. `code` is our own six digits. */
@@ -295,23 +286,23 @@ const SIGNUP_CONFIG = {
 const invitationsTo = (a: Address, now: Date) => ({
 	text: `SELECT id, email, phone, team, external, party FROM sys_invitation WHERE ${a.kind === 'email' ? 'lower(email) = $1' : `regexp_replace(phone, '\\D', '', 'g') = $1`}
 		AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $2::timestamptz ORDER BY expires_at DESC LIMIT 1`,
-	params: [memberValue(a), now.toISOString()]
+	params: [member_value(a), now.toISOString()]
 });
 /**
  * Rule 38a(a–c): checks membership, an open invitation or self sign-up before persisting the challenge and sending
  * an email or asking the phone verifier to send by `via` (SMS unless WhatsApp is chosen). Ineligible addresses are
  * refused before the code step. The challenge carries our attempts and expiry for the verifier's code too.
- * A port refusal is returned; a fresh `sendCode` is allowed at once. `human` is asked only for a stranger: where the
+ * A port refusal is returned; a fresh `send_code` is allowed at once. `human` is asked only for a stranger: where the
  * workspace challenges sign-up, it answers whether the caller passed.
  */
-export const sendCode = Effect.fn('Bolt.sendCode')(function* (
+export const send_code = Effect.fn('Bolt.send_code')(function* (
 	h: IdentityHost,
 	typed: string,
 	ip: string,
 	via: 'sms' | 'whatsapp' = 'sms',
 	human: Effect.Effect<boolean> = Effect.succeed(true)
 ) {
-	const a = parseAddress(typed);
+	const a = parse_address(typed);
 	if (a === null) return yield* Effect.fail(refuse('check', ADDRESS_HINT));
 	if (a.kind === 'phone' && h.phone?.via.includes(via) !== true)
 		return yield* Effect.fail(
@@ -321,28 +312,30 @@ export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 			)
 		);
 	const keys = yield* keysOf(h);
-	const charges = preSignIn(keys, 'session.sendCode', a, ip);
+	const charges = preSignIn(keys, 'session.send_code', a, ip);
 	const limited = admitMemory(h, charges, (yield* h.now).getTime());
 	if (limited) return yield* Effect.fail(limited);
 	const now = yield* h.now;
 	const [users, invitations, config] = yield* h.db.read([
 		{
-			text: `SELECT active FROM sys_user WHERE ${memberColumn(a, '$1')}`,
-			params: [memberValue(a)]
+			text: `SELECT active FROM sys_user WHERE ${member_column(a, '$1')}`,
+			params: [member_value(a)]
 		},
 		invitationsTo(a, now),
 		SIGNUP_CONFIG
 	]);
+	if (users === undefined || invitations === undefined || config === undefined)
+		return yield* Effect.fail(DbError.make('XX000', 'The database did not answer the sign-in eligibility reads.'));
 	const user = yield* identityRow(
 		Schema.UndefinedOr(Schema.Struct({ active: Schema.Boolean })),
-		users!.rows[0]
+		users.rows[0]
 	);
 	if (user !== undefined && !user.active)
-		return yield* Effect.fail(refuse('notMember', 'This member is deactivated.'));
-	if (user === undefined && invitations!.rows.length === 0) {
-		if (!signupOpen(h, a, config!.rows[0]))
+		return yield* Effect.fail(refuse('not_member', 'This member is deactivated.'));
+	if (user === undefined && invitations.rows.length === 0) {
+		if (!signupOpen(h, a, config.rows[0]))
 			return yield* Effect.fail(
-				refuse('notMember', 'This address has no invitation to this workspace.')
+				refuse('not_member', 'This address has no invitation to this workspace.')
 			);
 		if (!(yield* human))
 			return yield* Effect.fail(
@@ -365,20 +358,17 @@ export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 			charges.push(...signup);
 		}
 	}
-	const code = h.devSink === true ? '123456' : sixDigits();
-	const s = new IdentityStatement(h);
-	const rate = ratePiece(charges, now.getTime(), (value) => s.p(value));
-	const saved = yield* h.db.write({
-		params: s.params,
-		text: `WITH ${rate.cte},
-ch AS (INSERT INTO sys_challenge (address_mac, code_mac, attempts, expires_at)
+	const code = h.dev_sink === true ? '123456' : sixDigits();
+	const s = new IdentityStatement();
+	const rate = ratePiece(s, charges, now.getTime());
+	s.cte('ch', `INSERT INTO sys_challenge (address_mac, code_mac, attempts, expires_at)
 	SELECT ${s.p(macKey(keys.ipMac, addressKey(a)))}, ${s.p(codeMac(keys, a, code))}, 0, ${s.p(new Date(now.getTime() + CODE_MS).toISOString())}::timestamptz
-	WHERE ${rate.admitted}
-	ON CONFLICT (address_mac) DO UPDATE SET code_mac = excluded.code_mac, attempts = 0, expires_at = excluded.expires_at RETURNING 1)
-SELECT count(*)::int AS saved FROM ch`
-	});
-	if (saved.rows[0]!.saved !== 1)
-		return yield* Effect.fail(refuse('rateLimited', RATE_LIMITED, retryAfter(now)));
+	WHERE ${rate}
+	ON CONFLICT (address_mac) DO UPDATE SET code_mac = excluded.code_mac, attempts = 0, expires_at = excluded.expires_at RETURNING 1`);
+	const saved = yield* nativeCommit(h.db.write, h.publication, s,
+		Schema.Struct({ ...CapturedResult.fields, saved: Schema.Number }), '(SELECT count(*)::int FROM ch) AS saved');
+	if (saved.saved !== 1)
+		return yield* Effect.fail(refuse('rate_limited', RATE_LIMITED, retryAfter(now)));
 	const sent =
 		a.kind === 'email'
 			? yield* identityPort('email', h.mail, LIMITS.callMs.other, (m, signal) =>
@@ -394,19 +384,10 @@ SELECT count(*)::int AS saved FROM ch`
 					)
 				)
 			: yield* identityPort('phone', h.phone, LIMITS.callMs.other, (p, signal) =>
-					p.start(a.value, via, signal).then(() => ({ providerId: via }))
+					p.start(a.value, via, signal).then(() => ({ provider_id: via }))
 				);
 	if (Result.isFailure(sent))
-		return yield* Effect.fail(
-			refuse(
-				sent.failure._tag === 'Unavailable'
-					? 'unavailable'
-					: sent.failure.kind === 'timeout'
-						? 'timeout'
-						: 'upstream',
-				'The code could not be sent.'
-			)
-		);
+		return yield* Effect.fail(portRefusal(sent.failure, 'The code could not be sent.'));
 	return null;
 });
 export type Session = {
@@ -428,9 +409,12 @@ export const identityRow = <A>(schema: Schema.Decoder<A>, row: unknown) =>
 		Effect.mapError((error) => refuse('upstream', `The identity row is invalid: ${error.message}`))
 	);
 // ── member and invitation history ──
-/** The RETURNING of a CTE that writes a historied identity table: its id and both images. */
-export const IMAGES = `RETURNING coalesce(new.id, old.id) AS id, CASE WHEN old.id IS NULL THEN NULL ELSE to_jsonb(old) END AS o,
-	CASE WHEN new.id IS NULL THEN NULL ELSE to_jsonb(new) END AS n`;
+/** A historied identity mutation keeps its before/after projection in the same captured piece. */
+export const identityPiece = (s: Chain, name: string, table: string, statement: string): string =>
+	capturePiece(s, name, table, statement, { returning: (before, after) =>
+		`coalesce(${after}.id, ${before}.id) AS id,
+		CASE WHEN ${before}.id IS NULL THEN NULL ELSE to_jsonb(${before}) END AS o,
+		CASE WHEN ${after}.id IS NULL THEN NULL ELSE to_jsonb(${after}) END AS n` });
 /** Images acquire their identity once, then the shared writer records their history and events. */
 export function identityHistory(
 	s: IdentityStatement,
@@ -438,24 +422,23 @@ export function identityHistory(
 	cte: string,
 	at: Date,
 	actor: string | null
-): string {
-	return s.pieces((chain) => {
-		const source = chain.cte(
-			`${cte}_changes`,
-			`SELECT ${chain.p(table)}::text AS c,id,
-   coalesce((n->>'revision')::int,(o->>'revision')::int + 1) AS revision,${chain.p(at.toISOString())}::timestamptz AS at,
-   ${chain.p(actor)}::text AS actor,CASE WHEN o IS NULL THEN 'create' WHEN n IS NULL THEN 'delete' ELSE 'update' END AS op,
+): void {
+	const source = s.cte(
+		`${cte}_changes`,
+		`SELECT ${s.p(table)}::text AS c,id,
+   coalesce((n->>'revision')::int,(o->>'revision')::int + 1) AS revision,${s.p(at.toISOString())}::timestamptz AS at,
+   ${s.p(actor)}::text AS actor,CASE WHEN o IS NULL THEN 'create' WHEN n IS NULL THEN 'delete' ELSE 'update' END AS op,
    'direct'::text AS cause,false AS erased,o,n FROM ${cte}`
-		);
-		historyPiece(chain, source);
-	});
+	);
+	// identity writes run in the audited batch, which names its operation for the transaction
+	history_piece(s, source, { operation: "nullif(current_setting('bolt.audit',true),'')" });
 }
-/** The actor a history row names: `member:<id>` (as the write area's `actorRef`), or the host. */
+/** The actor a history row names: `member:<id>` (as the write area's `actor_ref`), or the host. */
 export const by = (auth: Authority | null): string =>
 	auth !== null && auth.actor.kind === 'member' ? `member:${auth.actor.id}` : 'host';
 export const MEMBERSHIP = 'bolt.membership';
 /**
- * §5.11.3: the piece that queues one `bolt.membership` run per `sys_user` row `cte` wrote (its `IMAGES`) where `gate`
+ * §5.11.3: the piece that queues one `bolt.membership` run per `sys_user` row `cte` wrote where `gate`
  * holds, or nothing when the host binds no membership port.
  */
 export function projection(
@@ -464,19 +447,15 @@ export function projection(
 	cte: string,
 	now: Date,
 	gate = 'true'
-): string {
-	if (h.membership === undefined) return '';
+): boolean {
+	if (h.membership === undefined) return false;
 	const input = `jsonb_build_object('user', x.id, 'email', x.n->'email', 'phone', x.n->'phone', 'team', x.n->'team', 'state', CASE WHEN (x.n->>'active')::boolean THEN 'active' ELSE 'inactive' END)`;
-	return (
-		',\n' +
-		s.pieces((chain) =>
-			enqueue(chain, {
-				select: `SELECT ${chain.p(MEMBERSHIP)}::text AS automation,
-        ${input} AS input,${chain.p(now.toISOString())}::timestamptz AS due_at,'platform'::text AS cause,0 AS depth
+	enqueue(s, {
+		select: `SELECT ${s.p(MEMBERSHIP)}::text AS automation,
+        ${input} AS input,${s.p(now.toISOString())}::timestamptz AS due_at,'platform'::text AS cause,0 AS depth
         FROM ${cte} x WHERE ${gate}`
-			})
-		)
-	);
+	});
+	return true;
 }
 /** After a verb whose statement may have queued `bolt.membership`: wake the queue now. */
 export const announceMembership = (h: IdentityHost) =>
@@ -498,17 +477,17 @@ export function acceptPieces(
 	now: Date,
 	gate: string,
 	born: boolean
-): string {
+): void {
 	const actor = `member:${user}`;
-	const member = born
-		? `member AS (SELECT id FROM born WHERE EXISTS (SELECT 1 FROM accepted))`
-		: `member AS (UPDATE sys_user SET team = coalesce(${s.p(inv.team)}, team), kind = ${s.p(inv.external ? 'external' : 'staff')},
-	party = ${s.p(jsonb(inv.party))}::jsonb, revision = revision + 1 WHERE id = ${s.p(user)} AND EXISTS (SELECT 1 FROM accepted) ${IMAGES}),
-${identityHistory(s, 'sys_user', 'member', now, actor)}`;
-	return `accepted AS (UPDATE sys_invitation SET accepted_at = ${s.p(now.toISOString())}::timestamptz, revision = revision + 1
-	WHERE ${openInvitation(s, inv.id, now)} AND ${gate} ${IMAGES}),
-${identityHistory(s, 'sys_invitation', 'accepted', now, actor)},
-${member}`;
+	identityPiece(s, 'accepted', 'sys_invitation', `UPDATE sys_invitation SET accepted_at = ${s.p(now.toISOString())}::timestamptz, revision = revision + 1
+	WHERE ${openInvitation(s, inv.id, now)} AND ${gate}`);
+	identityHistory(s, 'sys_invitation', 'accepted', now, actor);
+	if (born) s.cte('member', 'SELECT id FROM born WHERE EXISTS (SELECT 1 FROM accepted)');
+	else {
+		identityPiece(s, 'member', 'sys_user', `UPDATE sys_user SET team = coalesce(${s.p(inv.team)}, team), kind = ${s.p(inv.external ? 'external' : 'staff')},
+		party = ${s.p(jsonb(inv.party))}::jsonb, revision = revision + 1 WHERE id = ${s.p(user)} AND EXISTS (SELECT 1 FROM accepted)`);
+		identityHistory(s, 'sys_user', 'member', now, actor);
+	}
 }
 const openInvitation = (s: IdentityStatement, id: string, now: Date) =>
 	`id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ${s.p(now.toISOString())}::timestamptz`;
@@ -528,30 +507,41 @@ const SessionOutcome = Schema.Union([
 	}),
 	Schema.Struct({
 		kind: Schema.Literal('refused'),
-		code: Schema.Literals(['invalidCode', 'notFound', 'forbidden']),
+		code: Schema.Literals(['invalid_code', 'not_found', 'forbidden']),
 		message: Schema.String
 	})
 ]);
+const SessionResult = Schema.Struct({ ...CapturedResult.fields, outcome: SessionOutcome });
+const auditedIdentity = <O extends Json>(
+	h: IdentityHost,
+	s: IdentityStatement,
+	intent: Omit<AuditIntent, 'category'>,
+	schema: Schema.Decoder<typeof CapturedResult.Type & { readonly outcome: O }>,
+	select: string,
+	locks?: Lock
+) => Effect.gen(function* () {
+	const audit = h.audit ?? (yield* Audit);
+	const write: TenantDb['write'] = locks === undefined
+		? h.db.write
+		: (statement) => h.db.write(statement, locks);
+	return yield* audited(h.db, { category: 'identity', ...intent },
+		nativeCommit(write, h.publication, s, schema, select).pipe(Effect.map((row) => row.outcome))
+	).pipe(Effect.provideService(Audit, audit));
+});
 const sessionOutcome = (
 	s: IdentityStatement,
 	key: string,
 	digest: string,
-	code: 'invalidCode' | 'notFound' | 'forbidden',
+	code: 'invalid_code' | 'not_found' | 'forbidden',
 	message: string
-) => {
-	let select = '';
-	const cte = s.pieces((chain) => {
-		select = answer(
-			chain,
-			key,
-			digest,
-			`CASE WHEN EXISTS (SELECT 1 FROM sess) THEN jsonb_build_object('kind','committed','output',
+) => answer(
+	s,
+	key,
+	digest,
+	`CASE WHEN EXISTS (SELECT 1 FROM sess) THEN jsonb_build_object('kind','committed','output',
 			(SELECT jsonb_build_object('user',"user",'sessionId',id,'expiresAt',expires_at::text,'count',1) FROM sess),
 			'records','[]'::jsonb) ELSE ${s.p({ kind: 'refused', code, message })}::jsonb END`
-		);
-	});
-	return { cte, select };
-};
+	);
 /** The records `signup.party` names for `a` (its match field holds the address); exactly one is the person. */
 export const partyRow = (signup: Signup | undefined, a: Address) => {
 	const field = signup?.party?.match[a.kind];
@@ -560,7 +550,7 @@ export const partyRow = (signup: Signup | undefined, a: Address) => {
 	const column = `"${signup.party.model}"."${field}"`;
 	return {
 		text: `SELECT id::text AS id FROM "${signup.party.model}" WHERE ${a.kind === 'email' ? `lower(${column}) = $1` : `regexp_replace(${column}, '\\D', '', 'g') = $1`} LIMIT 2`,
-		params: [memberValue(a)]
+		params: [member_value(a)]
 	};
 };
 /**
@@ -570,7 +560,7 @@ export const partyRow = (signup: Signup | undefined, a: Address) => {
  * record that is them (a guest becomes a registered member). A member who signed up before their record existed is
  * bound to it at their next sign-in.
  */
-export const verifyCode = Effect.fn('Bolt.verifyCode')(function* (
+export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 	h: IdentityHost,
 	typed: string,
 	code: string,
@@ -578,10 +568,10 @@ export const verifyCode = Effect.fn('Bolt.verifyCode')(function* (
 	/** The caller's anonymous user (the visitor cookie's), linked to the account this proves; see `mergeAnonymous`. */
 	anonymous: string | null = null
 ) {
-	const a = parseAddress(typed);
+	const a = parse_address(typed);
 	if (a === null) return yield* Effect.fail(refuse('check', ADDRESS_HINT));
 	const keys = yield* keysOf(h);
-	const charges = preSignIn(keys, 'session.verifyCode', a, ip);
+	const charges = preSignIn(keys, 'session.verify_code', a, ip);
 	const limited = admitMemory(h, charges, (yield* h.now).getTime());
 	if (limited) return yield* Effect.fail(limited);
 	const now = yield* h.now,
@@ -592,23 +582,25 @@ export const verifyCode = Effect.fn('Bolt.verifyCode')(function* (
 			params: [address]
 		},
 		{
-			text: `SELECT id, active, kind, party FROM sys_user WHERE ${memberColumn(a, '$1')}`,
-			params: [memberValue(a)]
+			text: `SELECT id, active, kind, party FROM sys_user WHERE ${member_column(a, '$1')}`,
+			params: [member_value(a)]
 		},
 		invitationsTo(a, now),
 		SIGNUP_CONFIG,
 		partyRow(h.signup, a)
 	]);
+	if (challenges === undefined || users === undefined || invitations === undefined || config === undefined || parties === undefined)
+		return yield* Effect.fail(DbError.make('XX000', 'The database did not answer the sign-in verification reads.'));
 	const ch = yield* identityRow(
 		Schema.UndefinedOr(
 			Schema.Struct({ code_mac: Schema.String, attempts: Schema.Number, expires_at: Schema.String })
 		),
-		challenges!.rows[0]
+		challenges.rows[0]
 	);
 	if (ch === undefined || Date.parse(ch.expires_at) <= now.getTime())
-		return yield* Effect.fail(refuse('invalidCode', 'The code is wrong or has expired.'));
-	const s = new IdentityStatement(h);
-	const rate = ratePiece(charges, now.getTime(), (value) => s.p(value));
+		return yield* Effect.fail(refuse('invalid_code', 'The code is wrong or has expired.'));
+	const s = new IdentityStatement();
+	const rate = ratePiece(s, charges, now.getTime());
 	// a number's code is the verifier's, checked there; an email's is ours, compared in constant time
 	const checked =
 		a.kind === 'email'
@@ -621,27 +613,14 @@ export const verifyCode = Effect.fn('Bolt.verifyCode')(function* (
 					p.check(a.value, code, signal)
 				));
 	if (typeof checked !== 'boolean' && Result.isFailure(checked))
-		return yield* Effect.fail(
-			refuse(
-				checked.failure._tag === 'Unavailable'
-					? 'unavailable'
-					: checked.failure.kind === 'timeout'
-						? 'timeout'
-						: 'upstream',
-				'The code could not be checked. Try again.'
-			)
-		);
+		return yield* Effect.fail(portRefusal(checked.failure, 'The code could not be checked. Try again.'));
 	if (checked === false || (typeof checked !== 'boolean' && checked.success === false)) {
 		const at = s.p(address),
 			n = s.p(ch.attempts);
-		yield* h.db.write({
-			params: s.params,
-			text: `WITH ${rate.cte},
-bump AS (UPDATE sys_challenge SET attempts = attempts + 1 WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 < ${ATTEMPTS} RETURNING 1),
-gone AS (DELETE FROM sys_challenge WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 >= ${ATTEMPTS} RETURNING 1)
-SELECT 1`
-		});
-		return yield* Effect.fail(refuse('invalidCode', 'The code is wrong or has expired.'));
+		s.cte('bump', `UPDATE sys_challenge SET attempts = attempts + 1 WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 < ${ATTEMPTS} RETURNING 1`);
+		s.cte('gone', `DELETE FROM sys_challenge WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 >= ${ATTEMPTS} RETURNING 1`);
+		yield* nativeCommit(h.db.write, h.publication, s, CapturedResult);
+		return yield* Effect.fail(refuse('invalid_code', 'The code is wrong or has expired.'));
 	}
 	const user = yield* identityRow(
 		Schema.UndefinedOr(
@@ -652,20 +631,22 @@ SELECT 1`
 				party: Schema.Json
 			})
 		),
-		users!.rows[0]
+		users.rows[0]
 	);
-	const inv = yield* identityRow(Schema.UndefinedOr(InvitationSchema), invitations!.rows[0]);
-	const signup = user === undefined && inv === undefined && signupOpen(h, a, config!.rows[0]);
+	const inv = yield* identityRow(Schema.UndefinedOr(InvitationSchema), invitations.rows[0]);
+	const signup = user === undefined && inv === undefined && signupOpen(h, a, config.rows[0]);
 	// exactly one record is the person; two holding the same address name nobody
-	const party =
-		parties!.rows.length === 1
-			? { model: h.signup!.party!.model, id: String(parties!.rows[0]!.id), matched: true }
+	const matched = parties.rows.length === 1
+		? yield* identityRow(Schema.Struct({ id: Schema.NullOr(Schema.String) }), parties.rows[0])
+		: undefined;
+	const party = h.signup?.party !== undefined && matched?.id != null
+			? { model: h.signup.party.model, id: matched.id, matched: true }
 			: null;
 	if (user !== undefined && !user.active)
-		return yield* Effect.fail(refuse('notMember', 'This member is deactivated.'));
+		return yield* Effect.fail(refuse('not_member', 'This member is deactivated.'));
 	if (user === undefined && inv === undefined && !signup)
 		return yield* Effect.fail(
-			refuse('notMember', 'This address has no invitation to this workspace.')
+			refuse('not_member', 'This address has no invitation to this workspace.')
 		);
 	// a newcomer who was an anonymous visitor keeps that id: the anonymous user becomes the account, its rows with it
 	const upgraded =
@@ -682,16 +663,18 @@ SELECT 1`
 		sessionId = yield* newId(h.crypto);
 	const born = user === undefined;
 	/** The newcomer's row: inserted, or the anonymous user's, updated in place (`kind = 'anonymous'` guards the race). */
-	const birth = (columns: { readonly [column: string]: string }, when: string) =>
-		upgraded === undefined
-			? `born AS (INSERT INTO sys_user (id, ${Object.keys(columns).join(', ')})
-	SELECT ${s.p(userId)}, ${Object.values(columns).join(', ')}
-	WHERE ${when} ${IMAGES})`
-			: `born AS (UPDATE sys_user SET ${Object.entries(columns)
+	const birth = (columns: { readonly [column: string]: string }, when: string) => {
+		identityPiece(s, 'born', 'sys_user', upgraded === undefined
+			? `INSERT INTO sys_user (id, ${Object.keys(columns).join(', ')})
+	SELECT ${s.p(userId)}, ${Object.values(columns).join(', ')} WHERE ${when}`
+			: `UPDATE sys_user SET ${Object.entries(columns)
 					.map(([k, v]) => `${k} = ${v}`)
 					.join(', ')}, revision = revision + 1
-	WHERE id = ${s.p(userId)} AND kind = 'anonymous' AND active AND ${when} ${IMAGES}),
-anonymous_sessions AS (DELETE FROM sys_session WHERE "user" IN (SELECT id FROM born) AND via = ${s.p(ANONYMOUS)})`;
+	WHERE id = ${s.p(userId)} AND kind = 'anonymous' AND active AND ${when}`);
+		identityHistory(s, 'sys_user', 'born', now, `member:${userId}`);
+		if (upgraded !== undefined)
+			capturePiece(s, 'anonymous_sessions', 'sys_session', `DELETE FROM sys_session WHERE "user" IN (SELECT id FROM born) AND via = ${s.p(ANONYMOUS)}`);
+	};
 	const via = !born ? 'code' : signup ? 'signup' : 'invitation';
 	const payload = {
 		user: userId,
@@ -702,16 +685,15 @@ anonymous_sessions AS (DELETE FROM sys_session WHERE "user" IN (SELECT id FROM b
 	};
 	const outcomeKey = sha256(`identity:session.verify:${sessionId}`),
 		digest = sha256(canonical(payload));
-	const admission = s.pieces((chain) => gate(chain, outcomeKey, digest, now.toISOString()));
-	const used = `used AS (DELETE FROM sys_challenge WHERE address_mac = ${s.p(address)} AND attempts = ${s.p(ch.attempts)} AND ${rate.admitted} AND ${GATED} RETURNING 1)`;
-	const pieces = [admission, rate.cte, used];
+	gate(s, outcomeKey, digest, now.toISOString());
+	s.cte('used', `DELETE FROM sys_challenge WHERE address_mac = ${s.p(address)} AND attempts = ${s.p(ch.attempts)} AND ${rate} AND ${GATED} RETURNING 1`);
 	const email = a.kind === 'email' ? a.value : (inv?.email ?? null),
 		phone = a.kind === 'phone' ? a.value : (inv?.phone ?? null);
 	const name = defaultName(a);
 	// parameters bind as they are named, so only a branch that writes the newcomer names their contact
 	const contact = () => ({ email: s.p(email), phone: s.p(phone), name: s.p(name) });
 	if (user === undefined && inv !== undefined) {
-		pieces.push(`${birth(
+		birth(
 			{
 				...contact(),
 				kind: s.p(inv.external ? 'external' : 'staff'),
@@ -719,60 +701,47 @@ anonymous_sessions AS (DELETE FROM sys_session WHERE "user" IN (SELECT id FROM b
 				party: `${s.p(jsonb(inv.party))}::jsonb`
 			},
 			`EXISTS (SELECT 1 FROM used) AND EXISTS (SELECT 1 FROM sys_invitation WHERE ${openInvitation(s, inv.id, now)})`
-		)},
-${identityHistory(s, 'sys_user', 'born', now, `member:${userId}`)}`);
-		pieces.push(acceptPieces(s, inv, userId, now, 'EXISTS (SELECT 1 FROM born)', true));
+		);
+		acceptPieces(s, inv, userId, now, 'EXISTS (SELECT 1 FROM born)', true);
 	} else if (signup) {
-		pieces.push(`${birth(
+		birth(
 			{ ...contact(), kind: `'external'`, party: `${s.p(jsonb(party))}::jsonb`, signup: 'true' },
 			'EXISTS (SELECT 1 FROM used)'
-		)},
-${identityHistory(s, 'sys_user', 'born', now, `member:${userId}`)},
-member AS (SELECT id FROM born)`);
-	} else if (user!.kind === 'external' && user!.party === null && party !== null) {
-		pieces.push(`bound AS (UPDATE sys_user SET party = ${s.p(jsonb(party))}::jsonb, revision = revision + 1
-	WHERE id = ${s.p(userId)} AND party IS NULL AND EXISTS (SELECT 1 FROM used) ${IMAGES}),
-${identityHistory(s, 'sys_user', 'bound', now, `member:${userId}`)}`);
+		);
+		s.cte('member', 'SELECT id FROM born');
+	} else if (user?.kind === 'external' && user.party === null && party !== null) {
+		identityPiece(s, 'bound', 'sys_user', `UPDATE sys_user SET party = ${s.p(jsonb(party))}::jsonb, revision = revision + 1
+	WHERE id = ${s.p(userId)} AND party IS NULL AND EXISTS (SELECT 1 FROM used)`);
+		identityHistory(s, 'sys_user', 'bound', now, `member:${userId}`);
 	}
 	// §5.11.3: a member born by accepting an invitation or signing up is projected, in this statement
-	const project = born
-		? projection(h, s, 'born', now, signup ? 'true' : 'EXISTS (SELECT 1 FROM accepted)')
-		: '';
+	const project = born && projection(h, s, 'born', now, signup ? 'true' : 'EXISTS (SELECT 1 FROM accepted)');
+	capturePiece(s, 'sess', 'sys_session', `INSERT INTO sys_session ${SESSION_COLUMNS} SELECT v.id, ${s.p(userId)}, v.h, v.via, v.c, v.e, v.r
+	FROM (VALUES (${sessionValues(s, now, via, sha256(token), sessionId)})) v(id, h, via, c, e, r)
+	WHERE EXISTS (SELECT 1 FROM ${born ? 'member' : 'used'})`, { returning: 'id,"user",expires_at' });
 	const result = sessionOutcome(
 		s,
 		outcomeKey,
 		digest,
-		'invalidCode',
+		'invalid_code',
 		'The code is wrong or has expired.'
 	);
-	const audit = h.audit ?? (yield* Audit);
-	const out = yield* audited(
-		h.db,
+	const out = yield* auditedIdentity(
+		h,
+		s,
 		{
-			category: 'identity',
 			action: 'session.verify',
 			actor: { kind: 'member', id: userId, label: null },
 			payload,
 			outcomeKey,
 			digest
 		},
-		h.db
-			.write(
-				{
-					params: s.params,
-					text: `WITH ${pieces.join(',\n')}${project},
-sess AS (INSERT INTO sys_session ${SESSION_COLUMNS} SELECT v.id, ${s.p(userId)}, v.h, v.via, v.c, v.e, v.r
-	FROM (VALUES (${sessionValues(s, now, via, sha256(token), sessionId)})) v(id, h, via, c, e, r)
-	WHERE EXISTS (SELECT 1 FROM ${born ? 'member' : 'used'}) RETURNING id,"user",expires_at),
-${result.cte} SELECT ${result.select}`
-				},
-				lock(born)
-			)
-			.pipe(Effect.flatMap((rows) => identityRow(SessionOutcome, rows.rows[0]?.outcome)))
-	).pipe(Effect.provideService(Audit, audit));
+		SessionResult,
+		result,
+		lock(born)
+	);
 	if (out.kind === 'refused') return yield* Effect.fail(refuse(out.code, out.message));
-	if (project !== '') yield* announceMembership(h);
-	if (h.events !== undefined) yield* h.events.announce;
+	if (project) yield* announceMembership(h);
 	return { token, user: out.output.user, expiresAt: new Date(out.output.expiresAt).toISOString() };
 });
 /**
@@ -784,16 +753,13 @@ export const mintAnonymous = Effect.fn('Bolt.mintAnonymous')(function* (h: Ident
 		token = randomToken(),
 		user = yield* newId(h.crypto),
 		session = yield* newId(h.crypto),
-		s = new IdentityStatement(h),
+		s = new IdentityStatement(),
 		at = s.p(now.toISOString());
-	yield* h.db.write({
-		params: s.params,
-		text: `WITH born AS (INSERT INTO sys_user (id, name, kind) VALUES (${s.p(user)}, 'Anonymous', ${s.p(ANONYMOUS)}) ${IMAGES}),
-${identityHistory(s, 'sys_user', 'born', now, `visitor:${user}`)},
-sess AS (INSERT INTO sys_session ${SESSION_COLUMNS} SELECT ${s.p(session)}, id, ${s.p(sha256(token))}, ${s.p(ANONYMOUS)},
-	${at}::timestamptz, ${s.p(new Date(now.getTime() + ANONYMOUS_MS).toISOString())}::timestamptz, ${at}::timestamptz FROM born)
-SELECT 1`
-	});
+	identityPiece(s, 'born', 'sys_user', `INSERT INTO sys_user (id, name, kind) VALUES (${s.p(user)}, 'Anonymous', ${s.p(ANONYMOUS)})`);
+	identityHistory(s, 'sys_user', 'born', now, `visitor:${user}`);
+	capturePiece(s, 'sess', 'sys_session', `INSERT INTO sys_session ${SESSION_COLUMNS} SELECT ${s.p(session)}, id, ${s.p(sha256(token))}, ${s.p(ANONYMOUS)},
+	${at}::timestamptz, ${s.p(new Date(now.getTime() + ANONYMOUS_MS).toISOString())}::timestamptz, ${at}::timestamptz FROM born`);
+	yield* nativeCommit(h.db.write, h.publication, s, CapturedResult);
 	return { token, user };
 });
 /**
@@ -809,33 +775,22 @@ export const mergeAnonymous = Effect.fn('Bolt.mergeAnonymous')(function* (
 	to: string
 ) {
 	const now = yield* h.now,
-		s = new IdentityStatement(h),
+		s = new IdentityStatement(),
 		anon = `(SELECT id FROM anon)`;
-	const moves = relations(m).all.flatMap((r, i) => {
-		if (r.targets.length !== 1 || r.targets[0] !== 'sys_user') return [];
-		const locked = Object.entries(m.models[r.from]?.fields ?? {}).flatMap(([field, k]) => {
-			if (k.kind !== 'state') return [];
-			const states = Object.entries(k.states).filter(
-				([, st]) =>
-					(st.edit ?? 'all') !== 'all' && !(Array.isArray(st.edit) && st.edit.includes(r.fk))
-			);
-			return states.length === 0
-				? []
-				: [`t."${field}" NOT IN (${states.map(([name]) => s.p(name)).join(', ')})`];
-		});
-		return [
-			`move_${i} AS (UPDATE "${r.from}" t SET "${r.fk}" = ${s.p(to)} WHERE t."${r.fk}" = ${anon}${locked.map((l) => ` AND ${l}`).join('')} RETURNING 1)`
-		];
-	});
-	yield* h.db
-		.write({
-			params: s.params,
-			text: `WITH anon AS (SELECT id FROM sys_user WHERE id = ${s.p(from)} AND kind = ${s.p(ANONYMOUS)} AND id <> ${s.p(to)}),
-${[...moves, ''].join(',\n')}gone AS (DELETE FROM sys_session WHERE "user" = ${anon}),
-retired AS (UPDATE sys_user SET active = false, revision = revision + 1 WHERE id = ${anon} AND active ${IMAGES}),
-${identityHistory(s, 'sys_user', 'retired', now, `member:${to}`)}
-SELECT 1`
-		})
+	s.cte('anon', `SELECT id FROM sys_user WHERE id = ${s.p(from)} AND kind = ${s.p(ANONYMOUS)} AND id <> ${s.p(to)}`);
+	for (const [i, r] of relations(m).all.entries()) {
+		if (r.targets.length !== 1 || r.targets[0] !== 'sys_user') continue;
+		const locked: string[] = [];
+		for (const rule of Object.values(m.models[r.from]?.locks ?? {}))
+			if (!rule.except?.includes(r.fk)) locked.push(`(NOT ${yield* toOwnSql(m, r.from, rule.where, 't.', s, true)})`);
+		capturePiece(s, `move_${i}`, r.from,
+			`UPDATE "${r.from}" t SET "${r.fk}" = ${s.p(to)} WHERE t."${r.fk}" = ${anon}${locked.map((l) => ` AND ${l}`).join('')}`,
+			{ image: (alias) => storedRowSql(catalog_of(m), r.from, alias) });
+	}
+	capturePiece(s, 'gone', 'sys_session', `DELETE FROM sys_session WHERE "user" = ${anon}`);
+	identityPiece(s, 'retired', 'sys_user', `UPDATE sys_user SET active = false, revision = revision + 1 WHERE id = ${anon} AND active`);
+	identityHistory(s, 'sys_user', 'retired', now, `member:${to}`);
+	yield* nativeCommit(h.db.write, h.publication, s, CapturedResult)
 		.pipe(
 			Effect.catchTag('DbError', (error) =>
 				Effect.logWarning('an anonymous user was not merged into its account', error)
@@ -844,13 +799,14 @@ SELECT 1`
 });
 const lock = (born: boolean): Lock | undefined =>
 	born ? { advisory: ['sys_user.address'] } : undefined;
-export const makeIdentityHost = Effect.fn('Bolt.identityHost')(function* (
-	config: Omit<IdentityHost, 'crypto'>
+export const make_identity_host = Effect.fn('Bolt.identityHost')(function* (
+	config: Omit<IdentityHost, 'crypto' | 'publication'>
 ) {
 	const crypto = yield* Crypto.Crypto;
 	// the host's own facility: a verb may be called outside the context that built it
 	const audit = config.audit ?? (yield* Audit);
-	return { ...config, crypto, audit };
+	const host: IdentityHost = { ...config, crypto, audit, publication: 'bootstrap' };
+	return host;
 });
 /** Read the current session so a revocation from another activation applies to the next request. */
 export const authenticate = Effect.fn('Bolt.authenticate')(function* (
@@ -859,11 +815,11 @@ export const authenticate = Effect.fn('Bolt.authenticate')(function* (
 ) {
 	const session = yield* lookup(h, sha256(token));
 	if (session === null)
-		return yield* Effect.fail(refuse('notMember', 'No active session.'));
+		return yield* Effect.fail(refuse('not_member', 'No active session.'));
 	return session;
 });
 const lookup = Effect.fn('Bolt.lookup')(function* (
-	h: Pick<IdentityHost, 'db' | 'now'>,
+	h: Pick<IdentityHost, 'db' | 'now' | 'publication'>,
 	hash: string
 ) {
 	const now = yield* h.now;
@@ -895,18 +851,18 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 		r.impersonated_by === null &&
 		r.agent === null &&
 		(r.last_seen === null || now.getTime() - Date.parse(r.last_seen) >= HOUR)
-	)
-		yield* h.db.write({
-			text: `UPDATE sys_user SET last_seen = $2::timestamptz WHERE id = $1`,
-			params: [r.user, now.toISOString()]
-		});
+	) {
+		const c = new Chain();
+		capturePiece(c, 'seen', 'sys_user', `UPDATE sys_user SET last_seen = ${c.p(now.toISOString())}::timestamptz WHERE id = ${c.p(r.user)}`);
+		yield* nativeCommit(h.db.write, h.publication, c, CapturedResult);
+	}
 	let expiresAt = Date.parse(String(r.expires_at));
 	if (now.getTime() - Date.parse(r.refreshed_at) >= DAY) {
 		expiresAt = now.getTime() + (r.via === ANONYMOUS ? ANONYMOUS_MS : SESSION_MS);
-		yield* h.db.write({
-			text: `UPDATE sys_session SET refreshed_at = $2::timestamptz, expires_at = $3::timestamptz WHERE id = $1`,
-			params: [r.id, now.toISOString(), new Date(expiresAt).toISOString()]
-		});
+		const c = new Chain();
+		capturePiece(c, 'refreshed', 'sys_session', `UPDATE sys_session SET refreshed_at = ${c.p(now.toISOString())}::timestamptz,
+			expires_at = ${c.p(new Date(expiresAt).toISOString())}::timestamptz WHERE id = ${c.p(r.id)}`);
+		yield* nativeCommit(h.db.write, h.publication, c, CapturedResult);
 	}
 	return {
 		user: r.user,
@@ -928,7 +884,7 @@ export const mint = Effect.fn('Bolt.mint')(function* (
 	const now = yield* h.now,
 		token = randomToken(),
 		sessionId = yield* newId(h.crypto),
-		s = new IdentityStatement(h);
+		s = new IdentityStatement();
 	const payload = {
 		user,
 		sessionId,
@@ -939,30 +895,24 @@ export const mint = Effect.fn('Bolt.mint')(function* (
 	};
 	const outcomeKey = sha256(`identity:session.mint:${sessionId}`),
 		digest = sha256(canonical(payload));
-	const admission = s.pieces((chain) => gate(chain, outcomeKey, digest, now.toISOString()));
-	const result = sessionOutcome(s, outcomeKey, digest, 'notFound', 'No active member.');
-	const audit = h.audit ?? (yield* Audit);
-	const out = yield* audited(
-		h.db,
+	gate(s, outcomeKey, digest, now.toISOString());
+	capturePiece(s, 'sess', 'sys_session', `INSERT INTO sys_session (id, "user", token_hash, via, created_at, expires_at, refreshed_at, agent)
+	SELECT v.id, u.id, v.h, v.via, v.c, v.e, v.r, ${s.p(agent?.conversation ?? null)}::text FROM sys_user u, (VALUES (${sessionValues(s, now, 'host', sha256(token), sessionId)})) v(id, h, via, c, e, r)
+	WHERE u.id = ${s.p(user)} AND u.active AND ${GATED}`, { returning: 'id,"user",expires_at' });
+	const result = sessionOutcome(s, outcomeKey, digest, 'not_found', 'No active member.');
+	const out = yield* auditedIdentity(
+		h,
+		s,
 		{
-			category: 'identity',
 			action: 'session.mint',
 			actor: { kind: 'system', id: 'host', label: null },
 			payload,
 			outcomeKey,
 			digest
 		},
-		h.db
-			.write({
-				params: s.params,
-				text: `WITH ${admission},
-sess AS (INSERT INTO sys_session (id, "user", token_hash, via, created_at, expires_at, refreshed_at, agent)
-SELECT v.id, u.id, v.h, v.via, v.c, v.e, v.r, ${s.p(agent?.conversation ?? null)}::text FROM sys_user u, (VALUES (${sessionValues(s, now, 'host', sha256(token), sessionId)})) v(id, h, via, c, e, r)
-WHERE u.id = ${s.p(user)} AND u.active AND ${GATED} RETURNING id,"user",expires_at),
-${result.cte} SELECT ${result.select}`
-			})
-			.pipe(Effect.flatMap((rows) => identityRow(SessionOutcome, rows.rows[0]?.outcome)))
-	).pipe(Effect.provideService(Audit, audit));
+		SessionResult,
+		result
+	);
 	if (out.kind === 'refused') return yield* Effect.fail(refuse(out.code, out.message));
 	return { token, user: out.output.user, expiresAt: new Date(out.output.expiresAt).toISOString() };
 });
@@ -979,7 +929,7 @@ export const revokeSession = Effect.fn('Bolt.revokeSession')(function* (
 	if (session._tag === 'None') return;
 	const now = yield* h.now,
 		op = yield* newId(h.crypto),
-		s = new IdentityStatement(h);
+		s = new IdentityStatement();
 	const payload = {
 		user: session.value.user,
 		sessionId: session.value.id,
@@ -987,76 +937,60 @@ export const revokeSession = Effect.fn('Bolt.revokeSession')(function* (
 	};
 	const outcomeKey = sha256(`identity:session.revoke:${op}`),
 		digest = sha256(canonical(payload));
-	const admission = s.pieces((chain) => gate(chain, outcomeKey, digest, now.toISOString()));
-	let select = '';
-	const result = s.pieces((chain) => {
-		select = answer(
-			chain,
+	gate(s, outcomeKey, digest, now.toISOString());
+	capturePiece(s, 'gone', 'sys_session', `DELETE FROM sys_session WHERE id=${s.p(session.value.id)} AND token_hash=${s.p(hash)} AND ${GATED}`);
+	const select = answer(
+			s,
 			outcomeKey,
 			digest,
 			`jsonb_build_object('kind','committed','output',jsonb_build_object('sessionId',${s.p(session.value.id)}::text,
 			'count',(SELECT count(*)::int FROM gone)),'records','[]'::jsonb)`
 		);
-	});
-	const audit = h.audit ?? (yield* Audit);
-	yield* audited(
-		h.db,
+	yield* auditedIdentity(
+		h,
+		s,
 		{
-			category: 'identity',
 			action: 'session.revoke',
 			actor: { kind: 'member', id: session.value.user, label: null },
 			payload,
 			outcomeKey,
 			digest
 		},
-		h.db
-			.write({
-				text: `WITH ${admission},
-gone AS (DELETE FROM sys_session WHERE id=${s.p(session.value.id)} AND token_hash=${s.p(hash)} AND ${GATED} RETURNING id),
-${result} SELECT ${select}`,
-				params: s.params
-			})
-			.pipe(
-				Effect.flatMap((rows) =>
-					identityRow(
-						Schema.Struct({
+		Schema.Struct({ ...CapturedResult.fields, outcome: Schema.Struct({
 							kind: Schema.Literal('committed'),
 							output: Schema.Struct({
 								sessionId: Schema.String,
 								count: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1 }))
 							})
-						}),
-						rows.rows[0]?.outcome
-					)
-				)
-			)
-	).pipe(Effect.provideService(Audit, audit));
+						}) }),
+		select
+	);
 });
 /** A new member's display name until they set one: an email's local part as words (`mei.ling.tan` → `Mei Ling Tan`), else the number. */
 export const defaultName = (a: Address): string =>
 	a.kind === 'phone'
 		? a.value
 		: a.value
-				.split('@')[0]!
+				.slice(0, a.value.indexOf('@') < 0 ? a.value.length : a.value.indexOf('@'))
 				.split(/[._+-]+/)
 				.filter(Boolean)
-				.map((w) => w[0]!.toUpperCase() + w.slice(1))
+				.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
 				.join(' ') || a.value;
 /**
  * `founder.bootstrap { address, name? }` (§5.11.3): host only; creates the first admin and a session for the proven
  * address (an email or a mobile number); idempotent per address (a second call mints a session for the same member);
  * refused once another admin exists. A seeded active staff member keeps their identity when adopted as founder.
  */
-export const founderBootstrap = Effect.fn('Bolt.founderBootstrap')(function* (
+export const founder_bootstrap = Effect.fn('Bolt.founder_bootstrap')(function* (
 	h: IdentityHost,
 	typed: string,
 	name?: string
 ) {
-	const a = parseAddress(typed);
+	const a = parse_address(typed);
 	if (a === null) return yield* Effect.fail(refuse('check', ADDRESS_HINT));
 	const now = yield* h.now,
 		token = randomToken(),
-		s = new IdentityStatement(h),
+		s = new IdentityStatement(),
 		id = yield* newId(h.crypto),
 		sessionId = yield* newId(h.crypto);
 	const payload = {
@@ -1069,9 +1003,20 @@ export const founderBootstrap = Effect.fn('Bolt.founderBootstrap')(function* (
 	};
 	const outcomeKey = sha256(`identity:founder.bootstrap:${sessionId}`),
 		digest = sha256(canonical(payload));
-	const admission = s.pieces((chain) => gate(chain, outcomeKey, digest, now.toISOString()));
+	gate(s, outcomeKey, digest, now.toISOString());
 	return yield* Effect.gen(function* () {
-		const history = identityHistory(s, 'sys_user', 'ins', now, 'host');
+		s.cte('existing', `SELECT id FROM sys_user WHERE ${member_column(a, s.p(member_value(a)))} AND admin AND active`);
+		identityPiece(s, 'ins', 'sys_user', `INSERT INTO sys_user (id, email, phone, name, kind, admin)
+		SELECT ${s.p(id)}, ${s.p(a.kind === 'email' ? a.value : null)}, ${s.p(a.kind === 'phone' ? a.value : null)}, ${s.p(name ?? defaultName(a))}, 'staff', true
+		WHERE NOT EXISTS (SELECT 1 FROM sys_user WHERE admin) AND ${GATED}
+		ON CONFLICT (${a.kind === 'email' ? 'lower(email)' : 'phone_key'}) DO UPDATE
+		SET admin = true, revision = sys_user.revision + 1
+		WHERE sys_user.kind = 'staff' AND sys_user.active AND NOT EXISTS (SELECT 1 FROM sys_user WHERE admin)`);
+		identityHistory(s, 'sys_user', 'ins', now, 'host');
+		s.cte('u', 'SELECT id FROM existing UNION ALL SELECT id FROM ins');
+		capturePiece(s, 'sess', 'sys_session', `INSERT INTO sys_session ${SESSION_COLUMNS} SELECT v.id, u.id, v.h, v.via, v.c, v.e, v.r
+		FROM u, (VALUES (${sessionValues(s, now, 'host', sha256(token), sessionId)})) v(id, h, via, c, e, r)
+		WHERE ${GATED}`, { returning: 'id,"user",expires_at' });
 		const result = sessionOutcome(
 			s,
 			outcomeKey,
@@ -1079,42 +1024,21 @@ export const founderBootstrap = Effect.fn('Bolt.founderBootstrap')(function* (
 			'forbidden',
 			'This workspace already has an administrator.'
 		);
-		const audit = h.audit ?? (yield* Audit);
-		const out = yield* audited(
-			h.db,
+		const out = yield* auditedIdentity(
+			h,
+			s,
 			{
-				category: 'identity',
 				action: 'founder.bootstrap',
 				actor: { kind: 'system', id: 'host', label: null },
 				payload,
 				outcomeKey,
 				digest
 			},
-			h.db
-				.write(
-					{
-						params: s.params,
-						text: `WITH ${admission}, existing AS (SELECT id FROM sys_user WHERE ${memberColumn(a, s.p(memberValue(a)))} AND admin AND active),
-ins AS (INSERT INTO sys_user (id, email, phone, name, kind, admin)
-	SELECT ${s.p(id)}, ${s.p(a.kind === 'email' ? a.value : null)}, ${s.p(a.kind === 'phone' ? a.value : null)}, ${s.p(name ?? defaultName(a))}, 'staff', true
-	WHERE NOT EXISTS (SELECT 1 FROM sys_user WHERE admin) AND ${GATED}
-	ON CONFLICT (${a.kind === 'email' ? 'lower(email)' : 'phone_key'}) DO UPDATE
-	SET admin = true, revision = sys_user.revision + 1
-	WHERE sys_user.kind = 'staff' AND sys_user.active AND NOT EXISTS (SELECT 1 FROM sys_user WHERE admin)
-	${IMAGES}),
-${history},
-u AS (SELECT id FROM existing UNION ALL SELECT id FROM ins),
-sess AS (INSERT INTO sys_session ${SESSION_COLUMNS} SELECT v.id, u.id, v.h, v.via, v.c, v.e, v.r
-	FROM u, (VALUES (${sessionValues(s, now, 'host', sha256(token), sessionId)})) v(id, h, via, c, e, r)
-	WHERE ${GATED} RETURNING id,"user",expires_at),
-${result.cte} SELECT ${result.select}`
-					},
-					{ advisory: ['sys_user.admins'] }
-				)
-				.pipe(Effect.flatMap((rows) => identityRow(SessionOutcome, rows.rows[0]?.outcome)))
-		).pipe(Effect.provideService(Audit, audit));
+			SessionResult,
+			result,
+			{ advisory: ['sys_user.admins'] }
+		);
 		if (out.kind === 'refused') return yield* Effect.fail(refuse(out.code, out.message));
-		if (h.events !== undefined) yield* h.events.announce;
 		return {
 			token,
 			user: out.output.user,
@@ -1148,16 +1072,20 @@ export const IdentityLive = Layer.effect(
 	Effect.gen(function* () {
 		const manifest = yield* Manifest,
 			db = yield* TenantDbService,
+			live = yield* Live,
 			activation = yield* Activation;
-		const host = yield* makeIdentityHost({
+		const provided = yield* Effect.serviceOption(HostIdentity);
+		if (Option.isSome(provided)) provided.value.publication = live.publish;
+		const host = yield* make_identity_host({
 			db,
 			keys: lazyKeys(db),
 			now: Clock.currentTimeMillis.pipe(Effect.map((ms) => new Date(ms))),
 			windows: new Windows(),
-			publicUrl: activation.publicUrl,
-			signup: signupOf(manifest)
+			public_url: activation.public_url,
+			signup: signup_of(manifest)
 		});
 		const authorities = new Authorities(manifest, activation.release);
+		host.publication = live.publish;
 		return {
 			authenticate: (token: string) =>
 				authenticate(host, token).pipe(
@@ -1168,7 +1096,7 @@ export const IdentityLive = Layer.effect(
 			authority: (
 				holder: import('../access/authority.ts').Holder,
 				key = JSON.stringify([holder.actor, holder.policies, holder.admin])
-			) => Effect.sync(() => authorities.compile(holder, key))
+			) => authorities.compile(holder, key)
 		};
 	})
 );

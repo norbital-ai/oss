@@ -14,12 +14,8 @@ const ending = (rows: readonly AgentRow[]) =>
 const held = (row: AgentRow) =>
 	row.state === 'confirm' ||
 	row.tool?.approval !== undefined ||
-	(row.tool?.pageResult === undefined &&
+	(row.tool?.page_result === undefined &&
 		(row.tool?.page?.click !== undefined || row.tool?.page?.type !== undefined));
-// ponytail: a question mark outside code reads as asking the person; a structured "awaits the person" mark on the reply
-// would be exact
-const asks = (text: string | null) =>
-	(text ?? '').replace(/```[\s\S]*?```|`[^`]*`/g, '').includes('?');
 
 /**
  * The sound a turn's end makes, when it ended after `after` (an instant): a failure is an error; a held approval or a
@@ -31,7 +27,7 @@ export function endingSound(rows: readonly AgentRow[], after?: string): SoundKin
 	if (after !== undefined && (end.at === undefined || Date.parse(end.at) <= Date.parse(after)))
 		return null;
 	if (end.tag === 'failed') return 'error';
-	return asks(end.text) || rows.some((row) => row.turn === end.turn && held(row))
+	return (end.asked === true && end.answered !== true) || rows.some((row) => row.turn === end.turn && held(row))
 		? 'input'
 		: 'complete';
 }

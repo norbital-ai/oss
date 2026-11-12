@@ -59,12 +59,12 @@ const incoming = (
 	return {
 		id: message.id,
 		thread: message.threadId,
-		sentAt: new Date(Number(message.internalDate)).toISOString(),
+		sent_at: new Date(Number(message.internalDate)).toISOString(),
 		from: { handle: sender?.address.toLowerCase() ?? 'unknown', name: sender?.name || null },
 		text: (mail.text || (mail.html ?? '').replace(TAGS, '')).trim(),
 		group: [...to, ...addresses(mail.cc)].some((one) => one !== account),
 		mentioned: to.includes(account),
-		replyTo: mail.inReplyTo ?? null,
+		reply_to: mail.inReplyTo ?? null,
 		...(mail.subject ? { title: mail.subject } : {}),
 		files: mail.attachments.map((file, index) => ({
 			name: file.filename ?? 'attachment',
@@ -74,10 +74,10 @@ const incoming = (
 	};
 };
 /** A deleted message's thread is gone with it, and most deletes are of mail never stored, so it goes by id alone. */
-const deletion = (id: string, sentAt: string): Incoming => ({
+const deletion = (id: string, sent_at: string): Incoming => ({
 	id,
 	thread: '',
-	sentAt,
+	sent_at,
 	from: { handle: '', name: null },
 	text: '',
 	deleted: true
@@ -184,7 +184,7 @@ export const gmail: ChatPlatform = {
 				const claims =
 					idToken === undefined
 						? undefined
-						: await google.verifyIdToken({ idToken, audience: host.webhookUrl }).then(
+						: await google.verifyIdToken({ idToken, audience: host.webhook_url }).then(
 								(ticket) => ticket.getPayload(),
 								() => undefined
 							);

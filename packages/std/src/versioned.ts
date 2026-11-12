@@ -1,9 +1,9 @@
 // std/versioned (§3.7, §6.3 "Versioned lineage", PH GAP-4): pure helpers over the rows of the lineage recipe
-// (`period`, `sealed_at`, `voided_at`, `void_reason`, sealed-only `noOverlap`). A sealed version never changes except
+// (`period`, `sealed_at`, `voided_at`, `void_reason`, sealed-only `no_overlap`). A sealed version never changes except
 // for a shortened period (its successor was sealed) or one void with a reason; a correction is a new draft built by
-// `cloneNext` and sealed over the old version. The seal's write is held by the model's `update` grant (§3.8).
-import { addDays, PlainDate, type DatePeriod, type Instant } from './date.ts';
-import { Decimal } from './decimal.ts';
+// `clone_next` and sealed over the old version. The seal's write is held by the model's `update` grant (§3.8).
+import { add_days, PlainDate, type DatePeriod, type Instant } from './date.ts';
+import { equal_json } from './json.ts';
 import { Schema } from 'effect';
 
 /** The columns of a versioned row these helpers read. */
@@ -17,24 +17,8 @@ export type Lineage = {
 type Input = { readonly [field: string]: unknown };
 
 const live = (v: Lineage) => v.sealed_at != null && v.voided_at == null;
-/** Structural equality of JSON-shaped values (key order is not a change); a decimal compares by its exact text. */
-const equal = (a: unknown, b: unknown): boolean => {
-	const [x, y] = [a instanceof Decimal ? a.toJSON() : a, b instanceof Decimal ? b.toJSON() : b];
-	if (x === y) return true;
-	if (typeof x !== 'object' || typeof y !== 'object' || x === null || y === null) return false;
-	if (Array.isArray(x) || Array.isArray(y))
-		return (
-			Array.isArray(x) &&
-			Array.isArray(y) &&
-			x.length === y.length &&
-			x.every((v, i) => equal(v, y[i]))
-		);
-	const keys = (o: object) => Object.entries(o).filter(([, v]) => v !== undefined);
-	const [kx, ky] = [keys(x), new Map(keys(y))];
-	return kx.length === ky.size && kx.every(([k, v]) => ky.has(k) && equal(v, ky.get(k)));
-};
-const same = (a: unknown, b: unknown) => equal(a ?? null, b ?? null);
-const periodOf = (p: DatePeriod) => ({ from: p.from, to: p.to ?? null });
+const same = (a: unknown, b: unknown) => equal_json(a ?? null, b ?? null);
+const period_of = (p: DatePeriod) => ({ from: p.from, to: p.to ?? null });
 /** An update's `period` is caller input: a date period's ends as their ISO text. */
 const isPeriod = Schema.is(
 	Schema.Struct({ from: Schema.String, to: Schema.NullOr(Schema.String) })
@@ -42,13 +26,13 @@ const isPeriod = Schema.is(
 
 /**
  * The one update list (X-24) that seals `draft`: the sealed version it follows ends the day before it starts, and the
- * draft ends the day before the next sealed version, so the sealed-only `noOverlap` holds in the one statement.
+ * draft ends the day before the next sealed version, so the sealed-only `no_overlap` holds in the one statement.
  */
-export function sealWrites<V extends Lineage>(
+export function seal_writes<V extends Lineage & { readonly revision: number }>(
 	draft: V,
 	sealed: readonly V[],
 	now: Instant | string
-): { target: V['id']; set: { period: DatePeriod; sealed_at?: Instant | string } }[] {
+): { target: V; set: { period: DatePeriod; sealed_at?: Instant | string } }[] {
 	if (draft.sealed_at != null) throw new Error('This version is already sealed.');
 	const others = sealed.filter((v) => v.id !== draft.id && live(v));
 	const clash = others.find((v) => v.period.from === draft.period.from);
@@ -56,7 +40,7 @@ export function sealWrites<V extends Lineage>(
 		throw new Error(
 			`A sealed version already starts on ${draft.period.from}; void it before sealing another from that day.`
 		);
-	const writes: { target: V['id']; set: { period: DatePeriod; sealed_at?: Instant | string } }[] =
+	const writes: { target: V; set: { period: DatePeriod; sealed_at?: Instant | string } }[] =
 		[];
 	const before = others.find(
 		(v) =>
@@ -65,18 +49,18 @@ export function sealWrites<V extends Lineage>(
 	);
 	if (before)
 		writes.push({
-			target: before.id,
-			set: { period: { from: before.period.from, to: addDays(draft.period.from, -1) } }
+			target: before,
+			set: { period: { from: before.period.from, to: add_days(draft.period.from, -1) } }
 		});
 	const next = others
 		.filter((v) => v.period.from > draft.period.from)
 		.sort((a, b) => (a.period.from < b.period.from ? -1 : 1))[0];
 	const to =
 		next && (draft.period.to === null || draft.period.to >= next.period.from)
-			? addDays(next.period.from, -1)
+			? add_days(next.period.from, -1)
 			: draft.period.to;
 	writes.push({
-		target: draft.id,
+		target: draft,
 		set: { period: { from: draft.period.from, to }, sealed_at: now }
 	});
 	return writes;
@@ -84,15 +68,15 @@ export function sealWrites<V extends Lineage>(
 
 /**
  * For a sealed version's update: null when every change is an earlier end of its period (or a void, which
- * `voidOnce` judges), else the refusal. Nested relation writes (its lines) are changes, so they are refused too.
+ * `void_once` judges), else the refusal. Nested relation writes (its lines) are changes, so they are refused too.
  */
-export function onlyShortens(before: Lineage, input: Input): string | null {
+export function only_shortens(before: Lineage, input: Input): string | null {
 	for (const [field, value] of Object.entries(input)) {
 		if (field === 'voided_at' || field === 'void_reason' || same(value, (before as Input)[field]))
 			continue;
 		if (field === 'period' && isPeriod(value)) {
 			const p = value,
-				was = periodOf(before.period);
+				was = period_of(before.period);
 			if (
 				p.from === was.from &&
 				p.to != null &&
@@ -109,7 +93,7 @@ export function onlyShortens(before: Lineage, input: Input): string | null {
 }
 
 /** For a sealed version's update: one void, with a reason, never undone or reworded; null when admitted. */
-export function voidOnce(before: Lineage, input: Input): string | null {
+export function void_once(before: Lineage, input: Input): string | null {
 	const voids = 'voided_at' in input,
 		words = 'void_reason' in input;
 	if (!voids && !words) return null;
@@ -135,7 +119,7 @@ type Rows = { readonly [relation: string]: readonly { readonly [field: string]: 
  * The create input of the successor draft: the version's own values (as the caller selected them) from `from`, open,
  * unsealed, with each relation's rows as explicit nested creates.
  */
-export function cloneNext<V extends Lineage, R extends Rows = {}>(
+export function clone_next<V extends Lineage, R extends Rows = {}>(
 	version: V,
 	from: PlainDate | string,
 	children?: R

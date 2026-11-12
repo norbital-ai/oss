@@ -9,7 +9,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 	/** An exact amount in `currency`, typed to at most its minor digits (or `scale`). */
 	export type MoneyInputProps = {
 		value: Value;
-		onChange(next: Value): void;
+		on_change(next: Value): void;
 		currency?: string;
 		scale?: number;
 		id?: string;
@@ -20,8 +20,9 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 </script>
 
 <script lang="ts">
+	import { watch } from 'runed';
 	import { COUNTRY_CODES, flagOf } from '../primitives/country-picker/country-picker.svelte';
-	import { cn, useControls } from '../primitives/utils.js';
+	import { cn, use_controls } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
 	import { useKinds } from './context.js';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
@@ -30,7 +31,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 
 	let {
 		value,
-		onChange,
+		on_change,
 		currency,
 		scale,
 		id,
@@ -38,7 +39,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 		disabled,
 		invalid = false
 	}: MoneyInputProps = $props();
-	const controls = useControls();
+	const controls = use_controls();
 	const host = useKinds();
 	const off = $derived(disabled ?? controls.disabled);
 	const minor = $derived(currency === undefined ? undefined : minorDigits(currency));
@@ -55,7 +56,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 	let text = $state(''),
 		focused = $state(false);
 	let last: Value | undefined;
-	$effect.pre(() => {
+	watch.pre(() => value, (value) => {
 		// an outside change (reset, refusal, a transform's echo) replaces the text; our own echo does not
 		if (value !== last) {
 			text =
@@ -91,7 +92,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 		const next = /^-?\d+(\.\d+)?$/.test(text) ? Decimal.of(text) : text === '' ? null : undefined;
 		if (next !== undefined) {
 			last = next;
-			onChange(next);
+			on_change(next);
 		}
 	}
 </script>

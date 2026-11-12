@@ -10,8 +10,8 @@ import { DbError } from '../src/engine/errors.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Identity, RunHandlers, Runs, Writes } from '../src/engine/services.ts';
 import { Syncs, syncTriggers } from '../src/engine/sync/index.ts';
-import { remoteVersionNewer } from '../src/engine/sync/read.ts';
-import { retryDelay } from '../src/engine/sync/write.ts';
+import { remoteVersionNewer } from '../src/engine/sync/version.ts';
+import { retryDelay } from '../src/engine/queue.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
@@ -37,9 +37,9 @@ const manifest: EngineManifest = {
 		}
 	},
 	integrations: {
-		crm: { description: 'CRM', driver: 'http', http: { baseUrl: 'https://crm.example' } }
+		crm: { description: 'CRM', driver: 'http', http: { base_url: 'https://crm.example' } }
 	},
-	connections: { crm: { integration: 'crm' } },
+
 	policies: {
 		annotator: {
 			description: 'Annotates a queried contact',
@@ -50,6 +50,7 @@ const manifest: EngineManifest = {
 		annotate: {
 			description: 'Writes from a guarded contact read',
 			on: [{ cron: '* * * * *' }],
+			output: { kind: 'json' },
 			policies: ['annotator']
 		}
 	}
@@ -61,11 +62,11 @@ const source = `export default { model: { contacts: { bodies: { syncs: { crm: {
 		return yield* ctx.request({method:op === 'create' ? 'POST' : op === 'delete' ? 'DELETE' : 'PATCH',path:$id ? '/contacts/'+$id : '/contacts',headers:$version ? {'If-Match':$version} : {},body:{name:row.name}});
 	}
 } } } } }, automation: { annotate: { body: function* (_, ctx) {
-	const page = yield* ctx.query({contacts:{where:{name:{eq:'Observed contact'}},fields:['name']}});
+	const page = yield* ctx.query({contacts:{where:{name:{eq:'Observed contact'}},fields:['name','revision']}});
 	const row = page.contacts.rows[0];
 	if (row === undefined || row.$sync?.crm?.status !== 'pending') throw new Error('Missing pending contact');
 	yield* ctx.progress({text:'Read contact'});
-	const outcome = yield* ctx.act('contacts.update', [{target:row.id,set:{note:row.name}}]);
+	const outcome = yield* ctx.act({ 'contacts.update': [{target:row,set:{note:row.name}}] });
 	return {kind:outcome.kind,seen:row.$sync.crm.status};
 } } } };`;
 const Op = Schema.Struct({
@@ -105,7 +106,8 @@ const setupFor = Effect.fnUntraced(function* (
 			manifest: fixture,
 			guest: yield* program(guestSource),
 			db: Layer.succeed(TenantDb, intercepted),
-			now: '2026-10-24T08:00:00.000Z'
+			now: '2026-10-24T08:00:00.000Z',
+			seed: { sys_integration: [{ id: 'crm', integration: 'crm', name: 'CRM', active: true }] }
 		})
 	);
 	const t = Context.get(context, TestWorkspace),
@@ -217,11 +219,88 @@ const setup = setupFor(manifest, source).pipe(
 );
 
 describe('durable model sync', () => {
+	it.live('fans local and imported rows out to every active peer account, without echoing an inbound row', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const f = yield* setupFor(manifest, source);
+			yield* f.t.db.write({
+				text: `INSERT INTO sys_integration(id,integration,name,active)
+				VALUES ('crm_peer','crm','Peer',true),('crm_paused','crm','Paused',false)`,
+				params: []
+			});
+			yield* f.act('create', [{ name: 'Local fanout' }]);
+			f.page({ rows: [{ $id: 'remote-import', $version: '1', name: 'Imported fanout' }], cursor: 'fanout-1', more: false });
+			yield* f.t.syncs.read('contacts.sync.crm', { instance: 'crm' });
+			expect(yield* f.t.db.rows(Schema.Struct({ name: Schema.String, instance: Schema.String }), {
+				text: `SELECT c.name,o.instance FROM sys_outbox o JOIN contacts c ON c.id::text=o.record
+				WHERE c.name IN ('Local fanout','Imported fanout') ORDER BY c.name,o.instance`,
+				params: []
+			})).toEqual([
+				{ name: 'Imported fanout', instance: 'crm_peer' },
+				{ name: 'Local fanout', instance: 'crm' },
+				{ name: 'Local fanout', instance: 'crm_peer' }
+			]);
+		}))
+	);
+	it.live('refuses inbound updates and deletes of a locked row atomically with the sync page', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const contacts = manifest.models.contacts;
+			if (contacts === undefined) throw new Error('Missing contact fixture');
+			const f = yield* setupFor({ ...manifest, models: { contacts: {
+				...contacts,
+				locks: { frozen: { where: { name: { eq: 'Locked contact' } }, except: ['note'] } }
+			} } }, source);
+			f.page({ rows: [{ $id: 'locked', $version: '1', name: 'Locked contact' }], cursor: 'locked-1', more: false });
+			yield* f.t.syncs.read('contacts.sync.crm');
+			const [contact] = yield* f.rows();
+			if (contact === undefined) throw new Error('Missing imported locked contact');
+			expect((yield* f.act('update', [{ target: contact.id, set: { note: 'Local note awaiting delivery' } }])).outcome)
+				.toMatchObject({ kind: 'committed' });
+			const checkpoint = f.t.db.value(Schema.Struct({
+				contacts: Schema.Array(Schema.Json),
+				state: Schema.Json,
+				replicas: Schema.Array(Schema.Json),
+				history: Schema.Array(Schema.Json),
+				outbox: Schema.Array(Schema.Json)
+			}), {
+				text: `SELECT jsonb_build_object(
+					'contacts', (SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY c.id), '[]'::jsonb) FROM contacts c),
+					'state', (SELECT to_jsonb(s) - 'health' FROM sys_sync s WHERE s.instance='crm' AND s.sync='contacts.sync.crm'),
+					'replicas', (SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.id), '[]'::jsonb) FROM sys_sync_row r WHERE r.instance='crm' AND r.sync='contacts.sync.crm'),
+					'history', (SELECT coalesce(jsonb_agg(to_jsonb(h) ORDER BY h.revision), '[]'::jsonb) FROM bolt_history h WHERE h.collection='contacts' AND h.record=$1::uuid),
+					'outbox', (SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.seq), '[]'::jsonb) FROM sys_outbox o WHERE o.model='contacts')
+				)`,
+				params: [contact.id]
+			});
+			const before = yield* checkpoint;
+			expect(before.state).toMatchObject({ cursor: 'locked-1', version: 1 });
+			expect(before.replicas).toMatchObject([{ record: contact.id, remote_id: 'locked', remote_version: '1' }]);
+			expect(before.history).toMatchObject([{ op: 'create' }, { op: 'update' }]);
+			expect(before.outbox).toMatchObject([{ status: 'queued', image: { note: 'Local note awaiting delivery' } }]);
+			const attempts: readonly { row: Json; cursor: string }[] = [
+				{ row: { $id: 'locked', $version: '2', name: 'Overwritten' }, cursor: 'blocked-update' },
+				{ row: { $id: 'locked', $version: '3', $deleted: true }, cursor: 'blocked-delete' }
+			];
+			for (const attempt of attempts) {
+				f.page({ rows: [
+					{ $id: `sibling-${attempt.cursor}`, $version: '1', name: 'Must not be imported' },
+					attempt.row
+				], cursor: attempt.cursor, more: false });
+				expect(yield* f.t.syncs.read('contacts.sync.crm').pipe(Effect.flip)).toMatchObject({ code: 'locked' });
+				expect(yield* checkpoint).toEqual(before);
+				expect(yield* f.t.db.value(Schema.Json, {
+					text: "SELECT health FROM sys_sync WHERE instance='crm' AND sync='contacts.sync.crm'",
+					params: []
+				})).toMatchObject({ state: 'attention', code: 'locked' });
+			}
+			expect(f.calls).toEqual([]);
+			expect(f.accepted.size).toBe(0);
+		}))
+	);
 	it('compares versions exactly and caps retry delays', () => {
 		expect(remoteVersionNewer('9007199254740993', '9007199254740992')).toBe(true);
 		expect(remoteVersionNewer('9007199254740992', '9007199254740993')).toBe(false);
 		expect(remoteVersionNewer('2026-10-24T08:01:00Z', '2026-10-24T08:02:00Z')).toBe(false);
-		expect(retryDelay(8, 0.5)).toBe(3_600_000);
+		expect(retryDelay(8, [60_000, 300_000, 900_000, 1_800_000, 3_600_000], 3_600_000)).toBe(3_600_000);
 	});
 	it.live(
 		'retries a timed-out create with the same key, acknowledges once, and rolls back refused updates and conflicts',
@@ -397,7 +476,11 @@ describe('durable model sync', () => {
 				const first = yield* f.handler('sync.deliver').pipe(Effect.forkChild);
 				yield* Effect.gen(function* () {
 					yield* Deferred.await(blocked);
-					f.t.clock.advance('6min');
+					// a live claimer heartbeats its lease as the clock moves; a stuck one's lease lapses unrenewed
+					yield* f.t.db.write({
+						text: "UPDATE sys_outbox SET claimed_at = claimed_at - interval '6 minutes' WHERE status = 'sending'",
+						params: []
+					});
 					yield* f.handler('sync.deliver');
 					yield* Deferred.succeed(resume, undefined);
 					yield* Fiber.join(first);
@@ -449,7 +532,7 @@ describe('durable model sync', () => {
 						crm: {
 							description: 'CRM',
 							driver: 'http',
-							http: { baseUrl: 'https://crm.example' },
+							http: { base_url: 'https://crm.example' },
 							configuration: { areas: { kind: 'text', many: true, default: [] } }
 						}
 					}

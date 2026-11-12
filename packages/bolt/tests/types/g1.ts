@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { automation, policy } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
-import type { Id, InputOf, Row, Where } from '../../src/index.ts';
+import type { Id, InputOf, InstanceId, Row, Where } from '../../src/index.ts';
 import type { RowState, StoredRow } from '../../src/decl/names.ts';
 import * as rt from './fixture/runtime.ts';
 import * as m from './fixture/models.ts';
@@ -12,6 +12,7 @@ import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
+declare const erp_account: InstanceId<'erp'>;
 
 // ── union and record input kinds (§3.3.2) ──
 type Payment = {
@@ -82,7 +83,7 @@ bind_model('probe')({
 bind_model('probe')({
 	description: 'x',
 	record_label: 'record.a',
-	// @ts-expect-error U6 `union` is an input-only kind
+	// @ts-expect-error U6 model fields use their closed stored descriptor kinds
 	fields: { a: { kind: 'union', by: 't', arms: {} } }
 });
 automation({
@@ -106,7 +107,7 @@ bind_model('orders')({
 			// a workspace read is unmasked
 			is<Eq<(typeof stored.orders.rows)[number]['note'], string | null>>();
 			is<Eq<'due_soon' extends keyof StoredRow<'orders'> ? 1 : 0, 0>>(); // never computed, seq or roll-up
-			return inputs;
+			return inputs.map(({ set }) => set);
 		}
 	}
 });
@@ -116,7 +117,7 @@ bind_model('orders')({
 		...m.orders.spec.create,
 		// @ts-expect-error T1 a payload value of the wrong kind
 		transform: function* (inputs) {
-			return inputs.map((i) => ({ ...i, note: 5 }));
+			return inputs.map((i) => ({ ...i.set, note: 5 }));
 		}
 	}
 });
@@ -126,7 +127,7 @@ bind_model('orders')({
 		...m.orders.spec.create,
 		// @ts-expect-error T2 a payload writing a roll-up
 		transform: function* (inputs) {
-			return inputs.map((i) => ({ ...i, total: Decimal.of(0) }));
+			return inputs.map((i) => ({ ...i.set, total: Decimal.of(0) }));
 		}
 	}
 });
@@ -136,7 +137,7 @@ bind_model('orders')({
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
 			// @ts-expect-error T3 refuse naming a field the payload cannot hold
-			return inputs.length > 9 ? yield* ctx.refuse('too many', { field: 'total' }) : inputs;
+			return inputs.length > 9 ? yield* ctx.refuse('too many', { field: 'total' }) : inputs.map(({ set }) => set);
 		}
 	}
 });
@@ -159,7 +160,7 @@ bind_model('orders')({
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
 			// @ts-expect-error T5 a transform has no I/O facility (rule 63)
-			return (yield* ctx.ai.sys_2.infer({ prompt: 'x' }), inputs);
+			return (yield* ctx.ai.sys_2.infer({ prompt: 'x' }), inputs.map(({ set }) => set));
 		}
 	}
 });
@@ -171,7 +172,7 @@ bind_model('orders')({
 		transform: function* (inputs, ctx) {
 			return (
 				(yield* ctx.query({ orders: { fields: ['note'], limit: 1 } })).orders.rows[0]?.note,
-				inputs
+				inputs.map(({ set }) => set)
 			);
 		}
 	}
@@ -184,7 +185,7 @@ bind_model('orders')({
 			// T6b a read request reads what the root layer declares, roll-ups included (`read: 'all'`)
 			const read = yield* ctx.query({ orders: { fields: ['total'], limit: 1 } });
 			is<Eq<(typeof read.orders.rows)[number]['total'], Decimal>>();
-			return inputs;
+			return inputs.map(({ set }) => set);
 		}
 	}
 });
@@ -201,7 +202,7 @@ bind_model('orders')({
 					{ readonly id: Id<'orders'>; readonly number: string } & RowState
 				>
 			>();
-			return inputs;
+			return inputs.map(({ set }) => set);
 		}
 	}
 });
@@ -212,7 +213,7 @@ policy({
 			create: {
 				verdict: function* (_, ctx) {
 					// @ts-expect-error T7 a policy check has no I/O facility (rule 63)
-					yield* ctx.request('erp', { method: 'GET', path: 'x', output: { kind: 'json' } });
+					yield* ctx.request(erp_account, { method: 'GET', path: 'x', output: { kind: 'json' } });
 					return ctx.allow();
 				}
 			}
@@ -228,13 +229,13 @@ automation({
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
-		yield* ctx.act('orders.update', [
+		yield* ctx.act({ 'orders.update': [
+			// @ts-expect-error Q1 `set` naming a computed field (rule 38e)
 			{
-				target: target.id,
-				// @ts-expect-error Q1 `set` naming a computed field (rule 38e)
+				target,
 				set: { due_soon: target.due_soon }
 			}
-		]);
+		] });
 	}
 });
 automation({
@@ -245,7 +246,7 @@ automation({
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
 		// @ts-expect-error Q2 a relation array never replaces a set (rule 22): relation actions are explicit
-		yield* ctx.act('orders.update', [{ target: target.id, set: { lines: [] } }]);
+		yield* ctx.act({ 'orders.update': [{ target, set: { lines: [] } }] });
 	}
 });
 automation({
@@ -256,7 +257,7 @@ automation({
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
 		// @ts-expect-error Q3 a state value outside the state's states (rule 40)
-		yield* ctx.act('orders.update', [{ target: target.id, set: { status: 'shipped' } }]);
+		yield* ctx.act({ 'orders.update': [{ target, set: { status: 'shipped' } }] });
 	}
 });
 automation({
@@ -270,7 +271,7 @@ automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const out = yield* ctx
-			.act('orders.delete', [])
+			.act({ 'orders.delete': [] })
 			.pipe(
 				Effect.catchTag('ActRefused', (refused) =>
 					Effect.succeed({ kind: 'refused' as const, code: refused.code })
@@ -285,7 +286,7 @@ automation({
 automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
-		const { records } = yield* ctx.act('customers.create', [{ name: 'Acme' }]);
+		const { records } = yield* ctx.act({ 'customers.create': [{ name: 'Acme' }] });
 		for (const record of records)
 			if (record.model === 'customers') is<Eq<typeof record.id, Id<'customers'>>>();
 	}
@@ -312,8 +313,7 @@ automation({
 		void first?.email;
 		void name;
 		const { orders } = yield* ctx.query({
-			orders: { output: 'logistics', limit: 1 },
-			'orders.lines': {}
+			orders: { output: 'logistics', limit: 1, lines: {} }
 		});
 		const qty = orders.rows[0]?.lines[0]?.qty;
 		// @ts-expect-error K2 a layer field outside the named output (logistics lines carry item and qty)
@@ -323,11 +323,11 @@ automation({
 	}
 });
 
-// ── state `{ to, edit }` and owned relationships (rules 40, 41) ──
+// ── state transitions and owned relationships (rules 40, 41) ──
 bind_model('probe')({
 	description: 'x',
 	record_label: 'record.s',
-	// @ts-expect-error S1 `edit` is 'all', 'none' or a list
+	// @ts-expect-error S1 state edit lists are retired; locks are named constraints
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { edit: 'some' } } } }
 });
 bind_model('probe')({
@@ -345,14 +345,14 @@ bind_model('probe')({
 bind_model('order_lines')({
 	...m.order_lines.spec,
 	outputs: { default: { fields: 'all' } },
-	create: { columns: { order_lines: ['order', 'item', 'qty', 'price'] } },
-	update: { columns: { order_lines: ['qty'] } }
+	create: { columns: { fields: ['order', 'item', 'qty', 'price'] } },
+	update: { columns: { fields: ['qty'] } }
 });
 bind_model('order_lines')({
 	...m.order_lines.spec,
 	outputs: { default: { fields: 'all' } },
 	// @ts-expect-error O1 an owned child's parent key never changes after create (rule 41)
-	update: { columns: { order_lines: ['order', 'qty'] } }
+	update: { columns: { fields: ['order', 'qty'] } }
 });
 // (a write layer naming the FK that ties it to its parent, `'orders.lines': ['order']`, is `bolt check`'s `model/layer`)
 
@@ -419,7 +419,7 @@ automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error L3 nor write it
-		yield* ctx.act('sys_run.create', [{}]);
+		yield* ctx.act({ 'sys_run.create': [{}] });
 		return 0;
 	}
 });

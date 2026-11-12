@@ -6,7 +6,7 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import { afterAll, describe, expect, it } from '@effect/vitest';
 import type { IntegrationSpec } from '../src/decl/runtime/integration.ts';
 import type { Json } from '../src/decl/values.ts';
-import { httpRequest, type HttpInstance } from '../src/engine/integrations/http.ts';
+import { http_request, type HttpInstance } from '../src/engine/integrations/http.ts';
 import { Deferred, Effect, Fiber, FiberSet, Result } from 'effect';
 import { TestClock } from 'effect/testing';
 import { Port } from '../src/engine/port.ts';
@@ -17,7 +17,7 @@ import { manifest } from './catalogue-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { instanceRequest } from '../src/engine/integrations/instances.ts';
-import { httpPort, publicFetch, type Address, type PageWrite } from '../src/node/net.ts';
+import { http_port, public_fetch, type Address, type PageWrite } from '../src/node/net.ts';
 const servers: HttpServer[] = [];
 afterAll(() => {
 	for (const s of servers) s.close();
@@ -36,7 +36,7 @@ async function serve(
 		req
 			.on('data', (c: Buffer) => chunks.push(c))
 			.on('end', () => {
-				const r = handle(new URL(req.url!, 'http://x'), Buffer.concat(chunks));
+				const r = handle(new URL(req.url ?? '/', 'http://x'), Buffer.concat(chunks));
 				res
 					.writeHead(r.status, { 'content-type': 'application/json' })
 					.end(JSON.stringify(r.json ?? {}));
@@ -78,7 +78,7 @@ const request = (
 	fetcher: typeof fetch,
 	secrets?: Readonly<Record<string, string>>
 ) =>
-	httpRequest(spec, instance, op, secrets === undefined ? {} : { secrets }).pipe(
+	http_request(spec, instance, op, secrets === undefined ? {} : { secrets }).pipe(
 		Effect.provide(
 			Http.fromAbi({
 				fetch: async (r, _options, signal) => {
@@ -98,7 +98,7 @@ const request = (
 		)
 	);
 describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
-	const api = def({ baseUrl: 'https://api.example.test/v3', auth: { bearer: 'key' } });
+	const api = def({ base_url: 'https://api.example.test/v3', auth: { bearer: 'key' } });
 	let reads = 0;
 	class CountingCredentials extends Map<string, Json> {
 		override get(name: string) {
@@ -179,7 +179,7 @@ describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 					headers: Headers;
 				}[] = [];
 				const routes = def(
-					{ baseUrl: 'base', auth: { header: { name: 'X-Goog-Api-Key', value: 'key' } } },
+					{ base_url: 'base', auth: { header: { name: 'X-Goog-Api-Key', value: 'key' } } },
 					{ base: { kind: 'text' } }
 				);
 				yield* request(
@@ -218,11 +218,11 @@ describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 		Effect.gen(function* () {
 			yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
 			yield* Effect.flip(
-				httpRequest(
-					def({ baseUrl: 'base' }, { base: { kind: 'text' } }),
+				http_request(
+					def({ base_url: 'base' }, { base: { kind: 'text' } }),
 					{ configuration: { base: 'http://127.0.0.1:9/v1' }, credentials: new Map() },
 					{ method: 'GET', path: 'x' }
-				).pipe(Effect.provide(Http.fromAbi(httpPort)))
+				).pipe(Effect.provide(Http.fromAbi(http_port)))
 			).pipe(
 				Effect.tap((error) =>
 					Effect.sync(() =>
@@ -252,7 +252,7 @@ describe('an http instance on OAuth: its token refreshed before expiry and writt
 	});
 	const oauthDef = () =>
 		Effect.gen(function* () {
-			return def({ baseUrl: 'https://api.example.test/' }, undefined, {
+			return def({ base_url: 'https://api.example.test/' }, undefined, {
 				client: 'CID',
 				secret: 'CSECRET',
 				authorize: 'https://provider.example/authorize',
@@ -321,7 +321,7 @@ describe('an http instance on OAuth: its token refreshed before expiry and writt
 	);
 });
 describe('a token endpoint that fails, or a refresh that loses a race', () => {
-	const def0 = def({ baseUrl: 'https://api.example.test/' }, undefined, {
+	const def0 = def({ base_url: 'https://api.example.test/' }, undefined, {
 		client: 'CID',
 		secret: 'CSECRET',
 		authorize: 'https://provider.example/authorize',
@@ -365,7 +365,7 @@ describe('a token endpoint that fails, or a refresh that loses a race', () => {
 			);
 			yield* Effect.flip(call(Response.json({}, { status: 429 }), write)).pipe(
 				Effect.tap((error) =>
-					Effect.sync(() => expect(error).toMatchObject({ code: 'rateLimited' }))
+					Effect.sync(() => expect(error).toMatchObject({ code: 'rate_limited' }))
 				)
 			);
 			yield* Effect.flip(
@@ -416,7 +416,7 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 	const m: EngineManifest = {
 		...manifest,
 		integrations: {
-			api: { description: 'An API', driver: 'http', http: { baseUrl: 'https://api.example.test/' } }
+			api: { description: 'An API', driver: 'http', http: { base_url: 'https://api.example.test/' } }
 		}
 	};
 	const db = (active = true) =>
@@ -477,6 +477,27 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 			expect(sent).toEqual([{ method: 'PUT', path: '/events', query: { max: 5 }, body: { a: 1 } }]);
 		})
 	);
+	it.effect('paces consecutive requests using the configured count and window', () =>
+		Effect.gen(function* () {
+			for (const [rate, spacing] of [['2/s', 500], ['5/10s', 2_000]] as const) {
+				yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
+				const paced: EngineManifest = { ...m, integrations: { api: {
+					description: 'A paced API', driver: 'http', http: { base_url: 'https://api.example.test/' }, rate
+				} } };
+				const sent: Json[] = [], database = db();
+				const call = () => instanceRequest({ manifest: paced, db: database, links: links(200, {}, sent) }, 'api', {
+					method: 'GET', path: '/paced', output: { kind: 'json' }
+				});
+				expect(yield* call()).toEqual({ ok: true, value: {} });
+				const second = yield* call().pipe(Effect.forkChild);
+				yield* TestClock.adjust(spacing - 1);
+				expect(sent).toHaveLength(1);
+				yield* TestClock.adjust(1);
+				expect(yield* Fiber.join(second)).toEqual({ ok: true, value: {} });
+				expect(sent).toHaveLength(2);
+			}
+		})
+	);
 	it.effect('refuses a malformed nested output declaration before invoking the instance link', () =>
 		Effect.gen(function* () {
 			const sent: Json[] = [];
@@ -489,12 +510,12 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 					output: { kind: 'object', fields: { total: { kind: 'decimal' } } }
 				}
 			);
-			expect(result).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalidInput' } });
+			expect(result).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalid_input' } });
 			expect(sent).toEqual([]);
 		})
 	);
 	it.effect(
-		'a 429 is rateLimited, permanent 4xx is invalid, and retryable statuses or a body outside the output are upstream',
+		'a 429 is rate_limited, permanent 4xx is invalid, and retryable statuses or a body outside the output are upstream',
 		() =>
 			Effect.gen(function* () {
 				yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
@@ -506,7 +527,7 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 					});
 				expect(yield* call(429, '', { kind: 'json' })).toMatchObject({
 					ok: false,
-					error: { kind: 'rateLimited', status: 429 }
+					error: { kind: 'rate_limited', status: 429 }
 				});
 				expect(yield* call(403, 'no key', { kind: 'json' })).toMatchObject({
 					ok: false,
@@ -546,12 +567,12 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 						method: 'FETCH',
 						path: 'x'
 					})
-				).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalidInput' } });
+				).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalid_input' } });
 				expect(sent).toEqual([]);
 			})
 	);
 });
-describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
+describe('public_fetch: the hardened connector (L-BOLT-366)', () => {
 	const pub: Address[] = [{ address: '93.184.216.34', family: 4 }];
 	const resolve = async (host: string): Promise<readonly Address[]> =>
 		host === 'internal.test' ? [{ address: '10.0.0.5', family: 4 }] : pub;
@@ -560,7 +581,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 			const run = yield* FiberSet.makeRuntimePromise<never>();
 			const started = yield* Deferred.make<void>();
 			const stopped = yield* Deferred.make<void>();
-			const f = publicFetch(run, {
+			const f = public_fetch(run, {
 				resolve,
 				request: () =>
 					Deferred.succeed(started, undefined).pipe(
@@ -585,7 +606,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 				yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
 				let sent = 0;
 				const run = yield* FiberSet.makeRuntimePromise<never>();
-				const f = publicFetch(run, {
+				const f = public_fetch(run, {
 					resolve,
 					request: () =>
 						Effect.sync(() => {
@@ -637,7 +658,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 					};
 					write?: PageWrite;
 				}[] = [];
-				const f = publicFetch(run, {
+				const f = public_fetch(run, {
 					resolve,
 					request: (url, _a, headers = {}, write) =>
 						Effect.sync(() => {
@@ -685,7 +706,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 					},
 					{ url: 'https://cdn.example.test/done', headers: { accept: 'application/json' } }
 				]);
-				const toPrivate = publicFetch(run, {
+				const toPrivate = public_fetch(run, {
 					resolve,
 					request: () =>
 						Effect.succeed({
@@ -718,20 +739,20 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 						: [{ address: '127.0.0.1', family: 4 }];
 				const ok = () => Effect.succeed({ status: 200, contentType: '', body: 'ok' });
 				const first = yield* Port.attempt('test', () =>
-					publicFetch(run, { resolve: loop, request: ok, allowLoopback: true })(
+					public_fetch(run, { resolve: loop, request: ok, allowLoopback: true })(
 						'http://crm.localhost:5173/api'
 					)
 				);
 				expect(yield* Port.attempt('test', () => first.text())).toBe('ok');
 				const second = yield* Port.attempt('test', () =>
-					publicFetch(run, { resolve: loop, request: ok, allowLoopback: true })(
+					public_fetch(run, { resolve: loop, request: ok, allowLoopback: true })(
 						'http://127.0.0.1:8080/'
 					)
 				);
 				expect(yield* Port.attempt('test', () => second.text())).toBe('ok');
 				yield* Effect.flip(
 					Port.attempt('test', () =>
-						publicFetch(run, { resolve: loop, request: ok, allowLoopback: true })(
+						public_fetch(run, { resolve: loop, request: ok, allowLoopback: true })(
 							'http://rebind.localhost/'
 						)
 					)
@@ -746,7 +767,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 				);
 				yield* Effect.flip(
 					Port.attempt('test', () =>
-						publicFetch(run, { resolve, request: ok, allowLoopback: true })('http://internal.test/')
+						public_fetch(run, { resolve, request: ok, allowLoopback: true })('http://internal.test/')
 					)
 				).pipe(
 					Effect.tap((error) =>
@@ -759,7 +780,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 				);
 				yield* Effect.flip(
 					Port.attempt('test', () =>
-						publicFetch(run, { resolve: loop, request: ok })('http://crm.localhost:5173/api')
+						public_fetch(run, { resolve: loop, request: ok })('http://crm.localhost:5173/api')
 					)
 				).pipe(
 					Effect.tap((error) =>
@@ -776,7 +797,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 		Effect.gen(function* () {
 			yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
 			const run = yield* FiberSet.makeRuntimePromise<never>();
-			const f = publicFetch(run, {
+			const f = public_fetch(run, {
 				resolve,
 				request: (url) =>
 					Effect.succeed({ status: 307, location: `${url.href}x`, contentType: '', body: '' })

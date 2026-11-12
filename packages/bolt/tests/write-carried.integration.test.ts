@@ -1,7 +1,8 @@
 // A write callback may carry rows of other models into its own commit, as owned children are: they run their own
 // callbacks, the root write's grant admits them, and they commit with the write or not at all.
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Schema } from 'effect';
+import { Context, Effect, Layer, Schema } from 'effect';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
@@ -18,8 +19,7 @@ const manifest: EngineManifest = {
 		orders: {
 			...orders,
 			...(orders.create === undefined ? {} : { create: { ...orders.create, transform: true } }),
-			...(orders.update === undefined ? {} : { update: { ...orders.update, transform: true } }),
-			delete: { check: true }
+			...(orders.update === undefined ? {} : { update: { ...orders.update, transform: true } })
 		},
 		tags: {
 			...tags,
@@ -28,8 +28,7 @@ const manifest: EngineManifest = {
 	}
 };
 const Row = Schema.Record(Schema.String, Schema.Json);
-const Rows = Schema.Array(Row);
-const Updates = Schema.Array(Schema.Struct({ before: Row, set: Row }));
+const Changes = Schema.Array(Schema.Struct({ before: Schema.NullOr(Row), set: Row, after: Row }));
 /** What the orders callbacks carry, set by each case. */
 let carry: (rows: readonly (typeof Row.Type)[]) => { readonly [key: string]: Json } = () => ({});
 const setup = Effect.gen(function* () {
@@ -50,22 +49,8 @@ const setup = Effect.gen(function* () {
 			invokeProgram: () => Effect.die('This fixture executes native write callbacks only.'),
 			invoke: (invocation) =>
 				Effect.gen(function* () {
-					if (invocation.kind === 'delete') {
-						const gone = yield* Schema.decodeUnknownEffect(Rows)(invocation.input).pipe(
-							Effect.orDie
-						);
-						const answer = carry(gone);
-						return {
-							kind: 'ok' as const,
-							output: Object.keys(answer).length === 0 ? null : answer
-						};
-					}
-					const rows =
-						invocation.kind === 'update'
-							? (yield* Schema.decodeUnknownEffect(Updates)(invocation.input).pipe(
-									Effect.orDie
-								)).map((change) => change.set)
-							: yield* Schema.decodeUnknownEffect(Rows)(invocation.input).pipe(Effect.orDie);
+                    const changes = yield* Schema.decodeUnknownEffect(Changes)(invocation.input).pipe(Effect.orDie);
+                    const rows = changes.map(({ set }) => set);
 					if (invocation.target === 'tags') {
 						if (rows.some((row) => row['name'] === 'refuse'))
 							return { kind: 'refused' as const, message: 'This tag refuses.' };
@@ -77,7 +62,7 @@ const setup = Effect.gen(function* () {
 					// only a root create carries: the rows it carries would otherwise carry again, level after level
 					return {
 						kind: 'ok' as const,
-						output: { rows, ...(invocation.kind === 'create' ? carry(rows) : {}) }
+						output: { sets: rows, ...(invocation.kind === 'create' ? carry(changes.map(({ after }) => after)) : {}) }
 					};
 				})
 		}
@@ -167,7 +152,7 @@ describe('a write that carries other models', () => {
 			carry = () => ({
 				with: {
 					orders: {
-						update: [{ target: shelf.id, set: { note: 'counted' }, observed: shelf.revision }]
+						update: [{ target: shelf, set: { note: 'counted' } }]
 					}
 				}
 			});
@@ -180,24 +165,30 @@ describe('a write that carries other models', () => {
 		})
 	);
 
-	it.effect('lets a delete check carry writes that commit with the delete', () =>
-		Effect.gen(function* () {
-			const { run, names, order } = yield* setup;
-			carry = () => ({});
-			committed(yield* run({ verb: 'create', input: [{ title: 'stool' }] }));
-			const stool = yield* order('stool');
-			if (stool === undefined) return yield* Effect.die('no stool');
-			carry = () => ({ with: { tags: { create: [{ name: 'stool gone' }] } } });
-			committed(yield* run({ verb: 'delete', input: [{ target: stool.id }] }));
-			expect(yield* order('stool')).toBeUndefined();
-			expect(yield* names).toEqual(['STOOL GONE']);
-		})
-	);
+	it.live('an atomic map can delete a row and create its replacement record together', () =>
+        Effect.scoped(Effect.gen(function* () {
+            const context = yield* Layer.build(TestWorkspace.layer({ manifest: base }));
+            const t = Context.get(context, TestWorkspace);
+            const acts = yield* t.body_acts(t.admin);
+            const write = (input: Readonly<Record<string, Json>>) => acts(input);
+            const made = yield* write({ 'orders.create': [{ title: 'stool' }] });
+            if (made.kind !== 'committed') throw new Error('The stool must commit.');
+            const stool = yield* t.db.value(Schema.Struct({ id: Schema.String, revision: Schema.Number }), {
+                text: "SELECT jsonb_build_object('id',id,'revision',revision) FROM orders WHERE title='stool'", params: []
+            });
+            expect(yield* write({
+                'orders.delete': [{ target: stool }],
+                'tags.create': [{ name: 'stool gone' }]
+            })).toMatchObject({ kind: 'committed' });
+            expect(yield* t.db.value(Schema.Number, { text: "SELECT count(*)::int FROM orders WHERE id=$1", params: [stool.id] })).toBe(0);
+            expect(yield* t.db.value(Schema.String, { text: 'SELECT name FROM tags', params: [] })).toBe('stool gone');
+        }))
+    );
 
 	it.effect('is admitted by the root grant: the writer needs no grant on what is carried', () =>
 		Effect.gen(function* () {
 			const { run, names } = yield* setup;
-			carry = () => ({ onApproved: { tags: { create: [{ name: 'carried' }] } } });
+			carry = () => ({ on_approved: { tags: { create: [{ name: 'carried' }] } } });
 			committed(
 				yield* run({
 					verb: 'create',

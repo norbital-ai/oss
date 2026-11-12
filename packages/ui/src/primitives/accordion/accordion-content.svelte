@@ -3,15 +3,20 @@
 	import { Accordion as AccordionPrimitive } from 'bits-ui';
 	import { slide } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
+	import type { SnakeProps } from '../bits.js';
 
-	let { class: className, children, ...restProps }: AccordionPrimitive.ContentProps = $props();
+	let { class: className, children, force_mount = true, hidden_until_found, ...restProps }: SnakeProps<AccordionPrimitive.ContentProps, {
+		force_mount: 'forceMount';
+		hidden_until_found: 'hiddenUntilFound';
+	}> = $props();
 </script>
 
 <AccordionPrimitive.Content
-	forceMount
 	data-slot="accordion-content"
 	class={cn('overflow-clip text-sm', className)}
 	{...restProps}
+	forceMount={force_mount}
+	hiddenUntilFound={hidden_until_found}
 >
 	{#snippet child({ props, open })}
 		{#if open}

@@ -19,7 +19,7 @@ The live status of one automation run: queued, running with its progress, or its
 	// One run, live (rule 56): status, progress, the error code, and download links for the files it returned.
 	import { useBolt } from '../client/context.js';
 	import { watch } from '../read/live.svelte.js';
-	import { humanize, msg } from '../text/messages.js';
+	import { humanize, msg, catalogText } from '../text/messages.js';
 	import { progressOf, runFiles } from './facts.js';
 	import ReadGate from '../read/ReadGate.svelte';
 
@@ -52,7 +52,7 @@ The live status of one automation run: queued, running with its progress, or its
 
 {#if runs === undefined && given === null}
 	<p role="status" class="text-muted-foreground text-sm" data-run={id}>
-		{msg(bolt, 'run.unavailable', 'Run {id} started; its status is not readable here.', { id })}
+		{msg(bolt, 'run.unavailable', { id })}
 	</p>
 {:else}
 	<ReadGate {state} what={automation}>
@@ -60,7 +60,7 @@ The live status of one automation run: queued, running with its progress, or its
 			{@const r = page.rows[0]}
 			{#if r === undefined}
 				<p role="status" class="text-muted-foreground text-sm" data-run={id}>
-					{msg(bolt, 'run.notFound', 'Run {id} is not found or not yours to see.', { id })}
+					{msg(bolt, 'run.not_found', { id })}
 				</p>
 			{:else}
 				{@const p = progressOf(r)}
@@ -73,10 +73,10 @@ The live status of one automation run: queued, running with its progress, or its
 									: bolt.t(`automations.${automation}.label`))}</span
 						>
 						<span class="text-muted-foreground"
-							>{msg(bolt, `run.status.${r.status}`, r.status)}</span
+							>{catalogText(bolt, `run.status.${r.status}`, r.status)}</span
 						>
 						{#if (r.attempt_count ?? 0) > 1}<span class="text-muted-foreground text-xs"
-								>{msg(bolt, 'run.attempt', 'attempt {n}', { n: r.attempt_count ?? 0 })}</span
+								>{msg(bolt, 'run.attempt', { n: r.attempt_count ?? 0 })}</span
 							>{/if}
 					</div>
 					{#if p !== null && r.status === 'running'}<progress class="h-1 w-full" max="1" value={p}
@@ -88,7 +88,7 @@ The live status of one automation run: queued, running with its progress, or its
 						<a
 							class="text-primary text-xs underline-offset-4 hover:underline"
 							href={bolt.file_url(f)}
-							download={f.name}>{msg(bolt, 'run.download', 'Download {name}', { name: f.name })}</a
+							download={f.name}>{msg(bolt, 'run.download', { name: f.name })}</a
 						>
 					{/each}
 				</div>

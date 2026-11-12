@@ -2,9 +2,10 @@
 // over measured row heights, so it is tested without a DOM.
 
 /** Prefix sums: `offsets[i]` is row i's top, `offsets[n]` the total height. */
-export function offsets(heights: readonly number[]): number[] {
-	const out = [0];
-	for (const h of heights) out.push(out[out.length - 1]! + h);
+export function offsets(heights: readonly number[]): [number, ...number[]] {
+	const out: [number, ...number[]] = [0];
+	let total = 0;
+	for (const h of heights) out.push(total += h);
 	return out;
 }
 
@@ -14,7 +15,9 @@ function rowAt(offs: readonly number[], y: number): number {
 		hi = offs.length - 1;
 	while (lo < hi) {
 		const mid = (lo + hi) >> 1;
-		if (offs[mid + 1]! > y) hi = mid;
+		const end = offs[mid + 1];
+		if (end === undefined) throw new RangeError('The virtual row has no end offset.');
+		if (end > y) hi = mid;
 		else lo = mid + 1;
 	}
 	return lo;

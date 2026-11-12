@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { provideBolt, provideKinds } from '@norbital-ai/ui';
+	import { provide_bolt, provide_kinds } from '@norbital-ai/ui';
 	import type { ShellApi } from '../../src/shell/api-types.ts';
 	import type { ShellBolt } from '../../src/shell/runtime.ts';
 	import type { SettingsTab, ShellBoot } from '../../src/shell/nav.ts';
 	import type { SystemUiIntent } from '../../src/protocol/system-ui.ts';
+	import { view_client } from '../../src/page/view-client.ts';
 	import Settings from '../../src/shell/settings/Settings.svelte';
 	import People from '../../src/shell/people/People.svelte';
 	let {
@@ -23,10 +24,11 @@
 		configuration: SystemUiIntent;
 		people?: boolean;
 	} = $props();
-	// The mounted fixture owns one native shell client for its whole lifetime.
+	// The mounted fixture owns one native shell client for its whole lifetime; its controls read through the shell's view client.
 	// svelte-ignore state_referenced_locally
-	provideBolt(() => bolt);
-	provideKinds({
+	const view = view_client(bolt, {}, {});
+	provide_bolt(() => view);
+	provide_kinds({
 		get locale() {
 			return workspace.locale;
 		},

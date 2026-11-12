@@ -20,7 +20,7 @@ const CLIENT_ROLES: ReadonlySet<Role> = new Set([
 /** Vite queries describe how to load a file; they never grant access to the file's source. */
 const modulePath = (id: string, importer?: string): string | undefined => {
 	if (id.includes('\0')) return undefined;
-	const path = id.split(/[?#]/, 1)[0]!;
+	const [path = ''] = id.split(/[?#]/, 1);
 	if (path.startsWith('file:')) return resolve(fileURLToPath(path));
 	const decoded = Result.getOrElse(
 		Result.try(() => decodeURIComponent(path)),

@@ -37,7 +37,7 @@ const parse = (message: Message, photo: (url: string) => Promise<Uint8Array>): I
 	return {
 		id: message.message_id,
 		thread: message.chat.id,
-		sentAt: new Date(message.date).toISOString(),
+		sent_at: new Date(message.date).toISOString(),
 		from: { handle: message.from.id, name: message.from.display_name },
 		text,
 		group: message.chat.chat_type === 'GROUP',

@@ -1,16 +1,16 @@
-import { withEnvoys } from './support/envoys.ts';
+import { with_envoys } from './support/envoys.ts';
 // The shell host's administration surface over HTTP on PGlite: the environment badge and host notice in the boot,
 // `access.explain`, member handles, invitation resend, API keys and team membership.
 import { expect, layer } from '@effect/vitest';
 import { Context, Effect, FiberSet, Layer, Result, Schema } from 'effect';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { shellApi } from '../src/shell/runtime.ts';
-import { founderBootstrap } from '../src/engine/identity/session.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { shell_api } from '../src/shell/runtime.ts';
+import { founder_bootstrap } from '../src/engine/identity/session.ts';
 import { HostIdentity } from '../src/engine/services.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en', apps: ['sales'] },
 		models: {
 			openings: {
@@ -34,10 +34,10 @@ const manifest = Result.getOrThrow(
 		},
 		teams: { sales: { name: 'Sales', policies: ['rep'] } },
 		automations: {},
-		connections: {},
+
 
 		mcp: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -116,18 +116,18 @@ const api = (j: Jar) =>
 			request.headers.set('cookie', cookieOf(j));
 			return run(t.handle(request, { address: '203.0.113.9' }), { signal: request.signal });
 		};
-		return shellApi(fetch, { base: ORIGIN });
+		return shell_api(fetch, { base: ORIGIN });
 	});
 const settings = (j: Jar) => api(j).pipe(Effect.flatMap((host) => host.settings()));
 const boot = (j: Jar) => api(j).pipe(Effect.flatMap((host) => host.boot()));
 const workspace = Layer.effectContext(
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
-			withEnvoys(
+			with_envoys(
 				TestWorkspace.layer({
 					manifest,
 					host: {
-						publicUrl: ORIGIN,
+						public_url: ORIGIN,
 						workspace: () => ({ name: 'Acme', handle: 'acme' }),
 						environment: 'staging',
 						notice: async (a) =>
@@ -144,7 +144,7 @@ const workspace = Layer.effectContext(
 				runtimeEnvoys
 			)
 		);
-		yield* founderBootstrap(Context.get(context, HostIdentity), 'boss@acme.example');
+		yield* founder_bootstrap(Context.get(context, HostIdentity), 'boss@acme.example');
 		return context;
 	})
 );
@@ -255,7 +255,7 @@ layer(workspace)('shell administration', (it) => {
 		Effect.gen(function* () {
 			expect(
 				(yield* op(admin, 'issueKey', { name: 'Bad', team: 'undeclared' })).body?.error?.code
-			).toBe('notFound');
+			).toBe('not_found');
 			expect(
 				(yield* op(admin, 'issueKey', { name: 'Forged', policies: ['rep'] })).body?.error?.code
 			).toBe('invalid');
@@ -271,13 +271,13 @@ layer(workspace)('shell administration', (it) => {
 		() =>
 			Effect.gen(function* () {
 				const id = repId;
-				expect((yield* op(rep, 'assignTeam', { id, team: null })).status).toBe(403);
-				expect((yield* op(admin, 'assignTeam', { id, team: 'undeclared' })).body?.error?.code).toBe(
-					'notFound'
+				expect((yield* op(rep, 'assign_team', { id, team: null })).status).toBe(403);
+				expect((yield* op(admin, 'assign_team', { id, team: 'undeclared' })).body?.error?.code).toBe(
+					'not_found'
 				);
-				expect((yield* op(admin, 'assignTeam', { id, team: null })).status).toBe(200);
+				expect((yield* op(admin, 'assign_team', { id, team: null })).status).toBe(200);
 				expect((yield* boot(rep)).nav).toEqual([]);
-				expect((yield* op(admin, 'assignTeam', { id, team: teamId })).status).toBe(200);
+				expect((yield* op(admin, 'assign_team', { id, team: teamId })).status).toBe(200);
 				expect((yield* boot(rep)).nav.map((node) => node.name)).toEqual(['sales']);
 			})
 	);

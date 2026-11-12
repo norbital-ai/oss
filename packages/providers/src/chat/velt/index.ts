@@ -208,7 +208,7 @@ export const velt: ChatPlatform = {
 				// a comment id is a number within its annotation, and ids dedupe across all of them
 				id: `${place(thread).annotationId}:${comment.commentId}`,
 				thread,
-				sentAt: instant(comment.createdAt),
+				sent_at: instant(comment.createdAt),
 				from: { handle: comment.from?.userId ?? '', name: comment.from?.name ?? null },
 				text,
 				group: true,

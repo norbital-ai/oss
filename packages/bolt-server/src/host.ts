@@ -4,19 +4,19 @@
 // needs check refuses a bundle that needs it.
 import { Effect, FiberSet, FileSystem, Option, Result, Schema } from 'effect';
 import { HttpClient } from 'effect/http';
-import { aiModalityRefusals } from '@norbital-ai/providers/openrouter';
-import { toDrivers } from '@norbital-ai/providers';
+import { ai_modality_refusals } from '@norbital-ai/providers/openrouter';
+import { to_drivers } from '@norbital-ai/providers';
 import {
 	BoltError,
-	documentConverter,
-	documentIngester,
+	document_converter,
+	document_ingester,
 	Port,
 	type FilesPort,
 	type LogPort,
 	type LogRow
 } from '@norbital-ai/bolt/engine';
 import { off, type Challenge, type Facilities, type Serving } from '@norbital-ai/bolt/facilities';
-import { httpPort, keysPort, localAudit, localFiles, tcpPort } from '@norbital-ai/bolt/node';
+import { http_port, keys_port, local_audit, local_files, tcp_port } from '@norbital-ai/bolt/node';
 import { drivers } from './drivers.ts';
 import { messaging } from './mail.ts';
 import { nominatim, openAi, s3Files } from './ports.ts';
@@ -33,21 +33,21 @@ export type Facility = 'AI_SYS_1' | 'AI_SYS_2' | 'AI_EMBED' | 'GEO' | 'CONVERT' 
  */
 export type Transactional = {
 	email: { provider: 'resend'; key: string; from: string } | { provider: 'log' };
-	phone: { provider: 'twilio'; accountSid: string; authToken: string } | { provider: 'log' } | null;
+	phone: { provider: 'twilio'; account_sid: string; auth_token: string } | { provider: 'log' } | null;
 };
 export type AiModel = string | { model: string; inputs?: number; tokens?: number };
 /** What this host is configured with. */
 export type HostSettings = {
 	/** The workspace's public origin: webhook URLs and the OAuth callback are under it. */
-	publicUrl: string;
+	public_url: string;
 	/** Separate durable audit database directory; retained across process and artifact restarts. */
-	auditDir: string;
+	audit_dir: string;
 	files:
 		{ provider: 'local'; root: string } | { provider: 's3'; endpoint: string; credential: string };
 	/** Seals the tenant's secrets. */
-	masterKey: Buffer;
+	master_key: Buffer;
 	/** Host Google app shared by Gmail and Calendar where the workspace declares none of its own. */
-	googleOAuth: { id: string; secret: string } | null;
+	google_oauth: { id: string; secret: string } | null;
 	transactional: Transactional;
 	providers: { readonly [F in Facility]?: Provider };
 	/**
@@ -60,10 +60,10 @@ export type HostSettings = {
 		sys2: { readonly [modelClass: string]: string };
 		embed: { readonly [embedding: string]: AiModel };
 	};
-	vapid: { publicKey: string; privateKey: string } | null;
+	vapid: { public_key: string; private_key: string } | null;
 	/** Each Apple team's provider-token key (its id and `.p8` PEM), by team id; `{}` sends no APNs. */
-	apns: { readonly [teamId: string]: { readonly keyId: string; readonly key: string } };
-	turnstile: { siteKey: string; secret: string } | null;
+	apns: { readonly [teamId: string]: { readonly key_id: string; readonly key: string } };
+	turnstile: { site_key: string; secret: string } | null;
 	/** `production`, `staging`, `development`, …: every other than production shows the shell's badge. */
 	environment: string | null;
 };
@@ -74,8 +74,8 @@ const endpoint = (provider: Provider) => ({
 	...(provider.credential === undefined ? {} : { credential: provider.credential })
 });
 /** Cloudflare Turnstile's siteverify: this host's challenge facility. */
-const cloudflare = (siteKey: string, secret: string): Challenge => ({
-	siteKey,
+const cloudflare = (site_key: string, secret: string): Challenge => ({
+	site_key,
 	verify: async (token, ip, signal) => {
 		const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
 			method: 'POST',
@@ -124,6 +124,7 @@ const memoryLog = (log: (line: string) => void): LogPort => {
 	};
 };
 const PushBody = Schema.Struct({
+	id: Schema.String,
 	subscription: Schema.Struct({
 		kind: Schema.Literals(['web', 'apns']),
 		endpoint: Schema.String,
@@ -149,11 +150,11 @@ export const host = Effect.fn('server.host')(function* (
 		sys2 = config.providers.AI_SYS_2,
 		embed = config.providers.AI_EMBED;
 	if (sys2 !== undefined) {
-		const refusals = yield* aiModalityRefusals(
+		const refusals = yield* ai_modality_refusals(
 			[
 				{
 					system: 'sys_2',
-					endpoint: { baseUrl: endpoint(sys2).endpoint, apiKey: sys2.credential },
+					endpoint: { base_url: endpoint(sys2).endpoint, api_key: sys2.credential },
 					models: Object.values(config.ai.sys2)
 				},
 				...(embed === undefined
@@ -161,17 +162,17 @@ export const host = Effect.fn('server.host')(function* (
 					: [
 							{
 								system: 'embed' as const,
-								endpoint: { baseUrl: endpoint(embed).endpoint, apiKey: embed.credential },
+								endpoint: { base_url: endpoint(embed).endpoint, api_key: embed.credential },
 								models: Object.values(config.ai.embed).map((model) =>
 									typeof model === 'string' ? model : model.model
 								)
 							}
 						])
 			],
-			{ tolerateUnread: false }
+			{ tolerate_unread: false }
 		);
 		if (refusals.length > 0)
-			return yield* Effect.fail(BoltError.make('invalidSpec', 'admission', refusals.join('\n')));
+			return yield* Effect.fail(BoltError.make('invalid_spec', 'admission', refusals.join('\n')));
 	}
 	const runtime = yield* FiberSet.makeRuntimePromise<HttpClient.HttpClient>();
 	const run = <A, E>(
@@ -180,7 +181,7 @@ export const host = Effect.fn('server.host')(function* (
 	) => runtime(Effect.result(effect), options).then(Result.getOrThrow);
 	const files =
 		config.files.provider === 'local'
-			? localFiles(config.files.root)
+			? local_files(config.files.root)
 			: yield* s3Files(config.files.endpoint, config.files.credential);
 	const filesPort: FilesPort = {
 		put: (bytes, meta, signal) => run(files.put(bytes, meta), { signal }),
@@ -205,12 +206,12 @@ export const host = Effect.fn('server.host')(function* (
 					run
 				);
 	const fs = yield* FileSystem.FileSystem;
-	yield* fs.makeDirectory(config.auditDir, { recursive: true });
-	const auditDir = yield* fs.realPath(config.auditDir);
-	if (options.pglite !== undefined && auditDir === (yield* fs.realPath(options.pglite)))
+	yield* fs.makeDirectory(config.audit_dir, { recursive: true });
+	const audit_dir = yield* fs.realPath(config.audit_dir);
+	if (options.pglite !== undefined && audit_dir === (yield* fs.realPath(options.pglite)))
 		return yield* Effect.fail(
 			BoltError.make(
-				'invalidSpec',
+				'invalid_spec',
 				'admission',
 				'The audit database must be separate from the tenant database.'
 			)
@@ -218,12 +219,12 @@ export const host = Effect.fn('server.host')(function* (
 	const vapid = config.vapid;
 	const facilities: Facilities = {
 		storage: { database, files: filesPort },
-		logs: { runtime: memoryLog(log), audit: yield* localAudit(auditDir) },
+		logs: { runtime: memoryLog(log), audit: yield* local_audit(audit_dir) },
 		transactional: {
 			mail: messages.mail,
 			sms: messages.sms,
 			phone: messages.phone,
-			fixedCodes: messages.fixedCodes,
+			fixed_codes: messages.fixed_codes,
 			push: (database) => {
 				// a gone subscription is deleted on the database the engine hands over
 				const db = {
@@ -244,7 +245,7 @@ export const host = Effect.fn('server.host')(function* (
 										? ios.send({ _tag: 'Push', ...input })
 										: vapid === null
 											? Port.unavailable('push', 'This host has no VAPID keys.')
-											: push(db, vapid, config.publicUrl).send({ _tag: 'Push', ...input })
+											: push(db, vapid, config.public_url).send({ _tag: 'Push', ...input })
 								)
 							),
 							{ signal }
@@ -254,25 +255,25 @@ export const host = Effect.fn('server.host')(function* (
 			challenge:
 				config.turnstile === null
 					? off
-					: cloudflare(config.turnstile.siteKey, config.turnstile.secret)
+					: cloudflare(config.turnstile.site_key, config.turnstile.secret)
 		},
 		intelligence,
 		ports: {
-			webhooks: { publicUrl: config.publicUrl },
+			webhooks: { public_url: config.public_url },
 			websockets: off,
 			outbound: {
-				http: httpPort,
-				tcp: tcpPort
+				http: http_port,
+				tcp: tcp_port
 			}
 		},
 		sandbox: off,
-		keys: keysPort(config.masterKey)
+		keys: keys_port(config.master_key)
 	};
 	const converter = config.providers.CONVERT;
 	const documents =
 		converter?.endpoint === undefined || converter.credential === undefined
 			? undefined
-			: documentConverter({ url: converter.endpoint, key: converter.credential });
+			: document_converter({ url: converter.endpoint, key: converter.credential });
 	const geo =
 		config.providers.GEO?.endpoint === undefined
 			? undefined
@@ -280,18 +281,18 @@ export const host = Effect.fn('server.host')(function* (
 	const web = config.providers.WEB === undefined ? undefined : publicWeb();
 	const search = config.providers.SEARCH;
 	const serving: Serving = {
-		providers: yield* toDrivers(drivers(), run),
-		...(config.googleOAuth === null ? {} : { oauth: { google: config.googleOAuth } }),
+		providers: yield* to_drivers(drivers(), run),
+		...(config.google_oauth === null ? {} : { oauth: { google: config.google_oauth } }),
 		...(documents === undefined ||
 		converter?.endpoint === undefined ||
 		converter.credential === undefined
 			? {}
 			: {
-					ingest: documentIngester({ url: converter.endpoint, key: converter.credential }).ingest,
+					ingest: document_ingester({ url: converter.endpoint, key: converter.credential }).ingest,
 					convert: {
 						targets: documents.targets,
 						convert: (source, to, o, signal) => run(documents.convert(source, to, o), { signal }),
-						previewPdf: (source, options, signal) =>
+						preview_pdf: (source, options, signal) =>
 							run(documents.previewPdf(source, options), { signal })
 					}
 				}),
@@ -309,11 +310,11 @@ export const host = Effect.fn('server.host')(function* (
 		...(search?.endpoint === undefined || search.credential === undefined
 			? {}
 			: {
-					hostTools: [webSearch({ endpoint: search.endpoint, credential: search.credential })]
+					host_tools: [webSearch({ endpoint: search.endpoint, credential: search.credential })]
 				}),
 		shell: {
 			...(config.environment === null ? {} : { environment: config.environment }),
-			...(vapid === null ? {} : { push: { publicKey: vapid.publicKey } })
+			...(vapid === null ? {} : { push: { public_key: vapid.public_key } })
 		}
 	};
 	return { facilities, serving };

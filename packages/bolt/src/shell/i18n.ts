@@ -1,7 +1,7 @@
 // The shell's copy in each framework locale. English is the key itself and Chinese is written out here.
 // The viewer's language choice is a per-browser preference over the workspace's locale.
 import { Effect, Result } from 'effect';
-import { uiMessagesFor } from '@norbital-ai/ui/i18n';
+import { ui_messages_for } from '@norbital-ai/ui/i18n';
 
 export const LOCALES = ['en', 'zh'] as const;
 type FrameworkLocale = (typeof LOCALES)[number];
@@ -30,7 +30,29 @@ export const setLocale = (locale: string): Effect.Effect<void> =>
 		Effect.andThen(Effect.sync(() => location.reload()))
 	);
 
+/** Handle text keeps repeated separators and leading/trailing whitespace exactly as authored. */
+export const handle_words = (value: string): string => value.replaceAll('_', ' ');
+/** Agent names uppercase their first character, including a leading Unicode letter. */
+export const humanise = (value: string): string =>
+	handle_words(value).replace(/^./, (character) => character.toUpperCase());
+/** Native form labels and verbs uppercase an initial ASCII word character only. */
+export const humanise_word = (value: string): string =>
+	handle_words(value).replace(/^\w/, (character) => character.toUpperCase());
+
+export const BRIEF_TIMESTAMP = { dateStyle: 'medium', timeStyle: 'short' } as const;
+/** Native display semantics: the runtime locale remains the default, and invalid text reads as Invalid Date. */
+export const date_time = (value: string, locale?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string =>
+	new Date(value).toLocaleString(locale, options);
+/** Both shell USD views retain Intl's runtime locale and currency defaults; session costs show up to four decimals. */
+export const usd = (value: number, maximum_fraction_digits?: number): string =>
+	new Intl.NumberFormat(undefined, {
+		style: 'currency', currency: 'USD',
+		...(maximum_fraction_digits === undefined ? {} : { maximumFractionDigits: maximum_fraction_digits })
+	}).format(value);
+
 export const SHELL_ZH: { readonly [key: string]: string } = {
+	'Your input': '请提供信息',
+	'Question details': '问题详情',
 	'Command center': '指挥中心',
 	'A change is a named set of edits from live, with its own preview on a copy of live’s data.':
 		'变更是基于线上版本的一组命名修改，在线上数据的副本上有自己的预览。',
@@ -897,6 +919,9 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Sent: '已发送',
 	Sync: '同步',
 	'Sync health': '同步状态',
+	'Initial sync could not finish.': '初始同步未能完成。',
+	'Retry the initial sync and replay dead-lettered deliveries.': '重试初始同步并重放已停止的投递。',
+	'Retry sync': '重试同步',
 	'Last read': '上次读取',
 	'Read lag': '读取延迟',
 	'Last change': '上次变更',
@@ -976,6 +1001,49 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Attach media or files': '附加媒体或文件',
 	'Jump to latest': '跳到最新',
 	'Waiting for your answer': '等待您的回答',
+	'Workspace update': '工作区更新',
+	'Change details': '更改详情',
+	'Change summary': '更改摘要',
+	'Read more': '展开阅读',
+	'Restore this version?': '恢复到此版本？',
+	'Apply these changes?': '应用这些更改？',
+	'Restore to': '恢复到',
+	'Some stored data will be removed or changed. Review the data changes before applying.': '部分现有数据将被删除或更改。应用前请查看数据变更。',
+	'will be discarded.': '之后写入的数据将被丢弃。',
+	'Your current data will be kept.': '将保留当前数据。',
+	'Review data changes and version': '查看数据变更和版本',
+	'This updates the workspace for everyone.': '此更改将应用于整个工作区。',
+	'The update failed:': '更新失败：',
+	'Changes applied.': '更改已应用。',
+	'View workspace': '查看工作区',
+	'Applying changes… You can keep using the app.': '正在应用更改……您可以继续使用应用。',
+	'Changes rejected.': '已拒绝更改。',
+	'Restore version': '恢复版本',
+	'Apply changes': '应用更改',
+
+	'Your answer': '您的回答',
+	'Or write your own answer': '或填写其他回答',
+	'Send answer': '发送回答',
+	Answered: '已回答',
+	'Continued in conversation': '已在对话中继续',
+	'Queued instructions': '排队中的指示',
+	'Steers the current task at the next step.': '将在下一步引导当前任务。',
+	'Reorder message': '调整消息顺序',
+	'Drag or use the arrow keys to reorder': '拖动或使用方向键调整顺序',
+	'Move down': '下移',
+	Attachments: '附件',
+	'New connection': '新建连接',
+	'Choose integration': '选择集成',
+	'Instructions': '工作指示',
+	'Smart message handling': '智能消息处理',
+	'Back to envoys': '返回使者列表',
+	'Back to connections': '返回连接列表',
+	'Delete connection': '删除连接',
+	'Activity and account details': '活动与账户详情',
+	'Creating channel…': '正在创建渠道……',
+	'Choose who it helps and the channel it will answer on.': '选择服务对象及回复消息的渠道。',
+	'Create connection': '创建连接',
+	'Choose an integration, name the account, then pair its provider.': '选择集成并为账户命名，然后配对服务提供商。',
 	'Just now': '刚刚',
 	'Summarize this conversation and keep its transcript available.':
 		'总结此对话，并保留其完整记录。',
@@ -1064,7 +1132,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 };
 
 /** The framework copy of a locale (none for English: the key is the text). */
-export const frameworkText = (locale: string): { readonly [key: string]: string } => ({
+export const framework_text = (locale: string): { readonly [key: string]: string } => ({
 	...(locale.toLowerCase().startsWith('zh') ? SHELL_ZH : {}),
-	...uiMessagesFor(locale)
+	...ui_messages_for(locale)
 });

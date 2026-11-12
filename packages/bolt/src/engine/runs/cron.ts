@@ -16,7 +16,7 @@ export function cronFields(input: string): string {
 }
 
 /** Workspace schedules have minute resolution. The same parser checks and schedules them. */
-export function parseCron(
+export function parse_cron(
 	input: string,
 	tz?: string
 ): Result.Result<Cron.Cron, Cron.CronParseError> {

@@ -3,20 +3,20 @@
 The public temporal controls are `TimeInput` and `TimeRangeInput`. Calendar, month, week, year, date segments and clock controls are internal implementations. Both public controls select their implementation through `of` and `precision` and accept a scalar or an array of values.
 
 ```svelte
-<TimeInput of="date" precision="month" value={month} onChange={(next) => (month = next)} />
-<TimeInput of="date" precision="day" value={dates} onChange={(next) => (dates = next)} />
-<TimeRangeInput of="date" precision="day" value={range} onChange={(next) => (range = next)} />
+<TimeInput of="date" precision="month" value={month} on_change={(next) => (month = next)} />
+<TimeInput of="date" precision="day" value={dates} on_change={(next) => (dates = next)} />
+<TimeRangeInput of="date" precision="day" value={range} on_change={(next) => (range = next)} />
 <TimeRangeInput
 	of="instant"
 	precision="hour"
 	value={windows}
-	onChange={(next) => (windows = next)}
+	on_change={(next) => (windows = next)}
 />
 <TimeRangeInput
 	of="time"
 	precision="minute"
-	value={clockIntervals}
-	onChange={(next) => (clockIntervals = next)}
+	value={clock_intervals}
+	on_change={(next) => (clock_intervals = next)}
 />
 ```
 

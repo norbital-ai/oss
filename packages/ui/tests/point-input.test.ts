@@ -15,7 +15,7 @@ test('point search mounts only when opened', async () => {
 			catalog: {},
 			part: 'point',
 			view: PointInput,
-			props: { value: null, onChange: () => {}, map: false }
+			props: { value: null, on_change: () => {}, map: false }
 		}
 	});
 	try {

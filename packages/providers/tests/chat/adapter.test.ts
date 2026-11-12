@@ -4,23 +4,24 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider, nothing, recent, type ChatPlatform, type Incoming } from '../../src/chat/adapter.ts';
 import { chatProviders, PLATFORMS } from '../../src/chat/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, webhook } from './kit.ts';
 
 const message = (id: string): Incoming => ({
 	id,
 	thread: 't1',
-	sentAt: '2026-11-05T00:00:00.000Z',
+	sent_at: '2026-11-05T00:00:00.000Z',
 	from: { handle: 'u1', name: null },
 	text: id
 });
 /** A platform whose push carries nothing: every message is read from its change log. */
-const logged = (log: {
+type ChangeLog = {
 	pending: Incoming[];
 	asked: (string | null)[];
 	gap?: boolean;
 	pushed?: Incoming[];
-}): ChatPlatform => ({
+};
+const logged = (log: ChangeLog): ChatPlatform => ({
 	id: 'logged',
 	name: { en: 'Logged', zh: 'Logged' },
 	description: { en: 'A change log', zh: 'A change log' },
@@ -47,20 +48,20 @@ const logged = (log: {
 describe('a platform with a change log', () => {
 	it.live('stores what a push points to, and keeps the cursor it reached', () =>
 		Effect.gen(function* () {
-			const log = { pending: [] as Incoming[], asked: [] as (string | null)[] };
+			const log: ChangeLog = { pending: [], asked: [] };
 			const h = yield* connected(logged(log), {});
 			log.pending = [message('m1'), message('m2')];
-			expect((yield* h.link.webhook!(webhook('{}', {}))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook('{}', {}))).status).toBe(200);
 			expect(h.events).toHaveLength(2);
 			expect(h.values.get('cursor')).toBe('c2');
 			log.pending = [];
-			yield* h.link.webhook!(webhook('{}', {}));
+			yield* required(h.link.webhook)(webhook('{}', {}));
 			expect(log.asked.at(-1)).toBe('c2');
 		})
 	);
 	it.live('a failed store keeps the cursor, so the same changes are read again', () =>
 		Effect.gen(function* () {
-			const log = { pending: [] as Incoming[], asked: [] as (string | null)[] };
+			const log: ChangeLog = { pending: [], asked: [] };
 			let refusing = false;
 			const h = yield* connected(logged(log), {}, {
 				emit: () => (refusing ? Promise.reject(new Error('the store refused')) : Promise.resolve())
@@ -68,41 +69,41 @@ describe('a platform with a change log', () => {
 			const before = h.values.get('cursor');
 			log.pending = [message('m1')];
 			refusing = true;
-			expect((yield* h.link.webhook!(webhook('{}', {}))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook('{}', {}))).status).toBe(500);
 			expect(h.values.get('cursor')).toBe(before);
 			refusing = false;
-			expect((yield* h.link.webhook!(webhook('{}', {}))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook('{}', {}))).status).toBe(200);
 			expect(h.values.get('cursor')).toBe('c1');
 		})
 	);
 	it.live('a push that carries its message reads no change log, so its files are not fetched twice', () =>
 		Effect.gen(function* () {
-			const log = {
-				pending: [] as Incoming[],
-				asked: [] as (string | null)[],
+			const log: ChangeLog = {
+				pending: [],
+				asked: [],
 				pushed: [message('m1')]
 			};
 			const h = yield* connected(logged(log), {});
 			const asked = log.asked.length;
-			yield* h.link.webhook!(webhook('{}', {}));
+			yield* required(h.link.webhook)(webhook('{}', {}));
 			expect(h.events).toHaveLength(1);
 			expect(log.asked).toHaveLength(asked);
 		})
 	);
 	it.live('a new pairing starts the log over and forgets the old place', () =>
 		Effect.gen(function* () {
-			const log = { pending: [message('m1')], asked: [] as (string | null)[] };
+			const log: ChangeLog = { pending: [message('m1')], asked: [] };
 			const h = yield* connected(logged(log), {});
 			expect(log.asked[0]).toBe(null);
 			expect(h.values.get('cursor')).toBe('c1');
 			log.pending = [];
-			yield* h.link.pair!({});
+			yield* required(h.link.pair)({});
 			expect(log.asked.at(-1)).toBe(null);
 		})
 	);
 	it.live('a lost place in the log tells a person, on the connection', () =>
 		Effect.gen(function* () {
-			const log = { pending: [] as Incoming[], asked: [] as (string | null)[], gap: true };
+			const log: ChangeLog = { pending: [], asked: [], gap: true };
 			const h = yield* connected(logged(log), {});
 			expect(h.status).toMatchObject({ state: 'connected', detail: expect.stringContaining('gap') });
 		})
@@ -112,12 +113,12 @@ describe('a platform with a change log', () => {
 describe('a platform', () => {
 	it.live('that claims more than it implements cannot connect', () =>
 		Effect.gen(function* () {
-			const log = { pending: [], asked: [] };
+			const log: ChangeLog = { pending: [], asked: [] };
 			const h = yield* host(
 				chatProvider({ ...logged(log), consistency: 'history' }),
 				fetch
 			);
-			const refused = yield* Effect.flip(h.link.pair!({}));
+			const refused = yield* Effect.flip(required(h.link.pair)({}));
 			expect(refused.message).toContain('declares history');
 		})
 	);

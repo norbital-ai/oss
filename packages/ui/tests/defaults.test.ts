@@ -14,7 +14,7 @@ import type { Row, Page, Values } from '../src/model/types.ts';
 import type { Fields, Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { DefaultsPart } from './defaults-harness.svelte';
-import { everyRow, viewFixture, type ReadOptions } from './view-fixture.ts';
+import { everyRow, viewFixture, type ReadOptions, type ViewScript } from './view-fixture.ts';
 import { element } from './elements.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./defaults-harness.svelte');
@@ -23,14 +23,14 @@ const { default: Harness } = await import('./defaults-harness.svelte');
 const catalogT = (words: Record<string, string>) => (key: string) => words[key] ?? key;
 
 test('enumText: the catalog word, else the value in words; acronyms stay', () => {
-	assert.equal(k.enumText('not_sent'), 'Not sent');
-	assert.equal(k.enumText('PENDING_REVIEW'), 'Pending review');
-	assert.equal(k.enumText('SG_CPF'), 'SG CPF');
-	assert.equal(k.enumText('SG_64'), 'SG 64');
-	assert.equal(k.enumText('sent_to_HR'), 'Sent to HR');
+	assert.equal(k.enum_text('not_sent'), 'Not sent');
+	assert.equal(k.enum_text('PENDING_REVIEW'), 'Pending review');
+	assert.equal(k.enum_text('SG_CPF'), 'SG CPF');
+	assert.equal(k.enum_text('SG_64'), 'SG 64');
+	assert.equal(k.enum_text('sent_to_HR'), 'Sent to HR');
 	const t = catalogT({ 'models.jobs.fields.status.on_hold': 'Paused' });
-	assert.equal(k.enumText('on_hold', { t, model: 'jobs', field: 'status' }), 'Paused');
-	assert.equal(k.enumText('on_hold', { t, model: 'jobs', field: 'kind' }), 'On hold');
+	assert.equal(k.enum_text('on_hold', { t, model: 'jobs', field: 'status' }), 'Paused');
+	assert.equal(k.enum_text('on_hold', { t, model: 'jobs', field: 'kind' }), 'On hold');
 	// format() speaks the same words, for one and many values and for states
 	assert.equal(
 		k.format({ kind: 'enum', values: ['a_b', 'c'], many: true }, ['a_b', 'c']),
@@ -82,7 +82,7 @@ test('dates: a date is a medium date; an instant a medium date and a short time,
 		new RegExp(`^${want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} – …$`)
 	);
 	assert.equal(
-		k.formatValue(at, 'en-US'),
+		k.format_value(at, 'en-US'),
 		new Date(at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
 	);
 });
@@ -113,7 +113,7 @@ test('numbers: money is CODE 1,234.00; a decimal is trimmed; a sum of money is m
 		kind: 'sum',
 		of: 'quote_lines.qty'
 	});
-	assert.equal(k.fieldName({ kind: 'sum', of: 'quote_lines.net', money: {} }), 'money');
+	assert.equal(k.field_name({ kind: 'sum', of: 'quote_lines.net', money: {} }), 'money');
 });
 
 test('labels: a FK names its target, the catalog outranks a declared label, a model has a singular', () => {
@@ -136,7 +136,7 @@ test('a record title follows its expression and falls back to the target id', ()
 		status: { kind: 'enum', values: ['on_hold'] }
 	};
 	assert.equal(
-		k.fieldsText(
+		k.fields_text(
 			fields,
 			{ code: 'Q-1', due_on: '2026-01-02', status: 'on_hold' },
 			['code', 'due_on', 'status'],
@@ -176,7 +176,7 @@ test('CSV cells: enum words, ISO dates and instants, relation labels', () => {
 		n: 3,
 		$refs: { account: { of: 'accounts', text: 'Acme' } }
 	};
-	const words = (v: string) => k.enumText(v);
+	const words = (v: string) => k.enum_text(v);
 	assert.equal(
 		csv.csvCell(row, 'status', { kind: 'state', initial: 'on_hold', states: {} }, words),
 		'On hold'
@@ -221,7 +221,8 @@ async function fake(
 		read?(model: string, options: ReadOptions): Page | Promise<Page>;
 		get?(model: string, id: string): Row | null | Response | Promise<Row | null | Response>;
 		aggregate?(): Values;
-		start?(automation: string, input: Value): void;
+		sync_control?: ViewScript['sync_control'];
+		catalog?: ViewScript['catalog'];
 		t?: ViewBolt['t'];
 		runs?: ViewBolt['runs'];
 	} = {}
@@ -229,6 +230,7 @@ async function fake(
 	const reads: { c: string; o: ReadOptions }[] = [];
 	const client = await viewFixture({
 		...extra,
+		catalog: extra.catalog ?? jobs,
 		read: (model, options) => {
 			reads.push({ c: model, o: options });
 			return extra.read?.(model, options) ?? { rows, next: null };
@@ -358,9 +360,6 @@ test('Table inside a sheet: the row and the phone card still open their record (
 });
 
 test("Table: search falls back to the label fields; the empty text keeps the label's case", async () => {
-	const { bolt, reads } = await fake([], {
-		t: (key) => (key === 'models.sow_documents.label' ? 'SOW documents' : key)
-	});
 	const cat: NonNullable<KindsHost['catalog']> = {
 		sow_documents: {
 			record_label: 'record.title',
@@ -368,6 +367,10 @@ test("Table: search falls back to the label fields; the empty text keeps the lab
 			fields: { title: { kind: 'text' } }
 		}
 	};
+	const { bolt, reads } = await fake([], {
+		catalog: cat,
+		t: (key) => (key === 'models.sow_documents.label' ? 'SOW documents' : key)
+	});
 	const t = await show(
 		{ part: 'table', props: { of: 'sow_documents', columns: ['title'] } },
 		bolt,
@@ -506,10 +509,11 @@ test('select-all discards a matching result from before the search changed', asy
 });
 
 test("CustomView with `model`: the menu offers that model's file sync, and the search stays on the view's own rows", async () => {
-	const started: { automation: string; input: Value }[] = [];
+	const synced: { model: string; sync: string; input: Value }[] = [];
 	const { bolt } = await fake([], {
-		start: (automation, input) => {
-			started.push({ automation, input });
+		sync_control: ({ model, sync, input }) => {
+			synced.push({ model, sync, input });
+			return { kind: 'committed', output: null, records: [] };
 		}
 	});
 	const cat = {
@@ -532,9 +536,9 @@ test("CustomView with `model`: the menu offers that model's file sync, and the s
 	assert.ok(row, 'the file sync export is in the menu');
 	element(row, 'button').click();
 	await settle();
-	assert.deepEqual(started, [
+	assert.deepEqual(synced, [
 		{
-			automation: 'jobs.sync.sheet',
+			model: 'jobs', sync: 'sheet',
 			input: { mode: 'export', to: 'xlsx', context: { site: 's1' } }
 		}
 	]);
@@ -581,7 +585,7 @@ test('form reads keep the current draft when an older row resolves last', async 
 		await settle();
 		const current = pending.get('b');
 		assert.ok(current);
-		current({ id: 'b', title: 'Current' });
+		current({ ...ROW, id: 'b', title: 'Current' });
 		await settle();
 		const input = target.querySelector('input');
 		assert.ok(input);
@@ -591,7 +595,7 @@ test('form reads keep the current draft when an older row resolves last', async 
 		await settle();
 		const old = pending.get('a');
 		assert.ok(old);
-		old({ id: 'a', title: 'Old' });
+		old({ ...ROW, id: 'a', title: 'Old' });
 		await settle();
 		assert.deepEqual(calls, ['a', 'b']);
 		assert.equal(target.querySelector('input')?.value, 'Edited');

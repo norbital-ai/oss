@@ -1,6 +1,6 @@
-import { bind_model } from '../../../../../../../src/declarations.ts';
+import { model } from '../../../../.norbital/models/customers.ts';
 
-export default bind_model('customers')({
+export default model({
 	description: 'Buyers',
 	record_label: 'record.name',
 	fields: {
@@ -9,5 +9,5 @@ export default bind_model('customers')({
 		order_count: { kind: 'count', of: 'orders' }
 	},
 	outputs: { default: { fields: 'all' } },
-	create: { columns: { customers: ['name', 'rating'] } }
+	create: { columns: { fields: ['name', 'rating'] } }
 });

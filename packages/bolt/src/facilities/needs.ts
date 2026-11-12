@@ -2,7 +2,7 @@
 // Never config, never secrets. The check is the only gate: an unmet need refuses activation, naming it.
 import type { EngineManifest } from '../engine/manifest.ts';
 import type { Facilities } from './index.ts';
-import { isOff } from './off.ts';
+import { is_off } from './off.ts';
 
 /** Every facility member a host may leave `off`, each a need some declaration can record. */
 export const NEEDS = [
@@ -21,8 +21,7 @@ export const NEEDS = [
 export type Need = (typeof NEEDS)[number];
 
 type Manifest = Omit<EngineManifest, 'needs'>;
-const integrations = (m: Manifest) =>
-	Object.keys(m.integrations).length > 0 || Object.keys(m.connections).length > 0;
+const integrations = (m: Manifest) => Object.keys(m.integrations).length > 0;
 /**
  * Which declarations need each member. Push, websockets and the sandbox are reached only from guest code or
  * provider internals, which no declaration records: a notice still reaches the inbox without push, and an unsupported
@@ -40,18 +39,14 @@ const NEEDED: { readonly [N in Need]: (m: Manifest) => boolean } = {
 	system1: (m) => m.workspace.ai !== undefined,
 	system2: (m) => m.workspace.ai !== undefined,
 	embed: (m) => (m.workspace.ai?.embeddings?.length ?? 0) > 0,
-	webhooks: (m) =>
-		integrations(m) ||
-		Object.values(m.automations).some(
-			(a) => a.on?.some((trigger) => 'webhook' in trigger) === true
-		),
+	webhooks: integrations,
 	websockets: () => false,
 	outbound: (m) => integrations(m) || Object.keys(m.workspace.secrets ?? {}).length > 0,
 	sandbox: () => false
 };
 
 /** The needs of a decoded manifest, in `NEEDS` order. */
-export const needsOf = (m: Manifest): readonly Need[] => NEEDS.filter((need) => NEEDED[need](m));
+export const needs_of = (m: Manifest): readonly Need[] => NEEDS.filter((need) => NEEDED[need](m));
 
 /** The part of a `Facilities` record the needs check reads: the groups whose members may be `off`. */
 export type Checked = Pick<Facilities, 'transactional' | 'intelligence' | 'ports' | 'sandbox'>;
@@ -80,6 +75,6 @@ const member = (f: Checked, need: Need): object => {
  * and a record built around the type (a JavaScript host) is refused here too.
  */
 export const unmet = (needs: readonly Need[], f: Checked): readonly (Need | 'mail')[] => [
-	...(isOff(f.transactional.mail) ? (['mail'] as const) : []),
-	...needs.filter((need) => isOff(member(f, need)))
+	...(is_off(f.transactional.mail) ? (['mail'] as const) : []),
+	...needs.filter((need) => is_off(member(f, need)))
 ];

@@ -6,7 +6,7 @@ export const ROLES = [
 		role: 'workspace',
 		dir: '',
 		file: '+workspace.ts',
-		note: 'zone, locale, connections'
+		note: 'zone, locale, capabilities'
 	},
 	{ role: 'secrets', dir: '', file: '+secrets.ts', note: '' },
 	{
@@ -70,13 +70,12 @@ export const ROLES = [
 		file: '+skill.md',
 		note: 'agent skill'
 	},
-	{ role: 'tool', dir: 'agent/tool/*', file: '+tool.ts', note: 'agent tool; its body is run.ts' },
 	{ role: 'mcp', dir: 'agent/mcp', file: '+*.mcp.ts', note: 'MCP server' },
 	{
 		role: 'automation',
 		dir: 'automation',
 		file: '+*.automation.ts',
-		note: 'job run with its own policies'
+		note: 'job or call with its own policies'
 	},
 	{ role: 'app', dir: 'app/**', file: '+app.ts', note: 'app label and pages' },
 	{
@@ -93,9 +92,9 @@ export const ROLES = [
 export type Role = (typeof ROLES)[number]['role'];
 
 const escape = (s: string) => s.replace(/[.+]/g, '\\$&');
-export const fileRe = (file: string) => new RegExp(`^${escape(file).replace('*', '([^.]+)')}$`);
+export const file_re = (file: string) => new RegExp(`^${escape(file).replace('*', '([^.]+)')}$`);
 /** Matches a dir pattern; returns the folder name (`''` when the pattern has none) or undefined. */
-export function matchDir(pattern: string, segs: string[]): string | undefined {
+export function match_dir(pattern: string, segs: string[]): string | undefined {
 	const p = pattern === '' ? [] : pattern.split('/');
 	if (p.at(-1) === '**') {
 		const fixed = p.slice(0, -1);
@@ -105,18 +104,18 @@ export function matchDir(pattern: string, segs: string[]): string | undefined {
 	}
 	if (p.length !== segs.length) return undefined;
 	let name = '';
-	for (const [i, s] of p.entries()) {
-		if (s === '*') name = segs[i]!;
-		else if (s !== segs[i]) return undefined;
+	for (const [i, segment] of segs.entries()) {
+		if (p[i] === '*') name = segment;
+		else if (p[i] !== segment) return undefined;
 	}
 	return name;
 }
 /** The role a workspace-relative path holds, if any. */
-export function roleAt(path: string) {
+export function role_at(path: string) {
 	const segs = path.split('/').slice(1),
 		base = segs.pop() ?? '';
 	if (!path.startsWith('src/') || !base.startsWith('+')) return undefined;
-	return ROLES.find((r) => fileRe(r.file).test(base) && matchDir(r.dir, segs) !== undefined);
+	return ROLES.find((r) => file_re(r.file).test(base) && match_dir(r.dir, segs) !== undefined);
 }
 /** What a folder holds, where its name does not say. */
 export const FOLDER_NOTES: { readonly [dir: string]: string } = {

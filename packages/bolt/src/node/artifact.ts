@@ -24,7 +24,7 @@ const real = (at: string) =>
 		)
 	).pipe(Effect.map(Option.fromNullOr));
 
-export function artifactPort(release: string): ArtifactPort {
+export function artifact_port(release: string): ArtifactPort {
 	const locate = (path: string) =>
 		Effect.gen(function* () {
 			const segments = path === '' ? [] : path.split('/'),

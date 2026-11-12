@@ -13,7 +13,7 @@ The latest runs of one automation matching `where`, newest first, each with its 
 
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import { watch as onChange } from 'runed';
+	import { watch as on_change } from 'runed';
 	import { useBolt } from '../client/context.js';
 	import { watch } from '../read/live.svelte.js';
 	import { msg } from '../text/messages.js';
@@ -29,7 +29,7 @@ The latest runs of one automation matching `where`, newest first, each with its 
 			: runs(automation, { ...(where === undefined ? {} : { where }), limit })
 	);
 	const group = getContext<((automation: string, rows: number) => void) | undefined>(RUNS_GROUP);
-	onChange(
+	on_change(
 		() => live.state,
 		(s) => {
 			if (s.kind === 'ready') group?.(automation, s.value.rows.length);
@@ -43,7 +43,7 @@ The latest runs of one automation matching `where`, newest first, each with its 
 			<div class="flex flex-col gap-2" data-view="runs">
 				{#each page.rows as r (r.id)}<RunStatus {automation} {title} run={r} />{:else}
 					{#if group === undefined}<p class="text-muted-foreground text-sm" data-read="empty">
-							{msg(bolt, 'run.none', 'No runs yet')}
+							{msg(bolt, 'run.none')}
 						</p>{/if}{/each}
 			</div>
 		{/snippet}

@@ -10,7 +10,7 @@ import { Effect, FileSystem, Option, Schema } from 'effect';
 import type { InlineConfig, Plugin, Rolldown } from 'vite';
 import { EDITOR_SINGLETONS } from '../editor-dependencies.ts';
 import { tree } from '@norbital-ai/bolt/artifact';
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 import { cachedSvelte } from './svelte-cache.ts';
 import { BOLT, BOLT_PACKAGE, EXT } from '../bolt.ts';
 
@@ -155,7 +155,7 @@ export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(functio
 	const digests: [string, string][] = [];
 	for (const file of yield* tree(files))
 		if (!file.endsWith('.map'))
-			digests.push([file, sha256Hex(yield* fs.readFile(join(files, file)))]);
+			digests.push([file, sha256_hex(yield* fs.readFile(join(files, file)))]);
 	const temporary = `${metadata}.${process.pid}`;
 	yield* fs.writeFileString(
 		temporary,

@@ -57,7 +57,7 @@ const romanizeFunction = (): string => {
  */
 let functions: readonly { id: string; sql: string }[] | undefined;
 /** The search functions, built the first time a schema asks (the romanize function's table is large). */
-export const searchFunctions = (): readonly { id: string; sql: string }[] =>
+export const search_functions = (): readonly { id: string; sql: string }[] =>
 	(functions ??= searchFunctionsOf());
 const searchFunctionsOf = (): readonly { id: string; sql: string }[] => [
 	{

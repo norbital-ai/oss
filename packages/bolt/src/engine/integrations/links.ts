@@ -11,6 +11,7 @@ import {
 	Predicate,
 	PubSub,
 	RcMap,
+	Result,
 	Schedule,
 	Schema,
 	Scope,
@@ -38,9 +39,9 @@ import type {
 import { LIMITS, type Authority, type TcpPort } from '../contracts.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { SendRefused } from '../conversations/status.ts';
-import { Fenced, type EngineError } from '../errors.ts';
+import { Fenced, is_transient, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { Unavailable } from '../../decl/errors.ts';
+import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import { Drivers } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
 import {
@@ -57,17 +58,17 @@ import {
 import { mayUpdate } from '../write/act.ts';
 import { canonical } from '@norbital-ai/store';
 import type { Credentials, InstanceRow } from './credentials.ts';
-import { oauthClientOf, type OAuthClient, type OAuthVendor, type Provider } from './driver.ts';
+import { oauth_client_of, type OAuthClient, type OAuthVendor, type Provider } from './driver.ts';
 import { LINK_DOWN, linkCalls, linkFailure, type LinkCalls } from './abi.ts';
 import { conversational, definitionOf, writeStatus } from './instances.ts';
 import { SYSTEM } from '../../system/index.ts';
-import { Syncs, syncsOf } from '../sync/index.ts';
-import { verifiedWebhook } from '../runs/webhook.ts';
+import { Syncs, syncs_of } from '../sync/index.ts';
+import { verifiedWebhook } from './webhook.ts';
 
 export const HOOKS = '/hooks/integration/';
 export const OAUTH_CALLBACK = '/hooks/oauth/callback';
-export const webhookUrl = (publicUrl: string, instance: string): string =>
-	under(publicUrl, `${HOOKS}${encodeURIComponent(instance)}`);
+export const webhook_url = (public_url: string, instance: string): string =>
+	under(public_url, `${HOOKS}${encodeURIComponent(instance)}`);
 export type LinkAdmission =
 	TenantDb | Manifest | Conversations | Outbound | Syncs | Live | Wake | Reads | Writes | Guest;
 export type LinksHost = {
@@ -81,7 +82,7 @@ export type LinksHost = {
 		work: Effect.Effect<A, E, LinkAdmission>
 	) => Effect.Effect<A, E | EngineError>;
 	readonly credentials: Credentials;
-	readonly publicUrl: string;
+	readonly public_url: string;
 	readonly secrets?: Readonly<Record<string, string>> | undefined;
 	/** The host's own OAuth clients, used where a definition sets none of its own (a tenant need not register an app). */
 	readonly oauth?: Partial<Record<OAuthVendor, OAuthClient>> | undefined;
@@ -103,7 +104,7 @@ export type LinkManager = {
 		input: Json,
 		authority?: Authority
 	) => Effect.Effect<void, LinkError>;
-	readonly importStart: (
+	readonly import_start: (
 		instance: string,
 		input: ImportStartInput,
 		authority: Authority
@@ -125,6 +126,7 @@ const PROVIDER = 'provider';
 const DURABLE = new Set<LinkStatus['state']>(['connected', 'unpaired', 'error']);
 const REPLACED =
 	'Another host opened this account, so this link stopped. Pair it again here to take it back.';
+const fenced = (instance: string) => new Fenced({ instance, message: REPLACED });
 const EXPIRED = 'This sign-in is unknown or has expired; start it again.';
 const TEST_TEXT = 'Norbital test message: this integration is connected.';
 const DAY = 86_400_000;
@@ -133,7 +135,7 @@ const RECONCILE_GAP_MS = 3_600_000;
 const isRequest = (driver: DriverName) => 'request' in DRIVERS[driver];
 const unavailable = (reason: string) => BoltError.make('unavailable', 'facility', reason);
 const gone = (instance: string) =>
-	BoltError.make('notFound', 'facility', `no integration instance '${instance}'`);
+	BoltError.make('not_found', 'facility', `no integration instance '${instance}'`);
 const RowSchema = Schema.Struct({
 	integration: Schema.String,
 	owner: Schema.NullOr(Schema.String),
@@ -149,14 +151,14 @@ type Row = {
 	active: boolean;
 	status: Json;
 	stored: boolean;
-	importStart: ImportStart | null;
+	import_start: ImportStart | null;
 };
 type Held = {
 	instance: string;
 	integration: string;
 	definition: IntegrationSpec;
 	personal: boolean;
-	importStart: ImportStart | null;
+	import_start: ImportStart | null;
 	provider: Provider;
 	request: boolean;
 	epoch: string | null;
@@ -169,12 +171,10 @@ type Held = {
 	replaced: boolean;
 	/** Shared with the opened copy: set when a new import start retires this link, so its late imports are refused. */
 	boundary: { changed: boolean };
-	/** Shared with the opened copy, in memory, so a link's reconnects and quiet days ask the database nothing. */
+	/** Shared with the opened copy so a quiet reconcile has nothing to ask until another message moves. */
 	flow: {
 		/** Open from each connect until a reconcile takes it. */
 		readonly connects: Latch.Latch;
-		/** Sends may be waiting for this link: it just opened, or one found it down. */
-		parked: boolean;
 		/** The last reconcile found no recent thread and no message moved since: the next has nothing to ask. */
 		idle: boolean;
 	};
@@ -190,7 +190,7 @@ type Opened = {
 const wipe = (names: Iterable<string>) =>
 	new Map([...names].map((name): [string, null] => [name, null]));
 
-export const integrationLinks = (
+export const integration_links = (
 	h: LinksHost
 ): Effect.Effect<LinkManager, never, Scope.Scope | Crypto.Crypto> =>
 	Effect.gen(function* () {
@@ -246,13 +246,13 @@ export const integrationLinks = (
 				...(provider.name === undefined ? {} : { name: provider.name }),
 				...(provider.description === undefined ? {} : { description: provider.description }),
 				...(provider.icon === undefined ? {} : { icon: provider.icon }),
-				...(provider.importStart === undefined ? {} : { importStart: provider.importStart }),
+				...(provider.import_start === undefined ? {} : { import_start: provider.import_start }),
 				...(provider.describe?.({ personal, definition }) ?? {
 					label: provider.label,
 					setup: provider.setup
 				}),
 				...(provider.oauth === undefined ||
-				oauthClientOf(definition, h.secrets, h.oauth, provider.oauth) !== undefined
+				oauth_client_of(definition, h.secrets, h.oauth, provider.oauth) !== undefined
 					? {}
 					: { available: false })
 			}));
@@ -277,7 +277,7 @@ export const integrationLinks = (
 								active: x.active,
 								status: x.status,
 								stored: x.stored,
-								importStart: x.import_start
+								import_start: x.import_start
 							};
 				})
 			);
@@ -319,16 +319,16 @@ export const integrationLinks = (
 					? { test: held.provider.test }
 					: {}),
 				providers,
-				importStart: x.importStart,
+				import_start: x.import_start,
 				about: {
 					...(Schema.is(Schema.Record(Schema.String, Schema.Json))(about) ? about : {}),
 					...(providers.some((provider) => provider.setup.webhook === true)
-						? { webhookUrl: webhookUrl(h.publicUrl, instance) }
+						? { webhook_url: webhook_url(h.public_url, instance) }
 						: {}),
 					...(providers.some((provider) =>
-						provider.setup.steps.some((step) => step.copy === 'redirectUrl')
+						provider.setup.steps.some((step) => step.copy === 'redirect_url')
 					)
-						? { redirectUrl: under(h.publicUrl, OAUTH_CALLBACK) }
+						? { redirect_url: under(h.public_url, OAUTH_CALLBACK) }
 						: {})
 				}
 			};
@@ -377,7 +377,7 @@ export const integrationLinks = (
 						error: databaseTestMessage
 					}).pipe(
 						Effect.andThen(
-							Effect.fail(BoltError.make('invalidInput', 'facility', databaseTestMessage, cause))
+							Effect.fail(BoltError.make('invalid_input', 'facility', databaseTestMessage, cause))
 						)
 					)
 				)
@@ -395,7 +395,7 @@ export const integrationLinks = (
 		const persist = (held: HeldState, changes: ReadonlyMap<string, Json | null>) =>
 			Effect.gen(function* () {
 				if (held.replaced)
-					return yield* Effect.fail(new Fenced({ instance: held.instance, message: REPLACED }));
+					return yield* Effect.fail(fenced(held.instance));
 				const epoch = yield* h.credentials
 					.write(held.instance, held.epoch, changes, held.request)
 					.pipe(
@@ -414,7 +414,7 @@ export const integrationLinks = (
 								error._tag !== 'Fenced' &&
 								!(
 									error._tag === 'BoltError' &&
-									(error.code === 'fenced' || error.code === 'notFound')
+									(error.code === 'fenced' || error.code === 'not_found')
 								)
 						})
 					);
@@ -423,18 +423,11 @@ export const integrationLinks = (
 					if (value === null) held.values.delete(key);
 					else held.values.set(key, value);
 			}).pipe(Effect.uninterruptible);
-		/** What waits for this connected link is due now; it asks the database only when something may be waiting. */
+		/** Durable queued rows become due on each connection, including the first pairing and a restored host. */
 		const resumeSends = (held: HeldState) =>
 			Effect.suspend(() =>
-				held.flow.parked && held.status.state === 'connected' && live.get(held.instance) === held
-					? h.enter(Effect.flatMap(Outbound, (outbound) => outbound.resume(held.instance))).pipe(
-							Effect.tap(() =>
-								Effect.sync(() => {
-									held.flow.parked = false;
-								})
-							),
-							logged
-						)
+				held.status.state === 'connected' && live.get(held.instance) === held
+					? h.enter(Effect.flatMap(Outbound, (outbound) => outbound.resume(held.instance))).pipe(logged)
 					: Effect.void
 			);
 		const report = (held: HeldState, patch: LinkStatus) =>
@@ -442,7 +435,7 @@ export const integrationLinks = (
 				if (held.replaced) return;
 				const decoded = yield* Schema.decodeUnknownEffect(LinkStatusSchema)(patch).pipe(
 					Effect.mapError(() =>
-						BoltError.make('badAnswer', 'facility', 'the link reported an invalid status')
+						BoltError.make('bad_answer', 'facility', 'the link reported an invalid status')
 					)
 				);
 				const connected = decoded.state === 'connected' && held.status.state !== 'connected';
@@ -451,24 +444,24 @@ export const integrationLinks = (
 				held.status = decoded;
 				if (decoded.state !== 'pairing') held.pairing = null;
 				yield* moved(held);
-				if (connected) {
-					yield* held.flow.connects.open;
-					yield* resumeSends(held);
-				}
 				if (!DURABLE.has(decoded.state)) return;
 				const durable = {
 					state: decoded.state,
 					account: decoded.account ?? null,
 					error: decoded.error ?? null,
 					code: decoded.code ?? null,
-					lastDisconnect: decoded.lastDisconnect ?? null,
+					last_disconnect: decoded.last_disconnect ?? null,
 					// on the row, because delivery runs in the workspace and the provider is known only here
-					idempotentSends: held.provider.idempotentSends ?? null
+					idempotent_sends: held.provider.idempotent_sends ?? null
 				};
 				const key = canonical(durable);
 				if (key !== held.written) {
 					yield* status(held.instance, durable);
 					held.written = key;
+				}
+				if (connected) {
+					yield* held.flow.connects.open;
+					yield* resumeSends(held);
 				}
 			});
 		/**
@@ -494,7 +487,7 @@ export const integrationLinks = (
 						Effect.flatMap((page) =>
 							h.enter(
 								Effect.flatMap(Conversations, (conversations) =>
-									conversations.repair(held.instance, thread, since, page, held.importStart)
+									conversations.repair(held.instance, thread, since, page, held.import_start)
 								)
 							)
 						),
@@ -525,19 +518,19 @@ export const integrationLinks = (
 			Effect.gen(function* () {
 				const start = yield* Schema.decodeUnknownEffect(Schema.NullOr(ImportStart))(value).pipe(
 					Effect.mapError(() =>
-						BoltError.make('invalidInput', 'admission', 'Choose a valid import start.')
+						BoltError.make('invalid_input', 'admission', 'Choose a valid import start.')
 					)
 				);
 				if (start === null || start.kind === 'all') return start;
 				if (start.kind === 'since') {
-					if (provider.importStart?.kind !== 'timestamp')
+					if (provider.import_start?.kind !== 'timestamp')
 						return yield* Effect.fail(
 							unavailable('This provider does not support a time-based import start.')
 						);
 					return start;
 				}
-				const capability = provider.importStart,
-					validate = provider.validateImportStart?.bind(provider);
+				const capability = provider.import_start,
+					validate = provider.validate_import_start?.bind(provider);
 				if (
 					start.provider !== provider.id ||
 					capability?.kind !== 'native' ||
@@ -554,17 +547,17 @@ export const integrationLinks = (
 				)
 					return yield* Effect.fail(
 						BoltError.make(
-							'invalidInput',
+							'invalid_input',
 							'admission',
 							'The import position contains an unknown field.'
 						)
 					);
-				const values = yield* Port.attempt('link.importStart', () => validate(start.values)).pipe(
+				const values = yield* Port.attempt('link.import_start', () => validate(start.values)).pipe(
 					Effect.flatMap((values) =>
 						Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.String))(values).pipe(
 							Effect.mapError(() =>
 								BoltError.make(
-									'badAnswer',
+									'bad_answer',
 									'facility',
 									'The provider returned an invalid import position.'
 								)
@@ -577,7 +570,7 @@ export const integrationLinks = (
 				)
 					return yield* Effect.fail(
 						BoltError.make(
-							'badAnswer',
+							'bad_answer',
 							'facility',
 							'The provider returned an unknown import field.'
 						)
@@ -588,14 +581,14 @@ export const integrationLinks = (
 			instance: string,
 			input: ImportStartInput,
 			authority: Authority,
-			providerId?: string
+			provider_id?: string
 		) =>
 			Effect.gen(function* () {
 				const loaded = yield* h.credentials.read(instance),
 					def = yield* definition(loaded.row);
 				const provider = pick(
 					def.driver,
-					providerId ?? loaded.values.get(PROVIDER),
+					provider_id ?? loaded.values.get(PROVIDER),
 					loaded.row.owner !== null
 				);
 				if (provider === undefined)
@@ -608,7 +601,7 @@ export const integrationLinks = (
 					yield* resolveImportStart(
 						input,
 						now,
-						provider.importStart?.kind === 'timestamp' ? provider.importStart.precision : undefined
+						provider.import_start?.kind === 'timestamp' ? provider.import_start.precision : undefined
 					)
 				);
 				const key = yield* newId;
@@ -643,7 +636,7 @@ export const integrationLinks = (
 						)
 					);
 				const held = live.get(instance);
-				if (held !== undefined && canonical(held.importStart) !== canonical(start)) {
+				if (held !== undefined && canonical(held.import_start) !== canonical(start)) {
 					held.boundary.changed = true;
 					yield* port.changed(instance);
 				}
@@ -651,10 +644,10 @@ export const integrationLinks = (
 			});
 		const acquire = (instance: string, provider: Provider, o: Opened) =>
 			Effect.gen(function* () {
-				const importStart = yield* checkedStart(provider, o.row.import_start);
+				const import_start = yield* checkedStart(provider, o.row.import_start);
 				const syncs = yield* h.enter(
 					Effect.map(Manifest, (manifest) =>
-						[...syncsOf(manifest).values()].flatMap((sync) =>
+						[...syncs_of(manifest).values()].flatMap((sync) =>
 							sync.definition === o.row.integration && sync.read
 								? [
 										{
@@ -682,7 +675,7 @@ export const integrationLinks = (
 					integration: o.row.integration,
 					definition: o.definition,
 					personal: o.row.owner !== null,
-					importStart,
+					import_start,
 					provider,
 					request: isRequest(o.definition.driver),
 					epoch: o.epoch,
@@ -693,7 +686,7 @@ export const integrationLinks = (
 					written: null,
 					replaced: false,
 					boundary: { changed: false },
-					flow: { connects: yield* Latch.make(), parked: true, idle: false },
+					flow: { connects: yield* Latch.make(), idle: false },
 					stop: abort
 				};
 				const value = yield* Port.attempt('link', () =>
@@ -703,17 +696,17 @@ export const integrationLinks = (
 						syncs,
 						personal: o.row.owner !== null,
 						configuration: o.row.configuration,
-						importStart,
-						webhookUrl: webhookUrl(h.publicUrl, instance),
-						redirectUrl: under(h.publicUrl, OAUTH_CALLBACK),
+						import_start,
+						webhook_url: webhook_url(h.public_url, instance),
+						redirect_url: under(h.public_url, OAUTH_CALLBACK),
 						signal,
 						// each state() call is a fresh secure nonce
 						state: () => Promise.resolve(`${globalThis.crypto.randomUUID()}.${instance}`),
-						oauthClient: (vendor) =>
-							Promise.resolve(oauthClientOf(o.definition, h.secrets, h.oauth, vendor)),
+						oauth_client: (vendor) =>
+							Promise.resolve(oauth_client_of(o.definition, h.secrets, h.oauth, vendor)),
 						fetch: (input, init) =>
 							held.replaced
-								? Promise.reject(new Fenced({ instance, message: REPLACED }))
+								? Promise.reject(fenced(instance))
 								: f(input, {
 										...init,
 										signal: init?.signal == null ? signal : AbortSignal.any([signal, init.signal])
@@ -721,7 +714,7 @@ export const integrationLinks = (
 						tcp: {
 							connect: (endpoint, connecting) =>
 								held.replaced
-									? Promise.reject(new Fenced({ instance, message: REPLACED }))
+									? Promise.reject(fenced(instance))
 									: h.tcp.connect(endpoint, AbortSignal.any([signal, connecting]))
 						},
 						credentials: {
@@ -729,12 +722,12 @@ export const integrationLinks = (
 								Promise.resolve(new Map([...held.values].filter(([key]) => key !== PROVIDER))),
 							write: (changes) =>
 								held.replaced
-									? Promise.reject(new Fenced({ instance, message: REPLACED }))
+									? Promise.reject(fenced(instance))
 									: run(
 											changes.has(PROVIDER)
 												? Effect.fail(
 														BoltError.make(
-															'invalidInput',
+															'invalid_input',
 															'facility',
 															`'${PROVIDER}' is the host's credential`
 														)
@@ -746,11 +739,11 @@ export const integrationLinks = (
 						},
 						emit: (event) =>
 							held.replaced
-								? Promise.reject(new Fenced({ instance, message: REPLACED }))
+								? Promise.reject(fenced(instance))
 								: held.boundary.changed
 									? Promise.reject(
 											BoltError.make(
-												'sourceChanged',
+												'source_changed',
 												'admission',
 												'The import start changed; reopen the link before importing.'
 											)
@@ -763,7 +756,7 @@ export const integrationLinks = (
 														)
 													: Effect.flatMap(Conversations, (conversations) => {
 															held.flow.idle = false;
-															return conversations.receive(instance, event, importStart);
+															return conversations.receive(instance, event, import_start);
 														})
 											)
 										).then(() => {}),
@@ -796,7 +789,7 @@ export const integrationLinks = (
 				yield* Effect.addFinalizer(() =>
 					closeProvider.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 				);
-				if (opened.replaced) return yield* Effect.fail(new Fenced({ instance, message: REPLACED }));
+				if (opened.replaced) return yield* Effect.fail(fenced(instance));
 				if (value.renew !== undefined)
 					yield* Effect.forkIn(
 						Effect.gen(function* () {
@@ -847,20 +840,36 @@ export const integrationLinks = (
 				const lease = yield* Scope.make();
 				const opened = yield* RcMap.get(map, instance).pipe(
 					Effect.provideService(Scope.Scope, lease),
-					Effect.onError(() => Scope.close(lease, Exit.void))
+					Effect.onError(() => Scope.close(lease, Exit.void).pipe(Effect.andThen(RcMap.invalidate(map, instance))))
 				);
 				leases.set(instance, lease);
 				live.set(instance, opened);
 				yield* moved(opened);
 				yield* resumeSends(opened);
 			});
+		/** Re-read durable state before each reopen; an account may be paused, removed or unpaired during startup. */
+		const restore = (instance: string) => Effect.gen(function* () {
+			const current = yield* row(instance);
+			if (current?.active === true && current.stored && !isRequest(current.definition.driver))
+				yield* start(instance);
+		});
+		const retryOpening = (error: EngineError | PortFailure): boolean => {
+			if (stopped) return false;
+			switch (error._tag) {
+				case 'FacilityFailure': return error.kind === 'upstream' || error.kind === 'timeout';
+				case 'Unavailable':
+				case 'Fenced': return false;
+				case 'BoltError': return error.code !== 'fenced' && is_transient(error);
+				default: return (error._tag === 'DbError' && error.sqlstate.startsWith('08')) || is_transient(error);
+			}
+		};
 		const linked = (instance: string) =>
 			Effect.suspend((): Effect.Effect<Held, BoltError | Fenced> => {
 				const held = live.get(instance);
 				return held === undefined
 					? Effect.fail(unavailable(`'${instance}' is not connected`))
 					: held.replaced
-						? Effect.fail(new Fenced({ instance, message: REPLACED }))
+						? Effect.fail(fenced(instance))
 						: Effect.succeed(held);
 			});
 		const transient = <A, E>(instance: string, use: (held: Held) => Effect.Effect<A, E>) =>
@@ -876,8 +885,8 @@ export const integrationLinks = (
 				})
 			);
 		/**
-		 * The link a send goes through. A paired link that is not connected is down (`LINK_DOWN`): the row waits and its
-		 * connect resumes it. An instance with no credentials has nothing to come back, so it fails as `linked` does.
+		 * A valid workspace conversation account waits for its initial pairing or reconnect (`LINK_DOWN`). Its durable
+		 * queue is resumed by the connected transition, independently from this host's in-memory link state.
 		 */
 		const sending = (instance: string) =>
 			Effect.gen(function* () {
@@ -887,11 +896,12 @@ export const integrationLinks = (
 						held.flow.idle = false;
 						return held;
 					}
-					if (held !== undefined) held.flow.parked = true;
-					if (held !== undefined || (yield* row(instance))?.stored === true)
-						return yield* Effect.fail(
-							new Unavailable({ facility: LINK_DOWN, reason: `'${instance}' is not connected` })
-						);
+					const current = yield* row(instance);
+					if (current === undefined || current.personal || !conversational(current.definition))
+						return yield* Effect.fail(new FacilityFailure({ kind: 'invalid', message: `'${instance}' is not a workspace conversation account` }));
+					return yield* Effect.fail(
+						new Unavailable({ facility: LINK_DOWN, reason: `'${instance}' is not connected` })
+					);
 				}
 				return yield* linked(instance);
 			});
@@ -927,9 +937,7 @@ export const integrationLinks = (
 						const held = live.get(instance);
 						if (held?.request === true || held?.replaced === true) return;
 						yield* shut(instance);
-						const x = yield* row(instance);
-						if (x?.active === true && x.stored && !isRequest(x.definition.driver))
-							yield* start(instance);
+						yield* restore(instance);
 					})
 				).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 		};
@@ -939,7 +947,7 @@ export const integrationLinks = (
 					.read(instance)
 					.pipe(
 						Effect.catchTag('BoltError', (error) =>
-							error.code === 'notFound' ? Effect.succeed(undefined) : Effect.fail(error)
+							error.code === 'not_found' ? Effect.succeed(undefined) : Effect.fail(error)
 						)
 					);
 				if (found === undefined) return new Response(null, { status: 404 });
@@ -1024,9 +1032,18 @@ export const integrationLinks = (
 				)
 				.pipe(
 					Effect.flatMap((ids) =>
-						Effect.forEach(ids, (instance) => logged(serial(instance, start(instance))), {
-							concurrency: 'unbounded',
-							discard: true
+						Effect.gen(function* () {
+							const results = yield* Effect.forEach(ids, (instance) =>
+								serial(instance, restore(instance)).pipe(
+									Effect.retry({ times: 4, while: retryOpening,
+										schedule: Schedule.min([Schedule.exponential('100 millis'), Schedule.spaced('5 seconds')]) }),
+									Effect.tapError((error) => Effect.logWarning(error)),
+									Effect.result
+								), { concurrency: 'unbounded' });
+							// an instance this host cannot serve (no registered provider) stays closed; it does not fail the resume
+							const failure = results.find((result) => Result.isFailure(result)
+								&& !(result.failure._tag === 'BoltError' && result.failure.code === 'unavailable'));
+							if (failure !== undefined && Result.isFailure(failure)) return yield* Effect.fail(failure.failure);
 						})
 					)
 				),
@@ -1083,19 +1100,19 @@ export const integrationLinks = (
 						);
 					})
 				),
-			importStart: (instance, input, authority) => saveImportStart(instance, input, authority),
+			import_start: (instance, input, authority) => saveImportStart(instance, input, authority),
 			pair: (instance, input, authority) =>
 				Effect.gen(function* () {
-					if (Predicate.isObject(input) && input['importStart'] !== undefined) {
+					if (Predicate.isObject(input) && input['import_start'] !== undefined) {
 						if (authority === undefined)
 							return yield* Effect.fail(
 								BoltError.make('forbidden', 'admission', 'Sign in to change the import start.')
 							);
 						const start = yield* Schema.decodeUnknownEffect(ImportStartInput)(
-							input['importStart']
+							input['import_start']
 						).pipe(
 							Effect.mapError(() =>
-								BoltError.make('invalidInput', 'decode', 'Choose a valid import start.')
+								BoltError.make('invalid_input', 'decode', 'Choose a valid import start.')
 							)
 						);
 						yield* saveImportStart(
@@ -1125,12 +1142,12 @@ export const integrationLinks = (
 							if (provider === undefined)
 								return yield* Effect.fail(
 									BoltError.make(
-										'invalidInput',
+										'invalid_input',
 										'facility',
 										`choose how to connect this ${x.definition.driver} instance: ${ps.map((p) => p.id).join(', ')}`
 									)
 								);
-							const { provider: _, importStart: _start, ...rest } = body;
+							const { provider: _, import_start: _start, ...rest } = body;
 							const current = live.get(instance);
 							if (
 								x.definition.driver !== 'sqlserver' &&
@@ -1214,7 +1231,7 @@ export const integrationLinks = (
 							account: null,
 							error: null,
 							code: null,
-							lastDisconnect: null
+							last_disconnect: null
 						});
 						yield* publish(instance);
 					})
@@ -1234,7 +1251,7 @@ export const integrationLinks = (
 							if (x.personal)
 								return yield* Effect.fail(
 									BoltError.make(
-										'invalidInput',
+										'invalid_input',
 										'facility',
 										'A personal account sends no test message.'
 									)
@@ -1246,7 +1263,7 @@ export const integrationLinks = (
 							if (!live.has(instance))
 								return yield* Effect.fail(
 									BoltError.make(
-										'invalidInput',
+										'invalid_input',
 										'facility',
 										'this integration cannot send a test message now'
 									)
@@ -1255,7 +1272,7 @@ export const integrationLinks = (
 							if (held.status.state !== 'connected' || held.provider.test === undefined)
 								return yield* Effect.fail(
 									BoltError.make(
-										'invalidInput',
+										'invalid_input',
 										'facility',
 										'this integration cannot send a test message now'
 									)
@@ -1272,7 +1289,7 @@ export const integrationLinks = (
 										if (to === undefined)
 											return yield* Effect.fail(
 												BoltError.make(
-													'invalidInput',
+													'invalid_input',
 													'facility',
 													'name where the test message goes'
 												)

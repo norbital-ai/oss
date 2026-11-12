@@ -14,10 +14,10 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	export type MatrixCell = { row: string; col: Json };
 	/** The props of `Matrix`. */
 	export type MatrixProps = {
-		/** The row model, paged 50 at a time by its `rowLabel` (final-ui 29b). */
+		/** The row model, paged 50 at a time by its `row_label` (final-ui 29b). */
 		rows: string;
-		rowLabel: string;
-		rowWhere?: Json;
+		row_label: string;
+		row_where?: Json;
 		/** The item model; `row` is its relation to `rows`, `col` its date or relation field. */
 		of: string;
 		row: string;
@@ -26,13 +26,13 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		/** The cell fields (required: never the whole row). */
 		select: readonly string[];
 		/** Column width in px (required: memory matrix-columns-default-150px). */
-		colWidth: number;
+		col_width: number;
 		where?: Json;
 		/** Optional native view toolbar; omitted keeps the matrix without toolbar chrome. */
 		toolbar?: Toolbar;
 		marks?: MatrixMark;
 		/** An optional control in each column heading (for example an editable repayment date). */
-		columnHeader?: Snippet<[{ col: Json; label: string }]>;
+		column_header?: Snippet<[{ col: Json; label: string }]>;
 		cell?: Snippet<[{ row: Row; col: Json; items: readonly Row[]; marks: readonly Row[] }]>;
 		/** A click on an empty cell opens the create view with `{ [row], [col] }`. */
 		edit?: true;
@@ -44,20 +44,20 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 </script>
 
 <script lang="ts">
-	import { formatValue as show } from '../kinds/kind.js';
+	import { format_value as show } from '../kinds/kind.js';
 	import { Effect, Predicate } from 'effect';
 	import { fork } from '../effect/index.js';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { Button } from '../primitives/button/index.js';
 	import { coarsePointer } from '../primitives/utils.js';
-	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
-	import { openRecord } from '../record/navigation.js';
+	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
+	import { open_record } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import { actOutcome, outcomeText } from '../actions/outcome.js';
 	import { and } from '../filter/scope.js';
 	import { cellKey, MATRIX_PAGE, matrixCells } from './cells.js';
 	import { label, msg } from '../text/messages.js';
-	import { pageOf, READ_LIMIT, requestJson } from '../read/request.js';
+	import { page_of, READ_LIMIT, request_json } from '../read/request.js';
 	import { valueAt } from '../cell/value.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import { mapped, queryState } from '../read/state.js';
@@ -68,18 +68,18 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 
 	let {
 		rows,
-		rowLabel,
-		rowWhere,
+		row_label,
+		row_where,
 		of,
 		row,
 		col,
 		cols,
 		select,
-		colWidth,
+		col_width,
 		where,
 		toolbar,
 		marks,
-		columnHeader,
+		column_header,
 		cell,
 		edit,
 		move,
@@ -106,24 +106,24 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		queryState(
 			mapped(
 				bolt.query(
-					requestJson({
+					request_json({
 						[rows]: {
-							where: rowWhere,
-							order_by: { [rowLabel]: 'asc' },
-							fields: [rowLabel],
+							where: row_where,
+							order_by: { [row_label]: 'asc' },
+							fields: [row_label],
 							limit: MATRIX_PAGE,
 							after: after ?? undefined
 						}
 					})
 				),
-				(answer) => pageOf(answer, rows)
+				(answer) => page_of(answer, rows)
 			)
 		)
 	);
 	const pageRows = $derived(rowPage.kind === 'ready' ? rowPage.value.rows : []);
 	const ids = $derived(pageRows.map((r) => r.id));
 	// the page's rows window inside the grid's scroll port; the sticky header row and first column stay put
-	const grid = virtualList({
+	const grid = virtual_list({
 		count: () => pageRows.length,
 		key: (i) => ids[i] ?? String(i),
 		estimate: 41,
@@ -136,25 +136,33 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 				? null
 				: mapped(
 						bolt.query(
-							requestJson({
+							request_json({
 								[of]: {
 									where: and(where, { [row]: { in: ids } }, { [col]: { in: colValues } }),
-									fields: [...new Set([...select, row, col])],
+									// an audited item is moved at the revision it was read at
+									fields: [
+										...new Set([
+											...select,
+											row,
+											col,
+											...(kinds.catalog?.[of]?.audit === false ? [] : ['revision'])
+										])
+									],
 									limit: READ_LIMIT
 								}
 							})
 						),
-						(answer) => pageOf(answer, of)
+						(answer) => page_of(answer, of)
 					)
 		)
 	);
-	const markRead = $derived(
+	const mark_read = $derived(
 		queryState(
 			marks === undefined
 				? null
 				: mapped(
 						bolt.query(
-							requestJson({
+							request_json({
 								[marks.of]: {
 									where: { [marks.at]: { in: colValues } },
 									fields: [...new Set([marks.at, marks.label, ...(marks.row ? [marks.row] : [])])],
@@ -162,7 +170,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 								}
 							})
 						),
-						(answer) => pageOf(answer, marks.of)
+						(answer) => page_of(answer, marks.of)
 					)
 		)
 	);
@@ -170,9 +178,9 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		items.kind === 'ready' ? matrixCells(items.value.rows, row, col) : new Map<string, Row[]>()
 	);
 	const markCells = $derived.by(() => {
-		if (marks === undefined || markRead.kind !== 'ready') return new Map<string, Row[]>();
+		if (marks === undefined || mark_read.kind !== 'ready') return new Map<string, Row[]>();
 		return matrixCells(
-			markRead.value.rows.map((m) => (marks.row ? m : { ...m, $row: '*' })),
+			mark_read.value.rows.map((m) => (marks.row ? m : { ...m, $row: '*' })),
 			marks.row ?? '$row',
 			marks.at
 		);
@@ -199,14 +207,19 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		e.preventDefault();
 		const id = e.dataTransfer?.getData('text/x-bolt-id');
 		if (!move || !id) return;
+		const item = items.kind === 'ready' ? items.value.rows.find((row) => row.id === id) : undefined;
+		if (item === undefined) return;
+		const revision = item['revision'];
+		const target = { id: item.id, ...(typeof revision === 'number' ? { revision } : {}) };
 		fork(
-			actOutcome(bolt.act(`${of}.update`, [{ target: id, set: { [row]: rid, [col]: c } }])).pipe(
+			actOutcome(bolt.act({ [`${of}.update`]: [{ target, set: { [row]: rid, [col]: c } }] })).pipe(
 				Effect.tap((outcome) =>
 					Effect.sync(() => {
 						notice = outcome.kind === 'committed' ? null : outcomeText(bolt, outcome);
 					})
 				)
-			)
+			),
+			(error) => { notice = bolt.t(error.message); }
 		);
 	}
 </script>
@@ -240,11 +253,8 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 					data-read={items.kind}
 				>
 					{items.kind === 'noAccess'
-						? msg(bolt, 'view.noAccess', 'No access to {what}', { what: label(bolt, of) })
-						: msg(
-								bolt,
-								'matrix.pageError',
-								'Rows {from}–{to} could not be read ({code}): {message}',
+						? msg(bolt, 'view.noAccess', { what: label(bolt, of) })
+						: msg(bolt, 'matrix.pageError',
 								{
 									from: back.length * MATRIX_PAGE + 1,
 									to: back.length * MATRIX_PAGE + pageRows.length,
@@ -266,8 +276,8 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 							{#each columns as c (JSON.stringify(c.value))}
 								<th
 									class="bg-background sticky top-0 z-10 border-b p-1 text-left text-xs font-medium"
-									style={`width:${colWidth}px;min-width:${colWidth}px`}
-									>{#if columnHeader}{@render columnHeader({
+									style={`width:${col_width}px;min-width:${col_width}px`}
+									>{#if column_header}{@render column_header({
 											col: c.value,
 											label: c.label
 										})}{:else}{c.label}{/if}</th
@@ -285,7 +295,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 							<tr {@attach grid.measure(rid)}>
 								<th
 									class="bg-background sticky left-0 z-10 border-b p-1 text-left font-normal @max-[30rem]:max-w-[40cqw] @max-[30rem]:[overflow-wrap:anywhere]"
-									><Value value={valueAt(r, rowLabel)} /></th
+									><Value value={valueAt(r, row_label)} /></th
 								>
 								{#each columns as c (JSON.stringify(c.value))}
 									{@const here = cells.get(cellKey(rid, c.value)) ?? []}
@@ -313,7 +323,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 													ondragstart={(e) => e.dataTransfer?.setData('text/x-bolt-id', it.id)}
 													onclick={(e) => {
 														e.stopPropagation();
-														if (typeof it['id'] === 'string') openRecord(of, it['id']);
+														if (typeof it['id'] === 'string') open_record(of, it['id']);
 													}}
 												>
 													{select
@@ -344,7 +354,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 					onclick={() => {
 						after = back.at(-1) ?? null;
 						back = back.slice(0, -1);
-					}}>{msg(bolt, 'table.prev', 'Previous')}</Button
+					}}>{msg(bolt, 'table.prev')}</Button
 				>
 				<Button
 					variant="outline"
@@ -354,7 +364,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 							back = [...back, after];
 							after = rowPage.value.next;
 						}
-					}}>{msg(bolt, 'table.next', 'Next')}</Button
+					}}>{msg(bolt, 'table.next')}</Button
 				>
 			</footer>
 		{/snippet}
@@ -364,9 +374,9 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 			open
 			class="bg-background fixed inset-0 z-50 m-auto w-[min(40rem,95vw)] rounded-md border p-4 shadow-deep"
 		>
-			<RecordShell {of} mode="create" values={creating} onDone={() => (creating = null)} />
+			<RecordShell {of} mode="create" values={creating} on_done={() => (creating = null)} />
 			<Button variant="ghost" onclick={() => (creating = null)}
-				>{msg(bolt, 'record.close', 'Close')}</Button
+				>{msg(bolt, 'record.close')}</Button
 			>
 		</dialog>
 	{/if}

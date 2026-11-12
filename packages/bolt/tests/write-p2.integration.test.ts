@@ -1,6 +1,7 @@
 // engine/write and engine/query on PGlite, the P2 review gaps: erase (38e), history (17), import and export
 // (30), relation-action upsert (28), cascades and frozen parents (41), the delete guard (27),
 // telemetry (§5.12), pipeline order (19), guest failures (42, 72a) and `expired` (31).
+import type { Chain } from '../src/engine/write/sql.ts';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
@@ -15,7 +16,7 @@ import { Telemetry } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import type { ReadIR } from '../src/protocol/reads.ts';
-import { readHistory } from '../src/engine/query/history.ts';
+import { read_history } from '../src/engine/query/history.ts';
 import {
 	act,
 	type ActRequest,
@@ -23,7 +24,7 @@ import {
 	type WriteEngine
 } from '../src/engine/write/act.ts';
 import { restorePreview, restoreRecord, type RestoreTarget } from '../src/engine/write/restore.ts';
-import { admin, arm, authority, deleteArm, grants, NOW, TODAY, writeArm } from './write-fixture.ts';
+import { admin, arm, authority, delete_arm, grants, NOW, TODAY, write_arm } from './write-fixture.ts';
 import { manifest } from './write-p2.fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
@@ -121,7 +122,7 @@ const HistoryRevision = Schema.Struct({
 	revision: Schema.Number,
 	at: Schema.String,
 	cause: Schema.String,
-	restoredFrom: Schema.NullOr(Schema.Number),
+	restored_from: Schema.NullOr(Schema.Number),
 	changed: Changes,
 	actor: Schema.NullOr(Schema.Struct({ kind: Schema.String, id: Schema.String }))
 });
@@ -138,7 +139,7 @@ const REQUEST = '0199a000-0000-7000-8000-0000000000aa';
 const columns = (op: 'create' | 'update') => manifest.exposures['orders']?.[op]?.columns ?? {};
 /** A write its policy `check` approves. The fake hook still cannot mutate domain data. */
 const routed = (op: 'create' | 'update') =>
-	authority({ orders: grants('orders', { [op]: [writeArm(columns(op), true)] }) });
+	authority({ orders: grants('orders', { [op]: [write_arm(columns(op), true)] }) });
 const snapshot: StepsSnapshot = {
 	kind: 'steps',
 	steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
@@ -152,9 +153,12 @@ const holding: Partial<WriteEngine> = {
 	approval: {
 		route: () =>
 			Effect.succeed({
-				requestId: REQUEST,
+				request_id: REQUEST,
 				route: snapshot,
-				pieces: () => {}
+				pieces: (c: Chain) => {
+				// the commit reads the opened request from the approval engine's `ap_state` piece; this seam persists none
+				c.cte('ap_state', "SELECT NULL::uuid AS id, '[]'::jsonb AS records WHERE false");
+			}
 			}),
 		resubmit: () => Effect.die('The approval fixture does not resubmit requests')
 	}
@@ -179,7 +183,6 @@ function callback(
 					...(exposed.update === undefined
 						? {}
 						: { update: { ...exposed.update, transform: true } }),
-					...(exposed.delete === undefined ? {} : { delete: { check: true } })
 				}
 			}
 		},
@@ -200,9 +203,9 @@ describe('engine-owned callback identities', () => {
 				const engine = callback(
 					(inv) => ({
 						kind: 'ok',
-						output: Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ title: Schema.String })))(
+						output: Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ set: Schema.Struct({ title: Schema.String }) })))(
 							inv.input
-						).map((row, index) =>
+						).map(({ set: row }, index) =>
 							index < 2
 								? {
 										...row,
@@ -280,7 +283,9 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				expect(captured.map((x) => [x.model, x.op]).sort()).toEqual([
 					['lines', 'delete'],
 					['lines', 'delete'],
-					['orders', 'delete']
+					['orders', 'delete'],
+					// its notice leaves the live inbox in the same statement
+					['sys_notification', 'delete']
 				]);
 				expect(yield* one(Count, `select count(*)::int n from sys_run`)).toEqual({ n: 0 });
 				expect(count.writes).toBe(1);
@@ -388,7 +393,7 @@ describe('engine/query: history (rule 17)', () => {
 					: ({ _tag: 'Before', before: at.before } satisfies NonNullable<
 							Extract<ReadIR, { kind: 'history' }>['at']
 						>);
-		const answer = yield* readHistory(
+		const answer = yield* read_history(
 			db,
 			viewed,
 			{
@@ -421,7 +426,7 @@ describe('engine/query: history (rule 17)', () => {
 		reader: Authority = admin
 	) {
 		const { db } = yield* P2Fixture;
-		const answer = yield* readHistory(
+		const answer = yield* read_history(
 			db,
 			viewed,
 			{ kind: 'history', model: 'orders', id, at: { _tag: 'Revision', revision }, full: true },
@@ -436,7 +441,7 @@ describe('engine/query: history (rule 17)', () => {
 		reader: Authority
 	) {
 		const { db } = yield* P2Fixture;
-		const answer = yield* readHistory(
+		const answer = yield* read_history(
 			db,
 			viewed,
 			{
@@ -557,7 +562,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 	const history = Effect.fnUntraced(function* (id: string, model = 'orders') {
 		const { db } = yield* P2Fixture;
 		return yield* Schema.decodeUnknownEffect(Schema.Array(HistoryRevision))(
-			yield* readHistory(
+			yield* read_history(
 				db,
 				manifest,
 				{ kind: 'history', model, id },
@@ -585,7 +590,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 				ok(yield* restore(at(id, 2), { observed: { [id]: p.live } }));
 				ok(yield* restore(at(id, 3)));
 				const all = yield* history(id);
-				expect(all.map((r) => [r.revision, r.cause, r.restoredFrom, r.changed['note']])).toEqual([
+				expect(all.map((r) => [r.revision, r.cause, r.restored_from, r.changed['note']])).toEqual([
 					[1, 'direct', null, null],
 					[2, 'direct', null, 'a'],
 					[3, 'direct', null, 'b'],
@@ -596,7 +601,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 					yield* one(Schema.Struct({ note: Schema.String }), 'select note from orders')
 				).toEqual({ note: 'b' });
 				expect(yield* restore(at(id, 4))).toMatchObject({ kind: 'committed' }); // a restore entry restores too
-				expect(yield* restore(at(id, 6))).toMatchObject({ code: 'invalidInput' }); // not a past revision
+				expect(yield* restore(at(id, 6))).toMatchObject({ code: 'invalid_input' }); // not a past revision
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
@@ -652,11 +657,11 @@ describe('engine/write: per-record restore (rule 17)', () => {
 					.outcome
 			);
 			const titleOnly = authority({
-				orders: grants('orders', { update: [writeArm({ orders: ['title'] })] })
+				orders: grants('orders', { update: [write_arm({ orders: ['title'] })] })
 			});
 			const p = yield* preview(at(id, 1), titleOnly);
 			expect(fields(p)).toEqual(['title']);
-			expect(skips(p)).toEqual([['note', 'noGrant']]);
+			expect(skips(p)).toEqual([['note', 'no_grant']]);
 			ok(yield* restore(at(id, 1), { authority: titleOnly }));
 			expect(
 				yield* one(
@@ -729,7 +734,7 @@ describe('engine/write: import (rule 30)', () => {
 					{ code: 'p2', name: 'C' }
 				]);
 				expect((yield* imp({ rows: [{ code: 'p3', name: 'N' }] })).outcome).toMatchObject({
-					code: 'invalidInput',
+					code: 'invalid_input',
 					field: 'on_conflict'
 				});
 			}).pipe(Effect.provide(P2FixtureLive))
@@ -749,7 +754,7 @@ describe('engine/write: import (rule 30)', () => {
 					})).outcome
 				).toMatchObject({
 					kind: 'refused',
-					code: 'invalidInput',
+					code: 'invalid_input',
 					field: name
 				});
 			}
@@ -835,7 +840,7 @@ describe('engine/write: import (rule 30)', () => {
 				(yield* run({
 					model: 'receipts',
 					verb: 'import',
-					input: { rows: [{ memo: 'r', order: { title: 'desk' } }] }
+					input: { rows: [{ memo: 'r', order: { title: 'desk' } }], on_conflict: 'refuse' }
 				})).outcome
 			);
 			expect(yield* one(Owner, `select "order"::text o from receipts`)).toEqual({ o: id });
@@ -843,49 +848,36 @@ describe('engine/write: import (rule 30)', () => {
 				(yield* run({
 					model: 'receipts',
 					verb: 'import',
-					input: { rows: [{ memo: 'r', order: { title: 'nope' } }] }
+					input: { rows: [{ memo: 'r', order: { title: 'nope' } }], on_conflict: 'refuse' }
 				})).outcome
-			).toMatchObject({ code: 'notFound', field: 'order', row: 0 });
+			).toMatchObject({ code: 'not_found', field: 'order', row: 0 });
+			expect(
+				(yield* run({
+					model: 'receipts',
+					verb: 'import',
+					input: { rows: [{ memo: 'kept out', order: { title: 'desk' } }, null], on_conflict: 'refuse' }
+				})).outcome
+			).toMatchObject({ kind: 'refused', code: 'invalid_input', row: 1, message: expect.stringMatching(/expected an object/i) });
+			expect(yield* one(Count, 'SELECT count(*)::int AS n FROM receipts')).toEqual({ n: 1 });
 		}).pipe(Effect.provide(P2FixtureLive))
 	);
 });
 
 describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
-	it.effect(
-		'delete.check receives stored rows and guards everyone, administrators included (rules 27, 35)',
-		() =>
-			Effect.gen(function* () {
-				const calls: Invocation[] = [];
-				const guard = callback(
-					() => ({ kind: 'refused', message: 'the tag is in use' }),
-					'tags',
-					calls
-				);
-				const tag = idOf(
-					(yield* run({ model: 'tags', verb: 'create', input: [{ name: 't' }] })).outcome,
-					'tags'
-				);
-				const member = authority({ tags: grants('tags', { delete: [deleteArm()] }) });
-				expect(
-					(yield* run(
-						{ model: 'tags', verb: 'delete', input: [{ target: tag }], authority: member },
-						guard
-					)).outcome
-				).toEqual({
-					kind: 'refused',
-					code: 'refused',
-					message: 'the tag is in use',
-					rule: 'tags.delete'
-				});
-				expect(calls.map((call) => call.kind)).toEqual(['delete']);
-				expect(calls.map((call) => call.input)).toMatchObject([[{ id: tag, name: 't' }]]);
-				// an administrator's delete faces the same guard: a business rule (a settled row) is not an authority question
-				expect(
-					(yield* run({ model: 'tags', verb: 'delete', input: [{ target: tag }] }, guard)).outcome
-				).toMatchObject({ kind: 'refused', message: 'the tag is in use' });
-				expect(calls).toHaveLength(2);
-			}).pipe(Effect.provide(P2FixtureLive))
-	);
+	it.effect('explicit model locks guard member and administrator deletions', () =>
+  Effect.gen(function* () {
+   const tags = manifest.models.tags;
+   if (tags === undefined) throw new Error('The tag model is required.');
+   const locked: EngineManifest = { ...manifest, models: { ...manifest.models, tags: {
+    ...tags, locks: { in_use: { where: { name: { eq: 't' } } } }
+   } } };
+   const tag = idOf((yield* run({ model: 'tags', verb: 'create', input: [{ name: 't' }] })).outcome, 'tags');
+   for (const who of [authority({ tags: grants('tags', { delete: [delete_arm()] }) }), admin]) {
+    expect((yield* run({ model: 'tags', verb: 'delete', input: [{ target: tag }], authority: who }, { manifest: locked })).outcome).toMatchObject({ kind: 'refused', code: 'locked' });
+   }
+   expect(yield* rows(Schema.Struct({ name: Schema.String }), 'SELECT name FROM tags')).toEqual([{ name: 't' }]);
+  }).pipe(Effect.provide(P2FixtureLive))
+ );
 });
 
 describe('engine/write: telemetry (§5.12)', () => {
@@ -915,7 +907,7 @@ describe('engine/write: telemetry (§5.12)', () => {
 				expect(count.writes).toBe(1);
 				expect(
 					(yield* run({ verb: 'create', input: [{ title: 1 }] }, { log: yield* log() })).outcome
-				).toMatchObject({ code: 'invalidInput' });
+				).toMatchObject({ code: 'invalid_input' });
 				expect(count.writes).toBe(1);
 				const refusing = callback(() => ({ kind: 'refused', message: 'no' }));
 				expect(
@@ -958,7 +950,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 	const table: ((calls: Invocation[]) => Row)[] = [
 		(calls) => ({
 			name: 'rate admission before decode',
-			expect: 'rateLimited',
+			expect: 'rate_limited',
 			guest: false,
 			writes: 0,
 			act: () =>
@@ -980,7 +972,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 		}),
 		(calls) => ({
 			name: 'decode before the caller',
-			expect: 'invalidInput',
+			expect: 'invalid_input',
 			guest: false,
 			writes: 0,
 			act: () =>
@@ -1032,7 +1024,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 						verb: 'create',
 						input: [{ title: 'x' }],
 						authority: authority({
-							orders: grants('orders', { create: [writeArm({ orders: ['note'] }, true)] })
+							orders: grants('orders', { create: [write_arm({ orders: ['note'] }, true)] })
 						})
 					},
 					refusing(calls)
@@ -1049,7 +1041,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 						verb: 'create',
 						input: [{ title: 'x' }],
 						authority: authority({
-							orders: grants('orders', { create: [writeArm(columns('create'), true)] })
+							orders: grants('orders', { create: [write_arm(columns('create'), true)] })
 						})
 					},
 					{
@@ -1108,16 +1100,16 @@ describe('engine/write: guest failures (rules 42, 72a)', () => {
 						error: BoltError.make(code, 'guest', `${code}!`)
 					}));
 				expect(
-					(yield* run({ verb: 'create', input: [{ title: 'a' }] }, failing('guestError'))).outcome
-				).toEqual({ kind: 'refused', code: 'internal', message: 'guestError!' });
+					(yield* run({ verb: 'create', input: [{ title: 'a' }] }, failing('guest_error'))).outcome
+				).toEqual({ kind: 'refused', code: 'internal', message: 'guest_error!' });
 				expect(
-					(yield* run({ verb: 'create', input: [{ title: 'a' }] }, failing('cpuBudget'))).outcome
-				).toEqual({ kind: 'refused', code: 'cpuBudget', message: 'cpuBudget!' });
+					(yield* run({ verb: 'create', input: [{ title: 'a' }] }, failing('cpu_budget'))).outcome
+				).toEqual({ kind: 'refused', code: 'cpu_budget', message: 'cpu_budget!' });
 				expect(
 					yield* Effect.flip(
-						run({ verb: 'create', input: [{ title: 'a' }] }, failing('missingBody'))
+						run({ verb: 'create', input: [{ title: 'a' }] }, failing('missing_body'))
 					)
-				).toMatchObject({ code: 'missingBody' });
+				).toMatchObject({ code: 'missing_body' });
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 });

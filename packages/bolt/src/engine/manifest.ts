@@ -1,31 +1,23 @@
 // The manifest the engine consumes (C1, H1): the declaration literals by path-derived name, bodies stripped (an attached
-// body is marked `true`), decoded once at each boundary that reads one (`bolt check`, `readArtifact`). Its parts are the
-// decl types. `bolt check` proves an authored literal against its type (tsc over the source, then `Verify`), so a part
-// decodes as an object of its declared type, while the manifest's own shape (its parts, the workspace, the teams, the
-// connections, the policies and the agent text) decodes exactly: an unknown part, a part that is no object or a workspace
+// body is marked `true`), decoded once at each boundary that reads one (`bolt check`, `read_artifact`). Its parts are the
+// runtime codecs. Authored literals additionally have the compiler's narrower name/type checks. Every part and the
+// manifest's own shape (the workspace, teams, policies and agent text) decodes exactly: an unknown part or a workspace
 // without its zone is `ManifestInvalid`. The accessors derive, once per manifest, what interiors recomputed and cast.
-// Runtime imports stay off `contracts.ts`: it re-exports this module.
+// Runtime codecs stay with their owners; `contracts.ts` imports their derived types.
 import { Predicate, Result, Schema } from 'effect';
-import type { TeamData, TeamEntries, SourceTeam } from '../decl/access/team.ts';
-import type { InputFields, OutputKind } from '../decl/fields.ts';
-import type { custom_field } from '../decl/custom-field.ts';
+import { FieldData, OutputData } from '../decl/field-data.ts';
+import type { TeamEntries, SourceTeam } from '../decl/access/team.ts';
 import type { FieldKind } from '../decl/fields.ts';
-import {
-	layerModels,
-	splitModel,
-	type ModelLiteral,
-	type ModelSpec,
-	type SyncEntry
-} from '../decl/model.ts';
-import type { RelationshipSpec } from '../decl/names.ts';
+import { layer_models, column_layers } from '../decl/model.ts';
+import { ModelData, RelationshipData, SyncData, split_model } from '../decl/model-data.ts';
 import type { Role } from '../decl/layout.ts';
-import type { mcp, ToolSpec } from '../decl/runtime/agent.ts';
-import { AppData, type GroupSpec } from '../decl/runtime/app.ts';
-import { DeclaredDuration, TriggerSpec } from '../decl/runtime/automation.ts';
-import type { IntegrationSpec } from '../decl/runtime/integration.ts';
+import { AppData, GroupSpec } from '../decl/runtime/app.ts';
+import { CallCacheDuration, DeclaredDuration, TriggerSpec } from '../decl/runtime/automation.ts';
+import { AutomationInputSchema } from '../decl/runtime/automation-input.ts';
+import { IntegrationSpec } from '../decl/runtime/integration.ts';
 import { SYSTEM } from '../system/index.ts';
 import { ManifestInvalid } from './errors.ts';
-import { NEEDS, needsOf } from '../facilities/needs.ts';
+import { NEEDS, needs_of } from '../facilities/needs.ts';
 
 // ── parts without a decl type of their own: the literal as the manifest holds it ──
 /** A `history` (or identity read) scope: `true` or a `Where`. */
@@ -85,6 +77,7 @@ const PolicyData = Schema.Struct({
 		Schema.Struct({
 			apps: Schema.optionalKey(Schema.Array(Schema.String)),
 			automations: Schema.optionalKey(Schema.Array(Schema.String)),
+			syncs: Schema.optionalKey(Schema.Array(Schema.String)),
 			mcp: Schema.optionalKey(Schema.Array(Schema.String)),
 			tools: Schema.optionalKey(Schema.Array(Schema.String))
 		})
@@ -93,32 +86,28 @@ const PolicyData = Schema.Struct({
 		Schema.Record(Schema.String, Schema.Union([LimitData, Schema.Array(LimitData)]))
 	)
 });
-/** A definition's optional test body is marked in the engine projection. */
-type IntegrationData = IntegrationSpec & { readonly test?: true };
-/** A custom field's literal; `check` marks its `validate`. */
-type CustomFieldData = Omit<ReturnType<typeof custom_field>['spec'], 'validate'> & { check?: true };
-
-/** A part the compiler proved against `T`: an object here. */
-const part = <T extends object>(identifier: string) =>
-	Schema.declare((u: unknown): u is T => Predicate.isObject(u), { identifier });
-const parts = <T extends object>(identifier: string) =>
-	Schema.Record(Schema.String, part<T>(identifier));
-const ModelData = part<ModelSpec>('model').check(
-	Schema.makeFilter((model) => {
-		if (Object.hasOwn(model, 'label')) return 'use record_label';
-		if (Object.hasOwn(model, 'index') || Object.hasOwn(model.table ?? {}, 'indexes'))
-			return 'use model indexes';
-		return model.was === undefined || typeof model.was === 'string'
-			? undefined
-			: 'was must be a previous model name';
-	})
-);
+const Marker = Schema.optionalKey(Schema.Literal(true));
+const IntegrationData = Schema.Struct({ ...IntegrationSpec.fields, test: Marker });
+const CustomFieldData = Schema.Struct({
+	description: Schema.String, shape: FieldData,
+	label: Schema.optionalKey(Schema.String), search: Marker, check: Marker
+});
+const McpData = Schema.Struct({
+	description: Schema.String, url: Schema.String,
+	auth: Schema.optionalKey(Schema.Union([
+		Schema.Struct({ bearer: Schema.String }),
+		Schema.Struct({ oauth: Schema.Struct({
+			client_id: Schema.String, client_secret: Schema.optionalKey(Schema.String),
+			scopes: Schema.optionalKey(Schema.Array(Schema.String))
+		}) })
+	])),
+	tools: Schema.optionalKey(Schema.Array(Schema.String))
+});
 const ReadLayers = Schema.Record(
 	Schema.String,
 	Schema.Struct({ fields: Schema.Union([Schema.Literal('all'), Schema.Array(Schema.String)]) })
 );
 const Columns = Schema.Record(Schema.String, Schema.Array(Schema.String));
-const Marker = Schema.optionalKey(Schema.Literal(true));
 const ExposureData = Schema.Struct({
 	outputs: Schema.StructWithRest(Schema.Struct({ default: ReadLayers }), [
 		Schema.Record(Schema.String, ReadLayers)
@@ -128,16 +117,12 @@ const ExposureData = Schema.Struct({
 			columns: Columns,
 			filled: Schema.optionalKey(Columns),
 			transform: Marker,
-			attaches: Schema.optionalKey(
-				Schema.Record(Schema.String, Schema.Struct({ model: Schema.String, field: Schema.String }))
-			)
+			effect: Marker
 		})
 	),
-	update: Schema.optionalKey(Schema.Struct({ columns: Columns, transform: Marker })),
-	delete: Schema.optionalKey(Schema.Struct({ check: Marker })),
-	notify: Marker,
-	effect: Schema.optionalKey(Schema.Struct({ created: Marker, updated: Marker, deleted: Marker })),
-	syncs: Schema.optionalKey(parts<SyncEntry>('sync'))
+	update: Schema.optionalKey(Schema.Struct({ columns: Columns, transform: Marker, effect: Marker })),
+	delete: Schema.optionalKey(Schema.Struct({ effect: Marker })),
+	syncs: Schema.optionalKey(Schema.Record(Schema.String, SyncData))
 });
 
 // ── the parts decoded exactly ──
@@ -145,10 +130,7 @@ const SecretDecl = Schema.Struct({
 	label: Schema.String,
 	description: Schema.optionalKey(Schema.String)
 });
-const ModelClass = Schema.Literals(['default', 'fast', 'strong']);
 const Ai = Schema.Struct({
-	models: Schema.Array(ModelClass),
-	default: ModelClass,
 	embeddings: Schema.optionalKey(Schema.Array(Schema.String))
 });
 const Signup = Schema.Struct({
@@ -165,7 +147,7 @@ const Signup = Schema.Struct({
 	),
 	challenge: Schema.optionalKey(Schema.Literal('turnstile'))
 });
-/** `+workspace.ts` with `+secrets.ts` joined into `secrets`; its `connections` are their own part. */
+/** Workspace capabilities with the separately declared secrets joined into the workspace. */
 const Workspace = Schema.Struct({
 	tz: Schema.String,
 	locale: Schema.String,
@@ -184,22 +166,15 @@ const Workspace = Schema.Struct({
 	agent: Schema.optionalKey(Schema.Struct({ triage: Schema.optionalKey(Schema.Literal(false)) })), // hook:triage
 	signup: Schema.optionalKey(Signup)
 });
-/** `+team.ts`: a handle's policy list, or its structured definition. */
+/** `+team.ts`: each handle owns one structured definition. */
 const Teams = Schema.Record(
 	Schema.String,
-	Schema.Union([
-		Schema.Array(Schema.String),
-		Schema.Struct({
-			name: Schema.optionalKey(Schema.String),
-			parent: Schema.optionalKey(Schema.NullOr(Schema.String)),
-			policies: Schema.Array(Schema.String)
-		})
-	])
+	Schema.Struct({
+		name: Schema.optionalKey(Schema.String),
+		parent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+		policies: Schema.Array(Schema.String)
+	})
 );
-/** A `+workspace.ts` connection: the named instance `<slot>` of `integration`. */
-const Connection = Schema.Struct({
-	integration: Schema.String
-});
 /**
  * A skill (compute model §3, "Running a file"): a folder of `SKILL.md`, its scripts and the pure-JavaScript packages it
  * vendors, at most `SKILL_BYTES`. Its `SKILL.md` text, the digest of its tree (sha256 hex of the sorted
@@ -218,45 +193,61 @@ export const SKILL_FILE = 'SKILL.md';
 const Agent = Schema.Struct({
 	internal: Schema.optionalKey(Schema.String),
 	external: Schema.optionalKey(Schema.String),
-	skills: Schema.Record(Schema.String, SkillSchema),
-	/** The tools by name (`src/agent/tool/<n>/+tool.ts`). */
-	tools: Schema.optionalKey(parts<ToolSpec>('agent tool'))
+	skills: Schema.Record(Schema.String, SkillSchema)
 });
 
-const AutomationData = Schema.Struct({
+const AutomationBase = {
 	description: Schema.String,
-	input: Schema.optionalKey(part<InputFields>('automation input')),
-	output: Schema.optionalKey(part<OutputKind>('automation output')),
-	on: Schema.optionalKey(Schema.Array(TriggerSpec)),
+	input: Schema.optionalKey(AutomationInputSchema),
+	output: Schema.optionalKey(OutputData),
 	policies: Schema.NonEmptyArray(Schema.String),
-	retry: Schema.optionalKey(
-		Schema.Struct({
-			attempts: Schema.Literals([2, 3, 4, 5, 6, 7, 8]),
-			backoff: Schema.optionalKey(DeclaredDuration)
-		})
-	),
-	concurrency: Schema.optionalKey(
-		Schema.Struct({ max: Schema.Literals([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]) })
-	),
 	agent: Schema.optionalKey(Schema.Literals(['direct', 'confirm', 'never']))
-});
+};
+const Absent = Schema.optionalKey(Schema.Never);
+/** A job may trigger, retry and queue; a call may cache and does none of those. */
+const AutomationData = Schema.Union([
+	Schema.Struct({
+		...AutomationBase,
+		mode: Schema.optionalKey(Schema.Literal('job')),
+		cache: Absent,
+		on: Schema.optionalKey(Schema.Array(TriggerSpec)),
+		retry: Schema.optionalKey(
+			Schema.Struct({
+				attempts: Schema.Literals([2, 3, 4, 5, 6, 7, 8]),
+				backoff: Schema.optionalKey(DeclaredDuration)
+			})
+		),
+		concurrency: Schema.optionalKey(
+			Schema.Struct({ max: Schema.Literals([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]) })
+		)
+	}),
+	Schema.Struct({
+		...AutomationBase,
+		mode: Schema.Literal('call'),
+		cache: Schema.optionalKey(CallCacheDuration),
+		on: Absent,
+		retry: Absent,
+		concurrency: Absent
+	})
+]);
+const MessageCatalogue = Schema.Record(Schema.String, Schema.String);
 const manifestFields = {
 	workspace: Workspace,
+	/** Authored catalogue resolved for the workspace locale; file captions use the same text as its client. */
+	messages: Schema.optionalKey(MessageCatalogue),
 	models: Schema.Record(Schema.String, ModelData),
-	relationships: parts<RelationshipSpec>('relationship'),
+	relationships: Schema.Record(Schema.String, RelationshipData),
 	exposures: Schema.Record(Schema.String, ExposureData),
 	/** The workspace's integration definitions by name (bolt's conversation definitions are `SYSTEM.integrations`). */
-	integrations: parts<IntegrationData>('integration definition'),
+	integrations: Schema.Record(Schema.String, IntegrationData),
 	policies: Schema.Record(Schema.String, PolicyData),
 	teams: Teams,
 	automations: Schema.Record(Schema.String, AutomationData),
-	/** The named instances, by slot (the `sys_integration` id). */
-	connections: Schema.Record(Schema.String, Connection),
-	mcp: parts<ReturnType<typeof mcp>>('mcp server'),
+	mcp: Schema.Record(Schema.String, McpData),
 	apps: Schema.Record(Schema.String, AppData),
 	/** `+group.ts` literals: nav groups of apps. */ // hook:shell
-	groups: Schema.optionalKey(parts<GroupSpec>('group')),
-	customFields: parts<CustomFieldData>('custom field'),
+	groups: Schema.optionalKey(Schema.Record(Schema.String, GroupSpec)),
+	custom_fields: Schema.Record(Schema.String, CustomFieldData),
 	agent: Agent
 };
 export const EngineManifestSchema = Schema.Struct({
@@ -272,15 +263,15 @@ const decode = Schema.decodeUnknownResult(EngineManifestSchema, options),
 	decodeProjected = Schema.decodeUnknownResult(Schema.Struct(manifestFields), options);
 const invalid = (e: Schema.SchemaError) => new ManifestInvalid({ issues: e.message.split('\n') });
 /** The one manifest decoder (A.4): every artifact read. */
-export const decodeManifest = (u: unknown): Result.Result<EngineManifest, ManifestInvalid> =>
+export const decode_manifest = (u: unknown): Result.Result<EngineManifest, ManifestInvalid> =>
 	Result.mapError(decode(u), invalid);
-/** `bolt check`'s evaluated manifest (`projectManifest`), decoded, with its needs recorded. */
-export const decodeProjectedManifest = (
+/** `bolt check`'s evaluated manifest (`project_manifest`), decoded, with its needs recorded. */
+export const decode_projected_manifest = (
 	u: unknown
 ): Result.Result<EngineManifest, ManifestInvalid> =>
 	Result.mapBoth(decodeProjected(u), {
 		onFailure: invalid,
-		onSuccess: (m) => ({ ...m, needs: needsOf(m) })
+		onSuccess: (m) => ({ ...m, needs: needs_of(m) })
 	});
 
 const object = (v: unknown): { readonly [key: string]: unknown } =>
@@ -323,6 +314,12 @@ function outputGrant(model: string, output: unknown): unknown {
 		history: output['history']
 	});
 }
+const writeGrant = (model: string, arm: unknown): unknown =>
+	Predicate.isObject(arm) ? {
+		...arm,
+		...(arm['columns'] === undefined ? {} : { columns: column_layers(model, arm['columns']) }),
+		...(typeof arm['verdict'] === 'function' ? { verdict: true } : {})
+	} : arm;
 /** Lower the read scopes and mark each write grant's guest verdict callback as present. */
 const policyData = (p: unknown): unknown =>
 	Predicate.isObject(p) && 'grants' in p && Predicate.isObject(p.grants)
@@ -342,11 +339,8 @@ const policyData = (p: unknown): unknown =>
 														outputGrant(model, output)
 													])
 												)
-											: Predicate.isObject(arm) &&
-												  'verdict' in arm &&
-												  typeof arm.verdict === 'function'
-												? { ...arm, verdict: true }
-												: arm
+											: op === 'create' || op === 'update' || op === 'delete'
+												? writeGrant(model, arm) : arm
 									])
 								)
 							: grant
@@ -354,22 +348,13 @@ const policyData = (p: unknown): unknown =>
 				)
 			}
 		: p;
-/** A `model()` literal (the compiler proved it against its type); anything else is left to `decodeManifest` to refuse. */
-const isModelLiteral = (u: unknown): u is ModelLiteral =>
-	Predicate.isObject(u) && 'fields' in u && Predicate.isObject(u.fields);
 /** Split each model into its storage, its refs and the exposure defined by its outputs. */
 function modelParts(role: Record<string, unknown>) {
 	const models: { [name: string]: unknown } = {},
 		relationships: { [key: string]: unknown } = {},
 		exposures: { [name: string]: unknown } = {};
 	for (const [name, v] of Object.entries(role)) {
-		const lit = literal(v);
-		if (!isModelLiteral(lit)) {
-			models[name] = lit;
-			continue;
-		}
-		if (Object.hasOwn(lit, 'read')) throw new Error(`model '${name}': declare outputs.default`);
-		const parts = splitModel(name, lit);
+		const parts = split_model(name, literal(v));
 		models[name] = parts.model;
 		Object.assign(relationships, parts.relationships);
 		if (parts.exposure !== undefined) exposures[name] = parts.exposure;
@@ -382,12 +367,37 @@ function modelParts(role: Record<string, unknown>) {
  */
 export type LoadedManifest = { [R in Role]: Record<string, unknown> };
 
-/** P1's loaded manifest as the engine's, before `decodeManifest`: `+secrets.ts` joins the workspace as `secrets`. */
-export function projectManifest(m: LoadedManifest): unknown {
-	const { connections = {}, ...workspace } = object(m.workspace['']);
+const catalogue = (value: unknown, source: string): typeof MessageCatalogue.Type => {
+	const decoded = Schema.decodeUnknownResult(MessageCatalogue)(value);
+	if (Result.isFailure(decoded))
+		throw new ManifestInvalid({ issues: [`${source}: ${decoded.failure.message}`] });
+	return decoded.success;
+};
+/** The client's base catalogue and exact/language locale precedence, without a browser or inline field text. */
+function resolvedMessages(m: LoadedManifest, workspace: Readonly<Record<string, unknown>>) {
+	const hasBase = Object.hasOwn(m.messages, '');
+	if (!hasBase && Object.keys(m.locale).length === 0) return undefined;
+	const locales = new Map(
+		Object.entries(m.locale).map(([name, value]) =>
+			[name.toLowerCase(), catalogue(value, `locale ${name}`)] as const
+		)
+	);
+	const locale = typeof workspace['locale'] === 'string' ? workspace['locale'].toLowerCase() : '';
+	const language = locale.split('-')[0] ?? locale;
+	return {
+		...(hasBase ? catalogue(m.messages[''], 'messages') : {}),
+		...(locales.get(locale) ?? locales.get(language) ?? {})
+	};
+}
+
+/** P1's loaded manifest as the engine's, before `decode_manifest`: `+secrets.ts` joins the workspace as `secrets`. */
+export function project_manifest(m: LoadedManifest): unknown {
+	const workspace = object(m.workspace['']);
 	const secrets = m.secrets[''];
+	const messages = resolvedMessages(m, workspace);
 	return {
 		workspace: secrets === undefined ? workspace : { ...workspace, secrets },
+		...(messages === undefined ? {} : { messages }),
 		...modelParts(m.model),
 		integrations: marked(m.integration_definition, 'test', 'test'),
 		policies: Object.fromEntries(
@@ -395,21 +405,19 @@ export function projectManifest(m: LoadedManifest): unknown {
 		),
 		teams: m.team[''] ?? {},
 		automations: marked(m.automation, 'run'),
-		connections,
 		mcp: specs(m.mcp),
 		apps: m.app,
 		groups: m.group,
-		customFields: marked(m.custom_field, 'validate', 'check'),
+		custom_fields: marked(m.custom_field, 'validate', 'check'),
 		agent: {
 			...defined({ internal: m.agent[''], external: m.agent_external[''] }),
-			skills: specs(m.skill),
-			...(Object.keys(m.tool).length === 0 ? {} : { tools: specs(m.tool) })
+			skills: specs(m.skill)
 		}
 	};
 }
 /** A loaded manifest the caller has already checked, decoded; a refusal throws `ManifestInvalid` (tests, fixtures). */
-export const engineManifest = (m: LoadedManifest): EngineManifest =>
-	Result.getOrThrow(decodeProjectedManifest(projectManifest(m)));
+export const engine_manifest = (m: LoadedManifest): EngineManifest =>
+	Result.getOrThrow(decode_projected_manifest(project_manifest(m)));
 
 // ── accessors: each derived once per decoded manifest ──
 const memo = <A>(derive: (m: EngineManifest) => A) => {
@@ -424,7 +432,7 @@ const memo = <A>(derive: (m: EngineManifest) => A) => {
 };
 
 /** The secret names `+secrets.ts` declares, their values sealed in the tenant store. */
-export const declaredSecrets = memo((m): readonly string[] =>
+export const declared_secrets = memo((m): readonly string[] =>
 	Object.keys(m.workspace.secrets ?? {})
 );
 /** The apps whose public pages a visitor opens through a Turnstile challenge. */
@@ -433,17 +441,12 @@ export const challengedApps = memo((m): readonly string[] =>
 		.filter(([, a]) => typeof a.audience === 'object' && a.audience.challenge === 'turnstile')
 		.map(([name]) => name)
 );
-/** The source teams in one shape: a policy list is a team labelled by its handle, without a parent. */
-const structuredTeam = (entry: readonly string[] | TeamData): entry is TeamData =>
-	!Array.isArray(entry);
 /** A schema slice's team entries in the same runtime shape as the manifest catalogue. */
 export function teamEntries(entries: TeamEntries): { readonly [handle: string]: SourceTeam } {
 	return Object.fromEntries(
 		Object.entries(entries).map(([handle, entry]) => [
 			handle,
-			structuredTeam(entry)
-				? { name: entry.name ?? handle, parent: entry.parent ?? null, policies: entry.policies }
-				: { name: handle, parent: null, policies: entry }
+			{ name: entry.name ?? handle, parent: entry.parent ?? null, policies: entry.policies }
 		])
 	);
 }
@@ -458,7 +461,7 @@ export const layered = memo((m): EngineManifest => ({
 }));
 
 /**
- * Per exposed model (the built-in layer's included), each declared layer path → the model behind it (`layerModels`):
+ * Per exposed model (the built-in layer's included), each declared layer path → the model behind it (`layer_models`):
  * what the store scope, the authority and the lowering key every path by. `bolt check` refuses a path that resolves to
  * nothing (`model/layer`), so a decoded artifact's paths all resolve.
  */
@@ -468,7 +471,7 @@ export const layers = memo(
 		return Object.fromEntries(
 			Object.entries(all.exposures).map(([model, c]) => [
 				model,
-				layerModels(model, c, all.relationships).models
+				layer_models(model, c, all.relationships).models
 			])
 		);
 	}
@@ -492,7 +495,7 @@ export type Relation = {
 	readonly fk: string;
 	readonly targets: readonly string[];
 	readonly inverse: string | undefined;
-	readonly spec: RelationshipSpec;
+	readonly spec: EngineManifest['relationships'][string];
 };
 /** The relationships indexed once: by the model that declares the FK, and by `<target>.<inverse>`. */
 export type RelationIndex = {

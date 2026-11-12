@@ -19,21 +19,21 @@
 		client,
 		setup,
 		controls = true,
-		onStateChange,
+		on_state_change,
 		children,
 		t = (key: string) => key,
 		locale = 'en'
 	}: {
 		client: Pick<
 			IntegrationClient,
-			'instance' | 'status' | 'pair' | 'importStart' | 'unpair' | 'test' | 'watch'
+			'instance' | 'status' | 'pair' | 'import_start' | 'unpair' | 'test' | 'watch'
 		>;
 		/** The definition's own `+integration.svelte`, drawn in place of the generic views. */
 		setup?: IntegrationSetupEntry | undefined;
 		/** The containing connection row owns reconnecting and disconnecting. */
 		controls?: boolean | undefined;
 		/** Lifecycle events for a containing connection row, from the same status resource it renders. */
-		onStateChange?:
+		on_state_change?:
 			| ((
 					state: InstanceState | undefined,
 					previous: InstanceState | undefined,
@@ -86,7 +86,7 @@
 	const busy = $derived(mutation?.owner === client && mutation.busy);
 	watch.pre(
 		() => status,
-		(current, previous) => onStateChange?.(current?.state, previous?.state, current)
+		(current, previous) => on_state_change?.(current?.state, previous?.state, current)
 	);
 	// Only mutation state is local; reads and their failures belong to the query resource.
 	watch(
@@ -127,9 +127,9 @@
 		const owner = client;
 		return verb(owner, owner.unpair()).pipe(Effect.asVoid);
 	};
-	const importStart = (input: ImportStartInput) => {
+	const import_start = (input: ImportStartInput) => {
 		const owner = client;
-		return verb(owner, owner.importStart(input));
+		return verb(owner, owner.import_start(input));
 	};
 	const test = (to?: string) => {
 		const owner = client;
@@ -144,7 +144,7 @@
 		error,
 		busy,
 		pair,
-		importStart,
+		import_start,
 		unpair,
 		test,
 		t,
@@ -157,7 +157,7 @@
 		{error}
 		{busy}
 		{pair}
-		{importStart}
+		{import_start}
 		{unpair}
 		{test}
 		{t}

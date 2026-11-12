@@ -31,7 +31,7 @@ const parse = (
 	return {
 		id: message.mid,
 		thread: sender.id,
-		sentAt: new Date(timestamp).toISOString(),
+		sent_at: new Date(timestamp).toISOString(),
 		from: { handle: sender.id, name: null },
 		text,
 		files

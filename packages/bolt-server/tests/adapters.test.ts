@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from '@effect/vitest';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
-import { DeadlinePort, inProcessDeadlines } from '@norbital-ai/bolt/engine';
+import { DeadlinePort, in_process_deadlines } from '@norbital-ai/bolt/engine';
 import { envelope } from '../src/envelope.ts';
 
 class WorkFailed extends Schema.TaggedError<WorkFailed>()('WorkFailed', {
@@ -15,15 +15,17 @@ describe('the in-process timekeeper and the envelope (rules 52a, 71)', () => {
 			const woke: string[] = [];
 			let dk: DeadlinePort['Service'] | undefined;
 			const context = yield* Layer.build(
-				inProcessDeadlines((scope) =>
-					Effect.gen(function* () {
-						woke.push(scope);
-						if (woke.length === 1) {
-							if (dk === undefined) throw new Error('deadline layer has not opened');
-							yield* dk.settle(scope, new Date(30).toISOString());
-						}
-					})
-				)
+				in_process_deadlines({
+					wake: (scope) =>
+						Effect.gen(function* () {
+							woke.push(scope);
+							if (woke.length === 1) {
+								if (dk === undefined) throw new Error('deadline layer has not opened');
+								yield* dk.settle(scope, new Date(30).toISOString());
+							}
+						}),
+					pulse: () => Effect.succeed(true)
+				})
 			);
 			dk = Context.get(context, DeadlinePort);
 			yield* dk.announce('ws', new Date(40).toISOString());
@@ -50,18 +52,20 @@ describe('the in-process timekeeper and the envelope (rules 52a, 71)', () => {
 				const scope = yield* Scope.make();
 				yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 				const context = yield* Layer.build(
-					inProcessDeadlines(() =>
-						Effect.sync(() => {
-							calls++;
-						}).pipe(
-							Effect.andThen(Effect.never),
-							Effect.ensuring(
-								Effect.sync(() => {
-									released = true;
-								})
-							)
-						)
-					)
+					in_process_deadlines({
+						wake: () =>
+							Effect.sync(() => {
+								calls++;
+							}).pipe(
+								Effect.andThen(Effect.never),
+								Effect.ensuring(
+									Effect.sync(() => {
+										released = true;
+									})
+								)
+							),
+						pulse: () => Effect.succeed(true)
+					})
 				).pipe(Scope.provide(scope));
 				const dk = Context.get(context, DeadlinePort);
 				yield* dk.announce('ws', new Date(1).toISOString());
@@ -232,11 +236,14 @@ it.effect('a slow deadline cannot starve another scope or overlap itself', () =>
 			scope = yield* Scope.make();
 		yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 		const context = yield* Layer.build(
-			inProcessDeadlines((name) =>
-				Effect.sync(() => {
-					woke.push(name);
-				}).pipe(Effect.andThen(name === 'slow' ? Deferred.await(held) : Effect.void))
-			)
+			in_process_deadlines({
+				wake: (name) =>
+					Effect.sync(() => {
+						woke.push(name);
+					}).pipe(Effect.andThen(name === 'slow' ? Deferred.await(held) : Effect.void)),
+				// a due announcement during the slow wake goes to that wake
+				pulse: () => Effect.succeed(true)
+			})
 		).pipe(Scope.provide(scope));
 		const dk = Context.get(context, DeadlinePort);
 		yield* dk.announce('slow', new Date(1).toISOString());

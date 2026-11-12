@@ -5,19 +5,19 @@ import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Activation, Outbound, Agents, Runs } from '../engine/services.ts';
 import { NOT_IN_PREVIEW, ShellConfig, ShellHandler } from '../shell/host.ts';
 import { BoltError } from './errors.ts';
-import { AgentCallTable, AgentTurns, boltRoutes, RateLimits } from './http.ts';
-import { filesRoutes } from './files.ts';
+import { AgentCallTable, AgentTurns, bolt_routes, RateLimits } from './http.ts';
+import { files_routes } from './files.ts';
 import { ImagePreviewsLive } from './image-previews.ts';
-import { hookRoutes, integrationRoutes } from './integrations.ts';
+import { hook_routes, integration_routes } from './integrations.ts';
 
 export type Handler<R = never> = (
 	request: HttpServerRequest.HttpServerRequest
 ) => Effect.Effect<Option.Option<HttpServerResponse.HttpServerResponse>, never, R>;
 type RouteRequirements =
-	| Effect.Services<ReturnType<typeof boltRoutes>>
-	| Effect.Services<ReturnType<typeof filesRoutes>>
-	| Effect.Services<ReturnType<typeof integrationRoutes>>
-	| Effect.Services<ReturnType<typeof hookRoutes>>;
+	| Effect.Services<ReturnType<typeof bolt_routes>>
+	| Effect.Services<ReturnType<typeof files_routes>>
+	| Effect.Services<ReturnType<typeof integration_routes>>
+	| Effect.Services<ReturnType<typeof hook_routes>>;
 export const ORDER = ['hooks', 'shell', 'integrations', 'files', 'bolt'] as const;
 export class BoltHost extends Context.Service<
 	BoltHost,
@@ -60,11 +60,11 @@ export const BoltHostLive = Layer.effect(
 			)
 		);
 		const handlers: readonly Handler<RouteRequirements>[] = [
-			hookRoutes,
+			hook_routes,
 			shell.handle,
-			integrationRoutes,
-			filesRoutes,
-			boltRoutes
+			integration_routes,
+			files_routes,
+			bolt_routes
 		];
 		return {
 			handle: (request) =>

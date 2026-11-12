@@ -140,12 +140,12 @@ export const lark: ChatPlatform = {
 			return {
 				id: messageId,
 				thread: threadId === undefined ? chatId : `${chatId}:${rootId ?? messageId}:${threadId}`,
-				sentAt: new Date(message.createTime).toISOString(),
+				sent_at: new Date(message.createTime).toISOString(),
 				from: { handle: message.senderId, name: message.senderName ?? null },
 				text: message.content,
 				group: message.chatType !== 'p2p',
 				mentioned: message.mentionedBot,
-				replyTo: message.replyToMessageId ?? null,
+				reply_to: message.replyToMessageId ?? null,
 				files: message.resources.map(({ type, fileKey, fileName }) => ({
 					name: fileName ?? fileKey,
 					mime: MIME[type] ?? 'application/octet-stream',
@@ -195,7 +195,7 @@ export const lark: ChatPlatform = {
 							{
 								id: message_id,
 								thread: '',
-								sentAt: new Date().toISOString(),
+								sent_at: new Date().toISOString(),
 								from: { handle: '', name: null },
 								text: '',
 								deleted: true
@@ -206,9 +206,9 @@ export const lark: ChatPlatform = {
 				if (type !== 'im.message.receive_v1') return nothing();
 				const message = await parse(await Schema.decodeUnknownPromise(Raw)(event));
 				if (message === null) return nothing();
-				const parent = message.group ? message.replyTo : null;
+				const parent = message.group ? message.reply_to : null;
 				return {
-					messages: [{ ...message, repliedTo: parent != null && (await answersBot(parent)) }]
+					messages: [{ ...message, replied_to: parent != null && (await answersBot(parent)) }]
 				};
 			},
 			async send(thread, text, key) {

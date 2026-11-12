@@ -58,7 +58,7 @@ export const resend: ChatPlatform = {
 			return {
 				id: email.id,
 				thread,
-				sentAt: new Date(email.received_at).toISOString(),
+				sent_at: new Date(email.received_at).toISOString(),
 				from: person(email.from),
 				text: (email.text || (email.html ?? '').replace(TAGS, '')).trim(),
 				group: [...to, ...handles(email.cc)].some((one) => one !== account),

@@ -1,3 +1,4 @@
+import { actor_ref } from '../access/actor.ts';
 // The approval lock (rule 46a): while a request is Pending or ChangesRequested, the records it holds — root, the inline
 // children its provisional change touched, and any owned child created under a held record — change only through the
 // request: the current step's approvers (its teams' members and its users) in Pending, the requester in ChangesRequested
@@ -8,38 +9,35 @@ import type { EngineActor } from '../contracts.ts';
 import { relations, teams, type EngineManifest, type GrantData } from '../manifest.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { DbError } from '../errors.ts';
-import { q, type Catalog } from '@norbital-ai/store';
+import type { Catalog } from '@norbital-ai/store';
 import type { RowApproval } from '../../decl/names.ts';
 import { GATED, type Chain } from '../write/sql.ts';
-import { actorRef } from '../write/commit.ts';
+import { capturePiece } from '../db/captured.ts';
+import { literal } from '@norbital-ai/std/sql';
+
 import { Snapshot } from './snapshot.ts';
-/** `[child, fk, parent]` of every owned relationship. */
-export const ownedEdges = (m: EngineManifest, cat: Catalog) =>
-	relations(m).all.flatMap((rel) =>
-		rel.spec.owned === true
-			? rel.targets.flatMap((parent) =>
-					cat.models.has(parent) &&
-					cat.models.get(rel.from)?.one.get(rel.fk)?.targets.includes(parent) === true
-						? [
-								[
-									rel.from,
-									rel.targets.length > 1 ? `${rel.fk}__${parent}` : rel.fk,
-									parent
-								] as const
-							]
-						: []
-				)
-			: []
-	);
+import { open_sql } from './sql.ts';
+/** Physical relationship edges shared by lock admission, checkpoint extension and approval reachability. */
+const relationEdges = (m: EngineManifest, cat: Catalog) =>
+	relations(m).all.flatMap((rel) => {
+		const action = rel.spec.on_delete ?? (rel.spec.owned === true ? 'cascade' : 'restrict');
+		return rel.targets.flatMap((parent) =>
+			cat.models.has(parent) && cat.models.get(rel.from)?.one.get(rel.fk)?.targets.includes(parent) === true
+				? [{
+					child: rel.from, fk: rel.targets.length > 1 ? `${rel.fk}__${parent}` : rel.fk, parent,
+					owned: rel.spec.owned === true, cascades: action === 'cascade' || action === 'set_null'
+				}]
+				: []);
+	});
 /** The row images `source` touched (its direct and cascaded rows), plus the held parents of the owned children among them. */
 const touched = (m: EngineManifest, cat: Catalog, c: Chain, source: string, decision: boolean) => {
 	const own = decision ? 'NOT erased' : `cause IN ('direct', 'cascade') AND NOT erased`;
 	return [
 		`SELECT c, id FROM ${source} WHERE ${own}`,
-		...ownedEdges(m, cat).map(
-			([child, fk, parent]) =>
-				`SELECT ${c.p(parent)}::text, image.j ->> ${c.p(fk)}::text FROM ${source}
-				CROSS JOIN LATERAL (VALUES (o),(n)) image(j) WHERE c = ${c.p(child)} AND ${own}`
+		...relationEdges(m, cat).filter((edge) => edge.owned).map(
+			({ child, fk, parent }) =>
+				`SELECT ${literal(parent)}::text, image.j ->> ${literal(fk)} FROM ${source}
+				CROSS JOIN LATERAL (VALUES (o),(n)) image(j) WHERE c = ${literal(child)} AND ${own}`
 		)
 	].join(' UNION ');
 };
@@ -71,15 +69,16 @@ export function lockPieces(
 	c: Chain,
 	actor: EngineActor,
 	source: string,
-	excludeRequest?: string
+	excludeRequest?: string,
+	deferCheckpoint?: string
 ): string {
 	const { team, id } = own(actor);
 	c.cte('ap_touch', touched(m, cat, c, source, excludeRequest !== undefined));
 	c.cte(
 		'ap_hit',
 		`SELECT a.id, a.state, a.step, a.route, a.requestor_user, a.records,
-		${eligible(c.p(team), c.p(id), c.p(actorRef(actor)))} AS eligible
-	FROM bolt_approvals a WHERE a.state IN ('Pending', 'ChangesRequested')
+		${eligible(c.p(team), id === null ? c.p(null) : c.shared('by', id), c.shared('actor', actor_ref(actor)))} AS eligible
+	FROM bolt_approvals a WHERE ${open_sql('a.state')}
 		${excludeRequest === undefined ? '' : `AND a.id <> ${c.p(excludeRequest)}::uuid`}
 		AND EXISTS (SELECT 1 FROM jsonb_array_elements(a.records) r JOIN ap_touch t ON t.c = r ->> 'collection' AND t.id = r ->> 'id')
 	ORDER BY a.id FOR UPDATE OF a`
@@ -90,12 +89,12 @@ export function lockPieces(
 		'underApproval',
 		"(SELECT h.id::text || ' Under approval: the system raised this request. Approve or reject it; its record cannot be changed.' FROM ap_hit h WHERE h.route ? '__boltReadGuards' LIMIT 1)"
 	);
-	const names = c.p(
-		Object.fromEntries(Object.entries(teams(m)).map(([handle, t]) => [handle, t.name ?? handle]))
+	const names = literal(
+		JSON.stringify(Object.fromEntries(Object.entries(teams(m)).map(([handle, t]) => [handle, t.name ?? handle])))
 	);
 	c.assertWith(
 		'NOT EXISTS (SELECT 1 FROM ap_hit WHERE NOT eligible)',
-		'underApproval',
+		'under_approval',
 		`(SELECT h.id::text || ' Under approval: ' || CASE WHEN h.state = 'ChangesRequested'
 			THEN coalesce(u.name, u.email, 'the requester')
 			ELSE coalesce((SELECT string_agg(x, ' or ') FROM (
@@ -104,47 +103,32 @@ export function lockPieces(
 					LEFT JOIN sys_user su ON su.id::text = s) w), 'its approvers') END
 			|| ' may change it.' FROM ap_hit h LEFT JOIN sys_user u ON u.id::text = h.requestor_user WHERE NOT h.eligible LIMIT 1)`
 	);
-	const edges = relations(m).all.flatMap((rel) => {
-		const action = rel.spec.onDelete ?? (rel.spec.owned === true ? 'cascade' : 'restrict');
-		return rel.targets.flatMap((parent) =>
-			cat.models.has(parent) &&
-			cat.models.get(rel.from)?.one.get(rel.fk)?.targets.includes(parent) === true &&
-			(rel.spec.owned === true || action === 'cascade' || action === 'setNull')
-				? [
-						{
-							child: rel.from,
-							fk: rel.targets.length > 1 ? `${rel.fk}__${parent}` : rel.fk,
-							parent,
-							owned: rel.spec.owned === true,
-							cascades: action === 'cascade' || action === 'setNull'
-						}
-					]
-				: []
-		);
-	});
+	const edges = relationEdges(m, cat).filter((edge) => edge.owned || edge.cascades);
 	if (edges.length > 0) {
 		c.cte(
 			'ap_edges',
-			`SELECT * FROM jsonb_to_recordset(${c.p(edges)}::jsonb)
+			`SELECT * FROM jsonb_to_recordset(${literal(JSON.stringify(edges))}::jsonb)
 			AS edge(child text,fk text,parent text,owned boolean,cascades boolean)`
 		);
-		c.cte(
-			'ap_extend',
-			`UPDATE bolt_approvals a SET records = a.records || (
+		c.cte('ap_held',
+			`SELECT a.id,a.state,a.step,a.route,a.requestor_user,a.eligible,a.records || (
 		WITH RECURSIVE reached(c,id) AS (
 			SELECT entry.value->>'collection',entry.value->>'id' FROM jsonb_array_elements(a.records) AS entry(value)
 			UNION
 			SELECT x.c,x.id FROM ${source} x JOIN ap_edges edge ON edge.child=x.c
 			JOIN reached parent ON parent.c=edge.parent AND (parent.id=x.o->>edge.fk OR parent.id=x.n->>edge.fk)
-			WHERE NOT x.erased AND ((edge.owned AND x.cause IN ('direct','cascade')) OR (edge.cascades AND coalesce(x.cascaded,false)))
+			WHERE NOT x.erased AND ((edge.owned AND x.cause IN ('direct','cascade')) OR (edge.cascades AND x.cause = 'cascade'))
 		)
 		SELECT coalesce(jsonb_agg(${checkpoint('x')} ORDER BY x.c,x.id),'[]'::jsonb)
 		FROM (SELECT DISTINCT ON (c,id) * FROM ${source} WHERE cause IN ('direct','cascade') AND NOT erased) x
-		JOIN reached using(c,id) WHERE NOT ${held('a.records', 'x.c', 'x.id')})
-	WHERE a.id IN (SELECT id FROM ap_hit WHERE eligible) AND ${GATED} RETURNING a.id`
+		JOIN reached using(c,id) WHERE NOT ${held('a.records', 'x.c', 'x.id')}) AS records
+	FROM ap_hit a WHERE a.eligible`
 		);
-	}
-	return 'ap_hit';
+		capturePiece(c, 'ap_extend', 'bolt_approvals',
+			`UPDATE bolt_approvals a SET records=h.records FROM ap_held h WHERE a.id=h.id
+			${deferCheckpoint === undefined ? '' : `AND a.id<>${c.p(deferCheckpoint)}::uuid`} AND ${GATED}`);
+	} else c.cte('ap_held', 'SELECT * FROM ap_hit WHERE eligible');
+	return 'ap_held';
 }
 
 const Holder = Schema.Struct({
@@ -173,63 +157,11 @@ export const holders = Effect.fn('Approvals.holders')(function* (
 	return yield* db.rows(Holder, {
 		text: `SELECT a.id::text AS id, ${eligible('$2', '$3', '$4')} AS eligible, a.route ? '__boltReadGuards' AS "readGuarded", a.state, a.requestor = $4 AS requester,
 		a.collection AS model, a.record, a.action FROM bolt_approvals a
-	WHERE a.state IN ('Pending', 'ChangesRequested')
+	WHERE ${open_sql('a.state')}
 		AND EXISTS (SELECT 1 FROM jsonb_array_elements(a.records) r JOIN jsonb_to_recordset($1::jsonb) AS t(c text, id text)
 			ON t.c = r ->> 'collection' AND t.id = r ->> 'id')`,
-		params: [JSON.stringify(refs.map(([c, id]) => ({ c, id }))), team, id, actorRef(actor)]
+		params: [JSON.stringify(refs.map(([c, id]) => ({ c, id }))), team, id, actor_ref(actor)]
 	});
-});
-
-/** Relationship actions stay authored changes: a held child's checkpoint retains its root inverse through review. */
-export const heldFields = Effect.fn('Approvals.heldFields')(function* (
-	db: Pick<TenantDbShape, 'rows'>,
-	m: EngineManifest,
-	cat: Catalog,
-	request: string
-) {
-	const edges = ownedEdges(m, cat);
-	if (edges.length === 0) return [];
-	const params: (string | null)[] = [request];
-	const param = (value: string | null) => `$${params.push(value)}`;
-	const links = edges.flatMap(([child, fk, parent]) => {
-		const from = param(child),
-			to = param(parent),
-			column = param(fk),
-			field = param(
-				[...(cat.models.get(parent)?.many.values() ?? [])].find(
-					(rel) => rel.child === child && rel.column === fk
-				)?.name ?? null
-			);
-		const idType = cat.models.get(child)?.fields.get('id')?.pg ?? 'uuid';
-		return [
-			`SELECT ${to}::text AS collection, live.${q(fk)}::text AS id, ${field}::text AS field
-				FROM ${q(child)} live WHERE reached.collection = ${from}::text
-					AND live.id = (CASE WHEN reached.collection = ${from}::text THEN reached.id END)::${idType}`,
-			`SELECT ${to}::text, old.parent_id, ${field}::text FROM entries entry
-				CROSS JOIN LATERAL (SELECT h.changes ->> ${column}::text AS parent_id FROM bolt_history h
-					WHERE h.collection = ${from}::text AND h.record = entry.id::uuid AND h.revision <= entry.before
-						AND h.changes ? ${column}::text ORDER BY h.revision DESC LIMIT 1) old
-				WHERE reached.collection = ${from}::text AND entry.collection = ${from}::text
-					AND entry.id = reached.id AND entry.before IS NOT NULL`
-		];
-	});
-	const rows = yield* db.rows(Schema.Struct({ field: Schema.String }), {
-		text: `WITH RECURSIVE saved AS (SELECT collection, record, records FROM bolt_approvals WHERE id = $1::uuid),
-		entries AS (SELECT entry.* FROM saved CROSS JOIN LATERAL
-			jsonb_to_recordset(saved.records) AS entry(collection text, id text, before int)),
-		reached(collection, id, field) AS (
-			SELECT entry.collection, entry.id, null::text FROM entries entry, saved
-				WHERE (entry.collection, entry.id) <> (saved.collection, saved.record)
-			UNION
-			SELECT link.collection, link.id, link.field FROM reached, saved
-				CROSS JOIN LATERAL (${links.join(' UNION ALL ')}) link
-				WHERE link.id IS NOT NULL AND (reached.collection, reached.id) <> (saved.collection, saved.record)
-		)
-		SELECT DISTINCT reached.field FROM reached, saved WHERE reached.collection = saved.collection
-			AND reached.id = saved.record AND reached.field IS NOT NULL`,
-		params
-	});
-	return rows.map((row) => row.field);
 });
 
 const approvables = new WeakMap<EngineManifest, ReadonlySet<string>>();
@@ -243,17 +175,7 @@ export const approvable = (m: EngineManifest, cat: Catalog): ReadonlySet<string>
 	const roots = Object.values(m.policies).flatMap((p) =>
 		Object.entries(p.grants).flatMap(([c, g]) => (routesApproval(g) ? [c] : []))
 	);
-	const incoming = Map.groupBy(
-		relations(m).all.flatMap((rel) =>
-			rel.targets.flatMap((parent) =>
-				cat.models.has(parent) &&
-				cat.models.get(rel.from)?.one.get(rel.fk)?.targets.includes(parent) === true
-					? [{ parent, child: rel.from }]
-					: []
-			)
-		),
-		(rel) => rel.parent
-	);
+	const incoming = Map.groupBy(relationEdges(m, cat), (rel) => rel.parent);
 	const out = new Set<string>();
 	const visit = (c: string) => {
 		if (out.has(c)) return;
@@ -265,7 +187,7 @@ export const approvable = (m: EngineManifest, cat: Catalog): ReadonlySet<string>
 	return set;
 };
 const Held = Schema.Struct({
-	requestId: Schema.String,
+	request_id: Schema.String,
 	state: Schema.Literals(['Pending', 'ChangesRequested']),
 	step: Schema.Number,
 	steps: Snapshot.fields.steps,
@@ -276,7 +198,7 @@ const decodeHeld = Schema.decodeUnknownOption(Held);
 export const rowApproval = (raw: unknown): RowApproval | undefined =>
 	Option.match(decodeHeld(raw), {
 		onNone: () => undefined,
-		onSome: ({ by, ...r }) => ({ ...r, requestedBy: by })
+		onSome: ({ by, ...r }) => ({ ...r, requested_by: by })
 	});
 
 /**
@@ -287,7 +209,7 @@ export const heldModels = (db: Pick<TenantDbShape, 'rows'>) =>
 	db
 		.rows(Schema.Struct({ c: Schema.String }), {
 			text: `SELECT DISTINCT r ->> 'collection' AS c FROM bolt_approvals a CROSS JOIN LATERAL jsonb_array_elements(a.records) r
-	WHERE a.state IN ('Pending', 'ChangesRequested')`,
+	WHERE ${open_sql('a.state')}`,
 			params: []
 		})
 		.pipe(

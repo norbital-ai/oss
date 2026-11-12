@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
-	import { provideKinds } from '../src/kinds/context.js';
+	import { mount_edge } from '../src/effect/index.js';
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
+	import { provide_kinds } from '../src/kinds/context.js';
 	import StructuredData from '../src/kinds/structured-data.svelte';
 	import Editor from '../src/kinds/editor.svelte';
 	import type { JsonSchema } from '../src/kinds/json-schema.js';
@@ -31,7 +31,7 @@
 		cell?: boolean;
 		link?: boolean;
 		initial: Value;
-		host?: Parameters<typeof provideKinds>[0];
+		host?: Parameters<typeof provide_kinds>[0];
 		errors?: ReadonlyMap<string, string>;
 		readonly?: boolean;
 		editor?: boolean;
@@ -41,7 +41,7 @@
 	} = $props();
 	// Each test mount owns the initial host and draft, which subsequent edits replace locally.
 	// svelte-ignore state_referenced_locally
-	provideKinds(host);
+	provide_kinds(host);
 	// svelte-ignore state_referenced_locally
 	let value = $state(initial);
 	function update(next: Value) {
@@ -55,27 +55,27 @@
 {:else if kind !== undefined}<Editor
 		{kind}
 		{value}
-		onChange={update}
+		on_change={update}
 		name="input"
 		{readonly}
 		{errors}
-		{rawJson}
+		raw_json={rawJson}
 	/>
 {:else if editor}<Editor
 		kind={{ kind: 'json' }}
-		jsonSchema={schema}
+		json_schema={schema}
 		{value}
-		onChange={update}
+		on_change={update}
 		name="input"
 		{readonly}
 		{errors}
-		{rawJson}
+		raw_json={rawJson}
 	/>
 {:else if schema !== undefined}<StructuredData
 		mode="edit"
 		{schema}
 		{value}
-		onChange={update}
+		on_change={update}
 		name="input"
 		{readonly}
 		{errors}

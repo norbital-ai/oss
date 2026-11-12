@@ -1,14 +1,16 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
-import { schemaSlice } from '../src/engine/schema/plan.ts';
+import { schema_slice } from '../src/engine/schema/plan.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { readHistory, pruneHistory } from '../src/engine/query/history.ts';
+import { read_history, prune_history } from '../src/engine/query/history.ts';
+import { HistorySchema, historyKinds } from '../src/engine/query/history-schema.ts';
 import { acknowledgeAudit, drainAuditErases } from '../src/engine/audit-retention.ts';
 import { HistorySnapshotSchema } from '../src/protocol/record-contracts.ts';
 import { restorePreview, restoreRecord } from '../src/engine/write/restore.ts';
 import { act } from '../src/engine/write/act.ts';
-import { compileAuthority } from '../src/engine/access/authority.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
+import { IdentityStatement, identityPiece, identityHistory } from '../src/engine/identity/session.ts';
 import {
 	admin,
 	arm,
@@ -32,7 +34,7 @@ const before: EngineManifest = {
 			description: 'Documents',
 			record_label: 'record.title',
 			fields: {
-				title: { kind: 'text', label: 'Original title' },
+				title: { kind: 'text' },
 				quantity: { kind: 'text', optional: true },
 				removed: { kind: 'text', optional: true },
 				secret: { kind: 'text', optional: true }
@@ -54,7 +56,7 @@ const after: EngineManifest = {
 			was: 'documents',
 			record_label: 'record.heading',
 			fields: {
-				heading: { kind: 'text', was: 'title', label: 'Current heading' },
+				heading: { kind: 'text', was: 'title' },
 				quantity: { kind: 'int', optional: true },
 				secret: { kind: 'text', optional: true }
 			}
@@ -76,7 +78,7 @@ describe('versioned record history', () => {
 				Effect.gen(function* () {
 					const pg = yield* PgliteDb.open();
 					const db = PgliteDb.make(pg);
-					const initial = schemaSlice(before);
+					const initial = schema_slice(before);
 					yield* TestDb.migrate(db, initial);
 					yield* db.write({
 						text: "INSERT INTO documents(id,title) VALUES ($1,'Earlier')",
@@ -127,7 +129,7 @@ describe('versioned record history', () => {
 						...old,
 						workspace: { ...old.workspace, currency: 'SGD' }
 					};
-					const initial = schemaSlice(old);
+					const initial = schema_slice(old);
 					yield* TestDb.migrate(db, initial);
 					yield* db.write({
 						text: "insert into items(id,title,price) values($1,'Money',12.50)",
@@ -135,7 +137,7 @@ describe('versioned record history', () => {
 					});
 					yield* TestDb.migrate(db, current);
 					const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-						yield* readHistory(
+						yield* read_history(
 							db,
 							current,
 							{
@@ -155,87 +157,150 @@ describe('versioned record history', () => {
 				})
 			).pipe(Effect.provide(Pristine.layer))
 	);
-	it.live('identifies legacy revisions whose original schema was never captured', () =>
+	it.live('refuses missing, unknown, retired-flag and incomplete history metadata without rewriting it', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = schemaSlice(before);
-				yield* TestDb.migrate(db, initial);
-				yield* db.write({
-					text: "insert into documents(id,title) values($1,'Legacy')",
-					params: [ID]
-				});
-				yield* db.write({
-					text: "update bolt_history set meta=meta-'schema' where record=$1",
-					params: [ID]
-				});
 				yield* TestDb.migrate(db, before);
 				yield* db.write({
-					text: "update documents set title='First versioned write' where id=$1",
+					text: "insert into documents(id,title) values($1,'Original')",
 					params: [ID]
 				});
-				expect(
-					yield* db.value(Schema.Boolean, {
-						text: "select (meta->>'full')::boolean from bolt_history where record=$1 and revision=2",
-						params: [ID]
-					})
-				).toBe(true);
-				yield* TestDb.migrate(db, after, { accept: true });
-				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-					yield* readHistory(
-						db,
-						after,
-						{
-							kind: 'history',
-							model: 'articles',
-							id: ID,
-							view: true,
-							at: { _tag: 'Revision', revision: 1 }
-						},
-						{ as: 'caller', authority: admin },
-						bindings
-					)
-				);
-				expect(snapshot.legacy).toBe(true);
-				expect(snapshot.values.title).toBe('Legacy');
-				expect(snapshot.compatible.heading).toBe('Legacy');
-				yield* db.write({
-					text: "update articles set heading='Known schema' where id=$1",
-					params: [ID]
+				const metadata = () => db.value(Schema.JsonObject, {
+					text: 'select meta from bolt_history where record=$1 and revision=1', params: [ID]
 				});
-				const modern = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-					yield* readHistory(
-						db,
-						after,
-						{
-							kind: 'history',
-							model: 'articles',
-							id: ID,
-							view: true,
-							at: { _tag: 'Revision', revision: 3 }
-						},
-						{ as: 'caller', authority: admin },
-						bindings
-					)
-				);
-				expect(modern.legacy).toBe(false);
-				expect(modern.values).toMatchObject({ heading: 'Known schema', quantity: null });
-				expect(modern.values).not.toHaveProperty('title');
+				const version = yield* db.value(Schema.String, {
+					text: "select schema::text from bolt_history_current where model='documents'", params: []
+				});
+				const field_ids = () => db.value(Schema.JsonObject, {
+					text: 'select fields from bolt_history_schema where id=$1', params: [version]
+				});
+				const original_meta = yield* metadata(), original_fields = yield* field_ids();
+				for (const [index, corruption] of [
+					{ text: "update bolt_history set meta=meta-'schema' where record=$1", params: [ID] },
+					{ text: "update bolt_history set meta=jsonb_set(meta,'{schema}',to_jsonb(gen_random_uuid()::text)) where record=$1", params: [ID] },
+					{ text: "update bolt_history set meta=meta||'{\"legacy\":true}'::jsonb where record=$1", params: [ID] },
+					{ text: "update bolt_history_schema set fields=fields-'title' where id=$1", params: [version] }
+				].entries()) {
+					yield* db.write(corruption);
+					const stored_meta = yield* metadata(), stored_fields = yield* field_ids();
+					// Re-registering the same definition must neither stamp history nor invent missing field identities.
+					yield* db.write({
+						text: 'select bolt_history_register(model,definition) from bolt_history_schema where id=$1', params: [version]
+					});
+					expect(yield* Effect.flip(read_history(db, before, {
+						kind: 'history', model: 'documents', id: ID, view: true, at: { _tag: 'Revision', revision: 1 }
+					}, { as: 'caller', authority: admin }, bindings))).toMatchObject({ code: 'schema' });
+					if (index < 2)
+						expect(yield* Effect.flip(prune_history(db, 1))).toMatchObject({ sqlstate: 'BA001' });
+					expect(yield* metadata()).toEqual(stored_meta);
+					expect(yield* field_ids()).toEqual(stored_fields);
+					expect(yield* db.value(Schema.String, { text: 'select title from documents where id=$1', params: [ID] })).toBe('Original');
+					yield* db.write({ text: 'update bolt_history set meta=$2::jsonb where record=$1', params: [ID, original_meta] });
+					yield* db.write({ text: 'update bolt_history_schema set fields=$2::jsonb where id=$1', params: [version, original_fields] });
+				}
 			})
 		).pipe(Effect.provide(Pristine.layer))
+	);
+	it.live('keeps unsupported versioned descriptors raw without normalizing retired reference or state metadata', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const db = PgliteDb.make(yield* PgliteDb.open());
+			yield* TestDb.migrate(db, before);
+			yield* db.write({ text: "insert into documents(id,title) values($1,'Archived raw value')", params: [ID] });
+			const version = yield* db.value(Schema.String, {
+				text: "select meta->>'schema' from bolt_history where record=$1 and revision=1", params: [ID]
+			});
+			// Only the historical descriptor becomes unknown; its actual registered field identity is retained.
+			yield* db.write({
+				text: "update bolt_history_schema set definition=jsonb_set(definition,'{fields,title}','{\"kind\":\"archived_custom_kind\",\"original\":[true,1,\"raw\"]}'::jsonb) where id=$1",
+				params: [version]
+			});
+			yield* TestDb.migrate(db, after, { accept: true });
+			// a later write makes revision 1 a past revision a restore may preview
+			yield* db.write({ text: "update articles set secret='later' where id=$1", params: [ID] });
+			for (const descriptor of [
+				{ kind: 'archived_custom_kind', original: [true, 1, 'raw'] },
+				{ kind: 'ref', to: 'documents', onDelete: 'cascade' },
+				{ kind: 'ref', to: 'documents', optional: true, on_delete: 'setNull' },
+				{ kind: 'ref', to: 'documents', on_delete: 'cascade', onDelete: 'cascade' },
+				{ kind: 'state', initial: 'open', states: { open: { edit: 'none' } } },
+				{ kind: 'object', fields: { status: { kind: 'state', initial: 'open', states: { open: { edit: 'none' } } } } }
+			]) {
+				yield* db.write({
+					text: "update bolt_history_schema set definition=jsonb_set(definition,'{fields,title}',$2::jsonb) where id=$1",
+					params: [version, JSON.stringify(descriptor)]
+				});
+				const archived = yield* db.rows(Schema.Struct({ definition: Schema.JsonObject, fields: Schema.JsonObject }), {
+					text: 'select definition,fields from bolt_history_schema where id=$1', params: [version]
+				});
+				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(yield* read_history(db, after, {
+					kind: 'history', model: 'articles', id: ID, view: true, at: { _tag: 'Revision', revision: 1 }
+				}, { as: 'caller', authority: admin }, bindings));
+				expect(snapshot.schema_version).toBe(version);
+				expect(snapshot.values.title).toBe('Archived raw value');
+				expect(snapshot.fields).not.toHaveProperty('title');
+				expect(snapshot.incompatible).toContain('title');
+				expect(snapshot.compatible).not.toHaveProperty('heading');
+				const preview = yield* restorePreview({ manifest: after, db }, { model: 'articles', record: ID, revision: 1 }, admin, bindings);
+				if (!preview.ok) throw new Error(preview.outcome.message);
+				expect(preview.preview.changes).not.toContainEqual(expect.objectContaining({ field: 'heading' }));
+				expect(preview.preview.skipped).toContainEqual(expect.objectContaining({ field: 'title', reason: 'incompatible' }));
+				expect(yield* db.rows(Schema.Struct({ definition: Schema.JsonObject, fields: Schema.JsonObject }), {
+					text: 'select definition,fields from bolt_history_schema where id=$1', params: [version]
+				})).toEqual(archived);
+			}
+			const [native] = yield* db.rows(HistorySchema, {
+				text: "select s.id::text,s.lineage::text,s.model,s.definition,s.fields from bolt_history_schema s join bolt_history_current c on c.schema=s.id where c.model='sys_conversation' and c.active",
+				params: []
+			});
+			if (native === undefined) throw new Error('The current native conversation schema was not registered.');
+			const original_definition = JSON.stringify(native.definition);
+			expect(native.definition.fields.integration).toMatchObject({ kind: 'ref', on_delete: 'cascade' });
+			const current_reference = historyKinds(native).integration;
+			expect(current_reference).toMatchObject({ kind: 'ref', to: 'sys_integration', optional: true });
+			expect(current_reference).not.toHaveProperty('on_delete');
+			expect(JSON.stringify(native.definition)).toBe(original_definition);
+		})).pipe(Effect.provide(Pristine.layer))
+	);
+	it.live('versions native identity history and rolls back a mutation without its registered schema', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const db = PgliteDb.make(yield* PgliteDb.open());
+			const native: EngineManifest = { ...before, models: {}, relationships: {}, exposures: {} };
+			yield* TestDb.migrate(db, native);
+			const create = new IdentityStatement();
+			identityPiece(create, 'member', 'sys_user', `insert into sys_user(id,name) values(${create.p(ID)},'Native member')`);
+			identityHistory(create, 'sys_user', 'member', new Date(NOW), 'host');
+			yield* db.write(create.sql('1 AS applied'));
+			const version = yield* db.value(Schema.String, {
+				text: "select schema::text from bolt_history_current where model='sys_user' and active", params: []
+			});
+			const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(yield* read_history(db, native, {
+				kind: 'history', model: 'sys_user', id: ID, view: true
+			}, { as: 'workspace' }, bindings));
+			expect(snapshot.schema_version).toBe(version);
+			expect(snapshot.values.name).toBe('Native member');
+			expect(snapshot.compatible.name).toBe('Native member');
+			yield* db.write({ text: "update bolt_history_current set active=false where model='sys_user'", params: [] });
+			const change = new IdentityStatement();
+			identityPiece(change, 'member', 'sys_user', `update sys_user set name='Uncommitted',revision=revision+1 where id=${change.p(ID)}`);
+			identityHistory(change, 'sys_user', 'member', new Date(NOW), 'host');
+			expect(yield* Effect.flip(db.write(change.sql('1 AS applied')))).toMatchObject({ sqlstate: 'BA001' });
+			expect(yield* db.value(Schema.String, { text: 'select name from sys_user where id=$1', params: [ID] })).toBe('Native member');
+			expect(yield* db.value(Schema.Int, { text: 'select count(*)::int from bolt_history where record=$1', params: [ID] })).toBe(1);
+		})).pipe(Effect.provide(Pristine.layer))
 	);
 	it.live('rolls back a schema change while an affected erasure is pending', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = schemaSlice(before);
+				const initial = schema_slice(before);
 				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title) values($1,'Kept')",
 					params: [ID]
 				});
 				yield* db.write({
-					text: "insert into bolt_audit_receipt(operation,at) values('pending-schema',now())",
+					text: "insert into bolt_audit_receipt(operation,at,expires_at) values('pending-schema',now(),now()+interval '30 days')",
 					params: []
 				});
 				yield* db.write({
@@ -284,7 +349,7 @@ describe('versioned record history', () => {
 						}
 					}
 				};
-				const initial = schemaSlice(old);
+				const initial = schema_slice(old);
 				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into items(id,title,amount,location,span) values($1,'Original',9007199254740993.1234,'(103.8,1.3)','[2026-01-01,2026-01-31]')",
@@ -317,7 +382,7 @@ describe('versioned record history', () => {
 					params: [ID]
 				});
 				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-					yield* readHistory(
+					yield* read_history(
 						db,
 						current,
 						{
@@ -363,7 +428,7 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = schemaSlice(before);
+				const initial = schema_slice(before);
 				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title,quantity) values($1,'Original','42')",
@@ -379,9 +444,9 @@ describe('versioned record history', () => {
 					params: [ID]
 				});
 				yield* db.write({ text: "update articles set heading='Latest' where id=$1", params: [ID] });
-				expect(yield* pruneHistory(db, 2)).toBe(2);
+				expect(yield* prune_history(db, 2)).toBe(2);
 				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-					yield* readHistory(
+					yield* read_history(
 						db,
 						after,
 						{
@@ -415,7 +480,7 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = schemaSlice(before);
+				const initial = schema_slice(before);
 				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title,quantity) values($1,'Sensitive title','42')",
@@ -427,7 +492,7 @@ describe('versioned record history', () => {
 					params: [ID]
 				});
 				yield* db.write({
-					text: "insert into bolt_audit_receipt(operation,at) values('erase-schema',now())",
+					text: "insert into bolt_audit_receipt(operation,at,expires_at) values('erase-schema',now(),now()+interval '30 days')",
 					params: []
 				});
 				yield* db.write({
@@ -435,7 +500,7 @@ describe('versioned record history', () => {
 					params: [ID]
 				});
 				const read = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-					yield* readHistory(
+					yield* read_history(
 						db,
 						after,
 						{
@@ -465,7 +530,7 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = schemaSlice(before);
+				const initial = schema_slice(before);
 				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title,quantity,removed,secret) values($1,'Original','42','Retired private','Secret')",
@@ -491,13 +556,13 @@ describe('versioned record history', () => {
 				};
 				yield* TestDb.migrate(db, narrow, { accept: true });
 				// History is granted through the narrow output.
-				const caller = compileAuthority(
+				const caller = yield* compile_authority(
 					narrow,
 					{ actor: member, admin: false, policies: ['reader'] },
 					'history-reader'
 				);
 				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-					yield* readHistory(
+					yield* read_history(
 						db,
 						narrow,
 						{
@@ -525,7 +590,7 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = schemaSlice(before);
+				const initial = schema_slice(before);
 				yield* TestDb.migrate(db, initial);
 				const table = initial.tables.documents;
 				if (table === undefined) throw new Error('The native schema did not define documents.');
@@ -572,7 +637,7 @@ describe('versioned record history', () => {
 						accept: true
 					});
 					const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-						yield* readHistory(
+						yield* read_history(
 							db,
 							after,
 							{
@@ -591,7 +656,7 @@ describe('versioned record history', () => {
 						quantity: '42',
 						removed: 'Retired value'
 					});
-					expect(snapshot.fields.title?.label).toBe('Original title');
+					expect(snapshot.fields.title).toMatchObject({ kind: 'text' });
 					expect(snapshot.compatible).toMatchObject({ heading: 'Original', quantity: 42 });
 					expect(snapshot.incompatible).toContain('removed');
 					const preview = yield* restorePreview(
@@ -665,7 +730,7 @@ describe('versioned record history', () => {
 				};
 				yield* TestDb.migrate(db, readded);
 				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
-					yield* readHistory(
+					yield* read_history(
 						db,
 						readded,
 						{ kind: 'history', model: 'articles', id: ID, view: true },
@@ -685,7 +750,7 @@ describe('versioned record history', () => {
 						})
 					)
 				)(
-					yield* readHistory(
+					yield* read_history(
 						db,
 						readded,
 						{ kind: 'history', model: 'articles', id: ID },

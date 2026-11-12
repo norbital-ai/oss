@@ -1,4 +1,4 @@
-import { formatValue as show } from '../kinds/kind.js';
+import { format_value as show } from '../kinds/kind.js';
 import type { Values } from '../model/types.js';
 import { flat } from '../read/aggregate.js';
 export type PivotValue<F extends string = string> = { sum: F } | { count: true };

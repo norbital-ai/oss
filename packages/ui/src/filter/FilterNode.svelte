@@ -17,43 +17,13 @@
 	import { cn, stepActive } from '../primitives/utils.js';
 	import { useBolt } from '../client/context.js';
 	import FieldPicker from './FieldPicker.svelte';
-	import {
-		selectField,
-		selectOperator,
-		selectQuantifier,
-		aggregateValue,
-		aggFn,
-		aggOf,
-		argKind,
-		taggedArg,
-		childOf,
-		fieldsFor,
-		litKind,
-		manyAt,
-		manyOffers,
-		offersFor,
-		operandsFor,
-		operatorsFor,
-		QUANT_LABEL,
-		OP_LABEL,
-		radiusText,
-		resolve,
-		varError,
-		variableOf,
-		variablesFor,
-		type Arg,
-		type RawArg,
-		type Cmp,
-		type FilterStep,
-		type Node,
-		type Offer,
-		type Op,
-		type Quant,
-		type Resolved,
-		type FilterVariables
-	} from './filter.js';
+	import { selectField, selectOperator, selectQuantifier, aggregateValue, aggFn, aggOf } from './edit.js';
+	import { argKind, fieldsFor, litKind, operandsFor, operatorsFor, OP_LABEL, varError, variableOf, variablesFor, type FilterVariables } from './operators.js';
+	import { taggedArg, type Arg, type RawArg, type Cmp, type Node, type Op, type Quant } from './node.js';
+	import { childOf, manyAt, manyOffers, offersFor, resolve, type FilterStep, type Offer, type Resolved } from './catalog.js';
+	import { QUANT_LABEL, radiusText } from './text.js';
 	import FilterNode from './FilterNode.svelte';
-	import { humanize, msg } from '../text/messages.js';
+	import { humanize, msg, catalogText } from '../text/messages.js';
 
 	let {
 		node,
@@ -63,8 +33,8 @@
 		prefix = [],
 		top = false,
 		variables,
-		onChange,
-		onRemove
+		on_change,
+		on_remove
 	}: {
 		node: Node;
 		catalog: { readonly [c: string]: ModelExposure };
@@ -76,8 +46,8 @@
 		/** The view's own model outside any related group: many-relations are offered. */
 		top?: boolean;
 		variables?: FilterVariables;
-		onChange(next: Node): void;
-		onRemove(): void;
+		on_change(next: Node): void;
+		on_remove(): void;
 	} = $props();
 	const bolt = useBolt();
 	let expanded = $state(true);
@@ -85,14 +55,14 @@
 	const scopeId = $props.id();
 	const quantLabel = (q: Quant) =>
 		q === 'some'
-			? msg(bolt, 'view.scope.some', 'At least one record in')
+			? msg(bolt, 'view.scope.some')
 			: q === 'none'
-				? msg(bolt, 'view.scope.none', 'No record in')
+				? msg(bolt, 'view.scope.none')
 				: q === 'every'
-					? msg(bolt, 'view.scope.every', 'Every record in')
-					: msg(bolt, `view.q.${q}`, QUANT_LABEL[q]);
+					? msg(bolt, 'view.scope.every')
+					: catalogText(bolt, `view.q.${q}`, QUANT_LABEL[q]);
 
-	const NO_VALUE: readonly Op[] = ['is_null', 'notNull', 'isEmpty', 'notEmpty'];
+	const NO_VALUE: readonly Op[] = ['is_null', 'not_null', 'is_empty', 'not_empty'];
 	const OPERAND_LABEL = { lit: 'a value', var: 'a variable', field: 'a field' } as const;
 	const QUANTS: readonly Quant[] = ['some', 'none', 'every', 'count', 'sum', 'min', 'max', 'avg'];
 
@@ -122,7 +92,7 @@
 		variable = null;
 		draft = null;
 		operandOpen = false;
-		onChange(next);
+		on_change(next);
 	};
 	function picked(path: string, many: boolean) {
 		commit(selectField(catalog, model, node, path, many, offers, prefix, variables));
@@ -133,7 +103,7 @@
 		const first = kind === 'field' ? fieldsFor(catalog, model, path)[0] : undefined;
 		return first === undefined ? null : { _tag: 'field', field: first };
 	}
-	const setArg = (arg: Arg | null) => node.t === 'cond' && onChange({ ...node, arg });
+	const setArg = (arg: Arg | null) => node.t === 'cond' && on_change({ ...node, arg });
 	const list = $derived(
 		node.t === 'cond' && node.arg !== null && 'list' in node.arg ? node.arg.list : []
 	);
@@ -141,7 +111,7 @@
 		setArg(next.length === 0 ? null : { _tag: 'list', list: next });
 	const children = (n: Extract<Node, { t: 'group' | 'many' }>, of: readonly Node[]) => {
 		if (of.length > n.of.length) expanded = true;
-		onChange({ ...n, of } as Node);
+		on_change({ ...n, of } as Node);
 	};
 </script>
 
@@ -149,9 +119,9 @@
 	<button
 		type="button"
 		class="filter-remove text-muted-foreground hover:bg-muted hover:text-foreground ml-auto grid size-8 shrink-0 place-items-center rounded-sm"
-		aria-label={msg(bolt, 'view.removeRow', 'Remove')}
+		aria-label={msg(bolt, 'view.removeRow')}
 		data-remove
-		onclick={onRemove}
+		onclick={on_remove}
 	>
 		<svg
 			viewBox="0 0 24 24"
@@ -172,8 +142,8 @@
 		aria-expanded={expanded}
 		aria-controls={scopeId}
 		aria-label={expanded
-			? msg(bolt, 'view.hideConditions', 'Hide conditions')
-			: msg(bolt, 'view.showConditions', 'Show conditions')}
+			? msg(bolt, 'view.hideConditions')
+			: msg(bolt, 'view.showConditions')}
 		onclick={() => (expanded = !expanded)}
 		data-scope-toggle
 	>
@@ -205,12 +175,12 @@
 					{variables}
 					prefix={atPrefix}
 					top={isTop}
-					onChange={(c) =>
+					on_change={(c) =>
 						children(
 							n,
 							n.of.map((x, j) => (j === i ? c : x))
 						)}
-					onRemove={() =>
+					on_remove={() =>
 						children(
 							n,
 							n.of.filter((_, j) => j !== i)
@@ -224,17 +194,20 @@
 {#snippet addScope(n: Extract<Node, { t: 'group' | 'many' }>)}
 	<AddFilter
 		nested
-		iconOnly
-		onCondition={() => children(n, [...n.of, blank])}
-		onGroup={() => children(n, [...n.of, { t: 'group', join: 'or', of: [blank] }])}
+		icon_only
+		on_condition={() => children(n, [...n.of, blank])}
+		on_group={() => children(n, [...n.of, { t: 'group', join: 'or', of: [blank] }])}
 	/>
 {/snippet}
 
 {#snippet one(r: Resolved, value: Value, set: (v: Value) => void)}
 	{#if r.leaf === 'rel'}
-		<div class="w-48">
-			<Picker of={r.targets[0]!} value={typeof value === 'string' ? value : null} onChange={set} />
-		</div>
+		{@const target = r.targets[0]}
+		{#if target !== undefined}
+			<div class="w-48">
+				<Picker of={target} value={typeof value === 'string' ? value : null} on_change={set} />
+			</div>
+		{/if}
 	{:else if node.t === 'cond'}
 		{@const k = litKind(r, node.op)}
 		{#if k.kind === 'bool'}
@@ -242,11 +215,11 @@
 				variant="ghost"
 				class="w-auto"
 				options={[
-					{ value: 'true', label: msg(bolt, 'view.yes', 'Yes') },
-					{ value: 'false', label: msg(bolt, 'view.no', 'No') }
+					{ value: 'true', label: msg(bolt, 'view.yes') },
+					{ value: 'false', label: msg(bolt, 'view.no') }
 				]}
 				value={value === null ? null : value === true ? 'true' : 'false'}
-				onChange={(b) => set(b === null ? null : b === 'true')}
+				on_change={(b) => set(b === null ? null : b === 'true')}
 			/>
 		{:else}
 			<div
@@ -259,7 +232,7 @@
 							? '6rem'
 							: '11rem'}
 			>
-				<Editor kind={k} {value} onChange={set} name={node.path} />
+				<Editor kind={k} {value} on_change={set} name={node.path} />
 			</div>
 		{/if}
 	{/if}
@@ -270,7 +243,7 @@
 	<section
 		class="filter-scope"
 		role="group"
-		aria-label={msg(bolt, 'view.group', 'Condition group')}
+		aria-label={msg(bolt, 'view.group')}
 		data-group={g.join}
 	>
 		<div class="scope-header">
@@ -279,17 +252,17 @@
 				<Combobox
 					variant="ghost"
 					class="w-auto"
-					aria-label={msg(bolt, 'view.join', 'Match')}
+					aria-label={msg(bolt, 'view.join')}
 					value={`${g.not ? 'not-' : ''}${g.join}`}
 					options={[
-						{ value: 'and', label: msg(bolt, 'view.all', 'All of') },
-						{ value: 'or', label: msg(bolt, 'view.any', 'Any of') },
-						{ value: 'not-and', label: msg(bolt, 'view.notAll', 'Not all of') },
-						{ value: 'not-or', label: msg(bolt, 'view.none', 'None of') }
+						{ value: 'and', label: msg(bolt, 'view.all') },
+						{ value: 'or', label: msg(bolt, 'view.any') },
+						{ value: 'not-and', label: msg(bolt, 'view.notAll') },
+						{ value: 'not-or', label: msg(bolt, 'view.none') }
 					]}
-					onChange={(v) => {
+					on_change={(v) => {
 						if (v !== null)
-							onChange({
+							on_change({
 								t: 'group',
 								join: v.endsWith('or') ? 'or' : 'and',
 								...(v.startsWith('not') ? { not: true } : {}),
@@ -297,7 +270,7 @@
 							});
 					}}
 				/>
-				<span class="scope-tail">{msg(bolt, 'view.theseConditions', 'these conditions')}</span>
+				<span class="scope-tail">{msg(bolt, 'view.theseConditions')}</span>
 			</div>
 			<div class="scope-actions">{@render addScope(g)}{@render remove()}</div>
 		</div>
@@ -342,7 +315,10 @@
 					}
 				]
 			: []),
-		...[...new Set(mo.aggs.filter((o) => aggFn(o) === m.q).map((o) => aggOf(o)!))].map((f) => ({
+		...[...new Set(mo.aggs.flatMap((o) => {
+			const field = aggOf(o);
+			return aggFn(o) === m.q && typeof field === 'string' ? [field] : [];
+		}))].map((f) => ({
 			value: f,
 			label: catalog[child]?.fields[f]?.label ?? humanize(f)
 		}))
@@ -350,7 +326,7 @@
 	<section
 		class="filter-scope"
 		role="group"
-		aria-label={msg(bolt, 'view.relatedScope', 'Related records')}
+		aria-label={msg(bolt, 'view.relatedScope')}
 		data-many={m.rel}
 	>
 		<div class="scope-header">
@@ -359,13 +335,13 @@
 				<Combobox
 					variant="ghost"
 					class="w-auto"
-					aria-label={msg(bolt, 'view.quantifier', 'Quantifier')}
+					aria-label={msg(bolt, 'view.quantifier')}
 					value={m.q}
 					options={quantOptions.map((q) => ({
 						value: q,
 						label: quantLabel(q)
 					}))}
-					onChange={(q) => {
+					on_change={(q) => {
 						if (q !== null) commit(selectQuantifier(catalog, model, offers, prefix, m, q));
 					}}
 				/>
@@ -373,12 +349,12 @@
 					<Combobox
 						variant="ghost"
 						class="w-auto"
-						aria-label={msg(bolt, 'view.of', 'Of')}
+						aria-label={msg(bolt, 'view.of')}
 						value={m.field ?? null}
-						onChange={(f) => {
+						on_change={(f) => {
 							if (f !== null) {
 								const at = mo.aggs.filter((o) => aggFn(o) === m.q && aggOf(o) === f);
-								onChange({
+								on_change({
 									...m,
 									field: f,
 									op: (at.some((o) => o.op === m.op) ? m.op : (at[0]?.op ?? 'gte')) as Cmp,
@@ -389,11 +365,11 @@
 						options={ofOptions}
 					/>
 				{/if}
-				{#if agg && m.q !== 'count'}<span class="scope-tail">{msg(bolt, 'view.inScope', 'in')}</span
+				{#if agg && m.q !== 'count'}<span class="scope-tail">{msg(bolt, 'view.inScope')}</span
 					>{/if}
-				<FieldPicker {catalog} {model} {offers} {prefix} value={m.rel} many={top} onPick={picked} />
+				<FieldPicker {catalog} {model} {offers} {prefix} value={m.rel} many={top} on_pick={picked} />
 				{#if !agg && m.of.length > 0}<span class="scope-tail" data-many-heading
-						>{msg(bolt, 'view.scope.matches', 'matches:')}</span
+						>{msg(bolt, 'view.scope.matches')}</span
 					>{/if}
 				{#if agg}
 					{@const aggregateKind =
@@ -401,10 +377,10 @@
 					<Combobox
 						variant="ghost"
 						class="w-auto"
-						aria-label={msg(bolt, 'view.compare', 'Compare')}
+						aria-label={msg(bolt, 'view.compare')}
 						value={m.op ?? null}
-						onChange={(op) => {
-							if (op !== null) onChange({ ...m, op: op as Cmp });
+						on_change={(op) => {
+							if (op !== null) on_change({ ...m, op: op as Cmp });
 						}}
 						options={compareOptions}
 					/>
@@ -414,8 +390,8 @@
 								kind={{ ...aggregateKind, optional: true }}
 								value={typeof m.n === 'string' ? m.n : null}
 								name={m.field ?? 'date'}
-								onChange={(value) =>
-									onChange({ ...m, n: typeof value === 'string' ? value : null })}
+								on_change={(value) =>
+									on_change({ ...m, n: typeof value === 'string' ? value : null })}
 							/>
 						</div>
 					{:else}<input
@@ -424,9 +400,9 @@
 							min={m.q === 'count' ? 0 : undefined}
 							step={m.q === 'count' ? 1 : 'any'}
 							value={m.n ?? ''}
-							aria-label={msg(bolt, 'view.number', 'Number')}
+							aria-label={msg(bolt, 'view.number')}
 							oninput={(e) =>
-								onChange({
+								on_change({
 									...m,
 									n: e.currentTarget.value === '' ? null : Number(e.currentTarget.value)
 								})}
@@ -449,7 +425,7 @@
 	{@const at = offersFor(offers, prefix, node.path)}
 	<div class="condition-controls" data-cond={node.path}>
 		<div class="flex min-w-0 flex-col gap-1">
-			<span class="text-muted-foreground sr-only text-xs">{msg(bolt, 'view.field', 'Field')}</span>
+			<span class="text-muted-foreground sr-only text-xs">{msg(bolt, 'view.field')}</span>
 			<FieldPicker
 				{catalog}
 				{model}
@@ -457,7 +433,7 @@
 				{prefix}
 				value={node.path}
 				many={top}
-				onPick={picked}
+				on_pick={picked}
 			/>
 		</div>
 		{#if r !== null}
@@ -467,18 +443,18 @@
 			)}
 			<div class="flex flex-col gap-1">
 				<span class="text-muted-foreground sr-only text-xs"
-					>{msg(bolt, 'view.operator', 'Operator')}</span
+					>{msg(bolt, 'view.operator')}</span
 				>
 				<Combobox
 					variant="ghost"
 					class="w-auto"
-					aria-label={msg(bolt, 'view.operator', 'Operator')}
+					aria-label={msg(bolt, 'view.operator')}
 					value={c.op}
-					onChange={(op) => {
+					on_change={(op) => {
 						if (op !== null)
 							commit(selectOperator(catalog, model, c, op, offers, prefix, variables));
 					}}
-					placeholder={msg(bolt, 'view.operator', 'Operator')}
+					placeholder={msg(bolt, 'view.operator')}
 					options={[
 						...operatorsFor(offers, prefix, c.path, r).map((o) => ({
 							value: o.op,
@@ -488,12 +464,12 @@
 							? [
 									{
 										value: 'during' as const,
-										label: msg(bolt, 'view.during', 'is within')
+										label: msg(bolt, 'view.during')
 									}
 								]
 							: []),
 						...(c.op === 'near' && !at.some((o) => o.op === 'near')
-							? [{ value: 'near' as const, label: msg(bolt, 'view.near', 'is within') }]
+							? [{ value: 'near' as const, label: msg(bolt, 'view.near') }]
 							: [])
 					]}
 				/>
@@ -506,7 +482,7 @@
 					type="number"
 					min="0.1"
 					step="0.1"
-					aria-label={msg(bolt, 'view.radius', 'Kilometres')}
+					aria-label={msg(bolt, 'view.radius')}
 					value={m / 1000}
 					oninput={(e) => {
 						const km = Number(e.currentTarget.value);
@@ -514,7 +490,7 @@
 					}}
 				/>
 				<span class="text-muted-foreground text-sm" data-near
-					>{msg(bolt, 'view.kmOf', 'km of')}
+					>{msg(bolt, 'view.kmOf')}
 					{p.lat.toFixed(4)}, {p.lng.toFixed(4)}
 					<span class="sr-only">({radiusText(m)})</span></span
 				>
@@ -524,7 +500,7 @@
 				{@const named = variableOf(c.arg)}
 				<div class="flex min-w-0 flex-col gap-1">
 					<span class="text-muted-foreground sr-only text-xs"
-						>{msg(bolt, 'view.value', 'Value')}</span
+						>{msg(bolt, 'view.value')}</span
 					>
 					<!-- svelte-ignore a11y_no_static_element_interactions: it only listens for the `@` its controls receive -->
 					<div
@@ -544,7 +520,7 @@
 								aria-activedescendant={matching[variableActive] === undefined
 									? undefined
 									: `filter-variable-${variableActive}`}
-								aria-label={msg(bolt, 'view.variable', 'Variable')}
+								aria-label={msg(bolt, 'view.variable')}
 								data-variable-input
 								value={`@${variable}`}
 								{@attach (el) => el.focus()}
@@ -617,11 +593,11 @@
 									class={cn(CONTROL, 'h-auto w-64 py-1')}
 									language="javascript"
 									wrap
-									minHeight="1.75rem"
+									min_height="1.75rem"
 									invalid={error !== undefined}
 									value={draft}
-									aria-label={msg(bolt, 'view.expression', 'Expression')}
-									onChange={(next) => {
+									aria-label={msg(bolt, 'view.expression')}
+									on_change={(next) => {
 										draft = next;
 										if (varError(r, c.op, next, variables) === undefined)
 											setArg({ _tag: 'var', var: next });
@@ -634,7 +610,7 @@
 							<button
 								type="button"
 								class="text-muted-foreground text-sm"
-								onclick={() => (draft = null)}>{msg(bolt, 'view.done', 'Done')}</button
+								onclick={() => (draft = null)}>{msg(bolt, 'view.done')}</button
 							>
 						{:else if named !== undefined && c.arg !== null && 'var' in c.arg}
 							{@const text = c.arg.var}
@@ -644,12 +620,12 @@
 								><button
 									type="button"
 									class="font-mono"
-									aria-label={msg(bolt, 'view.editVariable', 'Edit variable')}
+									aria-label={msg(bolt, 'view.editVariable')}
 									onclick={() => (draft = text)}>@{named}</button
 								>
 								<button
 									type="button"
-									aria-label={msg(bolt, 'view.removeValue', 'Remove value')}
+									aria-label={msg(bolt, 'view.removeValue')}
 									onclick={() => setArg(null)}>×</button
 								></span
 							>
@@ -660,7 +636,7 @@
 							<Combobox
 								variant="ghost"
 								class="w-auto"
-								aria-label={msg(bolt, 'view.period', 'Period')}
+								aria-label={msg(bolt, 'view.period')}
 								value={c.arg !== null && 'range' in c.arg ? JSON.stringify(c.arg.range) : null}
 								display={c.arg !== null && 'range' in c.arg
 									? (c.arg.label ??
@@ -668,7 +644,7 @@
 											? c.arg.range.map((bound) => String(bound).slice(0, 10)).join(' – ')
 											: undefined))
 									: undefined}
-								onChange={(v) => {
+								on_change={(v) => {
 									const pick = values.find((x) => JSON.stringify(x.arg) === v);
 									setArg(
 										pick === undefined
@@ -687,9 +663,9 @@
 							<Combobox
 								variant="ghost"
 								class="w-auto"
-								aria-label={msg(bolt, 'view.field', 'Field')}
+								aria-label={msg(bolt, 'view.field')}
 								value={c.arg.field}
-								onChange={(f) => {
+								on_change={(f) => {
 									if (f !== null) setArg({ _tag: 'field', field: f });
 								}}
 								options={fieldsFor(catalog, model, c.path).map((f) => ({
@@ -701,7 +677,7 @@
 							<input
 								class={cn(CONTROL, 'w-48')}
 								type="text"
-								aria-label={msg(bolt, 'view.text', 'Text')}
+								aria-label={msg(bolt, 'view.text')}
 								value={c.arg !== null && 'lit' in c.arg ? String(c.arg.lit ?? '') : ''}
 								oninput={(e) =>
 									setArg(
@@ -710,7 +686,7 @@
 											: { _tag: 'lit', lit: e.currentTarget.value }
 									)}
 							/>
-						{:else if c.op === 'in' || c.op === 'nin' || c.op === 'hasAny' || c.op === 'hasAll'}
+						{:else if c.op === 'in' || c.op === 'not_in' || c.op === 'has_any' || c.op === 'has_all'}
 							<div class="flex flex-wrap items-center gap-1.5" data-list>
 								{#each list as item, i (i)}
 									{#if r.leaf === 'rel'}
@@ -727,7 +703,7 @@
 											>{String(item)}
 											<button
 												type="button"
-												aria-label={msg(bolt, 'view.removeValue', 'Remove value')}
+												aria-label={msg(bolt, 'view.removeValue')}
 												onclick={() => setList(list.filter((_, j) => j !== i))}>×</button
 											></span
 										>
@@ -761,8 +737,8 @@
 								{...props}
 								type="button"
 								class="rule-more text-muted-foreground hover:bg-muted grid place-items-center rounded-sm"
-								aria-label={msg(bolt, 'view.operand', 'Compare with')}
-								title={msg(bolt, 'view.operand', 'Compare with')}
+								aria-label={msg(bolt, 'view.operand')}
+								title={msg(bolt, 'view.operand')}
 								data-compare-with
 							>
 								<svg viewBox="0 0 24 24" class="size-3.5" fill="currentColor" aria-hidden="true"
@@ -778,14 +754,14 @@
 					<Popover.Content
 						align="end"
 						class="w-48 p-2"
-						aria-label={msg(bolt, 'view.operand', 'Compare with')}
+						aria-label={msg(bolt, 'view.operand')}
 					>
 						<Combobox
 							variant="ghost"
 							class="w-auto"
-							aria-label={msg(bolt, 'view.operand', 'Compare with')}
+							aria-label={msg(bolt, 'view.operand')}
 							value={argKind(c.arg)}
-							onChange={async (o) => {
+							on_change={async (o) => {
 								operandOpen = false;
 								if (o === null || o === argKind(c.arg)) return;
 								variable = null;
@@ -798,12 +774,12 @@
 								value: o,
 								label:
 									o === 'lit'
-										? msg(
+										? catalogText(
 												bolt,
 												`view.operand.${lit}`,
 												lit === 'record' ? 'a record' : lit === 'date' ? 'a date' : 'a value'
 											)
-										: msg(bolt, `view.operand.${o}`, OPERAND_LABEL[o])
+										: catalogText(bolt, `view.operand.${o}`, OPERAND_LABEL[o])
 							}))}
 						/>
 					</Popover.Content>

@@ -4,10 +4,10 @@
  * The rule: the scrollport owns the inset. A `Bound inset` or `Scroll inset` pads its region and
  * everything under it stays flush. A panel that is not itself a scrollport (a tab panel) pads
  * *provisionally*: it holds the inset until a scrollport inside it claims it, then goes flush so the
- * inset lands on the scrolling box. Chrome (a tab strip, a page header) reads `insetReader()` and
+ * inset lands on the scrolling box. Chrome (a tab strip, a page header) reads `inset_reader()` and
  * supplies its own inset only when nothing above it has.
  *
- * Overlays (sheet, dialog, drawer) start a fresh region with `resetInset()`.
+ * Overlays (sheet, dialog, drawer) start a fresh region with `reset_inset()`.
  */
 import { getContext, onDestroy, setContext } from 'svelte';
 import { LAYOUT_INSET_CONTEXT } from './layout.shared.js';
@@ -20,13 +20,13 @@ const OWNED: InsetScope = { kind: 'owned' };
 const scope = () => getContext<InsetScope | undefined>(LAYOUT_INSET_CONTEXT);
 
 /** Whether an ancestor already pads this subtree's edge. Call at init; the reader is reactive. */
-export function insetReader(): () => boolean {
+export function inset_reader(): () => boolean {
 	const current = scope();
 	return () => current?.kind === 'owned' || (current?.kind === 'provisional' && current.padded);
 }
 
 /** A scrollport with `inset`: pads unless an owner above already does; takes over a provisional one. */
-export function ownInset(): boolean {
+export function own_inset(): boolean {
 	const current = scope();
 	setContext(LAYOUT_INSET_CONTEXT, OWNED);
 	if (current?.kind === 'owned') return false;
@@ -35,7 +35,7 @@ export function ownInset(): boolean {
 }
 
 /** A non-scrolling panel: pads until a scrollport inside claims the inset. */
-export function provisionalInset(): { readonly padded: boolean } {
+export function provisional_inset(): { readonly padded: boolean } {
 	if (scope() !== undefined) {
 		setContext(LAYOUT_INSET_CONTEXT, OWNED);
 		return { padded: false };
@@ -56,6 +56,6 @@ export function provisionalInset(): { readonly padded: boolean } {
 }
 
 /** An overlay's content: a new page edge, owned by `owned` (a padded sheet) or by nobody yet. */
-export function resetInset(owned: boolean): void {
+export function reset_inset(owned: boolean): void {
 	setContext(LAYOUT_INSET_CONTEXT, owned ? OWNED : undefined);
 }

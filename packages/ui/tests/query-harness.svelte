@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Effect } from 'effect';
 	import { untrack } from 'svelte';
-	import { fork, observeOnce, type QueryOptions } from '../src/effect/index.js';
+	import { fork, observe_once, type QueryOptions } from '../src/effect/index.js';
 	let {
 		source,
 		options = {}
@@ -9,7 +9,7 @@
 		source: () => Effect.Effect<string | undefined, Error> | null;
 		options?: QueryOptions<string | undefined>;
 	} = $props();
-	const view = observeOnce(
+	const view = observe_once(
 		() => source(),
 		untrack(() => options)
 	);

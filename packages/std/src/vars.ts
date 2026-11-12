@@ -1,11 +1,11 @@
 // std/vars: a filter value's `{ var: '<CEL>' }`, a typed expression over the requestor (`requestor.id`,
 // `requestor.teams`, `requestor.scopes.<policy>` …) and the clock (`today`, a date; `now`, an instant), evaluated once
-// per read and never per row: `today - days(7)`, `startOfMonth(today)`, `now - hours(1)`. Helpers: minutes, hours,
-// days, weeks, months and years spans (`±` on a date or an instant), and startOfWeek/Month/Quarter/Year of a date.
+// per read and never per row: `today - days(7)`, `start_of_month(today)`, `now - hours(1)`. Helpers: minutes, hours,
+// days, weeks, months and years spans (`±` on a date or an instant), and start_of_week/start_of_month/start_of_quarter/start_of_year of a date.
 import { Environment, type ASTNode, type ParseResult } from '@marcbachmann/cel-js';
 import { children } from './cel-ast.ts';
 import * as Result from 'effect/Result';
-import { addDays, addMonths, PlainDate } from './date.ts';
+import { add_days, add_months, PlainDate } from './date.ts';
 import type { Json } from './wire.ts';
 
 /** A calendar day inside an expression. */
@@ -35,7 +35,7 @@ export type Requestor = {
 	readonly visitor: string | null;
 	readonly instance: string | null;
 	readonly teams: readonly string[];
-	readonly teamTree: readonly string[];
+	readonly team_tree: readonly string[];
 	readonly scopes: { readonly [policy: string]: readonly string[] };
 };
 /** The values an expression reads: the clock, and the requestor where it is known. */
@@ -55,11 +55,11 @@ export type VarField = {
 	readonly team?: boolean | undefined;
 };
 /** Whether `f` may compare with requestor member `m` (`scopes.<policy>` in a list position). */
-export function memberAdmits(f: VarField, m: string): boolean {
+export function member_admits(f: VarField, m: string): boolean {
 	if (m.startsWith('scopes.')) return f.kind === 'id';
 	switch (m) {
 		case 'teams':
-		case 'teamTree':
+		case 'team_tree':
 			return f.team === true;
 		case 'email':
 			return f.email === true;
@@ -82,7 +82,7 @@ export function memberAdmits(f: VarField, m: string): boolean {
 const n = (x: unknown) => Number(x);
 const shift = (d: Day, s: Span, sign: number): Day => {
 	if (s.ms !== 0) throw new RangeError('a date shifts by whole days, weeks, months or years');
-	return new Day(addDays(addMonths(d.iso, sign * s.months), sign * s.days));
+	return new Day(add_days(add_months(d.iso, sign * s.months), sign * s.days));
 };
 const instant = (t: Date, s: Span, sign: number): Date => {
 	const at = new Date(t.getTime());
@@ -102,7 +102,7 @@ const env = new Environment({ homogeneousAggregateLiterals: false })
 			visitor: 'string',
 			instance: 'string',
 			teams: 'list<string>',
-			teamTree: 'list<string>',
+			team_tree: 'list<string>',
 			scopes: 'map<string, list<string>>'
 		}
 	})
@@ -114,18 +114,18 @@ const env = new Environment({ homogeneousAggregateLiterals: false })
 	.registerFunction('weeks(int): Span', (x) => new Span(0, 7 * n(x), 0))
 	.registerFunction('months(int): Span', (x) => new Span(n(x), 0, 0))
 	.registerFunction('years(int): Span', (x) => new Span(12 * n(x), 0, 0))
-	.registerFunction('startOfWeek(Date): Date', (d) => {
+	.registerFunction('start_of_week(Date): Date', (d) => {
 		const iso = (d as Day).iso;
-		return new Day(addDays(iso, -((new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7)));
+		return new Day(add_days(iso, -((new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7)));
 	})
-	.registerFunction('startOfMonth(Date): Date', (d) => new Day(`${(d as Day).iso.slice(0, 7)}-01`))
-	.registerFunction('startOfQuarter(Date): Date', (d) => {
+	.registerFunction('start_of_month(Date): Date', (d) => new Day(`${(d as Day).iso.slice(0, 7)}-01`))
+	.registerFunction('start_of_quarter(Date): Date', (d) => {
 		const iso = (d as Day).iso,
 			m = Number(iso.slice(5, 7));
 		return new Day(`${iso.slice(0, 4)}-${String(m - ((m - 1) % 3)).padStart(2, '0')}-01`);
 	})
 	.registerFunction(
-		'startOfYear(Date): Date',
+		'start_of_year(Date): Date',
 		(d) => new Day(`${(d as Day).iso.slice(0, 4)}-01-01`)
 	)
 	.registerOperator('Date + Span', (d, s) => shift(d as Day, s as Span, 1))
@@ -173,11 +173,11 @@ function reads(node: ASTNode, out: { ids: Set<string>; requestor: Set<string> })
 	}
 	for (const x of children(node)) reads(x, out);
 }
-const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0]!;
+const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n', 1).join('');
 const cache = new Map<string, CompiledVar | { readonly error: string }>();
 
 /** Checks `text` for a position taking `result` (any type when absent): the program, or the syntax or type fault. */
-export function compileVar(
+export function compile_var(
 	text: string,
 	result?: VarResult
 ): CompiledVar | { readonly error: string } {
@@ -214,7 +214,7 @@ export function compileVar(
 	return out;
 }
 /** Evaluates a checked expression once; a value it reads but was not given throws. */
-export function evaluateVar(compiled: CompiledVar, values: VarValues): Json {
+export function evaluate_var(compiled: CompiledVar, values: VarValues): Json {
 	if (compiled.time && (values.today === undefined || values.now === undefined))
 		throw new RangeError(`'${compiled.text}' reads the clock`);
 	if (compiled.requestor.length > 0 && values.requestor === undefined)
@@ -226,7 +226,7 @@ export function evaluateVar(compiled: CompiledVar, values: VarValues): Json {
 			case 'scopes':
 				return [...(r.scopes[policy] ?? [])];
 			case 'teams':
-			case 'teamTree':
+			case 'team_tree':
 				return [...r[head]];
 			case 'id':
 			case 'email':
@@ -246,7 +246,7 @@ export function evaluateVar(compiled: CompiledVar, values: VarValues): Json {
 					requestor: {
 						...r,
 						teams: [...r.teams],
-						teamTree: [...r.teamTree],
+						team_tree: [...r.team_tree],
 						scopes: new Map(
 							compiled.requestor
 								.filter((m) => m.startsWith('scopes.'))
@@ -268,7 +268,7 @@ export function evaluateVar(compiled: CompiledVar, values: VarValues): Json {
  * hours of `now`, days or weeks of either (`now - hours(1)`, `today + days(7)`) — as its base and its signed SQL
  * interval (`- interval '1 hours'`), or `undefined` for any other text. A writer evaluates it at write time.
  */
-export function clockDefault(
+export function clock_default(
 	text: string
 ): { readonly base: 'now' | 'today'; readonly interval: string } | undefined {
 	const m = /^(now|today)(?:\s*([+-])\s*(minutes|hours|days|weeks)\((\d+)\))?$/.exec(text.trim());

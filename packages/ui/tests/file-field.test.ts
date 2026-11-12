@@ -113,7 +113,7 @@ async function field({
 					name: 'documents',
 					id: 'documents',
 					disabled: false,
-					onChange: (v) => changes.push(v)
+					on_change: (v) => changes.push(v)
 				}
 			: { mode, kind, value, name: 'documents' };
 	const target = document.createElement('div');

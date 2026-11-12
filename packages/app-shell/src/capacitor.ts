@@ -1,6 +1,6 @@
 import type { AppConfig } from './config.ts';
 
-/** The `NorbitalShell` plugin configuration the native navigation policy and push registration read. */
+/** The native Capacitor plugin keeps its own field names; authored config is adapted below. */
 type ShellPluginConfig = {
 	readonly host: string;
 	readonly workspace?: string;
@@ -49,9 +49,9 @@ const shellPluginConfig = (config: AppConfig): ShellPluginConfig => ({
 	host: config.host,
 	...(config.workspace === undefined ? {} : { workspace: config.workspace }),
 	pinned: config.workspace !== undefined,
-	allowNavigation: config.allowNavigation ?? [],
-	teamId: config.ios.teamId,
-	apsEnvironment: config.ios.apsEnvironment
+	allowNavigation: config.allow_navigation ?? [],
+	teamId: config.ios.team_id,
+	apsEnvironment: config.ios.aps_environment
 });
 
 /**
@@ -63,7 +63,7 @@ export const capacitorConfig = (config: AppConfig): CapacitorConfig => {
 	const origin = start(config);
 	const port = origin.port === '' ? '' : `:${origin.port}`;
 	const wildcard = subdomains(config);
-	const background = config.splash?.color ?? config.themeColor;
+	const background = config.splash?.color ?? config.theme_color;
 	return {
 		appId: config.id,
 		appName: config.name,
@@ -83,7 +83,7 @@ export const capacitorConfig = (config: AppConfig): CapacitorConfig => {
 							origin.origin,
 							...(wildcard ? [`${origin.protocol}//*.${origin.hostname}${port}`] : [])
 						]),
-				...(config.allowNavigation ?? [])
+				...(config.allow_navigation ?? [])
 			],
 			errorPath: OFFLINE_PAGE,
 			...(cleartext(config) ? { cleartext: true } : {})

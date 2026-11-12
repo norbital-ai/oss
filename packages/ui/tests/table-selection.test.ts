@@ -8,6 +8,7 @@ import { vi } from 'vitest';
 import { viewFixture, browser, type ReadOptions } from './view-fixture.ts';
 import type { TableProps, TableSource } from '../src/table/Table.svelte';
 import type { Value } from '@norbital-ai/std/kind';
+import type { KindsHost } from '../src/kinds/context.ts';
 const { createRawSnippet, flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const { default: Table } = await import('../src/table/Table.svelte');
@@ -28,7 +29,7 @@ afterEach(async () => {
 async function show(
 	rows: TableSource,
 	columns: TableProps['columns'] = ['name'],
-	onOpen?: TableProps['onOpen']
+	on_open?: TableProps['on_open']
 ) {
 	const calls: Value[] = [];
 	const { bolt } = await viewFixture();
@@ -44,7 +45,7 @@ async function show(
 			props: {
 				of: rows,
 				columns,
-				...(onOpen === undefined ? {} : { onOpen }),
+				...(on_open === undefined ? {} : { on_open }),
 				toolbar: {
 					title: false,
 					search: false,
@@ -55,7 +56,7 @@ async function show(
 						{
 							icon: 'lucide:download',
 							name: 'Export selected',
-							requiresSelection: true,
+							requires_selection: true,
 							run: (ids) => void calls.push(ids)
 						}
 					]
@@ -204,14 +205,18 @@ for (const [label, rows] of [
 		})
 	);
 
+const stock = {
+	stock: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
+} satisfies NonNullable<KindsHost['catalog']>;
 it.live('a read request source shows its root and reads exactly the request it was given', () =>
 	Effect.gen(function* () {
 		const calls: { model: string; options: ReadOptions }[] = [];
 		const { bolt } = yield* browser(() =>
 			viewFixture({
+				catalog: stock,
 				read: (model, options) => {
 					calls.push({ model, options });
-					return { rows: [{ id: 's1', name: 'Resin A' }], next: null };
+					return { rows: [{ id: 's1', revision: 1, name: 'Resin A' }], next: null };
 				}
 			})
 		);
@@ -220,13 +225,7 @@ it.live('a read request source shows its root and reads exactly the request it w
 			target,
 			props: {
 				bolt,
-				catalog: {
-					stock: {
-						record_label: 'record.name',
-						label: ['name'],
-						fields: { name: { kind: 'text' } }
-					}
-				},
+				catalog: stock,
 				part: 'table',
 				view: Table,
 				props: {

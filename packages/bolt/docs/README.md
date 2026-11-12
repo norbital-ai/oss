@@ -64,14 +64,14 @@ Each word names one thing:
 | ----------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Environment | An operating environment: local, staging or production, and a tenant environment inside one.                               | The operator CLI that resets and operates environments; never a workspace setting. |
 | Secrets     | Encrypted values stored in the tenant database, read by server code.                                                       | `src/+secrets.ts` with `secrets({ NAME: { label } })`.                             |
-| Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                                              | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
+| Server code | Transforms, policy verdicts, effects, automations, syncs and integrations.                                              | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
 | Page SDK    | What browser-side page code calls.                                                                                         | `ctx` prop, typed by `@norbital-ai/bolt/page`.                            |
-| Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links.       | `ctx.device` in pages; a shell installs `window.boltDevice`.                      |
+| Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links.       | `ctx.device` in pages; a shell installs `window.bolt_device`.                      |
 | Shell       | The container a workspace runs in, which implements Device.                                                                | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
 | Host        | The server that runs a bundle and supplies its facilities: Colony (tethered, the default) or an untethered host.           | `@norbital-ai/bolt/facilities`; the Host API. See [hosts](./hosts.md).             |
-| Output      | A model's named read shape, a fixed layer map: `read` is `default`, `outputs` names the others. Every read names one.      | `+model.ts` `read` and `outputs`; a read root's `output` option.                   |
+| Output      | A model's named read shape: a nested tree under `outputs`, including `default`. Every read selects one.      | `+model.ts` `outputs`; a read root's `output` option.                   |
 | Policy      | What holders may do: the outputs they read and the rows of each, writes, state moves, capabilities, limits, manual starts. | `src/access_control/policy/`; held by teams, kiosks, envoys and automations.       |
-| Automation  | A job the system identity runs with its declared `policies`; the run records its trigger (system or a person).             | `src/automation/+<name>.automation.ts`.                                            |
+| Automation  | A durable job or immediate call the system identity runs with its declared `policies`.             | `src/automation/+<name>.automation.ts`.                                            |
 | Effect      | The work after a committed write. It runs as the writer and holds no policy.                                               | A model's `effect`.                                                                |
 | Integration | What connects a workspace to an outside system: a source definition and its connections, each one account.                 | [Integrations, syncs and channels](./integrations.md) |
 | Sync        | Rows exchanged between a model and a connection.                                                                           | A model's `syncs`; [syncs](./syncs.md) |
@@ -106,7 +106,7 @@ when a nested option needs detail. This also works through re-exports and for UI
 In Studio, `workspace_lang` reads the workspace's locked dependencies and your working tree.
 Its completions are paged; follow `next` or narrow by `prefix`. An edit commits nothing, so a probe file holding
 a namespace import can explore an API, and `workspace_move` deletes it. A `type` query accepts TypeScript import types, for
-example `typeof import('@norbital-ai/bolt').model` or `import('@norbital-ai/bolt/page').PageBolt['act']`.
+example `typeof import('@norbital-ai/bolt').automation` or `import('@norbital-ai/bolt/page').PageBolt['act']`.
 Invalid probes return compiler diagnostics; a type that is too large asks for a narrower query rather than pretending
 a clipped answer is complete. Hover an actual member or query its value to read that member's documentation.
 
@@ -142,7 +142,7 @@ forming each batch; image bytes stay outside the Cell. Hosts serving these relea
 A structured `output` is built on a draft (`initial`, else empty) with draft tools: `edit` (`{ ops: [{ path, set | remove: true | append }] }`,
 each op applied and checked on its own), `read` (`{ path, fields? }`), `find` (`{ text, path? }`), `diff` (`{ path? }`:
 changes since the start) and `submit`. Paths are JSON Pointers, except that an item of a keyed list
-(`{ kind: 'list', of, key: 'code' }`) is addressed by its key (`/leave/ANNUAL/days`), so a removal never shifts another
+(`{ kind: 'object', fields, many: true, key: 'code' }`) is addressed by its key (`/leave/ANNUAL/days`), so a removal never shifts another
 item's path; keys are distinct and non-empty. Request `rules` (CEL over the output's top-level fields) must hold at
 `submit` and when the budget is spent, so a review whose items start `pending` fails `invalid` unless the model finishes
 it (`coverage.all(c, c.status != 'pending')`).
@@ -162,7 +162,7 @@ const match =
 Read open purchase_orders and goods_receipts for this supplier; match quantities and unit prices.`,
 		output: {
 			kind: 'object',
-			fields: { matched: { kind: 'bool' }, variances: { kind: 'list', of: { kind: 'text' } } }
+			fields: { matched: { kind: 'bool' }, variances: { kind: 'text', many: true } }
 		},
 		tools: ['read'],
 		steps: 6
@@ -219,18 +219,18 @@ typed, so `unique` and the digit match see the same value. Rows written before t
 
 ## Teams
 
-Teams exist only in source: `src/access_control/team/+team.ts` maps each handle to a policy list
-or `{ name?, parent?, policies }`. No table holds them. A member's, invitation's or API key's
+Teams exist only in source: `src/access_control/team/+team.ts` maps each handle to
+`{ policies, name?, parent? }`. A member's, invitation's or API key's
 `team` is a text field with `format: 'team'` holding one declared handle; every write refuses an
 undeclared handle, and a handle removed from source confers nothing. Authority, the `parent` graph
-(`requestor.teamTree`), approval flows (`supersededBy` and step teams are exact handles), team
+(`requestor.team_tree`), approval flows (`superseded_by` and step teams are exact handles), team
 previews and the People team picker all read the manifest. `{ var: 'requestor.teams' }` and
-`{ var: 'requestor.teamTree' }` are `in`/`nin` operands on `format: 'team'` fields.
+`{ var: 'requestor.team_tree' }` are `in` operands on `format: 'team'` fields; exclude with a nested `not` predicate.
 
 A filter value is a literal, `{ field: '<column>' }`, or `{ var: '<CEL>' }` (`@norbital-ai/std/vars`): a
 typed expression over `requestor` and the clock, checked against the field's kind at decode and evaluated once
 per read. Requestor expressions bind server-side; time expressions (`{ var: 'today - days(7)' }`,
-`{ var: 'startOfMonth(today)' }`, `{ var: 'now - hours(1)' }`) are evaluated at the edge and refused by the
+`{ var: 'start_of_month(today)' }`, `{ var: 'now - hours(1)' }`) are evaluated at the edge and refused by the
 store.
 
 ## Rate limits
@@ -244,10 +244,10 @@ Undeclared keys take defaults (members: `act 600/min`, `read 3000/min`, `upload 
 `register 20/h`). Windows are fixed and
 counted in the serving cell's memory; acts also persist theirs in their statement (`bolt_rate`), and a
 cell taking a tenant reloads the open ones. Every refusal is `429` with `Retry-After` (seconds until the
-window resets) and `{ code: 'rateLimited' }`, whose one message the shell translates.
+window resets) and `{ code: 'rate_limited' }`, whose one message the shell translates.
 
-Automations are limited only when started manually (the `start` callable, Run now, the agent): each
-counts against the quota of 30 starts per automation and starter per minute. Cron, webhook and model effect runs, and the acts any run's body performs, are never rate
+Automations are limited only when started manually (`ctx.run`, Run now, the agent): each
+counts against the quota of 30 starts per automation and starter per minute. Cron and model effect runs, and the acts any run's body performs, are never rate
 limited; run budgets bound them.
 
 ## Record history and restore
@@ -262,9 +262,9 @@ hints preserve their identities through renames; removing and later reintroducin
 new identity. Original revision payloads retain their old field names. The first update under a new
 definition records a full post-image, so migrated values cannot inherit a stale value from the prior schema.
 
-`ctx.history(c, id, { at: { revision }, view: true })` returns the original field definitions and values,
-the compatible projection into the current schema, and `incompatible` field names. Built-in record
-history uses that exact revision and displays its original labels and kinds. Removed fields, invalid
+Built-in record history loads the selected revision's original field definitions and values,
+its compatible projection into the current schema, and `incompatible` field names. It displays
+that revision's original labels and kinds. Removed fields, invalid
 values and unsupported conversions have an **incompatible** indicator; compatible scalar conversions
 and declared renames restore automatically. Reference retargeting and changed custom field identities
 require manual resolution. Current outputs, the record's current read scope and field visibility still apply. A
@@ -273,9 +273,8 @@ revision with no incompatible field is valid and projects into the record's own 
 invalid one shows only its captured data. `ctx.history(c, id)` marks each revision `valid` for its
 timeline. Removed fields are visible only to administrators reading the default all-fields output.
 
-History captured before this feature has no saved historical definitions. Its earliest known schema
-is attached as a baseline and the UI identifies that limitation; earlier deleted definitions cannot
-be recovered automatically. Current validation still decides which values can be restored. Metadata
+Every retained revision requires its registered schema version and field identities. Missing versions
+or identities are refused; runtime code never infers them from today's schema. Metadata
 registration is a data step: preserve sequential migration files rather than squashing it into DDL.
 Schema changes wait for affected open approvals and pending erasures to settle.
 
@@ -315,8 +314,9 @@ the native database acknowledgement; prepared and unknown states make no such cl
 
 Audit payloads do not belong in the host's system/control database or in a new tenant model.
 `bolt_history` remains in the tenant database because revision reads, approval rollback and
-record restore require it. Native model triggers capture revisions and referential cascades;
-application policy checks still belong to admitted Bolt writes. Runtime logs remain diagnostic
+record restore require it. An act's one statement writes the revisions of its rows and of the
+cascades it implies, and its audit receipt; the native model trigger captures raw SQL changes only.
+Application policy checks still belong to admitted Bolt writes. Runtime logs remain diagnostic
 events with their own size, rate and retention limits. These are separate contracts.
 
 Hosts declare `durable`, `buffered` or `disabled` acknowledgement. A buffered host can lose
@@ -324,7 +324,10 @@ accepted events in a crash before its disk flush; append/read-back is not an fsy
 Disabled hosts refuse audited writes.
 
 For audited mutations, prepared intent is acknowledged before the tenant lease. The tenant
-keeps a minimal operation receipt, not a bulk payload outbox. Recovery pages unresolved host
+keeps a minimal operation receipt, not a bulk payload outbox. An act's commit statement carries
+its receipt and answers its own row images, so its terminal event needs no read; its local
+acknowledgement rides on the next commit statement (an erasure's follows at once), and recovery
+acknowledges any a stopped process left. Recovery pages unresolved host
 intents and reconstructs confirmed effects from that receipt and retained revision history.
 History trimming and erasure retain every revision needed by an unacknowledged operation.
 Trimming also retains open approval checkpoints. If a required checkpoint is unavailable,
@@ -362,7 +365,7 @@ reads `sys_user`'s `directory` output (id, name): staff read staff, externals th
 party; a read of `sys_user` without a `default` grant names `output: 'directory'`. `sys_file` declares
 `default` (name, type, size, digest, field, uploader) and `meta` (id, name, mime) for a holder that only
 lists files. A `create` or `update`
-grant is `true` or `{ columns?: { '<model>': [...], '<model>.<rel>': [...] }, verdict? }`.
+grant is `true` or `{ columns?: { fields: [...], '<relation>': { fields: [...] } }, verdict? }`.
 An update grant also lists allowed state edges in `moves`. A delete grant is `true` or
 `{ verdict? }`. Columns are checked before the verdict judges the batch, including nested rows.
 Return `ctx.allow()`, `ctx.approve({ steps, superseded_by })` or
@@ -374,9 +377,9 @@ guards its root's whole tree: a layer is never judged by its own model's policy.
 
 ```ts
 create: {
-  columns: { variations: ['job', 'title', 'amount'] },
-  verdict: function* (rows, ctx) {
-    const big = rows.some((r) => Number(r.amount) >= 5000);
+  columns: { fields: ['job', 'title', 'amount'] },
+  verdict: function* (changes, ctx) {
+    const big = changes.some((c) => c.after.amount.gte('5000'));
     return ctx.approve({
       steps: [
         { name: 'Controller review', teams: ['controllers'] },
@@ -388,9 +391,9 @@ create: {
 }
 ```
 
-A verdict reads with `ctx.query(readRequest)` as the workspace, at most 10 crossings per call, and does
-no I/O or writes. Its arguments are the create trees, `{ before, set }` per update (`before` the
-stored tree of the layers the update declares) or the stored rows a delete removes.
+A verdict reads with `ctx.query(read_request)` as the workspace, at most 10 crossings per call, and does
+no I/O or writes. Each change carries `before`, `set`, `after` and `changed(...)`. A create has
+null `before`; a delete has null `after`. The stored trees include the verb's declared layers.
 
 `steps` lists named team-review steps. Use ordinary conditions to select steps and immediate
 verdicts. The flow is snapshotted when the request opens and evaluated again on resubmit. Changed
@@ -422,14 +425,14 @@ imports, syncs, nested owned children, cascades and restore. Pending records may
 by current approvers; requested changes only by the requester. Administrators may supersede but
 cannot bypass the lock. Outbound sync writes wait for approval.
 
-Every held read row carries `$approval: { requestId, state, step, steps, requestedBy, waitingOn }`.
-Shared Table and Board views show it automatically. The model's `notify(event, ctx)` callback
-receives write and approval events and returns notices after commit; see [notifications](./notifications.md).
+Every held read row carries `$approval: { request_id, state, step, steps, requested_by }`.
+Shared Table and Board views show it automatically. Per-verb effects receive write changes or
+approval events through `ctx.event` and call `ctx.notify` for custom notices; see [notifications](./notifications.md).
 
 ## Hosts and tests
 
 Sign-in codes are issued only for active workspace members, unexpired open invitations, or newcomers
-allowed by the workspace's open `signup`. An ineligible address returns `notMember` before a challenge
+allowed by the workspace's open `signup`. An ineligible address returns `not_member` before a challenge
 is stored or a code is sent, so the sign-in form stays on the address step.
 
 `@norbital-ai/bolt/engine` exposes native service tags and Layers. `EngineLive(manifest)` composes
@@ -443,7 +446,7 @@ These modules return Effects; the host owns execution and resource lifetime.
 Engine and identity constructors capture this service for their returned operations.
 
 Bolt carries no guest runner, and the runner is no facility: each host owns its own and hands it to
-the engine as `HostPorts.guests` (`GuestIsolatesPort`). bolt-cli's `nodeGuests()`
+the engine as `HostPorts.guests` (`GuestIsolatesPort`). bolt-cli's `node_guests()`
 (`@norbital-ai/bolt-cli/guests`) runs Node vm contexts in the host's own process: each call runs under
 a timeout of what is left of the session's CPU budget, and the thread's CPU around it is metered. A vm
 context shares the host's heap and is not a security boundary, so it caps no guest memory and runs
@@ -453,7 +456,7 @@ the declarations twice, each on a worker thread stripped to a guest's ECMAScript
 
 Guests initialize their prelude and evaluate tenant source in a fresh context. Builds produce
 no native V8 snapshot, and artifact readers never open historical snapshot blobs. Historical
-descriptor metadata remains covered by artifact integrity checks. `HOST_API.guestExecution`
+descriptor metadata remains covered by artifact integrity checks. `HOST_API.guest_execution`
 declares `source`; hosts require that policy before admitting a runtime.
 
 The compiler first bundles every declaration and evaluates it twice for the manifest and all build
@@ -479,8 +482,8 @@ native engine failures and browser protocol decoders use those same identities.
 
 `@norbital-ai/bolt-cli/test` exports `TestWorkspace`, `TestWorkspace.layer(options)`, and the Effect
 Vitest helpers; guest code runs on the kit's own `node:vm` runner. Suites declare `@effect/vitest` directly and import their helpers from it.
-Acquire `yield* TestWorkspace` in `it.effect`, then yield native `t.as(actor)`
-calls. Use `Effect.flip` or `Effect.result` to assert failures. The layer closes its database,
+Acquire `yield* TestWorkspace` in `it.effect`, then `const caller = yield* t.as(actor)` and yield its
+native calls; `t.as`, `t.visitor` and `t.body_acts` are Effects that fail with `BoltError`. Use `Effect.flip` or `Effect.result` to assert failures. The layer closes its database,
 host and provider resources. With a `root`, the layer seeds from the template's `test` pack
 (`seed/test/`, built once per source hash; `bolt build` also writes it to `.norbital/seed/test`, and no
 host provisions it). It never loads the public `base` pack or bank rows; `seed: 'none'` or
@@ -496,7 +499,7 @@ hosts test their own behavior independently of template suites.
 ### Workspace URLs
 
 Every host serves the same workspace-relative paths: an untethered host (bolt-server, `bolt dev --host`) at its
-root, a tethered one under the base its `publicUrl` names (`/<label>` on Colony, whose own paths stay under
+root, a tethered one under the base its `public_url` names (`/<label>` on Colony, whose own paths stay under
 `/__colony`).
 
 | Path                                                                                                                                    | Serves                                                                                                            |
@@ -508,7 +511,7 @@ root, a tethered one under the base its `publicUrl` names (`/<label>` on Colony,
 | `/hooks/integration/<instance>`, `/hooks/oauth/callback`                                                                                | Integration ingress.                                                                                              |
 | `/manifest.webmanifest`, `/assets/*`, the client build's files                                                                          | The PWA manifest and client bytes.                                                                                |
 
-Each has one spelling, `canonicalPath` (`protocol/wire.ts`): a repeated or trailing slash is answered with one 308
+Each has one spelling, `canonical_path` (`protocol/wire.ts`): a repeated or trailing slash is answered with one 308
 to it, query kept; the root keeps its `/`. The shell handler answers it first, so every host that routes through
 `workspace.handle` answers it alike.
 

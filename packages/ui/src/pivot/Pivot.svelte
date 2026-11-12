@@ -21,7 +21,6 @@
 	import { and, compact } from '../filter/scope.js';
 	import { label, msg } from '../text/messages.js';
 	import { pivotGrid } from './grid.js';
-	import type { Page, Values } from '../model/types.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import { queryState } from '../read/state.js';
 	import { useKinds } from '../kinds/context.js';
@@ -36,17 +35,19 @@
 		key: () => key ?? of,
 		model: () => of,
 		catalog: () => catalog,
-		initialFilter: () => undefined
+		initial_filter: () => undefined
 	});
 	const agg = $derived(
-		bolt.aggregate<Page<Values>>(
+		bolt.aggregate(
 			of,
-			compact({
-				by: cols === undefined ? [rows] : [rows, cols],
+			{
+				...compact({
 				...('sum' in value ? { sum: [value.sum] } : { count: true }),
 				where: and(where, view.where),
 				all: true
-			})
+				}),
+				by: cols === undefined ? [rows] : [rows, cols]
+			}
 		)
 	);
 	const fmt = (n: number) => new Intl.NumberFormat(bolt.locale).format(n);
@@ -58,7 +59,7 @@
 		{@const g = pivotGrid(v.rows, rows, cols, value)}
 		{#if g.rowKeys.length === 0}
 			<p class="text-muted-foreground p-4 text-sm" data-read="empty">
-				{msg(bolt, 'table.none', 'No rows')}
+				{msg(bolt, 'table.none')}
 			</p>
 		{:else}
 			<div class="overflow-x-auto" data-view="pivot">
@@ -70,7 +71,7 @@
 							><th>{label(bolt, of, rows)}</th>{#each g.colKeys as c (c)}<th class="text-right"
 									>{c}</th
 								>{/each}{#if cols !== undefined}<th class="text-right"
-									>{msg(bolt, 'pivot.total', 'Total')}</th
+									>{msg(bolt, 'pivot.total')}</th
 								>{/if}</tr
 						></thead
 					>
@@ -83,7 +84,7 @@
 							>
 						{/each}
 						<tr class="font-medium"
-							><th>{msg(bolt, 'pivot.total', 'Total')}</th>{#each g.colKeys as c (c)}<td
+							><th>{msg(bolt, 'pivot.total')}</th>{#each g.colKeys as c (c)}<td
 									>{fmt(g.colTotal(c))}</td
 								>{/each}{#if cols !== undefined}<td>{fmt(g.total)}</td>{/if}</tr
 						>

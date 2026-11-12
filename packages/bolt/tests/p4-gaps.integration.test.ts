@@ -2,18 +2,18 @@
 // `sys_message.post`, `sys_message.confirm`) with the transcript; web push of inbox notices through `bolt.push`.
 import { describe, expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
-import { actFailure } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import type { AiPortResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { AgentRow } from '../src/protocol/schema.ts';
-import { actReply, json, routeFixture } from './support/route-fixture.ts';
+import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
 		models: {
 			quotes: {
@@ -31,8 +31,7 @@ const manifest = Result.getOrThrow(
 		exposures: {
 			quotes: {
 				outputs: { default: { quotes: { fields: 'all' } } },
-				create: { columns: { quotes: ['title'] } },
-				effect: { created: true }
+				create: { columns: { quotes: ['title'] }, effect: true }
 			},
 			logs: {
 				outputs: { default: { logs: { fields: 'all' } } },
@@ -60,33 +59,33 @@ const manifest = Result.getOrThrow(
 		},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		teams: { rep: ['rep'] },
-		connections: {},
+		teams: { rep: { policies: ['rep'] } },
 		mcp: {},
 		apps: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
 const guest = {
 	source: `export default {
-	model: { quotes: { bodies: { effect: { created: function* (rows, ctx) {
-		for (const { id } of rows) yield* ctx.act('logs.create', [{ line: 'quote ' + id }]);
+	model: { quotes: { bodies: { effect: { create: function* (changes, ctx) {
+		const rows = changes.map(({ after }) => after);
+		for (const { id } of rows) yield* ctx.act({ 'logs.create': [{ line: 'quote ' + id }] });
 		yield* ctx.notify({ to: [{ policy: 'rep' }], title: 'Logged' });
 	} } } } },
 	automation: {
-	quotes_mark: { body: function* (input, ctx) { return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id; } } },
+	quotes_mark: { body: function* (input, ctx) { return (yield* ctx.act({ 'quotes.create': [{ title: input.title }] })).records[0].id; } } },
 };`
 };
 
-type Step = () => AiResponse;
+type Step = () => AiPortResponse;
 const say =
 	(text: string): Step =>
-	() => ({ content: text, toolCalls: [], finish: 'stop', usage: { input: 10, output: 5 } });
+	() => ({ content: text, tool_calls: [], finish: 'stop', usage: { input: 10, output: 5 } });
 const use =
 	(name: string, input: Json, id: string): Step =>
 	() => ({
 		content: '',
-		toolCalls: [{ id, name, input }],
+		tool_calls: [{ id, name, input }],
 		finish: 'tool',
 		usage: { input: 10, output: 5 }
 	});
@@ -113,7 +112,7 @@ const setup = () =>
 	Effect.gen(function* () {
 		const context = yield* Effect.context<TestWorkspace | WorkspaceServices>();
 		const t = Context.get(context, TestWorkspace),
-			route = yield* routeFixture(context),
+			route = yield* route_fixture(context),
 			authorities = new Authorities(manifest, 'test');
 		const user = (id: string, options: { external?: boolean } = {}) =>
 			t.db
@@ -123,7 +122,7 @@ const setup = () =>
 				})
 				.pipe(Effect.map(() => id));
 		const authority = (id: string) =>
-			authorities.member(t.db, id).pipe(
+			authorities.member(t.db, 'bootstrap', id).pipe(
 				Effect.map((value) => {
 					if (value === null) throw new Error('member authority missing');
 					return value;
@@ -142,12 +141,10 @@ const setup = () =>
 			});
 		const act = (as: string, callable: string, input: Json) =>
 			Effect.gen(function* () {
-				const reply = yield* actReply(route, yield* authority(as), {
-					callable,
-					input,
-					issuedAt: t.clock.now()
-				});
-				const failure = actFailure(reply.outcome);
+				const reply = yield* act_reply(route, yield* authority(as), /\.(?:create|update|delete|import|erase)$/.test(callable)
+					? { acts: { [callable]: input }, issued_at: t.clock.now() }
+					: { callable, input, issued_at: t.clock.now() });
+				const failure = act_failure(reply.outcome);
 				if (Option.isSome(failure)) return yield* Effect.fail(failure.value);
 				return reply.outcome;
 			});
@@ -237,7 +234,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 					yield* act(bob, 'sys_message.confirm', { message: held.id, approve: true }).pipe(
 						Effect.flip
 					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+				).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
 				expect(
 					(yield* act(ann, 'sys_message.confirm', { message: held.id, approve: true })).kind
 				).toBe('committed');
@@ -255,7 +252,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 					text: 'Marked.',
 					receipts: [{ outcome: 'committed', callable: 'automation.quotes_mark' }]
 				});
-				yield* t.runDue();
+				yield* t.run_due();
 				expect(yield* quotes(t)).toEqual([{ title: 'Chair' }]);
 				const quoteId = yield* t.db.value(Schema.String, {
 					text: 'SELECT id FROM quotes',
@@ -284,7 +281,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 					const res = yield* call(dan, 'POST', '/__bolt/act', {
 						callable: 'sys_message.post',
 						input: { conversation: 1 },
-						issuedAt: '2026-09-25T10:00:00.000Z'
+						issued_at: '2026-09-25T10:00:00.000Z'
 					});
 					expect(res.status).toBe(400);
 				})
@@ -299,7 +296,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 					const { t, user, call, act } = yield* setup();
 					const eve = yield* user('eve');
 					const token = 'ab'.repeat(32),
-						keys = { topic: 'ai.norbital.app', environment: 'production', teamId: 'TEAM123456' };
+						keys = { topic: 'ai.norbital.app', environment: 'production', team_id: 'TEAM123456' };
 					expect(
 						(yield* call(eve, 'POST', '/__bolt/push', { endpoint: 'http://insecure' })).status
 					).toBe(400);
@@ -329,7 +326,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 					).toBe(204);
 					// an automation's notice (a guest `ctx.notify` inside its run's statement) is pushed by the next wake
 					yield* act(eve, 'quotes.create', [{ title: 'Desk' }]);
-					yield* t.runDue();
+					yield* t.run_due();
 					const pushed = () => t.fakes.sent.filter((message) => message._tag === 'Push');
 					expect(pushed()).toHaveLength(2);
 					expect(pushed()).toEqual(
@@ -370,7 +367,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 						('mid', '{"user":"cat"}', 'cat', 'Missed', '2020-01-02T00:00:00Z')`,
 						params: []
 					});
-					const authority = required((yield* authorities.member(t.db, cat)) ?? undefined);
+					const authority = required((yield* authorities.member(t.db, 'bootstrap', cat)) ?? undefined);
 					const response = yield* bolt.handle(
 						authority,
 						new Request('http://cell/__bolt/notices', {
@@ -386,7 +383,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 					expect(Date.parse(missed.id ?? '')).toBe(Date.parse('2020-01-02T00:00:00Z'));
 					// an automation's notice reaches the open stream as it commits
 					yield* act(cat, 'quotes.create', [{ title: 'Desk' }]);
-					yield* t.runDue();
+					yield* t.run_due();
 					expect((yield* next).data).toMatchObject({ title: 'Logged', body: null, path: '/inbox' });
 				})
 		);

@@ -5,14 +5,14 @@ import {
 	Files,
 	Geo,
 	Port,
-	decisionsSystem1,
-	openAiChat,
-	structuredSystem1,
+	decisions_system_1,
+	open_ai_chat,
+	structured_system_1,
 	type AiResponse
 } from '@norbital-ai/bolt/engine';
 import { off, type Facilities } from '@norbital-ai/bolt/facilities';
-import { downloadMedia, type DownloadOptions } from '@norbital-ai/bolt/node';
-import { openAiEmbeddings, openRouterChat } from '@norbital-ai/providers/openrouter';
+import { download_media, type DownloadOptions } from '@norbital-ai/bolt/node';
+import { open_ai_embeddings, open_router_chat } from '@norbital-ai/providers/openrouter';
 import type { HostSettings } from './host.ts';
 
 /** S3-compatible SigV4, with a provider-requested signed URL expiry. */
@@ -164,7 +164,7 @@ export const s3Files = Effect.fn('server.s3Files')(function* (
 		remove: (key) => call('DELETE', key).pipe(Effect.asVoid),
 		// a multipart upload, a part at a time: a download never holds the whole file
 		download: (url) =>
-			downloadMedia(
+			download_media(
 				url,
 				{
 					begin: (mime) =>
@@ -249,7 +249,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 	const client = yield* HttpClient.HttpClient;
 	const system1 =
 		endpoints.sys1.provider === 'decisions' || endpoints.sys1.provider === 'openai-decisions'
-			? decisionsSystem1(
+			? decisions_system_1(
 					{
 						url: endpoints.sys1.endpoint,
 						...(endpoints.sys1.provider === 'openai-decisions'
@@ -258,25 +258,25 @@ export const openAi = Effect.fn('server.openAi')(function* (
 						model: config.sys1 ?? '',
 						api_key: endpoints.sys1.credential ?? ''
 					},
-					{ httpClient: client }
+					{ http_client: client }
 				)
-			: structuredSystem1(
-					openAiChat(
+			: structured_system_1(
+					open_ai_chat(
 						{ ...endpoints.sys1, models: { sys_1: config.sys1 ?? '' } },
-						{ httpClient: client }
+						{ http_client: client }
 					),
 					'sys_1'
 				);
-	const chat = openRouterChat({ ...endpoints.sys2, models: config.sys2 }, { httpClient: client });
+	const chat = open_router_chat({ ...endpoints.sys2, models: config.sys2 }, { http_client: client });
 	const mapped = declared.filter((name) => config.sys2[name] !== undefined);
 	const embed = endpoints.embed;
 	const embeddings =
 		embed === undefined
 			? undefined
-			: openAiEmbeddings({
+			: open_ai_embeddings({
 					files,
-					baseUrl: embed.endpoint,
-					...(embed.credential === undefined ? {} : { apiKey: embed.credential }),
+					base_url: embed.endpoint,
+					...(embed.credential === undefined ? {} : { api_key: embed.credential }),
 					model: (name) => {
 						const model =
 							config.embed[name] ??
@@ -291,7 +291,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 	const members: Pick<Facilities['intelligence'], 'system1' | 'system2' | 'embed'> = {
 		system1: {
 			ask: (request, signal) => run(system1.ask(request), { signal }),
-			...(system1.maxChoices === undefined ? {} : { maxChoices: system1.maxChoices })
+			...(system1.maxChoices === undefined ? {} : { max_choices: system1.maxChoices })
 		},
 		system2: {
 			models: mapped,
@@ -314,7 +314,8 @@ export const openAi = Effect.fn('server.openAi')(function* (
 							return yield* Effect.fail(
 								Port.failure('ai')(new Error('the model stream ended without a response'))
 							);
-						return answer;
+						const { toolCalls, ...response } = answer;
+						return { ...response, tool_calls: toolCalls };
 					}),
 					{ signal }
 				)

@@ -3,11 +3,11 @@ import './setup-happy-dom.ts';
 import { Deferred, Effect, Layer, ManagedRuntime, Queue, Stream } from 'effect';
 import { expect, it, vi } from '@effect/vitest';
 import { mount, unmount } from 'svelte';
-import { mountEdge, run } from '@norbital-ai/ui/effect';
+import { mount_edge, run } from '@norbital-ai/ui/effect';
 import Rows from './fresh-reference.svelte';
 
 it('a live list re-renders on every frame even when the source reuses its array', async () => {
-	const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 	let emit: ((value: { id: string; value: number }[]) => void) | undefined;
 	const ready = Deferred.makeUnsafe<void>();
 	const source = Stream.callback<{ id: string; value: number }[]>((queue) =>

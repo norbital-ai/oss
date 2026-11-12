@@ -16,8 +16,7 @@ describe('runtime declarations', () => {
 	it('keeps body-free declarations as their authored data', () => {
 		const ws = {
 			tz: 'UTC',
-			locale: 'en',
-			connections: { mail: { integration: 'email' } }
+			locale: 'en'
 		} as const;
 		expect(workspace(ws)).toBe(ws);
 		const server = { description: 'Docs', url: 'MCP_URL' } as const;

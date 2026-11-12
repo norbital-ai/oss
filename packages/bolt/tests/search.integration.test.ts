@@ -4,12 +4,12 @@ import { Effect, Schema } from 'effect';
 import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
 import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { describe, expect, it } from '@effect/vitest';
-import { searchFunctions } from '@norbital-ai/store';
+import { search_functions } from '@norbital-ai/store';
 describe('lexical tokenizer', () => {
 	let database: TenantDbShape;
 	const setup = Effect.fnUntraced(function* () {
 		database = PgliteDb.make(yield* PgliteDb.open());
-		for (const step of searchFunctions()) yield* database.write({ text: step.sql, params: [] });
+		for (const step of search_functions()) yield* database.write({ text: step.sql, params: [] });
 	});
 	const value = (statement: string, parameter: string) =>
 		database.value(Schema.Json, { text: `select ${statement} as value`, params: [parameter] });

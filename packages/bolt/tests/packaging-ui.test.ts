@@ -1,7 +1,7 @@
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { describe, expect, vi } from 'vitest';
-import { shellApi, shellBolt } from '../src/shell/runtime.ts';
+import { shell_api, shell_bolt } from '../src/shell/runtime.ts';
 
 describe('page contexts', () => {
 	it.effect('keeps each boot’s locale and messages separate', () =>
@@ -19,10 +19,12 @@ describe('page contexts', () => {
 				push: null,
 				visitor: null,
 				catalog: {},
-				automations: {}
-			} satisfies Parameters<typeof shellBolt>[0];
-			const first = yield* shellBolt(boot, { messages: { x: 'ms:x' } });
-			const second = yield* shellBolt(
+				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} }
+			} satisfies Parameters<typeof shell_bolt>[0];
+			const first = yield* shell_bolt(boot, { messages: { x: 'ms:x' } });
+			const second = yield* shell_bolt(
 				{ ...boot, workspace: { ...boot.workspace, locale: 'en' } },
 				{ messages: { x: 'en:x' } }
 			);
@@ -43,7 +45,7 @@ describe('bolt.runs', () => {
 					vi.unstubAllGlobals();
 				})
 			);
-			const api = shellApi(async (input) => {
+			const api = shell_api(async (input) => {
 				urls.push(String(input));
 				return new Response(JSON.stringify({ value: [] }));
 			});

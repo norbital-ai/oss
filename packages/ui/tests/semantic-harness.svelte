@@ -2,10 +2,10 @@
 	// A record (shared header Save) or a create form (footer Save) whose `FormState` is handed to the test.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
-	import { provideKinds, type ModelExposure } from '../src/kinds/context.js';
-	import { provideBolt } from '../src/client/context.js';
+	import { mount_edge } from '../src/effect/index.js';
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
+	import { provide_kinds, type ModelExposure } from '../src/kinds/context.js';
+	import { provide_bolt } from '../src/client/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
 	import RecordShell from '../src/record/RecordShell.svelte';
 	import Form from '../src/form/form.svelte';
@@ -27,8 +27,8 @@
 	} = $props();
 	let open = $state(true);
 	// svelte-ignore state_referenced_locally
-	provideBolt(() => bolt);
-	provideKinds({
+	provide_bolt(() => bolt);
+	provide_kinds({
 		get catalog() {
 			return catalog;
 		}

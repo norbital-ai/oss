@@ -19,11 +19,11 @@
 		{enabled}
 		{status}
 		t={(key) => key}
-		onChange={(value) => {
+		on_change={(value) => {
 			enabled = value;
 			if (value) void sounds.test();
 		}}
-		onTest={() => {
+		on_test={() => {
 			void sounds.test();
 		}}
 	/>

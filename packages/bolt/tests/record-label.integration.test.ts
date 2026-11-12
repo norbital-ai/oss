@@ -3,7 +3,7 @@ import { expect, layer } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { Writes } from '../src/engine/services.ts';
-import { dynamicRead } from '../src/protocol/read-request.ts';
+import { dynamic_read } from '../src/protocol/read-request.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import { manifest as base } from './write-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -65,6 +65,19 @@ const manifest: EngineManifest = {
 	},
 	teams: {}
 };
+const EntryPage = Schema.Struct({
+	entries: Schema.Struct({
+		rows: Schema.Array(Schema.Struct({ id: Schema.String, code: Schema.String, display_name: Schema.String }))
+	})
+});
+const ApprovalPage = Schema.Struct({
+	approval_request: Schema.Struct({
+		rows: Schema.Array(Schema.Struct({ id: Schema.String, collection_name: Schema.String, $label: Schema.String }))
+	})
+});
+const PublicPage = Schema.Struct({
+	entries: Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String, first_name: Schema.String })) })
+});
 
 layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 	'materialized record labels',
@@ -75,7 +88,7 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 				Effect.gen(function* () {
 					const t = yield* TestWorkspace,
 						writes = yield* Writes;
-					const admin = t.as(t.admin);
+					const admin = yield* t.as(t.admin);
 					const act = (verb: 'create' | 'update', input: Json) => {
 						const key = randomUUID(),
 							now = t.clock.now();
@@ -98,8 +111,8 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 					if (id === undefined) throw new Error('Missing entry');
 					const search = (text: string) =>
 						admin.query(
-							dynamicRead({ entries: { search: text, fields: ['code', 'display_name'] } })
-						);
+							dynamic_read({ entries: { search: text, fields: ['code', 'display_name'] } })
+						).pipe(Effect.flatMap(Schema.decodeUnknownEffect(EntryPage)));
 					const stored = yield* t.db.rows(
 						Schema.Struct({ code: Schema.String, bolt_record_label: Schema.String }),
 						{
@@ -119,15 +132,15 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 					});
 					const approvalSearch = (text: string, caller = admin) =>
 						caller.query(
-							dynamicRead({ approval_request: { search: text, fields: ['collection_name'] } })
-						);
-					expect((yield* approvalSearch('Lovelace')).approval_request?.rows).toEqual([
+							dynamic_read({ approval_request: { search: text, fields: ['collection_name'] } })
+						).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ApprovalPage)));
+					expect((yield* approvalSearch('Lovelace')).approval_request.rows).toEqual([
 						{ id: request, collection_name: 'entries', $label: 'PERSON P-0001 · Ada Lovelace' }
 					]);
-					expect((yield* search('PERSON')).entries?.rows).toMatchObject([
+					expect((yield* search('PERSON')).entries.rows).toMatchObject([
 						{ id, display_name: 'Ada Lovelace' }
 					]);
-					expect(exposure(manifest, admin.authority).entries?.search).toEqual(['$label']);
+					expect((yield* exposure(manifest, admin.authority)).entries?.search).toEqual(['$label']);
 					expect(
 						yield* t.db.value(Schema.Boolean, {
 							text: "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'entries' AND indexdef ILIKE '%using gin%')",
@@ -135,30 +148,30 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 						})
 					).toBe(true);
 					yield* act('update', [{ target: id, set: { last_name: 'Byron' } }]);
-					expect((yield* approvalSearch('Lovelace')).approval_request?.rows).toEqual([]);
-					expect((yield* approvalSearch('Byron')).approval_request?.rows).toEqual([
+					expect((yield* approvalSearch('Lovelace')).approval_request.rows).toEqual([]);
+					expect((yield* approvalSearch('Byron')).approval_request.rows).toEqual([
 						{ id: request, collection_name: 'entries', $label: 'PERSON P-0001 · Ada Byron' }
 					]);
-					expect((yield* search('Lovelace')).entries?.rows).toEqual([]);
-					expect((yield* search('PERSON Byron')).entries?.rows).toMatchObject([
+					expect((yield* search('Lovelace')).entries.rows).toEqual([]);
+					expect((yield* search('PERSON Byron')).entries.rows).toMatchObject([
 						{ id, display_name: 'Ada Byron' }
 					]);
-					const publicReader = t.as(t.member(['public']));
+					const publicReader = yield* t.as(t.member(['public']));
 					expect(
-						(yield* approvalSearch('Byron', t.as(t.member(['blocked'])))).approval_request?.rows
+						(yield* approvalSearch('Byron', yield* t.as(t.member(['blocked'])))).approval_request.rows
 					).toEqual([]);
-					expect((yield* approvalSearch('Byron', publicReader)).approval_request?.rows).toEqual([]);
+					expect((yield* approvalSearch('Byron', publicReader)).approval_request.rows).toEqual([]);
 					expect(
-						(yield* approvalSearch('Byron', t.as(t.member(['directory'])))).approval_request?.rows
+						(yield* approvalSearch('Byron', yield* t.as(t.member(['directory'])))).approval_request.rows
 					).toEqual([
 						{ id: request, collection_name: 'entries', $label: 'PERSON P-0001 · Ada Byron' }
 					]);
-					expect(exposure(manifest, publicReader.authority).entries?.record_label).toBeUndefined();
-					expect(exposure(manifest, publicReader.authority).entries?.label).toEqual([]);
+					expect((yield* exposure(manifest, publicReader.authority)).entries?.record_label).toBeUndefined();
+					expect((yield* exposure(manifest, publicReader.authority)).entries?.label).toEqual([]);
 					const restricted = yield* publicReader.query(
-						dynamicRead({ entries: { output: 'public', search: 'Byron', fields: ['first_name'] } })
-					);
-					expect(restricted.entries?.rows).toEqual([]);
+						dynamic_read({ entries: { output: 'public', search: 'Byron', fields: ['first_name'] } })
+					).pipe(Effect.flatMap(Schema.decodeUnknownEffect(PublicPage)));
+					expect(restricted.entries.rows).toEqual([]);
 				})
 		);
 	}

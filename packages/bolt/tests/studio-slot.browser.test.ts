@@ -2,7 +2,7 @@
 // Studio's place in the shell: the host's bundle is imported by URL, shares nothing with the page, follows the URL through
 // `update`, unmounts on leave, and a bundle that cannot be loaded says so plainly.
 import { expect, it } from '@effect/vitest';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { Layer, ManagedRuntime } from 'effect';
 import { mount, tick, unmount } from 'svelte';
 import { page } from 'vitest/browser';
@@ -14,17 +14,17 @@ import './support/shell.css';
 const props: StudioProps = {
 	t: (key) => key,
 	locale: 'en',
-	uiText: {},
+	ui_text: {},
 	tab: 'workbench',
-	onTab: () => {},
+	on_tab: () => {},
 	file: null,
-	onFile: () => {},
+	on_file: () => {},
 	admin: true,
-	onAsk: null
+	on_ask: null
 };
 const moduleUrl = (source: string) =>
 	URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-const bundle = moduleUrl(`export const mountStudio = (target, props) => {
+const bundle = moduleUrl(`export const mount_studio = (target, props) => {
 	target.textContent = 'tab ' + props.tab;
 	return {
 		update: (next) => { target.textContent = 'tab ' + next.tab; },
@@ -33,7 +33,7 @@ const bundle = moduleUrl(`export const mountStudio = (target, props) => {
 };`);
 const withSlot = async (url: string | undefined, check: (state: { props: StudioProps }) => Promise<void>) => {
 	const target = document.body.appendChild(document.createElement('div'));
-	const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 	const state = reactive({ bundle: url, props });
 	const view = mount(StudioSlot, { target, props: state });
 	try {

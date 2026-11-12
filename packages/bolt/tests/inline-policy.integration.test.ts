@@ -2,7 +2,7 @@ import { expect, layer } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { dynamicRead } from '../src/protocol/read-request.ts';
+import { dynamic_read } from '../src/protocol/read-request.ts';
 
 const manifest: EngineManifest = {
 	needs: [],
@@ -50,10 +50,9 @@ const manifest: EngineManifest = {
 	integrations: {},
 	teams: {},
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const seed = {
@@ -103,12 +102,12 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 					['north', ['N1', 'N2', 'N3']],
 					['south', ['S1', 'S2']]
 				] as const) {
-					const actor = t.as(t.member([policy]));
+					const actor = yield* t.as(t.member([policy]));
 					const seen: string[] = [];
 					let after: string | undefined;
 					for (let page = 0; page < 4; page++) {
 						const answer = yield* actor.query(
-							dynamicRead({
+							dynamic_read({
 								documents: {
 									where: {
 										or: [
@@ -141,8 +140,8 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 			() =>
 				Effect.gen(function* () {
 					const t = yield* TestWorkspace;
-					const actor = t.as(t.member(['north']));
-					const query = dynamicRead({
+					const actor = yield* t.as(t.member(['north']));
+					const query = dynamic_read({
 						documents: {
 							where: { not: { profile: { flags: { some: { eq: 'blocked' } } } } },
 							fields: ['name'],
@@ -155,13 +154,13 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 					);
 					expect(documents.rows.map((row) => row.name)).toEqual(['N1', 'N3']);
 					expect(documents.total).toBe(2);
-					const outside = dynamicRead({
+					const outside = dynamic_read({
 						documents: { where: { profile: { region: { eq: 'south' } } }, fields: ['name'] }
 					});
 					expect(
 						(yield* Schema.decodeUnknownEffect(Answer)(yield* actor.query(outside))).documents.rows
 					).toEqual([]);
-					expect(yield* Effect.flip(t.as(t.member([])).query(query))).toMatchObject({
+					expect(yield* Effect.flip((yield* t.as(t.member([]))).query(query))).toMatchObject({
 						code: 'forbidden'
 					});
 				})

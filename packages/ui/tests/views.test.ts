@@ -16,11 +16,11 @@ import { series } from '../src/chart/series.ts';
 import { withOutputs } from '../src/client/context.ts';
 import type { HistoryEntry, Query, QueryAnswer } from '../src/client/contract.ts';
 import { reactive } from './kit-state.svelte.js';
-import { listRequest, unref, refOf, labelRead } from '../src/relations/select.ts';
+import { listRequest, unref, refOf, label_read } from '../src/relations/select.ts';
 import { recordText } from '../src/kinds/kind.ts';
 import { Deferred, Effect, Queue } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
-import { formatValue as show } from '../src/kinds/kind.ts';
+import { format_value as show } from '../src/kinds/kind.ts';
 import { jsonRecord, viewFixture } from './view-fixture.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Json } from '@norbital-ai/std/wire';
@@ -34,7 +34,7 @@ it('reads own nested CEL label dependencies and uses each target’s own label f
 		orders: {
 			label: ['code', 'details'],
 			record_label: "record.code + ' · ' + record.details.name",
-			labelPaths: ['code', 'details.name'],
+			label_paths: ['code', 'details.name'],
 			fields: { code: { kind: 'text' }, details: { kind: 'json' } },
 			relations: { customer: { targets: ['customers'] } },
 			layers: ['customer']
@@ -45,7 +45,7 @@ it('reads own nested CEL label dependencies and uses each target’s own label f
 			fields: { code: { kind: 'text' }, name: { kind: 'text' } }
 		}
 	};
-	assert.deepEqual(labelRead(cat, 'orders', { limit: 1 }), {
+	assert.deepEqual(label_read(cat, 'orders', { limit: 1 }), {
 		orders: { limit: 1, fields: ['code', 'details'] }
 	});
 	const row = {
@@ -75,7 +75,7 @@ it.effect('no grant is a state of its own, never an empty page', () =>
 		assert.deepEqual(readState(undefined, undefined, false), { kind: 'empty' });
 		assert.deepEqual(readState(null, undefined, false), { kind: 'ready', value: null });
 		assert.equal(
-			readState(undefined, Object.assign(new Error('big'), { code: 'tooLarge' })).kind,
+			readState(undefined, Object.assign(new Error('big'), { code: 'too_large' })).kind,
 			'error'
 		);
 		assert.deepEqual(failed(Object.assign(new Error('no'), { code: 'forbidden' })), {
@@ -115,6 +115,7 @@ it.live('a later page stays live through Query state; a restored cursor reads on
 		const lived: Json[] = [];
 		const { bolt } = yield* browser(() =>
 			viewFixture({
+				catalog: { c: { label: [], fields: {}, audit: false } },
 				read: (_model, options) =>
 					options.after === undefined
 						? {
@@ -145,7 +146,7 @@ it.live('a later page stays live through Query state; a restored cursor reads on
 		}>({
 			of: 'c',
 			read: (limit: number, after?: string) =>
-				bolt.query<QueryAnswer>({ c: after === undefined ? { limit } : { limit, after } }),
+				bolt.query({ c: after === undefined ? { limit } : { limit, after } }),
 			index: 0,
 			after: null
 		});
@@ -178,7 +179,7 @@ it.effect('range and count', () =>
 		assert.equal(rangeText(bolt, 0, 0, null), 'No rows');
 		assert.equal(rangeText(bolt, 0, 1, 0), 'rows 1–1'); // a live row ahead of the 30 s count
 		assert.equal(
-			msg({ t: (k) => (k === 'ui.table.next' ? 'Suivant' : k) }, 'table.next', 'Next'),
+			msg({ t: (k) => (k === 'ui.table.next' ? 'Suivant' : k) }, 'table.next'),
 			'Suivant'
 		);
 		assert.equal(label(bolt, 'leave_entries', 'start_part'), 'Start part');
@@ -264,15 +265,15 @@ it.effect('Rows ignores reordered object keys while preserving decimal and array
 		const loaded = [{ id: '1', details: { amount: Decimal.of('1.20'), tags: ['a', 'b'] } }];
 		const current = [{ id: '1', details: { tags: ['a', 'b'], amount: Decimal.of('1.20') } }];
 		assert.deepEqual(rowsOps(loaded, current, []), {});
-		current[0]!.details.amount = Decimal.of('2.00');
+		required(current[0]).details.amount = Decimal.of('2.00');
 		assert.deepEqual(rowsOps(loaded, current, []), {
-			update: [{ target: '1', set: { details: current[0]!.details } }]
+			update: [{ target: '1', set: { details: required(current[0]).details } }]
 		});
-		current[0]!.details.amount = Decimal.of('1.20');
+		required(current[0]).details.amount = Decimal.of('1.20');
 		assert.deepEqual(rowsOps(loaded, current, []), {});
-		current[0]!.details.tags.reverse();
+		required(current[0]).details.tags.reverse();
 		assert.deepEqual(rowsOps(loaded, current, []), {
-			update: [{ target: '1', set: { details: current[0]!.details } }]
+			update: [{ target: '1', set: { details: required(current[0]).details } }]
 		});
 	})
 );
@@ -597,9 +598,11 @@ it.live(
 			const history: readonly HistoryEntry[] = [
 				{
 					revision: 2,
+					schema_version: 'prior-schema',
 					at: '2026-09-02T00:00:00.000Z',
 					actor: { kind: 'system', id: 'run1' },
-					restoredFrom: 1,
+					cause: 'restored',
+					restored_from: 1,
 					approval: { request: 'r1', state: 'Rejected' },
 					changed: { status: 'done', updated_at: 'x', revision: 2 },
 					incompatible: ['price'],
@@ -607,13 +610,28 @@ it.live(
 				},
 				{
 					revision: 1,
+					schema_version: 'prior-schema',
 					at: '2026-09-01T00:00:00.000Z',
 					actor: { kind: 'member', id: 'u1' },
-					restoredFrom: null,
+					restored_from: null,
 					approval: null,
-					changed: { title: 'Paint', id: 'j1' }
+					changed: { title: 'Paint', id: 'j1' },
+					cause: 'direct',
+					incompatible: [],
+					valid: true
 				},
-				{ revision: 3, at: null, actor: null, restoredFrom: null, approval: null, changed: {} }
+				{
+					revision: 3,
+					schema_version: 'current-schema',
+					at: null,
+					actor: null,
+					restored_from: null,
+					approval: null,
+					changed: {},
+					cause: 'direct',
+					incompatible: [],
+					valid: true
+				}
 			];
 			assert.deepEqual(checkpoints(history), [
 				{
@@ -621,7 +639,7 @@ it.live(
 					at: '2026-09-01T00:00:00.000Z',
 					actor: { kind: 'member', id: 'u1' },
 					fields: ['title'],
-					restoredFrom: null,
+					restored_from: null,
 					approval: null,
 					valid: true
 				},
@@ -630,7 +648,8 @@ it.live(
 					at: '2026-09-02T00:00:00.000Z',
 					actor: { kind: 'system', id: 'run1' },
 					fields: ['status'],
-					restoredFrom: 1,
+					cause: 'restored',
+					restored_from: 1,
 					approval: { request: 'r1', state: 'Rejected' },
 					valid: false
 				},
@@ -639,7 +658,7 @@ it.live(
 					at: null,
 					actor: null,
 					fields: [],
-					restoredFrom: null,
+					restored_from: null,
 					approval: null,
 					valid: true
 				}

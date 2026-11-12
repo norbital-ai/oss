@@ -128,8 +128,8 @@ export function measureFit<Seed, State extends string>(
 	let minY = Infinity;
 	let maxY = -Infinity;
 	for (let time = 0; time < 15; time += 0.6) {
-		for (let index = 0; index < seeds.length; index += 1) {
-			const point = geometry.point(state, seeds[index]!, index, time);
+		for (const [index, seed] of seeds.entries()) {
+			const point = geometry.point(state, seed, index, time);
 			if (point.vis <= 0) continue;
 			minX = Math.min(minX, point.x);
 			maxX = Math.max(maxX, point.x);
@@ -164,8 +164,10 @@ function rgb(css: string): Rgb {
 	probe.clearRect(0, 0, 1, 1);
 	probe.fillStyle = css;
 	probe.fillRect(0, 0, 1, 1);
-	const d = probe.getImageData(0, 0, 1, 1).data;
-	const value: Rgb = [d[0]!, d[1]!, d[2]!];
+	const [red, green, blue] = probe.getImageData(0, 0, 1, 1).data;
+	if (red === undefined || green === undefined || blue === undefined)
+		throw new RangeError('The canvas did not return an RGB pixel.');
+	const value: Rgb = [red, green, blue];
 	rgbCache.set(css, value);
 	return value;
 }
@@ -210,7 +212,7 @@ export type DotFieldOptions<Seed, State extends string> = {
  * attach closure passes `size` in and reads `state` through `readState`, so a state change does not
  * re-run the attachment and restart the transition.
  */
-export function attachDotField<Seed, State extends string>(
+export function attach_dot_field<Seed, State extends string>(
 	root: HTMLElement,
 	canvas: HTMLCanvasElement,
 	accentSwatch: HTMLElement,
@@ -222,6 +224,8 @@ export function attachDotField<Seed, State extends string>(
 	const { geometry, size, radius, readState, transitionMs } = options;
 
 	const seeds = geometry.layout(size);
+	const initialState = geometry.states[0];
+	if (initialState === undefined) throw new RangeError('A dot geometry must declare a state.');
 	const fits = new Map<State, ShapeFit>();
 	for (const state of geometry.states) fits.set(state, measureFit(geometry, seeds, state));
 
@@ -230,7 +234,7 @@ export function attachDotField<Seed, State extends string>(
 	let visible = true;
 	let frame = 0;
 	let initialized = false;
-	let targetState: State = geometry.states[0]!;
+	let targetState: State = initialState;
 	let previousState: State = targetState;
 	let transitionStarted = 0;
 	let lastDpr = 0;
@@ -242,8 +246,8 @@ export function attachDotField<Seed, State extends string>(
 	// Each instance starts at its own point in the cycle, so a row of marks does not move in step.
 	const phase = noise(size, 11) * 20;
 
-	function seated(state: State, index: number, time: number): DotPoint {
-		const point = geometry.point(state, seeds[index]!, index, time);
+	function seated(state: State, seed: Seed, index: number, time: number): DotPoint {
+		const point = geometry.point(state, seed, index, time);
 		const fit = fits.get(state) ?? { cx: 0, cy: 0, scale: 1 };
 		point.x = (point.x - fit.cx) * fit.scale;
 		point.y = (point.y - fit.cy) * fit.scale;
@@ -284,10 +288,10 @@ export function attachDotField<Seed, State extends string>(
 		const far = dotFar(size);
 
 		const points: Array<DotPoint & { index: number }> = [];
-		for (let index = 0; index < seeds.length; index += 1) {
-			const to = seated(targetState, index, time);
+		for (const [index, seed] of seeds.entries()) {
+			const to = seated(targetState, seed, index, time);
 			if (mixAmount < 1) {
-				const from = seated(previousState, index, time);
+				const from = seated(previousState, seed, index, time);
 				to.x = from.x + (to.x - from.x) * mixAmount;
 				to.y = from.y + (to.y - from.y) * mixAmount;
 				to.z = from.z + (to.z - from.z) * mixAmount;
@@ -306,7 +310,10 @@ export function attachDotField<Seed, State extends string>(
 			// A faint surface under the dots, far to near, so the shape shows through the lattice
 			// at a size where the dots alone would read as a smudge.
 			const faces = geometry.faces(seeds, targetState).map(([a, b, c, d]) => {
-				const quad = [points[a]!, points[b]!, points[c]!, points[d]!] as const;
+				const pa = points[a], pb = points[b], pc = points[c], pd = points[d];
+				if (pa === undefined || pb === undefined || pc === undefined || pd === undefined)
+					throw new RangeError('A dot geometry face names a missing seed.');
+				const quad = [pa, pb, pc, pd] as const;
 				return { quad, z: (quad[0].z + quad[1].z + quad[2].z + quad[3].z) / 4 };
 			});
 			faces.sort((p, q) => p.z - q.z);

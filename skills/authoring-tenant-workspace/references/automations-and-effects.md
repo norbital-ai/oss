@@ -4,30 +4,30 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `i
 
 ## Effects
 
-- `effect: { created, updated, deleted }` on a model is work after a committed write, once per committed batch, as a durable run `<model>.effect.<verb>`: retried 3 times, listed in runs, never rate limited.
-- `created` gets new rows, `deleted` stored rows, `updated` `[{ before, after }]` for writes that changed a stored field. Filter in code.
+- Put `effect(changes, ctx)` inside the model's `create`, `update` or `delete` block. It runs after commit as a durable `<model>.effect.<verb>` run, listed in runs and bounded by the effect retry policy.
+- Every change has `before`, `set`, `after` and `changed(...fields)`. Create has no before row; delete has no after row. Update effects run only when stored values change. Filter the batch in code.
 - It runs as the writer and holds no policy: rows are the root fields of the writer's output, and every read and write needs the writer's grants. Work needing other authority is an automation it schedules; `ctx.schedule` needs no start grant.
 - Its writes run effects one level deeper; past 8 levels the run fails `depth`.
-- Effects follow every commit, including provisional approval writes and their rollback. Work that must wait for approval uses the approval lifecycle or the outbox.
+- Write effects held by an approval retain the frozen changes and writer; final approval releases them atomically and rejection discards them. Approval lifecycle events reach the same verb's effect with an empty change list and `ctx.event.kind === 'approval'`. Custom approval notifications use `ctx.notify` there; built-in inbox notices already exist.
 
 ## Automations
 
-- A job the reserved system identity runs with its declared `policies` (required, non-empty), on cron, webhook, manual start or `ctx.schedule`. Every run holds exactly those policies. Automations cannot approve; `ctx.approvals.withdraw(requestId, reason?)` takes back an open request the same automation asked for. A run has 10,000 crossings.
-- `ctx.run.trigger` records `{ kind: 'person', actor, agent? }` or `{ kind: 'system', cause }` (cron, webhook, effect, schedule). It is never authority: `requestor.*` names the system identity, so a requestor-scoped grant matches nothing and a ref default does not apply.
+- An automation runs as the reserved system identity with its declared `policies` (required, non-empty). A `mode: 'job'` automation is durable and may start from cron, a person or `ctx.schedule`; `mode: 'call'` returns its output in the calling request. Every run holds exactly those policies and cannot approve. A run has 10,000 crossings.
+- `ctx.run.trigger` records the job or uncached call's starter. It is never authority: `requestor.*` names the system identity, so a requestor-scoped grant matches nothing and a ref default does not apply. A cached call has no starter metadata and cannot write, send or schedule.
 - A rule about the starter is an explicit check of the trigger in the body. Refs the run writes are set explicitly.
 - `capabilities.automations` grants manual starts only; code needs none.
 - A row write runs its model's `effect`, never an automation.
-- Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rateLimited`. Cron, webhook, effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
+- Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rate_limited`. Cron and effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
 - A safety-net cron depending only on workspace data declares `rest`: when a run writes nothing, no slot fires until the workspace is used or the rest passes. Never on a cron that finds work by time or reads what a connected link writes.
-- A page starts a run with `ctx.run(name, input)`, which yields `id` and `automation` for run status. Output is readable on the run.
+- Server `ctx.run(name, input)` returns a job's `id` and `automation`, or a call's declared output. A page's job handle exposes `.id`, `.ids` and `.automation`; yielding it confirms queue admission through an outcome, not completion. A page call yields its output. Only jobs may be scheduled. A cached call declares a positive `cache` duration and remains read-only.
 - Every startable automation appears in the Command Center with its typed form; a page form is optional.
 
 ## Reruns
 
 A dropped run reruns from the start, up to 3 times; a retry also starts over. Nothing is replayed, and `ctx.ai.*`, `ctx.request` and `ctx.web.*` are asked and paid again. Every body must be safe twice:
 
-- Upsert by a natural key, or pass `{ once: '<key>' }` to `ctx.act`.
-- Check status before a send, and record it in the same write.
+- Supply a stable domain key through the act's `{ key }` option when that write must deduplicate. Separate acts already committed may repeat when the body starts over; there is no positional replay or `once` option on acts.
+- `ctx.send` durably queues a message and returns its id, even while its account awaits pairing. Save that id; waiting messages persist across host restart and spend no provider attempts until connected. Queue admission is not provider delivery: derive a business report's Sent state/timestamp from actual `sys_message` status/timeline and `sent_at` under an explicit output grant, never from the call's success or an in-app notification. A retry may queue a second send, and an interrupted provider call may have an uncertain outcome. Model the delivery state before promising exactly-once external work.
 - Give `ctx.schedule` a `key`; key notices with `once`.
 
 ## Body rules
@@ -40,17 +40,24 @@ A dropped run reruns from the start, up to 3 times; a retry also starts over. No
 
 ## Facilities
 
-- `on` is a list of trigger literals: `{ cron, tz?, rest? }`, `{ webhook, verify: { scheme, secret } }`.
+- `on` is a list of cron literals `{ cron, tz?, rest? }`. Incoming webhooks belong to integration definitions and their native sync deliveries, never automation triggers.
 - Business I/O runs in automations: `ctx.request`, `ctx.send`, `ctx.web.read`, `ctx.files.*`, `ctx.geo.*`, `ctx.convert.*`, `ctx.ai.*`. Integration bodies call `ctx.request(op)` on their own instance.
 - `ctx.convert.document` and `ctx.convert.ingest` are optional. Recover `Unavailable` only when absence is allowed; other failures propagate unless the workflow recovers them.
 - Discover each member's input on `AutomationCtx` and `Ai`.
+
+## Browser work
+
+- `ctx.browser` is the run's own tab, with no person's cookies. It closes when the run's scope ends, including failure or interruption.
+- `navigate` and `snapshot` return a typed `BrowserSnapshot` with URL, title, text and host metadata. Use refs from the current snapshot in typed `act` steps; `evaluate` returns JSON, `download(url, { for })` stores supported media, and `close` closes the tab early.
+- Use `ctx.web.read(url)` when readable page text needs no interaction. This run browser is separate from the user's root-web `page` tool and the agent's fleet browser.
+- Host browser failures propagate through the typed facility failure channel. Source wiring or a fake does not prove a host can drive the target site.
 
 ## AI
 
 - `ctx.ai.sys_1.decide({ state, questions })` asks keyed questions over text-only state and returns typed answers. `ctx.ai.sys_2.infer` is the LLM. Neither falls back to the other.
 - `sys_2.infer({ initial, output, … })` holds a complete answer in memory and exposes draft tools `read`, `find`, `edit`, `diff`, `submit`. Paths are JSON Pointers; a keyed list item is addressed by key, never index. Large reads are bounded: read child paths.
 - Request `rules` (CEL over top-level properties) make an unfinished draft fail `invalid`.
-- `tools: ['read', ...hostTools]` reads records as the run's policies across turns; bound it with `steps`. The draft reader is then `read_answer`.
+- `tools: ['read', ...host_tools]` reads records as the run's policies across turns; bound it with `steps`. The draft reader is then `read_answer`.
 - Transient provider failures retry inside the invocation, keeping the transcript and edited answer.
 - Infer results are proposals. Store them for native form review before a separate confirmed apply; a write still runs through grants, checks and approvals. A person confirms anything changing money or access.
 - Use the public `Ai` signature; test with scripted output, never a live model.

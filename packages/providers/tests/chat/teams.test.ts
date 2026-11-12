@@ -6,7 +6,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { teams } from '../../src/chat/teams/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const microsoft = generateKeyPairSync('rsa', { modulusLength: 2048 }),
@@ -72,7 +72,7 @@ describe('Teams', () => {
 			const h = yield* connected(teams, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'app-1' });
 			const body = activity();
-			const response = yield* h.link.webhook!(webhook(body, { authorization: token() }));
+			const response = yield* required(h.link.webhook)(webhook(body, { authorization: token() }));
 			expect(response.status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
@@ -80,7 +80,7 @@ describe('Teams', () => {
 					{
 						id: 'a:dm:1790000000000',
 						thread: `${SERVICE}|a:dm`,
-						sentAt: '2026-11-05T10:00:00.000Z',
+						sent_at: '2026-11-05T10:00:00.000Z',
 						from: { handle: '29:ann', name: 'Ann' },
 						text: 'hello',
 						group: false,
@@ -126,7 +126,7 @@ describe('Teams', () => {
 					activity({ type: 'conversationUpdate', id: '9' })
 				];
 				for (const body of bodies)
-					expect((yield* h.link.webhook!(webhook(body, { authorization: token() }))).status).toBe(
+					expect((yield* required(h.link.webhook)(webhook(body, { authorization: token() }))).status).toBe(
 						200
 					);
 				expect(h.events.length).toBe(3);
@@ -139,7 +139,7 @@ describe('Teams', () => {
 								text: '@Acme hi @Bob',
 								group: true,
 								title: 'General',
-								replyTo: '19:c@thread.tacv2:5',
+								reply_to: '19:c@thread.tacv2:5',
 								invocation: 'mention'
 							}
 						]
@@ -169,7 +169,7 @@ describe('Teams', () => {
 					{ contentType: 'text/html', content: '<p>hello</p>' }
 				]
 			});
-			yield* h.link.webhook!(webhook(body, { authorization: token() }));
+			yield* required(h.link.webhook)(webhook(body, { authorization: token() }));
 			expect(h.events[0]).toMatchObject({
 				bins: [new Uint8Array([1]), new Uint8Array([2])],
 				messages: [
@@ -200,9 +200,9 @@ describe('Teams', () => {
 				token({ serviceurl: 'https://evil.test/' }),
 				token({ exp: 1 })
 			])
-				expect((yield* h.link.webhook!(webhook(body, { authorization }))).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook('not json', { authorization: token() }))).status).toBe(
+				expect((yield* required(h.link.webhook)(webhook(body, { authorization }))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook('not json', { authorization: token() }))).status).toBe(
 				401
 			);
 			expect(h.events).toEqual([]);
@@ -215,7 +215,7 @@ describe('Teams', () => {
 			const h = yield* connected(teams, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			const response = yield* h.link.webhook!(webhook(activity(), { authorization: token() }));
+			const response = yield* required(h.link.webhook)(webhook(activity(), { authorization: token() }));
 			expect(response.status).toBe(500);
 		})
 	);
@@ -224,8 +224,8 @@ describe('Teams', () => {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(teams, settings);
 			const to = `${SERVICE}|19:c@thread.tacv2;messageid=5`;
-			const sent = yield* h.link.send!({ id: 'r1', to, text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: '19:c@thread.tacv2:out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to, text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: '19:c@thread.tacv2:out1' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe(
 				`${SERVICE}v3/conversations/${encodeURIComponent('19:c@thread.tacv2;messageid=5')}/activities`
@@ -236,7 +236,7 @@ describe('Teams', () => {
 				text: 'Hello',
 				textFormat: 'markdown'
 			});
-			yield* h.link.typing!(to, true);
+			yield* required(h.link.typing)(to, true);
 			expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toEqual({ type: 'typing' });
 			const login = api.calls.filter(({ url }) => url.includes('login.microsoftonline.com'));
 			expect(login.length).toBe(1);
@@ -255,10 +255,10 @@ describe('Teams', () => {
 			const h = yield* connected(teams, settings),
 				before = api.calls.length;
 			yield* Effect.flip(
-				h.link.send!({ id: 'r1', to: 'https://evil.test/|a:dm', text: 'Hello' }, [])
+				required(h.link.send)({ id: 'r1', to: 'https://evil.test/|a:dm', text: 'Hello' }, [])
 			);
 			yield* Effect.flip(
-				h.link.send!({ id: 'r2', to: 'http://smba.trafficmanager.net/|a:dm', text: 'Hello' }, [])
+				required(h.link.send)({ id: 'r2', to: 'http://smba.trafficmanager.net/|a:dm', text: 'Hello' }, [])
 			);
 			expect(api.calls.length).toBe(before);
 		})
@@ -267,7 +267,7 @@ describe('Teams', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(teams, settings);
-			yield* h.link.test!({ to: '29:ann' });
+			yield* required(h.link.test)({ to: '29:ann' });
 			expect(api.calls.at(-2)?.url).toBe('https://smba.trafficmanager.net/teams/v3/conversations');
 			expect(JSON.parse(api.calls.at(-2)?.body ?? '')).toEqual({
 				bot: { id: 'app-1' },
@@ -283,7 +283,7 @@ describe('Teams', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ error: 'invalid_client' }, 401));
 			const h = yield* host(chatProvider(teams), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

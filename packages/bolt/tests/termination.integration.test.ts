@@ -22,17 +22,17 @@ import { Ai, RunUnits, WebRead } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Runs } from '../src/engine/services.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
 import { TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
-import { loadPack, sourceOf } from '../src/engine/write/pack.ts';
+import { load_pack, source_of } from '../src/engine/write/pack.ts';
 import { randomUUID } from 'node:crypto';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			docs: {
@@ -63,10 +63,10 @@ const manifest = Result.getOrThrow(
 		},
 		integrations: {},
 		teams: {},
-		connections: {},
+
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -128,7 +128,7 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 			const t = yield* TestWorkspace;
 			both = yield* Deferred.make<void>();
 			yield* t.db.write({ text: queue('pair'), params: [] });
-			yield* t.runDue();
+			yield* t.run_due();
 			expect(yield* sql(t, `SELECT state FROM sys_run WHERE automation = 'pair'`)).toEqual([
 				{ state: 'succeeded' }
 			]);
@@ -143,7 +143,7 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 				const t = yield* TestWorkspace;
 				next = yield* Deferred.make<void>();
 				yield* t.db.write({ text: queue('relay'), params: [] });
-				yield* t.runDue();
+				yield* t.run_due();
 				expect(yield* sql(t, `SELECT state FROM sys_run WHERE automation = 'relay'`)).toEqual([
 					{ state: 'succeeded' }
 				]);
@@ -154,10 +154,10 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
 			expect(
-				yield* loadPack(
+				yield* load_pack(
 					t.db,
 					manifest,
-					sourceOf({
+					source_of({
 						dir: '',
 						meta: {
 							format: 1,
@@ -204,7 +204,7 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 					)
 				);
 				expect(yield* Effect.flip(raced({}, { id: randomUUID(), starter: null }))).toMatchObject({
-					code: 'noProgress',
+					code: 'no_progress',
 					phase: 'commit'
 				});
 				expect(passes).toBe(1);
@@ -299,7 +299,7 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 					).toEqual([
 						{
 							state: 'failed',
-							error: { code: 'cpuBudget', message: 'The run used its CPU budget.' },
+							error: { code: 'cpu_budget', message: 'The run used its CPU budget.' },
 							finished: true
 						}
 					]);

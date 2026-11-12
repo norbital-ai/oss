@@ -6,7 +6,7 @@ import { decode as decodePng, encode as encodePng } from 'fast-png';
 import jpeg from 'jpeg-js';
 import type { ImagePreviewMime, ImagePreviewSize } from '../src/engine/contracts.ts';
 import { Files, Images } from '../src/engine/ports.ts';
-import { imagesPort } from '../src/node/images.ts';
+import { images_port } from '../src/node/images.ts';
 import { ImagePreviews, ImagePreviewsLive } from '../src/protocol/image-previews.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -20,10 +20,9 @@ const manifest = {
 	integrations: {},
 	teams: {},
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -120,7 +119,7 @@ const orientedJpeg = (orientation: number) => {
 const imagePreview = (bytes: Uint8Array, mime: ImagePreviewMime, edge: ImagePreviewSize) =>
 	Effect.gen(function* () {
 		return yield* (yield* Images).preview(bytes, mime, edge);
-	}).pipe(Effect.provide(Images.fromAbi(imagesPort)));
+	}).pipe(Effect.provide(Images.fromAbi(images_port)));
 
 it.live('supports all three fixed bounds without upscaling and keeps PNG alpha', () =>
 	Effect.gen(function* () {
@@ -164,6 +163,20 @@ it.live('honors the native primary HEIC rotation without applying it twice', () 
 		const result = yield* imagePreview(bytes, 'image/heic', 64);
 		expect(result).toMatchObject({ mime: 'image/jpeg', derived: true });
 		expect(jpeg.decode(result.bytes)).toMatchObject({ width: 48, height: 64 });
+	})
+);
+
+it.live('preview and crop both refuse an invalid EXIF orientation without changing the source', () =>
+	Effect.gen(function* () {
+		const source = orientedJpeg(9), before = source.slice();
+		expect(yield* Effect.flip(imagePreview(source, 'image/jpeg', 64))).toMatchObject({
+			message: expect.stringContaining('the EXIF orientation is invalid')
+		});
+		expect(yield* Effect.flip(Effect.tryPromise({
+			try: () => images_port.crop(source, { left: 0, top: 0, right: 1, bottom: 1 }, new AbortController().signal),
+			catch: (error) => error
+		}))).toMatchObject({ message: expect.stringContaining('the EXIF orientation is invalid') });
+		expect(source).toEqual(before);
 	})
 );
 
@@ -275,7 +288,7 @@ it.live(
 			const source = encodePng({ ...pixels, channels: 4, depth: 8 }),
 				before = source.slice();
 			const cropped = yield* Effect.tryPromise(() =>
-				imagesPort.crop(
+				images_port.crop(
 					source,
 					{ left: 0, top: 0, right: 0.5, bottom: 1 },
 					new AbortController().signal
@@ -287,7 +300,7 @@ it.live(
 			expect(source).toEqual(before);
 			const rotated = decodePng(
 				yield* Effect.tryPromise(() =>
-					imagesPort.crop(
+					images_port.crop(
 						orientedJpeg(6),
 						{ left: 0, top: 0, right: 1, bottom: 0.5 },
 						new AbortController().signal
@@ -304,7 +317,7 @@ it.live(
 				expect(
 					yield* Effect.flip(
 						Effect.tryPromise({
-							try: () => imagesPort.crop(source, box, new AbortController().signal),
+							try: () => images_port.crop(source, box, new AbortController().signal),
 							catch: (error) => error
 						})
 					)

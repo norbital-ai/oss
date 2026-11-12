@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { novu } from '../../src/chat/novu/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook } from './kit.ts';
 
 const settings = { apiKey: 'nv-key', agentIdentifier: 'agent1' };
@@ -42,7 +42,7 @@ describe('Novu', () => {
 			const h = yield* connected(novu, settings),
 				body = bridge('onMessage');
 			expect(h.status).toMatchObject({ state: 'connected', account: 'agent1' });
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
@@ -50,7 +50,7 @@ describe('Novu', () => {
 						id: 'm1',
 						thread: 'conv1',
 						text: 'hello',
-						sentAt: '2026-10-01T10:00:00.000Z',
+						sent_at: '2026-10-01T10:00:00.000Z',
 						from: { handle: 'sub1', name: 'Mei' },
 						group: true,
 						invocation: 'mention'
@@ -81,13 +81,13 @@ describe('Novu', () => {
 						]
 					})
 				});
-			yield* h.link.webhook!(webhook(body, sign(body)));
+			yield* required(h.link.webhook)(webhook(body, sign(body)));
 			const event = h.events[0];
 			expect(event).toMatchObject({
 				messages: [
 					{
 						invocation: 'direct',
-						replyTo: 'm0',
+						reply_to: 'm0',
 						attachments: [{ name: 'a.png', mime: 'image/png', bin: 0 }]
 					}
 				]
@@ -105,8 +105,8 @@ describe('Novu', () => {
 					message: message({ text: 'edited', timestamp: '2026-10-01T11:00:00.000Z' })
 				}),
 				gone = bridge('onMessageDeleted', { message: null, previousMessage: message() });
-			yield* h.link.webhook!(webhook(edit, sign(edit)));
-			yield* h.link.webhook!(webhook(gone, sign(gone)));
+			yield* required(h.link.webhook)(webhook(edit, sign(edit)));
+			yield* required(h.link.webhook)(webhook(gone, sign(gone)));
 			expect(h.events[0]).toMatchObject({
 				messages: [{ id: 'm1', text: 'edited', version: '2026-10-01T11:00:00.000Z' }]
 			});
@@ -121,8 +121,8 @@ describe('Novu', () => {
 					message: message({ author: { userId: 'B', fullName: 'Bot', userName: 'b', isBot: true } })
 				}),
 				action = bridge('onAction', { message: null });
-			yield* h.link.webhook!(webhook(own, sign(own)));
-			yield* h.link.webhook!(webhook(action, sign(action)));
+			yield* required(h.link.webhook)(webhook(own, sign(own)));
+			yield* required(h.link.webhook)(webhook(action, sign(action)));
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -130,11 +130,11 @@ describe('Novu', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(novu, settings);
-			const health = yield* h.link.webhook!(
+			const health = yield* required(h.link.webhook)(
 				new Request('https://hook.test/?action=health-check')
 			);
 			expect(yield* Effect.promise(() => health.json())).toEqual({ status: 'ok' });
-			const discover = yield* h.link.webhook!(new Request('https://hook.test/?action=discover'));
+			const discover = yield* required(h.link.webhook)(new Request('https://hook.test/?action=discover'));
 			expect(yield* Effect.promise(() => discover.json())).toEqual({
 				workflows: [],
 				agents: [{ agentId: 'agent1' }]
@@ -153,7 +153,7 @@ describe('Novu', () => {
 				sign(body, 'nv-key', Date.now() + 60 * 1000),
 				{}
 			])
-				expect((yield* h.link.webhook!(webhook(body, headers))).status).toBe(401);
+				expect((yield* required(h.link.webhook)(webhook(body, headers))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -162,8 +162,8 @@ describe('Novu', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(novu, { ...settings, bridgeSecret: 'bridge' }),
 				body = bridge('onMessage');
-			expect((yield* h.link.webhook!(webhook(body, sign(body, 'bridge')))).status).toBe(200);
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body, 'bridge')))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(401);
 		})
 	);
 	it.live('a message the engine did not store is not acknowledged', () =>
@@ -173,14 +173,14 @@ describe('Novu', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = bridge('onMessage');
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(500);
 		})
 	);
 	it.live('sends an assistant message into the conversation', () =>
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(novu, settings);
-			const sent = yield* h.link.send!({ to: 'conv1', text: 'Hello **there**' }, []);
+			const sent = yield* required(h.link.send)({ to: 'conv1', text: 'Hello **there**' }, []);
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe('https://api.novu.co/v1/agents/events/ingest');
 			expect(call?.headers.get('authorization')).toBe('ApiKey nv-key');
@@ -194,7 +194,7 @@ describe('Novu', () => {
 						event: {
 							type: 'message',
 							role: 'assistant',
-							messageId: sent.providerId,
+							messageId: sent.provider_id,
 							content: { markdown: 'Hello **there**' }
 						}
 					}
@@ -208,7 +208,7 @@ describe('Novu', () => {
 			yield* platformApi(() => (refusing ? json({}, 422) : answer()));
 			const h = yield* connected(novu, settings);
 			refusing = true;
-			const failure = yield* Effect.flip(h.link.send!({ to: 'conv1', text: 'hi' }, []));
+			const failure = yield* Effect.flip(required(h.link.send)({ to: 'conv1', text: 'hi' }, []));
 			expect(failure.message).toContain('422');
 		})
 	);
@@ -216,7 +216,7 @@ describe('Novu', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(() => json({ message: 'Unauthorized' }, 401));
 			const h = yield* host(chatProvider(novu), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(JSON.parse(api.calls[0]?.body ?? '')).toEqual({ events: [] });
 			expect(h.values.size).toBe(0);
 		})

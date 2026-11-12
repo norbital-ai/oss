@@ -5,7 +5,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { Effect, Result } from 'effect';
 import type { KeysPort } from '../engine/contracts.ts';
 
-export function keysPort(key: Uint8Array): KeysPort {
+export function keys_port(key: Uint8Array): KeysPort {
 	if (key.byteLength !== 32) throw new Error('the secrets key must be 32 bytes (AES-256)');
 	const seal = (plain: Uint8Array, aad: Uint8Array) => {
 		const iv = randomBytes(12),

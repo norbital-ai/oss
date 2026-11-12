@@ -10,17 +10,19 @@
 // Verify makes an edited file safe: replay every file on a scratch database, build the schema itself on another, and
 // compare what the two hold (`introspect`); and the snapshot must be the schema the code declares.
 import { Effect, Predicate, Result, Schema } from 'effect';
+import { q as ident, literal as lit } from '@norbital-ai/std/sql';
 import * as Base64 from 'effect/encoding/Base64';
 import { deflateSync, inflateSync } from 'fflate';
 import { StoreError } from './errors.ts';
-import { canonical, sha256Hex } from '@norbital-ai/std/hash';
+import { canonical, sha256_hex } from '@norbital-ai/std/hash';
 import { plan, statements, type Plan } from './schema/plan.ts';
-import { SchemaSpec } from './schema/spec.ts';
+import type { SchemaSpec } from './schema/spec.ts';
+import { schema_snapshot, type SchemaSnapshot } from './schema/snapshot.ts';
 import { INTROSPECT } from './migration-introspect.ts';
 import type { Sql } from './read/sql.ts';
 
 type Fx<A> = Effect.Effect<A, StoreError>;
-const refuse = (code: 'migrationInvalid' | 'migrationChanged' | 'schemaMoved', message: string) =>
+const refuse = (code: 'migration_invalid' | 'migration_changed' | 'schema_moved', message: string) =>
 	Effect.fail(StoreError.of(code, 'admission', message));
 
 /** A migration file: its name (`0007_lease_until.sql`) and text. */
@@ -53,9 +55,9 @@ export type MigrationLock = typeof MigrationLock.Type;
 
 /** The table a database records its applied files in, and each record. */
 export const MIGRATIONS_TABLE = `create table if not exists store_migration (name text primary key, checksum text not null, applied_at timestamptz not null default now())`;
-export const recordApplied = (file: MigrationFile) => ({
+export const record_applied = (file: MigrationFile) => ({
 	text: 'insert into store_migration (name, checksum) values ($1, $2)',
-	params: [file.name, checksumOf(file)]
+	params: [file.name, checksum_of(file)]
 });
 export const APPLIED = 'select name, checksum from store_migration order by name';
 
@@ -69,13 +71,12 @@ export const MIGRATION_GUARD_CODES = {
 } as const;
 
 /** Exact ledger and native definition sets, checked inside the host's atomic migration batch. */
-export function migrationGuard(
+export function migration_guard(
 	applied: readonly Applied[],
 	definitions: readonly string[],
 	stage: 'before' | 'after',
 	excluded: readonly (readonly [string, string])[] = []
 ): Sql {
-	const lit = (text: string) => `'${text.replaceAll("'", "''")}'`;
 	const history = [...applied].sort((a, b) => a.name.localeCompare(b.name));
 	const ledgerCode =
 		stage === 'before' ? MIGRATION_GUARD_CODES.beforeLedger : MIGRATION_GUARD_CODES.afterLedger;
@@ -98,40 +99,41 @@ export function migrationGuard(
 	return { text: `do ${lit(body)}`, params: [] };
 }
 
-export const checksumOf = (file: MigrationFile): string => sha256Hex(file.sql);
+export const checksum_of = (file: MigrationFile): string => sha256_hex(file.sql);
 const STEP_CLASSES = ['additive', 'rename', 'backfill', 'validating', 'destructive', 'data'];
 const NAME = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 const number = (name: string): number => Number(NAME.exec(name)?.[1] ?? Number.NaN);
 const decodeSnapshot = /*#__PURE__*/ (() =>
-	Schema.decodeUnknownEffect(Schema.fromJsonString(SchemaSpec)))();
+	Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json)))();
 const decodeLock = /*#__PURE__*/ (() =>
 	Schema.decodeUnknownEffect(Schema.fromJsonString(MigrationLock)))();
 /** A schema as its snapshot file holds it: canonical JSON. */
-export const snapshotOf = (s: SchemaSpec): string =>
+export const snapshot_of = (s: SchemaSpec): string =>
 	`${JSON.stringify(JSON.parse(canonical(s)), null, '\t')}\n`;
 /** A snapshot file's schema, decoded (an edited snapshot that is no schema is refused). */
-export const readSnapshot = (text: string): Fx<SchemaSpec> =>
+export const read_snapshot = (text: string): Fx<SchemaSnapshot> =>
 	decodeSnapshot(text).pipe(
+		Effect.flatMap(schema_snapshot),
 		Effect.mapError((e) =>
-			StoreError.of('migrationInvalid', 'decode', `snapshot.json is no schema: ${e.message}`)
+			StoreError.of('migration_invalid', 'decode', `snapshot.json is no schema: ${e.message}`)
 		)
 	);
-export const readLock = (text: string): Fx<MigrationLock> =>
+export const read_lock = (text: string): Fx<MigrationLock> =>
 	decodeLock(text).pipe(
 		Effect.mapError((e) =>
-			StoreError.of('migrationInvalid', 'decode', `migrations.lock.json: ${e.message}`)
+			StoreError.of('migration_invalid', 'decode', `migrations.lock.json: ${e.message}`)
 		)
 	);
 export type MigrationProofs = Pick<MigrationLock, 'squashes' | 'physical'>;
-export const lockOf = (
+export const lock_of = (
 	snapshot: string,
 	files: readonly MigrationFile[],
 	proofs: MigrationProofs = {}
 ): string =>
 	`${JSON.stringify(
 		{
-			snapshot: sha256Hex(snapshot),
-			files: Object.fromEntries(files.map((f) => [f.name, checksumOf(f)])),
+			snapshot: sha256_hex(snapshot),
+			files: Object.fromEntries(files.map((f) => [f.name, checksum_of(f)])),
 			...proofs
 		},
 		null,
@@ -268,7 +270,6 @@ function checksOf(sql: string): Check[] {
 	}
 	return out;
 }
-const quoted = (text: string) => `'${text.replaceAll("'", "''")}'`;
 /**
  * The SQL a host executes: each check becomes a block that counts its rows and raises `BM005`, naming it, when any
  * remain, so the file, its data changes and its ledger record roll back together. The checksum stays the file's own.
@@ -277,7 +278,7 @@ export function executable(file: MigrationFile): string {
 	let out = '';
 	let from = 0;
 	for (const check of checksOf(file.sql)) {
-		const body = `declare n bigint; begin\n\texecute ${quoted(`select count(*) from (${check.query}\n) store_check`)} into n;\n\tif n > 0 then raise exception using errcode = '${MIGRATION_GUARD_CODES.check}', message = format('check %s failed: %s row(s) returned', ${quoted(check.name)}, n); end if;\nend`;
+		const body = `declare n bigint; begin\n\texecute ${lit(`select count(*) from (${check.query}\n) store_check`)} into n;\n\tif n > 0 then raise exception using errcode = '${MIGRATION_GUARD_CODES.check}', message = format('check %s failed: %s row(s) returned', ${lit(check.name)}, n); end if;\nend`;
 		let delimiter = '$store_check$';
 		while (body.includes(delimiter)) delimiter = `${delimiter.slice(0, -1)}_$`;
 		out += `${file.sql.slice(from, check.start)}do ${delimiter} ${body} ${delimiter};`;
@@ -295,7 +296,7 @@ export type MigrationStatement = {
 };
 const WRITES = /*#__PURE__*/ new Set(['insert', 'update', 'delete', 'merge']);
 /** `executable(file)` statement by statement, in order: the same SQL, so a host can answer each step's rows. */
-export function migrationStatements(file: MigrationFile): readonly MigrationStatement[] {
+export function migration_statements(file: MigrationFile): readonly MigrationStatement[] {
 	const sql = executable(file);
 	const markers = [...sql.matchAll(/^-- step (\S+) \((\w+)\)[ \t]*$/gm)];
 	const out: MigrationStatement[] = [];
@@ -326,18 +327,17 @@ export function migrationStatements(file: MigrationFile): readonly MigrationStat
 	close(sql.length);
 	return out;
 }
-const ident = (name: string) => `"${name.replaceAll('"', '""')}"`;
 /**
  * Two statements that answer `n`: the rows of `table`, or with `column` the rows holding a value there, counted inside
  * the migration's own transaction; `0` when the table is already gone.
  */
-export function impactCount(table: string, column?: string): readonly [string, string] {
+export function impact_count(table: string, column?: string): readonly [string, string] {
 	const count =
 		column === undefined
 			? 'count(*)'
-			: `count(*) filter (where to_jsonb(x) -> ${quoted(column)} <> 'null'::jsonb)`;
+			: `count(*) filter (where to_jsonb(x) -> ${lit(column)} <> 'null'::jsonb)`;
 	return [
-		`do $store_impact$ declare n bigint := 0; begin if to_regclass(${quoted(ident(table))}) is not null then execute ${quoted(`select ${count} from ${ident(table)} x`)} into n; end if; perform set_config('store.impact', n::text, true); end $store_impact$`,
+		`do $store_impact$ declare n bigint := 0; begin if to_regclass(${lit(ident(table))}) is not null then execute ${lit(`select ${count} from ${ident(table)} x`)} into n; end if; perform set_config('store.impact', n::text, true); end $store_impact$`,
 		`select current_setting('store.impact')::float8 as n`
 	];
 }
@@ -385,30 +385,30 @@ function changesHostBounds(tokens: readonly SqlToken[]): boolean {
 	);
 }
 /** A file a database may run: named in order, and every destructive step accepted. */
-export const checkFile = /*#__PURE__*/ (() =>
-	Effect.fn('Store.checkFile')(function* (file: MigrationFile) {
+export const check_file = /*#__PURE__*/ (() =>
+	Effect.fn('Store.check_file')(function* (file: MigrationFile) {
 		if (!NAME.test(file.name) || number(file.name) < 1)
 			return yield* refuse(
-				'migrationInvalid',
+				'migration_invalid',
 				`'${file.name}' is not NNNN_<name>.sql starting at 0001`
 			);
 		const blocks = blocksOf(file);
 		for (const block of blocks)
 			if (!STEP_CLASSES.includes(block.klass))
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`${file.name}: unknown step class '${block.klass}': it is one of ${STEP_CLASSES.join(', ')}`
 				);
 		for (const check of checksOf(file.sql))
 			if (!['select', 'with'].includes(sqlTokens(check.query)[0]?.text ?? ''))
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`${file.name}: check ${check.name} needs one SELECT whose rows are the violations`
 				);
 		const refused = blocks.filter((b) => b.klass === 'destructive' && !b.accepted);
 		if (refused.length > 0)
 			return yield* refuse(
-				'migrationInvalid',
+				'migration_invalid',
 				`${file.name}: destructive steps need an accept line: ${refused.map((b) => `-- accept: ${b.id}`).join(', ')}`
 			);
 		for (const statement of sqlStatements(file.sql)) {
@@ -420,12 +420,12 @@ export const checkFile = /*#__PURE__*/ (() =>
 				((words[0] === 'start' || words[0] === 'prepare') && words[1] === 'transaction')
 			)
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`${file.name}: transaction control cannot run inside an atomic migration`
 				);
 			if (changesHostBounds(statement))
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`${file.name}: lock_timeout, statement_timeout, idle_in_transaction_session_timeout and transaction_timeout belong to the host's bounded migration transaction`
 				);
 			if (
@@ -434,7 +434,7 @@ export const checkFile = /*#__PURE__*/ (() =>
 					((words[0] === 'create' || words[0] === 'drop') && words.includes('index')))
 			)
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`${file.name}: CONCURRENTLY cannot run in an atomic migration; use an ordinary index statement`
 				);
 		}
@@ -445,10 +445,10 @@ const orderedFiles = /*#__PURE__*/ (() =>
 	Effect.fn('Store.orderedMigrations')(function* (files: readonly MigrationFile[]) {
 		const ordered = [...files].sort((a, b) => number(a.name) - number(b.name));
 		for (const [i, file] of ordered.entries()) {
-			yield* checkFile(file);
+			yield* check_file(file);
 			if (number(file.name) !== i + 1)
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`migrations are numbered from 0001 without gaps; ${file.name} is not ${i + 1}`
 				);
 		}
@@ -456,13 +456,13 @@ const orderedFiles = /*#__PURE__*/ (() =>
 	}))();
 
 const appliedOf = (files: readonly MigrationFile[]): Applied[] =>
-	files.map((file) => ({ name: file.name, checksum: checksumOf(file) }));
+	files.map((file) => ({ name: file.name, checksum: checksum_of(file) }));
 /** Identifies the exact original prefix, including its order, filenames and immutable SQL checksums. */
-export const archiveOf = (files: readonly MigrationFile[]): string =>
-	sha256Hex(canonical(appliedOf(files)));
+export const archive_of = (files: readonly MigrationFile[]): string =>
+	sha256_hex(canonical(appliedOf(files)));
 /** A physical proof ignores introspection row order, but includes every distinct schema definition. */
-export const physicalHash = (lines: readonly string[]): string =>
-	sha256Hex(canonical([...new Set(lines)].sort()));
+export const physical_hash = (lines: readonly string[]): string =>
+	sha256_hex(canonical([...new Set(lines)].sort()));
 
 export type PhysicalDefinitions = Readonly<Record<string, readonly string[]>>;
 const PhysicalDefinitions = /*#__PURE__*/ (() =>
@@ -492,7 +492,7 @@ const indexedDefinitions = (
 	file['format'] === 1 || file['format'] === 2;
 
 /** Every exact native definition is stored once, even when many historical prefixes share it. */
-export function physicalDefinitionsOf(definitions: PhysicalDefinitions): string {
+export function physical_definitions_of(definitions: PhysicalDefinitions): string {
 	const lines: string[] = [];
 	const indexes = new Map<string, number>();
 	const prefixes = Object.fromEntries(
@@ -522,10 +522,10 @@ export function physicalDefinitionsOf(definitions: PhysicalDefinitions): string 
 }
 
 /** Decode committed proofs, including existing unindexed histories; hashes still cover the expanded definitions. */
-export const readPhysicalDefinitions = (text: string): Fx<PhysicalDefinitions> =>
+export const read_physical_definitions = (text: string): Fx<PhysicalDefinitions> =>
 	Effect.gen(function* () {
 		const file = yield* decodeDefinitions(text).pipe(
-			Effect.mapError((cause) => StoreError.of('migrationChanged', 'decode', cause.message))
+			Effect.mapError((cause) => StoreError.of('migration_changed', 'decode', cause.message))
 		);
 		if (!indexedDefinitions(file)) return file;
 		const expanded = yield* Effect.forEach(file.lines, (line) =>
@@ -537,7 +537,7 @@ export const readPhysicalDefinitions = (text: string): Fx<PhysicalDefinitions> =
 								inflateSync(Result.getOrThrow(Base64.decode(line.deflate)))
 							),
 						catch: () =>
-							StoreError.of('migrationChanged', 'decode', 'invalid compressed physical definition')
+							StoreError.of('migration_changed', 'decode', 'invalid compressed physical definition')
 					})
 		);
 		const definitions: Record<string, string[]> = {};
@@ -547,7 +547,7 @@ export const readPhysicalDefinitions = (text: string): Fx<PhysicalDefinitions> =
 				const line = expanded[index];
 				if (line === undefined)
 					return yield* refuse(
-						'migrationChanged',
+						'migration_changed',
 						`${name}: physical definition ${index} is missing`
 					);
 				lines.push(line);
@@ -557,21 +557,21 @@ export const readPhysicalDefinitions = (text: string): Fx<PhysicalDefinitions> =
 		return definitions;
 	});
 
-export const comparePhysical = (lines: readonly string[], expected: string): Fx<void> =>
-	physicalHash(lines) === expected
+export const compare_physical = (lines: readonly string[], expected: string): Fx<void> =>
+	physical_hash(lines) === expected
 		? Effect.void
-		: refuse('migrationChanged', 'the live schema differs from its verified migration prefix');
+		: refuse('migration_changed', 'the live schema differs from its verified migration prefix');
 
 /** A baseline may omit DDL history, never row transformations or arbitrary executed SQL. */
-export const checkSquashSources = /*#__PURE__*/ (() =>
-	Effect.fn('Store.checkSquashSources')(function* (files: readonly MigrationFile[]) {
+export const check_squash_sources = /*#__PURE__*/ (() =>
+	Effect.fn('Store.check_squash_sources')(function* (files: readonly MigrationFile[]) {
 		const ordered = yield* orderedFiles(files);
 		if (ordered.length === 0)
-			return yield* refuse('migrationInvalid', 'a squash needs a nonempty original prefix');
+			return yield* refuse('migration_invalid', 'a squash needs a nonempty original prefix');
 		for (const file of ordered) {
 			if (blocksOf(file).some((block) => block.klass === 'data'))
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`${file.name}: a data step cannot be replaced by a schema baseline`
 				);
 			for (const statement of sqlStatements(file.sql)) {
@@ -585,7 +585,7 @@ export const checkSquashSources = /*#__PURE__*/ (() =>
 						!['vector', 'btree_gist'].includes(words[5] ?? '')
 					)
 						return yield* refuse(
-							'migrationInvalid',
+							'migration_invalid',
 							`${file.name}: only generated vector/btree_gist extension creation can be replaced by a schema baseline`
 						);
 					continue;
@@ -613,7 +613,7 @@ export const checkSquashSources = /*#__PURE__*/ (() =>
 						queryTokens.some((token) => token.kind === 'symbol' && token.text === ';')
 					)
 						return yield* refuse(
-							'migrationInvalid',
+							'migration_invalid',
 							`${file.name}: an executed DO body cannot be replaced by a schema baseline`
 						);
 					continue;
@@ -654,7 +654,7 @@ export const checkSquashSources = /*#__PURE__*/ (() =>
 				);
 				if (!allowed || (!storedDefinition && data))
 					return yield* refuse(
-						'migrationInvalid',
+						'migration_invalid',
 						`${file.name}: data-affecting or unclassified SQL cannot be replaced by a schema baseline`
 					);
 			}
@@ -663,41 +663,41 @@ export const checkSquashSources = /*#__PURE__*/ (() =>
 	}))();
 
 /** Bind an edited baseline only after the host replayed the exact archive and baseline on separate empty databases. */
-export const verifySquash = /*#__PURE__*/ (() =>
-	Effect.fn('Store.verifySquash')(function* (
+export const verify_squash = /*#__PURE__*/ (() =>
+	Effect.fn('Store.verify_squash')(function* (
 		originals: readonly MigrationFile[],
 		file: MigrationFile,
 		archived: readonly string[],
 		baseline: readonly string[]
 	) {
-		const ordered = yield* checkSquashSources(originals);
-		yield* checkFile(file);
+		const ordered = yield* check_squash_sources(originals);
+		yield* check_file(file);
 		yield* checkSquashBaseline(file);
 		if (
 			number(file.name) !== ordered.length ||
 			ordered.some((original) => original.name === file.name)
 		)
 			return yield* refuse(
-				'migrationInvalid',
+				'migration_invalid',
 				'a squash needs a distinct filename numbered at the end of its original prefix'
 			);
-		if (physicalHash(archived) !== physicalHash(baseline))
+		if (physical_hash(archived) !== physical_hash(baseline))
 			return yield* refuse(
-				'migrationInvalid',
+				'migration_invalid',
 				'the squash baseline does not reproduce the archived schema'
 			);
 		return {
 			file: file.name,
-			checksum: checksumOf(file),
-			archive: archiveOf(ordered),
+			checksum: checksum_of(file),
+			archive: archive_of(ordered),
 			replaces: appliedOf(ordered),
-			proof: physicalHash(baseline)
+			proof: physical_hash(baseline)
 		};
 	}))();
 
 // Baselines are numbered at their cutoff, so their single-file check does not require numbering from 0001.
 const checkSquashBaseline = (file: MigrationFile) =>
-	checkSquashSources([{ ...file, name: '0001_baseline.sql' }]);
+	check_squash_sources([{ ...file, name: '0001_baseline.sql' }]);
 
 const migrationHistory = /*#__PURE__*/ (() =>
 	Effect.fn('Store.migrationHistory')(function* (
@@ -708,52 +708,52 @@ const migrationHistory = /*#__PURE__*/ (() =>
 		squashes: readonly MigrationFile[]
 	) {
 		const ordered = yield* orderedFiles(files);
-		if (snapshot !== undefined && sha256Hex(snapshot) !== lock.snapshot)
+		if (snapshot !== undefined && sha256_hex(snapshot) !== lock.snapshot)
 			return yield* refuse(
-				'migrationChanged',
+				'migration_changed',
 				'snapshot.json changed since the migrations were verified'
 			);
 		for (const f of ordered) {
-			if (lock.files[f.name] !== checksumOf(f))
+			if (lock.files[f.name] !== checksum_of(f))
 				return yield* refuse(
-					'migrationChanged',
+					'migration_changed',
 					`${f.name} changed since it was last verified; verify the migrations before applying them`
 				);
 		}
 		const known = new Map(ordered.map((f) => [f.name, f]));
 		for (const name of Object.keys(lock.files))
 			if (!known.has(name))
-				return yield* refuse('migrationChanged', `the verified migration ${name} is gone`);
+				return yield* refuse('migration_changed', `the verified migration ${name} is gone`);
 		const baselines = new Map<string, { file: MigrationFile; receipt: SquashReceipt }>();
 		const loaded = new Map<string, MigrationFile>();
 		for (const file of squashes) {
 			if (loaded.has(file.name))
-				return yield* refuse('migrationInvalid', `duplicate squash file ${file.name}`);
+				return yield* refuse('migration_invalid', `duplicate squash file ${file.name}`);
 			loaded.set(file.name, file);
 		}
 		for (const receipt of lock.squashes ?? []) {
 			if (baselines.has(receipt.file) || known.has(receipt.file))
-				return yield* refuse('migrationInvalid', `duplicate migration identity ${receipt.file}`);
+				return yield* refuse('migration_invalid', `duplicate migration identity ${receipt.file}`);
 			const file = loaded.get(receipt.file);
 			if (file === undefined)
-				return yield* refuse('migrationChanged', `the verified squash ${receipt.file} is gone`);
-			yield* checkFile(file);
+				return yield* refuse('migration_changed', `the verified squash ${receipt.file} is gone`);
+			yield* check_file(file);
 			yield* checkSquashBaseline(file);
 			const prefix = ordered.slice(0, receipt.replaces.length);
 			if (
 				receipt.replaces.length === 0 ||
 				number(receipt.file) !== receipt.replaces.length ||
 				canonical(receipt.replaces) !== canonical(appliedOf(prefix)) ||
-				receipt.archive !== archiveOf(prefix)
+				receipt.archive !== archive_of(prefix)
 			)
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`${receipt.file} does not replace an exact original prefix`
 				);
-			yield* checkSquashSources(prefix);
-			if (receipt.checksum !== checksumOf(file))
+			yield* check_squash_sources(prefix);
+			if (receipt.checksum !== checksum_of(file))
 				return yield* refuse(
-					'migrationChanged',
+					'migration_changed',
 					`${receipt.file} changed since its baseline was verified`
 				);
 			if (
@@ -762,35 +762,35 @@ const migrationHistory = /*#__PURE__*/ (() =>
 					lock.physical[receipt.file] !== receipt.proof)
 			)
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`${receipt.file} has no consistent physical replay proof`
 				);
 			baselines.set(receipt.file, { file, receipt });
 		}
 		for (const file of squashes)
 			if (!baselines.has(file.name))
-				return yield* refuse('migrationChanged', `${file.name} has no verified squash receipt`);
+				return yield* refuse('migration_changed', `${file.name} has no verified squash receipt`);
 		const history = [...applied].sort((a, b) => number(a.name) - number(b.name));
 		const used = history.filter((a) => baselines.has(a.name));
 		if (used.length > 1)
-			return yield* refuse('migrationInvalid', 'a database cannot apply multiple squash baselines');
+			return yield* refuse('migration_invalid', 'a database cannot apply multiple squash baselines');
 		const baseline = used[0] === undefined ? undefined : baselines.get(used[0].name);
 		const cutoff = baseline?.receipt.replaces.length ?? 0;
 		const originals = history.filter((a) => !baselines.has(a.name));
 		for (const a of history) {
 			const f = known.get(a.name) ?? baselines.get(a.name)?.file;
 			if (f === undefined)
-				return yield* refuse('migrationChanged', `the database applied ${a.name}, which is gone`);
-			if (checksumOf(f) !== a.checksum)
+				return yield* refuse('migration_changed', `the database applied ${a.name}, which is gone`);
+			if (checksum_of(f) !== a.checksum)
 				return yield* refuse(
-					'migrationChanged',
+					'migration_changed',
 					`${a.name} was applied with other text; an applied file never changes`
 				);
 		}
 		for (const [i, a] of originals.entries()) {
 			if (ordered[cutoff + i]?.name !== a.name)
 				return yield* refuse(
-					'migrationInvalid',
+					'migration_invalid',
 					`the database migration history is not a prefix of the committed files at ${a.name}`
 				);
 		}
@@ -833,8 +833,8 @@ export const pending = /*#__PURE__*/ (() =>
 	}))();
 
 /** Read-only source, ledger and physical planning state. A physical drift is reported, never adopted or repaired. */
-export const migrationStatus = /*#__PURE__*/ (() =>
-	Effect.fn('Store.migrationStatus')(function* (
+export const migration_status = /*#__PURE__*/ (() =>
+	Effect.fn('Store.migration_status')(function* (
 		files: readonly MigrationFile[],
 		lock: MigrationLock,
 		applied: readonly Applied[],
@@ -855,10 +855,10 @@ export const migrationStatus = /*#__PURE__*/ (() =>
 		const expectedPhysical =
 			lock.physical?.[last] ??
 			(last === ''
-				? physicalHash([])
+				? physical_hash([])
 				: lock.squashes?.find((receipt) => receipt.file === last)?.proof);
 		const actualPhysical =
-			options.physical === undefined ? undefined : physicalHash(options.physical);
+			options.physical === undefined ? undefined : physical_hash(options.physical);
 		const physical =
 			actualPhysical === undefined
 				? 'unchecked'
@@ -901,7 +901,7 @@ export const current = (snapshot: SchemaSpec, schema: SchemaSpec): Fx<void> => {
 	if (held === declared) return Effect.void;
 	const at = firstDifference(JSON.parse(held), JSON.parse(declared), '');
 	return refuse(
-		'schemaMoved',
+		'schema_moved',
 		`the schema changed since the last migration at ${at}; generate the next one, or remove it if the build cannot store it`
 	);
 };
@@ -928,14 +928,14 @@ export const verify = /*#__PURE__*/ (() =>
 		declared: readonly string[],
 		proofs: MigrationProofs = {}
 	) {
-		yield* current(yield* readSnapshot(snapshot), schema);
+		yield* current((yield* read_snapshot(snapshot)).schema, schema);
 		const ordered = yield* orderedFiles(files);
 		const [a, b] = [new Set(replayed), new Set(declared)];
 		const missing = declared.filter((l) => !a.has(l));
 		const extra = replayed.filter((l) => !b.has(l));
 		if (missing.length > 0 || extra.length > 0)
 			return yield* refuse(
-				'migrationInvalid',
+				'migration_invalid',
 				[
 					'the migrations do not arrive at the schema the models declare; an edit may move data, never the schema:',
 					...missing.map((l) => `  missing ${l}`),
@@ -943,12 +943,12 @@ export const verify = /*#__PURE__*/ (() =>
 				].join('\n')
 			);
 		const head = ordered.at(-1)?.name ?? '';
-		if (proofs.physical?.[head] !== undefined && proofs.physical[head] !== physicalHash(replayed))
+		if (proofs.physical?.[head] !== undefined && proofs.physical[head] !== physical_hash(replayed))
 			return yield* refuse(
-				'migrationInvalid',
+				'migration_invalid',
 				'the final prefix proof differs from the verified replay'
 			);
-		return lockOf(snapshot, ordered, proofs);
+		return lock_of(snapshot, ordered, proofs);
 	}))();
 /** The statements that build `schema` from nothing: what `verify`'s second scratch database runs. */
 export const build = (schema: SchemaSpec): Effect.Effect<readonly string[], StoreError> =>

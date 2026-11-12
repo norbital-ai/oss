@@ -2,18 +2,19 @@
 // Descendants scope teamTree without inheriting grants. Static actors hold their declared policies.
 import { sql } from '../db/sql.ts';
 import type { SourceTeam } from '../../decl/access/team.ts';
-import { compileAuthority, type Holder } from '../access/authority.ts';
+import { compile_authority, type Holder } from '../access/authority.ts';
 import type { Authority, EngineActor } from '../contracts.ts';
 import { teams, type EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Clock, Effect, Schema } from 'effect';
+import { CapturedResult, nativeCommit, type CommitPublication } from '../db/captured.ts';
 import {
 	identityHistory,
-	IMAGES,
+	identityPiece,
 	jsonb,
 	partyRow,
-	signupOf,
+	signup_of,
 	IdentityStatement
 } from './session.ts';
 import { envoySpec } from '../envoys/spec.ts';
@@ -21,7 +22,7 @@ const UserSchema = Schema.Struct({
 	id: Schema.String,
 	email: Schema.NullOr(Schema.String),
 	phone: Schema.NullOr(Schema.String),
-	kind: Schema.String,
+	kind: Schema.Literals(['staff', 'external', 'anonymous']),
 	active: Schema.Boolean,
 	admin: Schema.Boolean,
 	team: Schema.NullOr(Schema.String),
@@ -64,15 +65,21 @@ export class Authorities {
 		this.remember = options.remember ?? false;
 	}
 	/** Compiled once per key; the key carries every revision it depends on, so a change is a miss, never a stale hit. */
-	compile(holder: Holder, key: string): Authority {
+	compile(holder: Holder, key: string): Effect.Effect<Authority, BoltError> {
 		const full = `${key}@${this.release}`;
-		let a = this.cache.get(full);
-		if (a === undefined) {
-			a = compileAuthority(this.m, holder, full);
-			this.cache.set(full, a);
-			if (this.cache.size > this.max) this.cache.delete(this.cache.keys().next().value!);
-		}
-		return a;
+		const hit = this.cache.get(full);
+		if (hit !== undefined) return Effect.succeed(hit);
+		return compile_authority(this.m, holder, full).pipe(
+			Effect.tap((a) =>
+				Effect.sync(() => {
+					this.cache.set(full, a);
+					if (this.cache.size > this.max) {
+						const oldest = this.cache.keys().next();
+						if (!oldest.done) this.cache.delete(oldest.value);
+					}
+				})
+			)
+		);
 	}
 	/**
 	 * A member whose record is decided by who holds their address, which any write to a record can change: never
@@ -81,7 +88,7 @@ export class Authorities {
 	private matched(u: UserRow) {
 		return (
 			u.kind === 'external' &&
-			signupOf(this.m)?.party !== undefined &&
+			signup_of(this.m)?.party !== undefined &&
 			(u.party === null || u.signup || u.party.matched === true)
 		);
 	}
@@ -90,10 +97,10 @@ export class Authorities {
 	 * email), so the booking that files a newcomer's customer record shows them that booking at once, and unbound once
 	 * theirs no longer does, so a number the desk corrected or a phone company reassigned opens nothing.
 	 */
-	private bind(db: TenantDb, u: UserRow) {
+	private bind(db: TenantDb, publication: CommitPublication, u: UserRow) {
 		return Effect.gen(
 			function* (this: Authorities) {
-				const signup = signupOf(this.m);
+				const signup = signup_of(this.m);
 				if (!this.matched(u) || signup?.party === undefined) return u;
 				// ponytail: one read per request for a matched member; a write-side unbind would save it, on every write path
 				const address =
@@ -104,7 +111,12 @@ export class Authorities {
 							: null;
 				if (address === null) return u;
 				const [rows] = yield* db.read([partyRow(signup, address)]);
-				const holders = rows!.rows.map((row) => String(row['id']));
+				if (rows === undefined)
+					return yield* BoltError.make('corrupt', 'decode', 'The party query returned no result.');
+				const found = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ id: Schema.String })))(rows.rows).pipe(
+					Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
+				);
+				const holders = found.map((row) => row.id);
 				if (u.party !== null && holders.includes(u.party.id)) return u;
 				const [only, other] = holders;
 				const party =
@@ -113,21 +125,19 @@ export class Authorities {
 						: { model: signup.party.model, id: only, matched: true };
 				if (party === null && u.party === null) return u;
 				const s = new IdentityStatement();
-				const out = yield* db.write({
-					params: s.params,
-					text: `WITH bound AS (UPDATE sys_user SET party = ${s.p(jsonb(party))}::jsonb, revision = revision + 1
-	WHERE id = ${s.p(u.id)} AND party IS NOT DISTINCT FROM ${s.p(jsonb(u.party))}::jsonb ${IMAGES}),
-${identityHistory(s, 'sys_user', 'bound', new Date(yield* Clock.currentTimeMillis), `member:${u.id}`)}
-SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
-				});
-				const revision = out.rows[0]?.['revision'];
+				identityPiece(s, 'bound', 'sys_user', `UPDATE sys_user SET party = ${s.p(jsonb(party))}::jsonb, revision = revision + 1
+	WHERE id = ${s.p(u.id)} AND party IS NOT DISTINCT FROM ${s.p(jsonb(u.party))}::jsonb`);
+				identityHistory(s, 'sys_user', 'bound', new Date(yield* Clock.currentTimeMillis), `member:${u.id}`);
+				const { revision } = yield* nativeCommit(db.write, publication, s,
+					Schema.Struct({ ...CapturedResult.fields, revision: Schema.NullOr(Schema.Number) }),
+					"(SELECT (n->>'revision')::int FROM bound) AS revision");
 				// a concurrent request got there first with this answer: its revision, never the old record's
 				return { ...u, party, revision: typeof revision === 'number' ? revision : u.revision + 1 };
 			}.bind(this)
 		);
 	}
 	/** An active member's row, from memory while no statement on people or sessions has finished since it was read. */
-	private row(db: TenantDb, userId: string) {
+	private row(db: TenantDb, publication: CommitPublication, userId: string) {
 		return Effect.gen(
 			function* (this: Authorities) {
 				const now = yield* Clock.currentTimeMillis,
@@ -141,17 +151,22 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 						userId
 					)
 				]);
-				const value = users?.rows[0];
+				if (users === undefined)
+					return yield* BoltError.make('corrupt', 'decode', 'The member query returned no result.');
+				const value = users.rows[0];
 				if (value === undefined) return null;
 				const found = yield* Schema.decodeUnknownEffect(UserSchema)(value).pipe(
 					Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
 				);
 				// an anonymous user is a visitor's identity (a cookie, never a session): it is no member
-				if (found === undefined || !found.active || found.kind === 'anonymous') return null;
-				const u = yield* this.bind(db, found);
+				if (!found.active || found.kind === 'anonymous') return null;
+				const u = yield* this.bind(db, publication, found);
 				if (this.remember && !this.matched(u)) {
 					this.rows.set(userId, { row: u, stamp, at: now });
-					if (this.rows.size > this.max) this.rows.delete(this.rows.keys().next().value!);
+					if (this.rows.size > this.max) {
+						const oldest = this.rows.keys().next();
+						if (!oldest.done) this.rows.delete(oldest.value);
+					}
 				}
 				return u;
 			}.bind(this)
@@ -161,10 +176,10 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 	 * A member's authority, or `null` for an unknown or deactivated user. One pipelined read. `preview` (rule 39) clears
 	 * the administrator flag, so the previewed member's grants and approval eligibility apply.
 	 */
-	member(db: TenantDb, userId: string, preview = false) {
+	member(db: TenantDb, publication: CommitPublication, userId: string, preview = false) {
 		return Effect.gen(
 			function* (this: Authorities) {
-				const u = yield* this.row(db, userId);
+				const u = yield* this.row(db, publication, userId);
 				if (u === null) return null;
 				const graph = teams(this.m),
 					team = u.team !== null && Object.hasOwn(graph, u.team) ? u.team : null;
@@ -183,10 +198,10 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				const policies = [
 					...new Set([
 						...(team === null ? [] : (graph[team]?.policies ?? [])),
-						...(u.signup ? (signupOf(this.m)?.policies ?? []) : [])
+						...(u.signup ? (signup_of(this.m)?.policies ?? []) : [])
 					])
 				];
-				return this.compile(
+				return yield* this.compile(
 					{
 						actor,
 						admin: actor.admin,
@@ -223,7 +238,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 					admin: false,
 					party: null
 				};
-				return this.compile(
+				return yield* this.compile(
 					{ actor, admin: false, policies: definition.policies, teamTree: closure(graph, team) },
 					`preview:team:${team}:${previewer.id}`
 				);
@@ -240,14 +255,16 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 						keyId
 					)
 				]);
-				const k = keys?.rows[0];
+				if (keys === undefined)
+					return yield* BoltError.make('corrupt', 'decode', 'The API key query returned no result.');
+				const k = keys.rows[0];
 				if (k === undefined || typeof k['id'] !== 'string' || typeof k['revision'] !== 'number')
 					return null;
 				const team = typeof k['team'] === 'string' ? k['team'] : undefined;
 				const graph = teams(this.m),
 					policies =
 						team === undefined || !Object.hasOwn(graph, team) ? [] : (graph[team]?.policies ?? []);
-				return this.compile(
+				return yield* this.compile(
 					{ actor: { kind: 'api_key', key: k['id'] }, admin: false, policies },
 					`api_key:${k['id']}:${k['revision']}`
 				);
@@ -264,6 +281,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 	 */
 	envoy(
 		db: TenantDb,
+		publication: CommitPublication,
 		o: {
 			envoy: string;
 			instance: string;
@@ -277,7 +295,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				const spec = yield* envoySpec(db, o.envoy);
 				if (spec === undefined)
 					return yield* Effect.fail(
-						BoltError.make('unknownEnvoy', 'admission', `no envoy '${o.envoy}'`)
+						BoltError.make('unknown_envoy', 'admission', `no envoy '${o.envoy}'`)
 					);
 				const [rows] = yield* db.read([
 					sql(
@@ -286,8 +304,13 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 						o.envoy
 					)
 				]);
-				const revision = rows!.rows[0]?.['revision'];
-				if (revision === undefined) return null;
+				if (rows === undefined)
+					return yield* BoltError.make('corrupt', 'decode', 'The envoy account query returned no result.');
+				const row = rows.rows[0];
+				if (row === undefined) return null;
+				const { revision } = yield* Schema.decodeUnknownEffect(Schema.Struct({ revision: Schema.Number }))(row).pipe(
+					Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
+				);
 				const actor: EngineActor = {
 					kind: 'envoy',
 					envoy: o.envoy,
@@ -296,17 +319,17 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 					member: o.member
 				};
 				const at = `${o.envoy}:${o.instance}:${String(revision)}:${o.sender}`;
-				const own = this.compile(
+				const own = yield* this.compile(
 					{ actor, admin: false, policies: spec.policies },
 					`envoy:${at}:${o.member ?? ''}`
 				);
 				if (!o.dm || o.member === null) return own;
-				const mine = yield* this.member(db, o.member);
+				const mine = yield* this.member(db, publication, o.member);
 				if (mine === null || mine.actor.kind !== 'member') return null;
 				// ponytail: every arm's `actor` operands resolve against the linked member, the envoy's too; the member directory arms (rule 35a) do not join
 				const linked = { ...actor, linked: mine.actor };
 				if (spec.dm === 'envoy')
-					return this.compile(
+					return yield* this.compile(
 						{
 							actor: linked,
 							admin: false,
@@ -316,7 +339,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 						},
 						`envoy-bound:${at}:${mine.key}`
 					);
-				const both = this.compile(
+				const both = yield* this.compile(
 					{
 						actor: linked,
 						admin: mine.admin,
@@ -334,14 +357,14 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 	 * A visitor holds exactly the app's public policies (rule 38d). `visitor` is the visitor's anonymous user when
 	 * `anonymous`, else a per-request id that owns nothing.
 	 */
-	visitor(app: string, visitor: string, anonymous = false): Authority {
+	visitor(app: string, visitor: string, anonymous = false): Effect.Effect<Authority, BoltError> {
 		const audience = this.m.apps[app]?.audience;
 		const policies =
 			typeof audience === 'object' && audience !== null && 'public' in audience
 				? audience.public
 				: undefined;
 		if (policies === undefined)
-			throw BoltError.make('forbidden', 'admission', `app '${app}' has no public audience`);
+			return Effect.fail(BoltError.make('forbidden', 'admission', `app '${app}' has no public audience`));
 		return this.compile(
 			{
 				actor: {
@@ -368,7 +391,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				kind: 'system';
 			}
 		>['by']
-	): Authority {
+	): Effect.Effect<Authority, BoltError> {
 		const actor: EngineActor = { kind: 'system', run, by };
 		if ('platform' in by)
 			return this.compile(
@@ -382,15 +405,16 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 			);
 		const policies = this.m.automations[by.automation]?.policies;
 		if (policies === undefined)
-			throw BoltError.make('unknownAutomation', 'admission', `no automation '${by.automation}'`);
+			return Effect.fail(BoltError.make('unknown_automation', 'admission', `no automation '${by.automation}'`));
 		return this.compile({ actor, admin: false, policies }, `automation:${by.automation}:${run}`);
 	}
 }
 /** Rule 39: admin-only; the Authority becomes the previewed member's (or team's, `{ team }`), administrator flag cleared. */
-export const previewAs = Effect.fn('Bolt.previewAs')(function* (
+export const preview_as = Effect.fn('Bolt.preview_as')(function* (
 	real: Authority,
 	authorities: Authorities,
 	db: TenantDb,
+	publication: CommitPublication,
 	target:
 		| string
 		| {
@@ -407,12 +431,12 @@ export const previewAs = Effect.fn('Bolt.previewAs')(function* (
 		);
 	const authority =
 		typeof target === 'string'
-			? yield* authorities.member(db, target, true)
+			? yield* authorities.member(db, publication, target, true)
 			: yield* authorities.team(db, real.actor, target.team);
 	if (authority === null)
 		return yield* Effect.fail(
 			BoltError.make(
-				'notFound',
+				'not_found',
 				'admission',
 				typeof target === 'string' ? 'No active member to preview.' : 'No such team to preview.'
 			)
@@ -425,7 +449,7 @@ export const previewAs = Effect.fn('Bolt.previewAs')(function* (
 		impersonatedBy: real.actor.id
 	};
 });
-/** A source team and every authored descendant (`actor.teamTree`). */
+/** A source team and every authored descendant (`requestor.team_tree`). */
 function closure(graph: TeamGraph, root: string): string[] {
 	const out = [root];
 	for (let i = 0; i < out.length; i++)

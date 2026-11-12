@@ -4,14 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it, layer } from '@effect/vitest';
 import { Effect, Layer, Result, Schema } from 'effect';
 import { RateWindows } from '../src/engine/access/rate.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { RATE_LIMITED, uuidv7 } from '../src/protocol/wire.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { SHELL } from '../src/shell/nav.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			notes: {
@@ -50,7 +50,6 @@ const manifest = Result.getOrThrow(
 			Chatters: { name: 'Chatters', policies: ['chatter'] }
 		},
 		automations: {},
-		connections: {},
 		mcp: {},
 		apps: {
 			site: {
@@ -61,14 +60,14 @@ const manifest = Result.getOrThrow(
 				pages: { home: { title: 'Home' } }
 			}
 		},
-		customFields: {},
+		custom_fields: {},
 		agent: { internal: 'You help.', skills: {} }
 	})
 );
 
 const ORIGIN = 'https://acme.example';
-const workspace = TestWorkspace.layer({ manifest, host: { publicUrl: ORIGIN } });
-type Answer = { status: number; body: unknown; retryAfter: string | null };
+const workspace = TestWorkspace.layer({ manifest, host: { public_url: ORIGIN } });
+type Answer = { status: number; body: unknown; retry_after: string | null };
 const send = (
 	path: string,
 	init: { method?: string; headers?: Record<string, string>; body?: unknown }
@@ -90,16 +89,25 @@ const send = (
 		const answer: Answer = {
 			status: res.status,
 			body: text === '' ? null : JSON.parse(text),
-			retryAfter: res.headers.get('retry-after')
+			retry_after: res.headers.get('retry-after')
 		};
-		return { answer, cookies: res.headers.getSetCookie().map((c) => c.split(';')[0]!) };
+		return {
+			answer,
+			cookies: res.headers.getSetCookie().map((cookie) => {
+				const end = cookie.indexOf(';');
+				return end < 0 ? cookie : cookie.slice(0, end);
+			})
+		};
 	});
 const act = (cookie: string, callable: string, input: unknown) =>
 	Effect.gen(function* () {
 		const t = yield* TestWorkspace;
 		return (yield* send('/__bolt/act', {
 			headers: { cookie, 'Idempotency-Key': randomUUID() },
-			body: { callable, input, issuedAt: t.clock.now() }
+			body: {
+				...(callable === 'notes.create' ? { acts: { [callable]: input } } : { callable, input }),
+				issued_at: t.clock.now()
+			}
 		})).answer;
 	});
 const statuses = (answers: readonly Answer[]) => answers.map((a) => a.status);
@@ -121,12 +129,12 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 						body: {
 							outcome: {
 								kind: 'refused',
-								code: 'rateLimited',
+								code: 'rate_limited',
 								message: RATE_LIMITED
 							},
 							v: expect.any(Number)
 						},
-						retryAfter: expect.stringMatching(/^[1-9]\d*$/)
+						retry_after: expect.stringMatching(/^[1-9]\d*$/)
 					});
 					const [rows] = yield* t.db.read([
 						{ text: `SELECT rule, n FROM bolt_rate WHERE rule LIKE 'act:%'`, params: [] }
@@ -151,8 +159,8 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 				expect(statuses(answers)).toEqual([200, 200, 429]);
 				expect(answers[2]).toEqual({
 					status: 429,
-					body: { error: { code: 'rateLimited', message: RATE_LIMITED } },
-					retryAfter: expect.stringMatching(/^[1-9]\d*$/)
+					body: { error: { code: 'rate_limited', message: RATE_LIMITED } },
+					retry_after: expect.stringMatching(/^[1-9]\d*$/)
 				});
 				// a live registration is a read on the same bucket
 				expect(
@@ -180,10 +188,10 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 					expect(yield* act(cookie, 'notes.create', [{ title: 'x' }])).toEqual({
 						status: 429,
 						body: {
-							outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED },
+							outcome: { kind: 'refused', code: 'rate_limited', message: RATE_LIMITED },
 							v: expect.any(Number)
 						},
-						retryAfter: expect.stringMatching(/^[1-9]\d*$/)
+						retry_after: expect.stringMatching(/^[1-9]\d*$/)
 					});
 				})
 		);
@@ -194,7 +202,7 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 				Effect.gen(function* () {
 					const t = yield* TestWorkspace;
 					const cookie = yield* t.session(t.member(['chatter'], { teams: ['Chatters'] }).id);
-					// an unknown conversation: the post is charged, then refused notFound; no turn starts
+					// an unknown conversation: the post is charged, then refused not_found; no turn starts
 					const post = act(cookie, 'sys_message.post', { conversation: randomUUID(), text: 'hi' });
 					const answers = [yield* post, yield* post, yield* post];
 					expect(statuses(answers)).toEqual([404, 404, 429]);
@@ -203,12 +211,12 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 						body: {
 							outcome: {
 								kind: 'refused',
-								code: 'rateLimited',
+								code: 'rate_limited',
 								message: RATE_LIMITED
 							},
 							v: expect.any(Number)
 						},
-						retryAfter: expect.stringMatching(/^[1-9]\d*$/)
+						retry_after: expect.stringMatching(/^[1-9]\d*$/)
 					});
 					// filter.describe draws on the same agent bucket
 					expect(
@@ -233,8 +241,8 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 				expect(statuses(answers)).toEqual([200, 200, 429]);
 				expect(answers[2]).toEqual({
 					status: 429,
-					body: { error: { code: 'rateLimited', message: RATE_LIMITED } },
-					retryAfter: expect.stringMatching(/^\d+$/)
+					body: { error: { code: 'rate_limited', message: RATE_LIMITED } },
+					retry_after: expect.stringMatching(/^\d+$/)
 				});
 			})
 		);
@@ -252,8 +260,8 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 				expect(statuses(answers)).toEqual([200, 200, 200, 200, 200, 429]);
 				expect(answers[5]).toEqual({
 					status: 429,
-					body: { error: { code: 'rateLimited', message: RATE_LIMITED } },
-					retryAfter: expect.stringMatching(/^\d+$/)
+					body: { error: { code: 'rate_limited', message: RATE_LIMITED } },
+					retry_after: expect.stringMatching(/^\d+$/)
 				});
 			})
 		);
@@ -301,7 +309,7 @@ describe('RateWindows (rule 72)', () => {
 // Automations (rule 38): only a manual start counts, against the per-automation quota for the starter. Cron and
 // model effect runs, and the acts any run's body performs, are never limited.
 const runs = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			notes: {
@@ -319,8 +327,7 @@ const runs = Result.getOrThrow(
 		exposures: {
 			notes: {
 				outputs: { default: { notes: { fields: 'all' } } },
-				create: { columns: { notes: ['title'] } },
-				effect: { created: true }
+				create: { columns: { notes: ['title'] }, effect: true }
 			},
 			logs: {
 				outputs: { default: { logs: { fields: 'all' } } },
@@ -348,22 +355,21 @@ const runs = Result.getOrThrow(
 				policies: ['worker']
 			}
 		},
-		connections: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { internal: 'You help.', skills: {} }
 	})
 );
 const lines = (tag: string) =>
-	`function* (_, ctx) { for (const i of [1, 2, 3]) yield* ctx.act('logs.create', [{ title: '${tag}' + i }]); }`;
+	`function* (_, ctx) { for (const i of [1, 2, 3]) yield* ctx.act({ 'logs.create': [{ title: '${tag}' + i }] }); }`;
 const automations = Effect.gen(function* () {
 	return TestWorkspace.layer({
 		manifest: runs,
 		guest: yield* program(
-			`export default { model: { notes: { bodies: { effect: { created: ${lines('r')} } } } }, automation: { manual: { body: ${lines('m')} }, tick: { body: ${lines('t')} } } };`
+			`export default { model: { notes: { bodies: { effect: { create: ${lines('r')} } } } }, automation: { manual: { body: ${lines('m')} }, tick: { body: ${lines('t')} } } };`
 		),
-		host: { publicUrl: ORIGIN },
+		host: { public_url: ORIGIN },
 		now: '2026-10-29T08:00:30.000Z'
 	});
 });
@@ -376,7 +382,7 @@ layer(Layer.unwrap(automations))('automation limits (rule 38)', (it) => {
 				const t = yield* TestWorkspace;
 				const cookie = yield* t.session(t.member(['worker'], { teams: ['Workers'] }).id);
 				const start = () =>
-					act(cookie, 'start', {
+					act(cookie, 'run', {
 						automation: 'manual',
 						id: uuidv7(Date.parse(t.clock.now())),
 						input: {}
@@ -386,20 +392,20 @@ layer(Layer.unwrap(automations))('automation limits (rule 38)', (it) => {
 				expect(yield* start()).toEqual({
 					status: 429,
 					body: {
-						outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED },
+						outcome: { kind: 'refused', code: 'rate_limited', message: RATE_LIMITED },
 						v: expect.any(Number)
 					},
-					retryAfter: '30'
+					retry_after: '30'
 				});
 				// Two notes run the created effect. The cron fires tick each minute.
 				expect((yield* act(cookie, 'notes.create', [{ title: 'a' }, { title: 'b' }])).status).toBe(
 					200
 				);
-				yield* t.runDue();
+				yield* t.run_due();
 				t.clock.advance('1min');
-				yield* t.runDue();
+				yield* t.run_due();
 				t.clock.advance('1min');
-				yield* t.runDue();
+				yield* t.run_due();
 				const count = (prefix: string) =>
 					t.db.value(Schema.Number, {
 						text: `SELECT count(*)::int FROM logs WHERE title LIKE $1`,

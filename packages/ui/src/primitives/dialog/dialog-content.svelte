@@ -1,34 +1,32 @@
 <script lang="ts">
-	import { resetInset } from '../../layout/inset.svelte.js';
+	import { reset_inset } from '../../layout/inset.svelte.js';
 	import Icon from '@iconify/svelte';
-	import { uiText } from '../utils.js';
-	import { cn } from '../utils.js';
-	import { Dialog as DialogPrimitive, Portal, type WithoutChildrenOrChild } from 'bits-ui';
-	import type { Snippet } from 'svelte';
+	import { ui_text, cn } from '../utils.js';
+	import { Dialog as DialogPrimitive, Portal } from 'bits-ui';
+	import type { ComponentProps, Snippet } from 'svelte';
 	import { watchKeyboard } from '../sheet/keyboard.js';
 	import Overlay from './dialog-overlay.svelte';
+	import PrimitiveContent from './dialog-primitive-content.svelte';
 
-	const t = uiText();
-
+	const t = ui_text();
 	let {
 		ref = $bindable(null),
 		class: className,
-		overlayClass,
+		overlay_class,
 		children,
 		...restProps
-	}: WithoutChildrenOrChild<DialogPrimitive.ContentProps> & {
+	}: Omit<ComponentProps<typeof PrimitiveContent>, 'child' | 'children'> & {
 		children: Snippet;
-		overlayClass?: string;
+		overlay_class?: string;
 	} = $props();
-	// An overlay is a new page edge: it does not inherit the page's inset owner.
-	resetInset(true);
+	reset_inset(true);
 	watchKeyboard();
 </script>
 
 <Portal>
-	<!-- repository-health:allow UI25 -- pass-through of the caller's `overlayClass` prop; its tokens are literal at the call site -->
-	<Overlay class={overlayClass} />
-	<DialogPrimitive.Content
+	<!-- repository-health:allow UI25 -- pass-through of the caller's `overlay_class` prop; its tokens are literal at the call site -->
+	<Overlay class={overlay_class} />
+	<PrimitiveContent
 		bind:ref
 		data-mobile-bottom-sheet="true"
 		style="--sheet-height: auto"
@@ -51,5 +49,5 @@
 			<Icon icon="lucide:x" class="size-4" />
 			<span class="sr-only">{t('close')}</span>
 		</DialogPrimitive.Close>
-	</DialogPrimitive.Content>
+	</PrimitiveContent>
 </Portal>

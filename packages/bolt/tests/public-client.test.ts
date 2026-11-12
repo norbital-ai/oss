@@ -1,15 +1,17 @@
 import { expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Cause, Effect, Exit, Schema } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
+import { input_schema } from '@norbital-ai/std/kind';
 import {
 	decodePublicHydration,
-	publicReadKey,
+	public_read_key,
 	PublicBoot,
 	toPublicBoot
 } from '../src/protocol/public-page.ts';
 import type { ShellBoot } from '../src/shell/nav.ts';
-import { storedFileUrl } from '../src/page/file-ref.ts';
-import { createBolt } from '../src/page/bolt.ts';
+import { stored_file_url } from '../src/page/file-ref.ts';
+import { create_bolt } from '../src/page/bolt.ts';
+import { renderPublicPage } from '../src/shell/public/server.ts';
 
 const boot: PublicBoot = {
 	workspace: { name: 'Public fixture', locale: 'en-SG', tz: 'Asia/Singapore' },
@@ -22,7 +24,9 @@ const boot: PublicBoot = {
 	describe: false,
 	messages: {},
 	catalog: {},
-	automations: {}
+	automations: {},
+	read_catalog: {},
+	operation_outputs: { automations: {} }
 };
 const body = {
 	route: 'app/portal/book',
@@ -32,11 +36,30 @@ const body = {
 	reads: {}
 };
 
+it.effect('refuses interactive refresh during server rendering without pretending to reread data', () =>
+	Effect.gen(function* () {
+		let reads = 0;
+		const result = yield* Effect.exit(renderPublicPage(
+			boot,
+			'2026-11-12T00:00:00Z',
+			() => Effect.sync(() => { reads++; return {}; }),
+			(ctx) => {
+				ctx.refresh();
+				return { body: 'Unreachable refresh', head: '' };
+			}
+		));
+		expect(Exit.isFailure(result)).toBe(true);
+		if (Exit.isFailure(result))
+			expect(Cause.squash(result.cause)).toEqual(new Error('Start interactive page effects on mount.'));
+		expect(reads).toBe(0);
+	})
+);
+
 it('keeps native image previews and original downloads within one encoded public surface', () => {
-	expect(storedFileUrl('/fixture', 'file/a?b')).toBe('/fixture/__bolt/files/file%2Fa%3Fb');
+	expect(stored_file_url('/fixture', 'file/a?b')).toBe('/fixture/__bolt/files/file%2Fa%3Fb');
 	for (const preview of [64, 512, 1024] as const) {
 		const url = new URL(
-			storedFileUrl('/fixture', 'file', { preview }, { app: 'public/jobs' }),
+			stored_file_url('/fixture', 'file', { preview }, { app: 'public/jobs' }),
 			'https://workspace.test'
 		);
 		expect([...url.searchParams]).toEqual([
@@ -45,7 +68,7 @@ it('keeps native image previews and original downloads within one encoded public
 		]);
 	}
 	const kiosk = new URL(
-		storedFileUrl('/fixture', 'file', {}, { kiosk: 'lobby' }),
+		stored_file_url('/fixture', 'file', {}, { kiosk: 'lobby' }),
 		'https://workspace.test'
 	);
 	expect([...kiosk.searchParams]).toEqual([['kiosk', 'lobby']]);
@@ -104,6 +127,8 @@ it.effect(
 				visitor: { app: 'portal' },
 				catalog: {},
 				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} },
 				contract: boot.contract
 			};
 			const projected = yield* toPublicBoot(source, {
@@ -128,20 +153,33 @@ it.effect(
 it.effect('seeds the hydrated query with its native decimal before the stream answers', () =>
 	Effect.gen(function* () {
 		const request = { jobs: { fields: ['total'] } };
-		const key = publicReadKey({ m: 'query', a: [request] });
+		const key = public_read_key({ m: 'query', a: [request] });
 		const rows = [{ id: 'job', total: { $dec: '12.5' } }];
 		const props = yield* decodePublicHydration(
-			JSON.stringify({ ...body, reads: { [key]: { jobs: { rows, next: null } } } }),
+			JSON.stringify({ ...body, reads: { [key]: { jobs: { rows, next: null, total: 1 } } } }),
 			{ route: body.route, release: body.release }
 		);
-		const client = yield* createBolt({
+		const client = yield* create_bolt({
+			operation_outputs: boot.operation_outputs,
 			actor: boot.actor,
 			locale: boot.workspace.locale,
-			initialRead: (read) => props.reads[publicReadKey(read)]
+			initial_read: (read) => props.reads[public_read_key(read)]
 		});
-		const query = client.query<{ jobs: { rows: readonly { total: Decimal }[] } }>(request);
-		expect(query.current?.jobs.rows[0]?.total).toBeInstanceOf(Decimal);
-		expect(query.current?.jobs.rows[0]?.total.toString()).toBe('12.5');
+		const query = client.native_query(
+			{ m: 'query', a: [request] },
+			Schema.Struct({
+				jobs: Schema.Struct({
+					rows: Schema.Array(
+						Schema.Struct({ id: Schema.String, total: input_schema({ kind: 'decimal', scale: 1 }) })
+					),
+					next: Schema.NullOr(Schema.String),
+					total: Schema.Number
+				})
+			})
+		);
+		const total = query.current?.jobs.rows[0]?.total;
+		expect(total).toBeInstanceOf(Decimal);
+		expect(String(total)).toBe('12.5');
 		expect(query.loading).toBe(false);
 	})
 );

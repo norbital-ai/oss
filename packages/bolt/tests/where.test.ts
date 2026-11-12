@@ -1,25 +1,34 @@
 // Rule 11a: the strict `Where`/`OrderBy` decoder, materialized time bounds, child aggregates, json contains, `bolt.decode`.
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Result } from 'effect';
-import { BoltError, storeSync } from '../src/protocol/errors.ts';
+import { Effect } from 'effect';
 import type { Reader, RowData } from '../src/engine/contracts.ts';
-import { browserCatalog, catalog } from '../src/protocol/catalog.ts';
+import { browser_catalog, catalog } from '../src/protocol/catalog.ts';
 import { contains, evaluate, midnight, startOfDate } from '../src/engine/query/eval.ts';
-import { catalogFor, compile, decodeView, order, read, where, type Pred } from '@norbital-ai/store';
+import {
+	catalog_for,
+	compile,
+	decode_view,
+	order,
+	read,
+	where,
+	type Pred
+} from '@norbital-ai/store';
 import { readOptions } from '../src/engine/query/reader.ts';
-import { createBolt } from '../src/page/bolt.ts';
+import { create_bolt } from '../src/page/bolt.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import { bindings, clerk, manifest, rep } from './query.fixture.ts';
 
-const cat = catalog(manifest);
-const code = (f: () => unknown) => {
-	const result = Result.try({ try: f, catch: (error) => error });
-	return Result.isSuccess(result)
-		? 'ok'
-		: result.failure instanceof BoltError
-			? result.failure.code
-			: 'internal';
+const present = <A>(value: A | null | undefined): A => {
+	if (value === null || value === undefined) throw new Error('Missing fixture value');
+	return value;
 };
+
+const cat = catalog(manifest);
+const code = <E extends { readonly code: string }>(effect: Effect.Effect<unknown, E>) =>
+	effect.pipe(
+		Effect.as('ok'),
+		Effect.catch((error) => Effect.succeed(error.code))
+	);
 const nest = (n: number): object => (n === 0 ? { qty: { eq: 1 } } : { not: nest(n - 1) });
 
 describe('rule 11a: one invalid row per shape', () => {
@@ -54,6 +63,10 @@ describe('rule 11a: one invalid row per shape', () => {
 		['orders', 'id not a uuid', { account: { eq: 'x' } }],
 		['orders', 'in not a list', { status: { in: 'open' } }],
 		['orders', 'hasAny not a list', { tags: { hasAny: 'a' } }],
+		['orders', 'retired nin', { status: { nin: ['open'] } }],
+		['orders', 'retired hasAll', { tags: { hasAll: ['a'] } }],
+		['orders', 'retired hasAny', { tags: { hasAny: ['a'] } }],
+		['orders', 'retired isEmpty', { tags: { isEmpty: true } }],
 		[
 			'orders',
 			'list past WHERE_MAX_LIST',
@@ -99,37 +112,49 @@ describe('rule 11a: one invalid row per shape', () => {
 		['orders', 'json contains on a text field', { note: { contains: 'x' } }],
 		['orders', 'nested past WHERE_MAX_DEPTH', nest(17)]
 	];
-	it.each(rows)('%s: %s', (m, _, w) => {
-		expect(code(() => storeSync(where(cat, m, w)))).toBe('invalid');
-	});
-	it('the invalid names the path of the first fault', () => {
-		expect(() =>
-			storeSync(
-				where(cat, 'accounts', { orders: { some: { lines: { every: { amount: { gt: 'x' } } } } } })
-			)
-		).toThrow(/where\.orders\.some\.lines\.every\.amount\.gt/);
-	});
-	it('a bare value is eq, a list in and null is_null, as a person writes it; a bad value is still refused', () => {
-		expect(storeSync(where(cat, 'orders', { status: 'open' }))).toEqual(
-			storeSync(where(cat, 'orders', { status: { eq: 'open' } }))
-		);
-		expect(storeSync(where(cat, 'orders', { status: ['open'] }))).toEqual(
-			storeSync(where(cat, 'orders', { status: { in: ['open'] } }))
-		);
-		expect(storeSync(where(cat, 'orders', { note: null }))).toEqual(
-			storeSync(where(cat, 'orders', { note: { is_null: true } }))
-		);
-		expect(code(() => storeSync(where(cat, 'orders', { status: 'bogus' })))).toBe('invalid');
-		const account = '0199a000-0000-4000-8000-0000000000a1';
-		expect(storeSync(where(cat, 'orders', { account }))).toEqual(
-			storeSync(where(cat, 'orders', { account: { eq: account } }))
-		);
-	});
-	it('an empty Where is valid at the root and as a quantifier body', () => {
-		expect(storeSync(where(cat, 'orders', {}))).toEqual({ t: 'const', value: true });
-		expect(code(() => storeSync(where(cat, 'accounts', { orders: { none: {} } })))).toBe('ok');
-		expect(code(() => storeSync(where(cat, 'orders', nest(16))))).toBe('ok');
-	});
+	it.effect.each(rows)('%s: %s', ([m, _, w]) =>
+		Effect.gen(function* () {
+			expect(yield* code(where(cat, m, w))).toBe('invalid');
+		})
+	);
+	it.effect('the invalid names the path of the first fault', () =>
+		Effect.gen(function* () {
+			expect(
+				(yield* Effect.flip(
+					where(cat, 'accounts', {
+						orders: { some: { lines: { every: { amount: { gt: 'x' } } } } }
+					})
+				)).message
+			).toMatch(/where\.orders\.some\.lines\.every\.amount\.gt/);
+		})
+	);
+	it.effect(
+		'a bare value is eq, a list in and null is_null, as a person writes it; a bad value is still refused',
+		() =>
+			Effect.gen(function* () {
+				expect(yield* where(cat, 'orders', { status: 'open' })).toEqual(
+					yield* where(cat, 'orders', { status: { eq: 'open' } })
+				);
+				expect(yield* where(cat, 'orders', { status: ['open'] })).toEqual(
+					yield* where(cat, 'orders', { status: { in: ['open'] } })
+				);
+				expect(yield* where(cat, 'orders', { note: null })).toEqual(
+					yield* where(cat, 'orders', { note: { is_null: true } })
+				);
+				expect(yield* code(where(cat, 'orders', { status: 'bogus' }))).toBe('invalid');
+				const account = '0199a000-0000-4000-8000-0000000000a1';
+				expect(yield* where(cat, 'orders', { account })).toEqual(
+					yield* where(cat, 'orders', { account: { eq: account } })
+				);
+			})
+	);
+	it.effect('an empty Where is valid at the root and as a quantifier body', () =>
+		Effect.gen(function* () {
+			expect(yield* where(cat, 'orders', {})).toEqual({ t: 'const', value: true });
+			expect(yield* code(where(cat, 'accounts', { orders: { none: {} } }))).toBe('ok');
+			expect(yield* code(where(cat, 'orders', nest(16)))).toBe('ok');
+		})
+	);
 });
 
 describe('one wire literal per kind', () => {
@@ -148,66 +173,70 @@ describe('one wire literal per kind', () => {
 		relationships: {},
 		exposures: { clock: { outputs: { default: { clock: { fields: 'all' } } } } }
 	});
-	it('keeps exact decimal text and scale through the canonical tag and shorthand', () => {
-		const value = { $dec: '9007199254740993.123456789000' };
-		const expected = {
-			t: 'cmp',
-			field: 'total',
-			op: 'eq',
-			arg: { _tag: 'Lit', value }
-		} satisfies Pred;
-		expect(storeSync(where(cat, 'orders', { total: { eq: value } }))).toEqual(expected);
-		expect(storeSync(where(cat, 'orders', { total: value }))).toEqual(expected);
-	});
-	it('preserves ISO date, instant and open date-period values', () => {
-		expect(storeSync(where(cat, 'orders', { placed: '2026-01-02' }))).toEqual({
-			t: 'cmp',
-			field: 'placed',
-			op: 'eq',
-			arg: { _tag: 'Lit', value: '2026-01-02' }
-		} satisfies Pred);
-		expect(storeSync(where(cat, 'orders', { at: { eq: '2026-01-02T03:04:05.123Z' } }))).toEqual({
-			t: 'cmp',
-			field: 'at',
-			op: 'eq',
-			arg: { _tag: 'Lit', value: '2026-01-02T03:04:05.123Z' }
-		} satisfies Pred);
-		expect(
-			storeSync(where(cat, 'orders', { span: { overlaps: { from: '2026-01-01', to: null } } }))
-		).toEqual({
-			t: 'period',
-			field: 'span',
-			op: 'overlaps',
-			lo: { _tag: 'Lit', value: '2026-01-01' },
-			hi: { _tag: 'Lit', value: null }
-		} satisfies Pred);
-	});
-	it('preserves instant-period ends and compares their actual instants', () => {
-		const value = { start: '2026-01-02T10:00:00.123+08:00', end: '2026-01-02T03:00:00.456Z' };
-		expect(storeSync(where(instants, 'clock', { slot: { within: value } }))).toEqual({
-			t: 'period',
-			field: 'slot',
-			op: 'within',
-			lo: { _tag: 'Lit', value: value.start },
-			hi: { _tag: 'Lit', value: value.end }
-		} satisfies Pred);
-		expect(
-			storeSync(where(instants, 'clock', { slot: { overlaps: { start: value.start, end: null } } }))
-		).toEqual({
-			t: 'period',
-			field: 'slot',
-			op: 'overlaps',
-			lo: { _tag: 'Lit', value: value.start },
-			hi: { _tag: 'Lit', value: null }
-		} satisfies Pred);
-		expect(
-			code(() =>
-				storeSync(
+	it.effect('keeps exact decimal text and scale through the canonical tag and shorthand', () =>
+		Effect.gen(function* () {
+			const value = { $dec: '9007199254740993.123456789000' };
+			const expected = {
+				t: 'cmp',
+				field: 'total',
+				op: 'eq',
+				arg: { _tag: 'Lit', value }
+			} satisfies Pred;
+			expect(yield* where(cat, 'orders', { total: { eq: value } })).toEqual(expected);
+			expect(yield* where(cat, 'orders', { total: value })).toEqual(expected);
+		})
+	);
+	it.effect('preserves ISO date, instant and open date-period values', () =>
+		Effect.gen(function* () {
+			expect(yield* where(cat, 'orders', { placed: '2026-01-02' })).toEqual({
+				t: 'cmp',
+				field: 'placed',
+				op: 'eq',
+				arg: { _tag: 'Lit', value: '2026-01-02' }
+			} satisfies Pred);
+			expect(yield* where(cat, 'orders', { at: { eq: '2026-01-02T03:04:05.123Z' } })).toEqual({
+				t: 'cmp',
+				field: 'at',
+				op: 'eq',
+				arg: { _tag: 'Lit', value: '2026-01-02T03:04:05.123Z' }
+			} satisfies Pred);
+			expect(
+				yield* where(cat, 'orders', { span: { overlaps: { from: '2026-01-01', to: null } } })
+			).toEqual({
+				t: 'period',
+				field: 'span',
+				op: 'overlaps',
+				lo: { _tag: 'Lit', value: '2026-01-01' },
+				hi: { _tag: 'Lit', value: null }
+			} satisfies Pred);
+		})
+	);
+	it.effect('preserves instant-period ends and compares their actual instants', () =>
+		Effect.gen(function* () {
+			const value = { start: '2026-01-02T10:00:00.123+08:00', end: '2026-01-02T03:00:00.456Z' };
+			expect(yield* where(instants, 'clock', { slot: { contained_by: value } })).toEqual({
+				t: 'period',
+				field: 'slot',
+				op: 'contained_by',
+				lo: { _tag: 'Lit', value: value.start },
+				hi: { _tag: 'Lit', value: value.end }
+			} satisfies Pred);
+			expect(
+				yield* where(instants, 'clock', { slot: { overlaps: { start: value.start, end: null } } })
+			).toEqual({
+				t: 'period',
+				field: 'slot',
+				op: 'overlaps',
+				lo: { _tag: 'Lit', value: value.start },
+				hi: { _tag: 'Lit', value: null }
+			} satisfies Pred);
+			expect(
+				yield* code(
 					where(instants, 'clock', { slot: { overlaps: { start: value.end, end: value.start } } })
 				)
-			)
-		).toBe('invalid');
-	});
+			).toBe('invalid');
+		})
+	);
 });
 
 describe('P34: the widened language', () => {
@@ -220,201 +249,221 @@ describe('P34: the widened language', () => {
 		expect(midnight('2026-09-01', 'Asia/Kuala_Lumpur')).toBe('2026-08-31T16:00:00.000Z');
 		expect(midnight('2026-03-29', 'Europe/Berlin')).toBe('2026-03-28T23:00:00.000Z');
 	});
-	it('decodes materialized date, period and instant bounds identically in SQL and JS', () => {
-		const month = startOfDate({ unit: 'month' }, bindings.today);
-		const nextMonth = startOfDate({ unit: 'month', shift: 1 }, bindings.today);
-		const week = midnight(startOfDate({ unit: 'week' }, bindings.today), bindings.tz);
-		const filter = {
-			placed: { gte: month, lt: nextMonth },
-			span: { overlaps: { from: month, to: bindings.today } },
-			at: { gte: week }
-		};
-		const p = storeSync(where(cat, 'orders', filter));
-		const env = { cat, bindings };
-		const row = {
-			id: 'x',
-			placed: '2026-09-02',
-			span: { from: '2026-08-20', to: '2026-09-01' },
-			at: '2026-09-21T00:00:00.000Z'
-		};
-		expect(evaluate(env, 'orders', p, row)).toBe(true);
-		expect(evaluate(env, 'orders', p, { ...row, placed: '2026-08-31' })).toBe(false);
-		expect(evaluate(env, 'orders', p, { ...row, at: '2026-09-20T15:59:59.000Z' })).toBe(false); // before Monday 00:00 in KL
-		const sql = storeSync(
-			compile(
+	it.effect('decodes materialized date, period and instant bounds identically in SQL and JS', () =>
+		Effect.gen(function* () {
+			const month = startOfDate({ unit: 'month' }, bindings.today);
+			const nextMonth = startOfDate({ unit: 'month', shift: 1 }, bindings.today);
+			const week = midnight(startOfDate({ unit: 'week' }, bindings.today), bindings.tz);
+			const filter = {
+				placed: { gte: month, lt: nextMonth },
+				span: { overlaps: { from: month, to: bindings.today } },
+				at: { gte: week }
+			};
+			const p = yield* where(cat, 'orders', filter);
+			const env = { cat, bindings };
+			const row = {
+				id: 'x',
+				placed: '2026-09-02',
+				span: { from: '2026-08-20', to: '2026-09-01' },
+				at: '2026-09-21T00:00:00.000Z'
+			};
+			expect(evaluate(env, 'orders', p, row)).toBe(true);
+			expect(evaluate(env, 'orders', p, { ...row, placed: '2026-08-31' })).toBe(false);
+			expect(evaluate(env, 'orders', p, { ...row, at: '2026-09-20T15:59:59.000Z' })).toBe(false); // before Monday 00:00 in KL
+			const sql = (yield* compile(
 				cat,
-				storeSync(read(cat, 'orders', { limit: 1, where: filter })),
+				yield* read(cat, 'orders', { limit: 1, where: filter }),
 				readOptions({ as: 'workspace' }, bindings)
-			)
-		).sql;
-		expect(sql.params).toContain(month);
-		expect(sql.params).toContain(nextMonth);
-		expect(sql.params).toContain(week);
-	});
-	it('child aggregates: sum of none is 0, min/max/avg of none match nothing', () => {
-		const env = {
-			cat,
-			bindings,
-			related: (_c: string, _r: string, _t: string, row: RowData): RowData[] =>
-				row.id === 'a'
-					? []
-					: [
-							{ id: 'l1', amount: { $dec: '10.10' } },
-							{ id: 'l2', amount: '10.20' }
-						]
-		};
-		const is = (w: object, id: string) =>
-			evaluate(env, 'orders', storeSync(where(cat, 'orders', w)), { id });
-		expect(is({ lines: { sum: { of: 'amount', eq: 0 } } }, 'a')).toBe(true);
-		expect(is({ lines: { avg: { of: 'amount', ne: 1 } } }, 'a')).toBe(false);
-		expect(is({ lines: { sum: { of: 'amount', eq: '20.3' } } }, 'b')).toBe(true);
-		expect(
-			is({ lines: { max: { of: 'amount', gte: '10.2' }, min: { of: 'amount', lt: 10.2 } } }, 'b')
-		).toBe(true);
-	});
-	it('json contains is jsonb @>', () => {
-		expect(storeSync(where(cat, 'orders', { doc: { contains: { big: 'x' } } }))).toEqual({
-			t: 'json',
-			field: 'doc',
-			contains: { big: 'x' }
-		} satisfies Pred);
-		expect(contains({ a: [1, 2, { b: null }], c: 'x' }, { a: [{ b: null }, 2] }, true)).toBe(true);
-		expect(contains([1, 2], 2, true)).toBe(true);
-		expect(contains({ a: 1 }, { a: 2 }, true)).toBe(false);
-	});
-	it('OrderBy: at most 4 keys, one field each, no field twice, sortable fields only', () => {
-		expect(
-			storeSync(order([{ total: 'desc' }, 'placed', { created_at: 'asc' }], cat, 'orders'))
-		).toEqual([
-			{ field: 'total', dir: 'desc' },
-			{ field: 'placed', dir: 'asc' },
-			{ field: 'created_at', dir: 'asc' }
-		]);
-		for (const bad of [
-			['qty', 'placed', 'at', 'total', 'note'],
-			['qty', { qty: 'desc' }],
-			{ qty: 'asc', at: 'desc' },
-			'tags',
-			'span',
-			'doc',
-			'spot',
-			'revision',
-			{ qty: 'up' }
-		])
-			expect(code(() => storeSync(order(bad, cat, 'orders')))).toBe('invalid');
-	});
-	it('OrderBy: a related key nests through one-relations (≤ 2 hops) to a sortable target field; the IR path is dotted', () => {
-		expect(
-			storeSync(
-				order(
-					[{ account: { name: 'asc' } }, { account: { region: 'desc' } }, 'account'],
-					cat,
-					'orders'
+			)).sql;
+			expect(sql.params).toContain(month);
+			expect(sql.params).toContain(nextMonth);
+			expect(sql.params).toContain(week);
+		})
+	);
+	it.effect('child aggregates: sum of none is 0, min/max/avg of none match nothing', () =>
+		Effect.gen(function* () {
+			const env = {
+				cat,
+				bindings,
+				related: (_c: string, _r: string, _t: string, row: RowData): RowData[] =>
+					row.id === 'a'
+						? []
+						: [
+								{ id: 'l1', amount: { $dec: '10.10' } },
+								{ id: 'l2', amount: '10.20' }
+							]
+			};
+			const is = (w: object, id: string) =>
+				where(cat, 'orders', w).pipe(Effect.map((p) => evaluate(env, 'orders', p, { id })));
+			expect(yield* is({ lines: { sum: { of: 'amount', eq: 0 } } }, 'a')).toBe(true);
+			expect(yield* is({ lines: { avg: { of: 'amount', ne: 1 } } }, 'a')).toBe(false);
+			expect(yield* is({ lines: { sum: { of: 'amount', eq: '20.3' } } }, 'b')).toBe(true);
+			expect(
+				yield* is(
+					{ lines: { max: { of: 'amount', gte: '10.2' }, min: { of: 'amount', lt: 10.2 } } },
+					'b'
 				)
-			)
-		).toEqual([
-			{ field: 'account.name', dir: 'asc' },
-			{ field: 'account.region', dir: 'desc' },
-			{ field: 'account', dir: 'asc' }
-		]);
-		expect(storeSync(order({ order: { account: { name: 'desc' } } }, cat, 'lines'))).toEqual([
-			{ field: 'order.account.name', dir: 'desc' }
-		]);
-		for (const bad of [
-			{ account: { name: 'asc', region: 'asc' } },
-			{ account: {} },
-			{ account: { name: 'up' } },
-			{ account: { id: 'asc' } },
-			{ account: { bogus: 'asc' } },
-			{ 'account.name': 'asc' },
-			'account.name',
-			{ status: { name: 'asc' } },
-			[{ account: { name: 'asc' } }, { account: { name: 'desc' } }]
-		])
-			expect(code(() => storeSync(order(bad, cat, 'orders')))).toBe('invalid');
-		expect(code(() => storeSync(order({ about: { name: 'asc' } }, cat, 'notes')))).toBe('invalid'); // an arc is not a hop
-		expect(
-			code(() => storeSync(order({ order: { account: { name: { x: 'asc' } } } }, cat, 'lines')))
-		).toBe('invalid'); // three hops
-	});
-	it("rule 14: a related key compiles to a subselect only through a layer the caller's output reads, else invalidInput", () => {
-		const sql = (order_by: unknown, reader: Reader = { as: 'caller', authority: rep }) =>
-			storeSync(
-				compile(
-					cat,
-					storeSync(read(cat, 'orders', { limit: 5, order_by })),
-					readOptions(reader, bindings)
-				)
+			).toBe(true);
+		})
+	);
+	it.effect('json contains is jsonb @>', () =>
+		Effect.gen(function* () {
+			expect(yield* where(cat, 'orders', { doc: { contains: { big: 'x' } } })).toEqual({
+				t: 'json',
+				field: 'doc',
+				contains: { big: 'x' }
+			} satisfies Pred);
+			expect(contains({ a: [1, 2, { b: null }], c: 'x' }, { a: [{ b: null }, 2] }, true)).toBe(
+				true
 			);
-		const ok = sql({ account: { name: 'asc' } }).sql.text;
-		expect(ok).toMatch(/ORDER BY \(SELECT \w+\."name" FROM "accounts"/);
-		expect(ok).toMatch(/jsonb_build_array\(\(SELECT \w+\."name"/); // the cursor carries the related value
-		expect(code(() => sql({ account: { secret: 'asc' } }))).toBe('ok');
-		// the `brief` output's account layer omits `secret`: no ordering by it
-		const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
-		const asClerk = (order_by: unknown) =>
-			storeSync(
-				compile(
-					brief,
-					{ ...storeSync(read(brief, 'orders', { limit: 5, order_by })), output: 'brief' },
-					readOptions({ as: 'caller', authority: clerk }, bindings)
-				)
-			);
-		expect(code(() => asClerk({ account: { secret: 'asc' } }))).toBe('invalidInput');
-		expect(code(() => asClerk({ account: { name: 'asc' } }))).toBe('ok');
-		// authority is per access point: the root's arms for its account layer decide, never the accounts model's own
-		const orders = rep.models['orders']!;
-		const unread = {
-			...rep,
-			models: {
-				...rep.models,
-				orders: {
-					...orders,
-					read: {
-						default: Object.fromEntries(
-							Object.entries(orders.read['default']!).filter(([path]) => path === 'orders')
+			expect(contains([1, 2], 2, true)).toBe(true);
+			expect(contains({ a: 1 }, { a: 2 }, true)).toBe(false);
+		})
+	);
+	it.effect('OrderBy: at most 4 keys, one field each, no field twice, sortable fields only', () =>
+		Effect.gen(function* () {
+			expect(
+				yield* order([{ total: 'desc' }, 'placed', { created_at: 'asc' }], cat, 'orders')
+			).toEqual([
+				{ field: 'total', dir: 'desc' },
+				{ field: 'placed', dir: 'asc' },
+				{ field: 'created_at', dir: 'asc' }
+			]);
+			for (const bad of [
+				['qty', 'placed', 'at', 'total', 'note'],
+				['qty', { qty: 'desc' }],
+				{ qty: 'asc', at: 'desc' },
+				'tags',
+				'span',
+				'doc',
+				'spot',
+				'revision',
+				{ qty: 'up' }
+			])
+				expect(yield* code(order(bad, cat, 'orders'))).toBe('invalid');
+		})
+	);
+	it.effect(
+		'OrderBy: a related key nests through one-relations (≤ 2 hops) to a sortable target field; the IR path is dotted',
+		() =>
+			Effect.gen(function* () {
+				expect(
+					yield* order(
+						[{ account: { name: 'asc' } }, { account: { region: 'desc' } }, 'account'],
+						cat,
+						'orders'
+					)
+				).toEqual([
+					{ field: 'account.name', dir: 'asc' },
+					{ field: 'account.region', dir: 'desc' },
+					{ field: 'account', dir: 'asc' }
+				]);
+				expect(yield* order({ order: { account: { name: 'desc' } } }, cat, 'lines')).toEqual([
+					{ field: 'order.account.name', dir: 'desc' }
+				]);
+				for (const bad of [
+					{ account: { name: 'asc', region: 'asc' } },
+					{ account: {} },
+					{ account: { name: 'up' } },
+					{ account: { id: 'asc' } },
+					{ account: { bogus: 'asc' } },
+					{ 'account.name': 'asc' },
+					'account.name',
+					{ status: { name: 'asc' } },
+					[{ account: { name: 'asc' } }, { account: { name: 'desc' } }]
+				])
+					expect(yield* code(order(bad, cat, 'orders'))).toBe('invalid');
+				expect(yield* code(order({ about: { name: 'asc' } }, cat, 'notes'))).toBe('invalid'); // an arc is not a hop
+				expect(
+					yield* code(order({ order: { account: { name: { x: 'asc' } } } }, cat, 'lines'))
+				).toBe('invalid'); // three hops
+			})
+	);
+	it.effect(
+		"rule 14: a related key compiles to a subselect only through a layer the caller's output reads, else invalidInput",
+		() =>
+			Effect.gen(function* () {
+				const sql = (order_by: unknown, reader: Reader = { as: 'caller', authority: rep }) =>
+					read(cat, 'orders', { limit: 5, order_by }).pipe(
+						Effect.flatMap((ir) => compile(cat, ir, readOptions(reader, bindings)))
+					);
+				const ok = (yield* sql({ account: { name: 'asc' } })).sql.text;
+				expect(ok).toMatch(/ORDER BY \(SELECT \w+\."name" FROM "accounts"/);
+				expect(ok).toMatch(/jsonb_build_array\(\(SELECT \w+\."name"/); // the cursor carries the related value
+				expect(yield* code(sql({ account: { secret: 'asc' } }))).toBe('ok');
+				// the `brief` output's account layer omits `secret`: no ordering by it
+				const brief = yield* catalog_for(cat, 'orders', 'brief');
+				const asClerk = (order_by: unknown) =>
+					read(brief, 'orders', { limit: 5, order_by }).pipe(
+						Effect.flatMap((ir) =>
+							compile(
+								brief,
+								{ ...ir, output: 'brief' },
+								readOptions({ as: 'caller', authority: clerk }, bindings)
+							)
 						)
+					);
+				expect(yield* code(asClerk({ account: { secret: 'asc' } }))).toBe('invalid_input');
+				expect(yield* code(asClerk({ account: { name: 'asc' } }))).toBe('ok');
+				// authority is per access point: the root's arms for its account layer decide, never the accounts model's own
+				const orders = present(rep.models['orders']);
+				const unread = {
+					...rep,
+					models: {
+						...rep.models,
+						orders: {
+							...orders,
+							read: {
+								default: Object.fromEntries(
+									Object.entries(present(orders.read['default'])).filter(
+										([path]) => path === 'orders'
+									)
+								)
+							}
+						}
 					}
-				}
-			}
-		};
-		expect(code(() => sql({ account: { name: 'asc' } }, { as: 'caller', authority: unread }))).toBe(
-			'invalidInput'
-		);
-		expect(
-			code(() =>
-				sql({ account: { name: 'asc' } }, { as: 'caller', authority: { ...rep, admin: true } })
-			)
-		).toBe('ok');
-	});
+				};
+				expect(
+					yield* code(sql({ account: { name: 'asc' } }, { as: 'caller', authority: unread }))
+				).toBe('invalid_input');
+				expect(
+					yield* code(
+						sql({ account: { name: 'asc' } }, { as: 'caller', authority: { ...rep, admin: true } })
+					)
+				).toBe('ok');
+			})
+	);
 });
 
 describe('bolt.decode (rule 11a in the browser, rule 16b)', () => {
-	it('keeps valid conditions and sort keys, drops each invalid one alone with its path', () => {
-		const out = storeSync(
-			decodeView(cat, 'orders', {
-				where: { status: { eq: 'open' }, qty: {}, lines: { some: { amount: { gt: 'x' } } } },
-				order_by: ['placed', 'tags', 'placed', { total: 'desc' }]
+	it.effect(
+		'keeps valid conditions and sort keys, drops each invalid one alone with its path',
+		() =>
+			Effect.gen(function* () {
+				const out = yield* decode_view(cat, 'orders', {
+					where: { status: { eq: 'open' }, qty: {}, lines: { some: { amount: { gt: 'x' } } } },
+					order_by: ['placed', 'tags', 'placed', { total: 'desc' }]
+				});
+				expect(out.where).toEqual({ status: { eq: 'open' } });
+				expect(out.order_by).toEqual(['placed', { total: 'desc' }]);
+				expect(out.dropped.map((d) => d.path)).toEqual([
+					'where.qty',
+					'where.lines',
+					'order_by[1]',
+					'order_by[2]'
+				]);
 			})
-		);
-		expect(out.where).toEqual({ status: { eq: 'open' } });
-		expect(out.order_by).toEqual(['placed', { total: 'desc' }]);
-		expect(out.dropped.map((d) => d.path)).toEqual([
-			'where.qty',
-			'where.lines',
-			'order_by[1]',
-			'order_by[2]'
-		]);
-	});
+	);
 	it.effect(
 		'the client decodes against the shell boot exposure: relations included, unreadable fields dropped',
 		() =>
 			Effect.gen(function* () {
-				const bolt = yield* createBolt({
+				const bolt = yield* create_bolt({
 					actor: null,
 					locale: 'en',
-					catalog: exposure(manifest, rep),
-					openStream: () => ({ onmessage: null, onerror: null, close() {} })
+					operation_outputs: { automations: {} },
+					catalog: yield* exposure(manifest, rep),
+					open_stream: () => ({ onmessage: null, onerror: null, close() {} })
 				});
 				const out = bolt.decode('accounts', {
 					where: {
@@ -429,7 +478,9 @@ describe('bolt.decode (rule 11a in the browser, rule 16b)', () => {
 				});
 				expect(out.dropped.map((d) => d.path)).toEqual(['where.bogus']);
 				expect(
-					browserCatalog(exposure(manifest, rep)).models.get('notes')?.one.get('about')?.targets
+					browser_catalog(yield* exposure(manifest, rep))
+						.models.get('notes')
+						?.one.get('about')?.targets
 				).toEqual(['accounts', 'orders']);
 			})
 	);

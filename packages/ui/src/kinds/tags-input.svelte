@@ -1,23 +1,23 @@
 <script lang="ts">
 	// `text many`: each entry a chip; Enter or a comma adds, Backspace on an empty box removes the last.
 	import Icon from '@iconify/svelte';
-	import { cn, uiText } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
 
 	let {
 		value,
-		onChange,
+		on_change,
 		id,
 		disabled = false,
 		invalid = false
 	}: {
 		value: readonly string[];
-		onChange(next: readonly string[]): void;
+		on_change(next: readonly string[]): void;
 		id?: string;
 		disabled?: boolean;
 		invalid?: boolean;
 	} = $props();
-	const t = uiText();
+	const t = ui_text();
 	let text = $state('');
 	function commit() {
 		const add = text
@@ -25,7 +25,7 @@
 			.map((s) => s.trim())
 			.filter((s) => s !== '' && !value.includes(s));
 		text = '';
-		if (add.length > 0) onChange([...value, ...add]);
+		if (add.length > 0) on_change([...value, ...add]);
 	}
 </script>
 
@@ -40,7 +40,7 @@
 				<button
 					type="button"
 					aria-label={`${t('remove')} ${item}`}
-					onclick={() => onChange(value.filter((x) => x !== item))}
+					onclick={() => on_change(value.filter((x) => x !== item))}
 					><Icon icon="lucide:x" class="size-3" /></button
 				>
 			{/if}
@@ -60,7 +60,7 @@
 				e.preventDefault();
 				commit();
 			} else if (e.key === 'Backspace' && text === '' && value.length > 0)
-				onChange(value.slice(0, -1));
+				on_change(value.slice(0, -1));
 		}}
 		onblur={commit}
 	/>

@@ -1,29 +1,24 @@
 <!--
-	Settings → Envoys: one row per envoy. Step one creates the envoy and chooses its channel provider; step two pairs
-	that channel with the provider credentials. A toast/table row opens the same pairing card for an unpaired channel.
+	Settings → Envoys: one row per envoy. Creation, provider pairing and the envoy's own fields stay in this one inline card;
+	a paired envoy's channel opens from it. Programmatic setup opens the same controls; no dialog or record-sheet handoff.
 -->
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
 	import { watch } from 'runed';
 	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 	import type { Json } from '../../decl/values.ts';
-	import { fork, observeOnce } from '@norbital-ai/ui/effect';
+	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import {
 		Button,
 		Combobox,
-		Dialog,
-		Field,
 		Form,
-		Input,
 		Table,
-		Textarea,
 		toast
 	} from '@norbital-ai/ui';
-	import type { IntegrationOffer } from '../../protocol/instance-status.ts';
 	import type { ShellApi } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import type { Settings } from '../settings/data.ts';
-	import Connector from './Connector.svelte';
+	import EnvoyFields from './EnvoyFields.svelte';
 	import { driverLabel, instanceMade, statusLabel } from './setup.ts';
 
 	let {
@@ -32,7 +27,7 @@
 		settings,
 		t,
 		locale,
-		onManage,
+		on_manage,
 		reload,
 		configuration = null
 	}: {
@@ -41,14 +36,13 @@
 		settings: Settings;
 		t: (key: string) => string;
 		locale: string;
-		onManage: (instance: string) => void;
+		on_manage: (instance: string) => void;
 		reload: () => Effect.Effect<void>;
 		configuration?: SystemUiIntent | null;
 	} = $props();
 
 	type Envoy = Settings['envoys'][number];
 	type Instance = Settings['instances'][number];
-	type WireOffer = Pick<IntegrationOffer, 'integration' | 'driver' | 'description' | 'workspace'>;
 	type TableRow = {
 		id: string;
 		name: string;
@@ -60,8 +54,8 @@
 	const decodeState = Schema.decodeUnknownOption(Schema.Struct({ state: Schema.String }));
 	const statusState = (status: Json) =>
 		Option.getOrUndefined(Option.map(decodeState(status), (held) => held.state));
-	const offers = observeOnce(() =>
-		api.integrationOffers().pipe(Effect.map((all) => all.filter((o) => o.conversation)))
+	const offers = observe_once(() =>
+		api.integration_offers().pipe(Effect.map((all) => all.filter((o) => o.conversation)))
 	);
 	const offerOf = (integration: string) =>
 		offers.current?.find((offer) => offer.integration === integration);
@@ -95,10 +89,8 @@
 	const instanceOf = (id: string) => settings.instances.find((instance) => instance.envoy === id);
 	const providers = $derived((offers.current ?? []).filter((offer) => offer.workspace.length > 0));
 	/** The provider chosen in the create step; the first available until the viewer changes it. */
-	let provider = $state<string | null>(null);
-	$effect(() => {
-		if (provider === null && providers[0] !== undefined) provider = providers[0].integration;
-	});
+	let chosenProvider = $state<string | null>(null);
+	const provider = $derived(chosenProvider ?? providers[0]?.integration ?? null);
 	let creating = $state(false);
 	let newName = $state('');
 	watch(
@@ -109,69 +101,44 @@
 			creating = true;
 		}
 	);
-	let wiring = $state<{
-		envoy: Pick<Envoy, 'id' | 'name'>;
-		offer: WireOffer;
-		instance: string;
-	} | null>(null);
+	let editing = $state<string | null>(null);
+	const editing_envoy = $derived(settings.envoys.find((envoy) => envoy.id === editing));
+	const editing_row = $derived(rows.find((row) => row.id === editing));
+	let pending_envoy = $state<string | null>(null);
 
 	const created = (envoy: Pick<Envoy, 'id' | 'name'>, integration: string) =>
 		bolt
-			.act('sys_integration.create', [
+			.act({ 'sys_integration.create': [
 				{
 					integration,
 					name: envoy.name,
 					envoy: envoy.id
 				}
-			])
+			] })
 			.pipe(
 				Effect.flatMap((outcome) => instanceMade(outcome, t('This connection could not be made.')))
 			);
 
-	const wire = (envoy: Pick<Envoy, 'id' | 'name'>, offer: WireOffer) => {
-		fork(
-			created(envoy, offer.integration).pipe(
-				Effect.tap((instance) =>
-					Effect.sync(() => {
-						wiring = { envoy, offer, instance };
-					})
-				),
-				Effect.tap(() => reload())
-			),
-			(cause) => toast.error(cause.message)
-		);
+	const wire = (envoy: Pick<Envoy, 'id' | 'name'>, integration: string) => {
+		if (pending_envoy !== null) return;
+		pending_envoy = envoy.id;
+		fork(created(envoy, integration).pipe(
+			Effect.tap(() => reload()),
+			Effect.tap((instance) => Effect.sync(() => on_manage(instance))),
+			Effect.ensuring(Effect.sync(() => { pending_envoy = null; }))
+		), (cause) => toast.error(cause.message));
 	};
-	const open = (row: TableRow) => {
-		const envoy = envoyOf(row.id);
-		if (envoy === undefined) return;
-		const instance = instanceOf(row.id);
-		if (instance === undefined) return;
-		const offer = offerOf(instance.integration);
-		if (offer === undefined) {
-			toast.error(t('This channel’s provider is not available on this host.'));
-			return;
-		}
-		wiring = { envoy, offer, instance: instance.id };
-	};
+
 	const pair = (row: TableRow, integration: string) => {
 		const envoy = envoyOf(row.id);
 		const offer = providers.find((candidate) => candidate.integration === integration);
 		if (envoy === undefined || offer === undefined) return;
-		wire(envoy, offer);
-	};
-	const removed = (instance: string) =>
-		(settings.instances.find((i) => i.id === instance)?.named === true
-			? Effect.succeed(false)
-			: bolt
-					.act('sys_integration.delete', [{ target: instance }])
-					.pipe(Effect.map((outcome) => outcome.kind === 'committed'))
-		).pipe(Effect.tap(() => reload()));
-	const closeWiring = () => {
-		wiring = null;
-		fork(reload());
+		wire(envoy, offer.integration);
 	};
 </script>
 
+{#if offers.error !== undefined}<p class="mb-3 text-sm text-destructive" role="alert">{offers.error.message}</p>{/if}
+{#if !creating && editing_envoy === undefined}
 <Table
 	of={rows}
 	columns={[
@@ -192,8 +159,9 @@
 			creating = true;
 		}
 	}}
-	onOpen={open}
+	on_open={(row) => (editing = row.id)}
 />
+{/if}
 
 {#snippet nameCell({ row }: { row: TableRow })}
 	<span data-envoy-channel={row.id}>{row.name}</span>
@@ -209,14 +177,15 @@
 		>
 			<Combobox
 				aria-label={t('Provider')}
-				placeholder={t('Choose provider')}
+				placeholder={t(pending_envoy === row.id ? 'Creating channel…' : 'Choose provider')}
+				disabled={pending_envoy !== null}
 				options={providers.map((offer) => ({
 					value: offer.integration,
 					label: driverLabel(offer.driver),
 					description: offer.description
 				}))}
 				value={null}
-				onChange={(integration) => {
+				on_change={(integration) => {
 					if (integration !== null) pair(row, integration);
 				}}
 			/>
@@ -226,20 +195,12 @@
 	{/if}
 {/snippet}
 
-<Dialog.Root
-	bind:open={creating}
-	onOpenChange={(open) => {
-		if (!open) creating = false;
-	}}
->
-	<Dialog.Content class="max-w-lg">
-		<Dialog.Header>
-			<Dialog.Title>{t('New envoy')}</Dialog.Title>
-			<Dialog.Description>
-				{t('Step 1 of 2: the envoy’s details and the channel it will answer on.')}
-			</Dialog.Description>
-		</Dialog.Header>
-		{#if creating}
+{#if creating}
+	<section class="mt-4 space-y-4 rounded-lg border bg-card p-4" data-envoy-create>
+		<div class="flex items-start justify-between gap-3">
+			<div><h3 class="text-sm font-medium">{t('New envoy')}</h3><p class="mt-1 text-xs text-muted-foreground">{t('Choose who it helps and the channel it will answer on.')}</p></div>
+			<Button variant="ghost" onclick={() => { creating = false; }}>{t('Cancel')}</Button>
+		</div>
 			<Form
 				of="sys_envoy"
 				mode="create"
@@ -248,31 +209,17 @@
 					Array.isArray(policies) && policies.length > 0
 						? []
 						: [{ field: 'policies', message: t('An envoy with no policy answers nobody.') }]}
-				onOutcome={(outcome) => {
+				on_outcome={(outcome) => {
 					if (outcome.kind !== 'committed') return;
 					const record = outcome.records.find((r) => r.model === 'sys_envoy');
 					const offer = providers.find((p) => p.integration === provider);
 					creating = false;
 					if (record !== undefined && offer !== undefined)
-						wire({ id: record.id, name: newName }, offer);
+						wire({ id: record.id, name: newName }, offer.integration);
 					else fork(reload());
 				}}
 			>
 				{#snippet children()}
-					<Field name="name" label={t('Name')}>
-						{#snippet editor(field)}
-							<Input
-								id={field.id}
-								value={newName}
-								disabled={field.disabled}
-								oninput={(event) => {
-									newName = event.currentTarget.value;
-									field.onChange(newName === '' ? null : newName);
-								}}
-							/>
-						{/snippet}
-					</Field>
-					<Field name="audience" label={t('Audience')} />
 					<div class="grid gap-1">
 						<span class="text-xs font-medium text-muted-foreground">{t('Channel')}</span>
 						<Combobox
@@ -283,87 +230,33 @@
 								description: offer.description
 							}))}
 							value={provider}
-							onChange={(next) => (provider = next)}
+							on_change={(next) => (chosenProvider = next)}
 						/>
 					</div>
-					<Field name="task" label={t('Supplementary prompt')}>
-						{#snippet editor(field)}
-							<Textarea
-								id={field.id}
-								rows={4}
-								value={typeof field.value === 'string' ? field.value : ''}
-								disabled={field.disabled}
-								oninput={(event) =>
-									field.onChange(
-										event.currentTarget.value === '' ? null : event.currentTarget.value
-									)}
-							/>
-						{/snippet}
-					</Field>
-					<Field name="policies" label={t('Policies')}>
-						{#snippet editor(field)}
-							<Combobox
-								id={field.id}
-								multiple
-								aria-label={t('Policies')}
-								placeholder={t('Choose policies')}
-								options={settings.policies.map((policy) => ({
-									value: policy,
-									label: policy
-								}))}
-								value={Array.isArray(field.value) ? field.value.map(String) : []}
-								onChange={field.onChange}
-								disabled={field.disabled}
-							/>
-						{/snippet}
-					</Field>
-					<div class="grid gap-3 sm:grid-cols-2">
-						<Field name="group_messages" label={t('Group messages')} />
-						<Field name="delegation" label={t('Delegation')} />
-						<Field name="dm" label={t('Direct messages')} />
-					</div>
+					<EnvoyFields policies={settings.policies} {t} on_name_change={(name) => { newName = name; }} />
 				{/snippet}
 			</Form>
-		{/if}
-	</Dialog.Content>
-</Dialog.Root>
+	</section>
+{/if}
 
-<Dialog.Root
-	open={wiring !== null}
-	onOpenChange={(open) => {
-		if (!open) closeWiring();
-	}}
->
-	<Dialog.Content class="max-w-2xl">
-		<Dialog.Header>
-			<Dialog.Title>{wiring === null ? t('Pair channel') : wiring.envoy.name}</Dialog.Title>
-			<Dialog.Description>
-				{t('Pair the provider. Its credentials are stored by the host and never shown as a field.')}
-			</Dialog.Description>
-		</Dialog.Header>
-		{#if wiring !== null}
-			<ul class="flex w-full min-w-0 flex-col gap-2">
-				{@render connector(wiring.envoy, wiring.offer, wiring.instance)}
-			</ul>
+{#if editing_envoy !== undefined}
+	<section class="mt-4 space-y-4 rounded-lg border bg-card p-4" data-envoy-settings={editing_envoy.id}>
+		<div class="flex items-center justify-between gap-3">
+			<h3 class="text-sm font-medium">{editing_envoy.name}</h3>
+			<Button variant="ghost" onclick={() => { editing = null; }}>{t('Back to envoys')}</Button>
+		</div>
+		{#if editing_row !== undefined}
+			{@const channel = instanceOf(editing_row.id)}
+			{#if channel === undefined}{@render providerCell({ row: editing_row })}
+			{:else}
+				<div class="flex items-center justify-between gap-3 text-sm">
+					<span>{editing_row.provider} · {editing_row.state}</span>
+					<Button variant="outline" onclick={() => on_manage(channel.id)}>{t('Manage')}</Button>
+				</div>
+			{/if}
 		{/if}
-	</Dialog.Content>
-</Dialog.Root>
-
-{#snippet connector(envoy: Pick<Envoy, 'id' | 'name'>, offer: WireOffer, instance: string)}
-	{@const channel = settings.instances.find((i) => i.id === instance)}
-	<Connector
-		driver={offer.driver}
-		description={offer.description}
-		providers={offer.workspace}
-		instance={{ id: instance, status: channel?.status ?? null, active: channel?.active ?? true }}
-		client={(id) => api.integration(id)}
-		create={() => Effect.succeed(instance)}
-		remove={removed}
-		onManage={(id) => {
-			wiring = null;
-			onManage(id);
-		}}
-		{t}
-		{locale}
-	/>
-{/snippet}
+		<Form of="sys_envoy" mode="update" id={editing_envoy.id} submit={t('Save')} on_outcome={() => fork(reload())}>
+			<EnvoyFields policies={settings.policies} {t} active />
+		</Form>
+	</section>
+{/if}

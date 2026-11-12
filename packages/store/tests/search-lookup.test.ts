@@ -1,10 +1,10 @@
 import { Buffer } from 'node:buffer';
 import { expect, it } from '@effect/vitest';
 import { Schema } from 'effect';
-import { searchFunctions } from '../src/index.ts';
+import { search_functions } from '../src/index.ts';
 
 it('the installed search SQL romanizes multilingual text through its packed lookup', () => {
-	const sql = searchFunctions().find((fn) => fn.id === 'bolt:function-search-2-romanize')?.sql;
+	const sql = search_functions().find((fn) => fn.id === 'bolt:function-search-2-romanize')?.sql;
 	if (sql === undefined) throw new Error('Romanization function is missing');
 	const lookup =
 		/select decode\('([A-Za-z0-9+/=]+)', 'base64'\) as codes, '([^']+)'::jsonb as readings/.exec(

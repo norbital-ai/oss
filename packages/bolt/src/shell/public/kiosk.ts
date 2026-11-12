@@ -3,8 +3,9 @@ import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import type { Authority } from '../../engine/contracts.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import { Identity } from '../../engine/services.ts';
-import { audienceOf, canOpenKiosk, kioskOf, kioskPolicies } from '../nav.ts';
+import { audience_of, can_open_kiosk, kiosk_of, kiosk_policies } from '../nav.ts';
 import { HEADERS } from '../../protocol/wire.ts';
+import type { BoltError } from '../../protocol/errors.ts';
 
 export const KIOSK_PATH = /^[a-z][a-z0-9_]*(?:\/[a-z][a-z0-9_]*)*$/;
 
@@ -25,14 +26,14 @@ export const kioskAuthority = Effect.fn('shell.kioskAuthority')(function* (
 	member: Authority | null,
 	visitor: { readonly id: string; readonly anonymous: boolean }
 ) {
-	const spec = kioskOf(manifest, name);
+	const spec = kiosk_of(manifest, name);
 	if (spec === undefined) return Option.none<Authority>();
-	const policies = kioskPolicies(spec);
+	const policies = kiosk_policies(spec);
 	if (
 		policies === undefined ||
 		policies.length === 0 ||
 		policies.some((policy) => manifest.policies[policy] === undefined) ||
-		(member === null ? audienceOf(spec) !== 'public' : !canOpenKiosk(spec, member, name))
+		(member === null ? audience_of(spec) !== 'public' : !can_open_kiosk(spec, member, name))
 	)
 		return Option.none<Authority>();
 	const identity = yield* Identity;
@@ -64,10 +65,10 @@ export const kioskBoot = Effect.fn('shell.kioskBoot')(function* (
 	name: string,
 	member: Authority | null,
 	visitor: { readonly id: string; readonly anonymous: boolean }
-): Effect.fn.Return<KioskBoot, never, Identity> {
-	const spec = kioskOf(manifest, name);
+): Effect.fn.Return<KioskBoot, BoltError, Identity> {
+	const spec = kiosk_of(manifest, name);
 	if (spec === undefined) return { _tag: 'Unknown' };
-	if (member === null && audienceOf(spec) !== 'public') return { _tag: 'SignIn' };
+	if (member === null && audience_of(spec) !== 'public') return { _tag: 'SignIn' };
 	const authority = yield* kioskAuthority(manifest, name, member, visitor);
 	return Option.isNone(authority)
 		? { _tag: 'Closed', message: 'This kiosk is not open to you.' }

@@ -13,11 +13,11 @@
 		/** The views to offer, in order (all four by default); with one, it renders without its own tab strip. */
 		views?: readonly WorkspaceView[];
 		busy?: boolean;
-		onChange: (next: WorkspaceScope) => void;
+		on_change: (next: WorkspaceScope) => void;
 		t?: (key: string) => string;
 		/**
 		 * The release whose logs Logs shows, by its publication instant (`at`): omitted, the serving release; `null`, every
-		 * release. Bind it to read the selection (the owner scopes its own log read to `releaseWindow`).
+		 * release. Bind it to read the selection (the owner scopes its own log read to `release_window`).
 		 */
 		release?: string | null | undefined;
 		/** Trailing controls on the Logs header line (an Auto-refresh toggle). */
@@ -33,16 +33,16 @@
 	import ToolbarSearch from '../model/toolbar/ToolbarSearch.svelte';
 	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import LogView from '../logs/LogView.svelte';
-	import UsageChart, { formatMetricValue } from '../chart/UsageChart.svelte';
+	import UsageChart, { format_metric_value } from '../chart/UsageChart.svelte';
 	import { useKinds } from '../kinds/context.js';
-	import { filterMembers, newestReleases, releaseWindow } from './filters.js';
+	import { filterMembers, newestReleases, release_window } from './filters.js';
 	let {
 		data,
 		range,
 		view,
 		views = ['bundle', 'telemetry', 'logs', 'users'],
 		busy = false,
-		onChange,
+		on_change,
 		t = (key) => key,
 		release = $bindable(),
 		actions
@@ -53,7 +53,7 @@
 		assetStatus = $state('all'),
 		runSearch = $state(''),
 		packageSearch = $state('');
-	const canInspect = $derived(data.canInspect);
+	const can_inspect = $derived(data.can_inspect);
 	const studio = $derived(data.studio),
 		members = $derived(data.members),
 		bundles = $derived(data.bundles),
@@ -67,8 +67,8 @@
 				(assetStatus === 'all' ||
 					(cache !== null &&
 						(assetStatus === 'cached'
-							? (cacheByPath.get(asset.path)?.cachedBytes ?? 0) > 0
-							: (cacheByPath.get(asset.path)?.cachedBytes ?? 0) === 0)))
+							? (cacheByPath.get(asset.path)?.cached_bytes ?? 0) > 0
+							: (cacheByPath.get(asset.path)?.cached_bytes ?? 0) === 0)))
 		)
 	);
 	const shownPackages = $derived(
@@ -100,7 +100,7 @@
 		}))
 	]);
 	const runtimeLines = $derived.by(() => {
-		const { since, until } = releaseWindow(releases, releaseAt);
+		const { since, until } = release_window(releases, releaseAt);
 		return [...(data.logs ?? [])]
 			.filter(
 				(row) => (since === undefined || row.at >= since) && (until === undefined || row.at < until)
@@ -119,7 +119,7 @@
 		value === null ? t('Not recorded') : new Date(value).toLocaleString(host.locale);
 	const online = (value: string | null) =>
 		value !== null && Date.parse(value) > Date.parse(data.as_of) - 300000;
-	const bytes = (value: number | null) => formatMetricValue('bytes', value, host.locale);
+	const bytes = (value: number | null) => format_metric_value('bytes', value, host.locale);
 	const TABS = {
 		bundle: { title: 'Bundle', icon: 'lucide:package' },
 		telemetry: { title: 'Telemetry', icon: 'lucide:activity' },
@@ -142,9 +142,9 @@
 		<Tabs
 			value={view}
 			class="gap-3"
-			onValueChange={(next) => {
+			on_value_change={(next) => {
 				const picked = views.find((v) => v === next);
-				if (picked !== undefined) onChange({ view: picked });
+				if (picked !== undefined) on_change({ view: picked });
 			}}
 			tabs={views.map((name) => ({
 				name,
@@ -174,7 +174,7 @@
 				{#each ['24h', '7d', '30d'] as item (item)}<Button
 						variant={range === item ? 'secondary' : 'ghost'}
 						class="h-8 px-2.5 text-xs"
-						onclick={() => onChange({ range: item === '24h' || item === '30d' ? item : '7d' })}
+						onclick={() => on_change({ range: item === '24h' || item === '30d' ? item : '7d' })}
 						>{item}</Button
 					>{/each}
 			</nav>
@@ -214,24 +214,24 @@
 			</div>
 			<div>
 				<dt class="text-meta">{t('Artifact bytes')}</dt>
-				<dd class="mt-1 font-medium tabular-nums">{bytes(data.health?.artifactBytes ?? null)}</dd>
+				<dd class="mt-1 font-medium tabular-nums">{bytes(data.health?.artifact_bytes ?? null)}</dd>
 			</div>
 			<div>
 				<dt class="text-meta">{t('Public client bytes')}</dt>
-				<dd class="mt-1 font-medium tabular-nums">{bytes(bundles?.totalBytes ?? null)}</dd>
+				<dd class="mt-1 font-medium tabular-nums">{bytes(bundles?.total_bytes ?? null)}</dd>
 			</div>
 			<div>
 				<dt class="text-meta">{t('Referenced cache bytes')}</dt>
 				<dd class="mt-1 font-medium tabular-nums">
-					{bundles?.assetCount === null ? t('Unavailable') : bytes(cache?.releaseBytes ?? null)}
+					{bundles?.asset_count === null ? t('Unavailable') : bytes(cache?.release_bytes ?? null)}
 				</dd>
 			</div>
 		</dl>
 		{#each data.health?.errors ?? [] as error, index (index)}<p class="text-meta">{error}</p>{/each}
 		{#if cache}<p class="text-meta">
 				{t('Shared host cache')}:
-				<span class="font-mono">{bytes(cache.hostBytes)} / {bytes(cache.budgetBytes)}</span>
-				· {cache.releaseEntries}
+				<span class="font-mono">{bytes(cache.host_bytes)} / {bytes(cache.budget_bytes)}</span>
+				· {cache.release_entries}
 				{t('entries referenced by this release')}
 			</p>{/if}
 		{#if data.errors?.cache}<p role="alert" class="text-destructive">{data.errors.cache}</p>{/if}
@@ -266,13 +266,13 @@
 		</details>
 		<details class="rounded-md border border-border p-3">
 			<summary class="cursor-pointer font-medium"
-				>{t('Bundle files')} · {bundles?.assetCount ?? t('Unavailable')}</summary
+				>{t('Bundle files')} · {bundles?.asset_count ?? t('Unavailable')}</summary
 			>
 			<div class="mt-2 flex flex-wrap items-center gap-1" data-view-toolbar>
 				<ToolbarSearch bind:value={assetSearch} label={t('Search client files')} /><ToolbarFilter
 					count={assetStatus === 'all' ? 0 : 1}
 					label={t('Filter client files')}
-					panelClass="w-72"
+					panel_class="w-72"
 					><label class="grid gap-2"
 						><span class="text-label">{t('Cache residency')}</span><Combobox
 							aria-label={t('Cache residency')}
@@ -282,7 +282,7 @@
 								{ value: 'cached', label: t('Cached') },
 								{ value: 'cold', label: t('Not resident') }
 							]}
-							onChange={(status) => {
+							on_change={(status) => {
 								assetStatus = status ?? 'all';
 							}}
 						/></label
@@ -321,14 +321,14 @@
 	</section>
 {/snippet}
 {#snippet runtime()}
-	{#if !canInspect}{@render restricted()}{:else}<div class="flex min-h-0 flex-1 flex-col gap-3">
+	{#if !can_inspect}{@render restricted()}{:else}<div class="flex min-h-0 flex-1 flex-col gap-3">
 			{#if data.errors?.logs}<p role="alert" class="text-destructive">
 					{data.errors.logs}
 				</p>{/if}<LogView
 				rows={runtimeLines}
 				follow={false}
 				class="min-h-80 flex-1"
-				filterCount={data.filters.run ? 1 : 0}
+				filter_count={data.filters.run ? 1 : 0}
 				trailing={actions}
 			>
 				{#snippet leading()}
@@ -339,7 +339,7 @@
 						searchable
 						value={releaseAt ?? ''}
 						options={releaseOptions}
-						onChange={(at) => at !== null && (release = at || null)}
+						on_change={(at) => at !== null && (release = at || null)}
 					/>
 				{/snippet}
 				{#snippet filters()}
@@ -349,10 +349,10 @@
 							searchable
 							value={data.filters.run}
 							options={runOptions}
-							onSearch={(query) => {
+							on_search={(query) => {
 								runSearch = query;
 							}}
-							onChange={(run) => run !== null && onChange({ run: run || null })}
+							on_change={(run) => run !== null && on_change({ run: run || null })}
 						/></label
 					>
 				{/snippet}
@@ -360,7 +360,7 @@
 		</div>{/if}
 {/snippet}
 {#snippet users()}
-	{#if members === null}{#if canInspect}<p class="text-meta">
+	{#if members === null}{#if can_inspect}<p class="text-meta">
 				{data.errors?.access ?? t('The named user inventory is unavailable.')}
 			</p>{:else}{@render restricted()}{/if}{:else}<div class="grid gap-3">
 			<div class="flex min-w-0 flex-wrap items-center gap-1" data-view-toolbar>
@@ -371,7 +371,7 @@
 				/><ToolbarFilter
 					count={userStatus === 'all' ? 0 : 1}
 					label={t('Filter users')}
-					panelClass="w-72"
+					panel_class="w-72"
 					><label class="grid gap-2"
 						><span class="text-label">{t('Status')}</span><Combobox
 							aria-label={t('User status')}
@@ -384,7 +384,7 @@
 								{ value: 'offline', label: t('Offline') },
 								{ value: 'unknown', label: t('No recorded activity') }
 							]}
-							onChange={(status) => {
+							on_change={(status) => {
 								userStatus = status ?? 'all';
 							}}
 						/></label
@@ -393,7 +393,7 @@
 					>{shownMembers.length}
 					{t('of')}
 					{members.length}
-					{t('users')} · {members.filter((member) => member.active && online(member.lastSeen))
+					{t('users')} · {members.filter((member) => member.active && online(member.last_seen))
 						.length}
 					{t('recently active')}</span
 				>
@@ -417,14 +417,14 @@
 										>{t(
 											!member.active
 												? 'Disabled'
-												: online(member.lastSeen)
+												: online(member.last_seen)
 													? 'Recently active'
-													: member.lastSeen === null
+													: member.last_seen === null
 														? 'Unknown'
 														: 'Offline'
 										)}</span
 									></td
-								><td class="whitespace-nowrap">{when(member.lastSeen)}</td></tr
+								><td class="whitespace-nowrap">{when(member.last_seen)}</td></tr
 							>{:else}<tr
 								><td colspan="4" class="text-meta"
 									>{t(members.length === 0 ? 'No users.' : 'No users match these filters.')}</td

@@ -9,14 +9,14 @@ import { dirname, extname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build, type Rolldown } from 'vite';
 import type { Json, EngineManifest } from '@norbital-ai/bolt/engine';
-import { decodeSeed, type PackJson } from '@norbital-ai/bolt/engine';
-import { decodeIdentity, IDENTITY, type SeedAsset } from '@norbital-ai/bolt/tooling';
+import { decode_seed, type PackJson } from '@norbital-ai/bolt/engine';
+import { decode_identity, IDENTITY, type SeedAsset } from '@norbital-ai/bolt/tooling';
 import type { CheckDiagnostic } from '../check/index.ts';
-import { assetPath } from '@norbital-ai/bolt/artifact';
+import { asset_path } from '@norbital-ai/bolt/artifact';
 import { rowsIn, seedPack } from '../seed.ts';
 import { BOLT, EXT } from '../bolt.ts';
-import { sha256Hex } from '@norbital-ai/store';
-import { datatypeIssues } from '@norbital-ai/std/kind';
+import { sha256_hex } from '@norbital-ai/store';
+import { datatype_issues } from '@norbital-ai/std/kind';
 
 /** Rows per model, the identity rows (`sys_user`, run-time `sys_integration` instances) included, as JSON. */
 export type SeedRows = {
@@ -37,7 +37,7 @@ const Asset = Schema.Struct({
 	path: Schema.String,
 	sha256: Schema.String,
 	bytes: Schema.Number,
-	contentType: Schema.String
+	content_type: Schema.String
 });
 const Source = Schema.Struct({
 	bank: Schema.optionalKey(
@@ -89,7 +89,7 @@ const seederOf = Effect.fn('bolt.seederOf')(function* (root: string, cache: stri
 		return yield* Effect.fail(
 			new SeedSourceError({ cause: new Error('the seed bundler emitted no chunk') })
 		);
-	const file = join(cache, `seed-${sha256Hex(chunk.code).slice(0, 16)}.mjs`);
+	const file = join(cache, `seed-${sha256_hex(chunk.code).slice(0, 16)}.mjs`);
 	yield* fs.makeDirectory(cache, { recursive: true });
 	// content-addressed, written whole: a concurrent run (a test worker) never imports a half-written bundle
 	if (!(yield* fs.exists(file))) {
@@ -106,7 +106,7 @@ const seederOf = Effect.fn('bolt.seederOf')(function* (root: string, cache: stri
 	).pipe(Effect.mapError((cause) => new SeedSourceError({ cause })));
 });
 
-/** `<dir>/assets.json` (`{ path, sha256, bytes, contentType }`) checked against `<dir>/assets/**` (rule 70). */
+/** `<dir>/assets.json` (`{ path, sha256, bytes, content_type }`) checked against `<dir>/assets/**` (rule 70). */
 const assetList = Effect.fn('bolt.seedAssets')(function* (
 	root: string,
 	dir: 'seed/public' | 'seed/test',
@@ -123,7 +123,7 @@ const assetList = Effect.fn('bolt.seedAssets')(function* (
 				errors.push({
 					code: 'seed/asset',
 					path: `${dir}/assets.json`,
-					message: `${dir}/assets.json is the seed's asset list, each { path, sha256, bytes, contentType }, never a model's rows: ${failure.message}`
+					message: `${dir}/assets.json is the seed's asset list, each { path, sha256, bytes, content_type }, never a model's rows: ${failure.message}`
 				});
 				return [];
 			})
@@ -153,7 +153,7 @@ const assetList = Effect.fn('bolt.seedAssets')(function* (
 			fail(`is ${bytes.byteLength} bytes; assets.json says ${a.bytes}`);
 			continue;
 		}
-		if (sha256Hex(bytes) !== a.sha256) {
+		if (sha256_hex(bytes) !== a.sha256) {
 			fail('sha256 does not match assets.json');
 			continue;
 		}
@@ -170,7 +170,7 @@ function assetRefs(m: EngineManifest, rows: SeedRows): Set<string> {
 			if (k.kind !== 'file') continue;
 			for (const r of list)
 				for (const v of [r[f]].flat()) {
-					const p = assetPath(v);
+					const p = asset_path(v);
 					if (p !== undefined) out.add(p);
 				}
 		}
@@ -220,9 +220,9 @@ const bankAssets = Effect.fn('bolt.bankAssets')(function* (
 		}
 		out.push({
 			path,
-			sha256: sha256Hex(bytes),
+			sha256: sha256_hex(bytes),
 			bytes: bytes.byteLength,
-			contentType: MIME[extname(path).toLowerCase()] ?? 'application/octet-stream'
+			content_type: MIME[extname(path).toLowerCase()] ?? 'application/octet-stream'
 		});
 	}
 	return out;
@@ -248,11 +248,11 @@ function checkPack(
 			});
 	const decoded = Result.try({
 		try: () => {
-			decodeIdentity(m, rows);
-			decodeSeed(
+			decode_identity(m, rows);
+			decode_seed(
 				m,
 				Object.fromEntries(
-					Object.entries(rows).filter(([c]) => !(IDENTITY as readonly string[]).includes(c))
+					Object.entries(rows).filter(([c]) => !IDENTITY.some((model) => model === c))
 				)
 			);
 		},
@@ -269,7 +269,7 @@ function checkPack(
 	}
 
 	for (const c of Object.keys(rows))
-		if (c.startsWith('sys_') && !(IDENTITY as readonly string[]).includes(c))
+		if (c.startsWith('sys_') && !IDENTITY.some((model) => model === c))
 			errors.push({
 				code: 'seed/decode',
 				path,
@@ -280,7 +280,7 @@ function checkPack(
 		list.forEach((row, index) => {
 			for (const [field, value] of Object.entries(row))
 				if (Predicate.isObject(value) && Predicate.hasProperty(value, '$schema'))
-					for (const issue of datatypeIssues(value))
+					for (const issue of datatype_issues(value))
 						errors.push({
 							code: 'seed/datatype',
 							path,

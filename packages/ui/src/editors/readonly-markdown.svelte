@@ -6,7 +6,7 @@ Renders Markdown text for reading.
 	// Markdown for reading (`MarkdownEditor readonly`, a preview, a stored document): the kit's typography, no raw HTML.
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { cn } from '../primitives/utils.js';
-	import { markdownHtml } from './markdown.js';
+	import { markdown_html } from './markdown.js';
 
 	// other attributes (`id`, `data-*`, `aria-*`) reach the rendered block
 	let {
@@ -16,7 +16,7 @@ Renders Markdown text for reading.
 	}: { value: string; class?: string } & Omit<HTMLAttributes<HTMLDivElement>, 'class'> = $props();
 </script>
 
-<!-- markdownHtml escapes raw HTML and neuters script-capable hrefs -->
+<!-- markdown_html escapes raw HTML and neuters script-capable hrefs -->
 <div
 	{...rest}
 	class={cn(
@@ -25,5 +25,5 @@ Renders Markdown text for reading.
 	)}
 	data-markdown
 >
-	{@html markdownHtml(value)}
+	{@html markdown_html(value)}
 </div>

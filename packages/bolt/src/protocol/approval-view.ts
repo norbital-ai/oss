@@ -24,7 +24,7 @@ export const ApprovalLogFields = {
 	reason: Schema.NullOr(Schema.String),
 	/** A resubmission's changed fields: the root record's by name, any other held row's as `<model>.<field>`. */
 	changed: Schema.optionalKey(Schema.Array(Schema.String)),
-	rolledBack: Schema.optionalKey(
+	rolled_back: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
 				model: Schema.String,
@@ -65,8 +65,8 @@ export const ApprovalViewSchema = Schema.Struct({
 		})
 	),
 	superseded_by: Schema.Array(Schema.String),
-	teamNames: Names,
-	userNames: Names,
+	team_names: Names,
+	user_names: Names,
 	requestor: Who,
 	log: Schema.Array(Schema.Struct({ ...ApprovalLogFields, by: Who })),
 	records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String, op: Operation })),

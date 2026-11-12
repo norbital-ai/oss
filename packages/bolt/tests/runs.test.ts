@@ -1,17 +1,16 @@
-// The runs area without a database: buckets (rule 52a), the in-process deadlines port, webhook
-// signatures per scheme (rule 56a), and what retries (rule 54).
+// Durable timing, deadline lifecycle and retry classification; webhook signatures belong to integrations.
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Clock, Context, Deferred, Effect, Layer } from 'effect';
+import { Clock, Context, Deferred, Effect, Fiber, Layer } from 'effect';
 import { TestClock } from 'effect/testing';
 import { DeadlinePort } from '../src/engine/ports.ts';
-import type { Unavailable } from '../src/decl/errors.ts';
-import { isTransient } from '../src/engine/errors.ts';
+import type { PortFailure } from '../src/engine/port.ts';
+import { is_transient } from '../src/engine/errors.ts';
 import { BoltError, type Code } from '../src/protocol/errors.ts';
-import { dueAt } from '../src/engine/runs/time.ts';
-import { inProcessDeadlines } from '../src/engine/runs/deadlines.ts';
-import { verifySignature, type WebhookRequest } from '../src/engine/runs/webhook.ts';
-import type { WebhookScheme } from '../src/decl/runtime/automation.ts';
+import { due_at } from '../src/engine/runs/time.ts';
+import { in_process_deadlines } from '../src/engine/runs/deadlines.ts';
+import { verifySignature, type WebhookRequest } from '../src/engine/integrations/webhook.ts';
+import type { WebhookScheme } from '../src/decl/runtime/integration.ts';
 
 const at = (s: string) => Date.parse(s);
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -19,9 +18,9 @@ const iso = (ms: number) => new Date(ms).toISOString();
 describe('buckets (rule 52a)', () => {
 	it('a due time under 5 minutes ahead is exact; 5 minutes or more rounds up to the bucket', () => {
 		const now = at('2026-09-25T09:01:17Z');
-		expect(iso(dueAt(now, now + 60_000))).toBe('2026-09-25T09:02:17.000Z');
-		expect(iso(dueAt(now, now + 3 * 86_400_000))).toBe('2026-09-28T09:05:00.000Z');
-		expect(iso(dueAt(now, at('2026-09-25T09:10:00Z')))).toBe('2026-09-25T09:10:00.000Z');
+		expect(iso(due_at(now, now + 60_000))).toBe('2026-09-25T09:02:17.000Z');
+		expect(iso(due_at(now, now + 3 * 86_400_000))).toBe('2026-09-28T09:05:00.000Z');
+		expect(iso(due_at(now, at('2026-09-25T09:10:00Z')))).toBe('2026-09-25T09:10:00.000Z');
 	});
 });
 
@@ -31,12 +30,13 @@ describe('the in-process deadlines port', () => {
 		() => {
 			const wakes: string[] = [];
 			let port: DeadlinePort['Service'];
-			const layer = inProcessDeadlines<Unavailable, never>((scope) =>
-				Effect.gen(function* () {
+			const layer = in_process_deadlines<PortFailure, never>({
+				wake: (scope) => Effect.gen(function* () {
 					wakes.push(`${scope}@${new Date(yield* Clock.currentTimeMillis).toISOString()}`);
 					yield* port.settle(scope, wakes.length === 1 ? '2026-09-25T02:00:00.000Z' : null);
-				})
-			);
+				}),
+				pulse: () => Effect.succeed(false)
+			});
 			return Effect.scoped(
 				Effect.gen(function* () {
 					yield* TestClock.setTime(at('2026-09-25T00:00:00Z'));
@@ -75,13 +75,14 @@ describe('the in-process deadlines port', () => {
 	it.effect("an announcement made while the scope wakes is merged with the tick's answer", () => {
 		const wakes: string[] = [];
 		let port: DeadlinePort['Service'];
-		const layer = inProcessDeadlines<Unavailable, never>((scope) =>
-			Effect.gen(function* () {
+		const layer = in_process_deadlines<PortFailure, never>({
+			wake: (scope) => Effect.gen(function* () {
 				wakes.push(new Date(yield* Clock.currentTimeMillis).toISOString());
 				if (wakes.length === 1) yield* port.announce(scope, '2026-09-25T00:10:00.000Z');
 				yield* port.settle(scope, wakes.length === 1 ? '2026-09-25T05:00:00.000Z' : null);
-			})
-		);
+			}),
+			pulse: () => Effect.succeed(false)
+		});
 		return Effect.scoped(
 			Effect.gen(function* () {
 				yield* TestClock.setTime(at('2026-09-25T00:00:00Z'));
@@ -92,9 +93,47 @@ describe('the in-process deadlines port', () => {
 			}).pipe(Effect.provide(layer))
 		);
 	});
+	it.effect('the host ABI awaits announce, settle and teardown completion', () =>
+		Effect.scoped(Effect.gen(function* () {
+			let pending = Promise.withResolvers<void>();
+			let entered = yield* Deferred.make<void>();
+			const calls: string[] = [];
+			const record = (call: string) => {
+				calls.push(call);
+				Deferred.doneUnsafe(entered, Effect.void);
+				return pending.promise;
+			};
+			const port = Context.get(yield* Layer.build(DeadlinePort.fromAbi({
+				announce: (scope, at) => record(`announce:${scope}:${at}`),
+				settle: (scope, at) => record(`settle:${scope}:${at}`),
+				teardown: (scope) => record(`teardown:${scope}`)
+			})), DeadlinePort);
+			const operations = [
+				{ expected: 'announce:ws:2026-09-25T01:00:00.000Z', effect: port.announce('ws', '2026-09-25T01:00:00.000Z') },
+				{ expected: 'settle:ws:null', effect: port.settle('ws', null) },
+				{ expected: 'teardown:ws', effect: port.teardown('ws') }
+			];
+			for (const operation of operations) {
+				pending = Promise.withResolvers<void>();
+				entered = yield* Deferred.make<void>();
+				let finished = false;
+				const fiber = yield* operation.effect.pipe(
+					Effect.tap(() => Effect.sync(() => { finished = true; })),
+					Effect.forkChild
+				);
+				yield* Deferred.await(entered);
+				expect(calls.at(-1)).toBe(operation.expected);
+				expect(finished).toBe(false);
+				pending.resolve();
+				yield* Fiber.join(fiber);
+				expect(finished).toBe(true);
+			}
+			expect(calls).toEqual(operations.map((operation) => operation.expected));
+		}))
+	);
 });
 
-describe('webhook signatures (rule 56a)', () => {
+describe('integration webhook signatures', () => {
 	const now = at('2026-09-25T10:00:00Z'),
 		ts = String(now / 1000),
 		secret = 'shh';
@@ -189,11 +228,11 @@ describe('attempts (rule 54)', () => {
 		error: BoltError.make(code, 'guest', message)
 	});
 	it('only Transient retries: facility upstream, timeout, rateLimited and an act conflict, thrown or coded', () => {
-		expect(isTransient(failed('upstream', '502').error)).toBe(true);
-		expect(isTransient(failed('conflict').error)).toBe(true);
-		expect(isTransient(failed('timeout').error)).toBe(true);
-		expect(isTransient(failed('guestError', 'TypeError: x is undefined').error)).toBe(false);
-		expect(isTransient(failed('cpuBudget').error)).toBe(false);
-		expect(isTransient(failed('refused', 'no').error)).toBe(false);
+		expect(is_transient(failed('upstream', '502').error)).toBe(true);
+		expect(is_transient(failed('conflict').error)).toBe(true);
+		expect(is_transient(failed('timeout').error)).toBe(true);
+		expect(is_transient(failed('guest_error', 'TypeError: x is undefined').error)).toBe(false);
+		expect(is_transient(failed('cpu_budget').error)).toBe(false);
+		expect(is_transient(failed('refused', 'no').error)).toBe(false);
 	});
 });

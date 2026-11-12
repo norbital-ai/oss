@@ -4,37 +4,38 @@
 //
 // One enforcing place per declared constraint: kind / NOT NULL / CHECK, FK, UNIQUE / EXCLUDE, GENERATED STORED
 // (`computed`, the search document). An audited table's uniques, checks and exclusions are DEFERRABLE INITIALLY
-// IMMEDIATE (a natural key is not: it is an `on conflict` arbiter). Legacy snapshots retain their original DDL.
+// IMMEDIATE (a natural key is not: it is an `on conflict` arbiter). Every table carries the native row rules.
 import { Effect, Predicate, Schema } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
-import { sha256, toHex, canonical } from '@norbital-ai/std/hash';
+import { sha256, to_hex, canonical } from '@norbital-ai/std/hash';
 import type { Json } from '../values.ts';
 import type { Catalog } from '../catalog.ts';
-import { catalogOf, indexColumn, RECORD_LABEL_COLUMN } from '../catalog.ts';
+import { catalog_of, index_column, RECORD_LABEL_COLUMN } from '../catalog.ts';
 import { where } from '../decode.ts';
-import { ownPredSql } from '../write/predicate.ts';
-import { jsonPath } from '../read/values.ts';
+import { own_pred_sql } from '../write/predicate.ts';
+import { json_path } from '../read/values.ts';
 import { StoreError } from '../errors.ts';
-import { clockDefault } from '@norbital-ai/std/vars';
-import { searchFunctions } from './search.ts';
-import { ROW_RULES_V1, ROW_RULES_V2 } from './rules.ts';
+import { clock_default } from '@norbital-ai/std/vars';
+import { search_functions } from './search.ts';
+import { ROW_RULES } from './rules.ts';
 import { JSON_VALID } from './json.ts';
-import { SchemaSpec, type Expr, type FieldSpec, type RefSpec, type TableSpec } from './spec.ts';
-import { labelExpression } from '@norbital-ai/std/label';
+import { SchemaSpec as SchemaSpecSchema, type SchemaSpec, type Expr, type FieldSpec, type RefSpec, type TableSpec } from './spec.ts';
+import { label_expression, label_text_sql } from '@norbital-ai/std/label';
+import { q, literal as lit } from '@norbital-ai/std/sql';
 import { wire } from '../read/sql.ts';
 
 type Fx<A> = Effect.Effect<A, StoreError>;
 /** How a constraint name maps back to its declaration, for a writer's SQLSTATE → refusal map. */
 export type ConstraintMeta = {
 	model: string;
-	kind: 'unique' | 'check' | 'overlap' | 'fk';
+	kind: 'unique' | 'check' | 'overlap' | 'fk' | 'locked';
 	fields: readonly string[];
 	rule?: string;
 	/** A check's authored refusal message (`check: { <rule>: { where, message } }`). */
 	message?: string;
 };
 /** A check is a bare where literal or `{ where, message }` (the message is the refusal a reader is shown). */
-export const checkOf = (c: object): { where: object; message?: string } =>
+export const check_of = (c: object): { where: object; message?: string } =>
 	'where' in c && Predicate.isObject(c.where) && 'message' in c && typeof c.message === 'string'
 		? { where: c.where, message: c.message }
 		: { where: c };
@@ -84,10 +85,8 @@ export type SchemaObject = typeof SchemaObjectSchema.Type & {
 	readonly meta?: ConstraintMeta & { name: string };
 };
 
-const q = (id: string): string => `"${id.replaceAll('"', '""')}"`;
-const lit = (v: string): string => `'${v.replaceAll("'", "''")}'`;
 const fail = (message: string) => Effect.fail(StoreError.of('schema', 'derive', message));
-const hash8 = (s: string): string => toHex(sha256(s)).slice(0, 8);
+const hash8 = (s: string): string => to_hex(sha256(s)).slice(0, 8);
 /** `<table≤40>__<kind>__<hash8>`: at most 63 bytes for any table name `ident` admits. */
 const cname = (table: string, kind: string, def: string): string =>
 	`${table.slice(0, 40)}__${kind}__${hash8(def)}`;
@@ -132,16 +131,6 @@ export const MINOR_FN = `create or replace function bolt_minor_units(c text) ret
 const AUDIT =
 	'revision int not null default 1, created_at timestamptz not null default now(), ' +
 	'created_by text, updated_at timestamptz not null default now(), updated_by text';
-const AUDIT_UPDATE = `create or replace function store_audit_update() returns trigger language plpgsql as $store_audit$
-begin
-	if new.revision is not distinct from old.revision then
-		new.revision := old.revision + 1;
-		new.updated_at := clock_timestamp();
-		new.updated_by := null;
-	end if;
-	return new;
-end;
-$store_audit$`;
 
 // ── columns ──
 type Col = { name: string; type: string; kind: string; optional: boolean };
@@ -168,7 +157,7 @@ export const PG: Record<string, string> = {
 	ref: 'uuid'
 };
 /** A stored field's column type; inline unions and records live inside a shaped json value. */
-export function colType(k: FieldSpec): string | undefined {
+export function col_type(k: FieldSpec): string | undefined {
 	if (k.many === true && k.kind !== 'text' && k.kind !== 'enum') return 'jsonb';
 	if (k.kind === 'int' && k.storage === 'int64') return 'bigint';
 	if (k.kind === 'period') return k.of === 'date' ? 'daterange' : 'tstzrange';
@@ -179,7 +168,7 @@ export function colType(k: FieldSpec): string | undefined {
 	return (k.kind === 'text' || k.kind === 'enum') && k.many === true ? `${t}[]` : t;
 }
 const typeOf = (k: FieldSpec, where: string): Fx<string> => {
-	const t = colType(k);
+	const t = col_type(k);
 	return t === undefined
 		? fail(`${where}: a '${k.kind}' is an input kind, not a stored one`)
 		: Effect.succeed(t);
@@ -231,8 +220,8 @@ function relations(s: SchemaSpec): Effect.Effect<Rel[], StoreError> {
 	return Effect.forEach(refs, ({ model, field, spec }) =>
 		Effect.gen(function* () {
 			const key = `${model}.${field}`;
-			if (spec.onDelete === 'setNull' && spec.optional !== true)
-				return yield* fail(`relation '${key}': onDelete 'setNull' needs an optional ref`);
+			if (spec.on_delete === 'set_null' && spec.optional !== true)
+				return yield* fail(`relation '${key}': on_delete 'set_null' needs an optional ref`);
 			const to = typeof spec.to === 'string' ? [spec.to] : spec.to;
 			const cols =
 				to.length === 1 ? [field] : yield* Effect.forEach(to, (t) => ident(`${field}__${t}`));
@@ -252,7 +241,7 @@ type Table = {
 };
 const tables = Effect.fnUntraced(function* (s: SchemaSpec, rels: readonly Rel[]) {
 	const out = new Map<string, Table>();
-	const catalogue = catalogOf(s);
+	const catalogue = catalog_of(s);
 	for (const [model, spec] of Object.entries(s.tables)) {
 		yield* ident(model);
 		const cols = new Map<string, Col>();
@@ -304,8 +293,8 @@ const tables = Effect.fnUntraced(function* (s: SchemaSpec, rels: readonly Rel[])
 });
 
 // ── literals by column type ──
-function sqlValue(v: unknown, type: string, native = false): Fx<string> {
-	if (native && type === 'jsonb' && v !== undefined)
+function sqlValue(v: unknown, type: string): Fx<string> {
+	if (type === 'jsonb' && v !== undefined)
 		return Effect.succeed(`${lit(canonical(v))}::jsonb`);
 	if (v === null || v === undefined) return Effect.succeed('null');
 	if (typeof v === 'boolean') return Effect.succeed(v ? 'true' : 'false');
@@ -323,8 +312,7 @@ function sqlValue(v: unknown, type: string, native = false): Fx<string> {
 const defaultSql = Effect.fnUntraced(function* (
 	k: FieldSpec,
 	type: string,
-	tz: string,
-	native = false
+	tz: string
 ) {
 	if (k.kind === 'state') return lit(k.initial);
 	const d = k.default;
@@ -335,21 +323,21 @@ const defaultSql = Effect.fnUntraced(function* (
 		typeof d['var'] === 'string'
 	) {
 		const text = d['var'],
-			clock = clockDefault(text);
-		if (clock?.base === 'now' && (!native || k.kind === 'instant'))
+			clock = clock_default(text);
+		if (clock?.base === 'now' && k.kind === 'instant')
 			return `(now()${clock.interval})`;
-		if (clock?.base === 'today' && (!native || k.kind === 'date'))
+		if (clock?.base === 'today' && k.kind === 'date')
 			return `((now()${clock.interval}) at time zone ${lit(tz)})::date`;
 		if (
 			(text === 'requestor.id' || text === 'requestor.party') &&
-			(!native || k.kind === 'ref' || k.kind === 'text')
+			(k.kind === 'ref' || k.kind === 'text')
 		)
 			return null;
 	}
-	return yield* sqlValue(d, type, native);
+	return yield* sqlValue(d, type);
 });
 
-// ── static predicates (check, unique/noOverlap `where`) → SQL, two-valued: a null never passes a comparison ──
+// ── static predicates (check, unique/no_overlap `where`) → SQL, two-valued: a null never passes a comparison ──
 /** Static declarations normalize through the same Pred as reads and grants. */
 const staticSql = Effect.fnUntraced(function* (
 	w: object,
@@ -367,7 +355,7 @@ const staticSql = Effect.fnUntraced(function* (
 			{ ...field, pg: t.cols.get(name)?.type ?? field.pg }
 		])
 	);
-	const sql = yield* ownPredSql(pred, row, { p: () => 'null' }, !plain, fields);
+	const sql = yield* own_pred_sql(pred, row, { p: () => 'null' }, !plain, fields);
 	return pred.t === 'const' || pred.t === 'and' || pred.t === 'or' || pred.t === 'not'
 		? sql
 		: `(${sql})`;
@@ -471,14 +459,14 @@ const exprSql: (e: Expr, t: Table, tz: string, depth?: number) => Fx<Typed> = Ef
 				kind: 'text'
 			};
 		}
-		if ('plusDays' in e)
+		if ('plus_days' in e)
 			return {
-				sql: `(${(yield* x(e.plusDays[0])).sql} + (${(yield* x(e.plusDays[1])).sql})::int)`,
+				sql: `(${(yield* x(e.plus_days[0])).sql} + (${(yield* x(e.plus_days[1])).sql})::int)`,
 				kind: 'date'
 			};
-		if ('startOf' in e) {
-			const value = yield* x(e.startOf[0]),
-				unit = lit(e.startOf[1]);
+		if ('start_of' in e) {
+			const value = yield* x(e.start_of[0]),
+				unit = lit(e.start_of[1]);
 			return value.kind === 'date'
 				? { sql: `date_trunc(${unit}, (${value.sql})::timestamp)::date`, kind: 'date' }
 				: {
@@ -494,25 +482,25 @@ const exprSql: (e: Expr, t: Table, tz: string, depth?: number) => Fx<Typed> = Ef
 			const parts = yield* Effect.forEach(e.substring, x);
 			return { sql: `substr(${parts.map((value) => value.sql).join(', ')})`, kind: 'text' };
 		}
-		if ('regexReplace' in e)
+		if ('regex_replace' in e)
 			return {
-				sql: `regexp_replace(${(yield* x(e.regexReplace[0])).sql}, ${lit(e.regexReplace[1])}, ${lit(e.regexReplace[2])}, 'g')`,
+				sql: `regexp_replace(${(yield* x(e.regex_replace[0])).sql}, ${lit(e.regex_replace[1])}, ${lit(e.regex_replace[2])}, 'g')`,
 				kind: 'text'
 			};
-		if ('jsonText' in e) {
-			const from = e.jsonText[0];
+		if ('json_text' in e) {
+			const from = e.json_text[0];
 			const name = typeof from === 'object' && 'field' in from ? from.field : undefined;
 			if (name === undefined || t.cols.get(name)?.type !== 'jsonb')
 				return yield* fail(
-					`${t.model}: jsonText reads a json field, not '${name ?? JSON.stringify(from)}'`
+					`${t.model}: json_text reads a json field, not '${name ?? JSON.stringify(from)}'`
 				);
-			return { sql: `(${q(name)} ->> ${lit(e.jsonText[1])})`, kind: 'text' };
+			return { sql: `(${q(name)} ->> ${lit(e.json_text[1])})`, kind: 'text' };
 		}
-		if ('jsonLength' in e) {
-			const from = e.jsonLength;
+		if ('json_length' in e) {
+			const from = e.json_length;
 			const name = typeof from === 'object' && 'field' in from ? from.field : undefined;
 			if (name === undefined || t.cols.get(name)?.type !== 'jsonb')
-				return yield* fail(`${t.model}: jsonLength reads a JSON array column`);
+				return yield* fail(`${t.model}: json_length reads a JSON array column`);
 			return { sql: `jsonb_array_length(${q(name)})`, kind: 'int' };
 		}
 		if ('eq' in e) return yield* cmp('=', e.eq);
@@ -573,15 +561,15 @@ const EMBEDDING = 'bolt_embedding';
  * Every object a schema holds, in a stable order with stable ids (each id names its definition), followed by `extra`:
  * objects a host keeps beside its tables (Bolt's engine tables), re-asserted with every plan.
  */
-const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
-	Effect.fn('Store.schemaObjects')(function* (
+const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
+	Effect.fn('Store.schema_objects')(function* (
 		declared: SchemaSpec,
 		extra: readonly SchemaObject[] = []
 	) {
 		// Every definition renders from sorted keys (predicates, a state's names, a JSON default): a snapshot read back
 		// may have its keys reordered, and another order would hash every constraint name differently — the plan would
 		// re-create a constraint the database already has.
-		const s = yield* Schema.decodeUnknownEffect(SchemaSpec)(declared).pipe(
+		const s = yield* Schema.decodeUnknownEffect(SchemaSpecSchema, { onExcessProperty: 'error' })(declared).pipe(
 			Effect.mapError((cause) => StoreError.of('schema', 'derive', cause.message, cause))
 		);
 		const rels = yield* relations(s);
@@ -598,13 +586,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 		};
 		const anyKind = (k: string) =>
 			Object.values(s.tables).some((m) => Object.values(m.fields).some((f) => f.kind === k));
-		if (
-			Object.values(s.tables).some(
-				(table) =>
-					table.nativeRules !== undefined &&
-					Object.values(table.fields).some((field) => colType(field) === 'jsonb')
-			)
-		)
+		if (Object.values(s.tables).some((table) => Object.values(table.fields).some((field) => col_type(field) === 'jsonb')))
 			push({
 				id: 'function:store_json_valid',
 				rank: 'function',
@@ -613,31 +595,16 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 				create: [JSON_VALID],
 				drop: 'drop function if exists store_json_valid(jsonb,jsonb)'
 			});
-		if (Object.values(s.tables).some((m) => m.nativeRules !== undefined))
+		if (Object.keys(s.tables).length > 0)
 			push({
 				id: 'function:store_row_rules',
 				rank: 'function',
 				table: '',
 				deps: [],
-				create: [
-					Object.values(s.tables).some((m) => m.nativeRules === 2) ? ROW_RULES_V2 : ROW_RULES_V1
-				],
+				create: [ROW_RULES],
 				drop: 'drop function if exists store_row_rules()'
 			});
-		if (
-			Object.values(s.tables).some(
-				(m) => m.nativeRules === undefined && m.audit === true && m.managedDeletes !== true
-			)
-		)
-			push({
-				id: 'function:store_audit_update',
-				rank: 'function',
-				table: '',
-				deps: [],
-				create: [AUDIT_UPDATE],
-				drop: 'drop function if exists store_audit_update()'
-			});
-		if (Object.values(s.tables).some((m) => (m.noOverlap ?? []).length > 0))
+		if (Object.values(s.tables).some((m) => (m.no_overlap ?? []).length > 0))
 			push({
 				id: 'extension:btree_gist',
 				rank: 'extension',
@@ -731,130 +698,124 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 				create: [`create table ${T} (${keyDef}${workspace ? `, ${AUDIT}` : ''})`],
 				drop: `drop table if exists ${T} cascade`
 			});
-			if (workspace && t.spec.nativeRules === undefined && t.spec.managedDeletes !== true)
-				push({
-					id: `trigger:${t.model}.store_audit_update`,
-					rank: 'index',
-					table: t.model,
-					deps: ['revision', 'updated_at', 'updated_by'],
-					create: [
-						`create trigger store_audit_update before update on ${T} for each row execute function store_audit_update()`
-					],
-					drop: `drop trigger if exists store_audit_update on ${T}`
-				});
-			if (t.spec.nativeRules !== undefined) {
-				type State = Extract<FieldSpec, { kind: 'state' }>;
-				const statesOf = (spec: TableSpec) =>
-					Object.fromEntries(
-						Object.entries(spec.fields).flatMap(
-							([name, kind]): [string, Pick<State, 'initial' | 'states'>][] =>
-								kind.kind === 'state'
-									? [[name, { initial: kind.initial, states: kind.states }]]
-									: []
-						)
-					);
-				const parents: {
-					column: string;
-					table: string;
-					key: string;
-					type: string;
-					relation: string;
-					states: object;
-				}[] = [];
-				for (const rel of rels.filter(
-					(rel) =>
-						rel.model === t.model && rel.spec.owned === true && rel.spec.inverse !== undefined
-				))
-					for (const [i, target] of rel.to.entries()) {
-						const parent = all.get(target);
-						if (parent === undefined) continue;
-						const key = yield* fkType(s, target, rel.key);
-						parents.push({
-							column: rel.cols[i] ?? rel.field,
-							table: target,
-							key: key.name,
-							type: key.type,
-							relation: rel.spec.inverse ?? '',
-							states: statesOf(parent.spec)
-						});
-					}
-				for (const parent of all.values())
-					for (const [name, through] of Object.entries(parent.spec.through ?? {})) {
-						if (through.table !== t.model) continue;
-						const rel = rels.find((rel) => rel.model === t.model && rel.field === through.from);
-						if (rel === undefined) continue;
-						const i = rel.to.indexOf(parent.model);
-						if (i < 0) continue;
-						const key = yield* fkType(s, parent.model, rel.key);
-						parents.push({
-							column: rel.cols[i] ?? through.from,
-							table: parent.model,
-							key: key.name,
-							type: key.type,
-							relation: name,
-							states: statesOf(parent.spec)
-						});
-					}
-				const fields = Object.fromEntries(
-					Object.entries(t.spec.fields)
-						.filter(([, kind]) => !['seq', 'sum', 'count'].includes(kind.kind))
-						.map(([name]): [string, readonly string[]] => [name, t.fieldCols.get(name) ?? [name]])
-				);
-				const config = {
-					key: keyNames,
-					audit: workspace,
-					states: statesOf(t.spec),
-					fields,
-					parents: parents.sort(
-						(a, b) =>
-							a.table.localeCompare(b.table) ||
-							a.column.localeCompare(b.column) ||
-							a.relation.localeCompare(b.relation)
+			type State = Extract<FieldSpec, { kind: 'state' }>;
+			const statesOf = (spec: TableSpec) =>
+				Object.fromEntries(
+					Object.entries(spec.fields).flatMap(
+						([name, kind]): [string, Pick<State, 'initial' | 'states'>][] =>
+							kind.kind === 'state'
+								? [[name, { initial: kind.initial, states: kind.states }]]
+								: []
 					)
-				};
-				push({
-					id: `trigger:${t.model}.store_row_rules`,
-					rank: 'index',
-					table: t.model,
-					deps: [
-						...new Set([
-							...keyNames,
-							...Object.values(fields).flat(),
-							...(workspace
-								? ['revision', 'created_at', 'created_by', 'updated_at', 'updated_by']
-								: [])
-						])
-					],
-					create: [
-						`create trigger store_row_rules before insert or update or delete on ${T} for each row execute function store_row_rules(${lit(canonical(config))})`
-					],
-					drop: `drop trigger if exists store_row_rules on ${T}`
-				});
-			}
+				);
+			const locksOf = (table: Table) => Effect.forEach(
+				Object.entries(table.spec.locks ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+				([name, rule]) => Effect.map(staticSql(rule.where, table, (field) => `t.${q(field)}`), (sql) => ({
+					name, constraint: cname(table.model, 'lock', name), sql, except: rule.except ?? []
+				}))
+			);
+
+			const parents: {
+				column: string;
+				table: string;
+				key: string;
+				type: string;
+				relation: string;
+				locks: readonly { name: string; constraint: string; sql: string; except: readonly string[] }[];
+			}[] = [];
+			for (const rel of rels.filter(
+				(rel) =>
+					rel.model === t.model && rel.spec.owned === true && rel.spec.inverse !== undefined
+			))
+				for (const [i, target] of rel.to.entries()) {
+					const parent = all.get(target);
+					if (parent === undefined) continue;
+					const key = yield* fkType(s, target, rel.key);
+					parents.push({
+						column: rel.cols[i] ?? rel.field,
+						table: target,
+						key: key.name,
+						type: key.type,
+						relation: rel.spec.inverse ?? '',
+						locks: yield* locksOf(parent)
+					});
+				}
+			for (const parent of all.values())
+				for (const [name, through] of Object.entries(parent.spec.through ?? {})) {
+					if (through.table !== t.model) continue;
+					const rel = rels.find((rel) => rel.model === t.model && rel.field === through.from);
+					if (rel === undefined) continue;
+					const i = rel.to.indexOf(parent.model);
+					if (i < 0) continue;
+					const key = yield* fkType(s, parent.model, rel.key);
+					parents.push({
+						column: rel.cols[i] ?? through.from,
+						table: parent.model,
+						key: key.name,
+						type: key.type,
+						relation: name,
+						locks: yield* locksOf(parent)
+					});
+				}
+			const fields = Object.fromEntries(
+				Object.entries(t.spec.fields)
+					.filter(([, kind]) => !['seq', 'sum', 'count'].includes(kind.kind))
+					.map(([name]): [string, readonly string[]] => [name, t.fieldCols.get(name) ?? [name]])
+			);
+			const config = {
+				locks: yield* locksOf(t),
+				key: keyNames,
+				audit: workspace,
+				states: statesOf(t.spec),
+				fields,
+				parents: parents.sort(
+					(a, b) =>
+						a.table.localeCompare(b.table) ||
+						a.column.localeCompare(b.column) ||
+						a.relation.localeCompare(b.relation)
+				)
+			};
+			push({
+				id: `trigger:${t.model}.store_row_rules`,
+				rank: 'index',
+				table: t.model,
+				deps: [
+					...new Set([
+						...keyNames,
+						...Object.values(fields).flat(),
+						...(workspace
+							? ['revision', 'created_at', 'created_by', 'updated_at', 'updated_by']
+							: [])
+					])
+				],
+				create: [
+					`create trigger store_row_rules before insert or update or delete on ${T} for each row execute function store_row_rules(${lit(canonical(config))})`
+				],
+				drop: `drop trigger if exists store_row_rules on ${T}`
+			});
 
 			// Primary and identity columns already exist, but their declared value constraints still apply.
-			if (t.spec.nativeRules !== undefined)
-				for (const name of [
-					...new Set([...keyNames, ...(t.spec.identity === undefined ? [] : [t.spec.identity])])
-				]) {
-					const kind = t.spec.fields[name];
-					if (kind === undefined) continue;
-					const checkSql = yield* kindCheck(q(name), kind, s.currency, t, true);
-					if (checkSql !== null)
-						check(checkSql, [name], { model: t.model, kind: 'check', fields: [name] });
-					if (name === t.spec.identity) continue;
-					const type = yield* typeOf(kind, `${t.model}.${name}`);
-					const def = yield* defaultSql(kind, type, s.tz, true);
-					if (def !== null)
-						push({
-							id: `default:${t.model}.${name}`,
-							rank: 'default',
-							table: t.model,
-							deps: [name],
-							create: [`alter table ${T} alter column ${q(name)} set default ${def}`],
-							drop: `alter table ${T} alter column ${q(name)} drop default`
-						});
-				}
+			for (const name of [
+				...new Set([...keyNames, ...(t.spec.identity === undefined ? [] : [t.spec.identity])])
+			]) {
+				const kind = t.spec.fields[name];
+				if (kind === undefined) continue;
+				const checkSql = yield* kindCheck(q(name), kind, s.currency, t);
+				if (checkSql !== null)
+					check(checkSql, [name], { model: t.model, kind: 'check', fields: [name] });
+				if (name === t.spec.identity) continue;
+				const type = yield* typeOf(kind, `${t.model}.${name}`);
+				const def = yield* defaultSql(kind, type, s.tz);
+				if (def !== null)
+					push({
+						id: `default:${t.model}.${name}`,
+						rank: 'default',
+						table: t.model,
+						deps: [name],
+						create: [`alter table ${T} alter column ${q(name)} set default ${def}`],
+						drop: `alter table ${T} alter column ${q(name)} drop default`
+					});
+			}
 
 			// stored fields
 			for (const [name, k] of Object.entries(t.spec.fields)) {
@@ -877,7 +838,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 				}
 				const rollup = k.kind === 'sum' || k.kind === 'count';
 				const def =
-					(yield* defaultSql(k, c.type, s.tz, t.spec.nativeRules !== undefined)) ??
+					(yield* defaultSql(k, c.type, s.tz)) ??
 					(rollup ? '0' : null);
 				push({
 					id: `column:${t.model}.${name}`,
@@ -912,7 +873,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					});
 				if (k.kind === 'sum' || k.kind === 'count')
 					push(yield* rollupBackfill(t, name, k, rels, all));
-				const kc = yield* kindCheck(C, k, s.currency, t, t.spec.nativeRules !== undefined);
+				const kc = yield* kindCheck(C, k, s.currency, t);
 				if (kc !== null)
 					check(
 						kc,
@@ -966,7 +927,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					drop: `alter table ${T} drop column if exists ${q(name)} cascade`
 				});
 			}
-			const identifier = yield* recordLabelObjects(t, s.tz);
+			const identifier = yield* record_labelObjects(t, s.tz);
 			if (identifier !== undefined) {
 				push(identifier.function);
 				push({
@@ -983,6 +944,16 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 			}
 			const search: TableSpec['search'] =
 				t.spec.search ?? (identifier === undefined ? undefined : { text: [] });
+			if (search !== undefined || t.spec.record_label !== undefined)
+				for (const fn of searchDefinitions())
+					push({
+						id: `function:${fn.id}`,
+						rank: 'function',
+						table: '',
+						deps: [],
+						create: [fn.sql],
+						drop: null
+					});
 			if (search !== undefined) {
 				// the multilingual document: folded, tokenized and romanized when the row is written. A link in `text` is
 				// matched through the linked row's own document when read, never copied into this one.
@@ -1005,15 +976,6 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					doc.unshift(identifier.call);
 					deps.push(...identifier.deps);
 				}
-				for (const fn of searchDefinitions())
-					push({
-						id: `function:${fn.id}`,
-						rank: 'function',
-						table: '',
-						deps: [],
-						create: [fn.sql],
-						drop: null
-					});
 				push({
 					id: `column:${t.model}.${SEARCH}`,
 					rank: 'column',
@@ -1053,7 +1015,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 							);
 						continue;
 					}
-					const column = yield* ident(indexColumn(name));
+					const column = yield* ident(index_column(name));
 					const C = q(column);
 					push({
 						id: `column:${t.model}.${column}`,
@@ -1069,19 +1031,21 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 			}
 
 			// declared identity and invariants
+			const notNull = (cols: readonly string[]) => {
+				for (const column of cols)
+					push({
+						id: `notNull:${t.model}.${column}`,
+						rank: 'notNull',
+						table: t.model,
+						deps: [column],
+						create: [`alter table ${T} alter column ${q(column)} set not null`],
+						drop: `alter table ${T} alter column ${q(column)} drop not null`,
+						violations: `select count(*)::int as n from ${T} where ${q(column)} is null`
+					});
+			};
 			if (t.spec.natural !== undefined) {
 				const cols = yield* colsOf(t.spec.natural);
-				if (t.spec.nativeRules !== undefined)
-					for (const column of cols)
-						push({
-							id: `notNull:${t.model}.${column}`,
-							rank: 'notNull',
-							table: t.model,
-							deps: [column],
-							create: [`alter table ${T} alter column ${q(column)} set not null`],
-							drop: `alter table ${T} alter column ${q(column)} drop not null`,
-							violations: `select count(*)::int as n from ${T} where ${q(column)} is null`
-						});
+				notNull(cols);
 				constraint('key', `unique (${cols.map(q).join(', ')})`, cols, dupes(T, cols.map(q)), {
 					model: t.model,
 					kind: 'unique',
@@ -1090,6 +1054,11 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 			}
 			for (const u of t.spec.unique ?? []) {
 				const cols = yield* colsOf(u.fields);
+				if (u.import_key === true) {
+					if (u.where !== undefined)
+						return yield* fail(`${t.model}: import_key '${u.name ?? u.fields.join(',')}' cannot be partial`);
+					notNull(cols);
+				}
 				const meta: ConstraintMeta = {
 					model: t.model,
 					kind: 'unique',
@@ -1102,7 +1071,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					const nulls = cols.length > 1 ? ' nulls not distinct' : '';
 					constraint(
 						'uq',
-						`unique${nulls} (${cols.map(q).join(', ')})${deferrable}`,
+						`unique${nulls} (${cols.map(q).join(', ')})${u.import_key === true ? '' : deferrable}`,
 						cols,
 						dupes(T, cols.map(q), cols.length > 1 ? undefined : `${q(first)} is not null`),
 						meta
@@ -1130,7 +1099,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 				}
 			}
 			for (const [rule, c] of Object.entries(t.spec.check ?? {})) {
-				const { where: w, message } = checkOf(c);
+				const { where: w, message } = check_of(c);
 				check(yield* staticSql(w, t), whereDeps(w), {
 					model: t.model,
 					kind: 'check',
@@ -1139,7 +1108,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					...(message === undefined ? {} : { message })
 				});
 			}
-			for (const o of t.spec.noOverlap ?? []) {
+			for (const o of t.spec.no_overlap ?? []) {
 				const cols = yield* colsOf(o.key);
 				const pred = o.where === undefined ? null : yield* staticSql(o.where, t);
 				const alias = (a: string) => (c: string) => `${a}.${q(c)}`;
@@ -1196,7 +1165,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 				else
 					index(
 						'px',
-						`((${yield* pathText(t.spec.fields[p.field], q(p.field), p.path, `${t.model}.${p.field}`)}))`,
+						`((${yield* path_text(t.spec.fields[p.field], q(p.field), p.path, `${t.model}.${p.field}`)}))`,
 						[p.field]
 					);
 			}
@@ -1220,18 +1189,9 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					create: [`alter table ${T} add column ${q(c)} ${key.type}`],
 					drop: `alter table ${T} drop column if exists ${q(c)} cascade`
 				});
-				const action = r.spec.onDelete ?? (r.spec.owned === true ? 'cascade' : 'restrict');
-				const onDelete =
-					owner.spec.nativeRules !== undefined
-						? ` on delete ${action === 'setNull' ? 'set null' : action} on update restrict`
-						: owner.spec.managedDeletes === true
-							? ''
-							: action === 'cascade'
-								? ' on delete cascade'
-								: action === 'setNull'
-									? ' on delete set null'
-									: '';
-				const def = `foreign key (${q(c)}) references ${q(target)} (${q(key.name)})${onDelete}`;
+				const action = r.spec.on_delete ?? (r.spec.owned === true ? 'cascade' : 'restrict');
+				const on_delete = ` on delete ${action === 'set_null' ? 'set null' : action} on update restrict`;
+				const def = `foreign key (${q(c)}) references ${q(target)} (${q(key.name)})${on_delete}`;
 				const name = cname(r.model, 'fk', def);
 				push({
 					id: `fk:${r.model}.${name}`,
@@ -1243,7 +1203,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					drop: `alter table ${T} drop constraint if exists ${q(name)}`,
 					violations: `select count(*)::int as n from ${T} c where c.${q(c)} is not null and not exists (select 1 from ${q(target)} p where p.${q(key.name)} = c.${q(c)})`
 				});
-				if (owner.spec.nativeRules !== undefined && r.spec.unique === true) {
+				if (r.spec.unique === true) {
 					const def = `unique (${q(c)})${owner.spec.audit === true ? ' deferrable initially immediate' : ''}`;
 					const name = cname(r.model, 'uq', def);
 					push({
@@ -1330,12 +1290,12 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 	});
 
 /** Complete SQL definitions, including the database's multilingual search functions. */
-export const schemaObjects = /*#__PURE__*/ objectsWithSearch(searchFunctions);
+export const schema_objects = /*#__PURE__*/ objectsWithSearch(search_functions);
 /** Classification only: these fixed, never-dropped functions have no constraint metadata or destructive steps. */
 export const schemaObjectsForClassification = /*#__PURE__*/ objectsWithSearch(() => []);
 
 /** A json value's text at `path` (`#>> '{a,b}'`), cast to the kind the field's shape declares there. */
-export const pathText = Effect.fn('Store.pathText')(function* (
+export const path_text = Effect.fn('Store.path_text')(function* (
 	field: FieldSpec | undefined,
 	column: string,
 	path: readonly string[],
@@ -1348,10 +1308,10 @@ export const pathText = Effect.fn('Store.pathText')(function* (
 		if (k === undefined)
 			return yield* fail(`${at}: '${path.join('.')}' is no scalar path of its shape`);
 	}
-	const type = k === undefined ? undefined : colType(k);
+	const type = k === undefined ? undefined : col_type(k);
 	if (k === undefined || type === undefined || type === 'jsonb')
 		return yield* fail(`${at}: '${path.join('.')}' ends at no scalar`);
-	const text = `${column} #>> ${jsonPath(path)}`;
+	const text = `${column} #>> ${json_path(path)}`;
 	return type === 'text' ? `(${text})` : `(${text})::${type}`;
 });
 
@@ -1420,10 +1380,10 @@ function children(
 	e: Exclude<Expr, number | string | boolean | { readonly field: string }>
 ): readonly Expr[] {
 	if ('round' in e) return [e.round[0]];
-	if ('startOf' in e) return [e.startOf[0]];
-	if ('regexReplace' in e) return [e.regexReplace[0]];
-	if ('jsonText' in e) return [e.jsonText[0]];
-	if ('jsonLength' in e) return [e.jsonLength];
+	if ('start_of' in e) return [e.start_of[0]];
+	if ('regex_replace' in e) return [e.regex_replace[0]];
+	if ('json_text' in e) return [e.json_text[0]];
+	if ('json_length' in e) return [e.json_length];
 	if ('text' in e) return [e.text];
 	if ('lower' in e) return [e.lower];
 	if ('upper' in e) return [e.upper];
@@ -1434,7 +1394,7 @@ function children(
 	if ('times' in e) return e.times;
 	if ('div' in e) return e.div;
 	if ('concat' in e) return e.concat;
-	if ('plusDays' in e) return e.plusDays;
+	if ('plus_days' in e) return e.plus_days;
 	if ('substring' in e) return e.substring;
 	if ('eq' in e) return e.eq;
 	if ('ne' in e) return e.ne;
@@ -1453,10 +1413,9 @@ const kindCheck = (
 	C: string,
 	k: FieldSpec,
 	wsCurrency: string | null,
-	t: Table,
-	native = false
+	t: Table
 ): Fx<string | null> => {
-	if (native && colType(k) === 'jsonb')
+	if (col_type(k) === 'jsonb')
 		return Effect.succeed(
 			`(${C} is null or store_json_valid(${C}, ${lit(canonical(k))}::jsonb) is true)`
 		);
@@ -1468,33 +1427,31 @@ const kindCheck = (
 	switch (k.kind) {
 		case 'text':
 			if (k.many === true) {
-				if (native) {
-					const invalid = ['@.type() != "string"'];
-					if (k.max !== undefined && Number.isFinite(k.max)) {
-						const overflow = Math.floor(k.max) + 1;
-						// PostgreSQL bounds each regex repetition at 255; fixed groups retain larger text limits.
-						const repeat = (n: number): string =>
-							n <= 255
-								? `.{${n}}`
-								: `(?:${repeat(Math.floor(n / 255))}){255}${n % 255 === 0 ? '' : `.{${n % 255}}`}`;
-						invalid.push(
-							overflow <= 0
-								? '@.type() == "string"'
-								: `@ like_regex ${canonical(`^${repeat(overflow)}`)} flag "s"`
-						);
-					}
-					const formats: Record<string, string> = {
-						email: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$',
-						phone: '^\\+?[0-9][0-9 ()\\-.]{2,}$',
-						url: '^https?://\\S+$',
-						zone: '^[A-Za-z_]+(/[A-Za-z0-9_+\\-]+)*$'
-					};
-					const format = k.format === undefined ? undefined : formats[k.format];
-					if (format !== undefined) invalid.push(`!(@ like_regex ${canonical(format)})`);
-					parts.push(
-						`not jsonb_path_exists(to_jsonb(${C}), ${lit(`strict $[*] ? (${invalid.join(' || ')})`)})`
+				const invalid = ['@.type() != "string"'];
+				if (k.max !== undefined && Number.isFinite(k.max)) {
+					const overflow = Math.floor(k.max) + 1;
+					// PostgreSQL bounds each regex repetition at 255; fixed groups retain larger text limits.
+					const repeat = (n: number): string =>
+						n <= 255
+							? `.{${n}}`
+							: `(?:${repeat(Math.floor(n / 255))}){255}${n % 255 === 0 ? '' : `.{${n % 255}}`}`;
+					invalid.push(
+						overflow <= 0
+							? '@.type() == "string"'
+							: `@ like_regex ${canonical(`^${repeat(overflow)}`)} flag "s"`
 					);
 				}
+				const formats: Record<string, string> = {
+					email: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$',
+					phone: '^\\+?[0-9][0-9 ()\\-.]{2,}$',
+					url: '^https?://\\S+$',
+					zone: '^[A-Za-z_]+(/[A-Za-z0-9_+\\-]+)*$'
+				};
+				const format = k.format === undefined ? undefined : formats[k.format];
+				if (format !== undefined) invalid.push(`!(@ like_regex ${canonical(format)})`);
+				parts.push(
+					`not jsonb_path_exists(to_jsonb(${C}), ${lit(`strict $[*] ? (${invalid.join(' || ')})`)})`
+				);
 				break;
 			}
 			if (k.max !== undefined) parts.push(`char_length(${C}) <= ${k.max}`);
@@ -1505,7 +1462,7 @@ const kindCheck = (
 			break;
 		case 'int':
 		case 'decimal':
-			if (native && k.kind === 'decimal')
+			if (k.kind === 'decimal')
 				parts.push(`${C} not in ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)`);
 			if (k.kind === 'decimal') parts.push(`round(${C}, ${k.scale}) = ${C}`);
 			if (k.kind === 'decimal' && k.precision !== undefined)
@@ -1514,17 +1471,14 @@ const kindCheck = (
 			if (k.max !== undefined) parts.push(`${C} <= ${k.max}`);
 			break;
 		case 'number':
-			if (native) {
-				parts.push(
-					`${C} not in ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision)`
-				);
-				if (k.min !== undefined) parts.push(`${C} >= ${k.min}`);
-				if (k.max !== undefined) parts.push(`${C} <= ${k.max}`);
-			}
+			parts.push(
+				`${C} not in ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision)`
+			);
+			if (k.min !== undefined) parts.push(`${C} >= ${k.min}`);
+			if (k.max !== undefined) parts.push(`${C} <= ${k.max}`);
 			break;
 		case 'money': {
-			if (native)
-				parts.push(`${C} not in ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)`);
+			parts.push(`${C} not in ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)`);
 			// a declared scale (a unit price) replaces the minor-unit check
 			if (k.scale !== undefined) {
 				parts.push(`round(${C}, ${k.scale}) = ${C}`);
@@ -1542,16 +1496,16 @@ const kindCheck = (
 			break;
 		case 'date':
 		case 'instant':
-			if (native) parts.push(`isfinite(${C})`);
+			parts.push(`isfinite(${C})`);
 			break;
 		case 'time':
-			if (native) parts.push(`${C} < time '24:00'`);
+			parts.push(`${C} < time '24:00'`);
 			break;
 		case 'period':
 			parts.push(`not isempty(${C}) and not lower_inf(${C})`);
 			break;
 		case 'enum':
-			if (native && k.many === true)
+			if (k.many === true)
 				parts.push(`not jsonb_path_exists(to_jsonb(${C}), 'strict $[*] ? (@.type() != "string")')`);
 			parts.push(
 				k.many === true
@@ -1622,21 +1576,30 @@ const rollupBackfill = Effect.fnUntraced(function* (
 });
 
 /** A pure SQL wrapper keeps CEL subqueries legal inside a generated column; its versioned name rebuilds stored values on edits. */
-const recordLabelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
-	if (t.spec.recordLabel === undefined) return undefined;
-	const program = labelExpression(t.spec.recordLabel);
+const record_labelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
+	if (t.spec.record_label === undefined) return undefined;
+	const program = label_expression(t.spec.record_label);
 	if ('error' in program) return yield* fail(`${t.model}.record_label: ${program.error}`);
 	const roots = [...new Set(program.paths.map((path) => path.split('.')[0] ?? path))];
 	const dependencies: string[] = [];
+	let follows_relation = false;
 	for (const path of program.paths) {
 		const field = path.split('.')[0] ?? path;
-		// a label that follows a relation has no generated column: the page reads the target's label alongside the row
-		if (path.includes('.') && t.spec.fields[field]?.kind === 'ref') return undefined;
+		// A to-one label resolves under the output's related layer instead of copying another row into storage.
+		const related = t.spec.fields[field];
+		if (path.includes('.') && related?.kind === 'ref') {
+			if (related.many === true) return yield* fail(`${t.model}.record_label: '${path}' must follow a to-one relation`);
+			if (typeof related.to !== 'string' && related.to.length !== 1)
+				return yield* fail(`${t.model}.record_label: '${path}' must name one target`);
+			follows_relation = true;
+			continue;
+		}
 		const computed = t.spec.computed?.[field];
 		if (computed !== undefined) dependencies.push(...(yield* exprDeps(computed.expr, t)));
 		else if (t.cols.has(field)) dependencies.push(...(t.fieldCols.get(field) ?? [field]));
 		else return yield* fail(`${t.model}.record_label: unknown field '${field}'`);
 	}
+	if (follows_relation) return undefined;
 	const deps = [...new Set(dependencies)].sort();
 	const args = deps.map((field, index) => `$${index + 1} AS ${q(field)}`);
 	const types = deps.map((field) => t.cols.get(field)?.type ?? 'text');
@@ -1662,14 +1625,7 @@ const recordLabelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
 	const expression = program.sql(
 		(path) => `(label_row.j #> ARRAY[${path.split('.').map(lit).join(', ')}])`
 	);
-	const body = `SELECT CASE
-		WHEN value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN NULL
-		WHEN left(value, 1) IN ('{', '[') AND pg_input_is_valid(value, 'jsonb') THEN NULL
-		WHEN value ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}([.]\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$' THEN
-			CASE WHEN (value::timestamptz AT TIME ZONE 'UTC')::time = '00:00:00'::time THEN to_char(value::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD')
-			ELSE to_char(value::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') END
-		ELSE nullif(btrim(value), '') END
-		FROM (SELECT (${expression} #>> '{}') AS value FROM (${input}) label_row) label_value`;
+	const body = label_text_sql(expression, `(${input}) label_row`);
 	const name = `bolt_record_label_${t.model.slice(0, 22)}_${hash8(canonical([body, types]))}`;
 	let delimiter = '$record_label$';
 	while (body.includes(delimiter)) delimiter = `${delimiter.slice(0, -1)}_$`;
@@ -1687,10 +1643,16 @@ const recordLabelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
 });
 
 /** Constraint name → its declaration, for a writer's SQLSTATE map. */
-export const constraintIndex = Effect.fn('Store.constraintIndex')(function* (s: SchemaSpec) {
+export const constraint_index = Effect.fn('Store.constraint_index')(function* (s: SchemaSpec) {
 	const objects = yield* schemaObjectsForClassification(s);
-	return new Map(
-		objects.flatMap((o) => (o.meta === undefined ? [] : [[o.meta.name, o.meta] as const]))
+	const indexed = new Map(
+		objects.flatMap((object) => object.meta === undefined ? [] : [[object.meta.name, object.meta] as const])
 	);
+	for (const [table, spec] of Object.entries(s.tables))
+		for (const rule of Object.keys(spec.locks ?? {})) {
+				const name = cname(table, 'lock', rule);
+				indexed.set(name, { name, model: table, kind: 'locked', fields: [], rule });
+			}
+	return indexed;
 });
 export type { Json };

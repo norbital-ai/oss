@@ -7,9 +7,9 @@
 		releases: readonly ReleaseVersion[];
 		changes?: readonly ReleaseChange[] | undefined;
 		selected?: string | null | undefined;
-		onSelect?: ((commit: string) => void) | undefined;
-		onBuild?: ((commit: string) => void) | undefined;
-		onRestore?: ((commit: string) => void) | undefined;
+		on_select?: ((commit: string) => void) | undefined;
+		on_build?: ((commit: string) => void) | undefined;
+		on_restore?: ((commit: string) => void) | undefined;
 		busy?: boolean;
 		t?: ((key: string) => string) | undefined;
 		class?: string | undefined;
@@ -20,21 +20,21 @@
 	import Button from '../primitives/button/button.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import { cn } from '../primitives/utils.js';
-	import { rollbackReason, timelineEntries } from './model.js';
+	import { rollback_reason, timeline_entries } from './model.js';
 
 	let {
 		builds,
 		releases,
 		changes = [],
 		selected = null,
-		onSelect,
-		onBuild,
-		onRestore,
+		on_select,
+		on_build,
+		on_restore,
 		busy = false,
 		t = (key) => key,
 		class: className
 	}: ReleaseTimelineProps = $props();
-	const entries = $derived(timelineEntries(builds, releases, changes));
+	const entries = $derived(timeline_entries(builds, releases, changes));
 	const when = (at: string) => new Date(at).toLocaleString();
 </script>
 
@@ -46,7 +46,7 @@
 		{#each entries as entry (entry.commit)}
 			{@const current = entry.publications.find((release) => release.current)}
 			{@const version = current ?? entry.publications[0]}
-			{@const reason = version === undefined ? null : rollbackReason(version)}
+			{@const reason = version === undefined ? null : rollback_reason(version)}
 			<li class="relative min-w-0 pl-5" data-commit={entry.commit}>
 				<span
 					aria-hidden="true"
@@ -70,10 +70,10 @@
 							type="button"
 							class="min-w-0 flex-1 text-left font-medium text-foreground hover:underline disabled:cursor-default disabled:no-underline"
 							disabled={busy ||
-								onSelect === undefined ||
+								on_select === undefined ||
 								(entry.build === null && entry.publications.length === 0)}
 							aria-current={selected === entry.commit ? 'true' : undefined}
-							onclick={() => onSelect?.(entry.commit)}
+							onclick={() => on_select?.(entry.commit)}
 							title={entry.commit}
 						>
 							{entry.message}
@@ -161,21 +161,21 @@
 								: t(reason)}
 						</p>
 					{/if}
-					{#if (entry.build !== null && onBuild !== undefined) || (version !== undefined && onRestore !== undefined)}
+					{#if (entry.build !== null && on_build !== undefined) || (version !== undefined && on_restore !== undefined)}
 						<div class="flex flex-wrap gap-1">
-							{#if entry.build !== null && onBuild !== undefined}<Button
+							{#if entry.build !== null && on_build !== undefined}<Button
 									variant="ghost"
 									class="h-7 px-2 text-micro"
 									disabled={busy}
-									onclick={() => onBuild?.(entry.commit)}
+									onclick={() => on_build?.(entry.commit)}
 									><Icon name="lucide:scroll-text" class="size-3" />{t('Build log')}</Button
 								>{/if}
-							{#if version !== undefined && onRestore !== undefined}<Button
+							{#if version !== undefined && on_restore !== undefined}<Button
 									variant="outline"
 									class="h-7 px-2 text-micro"
 									disabled={busy || reason !== null}
-									disabledMessage={reason === null ? undefined : t(reason)}
-									onclick={() => onRestore?.(version.commit)}
+									disabled_message={reason === null ? undefined : t(reason)}
+									onclick={() => on_restore?.(version.commit)}
 									><Icon
 										name={version.undo ? 'lucide:undo-2' : 'lucide:history'}
 										class="size-3"

@@ -3,22 +3,23 @@
 // `Retry-After`) and the body runner sync bodies and the `test` body share. The transform reads the manifest's definitions and envoys, which no guest transform sees: the model's
 // allowlists fix `integration` and `owner` at create; this keeps the rest true of the definition — a known definition,
 // an owner only where its driver syncs personal accounts, an envoy only on a workspace instance of a conversation
-// definition, a configuration that decodes (defaults filled), and a named instance (`+workspace.ts`'s) never deleted here.
-import { Clock, Crypto, Effect, Option, Predicate, Schema } from 'effect';
-import { localOf } from '@norbital-ai/std/zone';
+// definition and a configuration that decodes with its defaults filled. Accounts remain runtime records.
+import { Clock, Crypto, Effect, Option, Predicate, Result, Schema } from 'effect';
+import { local_of } from '@norbital-ai/std/zone';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { Drivers } from '../ports.ts';
 import { Manifest, Reads, Live, Wake, type Bridge } from '../services.ts';
 import type { GuestShape } from '../services.ts';
 import { prepareSend, sendPiece } from '../conversations/outbound.ts';
 import { stableId } from '../conversations/store.ts';
-import { duration } from '../runs/time.ts';
+import { parse_rate } from '../access/rate.ts';
 import { Port } from '../port.ts';
-import { RequestOutput } from './request-schema.ts';
+import { KindSchema } from '@norbital-ai/std/kind';
 import type { EngineManifest } from '../manifest.ts';
-import type { Json, Rate } from '../../decl/values.ts';
+import type { Json } from '../../decl/values.ts';
 import {
-	configurationDefaults,
+	configuration_defaults,
 	DRIVERS,
 	type HandleKind,
 	type IntegrationSpec
@@ -27,6 +28,7 @@ import { SYSTEM } from '../../system/index.ts';
 import { ImportStart } from '../../protocol/schema.ts';
 import {
 	LIMITS,
+	cross_failure,
 	type Bindings,
 	type CrossAnswer,
 	type EngineActor,
@@ -38,12 +40,12 @@ import {
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { decodeInput } from '../callables/decode.ts';
-import { enqueue, nextDue } from '../runs/queue.ts';
+import { enqueue, next_due } from '../runs/queue.ts';
 import type { Item } from '../write/flatten.ts';
 import { Chain } from '../write/sql.ts';
 import {
-	validateDatabaseRequest,
-	validateDatabaseResult,
+	validate_database_request,
+	validate_database_result,
 	type DatabaseRequest
 } from './database.ts';
 
@@ -91,7 +93,7 @@ export function decodeConfiguration(
 	const given = Object.entries(Predicate.isObject(value) ? value : {}).filter(
 		([k, v]) => v !== null || def.configuration?.[k]?.optional === true
 	);
-	return { value: { ...configurationDefaults(def), ...Object.fromEntries(given) } };
+	return { value: { ...configuration_defaults(def), ...Object.fromEntries(given) } };
 }
 
 /** The batch's rows as they will be written, or the first refusal. `stored` is an updated or deleted row's pre-image. */
@@ -109,8 +111,6 @@ export function instanceTransform(
 			continue;
 		}
 		if (c.op === 'delete') {
-			if (stored(c.id)?.['named'] === true)
-				return refuse(c.path, 'id', `'${c.id}' is a connection of +workspace.ts; remove it there.`);
 			out.push(it);
 			continue;
 		}
@@ -129,16 +129,18 @@ export function instanceTransform(
 			if (Option.isNone(decoded))
 				return refuse(c.path, 'import_start', 'Choose a valid import start.');
 			if (decoded.value.kind === 'since') {
-				try {
-					if (!Number.isFinite(Date.parse(decoded.value.at))) throw new Error('instant');
-					localOf(Date.parse(decoded.value.at), decoded.value.zone);
-				} catch {
+				const at = Date.parse(decoded.value.at),
+					zone = decoded.value.zone;
+				// the zone functions throw for a zone the runtime does not know
+				if (
+					!Number.isFinite(at) ||
+					Result.isFailure(Result.try({ try: () => local_of(at, zone), catch: () => zone }))
+				)
 					return refuse(
 						c.path,
 						'import_start',
 						'Choose a valid import instant and IANA time zone.'
 					);
-				}
 			}
 		}
 		const envoy = values['envoy'] ?? null;
@@ -217,47 +219,28 @@ export const writeStatus = (instance: string, patch: { readonly [key: string]: J
 			p = c.p(patch),
 			merged = `coalesce(i.status, '{}'::jsonb) || ${p}::jsonb`;
 		const since = `CASE WHEN ${p}::jsonb -> 'state' IS NOT NULL AND i.status -> 'state' IS DISTINCT FROM ${p}::jsonb -> 'state' THEN jsonb_build_object('since', ${c.p(at)}::text) ELSE '{}'::jsonb END`;
-		c.cte(
+		capturePiece(c,
 			'status',
-			`UPDATE sys_integration i SET status = ${merged} || ${since}, revision = i.revision + 1 WHERE i.id = ${c.p(instance)} AND ${merged} IS DISTINCT FROM coalesce(i.status, '{}'::jsonb) RETURNING 'sys_integration'::text AS c, i.id::text AS id, i.revision AS revision, 'update'::text AS op, 'direct'::text AS cause, to_jsonb(old) AS o, to_jsonb(new) AS n`
+			'sys_integration',
+			`UPDATE sys_integration i SET status = ${merged} || ${since}, revision = i.revision + 1 WHERE i.id = ${c.p(instance)} AND ${merged} IS DISTINCT FROM coalesce(i.status, '{}'::jsonb)`
 		);
 		if (patch.state === 'connected')
 			enqueue(
 				c,
-				[{ automation: 'sync.deliver', input: {}, dueAt: at, cause: 'schedule', depth: 0 }],
+				[{ automation: 'sync.deliver', input: {}, due_at: at, cause: 'schedule', depth: 0 }],
 				{
 					when: `EXISTS (SELECT 1 FROM status x JOIN sys_outbox o ON o.instance = x.id WHERE o.status IN ('queued', 'sending'))`
 				}
 			);
-		const rows = yield* db.returning(
+		const answer = yield* nativeCommit(db.write, live.publish, c,
 			Schema.Struct({
-				captured: Schema.Array(
-					Schema.Struct({
-						model: Schema.String,
-						id: Schema.String,
-						op: Schema.Literals(['create', 'update', 'delete']),
-						revision: Schema.Number,
-						old: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
-						new: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
-						cause: Schema.Literals(['direct', 'derived', 'cascade', 'erased'])
-					})
-				),
+				...CapturedResult.fields,
 				next_due: Schema.NullOr(Schema.String)
 			}),
-			c.sql(
-				`(SELECT coalesce(jsonb_agg(jsonb_build_object('model', c, 'id', id, 'op', op, 'revision', revision, 'old', o, 'new', n, 'cause', cause)), '[]'::jsonb) FROM status) AS captured, (${nextDue(c)})::text AS next_due`
-			)
+			`(${next_due(c)})::text AS next_due`
 		);
-		const answer = rows[0];
-		if (answer !== undefined) {
-			live.publish(answer.captured);
-			if (answer.next_due !== null) yield* wake.at(answer.next_due);
-		}
+		if (answer.next_due !== null) yield* wake.at(answer.next_due);
 	});
-const fail = (code: string, message: string): CrossAnswer => ({
-	ok: false,
-	error: { kind: 'bolt', code, message }
-});
 const HttpOp = Schema.Struct({
 	method: Schema.Literals(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
 	path: Schema.String,
@@ -268,7 +251,7 @@ const HttpOp = Schema.Struct({
 		Schema.Record(Schema.String, Schema.Union([Schema.String, Schema.Number, Schema.Boolean]))
 	),
 	body: Schema.optionalKey(Schema.Json),
-	output: Schema.optionalKey(RequestOutput)
+	output: Schema.optionalKey(KindSchema)
 });
 const HttpResponse = Schema.Struct({
 	status: Schema.Number,
@@ -277,6 +260,7 @@ const HttpResponse = Schema.Struct({
 	retryAfter: Schema.optionalKey(Schema.Number)
 });
 type RequestConfig = {
+	readonly readOnly?: boolean;
 	manifest: EngineManifest;
 	db: TenantDbShape;
 	links: Drivers['Service'];
@@ -293,10 +277,10 @@ const paceOf = (db: TenantDbShape, instance: string): Pace => {
 	return p;
 };
 /** The milliseconds a definition's `rate` (`'10/s'`, `'600/min'`, `'5/10s'`) leaves between two requests. */
-const spacing = (rate: Rate | undefined): number => {
+const spacing = (rate: IntegrationSpec['rate']): number => {
 	if (rate === undefined) return 0;
-	const [n, per = 's'] = rate.split('/');
-	return duration(/^\d/.test(per) ? per : `1${per}`) / Number(n);
+	const { limit, windowMs } = parse_rate(rate);
+	return windowMs / limit;
 };
 /** Until when an instance's provider asked (`Retry-After`) that nothing be sent to it; 0 when it did not. */
 export const retryAfterOf = (db: TenantDbShape, instance: string): number =>
@@ -313,18 +297,18 @@ export const instanceRequest = (
 	Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
 		const instance = yield* known ??
 			instancesOf(cfg.manifest, cfg.db, { ids: [to] }).pipe(Effect.map(([first]) => first));
-		if (instance === undefined) return fail('invalidInput', `No integration instance '${to}'.`);
+		if (instance === undefined) return cross_failure('invalid_input', `No integration instance '${to}'.`);
 		const driver = DRIVERS[instance.definition.driver],
 			kind = 'request' in driver ? driver.request : 'call' in driver ? driver.call : undefined;
 		if (kind === undefined)
-			return fail(
-				'invalidInput',
+			return cross_failure(
+				'invalid_input',
 				`'${to}' is a ${instance.definition.driver} instance; it takes no request.`
 			);
 		// a member's own account answers only its definition's bodies (they pass `known`), never an automation
 		if (instance.owner !== null && known === undefined)
-			return fail(
-				'invalidInput',
+			return cross_failure(
+				'invalid_input',
 				`'${to}' is a member's own account; only its integration calls it.`
 			);
 		if (!instance.active)
@@ -334,24 +318,20 @@ export const instanceRequest = (
 			};
 		const decode: Effect.Effect<DatabaseRequest | typeof HttpOp.Type, BoltError> =
 			kind === 'database'
-				? Effect.try({
-						try: () => validateDatabaseRequest(op),
-						catch: (error) =>
-							error instanceof BoltError
-								? error
-								: BoltError.make('invalidInput', 'admission', 'Invalid database request.')
-					})
+				? validate_database_request(op)
 				: Schema.decodeUnknownEffect(HttpOp)(op, { errors: 'all', onExcessProperty: 'error' }).pipe(
 						Effect.mapError(() =>
 							BoltError.make(
-								'invalidInput',
+								'invalid_input',
 								'admission',
 								'An http request is { method, path, query?, headers?, body?, output }.'
 							)
 						)
 					);
 		const wire = yield* decode.pipe(Effect.catch((error) => Effect.succeed(error)));
-		if (wire instanceof BoltError) return fail(wire.code, wire.message);
+		if (wire instanceof BoltError) return cross_failure(wire.code, wire.message);
+		if (cfg.readOnly && ('method' in wire ? wire.method !== 'GET' : !['values', 'read', 'cdc_captures', 'cdc_identity', 'cdc_clock', 'cdc_age', 'cdc_page'].includes(wire.op)))
+			return cross_failure('forbidden', 'A cached call may issue only a read request.');
 		const { output, ...plain } = 'output' in wire ? wire : { ...wire, output: undefined };
 		const http =
 			key === undefined || !('method' in plain)
@@ -394,7 +374,7 @@ export const instanceRequest = (
 			);
 		if (got._tag === 'Failure') {
 			const error = got.failure;
-			if (error._tag === 'Fenced') return fail('fenced', error.message);
+			if (error._tag === 'Fenced') return cross_failure('fenced', error.message);
 			return {
 				ok: false,
 				error:
@@ -407,24 +387,11 @@ export const instanceRequest = (
 			};
 		}
 		if (kind === 'database')
-			return yield* Effect.try({
-				try: () =>
-					({
-						ok: true,
-						value: validateDatabaseResult(
-							got.success,
-							Predicate.isObject(op) && typeof op['maxRows'] === 'number'
-								? op['maxRows']
-								: undefined
-						)
-					}) satisfies CrossAnswer,
-				catch: (error) =>
-					BoltError.make(
-						'upstream',
-						'facility',
-						error instanceof Error ? error.message : 'Database result is invalid.'
-					)
-			}).pipe(
+			return yield* validate_database_result(
+				got.success,
+				Predicate.isObject(op) && typeof op['max_rows'] === 'number' ? op['max_rows'] : undefined
+			).pipe(
+				Effect.map((value) => ({ ok: true, value }) satisfies CrossAnswer),
 				Effect.catch((error) =>
 					Effect.succeed({
 						ok: false,
@@ -449,7 +416,7 @@ export const instanceRequest = (
 		if (res.status === 429)
 			return {
 				ok: false,
-				error: { kind: 'rateLimited', message: `'${to}' is rate limited`, status: res.status }
+				error: { kind: 'rate_limited', message: `'${to}' is rate limited`, status: res.status }
 			};
 		if (res.status < 200 || res.status >= 300)
 			return {
@@ -476,6 +443,7 @@ export const instanceRequest = (
 	});
 type BodyConfig = RequestConfig & {
 	guest: GuestShape;
+	live: Live['Service'];
 	read: Reads['Service']['run'];
 	bindings: () => Effect.Effect<Bindings>;
 	crypto: Crypto.Crypto;
@@ -517,7 +485,7 @@ export const integrationBody = (
 					message,
 					cfg.crypto
 				);
-				if ('error' in prepared) return fail('invalidInput', prepared.error);
+				if ('error' in prepared) return cross_failure('invalid_input', prepared.error);
 				const id = stableId('sync.send', options.key ?? options.id, String(sends++)),
 					c = new Chain();
 				sendPiece(
@@ -526,7 +494,7 @@ export const integrationBody = (
 					bindings.now
 				);
 				if (options.fence !== undefined) yield* options.fence;
-				yield* cfg.db.write(c.sql('NULL AS outcome'));
+				yield* nativeCommit(cfg.db.write, cfg.live.publish, c, CapturedResult);
 				yield* cfg.announce(bindings.now);
 				return { ok: true, value: id };
 			});
@@ -542,7 +510,7 @@ export const integrationBody = (
 									Effect.catch((error) =>
 										Effect.succeed(
 											reads.map(() =>
-												fail(error._tag === 'BoltError' ? error.code : 'internal', error.message)
+												cross_failure(error._tag === 'BoltError' ? error.code : 'internal', error.message)
 											)
 										)
 									)
@@ -553,7 +521,7 @@ export const integrationBody = (
 						(call): Effect.Effect<CrossAnswer> => {
 							if (call._tag === 'read')
 								return Effect.succeed(
-									answers[index++] ?? fail('internal', 'the read returned no answer')
+												answers[index++] ?? cross_failure('internal', 'the read returned no answer')
 								);
 							const done =
 								call._tag === 'request' && call.to === null
@@ -570,12 +538,12 @@ export const integrationBody = (
 										: undefined;
 							return done === undefined
 								? Effect.succeed(
-										fail('unsupported', `an integration body cannot ${call._tag} here`)
+												cross_failure('unsupported', `an integration body cannot ${call._tag} here`)
 									)
 								: done.pipe(
 										Effect.catch((error) =>
 											Effect.succeed(
-												fail(error._tag === 'BoltError' ? error.code : 'internal', error.message)
+												cross_failure(error._tag === 'BoltError' ? error.code : 'internal', error.message)
 											)
 										)
 									);

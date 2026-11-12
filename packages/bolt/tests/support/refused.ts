@@ -5,7 +5,7 @@ import type { FilesPort } from '../../src/engine/contracts.ts';
 export const refused = (facility: string) => () =>
 	Promise.reject(new Unavailable({ facility, reason: `the host provides no ${facility}` }));
 
-export const refusedFiles: FilesPort = {
+export const refused_files: FilesPort = {
 	put: refused('files'),
 	get: refused('files'),
 	url: refused('files'),

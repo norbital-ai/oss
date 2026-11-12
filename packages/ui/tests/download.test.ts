@@ -4,7 +4,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { it, afterEach, vi } from '@effect/vitest';
 import { strFromU8, unzipSync } from 'fflate';
-import { downloadTextFiles } from '../src/utilities/download.ts';
+import { download_text_files } from '../src/utilities/download.ts';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -40,7 +40,7 @@ it.live('a 91-document export uses one download and retains every UTF-8 file in 
 			name: `payslip-${index}.csv`,
 			content: `\uFEFFname,amount\n员工 ${index},${index}.00`
 		}));
-		downloadTextFiles(documents, 'payroll.zip');
+		download_text_files(documents, 'payroll.zip');
 		assert.deepEqual(probe.clicks, ['payroll.zip']);
 		const blob = probe.blobs[0];
 		assert.ok(blob);
@@ -61,7 +61,7 @@ it.live('a 91-document export uses one download and retains every UTF-8 file in 
 it.live('batch exports preserve duplicate filenames and flatten paths safely', () =>
 	Effect.gen(function* () {
 		const probe = capture();
-		downloadTextFiles(
+		download_text_files(
 			[
 				{ name: '../report.csv', content: 'one' },
 				{ name: 'C:\\folder\\report.csv', content: 'two' },
@@ -90,7 +90,7 @@ it.live('batch exports preserve duplicate filenames and flatten paths safely', (
 it.live('one CSV remains a direct download with its BOM and releases its URL after the click', () =>
 	Effect.gen(function* () {
 		const probe = capture();
-		downloadTextFiles([{ name: 'rows.csv', content: '\uFEFFname\r\n中文' }]);
+		download_text_files([{ name: 'rows.csv', content: '\uFEFFname\r\n中文' }]);
 		assert.deepEqual(probe.clicks, ['rows.csv']);
 		const blob = probe.blobs[0];
 		assert.ok(blob);
@@ -115,7 +115,7 @@ it.live('a refused click preserves its error and still removes the link and rele
 			throw failure;
 		});
 		assert.throws(
-			() => downloadTextFiles([{ name: 'rows.csv', content: 'name' }]),
+			() => download_text_files([{ name: 'rows.csv', content: 'name' }]),
 			(error) => error === failure
 		);
 		assert.equal(document.querySelector('a[download="rows.csv"]'), null);

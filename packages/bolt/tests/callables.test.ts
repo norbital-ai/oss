@@ -1,7 +1,7 @@
 // Pure parts of the callables area: typed-input decode (rules 5, 23, 36) and the rule 52a due time.
 import { describe, expect, it } from '@effect/vitest';
-import { dueAt as roundedDueAt, materialize } from '../src/engine/runs/time.ts';
-const dueAt = (now: string, at?: string | { var: string }) => {
+import { due_at as roundedDueAt, materialize } from '../src/engine/runs/time.ts';
+const due_at = (now: string, at?: string | { var: string }) => {
 	const ms = Date.parse(now);
 	const when =
 		at === undefined
@@ -87,7 +87,7 @@ describe('decodeInput', () => {
 		const spec = {
 			list: { kind: 'json', shape: optionalId, many: true },
 			record: { kind: 'record', of: optionalId },
-			union: { kind: 'union', of: [{ kind: 'int' }, optionalId] },
+			union: { kind: 'union', of: [{ kind: 'int' }, { kind: 'text', optional: true }] },
 			tagged: { kind: 'union', by: 'type', arms: { ref: { who: optionalId } } },
 			taggedList: {
 				kind: 'json',
@@ -118,10 +118,7 @@ describe('decodeInput', () => {
 				{ list: { kind: 'json', shape: spec.union, many: true } },
 				{ list: [null, 1, ID] }
 			)
-		).toEqual({
-			problems: [],
-			refs: [{ model: 'customers', id: ID, field: 'list.2' }]
-		});
+		).toEqual({ problems: [], refs: [] });
 		expect(
 			decodeInput(
 				{ list: spec.required, tagged: spec.tagged },
@@ -134,12 +131,12 @@ describe('decodeInput', () => {
 	});
 });
 
-describe('dueAt (rule 52a)', () => {
+describe('due_at (rule 52a)', () => {
 	const now = '2026-09-25T10:01:30.000Z';
 	it('is exact under 5 minutes ahead and rounds up to a 5-minute bucket from 5 minutes on', () => {
-		expect(dueAt(now)).toBe(now);
-		expect(dueAt(now, { var: 'now + minutes(1)' })).toBe('2026-09-25T10:02:30.000Z');
-		expect(dueAt(now, { var: 'now + hours(1)' })).toBe('2026-09-25T11:05:00.000Z');
-		expect(dueAt(now, '2026-09-26T00:00:00.000Z')).toBe('2026-09-26T00:00:00.000Z');
+		expect(due_at(now)).toBe(now);
+		expect(due_at(now, { var: 'now + minutes(1)' })).toBe('2026-09-25T10:02:30.000Z');
+		expect(due_at(now, { var: 'now + hours(1)' })).toBe('2026-09-25T11:05:00.000Z');
+		expect(due_at(now, '2026-09-26T00:00:00.000Z')).toBe('2026-09-26T00:00:00.000Z');
 	});
 });

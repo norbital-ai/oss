@@ -22,23 +22,23 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 
 <script lang="ts">
 	import { Schema } from 'effect';
-	import { inputSchema } from '@norbital-ai/std/kind';
-	import { useEnumText } from '../model/context.js';
+	import { input_schema } from '@norbital-ai/std/kind';
+	import { use_enum_text } from '../model/context.js';
 	import { usePageContext } from '../client/context.js';
 	import Badge from '../primitives/badge/badge.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import ReadonlyMarkdown from '../editors/readonly-markdown.svelte';
 	import CodeEditor from '../editors/code-editor.svelte';
 	import Icon from '@iconify/svelte';
-	import { cn, uiText } from '../primitives/utils.js';
-	import { fieldEntry } from './builtin/index.js';
+	import { cn, ui_text } from '../primitives/utils.js';
+	import { field_entry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { arcOf, currencyOf, format, shownKind, valueObject } from './kind.js';
+	import { arcOf, currencyOf, format, shownKind, value_object } from './kind.js';
 	import { KINDS } from './registry.js';
 	import Self from './show.svelte';
 	import StateBadge from './state-badge.svelte';
 	import StructuredData from './structured-data.svelte';
-	import { isJsonSchemaDocument } from './json-schema.js';
+	import { is_json_schema_document } from './json-schema.js';
 	import Picker from './picker.svelte';
 
 	let {
@@ -54,8 +54,8 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	}: ShowProps = $props();
 	const pageContext = usePageContext();
 	const host = useKinds();
-	const t = uiText();
-	const words = useEnumText();
+	const t = ui_text();
+	const words = use_enum_text();
 	const kind = $derived(shownKind(declared));
 	const v = $derived(value ?? null);
 	const text = $derived(
@@ -65,17 +65,17 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 			currency: kind.kind === 'money' ? currencyOf(kind, row, host.currency) : undefined
 		})
 	);
-	const field = $derived(fieldEntry(kind, host));
+	const field = $derived(field_entry(kind, host));
 	const shape = $derived(
 		kind.kind === 'custom' && field?.entry.renderer === undefined
 			? field?.entry.shape
 			: kind.kind === 'json'
 				? kind.shape
 				: kind.kind === 'union' && 'of' in kind
-					? kind.of.find((arm) => Schema.is(inputSchema(arm))(value))
+					? kind.of.find((arm) => Schema.is(input_schema(arm))(value))
 					: undefined
 	);
-	const object = $derived(valueObject(v) ? v : null);
+	const object = $derived(value_object(v) ? v : null);
 	const numeric = $derived(KINDS[kind.kind].numeric);
 </script>
 
@@ -104,7 +104,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 			relation?.targets[0] ??
 			(kind.kind === 'ref' && typeof kind.to === 'string' ? kind.to : '')}
 		value={arc?.id ?? String(v)}
-		onChange={() => {}}
+		on_change={() => {}}
 		{id}
 		readonly
 	/>
@@ -126,7 +126,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 			language="javascript"
 			wrap
 			readonly
-			minHeight="2.25rem"
+			min_height="2.25rem"
 			value={v}
 			aria-label={name}
 		/>
@@ -179,7 +179,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	<div {id} class={cn('min-w-0', className)}>
 		<StructuredData {kind} value={v} mode="view" {name} {row} />
 	</div>
-{:else if kind.kind === 'json' && isJsonSchemaDocument(v)}
+{:else if kind.kind === 'json' && is_json_schema_document(v)}
 	<StructuredData schema={v} mode="schema" {name} {id} />
 {:else if kind.kind === 'json' || kind.kind === 'custom'}
 	<div {id} class={cn('min-w-0', className)}>

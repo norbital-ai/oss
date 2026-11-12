@@ -1,4 +1,5 @@
 import { Effect, Schema } from 'effect';
+import { literal } from '@norbital-ai/std/sql';
 import { StoreError } from '../errors.ts';
 import { canonical } from '@norbital-ai/std/hash';
 
@@ -48,8 +49,8 @@ const reserved = new Set([
 	'cutoff'
 ]);
 const invalid = (message: string) =>
-	StoreError.of('schemaInvalid', 'decode', `append-only log: ${message}`);
-export const logSpec = (input: AppendOnlyLogSpec) =>
+	StoreError.of('schema_invalid', 'decode', `append-only log: ${message}`);
+export const log_spec = (input: AppendOnlyLogSpec) =>
 	Effect.gen(function* () {
 		const spec = yield* Schema.decodeUnknownEffect(AppendOnlyLogSpec, {
 			onExcessProperty: 'error'
@@ -123,20 +124,18 @@ export const logSpec = (input: AppendOnlyLogSpec) =>
 		return spec;
 	});
 
-export const logSnapshot = (spec: AppendOnlyLogSpec): string =>
+export const log_snapshot = (spec: AppendOnlyLogSpec): string =>
 	`${JSON.stringify(JSON.parse(canonical(spec)), null, '\t')}\n`;
-export const readLogSnapshot = (text: string) =>
+export const read_log_snapshot = (text: string) =>
 	Schema.decodeUnknownEffect(Schema.fromJsonString(AppendOnlyLogSpec))(text).pipe(
 		Effect.mapError((cause) =>
-			StoreError.of('migrationInvalid', 'decode', `log snapshot: ${cause.message}`)
+			StoreError.of('migration_invalid', 'decode', `log snapshot: ${cause.message}`)
 		),
-		Effect.flatMap(logSpec)
+		Effect.flatMap(log_spec)
 	);
 
-export const logLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
-export const logName = (value: string): string => `"${value.replaceAll('"', '""')}"`;
-export const logPath = (path: readonly string[], row = 'event', text = true): string =>
+export const log_path = (path: readonly string[], row = 'event', text = true): string =>
 	path.reduce(
-		(sql, part, i) => `${sql}${text && i === path.length - 1 ? '->>' : '->'}${logLiteral(part)}`,
+		(sql, part, i) => `${sql}${text && i === path.length - 1 ? '->>' : '->'}${literal(part)}`,
 		row
 	);

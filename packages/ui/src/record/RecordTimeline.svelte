@@ -7,7 +7,8 @@ revision returns to the live record.
 <script lang="ts">
 	import { recordText } from '../kinds/kind.js';
 	import { Effect } from 'effect';
-	import { observeOnce, run } from '../effect/index.js';
+	import { observe_once } from '../effect/index.js';
+	import ReadOnce from '../read/ReadOnce.svelte';
 	import { format } from '../kinds/kind.js';
 	import { useKinds } from '../kinds/context.js';
 	import type { RecordHistoryConfig } from './history.js';
@@ -16,9 +17,9 @@ revision returns to the live record.
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import Badge from '../primitives/badge/badge.svelte';
 	import { checkpoints, type Checkpoint } from './history.js';
-	import { byId, firstOf, pageOf, READ_LIMIT, requestJson } from '../read/request.js';
-	import { label, msg } from '../text/messages.js';
-	import { labelRead } from '../relations/select.js';
+	import { by_id, first_of, page_of, READ_LIMIT, request_json } from '../read/request.js';
+	import { label, msg, catalogText } from '../text/messages.js';
+	import { label_read } from '../relations/select.js';
 
 	let {
 		of,
@@ -70,10 +71,10 @@ revision returns to the live record.
 	// who wrote a revision: a member by name when this caller may read them, else what kind of actor it was
 	const names = new Map<string, string>();
 	function who(actor: Checkpoint['actor']): Effect.Effect<string> {
-		if (actor === null) return Effect.succeed(msg(bolt, 'record.actor.unknown', 'Unknown'));
+		if (actor === null) return Effect.succeed(msg(bolt, 'record.actor.unknown'));
 		if (actor.kind !== 'member')
 			return Effect.succeed(
-				msg(
+				catalogText(
 					bolt,
 					`record.actor.${actor.kind}`,
 					actor.kind === 'system'
@@ -88,9 +89,9 @@ revision returns to the live record.
 		const known = names.get(actor.id);
 		return known !== undefined
 			? Effect.succeed(known)
-			: bolt.query(byId('sys_user', actor.id)).pipe(
+			: bolt.query(by_id('sys_user', actor.id)).pipe(
 					Effect.map((answer) => {
-						const user = firstOf(answer, 'sys_user');
+						const user = first_of(answer, 'sys_user');
 						return String(user?.['name'] ?? user?.['email'] ?? actor.id);
 					}),
 					Effect.catch(() => Effect.succeed(actor.id)),
@@ -107,27 +108,27 @@ revision returns to the live record.
 		// an approval's provisional change says where its request stands; a rollback says it was the request's
 		return c.approval === null || c.approval.state === null
 			? base
-			: c.restoredFrom !== null
-				? msg(bolt, 'record.rolledBackBy', '{what} · rolled back ({state})', {
+			: c.restored_from !== null
+				? msg(bolt, 'record.rolledBackBy', {
 						what: base,
 						state: c.approval.state
 					})
-				: msg(bolt, 'record.underRequest', '{what} · approval {state}', {
+				: msg(bolt, 'record.underRequest', {
 						what: base,
 						state: c.approval.state
 					});
 	}
 	function described(c: Checkpoint, model: string): string {
-		if (c.restoredFrom !== null)
-			return msg(bolt, 'record.restoredFrom', 'Restored from revision {n}', { n: c.restoredFrom });
-		if (c.revision === 1) return msg(bolt, 'record.created', 'Created');
-		if (c.fields.length === 0) return msg(bolt, 'record.noVisibleChanges', 'No visible changes');
+		if (c.restored_from !== null)
+			return msg(bolt, 'record.restored_from', { n: c.restored_from });
+		if (c.revision === 1) return msg(bolt, 'record.created');
+		if (c.fields.length === 0) return msg(bolt, 'record.noVisibleChanges');
 		const named = c.fields
 			.slice(0, 3)
 			.map((f) => label(bolt, model, f))
 			.join(', ');
 		return c.fields.length > 3
-			? msg(bolt, 'record.changedMore', '{fields} +{more}', {
+			? msg(bolt, 'record.changedMore', {
 					fields: named,
 					more: c.fields.length - 3
 				})
@@ -144,8 +145,8 @@ revision returns to the live record.
 			)
 		};
 	}
-	const rootHistory = observeOnce<readonly Checkpoint[], Error>(() => (open ? history : null));
-	const loaded = observeOnce<LoadedHistory, Error>(() => {
+	const rootHistory = observe_once<readonly Checkpoint[], Error>(() => (open ? history : null));
+	const loaded = observe_once<LoadedHistory, Error>(() => {
 		if (!open || history === null) return null;
 		void refresh;
 		if (rootHistory.loading || rootHistory.error !== undefined) return null;
@@ -158,14 +159,14 @@ revision returns to the live record.
 					Effect.result(
 						Effect.gen(function* () {
 							const records =
-								pageOf(
+								page_of(
 									yield* bolt.query(
 										kinds.catalog?.[source.of]?.record_label !== undefined
-											? labelRead(kinds.catalog, source.of, {
+											? label_read(kinds.catalog, source.of, {
 													where: source.where,
 													limit: READ_LIMIT
 												})
-											: requestJson({ [source.of]: { where: source.where, limit: READ_LIMIT } })
+											: request_json({ [source.of]: { where: source.where, limit: READ_LIMIT } })
 									),
 									source.of
 								)?.rows ?? [];
@@ -205,7 +206,7 @@ revision returns to the live record.
 						...result.success.filter(
 							(event) =>
 								event.checkpoint.fields.length > 0 ||
-								event.checkpoint.restoredFrom !== null ||
+								event.checkpoint.restored_from !== null ||
 								event.checkpoint.approval !== null
 						)
 					);
@@ -233,7 +234,7 @@ revision returns to the live record.
 
 <Popover.Root
 	bind:open
-	onOpenChange={(next) => {
+	on_open_change={(next) => {
 		if (next) {
 			refresh++;
 			onload();
@@ -242,8 +243,8 @@ revision returns to the live record.
 >
 	<Popover.Trigger
 		class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 grid size-8 max-sm:size-11 shrink-0 place-items-center rounded-md outline-none focus-visible:ring-2"
-		aria-label={msg(bolt, 'record.history', 'History')}
-		title={msg(bolt, 'record.revisionOf', 'Revision {n} of {total}', {
+		aria-label={msg(bolt, 'record.history')}
+		title={msg(bolt, 'record.revisionOf', {
 			n: viewing ?? latest,
 			total: latest
 		})}
@@ -257,13 +258,13 @@ revision returns to the live record.
 		data-record-timeline
 	>
 		<div class="flex items-center justify-between gap-2 border-b px-3 py-2">
-			<p class="text-sm font-medium">{msg(bolt, 'record.history', 'History')}</p>
+			<p class="text-sm font-medium">{msg(bolt, 'record.history')}</p>
 			{#if viewing !== null}<button
 					type="button"
 					class="text-brand-text hover:bg-brand/10 focus-visible:ring-ring/40 rounded-md px-2 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none"
 					data-record-history-current
 					onclick={() => onpick(null, null)}
-					>{msg(bolt, 'record.backToCurrent', 'Back to current')}</button
+					>{msg(bolt, 'record.backToCurrent')}</button
 				>{/if}
 		</div>
 		{#if open && history !== null}
@@ -271,21 +272,21 @@ revision returns to the live record.
 					role="status"
 					class="text-muted-foreground px-3 py-4 text-sm"
 				>
-					{msg(bolt, 'record.historyLoading', 'Loading history…')}
+					{msg(bolt, 'record.historyLoading')}
 				</p>
 			{:else if rootHistory.error !== undefined || loaded.error !== undefined}<p
 					role="alert"
 					class="text-destructive px-3 py-4 text-sm"
 				>
-					{msg(bolt, 'record.noHistory', 'No access to this record’s history')}
+					{msg(bolt, 'record.noHistory')}
 				</p>
 			{:else}
 				{@const result = loaded.current ?? { list: [], partial: false }}
 				<div class="max-h-96 overflow-y-auto px-3 py-3" data-record-history-events>
 					{#if result.partial}<p role="status" class="text-muted-foreground mb-2 text-xs">
-							{msg(bolt, 'record.historyPartial', 'Some related history is unavailable.')}
+							{msg(bolt, 'record.historyPartial')}
 						</p>{/if}
-					<ol class="flex flex-col" aria-label={msg(bolt, 'record.history', 'History')}>
+					<ol class="flex flex-col" aria-label={msg(bolt, 'record.history')}>
 						{#each result.list as event, i (event.key)}
 							{@const c = event.checkpoint}
 							{@const current = event.own && c.revision >= latest}
@@ -342,15 +343,18 @@ revision returns to the live record.
 			<span class="text-muted-foreground text-tiny tabular-nums">#{c.revision}</span>
 		</span>
 		<span class="shrink-0">
-			{#if current}<Badge variant="default">{msg(bolt, 'record.current', 'Current')}</Badge>
-			{:else if c.valid}<Badge variant="outline">{msg(bolt, 'record.historyValid', 'Valid')}</Badge>
-			{:else}<Badge variant="warning">{msg(bolt, 'record.historyInvalid', 'Not valid')}</Badge>{/if}
+			{#if current}<Badge variant="default">{msg(bolt, 'record.current')}</Badge>
+			{:else if c.valid}<Badge variant="outline">{msg(bolt, 'record.historyValid')}</Badge>
+			{:else}<Badge variant="warning">{msg(bolt, 'record.historyInvalid')}</Badge>{/if}
 		</span>
 	</span>
 	<span class="mt-0.5 block truncate text-sm font-medium">
 		{event.own ? what(c, event.of) : `${event.subject} · ${what(c, event.of)}`}
 	</span>
 	<span class="text-muted-foreground block truncate text-xs">
-		{#await run(who(c.actor))}…{:then name}{name}{/await}
+		<ReadOnce effect={who(c.actor)}>
+			{#snippet pending()}…{/snippet}
+			{#snippet ready(name)}{name}{/snippet}
+		</ReadOnce>
 	</span>
 {/snippet}

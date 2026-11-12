@@ -1,10 +1,11 @@
 // One immutable activation graph. Every shared bottom service is built once in this generation's layer scope.
 import { ConfigProvider, Crypto, Deferred, Effect, FileSystem, Layer, Path, PubSub } from 'effect';
-import { declaredSecrets, layered, type EngineManifest } from './manifest.ts';
+import { declared_secrets, layered, type EngineManifest } from './manifest.ts';
 import type { EngineError } from './errors.ts';
 import {
 	Activation,
 	Agents,
+	Automations,
 	Approvals,
 	Callables,
 	Conversations,
@@ -53,11 +54,12 @@ import { ReadsLive } from './query/engine.ts';
 import { WritesLive } from './write/act.ts';
 import { CallablesLive } from './callables/index.ts';
 import { ApprovalsLive } from './approvals/approvals.ts';
-import { DecisionsLive } from './decisions/index.ts';
+import { DecisionsLive } from './decision.ts';
 import { IdentityLive } from './identity/session.ts';
 import { LiveHubLive } from './live/hub.ts';
 import { DeadlinesLive } from './runs/deadlines.ts';
-import { Nudges, RunHandlersLive, RunsLive, WakeLive } from './runs/index.ts';
+import { RunHandlersLive, RunsLive, WakeLive } from './runs/index.ts';
+import { AutomationsLive } from './runs/invoke.ts';
 import { ConversationsLive } from './conversations/index.ts';
 import { EnvoysLive } from './envoys/index.ts';
 import { TurnHandlers, TurnsLive } from './agent/turns.ts';
@@ -76,6 +78,7 @@ export type EngineServices =
 	| Secrets
 	| Reads
 	| Writes
+	| Automations
 	| Callables
 	| Approvals
 	| Decisions
@@ -95,7 +98,6 @@ export type EngineServices =
 	| Facilities
 	| Guest
 	| Telemetry
-	| Nudges
 	| RunEnds
 	| TurnHandlers
 	| SmartThrottle
@@ -128,7 +130,7 @@ export function EngineLive(
 	manifest: EngineManifest
 ): Layer.Layer<EngineServices, EngineError, EngineHost> {
 	const values = Layer.succeed(Manifest, layered(manifest));
-	const secrets = Secrets.layer(declaredSecrets(manifest)).pipe(Layer.provideMerge(values));
+	const secrets = Secrets.layer(declared_secrets(manifest)).pipe(Layer.provideMerge(values));
 	const config = ConfigProvider.layer(Effect.map(Secrets, (secrets) => secrets.config)).pipe(
 		Layer.provide(secrets)
 	);
@@ -177,7 +179,6 @@ export function EngineLive(
 				);
 			})
 		),
-		IdentityLive,
 		DecisionsLive,
 		TelemetryLive,
 		TurnsLive,
@@ -188,14 +189,16 @@ export function EngineLive(
 	const guest = GuestLive.pipe(Layer.provideMerge(wake));
 	const reads = ReadsLive.pipe(Layer.provideMerge(guest));
 	const live = LiveHubLive.pipe(Layer.provideMerge(reads));
-	const links = LinksLive.pipe(Layer.provideMerge(live));
+	const identity = IdentityLive.pipe(Layer.provideMerge(live));
+	const links = LinksLive.pipe(Layer.provideMerge(identity));
 	const writes = WritesLive.pipe(Layer.provideMerge(links));
 	const callables = CallablesLive.pipe(Layer.provideMerge(writes));
 	const approvals = ApprovalsLive.pipe(Layer.provideMerge(callables));
 	const facilities = Layer.mergeAll(FacilitiesLive, SyncsLive, OutboundLive).pipe(
 		Layer.provideMerge(approvals)
 	);
-	const conversations = ConversationsLive.pipe(Layer.provideMerge(facilities));
+	const automations = AutomationsLive.pipe(Layer.provideMerge(facilities));
+	const conversations = ConversationsLive.pipe(Layer.provideMerge(automations));
 	const throttle = SmartThrottleLive.pipe(Layer.provideMerge(conversations));
 	const agents = AgentsLive.pipe(Layer.provideMerge(throttle));
 	const envoys = EnvoysLive.pipe(Layer.provideMerge(agents));

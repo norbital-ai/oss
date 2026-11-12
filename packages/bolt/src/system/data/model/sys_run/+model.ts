@@ -1,9 +1,9 @@
 // The one queue (rules 48–52a): a run is a row with a `due_at`. `key` is rule 51's "one queued, unstarted run per
 // key" (an `on conflict` arbiter); a claim moves a workspace run's key to `run_key`. No grant: read through ctx.runs,
 // RunStatus, RunsFor and /runs (rule 56).
-import { bind_model } from '../../../../declarations.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default bind_model('sys_run')({
+export default bind_system_model('sys_run')({
 	description:
 		'An automation run: queued, running or finished, with its input, progress and results.',
 	record_label: 'record.automation',
@@ -31,5 +31,8 @@ export default bind_model('sys_run')({
 	},
 	table: { primary: 'text' },
 	outputs: { default: { fields: 'all' } },
-	indexes: { by_due_at: { on: ['due_at'], where: { state: { eq: 'queued' } } } }
+	indexes: {
+		by_due_at: { on: ['due_at'], where: { state: { eq: 'queued' } } },
+		by_automation_state: { on: ['automation', 'state'] }
+	}
 });

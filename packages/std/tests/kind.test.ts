@@ -3,12 +3,12 @@ import { describe, it } from '@effect/vitest';
 import { Result, Schema } from 'effect';
 import * as fc from 'fast-check';
 import { Decimal } from '../src/decimal.ts';
-import { IdValue, KIND, inputSchema, type FieldKind, type Kind } from '../src/kind.ts';
+import { IdValue, KIND, input_schema, type FieldKind, type Kind } from '../src/kind.ts';
 
-const decode = (k: Kind, v: unknown) => Schema.decodeUnknownResult(inputSchema(k))(v);
+const decode = (k: Kind, v: unknown) => Schema.decodeUnknownResult(input_schema(k))(v);
 /** The wire form of an accepted value: decoded, then encoded. */
 const wire = (k: Kind, v: unknown) =>
-	Result.getOrThrow(Schema.encodeUnknownResult(inputSchema(k))(Result.getOrThrow(decode(k, v))));
+	Result.getOrThrow(Schema.encodeUnknownResult(input_schema(k))(Result.getOrThrow(decode(k, v))));
 const refused = (k: Kind, v: unknown) =>
 	assert.equal(decode(k, v)._tag, 'Failure', `${JSON.stringify(k)} refuses ${JSON.stringify(v)}`);
 
@@ -39,7 +39,7 @@ const json = fc
 	.map((v): unknown => JSON.parse(JSON.stringify(v)))
 	.filter((v) => !JSON.stringify(v).includes('"__proto__"'));
 const key = fc.string().filter((k) => k !== '__proto__');
-const addDays = (d: string, n: number) =>
+const add_days = (d: string, n: number) =>
 	new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
 /** One spec and one generator of accepted inputs per kind; every kind is here (asserted below). */
@@ -80,7 +80,7 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 			{ kind: 'period', of: 'date' },
 			fc
 				.tuple(day, fc.option(fc.nat(400), { nil: null }))
-				.map(([from, n]) => ({ from, to: n === null ? null : addDays(from, n) }))
+				.map(([from, n]) => ({ from, to: n === null ? null : add_days(from, n) }))
 		],
 		[
 			{ kind: 'period', of: 'instant' },
@@ -313,8 +313,9 @@ describe('std/kind', () => {
 			'time'
 		]);
 		assert.deepEqual(
-			Object.keys(KIND)
-				.filter((k) => !KIND[k as FieldKind].traits.sortable)
+			Object.entries(KIND)
+				.filter(([, entry]) => !entry.traits.sortable)
+				.map(([kind]) => kind)
 				.sort(),
 			['custom', 'file', 'json', 'object', 'period', 'point', 'record', 'union', 'vector']
 		);
@@ -322,6 +323,6 @@ describe('std/kind', () => {
 
 	it('memoises per spec object', () => {
 		const spec: Kind = { kind: 'int', many: true };
-		assert.equal(inputSchema(spec), inputSchema(spec));
+		assert.equal(input_schema(spec), input_schema(spec));
 	});
 });

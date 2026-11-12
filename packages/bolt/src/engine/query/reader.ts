@@ -2,7 +2,8 @@
 // output and path conjoined at every level (rule 13), and the open approval request a root row of a holdable model
 // carries (rule 46b), for every reader — and the invocation's bindings as the operand resolver. A workspace read (the transform, rule 15) has no scope. Statements a batch may fold into one are marked here.
 import { Effect } from 'effect';
-import { localOf } from '@norbital-ai/std/zone';
+import { literal as lit } from '@norbital-ai/std/sql';
+import { local_of } from '@norbital-ai/std/zone';
 import {
 	StoreError,
 	type CompileOptions,
@@ -14,37 +15,23 @@ import type { Authority, Bindings, Reader } from '../contracts.ts';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { operand } from './eval.ts';
+import { readPredicates } from '../access/authority.ts';
+import { open_sql } from '../approvals/sql.ts';
 
 /** Fixed clock operands for one invocation; the owner chooses when its clock is read. */
 export function bindingsAt(at: number | string, tz: string): Bindings {
 	return {
 		now: typeof at === 'string' ? at : new Date(at).toISOString(),
-		today: localOf(typeof at === 'number' ? at : Date.parse(at), tz).date,
+		today: local_of(typeof at === 'number' ? at : Date.parse(at), tz).date,
 		tz
 	};
 }
 
-const rootOf = (path: string) => path.split('.', 1)[0]!;
-const lit = (s: string) => `'${s.replaceAll("'", "''")}'`;
 /** A caller's scope: none for an admin's rows. */
-export function scopeOf(authority: Authority): Scope {
+export function scopeOf(authority: Authority, outputs: 'named' | 'any' = 'named'): Scope {
 	return {
 		// a layer path is scoped by its root's arms for that output and path (decision 3), never its own model's grants
-		rows: (path, output) =>
-			authority.admin
-				? undefined
-				: (authority.models[rootOf(path)]?.read[output]?.[path] ?? []).map((arm) => arm.where)
-	};
-}
-/** A caller's scope over every output it holds: a row any granted output's arms admit (a write's read visibility). */
-export function anyOutputScope(authority: Authority): Scope {
-	return {
-		rows: (path) =>
-			authority.admin
-				? undefined
-				: Object.values(authority.models[rootOf(path)]?.read ?? {})
-						.flatMap((paths) => paths[path] ?? [])
-						.map((arm) => arm.where)
+		rows: (path, output) => readPredicates(authority, path, outputs === 'any' ? undefined : output)
 	};
 }
 /** The open request holding a root row of a held model, as `$approval`: every reader sees it, scoped or not. */
@@ -53,10 +40,10 @@ export const heldColumns =
 	(c: string, a: string): readonly string[] =>
 		approvals.has(c)
 			? [
-					`(SELECT jsonb_build_object('requestId', ap.id::text, 'state', ap.state, 'step', ap.step,
+					`(SELECT jsonb_build_object('request_id', ap.id::text, 'state', ap.state, 'step', ap.step,
 		'steps', ap.route -> 'steps', 'by', coalesce(apu.name, apu.email, ap.requestor))
 	FROM bolt_approvals ap LEFT JOIN sys_user apu ON apu.id::text = ap.requestor_user
-	WHERE ap.state IN ('Pending', 'ChangesRequested')
+	WHERE ${open_sql('ap.state')}
 		AND ap.records @> jsonb_build_array(jsonb_build_object('collection', ${lit(c)}::text, 'id', ${a}."id"::text))
 	ORDER BY ap.seq DESC LIMIT 1) AS "$approval"`
 				]

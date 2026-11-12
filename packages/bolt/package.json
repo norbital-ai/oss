@@ -81,9 +81,9 @@
 		"package.json"
 	],
 	"scripts": {
-		"build": "node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json --then node scripts/docs.ts --then node scripts/cell-bundle.ts",
-		"lint": "svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
-		"types:compat": "tsc -p tests/tsconfig.json --noEmit",
+		"build": "node scripts/system-names.ts && node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json --then node scripts/docs.ts --then node scripts/cell-bundle.ts",
+		"lint": "node scripts/system-names.ts && svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
+		"types:compat": "node scripts/system-names.ts && tsc -p tests/tsconfig.json --noEmit",
 		"migrations:audit": "node --experimental-strip-types scripts/audit-migrations.ts",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
 	},

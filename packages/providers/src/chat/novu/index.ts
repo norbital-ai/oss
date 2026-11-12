@@ -127,7 +127,7 @@ export const novu: ChatPlatform = {
 		const parsed = (bridge: Bridge, thread: string, message: Message): Incoming => ({
 			id: message.platformMessageId,
 			thread,
-			sentAt: new Date(message.timestamp).toISOString(),
+			sent_at: new Date(message.timestamp).toISOString(),
 			from: {
 				handle: bridge.subscriber?.subscriberId ?? message.author.userId,
 				name: message.author.fullName
@@ -135,7 +135,7 @@ export const novu: ChatPlatform = {
 			text: message.text,
 			group: bridge.platformContext?.isDM !== true,
 			mentioned: true,
-			replyTo: message.replyTo?.messageId ?? null,
+			reply_to: message.replyTo?.messageId ?? null,
 			files: files(message)
 		});
 		const connection: ChatConnection = {

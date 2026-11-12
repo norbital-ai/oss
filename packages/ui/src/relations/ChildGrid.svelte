@@ -25,19 +25,20 @@ A related-record grid with explicit child operations, original revisions and par
 	import { SvelteMap } from 'svelte/reactivity';
 	import { watch as changes } from 'runed';
 	import { useKinds } from '../kinds/context.js';
-	import { fieldsText, recordText } from '../kinds/kind.js';
-	import { FormState, useRecordController } from '../form/form-state.svelte.js';
+	import { fields_text, recordText } from '../kinds/kind.js';
+	import { FormState, use_record_controller } from '../form/form-state.svelte.js';
 	import { changed, formSpec, locked } from '../form/draft.js';
+	import { pendingUnload } from '../form/unload.js';
 	import type { ChildOperation } from '../form/child-operations.js';
 	import { Button } from '../primitives/button/index.js';
-	import { confirmAction } from '../primitives/dialog/confirm.js';
+	import { confirm_action } from '../primitives/dialog/confirm.js';
 	import Picker from '../kinds/picker.svelte';
 	import { useBolt } from '../client/context.js';
 	import { type Outcome } from '../client/contract.js';
 	import { actOutcome } from '../actions/outcome.js';
 	import { and } from '../filter/scope.js';
-	import { msg } from '../text/messages.js';
-	import { byId, firstOf, pageOf, requestJson } from '../read/request.js';
+	import { msg, catalogText } from '../text/messages.js';
+	import { by_id, first_of, page_of, request_json } from '../read/request.js';
 	import { mapped, queryState } from '../read/state.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import Table from '../table/Table.svelte';
@@ -45,7 +46,7 @@ A related-record grid with explicit child operations, original revisions and par
 	let { of, relation, id, save = 'parent', columns, where }: ChildGridProps = $props();
 	const bolt = useBolt(),
 		kinds = useKinds(),
-		scope = useRecordController(),
+		scope = use_record_controller(),
 		owner = scope?.current;
 	const contract = $derived(owner?.spec.children?.[relation]);
 	const identity = $derived(contract ?? kinds.catalog?.[of]?.children?.[relation]);
@@ -105,7 +106,7 @@ A related-record grid with explicit child operations, original revisions and par
 			? null
 			: mapped(
 					bolt.query(
-						requestJson({
+						request_json({
 							[model]: {
 								where: and(where, { [identity.parent]: id }),
 								fields: [...new Set([...fields, identity.parent, 'revision'])],
@@ -114,7 +115,7 @@ A related-record grid with explicit child operations, original revisions and par
 							}
 						})
 					),
-					(answer) => pageOf(answer, model)
+					(answer) => page_of(answer, model)
 				)
 	);
 	const loaded = $derived(queryState(reads));
@@ -136,17 +137,17 @@ A related-record grid with explicit child operations, original revisions and par
 	let linkBusy = $state(false);
 	let active = true;
 	const text = {
-		pending_approval: msg(bolt, 'form.pending_approval', 'Pending approval'),
-		conflict: msg(bolt, 'form.conflict', 'The record changed. Review your draft and try again.'),
-		unknown: msg(bolt, 'form.unknown', 'The outcome is unknown. Retry to check the same request.'),
-		running: msg(bolt, 'form.running', 'Still working: this continues in the background.')
+		pending_approval: msg(bolt, 'form.pending_approval'),
+		conflict: msg(bolt, 'form.conflict'),
+		unknown: msg(bolt, 'form.unknown'),
+		running: msg(bolt, 'form.running')
 	};
 	onDestroy(() => {
 		active = false;
 	});
 	untrack(() => {
 		if (save !== 'parent' || owner === null || owner === undefined) return;
-		for (const [key, form] of owner.childForms) {
+		for (const [key, form] of owner.child_forms) {
 			if (!key.startsWith(`${relation}:`)) continue;
 			const id = key.slice(relation.length + 1);
 			const removed = owner.children[relation]?.find(
@@ -164,7 +165,7 @@ A related-record grid with explicit child operations, original revisions and par
 			});
 		}
 		// a restored draft's created rows come back with it; otherwise a create form's values seed the first rows
-		const already = [...owner.childForms].some(
+		const already = [...owner.child_forms].some(
 			([key, form]) =>
 				key.startsWith(`${relation}:`) &&
 				form.spec.target.of === 'model' &&
@@ -175,7 +176,7 @@ A related-record grid with explicit child operations, original revisions and par
 			? (owner.children[relation] ?? []).flatMap((operation) =>
 					operation.action === 'create' ? [operation.values] : []
 				)
-			: owner.childSeeds(relation);
+			: owner.child_seeds(relation);
 		for (const [index, values] of persisted.entries()) {
 			const key = `draft:restored:${index}`;
 			const entry = make(
@@ -233,29 +234,29 @@ A related-record grid with explicit child operations, original revisions and par
 				: {};
 		const form =
 			save === 'parent'
-				? (owner?.childForms.get(`${relation}:${key}`) ??
+				? (owner?.child_forms.get(`${relation}:${key}`) ??
 					new FormState(
 						spec,
 						created ? null : row,
 						created ? { ...inherited, ...row } : {},
-						(callable, input, options) => bolt.act(callable, input, options),
+						(acts, options) => bolt.act(acts, options),
 						text,
-						(field) => locked(exposure?.fields ?? {}, row)(field),
+						(field) => locked(exposure?.fields ?? {}, row, exposure?.locks)(field),
 						undefined,
-						created ? undefined : owner?.childStorageKey(relation, key)
+						created ? undefined : owner?.child_storage_key(relation, key)
 					))
 				: new FormState(
 						spec,
 						created ? null : row,
 						created ? { ...inherited, ...row } : {},
-						(callable, input, options) => bolt.act(callable, input, options),
+						(acts, options) => bolt.act(acts, options),
 						text,
-						(field) => locked(exposure?.fields ?? {}, row)(field)
+						(field) => locked(exposure?.fields ?? {}, row, exposure?.locks)(field)
 					);
-		if (save === 'parent') owner?.childForms.set(`${relation}:${key}`, form);
+		if (save === 'parent') owner?.child_forms.set(`${relation}:${key}`, form);
 		form.mode = created ? 'create' : activeEdit ? 'edit' : 'view';
 		if (save === 'independent')
-			form.onOutcome((outcome) => {
+			form.on_outcome((outcome) => {
 				noticeError =
 					outcome.kind === 'refused' || outcome.kind === 'conflict' || outcome.kind === 'unknown';
 				notice =
@@ -282,7 +283,7 @@ A related-record grid with explicit child operations, original revisions and par
 	function permissions(entry: Draft, row: Row): void {
 		if (bolt.record_capabilities === undefined) return;
 		const request = ++entry.request;
-		entry.form.expectCapabilities();
+		entry.form.expect_capabilities();
 		fork(
 			bolt.record_capabilities(model, row.id, parentContext()).pipe(
 				Effect.tap((value) =>
@@ -301,7 +302,7 @@ A related-record grid with explicit child operations, original revisions and par
 			),
 			() => {
 				if (request === entry.request)
-					notice = msg(bolt, 'record.permissionsFailed', 'Record permissions could not be loaded.');
+					notice = msg(bolt, 'record.permissionsFailed');
 			}
 		);
 	}
@@ -346,7 +347,7 @@ A related-record grid with explicit child operations, original revisions and par
 							values: Object.fromEntries(
 								Object.entries(entry.form.values).filter(([, value]) => value !== null)
 							),
-							...(entry.form.requestingApproval ? { proposal: true as const } : {})
+							...(entry.form.requesting_approval ? { proposal: true as const } : {})
 						}
 					];
 				const revision = entry.form.revision;
@@ -377,7 +378,7 @@ A related-record grid with explicit child operations, original revisions and par
 								id: key,
 								revision,
 								set,
-								...(entry.form.requestingApproval ? { proposal: true as const } : {})
+								...(entry.form.requesting_approval ? { proposal: true as const } : {})
 							}
 						];
 			})
@@ -390,7 +391,7 @@ A related-record grid with explicit child operations, original revisions and par
 		],
 		() => {
 			if (save === 'parent' && owner !== null && owner !== undefined && contract !== undefined)
-				owner.queueChildren(relation, commands());
+				owner.queue_children(relation, commands());
 		}
 	);
 	function reset() {
@@ -410,9 +411,9 @@ A related-record grid with explicit child operations, original revisions and par
 		}
 	}
 	if (owner !== null && owner !== undefined && untrack(() => save) === 'parent') {
-		onDestroy(owner.onReset(reset));
+		onDestroy(owner.on_reset(reset));
 		onDestroy(
-			owner.beforeSubmit(() =>
+			owner.before_submit(() =>
 				Effect.gen(function* () {
 					const valid = yield* Effect.forEach(
 						[...drafts.values()],
@@ -430,15 +431,15 @@ A related-record grid with explicit child operations, original revisions and par
 						},
 						{ concurrency: 'unbounded' }
 					);
-					owner.queueChildren(relation, commands());
+					owner.queue_children(relation, commands());
 					if (valid.some((value) => !value))
-						notice = msg(bolt, 'child.reviewDraft', 'Review the related rows before saving.');
+						notice = msg(bolt, 'child.reviewDraft');
 					return valid.every(Boolean);
 				})
 			)
 		);
 		onDestroy(
-			owner.beforeOutcome((outcome) => {
+			owner.before_outcome((outcome) => {
 				if (outcome.kind === 'committed' || outcome.kind === 'pending_approval') {
 					for (const entry of drafts.values()) entry.form.accept(outcome);
 					reset();
@@ -461,7 +462,7 @@ A related-record grid with explicit child operations, original revisions and par
 		if (entry !== null) {
 			drafts.set(key, entry);
 			if (save === 'independent')
-				entry.form.onOutcome((outcome) => {
+				entry.form.on_outcome((outcome) => {
 					if (outcome.kind === 'committed' || outcome.kind === 'pending_approval')
 						drafts.delete(key);
 				});
@@ -483,11 +484,9 @@ A related-record grid with explicit child operations, original revisions and par
 		fork(
 			actOutcome(
 				bolt.act(
-					`${model}.${action === 'delete' ? 'delete' : 'update'}`,
-					action === 'delete'
-						? [{ target: key }]
-						: [{ target: key, set: { [identity.parent]: null } }],
-					{ observed: { [key]: entry.form.revision } }
+					{ [`${model}.${action === 'delete' ? 'delete' : 'update'}`]: action === 'delete'
+						? [{ target: { id: key, revision: entry.form.revision } }]
+						: [{ target: { id: key, revision: entry.form.revision }, set: { [identity.parent]: null } }] }
 				)
 			).pipe(
 				Effect.tap((outcome) =>
@@ -507,7 +506,11 @@ A related-record grid with explicit child operations, original revisions and par
 						entry.form.pending = false;
 					})
 				)
-			)
+			),
+			(error) => {
+				noticeError = true;
+				notice = bolt.t(error.message);
+			}
 		);
 	}
 	function linkRow() {
@@ -523,10 +526,10 @@ A related-record grid with explicit child operations, original revisions and par
 		linkBusy = true;
 		fork(
 			Effect.gen(function* () {
-				const row = firstOf(yield* bolt.query(byId(model, selected)), model);
+				const row = first_of(yield* bolt.query(by_id(model, selected)), model);
 				if (!active) return;
 				if (row === null || typeof row['revision'] !== 'number') {
-					notice = msg(bolt, 'record.notFound', 'Not found or no access');
+					notice = msg(bolt, 'record.not_found');
 					return;
 				}
 				const capabilities =
@@ -546,11 +549,11 @@ A related-record grid with explicit child operations, original revisions and par
 				}
 				const writable = capabilities?.fields[identity.parent];
 				if (capabilities !== undefined && !writable?.writable && !writable?.proposal) {
-					notice = msg(bolt, 'record.noAccess', 'No access');
+					notice = msg(bolt, 'record.noAccess');
 					return;
 				}
 				if (row[identity.parent] != null) {
-					notice = msg(bolt, 'child.alreadyLinked', 'This record already has a parent.');
+					notice = msg(bolt, 'child.alreadyLinked');
 					return;
 				}
 				if (save === 'parent' && owner !== null && owner !== undefined) {
@@ -558,7 +561,7 @@ A related-record grid with explicit child operations, original revisions and par
 						selected,
 						(exposure?.record_label !== undefined
 							? recordText(exposure, row)
-							: fieldsText(
+							: fields_text(
 									exposure?.fields ?? {},
 									row,
 									(exposure?.label ?? []).filter(
@@ -584,9 +587,7 @@ A related-record grid with explicit child operations, original revisions and par
 				} else {
 					if (id === undefined) return;
 					const outcome = yield* actOutcome(
-						bolt.act(`${model}.update`, [{ target: selected, set: { [identity.parent]: id } }], {
-							observed: { [selected]: row['revision'] }
-						})
+						bolt.act({ [`${model}.update`]: [{ target: row, set: { [identity.parent]: id } }] })
 					);
 					if (outcome.kind !== 'committed' && outcome.kind !== 'pending_approval')
 						notice =
@@ -598,10 +599,10 @@ A related-record grid with explicit child operations, original revisions and par
 				}
 				link = null;
 			}).pipe(
-				Effect.catch(() =>
+				Effect.catch((error) =>
 					Effect.sync(() => {
 						noticeError = true;
-						notice = msg(bolt, 'child.saveFailed', 'The row could not be saved. Try again.');
+						notice = bolt.t(error.message);
 					})
 				),
 				Effect.ensuring(
@@ -612,12 +613,7 @@ A related-record grid with explicit child operations, original revisions and par
 			)
 		);
 	}
-	function beforeUnload(event: BeforeUnloadEvent) {
-		if (save === 'independent' && dirty) {
-			event.preventDefault();
-			event.returnValue = true;
-		}
-	}
+	const beforeUnload = pendingUnload(() => save === 'independent' && dirty);
 </script>
 
 <svelte:window onbeforeunload={beforeUnload} />
@@ -629,7 +625,7 @@ A related-record grid with explicit child operations, original revisions and par
 			{name}
 			readonly={!editing}
 			disabled={save === 'parent' && owner?.pending === true}
-			pendingPermissions={!entry.created &&
+			pending_permissions={!entry.created &&
 				bolt.record_capabilities !== undefined &&
 				entry.form.capabilities === undefined}
 		/>{/if}
@@ -641,23 +637,23 @@ A related-record grid with explicit child operations, original revisions and par
 		<div class="flex flex-wrap gap-1">
 			{#if editing}
 				{#if entry.created || entry.form.dirty}<Button
-						disabled={!entry.form.canSave}
+						disabled={!entry.form.can_save}
 						onclick={() => fork(entry.form.submit())}
 						>{entry.form.resubmitting
-							? msg(bolt, 'record.resubmit', 'Resubmit')
-							: entry.form.requestingApproval
-								? msg(bolt, 'record.requestApproval', 'Request approval')
-								: msg(bolt, 'record.save', 'Save')}</Button
+							? msg(bolt, 'record.resubmit')
+							: entry.form.requesting_approval
+								? msg(bolt, 'record.requestApproval')
+								: msg(bolt, 'record.save')}</Button
 					>{/if}
 				{#if entry.created || (strategy.delete && permits(entry.form.capabilities?.delete))}<Button
 						variant="ghost"
 						disabled={entry.form.pending || owner?.pending === true}
-						onclick={() => remove(key, 'delete')}>{msg(bolt, 'child.delete', 'Delete row')}</Button
+						onclick={() => remove(key, 'delete')}>{msg(bolt, 'child.delete')}</Button
 					>{/if}
 				{#if !identity?.owned && strategy.unlink && permits(entry.form.capabilities?.fields[identity?.parent ?? ''])}<Button
 						variant="ghost"
 						disabled={entry.form.pending || owner?.pending === true}
-						onclick={() => remove(key, 'unlink')}>{msg(bolt, 'child.unlink', 'Unlink')}</Button
+						onclick={() => remove(key, 'unlink')}>{msg(bolt, 'child.unlink')}</Button
 					>{/if}
 			{/if}
 		</div>
@@ -682,16 +678,16 @@ A related-record grid with explicit child operations, original revisions and par
 			variant="ghost"
 			size="icon"
 			aria-label={action === 'delete'
-				? msg(bolt, 'child.delete', 'Delete row')
-				: msg(bolt, 'child.unlink', 'Unlink')}
+				? msg(bolt, 'child.delete')
+				: msg(bolt, 'child.unlink')}
 			disabled={entry.form.pending || owner?.pending === true}
 			onclick={() => remove(row.id, action)}
 		>
 			<Icon icon="lucide:x" class="size-3.5" aria-hidden="true" />
 			<span class="sr-only"
 				>{action === 'delete'
-					? msg(bolt, 'child.delete', 'Delete row')
-					: msg(bolt, 'child.unlink', 'Unlink')}</span
+					? msg(bolt, 'child.delete')
+					: msg(bolt, 'child.unlink')}</span
 			>
 		</Button>
 	{/if}
@@ -702,7 +698,7 @@ A related-record grid with explicit child operations, original revisions and par
 		of={displayed}
 		layout="grid"
 		toolbar={false}
-		rowTrailing={save === 'parent' ? removeControl : undefined}
+		row_trailing={save === 'parent' ? removeControl : undefined}
 		columns={[
 			...(columns ?? fields).map((column) =>
 				typeof column === 'string'
@@ -713,7 +709,7 @@ A related-record grid with explicit child operations, original revisions and par
 				? [
 						{
 							field: '__operations',
-							label: msg(bolt, 'child.actions', 'Actions'),
+							label: msg(bolt, 'child.actions'),
 							cell: operations
 						}
 					]
@@ -725,7 +721,7 @@ A related-record grid with explicit child operations, original revisions and par
 <section class="grid min-w-0 gap-3" data-child-grid={relation} data-save-scope={save}>
 	<div class="flex flex-wrap items-center justify-between gap-2">
 		<h3 class="font-medium">
-			{msg(bolt, `field.${of}.${relation}`, relation.replaceAll('_', ' '))}
+			{catalogText(bolt, `field.${of}.${relation}`, relation.replaceAll('_', ' '))}
 		</h3>
 		{#if save === 'independent' && !scope?.historical}<Button
 				variant="outline"
@@ -738,10 +734,10 @@ A related-record grid with explicit child operations, original revisions and par
 					if (!independentEdit || ![...drafts.values()].some((entry) => entry.form.dirty))
 						return toggle();
 					fork(
-						confirmAction({
-							title: msg(bolt, 'form.discardDraft', 'Discard unsaved changes?'),
-							confirmLabel: msg(bolt, 'form.discard', 'Discard'),
-							cancelLabel: msg(bolt, 'record.cancel', 'Cancel'),
+						confirm_action({
+							title: msg(bolt, 'form.discardDraft'),
+							confirm_label: msg(bolt, 'form.discard'),
+							cancel_label: msg(bolt, 'record.cancel'),
 							destructive: true
 						}).pipe(
 							Effect.tap((confirmed) =>
@@ -753,12 +749,12 @@ A related-record grid with explicit child operations, original revisions and par
 					);
 				}}
 				>{independentEdit
-					? msg(bolt, 'record.cancel', 'Cancel')
-					: msg(bolt, 'record.edit', 'Edit')}</Button
+					? msg(bolt, 'record.cancel')
+					: msg(bolt, 'record.edit')}</Button
 			>{/if}
 	</div>
 	{#if identity === undefined}<p class="text-meta">
-			{msg(bolt, 'child.unavailable', 'This relationship is not exposed.')}
+			{msg(bolt, 'child.unavailable')}
 		</p>
 	{:else}
 		{#if id !== undefined}<ReadGate state={loaded} what={model}>{@render table()}</ReadGate
@@ -770,14 +766,14 @@ A related-record grid with explicit child operations, original revisions and par
 					onclick={add}
 				>
 					<Icon icon="lucide:plus" class="size-3.5" aria-hidden="true" />
-					{msg(bolt, 'child.add', 'Add row')}
+					{msg(bolt, 'child.add')}
 				</Button>
 			</div>{/if}
 		{#if loaded.kind === 'ready' && loaded.value.next !== null}<Button
 				variant="outline"
 				onclick={() => {
 					if (loaded.kind === 'ready' && loaded.value.next !== null) after = loaded.value.next;
-				}}>{msg(bolt, 'child.next', 'Next page')}</Button
+				}}>{msg(bolt, 'child.next')}</Button
 			>{/if}
 		{#if editing && !identity.owned && strategy.link && (id !== undefined || (save === 'parent' && owner?.mode === 'create'))}<div
 				class="flex items-center gap-2"
@@ -786,24 +782,24 @@ A related-record grid with explicit child operations, original revisions and par
 					of={model}
 					value={typeof link === 'string' ? link : null}
 					disabled={linkBusy || owner?.pending === true}
-					onChange={(value) => {
+					on_change={(value) => {
 						link = value;
 					}}
 				/><Button
 					variant="outline"
 					disabled={typeof link !== 'string' || linkBusy || owner?.pending === true}
-					onclick={linkRow}>{msg(bolt, 'child.link', 'Link existing')}</Button
+					onclick={linkRow}>{msg(bolt, 'child.link')}</Button
 				>
 			</div>{/if}
 	{/if}
 	{#if save === 'parent'}
 		{#each links as operation}{#if operation.action !== 'create'}<p class="text-meta" role="status">
-					{msg(bolt, 'child.linkPending', 'Will link {record}.', {
-						record: linkedLabels.get(operation.id) ?? msg(bolt, 'child.record', 'Record')
+					{msg(bolt, 'child.linkPending', {
+						record: linkedLabels.get(operation.id) ?? msg(bolt, 'child.record')
 					})}
 				</p>{/if}{/each}
 		{#each [...drafts] as [key, entry]}{#if entry.removed}<p class="text-meta" role="status">
-					{msg(
+					{catalogText(
 						bolt,
 						entry.removed === 'delete' ? 'child.deletePending' : 'child.unlinkPending',
 						entry.removed === 'delete'
@@ -820,15 +816,9 @@ A related-record grid with explicit child operations, original revisions and par
 		</p>{/if}
 	{#if scope?.historical}<p class="text-meta">
 			{dirty
-				? msg(
-						bolt,
-						'child.retainedDrafts',
-						'Related row drafts are preserved. Return to the current revision to continue editing.'
+				? msg(bolt, 'child.retainedDrafts'
 					)
-				: msg(
-						bolt,
-						'child.currentRows',
-						'Related rows show their current values. Return to the current revision to edit.'
+				: msg(bolt, 'child.currentRows'
 					)}
 		</p>{/if}
 </section>

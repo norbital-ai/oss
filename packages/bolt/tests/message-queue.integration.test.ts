@@ -16,15 +16,15 @@ import {
 import { Ai } from '../src/engine/ports.ts';
 import { MessageQueue } from '../src/engine/agent/queue.ts';
 import { Port } from '../src/engine/port.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { actReply, routeFixture } from './support/route-fixture.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { act_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { System1Request } from '../src/engine/decisions/index.ts';
+import type { System1Request } from '../src/engine/decision.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},
@@ -34,10 +34,10 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		teams: {},
 		automations: {},
-		connections: {},
+
 		mcp: {},
 		apps: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
 
@@ -78,7 +78,7 @@ const panel = () =>
 							legend: {}
 						}
 					},
-					costUsd: 0,
+					cost_usd: 0,
 					provider: 'scripted'
 				};
 			});
@@ -87,7 +87,9 @@ const panel = () =>
 				if (r.messages.at(-1)?.content !== 'Give your verdict.')
 					turns.push(
 						r.messages
-							.filter((m) => m.role === 'user' && !text(m.content).startsWith('Now: '))
+							.filter((m) => m.role === 'user' && !text(m.content).startsWith('Now: ')
+								// the step's action catalogue note, not a posted part
+								&& !text(m.content).startsWith('[Available actions for this step]'))
 							.map((m) => text(m.content))
 					);
 				const gate = hold.gate;
@@ -125,15 +127,15 @@ const panel = () =>
 			})
 		);
 		const t = Context.get(context, TestWorkspace),
-			route = yield* routeFixture(context);
+			route = yield* route_fixture(context);
 		yield* t.db.write({
 			text: `INSERT INTO sys_user (id, email, name) VALUES ('ann', 'ann@x.test', 'Ann')`,
 			params: []
 		});
-		const ann = yield* new Authorities(manifest, 'test').member(t.db, 'ann');
+		const ann = yield* new Authorities(manifest, 'test').member(t.db, 'bootstrap', 'ann');
 		if (ann === null) throw new Error('Ann has no authority');
 		const act = (callable: string, input: Json) =>
-			actReply(route, ann, { callable, input, issuedAt: t.clock.now() }).pipe(
+			act_reply(route, ann, { callable, input, issued_at: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
 			);
 		const started = yield* act('sys_conversation.start', {});
@@ -213,7 +215,7 @@ const panel = () =>
 			resume: act('sys_conversation.resume', { conversation: id }).pipe(
 				Effect.andThen(route.settled)
 			),
-			respondNow: act('sys_conversation.respondNow', { conversation: id }).pipe(
+			respondNow: act('sys_conversation.respond_now', { conversation: id }).pipe(
 				Effect.andThen(route.settled)
 			)
 		};
@@ -250,7 +252,7 @@ describe('the message queue', () => {
 					yield* p.post('second part', true);
 					expect(p.turns).toHaveLength(2);
 					expect(p.turns[1]?.slice(-2)).toEqual(['first part', 'second part']);
-					yield* p.t.runDue(); // the holds the plain parts started find nothing pending
+					yield* p.t.run_due(); // the holds the plain parts started find nothing pending
 					expect(p.inputs).toHaveLength(2); // one per burst: a held burst's next part asks nothing
 				})
 			)
@@ -442,7 +444,7 @@ describe('the message queue', () => {
 				});
 				expect(p.turns).toHaveLength(0);
 				p.t.clock.advance('1h');
-				yield* p.t.runDue();
+				yield* p.t.run_due();
 				yield* p.t.settled();
 				yield* p.settled;
 				expect(p.turns.at(-1)).toContain('at noon');

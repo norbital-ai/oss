@@ -1,8 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { catalogOf, compile, read, RECORD_LABEL_COLUMN, SEARCH_COLUMN } from '../src/index.ts';
+import { catalog_of, compile, read, RECORD_LABEL_COLUMN, SEARCH_COLUMN } from '../src/index.ts';
 
-const cat = catalogOf({
+const cat = catalog_of({
 	tables: {
 		accounts: {
 			fields: {
@@ -22,7 +22,7 @@ const cat = catalogOf({
 		},
 		links: {
 			fields: { model: { kind: 'text' }, record: { kind: 'text' } },
-			labelLink: { model: 'model', record: 'record', targets: ['accounts'] }
+			label_link: { model: 'model', record: 'record', targets: ['accounts'] }
 		}
 	}
 });
@@ -58,7 +58,7 @@ describe('compiler read dependencies', () => {
 						]
 					},
 					order_by: { upper_code: 'asc' },
-					firstPer: ['code']
+					first_per: ['code']
 				});
 				const result = yield* compile(cat, query);
 				expect([...(result.dependencies.models.get('accounts') ?? [])].sort()).toEqual([
@@ -83,12 +83,12 @@ describe('compiler read dependencies', () => {
 				yield* read(cat, 'accounts', { all: true, select: { code: true }, search: 'A' })
 			);
 			expect(search.dependencies.models.get('accounts')?.has(SEARCH_COLUMN)).toBe(true);
-			const labelled = catalogOf({
+			const labelled = catalog_of({
 				tables: {
-					accounts: { fields: { code: { kind: 'text' } }, recordLabel: 'code' },
+					accounts: { fields: { code: { kind: 'text' } }, record_label: 'code' },
 					links: {
 						fields: { model: { kind: 'text' }, record: { kind: 'text' } },
-						labelLink: { model: 'model', record: 'record', targets: ['accounts'] }
+						label_link: { model: 'model', record: 'record', targets: ['accounts'] }
 					}
 				}
 			});
@@ -108,7 +108,7 @@ describe('compiler read dependencies', () => {
 	);
 	it.effect('proves through-table membership and uses its actual prospective source', () =>
 		Effect.gen(function* () {
-			const through = catalogOf({
+			const through = catalog_of({
 				tables: {
 					accounts: {
 						fields: { code: { kind: 'text' } },

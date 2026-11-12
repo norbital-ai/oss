@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { twilioSms } from '../../src/chat/twilio-sms/index.ts';
-import { file, HOOK, host } from '../kit.ts';
+import { required, file, HOOK, host } from '../kit.ts';
 import { connected, json, platformApi, type Call } from './kit.ts';
 
 const SID = `AC${'1'.repeat(32)}`;
@@ -64,7 +64,7 @@ describe('SMS (Twilio)', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(twilioSms, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: '+15550000001' });
-			const answered = yield* h.link.webhook!(request(inbound()));
+			const answered = yield* required(h.link.webhook)(request(inbound()));
 			expect(answered.status).toBe(200);
 			expect(answered.headers.get('content-type')).toContain('text/xml');
 			expect(yield* Effect.promise(() => answered.text())).toBe('<Response/>');
@@ -88,7 +88,7 @@ describe('SMS (Twilio)', () => {
 			const url = `https://api.twilio.com/2010-04-01/Accounts/${SID}/Messages/MM1/Media/ME1`;
 			const api = yield* platformApi(answer);
 			const h = yield* connected(twilioSms, settings);
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				request(
 					inbound({
 						MessageSid: 'MM1',
@@ -116,7 +116,7 @@ describe('SMS (Twilio)', () => {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(twilioSms, settings),
 				before = api.calls.length;
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				request(
 					inbound({
 						NumMedia: '1',
@@ -134,7 +134,7 @@ describe('SMS (Twilio)', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(twilioSms, settings);
-			const answered = yield* h.link.webhook!(
+			const answered = yield* required(h.link.webhook)(
 				request({ MessageSid: 'SM1', MessageStatus: 'delivered', From: '+15550000001' })
 			);
 			expect(answered.status).toBe(200);
@@ -145,7 +145,7 @@ describe('SMS (Twilio)', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(twilioSms, settings);
-			expect((yield* h.link.webhook!(request(inbound(), 'wrong-token'))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(request(inbound(), 'wrong-token'))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -155,7 +155,7 @@ describe('SMS (Twilio)', () => {
 			const h = yield* connected(twilioSms, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(request(inbound()))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(request(inbound()))).status).toBe(500);
 		})
 	);
 	it.live('sends from the number with a link to each file', () =>
@@ -163,10 +163,10 @@ describe('SMS (Twilio)', () => {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(twilioSms, settings);
 			expect(
-				yield* h.link.send!({ to: '+15551234567', text: 'Hello' }, [
+				yield* required(h.link.send)({ to: '+15551234567', text: 'Hello' }, [
 					file('a.png', 'image/png', 'bytes')
 				])
-			).toMatchObject({ providerId: 'SMout' });
+			).toMatchObject({ provider_id: 'SMout' });
 			const call = api.calls.at(-1),
 				form = new URLSearchParams(call?.body);
 			expect(call?.url).toBe(
@@ -188,7 +188,7 @@ describe('SMS (Twilio)', () => {
 				authToken: 'auth-token',
 				messagingServiceSid: 'MG1'
 			});
-			yield* h.link.send!({ to: '+15551234567', text: 'Hello' }, []);
+			yield* required(h.link.send)({ to: '+15551234567', text: 'Hello' }, []);
 			expect(Object.fromEntries(new URLSearchParams(api.calls.at(-1)?.body))).toEqual({
 				To: '+15551234567',
 				Body: 'Hello',
@@ -200,8 +200,8 @@ describe('SMS (Twilio)', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ code: 20003, message: 'Authenticate' }, 401));
 			const h = yield* host(chatProvider(twilioSms), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
-			yield* Effect.flip(h.link.pair!({ accountSid: SID, authToken: 'auth-token' }));
+			yield* Effect.flip(required(h.link.pair)(settings));
+			yield* Effect.flip(required(h.link.pair)({ accountSid: SID, authToken: 'auth-token' }));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -211,12 +211,12 @@ describe('SMS (Twilio)', () => {
 			const connection = yield* Effect.promise(() =>
 				twilioSms.connect(settings, {
 					fetch,
-					webhookUrl: HOOK,
+					webhook_url: HOOK,
 					receive: async () => {}
 				})
 			);
 			const read = yield* Effect.promise(() =>
-				connection.history!('+15551234567', '2026-09-15T00:00:00.000Z')
+				required(connection.history)('+15551234567', '2026-09-15T00:00:00.000Z')
 			);
 			const query = new URL(api.calls.at(-1)?.url ?? '').searchParams;
 			expect(query.get('From')).toBe('+15551234567');
@@ -227,7 +227,7 @@ describe('SMS (Twilio)', () => {
 				id: 'SM3',
 				thread: '+15551234567',
 				text: 'newest',
-				sentAt: '2026-10-03T10:00:00.000Z'
+				sent_at: '2026-10-03T10:00:00.000Z'
 			});
 		})
 	);
@@ -245,10 +245,10 @@ describe('SMS (Twilio)', () => {
 					: answer(call)
 			);
 			const connection = yield* Effect.promise(() =>
-				twilioSms.connect(settings, { fetch, webhookUrl: HOOK, receive: async () => {} })
+				twilioSms.connect(settings, { fetch, webhook_url: HOOK, receive: async () => {} })
 			);
 			const read = yield* Effect.promise(() =>
-				connection.history!('+15551234567', '2026-09-15T00:00:00.000Z')
+				required(connection.history)('+15551234567', '2026-09-15T00:00:00.000Z')
 			);
 			expect(read.complete).toBe(false);
 		})

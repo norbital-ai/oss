@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { notion } from '../../src/chat/notion/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { token: 'ntn_token', verificationToken: 'secret_token' };
@@ -49,14 +49,14 @@ describe('Notion', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(notion, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'Acme' });
-			expect((yield* h.link.webhook!(delivery(event('comment.created')))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(event('comment.created')))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'c1',
 						thread: 'p1',
-						sentAt: '2026-11-01T10:00:00.000Z',
+						sent_at: '2026-11-01T10:00:00.000Z',
 						from: { handle: 'u1', name: 'Ada' },
 						text: 'hello',
 						group: true,
@@ -72,8 +72,8 @@ describe('Notion', () => {
 			const h = yield* connected(notion, settings),
 				body = event('comment.created');
 			const forged = webhook(body, { 'x-notion-signature': signature(body, 'guess') });
-			expect((yield* h.link.webhook!(forged)).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(forged)).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -83,7 +83,7 @@ describe('Notion', () => {
 			const h = yield* connected(notion, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(delivery(event('comment.created')))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(delivery(event('comment.created')))).status).toBe(500);
 		})
 	);
 	it.live('answers the unsigned handshake with a token set or not, storing nothing', () =>
@@ -91,7 +91,7 @@ describe('Notion', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(notion, { token: 'ntn_token' });
 			const handshake = webhook('{"verification_token":"secret_abc"}', {});
-			expect((yield* h.link.webhook!(handshake)).status).toBe(200);
+			expect((yield* required(h.link.webhook)(handshake)).status).toBe(200);
 			expect(h.events).toEqual([]);
 			expect(h.status).toMatchObject({ about: { verificationToken: 'secret_abc' } });
 		})
@@ -104,7 +104,7 @@ describe('Notion', () => {
 				const h = yield* connected(notion, { token: 'ntn_token' }),
 					body = event('comment.created');
 				const forged = webhook(body, { 'x-notion-signature': signature(body, '') });
-				expect((yield* h.link.webhook!(forged)).status).toBe(401);
+				expect((yield* required(h.link.webhook)(forged)).status).toBe(401);
 				expect(h.events).toEqual([]);
 			})
 	);
@@ -117,16 +117,16 @@ describe('Notion', () => {
 			let found: object = edited;
 			yield* platformApi((call) => answer(found)(call));
 			const h = yield* connected(notion, settings);
-			yield* h.link.webhook!(delivery(event('comment.updated')));
-			yield* h.link.webhook!(delivery(event('comment.deleted')));
+			yield* required(h.link.webhook)(delivery(event('comment.updated')));
+			yield* required(h.link.webhook)(delivery(event('comment.deleted')));
 			found = comment({
 				rich_text: [{ plain_text: '@x', mention: { type: 'user', user: { id: 'bot' } } }]
 			});
-			yield* h.link.webhook!(delivery(event('comment.created')));
+			yield* required(h.link.webhook)(delivery(event('comment.created')));
 			found = comment({ rich_text: [{ plain_text: 'ask @norbius' }] });
-			yield* h.link.webhook!(delivery(event('comment.created')));
+			yield* required(h.link.webhook)(delivery(event('comment.created')));
 			found = comment({ rich_text: [{ plain_text: 'ask @norbius2' }] });
-			yield* h.link.webhook!(delivery(event('comment.created')));
+			yield* required(h.link.webhook)(delivery(event('comment.created')));
 			expect(h.events[0]).toMatchObject({
 				messages: [{ id: 'c1', text: 'hi', version: '2026-11-01T11:00:00.000Z' }]
 			});
@@ -143,10 +143,10 @@ describe('Notion', () => {
 			let found: object | null = comment({ created_by: { id: 'bot' } });
 			yield* platformApi((call) => answer(found)(call));
 			const h = yield* connected(notion, settings);
-			yield* h.link.webhook!(delivery(event('comment.created')));
+			yield* required(h.link.webhook)(delivery(event('comment.created')));
 			found = null;
-			expect((yield* h.link.webhook!(delivery(event('comment.created')))).status).toBe(200);
-			yield* h.link.webhook!(delivery(event('page.created')));
+			expect((yield* required(h.link.webhook)(delivery(event('comment.created')))).status).toBe(200);
+			yield* required(h.link.webhook)(delivery(event('page.created')));
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -157,7 +157,7 @@ describe('Notion', () => {
 			});
 			const api = yield* platformApi(answer(files));
 			const h = yield* connected(notion, settings);
-			yield* h.link.webhook!(delivery(event('comment.created')));
+			yield* required(h.link.webhook)(delivery(event('comment.created')));
 			expect(h.events[0]).toMatchObject({
 				messages: [{ attachments: [{ name: 'image', bytes: 3, bin: 0 }] }],
 				bins: [new Uint8Array([1, 2, 3])]
@@ -169,15 +169,15 @@ describe('Notion', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer());
 			const h = yield* connected(notion, settings);
-			const sent = yield* h.link.send!({ to: 'p1', text: 'Done' }, []);
-			expect(sent).toMatchObject({ providerId: 'sent:4' });
+			const sent = yield* required(h.link.send)({ to: 'p1', text: 'Done' }, []);
+			expect(sent).toMatchObject({ provider_id: 'sent:4' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe('https://api.notion.com/v1/comments');
 			expect(call?.headers.get('authorization')).toBe('Bearer ntn_token');
 			expect(call?.headers.get('notion-version')).toBe('2026-03-11');
 			expect(JSON.parse(call?.body ?? '')).toEqual({ parent: { page_id: 'p1' }, markdown: 'Done' });
-			const long = yield* h.link.send!({ to: 'p1', text: 'x'.repeat(2500) }, []);
-			expect(long).toMatchObject({ providerId: 'sent:1900' });
+			const long = yield* required(h.link.send)({ to: 'p1', text: 'x'.repeat(2500) }, []);
+			expect(long).toMatchObject({ provider_id: 'sent:1900' });
 			expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toEqual({
 				discussion_id: 'd9',
 				markdown: 'x'.repeat(600)
@@ -189,18 +189,18 @@ describe('Notion', () => {
 			let refusal = () => json({ code: 'validation_error' }, 400);
 			yield* platformApi(({ url }) => (url.endsWith('/users/me') ? json(me) : refusal()));
 			const h = yield* connected(notion, settings);
-			const lost = yield* Effect.flip(h.link.send!({ to: 'p1', text: 'x' }, []));
+			const lost = yield* Effect.flip(required(h.link.send)({ to: 'p1', text: 'x' }, []));
 			expect(lost).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			refusal = () => new Response('{}', { status: 429, headers: { 'retry-after': '30' } });
-			const held = yield* Effect.flip(h.link.send!({ to: 'p1', text: 'x' }, []));
-			expect(held).toMatchObject({ _tag: 'ProviderUnavailable', retryAfterMs: 30_000 });
+			const held = yield* Effect.flip(required(h.link.send)({ to: 'p1', text: 'x' }, []));
+			expect(held).toMatchObject({ _tag: 'ProviderUnavailable', retry_after_ms: 30_000 });
 		})
 	);
 	it.live('a token Notion refuses fails pairing and keeps nothing', () =>
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ code: 'unauthorized' }, 401));
 			const h = yield* host(chatProvider(notion), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

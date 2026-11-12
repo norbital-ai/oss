@@ -7,7 +7,7 @@ import type { Where } from '../../src/decl/where.ts';
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const is = <T extends true>(): T => true as T;
+const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 type Flat<T> = { [K in keyof T]: T[K] };
 
 is<Eq<ColumnValue<'sys_user', 'kind'>, 'staff' | 'external' | 'anonymous'>>();
@@ -19,8 +19,8 @@ is<Eq<'sys_session' extends ModelName ? true : false, false>>();
 const staff: Where<'sys_user'> = { kind: { eq: 'staff' }, active: { eq: true } };
 // @ts-expect-error S1 a stored user's kind is staff, external or anonymous, unlike an actor's member kind
 const member: Where<'sys_user'> = { kind: { eq: 'member' } };
-// a member's team is a source handle: `actor.teams` / `actor.teamTree` compare it in a list
-const inTree: Where<'sys_user'> = { team: { in: { var: 'requestor.teamTree' } } };
+// a member's team is a source handle: `actor.teams` / `actor.team_tree` compare it in a list
+const inTree: Where<'sys_user'> = { team: { in: { var: 'requestor.team_tree' } } };
 // @ts-expect-error S1 a team operand only on a team field
 const notTeam: Where<'sys_user'> = { email: { in: { var: 'requestor.teams' } } };
 void staff;

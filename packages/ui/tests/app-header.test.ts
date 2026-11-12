@@ -53,7 +53,7 @@ it('a combobox carries its badge inside the trigger', () => {
 		props: {
 			options: [{ value: 'a', label: 'Alice' }],
 			value: 'a',
-			onChange: () => undefined,
+			on_change: () => undefined,
 			badge: text('SEALED')
 		}
 	});

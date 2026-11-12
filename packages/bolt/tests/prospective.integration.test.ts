@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { catalog } from '../src/protocol/catalog.ts';
-import { readEngine } from '../src/engine/query/engine.ts';
+import { read_engine } from '../src/engine/query/engine.ts';
 import { prospectiveBridge } from '../src/engine/write/prospective.ts';
 import type { WriteEngine } from '../src/engine/write/act.ts';
 import type { Item } from '../src/engine/write/flatten.ts';
@@ -15,7 +15,7 @@ it.effect(
 		Effect.gen(function* () {
 			const { db } = yield* open(manifest);
 			const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
-			const reader = readEngine({ db, manifest });
+			const reader = read_engine({ db, manifest });
 			const original: Bridge = {
 				cross: (calls) =>
 					reader
@@ -79,6 +79,6 @@ it.effect(
 			const generated = yield* bridge.cross([
 			{ _tag: 'read', read: { kind: 'after', model: 'orders', where: { t: 'const', value: true } } }
 			]);
-			expect(generated).toMatchObject([{ ok: false, error: { code: 'preparedComputed' } }]);
+			expect(generated).toMatchObject([{ ok: false, error: { code: 'prepared_computed' } }]);
 		})
 );

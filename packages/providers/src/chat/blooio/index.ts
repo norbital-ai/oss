@@ -104,7 +104,7 @@ export const blooio: ChatPlatform = {
 						{
 							id: message.message_id,
 							thread: group ? `${GROUP}${message.group_id}` : message.sender,
-							sentAt: new Date(message.received_at ?? message.timestamp).toISOString(),
+							sent_at: new Date(message.received_at ?? message.timestamp).toISOString(),
 							from: {
 								handle: message.sender,
 								name:
@@ -154,7 +154,7 @@ export const blooio: ChatPlatform = {
 						messages.push({
 							id: row.message_id,
 							thread,
-							sentAt: new Date(row.time_sent).toISOString(),
+							sent_at: new Date(row.time_sent).toISOString(),
 							from: { handle: row.sender, name: null },
 							text: row.text ?? '',
 							group,

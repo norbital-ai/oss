@@ -26,7 +26,7 @@ test('a selected record uses the model CEL label', async () => {
 			},
 			part: 'picker',
 			view: Picker,
-			props: { of: 'companies', value: 'c1', readonly: true, onChange: () => {} }
+			props: { of: 'companies', value: 'c1', readonly: true, on_change: () => {} }
 		}
 	});
 	try {
@@ -50,7 +50,7 @@ test('a failed picker read does not claim there are no options', async () => {
 				Effect.fail(
 					Object.assign(new Error('connection lost'), {
 						_tag: 'ReadFailed' as const,
-						code: 'connectionLost'
+						code: 'connection_lost'
 					})
 				),
 			catalog: {
@@ -62,7 +62,7 @@ test('a failed picker read does not claim there are no options', async () => {
 			},
 			part: 'picker',
 			view: Picker,
-			props: { of: 'companies', value: null, onChange: () => {} }
+			props: { of: 'companies', value: null, on_change: () => {} }
 		}
 	});
 	try {

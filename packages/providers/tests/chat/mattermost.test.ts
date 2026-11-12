@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from '@effect/vitest'
 import { Effect } from 'effect';
 import { chatProvider, type ChatHost, type Incoming } from '../../src/chat/adapter.ts';
 import { mattermost } from '../../src/chat/mattermost/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { baseUrl: 'https://mm.test/', botToken: 'token' };
@@ -52,16 +52,15 @@ const answer = ({ url, body }: Call) => {
 	if (url.endsWith('/files/f1')) return new Response(new Uint8Array([7, 8]));
 	return json({});
 };
-const fetched = (call: (url: string, body: string) => Response) =>
-	(async (input: RequestInfo | URL, init?: RequestInit) =>
-		call(String(input), typeof init?.body === 'string' ? init.body : '')) as typeof fetch;
+const fetched = (call: (url: string, body: string) => Response): typeof fetch =>
+	async (input, init) => call(String(input), typeof init?.body === 'string' ? init.body : '');
 const hostOf = (
 	receive: ChatHost['receive'],
 	fetch: typeof globalThis.fetch = fetched((url, body) =>
 		answer({ url, body, headers: new Headers() })
 	)
-): ChatHost => ({ fetch, webhookUrl: 'https://hook.test/', receive });
-const socket = () => FakeSocket.all.at(-1)!;
+): ChatHost => ({ fetch, webhook_url: 'https://hook.test/', receive });
+const socket = () => required(FakeSocket.all.at(-1));
 
 describe('Mattermost', () => {
 	beforeEach(() => {
@@ -103,12 +102,12 @@ describe('Mattermost', () => {
 					{
 						id: 'p1',
 						thread: 'c1:r1',
-						sentAt: new Date(1_790_000_000_000).toISOString(),
+						sent_at: new Date(1_790_000_000_000).toISOString(),
 						from: { handle: 'u1', name: 'ann' },
 						text: 'hello',
 						group: true,
 						title: 'Town',
-						replyTo: 'r1',
+						reply_to: 'r1',
 						invocation: 'reply',
 						attachments: [{ name: 'a.png', mime: 'image/png', bytes: 2, bin: 0 }]
 					}
@@ -151,15 +150,15 @@ describe('Mattermost', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(mattermost, settings);
-			expect((yield* h.link.webhook!(webhook('{}', {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook('{}', {}))).status).toBe(401);
 		})
 	);
 	it.live('posts into a channel and a thread, and opens a direct channel', () =>
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(mattermost, settings);
-			expect(yield* h.link.send!({ id: 'k', to: 'c1:r1', text: 'Hello' }, [])).toMatchObject({
-				providerId: 'out1'
+			expect(yield* required(h.link.send)({ id: 'k', to: 'c1:r1', text: 'Hello' }, [])).toMatchObject({
+				provider_id: 'out1'
 			});
 			expect(api.calls.at(-1)?.url).toBe('https://mm.test/api/v4/posts');
 			expect(api.calls.at(-1)?.headers.get('authorization')).toBe('Bearer token');
@@ -168,7 +167,7 @@ describe('Mattermost', () => {
 				root_id: 'r1',
 				message: 'Hello'
 			});
-			yield* h.link.test!({ to: 'u1' });
+			yield* required(h.link.test)({ to: 'u1' });
 			expect(JSON.parse(api.calls.at(-2)?.body ?? '')).toEqual(['bot', 'u1']);
 			expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toMatchObject({ channel_id: 'dm1' });
 		})
@@ -177,7 +176,7 @@ describe('Mattermost', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ message: 'unauthorized' }, 401));
 			const h = yield* host(chatProvider(mattermost), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 			expect(FakeSocket.all).toEqual([]);
 		})
@@ -207,7 +206,7 @@ describe('Mattermost', () => {
 		expect(FakeSocket.all.length).toBe(3);
 		socket().close();
 		expect(vi.getTimerCount()).toBe(2);
-		await connection.close!();
+		await required(connection.close)();
 		expect(vi.getTimerCount()).toBe(0);
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(FakeSocket.all.length).toBe(3);
@@ -222,7 +221,7 @@ describe('Mattermost', () => {
 		expect(socket().sent.at(-1)).toContain('"ping"');
 		await vi.advanceTimersByTimeAsync(130_000);
 		expect(FakeSocket.all.length).toBeGreaterThan(1);
-		await connection.close!();
+		await required(connection.close)();
 		expect(vi.getTimerCount()).toBe(0);
 	});
 	it('close during a connection ends it for good', async () => {
@@ -231,7 +230,7 @@ describe('Mattermost', () => {
 			hostOf(() => Promise.resolve())
 		);
 		const closing = vi.spyOn(socket(), 'close');
-		await connection.close!();
+		await required(connection.close)();
 		expect(closing).toHaveBeenCalled();
 		expect(FakeSocket.all.length).toBe(1);
 	});
@@ -265,14 +264,14 @@ describe('Mattermost', () => {
 			)
 		);
 		const since = new Date(1_789_000_000_000).toISOString();
-		const thread = await connection.history!('c1:r1', since);
+		const thread = await required(connection.history)('c1:r1', since);
 		expect(thread).toMatchObject({ complete: true, messages: [{ id: 'new', thread: 'c1:r1' }] });
-		const channel = await connection.history!('c1', since);
+		const channel = await required(connection.history)('c1', since);
 		expect(channel.complete).toBe(true);
 		expect(channel.messages).toMatchObject([
 			{ id: 'top', group: true, version: new Date(1_790_000_009_000).toISOString() }
 		]);
 		expect(new URL(urls.at(-1) ?? '').searchParams.get('per_page')).toBe('200');
-		await connection.close!();
+		await required(connection.close)();
 	});
 });

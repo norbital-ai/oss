@@ -7,7 +7,7 @@ import { Logs } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Guest, Telemetry, type Bridge, type InvocationEvents } from '../src/engine/services.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { guestLayer } from './support/guest-fixture.ts';
+import { guest_layer } from './support/guest-fixture.ts';
 
 const invocation: Invocation = {
 	id: 'run-1',
@@ -54,7 +54,7 @@ const eventLog = (ids: Parameters<Telemetry['Service']['open']>[0]) =>
 const run = (events: InvocationEvents, bridge: Bridge) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
-			guestLayer(yield* threeCalls, { console: () => {} }, () => Effect.succeed(events))
+			guest_layer(yield* threeCalls, { console: () => {} }, () => Effect.succeed(events))
 		);
 		return yield* Context.get(context, Guest).invoke(invocation, bridge);
 	});
@@ -103,7 +103,7 @@ describe('next guest telemetry (§5.12)', () => {
 			const body =
 				'() => { console.error("x".repeat(3000)); for (let i = 0; i < 250; i++) console.log("line", i); return "done"; }';
 			const guest = yield* Layer.build(
-				guestLayer(
+				guest_layer(
 					{ source: `export default { automation: { a: { body: ${body} } } };\n` },
 					{},
 					(ids) => Scope.provide(log.scope)(Context.get(log.context, Telemetry).open(ids))

@@ -41,7 +41,8 @@ export const webSearch = (config: { endpoint: string; credential: string }): Hos
 	input: Schema.decodeUnknownSync(Schema.Json)(
 		Schema.toJsonSchemaDocument(SearchInput, { onExcessProperty: 'error' }).schema
 	),
-	readOnly: true,
+	read_only: true,
+	behavior: { data: true },
 	call: async (raw, context, signal): Promise<Json> => {
 		const input = Schema.decodeUnknownOption(SearchInput)(raw);
 		if (Option.isNone(input)) return { error: 'web_search: query is 1 to 128 characters.' };

@@ -187,11 +187,11 @@ export const teams: ChatPlatform = {
 				return null;
 			const kind = conversation.conversationType,
 				group = kind === undefined ? conversation.isGroup === true : kind !== 'personal',
-				sentAt = activity.timestamp ?? new Date().toISOString();
+				sent_at = activity.timestamp ?? new Date().toISOString();
 			const base = {
 				id: idOf(conversation.id, id),
 				thread: threadOf(serviceUrl, conversation.id),
-				sentAt,
+				sent_at,
 				from: { handle: from.id, name: from.name ?? null },
 				group,
 				title: conversation.name ?? null
@@ -203,11 +203,11 @@ export const teams: ChatPlatform = {
 				mentioned:
 					entities?.some((one) => one.type === 'mention' && one.mentioned?.id === recipient?.id) ===
 					true,
-				replyTo:
+				reply_to:
 					activity.replyToId === undefined ? null : idOf(conversation.id, activity.replyToId),
 				files: filesOf(activity)
 			};
-			if (type === 'messageUpdate') return { ...message, version: sentAt };
+			if (type === 'messageUpdate') return { ...message, version: sent_at };
 			return type === 'message' ? message : null;
 		};
 		const connection: ChatConnection = {

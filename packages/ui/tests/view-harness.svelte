@@ -13,6 +13,7 @@
 	import type Form from '../src/form/form.svelte';
 	import type ApprovalPanel from '../src/approval/ApprovalPanel.svelte';
 	import type ChildGrid from '../src/relations/ChildGrid.svelte';
+	import type BulkRelation from '../src/model/BulkRelation.svelte';
 	type Table = typeof NativeTable<TableSource>;
 	export type ViewPart =
 		| { part: 'table'; view: Table; props: ComponentProps<Table> }
@@ -29,7 +30,8 @@
 		| { part: 'picker'; view: typeof Picker; props: ComponentProps<typeof Picker> }
 		| { part: 'form'; view: typeof Form; props: ComponentProps<typeof Form> }
 		| { part: 'approval'; view: typeof ApprovalPanel; props: ComponentProps<typeof ApprovalPanel> }
-		| { part: 'child'; view: typeof ChildGrid; props: ComponentProps<typeof ChildGrid> };
+		| { part: 'child'; view: typeof ChildGrid; props: ComponentProps<typeof ChildGrid> }
+		| { part: 'bulk-relation'; view: typeof BulkRelation; props: ComponentProps<typeof BulkRelation> };
 	export type ViewHarnessProps = {
 		catalog: NonNullable<KindsHost['catalog']>;
 		automations?: KindsHost['automations'];
@@ -47,20 +49,20 @@
 	// Mounts the fixture's view under a scripted `bolt` and catalog; a RecordShell inside a Sheet.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
-	import { provideKinds } from '../src/kinds/context.js';
+	import { mount_edge } from '../src/effect/index.js';
+	import { provide_kinds } from '../src/kinds/context.js';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
-	import { provideBolt } from '../src/client/context.js';
+	import { provide_bolt } from '../src/client/context.js';
 	import Button from '../src/primitives/button/button.svelte';
 	import Icon from '../src/primitives/icon/icon-wrapper.svelte';
 	import type { BoardProps } from '../src/board/Board.svelte';
 
 	let fixture: ViewHarnessProps = $props();
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
 	const client = fixture.bolt;
-	if (client !== undefined) provideBolt(() => client);
-	provideKinds({
+	if (client !== undefined) provide_bolt(() => client);
+	provide_kinds({
 		get catalog() {
 			return fixture.catalog;
 		},
@@ -128,7 +130,7 @@
 	{/snippet}
 	<fixture.view
 		{...fixture.props}
-		{...fixture.onColumn === undefined ? {} : { columnHeader }}
+		{...fixture.onColumn === undefined ? {} : { column_header: columnHeader }}
 		{...fixture.onTrailing === undefined
 			? {}
 			: { toolbar: { ...(fixture.props.toolbar || {}), trailing } }}
@@ -142,6 +144,8 @@
 {:else if fixture.part === 'form'}
 	<fixture.view {...fixture.props} />
 {:else if fixture.part === 'approval'}
+	<fixture.view {...fixture.props} />
+{:else if fixture.part === 'bulk-relation'}
 	<fixture.view {...fixture.props} />
 {:else}
 	<fixture.view {...fixture.props} />

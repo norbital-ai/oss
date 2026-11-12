@@ -3,9 +3,9 @@ import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import { LIMITS } from '../engine/contracts.ts';
 import { BoltError } from './errors.ts';
-import { chargesFor, resetAfter } from '../engine/access/rate.ts';
+import { charges_for, resetAfter } from '../engine/access/rate.ts';
 import { StoredUpload, upload } from '../engine/callables/upload.ts';
-import { readableFile } from '../engine/decisions/index.ts';
+import { readableFile } from '../engine/decision.ts';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Files } from '../engine/ports.ts';
 import { Manifest, Reads } from '../engine/services.ts';
@@ -16,10 +16,10 @@ import {
 	RateLimits,
 	rateLimitedResponse,
 	requestUrl,
-	responseError,
+	response_error,
 	SessionAuthority
 } from './http.ts';
-import { HEADERS, PATHS, statusOf } from './wire.ts';
+import { HEADERS, PATHS, status_of } from './wire.ts';
 import { ImagePreviews } from './image-previews.ts';
 
 /** What a browser only displays: every other type could script this origin, which all workspaces share. */
@@ -37,7 +37,7 @@ const FileRow = Schema.Struct({
 	name: Schema.String,
 	field: Schema.String
 });
-export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
+export const files_routes = (request: HttpServerRequest.HttpServerRequest) =>
 	Effect.gen(function* () {
 		const url = requestUrl(request);
 		if (!url.pathname.startsWith(PATHS.files))
@@ -65,7 +65,7 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 			const model = rest.slice(0, dot),
 				field = rest.slice(dot + 1);
 			if (dot < 0) return yield* Effect.fail(invalid('upload to <model>.<field>'));
-			const charges = chargesFor(
+			const charges = charges_for(
 					auth,
 					['upload'],
 					auth.actor.kind === 'member' ? { actor: auth.actor.id } : {}
@@ -111,7 +111,7 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 			return Option.some(
 				outcome.kind === 'committed'
 					? HttpServerResponse.jsonUnsafe(outcome.output)
-					: outcome.kind === 'refused' && outcome.code === 'rateLimited'
+					: outcome.kind === 'refused' && outcome.code === 'rate_limited'
 						? rateLimitedResponse(resetAfter(charges, now))
 						: HttpServerResponse.jsonUnsafe(
 								{
@@ -120,7 +120,7 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 										message: outcome.kind === 'refused' ? outcome.message : outcome.kind
 									}
 								},
-								{ status: statusOf(outcome) }
+								{ status: status_of(outcome) }
 							)
 			);
 		}
@@ -136,7 +136,7 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 			params: [rest]
 		});
 		if (Option.isNone(row))
-			return yield* Effect.fail(BoltError.make('notFound', 'admission', 'Not found or no access.'));
+			return yield* Effect.fail(BoltError.make('not_found', 'admission', 'Not found or no access.'));
 		const reads = yield* Reads;
 		if (
 			!(yield* readableFile(
@@ -145,7 +145,7 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 				row.value.field
 			))
 		)
-			return yield* Effect.fail(BoltError.make('notFound', 'admission', 'Not found or no access.'));
+			return yield* Effect.fail(BoltError.make('not_found', 'admission', 'Not found or no access.'));
 		const preview = url.searchParams.get('preview');
 		if (preview !== null && preview !== '64' && preview !== '512' && preview !== '1024')
 			return yield* Effect.fail(invalid('An image preview takes 64, 512 or 1024.'));
@@ -176,8 +176,8 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 				: HttpServerResponse.uint8Array(image.bytes, { headers })
 		);
 	}).pipe(
-		Effect.catch((error) => Effect.succeed(Option.some(responseError(error)))),
+		Effect.catch((error) => Effect.succeed(Option.some(response_error(error)))),
 		Effect.catchCause((cause) =>
-			Effect.logWarning(cause).pipe(Effect.as(Option.some(responseError(cause))))
+			Effect.logWarning(cause).pipe(Effect.as(Option.some(response_error(cause))))
 		)
 	);

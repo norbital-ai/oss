@@ -1,21 +1,46 @@
+<script lang="ts" module>
+	import type { ModelKey, RowOf, Values } from '../model/types.js';
+	import type { Json } from '../client/contract.js';
+	import type { BoardProps } from './Board.svelte';
+
+	export type BoardPageProps<C extends ModelKey> = Pick<BoardProps<C>, 'of' | 'card'> & {
+		lane: string;
+		where: Json | undefined;
+		order_by: Json | undefined;
+		search?: string;
+		page_size: number;
+		index: number;
+		after: string | null;
+		on_next: (next: string | null) => void;
+		selectable?: boolean;
+		selected?: ReadonlySet<RowOf<C>['id']>;
+		on_select?: (id: RowOf<C>['id'], selected: boolean) => void;
+		on_rows?: (page: symbol, rows: readonly (RowOf<C> & Values)[]) => () => void;
+		on_change?: () => void;
+		/** The expanded lane: cards are items of the parent's grid, unwindowed (pages bound them) and not draggable. */
+		grid?: boolean;
+		/** Opening a card; default the record sheet. */
+		on_open?: (id: string) => void;
+		/** The other lanes a card may move to, where a finger cannot drag it. */
+		moves?: readonly { label: string; move: (id: string) => void }[];
+	};
+</script>
+
 <script lang="ts" generics="C extends ModelKey">
-	import type { ModelKey, Row, RowOf } from '../model/types.js';
-	import type { Json, QueryAnswer } from '../client/contract.js';
 	import { watch as watchSource } from 'runed';
 	import { Equal } from 'effect';
 	import { untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { useKinds } from '../kinds/context.js';
-	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
+	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
 	import { Button } from '../primitives/button/index.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import * as Popover from '../primitives/popover/index.js';
-	import { openRecord } from '../record/navigation.js';
+	import { open_record } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
-	import type { BoardProps } from './Board.svelte';
 	import { label, msg } from '../text/messages.js';
 	import { listRequest, refOf, unref } from '../relations/select.js';
-	import { requestJson } from '../read/request.js';
+	import { request_json } from '../read/request.js';
 	import { pageRead } from '../read/paging.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import ReadGate from '../read/ReadGate.svelte';
@@ -31,43 +56,23 @@
 		where,
 		order_by,
 		search,
-		pageSize,
+		page_size,
 		index,
 		after,
-		onNext,
+		on_next,
 		selectable = false,
 		selected,
-		onSelect,
-		onRows,
-		onChange,
+		on_select,
+		on_rows,
+		on_change,
 		grid = false,
-		onOpen,
+		on_open,
 		moves
-	}: Pick<BoardProps<C>, 'of' | 'card'> & {
-		lane: string;
-		where: Json | undefined;
-		order_by: Json | undefined;
-		search?: string;
-		pageSize: number;
-		index: number;
-		after: string | null;
-		onNext: (next: string | null) => void;
-		selectable?: boolean;
-		selected?: ReadonlySet<RowOf<C>['id']>;
-		onSelect?: (id: RowOf<C>['id'], selected: boolean) => void;
-		onRows?: (page: symbol, ids: readonly RowOf<C>['id'][]) => () => void;
-		onChange?: () => void;
-		/** The expanded lane: cards are items of the parent's grid, unwindowed (pages bound them) and not draggable. */
-		grid?: boolean;
-		/** Opening a card; default the record sheet. */
-		onOpen?: (id: string) => void;
-		/** The other lanes a card may move to, where a finger cannot drag it. */
-		moves?: readonly { label: string; move: (id: string) => void }[];
-	} = $props();
+	}: BoardPageProps<C> = $props();
 	const bolt = useBolt();
 	/** A finger scrolls the lane: a card moves from its menu, not by a drag. */
 	const touch = new MediaQuery('pointer: coarse');
-	const open = (id: string) => (onOpen ? onOpen(id) : openRecord(of, id));
+	const open = (id: string) => (on_open ? on_open(id) : open_record(of, id));
 	const approvalTip = (row: unknown) => {
 		const held = approvalOf(row);
 		return held === null ? undefined : approvalText(bolt, held);
@@ -81,7 +86,7 @@
 		])
 	]);
 	const query = $derived(
-		JSON.stringify({ of, where, order_by, search, fields, pageSize, index, after })
+		JSON.stringify({ of, where, order_by, search, fields, page_size, index, after })
 	);
 	// hook:agent-ui — later pages stay live
 	const page = $derived.by(() => {
@@ -91,17 +96,19 @@
 			pageRead(
 				of,
 				(limit, at) =>
-					bolt.query<QueryAnswer<RowOf<C> & Row>>(
-						requestJson(
+					bolt.model_query(
+						of,
+						request_json(
 							listRequest(
 								kinds.catalog,
 								of,
 								{ where, order_by, search: search || undefined, limit, after: at },
 								readFields
 							)
-						)
+						),
+						'list'
 					),
-				pageSize,
+				page_size,
 				index,
 				after
 			)
@@ -117,11 +124,11 @@
 				current.value !== undefined &&
 				!Equal.equals(previous.value, current.value)
 			)
-				onChange?.();
+				on_change?.();
 		}
 	);
-	$effect(() => {
-		if (state.kind === 'ready') onNext(state.value.next);
+	watchSource(() => ({ state, on_next }), ({ state, on_next }) => {
+		if (state.kind === 'ready') on_next(state.value.next);
 	});
 	const cards = $derived(
 		state.kind === 'ready'
@@ -130,12 +137,12 @@
 	);
 	const pageKey = Symbol();
 	const reportRows = () =>
-		onRows?.(
+		on_rows?.(
 			pageKey,
-			cards.map((row) => row.id)
+			cards
 		);
 	// every loaded page of a lane windows alone (threshold 0): a lane opened ten pages deep keeps a screen of cards mounted
-	const lane = virtualList({
+	const lane = virtual_list({
 		count: () => cards.length,
 		key: (i) => cards[i]?.id ?? String(i),
 		estimate: 72,
@@ -168,9 +175,9 @@
 			>
 				<Glyph name="inbox" class="text-muted-foreground mb-1 size-5 dark:mb-0" />
 				<p class="text-sm text-muted-foreground dark:font-medium dark:text-foreground">
-					{msg(bolt, 'board.laneEmpty', 'Nothing here')}
+					{msg(bolt, 'board.laneEmpty')}
 				</p>
-				<p class="text-meta hidden dark:block">{msg(bolt, 'board.laneClear', 'Lane clear')}</p>
+				<p class="text-meta hidden dark:block">{msg(bolt, 'board.laneClear')}</p>
 			</div>
 		{/if}
 		<!-- the cards' spacing is their margin (measured with them); the page gives the last one back to the lane's gap -->
@@ -239,7 +246,7 @@
 						<Popover.Root>
 							<Popover.Trigger
 								class="text-muted-foreground absolute top-0.5 right-0.5 grid size-8 place-items-center rounded-sm [--hit-target:2rem]"
-								aria-label={msg(bolt, 'board.moveTo', 'Move to')}
+								aria-label={msg(bolt, 'board.moveTo')}
 								data-card-move={row.id}><Glyph name="more" class="size-4" /></Popover.Trigger
 							>
 							<Popover.Content
@@ -262,9 +269,9 @@
 					{#if selectable}
 						<label class="absolute top-0 left-0 grid size-10 place-items-center max-sm:size-11">
 							<Checkbox
-								aria-label={msg(bolt, 'table.select', 'Select')}
+								aria-label={msg(bolt, 'table.select')}
 								checked={selected?.has(row.id) ?? false}
-								onCheckedChange={(on) => onSelect?.(row.id, on)}
+								on_checked_change={(on) => on_select?.(row.id, on)}
 								data-select-row={row.id}
 							/>
 						</label>

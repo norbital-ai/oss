@@ -3,14 +3,18 @@ import { expect, layer } from '@effect/vitest';
 import { Deferred, Effect, Fiber, Layer, Option, Queue, Schema, Stream } from 'effect';
 import { Approvals, Live } from '../src/engine/services.ts';
 import type { LiveView } from '../src/engine/services.ts';
-import { json, routeFixture } from './support/route-fixture.ts';
+import { json, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { dynamicRead } from '../src/protocol/read-request.ts';
+import { dynamic_read } from '../src/protocol/read-request.ts';
 import { ActReply, type Frame } from '../src/protocol/schema.ts';
-import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import {
+	NativeReadRow,
+	TestWorkspace,
+	type WorkspaceServices
+} from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const manifest: EngineManifest = {
@@ -54,20 +58,29 @@ const manifest: EngineManifest = {
 		finance: { description: 'Finance', grants: { orders: { outputs: { default: true } } } }
 	},
 	integrations: {},
-	teams: { sales: ['sales', 'sales_approval'], finance: ['finance'], ops: [] },
+	teams: { sales: { policies: ['sales', 'sales_approval'] }, finance: { policies: ['finance'] }, ops: { policies: [] } },
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
+const OrderPage = Schema.Struct({
+	orders: Schema.Struct({
+		rows: Schema.Array(
+			Schema.StructWithRest(
+				Schema.Struct({ ...NativeReadRow.schema.fields, title: Schema.String }),
+				NativeReadRow.records
+			)
+		)
+	})
+});
 
 // one workspace per file; each test writes its own orders
 const workspace = Layer.unwrap(
 	program(
 		`export default { policy: { sales_approval: { grants: { orders: {
-	create: { verdict: function* (rows, ctx) { const row = rows.findIndex((r) => r.title === 'refuse'); return row >= 0 ? yield* ctx.refuse('This title is refused.', { row, field: 'title' }) : ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] }); } },
+	create: { verdict: function* (changes, ctx) { const row = changes.findIndex((change) => change.after.title === 'refuse'); return row >= 0 ? yield* ctx.refuse('This title is refused.', { row, field: 'title' }) : ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] }); } },
 	update: { verdict: function* (changes, ctx) { return ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] }); } }
 } } } } };`
 	).pipe(Effect.map((guest) => TestWorkspace.layer({ manifest, guest })))
@@ -77,7 +90,7 @@ const setup = Effect.gen(function* () {
 	const t = yield* TestWorkspace,
 		live = yield* Live,
 		approvals = yield* Approvals,
-		route = yield* routeFixture(context);
+		route = yield* route_fixture(context);
 	const rep = t.member(['sales', 'sales_approval']),
 		fin = t.member(['finance']);
 	yield* t.db.write({
@@ -85,8 +98,8 @@ const setup = Effect.gen(function* () {
 		params: [rep.id, fin.id, 'sales', 'finance']
 	});
 	const authorities = new Authorities(manifest, 'e2e');
-	const salesAuthority = yield* authorities.member(t.db, rep.id),
-		financeAuthority = yield* authorities.member(t.db, fin.id);
+	const salesAuthority = yield* authorities.member(t.db, 'bootstrap', rep.id),
+		financeAuthority = yield* authorities.member(t.db, 'bootstrap', fin.id);
 	if (salesAuthority === null || financeAuthority === null)
 		throw new Error('Missing test affiliation');
 	const sales = () => salesAuthority,
@@ -100,9 +113,13 @@ const setup = Effect.gen(function* () {
 			text: 'SELECT record_id FROM approval_request WHERE id=$1',
 			params: [id]
 		});
-	const decide = (requestId: string, decision: 'approve' | 'reject' | 'request_changes') =>
+	const current = (id: string) => t.db.value(Schema.Struct({ id: Schema.String, revision: Schema.Int }), {
+		text: "SELECT jsonb_build_object('id',id,'revision',revision) FROM orders WHERE id=$1::uuid",
+		params: [id]
+	});
+	const decide = (request_id: string, decision: 'approve' | 'reject' | 'request_changes') =>
 		approvals.decide({
-			requestId,
+			request_id,
 			decision,
 			...(decision === 'approve' ? {} : { reason: 'Please revise.' }),
 			authority: finance(),
@@ -115,7 +132,12 @@ const setup = Effect.gen(function* () {
 				new Request('http://cell/__bolt/act', {
 					method: 'POST',
 					headers: { 'Idempotency-Key': crypto.randomUUID() },
-					body: JSON.stringify({ callable, input, issuedAt: t.clock.now() })
+					body: JSON.stringify({
+						...(['orders.create', 'orders.update', 'orders.erase'].includes(callable)
+							? { acts: { [callable]: input } }
+							: { callable, input }),
+						issued_at: t.clock.now()
+					})
 				})
 			);
 			return {
@@ -183,6 +205,7 @@ const setup = Effect.gen(function* () {
 		finance,
 		held,
 		target,
+		current,
 		decide,
 		post,
 		settled,
@@ -191,7 +214,7 @@ const setup = Effect.gen(function* () {
 });
 const request = (outcome: Outcome) => {
 	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
-	return outcome.requestId;
+	return outcome.request_id;
 };
 const ok = (outcome: Outcome) => {
 	if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
@@ -208,9 +231,10 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 	it.effect('a rejection and an erase each purge their request from open inboxes', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const { t, approvals, sales, finance, held, target, post, settled, inboxView } =
+				const { t, approvals, sales, finance, held, target, current, post, settled, inboxView } =
 					yield* setup;
-				const admin = () => t.as(t.admin).authority;
+				const adminAuthority = (yield* t.as(t.admin)).authority;
+				const admin = () => adminAuthority;
 				const id = created(
 					(yield* post(admin, 'orders.create', [{ title: 'Erase fixture' }])).reply.outcome
 				);
@@ -222,14 +246,14 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 					);
 					const rejectedId = yield* target(rejected);
 					const erased = request(
-						(yield* post(sales, 'orders.update', [{ target: id, set: { note: 'Prospective' } }]))
+						(yield* post(sales, 'orders.update', [{ target: yield* current(id), set: { note: 'Prospective' } }]))
 							.reply.outcome
 					);
 					yield* settled;
 					expect(reviewer.value()).toMatchObject({ requests: [{}, {}] });
 					expect(
 						(yield* post(finance, 'approvals.decide', {
-							requestId: rejected,
+							request_id: rejected,
 							decision: 'reject',
 							reason: 'Not accepted.'
 						})).status
@@ -237,11 +261,11 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 					yield* settled;
 					expect(reviewer.value()).toMatchObject({ requests: [{ id: erased }] });
 					expect(yield* held(rejectedId)).toBeUndefined();
-					expect(yield* post(sales, 'orders.erase', { target: id })).toMatchObject({
+					expect(yield* post(sales, 'orders.erase', { target: yield* current(id) })).toMatchObject({
 						status: 403,
 						reply: { outcome: { kind: 'refused', code: 'forbidden' } }
 					});
-					expect(yield* post(admin, 'orders.erase', { target: id })).toMatchObject({
+					expect(yield* post(admin, 'orders.erase', { target: yield* current(id) })).toMatchObject({
 						status: 200
 					});
 					yield* settled;
@@ -281,10 +305,10 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { t, sales, finance, target, post, route } = yield* setup;
-					const requestId = request(
+					const request_id = request(
 						(yield* post(sales, 'orders.create', [{ title: 'listed' }])).reply.outcome
 					);
-					const id = yield* target(requestId);
+					const id = yield* target(request_id);
 					const listed = (query: string) =>
 						Effect.gen(function* () {
 							const body = yield* json(
@@ -294,24 +318,34 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 								Schema.Struct({ value: Schema.Array(Schema.Struct({ id: Schema.String })) })
 							)(body).value.map((v) => v.id);
 						});
-					expect(yield* listed('')).toContain(requestId);
-					expect(yield* listed(`?model=orders&record=${id}&all=1`)).toEqual([requestId]);
+					expect(yield* listed('')).toContain(request_id);
+					expect(yield* listed(`?model=orders&record=${id}&all=1`)).toEqual([request_id]);
 					const $approval = {
-						requestId,
+						request_id,
 						state: 'Pending',
 						step: 0,
 						steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
-						requestedBy: expect.any(String)
+						requested_by: expect.any(String)
 					};
-					const reader = t.as(t.member(['finance']));
-					const listedRow = <R extends object>(rows: readonly R[] | undefined) =>
-						(rows ?? []).filter((row) => Reflect.get(row, 'title') === 'listed');
-					expect(listedRow((yield* reader.query({ orders: {} })).orders.rows)).toEqual([
+					const reader = yield* t.as(t.member(['finance']));
+					const listedRows = (answer: typeof OrderPage.Type) =>
+						answer.orders.rows.filter((row) => row.title === 'listed');
+					expect(
+						yield* reader.query({ orders: {} }).pipe(
+							Effect.flatMap(Schema.decodeUnknownEffect(OrderPage)),
+							Effect.map(listedRows)
+						)
+					).toEqual([
 						expect.objectContaining({ title: 'listed', $approval })
 					]);
 					// the same layer map built at runtime: checked host-side, answered as JSON rows
-					const dynamic = dynamicRead({ orders: { fields: ['title'] } });
-					expect(listedRow((yield* reader.query(dynamic)).orders?.rows)).toEqual([
+					const dynamic = dynamic_read({ orders: { fields: ['title'] } });
+					expect(
+						yield* reader.query(dynamic).pipe(
+							Effect.flatMap(Schema.decodeUnknownEffect(OrderPage)),
+							Effect.map(listedRows)
+						)
+					).toEqual([
 						{ id: expect.any(String), title: 'listed', $approval }
 					]);
 				})
@@ -323,13 +357,14 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const { t, held, post } = yield* setup;
-					const admin = () => t.as(t.admin).authority;
+					const { t, held, current, post } = yield* setup;
+					const adminAuthority = (yield* t.as(t.admin)).authority;
+				const admin = () => adminAuthority;
 					const id = created(
 						(yield* post(admin, 'orders.create', [{ title: 'desk', note: 'a' }])).reply.outcome
 					);
 					ok(
-						(yield* post(admin, 'orders.update', [{ target: id, set: { note: 'b' } }])).reply
+						(yield* post(admin, 'orders.update', [{ target: yield* current(id), set: { note: 'b' } }])).reply
 							.outcome
 					);
 					const target = { model: 'orders', record: id, revision: 1 };

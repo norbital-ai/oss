@@ -34,7 +34,7 @@ const manifest: EngineManifest = {
 		}
 	},
 	integrations: {
-		crm: { description: 'CRM', driver: 'http', http: { baseUrl: 'https://crm.test' } }
+		crm: { description: 'CRM', driver: 'http', http: { base_url: 'https://crm.test' } }
 	},
 	policies: {
 		self: {
@@ -44,7 +44,7 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: { owners: ['self'] }
+	teams: { owners: { policies: ['self'] } }
 };
 /** `self` may update an instance it owns: the update `check`, dry-run on the instance before health or replay. */
 const guest = program(`export default { policy: { self: { grants: { sys_integration: { update: {
@@ -57,7 +57,7 @@ const setup = Effect.gen(function* () {
 			manifest,
 			guest: yield* guest,
 			now: NOW,
-			host: { publicUrl: ORIGIN }
+			host: { public_url: ORIGIN }
 		})
 	);
 	const t = Context.get(context, TestWorkspace);
@@ -193,6 +193,7 @@ describe('shell integration sync health and replay', () => {
 							pending: 1,
 							dead: 2,
 							failed: 1,
+							initialization: null,
 							last_read_at: null,
 							last_change_at: null,
 							last_hint_at: null,
@@ -209,7 +210,7 @@ describe('shell integration sync health and replay', () => {
 						yield* f.replay({ instance: 'missing' })
 					]) {
 						expect(response.status).toBe(404);
-						expect(yield* json(response)).toMatchObject({ error: { code: 'notFound' } });
+						expect(yield* json(response)).toMatchObject({ error: { code: 'not_found' } });
 					}
 				})
 			)

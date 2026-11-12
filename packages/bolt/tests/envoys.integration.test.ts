@@ -1,6 +1,7 @@
-import { withEnvoys } from './support/envoys.ts';
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // engine/envoys on PGlite with the agent area's real turn loop and a scripted model (§4.4, P22, P32, rules 57–61; G12 (4), (5)):
-// envoys are source roles deployed on `+workspace.ts` connections, every message admitted by the run its ingest queued.
+// Envoys and their account deployments are durable runtime rows; ingestion queues each admission.
 // A DM holds the envoy's policies joined by the linked sender's own authority (a contractor's DM does what the
 // contractor's team grants where the envoy's policies would refuse it), a group turn
 // holds the envoy's policies alone whoever sends, a private desk admits only senders whose handle is registered on a
@@ -12,7 +13,7 @@ import { Effect, Exit, Layer, Predicate, Schema, Scope, Stream } from 'effect';
 import { afterAll } from 'vitest';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, AiRequest } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -24,13 +25,19 @@ import {
 	TestWorkspace,
 	type Kit,
 	type WorkspaceServices,
-	respondSystem1
+	respond_system_1
 } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
 	return value;
 };
+
+const runtime_accounts = [
+	{ id: 'field_wa', integration: 'whatsapp', status: { state: 'connected' } },
+	{ id: 'sales_tg', integration: 'telegram', status: { state: 'connected' } },
+	{ id: 'ops_mail', integration: 'email', status: { state: 'connected' } },
+] as const;
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
@@ -68,15 +75,11 @@ const manifest = {
 	},
 	teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },
 	automations: {},
-	connections: {
-		field_wa: { integration: 'whatsapp' },
-		sales_tg: { integration: 'telegram' },
-		ops_mail: { integration: 'email' }
-	},
+	
 
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -86,7 +89,7 @@ const opsDeskEnvoy = '0199a000-0000-7000-8000-0000000000e3';
 const runtimeEnvoys = [
 	{
 		id: fieldOpsEnvoy,
-		connections: ['field_wa'],
+		accounts: ['field_wa'],
 		audience: 'private',
 		name: 'Norbius',
 		policies: ['desk'],
@@ -97,7 +100,7 @@ const runtimeEnvoys = [
 	},
 	{
 		id: salesDeskEnvoy,
-		connections: ['sales_tg'],
+		accounts: ['sales_tg'],
 		audience: 'public',
 		name: 'Norbius',
 		policies: ['desk', 'desk_turns'],
@@ -108,7 +111,7 @@ const runtimeEnvoys = [
 	},
 	{
 		id: opsDeskEnvoy,
-		connections: ['ops_mail'],
+		accounts: ['ops_mail'],
 		audience: 'private',
 		name: 'Norbius',
 		policies: ['desk'],
@@ -130,7 +133,7 @@ function scriptedAi(sent: (instance: string) => string[]) {
 	const text = (c: Json) =>
 		typeof c === 'string' ? c : String(Predicate.isObject(c) ? (c['text'] ?? '') : '');
 	const layer = Layer.succeed(Ai, {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Port.unavailable('ai.catalog'),
@@ -142,7 +145,8 @@ function scriptedAi(sent: (instance: string) => string[]) {
 					const usage = { input: 10, output: 5 };
 					const last = present(
 						request.messages.findLast(
-							(m) => !(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
+							// the step's notes (available actions) and conversation state are context, not what was said
+							(m) => !(typeof m.content === 'string' && /^\[(?:note\]|conversation state)/.test(m.content))
 						)
 					); // the step's closing note is the engine's, not a message
 					if (last.role === 'tool') {
@@ -160,7 +164,7 @@ function scriptedAi(sent: (instance: string) => string[]) {
 									name: 'act',
 									input: {
 										callable: 'jobs.update',
-										input: [{ target: present(close[1]), set: { status: 'done' } }]
+input: [{ target: { id: present(close[1]), revision: 1 }, set: { status: 'done' } }]
 									}
 								}
 							],
@@ -205,23 +209,23 @@ const setup = Effect.gen(function* () {
 	kit = t;
 	t.clock.advance('1h');
 	// work an earlier case left due (a turn queued behind its lease) runs now, before this case counts model steps
-	yield* t.runDue();
+	yield* t.run_due();
 	yield* t.settled();
-	const r = (route ??= yield* routeFixture(
+	const r = (route ??= yield* route_fixture(
 		yield* Effect.context<TestWorkspace | WorkspaceServices>()
 	).pipe(Scope.provide(fileScope)));
+	const adminAuthority = (yield* t.as(t.admin)).authority;
 	const job = () =>
 		Effect.gen(function* () {
-			const o = (yield* actReply(r, t.as(t.admin).authority, {
-				callable: 'jobs.create',
-				input: [{ title: 'Kismis', status: 'open' }],
-				issuedAt: t.clock.now()
+			const o = (yield* act_reply(r, (yield* t.as(t.admin)).authority, {
+				acts: { 'jobs.create': [{ title: 'Kismis', status: 'open' }] },
+				issued_at: t.clock.now()
 			})).outcome;
 			if (o.kind !== 'committed') throw new Error(o.kind);
 			return present(o.records[0]).id;
 		});
 	const status = (id: string) =>
-		qReply(r, t.as(t.admin).authority, {
+		q_reply(r, adminAuthority, {
 			reads: [{ m: 'query', a: [{ jobs: { where: { id: { eq: id } }, fields: ['status'] } }] }]
 		}).pipe(
 			Effect.flatMap((reply) =>
@@ -237,7 +241,7 @@ const setup = Effect.gen(function* () {
 	const paused = () =>
 		Effect.gen(function* () {
 			t.clock.advance('2s');
-			yield* t.runDue();
+			yield* t.run_due();
 		});
 	const say = (
 		instance: 'field_wa' | 'sales_tg',
@@ -249,7 +253,7 @@ const setup = Effect.gen(function* () {
 			.receive(instance, {
 				id: `m${++seq}`,
 				thread: from,
-				sentAt: t.clock.now(),
+				sent_at: t.clock.now(),
 				from: { handle: from, name: null },
 				text,
 				attachments: [],
@@ -282,12 +286,12 @@ const To = Schema.Struct({ to: Schema.String });
 /** The suite's workspace runs on the real clock, as `it.live` would. */
 const LIVE = { excludeTestServices: true };
 layer(
-	withEnvoys(
-		TestWorkspace.layer({
+	with_envoys(
+		with_accounts(TestWorkspace.layer({
 			manifest,
 			ports: ai.layer,
 			host: { envoys: { workspace: 'Acme Field' } }
-		}),
+		}), runtime_accounts),
 		runtimeEnvoys
 	),
 	LIVE
@@ -341,9 +345,9 @@ layer(
 					t.receive('ops_mail', {
 						id,
 						thread: null,
-						sentAt: t.clock.now(),
+						sent_at: t.clock.now(),
 						from: { address: from, name: 'Dana' },
-						replyTo: null,
+						reply_to: null,
 						to: [],
 						cc: [],
 						subject: 'Hi',
@@ -399,7 +403,7 @@ layer(
 				yield* say('sales_tg', '91', 'hello 1');
 				yield* say('sales_tg', '92', 'hello 2');
 				expect(steps()).toBe(before + 1);
-				expect((yield* rows('hello 2'))[0]).toMatchObject({ refused: 'rateLimited', role: null });
+				expect((yield* rows('hello 2'))[0]).toMatchObject({ refused: 'rate_limited', role: null });
 			})
 	);
 
@@ -465,7 +469,7 @@ layer(
 					thread: '1203@g.us',
 					group: true,
 					invocation: 'reply',
-					sentAt: t.clock.now(),
+					sent_at: t.clock.now(),
 					from: { handle: '6598765432@s.whatsapp.net', name: null },
 					text: 'and mine?',
 					attachments: []
@@ -488,20 +492,20 @@ layer(
 		() =>
 			Effect.gen(function* () {
 				const { say, rows, texts, steps } = yield* setup;
-				const notices = () => texts('field_wa').filter((x) => x === NOTICES.rateLimited).length;
+				const notices = () => texts('field_wa').filter((x) => x === NOTICES.rate_limited).length;
 				const before = notices();
 				for (const n of [1, 2, 3])
 					yield* say('field_wa', '6598765432@s.whatsapp.net', `flood ${n}`);
 				expect(steps()).toBe(2);
-				expect((yield* rows('flood 3'))[0]).toMatchObject({ refused: 'rateLimited', role: null });
+				expect((yield* rows('flood 3'))[0]).toMatchObject({ refused: 'rate_limited', role: null });
 				expect(notices() - before).toBe(1);
 			})
 	);
 
-	it.effect('a tenant-created envoy links a channel and answers through it', () =>
+	it.effect('a tenant-created envoy queues its answer until its new channel is paired', () =>
 		Effect.gen(function* () {
 			const { t, rows, paused, steps } = yield* setup;
-			const created = yield* t.as(t.admin).act('sys_envoy.create', [
+			const created = yield* (yield* t.as(t.admin)).act({ 'sys_envoy.create': [
 				{
 					name: 'Runtime desk',
 					audience: 'private',
@@ -511,34 +515,41 @@ layer(
 					delegation: 'disabled',
 					dm: 'union'
 				}
-			]);
+			] });
 			if (created.kind !== 'committed') throw new Error(created.kind);
 			const envoy = present(created.records[0]).id;
-			const line = yield* t
-				.as(t.admin)
-				.act('sys_integration.create', [{ integration: 'whatsapp', name: 'Runtime line', envoy }]);
+			const line = yield* (yield* t.as(t.admin)).act({ 'sys_integration.create': [{ integration: 'whatsapp', name: 'Runtime line', envoy }] });
 			expect(line.kind).toBe('committed');
 			const instance = present(
 				(yield* t.db.read([
 					{ text: 'SELECT id FROM sys_integration WHERE name = $1', params: ['Runtime line'] }
 				]))[0]
 			).rows[0]?.['id'];
-			expect(typeof instance).toBe('string');
-			yield* t.receive(String(instance), {
+			if (typeof instance !== 'string') throw new Error('Missing runtime line');
+			yield* t.receive(instance, {
 				id: 'runtime-m1',
 				thread: '6591234567:14@s.whatsapp.net',
-				sentAt: t.clock.now(),
+				sent_at: t.clock.now(),
 				from: { handle: '6591234567:14@s.whatsapp.net', name: null },
 				text: 'hello runtime',
 				attachments: []
 			});
 			yield* paused();
+			yield* t.settled();
 			expect(steps()).toBe(1);
 			// the tenant row's task and name reach the turn, not only admission
 			expect(ai.requests.at(-1)?.system).toContain('Answer the runtime line.');
 			expect((yield* rows('hello runtime'))[0]).toMatchObject({
 				as: { envoy: { name: envoy, member: ADA, dm: true } }
 			});
+			expect(yield* t.db.rows(
+				Schema.Struct({ status: Schema.String, attempts: Schema.Number, sent_at: Schema.Null, claimed_at: Schema.Null }),
+				{
+					text: "SELECT status,attempts,sent_at,claimed_at FROM sys_message WHERE integration=$1 AND direction='outbound'",
+					params: [instance]
+				}
+			)).toEqual([{ status: 'queued', attempts: 0, sent_at: null, claimed_at: null }]);
+			expect(t.fakes.links.sent.filter((item) => item.instance === instance)).toEqual([]);
 		})
 	);
 	it.effect(
@@ -556,7 +567,7 @@ layer(
 					hook = yield* hookServer,
 					services = yield* Effect.context<WorkspaceServices | TestWorkspace>();
 				const h = yield* host(telegram, fetch, undefined, {
-					webhookUrl: hook.url,
+					webhook_url: hook.url,
 					emit: (event) =>
 						Effect.runPromiseWith(services)(
 							t.receive(

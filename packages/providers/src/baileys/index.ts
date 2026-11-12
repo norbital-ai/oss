@@ -144,11 +144,11 @@ const MEDIA_MAX = 32 * 1024 * 1024;
 export type BaileysOptions = {
 	open?: WaOpen;
 	/** How long a closing link waits for messages in flight to land (default 10 s). */
-	graceMs?: number;
+	grace_ms?: number;
 	/** How long an emit is retried in place before the socket ends unreceipted (default 30 s). */
-	retryMs?: number;
+	retry_ms?: number;
 	/** How long opening a socket may take (default 60 s). */
-	openMs?: number;
+	open_ms?: number;
 };
 
 export function baileys(o: BaileysOptions = {}): ProviderDef {
@@ -160,7 +160,7 @@ export function baileys(o: BaileysOptions = {}): ProviderDef {
 		name: 'WhatsApp',
 		icon: 'simple-icons:whatsapp',
 		description: { en: 'Sync messages from your phone', zh: '同步手机中的消息' },
-		importStart: { kind: 'timestamp', precision: 'second' },
+		import_start: { kind: 'timestamp', precision: 'second' },
 		label: { en: 'Unofficial (WhatsApp Web)', zh: '非官方（WhatsApp 网页版）' },
 		setup: {
 			kind: 'qr',
@@ -279,7 +279,7 @@ export const classify = (code: number | undefined, wasPaired: boolean): Classifi
 class Disconnected extends Schema.TaggedError<Disconnected>()('WhatsAppDisconnected', {
 	code: Schema.optionalKey(Schema.Number),
 	message: Schema.String,
-	lastDisconnect: Schema.Json
+	last_disconnect: Schema.Json
 }) {}
 const Connection = Schema.Struct({
 	connection: Schema.optionalKey(Schema.String),
@@ -340,14 +340,14 @@ const messageIdOf = (id: string, part: number) =>
 export const InboundMessage = Schema.Struct({
 	id: Schema.String,
 	thread: Schema.String,
-	sentAt: Schema.String,
-	sourceAt: Schema.String,
+	sent_at: Schema.String,
+	source_at: Schema.String,
 	from: Schema.Struct({ handle: Schema.String, name: Schema.NullOr(Schema.String) }),
 	text: Schema.String,
 	group: Schema.Boolean,
 	attachments: Schema.Array(Schema.JsonObject),
 	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient']),
-	replyTo: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	reply_to: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	mentions: Schema.optionalKey(Schema.Array(Schema.String)),
 	title: Schema.optionalKey(Schema.String),
 	participants: Schema.optionalKey(
@@ -487,14 +487,14 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 					})
 				: Effect.die(`invalid WhatsApp supervisor transition ${phase._tag} → ${next._tag}`)
 		);
-	const terminal = (code: string, error: string, lastDisconnect?: Json) =>
+	const terminal = (code: string, error: string, last_disconnect?: Json) =>
 		Effect.gen(function* () {
 			yield* transition(Supervisor.Terminal({ code, error }));
 			yield* status({
 				state: 'error',
 				code,
 				error,
-				...(lastDisconnect === undefined ? {} : { lastDisconnect })
+				...(last_disconnect === undefined ? {} : { last_disconnect })
 			});
 			const socket = current?.socket;
 			if (socket !== undefined)
@@ -575,7 +575,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			Effect.retry({
 				schedule: Schedule.max([
 					Schedule.min([Schedule.exponential('250 millis'), Schedule.spaced('5 seconds')]),
-					Schedule.during(options.retryMs ?? 30000)
+					Schedule.during(options.retry_ms ?? 30000)
 				]),
 				while: (error) => error._tag !== 'Fenced' && !ctx.signal.aborted
 			})
@@ -664,11 +664,11 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 				...(lid === undefined ? {} : { lid })
 			});
 			if (found === null) return null;
-			const sentAt = str(found['sentAt']);
+			const sent_at = str(found['sent_at']);
 			if (
-				ctx.importStart?.kind === 'since' &&
-				sentAt !== null &&
-				Date.parse(sentAt) < Date.parse(ctx.importStart.at)
+				ctx.import_start?.kind === 'since' &&
+				sent_at !== null &&
+				Date.parse(sent_at) < Date.parse(ctx.import_start.at)
 			)
 				return null;
 			// a revoke names only its target: the engine tombstones the row, or holds the id so a later copy never lands
@@ -676,7 +676,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 				const revoke: Json = {
 					id: String(found['id']),
 					deleted: true,
-					...(sentAt === null ? {} : { sourceAt: sentAt })
+					...(sent_at === null ? {} : { source_at: sent_at })
 				};
 				return { message: revoke, bins: undefined };
 			}
@@ -703,7 +703,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			if (found['text'] === '' && media === null) return null;
 			const message = yield* Schema.decodeUnknownEffect(InboundMessage)({
 				...found,
-				sourceAt: found['sentAt'],
+				source_at: found['sent_at'],
 				...(phone?.endsWith('@s.whatsapp.net') && Predicate.isObject(found['from'])
 					? {
 							from: { ...found['from'], handle: phone },
@@ -823,7 +823,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 					personal: ctx.personal,
 					fullHistory:
 						ctx.personal &&
-						!(ctx.importStart?.kind === 'since' && ctx.importStart.origin === 'now'),
+						!(ctx.import_start?.kind === 'since' && ctx.import_start.origin === 'now'),
 					beforeHistory: (messages) =>
 						sdk(
 							Effect.gen(function* () {
@@ -888,7 +888,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 							})
 					}).pipe(
 						Effect.timeoutOrElse({
-							duration: options.openMs ?? 60000,
+							duration: options.open_ms ?? 60000,
 							orElse: () =>
 								Effect.fail(
 									new ProviderUnavailable({
@@ -1025,7 +1025,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 										new Disconnected({
 											...(code === undefined ? {} : { code }),
 											message,
-											lastDisconnect: {
+											last_disconnect: {
 												code: code ?? null,
 												message,
 												at: new Date(yield* Clock.currentTimeMillis).toISOString()
@@ -1106,7 +1106,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 							yield* terminal(
 								action.code,
 								action.error,
-								error._tag === 'WhatsAppDisconnected' ? error.lastDisconnect : undefined
+								error._tag === 'WhatsAppDisconnected' ? error.last_disconnect : undefined
 							);
 						} else if (action.kind === 'restart') {
 							yield* store.flush;
@@ -1116,9 +1116,9 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 							yield* status({
 								state: 'reconnecting',
 								detail: error.message,
-								lastDisconnect:
+								last_disconnect:
 									error._tag === 'WhatsAppDisconnected'
-										? error.lastDisconnect
+										? error.last_disconnect
 										: {
 												code: null,
 												message: error.message,
@@ -1169,7 +1169,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			}),
 		close: Effect.gen(function* () {
 			closing = true;
-			yield* FiberSet.awaitEmpty(callbacks).pipe(Effect.timeoutOption(options.graceMs ?? 10000));
+			yield* FiberSet.awaitEmpty(callbacks).pipe(Effect.timeoutOption(options.grace_ms ?? 10000));
 			yield* FiberHandle.clear(supervisor);
 			yield* Queue.end(acknowledged);
 			yield* Fiber.join(historyWorker);
@@ -1195,7 +1195,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 							yield* Cache.set(sent, id, result.message);
 						return id;
 					});
-				// No `idempotentSends`: a stable id keeps receipts on one message, but nothing in Baileys or any published
+				// No `idempotent_sends`: a stable id keeps receipts on one message, but nothing in Baileys or any published
 				// source shows WhatsApp dropping a repeat of it, so a send that timed out stays `uncertain`.
 				const jid = jidOf(outbound.to),
 					id = yield* remember(
@@ -1223,7 +1223,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 					return yield* Effect.fail(
 						new ProviderUnavailable({ message: 'WhatsApp returned no message id' })
 					);
-				return { providerId: id };
+				return { provider_id: id };
 			}),
 		// typing on reads the chat's waiting messages (blue ticks) and, once per socket, goes online first
 		typing: (to: string, on: boolean) =>
@@ -1262,7 +1262,7 @@ const RECEIPT: { readonly [status: number]: Report['kind'] } = {
 export function baileysReceipt(
 	u: unknown,
 	now: number
-): { providerId: string; report: Report } | null {
+): { provider_id: string; report: Report } | null {
 	if (
 		!Predicate.isObject(u) ||
 		!Predicate.isObject(u['key']) ||
@@ -1275,7 +1275,7 @@ export function baileysReceipt(
 	const kind = typeof status === 'number' ? RECEIPT[status] : undefined;
 	if (id === null || kind === undefined) return null;
 	return {
-		providerId: id,
+		provider_id: id,
 		report: {
 			kind,
 			at: new Date(now).toISOString(),
@@ -1288,7 +1288,7 @@ export function baileysReceipt(
 export function baileysGroupReceipt(
 	u: unknown,
 	now: number
-): { providerId: string; report: Report } | null {
+): { provider_id: string; report: Report } | null {
 	if (
 		!Predicate.isObject(u) ||
 		!Predicate.isObject(u['key']) ||
@@ -1307,7 +1307,7 @@ export function baileysGroupReceipt(
 				: undefined;
 	return id === null || kind === undefined
 		? null
-		: { providerId: id, report: { kind, at: new Date(now).toISOString(), provider: 'baileys' } };
+		: { provider_id: id, report: { kind, at: new Date(now).toISOString(), provider: 'baileys' } };
 }
 
 /** One Baileys `WAMessage` (read structurally) → the wire message, or `null` (our own echo, a receipt, an empty message). */
@@ -1330,7 +1330,7 @@ export function whatsappMessage(
 	if (jid === null || id === null || !Predicate.isObject(content) || !Number.isFinite(ts))
 		return null;
 	const group = jid.endsWith('@g.us');
-	const sentAt = new Date(ts * 1000).toISOString();
+	const sent_at = new Date(ts * 1000).toISOString();
 	const alternate = str(key['remoteJidAlt']);
 	const from = {
 		handle: group
@@ -1345,7 +1345,7 @@ export function whatsappMessage(
 			!group && from.handle.endsWith('@s.whatsapp.net')
 				? from.handle.replace(/:\d+(?=@s\.whatsapp\.net$)/, '')
 				: jid,
-		sentAt,
+		sent_at,
 		from,
 		group,
 		attachments: [],
@@ -1359,14 +1359,14 @@ export function whatsappMessage(
 	if (Predicate.isObject(protocol)) {
 		const target = Predicate.isObject(protocol['key']) ? str(protocol['key']['id']) : null;
 		if (target === null) return null;
-		if (Number(protocol['type']) === 0) return { id: target, sentAt, deleted: true };
+		if (Number(protocol['type']) === 0) return { id: target, sent_at, deleted: true };
 		const edited = unwrap(protocol['editedMessage']);
 		if (Number(protocol['type']) !== 14 || !Predicate.isObject(edited)) return null;
 		return {
 			...base,
 			id: target,
 			text: whatsappText(edited),
-			version: sentAt,
+			version: sent_at,
 			invocation: 'ambient'
 		};
 	}
@@ -1400,7 +1400,7 @@ export function whatsappMessage(
 		...base,
 		id,
 		text,
-		replyTo: str(info?.['stanzaId']),
+		reply_to: str(info?.['stanzaId']),
 		mentions,
 		invocation: !group
 			? 'direct'

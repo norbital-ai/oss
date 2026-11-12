@@ -51,7 +51,7 @@ const manifest: EngineManifest = {
 	policies: {
 		debit: {
 			description: 'Start and execute debits',
-			capabilities: { automations: ['debitA', 'debitB', 'reread', 'fanout'] },
+			capabilities: { automations: ['debit_a', 'debit_b', 'reread', 'fanout'] },
 			grants: {
 				accounts: { outputs: { default: true }, update: true },
 				ledger: { outputs: { default: true }, create: true }
@@ -59,31 +59,32 @@ const manifest: EngineManifest = {
 		}
 	},
 	automations: {
-		debitA: { description: 'First concurrent debit', input, policies: ['debit'] },
-		debitB: { description: 'Second concurrent debit', input, policies: ['debit'] },
+		debit_a: { description: 'First concurrent debit', input, output: { kind: 'json' }, policies: ['debit'] },
+		debit_b: { description: 'Second concurrent debit', input, output: { kind: 'json' }, policies: ['debit'] },
 		reread: {
 			description: 'A changed repeated read poisons later writes',
 			input,
+			output: { kind: 'json' },
 			policies: ['debit']
 		},
-		fanout: { description: 'Independent writes after one shared read', input, policies: ['debit'] }
+		fanout: { description: 'Independent writes after one shared read', input, output: { kind: 'json' }, policies: ['debit'] }
 	}
 };
 const guest = program(`import { Effect } from 'effect';
-const operations = (input,balance) => [
- {callable:'accounts.update',input:[{target:input.account,set:{balance:balance-input.amount}}]},
- {callable:'ledger.create',input:[{
+const operations = (input,account) => ({
+ 'accounts.update':[{target:account,set:{balance:account.balance-input.amount}}],
+ 'ledger.create':[{
   account:input.account,label:input.label,amount:input.amount,
-  balance_before:balance,balance_after:balance-input.amount
- }]}
-];
+  balance_before:account.balance,balance_after:account.balance-input.amount
+ }]
+});
 function* debit(input,ctx){
  const {accounts:page}=yield* ctx.query({accounts:{
-  where:{id:{eq:input.account}},fields:['balance']
+  where:{id:{eq:input.account}},fields:['balance','revision']
  }});
  const account=page.rows[0];
  if(account===undefined)throw new Error('The debit account is missing');
- return yield* ctx.act.many(operations(input,account.balance)).pipe(
+ return yield* ctx.act(operations(input,account)).pipe(
   Effect.map(outcome=>({result:outcome.kind,readBalance:account.balance,label:input.label})),
   Effect.catchTag('ActConflict',error=>Effect.succeed({
    result:error._tag,readBalance:account.balance,label:input.label
@@ -91,16 +92,16 @@ function* debit(input,ctx){
  );
 }
 export default {automation:{
- debitA:{body:debit},
- debitB:{body:debit},
+ debit_a:{body:debit},
+ debit_b:{body:debit},
  fanout:{body:function*(input,ctx){
-  const {accounts:page}=yield* ctx.query({accounts:{fields:['balance']}});
-  return yield* Effect.all(page.rows.map(account=>ctx.act('accounts.update',[{
-   target:account.id,set:{balance:account.balance-input.amount}
-  }]).pipe(Effect.map(outcome=>outcome.kind))),{concurrency:'unbounded'});
+  const {accounts:page}=yield* ctx.query({accounts:{fields:['balance','revision']}});
+  return yield* Effect.all(page.rows.map(account=>ctx.act({'accounts.update':[{
+   target:account,set:{balance:account.balance-input.amount}
+  }]}).pipe(Effect.map(outcome=>outcome.kind))),{concurrency:'unbounded'});
  }},
  reread:{body:function*(input,ctx){
-  const query={accounts:{where:{id:{eq:input.account}},fields:['balance']}};
+  const query={accounts:{where:{id:{eq:input.account}},fields:['balance','revision']}};
   const first=yield* ctx.query(query);
   const account=first.accounts.rows[0];
   if(account===undefined)throw new Error('The reread account is missing');
@@ -109,7 +110,7 @@ export default {automation:{
    Effect.map(()=>{secondReturned=true;return 'returned';}),
    Effect.catchTag('ReadFailed',error=>Effect.succeed(error.code))
   );
-  const write=yield* ctx.act.many(operations(input,account.balance)).pipe(
+  const write=yield* ctx.act(operations(input,account)).pipe(
    Effect.map(outcome=>outcome.kind),
    Effect.catchTag('ActConflict',error=>Effect.succeed(error._tag))
   );
@@ -191,7 +192,7 @@ const fixture = (mode: 'concurrent' | 'aba') =>
 		);
 		const t = Context.get(context, TestWorkspace),
 			calls = Context.get(context, Callables);
-		const authority = t.as(t.member(['debit'])).authority;
+		const authority = (yield* t.as(t.member(['debit']))).authority;
 		const start = (automation: string, label: string) =>
 			Effect.gen(function* () {
 				const id = randomUUID();
@@ -241,7 +242,7 @@ it.live(
 				});
 				const started = yield* f.start('fanout', 'independent');
 				expect(started.outcome.kind).toBe('committed');
-				yield* f.t.runDue();
+				yield* f.t.run_due();
 				expect(yield* f.run(started.id)).toMatchObject({
 					state: 'succeeded',
 					output: ['committed', 'committed'],
@@ -263,14 +264,14 @@ it.live(
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture('concurrent');
-				const first = yield* f.start('debitA', 'first');
-				const second = yield* f.start('debitB', 'second');
+				const first = yield* f.start('debit_a', 'first');
+				const second = yield* f.start('debit_b', 'second');
 				expect(first.outcome.kind).toBe('committed');
 				expect(second.outcome.kind).toBe('committed');
 				expect((yield* f.run(first.id)).state).toBe('queued');
 				expect((yield* f.run(second.id)).state).toBe('queued');
 				f.arm();
-				yield* f.t.runDue();
+				yield* f.t.run_due();
 				const results: (typeof DebitResult.Type)[] = [];
 				for (const id of [first.id, second.id]) {
 					const run = yield* f.run(id);
@@ -305,7 +306,7 @@ it.live(
 				expect(started.outcome.kind).toBe('committed');
 				expect((yield* f.run(started.id)).state).toBe('queued');
 				f.arm();
-				yield* f.t.runDue();
+				yield* f.t.run_due();
 				const run = yield* f.run(started.id);
 				expect(run.state).toBe('succeeded');
 				expect(run.error).toBeNull();

@@ -24,7 +24,7 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {
-		'documents.folder': { to: 'folders', optional: true, onDelete: 'setNull' }
+		'documents.folder': { to: 'folders', optional: true, on_delete: 'set_null' }
 	},
 	exposures: {
 		folders: {
@@ -42,10 +42,9 @@ const manifest: EngineManifest = {
 	teams: {},
 	integrations: {},
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const Folder = Schema.Struct({ id: Schema.String, name: Schema.String, revision: Schema.Number });
@@ -64,7 +63,7 @@ const fixture = Effect.gen(function* () {
 	);
 	const t = Context.get(context, TestWorkspace),
 		writes = Context.get(context, Writes),
-		admin = t.as(t.admin).authority;
+		admin = (yield* t.as(t.admin)).authority;
 	const bindings = {
 		now: t.clock.now(),
 		today: t.clock.now().slice(0, 10),
@@ -136,7 +135,7 @@ describe('restore skips a reference to a row that stays deleted', () => {
 				if (!previewed.ok) throw new Error(JSON.stringify(previewed.outcome));
 				expect(previewed.preview.changes).toEqual([]);
 				expect(previewed.preview.skipped).toEqual([
-					{ field: 'folder', current: null, restored: f.folder, reason: 'deletedTarget' }
+					{ field: 'folder', current: null, restored: f.folder, reason: 'deleted_target' }
 				]);
 				yield* f.t.db.write({
 					text: 'DELETE FROM bolt_history WHERE collection=$1 AND record=$2',
@@ -155,7 +154,7 @@ describe('restore skips a reference to a row that stays deleted', () => {
 				expect(plan.skipped).toEqual(
 					expect.arrayContaining([
 						{ model: 'folders', id: f.folder, field: '*', reason: 'noHistory' },
-						{ model: 'documents', id: f.document, field: 'folder', reason: 'deletedTarget' }
+						{ model: 'documents', id: f.document, field: 'folder', reason: 'deleted_target' }
 					])
 				);
 				expect(Option.isNone(yield* f.folderRow())).toBe(true);

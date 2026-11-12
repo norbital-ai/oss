@@ -1,6 +1,6 @@
 /** Combine writers at an instant, then summarize buckets or carry each source's last gauge. */
 import { Effect } from 'effect';
-import { exposureOf, q, type Catalog } from '../catalog.ts';
+import { exposure_of, q, type Catalog } from '../catalog.ts';
 import { StoreError } from '../errors.ts';
 import type { Pred } from '../ir.ts';
 import { STORE_LIMITS } from '../limits.ts';
@@ -13,14 +13,14 @@ export type RollupIR = {
 	readonly value: string;
 	readonly combine?: 'sum' | 'max' | undefined;
 	readonly where?: Pred | undefined;
-	readonly stepMillis?: number | undefined;
-	readonly latestPer?: readonly string[] | undefined;
+	readonly step_millis?: number | undefined;
+	readonly latest_per?: readonly string[] | undefined;
 	readonly carry?:
-		{ readonly from: string; readonly until: string; readonly stepMillis: number } | undefined;
+		{ readonly from: string; readonly until: string; readonly step_millis: number } | undefined;
 };
 
 export const compileRollup = Effect.fn('Store.rollup')(function* (cat: Catalog, query: RollupIR) {
-	const c = yield* exposureOf(cat, query.table),
+	const c = yield* exposure_of(cat, query.table),
 		b = new Build(cat),
 		a = b.alias();
 	const invalid = (message: string) => Effect.fail(StoreError.of('invalid', 'decode', message));
@@ -30,7 +30,7 @@ export const compileRollup = Effect.fn('Store.rollup')(function* (cat: Catalog, 
 		return yield* invalid(
 			'measurement rollups require an instant and a floating-point number field'
 		);
-	const names = [...new Set([...query.by, ...(query.latestPer ?? [])])];
+	const names = [...new Set([...query.by, ...(query.latest_per ?? [])])];
 	if (query.by.length === 0 || query.by.length > 4 || names.length > 8)
 		return yield* invalid('a rollup groups by one to four fields and at most eight source keys');
 	const fields = yield* Effect.forEach(names, (name) => {
@@ -41,17 +41,17 @@ export const compileRollup = Effect.fn('Store.rollup')(function* (cat: Catalog, 
 			? invalid(`'${name}' is not a scalar rollup key`)
 			: Effect.succeed(f);
 	});
-	const step = query.carry?.stepMillis ?? query.stepMillis;
+	const step = query.carry?.step_millis ?? query.step_millis;
 	if (step !== undefined && (!Number.isSafeInteger(step) || step <= 0))
 		return yield* invalid('a rollup step is a positive number of milliseconds');
 	if (
 		query.carry !== undefined &&
-		(query.latestPer === undefined || Date.parse(query.carry.until) < Date.parse(query.carry.from))
+		(query.latest_per === undefined || Date.parse(query.carry.until) < Date.parse(query.carry.from))
 	)
 		return yield* invalid('a carried rollup requires source keys and an ordered time range');
 	if (
 		query.carry !== undefined &&
-		(Date.parse(query.carry.until) - Date.parse(query.carry.from)) / query.carry.stepMillis >=
+		(Date.parse(query.carry.until) - Date.parse(query.carry.from)) / query.carry.step_millis >=
 			STORE_LIMITS.page.all
 	)
 		return yield* invalid('a carried rollup exceeds the all-read step budget');
@@ -65,7 +65,7 @@ export const compileRollup = Effect.fn('Store.rollup')(function* (cat: Catalog, 
 	const combine = query.combine === 'max' ? 'max' : 'sum';
 	const bucket = (x: string) => `floor(extract(epoch FROM ${x}) * 1000 / ${dt}) * ${dt}`;
 	let input: string, timestamp: string, total: string, peak: string, latest: string;
-	if (query.latestPer !== undefined) {
+	if (query.latest_per !== undefined) {
 		const distinct = fields.map((f) => `${a}.${q(f.column)}`);
 		const read = (extra: string) =>
 			`SELECT DISTINCT ON (${distinct.join(', ')}) ${source.join(', ')}, ${amount} AS "$value" FROM ${T} ${a} WHERE (${condition}) ${extra} ORDER BY ${[...distinct, `${at} DESC`].join(', ')}`;

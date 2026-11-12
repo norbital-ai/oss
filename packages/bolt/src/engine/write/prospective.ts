@@ -4,22 +4,22 @@ import { Effect, Predicate } from 'effect';
 import type { Bindings, CrossAnswer, EngineActor, RowData, Sql } from '../contracts.ts';
 import type { ListRead } from '@norbital-ai/store';
 import { TenantDb } from '../db/tenant-db.ts';
-import { BoltError, fromStore } from '../../protocol/errors.ts';
+import { BoltError, from_store } from '../../protocol/errors.ts';
 import { readOptions } from '../query/reader.ts';
 import { LIMITS } from '../contracts.ts';
 import {
-	nullRowSql,
+	null_row_sql,
 	q,
 	RECORD_LABEL_COLUMN,
 	SEARCH_COLUMN,
 	EMBEDDING_COLUMN,
-	indexColumn,
+	index_column,
 	type Catalog
 } from '@norbital-ai/store';
-import { readEngine } from '../query/engine.ts';
+import { read_engine } from '../query/engine.ts';
 import { compile } from '@norbital-ai/store';
 import { withDefaults, type Item } from './flatten.ts';
-import { databaseValue } from '@norbital-ai/store';
+import { database_value } from '@norbital-ai/store';
 import { k, type WriteEngine } from './act.ts';
 
 /** A write callback's bridge: `query.after` overlays `staged` (the act's rows when the callback runs) on stored rows. */
@@ -45,12 +45,15 @@ export function prospectiveBridge(
 				let forwardedIndex = 0;
 				for (const call of calls) {
 					if (call._tag === 'read' && call.read.kind === 'after') {
+						const exposure = cat.exposures.get(call.read.model);
+						if (exposure === undefined)
+							return yield* BoltError.make('prepared_read', 'guest', 'The prospective read has no declared model.');
 						const nativeRead: ListRead = call.read.query ?? {
 							kind: 'read' as const,
 							model: call.read.model,
 							where: call.read.where,
 							select: {
-								fields: [...cat.exposures.get(call.read.model)!.model.fields.keys()],
+								fields: [...exposure.model.fields.keys()],
 								relations: {}
 							},
 							page: { _tag: 'All' as const }
@@ -60,19 +63,27 @@ export function prospectiveBridge(
 						if (baseline.length !== 1)
 							return yield* Effect.fail(
 								BoltError.make(
-									'preparedRead',
+									'prepared_read',
 									'guest',
 									'a prospective read requires its actual native source baseline'
 								)
 							);
-						if (baseline[0]?.ok !== true) {
-							answers.push(baseline[0]!);
+						const first = baseline[0];
+						if (first === undefined)
+							return yield* BoltError.make('prepared_read', 'guest', 'The prospective read has no baseline answer.');
+						if (first.ok !== true) {
+							answers.push(first);
 							continue;
 						}
-						const groups = Map.groupBy(
-							staged,
-							(item) => cat.exposures.get(item.change.model)!.model.name
-						);
+						const groups = new Map<string, Item[]>();
+						for (const item of staged) {
+							const source = cat.exposures.get(item.change.model);
+							if (source === undefined)
+								return yield* BoltError.make('prepared_read', 'guest', 'A prospective source has no declared model.');
+							const rows = groups.get(source.model.name) ?? [];
+							rows.push(item);
+							groups.set(source.model.name, rows);
+						}
 						const sources = new Map(
 							[...groups.keys()].map((model, index) => [model, `__bolt_prepared_${index}`])
 						);
@@ -80,11 +91,11 @@ export function prospectiveBridge(
 							cat,
 							nativeRead,
 							readOptions({ as: 'workspace' }, b, { sources })
-						).pipe(Effect.mapError(fromStore));
+						).pipe(Effect.mapError(from_store));
 						if (!compiled.dependencies.complete)
 							return yield* Effect.fail(
 								BoltError.make(
-									'preparedRead',
+									'prepared_read',
 									'guest',
 									'prospective reads require complete native compiler dependency proof'
 								)
@@ -97,7 +108,9 @@ export function prospectiveBridge(
 								sources.delete(model);
 								continue;
 							}
-							const spec = m.models[model]!;
+							const spec = m.models[model];
+							if (spec === undefined)
+								return yield* BoltError.make('prepared_read', 'guest', 'A prospective source has no storage declaration.');
 							const generated = new Set([
 								...Object.keys(spec.computed ?? {}),
 								...Object.entries(spec.fields).flatMap(([field, definition]) =>
@@ -106,12 +119,12 @@ export function prospectiveBridge(
 								RECORD_LABEL_COLUMN,
 								SEARCH_COLUMN,
 								EMBEDDING_COLUMN,
-								...Object.keys(cat.models.get(model)?.indexes ?? {}).map(indexColumn)
+								...Object.keys(cat.models.get(model)?.indexes ?? {}).map(index_column)
 							]);
 							if ([...fields].some((field) => generated.has(field)))
 								return yield* Effect.fail(
 									BoltError.make(
-										'preparedComputed',
+										'prepared_computed',
 										'guest',
 										'prospective reads require native generated fields to be materialized before they can be read'
 									)
@@ -122,7 +135,7 @@ export function prospectiveBridge(
 								if (item.change.op !== 'create' && item.change.op !== 'update')
 									return yield* Effect.fail(
 										BoltError.make(
-											'preparedUpsert',
+											'prepared_upsert',
 											'guest',
 											'prospective sources require resolved native row identities'
 										)
@@ -134,7 +147,7 @@ export function prospectiveBridge(
 								if (item.change.op === 'update' && old === undefined)
 									return yield* Effect.fail(
 										BoltError.make(
-											'preparedPrevious',
+											'prepared_previous',
 											'guest',
 											'a prospective update requires its actual stored pre-image'
 										)
@@ -150,7 +163,7 @@ export function prospectiveBridge(
 									...Object.fromEntries(
 										Object.entries(values).map(([field, value]) => [
 											field,
-											databaseValue(value, cat.models.get(model)?.fields.get(field))
+											database_value(value, cat.models.get(model)?.fields.get(field))
 										])
 									)
 								});
@@ -160,11 +173,14 @@ export function prospectiveBridge(
 						const withSources = (statement: Sql): Sql => {
 							const params = [...statement.params];
 							const ctes = [...nativeRows].map(([model, rows]) => {
+								const group = groups.get(model), source = sources.get(model);
+								if (group === undefined || source === undefined)
+									throw BoltError.make('prepared_read', 'guest', 'A prospective source lost its row identities.');
 								params.push(JSON.stringify(rows));
 								const argument = `$${params.length}::jsonb`;
-								params.push(JSON.stringify(groups.get(model)!.map((item) => item.change.id)));
+								params.push(JSON.stringify(group.map((item) => item.change.id)));
 								const identities = `$${params.length}::jsonb`;
-								return `${q(sources.get(model)!)} AS (SELECT original.* FROM ${q(model)} original WHERE NOT (original.id::text IN (SELECT jsonb_array_elements_text(${identities}))) UNION ALL SELECT * FROM jsonb_populate_recordset(${nullRowSql(model, cat.models.get(model)?.fields.keys() ?? [])},${argument}))`;
+								return `${q(source)} AS (SELECT original.* FROM ${q(model)} original WHERE NOT (original.id::text IN (SELECT jsonb_array_elements_text(${identities}))) UNION ALL SELECT * FROM jsonb_populate_recordset(${null_row_sql(model, cat.models.get(model)?.fields.keys() ?? [])},${argument}))`;
 							});
 							const body = statement.text.startsWith('WITH ')
 								? statement.text.slice(5)
@@ -196,7 +212,7 @@ export function prospectiveBridge(
 							if (statement.params.length > LIMITS.statement.params)
 								return yield* Effect.fail(
 									BoltError.make(
-										'tooLarge',
+										'too_large',
 										'guest',
 										'the prospective native read exceeds its statement parameter budget'
 									)
@@ -208,7 +224,7 @@ export function prospectiveBridge(
 							)
 								return yield* Effect.fail(
 									BoltError.make(
-										'tooLarge',
+										'too_large',
 										'guest',
 										'the prospective native source statement exceeds the guest read byte budget'
 									)
@@ -218,7 +234,7 @@ export function prospectiveBridge(
 							...e.db,
 							read: (statements) => e.db.read(statements.map(withSources))
 						});
-						const reader = readEngine({
+						const reader = read_engine({
 							manifest: m,
 							db,
 							querySources: { sources },
@@ -229,7 +245,7 @@ export function prospectiveBridge(
 						if (!Predicate.isObject(answer) || !Array.isArray(answer.rows))
 							return yield* Effect.fail(
 								BoltError.make(
-									'preparedRead',
+									'prepared_read',
 									'guest',
 									'the native prospective reader returned an invalid row envelope'
 								)
@@ -237,7 +253,10 @@ export function prospectiveBridge(
 						answers.push({ ok: true, value: call.read.query === undefined ? answer.rows : answer });
 						continue;
 					}
-					answers.push(readAnswers[forwardedIndex++]!);
+					const answer = readAnswers[forwardedIndex++];
+					if (answer === undefined)
+						return yield* BoltError.make('prepared_read', 'guest', 'The write callback received fewer answers than its reads.');
+					answers.push(answer);
 				}
 				return answers;
 			}).pipe(

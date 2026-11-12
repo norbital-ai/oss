@@ -21,7 +21,7 @@ the route changes. It has no header: the navigation, flush to its edges in the s
 
 	let {
 		open = $bindable(false),
-		onOpenChange,
+		on_open_change,
 		path,
 		children,
 		class: className,
@@ -29,7 +29,7 @@ the route changes. It has no header: the navigation, flush to its edges in the s
 	}: DrawerProps = $props();
 	const close = () => {
 		open = false;
-		onOpenChange?.(false);
+		on_open_change?.(false);
 	};
 	watch(
 		() => path,
@@ -41,7 +41,7 @@ the route changes. It has no header: the navigation, flush to its edges in the s
 <!-- a phone: as tall as the navigation until dragged or expanded (not a fixed 90%), the grabber clear of the first row, and one safe-area inset (the nav's own footer pads it) -->
 <Sheet
 	bind:open
-	{onOpenChange}
+	{on_open_change}
 	side="left"
 	class={cn(
 		'bg-sidebar [&:not([data-fullscreen])]:h-[var(--sheet-h,auto)] pt-5 pb-0 data-fullscreen:pt-[calc(1.25rem+env(safe-area-inset-top))] md:w-72 md:pt-0 [&>header]:hidden [&>[data-sheet-body]]:p-0',

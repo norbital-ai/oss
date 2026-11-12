@@ -75,10 +75,10 @@ const clip = (text: string) =>
 	Array.from(text.replace(/\s*\n\s*/g, ' '))
 		.slice(0, LIMIT)
 		.join('');
-const chat = (event: Chat, sentAt: string, me: string): Incoming => ({
+const chat = (event: Chat, sent_at: string, me: string): Incoming => ({
 	id: event.message_id,
 	thread: event.broadcaster_user_id,
-	sentAt,
+	sent_at,
 	from: {
 		handle: event.chatter_user_id,
 		name: event.chatter_user_name ?? event.chatter_user_login ?? null
@@ -89,14 +89,14 @@ const chat = (event: Chat, sentAt: string, me: string): Incoming => ({
 		event.message.fragments?.some(
 			(fragment) => fragment.type === 'mention' && fragment.mention?.user_id === me
 		) === true,
-	repliedTo: event.reply?.parent_user_id === me,
-	replyTo: event.reply?.parent_message_id ?? null,
+	replied_to: event.reply?.parent_user_id === me,
+	reply_to: event.reply?.parent_message_id ?? null,
 	...(event.broadcaster_user_name === undefined ? {} : { title: event.broadcaster_user_name })
 });
-const whisper = (event: Whisper, sentAt: string): Incoming => ({
+const whisper = (event: Whisper, sent_at: string): Incoming => ({
 	id: event.whisper_id,
 	thread: `whisper:${event.from_user_id}`,
-	sentAt,
+	sent_at,
 	from: {
 		handle: event.from_user_id,
 		name: event.from_user_name ?? event.from_user_login ?? null
@@ -218,7 +218,7 @@ export const twitch: ChatPlatform = {
 				if (kind !== 'notification') return nothing();
 				const event = payload.event,
 					type = payload.subscription?.type,
-					sentAt = new Date(at).toISOString();
+					sent_at = new Date(at).toISOString();
 				if (type === 'channel.chat.message') {
 					const message = await Schema.decodeUnknownPromise(Chat)(event);
 					const copied =
@@ -227,11 +227,11 @@ export const twitch: ChatPlatform = {
 						message.source_broadcaster_user_id !== message.broadcaster_user_id;
 					return message.chatter_user_id === me || copied
 						? nothing()
-						: { messages: [chat(message, sentAt, me)] };
+						: { messages: [chat(message, sent_at, me)] };
 				}
 				if (type === 'user.whisper.message') {
 					const message = await Schema.decodeUnknownPromise(Whisper)(event);
-					return message.from_user_id === me ? nothing() : { messages: [whisper(message, sentAt)] };
+					return message.from_user_id === me ? nothing() : { messages: [whisper(message, sent_at)] };
 				}
 				return nothing();
 			},

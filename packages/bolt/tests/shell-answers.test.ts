@@ -5,14 +5,13 @@ import { Effect, Schema } from 'effect';
 import {
 	SettingsAnswer,
 	ShellBootAnswer,
-	StudioBuildAnswer,
 	StudioFileAnswer,
 	StudioViewAnswer
 } from '../src/shell/api-types.ts';
-import { shellApi } from '../src/shell/runtime.ts';
+import { shell_api } from '../src/shell/runtime.ts';
 import type { ShellBoot } from '../src/shell/nav.ts';
 import type { Settings } from '../src/shell/settings/data.ts';
-import type { StudioBuildRecord, StudioFile, StudioView } from '../src/shell/studio/model.ts';
+import type { StudioFile, StudioView } from '../src/shell/studio/model.ts';
 
 const strict = <A>(schema: Schema.Decoder<A>, value: A) =>
 	expect(Schema.decodeUnknownSync(schema)(value, { onExcessProperty: 'error' })).toEqual(value);
@@ -83,7 +82,7 @@ const boot = {
 		}
 	],
 	push: 'vapid',
-	visitor: { app: 'shop', siteKey: 'site' },
+	visitor: { app: 'shop', site_key: 'site' },
 	catalog: {
 		customer: {
 			label: ['name'],
@@ -109,13 +108,13 @@ const boot = {
 			create: {
 				columns: ['name'],
 				filled: ['holder'],
-				proposalOnly: true,
+				proposal_only: true,
 				with: {
 					orders: {
 						model: 'order',
 						parent: 'customer',
 						owned: true,
-						create: { columns: ['total'], filled: [], proposalOnly: true },
+						create: { columns: ['total'], filled: [], proposal_only: true },
 						update: { columns: ['total'] },
 						delete: true,
 						link: true,
@@ -124,8 +123,8 @@ const boot = {
 				}
 			},
 			update: { columns: ['name'], with: {} },
-			readonlyFields: { name: 'syncOwned' },
-			locked: { status: 'closed' },
+			readonly_fields: { name: 'sync_owned' },
+			locks: [{ where: { status: { eq: 'closed' } } }],
 			description: 'Customers',
 			delete: true,
 			syncs: {
@@ -138,8 +137,16 @@ const boot = {
 			}
 		}
 	},
+	read_catalog: {
+		customer: {
+			brief: {
+				customer: { model: 'customer', many: false, list_fields: ['name'], fields: { name: { kind: 'text' } } }
+			}
+		}
+	},
 	automations: { sync: { input: { since: { kind: 'date' } }, description: 'Sync' } },
-	aiUnconfigured: true,
+	operation_outputs: { automations: { sync: { mode: 'job', output: { kind: 'void' } } } },
+	ai_unconfigured: true,
 	contract: 'abc'
 } satisfies ShellBoot;
 
@@ -204,11 +211,11 @@ const settings = {
 			name: 'Mail',
 			integration: 'mail',
 			owner: null,
-			named: true,
 			envoy: null,
 			active: true,
 			status: { state: 'ready' },
 			configuration: { from: 'a@example.test' },
+			revision: 1,
 			delivery: {
 				sent: 1,
 				pending: 0,
@@ -273,7 +280,7 @@ const preview = {
 	stale: false,
 	shelved: true,
 	destructive: ['drop x'],
-	impact: { durationMs: 5, steps: [{ id: 's', hazard: 'drop', rows: 1, summary: 'Drops x' }] }
+	impact: { duration_ms: 5, steps: [{ id: 's', hazard: 'drop', rows: 1, summary: 'Drops x' }] }
 } as const;
 const entries = [{ name: 'crm', path: 'src/app/crm/+app.ts', href: '/app/crm' }];
 const studio = {
@@ -302,17 +309,17 @@ const studio = {
 	environments: [{ name: 'live', release: 'r1', url: null }],
 	change: 'ch1',
 	branch: 'change/ch1',
-	previewOf: preview,
-	previewControl: { holder: 'norbius', conversation: 'conv', at: '2026-01-01' },
+	preview_of: preview,
+	preview_control: { holder: 'norbius', conversation: 'conv', at: '2026-01-01' },
 	base: 'c0',
 	behind: 1,
 	conflicts: ['src/b.ts'],
-	changeSets: [
+	change_sets: [
 		{
 			id: 'ch1',
 			title: 'Edit',
 			state: 'open',
-			openedBy: 'u1',
+			opened_by: 'u1',
 			contributors: ['u1'],
 			branch: 'change/ch1',
 			base: 'c0',
@@ -326,11 +333,11 @@ const studio = {
 				at: '2026-01-01',
 				head: 'c1',
 				error: 'conflict',
-				runAt: '2026-01-02'
+				run_at: '2026-01-02'
 			},
 			log: [line],
-			createdAt: '2026-01-01',
-			updatedAt: '2026-01-01',
+			created_at: '2026-01-01',
+			updated_at: '2026-01-01',
 			diagnostics: [diagnostic]
 		}
 	],
@@ -357,7 +364,6 @@ const studio = {
 	},
 	stale: true
 } satisfies StudioView;
-const record = { build, log: [line], diagnostics: [diagnostic] } satisfies StudioBuildRecord;
 const files = [
 	{ text: 'x', truncated: { limit: 1, bytes: 2 } },
 	{ binary: true, bytes: 4 }
@@ -368,14 +374,12 @@ describe('shell answers', () => {
 		strict(ShellBootAnswer, boot);
 		strict(SettingsAnswer, settings);
 		strict(StudioViewAnswer, studio);
-		strict(StudioBuildAnswer, record);
-		strict(StudioBuildAnswer, null);
 		for (const file of files) strict(StudioFileAnswer, file);
 	});
 	it.effect('refuse a malformed answer as a protocol failure', () =>
 		Effect.gen(function* () {
 			const answering = (value: unknown) =>
-				shellApi(async () => Response.json({ value }), { base: 'http://localhost' });
+				shell_api(async () => Response.json({ value }), { base: 'http://localhost' });
 			const protocol = { status: 200, code: 'protocol' };
 			expect(yield* Effect.flip(answering({ ...boot, nav: {} }).boot())).toMatchObject(protocol);
 			expect(yield* Effect.flip(answering({ contract: 'x' }).boot())).toMatchObject(protocol);
@@ -386,9 +390,8 @@ describe('shell answers', () => {
 				protocol
 			);
 			expect(
-				yield* Effect.flip(answering({ binary: false }).studioFile('c1', 'src/a.ts'))
+				yield* Effect.flip(answering({ binary: false }).studio_file('c1', 'src/a.ts'))
 			).toMatchObject(protocol);
-			expect(yield* Effect.flip(answering({ build }).studioBuild('c1'))).toMatchObject(protocol);
 		})
 	);
 });

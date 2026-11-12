@@ -2,16 +2,16 @@
 
 Store declares data and emits SQL. A host owns its connections, transactions, batching and prepared statements.
 Data compilers return Effects with a tagged `StoreError`; no driver is installed by Store.
-`postgresMaintenance` supplies fixed, prepared catalog and database-administration programs, with quoted
-identifiers and separate value parameters. `destroyNamespace` compiles an explicit factory reset of a dedicated
+`postgres_maintenance` supplies fixed, prepared catalog and database-administration programs, with quoted
+identifiers and separate value parameters. `destroy_namespace` compiles an explicit factory reset of a dedicated
 namespace, including objects from old declarations. These programs accept structured arguments; there is no
 custom-SQL statement constructor on `store`.
 
 `@norbital-ai/store/sqlserver` owns structured external database programs. `SqlServerRequest` decodes
 qualified reads, bound values/procedure arguments, CDC metadata/pages and immutable submissions;
-`compileSqlServer` returns the host's TDS statement or native procedure RPC, with bound parameters. It installs no driver. CDC projections
+`compile_sql_server` returns the host's TDS statement or native procedure RPC, with bound parameters. It installs no driver. CDC projections
 declare key/columns, filters, decimal/date formats and a native delete policy. Their cursor fixes the inclusive
-LSN range and orders sequence, operation and key. `insertOnce` compiles the key/fingerprint checks, transaction
+LSN range and orders sequence, operation and key. `insert_once` compiles the key/fingerprint checks, transaction
 lock, UUID header, typed XML children, optional approval procedure and exact receipt together; the host must run
 that program serializably. XML attributes use singleton paths required by SQL Server's
 [value method](https://learn.microsoft.com/sql/t-sql/xml/value-method-xml-data-type).
@@ -57,7 +57,7 @@ relations use bounded correlated subqueries. Ordinary refs, inverses, self refs,
 the same query language. A polymorphic ref stores one nullable foreign-key column per target. Its `with` arm can name
 each target's own `select` and `with`, and the result discriminates them by `model`.
 
-`store.read` accepts `firstPer: ['group_column']` to select one matching row per group. Group columns lead
+`store.read` accepts `first_per: ['group_column']` to select one matching row per group. Group columns lead
 the result order; `order_by` chooses the row within each group, with primary keys breaking ties. PostgreSQL
 selects each group's first row before applying the cursor, so older rows cannot reappear on later pages.
 Filtering, projections, relation bounds and page byte limits still apply. Group columns must be sortable
@@ -79,7 +79,7 @@ locks, conditional writes and observed revisions still apply; keys, computed fie
 cannot be assigned this way.
 
 Host queries also use declared fields and values. `related` resolves an explicit scalar join in one statement;
-`union` selects distinct field values across declared sources. `updateMany` makes one set-based scalar update,
+`union` selects distinct field values across declared sources. `update_many` makes one set-based scalar update,
 with an independent key and optional pre-image fence for each candidate. Stateful tables continue to use guarded
 `update` operations in a transaction. Deletion can `keep` the first rows in a declared order or require a joined
 record to be `absent`. These operations accept no SQL strings or caller-created statements.
@@ -90,13 +90,13 @@ candidate replacing its prior value. The executor must serialize group writers b
 using a host advisory lock or a serializable transaction. An unchanged retry should be resolved before admission.
 
 `rollup` summarizes floating-point measurements: it sums sources at each instant before calculating bucket peaks,
-totals and the last reading. `latestPer` sums each source's newest gauge; `carry` produces bounded time steps while
+totals and the last reading. `latest_per` sums each source's newest gauge; `carry` produces bounded time steps while
 retaining each source's latest value, including zero. Group keys and results retain their declared types. Decimal
 financial data continues to use exact decimal aggregates. Text predicates support `folded` and `digits` matching;
-instant predicates support `olderThan` against the database clock.
+instant predicates support `older_than` against the database clock.
 
 Foreign keys restrict parent deletion by default. `owned: true` defaults to database cascade; an explicit
-`onDelete` selects `cascade`, `restrict`, or `setNull` (which requires an optional ref). These rules apply to plain
+`on_delete` selects `cascade`, `restrict`, or `set_null` (which requires an optional ref). These rules apply to plain
 and audited tables. A database update that leaves an audited row's incoming revision unchanged advances its revision
 and timestamp and clears its unknown `updated_by` actor; explicit Store updates advance the revision once.
 This includes a foreign key setting its child reference to null, so a previously observed revision becomes stale.
@@ -118,17 +118,17 @@ permissive `Date.parse` language.
 ## Append-only logs
 
 `AppendOnlyLogSpec` declares a dedicated namespace, scope, JSON envelope, indexed paths, pending-operation
-matching and bounded retention. `logDdl` compiles its native checks, generated search document/payload size,
-indexes and immutable programs. `logStatements` compiles scoped append/search/detail/recovery and maintenance
+matching and bounded retention. `log_ddl` compiles its native checks, generated search document/payload size,
+indexes and immutable programs. `log_statements` compiles scoped append/search/detail/recovery and maintenance
 operations. Identical retries succeed; changed content under one id refuses the entire append. Scoped logs keep
 durable retirement tombstones and protect maintenance with a private backend/transaction capability.
 
-Hosts keep these payloads in a separate database. Bolt supplies its audit envelope through `auditLogSpec`;
+Hosts keep these payloads in a separate database. Bolt supplies its audit envelope through `audit_log_spec`;
 both standalone adapters and managed hosts use Store's compiled operations. Retention follows native wall-clock
 recording time, independently of an event's occurrence time.
 
 Log migrations have their own decoded snapshot and native/security inspection, rather than an empty relational
-schema. `verifyLog` compares independent history replay with fresh declaration compilation and records every
+schema. `verify_log` compares independent history replay with fresh declaration compilation and records every
 prefix. Inspection includes namespace/table/column/routine privileges and extension placement. An existing
 layout can be adopted only when its entire native/security prefix matches; adoption records a receipt without
 recreating tables or reactivating retired scopes. A later migration installs new checks without validating old
@@ -152,7 +152,7 @@ The host replays all files on a scratch database, builds the declared schema on 
 checksum. Commit the SQL files, snapshot and lock together. Editing a file requires replay verification again.
 
 At application time `pending` validates the lock and the database's applied prefix. The host runs each pending file
-and `recordApplied(file)` in one transaction. Once applied, a file's text is immutable; subsequent changes belong in
+and `record_applied(file)` in one transaction. Once applied, a file's text is immutable; subsequent changes belong in
 the next file. Store supplies the format and SQL; the host owns scratch databases, file I/O and execution.
 
 Bolt's `bolt build` creates or extends the workspace's `migrations/` directory and verifies it. `bolt check` verifies
@@ -169,16 +169,16 @@ approval restoration. Those modes may cross ordinary state edges and edit locks;
 and increasing update revisions still apply. This context transports trusted engine intent and actor metadata;
 it does not authenticate a database owner, who already controls SQL and schema definitions.
 
-`migrationStatus` validates the source lock, distinguishes original and squash histories, and reports applied and
+`migration_status` validates the source lock, distinguishes original and squash histories, and reports applied and
 pending files. When given actual introspection lines, it compares them with the last executed file's physical proof;
 checksum agreement alone does not excuse an extra or missing column. A host records a proof for every replayed
-prefix and checks the actual prefix before and after applying each file. `migrationGuard` compiles exact ledger
+prefix and checks the actual prefix before and after applying each file. `migration_guard` compiles exact ledger
 and physical-definition checks for the host's prepared atomic batch. Concurrent schema observation also needs
 the host's migration lock; filtering malformed catalog rows would conceal drift. `INTROSPECT` includes noninternal triggers
 and function overload identities; extension-owned implementation definitions are excluded, with extension names
 retained. These proofs assume the same schema namespace used by scratch replay (Bolt uses `public`).
-`physicalDefinitionsOf` serializes shared native definitions once across prefixes, compressing large definitions
-in the version 2 format while leaving ordinary definitions readable. `readPhysicalDefinitions` expands packed,
+`physical_definitions_of` serializes shared native definitions once across prefixes, compressing large definitions
+in the version 2 format while leaving ordinary definitions readable. `read_physical_definitions` expands packed,
 version 1 indexed and existing unindexed proofs. Prefix hashes still cover the
 exact expanded definitions. Invalid references and changed definitions are refused before migration execution.
 
@@ -190,7 +190,7 @@ the blocker. `CONCURRENTLY` index operations and transaction-control statements 
 For larger changes, use expand/backfill/contract releases; externally coordinated online index creation is outside
 this atomic file workflow.
 
-`generateSquash` creates an alternative baseline for an exact original prefix. The host verifies the original and
+`generate_squash` creates an alternative baseline for an exact original prefix. The host verifies the original and
 baseline replays against the same physical schema, retains the original SQL and checksums, and supplies both to
 `pending`. A fresh ledger chooses the longest verified baseline. A partially or fully migrated original history
 continues its exact original suffix; an older baseline continues the suffix after its own cutoff. No applied ledger

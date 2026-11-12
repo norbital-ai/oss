@@ -77,7 +77,11 @@ export class Secrets extends Context.Service<Secrets, SecretsShape>()('bolt/Secr
 						if (Option.isSome(value)) workspace.set(name, value.value);
 					}
 					loaded = true;
-				}).pipe(Effect.orDie);
+				}).pipe(
+					Effect.mapError(
+						(cause) => new ConfigProvider.SourceError({ message: cause.message, cause })
+					)
+				);
 				const config = ConfigProvider.make((path) =>
 					Effect.andThen(
 						load,

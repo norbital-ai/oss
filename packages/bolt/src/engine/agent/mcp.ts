@@ -132,7 +132,7 @@ export const mcpSessions = Effect.fn('Mcp.sessions')(function* (
 							server: name,
 							name: tool.name,
 							description: tool.description,
-							input: tool.inputSchema
+							input: tool.input_schema
 						}));
 				}),
 			{ concurrency: 'unbounded' }

@@ -2,35 +2,29 @@
 // that history records `restored` from that revision. Later history stays; restoring an earlier entry undoes it. Not
 // point-in-time recovery (the whole database to a moment) and not a source rollback (the workspace code).
 import { Effect, Option, Predicate, Schema } from 'effect';
+import { UUID_PATTERN } from '@norbital-ai/std/id';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, Outcome, RowData } from '../contracts.ts';
 import type { ActRequest, ActResult } from '../services.ts';
 import type { EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { catalogOf } from '../access/pred.ts';
-import { q, SYSTEM_COLUMNS } from '@norbital-ai/store';
-import { lowerRead, readEngine } from '../query/engine.ts';
-import { readHistory } from '../query/history.ts';
+import { catalog_of } from '../access/pred.ts';
+import { q, SYSTEM_COLUMN_SET } from '@norbital-ai/store';
+import { lower_read, read_engine } from '../query/engine.ts';
+import { read_history } from '../query/history.ts';
 import { decodeValue } from './flatten.ts';
 import type { RestorePreview, RestoreSkip } from '../../protocol/record-contracts.ts';
 import { HistorySnapshotSchema } from '../../protocol/record-contracts.ts';
-import { historyColumns } from '../query/history-schema.ts';
-import { tablesOf } from '../../protocol/catalog.ts';
-import { k, readRows, recordCapabilities, stateField, type WriteEngine } from './act.ts';
+import { storedRow } from '../db/stored.ts';
+import { k, readRows, record_capabilities, stateField, type WriteEngine } from './act.ts';
 
 export type RestoreTarget = { model: string; record: string; revision: number };
 type Previewed =
 	| { ok: true; preview: RestorePreview }
 	| { ok: false; outcome: Extract<Outcome, { kind: 'refused' }> };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PAST = '__bolt_restore_past';
-const SYSTEM = new Set<string>(SYSTEM_COLUMNS);
-const stored = (v: Json): Json =>
-	Predicate.isObject(v) && Object.keys(v).length === 1 && typeof v['$dec'] === 'string'
-		? v['$dec']
-		: v;
-const refused = (code: 'notFound' | 'invalidInput', message: string): Previewed => ({
+const refused = (code: 'not_found' | 'invalid_input', message: string): Previewed => ({
 	ok: false,
 	outcome: { kind: 'refused', code, message }
 });
@@ -50,24 +44,20 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 	prospectiveTargets?: ReadonlySet<string>
 ): Effect.fn.Return<Previewed, EngineError> {
 	const m = e.manifest,
-		cat = catalogOf(m),
+		cat = catalog_of(m),
 		{ model, record: id, revision } = target,
 		c = cat.exposures.get(model);
-	const gone = refused('notFound', 'Not found or no access.');
-	if (c === undefined || m.models[model] === undefined || !UUID.test(id)) return gone;
+	const gone = refused('not_found', 'Not found or no access.');
+	if (c === undefined || m.models[model] === undefined || !UUID_PATTERN.test(id)) return gone;
 	const caller =
 		authority === null ? ({ as: 'workspace' } as const) : ({ as: 'caller', authority } as const);
 	const getOf = (col: string, i: string) =>
-		Effect.try({
-			try: () => lowerRead(m, 'get', [col, i]),
-			catch: (error) =>
-				error instanceof BoltError ? error : BoltError.make('invalid', 'decode', String(error))
-		});
+		lower_read(m, 'get', [col, i]);
 	const asRow = (answer: readonly Json[]): RowData | null => {
 		const row = answer[0];
 		return Schema.is(Row)(row) ? row : null;
 	};
-	const reads = readEngine({ manifest: m, db: e.db });
+	const reads = read_engine({ manifest: m, db: e.db });
 	const readable = (col: string, i: string) =>
 		getOf(col, i).pipe(
 			Effect.flatMap((ir) => reads.run([ir], caller, bindings)),
@@ -79,9 +69,9 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 	const caps =
 		authority === null
 			? null
-			: yield* recordCapabilities({ ...e, manifest: m }, model, id, authority, bindings, readable);
+			: yield* record_capabilities({ ...e, manifest: m }, model, id, authority, bindings, readable);
 	if (authority !== null && caps === null) return gone;
-	if (caps?.update.reasons.includes('underApproval'))
+	if (caps?.update.reasons.includes('under_approval'))
 		return {
 			ok: false,
 			outcome: {
@@ -94,9 +84,9 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 		caps?.revision ??
 		Number((yield* readRows(e.db, cat, [[model, id]])).get(k(model, id))?.['revision']);
 	if (!Number.isSafeInteger(revision) || revision < 1 || revision >= liveRevision)
-		return refused('invalidInput', `Revision ${revision} is not a past revision of this record.`);
-	const history = (reader: { as: 'workspace' } | typeof caller, view = false) =>
-		readHistory(
+		return refused('invalid_input', `Revision ${revision} is not a past revision of this record.`);
+	const history = (reader: typeof caller) =>
+		read_history(
 			e.db,
 			m,
 			{
@@ -104,31 +94,26 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 				model,
 				id,
 				at: { _tag: 'Revision', revision },
-				...(view ? { view: true as const } : { full: true as const })
+				view: true
 			},
 			reader,
 			bindings
 		);
 	// the caller's fold authorizes (the history grant); the workspace's is the stored past to compare
-	const seen = yield* history(caller, true);
-	const raw = yield* history({ as: 'workspace' }, true);
+	const seen = yield* history(caller);
+	const raw = yield* history({ as: 'workspace' });
 	if (!Predicate.isObject(seen) || !Predicate.isObject(raw) || Array.isArray(raw))
 		return refused(
-			'notFound',
+			'not_found',
 			`Revision ${revision} cannot be rebuilt from this record's history.`
 		);
 	const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(raw).pipe(
-		Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message))
+		Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message))
 	);
 	const visibleSnapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(seen).pipe(
-		Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message))
+		Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message))
 	);
-	const currentKinds = tablesOf(m.models, m.relationships)[model]?.fields ?? {};
-	const past = Object.fromEntries(
-		Object.entries(snapshot.compatible).flatMap(([f, v]) =>
-			Object.entries(historyColumns(currentKinds[f], f, stored(v)))
-		)
-	);
+	const past = storedRow(cat, model, snapshot.compatible);
 	const table = c.model.name;
 	// the stored values that still cast to their column (a jsonb column takes any value), and those that differ from live
 	const probe = yield* e.db.one(Probe, {
@@ -161,13 +146,13 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 			)
 	};
 	const then = asRow(
-		yield* readEngine({
+		yield* read_engine({
 			manifest: m,
 			db: prospective,
 			querySources: { sources: new Map([[table, PAST]]) }
 		}).run([getIR], caller, bindings)
 	);
-	if (then === null) return refused('notFound', `Revision ${revision} is not readable to you.`);
+	if (then === null) return refused('not_found', `Revision ${revision} is not readable to you.`);
 	const changes: RestorePreview['changes'][number][] = [],
 		skipped: RestorePreview['skipped'][number][] = [];
 	for (const field of snapshot.incompatible) {
@@ -185,13 +170,13 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 		if (!columns.has(key) && !key.startsWith('bolt_') && value !== null)
 			skipped.push({
 				field: key,
-				reason: 'definitionChanged',
+				reason: 'definition_changed',
 				current: null,
 				restored: value
 			});
 	const state = stateField(m, model);
 	for (const [name, f] of c.model.fields) {
-		if (SYSTEM.has(name) || f.computed || f.derived || name.includes('.')) continue;
+		if (SYSTEM_COLUMN_SET.has(name) || f.computed || f.derived || name.includes('.')) continue;
 		const cols = f.arms === undefined ? [f.column] : f.arms.map((arm) => `${f.column}__${arm}`);
 		const present = cols.filter((col) => Object.hasOwn(past, col));
 		if (present.length === 0 || !Object.hasOwn(live, name)) continue; // not historied, or not visible
@@ -202,15 +187,15 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 				field: name,
 				reason,
 				current,
-				restored: reason === 'definitionChanged' ? null : restored
+				restored: reason === 'definition_changed' ? null : restored
 			});
 		if (present.some((col) => !Object.hasOwn(kept, col))) {
-			skip('definitionChanged');
+			skip('definition_changed');
 			continue;
 		}
 		if (!cols.some((col) => differs.includes(col))) continue;
 		if (decodeValue(f, restored, m.models[model]?.fields[name]) !== null) {
-			skip('definitionChanged');
+			skip('definition_changed');
 			continue;
 		}
 		const cap = caps?.fields[name];
@@ -220,41 +205,43 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 		} else if (name === state) {
 			const to = String(restored);
 			if (!(caps.moves[name] ?? []).includes(to)) {
-				if (!(caps.proposalMoves[name] ?? []).includes(to)) {
-					skip('stateLocked');
+				if (!(caps.proposal_moves[name] ?? []).includes(to)) {
+					skip('state_locked');
 					continue;
 				}
 				approval = true;
 			}
 		} else {
 			if (cap === undefined) {
-				skip('noGrant');
+				skip('no_grant');
 				continue;
 			}
 			const reasons = cap.reasons;
 			if (
-				reasons.some((r) => r === 'syncOwned' || r === 'ownedParent' || r === 'ownedParentLocked')
+				reasons.some((r) => r === 'sync_owned' || r === 'owned_parent' || r === 'owned_parent_locked')
 			) {
-				skip('readOnly');
+				skip('read_only');
 				continue;
 			}
-			if (reasons.includes('stateLocked')) {
-				skip('stateLocked');
+			if (reasons.includes('state_locked')) {
+				skip('state_locked');
 				continue;
 			}
 			if (!cap.writable) {
 				if (!cap.proposal) {
-					skip('noGrant');
+					skip('no_grant');
 					continue;
 				}
 				approval = true;
 			}
 		}
 		// ordinary restore never writes the target; rollback can recreate it in the same decision
-		if (restored !== null && c.model.one.has(name)) {
+		const relation = c.model.one.get(name);
+		if (restored !== null && relation !== undefined) {
+			const target = relation.targets[0];
 			const ref: readonly [string, string] | null =
-				typeof restored === 'string'
-					? [c.model.one.get(name)!.targets[0]!, restored]
+				typeof restored === 'string' && target !== undefined
+					? [target, restored]
 					: Predicate.isObject(restored) &&
 						  typeof restored['model'] === 'string' &&
 						  typeof restored['id'] === 'string'
@@ -265,7 +252,7 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 				(!(authority === null && prospectiveTargets?.has(k(...ref)) === true) &&
 					!(yield* readRows(e.db, cat, [ref])).has(k(...ref)))
 			) {
-				skip('deletedTarget');
+				skip('deleted_target');
 				continue;
 			}
 		}
@@ -294,7 +281,7 @@ export const restoreRecord = Effect.fn('Bolt.restoreRecord')(function* (
 		return {
 			outcome: {
 				kind: 'refused',
-				code: 'invalidInput',
+				code: 'invalid_input',
 				message: `Revision ${target.revision} has nothing you may restore.`
 			}
 		};

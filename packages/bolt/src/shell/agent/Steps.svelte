@@ -32,7 +32,7 @@
 		ms < 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`;
 </script>
 
-<ol class={activity ? 'space-y-1' : 'mt-1 space-y-0.5 border-l border-border/70 pl-3'}>
+<ol class={activity ? 'min-w-0 w-full space-y-1' : 'mt-1 min-w-0 w-full space-y-0.5 border-l border-border/70 pl-3'}>
 	{#each steps as s (s.id)}
 		{@const report = reportView(s)}
 		{@const v = report ?? viewOf(s)}
@@ -58,12 +58,12 @@
 			data-step-state={active(s) ? 'running' : failed ? 'failed' : 'done'}
 		>
 			<details
-				class="group/step"
+				class="group/step min-w-0 w-full"
 				open={opened.has(s.id)}
 				ontoggle={(e) => (e.currentTarget.open ? opened.add(s.id) : opened.delete(s.id))}
 			>
 				<summary
-					class="flex cursor-pointer list-none items-center rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [&::-webkit-details-marker]:hidden {activity
+					class="flex min-w-0 min-h-8 w-full pointer-coarse:min-h-11 cursor-pointer list-none items-center rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [&::-webkit-details-marker]:hidden {activity
 						? 'gap-3 py-2.5 text-sm'
 						: 'gap-2 py-0.5 text-xs'} {failed
 						? 'text-destructive'
@@ -103,14 +103,14 @@
 						/>{/if}
 				</summary>
 				{#if opened.has(s.id)}
-					<div class="mt-1 mb-2 grid gap-1.5 text-xs">
+					<div class="mt-1 mb-2 grid min-w-0 w-full gap-1.5 text-xs">
 						{#if report !== null}
 							<div class="max-h-56 overflow-auto rounded-md" data-step-pane="output">
 								<CodeEditor
 									value={report.message}
 									readonly
 									wrap
-									minHeight="0"
+									min_height="0"
 									class="text-micro"
 									language="plaintext"
 									aria-label={t('Output')}

@@ -4,8 +4,8 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path } from 'effect';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { isOff } from '@norbital-ai/bolt/facilities';
-import { loadHost } from '@norbital-ai/bolt/node';
+import { is_off } from '@norbital-ai/bolt/facilities';
+import { load_host } from '@norbital-ai/bolt/node';
 
 const example = fileURLToPath(new URL('../example/norbital.host.ts', import.meta.url));
 
@@ -30,8 +30,8 @@ describe('example/norbital.host.ts', () => {
 				BOLT_FILES_ENDPOINT: path.join(dir, 'files'),
 				BOLT_TRANSACTIONAL_EMAIL: 'log'
 			});
-			const { facilities } = yield* loadHost(example);
-			expect(isOff(facilities.intelligence.system2)).toBe(true);
+			const { facilities } = yield* load_host(example);
+			expect(is_off(facilities.intelligence.system2)).toBe(true);
 		}).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
 	);
 });

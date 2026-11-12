@@ -3,10 +3,11 @@
 import { Effect, Option, Predicate, Schema, type Types } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
 import { STUDIO_ROLES } from '../../protocol/schema.ts';
-import { PageAction, PageResult, Usage as UsageSchema } from '../../protocol/schema.ts';
+import { AgentQuestion, PageAction, PageResult, ToolBehavior, Usage as UsageSchema } from '../../protocol/schema.ts';
 import type { Json } from '../../decl/values.ts';
 import type { AgentRow } from '../../protocol/wire.ts';
-import type { Authority, Captured, RowData } from '../contracts.ts';
+import type { Authority, RowData } from '../contracts.ts';
+import { storedInstant } from '../db/wire.ts';
 
 /** Plain words from a message or provider reply. */
 export const textOf = (content: Json): string => {
@@ -84,11 +85,17 @@ const ToolCallSchema = Schema.Struct({
 	input: Schema.Json,
 	invalid: Schema.optionalKey(Schema.String)
 });
+const AssistantSegment = Schema.Struct({
+	text: Schema.String,
+	reasoning: Schema.optionalKey(Schema.String),
+	toolCalls: Schema.optionalKey(Schema.Array(ToolCallSchema))
+});
+export type AssistantSegment = typeof AssistantSegment.Type;
 const ReceiptSchema = Schema.Struct({
 	outcome: Schema.Literals(['committed', 'pending_approval']),
 	callable: Schema.String,
 	records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String })),
-	requestId: Schema.optionalKey(Schema.String)
+	request_id: Schema.optionalKey(Schema.String)
 });
 const MetaSchema = Schema.Union([
 	Schema.Struct({
@@ -108,11 +115,13 @@ const MetaSchema = Schema.Union([
 		complete: Schema.Boolean,
 		gaps: Schema.Array(Schema.String)
 	}),
-	Schema.Struct({ tag: Schema.Literal('confirm'), call: ToolCallSchema }),
+	Schema.Struct({ tag: Schema.Literal('confirm'), call: ToolCallSchema, full: Schema.optionalKey(Schema.Json) }),
 	Schema.Struct({
 		tag: Schema.Literal('reply'),
 		receipts: Schema.Array(ReceiptSchema),
-		/** A sub-agent's question to its delegating agent (`ask_parent`), not its answer. */
+		question: Schema.optionalKey(AgentQuestion),
+		answered: Schema.optionalKey(Schema.Literal(true)),
+		/** A question to the person, or to the sub-agent's delegating agent. */
 		asked: Schema.optionalKey(Schema.Literal(true)),
 		usage: Schema.optionalKey(UsageSchema)
 	}),
@@ -124,7 +133,8 @@ const MetaSchema = Schema.Union([
 	}),
 	Schema.Struct({ tag: Schema.Literal('output'), full: Schema.Json }),
 	Schema.Struct({ tag: Schema.Literal('note') }),
-	Schema.Struct({ tag: Schema.Literal('tools') }),
+	Schema.Struct({ tag: Schema.Literal('answer'), question: Schema.String }),
+	Schema.Struct({ tag: Schema.Literal('aside'), message: Schema.String }),
 	Schema.Struct({ tag: Schema.Literal('event'), at: Schema.String }),
 	Schema.Struct({ tag: Schema.Literal('scheduled'), at: Schema.optionalKey(Schema.String) })
 ]);
@@ -145,20 +155,21 @@ export const FileRef = Schema.StructWithRest(
 );
 export type FileRef = typeof FileRef.Type;
 /**
- * A tool step's content (`role: 'tool'`): its call id and tool, the input as the panel shows it, the result once it
- * answered, the tool's Studio role and how long it ran.
+ * A tool step retains its protocol name and arguments. A native display projection names the host operation for the
+ * panel; its result, declared Studio role and elapsed time stay on the same row.
  */
-export const StepContent = Schema.StructWithRest(
-	Schema.Struct({
+const ToolResultFields = {
 		id: Schema.String,
 		name: Schema.String,
+		behavior: Schema.optionalKey(ToolBehavior),
 		args: Schema.optionalKey(Schema.String),
+		display: Schema.optionalKey(Schema.Struct({ name: Schema.String, args: Schema.String })),
 		result: Schema.optionalKey(Schema.Json),
 		studio: Schema.optionalKey(Schema.String),
 		ms: Schema.optionalKey(Schema.Number)
-	}),
-	Rest
-);
+};
+export const StepContent = Schema.StructWithRest(Schema.Struct(ToolResultFields), Rest);
+const StoredToolContent = Schema.StructWithRest(Schema.Struct({ ...ToolResultFields, assistant: Schema.String }), Rest);
 /**
  * Every other row's content: a message's text and the zone it was sent from, a reply's reasoning and tool calls. An
  * inference's prompt is a bare string; an inbound row the agent never received has none.
@@ -171,7 +182,8 @@ export const SaidContent = Schema.Union([
 			text: Schema.optionalKey(Schema.String),
 			tz: Schema.optionalKey(Schema.String),
 			reasoning: Schema.optionalKey(Schema.String),
-			toolCalls: Schema.optionalKey(Schema.Array(ToolCallSchema))
+			toolCalls: Schema.optionalKey(Schema.Array(ToolCallSchema)),
+			segments: Schema.optionalKey(Schema.Array(AssistantSegment).check(Schema.isMinLength(1)))
 		}),
 		Rest
 	)
@@ -199,6 +211,7 @@ const MessageFields = {
 	author: Schema.NullOr(Schema.String),
 	meta: Schema.NullOr(MetaSchema),
 	supersedes: Schema.NullOr(Schema.String),
+	copied_from: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	turn: Schema.NullOr(Schema.String),
 	addressed: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
 	sender: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -206,6 +219,7 @@ const MessageFields = {
 	files: Schema.optionalKey(Schema.Array(FileRef)),
 	delivered_turn: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	direction: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	status: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	provider_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	reply_to: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	sent_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -218,7 +232,7 @@ const MessageFields = {
 };
 /** A `sys_message` row, its `content` decoded by `role`: a tool step, or what a person, the agent or the engine said. */
 export const Message = Schema.Union([
-	Schema.Struct({ ...MessageFields, role: Schema.Literal('tool'), content: StepContent }),
+	Schema.Struct({ ...MessageFields, role: Schema.Literal('tool'), content: StoredToolContent }),
 	Schema.Struct({
 		...MessageFields,
 		role: Schema.NullOr(Schema.Literals(['user', 'assistant', 'system'])),
@@ -238,28 +252,6 @@ export const rowsOf = (rows: readonly { readonly [c: string]: Json }[]) =>
 			BoltError.make('corrupt', 'decode', 'a sys_message row does not match its schema', error)
 		)
 	);
-/** Rule 65 for the transcript: the rows a statement wrote (its `RETURNING ${MSG}`) as the live lane's commit record. */
-export const messageCommit = (rows: readonly MessageRow[], deleted = false): Captured[] =>
-	rows.map((r) => ({
-		model: 'sys_message',
-		id: r.id,
-		op: deleted ? 'delete' : 'update',
-		revision: 0,
-		old: deleted ? { ...r } : null,
-		new: deleted ? null : { ...r },
-		cause: 'direct'
-	}));
-/** The same for `sys_conversation` (`RETURNING to_jsonb(c) AS r`): the panel's conversation list and each one's status, plan and goals. */
-export const conversationCommit = (rows: readonly RowData[]): Captured[] =>
-	rows.map((r) => ({
-		model: 'sys_conversation',
-		id: String(r['id']),
-		op: 'update',
-		revision: 0,
-		old: null,
-		new: r,
-		cause: 'direct'
-	}));
 /** The panel's conversation list: a member's own in-app conversations, most recently active first. */
 export const CONVERSATIONS = 100;
 /**
@@ -287,13 +279,28 @@ export const sharedConversations = (p: {
 }) => `(c.run IS NOT NULL AND ${p.admin}) OR
    (c.integration IS NOT NULL AND ${p.member} IS NOT NULL AND ((${p.staff} AND ${PUBLIC_ENVOY}) OR
     EXISTS (SELECT 1 FROM sys_message m WHERE m.conversation = c.id AND ${p.member} IN (m.author, m."as"->>'member', m."as"->'envoy'->>'member'))))`;
-/** A `sys_conversation` image as the list shows it, so a live patch matches a re-read. */
-export const conversationRow = (r: RowData): { [k: string]: Json } => ({
-	id: r['id']!,
+export const ConversationListRow = Schema.Struct({
+	id: Schema.String,
+	updated_at: Schema.String,
+	status: Schema.String,
+	model: Schema.String,
+	title: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	plan: Schema.optionalKey(Schema.Json),
+	goals: Schema.optionalKey(Schema.Json),
+	envoy: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	integration: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	run: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	kind: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	thread: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	peer: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
+/** Reads and capture projection decode the same native list row. */
+export const conversationRow = (r: typeof ConversationListRow.Type): { [k: string]: Json } => ({
+	id: r['id'],
 	title: r['title'] ?? null,
-	at: r['updated_at']!,
-	status: r['status']!,
-	model: r['model']!,
+	at: storedInstant(r['updated_at']),
+	status: r['status'],
+	model: r['model'],
 	plan: r['plan'] ?? null,
 	goals: r['goals'] ?? null,
 	// which conversation this is, for the panel's segmented selector: an envoy's thread beside the member's own in-app
@@ -308,27 +315,6 @@ export const conversationRow = (r: RowData): { [k: string]: Json } => ({
 	// a DM's member, by name, when the sender is one: the selector reads "Dion (+65 9238 8112)"
 	peer: r['peer'] ?? null
 });
-/** The tools the panel shows as data of their own (`ToolBody`): their step carries more than a line of it. */
-const SHOWN: ReadonlySet<string> = new Set([
-	'read',
-	'act',
-	'browser',
-	'web_search',
-	'run_js',
-	'read_file',
-	'describe_workspace',
-	'skill',
-	'workspace_read',
-	'workspace_search',
-	'workspace_list_dir',
-	'workspace_lang',
-	'workspace_diagnose',
-	'workspace_test',
-	'workspace_preview',
-	'workspace_try',
-	'runs',
-	'logs'
-]);
 /** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_file { call }`). */
 export const clip = (v: Json | undefined, max = 600): string => {
 	const s = typeof v === 'string' ? v : JSON.stringify(v ?? null);
@@ -366,8 +352,8 @@ const SourceEdit = Schema.fromJsonString(
 	Schema.Struct({
 		path: Schema.String,
 		content: Schema.optionalKey(Schema.String),
-		oldString: Schema.optionalKey(Schema.String),
-		newString: Schema.optionalKey(Schema.String)
+		old_string: Schema.optionalKey(Schema.String),
+		new_string: Schema.optionalKey(Schema.String)
 	})
 );
 const marked = (mark: string, text: string) =>
@@ -377,11 +363,10 @@ const marked = (mark: string, text: string) =>
 		.join('\n');
 /**
  * A source edit's files and compact diffs for the panel's Changes tab. An edit reads them off its call, whose answer
- * stays `{ path, diagnostics }` so a diff never enters the model's context; a row from before the split carries them.
+ * stays `{ path, diagnostics }` so a diff never enters the model's context.
  */
 function changesOf(
-	step: { readonly name: string; readonly args?: string } | null,
-	result: Json | undefined
+	step: { readonly name: string; readonly args?: string } | null
 ): ReadonlyArray<{ path: string; diff: string; change?: string }> | undefined {
 	if (step === null) return undefined;
 	const edit =
@@ -390,29 +375,14 @@ function changesOf(
 			: undefined;
 	if (edit?.content !== undefined)
 		return [{ path: edit.path, diff: marked('+', edit.content).slice(0, 8000) }];
-	if (edit?.oldString !== undefined && edit.newString !== undefined)
+	if (edit?.old_string !== undefined && edit.new_string !== undefined)
 		return [
 			{
 				path: edit.path,
-				diff: `${marked('-', edit.oldString)}\n${marked('+', edit.newString)}`.slice(0, 8000)
+				diff: `${marked('-', edit.old_string)}\n${marked('+', edit.new_string)}`.slice(0, 8000)
 			}
 		];
-	if (step.name !== 'workspace_write') return undefined;
-	if (!Predicate.isObject(result) || !Array.isArray(result['changes'])) return undefined;
-	const files = result['changes'].flatMap((change) =>
-		Predicate.isObject(change) &&
-		typeof change['path'] === 'string' &&
-		typeof change['diff'] === 'string'
-			? [
-					{
-						path: change['path'],
-						diff: change['diff'].slice(0, 8000),
-						...(typeof change['change'] === 'string' ? { change: change['change'] } : {})
-					}
-				]
-			: []
-	);
-	return files.length === 0 ? undefined : files.slice(0, 60);
+	return undefined;
 }
 
 const isStudio = Schema.is(StudioRoleSchema);
@@ -447,23 +417,26 @@ const Outcome = Schema.Struct({
 	preview: Schema.optionalKey(Schema.String),
 	navigation: Schema.optionalKey(Schema.String),
 	page: Schema.optionalKey(PageAction),
-	pageResult: Schema.optionalKey(PageResult),
+	page_result: Schema.optionalKey(PageResult),
 	approval: Schema.optionalKey(Schema.Struct({ id: Schema.String }))
 });
 const outcomeOf = Schema.decodeUnknownOption(Outcome);
 const NO_OUTCOME: typeof Outcome.Type = {};
 
 /** Staff read a failed turn's reason (rule 59) and every instance's thread (§5.9). */
+const reparsed = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
 /**
  * A value as PostgreSQL holds it, before anything sees it: text and jsonb have no NUL, and a tool's text can carry one (a
  * binary file read as text), which would otherwise end the turn. Only a real escape is replaced, never an escaped `\\u0000`.
  */
-export const storable = <J extends Json>(value: J): J => {
+export function storable(value: string): string;
+export function storable(value: Json): Json;
+export function storable(value: Json): Json {
 	const text = JSON.stringify(value);
 	return text.includes('\\u0000')
-		? (JSON.parse(text.replace(/(?<!\\)((?:\\\\)*)\\u0000/g, '$1\\ufffd')) as J)
+		? reparsed(text.replace(/(?<!\\)((?:\\\\)*)\\u0000/g, '$1\\ufffd'))
 		: value;
-};
+}
 export const isStaff = (a: Authority) =>
 	a.admin || (a.actor.kind === 'member' && !a.actor.external);
 /**
@@ -471,12 +444,13 @@ export const isStaff = (a: Authority) =>
  * for a row the panel leaves out (a cancelled input, and outside an instance's thread an ambient row no member posted).
  */
 export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): AgentRow | null {
+	if (r.meta?.tag === 'aside') return null;
 	if ((!thread && ambient(r) && r.as === null) || r.state === 'cancelled') return null;
 	// every message that came in is shown: one admission left unanswered (chatter, an unknown sender, over a limit) is an aside
 	const aside = r.role === null && r.direction === 'inbound';
 	if (aside && !thread) return null;
 	const meta = r.meta,
-		step = r.role === 'tool' ? r.content : null,
+		step = r.role === 'tool' ? { ...r.content, ...r.content.display, result: r.content['approval_result'] ?? r.content.result } : null,
 		said = r.role !== 'tool' && typeof r.content === 'object' ? r.content : null,
 		outcome =
 			step === null ? NO_OUTCOME : Option.getOrElse(outcomeOf(step.result), () => NO_OUTCOME);
@@ -518,18 +492,18 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		// a live change the host holds for the person (`approval.decide`): its id, never clipped
 		approval = outcome.approval?.id,
 		// a source edit's compact diffs, kept whole for the panel while the result itself may be clipped
-		changes = changesOf(step, payload);
+		changes = changesOf(step);
 	return {
 		id: r.id,
 		seq: Number(r.seq),
-		role: aside ? 'user' : r.role,
+		role: aside ? 'user' : r.role === null && r.direction === 'outbound' ? 'assistant' : r.role,
 		text: r.text,
 		state: r.state,
 		tag: meta?.tag ?? (ambient(r) || aside ? 'ambient' : null),
 		...(meta?.tag === 'scheduled' && meta.at !== undefined ? { due: meta.at } : {}),
 		...(r.turn === null ? {} : { turn: r.turn }),
 		author: authorOf(r),
-		...(r.created_at === undefined ? {} : { at: r.created_at }),
+		...(r.created_at === undefined ? {} : { at: storedInstant(r.created_at) }),
 		...(r.about === undefined || r.about === null ? {} : { about: r.about }),
 		...(files.length === 0
 			? {}
@@ -543,7 +517,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		...(staff && meta?.tag === 'failed' && meta.detail !== undefined
 			? { detail: meta.detail }
 			: {}), // hook:agent-ui — rule 59: the reason reaches staff, never a sender
-		...(meta?.tag === 'confirm'
+		...(r.copied_from == null && meta?.tag === 'confirm'
 			? {
 					call: { name: meta.call.name, input: meta.call.input }
 				}
@@ -553,24 +527,25 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 			? {
 					tool: {
 						name: step.name,
+						behavior: step.behavior ?? {},
 						failed: completed.error !== undefined && completed.error !== null,
-						...(child === undefined ? {} : { child }),
-						...(runs.length === 0 ? {} : { runs }),
+						...(r.copied_from != null || child === undefined ? {} : { child }),
+						...(r.copied_from != null || runs.length === 0 ? {} : { runs }),
 						...(r.state === 'running' ? { running: true } : {}),
 						...(step.args === undefined ? {} : { args: step.args }),
 						...(step.result === undefined
 							? {}
 							: {
-									result: clip(step.result, studio === 'logs' || SHOWN.has(step.name) ? 20000 : 600)
+									result: clip(step.result, studio === 'logs' || step.behavior?.data === true ? 20000 : 600)
 								}),
 						...(completed.preview === undefined ? {} : { preview: completed.preview }),
-						...(approval === undefined ? {} : { approval }),
-						...(step.name === 'page' && outcome.navigation !== undefined
+						...(r.copied_from != null || approval === undefined ? {} : { approval }),
+						...(r.copied_from == null && step.behavior?.page === true && outcome.navigation !== undefined
 							? { navigation: outcome.navigation }
 							: {}),
-						...(step.name === 'page' && outcome.page !== undefined ? { page: outcome.page } : {}),
-						...(step.name === 'page' && outcome.pageResult !== undefined
-							? { pageResult: outcome.pageResult }
+						...(r.copied_from == null && step.behavior?.page === true && outcome.page !== undefined ? { page: outcome.page } : {}),
+						...(r.copied_from == null && step.behavior?.page === true && outcome.page_result !== undefined
+							? { page_result: outcome.page_result }
 							: {}),
 						...(about === undefined ? {} : { about }),
 						...(changes === undefined ? {} : { changes }),
@@ -580,8 +555,11 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 				}
 			: {}),
 		...(meta?.tag === 'reply' ? { receipts: meta.receipts } : {}),
-		...(meta?.tag === 'reply' && meta.asked === true ? { asked: true as const } : {}),
-		...(meta?.tag === 'report'
+		...(r.copied_from == null && meta?.tag === 'reply' && meta.asked === true ? { asked: true as const } : {}),
+		...(r.copied_from == null && meta?.tag === 'reply' && meta.question !== undefined ? { question: meta.question } : {}),
+		...(r.copied_from == null && meta?.tag === 'reply' && meta.answered !== undefined ? { answered: meta.answered } : {}),
+		...(meta?.tag === 'answer' ? { answer_to: meta.question } : {}),
+		...(r.copied_from == null && meta?.tag === 'report'
 			? {
 					report: {
 						conversation: meta.conversation,
@@ -597,7 +575,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 					compact: { cutoff: meta.cutoff, keep: [...meta.keep], origin: meta.origin ?? 'automatic' }
 				}
 			: {}), // L-BOLT-546
-		...((meta?.tag === 'reply' || meta?.tag === 'failed') && meta.usage !== undefined
+		...(r.copied_from == null && (meta?.tag === 'reply' || meta?.tag === 'failed') && meta.usage !== undefined
 			? { usage: meta.usage }
 			: {})
 	}; // hook:agent — cost and context display

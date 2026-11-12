@@ -1,1 +1,3 @@
-export default { url: 'https://hq.example/mcp' } as const;
+import { mcp } from '../../../../../../src/index.ts';
+
+export default mcp({ description: 'HQ tools', url: 'HQ_URL' });

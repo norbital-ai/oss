@@ -3,19 +3,19 @@ import { Effect } from 'effect';
 import { HostIdentity } from '../src/engine/services.ts';
 import { layer, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { assignTeam, invite, issueKey } from '../src/engine/identity/members.ts';
-import { decodeIdentity, loadPack, sourceOf, type Pack } from '../src/engine/write/pack.ts';
+import { assign_team, invite, issueKey } from '../src/engine/identity/members.ts';
+import { decode_identity, load_pack, source_of, type Pack } from '../src/engine/write/pack.ts';
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { manifest } from './catalogue-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { plan, readApplied } from '../src/engine/schema/plan.ts';
+import { plan, read_applied } from '../src/engine/schema/plan.ts';
 
 const source = {
 	...manifest,
 	teams: {
 		'sales-id': { name: 'Sales', policies: ['sales'] },
 		'branch-id': { name: 'Sales', parent: 'sales-id', policies: [] },
-		'viewer-id': ['viewer']
+		'viewer-id': { policies: ['viewer'] }
 	}
 };
 
@@ -33,7 +33,7 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 					{ sys_user: [{ id: 'bad', team: 'Sales' }] },
 					{ sys_user: [{ id: 'bad', team: 'toString' }] }
 				])
-					expect(() => decodeIdentity(source, rows)).toThrow();
+					expect(() => decode_identity(source, rows)).toThrow();
 				const pack: Pack = {
 					dir: '',
 					rows: { sys_user: [{ id: 'seed-user', name: 'Seeded', team: 'viewer-id' }] },
@@ -46,9 +46,9 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 						assets: []
 					}
 				};
-				expect(yield* loadPack(t.db, t.manifest, sourceOf(pack), t.clock.now())).toBe(true);
+				expect(yield* load_pack(t.db, t.manifest, source_of(pack), t.clock.now())).toBe(true);
 				expect(
-					(yield* new Authorities(t.manifest, 'seeded').member(t.db, 'seed-user'))?.policies
+					(yield* new Authorities(t.manifest, 'seeded').member(t.db, 'bootstrap', 'seed-user'))?.policies
 				).toEqual(['viewer']);
 			})
 	);
@@ -66,8 +66,8 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 					text: "UPDATE sys_user SET team = CASE WHEN id = $1 THEN 'sales-id' WHEN id = $2 THEN 'branch-id' ELSE 'toString' END WHERE id IN ($1,$2,$3)",
 					params: [sales.id, branch.id, impostor.id]
 				});
-				const salesAuthority = yield* authorities.member(t.db, sales.id),
-					branchAuthority = yield* authorities.member(t.db, branch.id);
+				const salesAuthority = yield* authorities.member(t.db, 'bootstrap', sales.id),
+					branchAuthority = yield* authorities.member(t.db, 'bootstrap', branch.id);
 				expect(salesAuthority?.policies).toEqual(['sales']);
 				expect(salesAuthority?.teamTree).toEqual(['sales-id', 'branch-id']);
 				expect(branchAuthority?.policies).toEqual([]);
@@ -75,11 +75,11 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 					teams: ['branch-id'],
 					team_path: ['Sales', 'Sales']
 				});
-				expect((yield* authorities.member(t.db, impostor.id))?.actor).toMatchObject({
+				expect((yield* authorities.member(t.db, 'bootstrap', impostor.id))?.actor).toMatchObject({
 					teams: [],
 					team_path: []
 				});
-				const previewer = t.as(t.admin).authority.actor;
+				const previewer = (yield* t.as(t.admin)).authority.actor;
 				if (previewer.kind !== 'member') throw new Error('admin must be a member');
 				expect(yield* authorities.team(t.db, previewer, 'toString')).toBeNull();
 				// a release relabelling or removing a team plans no schema change and re-derives authority
@@ -90,18 +90,18 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 							teams: { ...source.teams, 'sales-id': { name: 'New label', policies: ['viewer'] } }
 						},
 						'source-two'
-					).member(t.db, sales.id))?.policies
+					).member(t.db, 'bootstrap', sales.id))?.policies
 				).toEqual(['viewer']);
 				const removed = { ...t.manifest, teams: {} };
-				expect((yield* plan(yield* readApplied(t.db), removed)).steps).toEqual([]);
+				expect((yield* plan(yield* read_applied(t.db), removed)).steps).toEqual([]);
 				expect(
-					(yield* new Authorities(removed, 'removed').member(t.db, sales.id))?.actor
+					(yield* new Authorities(removed, 'removed').member(t.db, 'bootstrap', sales.id))?.actor
 				).toMatchObject({
 					teams: [],
 					team_path: []
 				});
 				const member = t.member(['sales'], { teams: ['sales-id'] });
-				expect((yield* authorities.member(t.db, member.id))?.actor).toMatchObject({
+				expect((yield* authorities.member(t.db, 'bootstrap', member.id))?.actor).toMatchObject({
 					teams: ['sales-id']
 				});
 			})
@@ -113,13 +113,13 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 				h = yield* HostIdentity,
 				authorities = new Authorities(t.manifest, 'source-one');
 			const member = t.member([]),
-				admin = t.as(t.admin).authority;
-			expect(yield* assignTeam(h, t.manifest, admin, member.id, 'sales-id')).toBeNull();
+				admin = (yield* t.as(t.admin)).authority;
+			expect(yield* assign_team(h, t.manifest, admin, member.id, 'sales-id')).toBeNull();
 			for (const handle of ['Sales', 'toString'])
 				expect(
-					yield* Effect.flip(assignTeam(h, t.manifest, admin, member.id, handle))
+					yield* Effect.flip(assign_team(h, t.manifest, admin, member.id, handle))
 				).toMatchObject({
-					code: 'notFound'
+					code: 'not_found'
 				});
 			const [row] = yield* t.db.read([
 				{ text: 'SELECT team FROM sys_user WHERE id = $1', params: [member.id] }
@@ -129,17 +129,17 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 				yield* Effect.flip(
 					invite(h, t.manifest, admin, { email: 'person@example.test', team: 'copied-label' })
 				)
-			).toMatchObject({ code: 'notFound' });
+			).toMatchObject({ code: 'not_found' });
 			expect(
 				yield* Effect.flip(issueKey(h, t.manifest, admin, 'Invalid', 'copied-label'))
 			).toMatchObject({
-				code: 'notFound'
+				code: 'not_found'
 			});
 			const key = yield* issueKey(h, t.manifest, admin, 'Catalogue', 'viewer-id');
 			expect((yield* authorities.api_key(t.db, key.id))?.policies).toEqual(['viewer']);
 			expect(
 				(yield* new Authorities(
-					{ ...t.manifest, teams: { ...source.teams, 'viewer-id': [] } },
+					{ ...t.manifest, teams: { ...source.teams, 'viewer-id': { policies: [] } } },
 					'revoked'
 				).api_key(t.db, key.id))?.policies
 			).toEqual([]);
@@ -229,8 +229,8 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 					workspace: { ...t.manifest.workspace, signup: { via: ['email'], policies: ['viewer'] } }
 				} satisfies EngineManifest;
 				const readers = new Authorities(current, 'signup-one');
-				expect((yield* readers.member(t.db, signup.id))?.policies).toEqual(['viewer']);
-				expect((yield* readers.member(t.db, invited.id))?.policies).toEqual([]);
+				expect((yield* readers.member(t.db, 'bootstrap', signup.id))?.policies).toEqual(['viewer']);
+				expect((yield* readers.member(t.db, 'bootstrap', invited.id))?.policies).toEqual([]);
 				expect(
 					(yield* new Authorities(
 						{
@@ -238,7 +238,7 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 							workspace: { ...current.workspace, signup: { via: ['email'], policies: [] } }
 						},
 						'signup-two'
-					).member(t.db, signup.id))?.policies
+					).member(t.db, 'bootstrap', signup.id))?.policies
 				).toEqual([]);
 			})
 	);

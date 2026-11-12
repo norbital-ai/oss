@@ -24,7 +24,7 @@ export type OpenAiChatConfig = {
 	/** `response_format.json_schema.strict` for structured output. */
 	strict?: boolean;
 	/** The provider's charge for one call (`usage.cost`, USD) under its generation id, awaited before `infer` resolves. */
-	meter?: (costUsd: number, generationId: string) => Promise<void> | void;
+	meter?: (cost_usd: number, generationId: string) => Promise<void> | void;
 };
 
 type Wire = { [k: string]: unknown };
@@ -175,21 +175,21 @@ const decodeChunk = Schema.decodeUnknownEffect(Schema.fromJsonString(Chunk));
 const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 
 /** The caller's HTTP client, else fetch (the caller's `fetch` when given). */
-export type HttpOptions = { httpClient?: HttpClient.HttpClient; fetch?: typeof fetch };
-export const provideHttp =
+export type HttpOptions = { http_client?: HttpClient.HttpClient; fetch?: typeof fetch };
+export const provide_http =
 	(options: HttpOptions) =>
 	<A, E, R>(effect: Effect.Effect<A, E, R>) => {
 		const provided =
-			options.httpClient === undefined
+			options.http_client === undefined
 				? effect.pipe(Effect.provide(FetchHttpClient.layer))
-				: effect.pipe(Effect.provideService(HttpClient.HttpClient, options.httpClient));
-		return options.httpClient === undefined && options.fetch !== undefined
+				: effect.pipe(Effect.provideService(HttpClient.HttpClient, options.http_client));
+		return options.http_client === undefined && options.fetch !== undefined
 			? provided.pipe(Effect.provideService(FetchHttpClient.Fetch, options.fetch))
 			: provided;
 	};
 /** One call is a cancellable stream; its final event carries the assembled response. */
 export type OpenAiChat = (request: AiRequest) => Stream.Stream<AiEvent, PortFailure>;
-export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}): OpenAiChat {
+export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}): OpenAiChat {
 	return (request) =>
 		Stream.callback<AiEvent, PortFailure>((queue) =>
 			Effect.gen(function* () {
@@ -260,7 +260,7 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 						Effect.mapError(Port.failure('ai')),
 						Port.call('ai.body', LIMITS.callMs.ai)
 					);
-					const tooLarge =
+					const too_large =
 						res.status === 413 ||
 						(res.status === 400 && /maximum context|context[_ ](?:length|window)/i.test(detail));
 					const budget = res.status === 402 ? inFlightBudget(detail) : Option.none();
@@ -280,9 +280,9 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 								: Date.parse(hint) - (yield* Clock.currentTimeMillis);
 					return yield* Effect.fail(
 						new FacilityFailure({
-							kind: tooLarge ? 'tooLarge' : limited ? 'rateLimited' : 'upstream',
+							kind: too_large ? 'too_large' : limited ? 'rate_limited' : 'upstream',
 							status: res.status,
-							...(Number.isFinite(delay) && delay >= 0 ? { retryAfterMs: delay } : {}),
+							...(Number.isFinite(delay) && delay >= 0 ? { retry_after_ms: delay } : {}),
 							message: `the model provider refused the request (HTTP ${res.status}): ${detail.slice(0, 500)}`
 						})
 					);
@@ -408,7 +408,7 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 				yield* Queue.offer(queue, { _tag: 'Response', response });
 				yield* Queue.end(queue);
 			}).pipe(
-				provideHttp(options),
+				provide_http(options),
 				Effect.mapError(Port.failure('ai')),
 				Effect.catch((e) => Queue.fail(queue, e))
 			)

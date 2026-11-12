@@ -4,9 +4,10 @@
 // destructive (a table or stored column dropped, or rebuilt; it needs acceptance). Rename hints (`was`) turn a drop plus
 // an add into a RENAME. Pure: the host reads what it applied, passes it in, and executes what comes back.
 import { Effect } from 'effect';
-import { canonical, sha256Hex } from '@norbital-ai/std/hash';
+import { q } from '@norbital-ai/std/sql';
+import { canonical, sha256_hex } from '@norbital-ai/std/hash';
 import { StoreError } from '../errors.ts';
-import { RANK, schemaObjects, schemaObjectsForClassification, type SchemaObject } from './ddl.ts';
+import { RANK, schema_objects, schemaObjectsForClassification, type SchemaObject } from './ddl.ts';
 import type { SchemaSpec } from './spec.ts';
 
 export type StepClass = 'additive' | 'rename' | 'backfill' | 'validating' | 'destructive';
@@ -42,14 +43,13 @@ export type PlannedStatement = {
 };
 
 /** A schema's fingerprint: SHA-256 of its canonical JSON. */
-export const fingerprint = (s: SchemaSpec): string => sha256Hex(canonical(s));
+export const fingerprint = (s: SchemaSpec): string => sha256_hex(canonical(s));
 
 const ORDER: readonly StepClass[] = ['additive', 'rename', 'backfill', 'validating', 'destructive'];
 const worst = (a: StepClass, b: StepClass): StepClass =>
 	ORDER.indexOf(a) > ORDER.indexOf(b) ? a : b;
 const def = (o: SchemaObject) => o.shape ?? o.create.join(';\n');
 const colKey = (o: SchemaObject, c: string) => `${o.table}.${c}`;
-const q = (id: string): string => `"${id.replaceAll('"', '""')}"`;
 const WIDENING_RISKS: readonly StepRisk[] = [
 	'access-exclusive-lock',
 	'table-rewrite',
@@ -216,20 +216,20 @@ function renameSql(
  * The steps from `applied` (`null`: an empty database) to `next`. `extra` is what a host keeps beside its tables (its
  * own objects for that schema), diffed and re-asserted alike.
  */
-const plannerWithObjects = (objects: typeof schemaObjects) =>
-	Effect.fn('Store.plan')(function* (
+const plannerWithObjects = (objects: typeof schema_objects) =>
+	Effect.fn('Store.plan')(function* <E = never>(
 		applied: SchemaSpec | null,
 		next: SchemaSpec,
-		extra: (s: SchemaSpec) => readonly SchemaObject[] = () => []
+		extra: (s: SchemaSpec) => Effect.Effect<readonly SchemaObject[], E> = () => Effect.succeed([])
 	) {
 		const r: Renames =
 			applied === null
 				? { tables: new Map(), fields: new Map(), columns: new Map() }
 				: yield* renamesOf(applied, next);
 		// what the database holds, keyed as it reads after the renames
-		const held = applied === null ? [] : yield* objects(applied, extra(applied));
+		const held = applied === null ? [] : yield* objects(applied, yield* extra(applied));
 		const before = new Map(held.map((o) => renamedObject(o, r)).map((o) => [o.id, o]));
-		const after = yield* objects(next, extra(next));
+		const after = yield* objects(next, yield* extra(next));
 		const afterById = new Map(after.map((o) => [o.id, o]));
 		const changed = new Set<string>();
 		for (const [id, o] of before) {
@@ -360,14 +360,14 @@ const plannerWithObjects = (objects: typeof schemaObjects) =>
 	});
 
 /** A complete executable plan uses every original SQL definition. */
-export const plan = /*#__PURE__*/ plannerWithObjects(schemaObjects);
+export const plan = /*#__PURE__*/ plannerWithObjects(schema_objects);
 const classificationPlan = /*#__PURE__*/ plannerWithObjects(schemaObjectsForClassification);
 /** Destructive ids share the complete diff, rename and dependency logic; no incomplete SQL plan escapes. */
-export const destructiveSteps = (
+export const destructive_steps = <E = never>(
 	applied: SchemaSpec | null,
 	next: SchemaSpec,
-	extra: (s: SchemaSpec) => readonly SchemaObject[] = () => []
-): Effect.Effect<readonly string[], StoreError> =>
+	extra: (s: SchemaSpec) => Effect.Effect<readonly SchemaObject[], E> = () => Effect.succeed([])
+): Effect.Effect<readonly string[], StoreError | E> =>
 	classificationPlan(applied, next, extra).pipe(
 		Effect.map((p) => p.steps.filter((step) => step.class === 'destructive').map((step) => step.id))
 	);

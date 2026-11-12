@@ -9,13 +9,15 @@ import type {
 	Outcome as ActOutcomeSchema,
 	Written as WrittenSchema
 } from '../protocol/schema.ts';
-import type { ImageMetadataSchema, IngestedSchema } from './media.ts';
-import type { DeliveryReport } from './conversations/status.ts';
+import type { ImageMetadataSchema, ImagePreviewMimeSchema, IngestedSchema } from './media.ts';
+import type { AiPortResponseSchema } from './ai-schema.ts';
+import type { DeliveryReport, OutboundReference, SendReceipt } from './conversations/status.ts';
 import type { BoltError } from '../protocol/errors.ts';
 import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
 import type {
 	ConvertSource,
 	ConvertTarget,
+	PreviewPdfOptions,
 	GeoHit,
 	RunCause,
 	IngestOptions,
@@ -24,7 +26,11 @@ import type {
 import type { Json, Point } from '../decl/values.ts';
 import type { Pred } from '@norbital-ai/store';
 import type { GuestProgram } from './guest/runner.ts';
+import type { GuestFinalSchema, GuestTakenSchema, GuestTurnSchema } from './guest/schema.ts';
 import type { Holder } from './access/authority.ts';
+import type { BrowserSnapshot, BrowserStep } from '../decl/runtime/browser.ts';
+import type { FacilityMember } from '../decl/runtime/facility-members.ts';
+export type { BrowserSnapshot, BrowserStep } from '../decl/runtime/browser.ts';
 
 /** The precise facility failure sent across the guest ABI; interior failures remain tagged errors. */
 export type FacilityError =
@@ -35,6 +41,8 @@ export type FacilityError =
 const MiB = 1024 * 1024;
 /** Every wall and cap as one table; each overrun is a typed `BoltError`, never a clamp (rule 9). */
 export const LIMITS = {
+	automationCache: { entries: 256 },
+	runLog: { lines: 100, pollMs: 2_000 },
 	/** One unit's guest CPU: Colony's meter budget (`BUDGET_MS`), so the kit and dev refuse what a deployed host refuses. */
 	guestCpuMs: 3_000,
 	guestMemoryMiB: 256,
@@ -54,8 +62,8 @@ export const LIMITS = {
 		ingest: 600_000,
 		attachment: 20_000
 	},
-	/** Read crossings per invocation: `write` for one write-callback call (`create.transform`, `update.transform`,
-	 * `delete.check`: read for the whole batch, never per row), `sync` for every other synchronous body. */
+	/** Read crossings per invocation: `write` for one create/update transform, reading the whole batch;
+	 * `sync` for every other synchronous body. */
 	crossings: { sync: 40, write: 10, automation: 10_000 },
 	/** Rows per write-callback invocation: a batch of N rows is ⌈N/1000⌉ calls per verb per model, one 3 s budget each. */
 	writeChunk: 1_000,
@@ -67,9 +75,9 @@ export const LIMITS = {
 	argsBytes: 4 * MiB,
 	changeSetBytes: 16 * MiB,
 	/** A direct act holds its root inputs through the atomic commit. */
-	act: { rows: 4_000, inputBytes: 8 * MiB },
+	act: { rows: 10_000, inputBytes: 8 * MiB },
 	seedChunkBytes: MiB,
-	changesPerAct: 10_000,
+	changesPerAct: 50_000,
 	expandedRowsPerStatement: 100_000,
 	writeDepth: 8,
 	page: { max: 10_000, all: 50_000, allBytes: 8 * MiB, relationArm: 10_000 },
@@ -79,6 +87,19 @@ export const LIMITS = {
 	/** An outbound conversation message's attachments together, read for its provider; more refuses the message (permanent). */
 	messageAttachmentBytes: 20 * MiB
 } as const;
+
+/** A facility's native wall; the guest may tighten ordinary crossings, while ingest and inference keep their own liveness. */
+export function facility_wall_ms(member: FacilityMember, crossing_wall_ms?: number): number | undefined {
+	switch (member) {
+		case 'ai.sys_2.infer': return undefined;
+		case 'convert.ingest': return LIMITS.callMs.ingest;
+		case 'files.image': return crossing_wall_ms ?? LIMITS.callMs.image;
+		case 'ai.sys_1.decide':
+		case 'ai.embed': return crossing_wall_ms ?? LIMITS.callMs.ai;
+		case 'convert.document': return crossing_wall_ms ?? LIMITS.callMs.database;
+		default: return crossing_wall_ms ?? LIMITS.callMs.other;
+	}
+}
 
 /** Size of wire text in UTF-8, including non-ASCII characters. */
 export const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
@@ -109,10 +130,12 @@ export type Reader = { as: 'caller'; authority: Authority } | { as: 'workspace' 
 export type RowData = { readonly [field: string]: Json };
 /** Where a change came from in the caller's input, for `refused { field, row }` (rule 32). */
 export type InputPath = readonly (string | number)[];
+/** Native keyed writes choose replacement or retention; authored imports separately permit refusal. */
+export type NativeWriteConflict = 'update' | 'keep';
 /** One write per row (rule 21); relation actions are already flattened (`link`/`unlink` are FK updates). */
 export type Change = { model: string; id: string; path: InputPath } & (
 	| { op: 'create'; values: RowData }
-	| { op: 'upsert'; values: RowData; on: readonly string[]; on_conflict: 'update' | 'keep' }
+	| { op: 'upsert'; values: RowData; on: readonly string[]; on_conflict: NativeWriteConflict }
 	/** `revision` is the one the caller observed (rule 25); `null` writes blind. */
 	| { op: 'update'; set: RowData; revision: number | null }
 	| { op: 'delete'; revision: number | null }
@@ -120,7 +143,7 @@ export type Change = { model: string; id: string; path: InputPath } & (
 export type QueuedRun = {
 	automation: string;
 	input: Json;
-	dueAt: string;
+	due_at: string;
 	key?: string;
 	id?: string;
 	actor?: string;
@@ -130,16 +153,7 @@ export type QueuedRun = {
 	cause: string;
 	depth: number;
 };
-/** One committed row change from `RETURNING old.*, new.*`: the input of triggers (rule 50) and live routing (A9). */
-export type Captured = {
-	model: string;
-	id: string;
-	op: 'create' | 'update' | 'delete';
-	revision: number;
-	old: RowData | null;
-	new: RowData | null;
-	cause: 'direct' | 'cascade' | 'derived' | 'erased';
-};
+export type { Captured } from './db/captured.ts';
 
 // ── outcomes (rule 32): the author types of decl/ctx with names erased; a write's own `Outcome` is never `running` ──
 export type Written = typeof WrittenSchema.Type;
@@ -161,7 +175,7 @@ export type RunTriggerView = typeof RunTriggerViewSchema.Type;
 export type Arm = { policy: string; where: Pred; history?: true };
 /**
  * A create or update arm: the columns it admits per write path (checked before any guest code) and whether its policy
- * declares a `check` (`policy.<p>.grants.<model>.<op>.check`, invocation kind `policy`); without one the arm allows. The
+ * declares a `verdict` (`policy.<p>.grants.<model>.<op>.verdict`, invocation kind `policy`); without one the arm allows. The
  * verdicts of every admitting arm combine: any `allow` executes; else the first `approve` in the team's policy order
  * holds the batch for its flow; else the first `deny` refuses it.
  */
@@ -170,7 +184,7 @@ export type WriteArm = {
 	columns: { readonly [path: string]: readonly string[] };
 	check: boolean;
 };
-/** A delete arm: its policy, and whether it declares a `check`. */
+/** A delete arm: its policy, and whether it declares a verdict callback. */
 export type DeleteArm = { policy: string; check: boolean };
 /**
  * A model's access points as one actor holds them (decision 3): only this model's policies guard its reads and writes,
@@ -214,12 +228,12 @@ export type Authority = {
 	automations: readonly string[];
 	capabilities: {
 		apps: readonly string[];
-
+		syncs: readonly string[];
 		tools: readonly string[];
 		mcp: readonly string[];
 	};
 	limits: readonly LimitRule[];
-	/** Requestor variables: `requestor.teamTree`, `requestor.scopes.<policy>`. */
+	/** Requestor variables: `requestor.team_tree`, `requestor.scopes.<policy>`. */
 	teamTree: readonly string[];
 	scopes: { readonly [policy: string]: readonly string[] };
 };
@@ -228,8 +242,6 @@ export type Authority = {
 export type InvocationKind =
 	| 'create'
 	| 'update'
-	| 'delete'
-	| 'notify'
 	| 'vector'
 	| 'probe'
 	| 'rerank'
@@ -244,9 +256,9 @@ export type InvocationKind =
 	| 'validation'
 	| 'tool';
 /**
- * One fresh-isolate run of one body. `target` names it: `'<model>'` (write callbacks `create`/`update`/`delete`,
- * `notify`), `'<model>.<index>'` (`vector`, `probe`, `rerank`), `'<model>.<sync>'` (`syncRead`, `syncWrite`),
- * `'<model>.<sync>.<media type>'` (`parse`), `'<policy>.<model>.<op>'` (`policy`: a write grant's `check`, answering a
+ * One fresh-isolate run of one body. `target` names it: `'<model>'` (create/update transforms),
+ * `'<model>.<index>'` (`vector`, `probe`, `rerank`), `'<model>.<sync>'` (`syncRead`, `syncWrite`),
+ * `'<model>.<sync>.<media type>'` (`parse`), `'<policy>.<model>.<op>'` (`policy`: a write grant's verdict, answering a
  * `VerdictData`), `'<a>'` (automation), `'<model>.effect.<verb>'` (effect), or `'<app>/<page>'` (page).
  */
 export type Invocation = {
@@ -263,13 +275,14 @@ export type Invocation = {
 		tz: string;
 		seed: string;
 		cause?: RunCause;
+		attempt?: number;
 		/** An automation run's id and trigger (`ctx.run`). */
-		run?: { id: string; trigger: RunTrigger };
+		run?: { id?: string; trigger?: RunTrigger };
 		admin?: boolean;
 		policies?: readonly string[];
-		/** A write callback's rows carried by this model's write (`with` or `onApproved`). */
+		/** A write callback's rows carried by this model's write (`with` or `on_approved`). */
 		carriedBy?: string;
-		/** The approving decision asks a held write's callback again, for its `onApproved`. */
+		/** The approving decision asks a held write's callback again, for its `on_approved`. */
 		approving?: true;
 		/** A sync body's or integration test's instance and configuration; `key` a sync write's `Idempotency-Key`. */
 		instance?: string;
@@ -286,9 +299,14 @@ export type CrossAnswer =
 			ok: false;
 			error:
 				| FacilityError
-				| { kind: 'refused'; code: string; message: string }
+				| { kind: 'refused'; code: string; message: string; field?: string; row?: number; rows?: readonly number[]; rule?: string }
 				| { kind: 'bolt'; code: string; message: string };
 	  };
+/** A Bolt failure crossing back to a guest; facility and authored refusal envelopes remain distinct. */
+export const cross_failure = (code: string, message: string): CrossAnswer => ({
+	ok: false,
+	error: { kind: 'bolt', code, message }
+});
 export type GuestOutcome =
 	| { kind: 'ok'; output: Json }
 	/** `ctx.refuse(message, { field, row })`; `row` indexes the batch a write callback received. */
@@ -300,15 +318,11 @@ export type GuestOutcome =
 			row?: number;
 			rows?: readonly number[];
 			rule?: string;
-			data?: { readonly requestId: string };
-			records?: readonly {
-				readonly model: string;
-				readonly id: string;
-				readonly fields: readonly string[];
-			}[];
+			data?: { readonly request_id: string };
+			records?: readonly { readonly model: string; readonly id: string }[];
 			invocation?: string;
 	  }
-	/** A throw, a budget (`cpuBudget`, `crossingBudget`, `readBudgetExceeded`, `memory`) or a bad answer. */
+	/** A throw, a budget (`cpu_budget`, `crossing_budget`, `read_budget_exceeded`, `memory`) or a bad answer. */
 	| { kind: 'failed'; error: BoltError };
 // ── host ports (§3.3.10 `/engine` types; P18, P19): optional ports are absent when the host lacks the provider ──
 /** A stored blob; the `sys_file` row is the engine's (rule 18). */
@@ -355,13 +369,13 @@ export interface ConvertPort {
 	convert(
 		source: ConvertSource,
 		to: ConvertTarget,
-		options: { reference?: Uint8Array; page?: 'A4' | 'A3' | 'Letter'; landscape?: boolean },
+		options: PreviewPdfOptions & { reference?: Uint8Array },
 		signal: AbortSignal
 	): Promise<Uint8Array>;
 	/** Renders in memory without retaining source or result in a job or file store. */
-	previewPdf?(
+	preview_pdf?(
 		source: ConvertSource,
-		options: { page?: 'A4' | 'A3' | 'Letter'; landscape?: boolean },
+		options: PreviewPdfOptions,
 		signal: AbortSignal
 	): Promise<Uint8Array>;
 }
@@ -379,7 +393,7 @@ export type Ingested = typeof IngestedSchema.Type;
 /**
  * File ingestion (plan 12) behind the agent's `read_file` and `ctx.convert.ingest`: one file to `Ingested`, or
  * `unsupported` (the format has no parser: CAD). A video container is heard from its audio track.
- * `documentIngester` implements it over Norbital Convert's `/v1/ingest`; a converter without a transcription model rejects audio as `unavailable`.
+ * `document_ingester` implements it over Norbital Convert's `/v1/ingest`; a converter without a transcription model rejects audio as `unavailable`.
  */
 export interface IngestPort {
 	ingest(
@@ -414,29 +428,9 @@ export type AiRequest = {
 	continuation?: string;
 };
 /** `cut`: the 60 s wall ended a stream; `continuation` resumes it as the next step (rule 63). */
-export type AiResponse = {
-	content: Json;
-	toolCalls: readonly {
-		id: string;
-		name: string;
-		input: Json;
-		/** why the arguments did not parse; the call is answered with it, not run */ invalid?: string;
-	}[];
-	finish: 'stop' | 'tool' | 'cut';
-	continuation?: string;
-	/** L-BOLT-412: the provider's reasoning, verbatim, stored beside the text and sent back with it. */ reasoning?: string;
-	usage: {
-		input: number;
-		output: number;
-		/** hook:agent — USD, for the cost disclosure */ cost?: number;
-		/** L-BOLT-432: the provider's call id (the metering key) */ call?: string;
-		/** who answered, where a router says */ provider?: string;
-		/** input tokens the provider read from its prompt cache */ cached?: number;
-		/** output tokens spent reasoning */ reasoning?: number;
-		/** the request's characters: system prompt, messages and tool definitions (where the input tokens went) */
-		prompt?: { system: number; messages: number; tools: number };
-	};
-};
+export type AiPortResponse = typeof AiPortResponseSchema.Type;
+/** Native model events and stored assistant content retain their existing transcript shape. */
+export type AiResponse = Omit<AiPortResponse, 'tool_calls'> & { readonly toolCalls: AiPortResponse['tool_calls'] };
 /** hook:runtime — bytes supplied by a host, or an engine-resolved stored file read by the provider outside the Cell. */
 export type EmbedInput =
 	| string
@@ -474,7 +468,7 @@ export interface EmbeddingsPort {
  * verifies at activation that every `sys_2` and `embed` model takes images; nothing here branches on modality.
  */
 export interface AiPort {
-	sys_1: import('./decisions/index.ts').System1Port;
+	sys_1: import('./decision.ts').System1Port;
 	sys_2: {
 		/** The model classes the host maps (`default fast strong`). */
 		models: readonly string[];
@@ -490,7 +484,7 @@ export interface AiPort {
 			signal: AbortSignal,
 			onDelta?: (text: string) => void,
 			onProgress?: (reasoning?: string) => void
-		): Promise<AiResponse>;
+		): Promise<AiPortResponse>;
 	};
 	embed?: EmbeddingsPort['embed'];
 }
@@ -506,15 +500,6 @@ export interface WebReadPort {
 /** Where the agent's browser goes: a page, or back, forward or a reload of the one open. */
 export type BrowserTarget =
 	{ readonly url: string } | { readonly go: 'back' | 'forward' | 'reload' };
-/** One `browser` step, on a control's `ref` from the page text. */
-export type BrowserStep =
-	| { readonly click: string }
-	| { readonly type: { readonly ref: string; readonly text: string; readonly submit?: boolean } }
-	| { readonly select: { readonly ref: string; readonly value: string } }
-	| { readonly press: string }
-	| { readonly hover: string }
-	| { readonly scroll: { readonly ref?: string; readonly y?: number } }
-	| { readonly wait: { readonly text?: string; readonly ms?: number } };
 /**
  * The browsing facility the built-in `browser_*` tools drive. Each `profile` is one browser of its own, its sign-ins and
  * site data kept between calls: a person's id, or `BROWSER_RUN_PROFILE` + `<run id>:<inference id>` for one inference of a run.
@@ -524,7 +509,7 @@ export type BrowserStep =
 export type BrowserViewport = {
 	width: number;
 	height: number;
-	deviceScaleFactor?: number;
+	device_scale_factor?: number;
 };
 /** A workspace page the agent's browser opens: `live`, or a preview environment by its name. */
 export type BrowserWorkspaceTarget = {
@@ -539,31 +524,33 @@ export type BrowserCaller = {
 	readonly agent?: { readonly conversation: string };
 };
 export interface BrowserPort {
+	/** Open the profile's isolated tab. A failed open is an error, and close must release any partial resources. */
+	open(profile: string, signal: AbortSignal): Promise<void>;
 	navigate(
 		profile: string,
 		to: BrowserTarget,
 		find: string | undefined,
 		signal: AbortSignal,
 		viewport?: BrowserViewport
-	): Promise<Json>;
+	): Promise<BrowserSnapshot>;
 	/**
 	 * Open a page of the workspace as the person, signed in by the host's hand-off: the internal half of `browser`.
 	 * A host that cannot sign its browser in omits it, and the agent is not offered workspace pages.
 	 */
-	openWorkspace?(
+	open_workspace?(
 		profile: string,
 		target: BrowserWorkspaceTarget,
 		caller: BrowserCaller,
 		signal: AbortSignal
-	): Promise<Json>;
+	): Promise<BrowserSnapshot>;
 	/** Close this profile's tab and release its page resources; its sealed sign-ins stay for the next open. */
-	close?(profile: string, signal: AbortSignal): Promise<void>;
+	close(profile: string, signal: AbortSignal): Promise<void>;
 	snapshot(
 		profile: string,
 		options: { find?: string; from?: number },
 		signal: AbortSignal
-	): Promise<Json>;
-	act(profile: string, steps: readonly BrowserStep[], signal: AbortSignal): Promise<Json>;
+	): Promise<BrowserSnapshot>;
+	act(profile: string, steps: readonly BrowserStep[], signal: AbortSignal): Promise<BrowserSnapshot>;
 	evaluate(profile: string, expression: string, signal: AbortSignal): Promise<Json>;
 	screenshot(profile: string, signal: AbortSignal): Promise<Uint8Array>;
 	/**
@@ -575,13 +562,15 @@ export interface BrowserPort {
 /**
  * What an instance's link hands the engine (§4.5, `integrations.receive`): inbound conversation messages (each attachment
  * `{ name, mime, bytes, bin? }`, its bytes in `bins` at `bin`; `history` is a backfill nobody waits on), a provider's
- * report on a message it sent (§5.9; `providerId` is what its `send` answered), a chat the account cleared or deleted
+ * report on a message it sent (§5.9; `provider_id` is what its `send` answered), a chat the account cleared or deleted
  * (`clear`: every message of `thread` sent at or before `before` is tombstoned), or a pushing driver's changed sync
  * partition (`sync`: `'<model>.<sync>'`).
  */
 export type DriverEvent =
 	| { kind: 'messages'; messages: readonly Json[]; history?: true; bins?: readonly Uint8Array[] }
-	| { kind: 'delivery'; providerId: string; report: DeliveryReport }
+	/** Await registration before sending when the provider chooses its message id before I/O. */
+	| ({ kind: 'outbound_ref' } & OutboundReference)
+	| { kind: 'delivery'; provider_id: string; report: DeliveryReport }
 	| { kind: 'clear'; thread: string; before: string }
 	/** The sender is typing (`typing: true`) in `thread`: a held burst waits for the rest, up to its cap. */
 	| { kind: 'presence'; thread: string; typing: boolean }
@@ -601,7 +590,7 @@ export type OutboundAttachment = {
 /** The host's transactional mail and SMS (identity codes, invitations) and web push: a send to an address. */
 export interface TransportPort {
 	/** `kind` names what it sends (`email`, `sms`, `inbox` for push); the address is the message's. Any throw is a failed send. */
-	send(kind: string, message: Json, signal: AbortSignal): Promise<{ providerId: string }>;
+	send(kind: string, message: Json, signal: AbortSignal): Promise<{ provider_id: string }>;
 }
 // ── the runtime log (§5.12) ──
 export type LogLevel = 'info' | 'warn' | 'error';
@@ -666,9 +655,9 @@ export interface MembershipPort {
 }
 /** One next-due instant per scope, held in host memory; no polling (rule 52a). */
 export interface DeadlinesPort {
-	announce(scope: string, notLaterThan: string): void;
-	settle(scope: string, nextDue: string | null): void;
-	teardown(scope: string): void;
+	announce(scope: string, notLaterThan: string): Promise<void>;
+	settle(scope: string, nextDue: string | null): Promise<void>;
+	teardown(scope: string): Promise<void>;
 }
 /** A pushing driver's page of a sync partition: its items (the sync `read`'s `items`), and the page facts a `read` page carries. */
 export type DriverPage = {
@@ -704,7 +693,7 @@ export interface LinksPort {
 		message: Json,
 		signal: AbortSignal,
 		attachments?: readonly OutboundAttachment[]
-	): Promise<{ providerId: string; presumeAfterMs?: number }>;
+	): Promise<SendReceipt>;
 	typing?(instance: string, to: string, signal: AbortSignal, on: boolean): Promise<void>;
 	request?(instance: string, op: Json, signal: AbortSignal): Promise<Json>;
 	read?(
@@ -748,9 +737,9 @@ export interface KeysPort {
 /** A guest session's options: the prelude it evaluates first (the engine's `PRELUDE`), its entropy and its heap. */
 export type GuestSessionOptions = {
 	readonly prelude: string;
-	/** `$1` draws SHA-256 blocks of it (`randomStream`), so a replay with the same seed draws the same values. */
+	/** `$1` draws SHA-256 blocks of it (`random_stream`), so a replay with the same seed draws the same values. */
 	readonly seed: string;
-	readonly memoryMiB: number;
+	readonly memory_mib: number;
 	/** A program run once (a `run_js` script): no spare isolates are prepared for it. */
 	readonly once?: true;
 };
@@ -763,21 +752,11 @@ export type GuestStart = {
 	readonly invocation: string;
 };
 /** The body's end state: its JSON result, a refusal, a missing body, or a throw (name, message, stack, facility kind). */
-export type GuestFinal =
-	| readonly ['ok', string]
-	| readonly ['refused', string, string | null, number | null, string]
-	| readonly ['missing', string]
-	| readonly ['error', string, string, string]
-	| readonly ['error', string, string, string, string];
+export type GuestFinal = typeof GuestFinalSchema.Type;
 /** One queued ctx call: member, JSON arguments, call site (stack frame) and call id. */
 export type GuestCall = readonly [member: string, args: string, site: string, id: number];
 /** The prelude's `take()`: end state, the calls crossing now, each call's bytes (`$bin`), and whether a timer ran instead. */
-export type GuestTaken = readonly [
-	final: GuestFinal | null,
-	calls: readonly GuestCall[],
-	bins: readonly (readonly Uint8Array[])[],
-	ranTimer: boolean
-];
+export type GuestTaken = typeof GuestTakenSchema.Type;
 /** One batch's answers (`give`): call ids, one JSON text per call, and each call's bytes. */
 export type GuestAnswers = {
 	readonly ids: readonly number[];
@@ -788,18 +767,14 @@ export type GuestAnswers = {
  * What one native slice leaves: the prelude's `take()` after it, and the console lines (`$0`) said since the last turn,
  * module evaluation's among the first; past 200 lines in one turn the host keeps the first 200 and counts the rest.
  */
-export type GuestTurn = {
-	readonly taken: GuestTaken;
-	readonly lines: readonly (readonly [level: string, line: string])[];
-	readonly dropped: number;
-};
+export type GuestTurn = typeof GuestTurnSchema.Type;
 /**
  * Guest isolates, made and metered by the host. `open` evaluates `prelude` as an `evalClosure` body with the hooks
  * `$0` say (lines buffered for the turn), `$1` random (from `seed`), `$2` digest (`crypto.subtle.digest`'s host half)
  * and `$3` asset (`program.assets` by sha256), then `program.source` as one module bound to `__boltGuest`; it answers
  * an opaque session id. `start` and `give` run their prelude hook and then `take()`, `take` only `take()` (after a turn
  * whose timer ran): each call is one native slice, under a CPU slot the host takes for it. A session past its unit's
- * CPU budget or its memory ends and rejects with an encoded `HostFailure` of code `cpuBudget` or `memory`; an aborted
+ * CPU budget or its memory ends and rejects with an encoded `HostFailure` of code `cpu_budget` or `memory`; an aborted
  * call ends its session. `close` disposes it (idempotent).
  */
 export interface GuestIsolatesPort {
@@ -816,8 +791,8 @@ export type HttpRequest = {
 	readonly headers: readonly (readonly [name: string, value: string])[];
 	readonly body?: Uint8Array;
 };
-/** `redirects`: hops followed (each re-checked); `maxBytes`: the decoded body's ceiling (more fails `tooLarge`). */
-export type HttpFetchOptions = { readonly redirects: number; readonly maxBytes: number };
+/** `redirects`: hops followed (each re-checked); `max_bytes`: the decoded body's ceiling (more fails `too_large`). */
+export type HttpFetchOptions = { readonly redirects: number; readonly max_bytes: number };
 /** The final response: status, lowercase headers, the whole decoded body (empty for 204, 205, 304 and a redirect). */
 export type HttpResponse = {
 	readonly status: number;
@@ -854,7 +829,7 @@ export type TcpSocket = {
 	 * STARTTLS: TLS over this cleartext connection, verified as the endpoint says. Release both streams' locks first;
 	 * this socket's streams then end and the returned one carries the connection.
 	 */
-	startTls(signal: AbortSignal): Promise<TcpSocket>;
+	start_tls(signal: AbortSignal): Promise<TcpSocket>;
 };
 /**
  * Outbound TCP/TLS (IMAP, SMTP) under the host's egress policy: the host resolves and checks the destination (a public
@@ -889,7 +864,7 @@ export interface BundlerPort {
 /** What `ctx.files.image` reads from a JPEG, PNG or HEIC: format, size, the PDQ perceptual hash and EXIF. */
 export type ImageMetadata = typeof ImageMetadataSchema.Type;
 export type ImagePreviewSize = 64 | 512 | 1024;
-export type ImagePreviewMime = 'image/jpeg' | 'image/png' | 'image/heic' | 'image/heif';
+export type ImagePreviewMime = typeof ImagePreviewMimeSchema.Type;
 /** A rectangle in the oriented image, with coordinates from zero to one. */
 export type ImageCrop = {
 	left: number;
@@ -897,7 +872,7 @@ export type ImageCrop = {
 	right: number;
 	bottom: number;
 	/** Enlarge a small region until its longer edge reaches this many pixels, at most 4×. */
-	minEdge?: number;
+	min_edge?: number;
 };
 /** A preview at most `maxEdge` on its long side, EXIF-oriented; `derived: false` is the original (an APNG, a HEIC sequence). */
 export type ImagePreview = {
@@ -938,7 +913,7 @@ export type McpServer = {
 export type McpToolInfo = {
 	readonly name: string;
 	readonly description: string;
-	readonly inputSchema: Json;
+	readonly input_schema: Json;
 };
 /**
  * MCP over streamable HTTP on the current protocol revision (rule 63b): `connect` answers an opaque session id, `call`

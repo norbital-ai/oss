@@ -3,10 +3,10 @@
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { lark } from '../../src/chat/lark/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = {
@@ -107,14 +107,14 @@ describe('Lark', () => {
 			const h = yield* connected(lark, settings),
 				body = received();
 			expect(h.status).toMatchObject({ state: 'connected', account: 'Acme' });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'om_1',
 						thread: 'oc_1',
-						sentAt: new Date(1_790_000_000_000).toISOString(),
+						sent_at: new Date(1_790_000_000_000).toISOString(),
 						from: { handle: 'ou_ann' },
 						text: '你好',
 						group: false,
@@ -130,10 +130,10 @@ describe('Lark', () => {
 			yield* overFetch;
 			const h = yield* connected(lark, settings);
 			const good = seal({ type: 'url_verification', token: 'verify', challenge: 'c1' });
-			const response = yield* h.link.webhook!(webhook(good, {}));
+			const response = yield* required(h.link.webhook)(webhook(good, {}));
 			expect(yield* Effect.promise(() => response.json())).toEqual({ challenge: 'c1' });
 			const bad = seal({ type: 'url_verification', token: 'nope', challenge: 'c1' });
-			expect((yield* h.link.webhook!(webhook(bad, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(bad, {}))).status).toBe(401);
 		})
 	);
 	it.live('refuses a bad signature, a missing one and a plain body, and stores nothing', () =>
@@ -142,12 +142,12 @@ describe('Lark', () => {
 			yield* overFetch;
 			const h = yield* connected(lark, settings),
 				body = received();
-			expect((yield* h.link.webhook!(webhook(body, signature(body, 'wrong')))).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body, 'wrong')))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
 			const plain = JSON.stringify({ type: 'url_verification', challenge: 'c1' });
-			expect((yield* h.link.webhook!(webhook(plain, signature(plain)))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(plain, signature(plain)))).status).toBe(401);
 			const sealedWithAnother = JSON.stringify({ encrypt: Buffer.alloc(48, 1).toString('base64') });
-			expect((yield* h.link.webhook!(webhook(sealedWithAnother, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(sealedWithAnother, {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -159,7 +159,7 @@ describe('Lark', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = received();
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live(
@@ -191,7 +191,7 @@ describe('Lark', () => {
 				});
 				const own = received({ message_id: 'om_5' }, { sender_type: 'app' });
 				for (const body of [mention, reply, file, recall, own])
-					expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+					expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 				expect(h.events.length).toBe(4);
 				expect(h.events).toMatchObject([
 					{
@@ -202,11 +202,11 @@ describe('Lark', () => {
 								text: 'hi',
 								group: true,
 								invocation: 'mention',
-								replyTo: 'om_root'
+								reply_to: 'om_root'
 							}
 						]
 					},
-					{ messages: [{ id: 'om_3', invocation: 'reply', replyTo: 'om_parent' }] },
+					{ messages: [{ id: 'om_3', invocation: 'reply', reply_to: 'om_parent' }] },
 					{
 						bins: [new Uint8Array([4, 5])],
 						messages: [{ id: 'om_4', attachments: [{ name: 'a.pdf', bin: 0 }] }]
@@ -221,11 +221,11 @@ describe('Lark', () => {
 			yield* overFetch;
 			const h = yield* connected(lark, settings);
 			const key = 'k'.repeat(200);
-			const sent = yield* h.link.send!({ id: key, to: 'oc_1', text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'om_out' });
+			const sent = yield* required(h.link.send)({ id: key, to: 'oc_1', text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'om_out' });
 			const chat = api.calls.at(-1);
 			expect(new URL(chat?.url ?? '').searchParams.get('receive_id_type')).toBe('chat_id');
-			const body = JSON.parse(chat?.body ?? '') as { uuid: string };
+			const body = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ uuid: Schema.String, receive_id: Schema.String, msg_type: Schema.String, content: Schema.String })))(chat?.body ?? '');
 			expect(body).toMatchObject({
 				receive_id: 'oc_1',
 				msg_type: 'text',
@@ -233,11 +233,11 @@ describe('Lark', () => {
 			});
 			expect(body.uuid).toBe(createHash('sha256').update(key).digest('hex').slice(0, 50));
 			expect(chat?.headers.get('authorization')).toBe('Bearer t-1');
-			yield* h.link.send!({ id: 'k2', to: 'ou_ann', text: 'Hi' }, []);
+			yield* required(h.link.send)({ id: 'k2', to: 'ou_ann', text: 'Hi' }, []);
 			expect(new URL(api.calls.at(-1)?.url ?? '').searchParams.get('receive_id_type')).toBe(
 				'open_id'
 			);
-			yield* h.link.send!({ id: 'k3', to: 'oc_1:om_root:omt_1', text: 'In thread' }, []);
+			yield* required(h.link.send)({ id: 'k3', to: 'oc_1:om_root:omt_1', text: 'In thread' }, []);
 			expect(new URL(api.calls.at(-1)?.url ?? '').pathname).toBe(
 				'/open-apis/im/v1/messages/om_root/reply'
 			);
@@ -249,7 +249,7 @@ describe('Lark', () => {
 			yield* platformApi(() => json({ code: 10014, msg: 'app secret invalid' }, 400));
 			yield* overFetch;
 			const h = yield* host(chatProvider(lark), fetch);
-			yield* Effect.flip(h.link.pair!({ ...settings, appId: 'cli_refused' }));
+			yield* Effect.flip(required(h.link.pair)({ ...settings, appId: 'cli_refused' }));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -289,12 +289,12 @@ describe('Lark', () => {
 			const connection = yield* Effect.promise(() =>
 				lark.connect(settings, {
 					fetch,
-					webhookUrl: 'https://hook.test/',
+					webhook_url: 'https://hook.test/',
 					receive: () => Promise.resolve()
 				})
 			);
 			const read = yield* Effect.promise(() =>
-				connection.history!('oc_1', '2026-09-20T00:00:00.000Z')
+				required(connection.history)('oc_1', '2026-09-20T00:00:00.000Z')
 			);
 			expect(read.complete).toBe(true);
 			expect(read.messages).toMatchObject([

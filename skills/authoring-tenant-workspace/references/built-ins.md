@@ -7,20 +7,20 @@ Read before writing a page. When a page seems to need one of these, configure th
 1. `AppShell` with hero props; scope pickers in `actions`.
 2. One view of the subject: discover the view components with `keyof typeof import('@norbital-ai/ui')`; `CustomView` for any other body, with the same toolbar. Scope with `where`.
 3. Operations in their slots: [app-structure.md](app-structure.md).
-4. Each view makes one `bolt.query` (or `of=` a model) with its layers.
+4. Each view makes one `ctx.query` (or `of=` a model) with its layers.
 
 ## Table and toolbar
 
 | Built in | How you get it |
 | --- | --- |
-| Search | `search.text` on the model; otherwise the label's text fields |
-| Filter and sort | default; fixed scope `where`, starting filter `initialFilter` |
+| Search | a text entry under `indexes`; `record_label` is indexed automatically |
+| Filter and sort | default; fixed scope `where`, starting filter `initial_filter` |
 | Column menu | always |
 | Export CSV | `toolbar.export`; a file sync replaces it |
 | ⚡ Import, template, Export, Sync now, Update and Delete selected | the model's syncs and grants |
 | Page operations | `toolbar.actions` |
 | New | a `create` grant |
-| Row open | the record sheet (`?record=<model>/<id>`) unless `onOpen` |
+| Row open | the record sheet (`?record=<model>/<id>`) unless `on_open` |
 | Selection, select all, cursor paging, footer, empty states, approval accents | always |
 | Cell rendering | by kind; a link shows the linked label as text, the row opens the record; `cell` only for computed display |
 
@@ -33,7 +33,7 @@ Read before writing a page. When a page seems to need one of these, configure th
 ## Kinds render themselves
 
 - Text formats, money, numbers, dates, periods, enum and state words, files, points, links and typed json render and edit themselves in cells, forms, boards and history.
-- Enum and state words come from `models.<m>.fields.<f>.<value>`; use `enumText` or `useEnumText` to compose. Never write a label map.
+- Enum and state words come from `models.<m>.fields.<f>.<value>`; use `enum_text` or `use_enum_text` to compose. Never write a label map.
 - A new value type is a custom field, used everywhere automatically.
 
 ## The shell

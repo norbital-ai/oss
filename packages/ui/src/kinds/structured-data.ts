@@ -1,8 +1,8 @@
-import { item_kind } from '@norbital-ai/std/kind';
+import { item_kind, view_schema } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { Array as Arr, Schema } from 'effect';
-import { valueObject, type Kind, type Value } from './kind.js';
-import { resolveJsonSchema, type JsonSchema } from './json-schema.js';
+import { value_object, type Kind, type Value } from './kind.js';
+import { resolve_json_schema, type JsonSchema } from './json-schema.js';
 
 /** Stable row identities by JSON Pointer; a tuple names a composite identity. */
 export type ArrayKeys = Readonly<Record<string, string | readonly string[]>>;
@@ -16,11 +16,11 @@ export type DataPair = {
 
 /** Structures only: decimals remain opaque leaves. */
 export function dataEntries(value: Value | undefined): Readonly<Record<string, Value>> | undefined {
-	return valueObject(value) ? value : undefined;
+	return value_object(value) ? value : undefined;
 }
 
 /** Equality preserves missing/null and scalar types; object declaration order is immaterial. */
-export function dataEqual(before: Value | undefined, value: Value | undefined): boolean {
+export function data_equal(before: Value | undefined, value: Value | undefined): boolean {
 	if (before === value) return true;
 	if (before === undefined || value === undefined) return false;
 	if (before instanceof Decimal || value instanceof Decimal)
@@ -30,7 +30,7 @@ export function dataEqual(before: Value | undefined, value: Value | undefined): 
 			Arr.isArray<Value>(before) &&
 			Arr.isArray<Value>(value) &&
 			before.length === value.length &&
-			before.every((item, index) => dataEqual(item, value[index]))
+			before.every((item, index) => data_equal(item, value[index]))
 		);
 	const old = dataEntries(before),
 		next = dataEntries(value);
@@ -38,7 +38,7 @@ export function dataEqual(before: Value | undefined, value: Value | undefined): 
 	const keys = Object.keys(old);
 	return (
 		keys.length === Object.keys(next).length &&
-		keys.every((key) => Object.hasOwn(next, key) && dataEqual(old[key], next[key]))
+		keys.every((key) => Object.hasOwn(next, key) && data_equal(old[key], next[key]))
 	);
 }
 
@@ -102,7 +102,7 @@ function inferValues(values: readonly Value[]): JsonSchema {
 }
 
 /** Only observed shapes: every list item contributes, with no invented formats, defaults or required keys. */
-export function inferJsonSchema(value: Value | undefined): JsonSchema {
+export function infer_json_schema(value: Value | undefined): JsonSchema {
 	return value === undefined ? {} : inferValues([value]);
 }
 
@@ -179,9 +179,9 @@ function intersectPlan(left: JsonSchema, right: JsonSchema): JsonSchema | undefi
 		else if (isUpper(key) && left[key] !== undefined && right[key] !== undefined)
 			merged[key] = Math.min(left[key], right[key]);
 		else if (key === 'enum' && left.enum !== undefined && right.enum !== undefined)
-			merged.enum = left.enum.filter((item) => right.enum?.some((other) => dataEqual(item, other)));
+			merged.enum = left.enum.filter((item) => right.enum?.some((other) => data_equal(item, other)));
 		else if (key === 'const' && left.const !== undefined && right.const !== undefined) {
-			if (!dataEqual(left.const, right.const)) return false;
+			if (!data_equal(left.const, right.const)) return false;
 		} else return undefined;
 	}
 	return merged;
@@ -194,15 +194,15 @@ function intersectPlan(left: JsonSchema, right: JsonSchema): JsonSchema | undefi
 export function structuredSchema(schema: JsonSchema, root: JsonSchema, value?: Value): JsonSchema {
 	function compatible(raw: JsonSchema, held: Value, depth: number): boolean | undefined {
 		if (depth >= 24) return undefined;
-		const current = resolveJsonSchema(raw, root);
+		const current = resolve_json_schema(raw, root);
 		if (typeof current === 'boolean') return current === false ? false : undefined;
 		let evidence = false;
 		if (current.const !== undefined || Object.hasOwn(current, 'const')) {
-			if (!dataEqual(current.const, held)) return false;
+			if (!data_equal(current.const, held)) return false;
 			evidence = true;
 		}
 		if (current.enum !== undefined) {
-			if (!current.enum.some((item) => dataEqual(item, held))) return false;
+			if (!current.enum.some((item) => data_equal(item, held))) return false;
 			evidence = true;
 		}
 		if (current.type !== undefined) {
@@ -235,7 +235,7 @@ export function structuredSchema(schema: JsonSchema, root: JsonSchema, value?: V
 	): JsonSchema {
 		if (typeof raw === 'boolean' || depth >= 24 || seen.has(raw)) return raw;
 		const nextSeen = new Set(seen).add(raw);
-		const resolved = resolveJsonSchema(raw, root);
+		const resolved = resolve_json_schema(raw, root);
 		if (typeof resolved === 'boolean')
 			return resolved === false || raw.$ref === undefined ? resolved : raw;
 		let current: JsonSchema = resolved;
@@ -298,10 +298,11 @@ export function dataDefaults(
 			return held;
 		}
 		if (Arr.isArray<Value>(held)) {
-			if (resolved.items === undefined) return held;
+			const items = resolved.items;
+			if (items === undefined) return held;
 			let changedItems = false;
 			const next = held.map((item) => {
-				const filled = fill(resolved.items!, item);
+				const filled = fill(items, item);
 				if (filled === undefined) return item;
 				changedItems = true;
 				return filled;
@@ -329,137 +330,30 @@ export function dataDefaults(
 }
 
 /** The schema's structural description; callers retain the original Kind for native leaf rendering. */
-export function kindJsonSchema(kind: Kind): JsonSchema {
-	const common = { title: kind.label, description: kind.help };
-	const object = (fields: Readonly<Record<string, Kind>>, rest?: Kind): JsonSchema => {
+export function kind_json_schema(kind: Kind): JsonSchema {
+	const common = {
+		...(kind.label === undefined ? {} : { title: kind.label }),
+		...(kind.help === undefined ? {} : { description: kind.help })
+	};
+	const object = (fields: Readonly<Record<string, Kind>>, rest?: Kind): Exclude<JsonSchema, boolean> => {
 		const shown = Object.entries(fields).filter(([, child]) => !child.hidden);
 		return {
 			...common,
 			type: 'object',
-			properties: Object.fromEntries(shown.map(([key, child]) => [key, kindJsonSchema(child)])),
+			properties: Object.fromEntries(shown.map(([key, child]) => [key, kind_json_schema(child)])),
 			required: shown.filter(([, child]) => !child.optional).map(([key]) => key),
-			...(rest === undefined ? {} : { additionalProperties: kindJsonSchema(rest) })
+			...(rest === undefined ? {} : { additionalProperties: kind_json_schema(rest) })
 		};
 	};
 	if (kind.many === true)
 		return {
 			...common,
 			type: 'array',
-			items: kindJsonSchema(item_kind(kind)),
-			minItems: kind.min_items,
-			maxItems: kind.max_items
+			items: kind_json_schema(item_kind(kind)),
+			...(kind.min_items === undefined ? {} : { minItems: kind.min_items }),
+			...(kind.max_items === undefined ? {} : { maxItems: kind.max_items })
 		};
-	switch (kind.kind) {
-		case 'object':
-			return object(kind.fields, kind.rest);
-		case 'record':
-			return { ...common, type: 'object', additionalProperties: kindJsonSchema(kind.of) };
-		case 'json': {
-			const shape = kind.shape === undefined ? undefined : kindJsonSchema(kind.shape);
-			return shape === undefined || typeof shape === 'boolean' ? common : { ...shape, ...common };
-		}
-		case 'union':
-			return 'of' in kind
-				? { ...common, anyOf: kind.of.map(kindJsonSchema) }
-				: {
-						...common,
-						anyOf: Object.entries(kind.arms).map(([tag, fields]) => {
-							const arm = object(fields);
-							return typeof arm === 'boolean'
-								? arm
-								: {
-										...arm,
-										properties: { ...arm.properties, [kind.by]: { type: 'string', const: tag } },
-										required: [...new Set([kind.by, ...(arm.required ?? [])])]
-									};
-						})
-					};
-		case 'text': {
-			const schema: JsonSchema = {
-				...common,
-				type: 'string',
-				format: kind.format,
-				maxLength: kind.max
-			};
-			return kind.many ? { ...common, type: 'array', items: schema } : schema;
-		}
-		case 'enum': {
-			const schema: JsonSchema = { ...common, type: 'string', enum: kind.values };
-			return kind.many ? { ...common, type: 'array', items: schema } : schema;
-		}
-		case 'state':
-			return { ...common, type: 'string', enum: Object.keys(kind.states) };
-		case 'int':
-		case 'number':
-		case 'decimal':
-			return {
-				...common,
-				type: kind.kind === 'int' ? 'integer' : 'number',
-				minimum: kind.min,
-				maximum: kind.max
-			};
-		case 'count':
-			return { ...common, type: 'integer' };
-		case 'money':
-			return { ...common, type: 'number', format: 'money' };
-		case 'sum':
-			return { ...common, type: 'number' };
-		case 'bool':
-			return { ...common, type: 'boolean' };
-		case 'date':
-			return { ...common, type: 'string', format: 'date' };
-		case 'instant':
-			return { ...common, type: 'string', format: 'date-time' };
-		case 'time':
-			return { ...common, type: 'string', format: 'time' };
-		case 'period': {
-			const date = kind.of === 'date';
-			const format = date ? 'date' : 'date-time';
-			const [from, to] = date ? ['from', 'to'] : ['start', 'end'];
-			return {
-				...common,
-				type: 'object',
-				format: 'period',
-				properties: {
-					[from]: { type: 'string', format },
-					[to]: { type: ['string', 'null'], format }
-				},
-				required: [from, to]
-			};
-		}
-		case 'point':
-			return {
-				...common,
-				type: 'object',
-				format: 'point',
-				properties: { lat: { type: 'number' }, lng: { type: 'number' } },
-				required: ['lat', 'lng']
-			};
-		case 'file':
-			return kind.many
-				? { ...common, type: 'array', items: { type: 'object' } }
-				: { ...common, type: 'object' };
-		case 'custom': {
-			const schema: JsonSchema = { ...common, 'x-norbital': { datatype: kind.of } };
-			return kind.many ? { ...common, type: 'array', items: schema } : schema;
-		}
-		case 'vector':
-			return {
-				...common,
-				type: 'array',
-				items: { type: 'number' },
-				minItems: kind.dim,
-				maxItems: kind.dim
-			};
-		case 'ref':
-			return typeof kind.to === 'string'
-				? { ...common, type: 'string' }
-				: { ...common, type: 'object' };
-		case 'currency':
-			return { ...common, type: 'string', format: 'currency' };
-		case 'seq':
-			return { ...common, type: 'string' };
-	}
+	return view_schema(kind, { common, object, project: kind_json_schema });
 }
 
 const identityPart = (value: Value | undefined): string | undefined => {
@@ -487,7 +381,7 @@ const identities = (rows: readonly Value[], fields: readonly string[]): string[]
 };
 
 /** Match unique explicit identities; ambiguous/missing identities retain positional list semantics. */
-export function pairDataRows(
+export function pair_data_rows(
 	before: readonly Value[],
 	value: readonly Value[],
 	key?: string | readonly string[]
@@ -533,17 +427,17 @@ const pointerTo = (pointer: string, key: string | number) =>
 	`${pointer}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
 
 /** Keyed record-list reordering is not a value change; all other list order remains meaningful. */
-export function dataChanged(
+export function data_changed(
 	before: Value | undefined,
 	value: Value | undefined,
 	arrayKeys: ArrayKeys = {},
 	pointer = ''
 ): boolean {
-	if (dataEqual(before, value)) return false;
+	if (data_equal(before, value)) return false;
 	if (before === undefined || value === undefined) return true;
 	if (Arr.isArray<Value>(before) && Arr.isArray<Value>(value))
-		return pairDataRows(before, value, arrayKeys[pointer]).some((pair) =>
-			dataChanged(
+		return pair_data_rows(before, value, arrayKeys[pointer]).some((pair) =>
+			data_changed(
 				pair.before,
 				pair.value,
 				arrayKeys,
@@ -556,7 +450,7 @@ export function dataChanged(
 		old === undefined ||
 		next === undefined ||
 		[...new Set([...Object.keys(old), ...Object.keys(next)])].some((key) =>
-			dataChanged(
+			data_changed(
 				Object.hasOwn(old, key) ? old[key] : undefined,
 				Object.hasOwn(next, key) ? next[key] : undefined,
 				arrayKeys,

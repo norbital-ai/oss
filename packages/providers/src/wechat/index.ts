@@ -76,7 +76,7 @@ export function wechat(): ProviderDef {
 						en: 'Under Server Configuration: paste this URL, choose a Token, generate an EncodingAESKey, set Message Encryption to Safe Mode, then enable it.',
 						zh: '在服务器配置中：粘贴此 URL，设置 Token，生成 EncodingAESKey，将消息加解密方式设为安全模式，然后启用。'
 					},
-					copy: 'webhookUrl'
+					copy: 'webhook_url'
 				},
 				{
 					text: {
@@ -299,7 +299,7 @@ export function wechat(): ProviderDef {
 						});
 					}
 					// the API answers no id, and a retry of this message must name the same one
-					return { providerId: `wx-${m.id}` };
+					return { provider_id: `wx-${m.id}` };
 				}),
 				typing: (to: string, on: boolean) =>
 					custom('typing', { touser: to, command: on ? 'Typing' : 'CancelTyping' }),
@@ -424,7 +424,7 @@ export function wechatMessage(xml: string): { message: Obj; media: WechatMedia |
 		message: {
 			id,
 			thread: from,
-			sentAt: new Date(at * 1000).toISOString(),
+			sent_at: new Date(at * 1000).toISOString(),
 			from: { handle: from, name: null },
 			text:
 				type === 'location'
@@ -437,7 +437,7 @@ export function wechatMessage(xml: string): { message: Obj; media: WechatMedia |
 						: (xmlField(xml, 'Content') ?? ''),
 			group: false,
 			invocation: 'direct',
-			replyTo: null,
+			reply_to: null,
 			attachments: media === null ? [] : [{ name: media.name, mime, bytes: 0 }]
 		}
 	};

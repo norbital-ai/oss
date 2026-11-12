@@ -4,10 +4,8 @@ import { fileURLToPath } from 'node:url';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Console, Effect, FileSystem } from 'effect';
-import { StoreError, checksumOf, readLock } from '@norbital-ai/store';
-import { logNativeUpgrade, logNativeValidation } from '../../store/src/log/ddl.ts';
-import { logSnapshot } from '../../store/src/log/spec.ts';
-import { auditLogSpec } from '../src/node/audit-schema.ts';
+import { StoreError, checksum_of, log_ddl, log_snapshot, read_lock } from '@norbital-ai/store';
+import { audit_log_spec } from '../src/node/audit-schema.ts';
 
 const prepareOnly = process.argv.includes('--prepare'),
 	write = process.argv.includes('--write');
@@ -17,25 +15,22 @@ const program = Effect.gen(function* () {
 		const directory = fileURLToPath(
 			new URL(`../src/node/audit/${scoped ? 'scoped' : 'standalone'}/`, import.meta.url)
 		);
-		const spec = auditLogSpec(scoped);
+		const spec = audit_log_spec(scoped);
 		if (prepareOnly) {
 			const source = [
 				[
-					'0002_declaration.sql',
-					`-- step declared_log (validating)\n-- hazard: brief metadata locks; new writes are checked immediately; existing rows validate in the next transaction.\n${(yield* logNativeUpgrade(spec)).join(';\n')};\n`
+					'0001_initial.sql',
+					// The extension prerequisite (first two statements) runs before every replay.
+					`-- step initial_log (additive)\n${(yield* log_ddl(spec)).slice(2).join(';\n')};\n`
 				],
-				[
-					'0003_validation.sql',
-					`-- step validate_log (validating)\n-- hazard: scans existing records with a lock that permits ordinary reads and writes.\n${(yield* logNativeValidation(spec)).join(';\n')};\n`
-				],
-				['snapshot.json', logSnapshot(spec)]
+				['snapshot.json', log_snapshot(spec)]
 			] as const;
 			for (const [name, text] of source) {
 				const file = join(directory, name);
 				if (yield* fs.exists(file)) {
 					if ((yield* fs.readFileString(file)) !== text)
 						return yield* StoreError.of(
-							'migrationChanged',
+							'migration_changed',
 							'admission',
 							`${file}: source already exists; add a new migration instead of rewriting it`
 						);
@@ -51,19 +46,19 @@ const program = Effect.gen(function* () {
 		);
 		const lockFile = join(directory, 'migrations.lock.json');
 		if (yield* fs.exists(lockFile)) {
-			const previous = yield* readLock(yield* fs.readFileString(lockFile));
+			const previous = yield* read_lock(yield* fs.readFileString(lockFile));
 			for (const [name, checksum] of Object.entries(previous.files))
-				if (checksumOf(files.find((file) => file.name === name) ?? { name, sql: '' }) !== checksum)
+				if (checksum_of(files.find((file) => file.name === name) ?? { name, sql: '' }) !== checksum)
 					return yield* StoreError.of(
-						'migrationChanged',
+						'migration_changed',
 						'admission',
 						`${name}: committed log SQL is immutable`
 					);
 		}
-		const { auditMigrationProof } = yield* Effect.promise(
+		const { audit_migration_proof } = yield* Effect.promise(
 			() => import('../src/node/audit-migrations.ts')
 		);
-		const proof = yield* auditMigrationProof(
+		const proof = yield* audit_migration_proof(
 			spec,
 			files,
 			yield* fs.readFileString(join(directory, 'snapshot.json'))
@@ -78,7 +73,7 @@ const program = Effect.gen(function* () {
 			(yield* fs.readFileString(join(directory, 'physical.json'))) !== proof.physical
 		)
 			return yield* StoreError.of(
-				'migrationChanged',
+				'migration_changed',
 				'admission',
 				'log native proofs differ; run audit-migrations.ts --write'
 			);

@@ -18,7 +18,7 @@ Several named numbers typed in one segmented field (feet and inches, a blood pre
 	export type NumberTupleProps = {
 		segments: readonly NumberTupleSegment[];
 		value: NumberTupleValue;
-		onChange(next: NumberTupleValue): void;
+		on_change(next: NumberTupleValue): void;
 		/** Shows the numbers as copyable text; an enclosing readonly form sets it. */
 		readonly?: boolean;
 		disabled?: boolean;
@@ -28,7 +28,7 @@ Several named numbers typed in one segmented field (feet and inches, a blood pre
 		id?: string;
 	};
 	/** Splits pasted or typed text on the delimiters a person puts between numbers. */
-	export const splitNumbers = (text: string): readonly string[] =>
+	export const split_numbers = (text: string): readonly string[] =>
 		text
 			.replaceAll(/[;,·|/\t]/gu, ' ')
 			.split(/\s+/u)
@@ -45,20 +45,20 @@ Several named numbers typed in one segmented field (feet and inches, a blood pre
 	 */
 	import { Inline } from '../layout/index.js';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
-	import { cn, uiText, useControls } from '../primitives/utils.js';
+	import { cn, ui_text, use_controls } from '../primitives/utils.js';
 
 	let {
 		segments,
 		value,
-		onChange,
+		on_change,
 		readonly,
 		disabled: ownDisabled,
 		invalid = false,
 		class: className,
 		id
 	}: NumberTupleProps = $props();
-	const controls = useControls();
-	const t = uiText();
+	const controls = use_controls();
+	const t = ui_text();
 	const disabled = $derived(ownDisabled ?? controls.disabled);
 
 	let cells: (HTMLInputElement | null)[] = $state([]);
@@ -75,12 +75,14 @@ Several named numbers typed in one segmented field (feet and inches, a blood pre
 	}
 	/** Typed input, delimiter included: a keyboard that inserts text rather than sending a keydown (a phone, an IME) still walks the cells. */
 	function input(index: number, raw: string): void {
-		const name = segments[index]!.name;
+		const segment = segments[index];
+		if (segment === undefined) return;
+		const name = segment.name;
 		if (!/[;,·|/\s]/u.test(raw)) {
 			drafts = { ...drafts, [name]: raw };
-			return onChange({ ...value, [name]: parse(raw) });
+			return on_change({ ...value, [name]: parse(raw) });
 		}
-		const tokens = splitNumbers(raw);
+		const tokens = split_numbers(raw);
 		const next: Record<string, number | null> = { ...value },
 			nextDrafts = { ...drafts, [name]: '' };
 		for (const [offset, token] of tokens.entries()) {
@@ -92,7 +94,7 @@ Several named numbers typed in one segmented field (feet and inches, a blood pre
 		drafts = nextDrafts;
 		// the draft may not have changed (`62.4` then `62.4 `), so the cell is written directly
 		if (cells[index]) cells[index].value = nextDrafts[name] ?? '';
-		onChange(next);
+		on_change(next);
 		focus(Math.min(segments.length - 1, index + Math.max(1, tokens.length)));
 	}
 	function keydown(index: number, e: KeyboardEvent & { currentTarget: HTMLInputElement }): void {

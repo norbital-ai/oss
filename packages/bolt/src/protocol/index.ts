@@ -18,13 +18,13 @@ export {
 	LayerRequestSchema,
 	READ_LIMIT,
 	ReadRequestSchema,
-	decodeReadRequest,
-	dynamicRead,
+	decode_read_request,
+	dynamic_read,
 	type DynamicRead,
 	type LayerRequestJson,
 	type ReadRequestJson
 } from './read-request.ts';
-export { MIME, clientPage, type ClientPage } from './static.ts';
+export { MIME, client_page, type ClientPage } from './static.ts';
 
 /** `POST /__bolt/q`: reads, each `{ m, a }` as the guest names it. */
 export type QueryRequest = S.QBody;

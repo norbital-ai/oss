@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { expect } from '@effect/vitest';
 import { Effect, Layer, Schema } from 'effect';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, json, routeFixture } from './support/route-fixture.ts';
+import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { layer, TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
@@ -27,10 +27,9 @@ const manifest = {
 	},
 	integrations: {},
 	teams: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	policies: {
 		ops: {
@@ -43,7 +42,8 @@ const manifest = {
 		read: {
 			description: 'Reads a stored file',
 			policies: ['ops'],
-			input: { ref: { kind: 'json' }, how: { kind: 'text' } }
+			input: { ref: { kind: 'json' }, how: { kind: 'text' } },
+			output: { kind: 'json' }
 		}
 	},
 	needs: []
@@ -65,8 +65,8 @@ const read = (name: string, mime: string, how: string) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace,
-				route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>()),
-				admin = t.as(t.admin).authority;
+				route = yield* route_fixture(yield* Effect.context<TestWorkspace | WorkspaceServices>()),
+				admin = (yield* t.as(t.admin)).authority;
 			const up = yield* Schema.decodeUnknownEffect(
 				Schema.Struct({
 					id: Schema.String,
@@ -91,18 +91,17 @@ const read = (name: string, mime: string, how: string) =>
 					)
 				)
 			);
-			yield* actReply(route, admin, {
-				callable: 'docs.create',
-				input: [{ title: name, file: up }],
-				issuedAt: t.clock.now()
+			yield* act_reply(route, admin, {
+				acts: { 'docs.create': [{ title: name, file: up }] },
+				issued_at: t.clock.now()
 			});
 			const id = uuidv7(Date.parse(t.clock.now()));
-			yield* actReply(route, t.as(t.member(['ops'])).authority, {
-				callable: 'start',
+			yield* act_reply(route, (yield* t.as(t.member(['ops']))).authority, {
+				callable: 'run',
 				input: { automation: 'read', input: { ref: up, how }, id },
-				issuedAt: t.clock.now()
+				issued_at: t.clock.now()
 			});
-			yield* t.runDue();
+			yield* t.run_due();
 			const [run] = yield* t.db.rows(
 				Schema.Struct({ state: Schema.String, output: Schema.Json, error: Schema.Json }),
 				{ text: 'SELECT state, output, error FROM sys_run WHERE id = $1', params: [id] }
@@ -131,7 +130,7 @@ layer(Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, gues
 						sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
 						pdq: expect.stringMatching(/^[0-9a-f]{64}$/),
 						exif: {
-							takenAt: expect.stringMatching(/^2026-07-0[34]T/),
+							taken_at: expect.stringMatching(/^2026-07-0[34]T/),
 							gps: { lat: expect.closeTo(1.2917, 3), lng: expect.closeTo(103.85, 3) },
 							software: 'Adobe Photoshop 25.0',
 							make: 'Acme',

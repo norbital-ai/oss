@@ -25,7 +25,7 @@ The built-in `money` custom field's renderer: the amount box with its currency a
 {#if view.mode === 'edit'}
 	<MoneyInput
 		value={view.value}
-		onChange={view.onChange}
+		on_change={view.on_change}
 		{currency}
 		scale={kind.scale}
 		id={view.id}

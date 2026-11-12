@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber } from 'effect';
-import { environmentLabel, recordsOf, withRecords, type NavNode } from '../src/shell/nav.ts';
+import { environment_label, records_of, with_records, type NavNode } from '../src/shell/nav.ts';
 import {
 	pageHits,
 	recordFinder,
@@ -19,7 +19,7 @@ import {
 describe('environment badge', () => {
 	it('hides production and an unset environment, reads development as local, shows any other name', () => {
 		expect(
-			[undefined, '', ' production ', 'development', 'staging', 'preview-7'].map(environmentLabel)
+			[undefined, '', ' production ', 'development', 'staging', 'preview-7'].map(environment_label)
 		).toEqual([null, null, null, 'local', 'staging', 'preview-7']);
 	});
 });
@@ -29,14 +29,14 @@ describe('record-sheet stack', () => {
 		const url = new URL(
 			'https://x.example/app/sales?tab=1&record=orders/o1&record=bad&record=customers/c9'
 		);
-		expect(recordsOf(url)).toEqual([
+		expect(records_of(url)).toEqual([
 			{ model: 'orders', id: 'o1' },
 			{ model: 'customers', id: 'c9' }
 		]);
-		const closed = withRecords(url, 1);
+		const closed = with_records(url, 1);
 		expect(closed.searchParams.getAll('record')).toEqual(['orders/o1']);
 		expect(closed.searchParams.get('tab')).toBe('1');
-		expect(withRecords(url, 0).searchParams.has('record')).toBe(false);
+		expect(with_records(url, 0).searchParams.has('record')).toBe(false);
 	});
 });
 
@@ -96,7 +96,15 @@ describe('finder', () => {
 			scope: { kind: 'model', model: 'customers' },
 			query: 'Acme & Sons'
 		});
-		expect(scopeQuery(scopes, '/customers/Acme West')).toMatchObject({ query: 'Acme West' });
+		expect(scopeQuery(scopes, '/customers/Acme West')).toEqual({
+			explicit: true,
+			scope: undefined,
+			query: 'customers/Acme West'
+		});
+		expect(scopeQuery(scopes, '/customers Acme/West')).toMatchObject({
+			scope: { kind: 'model', model: 'customers' },
+			query: 'Acme/West'
+		});
 		expect(scopeQuery(scopes, '/unknown Acme').scope).toBeUndefined();
 		expect(scopeSuggestions(scopes, 'customer').map((scope) => scope.command)).toEqual([
 			'customers'
@@ -107,6 +115,10 @@ describe('finder', () => {
 			expect(scopedPages(app, 'quotes').map((hit) => hit.label)).toEqual(['Quotes']);
 		expect(scopeQuery(scopes, '/ops/jobs').scope).toBeUndefined();
 		expect(scopeQuery(scopes, '/ops/jobs ').scope?.kind).toBe('app');
+		expect(scopeQuery(scopes, '/ops/jobs Board')).toMatchObject({
+			scope: { kind: 'app', command: 'ops/jobs' },
+			query: 'Board'
+		});
 	});
 
 	it.effect(
@@ -140,6 +152,12 @@ describe('finder', () => {
 				).toBe('[@Sales](/app/sales/deals) ');
 				yield* recordMentions(catalog, read, 'notes whatever', (key) => key, { nav });
 				yield* recordMentions(catalog, read, 'missing whatever', (key) => key, { nav });
+				for (const [query, prefix] of [
+					['customers/Acme West', '@'],
+					['/customers/Acme West', '@'],
+					['customers/Acme West', '/']
+				] as const)
+					expect(yield* recordMentions(catalog, read, query, (key) => key, { nav, prefix })).toEqual([]);
 				expect(requests).toHaveLength(2);
 			})
 	);
@@ -237,10 +255,10 @@ describe('finder', () => {
 				insert: '[@notes](/?find=notes) '
 			});
 			expect(models.find((item) => item.id === 'notes')?.drill).toBeUndefined();
-			expect(yield* recordMentions(catalog, read, 'notes/Acme', (key) => key)).toHaveLength(1);
+			expect(yield* recordMentions(catalog, read, '/notes Acme', (key) => key)).toHaveLength(1);
 			expect(requests).toEqual([]);
 			const direct = yield* searchRecords(catalog, read, 'customers', 'Acme', (key) => key);
-			const mentions = yield* recordMentions(catalog, read, 'customers/Acme', (key) => key);
+			const mentions = yield* recordMentions(catalog, read, '/customers Acme', (key) => key);
 			expect(mentions[1]).toMatchObject({
 				label: direct[0]?.label,
 				insert: '[@Acme](customers/c1) '

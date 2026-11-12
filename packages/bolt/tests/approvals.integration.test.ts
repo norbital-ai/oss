@@ -4,18 +4,32 @@ import { Effect, Layer, Option, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { compileAuthority } from '../src/engine/access/authority.ts';
-import { pruneHistory } from '../src/engine/query/history.ts';
-import { Approvals, RunHandlers, Writes } from '../src/engine/services.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
+import { prune_history } from '../src/engine/query/history.ts';
+import { Approvals, Writes } from '../src/engine/services.ts';
 import { Files } from '../src/engine/ports.ts';
 import { storeFile } from '../src/engine/facilities.ts';
-import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { NativeReadRow, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
-import { dynamicRead } from '../src/protocol/read-request.ts';
-import { label, labelExpression } from '@norbital-ai/std/label';
+import { dynamic_read } from '../src/protocol/read-request.ts';
+import { label, label_expression } from '@norbital-ai/std/label';
 import { inboxRequests, openRequests } from '../src/engine/approvals/inbox.ts';
 
+const required = <A>(value: A | undefined): A => {
+ if (value === undefined) throw new Error('Missing approval fixture value.');
+ return value;
+};
+const ApprovalSearch = Schema.Struct({
+	approval_request: Schema.Struct({
+		rows: Schema.Array(
+			Schema.StructWithRest(
+				Schema.Struct({ ...NativeReadRow.schema.fields, collection_name: Schema.String }),
+				NativeReadRow.records
+			)
+		)
+	})
+});
 const requesterId = '0199a000-0000-7000-8000-000000000001',
 	managerId = '0199a000-0000-7000-8000-000000000002',
 	financeId = '0199a000-0000-7000-8000-000000000003';
@@ -50,14 +64,13 @@ const manifest: EngineManifest = {
 			outputs: { default: { expenses: { fields: 'all' } } },
 			create: {
 				columns: { expenses: ['name', 'amount', 'manager', 'receipt'], 'expenses.lines': ['name'] },
-				transform: true
+				transform: true, effect: true
 			},
 			update: {
 				columns: { expenses: ['name', 'amount', 'manager', 'receipt'], 'expenses.lines': ['name'] },
-				transform: true
+				transform: true, effect: true
 			},
-			delete: {},
-			notify: true
+			delete: { effect: true }
 		},
 		lines: {
 			outputs: { default: { lines: { fields: 'all' } } },
@@ -86,7 +99,7 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: { requesters: ['requester'], managers: ['reviewer'], finance: ['reviewer'] }
+	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] }, finance: { policies: ['reviewer'] } }
 };
 const source = `import { Decimal } from '@norbital-ai/std/decimal';
 const managerStep = (ids) => ({
@@ -97,11 +110,16 @@ const managerStep = (ids) => ({
 });
 const financeStep = { name: 'Finance', teams: ['finance'] };
 export default { model: { expenses: { bodies: {
-	create: function* (rows) { return rows.map((row) => ({...row,name:row.name.trim()})); },
-	update: function* (changes) { return changes.map(({before,set}) => ({...set,name:(set.name ?? before.name).trim()})); },
-	notify: function* (event) { return [{title:event.kind+':'+(event.move ?? event.action),to:[{user:'${managerId}'}]}]; }
+	create: function* (changes) { return changes.map(({set}) => ({...set,name:set.name.trim()})); },
+	update: function* (changes) { return changes.map(({set,after}) => ({...set,name:after.name.trim()})); },
+	effect: {
+        create: function*(_changes,ctx){ yield* ctx.notify({title:ctx.event.kind+':'+(ctx.event.move ?? 'create'),to:[{user:'${managerId}'}]}); },
+        update: function*(_changes,ctx){ yield* ctx.notify({title:ctx.event.kind+':'+(ctx.event.move ?? 'update'),to:[{user:'${managerId}'}]}); },
+        delete: function*(_changes,ctx){ yield* ctx.notify({title:ctx.event.kind+':'+(ctx.event.move ?? 'delete'),to:[{user:'${managerId}'}]}); }
+    }
 } } }, policy: { requester: { grants: { expenses: {
-	create: { verdict: function* (rows, ctx) {
+	create: { verdict: function* (changes, ctx) {
+        const rows = changes.map(({after}) => after);
 		return ctx.approve({
 			steps: [
 				managerStep(rows.map((row) => row.manager)),
@@ -112,11 +130,12 @@ export default { model: { expenses: { bodies: {
 	} },
 	update: { verdict: function* (changes, ctx) {
 		if (!changes.every(({ before }) => before.amount instanceof Decimal)) throw new Error('The stored amount must be a Decimal');
+        if (changes.some(({ before, after, set }) => before.name === 'Checkpoint tree' && (before.lines[0]?.name !== 'Original' || !['Proposed', 'Revised'].includes(after.lines[0]?.name) || !set.lines))) throw new Error('Resubmission must retain the original child checkpoint and final proposal.');
 		const material = changes.filter(({ set }) => set.amount !== undefined || set.lines !== undefined || set.receipt !== undefined);
 		return material.length === 0 ? ctx.allow() : ctx.approve({
 			steps: [
-				managerStep(material.map(({ before, set }) => set.manager ?? before.manager)),
-				...(material.some(({ before, set }) => Decimal.of(String(set.amount ?? before.amount)).gte(Decimal.of(100)))
+				managerStep(material.map(({ after }) => after.manager)),
+				...(material.some(({ after }) => Decimal.of(String(after.amount)).gte(Decimal.of(100)))
 					? [financeStep] : [])
 			]
 		});
@@ -143,17 +162,16 @@ const workspace = Layer.unwrap(
 const fixture = Effect.gen(function* () {
 	const t = yield* TestWorkspace,
 		writes = yield* Writes,
-		approvals = yield* Approvals,
-		handlers = yield* RunHandlers;
+		approvals = yield* Approvals;
 	yield* t.db.write({
 		text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Requester','staff','requesters'),($2,'Manager','staff','managers'),($3,'Finance','staff','finance') ON CONFLICT (id) DO NOTHING",
 		params: [requesterId, managerId, financeId]
 	});
-	const as = (id: string, team: string, policies: readonly string[]): Authority =>
-		compileAuthority(manifest, { actor: member(id, team), policies, admin: false }, id);
-	const requester = as(requesterId, 'requesters', ['requester']),
-		manager = as(managerId, 'managers', ['reviewer']),
-		finance = as(financeId, 'finance', ['reviewer']);
+	const as = (id: string, team: string, policies: readonly string[]) =>
+		compile_authority(manifest, { actor: member(id, team), policies, admin: false }, id);
+	const requester = yield* as(requesterId, 'requesters', ['requester']),
+		manager = yield* as(managerId, 'managers', ['reviewer']),
+		finance = yield* as(financeId, 'finance', ['reviewer']);
 	const act = (verb: 'create' | 'update', input: Json, authority = requester) => {
 		const key = randomUUID(),
 			now = t.clock.now();
@@ -170,13 +188,13 @@ const fixture = Effect.gen(function* () {
 		});
 	};
 	const decide = (
-		requestId: string,
+		request_id: string,
 		decision: 'approve' | 'reject' | 'request_changes',
 		authority = manager,
 		reason?: string
 	) =>
 		approvals.decide({
-			requestId,
+			request_id,
 			decision,
 			authority,
 			now: t.clock.now(),
@@ -199,31 +217,22 @@ const fixture = Effect.gen(function* () {
 			params: [id]
 		});
 	const search = (query: string, authority = manager) =>
-		t
-			.as(authority)
-			.query(
-				dynamicRead({
-					approval_request: { search: query, fields: ['collection_name'], limit: 20 }
-				})
-			)
-			.pipe(Effect.map((answer) => answer.approval_request?.rows ?? []));
+		t.as(authority).pipe(
+				Effect.flatMap((caller) =>
+					caller.query(
+						dynamic_read({
+							approval_request: { search: query, fields: ['collection_name'], limit: 20 }
+						})
+					)
+				),
+				Effect.flatMap(Schema.decodeUnknownEffect(ApprovalSearch)),
+				Effect.map((answer) => answer.approval_request.rows)
+			);
 	const notices = () =>
 		Effect.gen(function* () {
-			const run = yield* handlers.handler('bolt.notify');
-			if (Option.isNone(run)) throw new Error('Missing notify handler');
-			const pending = yield* t.db.rows(Schema.Struct({ id: Schema.String, input: Schema.Json }), {
-				text: "SELECT id,input FROM sys_run WHERE automation='bolt.notify' AND state='queued'",
-				params: []
-			});
-			for (const current of pending) {
-				yield* run.value(current.input, { id: current.id, starter: null });
-				yield* t.db.write({
-					text: "UPDATE sys_run SET state='completed' WHERE id=$1",
-					params: [current.id]
-				});
-			}
+			yield* t.run_due();
 			return yield* t.db.rows(Schema.Struct({ title: Schema.String }), {
-				text: 'SELECT title FROM sys_notification ORDER BY id',
+				text: "SELECT title FROM sys_notification WHERE title LIKE 'approval:%' OR title LIKE 'write:%' ORDER BY id",
 				params: []
 			});
 		});
@@ -250,7 +259,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 			if (created.kind !== 'pending_approval') throw new Error(JSON.stringify(created));
 			const id = created.records[0]?.id;
 			if (id === undefined) throw new Error('Missing expense');
-			expect(yield* f.decide(created.requestId, 'approve')).toMatchObject({ status: 'Approved' });
+			expect(yield* f.decide(created.request_id, 'approve')).toMatchObject({ status: 'Approved' });
 			const proposed = (yield* f.act('update', [{ target: id, set: { receipt: nextFile } }]))
 				.outcome;
 			if (proposed.kind !== 'pending_approval') throw new Error(JSON.stringify(proposed));
@@ -261,7 +270,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				});
 			expect(Option.getOrThrow(yield* stored()).id).toBe(nextFile.id);
 			expect(
-				yield* f.decide(proposed.requestId, 'reject', f.manager, 'Restore original receipt')
+				yield* f.decide(proposed.request_id, 'reject', f.manager, 'Restore original receipt')
 			).toMatchObject({ status: 'Rejected' });
 			const restored = Option.getOrThrow(yield* stored());
 			expect(restored.id).toBe(oldFile.id);
@@ -277,7 +286,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				text: "INSERT INTO sys_user (id, name, kind, team) VALUES ($1, 'Former reviewer', 'staff', 'finance')",
 				params: [id]
 			});
-			const previous = compileAuthority(
+			const previous = yield* compile_authority(
 				manifest,
 				{ actor: member(id, 'finance'), policies: ['reviewer'], admin: false },
 				id
@@ -286,17 +295,17 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				{ name: 'Team snapshot', amount: 150, manager: managerId }
 			])).outcome;
 			if (submitted.kind !== 'pending_approval') throw new Error('Missing approval');
-			yield* f.decide(submitted.requestId, 'approve');
-			const waiting = yield* f.request(submitted.requestId);
+			yield* f.decide(submitted.request_id, 'approve');
+			const waiting = yield* f.request(submitted.request_id);
 			yield* f.t.db.write({
 				text: "UPDATE sys_user SET team = 'managers' WHERE id = $1",
 				params: [id]
 			});
-			expect(yield* f.decide(submitted.requestId, 'approve', previous)).toMatchObject({
+			expect(yield* f.decide(submitted.request_id, 'approve', previous)).toMatchObject({
 				kind: 'refused',
 				code: 'forbidden'
 			});
-			expect(yield* f.request(submitted.requestId)).toEqual(waiting);
+			expect(yield* f.request(submitted.request_id)).toEqual(waiting);
 		})
 	);
 	it.effect('rejecting requested changes immediately restores the checkpoint', () =>
@@ -305,17 +314,17 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 			const original = (yield* f.act(
 				'create',
 				[{ name: 'Original', amount: 25, manager: managerId }],
-				f.t.as(f.t.admin).authority
+				(yield* f.t.as(f.t.admin)).authority
 			)).outcome;
 			const id = original.kind === 'committed' ? original.records[0]?.id : undefined;
 			if (id === undefined) throw new Error('Missing original row');
 			const submitted = (yield* f.act('update', [{ target: id, set: { amount: 50 } }])).outcome;
 			if (submitted.kind !== 'pending_approval') throw new Error('Missing approval');
 			expect(
-				yield* f.decide(submitted.requestId, 'request_changes', f.manager, 'Please review')
+				yield* f.decide(submitted.request_id, 'request_changes', f.manager, 'Please review')
 			).toMatchObject({ kind: 'decided', status: 'ChangesRequested' });
 			expect(
-				yield* f.decide(submitted.requestId, 'reject', f.manager, 'Restore original')
+				yield* f.decide(submitted.request_id, 'reject', f.manager, 'Restore original')
 			).toMatchObject({ kind: 'decided', status: 'Rejected' });
 			expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(25);
 		})
@@ -324,19 +333,19 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 		Effect.gen(function* () {
 			const f = yield* fixture;
 			for (const [name, actor] of [
-				['Override by admin', f.t.as(f.t.admin).authority],
+				['Override by admin', (yield* f.t.as(f.t.admin)).authority],
 				['Override by team', f.finance]
 			] as const) {
 				const submitted = (yield* f.act('create', [{ name, amount: 50, manager: managerId }]))
 					.outcome;
 				if (submitted.kind !== 'pending_approval') throw new Error('Missing approval');
-				expect(yield* f.decide(submitted.requestId, 'approve', actor)).toMatchObject({
+				expect(yield* f.decide(submitted.request_id, 'approve', actor)).toMatchObject({
 					kind: 'refused'
 				});
 				expect(
-					yield* f.decide(submitted.requestId, 'approve', actor, 'Override authorised')
+					yield* f.decide(submitted.request_id, 'approve', actor, 'Override authorised')
 				).toMatchObject({ kind: 'decided', status: 'Superseded' });
-				expect(yield* f.request(submitted.requestId)).toMatchObject({ state: 'Superseded' });
+				expect(yield* f.request(submitted.request_id)).toMatchObject({ state: 'Superseded' });
 			}
 		})
 	);
@@ -350,7 +359,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Self review requester','staff','requesters')",
 					params: [id]
 				});
-				const requester = compileAuthority(
+				const requester = yield* compile_authority(
 					manifest,
 					{
 						actor: member(id, 'requesters'),
@@ -368,8 +377,8 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					requester
 				)).outcome;
 				if (submitted.kind !== 'pending_approval') throw new Error(JSON.stringify(submitted));
-				const requestId = submitted.requestId;
-				expect(yield* f.decide(requestId, 'approve', requester)).toMatchObject({
+				const request_id = submitted.request_id;
+				expect(yield* f.decide(request_id, 'approve', requester)).toMatchObject({
 					kind: 'refused',
 					code: 'forbidden'
 				});
@@ -378,7 +387,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						'update',
 						[
 							{
-								target: submitted.records[0]!.id,
+								target: required(submitted.records[0]).id,
 								set: { name: 'Self edit while pending' }
 							}
 						],
@@ -389,7 +398,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					text: 'UPDATE sys_user SET admin=true WHERE id=$1',
 					params: [id]
 				});
-				const admin = compileAuthority(
+				const admin = yield* compile_authority(
 					manifest,
 					{
 						actor: { ...member(id, 'requesters'), admin: true },
@@ -400,34 +409,30 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				);
 				const preview = { ...f.manager, preview: { by: id, team: null } };
 				const approvals = yield* Approvals;
-				// the requester's own identity is offered withdraw alone; a previewer nothing
-				for (const [auth, moves] of [
-					[admin, [WITHDRAW]],
-					[preview, []]
-				] as const) {
-					expect(yield* f.decide(requestId, 'approve', auth, 'Override')).toMatchObject({
+				for (const auth of [admin, preview]) {
+					expect(yield* f.decide(request_id, 'approve', auth, 'Override')).toMatchObject({
 						kind: 'refused',
 						code: 'forbidden'
 					});
 					expect(
-						Option.getOrThrow(yield* approvals.view(requestId, auth, () => Effect.succeed(true)))
+						Option.getOrThrow(yield* approvals.view(request_id, auth, () => Effect.succeed(true)))
 							.moves
 					).toEqual(moves);
 				}
 				const [open] = yield* f.t.db.read([openRequests]);
 				expect(inboxRequests(open?.rows ?? [], admin)).toContainEqual(
 					expect.objectContaining({
-						id: requestId,
+						id: request_id,
 						mine: true,
 						canDecide: false,
 						canSupersede: false,
 						moves: [WITHDRAW]
 					})
 				);
-				expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending', step: 0 });
+				expect(yield* f.request(request_id)).toMatchObject({ state: 'Pending', step: 0 });
 				for (const record of submitted.records)
 					expect(Option.getOrThrow(yield* f.row(record.id)).amount).toBe(50);
-				expect(yield* f.decide(requestId, 'approve')).toMatchObject({
+				expect(yield* f.decide(request_id, 'approve')).toMatchObject({
 					kind: 'decided',
 					status: 'Approved'
 				});
@@ -440,7 +445,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					requester
 				)).outcome;
 				if (updated.kind !== 'pending_approval') throw new Error(JSON.stringify(updated));
-				expect(yield* f.decide(updated.requestId, 'approve', admin, 'Self override')).toMatchObject(
+				expect(yield* f.decide(updated.request_id, 'approve', admin, 'Self override')).toMatchObject(
 					{
 						kind: 'refused',
 						code: 'forbidden'
@@ -448,7 +453,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				);
 				for (const record of updated.records)
 					expect(Option.getOrThrow(yield* f.row(record.id)).amount).toBe(60);
-				expect(yield* f.decide(updated.requestId, 'approve')).toMatchObject({
+				expect(yield* f.decide(updated.request_id, 'approve')).toMatchObject({
 					kind: 'decided',
 					status: 'Approved'
 				});
@@ -462,7 +467,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Team requester','staff','requesters')",
 				params: [id]
 			});
-			const requester = compileAuthority(
+			const requester = yield* compile_authority(
 				manifest,
 				{
 					actor: member(id, 'requesters'),
@@ -477,17 +482,17 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				requester
 			)).outcome;
 			if (submitted.kind !== 'pending_approval') throw new Error(JSON.stringify(submitted));
-			yield* f.decide(submitted.requestId, 'approve');
+			yield* f.decide(submitted.request_id, 'approve');
 			yield* f.t.db.write({
 				text: "UPDATE sys_user SET team='finance' WHERE id=$1",
 				params: [id]
 			});
-			expect(yield* f.decide(submitted.requestId, 'approve', requester)).toMatchObject({
+			expect(yield* f.decide(submitted.request_id, 'approve', requester)).toMatchObject({
 				kind: 'refused',
 				code: 'forbidden'
 			});
-			expect(yield* f.request(submitted.requestId)).toMatchObject({ state: 'Pending', step: 1 });
-			expect(yield* f.decide(submitted.requestId, 'approve', f.finance)).toMatchObject({
+			expect(yield* f.request(submitted.request_id)).toMatchObject({ state: 'Pending', step: 1 });
+			expect(yield* f.decide(submitted.request_id, 'approve', f.finance)).toMatchObject({
 				kind: 'decided',
 				status: 'Approved'
 			});
@@ -496,7 +501,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 	it.effect('prevents self-review by a member who submitted through a linked envoy', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;
-			const envoy = compileAuthority(
+			const envoy = yield* compile_authority(
 				manifest,
 				{
 					actor: {
@@ -520,12 +525,12 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				envoy
 			)).outcome;
 			if (submitted.kind !== 'pending_approval') throw new Error(JSON.stringify(submitted));
-			expect(yield* f.decide(submitted.requestId, 'approve', f.manager)).toMatchObject({
+			expect(yield* f.decide(submitted.request_id, 'approve', f.manager)).toMatchObject({
 				kind: 'refused',
 				code: 'forbidden'
 			});
-			expect(yield* f.request(submitted.requestId)).toMatchObject({ state: 'Pending' });
-			expect(yield* f.decide(submitted.requestId, 'approve', f.finance)).toMatchObject({
+			expect(yield* f.request(submitted.request_id)).toMatchObject({ state: 'Pending' });
+			expect(yield* f.decide(submitted.request_id, 'approve', f.finance)).toMatchObject({
 				kind: 'decided',
 				status: 'Approved'
 			});
@@ -558,7 +563,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 			const created = (yield* f.act(
 				'create',
 				[{ name: 'Revised expense', amount: 50, manager: managerId }],
-				f.t.as(f.t.admin).authority
+				(yield* f.t.as(f.t.admin)).authority
 			)).outcome;
 			if (created.kind !== 'committed') throw new Error(JSON.stringify(created));
 			const id = created.records[0]?.id;
@@ -566,7 +571,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 			const proposed = (yield* f.act('update', [{ target: id, set: { amount: 150 } }])).outcome;
 			if (proposed.kind !== 'pending_approval') throw new Error(JSON.stringify(proposed));
 			yield* f.decide(
-				proposed.requestId,
+				proposed.request_id,
 				'request_changes',
 				f.manager,
 				'Restore the original amount'
@@ -575,19 +580,19 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 			if (resubmitted.kind !== 'pending_approval') throw new Error(JSON.stringify(resubmitted));
 			expect(resubmitted).toMatchObject({
 				kind: 'pending_approval',
-				requestId: proposed.requestId
+				request_id: proposed.request_id
 			});
 			expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(50);
-			expect(yield* f.request(proposed.requestId)).toMatchObject({ state: 'Pending', step: 0 });
-			expect(yield* f.decide(proposed.requestId, 'approve', f.requester)).toMatchObject({
+			expect(yield* f.request(proposed.request_id)).toMatchObject({ state: 'Pending', step: 0 });
+			expect(yield* f.decide(proposed.request_id, 'approve', f.requester)).toMatchObject({
 				kind: 'refused',
 				code: 'forbidden'
 			});
-			expect(yield* f.decide(proposed.requestId, 'approve')).toMatchObject({
+			expect(yield* f.decide(proposed.request_id, 'approve')).toMatchObject({
 				kind: 'decided',
 				status: 'Pending'
 			});
-			expect(yield* f.decide(proposed.requestId, 'approve', f.finance)).toMatchObject({
+			expect(yield* f.decide(proposed.request_id, 'approve', f.finance)).toMatchObject({
 				kind: 'decided',
 				status: 'Approved'
 			});
@@ -612,7 +617,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				'string([record.code, record.name].size())',
 				'string(1 / 0)'
 			]) {
-				const program = labelExpression(expression);
+				const program = label_expression(expression);
 				if ('error' in program) throw new Error(program.error);
 				const sql = program.sql(
 					(path) =>
@@ -638,7 +643,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					const original = (yield* f.act(
 						'create',
 						[{ name: 'Travel', amount: 50, manager: managerId }],
-						f.t.as(f.t.admin).authority
+						(yield* f.t.as(f.t.admin)).authority
 					)).outcome;
 					if (original.kind !== 'committed') throw new Error('Missing committed expense');
 					const record = original.records.find((row) => row.model === 'expenses');
@@ -651,19 +656,19 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						});
 					const proposed = (yield* f.act('update', [{ target: id, set: { amount: 150 } }])).outcome;
 					if (proposed.kind !== 'pending_approval') throw new Error('Missing approval');
-					yield* f.decide(proposed.requestId, 'request_changes', f.manager, 'Clarify');
-					yield* pruneHistory(f.t.db, 1);
+					yield* f.decide(proposed.request_id, 'request_changes', f.manager, 'Clarify');
+					yield* prune_history(f.t.db, 1);
 					expect(yield* checkpoint()).toBe(1);
 					expect(
 						(yield* f.act('update', [{ target: id, set: { amount: 151 } }])).outcome
-					).toMatchObject({ kind: 'pending_approval', requestId: proposed.requestId });
-					yield* pruneHistory(f.t.db, 1);
+					).toMatchObject({ kind: 'pending_approval', request_id: proposed.request_id });
+					yield* prune_history(f.t.db, 1);
 					expect(yield* checkpoint()).toBe(1);
 					expect(
-						yield* f.decide(proposed.requestId, 'reject', f.manager, 'Restore the checkpoint')
+						yield* f.decide(proposed.request_id, 'reject', f.manager, 'Restore the checkpoint')
 					).toMatchObject({ kind: 'decided', status: 'Rejected' });
 					expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(50);
-					expect(yield* pruneHistory(f.t.db, 1)).toBeGreaterThan(0);
+					expect(yield* prune_history(f.t.db, 1)).toBeGreaterThan(0);
 					expect(yield* checkpoint()).toBe(0);
 					const again = (yield* f.act('update', [{ target: id, set: { amount: 160 } }])).outcome;
 					if (again.kind !== 'pending_approval') throw new Error('Missing second approval');
@@ -672,10 +677,10 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						text: "DELETE FROM bolt_history WHERE collection='expenses' AND record=$1::uuid",
 						params: [id]
 					});
-					expect(yield* f.decide(again.requestId, 'reject', f.manager, 'Restore')).toMatchObject({
+					expect(yield* f.decide(again.request_id, 'reject', f.manager, 'Restore')).toMatchObject({
 						kind: 'refused'
 					});
-					expect(yield* f.request(again.requestId)).toMatchObject({ state: 'Pending' });
+					expect(yield* f.request(again.request_id)).toMatchObject({ state: 'Pending' });
 					expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(160);
 				})
 			)
@@ -699,15 +704,15 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					if (id === undefined) throw new Error('Missing expense');
 					expect(Option.getOrThrow(yield* f.row(id)).name).toBe('Travel');
 					expect(yield* f.search('Travel Manager')).toContainEqual({
-						id: result.outcome.requestId,
+						id: result.outcome.request_id,
 						collection_name: 'expenses',
 						$label: 'TRAVEL · Manager'
 					});
 					expect(yield* f.search(id)).toEqual([]);
 					expect(yield* f.search('150')).not.toContainEqual(
-						expect.objectContaining({ id: result.outcome.requestId })
+						expect.objectContaining({ id: result.outcome.request_id })
 					);
-					expect(yield* f.request(result.outcome.requestId)).toMatchObject({
+					expect(yield* f.request(result.outcome.request_id)).toMatchObject({
 						state: 'Pending',
 						step: 0,
 						route: {
@@ -721,18 +726,18 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						(yield* f.act('update', [{ target: id, set: { name: 'Not allowed' } }])).outcome.kind
 					).toBe('refused');
 					// a rejection needs its reason
-					expect(yield* f.decide(result.outcome.requestId, 'reject')).toMatchObject({
+					expect(yield* f.decide(result.outcome.request_id, 'reject')).toMatchObject({
 						kind: 'refused'
 					});
-					expect(yield* f.decide(result.outcome.requestId, 'approve', f.finance)).toMatchObject({
+					expect(yield* f.decide(result.outcome.request_id, 'approve', f.finance)).toMatchObject({
 						kind: 'refused',
 						code: 'forbidden'
 					});
-					expect(yield* f.decide(result.outcome.requestId, 'approve')).toMatchObject({
+					expect(yield* f.decide(result.outcome.request_id, 'approve')).toMatchObject({
 						kind: 'decided',
 						status: 'Pending'
 					});
-					expect(yield* f.decide(result.outcome.requestId, 'approve', f.finance)).toMatchObject({
+					expect(yield* f.decide(result.outcome.request_id, 'approve', f.finance)).toMatchObject({
 						kind: 'decided',
 						status: 'Approved'
 					});
@@ -750,23 +755,23 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					if (created.outcome.kind !== 'pending_approval')
 						throw new Error(JSON.stringify(created.outcome));
 					const id = created.outcome.records[0]?.id,
-						requestId = created.outcome.requestId;
+						request_id = created.outcome.request_id;
 					if (id === undefined) throw new Error('Missing expense');
-					yield* f.decide(requestId, 'approve');
-					yield* f.decide(requestId, 'request_changes', f.finance, 'Clarify');
+					yield* f.decide(request_id, 'approve');
+					yield* f.decide(request_id, 'request_changes', f.finance, 'Clarify');
 					expect(
 						(yield* f.act('update', [{ target: id, set: { name: '  Clarified  ' } }])).outcome
-					).toMatchObject({ kind: 'pending_approval', requestId });
+					).toMatchObject({ kind: 'pending_approval', request_id });
 					expect(Option.getOrThrow(yield* f.row(id)).name).toBe('Clarified');
 					expect(yield* f.search('Clarified Manager')).toContainEqual({
-						id: requestId,
+						id: request_id,
 						collection_name: 'expenses',
 						$label: 'CLARIFIED · Manager'
 					});
-					expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending', step: 1 });
-					yield* f.decide(requestId, 'request_changes', f.finance, 'Reduce');
+					expect(yield* f.request(request_id)).toMatchObject({ state: 'Pending', step: 1 });
+					yield* f.decide(request_id, 'request_changes', f.finance, 'Reduce');
 					yield* f.act('update', [{ target: id, set: { amount: 50 } }]);
-					expect(yield* f.request(requestId)).toMatchObject({
+					expect(yield* f.request(request_id)).toMatchObject({
 						state: 'Pending',
 						step: 0,
 						route: { steps: [{ name: 'Manager', users: [], teams: ['managers'] }] }
@@ -775,6 +780,39 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				})
 			)
 	);
+	it.effect('resubmission compares nested final values with the original child checkpoint', () =>
+  Effect.scoped(Effect.gen(function* () {
+   const f = yield* fixture;
+   const made = (yield* f.act('create', [{ name: 'Checkpoint tree', amount: 50, manager: managerId, lines: [{ name: 'Original' }] }], (yield* f.t.as(f.t.admin)).authority)).outcome;
+   if (made.kind !== 'committed') throw new Error('The baseline must commit.');
+   const root = made.records.find(({model}) => model === 'expenses'), child = made.records.find(({model}) => model === 'lines');
+   if (root === undefined || child === undefined) throw new Error('Both baseline records are required.');
+   const propose = (name: string) => f.act('update', [{ target: root.id, set: { lines: { update: [{ target: child.id, set: { name } }] } } }]);
+   const pending = (yield* propose('Proposed')).outcome;
+   if (pending.kind !== 'pending_approval') throw new Error('The nested edit must need review.');
+   yield* f.decide(pending.request_id, 'request_changes', f.manager, 'Revise the line');
+   expect((yield* propose('Revised')).outcome).toMatchObject({ kind: 'pending_approval', request_id: pending.request_id });
+   expect(yield* f.t.db.value(Schema.String, {text:'SELECT name FROM lines WHERE id=$1',params:[child.id]})).toBe('Revised');
+   expect(yield* f.decide(pending.request_id,'reject',f.manager,'Restore')).toMatchObject({status:'Rejected'});
+   expect(yield* f.t.db.value(Schema.String, {text:'SELECT name FROM lines WHERE id=$1',params:[child.id]})).toBe('Original');
+  }))
+ );
+ it.effect('a missing resubmission checkpoint conflicts while the proposal stays held', () =>
+  Effect.scoped(Effect.gen(function* () {
+   const f = yield* fixture;
+   const made = (yield* f.act('create', [{name:'Missing tree checkpoint',amount:50,manager:managerId}], (yield* f.t.as(f.t.admin)).authority)).outcome;
+   if(made.kind!=='committed')throw new Error('The baseline must commit.');
+   const root=made.records.find(({model})=>model==='expenses');
+   if(root===undefined)throw new Error('The baseline expense is required.');
+   const pending=(yield* f.act('update',[{target:root.id,set:{amount:150}}])).outcome;
+   if(pending.kind!=='pending_approval')throw new Error('The edit must need review.');
+   yield* f.decide(pending.request_id,'request_changes',f.manager,'Clarify');
+   yield* f.t.db.write({text:"DELETE FROM bolt_history WHERE collection='expenses' AND record=$1",params:[root.id]});
+   expect((yield* f.act('update',[{target:root.id,set:{amount:151}}])).outcome).toMatchObject({kind:'conflict'});
+   expect(yield* f.request(pending.request_id)).toMatchObject({state:'ChangesRequested'});
+   expect(Option.getOrThrow(yield* f.row(root.id)).amount).toBe(150);
+  }))
+ );
 	it.effect('held owned relation actions still require review on a same-value parent Save', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -789,7 +827,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 							lines: [{ name: 'First' }]
 						}
 					],
-					f.t.as(f.t.admin).authority
+					(yield* f.t.as(f.t.admin)).authority
 				)).outcome;
 				if (created.kind !== 'committed') throw new Error(JSON.stringify(created));
 				const id = created.records.find((row) => row.model === 'expenses')?.id;
@@ -806,24 +844,24 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					}
 				])).outcome;
 				if (proposed.kind !== 'pending_approval') throw new Error(JSON.stringify(proposed));
-				const requestId = proposed.requestId;
+				const request_id = proposed.request_id;
 				// relationship actions stay authored until this request resolves
 				const set = { lines: { update: [{ target: line, set: { name: 'First' } }] } };
 				expect(
-					yield* f.decide(requestId, 'request_changes', f.manager, 'Clarify the line')
+					yield* f.decide(request_id, 'request_changes', f.manager, 'Clarify the line')
 				).toMatchObject({ kind: 'decided', status: 'ChangesRequested' });
 				expect((yield* f.act('update', [{ target: id, set }])).outcome).toMatchObject({
 					kind: 'pending_approval',
-					requestId
+					request_id
 				});
-				expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending' });
+				expect(yield* f.request(request_id)).toMatchObject({ state: 'Pending' });
 				expect(
 					yield* f.t.db.value(Schema.Int, {
 						text: 'SELECT revision FROM expenses WHERE id=$1::uuid',
 						params: [id]
 					})
 				).toBe(revision);
-				yield* f.decide(requestId, 'reject', f.manager, 'Restore the line');
+				yield* f.decide(request_id, 'reject', f.manager, 'Restore the line');
 				expect(
 					yield* f.t.db.value(Schema.String, {
 						text: 'SELECT name FROM lines WHERE id=$1::uuid',
@@ -992,7 +1030,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 	);
 });
 
-const { record_label: _recordLabel, ...unlabelledExpenses } = manifest.models.expenses!;
+const { record_label: _recordLabel, ...unlabelledExpenses } = required(manifest.models.expenses);
 const unlabelled = { ...manifest, models: { ...manifest.models, expenses: unlabelledExpenses } };
 layer(
 	Layer.unwrap(
@@ -1009,7 +1047,7 @@ layer(
 				.outcome;
 			if (result.kind !== 'pending_approval') throw new Error(JSON.stringify(result));
 			expect(yield* f.search('expenses')).toContainEqual({
-				id: result.requestId,
+				id: result.request_id,
 				collection_name: 'expenses',
 				$label: result.records[0]?.id
 			});

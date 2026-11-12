@@ -2,9 +2,9 @@
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import type { Query, QueryAnswer } from '../src/client/contract.js';
-	import { mountEdge } from '../src/effect/index.js';
+	import { mount_edge } from '../src/effect/index.js';
 	import { pageRead } from '../src/read/paging.js';
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	let {
 		of,
 		read,

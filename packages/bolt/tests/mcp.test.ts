@@ -192,12 +192,12 @@ const discoveryAuthority: Authority = {
 	limits: [],
 	teamTree: [],
 	scopes: {},
-	capabilities: { apps: [], tools: [], mcp: [] }
+	capabilities: { apps: [], tools: [], mcp: [], syncs: [] }
 };
 const info = (name: string): McpToolInfo => ({
 	name,
 	description: name,
-	inputSchema: { type: 'object' }
+	input_schema: { type: 'object' }
 });
 it.effect('keeps declaration order and allowlists when server lists finish out of order', () =>
 	Effect.gen(function* () {

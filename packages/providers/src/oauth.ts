@@ -188,7 +188,7 @@ export const revoke = (app: OAuthApp, tokens: Tokens | null) =>
 /** `t` if it is still good, else refreshed (the old refresh token kept when the provider does not rotate it). */
 export const tokenHolder = Effect.fn('OAuth.tokenHolder')(function* (
 	app: OAuthApp,
-	client: () => Effect.Effect<{ id: string; secret: string }, ProviderUnavailable>,
+	client: () => Effect.Effect<{ id: string; secret: string }, ProviderFailure>,
 	initial: Tokens | null,
 	onRefresh: (tokens: Tokens) => Effect.Effect<void, ProviderFailure>
 ) {

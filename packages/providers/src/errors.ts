@@ -1,4 +1,4 @@
-// What a provider fails with (D3): one tag per way it fails, each a decoded value. `toDrivers` (abi.ts) hands them across
+// What a provider fails with (D3): one tag per way it fails, each a decoded value. `to_drivers` (abi.ts) hands them across
 // the driver ABI in the shape the engine reads: a refusal as the engine's `SendRefused`, any other as itself (an
 // `Error` named by its tag).
 import { Schema } from 'effect';
@@ -14,13 +14,13 @@ export class ProviderRefused extends Schema.TaggedError<ProviderRefused>()('Prov
 	code: Schema.optional(Schema.String),
 	permanent: Schema.Boolean
 }) {}
-/** The provider could not be reached, or answered something that is not its result; worth retrying (after `retryAfterMs`, when it said). */
+/** The provider could not be reached, or answered something that is not its result; worth retrying (after `retry_after_ms`, when it said). */
 export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()(
 	'ProviderUnavailable',
 	{
 		message: Schema.String,
 		status: Schema.optional(Schema.Number),
-		retryAfterMs: Schema.optional(Schema.Number)
+		retry_after_ms: Schema.optional(Schema.Number)
 	}
 ) {}
 /** The token endpoint refused: `revoked` when only a new sign-in helps (`invalid_grant`). */
@@ -51,8 +51,8 @@ export const answerFailure = (
 	message: string,
 	status: number,
 	code?: string,
-	retryAfterMs?: number
+	retry_after_ms?: number
 ): ProviderRefused | ProviderUnavailable =>
 	status >= 400 && status < 500 && status !== 429
 		? new ProviderRefused({ message, code: code ?? String(status), permanent: true })
-		: new ProviderUnavailable({ message, status, retryAfterMs });
+		: new ProviderUnavailable({ message, status, retry_after_ms });

@@ -3,7 +3,7 @@
 // stream silent for the wall is closed and its partial output kept as a cut step the next request continues; a request
 // that yields nothing within it is `timeout` (OD-13). `model` is a class or a catalog id; any other is `unavailable`.
 // Chat, compaction, verification and structured inference send the native request through modelCall.
-import { item_kind } from '@norbital-ai/std/kind';
+import { item_kind, json_schema, KindSchema } from '@norbital-ai/std/kind';
 import {
 	Cause,
 	Clock,
@@ -18,14 +18,16 @@ import {
 	type Scope
 } from 'effect';
 import * as EffectArray from 'effect/Array';
-import { Tool, type LanguageModel } from 'effect/ai';
+import { model_step, run_calls, type ModelCarry } from './step.ts';
+import { model_schema } from './json-schema.ts';
 import { textOf } from './schema.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
+import type { ToolBehavior } from '../../protocol/schema.ts';
 import type { Ai, AiEvent } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { FacilityCall } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/std/wire';
 import {
 	LIMITS,
 	type AiMessage,
@@ -35,7 +37,6 @@ import {
 } from '../contracts.ts';
 import { decodeInput } from '../callables/decode.ts';
 import type { Kind } from '@norbital-ai/std/kind';
-import { RequestOutput } from '../integrations/request-schema.ts';
 import { bound, BOUNDS, size } from './context.ts';
 import {
 	ANY,
@@ -86,8 +87,8 @@ const retryBackoff: Schedule.Schedule<Duration.Duration, PortFailure> = Schedule
 ).pipe(
 	Schedule.modifyDelay(({ input, duration }) =>
 		Effect.succeed(
-			input instanceof FacilityFailure && input.retryAfterMs !== undefined
-				? Duration.max(duration, Duration.millis(input.retryAfterMs))
+			input instanceof FacilityFailure && input.retry_after_ms !== undefined
+				? Duration.max(duration, Duration.millis(input.retry_after_ms))
 				: duration
 		)
 	)
@@ -227,7 +228,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 			schedule: retryBackoff,
 			times: TRANSIENT_RETRIES,
 			while: (error) => {
-				if (error instanceof FacilityFailure && error.kind === 'rateLimited')
+				if (error instanceof FacilityFailure && error.kind === 'rate_limited')
 					return partial === '' && !progressed && response === undefined;
 				if (!isTransientUpstream(error) || upstreamRetries >= (options.retryUpstream ?? 0))
 					return false;
@@ -270,51 +271,12 @@ export const ToolAnswer = Schema.Union([
 	Schema.Struct({ confirm: Schema.Literal(true) })
 ]);
 export type ToolAnswer = typeof ToolAnswer.Type;
-/** A catalogue tool, erased to its answer: a `Tool.make` over a service-free input Schema, or a `Tool.dynamic`. */
-export type AnyTool = Tool.Tool<
-	string,
-	{
-		readonly parameters: Schema.Top & {
-			readonly DecodingServices: never;
-			readonly EncodingServices: never;
-		};
-		readonly success: typeof ToolAnswer;
-		readonly failure: typeof Schema.Never;
-		readonly failureMode: 'error';
-	}
->;
-/** A tool's input as the closed JSON Schema the model is shown: Effect's document of its Schema, refusing unknown keys. */
-const closed: LanguageModel.CodecTransformer = (schema) => {
-	const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: 'error' });
-	return {
-		codec: schema,
-		jsonSchema:
-			Object.keys(document.definitions).length === 0
-				? document.schema
-				: { ...document.schema, $defs: document.definitions }
-	};
-};
-/** Each input's JSON Schema, by the object it is derived from: a turn's later steps offer the same tools again. */
-const toolSchemas = new WeakMap<object, Json>();
-/** The JSON Schema a tool's input is offered as: a dynamic tool's raw schema, else its closed Schema document. */
-export const toolSchema = (tool: Tool.Any): Json => {
-	const source =
-		Tool.isDynamic(tool) && tool.jsonSchema !== undefined ? tool.jsonSchema : tool.parametersSchema;
-	let schema = toolSchemas.get(source);
-	if (schema === undefined) {
-		schema = Schema.decodeUnknownSync(Schema.Json)(
-			Tool.getJsonSchema(tool, { transformer: closed })
-		);
-		toolSchemas.set(source, schema);
-	}
-	return schema;
-};
-
 /** A tool `ctx.ai.sys_2.infer` offers the model (rule 58: a host tool its automation's policies name); a throw is a failed result. */
 export type InferTool = {
 	name: string;
 	description: string;
 	input: Json;
+	behavior: ToolBehavior;
 	call(input: Json): Effect.Effect<Json, PortFailure>;
 };
 /**
@@ -363,163 +325,104 @@ const emptyOf = (k: Kind): Json =>
  * returning the new draft. `set` replaces or creates the value at a keyed pointer, creating missing parent objects and
  * lists; `set` at `/list/KEY` of a keyed list adds or replaces that item and fills its key field. `append` adds to an
  * unkeyed list; `remove: true` deletes. A set or appended value is checked against its kind (quoted scalars read as the
- * kind) and a keyed item keeps a distinct key. Throws the operation's problem, led by its path.
+ * kind) and a keyed item keeps a distinct key. Fails with the operation's problem, led by its path.
  */
-export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Json {
-	function fail(why: string): never {
-		throw new Error(`${op.path || '/'}: ${why}`);
-	}
+export class EditRefused extends Schema.TaggedError<EditRefused>()('EditRefused', {
+	message: Schema.String
+}) {}
+type Edited = Result.Result<Json | undefined, EditRefused>;
+export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Result.Result<Json, EditRefused> {
+	const refused = (message: string) => Result.fail(new EditRefused({ message }));
+	const fail = (why: string) => refused(`${op.path || '/'}: ${why}`);
 	if ([op.set, op.remove, op.append].filter((v) => v !== undefined).length !== 1)
-		fail('give exactly one of set, remove and append');
-	const segs = segments(op.path) ?? fail('a path is "" or starts with "/"');
-	const fits = (k: Kind, value: Json, at: readonly string[]): Json => {
+		return fail('give exactly one of set, remove and append');
+	const segs = segments(op.path);
+	if (segs === undefined) return fail('a path is "" or starts with "/"');
+	const fits = (k: Kind, value: Json, at: readonly string[]): Result.Result<Json, EditRefused> => {
 		const v = unquoted(k, value);
 		const problems = decodeInput({ v: k }, { v }).problems;
-		if (problems.length > 0)
-			throw new Error(
-				problems
-					.map(
-						(p) =>
-							`${pointer(at) + keyedPath(v, k, p.path.split('.').slice(1)) || '/'}: ${p.message}`
-					)
-					.join('; ')
-			);
-		return v;
+		return problems.length > 0
+			? refused(
+					problems
+						.map(
+							(p) =>
+								`${pointer(at) + keyedPath(v, k, p.path.split('.').slice(1)) || '/'}: ${p.message}`
+						)
+						.join('; ')
+				)
+			: Result.succeed(v);
 	};
-	const target = (
-		current: Json | undefined,
-		k: Kind,
-		keyed: string | undefined
-	): Json | undefined => {
+	const target = (current: Json | undefined, k: Kind, keyed: string | undefined): Edited => {
 		if (op.remove === true) {
-			if (segs.length === 0) fail('cannot remove the whole answer');
-			if (current === undefined) fail('nothing is there');
-			return undefined;
+			if (segs.length === 0) return fail('cannot remove the whole answer');
+			if (current === undefined) return fail('nothing is there');
+			return Result.succeed(undefined);
 		}
 		if (op.append !== undefined) {
 			const list = current ?? [];
-			if (!isList(list)) fail('append adds to a list, and this is not one');
+			if (!isList(list)) return fail('append adds to a list, and this is not one');
 			const key = keyOf(k);
-			if (key !== undefined) fail(`a keyed list: add an item with set at ${op.path}/<its ${key}>`);
-			return [
-				...list,
-				fits(childKind(k, '', list) ?? ANY, op.append, [...segs, String(list.length)])
-			];
+			if (key !== undefined) return fail(`a keyed list: add an item with set at ${op.path}/<its ${key}>`);
+			const item = fits(childKind(k, '', list) ?? ANY, op.append, [...segs, String(list.length)]);
+			return Result.isFailure(item) ? item : Result.succeed([...list, item.success]);
 		}
 		let value = op.set ?? null;
 		const seg = segs.at(-1);
 		if (keyed !== undefined && seg !== undefined && isObj(value)) {
 			const own = keyText(value, keyed);
 			if (own === undefined) value = { ...value, [keyed]: seg };
-			else if (own !== seg) fail(`the item's ${keyed} is "${own}", not "${seg}"`);
+			else if (own !== seg) return fail(`the item's ${keyed} is "${own}", not "${seg}"`);
 		}
 		return fits(k, value, segs);
 	};
-	const update = (
-		current: Json | undefined,
-		k: Kind,
-		i: number,
-		keyed?: string
-	): Json | undefined => {
+	const update = (current: Json | undefined, k: Kind, i: number, keyed?: string): Edited => {
 		const seg = segs[i];
 		if (seg === undefined) return target(current, k, keyed);
 		const here = pointer(segs.slice(0, i)) || '/';
-		const holder =
-			current ?? (op.remove === true ? fail(`nothing is at ${here}`) : k.many === true ? [] : {});
-		const child =
-			childKind(k, seg, holder) ??
-			fail(`${pointer(segs.slice(0, i + 1))} is not part of the output`);
+		if ((current === undefined || current === null) && op.remove === true)
+			return fail(`nothing is at ${here}`);
+		const holder: Json = current ?? (k.many === true ? [] : {});
+		const child = childKind(k, seg, holder);
+		if (child === undefined) return fail(`${pointer(segs.slice(0, i + 1))} is not part of the output`);
 		if (isList(holder)) {
 			const key = keyOf(k);
 			const index = indexOf(holder, seg, key);
 			if (index < 0 && !(key !== undefined && i === segs.length - 1 && op.set !== undefined))
-				fail(`${here} has no item "${seg}"`);
-			const next = update(index < 0 ? undefined : holder[index], child, i + 1, key);
-			if (next === undefined) return holder.filter((_, j) => j !== index);
+				return fail(`${here} has no item "${seg}"`);
+			const updated = update(index < 0 ? undefined : holder[index], child, i + 1, key);
+			if (Result.isFailure(updated)) return updated;
+			const next = updated.success;
+			if (next === undefined) return Result.succeed(holder.filter((_, j) => j !== index));
 			if (key !== undefined) {
 				const named = keyText(next, key);
-				if (named === undefined) fail(`the item needs its ${key}`);
+				if (named === undefined) return fail(`the item needs its ${key}`);
 				if (holder.some((x, j) => j !== index && keyText(x, key) === named))
-					fail(`another item of ${here} is keyed "${named}"`);
+					return fail(`another item of ${here} is keyed "${named}"`);
 			}
-			return index < 0 ? [...holder, next] : holder.map((x, j) => (j === index ? next : x));
+			return Result.succeed(
+				index < 0 ? [...holder, next] : holder.map((x, j) => (j === index ? next : x))
+			);
 		}
 		if (isObj(holder)) {
-			const next = update(Object.hasOwn(holder, seg) ? holder[seg] : undefined, child, i + 1);
-			return next === undefined
-				? Object.fromEntries(Object.entries(holder).filter(([f]) => f !== seg))
-				: { ...holder, [seg]: next };
+			const updated = update(Object.hasOwn(holder, seg) ? holder[seg] : undefined, child, i + 1);
+			if (Result.isFailure(updated)) return updated;
+			const next = updated.success;
+			return Result.succeed(
+				next === undefined
+					? Object.fromEntries(Object.entries(holder).filter(([f]) => f !== seg))
+					: { ...holder, [seg]: next }
+			);
 		}
 		return fail(`${here} holds ${JSON.stringify(holder)}, not an object or list`);
 	};
-	return update(draft, kind, 0) ?? fail('cannot remove the whole answer');
+	const edited = update(draft, kind, 0);
+	if (Result.isFailure(edited)) return Result.fail(edited.failure);
+	return edited.success === undefined
+		? fail('cannot remove the whole answer')
+		: Result.succeed(edited.success);
 }
 
 /** A declared output kind (§3.3.2) as the JSON Schema the provider constrains its answer by. */
-function jsonSchemaOf(k: Kind): Json {
-	if (k.many === true) {
-		const key = keyOf(k);
-		return {
-			type: 'array',
-			items: jsonSchemaOf(item_kind(k)),
-			...(key === undefined
-				? {}
-				: {
-						description: `Keyed by "${key}": an item's path is …/<its ${key}>, never its index.`
-					})
-		};
-	}
-	switch (k.kind) {
-		case 'text':
-			return { type: 'string', ...(k['max'] === undefined ? {} : { maxLength: Number(k['max']) }) };
-		case 'int':
-			return { type: 'integer' };
-		case 'number':
-			return { type: 'number' };
-		case 'decimal':
-		case 'money':
-			return { type: ['number', 'string'] };
-		case 'bool':
-			return { type: 'boolean' };
-		case 'date':
-			return { type: 'string', format: 'date' };
-		case 'instant':
-			return { type: 'string', format: 'date-time' };
-		case 'enum':
-			return { enum: [...k.values] };
-		case 'ref':
-			return typeof k.to === 'string' ? { type: 'string' } : { type: 'object' };
-		case 'vector':
-			return { type: 'array', items: { type: 'number' } };
-		case 'record':
-			return { type: 'object', additionalProperties: jsonSchemaOf(k.of) };
-		case 'object': {
-			const fields = Object.entries(k.fields);
-			return {
-				type: 'object',
-				additionalProperties: k.rest === undefined ? false : jsonSchemaOf(k.rest),
-				properties: Object.fromEntries(fields.map(([f, x]) => [f, jsonSchemaOf(x)])),
-				required: fields
-					.filter(([, x]) => x.optional !== true && x['default'] === undefined)
-					.map(([f]) => f)
-			};
-		}
-		case 'union':
-			return 'of' in k
-				? { anyOf: k.of.map(jsonSchemaOf) }
-				: {
-						anyOf: Object.entries(k.arms).map(([tag, fields]) =>
-							jsonSchemaOf({
-								kind: 'object',
-								fields: { ...fields, [k.by]: { kind: 'enum', values: [tag] } }
-							})
-						)
-					};
-		default:
-			return {};
-	}
-}
-
 /**
  * Without the author's `steps`, an inference has no step budget and no time limit: it goes on while it progresses, until
  * it answers (a structured one, until a submission matches). What ends a runaway is the stall window — no model token,
@@ -545,7 +448,7 @@ const InferOutput = Schema.Union([
 			)
 		]
 	),
-	RequestOutput
+	KindSchema
 ]);
 /** `ai.sys_2.infer`'s arguments; `tools` names the host tools a run lends it (the run's gate, `runs/index.ts`). */
 export const InferArgs = Schema.Struct({
@@ -562,31 +465,37 @@ export const InferArgs = Schema.Struct({
 });
 export const inferArgsOf = Schema.decodeUnknownOption(InferArgs);
 /** A checker for a schema output: the schema's own violations as JSON Pointers into the answer. */
-function schemaChecker(output: SchemaOutput): (value: Json) => string[] {
+function schemaChecker(
+	output: SchemaOutput
+): Effect.Effect<(value: Json) => string[], FacilityFailure> {
 	const schema = output.json_schema;
 	if (typeof schema !== 'boolean' && !Predicate.isObject(schema))
-		throw new Error('json_schema must be an object or boolean');
-	const validator = new Validator(schema, '2020-12', false);
-	return (value) => [
-		...new Set(
-			validator
-				.validate(value)
-				// a container's error repeats its children's; the leaves name what to edit
-				.errors.filter(
-					(e) =>
-						![
-							'properties',
-							'items',
-							'prefixItems',
-							'additionalProperties',
-							'allOf',
-							'$ref',
-							'dependentSchemas'
-						].includes(e.keyword)
-				)
-				.map((e) => `${e.instanceLocation.replace(/^#/, '') || '/'}: ${e.error}`)
-		)
-	];
+		return Effect.fail(FacilityFailure.invalid('json_schema must be an object or boolean'));
+	return Effect.try({
+		try: () => new Validator(schema, '2020-12', false),
+		catch: (error) => FacilityFailure.invalid(error instanceof Error ? error.message : String(error))
+	}).pipe(
+		Effect.map((validator) => (value: Json): string[] => [
+			...new Set(
+				validator
+					.validate(value)
+					// a container's error repeats its children's; the leaves name what to edit
+					.errors.filter(
+						(e) =>
+							![
+								'properties',
+								'items',
+								'prefixItems',
+								'additionalProperties',
+								'allOf',
+								'$ref',
+								'dependentSchemas'
+							].includes(e.keyword)
+					)
+					.map((e) => `${e.instanceLocation.replace(/^#/, '') || '/'}: ${e.error}`)
+			)
+		])
+	);
 }
 /**
  * A checker for `rules` over the answer's top-level `properties`: every rule that evaluates to false. A rule that cannot
@@ -688,7 +597,7 @@ function unquoted(kind: Kind, value: Json): Json {
 	}
 }
 
-export function inferFacility(
+export function infer_facility(
 	ai: Ai['Service'] | undefined,
 	options: {
 		load?: (fileId: string) => Effect.Effect<{ mime: string; bytes: Uint8Array }, PortFailure>;
@@ -696,7 +605,7 @@ export function inferFacility(
 		/** Each answer-changing call (`edit`, `submit`) as the model makes it: the host's record of the draft's progress. */
 		onDraft?: (name: string, input: Json) => Effect.Effect<void>;
 		/** Each message of the transcript as it is written: the host keeps the inference's whole conversation. */
-		onMessage?: (message: AiMessage, index: number) => Effect.Effect<void>;
+		onMessage?: (message: AiMessage, index: number, behavior: ToolBehavior) => Effect.Effect<void>;
 	} = {}
 ) {
 	return Effect.fn('Ai.inferFacility')(function* (
@@ -740,14 +649,7 @@ export function inferFacility(
 			);
 		let check: ((value: Json) => string[]) | undefined;
 		if (schemaOut !== undefined)
-			check = yield* Effect.try({
-				try: () => schemaChecker(schemaOut),
-				catch: (error) =>
-					new FacilityFailure({
-						kind: 'invalid',
-						message: error instanceof Error ? error.message : String(error)
-					})
-			});
+			check = yield* schemaChecker(schemaOut);
 		const root = Predicate.isObject(schemaOut?.json_schema) ? schemaOut.json_schema : {};
 		const rules = [...(schemaOut?.rules ?? []), ...(a.rules ?? [])];
 		const ruled = ruleChecker(
@@ -785,7 +687,7 @@ export function inferFacility(
 		const beat = () => {
 			progressed = clock.currentTimeMillisUnsafe();
 		};
-		const shape = out !== undefined ? jsonSchemaOf(out) : schemaOut?.json_schema;
+		const shape = out !== undefined ? json_schema(out) : schemaOut?.json_schema;
 		const rulesText =
 			rules.length === 0
 				? ''
@@ -801,11 +703,12 @@ export function inferFacility(
 			required: [...required],
 			properties
 		});
-		const finishing = !structured
+		const finishing: readonly Pick<InferTool, 'name' | 'description' | 'input' | 'behavior'>[] = !structured
 			? []
 			: [
 					{
 						name: EDIT,
+						behavior: {},
 						description: `Change the answer you are building. Each op names a path and exactly one of: set (replace or create the value there; missing parent objects and lists are created), remove: true, or append (add an item to the end of a list that has no key). A path is a JSON Pointer ("/a/b"), except that an item of a keyed list is addressed by its key, never its index ("/items/ANNUAL/days"; set "/items/NEW" adds the item NEW); a list without a key uses indices. Ops apply in order and each is checked on its own: the result counts those applied and names each failed op with its path, and later ops still apply. Send only what changes. Take as many turns as the answer needs (tools to check facts, more reading); when it is complete, call ${SUBMIT} in the same reply as your last ${EDIT}.`,
 						input: object(
 							{
@@ -822,11 +725,13 @@ export function inferFacility(
 					},
 					{
 						name: SUBMIT,
+						behavior: {},
 						description: `Hand in the answer as edited so far, including any ${EDIT} earlier in this same reply (calls apply in order). It is checked against the required shape; anything wrong comes back by path, and you ${EDIT} and ${SUBMIT} again together in one reply.`,
 						input: object({})
 					},
 					{
 						name: draftRead,
+						behavior: draftRead === 'read' ? { data: true } : {},
 						description: `Read the answer at a path (as in ${EDIT}; "" is the whole answer). fields narrows an object to those fields, and each item of a list to its key and those fields. Reading changes nothing. A value too large to return comes back as its outline: read a child path, or pass fields.`,
 						input: object(
 							{ path: { type: 'string' }, fields: { type: 'array', items: { type: 'string' } } },
@@ -835,21 +740,23 @@ export function inferFacility(
 					},
 					{
 						name: FIND,
+						behavior: {},
 						description: `Search the answer for text, case-insensitively: the values and field names under path (default the whole answer). Returns each matching path (as in ${EDIT}) with a short excerpt, at most ${HITS}.`,
 						input: object({ text: { type: 'string' }, path: { type: 'string' } }, ['text'])
 					},
 					{
 						name: DIFF,
+						behavior: {},
 						description: `What has changed in the answer since it started, under path (default the whole answer): each change's path, whether it was added, removed or changed, and the values before and after (long ones shortened). Items of keyed lists are matched by key. Use it to check your work, and to describe your changes.`,
 						input: object({ path: { type: 'string' } })
 					}
 				];
 		const drafting = new Set(finishing.map((t) => t.name));
 		const inspecting = new Set([draftRead, FIND, DIFF]);
-		const offered = [
-			...tools.map(({ name, description, input }) => ({ name, description, input })),
-			...finishing
-		];
+		const definitions = [...tools, ...finishing];
+		const offered = definitions.map(({ name, description, input }) => ({ name, description, input }));
+		const finishingOffers = finishing.map(({ name, description, input }) => ({ name, description, input }));
+		const behaviorOf = new Map(definitions.map((tool): [string, ToolBehavior] => [tool.name, tool.behavior]));
 		/** The draft checked against `output` and the rules: every offending field named (rule 23), as keyed pointers. */
 		const decoded = (raw: Json): CrossAnswer => {
 			let problems: string[];
@@ -879,7 +786,9 @@ export function inferFacility(
 				recorded.set(messages, messages.length);
 				return onMessage === undefined
 					? Effect.void
-					: Effect.forEach(messages.slice(from), (message) => onMessage(message, messageIndex++), {
+					: Effect.forEach(messages.slice(from), (message) => onMessage(message, messageIndex++,
+						message.role === 'tool' && isObj(message.content) && typeof message.content['name'] === 'string'
+							? behaviorOf.get(message.content['name']) ?? {} : {}), {
 							discard: true
 						});
 			});
@@ -894,9 +803,7 @@ export function inferFacility(
 			final: boolean
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
 			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
-			let text = '',
-				continuation: string | undefined,
-				cutAt: number | undefined,
+			let carry: ModelCarry | undefined,
 				pauses = 0,
 				failures = 0,
 				stalls = 0,
@@ -918,8 +825,8 @@ export function inferFacility(
 					);
 				}
 				yield* record(messages);
-				const offeredTools = spent ? finishing : offered;
-				const r = yield* modelCall(
+				const offeredTools = spent ? finishingOffers : offered;
+				const stepped = yield* model_step(modelCall(
 					ai,
 					{
 						model: a.model ?? 'default',
@@ -927,7 +834,7 @@ export function inferFacility(
 						messages: [...messages],
 						...(offeredTools.length === 0 ? {} : { tools: offeredTools }),
 						...(files.length === 0 ? {} : { files }),
-						...(continuation === undefined ? {} : { continuation })
+						...(carry?.continuation === undefined ? {} : { continuation: carry.continuation })
 					},
 					{
 						...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }),
@@ -935,7 +842,7 @@ export function inferFacility(
 						onDelta: beat,
 						onReasoning: beat
 					}
-				).pipe(Effect.catch((e) => Effect.succeed(e)));
+				), carry).pipe(Effect.catch((e) => Effect.succeed(e)));
 				beat();
 				// ended from outside (a stop, the caller's own wall): the last failed submission says more than a bare timeout
 				if (signal.aborted)
@@ -950,9 +857,9 @@ export function inferFacility(
 							};
 				// a silent model call stalls one turn, never the whole inference: ask again (for smaller calls when it went
 				// silent writing one); past the last try a draft that already holds is the answer
-				if (r instanceof ModelIdle) {
+				if (stepped instanceof ModelIdle) {
 					if (++idles <= PAUSES) {
-						if (r.cutTool === true)
+						if (stepped.cutTool === true)
 							messages.push({
 								role: 'user',
 								content: `Your last reply went silent while you were still writing a tool call. Make smaller calls: one row, or a few fields, per ${EDIT}.`
@@ -962,51 +869,47 @@ export function inferFacility(
 					const held = structured ? settle(draft) : undefined;
 					if (held?.ok === true) return held;
 				}
-				if (isFacilityError(r))
+				if (isFacilityError(stepped))
 					return {
 						ok: false,
 						error:
-							r instanceof Unavailable
-								? { kind: 'unavailable', facility: r.facility, reason: r.reason }
+							stepped instanceof Unavailable
+								? { kind: 'unavailable', facility: stepped.facility, reason: stepped.reason }
 								: {
-										kind: r.kind,
-										message: r.message,
-										...(r.status === undefined ? {} : { status: r.status })
+										kind: stepped.kind,
+										message: stepped.message,
+										...(stepped.status === undefined ? {} : { status: stepped.status })
 									}
 					};
+				const { response: r, content: whole, calls } = stepped;
 				idles = 0;
 				if (r.finish === 'cut') {
-					cutAt ??= messages.length;
-					text += textOf(r.content);
-					continuation = r.continuation;
-					messages.splice(cutAt, messages.length - cutAt, { role: 'assistant', content: text });
+					carry = stepped.carry;
+					messages.push({ role: 'assistant', content: stepped.segment.text });
 					continue;
 				}
-				// once tools end, a reply that still edits or submits may be repaired; one that does neither is the last
-				finished = spent && (r.toolCalls.length === 0 || ++finals >= FINAL_TURNS);
-				const whole: Json = text === '' ? r.content : text + textOf(r.content);
-				if (cutAt !== undefined) messages.splice(cutAt);
-				text = '';
-				continuation = undefined;
-				cutAt = undefined;
+				finished = spent && (calls.length === 0 || ++finals >= FINAL_TURNS);
+				carry = undefined;
 				if (r.toolCalls.length > 0) {
 					const before = JSON.stringify(draft);
 					messages.push({
 						role: 'assistant',
 						content: {
-							text: typeof whole === 'string' ? whole : '',
-							toolCalls: encodeWire(r.toolCalls)
+							text: typeof r.content === 'string' ? r.content : '',
+							toolCalls: encode_wire(calls)
 						}
 					});
-					for (const c of r.toolCalls) {
-						let result: Json;
+					const completed = yield* run_calls<CrossAnswer, PortFailure, never>(calls, Effect.fn('Ai.inferCall')(function* (c, invalid, stopped) {
+						let result: Json, submitted: CrossAnswer | undefined;
 						if (
-							(c.name === EDIT || c.name === SUBMIT) &&
+							!stopped && invalid === undefined && (c.name === EDIT || c.name === SUBMIT) &&
 							structured &&
 							options.onDraft !== undefined
 						)
 							yield* options.onDraft(c.name, c.input);
-						if (c.name === EDIT && structured) {
+						if (stopped) result = { skipped: 'An earlier call submitted this step; no later operation ran.' };
+						else if (invalid !== undefined) result = invalid;
+						else if (c.name === EDIT && structured) {
 							const ops = Option.getOrUndefined(
 								Schema.decodeUnknownOption(EditInput)(c.input)
 							)?.ops;
@@ -1015,12 +918,12 @@ export function inferFacility(
 							else {
 								const errors: Json[] = [];
 								for (const [i, op] of ops.entries()) {
-									const edited = Result.try({
-										try: () => applyEdit(draft, Schema.decodeUnknownSync(EditOp)(op), kind),
-										catch: (cause) => (cause instanceof Error ? cause.message : String(cause))
-									});
+									const edited = yield* Schema.decodeUnknownEffect(EditOp)(op).pipe(
+										Effect.flatMap((decoded) => Effect.fromResult(applyEdit(draft, decoded, kind))),
+										Effect.result
+									);
 									if (Result.isSuccess(edited)) draft = edited.success;
-									else errors.push({ op: i, error: edited.failure });
+									else errors.push({ op: i, error: edited.failure.message });
 								}
 								result = {
 									applied: ops.length - errors.length,
@@ -1110,8 +1013,8 @@ export function inferFacility(
 							}
 						} else if (c.name === SUBMIT && structured) {
 							last = settle(draft);
-							if (last.ok) return last;
-							result = { error: last.error.kind === 'invalid' ? last.error.message : 'invalid' };
+							if (last.ok) { submitted = last; result = { submitted: true }; }
+							else result = { error: last.error.kind === 'invalid' ? last.error.message : 'invalid' };
 						} else {
 							const tool = spent ? undefined : tools.find((t) => t.name === c.name);
 							result =
@@ -1126,7 +1029,9 @@ export function inferFacility(
 							content: { id: c.id, name: c.name, result: bound(result) }
 						});
 						beat();
-					}
+						return submitted === undefined ? Option.none() : Option.some(submitted);
+					}));
+					if (Option.isSome(completed)) return completed.value;
 					// a turn of only draft tools that leaves the draft as it was is no progress: 3 running end the call. Under a
 					// `steps` budget a read-only turn is exploration the budget already bounds, not a stall.
 					if (
@@ -1164,7 +1069,7 @@ export function inferFacility(
 					continue;
 				}
 				pauses = 0;
-				if (!structured) return { ok: true, value: textOf(whole) };
+				if (!structured) { messages.push({ role: 'assistant', content: textOf(r.content) }); return { ok: true, value: textOf(whole) }; }
 				// a structured answer written out as text instead: a well-formed one is taken as a submission of it
 				const parsed =
 					typeof whole === 'string'
@@ -1172,21 +1077,23 @@ export function inferFacility(
 								Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(whole)
 							)
 						: whole;
+				let feedback: string | undefined;
 				if (parsed !== undefined) {
 					last = settle(parsed);
-					if (last.ok) return last;
+					if (last.ok) { messages.push({ role: 'assistant', content: textOf(r.content) }); return last; }
+					feedback = last.error.kind === 'invalid' ? last.error.message : 'That answer does not match the output';
 					draft = parsed;
 				}
 				if (++failures > FAILURES)
 					return last ?? invalid(`the model did not build its answer with ${EDIT} and ${SUBMIT}`);
 				messages.push(
-					{ role: 'assistant', content: textOf(whole) },
+					{ role: 'assistant', content: textOf(r.content) },
 					{
 						role: 'user',
 						content:
-							parsed === undefined
+							feedback === undefined
 								? `Build the answer with ${EDIT} and hand it in with ${SUBMIT}; do not write it out.`
-								: `${last!.ok ? '' : last!.error.kind === 'invalid' ? last!.error.message : 'That answer does not match the output'}. It is now your draft: fix it with ${EDIT}, then call ${SUBMIT}.`
+								: `${feedback}. It is now your draft: fix it with ${EDIT}, then call ${SUBMIT}.`
 					}
 				);
 			}

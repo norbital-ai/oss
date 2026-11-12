@@ -1,7 +1,7 @@
 // The seam between the shell and the host's Studio. Studio is no part of a workspace's build: a Studio host serves it as
-// one self-contained ES module (`ShellBoot.studioBundle`) with its own Svelte, ui and Effect, sharing no module with the
-// page, so all that crosses is plain values. Each pinned release mounts this interface for as long as it serves: extend
-// it, never change a member.
+// one self-contained ES module (`ShellBoot.studio_bundle`) with its own Svelte, ui and Effect, sharing no module with the
+// page, so all that crosses is plain values under the current shell contract.
+import { Predicate } from 'effect';
 import type { UiTextKey } from '@norbital-ai/ui';
 import type { StudioTab } from '../nav.ts';
 
@@ -10,15 +10,15 @@ export type StudioProps = {
 	readonly t: (key: string) => string;
 	readonly locale: string;
 	/** ui's chrome strings in that locale. */
-	readonly uiText: { readonly [key in UiTextKey]?: string };
+	readonly ui_text: { readonly [key in UiTextKey]?: string };
 	readonly tab: StudioTab;
-	readonly onTab: (tab: StudioTab) => void;
+	readonly on_tab: (tab: StudioTab) => void;
 	/** The file the URL names. */
 	readonly file: string | null;
-	readonly onFile: (path: string) => void;
+	readonly on_file: (path: string) => void;
 	readonly admin: boolean;
 	/** Hands a request to Norbius and sends it; `null` where the viewer has no Norbius. */
-	readonly onAsk: ((prompt: string) => void) | null;
+	readonly on_ask: ((prompt: string) => void) | null;
 	/** A host's own authenticated endpoint for the Studio routes; absent: the workspace's. */
 	readonly base?: string;
 };
@@ -28,6 +28,27 @@ export type StudioMount = {
 	unmount(): Promise<void>;
 };
 export type MountStudio = (target: HTMLElement, props: StudioProps) => StudioMount;
-/** The bundle's one export. */
-export const isMountStudio = (value: unknown): value is MountStudio =>
-	typeof value === 'function';
+/** Adapt an untrusted bundle at its owning boundary; a function alone does not prove the mounted contract. */
+export function mount_studio(module: unknown, target: HTMLElement, props: StudioProps): StudioMount {
+	if (!Predicate.isObject(module) || typeof module['mount_studio'] !== 'function')
+		throw new Error('The Studio bundle exports no mount_studio.');
+	const mounted: unknown = module['mount_studio'].call(module, target, props);
+	if (
+		!Predicate.isObject(mounted) ||
+		typeof mounted['update'] !== 'function' ||
+		typeof mounted['unmount'] !== 'function'
+	)
+		throw new Error('The Studio bundle returned an invalid mounted view.');
+	const update = mounted['update'],
+		unmount = mounted['unmount'];
+	return {
+		update(next) {
+			const result: unknown = update.call(mounted, next);
+			if (result !== undefined) throw new Error('Studio update must return no value.');
+		},
+		async unmount() {
+			const result: unknown = await unmount.call(mounted);
+			if (result !== undefined) throw new Error('Studio unmount must return no value.');
+		}
+	};
+}

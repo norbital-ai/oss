@@ -133,7 +133,7 @@ export const notion: ChatPlatform = {
 			return {
 				id: comment.id,
 				thread,
-				sentAt: comment.created_time,
+				sent_at: comment.created_time,
 				from: { handle: comment.created_by.id, name: comment.created_by.name ?? null },
 				text,
 				group: true,
@@ -175,7 +175,7 @@ export const notion: ChatPlatform = {
 							{
 								id: event.entity.id,
 								thread: event.data?.page_id ?? '',
-								sentAt: event.timestamp,
+								sent_at: event.timestamp,
 								from: { handle: '', name: null },
 								text: '',
 								deleted: true

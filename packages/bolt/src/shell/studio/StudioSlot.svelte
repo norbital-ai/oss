@@ -9,7 +9,7 @@
 	import { watch } from 'runed';
 	import { untrack } from 'svelte';
 	import { based } from '../nav.ts';
-	import { isMountStudio, type StudioMount, type StudioProps } from './slot.ts';
+	import { mount_studio, type StudioMount, type StudioProps } from './slot.ts';
 
 	let {
 		bundle,
@@ -24,11 +24,9 @@
 	const open = (path: string, target: HTMLElement) =>
 		Effect.gen(function* () {
 			const module = yield* Effect.tryPromise(
-				(): Promise<{ readonly mountStudio?: unknown }> => import(/* @vite-ignore */ based(path))
+				(): Promise<unknown> => import(/* @vite-ignore */ based(path))
 			);
-			if (!isMountStudio(module.mountStudio))
-				return yield* Effect.fail(new Error('The Studio bundle exports no mountStudio.'));
-			return (mounted = module.mountStudio(target, props));
+			return (mounted = yield* Effect.try(() => mount_studio(module, target, props)));
 		});
 	const slot = attach((target: HTMLDivElement) => {
 		// read once: a later boot naming a newer bundle must not remount Studio over unsaved edits

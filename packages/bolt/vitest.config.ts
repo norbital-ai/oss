@@ -48,6 +48,7 @@ function liveFixture(): Plugin {
 /** `@norbital-ai/bolt` and its subpaths as this source: one copy of every module for the suite and bolt-cli's source. */
 const SOURCE = Object.entries({
 	'': 'index',
+	'/declarations': 'declarations',
 	'/artifact': 'engine/artifact/read',
 	'/engine': 'engine/index',
 	'/errors': 'decl/errors',

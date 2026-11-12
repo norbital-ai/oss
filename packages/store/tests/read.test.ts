@@ -13,6 +13,66 @@ const first = <A>(rows: readonly A[]): A => {
 };
 
 describe('typed read projections', () => {
+	it.effect('keeps nulls in predicate complements and refuses null membership literals', () =>
+		Effect.gen(function* () {
+			const declaration = schema({
+				entry: table({ key: 'text', fields: { value: { kind: 'text', optional: true } } })
+			});
+			const pg = yield* database;
+			yield* script(pg, `${(yield* build(declaration)).join(';\n')};`);
+			const db = store(declaration),
+				execute = run(pg);
+			yield* execute(
+				yield* db.create('entry', [
+					{ id: 'null', value: null },
+					{ id: 'a', value: 'a' },
+					{ id: 'b', value: 'b' }
+				])
+			);
+			const members = yield* execute(
+				yield* db.read('entry', { where: { value: { in: ['a'] } }, order_by: 'id', all: true })
+			);
+			expect(members.rows.map((row) => row.id)).toEqual(['a']);
+			const complement = yield* execute(
+				yield* db.read('entry', {
+					where: { not: { value: { in: ['a'] } } },
+					order_by: 'id',
+					all: true
+				})
+			);
+			expect(complement.rows.map((row) => row.id)).toEqual(['b', 'null']);
+			const different = yield* execute(
+				yield* db.read('entry', { where: { value: { ne: 'a' } }, order_by: 'id', all: true })
+			);
+			expect(different.rows.map((row) => row.id)).toEqual(['b', 'null']);
+			const absent = yield* execute(
+				yield* db.read('entry', { where: { value: { is_null: true } }, all: true })
+			);
+			expect(absent.rows.map((row) => row.id)).toEqual(['null']);
+			const empty = yield* execute(
+				yield* db.read('entry', { where: { value: { in: [] } }, all: true })
+			);
+			expect(empty.rows).toEqual([]);
+			const outside_empty = yield* execute(
+				yield* db.read('entry', {
+					where: { not: { value: { in: [] } } },
+					order_by: 'id',
+					all: true
+				})
+			);
+			expect(outside_empty.rows.map((row) => row.id)).toEqual(['a', 'b', 'null']);
+			for (const where of [
+				{ value: { eq: null } },
+				{ value: { ne: null } },
+				{ value: { in: ['a', null] } },
+				{ value: { nin: ['a'] } },
+				{ value: { isNull: true } }
+			]) {
+				const failure = yield* Effect.flip(read(db.catalog, 'entry', { where, all: true }));
+				expect(failure.code).toBe('invalid');
+			}
+		})
+	);
 	it.effect(
 		'pages filtered inline values through tied and null sort keys without losing rows',
 		() =>
@@ -86,7 +146,7 @@ describe('typed read projections', () => {
 								after: first.next ?? ''
 							})
 						)).code
-					).toBe('badCursor');
+					).toBe('bad_cursor');
 				}
 			})
 	);

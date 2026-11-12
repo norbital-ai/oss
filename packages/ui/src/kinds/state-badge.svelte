@@ -9,11 +9,11 @@ A `state` field's value as a coloured pill, in its words (`label`, else the cata
 
 <script lang="ts">
 	import Badge from '../primitives/badge/badge.svelte';
-	import { useEnumText } from '../model/context.js';
+	import { use_enum_text } from '../model/context.js';
 	import { tone } from './kind.js';
 
 	let { state, label, class: className }: StateBadgeProps = $props();
-	const words = useEnumText();
+	const words = use_enum_text();
 	const VARIANT = {
 		neutral: 'outline',
 		info: 'info',

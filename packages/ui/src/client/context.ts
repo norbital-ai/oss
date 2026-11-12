@@ -1,11 +1,16 @@
 import { getContext, setContext } from 'svelte';
 import { Predicate } from 'effect';
-import type { Json } from '@norbital-ai/std/wire';
+import { encode_wire, type Json } from '@norbital-ai/std/wire';
+import type { Value } from '@norbital-ai/std/kind';
 import type { ViewBolt } from './contract.js';
 import { useKinds, type ModelExposure } from '../kinds/context.js';
 const BOLT = Symbol('ui.views.bolt');
+const withOutput = (layer: Json, output: string | undefined): Json =>
+	output !== undefined && Predicate.isObject(layer) && layer['output'] === undefined
+		? { ...layer, output }
+		: layer;
 /** Hands the page's client to every view beneath; the shell calls it once per page. */
-export const provideBolt = (client: () => ViewBolt) => setContext(BOLT, client);
+export const provide_bolt = (client: () => ViewBolt) => setContext(BOLT, client);
 export const usePageContext = () => getContext<(() => ViewBolt) | undefined>(BOLT);
 /**
  * A view's read request with each root that names no `output` reading the one the catalog gives the caller's views
@@ -18,12 +23,7 @@ export const withOutputs = (
 	Object.fromEntries(
 		Object.entries(request).map(([path, layer]) => {
 			const output = path.includes('.') ? undefined : catalog?.[path]?.output;
-			return [
-				path,
-				output !== undefined && Predicate.isObject(layer) && layer['output'] === undefined
-					? { ...layer, output }
-					: layer
-			];
+			return [path, withOutput(layer, output)];
 		})
 	);
 /** The host client when present, its reads in the caller's view outputs; controlled local views can render without one. */
@@ -39,8 +39,8 @@ export const useOptionalBolt = (): ViewBolt | undefined => {
 				return (request: { readonly [path: string]: Json }) =>
 					target.query(withOutputs(request, catalog));
 			if (key === 'aggregate')
-				return (model: string, args: Json) =>
-					target.aggregate(model, withOutputs({ [model]: args }, catalog)[model]);
+				return (model: string, args: Value) =>
+					target.aggregate(model, withOutput(encode_wire(args), catalog?.[model]?.output));
 			const value: unknown = Reflect.get(target, key);
 			return typeof value === 'function' ? value.bind(target) : value;
 		}
@@ -49,6 +49,6 @@ export const useOptionalBolt = (): ViewBolt | undefined => {
 /** The shell client for native reads, actions and translated text. Capture it during component initialization. */
 export function useBolt(): ViewBolt {
 	const bolt = useOptionalBolt();
-	if (bolt === undefined) throw new Error('A view needs the shell: call provideBolt above it.');
+	if (bolt === undefined) throw new Error('A view needs the shell: call provide_bolt above it.');
 	return bolt;
 }

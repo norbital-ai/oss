@@ -1,44 +1,5 @@
-import type { Checked, Exact, InputFields, ValidInputs } from '../fields.ts';
-import type { Json } from '../values.ts';
-import type { RunInput } from './automation.ts';
+import type { Checked, Exact } from '../fields.ts';
 import type { SecretName } from './names.ts';
-
-/** A tool literal's data: what the manifest holds. */
-export type ToolSpec = {
-	/** What it does, as the agent reads it. */
-	description: string;
-	/** The typed input a call passes to `run.ts`. */
-	input?: InputFields;
-};
-type ToolFor<S> = {
-	description: string;
-	input?: S extends { input: infer I } ? ValidInputs<I> : InputFields;
-};
-
-/**
- * `src/agent/tool/<name>/+tool.ts`: a tool the agent calls with `run_tool`, told of it once it is merged. This file is data
- * the compiler reads. The body is `run.ts` beside it, whose default export is a `ToolRun`: it runs on Node in a VM of its
- * own, with the workspace's packages, and never reaches the network, a process, a native addon or the workspace's records.
- * @example
- * export default tool({
- * 	description: 'The sheets of a drawing, each with its layers.',
- * 	input: { sheet: { kind: 'text', optional: true } }
- * });
- */
-export function tool<const S extends ToolSpec>(
-	spec: S & Checked<ToolSpec, S, Exact<S, ToolFor<S>>>
-): S {
-	return spec;
-}
-
-/** The files a call handed a tool, and the files it gives the person. */
-export type ToolFiles = {
-	readonly names: readonly string[];
-	read(name: string): Promise<Uint8Array>;
-	write(name: string, content: Uint8Array | string): Promise<void>;
-};
-/** The default export of a tool's `run.ts`, `S` its `+tool.ts`: what it returns is the agent's answer. */
-export type ToolRun<S> = (input: RunInput<S>, files: ToolFiles) => Json | Promise<Json>;
 
 /** The authoring shape of an MCP server: `url` is a secret name, so a string until the names are checked. */
 export type McpBase = {

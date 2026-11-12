@@ -3,29 +3,34 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Predicate, Schema } from 'effect';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { dbError } from '../src/engine/db/wire.ts';
+import { db_error } from '../src/engine/db/wire.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, Reader, RowData } from '../src/engine/contracts.ts';
 import {
 	aggregate,
-	catalogFor,
-	decodeView,
+	catalog_for,
+	decode_view,
 	where,
-	whereSql,
+	where_sql,
 	type FieldInfo,
 	type Pred
 } from '@norbital-ai/store';
 import { get, read, type ReadIR } from '../src/protocol/reads.ts';
-import { fromStore, storeSync } from '../src/protocol/errors.ts';
+import { from_store } from '../src/protocol/errors.ts';
 import { readOptions } from '../src/engine/query/reader.ts';
-import { lowerRead, readEngine, readTargets } from '../src/engine/query/engine.ts';
+import { lower_read, read_engine, readTargets } from '../src/engine/query/engine.ts';
 import { transformBridge } from '../src/engine/write/act.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
 import { evaluate } from '../src/engine/query/eval.ts';
-import { browserCatalog } from '../src/protocol/catalog.ts';
+import { browser_catalog } from '../src/protocol/catalog.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import { DDL, bindings, clerk, manifest, rep } from './query.fixture.ts';
+
+const present = <A>(value: A | null | undefined): A => {
+	if (value === null || value === undefined) throw new Error('Missing fixture value');
+	return value;
+};
 // ── a PGlite TenantDb: `read` runs its statements in order inside one call ──
 let pg: PGlite;
 let reads = 0,
@@ -41,11 +46,15 @@ const db = TenantDb.typed({
 	write: (statement, lock) => native.write(statement, lock),
 	transaction: (batch) => native.transaction(batch)
 });
-const exec = (text: string) => Effect.tryPromise({ try: () => pg.exec(text), catch: dbError });
+const exec = (text: string) => Effect.tryPromise({ try: () => pg.exec(text), catch: db_error });
 const query = (text: string, params: readonly Json[] = []) => native.write({ text, params });
 let seed = 7;
 const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
-const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!;
+const pick = <T>(xs: readonly T[]): T => {
+	const i = Math.floor(rnd() * xs.length);
+	for (const [j, x] of xs.entries()) if (j === i) return x;
+	throw new Error('Missing fixture value');
+};
 const id = (kind: number, n: number) =>
 	`00000000-0000-4000-8${kind}00-${n.toString(16).padStart(12, '0')}`;
 const ACCOUNTS = [
@@ -58,7 +67,7 @@ const ACCOUNTS = [
 ].map((name, i) => ({
 	id: id(1, i),
 	name,
-	region: ['north', 'south', 'north', null, 'north', 'south'][i]!
+	region: ['north', 'south', 'north', null, 'north', 'south'][i] ?? null
 }));
 const ORDERS = Array.from({ length: 40 }, (_, i) => {
 	const d = 1 + Math.floor(rnd() * 28);
@@ -103,7 +112,7 @@ const NOTES = Array.from({ length: 20 }, (_, i) => ({
 			: { model: 'orders', id: pick(ORDERS).id },
 	body: pick(['call back', 'paid', 'late'])
 }));
-const engine = readEngine({
+const engine = read_engine({
 	db,
 	manifest,
 	allBytes: 8 * 1024 * 1024,
@@ -118,7 +127,8 @@ const engine = readEngine({
 						reranked = rows.length;
 						return rows.map((row) =>
 							Math.abs(
-								Schema.decodeUnknownSync(Schema.Array(Schema.Number))(row['color'])[0]! - 0.5
+								present(Schema.decodeUnknownSync(Schema.Array(Schema.Number))(row['color'])[0]) -
+									0.5
 							)
 						);
 					})
@@ -130,10 +140,8 @@ const cat = engine.catalog;
 const caller: Reader = { as: 'caller', authority: rep };
 const workspace: Reader = { as: 'workspace' };
 const run = (reader: Reader, ...batch: ReadIR[]) => engine.run(batch, reader, bindings);
-type Page = {
-	rows: RowData[];
-	next: string | null;
-};
+const JsonRow = Schema.Record(Schema.String, Schema.Json);
+const Page = Schema.Struct({ rows: Schema.Array(JsonRow), next: Schema.NullOr(Schema.String) });
 const fill = Effect.fnUntraced(function* (fresh: PGlite) {
 	pg = fresh;
 	native = PgliteDb.make(pg);
@@ -212,12 +220,12 @@ describe('next query engine (PGlite)', () => {
 						readBytes: LIMITS.readBytes
 					}
 				});
-				const accounts = read(cat, 'accounts', {
+				const accounts = yield* read(cat, 'accounts', {
 					all: true,
 					where: { region: { eq: 'north' } },
 					select: { name: true }
 				});
-				const orders = read(cat, 'orders', {
+				const orders = yield* read(cat, 'orders', {
 					all: true,
 					where: { account: { in: { member: '1:accounts', field: 'id' } } },
 					select: { account: true }
@@ -245,7 +253,7 @@ describe('next query engine (PGlite)', () => {
 					},
 					{
 						_tag: 'read',
-						read: read(cat, 'notes', { all: true, select: { body: true } })
+						read: yield* read(cat, 'notes', { all: true, select: { body: true } })
 					}
 				]);
 				expect(statementCount - before).toBe(2);
@@ -279,7 +287,7 @@ describe('next query engine (PGlite)', () => {
 				expect(rows[2]).toEqual(NOTES.map((note) => note.id).sort());
 				expect(bridge.tables().toSorted()).toEqual(['accounts', 'notes', 'orders']);
 				expect(bridge.fingerprints()).toHaveLength(2);
-				const notes = read(cat, 'notes', { all: true });
+				const notes = yield* read(cat, 'notes', { all: true });
 				if (notes.kind !== 'read') throw new Error('The fixture declares a native row read.');
 				const independent = yield* bridge.cross([
 					{
@@ -288,7 +296,7 @@ describe('next query engine (PGlite)', () => {
 					},
 					{
 						_tag: 'read',
-						read: read(cat, 'notes', { all: true, select: { body: true } })
+						read: yield* read(cat, 'notes', { all: true, select: { body: true } })
 					}
 				]);
 				expect(independent[0]?.ok).toBe(false);
@@ -298,11 +306,14 @@ describe('next query engine (PGlite)', () => {
 	it.effect(
 		"a read request's targets are its roots, its layers and every model its filters hop into",
 		() =>
-			Effect.sync(() => {
-				const request = lowerRead(manifest, 'query', [
+			Effect.gen(function* () {
+				const request = yield* lower_read(manifest, 'query', [
 					{
-						orders: { where: { lines: { some: { sku: { eq: 's1' } } } }, fields: ['status'] },
-						'orders.account': { fields: ['name'] },
+						orders: {
+							where: { lines: { some: { sku: { eq: 's1' } } } },
+							fields: ['status'],
+							account: { fields: ['name'] }
+						},
 						notes: { fields: ['body'] }
 					}
 				]);
@@ -330,7 +341,7 @@ describe('next query engine (PGlite)', () => {
 				const page = Effect.fnUntraced(function* (reader: Reader, after?: string) {
 					const [answer] = yield* run(
 						reader,
-						lowerRead(manifest, 'query', [
+						yield* lower_read(manifest, 'query', [
 							{
 								orders: {
 									where: { status: { ne: 'held' } },
@@ -344,11 +355,11 @@ describe('next query engine (PGlite)', () => {
 					return Schema.decodeUnknownSync(counted)(answer).orders;
 				});
 				for (const reader of [caller, workspace]) {
-					const visible = (
+					const visible = Schema.decodeUnknownSync(Page)(
 						(yield* run(
 							reader,
-							read(cat, 'orders', { all: true, where: { status: { ne: 'held' } } })
-						))[0] as Page
+							yield* read(cat, 'orders', { all: true, where: { status: { ne: 'held' } } })
+						))[0]
 					).rows.length;
 					const first = yield* page(reader);
 					expect(first.rows).toHaveLength(2);
@@ -362,7 +373,7 @@ describe('next query engine (PGlite)', () => {
 				for (const reader of [caller, workspace]) {
 					const [lanes] = yield* run(
 						reader,
-						lowerRead(manifest, 'aggregate', [
+						yield* lower_read(manifest, 'aggregate', [
 							'orders',
 							{ count: true, by: ['status'], all: true, where: { status: { ne: 'held' } } }
 						])
@@ -382,11 +393,11 @@ describe('next query engine (PGlite)', () => {
 			Effect.gen(function* () {
 				yield* setup();
 				const all = Effect.fnUntraced(function* (c: string, reader: Reader, select?: object) {
-					return (
+					return Schema.decodeUnknownSync(Page)(
 						(yield* run(
 							reader,
-							read(cat, c, { all: true, ...(select === undefined ? {} : { select }) })
-						))[0] as Page
+							yield* read(cat, c, { all: true, ...(select === undefined ? {} : { select }) })
+						))[0]
 					).rows;
 				});
 				const everything = {
@@ -403,36 +414,37 @@ describe('next query engine (PGlite)', () => {
 					account: true,
 					doc: true
 				};
-				const rows = {
+				const rows: Readonly<Record<string, readonly RowData[]>> = {
 					accounts: yield* all('accounts', workspace, { name: true, region: true, secret: true }),
 					orders: yield* all('orders', workspace, everything),
 					lines: yield* all('lines', workspace),
 					notes: yield* all('notes', workspace)
-				} as {
-					[c: string]: RowData[];
 				};
-				const related = (c: string, rel: string, target: string, row: RowData): RowData[] => {
-					const one = cat.models.get(c)!.one.get(rel);
+				const related = (
+					c: string,
+					rel: string,
+					target: string,
+					row: RowData
+				): readonly RowData[] => {
+					const one = present(cat.models.get(c)).one.get(rel);
 					if (one !== undefined) {
-						const v = row[rel] as
-							| string
-							| {
-									model: string;
-									id: string;
-							  }
-							| null;
+						const v = Schema.decodeUnknownSync(
+							Schema.NullOr(
+								Schema.Union([
+									Schema.String,
+									Schema.Struct({ model: Schema.String, id: Schema.String })
+								])
+							)
+						)(row[rel]);
 						const to = typeof v === 'string' ? v : v?.model === target ? v.id : null;
-						return rows[target]!.filter((r) => r.id === to);
+						return present(rows[target]).filter((r) => r.id === to);
 					}
-					const m = cat.models.get(c)!.many.get(rel)!;
-					const fk = m.column.split('__')[0]!;
-					return rows[target]!.filter((r) => {
-						const v = r[fk] as
-							| string
-							| {
-									id: string;
-							  }
-							| null;
+					const m = present(present(cat.models.get(c)).many.get(rel));
+					const fk = present(m.column.split('__')[0]);
+					return present(rows[target]).filter((r) => {
+						const v = Schema.decodeUnknownSync(
+							Schema.NullOr(Schema.Union([Schema.String, Schema.Struct({ id: Schema.String })]))
+						)(r[fk]);
 						return (typeof v === 'string' ? v : v?.id) === row.id;
 					});
 				};
@@ -447,7 +459,7 @@ describe('next query engine (PGlite)', () => {
 				const pool = (m: string, f: string): Json[] =>
 					[
 						...new Set(
-							rows[m]!.flatMap((row) =>
+							present(rows[m]).flatMap((row) =>
 								row[f] === undefined || row[f] === null ? [] : [JSON.stringify(untag(row[f]))]
 							)
 						)
@@ -470,8 +482,8 @@ describe('next query engine (PGlite)', () => {
 					switch (f.kind) {
 						case 'enum':
 							return pick([
-								{ [cmp().slice(0, 2) === 'eq' ? 'eq' : 'ne']: pick(f.values!) },
-								{ [pick(['in', 'nin'])]: f.values!.filter(() => rnd() < 0.5) }
+								{ [cmp().slice(0, 2) === 'eq' ? 'eq' : 'ne']: pick(present(f.values)) },
+								{ in: present(f.values).filter(() => rnd() < 0.5) }
 							]);
 						case 'decimal':
 						case 'int': {
@@ -509,7 +521,7 @@ describe('next query engine (PGlite)', () => {
 									])
 								},
 								{
-									[pick(['overlaps', 'within', 'startsWithin', 'endsWithin'])]: {
+									[pick(['overlaps', 'contained_by', 'starts_within', 'ends_within'])]: {
 										from: pick(['2026-08-31', '2026-09-01']),
 										to: pick([null, '2026-09-12', bindings.today, '2026-10-01'])
 									}
@@ -540,18 +552,11 @@ describe('next query engine (PGlite)', () => {
 							]);
 						case 'json':
 							return pick([
-								{ contains: { big: pick(rows.orders!).id } },
+								{ contains: { big: pick(present(rows.orders)).id } },
 								{ contains: {} },
 								{ is_null: false }
 							]);
 						case 'text': {
-							if (f.many)
-								return pick([
-									{ has: pick(['a', 'b', 'c']) },
-									{ hasAny: ['a', 'b', 'c'].filter(() => rnd() < 0.5) },
-									{ hasAll: ['a', 'b'].filter(() => rnd() < 0.7) },
-									{ isEmpty: rnd() < 0.5 }
-								]);
 							const s = vals.length === 0 ? 'x' : String(v());
 							const like = pick([
 								`%${s.slice(1, 3)}%`,
@@ -581,7 +586,7 @@ describe('next query engine (PGlite)', () => {
 					}
 				}
 				const FIELDS = (m: string) =>
-					[...cat.models.get(m)!.fields.values()].filter(
+					[...present(cat.models.get(m)).fields.values()].filter(
 						(f) =>
 							!f.name.includes('.') &&
 							!['id', 'revision', 'created_by', 'updated_by', 'created_at', 'updated_at'].includes(
@@ -593,7 +598,7 @@ describe('next query engine (PGlite)', () => {
 					);
 				// a relation only through the read layers `path` declares: a read filters across no other
 				function gen(m: string, depth: number, o: Opts, path = m): object {
-					const info = cat.models.get(m)!;
+					const info = present(cat.models.get(m));
 					const r = rnd();
 					if (depth < 4 && r < 0.12)
 						return { and: [gen(m, depth + 1, o, path), gen(m, depth + 1, o, path)] };
@@ -612,13 +617,17 @@ describe('next query engine (PGlite)', () => {
 								rnd() < 0.7
 									? { is: gen(t, depth + 1, o, `${path}.${rel}`) }
 									: pick([
-											{ eq: pick(rows[t]!).id },
-											{ in: rows[t]!.filter(() => rnd() < 0.3).map((x) => x.id) },
+											{ eq: pick(present(rows[t])).id },
+											{
+												in: present(rows[t])
+													.filter(() => rnd() < 0.3)
+													.map((x) => x.id)
+											},
 											{ is_null: rnd() < 0.5 }
 										]);
 							return { [rel]: one.targets.length > 1 ? { [t]: body } : body };
 						}
-						const child = info.many.get(rel)!.child;
+						const child = present(info.many.get(rel)).child;
 						const amounts = pool(child, 'amount');
 						return {
 							[rel]: pick([
@@ -638,108 +647,105 @@ describe('next query engine (PGlite)', () => {
 						};
 					}
 					const f = pick(FIELDS(m));
-					return { [f.name]: leaf(m, f, o) };
+					if (f.many) {
+						const any = ['a', 'b', 'c'].filter(() => rnd() < 0.5);
+						const all = ['a', 'b'].filter(() => rnd() < 0.7);
+						return pick([
+							{ [f.name]: { has: pick(['a', 'b', 'c']) } },
+							{ or: any.map((value) => ({ [f.name]: { has: value } })) },
+							{ and: all.map((value) => ({ [f.name]: { has: value } })) },
+							{ [f.name]: { [rnd() < 0.5 ? 'eq' : 'ne']: [] } }
+						]);
+					}
+					const predicate = { [f.name]: leaf(m, f, o) };
+					return rnd() < 0.2 ? { not: predicate } : predicate;
 				}
 				// rule 11a's mutation step: one operator object or relation body becomes a shape every kind refuses
 				const BAD = [{}, { nope: 1 }, { eq: null }, { is_null: 'yes' }, { eq: { now: '+-1d' } }];
 				function corrupt(m: string, w: object): object {
-					const spots: {
-						obj: {
-							[k: string]: unknown;
-						};
-						key: string;
-						rel: boolean;
-					}[] = [];
-					const walk = (
-						mm: string,
-						node: {
-							[k: string]: unknown;
-						}
-					) => {
-						const info = cat.models.get(mm)!;
+					const spots: { obj: Record<string, unknown>; key: string; rel: boolean }[] = [];
+					const record = (value: unknown): Record<string, unknown> => {
+						if (!Predicate.isObject(value) || Array.isArray(value))
+							throw new Error('Expected a generated predicate object');
+						return value;
+					};
+					const walk = (mm: string, value: unknown) => {
+						const node = record(value),
+							info = present(cat.models.get(mm));
 						for (const [k, v] of Object.entries(node)) {
-							if (k === 'and' || k === 'or')
-								(v as object[]).forEach((x) =>
-									walk(
-										mm,
-										x as {
-											[k: string]: unknown;
-										}
-									)
-								);
-							else if (k === 'not')
-								walk(
-									mm,
-									v as {
-										[k: string]: unknown;
-									}
-								);
+							if (k === 'and' || k === 'or') {
+								if (!Array.isArray(v)) throw new Error('Expected generated predicate children');
+								if (v.length === 0) spots.push({ obj: node, key: k, rel: false });
+								v.forEach((child) => walk(mm, child));
+							} else if (k === 'not') walk(mm, v);
 							else if (info.many.has(k)) {
 								spots.push({ obj: node, key: k, rel: true });
-								for (const [q, x] of Object.entries(v as object))
+								for (const [q, child] of Object.entries(record(v)))
 									if (q === 'some' || q === 'none' || q === 'every')
-										walk(info.many.get(k)!.child, x);
+										walk(present(info.many.get(k)).child, child);
 							} else if (info.one.has(k)) {
 								spots.push({ obj: node, key: k, rel: true });
-								const one = info.one.get(k)!;
-								const body = (one.targets.length > 1 ? Object.values(v as object)[0] : v) as {
-									is?: object;
-								};
+								const one = present(info.one.get(k)),
+									arms = record(v);
+								const body = record(one.targets.length > 1 ? Object.values(arms)[0] : v);
 								if (body.is !== undefined)
 									walk(
-										one.targets.length > 1 ? Object.keys(v as object)[0]! : one.targets[0]!,
-										body.is as {
-											[k: string]: unknown;
-										}
+										one.targets.length > 1
+											? present(Object.keys(arms)[0])
+											: present(one.targets[0]),
+										body.is
 									);
 							} else spots.push({ obj: node, key: k, rel: false });
 						}
 					};
-					const copy = JSON.parse(JSON.stringify(w)) as {
-						[k: string]: unknown;
-					};
+					const copy = Schema.decodeUnknownSync(Schema.fromJsonString(JsonRow))(JSON.stringify(w));
 					walk(m, copy);
-					const s = pick(spots);
-					s.obj[s.key] = s.rel ? pick([{}, { bogus: {} }]) : pick(BAD);
+					const spot = pick(spots);
+					spot.obj[spot.key] = spot.rel ? pick([{}, { bogus: {} }]) : pick(BAD);
 					return copy;
 				}
 				// the workspace (unscoped) and a scoped caller; an admin reads as the workspace does
-				for (const [reader, authority] of [
+				const readers: readonly (readonly [Reader, Authority | null])[] = [
 					[workspace, null],
 					[caller, rep]
-				] as [Reader, Authority | null][]) {
+				];
+				for (const [reader, authority] of readers) {
 					const o = { actor: authority !== null, text: false };
 					const wheres = Array.from({ length: 12 }, () => gen('orders', 0, o));
-					const browser = authority === null ? cat : browserCatalog(exposure(manifest, authority));
-					const preds: Pred[] = wheres.map((w) => {
-						const p = storeSync(where(cat, 'orders', w));
-						expect(storeSync(where(cat, 'orders', JSON.parse(JSON.stringify(w))))).toEqual(p);
-						expect(storeSync(decodeView(browser, 'orders', { where: w })).dropped).toEqual([]);
-						expect(() => storeSync(where(cat, 'orders', corrupt('orders', w)))).toThrow(
-							expect.objectContaining({ code: 'invalid' })
-						);
-						return p;
-					});
+					const browser =
+						authority === null ? cat : browser_catalog(yield* exposure(manifest, authority));
+					const preds: Pred[] = [];
+					for (const w of wheres) {
+						const p = yield* where(cat, 'orders', w);
+						expect(yield* where(cat, 'orders', JSON.parse(JSON.stringify(w)))).toEqual(p);
+						expect((yield* decode_view(browser, 'orders', { where: w })).dropped).toEqual([]);
+						expect(yield* Effect.flip(where(cat, 'orders', corrupt('orders', w)))).toMatchObject({
+							code: 'invalid'
+						});
+						preds.push(p);
+					}
 					const results = yield* db.read(
-						preds.map((p) => storeSync(whereSql(cat, 'orders', p, readOptions(reader, bindings))))
+						yield* Effect.forEach(preds, (p) =>
+							where_sql(cat, 'orders', p, readOptions(reader, bindings))
+						)
 					);
 					const env = { cat, bindings, authority, scoped: authority !== null, related };
 					const inScope = (r: RowData) =>
 						authority === null ||
 						authority.admin ||
-						(authority.models.orders!.read['default']?.['orders'] ?? []).some((a) =>
+						(present(authority.models.orders).read['default']?.['orders'] ?? []).some((a) =>
 							evaluate({ ...env, scoped: false }, 'orders', a.where, r)
 						);
 					let telling = 0;
-					const scoped = rows.orders!.filter(inScope).length;
+					const scoped = present(rows.orders).filter(inScope).length;
 					preds.forEach((p, i) => {
-						const js = rows
-							.orders!.filter((r) => inScope(r) && evaluate(env, 'orders', p, r))
+						const js = present(rows.orders)
+							.filter((r) => inScope(r) && evaluate(env, 'orders', p, r))
 							.map((r) => r.id)
 							.sort();
 						expect({
 							w: JSON.stringify(wheres[i]),
-							ids: results[i]!.rows.map((r) => r.id)
+							ids: present(results[i]).rows.map((r) => r.id)
 						}).toEqual({ w: JSON.stringify(wheres[i]), ids: js });
 						if (js.length > 0 && js.length < scoped) telling++;
 					});
@@ -748,14 +754,9 @@ describe('next query engine (PGlite)', () => {
 					// text ordering follows the database collation, which the JS evaluator does not model: SQL only
 					const text = Array.from({ length: 3 }, () => gen('orders', 0, { ...o, text: true }));
 					yield* db.read(
-						text.map((w) =>
-							storeSync(
-								whereSql(
-									cat,
-									'orders',
-									storeSync(where(cat, 'orders', w)),
-									readOptions(reader, bindings)
-								)
+						yield* Effect.forEach(text, (w) =>
+							where(cat, 'orders', w).pipe(
+								Effect.flatMap((p) => where_sql(cat, 'orders', p, readOptions(reader, bindings)))
 							)
 						)
 					);
@@ -771,58 +772,60 @@ describe('next query engine (PGlite)', () => {
 					const seen: string[] = [];
 					let after: string | undefined;
 					do {
-						const page = (yield* run(
-							workspace,
-							read(cat, 'orders', {
-								order_by,
-								limit: 7,
-								...(after === undefined ? {} : { after }),
-								select: { total: true, note: true, status: true }
-							})
-						))[0] as Page;
+						const page = Schema.decodeUnknownSync(Page)(
+							(yield* run(
+								workspace,
+								yield* read(cat, 'orders', {
+									order_by,
+									limit: 7,
+									...(after === undefined ? {} : { after }),
+									select: { total: true, note: true, status: true }
+								})
+							))[0]
+						);
 						expect(page.rows.length).toBeLessThanOrEqual(7);
-						seen.push(...page.rows.map((r) => r.id as string));
+						seen.push(...page.rows.map((r) => Schema.decodeUnknownSync(Schema.String)(r.id)));
 						after = page.next ?? undefined;
 					} while (after !== undefined);
-					const all = (
+					const all = Schema.decodeUnknownSync(Page)(
 						(yield* run(
 							workspace,
-							read(cat, 'orders', { order_by, all: true, select: { total: true } })
-						))[0] as Page
+							yield* read(cat, 'orders', { order_by, all: true, select: { total: true } })
+						))[0]
 					).rows.map((r) => r.id);
 					expect(seen).toEqual(all);
 					expect(new Set(seen).size).toBe(ORDERS.length);
 				}
-				const byTotal = (
+				const byTotal = Schema.decodeUnknownSync(Page)(
 					(yield* run(
 						workspace,
-						read(cat, 'orders', {
+						yield* read(cat, 'orders', {
 							order_by: { total: 'desc' },
 							all: true,
 							select: { total: true }
 						})
-					))[0] as Page
+					))[0]
 				).rows;
 				const totals = byTotal.map((r) =>
-					Number(
-						(
-							r.total as {
-								$dec: string;
-							}
-						).$dec
-					)
+					Number(Schema.decodeUnknownSync(Schema.Struct({ $dec: Schema.String }))(r.total).$dec)
 				);
 				expect(totals).toEqual([...totals].sort((a, b) => b - a));
-				const first = (yield* run(workspace, read(cat, 'orders', { limit: 3 })))[0] as Page;
+				const first = Schema.decodeUnknownSync(Page)(
+					(yield* run(workspace, yield* read(cat, 'orders', { limit: 3 })))[0]
+				);
 				expect(
 					yield* Effect.flip(
 						run(
 							workspace,
-							read(cat, 'orders', { limit: 3, after: first.next!, where: { qty: { gt: 0 } } })
+							yield* read(cat, 'orders', {
+								limit: 3,
+								after: present(first.next),
+								where: { qty: { gt: 0 } }
+							})
 						)
 					)
-				).toMatchObject({ code: 'badCursor' });
-				expect((yield* run(workspace, read(cat, 'orders', { limit: 0 })))[0]).toEqual({
+				).toMatchObject({ code: 'bad_cursor' });
+				expect((yield* run(workspace, yield* read(cat, 'orders', { limit: 0 })))[0]).toEqual({
 					rows: [],
 					next: null
 				});
@@ -861,26 +864,27 @@ describe('next query engine (PGlite)', () => {
 				const seen: string[] = [];
 				let after: string | undefined;
 				do {
-					const page = (yield* run(
-						workspace,
-						read(cat, 'orders', {
-							order_by,
-							limit: 7,
-							...(after === undefined ? {} : { after }),
-							select: { spot: true }
-						})
-					))[0] as Page;
-					seen.push(...page.rows.map((r) => r.id as string));
+					const page = Schema.decodeUnknownSync(Page)(
+						(yield* run(
+							workspace,
+							yield* read(cat, 'orders', {
+								order_by,
+								limit: 7,
+								...(after === undefined ? {} : { after }),
+								select: { spot: true }
+							})
+						))[0]
+					);
+					seen.push(...page.rows.map((r) => Schema.decodeUnknownSync(Schema.String)(r.id)));
 					after = page.next ?? undefined;
 				} while (after !== undefined);
 				expect(seen).toEqual(want);
 				// through a one-relation's point is the same key shape; a non-point field is refused
-				expect(() => read(cat, 'orders', { order_by: { total: { near: at } }, limit: 5 })).toThrow(
-					/not a point/
-				);
-				expect(() =>
-					read(cat, 'orders', { order_by: { spot: { near: { lat: 99, lng: 1 } } }, limit: 5 })
-				).not.toThrow(); // the grammar checks shape, not range
+				expect(
+					(yield* Effect.flip(read(cat, 'orders', { order_by: { total: { near: at } }, limit: 5 })))
+						.message
+				).toMatch(/not a point/);
+				yield* read(cat, 'orders', { order_by: { spot: { near: { lat: 99, lng: 1 } } }, limit: 5 }); // the grammar checks shape, not range
 			})
 	);
 	it.live(
@@ -890,7 +894,7 @@ describe('next query engine (PGlite)', () => {
 				yield* setup();
 				const acc = new Map(ACCOUNTS.map((a) => [a.id, a]));
 				const ord = new Map(ORDERS.map((o) => [o.id, o]));
-				const byId = (
+				const by_id = (
 					x: {
 						id: string;
 					},
@@ -907,15 +911,17 @@ describe('next query engine (PGlite)', () => {
 					const seen: string[] = [];
 					let after: string | undefined;
 					do {
-						const page = (yield* run(
-							reader,
-							read(cat, model, {
-								order_by,
-								limit,
-								...(after === undefined ? {} : { after })
-							})
-						))[0] as Page;
-						seen.push(...page.rows.map((r) => r.id as string));
+						const page = Schema.decodeUnknownSync(Page)(
+							(yield* run(
+								reader,
+								yield* read(cat, model, {
+									order_by,
+									limit,
+									...(after === undefined ? {} : { after })
+								})
+							))[0]
+						);
+						seen.push(...page.rows.map((r) => Schema.decodeUnknownSync(Schema.String)(r.id)));
 						after = page.next ?? undefined;
 					} while (after !== undefined);
 					return seen;
@@ -923,15 +929,17 @@ describe('next query engine (PGlite)', () => {
 				// one hop: account name ascending (distinct first letters: the database collation and JS agree), then id
 				const byName = [...ORDERS]
 					.sort(
-						(x, y) => acc.get(x.account)!.name.localeCompare(acc.get(y.account)!.name) || byId(x, y)
+						(x, y) =>
+							present(acc.get(x.account)).name.localeCompare(present(acc.get(y.account)).name) ||
+							by_id(x, y)
 					)
 					.map((o) => o.id);
 				expect(
-					(
+					Schema.decodeUnknownSync(Page)(
 						(yield* run(
 							workspace,
-							read(cat, 'orders', { order_by: { account: { name: 'asc' } }, all: true })
-						))[0] as Page
+							yield* read(cat, 'orders', { order_by: { account: { name: 'asc' } }, all: true })
+						))[0]
 					).rows.map((r) => r.id)
 				).toEqual(byName);
 				expect(yield* walk(workspace, 'orders', { account: { name: 'asc' } }, 7)).toEqual(byName);
@@ -939,9 +947,9 @@ describe('next query engine (PGlite)', () => {
 				const byOrderAccount = [...LINES]
 					.sort(
 						(x, y) =>
-							acc
-								.get(ord.get(y.order)!.account)!
-								.name.localeCompare(acc.get(ord.get(x.order)!.account)!.name) || byId(x, y)
+							present(acc.get(present(ord.get(y.order)).account)).name.localeCompare(
+								present(acc.get(present(ord.get(x.order)).account)).name
+							) || by_id(x, y)
 					)
 					.map((l) => l.id);
 				expect(
@@ -949,10 +957,10 @@ describe('next query engine (PGlite)', () => {
 				).toEqual(byOrderAccount);
 				// a nullable target field: nulls first descending, as an own field; then an own key; every row once across pages
 				const mixed: Json = [{ account: { region: 'desc' } }, { total: 'asc' }];
-				const all = (
-					(yield* run(workspace, read(cat, 'orders', { order_by: mixed, all: true })))[0] as Page
-				).rows.map((r) => r.id as string);
-				const region = (id: string) => acc.get(ord.get(id)!.account)!.region;
+				const all = Schema.decodeUnknownSync(Page)(
+					(yield* run(workspace, yield* read(cat, 'orders', { order_by: mixed, all: true })))[0]
+				).rows.map((r) => Schema.decodeUnknownSync(Schema.String)(r.id));
+				const region = (id: string) => present(acc.get(present(ord.get(id)).account)).region;
 				expect(
 					all
 						.slice(0, all.filter((id) => region(id) === null).length)
@@ -961,49 +969,55 @@ describe('next query engine (PGlite)', () => {
 				expect(yield* walk(workspace, 'orders', mixed, 5)).toEqual(all);
 				expect(new Set(all).size).toBe(ORDERS.length);
 				// a caller: in scope only, same order; a cursor is bound to its related key
-				const scoped = byName.filter((id) => acc.get(ord.get(id)!.account)!.region === 'north');
+				const scoped = byName.filter(
+					(id) => present(acc.get(present(ord.get(id)).account)).region === 'north'
+				);
 				expect(yield* walk(caller, 'orders', { account: { name: 'asc' } }, 4)).toEqual(scoped);
-				const first = (yield* run(
-					caller,
-					read(cat, 'orders', { order_by: { account: { name: 'asc' } }, limit: 3 })
-				))[0] as Page;
+				const first = Schema.decodeUnknownSync(Page)(
+					(yield* run(
+						caller,
+						yield* read(cat, 'orders', { order_by: { account: { name: 'asc' } }, limit: 3 })
+					))[0]
+				);
 				expect(
 					yield* Effect.flip(
 						run(
 							caller,
-							read(cat, 'orders', {
+							yield* read(cat, 'orders', {
 								order_by: { account: { region: 'asc' } },
 								limit: 3,
-								after: first.next!
+								after: present(first.next)
 							})
 						)
 					)
-				).toMatchObject({ code: 'badCursor' });
+				).toMatchObject({ code: 'bad_cursor' });
 				// rule 14: a target field the output's layer omits and an unread target refuse; the workspace sorts by any of them
-				const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
-				const asClerk = (order_by: Json) => ({
-					...read(brief, 'orders', { order_by, limit: 5 }),
-					output: 'brief'
-				});
+				const brief = yield* catalog_for(cat, 'orders', 'brief');
+				const asClerk = (order_by: Json) =>
+					read(brief, 'orders', { order_by, limit: 5 }).pipe(
+						Effect.flatMap((ir) => run(clerkReads, as_brief(ir)))
+					);
 				const clerkReads: Reader = { as: 'caller', authority: clerk };
+				expect(yield* Effect.flip(asClerk({ account: { secret: 'asc' } }))).toMatchObject({
+					code: 'invalid_input'
+				});
 				expect(
-					yield* Effect.flip(run(clerkReads, asClerk({ account: { secret: 'asc' } })))
-				).toMatchObject({ code: 'invalidInput' });
-				expect(
-					((yield* run(clerkReads, asClerk({ account: { name: 'asc' } })))[0] as Page).rows.map(
-						(r) => r.id
-					)
+					Schema.decodeUnknownSync(Page)(
+						(yield* asClerk({ account: { name: 'asc' } }))[0]
+					).rows.map((r) => r.id)
 				).toEqual(scoped.slice(0, 5));
 				// unread: neither the accounts grant nor the orders grant's account layer
 				const { accounts: _accounts, ...withoutAccounts } = rep.models;
-				const { 'orders.account': _layer, ...ordersRead } = rep.models.orders!.read['default']!;
+				const { 'orders.account': _layer, ...ordersRead } = present(
+					present(rep.models.orders).read['default']
+				);
 				const noAccounts: Reader = {
 					as: 'caller',
 					authority: {
 						...rep,
 						models: {
 							...withoutAccounts,
-							orders: { ...rep.models.orders!, read: { default: ordersRead } }
+							orders: { ...present(rep.models.orders), read: { default: ordersRead } }
 						}
 					}
 				};
@@ -1011,48 +1025,54 @@ describe('next query engine (PGlite)', () => {
 					yield* Effect.flip(
 						run(
 							noAccounts,
-							read(cat, 'orders', { order_by: { account: { name: 'asc' } }, limit: 5 })
+							yield* read(cat, 'orders', { order_by: { account: { name: 'asc' } }, limit: 5 })
 						)
 					)
-				).toMatchObject({ code: 'invalidInput' });
+				).toMatchObject({ code: 'invalid_input' });
 				expect(
-					(
+					Schema.decodeUnknownSync(Page)(
 						(yield* run(
 							workspace,
-							read(cat, 'orders', { order_by: { account: { secret: 'asc' } }, limit: 5 })
-						))[0] as Page
+							yield* read(cat, 'orders', { order_by: { account: { secret: 'asc' } }, limit: 5 })
+						))[0]
 					).rows
 				).toHaveLength(5);
 				// the grammar: an arc is not a hop, three hops and a dotted key are invalid
-				expect(() =>
-					read(cat, 'notes', { order_by: { about: { name: 'asc' } }, limit: 5 })
-				).toThrow(/not a one-relation/);
-				expect(() =>
-					read(cat, 'lines', {
-						order_by: { order: { account: { name: { x: 'asc' } } } },
-						limit: 5
-					})
-				).toThrow(/at most 2 relations/);
-				expect(() =>
-					read(cat, 'orders', { order_by: { 'account.name': 'asc' }, limit: 5 })
-				).toThrow(/one \{ field/);
+				expect(
+					(yield* Effect.flip(
+						read(cat, 'notes', { order_by: { about: { name: 'asc' } }, limit: 5 })
+					)).message
+				).toMatch(/not a one-relation/);
+				expect(
+					(yield* Effect.flip(
+						read(cat, 'lines', {
+							order_by: { order: { account: { name: { x: 'asc' } } } },
+							limit: 5
+						})
+					)).message
+				).toMatch(/at most 2 relations/);
+				expect(
+					(yield* Effect.flip(
+						read(cat, 'orders', { order_by: { 'account.name': 'asc' }, limit: 5 })
+					)).message
+				).toMatch(/one \{ field/);
 			})
 	);
 	it.live('rule 12: one batch is one round trip; identical reads run once', () =>
 		Effect.gen(function* () {
 			yield* setup();
 			const before = reads;
-			const a = read(cat, 'accounts', { limit: 2 });
+			const a = yield* read(cat, 'accounts', { limit: 2 });
 			const out = yield* run(
 				workspace,
 				a,
-				get(cat, 'orders', ORDERS[0]!.id),
+				yield* get(cat, 'orders', present(ORDERS[0]).id),
 				a,
-				yield* aggregate(cat, 'orders', { count: true }).pipe(Effect.mapError(fromStore))
+				yield* aggregate(cat, 'orders', { count: true }).pipe(Effect.mapError(from_store))
 			);
 			expect(reads - before).toBe(1);
 			expect(out[0]).toEqual(out[2]);
-			expect((out[1] as RowData).id).toBe(ORDERS[0]!.id);
+			expect(Schema.decodeUnknownSync(JsonRow)(out[1]).id).toBe(present(ORDERS[0]).id);
 			expect(out[3]).toEqual({ count: 40 });
 		})
 	);
@@ -1062,19 +1082,19 @@ describe('next query engine (PGlite)', () => {
 			Effect.gen(function* () {
 				yield* setup();
 				const batch = [
-					read(cat, 'accounts', { all: true, select: { name: true } }),
-					read(cat, 'orders', { limit: 3, order_by: { placed: 'desc' } }),
-					get(cat, 'orders', ORDERS[1]!.id),
-					get(cat, 'orders', ORDERS[2]!.id),
+					yield* read(cat, 'accounts', { all: true, select: { name: true } }),
+					yield* read(cat, 'orders', { limit: 3, order_by: { placed: 'desc' } }),
+					yield* get(cat, 'orders', present(ORDERS[1]).id),
+					yield* get(cat, 'orders', present(ORDERS[2]).id),
 					yield* aggregate(cat, 'orders', { count: true, where: { status: { eq: 'open' } } }).pipe(
-						Effect.mapError(fromStore)
+						Effect.mapError(from_store)
 					),
-					read(cat, 'lines', {
+					yield* read(cat, 'lines', {
 						all: true,
 						where: { sku: { eq: 's1' } },
 						select: { amount: true }
 					}),
-					read(cat, 'notes', { limit: 0 })
+					yield* read(cat, 'notes', { limit: 0 })
 				];
 				for (const reader of [workspace, caller]) {
 					const alone = [];
@@ -1087,43 +1107,55 @@ describe('next query engine (PGlite)', () => {
 				const north = new Set(ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id));
 				const [accounts, far] = yield* run(
 					caller,
-					read(cat, 'accounts', { all: true }),
-					get(cat, 'orders', ORDERS.find((o) => !north.has(o.account))!.id)
+					yield* read(cat, 'accounts', { all: true }),
+					yield* get(cat, 'orders', present(ORDERS.find((o) => !north.has(o.account))).id)
 				);
-				expect((accounts as Page).rows.map((r) => r.id).sort()).toEqual([...north].sort());
+				expect(
+					Schema.decodeUnknownSync(Page)(accounts)
+						.rows.map((r) => r.id)
+						.sort()
+				).toEqual([...north].sort());
 				expect(far).toBeNull();
 			})
 	);
+	/** A list or aggregate read of the `brief` output. */
+	const as_brief = (read: ReadIR): ReadIR => {
+		if (read.kind !== 'read' && read.kind !== 'aggregate') throw new Error('Only a list or aggregate names one output');
+		return { ...read, output: 'brief' };
+	};
 	/** A batch read labelled as a keyed query's member. */
-	const member = (read: ReadIR, key: string, cte?: string): ReadIR =>
-		({ ...read, member: key, ...(cte === undefined ? {} : { cte }) }) as ReadIR;
+	const member = (read: ReadIR, key: string, cte?: string): ReadIR => {
+		if (read.kind !== 'read' && read.kind !== 'get')
+			throw new Error('Only native row reads can be keyed members');
+		return { ...read, member: key, ...(cte === undefined ? {} : { cte }) };
+	};
 	it.live(
 		"rule 12: a keyed member reads an earlier member's values inside the one statement, under that member's scope",
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
 				const ref = (where: object, cte: string) =>
-					member(
-						read(cat, 'orders', { all: true, where, select: { account: true } }),
-						'orders',
-						cte
+					read(cat, 'orders', { all: true, where, select: { account: true } }).pipe(
+						Effect.map((ir) => member(ir, 'orders', cte))
 					);
 				const north = ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id);
 				for (const reader of [workspace, caller]) {
 					const s0 = statementCount;
-					const [accounts, orders] = (yield* run(
-						reader,
-						member(
-							read(cat, 'accounts', {
-								all: true,
-								where: { region: { eq: 'north' } },
-								select: { name: true }
-							}),
-							'accounts',
-							'1:accounts'
-						),
-						ref({ account: { in: { member: '1:accounts', field: 'id' } } }, '1:orders')
-					)) as [Page, Page];
+					const [accounts, orders] = Schema.decodeUnknownSync(Schema.Tuple([Page, Page]))(
+						yield* run(
+							reader,
+							member(
+								yield* read(cat, 'accounts', {
+									all: true,
+									where: { region: { eq: 'north' } },
+									select: { name: true }
+								}),
+								'accounts',
+								'1:accounts'
+							),
+							yield* ref({ account: { in: { member: '1:accounts', field: 'id' } } }, '1:orders')
+						)
+					);
 					expect(statementCount - s0).toBe(1);
 					expect(accounts.rows.map((r) => r.id).sort()).toEqual([...north].sort());
 					const expected = ORDERS.filter((o) => north.includes(o.account))
@@ -1132,11 +1164,16 @@ describe('next query engine (PGlite)', () => {
 					expect(orders.rows.map((r) => r.id).sort()).toEqual(expected);
 				}
 				// the referenced rows are the earlier member's as its reader sees them: the rep's accounts are its north ones
-				const [, scoped] = (yield* run(
-					caller,
-					member(read(cat, 'accounts', { all: true }), 'accounts', '2:accounts'),
-					ref({ account: { nin: { member: '2:accounts', field: 'id' } } }, '2:orders')
-				)) as [Page, Page];
+				const [, scoped] = Schema.decodeUnknownSync(Schema.Tuple([Page, Page]))(
+					yield* run(
+						caller,
+						member(yield* read(cat, 'accounts', { all: true }), 'accounts', '2:accounts'),
+						yield* ref(
+							{ not: { account: { in: { member: '2:accounts', field: 'id' } } } },
+							'2:orders'
+						)
+					)
+				);
 				expect(scoped.rows).toEqual([]);
 			})
 	);
@@ -1148,27 +1185,29 @@ describe('next query engine (PGlite)', () => {
 				const north = ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id);
 				const orders = new Set(ORDERS.filter((o) => north.includes(o.account)).map((o) => o.id));
 				const s0 = statementCount;
-				const [, lines] = (yield* run(
-					workspace,
-					member(
-						read(cat, 'accounts', {
-							all: true,
-							where: { region: { eq: 'north' } },
-							select: { name: true, orders: { select: { status: true }, all: true } }
-						}),
-						'accounts',
-						'3:accounts'
-					),
-					member(
-						read(cat, 'lines', {
-							all: true,
-							where: { order: { in: { member: '3:accounts', field: 'orders.id' } } },
-							select: { order: true }
-						}),
-						'lines',
-						'3:lines'
+				const [, lines] = Schema.decodeUnknownSync(Schema.Tuple([Page, Page]))(
+					yield* run(
+						workspace,
+						member(
+							yield* read(cat, 'accounts', {
+								all: true,
+								where: { region: { eq: 'north' } },
+								select: { name: true, orders: { select: { status: true }, all: true } }
+							}),
+							'accounts',
+							'3:accounts'
+						),
+						member(
+							yield* read(cat, 'lines', {
+								all: true,
+								where: { order: { in: { member: '3:accounts', field: 'orders.id' } } },
+								select: { order: true }
+							}),
+							'lines',
+							'3:lines'
+						)
 					)
-				)) as [Page, Page];
+				);
 				expect(statementCount - s0).toBe(1);
 				expect(lines.rows.map((r) => r.id).sort()).toEqual(
 					LINES.filter((l) => orders.has(l.order))
@@ -1182,20 +1221,22 @@ describe('next query engine (PGlite)', () => {
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
-				const account = ACCOUNTS[0]!.id;
+				const account = present(ACCOUNTS[0]).id;
 				for (let i = 0; i < 30; i++)
 					yield* query(
 						'insert into orders (id, account, status, total, qty, placed, at) values ($1, $2, $3, $4, $5, $6, $7)',
 						[id(5, i), account, 'open', '1.00', 1, '2026-09-01', '2026-09-01T00:00:00Z']
 					);
 				const s0 = statementCount;
-				const [page] = (yield* run(
-					workspace,
-					read(cat, 'accounts', {
-						all: true,
-						select: { name: true, orders: { select: { status: true }, all: true } }
-					})
-				)) as [Page];
+				const [page] = Schema.decodeUnknownSync(Schema.Tuple([Page]))(
+					yield* run(
+						workspace,
+						yield* read(cat, 'accounts', {
+							all: true,
+							select: { name: true, orders: { select: { status: true }, all: true } }
+						})
+					)
+				);
 				expect(statementCount - s0).toBe(1);
 				const held = page.rows.find((r) => r.id === account)?.orders;
 				expect(Array.isArray(held) ? held.length : -1).toBe(
@@ -1208,21 +1249,21 @@ describe('next query engine (PGlite)', () => {
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
-				const small = readEngine({ db, manifest, allBytes: 200 });
+				const small = read_engine({ db, manifest, allBytes: 200 });
 				const s0 = statementCount;
 				expect(
 					yield* Effect.flip(
 						small.run(
 							[
-								member(read(cat, 'accounts', { limit: 1 }), 'one'),
-								member(read(cat, 'orders', { all: true }), 'every')
+								member(yield* read(cat, 'accounts', { limit: 1 }), 'one'),
+								member(yield* read(cat, 'orders', { all: true }), 'every')
 							],
 							workspace,
 							bindings
 						)
 					)
 				).toMatchObject({
-					code: 'tooLarge',
+					code: 'too_large',
 					message: "member 'every': the read of orders is larger than 200 bytes; page it (rule 9)"
 				});
 				expect(statementCount - s0).toBe(1);
@@ -1234,20 +1275,31 @@ describe('next query engine (PGlite)', () => {
 			Effect.gen(function* () {
 				yield* setup();
 				const north = new Set(ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id));
-				const [accounts, orders, lines, far] = (yield* run(
-					caller,
-					read(cat, 'accounts', {
-						all: true,
-						select: { name: true, orders: { select: { status: true }, all: true } }
-					}),
-					read(cat, 'orders', { all: true, select: { account: { select: { name: true } } } }),
-					read(cat, 'lines', { all: true, select: { order: { select: { status: true } } } }),
-					get(cat, 'orders', ORDERS.find((o) => !north.has(o.account))!.id)
-				)) as [Page, Page, Page, Json];
-				expect(accounts.rows.map((r) => r.id).sort()).toEqual([...north].sort());
-				expect(accounts.rows.flatMap((r) => r.orders as RowData[]).length).toBe(
-					ORDERS.filter((o) => north.has(o.account)).length
+				const [accounts, orders, lines, far] = Schema.decodeUnknownSync(
+					Schema.Tuple([Page, Page, Page, Schema.Json])
+				)(
+					yield* run(
+						caller,
+						yield* read(cat, 'accounts', {
+							all: true,
+							select: { name: true, orders: { select: { status: true }, all: true } }
+						}),
+						yield* read(cat, 'orders', {
+							all: true,
+							select: { account: { select: { name: true } } }
+						}),
+						yield* read(cat, 'lines', {
+							all: true,
+							select: { order: { select: { status: true } } }
+						}),
+						yield* get(cat, 'orders', present(ORDERS.find((o) => !north.has(o.account))).id)
+					)
 				);
+				expect(accounts.rows.map((r) => r.id).sort()).toEqual([...north].sort());
+				expect(
+					accounts.rows.flatMap((r) => Schema.decodeUnknownSync(Schema.Array(JsonRow))(r.orders))
+						.length
+				).toBe(ORDERS.filter((o) => north.has(o.account)).length);
 				expect(orders.rows.every((r) => r.account !== null)).toBe(true);
 				expect(orders.rows.length).toBe(ORDERS.filter((o) => north.has(o.account)).length);
 				expect(lines.rows.length).toBe(LINES.length);
@@ -1269,7 +1321,7 @@ describe('next query engine (PGlite)', () => {
 						models: {
 							...rep.models,
 							lines: {
-								...rep.models['lines']!,
+								...present(rep.models['lines']),
 								read: {
 									default: {
 										lines: [{ policy: 'rep', where: { t: 'const', value: true } }],
@@ -1280,13 +1332,19 @@ describe('next query engine (PGlite)', () => {
 						}
 					}
 				};
-				const [narrow] = (yield* run(
-					narrowed,
-					read(cat, 'lines', { all: true, select: { order: { select: { status: true } } } })
-				)) as [Page];
+				const [narrow] = Schema.decodeUnknownSync(Schema.Tuple([Page]))(
+					yield* run(
+						narrowed,
+						yield* read(cat, 'lines', {
+							all: true,
+							select: { order: { select: { status: true } } }
+						})
+					)
+				);
 				expect(narrow.rows.length).toBe(LINES.length);
 				expect(narrow.rows.filter((r) => r.order === null).length).toBe(
-					LINES.filter((l) => !north.has(ORDERS.find((o) => o.id === l.order)!.account)).length
+					LINES.filter((l) => !north.has(present(ORDERS.find((o) => o.id === l.order)).account))
+						.length
 				);
 			})
 	);
@@ -1295,17 +1353,17 @@ describe('next query engine (PGlite)', () => {
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
-				const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
+				const brief = yield* catalog_for(cat, 'orders', 'brief');
 				const clerkReads: Reader = { as: 'caller', authority: clerk };
-				const asBrief = (q: { [k: string]: Json }) => ({
-					...read(brief, 'orders', q),
-					output: 'brief'
-				});
+				const asBrief = (q: { [k: string]: Json }) =>
+					read(brief, 'orders', q).pipe(Effect.flatMap((ir) => run(clerkReads, as_brief(ir))));
 				const north = new Set(ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id));
-				const [page] = (yield* run(
-					clerkReads,
-					asBrief({ all: true, select: { status: true, account: { select: { name: true } } } })
-				)) as [Page];
+				const [page] = Schema.decodeUnknownSync(Schema.Tuple([Page]))(
+					yield* asBrief({
+						all: true,
+						select: { status: true, account: { select: { name: true } } }
+					})
+				);
 				expect(page.rows.map((r) => r.id).sort()).toEqual(
 					ORDERS.filter((o) => north.has(o.account))
 						.map((o) => o.id)
@@ -1318,18 +1376,18 @@ describe('next query engine (PGlite)', () => {
 					{ all: true, select: { total: true } },
 					{ all: true, select: { account: { select: { secret: true } } } }
 				])
-					expect(yield* Effect.flip(run(clerkReads, asBrief(q)))).toMatchObject({
+					expect(yield* Effect.flip(asBrief(q))).toMatchObject({
 						code: expect.stringMatching(/^invalid/)
 					});
 				const max = yield* aggregate(brief, 'orders', { max: ['total'] }).pipe(
-					Effect.mapError(fromStore)
+					Effect.mapError(from_store)
 				);
 				expect(yield* Effect.flip(run(clerkReads, { ...max, output: 'brief' }))).toMatchObject({
 					code: expect.stringMatching(/^invalid/)
 				});
 				// the clerk holds no `default` output of orders
 				expect(
-					yield* Effect.flip(run(clerkReads, read(cat, 'orders', { all: true })))
+					yield* Effect.flip(run(clerkReads, yield* read(cat, 'orders', { all: true })))
 				).toMatchObject({ code: 'forbidden' });
 			})
 	);
@@ -1338,27 +1396,40 @@ describe('next query engine (PGlite)', () => {
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
-				const [ws, call] = (yield* Effect.all(
-					[
-						run(workspace, get(cat, 'accounts', ACCOUNTS[0]!.id)),
-						run(caller, get(cat, 'accounts', ACCOUNTS[0]!.id))
-					],
-					{ concurrency: 'unbounded' }
-				)) as [[RowData], [RowData]];
+				const [ws, call] = Schema.decodeUnknownSync(
+					Schema.Tuple([Schema.Tuple([JsonRow]), Schema.Tuple([JsonRow])])
+				)(
+					yield* Effect.all(
+						[
+							run(workspace, yield* get(cat, 'accounts', present(ACCOUNTS[0]).id)),
+							run(caller, yield* get(cat, 'accounts', present(ACCOUNTS[0]).id))
+						],
+						{ concurrency: 'unbounded' }
+					)
+				);
 				expect(ws[0]).toMatchObject({ name: 'alpha acme', secret: 'shh', revision: 1 });
 				expect(ws[0]).not.toHaveProperty('shout');
 				expect(call[0]).toMatchObject({ shout: 'ALPHA ACME', secret: 'shh' });
-				const [dflt, explicit] = (yield* run(
-					workspace,
-					read(cat, 'orders', { limit: 1 }),
-					read(cat, 'orders', { limit: 1, select: { doc: true, span: true, color: true } })
-				)) as [Page, Page];
+				const [dflt, explicit] = Schema.decodeUnknownSync(Schema.Tuple([Page, Page]))(
+					yield* run(
+						workspace,
+						yield* read(cat, 'orders', { limit: 1 }),
+						yield* read(cat, 'orders', { limit: 1, select: { doc: true, span: true, color: true } })
+					)
+				);
 				expect(ws[0]).toHaveProperty('created_at');
-				const cdefault = (yield* run(caller, read(cat, 'orders', { limit: 1 })))[0] as Page;
+				const cdefault = Schema.decodeUnknownSync(Page)(
+					(yield* run(caller, yield* read(cat, 'orders', { limit: 1 })))[0]
+				);
 				expect(cdefault.rows[0]).not.toHaveProperty('doc');
 				expect(dflt.rows[0]).toHaveProperty('doc');
-				expect(explicit.rows[0]!.doc).toEqual({ big: explicit.rows[0]!.id });
-				expect(Object.keys(explicit.rows[0]!).sort()).toEqual(['color', 'doc', 'id', 'span']);
+				expect(present(explicit.rows[0]).doc).toEqual({ big: present(explicit.rows[0]).id });
+				expect(Object.keys(present(explicit.rows[0])).sort()).toEqual([
+					'color',
+					'doc',
+					'id',
+					'span'
+				]);
 			})
 	);
 	it.live(
@@ -1368,7 +1439,7 @@ describe('next query engine (PGlite)', () => {
 				yield* setup();
 				const [answer] = yield* run(
 					caller,
-					lowerRead(manifest, 'query', [
+					yield* lower_read(manifest, 'query', [
 						{ orders: { search: { hue: {} }, fields: ['color'], limit: 2 } }
 					])
 				);
@@ -1386,16 +1457,20 @@ describe('next query engine (PGlite)', () => {
 				const pool = ORDERS.filter(
 					(o) => o.color !== null && o.status !== 'held' && north.has(o.account)
 				)
-					.map((o) => ({ o, d: Math.hypot(...o.color!) }))
+					.map((o) => ({ o, d: Math.hypot(...present(o.color)) }))
 					.sort((a, b) => a.d - b.d || a.o.id.localeCompare(b.o.id))
 					.slice(0, 6);
 				expect(reranked).toBe(Math.min(6, pool.length));
 				const expected = pool
-					.sort((a, b) => Math.abs(a.o.color![0]! - 0.5) - Math.abs(b.o.color![0]! - 0.5))
+					.sort(
+						(a, b) =>
+							Math.abs(present(present(a.o.color)[0]) - 0.5) -
+							Math.abs(present(present(b.o.color)[0]) - 0.5)
+					)
 					.slice(0, 2)
 					.map((x) => x.o.id);
 				expect(out.map((r) => r.id)).toEqual(expected);
-				expect(typeof out[0]!.$distance).toBe('number');
+				expect(typeof present(out[0]).$distance).toBe('number');
 			})
 	);
 	it.live(
@@ -1403,149 +1478,156 @@ describe('next query engine (PGlite)', () => {
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
-				const page = (yield* run(
-					workspace,
-					read(cat, 'accounts', { search: 'acme alp', limit: 10, select: { name: true } })
-				))[0] as Page;
+				const page = Schema.decodeUnknownSync(Page)(
+					(yield* run(
+						workspace,
+						yield* read(cat, 'accounts', { search: 'acme alp', limit: 10, select: { name: true } })
+					))[0]
+				);
 				expect(page.rows.map((r) => r.name)).toEqual(
 					expect.arrayContaining(['alpha acme', 'acme north', 'delta acme works'])
 				);
-				expect(page.rows[0]!.name).toBe('alpha acme');
+				expect(present(page.rows[0]).name).toBe('alpha acme');
 				expect(page.rows).toHaveLength(3);
 				expect(
-					yield* Effect.flip(run(workspace, read(cat, 'orders', { search: 'x', limit: 1 })))
+					yield* Effect.flip(run(workspace, yield* read(cat, 'lines', { search: 'x', limit: 1 })))
 				).toMatchObject({ code: 'invalid' });
 			})
 	);
 	it.live('aggregate: buckets by month and through a one-relation, exact decimal sums, paged', () =>
 		Effect.gen(function* () {
 			yield* setup();
-			const out = (yield* run(
-				workspace,
-				yield* aggregate(cat, 'orders', {
-					by: ['account.region', { month: 'placed' }],
-					count: true,
-					sum: ['total'],
-					all: true
-				}).pipe(Effect.mapError(fromStore))
-			))[0] as Page;
+			const out = Schema.decodeUnknownSync(Page)(
+				(yield* run(
+					workspace,
+					yield* aggregate(cat, 'orders', {
+						by: ['account.region', { month: 'placed' }],
+						count: true,
+						sum: ['total'],
+						all: true
+					}).pipe(Effect.mapError(from_store))
+				))[0]
+			);
 			const region = (o: (typeof ORDERS)[number]) =>
-				ACCOUNTS.find((a) => a.id === o.account)!.region;
+				present(ACCOUNTS.find((a) => a.id === o.account)).region;
 			expect(out.rows.length).toBeGreaterThan(2);
 			for (const g of out.rows) {
-				const key = g.key as {
-					[k: string]: Json;
-				};
+				const key = Schema.decodeUnknownSync(JsonRow)(g.key);
 				const members = ORDERS.filter(
 					(o) => region(o) === key['account.region'] && key.placed === '2026-09-01'
 				);
 				expect(g.count).toBe(members.length);
-				const total = (
-					g.sum as {
-						total: {
-							$dec: string;
-						};
-					}
-				).total.$dec;
+				const total = Schema.decodeUnknownSync(
+					Schema.Struct({ total: Schema.Struct({ $dec: Schema.String }) })
+				)(g.sum).total.$dec;
 				expect(Math.round(Number(total) * 100)).toBe(
 					members.reduce((s, o) => s + Math.round(Number(o.total) * 100), 0)
 				);
 			}
-			const p1 = (yield* run(
-				workspace,
-				yield* aggregate(cat, 'orders', { by: ['status'], limit: 2 }).pipe(
-					Effect.mapError(fromStore)
-				)
-			))[0] as Page;
+			const p1 = Schema.decodeUnknownSync(Page)(
+				(yield* run(
+					workspace,
+					yield* aggregate(cat, 'orders', { by: ['status'], limit: 2 }).pipe(
+						Effect.mapError(from_store)
+					)
+				))[0]
+			);
 			// grouped: each bucket counts its rows without `count: true`
 			for (const g of p1.rows)
 				expect(g.count).toBe(
-					ORDERS.filter((o) => o.status === (g.key as { status: string }).status).length
+					ORDERS.filter(
+						(o) =>
+							o.status ===
+							Schema.decodeUnknownSync(Schema.Struct({ status: Schema.String }))(g.key).status
+					).length
 				);
-			const p2 = (yield* run(
-				workspace,
-				yield* aggregate(cat, 'orders', {
-					by: ['status'],
-					count: true,
-					limit: 2,
-					after: p1.next
-				}).pipe(Effect.mapError(fromStore))
-			))[0] as Page;
+			const p2 = Schema.decodeUnknownSync(Page)(
+				(yield* run(
+					workspace,
+					yield* aggregate(cat, 'orders', {
+						by: ['status'],
+						count: true,
+						limit: 2,
+						after: p1.next
+					}).pipe(Effect.mapError(from_store))
+				))[0]
+			);
 			expect(
 				[...p1.rows, ...p2.rows].map(
-					(r) =>
-						(
-							r.key as {
-								status: string;
-							}
-						).status
+					(r) => Schema.decodeUnknownSync(Schema.Struct({ status: Schema.String }))(r.key).status
 				)
 			).toEqual(['closed', 'held', 'open']);
 			expect(p2.next).toBeNull();
 		})
 	);
 	it.live(
-		'rule 9: `all` past its cap is tooLarge, never clamped; a relation arm with a limit is cut to it',
+		'rule 9: `all` past its cap is too_large, never clamped; a relation arm with a limit is cut to it',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
 				// the row caps (10,000 / 50,000) take the same refusal as the byte cap: proving them is a benchmark, not a test
-				const small = readEngine({ db, manifest, allBytes: 1000 });
+				const small = read_engine({ db, manifest, allBytes: 1000 });
 				expect(
-					yield* Effect.flip(small.run([read(cat, 'orders', { all: true })], workspace, bindings))
-				).toMatchObject({ code: 'tooLarge' });
-				const limited = (yield* run(
-					workspace,
-					get(cat, 'orders', LINES[0]!.order, { select: { lines: { limit: 1 } } })
-				))[0] as {
-					lines: RowData[];
-				};
+					yield* Effect.flip(
+						small.run([yield* read(cat, 'orders', { all: true })], workspace, bindings)
+					)
+				).toMatchObject({ code: 'too_large' });
+				const limited = Schema.decodeUnknownSync(Schema.Struct({ lines: Schema.Array(JsonRow) }))(
+					(yield* run(
+						workspace,
+						yield* get(cat, 'orders', present(LINES[0]).order, { select: { lines: { limit: 1 } } })
+					))[0]
+				);
 				expect(limited.lines).toHaveLength(1);
 			})
 	);
 	it.live(
-		'rule 9: a page ends at one crossing of row bytes, its cursor after the last row that fits; a row past it is tooLarge',
+		'rule 9: a page ends at one crossing of row bytes, its cursor after the last row that fits; a row past it is too_large',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
 				const mib = 1024 * 1024;
 				yield* exec(
-					`insert into notes (id, about__accounts, body) select gen_random_uuid(), '${ACCOUNTS[0]!.id}', repeat('x', ${mib}) from generate_series(1, 6)`
+					`insert into notes (id, about__accounts, body) select gen_random_uuid(), '${present(ACCOUNTS[0]).id}', repeat('x', ${mib}) from generate_series(1, 6)`
 				);
 				const seen: string[] = [];
 				let after: string | undefined;
 				let pages = 0;
 				do {
-					const page = (yield* run(
-						workspace,
-						read(cat, 'notes', {
-							limit: 50,
-							...(after === undefined ? {} : { after }),
-							select: { body: true }
-						})
-					))[0] as Page;
+					const page = Schema.decodeUnknownSync(Page)(
+						(yield* run(
+							workspace,
+							yield* read(cat, 'notes', {
+								limit: 50,
+								...(after === undefined ? {} : { after }),
+								select: { body: true }
+							})
+						))[0]
+					);
 					// the database stopped the page: no more than one crossing ever reached the engine
 					expect(JSON.stringify(page.rows).length).toBeLessThanOrEqual(LIMITS.crossingBytes);
-					seen.push(...page.rows.map((r) => r.id as string));
+					seen.push(...page.rows.map((r) => Schema.decodeUnknownSync(Schema.String)(r.id)));
 					after = page.next ?? undefined;
 					pages++;
 				} while (after !== undefined);
 				expect(pages).toBe(2);
 				expect(new Set(seen).size).toBe(NOTES.length + 6);
-				yield* exec(`update notes set body = repeat('x', ${5 * mib}) where id = '${NOTES[0]!.id}'`);
+				yield* exec(
+					`update notes set body = repeat('x', ${5 * mib}) where id = '${present(NOTES[0]).id}'`
+				);
 				expect(
 					yield* Effect.flip(
 						run(
 							workspace,
-							read(cat, 'notes', {
-								where: { id: { eq: NOTES[0]!.id } },
+							yield* read(cat, 'notes', {
+								where: { id: { eq: present(NOTES[0]).id } },
 								limit: 1,
 								select: { body: true }
 							})
 						)
 					)
 				).toMatchObject({
-					code: 'tooLarge',
+					code: 'too_large',
 					message: `a row of notes is larger than ${LIMITS.crossingBytes} bytes; select fewer fields (rule 9)`
 				});
 			})

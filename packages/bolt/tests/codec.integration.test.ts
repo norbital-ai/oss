@@ -9,7 +9,7 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { type GuestShape } from '../src/engine/services.ts';
 import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
-import { restoreSource, seed } from '../src/engine/write/seed.ts';
+import { restore_source, seed } from '../src/engine/write/seed.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 
 const cols = ['name', 'span', 'slot'];
@@ -139,7 +139,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 					verb: 'create',
 					input: [{ name: 'x', span: { from: '2026-02-01', to: '2026-01-01' } }]
 				})).outcome
-			).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'span' });
+			).toMatchObject({ kind: 'refused', code: 'invalid_input', field: 'span' });
 		}).pipe(Effect.provide(CodecFixtureLive))
 	);
 
@@ -149,7 +149,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 			yield* seed(
 				manifest,
 				db,
-				restoreSource({
+				restore_source({
 					shifts: [
 						{
 							id: '0199a000-0000-7000-8000-000000000001',

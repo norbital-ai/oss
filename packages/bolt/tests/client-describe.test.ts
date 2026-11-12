@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { expect, it } from '@effect/vitest';
-import { createBolt } from '../src/page/bolt.ts';
+import { create_bolt } from '../src/page/bolt.ts';
 
 it.effect('describe exists only with AI and returns the committed where/order_by', () =>
 	Effect.gen(function* () {
@@ -19,10 +19,11 @@ it.effect('describe exists only with AI and returns the committed where/order_by
 			return Response.json(reply);
 		};
 		expect(
-			(yield* createBolt({ actor: null, locale: 'en', base: 'https://workspace.test', fetch }))
+			(yield* create_bolt({ operation_outputs: { automations: {} }, actor: null, locale: 'en', base: 'https://workspace.test', fetch }))
 				.describe
 		).toBeUndefined();
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',
@@ -47,7 +48,7 @@ it.effect('describe exists only with AI and returns the committed where/order_by
 		reply = {
 			outcome: {
 				kind: 'refused',
-				code: 'invalidInput',
+				code: 'invalid_input',
 				message: 'Could not build a filter from that description.'
 			},
 			v: 0
@@ -83,7 +84,8 @@ it.effect('options returns the catalogue the builder renders', () =>
 				v: 0
 			});
 		};
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',

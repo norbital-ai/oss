@@ -15,7 +15,7 @@ const ascii = (b: Uint8Array, at: number, length: number): string =>
 const HEIF = new Set(['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1']);
 
 /** The media type of a body from its first `DOWNLOAD.headBytes` bytes (all of a shorter body); `undefined` is not media. */
-export function mediaType(head: Uint8Array): string | undefined {
+export function media_type(head: Uint8Array): string | undefined {
 	const b0 = head[0] ?? 0,
 		b1 = head[1] ?? 0;
 	if (b0 === 0x89 && ascii(head, 1, 7) === 'PNG\r\n\x1a\n') return 'image/png';

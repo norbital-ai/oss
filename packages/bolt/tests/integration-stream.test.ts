@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from '@effect/vitest';
 import { Effect, Fiber, Queue, Stream } from 'effect';
-import { integrationClients } from '../src/page/integrations.ts';
+import { integration_clients } from '../src/page/integrations.ts';
 import type { InstanceStatus } from '../src/protocol/instance-status.ts';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -35,7 +35,7 @@ it.live(
 				}
 			}
 			vi.stubGlobal('EventSource', Source);
-			const clients = integrationClients({ base: '/tenant/__bolt/integrations/' });
+			const clients = integration_clients({ base: '/tenant/__bolt/integrations/' });
 			const received = yield* Queue.unbounded<InstanceStatus>();
 			const mail = yield* clients('mail')
 				.watch()

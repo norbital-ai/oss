@@ -5,33 +5,22 @@ import { EMBED } from '../integrations/embed.ts';
 import { INDEX } from './index-run.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { Effect, FileSystem, Schema, Stream } from 'effect';
+import { literal } from '@norbital-ai/std/sql';
 import { enqueue } from '../runs/queue.ts';
+import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { Chain } from './sql.ts';
 import type { Json } from '../../decl/values.ts';
 import type { RowData, Sql } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
+import { DbError } from '../errors.ts';
 import { restorer } from './seed.ts';
 import { decodeConfiguration, definitionOf } from '../integrations/instances.ts';
-import { catalogOf } from '../access/pred.ts';
-import { nullRowSql, q } from '@norbital-ai/store';
-export type SeedAsset = {
-	path: string;
-	sha256: string;
-	bytes: number;
-	contentType: string;
-};
-export type PackJson = {
-	format: 1;
-	name: string;
-	hash: string;
-	start: readonly string[];
-	rows: {
-		readonly [model: string]: number;
-	};
-	assets: readonly SeedAsset[];
-};
+import { catalog_of } from '../access/pred.ts';
+import { null_row_sql, q } from '@norbital-ai/store';
+export type PackJson = typeof PackSchema.Type;
+export type SeedAsset = PackJson['assets'][number];
 export type Pack = {
 	dir: string;
 	meta: PackJson;
@@ -43,27 +32,21 @@ export type Pack = {
 };
 /** The system models a pack may seed, in load order: members, then integration instances (a personal one names its member). */
 export const IDENTITY = ['sys_user', 'sys_integration'] as const;
-const IDENTITY_COLUMNS: {
-	readonly [t: string]: readonly string[];
-} = {
+const IDENTITY_COLUMNS = {
 	sys_user: ['id', 'name', 'email', 'kind', 'active', 'admin', 'team', 'phone', 'telegram'],
 	sys_integration: ['id', 'integration', 'name', 'owner', 'active', 'configuration']
-};
-/** The rows that make a database "not empty": a named instance is the schema plan's (`source:connections`), never a seed's. */
-const SEEDED: {
-	readonly [t: string]: string;
-} = { sys_integration: 'WHERE NOT named' };
+} satisfies Record<(typeof IDENTITY)[number], readonly string[]>;
 /**
  * Identity seeds choose source affiliations; they cannot declare teams or policy grants. An instance seed is a run-time
- * instance of a defined integration: a connection (named, its envoy) is source, and its credentials are never seeded.
+ * instance of a defined integration. Credentials and envoy deployment are configured at runtime, never seeded.
  * The seeded instances come back as they are stored: their configuration decoded, its defaults filled.
  */
-export function decodeIdentity(m: EngineManifest, rows: Pack['rows']): Pack['rows'] {
+export function decode_identity(m: EngineManifest, rows: Pack['rows']): Pack['rows'] {
 	const unknown = Object.keys(rows).find(
 		(c) => m.models[c] === undefined && !(IDENTITY as readonly string[]).includes(c)
 	);
 	if (unknown !== undefined)
-		throw BoltError.make('seedDecode', 'decode', `seed: unknown model '${unknown}'`);
+		throw BoltError.make('seed_decode', 'decode', `seed: unknown model '${unknown}'`);
 	for (const [i, row] of (rows['sys_user'] ?? []).entries()) {
 		const team = row['team'];
 		if (
@@ -72,24 +55,22 @@ export function decodeIdentity(m: EngineManifest, rows: Pack['rows']): Pack['row
 			(typeof team !== 'string' || !Object.hasOwn(m.teams, team))
 		)
 			throw BoltError.make(
-				'seedDecode',
+				'seed_decode',
 				'decode',
 				`seed sys_user[${i}]: team must name an authored source handle`
 			);
 	}
-	const columns = IDENTITY_COLUMNS['sys_integration']!;
+	const columns = IDENTITY_COLUMNS.sys_integration;
 	const instances = (rows['sys_integration'] ?? []).map((row, i) => {
 		const fail = (message: string): never => {
-			throw BoltError.make('seedDecode', 'decode', `seed sys_integration[${i}]: ${message}`);
+			throw BoltError.make('seed_decode', 'decode', `seed sys_integration[${i}]: ${message}`);
 		};
 		const extra = Object.keys(row).find((k) => !columns.includes(k));
 		if (extra !== undefined)
 			fail(
-				`'${extra}' is not seeded (an instance seeds ${columns.join(', ')}; connections and their envoys are +workspace.ts's)`
+				`'${extra}' is not seeded (an instance seeds ${columns.join(', ')}; credentials and envoy deployment are runtime settings)`
 			);
 		if (typeof row['id'] !== 'string') fail('every row carries its id');
-		if (Object.hasOwn(m.connections, String(row['id'])))
-			fail(`'${String(row['id'])}' is a connection of +workspace.ts, not a seed`);
 		const def =
 			definitionOf(m, String(row['integration'])) ??
 			fail(`no integration '${String(row['integration'])}' is defined`);
@@ -111,14 +92,14 @@ const PackSchema = Schema.Struct({
 			path: Schema.String,
 			sha256: Schema.String,
 			bytes: Schema.Int,
-			contentType: Schema.String
+			content_type: Schema.String
 		})
 	)
 });
 const RowSchema = Schema.Record(Schema.String, Schema.Json);
 const decodeJson = <A, I>(schema: Schema.Codec<A, I>, text: string) =>
 	Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text).pipe(
-		Effect.mapError((cause) => BoltError.make('seedDecode', 'decode', cause.message, cause))
+		Effect.mapError((cause) => BoltError.make('seed_decode', 'decode', cause.message, cause))
 	);
 /** A rows file's lines, cut from its bytes (the artifact port reads whole files): one row each, decoded as it is read. */
 function* linesOf(bytes: Uint8Array) {
@@ -137,9 +118,9 @@ export type PackSource = {
 /** A pack directory's `assets/<path>`. */
 const assetAt = (dir: string) => (path: string) =>
 	Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFile(`${dir}/assets/${path}`)).pipe(
-		Effect.mapError((cause) => BoltError.make('seedDecode', 'decode', cause.message, cause))
+		Effect.mapError((cause) => BoltError.make('seed_decode', 'decode', cause.message, cause))
 	);
-export const sourceOf = (pack: Pack): PackSource => ({
+export const source_of = (pack: Pack): PackSource => ({
 	meta: pack.meta,
 	rows: (model, from) => Stream.fromIterable((pack.rows[model] ?? []).slice(from)),
 	asset: assetAt(pack.dir)
@@ -148,7 +129,7 @@ export const sourceOf = (pack: Pack): PackSource => ({
  * Rows a host holds in memory (`bolt seed`'s, never written to its disk) as a pack named `name`; each asset's bytes come
  * from `asset`, the host's store of what the seeding run uploaded.
  */
-export const memorySource = (
+export const memory_source = (
 	name: string,
 	rows: Pack['rows'],
 	start: readonly string[],
@@ -167,7 +148,7 @@ export const memorySource = (
 	asset
 });
 /** A pack whose rows stay on disk until each model is restored, a line at a time (a cell holds 128 MiB). */
-export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: string) {
+export const read_pack_source = Effect.fn('Bolt.read_pack_source')(function* (dir: string) {
 	const fs = yield* FileSystem.FileSystem;
 	// posix, relative to a release in a cell or absolute in-process
 	const meta = yield* decodeJson(PackSchema, yield* fs.readFileString(`${dir}/pack.json`));
@@ -177,7 +158,7 @@ export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: s
 		held?.model === model
 			? Effect.succeed(held.bytes)
 			: fs.readFile(`${dir}/rows/${model}.jsonl`).pipe(
-					Effect.mapError((cause) => BoltError.make('seedDecode', 'decode', cause.message, cause)),
+					Effect.mapError((cause) => BoltError.make('seed_decode', 'decode', cause.message, cause)),
 					Effect.tap((bytes) =>
 						Effect.sync(() => {
 							held = { model, bytes };
@@ -202,8 +183,8 @@ export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: s
 	} satisfies PackSource;
 });
 /** Every model's rows in memory, for in-process hosts and test kits. */
-export const readPack = Effect.fn('Bolt.readPack')(function* (dir: string) {
-	const source = yield* readPackSource(dir);
+export const read_pack = Effect.fn('Bolt.read_pack')(function* (dir: string) {
+	const source = yield* read_pack_source(dir);
 	const entries = yield* Effect.forEach(
 		Object.keys(source.meta.rows),
 		(c) =>
@@ -227,7 +208,7 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 	now: string
 ) {
 	const identities: ReadonlySet<string> = new Set(IDENTITY);
-	const cat = catalogOf(m);
+	const cat = catalog_of(m);
 	const names = Object.keys(pack.meta.rows);
 	const tenant = names.filter((c) => !identities.has(c));
 	const identityStep = Effect.gen(function* () {
@@ -240,11 +221,11 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 			)
 		);
 		const identity = yield* Effect.try({
-			try: () => decodeIdentity(m, identityRows),
+			try: () => decode_identity(m, identityRows),
 			catch: (error) =>
 				error instanceof BoltError
 					? error
-					: BoltError.make('seedDecode', 'decode', String(error), error)
+					: BoltError.make('seed_decode', 'decode', String(error), error)
 		});
 		const tables = [
 			...IDENTITY,
@@ -254,29 +235,32 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 			{
 				text:
 					tables
-						.map((t) => `SELECT 1 FROM "${t}"${SEEDED[t] === undefined ? '' : ` ${SEEDED[t]}`}`)
+						.map((t) => `SELECT 1 FROM "${t}"`)
 						.join(' UNION ALL ') + ' LIMIT 1',
 				params: []
 			}
 		]);
-		if (probe!.rows.length > 0) return false;
+		if (probe === undefined) return yield* Effect.fail(DbError.make('XX000', 'The database did not answer the seed emptiness read.'));
+		if (probe.rows.length > 0) return false;
 		const probeSql = tables
 			.map(
 				(table) =>
-					`select 1 from ${q(table)}${SEEDED[table] === undefined ? '' : ` ${SEEDED[table]}`}`
+					`select 1 from ${q(table)}`
 			)
 			.join(' union all ');
 		const body = `begin if exists (${probeSql}) then raise exception using errcode = 'BP001', message = 'the seed database is no longer empty'; end if; end`;
-		const statements: Sql[] = [{ text: `do '${body.replaceAll("'", "''")}'`, params: [] }];
+		const statements: Sql[] = [{ text: `do ${literal(body)}`, params: [] }];
 		// Model and decoding finished before the batch: no stream, file or guest work holds its locks.
 		for (const table of IDENTITY)
 			for (const rows of Map.groupBy(identity[table] ?? [], (row) =>
-				IDENTITY_COLUMNS[table]!.filter((column) => row[column] !== undefined).join()
+				IDENTITY_COLUMNS[table].filter((column) => row[column] !== undefined).join()
 			).values()) {
-				const columns = IDENTITY_COLUMNS[table]!.filter((column) => rows[0]![column] !== undefined);
+				const first = rows[0];
+				if (first === undefined) continue;
+				const columns = IDENTITY_COLUMNS[table].filter((column) => first[column] !== undefined);
 				statements.push({
 					text: `insert into ${q(table)} (${columns.map(q).join(', ')}) select ${columns.map((column) => `r.${q(column)}`).join(', ')}
-					from jsonb_populate_recordset(${nullRowSql(table, cat.models.get(table)?.fields.keys() ?? [])}, $1::jsonb) r on conflict (id) do nothing`,
+					from jsonb_populate_recordset(${null_row_sql(table, cat.models.get(table)?.fields.keys() ?? [])}, $1::jsonb) r on conflict (id) do nothing`,
 					params: [JSON.stringify(rows)]
 				});
 			}
@@ -298,18 +282,18 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 	const embed = Effect.suspend(() => {
 		const runs = [
 			...(tenant.some((c) => m.models[c]?.search?.semantic !== undefined)
-				? [{ automation: EMBED, input: {}, dueAt: now, cause: 'schedule', depth: 0 }]
+				? [{ automation: EMBED, input: {}, due_at: now, cause: 'schedule', depth: 0 }]
 				: []),
 			// nor would a pure search index's vector, which only an act evaluates
 			...(tenant.some((c) =>
 				Object.values(m.models[c]?.search?.indexes ?? {}).some((index) => index.field === undefined)
 			)
-				? [{ automation: INDEX, input: {}, dueAt: now, cause: 'schedule', depth: 0 }]
+				? [{ automation: INDEX, input: {}, due_at: now, cause: 'schedule', depth: 0 }]
 				: []),
 			...pack.meta.start.map((automation) => ({
 				automation,
 				input: {},
-				dueAt: now,
+				due_at: now,
 				cause: 'start',
 				depth: 0
 			}))
@@ -317,7 +301,7 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 		if (runs.length === 0) return Effect.void;
 		const chain = new Chain();
 		enqueue(chain, runs);
-		return db.write(chain.sql('1')).pipe(Effect.asVoid);
+		return nativeCommit(db.write, 'bootstrap', chain, CapturedResult).pipe(Effect.asVoid);
 	});
 	let identified = false,
 		answer: 'loaded' | 'hadRows' | undefined;
@@ -344,7 +328,7 @@ export const drain = <E, R>(step: Effect.Effect<PackStep, E, R>) =>
 		return answer;
 	});
 /** `packLoader` whole: `false` when the database had rows and nothing changed. */
-export const loadPack = Effect.fn('Bolt.loadPack')(function* (
+export const load_pack = Effect.fn('Bolt.load_pack')(function* (
 	db: TenantDb,
 	m: EngineManifest,
 	pack: PackSource,

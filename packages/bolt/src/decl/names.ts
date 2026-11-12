@@ -1,10 +1,12 @@
 // The names index (§3.1, rule 8). `bolt sync` evaluates the declarations and prints each part's data into
 // `.norbital/names.ts` as literal type text (functions dropped), augmenting `Names`; every cross-file type below is read
 // from it. No part reads its own file, so a body typed from it is never circular; it is one sync behind an edit.
-import type { SystemNames } from '../system/index.ts';
+import type { InitialStampFields } from '@norbital-ai/std/kind';
+import type { SystemNames } from '../system/names.ts';
 import type { BuiltinFields } from './builtin-fields.ts';
 import type { KeyFor, Simplify, ValueOf } from './fields.ts';
 import type { ExposureSpec, ModelSpec, NullableOfExpr } from './model.ts';
+import type { RelationshipData } from './model-data.ts';
 import type { ApprovalStep } from './access/policy.ts';
 import type { CurrencyCode, Id, RecordRef } from './values.ts';
 
@@ -16,22 +18,20 @@ export interface Names {}
 type NamesShape = {
 	workspace: {
 		currency?: CurrencyCode;
-		/** Named instances: the slot name is the `sys_integration` id source addresses. */
-		connections?: { readonly [slot: string]: { integration: string } };
 	};
 	/** `src/+secrets.ts`: the workspace's secret names. */
 	secrets: { readonly [name: string]: unknown };
-	/** Each model's storage (`splitModel(name, literal).model`). */
+	/** Each model's storage (`split_model(name, literal).model`). */
 	models: { [model: string]: ModelSpec };
-	/** Each ref field, keyed `'<model>.<field>'` (`splitModel(name, literal).relationships`). */
+	/** Each ref field, keyed `'<model>.<field>'` (`split_model(name, literal).relationships`). */
 	relationships: { [key: `${string}.${string}`]: RelationshipSpec };
-	/** Each exposed model's exposure (`splitModel(name, literal).exposure`); a model without `read` has none. */
+	/** Each exposed model's exposure (`split_model(name, literal).exposure`); a model without `read` has none. */
 	exposures: { [model: string]: ExposureSpec };
-	/** Each exposed model's declared layer paths below its root → the model behind each (`layerModels`). */
+	/** Each exposed model's declared layer paths below its root → the model behind each (`layer_models`). */
 	layers: { [model: string]: { [path: string]: string } };
 	/** Each `src/integration/<name>/+integration.ts`: the workspace's definitions (bolt's own are `SystemNames`). */
 	integrations: { [integration: string]: unknown };
-	customFields: { [field: string]: { spec: { shape: unknown } } };
+	custom_fields: { [field: string]: { spec: { shape: unknown } } };
 	teams: { [team: string]: unknown };
 	/** The base catalogue `src/i18n/+messages.ts`: its keys are the message keys. */
 	messages: { [key: string]: string };
@@ -47,24 +47,16 @@ type NamesShape = {
 	/** Each group (its folder path) → the union of its child app and group folder names. */
 	groups: { [group: string]: string };
 	/** The tools the host advertises (rule 58), written by the build from the host it compiles for. */
-	hostTools: { [tool: string]: unknown };
+	host_tools: { [tool: string]: unknown };
 };
 // Indexed access touches only the one part, so a part may depend on another (models ← relationships ← models).
 export type NamesPart<K extends keyof NamesShape> = K extends keyof Names ? Names[K] : {};
 
 /**
  * One ref field as the relationships part holds it (`'<model>.<field>'`): its target (`to`), the `inverse` many-relation
- * name, `optional`, a default from the requestor, `onDelete`, `owned` children and a `where` on the target.
+ * name, `optional`, a default from the requestor, `on_delete`, `owned` children and a `where` on the target.
  */
-export type RelationshipSpec = {
-	to: string | readonly string[];
-	inverse?: string;
-	optional?: true;
-	default?: { var: 'requestor.id' | 'requestor.party' };
-	onDelete?: 'restrict' | 'cascade' | 'setNull';
-	owned?: true;
-	where?: object;
-};
+export type RelationshipSpec = typeof RelationshipData.Type;
 
 // The built-in layer (`src/system/**`, X-18): its models are declared as a workspace's are and its index holds the same
 // three parts. Its models are the exposed system models; its private models (sys_session, sys_challenge,
@@ -89,7 +81,7 @@ export type Ledger = 'sys_run';
 /** A model a trigger or a read may name: every model but the ledgers. */
 export type ReadableName = Exclude<ModelName, Ledger>;
 /** Every custom field: the built-ins (`money`, `file`, `point`, `phone`) and the workspace's (`src/data/custom_field/<f>/`), one namespace. */
-type CustomFields = BuiltinFields & NamesPart<'customFields'>;
+type CustomFields = BuiltinFields & NamesPart<'custom_fields'>;
 /** A custom field name a model may store as `{ kind: 'custom', of }`: a built-in's or the workspace's own. */
 export type CustomFieldName = keyof CustomFields & string;
 /** The team names `+team.ts` declares. */
@@ -118,7 +110,7 @@ export type InstanceId<D extends string = IntegrationName> = Id<'sys_integration
 export type McpName = keyof NamesPart<'mcp'> & string;
 /** The agent skill names (`src/agent/skill/<n>/+skill.md`). */
 /** The host tools a policy's `capabilities.tools` may name (the host's Studio and browser tools). */
-export type HostToolName = keyof NamesPart<'hostTools'> & string;
+export type HostToolName = keyof NamesPart<'host_tools'> & string;
 export type CustomShape<F> = F extends keyof CustomFields
 	? CustomFields[F] extends { spec: { shape: infer S } }
 		? S
@@ -377,15 +369,6 @@ export type ReadPath<C, O = 'default'> = keyof ReadSpec<C, O> & string;
 type WriteLayers<C, V> = SpecOf<C> extends { [P in V & string]: { columns: infer L } } ? L : {};
 /** The write paths `C`'s `create` or `update` declares: `'<C>'` and each child layer of its `columns`. */
 export type WritePath<C, V extends 'create' | 'update'> = keyof WriteLayers<C, V> & string;
-type AttachesOf<C> = SpecOf<C> extends { create: { attaches: infer A } } ? A : {};
-/** The attach layers `C`'s create payload accepts. */
-export type AttachName<C> = keyof AttachesOf<C> & string;
-/** The existing model an attach layer of `C` names. */
-export type AttachModel<C, A> = A extends keyof AttachesOf<C>
-	? AttachesOf<C>[A] extends { model: infer M extends TargetName }
-		? M
-		: never
-	: never;
 /** The root of a path: the model before its first dot. */
 export type RootOf<P> = P extends `${infer C}.${string}` ? C : P;
 /** The model behind path `P` of `C`'s declaration (`'orders.lines'` → `'order_lines'`). */
@@ -439,7 +422,7 @@ export type FileSyncName<C, S = SyncsOf<C>> = {
 	[N in keyof S]: S[N] extends { with: 'file' } ? N : never;
 }[keyof S] &
 	string;
-type ReadSyncName<C, S = SyncsOf<C>> = {
+export type ReadSyncName<C, S = SyncsOf<C>> = {
 	[N in keyof S]: S[N] extends { with: infer W; read: true }
 		? W extends 'file'
 			? never
@@ -447,9 +430,9 @@ type ReadSyncName<C, S = SyncsOf<C>> = {
 		: never;
 }[keyof S] &
 	string;
-/** A remote sync that reads, available to `ctx.run` through policy `capabilities.automations`: `'<model>.sync.<name>'`. */
-export type SyncCallable = {
-	[C in ModelName]: `${C}.sync.${ReadSyncName<C> | FileSyncName<C>}`;
+/** A remote read the native manual sync control may refresh, granted by `capabilities.syncs`. */
+export type SyncKey = {
+	[C in ModelName]: `${C}.${ReadSyncName<C>}`;
 }[ModelName];
 
 // ── search indexes (`search.indexes` of the models part) ──
@@ -471,7 +454,9 @@ export type ColumnValue<M, P> = P extends keyof OneRels<M>
 		? ValueOf<Columns<M>[P]>
 		: never;
 /** A column an insert may omit: optional, defaulted, or an FK filled from the writer (rule 23a). */
-export type OmittableOnInsert<M, P> = P extends keyof OneRels<M>
+export type OmittableOnInsert<M, P> = P extends InitialStampFields<FieldsOf<M>>
+	? true
+	: P extends keyof OneRels<M>
 	? OneRels<M>[P] extends { optional: true } | { default: unknown }
 		? true
 		: false
@@ -497,7 +482,7 @@ type ColumnValues<M, P extends PropertyKey, Rels = OneRels<M>> = {
 export type Row<C, O = 'default'> = RowOf<C, O> & RowState;
 /** What a read, the caller's or the workspace's, attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
 export type RowState = {
-	/** A live reference's authorized target record_label (e.g. an approval's target); derived at read time, never copied to a field. */
+	/** An authorized relation-dependent record_label or live reference's target label; derived at read time, never copied to a field. */
 	readonly $label?: string | null;
 	readonly $sync?: { readonly [sync: string]: SyncState };
 	readonly $approval?: RowApproval;
@@ -507,11 +492,11 @@ export type RowState = {
  * decided by its teams or users) or `ChangesRequested`, and who asked. Absent once the request closes.
  */
 export type RowApproval = {
-	readonly requestId: string;
+	readonly request_id: string;
 	readonly state: 'Pending' | 'ChangesRequested';
 	readonly step: number;
 	readonly steps: readonly ApprovalStep[];
-	readonly requestedBy: string;
+	readonly requested_by: string;
 };
 /** Where a row's latest change stands with one write sync (`$sync.<name>`): queued, acknowledged, or refused with `message`. */
 export type SyncState = {
@@ -521,6 +506,6 @@ export type SyncState = {
 type RowOf<C, O> = Simplify<{
 	readonly [P in ReadField<C, O> & (keyof Columns<C> | keyof OneRels<C>)]: ColumnValue<C, P>;
 }>;
-/** A stored row as write callbacks see it (`before`, `delete.check`'s rows, `ctx.query`): never masked, every stored field,
+/** A stored row as write callbacks see it (`before`, `ctx.query`): never masked, every stored field,
  * no seq, roll-up or computed (rule 10). */
 export type StoredRow<M> = Simplify<ColumnValues<M, WritableField<M> | keyof SystemColumns<M>>>;

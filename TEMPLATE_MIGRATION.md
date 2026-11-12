@@ -65,3 +65,8 @@ Apply these entries when relocking the template to the matching Bolt release. Fo
 - Import inputs change `onMissing` to `on_missing`. The retired key is rejected.
 - Import inputs change `dryRun` to `dry_run`. The retired key is rejected.
 - Schema-based inference uses `output: { json_schema, rules? }` in place of `output: { jsonSchema, rules? }`.
+- `@norbital-ai/std/pricing` `band` and `priced_lines` return a `Result` (failure: the formula compile error) in place of throwing. Unwrap with `Result.getOrThrow` in tests, or match `Result.isFailure` in source.
+- UI component props are snake_case, callbacks included (`onOpen` → `on_open`). Layout props seen in templates: `rowGap` → `row_gap`, `switchLabels` → `switch_labels`, `collapseAt` → `collapse_at`, `actionsLabel` → `actions_label`.
+- Test kit: `t.as(...)`, `t.visitor()` and `t.body_acts(...)` return Effects; write `const member = yield* t.as(holder)`.
+- Rebuild committed `migrations/` with `bolt build`: the engine's audit objects changed (an act now writes its own history in one statement; `bolt_audit_mark()` and `bolt_write_context()` are dropped, `bolt_audit` fires for raw SQL only, `store_anonymise_fields` reads the erase statement's own fields). A delete that also updates a row it cascades to now refuses with `conflict`; two `set_null` references to one deleted parent unlink in one revision.
+- `norbital.template.json`: `schemaVersion` → `schema_version`.

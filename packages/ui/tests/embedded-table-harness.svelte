@@ -28,6 +28,6 @@
 	embedded
 	controlled
 	toolbar={false}
-	rowClass={(row) => (row.paid ? 'paid-row' : undefined)}
-	rowTrailing={trailing}
+	row_class={(row) => (row.paid ? 'paid-row' : undefined)}
+	row_trailing={trailing}
 />

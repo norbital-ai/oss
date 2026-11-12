@@ -1,5 +1,5 @@
 import { UI_TEXT, type UiTextKey } from '../i18n.js';
-export { uiTextFor, type UiTextKey } from '../i18n.js';
+export { ui_text_for, type UiTextKey } from '../i18n.js';
 import { type ClassValue, clsx } from 'clsx';
 import { getContext, setContext } from 'svelte';
 import { MediaQuery } from 'svelte/reactivity';
@@ -31,7 +31,7 @@ export function stepActive(
 }
 
 /** A byte count as short text in binary units (`512.0 B`, `12.0 KB`, `3.4 MB`); `0 B` for none. */
-export function formatFileSize(bytes: number): string {
+export function format_file_size(bytes: number): string {
 	if (bytes === 0) return '0 B';
 	const units = ['B', 'KB', 'MB', 'GB'];
 	const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
@@ -63,9 +63,9 @@ export const noHover = new MediaQuery('hover: none');
 
 const TEXT = Symbol.for('norbital.ui.text');
 /** Sets the kit's chrome strings for everything beneath (the shell passes the workspace locale's text once). */
-export const setUiText = (text: Partial<Record<UiTextKey, string>>) => setContext(TEXT, text);
+export const set_ui_text = (text: Partial<Record<UiTextKey, string>>) => setContext(TEXT, text);
 /** Resolve once per component (it reads context); returns `t(key)`. */
-export function uiText(): (key: UiTextKey) => string {
+export function ui_text(): (key: UiTextKey) => string {
 	const text = getContext<Partial<Record<UiTextKey, string>> | undefined>(TEXT);
 	return (key) => text?.[key] ?? UI_TEXT[key];
 }
@@ -89,7 +89,7 @@ export type Controls = { readonly readonly: boolean; readonly disabled: boolean 
 const CONTROLS = Symbol.for('norbital.ui.controls');
 const FREE: Controls = { readonly: false, disabled: false };
 /** The enclosing `Form`'s, `Fieldset`'s or `Field`'s control mode; editable outside any. */
-export const useControls = (): Controls => getContext<Controls | undefined>(CONTROLS) ?? FREE;
+export const use_controls = (): Controls => getContext<Controls | undefined>(CONTROLS) ?? FREE;
 /** Hands a control mode to every control beneath; a member `own` leaves `undefined` inherits the enclosing one. Readonly
  * only adds: a `readonly={false}` beneath a readonly form (a viewed record) stays readonly. Only a form's own boundary
  * (`boundary`: a create sheet opened inside a readonly form) starts afresh. */
@@ -97,7 +97,7 @@ export function provideControls(
 	own: () => { readonly?: boolean | null | undefined; disabled?: boolean | null | undefined },
 	boundary = false
 ): Controls {
-	const parent = useControls();
+	const parent = use_controls();
 	return setContext(CONTROLS, {
 		get readonly() {
 			const mine = own().readonly;

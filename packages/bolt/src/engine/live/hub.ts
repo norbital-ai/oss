@@ -4,21 +4,16 @@
 // falls back as narrowly as it can — a PK `get` of the one row, else a re-read of the view — and is counted
 // (`conservative=`, listed by `sweep()`). Commits coalesce per lane batch; each connection's fallbacks are one pipelined
 // read. Budgets are typed errors on the view; the stream is untouched.
-import { Decimal } from '@norbital-ai/std/decimal';
-import { encodeWire } from '@norbital-ai/std/wire';
 import {
 	Cause,
 	Clock,
 	Deferred,
 	Effect,
-	Equal,
 	Exit,
 	Layer,
 	Option,
-	Predicate,
 	Queue,
 	Result,
-	Schema,
 	Scope,
 	Stream
 } from 'effect';
@@ -26,25 +21,14 @@ import { bindingsAt } from '../query/reader.ts';
 import { Live, Manifest, Reads, type LiveView } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
 import type { Frame, LiveErrorCode, PatchOp } from '../../protocol/wire.ts';
-import type { Authority, Bindings, Captured, RowData } from '../contracts.ts';
-import type { Pred, SelectIR } from '@norbital-ai/store';
+import type { Authority, Bindings, Captured } from '../contracts.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
-import { LIMITS } from '../contracts.ts';
-import { BoltError, storeSync } from '../../protocol/errors.ts';
-import { catalogOf } from '../access/pred.ts';
-import { syncsOf } from '../sync/index.ts';
-import { readTargets, selectTargets, sortTargets } from '../query/engine.ts';
-import { approvable } from '../approvals/lock.ts';
-import {
-	conversationRow,
-	CONVERSATIONS,
-	isStaff,
-	listed,
-	transcriptRow,
-	Message
-} from '../agent/schema.ts';
-import { catalogFor, exposureOf, defaultFields, type FieldInfo } from '@norbital-ai/store';
-import { evaluate, type EvalEnv } from '../query/eval.ts';
+import { BoltError } from '../../protocol/errors.ts';
+import { catalog_of } from '../access/pred.ts';
+import { storedCaptures } from '../db/stored.ts';
+import { ReadSnapshots, type ReadSnapshot } from '../query/snapshot.ts';
+import { ViewCompiler, same, sourceKeys, type ViewPlan } from '../query/view.ts';
+import * as patch from './patch.ts';
 
 const MiB = 1024 * 1024;
 /** §4.9's live row: per subscription / per connection / retained per cell. */
@@ -56,20 +40,12 @@ export const LIVE = {
 	cellBytes: 128 * MiB
 } as const;
 
-/** The inbox's page (L-BOLT-354). */
-export const INBOX_LIMIT = 200;
-/** A notice image (a capture's `new`, or `to_jsonb` of the row) as the inbox shows it. */
-export const noticeRow = (r: RowData): { [k: string]: Json } => ({
-	id: r['id']!,
-	title: r['title']!,
-	body: r['body'] ?? null,
-	link: r['link'] ?? null,
-	at: r['at']!,
-	read: r['read_at'] !== null && r['read_at'] !== undefined
-});
 /** `value`: the view's current answer as the connection holds it (after every frame sent), `undefined` before the first. */
 type View = LiveView & {
 	id: string;
+	plan: ViewPlan;
+	snapshots: patch.Snapshots;
+	readVersion: number;
 	bytes: number;
 	value: Json | undefined;
 	arrivalsAfter: number | undefined;
@@ -84,108 +60,11 @@ type Conn = {
 	scope: Scope.Closeable;
 };
 
-type Row = { readonly [field: string]: Json };
-const PageSchema = Schema.Struct({
-	rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-	next: Schema.optionalKey(Schema.NullOr(Schema.String))
-});
-const pageOf = Schema.decodeUnknownOption(PageSchema);
-const rowOf = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
-/** What one captured row is to a view: its row as the view shows it (`null`: not in it), a PK `get` of it, or a re-read. */
-type Resolved = { c: Captured; row: Row | null } | { c: Captured; get: ReadIR } | 'full';
-type Answer = { ok: Json } | { err: unknown };
+type ReadAnswer = { ok: Json; snapshots: patch.Snapshots };
+type Answer = ReadAnswer | { err: unknown };
 
-const bytesOf = (text: string) => new TextEncoder().encode(text).byteLength;
-/** Relation, period and point predicates need rows or column forms the RETURNING image does not carry. */
-function decidable(p: Pred): boolean {
-	switch (p.t) {
-		case 'and':
-		case 'or':
-			return p.of.every(decidable);
-		case 'not':
-			return decidable(p.of);
-		case 'one':
-		case 'many':
-		case 'count':
-		case 'agg':
-		case 'geo':
-		case 'period':
-		case 'path':
-		case 'each':
-		case 'search':
-		case 'similar':
-			return false; // hook:query (agg)
-		case 'const':
-			return true;
-		default:
-			return (
-				!p.field.includes('.') &&
-				!(p.t === 'cmp' && p.arg._tag === 'Field' && p.arg.field.includes('.'))
-			);
-	}
-}
-/** Keys in jsonb's order (length, then bytes), so a built row prints as the database's does. */
-const jb = (o: { [k: string]: Json }): Row =>
-	Object.fromEntries(
-		Object.entries(o).sort(([a], [b]) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))
-	);
-const same = (a: Json | undefined, b: Json) =>
-	a !== undefined && Equal.equals(encodeWire(a), encodeWire(b));
-const iso = (s: string): string | undefined => {
-	const t = Date.parse(s.replace(' ', 'T').replace(/([+-]\d\d)$/, '$1:00'));
-	return Number.isNaN(t) || !/^\d{4}-/.test(s) ? undefined : new Date(t).toISOString();
-};
-const dayBefore = (d: string) =>
-	new Date(Date.parse(`${d}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
-
-/**
- * A RETURNING value (`to_jsonb(row)`, parsed) in the read's wire form (`sql.ts` `wire`, std/wire), or `undefined` when it
- * cannot be exact. A commit's image carries `numeric` as text (`commit.ts` `numericText`), so a decimal, money or sum keeps
- * its scale; a JSON number (an approval seal's or restore's image) has lost it (`1.20` → 1.2) and falls back to a PK get.
- */
-function wireOf(f: FieldInfo, v: Json | undefined): Json | undefined {
-	if (v === undefined || v === null) return v;
-	switch (f.pg) {
-		case 'numeric':
-			return typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v)
-				? encodeWire(Decimal.of(v))
-				: undefined;
-		case 'timestamptz':
-			return typeof v === 'string' ? iso(v) : undefined;
-		case 'date':
-			return typeof v === 'string' ? v : undefined;
-		case 'vector':
-			return typeof v === 'string'
-				? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Json)(JSON.parse(v)))
-				: v;
-		case 'point': {
-			const p = typeof v === 'string' ? /^\(([^,]+),([^)]+)\)$/.exec(v) : null;
-			return p === null ? undefined : { lat: Number(p[2]), lng: Number(p[1]) };
-		}
-		case 'daterange': {
-			const p = typeof v === 'string' ? /^\[(\d{4}-\d\d-\d\d),(\d{4}-\d\d-\d\d)?\)$/.exec(v) : null;
-			return p === null
-				? undefined
-				: jb({ from: p[1]!, to: p[2] === undefined ? null : dayBefore(p[2]) });
-		}
-		case 'tstzrange': {
-			const p = typeof v === 'string' ? /^[[(]"([^"]+)",(?:"([^"]+)")?[\])]$/.exec(v) : null;
-			const start = p === null ? undefined : iso(p[1]!),
-				end = p?.[2] === undefined ? null : iso(p[2]);
-			return start === undefined || end === undefined ? undefined : jb({ start, end });
-		}
-		default:
-			return v;
-	}
-}
-/** A wire value as the order compares it: `undefined` when the row does not carry it. */
-function sortable(v: Json | undefined): string | number | boolean | null | undefined {
-	if (v === undefined || v === null) return v;
-	if (typeof v !== 'object') return v;
-	if (!Predicate.isObject(v)) return undefined;
-	return typeof v['$dec'] === 'string' ? Number(v['$dec']) : undefined;
-}
-
+const utf8 = new TextEncoder();
+const bytesOf = (text: string) => utf8.encode(text).byteLength;
 export const LiveHubLive = Layer.effect(
 	Live,
 	Effect.gen(function* () {
@@ -195,12 +74,27 @@ export const LiveHubLive = Layer.effect(
 		const bindings = Clock.currentTimeMillis.pipe(
 			Effect.map((at) => bindingsAt(at, manifest.workspace.tz))
 		);
-		const cat = catalogOf(manifest);
+		const catalog = catalog_of(manifest), compiler = new ViewCompiler(catalog, manifest);
 		const lane = yield* Queue.unbounded<
 			| { readonly _tag: 'Flush' }
 			| { readonly _tag: 'Barrier'; readonly done: Deferred.Deferred<void> }
 		>();
 		const conns = new Map<string, Conn>();
+		const byModel = new Map<string, Map<View, Conn>>();
+		const index = (conn: Conn, view: View) => {
+			for (const model of view.plan.models) {
+				const views = byModel.get(model) ?? new Map<View, Conn>();
+				views.set(view, conn);
+				byModel.set(model, views);
+			}
+		};
+		const unindex = (view: View) => {
+			for (const model of view.plan.models) {
+				const views = byModel.get(model);
+				views?.delete(view);
+				if (views?.size === 0) byModel.delete(model);
+			}
+		};
 		// `v`: the last commit's sequence; `routed`: the last one whose views were answered (frames are stamped with it)
 		let v = 0,
 			routed = 0,
@@ -210,410 +104,43 @@ export const LiveHubLive = Layer.effect(
 			reads = 0;
 		let pending: { captured: Captured; version: number }[] = [],
 			queued = false;
-		let syncChanges = new Map<string, Set<string> | null>();
 		const queue = () => {
 			if (queued) return;
 			queued = true;
 			Queue.offerUnsafe(lane, { _tag: 'Flush' });
 		};
 
-		/** Cursor pages and prospective reads have no live registration. Index searches re-answer on model writes. */
-		function check(view: LiveView): void {
-			const r = view.read;
-			if (r.kind === 'request') {
-				for (const root of r.roots) if ('read' in root) check({ read: root.read });
-				return;
-			}
-			if (
-				r.kind === 'after' ||
-				(r.kind === 'read' && r.page._tag === 'Limit' && r.page.after !== undefined)
-			)
-				throw BoltError.make(
-					'invalid',
-					'decode',
-					`a ${r.kind === 'read' ? 'cursor page' : r.kind} read is not liveable`
-				);
-		}
-
-		/** The RETURNING image with each exclusive arc also under its field name as a `RecordRef`, as the evaluator and the wire read it. */
-		const images = new WeakMap<RowData, RowData>();
-		function image(model: string, row: RowData): RowData {
-			const hit = images.get(row);
-			if (hit !== undefined) return hit;
-			let out: { [k: string]: Json } | null = null;
-			for (const f of cat.models.get(model)?.fields.values() ?? []) {
-				if (f.arms === undefined || f.arms.some((a) => row[`${f.column}__${a}`] === undefined))
-					continue;
-				const arm = f.arms.find((a) => row[`${f.column}__${a}`] !== null);
-				(out ??= { ...row })[f.name] =
-					arm === undefined ? null : jb({ model: arm, id: row[`${f.column}__${arm}`]! });
-			}
-			images.set(row, out ?? row);
-			return out ?? row;
-		}
-		/** Whether a row image is one of the view's rows for this caller: a read arm admits it and the view's `where` holds. */
-		function member(
-			a: Authority,
-			r: { model: string; where?: Pred | undefined; output?: string | undefined },
-			row: RowData,
-			b: Bindings
-		): boolean {
-			const arms = a.admin
-				? null
-				: (a.models[r.model]?.read[r.output ?? 'default']?.[r.model] ?? []);
-			const env: EvalEnv = { cat, bindings: b, authority: a, scoped: true };
-			return (
-				(arms === null ||
-					arms.some((x) => evaluate({ ...env, scoped: false }, r.model, x.where, row))) &&
-				(r.where === undefined || evaluate(env, r.model, r.where, row))
-			);
-		}
-
-		/** What a captured row means for a view: skip, a decided hit, or undecidable. */
-		function decide(
-			a: Authority,
-			view: View,
-			c: Captured,
-			b: Bindings
-		): 'skip' | 'hit' | 'unknown' {
-			const r = view.read;
-			// a read request's rows hold their layers: a change in any model it read re-reads it (`request` below)
-			if (r.kind === 'request') return 'unknown';
-			// a commit to a related sort key's target (a renamed account) may reorder rows it does not carry: re-read
-			if (r.kind === 'read' && sortTargets(cat, r.model, r.order).has(c.model)) return 'unknown';
-			if (c.model !== r.model)
-				return (r.kind === 'read' || r.kind === 'get') && selectTargets(cat, r.select).has(c.model)
-					? 'unknown'
-					: 'skip';
-			if (r.kind === 'get' || r.kind === 'history') return c.id === r.id ? 'hit' : 'skip';
-			if (r.kind !== 'read' && r.kind !== 'aggregate' && r.kind !== 'similar') return 'unknown';
-			const arms = a.admin
-				? null
-				: (a.models[c.model]?.read[r.output ?? 'default']?.[c.model] ?? []);
-			if ((r.where !== undefined && !decidable(r.where)) || arms?.some((x) => !decidable(x.where)))
-				return 'unknown';
-			const hit = (row: RowData | null) => row !== null && member(a, r, image(c.model, row), b);
-			return Result.getOrElse(
-				Result.try(() => (hit(c.old) || hit(c.new) ? ('hit' as const) : ('skip' as const))),
-				() => 'unknown' as const
-			);
-		}
-
-		/** A row image as the read projects it (`sql.ts` `items`): `id` and the selected fields of its output in wire form;
-		 * `undefined` when the image cannot give it exactly (a relation arm, an arc arm field, a numeric number, a column it lacks). */
-		function project(
-			model: string,
-			output: string | undefined,
-			select: SelectIR,
-			row: RowData,
-			one: boolean
-		): Row | undefined {
-			if (
-				Object.keys(select.relations).length > 0 ||
-				cat.models.get(model)?.labelLink !== undefined ||
-				[...syncsOf(manifest).values()].some((sync) => sync.model === model && sync.write) ||
-				approvable(manifest, cat).has(model)
-			)
-				return undefined; // `$label`, `$sync` and `$approval` are read, never in an image
-			const c = storeSync(exposureOf(storeSync(catalogFor(cat, model, output)), model));
-			const out: { [k: string]: Json } = { id: row['id']! };
-			for (const name of select.fields ?? defaultFields(c, one)) {
-				if (name === 'id') continue;
-				const f = c.model.fields.get(name);
-				if (f === undefined || name.includes('.')) return undefined;
-				const value = f.arms === undefined ? wireOf(f, row[f.column]) : row[name];
-				if (value === undefined) return undefined;
-				out[name] = value;
-			}
-			return jb(out);
-		}
-
-		function resolve(a: Authority, view: View, c: Captured, b: Bindings): Resolved {
-			const r = view.read;
-			if ((r.kind !== 'read' && r.kind !== 'get') || (r.kind === 'read' && r.search !== undefined))
-				return 'full';
-			if (c.new === null) return { c, row: null };
-			const row = image(c.model, c.new);
-			const projected = Result.try(() =>
-				!member(a, r.kind === 'get' ? { model: r.model } : r, row, b)
-					? null
-					: project(r.model, r.output, r.select, row, r.kind === 'get')
-			);
-			if (Result.isFailure(projected)) return 'full';
-			if (projected.success !== undefined) return { c, row: projected.success };
-			// the one row, read as the view reads it (a list's default projection, not a record's)
-			return r.kind === 'get'
-				? 'full'
-				: {
-						c,
-						get: {
-							kind: 'get',
-							model: r.model,
-							...(r.output === undefined ? {} : { output: r.output }),
-							id: c.id,
-							select: {
-								fields:
-									r.select.fields ??
-									defaultFields(
-										storeSync(exposureOf(storeSync(catalogFor(cat, r.model, r.output)), r.model))
-									),
-								relations: r.select.relations
-							}
-						}
-					};
-		}
-
-		/** Where `row` goes among `rows` by the view's order (nulls last ascending, first descending, then `id`), or `null` when
-		 * it cannot be exact: a key the rows do not carry, or two different text values, whose order is the database collation's. */
-		function place(r: ReadIR, rows: readonly Row[], row: Row): number | null {
-			if (r.kind !== 'read') return null;
-			const fields = storeSync(exposureOf(cat, r.model)).model.fields;
-			const keys = [...(r.order ?? []), { field: 'id', dir: 'asc' as const }];
-			const before = (x: Row, y: Row): boolean | null => {
-				for (const k of keys) {
-					// a distance is the database's to compute: a row that moves re-reads
-					if ('near' in k && k.near !== undefined) return null;
-					const p = sortable(x[k.field]),
-						q = sortable(y[k.field]);
-					if (p === undefined || q === undefined) return null;
-					if (p === q) continue;
-					if (p === null || q === null) return (p === null) === (k.dir === 'desc');
-					if (fields.get(k.field)?.pg === 'text') return null; // ponytail: collation-ordered text re-reads; learn the collation to place it
-					return p < q === (k.dir === 'asc');
-				}
-				return false;
-			};
-			for (let i = 0; i < rows.length; i++) {
-				const b = before(row, rows[i]!);
-				if (b === null) return null;
-				if (b) return i;
-			}
-			return rows.length;
-		}
-		/** Whether the change leaves the row's order keys as they were, so it stays where it is. */
-		function kept(r: ReadIR, a: Authority, c: Captured, old: Row, row: Row): boolean {
-			if (r.kind !== 'read') return false;
-			const fields = storeSync(exposureOf(cat, r.model)).model.fields;
-			return (r.order ?? []).every(({ field }) => {
-				// a related key (`account.name`) holds while its relation does; a commit to the target re-reads (`decide`)
-				const head = field.split('.')[0]!,
-					col = fields.get(head)?.column ?? head;
-				return c.old !== null && c.new !== null && same(c.old[col], c.new[col] ?? null);
-			});
-		}
-
-		type Strategy = {
-			decide: typeof decide;
-			resolve: typeof resolve;
-			place: typeof place;
-			kept: typeof kept;
-			limit: (read: ReadIR) => number;
-		};
-		const base: Strategy = {
-			decide,
-			resolve,
-			place,
-			kept,
-			limit: (read) =>
-				read.kind === 'read' && read.page._tag === 'Limit' ? read.page.limit : LIMITS.page.all
-		};
-		const newest = (read: ReadIR, rows: readonly Row[], row: Row): number => {
-			const time = Date.parse(String(row['at'])),
-				id = String(row['id']);
-			const at = rows.findIndex((other) => {
-				const value = Date.parse(String(other['at']));
-				return value < time || (value === time && String(other['id']) < id);
-			});
-			return at < 0 ? rows.length : at;
-		};
-		const sameAt: Strategy['kept'] = (read, authority, captured, old, row) =>
-			old['at'] === row['at'];
-		/** Each liveable own read owns its image judgement and projection beside its delegates. */
-		const LIVE_KINDS = {
-			read: base,
-			get: base,
-			history: base,
-			aggregate: base,
-			// ponytail: any commit to a model the request read (its roots, layers, hops and the caller's arms) re-reads the
-			// whole request; patch per root when request views grow large
-			request: {
-				...base,
-				decide: (a, view, captured) =>
-					readTargets(cat, view.read, a).has(captured.model) ? 'unknown' : 'skip',
-				resolve: () => 'full'
-			},
-			similar: {
-				...base,
-				decide: (a, view, captured) =>
-					view.read.kind === 'similar' && captured.model === view.read.model ? 'unknown' : 'skip'
-			},
-			after: { ...base, decide: () => 'unknown' },
-			transcript: {
-				...base,
-				decide: (a, view, captured) =>
-					// the answer carries its conversation's status (a stop may change no message): its row re-reads
-					view.read.kind === 'transcript' &&
-					captured.model === 'sys_conversation' &&
-					(captured.new ?? captured.old)?.['id'] === view.read.conversation
-						? Predicate.isObject(view.value) &&
-							view.value['status'] === (captured.new ?? captured.old)?.['status']
-							? 'skip'
-							: 'hit'
-						: view.read.kind === 'transcript' &&
-							  captured.model === view.read.model &&
-							  (captured.new ?? captured.old)?.['conversation'] === view.read.conversation &&
-							  (view.read.from === undefined ||
-									Number((captured.new ?? captured.old)?.['seq']) >= view.read.from)
-							? 'hit'
-							: 'skip',
-				resolve: (a, view, captured) => {
-					if (captured.new === null || captured.model === 'sys_conversation')
-						return { c: captured, row: null };
-					const message = Schema.decodeUnknownOption(Message)(captured.new);
-					if (view.read.kind !== 'transcript' || Option.isNone(message)) return 'full';
-					return { c: captured, row: transcriptRow(message.value, isStaff(a), view.read.thread) };
-				},
-				place: (read, rows, row) => {
-					const at = rows.findIndex((other) => Number(other['seq']) > Number(row['seq']));
-					return at < 0 ? rows.length : at;
-				},
-				kept: (read, a, captured, old, row) => old['seq'] === row['seq']
-			},
-			inbox: {
-				...base,
-				decide: (a, view, captured) =>
-					view.read.kind === 'inbox' &&
-					((captured.model === view.read.model &&
-						(captured.new ?? captured.old)?.['member'] === view.read.member) ||
-						(view.read.requests === true && captured.model === 'sys_user'))
-						? 'hit'
-						: 'skip',
-				resolve: (a, view, captured) => ({
-					c: captured,
-					row: captured.new === null ? null : noticeRow(captured.new)
-				}),
-				place: newest,
-				kept: sameAt,
-				limit: () => INBOX_LIMIT
-			},
-			conversations: {
-				...base,
-				decide: (a, view, captured) => {
-					if (view.read.kind !== 'conversations') return 'skip';
-					if (captured.model === 'sys_envoy') return isStaff(a) ? 'unknown' : 'skip';
-					if (captured.model !== view.read.model) return 'skip';
-					const row = captured.new ?? captured.old;
-					if (listed(row, view.read.member, a.admin)) return 'hit';
-					// a thread the member posted in is listed (`sharedConversations`) though no row image says so: re-read
-					// ponytail: every unlisted thread change re-reads the list; track posted threads per view if that gets hot
-					return row !== null &&
-						(row['parent'] ?? null) === null &&
-						(row['integration'] ?? null) !== null
-						? 'unknown'
-						: 'skip';
-				},
-				resolve: (a, view, captured) => ({
-					c: captured,
-					row: captured.new === null ? null : conversationRow(captured.new)
-				}),
-				place: newest,
-				kept: sameAt,
-				limit: () => CONVERSATIONS
-			},
-			// `sys_run` changes arrive as `syncChanged('sys_run')` (the queue writes no captures): each re-reads the list
-			runs: { ...base, decide: () => 'skip', resolve: () => 'full' }
-		} satisfies { [K in ReadIR['kind']]: Strategy };
-
-		/** Applies one resolved row to a working value; the ops that did it, or `'full'` when only a re-read is exact. */
-		function apply(
-			a: Authority,
-			view: View,
-			work: { value: Json },
-			c: Captured,
-			row: Row | null
-		): PatchOp[] | 'full' {
-			const r = view.read;
-			// a transcript's conversation changed status: set it beside the rows, no re-read
-			if (r.kind === 'transcript' && c.model === 'sys_conversation') {
-				const status = c.new?.['status'];
-				if (!Predicate.isObject(work.value) || status === undefined) return 'full';
-				work.value = { ...work.value, status };
-				return [{ op: 'meta', key: 'status', value: status }];
-			}
-			if (r.kind === 'get') {
-				if (row === null)
-					return work.value === null ? [] : ((work.value = null), [{ op: 'remove', id: c.id }]);
-				if (same(work.value, row)) return [];
-				work.value = row;
-				return [{ op: 'upsert', index: 0, row }];
-			}
-			const parsed = pageOf(work.value);
-			if (
-				(r.kind !== 'read' &&
-					r.kind !== 'transcript' &&
-					r.kind !== 'inbox' &&
-					r.kind !== 'conversations') ||
-				Option.isNone(parsed)
-			)
-				return 'full';
-			const page = parsed.value,
-				rows = [...page.rows],
-				i = rows.findIndex((x) => x['id'] === c.id);
-			work.value = { ...page, rows };
-			const more = page.next !== undefined && page.next !== null;
-			const limit = LIVE_KINDS[r.kind].limit(r);
-			if (row === null) {
-				if (more) return 'full'; // a row left: from the page, which backfills; or from beyond it, which may end `next`
-				if (i < 0) return [];
-				rows.splice(i, 1);
-				return [{ op: 'remove', id: c.id }];
-			}
-			if (i >= 0 && LIVE_KINDS[r.kind].kept(r, a, c, rows[i]!, row)) {
-				if (same(rows[i], row)) return [];
-				rows[i] = row;
-				return [{ op: 'upsert', index: i, row }];
-			}
-			const last = rows.at(-1)?.['id'];
-			if (i >= 0) rows.splice(i, 1);
-			const at = LIVE_KINDS[r.kind].place(r, rows, row);
-			if (at === null) return 'full';
-			if (more) {
-				// a full page with more beyond: a row past its end is not on it; a row leaving or entering it moves `next`
-				if (at === rows.length) return i < 0 ? [] : 'full';
-				if (i < 0) return 'full';
-				rows.splice(at, 0, row);
-				return rows.at(-1)?.['id'] === last ? [{ op: 'upsert', index: at, row }] : 'full';
-			}
-			if (rows.length + 1 > limit) return 'full';
-			rows.splice(at, 0, row);
-			return [{ op: 'upsert', index: at, row }];
-		}
-
 		/** Sends a view's new value: its ops as a patch, or the whole answer; over a budget, the view errors alone. */
 		const put = Effect.fn('Live.put')(function* (
 			conn: Conn,
 			view: View,
-			value: Json,
-			ops?: readonly PatchOp[],
-			arrivals?: readonly Json[]
+			answer: {
+				value: Json;
+				expected: number;
+				ops?: readonly PatchOp[] | undefined;
+				arrivals?: readonly Json[] | undefined;
+				snapshots?: patch.Snapshots;
+			}
 		) {
+			if (conn.views.get(view.id) !== view || view.readVersion !== answer.expected) return;
+			const { value, ops, arrivals } = answer;
+			const snapshots = ops === undefined ? answer.snapshots ?? new Map<string, ReadSnapshot>() : view.snapshots;
 			const text = JSON.stringify(value);
-			if (
+			const unchanged =
 				ops === undefined &&
 				!arrivals?.length &&
 				view.value !== undefined &&
-				same(view.value, value)
-			)
-				return;
-			const bytes = bytesOf(text);
+				same(view.value, value);
+			const bytes = bytesOf(text) + patch.keys(view.plan).reduce((sum, key) => sum + bytesOf(key), 0) +
+				[...snapshots].reduce((sum, [key, snapshot]) => sum + bytesOf(key) + snapshot.bytes, 0);
 			const over: [LiveErrorCode, string] | null =
 				bytes > LIVE.subscriptionBytes
 					? [
-							'subscriptionTooLarge',
+							'subscription_too_large',
 							`the answer is ${bytes} bytes; a live view holds at most ${LIVE.subscriptionBytes}`
 						]
 					: retained - view.bytes + bytes > LIVE.cellBytes
-						? ['cellBudget', `the cell retains at most ${LIVE.cellBytes} bytes of live answers`]
+						? ['cell_budget', `the cell retains at most ${LIVE.cellBytes} bytes of live answers`]
 						: null;
 			if (over !== null) {
 				yield* drop(conn, view.id);
@@ -623,6 +150,9 @@ export const LiveHubLive = Layer.effect(
 			retained += bytes - view.bytes;
 			view.bytes = bytes;
 			view.value = value;
+			view.snapshots = snapshots;
+			view.readVersion++;
+			if (unchanged) return;
 			yield* conn.send(
 				ops === undefined
 					? {
@@ -632,16 +162,16 @@ export const LiveHubLive = Layer.effect(
 							value,
 							...(arrivals?.length ? { arrivals } : {})
 						}
-					: { t: 'patch', view: view.id, v: routed, ops }
+					: { t: 'patch', view: view.id, v: routed, ops, ...(arrivals?.length ? { arrivals } : {}) }
 			);
 		});
-		const failed = (conn: Conn, view: View, err: unknown) =>
-			conn.send({
+		const failed = (conn: Conn, view: View, err: unknown, expected: number) => Effect.suspend(() =>
+			conn.views.get(view.id) !== view || view.readVersion !== expected ? Effect.void : conn.send({
 				t: 'error',
 				view: view.id,
 				code: err instanceof BoltError ? err.code : 'internal',
 				message: err instanceof Error ? err.message : String(err)
-			});
+			}));
 
 		/** One pipelined read; a failing batch is re-asked per read so one bad view errors alone. */
 		const readAll = Effect.fn('Live.readAll')(function* (
@@ -651,24 +181,34 @@ export const LiveHubLive = Layer.effect(
 		) {
 			if (batch.length === 0) return [];
 			reads += batch.length;
-			return yield* reader.run(batch, { as: 'caller', authority: conn.authority }, b).pipe(
-				Effect.map((values): readonly Answer[] => values.map((ok) => ({ ok }))),
-				Effect.catch(() =>
-					Effect.forEach(
-						batch,
-						(read) =>
-							reader.run([read], { as: 'caller', authority: conn.authority }, b).pipe(
-								Effect.match({
-									onSuccess: (values): Answer => ({ ok: values[0] ?? null }),
-									onFailure: (err): Answer => ({ err })
-								})
-							),
-						{ concurrency: 'unbounded' }
-					)
-				)
-			);
+			const read = Effect.fn('Live.read')(function* (items: readonly ReadIR[]) {
+				const snapshots = new Map<string, ReadSnapshot>();
+				const values = yield* reader.run(items, { as: 'caller', authority: conn.authority }, b).pipe(
+					Effect.provideService(ReadSnapshots, snapshots)
+				);
+				if (values.length !== items.length) return yield* Effect.fail(BoltError.make('internal', 'decode', 'The live read returned the wrong number of answers.'));
+				const answers: ReadAnswer[] = [];
+				for (const [index, item] of items.entries()) {
+					const ok = values[index];
+					if (ok === undefined) return yield* Effect.fail(BoltError.make('internal', 'decode', 'The live read returned no answer.'));
+					const requested = new Set(sourceKeys(item));
+					answers.push({ ok, snapshots: new Map([...snapshots].filter(([key]) => requested.has(key))) });
+				}
+				return answers;
+			});
+			return yield* read(batch).pipe(Effect.catch(() => Effect.forEach(batch, (item) =>
+				read([item]).pipe(Effect.match({
+					onSuccess: (values): Answer => values[0] ?? { err: BoltError.make('internal', 'decode', 'The live read returned no answer.') },
+					onFailure: (err): Answer => ({ err })
+				})), { concurrency: 'unbounded' })));
+
 		});
-		const answer = Effect.fn('Live.answer')(function* (conn: Conn, views: readonly View[]) {
+		const answer = Effect.fn('Live.answer')(function* (
+			conn: Conn,
+			views: readonly View[],
+			arrivals?: (view: View) => readonly Json[] | undefined
+		) {
+			const tickets = new Map(views.map((view) => [view, ++view.readVersion]));
 			const b = yield* bindings;
 			const values = yield* readAll(
 				conn,
@@ -676,24 +216,32 @@ export const LiveHubLive = Layer.effect(
 				b
 			);
 			for (const [i, view] of views.entries()) {
-				if (!conn.views.has(view.id)) continue;
+				if (conn.views.get(view.id) !== view) continue;
+				const expected = tickets.get(view);
+				if (expected === undefined || view.readVersion !== expected) continue;
 				const result = values[i];
 				if (result === undefined) continue;
-				if ('ok' in result) yield* put(conn, view, result.ok);
-				else yield* failed(conn, view, result.err);
+				if ('ok' in result) yield* put(conn, view, { value: result.ok, expected,
+					snapshots: result.snapshots,
+					...(arrivals === undefined ? {} : { arrivals: arrivals(view) }) });
+				else yield* failed(conn, view, result.err, expected);
 			}
 		});
 		const drop = (conn: Conn, id: string) =>
 			Effect.sync(() => {
 				const view = conn.views.get(id);
 				if (view === undefined) return;
+				unindex(view);
 				retained -= view.bytes;
 				conn.views.delete(id);
 			});
 		const disconnect = Effect.fn('Live.disconnect')(function* (id: string, discard = false) {
 			const conn = conns.get(id);
 			if (conn === undefined) return;
-			for (const view of conn.views.values()) retained -= view.bytes;
+			for (const view of conn.views.values()) {
+				unindex(view);
+				retained -= view.bytes;
+			}
 			conn.views.clear();
 			conns.delete(id);
 			conn.end(discard);
@@ -705,142 +253,94 @@ export const LiveHubLive = Layer.effect(
 			routed = v;
 			const batch = pending;
 			pending = [];
-			const metadata = syncChanges;
-			syncChanges = new Map();
+			type Work = { view: View; captured: typeof batch };
+			const interested = new Map<Conn, Map<View, Work>>();
+			const work = (conn: Conn, view: View): Work => {
+				const views = interested.get(conn) ?? new Map<View, Work>();
+				interested.set(conn, views);
+				const current: Work = views.get(view) ?? { view, captured: [] };
+				views.set(view, current);
+				return current;
+			};
+			for (const entry of batch)
+				for (const [view, conn] of byModel.get(entry.captured.model) ?? [])
+					work(conn, view).captured.push(entry);
+			const arrivals = (view: View): readonly Json[] | undefined => {
+				const after = view.arrivalsAfter;
+				return after === undefined ? undefined : batch.flatMap(({ captured, version }) =>
+					version > after ? patch.arrivals(view.plan, captured) : []);
+			};
 			const b = yield* bindings;
-			let hit = 0,
-				patched = 0;
+			let hit = 0, patched = 0;
 			const fallback = new Set<View>();
 			reads = 0;
-			yield* Effect.forEach(
-				[...conns.values()],
-				(conn) =>
-					Effect.gen(function* () {
-						const full: View[] = [],
-							deltas: { view: View; rows: Exclude<Resolved, 'full'>[] }[] = [];
-						for (const view of conn.views.values()) {
-							const hits: Captured[] = [];
-							const read = view.read;
-							const changed =
-								read.kind === 'get' || read.kind === 'read' ? metadata.get(read.model) : undefined;
-							let unsure =
-								(read.kind === 'request' && read.roots.some((r) => metadata.has(r.root))) ||
-								(read.kind === 'inbox' && metadata.has(read.model)) ||
-								(read.kind === 'runs' && metadata.has(read.model)) ||
-								(read.kind === 'inbox' &&
-									read.requests === true &&
-									metadata.has('approval_request')) ||
-								changed === null ||
-								(changed !== undefined &&
-									(read.kind === 'get'
-										? changed.has(read.id)
-										: view.value === undefined ||
-											(Predicate.isObject(view.value) &&
-												Array.isArray(view.value['rows']) &&
-												view.value['rows'].some(
-													(row: Json) =>
-														Predicate.isObject(row) &&
-														typeof row['id'] === 'string' &&
-														changed.has(row['id'])
-												))));
-							for (const { captured: c } of batch) {
-								const d = LIVE_KINDS[view.read.kind].decide(conn.authority, view, c, b);
-								if (d === 'unknown') unsure = true;
-								else if (d === 'hit') hits.push(c);
-							}
-							if (!unsure && hits.length === 0) continue;
-							hit++;
-							// Inbox counts cover rows beyond the displayed page, including old:null read captures.
-							const rows =
-								unsure || view.value === undefined || view.read.kind === 'inbox'
-									? ['full' as const]
-									: hits.map((c) => LIVE_KINDS[view.read.kind].resolve(conn.authority, view, c, b));
-							if (rows.includes('full')) full.push(view);
-							else
-								deltas.push({
-									view,
-									rows: rows.filter((row): row is Exclude<Resolved, 'full'> => row !== 'full')
-								});
+			yield* Effect.forEach([...interested], ([conn, views]) => Effect.gen(function* () {
+				const full: View[] = [], deltas: { view: View; rows: patch.Resolved[] }[] = [];
+				for (const { view, captured } of views.values()) {
+					if (conn.views.get(view.id) !== view) continue;
+					const rows: patch.Resolved[] = [], value = view.value;
+					let unsure = value === undefined;
+					if (!unsure && value !== undefined)
+						for (const { captured: c } of captured) {
+							const result = Result.try(() => patch.resolve(view.plan, value, c, b, view.snapshots));
+							if (Result.isFailure(result) || result.success === undefined) { unsure = true; break; }
+							rows.push(...result.success);
 						}
-						// the fallbacks, in one round trip: whole views, then single rows by id
-						const gets = deltas.flatMap((d) => d.rows.flatMap((x) => ('get' in x ? [x.get] : [])));
-						const values = yield* readAll(conn, [...full.map((x) => x.read), ...gets], b);
-						for (const [i, view] of full.entries()) {
-							const r = values[i];
-							if (r === undefined) continue;
-							if (conn.views.has(view.id)) {
-								if ('ok' in r) {
-									const read = view.read;
-									const after = view.arrivalsAfter;
-									const arrivals =
-										read.kind === 'inbox' && after !== undefined
-											? batch.flatMap(({ captured: c, version }) =>
-													version > after &&
-													c.model === read.model &&
-													c.op === 'create' &&
-													c.new?.['member'] === read.member
-														? [noticeRow(c.new)]
-														: []
-												)
-											: undefined;
-									yield* put(conn, view, r.ok, undefined, arrivals);
-								} else yield* failed(conn, view, r.err);
-							}
-						}
-						let k = full.length;
-						const again: View[] = [];
-						for (const { view, rows } of deltas) {
-							const got = rows.map((x) => ('get' in x ? values[k++] : null));
-							if (!conn.views.has(view.id)) continue;
-							if (got.some((x) => x !== null)) {
-								fallback.add(view);
-							}
-							if (view.value === undefined) {
-								again.push(view);
-								continue;
-							}
-							const work = { value: view.value };
-							const ops: PatchOp[] = [];
-							let exact = true;
-							for (const [i, x] of rows.entries()) {
-								const g = got[i];
-								if (g !== null && g !== undefined && 'err' in g) {
-									exact = false;
-									break;
-								}
-								const projected =
-									'row' in x
-										? Option.some(x.row)
-										: g !== null && g !== undefined && 'ok' in g
-											? g.ok === null
-												? Option.some(null)
-												: rowOf(g.ok)
-											: Option.none();
-								if (Option.isNone(projected)) {
-									exact = false;
-									break;
-								}
-								const o = apply(conn.authority, view, work, x.c, projected.value);
-								if (o === 'full') {
-									exact = false;
-									break;
-								}
-								ops.push(...o);
-							}
-							if (!exact) {
-								again.push(view);
-								continue;
-							}
-							if (ops.length === 0) continue;
-							patched++;
-							yield* put(conn, view, work.value, ops);
-						}
-						for (const view of [...full, ...again]) fallback.add(view);
-						yield* answer(conn, again); // rare: a page boundary moved or an order needed the collation
-						yield* conn.send({ t: 'v', v: routed });
-					}),
-				{ concurrency: 'unbounded', discard: true }
-			);
+					if (!unsure && rows.length === 0) continue;
+					hit++;
+					if (unsure) full.push(view);
+					else deltas.push({ view, rows });
+				}
+				// Whole answers and scoped single-row fetches still share one pipelined crossing.
+				// one fetch per distinct row read: repeated captures of one row (coalesced commits) share it
+				const gets = new Map<string, number>(), fetches: ReadIR[] = [];
+				const slots = deltas.map(({ rows }) => rows.map((change) => {
+					if (!('get' in change)) return null;
+					const key = JSON.stringify(change.get.read);
+					let slot = gets.get(key);
+					if (slot === undefined) gets.set(key, slot = full.length + fetches.push(change.get.read) - 1);
+					return slot;
+				}));
+				const tickets = new Map(full.map((view) => [view, ++view.readVersion]));
+				const values = yield* readAll(conn, [...full.map((view) => view.read), ...fetches], b);
+				for (const [i, view] of full.entries()) {
+					const result = values[i], expected = tickets.get(view);
+					if (result === undefined || expected === undefined || conn.views.get(view.id) !== view || view.readVersion !== expected) continue;
+					if ('ok' in result) yield* put(conn, view, { value: result.ok, expected, snapshots: result.snapshots, arrivals: arrivals(view) });
+					else yield* failed(conn, view, result.err, expected);
+				}
+				const again: View[] = [];
+				for (const [d, { view, rows }] of deltas.entries()) {
+					const got = (slots[d] ?? []).map((slot) => slot === null ? null : values[slot]);
+					if (conn.views.get(view.id) !== view) continue;
+					if (got.some((answer) => answer !== null)) fallback.add(view);
+					if (view.value === undefined) { again.push(view); continue; }
+					const work: patch.PatchWork = { value: view.value, ops: [], roots: new Set<string>() };
+					const expected = view.readVersion;
+					let exact = true;
+					for (const [i, change] of rows.entries()) {
+						const answer = got[i];
+						if ('get' in change && (answer === undefined || answer === null || 'err' in answer)) { exact = false; break; }
+						const result = Result.try(() => {
+							const row = 'row' in change ? change.row : 'get' in change && answer !== null && answer !== undefined && 'ok' in answer
+								? change.get.row(answer.ok) : undefined;
+							return patch.apply(work, change, row, b, view.snapshots);
+						});
+						if (Result.isFailure(result) || !result.success) { exact = false; break; }
+					}
+					if (!exact) { again.push(view); continue; }
+					const ops = patch.patches(work), incoming = arrivals(view);
+					if (ops.length === 0 && !incoming?.length) continue;
+					patched++;
+					yield* put(conn, view, { value: work.value, expected, ops, arrivals: incoming });
+				}
+				for (const view of [...full, ...again]) fallback.add(view);
+				yield* answer(conn, again, arrivals);
+			}), { concurrency: 'unbounded', discard: true });
+			// Every connection still sees the commit watermark, even when none of its views depends on it.
+			yield* Effect.forEach([...conns.values()], (conn) => conn.send({ t: 'v', v: routed }), {
+				concurrency: 'unbounded', discard: true
+			});
 			for (const view of fallback) view.conservative = true;
 			conservative += fallback.size;
 			yield* Effect.logDebug(
@@ -916,17 +416,13 @@ export const LiveHubLive = Layer.effect(
 				const conn = conns.get(connId);
 				if (conn === undefined)
 					return yield* Effect.fail(
-						BoltError.make('notFound', 'admission', 'the live connection is gone')
+						BoltError.make('not_found', 'admission', 'the live connection is gone')
 					);
-				yield* Effect.try({
-					try: () => check(view),
-					catch: (error) =>
-						error instanceof BoltError ? error : BoltError.make('internal', 'decode', String(error))
-				});
+				const plan = yield* compiler.compile(view.read, conn.authority);
 				if (!conn.views.has(id) && conn.views.size >= LIVE.perConnection)
 					return yield* Effect.fail(
 						BoltError.make(
-							'tooManySubscriptions',
+							'too_many_subscriptions',
 							'admission',
 							`a connection holds at most ${LIVE.perConnection} live views`
 						)
@@ -935,11 +431,15 @@ export const LiveHubLive = Layer.effect(
 				const state: View = {
 					...view,
 					id,
+					plan,
+					snapshots: new Map<string, ReadSnapshot>(),
+					readVersion: 0,
 					bytes: 0,
 					value: undefined,
 					arrivalsAfter: undefined
 				};
 				conn.views.set(id, state);
+				index(conn, state);
 				yield* answer(conn, [state]);
 				state.arrivalsAfter = v;
 			}),
@@ -952,21 +452,7 @@ export const LiveHubLive = Layer.effect(
 			publish(captured: readonly Captured[]): number {
 				if (captured.length === 0) return v;
 				v++;
-				pending.push(...captured.map((row) => ({ captured: row, version: v })));
-				queue();
-				return v;
-			},
-			/** Re-read affected views after native metadata commits, without domain captures or hooks. Omit records to invalidate the model. */
-			syncChanged(model: string, records?: readonly string[]): number {
-				if (records?.length === 0) return v;
-				v++;
-				const previous = syncChanges.get(model);
-				if (records === undefined || previous === null) syncChanges.set(model, null);
-				else {
-					const ids = previous ?? new Set<string>();
-					for (const record of records) ids.add(record);
-					syncChanges.set(model, ids);
-				}
+				pending.push(...storedCaptures(catalog, captured).map((row) => ({ captured: row, version: v })));
 				queue();
 				return v;
 			},
@@ -989,8 +475,16 @@ export const LiveHubLive = Layer.effect(
 				const conn = conns.get(connId);
 				if (conn === undefined) return;
 				conn.authority = authority;
-				for (const view of conn.views.values()) view.value = undefined;
-				yield* answer(conn, [...conn.views.values()]);
+				const views: View[] = [];
+				for (const previous of [...conn.views.values()]) {
+					const plan = yield* compiler.compile(previous.read, authority);
+					unindex(previous);
+					const view: View = { ...previous, value: undefined, snapshots: new Map<string, ReadSnapshot>(), plan };
+					conn.views.set(view.id, view);
+					index(conn, view);
+					views.push(view);
+				}
+				yield* answer(conn, views);
 			}),
 			close: Effect.fn('Live.close')(function* (release: string) {
 				for (const conn of [...conns.values()]) {

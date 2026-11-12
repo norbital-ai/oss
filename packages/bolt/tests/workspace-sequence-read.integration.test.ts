@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer } from 'effect';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { ACME, manifest, seed } from './engine-fixture.ts';
 
@@ -39,41 +39,41 @@ it.effect(
 					})
 				);
 				const t = Context.get(context, TestWorkspace),
-					route = yield* routeFixture(context);
-				const as = t.as(t.admin);
+					route = yield* route_fixture(context);
+				const as = yield* t.as(t.admin);
 				for (const number of ['SO-0001', 'SO-0002']) {
-					const created = (yield* actReply(route, as.authority, {
-						callable: 'orders.create',
-						input: [
+					const created = (yield* act_reply(route, as.authority, {
+						acts: { 'orders.create': [
 							{
 								title: number,
 								region: 'north',
 								customer: ACME
 							}
-						],
-						issuedAt: t.clock.now()
+						] },
+						issued_at: t.clock.now()
 					})).outcome;
 					expect(created.kind).toBe('committed');
 					if (created.kind !== 'committed') throw new Error('create refused');
-					const id = created.records[0]?.id;
-					if (id === undefined) throw new Error('create returned no record');
+					const record = created.records[0];
+					if (record === undefined) throw new Error('create returned no record');
+					const id = record.id;
+					const submitted = (yield* act_reply(route, as.authority, {
+						acts: { 'orders.update': [{ target: { id, revision: record.revision }, set: { status: 'submitted' } }] },
+						issued_at: t.clock.now()
+					})).outcome;
+					expect(submitted.kind).toBe('committed');
+					if (submitted.kind !== 'committed') throw new Error('update refused');
+					const revision = submitted.records[0]?.revision;
+					if (revision === undefined) throw new Error('update returned no record');
 					expect(
-						(yield* actReply(route, as.authority, {
-							callable: 'orders.update',
-							input: [{ target: id, set: { status: 'submitted' } }],
-							issuedAt: t.clock.now()
-						})).outcome.kind
-					).toBe('committed');
-					expect(
-						(yield* qReply(route, as.authority, {
+						(yield* q_reply(route, as.authority, {
 							reads: [{ m: 'query', a: [{ orders: { where: { id: { eq: id } } } }] }]
 						})).answers[0]
 					).toMatchObject({ orders: { rows: [{ number, note: number }] } });
 					expect(
-						(yield* actReply(route, as.authority, {
-							callable: 'orders.update',
-							input: [{ target: id, set: { number: 'FORGED' } }],
-							issuedAt: t.clock.now()
+						(yield* act_reply(route, as.authority, {
+							acts: { 'orders.update': [{ target: { id, revision }, set: { number: 'FORGED' } }] },
+							issued_at: t.clock.now()
 						})).outcome.kind
 					).toBe('refused');
 				}

@@ -76,7 +76,7 @@ export const webex: ChatPlatform = {
 		const parse = (message: Message): Incoming => ({
 			id: message.id,
 			thread: threadOf(message),
-			sentAt: message.created,
+			sent_at: message.created,
 			from: {
 				handle: message.personId,
 				name: message.personDisplayName ?? message.personEmail ?? null
@@ -85,7 +85,7 @@ export const webex: ChatPlatform = {
 			group: message.roomType !== 'direct',
 			mentioned:
 				message.mentionedPeople?.some((person) => person === me.id || person === 'all') === true,
-			replyTo: message.parentId ?? null,
+			reply_to: message.parentId ?? null,
 			files: (message.files ?? []).map((url) => ({
 				name: new URL(url).pathname.split('/').at(-1) || 'attachment',
 				mime: 'application/octet-stream',

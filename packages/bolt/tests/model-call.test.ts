@@ -4,7 +4,7 @@ import { Effect, Result, Stream } from 'effect';
 import { Unavailable } from '../src/decl/errors.ts';
 import { modelCall } from '../src/engine/agent/ai.ts';
 import type { Ai, AiEvent } from '../src/engine/ports.ts';
-import { clockProbe } from './support/clock-probe.ts';
+import { clock_probe } from './support/clock-probe.ts';
 
 const request = { model: 'default', system: '', messages: [] };
 const atWall = (events: readonly AiEvent[]) =>
@@ -18,7 +18,7 @@ const atWall = (events: readonly AiEvent[]) =>
 			catalog: Effect.succeed({ models: [], default: 'default' }),
 			infer: () => Stream.concat(Stream.fromIterable(events), Stream.fromEffect(Effect.never))
 		};
-		return yield* clockProbe(modelCall(ai, request, { wallMs: 20 }).pipe(Effect.result), 21);
+		return yield* clock_probe(modelCall(ai, request, { wallMs: 20 }).pipe(Effect.result), 21);
 	});
 
 describe('modelCall at its wall', () => {

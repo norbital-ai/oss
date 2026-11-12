@@ -4,6 +4,7 @@ import { Cause, Context, Effect, Exit, Fiber, Layer, Stream } from 'effect';
 import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
 import type {
 	AiPort,
+	AiPortResponse,
 	BrowserPort,
 	DeadlinesPort,
 	LinksPort,
@@ -69,7 +70,7 @@ describe('fromAbi', () => {
 			});
 			expect(yield* Effect.flip(using(Docs, loaded, (d) => d.corpus))).toMatchObject({
 				_tag: 'FacilityFailure',
-				kind: 'upstream'
+				kind: 'invalid'
 			});
 		})
 	);
@@ -107,16 +108,18 @@ describe('fromAbi', () => {
 	it.effect('Browser optional methods and lifted methods keep their port receiver', () =>
 		Effect.gen(function* () {
 			const closed: string[] = [];
+			const snapshot = (profile: string) => ({ url: `https://${profile}.example`, title: profile, text: profile });
 			const port: BrowserPort = {
-				async navigate() {
-					return null;
+				async open() {},
+				async navigate(profile) {
+					return snapshot(profile);
 				},
 				async snapshot(profile) {
 					expect(this).toBe(port);
-					return profile;
+					return snapshot(profile);
 				},
-				async act() {
-					return null;
+				async act(profile) {
+					return snapshot(profile);
 				},
 				async evaluate() {
 					return null;
@@ -127,9 +130,9 @@ describe('fromAbi', () => {
 				async download() {
 					return { ...blob, name: 'file.txt' };
 				},
-				async openWorkspace(profile) {
+				async open_workspace(profile) {
 					expect(this).toBe(port);
-					return profile;
+					return snapshot(profile);
 				},
 				async close(profile) {
 					expect(this).toBe(port);
@@ -138,7 +141,7 @@ describe('fromAbi', () => {
 			};
 			yield* Effect.gen(function* () {
 				const browser = yield* Browser;
-				expect(yield* browser.snapshot('reader', {})).toBe('reader');
+				expect(yield* browser.snapshot('reader', {})).toEqual(snapshot('reader'));
 				expect(
 					yield* browser.openWorkspace?.(
 						'reader',
@@ -158,9 +161,9 @@ describe('fromAbi', () => {
 							conversation: 'conversation'
 						}
 					) ?? Effect.die('openWorkspace missing')
-				).toBe('reader');
+				).toEqual(snapshot('reader'));
 				const session = yield* browser.scoped('scoped');
-				expect(yield* session.snapshot({})).toBe('scoped');
+				expect(yield* session.snapshot({})).toEqual(snapshot('scoped'));
 				yield* browser.close?.('reader') ?? Effect.die('close missing');
 			}).pipe(Effect.provide(Browser.fromAbi(port)), Effect.scoped);
 			expect(closed).toEqual(['reader', 'scoped']);
@@ -261,7 +264,7 @@ describe('fromAbi', () => {
 			const port: TransportPort = {
 				send: async (kind, message) => {
 					sent.push([kind, message]);
-					return { providerId: `p${sent.length}` };
+					return { provider_id: `p${sent.length}` };
 				}
 			};
 			const transport = Transport.fromAbi({ Mail: port, Sms: off, Push: port });
@@ -269,10 +272,11 @@ describe('fromAbi', () => {
 				yield* using(Transport, transport, (t) =>
 					t.send({ _tag: 'Mail', to: 'a@b.c', subject: 'Code', text: '123456' })
 				)
-			).toEqual({ providerId: 'p1' });
+			).toEqual({ provider_id: 'p1' });
 			yield* using(Transport, transport, (t) =>
 				t.send({
 					_tag: 'Push',
+					id: 'notice-1',
 					subscription: { kind: 'web', endpoint: 'https://push', keys: {} },
 					title: 'New',
 					body: null,
@@ -285,6 +289,7 @@ describe('fromAbi', () => {
 				[
 					'inbox',
 					{
+						id: 'notice-1',
 						subscription: { kind: 'web', endpoint: 'https://push', keys: {} },
 						title: 'New',
 						body: null,
@@ -305,13 +310,13 @@ describe('fromAbi', () => {
 		Effect.gen(function* () {
 			const calls: string[] = [];
 			const port: DeadlinesPort = {
-				announce: (s, at) => {
+				announce: async (s, at) => {
 					calls.push(`announce ${s} ${at}`);
 				},
-				settle: (s, at) => {
+				settle: async (s, at) => {
 					calls.push(`settle ${s} ${String(at)}`);
 				},
-				teardown: (s) => {
+				teardown: async (s) => {
 					calls.push(`teardown ${s}`);
 				}
 			};
@@ -356,14 +361,14 @@ describe('fromAbi', () => {
 		'Ai: ask round-trips, infer streams its deltas then the response, an embeddings-only port embeds',
 		() =>
 			Effect.gen(function* () {
-				const response = {
+				const response: AiPortResponse = {
 					content: 'hello',
-					toolCalls: [],
-					finish: 'stop' as const,
+					tool_calls: [{ id: 'call-1', name: 'lookup', input: { query: 'hello' } }],
+					finish: 'tool',
 					usage: { input: 1, output: 1 }
 				};
 				const port: AiPort = {
-					sys_1: { ask: async () => ({ answers: {}, costUsd: 0, provider: 'p' }) },
+					sys_1: { max_choices: 8, ask: async () => ({ answers: {}, cost_usd: 0, provider: 'p' }) },
 					sys_2: {
 						models: ['default'],
 						infer: async (_request, _signal, onDelta, onProgress) => {
@@ -375,9 +380,10 @@ describe('fromAbi', () => {
 					}
 				};
 				const ai = Ai.fromAbi({ system1: port.sys_1, system2: port.sys_2, embed: off });
+				expect(yield* using(Ai, ai, (a) => Effect.succeed(a.maxChoices))).toBe(8);
 				expect(yield* using(Ai, ai, (a) => a.ask({ state: {}, questions: {} }))).toEqual({
 					answers: {},
-					costUsd: 0,
+					cost_usd: 0,
 					provider: 'p'
 				});
 				expect(
@@ -388,8 +394,10 @@ describe('fromAbi', () => {
 					{ _tag: 'Delta', text: 'hel' },
 					{ _tag: 'Progress', reasoning: 'thinking' },
 					{ _tag: 'Delta', text: 'lo' },
-					{ _tag: 'Response', response }
+					{ _tag: 'Response', response: { content: response.content, toolCalls: response.tool_calls, finish: response.finish, usage: response.usage } }
 				]);
+				expect(response).not.toHaveProperty('toolCalls');
+				expect(response.tool_calls).toEqual([{ id: 'call-1', name: 'lookup', input: { query: 'hello' } }]);
 				expect(yield* Effect.flip(using(Ai, ai, (a) => a.embed(['x'], 'default')))).toMatchObject({
 					facility: 'ai.embed'
 				});
@@ -424,6 +432,20 @@ describe('fromAbi', () => {
 				).toMatchObject({ kind: 'upstream', message: 'the model stream failed' });
 			})
 	);
+
+	it.effect('Ai rejects a foreign host response using the stored transcript shape', () =>
+		Effect.gen(function* () {
+			const port: AiPort['sys_2'] = {
+				models: ['default'],
+				infer: async () => ({ content: 'hello', tool_calls: [], finish: 'stop', usage: { input: 1, output: 1 } })
+			};
+			Object.defineProperty(port, 'infer', {
+				value: async () => ({ content: 'hello', toolCalls: [], finish: 'stop', usage: { input: 1, output: 1 } })
+			});
+			const ai = Ai.fromAbi({ system1: off, system2: port, embed: off });
+			expect(yield* Effect.flip(using(Ai, ai, (a) => Stream.runCollect(a.infer({ model: 'default', messages: [] }))))).toMatchObject({ _tag: 'FacilityFailure', kind: 'upstream' });
+		})
+	);
 });
 
 describe('native tagged failures', () => {
@@ -450,7 +472,7 @@ describe('native tagged failures', () => {
 		'BoltError and DbError retain identity; an ABI throw is a typed failure that names it',
 		() =>
 			Effect.gen(function* () {
-				const bolt = BoltError.make('notFound', 'admission', 'gone'),
+				const bolt = BoltError.make('not_found', 'admission', 'gone'),
 					db = DbError.make('23505', 'duplicate key');
 				expect([
 					yield* Effect.flip(Effect.fail(bolt)),

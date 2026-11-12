@@ -2,11 +2,12 @@
 // The generic setup of one integration instance (`IntegrationSetup`) over its client: the status read and stream, the
 // provider's form with its secrets masked and cleared, pairing, the connected summary, disconnecting, a refused read
 // shown as such, and nothing drawn after unmount.
+import { required } from './support/required.ts';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { beforeEach, afterEach, expect, it, vi } from '@effect/vitest';
 import '../../bolt-cli/src/test/dom.ts';
 import { Deferred, Effect, Layer, ManagedRuntime, Queue, Stream } from 'effect';
-import { mountEdge, run } from '@norbital-ai/ui/effect';
+import { mount_edge, run } from '@norbital-ai/ui/effect';
 import { ActRefused } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import IntegrationSetup from '../src/page/IntegrationSetup.svelte';
@@ -17,7 +18,7 @@ import { reactive } from './support/reactive.svelte.ts';
 const mounted: (() => Promise<void>)[] = [];
 let dispose: (() => Promise<void>) | undefined;
 beforeEach(() => {
-	dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 });
 afterEach(async () => {
 	for (const close of mounted.splice(0)) await close();
@@ -30,7 +31,7 @@ const settle = async () => {
 };
 type Client = Pick<
 	IntegrationClient,
-	'instance' | 'status' | 'pair' | 'importStart' | 'unpair' | 'test' | 'watch'
+	'instance' | 'status' | 'pair' | 'import_start' | 'unpair' | 'test' | 'watch'
 >;
 const fixture = (over: Partial<Client> = {}) => {
 	let status: InstanceStatus = {
@@ -74,7 +75,7 @@ const fixture = (over: Partial<Client> = {}) => {
 		instance: 'erp',
 		status: () => Effect.sync(() => status),
 		pair,
-		importStart: () => Effect.sync(() => status),
+		import_start: () => Effect.sync(() => status),
 		unpair,
 		test: () => Effect.sync(() => status),
 		watch: () =>
@@ -135,26 +136,26 @@ it('retains a refused import edit and never reports it as saved after another re
 				id: 'http',
 				label: 'HTTP',
 				setup: { kind: 'form', steps: [] },
-				importStart: { kind: 'timestamp' }
+				import_start: { kind: 'timestamp' }
 			}
 		]
 	};
 	const f = fixture({
 		status: () => Effect.succeed(status),
-		importStart: () =>
+		import_start: () =>
 			Effect.fail(new ActRefused({ code: 'refused', message: 'Import start could not be saved.' })),
 		test: () => Effect.succeed(status)
 	});
 	const target = await show(f.client, f.ready);
-	target.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Import start"]')!.click();
+	required(target.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Import start"]')).click();
 	await settle();
-	document.querySelector<HTMLButtonElement>('[role=option][data-value=since] button')!.click();
+	required(document.querySelector<HTMLButtonElement>('[role=option][data-value=since] button')).click();
 	await settle();
-	const date = target.querySelector<HTMLInputElement>('input[name=import-start-date]')!;
+	const date = required(target.querySelector<HTMLInputElement>('input[name=import-start-date]'));
 	date.value = '2026-10-21';
 	date.dispatchEvent(new Event('input', { bubbles: true }));
 	await settle();
-	target.querySelector<HTMLFormElement>('[data-import-start-form]')!.requestSubmit();
+	required(target.querySelector<HTMLFormElement>('[data-import-start-form]')).requestSubmit();
 	await vi.waitFor(() =>
 		expect(target.querySelector('[data-connection-error]')?.textContent).toContain(
 			'could not be saved'
@@ -184,7 +185,7 @@ it('unsubscribes its stream on unmount and draws nothing a late read answers', a
 	);
 	await run(Deferred.await(requested));
 	expect(
-		target.querySelector('[data-connection-state]')!.getAttribute('data-connection-state')
+		required(target.querySelector('[data-connection-state]')).getAttribute('data-connection-state')
 	).toBe('loading');
 	const close = mounted.pop();
 	if (close === undefined) throw new Error('Missing mounted view');

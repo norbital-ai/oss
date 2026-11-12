@@ -10,7 +10,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import type { ArrayKeys } from './structured-data.js';
 	import type { Values } from '../model/types.js';
 	import { Schema } from 'effect';
-	import { inputSchema } from '@norbital-ai/std/kind';
+	import { input_schema } from '@norbital-ai/std/kind';
 	/** A schema or native kind with current data, editing controls, or a prior value for comparison. */
 	export type StructuredDataProps = {
 		schema?: JsonSchema;
@@ -18,7 +18,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		value?: Value;
 		before?: Value;
 		mode?: 'view' | 'edit' | 'schema' | 'diff';
-		onChange?(next: Value): void;
+		on_change?(next: Value): void;
 		name?: string;
 		id?: string;
 		readonly?: boolean;
@@ -26,10 +26,10 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		errors?: ReadonlyMap<string, string>;
 		row?: Values;
 		/** Prior row context for native currency and related-value formatting. */
-		beforeRow?: Values;
+		before_row?: Values;
 		/** Explicit row identities, indexed by JSON Pointer. Unkeyed lists compare by position. */
-		arrayKeys?: ArrayKeys;
-		changesOnly?: boolean;
+		array_keys?: ArrayKeys;
+		changes_only?: boolean;
 		/** A new record: schema defaults fill as the editor opens; an edit offers them by control instead. */
 		create?: boolean;
 		/** Internal recursion context. */
@@ -85,7 +85,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		}
 		if (kind?.kind === 'union' && 'of' in kind)
 			return shape(
-				kind.of.find((arm) => value !== undefined && Schema.is(inputSchema(arm))(value)) ??
+				kind.of.find((arm) => value !== undefined && Schema.is(input_schema(arm))(value)) ??
 					kind.of[0],
 				value
 			);
@@ -97,7 +97,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		host: ReturnType<typeof useKinds>
 	): Value => {
 		if (value === undefined) return null;
-		const native = kind ? fieldEntry(kind, host) : undefined;
+		const native = kind ? field_entry(kind, host) : undefined;
 		if (native?.entry.renderer) return native.entry.label ?? kind?.label ?? 'Details';
 		const planned = shape(native?.entry.shape ?? kind, value);
 		if (planned !== kind && planned?.kind === 'custom') return visible(value, planned, host);
@@ -133,6 +133,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Decimal } from '@norbital-ai/std/decimal';
+	import { watch } from 'runed';
 	import Self from './structured-data.svelte';
 	import Editor from './editor.svelte';
 	import Show from './show.svelte';
@@ -144,29 +145,29 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import Table, { type Col } from '../table/Table.svelte';
 	import Overflow from '../cell/Overflow.svelte';
 	import * as Popover from '../primitives/popover/index.js';
-	import { fieldEntry } from './builtin/index.js';
+	import { field_entry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { armValue, formatValue, inferKind, initial, wideKind } from './kind.js';
-	import { FIELD_TYPES, jsonSchemaFromRows, jsonSchemaRows } from './json-schema-rows.js';
-	import { provideControls, uiText } from '../primitives/utils.js';
+	import { armValue, format_value, inferKind, initial, wideKind } from './kind.js';
+	import { FIELD_TYPES, json_schema_from_rows, json_schema_rows } from './json-schema-rows.js';
+	import { provideControls, ui_text } from '../primitives/utils.js';
 	import { humanize } from '../text/messages.js';
 	import {
 		jsonSchemaGroups,
 		jsonSchemaInitial,
-		jsonSchemaKind,
+		json_schema_kind,
 		nullableJsonSchema
 	} from './json-schema.js';
 	import {
-		dataChanged,
+		data_changed,
 		dataDefaults,
 		dataEntries,
-		dataEqual,
-		inferJsonSchema,
-		kindJsonSchema,
-		pairDataRows,
+		data_equal,
+		infer_json_schema,
+		kind_json_schema,
+		pair_data_rows,
 		structuredSchema
 	} from './structured-data.js';
-	import { useForm } from '../form/form-state.svelte.js';
+	import { use_form } from '../form/form-state.svelte.js';
 	import FieldControl, { useFieldPresentation } from '../form/field-control.svelte';
 	import { useOptionalBolt } from '../client/context.js';
 	import { useSectionTitle } from '../form/section.svelte';
@@ -177,16 +178,16 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		value,
 		before,
 		mode,
-		onChange,
+		on_change,
 		name = '',
 		id,
 		readonly,
 		disabled,
 		errors: ownErrors,
 		row = {},
-		beforeRow,
-		arrayKeys,
-		changesOnly = false,
+		before_row,
+		array_keys,
+		changes_only = false,
 		create,
 		root,
 		path = '',
@@ -195,10 +196,10 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		frame = true
 	}: StructuredDataProps = $props();
 	const uid = $props.id();
-	const form = useForm();
+	const form = use_form();
 	const bolt = useOptionalBolt();
 	const presentation = useFieldPresentation();
-	const errors = $derived(ownErrors ?? form?.fieldErrors);
+	const errors = $derived(ownErrors ?? form?.field_errors);
 	const errorFor = (name: string) => {
 		const error = errors?.get(name);
 		return error === undefined ? undefined : (bolt?.t(error) ?? error);
@@ -207,9 +208,9 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const controlId = $derived(id ?? uid);
 	const controls = provideControls(() => ({ readonly, disabled }));
 	const host = useKinds();
-	const t = uiText();
-	const currentMode = $derived(mode ?? (onChange ? 'edit' : 'view'));
-	const editing = $derived(currentMode === 'edit' && !controls.readonly && !!onChange);
+	const t = ui_text();
+	const currentMode = $derived(mode ?? (on_change ? 'edit' : 'view'));
+	const editing = $derived(currentMode === 'edit' && !controls.readonly && !!on_change);
 	const held = $derived(value === undefined ? before : value);
 	const kind = $derived.by(() => {
 		const next = shape(declaredKind, held),
@@ -218,30 +219,35 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			return {
 				...next,
 				fields: Object.fromEntries(
-					[...new Set([...Object.keys(previous.fields), ...Object.keys(next.fields)])]
-						.filter((key) => !previous.fields[key]?.hidden && !next.fields[key]?.hidden)
-						.map((key) => [key, next.fields[key] ?? previous.fields[key]!])
+					[...Object.entries(previous.fields), ...Object.entries(next.fields)].filter(
+						([key]) => !previous.fields[key]?.hidden && !next.fields[key]?.hidden
+					)
 				)
 			};
 		return next;
 	});
 	const document = $derived(
-		root ?? schema ?? (kind ? kindJsonSchema(kind) : inferJsonSchema(held))
+		root ?? schema ?? (kind ? kind_json_schema(kind) : infer_json_schema(held))
 	);
-	const rawSchema = $derived(schema ?? (kind ? kindJsonSchema(kind) : inferJsonSchema(held)));
+	const rawSchema = $derived(schema ?? (kind ? kind_json_schema(kind) : infer_json_schema(held)));
 	const resolved = $derived(structuredSchema(rawSchema, document, held));
 	const spec = $derived(node(resolved));
 	const locked = $derived(!editing || spec.readOnly === true);
 	let seeded = false;
-	$effect(() => {
-		if (currentMode !== 'edit' || seeded || !newRecord || depth !== 0 || onChange === undefined)
-			return;
-		seeded = true;
-		const next = dataDefaults(rawSchema, value, document);
-		if (next !== undefined) onChange(next);
-	});
-	const plan = $derived(kind ?? jsonSchemaKind(resolved));
-	const native = $derived(plan.kind === 'custom' ? fieldEntry(plan, host) : undefined);
+	watch(
+		() => {
+			if (currentMode !== 'edit' || seeded || !newRecord || depth !== 0 || on_change === undefined)
+				return null;
+			return { next: dataDefaults(rawSchema, value, document), on_change };
+		},
+		(seed) => {
+			if (seed === null) return;
+			seeded = true;
+			if (seed.next !== undefined) seed.on_change(seed.next);
+		}
+	);
+	const plan = $derived(kind ?? json_schema_kind(resolved));
+	const native = $derived(plan.kind === 'custom' ? field_entry(plan, host) : undefined);
 	const childName = (key: string | number) => (name === '' ? String(key) : `${name}.${key}`);
 	const title = (key: string, child: JsonSchema, childKind?: Kind) =>
 		unitTitle(childKind?.label ?? node(child).title ?? humanize(key), child);
@@ -250,12 +256,12 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		if (held === undefined || held === null) return '—';
 		if (Array.isArray(held)) return `${held.length} ${held.length === 1 ? 'item' : 'items'}`;
 		const entries = dataEntries(held);
-		if (entries === undefined) return formatValue(held, host.locale);
+		if (entries === undefined) return format_value(held, host.locale);
 		const fields = Object.entries(entries);
 		return (
 			fields
 				.slice(0, 2)
-				.map(([key, item]) => `${humanize(key)}: ${formatValue(item, host.locale)}`)
+				.map(([key, item]) => `${humanize(key)}: ${format_value(item, host.locale)}`)
 				.join(' · ') + (fields.length > 2 ? ' …' : '')
 		);
 	};
@@ -291,14 +297,14 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		const declared = shape(k, next === undefined ? previous : next);
 		const planned =
 			declared ??
-			jsonSchemaKind(structuredSchema(s, document, next === undefined ? previous : next));
-		if (planned.kind === 'custom' && fieldEntry(planned, host)) return;
+			json_schema_kind(structuredSchema(s, document, next === undefined ? previous : next));
+		if (planned.kind === 'custom' && field_entry(planned, host)) return;
 		if (currentMode === 'diff' && previous !== undefined) {
 			const previousKind =
-				shape(k, previous) ?? jsonSchemaKind(structuredSchema(s, document, previous));
+				shape(k, previous) ?? json_schema_kind(structuredSchema(s, document, previous));
 			if (
 				previousKind.kind === 'custom'
-					? !!fieldEntry(previousKind, host)
+					? !!field_entry(previousKind, host)
 					: previousKind.many !== true &&
 						!['object', 'record', 'json', 'union'].includes(previousKind.kind)
 			)
@@ -367,25 +373,28 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					])
 				];
 		return keys
-			.map((key) => ({
-				key,
-				schema: structuredSchema(
-					spec.properties?.[key] ??
-						(fieldKind(key)
-							? kindJsonSchema(fieldKind(key)!)
-							: inferJsonSchema(object[key] === undefined ? previousObject[key] : object[key])),
-					document
-				),
-				kind: fieldKind(key)
-			}))
+			.map((key) => {
+				const kind = fieldKind(key);
+				return {
+					key,
+					schema: structuredSchema(
+						spec.properties?.[key] ??
+							(kind
+								? kind_json_schema(kind)
+									: infer_json_schema(object[key] === undefined ? previousObject[key] : object[key])),
+						document
+					),
+					kind
+				};
+			})
 			.filter(
 				(field) =>
-					!changesOnly ||
+					!changes_only ||
 					currentMode !== 'diff' ||
-					dataChanged(
+					data_changed(
 						previousObject[field.key],
 						object[field.key],
-						arrayKeys,
+						array_keys,
 						pointer(path, field.key)
 					)
 			);
@@ -410,13 +419,13 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			key === tagged.by &&
 			typeof next === 'string'
 		) {
-			onChange?.(armValue(tagged, next));
+			on_change?.(armValue(tagged, next));
 			return;
 		}
 		const field = fields.find((f) => f.key === key);
 		if (next === null && field && field.kind === undefined && !nullableJsonSchema(field.schema))
-			onChange?.(Object.fromEntries(Object.entries(object).filter(([k]) => k !== key)));
-		else onChange?.({ ...object, [key]: next });
+			on_change?.(Object.fromEntries(Object.entries(object).filter(([k]) => k !== key)));
+		else on_change?.({ ...object, [key]: next });
 	}
 	const list = $derived<readonly Value[]>(Array.isArray(value) ? value : []);
 	/** A list of plain values (numbers, text, flags): read, it is one line of chips, not a one-column table. */
@@ -429,16 +438,16 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const itemSchema = $derived(
 		spec.items ??
 			(itemKind
-				? kindJsonSchema(itemKind)
-				: (node(inferJsonSchema([...previousList, ...list])).items ?? true))
+				? kind_json_schema(itemKind)
+				: (node(infer_json_schema([...previousList, ...list])).items ?? true))
 	);
 	const schemaAt = (index: number): JsonSchema => spec.prefixItems?.[index] ?? itemSchema;
 	const pairs = $derived(
 		currentMode === 'diff'
-			? pairDataRows(
+			? pair_data_rows(
 					previousList,
 					list,
-					arrayKeys?.[path] ?? (kind?.many === true ? kind.key : undefined)
+					array_keys?.[path] ?? (kind?.many === true ? kind.key : undefined)
 				)
 			: list.map((item, index) => ({
 					before: undefined,
@@ -450,12 +459,12 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const visiblePairs = $derived(
 		pairs.filter(
 			(pair) =>
-				!changesOnly ||
+				!changes_only ||
 				currentMode !== 'diff' ||
-				dataChanged(
+				data_changed(
 					pair.before,
 					pair.value,
-					arrayKeys,
+					array_keys,
 					pointer(path, pair.index ?? pair.beforeIndex ?? 0)
 				)
 		)
@@ -465,8 +474,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			? !visiblePairs.some((pair) =>
 					[pair.before, pair.value].some((value) => {
 						if (value === undefined) return false;
-						const plan = jsonSchemaKind(structuredSchema(itemSchema, document, value));
-						return plan.kind === 'custom' && fieldEntry(plan, host) !== undefined;
+						const plan = json_schema_kind(structuredSchema(itemSchema, document, value));
+						return plan.kind === 'custom' && field_entry(plan, host) !== undefined;
 					})
 				)
 			: itemKind.kind === 'object' || (itemKind.kind === 'json' && itemKind.shape === undefined)) &&
@@ -476,7 +485,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 							.filter((value) => value !== undefined)
 							.every((value) => !!dataEntries(value))
 					)
-				: jsonSchemaKind(structuredSchema(itemSchema, document)).kind === 'object')
+				: json_schema_kind(structuredSchema(itemSchema, document)).kind === 'object')
 	);
 	const itemSpec = $derived(node(structuredSchema(itemSchema, document)));
 	const itemObjectKind = $derived(itemKind?.kind === 'object' ? itemKind : undefined);
@@ -505,7 +514,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					? title(field, spec, itemObjectKind?.fields[field]) +
 						(!locked && itemSpec.required?.includes(field) ? '*' : '')
 					: t('schemaValue'),
-				width: (itemObjectKind?.fields[field] ?? jsonSchemaKind(spec)).kind === 'bool' ? 104 : 200,
+				width: (itemObjectKind?.fields[field] ?? json_schema_kind(spec)).kind === 'bool' ? 104 : 200,
 				cell: dataCell
 			};
 		})
@@ -520,7 +529,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				? Object.fromEntries(Object.entries(item).filter(([key]) => key !== field))
 				: { ...item, [field]: next }
 			: next;
-		onChange?.(list.map((value, index) => (index === pair.index ? updated : value)));
+		on_change?.(list.map((value, index) => (index === pair.index ? updated : value)));
 	}
 	const rowChange = (entry: DataRow) => {
 		const pair = visiblePairs[entry.at];
@@ -536,7 +545,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		min: spec.minItems ?? (kind?.many === true ? (kind.min_items ?? 0) : 0),
 		max: spec.maxItems ?? (kind?.many === true ? kind.max_items : undefined)
 	});
-	const changed = $derived(currentMode === 'diff' && !dataEqual(before, value));
+	const changed = $derived(currentMode === 'diff' && !data_equal(before, value));
 	const leafKind = $derived.by((): Kind => {
 		if (held instanceof Decimal && !kind) return { kind: 'decimal', scale: held.scale };
 		if (
@@ -680,7 +689,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	child: JsonSchema,
 	index: number,
 	row: Values,
-	beforeRow: Values | undefined
+	before_row: Values | undefined
 )}
 	<Self
 		schema={child}
@@ -688,16 +697,16 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		value={next}
 		before={previous}
 		mode={currentMode}
-		onChange={locked ? undefined : (next) => listChange(entry.at, field, next)}
+		on_change={locked ? undefined : (next) => listChange(entry.at, field, next)}
 		name={childName(recordList ? `${index}.${field}` : index)}
 		id={`${controlId}-${entry.at}-${field}`}
 		disabled={controls.disabled}
 		readonly={locked}
 		{errors}
 		{row}
-		{beforeRow}
-		{arrayKeys}
-		{changesOnly}
+		{before_row}
+		{array_keys}
+		{changes_only}
 		create={newRecord}
 		root={document}
 		path={recordList ? pointer(pointer(path, index), field) : pointer(path, index)}
@@ -730,21 +739,24 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		{@const child = recordList
 			? (indexed.properties?.[field] ??
 				(nativeKind
-					? kindJsonSchema(nativeKind)
-					: inferJsonSchema(next === undefined ? previous : next)))
+					? kind_json_schema(nativeKind)
+					: infer_json_schema(next === undefined ? previous : next)))
 			: schemaAt(index)}
 		{@const held = dataEntries(pair.value) ?? row}
-		{@const heldBefore = dataEntries(pair.before) ?? beforeRow}
+		{@const heldBefore = dataEntries(pair.before) ?? before_row}
 		<!-- a value of a native kind (a period, a money, a point) keeps its own editor and renderer in the cell; only a
 		     structure opens the popover -->
-		{@const cellKind = nativeKind ?? jsonSchemaKind(child)}
+		{@const cellKind = nativeKind ?? json_schema_kind(child)}
 		{@const complex =
 			recordList &&
 			(cellKind.many === true ||
 				['object', 'record', 'union', 'json'].includes(cellKind.kind) ||
-				(cellKind.kind === 'custom' && !fieldEntry(cellKind, host))) &&
+				(cellKind.kind === 'custom' && !field_entry(cellKind, host))) &&
 			(dataEntries(next) !== undefined ||
 				(Array.isArray(next) && !(currentMode === 'view' && scalarList(next))))}
+		{#snippet cellValue()}
+			{@render dataSelf(entry, field, next, previous, nativeKind, child, index, held, heldBefore)}
+		{/snippet}
 		<div class="group/cell relative w-full min-w-0">
 			{#if !complex}<label class="sr-only" for={`${controlId}-${entry.at}-${field}`}
 					>{recordList ? title(field, child, nativeKind) : 'Item'} {index + 1}</label
@@ -768,68 +780,28 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 						class="max-h-[min(32rem,var(--bits-popover-content-available-height,80vh))] w-[min(44rem,calc(100vw-2rem))] overflow-auto p-3"
 						data-structured-editor
 					>
-						{@render dataSelf(
-							entry,
-							field,
-							next,
-							previous,
-							nativeKind,
-							child,
-							index,
-							held,
-							heldBefore
-						)}
+						{@render cellValue()}
 					</Popover.Content>
 				</Popover.Root>
 			{:else if currentMode === 'view' && typeof next === 'string' && (nativeKind === undefined || (nativeKind.kind === 'text' && nativeKind.format === undefined))}
 				<Overflow text={next}>
-					{@render dataSelf(
-						entry,
-						field,
-						next,
-						previous,
-						nativeKind,
-						child,
-						index,
-						held,
-						heldBefore
-					)}
+					{@render cellValue()}
 				</Overflow>
 			{:else if currentMode === 'view' && typeof next === 'string' && nativeKind?.kind === 'text'}
 				<!-- an expression or formatted text previews as one line; the popover renders it whole -->
 				<Overflow text={next}>
 					<code class="font-mono">{next.replace(/\s+/g, ' ')}</code>
 					{#snippet full()}
-						{@render dataSelf(
-							entry,
-							field,
-							next,
-							previous,
-							nativeKind,
-							child,
-							index,
-							held,
-							heldBefore
-						)}
+						{@render cellValue()}
 					{/snippet}
 				</Overflow>
 			{:else if currentMode === 'view'}
 				<!-- every row keeps one line's height: a taller value clamps and opens whole -->
 				<Overflow>
-					{@render dataSelf(
-						entry,
-						field,
-						next,
-						previous,
-						nativeKind,
-						child,
-						index,
-						held,
-						heldBefore
-					)}
+					{@render cellValue()}
 				</Overflow>
 			{:else}
-				{@render dataSelf(entry, field, next, previous, nativeKind, child, index, held, heldBefore)}
+				{@render cellValue()}
 			{/if}
 		</div>
 	{/if}
@@ -845,12 +817,10 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				disabled={controls.disabled || entry.at === 0}
 				onclick={() => {
 					const index = visiblePairs[entry.at]?.index;
-					if (index !== undefined && index > 0)
-						onChange?.(
-							list.map((item, at) =>
-								at === index ? list[index - 1]! : at === index - 1 ? list[index]! : item
-							)
-						);
+					if (index === undefined || index <= 0) return;
+					const previous = list[index - 1], current = list[index];
+					if (previous === undefined || current === undefined) return;
+					on_change?.(list.map((item, at) => at === index ? previous : at === index - 1 ? current : item));
 				}}><Icon icon="lucide:arrow-up" class="size-3.5" /></Button
 			>{/if}
 		<Button
@@ -860,13 +830,39 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			disabled={controls.disabled || list.length <= bounds.min}
 			onclick={() => {
 				const index = visiblePairs[entry.at]?.index;
-				if (index !== undefined) onChange?.(list.filter((_, at) => at !== index));
+				if (index !== undefined) on_change?.(list.filter((_, at) => at !== index));
 			}}
 			><Icon icon="lucide:x" class="size-3.5" /><span class="sr-only"
 				>{t('remove')} {entry.at + 1}</span
 			></Button
 		>
 	</div>
+{/snippet}
+
+{#snippet fieldSelf(field: (typeof fields)[number], heading: string | undefined)}
+	<Self
+		schema={field.schema}
+		kind={field.kind}
+		value={object[field.key]}
+		before={previousObject[field.key]}
+		mode={currentMode}
+		on_change={locked ? undefined : (next) => assign(field.key, next)}
+		name={childName(field.key)}
+		id={`${controlId}-${field.key}`}
+		disabled={controls.disabled}
+		readonly={locked}
+		{errors}
+		row={object}
+		before_row={previousObject}
+		{array_keys}
+		{changes_only}
+		create={newRecord}
+		root={document}
+		path={pointer(path, field.key)}
+		depth={depth + 1}
+		{frame}
+		{heading}
+	/>
 {/snippet}
 
 {#snippet fieldRows(members: typeof fields)}
@@ -880,36 +876,12 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				currentMode === 'diff' ? previousObject[field.key] : undefined
 			)}
 			{#if nested && !(locked && currentMode === 'view' && scalarList(object[field.key]))}
-				<Self
-					schema={field.schema}
-					kind={field.kind}
-					value={object[field.key]}
-					before={previousObject[field.key]}
-					mode={currentMode}
-					onChange={locked ? undefined : (next) => assign(field.key, next)}
-					name={childName(field.key)}
-					id={`${controlId}-${field.key}`}
-					disabled={controls.disabled}
-					readonly={locked}
-					{errors}
-					row={object}
-					beforeRow={previousObject}
-					{arrayKeys}
-					{changesOnly}
-					create={newRecord}
-					root={document}
-					path={pointer(path, field.key)}
-					depth={depth + 1}
-					{frame}
-					heading={repeatsSection(title(field.key, field.schema, field.kind))
-						? undefined
-						: title(field.key, field.schema, field.kind)}
-				/>
+				{@render fieldSelf(field, repeatsSection(title(field.key, field.schema, field.kind)) ? undefined : title(field.key, field.schema, field.kind))}
 			{:else}
 				<div
 					class="structured-field"
 					class:structured-field-wide={!compactJson(
-						field.kind ?? jsonSchemaKind(field.schema),
+						field.kind ?? json_schema_kind(field.schema),
 						object[field.key]
 					)}
 					data-schema-field={childName(field.key)}
@@ -923,35 +895,14 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 						required={spec.required?.includes(field.key)}
 					>
 						<div class="structured-field-value">
-							<Self
-								schema={field.schema}
-								kind={field.kind}
-								value={object[field.key]}
-								before={previousObject[field.key]}
-								mode={currentMode}
-								onChange={locked ? undefined : (next) => assign(field.key, next)}
-								name={childName(field.key)}
-								id={`${controlId}-${field.key}`}
-								disabled={controls.disabled}
-								readonly={locked}
-								{errors}
-								row={object}
-								beforeRow={previousObject}
-								{arrayKeys}
-								{changesOnly}
-								create={newRecord}
-								root={document}
-								path={pointer(path, field.key)}
-								depth={depth + 1}
-								{frame}
-							/>
+							{@render fieldSelf(field, undefined)}
 							{#if !locked && !spec.required?.includes(field.key) && Object.hasOwn(object, field.key) && child.readOnly !== true}<button
 									class="structured-remove-field"
 									type="button"
 									aria-label={`${t('remove')} ${title(field.key, field.schema, field.kind)}`}
 									disabled={controls.disabled}
 									onclick={() =>
-										onChange?.(
+										on_change?.(
 											Object.fromEntries(
 												Object.entries(object).filter(([key]) => key !== field.key)
 											)
@@ -1010,7 +961,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					variant="ghost"
 					disabled={controls.disabled || !extraKey.trim() || Object.hasOwn(object, extraKey.trim())}
 					onclick={() => {
-						onChange?.({
+						on_change?.({
 							...object,
 							[extraKey.trim()]: kind?.kind === 'record' ? initial(kind.of) : ''
 						});
@@ -1037,18 +988,18 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			layout="grid"
 			toolbar={false}
 			key={`structured:${name || controlId}`}
-			rowClass={rowChange}
-			rowTrailing={locked ? undefined : trailing}
+			row_class={rowChange}
+			row_trailing={locked ? undefined : trailing}
 		/>
 	{:else}<p class="px-3 py-2 text-sm text-muted-foreground">
-			{currentMode === 'diff' && changesOnly ? 'No changes' : 'Empty array'}
+			{currentMode === 'diff' && changes_only ? 'No changes' : 'Empty array'}
 		</p>{/if}
 	{#if !locked}<Button
 			class="m-1 justify-self-start text-muted-foreground"
 			variant="ghost"
 			disabled={controls.disabled || (bounds.max !== undefined && list.length >= bounds.max)}
 			onclick={() =>
-				onChange?.([
+				on_change?.([
 					...list,
 					itemKind ? initial(itemKind) : jsonSchemaInitial(schemaAt(list.length), document)
 				])}><Icon icon="lucide:plus" class="size-3.5" />{t('add')}</Button
@@ -1057,9 +1008,11 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 
 {#snippet shown(held: Value | undefined, previous = false)}
 	{@const schema = structuredSchema(rawSchema, document, held)}
-	{@const declared = shape(declaredKind, held) ?? jsonSchemaKind(schema)}
-	{@const field = fieldEntry(declared, host)}
-	{@const context = previous ? (beforeRow ?? row) : row}
+	{@const entries = dataEntries(held)}
+	{@const enumItems = enumList(held)}
+	{@const declared = shape(declaredKind, held) ?? json_schema_kind(schema)}
+	{@const field = field_entry(declared, host)}
+	{@const context = previous ? (before_row ?? row) : row}
 	{@const nativeKind =
 		held instanceof Decimal && (shape(declaredKind, held) === undefined || declared.kind === 'json')
 			? { kind: 'decimal' as const, scale: held.scale }
@@ -1070,16 +1023,16 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	{:else if Array.isArray(held) && held.length === 0}<span class="text-sm text-muted-foreground"
 			>Empty array</span
 		>
-	{:else if dataEntries(held) && Object.keys(dataEntries(held)!).length === 0}<span
+	{:else if entries !== undefined && Object.keys(entries).length === 0}<span
 			class="text-sm text-muted-foreground">Empty object</span
 		>
 	{:else if held === ''}<span class="text-sm text-muted-foreground">Empty text</span>
 	{:else if typeof held === 'boolean'}<span class="structured-boolean"
 			><Checkbox checked={held} readonly={false} disabled aria-label={name || 'Value'} /></span
 		>
-	{:else if enumList(held) !== null}
+	{:else if enumItems !== null}
 		<span class="inline-flex flex-wrap gap-1" data-enum-list
-			>{#each enumList(held)! as item (item)}<Badge
+			>{#each enumItems as item (item)}<Badge
 					variant="outline"
 					class="font-medium"
 					data-enum-value={item}>{item}</Badge
@@ -1087,7 +1040,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		>
 	{:else if enumLike(held)}
 		<Badge variant="outline" class="font-medium" data-enum-value={held}>{held}</Badge>
-	{:else if (dataEntries(held) || Array.isArray(held)) && (declared.many === true || ['json', 'custom', 'object', 'record', 'union'].includes(declared.kind))}
+	{:else if (entries || Array.isArray(held)) && (declared.many === true || ['json', 'custom', 'object', 'record', 'union'].includes(declared.kind))}
 		{#if depth >= 24}<CodeEditor
 				language="json"
 				readonly
@@ -1125,12 +1078,12 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	class:structured-leaf={layout === undefined && currentMode !== 'schema'}
 	data-structured-data={currentMode}
 >
-	{#if currentMode === 'schema' && onChange && !controls.readonly}
+	{#if currentMode === 'schema' && on_change && !controls.readonly}
 		<Self
 			schema={authorSchema}
-			value={jsonSchemaRows(schema ?? true)}
+			value={json_schema_rows(schema ?? true)}
 			mode="edit"
-			onChange={(next) => onChange?.(jsonSchemaFromRows(next, schema))}
+			on_change={(next) => on_change?.(json_schema_from_rows(next, schema))}
 			{name}
 			{id}
 			disabled={controls.disabled}
@@ -1147,13 +1100,13 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			layout="grid"
 			toolbar={false}
 			key={`schema:${name || controlId}`}
-			rowClass={(row) => (row.section ? 'structured-schema-section' : undefined)}
+			row_class={(row) => (row.section ? 'structured-schema-section' : undefined)}
 		/>
 	{:else if !locked && kind?.kind === 'object' && kind.optional && (value === null || value === undefined)}<Button
 			variant="ghost"
 			disabled={controls.disabled}
 			onclick={() =>
-				onChange?.(
+				on_change?.(
 					Object.fromEntries(
 						Object.entries(kind.fields).map(([key, child]) => [key, initial(child)])
 					)
@@ -1205,10 +1158,13 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		>
 	{:else if locked || currentMode === 'diff'}{@render shown(value)}
 	{:else if spec.const !== undefined}
-		{@render shown(value)}{#if !dataEqual(spec.const, value)}<Button
+		{@render shown(value)}{#if !data_equal(spec.const, value)}<Button
 				variant="ghost"
 				disabled={controls.disabled}
-				onclick={() => onChange?.(spec.const!)}>Use fixed value</Button
+				onclick={() => {
+					const fixed = spec.const;
+					if (fixed !== undefined) on_change?.(fixed);
+				}}>Use fixed value</Button
 			>{/if}
 	{:else if spec.enum !== undefined && leafKind.kind !== 'enum'}
 		<Combobox
@@ -1217,15 +1173,15 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				value: String(index),
 				label: typeof option === 'string' ? option : JSON.stringify(option)
 			}))}
-			value={spec.enum.findIndex((option) => dataEqual(option, value)) < 0
+			value={spec.enum.findIndex((option) => data_equal(option, value)) < 0
 				? null
-				: String(spec.enum.findIndex((option) => dataEqual(option, value)))}
+				: String(spec.enum.findIndex((option) => data_equal(option, value)))}
 			disabled={controls.disabled}
 			readonly={false}
 			invalid={errors?.has(name)}
-			onChange={(next) => {
-				if (next !== null && spec.enum?.[Number(next)] !== undefined)
-					onChange?.(spec.enum[Number(next)]!);
+			on_change={(next) => {
+				const option = next === null ? undefined : spec.enum?.[Number(next)];
+				if (option !== undefined) on_change?.(option);
 			}}
 		/>
 	{:else if leafKind.kind === 'bool'}
@@ -1237,7 +1193,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				readonly={false}
 				disabled={controls.disabled}
 				aria-label={name || 'Value'}
-				onCheckedChange={(next) => onChange?.(next)}
+				on_checked_change={(next) => on_change?.(next)}
 			/></span
 		>
 	{:else}
@@ -1246,9 +1202,9 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			value={value ?? null}
 			{name}
 			id={controlId}
-			onChange={(next) => onChange?.(next)}
+			on_change={(next) => on_change?.(next)}
 			disabled={controls.disabled}
-			rawJson={leafKind.kind === 'json' || (leafKind.kind === 'custom' && native === undefined)}
+			raw_json={leafKind.kind === 'json' || (leafKind.kind === 'custom' && native === undefined)}
 			{errors}
 			{row}
 		/>
@@ -1260,7 +1216,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			hint="Clear value"
 			aria-label="Clear value"
 			disabled={controls.disabled}
-			onclick={() => onChange?.(null)}><Icon icon="lucide:x" class="size-3.5" /></Button
+			onclick={() => on_change?.(null)}><Icon icon="lucide:x" class="size-3.5" /></Button
 		>{/if}
 	{#if !locked && !newRecord && layout === undefined && spec.default !== undefined && (value === undefined || value === null)}
 		<Button
@@ -1270,7 +1226,10 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			hint={t('useDefault')}
 			aria-label={t('useDefault')}
 			disabled={controls.disabled}
-			onclick={() => onChange?.(spec.default!)}
+			onclick={() => {
+				const fallback = spec.default;
+				if (fallback !== undefined) on_change?.(fallback);
+			}}
 		>
 			<Icon icon="lucide:rotate-ccw" class="size-3.5" />
 		</Button>

@@ -1,11 +1,10 @@
-// @norbital-ai/bolt: the declaration functions and their types. Nothing else is a runtime value (P29).
+// @norbital-ai/bolt: author declarations, small composition helpers and their types. Native services use separate entries.
 export { custom_field } from './decl/custom-field.ts';
 export type { CustomField } from './decl/custom-field.ts';
 export { policy } from './decl/access/policy.ts';
 export { team } from './decl/access/team.ts';
 export type { SourceTeam, TeamData, TeamEntries, TeamEntry, TeamSpec } from './decl/access/team.ts';
-export { mcp, tool } from './decl/runtime/agent.ts';
-export type { ToolFiles, ToolRun, ToolSpec } from './decl/runtime/agent.ts';
+export { mcp } from './decl/runtime/agent.ts';
 export type { McpBase, McpSpec } from './decl/runtime/agent.ts';
 export { app, group, messages, secrets, workspace } from './decl/runtime/app.ts';
 export type { AppSpec, DeviceRequirement, EmbedOrigin, GroupSpec } from './decl/runtime/app.ts';
@@ -31,7 +30,6 @@ export type {
 	Limit,
 	LimitKey,
 	ReadGrant,
-	StartableName,
 	StateField,
 	Verdict,
 	VerdictData,
@@ -53,14 +51,15 @@ export type {
 	ReadLayers,
 	RefField,
 	SearchIndexSpec,
-	SyncEntry,
-	TableSpec
+	SyncEntry
 } from './decl/model.ts';
 export type {
 	Act,
-	ActBatch,
-	ActManyInput,
-	ActManyOutput,
+	ActMap,
+	ActMapInput,
+	ActMapOutput,
+	ActOptions,
+	WriteTarget,
 	ActInput,
 	ActOutput,
 	AggRow,
@@ -71,13 +70,14 @@ export type {
 	Callable,
 	CallerQuery,
 	Carried,
+	Change,
 	CreatedRow,
 	CarriedWrites,
 	Clock,
 	Committed,
-	CreateCheck,
+	CreateVerdict,
 	CreateInput,
-	DeleteCheck,
+	DeleteVerdict,
 	DenyAt,
 	Eff,
 	HistoryOptions,
@@ -88,8 +88,6 @@ export type {
 	LayerRow,
 	MessageKey,
 	Measures,
-	NotifyCtx,
-	NotifyEvent,
 	Conflict,
 	Cursor,
 	KeyValues,
@@ -110,8 +108,9 @@ export type {
 	RootRequest,
 	Running,
 	StoredTree,
+	ProposedTree,
 	Unknown,
-	UpdateCheck,
+	UpdateVerdict,
 	TransformAnswer,
 	UpdateInput,
 	WorkspaceQuery,
@@ -164,7 +163,8 @@ export type {
 	RelationshipSpec,
 	Row,
 	StoredRow,
-	SyncCallable,
+	ReadSyncName,
+	SyncKey,
 	SyncName,
 	SyncState,
 	TargetName,
@@ -204,14 +204,16 @@ export type {
 	AutomationSpec,
 	Cron,
 	EffectCtx,
+	EffectEvent,
 	RunInput,
 	RunOutput,
-	Trigger,
-	WebhookScheme
+	Trigger
 } from './decl/runtime/automation.ts';
 export type {
 	Ai,
 	Browser,
+	BrowserSnapshot,
+	BrowserStep,
 	Convert,
 	ConvertOptions,
 	ConvertSource,
@@ -226,7 +228,6 @@ export type {
 	Geo,
 	GeoHit,
 	ImageFacts,
-	InstanceTarget,
 	Notice,
 	NoticeAttachment,
 	Notify,
@@ -234,6 +235,9 @@ export type {
 	Request,
 	RunCause,
 	RunHandle,
+	Run,
+	RunResult,
+	JobName,
 	RunRow,
 	RunTrigger,
 	RunTriggerView,
@@ -241,7 +245,6 @@ export type {
 	Schedule,
 	Send,
 	StartInput,
-	FileSyncStartInput,
 	StartOutput,
 	IngestOptions,
 	Ingest,
@@ -281,7 +284,8 @@ export type {
 	RequesterOf,
 	SendInput,
 	TestCtx,
-	WebhookDelivery
+	WebhookDelivery,
+	WebhookScheme
 } from './decl/runtime/integration.ts';
 export type {
 	BuiltinParser,
@@ -307,8 +311,8 @@ export type {
 export type { MediaType } from './decl/media-types.ts';
 export type {
 	AiModelClass,
+	AutomationSpecOf,
 	ChildName,
-	ConnectionName,
 	DeclaredConvertTarget,
 	EmbeddingModelName,
 	IntegrationOf,
@@ -318,3 +322,7 @@ export type {
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props
 
 export type { Unavailable } from './decl/errors.ts';
+
+export type { AutomationInputFields, AutomationInputOf, RowsInput } from './decl/runtime/automation-input.ts';
+
+export type { FileSyncInput, SyncControlInput } from './decl/runtime/sync.ts';

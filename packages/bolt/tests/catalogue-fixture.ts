@@ -1,16 +1,17 @@
 // A catalogue workspace: an ERP item file import and a CSV catalogue export as product syncs, a `sales` writer and a
 // `viewer` reader; a suite that needs a plain workspace with a few policies boots it.
 import { Result } from 'effect';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 
 export const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			products: {
 				description: 'A product',
 				record_label: 'record.name',
 				key: ['external_code'],
+				unique: [{ fields: ['external_code'], name: 'one_external_code', import_key: true }],
 				fields: {
 					external_code: { kind: 'text' },
 					name: { kind: 'text' },
@@ -31,7 +32,7 @@ export const manifest = Result.getOrThrow(
 						schema: {
 							external_code: { kind: 'text' },
 							name: { kind: 'text' },
-							unit_price: { kind: 'decimal', optional: true }
+							unit_price: { kind: 'decimal', scale: 2, optional: true }
 						},
 						read: true
 					},
@@ -61,16 +62,15 @@ export const manifest = Result.getOrThrow(
 		},
 		teams: {},
 		automations: {},
-		connections: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
 
 /** `guest.mjs` for ERP items, skipping product codes already on file. */
-export const guestSource = `
+export const guest_source = `
 export default {
 	model: { products: { bodies: { syncs: { erp: {
 		read: function* ({ records }, ctx) {

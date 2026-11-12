@@ -37,23 +37,23 @@ import { Authorities } from '../engine/identity/actor.ts';
 import { RateWindows } from '../engine/access/rate.ts';
 import {
 	captureIdentity,
-	directory,
+	member_directory,
 	restoreIdentity,
 	type DirectoryPerson,
 	type DirectoryMember,
 	type AdministeredMember
 } from '../engine/identity/maintenance.ts';
 import {
-	founderBootstrap,
+	founder_bootstrap,
 	lazyKeys,
-	loadKeys,
-	makeIdentityHost,
+	load_keys,
+	make_identity_host,
 	mint,
-	signupOf,
+	signup_of,
 	type IdentityHost
 } from '../engine/identity/session.ts';
 import { Conflict, DbError, Fenced, Interrupted, type EngineError } from '../engine/errors.ts';
-import { BoltError, CODES, PHASES, storeSync } from './errors.ts';
+import { BoltError, CODES, PHASES } from './errors.ts';
 import type {
 	ArtifactPort,
 	Authority,
@@ -79,16 +79,16 @@ import type {
 	WebReadPort
 } from '../engine/contracts.ts';
 import type { Facilities } from '../facilities/index.ts';
-import { isOff, off, type Off } from '../facilities/off.ts';
+import { is_off, off, type Off } from '../facilities/off.ts';
 import { unmet } from '../facilities/needs.ts';
 import { TenantDb, type DbBatch, type TenantDbShape } from '../engine/db/tenant-db.ts';
-import { auditFromAbi } from '../engine/audit.ts';
+import { audit_from_abi } from '../engine/audit.ts';
 import type { AuditPort } from './audit.ts';
-import { copiedBatch, dbError } from '../engine/db/wire.ts';
+import { copiedBatch, db_error } from '../engine/db/wire.ts';
 import { sha1 } from '../engine/crypto.ts';
 import { sha256 } from '@norbital-ai/store';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
-import { Activation, Agents, HostIdentity, Live, Manifest, Runs } from '../engine/services.ts';
+import { Activation, Agents, Automations, HostIdentity, Live, Manifest, Runs } from '../engine/services.ts';
 import {
 	Ai,
 	ArtifactFiles,
@@ -110,60 +110,60 @@ import {
 	Browser,
 	RunUnits
 } from '../engine/ports.ts';
-import { declaredSecrets } from '../engine/manifest.ts';
+import { declared_secrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { AgentHost, type AgentConfig } from '../engine/agent/index.ts';
-import { withBrowser } from '../engine/agent/browser.ts';
+import { with_browser } from '../engine/agent/browser.ts';
 import {
 	HOOKS,
 	OAUTH_CALLBACK,
-	integrationLinks,
+	integration_links,
 	type LinkAdmission
 } from '../engine/integrations/links.ts';
-import { credentials } from '../engine/integrations/credentials.ts';
+import { credentials, type Credentials } from '../engine/integrations/credentials.ts';
 import type { OAuthClient, OAuthVendor, Provider } from '../engine/integrations/driver.ts';
 import type { SchemaSlice } from '../engine/schema/plan.ts';
-import { destructiveSteps, fingerprint, readApplied, schemaSlice } from '../engine/schema/plan.ts';
-import { applyMigrations } from '../engine/schema/migrations.ts';
+import { destructiveSteps, fingerprint, read_applied, schema_slice } from '../engine/schema/plan.ts';
+import { apply_migrations } from '../engine/schema/migrations.ts';
 import type { MigrationImpact } from './migration-impact.ts';
 import {
-	decodeIdentity,
+	decode_identity,
 	IDENTITY,
-	memorySource,
+	memory_source,
 	packLoader,
-	readPackSource,
+	read_pack_source,
 	type PackSource,
 	type PackStep,
 	type SeedAsset
 } from '../engine/write/pack.ts';
-import { decodeSeed } from '../engine/write/seed.ts';
+import { decode_seed } from '../engine/write/seed.ts';
 import { Port } from '../engine/port.ts';
 import { announce } from '../engine/notifications/notify.ts';
 import {
-	authorityOf,
+	authority_of,
 	ShellConfig,
 	ShellRoutes,
 	Turnstile,
 	type ShellHostConfig
 } from '../shell/host.ts';
-import { COOKIES, cookieSite, framePolicy } from '../shell/nav.ts';
+import { COOKIES, cookie_site, frame_policy } from '../shell/nav.ts';
 import {
-	packAssetLoader,
-	readArtifact,
-	skillFiles,
-	workspaceFiles,
+	pack_asset_loader,
+	read_artifact,
+	skill_files,
+	workspace_files,
 	CONTRACT,
 	type Artifact
 } from '../engine/artifact/read.ts';
-import { needsGuest, RateLimits, SessionAuthority } from './http.ts';
+import { needs_guest, RateLimits, SessionAuthority } from './http.ts';
 import { BoltHost, BoltHostLive } from './host.ts';
-import { PublicPages, publicPages } from './pages.ts';
-export { renderMode } from './pages.ts';
-export { MigrationImpact, impactLines } from './migration-impact.ts';
-import { IntegrationManager, integrationRoutes } from './integrations.ts';
+import { PublicPages, public_pages } from './pages.ts';
+export { render_mode } from './pages.ts';
+export { MigrationImpact, impact_lines } from './migration-impact.ts';
+import { IntegrationManager, integration_routes } from './integrations.ts';
 
 /** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
-export const HOST_API_VERSION = 17;
+export const HOST_API_VERSION = 18;
 export { CELL_ABI_VERSION } from './membrane.ts';
 export type { CellEnd, Kernel } from './cell.ts';
 
@@ -182,11 +182,11 @@ export const HostApiFailure = Schema.Union([HostFailure, HostDefect]);
 export type HostApiFailure = typeof HostApiFailure.Type;
 
 // ── answers the host interprets ──
-/** `session.mint` (the apex handoff): the host sets `cookies.session` to `token` until `expiresAt`. */
+/** `session.mint` (the apex handoff): the host sets `cookies.session` to `token` until `expires_at`. */
 export const MintedSession = Schema.Struct({
 	token: Schema.String,
 	user: Schema.String,
-	expiresAt: Schema.String
+	expires_at: Schema.String
 });
 export type MintedSession = typeof MintedSession.Type;
 /** `founder.bootstrap` (§5.11.3): the first administrator, or the identity refusal (`forbidden`: one exists already). */
@@ -216,34 +216,8 @@ export type HostTenantDb = {
 	transaction(batch: DbBatch, signal?: AbortSignal): Promise<readonly Rows[]>;
 };
 export type HostCredentials = {
-	readonly open: (instance: string) => Promise<{
-		epoch: string;
-		row: {
-			integration: string;
-			owner: string | null;
-			active: boolean;
-			configuration: Json;
-			import_start?: Json;
-		};
-		values: ReadonlyMap<string, Json>;
-	}>;
-	readonly read: (instance: string) => Promise<{
-		epoch: string | null;
-		row: {
-			integration: string;
-			owner: string | null;
-			active: boolean;
-			configuration: Json;
-			import_start?: Json;
-		};
-		values: ReadonlyMap<string, Json>;
-	}>;
-	readonly write: (
-		instance: string,
-		epoch: string | null,
-		changes: ReadonlyMap<string, Json | null>,
-		rotate?: boolean
-	) => Promise<string | null>;
+	readonly [K in keyof Credentials]: (...args: Parameters<Credentials[K]>) =>
+		Promise<Effect.Success<ReturnType<Credentials[K]>>>;
 };
 /** The shell's host parts (§5.10); `studio` and `organization.write` may reject with an encoded `HostFailure`. */
 export type ShellPorts = Pick<
@@ -261,11 +235,11 @@ export type ShellPorts = Pick<
 >;
 /**
  * The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. `ingest`
- * (Norbital Convert's `documentIngester`) serves the agent's `read_file` and `ctx.convert.ingest`; absent, neither ingests.
+ * (Norbital Convert's `document_ingester`) serves the agent's `read_file` and `ctx.convert.ingest`; absent, neither ingests.
  */
 export type AgentPorts = Pick<
 	AgentConfig,
-	'draft' | 'search' | 'hostTools' | 'skills' | 'onTurnStart' | 'events'
+	'draft' | 'search' | 'host_tools' | 'skills' | 'on_turn_start' | 'events'
 > & {
 	readonly ingest?: IngestPort['ingest'];
 };
@@ -281,7 +255,7 @@ export type HostPorts = {
 	readonly scope: string;
 	readonly release: Release;
 	/** The workspace's public URL with its path prefix (`https://host/acme`), no trailing slash. */
-	readonly publicUrl: string;
+	readonly public_url: string;
 	/** The host's own guest runner: isolates it makes, meters and ends for guest code (bodies, page loaders, `run_js`). */
 	readonly guests: GuestIsolatesPort;
 	readonly deadlines: DeadlinesPort;
@@ -303,7 +277,7 @@ export type HostPorts = {
 	readonly units?: { next(): Promise<void> };
 	/**
 	 * Why the previous generation ended, when the kernel stopped it past a unit's CPU budget: the runs it left `running`
-	 * fail `cpuBudget` with this message instead of rerunning (they would only overrun again).
+	 * fail `cpu_budget` with this message instead of rerunning (they would only overrun again).
 	 */
 	readonly overran?: string;
 };
@@ -320,8 +294,8 @@ export type LinkHost = {
 	readonly database: HostTenantDb;
 	/** As `Facilities.keys`: the sealed credentials open through it. */
 	readonly keys: KeysPort;
-	/** As `HostPorts.publicUrl`: every webhook URL and the OAuth callback are under it. */
-	readonly publicUrl: string;
+	/** As `HostPorts.public_url`: every webhook URL and the OAuth callback are under it. */
+	readonly public_url: string;
 	readonly providers: readonly Provider[];
 	/** The host's OAuth clients (Google), signing in every definition that names none of its own. */
 	readonly oauth?: Partial<Record<OAuthVendor, OAuthClient>>;
@@ -353,16 +327,18 @@ export type ActiveWorkspace = {
 	): Promise<Response | null>;
 	/** One deadline wake (rule 52a): every due run of the environment, then `deadlines.settle`. */
 	wake(options: Signal): Promise<void>;
+	/** Signal work due during an existing wake without entering another compute envelope. */
+	pulse(options: Signal): Promise<boolean>;
 	/** Every cron the manifest declares; the host's clock computes their slots. */
 	crons(): Promise<readonly CronEntry[]>;
 	/** Runs cron `id` for `slot` (an ISO minute), once per `(id, slot)`; `ran: false` for a repeat or a run that wrote nothing. */
 	fire(id: string, slot: string, options: Signal): Promise<CronFired>;
 	/**
-	 * A planned close: pages and requests go on and no run starts. Running automations get `automationsMs` to end, while
+	 * A planned close: ordinary pages and requests go on; no new job or automation call starts. Active automations get `automations_ms` to end, while
 	 * turns work on; then every turn holds at its next step. Answers once no step is running; the host then closes the
-	 * generation and the next one takes the turns over. A host bounds the wait; a release from before this method has none.
+	 * generation and the next one takes the turns over. A host bounds the wait.
 	 */
-	park?(options: Signal & { readonly automationsMs: number }): Promise<void>;
+	park(options: Signal & { readonly automations_ms: number }): Promise<void>;
 	/** Rule 71a: interrupts every guest invocation and in-flight crossing of this generation; the host then ends its pool. */
 	close(): Promise<void>;
 	readonly identity: {
@@ -412,14 +388,14 @@ export type WorkspaceBranch = {
 		restore(snapshot: string, options: Signal): Promise<void>;
 	};
 	readonly directory: {
-		memberOf(person: DirectoryPerson, options: Signal): Promise<string | null>;
-		personOf(user: string, options: Signal): Promise<DirectoryPerson | null>;
+		member_of(person: DirectoryPerson, options: Signal): Promise<string | null>;
+		person_of(user: string, options: Signal): Promise<DirectoryPerson | null>;
 		members(options: Signal): Promise<readonly DirectoryMember[]>;
 		administered(email: string, options: Signal): Promise<readonly AdministeredMember[] | null>;
 	};
 	readonly integrations: {
 		/** FINAL §4.5: a restored branch's session instances lose their credentials and read `unpaired`. */
-		unpairSessions(options: Signal): Promise<void>;
+		unpair_sessions(options: Signal): Promise<void>;
 	};
 };
 /**
@@ -446,20 +422,20 @@ export type WorkspaceLinks = {
 };
 export type HostApi = {
 	/** Hosts admit only runtimes that evaluate tenant source without restoring native snapshots. */
-	readonly guestExecution: 'source';
+	readonly guest_execution: 'source';
 	/** `HOST_API_VERSION` of the release that answers. */
 	readonly version: number;
 	/** The artifact contract this release implements (rule 69). */
 	readonly contract: string;
 	readonly cookies: { readonly session: string; readonly preview: string };
 	/** The session cookie's site attributes. */
-	cookieSite(secure: boolean): string;
+	cookie_site(secure: boolean): string;
 	/** Rule 71: whether a request may run a guest body, so the host admits only these under its compute envelope. */
-	needsGuest(request: Request): Promise<boolean>;
+	needs_guest(request: Request): Promise<boolean>;
 	/** Refuses an artifact this release did not build or whose files do not match their digests. */
 	verify(release: Release, options: Signal): Promise<void>;
 	/** The client page's `frame-ancestors` policy for `path`. */
-	framePolicy(release: Release, path: string, options: Signal): Promise<string>;
+	frame_policy(release: Release, path: string, options: Signal): Promise<string>;
 	/** The host's own authority over a workspace (signed operations, Studio as the host). */
 	authority(release: Release, holder: Holder, key: string, options: Signal): Promise<Authority>;
 	readonly schema: {
@@ -519,6 +495,27 @@ const guard = <A>(work: () => Promise<A>): Promise<A> =>
 		.catch((error: unknown) =>
 			Promise.reject(Schema.encodeUnknownSync(HostApiFailure)(encode(error)))
 		);
+type PromiseRunner<R> = <A, E>(effect: Effect.Effect<A, E, R>, options?: Effect.RunOptions) => Promise<A>;
+/** Unwrap typed failures without changing their release-native identity. */
+const effectPromise = <R>(runner: PromiseRunner<R>) =>
+	<A, E>(effect: Effect.Effect<A, E, R>, signal?: AbortSignal): Promise<A> =>
+		runner(Effect.result(effect), signal === undefined ? undefined : { signal }).then(Result.getOrThrow);
+/** Host-interpreted answers cross with the encoded failure contract. */
+const encodedPromise = <R>(runner: PromiseRunner<R>) => {
+	const run = effectPromise(runner);
+	return <A, E>(effect: Effect.Effect<A, E, R>, signal?: AbortSignal): Promise<A> =>
+		guard(() => run(effect, signal));
+};
+/** A host call without a runtime of its own: one run, failures encoded. */
+const hostRun = encodedPromise<never>(Effect.runPromise);
+/** The runtime's services; a failed or interrupted boot disposes it. */
+const bootRuntime = <R, E>(runtime: ManagedRuntime.ManagedRuntime<R, E>) =>
+	runtime.contextEffect.pipe(Effect.onError(() => runtime.disposeEffect));
+const credentialPort = (sealed: Credentials, run: ReturnType<typeof encodedPromise<never>>): HostCredentials => ({
+	open: (instance) => run(sealed.open(instance)),
+	read: (instance) => run(sealed.read(instance)),
+	write: (instance, epoch, changes, rotate) => run(sealed.write(instance, epoch, changes, rotate))
+});
 const isFailure = Schema.is(HostFailure),
 	isCode = Schema.is(Schema.Literals(CODES));
 const hosted = <A>(work: () => Promise<A>) =>
@@ -538,24 +535,27 @@ const hosted = <A>(work: () => Promise<A>) =>
 /** The host executes SQL requests; application callbacks remain inside the engine's bounded guest controller. */
 const database = (port: HostTenantDb): TenantDbShape => {
 	const attempt = <A>(work: (signal: AbortSignal) => Promise<A>) =>
-		Effect.tryPromise({ try: work, catch: dbError });
+		Effect.tryPromise({ try: work, catch: db_error });
 	return TenantDb.typed({
 		read: (statements) =>
-			Effect.try({ try: () => copiedBatch({ statements }).statements, catch: dbError }).pipe(
+			Effect.try({ try: () => copiedBatch({ statements }).statements, catch: db_error }).pipe(
 				Effect.flatMap((prepared) => attempt((signal) => port.read(prepared, signal)))
 			),
 		write: (statement, lock) =>
 			Effect.try({
 				try: () =>
 					copiedBatch({ statements: [statement], ...(lock === undefined ? {} : { lock }) }),
-				catch: dbError
+				catch: db_error
 			}).pipe(
-				Effect.flatMap((prepared) =>
-					attempt((signal) => port.write(prepared.statements[0]!, prepared.lock, signal))
-				)
+				Effect.flatMap((prepared) => {
+					const statement = prepared.statements[0];
+					return statement === undefined
+						? Effect.fail(DbError.make('08P01', 'A copied write contained no statement.'))
+						: attempt((signal) => port.write(statement, prepared.lock, signal));
+				})
 			),
 		transaction: (batch) =>
-			Effect.try({ try: () => copiedBatch(batch), catch: dbError }).pipe(
+			Effect.try({ try: () => copiedBatch(batch), catch: db_error }).pipe(
 				Effect.flatMap((prepared) => attempt((signal) => port.transaction(prepared, signal)))
 			)
 	});
@@ -583,45 +583,40 @@ const cryptoLayer = Layer.succeed(
 );
 /** The release's files root: artifact paths are relative to it. */
 const ROOT = '';
-/** One call's own runtime over the release's files; nothing outlives the call. */
+/** One call's effect over the release's files; nothing outlives the call. */
 const inRelease = <A, E>(
 	release: Release,
-	effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Crypto.Crypto>,
-	signal: AbortSignal
+	effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Crypto.Crypto>
 ) =>
-	Effect.runPromise(
-		Effect.result(
-			effect.pipe(
-				Effect.provide(
-					Layer.mergeAll(ArtifactFiles.fileSystem(release.artifact), cryptoLayer, logging)
-				)
-			)
-		),
-		{ signal }
-	).then(Result.getOrThrow);
+	effect.pipe(
+		Effect.provide(Layer.mergeAll(ArtifactFiles.fileSystem(release.artifact), cryptoLayer, logging))
+	);
+const readRelease = (release: Release) =>
+	inRelease(release, read_artifact(ROOT, [CONTRACT], 'executed'));
+type ArtifactRead = Result.Result<Artifact, Effect.Error<ReturnType<typeof readRelease>>>;
 /**
  * The kernel admitted the release (every digest) before handing it over: here only what runs is checked again, once per
  * release. A cell serves one release at a time, and every page load's static call reads it: concurrent reads of the
  * whole release (guest code, source map, asset digests) would exhaust the cell's memory. The shared read outlives any
- * one caller, so a caller's abort leaves it running; a failed read is not kept.
+ * one caller, so a caller's interruption leaves it running; a failed read is not kept.
  */
-let held: { readonly id: string; readonly artifact: Promise<Artifact> } | undefined;
-const artifactOf = (release: Release, options: Signal): Promise<Artifact> => {
-	options.signal.throwIfAborted();
-	if (held?.id !== release.id) {
-		const artifact = inRelease(
-			release,
-			readArtifact(ROOT, [CONTRACT], 'executed'),
-			new AbortController().signal
-		);
-		const entry = { id: release.id, artifact };
-		held = entry;
-		artifact.catch(() => {
-			if (held === entry) held = undefined;
-		});
-	}
-	return held.artifact;
-};
+let held: { readonly id: string; readonly artifact: Promise<ArtifactRead> } | undefined;
+const artifactOf = (release: Release) =>
+	Effect.suspend(() => {
+		if (held?.id !== release.id) {
+			const artifact = Effect.runPromise(Effect.result(readRelease(release)));
+			const entry = { id: release.id, artifact };
+			held = entry;
+			const forget = () => {
+				if (held === entry) held = undefined;
+			};
+			artifact.then((read) => {
+				if (Result.isFailure(read)) forget();
+			}, forget);
+		}
+		const { artifact } = held;
+		return Effect.promise(() => artifact).pipe(Effect.flatMap((read) => Effect.fromResult(read)));
+	});
 
 const activeRuns = new WeakMap<
 	ActiveWorkspace,
@@ -632,30 +627,30 @@ const activation = (ports: HostPorts, artifact: Artifact) =>
 		scope: ports.scope,
 		epoch: ports.epoch ?? '',
 		release: ports.release.id,
-		publicUrl: ports.publicUrl,
+		public_url: ports.public_url,
 		guest: Option.some(artifact.guest),
 		...(ports.overran === undefined ? {} : { overran: ports.overran })
 	});
 /** The facilities' engine services, each member across its Promise ABI adapter; the test kit composes the same. */
-export const facilityLayers = (f: Facilities) =>
+export const facility_layers = (f: Facilities) =>
 	Layer.mergeAll(
-		auditFromAbi(f.logs.audit).pipe(Layer.provide(cryptoLayer)),
+		audit_from_abi(f.logs.audit).pipe(Layer.provide(cryptoLayer)),
 		Logs.fromAbi(f.logs.runtime),
 		Files.fromAbi(f.storage.files),
 		Ai.fromAbi(f.intelligence),
 		Keys.fromAbi(f.keys),
-		Http.fromAbi(isOff(f.ports.outbound) ? off : f.ports.outbound.http),
+		Http.fromAbi(is_off(f.ports.outbound) ? off : f.ports.outbound.http),
 		Turnstile.fromAbi(f.transactional.challenge),
 		Transport.fromAbi({
 			Mail: f.transactional.mail,
 			Sms: f.transactional.sms,
-			Push: isOff(f.transactional.push) ? off : f.transactional.push(f.storage.database)
+			Push: is_off(f.transactional.push) ? off : f.transactional.push(f.storage.database)
 		})
 	);
 /** Host-provided records cross only this explicit Promise ABI adapter. */
 const portLayers = ({ units, ...ports }: HostPorts) =>
 	Layer.mergeAll(
-		facilityLayers(ports.facilities),
+		facility_layers(ports.facilities),
 		GuestIsolates.fromAbi(ports.guests),
 		Convert.fromAbi(ports.convert, ports.agent.ingest),
 		WebRead.fromAbi(ports.web),
@@ -666,7 +661,7 @@ const portLayers = ({ units, ...ports }: HostPorts) =>
 		Images.fromAbi(ports.images),
 		Docs.fromAbi(ports.docs),
 		Mcp.fromAbi(ports.mcp),
-		...(isOff(ports.bundler) ? [] : [Bundler.fromAbi(ports.bundler)]),
+		...(is_off(ports.bundler) ? [] : [Bundler.fromAbi(ports.bundler)]),
 		units === undefined
 			? Layer.empty
 			: Layer.succeed(RunUnits, {
@@ -674,48 +669,50 @@ const portLayers = ({ units, ...ports }: HostPorts) =>
 				})
 	);
 const identityLayer = (
-	publicUrl: string,
-	identity: Pick<IdentityHost, 'mail' | 'sms' | 'phone' | 'devSink'>
+	public_url: string,
+	identity: Pick<IdentityHost, 'mail' | 'sms' | 'phone' | 'dev_sink'>
 ) =>
 	Layer.effect(
 		HostIdentity,
 		Effect.gen(function* () {
 			const db = yield* TenantDb,
 				manifest = yield* Manifest;
-			return yield* makeIdentityHost({
+			return yield* make_identity_host({
 				...identity,
 				db,
 				now: Clock.currentTimeMillis.pipe(Effect.map((at) => new Date(at))),
 				windows: new RateWindows(),
 				keys: lazyKeys(db),
-				publicUrl,
-				...(signupOf(manifest) === undefined ? {} : { signup: signupOf(manifest) })
+				public_url,
+				...(signup_of(manifest) === undefined ? {} : { signup: signup_of(manifest) })
 			});
 		})
 	);
 
-const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorkspace> => {
-	const artifact = await artifactOf(ports.release, options),
+const activate = Effect.fn('bolt.hostApi.activate')(function* (ports: HostPorts) {
+	const artifact = yield* artifactOf(ports.release),
 		f = ports.facilities,
 		db = database(f.storage.database);
 	const missing = unmet(artifact.manifest.needs, f);
 	if (missing.length > 0)
-		throw BoltError.make(
-			'unavailable',
-			'admission',
-			`the bundle needs ${missing.join(', ')}, which this host leaves off`
+		return yield* Effect.fail(
+			BoltError.make(
+				'unavailable',
+				'admission',
+				`the bundle needs ${missing.join(', ')}, which this host leaves off`
+			)
 		);
 	// checked before the first statement rather than at the start: a cold start makes no trip to the database
-	const expected = fingerprint(schemaSlice(artifact.manifest));
+	const expected = fingerprint(schema_slice(artifact.manifest));
 	db.owe(
-		readApplied(db).pipe(
+		read_applied(db).pipe(
 			Effect.flatMap((applied) => {
-				const from = applied === null ? null : fingerprint(applied);
+				const from = applied?.fingerprint ?? null;
 				return from === expected
 					? Effect.void
 					: Effect.fail(
 							BoltError.make(
-								'schemaMismatch',
+								'schema_mismatch',
 								'admission',
 								`the environment's database is at schema ${from ?? '(none)'}, its release expects ${expected}`
 							)
@@ -725,17 +722,17 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 		)
 	);
 	const files = ArtifactFiles.fileSystem(ports.release.artifact);
-	const identity = identityLayer(ports.publicUrl, {
+	const identity = identityLayer(ports.public_url, {
 		mail: f.transactional.mail,
-		devSink: f.transactional.fixedCodes,
-		...(isOff(f.transactional.sms) ? {} : { sms: f.transactional.sms }),
-		...(isOff(f.transactional.phone) ? {} : { phone: f.transactional.phone })
+		dev_sink: f.transactional.fixed_codes,
+		...(is_off(f.transactional.sms) ? {} : { sms: f.transactional.sms }),
+		...(is_off(f.transactional.phone) ? {} : { phone: f.transactional.phone })
 	}).pipe(
 		Layer.provide(
 			Layer.mergeAll(
 				Layer.succeed(TenantDb, db),
 				Layer.succeed(Manifest, artifact.manifest),
-				auditFromAbi(f.logs.audit).pipe(Layer.provide(cryptoLayer)),
+				audit_from_abi(f.logs.audit).pipe(Layer.provide(cryptoLayer)),
 				cryptoLayer
 			)
 		)
@@ -747,10 +744,10 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 		portLayers(ports),
 		Layer.effect(
 			AgentHost,
-			Effect.flatMap(Effect.all([workspaceFiles(ROOT), skillFiles(ROOT)]), ([workspace, skills]) =>
-				withBrowser({
+			Effect.flatMap(Effect.all([workspace_files(ROOT), skill_files(ROOT)]), ([workspace, skills]) =>
+				with_browser({
 					...ports.agent,
-					skillFiles: skills,
+					skill_files: skills,
 					...(workspace === undefined ? {} : { workspace })
 				})
 			)
@@ -765,8 +762,8 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 				Layer.succeed(ShellConfig, {
 					...ports.shell,
 					client: artifact.artifact.hashes.client,
-					publicUrl: ports.publicUrl,
-					secure: ports.publicUrl.startsWith('https:')
+					public_url: ports.public_url,
+					secure: ports.public_url.startsWith('https:')
 				}),
 				RateLimits.layer
 			).pipe(Layer.provideMerge(engine))
@@ -775,7 +772,7 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 	const runtime = ManagedRuntime.make(
 		Layer.mergeAll(
 			BoltHostLive,
-			publicPages(artifact),
+			public_pages(artifact),
 			// "release changed": a closing generation tells its open pages; they reload onto the serving release
 			Layer.effectDiscard(
 				Effect.addFinalizer(() => Effect.flatMap(Live, (live) => live.close(ports.release.id)))
@@ -788,22 +785,8 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 			)
 		)
 	);
-	const ready = await runtime
-		.context()
-		.then(Result.succeed, (error: unknown) => Result.fail(error));
-	if (Result.isFailure(ready)) {
-		await runtime.dispose();
-		throw ready.failure;
-	}
-	const run = <A, E, R extends ManagedRuntime.ManagedRuntime.Services<typeof runtime>>(
-		effect: Effect.Effect<A, E, R>,
-		signal?: AbortSignal
-	) =>
-		guard(() =>
-			runtime
-				.runPromise(Effect.result(effect), signal === undefined ? undefined : { signal })
-				.then(Result.getOrThrow)
-		);
+	yield* bootRuntime(runtime);
+	const run = encodedPromise<ManagedRuntime.ManagedRuntime.Services<typeof runtime>>(runtime.runPromise);
 
 	let open = true;
 	const incoming = (request: Request, address: string) =>
@@ -847,10 +830,11 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 		// a wake also delivers the last day's workspace events to the inbox, so a host announces one by waking
 		wake: ({ signal }) =>
 			run(Effect.flatMap(Runs, (runs) => runs.tick).pipe(Effect.andThen(announced)), signal),
-		park: ({ signal, automationsMs }) =>
+		pulse: ({ signal }) => run(Effect.flatMap(Runs, (runs) => runs.pulse), signal),
+		park: ({ signal, automations_ms }) =>
 			run(
-				Effect.flatMap(Runs, (runs) => runs.park).pipe(
-					Effect.timeoutOption(automationsMs),
+				Effect.all([Effect.flatMap(Runs, (runs) => runs.park), Effect.flatMap(Automations, (automations) => automations.park)], { concurrency: 'unbounded', discard: true }).pipe(
+					Effect.timeoutOption(automations_ms),
 					Effect.andThen(Effect.flatMap(Agents, (agents) => agents.park))
 				),
 				signal
@@ -867,10 +851,11 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 		},
 		identity: {
 			authority: (request, { signal }) =>
-				run(authorityOf(HttpServerRequest.fromWeb(request)), signal),
+				run(authority_of(HttpServerRequest.fromWeb(request)), signal),
 			mint: (user, { signal, agent }) =>
 				run(
 					Effect.flatMap(HostIdentity, (identity) => mint(identity, user, agent)).pipe(
+						Effect.map(({ token, user, expiresAt }) => ({ token, user, expires_at: expiresAt })),
 						Effect.catchTag('IdentityRefusal', () => Effect.succeed(null))
 					),
 					signal
@@ -879,55 +864,55 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 	};
 	activeRuns.set(served, (effect) => run(effect));
 	return served;
-};
+});
 
-const branch = async (ports: BranchPorts, options: Signal): Promise<WorkspaceBranch> => {
-	const artifact = await artifactOf(ports.release, options),
+const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
+	const artifact = yield* artifactOf(ports.release),
 		m = artifact.manifest,
 		db = database(ports.database);
 	const run = <A, E>(
 		effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Crypto.Crypto>,
 		signal: AbortSignal
-	) => guard(() => inRelease(ports.release, effect, signal));
-	const people = directory(db);
+	) => hostRun(inRelease(ports.release, effect), signal);
+	const people = member_directory(db);
 	// the loader's state stays in this cell between the host's entries
 	const loader = (at: string, files: FilesPort | undefined) => (pack: PackSource) =>
 		(files === undefined
 			? packLoader(db, m, pack, at)
-			: Effect.flatMap(Files, (store) => packAssetLoader(db, m, pack, store, at)).pipe(
+			: Effect.flatMap(Files, (store) => pack_asset_loader(db, m, pack, store, at)).pipe(
 					Effect.provide(Files.fromAbi(files))
 				)
 		).pipe(Effect.map(({ step }): PackLoad => ({ step: (options) => run(step, options.signal) })));
-	return {
+	const branched: WorkspaceBranch = {
 		schema: {
-			migrate: ({ signal }) => run(applyMigrations(db, m, artifact.migrations), signal)
+			migrate: ({ signal }) => run(apply_migrations(db, m, artifact.migrations), signal)
 		},
 		packs: {
 			load: (pack, { signal, at, files }) =>
-				run(readPackSource(`../seed/${pack}`).pipe(Effect.flatMap(loader(at, files))), signal),
+				run(read_pack_source(`../seed/${pack}`).pipe(Effect.flatMap(loader(at, files))), signal),
 			restore: (rows, { signal, at, start, assets, asset, files }) =>
 				run(
 					Effect.try({
 						try: () => {
-							decodeIdentity(m, rows);
-							decodeSeed(
+							decode_identity(m, rows);
+							decode_seed(
 								m,
 								Object.fromEntries(
 									Object.entries(rows).filter(([c]) => !(IDENTITY as readonly string[]).includes(c))
 								)
 							);
-							return memorySource('private', rows, start, assets, (path) =>
+							return memory_source('private', rows, start, assets, (path) =>
 								Effect.tryPromise({
 									try: (signal) => asset(path, { signal }),
 									catch: (cause) =>
-										BoltError.make('seedDecode', 'decode', `seed asset ${path}: ${String(cause)}`)
+										BoltError.make('seed_decode', 'decode', `seed asset ${path}: ${String(cause)}`)
 								})
 							);
 						},
 						catch: (cause) =>
 							cause instanceof BoltError
 								? cause
-								: BoltError.make('seedDecode', 'decode', String(cause))
+								: BoltError.make('seed_decode', 'decode', String(cause))
 					}).pipe(Effect.flatMap(loader(at, files))),
 					signal
 				)
@@ -945,14 +930,14 @@ const branch = async (ports: BranchPorts, options: Signal): Promise<WorkspaceBra
 					);
 				return run(
 					Effect.gen(function* (): Effect.fn.Return<FounderAnswer, EngineError, Crypto.Crypto> {
-						const identity = yield* makeIdentityHost({
+						const identity = yield* make_identity_host({
 							db,
 							now: Effect.succeed(new Date(at)),
 							windows: new RateWindows(),
-							keys: yield* loadKeys(db),
-							publicUrl: 'http://localhost'
+							keys: yield* load_keys(db),
+							public_url: 'http://localhost'
 						});
-						return yield* founderBootstrap(identity, address).pipe(
+						return yield* founder_bootstrap(identity, address).pipe(
 							Effect.map((session): FounderAnswer => ({ _tag: 'Founded', user: session.user })),
 							Effect.catchTag('IdentityRefusal', (error) =>
 								Effect.succeed({
@@ -962,19 +947,19 @@ const branch = async (ports: BranchPorts, options: Signal): Promise<WorkspaceBra
 								} satisfies FounderAnswer)
 							)
 						);
-					}).pipe(Effect.provide(auditFromAbi(audit))),
+					}).pipe(Effect.provide(audit_from_abi(audit))),
 					signal
 				);
 			}
 		},
 		directory: {
-			memberOf: (person, { signal }) => run(people.memberOf(person), signal),
-			personOf: (user, { signal }) => run(people.personOf(user), signal),
+			member_of: (person, { signal }) => run(people.memberOf(person), signal),
+			person_of: (user, { signal }) => run(people.personOf(user), signal),
 			members: ({ signal }) => run(people.members, signal),
 			administered: (email, { signal }) => run(people.administered(email), signal)
 		},
 		integrations: {
-			unpairSessions: ({ signal }) =>
+			unpair_sessions: ({ signal }) =>
 				run(
 					Effect.gen(function* () {
 						const requests = Object.entries(m.integrations)
@@ -992,12 +977,13 @@ const branch = async (ports: BranchPorts, options: Signal): Promise<WorkspaceBra
 				)
 		}
 	};
-};
+	return branched;
+});
 
-const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> => {
-	const artifact = await artifactOf(host.release, options),
+const links = Effect.fn('bolt.hostApi.links')(function* (host: LinkHost) {
+	const artifact = yield* artifactOf(host.release),
 		db = database(host.database);
-	const secretsLayer = Secrets.layer(declaredSecrets(artifact.manifest)).pipe(
+	const secretsLayer = Secrets.layer(declared_secrets(artifact.manifest)).pipe(
 		Layer.provideMerge(Layer.merge(Layer.succeed(TenantDb, db), Keys.fromAbi(host.keys)))
 	);
 	const managerLayer = Layer.effect(
@@ -1006,45 +992,21 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 			const secretService = yield* Secrets;
 			const sealed = yield* credentials(db, secretService);
 			const secrets = Object.fromEntries(
-				(yield* Effect.forEach(declaredSecrets(artifact.manifest), (name) =>
+				(yield* Effect.forEach(declared_secrets(artifact.manifest), (name) =>
 					Config.option(Config.String(name)).pipe(
 						Effect.provideService(ConfigProvider.ConfigProvider, secretService.config),
 						Effect.map((value) => (Option.isSome(value) ? [[name, value.value] as const] : []))
 					)
 				)).flat()
 			);
-			const runPort = yield* FiberSet.makeRuntimePromise();
-			const port: HostCredentials = {
-				open: (instance) =>
-					guard(() => runPort(Effect.result(sealed.open(instance))).then(Result.getOrThrow)),
-				read: (instance) =>
-					guard(() => runPort(Effect.result(sealed.read(instance))).then(Result.getOrThrow)),
-				write: (instance, epoch, changes, rotate) =>
-					guard(() =>
-						runPort(Effect.result(sealed.write(instance, epoch, changes, rotate))).then(
-							Result.getOrThrow
-						)
-					)
-			};
+			const port = credentialPort(sealed, encodedPromise<never>(yield* FiberSet.makeRuntimePromise()));
 			const wrapped = host.credentials?.(port);
 			const through =
 				wrapped === undefined
 					? sealed
 					: {
-							open: (instance: string) =>
-								hosted(() => wrapped.open(instance)).pipe(
-									Effect.map((value) => ({
-										...value,
-										row: { ...value.row, import_start: value.row.import_start ?? null }
-									}))
-								),
-							read: (instance: string) =>
-								hosted(() => wrapped.read(instance)).pipe(
-									Effect.map((value) => ({
-										...value,
-										row: { ...value.row, import_start: value.row.import_start ?? null }
-									}))
-								),
+							open: (instance: string) => hosted(() => wrapped.open(instance)),
+							read: (instance: string) => hosted(() => wrapped.read(instance)),
 							write: (
 								instance: string,
 								epoch: string | null,
@@ -1077,10 +1039,10 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 								: run(effect);
 						})
 					);
-			return yield* integrationLinks({
+			return yield* integration_links({
 				providers: host.providers,
 				credentials: through,
-				publicUrl: host.publicUrl,
+				public_url: host.public_url,
 				secrets,
 				oauth: host.oauth,
 				fetch: host.fetch,
@@ -1094,62 +1056,27 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 	const runtime = ManagedRuntime.make(
 		managerLayer.pipe(Layer.provideMerge(cryptoLayer), Layer.provideMerge(logging))
 	);
-	const ready = await runtime
-		.context()
-		.then(Result.succeed, (error: unknown) => Result.fail(error));
-	if (Result.isFailure(ready)) {
-		await runtime.dispose();
-		throw ready.failure;
-	}
-	const requestRun = Effect.runPromiseWith(Result.getOrThrow(ready));
-	const run = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) =>
-		guard(() =>
-			runtime
-				.runPromise(Effect.result(effect), signal === undefined ? undefined : { signal })
-				.then(Result.getOrThrow)
-		);
-	const manager = await runtime.runPromise(LinkManagerService),
-		sealed = await runtime.runPromise(Effect.flatMap(Secrets, (codec) => credentials(db, codec)));
-	const own: HostCredentials = {
-		open: (instance) => run(sealed.open(instance)),
-		read: (instance) => run(sealed.read(instance)),
-		write: (instance, epoch, changes, rotate) => run(sealed.write(instance, epoch, changes, rotate))
-	};
-	return {
-		credentials: own,
+	const context = yield* bootRuntime(runtime);
+	// Requests retain their captured context runner; the other link operations keep the managed runtime's scope.
+	const requestRun = effectPromise(Effect.runPromiseWith(context));
+	const raw = effectPromise<ManagedRuntime.ManagedRuntime.Services<typeof runtime>>(runtime.runPromise);
+	const run = encodedPromise<ManagedRuntime.ManagedRuntime.Services<typeof runtime>>(runtime.runPromise);
+	const manager = Context.get(context, LinkManagerService),
+		sealed = yield* Effect.provideContext(credentials(db, Context.get(context, Secrets)), context);
+	const linked: WorkspaceLinks = {
+		credentials: credentialPort(sealed, run),
 		port: {
 			send: (instance, message, signal, attachments) =>
-				runtime
-					.runPromise(
-						Effect.result(
-							manager.port.send(
-								instance,
-								message,
-								attachments?.map(({ url, ...attachment }) => ({
-									...attachment,
-									...(url === undefined
-										? {}
-										: { url: (expiry: number) => Port.attempt('files.url', () => url(expiry)) })
-								}))
-							)
-						),
-						{ signal }
-					)
-					.then(Result.getOrThrow),
+				raw(manager.port.send(instance, message, attachments?.map(({ url, ...attachment }) => ({
+					...attachment,
+					...(url === undefined ? {} : { url: (expiry: number) => Port.attempt('files.url', () => url(expiry)) })
+				}))), signal),
 			typing: (instance, to, signal, on) =>
-				runtime
-					.runPromise(Effect.result(manager.port.typing(instance, to, on)), { signal })
-					.then(Result.getOrThrow),
+				raw(manager.port.typing(instance, to, on), signal),
 			request: (instance, operation, signal) =>
-				requestRun(Effect.result(manager.port.request(instance, operation)), { signal }).then(
-					Result.getOrThrow
-				),
+				requestRun(manager.port.request(instance, operation), signal),
 			read: (instance, sync, partition, cursor, signal) =>
-				runtime
-					.runPromise(Effect.result(manager.port.read(instance, sync, partition, cursor)), {
-						signal
-					})
-					.then(Result.getOrThrow),
+				raw(manager.port.read(instance, sync, partition, cursor), signal),
 			changed: (instance) => {
 				runtime.runFork(
 					manager.port.changed(instance).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
@@ -1162,7 +1089,7 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 			run(
 				Effect.gen(function* () {
 					const incoming = new URL(request.url),
-						base = new URL(host.publicUrl).pathname.replace(/\/+$/, '');
+						base = new URL(host.public_url).pathname.replace(/\/+$/, '');
 					const path =
 						base !== '' && incoming.pathname.startsWith(base + '/')
 							? incoming.pathname.slice(base.length)
@@ -1179,7 +1106,7 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 			),
 		admin: (request, authority) =>
 			run(
-				integrationRoutes(HttpServerRequest.fromWeb(request)).pipe(
+				integration_routes(HttpServerRequest.fromWeb(request)).pipe(
 					Effect.provideService(IntegrationManager, Option.some(manager)),
 					Effect.provideService(SessionAuthority, {
 						of: () => Effect.succeed(Option.some(authority))
@@ -1191,49 +1118,54 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 				request.signal
 			)
 	};
-};
+	return linked;
+});
 class LinkManagerService extends Context.Service<
 	LinkManagerService,
 	import('../engine/integrations/links.ts').LinkManager
 >()('bolt/HostApiLinks') {}
 
 export const HOST_API: HostApi = {
-	guestExecution: 'source',
+	guest_execution: 'source',
 	version: HOST_API_VERSION,
 	contract: CONTRACT,
 	cookies: { session: COOKIES.session, preview: COOKIES.preview },
-	cookieSite,
-	needsGuest: (request) =>
-		guard(() =>
-			Effect.runPromise(
-				needsGuest(HttpServerRequest.fromWeb(request.clone())).pipe(
-					Effect.catch(() => Effect.succeed(true))
-				),
-				{ signal: request.signal }
-			)
+	cookie_site: cookie_site,
+	needs_guest: (request) =>
+		hostRun(
+			needs_guest(HttpServerRequest.fromWeb(request.clone())).pipe(
+				Effect.catch(() => Effect.succeed(true))
+			),
+			request.signal
 		),
-	verify: (release, options) =>
-		guard(async () => {
-			await artifactOf(release, options);
-		}),
-	framePolicy: (release, path, options) =>
-		guard(async () => framePolicy((await artifactOf(release, options)).manifest, path)),
+	verify: (release, options) => hostRun(Effect.asVoid(artifactOf(release)), options.signal),
+	frame_policy: (release, path, options) =>
+		hostRun(
+			Effect.map(artifactOf(release), (artifact) => frame_policy(artifact.manifest, path)),
+			options.signal
+		),
 	authority: (release, holder, key, options) =>
-		guard(async () =>
-			new Authorities((await artifactOf(release, options)).manifest, release.id).compile(
-				holder,
-				key
-			)
+		hostRun(
+			Effect.flatMap(artifactOf(release), (artifact) =>
+				new Authorities(artifact.manifest, release.id).compile(holder, key)
+			),
+			options.signal
 		),
 	schema: {
 		slice: (release, options) =>
-			guard(async () => schemaSlice((await artifactOf(release, options)).manifest)),
+			hostRun(
+				Effect.map(artifactOf(release), (artifact) => schema_slice(artifact.manifest)),
+				options.signal
+			),
 		destructive: (applied, release, options) =>
-			guard(async () =>
-				storeSync(destructiveSteps(applied, (await artifactOf(release, options)).manifest))
+			hostRun(
+				Effect.flatMap(artifactOf(release), (artifact) =>
+					destructiveSteps(applied, artifact.manifest)
+				),
+				options.signal
 			)
 	},
-	activate: (ports, options) => guard(() => activate(ports, options)),
-	branch: (ports, options) => guard(() => branch(ports, options)),
-	links: (host, options) => guard(() => links(host, options))
+	activate: (ports, options) => hostRun(activate(ports), options.signal),
+	branch: (ports, options) => hostRun(branch(ports), options.signal),
+	links: (host, options) => hostRun(links(host), options.signal)
 };

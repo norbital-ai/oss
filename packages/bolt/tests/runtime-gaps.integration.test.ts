@@ -4,15 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, layer } from '@effect/vitest';
 import { Context, Deferred, Effect, Fiber, Layer, Option, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { Callables, Runs } from '../src/engine/services.ts';
 import { WebRead } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, route_fixture } from './support/route-fixture.ts';
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			notes: {
@@ -53,11 +53,10 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		integrations: {},
-		teams: { ops: ['ops'] },
-		connections: {},
+		teams: { ops: { policies: ['ops'] } },
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} },
 		policies: {
 			ops: {
@@ -70,17 +69,19 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		automations: {
-			report: { description: 'Reports progress', policies: ['ops'] },
+			report: { description: 'Reports progress', policies: ['ops'], output: { kind: 'text' } },
 			long: {
 				description: 'Runs until stopped',
 				policies: ['ops'],
-				input: { title: { kind: 'text' } }
+				input: { title: { kind: 'text' } },
+				output: { kind: 'text' }
 			},
-			bundle: { description: 'Stores a file and reads it back', policies: ['ops'] },
+			bundle: { description: 'Stores a file and reads it back', policies: ['ops'], output: { kind: 'json' } },
 			read_doc: {
 				description: 'Reads a stored file',
 				policies: ['ops'],
-				input: { ref: { kind: 'json' } }
+				input: { ref: { kind: 'json' } },
+				output: { kind: 'json' }
 			}
 		}
 	})
@@ -92,7 +93,7 @@ const source = `import { Effect } from 'effect'; export default { automation: {
 		yield* ctx.progress({ ratio: 0.1, text: 'start' });
 		yield* ctx.web.read('https://hq.example/pause');
 		if (input.title === 'progress') yield* ctx.progress({ ratio: 0.5, text: 'half' });
-		yield* ctx.act('notes.create', [{ title: input.title }]);
+		yield* ctx.act({ 'notes.create': [{ title: input.title }] });
 		return 'finished';
 	} },
 	bundle: { body: function* (_, ctx) {
@@ -122,7 +123,7 @@ const workspace = Layer.unwrap(
 			guest,
 			ports: Layer.succeed(WebRead, { read: (...args) => answer(...args) }),
 			host: {
-				publicUrl: 'https://acme.example',
+				public_url: 'https://acme.example',
 				secure: false,
 				workspace: () => ({ name: 'Acme', handle: 'acme' })
 			}
@@ -134,11 +135,12 @@ const setup = (web: WebRead['Service']['read'] = unused) =>
 		answer = web;
 		const context = yield* Effect.context<TestWorkspace | WorkspaceServices>();
 		const t = Context.get(context, TestWorkspace),
-			route = yield* routeFixture(context),
+			route = yield* route_fixture(context),
 			calls = Context.get(context, Callables),
 			runs = Context.get(context, Runs);
-		let ops: ReturnType<Kit['as']>['authority'] | undefined;
-		const authority = () => (ops ??= t.as(t.member(['ops'])).authority);
+		const ops = (yield* t.as(t.member(['ops']))).authority;
+		const admin = (yield* t.as(t.admin)).authority;
+		const authority = () => ops;
 		const start = (automation: string, input: Json, id = randomUUID()) =>
 			calls.start({
 				automation,
@@ -147,7 +149,7 @@ const setup = (web: WebRead['Service']['read'] = unused) =>
 				bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC' }
 			});
 		const act = (callable: string, input: Json) =>
-			actReply(route, t.as(t.admin).authority, { callable, input, issuedAt: t.clock.now() }).pipe(
+			act_reply(route, admin, { acts: { [callable]: input }, issued_at: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
 			);
 		return {
@@ -170,7 +172,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 				const { t, runs, start } = yield* setup();
 				const started = yield* start('report', {});
 				expect(started.kind).toBe('committed');
-				yield* t.runDue();
+				yield* t.run_due();
 				const [run] = yield* sql(
 					t,
 					`SELECT id, state, progress, error FROM sys_run WHERE automation = 'report'`
@@ -181,7 +183,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 					error: null
 				});
 				expect(
-					Option.getOrNull(yield* runs.view(t.as(t.admin).authority, String(required(run)['id'])))
+					Option.getOrNull(yield* runs.view((yield* t.as(t.admin)).authority, String(required(run)['id'])))
 				).toMatchObject({ progress: { ratio: 0.5, text: 'half' } });
 			})
 		);
@@ -195,9 +197,9 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 					const { t, runs, ops, start } = yield* setup();
 					const id = randomUUID();
 					yield* start('report', {}, id);
-					expect(Option.getOrNull(yield* runs.stop(t.as(t.member([])).authority, id))).toBeNull();
+					expect(Option.getOrNull(yield* runs.stop((yield* t.as(t.member([]))).authority, id))).toBeNull();
 					expect(Option.getOrNull(yield* runs.stop(ops, id))).toMatchObject({ status: 'stopped' });
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(
 						yield* sql(t, `SELECT state, progress, output FROM sys_run WHERE id = $1`, [id])
 					).toEqual([{ state: 'stopped', progress: null, output: null }]);
@@ -208,7 +210,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 			'a running run stops at its next crossing and stays stopped; a stop recorded elsewhere is seen at its next progress',
 			() =>
 				Effect.gen(function* () {
-					let stop: ReturnType<Kit['runDue']> = Effect.succeed({ failed: [] });
+					let stop: ReturnType<Kit['run_due']> = Effect.succeed({ failed: [] });
 					const web: WebRead['Service']['read'] = () =>
 						stop.pipe(
 							Effect.mapError(Port.failure('web')),
@@ -216,9 +218,9 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 						);
 					const { t, runs, start } = yield* setup(web);
 					const id = randomUUID();
-					stop = runs.stop(t.as(t.admin).authority, id).pipe(Effect.as({ failed: [] }));
+					stop = runs.stop((yield* t.as(t.admin)).authority, id).pipe(Effect.as({ failed: [] }));
 					yield* start('long', { title: 'never' }, id);
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(
 						yield* sql(t, `SELECT state, error->>'code' AS code FROM sys_run WHERE id = $1`, [id])
 					).toEqual([{ state: 'stopped', code: 'stopped' }]);
@@ -230,7 +232,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 						.write({ text: `UPDATE sys_run SET state = 'stopped' WHERE id = $1`, params: [other] })
 						.pipe(Effect.as({ failed: [] }));
 					yield* start('long', { title: 'progress' }, other);
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(yield* sql(t, `SELECT state FROM sys_run WHERE id = $1`, [other])).toEqual([
 						{ state: 'stopped' }
 					]);
@@ -248,9 +250,9 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 					const { t, runs, start } = yield* setup(web);
 					const id = randomUUID();
 					yield* start('long', { title: 'never' }, id);
-					const tick = yield* Effect.forkChild(t.runDue());
+					const tick = yield* Effect.forkChild(t.run_due());
 					yield* Deferred.await(entered);
-					yield* runs.stop(t.as(t.admin).authority, id);
+					yield* runs.stop((yield* t.as(t.admin)).authority, id);
 					// the stop used to wait for the crossing to end (the workspace's frozen clock never fires its wall: a hang)
 					yield* Fiber.join(tick);
 					expect(
@@ -271,7 +273,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 				const cookie = yield* t.session(user);
 				const id = randomUUID();
 				yield* start('report', {}, id);
-				yield* t.runDue();
+				yield* t.run_due();
 				const answer = yield* t.handle(
 					new Request(`https://acme.example/__bolt/shell/runs?id=${id}`, { headers: { cookie } })
 				);
@@ -321,7 +323,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 				Effect.gen(function* () {
 					const { t, start } = yield* setup();
 					yield* start('bundle', {});
-					yield* t.runDue();
+					yield* t.run_due();
 					const [run] = yield* sql(
 						t,
 						`SELECT state, output, error FROM sys_run WHERE automation = 'bundle'`
@@ -353,7 +355,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 					expect(out.url).toBe(
 						`memory://${required((yield* sql(t, `SELECT key FROM sys_file WHERE id = $1`, [out.ref.id]))[0])['key']}`
 					);
-					expect(out.big).toMatchObject({ kind: 'tooLarge' });
+					expect(out.big).toMatchObject({ kind: 'too_large' });
 					expect(
 						yield* sql(t, `SELECT field, size FROM sys_file WHERE id = $1`, [out.ref.id])
 					).toEqual([{ field: 'bundle', size: 5 }]);
@@ -363,7 +365,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 		it.effect('reads an uploaded file its policies may read, and refuses one they may not', () =>
 			Effect.gen(function* () {
 				const { t, start, act } = yield* setup();
-				const admin = t.as(t.admin);
+				const admin = yield* t.as(t.admin);
 				const doc = yield* admin.upload('docs.file', {
 					name: 'n.txt',
 					mime: 'text/plain',
@@ -389,7 +391,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 				yield* act('secrets.create', [{ title: 's', file: hiddenFile }]);
 				yield* start('read_doc', { ref: docFile });
 				yield* start('read_doc', { ref: hiddenFile });
-				yield* t.runDue();
+				yield* t.run_due();
 				const rows = yield* sql(
 					t,
 					`SELECT input->'ref'->>'name' AS name, state, output, error->>'message' AS message FROM sys_run WHERE automation = 'read_doc' ORDER BY name`

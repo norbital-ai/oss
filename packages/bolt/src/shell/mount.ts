@@ -5,22 +5,22 @@ import { mount, unmount, type Component } from 'svelte';
 import type { CustomFieldEntry, RepresentationLoader } from '@norbital-ai/ui';
 import type { BoltConfig } from '../page/bolt.ts';
 import type { IntegrationSetupEntry } from '../page/integration.ts';
-import { awaitDevice, resolveDevice, type DeviceApi } from '../page/device.ts';
+import { await_device, resolve_device, type DeviceApi } from '../page/device.ts';
 import type { ShellManifest } from './nav.ts';
-import type { AgentRequest, ShellBolt } from './runtime.ts';
+import type { AgentRequest, ShellBolt, ShellPageContext } from './runtime.ts';
 import Shell from './Shell.svelte';
 import { Effect, ManagedRuntime, Result, Schema } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { ShellLive } from './runtime.ts';
 
 const InitialModules = Schema.Struct({
 	css: Schema.Array(Schema.String),
-	nativeModules: Schema.Array(Schema.String)
+	native_modules: Schema.Array(Schema.String)
 });
 export const INITIAL_MODULES_ID = 'bolt-initial-modules';
 
 /** The browser waits for shell styles; the native app also warms the workspace's main-thread modules. */
-export const initializeShellAssets = (entry: string): Promise<void> =>
+export const initialize_shell_assets = (entry: string): Promise<void> =>
 	Effect.runPromise(
 		Effect.gen(function* () {
 			const text = document.getElementById(INITIAL_MODULES_ID)?.textContent;
@@ -37,11 +37,11 @@ export const initializeShellAssets = (entry: string): Promise<void> =>
 			yield* Effect.all(
 				[
 					Effect.gen(function* () {
-						yield* Effect.tryPromise(awaitDevice);
-						const { platform } = resolveDevice();
+						yield* Effect.tryPromise(await_device);
+						const { platform } = resolve_device();
 						if (platform !== 'ios' && platform !== 'android') return;
 						yield* Effect.forEach(
-							assets.nativeModules,
+							assets.native_modules,
 							(path) =>
 								Effect.tryPromise(async () => {
 									await import(/* @vite-ignore */ resolve(path));
@@ -86,33 +86,33 @@ export const initializeShellAssets = (entry: string): Promise<void> =>
 export type ShellMountConfig = {
 	manifest: ShellManifest;
 	/** The artifact's display name, available before the caller's boot response arrives. */
-	workspaceName?: string;
+	workspace_name?: string;
 	/** Shell styles and, in the native app, device and module readiness before mounting. */
 	ready?: Promise<void>;
 	/** Server-rendered routes use a document navigation to admit and load the new public page. */
-	publicRoutes?: readonly string[];
+	public_routes?: readonly string[];
 	/** `'<app>/<page>'` (apps) and `'kiosk/<kiosk>/<page>'` (kiosks) → the page chunk. */
-	pages: { readonly [page: string]: () => Promise<{ default: Component<{ ctx: ShellBolt }> }> };
+	pages: { readonly [page: string]: () => Promise<{ default: Component<{ ctx: ShellPageContext }> }> };
 	/** App session components stay mounted across navigation for signed-in callers with access to that app. */
 	sessions?: { readonly [app: string]: Component<{ ctx: ShellBolt }> };
 	messages?: { readonly [key: string]: string };
-	agent?: Component<{ bolt: ShellBolt; request: AgentRequest; onClose: () => void }>;
+	agent?: Component<{ bolt: ShellBolt; request: AgentRequest; on_close: () => void }>;
 	/** Each model's `+representation.svelte`, loaded on first use; every `RecordShell` (sheet or page) reads it. */
 	representations?: { readonly [model: string]: RepresentationLoader };
 	/** Named integration setup components, loaded when their authorized instance is opened. */
-	integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry };
+	integration_setups?: { readonly [integration: string]: IntegrationSetupEntry };
 	/** The workspace's custom fields: their shape, and the `+renderer.svelte` that shows and edits them. */
-	customFields?: { readonly [field: string]: CustomFieldEntry };
+	custom_fields?: { readonly [field: string]: CustomFieldEntry };
 	fetch?: typeof fetch;
 	/** Optional Device from the embedding host; otherwise the native shell's injected Device or the browser's are used. */
 	device?: DeviceApi;
 	/** The live stream's source; default the browser's `EventSource` (tests and `sweep()` give their own). */
-	openStream?: BoltConfig['openStream'];
+	open_stream?: BoltConfig['open_stream'];
 };
 
 /** Mounts the workspace browser shell with optional Device supplied by its embedding host. */
-export function mountShell(target: HTMLElement, config: ShellMountConfig): () => Promise<void> {
-	const dispose = mountEdge(ManagedRuntime.make(ShellLive(config)));
+export function mount_shell(target: HTMLElement, config: ShellMountConfig): () => Promise<void> {
+	const dispose = mount_edge(ManagedRuntime.make(ShellLive(config)));
 	const view = mount(Shell, { target, props: { config } });
 	return () => {
 		const started = Result.try(() => unmount(view));

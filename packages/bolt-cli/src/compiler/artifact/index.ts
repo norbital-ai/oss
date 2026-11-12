@@ -3,10 +3,10 @@
 // (C1, pure data), `schema.sql`, `guest.mjs` (tenant code only) with its `guest-assets/<sha256>`, `client/**`,
 // `server/**`, `assets/**`, `skills/**`, `migrations/**` and `workspace/**`, the agent's `workspace_search` source and a
 // host language tool's type setup), the SOURCE Studio edits (`source/`) and the SEED packs (`seed/<pack>/`), each with
-// its own digest in `release.json`. Every host activates the bundle through `readArtifact`.
+// its own digest in `release.json`. Every host activates the bundle through `read_artifact`.
 import { Effect, FileSystem, Option, Path, Schema } from 'effect';
 import { TemplateManifest, SKILL_FILE, type EngineManifest, plan } from '@norbital-ai/bolt/engine';
-import { HOST_FILE, fingerprint, schemaSlice, storeSync } from '@norbital-ai/bolt/tooling';
+import { HOST_FILE, fingerprint, schema_slice } from '@norbital-ai/bolt/tooling';
 import { constants, cpSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
@@ -17,13 +17,13 @@ import { buildClient, BuildError, type Graphs } from './client.ts';
 import { buildServerPages } from './server.ts';
 import { layerLines, PLATFORM, type PreparedLayer } from './platform.ts';
 import {
-	artifactHash,
+	artifact_hash,
 	ArtifactJsonSchema,
 	CONTRACT,
 	tree,
 	type ArtifactJson
 } from '@norbital-ai/bolt/artifact';
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 
 const TEST = /\.(test|spec)\.ts$/;
 const mtime = (stat: FileSystem.File.Info) =>
@@ -58,7 +58,7 @@ export const cloneTree = Effect.fn('bolt.cloneTree')(function* (
 // ponytail: keyed by millisecond mtime, so a same-size rewrite within one millisecond keeps its old digest (a build
 // writes a file once); entries for deleted files stay until the process exits
 const digests = new Map<string, { size: bigint; mtime: number; hex: string }>();
-/** `treeHash` (the same `<path>\0<sha256>` lines, `*.map` left out) that reads only the files changed since this process hashed them. */
+/** `tree_hash` (the same `<path>\0<sha256>` lines, `*.map` left out) that reads only the files changed since this process hashed them. */
 export const memoTreeHash = Effect.fn('bolt.memoTreeHash')(function* (
 	dir: string,
 	/** Lines of files the tree holds only once its host adds them. */
@@ -72,12 +72,12 @@ export const memoTreeHash = Effect.fn('bolt.memoTreeHash')(function* (
 			stat = yield* fs.stat(at);
 		let known = digests.get(at);
 		if (known === undefined || known.size !== stat.size || known.mtime !== mtime(stat)) {
-			known = { size: stat.size, mtime: mtime(stat), hex: sha256Hex(yield* fs.readFile(at)) };
+			known = { size: stat.size, mtime: mtime(stat), hex: sha256_hex(yield* fs.readFile(at)) };
 			digests.set(at, known);
 		}
 		lines.push(`${file}\0${known.hex}`);
 	}
-	return sha256Hex(lines.sort().join('\n'));
+	return sha256_hex(lines.sort().join('\n'));
 });
 
 /** The template's catalogue metadata when present (`key` and `name`). */
@@ -93,11 +93,11 @@ const templateMeta = Effect.fn('bolt.templateMeta')(function* (root: string) {
 });
 
 /** `schema.sql`: the plan from an empty database, in apply order (review aid; hosts apply `plan`, rule 69). */
-export function schemaSql(m: EngineManifest): string {
-	return `${statements(storeSync(plan(null, m)))
-		.map((s) => `${s.sql.trim().replace(/;?$/, ';')}`)
-		.join('\n\n')}\n`;
-}
+export const schemaSql = (m: EngineManifest) =>
+	Effect.map(
+		plan(null, m),
+		(p) => `${statements(p).map((s) => `${s.sql.trim().replace(/;?$/, ';')}`).join('\n\n')}\n`
+	);
 
 /** The workspace's type setup, copied into the artifact's `workspace/` beside its source. */
 const TYPE_SETUP = [
@@ -135,9 +135,9 @@ export const pagesKey = Effect.fn('bolt.pagesKey')(function* (
 	const lines = [clientKey];
 	for (const source of sources) {
 		const at = join(root, source);
-		lines.push(`${source}\0${(yield* fs.exists(at)) ? sha256Hex(yield* fs.readFile(at)) : ''}`);
+		lines.push(`${source}\0${(yield* fs.exists(at)) ? sha256_hex(yield* fs.readFile(at)) : ''}`);
 	}
-	return sha256Hex(lines.join('\n'));
+	return sha256_hex(lines.join('\n'));
 });
 /** The parts of a bundle the public pages' builds write, each with its name in the held copy. */
 const heldParts = (out: string) =>
@@ -168,13 +168,13 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		kept = join(cache, 'client-kept'),
 		heldDir = join(cache, 'pages');
 	// what the generated entries are made of: the manifest parts they read and every discovered file's path
-	const clientKey = sha256Hex(
+	const clientKey = sha256_hex(
 		JSON.stringify([
 			meta.name,
 			c.manifest.workspace,
 			c.manifest.apps,
 			c.manifest.groups ?? {},
-			c.manifest.customFields,
+			c.manifest.custom_fields,
 			files.map((f) => f.path)
 		])
 	);
@@ -232,16 +232,16 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	const manifestText = `${JSON.stringify(c.manifest, null, '\t')}\n`;
 	yield* fs.writeFileString(join(out, 'manifest.json'), manifestText);
 	yield* fs.writeFileString(join(out, 'guest.mjs'), c.guest.source);
-	if (c.guest.sourceMap === undefined)
+	if (c.guest.source_map === undefined)
 		yield* fs.remove(join(out, 'guest.mjs.map'), { force: true });
-	else yield* fs.writeFileString(join(out, 'guest.mjs.map'), c.guest.sourceMap);
+	else yield* fs.writeFileString(join(out, 'guest.mjs.map'), c.guest.source_map);
 	// `?bytes` imports (§5.8), by sha256; server-only, never under the browser-served `assets/`. guest.mjs names each sha, so its hash covers them
 	yield* fs.remove(join(out, 'guest-assets'), { recursive: true, force: true });
 	for (const [hash, bytes] of Object.entries(c.guest.assets ?? {})) {
 		yield* fs.makeDirectory(join(out, 'guest-assets'), { recursive: true });
 		yield* fs.writeFile(join(out, 'guest-assets', hash), bytes);
 	}
-	yield* fs.writeFileString(join(out, 'schema.sql'), schemaSql(c.manifest));
+	yield* fs.writeFileString(join(out, 'schema.sql'), yield* schemaSql(c.manifest));
 	yield* cloneTree(join(root, 'migrations'), join(out, 'migrations'));
 	const pages: Record<string, ArtifactJson['pages'][string]> = {};
 	let client: ArtifactJson['client'];
@@ -330,8 +330,8 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 			yield* fs.copyFile(join(root, file), join(out, 'workspace', file));
 		}
 	const hashes = {
-		manifest: sha256Hex(manifestText),
-		guest: sha256Hex(c.guest.source),
+		manifest: sha256_hex(manifestText),
+		guest: sha256_hex(c.guest.source),
 		client: yield* memoTreeHash(join(out, 'client'), layerLines(options.prepared, '')),
 		server: yield* memoTreeHash(join(out, 'server'))
 	};
@@ -340,12 +340,12 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		contract: CONTRACT,
 		handle: meta.handle,
 		name: meta.name,
-		schema: fingerprint(schemaSlice(c.manifest)),
+		schema: fingerprint(schema_slice(c.manifest)),
 		client,
 		pages,
 		hashes
 	};
-	const artifact: ArtifactJson = { ...body, hash: yield* artifactHash(out, body) };
+	const artifact: ArtifactJson = { ...body, hash: yield* artifact_hash(out, body) };
 	yield* fs.writeFileString(
 		join(out, 'artifact.json'),
 		`${JSON.stringify(artifact, null, '\t')}\n`

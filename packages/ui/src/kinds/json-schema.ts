@@ -1,54 +1,8 @@
 import { Array as Arr, Predicate, Schema } from 'effect';
-import { DATATYPE_SHAPES } from '@norbital-ai/std/kind';
+import { DATATYPE_SHAPES, type JsonSchema } from '@norbital-ai/std/kind';
 import type { Json, Kind } from './kind.js';
-
-/**
- * JSON Schema is data, never executable code. Remote references are deliberately not fetched. Every keyword this
- * renderer reads is typed; any other keyword is carried as JSON (`$defs`, vendor keywords) for `$ref` resolution.
- */
-export type JsonSchema = boolean | JsonSchemaObject;
-type JsonSchemaObject = {
-	readonly [keyword: string]: Json | JsonSchema | readonly JsonSchema[] | undefined;
-	readonly $schema?: string;
-	readonly $ref?: string;
-	readonly type?: string | readonly string[];
-	readonly format?: string;
-	readonly title?: string;
-	readonly description?: string;
-	readonly unit?: string;
-	readonly properties?: Readonly<Record<string, JsonSchema>>;
-	readonly additionalProperties?: JsonSchema;
-	readonly required?: readonly string[];
-	readonly items?: JsonSchema;
-	readonly prefixItems?: readonly JsonSchema[];
-	readonly allOf?: readonly JsonSchema[];
-	readonly anyOf?: readonly JsonSchema[];
-	readonly oneOf?: readonly JsonSchema[];
-	readonly if?: JsonSchema;
-	readonly then?: JsonSchema;
-	readonly else?: JsonSchema;
-	readonly not?: JsonSchema;
-	readonly enum?: readonly Json[];
-	readonly const?: Json;
-	readonly default?: Json;
-	readonly readOnly?: boolean;
-	readonly minimum?: number;
-	readonly maximum?: number;
-	readonly exclusiveMinimum?: number;
-	readonly exclusiveMaximum?: number;
-	readonly minLength?: number;
-	readonly maxLength?: number;
-	readonly minItems?: number;
-	readonly maxItems?: number;
-	readonly minProperties?: number;
-	readonly maxProperties?: number;
-	readonly 'x-norbital'?: {
-		readonly datatype?: string;
-		readonly section?: string;
-		readonly advanced?: boolean;
-		readonly order?: number;
-	};
-};
+export type { JsonSchema } from '@norbital-ai/std/kind';
+type JsonSchemaObject = Exclude<JsonSchema, boolean>;
 
 const optional = Schema.optionalKey;
 const Node: Schema.Codec<JsonSchema> = Schema.Union([
@@ -107,11 +61,11 @@ const Node: Schema.Codec<JsonSchema> = Schema.Union([
 ]);
 
 /** Whether a stored value is a JSON Schema in the keywords this renderer reads: decode once where a schema enters a page. */
-export const isJsonSchema: (value: unknown) => value is JsonSchema = Schema.is(Node);
+export const is_json_schema: (value: unknown) => value is JsonSchema = Schema.is(Node);
 
 /** A JSON Schema document: an object naming its dialect in `$schema`, the keyword by which a value says it is a schema. */
-export const isJsonSchemaDocument = (value: unknown): value is Exclude<JsonSchema, boolean> =>
-	isJsonSchema(value) && typeof value !== 'boolean' && value.$schema !== undefined;
+export const is_json_schema_document = (value: unknown): value is Exclude<JsonSchema, boolean> =>
+	is_json_schema(value) && typeof value !== 'boolean' && value.$schema !== undefined;
 
 const COMPOSITIONS = [
 	'allOf',
@@ -169,7 +123,7 @@ const step = (at: Pointed, key: string): Pointed =>
 			: at[key];
 
 /** Resolve local JSON Pointers, with cycle detection. Unsupported references keep their JSON editor. */
-export function resolveJsonSchema(schema: JsonSchema, root: JsonSchema = schema): JsonSchema {
+export function resolve_json_schema(schema: JsonSchema, root: JsonSchema = schema): JsonSchema {
 	const seen = new Set<string>();
 	while (typeof schema !== 'boolean' && schema.$ref !== undefined) {
 		const ref = schema.$ref;
@@ -180,7 +134,7 @@ export function resolveJsonSchema(schema: JsonSchema, root: JsonSchema = schema)
 			.split('/')
 			.reduce((at: Pointed, part) => step(at, part.replace(/~1/g, '/').replace(/~0/g, '~')), root);
 		// a pointer may land under any keyword, `$defs` included: what it names is decoded there
-		if (!isJsonSchema(target)) return true;
+		if (!is_json_schema(target)) return true;
 		const { $ref: _ref, ...siblings } = schema;
 		// Sibling assertions are intersections, not overrides. Keep ambiguous intersections in JSON.
 		if (typeof target === 'boolean') return Object.keys(siblings).length === 0 ? target : true;
@@ -248,7 +202,7 @@ function namedKind(schema: JsonSchemaObject): Kind | undefined {
  * explicitly (`format: '<datatype>'`, or `x-norbital.datatype` for a custom one) or implicitly by an exact shape
  * (`DATATYPE_SHAPES`); explicit wins.
  */
-export function jsonSchemaKind(schema: JsonSchema): Kind {
+export function json_schema_kind(schema: JsonSchema): Kind {
 	if (typeof schema === 'boolean') return { kind: 'json' };
 	const common = { label: schema.title, help: schema.description };
 	if (composesJsonSchema(schema)) return { ...common, kind: 'json' };
@@ -303,7 +257,7 @@ export function jsonSchemaKind(schema: JsonSchema): Kind {
 }
 
 export function jsonSchemaInitial(schema: JsonSchema, root: JsonSchema = schema): Json {
-	const resolved = resolveJsonSchema(schema, root);
+	const resolved = resolve_json_schema(schema, root);
 	if (typeof resolved === 'boolean') return null;
 	if (resolved.default !== undefined) return resolved.default;
 	if (resolved.const !== undefined) return resolved.const;
@@ -324,7 +278,7 @@ export function jsonSchemaGroups(schema: Exclude<JsonSchema, boolean>, root: Jso
 	>();
 	const fields = Object.entries(schema.properties ?? {}).map(([name, child]) => ({
 		name,
-		schema: resolveJsonSchema(child, root),
+		schema: resolve_json_schema(child, root),
 		required: schema.required?.includes(name) ?? false
 	}));
 	fields.sort(
@@ -337,8 +291,9 @@ export function jsonSchemaGroups(schema: Exclude<JsonSchema, boolean>, root: Jso
 		const advanced = meta?.advanced ?? false,
 			title = meta?.section ?? '',
 			key = `${advanced}:${title}`;
-		if (!groups.has(key)) groups.set(key, { title, advanced, fields: [] });
-		groups.get(key)!.fields.push(field);
+		const group = groups.get(key);
+		if (group === undefined) groups.set(key, { title, advanced, fields: [field] });
+		else group.fields.push(field);
 	}
 	return [...groups.values()].sort((a, b) => Number(a.advanced) - Number(b.advanced));
 }

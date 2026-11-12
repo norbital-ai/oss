@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { Accordion as AccordionPrimitive } from 'bits-ui';
+	import type { SnakeProps } from '../bits.js';
 
 	let {
 		ref = $bindable(null),
 		value = $bindable(),
 		...restProps
-	}: AccordionPrimitive.RootProps = $props();
+	}: SnakeProps<AccordionPrimitive.RootProps, { on_value_change: 'onValueChange' }> = $props();
 </script>
 
 {#if restProps.type === 'multiple'}
+	{@const { on_value_change, ...props } = restProps}
 	<AccordionPrimitive.Root
 		bind:ref
 		bind:value={
@@ -16,9 +18,11 @@
 			(next: string[] | undefined) => (value = next)
 		}
 		data-slot="accordion"
-		{...restProps}
+		{...props}
+		onValueChange={on_value_change}
 	/>
 {:else}
+	{@const { on_value_change, ...props } = restProps}
 	<AccordionPrimitive.Root
 		bind:ref
 		bind:value={
@@ -26,6 +30,7 @@
 			(next: string | undefined) => (value = next)
 		}
 		data-slot="accordion"
-		{...restProps}
+		{...props}
+		onValueChange={on_value_change}
 	/>
 {/if}

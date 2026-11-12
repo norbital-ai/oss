@@ -23,7 +23,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import pg from 'pg';
 import { TenantDb } from '@norbital-ai/bolt/engine';
 import type { Facilities, Serving } from '@norbital-ai/bolt/facilities';
-import { PgliteDb, PostgresDb, tenantDbPort } from '@norbital-ai/bolt/node';
+import { PgliteDb, PostgresDb, tenant_db_port } from '@norbital-ai/bolt/node';
 import { host, type Facility, type HostSettings, type Provider } from '../src/index.ts';
 
 const env = (name: string): string | undefined => {
@@ -48,16 +48,16 @@ const json = <A>(name: string, schema: Schema.Decoder<A>, empty: string): A => {
 	return decoded.value;
 };
 
-const masterKey = (() => {
+const master_key = (() => {
 	const v = required('BOLT_MASTER_KEY');
 	const b = /^[0-9a-f]{64}$/i.test(v) ? Buffer.from(v, 'hex') : Buffer.from(v, 'base64');
 	if (b.length !== 32)
 		throw new Error('BOLT_MASTER_KEY is not a 32-byte key (64 hex digits or base64)');
 	return b;
 })();
-const publicUrl = new URL(required('BOLT_PUBLIC_URL'));
-const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(publicUrl.hostname);
-if (publicUrl.protocol !== 'https:' && !(publicUrl.protocol === 'http:' && loopback))
+const public_url = new URL(required('BOLT_PUBLIC_URL'));
+const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(public_url.hostname);
+if (public_url.protocol !== 'https:' && !(public_url.protocol === 'http:' && loopback))
 	throw new Error('BOLT_PUBLIC_URL must be https:// unless its host is loopback');
 
 const providers: { [F in Facility]?: Provider } = {};
@@ -99,7 +99,7 @@ const transactional: HostSettings['transactional'] = {
 				? {
 						provider: 'resend',
 						key: required('BOLT_RESEND_API_KEY'),
-						from: env('BOLT_RESEND_FROM') ?? `noreply@${publicUrl.hostname}`
+						from: env('BOLT_RESEND_FROM') ?? `noreply@${public_url.hostname}`
 					}
 				: (() => {
 						throw new Error(`BOLT_TRANSACTIONAL_EMAIL is resend or log, not '${email}'`);
@@ -112,8 +112,8 @@ const transactional: HostSettings['transactional'] = {
 				: phone === 'twilio'
 					? {
 							provider: 'twilio',
-							accountSid: required('BOLT_TWILIO_ACC_SID'),
-							authToken: required('BOLT_TWILIO_AUTH_TOKEN')
+							account_sid: required('BOLT_TWILIO_ACC_SID'),
+							auth_token: required('BOLT_TWILIO_AUTH_TOKEN')
 						}
 					: (() => {
 							throw new Error(`BOLT_TRANSACTIONAL_PHONE is twilio, log or none, not '${phone}'`);
@@ -124,11 +124,11 @@ const google = both('BOLT_GOOGLE_OAUTH_CLIENT_ID', 'BOLT_GOOGLE_OAUTH_CLIENT_SEC
 const vapid = both('BOLT_VAPID_PUBLIC_KEY', 'BOLT_VAPID_PRIVATE_KEY');
 const turnstile = both('BOLT_TURNSTILE_SITE_KEY', 'BOLT_TURNSTILE_SECRET');
 const settings: HostSettings = {
-	publicUrl: publicUrl.origin,
-	auditDir: required('BOLT_AUDIT_DIR'),
+	public_url: public_url.origin,
+	audit_dir: required('BOLT_AUDIT_DIR'),
 	files,
-	masterKey,
-	googleOAuth: google === null ? null : { id: google[0], secret: google[1] },
+	master_key,
+	google_oauth: google === null ? null : { id: google[0], secret: google[1] },
 	transactional,
 	providers,
 	ai: {
@@ -150,16 +150,16 @@ const settings: HostSettings = {
 			'{}'
 		)
 	},
-	vapid: vapid === null ? null : { publicKey: vapid[0], privateKey: vapid[1] },
+	vapid: vapid === null ? null : { public_key: vapid[0], private_key: vapid[1] },
 	apns: json(
 		'BOLT_APNS_KEYS',
 		Schema.Record(
 			Schema.String,
-			Schema.Struct({ keyId: Schema.NonEmptyString, key: Schema.NonEmptyString })
+			Schema.Struct({ key_id: Schema.NonEmptyString, key: Schema.NonEmptyString })
 		),
 		'{}'
 	),
-	turnstile: turnstile === null ? null : { siteKey: turnstile[0], secret: turnstile[1] },
+	turnstile: turnstile === null ? null : { site_key: turnstile[0], secret: turnstile[1] },
 	environment: env('BOLT_ENVIRONMENT') ?? null
 };
 
@@ -195,7 +195,7 @@ const scope = await runtime.runPromise(Scope.make());
 const served = await runtime.runPromise(
 	Effect.gen(function* () {
 		const db = yield* TenantDb;
-		return yield* host(settings, tenantDbPort(db), {
+		return yield* host(settings, tenant_db_port(db), {
 			...(pglite === undefined ? {} : { pglite }),
 			log: (line) => console.log(`[host] ${line}`)
 		});

@@ -4,6 +4,8 @@
 // models it syncs (`model(…).syncs`, `./sync.ts`). Bolt's conversation definitions (whatsapp, email, telegram, slack,
 // discord, wechat) are this same declaration in its system layer.
 import type { Handle } from '../access/actor.ts';
+import { Record as EffectRecord, Schema } from 'effect';
+import { FieldData } from '../field-data.ts';
 import { attached, type Body } from '../body.ts';
 import type { BodyReturn, Eff } from '../ctx.ts';
 import type { FacilityFailure, Unavailable } from '../errors.ts';
@@ -29,8 +31,10 @@ import type {
 	RecordRef
 } from '../values.ts';
 import type { DatabaseRequest, DatabaseResult } from '../../engine/integrations/database.ts';
-import type { WebhookScheme } from './automation.ts';
 import type { SecretName } from './names.ts';
+
+/** How an integration signs incoming webhooks; Standard Webhooks also accepts Svix headers. */
+export type WebhookScheme = 'standard' | 'hmac-sha256' | 'stripe' | 'slack' | 'meta' | 'bearer';
 
 /** Checks the definition of a read integration instance before using its id in a definition-pinned ref. */
 export function instance_id<const D extends string>(
@@ -59,17 +63,17 @@ export function is_instance<const D extends string>(
  * takes through a pushing driver's standing link (its provider's own API under its sign-in: a calendar's event writes).
  */
 export const DRIVERS = {
-	http: { request: 'http', credential: true, oauth: true },
-	sqlserver: { request: 'database', credential: true },
-	whatsapp: { conversation: { kind: 'chat', handle: 'phone' }, personal: true },
-	email: { conversation: { kind: 'email', handle: 'email' }, personal: true },
-	telegram: { conversation: { kind: 'chat', handle: 'telegram' } },
-	slack: { conversation: { kind: 'chat', handle: null } },
-	discord: { conversation: { kind: 'chat', handle: null } },
-	wechat: { conversation: { kind: 'chat', handle: null } },
+	http: { read: 'cursor', request: 'http', credential: true, oauth: true },
+	sqlserver: { read: 'cursor', request: 'database', credential: true },
+	whatsapp: { read: 'deliveries', conversation: { kind: 'chat', handle: 'phone' }, personal: true },
+	email: { read: 'deliveries', conversation: { kind: 'email', handle: 'email' }, personal: true },
+	telegram: { read: 'deliveries', conversation: { kind: 'chat', handle: 'telegram' } },
+	slack: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
+	discord: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
+	wechat: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
 	/** Any other chat platform: the host's providers name them, and a connection picks one. */
-	chat: { conversation: { kind: 'chat', handle: null } },
-	calendar: { items: 'calendar', oauth: true, personal: true, call: 'http' }
+	chat: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
+	calendar: { read: 'items', items: 'calendar', oauth: true, personal: true, call: 'http' }
 } as const;
 /** A driver kind: what a definition's `driver` names. */
 export type DriverName = keyof typeof DRIVERS;
@@ -90,9 +94,9 @@ type Address = { readonly address: string; readonly name: string | null };
 export type InboundMail = {
 	readonly id: string;
 	readonly thread: string | null;
-	readonly sentAt: Instant;
+	readonly sent_at: Instant;
 	readonly from: Address;
-	readonly replyTo: Address | null;
+	readonly reply_to: Address | null;
 	readonly to: readonly Address[];
 	readonly cc: readonly Address[];
 	readonly subject: string;
@@ -103,13 +107,13 @@ export type InboundMail = {
 	/** The receiving mail server vouched for `from`'s domain. Without it, `from` is a claim and links no member. */
 	readonly authenticated?: boolean;
 };
-/** An inbound chat message. `thread` is the chat; `replyTo` the message it answers. */
+/** An inbound chat message. `thread` is the chat; `reply_to` the message it answers. */
 export type InboundChat = {
 	readonly id: string;
 	readonly thread: string;
-	readonly sentAt: Instant;
+	readonly sent_at: Instant;
 	readonly from: { readonly handle: Handle; readonly name: string | null };
-	readonly replyTo: string | null;
+	readonly reply_to: string | null;
 	readonly text: string;
 	readonly attachments: readonly Attachment[];
 	readonly group?: boolean;
@@ -119,12 +123,17 @@ export type InboundChat = {
 export type Inbound<K> = K extends 'email' ? InboundMail : K extends 'chat' ? InboundChat : never;
 /** An inbound message as a sync's `read` receives it: the message as stored, its `version` (an edit is a new one) and whether it was deleted or recalled. */
 export type MessageItem<K> = Inbound<K> & { readonly version: string; readonly deleted: boolean };
-type Common = { replyTo?: string; about?: RecordRef };
+type Common = {
+	/** Provider message id this message answers. */
+	reply_to?: string;
+	about?: RecordRef;
+};
 /** What a conversation sends, by its kind: a sync `write`'s `ctx.send`, an automation's `ctx.send` and an envoy's reply. */
 export type Outgoing<K> = K extends 'email'
 	? Common & {
 			to: readonly string[];
 			cc?: readonly string[];
+			bcc?: readonly string[];
 			subject: string;
 			html?: string;
 			text?: string;
@@ -186,7 +195,7 @@ export type DeliveryEvent<E extends DeliveryKind = DeliveryKind, K = 'email'> = 
 		? { readonly reason: string }
 		: {});
 
-// ── deliveries and driver items: what a sync's `read` receives beside its cursor ──
+// ── driver-owned read payloads ──
 /** A verified webhook delivery the inbox stored for an instance (deduplicated by its delivery id), oldest first. */
 export type WebhookDelivery = {
 	readonly kind: 'webhook';
@@ -280,6 +289,9 @@ type ConfigurationIn<S, F = Part<S, 'configuration'>> = Simplify<
 >;
 /** The driver definition `D` names. */
 export type DriverOf<D> = DriverIn<IntegrationSpecOf<D>>;
+type ReadMode<K> = K extends DriverName ? (typeof DRIVERS)[K]['read'] : never;
+/** The single read payload a definition's driver supplies to a sync. */
+export type DriverReadOf<D> = ReadMode<DriverOf<D>>;
 /** The message kind definition `D` carries (`chat` | `email`); `never` for a definition with no conversation. */
 export type ConversationOf<D> = KindIn<IntegrationSpecOf<D>>;
 /** What a send through an instance of definition `D` takes. */
@@ -305,42 +317,49 @@ export type ConfigurationOf<D> = ConfigurationIn<IntegrationSpecOf<D>>;
 type HttpAuth<C> =
 	{ bearer: C } | { header: { name: string; value: C } } | { basic: { user: C; password: C } };
 /** A definition literal's data: what the manifest holds (the `test` body is not data). */
-export type IntegrationSpec = {
-	description: string;
-	driver: DriverName;
+export const IntegrationSpec = Schema.Struct({
+	description: Schema.String,
+	driver: Schema.Literals(EffectRecord.keys(DRIVERS)),
 	/** Safe settings each instance edits at run time (with history), decoded against these fields. */
-	configuration?: InputFields;
+	configuration: Schema.optionalKey(Schema.Record(Schema.String, FieldData)),
 	/** The secret each instance pairs with, sealed host-side and never readable (`http` and `sqlserver` only). */
-	credential?: InputFields;
+	credential: Schema.optionalKey(Schema.Record(Schema.String, FieldData)),
 	/**
 	 * The OAuth client an `oauth` driver (http, calendar) grants with, by secret name; tokens are per instance. An http
 	 * definition names its `authorize` and `token` endpoints too, and its requests carry the instance's token as a bearer.
 	 */
-	oauth?: {
-		client: string;
-		secret: string;
-		authorize?: string;
-		token?: string;
-		scopes?: readonly string[];
-	};
+	oauth: Schema.optionalKey(Schema.Struct({
+		client: Schema.String, secret: Schema.String,
+		authorize: Schema.optionalKey(Schema.String), token: Schema.optionalKey(Schema.String),
+		scopes: Schema.optionalKey(Schema.Array(Schema.String))
+	})),
 	/** `http` only: the base URL (a literal or a text configuration field) and how requests authenticate. */
-	http?: { baseUrl: string; auth?: HttpAuth<string> };
+	http: Schema.optionalKey(Schema.Struct({
+		base_url: Schema.String,
+		auth: Schema.optionalKey(Schema.Union([
+			Schema.Struct({ bearer: Schema.String }),
+			Schema.Struct({ header: Schema.Struct({ name: Schema.String, value: Schema.String }) }),
+			Schema.Struct({ basic: Schema.Struct({ user: Schema.String, password: Schema.String }) })
+		]))
+	})),
 	/**
 	 * `http` only: how the provider signs its webhooks, verified with a credential field. The instance page shows the
 	 * endpoint URL to paste into the provider. A verified delivery is stored (a duplicate delivery id is acknowledged and
 	 * dropped) and is a hint: the engine runs `read` of every sync over this connection at once, debounced, and passes the
 	 * stored deliveries to `read` as `deliveries`. `standard` is Standard Webhooks (`webhook-*` and Svix's `svix-*` headers).
 	 */
-	webhook?: { verify: { scheme: WebhookScheme; secret: string } };
+	webhook: Schema.optionalKey(Schema.Struct({ verify: Schema.Struct({
+		scheme: Schema.Literals(['standard', 'hmac-sha256', 'stripe', 'slack', 'meta', 'bearer']), secret: Schema.String
+	}) })),
 	/**
 	 * At most this many requests through one instance (`'10/s'`, `'600/min'`): every sync `read`, `write` and
 	 * `ctx.request` waits its turn; a `429` with `Retry-After` is honoured on top. Request drivers only.
 	 */
-	rate?: Rate;
-};
-/** The configuration every instance of `def` starts with, however it was made (at run time, from a seed pack, or as a
- * `+workspace.ts` connection): its configuration fields' defaults. */
-export const configurationDefaults = (
+	rate: Schema.optionalKey(Schema.String)
+});
+export type IntegrationSpec = typeof IntegrationSpec.Type;
+/** The configuration every instance of `def` starts with, however it was made (at runtime or from permitted seed data): its configuration fields' defaults. */
+export const configuration_defaults = (
 	def: Pick<IntegrationSpec, 'configuration'> | undefined
 ): { readonly [field: string]: Json } =>
 	Object.fromEntries(
@@ -357,7 +376,7 @@ type TextField<F> = {
 type HttpFor<S> =
 	DriverIn<S> extends 'http'
 		? {
-				baseUrl: `https://${string}` | TextField<Part<S, 'configuration'>>;
+				base_url: `https://${string}` | TextField<Part<S, 'configuration'>>;
 				auth?: S extends { oauth: unknown }
 					? 'error: an oauth integration authenticates with its token; drop auth'
 					: HttpAuth<keyof Part<S, 'credential'> & string>;
@@ -416,7 +435,7 @@ export type Integration<N extends string, S> = {
 /**
  * `src/integration/<name>/+integration.ts`: one external system's connection: its driver, configuration, credential,
  * OAuth client, HTTP base and auth, webhook verification and request `rate`, with an optional `test` body run when an
- * instance is paired. Its instances are `sys_integration` rows (a `+workspace.ts` connection names one). What it
+ * instance is paired. Its durable instances are runtime `sys_integration` rows. What it
  * exchanges is declared on models: `model({ syncs: { <s>: { with: '<name>', read?, write? } } })`.
  * @returns Declaration metadata and its attached pairing-test body.
  * @example
@@ -424,9 +443,9 @@ export type Integration<N extends string, S> = {
  * export default integration({
  * 	description: 'The CRM account.',
  * 	driver: 'http',
- * 	http: { baseUrl: 'https://api.crm.example', auth: { bearer: 'api_key' } },
- * 	credential: { api_key: { kind: 'text', label: 'API key' }, signingSecret: { kind: 'text', label: 'Webhook signing secret' } },
- * 	webhook: { verify: { scheme: 'standard', secret: 'signingSecret' } },
+ * 	http: { base_url: 'https://api.crm.example', auth: { bearer: 'api_key' } },
+ * 	credential: { api_key: { kind: 'text', label: 'API key' }, signing_secret: { kind: 'text', label: 'Webhook signing secret' } },
+ * 	webhook: { verify: { scheme: 'standard', secret: 'signing_secret' } },
  * 	rate: '10/s',
  * 	test: function* (ctx) {
  * 		yield* ctx.request({ method: 'GET', path: '/me', output: { kind: 'json' } });

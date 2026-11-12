@@ -7,10 +7,11 @@ export { default as Section, type RecordSection, type SectionProps } from './sec
 export { default as Form, type FormConfirm, type FormProps, type FormSource } from './form.svelte';
 export {
 	FormState,
-	idsOf,
-	useForm,
-	useRecordController,
+	ids_of,
+	use_form,
+	use_record_controller,
 	type RecordControllerScope,
 	type SemanticIssue
 } from './form-state.svelte.js';
-export type { Outcome, Row } from './draft.js';
+export type { Outcome } from '../client/contract.js';
+export type { Row } from './draft.js';

@@ -3,7 +3,7 @@ import type { Json } from '../../decl/values.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Images, type Files, type Logs } from '../ports.ts';
-import { imageJpeg } from '../files/image.ts';
+import { image_jpeg } from '../files/image.ts';
 import { row } from '../system/rows.ts';
 import { MODEL_FILES } from './ai.ts';
 import type { AttachmentPort } from './tools.ts';
@@ -17,7 +17,7 @@ const Content = row('sys_file', ['key', 'mime']);
 const TEXT = /^(text\/|application\/(json|xml|csv))/;
 const MODEL_IMAGE = /^image\/(jpeg|png|webp|gif)$/;
 const TEXT_CHARS = 64 * 1024;
-const refused = (message: string) => Effect.fail(BoltError.make('invalidInput', 'decode', message));
+const refused = (message: string) => Effect.fail(BoltError.make('invalid_input', 'decode', message));
 
 /** Only the member's own panel uploads can be attached, with one query for the whole set. */
 export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
@@ -27,7 +27,7 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
 ) {
 	const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(Ref))(refs).pipe(
 		Effect.mapError((error) =>
-			BoltError.make('invalidInput', 'decode', 'An attachment is a stored file reference.', error)
+			BoltError.make('invalid_input', 'decode', 'An attachment is a stored file reference.', error)
 		)
 	);
 	if (decoded.length > MODEL_FILES.count)
@@ -56,7 +56,7 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
  * The host-independent attachment reader: an image as model-compatible bytes, a text file as its text. Every other file
  * is parsed by `read_file` (plan 12), never here.
  */
-export function fileAttachments(
+export function file_attachments(
 	db: TenantDbShape,
 	files: Files['Service'],
 	images: Images['Service']
@@ -64,7 +64,7 @@ export function fileAttachments(
 	return {
 		read: Effect.fn('Agents.readAttachment')(function* (file: Json) {
 			const ref = yield* Schema.decodeUnknownEffect(Ref)(file).pipe(
-				Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message, error))
+				Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
 			);
 			const stored = yield* db.one(Content, {
 				text: 'SELECT key, mime FROM sys_file WHERE id = $1',
@@ -84,7 +84,7 @@ export function fileAttachments(
 					? { mime, bytes }
 					: {
 							mime: 'image/jpeg',
-							bytes: yield* imageJpeg(bytes, 2048).pipe(Effect.provideService(Images, images))
+							bytes: yield* image_jpeg(bytes, 2048).pipe(Effect.provideService(Images, images))
 						};
 			const text = new TextDecoder().decode(bytes);
 			return {
@@ -140,7 +140,7 @@ export const triageAttachments = Effect.fn('Agents.triageAttachments')(function*
 					size: number;
 				}) {
 					if (++images > 4 || image.size > 8 * 1024 * 1024) return undefined;
-					const jpeg = yield* imageJpeg(
+					const jpeg = yield* image_jpeg(
 						yield* ports.files.get(image.key, 8 * 1024 * 1024),
 						1024
 					).pipe(Effect.provideService(Images, ports.images));

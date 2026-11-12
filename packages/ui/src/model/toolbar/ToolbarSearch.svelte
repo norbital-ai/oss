@@ -12,8 +12,8 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 		value?: string;
 		label: string;
 		active?: boolean;
-		panelClass?: string;
-		onOpenAutoFocus?: ComponentProps<typeof PopoverControls.Content>['onOpenAutoFocus'];
+		panel_class?: string;
+		on_open_auto_focus?: ComponentProps<typeof PopoverControls.Content>['on_open_auto_focus'];
 		children?: Snippet;
 	};
 </script>
@@ -29,8 +29,8 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 		value = $bindable(''),
 		label,
 		active,
-		panelClass,
-		onOpenAutoFocus,
+		panel_class,
+		on_open_auto_focus,
 		children
 	}: ToolbarSearchProps = $props();
 	let box = $state<HTMLInputElement>();
@@ -54,10 +54,10 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 	<Popover.Content
 		align="start"
 		aria-label={label}
-		class={cn('flex w-[min(26rem,calc(100vw-1rem))] flex-col gap-2 p-2', panelClass)}
+		class={cn('flex w-[min(26rem,calc(100vw-1rem))] flex-col gap-2 p-2', panel_class)}
 		data-search-panel
-		onOpenAutoFocus={(event) => {
-			if (onOpenAutoFocus !== undefined) onOpenAutoFocus(event);
+		on_open_auto_focus={(event) => {
+			if (on_open_auto_focus !== undefined) on_open_auto_focus(event);
 			else {
 				event.preventDefault();
 				box?.focus();

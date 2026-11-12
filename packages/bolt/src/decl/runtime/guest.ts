@@ -9,22 +9,27 @@ import * as Exit from 'effect/Exit';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Scheduler from 'effect/Scheduler';
+import * as Schema from 'effect/Schema';
+import { equal_json } from '@norbital-ai/std/json';
+import { local_of } from '@norbital-ai/std/zone';
 // Wire decimals must revive even when a body only uses methods on its typed input.
 import '@norbital-ai/std/decimal';
-import { attached, type Body } from '../body.ts';
-import type { BodyError } from '../ctx.ts';
+import { attached, type AttachedBody, type GeneratorBody } from '../body.ts';
+import type { BodyError, BodyReturn } from '../ctx.ts';
 import { Refusal } from '../errors/refusal.ts';
-import { Verdict } from '../access/policy.ts';
-import { actFailureTag } from '../errors/act-failure-tag.ts';
+import { Verdict, type VerdictData } from '../access/policy.ts';
+import { act_failure_tag } from '../errors/act-failure-tag.ts';
+import type { FacilityMember } from './facility-members.ts';
 
 /** The prelude's raw crossing: member, args and the author's captured call site. */
 type Call = (member: string, args: readonly unknown[], site: string) => Promise<unknown>;
 const CALL: unique symbol = Symbol.for('norbital.bolt.call');
 const CTX: unique symbol = Symbol.for('norbital.bolt.ctx');
+const SECRETS: unique symbol = Symbol.for('norbital.bolt.secrets');
 const outside: Call = () =>
 	Promise.reject(new Error('a generator body runs inside the guest prelude only'));
 
-type Family = 'engine' | 'act' | 'facility' | 'read';
+type Family = 'engine' | 'act' | 'facility' | 'read' | 'run';
 const engineFault = (error: unknown): unknown => {
 	if (!Predicate.hasProperty(error, 'kind') || error.kind !== 'bolt') return error;
 	const fault = new Error(
@@ -36,11 +41,16 @@ const engineFault = (error: unknown): unknown => {
 	});
 };
 const FAILED = {
+	run: (error: unknown) => Effect.promise(() => import('../errors/act.ts')).pipe(Effect.flatMap(({ ActRefused }) => {
+		if (!Predicate.isObject(error) || (error['kind'] !== 'bolt' && error['kind'] !== 'refused')) return Effect.die(engineFault(error));
+		const refusal = Schema.decodeUnknownOption(ActRefused)({ ...error, _tag: 'ActRefused' });
+		return Option.isSome(refusal) ? Effect.fail(refusal.value) : Effect.die(engineFault(error));
+	})),
 	engine: (error: unknown) => Effect.die(engineFault(error)),
 	read: (error: unknown) =>
 		Effect.promise(() => import('../errors/read.ts')).pipe(
-			Effect.flatMap(({ readFailure }) =>
-				Option.match(readFailure(error), {
+			Effect.flatMap(({ read_failure }) =>
+				Option.match(read_failure(error), {
 					onNone: () => Effect.die(engineFault(error)),
 					onSome: Effect.fail
 				})
@@ -48,8 +58,8 @@ const FAILED = {
 		),
 	act: (error: unknown) =>
 		Effect.promise(() => import('../errors/act.ts')).pipe(
-			Effect.flatMap(({ actFailure }) =>
-				Option.match(actFailure(error), {
+			Effect.flatMap(({ act_failure }) =>
+				Option.match(act_failure(error), {
 					onNone: () => Effect.die(engineFault(error)),
 					onSome: Effect.fail
 				})
@@ -57,14 +67,15 @@ const FAILED = {
 		),
 	facility: (error: unknown) =>
 		Effect.promise(() => import('../errors/facility.ts')).pipe(
-			Effect.flatMap(({ facilityFailure }) =>
-				Option.match(facilityFailure(error), {
+			Effect.flatMap(({ facility_failure }) =>
+				Option.match(facility_failure(error), {
 					onNone: () => Effect.die(engineFault(error)),
 					onSome: Effect.fail
 				})
 			)
 		)
 };
+const READS = new Set(['query', 'db.query', 'db.after', 'history', 'aggregate']);
 type CrossingFailure = Effect.Error<ReturnType<(typeof FAILED)[Family]>>;
 /**
  * One member as an Effect: uninterruptible, so a sibling's failure never leaves its queued or in-flight call `unawaited`;
@@ -72,9 +83,8 @@ type CrossingFailure = Effect.Error<ReturnType<(typeof FAILED)[Family]>>;
  */
 const lifted = (call: Call, member: string, family: Family) => {
 	const cross = (...args: readonly unknown[]): Effect.Effect<unknown, CrossingFailure> => {
-		// every query is one read request; a runtime-built one (`dynamicRead`) fails with `ReadFailed`
-		const failureFamily =
-			family === 'engine' && (member === 'query' || member === 'db.query') ? 'read' : family;
+		// every read (a request, its prospective `after`, a record's history, a page aggregate) fails with `ReadFailed`
+		const failureFamily = family === 'engine' && READS.has(member) ? 'read' : family;
 		const at: { stack?: string } = {};
 		Error.captureStackTrace(at, cross); // the author's frame: by the time the Effect runs the stack is the fiber's
 		const site = at.stack?.split('\n')[1]?.trim() ?? 'unknown';
@@ -85,11 +95,11 @@ const lifted = (call: Call, member: string, family: Family) => {
 						resume(
 							family === 'act'
 								? Effect.suspend<unknown, CrossingFailure, never>(() =>
-										actFailureTag(value) === undefined
+										act_failure_tag(value) === undefined
 											? Effect.succeed(value)
 											: Effect.promise(() => import('../errors/act.ts')).pipe(
-													Effect.flatMap(({ actFailure }) => {
-														const failure = actFailure(value);
+													Effect.flatMap(({ act_failure }) => {
+														const failure = act_failure(value);
 														return Option.isSome(failure)
 															? Effect.fail(failure.value)
 															: Effect.succeed(value);
@@ -105,44 +115,72 @@ const lifted = (call: Call, member: string, family: Family) => {
 	};
 	return cross;
 };
+type RefusalPoint = { readonly row?: number; readonly path?: string };
+function inputPoint(input: unknown, target: object, path = '', row?: number): RefusalPoint | undefined {
+	if (input === target) return { ...(row === undefined ? {} : { row }), ...(path === '' ? {} : { path }) };
+	if (isArray(input)) {
+		for (const [index, item] of input.entries()) {
+			const point = inputPoint(item, target, path, row ?? index);
+			if (point !== undefined) return point;
+		}
+	} else if (Predicate.isObject(input)) {
+		for (const [key, item] of Object.entries(input)) {
+			const point = inputPoint(item, target, row === undefined ? (path === '' ? key : `${path}.${key}`) : path, row);
+			if (point !== undefined) return point;
+		}
+	}
+	return undefined;
+}
 const refuse = (
 	message: unknown,
 	at?: {
+		readonly at?: unknown;
 		readonly field?: string | undefined;
 		readonly row?: number | undefined;
 		readonly path?: string | undefined;
-	}
+	},
+	input: unknown = undefined
 ): Effect.Effect<never, Refusal> => {
-	const failure = { message: String(message), field: at?.field, row: at?.row, path: at?.path };
+	const point = at?.at === undefined ? undefined : Predicate.isObject(at.at) ? inputPoint(input, at.at) : undefined;
+	if (at?.at !== undefined && point === undefined)
+		return Effect.die(new Error('refuse at must name a row or change from this input'));
+	const failure = { message: String(message), field: at?.field, row: point?.row ?? at?.row, path: at?.path ?? point?.path };
 	return Effect.fail(new Refusal(failure));
 };
+const RowChange = Schema.Struct({
+	before: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
+	set: Schema.Record(Schema.String, Schema.Unknown),
+	after: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown))
+});
+const changesOf = (input: unknown) => Schema.decodeUnknownSync(Schema.Array(RowChange))(input).map((change) => ({
+	...change,
+	changed: (...fields: readonly string[]) => {
+		const names = fields.length === 0
+			? Object.keys({ ...change.before, ...change.after })
+			: fields;
+		return names.some((field) => !equal_json(change.before?.[field], change.after?.[field]));
+	}
+}));
 /** Builds only the members that this invocation kind admits; the prelude carries no ctx functions. */
-const lift = (call: Call, raw: unknown): unknown => {
+const lift = (call: Call, raw: unknown, input?: unknown): unknown => {
 	if (!Predicate.isObject(raw)) return raw;
-	const kind = (raw as { readonly [CTX]?: string })[CTX];
+	const kind = raw[CTX];
+	const deny = (message: unknown, at?: Parameters<typeof refuse>[1]) => refuse(message, at, input);
 	const cross = (member: string, family: Family = 'engine') => lifted(call, member, family);
+	const facility = (member: FacilityMember) => cross(member, 'facility');
 	const clock = {
 		now: raw['now'],
 		today: raw['today'],
 		tz: raw['tz'],
-		today_in: (zone: string) =>
-			new Intl.DateTimeFormat('en-CA', {
-				timeZone: zone,
-				year: 'numeric',
-				month: '2-digit',
-				day: '2-digit'
-			}).format(new Date(String(raw['now'])))
+		today_in: (zone: string) => local_of(Date.parse(String(raw['now'])), zone).date
 	};
 	const reads = {
 		query: cross('query'),
-		aggregate: cross('aggregate'),
 		history: cross('history')
 	};
 	const writes = {
-		act: Object.assign(cross('act', 'act'), {
-			many: cross('acts', 'act'),
-			checked: cross('acts', 'act')
-		}),
+		act: cross('act', 'act'),
+		run: cross('run', 'run'),
 		schedule: cross('schedule'),
 		notify: cross('notify')
 	};
@@ -150,7 +188,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 	const policies = isArray(raw['policies'])
 		? Object.freeze([...raw['policies']])
 		: Object.freeze([]);
-	const workspace = { query: cross('db.query'), aggregate: cross('db.aggregate') };
+	const workspace = { query: cross('db.query') };
 	// a sync body's instance: its configuration, `request` through it, and `send` (a conversation driver's message)
 	const instance = {
 		configuration: raw['configuration'] ?? {},
@@ -160,7 +198,6 @@ const lift = (call: Call, raw: unknown): unknown => {
 	switch (kind) {
 		case 'create':
 		case 'update':
-		case 'delete':
 			return {
 				...clock,
 				...actor,
@@ -168,20 +205,18 @@ const lift = (call: Call, raw: unknown): unknown => {
 				admin: raw['admin'] === true,
 				carried_by: typeof raw['carriedBy'] === 'string' ? raw['carriedBy'] : null,
 				approving: raw['approving'] === true,
-				refuse,
+				refuse: deny,
 				...workspace,
 				query: Object.assign(workspace.query, { after: cross('db.after') })
 			};
-		case 'notify':
-			return { ...clock, ...actor, ...workspace };
 		case 'syncRead':
-			return { ...clock, ...actor, ...workspace, refuse, ...instance };
+			return { ...clock, ...actor, ...workspace, refuse: deny, ...instance };
 		case 'syncWrite':
 			return {
 				...clock,
 				...actor,
 				...workspace,
-				refuse,
+				refuse: deny,
 				...instance,
 				...(raw['fileExport'] === true
 					? {
@@ -197,7 +232,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...clock,
 				...actor,
 				...workspace,
-				refuse,
+				refuse: deny,
 				...instance,
 				files: { get: cross('files.get', 'facility') }
 			};
@@ -209,18 +244,18 @@ const lift = (call: Call, raw: unknown): unknown => {
 				policies,
 				query: workspace.query,
 				allow: Verdict.allow,
-				refuse,
+				refuse: deny,
 				approve: Verdict.approve
 			};
 		case 'page':
-			return { ...clock, ...actor, ...reads };
+			return { ...clock, ...actor, ...reads, aggregate: cross('aggregate') };
 		case 'tool':
 			return {
 				...clock,
 				...actor,
 				...reads,
 				...writes,
-				refuse,
+				refuse: deny,
 				policies,
 				admin: raw['admin'] === true,
 				target: raw['row']
@@ -228,43 +263,42 @@ const lift = (call: Call, raw: unknown): unknown => {
 		case 'automation':
 		case 'effect':
 			return {
+				...(kind === 'effect' ? { event: raw['event'] } : {}),
 				...clock,
 				...actor,
 				...reads,
 				...writes,
-				refuse,
+				refuse: deny,
 				cause: raw['cause'],
+				attempt: raw['attempt'],
 				// an automation run's id and trigger; an effect has none
-				...(raw['run'] === undefined ? {} : { run: raw['run'] }),
-				approvals: { withdraw: cross('approvals.withdraw', 'act') },
+				run: Object.assign(cross('run', 'run'), Predicate.isObject(raw['run']) ? raw['run'] : {}),
 				send: cross('send'),
 				progress: cross('progress'),
 				request: cross('request', 'facility'),
-				web: { read: cross('web.read', 'facility') },
-				files: Object.fromEntries(
-					['meta', 'get', 'url', 'image', 'put'].map((name) => [
-						name,
-						cross(`files.${name}`, 'facility')
-					])
-				),
+				web: { read: facility('web.read') },
+				files: {
+					meta: facility('files.meta'), get: facility('files.get'), url: facility('files.url'),
+					image: facility('files.image'), put: facility('files.put')
+				},
 				convert: {
-					document: cross('convert.document', 'facility'),
-					ingest: cross('convert.ingest', 'facility')
+					document: facility('convert.document'),
+					ingest: facility('convert.ingest')
 				},
 				browser: {
-					navigate: cross('browser.navigate', 'facility'),
-					snapshot: cross('browser.snapshot', 'facility'),
-					act: cross('browser.act', 'facility'),
-					evaluate: cross('browser.evaluate', 'facility'),
-					download: cross('browser.download', 'facility'),
-					close: cross('browser.close', 'facility')
+					navigate: facility('browser.navigate'),
+					snapshot: facility('browser.snapshot'),
+					act: facility('browser.act'),
+					evaluate: facility('browser.evaluate'),
+					download: facility('browser.download'),
+					close: facility('browser.close')
 				},
 				ai: {
-					sys_1: { decide: cross('ai.sys_1.decide', 'facility') },
-					sys_2: { infer: cross('ai.sys_2.infer', 'facility') },
-					embed: cross('ai.embed', 'facility')
+					sys_1: { decide: facility('ai.sys_1.decide') },
+					sys_2: { infer: facility('ai.sys_2.infer') },
+					embed: facility('ai.embed')
 				},
-				geo: { search: cross('geo.search', 'facility'), reverse: cross('geo.reverse', 'facility') }
+				geo: { search: facility('geo.search'), reverse: facility('geo.reverse') }
 			};
 		case 'integration':
 			return { configuration: instance.configuration, request: instance.request };
@@ -275,17 +309,34 @@ const lift = (call: Call, raw: unknown): unknown => {
 
 /** A yield is a microtask, never the prelude's zero-delay timer (each of which is a `take()` round trip). */
 const scheduler = new Scheduler.MixedScheduler('sync');
+/** Check foreign JavaScript producers without replacing Effect's iterator, failure or cancellation machinery. */
+const body_effect = <O>(body: () => BodyReturn<O>): Effect.Effect<O, BodyError> =>
+	Effect.gen(function* () {
+		const iterator = body();
+		const candidate: unknown = iterator;
+		if (!Predicate.isObject(candidate) || typeof candidate['next'] !== 'function')
+			throw new TypeError('a declaration body must return a generator iterator');
+		let step = iterator.next();
+		for (;;) {
+			const result: unknown = step;
+			if (!Predicate.isObject(result) || typeof result['done'] !== 'boolean' || !('value' in result))
+				throw new TypeError('a declaration body returned an invalid iterator result');
+			if (step.done) return step.value;
+			const effect = step.value;
+			const yielded: unknown = effect;
+			if (!Effect.isEffect(yielded))
+				throw new TypeError('a declaration body must yield Effects; use yield* for effectful operations');
+			step = iterator.next(yield* effect);
+		}
+	});
 /** The one edge per invocation: one `runPromiseExit`, the body's output or its `finalOf` as the prelude's answer. */
-export const runBody = <O>(body: () => Effect.fn.Return<O, BodyError>): Promise<O> =>
-	Effect.runPromiseExit(
-		Effect.gen(body).pipe(
+export const runBody = <O>(body: () => BodyReturn<O>): Promise<O> => {
+	const secrets: unknown = Reflect.get(globalThis, SECRETS);
+	return Effect.runPromiseExit(
+		body_effect(body).pipe(
 			Effect.provideService(
 				ConfigProvider.ConfigProvider,
-				ConfigProvider.fromUnknown(
-					(globalThis as { readonly [key: symbol]: unknown })[
-						Symbol.for('norbital.bolt.secrets')
-					] ?? {}
-				)
+				ConfigProvider.fromUnknown(secrets ?? {})
 			)
 		),
 		{ scheduler }
@@ -295,22 +346,51 @@ export const runBody = <O>(body: () => Effect.fn.Return<O, BodyError>): Promise<
 			throw finalOf(exit.cause);
 		});
 	});
+};
 
-/** A generator body as the prelude calls it: its ctx argument (at `at`) lifted, its run one `runBody`. */
-const wrap = (body: Body, at: number): Body => {
+/** Raw invocation arguments are prepared only at the prelude's unknown module boundary. */
+const prepare_args = (args: readonly unknown[], at: number): readonly unknown[] => {
+	const hook: unknown = Reflect.get(globalThis, CALL);
+	const call: Call = (...args) => {
+		if (typeof hook !== 'function') return outside(...args);
+		const answer: unknown = hook(...args);
+		return Promise.resolve(answer);
+	};
+	const ctx = args[at];
+	const kind = Predicate.isObject(ctx) ? ctx[CTX] : undefined;
+	const changes = ['create', 'update', 'effect', 'policy'].includes(String(kind))
+		? changesOf(args[0])
+		: undefined;
+	return args.map((arg, i) => i === at
+		? lift(call, arg, changes ?? args[0])
+		: i === 0 && changes !== undefined ? changes : arg);
+};
+/** The generator tag supplies the authoring diagnostic; the typed producer and body_effect own execution proof. */
+const described_body = <A extends readonly unknown[], W>(
+	body: GeneratorBody<A>, wrapped: AttachedBody<A, W>, at: number
+): AttachedBody<A, W> => {
 	if (Object.prototype.toString.call(body) !== '[object GeneratorFunction]')
 		throw new Error(
 			`a ctx-bearing body must be a generator function, function* (…): ${String(body).slice(0, 120)}`
 		);
-	const gen = body as (...args: readonly unknown[]) => Effect.fn.Return<unknown, BodyError>; // checked above
-	const wrapped = (...args: readonly unknown[]) => {
-		const call = (globalThis as { readonly [CALL]?: Call })[CALL] ?? outside;
-		const invoke = () => gen(...args.map((arg, i) => (i === at ? lift(call, arg) : arg)));
-		const ctx = args[at];
-		if (!Predicate.isObject(ctx) || ctx[CTX] !== 'policy') return runBody(invoke);
+	Object.defineProperty(wrapped, 'name', { value: body.name });
+	Object.defineProperty(wrapped, Symbol.for('norbital.bolt.prepare'), {
+		value: (args: readonly unknown[]) => prepare_args(args, at)
+	});
+	return Object.defineProperty(wrapped, Symbol.for('norbital.bolt.generator'), { value: body });
+};
+/** A typed producer runs with its original tuple and returns its exact result. */
+const wrap = <A extends readonly unknown[], O>(
+	body: GeneratorBody<A, O>, at: number
+): AttachedBody<A, O> => described_body(body, (...args: A) => runBody(() => body(...args)), at);
+
+/** Policy values have their own typed native boundary rather than claiming the authored result is unchanged. */
+const wrap_verdict = <A extends readonly unknown[]>(
+	body: GeneratorBody<A, Verdict>, at: number
+): AttachedBody<A, VerdictData> => described_body(body, (...args: A) =>
 		// A policy refusal is one arm's denial. Other admitting arms still get their verdict.
-		return runBody(function* () {
-			return yield* Effect.gen(invoke).pipe(
+		runBody(function* () {
+			return yield* body_effect(() => body(...args)).pipe(
 				Effect.map(Verdict.dataOf),
 				Effect.catchIf(
 					(error): error is Refusal => error instanceof Refusal,
@@ -326,12 +406,9 @@ const wrap = (body: Body, at: number): Body => {
 						})
 				)
 			);
-		});
-	};
-	Object.defineProperty(wrapped, 'name', { value: body.name });
-	return Object.defineProperty(wrapped, Symbol.for('norbital.bolt.generator'), { value: body });
-};
+		}), at);
 /** Wires the edge into attach: a bundle that carries it calls this before any of its bodies attach. */
 export const install = (): void => {
 	attached.wrap = wrap;
+	attached.verdict = wrap_verdict;
 };

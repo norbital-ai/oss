@@ -9,7 +9,7 @@ import type { MigrationImpact } from '../../protocol/migration-impact.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
 import type { StudioInspectInput, StudioInspection } from './inspection.ts';
-import { href, kioskHref } from '../nav.ts';
+import { href, kiosk_href } from '../nav.ts';
 import type { StudioTestRun } from './test-results.ts';
 
 /** A changed file and what its diff needs: the head's `text` (absent: deleted, or not text) and the base's `baseline` (absent: added, or not text), each cut at the host's one-file text bound. */
@@ -59,12 +59,6 @@ export type StudioBuild = {
 	lines: number;
 	diagnostics: number;
 };
-/** One build's stored log (its last 5,000 lines, at most 1 MiB) and diagnostics, readable after the fact. */
-export type StudioBuildRecord = {
-	build: StudioBuild;
-	log: readonly StudioLogLine[];
-	diagnostics: readonly StudioDiagnostic[];
-};
 /** A tenant environment the host routes (`live`, a change's preview, …): `release` is the artifact it serves, `''` when unrouted. */
 type StudioEnvironment = { name: string; release: string; url: string | null };
 /**
@@ -92,7 +86,7 @@ export type StudioChangeSet = {
 	id: string;
 	title: string;
 	state: 'open' | 'merged' | 'closed';
-	openedBy: string;
+	opened_by: string;
 	contributors: readonly string[];
 	branch: string;
 	base: string;
@@ -111,11 +105,11 @@ export type StudioChangeSet = {
 		at: string;
 		head: string;
 		error?: string;
-		runAt?: string;
+		run_at?: string;
 	};
 	log: readonly StudioLogLine[];
-	createdAt: string;
-	updatedAt: string;
+	created_at: string;
+	updated_at: string;
 	/** Its head's last build's diagnosis. */
 	diagnostics?: readonly StudioDiagnostic[];
 };
@@ -168,15 +162,15 @@ export type StudioState = {
 	environments?: readonly StudioEnvironment[];
 	change?: string;
 	branch?: string;
-	previewOf?: StudioPreview;
+	preview_of?: StudioPreview;
 	/** The open change's preview control; absent: nobody claimed it. */
-	previewControl?: PreviewControl;
+	preview_control?: PreviewControl;
 	base?: string;
 	behind?: number;
 	conflicts?: readonly string[];
 	/** Why a migration among `conflicts` stopped, in plain words. */
-	conflictNotes?: readonly string[];
-	changeSets?: readonly StudioChangeSet[];
+	conflict_notes?: readonly string[];
+	change_sets?: readonly StudioChangeSet[];
 	/** The viewer's change's last build's diagnosis (empty: it built clean; absent: not built, or the host reports none). */
 	diagnostics?: readonly StudioDiagnostic[];
 	/** The retained builds, newest first; `StudioPort.build` reads one's log and diagnostics. */
@@ -187,7 +181,7 @@ export type StudioState = {
 /**
  * `change.open` works on an existing change (`id`): a person has one active change at a time, and their first edit starts
  * it, a branch from live and a copy-on-write fork of live's data as its preview. `draft` writes one path of
- * the viewer's working tree (the whole `content`, an `oldString` replacement, a move `to` another path or a `remove`)
+ * the viewer's working tree (the whole `content`, an `old_string` replacement, a move `to` another path or a `remove`)
  * and moves no head; with none open, it opens a change. `commit` makes the working tree the change's next
  * commit, in any state. `save` commits edits to the viewer's change over
  * `expected` (a stale head is refused; with none open, the save opens one named by its message), `null` deletes a
@@ -199,9 +193,9 @@ export type StudioState = {
  * `change.unschedule` drops the schedule. Its cutover is the tenant's only downtime: requests answer maintenance and
  * in-flight work is cancelled until the new release serves. `change.rebase` replays the viewer's commits on top of live,
  * and a merge needs that: merged migrations stay as they are and the viewer's are set on top, and what stops lands as
- * marked files with `conflictNotes`. `change.revert` drops a commit and those after it, source only: data rolls back on live alone.
+ * marked files with `conflict_notes`. `change.revert` drops a commit and those after it, source only: data rolls back on live alone.
  * `rollback` brings a Version back, source and data together, recording the state it leaves as an Undo Version first;
- * a schema change refuses it unless `discardDataSince` names the instant whose later writes it discards. It is neither
+ * a schema change refuses it unless `discard_data_since` names the instant whose later writes it discards. It is neither
  * the operator's database restore nor a record's restore. `approval.decide` approves (it runs as the viewer) or rejects
  * one of the viewer's held requests (`StudioState.approvals`).
  */
@@ -226,7 +220,7 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('save'),
 		expected: Schema.String,
-		/** What the save does, in the author's words: its commit message (absent: the host's `suggestMessage`). */
+		/** What the save does, in the author's words: its commit message (absent: the host's `suggest_message`). */
 		message: Schema.optionalKey(truncated(200)),
 		files: Schema.Record(Schema.String, Schema.NullOr(Schema.String)).check(
 			Schema.makeFilter((files) => Object.keys(files).every(Schema.is(safePath)))
@@ -236,12 +230,12 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('draft'),
 		path: safePath,
-		oldString: nonempty,
-		newString: Schema.String,
-		replaceAll: Schema.optionalKey(Schema.Boolean)
+		old_string: nonempty,
+		new_string: Schema.String,
+		replace_all: Schema.optionalKey(Schema.Boolean)
 	}),
 	/** One patch over the working tree, in OpenCode's patch language: its paths are checked as it applies. */
-	Schema.Struct({ op: Schema.Literal('draft'), patchText: nonempty }),
+	Schema.Struct({ op: Schema.Literal('draft'), patch_text: nonempty }),
 	Schema.Struct({ op: Schema.Literal('draft'), path: safePath, to: safePath }),
 	Schema.Struct({ op: Schema.Literal('draft'), path: safePath, remove: Schema.Literal(true) }),
 	Schema.Struct({ op: Schema.Literal('commit'), message: truncated(200) }),
@@ -295,7 +289,7 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('rollback'),
 		commit: nonempty,
-		discardDataSince: Schema.optionalKey(nonempty),
+		discard_data_since: Schema.optionalKey(nonempty),
 		/** Why, for the person approving it. */
 		summary: Schema.optionalKey(truncated(200))
 	}),
@@ -362,29 +356,13 @@ export type StudioPort = {
 		auth: Authority,
 		input: { from: string; to: string; path?: string }
 	): Promise<{ from: string; to: string; files: readonly StudioDiffFile[]; patch?: string }>;
-	/** One build's stored log and diagnostics by its commit (a unique prefix); `null`: no such build is retained. */
-	build?(auth: Authority, commit: string): Promise<StudioBuildRecord | null>;
 	/** This workspace's frames as they happen, never another's; answers the unsubscribe. Absent → no live stream. */
 	watch?(auth: Authority, send: (frame: StudioFrame) => void): () => void;
-	/** This workspace's own resource use over time (an administrator's). Absent → no Usage view. */
-	usage?(auth: Authority): Promise<StudioUsage>;
 	/** Curated operational diagnostics shared with Realm across the current HOST_API contract. */
 	inspect(auth: Authority, input: StudioInspectInput): Promise<StudioInspection>;
 	/** Where this host serves Studio's browser bundle (`slot.ts`), under the workspace; `null`: it has none to serve. */
 	bundle?(): Promise<string | null>;
 };
-/**
- * The host's metering of this workspace: one chart per measure, each point a time (epoch milliseconds) and the peak or
- * total of its interval (null when unmeasured). `unit` is `bytes`, `MiB`, `seconds`, `micro-SGD` or a plain count noun.
- */
-export type StudioUsage = {
-	charts: readonly {
-		title: string;
-		unit: string;
-		points: readonly { at: number; value: number | null }[];
-	}[];
-};
-
 export const SECTIONS = ['models', 'apps', 'kiosks', 'policies', 'automations', 'secrets'] as const;
 export type Section = (typeof SECTIONS)[number];
 /** A declaration: its path-derived name, the source file it comes from (rule 1), and where it opens (an app). */
@@ -399,7 +377,7 @@ export type StudioView = Omit<StudioState, 'manifest'> & {
 	stale?: true;
 };
 
-export function studioView({ manifest: m, ...rest }: StudioState): StudioView {
+export function studio_view({ manifest: m, ...rest }: StudioState): StudioView {
 	if (m === null) return { ...rest, sections: null };
 	const at = (o: object | undefined, path: (name: string) => string) =>
 		Object.keys(o ?? {})
@@ -412,7 +390,7 @@ export function studioView({ manifest: m, ...rest }: StudioState): StudioView {
 			.map((e) => ({ ...e, href: href(e.name) })),
 		kiosks: at(m.apps, (n) => `src/app/${n}/+app.ts`)
 			.filter(({ name }) => m.apps[name]?.shell === 'kiosk')
-			.map((e) => ({ ...e, href: kioskHref(e.name) })),
+			.map((e) => ({ ...e, href: kiosk_href(e.name) })),
 		policies: at(m.policies, (n) => `src/access_control/policy/+${n}.policy.ts`),
 		automations: at(m.automations, (n) => `src/automation/+${n}.automation.ts`),
 		secrets: at(m.workspace.secrets, () => 'src/+secrets.ts')
@@ -422,13 +400,13 @@ export function studioView({ manifest: m, ...rest }: StudioState): StudioView {
 }
 
 /** A running step's elapsed time as `m:ss`. */
-export const elapsedText = (ms: number) => {
+export const elapsed_text = (ms: number) => {
 	const seconds = Math.max(0, Math.round(ms / 1000));
 	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
 /** What a save changes, in plain words, from its drafts (`null`: deleted) over the tree they change. */
-export function suggestMessage(
+export function suggest_message(
 	drafts: { readonly [path: string]: unknown },
 	files: { readonly [path: string]: unknown }
 ): string {
@@ -447,18 +425,8 @@ export function suggestMessage(
 	});
 	return words.length <= 2 ? words.join(', ') : `${words[0]} and ${words.length - 1} more files`;
 }
-/** The commits the host itself makes: nothing a person would say about the change. */
-const HOST_COMMIT = /^(Merge live into |generate the next migration|squash migrations: )/;
-/** The environment the Operations pane summarizes: `live` when routed, else the first routed one; none routed → undefined. */
-export function routedEnvironment(
-	envs: readonly StudioEnvironment[] | undefined
-): StudioEnvironment | undefined {
-	const routed = (envs ?? []).filter((e) => e.release !== '');
-	return routed.find((e) => e.name === 'live') ?? routed[0];
-}
-
 /** L-BOLT-528: the CodeEditor language a path is edited in. */
-export function languageOf(path: string): 'javascript' | 'json' | 'plaintext' {
+export function language_of(path: string): 'javascript' | 'json' | 'plaintext' {
 	return /\.(?:[cm]?[jt]s|svelte)$/.test(path)
 		? 'javascript'
 		: path.endsWith('.json')

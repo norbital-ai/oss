@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { wechat, wechatDecrypt, wechatSignature } from '../src/wechat/index.ts';
-import { fakeFetch, file, host, json, signal } from './kit.ts';
+import { required, fakeFetch, file, host, json, signal } from './kit.ts';
 
 const KEY = 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG',
 	APP = 'wx0123456789abcdef',
@@ -58,16 +58,16 @@ describe('WeChat', () => {
 		Effect.gen(function* () {
 			const h = yield* host(wechat(), api());
 			expect(
-				(yield* Effect.flip(h.link.pair!({ ...CRED, encodingAesKey: 'short' }))).message
+				(yield* Effect.flip(required(h.link.pair)({ ...CRED, encodingAesKey: 'short' }))).message
 			).toMatch(/EncodingAESKey does not look right/);
-			expect((yield* Effect.flip(h.link.pair!({ ...CRED, appId: 'nope' }))).message).toMatch(
+			expect((yield* Effect.flip(required(h.link.pair)({ ...CRED, appId: 'nope' }))).message).toMatch(
 				/AppID/
 			);
-			expect((yield* Effect.flip(h.link.pair!({ ...CRED, appSecret: 'wrong' }))).message).toMatch(
+			expect((yield* Effect.flip(required(h.link.pair)({ ...CRED, appSecret: 'wrong' }))).message).toMatch(
 				/invalid appsecret/
 			);
 			expect(h.writes).toEqual([]);
-			yield* h.link.pair!(CRED);
+			yield* required(h.link.pair)(CRED);
 			expect(Object.fromEntries(h.values)).toEqual({ credential: CRED });
 			expect(h.status).toMatchObject({ state: 'connected', account: APP, about: { account: APP } });
 		})
@@ -76,7 +76,7 @@ describe('WeChat', () => {
 		Effect.gen(function* () {
 			const h = yield* host(wechat(), api(), { credential: CRED });
 			const check = (sig: string) =>
-				h.link.webhook!(
+				required(h.link.webhook)(
 					new Request(`https://internal/hook?signature=${sig}&timestamp=1&nonce=n&echostr=echo-9`)
 				);
 			expect(
@@ -92,12 +92,12 @@ describe('WeChat', () => {
 		() =>
 			Effect.gen(function* () {
 				const h = yield* host(wechat(), api(), { credential: CRED });
-				expect((yield* h.link.webhook!(post(encrypt(text), 'bad'))).status).toBe(401);
-				expect((yield* h.link.webhook!(post(encrypt(text, 'wxffffffffffffffff')))).status).toBe(
+				expect((yield* required(h.link.webhook)(post(encrypt(text), 'bad'))).status).toBe(401);
+				expect((yield* required(h.link.webhook)(post(encrypt(text, 'wxffffffffffffffff')))).status).toBe(
 					401
 				);
 				expect(h.events).toEqual([]);
-				const r = yield* h.link.webhook!(post(encrypt(text)));
+				const r = yield* required(h.link.webhook)(post(encrypt(text)));
 				expect(yield* Effect.tryPromise(() => r.text())).toBe('success');
 				expect(h.events).toEqual([
 					{
@@ -106,12 +106,12 @@ describe('WeChat', () => {
 							{
 								id: '2001',
 								thread: 'openid-1',
-								sentAt: '2026-09-21T14:13:20.000Z',
+								sent_at: '2026-09-21T14:13:20.000Z',
 								from: { handle: 'openid-1', name: null },
 								text: '你好',
 								group: false,
 								invocation: 'direct',
-								replyTo: null,
+								reply_to: null,
 								attachments: []
 							}
 						]
@@ -140,7 +140,7 @@ describe('WeChat', () => {
 				new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } })
 			);
 			const h = yield* host(wechat(), f, { credential: CRED });
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				post(
 					encrypt(
 						xml(
@@ -150,7 +150,7 @@ describe('WeChat', () => {
 					)
 				)
 			);
-			expect(new URL(f.calls.at(-1)!.url).searchParams.get('media_id')).toBe('M1');
+			expect(new URL(required(f.calls.at(-1)).url).searchParams.get('media_id')).toBe('M1');
 			expect(h.events).toMatchObject([
 				{
 					messages: [
@@ -173,8 +173,8 @@ describe('WeChat', () => {
 			const video = encrypt(
 				xml('video', '<MediaId><![CDATA[M2]]></MediaId><ThumbMediaId><![CDATA[T2]]></ThumbMediaId>')
 			);
-			yield* h.link.webhook!(post(video));
-			yield* h.link.webhook!(post(video));
+			yield* required(h.link.webhook)(post(video));
+			yield* required(h.link.webhook)(post(video));
 			expect(h.events).toMatchObject([
 				{
 					messages: [{ id: '3001', attachments: [{ mime: 'video/mp4', bytes: 2, bin: 0 }] }],
@@ -189,7 +189,7 @@ describe('WeChat', () => {
 			const h = yield* host(wechat(), media(json({ errcode: 40007, errmsg: 'invalid media_id' })), {
 				credential: CRED
 			});
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				post(
 					encrypt(
 						xml('voice', '<MediaId><![CDATA[M3]]></MediaId><Format><![CDATA[Speex]]></Format>')
@@ -207,7 +207,7 @@ describe('WeChat', () => {
 			const down = yield* host(wechat(), media(new Response('<html>', { status: 502, headers: { 'content-type': 'text/html' } })), {
 				credential: CRED
 			});
-			yield* down.link.webhook!(post(encrypt(xml('image', '<MediaId><![CDATA[M5]]></MediaId>'))));
+			yield* required(down.link.webhook)(post(encrypt(xml('image', '<MediaId><![CDATA[M5]]></MediaId>'))));
 			expect(down.events[0]).not.toHaveProperty('bins');
 		})
 	);
@@ -227,14 +227,14 @@ describe('WeChat', () => {
 				}
 			]);
 			const h = yield* host(wechat(), f, { credential: CRED });
-			yield* h.link.webhook!(post(encrypt(xml('image', '<MediaId><![CDATA[M4]]></MediaId>'))));
+			yield* required(h.link.webhook)(post(encrypt(xml('image', '<MediaId><![CDATA[M4]]></MediaId>'))));
 			expect(h.events).toMatchObject([{ bins: [new Uint8Array([8])] }]);
 		})
 	);
 	it.effect('a location and a link are their text; an event is still no message', () =>
 		Effect.gen(function* () {
 			const h = yield* host(wechat(), api(), { credential: CRED });
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				post(
 					encrypt(
 						xml(
@@ -244,7 +244,7 @@ describe('WeChat', () => {
 					)
 				)
 			);
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				post(
 					encrypt(
 						xml(
@@ -255,7 +255,7 @@ describe('WeChat', () => {
 					)
 				)
 			);
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				post(encrypt(xml('event', '<Event><![CDATA[subscribe]]></Event>', null)))
 			);
 			expect(h.events).toMatchObject([
@@ -271,8 +271,8 @@ describe('WeChat', () => {
 			Effect.gen(function* () {
 				const h = yield* host(wechat(), api(), { credential: CRED });
 				const push = encrypt(xml('text', '<Content><![CDATA[hi]]></Content>', null));
-				yield* h.link.webhook!(post(push));
-				yield* h.link.webhook!(post(push));
+				yield* required(h.link.webhook)(post(push));
+				yield* required(h.link.webhook)(post(push));
 				expect(h.events).toMatchObject([
 					{ messages: [{ id: 'openid-1:1790000000' }] },
 					{ messages: [{ id: 'openid-1:1790000000' }] }
@@ -283,27 +283,27 @@ describe('WeChat', () => {
 		Effect.gen(function* () {
 			const h = yield* host(wechat(), api(), { credential: CRED });
 			const hello = { id: 'm-9', to: 'openid-1', text: 'hi' };
-			const first = yield* h.link.send!(hello, undefined);
-			expect(first).toEqual({ providerId: 'wx-m-9' });
-			expect(yield* h.link.send!(hello, undefined)).toEqual(first);
+			const first = yield* required(h.link.send)(hello, undefined);
+			expect(first).toEqual({ provider_id: 'wx-m-9' });
+			expect(yield* required(h.link.send)(hello, undefined)).toEqual(first);
 		})
 	);
 	it.effect('sends through the customer-service API; an expired token is fetched again once', () =>
 		Effect.gen(function* () {
 			const f = api([42001]),
 				h = yield* host(wechat(), f, { credential: CRED });
-			yield* h.link.send!({ id: 'm-1', to: 'openid-1', text: 'hi' }, undefined);
+			yield* required(h.link.send)({ id: 'm-1', to: 'openid-1', text: 'hi' }, undefined);
 			const sends = f.calls.filter((c) => c.url.includes('/message/custom/send'));
 			expect(sends).toHaveLength(2);
-			expect(sends[1]!.url).not.toBe(sends[0]!.url);
-			expect(JSON.parse(sends[1]!.body)).toEqual({
+			expect(required(sends[1]).url).not.toBe(required(sends[0]).url);
+			expect(JSON.parse(required(sends[1]).body)).toEqual({
 				touser: 'openid-1',
 				msgtype: 'text',
 				text: { content: 'hi' }
 			});
 			expect(
 				(yield* Effect.flip(
-					(yield* host(wechat(), api([45015]), { credential: CRED })).link.send!(
+					required((yield* host(wechat(), api([45015]), { credential: CRED })).link.send)(
 						{ id: 'm-2', to: 'o', text: 'x' },
 						undefined
 					)
@@ -315,13 +315,15 @@ describe('WeChat', () => {
 		Effect.gen(function* () {
 			const f = api(),
 				h = yield* host(wechat(), f, { credential: CRED });
-			yield* h.link.send!({ id: 'm-3', to: 'openid-1', text: 'hi' }, [
+			yield* required(h.link.send)({ id: 'm-3', to: 'openid-1', text: 'hi' }, [
 				file('report.pdf', 'application/pdf', '%PDF r'),
 				file('chart.png', 'image/png', 'png')
 			]);
-			const upload = f.calls.find((c) => c.url.includes('/media/upload'))!;
+			const upload = required(f.calls.find((c) => c.url.includes('/media/upload')));
 			expect(upload.url).toMatch(/type=image$/);
-			expect((upload.form!.get('media') as File).name).toBe('chart.png');
+			const media = required(upload.form).get('media');
+			if (!(media instanceof File)) throw new Error('The uploaded image is missing.');
+			expect(media.name).toBe('chart.png');
 			expect(
 				f.calls.filter((c) => c.url.includes('/message/custom/send')).map((c) => JSON.parse(c.body))
 			).toEqual([

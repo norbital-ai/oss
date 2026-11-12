@@ -1,25 +1,25 @@
 // The host intent is durable before acquisition; the tenant keeps only correlation, never an audit payload outbox.
 import { Array as EffectArray, Clock, Effect, Predicate, Result, Schema } from 'effect';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/std/wire';
 import type { AuditActor, AuditEvent } from '../protocol/audit.ts';
 import type { EngineActor } from './contracts.ts';
 import type { Json } from '../decl/values.ts';
 import type { TenantDbShape } from './db/tenant-db.ts';
 import { Audit, AuditRecoveryActive, requestAuditRecovery } from './audit.ts';
-import { AuditMutation } from './audit-context.ts';
-import { acknowledgeAudit, drainAuditErases, expireAudit } from './audit-retention.ts';
+import { AuditMutation, type AuditCommitted } from './audit-context.ts';
+import { acknowledgeAudit, acknowledgements, drainAuditErases, expireAudit } from './audit-retention.ts';
 import { BoltError } from '../protocol/errors.ts';
 
 const jsonPayload = (value: unknown) =>
 	Effect.try({
 		try: () => JSON.stringify(value),
-		catch: (error) => BoltError.make('invalidInput', 'facility', String(error))
+		catch: (error) => BoltError.make('invalid_input', 'facility', String(error))
 	}).pipe(
 		Effect.flatMap((value) =>
 			Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(value)
 		),
 		Effect.mapError((error) =>
-			error instanceof BoltError ? error : BoltError.make('invalidInput', 'facility', String(error))
+			error instanceof BoltError ? error : BoltError.make('invalid_input', 'facility', String(error))
 		)
 	);
 export const auditActor = (actor: EngineActor): AuditActor => ({
@@ -47,7 +47,10 @@ export type AuditIntent = {
 	readonly outcomeKey?: string;
 	readonly digest?: string;
 };
-export const prepareAudit = Effect.fn('Audit.prepare')(function* (intent: AuditIntent) {
+export const prepareAudit = Effect.fn('Audit.prepare')(function* (
+	intent: AuditIntent,
+	acknowledge: readonly string[] = []
+) {
 	const audit = yield* Audit;
 	if (audit.mode === 'disabled')
 		return yield* BoltError.make(
@@ -56,10 +59,10 @@ export const prepareAudit = Effect.fn('Audit.prepare')(function* (intent: AuditI
 			'An audit store is required for this mutation.'
 		);
 	const at = new Date(yield* Clock.currentTimeMillis).toISOString();
-	const operationId = yield* audit.uuid;
+	const operation_id = yield* audit.uuid;
 	const event: AuditEvent = {
-		id: `${operationId}:prepared`,
-		operationId,
+		id: `${operation_id}:prepared`,
+		operation_id,
 		at,
 		category: intent.category,
 		action: intent.action,
@@ -77,22 +80,25 @@ export const prepareAudit = Effect.fn('Audit.prepare')(function* (intent: AuditI
 	if (
 		stored === null ||
 		stored.id !== event.id ||
-		stored.operationId !== operationId ||
+		stored.operation_id !== operation_id ||
 		stored.status !== 'prepared' ||
-		!Number.isFinite(Date.parse(stored.recordedAt))
+		!Number.isFinite(Date.parse(stored.recorded_at))
 	)
 		return yield* BoltError.make(
-			'badAnswer',
+			'bad_answer',
 			'facility',
 			'The audit store did not retain its prepared event and recording time.'
 		);
+	const committed: AuditMutation['committed'] = {};
 	return {
 		event,
-		recordedAt: stored.recordedAt,
+		recorded_at: stored.recorded_at,
 		...(intent.outcomeKey === undefined ? {} : { outcomeKey: intent.outcomeKey }),
 		...(intent.digest === undefined ? {} : { digest: intent.digest }),
 		...(intent.run === undefined ? {} : { run: intent.run }),
-		...(intent.approval === undefined ? {} : { approval: intent.approval })
+		...(intent.approval === undefined ? {} : { approval: intent.approval }),
+		acknowledge,
+		committed
 	} satisfies AuditMutation;
 });
 const History = Schema.Struct({
@@ -138,7 +144,7 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 		// Receipt and images share one snapshot: an acknowledgement may permit a concurrent history purge.
 		text: `WITH receipt AS (SELECT r.at::text AS at,o.outcome,coalesce(r.digest IS NOT NULL AND i.digest IS DISTINCT FROM r.digest,false) AS key_reuse,
 		r.acknowledged_at IS NOT NULL AS acknowledged,r.expired_at IS NOT NULL AS expired,
-		coalesce(r.expires_at,(SELECT expires_at FROM bolt_audit_retention WHERE one))<=clock_timestamp() AS due
+		r.expires_at<=clock_timestamp() AS due
 		FROM bolt_audit_receipt r LEFT JOIN bolt_idem i ON i.key=r.outcome_key
 		LEFT JOIN bolt_idem_outcome o ON o.key=i.key WHERE r.operation=$1),
 		history AS (SELECT h.collection AS model,h.record::text AS id,h.revision,h.at::text AS at,h.actor,h.op,h.cause,
@@ -149,49 +155,90 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 		(SELECT DISTINCT ON(x.key) x.key,x.value FROM bolt_history p CROSS JOIN LATERAL jsonb_each(p.changes) x WHERE p.collection=h.collection AND p.record=h.record AND p.revision<=h.revision ORDER BY x.key,p.revision DESC) e) || h.meta END AS new
 		FROM bolt_history h WHERE h.operation=$1 AND NOT (SELECT acknowledged OR expired FROM receipt))
 		SELECT receipt.*,coalesce((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.model,h.id,h.revision) FROM history h),'[]'::jsonb) AS records FROM receipt`,
-		params: [event.operationId]
+		params: [event.operation_id]
 	});
 	if (receipt._tag === 'None') return false;
 	if (receipt.value.acknowledged || receipt.value.expired) return true;
 	if (
 		receipt.value.due &&
-		(yield* (yield* Audit).detail(`${event.operationId}:prepared`)) === null
+		(yield* (yield* Audit).detail(`${event.operation_id}:prepared`)) === null
 	) {
-		if (yield* expireAudit(db, event.operationId)) yield* drainAuditErases(db);
+		if (yield* expireAudit(db, event.operation_id)) yield* drainAuditErases(db);
 		return true;
 	}
-	const written = receipt.value.records;
-	const outcome = receipt.value.key_reuse
-		? { kind: 'refused', code: 'keyReuse', message: 'This key was used for a different request.' }
-		: receipt.value.outcome;
+	const status = yield* appendTerminal(event, {
+		outcome: receipt.value.key_reuse
+			? { kind: 'refused', code: 'key_reuse', message: 'This key was used for a different request.' }
+			: receipt.value.outcome,
+		records: receipt.value.records,
+		committedAt: receipt.value.at
+	});
+	// an unknown commit stays pending for recovery to settle later
+	if (status === 'unknown') yield* requestAuditRecovery(yield* Audit);
+	else if (yield* acknowledgeAudit(db, event.operation_id)) yield* drainAuditErases(db);
+	return true;
+});
+/** The row events and the terminal event of a committed operation, appended together; answers its status. */
+const appendTerminal = Effect.fn('Audit.appendTerminal')(function* (
+	event: AuditEvent,
+	settled: { readonly outcome: Json; readonly records: readonly (typeof History.Type)[]; readonly committedAt: string }
+) {
+	const { outcome, committedAt } = settled;
+	const written = settled.records;
 	const status = outcome === null ? 'committed' : statusOf(outcome);
 	const terminal: AuditEvent = {
 		...event,
-		id: `${event.operationId}:${status === 'unknown' ? 'unknown' : 'terminal'}`,
+		id: `${event.operation_id}:${status === 'unknown' ? 'unknown' : 'terminal'}`,
 		status,
-		payload: encodeWire({
+		payload: encode_wire({
 			request: event.payload,
 			outcome,
 			records: written,
-			committedAt: receipt.value.at
+			committedAt
 		})
 	};
 	// the request rides on a row event only when it wrote that one row: a bulk write's request is the terminal event's
 	// alone, as copying it into each of its N row events is N² bytes (a 1,700-row import overran its 2 s of CPU)
 	const rows: AuditEvent[] = written.map((row) => ({
 		...event,
-		id: `${event.operationId}:row:${row.model}:${row.id}:${row.revision}`,
+		id: `${event.operation_id}:row:${row.model}:${row.id}:${row.revision}`,
 		action: `${row.model}.${row.op}`,
 		status,
 		subject: { model: row.model, id: row.id, revision: row.revision },
-		payload: encodeWire(
+		payload: encode_wire(
 			written.length === 1 ? { request: event.payload, change: row } : { change: row }
 		)
 	}));
 	yield* (yield* Audit).append([...rows, terminal]);
-	// an unknown commit stays pending for recovery to settle later
-	if (status === 'unknown') yield* requestAuditRecovery(yield* Audit);
-	else if (yield* acknowledgeAudit(db, event.operationId)) yield* drainAuditErases(db);
+	return status;
+});
+/**
+ * A commit statement answered its own receipt and images, so its terminal event needs no read. Its acknowledgement
+ * rides on the next commit statement (an erasure's, whose purge waits for it, follows at once); recovery acknowledges
+ * any left when the process stops first.
+ */
+const appendCommitted = Effect.fn('Audit.appendCommitted')(function* (
+	db: TenantDbShape,
+	event: AuditEvent,
+	committed: AuditCommitted
+) {
+	yield* appendTerminal(event, {
+		outcome: committed.outcome,
+		records: committed.records.map((row) => ({
+			model: row.model,
+			id: row.id,
+			revision: row.revision,
+			at: committed.at,
+			actor: committed.actor,
+			op: row.op,
+			cause: row.cause,
+			old: row.old,
+			new: row.new
+		})),
+		committedAt: committed.committedAt
+	});
+	if (!committed.erase) acknowledgements(db).add(event.operation_id);
+	else if (yield* acknowledgeAudit(db, event.operation_id)) yield* drainAuditErases(db);
 	return true;
 });
 export const recoverAudit = Effect.fn('Audit.recover')(
@@ -211,7 +258,7 @@ export const recoverAudit = Effect.fn('Audit.recover')(
 				Schema.Struct({ operation: Schema.String, at: Schema.String, due: Schema.Boolean }),
 				{
 					text: `SELECT operation,at::text AS at,
-			coalesce(expires_at,(SELECT expires_at FROM bolt_audit_retention WHERE one))<=clock_timestamp() AS due
+			expires_at<=clock_timestamp() AS due
 			FROM bolt_audit_receipt WHERE acknowledged_at IS NULL AND expired_at IS NULL
 			AND ($1::text IS NULL OR operation>$1) ORDER BY operation LIMIT 200`,
 					params: [operation ?? null]
@@ -253,7 +300,8 @@ export const audited = <A, E, R>(
 ): Effect.Effect<A, E | BoltError | import('./errors.ts').DbError, R> =>
 	Effect.gen(function* () {
 		if ((yield* AuditMutation) !== undefined) return yield* effect;
-		const operation = yield* prepareAudit(intent);
+		const pending = acknowledgements(db);
+		const operation = yield* prepareAudit(intent, [...pending]);
 		// Recovery wakes only for an operation this fiber leaves unsettled (failed, unknown or interrupted): a settled
 		// one has nothing to recover.
 		let settled = false;
@@ -262,9 +310,13 @@ export const audited = <A, E, R>(
 			const result = yield* Effect.result(
 				effect.pipe(Effect.provideService(AuditMutation, operation))
 			);
-			const resolved = yield* settleAudit(db, operation.event).pipe(
-				Effect.catch((error) => Effect.andThen(Effect.logWarning(error), Effect.succeed(undefined)))
-			);
+			const committed = operation.committed.value;
+			// the statement that committed acknowledged the earlier operations it carried
+			if (committed !== undefined && !committed.erase) for (const id of operation.acknowledge ?? []) pending.delete(id);
+			const resolved = yield* (committed === undefined
+				? settleAudit(db, operation.event)
+				: appendCommitted(db, operation.event, committed)
+			).pipe(Effect.catch((error) => Effect.andThen(Effect.logWarning(error), Effect.succeed(undefined))));
 			// settleAudit wakes recovery itself for an unknown commit
 			if (resolved === true) settled = true;
 			if (resolved === false) {
@@ -272,7 +324,8 @@ export const audited = <A, E, R>(
 					Result.isFailure(result) &&
 					Predicate.hasProperty(result.failure, 'sqlstate') &&
 					typeof result.failure.sqlstate === 'string' &&
-					result.failure.sqlstate.startsWith('08');
+					(result.failure.sqlstate.startsWith('08') ||
+						(Predicate.hasProperty(result.failure, 'outcome_unknown') && result.failure.outcome_unknown === true));
 				const payload = yield* jsonPayload({
 					request: intent.payload,
 					...(Result.isFailure(result)
@@ -286,7 +339,7 @@ export const audited = <A, E, R>(
 						: statusOf(result.success);
 				const event: AuditEvent = {
 					...operation.event,
-					id: `${operation.event.operationId}:${status === 'unknown' ? 'unknown' : 'terminal'}`,
+					id: `${operation.event.operation_id}:${status === 'unknown' ? 'unknown' : 'terminal'}`,
 					status,
 					payload
 				};

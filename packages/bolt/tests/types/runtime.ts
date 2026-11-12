@@ -3,7 +3,7 @@
 import { app, automation, id_of, group, mcp, secrets, workspace } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
 import { currency } from '@norbital-ai/std/decimal';
-import type { Actor, CurrencyCode, FileRef, Id, Instant } from '../../src/index.ts';
+import type { Actor, CurrencyCode, FileRef, Id, InstanceId, Instant, Row } from '../../src/index.ts';
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
 import type { SkillFrontmatter } from '../../src/decl/runtime/agent.ts';
 import type { StartInput } from '../../src/decl/runtime/facilities.ts';
@@ -14,6 +14,12 @@ import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
+// runtime instances: ctx.send and ctx.request take an instance id, never a definition name
+declare const erp_account: InstanceId<'erp'>;
+declare const whatsapp_account: InstanceId<'whatsapp'>;
+declare const mail_account: InstanceId<'support_mail'>;
+declare const either: InstanceId<'whatsapp'> | InstanceId<'support_mail'>;
+declare const billing_account: InstanceId<'billing'>;
 
 // ── run inputs and outputs, from the literal ──
 is<Eq<RunInput<typeof rt.follow_up.spec>, { readonly ids: readonly Id<'orders'>[] }>>(); // declared input
@@ -21,7 +27,7 @@ is<Eq<RunInput<typeof rt.render.spec>, { readonly order: Id<'orders'> }>>(); // 
 is<Eq<RunInput<typeof rt.nightly.spec>, {}>>(); // cron: nothing
 is<Eq<RunOutput<typeof rt.nightly.spec>, number>>();
 is<Eq<RunOutput<typeof rt.render.spec>, FileRef>>();
-is<Eq<StartInput<'products.sync.ledger'>, { readonly [key: string]: never }>>(); // a remote sync read takes no input
+is<Eq<StartInput<'products.sync.ledger'>, never>>(); // sync control is separate from automation starts
 const mixed = automation({
 	...rt.follow_up.spec,
 	description: 'x',
@@ -33,22 +39,9 @@ const mixed = automation({
 	],
 	run: function* ({ ids = [] }, ctx) {
 		is<Eq<typeof ctx.actor.kind, 'system'>>();
-		yield* ctx.act(
-			'orders.update',
-			ids.map((id) => ({ target: id, set: { note: 'swept' } }))
-		);
+		const orders = (yield* ctx.query({ orders: { where: { id: { in: ids } } } })).orders.rows;
+		yield* ctx.act({ 'orders.update': orders.map((target) => ({ target, set: { note: 'swept' } })) });
 		const id = ids[0];
-		if (id !== undefined) {
-			yield* ctx.act('orders.update', [{ target: id, set: { note: 'observed' } }], {
-				observed: { [id]: 1 }
-			});
-			yield* ctx.act(
-				'orders.update',
-				[{ target: id, set: { note: 'invalid' } }],
-				// @ts-expect-error an observed revision is numeric
-				{ observed: { [id]: '1' } }
-			);
-		}
 		if (id !== undefined) yield* ctx.schedule('render', { order: id });
 		yield* ctx.schedule('nightly', {});
 		yield* ctx.ai.sys_2.infer({ prompt: 'x', tools: ['browser'] });
@@ -130,7 +123,7 @@ const mixed = automation({
 			for: 'sites.photos'
 		});
 		yield* ctx.files.image(ref, { jpeg: { max_edge: 1024 } });
-		yield* ctx.send('support', { to: ['a@b.co'], subject: 'x', text: String(n) });
+		yield* ctx.send(mail_account, { to: ['a@b.co'], subject: 'x', text: String(n) });
 		void (ctx.now satisfies Instant);
 	}
 });
@@ -314,12 +307,11 @@ automation({
 		// @ts-expect-error B5 an input for an automation that declares none
 		yield* ctx.schedule('nightly', { force: true });
 		// @ts-expect-error B6 an email message through a chat connection
-		yield* ctx.send('whatsapp', { to: ['a@b.co'], subject: 'x' });
-		const either = Math.random() > 0.5 ? ('whatsapp' as const) : ('support' as const);
+		yield* ctx.send(whatsapp_account, { to: ['a@b.co'], subject: 'x' });
 		// @ts-expect-error B7 a union-typed connection (§3.3.9)
 		yield* ctx.send(either, { to: '+65', text: 'x' });
 		// @ts-expect-error B8 an unknown connection
-		yield* ctx.request('billing', { method: 'GET', path: 'x', output: { kind: 'text' } });
+		yield* ctx.request(billing_account, { method: 'GET', path: 'x', output: { kind: 'text' } });
 		// @ts-expect-error B9 a file owner that is not a file field
 		yield* ctx.convert.document({ markdown: '' }, { to: 'pdf', name: 'x.pdf', for: 'orders.note' });
 		// a declared target with its own options: a docx takes a styling reference, a pdf its paper
@@ -344,7 +336,7 @@ automation({
 		// @ts-expect-error B10 refusal row indices are numeric
 		ctx.refuse('no', { row: 'first' });
 		// @ts-expect-error B11 an http output of an unknown kind
-		yield* ctx.request('erp', { method: 'POST', path: 'x', output: { kind: 'txt' } });
+		yield* ctx.request(erp_account, { method: 'POST', path: 'x', output: { kind: 'txt' } });
 		// @ts-expect-error B12 a notice with a non-string team ID
 		yield* ctx.notify({ to: [{ team: 42 }], title: 'x' });
 		// @ts-expect-error B13 an AI model class that does not exist
@@ -512,7 +504,7 @@ bind_model('notice_notes')({
 secrets({ erpUrl: { label: 'x' } });
 // @ts-expect-error WS2 a secret takes no default
 secrets({ ERP_URL: { label: 'x', default: 'https://x' } });
-// @ts-expect-error WS3 the default model class must be one the workspace declares
+// @ts-expect-error WS3 workspace AI model classes and defaults are host configuration
 workspace({ tz: 'UTC', locale: 'en', ai: { models: ['fast'], default: 'strong' } });
 // @ts-expect-error WS4 an unknown app in the launcher order
 workspace({ tz: 'UTC', locale: 'en', apps: ['crm'] });
@@ -563,7 +555,7 @@ automation({
 	run: function* (_, ctx) {
 		yield* ctx.schedule('nightly', {});
 		yield* ctx.notify({ to: [{ policy: 'sales_rep' }], title: 'x' });
-		yield* ctx.request('erp', { method: 'GET', path: 'x', output: { kind: 'json' } });
+		yield* ctx.request(erp_account, { method: 'GET', path: 'x', output: { kind: 'json' } });
 	}
 });
 
@@ -571,3 +563,17 @@ automation({
 is<Eq<ReturnType<typeof id_of<'orders'>>['Type'], Id<'orders'>>>();
 // @ts-expect-error a model the workspace does not declare
 id_of('no_such_model');
+
+// Selection inputs cross as ids and load complete admitted rows before a call body runs.
+const selected_call = automation({
+	description: 'Count selected orders', mode: 'call', policies: ['sales_rep'],
+	input: { orders: { kind: 'rows', of: 'orders' } }, output: { kind: 'int' },
+	run: function* ({ orders }) {
+		is<Eq<typeof orders, readonly Row<'orders'>[]>>();
+		return orders.length;
+	}
+});
+is<Eq<RunInput<typeof selected_call.spec>, { readonly orders: readonly Row<'orders'>[] }>>();
+// @ts-expect-error rows inputs select readable models
+// prettier-ignore
+automation({ description: 'x', mode: 'call', policies: ['sales_rep'], input: { rows: { kind: 'rows', of: 'missing_model' } }, run: function* () {} });

@@ -4,10 +4,10 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Ap
 
 ## Workspace and secrets
 
-- `+workspace.ts` declares zone, locale, currency, launcher order (`apps`), `ai` classes and embeddings (the host maps them to providers), `agent`, `csp`, `convert`, `signup` and `connections`.
+- `+workspace.ts` declares zone, locale, currency, launcher order (`apps`), `ai` classes and embeddings (the host maps them to providers), `agent`, `csp`, `convert` and `signup`. Accounts and envoys are runtime records; administrators choose chat models and spending limits in Settings.
 - `+secrets.ts` is the one place secrets are declared: `UPPER_SNAKE` name, `label`, optional `description`; no defaults or non-secret values. Values are set in Settings and sealed in the tenant database.
 - Secret names hold OAuth clients, MCP URLs and credentials, and webhook secrets. An integration's own secret is its `credential`, sealed per instance at pairing.
-- Server Effect bodies read declared values through `Config.Redacted(name)` from `effect`, in automations, callbacks and loaders; `Config.option` for optional ones. A required unset value fails. Use `Redacted.value` only where plaintext is needed.
+- Server Effect bodies read declared values through `Config.Redacted(name)` from `effect`, in automations, callbacks and syncs; `Config.option` for optional ones. A required unset value fails. Use `Redacted.value` only where plaintext is needed.
 - Keep values out of page data, logs, chat and source. Clients and declaration evaluation get none.
 
 ## Apps, groups and pages
@@ -22,10 +22,10 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Ap
 ## Audiences
 
 - `audience`: `members`, `external`, `all`, or `{ public: [...policies], challenge? }`.
-- A public app runs as an anonymous visitor holding exactly those policies: `create` on a submission model and field-listed `read` of published or own rows. The build refuses the rest.
+- A public app runs as an anonymous visitor holding exactly those policies: `create` on a submission model and declared output grants for published or own rows. The build refuses the rest.
 - A public app can use the kiosk shell. The policies in `audience.public` govern access inside it.
 - External newcomers join through `signup` or invitation. `signup.policies` are what they hold outside portals: keep that an empty `grants: {}` policy for portal-only customers. Scope rows with `{ var: 'requestor.id' }` or `{ var: 'requestor.party' }`.
-- External members open no members app. Staff open a signed-in kiosk through `capabilities.apps`. An external portal's policies list fields, never delete, and hold no `capabilities`.
+- External members open no members app. Staff open a signed-in kiosk through `capabilities.apps`. An external portal's policies grant narrow outputs and write columns, never delete, and hold no `capabilities`.
 - A page with `portal: true` renders alone and is listed under the account menu. The app’s `embed` allows the named sites to frame any of its pages. `audience` decides who opens each page.
 
 ## SSR

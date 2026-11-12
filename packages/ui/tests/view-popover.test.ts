@@ -18,32 +18,21 @@ import { setImmediate } from 'node:timers/promises';
 import type { ViewBolt, Json } from '../src/client/contract.ts';
 import type { Row } from '../src/model/types.ts';
 import type { Value } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/std/decimal';
 import type { KindsHost } from '../src/kinds/context.ts';
-import type { Offer, RawArg, Node, Op, Resolved, SortKey } from '../src/filter/filter.ts';
-import {
-	nodeParts,
-	operatorsFor,
-	resolve,
-	taggedArg,
-	varError,
-	variableOf,
-	variablesFor
-} from '../src/filter/filter.ts';
+import { type Offer, type Resolved } from '../src/filter/catalog.ts';
+import { type RawArg, type Node, type Op } from '../src/filter/node.ts';
+import { type SortKey } from '../src/filter/order.ts';
+import { nodeParts } from '../src/filter/text.ts';
+import { operatorsFor, varError, variableOf, variablesFor } from '../src/filter/operators.ts';
+import { resolve } from '../src/filter/catalog.ts';
+import { taggedArg } from '../src/filter/node.ts';
 import type { ViewHarnessProps } from './view-harness.svelte';
 import { it, vi } from '@effect/vitest';
-import {
-	fromWhere,
-	matches,
-	nodeText,
-	orderKeys,
-	orderOf,
-	orderText,
-	parseOrder,
-	sortable,
-	sortRows,
-	sortText,
-	toWhere
-} from '../src/filter/filter.ts';
+import { fromWhere, toWhere } from '../src/filter/where.ts';
+import { matches, sortRows } from '../src/filter/local.ts';
+import { nodeText, sortText } from '../src/filter/text.ts';
+import { orderKeys, orderOf, orderText, parseOrder, sortable } from '../src/filter/order.ts';
 import { likePattern } from '../src/kinds/kind.ts';
 import { listRequest, MANY_SHOWN, unref } from '../src/relations/select.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
@@ -247,15 +236,15 @@ it.effect(
 				cond('account.owner.name', 'like', { lit: 'bo' }),
 				cond('subject:accounts', 'in', { list: ['a1', 'a2'] }),
 				cond('scheduled_on', 'during', {
-					range: [{ var: 'startOfWeek(today)' }, { var: 'startOfWeek(today) + weeks(1)' }]
+					range: [{ var: 'start_of_week(today)' }, { var: 'start_of_week(today) + weeks(1)' }]
 				}),
 				cond('scheduled_on', 'during', {
 					range: [{ var: 'today - days(7)' }, { var: 'today + days(1)' }]
 				}),
-				cond('scheduled_on', 'gte', { var: 'startOfMonth(today) - months(1)' }),
+				cond('scheduled_on', 'gte', { var: 'start_of_month(today) - months(1)' }),
 				cond('scheduled_on', 'lt', { var: 'today - days(7)' }),
 				cond('scheduled_on', 'lt', { field: 'due_on' }),
-				cond('tags', 'hasAll', { list: ['a', 'b'] }),
+				cond('tags', 'has_all', { list: ['a', 'b'] }),
 				cond('meta', 'contains', { lit: { a: 1 } }),
 				cond('window', 'contains', { var: 'today' }),
 				{ t: 'many', rel: 'lines', q: 'some', of: [cond('qty', 'gt', { lit: 2 })] },
@@ -295,8 +284,8 @@ it.effect(
 			});
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[7])), {
 				scheduled_on: {
-					gte: { var: 'startOfWeek(today)' },
-					lt: { var: 'startOfWeek(today) + weeks(1)' }
+					gte: { var: 'start_of_week(today)' },
+					lt: { var: 'start_of_week(today) + weeks(1)' }
 				}
 			});
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[5])), {
@@ -402,7 +391,7 @@ it.effect(
 	'a chip formats every value by its kind: a date range reads as dates, never [object Object]; parts keep their roles',
 	() =>
 		Effect.sync(() => {
-			const range = cond('window', 'startsWithin', {
+			const range = cond('window', 'starts_within', {
 				lit: { from: '2026-01-01', to: '2026-12-31' }
 			});
 			const text = nodeText(catalog, 'jobs', range, (x) => x);
@@ -450,17 +439,17 @@ it.effect("a condition's operators are the catalogue's, else its kind's", () =>
 	Effect.sync(() => {
 		const ops = (path: string) =>
 			operatorsFor([], [], path, required(resolve(catalog, 'jobs', path))).map((o) => o.op);
-		assert.deepEqual(ops('assignee'), ['eq', 'ne', 'in', 'nin', 'is_null', 'notNull']);
+		assert.deepEqual(ops('assignee'), ['eq', 'ne', 'in', 'not_in', 'is_null', 'not_null']);
 		assert.deepEqual(ops('window'), [
 			'contains',
 			'overlaps',
-			'within',
-			'startsWithin',
-			'endsWithin',
+			'contained_by',
+			'starts_within',
+			'ends_within',
 			'is_null',
-			'notNull'
+			'not_null'
 		]);
-		assert.deepEqual(ops('tags'), ['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty']);
+		assert.deepEqual(ops('tags'), ['has', 'has_any', 'has_all', 'is_empty', 'not_empty']);
 		assert.equal(
 			operatorsFor([], [], 'scheduled_on', required(resolve(catalog, 'jobs', 'scheduled_on')))[2]
 				?.label,
@@ -521,7 +510,7 @@ const offers = (c: string): readonly Offer[] =>
 						{
 							label: 'this week',
 							arg: {
-								range: [{ var: 'startOfWeek(today)' }, { var: 'startOfWeek(today) + weeks(1)' }]
+								range: [{ var: 'start_of_week(today)' }, { var: 'start_of_week(today) + weeks(1)' }]
 							}
 						}
 					]
@@ -543,14 +532,14 @@ const offers = (c: string): readonly Offer[] =>
 				{
 					label: 'Tags',
 					path: [{ k: 'field', name: 'tags' }],
-					op: 'hasAll',
+					op: 'has_all',
 					opLabel: 'has all of',
 					kind: 'text'
 				},
 				{
 					label: 'Tags',
 					path: [{ k: 'field', name: 'tags' }],
-					op: 'isEmpty',
+					op: 'is_empty',
 					opLabel: 'is empty',
 					kind: 'text'
 				},
@@ -633,15 +622,22 @@ const offers = (c: string): readonly Offer[] =>
 					kind: 'money'
 				}
 			];
+/** A job as the host answers it: every field its read output promises. */
+const JOB = {
+	revision: 1, title: '', hours: null, scheduled_on: null, due_on: null, status: 'scheduled', tags: [], meta: null,
+	window: null, salary: Decimal.of('0'), assignee: null, account: 'a1', subject: { model: 'accounts', id: 'a1' }
+};
 async function scripted(extra: Partial<ViewScript> = {}) {
 	const reads: { c: string; o: ReadOptions }[] = [];
-	const rows = [{ id: 'j1', title: 'One', hours: 2, status: 'done' }];
+	const job = { ...JOB, title: 'One', hours: 2, status: 'done' };
+	const rows = [{ id: 'j1', ...job }];
 	const fixture = await viewFixture({
+		catalog,
 		read: (c, o) => {
 			reads.push({ c, o });
 			return { rows, next: null };
 		},
-		get: (_c, id) => ({ id, title: 'One', status: 'done' }),
+		get: (_c, id) => ({ id, ...job }),
 		aggregate: (_c, o): Value =>
 			o.by
 				? {
@@ -742,13 +738,13 @@ it.live('filter metadata loads on opening, retries a failure on reopening, then 
 	})
 );
 
-it.live('Table: initialFilter seeds clearable rows, and a cleared choice survives a reload', () =>
+it.live('Table: initial_filter seeds clearable rows, and a cleared choice survives a reload', () =>
 	Effect.gen(function* () {
 		const s = yield* browser(() => scripted());
 		const props: import('../src/table/Table.svelte').TableProps = {
 			of: 'jobs',
 			columns: ['title'],
-			initialFilter: { status: { eq: 'scheduled' } }
+			initial_filter: { status: { eq: 'scheduled' } }
 		};
 		let v = yield* browser(() =>
 			show({ part: 'table', view: Table, props: props, bolt: s.bolt, catalog: catalog }, '/')
@@ -787,7 +783,7 @@ it.live(
 						props: {
 							of: 'jobs',
 							columns: ['title'],
-							initialFilter: {
+							initial_filter: {
 								lines: { some: { qty: { gt: 2 } } },
 								or: [{ hours: { gt: 1 } }, { title: { eq: 'x' } }]
 							}
@@ -835,7 +831,7 @@ it.live(
 			);
 			assert.deepEqual(
 				options(element<HTMLElement>(many, '[data-cond=qty] [aria-label=Operator]')),
-				['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin']
+				['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in']
 			);
 			element<HTMLButtonElement>(many, '[data-add-filter]').click();
 			yield* browser(settle);
@@ -953,8 +949,8 @@ it.effect(
 			assert.deepEqual(names(day, 'lt'), [
 				'today',
 				'today - days(7)',
-				'startOfWeek(today)',
-				'startOfMonth(today)'
+				'start_of_week(today)',
+				'start_of_month(today)'
 			]);
 			assert.deepEqual(names(required(resolve(catalog, 'jobs', 'hours')), 'eq'), []);
 			const email: Resolved = {
@@ -1113,6 +1109,7 @@ it.live(
 					read: (c, o) => {
 						s.reads.push({ c, o });
 						const rows = Array.from({ length: o.limit ?? 1 }, (_, i) => ({
+							...JOB,
 							id: `${JSON.stringify(o.where)}-${i}`,
 							title: 'x'
 						}));
@@ -1125,7 +1122,7 @@ it.live(
 					{
 						part: 'board',
 						view: Board,
-						props: { of: 'jobs', by: 'status', card: ['title'], pageSize: 1 },
+						props: { of: 'jobs', by: 'status', card: ['title'], page_size: 1 },
 						bolt: s.bolt,
 						catalog: catalog
 					},
@@ -1586,12 +1583,13 @@ async function changingBoard(
 ) {
 	let rows = initialRows ?? [
 		...[1, 2, 3].map((i) => ({
+			...JOB,
 			id: `scheduled-${i}`,
 			title: `Scheduled ${i}`,
 			hours: 1,
 			status: 'scheduled'
 		})),
-		{ id: 'done-1', title: 'Done 1', hours: 1, status: 'done' }
+		{ ...JOB, id: 'done-1', title: 'Done 1', hours: 1, status: 'done' }
 	];
 	const readers = new Set<() => void>(),
 		aggregates: ReadOptions[] = [],
@@ -1654,7 +1652,7 @@ function mountCountingBoard(s: Awaited<ReturnType<typeof changingBoard>>) {
 				by: 'status',
 				card: ['title'],
 				lanes: ['scheduled', 'done'],
-				pageSize: 1,
+				page_size: 1,
 				where: { hours: { gt: 0 } }
 			}
 		}
@@ -1746,6 +1744,7 @@ it.live(
 			});
 			const s = yield* browser(() =>
 				scripted({
+					catalog: cat,
 					options: () =>
 						Effect.succeed({
 							fields: [
@@ -1768,7 +1767,7 @@ it.live(
 						props: {
 							of: 'jobs',
 							columns: ['title'],
-							initialFilter: { window: { contains: '2026-10-29' } }
+							initial_filter: { window: { contains: '2026-10-29' } }
 						},
 						bolt: s.bolt,
 						catalog: cat

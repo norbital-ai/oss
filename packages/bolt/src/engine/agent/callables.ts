@@ -6,11 +6,19 @@ import { PageResult } from '../../protocol/schema.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { Agents, Manifest, Reads, Turns, type AgentCallables } from '../services.ts';
-import { Conversation, isStaff, sharedConversations } from './schema.ts';
+import { Agents, Manifest, Reads, Turns } from '../services.ts';
+import { Conversation, isStaff, sharedConversations, transcriptRow } from './schema.ts';
 import { MessageQueue } from './queue.ts';
 import { SmartThrottle } from './throttle.ts';
-import { lowerRead } from '../query/engine.ts';
+import { lower_read } from '../query/engine.ts';
+
+/** Native agent and conversation callables, each with its decoded input contract. */
+export type AgentCallables = {
+	readonly [name: string]: {
+		readonly input: Schema.Codec<unknown, Json>;
+		readonly run: (input: unknown, authority: Authority) => Effect.Effect<Json, EngineError>;
+	};
+};
 
 export class AgentBackground extends Context.Service<
 	AgentBackground,
@@ -32,7 +40,7 @@ export const conversationFor = Effect.fn('Agents.conversationFor')(function* (
 		params: [id, authority.admin, member, isStaff(authority)]
 	});
 	if (Option.isNone(row))
-		return yield* Effect.fail(BoltError.make('notFound', 'admission', 'Not found or no access.'));
+		return yield* Effect.fail(BoltError.make('not_found', 'admission', 'Not found or no access.'));
 	return row.value;
 });
 
@@ -42,6 +50,7 @@ const Post = Schema.Struct({
 	conversation: Schema.String,
 	text: Schema.String,
 	attachments: Schema.optionalKey(Schema.Array(Schema.Json)),
+	question: Schema.optionalKey(Schema.String),
 	mode: Schema.optionalKey(Schema.Literals(['agent', 'plan', 'compact'])),
 	now: Schema.optionalKey(Schema.Boolean),
 	schedule: Schema.optionalKey(Schema.String),
@@ -65,7 +74,7 @@ export const agentCallables = Effect.gen(function* () {
 	const own = Effect.fn('Agents.own')(function* (authority: Authority, id: string) {
 		const row = yield* readable(authority, id);
 		if (row.integration !== null || row.owner === null)
-			return yield* Effect.fail(BoltError.make('notFound', 'admission', 'Not found or no access.'));
+			return yield* Effect.fail(BoltError.make('not_found', 'admission', 'Not found or no access.'));
 		return row;
 	});
 	const member = (authority: Authority) =>
@@ -79,7 +88,7 @@ export const agentCallables = Effect.gen(function* () {
 			{ text: 'SELECT conversation FROM sys_message WHERE id = $1', params: [id] }
 		);
 		if (Option.isNone(conversation))
-			return yield* Effect.fail(BoltError.make('notFound', 'admission', 'Not found or no access.'));
+			return yield* Effect.fail(BoltError.make('not_found', 'admission', 'Not found or no access.'));
 		yield* own(authority, conversation.value.conversation);
 		return conversation.value.conversation;
 	});
@@ -127,12 +136,14 @@ export const agentCallables = Effect.gen(function* () {
 					conv = yield* own(authority, input.conversation);
 				if (who === null || conv.owner !== who)
 					return yield* Effect.fail(
-						BoltError.make('notFound', 'admission', 'Not found or no access.')
+						BoltError.make('not_found', 'admission', 'Not found or no access.')
 					);
 				if (input.text.trim() === '' && (input.attachments?.length ?? 0) === 0)
 					return yield* Effect.fail(
 						BoltError.make('invalid', 'decode', 'a post needs text or an attachment')
 					);
+				if (input.question !== undefined && input.schedule !== undefined)
+					return yield* Effect.fail(BoltError.make('invalid', 'decode', 'An answer cannot be scheduled.'));
 				const files = yield* agents.attachments(who, input.attachments ?? []);
 				const team = authority.key.startsWith('preview:team:')
 					? authority.key.split(':')[2]
@@ -141,6 +152,7 @@ export const agentCallables = Effect.gen(function* () {
 					conversation: input.conversation,
 					as: { member: who, ...(team === undefined ? {} : { team }) },
 					text: input.text,
+					...(input.question === undefined ? {} : { question: input.question }),
 					author: authority.actor.kind === 'member' ? (authority.actor.email ?? who) : who,
 					files,
 					...(input.tz === undefined ? {} : { tz: input.tz })
@@ -164,6 +176,7 @@ export const agentCallables = Effect.gen(function* () {
 				// rule 60: a message that arrives while the turn runs steers: queued at once, claimed at its next step, never held
 				if (
 					input.mode !== 'compact' &&
+					input.question === undefined &&
 					input.now !== true &&
 					conv.status !== 'running' &&
 					throttle.inApp()
@@ -192,22 +205,22 @@ export const agentCallables = Effect.gen(function* () {
 				return committed({ id: input.conversation });
 			})
 		),
-		'sys_conversation.respondNow': control((id) =>
+		'sys_conversation.respond_now': control((id) =>
 			turns.release(id).pipe(Effect.andThen(background(agents.kick(id))))
 		),
 		'sys_conversation.stop': control(agents.stop),
 		'sys_conversation.resume': control((id) =>
 			turns.release(id).pipe(Effect.andThen(background(agents.resume(id))))
 		),
-		'sys_conversation.setModel': entry(
+		'sys_conversation.set_model': entry(
 			Schema.Struct({ conversation: Schema.String, model: Schema.String }),
 			Effect.fn('Agents.modelCallable')(function* (input, authority) {
 				yield* own(authority, input.conversation);
-				yield* agents.setModel(input.conversation, input.model);
+				yield* agents.set_model(input.conversation, input.model);
 				return committed({ id: input.conversation, model: input.model });
 			})
 		),
-		'sys_conversation.setAgent': entry(
+		'sys_conversation.set_agent': entry(
 			Schema.Struct({ conversation: Schema.String, agent: Schema.String }),
 			Effect.fn('Agents.agentCallable')(function* (input, authority) {
 				yield* own(authority, input.conversation);
@@ -219,17 +232,34 @@ export const agentCallables = Effect.gen(function* () {
 							'Only staff switch the agent of a conversation.'
 						)
 					);
-				yield* agents.setAgent(input.conversation, input.agent);
+				yield* agents.set_agent(input.conversation, input.agent);
 				return committed({ id: input.conversation, agent: input.agent });
 			})
 		),
 		'sys_message.revise': entry(
-			Schema.Struct({ message: Schema.String, text: Schema.String.check(Schema.isPattern(/\S/)) }),
+			Schema.Struct({ message: Schema.String, text: Schema.String, attachments: Schema.optionalKey(Schema.Array(Schema.Json)) }),
 			Effect.fn('Agents.reviseCallable')(function* (input, authority) {
-				const conversation = yield* message(authority, input.message),
-					id = yield* agents.revise(input.message, input.text, authority);
+				const conversation = yield* message(authority, input.message);
+				const who = member(authority);
+				if (who === null)
+					return yield* Effect.fail(BoltError.make('forbidden', 'admission', 'Only a member can revise a message.'));
+				const files = input.attachments === undefined ? undefined : yield* agents.attachments(who, input.attachments);
+				const id = yield* agents.revise(input.message, input.text, authority, files);
 				yield* background(agents.drain(conversation));
 				return committed({ id: Option.getOrNull(id) });
+			})
+		),
+		'sys_message.restart': entry(
+			Msg,
+			Effect.fn('Agents.restartCallable')(function* (input, authority) {
+				yield* message(authority, input.message);
+				if (member(authority) === null)
+					return yield* Effect.fail(BoltError.make('forbidden', 'admission', 'The assistant is not available to you here.'));
+				const result = yield* agents.restart(input.message, authority);
+				const draft = transcriptRow(result.message, isStaff(authority), false);
+				if (draft === null)
+					return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The restart input could not be read.'));
+				return committed({ conversation: result.conversation, message: draft, mode: result.message.mode });
 			})
 		),
 		'sys_message.dequeue': entry(
@@ -248,45 +278,45 @@ export const agentCallables = Effect.gen(function* () {
 				return committed({ id: input.conversation });
 			})
 		),
-		'sys_message.executePlan': entry(
+		'sys_message.execute_plan': entry(
 			Conv,
 			Effect.fn('Agents.executeCallable')(function* (input, authority) {
 				const conv = yield* own(authority, input.conversation),
 					who = member(authority);
 				if (who === null || conv.owner !== who)
 					return yield* Effect.fail(
-						BoltError.make('notFound', 'admission', 'Not found or no access.')
+						BoltError.make('not_found', 'admission', 'Not found or no access.')
 					);
-				yield* background(agents.executePlan(input.conversation, { member: who }));
+				yield* background(agents.execute_plan(input.conversation, { member: who }));
 				return committed({ id: input.conversation });
 			})
 		),
-		'sys_message.discardPlan': control(agents.discardPlan),
-		'sys_message.markRead': entry(
+		'sys_message.discard_plan': control(agents.discard_plan),
+		'sys_message.mark_read': entry(
 			Conv,
 			Effect.fn('Agents.readCallable')(function* (input, authority) {
 				yield* readable(authority, input.conversation);
 				if (authority.actor.kind !== 'member')
 					return yield* Effect.fail(
-						BoltError.make('notFound', 'admission', 'Not found or no access.')
+						BoltError.make('not_found', 'admission', 'Not found or no access.')
 					);
-				yield* agents.markRead(input.conversation, authority.actor.id);
+				yield* agents.mark_read(input.conversation, authority.actor.id);
 				return committed({ id: input.conversation });
 			})
 		),
-		'sys_message.pageResult': entry(
+		'sys_message.page_result': entry(
 			Schema.Struct({ message: Schema.String, result: PageResult }),
 			Effect.fn('Agents.pageResultCallable')(function* (input, authority) {
 				yield* message(authority, input.message);
-				yield* agents.pageResult(input.message, input.result);
+				yield* agents.page_result(input.message, input.result);
 				return committed({ id: input.message });
 			})
 		),
-		'sys_message.claimPageAction': entry(
+		'sys_message.claim_page_action': entry(
 			Schema.Struct({ message: Schema.String }),
 			Effect.fn('Agents.claimPageActionCallable')(function* (input, authority) {
 				yield* message(authority, input.message);
-				return committed({ claimed: yield* agents.claimPageAction(input.message) });
+				return committed({ claimed: yield* agents.claim_page_action(input.message) });
 			})
 		),
 		'sys_message.file': entry(
@@ -301,19 +331,19 @@ export const agentCallables = Effect.gen(function* () {
 				);
 				if (Option.isNone(image) || !isStaff(authority))
 					return yield* Effect.fail(
-						BoltError.make('notFound', 'admission', 'Not found or no access.')
+						BoltError.make('not_found', 'admission', 'Not found or no access.')
 					);
 				yield* readable(authority, image.value.conversation);
 				if (input.about !== null) {
 					const now = yield* Clock.currentTimeMillis;
 					const answer = yield* reads.run(
-						[lowerRead(manifest, 'get', [input.about.model, input.about.id])],
+						[yield* lower_read(manifest, 'get', [input.about.model, input.about.id])],
 						{ as: 'caller', authority },
 						bindingsAt(now, manifest.workspace.tz)
 					);
 					if (answer[0] == null)
 						return yield* Effect.fail(
-							BoltError.make('notFound', 'admission', 'Not found or no access.')
+							BoltError.make('not_found', 'admission', 'Not found or no access.')
 						);
 				}
 				yield* agents.file(input.message, input.about);

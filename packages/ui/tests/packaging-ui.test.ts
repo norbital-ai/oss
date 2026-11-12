@@ -36,6 +36,7 @@ async function show(
 		Partial<Pick<PackagingHarnessProps, 'catalog' | 'customFields' | 'representations'>>
 ) {
 	const { bolt } = await viewFixture({
+		catalog: props.catalog ?? catalog,
 		read: () => ({ rows: [JOB], next: null }),
 		get: (_c, id) => (id === 'j1' ? JOB : null),
 		aggregate: () => ({ count: 1 }),

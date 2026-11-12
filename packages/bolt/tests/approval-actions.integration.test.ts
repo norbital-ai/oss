@@ -1,18 +1,19 @@
 import { expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Option, Schema } from 'effect';
-import { Callables, Approvals, RunHandlers } from '../src/engine/services.ts';
-import { acquireEngine } from './effect-engine.ts';
+import { Context, Effect, Layer, Option } from 'effect';
+import { TestClock } from 'effect/testing';
+import { Callables, Approvals, Runs } from '../src/engine/services.ts';
+import { acquire_engine } from './effect-engine.ts';
 import type { EngineManifest, GrantData } from '../src/engine/manifest.ts';
 import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
-import { dbError } from '../src/engine/db/wire.ts';
+import { db_error } from '../src/engine/db/wire.ts';
 import type { PGlite } from '@electric-sql/pglite';
 import type { Authority, Outcome } from '../src/engine/contracts.ts';
-type Engine = Effect.Success<ReturnType<typeof acquireEngine>>;
+type Engine = Effect.Success<ReturnType<typeof acquire_engine>>;
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { NOW, TODAY } from './write-fixture.ts';
-import { actorRef } from '../src/engine/write/commit.ts';
+import { actor_ref } from '../src/engine/access/actor.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const salesId = '0199a000-0000-7000-8000-000000000001',
@@ -37,36 +38,33 @@ const manifest: EngineManifest = {
 	exposures: {
 		orders: {
 			outputs: { default: { orders: { fields: 'all' } } },
-			update: { columns: { orders: ['note'] } },
-			notify: true,
-			effect: { updated: true }
+			update: { columns: { orders: ['note'] }, effect: true }
 		}
 	},
-	teams: { Sales: ['seller'], Finance: ['reviewer'] },
+	teams: { Sales: { policies: ['seller'] }, Finance: { policies: ['reviewer'] } },
 	policies: {
 		seller: { description: 'Seller', grants: { orders: grant } },
 		reviewer: { description: 'Reviewer', grants: { orders: { outputs: { default: true } } } }
 	},
 	automations: {},
 	integrations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const guest = program(`export default {
- model: { orders: { bodies: { notify: function*(event) {
-  if(event.kind!=='write')return [];
-  if(event.action!=='update'||event.records.length!==2)throw Error('Expected the complete committed batch');
-  return [{to:[{user:'${salesId}'}],title:'Bundle committed'}];
- }, effect: { updated: function*(){return null;} } } } },
+ model: { orders: { bodies: { effect: { update: function*(changes,ctx) {
+  if(ctx.event.kind!=='write')return;
+  if(changes.length!==2)throw Error('Expected the complete committed batch');
+  yield* ctx.notify({to:[{user:'${salesId}'}],title:'Bundle committed'});
+ } } } } },
  policy: { seller: { grants: { orders: { update: {
   verdict: function*(_changes,ctx){ return ctx.approve({ steps: [{ name: 'Finance', teams: ['Finance'] }] }); }
  } } } } }
 };`);
 let pg: PGlite, db: TenantDb, e: Engine, sales: Authority, finance: Authority;
-const exec = (text: string) => Effect.tryPromise({ try: () => pg.exec(text), catch: dbError });
+const exec = (text: string) => Effect.tryPromise({ try: () => pg.exec(text), catch: db_error });
 const view = (...args: Parameters<ReturnType<typeof Approvals.of>['view']>) =>
 	Context.get(e, Approvals)
 		.view(...args)
@@ -76,7 +74,7 @@ const rows = (sql: string) =>
 	Effect.map(db.read([{ text: sql, params: [] }]), (rows) => rows[0]?.rows ?? []);
 const pending = (outcome: Outcome) => {
 	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
-	return outcome.requestId;
+	return outcome.request_id;
 };
 const submit = Effect.fn('Test.submitAtomicBatch')(function* () {
 	const result = yield* Context.get(e, Callables).acts({
@@ -96,46 +94,37 @@ const submit = Effect.fn('Test.submitAtomicBatch')(function* () {
 	return result;
 });
 const notices = Effect.fn('Test.deliverBatchNotices')(function* () {
-	const handler = yield* Context.get(e, RunHandlers).handler('bolt.notify');
-	if (Option.isNone(handler)) throw new Error('Missing notification handler');
-	const queued = yield* db.rows(Schema.Struct({ id: Schema.String, input: Schema.Json }), {
-		text: "SELECT id,input FROM sys_run WHERE automation='bolt.notify' AND state='queued' ORDER BY id",
-		params: []
-	});
-	for (const run of queued) {
-		yield* handler.value(run.input, { id: run.id, starter: null });
-		yield* handler.value(run.input, { id: run.id, starter: null });
-		yield* db.write({ text: "UPDATE sys_run SET state='succeeded' WHERE id=$1", params: [run.id] });
-	}
-	return yield* rows('SELECT title FROM sys_notification');
+    yield* Context.get(e, Runs).tick;
+    return yield* rows("SELECT title FROM sys_notification WHERE title='Bundle committed'");
 });
-const approve = (requestId: string) =>
+const approve = (request_id: string) =>
 	Context.get(e, Approvals).decide({
-		requestId,
+		request_id,
 		decision: 'approve',
 		authority: finance,
 		now: NOW
 	});
 const fixture = Layer.effectDiscard(
 	Effect.gen(function* () {
+		// runs are due at the act's NOW; the queue claims by the test clock
+		yield* TestClock.setTime(Date.parse(NOW));
 		pg = yield* TestDb.open(manifest);
 		db = PgliteDb.make(pg);
 		yield* exec(
-			`INSERT INTO sys_user(id,name,team) VALUES('${salesId}','Sales','Sales'),('${financeId}','Finance','Finance');INSERT INTO orders(id,title) VALUES('${left}','Left'),('${right}','Right');
-			INSERT INTO bolt_history(collection,record,revision,op,cause,changes) SELECT 'orders',id,1,'create','seed',to_jsonb(o) FROM orders o`
+			`INSERT INTO sys_user(id,name,team) VALUES('${salesId}','Sales','Sales'),('${financeId}','Finance','Finance');INSERT INTO orders(id,title) VALUES('${left}','Left'),('${right}','Right')`
 		);
 		const authorities = new Authorities(manifest, 'test');
-		const seller = yield* authorities.member(db, salesId),
-			reviewer = yield* authorities.member(db, financeId);
+		const seller = yield* authorities.member(db, 'bootstrap', salesId),
+			reviewer = yield* authorities.member(db, 'bootstrap', financeId);
 		if (seller === null || reviewer === null) throw new Error('Missing test actors');
 		sales = seller;
 		finance = reviewer;
-		e = yield* acquireEngine(manifest, db, yield* guest);
+		e = yield* acquire_engine(manifest, db, yield* guest);
 	})
 );
 
 it.effect(
-	'one request holds the complete atomic batch and queues its effects once; approval keeps the writes',
+	'one request holds the atomic batch and freezes its effects until approval releases the writer job once',
 	() =>
 		Effect.gen(function* () {
 			const result = yield* submit();
@@ -148,10 +137,10 @@ it.effect(
 				{ note: 'second' }
 			]);
 			expect(
-				yield* rows("SELECT actor FROM sys_run WHERE automation='orders.effect.updated'")
-			).toEqual([{ actor: actorRef(sales.actor) }]);
-			expect(yield* rows('SELECT title FROM sys_notification')).toEqual([]);
-			expect(yield* notices()).toEqual([{ title: 'Bundle committed' }]);
+				yield* rows("SELECT actor FROM sys_run WHERE automation='orders.effect.update' AND input->'event'->>'kind'='write'")
+			).toEqual([]);
+			expect(yield* rows("SELECT actor FROM bolt_approval_effect WHERE automation='orders.effect.update' AND input->'event'->>'kind'='write'")).toEqual([{ actor: actor_ref(sales.actor) }]);
+			expect(yield* notices()).toEqual([]);
 			expect(
 				yield* rows('SELECT jsonb_array_length(records) n, state FROM bolt_approvals')
 			).toEqual([{ n: 2, state: 'Pending' }]);
@@ -172,31 +161,31 @@ it.effect(
 			expect(again.outcome).toMatchObject({
 				kind: 'refused',
 				code: 'locked',
-				data: { requestId: id }
+				data: { request_id: id }
 			});
 			expect((yield* submit()).outcome).toEqual(result.outcome);
-			expect(yield* notices()).toHaveLength(1);
+			expect(yield* notices()).toHaveLength(0);
 			expect(yield* approve(id)).toMatchObject({ kind: 'decided', status: 'Approved' });
 			expect(yield* rows('SELECT note FROM orders ORDER BY title')).toEqual([
 				{ note: 'first' },
 				{ note: 'second' }
 			]);
-			expect(yield* approve(id)).toMatchObject({ kind: 'refused', code: 'invalidInput' });
+			expect(yield* approve(id)).toMatchObject({ kind: 'refused', code: 'invalid_input' });
 			expect(
-				yield* rows("SELECT automation FROM sys_run WHERE automation='orders.effect.updated'")
+				yield* rows("SELECT automation FROM sys_run WHERE automation='orders.effect.update' AND input->'event'->>'kind'='write'")
 			).toHaveLength(1);
 			expect(yield* notices()).toHaveLength(1);
 		}).pipe(Effect.provide(fixture))
 );
 it.effect(
-	'rejecting the batch restores both writes, the restore running the effect as the approver; its committed notification and first effect stay',
+	'rejecting the batch restores both writes and discards frozen writer effects and custom notices',
 	() =>
 		Effect.gen(function* () {
 			const id = pending((yield* submit()).outcome);
-			expect(yield* notices()).toEqual([{ title: 'Bundle committed' }]);
+			expect(yield* notices()).toEqual([]);
 			expect(
 				yield* Context.get(e, Approvals).decide({
-					requestId: id,
+					request_id: id,
 					decision: 'reject',
 					reason: 'Rejected',
 					authority: finance,
@@ -208,11 +197,11 @@ it.effect(
 				{ note: null }
 			]);
 			expect(
-				(yield* rows("SELECT actor FROM sys_run WHERE automation='orders.effect.updated'"))
+				(yield* rows("SELECT actor FROM sys_run WHERE automation='orders.effect.update' AND input->'event'->>'kind'='write'"))
 					.map((row) => row['actor'])
 					.sort()
-			).toEqual([actorRef(sales.actor), actorRef(finance.actor)].sort());
-			expect(yield* notices()).toEqual([{ title: 'Bundle committed' }]);
+			).toEqual([]);
+			expect(yield* notices()).toEqual([]);
 			expect(
 				yield* rows("SELECT count(*)::int n FROM bolt_history WHERE cause = 'restored'")
 			).toEqual([{ n: 2 }]);
@@ -243,7 +232,7 @@ it.effect('a refused item leaves every batch write, approval and queued effect a
 			issuedAt: NOW,
 			from: 'Client'
 		});
-		expect(result.outcome).toMatchObject({ kind: 'refused', code: 'notFound' });
+		expect(result.outcome).toMatchObject({ kind: 'refused', code: 'not_found' });
 		expect(result.captured).toEqual([]);
 		expect(yield* rows('SELECT note FROM orders ORDER BY title')).toEqual([
 			{ note: null },

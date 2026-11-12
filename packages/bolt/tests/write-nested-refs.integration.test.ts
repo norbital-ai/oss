@@ -9,7 +9,7 @@ import { toPred } from '../src/engine/access/pred.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { act } from '../src/engine/write/act.ts';
-import { admin, arm, authority, grants, manifest, NOW, TODAY, writeArm } from './write-fixture.ts';
+import { admin, arm, authority, grants, manifest, NOW, TODAY, write_arm } from './write-fixture.ts';
 const orderModel = manifest.models.orders,
 	orderExposure = manifest.exposures.orders;
 if (orderModel === undefined || orderExposure === undefined)
@@ -50,7 +50,7 @@ const m: EngineManifest = {
 			update: { columns: { orders: ['preferences', 'metadata'] } }
 		}
 	},
-	customFields: {
+	custom_fields: {
 		preferences: {
 			description: 'Ranked targets.',
 			shape: { kind: 'ref', to: 'tags', many: true, max_items: 5 }
@@ -61,11 +61,11 @@ let pg: PGlite, db: TenantDb;
 let n = 0;
 const visible = authority({
 	orders: grants('orders', {
-		create: [writeArm({ orders: ['title', 'preferences', 'metadata'] })],
-		update: [writeArm({ orders: ['preferences', 'metadata'] })]
+		create: [write_arm({ orders: ['title', 'preferences', 'metadata'] })],
+		update: [write_arm({ orders: ['preferences', 'metadata'] })]
 	}),
 	tags: grants('tags', {
-		read: { default: { tags: [arm(toPred(m, 'tags', { name: { eq: 'visible' } }))] } }
+		read: { default: { tags: [arm(Effect.runSync(toPred(m, 'tags', { name: { eq: 'visible' } })))] } }
 	})
 });
 const run = (input: Json, verb: 'create' | 'update' = 'create', caller = visible) =>
@@ -117,7 +117,7 @@ it.live('refuses unreadable and missing custom list targets without creating the
 			const result = yield* run({ title: 'blocked', preferences: [allowed, id] });
 			expect(result.outcome).toMatchObject({
 				kind: 'refused',
-				code: 'notFound',
+				code: 'not_found',
 				field: 'preferences.1'
 			});
 			expect(result.captured).toEqual([]);
@@ -136,7 +136,7 @@ it.live('checks IDs nested in JSON objects and lists, preserving nullable target
 		});
 		expect(denied.outcome).toMatchObject({
 			kind: 'refused',
-			code: 'notFound',
+			code: 'not_found',
 			field: 'metadata.groups.1.target'
 		});
 		expect((yield* db.read([{ text: 'SELECT title FROM orders', params: [] }]))[0]?.rows).toEqual(
@@ -163,7 +163,7 @@ it.live('retains the existing value when an update supplies an unreadable refere
 		if (row === undefined) return yield* Effect.fail(new Error('The booking must be committed.'));
 		expect(
 			(yield* run({ target: row.id, set: { preferences: [hidden] } }, 'update')).outcome
-		).toMatchObject({ kind: 'refused', code: 'notFound', field: 'preferences.0' });
+		).toMatchObject({ kind: 'refused', code: 'not_found', field: 'preferences.0' });
 		expect(
 			(yield* db.read([{ text: 'SELECT preferences, revision FROM orders', params: [] }]))[0]?.rows
 		).toEqual([{ preferences: [allowed], revision: 1 }]);
@@ -174,7 +174,7 @@ it.live('decodes a custom shape before reference admission and writes only valid
 		yield* setup();
 		expect((yield* run({ title: 'invalid', preferences: [17] })).outcome).toMatchObject({
 			kind: 'refused',
-			code: 'invalidInput',
+			code: 'invalid_input',
 			field: 'preferences'
 		});
 		expect((yield* db.read([{ text: 'SELECT title FROM orders', params: [] }]))[0]?.rows).toEqual(

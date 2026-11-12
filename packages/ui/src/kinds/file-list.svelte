@@ -1,7 +1,8 @@
 <!--
 @component
-Files already uploaded share one preview control. Pending uploads have their own retry and dismiss chips.
-The add control sits at the end.
+Files as compact chips: an icon (an image's own thumbnail) and the truncated name. A chip is a button opening a popover
+with the file's preview, metadata and Download; `on_remove` adds Remove there. `pending` chips show uploads in flight or
+failed (retry, dismiss); `dense` shows the first chip and how many more; `children` ends the row (the field's "+").
 -->
 <script lang="ts" module>
 	import type { FileRef } from './kind.js';
@@ -14,29 +15,34 @@ The add control sits at the end.
 	import Icon from '@iconify/svelte';
 	import type { Snippet } from 'svelte';
 	import Spinner from '../primitives/spinner/spinner.svelte';
-	import { cn, uiText } from '../primitives/utils.js';
-	import FileCollection from './file-collection.svelte';
+	import Image from '../primitives/image/image.svelte';
+	import { cn, ui_text } from '../primitives/utils.js';
+	import { useKinds } from './context.js';
+	import FilePreview from './file-preview.svelte';
 
 	let {
 		refs,
 		pending = [],
-		onRemove,
-		onRetry,
-		onDismiss,
+		on_remove,
+		on_retry,
+		on_dismiss,
 		disabled = false,
 		class: className,
 		children
 	}: {
 		refs: readonly FileRef[];
 		pending?: readonly PendingFile[];
-		onRemove?(ref: FileRef): void;
-		onRetry?(p: PendingFile): void;
-		onDismiss?(p: PendingFile): void;
+		on_remove?(ref: FileRef): void;
+		on_retry?(p: PendingFile): void;
+		on_dismiss?(p: PendingFile): void;
 		disabled?: boolean;
 		class?: string;
 		children?: Snippet;
 	} = $props();
-	const t = uiText();
+	const host = useKinds();
+	const t = ui_text();
+	const shown = $derived(dense ? refs.slice(0, 1) : refs);
+	let open = $state<string | null>(null);
 	const CHIP =
 		'inline-flex h-7 max-w-48 min-w-0 items-center gap-1.5 rounded-sm border border-border bg-muted/50 px-2 text-xs font-medium';
 	const ICON_BUTTON =
@@ -55,27 +61,27 @@ The add control sits at the end.
 				/>{/if}
 			<span class="truncate">{p.file.name}</span>
 			{#if p.error !== undefined}
-				{#if onRetry}<button
+				{#if on_retry}<button
 						type="button"
 						class={ICON_BUTTON}
 						aria-label={`${t('retry')} ${p.file.name}`}
 						title={t('retry')}
 						{disabled}
-						onclick={() => onRetry(p)}><Icon icon="lucide:refresh-cw" class="size-3" /></button
+						onclick={() => on_retry(p)}><Icon icon="lucide:refresh-cw" class="size-3" /></button
 					>{/if}
-				{#if onDismiss}<button
+				{#if on_dismiss}<button
 						type="button"
 						class={ICON_BUTTON}
 						aria-label={`${t('remove')} ${p.file.name}`}
 						title={t('remove')}
-						onclick={() => onDismiss(p)}><Icon icon="lucide:x" class="size-3" /></button
+						onclick={() => on_dismiss(p)}><Icon icon="lucide:x" class="size-3" /></button
 					>{/if}
 			{/if}
 		</span>
 	{/each}
 	{#each shown as ref (ref.id)}
 		{@const url = host.file_url?.(ref, { preview: 64 })}
-		<Popover.Root open={open === ref.id} onOpenChange={(o) => (open = o ? ref.id : null)}>
+		<Popover.Root open={open === ref.id} on_open_change={(o) => (open = o ? ref.id : null)}>
 			<Popover.Trigger>
 				{#snippet child({ props })}
 					<button
@@ -95,7 +101,7 @@ The add control sits at the end.
 								width={16}
 								height={16}
 								class="size-4 shrink-0 rounded-xs"
-								imageClass="size-full object-cover"
+								image_class="size-full object-cover"
 							/>
 						{:else}
 							<Icon icon={fileIcon(ref.mime)} class="size-3.5 shrink-0 text-muted-foreground" />
@@ -108,14 +114,14 @@ The add control sits at the end.
 				class="w-80 max-w-[calc(100vw-2rem)] p-3"
 				align="start"
 				aria-label={`${t('preview')} ${ref.name}`}
-				onCloseAutoFocus={() => {}}
+				on_close_auto_focus={() => {}}
 			>
 				<FilePreview
 					file={ref}
-					onRemove={onRemove && !disabled
+					on_remove={on_remove && !disabled
 						? () => {
 								open = null;
-								onRemove(ref);
+								on_remove(ref);
 							}
 						: undefined}
 				/>

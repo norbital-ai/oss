@@ -3,12 +3,12 @@ import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte';
 import { expect, it } from 'vitest';
 import Tabs from '../src/primitives/tabs/tabs.svelte';
 import TabStrip from '../src/primitives/tabs/tab-strip.svelte';
-import { uiMessagesFor, uiTextFor } from '../src/i18n.ts';
+import { ui_messages_for, ui_text_for } from '../src/i18n.ts';
 
 it('owns primitive and model-view translations', () => {
-	expect(uiTextFor('zh-CN').propertyName).toBe('属性名称');
-	expect(uiMessagesFor('zh-CN')['ui.table.empty']).toBe('尚无{what}');
-	expect(uiMessagesFor('en')).toEqual({});
+	expect(ui_text_for('zh-CN').propertyName).toBe('属性名称');
+	expect(ui_messages_for('zh-CN')['ui.table.empty']).toBe('尚无{what}');
+	expect(ui_messages_for('en')).toEqual({});
 });
 
 it.each([
@@ -130,7 +130,7 @@ it.each(['en', 'zh'])('an overflow tab keeps its selection with %s chrome', asyn
 		const view = mount(Tabs, {
 			target,
 			props: { tabs, value: 'Suspension' },
-			context: new Map([[Symbol.for('norbital.ui.text'), uiTextFor(locale)]])
+			context: new Map([[Symbol.for('norbital.ui.text'), ui_text_for(locale)]])
 		});
 		await tick();
 		flushSync();

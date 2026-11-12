@@ -93,8 +93,22 @@ policies still control data access. Embedded session cookies use `SameSite=None;
 so each embedding site has its own session. The embedding site's iframe `allow` attribute delegates
 browser permissions such as camera and geolocation; it confers no data authority.
 
-The native device belongs to the current document: the host may inject `window.boltDevice`,
-or pass an explicit `device` to `mountShell`. Public hydration detects that same document's
+The native device belongs to the current document: the host may inject `window.bolt_device`,
+or pass an explicit `device` to `mount_shell`. Public hydration detects that same document's
 descriptor; it does not read an embedding parent's globals. Browser geolocation is the fallback
 when no native implementation exists, and a native denial does not trigger another provider.
 See [Device](./device.md) for permission and session lifetimes.
+
+
+## Browsers without streams
+
+A fleet browser can refresh data without keeping a stream open. The document bridge is typed by
+`PageSnapshotHost` from `@norbital-ai/bolt/page`. Set `window.bolt_live_mode = 'snapshot'` before the
+page boots. Once a snapshot client is mounted, check that the optional bridge exists, then await
+`window.bolt_refresh()` before inspecting the page. The runtime installs this read-only function
+while snapshot clients are mounted and removes it when the last client's scope closes; its absence
+means there is no mounted snapshot client to refresh. The Promise covers current mounted queries
+and the next Svelte render; a read failure rejects and remains visible in the query state. There is
+no tenant polling interval. Closing the page's scope unregisters its client.
+
+Page code can yield `ctx.refresh()` to re-read its mounted queries. Queries retain a failure until a later successful answer and keep listening, so refreshing can recover them. Normal browser tabs use native streaming; an explicit refresh re-registers their views through that same versioned stream. The native read route admits snapshot transcripts, inbox and conversation lists through the same authority checks and reader as live views.

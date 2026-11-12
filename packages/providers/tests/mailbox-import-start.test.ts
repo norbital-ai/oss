@@ -28,12 +28,12 @@ const fixture = Effect.fn('MailboxImportStart.fixture')(function* () {
 	const provider = mailbox({ plain: true }).find((provider) => provider.id === 'imap');
 	if (provider === undefined) return yield* Effect.die('The mailbox provider is missing');
 	const open = Effect.fn('MailboxImportStart.open')(function* (
-		start: DriverOpen['importStart'],
+		start: DriverOpen['import_start'],
 		stored: ReadonlyMap<string, typeof Schema.Json.Type> = new Map()
 	) {
 		const h = yield* host(provider, fakeFetch([]), Object.fromEntries(stored), {
 			personal: true,
-			...(start === undefined ? {} : { importStart: start })
+			...(start === undefined ? {} : { import_start: start })
 		});
 		yield* Effect.addFinalizer(() => h.link.close ?? Effect.void);
 		return h;
@@ -88,7 +88,7 @@ describe('mailbox import start', () => {
 					expect(
 						messagesOf(h.events).map(
 							(value) =>
-								Schema.decodeUnknownSync(Schema.Struct({ sourceAt: Schema.String }))(value).sourceAt
+								Schema.decodeUnknownSync(Schema.Struct({ source_at: Schema.String }))(value).source_at
 						)
 					).toEqual([
 						after,
@@ -96,7 +96,7 @@ describe('mailbox import start', () => {
 						'2026-10-20T16:00:01.000Z',
 						'2026-10-20T16:00:02.000Z'
 					]);
-					expect(f.provider.importStart).toEqual({ kind: 'timestamp', precision: 'second' });
+					expect(f.provider.import_start).toEqual({ kind: 'timestamp', precision: 'second' });
 				})
 			)
 	);

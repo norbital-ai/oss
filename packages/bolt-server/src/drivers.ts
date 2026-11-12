@@ -1,10 +1,10 @@
-// Every host registers this provider catalogue through toDrivers(defs, run).
+// Every host registers this provider catalogue through to_drivers(defs, run).
 import { Clock, Effect, Option, Schema } from 'effect';
 import {
 	DatabaseRequest,
 	DatabaseResult,
-	httpOAuth,
-	httpRequest,
+	http_oauth,
+	http_request,
 	OAUTH_CALLBACK,
 	Http,
 	Port,
@@ -14,12 +14,12 @@ import {
 	type SetupDescription,
 	type SetupField
 } from '@norbital-ai/bolt/engine';
-import { httpPort, publicFetch } from '@norbital-ai/bolt/node';
+import { http_port, public_fetch } from '@norbital-ai/bolt/node';
 import { FacilityFailure } from '@norbital-ai/bolt/errors';
 import {
 	attempt,
 	authorizeUrl,
-	defaultProviders,
+	default_providers,
 	grant,
 	same,
 	STATE_MS,
@@ -61,7 +61,7 @@ const fetchHttp = (fetcher: typeof fetch): HttpPort => ({
 });
 export function drivers(options: DriversOptions = {}): readonly ProviderDef[] {
 	return [
-		...defaultProviders(),
+		...default_providers(),
 		...(options.simulator === undefined ? [] : simulatedProviders(options.simulator)),
 		httpProvider(options),
 		sqlServerProvider(options.database ?? sqlServerDatabase())
@@ -90,7 +90,7 @@ const credentials = Effect.fn('Drivers.credentials')(function* (
 	}
 	return values;
 });
-const appOf = (oauth: NonNullable<ReturnType<typeof httpOAuth>>): OAuthApp => ({
+const appOf = (oauth: NonNullable<ReturnType<typeof http_oauth>>): OAuthApp => ({
 	authorizeUrl: oauth.authorize,
 	tokenUrl: oauth.token,
 	scopes: oauth.scopes ?? []
@@ -100,7 +100,7 @@ const unavailable = (error: { readonly message: string }) =>
 
 export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): ProviderDef {
 	const setup = (d: Definition): SetupDescription =>
-		httpOAuth(d) !== undefined
+		http_oauth(d) !== undefined
 			? {
 					kind: 'form',
 					steps: [
@@ -109,7 +109,7 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 								en: 'Register this redirect URI with the OAuth app, then sign in.',
 								zh: '在 OAuth 应用中登记此重定向 URI，然后登录。'
 							},
-							copy: 'redirectUrl'
+							copy: 'redirect_url'
 						}
 					]
 				}
@@ -130,15 +130,15 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 		describe: ({ definition }) => ({ label: { en: 'HTTP', zh: 'HTTP' }, setup: setup(definition) }),
 		open: Effect.fn('HTTP.open')(function* (ctx: DriverOpen) {
 			const definition = ctx.definition,
-				oauth = httpOAuth(definition);
+				oauth = http_oauth(definition);
 			const run = yield* ProviderRuntime;
 			// OAuth token exchanges take a fetch; the definition's own requests take the engine's HTTP port
-			const guarded = { fetch: options.fetch ?? publicFetch(run) };
-			const http = Http.fromAbi(options.fetch === undefined ? httpPort : fetchHttp(options.fetch));
+			const guarded = { fetch: options.fetch ?? public_fetch(run) };
+			const http = Http.fromAbi(options.fetch === undefined ? http_port : fetchHttp(options.fetch));
 			let pending: { state: string; verifier: string; at: number } | null = null;
 			/** The definition's own OAuth app, from the workspace's secrets. */
 			const own = Effect.gen(function* () {
-				const client = yield* Effect.promise(() => ctx.oauthClient());
+				const client = yield* hostCall('read OAuth client', () => ctx.oauth_client());
 				return yield* client === undefined
 					? Effect.fail(
 							new ProviderUnavailable({
@@ -160,7 +160,7 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 							secrets[oauth.client] = client.id;
 							secrets[oauth.secret] = client.secret;
 						}
-						return yield* httpRequest(
+						return yield* http_request(
 							definition,
 							{
 								configuration: ctx.configuration,
@@ -188,11 +188,11 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 						yield* hostCall('report HTTP status', () => ctx.status({ state: 'connected' }));
 						return;
 					}
-					const paired = attempt(yield* Effect.promise(() => ctx.state()));
+					const paired = attempt(yield* hostCall('read pairing state', () => ctx.state()));
 					const url = authorizeUrl(
 						appOf(oauth),
 						(yield* own).id,
-						ctx.redirectUrl,
+						ctx.redirect_url,
 						paired.state,
 						paired.challenge
 					);
@@ -223,7 +223,7 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 						grant(appOf(oauth), yield* own, {
 							grant_type: 'authorization_code',
 							code,
-							redirect_uri: ctx.redirectUrl,
+							redirect_uri: ctx.redirect_url,
 							code_verifier: paired.verifier
 						})
 					).pipe(
@@ -283,7 +283,7 @@ export function sqlServerProvider(database: ReturnType<typeof sqlServerDatabase>
 								message: 'the instance is not paired: its connection string is missing'
 							})
 						);
-					const request = yield* Schema.decodeUnknownEffect(DatabaseRequest)(operation).pipe(
+					const request = yield* Schema.decodeUnknownEffect(DatabaseRequest, { onExcessProperty: 'error' })(operation).pipe(
 						Effect.mapError(
 							() => new ProviderRefused({ message: 'Invalid database request.', permanent: true })
 						)
@@ -309,7 +309,7 @@ export function sqlServerProvider(database: ReturnType<typeof sqlServerDatabase>
 			return {
 				close: Effect.void,
 				test: () =>
-					request({ op: 'values', values: { connected: 1 }, maxRows: 1 }).pipe(Effect.asVoid),
+					request({ op: 'values', values: { connected: 1 }, max_rows: 1 }).pipe(Effect.asVoid),
 				pair: (input: Json) =>
 					Effect.gen(function* () {
 						const value = yield* credentials(ctx.definition, input);

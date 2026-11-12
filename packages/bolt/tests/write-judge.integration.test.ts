@@ -1,19 +1,20 @@
 // Rule 35 through `act` on PGlite: every supplied column admitted by an arm's `columns` before any guest code, then one
 // policy `check` per admitting arm over the batch of `{ before, set }` (what `previous` and the write `where` judged), a
 // denying check refusing the write, and a direct arm committing past a policy whose check would hold it.
+import type { Chain } from '../src/engine/write/sql.ts';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import { compileAuthority } from '../src/engine/access/authority.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
 import type { Authority, GuestOutcome, Invocation } from '../src/engine/contracts.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { act, type WriteEngine } from '../src/engine/write/act.ts';
 import { admin, member, NOW, TODAY } from './write-fixture.ts';
 
 const m = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			orders: {
@@ -67,6 +68,7 @@ const m = Result.getOrThrow(
 					}
 				}
 			},
+			deletion: { description: 'Judges deletions', grants: { orders: { outputs: { default: true }, delete: { verdict: true } } } },
 			mover: {
 				description: '',
 				grants: { orders: { outputs: { default: true }, update: { verdict: true } } }
@@ -87,27 +89,28 @@ const m = Result.getOrThrow(
 				}
 			}
 		},
-		teams: { Finance: [] },
+		teams: { Finance: { policies: [] } },
 		integrations: {},
 		automations: {},
-		connections: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
 
 const as = (policies: string[]): Authority =>
-	compileAuthority(m, { actor: member, admin: false, policies }, policies.join());
+	Effect.runSync(compile_authority(m, { actor: member, admin: false, policies }, policies.join()));
 const Changes = Schema.Array(
 	Schema.Struct({
 		before: Schema.Record(Schema.String, Schema.Json),
-		set: Schema.Record(Schema.String, Schema.Json)
+		set: Schema.Record(Schema.String, Schema.Json),
+		after: Schema.NullOr(Schema.Record(Schema.String, Schema.Json))
 	})
 );
 /** Each policy's update `check`, as its authored `function*` would answer: the stored row, then the written one. */
 const verdicts: { readonly [target: string]: (c: { before: Json; after: Json }[]) => Json } = {
+	'deletion.orders.delete': (changes) => changes.every(({before,after}) => field(before,'region') === 'north' && after === null) ? {kind:'allow'} : {kind:'deny',message:'Only northern deletions.'},
 	'routed.orders.update': () => ({
 		kind: 'approve',
 		flow: {
@@ -149,10 +152,9 @@ const checks: WriteEngine['guest'] = {
 			const verdict = verdicts[inv.target];
 			if (inv.kind !== 'policy' || verdict === undefined)
 				throw new Error(`Unexpected guest call ${inv.kind} ${inv.target}`);
-			const changes = Schema.decodeUnknownSync(Changes)(inv.input).map(({ before, set }) => ({
-				before,
-				after: { ...before, ...set }
-			}));
+			const decoded = Schema.decodeUnknownSync(Changes)(inv.input);
+            if(inv.target==='deletion.orders.delete') expect(decoded.every(({set})=>Object.keys(set).length===0)).toBe(true);
+            const changes = decoded.map(({ before, after }) => ({ before, after }));
 			return { kind: 'ok', output: verdict(changes) };
 		})
 };
@@ -160,9 +162,12 @@ const checks: WriteEngine['guest'] = {
 const approval: WriteEngine['approval'] = {
 	route: (held) =>
 		Effect.succeed({
-			requestId: '0199a000-0000-7000-8000-0000000000aa',
+			request_id: '0199a000-0000-7000-8000-0000000000aa',
 			route: held.snapshot,
-			pieces: () => {}
+			pieces: (c: Chain) => {
+				// the commit reads the opened request from the approval engine's `ap_state` piece; this seam persists none
+				c.cte('ap_state', "SELECT NULL::uuid AS id, '[]'::jsonb AS records WHERE false");
+			}
 		}),
 	resubmit: () => Effect.die(new Error('This fixture does not resubmit requests.'))
 };
@@ -232,7 +237,7 @@ describe('engine/write: columns, then one check over the stored and the written 
 				});
 				expect(yield* update('orders', south, { note: 'x' }, rep)).toMatchObject({
 					kind: 'refused',
-					code: 'notFound'
+					code: 'not_found'
 				});
 				// a whole verb refused names the policies weighed, so the caller knows what it holds
 				expect(
@@ -285,4 +290,13 @@ describe('engine/write: columns, then one check over the stored and the written 
 				).toMatchObject({ kind: 'refused', code: 'refused', rule: 'stamp.employees.update' });
 			}).pipe(Effect.provide(JudgeFixtureLive))
 	);
+ it.effect('delete verdicts receive the stored before image, an empty set and null after', () =>
+  Effect.gen(function*(){
+   const {run,create}=yield* JudgeFixture;
+   const north=yield* create('orders',{region:'north',amount:'10'}), south=yield* create('orders',{region:'south',amount:'10'});
+   expect(yield* run('orders','delete',[{target:south}],as(['deletion']))).toMatchObject({kind:'refused',code:'refused',rule:'deletion.orders.delete'});
+   expect(yield* run('orders','delete',[{target:north}],as(['deletion']))).toMatchObject({kind:'committed'});
+  }).pipe(Effect.provide(JudgeFixtureLive))
+ );
+
 });

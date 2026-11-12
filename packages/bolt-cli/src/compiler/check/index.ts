@@ -5,7 +5,7 @@
 // good one. Workspace diagnostics use the TypeScript language service; deeper audits run on request. Declarations are
 // evaluated on a worker thread stripped to a guest's globals (rule 2), with a frozen clock and seeded `Math.random`, twice,
 // and both manifest hashes must match; the guest program obeys rule 6's walls.
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 import { builtinModules } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, sep } from 'node:path';
@@ -14,15 +14,15 @@ import { Effect, FileSystem, Option, Result, Schema } from 'effect';
 import { Worker } from 'node:worker_threads';
 import { build, type Rolldown } from 'vite';
 import {
-	decodeProjectedManifest,
-	projectManifest,
+	decode_projected_manifest,
+	project_manifest,
 	type EngineManifest,
 	plan,
-	decodeSeed,
+	decode_seed,
 	type SeedPack
 } from '@norbital-ai/bolt/engine';
-import { FieldsSchema, PRELUDE } from '@norbital-ai/bolt/tooling';
-import { moduleScript, type ImportDeclaration } from '@norbital-ai/bolt/guest-hooks';
+import { PRELUDE } from '@norbital-ai/bolt/tooling';
+import { module_script, type ImportDeclaration } from '@norbital-ai/bolt/guest-hooks';
 import type { GuestProgram } from '@norbital-ai/bolt/engine';
 import type { EvaluateInput } from './evaluate-worker.ts';
 import { discover, type Discovered } from '../discover.ts';
@@ -30,7 +30,7 @@ import { BOLT, EXT } from '../bolt.ts';
 import { load, manifestErrors } from '../load.ts';
 import { namesIndex, writeNames, writeTypeSetup } from '../names.ts';
 import { seedPack } from '../seed.ts';
-import { prepareMigrations } from '../migrations.ts';
+import { prepare_migrations } from '../migrations.ts';
 import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 export type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 
@@ -42,7 +42,7 @@ export type CheckResult = {
 	errors: CheckDiagnostic[];
 	manifest?: EngineManifest;
 	guest?: GuestProgram;
-	/** The write callbacks the models declare, per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`. */
+	/** The model transforms, per verb: `'<model>.create'`, `'<model>.update'`. */
 	transforms: string[];
 	seed?: SeedPack;
 };
@@ -178,12 +178,12 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 	if (evaluated === undefined) return out;
 	const { files, code, guest, manifest, bodies } = evaluated;
 	out.guest = guest;
-	const projection = Result.try(() => projectManifest(manifest));
+	const projection = Result.try(() => project_manifest(manifest));
 	if (Result.isFailure(projection)) {
 		errors.push({ code: 'manifest/invalid', path: 'src', message: String(projection.failure) });
 		return out;
 	}
-	const decoded = decodeProjectedManifest(projection.success);
+	const decoded = decode_projected_manifest(projection.success);
 	if (Result.isFailure(decoded)) {
 		errors.push({
 			code: 'manifest/invalid',
@@ -195,20 +195,6 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 	const m = decoded.success;
 	out.manifest = m;
 	out.transforms = [...bodies.transforms];
-	// Shell boot hydrates these inputs too: even a build without authoring diagnostics must refuse invalid metadata.
-	if (!diagnostics)
-		for (const [name, automation] of Object.entries(m.automations)) {
-			const input = Schema.decodeUnknownResult(FieldsSchema)(automation.input ?? {});
-			if (Result.isFailure(input))
-				errors.push({
-					code: 'automation/input',
-					path:
-						files.find((file) => file.role === 'automation' && file.name === name)?.path ??
-						`src/automation/+${name}.automation.ts`,
-					message: `input: ${input.failure.message}`
-				});
-		}
-
 	if (diagnostics) {
 		stage('seed');
 		const { publicSeed } = yield* Effect.tryPromise({
@@ -224,7 +210,7 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 			Object.entries(yield* seedPack(root, errors, 'test')).filter(([c]) => !c.startsWith('sys_'))
 		);
 		const decodedTest = Result.try({
-			try: () => decodeSeed(m, test),
+			try: () => decode_seed(m, test),
 			catch: (cause) => new EvalError({ cause })
 		});
 		if (Result.isFailure(decodedTest))
@@ -245,7 +231,7 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 		errors.push({ code: `schema/${e.code}`, path: 'src/data', message: e.message });
 	} else {
 		const migrations = yield* Effect.result(
-			prepareMigrations(root, m, options.migrations ?? 'verify', {
+			prepare_migrations(root, m, options.migrations ?? 'verify', {
 				...(options.squash === undefined ? {} : { squash: options.squash })
 			})
 		);
@@ -286,8 +272,8 @@ export const compile = (dir: string, options: CompilerOptions = {}) =>
  * A policy's guest part: each write grant's `verdict` (`policy.<p>.grants.<model>.<op>.verdict`), a ctx-bearing generator
  * called with its batch and a `PolicyCtx` (invocation kind `policy`), answering the data of the `Verdict` it returns.
  */
-const VERDICTS = `import { attached as __attached } from ${JSON.stringify(join(BOLT, 'decl', `body${EXT}`))};
-const __verdicts = (p) => ({ grants: Object.fromEntries(Object.entries(p?.grants ?? {}).map(([model, g]) => [model, Object.fromEntries(['create', 'update', 'delete'].flatMap((op) => typeof g?.[op]?.verdict === 'function' ? [[op, { verdict: __attached(g[op].verdict, 1) }]] : []))])) });`;
+const VERDICTS = `import { attached_verdict as __attached_verdict } from ${JSON.stringify(join(BOLT, 'decl', `body${EXT}`))};
+const __verdicts = (p) => ({ grants: Object.fromEntries(Object.entries(p?.grants ?? {}).map(([model, g]) => [model, Object.fromEntries(['create', 'update', 'delete'].flatMap((op) => typeof g?.[op]?.verdict === 'function' ? [[op, { verdict: __attached_verdict(g[op].verdict, 1) }]] : []))])) });`;
 /**
  * The callback paths selected by the runner (the Guest ABI), retaining every role module's original initialization order:
  * a model's bodies under `model.<model>.bodies`, a policy's write checks, an automation's `body`, a custom
@@ -411,7 +397,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 							if (!id.startsWith(BYTES_ID)) return null;
 							// Vite owns this Promise hook; the enclosing bundle Effect supplies cancellation and captures failures.
 							return readFile(id.slice(BYTES_ID.length), { signal }).then((bytes) => {
-								const sha = sha256Hex(bytes);
+								const sha = sha256_hex(bytes);
 								assets[sha] = bytes;
 								// ponytail: every invocation copies the bytes in at module evaluation; lazy access when an asset is large
 								return `export default globalThis[Symbol.for('norbital.bolt.asset')](${JSON.stringify(sha)});`;
@@ -477,7 +463,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 		});
 	return {
 		source,
-		...(sourceMap === undefined ? {} : { sourceMap }),
+		...(sourceMap === undefined ? {} : { source_map: sourceMap }),
 		...(Object.keys(assets).length > 0 ? { assets } : {})
 	};
 });
@@ -486,7 +472,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 const FREEZE = `{ const T = ${FROZEN}, D = Date;
 	globalThis.Date = class extends D { constructor(...a) { if (a.length === 0) super(T); else super(...a); } static now() { return T; } };
 	let s = 0x2545f491; Math.random = () => { s = s + 0x6d2b79f5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }`;
-// Declarations are data (functions drop out of JSON). A model's bodies become `true` markers in its literal (`splitModel`
+// Declarations are data (functions drop out of JSON). A model's bodies become `true` markers in its literal (`split_model`
 // reads them) and a policy's verdicts `verdict: true`; which write callbacks and automation bodies exist is
 // read beside them. A ctx-bearing body must be a generator.
 const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transforms: [], automations: [], models: [] };
@@ -502,9 +488,9 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 		const b = m?.bodies ?? {};
 		if (hasBody(b)) bodies.models.push(n);
 		if (Object.hasOwn(m?.spec ?? {}, 'queries')) throw new Error('model ' + JSON.stringify(n) + ' cannot declare queries: read layers, then transform them in src/lib');
-		for (const body of [b.create, b.update, b.delete, b.notify, ...Object.values(b.effect ?? {})]) generator(body);
+		for (const body of [b.create, b.update, ...Object.values(b.effect ?? {})]) generator(body);
 		for (const s of Object.values(b.syncs ?? {})) { generator(s?.read); generator(s?.write); for (const p of Object.values(s?.parse ?? {})) generator(p); }
-		for (const verb of ['create', 'update', 'delete']) if (typeof b[verb] === 'function') bodies.transforms.push(n + '.' + verb);
+		for (const verb of ['create', 'update']) if (typeof b[verb] === 'function') bodies.transforms.push(n + '.' + verb);
 		mark(m?.spec);
 		d.model[n] = { name: m?.name, spec: m?.spec };
 	}
@@ -602,7 +588,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 	timing: boolean
 ) {
 	const runs = yield* Effect.try({
-		try: () => moduleScript(program.source, missing),
+		try: () => module_script(program.source, missing),
 		catch: (cause) =>
 			new EvalError({ cause: cause instanceof Error ? cause : new Error(String(cause)) })
 	}).pipe(
@@ -638,7 +624,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 		return yield* Effect.fail(
 			new EvalError({ cause: new Error('missing deterministic evaluation') })
 		);
-	if (sha256Hex(a.json) !== sha256Hex(b.json))
+	if (sha256_hex(a.json) !== sha256_hex(b.json))
 		errors.push({
 			code: 'load/nondeterministic',
 			path: 'src',

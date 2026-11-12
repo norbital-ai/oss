@@ -1,28 +1,28 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
 	import { Layer, ManagedRuntime } from 'effect';
-	import { mountEdge } from '../../../ui/src/effect/index.js';
-	import { provideBolt } from '../../../ui/src/client/context.js';
-	import { filterCatalog as catalog } from './filter-catalog.ts';
+	import { mount_edge } from '../../../ui/src/effect/index.js';
+	import { provide_bolt } from '../../../ui/src/client/context.js';
+	import { filter_catalog as catalog } from './filter-catalog.ts';
 	import type { Json } from '../../../ui/src/client/contract.js';
 	import type { ViewBolt } from '../../../ui/src/client/contract.js';
-	import { provideKinds } from '../../../ui/src/kinds/context.js';
+	import { provide_kinds } from '../../../ui/src/kinds/context.js';
 	import ViewPopover from '../../../ui/src/filter/ViewPopover.svelte';
 	import { viewState } from '../../../ui/src/filter/view-state.svelte.js';
 
 	let { bolt, initialFilter }: { bolt: ViewBolt; initialFilter?: Json } = $props();
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(() => bolt);
+	provide_bolt(() => bolt);
 
-	provideKinds({ catalog, zone: 'Asia/Singapore' });
+	provide_kinds({ catalog, zone: 'Asia/Singapore' });
 	const view = viewState(
 		untrack(() => bolt),
 		{
 			key: () => 'filter-browser',
 			model: () => 'people',
 			catalog: () => catalog,
-			initialFilter: () =>
+			initial_filter: () =>
 				initialFilter ?? {
 					employer: { eq: 'company_1' },
 					contracts: {

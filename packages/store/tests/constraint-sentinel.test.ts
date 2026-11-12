@@ -1,7 +1,7 @@
 import type { PGlite } from '@electric-sql/pglite';
 import { expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import { build, constraintIndex, schema, table, type FieldSpec, type Sql } from '../src/index.ts';
+import { build, constraint_index, schema, table, type FieldSpec, type Sql } from '../src/index.ts';
 import { database, exec, script } from './support.ts';
 
 const rejected = Effect.fnUntraced(function* (pg: PGlite, statement: Sql) {
@@ -40,12 +40,12 @@ for (const { name, field, value } of cases) {
 						audit: true,
 						key: 'text',
 						fields: { account: field, window: { kind: 'period', of: 'date' } },
-						noOverlap: [{ key: ['account'], period: 'window' }]
+						no_overlap: [{ key: ['account'], period: 'window' }]
 					})
 				});
 				const pg = yield* database;
 				yield* script(pg, `${(yield* build(records)).join(';\n')};`);
-				const constraints = yield* constraintIndex(records);
+				const constraints = yield* constraint_index(records);
 				for (const { id, account } of [
 					{ id: 'null', account: null },
 					{ id: 'zero', account: '0' },

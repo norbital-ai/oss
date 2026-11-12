@@ -2,10 +2,16 @@
 // the corpus the last build produced (`pnpm --dir oss build` first). Every symbol a workspace imports has a summary;
 // declaration functions carry their option shapes; `workspace_lang` reads the same source JSDoc through the compiler.
 import { expect, it } from '@effect/vitest';
-import { docs } from '../src/docs/index.ts';
+import { Effect } from 'effect';
+import { docs as cached } from '../src/docs/index.ts';
 import { corpus } from '../src/engine/docs-corpus.ts';
 
-it('validates and caches each documentation document once', () => {
+const required = <A>(value: A | null | undefined): A => {
+	if (value == null) throw new Error('A required documentation entry is missing');
+	return value;
+};
+
+it.effect('validates and decodes each documentation document once', () => Effect.gen(function* () {
 	const files: Record<string, unknown> = {
 		'index.json': {
 			namespaces: [
@@ -42,10 +48,12 @@ it('validates and caches each documentation document once', () => {
 		}
 	};
 	const reads: string[] = [];
-	const local = corpus((file) => {
-		reads.push(file);
-		return files[file];
-	});
+	const local = yield* corpus((file) =>
+		Effect.sync(() => {
+			reads.push(file);
+			return files[file];
+		})
+	);
 	expect(local.index()).toBe(local.index());
 	expect(local.namespace('bolt')).toBe(local.namespace('bolt'));
 	expect(local.skill('authoring')).toBe(local.skill('authoring'));
@@ -53,9 +61,9 @@ it('validates and caches each documentation document once', () => {
 	expect(local.namespace('missing')).toBeNull();
 	expect(local.skill('missing')).toBeNull();
 	expect(reads).toEqual(['index.json', 'bolt.json', 'skill.authoring.json']);
-});
+}));
 
-it('rejects malformed documents and mismatched document identities', () => {
+it.effect('rejects malformed documents and mismatched document identities', () => Effect.gen(function* () {
 	const index = {
 		namespaces: [
 			{
@@ -70,21 +78,23 @@ it('rejects malformed documents and mismatched document identities', () => {
 		guides: [],
 		skills: [{ name: 'authoring', description: 'Authoring', files: [] }]
 	};
-	expect(() => corpus(() => ({ ...index, namespaces: 'bad' })).index()).toThrow();
+	yield* Effect.flip(corpus(() => Effect.succeed({ ...index, namespaces: 'bad' })));
 	for (const document of [
 		{ namespace: 'other', module: 'other', summary: '', symbols: [] },
 		{ namespace: 'bolt', module: 'bolt', summary: '', symbols: [{ name: 7 }] }
 	]) {
-		const local = corpus((file) => (file === 'index.json' ? index : document));
-		expect(() => local.namespace('bolt')).toThrow();
+		yield* Effect.flip(corpus((file) => Effect.succeed(file === 'index.json' ? index : document)));
 	}
-	const local = corpus((file) =>
-		file === 'index.json' ? index : { name: 'other', description: '', files: [] }
+	const skilled = { ...index, namespaces: [] };
+	yield* Effect.flip(
+		corpus((file) =>
+			Effect.succeed(file === 'index.json' ? skilled : { name: 'other', description: '', files: [] })
+		)
 	);
-	expect(() => local.skill('authoring')).toThrow();
-});
+}));
 
-it('one namespace per public entry, with its module and the entry summary', () => {
+it.effect('one namespace per public entry, with its module and the entry summary', () => Effect.gen(function* () {
+	const docs = yield* cached;
 	const names = docs.index().namespaces.map((n) => n.namespace);
 	expect(names).toEqual(
 		expect.arrayContaining([
@@ -104,11 +114,11 @@ it('one namespace per public entry, with its module and the entry summary', () =
 	);
 	for (const n of docs.index().namespaces.filter((x) => x.reference))
 		expect(n.summary, n.namespace).not.toBe('');
-});
+}));
 
-it('the declaration functions are documented, and spec parameters list their fields', () => {
-	const fns = docs
-		.namespace('bolt')!
+it.effect('the declaration functions are documented, and spec parameters list their fields', () => Effect.gen(function* () {
+	const docs = yield* cached;
+	const fns = required(docs.namespace('bolt'))
 		.symbols.filter((s) => s.kind === 'function')
 		.map((s) => s.name);
 	expect(fns).toEqual([
@@ -126,16 +136,16 @@ it('the declaration functions are documented, and spec parameters list their fie
 		'secrets',
 		'seeder',
 		'team',
-		'tool',
 		'workspace'
 	]);
-	const model = docs.symbol('bolt', 'ModelDeclaration')!;
+	const model = required(docs.symbol('bolt', 'ModelDeclaration'));
 	expect(model.signature).toContain('interface ModelDeclaration');
 	expect(model.source).toMatch(/^packages\/bolt\/src\/decl\/model\.ts:\d+$/);
 	expect(model.params?.[0]?.fields?.map((f) => f.name)).toContain('fields');
-});
+}));
 
-it('keeps implementation guidance and parameter documentation on the core public contracts', () => {
+it.effect('keeps implementation guidance and parameter documentation on the core public contracts', () => Effect.gen(function* () {
+	const docs = yield* cached;
 	for (const name of [
 		'ModelDeclaration',
 		'IntegrationDeclaration',
@@ -160,16 +170,18 @@ it('keeps implementation guidance and parameter documentation on the core public
 		?.members?.find((member) => member.name === 'query');
 	expect(query?.docs).toContain('@returns');
 	expect(query?.examples?.[0]).toContain('bolt.query');
-});
+}));
 
-it('svelte components list their props with the props docs', () => {
-	const stack = docs.symbol('ui/layout', 'Stack')!;
+it.effect('svelte components list their props with the props docs', () => Effect.gen(function* () {
+	const docs = yield* cached;
+	const stack = required(docs.symbol('ui/layout', 'Stack'));
 	expect(stack.kind).toBe('component');
 	expect(stack.props?.map((p) => p.name)).toContain('gap');
 	expect(docs.symbol('ui', 'Table')?.kind).toBe('component');
-});
+}));
 
-it('search ranks an exact name first and narrows by namespace', () => {
+it.effect('search ranks an exact name first and narrows by namespace', () => Effect.gen(function* () {
+	const docs = yield* cached;
 	expect(docs.search('ModelDeclaration')[0]).toMatchObject({
 		namespace: 'bolt',
 		name: 'ModelDeclaration',
@@ -187,9 +199,10 @@ it('search ranks an exact name first and narrows by namespace', () => {
 	expect(names.some((n) => n.startsWith('Table'))).toBe(true);
 	expect(names).not.toContain('ApprovalPanel'); // "app" matches where a word starts, not inside "approval"
 	expect(docs.search('enum field kind values options')[0]?.name).toBe('FieldKind');
-});
+}));
 
-it('documents native Effect service implementations needed by test layers', () => {
+it.effect('documents native Effect service implementations needed by test layers', () => Effect.gen(function* () {
+	const docs = yield* cached;
 	const convert = docs.symbol('bolt/engine', 'Convert');
 	expect(convert?.members?.map((member) => member.name)).toEqual(
 		expect.arrayContaining(['targets', 'convert', 'ingest'])
@@ -202,9 +215,10 @@ it('documents native Effect service implementations needed by test layers', () =
 		expect.arrayContaining(['put', 'get', 'url', 'remove', 'download'])
 	);
 	expect(docs.symbol('bolt/engine', 'Sql')?.signature).toContain('readonly params');
-});
+}));
 
-it('ships every maintained mechanism guide with source and complete text', () => {
+it.effect('ships every maintained mechanism guide with source and complete text', () => Effect.gen(function* () {
+	const docs = yield* cached;
 	const guides = docs.index().guides;
 	expect(guides.map((guide) => guide.slug)).toEqual(
 		expect.arrayContaining([
@@ -220,9 +234,10 @@ it('ships every maintained mechanism guide with source and complete text', () =>
 	expect(docs.guide('mechanisms')?.text).toContain('reserved system identity');
 	expect(docs.guide('models')?.source).toBe('packages/bolt/docs/models.md');
 	expect(docs.guide('not-a-guide')).toBeNull();
-});
+}));
 
-it('bolt-contract holds a generated card per role, naming what a role is written with', () => {
+it.effect('bolt-contract holds a generated card per role, naming what a role is written with', () => Effect.gen(function* () {
+	const docs = yield* cached;
 	const contract = docs.skill('bolt-contract');
 	expect(contract?.files.map((file) => file.path)).toEqual([
 		'SKILL.md',
@@ -230,7 +245,7 @@ it('bolt-contract holds a generated card per role, naming what a role is written
 		'access.md',
 		'automation.md',
 		'sync.md',
-		'tool.md',
+		'integration.md',
 		'page.md',
 		'test.md'
 	]);
@@ -238,4 +253,23 @@ it('bolt-contract holds a generated card per role, naming what a role is written
 	expect(card('model.md')).toContain("kind: 'money'");
 	expect(card('automation.md')).toContain('- policies: NonEmpty<string>');
 	expect(card('page.md').length).toBeLessThan(25_000);
-});
+}));
+
+it.effect('documents the optional snapshot host bridge from its public source type and page-role card', () => Effect.gen(function* () {
+	const docs = yield* cached;
+	const bridge = required(docs.symbol('bolt/page', 'PageSnapshotHost'));
+	expect(bridge.kind).toBe('interface');
+	expect(bridge.source).toMatch(/^packages\/bolt\/src\/page\/bolt\.ts:\d+$/);
+	expect(bridge.signature).toContain('readonly bolt_refresh?');
+	expect(bridge.members?.find((member) => member.name === 'bolt_live_mode')).toMatchObject({
+		optional: true, type: expect.stringContaining('snapshot')
+	});
+	expect(bridge.members?.find((member) => member.name === 'bolt_refresh')).toMatchObject({
+		optional: true, type: expect.stringContaining('Promise<void>'),
+		summary: expect.stringContaining('read-only')
+	});
+	const card = docs.skill('bolt-contract')?.files.find((file) => file.path === 'page.md')?.text;
+	expect(card).toContain('## PageSnapshotHost');
+	expect(card).toContain('- bolt_refresh?: () => Promise<void>');
+	expect(docs.guide('client-bundling')?.text).toContain('window.bolt_refresh()');
+}));

@@ -1,18 +1,18 @@
 import { Effect } from 'effect';
 import { expect, it } from '@effect/vitest';
-import { createBolt } from '../src/page/bolt.ts';
+import { create_bolt } from '../src/page/bolt.ts';
 const capabilities = {
 	model: 'jobs',
 	id: 'j1',
 	revision: 3,
 	fields: {
-		title: { writable: false, proposal: false, reasons: ['syncOwned'] },
+		title: { writable: false, proposal: false, reasons: ['sync_owned'] },
 		note: { writable: true, proposal: false, reasons: [] }
 	},
 	update: { allowed: true, proposal: false, reasons: [] },
-	delete: { allowed: false, proposal: false, reasons: ['noGrant'] },
+	delete: { allowed: false, proposal: false, reasons: ['no_grant'] },
 	moves: {},
-	proposalMoves: {}
+	proposal_moves: {}
 };
 it.effect('loads and validates the native current-row capability projection', () =>
 	Effect.gen(function* () {
@@ -26,7 +26,8 @@ it.effect('loads and validates the native current-row capability projection', ()
 				value: { ...capabilities, credential: 'must never leave the codec' }
 			});
 		};
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',
@@ -44,7 +45,7 @@ it.effect('loads and validates the native current-row capability projection', ()
 			revision: 4
 		});
 		expect(request).toEqual({
-			url: '/__bolt/record-capabilities?model=jobs&id=j1&parentModel=orders&parentId=o1&relation=lines&parentRevision=4',
+			url: '/__bolt/record-capabilities?model=jobs&id=j1&parent_model=orders&parent_id=o1&relation=lines&parent_revision=4',
 			credentials: 'same-origin'
 		});
 	})
@@ -52,11 +53,12 @@ it.effect('loads and validates the native current-row capability projection', ()
 it.effect('an unreadable record is null; malformed and refused capabilities fail', () =>
 	Effect.gen(function* () {
 		let response = Response.json(
-			{ error: { code: 'notFound', message: 'Not found or no access.' } },
+			{ error: { code: 'not_found', message: 'Not found or no access.' } },
 			{ status: 404 }
 		);
 		const fetch: typeof globalThis.fetch = async () => response;
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',

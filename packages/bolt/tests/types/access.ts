@@ -5,19 +5,19 @@ import { Schema } from 'effect';
 import { policy } from '../../src/index.ts';
 import type {
 	Actor,
-	CreateCheck,
+	CreateVerdict,
 	Edge,
 	Grant,
 	Id,
 	LimitKey,
 	TeamName,
-	UpdateCheck,
+	UpdateVerdict,
 	WriteField
 } from '../../src/index.ts';
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const is = <T extends true>(): T => true as T;
+const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 is<Eq<Edge<'orders', 'status'>, 'draft->submitted' | 'submitted->ordered' | 'submitted->draft'>>();
 // a write grant's root columns are the model's declared root columns; a layer is its own path, never a column
@@ -37,19 +37,19 @@ export const salesRep = policy({
 		orders: {
 			outputs: { default: { history: true, where: ownOrders } },
 			create: {
-				columns: { orders: ['customer', 'note'], 'orders.lines': ['item', 'qty'] },
+				columns: { fields: ['customer', 'note'], lines: { fields: ['item', 'qty'] } },
 				// one read over the batch replaces the old relation-hop `where`; steps in order, `if` adds one only when it
 				// holds, finance may decide in any step's place
 				verdict: function* (rows, ctx) {
 					const { customers } = yield* ctx.query({
-						customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['tier'] }
+						customers: { where: { id: { in: rows.map((r) => r.after.customer) } }, fields: ['tier'] }
 					});
 					if (customers.rows.some((c) => c.tier !== 'gold'))
 						return yield* ctx.refuse('Gold customers only.', { field: 'customer' });
 					return ctx.approve({
 						steps: [
 							{ name: 'Sales review', teams: ['sales'] },
-							...(rows.some((row) => row.note != null)
+							...(rows.some((row) => row.after.note != null)
 								? [{ name: 'Finance sign-off', teams: ['finance'] as const }]
 								: [])
 						],
@@ -58,7 +58,7 @@ export const salesRep = policy({
 				}
 			},
 			update: {
-				columns: { orders: ['status', 'note'] },
+				columns: { fields: ['status', 'note'] },
 				moves: { status: ['draft->submitted', 'submitted->draft'] },
 				// the pre-image check `previous` was; the owner's team reviews a status change
 				verdict: function* (changes, ctx) {
@@ -74,7 +74,7 @@ export const salesRep = policy({
 			},
 			delete: {
 				verdict: function* (rows, ctx) {
-					if (rows.some((r) => r.status !== 'draft'))
+					if (rows.some((r) => r.before.status !== 'draft'))
 						return yield* ctx.refuse('Only drafts are deleted.', { row: 0 });
 					return ctx.actor.kind === 'member' && ctx.actor.teams.includes('finance')
 						? ctx.allow()
@@ -91,13 +91,14 @@ export const salesRep = policy({
 		sites: {
 			outputs: { summary: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } }
 		},
-		sys_user: { outputs: { directory: { where: { team: { in: { var: 'requestor.teamTree' } } } } } }
+		sys_user: { outputs: { directory: { where: { team: { in: { var: 'requestor.team_tree' } } } } } }
 	},
 	capabilities: {
 		apps: ['sales'],
 		tools: ['browser'],
 		mcp: ['erp'],
-		automations: ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote']
+		automations: ['nightly', 'orders_submit', 'orders_renote'],
+		syncs: ['products.ledger']
 	},
 	limits: {
 		act: '600/min',
@@ -119,7 +120,7 @@ export const applicant = policy({
 	description: 'Anyone may apply',
 	grants: {
 		customers: { outputs: { directory: { where: { tier: { eq: 'gold' } } } } },
-		orders: { create: { columns: { orders: ['customer'] } } }
+		orders: { create: { columns: { fields: ['customer'] } } }
 	},
 	limits: { register: { rate: '10/h', per: 'ip' } }
 });
@@ -140,8 +141,8 @@ export const clerk = policy({
 	}
 });
 // the check callbacks are part of the literal policy() returns, typed from the model's declaration
-export const createCheck: CreateCheck<'orders'> = salesRep.grants.orders.create.verdict;
-export const updateCheck: UpdateCheck<'orders'> = salesRep.grants.orders.update.verdict;
+export const createCheck: CreateVerdict<'orders'> = salesRep.grants.orders.create.verdict;
+export const updateCheck: UpdateVerdict<'orders'> = salesRep.grants.orders.update.verdict;
 
 // ── grants ──
 // @ts-expect-error A1 an unknown model
@@ -184,7 +185,7 @@ policy({ description: 'x', grants: { orders: { outputs: { default: { where: { no
 policy({ description: 'x', grants: { orders: { outputs: { default: { owner: { eq: { var: 'requestor.id' } } } } } } });
 // @ts-expect-error A4 a create column outside the declared create columns
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { columns: { orders: ['status'] } } } } });
+policy({ description: 'x', grants: { orders: { create: { columns: { fields: ['status'] } } } } });
 // @ts-expect-error A5 the `'read'` write shorthand is gone
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { outputs: { default: true }, update: 'read' } } });
@@ -199,7 +200,7 @@ policy({ description: 'x', grants: { orders: { create: { where: { note: { is_nul
 policy({ description: 'x', grants: { order_lines: { via: 'order' } } });
 // @ts-expect-error A8 a write layer is a declared write path (orders.customer is a read layer only)
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { columns: { 'orders.customer': ['name'] } } } } });
+policy({ description: 'x', grants: { orders: { create: { columns: { customer: { fields: ['name'] } } } } } });
 // @ts-expect-error A9 a move along an undeclared edge
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { moves: { status: ['draft->ordered'] } } } } });
@@ -271,9 +272,6 @@ policy({ description: 'x', grants: { orders: { update: { verdict: function* () {
 // @ts-expect-error AP3b a plain object is no verdict
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { verdict: function* () { return { kind: 'allow' }; } } } } });
-// @ts-expect-error AP4 a create row has no `before`
-// prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { verdict: function* (rows, ctx) { return rows[0]?.before === null ? ctx.allow() : yield* ctx.refuse('x'); } } } } });
 // @ts-expect-error AP5 `set` names the declared update columns
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { verdict: function* (changes, ctx) { return changes[0]?.set.nte === undefined ? ctx.allow() : yield* ctx.refuse('x'); } } } } });
@@ -288,13 +286,13 @@ policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, 
 policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, ctx) { return ctx.approve({ steps: [{ name: 'x', users: ['bob'] }] }); } } } } });
 // @ts-expect-error AP11 a row field the model lacks
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { verdict: function* (rows, ctx) { return rows[0]?.amount === null ? ctx.allow() : yield* ctx.refuse('x'); } } } } });
+policy({ description: 'x', grants: { orders: { create: { verdict: function* (rows, ctx) { return rows[0]?.after.amount === null ? ctx.allow() : yield* ctx.refuse('x'); } } } } });
 // @ts-expect-error AP12 `deny`'s path is a declared write path
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { create: { verdict: function* (_, ctx) { return yield* ctx.refuse('x', { path: 'orders.customer' }); } } } } });
 // @ts-expect-error AP13 a check's ctx holds no `act`
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { delete: { verdict: function* (_, ctx) { yield* ctx.act('orders.delete', []); return ctx.allow(); } } } } });
+policy({ description: 'x', grants: { orders: { delete: { verdict: function* (_, ctx) { yield* ctx.act({ 'orders.delete': [] }); return ctx.allow(); } } } } });
 
 // ── the policy, capabilities and limits ──
 // @ts-expect-error A29 a policy without a description
@@ -308,7 +306,7 @@ policy({ description: 'x', grants: {}, elevate: true });
 policy({ description: 'x', grants: {}, capabilities: { automations: ['nightley'] } });
 // @ts-expect-error A32 a sync run the model does not declare (sheet is a file sync; ledger on orders only writes)
 // prettier-ignore
-policy({ description: 'x', grants: {}, capabilities: { automations: ['orders.sync.ledger'] } });
+policy({ description: 'x', grants: {}, capabilities: { syncs: ['orders.ledger'] } });
 // a group name covers every app under it (`canOpen`'s `<group>/` prefix)
 policy({ description: 'x', grants: {}, capabilities: { apps: ['ops'] } });
 // @ts-expect-error A33 an unknown app
@@ -358,7 +356,7 @@ const envoy: Actor = {
 const run: Actor = {
 	kind: 'system',
 	run: '' as Id<'sys_run'>,
-	by: { platform: 'bolt.notify' }
+	by: { platform: 'notifications.deliver' }
 };
 // a sync's own writes run as the sync for one instance (never sent back through it)
 const synced: Actor = {

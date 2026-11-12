@@ -9,19 +9,19 @@ import {
 	MIGRATIONS_TABLE,
 	MIGRATION_GUARD_CODES,
 	StoreError,
-	checksumOf,
-	logCurrent,
-	logDdl,
-	logIntrospect,
-	logMigrationGuard,
-	migrationStatus,
+	checksum_of,
+	log_current,
+	log_ddl,
+	log_introspect,
+	log_migration_guard,
+	migration_status,
 	pending,
-	physicalHash,
-	physicalDefinitionsOf,
-	readLock,
-	readPhysicalDefinitions,
-	recordApplied,
-	verifyLog,
+	physical_hash,
+	physical_definitions_of,
+	read_lock,
+	read_physical_definitions,
+	record_applied,
+	verify_log,
 	type AppendOnlyLogSpec,
 	type MigrationFile
 } from '@norbital-ai/store';
@@ -29,7 +29,7 @@ import { SqlReadCapture, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { AuditMutation } from '../engine/audit-context.ts';
 import type { DbError } from '../engine/errors.ts';
 import { PgliteDb, Pristine } from './db/pglite.ts';
-import { auditLogSpec } from './audit-schema.ts';
+import { audit_log_spec } from './audit-schema.ts';
 
 export type AuditMigrations = {
 	readonly spec: AppendOnlyLogSpec;
@@ -39,10 +39,10 @@ export type AuditMigrations = {
 	readonly physical: string;
 };
 const invalid = (message: string) =>
-	StoreError.of('migrationChanged', 'admission', `audit log: ${message}`);
+	StoreError.of('migration_changed', 'admission', `audit log: ${message}`);
 
 /** Packaged immutable source, with one directory per supported storage scope. */
-export const readAuditMigrations = (scoped: boolean) =>
+export const read_audit_migrations = (scoped: boolean) =>
 	Effect.gen(function* () {
 		const directory = new URL(`./audit/${scoped ? 'scoped' : 'standalone'}/`, import.meta.url);
 		const files = (yield* Effect.tryPromise({
@@ -57,7 +57,7 @@ export const readAuditMigrations = (scoped: boolean) =>
 				catch: (cause) => invalid(`read ${name}: ${String(cause)}`)
 			});
 		return {
-			spec: auditLogSpec(scoped),
+			spec: audit_log_spec(scoped),
 			files: yield* Effect.forEach(files, (name) =>
 				Effect.map(read(name), (sql) => ({ name, sql }))
 			),
@@ -68,7 +68,7 @@ export const readAuditMigrations = (scoped: boolean) =>
 	});
 
 /** Two independent databases prove immutable history versus fresh declaration, including privileges and every prefix. */
-export const auditMigrationProof = (
+export const audit_migration_proof = (
 	spec: AppendOnlyLogSpec,
 	files: readonly MigrationFile[],
 	snapshot: string
@@ -86,8 +86,8 @@ export const auditMigrationProof = (
 			).pipe(Effect.map(PgliteDb.make));
 			const replay = yield* open,
 				declared = yield* open;
-			const ddl = yield* logDdl(spec),
-				inspect = { text: logIntrospect(spec), params: [] };
+			const ddl = yield* log_ddl(spec),
+				inspect = { text: log_introspect(spec), params: [] };
 			// A preinstalled extension is a declared retained prerequisite, not evidence of an existing log schema.
 			for (const text of ddl.slice(0, 2)) {
 				yield* replay.write({ text, params: [] });
@@ -108,19 +108,19 @@ export const auditMigrationProof = (
 			for (const text of ddl.slice(2)) yield* declared.write({ text, params: [] });
 			const expected = (yield* declared.rows(IntrospectRow, inspect)).map(({ line }) => line);
 			return {
-				lock: yield* verifyLog(files, snapshot, spec, actual, expected, physical),
-				physical: physicalDefinitionsOf(physical)
+				lock: yield* verify_log(files, snapshot, spec, actual, expected, physical),
+				physical: physical_definitions_of(physical)
 			};
 		})
 	).pipe(Effect.provide(Pristine.layer));
 
-/** The same native adapter bounds each file; exact legacy adoption records only a receipt and preserves payloads. */
-export const applyAuditMigrations = (db: TenantDbShape, migrations: AuditMigrations) =>
+/** The same native adapter bounds each file and records its verified immutable prefix. */
+export const apply_audit_migrations = (db: TenantDbShape, migrations: AuditMigrations) =>
 	Effect.gen(function* () {
-		yield* logCurrent(migrations.snapshot, migrations.spec);
-		const lock = yield* readLock(migrations.lock);
+		yield* log_current(migrations.snapshot, migrations.spec);
+		const lock = yield* read_lock(migrations.lock);
 		yield* pending(migrations.files, lock, [], migrations.snapshot);
-		const physical = yield* readPhysicalDefinitions(migrations.physical);
+		const physical = yield* read_physical_definitions(migrations.physical);
 		const names = ['', ...migrations.files.map(({ name }) => name)].sort();
 		if (
 			JSON.stringify(Object.keys(physical).sort()) !== JSON.stringify(names) ||
@@ -128,13 +128,13 @@ export const applyAuditMigrations = (db: TenantDbShape, migrations: AuditMigrati
 		)
 			return yield* invalid('proofs must cover every immutable prefix');
 		for (const [name, lines] of Object.entries(physical))
-			if (physicalHash(lines) !== lock.physical?.[name])
+			if (physical_hash(lines) !== lock.physical?.[name])
 				return yield* invalid(`${name}: native definitions or privileges differ from their lock`);
 		const advisory = { advisory: [`${migrations.spec.namespace}_migration`] };
-		for (const text of (yield* logDdl(migrations.spec)).slice(0, 2))
+		for (const text of (yield* log_ddl(migrations.spec)).slice(0, 2))
 			yield* db.write({ text, params: [] }, advisory);
 		yield* db.write({ text: MIGRATIONS_TABLE, params: [] }, advisory);
-		const inspect = { text: logIntrospect(migrations.spec), params: [] };
+		const inspect = { text: log_introspect(migrations.spec), params: [] };
 		while (true) {
 			const rows = yield* db.transaction({
 				statements: [{ text: APPLIED, params: [] }, inspect],
@@ -146,31 +146,25 @@ export const applyAuditMigrations = (db: TenantDbShape, migrations: AuditMigrati
 			const lines = (yield* Schema.decodeUnknownEffect(Schema.Array(IntrospectRow))(
 				rows[1]?.rows ?? []
 			).pipe(Effect.mapError((cause) => invalid(cause.message)))).map(({ line }) => line);
-			const initial = migrations.files[0];
-			// Only the exact, independently replayed former layout can be adopted without replaying CREATE TABLE.
-			const adopt =
-				applied.length === 0 &&
-				initial !== undefined &&
-				physicalHash(lines) === lock.physical?.[initial.name];
-			const status = adopt
-				? undefined
-				: yield* migrationStatus(migrations.files, lock, applied, {
-						snapshot: migrations.snapshot,
-						physical: lines
-					});
-			if (!adopt && status?.physical !== 'current' && status?.physical !== 'prefix')
-				return yield* invalid('live schema or privileges differ from their verified prefix');
-			const file = adopt ? initial : status?.pending[0];
-			const statements = [logMigrationGuard(migrations.spec, applied, lines, 'before')];
+			const status = yield* migration_status(migrations.files, lock, applied, {
+				snapshot: migrations.snapshot,
+				physical: lines
+			});
+			if (status.physical !== 'current' && status.physical !== 'prefix')
+				return yield* invalid(
+					'live schema or privileges differ from their verified prefix; resolve unreceipted layouts externally before opening'
+				);
+			const file = status.pending[0];
+			const statements = [log_migration_guard(migrations.spec, applied, lines, 'before')];
 			if (file !== undefined) {
 				const after = physical[file.name];
 				if (after === undefined) return yield* invalid(`${file.name}: missing physical prefix`);
-				if (!adopt) statements.push({ text: file.sql, params: [] });
+				statements.push({ text: file.sql, params: [] });
 				statements.push(
-					recordApplied(file),
-					logMigrationGuard(
+					record_applied(file),
+					log_migration_guard(
 						migrations.spec,
-						[...applied, { name: file.name, checksum: checksumOf(file) }],
+						[...applied, { name: file.name, checksum: checksum_of(file) }],
 						after,
 						'after'
 					)

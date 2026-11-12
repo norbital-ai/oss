@@ -1,10 +1,13 @@
 import type { Value } from '@norbital-ai/std/kind';
 import type { Json } from '@norbital-ai/std/wire';
-import type { OrderBy } from '../filter/filter.js';
+import type { OrderBy } from '../filter/order.js';
+import type { Query } from '../client/contract.js';
 export type Values = { readonly [field: string]: Value };
 export type Row = Values & { readonly id: string };
 /** A page of rows and its cursor; a read request root's page also counts every row it matches (`total`). */
 export type Page<T = Row> = { rows: readonly T[]; next: string | null; total?: number };
+/** A native table page or a supplied row array. */
+export type SourceData<R extends Values> = Page<R> | readonly R[];
 /**
  * The workspace's names as its views see them. Empty here, so ui stays workspace-agnostic: `@norbital-ai/bolt` fills
  * `names` from the workspace's generated index, and `of`, `columns`, `values`, `record` and ids are then checked per
@@ -44,6 +47,18 @@ type Names = Workspace extends { names: infer N }
 	: Loose;
 type Models = Names['models'];
 export type ModelKey = keyof Models & string;
+/** A model, a request with its own decoded answer, or caller-owned rows. */
+export type ViewSource<R extends Values = Values> = ModelKey | Query<Readonly<Record<string, SourceData<R>>>> | readonly R[];
+type SourcePageRow<T> = T extends { readonly rows: readonly (infer R extends Values)[] } ? R
+	: T extends readonly (infer R extends Values)[] ? R : Values;
+/** The row proved by the actual source supplied to a view. */
+export type SourceRow<S> = S extends string ? RowOf<S> & Values
+	: S extends Query<infer T> ? SourcePageRow<T[keyof T]>
+	: S extends readonly (infer R extends Values)[] ? R : Values;
+/** A model's declared cells, including many layers; other sources retain their own row fields. */
+export type SourceColumns<S> = S extends string
+	? RecordOf<S> & { readonly [M in ManyOf<S>]: readonly Row[] }
+	: SourceRow<S>;
 /**
  * A model's row as a view's read returns it (json, custom and file fields only when selected), its whole row as a
  * record view reads it, its create input, its filter and its sort.

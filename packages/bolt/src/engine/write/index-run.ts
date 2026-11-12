@@ -2,11 +2,12 @@
 // index's missing vectors after the load, a guest batch at a time, writing the vector column only (derived data: no
 // audit, effect or notice).
 import { Clock, Effect, Schema } from 'effect';
-import { indexColumn, q } from '@norbital-ai/store';
+import { index_column, q } from '@norbital-ai/store';
 import { LIMITS } from '../contracts.ts';
 import { TenantDb } from '../db/tenant-db.ts';
-import { Guest, Manifest, Wake, type RunHandler } from '../services.ts';
-import { catalogOf } from '../access/pred.ts';
+import { CapturedResult, nativeCommit } from '../db/captured.ts';
+import { Guest, Manifest, Live, Wake, type RunHandler } from '../services.ts';
+import { catalog_of } from '../access/pred.ts';
 import { bindingsAt } from '../query/reader.ts';
 import { Chain } from './sql.ts';
 import { enqueue } from '../runs/queue.ts';
@@ -22,9 +23,10 @@ const Pending = Schema.Struct({ id: Schema.String, revision: Schema.Number });
 export const indexRun = Effect.gen(function* () {
 	const manifest = yield* Manifest,
 		db = yield* TenantDb,
+		live = yield* Live,
 		guest = yield* Guest,
 		wake = yield* Wake;
-	const cat = catalogOf(manifest);
+	const cat = catalog_of(manifest);
 	const run: RunHandler = (input, { id }) =>
 		Effect.gen(function* () {
 			const from = Schema.is(Cursor)(input) ? input : undefined;
@@ -40,7 +42,7 @@ export const indexRun = Effect.gen(function* () {
 			let indexed = 0,
 				selected = 0;
 			for (const { model, name, dim } of indexes.slice(start)) {
-				const column = indexColumn(name);
+				const column = index_column(name);
 				for (
 					let after = from?.model === model && from.index === name ? from.after : '', batch = 0;
 					;
@@ -53,12 +55,12 @@ export const indexRun = Effect.gen(function* () {
 							{
 								automation: INDEX,
 								input: { model, index: name, after },
-								dueAt: at,
+								due_at: at,
 								cause: 'continue',
 								depth: 0
 							}
 						]);
-						yield* db.write(c.sql('NULL AS outcome'));
+						yield* nativeCommit(db.write, live.publish, c, CapturedResult);
 						yield* wake.at(at);
 						return { indexed, continued: true };
 					}

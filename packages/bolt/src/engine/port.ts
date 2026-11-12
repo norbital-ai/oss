@@ -13,7 +13,7 @@ const Thrown = Schema.Union([
 		kind: Schema.Literals(FACILITY_KINDS),
 		message: Schema.String,
 		status: Schema.optional(Schema.Number),
-		retryAfterMs: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)))
+		retry_after_ms: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)))
 	}),
 	Schema.Struct({
 		kind: Schema.Literal('unavailable'),
@@ -48,7 +48,7 @@ const failureOf =
 export const Port = {
 	/** Bounds one port call by its wall: past `wallMs` the call is interrupted and fails `timeout`. */
 	call:
-		(facility: string, wallMs: number) =>
+		(facility: string, wallMs: number, message = `${facility} did not answer within ${wallMs} ms`) =>
 		<A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E | FacilityFailure, R> =>
 			Effect.timeoutOrElse(self, {
 				duration: Duration.millis(wallMs),
@@ -56,7 +56,7 @@ export const Port = {
 					Effect.fail(
 						new FacilityFailure({
 							kind: 'timeout',
-							message: `${facility} did not answer within ${wallMs} ms`
+							message
 						})
 					)
 			}),

@@ -6,7 +6,10 @@ import { BOLT } from '../protocol/wire.ts';
 import type { AutomationExposure, ModelExposure } from '@norbital-ai/ui';
 import { Schema } from 'effect';
 import { FieldsSchema } from '../protocol/public-page.ts';
+import { automation_fields } from '../decl/runtime/automation-input.ts';
 import type { ManifestItem } from './finder/manifest.ts';
+import type { ReadCatalog } from '../protocol/read-answer.ts';
+import type { OperationOutputs } from '../protocol/output-contract.ts';
 
 type AppSpec = EngineManifest['apps'][string];
 /** Browser route metadata; agent availability comes from the authorized boot surfaces. */
@@ -43,11 +46,11 @@ export type NavNode =
 	  };
 
 /** The apps a nav tree opens, groups flattened: the shell renders no other app's page. */
-export const navApps = (nodes: readonly NavNode[]): string[] =>
-	nodes.flatMap((node) => (node.kind === 'app' ? [node.name] : navApps(node.children)));
+export const nav_apps = (nodes: readonly NavNode[]): string[] =>
+	nodes.flatMap((node) => (node.kind === 'app' ? [node.name] : nav_apps(node.children)));
 
 /** Exact workspace pages the in-app assistant may request; never URLs, API routes or sign-in actions. */
-export function navigationPaths(nodes: readonly NavNode[], admin: boolean): string[] {
+export function navigation_paths(nodes: readonly NavNode[], admin: boolean): string[] {
 	const pages = (items: readonly NavNode[]): string[] =>
 		items.flatMap((node) =>
 			node.kind === 'group' ? pages(node.children) : node.pages.map((page) => page.href)
@@ -77,22 +80,22 @@ export const COOKIES = {
 	visitor: '__Secure-bolt-visitor'
 } as const;
 /** Plain HTTP must not depend on browser exceptions for Secure cookies. */
-export const cookieNames = (secure: boolean) =>
+export const cookie_names = (secure: boolean) =>
 	secure ? COOKIES : { session: 'bolt-session', preview: 'bolt-preview', visitor: 'bolt-visitor' };
 /**
  * The cookies' site attributes: over https, partitioned and sent in frames, so a portal page embedded in another site keeps
  * its own sign-in (kept apart from the top-level one: a framing site never borrows a member's session); over plain http
- * (`bolt dev`), `Lax` without Secure. Every cookie has no Domain and the workspace's `basePath` as its Path: workspaces
+ * (`bolt dev`), `Lax` without Secure. Every cookie has no Domain and the workspace's `base_path` as its Path: workspaces
  * served under paths of one host keep their sign-ins apart (`__Host-` would force `Path=/`).
- * Cross-site writes are refused by `crossSite`, not by `SameSite`.
+ * Cross-site writes are refused by `cross_site`, not by `SameSite`.
  */
-export const cookieSite = (secure: boolean): string =>
+export const cookie_site = (secure: boolean): string =>
 	secure ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax';
 /**
  * A browser write another site started (a forged form post or fetch): refused before it reaches a handler. A request from
  * a page of this workspace, framed or not, is `same-origin`; a server calling a webhook sends neither header.
  */
-export function crossSite(request: Request, publicUrl: string): boolean {
+export function cross_site(request: Request, publicUrl: string): boolean {
 	if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS')
 		return false;
 	const site = request.headers.get('sec-fetch-site');
@@ -125,7 +128,7 @@ export function logical(u: string | URL): URL | null {
 export type ShellBoot = {
 	/**
 	 * `logo`: the host's first brand icon, the page's organization mark (`bolt.org`). `environment`: the non-production
-	 * badge's label (`environmentLabel`), absent in production. `handle`: the tenant handle the sign-in card names; `apex`:
+	 * badge's label (`environment_label`), absent in production. `handle`: the tenant handle the sign-in card names; `apex`:
 	 * where "Change workspace" leads (the host's workspace picker). `organization`: the host lets an administrator edit the
 	 * name and logo (`ShellHostConfig.organization`). `live`: this is a preview environment; the live workspace's address.
 	 */
@@ -150,39 +153,43 @@ export type ShellBoot = {
 	/** The release's client hash: a live link that comes back under another reloads the page. */
 	client?: string;
 	/** Where this host serves Studio's bundle (`StudioPort.bundle`), under the workspace; absent: it serves none. */
-	studioBundle?: string;
+	studio_bundle?: string;
 	/** The member's other workspaces (`ShellHost.workspaces`): the switcher's options. */
 	workspaces?: readonly WorkspaceLink[];
 	nav: NavNode[];
 	surfaces: Surfaces;
 	inbox: number;
-	/** The kiosk rows the viewer may open (server-computed via `kioskNav`, like `nav`). */
+	/** The kiosk rows the viewer may open (server-computed via `kiosk_nav`, like `nav`). */
 	kiosks: {
 		readonly name: string;
 		readonly title: string;
 		readonly icon?: string;
 		readonly href: string;
 	}[];
-	/** The automations this member may start by hand from the command center's Automations (`startableAutomations`). */
+	/** The automations this member may start by hand from the command center's Automations (`startable_automations`). */
 	startable?: readonly {
 		readonly name: string;
 		readonly description: string;
-		readonly needsInput?: boolean;
+		readonly needs_input?: boolean;
 	}[];
 	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
 	envoys?: { readonly [envoy: string]: string };
 	/** The VAPID public key to subscribe this device to notices with (§5.7), or `null` when the host sends no push. */
 	push: string | null;
 	/** A visitor page's app and, when it declares one, the Turnstile site key. */
-	visitor: { app: string; siteKey?: string } | null;
+	visitor: { app: string; site_key?: string } | null;
 	/** What ui's generated forms and record views read per model (its `ModelExposure`), as this caller may use it. */
 	catalog: { readonly [model: string]: ModelExposure };
+	/** Field schemas for every output this caller holds, including its relation layers. */
+	read_catalog: ReadCatalog;
 	/** Inputs of the automations this caller may start; the host still validates every start. */
 	automations: Readonly<Record<string, AutomationExposure>>;
+	/** Result shapes of the automations this caller may start, for decoding their answers. */
+	operation_outputs: OperationOutputs;
 	/** Authorized manifest metadata for the shared search picker. */
 	search?: readonly ManifestItem[];
 	/** The agent surface is on but the host binds no AI provider (P19): the panel says so instead of failing each turn. */
-	aiUnconfigured?: true;
+	ai_unconfigured?: true;
 	/** The schema fingerprint the page boots against: the page context sends it as `Bolt-Contract` (L-BOLT-171). */
 	contract?: string;
 };
@@ -199,24 +206,24 @@ export type ShellNotice = {
  * The environment badge's label: nothing in production (or when unset), `local` for development, and any other name
  * as itself, so an unknown environment is visible rather than mistaken for production.
  */
-export function environmentLabel(environment: string | undefined): string | null {
+export function environment_label(environment: string | undefined): string | null {
 	const e = environment?.trim() ?? '';
 	return e === '' || e === 'production' ? null : e === 'development' ? 'local' : e;
 }
 
 const appOf = (m: ShellManifest, name: string) => m.apps[name];
-export const kioskOf = (m: ShellManifest, name: string) => {
+export const kiosk_of = (m: ShellManifest, name: string) => {
 	const app = appOf(m, name);
 	return app?.shell === 'kiosk' ? app : undefined;
 };
-export const kioskPolicies = (app: NonNullable<ReturnType<typeof kioskOf>>) =>
+export const kiosk_policies = (app: NonNullable<ReturnType<typeof kiosk_of>>) =>
 	typeof app.audience === 'object' ? app.audience.public : app.policies;
-export const canOpenKiosk = (
-	app: NonNullable<ReturnType<typeof kioskOf>>,
+export const can_open_kiosk = (
+	app: NonNullable<ReturnType<typeof kiosk_of>>,
 	authority: Authority,
 	name: string
 ) =>
-	audienceOf(app) === 'public' ||
+	audience_of(app) === 'public' ||
 	(authority.actor.kind === 'member' &&
 		(authority.admin ||
 			((app.audience === 'all' ||
@@ -228,11 +235,11 @@ const holdsApp = (authority: Authority, name: string) =>
 	);
 
 /** The four kinds of `audience`; `public` apps run every viewer as the visitor (§3.9). */
-export function audienceOf(spec: AppSpec | undefined): 'members' | 'external' | 'all' | 'public' {
+export function audience_of(spec: AppSpec | undefined): 'members' | 'external' | 'all' | 'public' {
 	const a = spec?.audience ?? 'members';
 	return typeof a === 'object' ? 'public' : a;
 }
-export const challengeOf = (m: ShellManifest, app: string): 'turnstile' | undefined => {
+export const challenge_of = (m: ShellManifest, app: string): 'turnstile' | undefined => {
 	const a = appOf(m, app)?.audience;
 	return typeof a === 'object' ? a.challenge : undefined;
 };
@@ -242,15 +249,15 @@ export const challengeOf = (m: ShellManifest, app: string): 'turnstile' | undefi
  * member sees an app whose audience admits their kind and that a held policy's `capabilities.apps` admits (a name, `*`, or a `<group>/` prefix); an administrator
  * sees every app, public ones included, so they can try a form.
  */
-export function canOpen(m: ShellManifest, auth: Authority, app: string): boolean {
+export function can_open(m: ShellManifest, auth: Authority, app: string): boolean {
 	const spec = appOf(m, app);
 	if (spec === undefined || spec.shell === 'kiosk') return false;
-	const audience = audienceOf(spec),
+	const audience = audience_of(spec),
 		actor = auth.actor;
 	if (actor.kind === 'visitor') return actor.app === app;
 	if (actor.kind !== 'member') return false;
 	if (auth.admin) return true;
-	if (audience === 'public') return holdsPublic(auth, app);
+	if (audience === 'public') return holds_public(auth, app);
 	if (audience !== 'all' && audience !== (actor.external ? 'external' : 'members')) return false;
 	return holdsApp(auth, app);
 }
@@ -259,11 +266,11 @@ export function canOpen(m: ShellManifest, auth: Authority, app: string): boolean
  * A document may be framed by the workspace itself and the origins in the app or kiosk’s `embed` list.
  * `path` is the workspace path without a base.
  */
-export function framePolicy(m: ShellManifest, path: string): string {
+export function frame_policy(m: ShellManifest, path: string): string {
 	const r = route(m, new URL(path, 'http://x'));
 	const embed =
 		r.kind === 'kiosk'
-			? kioskOf(m, r.kiosk)?.embed
+			? kiosk_of(m, r.kiosk)?.embed
 			: r.kind === 'page'
 				? appOf(m, r.app)?.embed
 				: undefined;
@@ -271,7 +278,7 @@ export function framePolicy(m: ShellManifest, path: string): string {
 }
 
 /** A member whose policy names a public app by name (never `*` or a group) opens it as themselves, not as its visitor. */
-export const holdsPublic = (auth: Authority, app: string): boolean =>
+export const holds_public = (auth: Authority, app: string): boolean =>
 	auth.actor.kind === 'member' && !auth.admin && auth.capabilities.apps.includes(app);
 
 /**
@@ -286,13 +293,13 @@ export function href(app: string, page?: string, record?: { model: string; id: s
 		: `${path}?record=${encodeURIComponent(record.model)}/${encodeURIComponent(record.id)}`;
 }
 const leafOf = (app: string) => app.split('/').at(-1);
-/** `bolt.kioskHref(kiosk, page?)`: `/kiosk/<kiosk>[/<page>]`. Kiosks take no record stack. */
-export function kioskHref(kiosk: string, page?: string): string {
+/** `bolt.kiosk_href(kiosk, page?)`: `/kiosk/<kiosk>[/<page>]`. Kiosks take no record stack. */
+export function kiosk_href(kiosk: string, page?: string): string {
 	return `${KIOSK_PREFIX}${kiosk}${page === undefined ? '' : `/${page}`}`;
 }
 
 /** The kiosk rows a caller may open, in name order. */
-export function kioskNav(
+export function kiosk_nav(
 	m: EngineManifest,
 	authority: Authority | null
 ): { name: string; title: string; icon?: string; href: string }[] {
@@ -301,8 +308,8 @@ export function kioskNav(
 		.flatMap(([name, spec]) => {
 			if (
 				spec.shell !== 'kiosk' ||
-				(audienceOf(spec) !== 'public' &&
-					(authority === null || !canOpenKiosk(spec, authority, name)))
+				(audience_of(spec) !== 'public' &&
+					(authority === null || !can_open_kiosk(spec, authority, name)))
 			)
 				return [];
 			const page = Object.keys(spec.pages)[0];
@@ -313,14 +320,14 @@ export function kioskNav(
 							name,
 							title: spec.title,
 							...(spec.icon === undefined ? {} : { icon: spec.icon }),
-							href: kioskHref(name, page)
+							href: kiosk_href(name, page)
 						}
 					];
 		});
 }
 
 /** Authorized input metadata for native automation forms. */
-export function automationInputs(
+export function automation_inputs(
 	m: EngineManifest,
 	authority: Authority
 ): Readonly<Record<string, AutomationExposure>> {
@@ -336,7 +343,8 @@ export function automationInputs(
 						[
 							name,
 							{
-								input: Schema.decodeUnknownSync(FieldsSchema)(spec.input ?? {}),
+								input: Schema.decodeUnknownSync(FieldsSchema)(automation_fields(spec.input)),
+								mode: spec.mode ?? 'job',
 								description: spec.description
 							}
 						]
@@ -347,12 +355,12 @@ export function automationInputs(
 
 /**
  * The automations `authority` may start from the command center's Automations. One with a required input opens its
- * native form first (`needsInput`), so a new automation is runnable without a bespoke page.
+ * native form first (`needs_input`), so a new automation is runnable without a bespoke page.
  */
-export function startableAutomations(
+export function startable_automations(
 	m: EngineManifest,
 	authority: Authority
-): { name: string; description: string; needsInput: boolean }[] {
+): { name: string; description: string; needs_input: boolean }[] {
 	return (authority.admin ? Object.keys(m.automations) : authority.automations)
 		.toSorted()
 		.flatMap((name) => {
@@ -363,7 +371,7 @@ export function startableAutomations(
 						{
 							name,
 							description: spec.description,
-							needsInput: Object.values(spec.input ?? {}).some((field) => field.optional !== true)
+							needs_input: Object.values(spec.input ?? {}).some((field) => field.optional !== true)
 						}
 					];
 		});
@@ -378,8 +386,8 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 			const children = childrenOf(name)
 				.map(node)
 				.filter((n) => n !== null);
-			if (children.length === 0) return null;
-			const first = children.find((c) => c.name === `${name}/${g.default_child}`) ?? children[0]!;
+			const first = children.find((c) => c.name === `${name}/${g.default_child}`) ?? children[0];
+			if (first === undefined) return null;
 			return {
 				kind: 'group',
 				name,
@@ -391,7 +399,7 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 			};
 		}
 		const a = appOf(m, name);
-		if (a === undefined || !canOpen(m, auth, name)) return null;
+		if (a === undefined || !can_open(m, auth, name)) return null;
 		const pages = Object.entries<AppSpec['pages'][string]>(a.pages).map(([p, s]): NavPage => ({
 			name: p,
 			...s,
@@ -432,7 +440,7 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
  * Settings and logs are an administrator's; Studio is every staff member's (their own draft; the host decides what a
  * non-administrator may do) on a host that serves it (`studio`: Colony; an untethered workspace has none). The command
  * center is every staff member's (`runs`); its tabs follow the rest. A preview environment (`preview`) drops the meta
- * tools, Norbius and Studio; everything else stays (Settings loses Integrations and the command center People, `previewRoute`).
+ * tools, Norbius and Studio; everything else stays (Settings loses Integrations and the command center People, `preview_route`).
  */
 export type Surfaces = {
 	inbox: boolean;
@@ -466,11 +474,15 @@ export type Route =
 	| { kind: 'home' }
 	| { kind: 'inbox' }
 	| { kind: 'settings'; tab: SettingsTab }
-	| { kind: 'commandCenter'; tab?: CommandCenterTab }
+	| { kind: 'command_center'; tab?: CommandCenterTab }
 	| { kind: 'studio'; tab?: StudioTab }
-	| { kind: 'signIn'; next?: string }
+	| { kind: 'sign_in'; next?: string }
 	| { kind: 'invite'; id: string }
-	| { kind: 'notFound' };
+	| { kind: 'not_found' };
+/** The compiled page module a page or kiosk route names. */
+export const page_chunk_key = (r: Route): string | null =>
+	r.kind === 'page' ? `${r.app}/${r.page}`
+		: r.kind === 'kiosk' ? `kiosk/${r.kiosk}/${r.page}` : null;
 /** Settings proper (organization), then the System pages (integrations, secrets). */
 const SETTINGS_TABS = ['organization', 'integrations', 'secrets'] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
@@ -488,11 +500,6 @@ const COMMAND_CENTER_TABS = [
 	'people'
 ] as const;
 export type CommandCenterTab = (typeof COMMAND_CENTER_TABS)[number];
-/** Tabs the command center used to offer; their deep links still open the tab that absorbed them. */
-const COMMAND_CENTER_ALIASES: Readonly<Record<string, CommandCenterTab>> = {
-	activity: 'bundle',
-	resources: 'telemetry'
-};
 /** Studio's tabs, each a stable deep link `/studio/<tab>` (L-BOLT-528); `/studio` is the workbench. */
 const STUDIO_TABS = ['workbench', 'changes', 'versions'] as const;
 export type StudioTab = (typeof STUDIO_TABS)[number];
@@ -502,10 +509,10 @@ const named = <T extends string>(tabs: readonly T[], value: string | undefined):
  * A preview environment drops the meta tools: Studio and who-has-access management (the command center's People) open
  * the apps launcher, and so does Settings → Integrations, whose integration endpoints only the live workspace serves.
  */
-export function previewRoute(r: Route, preview: boolean): Route {
+export function preview_route(r: Route, preview: boolean): Route {
 	return preview &&
 		(r.kind === 'studio' ||
-			(r.kind === 'commandCenter' && r.tab === 'people') ||
+			(r.kind === 'command_center' && r.tab === 'people') ||
 			(r.kind === 'settings' && r.tab === 'integrations'))
 		? { kind: 'home' }
 		: r;
@@ -516,7 +523,7 @@ export function previewRoute(r: Route, preview: boolean): Route {
  * host and an administrator; the audit trail, inference transcripts (with Norbius) and People are an administrator's,
  * People never in a preview environment; automation runs are every staff member's. Empty: no command center.
  */
-export function commandCenterTabs(
+export function command_center_tabs(
 	s: Surfaces,
 	admin: boolean,
 	preview: boolean
@@ -537,7 +544,7 @@ export function commandCenterTabs(
 }
 
 /**
- * The route a URL names, at its one canonical spelling only: any other is `notFound` (the server already redirects
+ * The route a URL names, at its one canonical spelling only: any other is `not_found` (the server already redirects
  * doubled and trailing slashes). An app name is a folder path, so the longest declared app prefix wins.
  */
 export function route(m: ShellManifest, url: URL): Route {
@@ -545,31 +552,31 @@ export function route(m: ShellManifest, url: URL): Route {
 	if (seg[0] === 'kiosk') {
 		for (let n = seg.length; n > 1; n--) {
 			const kiosk = seg.slice(1, n).join('/');
-			const spec = kioskOf(m, kiosk);
+			const spec = kiosk_of(m, kiosk);
 			if (spec === undefined) continue;
 			const page = seg[n] ?? Object.keys(spec.pages)[0];
 			if (seg.length > n + 1 || page === undefined || !Object.hasOwn(spec.pages, page)) break;
 			return { kind: 'kiosk', kiosk, page };
 		}
-		return { kind: 'notFound' };
+		return { kind: 'not_found' };
 	}
 	switch (seg[0]) {
 		case '':
 			return { kind: 'home' };
 		case 'inbox':
-			return seg.length === 1 ? { kind: 'inbox' } : { kind: 'notFound' };
+			return seg.length === 1 ? { kind: 'inbox' } : { kind: 'not_found' };
 		case 'settings': {
 			const tab = named(SETTINGS_TABS, seg[1]);
 			return seg.length === 2 && tab !== undefined
 				? { kind: 'settings', tab }
-				: { kind: 'notFound' };
+				: { kind: 'not_found' };
 		}
 		case 'command-center': {
-			if (seg.length === 1) return { kind: 'commandCenter' };
-			const tab = named(COMMAND_CENTER_TABS, seg[1]) ?? COMMAND_CENTER_ALIASES[seg[1] ?? ''];
+			if (seg.length === 1) return { kind: 'command_center' };
+			const tab = named(COMMAND_CENTER_TABS, seg[1]);
 			return seg.length === 2 && tab !== undefined
-				? { kind: 'commandCenter', tab }
-				: { kind: 'notFound' };
+				? { kind: 'command_center', tab }
+				: { kind: 'not_found' };
 		}
 		case 'studio': {
 			// `/studio` is the workbench; `/studio/workbench` is not another spelling of it
@@ -577,22 +584,22 @@ export function route(m: ShellManifest, url: URL): Route {
 			const tab = named(STUDIO_TABS, seg[1]);
 			return seg.length === 2 && tab !== undefined && tab !== 'workbench'
 				? { kind: 'studio', tab }
-				: { kind: 'notFound' };
+				: { kind: 'not_found' };
 		}
 		case 'sign-in': {
-			if (seg.length > 1) return { kind: 'notFound' };
+			if (seg.length > 1) return { kind: 'not_found' };
 			const next = url.searchParams.get('next');
 			return {
-				kind: 'signIn',
+				kind: 'sign_in',
 				...(next?.startsWith('/') && !next.startsWith('//') ? { next } : {})
 			};
 		}
 		case 'invite':
-			return seg.length === 2 && seg[1] ? { kind: 'invite', id: seg[1] } : { kind: 'notFound' };
+			return seg.length === 2 && seg[1] ? { kind: 'invite', id: seg[1] } : { kind: 'not_found' };
 		case 'app':
 			break;
 		default:
-			return { kind: 'notFound' };
+			return { kind: 'not_found' };
 	}
 	for (let n = seg.length; n > 1; n--) {
 		const app = seg.slice(1, n).join('/'),
@@ -606,39 +613,39 @@ export function route(m: ShellManifest, url: URL): Route {
 			!Object.hasOwn(a.pages, page) ||
 			href(app, page) !== `${APP_PREFIX}${seg.slice(1).join('/')}`
 		)
-			return { kind: 'notFound' };
+			return { kind: 'not_found' };
 		const record = recordOf(url);
 		return { kind: 'page', app, page, ...(record === null ? {} : { record }) };
 	}
-	return { kind: 'notFound' };
+	return { kind: 'not_found' };
 }
 
-/** The record a `?record=<model>/<id>` link opens over any shell route (the top of `recordsOf`'s stack). */
+/** The record a `?record=<model>/<id>` link opens over any shell route (the top of `records_of`'s stack). */
 function recordOf(url: URL): { model: string; id: string } | null {
-	return recordsOf(url).at(-1) ?? null;
+	return records_of(url).at(-1) ?? null;
 }
 /** The record-sheet stack (rule 10): each `?record=` in order, the last on top; a malformed entry is skipped. */
-export function recordsOf(url: URL): { model: string; id: string }[] {
+export function records_of(url: URL): { model: string; id: string }[] {
 	return url.searchParams.getAll('record').flatMap((v) => {
-		const r = /^([a-z][a-z0-9_]*)\/(.+)$/.exec(v);
-		return r === null ? [] : [{ model: r[1]!, id: r[2]! }];
+		const [, model, id] = /^([a-z][a-z0-9_]*)\/(.+)$/.exec(v) ?? [];
+		return model === undefined || id === undefined ? [] : [{ model, id }];
 	});
 }
 /** The URL with the record stack cut back to its first `depth` sheets (closing one closes those above it). */
-export function withRecords(url: URL, depth: number): URL {
+export function with_records(url: URL, depth: number): URL {
 	const next = new URL(url),
-		kept = recordsOf(url).slice(0, depth);
+		kept = records_of(url).slice(0, depth);
 	next.searchParams.delete('record');
 	for (const r of kept) next.searchParams.append('record', `${r.model}/${r.id}`);
 	return next;
 }
 
 /** What a signed-out viewer may open: public app and kiosk pages, sign-in and invitation. */
-export function isOpenRoute(m: ShellManifest, r: Route): boolean {
+export function is_open_route(m: ShellManifest, r: Route): boolean {
 	return (
-		r.kind === 'signIn' ||
+		r.kind === 'sign_in' ||
 		r.kind === 'invite' ||
-		(r.kind === 'page' && audienceOf(appOf(m, r.app)) === 'public') ||
-		(r.kind === 'kiosk' && audienceOf(kioskOf(m, r.kiosk)) === 'public')
+		(r.kind === 'page' && audience_of(appOf(m, r.app)) === 'public') ||
+		(r.kind === 'kiosk' && audience_of(kiosk_of(m, r.kiosk)) === 'public')
 	);
 }

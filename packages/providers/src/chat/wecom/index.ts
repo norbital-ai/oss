@@ -110,7 +110,7 @@ export const wecom: ChatPlatform = {
 						{
 							id,
 							thread: from,
-							sentAt: new Date(Number(xmlField(xml, 'CreateTime')) * 1000).toISOString(),
+							sent_at: new Date(Number(xmlField(xml, 'CreateTime')) * 1000).toISOString(),
 							from: { handle: from, name: null },
 							text:
 								xmlField(xml, 'Content') ??

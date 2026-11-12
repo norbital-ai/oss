@@ -12,9 +12,9 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	export type FileInputProps = {
 		kind: KindOf<'file'>;
 		value: Value;
-		onChange(next: Value): void;
+		on_change(next: Value): void;
 		/** Standalone request forms keep submit disabled while bytes are uploading. */
-		onPendingChange?(pending: boolean): void;
+		on_pending_change?(pending: boolean): void;
 		/** The field name the upload is checked against. */
 		name: string;
 		id?: string;
@@ -28,17 +28,17 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	import { Effect, FiberSet } from 'effect';
 	import { watch } from 'runed';
 	import { attach, fork } from '../effect/index.js';
-	import { cn, uiText } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
 	import { useKinds } from './context.js';
-	import { useForm } from '../form/form-state.svelte.js';
+	import { use_form } from '../form/form-state.svelte.js';
 	import FileList, { type PendingFile } from './file-list.svelte';
 	import { fileProblem, isFile, MAX_FILES, type FileRef } from './kind.js';
 
 	let {
 		kind,
 		value,
-		onChange,
-		onPendingChange,
+		on_change,
+		on_pending_change,
 		name,
 		id,
 		disabled = false,
@@ -46,18 +46,18 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	}: FileInputProps = $props();
 	const host = useKinds();
 	// the upload target is `<model>.<field>` (§5.7); a submit of the enclosing form waits for it
-	const form = useForm();
+	const form = use_form();
 	const target = $derived(
 		form?.spec.target.of === 'model' ? `${form.spec.target.model}.${name}` : name
 	);
-	const t = uiText();
+	const t = ui_text();
 	const refs = $derived(((v) => (Arr.isArray(v) ? v : [v]).filter(isFile))(value));
 	const max = $derived(kind.many ? MAX_FILES : 1);
 	let pending = $state<PendingFile[]>([]);
 	let problems = $state<string[]>([]);
 	watch(
 		() => pending.some((file) => file.error === undefined),
-		(busy) => onPendingChange?.(busy)
+		(busy) => on_pending_change?.(busy)
 	);
 	let over = $state(false),
 		seq = 0;
@@ -112,13 +112,13 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 				(ref): ref is FileRef => ref !== null
 			);
 			const first = done[0];
-			if (first !== undefined) onChange(kind.many ? [...refs, ...done] : first);
+			if (first !== undefined) on_change(kind.many ? [...refs, ...done] : first);
 		});
 	const retry = (p: PendingFile) =>
 		Effect.gen(function* () {
 			pending = pending.map((x) => (x.key === p.key ? { key: x.key, file: x.file } : x));
 			const ref = yield* upload(p);
-			if (ref !== null) onChange(kind.many ? [...refs, ref] : ref);
+			if (ref !== null) on_change(kind.many ? [...refs, ref] : ref);
 		});
 	const launch = (work: Effect.Effect<void>) => {
 		if (uploads !== undefined) fork(FiberSet.run(uploads, form?.track(work) ?? work));
@@ -126,7 +126,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	const start = (files: readonly File[]) => {
 		if (files.length > 0) launch(add(files));
 	};
-	const remove = (ref: FileRef) => onChange(kind.many ? refs.filter((r) => r.id !== ref.id) : null);
+	const remove = (ref: FileRef) => on_change(kind.many ? refs.filter((r) => r.id !== ref.id) : null);
 	const size = $derived(kind.max.replace('iB', 'B'));
 	const typeNames: Record<string, string> = {
 		'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'XLSX',
@@ -185,9 +185,9 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 		<FileList
 			{refs}
 			{pending}
-			onRemove={can ? remove : undefined}
-			onRetry={can ? (p) => launch(retry(p)) : undefined}
-			onDismiss={(p) => (pending = pending.filter((x) => x.key !== p.key))}
+			on_remove={can ? remove : undefined}
+			on_retry={can ? (p) => launch(retry(p)) : undefined}
+			on_dismiss={(p) => (pending = pending.filter((x) => x.key !== p.key))}
 			{disabled}
 		>
 			{#if can && room > 0}

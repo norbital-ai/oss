@@ -2,8 +2,8 @@
 export { default as AppHeader, type AppHeaderProps } from './app-header.svelte';
 export { default as AppShell, type AppShellProps, type AppShellVariant } from './app-shell.svelte';
 export {
-	getAppIdentitySlot,
-	setAppIdentitySlot,
+	get_app_identity_slot,
+	set_app_identity_slot,
 	type AppIdentity,
 	type AppIdentitySlot
 } from './app-identity.svelte.js';
@@ -25,7 +25,7 @@ export {
 	type SplitRatio
 } from './split.svelte';
 export { default as Stack, type StackProps } from './stack.svelte';
-export { insetReader, ownInset, provisionalInset, resetInset } from './inset.svelte.js';
+export { inset_reader, own_inset, provisional_inset, reset_inset } from './inset.svelte.js';
 export {
 	INSET_MX_CLASS,
 	INSET_X_CLASS,

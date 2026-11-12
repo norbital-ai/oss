@@ -10,15 +10,15 @@ import type { Json } from '../src/decl/values.ts';
 import { Ai } from '../src/engine/ports.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import {
-	actReply,
+	act_reply,
 	json,
-	qReply,
-	routeFixture,
+	q_reply,
+	route_fixture,
 	type FixtureRoute
 } from './support/route-fixture.ts';
-import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import type { System1Request } from '../src/engine/decisions/index.ts';
+import type { System1Request } from '../src/engine/decision.ts';
 import { TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 
 const present = <A>(value: A | null | undefined): A => {
@@ -55,9 +55,8 @@ const manifest = {
 	exposures: {
 		tickets: {
 			outputs: { default: { tickets: { fields: 'all' } } },
-			create: { columns: { tickets: ['subject', 'photo', 'ref_id'] } },
-			update: { columns: { tickets: ['queue', 'urgent', 'level', 'note'] } },
-			effect: { created: true }
+			create: { columns: { tickets: ['subject', 'photo', 'ref_id'] }, effect: true },
+			update: { columns: { tickets: ['queue', 'urgent', 'level', 'note'] } }
 		},
 		secret_docs: {
 			outputs: { default: { secret_docs: { fields: 'all' } } },
@@ -73,10 +72,9 @@ const manifest = {
 	automations: {},
 	integrations: {},
 	teams: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -85,19 +83,19 @@ const questions = {
 	queue: { type: 'choice', instructions: 'Which queue?', criteria: { billing: 'money', technical: 'broken', accounts: 'login' } },
 	blocked: { type: 'noul', instructions: 'Is the customer blocked?', criteria: { true: 'cannot work', false: 'can work' } },
 	urgency: { type: 'score', instructions: 'How urgent?', criteria: ['low', 'medium', 'high'] } };
-export default { model: { tickets: { bodies: { effect: { created: function* (rows, ctx) {
-	for (const { id } of rows) {
-		const t = (yield* ctx.query({ tickets: { where: { id: { eq: id } }, fields: ['subject', 'photo', 'ref_id'] } })).tickets.rows[0];
+export default { model: { tickets: { bodies: { effect: { create: function* (changes, ctx) {
+	for (const { after: { id } } of changes) {
+		const t = (yield* ctx.query({ tickets: { where: { id: { eq: id } }, fields: ['subject', 'photo', 'ref_id', 'revision'] } })).tickets.rows[0];
 		const photo = t.ref_id ? { id: t.ref_id, name: 'x.png', mime: 'image/png' } : t.photo;
 		const r = yield* Effect.result(ctx.ai.sys_1.decide({ state: { subject: t.subject, ...(photo ? { photo } : {}) }, questions }));
-		if (Result.isFailure(r)) { yield* ctx.act('tickets.update', [{ target: id, set: { note: r.failure._tag === 'Unavailable' ? 'unavailable' : r.failure.kind } }]); continue; }
+		if (Result.isFailure(r)) { yield* ctx.act({ 'tickets.update': [{ target: t, set: { note: r.failure._tag === 'Unavailable' ? 'unavailable' : r.failure.kind } }] }); continue; }
 		const result = r.success;
-		yield* ctx.act('tickets.update', [{ target: id, set: { queue: result.answers.queue.choice, urgent: result.answers.blocked.noul > 0.5,
-			level: result.answers.urgency.level, note: 'cost ' + result.costUsd } }]);
+		yield* ctx.act({ 'tickets.update': [{ target: t, set: { queue: result.answers.queue.choice, urgent: result.answers.blocked.noul > 0.5,
+			level: result.answers.urgency.level, note: 'cost ' + result.cost_usd } }] });
 	}
 } } } } } };`);
 
-type Mode = 'ok' | 'tooLarge' | 'unsupported' | 'offlist' | 'down' | 'absent';
+type Mode = 'ok' | 'too_large' | 'unsupported' | 'offlist' | 'down' | 'absent';
 type Fake = { mode: Mode; calls: System1Request[] };
 const aiPort = (fake: Fake): Ai['Service'] => ({
 	ask: (request) =>
@@ -105,7 +103,7 @@ const aiPort = (fake: Fake): Ai['Service'] => ({
 			// the host binds no AI facility: its answer is the kit's own for an absent member
 			if (fake.mode === 'absent') return yield* Port.unavailable('ai');
 			fake.calls.push(request);
-			if (fake.mode === 'tooLarge' || fake.mode === 'unsupported')
+			if (fake.mode === 'too_large' || fake.mode === 'unsupported')
 				return yield* Effect.fail(
 					new FacilityFailure({ kind: fake.mode, message: 'refused by the provider' })
 				);
@@ -114,7 +112,7 @@ const aiPort = (fake: Fake): Ai['Service'] => ({
 					new FacilityFailure({ kind: 'upstream', message: 'provider down' })
 				);
 			return {
-				costUsd: 0.0004,
+				cost_usd: 0.0004,
 				provider: 'scripted',
 				answers: {
 					queue: {
@@ -155,7 +153,7 @@ const shared = Effect.runSync(
 					ports: Layer.succeed(Ai, aiPort(fake))
 				})
 			);
-			return { t: Context.get(context, TestWorkspace), route: yield* routeFixture(context), fake };
+			return { t: Context.get(context, TestWorkspace), route: yield* route_fixture(context), fake };
 		}).pipe(Scope.provide(fileScope))
 	)
 );
@@ -165,17 +163,19 @@ const open = (mode: Mode = 'ok') =>
 		fake.calls = [];
 		return fixture;
 	});
-const ok = (outcome: Outcome) => {
+const ok = (outcome: ActOutcome) => {
 	if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
 	return outcome;
 };
-const desk = (t: Kit) => t.as(t.member(['desk'])).authority;
+const desk = (t: Kit) => t.as(t.member(['desk'])).pipe(Effect.map((desk) => desk.authority));
 const ticket = (t: Kit, route: FixtureRoute, set: Record<string, Json>) =>
-	actReply(route, desk(t), {
-		callable: 'tickets.create',
-		input: [{ subject: 'Charged twice', ...set }],
-		issuedAt: t.clock.now()
-	}).pipe(
+	desk(t).pipe(
+		Effect.flatMap((authority) =>
+			act_reply(route, authority, {
+				acts: { 'tickets.create': [{ subject: 'Charged twice', ...set }] },
+				issued_at: t.clock.now()
+			})
+		),
 		Effect.map((reply) => {
 			const row = ok(reply.outcome).records[0];
 			if (row === undefined) throw new Error('Missing ticket');
@@ -184,9 +184,12 @@ const ticket = (t: Kit, route: FixtureRoute, set: Record<string, Json>) =>
 	);
 const Tickets = Schema.Struct({ tickets: Schema.Struct({ rows: Schema.Array(Schema.Json) }) });
 const get = (t: Kit, route: FixtureRoute, id: string) =>
-	qReply(route, desk(t), {
-		reads: [{ m: 'query', a: [{ tickets: { where: { id: { eq: id } } } }] }]
-	}).pipe(
+	desk(t).pipe(
+		Effect.flatMap((authority) =>
+			q_reply(route, authority, {
+				reads: [{ m: 'query', a: [{ tickets: { where: { id: { eq: id } } } }] }]
+			})
+		),
 		Effect.flatMap((reply) => Schema.decodeUnknownEffect(Tickets)(reply.answers[0])),
 		Effect.map((answer) => answer.tickets.rows[0] ?? null)
 	);
@@ -196,7 +199,7 @@ const events = (t: Kit) =>
 	);
 const upload = (
 	route: FixtureRoute,
-	authority: ReturnType<typeof desk>,
+	authority: Effect.Success<ReturnType<typeof desk>>,
 	field: string,
 	bytes: Uint8Array<ArrayBuffer>,
 	name: string
@@ -229,7 +232,7 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 			Effect.gen(function* () {
 				const { t, route, fake } = yield* open();
 				const id = yield* ticket(t, route, {});
-				yield* t.runDue();
+				yield* t.run_due();
 				// A low-confidence choice is used as given; a score's native level indexes its legend.
 				expect(yield* get(t, route, id)).toMatchObject({
 					queue: 'billing',
@@ -245,16 +248,16 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 				]);
 				expect(sent.state).toEqual({ subject: 'Charged twice' });
 				expect(yield* events(t)).toMatchObject([
-					{ use: 'author', system: 1, automation: 'tickets.effect.created', costUsd: 0.0004 }
+					{ use: 'author', system: 1, automation: 'tickets.effect.create', cost_usd: 0.0004 }
 				]);
 				// refusals and failures are the typed error `.try` returns; no system2 call
 				for (const [mode, kind] of [
-					['tooLarge', 'tooLarge'],
+					['too_large', 'too_large'],
 					['offlist', 'invalid']
 				] as const) {
 					fake.mode = mode;
 					const failed = yield* ticket(t, route, {});
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(yield* get(t, route, failed)).toMatchObject({ note: kind });
 				}
 			})
@@ -269,30 +272,29 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 					const { t, route, fake } = yield* open();
 					const photo = yield* upload(
 						route,
-						desk(t),
+						yield* desk(t),
 						'tickets.photo',
 						new Uint8Array([7, 7, 7]),
 						'p.png'
 					);
 					const mine = yield* ticket(t, route, { photo });
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(yield* get(t, route, mine)).toMatchObject({ note: 'invalid' });
 					const doc = yield* upload(
 						route,
-						t.as(t.admin).authority,
+						(yield* t.as(t.admin)).authority,
 						'secret_docs.doc',
 						new Uint8Array([1]),
 						's.png'
 					);
 					ok(
-						(yield* actReply(route, t.as(t.admin).authority, {
-							callable: 'secret_docs.create',
-							input: [{ title: 'Payroll', doc }],
-							issuedAt: t.clock.now()
+						(yield* act_reply(route, (yield* t.as(t.admin)).authority, {
+							acts: { 'secret_docs.create': [{ title: 'Payroll', doc }] },
+							issued_at: t.clock.now()
 						})).outcome
 					);
 					const id = yield* ticket(t, route, { ref_id: doc.id });
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(yield* get(t, route, id)).toMatchObject({ note: 'invalid' });
 					expect(fake.calls).toHaveLength(0);
 				})
@@ -304,7 +306,7 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 			Effect.gen(function* () {
 				const { t, route } = yield* open('absent');
 				const id = yield* ticket(t, route, {});
-				yield* t.runDue();
+				yield* t.run_due();
 				expect(yield* get(t, route, id)).toMatchObject({ note: 'unavailable' });
 			})
 		)

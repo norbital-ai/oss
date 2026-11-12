@@ -12,45 +12,30 @@
 	interface Layout extends Schema.Schema.Type<typeof Layout> {}
 	const decodeLayout = Schema.decodeUnknownResult(Schema.fromJsonString(Layout));
 	import type {
-		ModelKey,
-		ManyOf,
-		Page,
 		OrderByOf,
-		RecordOf,
 		Row,
-		RowOf,
+		SourceColumns,
+		SourceData,
+		SourceRow,
 		Values,
+		ViewSource,
 		WhereOf
 	} from '../model/types.js';
-	import type { Json, Query, QueryAnswer } from '../client/contract.js';
-	import type { OrderBy, Where } from '../filter/filter.js';
+	import type { Json } from '../client/contract.js';
+	import type { OrderBy } from '../filter/order.js';
+	import type { Where } from '@norbital-ai/std/kind';
 	import type { Toolbar, ToolbarItem } from '../model/ViewToolbar.svelte';
 	import type { Kind } from '../kinds/kind.js';
 
-	type TableData<R extends Values> = Page<R> | readonly R[];
+	type TableData<R extends Values> = SourceData<R>;
 	/** A table's source: a model name, a native `bolt.query` read request of one root, or a local row array. */
-	export type TableSource<R extends Values = Values> =
-		ModelKey | Query<{ readonly [root: string]: TableData<R> }> | readonly R[];
-	type PageRow<T> = T extends { readonly rows: readonly (infer R extends Values)[] }
-		? R
-		: T extends readonly (infer R extends Values)[]
-			? R
-			: Values;
+	export type TableSource<R extends Values = Values> = ViewSource<R>;
 	/** The row a source yields: the model's caller row, the read's rows, or the array's element. */
-	export type RowIn<S> = S extends string
-		? RowOf<S> & Values
-		: S extends Query<infer T>
-			? PageRow<T[keyof T]>
-			: S extends readonly (infer R extends Values)[]
-				? R
-				: Values;
+	export type RowIn<S> = SourceRow<S>;
 	/** The fields a column may name: a model's whole record (a heavy field is then read) and its many-relations (the
 	 * related records, each `{ id, …label }`), else the row's. */
-	export type ColumnsIn<S> = S extends string
-		? RecordOf<S> & { readonly [M in ManyOf<S>]: readonly Row[] }
-		: RowIn<S>;
-	type ColumnDefinition<R, K, F extends keyof K & string> = {
-		field: F;
+	export type ColumnsIn<S> = SourceColumns<S>;
+	type ColumnOptions = {
 		/** The value's declared kind, including numeric scale, for authored value columns. */
 		kind?: Kind;
 		label?: string;
@@ -59,8 +44,13 @@
 		hide?: 'narrow';
 		edit?: true;
 		align?: 'start' | 'end';
+	};
+	type ColumnDefinition<R, K, F extends keyof K & string> = ColumnOptions & {
+		field: F;
 		cell?: Snippet<[{ row: R; value: K[F] | undefined; field: F }]>;
 	};
+	/** Catalogue columns have dynamic names and no authored, statically typed cell. */
+	type AutomaticColumn = ColumnOptions & { field: string; cell?: never };
 	/**
 	 * A column's field name or configuration, preserving that field's type in a custom cell snippet.
 	 * Without a custom cell, the kind renderer shows scalar values and relations show their target labels.
@@ -81,12 +71,12 @@
 		/** The author's fixed scope: ANDed under every viewer filter, shown read-only in the view popover, never clearable. */
 		where?: S extends string ? WhereOf<S> : Where;
 		/** A fixed scope ANDed under every reader filter like `where`, but not shown in the view popover. */
-		hiddenWhere?: S extends string ? WhereOf<S> : Where;
+		hidden_where?: S extends string ? WhereOf<S> : Where;
 		/** Seed rows of the view popover the viewer may edit or clear; a cleared choice is kept in the URL. */
-		initialFilter?: S extends string ? WhereOf<S> : Where;
+		initial_filter?: S extends string ? WhereOf<S> : Where;
 		/** The initial sort; a viewer's sort replaces it and clearing restores it. */
 		order_by?: S extends string ? OrderByOf<S> : OrderBy;
-		pageSize?: 10 | 25 | 50 | 100 | 200;
+		page_size?: 10 | 25 | 50 | 100 | 200;
 		/** Financial reports retain a horizontally scrollable grid on narrow screens. */
 		layout?: 'responsive' | 'grid';
 		/** The chrome: title, description, search, filter and sort, the actions menu and New (`ViewToolbar`). */
@@ -98,16 +88,16 @@
 		/** A controlled local matrix inside another surface: content height, no card, toolbar or footer. */
 		embedded?: boolean;
 		/** Semantic row treatment, shared by the grid and narrow layout. */
-		rowClass?: (row: R) => string | undefined;
+		row_class?: (row: R) => string | undefined;
 		/** An overlay at the row's right edge, sticky while scrolling; revealed on hover or keyboard focus. */
-		rowTrailing?: Snippet<[R]>;
+		row_trailing?: Snippet<[R]>;
 		actions?: readonly RowAction<R>[];
 		/** The URL parameter prefix; defaults to the source's name. */
 		key?: string;
 		empty?: Snippet;
-		onOpen?: (row: R) => void;
+		on_open?: (row: R) => void;
 		/** Local arrays only: editable when given; each change is a fresh array. */
-		onChange?: (next: R[]) => void;
+		on_change?: (next: R[]) => void;
 		add?: () => R;
 		remove?: boolean;
 	};
@@ -125,34 +115,36 @@
 </script>
 
 <script lang="ts" generics="S extends TableSource">
-	import { formatValue as show, recordText } from '../kinds/kind.js';
+	import { format_value as show, recordText } from '../kinds/kind.js';
 	import { fork } from '../effect/index.js';
 	import { getAllContexts, onDestroy, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { Debounced, watch as onChange_ } from 'runed';
+	import { currentSearchParams, replaceSearchParams } from '../utilities/url.js';
 	import { Button } from '../primitives/button/index.js';
-	import { confirmAction } from '../primitives/dialog/confirm.js';
+	import { confirm_action } from '../primitives/dialog/confirm.js';
 	import * as Popover from '../primitives/popover/index.js';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
-	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
+	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
 	import { useKinds } from '../kinds/context.js';
 	import { likeWhere } from '../kinds/kind.js';
 	import { KINDS } from '../kinds/registry.js';
-	import { openRecord } from '../record/navigation.js';
-	import { provideModel } from '../model/context.js';
+	import { open_record } from '../record/navigation.js';
+	import { provide_model } from '../model/context.js';
 	import { useOptionalBolt } from '../client/context.js';
 	import type { ViewBolt } from '../client/contract.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
 	import { toast } from '../toast/toast.svelte.js';
-	import { localExposure, matches, orderOf, sortable, sortRows } from '../filter/filter.js';
+	import { localExposure, matches, sortRows } from '../filter/local.js';
+	import { orderOf, sortable } from '../filter/order.js';
 	import { and, compact } from '../filter/scope.js';
 	import { pageRead } from '../read/paging.js';
 	import { like, valueAt } from '../cell/value.js';
-	import { humanize, label, lowerLead, msg } from '../text/messages.js';
+	import { humanize, label, lowerLead, msg, catalogText } from '../text/messages.js';
 	import { listRequest, refOf, unref } from '../relations/select.js';
-	import { pageOf, READ_LIMIT, requestJson, rootsOf } from '../read/request.js';
+	import { page_of, READ_LIMIT, request_json, roots_of } from '../read/request.js';
 	import {
 		rangeText,
 		readTableState,
@@ -173,28 +165,28 @@
 		of,
 		columns: authoredColumns = [],
 		where,
-		hiddenWhere,
-		initialFilter,
+		hidden_where,
+		initial_filter,
 		order_by,
-		pageSize = 25,
+		page_size = 25,
 		layout = 'responsive',
 		toolbar = {},
 		footer: customFooter,
 		controlled = false,
 		embedded = false,
-		rowClass,
-		rowTrailing,
+		row_class,
+		row_trailing,
 		actions = [],
 		key,
 		empty,
-		onOpen,
-		onChange,
+		on_open,
+		on_change,
 		add,
 		remove
 	}: TableProps<S, RowIn<S>, ColumnsIn<S>> = $props();
 	const client = useOptionalBolt();
 	if (client === undefined && !untrack(() => embedded && controlled && localSource(of)))
-		throw new Error('A view needs the shell: call provideBolt above it.');
+		throw new Error('A view needs the shell: call provide_bolt above it.');
 	const host = () => {
 		if (client === undefined) throw new Error('A remote table needs the shell.');
 		return client;
@@ -203,6 +195,8 @@
 	const kinds = useKinds();
 
 	type ReadRow = RowIn<S> & Partial<ColumnsIn<S>>;
+	// Keep the actual input's type alongside the tagged presentation; deriving only its name loses S.
+	const input = $derived<S>(of);
 	const tableSource = $derived(tableInput<ReadRow>(of));
 	const kind = $derived(tableSource._tag === 'read' ? 'q' : tableSource._tag);
 	const name = $derived(tableSource._tag === 'model' ? tableSource.name : '');
@@ -210,16 +204,15 @@
 		tableSource._tag === 'model'
 			? tableSource.name
 			: tableSource._tag === 'read'
-				? (rootsOf(tableSource.read.read)[0] ?? '')
+				? (roots_of(tableSource.read.read)[0] ?? '')
 				: ''
 	);
 	/** The columns as authored; a page may name only `of`, and every field the model exposes becomes a column. */
-	const columns = $derived<readonly Col<RowIn<S>, ColumnsIn<S>>[]>(
+	type Column = Col<RowIn<S>, ColumnsIn<S>> | AutomaticColumn;
+	const columns = $derived<readonly Column[]>(
 		authoredColumns.length > 0
 			? authoredColumns
-			: (Object.keys(kinds.catalog?.[model]?.fields ?? {}) as (keyof ColumnsIn<S> & string)[]).map(
-					(field) => ({ field })
-				)
+			: Object.keys(kinds.catalog?.[model]?.fields ?? {}).map((field) => ({ field }))
 	);
 
 	const urlKey = $derived(key ?? (name || model || 'rows'));
@@ -228,13 +221,13 @@
 			...columns.map((c) => (typeof c === 'string' ? c : c.field)),
 			...(kinds.catalog?.[model]?.record_label === undefined
 				? []
-				: (kinds.catalog?.[model]?.labelPaths ?? kinds.catalog?.[model]?.label ?? []))
+				: (kinds.catalog?.[model]?.label_paths ?? kinds.catalog?.[model]?.label ?? []))
 		])
 	]);
-	type Column = Col<RowIn<S>, ColumnsIn<S>>;
 	const colOf = <F extends keyof ColumnsIn<S> & string>(
-		c: F | ColumnDefinition<RowIn<S>, ColumnsIn<S>, F>
-	): ColumnDefinition<RowIn<S>, ColumnsIn<S>, F> => (typeof c === 'string' ? { field: c } : c);
+		c: F | ColumnDefinition<RowIn<S>, ColumnsIn<S>, F> | AutomaticColumn
+	): ColumnDefinition<RowIn<S>, ColumnsIn<S>, F> | AutomaticColumn =>
+		typeof c === 'string' ? { field: c } : c;
 	// a relation column (a FK or a many-relation) without an authored `cell` shows its targets' labels, read with the page
 	// in the same statement (kind `model` only)
 	const refs = $derived(
@@ -285,7 +278,7 @@
 	const fieldLabel = (f: string) =>
 		model === '' ? (kindOf(f)?.label ?? humanize(f)) : label(text, model, f, kindOf(f)?.label);
 	// the cells' enum and state words read this model's catalog keys
-	provideModel(() => model);
+	provide_model(() => model);
 	const canFilter = $derived(!controlled && (kind === 'model' || kind === 'local'));
 	// the view popover's catalog: the caller's exposure, or a local array's columns (kinds from its values)
 	const LOCAL = '$local';
@@ -312,7 +305,7 @@
 		key: () => urlKey,
 		model: () => source,
 		catalog: () => catalog,
-		initialFilter: () => initialFilter,
+		initial_filter: () => initial_filter,
 		enabled: () => !controlled
 	});
 	// Local projections can drive bulk actions only when each row names a distinct, stable record.
@@ -350,9 +343,9 @@
 	let widths = $state<{ [f: string]: number }>(initialLayout.widths ?? {});
 	let arranged = $state<string[]>(initialLayout.order ?? []);
 	let hidden = $state<string[]>(initialLayout.hidden ?? []);
-	// the viewer's page size (the footer's select), kept with the layout; the author's `pageSize` is the default
+	// the viewer's page size (the footer's select), kept with the layout; the author's `page_size` is the default
 	const SIZES = [10, 25, 50, 100, 200] as const;
-	let size = $state<number>(untrack(() => SIZES.find((n) => n === initialLayout.size) ?? pageSize));
+	let size = $state<number>(untrack(() => SIZES.find((n) => n === initialLayout.size) ?? page_size));
 	const keep = () => {
 		Result.getOrElse(
 			Result.try(() =>
@@ -365,25 +358,16 @@
 		);
 	};
 	// ── view state in the URL (rule 8) ──
-	const params = () =>
-		typeof location === 'undefined' ? new URLSearchParams() : new URL(location.href).searchParams;
 	let st = $state<TableState>(
-		untrack(() => (controlled ? { after: null, q: '' } : readTableState(params(), urlKey)))
+		untrack(() => (controlled ? { after: null, q: '' } : readTableState(currentSearchParams(), urlKey)))
 	);
 	let back = $state<(string | null)[]>([]);
 	let qText = $state(untrack(() => st.q));
 	// a search index the toolbar runs (`/<index>` and its input): its nearest rows, in its order, in place of the page
 	let probe = $state<{ index: string; input: Json } | null>(null);
 	let notice = $state<string | null>(null);
-	$effect(() => {
-		if (controlled) return;
-		const next = writeTableState(params(), urlKey, st);
-		if (typeof location !== 'undefined')
-			history.replaceState(
-				history.state,
-				'',
-				`${location.pathname}${next.size > 0 ? `?${next}` : ''}${location.hash}`
-			);
+	onChange_(() => controlled ? null : writeTableState(currentSearchParams(), urlKey, st), (next) => {
+		if (next !== null) replaceSearchParams(next);
 	});
 	const debouncedSearch = new Debounced(() => qText, 300);
 	onDestroy(debouncedSearch.cancel);
@@ -406,7 +390,7 @@
 	);
 
 	// ── the page (rule 7: cursor-only, live) ──
-	const scope = $derived(and(and(where, hiddenWhere), vs.where));
+	const scope = $derived(and(and(where, hidden_where), vs.where));
 	const order = $derived(vs.order.length > 0 ? orderOf(vs.order) : order_by);
 	/** The page's search: the declared index's `search`, else a `where` over the label fields. */
 	const searched = $derived(
@@ -418,8 +402,9 @@
 		const after = st.after ?? undefined;
 		if (kind === 'model' && probe !== null)
 			return mapped(
-				host().query<QueryAnswer<ReadRow>>(
-					requestJson(
+				host().source_query(
+					input,
+					request_json(
 						listRequest(
 							kinds.catalog,
 							name,
@@ -429,15 +414,16 @@
 						)
 					)
 				),
-				(answer) => pageOf(answer, name)
+				(answer) => page_of(answer, name)
 			);
 		// hook:agent-ui — a later page stays live (its index is the pages behind it; a cursor restored from the URL has none)
 		if (kind === 'model')
 			return pageRead(
 				name,
 				(limit, at) =>
-					host().query<QueryAnswer<ReadRow>>(
-						requestJson(
+					host().source_query(
+						input,
+						request_json(
 							listRequest(
 								kinds.catalog,
 								name,
@@ -456,17 +442,12 @@
 		return null;
 	});
 	const pageState = $derived(queryState(page));
-	$effect(() => {
-		const s = pageState;
-		if (s.kind === 'error' && s.code === 'badCursor')
-			untrack(() => {
-				notice = msg(
-					text,
-					'table.badCursor',
-					'That page is no longer available; showing the first page.'
-				);
-				restart({});
-			});
+	onChange_(() => pageState, (s) => {
+		if (s.kind === 'error' && s.code === 'bad_cursor') {
+			notice = msg(text, 'table.bad_cursor'
+			);
+			restart({});
+		}
 	});
 	const local = $derived(
 		kind === 'local'
@@ -495,7 +476,7 @@
 	const next = $derived(
 		pageState.kind === 'ready' && 'next' in pageState.value ? pageState.value.next : null
 	);
-	// a long page (pageSize 100/200, a local grid) renders a window of rows, one per layout, measured and keyed by id
+	// a long page (page_size 100/200, a local grid) renders a window of rows, one per layout, measured and keyed by id
 	const shownRows = $derived(view.kind === 'ready' ? view.value : []);
 	const presented = $derived(
 		new Map(
@@ -509,8 +490,8 @@
 		const id = shownRows[index]?.['id'];
 		return typeof id === 'string' ? id : String(index);
 	};
-	const wide = virtualList({ count: () => shownRows.length, key: rowKey, estimate: 37 });
-	const narrow = virtualList({ count: () => shownRows.length, key: rowKey, estimate: 64 });
+	const wide = virtual_list({ count: () => shownRows.length, key: rowKey, estimate: 37 });
+	const narrow = virtual_list({ count: () => shownRows.length, key: rowKey, estimate: 64 });
 
 	// A phone has no hover: a leftward row swipe reveals the trailing control; the next tap elsewhere hides it.
 	let touchStart: { key: string; x: number; y: number } | null = null;
@@ -559,6 +540,7 @@
 	// select-all: the page's rows, then (once the page is all selected) every row the scope and search match
 	const recordRow = <R extends RowIn<S>>(row: R): row is R & { readonly id: SelectedId } =>
 		typeof row['id'] === 'string' && row['id'].trim() !== '';
+	const matchedId = (id: string): id is SelectedId & string => id.trim() !== '';
 	const onPage = (rows: readonly RowIn<S>[]) => rows.filter(recordRow).map((r) => r.id);
 	const pageAll = (rows: readonly RowIn<S>[]) =>
 		rows.length > 0 && rows.every((r) => recordRow(r) && selected.has(r.id));
@@ -587,15 +569,14 @@
 		const current = () =>
 			matchingRequest === request && name === model && searched === query && qText === searchText;
 		fork(
+			// ids only: a plain read, not a model view (which reads every list field)
 			host()
-				.query<QueryAnswer<RowIn<S>>>(
-					requestJson({ [model]: { ...query, fields: [], limit: READ_LIMIT } })
-				)
+				.query(request_json({ [model]: { ...query, fields: [], limit: READ_LIMIT } }))
 				.pipe(
 					Effect.tap((answer) =>
 						Effect.sync(() => {
 							if (!current()) return;
-							for (const row of (answer[model]?.rows ?? []).filter(recordRow)) selected.add(row.id);
+							for (const { id } of answer[model]?.rows ?? []) if (matchedId(id)) selected.add(id);
 						})
 					),
 					Effect.catch((error) =>
@@ -615,7 +596,7 @@
 		const asked =
 			a.confirm === undefined
 				? Effect.succeed(true)
-				: confirmAction({ title: a.confirm, confirmLabel: a.label });
+				: confirm_action({ title: a.confirm, confirm_label: a.label });
 		fork(
 			asked.pipe(
 				Effect.flatMap((confirmed) =>
@@ -643,7 +624,7 @@
 					read: () =>
 						host()
 							.query(
-								requestJson(
+								request_json(
 									listRequest(
 										kinds.catalog,
 										name,
@@ -654,7 +635,7 @@
 									)
 								)
 							)
-							.pipe(Effect.map((answer) => pageOf(answer, name)?.rows ?? []))
+							.pipe(Effect.map((answer) => page_of(answer, name)?.rows ?? []))
 				}
 			: kind === 'local' && tb.export === true
 				? {
@@ -707,8 +688,8 @@
 	const span = $derived(
 		ordered.length +
 			(selectable ? 1 : 0) +
-			(rowTrailing ? 1 : 0) +
-			(actions.length > 0 || (kind === 'local' && onChange && remove) ? 1 : 0)
+			(row_trailing ? 1 : 0) +
+			(actions.length > 0 || (kind === 'local' && on_change && remove) ? 1 : 0)
 	);
 	/** Moves column `f` to `to`'s place (a drag onto a header), or one step (`±1`, the column menu's keyboard way). */
 	function moveColumn(f: string, to: string | -1 | 1) {
@@ -737,8 +718,11 @@
 	const sized = (w: number | undefined) =>
 		w === undefined ? undefined : `width:${w}px;min-width:${w}px;max-width:${w}px`;
 	function resize(e: PointerEvent, f: string) {
-		const th = (e.currentTarget as HTMLElement).parentElement!,
-			x0 = e.clientX,
+		const target = e.currentTarget;
+		if (!(target instanceof HTMLElement)) return;
+		const th = target.parentElement;
+		if (th === null) return;
+		const x0 = e.clientX,
 			w0 = th.offsetWidth;
 		const move = (m: PointerEvent) => {
 			widths = { ...widths, [f]: Math.max(64, Math.round(w0 + m.clientX - x0)) };
@@ -796,11 +780,11 @@
 	// the row actions stay at the right edge while wide rows scroll sideways (else a many-column table hides them past it)
 	const ACTS_EDGE = 'sticky right-0 shadow-[inset_1px_0_0_0_var(--color-border)]';
 
-	const opens = $derived(kind === 'model' || onOpen !== undefined);
+	const opens = $derived(kind === 'model' || on_open !== undefined);
 	const open = (row: ReadRow) =>
-		onOpen
-			? onOpen(row)
-			: kind === 'model' && typeof row['id'] === 'string' && openRecord(model, row['id']);
+		on_open
+			? on_open(row)
+			: kind === 'model' && typeof row['id'] === 'string' && open_record(model, row['id']);
 	/** A click on a row opens it, as the phone's card does; a link, a control, a sheet or selected text keeps its own. */
 	// only a control inside the row counts: the sheet the table sits in is a dialog too, and keeps nothing
 	const rowClick = (e: MouseEvent, row: ReadRow) => {
@@ -852,7 +836,7 @@
 		const rows = tableSource.rows;
 		const index = rows.indexOf(row);
 		if (index < 0) return;
-		onChange?.(
+		on_change?.(
 			rows.map((value, i) => (i === index ? { ...value, [field]: like(row[field], text) } : value))
 		);
 	};
@@ -860,7 +844,7 @@
 
 {#snippet columnInfo(c: Column)}
 	{#if colOf(c).description}
-		<Tooltip text={colOf(c).description} side="bottom" contentClass="max-w-80 whitespace-normal">
+		<Tooltip text={colOf(c).description} side="bottom" content_class="max-w-80 whitespace-normal">
 			{#snippet trigger({ props })}
 				<button
 					{...props}
@@ -877,7 +861,7 @@
 
 {#snippet cell(
 	row: ReadRow,
-	col: {
+	col: AutomaticColumn | {
 		field: keyof ColumnsIn<S> & string;
 		cell?: Snippet<
 			[
@@ -931,7 +915,7 @@
 		data-table-footer
 	>
 		{#if customFooter}{@render customFooter()}{:else}
-			{#if selectable && !(kind === 'local' && onChange)}{@render selection(rows)}{:else}<span
+			{#if selectable && !(kind === 'local' && on_change)}{@render selection(rows)}{:else}<span
 					class="px-1 tabular-nums"
 					data-range>{range}</span
 				>{/if}
@@ -940,20 +924,20 @@
 					<Combobox
 						variant="ghost"
 						class="w-24"
-						aria-label={msg(text, 'table.pageSize', 'Rows per page')}
+						aria-label={msg(text, 'table.pageSize')}
 						searchable={false}
 						options={SIZES.map((n) => ({
 							value: String(n),
-							label: msg(text, 'table.perPage', '{n} / page', { n })
+							label: msg(text, 'table.perPage', { n })
 						}))}
 						value={String(size)}
-						onChange={(v) => v !== null && setSize(Number(v))}
+						on_change={(v) => v !== null && setSize(Number(v))}
 					/>
 					<Button
 						size="icon"
 						variant="ghost"
-						hint={msg(text, 'table.prev', 'Previous')}
-						aria-label={msg(text, 'table.prev', 'Previous')}
+						hint={msg(text, 'table.prev')}
+						aria-label={msg(text, 'table.prev')}
 						disabled={back.length === 0}
 						onclick={() => {
 							st = { ...st, after: back.at(-1) ?? null };
@@ -962,8 +946,8 @@
 					>
 					<span class="min-w-16 text-center tabular-nums" data-page
 						>{pages === null
-							? msg(text, 'table.page', 'Page {page}', { page: back.length + 1 })
-							: msg(text, 'table.pageOf', 'Page {page} of {pages}', {
+							? msg(text, 'table.page', { page: back.length + 1 })
+							: msg(text, 'table.pageOf', {
 									page: back.length + 1,
 									pages
 								})}</span
@@ -971,8 +955,8 @@
 					<Button
 						size="icon"
 						variant="ghost"
-						hint={msg(text, 'table.next', 'Next')}
-						aria-label={msg(text, 'table.next', 'Next')}
+						hint={msg(text, 'table.next')}
+						aria-label={msg(text, 'table.next')}
 						disabled={next === null}
 						onclick={() => {
 							const cursor = next;
@@ -1001,11 +985,11 @@
 <!-- the grid's sticky actions cell: two or more actions fold into one menu, so the cell stays narrow and never covers the
      columns it floats over; the phone's card folds them the same way, so they never squeeze the row -->
 {#snippet rowMenu(row: ReadRow)}
-	{#if actions.length + (kind === 'local' && onChange && remove ? 1 : 0) > 1}
+	{#if actions.length + (kind === 'local' && on_change && remove ? 1 : 0) > 1}
 		<Popover.Root>
 			<Popover.Trigger
 				class="text-muted-foreground hover:bg-accent hover:text-foreground grid size-8 [--hit-target:2rem] place-items-center rounded-sm"
-				aria-label={msg(text, 'table.rowActions', 'Row actions')}
+				aria-label={msg(text, 'table.rowActions')}
 				data-row-menu><Glyph name="more" class="size-4" /></Popover.Trigger
 			>
 			<Popover.Content
@@ -1027,14 +1011,14 @@
 			}}>{a.label}</Button
 		>
 	{/each}
-	{#if kind === 'local' && onChange && remove}
+	{#if kind === 'local' && on_change && remove}
 		<Button
 			variant="ghost"
 			onclick={() => {
 				if (tableSource._tag !== 'local') return;
 				const index = tableSource.rows.indexOf(row);
-				if (index >= 0) onChange(tableSource.rows.filter((_, i) => i !== index));
-			}}>{msg(text, 'table.remove', 'Remove')}</Button
+				if (index >= 0) on_change(tableSource.rows.filter((_, i) => i !== index));
+			}}>{msg(text, 'table.remove')}</Button
 		>
 	{/if}
 {/snippet}
@@ -1048,15 +1032,15 @@
 			<input
 				type="checkbox"
 				checked={all}
-				aria-label={msg(text, 'table.selectPage', 'Select this page')}
+				aria-label={msg(text, 'table.selectPage')}
 				onchange={(e) => togglePage(rows, e.currentTarget.checked)}
 				data-select-page
 			/>
-			{msg(text, 'table.selectPage', 'Select this page')}
+			{msg(text, 'table.selectPage')}
 		</label>
 		{#if selected.size > 0}
 			<span class="font-medium" data-selected-count
-				>{msg(text, 'table.selected', '{n} selected', { n: selected.size })}</span
+				>{msg(text, 'table.selected', { n: selected.size })}</span
 			>
 			{#if all && matching !== null && matching > selected.size}
 				<Button
@@ -1066,11 +1050,11 @@
 					onclick={selectMatching}
 					data-select-matching
 				>
-					{msg(text, 'table.selectMatching', 'Select all {n} matching', { n: matching })}</Button
+					{msg(text, 'table.selectMatching', { n: matching })}</Button
 				>
 			{/if}
 			<Button variant="link" class="h-auto px-0 text-xs" onclick={clearSelection} data-select-clear
-				>{msg(text, 'table.clearSelection', 'Clear selection')}</Button
+				>{msg(text, 'table.clearSelection')}</Button
 			>
 		{:else}<span class="tabular-nums" data-range>{range}</span>{/if}
 	</div>
@@ -1093,17 +1077,17 @@
 			{catalog}
 			{source}
 			author={where}
-			hiddenAuthor={hiddenWhere}
+			hidden_author={hidden_where}
 			sortable={sorts}
 			bind:q={qText}
 			searchable={canSearch}
 			selected={selectable ? [...selected] : undefined}
-			onSettled={clearSelection}
+			on_settled={clearSelection}
 			{exporter}
-			onAdd={kind === 'local' && onChange && add
-				? () => onChange([...(tableSource._tag === 'local' ? tableSource.rows : []), add()])
+			on_add={kind === 'local' && on_change && add
+				? () => on_change([...(tableSource._tag === 'local' ? tableSource.rows : []), add()])
 				: undefined}
-			onProbe={kind === 'model'
+			on_probe={kind === 'model'
 				? (p) => {
 						probe = p;
 						restart({});
@@ -1121,37 +1105,37 @@
 			{:else}
 				<!-- an empty view says what is missing and offers the way forward, inside the table's own card -->
 				{@const what =
-					model === '' ? msg(text, 'table.rows', 'rows') : lowerLead(label(text, model))}
+					model === '' ? msg(text, 'table.rows') : lowerLead(label(text, model))}
 				<div class={embedded ? 'min-w-0' : 'bg-card min-w-0 rounded-md border'} data-table-card>
 					{#if filtered}
 						<EmptyState
 							variant="inset"
 							icon="search"
-							title={msg(text, 'table.noMatch', 'No {what} match this search or filter', {
+							title={msg(text, 'table.noMatch', {
 								what
 							})}
-							hint={msg(text, 'table.noMatchHint', 'Try a different search, or clear the filters.')}
+							hint={msg(text, 'table.noMatchHint')}
 						>
 							<Button
 								variant="outline"
 								onclick={() => {
 									vs.clear();
 									qText = '';
-								}}>{msg(text, 'view.clearAll', 'Clear all')}</Button
+								}}>{msg(text, 'view.clearAll')}</Button
 							>
 						</EmptyState>
 					{:else}
 						<EmptyState
 							variant="inset"
-							title={msg(text, 'table.empty', 'No {what} yet', { what })}
+							title={msg(text, 'table.empty', { what })}
 							hint={canNew
-								? msg(text, 'table.noneHint', 'Create the first one to get started.')
-								: msg(text, 'table.emptyHint', 'Nothing has been added here yet.')}
+								? msg(text, 'table.noneHint')
+								: msg(text, 'table.emptyHint')}
 						>
 							{#if canNew}<Button
 									onclick={() =>
-										typeof tb.new === 'function' ? tb.new() : openRecord(model, 'new', contexts)}
-									><Glyph name="plus" />{msg(text, 'table.new', 'New')}</Button
+										typeof tb.new === 'function' ? tb.new() : open_record(model, 'new', contexts)}
+									><Glyph name="plus" />{msg(text, 'table.new')}</Button
 								>{/if}
 						</EmptyState>
 					{/if}
@@ -1171,7 +1155,7 @@
 				<div
 					class={[
 						embedded ? 'min-w-0' : 'relative flex min-h-0 flex-1 flex-col',
-						!embedded && layout !== 'grid' && !(kind === 'local' && onChange) && 'max-md:hidden'
+						!embedded && layout !== 'grid' && !(kind === 'local' && on_change) && 'max-md:hidden'
 					]}
 				>
 					<div
@@ -1189,7 +1173,7 @@
 										<th class="bg-card sticky left-0 z-10 w-8 dark:bg-muted px-2!"
 											><input
 												type="checkbox"
-												aria-label={msg(text, 'table.selectAll', 'Select all')}
+												aria-label={msg(text, 'table.selectAll')}
 												checked={pageAll(rows)}
 												onchange={(e) => togglePage(rows, e.currentTarget.checked)}
 											/></th
@@ -1241,10 +1225,7 @@
 															'text-muted-foreground hover:bg-background hover:text-foreground ml-auto grid size-6 shrink-0 place-items-center rounded-sm transition-opacity focus-visible:opacity-100 data-[state=open]:opacity-100',
 															'opacity-0 group-hover:opacity-100'
 														]}
-														aria-label={msg(
-															text,
-															'table.columnMenu',
-															'Column options for {column}',
+														aria-label={msg(text, 'table.columnMenu',
 															{
 																column: colLabel(c)
 															}
@@ -1258,31 +1239,31 @@
 													>
 														{@render colItem(
 															isPinned
-																? msg(text, 'table.unpin', 'Unpin column')
-																: msg(text, 'table.pin', 'Pin column'),
+																? msg(text, 'table.unpin')
+																: msg(text, 'table.pin'),
 															'pin',
 															() => togglePin(f)
 														)}
 														{@render colItem(
-															msg(text, 'table.hideColumn', 'Hide column'),
+															msg(text, 'table.hideColumn'),
 															'eyeOff',
 															() => toggleHidden(f),
 															ordered.length === 1
 														)}
 														{@render colItem(
-															msg(text, 'table.moveLeft', 'Move left'),
+															msg(text, 'table.moveLeft'),
 															'left',
 															() => moveColumn(f, -1),
 															ci === 0
 														)}
 														{@render colItem(
-															msg(text, 'table.moveRight', 'Move right'),
+															msg(text, 'table.moveRight'),
 															'right',
 															() => moveColumn(f, 1),
 															ci === ordered.length - 1
 														)}
 														{#if widths[f] !== undefined}{@render colItem(
-																msg(text, 'table.resetWidth', 'Reset width'),
+																msg(text, 'table.resetWidth'),
 																'sync',
 																() => {
 																	const { [f]: _, ...rest } = widths;
@@ -1294,7 +1275,7 @@
 															<p
 																class="text-muted-foreground mt-1 border-t px-2 pt-2 pb-1 font-medium"
 															>
-																{msg(text, 'table.hiddenColumns', 'Hidden columns')}
+																{msg(text, 'table.hiddenColumns')}
 															</p>
 															{#each hiddenCols as h (colOf(h).field)}{@render colItem(
 																	colLabel(h),
@@ -1309,7 +1290,7 @@
 											<span
 												role="separator"
 												aria-orientation="vertical"
-												aria-label={msg(text, 'table.resize', 'Resize column')}
+												aria-label={msg(text, 'table.resize')}
 												data-column-resize
 												class={[
 													'group/resize absolute inset-y-0 z-10 flex w-2 cursor-col-resize touch-none justify-center select-none',
@@ -1323,8 +1304,8 @@
 											</span>
 										</th>
 									{/each}
-									{#if rowTrailing}<th class="w-0 p-0!"></th>{/if}
-									{#if actions.length > 0 || (kind === 'local' && onChange && remove)}<th
+									{#if row_trailing}<th class="w-0 p-0!"></th>{/if}
+									{#if actions.length > 0 || (kind === 'local' && on_change && remove)}<th
 											class={['bg-card z-10 dark:bg-muted', ACTS_EDGE]}
 										></th>{/if}
 								</tr>
@@ -1342,7 +1323,7 @@
 										class={[
 											'group/row hover:[&>td]:bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))]',
 											opens && 'focus-visible:[&>td]:bg-accent cursor-pointer outline-none',
-											rowClass?.(row),
+											row_class?.(row),
 											held !== null &&
 												(held.state === 'Pending'
 													? '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-warning)]'
@@ -1367,7 +1348,7 @@
 											<td class="bg-card sticky left-0 z-[1] px-2!">
 												{#if recordRow(row)}<input
 														type="checkbox"
-														aria-label={msg(text, 'table.select', 'Select')}
+														aria-label={msg(text, 'table.select')}
 														checked={selected.has(row.id)}
 														onchange={(e) =>
 															e.currentTarget.checked
@@ -1387,13 +1368,13 @@
 													isPinned && ci === pinCount - 1 && PIN_EDGE,
 													numeric(col.field) && 'text-right tabular-nums',
 													embedded && 'align-middle',
-													rowTrailing && ci === ordered.length - 1 && 'pr-9!'
+													row_trailing && ci === ordered.length - 1 && 'pr-9!'
 												]}
 												style={[sized(w), isPinned ? `left:${leftOf(ci)}px` : '']
 													.filter(Boolean)
 													.join(';') || undefined}
 											>
-												{#if kind === 'local' && onChange && col.edit && !col.cell}
+												{#if kind === 'local' && on_change && col.edit && !col.cell}
 													{@const value = valueAt(row, col.field)}
 													<input
 														class="border-input h-7 w-full rounded-sm border px-1"
@@ -1418,15 +1399,15 @@
 													<button
 														type="button"
 														class="bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))] text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm opacity-0 outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 [@media(hover:none)]:opacity-100"
-														aria-label={msg(text, 'table.openRow', 'Open')}
-														title={msg(text, 'table.openRow', 'Open')}
+														aria-label={msg(text, 'table.openRow')}
+														title={msg(text, 'table.openRow')}
 														onclick={() => open(row)}
 														data-row-open><Glyph name="panel" class="size-3.5" /></button
 													>
 												{/if}
 											</td>
 										{/each}
-										{#if rowTrailing}
+										{#if row_trailing}
 											<td class="sticky right-0 z-[2] w-0 p-0!">
 												<div
 													class={[
@@ -1438,11 +1419,11 @@
 													data-row-trailing
 													data-revealed={revealed === key || undefined}
 												>
-													{@render rowTrailing(row)}
+													{@render row_trailing(row)}
 												</div>
 											</td>
 										{/if}
-										{#if actions.length > 0 || (kind === 'local' && onChange && remove)}
+										{#if actions.length > 0 || (kind === 'local' && on_change && remove)}
 											<td class={['bg-card z-[1]', ACTS_EDGE]} data-row-actions
 												>{@render rowMenu(row)}</td
 											>
@@ -1474,7 +1455,7 @@
 						</div>
 					{/if}
 				</div>
-				{#if !embedded && layout !== 'grid' && !(kind === 'local' && onChange)}
+				{#if !embedded && layout !== 'grid' && !(kind === 'local' && on_change)}
 					<ul class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md md:hidden" data-table-list>
 						{#if narrow.on}<li
 								aria-hidden="true"
@@ -1492,7 +1473,7 @@
 								class={[
 									'relative flex min-w-0 items-start gap-2 px-3 py-1.5 transition-colors',
 									recordRow(row) && selected.has(row.id) ? 'bg-accent/40' : 'hover:bg-muted/40',
-									rowClass?.(row)
+									row_class?.(row)
 								]}
 								ontouchstart={(e) => swipeStart(e, key)}
 								ontouchend={(e) => swipeEnd(e, key)}
@@ -1505,7 +1486,7 @@
 										<input
 											class="mt-1 block"
 											type="checkbox"
-											aria-label={msg(text, 'table.select', 'Select')}
+											aria-label={msg(text, 'table.select')}
 											checked={selected.has(row.id)}
 											onchange={(e) =>
 												e.currentTarget.checked ? selected.add(row.id) : selected.delete(row.id)}
@@ -1552,7 +1533,7 @@
 										</div>
 									{/if}
 								</div>
-								{#if rowTrailing}
+								{#if row_trailing}
 									<div
 										class={[
 											'absolute top-1/2 right-2 -translate-y-1/2 transition-opacity',
@@ -1563,7 +1544,7 @@
 										data-row-trailing
 										data-revealed={revealed === key || undefined}
 									>
-										{@render rowTrailing(row)}
+										{@render row_trailing(row)}
 									</div>
 								{/if}
 								{#if actions.length > 0}<div class="shrink-0">{@render rowMenu(row)}</div>{/if}
@@ -1581,7 +1562,7 @@
 	{:else}
 		<ReadGate
 			state={view}
-			what={model === '' ? msg(text, 'table.rows', 'these rows') : label(text, model)}
+			what={model === '' ? catalogText(text, 'table.rows', 'these rows') : label(text, model)}
 		>
 			{#snippet children(rows)}{@render content(rows)}{/snippet}
 		</ReadGate>

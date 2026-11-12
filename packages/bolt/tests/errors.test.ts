@@ -8,7 +8,7 @@ import {
 	Fenced,
 	IdentityRefusal,
 	Interrupted,
-	isTransient,
+	is_transient,
 	ManifestInvalid,
 	SerializationReplay
 } from '../src/engine/errors.ts';
@@ -46,39 +46,39 @@ describe('engine errors', () => {
 	});
 
 	it('make never throws and keeps its cause', () => {
-		const inner = BoltError.make('guestError', 'guest', 'inner', new Error('root'));
+		const inner = BoltError.make('guest_error', 'guest', 'inner', new Error('root'));
 		const e = BoltError.make('refused', 'commit', '', inner);
 		expect(e.cause).toBe(inner);
 		expect(inner.cause).toMatchObject({ message: 'root' });
-		expect(BoltError.make('notFound', 'admission', 'gone').cause).toBeUndefined();
+		expect(BoltError.make('not_found', 'admission', 'gone').cause).toBeUndefined();
 	});
 
 	it('is an Error named BoltError, tagged, carrying its code and phase', () => {
-		const e = BoltError.make('notFound', 'admission', 'gone');
+		const e = BoltError.make('not_found', 'admission', 'gone');
 		expect(e).toBeInstanceOf(Error);
 		expect(e).toBeInstanceOf(BoltError);
 		expect(e.name).toBe('BoltError');
 		expect(e._tag).toBe('BoltError');
 		expect(String(e)).toBe('BoltError: gone');
-		expect(e).toMatchObject({ code: 'notFound', phase: 'admission', message: 'gone' });
-		expect(new BoltError({ code: 'notFound', phase: 'admission', message: 'gone' })).toMatchObject({
-			code: 'notFound',
+		expect(e).toMatchObject({ code: 'not_found', phase: 'admission', message: 'gone' });
+		expect(new BoltError({ code: 'not_found', phase: 'admission', message: 'gone' })).toMatchObject({
+			code: 'not_found',
 			message: 'gone'
 		});
 	});
 
 	it('round-trips through its Schema', () => {
-		const e = BoltError.make('notFound', 'admission', 'gone');
+		const e = BoltError.make('not_found', 'admission', 'gone');
 		const encoded = Schema.encodeSync(BoltError)(e);
 		expect(encoded).toEqual({
 			_tag: 'BoltError',
-			code: 'notFound',
+			code: 'not_found',
 			phase: 'admission',
 			message: 'gone'
 		});
 		const back = Schema.decodeUnknownSync(BoltError)(encoded);
 		expect(back).toBeInstanceOf(BoltError);
-		expect(back).toMatchObject({ code: 'notFound', phase: 'admission', message: 'gone' });
+		expect(back).toMatchObject({ code: 'not_found', phase: 'admission', message: 'gone' });
 		expect(() =>
 			Schema.decodeUnknownSync(BoltError)({
 				_tag: 'BoltError',
@@ -107,30 +107,32 @@ describe('engine errors', () => {
 		expect(Object.keys(CODE).sort()).toEqual([...CODES].sort());
 	});
 
-	it('transient table: a run retries upstream, timeout, rateLimited and conflict, nothing else (rule 54)', () => {
-		expect(CODES.filter((code) => isTransient(BoltError.make(code, 'facility', code)))).toEqual([
+	it('transient table: a run retries upstream, timeout, rate_limited and conflict, nothing else (rule 54)', () => {
+		expect(CODES.filter((code) => is_transient(BoltError.make(code, 'facility', code)))).toEqual([
 			'conflict',
-			'rateLimited',
+			'rate_limited',
 			'timeout',
 			'upstream'
 		]);
 		expect(
-			['40001', '40P01', '57014', '23505', '08006'].map((s) => isTransient(DbError.make(s, s)))
-		).toEqual([true, true, true, false, false]);
-		expect(isTransient(new Conflict({ records: [] }))).toBe(true);
-		expect(isTransient(new SerializationReplay())).toBe(true);
-		expect(isTransient(new Fenced({ instance: 'i', message: 'another link took i' }))).toBe(false);
-		expect(isTransient(new Interrupted())).toBe(false);
-		expect(isTransient(new IdentityRefusal({ code: 'timeout', message: 'slow' }))).toBe(true);
-		expect(isTransient(new IdentityRefusal({ code: 'forbidden', message: 'no' }))).toBe(false);
-		expect(isTransient(new ManifestInvalid({ issues: ['workspace: missing'] }))).toBe(false);
-		for (const kind of ['upstream', 'timeout', 'rateLimited'] as const) {
-			expect(isTransient(BoltError.make('guestError', 'guest', 'failed', { kind }))).toBe(true);
+			['40001', '40P01', '57014', '08006', '08001', '55P03', '53300', '57P01', '57P02', '57P03', '57P05'].map((s) => is_transient(DbError.make(s, s)))
+		).toEqual([true, true, true, true, true, true, true, true, true, true, true]);
+		for (const sqlstate of ['23505', '23503', '42601', '42P01', '53100', '53200', '53400', '57P04', '08invalid'])
+			expect(is_transient(DbError.make(sqlstate, sqlstate))).toBe(false);
+		expect(is_transient(new Conflict({ records: [] }))).toBe(true);
+		expect(is_transient(new SerializationReplay())).toBe(true);
+		expect(is_transient(new Fenced({ instance: 'i', message: 'another link took i' }))).toBe(false);
+		expect(is_transient(new Interrupted())).toBe(false);
+		expect(is_transient(new IdentityRefusal({ code: 'timeout', message: 'slow' }))).toBe(true);
+		expect(is_transient(new IdentityRefusal({ code: 'forbidden', message: 'no' }))).toBe(false);
+		expect(is_transient(new ManifestInvalid({ issues: ['workspace: missing'] }))).toBe(false);
+		for (const kind of ['upstream', 'timeout', 'rate_limited'] as const) {
+			expect(is_transient(BoltError.make('guest_error', 'guest', 'failed', { kind }))).toBe(true);
 		}
 		for (const cause of [{ kind: 'invalid' }, { kind: 'unsupported' }, { kind: 'unknown' }, null]) {
-			expect(isTransient(BoltError.make('guestError', 'guest', 'failed', cause))).toBe(false);
+			expect(is_transient(BoltError.make('guest_error', 'guest', 'failed', cause))).toBe(false);
 		}
-		expect(isTransient(BoltError.make('internal', 'guest', 'bug', { kind: 'timeout' }))).toBe(
+		expect(is_transient(BoltError.make('internal', 'guest', 'bug', { kind: 'timeout' }))).toBe(
 			false
 		);
 	});

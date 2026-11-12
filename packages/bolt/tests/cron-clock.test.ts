@@ -4,13 +4,13 @@ import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Queue } from 'effect';
 import { TestClock } from 'effect/testing';
 import type { CronEntry } from '../src/engine/contracts.ts';
-import { cronClock } from '../src/node/cron-clock.ts';
+import { cron_clock } from '../src/node/cron-clock.ts';
 
 const clock = (
 	crons: readonly CronEntry[],
 	onFire: (id: string, slot: string) => Effect.Effect<void>
 ) =>
-	cronClock({
+	cron_clock({
 		crons: Effect.succeed(crons),
 		fire: (id, slot) => onFire(id, slot).pipe(Effect.as({ ran: true }))
 	});
@@ -18,7 +18,7 @@ const clock = (
 const takes = (fired: Queue.Queue<string>, n: number) =>
 	Effect.forEach(Array.from({ length: n }), () => Queue.take(fired));
 
-describe('cronClock', () => {
+describe('cron_clock', () => {
 	it.effect('fires each slot once at its minute, in its zone', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

@@ -29,7 +29,7 @@ export type ReleaseChange = Readonly<{
 	title: string;
 	state: 'open' | 'merged' | 'closed';
 	head: string;
-	updatedAt: string;
+	updated_at: string;
 	preview: Readonly<{
 		commit: string;
 		artifact: string;
@@ -50,7 +50,7 @@ export type ReleaseEntry = Readonly<{
 }>;
 
 /** The same source-and-data rollback prerequisites wherever a version is displayed. */
-export function rollbackReason(release: ReleaseVersion): string | null {
+export function rollback_reason(release: ReleaseVersion): string | null {
 	if (release.current) return 'This commit is already live.';
 	if (release.replaced) return 'Before the last reset — can’t roll back to this';
 	if (release.checkpoint == null) return 'This version has no checkpoint to roll back to';
@@ -58,7 +58,7 @@ export function rollbackReason(release: ReleaseVersion): string | null {
 }
 
 /** A commit has one row, while every publication and preview reference remains visible inside it. */
-export function timelineEntries(
+export function timeline_entries(
 	builds: readonly ReleaseBuild[],
 	releases: readonly ReleaseVersion[],
 	changes: readonly ReleaseChange[] = []
@@ -83,8 +83,8 @@ export function timelineEntries(
 				[
 					...(build ? [build.at] : []),
 					...publications.map((release) => release.at),
-					...own.map((change) => change.updatedAt),
-					...previews.map((change) => change.updatedAt)
+					...own.map((change) => change.updated_at),
+					...previews.map((change) => change.updated_at)
 				]
 					.sort()
 					.at(-1) ?? '';

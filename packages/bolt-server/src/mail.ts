@@ -1,7 +1,7 @@
 // This host's transactional facilities (sign-in codes, invitations): each one explicit in its settings.
 import { Effect } from 'effect';
 import type { HttpClient } from 'effect/http/HttpClient';
-import { loggedPhone, type Json, type TransportPort } from '@norbital-ai/bolt/engine';
+import { logged_phone, type Json, type TransportPort } from '@norbital-ai/bolt/engine';
 import { off, type Facilities } from '@norbital-ai/bolt/facilities';
 import type { ProviderRefused, ProviderUnavailable } from '@norbital-ai/providers';
 import type { HostSettings } from './host.ts';
@@ -13,7 +13,7 @@ export type TransportDef = {
 	readonly send: (
 		message: Json
 	) => Effect.Effect<
-		{ readonly providerId: string },
+		{ readonly provider_id: string },
 		ProviderRefused | ProviderUnavailable,
 		HttpClient
 	>;
@@ -39,7 +39,7 @@ export type Run = <A, E>(
 const logged = (kind: string, log: (line: string) => void): TransportPort => ({
 	send: async (_kind, message: Json) => {
 		log(`${kind} → ${JSON.stringify(message)}`);
-		return { providerId: `log-${Date.now()}` };
+		return { provider_id: `log-${Date.now()}` };
 	}
 });
 
@@ -52,12 +52,14 @@ export const messaging = Effect.fn('server.messaging')(function* (
 	const native = (def: TransportDef): TransportPort => ({
 		send: (_kind, message, signal) => run(def.send(message), { signal })
 	});
-	const twilio = phone === null || phone.provider === 'log' ? undefined : phone;
+	const twilio = phone === null || phone.provider === 'log'
+		? undefined
+		: { accountSid: phone.account_sid, authToken: phone.auth_token };
 	const verifier = twilio === undefined ? undefined : yield* twilioVerify(twilio);
-	const members: Pick<Facilities['transactional'], 'mail' | 'sms' | 'phone' | 'fixedCodes'> = {
+	const members: Pick<Facilities['transactional'], 'mail' | 'sms' | 'phone' | 'fixed_codes'> = {
 		mail: email.provider === 'log' ? logged('mail', log) : native(resendMail(email)),
 		// a host whose mail is the log is a local one: its codes are 123456
-		fixedCodes: email.provider === 'log',
+		fixed_codes: email.provider === 'log',
 		sms:
 			phone === null
 				? off
@@ -68,7 +70,7 @@ export const messaging = Effect.fn('server.messaging')(function* (
 			phone === null
 				? off
 				: verifier === undefined
-					? loggedPhone(log, true)
+					? logged_phone(log, true)
 					: {
 							via: verifier.via,
 							start: (to, via, signal) => run(verifier.start(to, via), { signal }),

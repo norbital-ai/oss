@@ -97,7 +97,7 @@ function readSchema(schema: unknown): Read {
 }
 
 /** The field list a stored schema reads as: the matrix's rows. */
-export function jsonSchemaRows(schema: unknown): readonly JsonSchemaRow[] {
+export function json_schema_rows(schema: unknown): readonly JsonSchemaRow[] {
 	return readSchema(schema).rows;
 }
 
@@ -193,7 +193,7 @@ function write(at: Tree): JsonObject {
  * made unique; a list of the same length is the same fields in place, so a renamed row keeps its other keywords and
  * its children follow it.
  */
-export function jsonSchemaFromRows(next: unknown, held: unknown): JsonObject {
+export function json_schema_from_rows(next: unknown, held: unknown): JsonObject {
 	const prev = readSchema(held);
 	const rows = Array.isArray(next) ? next.map(rowFrom) : [];
 	const inPlace = rows.length === prev.rows.length;

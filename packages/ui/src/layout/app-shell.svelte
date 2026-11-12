@@ -39,11 +39,12 @@ Every `+<page>.page.svelte` renders inside one.
 
 <script lang="ts">
 	import { getAllContexts, onDestroy } from 'svelte';
+	import { watch } from 'runed';
 	import { offerContexts } from '../record/navigation.js';
 	import Bound from './bound.svelte';
 	import Cover from './cover.svelte';
-	import { getAppIdentitySlot } from './app-identity.svelte.js';
-	// the page's contexts (its create scope), for a record sheet opened over it by the URL: any model's (`pageContexts`)
+	import { get_app_identity_slot } from './app-identity.svelte.js';
+	// the page's contexts (its create scope), for a record sheet opened over it by the URL: any model's (`page_contexts`)
 	onDestroy(offerContexts('*', getAllContexts()));
 
 	let {
@@ -59,13 +60,15 @@ Every `+<page>.page.svelte` renders inside one.
 	const artwork = $derived(thumbnail ?? banner);
 	// Publish identity to the shell hero above: translated titles and descriptions are not
 	// statically readable, so without this the hero falls back to filename labels and icons.
-	// An effect (not init assignment) so locale switches re-publish; the slot is absent when
+	// Watch the identity so locale switches re-publish; the slot is absent when
 	// the shell renders standalone in a test or story.
-	const identitySlot = getAppIdentitySlot();
-	$effect(() => {
-		if (identitySlot)
-			identitySlot.current = { title, description, icon, banner, thumbnail, actions };
-	});
+	const identitySlot = get_app_identity_slot();
+	watch(
+		() => identitySlot === null ? null : { title, description, icon, banner, thumbnail, actions },
+		(identity) => {
+			if (identitySlot !== null && identity !== null) identitySlot.current = identity;
+		}
+	);
 	onDestroy(() => {
 		if (identitySlot?.current?.title === title) identitySlot.current = null;
 	});

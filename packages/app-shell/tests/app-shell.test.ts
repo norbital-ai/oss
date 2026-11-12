@@ -5,7 +5,7 @@ import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Result, Schema } from 'effect';
 import { androidCapacitorConfig, capacitorConfig } from '../src/capacitor.ts';
-import { AppConfig, defineApp, onHost } from '../src/config.ts';
+import { AppConfig, define_app, onHost } from '../src/config.ts';
 import {
 	NATIVE_PACKAGES,
 	nativeManifest,
@@ -15,8 +15,8 @@ import {
 } from '../src/generate.ts';
 import { exportOptions } from '../src/release.ts';
 
-const decode = Schema.decodeUnknownResult(AppConfig);
-const sample = defineApp({
+const decode = Schema.decodeUnknownResult(AppConfig, { onExcessProperty: 'error' });
+const sample = define_app({
 	id: 'com.mericlean.cleaner',
 	name: "Mericlean Cleaner's App",
 	description: 'Jobs for cleaners.',
@@ -26,13 +26,13 @@ const sample = defineApp({
 	splash: { color: '#0a7cff' },
 	host: 'https://apps.norbital.ai',
 	workspace: 'https://apps.norbital.ai/mericlean/apps/cleaner',
-	allowNavigation: ['*.stripe.com'],
+	allow_navigation: ['*.stripe.com'],
 	capabilities: {
 		location: { background: true, purpose: 'Share your route while on a job.' },
 		notifications: true,
 		camera: { purpose: 'Photograph completed work.' }
 	},
-	ios: { teamId: 'ABCDE12345', apsEnvironment: 'production' },
+	ios: { team_id: 'ABCDE12345', aps_environment: 'production' },
 	android: {}
 });
 const app = (overrides: Partial<typeof sample> = {}) => {
@@ -101,8 +101,17 @@ test('config refuses malformed identities, versions and hosts', () => {
 	refused({ id: 'com.mericlean.cleaner-app' });
 	refused({ version: '1.2' });
 	refused({ build: 0 });
-	refused({ allowNavigation: ['https://stripe.com'] });
-	refused({ ios: { teamId: 'short', apsEnvironment: 'production' } });
+	refused({ allow_navigation: ['https://stripe.com'] });
+	refused({ ios: { team_id: 'short', aps_environment: 'production' } });
+});
+
+test('config rejects retired optional names instead of silently dropping their settings', () => {
+	for (const retired of [
+		{ themeColor: '#123456' },
+		{ allowNavigation: ['*.stripe.com'] },
+		{ ios: { teamId: 'ABCDE12345', apsEnvironment: 'production' } },
+		{ android: { debugCa: './ca.pem' } }
+	]) strictEqual(Result.isFailure(decode({ ...sample, ...retired })), true);
 });
 
 test('capacitor config loads the workspace and keeps navigation on its host and the allowed hosts', () => {
@@ -204,7 +213,7 @@ test('every template placeholder renders and capabilities shape the native decla
 	strictEqual(bare.ANDROID_COMPONENTS, '');
 	strictEqual(bare.ANDROID_DEBUG_TRUST, '');
 	ok(
-		templateValues(app({ android: { debugCa: './ca.pem' } })).ANDROID_DEBUG_TRUST?.includes(
+		templateValues(app({ android: { debug_ca: './ca.pem' } })).ANDROID_DEBUG_TRUST?.includes(
 			'<certificates src="@raw/norbital_debug_ca" />'
 		)
 	);

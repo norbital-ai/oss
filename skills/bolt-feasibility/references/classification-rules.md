@@ -6,7 +6,7 @@ Ask in order; the first yes decides. Between two tiers choose the lower and say 
 | --- | --- | --- |
 | 1 | Data plus a workflow: records, states, transitions, permissions? | native: models, callbacks, state locks, policies, approvals, apps |
 | 2 | Computation with rules: money, eligibility, accruals, rates, scheduling, statutory calculations, derived reports? | native: std formula and decimal, callbacks, reads with helpers, aggregates, roll-ups |
-| 3 | Runs on a schedule or after an event? | native: automations, durable and idempotent |
+| 3 | Runs on a schedule or after an event? | native: durable jobs and model effects; explicit deduplication where required |
 | 4 | Custom endpoint, dashboard, public or external site, button beyond standard surfaces? | native: read requests, guarded writes, automations, apps, public page queries, the agent |
 | 5 | AI judgement: classification, extraction, summarisation, image reading, drafting, tool-using research ending in structured data? | native: `ctx.ai.sys_2.infer`, `ctx.ai.sys_1.decide`, `ctx.web.read`, host browser tools |
 | 6 | People outside the company over chat, without accounts? | native: a public envoy on a conversation connection |

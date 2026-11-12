@@ -2,10 +2,12 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import {
 	build,
-	destructiveSteps,
+	destructive_steps,
 	generate,
 	plan,
+	read_snapshot,
 	schema,
+	schema_snapshot,
 	statements,
 	table,
 	unaccepted,
@@ -18,17 +20,17 @@ describe('lossless schema planning', () => {
 	it.live('adds, recalculates and removes an optional indexed record label on existing rows', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const source = (recordLabel?: string) =>
+				const source = (record_label?: string) =>
 					schema({
 						people: table({
 							key: 'text',
 							fields: { name: { kind: 'text' } },
-							...(recordLabel === undefined ? {} : { recordLabel })
+							...(record_label === undefined ? {} : { record_label })
 						})
 					});
 				const pg = yield* database;
-				let current = source();
-				yield* script(pg, `${(yield* build(current)).join(';\n')};`);
+				let current = yield* schema_snapshot(source());
+				yield* script(pg, `${(yield* build(current.schema)).join(';\n')};`);
 				yield* script(pg, "insert into people (id, name) values ('person', 'Ada')");
 				let number = 2;
 				for (const [expression, expected] of [
@@ -47,7 +49,7 @@ describe('lossless schema planning', () => {
 						)
 					);
 					expect(result.rows).toEqual([{ bolt_record_label: expected }]);
-					current = next;
+					current = yield* read_snapshot(migration.snapshot);
 				}
 				const removal = yield* generate(current, source(), { number, name: 'remove_identifier' });
 				yield* script(pg, removal.file.sql);
@@ -84,7 +86,10 @@ describe('lossless schema planning', () => {
 				const pg = yield* database;
 				yield* script(pg, `${(yield* build(old)).join(';\n')};`);
 				yield* script(pg, "insert into requests (id, title) values ('request', 'Original')");
-				const migration = yield* generate(old, next, { number: 2, name: 'labels' });
+				const migration = yield* generate(yield* schema_snapshot(old), next, {
+					number: 2,
+					name: 'labels'
+				});
 				yield* script(pg, migration.file.sql);
 				yield* script(
 					pg,
@@ -102,15 +107,17 @@ describe('lossless schema planning', () => {
 	it.effect('preserves distinct host-owned table identities in an unchanged plan', () =>
 		Effect.gen(function* () {
 			const empty = schema({});
-			const beside = (): readonly SchemaObject[] =>
-				['first', 'second'].map((name): SchemaObject => ({
-					id: `engine:${name}`,
-					rank: 'table',
-					table: '',
-					deps: [],
-					create: [`create table if not exists ${name} (id int primary key)`],
-					drop: null
-				}));
+			const beside = () =>
+				Effect.succeed<readonly SchemaObject[]>(
+					['first', 'second'].map((name): SchemaObject => ({
+						id: `engine:${name}`,
+						rank: 'table',
+						table: '',
+						deps: [],
+						create: [`create table if not exists ${name} (id int primary key)`],
+						drop: null
+					}))
+				);
 			expect((yield* plan(null, empty, beside)).steps.map((step) => step.id)).toEqual([
 				'create:engine:first',
 				'create:engine:second'
@@ -137,7 +144,10 @@ describe('lossless schema planning', () => {
 						pg,
 						"insert into entry (id, n) values ('low', -2147483648), ('high', 2147483647), ('null', null)"
 					);
-					const migration = yield* generate(old, next, { number: 2, name: 'widen' });
+					const migration = yield* generate(yield* schema_snapshot(old), next, {
+						number: 2,
+						name: 'widen'
+					});
 					const sql = statements(migration.plan);
 					const widen = sql.filter((s) => s.step.startsWith('widen:'));
 					expect(widen).toHaveLength(1);
@@ -151,7 +161,7 @@ describe('lossless schema planning', () => {
 						false
 					);
 					expect(unaccepted(migration.plan)).toEqual([]);
-					expect(yield* destructiveSteps(old, next)).toEqual([]);
+					expect(yield* destructive_steps(old, next)).toEqual([]);
 					yield* script(pg, migration.file.sql);
 					const rows = yield* Effect.promise(() =>
 						pg.query<{ id: string; n: string | null; type: string }>(
@@ -191,7 +201,10 @@ describe('lossless schema planning', () => {
 				const pg = yield* database;
 				yield* script(pg, `${(yield* build(old)).join(';\n')};`);
 				yield* script(pg, "insert into entry (id, n) values ('kept', 21)");
-				const migration = yield* generate(old, next, { number: 2, name: 'rename and widen' });
+				const migration = yield* generate(yield* schema_snapshot(old), next, {
+					number: 2,
+					name: 'rename and widen'
+				});
 				const sql = statements(migration.plan).map((s) => s.sql);
 				const alter = sql.indexOf('alter table "record" alter column "value" type bigint');
 				expect(alter).toBeGreaterThan(
@@ -204,7 +217,7 @@ describe('lossless schema planning', () => {
 					sql.findIndex((s) => s.startsWith('alter table "record" add column "twice"'))
 				).toBeGreaterThan(alter);
 				expect(unaccepted(migration.plan)).toEqual([]);
-				expect(yield* destructiveSteps(old, next)).toEqual([]);
+				expect(yield* destructive_steps(old, next)).toEqual([]);
 				yield* script(pg, migration.file.sql);
 				expect(
 					(yield* Effect.promise(() =>
@@ -229,7 +242,7 @@ describe('lossless schema planning', () => {
 				const old = schema({ entry: table({ fields: { n: field } }) });
 				const p = yield* plan(old, target);
 				expect(unaccepted(p).map((s) => s.id)).toContain('replace:column:entry.n');
-				expect(yield* destructiveSteps(old, target)).toEqual(['replace:column:entry.n']);
+				expect(yield* destructive_steps(old, target)).toEqual(['replace:column:entry.n']);
 				expect(p.steps.some((s) => s.alter !== undefined)).toBe(false);
 			}
 			const unsupported = yield* plan(

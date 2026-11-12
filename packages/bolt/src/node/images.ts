@@ -4,7 +4,7 @@
 import { Worker } from 'node:worker_threads';
 import { Effect, Predicate, Schema } from 'effect';
 import { FacilityFailure } from '../decl/errors.ts';
-import { LIMITS, type ImagesPort, type ImageCrop as CropBox } from '../engine/contracts.ts';
+import { LIMITS, type ImagesPort, type ImagePreviewMime, type ImageCrop as CropBox } from '../engine/contracts.ts';
 import { ImageMetadataSchema } from '../engine/media.ts';
 import { Port } from '../engine/port.ts';
 
@@ -20,18 +20,12 @@ const bytesSchema = Schema.declare(
 	(value: unknown): value is Uint8Array => value instanceof Uint8Array
 );
 export const ImagePreviewSize = Schema.Literals([64, 512, 1024]);
-export const ImagePreviewMime = Schema.Literals([
-	'image/jpeg',
-	'image/png',
-	'image/heic',
-	'image/heif'
-]);
 export const ImageCrop = Schema.Struct({
 	left: Schema.Number,
 	top: Schema.Number,
 	right: Schema.Number,
 	bottom: Schema.Number,
-	minEdge: Schema.optionalKey(Schema.Number)
+	min_edge: Schema.optionalKey(Schema.Number)
 });
 const ImagePreviewSchema = Schema.Struct({
 	bytes: bytesSchema,
@@ -43,7 +37,7 @@ const image = <A>(
 	options: {
 		maxEdge?: number;
 		crop?: CropBox;
-		preview?: { maxEdge: typeof ImagePreviewSize.Type; mime: typeof ImagePreviewMime.Type };
+		preview?: { maxEdge: typeof ImagePreviewSize.Type; mime: ImagePreviewMime };
 	},
 	decoder: Schema.Decoder<A>
 ) =>
@@ -98,7 +92,7 @@ const image = <A>(
 		})
 	);
 
-export const imagesPort: ImagesPort = {
+export const images_port: ImagesPort = {
 	facts: (bytes, signal) => Effect.runPromise(image(bytes, {}, ImageMetadataSchema), { signal }),
 	jpeg: (bytes, maxEdge, signal) =>
 		Effect.runPromise(image(bytes, { maxEdge }, bytesSchema), { signal }),

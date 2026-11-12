@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 import { dev, tethered } from './dev.ts';
-import { hostFileOf } from '@norbital-ai/bolt/tooling';
+import { host_file_of } from '@norbital-ai/bolt/tooling';
 import { platformCommand } from './platform.ts';
 import { templatesCommand } from './templates.ts';
 import {
@@ -183,7 +183,7 @@ const devCommand = Command.make(
 					);
 				return yield* watching(options.dir);
 			}
-			const hostFile = yield* hostFileOf(root, Option.getOrUndefined(options.host));
+			const hostFile = yield* host_file_of(root, Option.getOrUndefined(options.host));
 			if (Option.isNone(hostFile)) return yield* watching(options.dir);
 			yield* Effect.scoped(
 				dev(root, hostFile.value, {

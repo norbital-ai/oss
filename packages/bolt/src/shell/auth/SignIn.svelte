@@ -4,7 +4,7 @@
 	lets newcomers sign up, the same two steps join them.
 -->
 <script lang="ts">
-	import { observeOnce, fork } from '@norbital-ai/ui/effect';
+	import { observe_once, fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import { Grid, Stack } from '@norbital-ai/ui/layout';
 	import { Button, Input, Label, PinInput, Spinner } from '@norbital-ai/ui';
@@ -29,7 +29,7 @@
 		handle?: string | undefined;
 	} = $props();
 
-	const methods = observeOnce(() => api.methods());
+	const methods = observe_once(() => api.methods());
 	// An old host, or a failed methods read, still signs in by email.
 	const byEmail = $derived(methods.current?.email ?? true);
 	const byPhone = $derived(methods.current?.phone ?? false);
@@ -61,7 +61,7 @@
 			Effect.gen(function* () {
 				const r = sent
 					? yield* Effect.result(api.verify(address, code))
-					: yield* Effect.result(api.sendCode(address, via));
+					: yield* Effect.result(api.send_code(address, via));
 				if (r._tag === 'Failure') return void (error = r.failure.message);
 				if (sent) location.assign(based(next));
 				else sent = true;
@@ -107,7 +107,7 @@
 								id="bolt-code"
 								bind:value={code}
 								aria-invalid={error !== null}
-								onComplete={() => form?.requestSubmit()}
+								on_complete={() => form?.requestSubmit()}
 							/>
 						</Stack>
 					{:else if current === 'phone'}
@@ -118,7 +118,7 @@
 									id="bolt-phone"
 									locale={methods.current?.locale ?? navigator.language}
 									value={phone}
-									onChange={(v) => {
+									on_change={(v) => {
 										mode = 'phone';
 										phone = v;
 									}}

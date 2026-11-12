@@ -39,10 +39,10 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {
-		'branches.root': { to: 'roots', onDelete: 'cascade' },
-		'leaves.branch': { to: 'branches', onDelete: 'cascade' },
-		'watchers.first': { to: ['roots', 'archives'], optional: true, onDelete: 'setNull' },
-		'watchers.second': { to: ['roots', 'archives'], optional: true, onDelete: 'setNull' }
+		'branches.root': { to: 'roots', on_delete: 'cascade' },
+		'leaves.branch': { to: 'branches', on_delete: 'cascade' },
+		'watchers.first': { to: ['roots', 'archives'], optional: true, on_delete: 'set_null' },
+		'watchers.second': { to: ['roots', 'archives'], optional: true, on_delete: 'set_null' }
 	},
 	exposures: {
 		roots: {
@@ -81,7 +81,7 @@ const manifest: EngineManifest = {
 			grants: { roots: { outputs: { default: true } }, watchers: { outputs: { default: true } } }
 		}
 	},
-	teams: { requesters: ['requester'], reviewers: ['reviewer'] }
+	teams: { requesters: { policies: ['requester'] }, reviewers: { policies: ['reviewer'] } }
 };
 const guest = program(`export default { policy: { requester: { grants: {
 	roots: { delete: { verdict: function* (rows, ctx) { return ctx.approve({ steps: [{ name: 'Review deletion', teams: ['reviewers'] }] }); } } },
@@ -119,13 +119,13 @@ const fixture = Effect.gen(function* () {
 	const t = Context.get(context, TestWorkspace),
 		writes = Context.get(context, Writes),
 		approvals = Context.get(context, Approvals),
-		admin = t.as(t.admin).authority,
-		requester = t.as(
+		admin = (yield* t.as(t.admin)).authority,
+		requester = (yield* t.as(
 			t.member(['requester'], { teams: ['requesters'], team_path: ['requesters'] })
-		).authority,
-		reviewer = t.as(
+		)).authority,
+		reviewer = (yield* t.as(
 			t.member(['reviewer'], { teams: ['reviewers'], team_path: ['reviewers'] })
-		).authority;
+		)).authority;
 	const act = (
 		model: Model,
 		verb: 'create' | 'update' | 'delete',
@@ -202,26 +202,13 @@ const fixture = Effect.gen(function* () {
 				params: []
 			}
 		);
+	// a write keeps no session buffer: its row images are its own statement's
 	const cleanJournal = Effect.gen(function* () {
-		for (const table of [
-			'pg_temp.bolt_write_context',
-			'pg_temp.bolt_write_targets',
-			'pg_temp.bolt_changes',
-			'pg_temp.bolt_erased',
-			'pg_temp.bolt_origins'
-		]) {
-			const exists = yield* t.db.value(Schema.Boolean, {
-				text: 'SELECT to_regclass($1) IS NOT NULL',
-				params: [table]
-			});
-			if (exists) {
-				const count = yield* t.db.value(Schema.Number, {
-					text: `SELECT count(*)::int FROM ${table}`,
-					params: []
-				});
-				assert.equal(count, 0, `${table} must not retain settled writes`);
-			}
-		}
+		const buffers = yield* t.db.value(Schema.Number, {
+			text: "SELECT count(*)::int FROM pg_class WHERE relpersistence = 't' AND relname IN ('bolt_write_context','bolt_write_targets','bolt_changes','bolt_erased','bolt_origins')",
+			params: []
+		});
+		assert.equal(buffers, 0, 'a write must not leave session buffers');
 	});
 	const rawDelete = { text: 'DELETE FROM roots WHERE id=$1', params: [root] };
 	return {
@@ -262,12 +249,12 @@ describe('database-owned referential actions', () => {
 					const refused = yield* Effect.result(f.t.db.write(f.rawDelete));
 					assert.ok(Result.isFailure(refused));
 					assert.equal(refused.failure.sqlstate, 'BA001');
-					assert.match(refused.failure.message, /^underApproval(?: |$)/);
+					assert.match(refused.failure.message, /^under_approval(?: |$)/);
 					assert.deepEqual(yield* f.snapshot(), holding);
 					yield* f.cleanJournal;
 					assert.deepEqual(yield* f.counts(), [{ roots: 1, branches: 1, leaves: 1, archives: 1 }]);
 					yield* f.approvals.decide({
-						requestId: held.outcome.requestId,
+						request_id: held.outcome.request_id,
 						decision: 'reject',
 						reason: 'Keep the name',
 						authority: f.reviewer,
@@ -344,7 +331,7 @@ describe('database-owned referential actions', () => {
 	);
 
 	it.live(
-		'a provisional native delete keeps the earliest checkpoint across both SET NULL events and key replay',
+		'a provisional delete unlinks both SET NULL references in one revision and keeps its checkpoint across key replay',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -353,13 +340,13 @@ describe('database-owned referential actions', () => {
 						input = [{ target: f.root }];
 					const first = yield* f.act('roots', 'delete', input, f.requester, key);
 					assert.ok(first.outcome.kind === 'pending_approval');
-					const requestId = first.outcome.requestId;
+					const request_id = first.outcome.request_id;
 					yield* f.cleanJournal;
 					assert.deepEqual(yield* f.counts(), [{ roots: 0, branches: 0, leaves: 0, archives: 1 }]);
-					assert.equal((yield* f.watcherRows())[0]?.revision, 3);
+					assert.equal((yield* f.watcherRows())[0]?.revision, 2);
 					const checkpoints = yield* f.t.db.value(Schema.Array(Checkpoint), {
 						text: 'SELECT records FROM bolt_approvals WHERE id=$1',
-						params: [requestId]
+						params: [request_id]
 					});
 					assert.deepEqual(
 						[...checkpoints].sort((a, b) => a.model.localeCompare(b.model)),
@@ -378,10 +365,7 @@ describe('database-owned referential actions', () => {
 								revision: row.revision,
 								request: row.request
 							})),
-						[
-							{ revision: 2, request: requestId },
-							{ revision: 3, request: requestId }
-						]
+						[{ revision: 2, request: request_id }]
 					);
 					assert.deepEqual(
 						(yield* f.act('roots', 'delete', input, f.requester, key, true)).outcome,
@@ -391,13 +375,13 @@ describe('database-owned referential actions', () => {
 					yield* f.cleanJournal;
 					assert.deepEqual(
 						yield* f.approvals.decide({
-							requestId,
+							request_id,
 							decision: 'reject',
 							reason: 'Keep the root and both references',
 							authority: f.reviewer,
 							now: f.t.clock.now()
 						}),
-						{ kind: 'decided', requestId, status: 'Rejected' }
+						{ kind: 'decided', request_id, status: 'Rejected' }
 					);
 					yield* f.cleanJournal;
 					assert.deepEqual(yield* f.counts(), [{ roots: 1, branches: 1, leaves: 1, archives: 1 }]);
@@ -409,11 +393,11 @@ describe('database-owned referential actions', () => {
 							first__archives: null,
 							second__roots: f.root,
 							second__archives: null,
-							revision: 4
+							revision: 3
 						}
 					]);
 					const restored = (yield* f.history()).filter(
-						(row) => row.request === requestId && row.cause === 'restored'
+						(row) => row.request === request_id && row.cause === 'restored'
 					);
 					assert.deepEqual(
 						restored.map((row) => row.model),

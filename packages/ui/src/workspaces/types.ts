@@ -17,22 +17,22 @@ export type WorkspaceMember = Readonly<{
 	name: string;
 	email: string | null;
 	active: boolean;
-	lastSeen: string | null;
+	last_seen: string | null;
 }>;
 export type WorkspaceChange = Readonly<{
 	id: string;
 	title: string;
 	state: 'open' | 'merged' | 'closed';
 	head: string;
-	createdAt: string;
-	updatedAt: string;
+	created_at: string;
+	updated_at: string;
 	behind?: number;
 	merge?: Readonly<{
 		state: 'scheduled' | 'queued' | 'running' | 'failed';
 		at: string;
 		head: string;
 		error?: string;
-		runAt?: string;
+		run_at?: string;
 	}>;
 	preview: Readonly<{
 		url: string | null;
@@ -46,7 +46,7 @@ export type WorkspaceChange = Readonly<{
 type BuildLine = Readonly<{ at: string; level: 'info' | 'warn' | 'error'; message: string }>;
 /** Plain operational data rendered identically in tenant Studio and Realm. Host boundaries decode its native schema. */
 export type WorkspaceOperationsData = Readonly<{
-	canInspect: boolean;
+	can_inspect: boolean;
 	as_of: string;
 	usage: readonly UsageChartProps[];
 	members: readonly WorkspaceMember[] | null;
@@ -83,24 +83,24 @@ export type WorkspaceOperationsData = Readonly<{
 		live: boolean;
 		name: string;
 		digest: string;
-		contentAddress: string | null;
+		content_address: string | null;
 		contract: string;
 		schema: string;
-		assetCount: number | null;
+		asset_count: number | null;
 		assets: readonly Readonly<{ path: string; sha256: string; bytes: number | null }>[];
 		truncated: boolean;
-		totalBytes: number | null;
+		total_bytes: number | null;
 	}> | null;
 	cache: Readonly<{
-		budgetBytes: number;
-		hostBytes: number;
-		hostEntries: number;
-		releaseBytes: number;
-		releaseEntries: number;
+		budget_bytes: number;
+		host_bytes: number;
+		host_entries: number;
+		release_bytes: number;
+		release_entries: number;
 		assets: readonly Readonly<{
 			path: string;
 			sha256: string;
-			cachedBytes: number;
+			cached_bytes: number;
 			variants: readonly Readonly<{ encoding: 'identity' | 'br' | 'gzip'; bytes: number }>[];
 		}>[];
 	}> | null;
@@ -119,8 +119,8 @@ export type WorkspaceOperationsData = Readonly<{
 		build: string | null;
 	}>;
 	health?: Readonly<{
-		artifactBytes: number | null;
-		fileCount: number | null;
+		artifact_bytes: number | null;
+		file_count: number | null;
 		packages: readonly Readonly<{
 			name: string;
 			version: string;
@@ -128,7 +128,7 @@ export type WorkspaceOperationsData = Readonly<{
 		}>[];
 		errors: readonly string[];
 		cleanup: readonly Readonly<{
-			changeId: string;
+			change_id: string;
 			title: string;
 			state: 'open' | 'merged' | 'closed';
 			environment: string;

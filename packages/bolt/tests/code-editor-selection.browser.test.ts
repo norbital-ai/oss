@@ -49,7 +49,7 @@ it.each([
 		let changes = 0;
 		const component = mount(CodeEditor, {
 			target,
-			props: { value: source, language: 'javascript', readonly, onChange: () => changes++ }
+			props: { value: source, language: 'javascript', readonly, on_change: () => changes++ }
 		});
 		try {
 			await tick();

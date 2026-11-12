@@ -1,5 +1,5 @@
 import { Exit, Schema } from 'effect';
-import type { PushBody } from '../protocol/schema.ts';
+import { PushBody } from '../protocol/schema.ts';
 
 /** A device permission as a host reports it; `prompt` means asking can still grant it. */
 export type Access = 'granted' | 'prompt' | 'denied';
@@ -7,7 +7,7 @@ export type Access = 'granted' | 'prompt' | 'denied';
 export type NativePermission = {
 	status(): Promise<Access>;
 	request(): Promise<Access>;
-	openSettings(): Promise<void>;
+	open_settings(): Promise<void>;
 };
 
 /** A notice the client raises on the device; `id` is the inbox notice's, so raising it again replaces it. */
@@ -22,13 +22,13 @@ export type DeviceNotice = {
 export type DeviceNotifications = {
 	show(notice: DeviceNotice): Promise<void>;
 	/** Listens for taps on raised notices; answers the unsubscribe. */
-	onOpen(listener: (path: string) => void): () => void;
+	on_open(listener: (path: string) => void): () => void;
 };
 /** A device's push endpoint as `POST /__bolt/push` stores it: a browser's web push, or an iOS app's APNs token. */
 export type PushRegistration = Exclude<PushBody, { readonly remove: true }>;
 
 /**
- * the device a shell (the native app shell, a desktop shell) installs as `window.boltDevice`
+ * the device a shell (the native app shell, a desktop shell) installs as `window.bolt_device`
  * before the workspace bundle runs; every member is optional and feature-detected. Without one, Bolt uses the
  * browser's own device. Availability grants no server authority.
  */
@@ -46,7 +46,7 @@ export type DeviceApi = {
 		/** Native authorization, independently of whether a foreground fix is available. */
 		background?: {
 			status(): Promise<{ enabled: boolean; always: boolean }>;
-			openSettings(): Promise<void>;
+			open_settings(): Promise<void>;
 		};
 	};
 	/** This device's push endpoint (it asks the platform for it, and for permission where the platform needs to). */
@@ -54,48 +54,172 @@ export type DeviceApi = {
 	/** A native service holding `GET /__bolt/notices` open while the app is in the background. */
 	notices?: { start(options: { url: string }): Promise<void>; stop(): Promise<void> };
 	/** Opens a URL outside the workspace in the system browser. */
-	navigation?: { openExternal(url: string): Promise<void> };
+	navigation?: { open_external(url: string): Promise<void> };
 };
 
-/** Native ports are opaque function ABIs: decoding checks their members are functions and calls none of them. */
-const functions = <T extends object>(names: readonly string[]) =>
-	Schema.declare<T>(
-		(value): value is T =>
-			typeof value === 'object' &&
-			value !== null &&
-			names.every((name) => typeof Reflect.get(value, name) === 'function')
-	);
-type DeviceMember<K extends keyof DeviceApi> = NonNullable<DeviceApi[K]>;
-const Permission = functions<NativePermission>(['status', 'request', 'openSettings']);
+/** Native functions remain unknown until their individual argument, result and callback contracts validate. */
+type NativeMethod = (...args: readonly unknown[]) => unknown;
+const Callable = Schema.declare(
+	(value: unknown): value is NativeMethod => typeof value === 'function',
+	{ identifier: 'NativeDeviceMethod' }
+);
+const callable = Schema.decodeUnknownSync(Callable);
+const access = Schema.decodeUnknownSync(Schema.Literals(['granted', 'prompt', 'denied']));
+const nothing = Schema.decodeUnknownSync(Schema.Undefined);
+const text = Schema.decodeUnknownSync(Schema.String);
+const notice = Schema.decodeUnknownSync(
+	Schema.Struct({
+		id: Schema.String,
+		title: Schema.String,
+		body: Schema.NullOr(Schema.String),
+		path: Schema.String
+	})
+);
+const background_status = Schema.decodeUnknownSync(
+	Schema.Struct({ enabled: Schema.Boolean, always: Schema.Boolean })
+);
+const registration = Schema.decodeUnknownSync(PushBody);
+const start_options = Schema.decodeUnknownSync(Schema.Struct({ url: Schema.String }));
+const position_options = Schema.decodeUnknownSync(
+	Schema.Struct({
+		enableHighAccuracy: Schema.optionalKey(Schema.Boolean),
+		maximumAge: Schema.optionalKey(Schema.Number),
+		timeout: Schema.optionalKey(Schema.Number)
+	})
+);
+const watch_id = Schema.decodeUnknownSync(Schema.Int);
+const position = Schema.decodeUnknownSync(
+	Schema.Struct({
+		coords: Schema.Struct({
+			accuracy: Schema.Number,
+			altitude: Schema.NullOr(Schema.Number),
+			altitudeAccuracy: Schema.NullOr(Schema.Number),
+			heading: Schema.NullOr(Schema.Number),
+			latitude: Schema.Number,
+			longitude: Schema.Number,
+			speed: Schema.NullOr(Schema.Number)
+		}),
+		timestamp: Schema.Number
+	})
+);
+const position_error = Schema.decodeUnknownSync(
+	Schema.Struct({
+		code: Schema.Number,
+		message: Schema.String,
+		PERMISSION_DENIED: Schema.Literal(1),
+		POSITION_UNAVAILABLE: Schema.Literal(2),
+		TIMEOUT: Schema.Literal(3)
+	})
+);
+
+/** Keep the native receiver: DOM and shell methods can depend on their original object. */
+const method = (owner: object, name: string): NativeMethod => {
+	const member: unknown = Reflect.get(owner, name);
+	const invoke = callable(member);
+	return (...args): unknown => Reflect.apply(invoke, owner, args);
+};
+const promised = async <A>(invoke: () => unknown, decode: (value: unknown) => A): Promise<A> => {
+	const result = invoke();
+	if (!(result instanceof Promise)) throw new TypeError('A native device method must return a Promise.');
+	const value: unknown = await result;
+	return decode(value);
+};
+const permission = (owner: object): NativePermission => {
+	const status = method(owner, 'status');
+	const request = method(owner, 'request');
+	const open_settings = method(owner, 'open_settings');
+	return {
+		status: () => promised(() => status(), access),
+		request: () => promised(() => request(), access),
+		open_settings: () => promised(() => open_settings(), nothing)
+	};
+};
+const notifications = (owner: object): NativePermission & DeviceNotifications => {
+	const permissions = permission(owner);
+	const show = method(owner, 'show');
+	const on_open = method(owner, 'on_open');
+	return {
+		...permissions,
+		show: (value) => promised(() => show(notice(value)), nothing),
+		on_open: (listener) => {
+			if (typeof listener !== 'function')
+				throw new TypeError('A notification listener must be a function.');
+			const off = callable(on_open((path: unknown) => listener(text(path))));
+			return () => {
+				nothing(off());
+			};
+		}
+	};
+};
+const geolocation = (owner: object): Geolocation => {
+	const current = method(owner, 'getCurrentPosition');
+	const watch = method(owner, 'watchPosition');
+	const clear = method(owner, 'clearWatch');
+	const callbacks = (success: PositionCallback, error: PositionErrorCallback | null | undefined) => {
+		if (typeof success !== 'function') throw new TypeError('A location listener must be a function.');
+		if (error !== undefined && error !== null && typeof error !== 'function')
+			throw new TypeError('A location error listener must be a function.');
+		return {
+			success: (value: unknown) => {
+				const point = position(value);
+				const coords: GeolocationCoordinates = {
+					...point.coords,
+					toJSON: () => ({ ...point.coords })
+				};
+				success({
+					coords,
+					timestamp: point.timestamp,
+					toJSON: () => ({ coords: { ...point.coords }, timestamp: point.timestamp })
+				});
+			},
+			error:
+				error === undefined || error === null
+					? error
+					: (value: unknown) => error(position_error(value))
+		};
+	};
+	return {
+		getCurrentPosition: (success, error, options) => {
+			const listener = callbacks(success, error);
+			nothing(
+				current(
+					listener.success,
+					listener.error,
+					options === undefined ? undefined : position_options(options)
+				)
+			);
+		},
+		watchPosition: (success, error, options) => {
+			const listener = callbacks(success, error);
+			return watch_id(
+				watch(
+					listener.success,
+					listener.error,
+					options === undefined ? undefined : position_options(options)
+				)
+			);
+		},
+		clearWatch: (id) => {
+			nothing(clear(watch_id(id)));
+		}
+	};
+};
 const decodeDevice = Schema.decodeUnknownExit(
 	Schema.Struct({
 		platform: Schema.optionalKey(Schema.Literals(['ios', 'android', 'web', 'desktop'])),
 		pinned: Schema.optionalKey(Schema.Literal(true)),
-		notifications: Schema.optionalKey(
-			functions<DeviceMember<'notifications'>>([
-				'status',
-				'request',
-				'openSettings',
-				'show',
-				'onOpen'
-			])
-		),
-		camera: Schema.optionalKey(Permission),
+		notifications: Schema.optionalKey(Schema.ObjectKeyword),
+		camera: Schema.optionalKey(Schema.ObjectKeyword),
 		geolocation: Schema.optionalKey(
 			Schema.Struct({
 				source: Schema.Literals(['native', 'browser']),
-				api: functions<Geolocation>(['getCurrentPosition', 'watchPosition', 'clearWatch']),
-				background: Schema.optionalKey(
-					functions<NonNullable<DeviceMember<'geolocation'>['background']>>([
-						'status',
-						'openSettings'
-					])
-				)
+				api: Schema.ObjectKeyword,
+				background: Schema.optionalKey(Schema.ObjectKeyword)
 			})
 		),
-		push: Schema.optionalKey(functions<DeviceMember<'push'>>(['register'])),
-		notices: Schema.optionalKey(functions<DeviceMember<'notices'>>(['start', 'stop'])),
-		navigation: Schema.optionalKey(functions<DeviceMember<'navigation'>>(['openExternal']))
+		push: Schema.optionalKey(Schema.ObjectKeyword),
+		notices: Schema.optionalKey(Schema.ObjectKeyword),
+		navigation: Schema.optionalKey(Schema.ObjectKeyword)
 	}),
 	{ onExcessProperty: 'error' }
 );
@@ -103,26 +227,75 @@ const installedDevice = (): DeviceApi | undefined => {
 	if (typeof window === 'undefined') return undefined;
 	const descriptor: TypedPropertyDescriptor<unknown> | undefined = Object.getOwnPropertyDescriptor(
 		window,
-		'boltDevice'
+		'bolt_device'
 	);
 	const value: unknown = descriptor?.value;
 	const decoded = decodeDevice(value);
-	return Exit.isSuccess(decoded) ? decoded.value : undefined;
+	if (Exit.isFailure(decoded)) return undefined;
+	const native = decoded.value;
+	try {
+		const device: DeviceApi = {};
+		if (native.platform !== undefined) device.platform = native.platform;
+		if (native.pinned !== undefined) device.pinned = native.pinned;
+		if (native.camera !== undefined) device.camera = permission(native.camera);
+		if (native.notifications !== undefined) device.notifications = notifications(native.notifications);
+		if (native.geolocation !== undefined) {
+			const location = native.geolocation;
+			device.geolocation = { source: location.source, api: geolocation(location.api) };
+			if (location.background !== undefined) {
+				const status = method(location.background, 'status');
+				const open_settings = method(location.background, 'open_settings');
+				device.geolocation.background = {
+					status: () => promised(() => status(), background_status),
+					open_settings: () => promised(() => open_settings(), nothing)
+				};
+			}
+		}
+		if (native.push !== undefined) {
+			const register = method(native.push, 'register');
+			device.push = {
+				register: () =>
+					promised(() => register(), (value) => {
+						const body = registration(value);
+						if ('remove' in body)
+							throw new TypeError('A native push registration cannot remove an endpoint.');
+						return body;
+					})
+			};
+		}
+		if (native.notices !== undefined) {
+			const start = method(native.notices, 'start');
+			const stop = method(native.notices, 'stop');
+			device.notices = {
+				start: (options) => promised(() => start(start_options(options)), nothing),
+				stop: () => promised(() => stop(), nothing)
+			};
+		}
+		if (native.navigation !== undefined) {
+			const open_external = method(native.navigation, 'open_external');
+			device.navigation = {
+				open_external: (url) => promised(() => open_external(text(url)), nothing)
+			};
+		}
+		return device;
+	} catch {
+		return undefined;
+	}
 };
 
 /** Await only this document's own native startup promise, without invoking getters or trusting thenables. */
-export function awaitDevice(): Promise<void> {
+export function await_device(): Promise<void> {
 	if (typeof window === 'undefined') return Promise.resolve();
 	const descriptor: TypedPropertyDescriptor<unknown> | undefined = Object.getOwnPropertyDescriptor(
 		window,
-		'boltDeviceReady'
+		'bolt_device_ready'
 	);
 	const value: unknown = descriptor?.value;
 	return value instanceof Promise ? value.then(() => undefined) : Promise.resolve();
 }
 
 /** Explicit device win; otherwise read this document's own native descriptor before browser fallback. */
-export function resolveDevice(host?: DeviceApi): DeviceApi {
+export function resolve_device(host?: DeviceApi): DeviceApi {
 	const apis = host === undefined ? (installedDevice() ?? {}) : host;
 	if (apis.geolocation !== undefined) return apis;
 	return typeof navigator !== 'undefined' && navigator.geolocation !== undefined

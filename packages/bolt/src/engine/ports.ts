@@ -19,7 +19,10 @@ import {
 	type Scope
 } from 'effect';
 import { IngestedSchema } from './media.ts';
+import { BrowserSnapshotSchema, type BrowserSnapshot } from '../decl/runtime/browser.ts';
+import { LIMITS } from './contracts.ts';
 import { Unavailable } from '../decl/errors.ts';
+import type { SendReceipt } from './conversations/status.ts';
 import type {
 	ConvertSource,
 	ConvertTarget,
@@ -83,15 +86,17 @@ import type {
 	WebReadPort
 } from './contracts.ts';
 import { SendRefused, sendRefusal } from './conversations/status.ts';
-import type { DecisionResult, System1Request } from './decisions/index.ts';
+import type { DecisionResult, System1Request } from './decision.ts';
 import type { OutboundFile } from './services.ts';
 import type { Fenced } from './errors.ts';
 import type { GuestProgram } from './guest/runner.ts';
 import { BoltError, CODES } from '../protocol/errors.ts';
 import { linkFailure } from './integrations/abi.ts';
 import { Port, type PortFailure } from './port.ts';
-import { corpus, skillFile, type DocsCorpus } from './docs-corpus.ts';
-import { isOff, type Off } from '../facilities/off.ts';
+import { corpus, type DocsCorpus } from './docs-corpus.ts';
+import { GuestTurnSchema } from './guest/schema.ts';
+import { AiPortResponseSchema } from './ai-schema.ts';
+import { is_off, type Off } from '../facilities/off.ts';
 
 /** Adapt typed ABI methods whose last argument is the interruption signal. */
 const lift =
@@ -170,9 +175,9 @@ export class Convert extends Context.Service<
 	}
 >()('bolt/Convert') {
 	static fromAbi(port: ConvertPort | Off, ingester?: IngestPort['ingest']): Layer.Layer<Convert> {
-		const previewPdf = isOff(port) ? undefined : port.previewPdf;
+		const previewPdf = is_off(port) ? undefined : port.preview_pdf;
 		return Layer.succeed(Convert, {
-			...(isOff(port)
+			...(is_off(port)
 				? { targets: [], convert: () => turnedOff('convert') }
 				: {
 						targets: port.targets,
@@ -209,7 +214,7 @@ export class WebRead extends Context.Service<
 	}
 >()('bolt/WebRead') {
 	static fromAbi(port: WebReadPort | Off): Layer.Layer<WebRead> {
-		return isOff(port)
+		return is_off(port)
 			? Layer.succeed(WebRead, { read: () => turnedOff('web') })
 			: Layer.succeed(WebRead, {
 					read: (url, options) => Port.attempt('web', (signal) => port.read(url, signal, options))
@@ -218,12 +223,12 @@ export class WebRead extends Context.Service<
 }
 /** A browser tab as a scoped resource: close it when the scope ends, never leave it to an idle timer alone. */
 export type BrowserSession = {
-	readonly navigate: (to: BrowserTarget, find?: string) => Effect.Effect<Json, PortFailure>;
+	readonly navigate: (to: BrowserTarget, find?: string) => Effect.Effect<BrowserSnapshot, PortFailure>;
 	readonly snapshot: (options: {
 		readonly find?: string;
 		readonly from?: number;
-	}) => Effect.Effect<Json, PortFailure>;
-	readonly act: (steps: readonly BrowserStep[]) => Effect.Effect<Json, PortFailure>;
+	}) => Effect.Effect<BrowserSnapshot, PortFailure>;
+	readonly act: (steps: readonly BrowserStep[]) => Effect.Effect<BrowserSnapshot, PortFailure>;
 	readonly evaluate: (expression: string) => Effect.Effect<Json, PortFailure>;
 	readonly screenshot: () => Effect.Effect<Uint8Array, PortFailure>;
 	readonly download: (url: string) => Effect.Effect<Downloaded, PortFailure>;
@@ -236,32 +241,32 @@ export class Browser extends Context.Service<
 			profile: string,
 			to: BrowserTarget,
 			find?: string
-		) => Effect.Effect<Json, PortFailure>;
+		) => Effect.Effect<BrowserSnapshot, PortFailure>;
 		/** A page of the workspace as the person, signed in by the host's hand-off; absent when the host cannot sign in. */
 		readonly openWorkspace?: (
 			profile: string,
 			target: BrowserWorkspaceTarget,
 			caller: BrowserCaller
-		) => Effect.Effect<Json, PortFailure>;
-		/** Close this tab now; the profile's sealed sign-ins stay for its next open. Absent when the host cannot close. */
-		readonly close?: (profile: string) => Effect.Effect<void, PortFailure>;
+		) => Effect.Effect<BrowserSnapshot, PortFailure>;
+		/** Close this tab now; the profile's sealed sign-ins stay for its next open. */
+		readonly close: (profile: string) => Effect.Effect<void, PortFailure>;
 		/** A tab whose finalizer closes it: the one way a run or a caller keeps browser hygiene. */
 		readonly scoped: (profile: string) => Effect.Effect<BrowserSession, PortFailure, Scope.Scope>;
 		readonly snapshot: (
 			profile: string,
 			options: { readonly find?: string; readonly from?: number }
-		) => Effect.Effect<Json, PortFailure>;
+		) => Effect.Effect<BrowserSnapshot, PortFailure>;
 		readonly act: (
 			profile: string,
 			steps: readonly BrowserStep[]
-		) => Effect.Effect<Json, PortFailure>;
+		) => Effect.Effect<BrowserSnapshot, PortFailure>;
 		readonly evaluate: (profile: string, expression: string) => Effect.Effect<Json, PortFailure>;
 		readonly screenshot: (profile: string) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly download: (profile: string, url: string) => Effect.Effect<Downloaded, PortFailure>;
 	}
 >()('bolt/Browser') {
 	static fromAbi(port: BrowserPort | Off): Layer.Layer<Browser> {
-		if (isOff(port)) {
+		if (is_off(port)) {
 			const none = () => turnedOff('browser');
 			return Layer.succeed(Browser, {
 				navigate: none,
@@ -270,6 +275,7 @@ export class Browser extends Context.Service<
 				evaluate: none,
 				screenshot: none,
 				download: none,
+				close: none,
 				scoped: () =>
 					Effect.acquireRelease(
 						Effect.succeed({
@@ -284,45 +290,49 @@ export class Browser extends Context.Service<
 					)
 			});
 		}
-		const open = port.openWorkspace?.bind(port),
-			close = port.close?.bind(port),
+		const openWorkspace = port.open_workspace?.bind(port),
+			close = port.close.bind(port),
+			snapshot = (read: (signal: AbortSignal) => PromiseLike<unknown>) =>
+				Port.fromPromise(read, BrowserSnapshotSchema, 'browser'),
 			shape = {
 				navigate: (profile: string, to: BrowserTarget, find?: string) =>
-					Port.attempt('browser', (signal) => port.navigate(profile, to, find, signal)),
-				snapshot: lift('browser', port.snapshot.bind(port)),
-				act: lift('browser', port.act.bind(port)),
+					snapshot((signal) => port.navigate(profile, to, find, signal)),
+				snapshot: (profile: string, options: { readonly find?: string; readonly from?: number }) =>
+					snapshot((signal) => port.snapshot(profile, options, signal)),
+				act: (profile: string, steps: readonly BrowserStep[]) =>
+					snapshot((signal) => port.act(profile, steps, signal)),
 				evaluate: lift('browser', port.evaluate.bind(port)),
 				screenshot: lift('browser', port.screenshot.bind(port)),
-				download: lift('browser', port.download.bind(port))
+				download: lift('browser', port.download.bind(port)),
+				close: (profile: string) => Port.attempt('browser', (signal) => close(profile, signal)).pipe(
+					Port.call('browser.close', LIMITS.callMs.http), Effect.asVoid
+				)
 			};
 		return Layer.succeed(Browser, {
 			...shape,
-			...(open === undefined
+			...(openWorkspace === undefined
 				? {}
 				: {
-						openWorkspace: lift('browser', open)
+						openWorkspace: (profile: string, target: BrowserWorkspaceTarget, caller: BrowserCaller) =>
+							snapshot((signal) => openWorkspace(profile, target, caller, signal))
 					}),
-			...(close === undefined
-				? {}
-				: {
-						close: (profile: string) =>
-							Port.attempt('browser', (signal) => close(profile, signal)).pipe(Effect.asVoid)
-					}),
-			scoped: (profile) =>
-				Effect.acquireRelease(
-					Effect.succeed({
-						navigate: (to, find) => shape.navigate(profile, to, find),
-						snapshot: (options) => shape.snapshot(profile, options),
-						act: (steps) => shape.act(profile, steps),
-						evaluate: (expression) => shape.evaluate(profile, expression),
-						screenshot: () => shape.screenshot(profile),
-						download: (url) => shape.download(profile, url)
-					}),
-					() =>
-						close === undefined
-							? Effect.void
-							: Port.attempt('browser', (signal) => close(profile, signal)).pipe(Effect.ignore)
-				)
+			scoped: (profile) => {
+				const session: BrowserSession = {
+					navigate: (to, find) => shape.navigate(profile, to, find),
+					snapshot: (options) => shape.snapshot(profile, options),
+					act: (steps) => shape.act(profile, steps),
+					evaluate: (expression) => shape.evaluate(profile, expression),
+					screenshot: () => shape.screenshot(profile),
+					download: (url) => shape.download(profile, url)
+				};
+				return Effect.acquireRelease(Effect.succeed(session), () => shape.close(profile).pipe(
+					Effect.tapError((error) => Effect.logWarning('Browser.close_failed', error)), Effect.ignore
+				)).pipe(
+					Effect.tap(() => Port.attempt('browser', (signal) => port.open(profile, signal)).pipe(
+						Port.call('browser', LIMITS.callMs.http)
+					))
+				);
+			}
 		});
 	}
 }
@@ -334,7 +344,7 @@ export class Geo extends Context.Service<
 	}
 >()('bolt/Geo') {
 	static fromAbi(port: GeocoderPort | Off): Layer.Layer<Geo> {
-		return isOff(port)
+		return is_off(port)
 			? Layer.succeed(Geo, { search: () => turnedOff('geo'), reverse: () => turnedOff('geo') })
 			: Layer.succeed(Geo, {
 					search: lift('geo', port.search.bind(port)),
@@ -370,10 +380,12 @@ export type MailMessage = {
 export type SmsMessage = { readonly _tag: 'Sms'; readonly to: string; readonly text: string };
 /**
  * One inbox notice to one device (`bolt.push`): the host routes it by `subscription.kind` (web push or APNs), signs it
- * and sends `{ title, body, path }`, `path` the workspace URL the notice opens.
+ * and sends `{ id, title, body, path }`, `path` the workspace URL the notice opens.
  */
 export type PushMessage = {
 	readonly _tag: 'Push';
+	/** The durable inbox notice identity, retained when an uncertain delivery is retried. */
+	readonly id: string;
 	readonly subscription: {
 		readonly kind: 'web' | 'apns';
 		readonly endpoint: string;
@@ -399,7 +411,7 @@ export class Transport extends Context.Service<
 	{
 		readonly send: (
 			message: TransportMessage
-		) => Effect.Effect<{ readonly providerId: string }, PortFailure>;
+		) => Effect.Effect<{ readonly provider_id: string }, PortFailure>;
 	}
 >()('bolt/Transport') {
 	/** Mail is mandatory; SMS and push may be `off`. */
@@ -412,7 +424,7 @@ export class Transport extends Context.Service<
 			send: (m) => {
 				const port = ports[m._tag],
 					{ kind, facility } = TRANSPORT[m._tag];
-				return isOff(port)
+				return is_off(port)
 					? turnedOff(facility)
 					: Port.attempt(facility, (signal) => port.send(kind, messageBody(m), signal));
 			}
@@ -434,6 +446,7 @@ const messageBody = (m: TransportMessage): Json =>
 			),
 		Sms: (x): Json => ({ to: x.to, text: x.text }),
 		Push: (x): Json => ({
+			id: x.id,
 			subscription: x.subscription,
 			title: x.title,
 			body: x.body,
@@ -447,16 +460,17 @@ const messageBody = (m: TransportMessage): Json =>
 export class DeadlinePort extends Context.Service<
 	DeadlinePort,
 	{
-		readonly announce: (scope: string, notLaterThan: string) => Effect.Effect<void, Unavailable>;
-		readonly settle: (scope: string, nextDue: string | null) => Effect.Effect<void, Unavailable>;
-		readonly teardown: (scope: string) => Effect.Effect<void, Unavailable>;
+		readonly announce: (scope: string, notLaterThan: string) => Effect.Effect<void, PortFailure>;
+		readonly settle: (scope: string, nextDue: string | null) => Effect.Effect<void, PortFailure>;
+		readonly teardown: (scope: string) => Effect.Effect<void, PortFailure>;
 	}
 >()('bolt/DeadlinePort') {
 	static fromAbi(port: DeadlinesPort): Layer.Layer<DeadlinePort> {
 		return Layer.succeed(DeadlinePort, {
-			announce: (scope, notLaterThan) => Effect.sync(() => port.announce(scope, notLaterThan)),
-			settle: (scope, nextDue) => Effect.sync(() => port.settle(scope, nextDue)),
-			teardown: (scope) => Effect.sync(() => port.teardown(scope))
+			announce: (scope, notLaterThan) =>
+				Port.attempt('deadlines', () => port.announce(scope, notLaterThan)),
+			settle: (scope, nextDue) => Port.attempt('deadlines', () => port.settle(scope, nextDue)),
+			teardown: (scope) => Port.attempt('deadlines', () => port.teardown(scope))
 		});
 	}
 }
@@ -486,7 +500,7 @@ export class Drivers extends Context.Service<
 			message: Json,
 			attachments?: readonly OutboundFile[]
 		) => Effect.Effect<
-			{ providerId: string; presumeAfterMs?: number },
+			SendReceipt,
 			PortFailure | SendRefused | Fenced
 		>;
 		readonly typing: (
@@ -508,7 +522,7 @@ export class Drivers extends Context.Service<
 >()('bolt/Drivers') {
 	/** `off`: this environment binds no live integration drivers. */
 	static fromAbi(links: LinksPort | Off): Layer.Layer<Drivers> {
-		const port = isOff(links) ? undefined : links;
+		const port = is_off(links) ? undefined : links;
 		const send = port?.send?.bind(port),
 			typing = port?.typing?.bind(port),
 			request = port?.request?.bind(port),
@@ -614,13 +628,13 @@ export class Ai extends Context.Service<
 		readonly system2: AiPort['sys_2'] | Off;
 		readonly embed: EmbeddingsPort | Off;
 	}): Layer.Layer<Ai> {
-		const sys1 = isOff(ports.system1) ? undefined : ports.system1,
-			sys2 = isOff(ports.system2) ? undefined : ports.system2,
-			embed = isOff(ports.embed) ? undefined : ports.embed;
+		const sys1 = is_off(ports.system1) ? undefined : ports.system1,
+			sys2 = is_off(ports.system2) ? undefined : ports.system2,
+			embed = is_off(ports.embed) ? undefined : ports.embed;
 		const catalog = sys2?.catalog?.bind(sys2);
 		return Layer.succeed(Ai, {
 			ask: sys1 === undefined ? Ai.noSystem1 : lift('sys_1', sys1.ask.bind(sys1)),
-			maxChoices: sys1?.maxChoices,
+			maxChoices: sys1?.max_choices,
 			models: sys2?.models ?? [],
 			catalog: catalog === undefined ? turnedOff('ai') : Port.attempt('ai', () => catalog()),
 			infer:
@@ -643,7 +657,8 @@ export class Ai extends Context.Service<
 										}
 									)
 								).pipe(
-									Effect.flatMap((response) => Queue.offer(queue, { _tag: 'Response', response })),
+									Effect.flatMap((response) => Schema.decodeUnknownEffect(AiPortResponseSchema)(response).pipe(Effect.mapError(Port.failure('ai')))),
+									Effect.flatMap(({ tool_calls, ...response }) => Queue.offer(queue, { _tag: 'Response', response: { ...response, toolCalls: tool_calls } })),
 									Effect.andThen(Queue.end(queue)),
 									Effect.catch((e) => Queue.fail(queue, e))
 								)
@@ -790,38 +805,7 @@ export class Keys extends Context.Service<
 }
 
 // The turn comes from a tenant-controlled isolate through the host untouched: it is decoded here, once.
-const GuestFinal = Schema.Union([
-	Schema.Tuple([Schema.Literal('ok'), Schema.String]),
-	Schema.Tuple([
-		Schema.Literal('refused'),
-		Schema.String,
-		Schema.NullOr(Schema.String),
-		Schema.NullOr(Schema.Int),
-		Schema.String
-	]),
-	Schema.Tuple([Schema.Literal('missing'), Schema.String]),
-	Schema.Tuple([Schema.Literal('error'), Schema.String, Schema.String, Schema.String]),
-	Schema.Tuple([
-		Schema.Literal('error'),
-		Schema.String,
-		Schema.String,
-		Schema.String,
-		Schema.String
-	])
-]);
-const decodeTurn: (turn: unknown) => Effect.Effect<GuestTurn, Schema.SchemaError> =
-	Schema.decodeUnknownEffect(
-		Schema.Struct({
-			taken: Schema.Tuple([
-				Schema.NullOr(GuestFinal),
-				Schema.Array(Schema.Tuple([Schema.String, Schema.String, Schema.String, Schema.Number])),
-				Schema.Array(Schema.Array(Schema.Uint8Array)),
-				Schema.Boolean
-			]),
-			lines: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
-			dropped: Schema.Number
-		})
-	);
+const decodeTurn = Schema.decodeUnknownEffect(GuestTurnSchema);
 const decodeHostFailure = Schema.decodeUnknownOption(
 	Schema.Struct({
 		_tag: Schema.Literal('HostFailure'),
@@ -829,7 +813,7 @@ const decodeHostFailure = Schema.decodeUnknownOption(
 		message: Schema.String
 	})
 );
-/** A session's rejection: the host's encoded code (`cpuBudget`, `memory`) as the guest's failure, else `internal`. */
+/** A session's rejection: the host's encoded code (`cpu_budget`, `memory`) as the guest's failure, else `internal`. */
 const guestFailure = (error: unknown): BoltError =>
 	Option.match(decodeHostFailure(error), {
 		onSome: (f) => BoltError.make(f.code, 'guest', f.message),
@@ -856,7 +840,7 @@ export class GuestIsolates extends Context.Service<
 			Effect.tryPromise({ try: f, catch: guestFailure }).pipe(
 				Effect.flatMap((turn) =>
 					decodeTurn(turn).pipe(
-						Effect.mapError((error) => BoltError.make('invalidInput', 'guest', error.message))
+						Effect.mapError((error) => BoltError.make('invalid_input', 'guest', error.message))
 					)
 				)
 			);
@@ -895,7 +879,7 @@ export class Http extends Context.Service<
 	}
 >()('bolt/Http') {
 	static fromAbi(port: HttpPort | Off): Layer.Layer<Http> {
-		return isOff(port)
+		return is_off(port)
 			? Layer.succeed(Http, { fetch: () => turnedOff('http') })
 			: Layer.succeed(Http, {
 					fetch: lift('http', port.fetch.bind(port))
@@ -955,7 +939,7 @@ export class Mcp extends Context.Service<
 	}
 >()('bolt/Mcp') {
 	static fromAbi(port: McpPort | Off): Layer.Layer<Mcp> {
-		return isOff(port)
+		return is_off(port)
 			? Layer.succeed(Mcp, { connect: () => turnedOff('mcp') })
 			: Layer.succeed(Mcp, {
 					connect: (server) =>
@@ -998,36 +982,7 @@ export class Docs extends Context.Service<
 		return Layer.effect(
 			Docs,
 			Effect.map(
-				Effect.cached(
-					Effect.gen(function* () {
-						const files = new Map<string, unknown>([['index.json', yield* read('index.json')]]);
-						const documents = corpus((file) => {
-							const value = files.get(file);
-							files.delete(file);
-							return value;
-						});
-						const index = yield* Effect.try({
-							try: () => documents.index(),
-							catch: Port.failure('docs')
-						});
-						for (const n of index.namespaces) {
-							const file = `${n.namespace.replaceAll('/', '.')}.json`;
-							files.set(file, yield* read(file));
-							yield* Effect.try({
-								try: () => documents.namespace(n.namespace),
-								catch: Port.failure('docs')
-							});
-						}
-						for (const k of index.skills) {
-							files.set(skillFile(k.name), yield* read(skillFile(k.name)));
-							yield* Effect.try({
-								try: () => documents.skill(k.name),
-								catch: Port.failure('docs')
-							});
-						}
-						return documents;
-					})
-				),
+				Effect.cached(corpus(read)),
 				(loaded) => ({ corpus: loaded })
 			)
 		);

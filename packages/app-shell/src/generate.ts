@@ -21,7 +21,7 @@ export const NATIVE_PACKAGES = {
 	'@capacitor-community/background-geolocation': '1.2.26'
 } as const;
 
-/** The debug build's copy of `android.debugCa`, a raw resource. */
+/** The debug build's copy of `android.debug_ca`, a raw resource. */
 const DEBUG_CA = 'norbital_debug_ca';
 
 /** Generated output, beside the config file and never committed. */
@@ -48,7 +48,7 @@ const permission = (name: string) =>
 
 /** The background colour behind icons, splash and the offline page. */
 const backgroundColor = (config: AppConfig) =>
-	(config.splash?.color ?? config.themeColor ?? '#FFFFFF').toUpperCase();
+	(config.splash?.color ?? config.theme_color ?? '#FFFFFF').toUpperCase();
 
 /** Every `{{KEY}}` the native templates use, for one app. */
 export const templateValues = (config: AppConfig): Readonly<Record<string, string>> => {
@@ -74,7 +74,7 @@ export const templateValues = (config: AppConfig): Readonly<Record<string, strin
 		APP_NAME_ANDROID: escapeAndroidString(config.name),
 		VERSION: config.version,
 		BUILD: String(config.build),
-		TEAM_ID: config.ios.teamId,
+		TEAM_ID: config.ios.team_id,
 		BACKGROUND_COLOR: backgroundColor(config),
 		IOS_INFO: [
 			...(location === undefined
@@ -98,7 +98,7 @@ export const templateValues = (config: AppConfig): Readonly<Record<string, strin
 				: [])
 		].join(''),
 		IOS_ENTITLEMENTS: notifications
-			? `\t<key>aps-environment</key>\n\t<string>${config.ios.apsEnvironment}</string>\n`
+			? `\t<key>aps-environment</key>\n\t<string>${config.ios.aps_environment}</string>\n`
 			: '',
 		ANDROID_PERMISSIONS: [
 			...[...new Set(androidPermissions)].map(permission),
@@ -109,7 +109,7 @@ export const templateValues = (config: AppConfig): Readonly<Record<string, strin
 					])
 		].join(''),
 		ANDROID_DEBUG_TRUST:
-			config.android.debugCa === undefined
+			config.android.debug_ca === undefined
 				? ''
 				: [
 						'    <debug-overrides>',
@@ -145,7 +145,7 @@ export const renderTemplate = (text: string, values: Readonly<Record<string, str
 const runtimeConfig = (config: AppConfig) => ({
 	host: config.host,
 	...(config.workspace === undefined ? {} : { workspace: config.workspace }),
-	allowNavigation: config.allowNavigation ?? [],
+	allow_navigation: config.allow_navigation ?? [],
 	...(config.capabilities.location === undefined
 		? {}
 		: { location: { background: config.capabilities.location.background } }),
@@ -366,11 +366,11 @@ export const generate = Effect.fn('AppShell.generate')(function* (appDir: string
 		yield* fs.writeFileString(target, script);
 	}
 
-	if (config.android.debugCa !== undefined) {
+	if (config.android.debug_ca !== undefined) {
 		const raw = path.join(native, 'android', 'app', 'src', 'debug', 'res', 'raw');
 		yield* fs.makeDirectory(raw, { recursive: true });
 		yield* fs.copyFile(
-			path.resolve(appDir, config.android.debugCa),
+			path.resolve(appDir, config.android.debug_ca),
 			path.join(raw, `${DEBUG_CA}.pem`)
 		);
 	}

@@ -3,7 +3,7 @@
 	import type { ModelExposure } from '../kinds/context.js';
 	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import { msg } from '../text/messages.js';
-	import { complete } from './filter.js';
+	import { complete } from './node.js';
 	import FilterPanel from './FilterPanel.svelte';
 	import type { ViewState } from './view-state.svelte.js';
 	import type { Json } from '../client/contract.js';
@@ -29,8 +29,8 @@
 <ToolbarFilter
 	bind:open
 	{count}
-	label={msg(bolt, 'view.filterSort', 'Filter and sort')}
-	panelClass="w-[min(46rem,calc(100vw-2rem))]"
+	label={msg(bolt, 'view.filterSort')}
+	panel_class="w-[min(46rem,calc(100vw-2rem))]"
 >
 	<FilterPanel {view} {catalog} {model} {author} {sortable} active={open} />
 </ToolbarFilter>

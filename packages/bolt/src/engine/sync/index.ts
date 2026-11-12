@@ -6,12 +6,13 @@ import { uuid } from '../port.ts';
 // stored once, then a debounced read), and the outbox (`write.ts`: queued in the statement that wrote the record,
 // delivered FIFO per record with retries, dead letter, rollback on refusal). File syncs are `file.ts`'s.
 //
-// Which instance: a model's ref to `sys_integration` pinned to the sync's integration (`where: { integration: { eq } }`)
-// picks it per row (a write follows the row's FK; a read stamps it); otherwise a read runs for every active instance and a
-// write goes through the one `+workspace.ts` connection of that integration.
-import { Clock, Context, Crypto, Effect, Layer, Predicate, Schema } from 'effect';
+// Every active connection of the integration reads independently and receives committed changes. The id map and
+// outbox carry the connection per replica; an inbound change fans out to peers. Its own connection receives only a
+// correction when an older uncertain outbound delivery could overwrite that inbound image.
+import { Clock, Context, Crypto, Effect, Layer, Schema } from 'effect';
 import { bindingsAt } from '../query/reader.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { Drivers } from '../ports.ts';
 import {
 	Activation,
@@ -30,7 +31,7 @@ import {
 	type ReadsShape,
 	type WritesShape
 } from '../services.ts';
-import { relations, type EngineManifest } from '../manifest.ts';
+import type { EngineManifest } from '../manifest.ts';
 import type { SyncEntry } from '../../decl/model.ts';
 import type { Json } from '../../decl/values.ts';
 import type { WebhookDelivery } from '../../decl/runtime/integration.ts';
@@ -40,11 +41,12 @@ import { BoltError } from '../../protocol/errors.ts';
 import { duration, iso } from '../runs/time.ts';
 import { instancesOf, integrationBody, writeStatus } from '../integrations/instances.ts';
 import { makeRead } from './read.ts';
-import { makeDeliver, SYNC_DELIVER } from './write.ts';
+import { makeDeliver } from './write.ts';
+import { SYNC_DELIVER } from './outbox.ts';
 import { Chain } from '../write/sql.ts';
-import { enqueue } from '../runs/queue.ts';
-import { deliverRun } from '../integrations/outbound.ts';
+import { enqueueDrain } from '../runs/queue.ts';
 import { makeHint } from './hint.ts';
+import { failedBackfills, makeBackfill, replayBackfills, SYNC_BACKFILL } from './backfill.ts';
 
 /** One remote sync of a model, as the engine runs it. */
 export type RemoteSync = {
@@ -58,10 +60,6 @@ export type RemoteSync = {
 	readonly definition: string;
 	readonly read: boolean;
 	readonly write: boolean;
-	/** The model's ref to `sys_integration` pinned to `definition`: it picks the instance per row. */
-	readonly fk: string | undefined;
-	/** Without `fk`, the `+workspace.ts` connection of `definition` a write goes through. */
-	readonly connection: string | undefined;
 	/** How often its read runs (`every`, default `'15min'`). */
 	readonly every: string;
 	/** The configuration field whose values partition its read (one cursor each). */
@@ -71,26 +69,13 @@ export type RemoteSync = {
 export const EVERY = '15min';
 const memo = new WeakMap<EngineManifest, ReadonlyMap<string, RemoteSync>>();
 /** Every remote sync by its run name `'<model>.sync.<sync>'`. */
-export const syncsOf = (m: EngineManifest): ReadonlyMap<string, RemoteSync> => {
+export const syncs_of = (m: EngineManifest): ReadonlyMap<string, RemoteSync> => {
 	let x = memo.get(m);
 	if (x === undefined) {
-		const rels = relations(m);
 		x = new Map(
 			Object.entries(m.exposures).flatMap(([model, c]) =>
 				Object.entries(c.syncs ?? {}).flatMap(([sync, entry]): [string, RemoteSync][] => {
 					if (entry.with === 'file') return [];
-					const pinned = (rels.from.get(model) ?? []).find((r) => {
-						const where = r.spec.where;
-						return (
-							r.targets.length === 1 &&
-							r.targets[0] === 'sys_integration' &&
-							Predicate.isObject(where) &&
-							Predicate.hasProperty(where, 'integration') &&
-							Predicate.isObject(where.integration) &&
-							Predicate.hasProperty(where.integration, 'eq') &&
-							where.integration.eq === entry.with
-						);
-					});
 					const name = `${model}.sync.${sync}`;
 					return [
 						[
@@ -103,10 +88,6 @@ export const syncsOf = (m: EngineManifest): ReadonlyMap<string, RemoteSync> => {
 								definition: entry.with,
 								read: entry.read === true,
 								write: entry.write === true,
-								fk: pinned?.fk,
-								connection: Object.entries(m.connections).find(
-									([, slot]) => slot.integration === entry.with
-								)?.[0],
 								every: entry.every ?? EVERY,
 								partitions: entry.partitions,
 								entry
@@ -141,7 +122,7 @@ export const everyCron = (every: string): string => {
 };
 /** H6: each remote read's periodic run, fired by the host's clock in the workspace's zone as an automation's cron is. */
 export const syncTriggers = (m: EngineManifest): readonly CronEntry[] =>
-	[...syncsOf(m).values()]
+	[...syncs_of(m).values()]
 		.filter((s) => s.read)
 		.map((s) => ({ id: s.name, cron: everyCron(s.every), zone: m.workspace.tz }));
 
@@ -235,8 +216,9 @@ export const SyncsLive = Layer.effect(
 		};
 		const reading = makeRead(e),
 			delivering = makeDeliver(e),
+			backfilling = makeBackfill(e),
 			hinting = makeHint(e);
-		const syncs = [...syncsOf(manifest).values()];
+		const syncs = [...syncs_of(manifest).values()];
 		yield* registry.register(
 			{
 				...Object.fromEntries(
@@ -247,11 +229,13 @@ export const SyncsLive = Layer.effect(
 							(input: Json, run: Parameters<RunHandler>[1]) => reading.run(s, input, run)
 						])
 				),
-				[SYNC_DELIVER]: () => delivering.deliver
+				[SYNC_DELIVER]: () => delivering.deliver,
+				[SYNC_BACKFILL]: (input) => backfilling(input)
 			},
-			Object.fromEntries(
-				syncs.filter((s) => s.read).map((s) => [s.name, { attempts: 3, backoff: '10s' }])
-			),
+			{
+				...Object.fromEntries(syncs.filter((s) => s.read).map((s) => [s.name, { attempts: 3, backoff: '10s' }])),
+				[SYNC_BACKFILL]: { attempts: 3, backoff: '10s' }
+			},
 			Object.fromEntries(
 				syncs.filter((s) => s.read).map((s) => [s.name, (now: number) => reading.rests(s, now)])
 			)
@@ -260,26 +244,30 @@ export const SyncsLive = Layer.effect(
 			health: Effect.fn('Syncs.health')(function* (instance: string) {
 				const ms = yield* Clock.currentTimeMillis,
 					now = iso(ms);
-				const health = yield* db.value(SyncHealth, {
-					text: `SELECT jsonb_build_object(
-						'pending', (SELECT count(*)::int FROM sys_outbox WHERE instance = $1 AND status IN ('queued','sending')),
-						'dead', (SELECT count(*)::int FROM sys_outbox WHERE instance = $1 AND status = 'dead'),
-						'failed', (SELECT count(*)::int FROM sys_outbox WHERE instance = $1 AND status = 'failed'),
-						'last_read_at', max(last_read_at)::text, 'last_change_at', max(last_change_at)::text, 'last_hint_at', greatest(max(last_hint_at), (SELECT max(received_at) FROM sys_inbox WHERE instance = $1 AND body ->> 'kind' = 'webhook'))::text,
-						'lag_seconds', extract(epoch FROM ($2::timestamptz - max(last_read_at)))::float,
-						'webhooks_quiet', EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = $1 AND i.integration IN
-							(SELECT jsonb_array_elements_text($3::jsonb))) AND coalesce(max(last_change_at) > coalesce(greatest(max(last_hint_at), (SELECT max(received_at) FROM sys_inbox WHERE instance = $1 AND body ->> 'kind' = 'webhook')), min(started_at)) + interval '30 minutes', false)
-					) AS health FROM sys_sync WHERE instance = $1`,
-					params: [
-						instance,
-						now,
-						JSON.stringify(
-							Object.entries(manifest.integrations).flatMap(([name, definition]) =>
-								definition.webhook === undefined ? [] : [name]
-							)
-						)
-					]
-				});
+				const c = new Chain(), selected = c.p(instance), at = c.p(now);
+				const failed = c.cte('initialization_failures', failedBackfills(manifest, c, instance));
+				const definitions = c.p(JSON.stringify(Object.entries(manifest.integrations).flatMap(([name, definition]) =>
+					definition.webhook === undefined ? [] : [name])));
+				// `Chain.sql` also answers its `guarded` count: the health is the one named column
+				const [answer] = yield* db.rows(Schema.Struct({ health: SyncHealth }), c.sql(`(SELECT jsonb_build_object(
+					'pending', (SELECT count(*)::int FROM sys_outbox WHERE instance = ${selected} AND status IN ('queued','sending')),
+					'dead', (SELECT count(*)::int FROM sys_outbox WHERE instance = ${selected} AND status = 'dead'),
+					'failed', (SELECT count(*)::int FROM sys_outbox WHERE instance = ${selected} AND status = 'failed'),
+					'initialization', (SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_build_object(
+						'failed', count(*)::int, 'message', (SELECT coalesce(error ->> 'message', error ->> 'code')
+						FROM ${failed} ORDER BY finished_at DESC NULLS LAST, id LIMIT 1)) END FROM ${failed}),
+					'last_read_at', max(last_read_at)::text, 'last_change_at', max(last_change_at)::text,
+					'last_hint_at', greatest(max(last_hint_at), (SELECT max(received_at) FROM sys_inbox
+						WHERE instance = ${selected} AND body ->> 'kind' = 'webhook'))::text,
+					'lag_seconds', extract(epoch FROM (${at}::timestamptz - max(last_read_at)))::float,
+					'webhooks_quiet', EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = ${selected} AND i.integration IN
+						(SELECT jsonb_array_elements_text(${definitions}::jsonb))) AND coalesce(max(last_change_at) > coalesce(
+						greatest(max(last_hint_at), (SELECT max(received_at) FROM sys_inbox WHERE instance = ${selected}
+						AND body ->> 'kind' = 'webhook')), min(started_at)) + interval '30 minutes', false)
+				) FROM sys_sync WHERE instance = ${selected}) AS health`));
+				if (answer === undefined)
+					return yield* BoltError.make('corrupt', 'decode', 'the sync health read returned no row');
+				const health = answer.health;
 				// a read that found nothing commits nothing, so this generation's memory may be the newer
 				const read = reading.lastReadOf(instance);
 				return read > Date.parse(health.last_read_at ?? '1970-01-01')
@@ -332,27 +320,25 @@ export const SyncsLive = Layer.effect(
 			replay: Effect.fn('Syncs.replay')(function* (instance: string, ids?: readonly string[]) {
 				const now = iso(yield* Clock.currentTimeMillis),
 					c = new Chain();
-				c.cte(
+				capturePiece(c,
 					'replayed',
+					'sys_outbox',
 					`UPDATE sys_outbox SET status = 'sending', attempts = 0,
-					claimed_at = ${c.p(now)}::timestamptz - interval '6 minutes', next_attempt_at = ${c.p(now)}::timestamptz, error = NULL
+					claimed_at = ${c.p(now)}::timestamptz - interval '6 minutes', next_attempt_at = ${c.p(now)}::timestamptz,
+					error = CASE WHEN error ->> 'code' = 'identity_conflict' THEN error ELSE NULL END
 					WHERE instance = ${c.p(instance)} AND status = 'dead'
-					${ids === undefined ? '' : `AND id::text IN (SELECT jsonb_array_elements_text(${c.p(ids)}::jsonb))`} RETURNING id, model, record`
+					${ids === undefined ? '' : `AND id::text IN (SELECT jsonb_array_elements_text(${c.p(ids)}::jsonb))`}`
 				);
-				enqueue(
-					c,
-					[{ automation: SYNC_DELIVER, input: {}, dueAt: now, cause: 'schedule', depth: 0 }],
-					{ when: 'EXISTS (SELECT 1 FROM replayed)' }
+				enqueueDrain(c, SYNC_DELIVER, c.p(now), 'EXISTS (SELECT 1 FROM replayed)');
+				const initialized = ids === undefined ? replayBackfills(manifest, c, instance, now) : null;
+				const answer = yield* nativeCommit(db.write, live.publish, c,
+					Schema.Struct({ ...CapturedResult.fields, replayed: Schema.Number }),
+					`((SELECT count(*)::int FROM replayed) + ${initialized === null ? '0' : `(SELECT count(*)::int FROM ${initialized})`}) AS replayed`
 				);
-				const [answer] = yield* db.returning(
-					Schema.Struct({ replayed: Schema.Number }),
-					c.sql('(SELECT count(*)::int FROM replayed) AS replayed')
-				);
-				if ((answer?.replayed ?? 0) > 0) {
-					live.syncChanged('sys_integration', [instance]);
+				if (answer.replayed > 0) {
 					yield* wake.at(now);
 				}
-				return answer ?? { replayed: 0 };
+				return { replayed: answer.replayed };
 			}),
 			invalidate: reading.invalidate,
 			hint: hinting.hint,
@@ -360,7 +346,7 @@ export const SyncsLive = Layer.effect(
 				const [inst] = yield* instancesOf(manifest, db, { ids: [instance] });
 				if (inst === undefined)
 					return yield* Effect.fail(
-						BoltError.make('notFound', 'decode', `No integration instance '${instance}'.`)
+						BoltError.make('not_found', 'decode', `No integration instance '${instance}'.`)
 					);
 				if (manifest.integrations[inst.integration]?.test !== true) return;
 				const id = yield* uuid(e.crypto);

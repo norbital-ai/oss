@@ -6,11 +6,11 @@ import type { Id, RecordRef } from '../values.ts';
 export type Handle = string;
 // ponytail: the platform automations named in §4.5 and §5.11.3; the runs area owns the closed list.
 /**
- * A platform automation a `system` actor can run as: notification delivery, a model's `notify` after a commit,
+ * A platform automation a `system` actor can run as: notification delivery,
  * membership sync, embedding and pure index backfill.
  */
 export type PlatformAutomation =
-	'notifications.deliver' | 'bolt.notify' | 'bolt.membership' | 'bolt.embed' | 'bolt.index';
+	'notifications.deliver' | 'bolt.membership' | 'bolt.embed' | 'bolt.index';
 
 type Member = {
 	kind: 'member';

@@ -1,4 +1,5 @@
-import { withEnvoys } from './support/envoys.ts';
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // The panel's `conversations` read (§5.9, §5.10), answered by the engine's reader as the live hub asks it: a member lists
 // their own root in-app conversations, newest first, titled by the engine or the first message, plus the envoy threads
 // they may read and (as an administrator) automation transcripts; only Web UI conversations take a post (real handler).
@@ -6,14 +7,18 @@ import { expect, layer } from '@effect/vitest';
 import { Context, Effect, FiberSet, Layer, Result, Schema } from 'effect';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { Agents, Reads } from '../src/engine/services.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { AgentConversation } from '../src/protocol/schema.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
-import { shellApi } from '../src/shell/runtime.ts';
+import { shell_api } from '../src/shell/runtime.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
+const runtime_accounts = [
+	{ id: 'whatsapp', integration: 'whatsapp' },
+] as const;
+
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 		models: {},
 		relationships: {},
@@ -23,18 +28,18 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		teams: {},
 		automations: {},
-		connections: { whatsapp: { integration: 'whatsapp' } },
+		
 
 		mcp: {},
 		apps: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
 const fieldOpsEnvoy = '0199a000-0000-7000-8000-0000000000e1';
 const runtimeEnvoys = [
 	{
 		id: fieldOpsEnvoy,
-		connections: ['whatsapp'],
+		accounts: ['whatsapp'],
 		audience: 'public',
 		name: 'Norbius',
 		policies: ['rep'],
@@ -50,7 +55,7 @@ const ORIGIN = 'http://cell';
 /** One workspace for the file: a public whatsapp envoy beside the in-app agent; no model runs (posts only queue). */
 const fixture = Effect.gen(function* () {
 	const context = yield* Layer.build(
-		withEnvoys(TestWorkspace.layer({ manifest, host: { publicUrl: ORIGIN } }), runtimeEnvoys)
+		with_envoys(with_accounts(TestWorkspace.layer({ manifest, host: { public_url: ORIGIN } }), runtime_accounts), runtimeEnvoys)
 	);
 	const t = Context.get(context, TestWorkspace),
 		agent = Context.get(context, Agents);
@@ -76,7 +81,7 @@ const fixture = Effect.gen(function* () {
 		authorities = new Authorities(manifest, 'test');
 	/** The member's conversation list: the `conversations` read the panel observes, as the hub answers it. */
 	const list = Effect.gen(function* () {
-		const authority = yield* authorities.member(t.db, as);
+		const authority = yield* authorities.member(t.db, 'bootstrap', as);
 		if (authority === null) throw new Error(`no member ${as}`);
 		const now = t.clock.now();
 		const [answer] = yield* reads.run(
@@ -92,7 +97,7 @@ const fixture = Effect.gen(function* () {
 		t,
 		agent,
 		list,
-		api: shellApi(fetch, { base: ORIGIN }),
+		api: shell_api(fetch, { base: ORIGIN }),
 		as: (who: string) => {
 			as = who;
 		}
@@ -139,6 +144,9 @@ layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
 		() =>
 			Effect.gen(function* () {
 				const s = yield* Fixture;
+				expect(yield* s.t.db.value(Schema.Null, {
+					text: 'SELECT status FROM sys_integration WHERE id = $1', params: ['whatsapp']
+				})).toBeNull();
 				// the first case's conversations stay in the shared workspace: read only this case's
 				s.as('bob');
 				const own = (yield* s.list).map((r) => r.id);

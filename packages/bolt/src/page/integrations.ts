@@ -3,7 +3,7 @@ import { Cause, Effect, Option, Queue, Schema, Stream } from 'effect';
 import { ActRefused, ProtocolFailed } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
 import {
-	decodeStatus,
+	decode_status,
 	type ImportStartInput,
 	type InstanceStatus
 } from '../protocol/instance-status.ts';
@@ -48,7 +48,7 @@ const answer = (options: Options, method: 'GET' | 'POST', url: string, body?: Js
 		);
 
 /** Every definition with the providers this host offers for it (`GET /__bolt/integrations`). */
-export const integrationOffers = (options: Options = {}) =>
+export const integration_offers = (options: Options = {}) =>
 	answer(options, 'GET', list(options)).pipe(
 		Effect.flatMap((value) =>
 			Schema.decodeUnknownEffect(Schema.Array(IntegrationOffer))(value).pipe(
@@ -59,13 +59,13 @@ export const integrationOffers = (options: Options = {}) =>
 		)
 	);
 
-export function integrationClient(instance: string, options: Options = {}) {
+export function integration_client(instance: string, options: Options = {}) {
 	const url = (verb: string) =>
 		`${options.base ?? BASE}${encodeURIComponent(instance)}${verb === '' ? '' : `/${verb}`}`;
 	const call = (method: 'GET' | 'POST', verb: string, body?: Json) =>
 		answer(options, method, url(verb), body);
 	const status = (value: Json) => {
-		const decoded = decodeStatus(value);
+		const decoded = decode_status(value);
 		return decoded !== null && decoded.instance === instance
 			? Effect.succeed(decoded)
 			: Effect.fail(
@@ -78,7 +78,7 @@ export function integrationClient(instance: string, options: Options = {}) {
 		instance,
 		status: () => call('GET', '').pipe(Effect.flatMap(status)),
 		pair: (input: Json = {}) => call('POST', 'pair', input).pipe(Effect.flatMap(status)),
-		importStart: (input: ImportStartInput) =>
+		import_start: (input: ImportStartInput) =>
 			call('POST', 'import-start', input).pipe(Effect.flatMap(status)),
 		unpair: () => call('POST', 'unpair', {}).pipe(Effect.flatMap(status)),
 		test: (input: Json = {}) => call('POST', 'test', input).pipe(Effect.flatMap(status)),
@@ -111,7 +111,7 @@ export function integrationClient(instance: string, options: Options = {}) {
 								const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(
 									event.data
 								);
-								const decoded = Option.isSome(parsed) ? decodeStatus(parsed.value) : null;
+								const decoded = Option.isSome(parsed) ? decode_status(parsed.value) : null;
 								if (decoded !== null && decoded.instance === instance)
 									Queue.offerUnsafe(queue, decoded);
 								else
@@ -139,10 +139,10 @@ export function integrationClient(instance: string, options: Options = {}) {
 			)
 	};
 }
-export type IntegrationClient = ReturnType<typeof integrationClient>;
+export type IntegrationClient = ReturnType<typeof integration_client>;
 
 /** One shell's instance watchers share a status socket; the last watcher closes it. */
-export function integrationClients(options: Options = {}) {
+export function integration_clients(options: Options = {}) {
 	type Subscriber = {
 		readonly instance: string;
 		readonly send: (status: InstanceStatus) => void;
@@ -154,7 +154,7 @@ export function integrationClients(options: Options = {}) {
 		const opened = new EventSource(`${list(options)}?stream=1`);
 		opened.onmessage = (event: MessageEvent<unknown>) => {
 			const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(event.data);
-			const status = Option.isSome(parsed) ? decodeStatus(parsed.value) : null;
+			const status = Option.isSome(parsed) ? decode_status(parsed.value) : null;
 			if (status === null) {
 				const error = new ProtocolFailed({
 					message: 'The integration status stream returned an invalid frame.'
@@ -173,7 +173,7 @@ export function integrationClients(options: Options = {}) {
 		return opened;
 	};
 	return (instance: string): IntegrationClient => ({
-		...integrationClient(instance, options),
+		...integration_client(instance, options),
 		watch: () =>
 			Stream.callback<InstanceStatus, ProtocolFailed>((queue) =>
 				Effect.acquireRelease(

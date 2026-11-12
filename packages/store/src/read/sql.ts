@@ -3,6 +3,7 @@
 // conjoined with the reader's row filters at every level of the output it reads; an unscoped read is not. Rows come back as one jsonb value each, in wire form.
 // The store never runs a statement: the caller executes it and decodes its rows.
 import { Array as EffectArray, Effect, Result, Schema } from 'effect';
+import { KIND } from '@norbital-ai/std/kind';
 import { STORE_LIMITS } from '../limits.ts';
 import { StoreError } from '../errors.ts';
 import { CursorPayload } from '../cursor.ts';
@@ -24,19 +25,22 @@ import {
 	SEARCH_COLUMN,
 	RECORD_LABEL_COLUMN,
 	SEMANTIC,
-	exposureOf,
-	defaultFields,
-	exposedField,
-	exposedRelation,
-	indexColumn,
+	exposure_of,
+	default_fields,
+	exposed_field,
+	exposed_relation,
+	index_column,
 	q,
-	storedFields,
-	catalogFor,
+	stored_fields,
+	catalog_for,
 	DEFAULT_OUTPUT
 } from '../catalog.ts';
-import { argumentList, inlineLeaf } from '../decode.ts';
+import { argument_list, inline_leaf, UNSORTABLE } from '../decode.ts';
 import { ELEMENT, type PathTest } from '../ir.ts';
-import { comparable, inverted, jsonPath, periodTest } from './values.ts';
+import { comparable, inverted, json_path, period_test } from './values.ts';
+import { label_expression, label_text_sql } from '@norbital-ai/std/label';
+import { literal as lit } from '@norbital-ai/std/sql';
+import { UUID_PATTERN } from '@norbital-ai/std/id';
 
 /** One statement with positional parameters (`$1…`): its text is its shape, whatever its parameters are. */
 export type Sql = { readonly text: string; readonly params: readonly Json[] };
@@ -46,7 +50,6 @@ const forbidden = (message: string) =>
 	Effect.fail(StoreError.of('forbidden', 'admission', message));
 /** `$similar`: how much farther than the nearest row a row may be and still be about the same thing (cosine distance). */
 const SIMILAR_BAND = 0.1;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** What stands for the first row past a read's byte budget; no stored row has a `$over` field. */
 export const OVER = '$over';
 /** The row after a counted read's rows (`ListRead.total`): `{"$total": n}`, every row the read matches. */
@@ -159,7 +162,7 @@ export class Build {
 		return this.params.length > STORE_LIMITS.statement.params
 			? Effect.fail(
 					StoreError.of(
-						'tooLarge',
+						'too_large',
 						'decode',
 						`a read binds more than ${STORE_LIMITS.statement.params} parameters`
 					)
@@ -173,10 +176,10 @@ export const RAW: Level = { scoped: false, exposed: false };
 
 /** What a layer exposes, named in a refusal so a caller (often a model) can correct the read in one step. */
 const readableFields = (c: ExposureInfo, lv: Level) =>
-	[...c.model.fields.keys()].filter((k) => !lv.exposed || exposedField(c, k));
+	[...c.model.fields.keys()].filter((k) => !lv.exposed || exposed_field(c, k));
 const fieldOf = (b: Build, c: ExposureInfo, name: string, lv: Level): Fx<FieldInfo> => {
 	const f = c.model.fields.get(name);
-	if (f !== undefined && !(lv.exposed && !exposedField(c, name))) {
+	if (f !== undefined && !(lv.exposed && !exposed_field(c, name))) {
 		b.touch(c.model.name, name);
 		return Effect.succeed(f);
 	}
@@ -203,8 +206,8 @@ const col = Effect.fnUntraced(function* (
 	return `${a}.${q(f.column)}`;
 });
 /** The reader's row filter on `c` at alias `a`, or null when unscoped; a reader with no arm sees nothing. */
-const scope = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, lv: Level) {
-	const arms = lv.scoped ? b.scope?.rows(c.path, b.outputOf(c.path)) : undefined;
+const scope = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, lv: Level, output = b.outputOf(c.path)) {
+	const arms = lv.scoped ? b.scope?.rows(c.path, output) : undefined;
 	if (arms === undefined) return null;
 	if (arms.length === 0) return 'false';
 	return `(${(yield* Effect.forEach(arms, (arm) => pred(b, c, a, arm, RAW))).join(' OR ')})`;
@@ -214,10 +217,10 @@ const conj = (...parts: (string | null)[]) =>
 
 const value = (b: Build, f: FieldInfo, v: Json): Fx<string> => {
 	const p = comparable(v);
-	if (p !== null && f.pg === 'uuid' && (typeof p !== 'string' || !UUID.test(p)))
+	if (p !== null && f.pg === 'uuid' && (typeof p !== 'string' || !UUID_PATTERN.test(p)))
 		return invalid(`'${f.name}' takes an id`);
 	return Effect.succeed(
-		b.bind(f.email === true && typeof p === 'string' ? p.toLowerCase() : p, f.pg)
+		b.bind(f.pg === 'jsonb' && p !== null ? JSON.stringify(p) : f.email === true && typeof p === 'string' ? p.toLowerCase() : p, f.pg)
 	);
 };
 const rhs = Effect.fnUntraced(function* (
@@ -247,7 +250,7 @@ const level = (
 ): Fx<ExposureInfo> => {
 	const layer = b.cat.layers.get(`${c.path}.${rel}`);
 	if (layer !== undefined && layer.name === target) return Effect.succeed(layer);
-	if (lv.exposed && !exposedRelation(c, rel))
+	if (lv.exposed && !exposed_relation(c, rel))
 		return invalid(
 			`'${c.path}' declares no read layer '${rel}': a read selects, filters and sorts only across the layers its model's read declares`
 		);
@@ -255,7 +258,7 @@ const level = (
 	if (root !== undefined) return Effect.succeed(root);
 	const model = b.cat.models.get(target);
 	return lv.exposed || model === undefined
-		? exposureOf(b.cat, target)
+		? exposure_of(b.cat, target)
 		: Effect.succeed({ name: target, path: target, model, fields: 'all', relations: 'all' });
 };
 const relation = Effect.fnUntraced(function* (
@@ -329,6 +332,64 @@ const searchLinks = Effect.fnUntraced(function* (
 	];
 });
 
+/** The label interpreter takes exact decimals as text and every other field in the same JSON form as materialization. */
+const labelValue = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, path: string, lv: Level) {
+	const [field = path, ...tail] = path.split('.');
+	if (!c.model.fields.has(field)) return yield* invalid(`${c.name}.record_label: unknown field '${path}'`);
+	if (lv.exposed && !exposed_field(c, field)) return undefined;
+	const f = yield* fieldOf(b, c, field, lv);
+	const column = `${a}.${q(f.column)}`;
+	const value = f.pg === 'numeric' ? `to_jsonb((${column})::text)` : wire(f, column, a);
+	return tail.length === 0 ? value : `(${value} #> ${json_path(tail)})`;
+});
+/** One-hop labels use their declaring output's related layers and scopes, never an unrelated target grant. */
+const recordLabel = Effect.fnUntraced(function* (
+	b: Build, c: ExposureInfo, a: string, lv: Level,
+	output = b.outputOf(c.path), layers: ReadonlyMap<string, ExposureInfo> = b.cat.layers
+) {
+	const label = c.model.record_label;
+	if (label === undefined) return undefined;
+	if (label.stored) {
+		if (lv.exposed && !label.fields.every((field) => exposed_field(c, field))) return undefined;
+		b.touch(c.model.name, RECORD_LABEL_COLUMN);
+		return `${a}.${q(RECORD_LABEL_COLUMN)}`;
+	}
+	const program = label_expression(label.expression);
+	if ('error' in program) return yield* invalid(`${c.name}.record_label: ${program.error}`);
+	const values = new Map<string, string>();
+	const available: string[] = [];
+	for (const path of label.paths) {
+		const [field = path, ...tail] = path.split('.');
+		const rel = c.model.one.get(field);
+		if (tail.length === 0 || rel === undefined) {
+			const value = yield* labelValue(b, c, a, path, lv);
+			if (value === undefined) return undefined;
+			values.set(path, value);
+			continue;
+		}
+		const target = rel.targets[0];
+		if (rel.targets.length !== 1 || target === undefined)
+			return yield* invalid(`${c.name}.record_label: '${field}' must name one target`);
+		if (lv.exposed && !exposed_relation(c, field)) return undefined;
+		const declared = layers.get(`${c.path}.${field}`);
+		const model = b.cat.models.get(target);
+		if (model === undefined) return yield* invalid(`${c.name}.record_label: unknown target '${target}'`);
+		if (lv.exposed && declared === undefined) return undefined;
+		const t: ExposureInfo = declared ?? { name: target, path: target, model, fields: 'all', relations: 'all' };
+		if (t.model.one.has(tail[0] ?? '') && tail.length > 1)
+			return yield* invalid(`${c.name}.record_label: '${path}' crosses more than one relation`);
+		const x = b.alias();
+		const value = yield* labelValue(b, t, x, tail.join('.'), lv);
+		if (value === undefined) return undefined;
+		b.touch(c.model.name, field);
+		const from = `${b.from(target)} ${x} WHERE ${conj(`${keyAt(b, t, x)} = ${a}.${q(field)}`, yield* scope(b, t, x, lv, output))}`;
+		available.push(`EXISTS (SELECT 1 FROM ${from})`);
+		values.set(path, `(SELECT ${value} FROM ${from})`);
+	}
+	const expression = program.sql((path) => values.get(path) ?? "'null'::jsonb");
+	const value = `(${label_text_sql(expression)})`;
+	return available.length === 0 ? value : `(CASE WHEN ${available.join(' AND ')} THEN ${value} END)`;
+});
 /** Resolve live label references under the target's own readable outputs and row grants, including named-only outputs. */
 const labelReferences = Effect.fnUntraced(function* (
 	b: Build,
@@ -336,16 +397,17 @@ const labelReferences = Effect.fnUntraced(function* (
 	a: string,
 	lv: Level
 ) {
-	const link = c.model.labelLink;
+	const link = c.model.label_link;
 	const out: { from: string; where: string; label: string; document: string }[] = [];
 	if (
 		link === undefined ||
-		(lv.exposed && ![link.model, link.record].every((f) => exposedField(c, f)))
+		(lv.exposed && ![link.model, link.record].every((f) => exposed_field(c, f)))
 	)
 		return out;
 	for (const target of link.targets) {
 		const model = b.cat.models.get(target);
-		if (model?.recordLabel === undefined || model.key.length !== 1) continue;
+		const primary = model?.key[0];
+		if (model?.record_label === undefined || model.key.length !== 1 || primary === undefined) continue;
 		const outputs = [
 			[DEFAULT_OUTPUT, b.cat.exposures.get(target)] as const,
 			...[...(b.cat.outputs.get(target) ?? [])].map(
@@ -353,19 +415,18 @@ const labelReferences = Effect.fnUntraced(function* (
 			)
 		];
 		for (const [output, t] of outputs) {
-			if (
-				t === undefined ||
-				(lv.exposed && !model.recordLabel.fields.every((f) => exposedField(t, f)))
-			)
-				continue;
+			if (t === undefined) continue;
 			const arms = lv.scoped ? b.scope?.rows(target, output) : undefined;
 			if (arms?.length === 0) continue;
 			const x = b.alias();
+			const label = yield* recordLabel(b, t, x, lv, output,
+				output === DEFAULT_OUTPUT ? b.cat.layers : b.cat.outputs.get(target)?.get(output)?.layers ?? b.cat.layers);
+			if (label === undefined) continue;
 			const rowScope =
 				arms === undefined
 					? null
 					: `(${(yield* Effect.forEach(arms, (p) => pred(b, t, x, p, RAW))).join(' OR ')})`;
-			const pg = model.fields.get(model.key[0]!)?.pg ?? 'text';
+			const pg = model.fields.get(primary)?.pg ?? 'text';
 			const id = `${a}.${q(link.record)}`;
 			const key =
 				pg === 'text'
@@ -373,8 +434,7 @@ const labelReferences = Effect.fnUntraced(function* (
 					: `(CASE WHEN pg_input_is_valid(${id}, ${lit(pg)}) THEN ${id}::${pg} END)`;
 			b.touch(c.model.name, link.model);
 			b.touch(c.model.name, link.record);
-			b.touch(target, RECORD_LABEL_COLUMN);
-			b.touch(target, SEARCH_COLUMN);
+			if (model.record_label.stored) b.touch(target, SEARCH_COLUMN);
 			out.push({
 				from: `${b.from(target)} ${x}`,
 				where: conj(
@@ -382,8 +442,8 @@ const labelReferences = Effect.fnUntraced(function* (
 					`${keyAt(b, t, x)} = ${key}`,
 					rowScope
 				),
-				label: `${x}.${q(RECORD_LABEL_COLUMN)}`,
-				document: `${x}.${q(SEARCH_COLUMN)}`
+				label,
+				document: model.record_label.stored ? `${x}.${q(SEARCH_COLUMN)}` : `bolt_search_document(${label})`
 			});
 		}
 	}
@@ -396,7 +456,7 @@ const exposedAll = (
 	lv: Level,
 	what: string
 ): Fx<void> => {
-	const hidden = fields.find((f) => lv.exposed && !exposedField(c, f));
+	const hidden = fields.find((f) => lv.exposed && !exposed_field(c, f));
 	return hidden === undefined
 		? Effect.void
 		: forbidden(
@@ -410,20 +470,18 @@ const exposedAll = (
 const searchDoc = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, lv: Level) {
 	const own = c.model.search.filter((f) => f !== RECORD_LABEL_COLUMN && !c.model.one.has(f)),
 		// a field outside the reader's exposure is in no document it matches, on any row
-		hidden = own.filter((f) => lv.exposed && !exposedField(c, f)),
+		hidden = own.filter((f) => lv.exposed && !exposed_field(c, f)),
 		readable = own.filter((f) => !hidden.includes(f));
 	const stored = `${a}.${q(SEARCH_COLUMN)}`;
-	const label = c.model.recordLabel;
-	const readableLabel =
-		label !== undefined && label.fields.every((field) => !lv.exposed || exposedField(c, field));
-	if (hidden.length === 0 && (label === undefined || readableLabel)) {
+	const label = c.model.record_label;
+	const readableLabel = yield* recordLabel(b, c, a, lv);
+	if (label?.stored !== false && hidden.length === 0 && (label === undefined || readableLabel !== undefined)) {
 		b.touch(c.model.name, SEARCH_COLUMN);
 		return stored;
 	}
 	const parts: string[] = [];
-	if (readableLabel) {
-		b.touch(c.model.name, RECORD_LABEL_COLUMN);
-		parts.push(`coalesce(${a}.${q(RECORD_LABEL_COLUMN)}, '')`);
+	if (readableLabel !== undefined) {
+		parts.push(`coalesce(${readableLabel}, '')`);
 	}
 	for (const f of readable) {
 		const value = yield* col(b, c, a, f, lv);
@@ -468,7 +526,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 			case 'in': {
 				const f = yield* fieldOf(b, c, p.field, lv);
 				const args = p.args;
-				if (!argumentList(args) && args._tag === 'Member') {
+				if (!argument_list(args) && args._tag === 'Member') {
 					// the earlier member's rows are the composed statement's CTE `"m:<member>"`, already under its own scope;
 					// `field` may be a path through the member's relation arms (`employment_id.company_id`); a many arm's rows
 					// each give theirs (a lax jsonpath walks into the arrays)
@@ -484,30 +542,25 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 					const hit = `(${x} = ANY(ARRAY(SELECT (${v} #>> '{}')::${f.pg} FROM ${q(args.member)} ${m}, jsonb_path_query(${m}.j, ${path}) ${v} WHERE jsonb_typeof(${v}) <> 'null')))`;
 					return p.negated ? `(NOT COALESCE(${hit}, false))` : hit;
 				}
-				const raw = argumentList(args) ? args : yield* b.operand(args);
+				const raw = argument_list(args) ? args : yield* b.operand(args);
 				const list = (EffectArray.isArray<typeof raw>(raw) ? raw : raw === null ? [] : [raw]).map(
 					(x) => comparable(x)
 				);
-				if (f.pg === 'uuid' && list.some((x) => typeof x !== 'string' || !UUID.test(x)))
+				if (f.pg === 'uuid' && list.some((x) => typeof x !== 'string' || !UUID_PATTERN.test(x)))
 					return yield* invalid(`'${f.name}' takes ids`);
 				const column = yield* col(b, c, a, p.field, lv);
 				const x = f.email === true ? `lower(${column})` : column;
 				const hit = `(${x} = ANY(${b.bind(f.email === true ? list.map((v) => String(v).toLowerCase()) : list, `${f.pg}[]`)}))`;
 				return p.negated ? `(NOT COALESCE(${hit}, false))` : hit;
 			}
-			case 'list': {
+			case 'has': {
 				const x = yield* col(b, c, a, p.field, lv);
-				if (p.op === 'isEmpty')
-					return p.arg === true
-						? `(COALESCE(cardinality(${x}), 0) = 0)`
-						: `(cardinality(${x}) > 0)`;
-				const arr = b.bind(p.op === 'has' ? [p.arg] : p.arg, 'text[]');
-				return p.op === 'hasAny' ? `(${x} && ${arr})` : `(${x} @> ${arr})`;
+				return `(${x} @> ${b.bind([p.arg], 'text[]')})`;
 			}
 			case 'period': {
 				const f = yield* fieldOf(b, c, p.field, lv);
 				const x = yield* col(b, c, a, p.field, lv);
-				const date = f.periodOf === 'date';
+				const date = f.period_of === 'date';
 				if (p.op === 'contains') {
 					const at =
 						p.arg._tag === 'Field'
@@ -526,7 +579,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 				const other = date
 					? `daterange(${b.bind(lo, 'date')}, ${b.bind(hi, 'date')}, '[]')`
 					: `tstzrange(${b.bind(lo, 'timestamptz')}, ${b.bind(hi, 'timestamptz')}, '[)')`;
-				return periodTest(p.op, x, other, date);
+				return period_test(p.op, x, other, date);
 			}
 			case 'geo': {
 				const x = yield* col(b, c, a, p.field, lv);
@@ -566,7 +619,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 				const base = p.field === ELEMENT ? b.elements.at(-1) : yield* col(b, c, a, p.field, lv);
 				if (base === undefined)
 					return yield* invalid('an element predicate outside a list quantifier');
-				const at = jsonPath(p.path);
+				const at = json_path(p.path);
 				const value = p.path.length === 0 ? base : `(${base} #> ${at})`;
 				if (p.t === 'each') {
 					const e = b.alias();
@@ -582,10 +635,6 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 			}
 			case 'json': {
 				const x = yield* col(b, c, a, p.field, lv);
-				if ('isEmpty' in p)
-					return p.isEmpty
-						? `(${x} IS NULL OR ${x} = '[]'::jsonb)`
-						: `(jsonb_typeof(${x}) = 'array' AND ${x} <> '[]'::jsonb)`;
 				return `(${x} @> ${b.bind(JSON.stringify(p.contains), 'jsonb')})`;
 			}
 			case 'one':
@@ -616,6 +665,8 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 
 /** A test of the value at a path: `value` the jsonb there, `text` its text (`#>>`), cast to `pg` to compare. */
 function pathTest(b: Build, value: string, text: string, pg: string, t: PathTest): string {
+	if (pg === 'jsonb' && (t.op === 'eq' || t.op === 'ne'))
+		return `(${value} ${OPS[t.op]} ${b.bind(JSON.stringify(t.arg), 'jsonb')})`;
 	const typed = pg === 'text' || pg === 'jsonb' ? text : `(${text})::${pg}`;
 	const at = pg === 'jsonb' ? 'text' : pg;
 	switch (t.op) {
@@ -625,10 +676,6 @@ function pathTest(b: Build, value: string, text: string, pg: string, t: PathTest
 			return t.is
 				? `(${value} IS NULL OR ${value} = 'null'::jsonb)`
 				: `(${value} IS NOT NULL AND ${value} <> 'null'::jsonb)`;
-		case 'isEmpty':
-			return t.is
-				? `(COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(${value}) = 'array' THEN ${value} END), 0) = 0)`
-				: `(jsonb_typeof(${value}) = 'array' AND ${value} <> '[]'::jsonb)`;
 		case 'like':
 			return `(${typed} ILIKE ${b.bind(t.arg, 'text')})`;
 		case 'in': {
@@ -696,7 +743,7 @@ export const items: (
 	for (const field of key) b.touch(c.model.name, field);
 	const fields =
 		s.fields ??
-		(b.scope !== undefined ? defaultFields(c, one || s.whole === true) : storedFields(c.model));
+		(b.scope !== undefined ? default_fields(c, one || s.whole === true) : stored_fields(c.model));
 	const readable = readableFields(c, lv),
 		unread = (s.fields ?? []).filter(
 			(f) => !key.includes(f) && !readable.includes(f) && s.relations[f] === undefined
@@ -714,6 +761,11 @@ export const items: (
 	];
 	for (const [rel, r] of Object.entries(s.relations))
 		out.push(`${yield* arm(b, c, a, rel, r, lv)} AS ${q(rel)}`);
+	if (c.model.record_label?.stored === false) {
+		const label = yield* recordLabel(b, c, a, lv);
+		const fallback = key.length === 1 ? `${keyAt(b, c, a)}::text` : 'NULL::text';
+		out.push(`coalesce(${label ?? 'NULL::text'}, ${fallback}) AS "$label"`);
+	}
 	return out;
 });
 /** The root level's select list, and the scope's own root columns over the same row. */
@@ -726,10 +778,10 @@ const root = Effect.fnUntraced(function* (
 	one: boolean = false
 ) {
 	const references = yield* labelReferences(b, c, a, lv);
-	const link = c.model.labelLink;
+	const link = c.model.label_link;
 	const label =
 		link === undefined ||
-		(lv.exposed && ![link.model, link.record].every((f) => exposedField(c, f)))
+		(lv.exposed && ![link.model, link.record].every((f) => exposed_field(c, f)))
 			? []
 			: [
 					`coalesce(${[...references.map((ref) => `(SELECT ${ref.label} FROM ${ref.from} WHERE ${ref.where} LIMIT 1)`), `${a}.${q(link.record)}::text`].join(', ')}) AS "$label"`
@@ -804,12 +856,7 @@ function metres(b: Build, x: string, pt: { lat: number; lng: number }): string {
 // ── order and keyset cursors ──
 type Key = { expr: string; pg: string; dir: 'asc' | 'desc' };
 const UNORDERED = new Set([
-	'json',
-	'file',
-	'custom',
-	'vector',
-	'point',
-	'ref',
+	...UNSORTABLE,
 	'daterange',
 	'tstzrange'
 ]);
@@ -827,14 +874,14 @@ const order_by = Effect.fnUntraced(function* (
 			const own = !field.includes('.');
 			const [head = field, ...rest] = field.split('.');
 			const inline = own ? undefined : c.model.fields.get(head);
-			const leaf = inline?.shape === undefined ? undefined : inlineLeaf(inline, rest);
+			const leaf = inline?.shape === undefined ? undefined : inline_leaf(inline, rest);
 			if (!own && leaf === undefined && lv.exposed) yield* readable(b, c, field, lv);
 			// a related key is a scalar subselect over the same joins and scopes as a filter; a missing or unseen target is null
 			const { expr, f } = own
 				? { expr: yield* col(b, c, a, field, lv), f: yield* fieldOf(b, c, field, lv) }
 				: leaf !== undefined
 					? {
-							expr: `((${yield* col(b, c, a, head, lv)} #>> ${jsonPath(rest)})${leaf.pg === 'text' ? '' : `::${leaf.pg}`})`,
+							expr: `((${yield* col(b, c, a, head, lv)} #>> ${json_path(rest)})${leaf.pg === 'text' ? '' : `::${leaf.pg}`})`,
 							f: leaf
 						}
 					: yield* path(b, c, a, field, lv);
@@ -860,10 +907,10 @@ const order_by = Effect.fnUntraced(function* (
 	return [...first, ...keys, ...tail];
 });
 /** A related sort key (`account.name`): each hop an exposed one-relation into a level the reader reads, and the field
- * exposed there; else `invalidInput`. */
+ * exposed there; else `invalid_input`. */
 const readable = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, p: string, lv: Level) {
 	const bad = (why: string) =>
-		Effect.fail(StoreError.of('invalidInput', 'decode', `order_by '${p}': ${why}`));
+		Effect.fail(StoreError.of('invalid_input', 'decode', `order_by '${p}': ${why}`));
 	const steps = p.split('.');
 	let x = c;
 	for (const s of steps.slice(0, -1)) {
@@ -872,24 +919,24 @@ const readable = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, p: stri
 		if (rel === undefined || target === undefined || rel.targets.length > 1)
 			return yield* bad(`'${x.path}.${s}' is not a relation this caller reads`);
 		const t = yield* level(b, x, s, target, lv).pipe(
-			Effect.catch(() => bad(`'${target}' is not a model`))
+			Effect.catch((error) => bad(error.message))
 		);
 		if (lv.scoped && b.scope?.rows(t.path, b.outputOf(t.path))?.length === 0)
 			return yield* bad(`'${t.path}' is not read by this caller`);
 		x = t;
 	}
 	const last = steps.at(-1) ?? p;
-	if (!exposedField(x, last))
+	if (!exposed_field(x, last))
 		return yield* bad(`'${x.name}.${last}' is not a field this caller reads`);
 });
-/** FNV-1a over the query minus its page: a cursor is bound to the query it came from (`badCursor` otherwise). */
+/** FNV-1a over the query minus its page: a cursor is bound to the query it came from (`bad_cursor` otherwise). */
 function hash(ir: unknown): string {
 	let h = 0x811c9dc5;
 	for (const ch of JSON.stringify(ir)) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193);
 	return (h >>> 0).toString(36);
 }
 const encodePayload = Schema.encodeSync(CursorPayload);
-export function encodeCursor(h: string, values: readonly (string | null)[]): string {
+export function encode_cursor(h: string, values: readonly (string | null)[]): string {
 	return encodePayload({ h, k: values });
 }
 const cursorPayload = Schema.decodeUnknownResult(CursorPayload);
@@ -898,7 +945,7 @@ const decodeCursor = (cursor: string, h: string, n: number): Fx<readonly (string
 	return Result.isSuccess(decoded) && decoded.success.h === h && decoded.success.k.length === n
 		? Effect.succeed(decoded.success.k)
 		: Effect.fail(
-				StoreError.of('badCursor', 'decode', 'the cursor does not belong to this query (rule 11)')
+				StoreError.of('bad_cursor', 'decode', 'the cursor does not belong to this query (rule 11)')
 			);
 };
 /** Rows after the cursor position: ASC puts nulls last, DESC first, as Postgres orders by default. */
@@ -945,8 +992,8 @@ const start = Effect.fnUntraced(function* (
 	options: CompileOptions,
 	output = DEFAULT_OUTPUT
 ) {
-	const cat = yield* catalogFor(base, model, output);
-	const c = yield* exposureOf(cat, model);
+	const cat = yield* catalog_for(base, model, output);
+	const c = yield* exposure_of(cat, model);
 	const scoped = options.scope !== undefined;
 	const lv: Level = { scoped, exposed: scoped };
 	if (options.scope?.rows(model, output)?.length === 0)
@@ -997,7 +1044,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 		const id = c.model.fields.get('id');
 		if (id === undefined)
 			return yield* invalid(`'${c.name}' is keyed by its fields; read it by them`);
-		if (id.pg === 'uuid' && !UUID.test(ir.id))
+		if (id.pg === 'uuid' && !UUID_PATTERN.test(ir.id))
 			return yield* one('SELECT NULL::jsonb AS j WHERE false');
 		return yield* one(
 			`SELECT to_jsonb(r) AS j FROM (SELECT ${(yield* root(b, c, a, ir.select, lv, true)).join(', ')} FROM ${table} WHERE ${conj(`${a}."id" = ${b.bind(ir.id, id.pg)}`, yield* scope(b, c, a, lv))}) r`
@@ -1034,10 +1081,10 @@ export const compile = Effect.fn('Store.compile')(function* (
 			return yield* invalid(`'${c.name}' declares no search index '${ir.index}'`);
 		if (probe.vector.length !== index.dim || !probe.vector.every(Number.isFinite))
 			return yield* invalid(`the probe is not ${index.dim} finite numbers`);
-		if (index.field === undefined) b.touch(c.model.name, indexColumn(ir.index));
+		if (index.field === undefined) b.touch(c.model.name, index_column(ir.index));
 		const x =
 			index.field === undefined
-				? `${a}.${q(indexColumn(ir.index))}`
+				? `${a}.${q(index_column(ir.index))}`
 				: yield* col(b, c, a, index.field, lv);
 		const dist = `(${x} ${index.metric === 'cosine' ? '<=>' : index.metric === 'ip' ? '<#>' : '<->'} ${b.bind(`[${probe.vector.join(',')}]`, 'vector')})`;
 		const where = conj(
@@ -1119,10 +1166,10 @@ export const compile = Effect.fn('Store.compile')(function* (
 		if (ir.order === undefined || ir.order.length === 0)
 			first = [{ expr: `(${rank}::float8)`, pg: 'float8', dir: 'desc' }];
 	}
-	const groups = ir.firstPer ?? [];
+	const groups = ir.first_per ?? [];
 	for (const field of groups) {
-		if (lv.exposed && !exposedField(c, field))
-			return yield* invalid(`firstPer '${field}' must be readable`);
+		if (lv.exposed && !exposed_field(c, field))
+			return yield* invalid(`first_per '${field}' must be readable`);
 	}
 	const groupOrder: Order = groups.map((field) => ({
 		field,
@@ -1190,7 +1237,7 @@ export const compile = Effect.fn('Store.compile')(function* (
  * Concurrent `get`s of one model and select as one statement: the ids unnested with their ordinal and each row
  * as a lateral subquery — one row per id, in order, `j` null when not found.
  */
-export const compileGets = Effect.fn('Store.compileGets')(function* (
+export const compile_gets = Effect.fn('Store.compile_gets')(function* (
 	cat: Catalog,
 	model: string,
 	ids: readonly string[],
@@ -1204,15 +1251,14 @@ export const compileGets = Effect.fn('Store.compileGets')(function* (
 	if (id === undefined)
 		return yield* invalid(`'${c.name}' is keyed by its fields; read it by them`);
 	const list = b.bind(
-		ids.map((x) => (id.pg !== 'uuid' || UUID.test(x) ? x : null)),
+		ids.map((x) => (id.pg !== 'uuid' || UUID_PATTERN.test(x) ? x : null)),
 		`${id.pg}[]`
 	);
 	return yield* b.sql(`SELECT (SELECT to_jsonb(r) FROM (SELECT ${(yield* root(b, c, a, select, lv, true)).join(', ')} FROM ${b.from(c.model.name)} ${a} WHERE ${conj(`${a}."id" = v.id`, yield* scope(b, c, a, lv))}) r) AS j
 	FROM unnest(${list}) WITH ORDINALITY v(id, n) ORDER BY v.n`);
 });
 
-const lit = (s: string) => `'${s.replaceAll("'", "''")}'`;
-const NUM = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number']);
+const NUM = new Set(Object.entries(KIND).filter(([, entry]) => entry.traits.summable).map(([kind]) => kind));
 /** A field reached by a one-relation path (`'account.region'`), each hop scoped. */
 const path: (
 	b: Build,
@@ -1349,13 +1395,13 @@ const aggregate = Effect.fnUntraced(function* (
 });
 
 /** The ids a predicate admits, compiled raw (no scope, no exposure): a grant arm, with its holder's operands. */
-export const grantSql = Effect.fn('Store.grantSql')(function* (
+export const grant_sql = Effect.fn('Store.grant_sql')(function* (
 	cat: Catalog,
 	model: string,
 	p: Pred,
 	options: Omit<CompileOptions, 'scope'> = {}
 ) {
-	const c = yield* exposureOf(cat, model),
+	const c = yield* exposure_of(cat, model),
 		b = new Build(cat, options),
 		a = b.alias();
 	return yield* b.sql(
@@ -1363,7 +1409,7 @@ export const grantSql = Effect.fn('Store.grantSql')(function* (
 	);
 });
 /** For the live router and tests: a predicate under the reader's scope, as the WHERE of `SELECT id FROM <c>`. */
-export const whereSql = Effect.fn('Store.whereSql')(function* (
+export const where_sql = Effect.fn('Store.where_sql')(function* (
 	cat: Catalog,
 	model: string,
 	p: Pred,

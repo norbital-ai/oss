@@ -80,14 +80,14 @@ const parse = (
 	const text = message.text?.body ?? media[0]?.caption ?? '';
 	if (user === undefined || (text === '' && media.length === 0)) return null;
 	const contact = contacts.find((one) => one.wa_id === user || one.user_id === user),
-		replyTo = message.context?.id;
+		reply_to = message.context?.id;
 	return {
 		id: message.id,
 		thread: user,
-		sentAt: new Date(Number(message.timestamp) * 1000).toISOString(),
+		sent_at: new Date(Number(message.timestamp) * 1000).toISOString(),
 		from: { handle: user, name: contact?.profile?.name ?? null },
 		text,
-		...(replyTo === undefined ? {} : { replyTo }),
+		...(reply_to === undefined ? {} : { reply_to }),
 		files: media.map((one) => ({
 			name: one.filename ?? one.kind,
 			mime: one.mime_type,

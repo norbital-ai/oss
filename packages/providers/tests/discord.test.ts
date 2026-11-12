@@ -8,7 +8,7 @@ import { discord, type GatewaySocket } from '../src/discord/index.ts';
 import { ProviderUnavailable } from '../src/errors.ts';
 import { Fenced } from '@norbital-ai/bolt/engine';
 import type { DriverEvent } from '@norbital-ai/bolt/engine';
-import { fakeFetch, file, host, json, messagesOf, until } from './kit.ts';
+import { required, fakeFetch, file, host, json, messagesOf, until } from './kit.ts';
 
 const settle = (ok: () => boolean) =>
 	Effect.gen(function* () {
@@ -86,7 +86,7 @@ const connected = (g: ReturnType<typeof gateway>, emit?: (e: DriverEvent) => Pro
 			emit === undefined ? {} : { emit }
 		);
 		yield* settle(() => g.sockets.length === 1);
-		const s = g.sockets[0]!;
+		const s = required(g.sockets[0]);
 		hello(s);
 		yield* settle(() => sentOp(s, 2).length === 1);
 		ready(s);
@@ -98,7 +98,7 @@ const reopened = (g: ReturnType<typeof gateway>, count: number) =>
 	Effect.gen(function* () {
 		yield* TestClock.adjust('60 seconds');
 		yield* settle(() => g.sockets.length === count);
-		const s = g.sockets[count - 1]!;
+		const s = required(g.sockets[count - 1]);
 		hello(s);
 		return s;
 	});
@@ -124,10 +124,10 @@ describe('Discord', () => {
 			const g = gateway(),
 				f = api(),
 				h = yield* host(discord({ socket: g.socket }), f);
-			expect((yield* Effect.flip(h.link.pair!({}))).message).toMatch(/bot token is required/);
-			expect((yield* Effect.flip(h.link.pair!({ botToken: 'bad' }))).message).toMatch(/401/);
+			expect((yield* Effect.flip(required(h.link.pair)({}))).message).toMatch(/bot token is required/);
+			expect((yield* Effect.flip(required(h.link.pair)({ botToken: 'bad' }))).message).toMatch(/401/);
 			expect(g.sockets).toHaveLength(0);
-			yield* h.link.pair!({ botToken: 'good' });
+			yield* required(h.link.pair)({ botToken: 'good' });
 			expect(Object.fromEntries(h.values)).toEqual({
 				credential: { botToken: 'good', botId: '100', botName: 'crewbot' }
 			});
@@ -146,7 +146,7 @@ describe('Discord', () => {
 						credential: { botToken: 'good', botId: '100', botName: 'crewbot' }
 					});
 				yield* settle(() => g.sockets.length === 1);
-				const s = g.sockets[0]!;
+				const s = required(g.sockets[0]);
 				s.fire('message', { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } }) });
 				yield* settle(() =>
 					s.sent.some(
@@ -216,7 +216,7 @@ describe('Discord', () => {
 					credential: { botToken: 'good', botId: '100', botName: 'crewbot' }
 				});
 			yield* settle(() => g.sockets.length === 1);
-			g.sockets[0]!.fire('close', { code: 1006 });
+			required(g.sockets[0]).fire('close', { code: 1006 });
 			yield* settle(() => h.status?.state === 'reconnecting');
 			expect(h.status?.state).toBe('reconnecting');
 			yield* TestClock.adjust('999 millis');
@@ -224,7 +224,7 @@ describe('Discord', () => {
 			yield* TestClock.adjust('1 milli');
 			yield* settle(() => g.sockets.length === 2);
 			expect(g.sockets).toHaveLength(2);
-			g.sockets[1]!.fire('close', { code: 4014 });
+			required(g.sockets[1]).fire('close', { code: 4014 });
 			yield* settle(() => h.status?.state === 'error');
 			expect(h.status).toMatchObject({
 				state: 'error',
@@ -294,8 +294,8 @@ describe('Discord', () => {
 			s.fire('close', { code: 1006 });
 			yield* TestClock.adjust('60 seconds');
 			yield* settle(() => g.sockets.length === 2);
-			expect(g.sockets[1]!.url).toBe(RESUME);
-			g.sockets[1]!.fire('close', { code: 1006 });
+			expect(required(g.sockets[1]).url).toBe(RESUME);
+			required(g.sockets[1]).fire('close', { code: 1006 });
 			const next = yield* reopened(g, 3);
 			expect(next.url).toBe(GATEWAY);
 			yield* settle(() => sentOp(next, 2).length === 1);
@@ -379,7 +379,7 @@ describe('Discord', () => {
 						id: 'm1',
 						text: 'fixed',
 						version: '2026-10-01T10:05:00.000Z',
-						sentAt: '2026-10-01T10:00:00.000Z'
+						sent_at: '2026-10-01T10:00:00.000Z'
 					},
 					{ id: 'm4', deleted: true },
 					{ id: 'm5', deleted: true },
@@ -427,7 +427,7 @@ describe('Discord', () => {
 			]);
 			const g = gateway(),
 				h = yield* host(discord({ socket: g.socket }), f, CREDENTIAL);
-			const page = yield* h.link.reconcile!('55', since);
+			const page = yield* required(h.link.reconcile)('55', since);
 			expect(page.complete).toBe(true);
 			expect(page.bins).toBeUndefined();
 			expect(page.messages).toMatchObject([
@@ -462,12 +462,12 @@ describe('Discord', () => {
 					? []
 					: [msg({ id: '7', channel_id: '66', guild_id: undefined }).d]
 			);
-			expect(yield* (yield* open(one)).link.reconcile!('66', since)).toMatchObject({
+			expect(yield* required((yield* open(one)).link.reconcile)('66', since)).toMatchObject({
 				complete: true,
 				messages: [{ id: '7', group: false, invocation: 'direct' }]
 			});
 			// without READ_MESSAGE_HISTORY Discord answers an empty list: that proves nothing was deleted
-			const blind = yield* (yield* open(answering(() => []))).link.reconcile!('66', since);
+			const blind = yield* required((yield* open(answering(() => []))).link.reconcile)('66', since);
 			expect(blind).toEqual({ messages: [], complete: false });
 			// a window that never ends within the walk deletes nothing
 			let id = 2000;
@@ -477,17 +477,17 @@ describe('Discord', () => {
 					() => msg({ id: String(id++), channel_id: '66' }).d
 				).toReversed()
 			);
-			const capped = yield* (yield* open(endless)).link.reconcile!('66', since);
+			const capped = yield* required((yield* open(endless)).link.reconcile)('66', since);
 			expect(capped.complete).toBe(false);
 			expect(capped.messages).toHaveLength(500);
 			// a channel the bot cannot read skips that thread: the engine would end its pass on a refusal
 			const refused = fakeFetch([() => json({ message: 'Missing Access', code: 50001 }, 403)]);
-			expect(yield* (yield* open(refused)).link.reconcile!('66', since)).toEqual({
+			expect(yield* required((yield* open(refused)).link.reconcile)('66', since)).toEqual({
 				messages: [],
 				complete: false
 			});
 			const down = fakeFetch([() => json({ message: 'slow down' }, 429)]);
-			expect(yield* Effect.flip((yield* open(down)).link.reconcile!('66', since))).toMatchObject({
+			expect(yield* Effect.flip(required((yield* open(down)).link.reconcile)('66', since))).toMatchObject({
 				_tag: 'ProviderUnavailable'
 			});
 		})
@@ -498,7 +498,7 @@ describe('Discord', () => {
 				h = yield* host(discord({ socket: g.socket }), api(), CREDENTIAL),
 				beats = (s: Fake) => sentOp(s, 1).length;
 			yield* settle(() => g.sockets.length === 1);
-			const first = g.sockets[0]!;
+			const first = required(g.sockets[0]);
 			hello(first, 1000);
 			for (let beat = 1; beat <= 4; beat++) {
 				yield* settle(() => beats(first) === beat);
@@ -512,7 +512,7 @@ describe('Discord', () => {
 			const stopped = beats(first);
 			yield* TestClock.adjust('1 second');
 			yield* settle(() => g.sockets.length === 2);
-			const second = g.sockets[1]!;
+			const second = required(g.sockets[1]);
 			hello(second, 1000);
 			for (let beat = 1; beat <= 5; beat++) {
 				yield* settle(() => beats(second) === beat);
@@ -539,7 +539,7 @@ describe('Discord', () => {
 				h = yield* host(discord({ socket: g.socket }), api(), CREDENTIAL),
 				beats = (s: Fake) => sentOp(s, 1).length;
 			yield* settle(() => g.sockets.length === 1);
-			const s = g.sockets[0]!;
+			const s = required(g.sockets[0]);
 			hello(s, 1000);
 			yield* settle(() => sentOp(s, 2).length === 1);
 			ready(s);
@@ -602,9 +602,9 @@ describe('Discord', () => {
 		Effect.gen(function* () {
 			const g = gateway(),
 				{ h } = yield* connected(g);
-			yield* h.link.pair!({ botToken: 'good' });
+			yield* required(h.link.pair)({ botToken: 'good' });
 			yield* settle(() => g.sockets.length === 2);
-			const next = g.sockets[1]!;
+			const next = required(g.sockets[1]);
 			expect(next.url).toBe(GATEWAY);
 			hello(next);
 			yield* settle(() => sentOp(next, 2).length === 1);
@@ -619,11 +619,11 @@ describe('Discord', () => {
 				h = yield* host(discord({ socket: g.socket }), f, {
 					credential: { botToken: 'good', botId: '100', botName: 'crewbot' }
 				});
-			expect(yield* h.link.send!({ to: '55', text: 'on it' }, undefined)).toEqual({
-				providerId: 'm-out'
+			expect(yield* required(h.link.send)({ to: '55', text: 'on it' }, undefined)).toEqual({
+				provider_id: 'm-out'
 			});
-			yield* h.link.typing!('55', true);
-			yield* h.link.typing!('55', false); // nothing to stop: it lapses by itself
+			yield* required(h.link.typing)('55', true);
+			yield* required(h.link.typing)('55', false); // nothing to stop: it lapses by itself
 			expect(f.calls.map((c) => [c.method, c.url, c.headers['authorization'], c.body])).toEqual([
 				[
 					'POST',
@@ -642,10 +642,10 @@ describe('Discord', () => {
 				f = api(),
 				h = yield* host(discord({ socket: g.socket }), f, CREDENTIAL),
 				id = '0190b4a2-7c1e-7f3a-9d52-3f6c1e2a4b10';
-			yield* h.link.send!({ id, to: '55', text: 'on it' }, undefined);
-			yield* h.link.send!({ id, to: '55', text: 'on it' }, undefined);
-			yield* h.link.send!({ id: 'another', to: '55', text: 'on it' }, undefined);
-			yield* h.link.send!({ id, to: '55', text: 'with a file' }, [
+			yield* required(h.link.send)({ id, to: '55', text: 'on it' }, undefined);
+			yield* required(h.link.send)({ id, to: '55', text: 'on it' }, undefined);
+			yield* required(h.link.send)({ id: 'another', to: '55', text: 'on it' }, undefined);
+			yield* required(h.link.send)({ id, to: '55', text: 'with a file' }, [
 				file('report.pdf', 'application/pdf', '%PDF r')
 			]);
 			const [first, again, other] = f.calls
@@ -657,14 +657,14 @@ describe('Discord', () => {
 						)
 					)(c.body)
 				);
-			expect(first!.enforce_nonce).toBe(true);
-			expect(first!.nonce.length).toBeLessThanOrEqual(25);
-			expect(again!.nonce).toBe(first!.nonce);
-			expect(other!.nonce).not.toBe(first!.nonce);
-			const payload = f.calls[3]!.form!.get('payload_json');
+			expect(required(first).enforce_nonce).toBe(true);
+			expect(required(first).nonce.length).toBeLessThanOrEqual(25);
+			expect(required(again).nonce).toBe(required(first).nonce);
+			expect(required(other).nonce).not.toBe(required(first).nonce);
+			const payload = required(required(f.calls[3]).form).get('payload_json');
 			if (typeof payload !== 'string') throw new Error('The multipart JSON payload is missing.');
 			expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(payload)).toMatchObject({
-				nonce: first!.nonce,
+				nonce: required(first).nonce,
 				enforce_nonce: true
 			});
 			yield* h.link.close ?? Effect.void;
@@ -677,10 +677,10 @@ describe('Discord', () => {
 				h = yield* host(discord({ socket: g.socket }), f, {
 					credential: { botToken: 'good', botId: '100', botName: 'crewbot' }
 				});
-			yield* h.link.send!({ to: '55', text: 'the report' }, [
+			yield* required(h.link.send)({ to: '55', text: 'the report' }, [
 				file('report.pdf', 'application/pdf', '%PDF r')
 			]);
-			const form = f.calls[0]!.form!;
+			const form = required(required(f.calls[0]).form);
 			const payload = form.get('payload_json');
 			if (typeof payload !== 'string') throw new Error('The multipart JSON payload is missing.');
 			expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(payload)).toEqual({
@@ -697,7 +697,7 @@ describe('Discord', () => {
 					catch: (error) => new ProviderUnavailable({ message: String(error) })
 				})
 			]).toEqual(['report.pdf', 'application/pdf', '%PDF r']);
-			expect(f.calls[0]!.headers['content-type']).toMatch(
+			expect(required(f.calls[0]).headers['content-type']).toMatch(
 				/^multipart\/form-data; boundary=[\w-]+$/
 			);
 			yield* h.link.close ?? Effect.void;

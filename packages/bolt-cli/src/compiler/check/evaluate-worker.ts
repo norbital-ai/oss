@@ -5,7 +5,7 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import * as Schema from 'effect/Schema';
 // the hooks alone: this worker starts per evaluation
-import { assetHook, digest, randomStream } from '@norbital-ai/bolt/guest-hooks';
+import { asset_hook, digest, random_stream } from '@norbital-ai/bolt/guest-hooks';
 import type { EvaluateOutput } from './index.ts';
 
 const Input = Schema.Struct({
@@ -112,7 +112,7 @@ const reference = () => {
 try {
 	const prelude = evaluate(`(function ($0, $1, $2, $3) {\n${input.prelude}\n})`);
 	if (typeof prelude !== 'function') throw new Error('the guest prelude is not a function');
-	prelude(() => {}, randomStream('bolt:check'), digest, assetHook(input.assets));
+	prelude(() => {}, random_stream('bolt:check'), digest, asset_hook(input.assets));
 	evaluate(input.freeze);
 	const before = reference();
 	const from = cpu();

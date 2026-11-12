@@ -12,19 +12,19 @@ import type {
 } from '../engine/contracts.ts';
 import type { TenantDbShape } from '../engine/db/tenant-db.ts';
 import type { HostTenantDb } from '../protocol/host-api.ts';
-import { artifactPort } from './artifact.ts';
-import { docsPort } from './docs.ts';
-import { tenantDbPort } from './db/port.ts';
-import { imagesPort } from './images.ts';
-import { keysPort } from './keys.ts';
-import { mcpPort } from './mcp.ts';
-import { httpPort } from './net.ts';
+import { artifact_port } from './artifact.ts';
+import { docs_port } from './docs.ts';
+import { tenant_db_port } from './db/port.ts';
+import { images_port } from './images.ts';
+import { keys_port } from './keys.ts';
+import { mcp_port } from './mcp.ts';
+import { http_port } from './net.ts';
 
 export type NodePortsOptions = {
 	/** The release directory; its seed packs are `../seed/<pack>`. Without one there is no artifact port. */
 	readonly release?: string | undefined;
 	/** The tenant's 32-byte secrets key; without one nothing seals or opens. */
-	readonly secretsKey?: Uint8Array | undefined;
+	readonly secrets_key?: Uint8Array | undefined;
 	/** The environment's database, as `HOST_API` takes it. */
 	readonly database?: TenantDbShape | undefined;
 };
@@ -39,15 +39,15 @@ export type NodePorts = {
 };
 
 /** The ports, alive until the scope closes: MCP sessions end with it. */
-export const nodePorts = Effect.fn('node.ports')(function* (options: NodePortsOptions = {}) {
+export const node_ports = Effect.fn('node.ports')(function* (options: NodePortsOptions = {}) {
 	const ports: NodePorts = {
-		...(options.release === undefined ? {} : { artifact: artifactPort(options.release) }),
-		...(options.secretsKey === undefined ? {} : { keys: keysPort(options.secretsKey) }),
-		...(options.database === undefined ? {} : { database: tenantDbPort(options.database) }),
-		http: httpPort,
-		images: imagesPort,
-		mcp: yield* mcpPort,
-		docs: docsPort()
+		...(options.release === undefined ? {} : { artifact: artifact_port(options.release) }),
+		...(options.secrets_key === undefined ? {} : { keys: keys_port(options.secrets_key) }),
+		...(options.database === undefined ? {} : { database: tenant_db_port(options.database) }),
+		http: http_port,
+		images: images_port,
+		mcp: yield* mcp_port,
+		docs: docs_port()
 	};
 	return ports;
 });

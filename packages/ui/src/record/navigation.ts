@@ -5,7 +5,7 @@ let carried: { record: string; contexts: ReadonlyMap<unknown, unknown> } | null 
  * The sheet mounts outside the page, so `contexts` (the opener's `getAllContexts()`, taken at its init) carry the page's
  * scope into it: a create opened from a scoped page keeps its presets and narrowed pickers. They live in memory only.
  */
-export function openRecord(
+export function open_record(
 	model: string,
 	id: string | 'new',
 	contexts?: ReadonlyMap<unknown, unknown>
@@ -42,17 +42,17 @@ export function offerContexts(
 	};
 }
 /** The page's contexts for `model`: a view's own model first; else the page's (`'*'`, offered by `AppShell`). */
-export const pageContexts = (model: string) => onPage.get(model) ?? onPage.get('*');
+export const page_contexts = (model: string) => onPage.get(model) ?? onPage.get('*');
 /** Subscribes to a view offering its contexts after a reader asked; the returned function unsubscribes. */
-export function onPageContexts(listener: () => void): () => void {
+export function on_page_contexts(listener: () => void): () => void {
 	listeners.add(listener);
 	return () => {
 		listeners.delete(listener);
 	};
 }
-/** The contexts the last `openRecord` of this record carried, taken once: the shell's sheet sets them above its
- * `RecordShell`; an opening that carried none (a reload, a link) takes the page's own (`pageContexts`). */
-export function carriedContexts(
+/** The contexts the last `open_record` of this record carried, taken once: the shell's sheet sets them above its
+ * `RecordShell`; an opening that carried none (a reload, a link) takes the page's own (`page_contexts`). */
+export function carried_contexts(
 	model: string,
 	id: string
 ): ReadonlyMap<unknown, unknown> | undefined {

@@ -71,7 +71,7 @@ export const agentphone: ChatPlatform = {
 						{
 							id: data.messageId,
 							thread: data.from,
-							sentAt: data.receivedAt,
+							sent_at: data.receivedAt,
 							from: { handle: data.from, name: data.contact?.name ?? null },
 							text: data.message,
 							files: (data.mediaUrls ?? []).map(file)

@@ -14,11 +14,12 @@
 // document, converted to a declared target (`convertDocument`); without `write` they are the rows in view (the page's
 // `where`, read as the member). A template is an export of what the page shows; of a document it is the header alone.
 import { Array as EffectArray, Clock, Effect, Option, Predicate, Result, Schema } from 'effect';
-import { csvOf } from '@norbital-ai/std/csv';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { csv_of } from '@norbital-ai/std/csv';
+import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { encode_wire } from '@norbital-ai/std/wire';
 import { bindingsAt } from '../query/reader.ts';
-import { databaseValue, read as storeRead } from '@norbital-ai/store';
-import type { InputFields, InputKind } from '../../decl/fields.ts';
+import { database_value, read as storeRead } from '@norbital-ai/store';
+import type { Fields, Kind } from '@norbital-ai/std/kind';
 import type { SyncEntry } from '../../decl/model.ts';
 import type { BuiltinParser, Finding } from '../../decl/runtime/sync.ts';
 import type { Json } from '../../decl/values.ts';
@@ -47,9 +48,9 @@ import {
 import type { EngineManifest } from '../manifest.ts';
 import { grantedArms, type Holder } from '../access/authority.ts';
 import type { EngineError } from '../errors.ts';
-import { BoltError, fromStore } from '../../protocol/errors.ts';
-import { catalogOf } from '../access/pred.ts';
-import { decodeInput, type InputSpec } from '../callables/decode.ts';
+import { BoltError, from_store } from '../../protocol/errors.ts';
+import { catalog_of } from '../access/pred.ts';
+import { decodeInput } from '../callables/decode.ts';
 import { modelKey } from '../write/flatten.ts';
 import { convertDocument, storeFile } from '../facilities.ts';
 import {
@@ -59,6 +60,7 @@ import {
 	parseBuiltin,
 	parserFor,
 	parsersOf,
+	type ColumnCaptions,
 	type Parser
 } from '../files/parse.ts';
 import { xlsxOf, type Cell } from '../files/xlsx.ts';
@@ -79,16 +81,8 @@ type Caller = {
 type FileSyncServices =
 	Manifest | TenantDb | Callables | Reads | Identity | Guest | Files | Facilities | Convert;
 
-/** A file sync's input, as `ctx.run('<model>.sync.<sync>', input)` decodes it. */
-export const FILE_SYNC_INPUT: InputSpec = {
-	mode: { kind: 'enum', values: ['import', 'template', 'export'] },
-	file: { kind: 'text', optional: true },
-	context: { kind: 'json', optional: true },
-	format: { kind: 'enum', values: FORMATS, optional: true },
-	to: { kind: 'enum', values: [...CONVERT_TARGETS, ...FORMATS], optional: true },
-	where: { kind: 'json', optional: true }
-};
-const RunInput = Schema.Union([
+/** File transfer input, decoded both at native admission and when the durable run executes. */
+export const FileSyncInput = Schema.Union([
 	Schema.Struct({
 		mode: Schema.Literal('import'),
 		file: Schema.String,
@@ -102,7 +96,7 @@ const RunInput = Schema.Union([
 		where: Schema.optionalKey(Schema.Json)
 	})
 ]);
-type ExportInput = Extract<typeof RunInput.Type, { mode: 'template' | 'export' }>;
+type ExportInput = Extract<typeof FileSyncInput.Type, { mode: 'template' | 'export' }>;
 
 /**
  * Who may start file sync `<model>.sync.<sync>` (its rows enter and leave as the member; the act judges each row
@@ -117,7 +111,7 @@ export function fileSyncAdmits(auth: Authority, model: string, input: Json): boo
 		: grantedArms(auth, model) !== undefined;
 }
 
-const TEXT: InputKind = { kind: 'text' };
+const TEXT: Kind = { kind: 'text' };
 /**
  * A file sync's columns: its `schema` (required: the fields neither optional nor defaulted), else the model's writable
  * fields, its create and update input (a ref given as its target's id or key value; required: the model's key).
@@ -125,11 +119,19 @@ const TEXT: InputKind = { kind: 'text' };
 function columnsOf(
 	m: EngineManifest,
 	s: Sync
-): { readonly columns: InputFields; readonly required: readonly string[] } {
+): { readonly columns: Fields; readonly captions: ColumnCaptions; readonly required: readonly string[] } {
 	const schema = s.entry.schema;
+	const captionsOf = (columns: Fields): ColumnCaptions => Object.fromEntries(
+		Object.keys(columns).flatMap((field) => {
+			const caption = (schema === undefined ? undefined : m.messages?.[`models.${s.model}.syncs.${s.sync}.schema.fields.${field}`])
+				?? m.messages?.[`models.${s.model}.fields.${field}`];
+			return caption === undefined ? [] : [[field, caption]];
+		})
+	);
 	if (schema !== undefined)
 		return {
 			columns: schema,
+			captions: captionsOf(schema),
 			required: Object.entries(schema)
 				.filter(([, k]) => k.optional !== true && k.default === undefined)
 				.map(([f]) => f)
@@ -141,7 +143,7 @@ function columnsOf(
 		...(c?.update?.columns[s.model] ?? [])
 	]);
 	const columns = Object.fromEntries(
-		[...names].flatMap((f): [string, InputKind][] => {
+		[...names].flatMap((f): [string, Kind][] => {
 			const k = fields[f];
 			return k !== undefined
 				? [[f, k]]
@@ -150,10 +152,9 @@ function columnsOf(
 					: [];
 		})
 	);
-	return { columns, required: modelKey(m, s.model).filter((f) => f in columns) };
+	return { columns, captions: captionsOf(columns), required: modelKey(m, s.model).filter((f) => f in columns) };
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** A default import's record as its row: `$at` dropped, a ref's text that is no id names its target by its one key field. */
 function rowOf(m: EngineManifest, model: string, record: Obj): Obj {
 	const row: { [f: string]: Json } = {};
@@ -162,7 +163,7 @@ function rowOf(m: EngineManifest, model: string, record: Obj): Obj {
 		const rel = m.relationships[`${model}.${f}`],
 			key = typeof rel?.to === 'string' ? modelKey(m, rel.to) : [];
 		row[f] =
-			typeof v === 'string' && !UUID.test(v) && key.length === 1 && key[0] !== undefined
+			typeof v === 'string' && !UUID_PATTERN.test(v) && key.length === 1 && key[0] !== undefined
 				? { [key[0]]: v }
 				: v;
 	}
@@ -178,11 +179,11 @@ function scopeWhere(
 	const less = (a: Json, b: Json) =>
 		typeof a === 'number' && typeof b === 'number' ? a < b : String(a) < String(b);
 	for (const r of rows) {
-		const by = Object.fromEntries(scope.by.map((f) => [f, databaseValue(r[f] ?? null)]));
+		const by = Object.fromEntries(scope.by.map((f) => [f, database_value(r[f] ?? null)]));
 		const key = JSON.stringify(by),
 			g = groups.get(key) ?? { by };
 		groups.set(key, g);
-		const v = scope.range === undefined ? null : databaseValue(r[scope.range] ?? null);
+		const v = scope.range === undefined ? null : database_value(r[scope.range] ?? null);
 		if (v === null) continue;
 		if (g.lo === undefined || less(v, g.lo)) g.lo = v;
 		if (g.hi === undefined || less(g.hi, v)) g.hi = v;
@@ -202,7 +203,7 @@ function scopeWhere(
 /** The stored row a `$deleted` row names, by the model's key. */
 const keyWhere = (key: readonly string[], row: Obj): Json => ({
 	and: key.map((f) => {
-		const v = databaseValue(row[f] ?? null);
+		const v = database_value(row[f] ?? null);
 		return { [f]: v === null ? { is_null: true } : { eq: v } };
 	})
 });
@@ -227,20 +228,20 @@ const WriteResult = Schema.Union([
 		document: Schema.Union([
 			Schema.Struct({ markdown: Schema.String }),
 			Schema.Struct({ html: Schema.String }),
-			Schema.Struct({ layoutHtml: Schema.String })
+			Schema.Struct({ layout_html: Schema.String })
 		]),
 		name: Schema.String
 	}),
 	Rows
 ]);
 const FileRow = Schema.Struct({ key: Schema.String, name: Schema.String, mime: Schema.String });
-const badAnswer = (path: string) => (error: Schema.SchemaError) =>
-	BoltError.make('badAnswer', 'guest', `${path} answered ${error.message}`, error);
+const bad_answer = (path: string) => (error: Schema.SchemaError) =>
+	BoltError.make('bad_answer', 'guest', `${path} answered ${error.message}`, error);
 const facilityError = (error: PortFailure) =>
 	error._tag === 'Unavailable'
 		? BoltError.make('unavailable', 'facility', error.reason, error)
 		: BoltError.make(
-				error.kind === 'invalid' || error.kind === 'tooLarge' || error.kind === 'timeout'
+				error.kind === 'invalid' || error.kind === 'too_large' || error.kind === 'timeout'
 					? error.kind
 					: 'upstream',
 				'facility',
@@ -311,7 +312,7 @@ const body = Effect.fn('FileSyncs.body')(function* (
 	const out = yield* guest.invoke(invocation, bridge);
 	if (out.kind === 'ok') return out.output;
 	return yield* Effect.fail(
-		out.kind === 'failed' ? out.error : BoltError.make('guestRefused', 'guest', out.message)
+		out.kind === 'failed' ? out.error : BoltError.make('guest_refused', 'guest', out.message)
 	);
 });
 
@@ -321,17 +322,18 @@ const contextOf = (s: Sync, given: Json | undefined): Effect.Effect<Json, BoltEr
 	return d.problems.length > 0
 		? Effect.fail(
 				BoltError.make(
-					'invalidInput',
+					'invalid_input',
 					'decode',
 					`${s.model}.sync.${s.sync} context: ${d.problems.map((p) => `${p.path}: ${p.message}`).join('; ')}`
 				)
 			)
-		: Effect.succeed(encodeWire(d.value));
+		: Effect.succeed(encode_wire(d.value));
 };
 
 /** Records with a `schema` decoded against it (all problems at once, as refusals at their `$at`), `$at` kept. */
 function decodeRecords(
-	schema: InputFields,
+	schema: Fields,
+	captions: ColumnCaptions,
 	records: readonly Obj[]
 ): { records: readonly Obj[]; findings: readonly Finding[] } {
 	const plain = records.map(({ $at: _at, ...r }) => r);
@@ -350,13 +352,13 @@ function decodeRecords(
 					k = f === undefined ? undefined : schema[f];
 				return {
 					at: typeof at === 'number' ? at : 0,
-					...(f === undefined ? {} : { field: k === undefined ? f : headerOf(f, k) }),
+					...(f === undefined ? {} : { field: k === undefined ? f : headerOf(f, captions) }),
 					message: p.message,
 					severity: 'refuse' as const
 				};
 			})
 		};
-	const wire = encodeWire(d.value),
+	const wire = encode_wire(d.value),
 		decoded =
 			Predicate.isObject(wire) && EffectArray.isArray<Json | undefined>(wire['records'])
 				? wire['records']
@@ -386,16 +388,16 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 	});
 	if (Option.isNone(f))
 		return yield* Effect.fail(
-			BoltError.make('notFound', 'admission', 'The import file is not found or not yours.')
+			BoltError.make('not_found', 'admission', 'The import file is not found or not yours.')
 		);
 	const parsers = parsersOf(s.entry),
 		parser: Parser | undefined = parserFor(parsers, f.value.name, f.value.mime);
 	if (parser === undefined)
 		return yield* Effect.fail(
-			BoltError.make('invalidInput', 'decode', `${f.value.name} is not a file this import reads.`)
+			BoltError.make('invalid_input', 'decode', `${f.value.name} is not a file this import reads.`)
 		);
 	const context = yield* contextOf(s, input.context);
-	const { columns, required } = columnsOf(m, s);
+	const { columns, captions, required } = columnsOf(m, s);
 	const bytes = yield* files
 		.get(f.value.key, LIMITS.storedFileBytes)
 		.pipe(Effect.mapError(facilityError));
@@ -403,9 +405,9 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 	const parsed =
 		typeof parser === 'string'
 			? isBuiltin(parser)
-				? parseBuiltin(parser, bytes, columns, { required, tz: caller.bindings.tz })
+				? parseBuiltin(parser, bytes, columns, { required, captions, tz: caller.bindings.tz })
 				: yield* Effect.fail(
-						BoltError.make('invalidSpec', 'decode', `'${parser}' is not a built-in parser`)
+						BoltError.make('invalid_spec', 'decode', `'${parser}' is not a built-in parser`)
 					)
 			: {
 					records: yield* body(
@@ -416,19 +418,19 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 					).pipe(
 						Effect.flatMap(Schema.decodeUnknownEffect(Rows)),
 						Effect.mapError((e) =>
-							Schema.isSchemaError(e) ? badAnswer(`${target}'s ${parser.type} parser`)(e) : e
+							Schema.isSchemaError(e) ? bad_answer(`${target}'s ${parser.type} parser`)(e) : e
 						)
 					),
 					findings: []
 				};
 	if (parsed.records.some((r) => typeof r['$at'] !== 'number'))
 		return yield* Effect.fail(
-			BoltError.make('badAnswer', 'guest', `${target}'s parser returned a record without its $at`)
+			BoltError.make('bad_answer', 'guest', `${target}'s parser returned a record without its $at`)
 		);
 	const decoded =
 		s.entry.schema === undefined || parsed.findings.length > 0
 			? parsed
-			: decodeRecords(s.entry.schema, parsed.records);
+			: decodeRecords(s.entry.schema, captions, parsed.records);
 	if (decoded.findings.some((x) => x.severity === 'refuse'))
 		return { applied: false, findings: decoded.findings };
 	const records = decoded.records;
@@ -438,7 +440,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 		s.entry.read === true
 			? yield* body('syncRead', target, { records, context }, caller).pipe(
 					Effect.flatMap(Schema.decodeUnknownEffect(ReadResult)),
-					Effect.mapError((e) => (Schema.isSchemaError(e) ? badAnswer(`${target}'s read`)(e) : e))
+					Effect.mapError((e) => (Schema.isSchemaError(e) ? bad_answer(`${target}'s read`)(e) : e))
 				)
 			: { rows: records.map((r) => ({ ...rowOf(m, s.model, r), $at: r['$at'] ?? 0 })) };
 	const found = [...decoded.findings, ...(read.findings ?? [])];
@@ -453,7 +455,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 	if ((read.scope !== undefined || gone.length > 0) && key.length === 0)
 		return yield* Effect.fail(
 			BoltError.make(
-				'invalidSpec',
+				'invalid_spec',
 				'decode',
 				`${target}: a scope or a $deleted row needs ${s.model} to have a key`
 			)
@@ -504,7 +506,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 			findings: [
 				{
 					at: own && outcome.row !== undefined ? (at[outcome.row] ?? 0) : 0,
-					...(field === undefined ? {} : { field: k === undefined ? field : headerOf(field, k) }),
+					...(field === undefined ? {} : { field: k === undefined ? field : headerOf(field, captions) }),
 					message:
 						outcome.kind === 'refused'
 							? outcome.message
@@ -539,15 +541,15 @@ const cellOf = (v: Json): Cell =>
 	v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
 		? v
 		: JSON.stringify(v);
-/** Records in one tabular format: a header of the columns' labels (what an import reads back), JSON keyed by name. */
-const scalarText = (value: Json): string => (value == null ? '' : String(databaseValue(value)));
+/** Records in one tabular format: catalogue captions as headers (what an import reads back), JSON keyed by name. */
+const scalarText = (value: Json): string => (value == null ? '' : String(database_value(value)));
 
-function encode(format: Format, columns: InputFields, records: readonly Obj[]): Uint8Array {
+function encode(format: Format, columns: Fields, captions: ColumnCaptions, records: readonly Obj[]): Uint8Array {
 	const fields = Object.keys(columns);
 	if (format === 'json')
 		return new TextEncoder().encode(
 			JSON.stringify(
-				records.map((r) => Object.fromEntries(fields.map((f) => [f, databaseValue(r[f] ?? null)])))
+				records.map((r) => Object.fromEntries(fields.map((f) => [f, database_value(r[f] ?? null)])))
 			)
 		);
 	if (format === 'txt')
@@ -557,12 +559,12 @@ function encode(format: Format, columns: InputFields, records: readonly Obj[]): 
 				.join('\n')
 		);
 	const table: Cell[][] = [
-		Object.entries(columns).map(([f, k]) => headerOf(f, k)),
-		...records.map((r) => fields.map((f) => cellOf(databaseValue(r[f] ?? null))))
+		fields.map((f) => headerOf(f, captions)),
+		...records.map((r) => fields.map((f) => cellOf(database_value(r[f] ?? null))))
 	];
 	return format === 'xlsx'
 		? xlsxOf(table)
-		: new TextEncoder().encode(csvOf(table, format === 'tsv' ? '\t' : ','));
+		: new TextEncoder().encode(csv_of(table, format === 'tsv' ? '\t' : ','));
 }
 
 /** Template and export: the `write` records or document, else the rows in view, stored as the member's own file. */
@@ -577,7 +579,7 @@ const exportFile = Effect.fn('FileSyncs.export')(function* (
 		reads = yield* Reads;
 	const target = `${s.model}.${s.sync}`,
 		owner = `${s.model}.$export.${s.sync}`;
-	const { columns } = columnsOf(m, s);
+	const { columns, captions } = columnsOf(m, s);
 	const written =
 		s.entry.write === true
 			? yield* body(
@@ -587,7 +589,7 @@ const exportFile = Effect.fn('FileSyncs.export')(function* (
 					caller
 				).pipe(
 					Effect.flatMap(Schema.decodeUnknownEffect(WriteResult)),
-					Effect.mapError((e) => (Schema.isSchemaError(e) ? badAnswer(`${target}'s write`)(e) : e))
+					Effect.mapError((e) => (Schema.isSchemaError(e) ? bad_answer(`${target}'s write`)(e) : e))
 				)
 			: null;
 	if (written !== null && 'document' in written && input.mode === 'export') {
@@ -615,11 +617,11 @@ const exportFile = Effect.fn('FileSyncs.export')(function* (
 							m.models[s.model]?.fields[f] !== undefined ||
 							m.relationships[`${s.model}.${f}`] !== undefined
 					);
-					const read = yield* storeRead(catalogOf(m), s.model, {
+					const read = yield* storeRead(catalog_of(m), s.model, {
 						all: true,
 						select: Object.fromEntries(fields.map((f) => [f, true])),
 						...(input.where === undefined ? {} : { where: input.where })
-					}).pipe(Effect.mapError(fromStore));
+					}).pipe(Effect.mapError(from_store));
 					const [answer] = yield* reads.run(
 						[read],
 						{ as: 'caller', authority: caller.authority },
@@ -638,11 +640,11 @@ const exportFile = Effect.fn('FileSyncs.export')(function* (
 		requested === undefined ? (writable[0] ?? 'xlsx') : writable.find((f) => f === requested);
 	if (format === undefined)
 		return yield* Effect.fail(
-			BoltError.make('invalidInput', 'decode', `${target} does not write ${requested}.`)
+			BoltError.make('invalid_input', 'decode', `${target} does not write ${requested}.`)
 		);
 	const name = `${s.model}-${s.sync}-${input.mode === 'template' ? 'template' : caller.bindings.today}${BUILTIN[format].extension}`;
 	const file = yield* storeFile({ db, manifest: m, files })(
-		encode(format, columns, records),
+		encode(format, columns, captions, records),
 		{ name, mime: BUILTIN[format].mime, for: owner, by: caller.member },
 		`${target}'s ${input.mode}`,
 		LIMITS.storedFileBytes
@@ -659,7 +661,7 @@ const run = Effect.fn('FileSyncs.run')(function* (
 	const member = r.starter?.actor.kind === 'member' ? r.starter.actor.id : null;
 	if (r.starter === null || member === null)
 		return yield* Effect.fail(
-			BoltError.make('noTrigger', 'admission', 'A file sync run is started by a member.')
+			BoltError.make('no_trigger', 'admission', 'A file sync run is started by a member.')
 		);
 	const m = yield* Manifest,
 		identity = yield* Identity;
@@ -670,8 +672,8 @@ const run = Effect.fn('FileSyncs.run')(function* (
 		member,
 		key: r.id
 	};
-	const input = yield* Schema.decodeUnknownEffect(RunInput)(given).pipe(
-		Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message, error))
+	const input = yield* Schema.decodeUnknownEffect(FileSyncInput, { onExcessProperty: 'error' })(given).pipe(
+		Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
 	);
 	return input.mode === 'import'
 		? yield* importFile(s, input, caller)

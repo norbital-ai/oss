@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { dial } from '../../src/chat/dial/index.ts';
-import { fakeFetch, host } from '../kit.ts';
+import { required, fakeFetch, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { apiKey: 'key', fromNumberId: 'n1', webhookSecret: 'hook' },
@@ -47,7 +47,7 @@ const direct = () =>
 	Effect.promise(() =>
 		dial.connect(settings, {
 			fetch,
-			webhookUrl: 'https://hook.test/',
+			webhook_url: 'https://hook.test/',
 			receive: () => Promise.resolve()
 		})
 	);
@@ -69,7 +69,7 @@ describe('Dial', () => {
 				try: () =>
 					dial.connect(settings, {
 						fetch: guarded,
-						webhookUrl: 'https://hook.test/',
+						webhook_url: 'https://hook.test/',
 						receive: () => Promise.resolve()
 					}),
 				catch: (error) => error
@@ -103,17 +103,17 @@ describe('Dial', () => {
 			const h = yield* connected(dial, settings),
 				body = event({ replyToId: 'm0' });
 			expect(h.status).toMatchObject({ state: 'connected', account: own });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'm1',
 						thread: person,
-						sentAt: '2026-01-02T03:04:05.000Z',
+						sent_at: '2026-01-02T03:04:05.000Z',
 						text: 'Hello',
 						from: { handle: person, name: null },
-						replyTo: 'm0',
+						reply_to: 'm0',
 						group: false,
 						invocation: 'direct'
 					}
@@ -128,7 +128,7 @@ describe('Dial', () => {
 				body = event();
 			const stale = signature(body, 'hook', Math.floor(Date.now() / 1000) - 301);
 			for (const headers of [signature(body, 'forged'), stale, {}])
-				expect((yield* h.link.webhook!(webhook(body, headers))).status).toBe(401);
+				expect((yield* required(h.link.webhook)(webhook(body, headers))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -139,7 +139,7 @@ describe('Dial', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = event();
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live('stores neither a ping, a call nor a reaction', () =>
@@ -151,7 +151,7 @@ describe('Dial', () => {
 				event({}, 'call.ended'),
 				event({ body: '', reaction: '👍', replyToId: 'm0' })
 			])
-				expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -164,7 +164,7 @@ describe('Dial', () => {
 					{ id: 'f1', url: 'https://cdn.test/f1', contentType: 'image/png', originalUrl: null }
 				]
 			});
-			yield* h.link.webhook!(webhook(body, signature(body)));
+			yield* required(h.link.webhook)(webhook(body, signature(body)));
 			expect(h.events[0]).toMatchObject({
 				bins: [new Uint8Array([1, 2, 3])],
 				messages: [{ attachments: [{ name: 'f1', mime: 'image/png', bytes: 3, bin: 0 }] }]
@@ -175,8 +175,8 @@ describe('Dial', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(dial, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: person, text: 'x'.repeat(2000) }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: person, text: 'x'.repeat(2000) }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe('https://api.getdial.ai/api/v1/messages');
 			expect(call?.headers.get('authorization')).toBe('Bearer key');
@@ -197,10 +197,10 @@ describe('Dial', () => {
 				call.url.endsWith('/api/v1/messages') ? json({ error: 'no' }, status) : answer(call)
 			);
 			const h = yield* connected(dial, settings);
-			const refused = yield* Effect.flip(h.link.send!({ to: person, text: 'Hello' }, []));
+			const refused = yield* Effect.flip(required(h.link.send)({ to: person, text: 'Hello' }, []));
 			expect(refused).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			status = 503;
-			const down = yield* Effect.flip(h.link.send!({ to: person, text: 'Hello' }, []));
+			const down = yield* Effect.flip(required(h.link.send)({ to: person, text: 'Hello' }, []));
 			expect(down).toMatchObject({ _tag: 'ProviderUnavailable', status: 503 });
 		})
 	);
@@ -255,7 +255,7 @@ describe('Dial', () => {
 				expect(read?.messages.map((message) => message.id)).toEqual(['m1']);
 				expect(read?.messages[0]).toMatchObject({
 					thread: person,
-					sentAt: '2026-01-03T00:00:00.000Z'
+					sent_at: '2026-01-03T00:00:00.000Z'
 				});
 				expect(Object.fromEntries(new URL(api.calls.at(-1)?.url ?? '').searchParams)).toEqual({
 					numberId: 'n1',
@@ -268,11 +268,11 @@ describe('Dial', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ error: 'unauthorized' }, 401));
 			const refused = yield* host(chatProvider(dial), fetch);
-			yield* Effect.flip(refused.link.pair!(settings));
+			yield* Effect.flip(required(refused.link.pair)(settings));
 			expect(refused.values.size).toBe(0);
 			yield* platformApi(() => json({ numbers: [{ id: 'other', number: own }] }));
 			const stranger = yield* host(chatProvider(dial), fetch);
-			yield* Effect.flip(stranger.link.pair!(settings));
+			yield* Effect.flip(required(stranger.link.pair)(settings));
 			expect(stranger.values.size).toBe(0);
 		})
 	);

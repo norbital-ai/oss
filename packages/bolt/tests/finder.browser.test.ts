@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Layer, ManagedRuntime } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { page, userEvent } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import Finder from '../src/shell/finder/Finder.svelte';
@@ -39,7 +39,7 @@ const nav = [
 
 it('Find requires an explicit model, explains search fields and explains unindexed searches', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const requests: Parameters<FinderRead>[0][] = [];
@@ -63,10 +63,10 @@ it('Find requires an explicit model, explains search fields and explains unindex
 			catalog,
 			read,
 			t: (key: string) => key,
-			onAsk: null,
+			on_ask: null,
 			nav,
-			onNavigate: () => {},
-			onOpenRecord: (model: string, id: string) => opened.push(`${model}/${id}`)
+			on_navigate: () => {},
+			on_open_record: (model: string, id: string) => opened.push(`${model}/${id}`)
 		}
 	});
 	try {
@@ -136,6 +136,11 @@ it('Find requires an explicit model, explains search fields and explains unindex
 			.element(page.getByRole('status'))
 			.toHaveTextContent('Scope not found. Search by name or go back to all results.');
 		expect(requests).toHaveLength(1);
+		await search.fill('/customers/Acme');
+		await expect
+			.element(page.getByRole('status'))
+			.toHaveTextContent('Scope not found. Search by name or go back to all results.');
+		expect(requests).toHaveLength(1);
 		await search.fill('/customers Acme');
 		await page.getByRole('button', { name: 'Acme customers' }).click();
 		expect(opened).toEqual(['customers/c1']);
@@ -149,7 +154,7 @@ it('Find requires an explicit model, explains search fields and explains unindex
 
 it('Norbius slash and @ share scopes, skip unavailable models and insert scoped records or apps', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const requests: Parameters<FinderRead>[0][] = [];
@@ -247,7 +252,7 @@ it('Norbius slash and @ share scopes, skip unavailable models and insert scoped 
 
 it('Find searches manifest names directly and drills apps into named pages without slash syntax', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const navigated: string[] = [];
@@ -267,9 +272,9 @@ it('Find searches manifest names directly and drills apps into named pages witho
 					href: '/command-center/automations?automation=manufacturing_pipeline'
 				}
 			],
-			onAsk: null,
-			onNavigate: (href: string) => navigated.push(href),
-			onOpenRecord: () => {}
+			on_ask: null,
+			on_navigate: (href: string) => navigated.push(href),
+			on_open_record: () => {}
 		}
 	});
 	try {
@@ -304,7 +309,7 @@ it('Find searches manifest names directly and drills apps into named pages witho
 
 it('Norbius keeps multiword name lookup global and consumes Enter while scoped records load', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const pending: (() => void)[] = [];

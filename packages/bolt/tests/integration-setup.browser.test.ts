@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { page } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import {
@@ -10,7 +10,7 @@ import {
 } from '../src/page/integration.ts';
 
 it('the shared instance setup renders and pairs in Chromium without server-only imports', async () => {
-	const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 	document.body.replaceChildren();
 	const target = document.createElement('div');
 	document.body.append(target);
@@ -34,12 +34,12 @@ it('the shared instance setup renders and pairs in Chromium without server-only 
 	};
 	const client: Pick<
 		IntegrationClient,
-		'instance' | 'status' | 'pair' | 'importStart' | 'unpair' | 'test' | 'watch'
+		'instance' | 'status' | 'pair' | 'import_start' | 'unpair' | 'test' | 'watch'
 	> = {
 		instance: 'erp',
 		status: () => Effect.sync(() => status),
 		pair: () => Effect.sync(() => (status = { ...status, state: 'connected', stored: true })),
-		importStart: () => Effect.sync(() => status),
+		import_start: () => Effect.sync(() => status),
 		unpair: () => Effect.sync(() => status),
 		test: () => Effect.sync(() => status),
 		watch: () => Stream.never

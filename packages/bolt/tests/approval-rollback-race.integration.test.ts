@@ -4,7 +4,7 @@ import { it } from '@effect/vitest';
 import { Context, Deferred, Effect, Fiber, Layer, Schema } from 'effect';
 import type { Authority, EngineActor, Sql } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { compileAuthority } from '../src/engine/access/authority.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Approvals, Writes } from '../src/engine/services.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
@@ -41,7 +41,7 @@ const manifest: EngineManifest = {
 			grants: { documents: { outputs: { default: true }, update: true } }
 		}
 	},
-	teams: { requesters: ['requester'], reviewers: ['reviewer'] }
+	teams: { requesters: { policies: ['requester'] }, reviewers: { policies: ['reviewer'] } }
 };
 const guest = program(`export default { policy: { requester: { grants: { documents: {
 	update: { verdict: function* (changes, ctx) { return ctx.approve({ steps: [{ name: 'Review', teams: ['reviewers'] }] }); } }
@@ -98,13 +98,13 @@ it.live('rejection conflicts when the record or approval changes before the deci
 				params: [requesterId, reviewerId]
 			});
 			const authority = (id: string, team: string, policy: string) =>
-				compileAuthority(
+				compile_authority(
 					manifest,
 					{ actor: member(id, team), policies: [policy], admin: false },
 					id
 				);
-			const requester = authority(requesterId, 'requesters', 'requester'),
-				reviewer = authority(reviewerId, 'reviewers', 'reviewer');
+			const requester = yield* authority(requesterId, 'requesters', 'requester'),
+				reviewer = yield* authority(reviewerId, 'reviewers', 'reviewer');
 			const update = (title: string, revision: number, as: Authority) => {
 				const key = randomUUID(),
 					now = t.clock.now();
@@ -129,7 +129,7 @@ it.live('rejection conflicts when the record or approval changes before the deci
 			assert.deepEqual(yield* row(), [{ title: 'A', revision: 1 }]);
 			const provisional = yield* update('B', 1, requester);
 			assert.ok(provisional.outcome.kind === 'pending_approval');
-			const requestId = provisional.outcome.requestId;
+			const request_id = provisional.outcome.request_id;
 			assert.deepEqual(yield* row(), [{ title: 'B', revision: 2 }]);
 			assert.equal((yield* update('A', 2, reviewer)).outcome.kind, 'committed');
 			assert.deepEqual(yield* row(), [{ title: 'A', revision: 3 }]);
@@ -138,14 +138,14 @@ it.live('rejection conflicts when the record or approval changes before the deci
 					Schema.Struct({ state: Schema.String, step: Schema.Number, moves: Schema.Number }),
 					{
 						text: 'SELECT state, step, jsonb_array_length(log)::int AS moves FROM bolt_approvals WHERE id = $1::uuid',
-						params: [requestId]
+						params: [request_id]
 					}
 				);
 			const pending = yield* request();
 			assert.deepEqual(pending, [{ state: 'Pending', step: 0, moves: 1 }]);
 			const reject = () =>
 				approvals.decide({
-					requestId,
+					request_id,
 					decision: 'reject',
 					reason: 'Restore the checkpoint',
 					authority: reviewer,
@@ -161,17 +161,26 @@ it.live('rejection conflicts when the record or approval changes before the deci
 			assert.equal((yield* Fiber.join(rejecting)).kind, 'conflict');
 			assert.deepEqual(yield* request(), pending);
 			assert.deepEqual(yield* row(), [{ title: 'C', revision: 4 }]);
-			assert.deepEqual(yield* reject(), { kind: 'decided', requestId, status: 'Rejected' });
+			assert.deepEqual(yield* reject(), { kind: 'decided', request_id, status: 'Rejected' });
 			assert.deepEqual(yield* row(), [{ title: 'A', revision: 5 }]);
 			assert.deepEqual(yield* request(), [{ state: 'Rejected', step: 0, moves: 2 }]);
 
 			const submitted = (yield* update('D', 5, requester)).outcome;
 			assert.ok(submitted.kind === 'pending_approval');
 			const decision = {
-				requestId: submitted.requestId,
+				request_id: submitted.request_id,
 				authority: reviewer,
 				now: t.clock.now()
 			};
+			const history = () =>
+				t.db.rows(
+					Schema.Struct({ revision: Schema.Number, op: Schema.String, cause: Schema.String }),
+					{
+						text: 'SELECT revision, op, cause FROM bolt_history WHERE collection = $1 AND record = $2::uuid ORDER BY revision',
+						params: ['documents', recordId]
+					}
+				);
+			const beforeRace = yield* history();
 			paused = yield* Deferred.make<void>();
 			resume = yield* Deferred.make<void>();
 			armed = true;
@@ -185,12 +194,32 @@ it.live('rejection conflicts when the record or approval changes before the deci
 			yield* Deferred.await(paused);
 			assert.deepEqual(yield* approvals.decide({ ...decision, decision: 'approve' }), {
 				kind: 'decided',
-				requestId: submitted.requestId,
+				request_id: submitted.request_id,
 				status: 'Approved'
 			});
 			yield* Deferred.succeed(resume, undefined);
 			assert.equal((yield* Fiber.join(rejected)).kind, 'conflict');
 			assert.deepEqual(yield* row(), [{ title: 'D', revision: 6 }]);
+			assert.deepEqual(yield* history(), beforeRace);
+			assert.deepEqual(
+				yield* t.db.rows(
+					Schema.Struct({
+						state: Schema.String,
+						status: Schema.String,
+						moves: Schema.Number,
+						last_move: Schema.String,
+						rejections: Schema.Number
+					}),
+					{
+						text: `SELECT a.state, p.status, jsonb_array_length(a.log)::int AS moves,
+							a.log -> -1 ->> 'move' AS last_move,
+							(SELECT count(*)::int FROM jsonb_array_elements(a.log) entry WHERE entry->>'move' = 'reject') AS rejections
+							FROM bolt_approvals a JOIN approval_request p ON p.id = a.id WHERE a.id = $1::uuid`,
+						params: [submitted.request_id]
+					}
+				),
+				[{ state: 'Approved', status: 'APPROVED', moves: 2, last_move: 'approve', rejections: 0 }]
+			);
 		})
 	)
 );

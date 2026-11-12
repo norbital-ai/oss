@@ -5,13 +5,13 @@ import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { Live } from '../../src/engine/services.ts';
 import type { Authority } from '../../src/engine/contracts.ts';
 import { ActRefused, ReadFailed } from '../../src/decl/errors.ts';
-import { filesRoutes } from '../../src/protocol/files.ts';
+import { files_routes } from '../../src/protocol/files.ts';
 import { ImagePreviewsLive } from '../../src/protocol/image-previews.ts';
 import {
 	AgentCallTable,
 	AgentTurns,
-	boltRoutes,
-	dispatchAct,
+	bolt_routes,
+	dispatch_act,
 	RateLimits,
 	SessionAuthority
 } from '../../src/protocol/http.ts';
@@ -34,7 +34,7 @@ export const json = (response: Response): Effect.Effect<unknown, KitInvalid> =>
 		catch: (error) => new KitInvalid({ message: String(error) })
 	});
 
-export const routeFixture = (workspace: Context.Context<TestWorkspace | WorkspaceServices>) =>
+export const route_fixture = (workspace: Context.Context<TestWorkspace | WorkspaceServices>) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
 			Layer.mergeAll(
@@ -53,12 +53,12 @@ export const routeFixture = (workspace: Context.Context<TestWorkspace | Workspac
 				const incoming = HttpServerRequest.fromWeb(request).modify({
 					remoteAddress: Option.some(options.address ?? '203.0.113.7')
 				});
-				const result = yield* filesRoutes(incoming).pipe(
+				const result = yield* files_routes(incoming).pipe(
 					Effect.flatMap((file) =>
-						Option.isSome(file) ? Effect.succeed(file) : boltRoutes(incoming)
+						Option.isSome(file) ? Effect.succeed(file) : bolt_routes(incoming)
 					),
 					Effect.provideService(SessionAuthority, {
-						of: () => Effect.succeed(Option.fromNullishOr(authority))
+						of: () => Effect.succeed(Option.fromNullOr(authority))
 					}),
 					Effect.provide(context)
 				);
@@ -66,8 +66,8 @@ export const routeFixture = (workspace: Context.Context<TestWorkspace | Workspac
 					? HttpServerResponse.toWeb(result.value, { context })
 					: new Response(null, { status: 404 });
 			});
-		const dispatch = (...args: Parameters<typeof dispatchAct>) =>
-			dispatchAct(...args).pipe(Effect.provide(context));
+		const dispatch = (...args: Parameters<typeof dispatch_act>) =>
+			dispatch_act(...args).pipe(Effect.provide(context));
 		return {
 			handle,
 			dispatch,
@@ -77,9 +77,9 @@ export const routeFixture = (workspace: Context.Context<TestWorkspace | Workspac
 			)
 		};
 	});
-export type FixtureRoute = Effect.Success<ReturnType<typeof routeFixture>>;
+export type FixtureRoute = Effect.Success<ReturnType<typeof route_fixture>>;
 
-export const actReply = (
+export const act_reply = (
 	route: FixtureRoute,
 	authority: Authority,
 	body: ActBody,
@@ -112,7 +112,7 @@ export const actReply = (
 		}
 		return yield* Schema.decodeUnknownEffect(ActReply)(raw);
 	});
-export const qReply = (route: FixtureRoute, authority: Authority, body: QBody) =>
+export const q_reply = (route: FixtureRoute, authority: Authority, body: QBody) =>
 	Effect.gen(function* () {
 		const response = yield* route.handle(
 			authority,

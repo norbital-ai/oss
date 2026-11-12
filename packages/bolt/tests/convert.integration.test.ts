@@ -8,17 +8,17 @@ import { afterAll, beforeAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { Convert, Files } from '../src/engine/ports.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { actReply, routeFixture } from './support/route-fixture.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { act_reply, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { service } from '../../../services/convert/src/server.ts';
 import { ConversionFailed } from '../../../services/convert/src/convert.ts';
 import type { Json } from '../src/decl/values.ts';
-import { documentConverter } from '../src/engine/convert.ts';
+import { document_converter } from '../src/engine/convert.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en', convert: { to: ['pdf', 'docx'] } },
 		models: {
 			docs: {
@@ -36,10 +36,9 @@ const manifest = Result.getOrThrow(
 		},
 		integrations: {},
 		teams: {},
-		connections: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} },
 		policies: {
 			ops: {
@@ -52,7 +51,8 @@ const manifest = Result.getOrThrow(
 			make: {
 				description: 'Converts a document',
 				policies: ['ops'],
-				input: { options: { kind: 'json' } }
+				input: { options: { kind: 'json' } },
+				output: { kind: 'json' }
 			}
 		}
 	})
@@ -65,6 +65,10 @@ export default { automation: { make: { body: function* ({ options }, ctx) {
 		: { kind: error.kind, message: error.message })));
 } } } };`);
 
+const required = <A>(value: A | null | undefined): A => {
+	if (value === null || value === undefined) throw new Error('Missing conversion fixture value');
+	return value;
+};
 type Call = Parameters<Convert['Service']['convert']>;
 const fake = (targets: Convert['Service']['targets'], calls: Call[] = []): Convert['Service'] => ({
 	targets,
@@ -95,8 +99,8 @@ const workspace = (convert?: Convert['Service'], reference?: Uint8Array) =>
 		);
 		const t = Context.get(context, TestWorkspace),
 			files = Context.get(context, Files);
-		const admin = t.as(t.admin),
-			route = yield* routeFixture(context);
+		const admin = yield* t.as(t.admin),
+			route = yield* route_fixture(context);
 		let ref: Json | undefined;
 		if (reference !== undefined) {
 			const up = yield* admin.upload('docs.file', {
@@ -106,17 +110,16 @@ const workspace = (convert?: Convert['Service'], reference?: Uint8Array) =>
 			});
 			if (up.kind !== 'committed') throw new Error('upload failed');
 			ref = { id: up.output.id, name: up.output.name, mime: up.output.mime };
-			yield* actReply(route, admin.authority, {
-				callable: 'docs.create',
-				input: [{ title: 'Letterhead', file: ref }],
-				issuedAt: t.clock.now()
+			yield* act_reply(route, admin.authority, {
+				acts: { 'docs.create': [{ title: 'Letterhead', file: ref }] },
+				issued_at: t.clock.now()
 			});
 		}
 		const make = (options: Readonly<Record<string, Json>>, withReference = false) =>
 			Effect.gen(function* () {
 				const id = uuidv7(Date.parse(t.clock.now()));
-				yield* actReply(route, t.as(t.member(['ops'])).authority, {
-					callable: 'start',
+				yield* act_reply(route, (yield* t.as(t.member(['ops']))).authority, {
+					callable: 'run',
 					input: {
 						automation: 'make',
 						input: {
@@ -127,12 +130,12 @@ const workspace = (convert?: Convert['Service'], reference?: Uint8Array) =>
 						},
 						id
 					},
-					issuedAt: t.clock.now()
+					issued_at: t.clock.now()
 				});
-				yield* t.runDue();
-				const [run] = (yield* t.db.read([
+				yield* t.run_due();
+				const [run] = required((yield* t.db.read([
 					{ text: `SELECT state, output, error FROM sys_run WHERE id = $1`, params: [id] }
-				]))[0]!.rows;
+				]))[0]).rows;
 				if (run === undefined) throw new Error('make did not produce a run');
 				return { run, output: yield* Schema.decodeUnknownEffect(Output)(run['output']) };
 			});
@@ -154,22 +157,22 @@ describe('ctx.convert.document', () => {
 					const { run, output } = yield* make({ to: 'docx' }, true);
 					expect(run).toMatchObject({ state: 'succeeded', error: null });
 					expect(calls).toHaveLength(1);
-					const [src, to, opts] = calls[0]!;
+					const [src, to, opts] = required(calls[0]);
 					expect(src).toEqual({ markdown: '# Report\n\n45 µΩ at 31 °C' });
 					expect(to).toBe('docx');
-					expect([...opts.reference!]).toEqual([...letterhead]);
+					expect([...required(opts.reference)]).toEqual([...letterhead]);
 					expect(output).toMatchObject({
 						name: 'out',
 						mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 					});
-					const [row] = (yield* t.db.read([
-						{ text: `SELECT key, field FROM sys_file WHERE id = $1`, params: [output.id!] }
-					]))[0]!.rows;
-					expect(row!['field']).toBe('make');
-					const stored = yield* files.get(String(row!['key']), 1024);
+					const [row] = required((yield* t.db.read([
+						{ text: `SELECT key, field FROM sys_file WHERE id = $1`, params: [required(output.id)] }
+					]))[0]).rows;
+					expect(required(row)['field']).toBe('make');
+					const stored = yield* files.get(String(required(row)['key']), 1024);
 					expect(new TextDecoder().decode(stored)).toBe('converted to docx');
 					yield* make({ to: 'pdf', page: 'Letter', landscape: true });
-					expect(calls[1]![2]).toEqual({ page: 'Letter', landscape: true });
+					expect(required(calls[1])[2]).toEqual({ page: 'Letter', landscape: true });
 					expect((yield* make({ to: 'pptx' })).output).toMatchObject({
 						kind: 'invalid',
 						message: expect.stringContaining("'pptx' is not declared")
@@ -212,7 +215,7 @@ describe('ctx.convert.document', () => {
 
 // The provider against the service itself (oss/services/convert), in process with a stand-in converter, so the wire shapes
 // are the service's own.
-describe('documentConverter (Norbital Convert)', () => {
+describe('document_converter (Norbital Convert)', () => {
 	const seen: unknown[] = [];
 	let url = '',
 		stop = async () => {};
@@ -240,7 +243,7 @@ describe('documentConverter (Norbital Convert)', () => {
 	it.live('serves every target, submitting the job and fetching its bytes once it settles', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const port = documentConverter({ url, key: 'k' });
+				const port = document_converter({ url, key: 'k' });
 				expect(port.targets).toEqual(['pdf', 'docx', 'pptx', 'odt', 'epub', 'html']);
 				expect(
 					new TextDecoder().decode(
@@ -253,7 +256,7 @@ describe('documentConverter (Norbital Convert)', () => {
 					.convert({ html: '<p>x</p>' }, 'docx', { reference: new Uint8Array([1, 2, 3]) })
 					.pipe(Effect.timeout('10 seconds'));
 				yield* port
-					.convert({ layoutHtml: '<style>@page{margin:0}</style><p>x</p>' }, 'pdf', {})
+					.convert({ layout_html: '<style>@page{margin:0}</style><p>x</p>' }, 'pdf', {})
 					.pipe(Effect.timeout('10 seconds'));
 				expect(seen).toEqual([
 					{
@@ -305,7 +308,7 @@ describe('documentConverter (Norbital Convert)', () => {
 							{ status: 200 }
 						);
 					};
-					const bytes = yield* documentConverter({ url, key: 'k', fetch: cutting })
+					const bytes = yield* document_converter({ url, key: 'k', fetch: cutting })
 						.convert({ markdown: '# R' }, 'epub', {})
 						.pipe(Effect.timeout('10 seconds'));
 					expect(cut).toBe(1);
@@ -319,14 +322,14 @@ describe('documentConverter (Norbital Convert)', () => {
 			Effect.gen(function* () {
 				expect(
 					(yield* Effect.flip(
-						documentConverter({ url, key: 'k' })
+						document_converter({ url, key: 'k' })
 							.convert({ markdown: 'fail' }, 'odt', {})
 							.pipe(Effect.timeout('10 seconds'))
 					)).message
 				).toContain('pandoc: unreadable input');
 				expect(
 					(yield* Effect.flip(
-						documentConverter({ url, key: 'wrong' })
+						document_converter({ url, key: 'wrong' })
 							.convert({ markdown: 'x' }, 'odt', {})
 							.pipe(Effect.timeout('10 seconds'))
 					)).message

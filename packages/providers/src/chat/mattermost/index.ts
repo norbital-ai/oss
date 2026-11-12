@@ -100,11 +100,11 @@ export const mattermost: ChatPlatform = {
 		const parse = (post: Post, group: boolean, name: string | null = null): Incoming => ({
 			id: post.id,
 			thread: threadOf(post),
-			sentAt: new Date(post.create_at).toISOString(),
+			sent_at: new Date(post.create_at).toISOString(),
 			from: { handle: post.user_id, name },
 			text: post.message,
 			group,
-			replyTo: post.root_id || null,
+			reply_to: post.root_id || null,
 			...(post.edit_at > 0 ? { version: new Date(post.edit_at).toISOString() } : {}),
 			files: (post.metadata?.files ?? []).map((file) => ({
 				name: file.name,
@@ -135,7 +135,7 @@ export const mattermost: ChatPlatform = {
 				{
 					...message,
 					mentioned: data.mentions?.includes(me.id) === true || named.test(post.message),
-					repliedTo: root?.user_id === me.id,
+					replied_to: root?.user_id === me.id,
 					...(data.channel_display_name ? { title: data.channel_display_name } : {})
 				}
 			]);

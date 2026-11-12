@@ -1,4 +1,4 @@
-// SMS and MMS through Twilio. A delivery carries no time of its own, so `sentAt` is its arrival. A thread is the other
+// SMS and MMS through Twilio. A delivery carries no time of its own, so `sent_at` is its arrival. A thread is the other
 // party's number, and only their messages come back: what the account sent is not an inbound message.
 import { Schema } from 'effect';
 import { json, request as requestHttp } from '../http.ts';
@@ -25,9 +25,9 @@ const message = (
 	id: string,
 	from: string,
 	text: string,
-	sentAt: string,
+	sent_at: string,
 	files: readonly IncomingFile[] = []
-): Incoming => ({ id, thread: from, sentAt, from: { handle: from, name: null }, text, files });
+): Incoming => ({ id, thread: from, sent_at, from: { handle: from, name: null }, text, files });
 
 export const twilioSms: ChatPlatform = {
 	id: 'twilio-sms',
@@ -79,7 +79,7 @@ export const twilioSms: ChatPlatform = {
 					request.headers.get('x-twilio-signature'),
 					twilioSignature(
 						authToken,
-						host.webhookUrl + new URL(request.url).search,
+						host.webhook_url + new URL(request.url).search,
 						Object.fromEntries(params)
 					)
 				);

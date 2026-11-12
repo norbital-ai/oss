@@ -9,7 +9,7 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 	type Said = EffectType.Effect<void, { readonly message: string }>;
 	/** What sends a code to a number and proves it. */
 	export type CodeSession = {
-		sendCode(address: string): Said;
+		send_code(address: string): Said;
 		verify(address: string, code: string): Said;
 	};
 	/** The props of `PhoneVerify`. */
@@ -26,13 +26,13 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 	import { attach, fork } from '../effect/index.js';
 	import { Cluster, Stack } from '../layout/index.js';
 	import { Button, Label, Spinner } from '../primitives/index.js';
-	import { Popover, PopoverContent } from '../primitives/popover/index.js';
-	import { uiText } from '../primitives/utils.js';
+	import * as Popover from '../primitives/popover/index.js';
+	import { ui_text } from '../primitives/utils.js';
 	import PhoneInput from '../kinds/phone-input.svelte';
 	import PinInput from './pin-input.svelte';
 
 	let { session, label, id = 'phone-verify' }: PhoneVerifyProps = $props();
-	const t = uiText();
+	const t = ui_text();
 
 	let phone = $state<string | null>(null);
 	let code = $state('');
@@ -81,7 +81,7 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 	};
 	function send() {
 		if (phone !== null)
-			start(session.sendCode(phone), () => {
+			start(session.send_code(phone), () => {
 				sent = open = true;
 				code = '';
 			});
@@ -109,7 +109,7 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 					value={phone}
 					disabled={busy}
 					invalid={error !== null && !open}
-					onChange={(v) => {
+					on_change={(v) => {
 						phone = typeof v === 'string' ? v : null;
 						sent = open = false;
 						code = '';
@@ -117,15 +117,15 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 				/>
 			</div>
 			<Button disabled={phone === null || busy} onclick={() => (sent ? (open = true) : send())}>
-				{#if busy && !open}<Spinner class="h-4 w-4" />{/if}{sent ? t('enterCode') : t('sendCode')}
+				{#if busy && !open}<Spinner class="h-4 w-4" />{/if}{sent ? t('enterCode') : t('send_code')}
 			</Button>
 		</Cluster>
 	</div>
 	{#if error !== null && !open}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
 </Stack>
 
-<Popover bind:open>
-	<PopoverContent customAnchor={row} side="bottom" align="start" sameWidth sideOffset={8}>
+<Popover.Root bind:open>
+	<Popover.Content custom_anchor={row} side="bottom" align="start" same_width side_offset={8}>
 		<Stack gap="md">
 			<Stack gap="xs">
 				<p class="text-sm font-semibold">{t('enterCode')}</p>
@@ -135,7 +135,7 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 				aria-label={t('code')}
 				bind:value={code}
 				aria-invalid={error !== null}
-				onComplete={verify}
+				on_complete={verify}
 			/>
 			{#if error !== null}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
 			<Button class="w-full" disabled={code.length !== 6 || busy} onclick={verify}>
@@ -163,5 +163,5 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 				</button>
 			</Cluster>
 		</Stack>
-	</PopoverContent>
-</Popover>
+	</Popover.Content>
+</Popover.Root>

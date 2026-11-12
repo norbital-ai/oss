@@ -20,18 +20,18 @@ import {
 	LiveReply,
 	QReply,
 	PATHS,
-	renderMode,
+	render_mode,
 	decodePublicHydration,
 	PUBLIC_HYDRATION_ID,
-	mountShell,
+	mount_shell,
 	type ShellMountConfig,
-	audienceOf,
+	audience_of,
 	nav,
 	surfaces,
 	type NavNode
 } from '@norbital-ai/bolt/tooling/browser';
 import { KitInvalid, type KitFailure, TestWorkspace } from './effect.ts';
-export { mountShell, type ShellMountConfig };
+export { mount_shell, type ShellMountConfig };
 
 export type SweepActor =
 	| { team: string; external?: boolean }
@@ -77,7 +77,7 @@ export class SweepFailed extends Schema.TaggedError<SweepFailed>()('SweepFailed'
 	report: Report
 }) {}
 const ORIGIN = 'http://localhost';
-const BUDGET = new Set(['subscriptionTooLarge', 'tooManySubscriptions', 'cellBudget']);
+const BUDGET = new Set(['subscription_too_large', 'too_many_subscriptions', 'cell_budget']);
 const refusal = (code: string) =>
 	BUDGET.has(code) ? ('budget' as const) : code === 'invalid' ? ('read' as const) : null;
 const flat = (nodes: readonly NavNode[]): string[] =>
@@ -175,7 +175,7 @@ const mountVisit = (
 				),
 				{ signal: init.signal ?? (input instanceof Request ? input.signal : undefined) }
 			);
-		const openStream = (url: string): EventSourceLike => {
+		const open_stream = (url: string): EventSourceLike => {
 			let fiber: Fiber.Fiber<void, never> | undefined,
 				closed = false;
 			const source: EventSourceLike = {
@@ -257,7 +257,7 @@ const mountVisit = (
 		)
 			window.happyDOM.setURL(`${ORIGIN}${path}`);
 		else history.replaceState(null, '', path);
-		const selected = renderMode(t.manifest, path);
+		const selected = render_mode(t.manifest, path);
 		if (selected !== null) {
 			const response = yield* Effect.tryPromise({
 				try: () => fetch(`${ORIGIN}${path}`),
@@ -325,11 +325,11 @@ const mountVisit = (
 		yield* Effect.acquireRelease(
 			Effect.try({
 				try: () =>
-					mountShell(target, {
+					mount_shell(target, {
 						manifest: t.manifest,
 						pages: options.pages ?? {},
 						fetch,
-						openStream,
+						open_stream,
 						...(options.messages === undefined ? {} : { messages: options.messages }),
 						...(options.representations === undefined
 							? {}
@@ -371,12 +371,12 @@ export const sweep = (
 			([name]) => options.apps === undefined || options.apps.includes(name)
 		);
 		const external = apps.some(
-			([, app]) => audienceOf(app) === 'external' || audienceOf(app) === 'all'
+			([, app]) => audience_of(app) === 'external' || audience_of(app) === 'all'
 		);
 		const actors: readonly SweepActor[] = options.as ?? [
 			...Object.keys(teams).map((team) => ({ team })),
 			...(external ? Object.keys(teams).map((team) => ({ team, external: true })) : []),
-			...apps.filter(([, app]) => audienceOf(app) === 'public').map(([visitor]) => ({ visitor }))
+			...apps.filter(([, app]) => audience_of(app) === 'public').map(([visitor]) => ({ visitor }))
 		];
 		const report: SweepReport = { visited: [], findings: [] };
 		for (const actor of actors) {
@@ -384,7 +384,7 @@ export const sweep = (
 			let who: VisitActor, auth: Authority;
 			if ('visitor' in actor) {
 				who = actor;
-				auth = t.visitor(actor.visitor).authority;
+				auth = (yield* t.visitor(actor.visitor)).authority;
 			} else {
 				const admin = 'admin' in actor;
 				const team = admin
@@ -409,7 +409,7 @@ export const sweep = (
 					external: !admin && actor.external === true,
 					teams: team === null ? [] : [team]
 				});
-				auth = t.as(who).authority;
+				auth = (yield* t.as(who)).authority;
 			}
 			const available = surfaces(manifest, auth.actor, auth.admin);
 			const paths = [
@@ -422,7 +422,7 @@ export const sweep = (
 				...(available.settings ? ['/settings/organization'] : [])
 			];
 			// Record drawers belong to the internal shell; a public document has no record drawer to exercise.
-			const recordBase = paths.find((path) => renderMode(manifest, path) === null);
+			const recordBase = paths.find((path) => render_mode(manifest, path) === null);
 			for (const model of 'visitor' in actor ? [] : Object.keys(options.representations ?? {})) {
 				if (who === null || 'visitor' in who || recordBase === undefined) continue;
 				const cookie = yield* t.session(who.id);
@@ -473,7 +473,7 @@ export const sweep = (
 				report.visited.push({
 					who: name,
 					path,
-					mode: renderMode(manifest, path) === null ? 'spa' : 'ssr'
+					mode: render_mode(manifest, path) === null ? 'spa' : 'ssr'
 				});
 			}
 		}

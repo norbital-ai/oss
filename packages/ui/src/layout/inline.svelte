@@ -12,10 +12,10 @@ A single non-wrapping row of children with a gap and alignment: a toolbar, a lab
 		gap?: LayoutGap;
 		align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch';
 		justify?: 'start' | 'center' | 'end' | 'between';
-		/** `content` (default): its own size, never squeezed; `fill`: the space left in its parent, down to `minHeight`. */
+		/** `content` (default): its own size, never squeezed; `fill`: the space left in its parent, down to `min_height`. */
 		size?: LayoutSize;
 		/** A `fill` box's floor (a CSS length; default 0). */
-		minHeight?: string;
+		min_height?: string;
 		/** A hairline between children — a segmented strip. Pair with `gap="none"`. */
 		divided?: boolean;
 		children: Snippet;
@@ -24,7 +24,7 @@ A single non-wrapping row of children with a gap and alignment: a toolbar, a lab
 
 <script lang="ts">
 	import { cn } from '../primitives/utils.js';
-	import { GAP_CLASSES, SIZE_CLASSES } from './layout.shared.js';
+	import { ALIGN_CLASSES, JUSTIFY_CLASSES, GAP_CLASSES, SIZE_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',
@@ -33,26 +33,13 @@ A single non-wrapping row of children with a gap and alignment: a toolbar, a lab
 		align = 'center',
 		justify = 'start',
 		size = 'content',
-		minHeight,
+		min_height,
 		divided = false,
 		class: className,
 		children,
 		...restProps
 	}: InlineProps = $props();
 
-	const alignClasses = {
-		start: 'items-start',
-		center: 'items-center',
-		end: 'items-end',
-		baseline: 'items-baseline',
-		stretch: 'items-stretch'
-	} as const;
-	const justifyClasses = {
-		start: 'justify-start',
-		center: 'justify-center',
-		end: 'justify-end',
-		between: 'justify-between'
-	} as const;
 </script>
 
 <svelte:element
@@ -61,14 +48,14 @@ A single non-wrapping row of children with a gap and alignment: a toolbar, a lab
 	class={cn(
 		'flex min-w-0 flex-row flex-nowrap',
 		GAP_CLASSES[gap],
-		alignClasses[align],
-		justifyClasses[justify],
+		ALIGN_CLASSES[align],
+		JUSTIFY_CLASSES[justify],
 		SIZE_CLASSES[size],
 		divided && 'divide-x divide-border',
 		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
-	style:min-height={size === 'fill' ? minHeight : undefined}
+	style:min-height={size === 'fill' ? min_height : undefined}
 	data-layout="inline"
 	{...restProps}
 >

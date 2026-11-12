@@ -1,11 +1,26 @@
-# Identity automation events
+# Identity lifecycle and automations
 
-Automations can subscribe to `created`, `updated`, and `deleted` events on readable system models, including `sys_user` and `sys_invitation`. Identity administration queues matching runs in the same database statement as its row changes, and that commit wakes the run queue for them.
+Native identity administration stores invitations, users, source-team affiliation and their history.
+Its row changes, captures and history commit together through the identity port. These writes do
+not subscribe or start tenant automations. An automation's `on` contains cron triggers only.
 
-An invitation creates `sys_invitation` immediately. A new `sys_user` is created when the invitee proves their address and accepts. Subscribe to invitations to provision a profile before acceptance, and to users to link the accepted identity. A policy can grant read access to invitations; identity model writes remain restricted to administrator verbs. Ledgers and API keys cannot be granted to template policies.
+An invitation creates `sys_invitation` immediately. Acceptance follows address proof and creates
+or links `sys_user`, applying the invitation's source team. Policies may grant scoped identity
+outputs for reads; identity writes remain native administrator operations. Ledgers and API keys
+cannot be granted to template policies.
 
-The HR template ships `invitation_profile`: staff invitations create or reuse `employment_profile`; external invitations are excluded. Profiles keep an optional invitation reference and a unique user reference. Acceptance links the same profile. Retries and repeated invitations reuse it; ambiguous existing profiles fail visibly rather than assigning an identity to the wrong person.
+Daily retention removes unreferenced invitations 90 days after their expiry, acceptance or
+revocation, whichever is latest. Expired invitations within that window can still be resent.
 
-The command center's People uses the `sys_user` model table. Its Invite dialog has two tabs: One person (an email or a mobile number, at least one) and Bulk import, a CSV dropped or chosen with columns `email`, `phone`, `team` (name or id) and `external`, up to 1,000 rows; the toolbar's Actions menu opens the same import. Bulk invitations validate the complete batch before saving. All rows and their automation events commit together. Delivery attempts every invitation; failed delivery IDs are returned for resending without recreating the invitations. Bulk API inputs accept the same source team handle, external flag and party reference as individual invitations.
+When a workspace needs a business profile for an invitation or accepted member, use an explicit
+automation or cron reconciliation under declared policies. Read the required identity output and
+write the business model through `ctx.act`; unique matching constraints and a stable act key make
+reconciliation repeatable. Refuse ambiguous existing profiles. This is authored business work,
+not an implicit identity event hook.
 
-Merged automation runs may contain several invitation batches. The HR automation reads and writes chunks of 500 to stay within predicate limits.
+The command center's People uses the `sys_user` model table. Its Invite dialog accepts one person
+or a bulk CSV with `email`, `phone`, `team` and `external`, up to 1,000 rows. Bulk invitations
+validate the complete batch before saving, and all invitation rows commit together. Delivery
+then attempts every invitation; failed IDs are returned for resending without recreating rows.
+Bulk API inputs accept the same source team handle, external flag and party reference as
+individual invitations.

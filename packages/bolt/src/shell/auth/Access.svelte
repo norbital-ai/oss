@@ -13,32 +13,32 @@
 		t,
 		environment,
 		locale,
-		onLocale,
+		on_locale,
 		dark,
-		onTheme,
+		on_theme,
 		apex,
 		children
 	}: {
 		t: (key: string) => string;
 		environment?: string | undefined;
 		locale: string;
-		onLocale: (locale: string) => void;
+		on_locale: (locale: string) => void;
 		dark: boolean;
-		onTheme: () => void;
+		on_theme: () => void;
 		apex?: string | undefined;
 		children: Snippet;
 	} = $props();
 
 	const base = $derived(LOCALES.find((l) => locale.startsWith(l)) ?? 'en');
-	const nextLocale = $derived(LOCALES[(LOCALES.indexOf(base) + 1) % LOCALES.length]!);
+	const nextLocale = $derived(LOCALES.at(LOCALES.indexOf(base) + 1) ?? LOCALES[0]);
 </script>
 
 <AccessFrame
 	{environment}
 	language={LANGUAGE[nextLocale]}
-	onLanguage={() => onLocale(nextLocale)}
+	on_language={() => on_locale(nextLocale)}
 	{dark}
-	{onTheme}
+	{on_theme}
 	labels={{
 		switchLanguage: t('Switch language'),
 		lightMode: t('Switch to light mode'),

@@ -60,7 +60,8 @@ type ValuesOf<R extends Roots> = { readonly [N in keyof R]: In<R[N]> };
 
 /** The type a compiled formula must produce. */
 export type FormulaResult = 'bool' | 'decimal' | 'money' | 'int' | 'date' | 'text' | 'json';
-type Out<T extends FormulaResult, M extends Mode> = T extends 'json'
+/** The value a compiled formula produces for its result kind and numeric mode. */
+export type Out<T extends FormulaResult, M extends Mode> = T extends 'json'
 	? Json
 	: T extends 'bool'
 		? boolean
@@ -197,7 +198,7 @@ export function context<
 	return ctx;
 }
 
-function chain(n: ASTNode): string[] | null {
+function chain(n: ASTNode): [string, ...string[]] | null {
 	if (n.op === 'id') return [n.args];
 	if (n.op !== '.' && n.op !== '.?') return null;
 	const c = chain(n.args[0]);
@@ -208,10 +209,11 @@ function unknownPath(n: ASTNode, roots: Roots): string | null {
 	const c = chain(n);
 	if (c !== null) {
 		if (c[0] === NULL_ROOT) return null;
-		let k: Kind | undefined = roots[c[0]!];
-		for (let i = 1; i < c.length && k?.kind === 'object'; i++) {
-			k = k.fields[c[i]!];
-			if (k === undefined) return c.slice(0, i + 1).join('.');
+		let k: Kind | undefined = roots[c[0]];
+		for (const [i, part] of c.slice(1).entries()) {
+			if (k?.kind !== 'object') break;
+			k = k.fields[part];
+			if (k === undefined) return c.slice(0, i + 2).join('.');
 		}
 		return null;
 	}
@@ -236,8 +238,8 @@ const ACCEPTS: { readonly [T in FormulaResult]: { readonly [M in Mode]: readonly
 };
 /** A double (a CEL literal like `0.17`) as the decimal it prints as. */
 const fromDouble = (x: number) =>
-	/e/i.test(String(x)) ? Decimal.fromNumber(x, 15) : Decimal.of(String(x));
-const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0]!;
+	/e/i.test(String(x)) ? Decimal.from_number(x, 15) : Decimal.of(String(x));
+const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n', 1).join('');
 /** Replace every null literal with the hidden dyn root so optional branches keep one checkable type. */
 function rewriteNull(node: unknown, nullNode: ASTNode): unknown {
 	if (Array.isArray(node)) return node.map((child) => rewriteNull(child, nullNode));
@@ -310,7 +312,7 @@ function input(k: Kind, v: unknown, mode: Mode): unknown {
 	}
 	if (!NUMERIC.has(k.kind)) return v;
 	if (mode === 'float' || k.kind === 'number')
-		return v instanceof Decimal ? v.toNumber() : Number(v);
+		return v instanceof Decimal ? v.to_number() : Number(v);
 	return EXACT.has(k.kind) ? Decimal.of(v as string) : BigInt(v as number);
 }
 

@@ -408,7 +408,7 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 							Effect.mapError(() => answerFailure('a Discord message needs `to` and `text`', 400))
 						);
 						// a nonce holds 25 characters, a message id more. Discord remembers it "in the past few minutes",
-						// short of the engine's 10-minute lease, so this narrows duplicates and is no `idempotentSends`
+						// short of the engine's 10-minute lease, so this narrows duplicates and is no `idempotent_sends`
 						const once =
 							m.id === undefined
 								? {}
@@ -431,7 +431,7 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 							body = form;
 						}
 						return {
-							providerId: (yield* rest(
+							provider_id: (yield* rest(
 								Sent,
 								'POST',
 								`/channels/${encodeURIComponent(m.to)}/messages`,
@@ -539,7 +539,7 @@ export function discordMessage(d: Obj, botId: string, now: number): Obj | null {
 	return {
 		id,
 		thread,
-		sentAt: str(d['timestamp']) ?? new Date(now).toISOString(),
+		sent_at: str(d['timestamp']) ?? new Date(now).toISOString(),
 		text: typeof d['content'] === 'string' ? d['content'] : '',
 		group,
 		mentions,
@@ -547,7 +547,7 @@ export function discordMessage(d: Obj, botId: string, now: number): Obj | null {
 			handle: String(author['id']),
 			name: str(author['global_name']) ?? str(author['username'])
 		},
-		replyTo: Predicate.isObject(d['message_reference'])
+		reply_to: Predicate.isObject(d['message_reference'])
 			? str(d['message_reference']['message_id'])
 			: null,
 		invocation: !group

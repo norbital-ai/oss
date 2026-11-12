@@ -4,7 +4,7 @@
 	// the unit's first day (`YYYY-MM-DD`, weeks from Monday).
 	import Icon from '@iconify/svelte';
 	import * as Popover from '../primitives/popover/index.js';
-	import { cn, uiText } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
 	import { useKinds } from './context.js';
 	import { pageStep, unitEnd, unitPage, unitStart, type Unit } from './precision.js';
@@ -12,7 +12,7 @@
 	let {
 		unit,
 		value,
-		onChange,
+		on_change,
 		id,
 		disabled = false,
 		invalid = false,
@@ -20,11 +20,11 @@
 		max,
 		inline = false,
 		end,
-		pickingEnd = false
+		picking_end = false
 	}: {
 		unit: Unit;
 		value: string | null;
-		onChange(next: string | null): void;
+		on_change(next: string | null): void;
 		id?: string;
 		disabled?: boolean;
 		invalid?: boolean;
@@ -32,15 +32,15 @@
 		max?: string;
 		/** Internal range picker: render the grid inside its existing popover. */ inline?: boolean;
 		end?: string | null;
-		pickingEnd?: boolean;
+		picking_end?: boolean;
 	} = $props();
 	const locale = useKinds().locale;
-	const t = uiText();
+	const t = ui_text();
 	const now = new Date();
 	const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 	let open = $state(false);
 	let hovered = $state<string | null>(null);
-	const shownEnd = $derived(pickingEnd ? hovered : end);
+	const shownEnd = $derived(picking_end ? hovered : end);
 	const range = $derived(
 		value === null
 			? null
@@ -66,13 +66,17 @@
 				: { day: 'numeric', month: 'short' }
 		).formatRange(utc(d), utc(unitEnd(d, 'week')));
 	}
-	const heading = $derived(
-		unit === 'year'
-			? `${cells[0]!.slice(0, 4)} – ${cells.at(-1)!.slice(0, 4)}`
-			: unit === 'month'
+	const heading = $derived.by(() => {
+		if (unit !== 'year')
+			return unit === 'month'
 				? anchor.slice(0, 4)
-				: fmt({ month: 'long', year: 'numeric' }).format(utc(anchor))
-	);
+				: fmt({ month: 'long', year: 'numeric' }).format(utc(anchor));
+		const first = cells[0],
+			last = cells.at(-1);
+		if (first === undefined || last === undefined)
+			throw new Error('The year picker page has no cells.');
+		return `${first.slice(0, 4)} – ${last.slice(0, 4)}`;
+	});
 	const off = (d: string) =>
 		(min !== undefined && unitEnd(d, unit) < min) || (max !== undefined && d > max);
 	const current = $derived(unitStart(today, unit));
@@ -110,7 +114,7 @@
 			<button
 				type="button"
 				role="gridcell"
-				aria-selected={pickingEnd ? d === value : included(d) || d === value}
+				aria-selected={picking_end ? d === value : included(d) || d === value}
 				data-unit={d}
 				disabled={disabled || off(d)}
 				class={cn(
@@ -119,7 +123,7 @@
 					included(d) && 'rounded-none bg-accent',
 					included(d) && d === range?.from && 'rounded-l-md',
 					included(d) && d === range?.to && 'rounded-r-md',
-					(d === value || (!pickingEnd && d === end)) &&
+					(d === value || (!picking_end && d === end)) &&
 						'bg-primary text-primary-foreground hover:bg-primary',
 					d === current && d !== value && d !== end && 'font-semibold text-primary'
 				)}
@@ -127,7 +131,7 @@
 				onfocus={() => (hovered = d)}
 				onclick={() => {
 					hovered = null;
-					onChange(d);
+					on_change(d);
 					open = false;
 				}}>{name(d, false)}</button
 			>

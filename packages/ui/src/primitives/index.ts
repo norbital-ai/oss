@@ -8,7 +8,7 @@ export * as Dialog from './dialog/index.js';
 /** Where the portals beneath it land: a mount with its own stylesheet keeps its floating content under it. */
 export { BitsConfig } from 'bits-ui';
 /** An in-app confirmation (never `window.confirm`, which WebViews suppress): an Effect answering whether it was confirmed. */
-export { confirmAction, type ConfirmOptions } from './dialog/confirm.js';
+export { confirm_action, type ConfirmOptions } from './dialog/confirm.js';
 /** Floating content anchored to a trigger: `Popover.Root`, `Popover.Trigger`, `Popover.Content`. */
 export * as Popover from './popover/index.js';
 export { default as Drawer, type DrawerProps } from './sheet/drawer.svelte';
@@ -42,14 +42,14 @@ export { default as Textarea } from './textarea/textarea.svelte';
  * Do not import bits-ui Tooltip (or Root/Provider/Trigger) at call sites.
  */
 export { default as Tooltip } from './tooltip/tooltip.svelte';
-export { virtualList, type Virtual, type VirtualOptions } from './virtual/virtual.svelte.js';
+export { virtual_list, type Virtual, type VirtualOptions } from './virtual/virtual.svelte.js';
 export {
 	cn,
-	formatFileSize,
-	setUiText,
-	uiTextFor,
-	uiText,
-	useControls,
+	format_file_size,
+	set_ui_text,
+	ui_text_for,
+	ui_text,
+	use_controls,
 	type Controls,
 	type UiTextKey
 } from './utils.js';

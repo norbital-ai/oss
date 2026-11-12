@@ -1,98 +1,74 @@
-// `attaches`: a create payload sets an existing row's optional ref to the new row, in the same commit, without an inverse.
+// Existing references join a new row through a create transform's carried update, in its atomic commit.
 import { expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
-import type { PGlite } from '@electric-sql/pglite';
-import type { EngineManifest } from '../src/engine/manifest.ts';
-import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
+import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
-import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { act, k, readRows } from '../src/engine/write/act.ts';
-import { catalogOf } from '../src/engine/access/pred.ts';
-import { admin, authority, grants, manifest, NOW, TODAY, writeArm } from './write-fixture.ts';
+import type { EngineManifest } from '../src/engine/manifest.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
+import { manifest, authority, grants, write_arm } from './write-fixture.ts';
 
+const inputs = (acts: Readonly<Record<string, Json>>) => acts;
 const base = manifest.exposures.orders;
 if (base?.create === undefined) throw new Error('The write fixture must expose orders.create.');
 const m: EngineManifest = {
-	...manifest,
-	exposures: {
-		...manifest.exposures,
-		orders: {
-			...base,
-			create: { ...base.create, attaches: { tags: { model: 'tags', field: 'order' } } }
-		}
-	}
+ ...manifest,
+ relationships: { ...manifest.relationships, 'orders.tag': { to: 'tags', optional: true } },
+ exposures: { ...manifest.exposures, orders: { ...base,
+  create: { columns: { orders: ['title', 'tag'] }, transform: true }
+ } }
 };
-const caller = authority({
-	orders: grants('orders', { create: [writeArm({ orders: ['title'] })] }),
-	tags: grants('tags', { update: [writeArm({ tags: ['order'] })] })
+const guest = program(`export default { model: { orders: { bodies: {
+ create: function*(changes,ctx){
+  const update=[];
+  for(const {set,after} of changes){
+   if(!set.tag)continue;
+   const {tags}=yield* ctx.query({tags:{where:{id:{eq:set.tag},order:{is_null:true}},fields:['name','revision']}});
+   const target=tags.rows[0];
+   if(!target)return yield* ctx.refuse('This tag is already attached or missing.');
+   update.push({target,set:{order:after.id}});
+  }
+  return {sets:changes.map(({set})=>set),with:{tags:{update}}};
+ }
+} } } };`);
+const fixture = Effect.gen(function* () {
+ const context = yield* Layer.build(TestWorkspace.layer({ manifest: m, guest: yield* guest }));
+ const t = Context.get(context, TestWorkspace);
+ // the writer reads the tag it links (rule 36); it holds no write on tags
+ const tags = grants('tags', { create: [], update: [], delete: [] });
+ const caller = authority({ orders: grants('orders', { create: [write_arm({ orders: ['title', 'tag'] })] }), tags });
+ const sealed = authority({ orders: grants('orders', { create: [write_arm({ orders: ['title'] })] }), tags });
+ yield* (yield* t.body_acts(t.admin))(inputs({ 'tags.create': [{ name: 'free' }] }));
+ const tag = yield* t.db.value(Schema.String, { text: "SELECT id::text FROM tags WHERE name='free'", params: [] });
+ const linked = () => t.db.value(Schema.NullOr(Schema.String), { text: 'SELECT "order"::text FROM tags WHERE id=$1', params: [tag] });
+ return { t, caller, sealed, tag, linked };
 });
-const sealed = authority({
-	orders: grants('orders', { create: [writeArm({ orders: ['title'] })] })
-});
-let pg: PGlite, db: TenantDb;
-let n = 0;
-const run = (model: string, input: Json, who = caller) =>
-	act(
-		{ manifest: m, db },
-		{
-			model,
-			verb: 'create',
-			input: [input],
-			mode: { _tag: 'Direct' },
-			key: `attaches-${n}`,
-			invocationId: `attaches-${n++}`,
-			issuedAt: NOW,
-			authority: who,
-			bindings: { now: NOW, today: TODAY, tz: 'UTC' }
-		}
-	);
-const setup = Effect.fnUntraced(function* () {
-	pg = yield* TestDb.open(m);
-	db = PgliteDb.make(pg);
-});
-const createTag = Effect.fnUntraced(function* () {
-	const tag = yield* run('tags', { name: 'free' }, admin);
-	if (tag.outcome.kind !== 'committed')
-		return yield* Effect.fail(new Error('The attach target must exist.'));
-	const id = tag.outcome.records[0]?.id;
-	if (id === undefined) return yield* Effect.fail(new Error('The attach target must exist.'));
-	return id;
-});
-
-it.live('attaches an existing optional ref in the same commit', () =>
-	Effect.gen(function* () {
-		yield* setup();
-		const tag = yield* createTag();
-		const order = yield* run('orders', { title: 'one', attaches: { tags: [tag] } });
-		if (order.outcome.kind !== 'committed')
-			return yield* Effect.fail(new Error(JSON.stringify(order.outcome)));
-		const id = order.outcome.records[0]?.id;
-		expect(id).toBeDefined();
-		const rows = yield* readRows(db, catalogOf(m), [['tags', tag]]);
-		expect(rows.get(k('tags', tag))?.['order']).toBe(id);
-	})
+it.live('carries an existing optional ref in the same commit without a separate target write grant', () =>
+ Effect.scoped(Effect.gen(function* () {
+  const f = yield* fixture;
+  const order = yield* (yield* f.t.body_acts(f.caller))(inputs({ 'orders.create': [{ title: 'one', tag: f.tag }] }));
+  if (order.kind !== 'committed') throw new Error('The root and carried target must commit.');
+  const root = order.records.find(({ model }) => model === 'orders');
+  if (root === undefined) throw new Error('The commit omitted its root.');
+  expect(yield* f.linked()).toBe(root.id);
+  expect(order.records.map(({ model }) => model).sort()).toEqual(['orders', 'tags']);
+ }))
 );
-it.live('refuses a target that is already attached', () =>
-	Effect.gen(function* () {
-		yield* setup();
-		const tag = yield* createTag();
-		expect((yield* run('orders', { title: 'one', attaches: { tags: [tag] } })).outcome.kind).toBe(
-			'committed'
-		);
-		const again = yield* run('orders', { title: 'two', attaches: { tags: [tag] } });
-		expect(again.outcome).toMatchObject({ kind: 'refused', code: 'invalidInput' });
-		const orders = yield* db.read([{ text: 'SELECT title FROM orders', params: [] }]);
-		expect(orders[0]?.rows).toEqual([{ title: 'one' }]);
-	})
+it.live('refuses an already attached target and leaves the second parent absent', () =>
+ Effect.scoped(Effect.gen(function* () {
+  const f = yield* fixture;
+  yield* (yield* f.t.body_acts(f.caller))(inputs({ 'orders.create': [{ title: 'one', tag: f.tag }] }));
+  const before = yield* f.linked();
+  expect(yield* Effect.flip((yield* f.t.body_acts(f.caller))(inputs({ 'orders.create': [{ title: 'two', tag: f.tag }] })))).toMatchObject({ _tag: 'ActRefused', code: 'refused' });
+  expect(yield* f.linked()).toBe(before);
+  expect(yield* f.t.db.rows(Schema.Struct({ title: Schema.String }), { text: 'SELECT title FROM orders', params: [] })).toEqual([{ title: 'one' }]);
+ }))
 );
-it.live('refuses a caller that may not write the target ref', () =>
-	Effect.gen(function* () {
-		yield* setup();
-		const tag = yield* createTag();
-		const order = yield* run('orders', { title: 'one', attaches: { tags: [tag] } }, sealed);
-		expect(order.outcome).toMatchObject({ kind: 'refused', code: 'forbidden' });
-		const rows = yield* readRows(db, catalogOf(m), [['tags', tag]]);
-		expect(rows.get(k('tags', tag))?.['order']).toBeNull();
-	})
+it.live('requires the root grant to admit the selected reference and leaves the target unchanged on refusal', () =>
+ Effect.scoped(Effect.gen(function* () {
+  const f = yield* fixture;
+  expect(yield* Effect.flip((yield* f.t.body_acts(f.sealed))(inputs({ 'orders.create': [{ title: 'one', tag: f.tag }] })))).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
+  expect(yield* f.linked()).toBeNull();
+  expect(yield* Effect.flip((yield* f.t.body_acts(f.caller))(inputs({ 'orders.create': [{ title: 'old shortcut', attaches: { tags: [f.tag] } }] })))).toMatchObject({ _tag: 'ActRefused', code: 'invalid_input' });
+  expect(yield* f.t.db.value(Schema.Number, { text: 'SELECT count(*)::int FROM orders', params: [] })).toBe(0);
+ }))
 );

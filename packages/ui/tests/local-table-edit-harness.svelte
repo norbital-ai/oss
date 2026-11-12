@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	import { mount_edge } from '../src/effect/index.js';
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	import Table from '../src/table/Table.svelte';
-	import { provideBolt } from '../src/client/context.js';
+	import { provide_bolt } from '../src/client/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
 	import { type Row } from '../src/model/types.js';
-	import { provideKinds } from '../src/kinds/context.js';
+	import { provide_kinds } from '../src/kinds/context.js';
 	type LocalRow = Row & { name: string; amount: number };
 	let {
 		initial,
@@ -20,7 +20,12 @@
 		throw new Error('Unexpected remote call in local table test');
 	};
 	const client: ViewBolt = {
+		refresh: unavailable,
+		sync_control: unavailable,
 		query: unavailable,
+		model_query: unavailable,
+		source_query: unavailable,
+		project_record: unavailable,
 		aggregate: unavailable,
 		history: unavailable,
 		clock: () => ({ today: '2026-01-02', now: '2026-01-02T03:04:05.000Z' }),
@@ -32,8 +37,8 @@
 		locale: 'en',
 		t: (key) => key
 	};
-	provideBolt(() => client);
-	provideKinds({});
+	provide_bolt(() => client);
+	provide_kinds({});
 </script>
 
 <Table
@@ -45,7 +50,7 @@
 	]}
 	toolbar={{ title: false, new: false, export: false, search, filter: false }}
 	remove
-	onChange={(next) => {
+	on_change={(next) => {
 		rows = next;
 		changed(next);
 	}}

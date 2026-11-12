@@ -58,7 +58,7 @@ export type Held = {
 	usedAt: number;
 };
 
-export const rootOf = (key: string) =>
+export const root_of = (key: string) =>
 	`${ROOTS}/${
 		key
 			.toLowerCase()
@@ -284,7 +284,7 @@ export function filesystem(roots: ReadonlyMap<string, Held>) {
 
 /** A fresh holder for `key`'s workspace, not yet open in any process. */
 export const holder = (tenant: string, key: string): Held => {
-	const root = rootOf(key);
+	const root = root_of(key);
 	return {
 		tenant,
 		key,
@@ -302,7 +302,7 @@ export const holder = (tenant: string, key: string): Held => {
 };
 
 /** A position → its file as the server holds it (a component's shadow) and offset; `null` inside generated markup. */
-export const offsetIn = (
+export const offset_in = (
 	held: Held,
 	at: LangPosition
 ): { file: string; offset: number } | null | undefined => {
@@ -413,12 +413,12 @@ export class TypeCheckError extends Schema.TaggedError<TypeCheckError>()('TypeCh
 }) {}
 
 /** The whole program's diagnostics in a `tsc --api` process of its own, closed when it answers. */
-export const checkWorkspace = Effect.fn('bolt.checkWorkspace')(function* (
+export const check_workspace = Effect.fn('bolt.check_workspace')(function* (
 	files: ReadonlyMap<string, string>,
 	modules: string | undefined,
-	options: { readonly timeoutMs?: number; readonly tsserverPath?: string } = {}
+	options: { readonly timeout_ms?: number; readonly tsserver_path?: string } = {}
 ) {
-	const timeoutMs = options.timeoutMs ?? 600_000;
+	const timeoutMs = options.timeout_ms ?? 600_000;
 	const held = holder('check', 'check');
 	return yield* Effect.acquireUseRelease(
 		Effect.sync(
@@ -426,7 +426,7 @@ export const checkWorkspace = Effect.fn('bolt.checkWorkspace')(function* (
 				new API({
 					cwd: '/',
 					fs: filesystem(new Map([[held.root, held]])),
-					...(options.tsserverPath === undefined ? {} : { tsserverPath: options.tsserverPath })
+					...(options.tsserver_path === undefined ? {} : { tsserverPath: options.tsserver_path })
 				})
 		),
 		(api) =>

@@ -1,15 +1,16 @@
 // the device's platform-free half (shell/device-session.ts): which inbox notices are raised, taps navigating,
 // the push endpoint stored and forgotten, the shell's notice service, and links out of the workspace.
 import { afterEach, describe, expect, it, vi } from '@effect/vitest';
-import { Effect, Exit, Queue, Scope, Stream } from 'effect';
+import { Effect, Exit, Fiber, Queue, Scope, Stream } from 'effect';
 import type { DeviceApi, DeviceNotice } from '../src/page/device.ts';
 import type { PushBody } from '../src/protocol/schema.ts';
 import {
 	freshNotices,
 	inboxNotices,
 	deviceSession,
-	openExternal
+	open_external
 } from '../src/shell/device-session.ts';
+import { webPush } from '../src/shell/web-device.ts';
 
 const row = (id: string, read = false, link: { model: string; id: string } | null = null) => ({
 	id,
@@ -60,7 +61,7 @@ describe('the device environment', () => {
 			const keys = {
 				topic: 'ai.norbital.app',
 				environment: 'production' as const,
-				teamId: 'TEAM123456'
+				team_id: 'TEAM123456'
 			};
 			const endpoint = 'ab'.repeat(32);
 			const device: DeviceApi = {
@@ -68,11 +69,11 @@ describe('the device environment', () => {
 				notifications: {
 					status: async () => 'granted',
 					request: async () => 'granted',
-					openSettings: async () => undefined,
+					open_settings: async () => undefined,
 					show: async (notice) => {
 						shown.push(notice);
 					},
-					onOpen: (listener) => {
+					on_open: (listener) => {
 						open = listener;
 						return off;
 					}
@@ -104,7 +105,7 @@ describe('the device environment', () => {
 			yield* Queue.offer(answers, { rows: [row('c'), row('b'), row('a')] });
 			open?.('/inbox?record=jobs/1');
 			expect(navigate).toHaveBeenCalledWith('/inbox?record=jobs/1');
-			yield* environment.signOut;
+			yield* environment.sign_out;
 			expect(stop).toHaveBeenCalledOnce();
 			expect(stored[1]).toEqual({ endpoint, remove: true });
 			yield* Scope.close(scope, Exit.void);
@@ -144,7 +145,7 @@ describe('the device environment', () => {
 				keys = { p256dh: 'p', auth: 'a' };
 			const subscribe = vi.fn(async () => ({ toJSON: () => ({ endpoint, keys }) }));
 			vi.stubGlobal('navigator', {
-				serviceWorker: { register: async () => ({ pushManager: { subscribe } }) }
+				serviceWorker: { register: async () => ({ active: Object.assign(new EventTarget(), { state: 'activated' }), pushManager: { subscribe } }) }
 			});
 			const stored: PushBody[] = [];
 			const answers = yield* Queue.unbounded<unknown>();
@@ -174,7 +175,7 @@ describe('the device environment', () => {
 			yield* Queue.offer(answers, { rows: [row('b'), row('a')] });
 			yield* Effect.sleep(10);
 			expect(raised).not.toHaveBeenCalled();
-			yield* environment.signOut;
+			yield* environment.sign_out;
 			expect(stored[1]).toEqual({ endpoint, remove: true });
 			yield* Scope.close(scope, Exit.void);
 
@@ -189,18 +190,59 @@ describe('the device environment', () => {
 		})
 	);
 
+	it.live('waits for this workspace worker activation before subscribing and releases its listener', () =>
+		Effect.gen(function* () {
+			vi.stubGlobal('Notification', { permission: 'granted' });
+			vi.stubGlobal('document', { querySelector: () => ({ getAttribute: () => '/workspace' }) });
+			vi.stubGlobal('atob', (value: string) => Buffer.from(value, 'base64').toString('latin1'));
+			const worker = Object.assign(new EventTarget(), { state: 'installing' });
+			const added = vi.spyOn(worker, 'addEventListener'), removed = vi.spyOn(worker, 'removeEventListener');
+			const endpoint = 'https://push.example/durable', keys = { p256dh: 'public', auth: 'auth' };
+			const subscribe = vi.fn(async () => ({ toJSON: () => ({ endpoint, keys }) }));
+			const register = vi.fn(async () => ({ active: null, waiting: null, installing: worker, pushManager: { subscribe } }));
+			vi.stubGlobal('navigator', { serviceWorker: { register } });
+			const pending = yield* webPush('AQAB').pipe(Effect.forkChild);
+			yield* Effect.promise(() => vi.waitFor(() => expect(added).toHaveBeenCalledOnce()));
+			expect(register).toHaveBeenCalledWith('/workspace/__bolt/sw.js', { scope: '/workspace/' });
+			expect(subscribe).not.toHaveBeenCalled();
+			worker.state = 'activated';
+			worker.dispatchEvent(new Event('statechange'));
+			expect(yield* Fiber.join(pending)).toEqual({ endpoint, keys });
+			expect(subscribe).toHaveBeenCalledOnce();
+			expect(removed).toHaveBeenCalledOnce();
+		})
+	);
+
+	it.live('cancels activation observation on close and fails a redundant worker without subscribing', () =>
+		Effect.gen(function* () {
+			vi.stubGlobal('Notification', { permission: 'granted' });
+			vi.stubGlobal('document', { querySelector: () => null });
+			const worker = Object.assign(new EventTarget(), { state: 'installing' });
+			const added = vi.spyOn(worker, 'addEventListener'), removed = vi.spyOn(worker, 'removeEventListener');
+			const subscribe = vi.fn();
+			vi.stubGlobal('navigator', { serviceWorker: { register: async () => ({ installing: worker, active: null, waiting: null, pushManager: { subscribe } }) } });
+			const pending = yield* webPush('AQAB').pipe(Effect.forkChild);
+			yield* Effect.promise(() => vi.waitFor(() => expect(added).toHaveBeenCalledOnce()));
+			yield* Fiber.interrupt(pending);
+			expect(removed).toHaveBeenCalledOnce();
+			worker.state = 'redundant';
+			expect(yield* Effect.flip(webPush('AQAB'))).toMatchObject({ operation: 'serviceWorker.activate' });
+			expect(subscribe).not.toHaveBeenCalled();
+		})
+	);
+
 	it.effect('opens a link out of the workspace through the shell, else in the browser', () =>
 		Effect.gen(function* () {
 			const page = { href: 'https://acme.example/' };
 			vi.stubGlobal('location', page);
 			const openExternalUrl = vi.fn(async () => undefined);
-			yield* openExternal(
-				{ navigation: { openExternal: openExternalUrl } },
+			yield* open_external(
+				{ navigation: { open_external: openExternalUrl } },
 				'https://maps.example/x'
 			);
 			expect(openExternalUrl).toHaveBeenCalledWith('https://maps.example/x');
 			expect(page.href).toBe('https://acme.example/');
-			yield* openExternal({}, 'https://maps.example/y');
+			yield* open_external({}, 'https://maps.example/y');
 			expect(page.href).toBe('https://maps.example/y');
 		})
 	);

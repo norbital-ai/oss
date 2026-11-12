@@ -43,7 +43,7 @@
 			{language}
 			readonly
 			wrap
-			minHeight="0"
+			min_height="0"
 			class="text-micro"
 			aria-label={t('Code')}
 		/>

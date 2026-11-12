@@ -2,12 +2,12 @@
 // `chatProvider` does not run `changes` yet, so the change log is driven through the connection itself.
 import { createSign, generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import PostalMime from 'postal-mime';
 import { vi } from 'vitest';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { gmail } from '../../src/chat/gmail/index.ts';
-import { HOOK, host } from '../kit.ts';
+import { required, HOOK, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = {
@@ -113,7 +113,7 @@ const open = () =>
 		Effect.promise(() =>
 			gmail.connect(settings, {
 				fetch,
-				webhookUrl: HOOK,
+				webhook_url: HOOK,
 				receive: () => Promise.resolve()
 			})
 		),
@@ -128,9 +128,9 @@ describe('Gmail', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(gmail, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'desk@acme.test' });
-			expect((yield* h.link.webhook!(push(jwt()))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(push(jwt()))).status).toBe(200);
 			expect(h.events).toEqual([]);
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('refuses a push whose token is forged, misaddressed or missing', () =>
@@ -145,9 +145,9 @@ describe('Gmail', () => {
 				push(jwt({ iss: 'https://evil.test' })),
 				webhook('{}', {})
 			];
-			for (const request of refused) expect((yield* h.link.webhook!(request)).status).toBe(401);
+			for (const request of refused) expect((yield* required(h.link.webhook)(request)).status).toBe(401);
 			expect(h.events).toEqual([]);
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('null asks for a starting cursor, and Gmail names it', () =>
@@ -192,16 +192,16 @@ describe('Gmail', () => {
 				{
 					id: 'm1',
 					thread: 't1',
-					sentAt: new Date(1_790_000_000_000).toISOString(),
+					sent_at: new Date(1_790_000_000_000).toISOString(),
 					from: { handle: 'ada@example.com', name: 'Ada Lovelace' },
 					text: 'Hello there',
 					group: false,
 					mentioned: true,
-					replyTo: null,
+					reply_to: null,
 					title: 'Invoice',
 					files: []
 				},
-				{ id: 'm2', group: true, mentioned: true, replyTo: '<m1@example.com>' },
+				{ id: 'm2', group: true, mentioned: true, reply_to: '<m1@example.com>' },
 				{ id: 'old', thread: '', deleted: true }
 			]);
 		})
@@ -311,13 +311,13 @@ describe('Gmail', () => {
 				bytes: new TextEncoder().encode('receipt'),
 				url: () => Promise.reject(new Error('no link'))
 			};
-			expect(yield* h.link.send!({ id: 'r1', to: 't1', text: 'Paid' }, [file])).toMatchObject({
-				providerId: 'out1'
+			expect(yield* required(h.link.send)({ id: 'r1', to: 't1', text: 'Paid' }, [file])).toMatchObject({
+				provider_id: 'out1'
 			});
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe(`${API}/messages/send`);
 			expect(call?.headers.get('authorization')).toBe('Bearer access');
-			const body = JSON.parse(call?.body ?? '') as { raw: string; threadId?: string };
+			const body = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ raw: Schema.String, threadId: Schema.optionalKey(Schema.String) })))(call?.body ?? '');
 			expect(body.threadId).toBe('t1');
 			const sent = yield* Effect.promise(() =>
 				PostalMime.parse(Buffer.from(body.raw, 'base64url'))
@@ -331,15 +331,15 @@ describe('Gmail', () => {
 			expect(sent.references).toBe('<m0@example.com> <m1@example.com> <m2@example.com>');
 			expect(sent.text?.trim()).toBe('Paid');
 			expect(sent.attachments).toMatchObject([{ filename: 'a.txt', mimeType: 'text/plain' }]);
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('a thread that is an address starts a new mail', () =>
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer());
 			const h = yield* connected(gmail, settings);
-			yield* h.link.test!({ to: 'ada@example.com' });
-			const body = JSON.parse(api.calls.at(-1)?.body ?? '') as { raw: string; threadId?: string };
+			yield* required(h.link.test)({ to: 'ada@example.com' });
+			const body = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ raw: Schema.String, threadId: Schema.optionalKey(Schema.String) })))(api.calls.at(-1)?.body ?? '');
 			expect(body.threadId).toBeUndefined();
 			const sent = yield* Effect.promise(() =>
 				PostalMime.parse(Buffer.from(body.raw, 'base64url'))
@@ -348,7 +348,7 @@ describe('Gmail', () => {
 				subject: 'Norbital test message',
 				to: [{ address: 'ada@example.com' }]
 			});
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('a refresh token Google refuses keeps nothing', () =>
@@ -359,7 +359,7 @@ describe('Gmail', () => {
 					: answer()(call)
 			);
 			const h = yield* host(chatProvider(gmail), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -369,7 +369,7 @@ describe('Gmail', () => {
 				call.url.endsWith('/watch') ? json({ error: { code: 403 } }, 403) : answer()(call)
 			);
 			const h = yield* host(chatProvider(gmail), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -379,7 +379,7 @@ describe('Gmail', () => {
 			vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
 			yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
 			const connection = yield* Effect.promise(() =>
-				gmail.connect(settings, { fetch, webhookUrl: HOOK, receive: () => Promise.resolve() })
+				gmail.connect(settings, { fetch, webhook_url: HOOK, receive: () => Promise.resolve() })
 			);
 			const watches = () => api.calls.filter((call) => call.url.endsWith('/watch')).length;
 			expect(watches()).toBe(1);

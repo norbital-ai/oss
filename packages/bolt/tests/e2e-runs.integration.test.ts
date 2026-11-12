@@ -1,7 +1,7 @@
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { Context, Effect, Layer, Schema } from 'effect';
-// End to end through the engine entry and the test kit: a model's `created` effect is queued by the act's own
+// End to end through the engine entry and the test kit: a model's create effect is queued by the act's own
 // statement and runs as the writer; the delayed follow-up it schedules is announced to the deadlines port and runs its
 // body when the deadline wakes (rules 49, 52a).
 import { describe, expect, it } from '@effect/vitest';
@@ -30,9 +30,8 @@ const manifest = {
 	exposures: {
 		quotes: {
 			outputs: { default: { quotes: { fields: 'all' } } },
-			create: { columns: { quotes: ['title'] } },
-			update: { columns: { quotes: ['status'] } },
-			effect: { created: true }
+			create: { columns: { quotes: ['title'] }, effect: true },
+			update: { columns: { quotes: ['status'] } }
 		}
 	},
 	policies: {
@@ -51,19 +50,20 @@ const manifest = {
 	},
 	integrations: {},
 	teams: {},
-	connections: {},
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
 const guestSource = `export default {
-	model: { quotes: { bodies: { effect: { created: function* (rows, ctx) {
-		yield* ctx.schedule('remind', { ids: rows.map((row) => row.id) }, { at: { var: 'now + hours(1)' } });
+	model: { quotes: { bodies: { effect: { create: function* (changes, ctx) {
+		yield* ctx.schedule('remind', { ids: changes.map((change) => change.after.id) }, { at: { var: 'now + hours(1)' } });
 	} } } } },
 	automation: { remind: { body: function* (input, ctx) {
-		for (const id of input.ids) yield* ctx.act('quotes.update', [{ target: id, set: { status: 'sent' } }]);
+		const { quotes } = yield* ctx.query({ quotes: { where: { id: { in: input.ids } } } });
+		yield* ctx.act({ 'quotes.update': quotes.rows.map((row) => ({ target: row, set: { status: 'sent' } })) });
 	} } }
 };`;
 
@@ -79,24 +79,23 @@ describe('a created effect that schedules a delayed follow-up', () => {
 					})
 				);
 				const t = Context.get(context, TestWorkspace),
-					route = yield* routeFixture(context);
-				const ops = t.as(t.member(['ops']));
-				const created = (yield* actReply(route, ops.authority, {
-					callable: 'quotes.create',
-					input: [{ title: 'q1' }],
-					issuedAt: t.clock.now()
+					route = yield* route_fixture(context);
+				const ops = yield* t.as(t.member(['ops']));
+				const created = (yield* act_reply(route, ops.authority, {
+					acts: { 'quotes.create': [{ title: 'q1' }] },
+					issued_at: t.clock.now()
 				})).outcome;
 				if (created.kind !== 'committed' || created.records[0] === undefined)
 					throw new Error('Missing created quote');
 				const id = created.records[0].id;
-				yield* t.runDue(); // the effect runs at its commit and schedules the follow-up an hour out
+				yield* t.run_due(); // the effect runs at its commit and schedules the follow-up an hour out
 				expect(
 					t.fakes.deadlines.announced.map(({ scope, at }) => ({ scope, at: Date.parse(at) }))
 				).toContainEqual({
 					scope: 'test',
 					at: Date.parse('2026-09-25T11:00:00.000Z')
 				});
-				yield* t.runDue();
+				yield* t.run_due();
 				expect(
 					yield* Schema.decodeUnknownEffect(
 						Schema.Struct({
@@ -105,13 +104,13 @@ describe('a created effect that schedules a delayed follow-up', () => {
 							})
 						})
 					)(
-						(yield* qReply(route, ops.authority, {
+						(yield* q_reply(route, ops.authority, {
 							reads: [{ m: 'query', a: [{ quotes: { where: { id: { eq: id } } } }] }]
 						})).answers[0]
 					).pipe(Effect.map((answer) => answer.quotes.rows[0]))
 				).toMatchObject({ status: 'draft' });
 				t.clock.advance('1h');
-				yield* t.runDue();
+				yield* t.run_due();
 				expect(
 					yield* Schema.decodeUnknownEffect(
 						Schema.Struct({
@@ -120,7 +119,7 @@ describe('a created effect that schedules a delayed follow-up', () => {
 							})
 						})
 					)(
-						(yield* qReply(route, ops.authority, {
+						(yield* q_reply(route, ops.authority, {
 							reads: [{ m: 'query', a: [{ quotes: { where: { id: { eq: id } } } }] }]
 						})).answers[0]
 					).pipe(Effect.map((answer) => answer.quotes.rows[0]))
@@ -131,7 +130,7 @@ describe('a created effect that schedules a delayed follow-up', () => {
 					]))[0]
 				).rows;
 				expect(runs).toEqual([
-					{ automation: 'quotes.effect.created', state: 'succeeded', cause: 'effect' },
+					{ automation: 'quotes.effect.create', state: 'succeeded', cause: 'effect' },
 					{ automation: 'remind', state: 'succeeded', cause: 'schedule' }
 				]);
 			})
@@ -171,16 +170,16 @@ describe('a started automation whose body fails', () => {
 						})
 					);
 					const t = Context.get(context, TestWorkspace);
-					const queued = (yield* actReply(
-						yield* routeFixture(context),
-						t.as(t.member(['ops'])).authority,
+					const queued = (yield* act_reply(
+						yield* route_fixture(context),
+						(yield* t.as(t.member(['ops']))).authority,
 						{
-							callable: 'start',
+							callable: 'run',
 							input: {
 								automation: 'quotes_boom',
-								runs: [{ id: uuidv7(Date.parse(t.clock.now())), input: {} }]
+								id: uuidv7(Date.parse(t.clock.now())), input: {}
 							},
-							issuedAt: t.clock.now()
+							issued_at: t.clock.now()
 						}
 					)).outcome;
 					if (queued.kind !== 'committed') throw new Error('Failing workflow did not enqueue');
@@ -196,7 +195,7 @@ describe('a started automation whose body fails', () => {
 							}
 						)
 					).toEqual([{ state: 'queued', error: null }]);
-					yield* t.runDue();
+					yield* t.run_due();
 					const runs = present(
 						(yield* t.db.read([
 							{
@@ -205,7 +204,7 @@ describe('a started automation whose body fails', () => {
 							}
 						]))[0]
 					).rows;
-					expect(runs).toEqual([{ state: 'failed', code: 'guestError', message: 'a bug' }]);
+					expect(runs).toEqual([{ state: 'failed', code: 'guest_error', message: 'a bug' }]);
 				})
 			)
 	);

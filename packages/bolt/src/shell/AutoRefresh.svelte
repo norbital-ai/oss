@@ -1,6 +1,6 @@
 <!--
 	An opt-in Auto-refresh toggle for a one-off read of a store outside the tenant database (Logs, Audit): off by
-	default; while on, `onRefresh` runs every ten seconds the page is visible.
+	default; while on, `on_refresh` runs every ten seconds the page is visible.
 -->
 <script lang="ts">
 	import { Checkbox } from '@norbital-ai/ui';
@@ -8,11 +8,11 @@
 	import { Effect } from 'effect';
 	import { visible } from '../page/stream.ts';
 
-	let { t, onRefresh }: { t: (key: string) => string; onRefresh: () => void } = $props();
+	let { t, on_refresh }: { t: (key: string) => string; on_refresh: () => void } = $props();
 	let on = $state(false);
 	const every = Effect.sleep('10 seconds').pipe(
 		Effect.andThen(visible),
-		Effect.andThen(Effect.sync(() => onRefresh())),
+		Effect.andThen(Effect.sync(() => on_refresh())),
 		Effect.forever
 	);
 </script>

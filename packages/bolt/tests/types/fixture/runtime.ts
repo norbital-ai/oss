@@ -5,6 +5,11 @@ import { Effect, Result } from 'effect';
 // src/automation and src/agent. Every body sits in its literal, typed from `../registry.ts` by its name.
 import { automation, mcp, secrets, workspace } from '../../../src/index.ts';
 import { bind_integration } from '../../../src/declarations.ts';
+import type { InstanceId } from '../../../src/index.ts';
+
+// runtime instances (a body reads its `sys_integration` row; never evaluated here)
+declare const erp_account: InstanceId<'erp'>;
+declare const whatsapp_account: InstanceId<'whatsapp'>;
 
 export const secretNames = secrets({
 	ERP_URL: { label: 'ERP base URL' },
@@ -20,15 +25,9 @@ export const ws = workspace({
 	locale: 'en-SG',
 	currency: 'SGD',
 	apps: ['sales', 'portal'],
-	ai: { models: ['default', 'fast', 'strong'], default: 'default', embeddings: ['text_small'] },
+	ai: { embeddings: ['text_small'] },
 	convert: { to: ['pdf', 'docx'] },
-	csp: { connect: ['https://huggingface.co'] },
-	connections: {
-		erp: { integration: 'erp' },
-		ledger_main: { integration: 'kingdee' },
-		support: { integration: 'support_mail' },
-		whatsapp: { integration: 'whatsapp' }
-	}
+	csp: { connect: ['https://huggingface.co'] }
 });
 
 // HTTP: a configured base URL, a credential sealed at pairing, Standard Webhooks, a request rate and a pairing test
@@ -36,17 +35,17 @@ export const erp = bind_integration('erp')({
 	description: 'The ERP API.',
 	driver: 'http',
 	configuration: {
-		baseUrl: { kind: 'text', format: 'url' },
+		base_url: { kind: 'text', format: 'url' },
 		room: { kind: 'text', default: 'general' },
 		topic: { kind: 'text', optional: true },
 		mute: { kind: 'bool', optional: true, default: false }
 	},
 	credential: {
-		token: { kind: 'text', label: 'API token' },
-		signingSecret: { kind: 'text', label: 'Webhook signing secret' }
+		token: { kind: 'text' },
+		signing_secret: { kind: 'text' }
 	},
-	http: { baseUrl: 'baseUrl', auth: { bearer: 'token' } },
-	webhook: { verify: { scheme: 'standard', secret: 'signingSecret' } },
+	http: { base_url: 'base_url', auth: { bearer: 'token' } },
+	webhook: { verify: { scheme: 'standard', secret: 'signing_secret' } },
 	rate: '10/s',
 	test: function* (ctx) {
 		yield* ctx.request({ method: 'GET', path: 'me', output: { kind: 'json' } });
@@ -57,9 +56,9 @@ export const erp = bind_integration('erp')({
 export const kingdee = bind_integration('kingdee')({
 	description: 'An accounting database.',
 	driver: 'sqlserver',
-	credential: { connection: { kind: 'text', label: 'Connection string' } },
+	credential: { connection: { kind: 'text' } },
 	configuration: {
-		maxLagMinutes: { kind: 'int', min: 1, default: 15 },
+		max_lag_minutes: { kind: 'int', min: 1, default: 15 },
 		databases: { kind: 'text', many: true, default: [] }
 	},
 	test: function* (ctx) {
@@ -146,11 +145,10 @@ export const render = automation({
 export const inbound_hook = automation({
 	description: 'Payment provider callback',
 	policies: ['sales_rep'],
-	on: [{ webhook: '/payments', verify: { scheme: 'stripe', secret: 'HOOK_SECRET' } }],
 	input: { order: { kind: 'text' } },
 	run: function* ({ order }, ctx) {
 		const answer = yield* Effect.result(
-			ctx.request('erp', {
+			ctx.request(erp_account, {
 				method: 'GET',
 				path: 'orders',
 				query: { order },
@@ -159,7 +157,7 @@ export const inbound_hook = automation({
 		);
 		if (Result.isFailure(answer)) return;
 		if (answer.success.paid)
-			yield* ctx.send('whatsapp', { to: '+6590000000', text: `Order ${order} is paid` });
+			yield* ctx.send(whatsapp_account, { to: '+6590000000', text: `Order ${order} is paid` });
 	}
 });
 
@@ -171,9 +169,7 @@ export const orders_submit = automation({
 		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders
 			.rows[0];
 		if (order === undefined) return yield* ctx.refuse('Choose an existing order.');
-		yield* ctx.act('orders.update', [{ target: order.id, set: { status: 'submitted' } }], {
-			observed: { [order.id]: order.revision }
-		});
+		yield* ctx.act({ 'orders.update': [{ target: order, set: { status: 'submitted' } }] });
 	}
 });
 
@@ -189,15 +185,9 @@ export const orders_renote = automation({
 				fields: ['id', 'revision']
 			}
 		});
-		yield* ctx.act(
-			'orders.update',
-			ids.map((id) => ({ target: id, set: { note } })),
-			{
-				observed: Object.fromEntries(
-					orders.orders.rows.map((order): [string, number] => [order.id, order.revision])
-				)
-			}
-		);
+		yield* ctx.act({
+			'orders.update': orders.orders.rows.map((order) => ({ target: order, set: { note } }))
+		});
 		const { customers } = yield* ctx.query({
 			customers: { where: { tier: { eq: 'gold' } }, fields: ['name'] }
 		});

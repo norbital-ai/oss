@@ -30,9 +30,9 @@ when shown; one OpenStreetMap link in a dense line.
 {#if view.mode === 'edit'}
 	<PointInput
 		value={view.value}
-		onChange={view.onChange}
+		on_change={view.on_change}
 		address={where}
-		onAddress={view.address?.onChange}
+		on_address={view.address?.on_change}
 		id={view.id}
 		disabled={view.disabled}
 		invalid={view.error !== undefined}

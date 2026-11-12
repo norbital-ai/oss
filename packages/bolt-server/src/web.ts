@@ -2,13 +2,13 @@ import { Effect } from 'effect';
 import { FacilityFailure } from '@norbital-ai/bolt/errors';
 import { WebRead, type PortFailure } from '@norbital-ai/bolt/engine';
 import {
-	makeRequestPage,
-	publicAddresses,
+	make_request_page,
+	public_addresses,
 	WEB_PAGE_BYTE_LIMIT,
 	type Address
 } from '@norbital-ai/bolt/node';
 import { extractDocumentText } from './documents.ts';
-const requestPage = makeRequestPage();
+const requestPage = make_request_page();
 export type PublicPage = {
 	url: string;
 	body: string;
@@ -31,7 +31,7 @@ export const readPublicPage = Effect.fn('server.readPublicPage')(
 			catch: () => failure('A public page needs a valid URL.')
 		});
 		for (let redirects = 0; redirects <= 5; redirects++) {
-			const addresses = yield* publicAddresses(target, options.resolve);
+			const addresses = yield* public_addresses(target, options.resolve);
 			const response = yield* (options.request ?? requestPage)(target, addresses);
 			if (response.status >= 300 && response.status < 400 && response.location) {
 				const location = response.location;
@@ -107,7 +107,7 @@ export const publicWeb = (
 					url: page.url,
 					title,
 					text,
-					...(page.contentType === undefined ? {} : { contentType: page.contentType }),
+					...(page.contentType === undefined ? {} : { content_type: page.contentType }),
 					...(page.sha256 === undefined ? {} : { sha256: page.sha256 }),
 					...(page.pageCount === undefined ? {} : { pages: page.pageCount }),
 					...(html === undefined ? {} : { html, links: linksOf(html, page.url) })

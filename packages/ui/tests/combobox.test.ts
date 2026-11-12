@@ -70,7 +70,7 @@ it('arrow keys move the active option and Enter chooses it', async () => {
 			options,
 			searchable: true,
 			value: null,
-			onChange: (v: string | null) => changes.push(v)
+			on_change: (v: string | null) => changes.push(v)
 		}
 	});
 	flushSync();
@@ -84,6 +84,49 @@ it('arrow keys move the active option and Enter chooses it', async () => {
 	search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 	await settle();
 	expect(changes).toEqual(['b']);
+	await unmount(view);
+});
+
+it('group headings keep filtered keyboard rows and the clear choice aligned', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const changes: (string | null)[] = [];
+	const view = mount(Combobox, {
+		target,
+		props: {
+			options: options.map((option) => ({ ...option, group: option.value === 'b' ? 'Support' : 'Sales' })),
+			value: 'a',
+			clearable: true,
+			searchable: true,
+			on_change: (value: string | null) => changes.push(value)
+		}
+	});
+	flushSync();
+	const trigger = target.querySelector<HTMLButtonElement>('[role=combobox]');
+	if (trigger === null) throw new Error('Missing combobox trigger');
+	trigger.click();
+	await settle();
+	const search = document.querySelector<HTMLInputElement>('input');
+	if (search === null) throw new Error('Missing combobox search');
+	search.value = 'bob';
+	search.dispatchEvent(new Event('input', { bubbles: true }));
+	await settle();
+	expect([...document.querySelectorAll('[role=listbox] [role=presentation]')].map((row) => row.textContent?.trim())).toEqual(['Support']);
+	expect([...document.querySelectorAll('[role=option]')].map((row) => row.getAttribute('data-value'))).toEqual(['', 'b']);
+	search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+	await settle();
+	search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+	await settle();
+	expect(changes).toEqual(['b']);
+	trigger.click();
+	await settle();
+	const reopened = document.querySelector<HTMLInputElement>('input');
+	if (reopened === null) throw new Error('Missing reopened combobox search');
+	reopened.value = 'missing';
+	reopened.dispatchEvent(new Event('input', { bubbles: true }));
+	await settle();
+	reopened.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+	await settle();
+	expect(changes).toEqual(['b', null]);
 	await unmount(view);
 });
 
@@ -106,7 +149,7 @@ it('single selection answers a scalar and closes', async () => {
 	const changes: (string | null)[] = [];
 	const view = mount(Combobox, {
 		target,
-		props: { options, value: null, onChange: (v: string | null) => changes.push(v) }
+		props: { options, value: null, on_change: (v: string | null) => changes.push(v) }
 	});
 	flushSync();
 	target.querySelector<HTMLButtonElement>('[role=combobox]')?.click();
@@ -131,11 +174,12 @@ it('keeps option suffixes separate from truncating labels and in the selected tr
 				}
 			],
 			value: 'annual',
-			onChange: () => {}
+			on_change: () => {}
 		}
 	});
 	flushSync();
-	const trigger = target.querySelector<HTMLButtonElement>('[role=combobox]')!;
+	const trigger = target.querySelector<HTMLButtonElement>('[role=combobox]');
+	if (trigger === null) throw new Error('Missing combobox trigger');
 	expect(trigger.textContent).toContain('14 days available');
 	expect(trigger.querySelector('.truncate')?.textContent).not.toContain('available');
 	trigger.click();
@@ -163,12 +207,12 @@ it('readonly has no trigger and disabled cannot open, single or multiple', async
 							multiple: true,
 							options,
 							value: ['a', 'b'],
-							onChange: () => changed++
+							on_change: () => changed++
 						}
 					})
 				: mount(Combobox, {
 						target,
-						props: { ...restriction, options, value: 'a', onChange: () => changed++ }
+						props: { ...restriction, options, value: 'a', on_change: () => changed++ }
 					});
 			flushSync();
 			const trigger = target.querySelector<HTMLButtonElement>('[role=combobox]');

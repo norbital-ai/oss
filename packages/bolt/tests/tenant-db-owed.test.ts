@@ -7,17 +7,17 @@ import { DbError } from '../src/engine/errors.ts';
 const world = () => {
 	const trips: string[] = [];
 	const raw: RawDb = {
-		read: () =>
+		read: (statements) =>
 			Effect.sync(() => {
 				trips.push('read');
-				return [];
+				return statements.map(() => ({ rows: [], affected: 0 }));
 			}),
 		write: () =>
 			Effect.sync(() => {
 				trips.push('write');
 				return { rows: [], affected: 0 };
 			}),
-		transaction: () => Effect.sync(() => [] as const)
+		transaction: (batch) => Effect.sync(() => batch.statements.map(() => ({ rows: [], affected: 0 })))
 	};
 	return { trips, db: TenantDb.typed(raw) };
 };

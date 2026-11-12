@@ -33,10 +33,10 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 		gap?: LayoutGap;
 		align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch';
 		justify?: 'start' | 'center' | 'end' | 'between';
-		/** `content` (default): its own height, up to `max`; `fill`: the space left in its parent, scrolling inside, down to `minHeight`. */
+		/** `content` (default): its own height, up to `max`; `fill`: the space left in its parent, scrolling inside, down to `min_height`. */
 		size?: LayoutSize;
 		/** A `fill` scroll's floor (a CSS length; default 0). */
-		minHeight?: string;
+		min_height?: string;
 		/** Snap children to the start edge along the scroll axis — a reel of lanes or cards. */
 		snap?: boolean;
 		/**
@@ -54,6 +54,8 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 	import { cn } from '../primitives/utils.js';
 	import { getContext, setContext } from 'svelte';
 	import {
+		ALIGN_CLASSES,
+		JUSTIFY_CLASSES,
 		GAP_CLASSES,
 		INSET_CLASS,
 		SCROLL_AXIS_CLASSES,
@@ -62,7 +64,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 		type ScrollPort
 	} from './layout.shared.js';
 	import { scrollAffordance } from './scroll-affordance.svelte.js';
-	import { ownInset } from './inset.svelte.js';
+	import { own_inset } from './inset.svelte.js';
 
 	let {
 		as = 'div',
@@ -75,7 +77,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 		align,
 		justify = 'start',
 		size = 'content',
-		minHeight,
+		min_height,
 		snap = false,
 		max,
 		ref = $bindable(null),
@@ -93,20 +95,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 		inline: 'flex flex-row flex-nowrap',
 		stack: 'flex flex-col [&>*]:shrink-0'
 	};
-	const alignClasses = {
-		start: 'items-start',
-		center: 'items-center',
-		end: 'items-end',
-		baseline: 'items-baseline',
-		stretch: 'items-stretch'
-	} as const;
-	const justifyClasses = {
-		start: 'justify-start',
-		center: 'justify-center',
-		end: 'justify-end',
-		between: 'justify-between'
-	} as const;
-	const padsInset = untrack(() => inset) ? ownInset() : false;
+	const padsInset = untrack(() => inset) ? own_inset() : false;
 	const parentPort = getContext<ScrollPort | undefined>(SCROLL_PORT_CONTEXT);
 	setContext<ScrollPort>(SCROLL_PORT_CONTEXT, {
 		get element() {
@@ -135,8 +124,8 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 		SCROLL_AXIS_CLASSES[axis],
 		layoutClasses[layout],
 		layout !== 'block' && GAP_CLASSES[gap],
-		layout !== 'block' && alignClasses[resolvedAlign],
-		layout !== 'block' && justifyClasses[justify],
+		layout !== 'block' && ALIGN_CLASSES[resolvedAlign],
+		layout !== 'block' && JUSTIFY_CLASSES[justify],
 		padsInset && INSET_CLASS,
 		snap &&
 			(axis === 'x'
@@ -145,7 +134,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
-	style:min-height={size === 'fill' ? minHeight : undefined}
+	style:min-height={size === 'fill' ? min_height : undefined}
 	data-layout="scroll"
 	data-scroll-axis={axis}
 	data-scroll-inset={padsInset || undefined}

@@ -1,33 +1,34 @@
-import { withEnvoys } from './support/envoys.ts';
-// The agent UI's engine half (§5.9): an in-app conversation starts on the workspace's `ai.default`; a failed turn's log
-// line and staff row name the real reason; `setAgent`, `file` and `markRead` over `/__bolt/act`; staff
+import { with_envoys } from './support/envoys.ts';
+import { with_accounts } from './support/accounts.ts';
+// The agent UI's engine half (§5.9): a conversation uses durable agent settings; a failed turn's log
+// line and staff row name the real reason; `set_agent`, `file` and `mark_read` over `/__bolt/act`; staff
 // list the envoy conversations with an unread mark; `read_file` reads an xlsx into std/sheet's cells.
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from '@effect/vitest';
-import { parseInstant } from '@norbital-ai/std/date';
+import { parse_instant } from '@norbital-ai/std/date';
 import { Context, Effect, Layer, Option, Result, Schema, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Agents, Conversations } from '../src/engine/services.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { ActReply, AgentRow, WireError } from '../src/protocol/schema.ts';
-import { json, routeFixture } from './support/route-fixture.ts';
-import { ActRefused, actFailure } from '../src/decl/errors.ts';
+import { json, route_fixture } from './support/route-fixture.ts';
+import { ActRefused, act_failure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { instanceMessages } from '../src/shell/integration/messages.ts';
+import { instance_messages } from '../src/shell/integration/messages.ts';
+import { saveAgentSettings } from '../src/engine/agent/settings.ts';
 import { xlsxCells, xlsxSheets } from '../src/engine/files/xlsx.ts';
-import { respondSystem1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: {
 			tz: 'UTC',
 			locale: 'en',
-			agent: { triage: false },
-			ai: { models: ['fast'], default: 'fast' }
+			agent: { triage: false }
 		},
 		models: {
 			quotes: {
@@ -45,21 +46,20 @@ const manifest = Result.getOrThrow(
 		},
 		policies: { rep: { description: 'Rep', grants: { quotes: { outputs: { default: true } } } } },
 
-		connections: { field: { integration: 'whatsapp' } },
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 		integrations: {},
 		teams: { 't-ops': { name: 'Ops', policies: ['rep'] } },
 		automations: {},
 		mcp: {},
 		apps: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
 const fieldEnvoy = '0199a000-0000-7000-8000-0000000000e1';
 const runtimeEnvoys = [
 	{
 		id: fieldEnvoy,
-		connections: ['field'],
+		accounts: ['field'],
 		audience: 'public',
 		name: 'Norbius',
 		policies: ['rep'],
@@ -72,9 +72,9 @@ const runtimeEnvoys = [
 
 const setup = () =>
 	Effect.gen(function* () {
-		// the host maps only `default`: the workspace's `fast` is unmapped, so a turn fails with that reason
+		// The host maps only `default`; allowing `fast` in durable settings exposes an unmapped class.
 		const ports = Layer.succeed(Ai, {
-			ask: respondSystem1,
+			ask: respond_system_1,
 			maxChoices: undefined,
 			models: ['default'],
 			catalog: Port.unavailable('ai.catalog'),
@@ -82,7 +82,10 @@ const setup = () =>
 			infer: () => Stream.fail(Port.failure('ai')(new Error('not called')))
 		});
 		const context = yield* Layer.build(
-			withEnvoys(TestWorkspace.layer({ manifest, ports }), runtimeEnvoys)
+			with_envoys(
+				with_accounts(TestWorkspace.layer({ manifest, ports }), [{ id: 'field', integration: 'whatsapp' }]),
+				runtimeEnvoys
+			)
 		);
 		const t = Context.get(context, TestWorkspace),
 			agent = Context.get(context, Agents),
@@ -97,7 +100,7 @@ const setup = () =>
 				params: [id, `${id}@x.test`, kind]
 			});
 		const authorities = new Authorities(manifest, 'test'),
-			route = yield* routeFixture(context);
+			route = yield* route_fixture(context);
 		const call = (
 			as: string,
 			method: string,
@@ -106,7 +109,7 @@ const setup = () =>
 			preview: boolean | string = false
 		) =>
 			Effect.gen(function* () {
-				const own = yield* authorities.member(t.db, as, preview === true);
+				const own = yield* authorities.member(t.db, 'bootstrap', as, preview === true);
 				const authority =
 					typeof preview !== 'string' || own === null || own.actor.kind !== 'member'
 						? own
@@ -127,7 +130,7 @@ const setup = () =>
 						as,
 						'POST',
 						'/__bolt/act',
-						{ callable, input, issuedAt: t.clock.now() },
+						{ callable, input, issued_at: t.clock.now() },
 						preview
 					)
 				);
@@ -141,7 +144,7 @@ const setup = () =>
 					return yield* Effect.fail(new ActRefused(failure.error));
 				}
 				const outcome = (yield* Schema.decodeUnknownEffect(ActReply)(raw)).outcome;
-				const failure = actFailure(outcome);
+				const failure = act_failure(outcome);
 				return Option.isSome(failure) ? yield* Effect.fail(failure.value) : outcome;
 			});
 		const transcript = (as: string, c: string) =>
@@ -161,14 +164,15 @@ const started = (outcome: Outcome) =>
 
 describe('the agent UI actions', () => {
 	it.live(
-		'starts on the workspace ai.default; a failed turn logs and shows staff the real reason',
+		'uses durable allowed models; a failed turn logs and shows staff the real reason',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { t, route, agent, act, transcript } = yield* setup();
+					yield* saveAgentSettings(t.db, { monthly: null, member: null, policies: {}, models: ['fast'] });
 					const start = yield* act('ann', 'sys_conversation.start', {});
 					const c = started(start);
-					expect((yield* agent.conversation(c)).model).toBe('fast');
+					expect((yield* agent.conversation(c)).model).toBe('default');
 					yield* act('ann', 'sys_message.post', { conversation: c, text: 'hi', now: true });
 					yield* route.settled;
 					const event = t.fakes.logs.find(
@@ -204,85 +208,87 @@ describe('the agent UI actions', () => {
 							't-ops'
 						)
 					).toMatchObject({ kind: 'committed' });
-					const [row] = (yield* t.db.read([
-						{
-							text: `SELECT "as" FROM sys_message WHERE conversation = $1 AND role = 'user'`,
-							params: [c]
-						}
-					]))[0]!.rows;
-					expect(row!['as']).toEqual({ member: 'ann', team: 't-ops' });
-					const ann = (yield* authorities.member(t.db, 'ann'))!;
+					expect(yield* t.db.value(Schema.Json, {
+						text: `SELECT "as" FROM sys_message WHERE conversation = $1 AND role = 'user'`,
+						params: [c]
+					})).toEqual({ member: 'ann', team: 't-ops' });
+					const ann = yield* authorities.member(t.db, 'bootstrap', 'ann');
+					if (ann === null) throw new Error('ann is not a member');
 					expect(ann.admin).toBe(true);
 					if (ann.actor.kind !== 'member') throw new Error('ann is not a member');
-					expect((yield* authorities.team(t.db, ann.actor, 't-ops'))!.admin).toBe(false);
+					const preview = yield* authorities.team(t.db, ann.actor, 't-ops');
+					if (preview === null) throw new Error('Ops preview is unavailable');
+					expect(preview.admin).toBe(false);
 				})
 			)
 	);
 
-	it.live("setAgent, file and markRead; an administrator reads an instance's raw messages", () =>
+	it.live("set_agent, file and mark_read; an administrator reads an instance's raw messages", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { t, agent, conversations, act, authorities } = yield* setup();
 				const c = yield* agent.start({ owner: 'ann' });
 				expect(
 					yield* Effect.flip(
-						act('ann', 'sys_conversation.setAgent', { conversation: c, agent: 'nope' })
+						act('ann', 'sys_conversation.set_agent', { conversation: c, agent: 'nope' })
 					)
 				).toMatchObject({ _tag: 'ActRefused' });
 				expect(
 					yield* Effect.flip(
-						act('bob', 'sys_conversation.setAgent', { conversation: c, agent: fieldEnvoy })
+						act('bob', 'sys_conversation.set_agent', { conversation: c, agent: fieldEnvoy })
 					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+				).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
 				expect(
-					yield* act('ann', 'sys_conversation.setAgent', { conversation: c, agent: fieldEnvoy })
+					yield* act('ann', 'sys_conversation.set_agent', { conversation: c, agent: fieldEnvoy })
 				).toMatchObject({ kind: 'committed' });
 				expect((yield* agent.conversation(c)).envoy).toBe(fieldEnvoy);
-				yield* act('ann', 'sys_conversation.setAgent', { conversation: c, agent: 'workspace' });
+				yield* act('ann', 'sys_conversation.set_agent', { conversation: c, agent: 'workspace' });
 				expect((yield* agent.conversation(c)).envoy).toBeNull();
 
-				// ingested only (its admission run left queued): the raw traffic is the inbound row alone
+				// Ingestion and inspection work before pairing; its admission run stays queued here.
+				expect(yield* t.db.value(Schema.Null, {
+					text: 'SELECT status FROM sys_integration WHERE id = $1', params: ['field']
+				})).toBeNull();
+				// The raw traffic is the inbound row alone.
 				yield* conversations.receive('field', {
 					kind: 'messages',
 					messages: [
 						{
 							id: 'w1',
 							thread: '6590000001@s.whatsapp.net',
-							sentAt: t.clock.now(),
+							sent_at: t.clock.now(),
 							from: { handle: '6590000001@s.whatsapp.net', name: 'Kim' },
+							reply_to: null,
 							text: 'hello?',
 							attachments: []
 						}
 					]
 				});
 				const thread = conversationId('field', '6590000001@s.whatsapp.net');
-				const ann = (yield* authorities.member(t.db, 'ann'))!;
 				// the instance's Messages tab: its raw traffic as stored, an administrator's
 				yield* t.db.write({
 					text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`,
 					params: []
 				});
-				const admin = (yield* authorities.member(t.db, 'ann'))!;
-				const raw = yield* instanceMessages(t.db, admin, 'field');
+				const admin = yield* authorities.member(t.db, 'bootstrap', 'ann');
+				if (admin === null) throw new Error('ann is not a member');
+				const raw = yield* instance_messages(t.db, admin, 'field');
 				expect(raw.map((x) => [x.direction, x.thread, x.sender_name, x.text])).toEqual([
 					['inbound', '6590000001@s.whatsapp.net', 'Kim', 'hello?']
 				]);
-				expect(
-					yield* Effect.flip(
-						instanceMessages(t.db, (yield* authorities.member(t.db, 'cus'))!, 'field')
-					)
-				).toMatchObject({ code: 'forbidden' });
-				expect(yield* Effect.flip(instanceMessages(t.db, admin, 'nope'))).toMatchObject({
-					code: 'notFound'
+				const customer = yield* authorities.member(t.db, 'bootstrap', 'cus');
+				if (customer === null) throw new Error('customer is unavailable');
+				expect(yield* Effect.flip(instance_messages(t.db, customer, 'field'))).toMatchObject({ code: 'forbidden' });
+				expect(yield* Effect.flip(instance_messages(t.db, admin, 'nope'))).toMatchObject({
+					code: 'not_found'
 				});
-				expect(yield* act('ann', 'sys_message.markRead', { conversation: thread })).toMatchObject({
+				expect(yield* act('ann', 'sys_message.mark_read', { conversation: thread })).toMatchObject({
 					kind: 'committed'
 				});
 
-				const [msg] = (yield* t.db.read([
-					{ text: `SELECT id FROM sys_message WHERE conversation = $1`, params: [thread] }
-				]))[0]!.rows;
-				const message = String(msg!['id']);
+				const message = yield* t.db.value(Schema.String, {
+					text: `SELECT id FROM sys_message WHERE conversation = $1`, params: [thread]
+				});
 				expect(
 					yield* Effect.flip(
 						act('ann', 'sys_message.file', {
@@ -290,16 +296,16 @@ describe('the agent UI actions', () => {
 							about: { model: 'quotes', id: 'missing' }
 						})
 					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+				).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
 				expect(
 					yield* Effect.flip(act('cus', 'sys_message.file', { message, about: null }))
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
-				const q = String(
-					(yield* t.db.write({
-						text: `INSERT INTO quotes (id, title) VALUES (gen_random_uuid(), 'Q1') RETURNING id::text AS id`,
-						params: []
-					})).rows[0]!['id']
-				);
+				).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
+				const [quote] = yield* t.db.returning(Schema.Struct({ id: Schema.String }), {
+					text: `INSERT INTO quotes (id, title) VALUES (gen_random_uuid(), 'Q1') RETURNING id::text AS id`,
+					params: []
+				});
+				if (quote === undefined) throw new Error('quote was not inserted');
+				const q = quote.id;
 				yield* t.db.write({
 					text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`,
 					params: []
@@ -307,11 +313,9 @@ describe('the agent UI actions', () => {
 				expect(
 					yield* act('ann', 'sys_message.file', { message, about: { model: 'quotes', id: q } })
 				).toMatchObject({ kind: 'committed' });
-				expect(
-					(yield* t.db.read([
-						{ text: `SELECT about FROM sys_message WHERE id = $1`, params: [message] }
-					]))[0]!.rows[0]!['about']
-				).toEqual({ model: 'quotes', id: q });
+				expect(yield* t.db.value(Schema.Json, {
+					text: `SELECT about FROM sys_message WHERE id = $1`, params: [message]
+				})).toEqual({ model: 'quotes', id: q });
 			})
 		)
 	);
@@ -409,6 +413,6 @@ describe('read_file on an xlsx', () => {
 		]);
 		const clock = cells[0]?.[1];
 		if (typeof clock !== 'string') throw new Error('ISO clock cell missing');
-		expect(parseInstant(clock, 'Asia/Kuala_Lumpur')).toBe('2026-06-03T00:15:30.125Z');
+		expect(parse_instant(clock, 'Asia/Kuala_Lumpur')).toBe('2026-06-03T00:15:30.125Z');
 	});
 });

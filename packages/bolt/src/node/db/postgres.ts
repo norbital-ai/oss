@@ -16,7 +16,7 @@ import {
 	cancelled,
 	copiedBatch,
 	DATABASE_SETTINGS,
-	dbError,
+	db_error,
 	lockStatements,
 	param,
 	parse
@@ -72,7 +72,7 @@ function raw(pool: PgPool): RawDb {
 		return name;
 	};
 	const query = (client: PgClient, q: PgQuery) =>
-		Effect.tryPromise({ try: () => client.query(q), catch: dbError });
+		Effect.tryPromise({ try: () => client.query(q), catch: db_error });
 	const send = (client: PgClient, text: string) => query(client, { text, types });
 	const single = (client: PgClient, statement: PgQuery) =>
 		Effect.map(query(client, statement), (result) => rowsOf(last(result)));
@@ -86,7 +86,7 @@ function raw(pool: PgPool): RawDb {
 			}
 			return client;
 		},
-		catch: dbError
+		catch: db_error
 	});
 	const run = (
 		batch: DbBatch,
@@ -109,7 +109,7 @@ function raw(pool: PgPool): RawDb {
 				].join(';\n');
 				return { statements, begin, end: prepared.rollback === true ? 'rollback' : 'commit' };
 			},
-			catch: dbError
+			catch: db_error
 		}).pipe(
 			Effect.flatMap((prepared) =>
 				Effect.scoped(

@@ -7,8 +7,8 @@ import { Effect, FileSystem } from 'effect';
 import { cachedSvelte } from './svelte-cache.ts';
 import { build, type Rolldown } from 'vite';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
-import { publicPageKeys } from '@norbital-ai/bolt/artifact';
-import { sha256Hex } from '@norbital-ai/store';
+import { public_page_keys } from '@norbital-ai/bolt/artifact';
+import { sha256_hex } from '@norbital-ai/store';
 import type { Discovered } from '../discover.ts';
 import { BuildError, graphSources } from './client.ts';
 import { publicWrapper } from './public-wrapper.ts';
@@ -34,7 +34,7 @@ export const buildServerPages = Effect.fn('bolt.buildServerPages')(function* (
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const root = yield* fs.realPath(directory);
-	const routes = publicPageKeys(m);
+	const routes = public_page_keys(m);
 	const pages: Record<string, { file: string; sha256: string }> = {};
 	if (routes.length === 0) return pages;
 	const base = files.find((file) => file.role === 'messages');
@@ -50,7 +50,7 @@ export const buildServerPages = Effect.fn('bolt.buildServerPages')(function* (
 		const entry = `import { install } from ${key(edge)};
 import { attached } from ${key(join(BOLT, 'decl', `body${EXT}`))};
 import { render } from 'svelte/server';
-import { frameworkText } from ${key(join(SHELL, `i18n${EXT}`))};
+import { framework_text } from ${key(join(SHELL, `i18n${EXT}`))};
 import { renderPublicPage } from ${key(join(SHELL, 'public', `server${EXT}`))};
 import Page from ${key(wrapper)};
 ${base === undefined ? 'const base = {};' : `import base from ${key(join(root, base.path))};`}
@@ -59,13 +59,13 @@ const locales = { ${locales.map((file, index) => `${key(file.name.toLowerCase())
 install();
 export default { page: { ${key(route)}: { body: attached(function* (input, ctx) {
 	const locale = input.boot.workspace.locale.toLowerCase();
-	const messages = { ...frameworkText(locale), ...base, ...(locales[locale] ?? locales[locale.split('-')[0]] ?? {}) };
+	const messages = { ...framework_text(locale), ...base, ...(locales[locale] ?? locales[locale.split('-')[0]] ?? {}) };
 	const boot = { ...input.boot, messages };
 	const rendered = yield* renderPublicPage(
 		boot,
 		ctx.now,
 		(read) => ctx[read.m](...read.a),
-		(context) => render(Page, { props: { boot, ctx: context } })
+		(context, views) => render(Page, { props: { boot, ctx: context, views } })
 	);
 	return { ...rendered, messages };
 }, 1) } } };`;
@@ -109,7 +109,7 @@ export default { page: { ${key(route)}: { body: attached(function* (input, ctx) 
 									);
 								if (NODE.has(id)) {
 									const from =
-										importer === undefined ? undefined : relative(root, importer.split('?')[0]!);
+										importer === undefined ? undefined : relative(root, importer.replace(/\?.*$/, ''));
 									if (
 										from !== undefined &&
 										!from.startsWith('..') &&
@@ -162,7 +162,7 @@ export default { page: { ${key(route)}: { body: attached(function* (input, ctx) 
 								if (id.endsWith('.css')) return '';
 								if (!id.startsWith(BYTES)) return null;
 								return readFile(id.slice(BYTES.length), { signal }).then((bytes) => {
-									const hash = sha256Hex(bytes);
+									const hash = sha256_hex(bytes);
 									assets[hash] = bytes;
 									return `export default globalThis[Symbol.for('norbital.bolt.asset')](${key(hash)});`;
 								});
@@ -249,7 +249,7 @@ export default { page: { ${key(route)}: { body: attached(function* (input, ctx) 
 			yield* fs.makeDirectory(join(out, `server/${route}.assets`), { recursive: true });
 			yield* fs.writeFile(join(out, `server/${route}.assets`, hash), bytes);
 		}
-		pages[route] = { file, sha256: sha256Hex(chunk.code) };
+		pages[route] = { file, sha256: sha256_hex(chunk.code) };
 	}
 	return pages;
 });

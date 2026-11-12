@@ -13,7 +13,7 @@
 		of: C;
 		/** The chosen id; any text is shown as not found, never trusted. */
 		value: string | null;
-		onChange(next: IdOf<C> | null): void;
+		on_change(next: IdOf<C> | null): void;
 		label?: readonly FieldOf<C>[];
 		where?: WhereOf<C> & Json;
 		order_by?: OrderByOf<C> & Json;
@@ -31,20 +31,20 @@
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import Input from '../primitives/input/input.svelte';
 	import { label as title } from '@norbital-ai/std/label';
-	import { uiText, useControls } from '../primitives/utils.js';
+	import { ui_text, use_controls } from '../primitives/utils.js';
 	import { useKinds } from './context.js';
 	import { Effect } from 'effect';
-	import { observeOnce as queryState } from '../effect/index.js';
-	import { idsOf } from '../form/form-state.svelte.js';
-	import { currencyOf, format, pickerRead, valueObject } from './kind.js';
-	import { byId } from '../read/request.js';
-	import { labelRead } from '../relations/select.js';
+	import { observe_once as queryState } from '../effect/index.js';
+	import { ids_of } from '../form/form-state.svelte.js';
+	import { currencyOf, format, picker_read, value_object } from './kind.js';
+	import { by_id } from '../read/request.js';
+	import { label_read } from '../relations/select.js';
 	import { withOutputs } from '../client/context.js';
 
 	let {
 		of,
 		value,
-		onChange,
+		on_change,
 		label,
 		where,
 		order_by,
@@ -54,12 +54,12 @@
 		disabled,
 		invalid = false
 	}: PickerProps<C> = $props();
-	const controls = useControls();
+	const controls = use_controls();
 	const host = useKinds();
 	const target = $derived(host.catalog?.[of]);
 	const labels = $derived(label ?? target?.label ?? []);
 	type Hit = { id: string; text: string };
-	const t = uiText();
+	const t = ui_text();
 	// The shared record identifier: declared label, otherwise its stable id.
 	const textOf = (row: { readonly [f: string]: Value }) =>
 		title(row, label === undefined ? (target?.record_label ?? []) : labels, (f, v) => {
@@ -85,7 +85,7 @@
 			Effect.map((answer) => {
 				const rows = answer.jurisdiction_settings?.rows ?? [];
 				const period = (row: (typeof rows)[number]) => {
-					const range = valueObject(row.effective_range) ? row.effective_range : {};
+					const range = value_object(row.effective_range) ? row.effective_range : {};
 					return {
 						from: typeof range['from'] === 'string' ? range['from'] : '',
 						to: typeof range['to'] === 'string' ? range['to'] : null
@@ -121,12 +121,12 @@
 			return yield* read(
 				withOutputs(
 					target?.record_label !== undefined
-						? labelRead(
+						? label_read(
 								host.catalog,
 								of,
-								pickerRead(target, labels, { where: filter, order_by, limit }, q)
+								picker_read(target, labels, { where: filter, order_by, limit }, q)
 							)
-						: { [of]: pickerRead(target, labels, { where: filter, order_by, limit }, q) },
+						: { [of]: picker_read(target, labels, { where: filter, order_by, limit }, q) },
 					host.catalog
 				)
 			);
@@ -143,14 +143,14 @@
 		return read(
 			withOutputs(
 				target?.record_label !== undefined
-					? labelRead(host.catalog, of, { where: { id: { eq: id } }, limit: 1 })
-					: byId(of, id, labels),
+					? label_read(host.catalog, of, { where: { id: { eq: id } }, limit: 1 })
+					: by_id(of, id, labels),
 				host.catalog
 			)
 		).pipe(
 			Effect.map((answer): Hit => {
 				const row = answer[of]?.rows[0];
-				return { id, text: row === undefined ? t('notFound') : textOf(row) };
+				return { id, text: row === undefined ? t('not_found') : textOf(row) };
 			})
 		);
 	});
@@ -165,14 +165,14 @@
 				? selected.current
 				: selected.error === undefined || value === null
 					? null
-					: { id: value, text: t('notFound') }
+					: { id: value, text: t('not_found') }
 	);
 	const type = (q: string) => {
 		query = q;
 	};
 	const choose = (next: string | null) => {
 		chosen = hits.find((hit) => hit.id === next) ?? null;
-		onChange(next === null ? null : (idsOf<C>([next])[0] ?? null));
+		on_change(next === null ? null : (ids_of<C>([next])[0] ?? null));
 	};
 </script>
 
@@ -205,7 +205,7 @@
 		options={hits.map((h) => ({ value: h.id, label: h.text }))}
 		{value}
 		display={current?.text}
-		onSearch={type}
-		onChange={choose}
+		on_search={type}
+		on_change={choose}
 	/>
 {/if}

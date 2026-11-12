@@ -1,9 +1,9 @@
 // An untethered in-process host (plan 01): a workspace's `norbital.host.ts` loaded, and one release served over its
 // facilities through the engine's own paths: integration links, activation, deadline wakes and the cron clock.
 // bolt-server and `bolt dev --host` both serve through it; Colony makes the same engine calls across its tenants.
-import { Clock, Effect, FiberSet, FileSystem, Option, Path, Queue, Result, Schema } from 'effect';
+import { Context, Effect, FiberSet, FileSystem, Layer, Option, Path, Result, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
-import { activate, isOff, off, type Facilities, type Serving } from '../facilities/index.ts';
+import { activate, is_off, off, type Facilities, type Serving } from '../facilities/index.ts';
 import { BoltError, CODES } from '../protocol/errors.ts';
 import {
 	HOST_API,
@@ -12,9 +12,12 @@ import {
 	type Release,
 	type WorkspaceLinks
 } from '../protocol/host-api.ts';
-import { cronClock } from './cron-clock.ts';
+import { cron_clock } from './cron-clock.ts';
 import type { GuestIsolatesPort } from '../engine/contracts.ts';
 import type { NodePorts } from './ports.ts';
+import { DeadlinePort } from '../engine/ports.ts';
+import { in_process_deadlines } from '../engine/runs/deadlines.ts';
+import { hostModule } from './host-module.ts';
 
 const isCode = Schema.is(Schema.Literals(CODES));
 /** A HOST_API rejection (an encoded `HostApiFailure`) as the BoltError it names. */
@@ -34,7 +37,7 @@ export const call = <A>(work: (signal: AbortSignal) => Promise<A>) =>
 export const HOST_FILE = 'norbital.host.ts';
 
 /** `flag`'s host file, else `root`'s own `norbital.host.ts`; none means the tethered loop. */
-export const hostFileOf = Effect.fn('bolt.hostFileOf')(function* (
+export const host_file_of = Effect.fn('bolt.host_file_of')(function* (
 	root: string,
 	flag: string | undefined
 ) {
@@ -45,55 +48,45 @@ export const hostFileOf = Effect.fn('bolt.hostFileOf')(function* (
 	return (yield* fs.exists(own)) ? Option.some(own) : Option.none<string>();
 });
 
-const groups = ['storage', 'logs', 'transactional', 'intelligence', 'ports', 'sandbox', 'keys'];
-const HostModule = Schema.Struct({
-	default: Schema.declare(
-		(input): input is Facilities =>
-			typeof input === 'object' && input !== null && groups.every((group) => group in input)
-	),
-	serving: Schema.optionalKey(
-		Schema.declare((input): input is Serving => typeof input === 'object' && input !== null)
-	)
-});
 /** A host file's default `Facilities` and optional `serving`; closed with the scope. */
-export const loadHost = Effect.fn('bolt.loadHost')(function* (file: string) {
+export const load_host = Effect.fn('bolt.load_host')(function* (file: string) {
 	const module = yield* Effect.tryPromise({
-		try: () => import(pathToFileURL(file).href),
+		try: (): Promise<unknown> => import(pathToFileURL(file).href),
 		catch: (cause) =>
 			BoltError.make(
-				'invalidSpec',
+				'invalid_spec',
 				'admission',
 				`${file} could not load: ${cause instanceof Error ? cause.message : String(cause)}`,
 				cause
 			)
 	}).pipe(
 		Effect.flatMap((module) =>
-			Schema.decodeUnknownEffect(HostModule)(module).pipe(
-				Effect.mapError((cause) =>
+			Effect.try({
+				try: () => hostModule(module),
+				catch: (cause) =>
 					BoltError.make(
-						'invalidSpec',
+						'invalid_spec',
 						'admission',
 						`${file} must default-export its Facilities (every group, \`off\` where left out).`,
 						cause
 					)
-				)
-			)
+			})
 		)
 	);
-	const serving = module.serving ?? {};
+	const serving = module.serving;
 	const close = serving.close;
 	if (close !== undefined) yield* Effect.addFinalizer(() => Effect.promise(() => close()));
-	return { facilities: module.default, serving };
+	return module;
 });
 
 export type ServeOptions = {
 	/** The deadlines scope and the log key. */
 	readonly scope: string;
 	readonly release: Release;
-	readonly publicUrl: string;
+	readonly public_url: string;
 	readonly facilities: Facilities;
 	readonly serving: Serving;
-	/** The host's guest runner (`nodeGuests` from `@norbital-ai/bolt-cli/guests` for bolt-server and `bolt dev`). */
+	/** The host's guest runner (`node_guests` from `@norbital-ai/bolt-cli/guests` for bolt-server and `bolt dev`). */
 	readonly guests: GuestIsolatesPort;
 	readonly native: NodePorts;
 	/** The shell's workspace name and handle. */
@@ -105,8 +98,8 @@ export type ServeOptions = {
 export type Generation = { readonly workspace: ActiveWorkspace; readonly links: WorkspaceLinks };
 
 /** One release served until the scope closes: its links, the activation, deadline wakes and crons. */
-export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: ServeOptions) {
-	const { facilities, serving, release, publicUrl } = options;
+export const serve_release = Effect.fn('bolt.serve_release')(function* (options: ServeOptions) {
+	const { facilities, serving, release, public_url } = options;
 	const generation = Promise.withResolvers<ActiveWorkspace>();
 	const runtime = yield* FiberSet.makeRuntimePromise<never>();
 	const run = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -118,7 +111,7 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 					release,
 					database: facilities.storage.database,
 					keys: facilities.keys,
-					publicUrl,
+					public_url,
 					providers: serving.providers ?? [],
 					...(serving.oauth === undefined ? {} : { oauth: serving.oauth }),
 					enter: (work) => generation.promise.then(work),
@@ -127,7 +120,7 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 							run(options.admit(Effect.promise(() => work(workspace))))
 						),
 					fetch: globalThis.fetch,
-					tcp: isOff(facilities.ports.outbound)
+					tcp: is_off(facilities.ports.outbound)
 						? {
 								connect: () =>
 									Promise.reject(
@@ -144,33 +137,30 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 				{ signal }
 			)
 		),
-		(links) => Effect.promise(() => links.close())
+		(links) => Effect.tryPromise(() => links.close()).pipe(Effect.ignore)
 	);
-	// deadlines: the engine announces and settles the next due wake; one fiber sleeps until it
-	const nudge = yield* Queue.sliding<void>(1);
-	let due: number | null = null;
+	const deadlines = Context.get(yield* Layer.build(in_process_deadlines({
+		wake: () => Effect.gen(function* () {
+			const current = yield* call(() => generation.promise);
+			yield* options.admit(call((signal) => current.wake({ signal })));
+		}),
+		// The active wake owns compute admission; a pulse only transfers a due notification to it.
+		pulse: () => call(() => generation.promise).pipe(
+			Effect.flatMap((current) => call((signal) => current.pulse({ signal })))
+		)
+	})), DeadlinePort);
 	const workspace = yield* Effect.acquireRelease(
 		call((signal) =>
 			activate(
 				{
 					scope: options.scope,
 					release,
-					publicUrl,
+					public_url,
 					guests: options.guests,
 					deadlines: {
-						announce: (_scope, notLaterThan) => {
-							const next = Date.parse(notLaterThan);
-							if (due !== null && due <= next) return;
-							due = next;
-							Queue.offerUnsafe(nudge, undefined);
-						},
-						settle: (_scope, nextDue) => {
-							due = nextDue === null ? null : Date.parse(nextDue);
-							Queue.offerUnsafe(nudge, undefined);
-						},
-						teardown: () => {
-							due = null;
-						}
+						announce: (scope, at) => run(deadlines.announce(scope, at)),
+						settle: (scope, at) => run(deadlines.settle(scope, at)),
+						teardown: (scope) => run(deadlines.teardown(scope))
 					},
 					images: options.native.images,
 					docs: options.native.docs,
@@ -184,37 +174,20 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 					shell: { workspace: () => options.workspace, ...serving.shell },
 					agent: {
 						...(serving.ingest === undefined ? {} : { ingest: serving.ingest }),
-						...(serving.hostTools === undefined ? {} : { hostTools: serving.hostTools })
+						...(serving.host_tools === undefined ? {} : { host_tools: serving.host_tools })
 					}
 				},
 				facilities,
 				{ signal }
 			)
 		),
-		(workspace) => Effect.promise(() => workspace.close())
+		(workspace) => Effect.tryPromise(() => workspace.close()).pipe(Effect.ignore)
 	);
 	generation.resolve(workspace);
 	yield* call((signal) => links.resume({ signal }));
-	yield* Effect.gen(function* () {
-		while (true) {
-			const wake = due;
-			if (wake === null) {
-				yield* Queue.take(nudge);
-				continue;
-			}
-			const wait = wake - (yield* Clock.currentTimeMillis);
-			if (wait > 0) {
-				yield* Queue.take(nudge).pipe(Effect.timeoutOption(wait));
-				continue;
-			}
-			due = null;
-			yield* options
-				.admit(call((signal) => workspace.wake({ signal })))
-				.pipe(Effect.catchCause((cause) => Effect.logWarning('deadline wake failed', cause)));
-		}
-	}).pipe(Effect.forkScoped);
-	yield* cronClock({
-		crons: Effect.promise(() => workspace.crons()),
+	const crons = yield* call(() => workspace.crons());
+	yield* cron_clock({
+		crons: Effect.succeed(crons),
 		fire: (id, slot) => options.admit(call((signal) => workspace.fire(id, slot, { signal })))
 	});
 	const served: Generation = { workspace, links };

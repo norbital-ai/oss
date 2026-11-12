@@ -6,14 +6,17 @@
 import type { Effect } from 'effect';
 import type { FileUrlOptions } from '@norbital-ai/std/kind';
 import type { Actor } from '../decl/access/actor.ts';
-import type { StartableName } from '../decl/access/policy.ts';
+import type { AutomationName } from '../decl/names.ts';
+import type { AutomationSpecOf } from '../decl/runtime/names.ts';
+import type { StartOutput } from '../decl/runtime/facilities.ts';
+import type { SyncControlInput } from '../decl/runtime/sync.ts';
 import type {
-	ActInput,
-	ActOutput,
+	ActMap,
+	ActMapInput,
+	ActMapOutput,
+	ActOptions,
 	AggRow,
 	Bucket,
-	BucketField,
-	Callable,
 	Committed,
 	HistoryOptions,
 	Measures,
@@ -38,9 +41,9 @@ import type {
 	TransportFailed,
 	Unavailable
 } from '../decl/errors.ts';
-import type { ModelName, FileField, FileSyncName, Is, ReadableName } from '../decl/names.ts';
+import type { ModelName, FileField, FileSyncName, ReadSyncName, Is, ReadableName } from '../decl/names.ts';
 import type { ConvertSource, PreviewPdfOptions, StartInput } from '../decl/runtime/facilities.ts';
-import type { FileRef, Id, Instant, PlainDate, RequestId } from '../decl/values.ts';
+import type { FileRef, Id, Instant, Json, PlainDate, RequestId } from '../decl/values.ts';
 import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import type { RecordCapabilities, RecordParentContext } from '../protocol/record-contracts.ts';
 import type { WireRead } from '../protocol/wire.ts';
@@ -66,9 +69,9 @@ export interface Query<out T>
  * and continues as a run, followed through `bolt.runs`) succeeds; refusal, conflict and uncertain settlement are typed
  * failures.
  */
-export type PageAct<O, N = string> = Effect.Effect<
-	Committed<O, N> | PendingApproval<N> | Running,
-	ActRefused | ActConflict | ActUnknown
+export type PageAct<O> = Effect.Effect<
+	Committed<O> | PendingApproval | Running,
+	ActRefused | ActConflict | ActUnknown | ProtocolFailed
 >;
 /** Admission of queued runs; a committed output is the queue receipt. `runs` follows execution and its declared result. */
 export type PageRun<A extends string = string> = Effect.Effect<
@@ -76,8 +79,10 @@ export type PageRun<A extends string = string> = Effect.Effect<
 		readonly id: Id<'sys_run'>;
 		readonly ids: readonly Id<'sys_run'>[];
 		readonly automation: A;
-	}>
+	}>,
+	ProtocolFailed
 > & {
+	readonly mode: 'job';
 	/** The first run's id; `ids` holds every run's, one per input. */
 	readonly id: Id<'sys_run'>;
 	readonly ids: readonly Id<'sys_run'>[];
@@ -101,6 +106,8 @@ type ApprovalFilter = {
 
 /** The typed members of a page context (§3.5); a page reads and acts as its viewer, so rows are caller rows. */
 export interface PageBolt {
+	/** Re-reads mounted queries, surfaces read failures, and waits for their subscribers to receive the answers. */
+	refresh(): Effect.Effect<void, ReadFailed | TransportFailed>;
 	/**
 	 * A read request, as server code's `ctx.query`: roots (models with `read`) and their declared layers in one read, the
 	 * answer typed from the named layers; live by every row it read, layers included.
@@ -110,9 +117,8 @@ export interface PageBolt {
 	 * @see Query
 	 * @example
 	 * const orders = bolt.query({
-	 * 	orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total', 'party'], order_by: 'due_on', limit: 100 },
-	 * 	'orders.party': { fields: ['name'] },
-	 * 	'orders.lines': { fields: ['quantity', 'net'] }
+	 * 	orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total'], order_by: 'due_on', limit: 100,
+	 * 		party: { fields: ['name'] }, lines: { fields: ['quantity', 'net'] } }
 	 * });
 	 */
 	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Query<ReadAnswer<R>>;
@@ -125,13 +131,13 @@ export interface PageBolt {
 	aggregate<C extends string, const B extends Bucket<C> | readonly Bucket<C>[]>(
 		model: Is<C, ReadableName>,
 		args: Measures<C> & { by: B } & Paged
-	): Query<Page<AggRow<C, BucketField<B>>>>;
-	/** A record's revisions, oldest first, or from an instant, a revision or just before an approval request. */
+	): Query<Page<AggRow<C, B>>>;
+	/** A record's revisions, oldest first, up to an instant, a revision or just before an approval request. */
 	history<C extends string>(
 		model: Is<C, ReadableName>,
 		id: NoInfer<Id<C>>,
 		options?: HistoryOptions<C>
-	): Query<readonly Revision<C>[]>;
+	): Query<readonly Revision[]>;
 	/**
 	 * The page's clock. With a unit, reactive: `today` and `now` change at each minute, hour or day boundary in the
 	 * workspace zone, ticking only while the page is visible. Without one, a fixed snapshot taken when the page opened.
@@ -143,31 +149,25 @@ export interface PageBolt {
 		id: NoInfer<Id<C>>,
 		parent?: RecordParentContext
 	): PageCall<RecordCapabilities | null, TransportFailed | ProtocolFailed>;
+	/** Plans every named generated write together and commits them as one statement. */
+	act<const A extends ActMap>(acts: ActMapInput<A>, options?: ActOptions): PageAct<ActMapOutput<A>>;
+	act<const A extends Readonly<Record<string, Json>>>(
+		acts: string extends keyof A ? A : never,
+		options?: ActOptions
+	): PageAct<Readonly<Record<string, Json>>>;
 	/**
-	 * Runs a generated model write as the viewer. Input is a batch derived from that verb's exposure.
-	 * Execute the returned Effect through the mounted page runtime (`run`, `fork` or `attach` from `@norbital-ai/ui/effect`).
-	 * A `pending_approval` receipt is successful submission, not final approval; `running` is followed through the run ledger.
-	 * Refusal, conflict and uncertain settlement fail with `ActRefused`, `ActConflict` and `ActUnknown` respectively.
-	 * @param callable A generated model verb, such as `orders.create`; automations use run.
-	 * @param input The verb's ActInput batch, with branded target ids for updates and deletes.
-	 * @param options Optional idempotency keys and observed revisions.
-	 * @returns A PageAct Effect with the committed, pending_approval or running receipt.
-	 * @see ActInput
-	 * @see PageAct
-	 */
-	act<const N extends string>(
-		callable: Is<N, Callable>,
-		input: NoInfer<ActInput<N>>,
-		options?: { key?: string; once?: string; observed?: Readonly<Record<string, number>> }
-	): PageAct<ActOutput<N>, N>;
-	/**
-	 * Starts an automation now with its typed input, or once per input in one request (a bulk action over selected
-	 * records). A batch needs at least one input. `id`/`ids` are the runs' ids before the outcome settles (a toolbar item returning it shows the runs).
+	 * Calls return their declared output in this request. Jobs queue one run per input, with `id`/`ids` available
+	 * before admission settles so native controls can follow them. A job batch needs at least one input.
 	 */
 	run<const A extends string>(
-		automation: Is<A, StartableName>,
-		input: NoInfer<StartInput<A> | readonly StartInput<A>[]>
-	): PageRun<A>;
+		automation: Is<A, AutomationName>,
+		input: NoInfer<AutomationSpecOf<A> extends { mode: 'call' } ? StartInput<A> : StartInput<A> | readonly StartInput<A>[]>
+	): AutomationSpecOf<A> extends { mode: 'call' }
+		? PageCall<StartOutput<A>, ActRefused | ActConflict | ActUnknown | ProtocolFailed> & { readonly mode: 'call'; readonly automation: A } : PageRun<A>;
+	/** Native sync controls, separate from automation calls and schedules; execution stays visible in the run ledger. */
+	sync_control<const M extends string, const S extends string>(
+		model: Is<M, ModelName>, sync: Is<S, FileSyncName<M> | ReadSyncName<M>>, input: NoInfer<SyncControlInput<M, S>>
+	): PageRun<`${M}.sync.${S}`>;
 	/** `accept` and `max` are checked before bytes are stored; a refusal is `ActRefused`. */
 	upload(
 		file: Blob & { name?: string },
@@ -200,12 +200,12 @@ export interface PageBolt {
 	/** A message of `+messages.ts` in the page's locale, `{name}` placeholders filled from `vars`. */
 	t(key: MessageKey, vars?: { readonly [name: string]: string | number }): string;
 	/**
-	 * On-page sign-in (§5.11.2): `sendCode` texts or emails a six-digit code, `verify` proves it, signs the viewer in — a
+	 * On-page sign-in (§5.11.2): `send_code` texts or emails a six-digit code, `verify` proves it, signs the viewer in — a
 	 * newcomer joins where the workspace declares `signup` — and reloads the page as them. A refusal is a `Refusal`. ui's
 	 * `<PhoneVerify session={bolt.session} />` is the whole control.
 	 */
 	session: {
-		sendCode(address: string): PageCall<void, Refusal>;
+		send_code(address: string): PageCall<void, Refusal>;
 		verify(address: string, code: string): PageCall<void, Refusal>;
 	};
 	/** Who the page runs as; `null` before a visitor page has one. */

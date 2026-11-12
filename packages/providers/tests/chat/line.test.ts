@@ -1,3 +1,4 @@
+import { required } from '../kit.ts';
 // LINE: its real SDK, signed deliveries, and its API faked behind `fetch`.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
@@ -37,7 +38,7 @@ describe('LINE', () => {
 			const h = yield* connected(line, settings),
 				body = text();
 			expect(h.status).toMatchObject({ state: 'connected', account: '@acme' });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
@@ -51,7 +52,7 @@ describe('LINE', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(line, settings),
 				body = text();
-			const refused = yield* h.link.webhook!(webhook(body, { 'x-line-signature': 'forged' }));
+			const refused = yield* required(h.link.webhook)(webhook(body, { 'x-line-signature': 'forged' }));
 			expect(refused.status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
@@ -63,7 +64,7 @@ describe('LINE', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = text();
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live('an unsend is a delete, and a group message reads its mention', () =>
@@ -81,8 +82,8 @@ describe('LINE', () => {
 						mention: { mentionees: [{ type: 'user', index: 0, length: 4, isSelf: true }] }
 					}
 				});
-			yield* h.link.webhook!(webhook(unsend, signature(unsend)));
-			yield* h.link.webhook!(webhook(group, signature(group)));
+			yield* required(h.link.webhook)(webhook(unsend, signature(unsend)));
+			yield* required(h.link.webhook)(webhook(group, signature(group)));
 			expect(h.events[0]).toMatchObject({ messages: [{ id: 'm1', deleted: true }] });
 			expect(h.events[1]).toMatchObject({
 				messages: [{ id: 'm2', thread: 'G1', group: true, invocation: 'mention' }]
@@ -93,8 +94,8 @@ describe('LINE', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(line, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: 'U1', text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: 'U1', text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1);
 			expect(call?.headers.get('x-line-retry-key')).toBe('r1');
 			expect(JSON.parse(call?.body ?? '')).toMatchObject({
@@ -109,7 +110,7 @@ describe('LINE', () => {
 			const { chatProvider } = yield* Effect.promise(() => import('../../src/chat/adapter.ts'));
 			const { host } = yield* Effect.promise(() => import('../kit.ts'));
 			const h = yield* host(chatProvider(line), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

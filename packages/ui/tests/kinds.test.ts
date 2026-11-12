@@ -4,17 +4,18 @@ import './resolve.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { KIND, type Kind } from '@norbital-ai/std/kind';
 import { KINDS, sortable } from '../src/kinds/registry.ts';
-import { sortable as sortableFields } from '../src/filter/filter.ts';
+import { sortable as sortableFields } from '../src/filter/order.ts';
+import { locked } from '../src/form/draft.ts';
 
 const k = await import('../src/kinds/kind.ts');
 
 test('native values keep exact decimals, native ISO dates and nested values', () => {
 	const amount = Decimal.of('12345678901234567.89');
-	assert.equal(k.formatValue(amount), '12,345,678,901,234,567.89');
-	assert.equal(k.formatValue(amount, 'de-DE'), '12.345.678.901.234.567,89');
-	assert.equal(k.formatValue('2026-09-25'), '2026-09-25');
-	assert.equal(k.formatValue({ from: '2026-01-01', to: null }), '2026-01-01 – …');
-	assert.equal(k.formatValue([Decimal.of('1')]), '1');
+	assert.equal(k.format_value(amount), '12,345,678,901,234,567.89');
+	assert.equal(k.format_value(amount, 'de-DE'), '12.345.678.901.234.567,89');
+	assert.equal(k.format_value('2026-09-25'), '2026-09-25');
+	assert.equal(k.format_value({ from: '2026-01-01', to: null }), '2026-01-01 – …');
+	assert.equal(k.format_value([Decimal.of('1')]), '1');
 	const kind = {
 		kind: 'object',
 		fields: { amounts: { kind: 'decimal', scale: 2, many: true } }
@@ -41,7 +42,7 @@ test('kind matrix: picker and view sortability share the canonical traits', () =
 	for (const [name, kind] of Object.entries(fields)) {
 		assert.equal(offered.includes(name), sortable(kind));
 		assert.deepEqual(
-			k.pickerRead(exposure, [name], { limit: 20 }, '').order_by,
+			k.picker_read(exposure, [name], { limit: 20 }, '').order_by,
 			sortable(kind) ? { [name]: 'asc' } : undefined
 		);
 	}
@@ -189,15 +190,20 @@ test('state helpers: edges, edit locks and a stable tone', () => {
 		initial: 'draft',
 		states: {
 			draft: { to: ['submitted'] },
-			submitted: { edit: ['note'] },
-			ordered: { edit: 'none' }
+			submitted: {},
+			ordered: {}
 		}
 	} as const;
 	assert.deepEqual(k.edgesFrom(s, 'draft'), ['submitted']);
-	assert.equal(k.editable(s, 'draft', 'total'), true);
-	assert.equal(k.editable(s, 'submitted', 'note'), true);
-	assert.equal(k.editable(s, 'submitted', 'total'), false);
-	assert.equal(k.editable(s, 'ordered', 'note'), false);
+	const fields = { status: s, total: { kind: 'int' }, note: { kind: 'text' } } as const;
+	const rules = [
+		{ where: { status: { eq: 'submitted' } }, except: ['note'] },
+		{ where: { status: { eq: 'ordered' } } }
+	];
+	assert.equal(locked(fields, { id: 'a', status: 'draft' }, rules)('total'), false);
+	assert.equal(locked(fields, { id: 'a', status: 'submitted' }, rules)('note'), false);
+	assert.equal(locked(fields, { id: 'a', status: 'submitted' }, rules)('total'), true);
+	assert.equal(locked(fields, { id: 'a', status: 'ordered' }, rules)('note'), true);
 	assert.equal(k.tone('rejected'), 'danger');
 	assert.equal(k.tone('approved'), 'success');
 });
@@ -219,13 +225,13 @@ test('a picker searches on the server, patterned seq labels included, and sorts 
 			n: { kind: 'seq' }
 		}
 	} as const;
-	assert.deepEqual(k.pickerRead(target, ['code', 'name'], { limit: 20 }, ''), {
+	assert.deepEqual(k.picker_read(target, ['code', 'name'], { limit: 20 }, ''), {
 		fields: ['code', 'name'],
 		limit: 20,
 		order_by: { code: 'asc' }
 	});
 	assert.deepEqual(
-		k.pickerRead(
+		k.picker_read(
 			target,
 			['code', 'name'],
 			{ where: { active: { eq: true } }, order_by: { name: 'desc' }, limit: 20 },
@@ -238,15 +244,15 @@ test('a picker searches on the server, patterned seq labels included, and sorts 
 			]
 		}
 	);
-	assert.equal(k.pickerRead(target, ['n'], { limit: 20 }, 'x').where, undefined); // an unpatterned seq is a number
+	assert.equal(k.picker_read(target, ['n'], { limit: 20 }, 'x').where, undefined); // an unpatterned seq is a number
 	// a declared search ranks the typed text; with nothing typed the label sorts
 	const indexed = { ...target, search: ['name'] };
-	assert.deepEqual(k.pickerRead(indexed, ['name'], { limit: 20 }, 'acme'), {
+	assert.deepEqual(k.picker_read(indexed, ['name'], { limit: 20 }, 'acme'), {
 		fields: ['name'],
 		limit: 20,
 		search: 'acme'
 	});
-	assert.deepEqual(k.pickerRead(indexed, ['name'], { limit: 20 }, '').order_by, { name: 'asc' });
+	assert.deepEqual(k.picker_read(indexed, ['name'], { limit: 20 }, '').order_by, { name: 'asc' });
 });
 
 test('precision: a year, month or week snaps to its first day (weeks from Monday); a period end to its last', async () => {

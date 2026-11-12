@@ -1,7 +1,7 @@
 // A pending sign-in code (rule 38a), keyed by the address's MAC. Engine only: not exposed.
-import { bind_model } from '../../../../declarations.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default bind_model('sys_challenge')({
+export default bind_system_model('sys_challenge')({
 	description: 'A sign-in code sent to an address, awaiting its entry.',
 	record_label: 'record.address_mac',
 	fields: {

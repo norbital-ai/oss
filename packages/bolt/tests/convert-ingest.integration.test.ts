@@ -4,8 +4,8 @@ import { Effect, Exit, Layer, Result, Schema, Scope } from 'effect';
 import { afterAll } from 'vitest';
 import { Convert } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { actReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { act_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { Ingested } from '../src/engine/contracts.ts';
 import { expect } from '@effect/vitest';
@@ -13,7 +13,7 @@ import type { Json } from '../src/decl/values.ts';
 import { layer, TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			calls: {
@@ -31,11 +31,10 @@ const manifest = Result.getOrThrow(
 		},
 		integrations: {},
 		teams: {},
-		connections: {},
 
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} },
 		policies: {
 			ops: {
@@ -48,7 +47,8 @@ const manifest = Result.getOrThrow(
 			listen: {
 				description: 'Reads a call',
 				policies: ['ops'],
-				input: { file: { kind: 'json' }, options: { kind: 'json' } }
+				input: { file: { kind: 'json' }, options: { kind: 'json' } },
+				output: { kind: 'json' }
 			}
 		}
 	})
@@ -94,10 +94,10 @@ afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
 const prepared = Effect.gen(function* () {
 	if (fixture !== undefined) return fixture;
 	const t = yield* TestWorkspace,
-		route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>()).pipe(
+		route = yield* route_fixture(yield* Effect.context<TestWorkspace | WorkspaceServices>()).pipe(
 			Scope.provide(fileScope)
 		),
-		admin = t.as(t.admin);
+		admin = yield* t.as(t.admin);
 	const up = yield* admin.upload('calls.audio', {
 		name: 'call.mp3',
 		mime: 'audio/mpeg',
@@ -105,10 +105,9 @@ const prepared = Effect.gen(function* () {
 	});
 	if (up.kind !== 'committed') throw new Error('upload failed');
 	const file: Json = { id: up.output.id, name: up.output.name, mime: up.output.mime };
-	yield* actReply(route, admin.authority, {
-		callable: 'calls.create',
-		input: [{ title: 'Call', audio: file }],
-		issuedAt: t.clock.now()
+	yield* act_reply(route, admin.authority, {
+		acts: { 'calls.create': [{ title: 'Call', audio: file }] },
+		issued_at: t.clock.now()
 	});
 	return (fixture = { route, file });
 });
@@ -118,12 +117,12 @@ const run = (input: (file: Json) => Json, port: { ingest?: Ingest } = {}) =>
 		const t = yield* TestWorkspace,
 			{ route, file } = yield* prepared;
 		const id = uuidv7(Date.parse(t.clock.now()));
-		yield* actReply(route, t.as(t.member(['ops'])).authority, {
-			callable: 'start',
+		yield* act_reply(route, (yield* t.as(t.member(['ops']))).authority, {
+			callable: 'run',
 			input: { automation: 'listen', input: input(file), id },
-			issuedAt: t.clock.now()
+			issued_at: t.clock.now()
 		});
-		yield* t.runDue();
+		yield* t.run_due();
 		const [rows] = yield* t.db.read([
 			{ text: `SELECT state, output, error FROM sys_run WHERE id = $1`, params: [id] }
 		]);
@@ -170,7 +169,7 @@ layer(
 						images: ['image-1.png']
 					},
 					transcript: {
-						durationMs: 3000,
+						duration_ms: 3000,
 						speakers: ['S1', 'S2'],
 						segments: [
 							{ speaker: 'S1', start: 0, end: 1.5, text: 'Hello.' },

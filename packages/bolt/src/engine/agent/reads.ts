@@ -2,13 +2,16 @@ import { Effect, Schema } from 'effect';
 import type { Reader } from '../contracts.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
+import { decodeValue } from '../db/rows.ts';
+import { readSnapshot, ReadSnapshots } from '../query/snapshot.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { inboxRequests, openRequests } from '../approvals/inbox.ts';
-import { INBOX_LIMIT, noticeRow } from '../live/hub.ts';
+import { INBOX_LIMIT, noticeRow, StoredNotice } from '../notifications/rows.ts';
 import {
 	CONVERSATIONS,
 	conversationRow,
+	ConversationListRow,
 	isStaff,
 	rowsOf,
 	sharedConversations,
@@ -35,7 +38,9 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 					params: [read.conversation]
 				}
 			]);
-			const rows = yield* rowsOf(result?.rows ?? []);
+			if (result === undefined || conv === undefined)
+				return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The transcript read returned an incomplete answer.'));
+			const rows = yield* rowsOf(result.rows);
 			const staff = reader.as === 'workspace' || isStaff(reader.authority);
 			const status = conv?.rows[0]?.['status'];
 			// the conversation's files, for the session rail: what came in and what its work made
@@ -60,19 +65,22 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 					text: `SELECT to_jsonb(c) || jsonb_build_object('peer', CASE WHEN c.kind = 'dm' THEN (SELECT u.name FROM sys_message p
     JOIN sys_user u ON u.id = COALESCE(p."as"->'envoy'->>'member', p."as"->>'member', p.author) WHERE p.conversation = c.id
     ORDER BY p.seq LIMIT 1) END) AS r FROM sys_conversation c WHERE c.parent IS NULL AND
-    (c.owner = $1 OR ${sharedConversations({ member: '$1', admin: '$2', staff: '$3' })})
+    (c.owner = $1 OR ${sharedConversations({ member: '$1', admin: '$2', staff: '$3' })})${read.id === undefined ? '' : ' AND c.id = $4'}
     ORDER BY updated_at DESC, id COLLATE "C" DESC LIMIT ${CONVERSATIONS}`,
 					// an automation's inference transcripts are an administrator's to read
 					params: [
 						read.member,
 						reader.as === 'workspace' || reader.authority.admin,
-						reader.as === 'workspace' || isStaff(reader.authority)
+						reader.as === 'workspace' || isStaff(reader.authority),
+						...(read.id === undefined ? [] : [read.id])
 					]
 				}
 			]);
+			if (result === undefined)
+				return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The conversation read returned no answer.'));
 			const rows = yield* Schema.decodeUnknownEffect(
-				Schema.Array(Schema.Record(Schema.String, Schema.Json))
-			)((result?.rows ?? []).map((row) => row['r'])).pipe(
+				Schema.Array(ConversationListRow)
+			)(result.rows.map((row) => row['r'])).pipe(
 				Effect.mapError((error) =>
 					BoltError.make(
 						'corrupt',
@@ -101,21 +109,30 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 					params: [read.member]
 				},
 				{
-					text: 'SELECT count(*)::int AS unread FROM sys_notification WHERE member = $1 AND read_at IS NULL',
+					text: "SELECT jsonb_build_object('unread', count(*)::int, 'snapshot', pg_current_snapshot()::text) AS state FROM sys_notification WHERE member = $1 AND read_at IS NULL",
 					params: [read.member]
 				},
 				...(read.requests ? [openRequests] : [])
 			]);
+			if (rows === undefined || count === undefined || (read.requests && open === undefined))
+				return yield* Effect.fail(BoltError.make('internal', 'decode', 'The inbox read returned an incomplete answer.'));
 			const decoded = yield* Schema.decodeUnknownEffect(
-				Schema.Array(Schema.Record(Schema.String, Schema.Json))
-			)((rows?.rows ?? []).map((row) => row['r'])).pipe(
+				Schema.Array(StoredNotice)
+			)(rows.rows.map((row) => row['r'])).pipe(
 				Effect.mapError((error) =>
 					BoltError.make('corrupt', 'decode', 'the inbox does not match its schema', error)
 				)
 			);
+			const state = yield* decodeValue(Schema.Struct({ unread: Schema.Number, snapshot: Schema.String }), count);
+			const snapshots = yield* ReadSnapshots;
+			if (snapshots !== undefined) {
+				const snapshot = yield* Effect.try({ try: () => readSnapshot(state.snapshot), catch: (error) =>
+					error instanceof BoltError ? error : BoltError.make('corrupt', 'decode', 'The inbox snapshot did not decode.', error) });
+				snapshots.set(JSON.stringify(read), snapshot);
+			}
 			return {
 				rows: decoded.map(noticeRow),
-				unread: count?.rows[0]?.['unread'] ?? 0,
+				unread: state.unread,
 				...(read.requests ? { requests: inboxRequests(open?.rows ?? [], reader.authority) } : {})
 			};
 		}

@@ -1,22 +1,26 @@
 // `Pred` → JS (K3): the second evaluator, for live routing and tests. It must answer exactly as the SQL compiler does
 // (`sql.ts`); a randomized test holds the two equal. A null never matches (SQL's unknown collapses to false), `ne` and
-// `nin` are "distinct from", and `not` negates the collapsed value.
+// negated membership use "distinct from", and `not` negates the collapsed value.
 import { Predicate } from 'effect';
+import { Decimal } from '@norbital-ai/std/decimal';
+import { equal_json } from '@norbital-ai/std/json';
+import { utc_of } from '@norbital-ai/std/zone';
 import type { Authority, Bindings, RowData } from '../contracts.ts';
 
 import { BoltError } from '../../protocol/errors.ts';
 import type { Json } from '../../decl/values.ts';
 import {
-	argumentList,
+	argument_list,
 	comparable,
-	inverted,
 	type Arg,
 	type Catalog,
+	type Cmp,
 	type FieldInfo,
 	type Operand,
 	type Pred
 } from '@norbital-ai/store';
-import { operandValue } from '../access/authority.ts';
+import { operand_value, readPredicates } from '../access/authority.ts';
+import { instantOrder, storedDecimal, storedField, storedOrder, storedRange } from '../db/stored.ts';
 
 const invalid = (message: string) => BoltError.make('invalid', 'decode', message);
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
@@ -41,26 +45,7 @@ export function startOfDate(
 }
 /** The instant of 00:00 on `date` in `tz`. */
 export function midnight(date: string, tz: string): string {
-	const utc = day(date).getTime();
-	const offset = (at: number) => {
-		const p = Object.fromEntries(
-			new Intl.DateTimeFormat('en-US', {
-				timeZone: tz,
-				hourCycle: 'h23',
-				year: 'numeric',
-				month: '2-digit',
-				day: '2-digit',
-				hour: '2-digit',
-				minute: '2-digit',
-				second: '2-digit'
-			})
-				.formatToParts(at)
-				.map((x) => [x.type, x.value])
-		);
-		return Date.UTC(+p.year!, +p.month! - 1, +p.day!, +p.hour!, +p.minute!, +p.second!) - at;
-	};
-	const guess = utc - offset(utc);
-	return new Date(utc - offset(guess)).toISOString();
+	return new Date(utc_of(date, 0, tz)).toISOString();
 }
 /** Resolve a tagged dynamic operand once against this invocation's fixed bindings. */
 export function operand(
@@ -71,30 +56,20 @@ export function operand(
 	switch (o._tag) {
 		case 'Var': {
 			if (authority == null) throw invalid('a requestor variable needs a caller');
-			return operandValue(o, authority);
+			return operand_value(o, authority);
 		}
 		case 'Field':
 			throw invalid('a field operand has no value of its own');
 	}
 }
 
-const NUMERIC = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration']);
-/** A comparable form: numbers for numeric kinds, epoch ms for instants, case-folded email. */
-function norm(f: FieldInfo, v: Json | undefined): string | number | boolean | null {
-	const p = comparable(v);
-	if (p === null || p === undefined) return null;
-	if (NUMERIC.has(f.kind)) return Number(p);
-	if (f.kind === 'instant') return Date.parse(p as string);
-	if (f.email) return String(p).toLowerCase();
-	return p as string | boolean;
-}
 /** ILIKE with `\` escapes. */
 export function likeRegex(pattern: string): RegExp {
 	let out = '';
 	for (let i = 0; i < pattern.length; i++) {
-		const ch = pattern[i]!;
+		const ch = pattern.charAt(i);
 		if (ch === '\\' && i + 1 < pattern.length)
-			out += pattern[++i]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+			out += pattern.charAt(++i).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 		else out += ch === '%' ? '.*' : ch === '_' ? '.' : ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	}
 	return new RegExp(`^${out}$`, 'is');
@@ -118,65 +93,81 @@ export type EvalEnv = {
 	related?: (model: string, rel: string, target: string, row: RowData) => readonly RowData[];
 };
 
-function field(_env: EvalEnv, _c: string, row: RowData, name: string): Json {
+function field(env: EvalEnv, model: string, row: RowData, name: string): Json {
 	const dot = name.indexOf('.');
-	if (dot < 0) return row[name] ?? null;
-	const ref = row[name.slice(0, dot)] as { model?: string; id?: string } | null | undefined;
-	return ref?.model === name.slice(dot + 1) ? (ref.id ?? null) : null;
+	const head = dot < 0 ? name : name.slice(0, dot), descriptor = env.cat.models.get(model)?.fields.get(head);
+	const value = descriptor === undefined ? row[head] : ['timestamptz', 'daterange', 'tstzrange'].includes(descriptor.pg) ? row[descriptor.column] : storedField(descriptor, row);
+	if (dot < 0) return value ?? null;
+	return Predicate.isObject(value) && value['model'] === name.slice(dot + 1) ? value['id'] ?? null : null;
 }
 function info(env: EvalEnv, c: string, name: string): FieldInfo {
 	const f = env.cat.models.get(c)?.fields.get(name);
-	if (f === undefined) throw invalid(`unknown field '${name}' on '${c}'`);
-	return f;
+	if (f !== undefined) return f;
+	const dot = name.indexOf('.'), head = name.slice(0, dot), arm = name.slice(dot + 1);
+	const reference = env.cat.models.get(c)?.fields.get(head), target = env.cat.models.get(arm);
+	const key = target?.key[0], scalar = key === undefined ? undefined : target?.fields.get(key);
+	if (dot > 0 && reference?.arms?.includes(arm) === true && scalar !== undefined)
+		return { ...scalar, name, column: `${reference.column}__${arm}` };
+	throw invalid(`unknown field '${name}' on '${c}'`);
 }
-function visible(env: EvalEnv, c: string, row: RowData): boolean {
-	const a = env.authority;
-	if (!env.scoped || a == null || a.admin) return true;
-	// a related row is visible where any output the caller holds of its model admits it
-	return Object.values(a.models[c]?.read ?? {}).some((paths) =>
-		(paths[c] ?? []).some((arm) => evaluate({ ...env, scoped: false }, c, arm.where, row))
+/** Admit a row through one output, or any granted output for related-row and write visibility. */
+export function canRead(env: EvalEnv, model: string, row: RowData, output?: string): boolean {
+	if (env.authority == null) return true;
+	const predicates = readPredicates(env.authority, model, output);
+	return predicates === undefined || predicates.some((where) =>
+		evaluate({ ...env, scoped: false }, model, where, row)
 	);
 }
 function rows(env: EvalEnv, c: string, rel: string, target: string, row: RowData): RowData[] {
 	if (env.related === undefined) throw invalid('this evaluation has no related rows');
-	return env.related(c, rel, target, row).filter((r) => visible(env, target, r));
+	return env.related(c, rel, target, row).filter((r) => !env.scoped || canRead(env, target, r));
 }
-const cmp = (op: string, a: unknown, b: unknown): boolean => {
-	if (op === 'ne') return a !== b;
-	if (a === null || b === null) return false;
-	const [x, y] = [a as number, b as number];
+const cmp = (field: Pick<FieldInfo, 'pg' | 'email'>, op: Cmp, a: Json | undefined, b: Json | undefined): boolean => {
+	const left = comparable(a), right = comparable(b);
+	if (left === null || right === null) return op === 'ne' && left !== right;
+	if ((op === 'eq' || op === 'ne') && (field.pg === 'jsonb' || field.pg.endsWith('[]')))
+		return equal_json(left, right) === (op === 'eq');
+	const fold = (value: Json): Json => field.email === true && typeof value === 'string' ? value.toLowerCase() : value;
+	const order = storedOrder(field, fold(left), fold(right));
+	if (order === undefined) throw invalid(`cannot compare a ${field.pg} value in memory`);
 	return op === 'eq'
-		? x === y
-		: op === 'lt'
-			? x < y
-			: op === 'lte'
-				? x <= y
-				: op === 'gt'
-					? x > y
-					: x >= y;
+		? order === 0
+		: op === 'ne'
+			? order !== 0
+			: op === 'lt'
+				? order < 0
+				: op === 'lte'
+					? order <= 0
+					: op === 'gt'
+						? order > 0
+						: order >= 0;
 };
-type Range = { lo: number | string; hi: number | string | null };
-function range(f: FieldInfo, v: Json | undefined): Range | null {
-	const r = comparable(v) as { [k: string]: Json } | null;
-	if (r == null) return null;
-	const p = Object.fromEntries(Object.entries(r).map(([k, x]) => [k, comparable(x)])) as {
-		from?: string;
-		to?: string | null;
-		start?: string;
-		end?: string | null;
+
+/** PostgreSQL numeric_avg uses numeric division's base-10000 scale selection. */
+function average(sum: Decimal, count: number): Decimal {
+	const leading = (value: Decimal) => {
+		const text = value.abs().toString(), all = text.replace('.', ''), digits = all.replace(/^0+/, '');
+		if (digits === '') return { weight: 0, digit: 0 };
+		const point = text.indexOf('.'), before = point < 0 ? text.length : point;
+		const exponent = before - (all.length - digits.length) - 1, weight = Math.floor(exponent / 4);
+		const width = exponent - weight * 4 + 1;
+		return { weight, digit: Number(digits.slice(0, width).padEnd(width, '0')) };
 	};
-	// a date period is inclusive: its exclusive upper bound is the day after `to`
-	if (f.periodOf === 'date')
-		return {
-			lo: p.from!,
-			hi:
-				p.to == null
-					? null
-					: new Date(Date.parse(`${p.to}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
-		};
-	return { lo: Date.parse(p.start!), hi: p.end == null ? null : Date.parse(p.end) };
+	const a = leading(sum), b = leading(Decimal.of(count));
+	const weight = a.weight - b.weight - (a.digit <= b.digit ? 1 : 0);
+	return sum.div(count, Math.min(1000, Math.max(0, sum.scale, 16 - weight * 4)));
 }
-const below = (x: number | string, hi: number | string | null) => hi === null || x < hi;
+type Range = { lo: bigint | string; hi: bigint | string | null };
+function range(f: FieldInfo, v: Json | undefined): Range | null {
+	if (v == null || v === 'empty') return null;
+	const period = storedRange(f, v);
+	if (period === undefined) throw invalid('a period needs valid stored bounds');
+	if (f.period_of === 'date') return { lo: period.from, hi: period.to === '' ? null : period.to };
+	const lo = instantOrder(period.from), hi = period.to === '' ? null : instantOrder(period.to);
+	if (lo === undefined || hi === undefined) throw invalid('an instant period needs valid instant bounds');
+	return { lo, hi };
+}
+const below = (x: bigint | string, hi: bigint | string | null) => hi === null || x < hi;
 /** Whether `row` of `model` satisfies `p`. */
 export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolean {
 	switch (p.t) {
@@ -192,13 +183,15 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			return (field(env, c, row, p.field) === null) === p.is;
 		case 'cmp': {
 			const f = info(env, c, p.field);
+			const comparison = p.arg._tag === 'Field' && ['float4', 'float8'].includes(info(env, c, p.arg.field).pg)
+				? { ...f, pg: 'float8' } : f;
 			const rhs =
 				p.arg._tag === 'Lit'
 					? p.arg.value
 					: p.arg._tag === 'Field'
 						? field(env, c, row, p.arg.field)
 						: operand(p.arg, env.bindings, env.authority);
-			return cmp(p.op, norm(f, field(env, c, row, p.field)), norm(f, rhs));
+			return cmp(comparison, p.op, field(env, c, row, p.field), rhs);
 		}
 		case 'like': {
 			const v = field(env, c, row, p.field);
@@ -211,34 +204,28 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			return typeof value === 'string' && normalize(value) === normalize(p.value);
 		}
 		case 'age': {
-			const value = field(env, c, row, p.field);
-			return (
-				typeof value === 'string' &&
-				Date.parse(value) < Date.parse(env.bindings.now) - p.seconds * 1000
-			);
+			const value = instantOrder(field(env, c, row, p.field)), now = instantOrder(env.bindings.now);
+			if (now === undefined) throw invalid('an age predicate needs a valid invocation instant');
+			return value !== undefined && value < now - BigInt(p.seconds) * 1_000_000_000n;
 		}
 		case 'in': {
 			const f = info(env, c, p.field);
-			const a = norm(f, field(env, c, row, p.field));
-			const list = argumentList(p.args)
-				? p.args
-				: p.args._tag === 'Member'
-					? []
-					: operand(p.args, env.bindings, env.authority);
+			const a = field(env, c, row, p.field);
+			let list: Json;
+			if (argument_list(p.args)) list = p.args;
+			else {
+				if (p.args._tag === 'Member') throw invalid('a composed member is decided by a read, not in memory');
+				list = operand(p.args, env.bindings, env.authority);
+			}
 			const found =
 				a !== null &&
-				(jsonArray(list) ? list : list === null ? [] : [list]).some((x) => norm(f, x) === a);
+				(jsonArray(list) ? list : list === null ? [] : [list]).some((x) => cmp(f, 'eq', a, x));
 			return p.negated ? !found : found;
 		}
-		case 'list': {
-			const arr = field(env, c, row, p.field) as readonly Json[] | null;
-			if (p.op === 'isEmpty')
-				return p.arg === true ? arr === null || arr.length === 0 : arr !== null && arr.length > 0;
-			if (arr === null) return false;
-			const want = p.op === 'has' ? [p.arg] : (p.arg as readonly Json[]);
-			return p.op === 'hasAny'
-				? want.some((x) => arr.includes(x))
-				: want.every((x) => arr.includes(x));
+		case 'has': {
+			const arr = field(env, c, row, p.field);
+			if (arr !== null && !jsonArray(arr)) throw invalid('a list predicate needs an array');
+			return arr !== null && arr.includes(p.arg);
 		}
 		case 'period': {
 			const f = info(env, c, p.field);
@@ -252,30 +239,32 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 							? field(env, c, row, p.arg.field)
 							: operand(p.arg, env.bindings, env.authority);
 				if (arg === null) return false;
-				const x =
-					f.periodOf === 'date'
-						? (comparable(arg) as string)
-						: Date.parse(comparable(arg) as string);
+				const value = comparable(arg), x = f.period_of === 'date' ? value : instantOrder(value);
+				if (typeof x !== 'string' && typeof x !== 'bigint') throw invalid('a period compares with a date or instant');
 				return r.lo <= x && below(x, r.hi);
 			}
 			const end = (e: Arg): Json =>
 				e._tag === 'Lit' ? e.value : operand(e, env.bindings, env.authority);
-			const [lo, hi] = f.periodOf === 'date' ? ['from', 'to'] : ['start', 'end'];
-			const o = range(f, { [lo]: end(p.lo), [hi]: end(p.hi) })!;
-			if (inverted(f, o.lo, o.hi)) return false;
+			const [lo, hi] = f.period_of === 'date' ? ['from', 'to'] : ['start', 'end'];
+			const o = range(f, { [lo]: end(p.lo), [hi]: end(p.hi) });
+			if (o === null || (o.hi !== null && (f.period_of === 'date' ? o.lo >= o.hi : o.lo > o.hi))) return false;
 			if (p.op === 'overlaps')
 				return below(r.lo, o.hi) && below(o.lo, r.hi) && r.lo !== r.hi && o.lo !== o.hi;
 			// a bound in the span: the first day (start) from its start, the last day (end) up to its end; none unbounded
-			if (p.op === 'startsWithin') return o.lo <= r.lo && below(r.lo, o.hi);
-			if (p.op === 'endsWithin')
+			if (p.op === 'starts_within') return o.lo <= r.lo && below(r.lo, o.hi);
+			if (p.op === 'ends_within')
 				return r.hi !== null && o.lo < r.hi && (o.hi === null || r.hi <= o.hi);
 			return o.lo <= r.lo && (o.hi === null || (r.hi !== null && r.hi <= o.hi));
 		}
 		case 'geo': {
-			const v = field(env, c, row, p.field) as { lat: number; lng: number } | null;
-			if (v === null) return false;
+			const value = field(env, c, row, p.field);
+			if (value === null) return false;
+			if (!Predicate.isObject(value) || typeof value['lat'] !== 'number' || typeof value['lng'] !== 'number')
+				throw invalid('a geo predicate needs a point');
+			const v = { lat: value['lat'], lng: value['lng'] };
 			if (p.near !== undefined) return haversine(v, p.near[0]) <= p.near[1];
-			const s = p.within!;
+			const s = p.within;
+			if (s === undefined) throw invalid('a geo predicate needs near or within');
 			if ('bbox' in s) {
 				const [a, b] = s.bbox;
 				return (
@@ -287,13 +276,15 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			}
 			let inside = false;
 			const poly = s.polygon;
-			for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-				const [pi, pj] = [poly[i]!, poly[j]!];
+			let pj = poly.at(-1);
+			if (pj === undefined) throw invalid('a polygon needs vertices');
+			for (const pi of poly) {
 				if (
 					pi.lat > v.lat !== pj.lat > v.lat &&
 					v.lng < ((pj.lng - pi.lng) * (v.lat - pi.lat)) / (pj.lat - pi.lat) + pi.lng
 				)
 					inside = !inside;
+				pj = pi;
 			}
 			return inside;
 		}
@@ -313,35 +304,36 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			return p.q === 'some' ? rs.some(hit) : p.q === 'none' ? !rs.some(hit) : rs.every(hit);
 		}
 		case 'count':
-			return cmp(p.op, rows(env, c, p.rel, p.target, row).length, p.n);
+			return cmp({ pg: 'int8' }, p.op, rows(env, c, p.rel, p.target, row).length, p.n);
 		case 'agg': {
 			const f = info(env, p.target, p.of);
-			const xs = rows(env, c, p.rel, p.target, row)
-				.map((r) => norm(f, r[p.of] ?? null))
-				.filter((x): x is number => x !== null) as number[];
-			// SQL sums decimals exactly; 15 significant digits keeps 10.10 + 10.20 equal to 20.3 here too
-			const exact = (x: number) => Number(x.toPrecision(15));
-			const v =
-				p.fn === 'sum'
-					? exact(xs.reduce((s, x) => s + x, 0))
-					: xs.length === 0
-						? null
-						: p.fn === 'avg'
-							? exact(xs.reduce((s, x) => s + x, 0) / xs.length)
-							: p.fn === 'min'
-								? xs.reduce((a, b) => (a < b ? a : b))
-								: xs.reduce((a, b) => (a > b ? a : b));
-			// ne of an empty aggregate is unknown too, as in SQL's `<>`
-			return v !== null && cmp(p.op, v, norm(f, p.arg));
+			const values = rows(env, c, p.rel, p.target, row)
+				.map((r) => field(env, p.target, r, p.of))
+				.filter((value) => value !== null);
+			if (p.fn !== 'sum' && values.length === 0) return false;
+			if (p.fn === 'min' || p.fn === 'max') {
+				const [head, ...tail] = values;
+				if (head === undefined) return false;
+				const value = tail.reduce((a, b) => cmp({ pg: f.pg }, p.fn === 'min' ? 'lt' : 'gt', b, a) ? b : a, head);
+				return cmp({ pg: f.pg }, p.op, value, p.arg);
+			}
+			if (f.pg === 'float8' || f.pg === 'float4') {
+				const sum = values.reduce<number>((sum, value) => {
+					if (typeof value !== 'number' || !Number.isFinite(value)) throw invalid('a floating aggregate needs finite numbers');
+					return sum + value;
+				}, 0);
+				return cmp({ pg: f.pg }, p.op, p.fn === 'avg' ? sum / values.length : sum, p.arg);
+			}
+			let sum = Decimal.of(0);
+			for (const value of values) {
+				const numeric = storedDecimal(value);
+				if (numeric === undefined) throw invalid('a numeric aggregate needs numeric values');
+				sum = sum.plus(numeric);
+			}
+			return cmp({ pg: 'numeric' }, p.op, (p.fn === 'avg' ? average(sum, values.length) : sum).toJSON(), p.arg);
 		}
-		case 'json': {
-			const v = field(env, c, row, p.field);
-			if ('isEmpty' in p)
-				return p.isEmpty
-					? v === null || (jsonArray(v) && v.length === 0)
-					: jsonArray(v) && v.length > 0;
-			return contains(v, p.contains, true);
-		}
+		case 'json':
+			return contains(field(env, c, row, p.field), p.contains, true);
 	}
 }
 /** jsonb `@>`: objects by key, arrays by any element, scalars by equality; a top-level array holds a bare scalar. */

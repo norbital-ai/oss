@@ -2,7 +2,8 @@
 // columns they admit per write path and whether a `check` judges them, and an administrator (or a platform run) bypasses
 // authored policy. A grant names outputs and filters their rows; it never changes an output's fields. Plus what a write
 // and a read consult of it: `moves` (rule 34) and the read scope (rule 13); the write judge itself is `write/act.ts`'s.
-import type { WritableColumns, VisitorMayRead, OperandValue } from '../services.ts';
+import { Effect } from 'effect';
+import type { Json } from '../../decl/values.ts';
 import type { Arm, Authority, DeleteArm, EngineActor, LimitRule, WriteArm } from '../contracts.ts';
 import {
 	layered,
@@ -12,9 +13,9 @@ import {
 	type LimitData,
 	type ReadGrantData
 } from '../manifest.ts';
-import { DEFAULT_OUTPUT, SYSTEM_COLUMNS, type Pred } from '@norbital-ai/store';
+import { DEFAULT_OUTPUT, SYSTEM_COLUMN_SET, type Pred, type Var } from '@norbital-ai/store';
 import { SYSTEM } from '../../system/index.ts';
-import { compileVar, evaluateVar, type Requestor } from '@norbital-ai/std/vars';
+import { compile_var, evaluate_var, type Requestor } from '@norbital-ai/std/vars';
 import { or, toPred, TRUE } from './pred.ts';
 import { BoltError } from '../../protocol/errors.ts';
 
@@ -70,24 +71,24 @@ const pathsOf = (
 /**
  * One policy's read arms of an output. The root scope also applies to history when this policy grants it.
  */
-function readArms(
+const readArms = Effect.fnUntraced(function* (
 	m: EngineManifest,
 	c: string,
 	output: string,
 	policy: string,
 	read: ReadGrantData
-): { readonly [path: string]: Arm } {
+): Effect.fn.Return<{ readonly [path: string]: Arm }, BoltError> {
 	const out: { [path: string]: Arm } = {};
 	for (const [path, model] of pathsOf(m, c, output)) {
 		const scope = read === true ? undefined : read.scopes?.[path];
 		out[path] = {
 			policy,
-			where: scope === undefined ? TRUE : toPred(m, model, scope),
+			where: scope === undefined ? TRUE : yield* toPred(m, model, scope),
 			...(path === c && read !== true && read.history === true ? { history: true } : {})
 		};
 	}
 	return out;
-}
+});
 /** A create or update arm: the columns it admits per write path (default: every column `c` declares) and its `check`. */
 function writeArm(
 	m: EngineManifest,
@@ -125,7 +126,7 @@ export function exposed(
 		...Object.keys(all.models[model]?.fields ?? {}),
 		...Object.keys(all.models[model]?.computed ?? {}),
 		...fks
-	].filter((x) => !sys || !(SYSTEM_COLUMNS as readonly string[]).includes(x));
+	].filter((x) => !sys || !SYSTEM_COLUMN_SET.has(x));
 	return f === undefined || f === 'all' ? own : f;
 }
 
@@ -183,9 +184,17 @@ function limitRules(key: string, v: LimitData | readonly LimitData[]): LimitRule
 }
 
 /** Compiles once per `key` (rule 37); the caller caches by that key. */
-export function compileAuthority(m: EngineManifest, holder: Holder, key: string): Authority {
+export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
+	m: EngineManifest,
+	holder: Holder,
+	key: string
+): Effect.fn.Return<Authority, BoltError> {
 	const bypass = holder.admin || holder.platform === true;
-	const policies = holder.policies.filter((p) => Object.hasOwn(m.policies, p)); // an unknown policy confers nothing
+	const policySpecs = holder.policies.flatMap((name) => {
+		const spec = Object.hasOwn(m.policies, name) ? m.policies[name] : undefined;
+		return spec === undefined ? [] : [{ name, spec }];
+	}); // an unknown policy confers nothing
+	const policies = policySpecs.map(({ name }) => name);
 	const cols: { [c: string]: Mutable } = {};
 	const col = (c: string) => (cols[c] ??= emptyModel());
 	const addRead = (c: string, output: string, arms: { readonly [path: string]: Arm }) => {
@@ -202,7 +211,7 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 			const a = col(c),
 				open: Arm = { policy: '$admin', where: TRUE };
 			for (const output of outputsOf(m, c))
-				addRead(c, output, readArms(m, c, output, open.policy, { history: true }));
+				addRead(c, output, yield* readArms(m, c, output, open.policy, { history: true }));
 			if (!isIdentity(c)) {
 				for (const op of WRITES)
 					a[op].push({ policy: '$admin', columns: all[c]?.[op]?.columns ?? {}, check: false });
@@ -212,11 +221,11 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 				if (k.kind === 'state') a.moves[f] = 'all';
 		}
 	} else {
-		for (const p of policies)
-			for (const [c, g] of Object.entries(m.policies[p]!.grants)) {
+		for (const { name: p, spec } of policySpecs)
+			for (const [c, g] of Object.entries(spec.grants)) {
 				const a = col(c);
 				for (const [output, read] of Object.entries(g.outputs ?? {}))
-					addRead(c, output, readArms(m, c, output, p, read));
+					addRead(c, output, yield* readArms(m, c, output, p, read));
 				for (const op of WRITES) {
 					const w = writeArm(m, c, op, p, g[op]);
 					if (w) a[op].push(w);
@@ -249,14 +258,14 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 	}
 	const caps = {
 		apps: new Set<string>(),
+		syncs: new Set<string>(),
 		tools: new Set<string>(),
 		mcp: new Set<string>()
 	};
 	const automations = new Set<string>();
 	const declared: LimitRule[] = [];
-	for (const p of policies) {
-		const spec = m.policies[p]!;
-		for (const k of ['apps', 'tools', 'mcp'] as const)
+	for (const { spec } of policySpecs) {
+		for (const k of ['apps', 'syncs', 'tools', 'mcp'] as const)
 			for (const x of spec.capabilities?.[k] ?? []) caps[k].add(x);
 		for (const x of spec.capabilities?.automations ?? []) automations.add(x);
 		for (const [k, v] of Object.entries(spec.limits ?? {})) declared.push(...limitRules(k, v));
@@ -273,6 +282,7 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 		automations: bypass ? Object.keys(m.automations) : list(automations),
 		capabilities: {
 			apps: list(caps.apps),
+			syncs: list(caps.syncs),
 			tools: list(caps.tools),
 			mcp: list(caps.mcp)
 		},
@@ -280,7 +290,7 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 		teamTree: holder.teamTree ?? [],
 		scopes: holder.scopes ?? {}
 	};
-}
+});
 
 /** Rule 34: a generated write moves a state only along an edge its grant lists (`'all'`: every declared edge). */
 export function admitMove(
@@ -305,10 +315,25 @@ export function grantedArms(
 	const arms = auth.models[model]?.read[output]?.[path];
 	return arms === undefined || arms.length === 0 ? undefined : arms;
 }
+/** Read predicates at a root's layer: one named output, or every granted output when omitted. Admins are unscoped. */
+export function readPredicates(
+	authority: Authority,
+	path: string,
+	output?: string
+): readonly Pred[] | undefined {
+	if (authority.admin) return undefined;
+	const dot = path.indexOf('.');
+	const grants = authority.models[dot < 0 ? path : path.slice(0, dot)]?.read ?? {};
+	const arms = output === undefined
+		? Object.values(grants).flatMap((paths) => paths[path] ?? [])
+		: grants[output]?.[path] ?? [];
+	return arms.map((arm) => arm.where);
+}
 /** Whether the caller reads any output of `model`. */
-export const readsAny = (auth: Authority, model: string): boolean =>
-	auth.admin ||
-	Object.values(auth.models[model]?.read ?? {}).some((paths) => (paths[model]?.length ?? 0) > 0);
+export const readsAny = (auth: Authority, model: string): boolean => {
+	const predicates = readPredicates(auth, model);
+	return predicates === undefined || predicates.length > 0;
+};
 /**
  * The output a caller's generic views read `model` as: `default` when granted, else the first named output it holds in
  * declaration order; `undefined` when it reads none.
@@ -318,27 +343,21 @@ export function viewOutput(m: EngineManifest, auth: Authority, model: string): s
 	return outputsOf(m, model).find((o) => grantedArms(auth, model, o) !== undefined);
 }
 
-/** The read scope of a caller is the union of its arms of one output. */
-export function readScope(
-	auth: Authority,
-	model: string,
-	output: string = DEFAULT_OUTPUT
-): Pred | undefined {
-	const arms = grantedArms(auth, model, output);
-	return arms === undefined || arms.length === 0 ? undefined : or(arms.map((x) => x.where));
-}
-
 /** The root arms whose output grant includes history. */
 export const historyArms = (authority: Authority, model: string, output: string) =>
 	grantedArms(authority, model, output)?.filter((arm) => arm.history === true) ?? [];
 
-export const writableColumns: WritableColumns = (authority, model, verb) => {
+export const writable_columns = (
+	authority: Authority,
+	model: string,
+	verb: 'create' | 'update'
+): ReadonlySet<string> | 'all' => {
 	if (authority.admin) return 'all';
 	return new Set(
 		(authority.models[model]?.[verb] ?? []).flatMap((arm) => arm.columns[model] ?? [])
 	);
 };
-export const visitorMayRead: VisitorMayRead = (authority, model) =>
+export const visitor_may_read = (authority: Authority, model: string): boolean =>
 	authority.actor.kind === 'visitor' && readsAny(authority, model);
 /** What the requestor variables read off an authority. */
 export function requestorOf(authority: Authority): Requestor {
@@ -359,15 +378,15 @@ export function requestorOf(authority: Authority): Requestor {
 					? actor.by.instance
 					: null,
 		teams: member === null ? [] : member.teams,
-		teamTree: authority.teamTree,
+		team_tree: authority.teamTree,
 		scopes: authority.scopes
 	};
 }
 /** Requestor variables have one interpretation across SQL, live evaluation and write admission. */
-export const operandValue: OperandValue = (operand, authority) => {
-	const c = compileVar(operand.text);
+export const operand_value = (operand: Var, authority: Authority): Json => {
+	const c = compile_var(operand.text);
 	if ('error' in c) throw BoltError.make('invalid', 'decode', c.error);
-	return evaluateVar(c, { requestor: requestorOf(authority) });
+	return evaluate_var(c, { requestor: requestorOf(authority) });
 };
 
 /**
@@ -375,7 +394,7 @@ export const operandValue: OperandValue = (operand, authority) => {
  * every other writer, administrators included, changes only its local fields (its `update.columns`) and never creates
  * or deletes one. A read+write sync leaves the fields editable (each edit reaches the outbox).
  */
-export function syncOwned(
+export function sync_owned(
 	m: EngineManifest,
 	model: string
 ): { readonly sync: string; readonly local: readonly string[] } | undefined {

@@ -90,7 +90,7 @@ export const linear: ChatPlatform = {
 				const base = {
 					id: data.id,
 					thread: data.issueId,
-					sentAt: data.createdAt,
+					sent_at: data.createdAt,
 					from: { handle: data.user.id, name: data.user.name },
 					...(data.issue?.title === undefined ? {} : { title: data.issue.title })
 				};
@@ -103,8 +103,8 @@ export const linear: ChatPlatform = {
 						{
 							...base,
 							...said(data.body),
-							...(data.parentId ? { replyTo: data.parentId } : {}),
-							repliedTo: data.parent?.userId === me.id,
+							...(data.parentId ? { reply_to: data.parentId } : {}),
+							replied_to: data.parent?.userId === me.id,
 							...(edited ? { version: data.editedAt ?? data.updatedAt } : {})
 						}
 					]
@@ -142,10 +142,10 @@ export const linear: ChatPlatform = {
 									{
 										id: comment.id,
 										thread,
-										sentAt: comment.createdAt.toISOString(),
+										sent_at: comment.createdAt.toISOString(),
 										from: { handle: comment.userId, name: null },
 										...said(comment.body),
-										...(comment.parentId ? { replyTo: comment.parentId } : {}),
+										...(comment.parentId ? { reply_to: comment.parentId } : {}),
 										...(comment.editedAt ? { version: comment.editedAt.toISOString() } : {})
 									}
 								]

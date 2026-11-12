@@ -74,7 +74,7 @@ const answer = <A>(schema: Schema.Decoder<A>, value: unknown) =>
 	Schema.decodeUnknownEffect(schema)(value).pipe(
 		Effect.mapError((error) =>
 			BoltError.make(
-				'badAnswer',
+				'bad_answer',
 				'facility',
 				`The audit store returned an invalid answer: ${error.message}`,
 				error
@@ -82,7 +82,7 @@ const answer = <A>(schema: Schema.Decoder<A>, value: unknown) =>
 		)
 	);
 /** The facility as a value: a host hands it to a verb that may run outside the context that built it. */
-export const auditShape = (port: AuditPort): Effect.Effect<AuditShape, never, Crypto.Crypto> =>
+export const audit_shape = (port: AuditPort): Effect.Effect<AuditShape, never, Crypto.Crypto> =>
 	Effect.gen(function* () {
 		const disabled: AuditShape = {
 			mode: 'disabled',
@@ -125,5 +125,5 @@ export const auditShape = (port: AuditPort): Effect.Effect<AuditShape, never, Cr
 		recoverySources.set(service, port);
 		return service;
 	});
-export const auditFromAbi = (port: AuditPort): Layer.Layer<never, never, Crypto.Crypto> =>
-	Layer.effect(Audit, auditShape(port));
+export const audit_from_abi = (port: AuditPort): Layer.Layer<never, never, Crypto.Crypto> =>
+	Layer.effect(Audit, audit_shape(port));

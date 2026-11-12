@@ -1,1 +1,6 @@
-export default { title: 'Sales', pages: { board: {} } };
+export default {
+	title: 'Sales',
+	description: 'Orders',
+	icon: 'cart',
+	pages: { board: { title: 'Board' } }
+};

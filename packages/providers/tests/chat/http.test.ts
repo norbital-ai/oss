@@ -27,7 +27,7 @@ describe('chat wire boundaries', () => {
 				)
 			).rejects.toMatchObject({
 				status: 429,
-				retryAfterMs: expected,
+				retry_after_ms: expected,
 				message: '429: limited'
 			});
 		}

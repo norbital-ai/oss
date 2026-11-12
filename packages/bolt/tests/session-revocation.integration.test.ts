@@ -10,7 +10,7 @@ const opened = Effect.gen(function* () {
 		TestWorkspace.layer({
 			manifest,
 			host: {
-				publicUrl: 'http://127.0.0.1:4180',
+				public_url: 'http://127.0.0.1:4180',
 				workspace: () => ({ name: 'Local', handle: 'local' })
 			}
 		})

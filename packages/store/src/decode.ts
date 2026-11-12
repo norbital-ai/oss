@@ -1,12 +1,13 @@
 // Read literals → the read IR. This is decode: an unknown key or operator fails `invalid` with its path, never a
 // silently ignored filter. Field names are checked against the model; exposure is the compiler's (it knows who reads).
 // Browser-safe.
-import { Array as EffectArray, Effect, Predicate, Result } from 'effect';
+import { Array as EffectArray, Effect, Predicate, Result, Option, Schema } from 'effect';
 import { KIND } from '@norbital-ai/std/kind';
+import { UUID_PATTERN } from '@norbital-ai/std/id';
 import { Decimal } from '@norbital-ai/std/decimal';
-import { duration_seconds, isPlainDate } from '@norbital-ai/std/date';
+import { duration_seconds, is_plain_date } from '@norbital-ai/std/date';
 import { ELEMENT } from './ir.ts';
-import { compileVar, memberAdmits } from '@norbital-ai/std/vars';
+import { compile_var, member_admits } from '@norbital-ai/std/vars';
 import type {
 	Arg,
 	Bucket,
@@ -23,8 +24,8 @@ import type {
 import { STORE_LIMITS } from './limits.ts';
 import { StoreError } from './errors.ts';
 import type { Json } from './values.ts';
-import type { Catalog, FieldInfo, KindSpec, ModelInfo } from './catalog.ts';
-import { SEMANTIC, SYSTEM_COLUMNS, exposureOf, family, fieldInfo } from './catalog.ts';
+import type { Catalog, FieldInfo, ModelInfo } from './catalog.ts';
+import { KindSpec, SEMANTIC, SYSTEM_COLUMN_SET, exposure_of, family, field_info } from './catalog.ts';
 
 /**
  * A value position's operand as a literal writes it: a same-row column, or a `{ var }` CEL expression (std/vars)
@@ -36,7 +37,7 @@ const invalid = (message: string) => Effect.fail(StoreError.of('invalid', 'decod
 const WHERE_MAX_DEPTH = STORE_LIMITS.where.depth,
 	WHERE_MAX_LIST = STORE_LIMITS.where.list,
 	ORDER_MAX_KEYS = STORE_LIMITS.orderKeys;
-export const isOperand = (v: unknown): v is WireOperand => {
+export const is_operand = (v: unknown): v is WireOperand => {
 	if (!Predicate.isObject(v)) return false;
 	const ks = Object.keys(v);
 	return ks.length === 1 && (ks[0] === 'field' || ks[0] === 'var');
@@ -58,7 +59,6 @@ const ORDERED = new Set(
 		.filter(([, entry]) => entry.traits.ordered)
 		.map(([kind]) => kind)
 );
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEC = /^-?\d+(\.\d+)?$/;
 /** `$search` / `$similar` text, and `$similar`'s nearest rows: 20 unless it says, at most 200. */
 const SEARCH_MAX_TEXT = 500,
@@ -110,7 +110,7 @@ function literalOf(f: FieldInfo, v: unknown): { readonly ok: Json } | string {
 		return 'a decimal';
 	}
 	if (k === 'bool') return typeof v === 'boolean' ? { ok: v } : 'a boolean';
-	if (k === 'date') return isPlainDate(v) ? { ok: v } : 'an ISO date';
+	if (k === 'date') return is_plain_date(v) ? { ok: v } : 'an ISO date';
 	if (k === 'instant')
 		return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v))
 			? { ok: v }
@@ -120,7 +120,7 @@ function literalOf(f: FieldInfo, v: unknown): { readonly ok: Json } | string {
 	if (k === 'id' && f.pg === 'int8')
 		return typeof v === 'number' && Number.isSafeInteger(v) ? { ok: v } : 'an integer id';
 	if (k === 'id')
-		return typeof v === 'string' && (f.pg !== 'uuid' || UUID.test(v)) ? { ok: v } : 'an id';
+		return typeof v === 'string' && (f.pg !== 'uuid' || UUID_PATTERN.test(v)) ? { ok: v } : 'an id';
 	if (typeof v !== 'string') return 'text';
 	if (f.values !== undefined && !f.values.includes(v)) return `one of ${f.values.join(', ')}`;
 	return { ok: v };
@@ -131,7 +131,7 @@ const literal = (f: FieldInfo, v: unknown, path: string): Effect.Effect<Json, St
 	return typeof r === 'string' ? invalid(`${path}: '${f.name}' takes ${r}`) : Effect.succeed(r.ok);
 };
 /** Normalize the authored wire shape once; interiors match one discriminator. */
-export function taggedOperand(o: WireOperand): Operand {
+export function tagged_operand(o: WireOperand): Operand {
 	return 'field' in o ? { _tag: 'Field', field: o.field } : { _tag: 'Var', text: o.var };
 }
 
@@ -151,11 +151,11 @@ const operand = (
 				? info.fields.get(o.field)
 				: undefined;
 		return g !== undefined && family(g) === family({ ...f, kind })
-			? Effect.succeed(taggedOperand(o))
+			? Effect.succeed(tagged_operand(o))
 			: refuse;
 	}
 	if (typeof o.var !== 'string') return refuse;
-	const c = compileVar(
+	const c = compile_var(
 		o.var,
 		list ? 'list' : kind === 'date' ? 'date' : kind === 'instant' ? 'instant' : 'text'
 	);
@@ -164,7 +164,7 @@ const operand = (
 		return invalid(
 			`${path}: a read takes a value, not ${JSON.stringify(o)}; materialize time before reading`
 		);
-	return c.requestor.every((m) => memberAdmits(f, m)) ? Effect.succeed(taggedOperand(o)) : refuse;
+	return c.requestor.every((m) => member_admits(f, m)) ? Effect.succeed(tagged_operand(o)) : refuse;
 };
 const val = (
 	info: ModelInfo,
@@ -177,14 +177,14 @@ const val = (
 		return invalid(
 			`${path}: a read takes a value, not ${JSON.stringify(v)}; materialize time before reading`
 		);
-	return isOperand(v)
+	return is_operand(v)
 		? operand(info, f, v, path, false, kind)
 		: Effect.map(literal(kind === undefined ? f : { ...f, kind }, v, path), (value): Arg => ({
 				_tag: 'Lit',
 				value
 			}));
 };
-export const argumentList = (value: Extract<Pred, { t: 'in' }>['args']): value is readonly Json[] =>
+export const argument_list = (value: Extract<Pred, { t: 'in' }>['args']): value is readonly Json[] =>
 	EffectArray.isArray(value);
 
 const point = (v: unknown): v is { readonly lat: number; readonly lng: number } =>
@@ -199,21 +199,21 @@ const periodArg = Effect.fnUntraced(function* (
 	v: unknown,
 	path: string
 ) {
-	const lo = f.periodOf === 'date' ? 'from' : 'start',
-		hi = f.periodOf === 'date' ? 'to' : 'end';
+	const lo = f.period_of === 'date' ? 'from' : 'start',
+		hi = f.period_of === 'date' ? 'to' : 'end';
 	if (!Predicate.isObject(v) || !(lo in v) || !(hi in v) || Object.keys(v).length !== 2)
 		return yield* invalid(`${path}: takes a period { ${lo}, ${hi} }`);
-	const a = yield* val(info, f, v[lo], `${path}.${lo}`, f.periodOf);
+	const a = yield* val(info, f, v[lo], `${path}.${lo}`, f.period_of);
 	const b: Arg =
 		v[hi] === null
 			? { _tag: 'Lit', value: null }
-			: yield* val(info, f, v[hi], `${path}.${hi}`, f.periodOf);
+			: yield* val(info, f, v[hi], `${path}.${hi}`, f.period_of);
 	if (
 		a._tag === 'Lit' &&
 		b._tag === 'Lit' &&
 		typeof a.value === 'string' &&
 		typeof b.value === 'string' &&
-		(f.periodOf === 'date' ? a.value > b.value : Date.parse(a.value) > Date.parse(b.value))
+		(f.period_of === 'date' ? a.value > b.value : Date.parse(a.value) > Date.parse(b.value))
 	)
 		return yield* invalid(`${path}: '${lo}' is after '${hi}'`);
 	return { lo: a, hi: b };
@@ -237,35 +237,33 @@ const fieldOp = Effect.fnUntraced(function* (
 	f: FieldInfo,
 	op: string,
 	v: unknown,
-	at: string
+	at: string,
+	depth: number
 ) {
-	if (op === 'is_null' && !f.many) {
+	if (op === 'is_null' && (!f.many || f.pg !== 'jsonb')) {
 		const pred: Pred = { t: 'null', field: f.name, is: yield* boolean(v, at) };
 		return pred;
 	}
 	if (f.pg === 'jsonb' && f.shape?.many === true) {
-		const pred = yield* shapeOp(f.name, f.shape, op, v, [], at);
+		const pred = yield* shapeOp(f.name, f.shape, op, v, [], at, depth);
 		return pred ?? (yield* invalid(`${at}: unknown operator '${op}' on '${f.name}'`));
 	}
 	if (f.many) {
-		if (op === 'isEmpty')
-			return { t: 'list', field: f.name, op, arg: yield* boolean(v, at) } satisfies Pred;
 		if (op === 'has')
-			return { t: 'list', field: f.name, op, arg: yield* literal(f, v, at) } satisfies Pred;
-		if (op === 'hasAny' || op === 'hasAll') {
-			const xs = yield* list(v, at);
-			const arg = yield* Effect.forEach(xs, (x, i) => literal(f, x, `${at}[${i}]`));
-			return { t: 'list', field: f.name, op, arg } satisfies Pred;
-		}
+			return { t: 'has', field: f.name, arg: yield* literal(f, v, at) } satisfies Pred;
+		if (op === 'eq' || op === 'ne') return {
+			t: 'cmp', field: f.name, op,
+			arg: { _tag: 'Lit', value: yield* Effect.forEach(yield* list(v, at), (item, index) => literal(f, item, `${at}[${index}]`)) }
+		} satisfies Pred;
 	} else if (f.kind === 'period') {
 		if (op === 'contains')
 			return {
 				t: 'period',
 				field: f.name,
 				op,
-				arg: yield* val(info, f, v, at, f.periodOf)
+				arg: yield* val(info, f, v, at, f.period_of)
 			} satisfies Pred;
-		if (op === 'overlaps' || op === 'within' || op === 'startsWithin' || op === 'endsWithin')
+		if (op === 'overlaps' || op === 'contained_by' || op === 'starts_within' || op === 'ends_within')
 			return {
 				t: 'period',
 				field: f.name,
@@ -311,11 +309,11 @@ const fieldOp = Effect.fnUntraced(function* (
 	} else if (['json', 'object', 'record'].includes(f.kind)) {
 		if (op === 'contains')
 			return { t: 'json', field: f.name, contains: yield* jsonOf(v, at) } satisfies Pred;
-		if (op === 'isEmpty')
-			return { t: 'json', field: f.name, isEmpty: yield* boolean(v, at) } satisfies Pred;
+		if ((op === 'eq' || op === 'ne') && EffectArray.isArray(v))
+			return { t: 'cmp', field: f.name, op, arg: { _tag: 'Lit', value: yield* jsonOf(v, at) } } satisfies Pred;
 		// a declared shape takes predicates at its paths
 		const shaped =
-			f.shape === undefined ? undefined : yield* shapeOp(f.name, f.shape, op, v, [], at);
+			f.shape === undefined ? undefined : yield* shapeOp(f.name, f.shape, op, v, [], at, depth);
 		if (shaped !== undefined) return shaped;
 	} else if (!['file', 'vector', 'custom', 'ref'].includes(f.kind)) {
 		if (isCmp(op)) {
@@ -328,13 +326,13 @@ const fieldOp = Effect.fnUntraced(function* (
 				return yield* invalid(`${at}: '${f.name}' is not ordered`);
 			return { t: 'cmp', field: f.name, op, arg: yield* val(info, f, v, at) } satisfies Pred;
 		}
-		if (op === 'in' || op === 'nin') {
+		if (op === 'in') {
 			const args = isMemberRef(v)
 				? { _tag: 'Member' as const, member: v.member, field: v.field }
-				: isOperand(v)
+				: is_operand(v)
 					? yield* operand(info, f, v, at, true)
 					: yield* Effect.forEach(yield* list(v, at), (x, i) => literal(f, x, `${at}[${i}]`));
-			return { t: 'in', field: f.name, negated: op === 'nin', args } satisfies Pred;
+			return { t: 'in', field: f.name, negated: false, args } satisfies Pred;
 		}
 		if (op === 'like' && f.kind === 'text') {
 			if (typeof v !== 'string') return yield* invalid(`${at}: takes a pattern string`);
@@ -344,7 +342,7 @@ const fieldOp = Effect.fnUntraced(function* (
 			if (typeof v !== 'string') return yield* invalid(`${at}: takes text`);
 			return { t: 'text', field: f.name, mode: op, value: v } satisfies Pred;
 		}
-		if (op === 'olderThan' && f.kind === 'instant') {
+		if (op === 'older_than' && f.kind === 'instant') {
 			const seconds = typeof v === 'string' ? duration_seconds(v) : undefined;
 			if (seconds === undefined || !Number.isSafeInteger(seconds))
 				return yield* invalid(`${at}: takes a nonnegative duration`);
@@ -356,8 +354,8 @@ const fieldOp = Effect.fnUntraced(function* (
 /** A shape's structure under a json value's declared `shape`. */
 const shaped = (k: KindSpec): KindSpec =>
 	k.kind === 'json' && k.many !== true && k.shape !== undefined ? shaped(k.shape) : k;
-const isKind = (u: unknown): u is KindSpec => Predicate.isObject(u) && typeof u.kind === 'string';
-const SCALAR_OPS = ['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'in', 'nin', 'like', 'is_null'];
+const nested_kind = (value: unknown): KindSpec | undefined => Option.getOrUndefined(Schema.decodeUnknownOption(KindSpec)(value));
+const SCALAR_OPS = ['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'in', 'like', 'is_null'];
 /**
  * One key of a predicate at `path` inside an inline value of shape `k` (relative to `field`, which is `ELEMENT` inside
  * an `each`): an object's field by name, a list's elements quantified, a scalar by its kind's operators. `undefined`:
@@ -369,43 +367,57 @@ const shapeOp: (
 	op: string,
 	v: unknown,
 	path: readonly string[],
-	at: string
+	at: string,
+	depth: number
 ) => Effect.Effect<Pred | undefined, StoreError> = Effect.fnUntraced(function* (
 	field: string,
 	shape: KindSpec,
 	op: string,
 	v: unknown,
 	path: readonly string[],
-	at: string
+	at: string,
+	depth: number
 ) {
+	if (depth > WHERE_MAX_DEPTH) return yield* invalid(`${at}: nested deeper than ${WHERE_MAX_DEPTH}`);
 	const k = shaped(shape);
 	const test = (t: PathTest): Pred => ({ t: 'path', field, path, pg: 'jsonb', test: t });
 	if (op === 'contains') return test({ op: 'contains', arg: yield* jsonOf(v, at) });
 	if (op === 'is_null') return test({ op: 'null', is: yield* boolean(v, at) });
+	if ((op === 'eq' || op === 'ne') && EffectArray.isArray(v) &&
+		(k.many === true || ['object', 'record', 'json', 'union', 'custom'].includes(k.kind)))
+		return test({ op, arg: yield* jsonOf(v, at) });
+	// An object's declared fields (or a record's keys) keep their meaning even when named `not`, `and` or `eq`.
+	if (k.many !== true && (k.kind === 'object' || k.kind === 'record')) {
+		const sub = k.kind === 'object' ? (k.fields?.[op] ?? k.rest) : nested_kind(k.of);
+		if (sub !== undefined) return yield* shapeWhere(field, sub, v, [...path, op], at, depth + 1);
+	}
+	if (op === 'not') return { t: 'not', of: yield* shapeWhere(field, k, v, path, at, depth + 1) } satisfies Pred;
+	if (op === 'and' || op === 'or') return {
+		t: op,
+		of: yield* Effect.forEach(yield* list(v, at), (part, index) =>
+			shapeWhere(field, k, part, path, `${at}[${index}]`, depth + 1))
+	} satisfies Pred;
 	if (k.many === true) {
 		const { many: _many, optional: _optional, ...item } = k;
-		if (op === 'isEmpty') return test({ op: 'isEmpty', is: yield* boolean(v, at) });
 		if (op === 'some' || op === 'every' || op === 'none') {
-			const pred = yield* shapeWhere(ELEMENT, item, v, [], at);
+			const pred = yield* shapeWhere(ELEMENT, item, v, [], at, depth + 1);
 			return { t: 'each', field, path, q: op, pred } satisfies Pred;
 		}
 		return undefined;
 	}
 	if (k.kind === 'object' || k.kind === 'record') {
-		const sub = k.kind === 'object' ? (k.fields?.[op] ?? k.rest) : isKind(k.of) ? k.of : undefined;
-		if (sub === undefined) return undefined;
-		return yield* shapeWhere(field, sub, v, [...path, op], `${at}`);
+		return undefined;
 	}
 	if (!SCALAR_OPS.includes(op)) return undefined;
 	// a scalar at the path: its kind's literal and operators, compared as its column type would be
-	const leaf = fieldInfo(path.at(-1) ?? field, k);
+	const leaf = field_info(path.at(-1) ?? field, k);
 	const cast = leaf.pg === 'jsonb' ? 'jsonb' : leaf.pg;
 	const scalar = (t: PathTest): Pred => ({ t: 'path', field, path, pg: cast, test: t });
-	if (op === 'in' || op === 'nin') {
+	if (op === 'in') {
 		const args = yield* Effect.forEach(yield* list(v, at), (x, i) =>
 			literal(leaf, x, `${at}[${i}]`)
 		);
-		return scalar({ op: 'in', args, negated: op === 'nin' });
+		return scalar({ op: 'in', args, negated: false });
 	}
 	if (op === 'like') {
 		if (leaf.pg !== 'text' || typeof v !== 'string')
@@ -420,15 +432,15 @@ const shapeOp: (
 	return undefined;
 });
 /** The scalar a path names inside an inline field (an object's fields, a record's values), or `undefined`. */
-export function inlineLeaf(f: FieldInfo, path: readonly string[]): FieldInfo | undefined {
+export function inline_leaf(f: FieldInfo, path: readonly string[]): FieldInfo | undefined {
 	let k: KindSpec | undefined = f.shape;
 	for (const step of path) {
 		const at: KindSpec | undefined = k === undefined ? undefined : shaped(k);
 		k =
 			at?.kind === 'object'
 				? (at.fields?.[step] ?? at.rest)
-				: at?.kind === 'record' && isKind(at.of)
-					? at.of
+				: at?.kind === 'record'
+					? nested_kind(at.of)
 					: undefined;
 	}
 	if (
@@ -437,7 +449,7 @@ export function inlineLeaf(f: FieldInfo, path: readonly string[]): FieldInfo | u
 		['object', 'record', 'json', 'union', 'custom', 'file'].includes(shaped(k).kind)
 	)
 		return undefined;
-	return fieldInfo(path.join('.'), shaped(k));
+	return field_info(path.join('.'), shaped(k));
 }
 /** A whole predicate at `path` inside an inline value: every key an operator of its shape. */
 const shapeWhere = Effect.fnUntraced(function* (
@@ -445,7 +457,8 @@ const shapeWhere = Effect.fnUntraced(function* (
 	shape: KindSpec,
 	ops: unknown,
 	path: readonly string[],
-	at: string
+	at: string,
+	depth: number
 ) {
 	const k = shaped(shape);
 	const scalar = k.many !== true && !['object', 'record', 'json'].includes(k.kind);
@@ -456,7 +469,7 @@ const shapeWhere = Effect.fnUntraced(function* (
 			'takes an operator object'
 		),
 		([op, v]) =>
-			Effect.flatMap(shapeOp(field, k, op, v, path, `${at}.${op}`), (p) =>
+			Effect.flatMap(shapeOp(field, k, op, v, path, `${at}.${op}`, depth), (p) =>
 				p === undefined
 					? invalid(`${at}.${op}: unknown operator '${op}' on '${[field, ...path].join('.')}'`)
 					: Effect.succeed(p)
@@ -478,17 +491,22 @@ const fieldOps = Effect.fnUntraced(function* (
 	info: ModelInfo,
 	f: FieldInfo,
 	ops: unknown,
-	path: string
+	path: string,
+	depth: number
 ) {
 	const es = yield* nonEmpty(shorthand(f, ops), path, `'${f.name}' takes an operator object`);
-	return yield* Effect.forEach(es, ([op, v]) => fieldOp(info, f, op, v, `${path}.${op}`));
+	return yield* Effect.forEach(es, ([op, v]) => fieldOp(info, f, op, v, `${path}.${op}`, depth));
 });
 
 const AGG = ['sum', 'min', 'max', 'avg'] as const;
 const isAgg = (q: string): q is (typeof AGG)[number] => AGG.some((a) => a === q);
-const SUMMABLE = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number']);
+const SUMMABLE = new Set(
+	Object.entries(KIND)
+		.filter(([, entry]) => entry.traits.summable)
+		.map(([kind]) => kind)
+);
 /** Whether a related row's scalar field can feed a filter aggregate. */
-export const canAggregateWhere = (kind: string, op: (typeof AGG)[number]): boolean =>
+export const can_aggregate_where = (kind: string, op: (typeof AGG)[number]): boolean =>
 	SUMMABLE.has(kind) || ((op === 'min' || op === 'max') && (kind === 'date' || kind === 'instant'));
 /** Normalizes a `Where` literal over model `m`, strictly: the first fault is `invalid` with its path. */
 export const where: (
@@ -579,7 +597,7 @@ export const where: (
 						typeof name === 'string' && !name.includes('.')
 							? (yield* modelInfo(cat, rel.child)).fields.get(name)
 							: undefined;
-					if (g === undefined || g.many || !canAggregateWhere(g.kind, q))
+					if (g === undefined || g.many || !can_aggregate_where(g.kind, q))
 						return yield* invalid(`${qa}.of: names a scalar child field supported by ${q}`);
 					const cmps = es.filter(([k]) => k !== 'of');
 					if (cmps.length === 0) return yield* invalid(`${qa}: compares with eq…gte`);
@@ -630,7 +648,7 @@ export const where: (
 				return yield* invalid(
 					`${at}: unknown field '${key}' on '${m}'${/\p{Cf}/u.test(key) ? ' (the name holds invisible characters)' : ''}; its fields: ${[...info.fields.keys()].join(', ')}`
 				);
-			of.push(...(yield* fieldOps(info, f, v, at)));
+			of.push(...(yield* fieldOps(info, f, v, at, depth)));
 		}
 	}
 	return of.length === 0 ? { t: 'const', value: true } : and(of);
@@ -661,16 +679,16 @@ const refOps = Effect.fnUntraced(function* (
 	}
 	const f = info.fields.get(arm === null ? rel : `${rel}.${arm}`);
 	if (f === undefined) return yield* invalid(`${path}: unknown relation '${rel}'`);
-	return yield* fieldOps(info, f, v, path);
+	return yield* fieldOps(info, f, v, path, depth);
 });
 
 /** In the browser (`bolt.decode`): each top-level condition and sort key is kept or dropped alone. */
-export const decodeView = /*#__PURE__*/ Effect.fnUntraced(function* (
+export const decode_view = /*#__PURE__*/ Effect.fnUntraced(function* (
 	cat: Catalog,
 	model: string,
 	q: { where?: unknown; order_by?: unknown }
 ) {
-	yield* exposureOf(cat, model);
+	yield* exposure_of(cat, model);
 	const dropped: { path: string; message: string }[] = [];
 	const keep = Effect.fnUntraced(function* (
 		path: string,
@@ -717,16 +735,10 @@ export const page = (
 	);
 };
 const SORTABLE_SYSTEM = new Set(['created_at', 'updated_at']);
-const SYSTEM = new Set<string>(SYSTEM_COLUMNS);
 /** Kinds that cannot be used as a scalar sort key. */
 export const UNSORTABLE: ReadonlySet<string> = new Set([
-	'json',
-	'object',
-	'file',
-	'custom',
-	'vector',
-	'point',
-	'period',
+	...Object.entries(KIND).filter(([, entry]) => !entry.traits.sortable).map(([kind]) => kind),
+	// Store's `ref` kind is a polymorphic reference; scalar refs lower to `id`.
 	'ref'
 ]);
 const ORDER_MAX_HOPS = 2;
@@ -794,7 +806,7 @@ export const order = Effect.fnUntraced(function* (o: unknown, cat?: Catalog, m?:
 			);
 		if (inline?.shape !== undefined && field.includes('.')) {
 			// a scalar path inside an inline value sorts by its text cast to its kind
-			const leaf = inlineLeaf(inline, field.split('.').slice(1));
+			const leaf = inline_leaf(inline, field.split('.').slice(1));
 			if (leaf === undefined || UNSORTABLE.has(leaf.kind) || near !== undefined)
 				return yield* invalid(`order_by[${i}]: '${field}' is no scalar path`);
 		} else if (cat !== undefined && m !== undefined) {
@@ -815,7 +827,7 @@ export const order = Effect.fnUntraced(function* (o: unknown, cat?: Catalog, m?:
 					: f === undefined ||
 						f.many === true ||
 						UNSORTABLE.has(f.kind) ||
-						(SYSTEM.has(last) &&
+						(SYSTEM_COLUMN_SET.has(last) &&
 							!SORTABLE_SYSTEM.has(last) &&
 							!(steps.length === 1 && info.key.includes(last)))
 			)
@@ -934,22 +946,22 @@ const selection = (s: unknown, w: unknown): unknown => {
 
 /** `read(model, { where?, select?, with?, order_by?, search? } & Paged)`. */
 export const read = Effect.fn('Store.decode.read')(function* (cat: Catalog, model: string, q: Obj) {
-	const { where: w, select: sel, with: rels, order_by, search, firstPer, ...paged } = q;
+	const { where: w, select: sel, with: rels, order_by, search, first_per, ...paged } = q;
 	const s = selection(sel, rels);
-	yield* exposureOf(cat, model);
+	yield* exposure_of(cat, model);
 	if (search !== undefined && typeof search !== 'string')
 		return yield* invalid('search is a string');
 	let groups: readonly string[] | undefined;
-	if (firstPer !== undefined) {
+	if (first_per !== undefined) {
 		if (
-			!EffectArray.isArray(firstPer) ||
-			firstPer.length === 0 ||
-			firstPer.some((field) => typeof field !== 'string' || field.includes('.'))
+			!EffectArray.isArray(first_per) ||
+			first_per.length === 0 ||
+			first_per.some((field) => typeof field !== 'string' || field.includes('.'))
 		)
-			return yield* invalid('firstPer names one or more sortable columns on this table');
-		groups = (yield* order(firstPer, cat, model)).map(({ field }) => field);
+			return yield* invalid('first_per names one or more sortable columns on this table');
+		groups = (yield* order(first_per, cat, model)).map(({ field }) => field);
 		if (search !== undefined)
-			return yield* invalid('firstPer cannot be combined with search ranking');
+			return yield* invalid('first_per cannot be combined with search ranking');
 	}
 	const ir: ReadIR = {
 		kind: 'read',
@@ -959,7 +971,7 @@ export const read = Effect.fn('Store.decode.read')(function* (cat: Catalog, mode
 		...(w === undefined ? {} : { where: yield* where(cat, model, w) }),
 		...(order_by === undefined ? {} : { order: yield* order(order_by, cat, model) }),
 		...(search === undefined || search === '' ? {} : { search }),
-		...(groups === undefined ? {} : { firstPer: groups })
+		...(groups === undefined ? {} : { first_per: groups })
 	};
 	return ir;
 });
@@ -969,7 +981,7 @@ export const get = Effect.fn('Store.decode.get')(function* (
 	id: string,
 	q: Obj = {}
 ) {
-	yield* exposureOf(cat, model);
+	yield* exposure_of(cat, model);
 	const ir: ReadIR = {
 		kind: 'get',
 		model,
@@ -994,7 +1006,7 @@ export const aggregate = Effect.fn('Store.decode.aggregate')(function* (
 	q: Obj
 ) {
 	const { where: w, by, count, sum, avg, min, max, ...paged } = q;
-	yield* exposureOf(cat, model);
+	yield* exposure_of(cat, model);
 	const buckets = yield* Effect.forEach(
 		by === undefined ? [] : EffectArray.isArray(by) ? by : [by],
 		(b): Effect.Effect<Bucket, StoreError> => {
@@ -1036,7 +1048,7 @@ export const semantic = Effect.fn('Store.decode.semantic')(function* (
 	model: string,
 	q: Obj
 ) {
-	const c = yield* exposureOf(cat, model);
+	const c = yield* exposure_of(cat, model);
 	if (c.model.semantic === undefined)
 		return yield* invalid(`'${model}' declares no search.semantic (rule 16)`);
 	const { to, where: w, select: s, ...paged } = q;
@@ -1066,7 +1078,7 @@ export const similar = Effect.fn('Store.decode.similar')(function* (
 	input: Json,
 	q: Obj
 ) {
-	const c = yield* exposureOf(cat, model);
+	const c = yield* exposure_of(cat, model);
 	if (!Object.hasOwn(c.model.indexes, index))
 		return yield* invalid(`'${model}' declares no search index '${index}'`);
 	const p = yield* page(q);

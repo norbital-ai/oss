@@ -1,8 +1,8 @@
 import './dom.ts';
 import { afterEach, expect, it, vi } from '@effect/vitest';
 import {
-	beginWorkspaceNavigation,
-	workspaceNavigation
+	begin_workspace_navigation,
+	workspace_navigation
 } from '../src/utilities/workspace-navigation.ts';
 
 const disposers: (() => void)[] = [];
@@ -19,7 +19,7 @@ const link = () => {
 	// Exercise the browser's default action without requesting a fixture server.
 	node.href = '#workspace-option';
 	document.body.append(node);
-	const action = workspaceNavigation(node, 'Opening workspace…');
+	const action = workspace_navigation(node, 'Opening workspace…');
 	disposers.push(() => action.destroy());
 	return node;
 };
@@ -67,12 +67,12 @@ it('clears a failed or aborted navigation without disturbing keyboard focus', ()
 	const button = document.createElement('button');
 	document.body.append(button);
 	button.focus();
-	disposers.push(beginWorkspaceNavigation('Opening workspace…'));
+	disposers.push(begin_workspace_navigation('Opening workspace…'));
 	expect(document.activeElement).toBe(button);
 	navigation.dispatchEvent(new Event('navigateerror'));
 	expect(cover()).toBeNull();
 	expect(document.activeElement).toBe(button);
-	disposers.push(beginWorkspaceNavigation('Opening workspace…'));
+	disposers.push(begin_workspace_navigation('Opening workspace…'));
 	const controller = new AbortController();
 	const event = new Event('navigate');
 	Object.defineProperty(event, 'signal', { value: controller.signal });
@@ -83,17 +83,17 @@ it('clears a failed or aborted navigation without disturbing keyboard focus', ()
 
 it('does not cache a stale cover on Back or retain one after a cancelled unload or Escape', async () => {
 	for (const type of ['pagehide', 'pageshow', 'popstate']) {
-		disposers.push(beginWorkspaceNavigation('Opening workspace…'));
+		disposers.push(begin_workspace_navigation('Opening workspace…'));
 		window.dispatchEvent(new Event(type));
 		expect(cover()).toBeNull();
 	}
-	disposers.push(beginWorkspaceNavigation('Opening workspace…'));
+	disposers.push(begin_workspace_navigation('Opening workspace…'));
 	const leaving = new Event('beforeunload', { cancelable: true });
 	window.dispatchEvent(leaving);
 	leaving.preventDefault();
 	await Promise.resolve();
 	expect(cover()).toBeNull();
-	disposers.push(beginWorkspaceNavigation('Opening workspace…'));
+	disposers.push(begin_workspace_navigation('Opening workspace…'));
 	window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
 	expect(cover()).toBeNull();
 });
@@ -101,7 +101,7 @@ it('does not cache a stale cover on Back or retain one after a cancelled unload 
 it('teardown removes the cover and no longer responds to link activation', () => {
 	const node = document.createElement('a');
 	document.body.append(node);
-	const action = workspaceNavigation(node, 'Opening workspace…');
+	const action = workspace_navigation(node, 'Opening workspace…');
 	node.dispatchEvent(new MouseEvent('click', { button: 0 }));
 	expect(cover()).not.toBeNull();
 	action.destroy();

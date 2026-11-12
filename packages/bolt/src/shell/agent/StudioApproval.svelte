@@ -1,17 +1,16 @@
 <!--
-	In the composer: a merge or rollback the agent asked for, held by the host for the person (the step's `approval`): the agent's
-	summary of the change, then the facts Studio holds — the change's commit message for a merge, the destructive schema
-	steps approving accepts; the checkpoint's time, its description and whether data written after it is discarded for a
-	rollback — and Approve / Reject, which decide it from the person's own session (`approval.decide`), as in Studio.
+	One bounded card per held update: a short summary, disclosed data/version details, visible data-loss warnings and
+	fixed decision controls. The native approval still runs once as the requestor and follows the real merge outcome.
 -->
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
-	import { fork, observeOnce } from '@norbital-ai/ui/effect';
+	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Button, Icon } from '@norbital-ai/ui';
-	import { Inline } from '@norbital-ai/ui/layout';
-	import { impactLines, stepName } from '../../protocol/migration-impact.ts';
+	import { Inline, Scroll } from '@norbital-ai/ui/layout';
+	import { impact_lines, step_name } from '../../protocol/migration-impact.ts';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import type { ShellApi } from '../api-types.ts';
+	import { date_time } from '../i18n.ts';
 
 	let {
 		api,
@@ -33,11 +32,11 @@
 			)
 		)?.summary
 	);
-	const studio = observeOnce(() => api.studio());
+	const studio = observe_once(() => api.studio());
 	const held = $derived(studio.current?.approvals?.find((one) => one.id === id));
 	// the checkpoint's time from Studio's own record, in the workspace's zone: never the agent's wording of it
 	const when = (at: string) =>
-		new Date(at).toLocaleString(undefined, zone === undefined ? {} : { timeZone: zone });
+		date_time(at, undefined, zone === undefined ? {} : { timeZone: zone });
 	const draft = $derived(
 		held?.op.op === 'change.merge' && held.head !== undefined
 			? studio.current?.builds?.find((b) => b.commit === held.head)?.message
@@ -47,7 +46,7 @@
 	const impact = $derived.by(() => {
 		const op = held?.op;
 		return op?.op === 'change.merge'
-			? studio.current?.changeSets?.find((c) => c.id === op.id)?.preview?.impact
+			? studio.current?.change_sets?.find((c) => c.id === op.id)?.preview?.impact
 			: undefined;
 	});
 	const checkpoint = $derived.by(() => {
@@ -56,6 +55,10 @@
 			? studio.current?.releases.find((r) => r.commit === op.commit)
 			: undefined;
 	});
+	const short_summary = $derived(summary === undefined || summary === null ? '' : summary.length <= 240 ? summary : `${summary.slice(0, 240).replace(/\s+\S*$/, '')}…`);
+	const destructive = $derived([...new Set(held?.destructive ?? [])]);
+	const impact_details = $derived(impact === undefined ? [] : impact_lines(impact, t));
+	const data_details = $derived([...new Set(impact === undefined ? destructive.map(step_name) : impact_details.slice(0, -2))]);
 	let decided = $state<'approved' | 'rejected' | null>(null);
 	/** How the approved merge ended: the card follows it, at most ten minutes, through its switch-over. */
 	let ended = $state<{ readonly error?: string } | null>(null);
@@ -63,7 +66,7 @@
 		for (let tries = 0; tries < 300 && ended === null; tries++) {
 			yield* Effect.sleep('2 seconds');
 			const view = yield* Effect.orElseSucceed(api.studio(), () => null),
-				found = view?.changeSets?.find((c) => c.id === change);
+				found = view?.change_sets?.find((c) => c.id === change);
 			if (found?.state === 'merged') ended = {};
 			else if (found?.merge?.state === 'failed')
 				ended = { error: found.merge.error ?? t('the merge did not reach live') };
@@ -77,7 +80,7 @@
 			busy = true;
 			failed = null;
 			const op = held?.op;
-			return api.studioRun({ op: 'approval.decide', id, kind }).pipe(
+			return api.studio_run({ op: 'approval.decide', id, kind }).pipe(
 				Effect.match({
 					onFailure: (cause) => {
 						failed = cause.message;
@@ -101,95 +104,75 @@
 </script>
 
 {#if held !== undefined || decided !== null}
-	<div class="rounded-xl border border-border/70 bg-background p-3" data-approval={id}>
-		<p class="text-sm font-medium text-foreground">
-			{t(
-				step.tool?.studio === 'rollback'
-					? 'Roll the workspace back to an earlier version?'
-					: 'Merge into live?'
-			)}
+	<section class="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background" style="max-height: min(32rem, 60dvh)" data-approval={id} aria-label={t('Workspace update')}>
+		<p class="shrink-0 px-3 pt-3 pb-2 text-sm font-medium">
+			{t(decided !== null ? 'Workspace update' : step.tool?.studio === 'rollback' ? 'Restore this version?' : 'Apply these changes?')}
 		</p>
-		{#if summary !== undefined}
-			<p class="mt-1 text-sm text-foreground" data-role="summary">{summary}</p>
-		{/if}
-		{#if draft !== undefined}
-			<p class="mt-1 text-xs text-muted-foreground">{t('Last commit')}: {draft}</p>
-		{/if}
-		{#if (held?.destructive?.length ?? 0) > 0}
-			<p class="mt-1 text-sm text-destructive" role="alert">
-				{t('This removes or changes stored data:')}
-				{held?.destructive?.map(stepName).join(', ')}
-			</p>
-		{/if}
-		{#if impact !== undefined}
-			<ul class="mt-1 text-xs text-muted-foreground" data-role="impact">
-				{#each impactLines(impact, t) as line (line)}<li>{line}</li>{/each}
-			</ul>
-		{/if}
-		{#if checkpoint !== undefined}
-			<p class="mt-1 text-xs text-muted-foreground">
-				{t('Goes back to')}:
-				<time datetime={checkpoint.checkpoint ?? checkpoint.at}
-					>{when(checkpoint.checkpoint ?? checkpoint.at)}</time
-				>
-				— {checkpoint.message}
-			</p>
-			{#if checkpoint.discards !== undefined}
-				<p class="mt-1 text-sm text-destructive" role="alert">
-					{t('Data written after')}
-					{when(checkpoint.discards)}
-					{t('will be discarded. Everyone stays signed in.')}
-				</p>
-			{:else}
-				<p class="mt-1 text-xs text-muted-foreground">
-					{t('All data is kept. Everyone stays signed in.')}
+		<Scroll name={t('Change details')} axis="both" fade={false} class="min-h-0 flex-initial space-y-3 overflow-y-auto overscroll-contain px-3 pb-3 text-sm [scrollbar-gutter:auto]">
+			{#if summary !== undefined && summary !== null && summary !== ''}
+				{#if summary.length > 240}
+					<details class="group/summary" data-role="summary">
+						<summary class="cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+							<span class="group-open/summary:hidden">{short_summary}</span>
+							<span class="hidden group-open/summary:inline">{t('Change summary')}</span>
+							<span class="ml-1 text-xs text-muted-foreground group-open/summary:hidden">{t('Read more')}</span>
+						</summary>
+						<p class="mt-2 whitespace-pre-wrap">{summary}</p>
+					</details>
+				{:else}<p class="whitespace-pre-wrap" data-role="summary">{summary}</p>{/if}
+			{/if}
+			{#if checkpoint !== undefined}
+				<p class="text-xs text-muted-foreground">
+					{t('Restore to')} <time datetime={checkpoint.checkpoint ?? checkpoint.at}>{when(checkpoint.checkpoint ?? checkpoint.at)}</time> — {checkpoint.message}
 				</p>
 			{/if}
-		{/if}
-		{#if decided === 'approved'}
-			<Inline gap="sm" align="center" class="mt-2 text-sm" role="status" data-outcome>
-				<Icon
-					name={ended?.error === undefined ? 'lucide:circle-check' : 'lucide:circle-alert'}
-					class="size-4 shrink-0 {ended?.error === undefined ? 'text-success' : 'text-destructive'}"
-				/>
-				{#if ended?.error !== undefined}
-					<span class="min-w-0 whitespace-normal">{t('The merge failed:')} {ended.error}</span>
-				{:else if ended !== null}
-					<span class="min-w-0 whitespace-normal">{t('Merged. Live runs the new version.')}</span>
-				{:else if held?.op.op === 'change.merge'}
-					<span class="min-w-0 whitespace-normal">{t('Approved. Merging into live…')}</span>
-				{:else}
-					<span class="min-w-0 whitespace-normal"
-						>{t('Applied — the workspace is now on the new version.')}</span
-					>
-					<Button
-						variant="outline"
-						class="shrink-0"
-						onclick={() => location.reload()}
-						data-view-live>{t('View live')}</Button
-					>
-				{/if}
-			</Inline>
-		{:else if decided === 'rejected'}
-			<p class="mt-2 text-xs text-muted-foreground" role="status">{t('Rejected')}</p>
-		{:else if held !== undefined}
-			<p class="mt-1 text-xs text-muted-foreground">
-				{t(
-					'The workspace updates for everyone. It can take a few minutes; pages wait while it switches over and nobody is signed out.'
-				)}
-			</p>
-			<Inline gap="xs" class="mt-2" align="center">
-				<Button disabled={busy} onclick={() => fork(decide('approved'))}>{t('Approve')}</Button>
-				<Button variant="outline" disabled={busy} onclick={() => fork(decide('rejected'))}
-					>{t('Reject')}</Button
-				>
-				{#if busy}<span class="text-xs text-muted-foreground" role="status"
-						>{t('Working on it… you can keep using the app.')}</span
-					>{/if}
-			</Inline>
-		{/if}
-		{#if failed !== null}
-			<p class="mt-2 text-sm text-destructive" role="alert">{failed}</p>
-		{/if}
-	</div>
+			{#if destructive.length > 0}
+				<p class="flex items-start gap-2 text-sm text-destructive" role="alert">
+					<Icon name="lucide:triangle-alert" class="mt-0.5 size-4 shrink-0" />
+					<span>{t('Some stored data will be removed or changed. Review the data changes before applying.')}</span>
+				</p>
+			{/if}
+			{#if checkpoint?.discards !== undefined}
+				<p class="text-sm text-destructive" role="alert">{t('Data written after')} {when(checkpoint.discards)} {t('will be discarded.')}</p>
+			{:else if checkpoint !== undefined}
+				<p class="text-xs text-muted-foreground">{t('Your current data will be kept.')}</p>
+			{/if}
+			{#if data_details.length > 0 || (draft !== undefined && draft !== summary)}
+				<details data-role="impact">
+					<summary class="cursor-pointer rounded-sm text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">{t('Review data changes and version')}</summary>
+					<div class="mt-2 space-y-2 text-xs text-muted-foreground">
+						{#if draft !== undefined && draft !== summary}<p>{t('Version')}: {draft}</p>{/if}
+						{#if data_details.length > 0}<ul class="list-disc space-y-1 pl-4 break-words">{#each data_details as line, index (index)}<li>{line}</li>{/each}</ul>{/if}
+					</div>
+				</details>
+			{/if}
+			{#if impact_details.length > 0}
+				<p class="text-xs text-muted-foreground">{impact_details.at(-2)}</p>
+				<p class="text-xs text-muted-foreground">{impact_details.at(-1)}</p>
+			{:else if decided === null && held !== undefined}
+				<p class="text-xs text-muted-foreground">{t('This updates the workspace for everyone.')}</p>
+			{/if}
+		</Scroll>
+		<div class="shrink-0 border-t border-border/60 px-3 py-2.5">
+			{#if decided === 'approved'}
+				<Inline gap="sm" align="center" class="text-sm" role="status" data-outcome>
+					<Icon name={ended?.error !== undefined ? 'lucide:circle-alert' : ended === null && held?.op.op === 'change.merge' ? 'lucide:loader-circle' : 'lucide:circle-check'} class="size-4 shrink-0" />
+					{#if ended?.error !== undefined}
+						<span class="min-w-0 whitespace-normal text-destructive">{t('The update failed:')} {ended.error}</span>
+					{:else if ended !== null || held?.op.op !== 'change.merge'}
+						<span class="min-w-0 whitespace-normal">{t('Changes applied.')}</span>
+						<Button variant="outline" class="shrink-0" onclick={() => location.reload()} data-view-live>{t('View workspace')}</Button>
+					{:else}<span class="min-w-0 whitespace-normal">{t('Applying changes… You can keep using the app.')}</span>{/if}
+				</Inline>
+			{:else if decided === 'rejected'}
+				<p class="text-xs text-muted-foreground" role="status">{t('Changes rejected.')}</p>
+			{:else if held !== undefined}
+				<Inline gap="xs" align="center">
+					<Button disabled={busy} onclick={() => fork(decide('approved'))}>{t(busy ? 'Working…' : step.tool?.studio === 'rollback' ? 'Restore version' : 'Apply changes')}</Button>
+					<Button variant="outline" disabled={busy} onclick={() => fork(decide('rejected'))}>{t('Cancel')}</Button>
+				</Inline>
+			{/if}
+			{#if failed !== null}<p class="mt-2 text-sm text-destructive" role="alert">{failed}</p>{/if}
+		</div>
+	</section>
 {/if}

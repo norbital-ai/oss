@@ -10,11 +10,11 @@
 		render(el: HTMLElement, o: { sitekey: string; callback(token: string): void }): string;
 		reset(id: string): void;
 	};
-	let { siteKey, queue }: { siteKey: string; queue: ChallengeQueue } = $props();
+	let { site_key, queue }: { site_key: string; queue: ChallengeQueue } = $props();
 	let el = $state<HTMLElement | null>(null);
 
 	onMount(() => {
-		if (siteKey === 'dev') {
+		if (site_key === 'dev') {
 			queue.setReset(() => queue.put('dev-pass'));
 			queue.put('dev-pass');
 			return;
@@ -25,7 +25,7 @@
 		script.onload = () => {
 			const ts = (window as Window & { turnstile?: Api }).turnstile;
 			if (ts === undefined || el === null) return;
-			const id = ts.render(el, { sitekey: siteKey, callback: (token) => queue.put(token) });
+			const id = ts.render(el, { sitekey: site_key, callback: (token) => queue.put(token) });
 			queue.setReset(() => ts.reset(id));
 		};
 		document.head.append(script);

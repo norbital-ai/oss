@@ -1,5 +1,5 @@
 // The web shell's device: the browser's own notifications and web push. Bolt uses them for whatever an installed
-// shell's device (`window.boltDevice`) does not provide.
+// shell's device (`window.bolt_device`) does not provide.
 import { Effect, Schema } from 'effect';
 import type { DeviceNotifications } from '../page/device.ts';
 import { PushBody } from '../protocol/schema.ts';
@@ -30,7 +30,7 @@ export const webNotifications = (): DeviceNotifications => {
 				for (const listener of listeners) listener(notice.path);
 			};
 		},
-		onOpen: (listener) => {
+		on_open: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		}
@@ -60,6 +60,27 @@ const permission = Effect.callback<NotificationPermission, DeviceFailure>((resum
 	document.addEventListener('click', ask, { once: true, capture: true });
 	return Effect.sync(() => document.removeEventListener('click', ask, { capture: true }));
 });
+/** A first installation must activate before PushManager can subscribe; the listener belongs to the page scope. */
+const activated = (registration: ServiceWorkerRegistration) =>
+	Effect.callback<void, DeviceFailure>((resume) => {
+		const worker = registration.active ?? registration.installing ?? registration.waiting;
+		if (worker === null)
+			return resume(Effect.fail(new DeviceFailure({ operation: 'serviceWorker.activate', cause: 'No service worker installed.' })));
+		const release = () => worker.removeEventListener('statechange', changed);
+		// the returned finalizer runs only on interruption: a settled wait releases its own listener
+		const changed = () => {
+			if (worker.state === 'activated') {
+				release();
+				resume(Effect.void);
+			} else if (worker.state === 'redundant') {
+				release();
+				resume(Effect.fail(new DeviceFailure({ operation: 'serviceWorker.activate', cause: 'The service worker failed to activate.' })));
+			}
+		};
+		worker.addEventListener('statechange', changed);
+		changed();
+		return Effect.sync(release);
+	});
 /** This browser's web push subscription under the host's VAPID key, once it has notification permission. */
 export const webPush = Effect.fn('shell.webPush')(function* (key: string) {
 	const answer = yield* permission;
@@ -68,6 +89,7 @@ export const webPush = Effect.fn('shell.webPush')(function* (key: string) {
 	const worker = yield* attempt('serviceWorker.register', () =>
 		navigator.serviceWorker.register(based(SW), { scope: based('/') })
 	);
+	yield* activated(worker);
 	const raw = yield* Effect.try({
 		try: () => atob(key.replace(/-/g, '+').replace(/_/g, '/')),
 		catch: (cause) => new DeviceFailure({ operation: 'push.key', cause })

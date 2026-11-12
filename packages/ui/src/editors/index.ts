@@ -8,6 +8,6 @@ export { default as CommandMenu, type CommandMenuProps } from './command-menu.sv
 export type { CommandItem, CommandTrigger } from './command-menu.js';
 export { default as MarkdownEditor, type MarkdownEditorProps } from './markdown-editor.svelte';
 export { default as ReadonlyMarkdown } from './readonly-markdown.svelte';
-export { markdownHtml } from './markdown.js';
-export { highlightedLine } from './highlight.js';
-export { codeHighlight, codeLanguage, codeTheme } from './code-setup.js';
+export { markdown_html } from './markdown.js';
+export { highlighted_line } from './highlight.js';
+export { code_highlight, code_language, code_theme } from './code-setup.js';

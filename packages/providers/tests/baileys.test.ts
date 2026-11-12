@@ -16,13 +16,13 @@ import {
 	whatsappMessage
 } from '../src/baileys/index.ts';
 import { CREDS, fake, ME, raw } from './baileys-fake.ts';
-import { fakeFetch, file, host, messagesOf, until, type HostOptions } from './kit.ts';
+import { required, fakeFetch, file, host, messagesOf, until, type HostOptions } from './kit.ts';
 
 describe('WhatsApp (Baileys) messages', () => {
 	it('a receipt on our own message is its delivery report; anything else is not', () => {
 		const key = { id: 'M1', remoteJid: '659@s.whatsapp.net', fromMe: true };
 		expect(baileysReceipt({ key, update: { status: 2 } }, 1_790_000_000_000)).toMatchObject({
-			providerId: 'M1',
+			provider_id: 'M1',
 			report: { kind: 'sent', provider: 'baileys' }
 		});
 		expect(baileysReceipt({ key, update: { status: 3 } }, 1_790_000_000_000)?.report.kind).toBe(
@@ -47,7 +47,7 @@ describe('WhatsApp (Baileys) messages', () => {
 				{ key, receipt: { userJid: '659@s.whatsapp.net', receiptTimestamp: 1 } },
 				1_790_000_000_000
 			)
-		).toMatchObject({ providerId: 'G1', report: { kind: 'delivered' } });
+		).toMatchObject({ provider_id: 'G1', report: { kind: 'delivered' } });
 		expect(
 			baileysGroupReceipt(
 				{ key, receipt: { userJid: '659@s.whatsapp.net', readTimestamp: 2 } },
@@ -113,7 +113,7 @@ describe('WhatsApp (Baileys) messages', () => {
 			from: { handle: '6591234567:14@s.whatsapp.net', name: 'Ben' }
 		});
 		expect(
-			whatsappMessage(
+			required(whatsappMessage(
 				wa(g, {
 					extendedTextMessage: {
 						text: '@bot done',
@@ -121,7 +121,7 @@ describe('WhatsApp (Baileys) messages', () => {
 					}
 				}),
 				self
-			)!['invocation']
+			))['invocation']
 		).toBe('mention');
 		expect(
 			whatsappMessage(
@@ -133,9 +133,9 @@ describe('WhatsApp (Baileys) messages', () => {
 				}),
 				self
 			)
-		).toMatchObject({ invocation: 'reply', replyTo: 'X' });
+		).toMatchObject({ invocation: 'reply', reply_to: 'X' });
 		expect(
-			whatsappMessage(
+			required(whatsappMessage(
 				wa(g, {
 					extendedTextMessage: {
 						text: 'ok',
@@ -143,7 +143,7 @@ describe('WhatsApp (Baileys) messages', () => {
 					}
 				}),
 				self
-			)!['invocation']
+			))['invocation']
 		).toBe('ambient');
 	});
 	it('a mention by our LID addresses us too, which is what WhatsApp actually sends', () => {
@@ -151,11 +151,11 @@ describe('WhatsApp (Baileys) messages', () => {
 		// prints as. Matching only the phone JID reads every real mention as ambient — the linked device never wakes.
 		const g = { remoteJid: '1203@g.us', participant: '6591234567:14@s.whatsapp.net' };
 		const mentioned = (jid: string) =>
-			whatsappMessage(
+			required(whatsappMessage(
 				wa(g, { extendedTextMessage: { text: '@bot done', contextInfo: { mentionedJid: [jid] } } }),
 				self,
 				{ lid: MY_LID }
-			)!['invocation'];
+			))['invocation'];
 		expect(mentioned('6580000000@s.whatsapp.net')).toBe('mention');
 		expect(mentioned(MY_LID)).toBe('mention');
 		expect(mentioned('999999999999@lid')).toBe('ambient');
@@ -203,7 +203,7 @@ describe('WhatsApp (Baileys) messages', () => {
 		const dm = { remoteJid: '6591234567@s.whatsapp.net' };
 		expect(
 			whatsappMessage(wa(dm, { protocolMessage: { type: 0, key: { id: 'OLD' } } }), self)
-		).toEqual({ id: 'OLD', sentAt: new Date(1_790_000_000_000).toISOString(), deleted: true });
+		).toEqual({ id: 'OLD', sent_at: new Date(1_790_000_000_000).toISOString(), deleted: true });
 		expect(
 			whatsappMessage(
 				wa(dm, {
@@ -271,21 +271,21 @@ describe('the WhatsApp Web link', () => {
 			const f = fake(),
 				h = yield* open(f);
 			expect(h.status).toEqual({ state: 'unpaired' });
-			expect(yield* Effect.flip(h.link.pair!({ phone: '12' }))).toMatchObject({
+			expect(yield* Effect.flip(required(h.link.pair)({ phone: '12' }))).toMatchObject({
 				message: expect.stringMatching(/digits, country code first/)
 			});
-			yield* h.link.pair!({});
+			yield* required(h.link.pair)({});
 			yield* f.socket(0);
-			f.opened[0]!.ev.emit('connection.update', { qr: 'QR-DATA' });
+			required(f.opened[0]).ev.emit('connection.update', { qr: 'QR-DATA' });
 			yield* until(() => h.pairing?.kind === 'qr');
 			expect([h.status, h.pairing]).toEqual([
 				{ state: 'pairing' },
 				{ kind: 'qr', value: 'QR-DATA' }
 			]);
-			yield* h.link.pair!({ phone: '+65 8000 0000' });
+			yield* required(h.link.pair)({ phone: '+65 8000 0000' });
 			yield* f.socket(1);
-			expect(f.opened[0]!.ended).toBe(true);
-			f.opened[1]!.ev.emit('connection.update', { qr: 'QR2' });
+			expect(required(f.opened[0]).ended).toBe(true);
+			required(f.opened[1]).ev.emit('connection.update', { qr: 'QR2' });
 			yield* until(() => h.pairing?.kind === 'code');
 			expect(h.pairing).toEqual({ kind: 'code', value: 'ABCD-1234' });
 			yield* h.link.close ?? Effect.void;
@@ -297,9 +297,9 @@ describe('the WhatsApp Web link', () => {
 			Effect.gen(function* () {
 				const f = fake(),
 					h = yield* open(f);
-				yield* h.link.pair!({});
+				yield* required(h.link.pair)({});
 				yield* f.socket(0);
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				yield* sdk(() => s.config.store.update({ me: { id: ME } })); // a pairing code names the number early: still not paired
 				yield* sdk(() => s.config.store.set({ 'pre-key': { '1': { k: 'a' } } }));
 				expect(h.writes).toEqual([]);
@@ -345,16 +345,16 @@ describe('the WhatsApp Web link', () => {
 						}
 					}
 				);
-			const s = f.opened[0]!;
+			const s = required(f.opened[0]);
 			const first = s.config.store.update({ ...creds, n: 1 });
 			yield* until(() => gate !== undefined);
 			const second = s.config.store.update({ ...creds, n: 2 }),
 				third = s.config.store.update({ ...creds, n: 3 });
 			const key = s.config.store.set({ session: { a: { s: 1 } } });
-			gate!();
+			required(gate)();
 			yield* sdk(() => Promise.all([first, second, third, key]));
 			expect(h.writes.map((w) => [...w.keys()].join())).toEqual(['creds', 'creds', 'session:a']);
-			expect(h.writes[1]!.get('creds')).toMatchObject({ n: 3 });
+			expect(required(h.writes[1]).get('creds')).toMatchObject({ n: 3 });
 			yield* h.link.close ?? Effect.void;
 		})
 	);
@@ -371,9 +371,9 @@ describe('the WhatsApp Web link', () => {
 						}
 					}
 				);
-			yield* h.link.pair!({});
+			yield* required(h.link.pair)({});
 			yield* f.socket(0);
-			const s = f.opened[0]!;
+			const s = required(f.opened[0]);
 			const updating = yield* sdk(() =>
 				s.config.store.update({ ...creds, accountSyncCounter: 1 })
 			).pipe(Effect.forkChild);
@@ -390,10 +390,10 @@ describe('the WhatsApp Web link', () => {
 			const f = fake(),
 				h = yield* open(f, { creds: CREDS, 'session:a': { s: 1 } });
 			expect(f.opened).toHaveLength(1);
-			expect(f.opened[0]!.config.store.creds).toEqual(CREDS);
-			expect(f.opened[0]!.config.store.get('session', ['a'])).toEqual({ a: { s: 1 } });
+			expect(required(f.opened[0]).config.store.creds).toEqual(CREDS);
+			expect(required(f.opened[0]).config.store.get('session', ['a'])).toEqual({ a: { s: 1 } });
 			expect(h.status).toMatchObject({ state: 'connecting' });
-			f.opened[0]!.ready();
+			required(f.opened[0]).ready();
 			yield* until(() => h.status?.state === 'connected');
 			expect(h.status).toEqual({
 				state: 'connected',
@@ -407,18 +407,18 @@ describe('the WhatsApp Web link', () => {
 		Effect.gen(function* () {
 			const f = fake(),
 				h = yield* open(f);
-			yield* h.link.pair!({});
+			yield* required(h.link.pair)({});
 			yield* f.socket(0);
-			f.opened[0]!.drop(408, 'QR refs attempts ended');
+			required(f.opened[0]).drop(408, 'QR refs attempts ended');
 			yield* until(() => h.status?.state === 'error');
 			expect(f.opened).toHaveLength(1);
 			expect(h.status).toMatchObject({
 				state: 'error',
 				code: 'pairingExpired',
-				lastDisconnect: { code: 408, message: 'QR refs attempts ended' }
+				last_disconnect: { code: 408, message: 'QR refs attempts ended' }
 			});
 			// pairing again starts over
-			yield* h.link.pair!({});
+			yield* required(h.link.pair)({});
 			yield* f.socket(1);
 			expect(f.opened).toHaveLength(2);
 			yield* h.link.close ?? Effect.void;
@@ -428,8 +428,8 @@ describe('the WhatsApp Web link', () => {
 		Effect.gen(function* () {
 			const f = fake(),
 				h = yield* open(f, { creds: CREDS });
-			f.opened[0]!.ready();
-			f.opened[0]!.drop(440, 'Stream Errored (conflict)');
+			required(f.opened[0]).ready();
+			required(f.opened[0]).drop(440, 'Stream Errored (conflict)');
 			yield* until(() => h.status?.state === 'error');
 			expect(f.opened).toHaveLength(1);
 			expect(h.status).toMatchObject({ state: 'error', code: 'replaced' });
@@ -440,7 +440,7 @@ describe('the WhatsApp Web link', () => {
 		Effect.gen(function* () {
 			const f = fake(),
 				h = yield* open(f, { creds: CREDS, 'session:a': { s: 1 } });
-			f.opened[0]!.drop(401, 'logged out');
+			required(f.opened[0]).drop(401, 'logged out');
 			yield* until(() => h.status?.state === 'error');
 			expect(h.status).toMatchObject({
 				code: 'loggedOut',
@@ -455,10 +455,10 @@ describe('the WhatsApp Web link', () => {
 		Effect.gen(function* () {
 			const f = fake(),
 				h = yield* open(f, { creds: CREDS });
-			f.opened[0]!.ready();
+			required(f.opened[0]).ready();
 			yield* TestClock.withLive(until(() => h.status?.state === 'connected'));
 			f.control.refuse = true;
-			f.opened[0]!.drop(428, 'Connection Terminated');
+			required(f.opened[0]).drop(428, 'Connection Terminated');
 			yield* TestClock.withLive(until(() => h.status?.state === 'reconnecting'));
 			yield* TestClock.adjust('999 millis');
 			expect(f.opened).toHaveLength(1);
@@ -469,7 +469,7 @@ describe('the WhatsApp Web link', () => {
 			yield* TestClock.adjust('1 millis');
 			yield* f.socket(1);
 			expect(h.statuses.filter((s) => s.state === 'reconnecting')).toMatchObject([
-				{ detail: 'Connection Terminated', lastDisconnect: { code: 428 } },
+				{ detail: 'Connection Terminated', last_disconnect: { code: 428 } },
 				{ detail: expect.stringContaining('no network') }
 			]);
 			yield* h.link.close ?? Effect.void;
@@ -481,7 +481,7 @@ describe('the WhatsApp Web link', () => {
 		'a socket that opens after its open timed out is ended at once, never live beside its retry',
 		() =>
 			Effect.gen(function* () {
-				const f = fake([], { openMs: 30 });
+				const f = fake([], { open_ms: 30 });
 				const started = Promise.withResolvers<void>(),
 					lateOpen = Promise.withResolvers<void>();
 				f.control.nextOpen = () => {
@@ -527,9 +527,9 @@ describe('the WhatsApp Web link', () => {
 					}
 				}
 			);
-			yield* h.link.pair!({});
+			yield* required(h.link.pair)({});
 			yield* f.socket(0);
-			const s = f.opened[0]!;
+			const s = required(f.opened[0]);
 			expect(yield* Effect.flip(sdk(() => s.paired()))).toMatchObject({ _tag: 'LinkClosed' });
 			yield* until(() => h.status?.state === 'error');
 			expect(h.status).toMatchObject({ code: 'replaced' });
@@ -551,7 +551,7 @@ describe('the ingest gate', () => {
 						{ creds: CREDS },
 						{
 							personal: true,
-							importStart: {
+							import_start: {
 								kind: 'since',
 								at: new Date(1_790_000_000_000).toISOString(),
 								zone: 'UTC',
@@ -559,7 +559,7 @@ describe('the ingest gate', () => {
 							}
 						}
 					);
-				expect(f.provider.importStart).toEqual({ kind: 'timestamp', precision: 'second' });
+				expect(f.provider.import_start).toEqual({ kind: 'timestamp', precision: 'second' });
 				const s = yield* f.socket();
 				let groups = 0,
 					phones = 0;
@@ -637,15 +637,15 @@ describe('the ingest gate', () => {
 					{
 						id: 'EQUAL',
 						direction: 'inbound',
-						sourceAt: new Date(1_790_000_000_000).toISOString()
+						source_at: new Date(1_790_000_000_000).toISOString()
 					},
 					{
 						id: 'SELF',
 						direction: 'outbound',
-						sourceAt: new Date(1_790_000_001_000).toISOString()
+						source_at: new Date(1_790_000_001_000).toISOString()
 					},
 					{ id: 'VOICE', attachments: [{ name: 'voice.ogg', mime: 'audio/ogg' }] },
-					{ id: 'H-EQUAL', sourceAt: new Date(1_790_000_000_000).toISOString() },
+					{ id: 'H-EQUAL', source_at: new Date(1_790_000_000_000).toISOString() },
 					{ id: 'H-NEW' }
 				]);
 				expect(media).toEqual(['EQUAL', 'SELF', 'VOICE', 'H-EQUAL', 'H-NEW']);
@@ -662,7 +662,7 @@ describe('the ingest gate', () => {
 					{ creds: CREDS },
 					{
 						personal: true,
-						importStart: {
+						import_start: {
 							kind: 'since',
 							at: '2026-09-21T14:13:20.000Z',
 							zone: 'UTC',
@@ -681,8 +681,8 @@ describe('the ingest gate', () => {
 				yield* sdk(() => socket.deliver(message));
 			expect(socket.receipts).toEqual(['BEFORE-NOW', 'SAME-NOW', 'AFTER-NOW']);
 			expect(messagesOf(h.events)).toMatchObject([
-				{ id: 'SAME-NOW', sourceAt: '2026-09-21T14:13:20.000Z' },
-				{ id: 'AFTER-NOW', sourceAt: '2026-09-21T14:13:21.000Z' }
+				{ id: 'SAME-NOW', source_at: '2026-09-21T14:13:20.000Z' },
+				{ id: 'AFTER-NOW', source_at: '2026-09-21T14:13:21.000Z' }
 			]);
 			yield* h.link.close ?? Effect.void;
 		})
@@ -697,7 +697,7 @@ describe('the ingest gate', () => {
 						{ creds: CREDS },
 						{
 							personal: true,
-							importStart: {
+							import_start: {
 								kind: 'since',
 								at: new Date(1_790_000_001_000).toISOString(),
 								zone: 'UTC',
@@ -713,9 +713,9 @@ describe('the ingest gate', () => {
 				expect(s.receipts).toEqual(['OLD']);
 				const saved = Object.fromEntries(h.values);
 				yield* h.link.close ?? Effect.void;
-				for (const importStart of [{ kind: 'all' }, null] as const) {
+				for (const import_start of [{ kind: 'all' }, null] as const) {
 					const next = fake(),
-						reopened = yield* open(next, saved, { personal: true, importStart });
+						reopened = yield* open(next, saved, { personal: true, import_start });
 					const socket = yield* next.socket();
 					socket.ready();
 					yield* sdk(() => socket.deliver(raw('OLD')));
@@ -741,7 +741,7 @@ describe('the ingest gate', () => {
 						}
 					}
 				);
-			const s = f.opened[0]!;
+			const s = required(f.opened[0]);
 			s.ready();
 			yield* sdk(() => s.deliver(raw('M1', 'hi')));
 			expect(s.receipts).toEqual(['M1']);
@@ -764,15 +764,15 @@ describe('the ingest gate', () => {
 							}
 						}
 					);
-				f.opened[0]!.ready();
-				yield* sdk(() => f.opened[0]!.deliver(raw('M1')));
-				expect(f.opened[0]!.receipts).toEqual([]);
-				expect(f.opened[0]!.ended).toBe(true);
+				required(f.opened[0]).ready();
+				yield* sdk(() => required(f.opened[0]).deliver(raw('M1')));
+				expect(required(f.opened[0]).receipts).toEqual([]);
+				expect(required(f.opened[0]).ended).toBe(true);
 				yield* f.socket(1);
 				down = false;
-				f.opened[1]!.ready();
-				yield* sdk(() => f.opened[1]!.deliver(raw('M1'))); // WhatsApp redelivers what was never receipted
-				expect(f.opened[1]!.receipts).toEqual(['M1']);
+				required(f.opened[1]).ready();
+				yield* sdk(() => required(f.opened[1]).deliver(raw('M1'))); // WhatsApp redelivers what was never receipted
+				expect(required(f.opened[1]).receipts).toEqual(['M1']);
 				expect(messagesOf(h.events)).toHaveLength(1);
 				yield* h.link.close ?? Effect.void;
 			})
@@ -793,21 +793,21 @@ describe('the ingest gate', () => {
 						}
 					}
 				);
-				f.opened[0]!.ready();
-				const pending = f.opened[0]!.deliver(raw('M1'));
+				required(f.opened[0]).ready();
+				const pending = required(f.opened[0]).deliver(raw('M1'));
 				yield* until(() => storing);
 				yield* h.link.close ?? Effect.void;
 				yield* sdk(() => pending);
-				expect(f.opened[0]!.receipts).toEqual([]);
-				expect(f.opened[0]!.ended).toBe(true);
+				expect(required(f.opened[0]).receipts).toEqual([]);
+				expect(required(f.opened[0]).ended).toBe(true);
 				// a new message arriving while it closes is refused too
-				yield* sdk(() => f.opened[0]!.deliver(raw('M2')));
-				expect(f.opened[0]!.receipts).toEqual([]);
+				yield* sdk(() => required(f.opened[0]).deliver(raw('M2')));
+				expect(required(f.opened[0]).receipts).toEqual([]);
 				const g = fake(),
 					next = yield* open(g, Object.fromEntries(h.values));
-				g.opened[0]!.ready();
-				yield* sdk(() => g.opened[0]!.deliver(raw('M1')));
-				expect(g.opened[0]!.receipts).toEqual(['M1']);
+				required(g.opened[0]).ready();
+				yield* sdk(() => required(g.opened[0]).deliver(raw('M1')));
+				expect(required(g.opened[0]).receipts).toEqual(['M1']);
 				expect(messagesOf(next.events)).toMatchObject([{ id: 'M1' }]);
 				yield* next.link.close ?? Effect.void;
 			})
@@ -826,13 +826,13 @@ describe('the ingest gate', () => {
 							})
 					}
 				);
-			f.opened[0]!.ready();
-			const pending = f.opened[0]!.deliver(raw('M1'));
+			required(f.opened[0]).ready();
+			const pending = required(f.opened[0]).deliver(raw('M1'));
 			yield* until(() => land !== undefined);
 			const closing = h.link.close ?? Effect.void;
-			land!();
+			required(land)();
 			yield* Effect.all([sdk(() => pending), closing], { concurrency: 'unbounded' });
-			expect(f.opened[0]!.receipts).toEqual(['M1']);
+			expect(required(f.opened[0]).receipts).toEqual(['M1']);
 		})
 	);
 	it.live(
@@ -851,7 +851,7 @@ describe('the ingest gate', () => {
 							}
 						}
 					);
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				s.ready();
 				yield* until(() => h.status?.state === 'connected');
 				s.ev.emit('messaging-history.set', { messages: [raw('H1'), raw('H2')] });
@@ -868,7 +868,7 @@ describe('the ingest gate', () => {
 		Effect.gen(function* () {
 			const f = fake(),
 				h = yield* open(f, { creds: CREDS });
-			const s = f.opened[0]!;
+			const s = required(f.opened[0]);
 			s.media = async (m) =>
 				Schema.decodeUnknownSync(Schema.Struct({ key: Schema.Struct({ id: Schema.String }) }))(m)
 					.key.id === 'BIG'
@@ -900,7 +900,7 @@ describe('the ingest gate', () => {
 		Effect.gen(function* () {
 			const f = fake(),
 				h = yield* open(f, { creds: CREDS });
-			const s = f.opened[0]!;
+			const s = required(f.opened[0]);
 			s.ready();
 			yield* until(() => h.status?.state === 'connected');
 			s.ev.emit('messaging-history.set', { messages: [raw('H1'), raw('H2')] });
@@ -921,12 +921,12 @@ describe('the ingest gate', () => {
 					},
 					{
 						kind: 'delivery',
-						providerId: 'OUT1',
+						provider_id: 'OUT1',
 						report: expect.objectContaining({ kind: 'delivered' })
 					},
 					{
 						kind: 'delivery',
-						providerId: 'OUT2',
+						provider_id: 'OUT2',
 						report: expect.objectContaining({ kind: 'read' })
 					}
 				])
@@ -951,7 +951,7 @@ describe('the ingest gate', () => {
 								: Promise.resolve()
 					}
 				);
-			const s = f.opened[0]!;
+			const s = required(f.opened[0]);
 			s.media = async () => {
 				reads++;
 				return null;
@@ -963,7 +963,7 @@ describe('the ingest gate', () => {
 			yield* until(() => land !== undefined);
 			expect(reads).toBe(100);
 			expect(h.events).toEqual([]);
-			land!();
+			required(land)();
 			yield* sdk(() => pending);
 			expect(
 				h.events.map((event) => (event.kind === 'messages' ? event.messages.length : 0))
@@ -976,7 +976,7 @@ describe('the ingest gate', () => {
 		Effect.gen(function* () {
 			const f = fake(),
 				h = yield* open(f, { creds: CREDS });
-			const s = f.opened[0]!;
+			const s = required(f.opened[0]);
 			let reads = 0;
 			s.socket.groupMetadata = async () => {
 				reads++;
@@ -1002,7 +1002,7 @@ describe('the ingest gate', () => {
 			Effect.gen(function* () {
 				const f = fake(),
 					h = yield* open(f, { creds: CREDS }, { personal: true });
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				expect(s.config.personal).toBe(true);
 				let membership = [
 					{ id: 'opaque@lid', phoneNumber: '6591009037@s.whatsapp.net', notify: 'POC' }
@@ -1052,7 +1052,7 @@ describe('the ingest gate', () => {
 			Effect.gen(function* () {
 				const f = fake(),
 					h = yield* open(f, { creds: CREDS }, { personal: true });
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				s.socket.groupMetadata = async () =>
 					extractGroupMetadata({
 						tag: 'iq',
@@ -1093,7 +1093,7 @@ describe('the ingest gate', () => {
 			Effect.gen(function* () {
 				const f = fake(),
 					h = yield* open(f, { creds: CREDS }, { personal: true });
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				const lookups: string[] = [];
 				s.socket.signalRepository = {
 					lidMapping: {
@@ -1130,7 +1130,7 @@ describe('deletions and deltas', () => {
 			Effect.gen(function* () {
 				const f = fake(),
 					h = yield* open(f, { creds: CREDS });
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				s.ready();
 				yield* sdk(() => s.deliver(raw('M1', 'hi')));
 				yield* sdk(() =>
@@ -1165,7 +1165,7 @@ describe('deletions and deltas', () => {
 						text: 'hi, fixed',
 						version: new Date(1_790_000_060_000).toISOString()
 					}),
-					{ id: 'M1', deleted: true, sourceAt: new Date(1_790_000_120_000).toISOString() }
+					{ id: 'M1', deleted: true, source_at: new Date(1_790_000_120_000).toISOString() }
 				]);
 				yield* h.link.close ?? Effect.void;
 			})
@@ -1176,7 +1176,7 @@ describe('deletions and deltas', () => {
 			Effect.gen(function* () {
 				const f = fake(),
 					h = yield* open(f, { creds: CREDS });
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				s.socket.signalRepository = {
 					lidMapping: {
 						getLIDForPN: async () => null,
@@ -1219,7 +1219,7 @@ describe('deletions and deltas', () => {
 			Effect.gen(function* () {
 				const f = fake(),
 					h = yield* open(f, { creds: CREDS });
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				s.ready();
 				yield* until(() => h.status?.state === 'connected');
 				s.ev.emit('messaging-history.set', { messages: [raw('H1')] });
@@ -1238,7 +1238,7 @@ describe('deletions and deltas', () => {
 
 				const again = fake(),
 					reopened = yield* open(again, Object.fromEntries(h.values));
-				const next = again.opened[0]!;
+				const next = required(again.opened[0]);
 				expect(next.config.store.creds).toEqual(CREDS);
 				expect(next.config.store.get('app-state-sync-version', ['regular_high'])).toEqual({
 					regular_high: version
@@ -1259,7 +1259,7 @@ describe('deletions and deltas', () => {
 				{ creds: CREDS },
 				{
 					personal: true,
-					importStart: {
+					import_start: {
 						kind: 'since',
 						at: new Date(1_790_000_000_000).toISOString(),
 						zone: 'UTC',
@@ -1268,8 +1268,8 @@ describe('deletions and deltas', () => {
 				}
 			);
 			const b = yield* open(all, { creds: CREDS }, { personal: true });
-			expect(now.opened[0]!.config.fullHistory).toBe(false);
-			expect(all.opened[0]!.config.fullHistory).toBe(true);
+			expect(required(now.opened[0]).config.fullHistory).toBe(false);
+			expect(required(all.opened[0]).config.fullHistory).toBe(true);
 			yield* a.link.close ?? Effect.void;
 			yield* b.link.close ?? Effect.void;
 		})
@@ -1283,30 +1283,30 @@ describe('sending', () => {
 			Effect.gen(function* () {
 				const f = fake(),
 					h = yield* open(f, { creds: CREDS });
-				const s = f.opened[0]!;
+				const s = required(f.opened[0]);
 				expect(
 					yield* Effect.flip(
-						h.link.send!({ id: 'm-0', to: '659@s.whatsapp.net', text: 'x' }, undefined)
+						required(h.link.send)({ id: 'm-0', to: '659@s.whatsapp.net', text: 'x' }, undefined)
 					)
 				).toMatchObject({ message: expect.stringMatching(/not open/) });
 				s.ready();
 				yield* until(() => h.status?.state === 'connected');
 				const hello = { id: 'm-1', to: '659@s.whatsapp.net', text: 'hello' };
-				const { providerId } = yield* h.link.send!(hello, undefined);
-				expect(providerId).toMatch(/^3EB0[0-9A-F]{18}$/);
-				expect(yield* sdk(() => s.config.getMessage({ id: providerId }))).toEqual({
+				const { provider_id } = yield* required(h.link.send)(hello, undefined);
+				expect(provider_id).toMatch(/^3EB0[0-9A-F]{18}$/);
+				expect(yield* sdk(() => s.config.getMessage({ id: provider_id }))).toEqual({
 					conversation: 'sent 1'
 				});
 				// a retry names the same message, and nothing here proves it arrives once
-				expect(yield* h.link.send!(hello, undefined)).toEqual({ providerId });
-				expect(f.provider.idempotentSends).toBeUndefined();
+				expect(yield* required(h.link.send)(hello, undefined)).toEqual({ provider_id });
+				expect(f.provider.idempotent_sends).toBeUndefined();
 				// the account's own number (the test message) is a JID
-				yield* h.link.send!({ id: 'm-2', to: '6580000000', text: 'test' }, undefined);
+				yield* required(h.link.send)({ id: 'm-2', to: '6580000000', text: 'test' }, undefined);
 				expect(s.sent.at(-1)).toEqual({
 					jid: '6580000000@s.whatsapp.net',
 					content: { text: 'test' }
 				});
-				yield* h.link.send!({ id: 'm-3', to: '659@s.whatsapp.net', text: 'files' }, [
+				yield* required(h.link.send)({ id: 'm-3', to: '659@s.whatsapp.net', text: 'files' }, [
 					file('report.pdf', 'application/pdf', '%PDF r'),
 					file('chart.png', 'image/png', 'png')
 				]);
@@ -1328,7 +1328,7 @@ describe('sending', () => {
 				// the sent messages outlive a reconnect
 				s.drop(428);
 				yield* f.socket(1);
-				expect(yield* sdk(() => f.opened[1]!.config.getMessage({ id: providerId }))).toEqual({
+				expect(yield* sdk(() => required(f.opened[1]).config.getMessage({ id: provider_id }))).toEqual({
 					conversation: 'sent 2'
 				});
 				yield* h.link.close ?? Effect.void;
@@ -1339,13 +1339,13 @@ describe('sending', () => {
 			let logouts = 0;
 			const f = fake(),
 				h = yield* open(f, { creds: CREDS });
-			f.opened[0]!.socket.logout = async () => {
+			required(f.opened[0]).socket.logout = async () => {
 				logouts++;
 			};
-			f.opened[0]!.ready();
-			yield* h.link.unpair!();
+			required(f.opened[0]).ready();
+			yield* required(h.link.unpair)();
 			expect(logouts).toBe(1);
-			expect(f.opened[0]!.ended).toBe(true);
+			expect(required(f.opened[0]).ended).toBe(true);
 			yield* h.link.close ?? Effect.void;
 		})
 	);

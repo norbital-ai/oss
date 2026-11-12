@@ -3,7 +3,7 @@ import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Result, Scope } f
 import { TestClock } from 'effect/testing';
 import { LIMITS, type CrossAnswer, type Invocation } from '../src/engine/contracts.ts';
 import { Guest, type Bridge } from '../src/engine/services.ts';
-import { guestLayer } from './support/guest-fixture.ts';
+import { guest_layer } from './support/guest-fixture.ts';
 const invocation: Invocation = {
 	id: 'wall',
 	kind: 'automation',
@@ -32,8 +32,8 @@ const timeout = answers.map(() => ({
 	ok: false,
 	error: { kind: 'timeout', message: 'no answer within 20 ms' }
 }));
-const host = (callWallMs = 20) =>
-	Layer.build(guestLayer(source, { callWallMs, console: () => {} })).pipe(
+const host = (call_wall_ms = 20) =>
+	Layer.build(guest_layer(source, { call_wall_ms, console: () => {} })).pipe(
 		Effect.map((context) => Context.get(context, Guest))
 	);
 const adapterSignal = Effect.acquireRelease(
@@ -55,7 +55,7 @@ it.effect('rejects invalid deadline configuration before any bridge work', () =>
 			if (Exit.isFailure(exit))
 				expect(Cause.findErrorOption(exit.cause)).toMatchObject({
 					_tag: 'Some',
-					value: { _tag: 'BoltError', code: 'invalidInput' }
+					value: { _tag: 'BoltError', code: 'invalid_input' }
 				});
 		}
 	})
@@ -72,7 +72,7 @@ it.effect('preserves answers and malformed failure mapping; empty bodies invoke 
 					})
 			};
 		const blank = yield* Layer.build(
-			guestLayer({ source: 'export default { automation: { a: { body: () => [] } } };' })
+			guest_layer({ source: 'export default { automation: { a: { body: () => [] } } };' })
 		);
 		expect(output(yield* Context.get(blank, Guest).invoke(invocation, bridge))).toEqual([]);
 		expect(reads).toBe(0);
@@ -87,7 +87,7 @@ it.effect('preserves answers and malformed failure mapping; empty bodies invoke 
 				ok: false,
 				error: {
 					kind: 'bolt',
-					code: 'badAnswer',
+					code: 'bad_answer',
 					message: 'the host answered a different number of calls'
 				}
 			}))
@@ -140,6 +140,42 @@ it.effect('expires exactly at the wall and aborts an adapter that ignores cancel
 		expect(signal.aborted).toBe(true);
 		yield* Deferred.succeed(held, answers);
 		expect(output(yield* Fiber.join(work))).toEqual(timeout);
+	})
+);
+it.effect('facility crossings keep the ordinary override, the ingest wall and inference liveness', () =>
+	Effect.gen(function* () {
+		for (const member of ['files.image', 'convert.ingest', 'ai.sys_2.infer'] as const) {
+			const context = yield* Layer.build(guest_layer({
+				source: `export default { automation: { a: { body: () => globalThis[Symbol.for('norbital.bolt.call')]('${member}', [], 'wall').then(value => ({ ok: true, value }), error => ({ ok: false, error })) } } };`
+			}, { call_wall_ms: 20 }));
+			const guest = Context.get(context, Guest),
+				ready = yield* Deferred.make<AbortSignal>(),
+				held = yield* Deferred.make<CrossAnswer>();
+			let settled = false;
+			const work = yield* guest.invoke(invocation, {
+				cross: (calls) => Effect.scoped(Effect.gen(function* () {
+					expect(calls.map((call) => call._tag)).toEqual([member]);
+					yield* Deferred.succeed(ready, yield* adapterSignal);
+					return [yield* Deferred.await(held)];
+				}))
+			}).pipe(Effect.tap(() => Effect.sync(() => { settled = true; })), Effect.forkScoped);
+			const signal = yield* Deferred.await(ready);
+			if (member === 'ai.sys_2.infer') {
+				yield* TestClock.adjust(LIMITS.callMs.ingest + 20);
+				expect(settled).toBe(false);
+				expect(signal.aborted).toBe(false);
+				yield* Deferred.succeed(held, { ok: true, value: 'finished' });
+				expect(output(yield* Fiber.join(work))).toEqual({ ok: true, value: 'finished' });
+			} else {
+				const wall = member === 'convert.ingest' ? LIMITS.callMs.ingest : 20;
+				yield* TestClock.adjust(wall - 1);
+				expect(settled).toBe(false);
+				expect(signal.aborted).toBe(false);
+				yield* TestClock.adjust(1);
+				expect(output(yield* Fiber.join(work))).toEqual({ ok: false, error: { kind: 'timeout', message: `no answer within ${wall} ms` } });
+				expect(signal.aborted).toBe(true);
+			}
+		}
 	})
 );
 it.effect('a closed generation refuses without invoking the bridge', () =>

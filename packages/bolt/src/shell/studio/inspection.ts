@@ -60,8 +60,8 @@ const change = Schema.Struct({
 	title: Schema.String,
 	state: Schema.Literals(['open', 'merged', 'closed']),
 	head: Schema.String,
-	createdAt: Schema.String,
-	updatedAt: Schema.String,
+	created_at: Schema.String,
+	updated_at: Schema.String,
 	behind: Schema.optionalKey(count),
 	merge: Schema.optionalKey(
 		Schema.Struct({
@@ -69,7 +69,7 @@ const change = Schema.Struct({
 			at: Schema.String,
 			head: Schema.String,
 			error: optionalText,
-			runAt: Schema.optionalKey(Schema.String)
+			run_at: Schema.optionalKey(Schema.String)
 		})
 	),
 	preview: Schema.NullOr(preview)
@@ -106,7 +106,7 @@ const message = Schema.NullOr(Schema.String);
 /** Curated host diagnostics shared by the tenant Studio and Realm; never source, manifests or credentials. */
 export const StudioInspection = Schema.Struct({
 	/** Proven administrator capability is independent of whether member activity could be measured. */
-	canInspect: Schema.Boolean,
+	can_inspect: Schema.Boolean,
 	as_of: Schema.String,
 	usage: Schema.Array(chart),
 	members: Schema.NullOr(
@@ -116,7 +116,7 @@ export const StudioInspection = Schema.Struct({
 				name: Schema.String,
 				email: Schema.NullOr(Schema.String),
 				active: Schema.Boolean,
-				lastSeen: Schema.NullOr(Schema.String)
+				last_seen: Schema.NullOr(Schema.String)
 			})
 		)
 	),
@@ -148,27 +148,27 @@ export const StudioInspection = Schema.Struct({
 			live: Schema.Boolean,
 			name: Schema.String,
 			digest: Schema.String,
-			contentAddress: message,
+			content_address: message,
 			contract: Schema.String,
 			schema: Schema.String,
-			assetCount: Schema.NullOr(count),
+			asset_count: Schema.NullOr(count),
 			assets: Schema.Array(asset),
 			truncated: Schema.Boolean,
-			totalBytes: Schema.NullOr(count)
+			total_bytes: Schema.NullOr(count)
 		})
 	),
 	cache: Schema.NullOr(
 		Schema.Struct({
-			budgetBytes: count,
-			hostBytes: count,
-			hostEntries: count,
-			releaseBytes: count,
-			releaseEntries: count,
+			budget_bytes: count,
+			host_bytes: count,
+			host_entries: count,
+			release_bytes: count,
+			release_entries: count,
 			assets: Schema.Array(
 				Schema.Struct({
 					path: Schema.String,
 					sha256: Schema.String,
-					cachedBytes: count,
+					cached_bytes: count,
 					variants: Schema.Array(
 						Schema.Struct({ encoding: Schema.Literals(['identity', 'br', 'gzip']), bytes: count })
 					)
@@ -188,8 +188,8 @@ export const StudioInspection = Schema.Struct({
 	),
 	health: Schema.optionalKey(
 		Schema.Struct({
-			artifactBytes: Schema.NullOr(count),
-			fileCount: Schema.NullOr(count),
+			artifact_bytes: Schema.NullOr(count),
+			file_count: Schema.NullOr(count),
 			packages: Schema.Array(
 				Schema.Struct({
 					name: Schema.String,
@@ -200,7 +200,7 @@ export const StudioInspection = Schema.Struct({
 			errors: Schema.Array(Schema.String),
 			cleanup: Schema.Array(
 				Schema.Struct({
-					changeId: Schema.String,
+					change_id: Schema.String,
 					title: Schema.String,
 					state: Schema.Literals(['open', 'merged', 'closed']),
 					environment: Schema.String,

@@ -23,16 +23,16 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // ── team(): keys are TeamName, values name policies ──
-team({ sales: ['sales_rep'], finance: [] });
+team({ sales: { policies: ['sales_rep'] }, finance: { policies: [] } });
 // @ts-expect-error T1 an unknown policy
 // prettier-ignore
-team({ sales: ['sales_rap'] });
-// @ts-expect-error T2 a team holds a list of policies, not one
+team({ sales: { policies: ['sales_rap'] } });
+// @ts-expect-error T2 a team is an object with its policy list
 // prettier-ignore
 team({ sales: 'sales_rep' });
 
 // Source handles are case-sensitive and labels do not merge them.
-team({ sales: ['sales_rep'], Sales: ['sales_rep'] });
+team({ sales: { policies: ['sales_rep'] }, Sales: { policies: ['sales_rep'] } });
 // @ts-expect-error T3 an unknown source parent
 // prettier-ignore
 team({ sales: { policies: ['sales_rep'], parent: 'missing' } });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import {
-	rollbackReason,
-	timelineEntries,
+	rollback_reason,
+	timeline_entries,
 	type ReleaseBuild,
 	type ReleaseChange,
 	type ReleaseVersion
@@ -29,14 +29,14 @@ const change: ReleaseChange = {
 	title: 'Operations update',
 	state: 'open',
 	head: 'build-b',
-	updatedAt: '2026-10-26T11:00:00.000Z',
+	updated_at: '2026-10-26T11:00:00.000Z',
 	preview: { commit: build.commit, artifact: 'artifact-a', url: '/preview', stale: true }
 };
 
 describe('build and release timeline', () => {
 	it('consolidates a commit while preserving every publication and preview reference', () => {
 		const republished = { ...published, current: true, at: '2026-10-26T12:00:00.000Z' };
-		const entries = timelineEntries([build], [published, republished], [change]);
+		const entries = timeline_entries([build], [published, republished], [change]);
 		expect(entries.map((entry) => entry.commit)).toEqual(['build-a', 'build-b']);
 		expect(entries[0]).toMatchObject({
 			build,
@@ -54,24 +54,24 @@ describe('build and release timeline', () => {
 			at: '2026-10-26T13:00:00.000Z'
 		};
 		const builds = [build, failed];
-		expect(timelineEntries(builds, [published]).map((entry) => entry.commit)).toEqual([
+		expect(timeline_entries(builds, [published]).map((entry) => entry.commit)).toEqual([
 			'failed',
 			'build-a'
 		]);
 		expect(builds).toEqual([build, failed]);
-		expect(timelineEntries([], [])).toEqual([]);
+		expect(timeline_entries([], [])).toEqual([]);
 	});
 	it('never offers a current, reset or uncheckpointed version as a rollback destination', () => {
-		expect(rollbackReason(published)).toBeNull();
-		expect(rollbackReason({ ...published, current: true })).toBe('This commit is already live.');
-		expect(rollbackReason({ ...published, replaced: true })).toContain('last reset');
-		expect(rollbackReason({ ...published, checkpoint: null })).toContain('no checkpoint');
+		expect(rollback_reason(published)).toBeNull();
+		expect(rollback_reason({ ...published, current: true })).toBe('This commit is already live.');
+		expect(rollback_reason({ ...published, replaced: true })).toContain('last reset');
+		expect(rollback_reason({ ...published, checkpoint: null })).toContain('no checkpoint');
 		const legacy: ReleaseVersion = {
 			commit: build.commit,
 			at: published.at,
 			message: build.message,
 			current: false
 		};
-		expect(rollbackReason(legacy)).toContain('no checkpoint');
+		expect(rollback_reason(legacy)).toContain('no checkpoint');
 	});
 });

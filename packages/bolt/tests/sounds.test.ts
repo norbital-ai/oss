@@ -1,3 +1,4 @@
+import { required } from './support/required.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createSounds, noticeArrivals } from '../src/shell/sounds.ts';
 
@@ -51,7 +52,7 @@ it('never creates audio when disabled, and never replays events dropped before u
 	enabled = true;
 	sounds.play('notification');
 	await sounds.unlock();
-	const audio = BrowserAudio.instances[0]!;
+	const audio = required(BrowserAudio.instances[0]);
 	expect(audio.createOscillator).not.toHaveBeenCalled();
 	sounds.play('notification');
 	expect(audio.createOscillator).toHaveBeenCalledTimes(2);
@@ -67,7 +68,7 @@ it('reports blocked audio, recovers on a later gesture, and reflects browser sus
 	const changed = vi.fn();
 	const sounds = createSounds(() => true, changed);
 	await sounds.unlock();
-	const audio = BrowserAudio.instances[0]!;
+	const audio = required(BrowserAudio.instances[0]);
 	audio.state = 'suspended';
 	audio.resume.mockRejectedValueOnce(new DOMException('Blocked', 'NotAllowedError'));
 	await sounds.test();
@@ -106,14 +107,14 @@ it('coalesces repeated events without letting Norbius suppress notifications or 
 	sounds.play('complete');
 	sounds.play('notification');
 	sounds.play('notification');
-	expect(BrowserAudio.instances[0]!.createOscillator).toHaveBeenCalledTimes(4);
+	expect(required(BrowserAudio.instances[0]).createOscillator).toHaveBeenCalledTimes(4);
 	await sounds.test();
 	await sounds.test();
-	expect(BrowserAudio.instances[0]!.createOscillator).toHaveBeenCalledTimes(8);
+	expect(required(BrowserAudio.instances[0]).createOscillator).toHaveBeenCalledTimes(8);
 	sounds.close();
 	await sounds.test();
 	sounds.play('input');
-	expect(BrowserAudio.instances[0]!.createOscillator).toHaveBeenCalledTimes(8);
+	expect(required(BrowserAudio.instances[0]).createOscillator).toHaveBeenCalledTimes(8);
 });
 
 it('plays a distinct quiet pair for each event: finished, needs input, error, notification', async () => {
@@ -123,15 +124,15 @@ it('plays a distinct quiet pair for each event: finished, needs input, error, no
 	await sounds.unlock();
 	for (const kind of ['complete', 'input', 'error', 'notification'] as const) {
 		sounds.play(kind);
-		const audio = BrowserAudio.instances[0]!;
+		const audio = required(BrowserAudio.instances[0]);
 		pairs.push(audio.createOscillator.mock.results.slice(-2).map((r) => r.value.frequency.value));
 	}
 	expect(new Set(pairs.map((pair) => pair.join())).size).toBe(4);
 	// the error falls; the others rise
-	expect(pairs[2]![0]!).toBeGreaterThan(pairs[2]![1]!);
-	for (const index of [0, 1, 3]) expect(pairs[index]![0]!).toBeLessThan(pairs[index]![1]!);
-	const peaks = BrowserAudio.instances[0]!.createGain.mock.results.map(
-		(r) => r.value.gain.linearRampToValueAtTime.mock.calls[0]![0]
+	expect(required(required(pairs[2])[0])).toBeGreaterThan(required(required(pairs[2])[1]));
+	for (const index of [0, 1, 3]) expect(required(required(pairs[index])[0])).toBeLessThan(required(required(pairs[index])[1]));
+	const peaks = required(BrowserAudio.instances[0]).createGain.mock.results.map(
+		(r) => required(r.value.gain.linearRampToValueAtTime.mock.calls[0])[0]
 	);
 	expect(Math.max(...peaks)).toBeLessThanOrEqual(0.03);
 	sounds.close();

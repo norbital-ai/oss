@@ -15,11 +15,11 @@ const narrow = () => {
 
 it('a narrow month lists the chosen day in full under its dots', () => {
 	narrow();
-	const onEventClick = vi.fn();
+	const on_event_click = vi.fn();
 	const target = document.body.appendChild(document.createElement('div'));
 	const view = mount(EventCalendar, {
 		target,
-		props: { events, view: 'month', date: at, onEventClick }
+		props: { events, view: 'month', date: at, on_event_click }
 	});
 	flushSync();
 	expect(target.querySelector('[data-calendar-compact]')).not.toBeNull();
@@ -30,7 +30,7 @@ it('a narrow month lists the chosen day in full under its dots', () => {
 	flushSync();
 	expect(target.querySelector('[data-calendar-agenda]')?.textContent).toContain('Public holiday');
 	target.querySelector<HTMLButtonElement>('[data-calendar-agenda] [data-event="b"]')?.click();
-	expect(onEventClick).toHaveBeenCalledWith(events[1]);
+	expect(on_event_click).toHaveBeenCalledWith(events[1]);
 	unmount(view);
 	target.remove();
 	vi.restoreAllMocks();

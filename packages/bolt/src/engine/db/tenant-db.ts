@@ -3,7 +3,7 @@
 // naming the table of a row that does not decode. Batches release their connection before answering.
 import { Clock, Context, Effect, Semaphore, type Option, type Schema } from 'effect';
 import type { Lock, Rows, Sql } from '../contracts.ts';
-import type { DbError } from '../errors.ts';
+import { DbError } from '../errors.ts';
 import type { BoltError } from '../../protocol/errors.ts';
 import { decodeOne, decodeRows, decodeValue } from './rows.ts';
 import { AuditMutation, auditedBatch } from '../audit-context.ts';
@@ -81,7 +81,21 @@ export type TenantDbShape = RawDb & {
 	) => Effect.Effect<readonly A[], DbError | BoltError>;
 };
 
-const NONE: Rows = { rows: [], affected: 0 };
+const protocolFailure = (operation: string, detail: string) => {
+	const fields = {
+		sqlstate: 'XX000',
+		message: `The database ${operation} returned ${detail}.${operation === 'transaction' ? ' Its commit or rollback outcome is unverified.' : ''}`
+	};
+	return operation === 'transaction' ? DbError.make({ ...fields, outcome_unknown: true }) : DbError.make(fields);
+};
+const complete = (rows: readonly Rows[], expected: number, operation: string): Effect.Effect<readonly Rows[], DbError> => {
+	if (rows.length !== expected)
+		return Effect.fail(protocolFailure(operation, `${rows.length} statement results; expected ${expected}`));
+	for (let index = 0; index < expected; index++)
+		if (rows[index] === undefined)
+			return Effect.fail(protocolFailure(operation, `no result for statement ${index + 1}`));
+	return Effect.succeed(rows);
+};
 export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/TenantDb') {
 	/** An adapter's calls with the decoding reads over them. */
 	static readonly typed = (adapter: RawDb): TenantDbShape => {
@@ -121,13 +135,16 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 				if (texts.some((text) => IDENTITY.test(text))) identity++;
 			});
 		const raw: RawDb = {
-			read: (statements) => Effect.andThen(settled, adapter.read(statements)),
+			read: (statements) => Effect.andThen(settled, adapter.read(statements)).pipe(
+				Effect.flatMap((rows) => complete(rows, statements.length, 'read'))
+			),
 			write: (statement, lock) =>
 				Effect.andThen(settled, adapter.write(statement, lock)).pipe(
 					Effect.ensuring(wrote([statement.text]))
 				),
 			transaction: (batch) =>
 				Effect.andThen(settled, adapter.transaction(batch)).pipe(
+					Effect.flatMap((rows) => complete(rows, batch.statements.length, 'transaction')),
 					Effect.ensuring(wrote(batch.statements.map((statement) => statement.text)))
 				)
 		};
@@ -136,8 +153,16 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 			if (capture === undefined) return yield* raw.read(statements);
 			return yield* capture
 				.read(statements, raw.read)
-				.pipe(Effect.provideService(SqlReadCapture, undefined));
+				.pipe(
+					Effect.provideService(SqlReadCapture, undefined),
+					Effect.flatMap((rows) => complete(rows, statements.length, 'captured read'))
+				);
 		});
+		const read_one = (statement: Sql) => Effect.flatMap(read([statement]), ([row]) =>
+			row === undefined
+				? Effect.fail(protocolFailure('read', 'no result for its statement'))
+				: Effect.succeed(row)
+		);
 		const write: RawDb['write'] = Effect.fn('Bolt.tenantWrite')(function* (statement, lock) {
 			const audit = yield* AuditMutation;
 			if (audit === undefined) return yield* raw.write(statement, lock);
@@ -146,7 +171,10 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 					auditedBatch({ statements: [statement], ...(lock === undefined ? {} : { lock }) }, audit)
 				)
 				.pipe(Effect.provideService(AuditMutation, undefined));
-			return rows[1] ?? NONE;
+			const answer = rows[1];
+			if (answer === undefined)
+				return yield* Effect.fail(protocolFailure('transaction', 'no result for the audited write'));
+			return answer;
 		});
 		const transaction: RawDb['transaction'] = Effect.fn('Bolt.tenantBatch')(function* (batch) {
 			const audit = yield* AuditMutation;
@@ -179,11 +207,11 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 			write,
 			transaction,
 			rows: (schema, statement) =>
-				Effect.flatMap(read([statement]), ([r]) => decodeRows(schema, r ?? NONE)),
+				Effect.flatMap(read_one(statement), (row) => decodeRows(schema, row)),
 			one: (schema, statement) =>
-				Effect.flatMap(read([statement]), ([r]) => decodeOne(schema, r ?? NONE)),
+				Effect.flatMap(read_one(statement), (row) => decodeOne(schema, row)),
 			value: (schema, statement) =>
-				Effect.flatMap(read([statement]), ([r]) => decodeValue(schema, r ?? NONE)),
+				Effect.flatMap(read_one(statement), (row) => decodeValue(schema, row)),
 			returning: (schema, statement, lock) =>
 				Effect.flatMap(write(statement, lock), (r) => decodeRows(schema, r))
 		};

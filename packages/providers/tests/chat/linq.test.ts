@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { linq } from '../../src/chat/linq/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const key = Buffer.from('a linq signing secret').toString('base64'),
@@ -65,7 +65,7 @@ const direct = (seen?: string[]) =>
 				seen?.push(init?.method ?? 'GET');
 				return fetch(input, init);
 			},
-			webhookUrl: 'https://hook.test/',
+			webhook_url: 'https://hook.test/',
 			receive: () => Promise.resolve()
 		})
 	);
@@ -77,17 +77,17 @@ describe('Linq', () => {
 			const h = yield* connected(linq, settings),
 				body = event(message());
 			expect(h.status).toMatchObject({ state: 'connected', account: own });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'm1',
 						thread: 'c1',
-						sentAt: '2026-01-02T03:04:05.000Z',
+						sent_at: '2026-01-02T03:04:05.000Z',
 						text: 'Hello',
 						from: { handle: person, name: null },
-						replyTo: null,
+						reply_to: null,
 						group: false,
 						invocation: 'direct'
 					}
@@ -101,8 +101,8 @@ describe('Linq', () => {
 			const h = yield* connected(linq, settings),
 				body = event(message());
 			const forged = signature(body, Buffer.from('another').toString('base64'));
-			expect((yield* h.link.webhook!(webhook(body, forged))).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, forged))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -113,7 +113,7 @@ describe('Linq', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = event(message());
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live('stores neither its own sends nor other events', () =>
@@ -125,7 +125,7 @@ describe('Linq', () => {
 				event(message(), 'message.delivered'),
 				event({ chat_id: 'c1' }, 'reaction.added')
 			])
-				expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -141,9 +141,9 @@ describe('Linq', () => {
 			const ambient = event(message({ chat, id: 'm3' }));
 			const unknown = event(message({ chat: { id: 'g1' }, id: 'm4' }));
 			for (const body of [mention, reply, ambient, unknown])
-				yield* h.link.webhook!(webhook(body, signature(body)));
+				yield* required(h.link.webhook)(webhook(body, signature(body)));
 			expect(h.events[0]).toMatchObject({ messages: [{ group: true, invocation: 'mention' }] });
-			expect(h.events[1]).toMatchObject({ messages: [{ replyTo: 'm0', invocation: 'reply' }] });
+			expect(h.events[1]).toMatchObject({ messages: [{ reply_to: 'm0', invocation: 'reply' }] });
 			expect(h.events[2]).toMatchObject({ messages: [{ invocation: 'ambient' }] });
 			expect(h.events[3]).toMatchObject({ messages: [{ group: true, invocation: 'ambient' }] });
 		})
@@ -163,7 +163,7 @@ describe('Linq', () => {
 				},
 				'message.edited'
 			);
-			yield* h.link.webhook!(webhook(body, signature(body)));
+			yield* required(h.link.webhook)(webhook(body, signature(body)));
 			expect(h.events[0]).toMatchObject({
 				messages: [
 					{ id: 'm1', thread: 'c1', text: 'Hello again', version: '2026-01-02T04:00:00.000Z' }
@@ -190,7 +190,7 @@ describe('Linq', () => {
 					]
 				})
 			);
-			yield* h.link.webhook!(webhook(body, signature(body)));
+			yield* required(h.link.webhook)(webhook(body, signature(body)));
 			expect(h.events[0]).toMatchObject({
 				bins: [new Uint8Array([1, 2, 3])],
 				messages: [
@@ -203,8 +203,8 @@ describe('Linq', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(linq, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: 'c1', text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: 'c1', text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toMatch(/\/v3\/chats\/c1\/messages$/);
 			expect(call?.headers.get('authorization')).toBe('Bearer key');
@@ -221,7 +221,7 @@ describe('Linq', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(linq, settings);
-			yield* h.link.test!({ to: person });
+			yield* required(h.link.test)({ to: person });
 			const call = api.calls.at(-1);
 			expect(call?.url).toMatch(/\/v3\/messages$/);
 			expect(JSON.parse(call?.body ?? '')).toMatchObject({
@@ -236,7 +236,7 @@ describe('Linq', () => {
 				call.url.endsWith('/v3/chats/c1/messages') ? json({ message: 'no' }, 403) : answer(call)
 			);
 			const h = yield* connected(linq, settings);
-			const refused = yield* Effect.flip(h.link.send!({ to: 'c1', text: 'Hello' }, []));
+			const refused = yield* Effect.flip(required(h.link.send)({ to: 'c1', text: 'Hello' }, []));
 			expect(refused).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 		})
 	);
@@ -255,11 +255,11 @@ describe('Linq', () => {
 	);
 	it.live('walks a thread back, keeping the window and leaving out its own', () =>
 		Effect.gen(function* () {
-			const row = (id: string, sentAt: string, mine = false) => ({
+			const row = (id: string, sent_at: string, mine = false) => ({
 				id,
 				chat_id: 'g1',
-				created_at: sentAt,
-				sent_at: sentAt,
+				created_at: sent_at,
+				sent_at: sent_at,
 				is_from_me: mine,
 				from_handle: handle,
 				parts: [{ type: 'text', value: id }]
@@ -312,7 +312,7 @@ describe('Linq', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ message: 'Unauthorized' }, 401));
 			const h = yield* host(chatProvider(linq), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

@@ -16,7 +16,7 @@
 	searchable
 	clearable
 	aria-label="People"
-	onChange={(next) => {
+	on_change={(next) => {
 		value = next;
 		onChange(next);
 	}}

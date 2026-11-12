@@ -3,7 +3,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { sendblue } from '../../src/chat/sendblue/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const line = '+16292925296',
@@ -44,7 +44,7 @@ const direct = () =>
 	Effect.promise(() =>
 		sendblue.connect(settings, {
 			fetch,
-			webhookUrl: 'https://hook.test/',
+			webhook_url: 'https://hook.test/',
 			receive: () => Promise.resolve()
 		})
 	);
@@ -55,17 +55,17 @@ describe('Sendblue', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(sendblue, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: line });
-			expect((yield* h.link.webhook!(webhook(text(), signature))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(text(), signature))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'm1',
 						thread: contact,
-						sentAt: '2026-01-02T03:04:05.000Z',
+						sent_at: '2026-01-02T03:04:05.000Z',
 						text: 'Hello',
 						from: { handle: contact, name: null },
-						replyTo: null,
+						reply_to: null,
 						group: false,
 						invocation: 'direct'
 					}
@@ -77,9 +77,9 @@ describe('Sendblue', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(sendblue, settings);
-			const refused = yield* h.link.webhook!(webhook(text(), { 'sb-signing-secret': 'forged' }));
+			const refused = yield* required(h.link.webhook)(webhook(text(), { 'sb-signing-secret': 'forged' }));
 			expect(refused.status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(text(), {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(text(), {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -89,7 +89,7 @@ describe('Sendblue', () => {
 			const h = yield* connected(sendblue, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(webhook(text(), signature))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(text(), signature))).status).toBe(500);
 		})
 	);
 	it.live('stores neither its own sends, reactions, typing, nor another line', () =>
@@ -102,7 +102,7 @@ describe('Sendblue', () => {
 				text({ sendblue_number: '+16290000000' }),
 				JSON.stringify({ number: contact, is_typing: true, from_number: line })
 			])
-				expect((yield* h.link.webhook!(webhook(body, signature))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, signature))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -116,14 +116,14 @@ describe('Sendblue', () => {
 				message_type: 'group',
 				reply_to: { message_handle: 'm0' }
 			});
-			yield* h.link.webhook!(webhook(body, signature));
+			yield* required(h.link.webhook)(webhook(body, signature));
 			expect(h.events[0]).toMatchObject({
 				messages: [
-					{ thread: 'group:g1', group: true, title: 'Crew', replyTo: 'm0', invocation: 'reply' }
+					{ thread: 'group:g1', group: true, title: 'Crew', reply_to: 'm0', invocation: 'reply' }
 				]
 			});
-			const sent = yield* h.link.send!({ id: 'r1', to: 'group:g1', text: 'Hi all' }, []);
-			expect(sent).toMatchObject({ providerId: 'out2' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: 'group:g1', text: 'Hi all' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out2' });
 			expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toEqual({
 				from_number: line,
 				group_id: 'g1',
@@ -135,7 +135,7 @@ describe('Sendblue', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(sendblue, settings);
-			yield* h.link.webhook!(webhook(text({ group_id: 'g1', message_type: 'group' }), signature));
+			yield* required(h.link.webhook)(webhook(text({ group_id: 'g1', message_type: 'group' }), signature));
 			expect(h.events[0]).toMatchObject({ messages: [{ invocation: 'ambient' }] });
 		})
 	);
@@ -143,14 +143,14 @@ describe('Sendblue', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(sendblue, settings);
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				webhook(text({ media_url: 'https://cdn.test/a/photo.JPG?sig=1' }), signature)
 			);
 			expect(h.events[0]).toMatchObject({
 				bins: [new Uint8Array([1, 2, 3])],
 				messages: [{ attachments: [{ name: 'photo.JPG', mime: 'image/jpeg', bytes: 3, bin: 0 }] }]
 			});
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				webhook(text({ message_handle: 'm2', media_url: 'data:image/png;base64,AQID' }), signature)
 			);
 			expect(h.events[1]).toMatchObject({
@@ -163,8 +163,8 @@ describe('Sendblue', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(sendblue, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: contact, text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: contact, text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toMatch(/\/api\/send-message$/);
 			expect(call?.headers.get('sb-api-key-id')).toBe('key');
@@ -189,14 +189,14 @@ describe('Sendblue', () => {
 				return answerSend();
 			});
 			const h = yield* connected(sendblue, settings);
-			const refused = yield* Effect.flip(h.link.send!({ to: contact, text: 'Hello' }, []));
+			const refused = yield* Effect.flip(required(h.link.send)({ to: contact, text: 'Hello' }, []));
 			expect(refused).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			expect(sends).toBe(1);
 			answerSend = () => json({ status: 'ERROR', error_message: 'declined' });
-			const declined = yield* Effect.flip(h.link.send!({ to: contact, text: 'Hello' }, []));
+			const declined = yield* Effect.flip(required(h.link.send)({ to: contact, text: 'Hello' }, []));
 			expect(declined).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			answerSend = () => json({}, 503);
-			const down = yield* Effect.flip(h.link.send!({ to: contact, text: 'Hello' }, []));
+			const down = yield* Effect.flip(required(h.link.send)({ to: contact, text: 'Hello' }, []));
 			expect(down).toMatchObject({ _tag: 'ProviderUnavailable', status: 503 });
 			expect(sends).toBe(3);
 		})
@@ -253,7 +253,7 @@ describe('Sendblue', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ message: 'Unauthorized' }, 401));
 			const h = yield* host(chatProvider(sendblue), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

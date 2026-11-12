@@ -4,6 +4,10 @@ export const SyncHealth = Schema.Struct({
 	pending: Schema.Number,
 	dead: Schema.Number,
 	failed: Schema.Number,
+	initialization: Schema.NullOr(Schema.Struct({
+		failed: Schema.Number,
+		message: Schema.NullOr(Schema.String)
+	})),
 	last_read_at: Schema.NullOr(Schema.String),
 	last_change_at: Schema.NullOr(Schema.String),
 	last_hint_at: Schema.NullOr(Schema.String),

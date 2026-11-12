@@ -7,7 +7,6 @@ import type {
 	AutomationCtx,
 	CalendarEvent,
 	ConfigurationOf,
-	ConnectionName,
 	ConversationOf,
 	DriverOf,
 	Id,
@@ -22,7 +21,7 @@ import type {
 	SyncRow,
 	Where
 } from '../../src/index.ts';
-import type { StartableName } from '../../src/decl/access/policy.ts';
+import type { SyncKey } from '../../src/decl/names.ts';
 import type { IntegrationSpecOf, StoredRow } from '../../src/decl/names.ts';
 import type { DatabaseResult } from '../../src/engine/integrations/database.ts';
 import * as m from './fixture/models.ts';
@@ -42,8 +41,8 @@ expectTypeOf<IntegrationName>().toEqualTypeOf<
 	| 'discord'
 	| 'wechat'
 >();
-expectTypeOf<ConnectionName>().toEqualTypeOf<'erp' | 'ledger_main' | 'support' | 'whatsapp'>();
-expectTypeOf<IntegrationOf<'ledger_main'>>().toEqualTypeOf<'kingdee'>();
+// a definition name is no instance
+expectTypeOf<IntegrationOf<'kingdee'>>().toBeNever();
 expectTypeOf<IntegrationOf<InstanceId<'calendar'>>>().toEqualTypeOf<'calendar'>();
 expectTypeOf<DriverOf<'kingdee'>>().toEqualTypeOf<'sqlserver'>();
 expectTypeOf<ConversationOf<'support_mail'>>().toEqualTypeOf<'email'>();
@@ -62,23 +61,21 @@ expectTypeOf<
 expectTypeOf<InstanceId<'kingdee'>>().toExtend<Id<'sys_integration'>>();
 expectTypeOf<SyncRow<'products'>['external_code']>().toEqualTypeOf<string | undefined>();
 expectTypeOf<
-	'products.sync.ledger' | 'notices.sync.mail' | 'entries.sync.calendar'
->().toExtend<StartableName>();
-expectTypeOf<StartInput<'products.sync.ledger'>>().toEqualTypeOf<{
-	readonly [key: string]: never;
-}>();
+	'products.ledger' | 'notices.mail' | 'entries.calendar'
+>().toExtend<SyncKey>();
+expectTypeOf<StartInput<'products.sync.ledger'>>().toBeNever();
 expectTypeOf<ConfigurationOf<'kingdee'>>().toEqualTypeOf<{
-	readonly maxLagMinutes: number;
+	readonly max_lag_minutes: number;
 	readonly databases: readonly string[];
 }>();
 expectTypeOf<ConfigurationOf<'erp'>>().toEqualTypeOf<{
-	readonly baseUrl: string;
+	readonly base_url: string;
 	readonly room: string;
 	readonly mute: boolean | null;
 	readonly topic?: string | null;
 }>();
 expectTypeOf<InputOf<IntegrationSpecOf<'kingdee'>['configuration']>>().toEqualTypeOf<{
-	readonly maxLagMinutes?: number;
+	readonly max_lag_minutes?: number;
 	readonly databases?: readonly string[];
 }>();
 const onHotline: Where<'customers'> = { hotline: { eq: { var: 'requestor.instance' } } };
@@ -93,7 +90,7 @@ bind_model('products')({
 			with: 'kingdee',
 			read: function* ({ cursor, instance }, ctx) {
 				expectTypeOf(instance).toEqualTypeOf<InstanceId<'kingdee'>>();
-				expectTypeOf(ctx.configuration.maxLagMinutes).toEqualTypeOf<number>();
+				expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
 				const { rows } = yield* ctx.request({ op: 'values', values: { n: 1 } });
 				void rows;
 				return {
@@ -132,7 +129,7 @@ bind_model('orders')({
 			with: 'kingdee',
 			write: function* ({ row, $id, $version, instance }, ctx) {
 				expectTypeOf(instance).toEqualTypeOf<InstanceId<'kingdee'>>();
-				expectTypeOf(ctx.configuration.maxLagMinutes).toEqualTypeOf<number>();
+				expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
 				yield* ctx.request({ op: 'values', values: { n: 1 } });
 				return { $id: $id ?? row.number, ...($version === null ? {} : { $version }) };
 			}
@@ -142,38 +139,42 @@ bind_model('orders')({
 bind_integration('kingdee')({
 	...rt.kingdee.spec,
 	test: function* (ctx) {
-		expectTypeOf(ctx.configuration.maxLagMinutes).toEqualTypeOf<number>();
+		expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
 	}
 });
 
 declare const ctx: AutomationCtx;
+declare const whatsapp: InstanceId<'whatsapp'>;
+declare const support_mail: InstanceId<'support_mail'>;
+declare const erp: InstanceId<'erp'>;
+declare const kingdee: InstanceId<'kingdee'>;
 declare const instance: StoredRow<'sys_integration'>;
 if (is_instance('whatsapp', instance))
 	expectTypeOf(instance.id).toEqualTypeOf<InstanceId<'whatsapp'>>();
 expectTypeOf(instance_id('kingdee', instance)).toEqualTypeOf<InstanceId<'kingdee'>>();
 Effect.gen(function* () {
-	expectTypeOf(yield* ctx.send('whatsapp', { to: '+6590000000', text: 'x' })).toEqualTypeOf<
+	expectTypeOf(yield* ctx.send(whatsapp, { to: '+6590000000', text: 'x' })).toEqualTypeOf<
 		Id<'sys_message'>
 	>();
-	yield* ctx.send('support', { to: ['a@b.co'], subject: 'x', text: 'y' });
+	yield* ctx.send(support_mail, { to: ['a@b.co'], subject: 'x', text: 'y' });
 	yield* ctx.send(instance_id('whatsapp', instance), { to: '+6590000000', text: 'x' });
 	expectTypeOf(
-		yield* ctx.request('erp', { method: 'GET', path: 'n', output: { kind: 'int' } })
+		yield* ctx.request(erp, { method: 'GET', path: 'n', output: { kind: 'int' } })
 	).toEqualTypeOf<number>();
 	expectTypeOf(
-		yield* ctx.request('ledger_main', { op: 'values', values: { n: 1 } })
+		yield* ctx.request(kingdee, { op: 'values', values: { n: 1 } })
 	).toEqualTypeOf<DatabaseResult>();
 	// @ts-expect-error email payloads require subject and recipient lists
-	yield* ctx.send('support', { to: '+6590000000', text: 'x' });
+	yield* ctx.send(support_mail, { to: '+6590000000', text: 'x' });
 	// @ts-expect-error an ERP connection carries no conversation
-	yield* ctx.send('erp', { to: '+6590000000', text: 'x' });
+	yield* ctx.send(erp, { to: '+6590000000', text: 'x' });
 	// @ts-expect-error database requests do not accept HTTP operations
-	yield* ctx.request('ledger_main', { method: 'GET', path: 'x', output: { kind: 'json' } });
+	yield* ctx.request(kingdee, { method: 'GET', path: 'x', output: { kind: 'json' } });
 	// @ts-expect-error a conversation driver has no HTTP requester
-	yield* ctx.request('whatsapp', { method: 'GET', path: 'x', output: { kind: 'json' } });
+	yield* ctx.request(whatsapp, { method: 'GET', path: 'x', output: { kind: 'json' } });
 });
 
-// @ts-expect-error no declaration has this integration name
+// @ts-expect-error source connection slots are retired
 workspace({ tz: 'UTC', locale: 'en', connections: { mail: { integration: 'emial' } } });
 bind_integration('support_mail')({
 	description: 'x',
@@ -182,13 +183,13 @@ bind_integration('support_mail')({
 	credential: { password: { kind: 'text' } }
 });
 // @ts-expect-error an HTTP base URL is https or a text configuration field
-bind_integration('erp')({ description: 'x', driver: 'http', http: { baseUrl: 'ftp://erp' } });
+bind_integration('erp')({ description: 'x', driver: 'http', http: { base_url: 'ftp://erp' } });
 bind_integration('erp')({
 	description: 'x',
 	driver: 'http',
 	credential: { token: { kind: 'text' } },
 	// @ts-expect-error bearer auth names a credential field
-	http: { baseUrl: 'https://erp', auth: { bearer: 'tokn' } }
+	http: { base_url: 'https://erp', auth: { bearer: 'tokn' } }
 });
 // @ts-expect-error drivers are enumerated
 bind_integration('erp')({ description: 'x', driver: 'ftp' });
@@ -197,7 +198,7 @@ bind_integration('erpp')({ description: 'x', driver: 'http' });
 bind_integration('erp')({
 	description: 'x',
 	driver: 'http',
-	http: { baseUrl: 'https://erp' },
+	http: { base_url: 'https://erp' },
 	oauth: {
 		client: 'CALENDAR_CLIENT',
 		secret: 'CALENDAR_SECRET',
@@ -214,7 +215,7 @@ bind_integration('kingdee')({
 bind_integration('erp')({
 	description: 'x',
 	driver: 'http',
-	http: { baseUrl: 'https://erp' },
+	http: { base_url: 'https://erp' },
 	// @ts-expect-error an HTTP OAuth grant needs its endpoints
 	oauth: { client: 'CALENDAR_CLIENT', secret: 'CALENDAR_SECRET' }
 });
@@ -228,7 +229,7 @@ bind_integration('erp')({
 	description: 'x',
 	driver: 'http',
 	credential: { s: { kind: 'text' } },
-	http: { baseUrl: 'https://chat' },
+	http: { base_url: 'https://chat' },
 	// @ts-expect-error webhook schemes are enumerated
 	webhook: { verify: { scheme: 'google-calendar', secret: 's' } }
 });
@@ -256,4 +257,4 @@ policy({
 	}
 });
 // @ts-expect-error only declared sync reads are startable
-policy({ description: 'x', grants: {}, capabilities: { automations: ['products.sync.stock'] } });
+policy({ description: 'x', grants: {}, capabilities: { syncs: ['products.stock'] } });

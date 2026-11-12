@@ -13,11 +13,11 @@
 	// An internal primitive (final-ui §7.4, id 736): a country select over `Combobox`, for a host's address or
 	// jurisdiction field. The value is the alpha-2 code.
 	import Combobox from '../combobox/combobox.svelte';
-	import { uiText } from '../utils.js';
+	import { ui_text } from '../utils.js';
 
 	let {
 		value,
-		onChange,
+		on_change,
 		locale = 'en',
 		id,
 		disabled = false,
@@ -25,14 +25,14 @@
 		class: className
 	}: {
 		value: string | null;
-		onChange(next: string | null): void;
+		on_change(next: string | null): void;
 		locale?: string;
 		id?: string;
 		disabled?: boolean;
 		invalid?: boolean;
 		class?: string;
 	} = $props();
-	const t = uiText();
+	const t = ui_text();
 	const options = $derived.by(() => {
 		const names = new Intl.DisplayNames([locale], { type: 'region' });
 		return COUNTRY_CODES.map((code) => ({ code, name: names.of(code) ?? code }))
@@ -44,7 +44,7 @@
 <Combobox
 	{options}
 	{value}
-	{onChange}
+	{on_change}
 	{id}
 	{disabled}
 	{invalid}

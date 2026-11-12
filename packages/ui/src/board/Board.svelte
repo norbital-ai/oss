@@ -4,7 +4,6 @@
 		ModelKey,
 		FieldOf,
 		OrderByOf,
-		Page,
 		RecordFieldOf,
 		RowOf,
 		Values,
@@ -40,10 +39,10 @@
 		/** The author's fixed scope (never clearable); the viewer's filter is ANDed under it. */
 		where?: WhereOf<C>;
 		/** Seed rows of the view popover the viewer may edit or clear. */
-		initialFilter?: WhereOf<C>;
+		initial_filter?: WhereOf<C>;
 		/** The cards' order within each lane; a viewer's sort replaces it (lane order stays the lanes'). */
 		order_by?: OrderByOf<C>;
-		pageSize?: number;
+		page_size?: number;
 		/** The chrome (`ViewToolbar`): title, description, search, filter and sort (a sort orders the cards within each lane), actions, New. */
 		toolbar?: Toolbar<RowOf<C>>;
 		/** The URL parameter prefix; defaults to `of`. */
@@ -52,10 +51,10 @@
 </script>
 
 <script lang="ts" generics="C extends ModelKey">
-	import { formatValue as show } from '../kinds/kind.js';
+	import { format_value as show } from '../kinds/kind.js';
 	import { Effect, Predicate, Queue, Stream } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { encodeWire } from '@norbital-ai/std/wire';
+	import { encode_wire } from '@norbital-ai/std/wire';
 	import { fork } from '../effect/index.js';
 	import { Button } from '../primitives/button/index.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
@@ -64,17 +63,19 @@
 	// (final-ui rule 9); lane counts are one aggregate. A drop is one generated `update` of `by`,
 	// painted optimistically and rolled back by a refusal, which shows on the board.
 	import { useKinds } from '../kinds/context.js';
-	import { watch } from 'runed';
+	import { Debounced, watch } from 'runed';
+	import { onDestroy } from 'svelte';
 	import { tone } from '../kinds/kind.js';
-	import { provideModel, useEnumText } from '../model/context.js';
+	import { provide_model, use_enum_text } from '../model/context.js';
 	import { useBolt } from '../client/context.js';
-	import { orderOf, sortable } from '../filter/filter.js';
+	import { orderOf, sortable } from '../filter/order.js';
 	import { actOutcome, notify } from '../actions/outcome.js';
+	import { toast } from '../toast/toast.svelte.js';
 	import { and } from '../filter/scope.js';
 	import { flat } from '../read/aggregate.js';
 	import { label, lowerLead, msg } from '../text/messages.js';
 	import { listRequest } from '../relations/select.js';
-	import { pageOf, READ_LIMIT, requestJson } from '../read/request.js';
+	import { page_of, READ_LIMIT, request_json } from '../read/request.js';
 	import { type ReadState } from '../read/state.js';
 	import { viewState } from '../filter/view-state.svelte.js';
 	import ViewToolbar, { selectionEnabled } from '../model/ViewToolbar.svelte';
@@ -84,7 +85,7 @@
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import * as Dialog from '../primitives/dialog/index.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
-	import { openRecord } from '../record/navigation.js';
+	import { open_record } from '../record/navigation.js';
 
 	let {
 		of,
@@ -93,16 +94,16 @@
 		lanes,
 		columns,
 		where,
-		initialFilter,
+		initial_filter,
 		order_by,
-		pageSize = 25,
+		page_size = 25,
 		toolbar = {},
 		key
 	}: BoardProps<C> = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
-	provideModel(() => of);
-	const words = useEnumText();
+	provide_model(() => of);
+	const words = use_enum_text();
 	// a lane of an enum or state value is named in its words
 	const laneText = (v: import('@norbital-ai/std/kind').Value) =>
 		typeof v === 'string' && ['enum', 'state'].includes(kinds.catalog?.[of]?.fields[by]?.kind ?? '')
@@ -114,18 +115,20 @@
 		key: () => key ?? of,
 		model: () => of,
 		catalog: () => catalog,
-		initialFilter: () => initialFilter
+		initial_filter: () => initial_filter
 	});
 	const scope = $derived(and(where, view.where));
 	const order = $derived(view.order.length > 0 ? orderOf(view.order) : order_by);
 	// the search is the lanes' (aggregate counts have none, so a searching board hides them)
-	let q = $state(''),
-		search = $state('');
+	let q = $state('');
+	const debouncedSearch = new Debounced(() => q, 300);
+	onDestroy(debouncedSearch.cancel);
+	const search = $derived(debouncedSearch.current.trim());
 	type SelectedId = RowOf<C>['id'] & Parameters<ToolbarItem<RowOf<C>>['run']>[0][number];
 	const recordId = (id: RowOf<C>['id']): id is SelectedId =>
 		typeof id === 'string' && id.trim() !== '';
 	const selected = new SvelteSet<SelectedId>();
-	const loaded = new SvelteMap<symbol, { lane: string; ids: readonly SelectedId[] }>();
+	const loaded = new SvelteMap<symbol, { lane: string; ids: readonly SelectedId[]; rows: readonly (RowOf<C> & Values)[] }>();
 	const loadedIds = $derived([...new Set([...loaded.values()].flatMap((entry) => entry.ids))]);
 	const loadedAll = $derived(loadedIds.length > 0 && loadedIds.every((id) => selected.has(id)));
 	const laneIds = (lane: string) => [
@@ -164,17 +167,12 @@
 	const selectCard = (id: RowOf<C>['id'], on: boolean) => {
 		if (recordId(id)) toggle(id, on);
 	};
-	const registerRows = (lane: string, page: symbol, ids: readonly RowOf<C>['id'][]) => {
-		loaded.set(page, { lane, ids: ids.filter(recordId) });
+	const registerRows = (lane: string, page: symbol, rows: readonly (RowOf<C> & Values)[]) => {
+		loaded.set(page, { lane, rows, ids: rows.map((row) => row.id).filter(recordId) });
 		return () => loaded.delete(page);
 	};
 	const selectionScope = $derived(JSON.stringify({ of, by, where: scope, order, search, lanes }));
 	watch(() => [selectionScope, q, selectable], clearSelection, { lazy: true });
-	$effect(() => {
-		const t = q;
-		const timer = setTimeout(() => (search = t.trim()), 300);
-		return () => clearTimeout(timer);
-	});
 	const fields = $derived(typeof card === 'function' ? [] : card);
 	const exporter = $derived({
 		fields,
@@ -182,7 +180,7 @@
 		read: () =>
 			bolt
 				.query(
-					requestJson(
+					request_json(
 						listRequest(
 							kinds.catalog,
 							of,
@@ -193,7 +191,7 @@
 						)
 					)
 				)
-				.pipe(Effect.map((answer) => pageOf(answer, of)?.rows ?? []))
+				.pipe(Effect.map((answer) => page_of(answer, of)?.rows ?? []))
 	});
 
 	// lane values and counts: one aggregate by `by` (the one-shot count rule 7 applies per lane)
@@ -207,7 +205,7 @@
 		const read = () => {
 			const revision = countsRevision;
 			return bolt
-				.aggregate<Page<Values>>(model, {
+				.aggregate(model, {
 					by: [field],
 					count: true,
 					all: true,
@@ -282,7 +280,7 @@
 			kind: 'ready',
 			value: list.map((lane) => ({
 				...lane,
-				label: lane.label || laneText(lane.value) || msg(bolt, 'board.none', 'None'),
+				label: lane.label || laneText(lane.value) || msg(bolt, 'board.none'),
 				count: countsInvalid ? null : (counts.get(JSON.stringify(lane.value)) ?? 0)
 			}))
 		};
@@ -308,16 +306,17 @@
 						or: found.value.map(
 							(lane): Json =>
 								lane.where ?? {
-									[by]: lane.value === null ? { is_null: true } : { eq: encodeWire(lane.value) }
+									[by]: lane.value === null ? { is_null: true } : { eq: encode_wire(lane.value) }
 								}
 						)
 					};
 		selecting = true;
 		selectionNotice = '';
 		fork(
+			// ids only: a plain read, not a model view (which reads every list field)
 			bolt
 				.query(
-					requestJson({
+					request_json({
 						[of]: {
 							where: and(scope, laneScope),
 							search: search || undefined,
@@ -331,7 +330,7 @@
 						Effect.sync(() => {
 							if (revision !== selectionRevision || current !== selectionScope || queryText !== q)
 								return;
-							for (const row of pageOf(answer, of)?.rows ?? [])
+							for (const row of page_of(answer, of)?.rows ?? [])
 								if (recordId(row.id)) selected.add(row.id);
 						})
 					),
@@ -360,7 +359,7 @@
 		and(
 			scope,
 			lane.where ?? {
-				[by]: lane.value === null ? { is_null: true } : { eq: encodeWire(lane.value) }
+				[by]: lane.value === null ? { is_null: true } : { eq: encode_wire(lane.value) }
 			}
 		);
 	// the lane expanded in the dialog, by its key; the button that opened it takes the focus back
@@ -409,16 +408,20 @@
 		host.replaceChildren(copy);
 	};
 
-	const move = (id: string, lane: import('@norbital-ai/std/kind').Value) =>
+	const move = (id: string, lane: import('@norbital-ai/std/kind').Value) => {
+		const target = [...loaded.values()].flatMap((page) => page.rows).find((row) => row.id === id);
+		if (target === undefined) return;
 		fork(
-			actOutcome(bolt.act(`${of}.update`, [{ target: id, set: { [by]: lane } }])).pipe(
+			actOutcome(bolt.act({ [`${of}.update`]: [{ target, set: { [by]: lane } }] })).pipe(
 				Effect.tap((outcome) =>
 					Effect.sync(() => {
 						if (outcome.kind !== 'committed') notify(bolt, outcome);
 					})
 				)
-			)
+			),
+			(error) => toast.error(bolt.t(error.message))
 		);
+	};
 	function drop(event: DragEvent, lane: import('@norbital-ai/std/kind').Value) {
 		event.preventDefault();
 		dragEnd();
@@ -465,7 +468,7 @@
 		bind:q
 		searchable={(catalog[of]?.search?.length ?? 0) > 0}
 		selected={selectable ? [...selected] : undefined}
-		onSettled={clearSelection}
+		on_settled={clearSelection}
 		{exporter}
 	/>
 	{#if selectable && selected.size > 0}
@@ -474,7 +477,7 @@
 			data-selection
 		>
 			<span class="font-medium text-foreground" aria-live="polite" data-selected-count
-				>{msg(bolt, 'table.selected', '{n} selected', { n: selected.size })}</span
+				>{msg(bolt, 'table.selected', { n: selected.size })}</span
 			>
 			{#if loadedAll && (matching === null || matching > selected.size)}
 				<Button
@@ -486,12 +489,12 @@
 					data-select-matching
 				>
 					{matching === null
-						? msg(bolt, 'table.selectAll', 'Select all')
-						: msg(bolt, 'table.selectMatching', 'Select all {n} matching', { n: matching })}
+						? msg(bolt, 'table.selectAll')
+						: msg(bolt, 'table.selectMatching', { n: matching })}
 				</Button>
 			{/if}
 			<Button variant="link" class="h-auto px-0 text-xs" onclick={clearSelection} data-select-clear
-				>{msg(bolt, 'table.clearSelection', 'Clear selection')}</Button
+				>{msg(bolt, 'table.clearSelection')}</Button
 			>
 		</div>
 		{#if selectionNotice}<p role="alert" class="text-destructive text-xs" data-select-error>
@@ -518,7 +521,7 @@
 				{#if list.length === 0}
 					<EmptyState
 						variant="card"
-						title={msg(bolt, 'table.empty', 'No {what} yet', { what: lowerLead(label(bolt, of)) })}
+						title={msg(bolt, 'table.empty', { what: lowerLead(label(bolt, of)) })}
 					/>
 				{:else}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -575,10 +578,10 @@
 												checked={picked.all}
 												indeterminate={picked.some && !picked.all}
 												disabled={picked.empty}
-												aria-label={msg(bolt, 'board.selectLane', 'Select all in {lane}', {
+												aria-label={msg(bolt, 'board.selectLane', {
 													lane: lane.label
 												})}
-												onCheckedChange={(on) => toggleLane(laneKey, on)}
+												on_checked_change={(on) => toggleLane(laneKey, on)}
 												data-select-lane={laneKey}
 											/>
 										{/if}
@@ -586,8 +589,8 @@
 											size="icon"
 											variant="ghost"
 											class="-my-1.5 -mr-1.5 opacity-0 transition-opacity group-hover/lane:opacity-100 group-focus-within/lane:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none [@media(hover:none)]:opacity-100"
-											hint={msg(bolt, 'board.expand', 'Expand {lane}', { lane: lane.label })}
-											aria-label={msg(bolt, 'board.expand', 'Expand {lane}', { lane: lane.label })}
+											hint={msg(bolt, 'board.expand', { lane: lane.label })}
+											aria-label={msg(bolt, 'board.expand', { lane: lane.label })}
 											onclick={(e) => {
 												opener = e.currentTarget;
 												expanded = laneKey;
@@ -611,14 +614,14 @@
 										{card}
 										{selectable}
 										{selected}
-										onSelect={selectCard}
-										onRows={(page, ids) => registerRows(laneKey, page, ids)}
+										on_select={selectCard}
+										on_rows={(page, rows) => registerRows(laneKey, page, rows)}
 										lane={lane.label}
 										order_by={order}
 										search={search || undefined}
-										{pageSize}
+										{page_size}
 										where={laneWhere(lane)}
-										onChange={() => invalidateCounts()}
+										on_change={() => invalidateCounts()}
 										moves={list
 											.filter((other) => other !== lane)
 											.map((other) => ({
@@ -637,18 +640,18 @@
 	<!-- a lane expanded: its cards as a grid in a modal; Escape and the backdrop close it, and the focus goes back to its button -->
 	<Dialog.Root
 		open={expandedLane !== undefined}
-		onOpenChange={(open) => {
+		on_open_change={(open) => {
 			if (!open) expanded = null;
 		}}
 	>
 		<Dialog.Content
 			bind:ref={laneDialog}
 			class="flex h-[min(90dvh,56rem)] max-w-[min(72rem,calc(100vw-2rem))] flex-col gap-0 overflow-hidden bg-background p-0 outline-none [--dialog-pad:0px]"
-			onOpenAutoFocus={(e) => {
+			on_open_auto_focus={(e) => {
 				e.preventDefault();
 				laneDialog?.focus({ preventScroll: true });
 			}}
-			onCloseAutoFocus={(e) => {
+			on_close_auto_focus={(e) => {
 				e.preventDefault();
 				opener?.focus();
 			}}
@@ -664,16 +667,16 @@
 					where={laneWhere(expandedLane)}
 					order_by={order}
 					{search}
-					{pageSize}
-					viewKey={key ?? of}
+					{page_size}
+					view_key={key ?? of}
 					{selectable}
 					{selected}
-					onSelect={selectCard}
-					onChange={invalidateCounts}
-					onOpen={(id) => {
+					on_select={selectCard}
+					on_change={invalidateCounts}
+					on_open={(id) => {
 						// the record sheet layers under a modal: the dialog closes first, then the card opens as on the board
 						expanded = null;
-						openRecord(of, id);
+						open_record(of, id);
 					}}
 				/>
 			{/if}

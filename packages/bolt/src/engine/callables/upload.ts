@@ -3,12 +3,13 @@
 // insert, so a resent upload adds no row and no count and answers the first `FileRef`. Refused before its bytes are
 // stored (grant, `accept`, `max`) it costs no statement.
 import { Effect, Schema } from 'effect';
+import { UUID_PATTERN } from '@norbital-ai/std/id';
 import { LIMITS, type Authority, type Outcome } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { Manifest } from '../services.ts';
 import { Files } from '../ports.ts';
-import { sha256 as sha256Of, toHex } from '@norbital-ai/store';
+import { sha256 as sha256Of, to_hex } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
 import type { RateCharge } from '../write/commit.ts';
@@ -43,7 +44,7 @@ const refuse = (code: Refused['code'], message: string): Refused => ({
 });
 const SIZE = { KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3 } as const;
 /** `'5MiB'` → bytes. */
-export const sizeBytes = (s: string): number => {
+export const size_bytes = (s: string): number => {
 	const m = /^(\d+)(KiB|MiB|GiB)$/.exec(s);
 	return m === null ? NaN : Number(m[1]) * SIZE[m[2] === 'KiB' ? 'KiB' : m[2] === 'MiB' ? 'MiB' : 'GiB'];
 };
@@ -98,8 +99,8 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 			: admits(manifest, u.authority, u.model, u.field);
 	if (kind?.kind !== 'file' || !allowed)
 		return refuse('forbidden', `You may not upload to ${u.model}.${u.field}.`);
-	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u.id))
-		return refuse('invalidInput', 'An upload id is a client-minted uuid.');
+	if (!UUID_PATTERN.test(u.id))
+		return refuse('invalid_input', 'An upload id is a client-minted uuid.');
 	if (
 		panel
 			? !ATTACHMENT_MIME.test(u.mime) || size === 0
@@ -108,20 +109,20 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 				: !accepts(kind.accept, u.mime)
 	)
 		return refuse(
-			'invalidInput',
+			'invalid_input',
 			panel
 				? 'Attach a nonempty image, document, spreadsheet, slides, recording or text file.'
 				: `${u.field} accepts ${parsers !== null ? acceptOf(parsers) : kind.accept.join(', ')}.`
 		);
 	// bytes the host stored never entered this cell, so only the field's own cap applies to them
-	if (size > (u.stored === undefined ? Math.min(sizeBytes(kind.max), LIMITS.storedFileBytes) : sizeBytes(kind.max)))
-		return refuse('invalidInput', `${u.field} holds at most ${kind.max}.`);
+	if (size > (u.stored === undefined ? Math.min(size_bytes(kind.max), LIMITS.storedFileBytes) : size_bytes(kind.max)))
+		return refuse('invalid_input', `${u.field} holds at most ${kind.max}.`);
 	const blob =
 		u.stored ??
 		(yield* files
 			.put(u.bytes, { name: u.name, mime: u.mime })
 			.pipe(Effect.mapError((error) => BoltError.make('upload', 'facility', error.message, error))));
-	const sha256 = u.stored?.sha256 ?? toHex(sha256Of(u.bytes));
+	const sha256 = u.stored?.sha256 ?? to_hex(sha256Of(u.bytes));
 	const c = new Chain();
 	c.cte(
 		'idem',
@@ -151,7 +152,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 			)
 		);
 	const row = answer[0];
-	if (row === undefined) return refuse('rateLimited', RATE_LIMITED);
+	if (row === undefined) return refuse('rate_limited', RATE_LIMITED);
 	const ref = row.ref;
 	return ref === null
 		? KEY_REUSE

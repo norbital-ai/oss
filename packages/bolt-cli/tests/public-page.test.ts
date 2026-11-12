@@ -8,7 +8,7 @@ import { discover } from '../src/compiler/discover.ts';
 import { load, manifestErrors } from '../src/compiler/load.ts';
 import { buildServerPages } from '../src/compiler/artifact/server.ts';
 import { Guest, type CrossCall } from '../../bolt/src/engine/services.ts';
-import { fixtureManifest, guestLayer } from '../../bolt/tests/support/guest-fixture.ts';
+import { fixture_manifest, guest_layer } from '../../bolt/tests/support/guest-fixture.ts';
 import { PublicBoot } from '../../bolt/src/protocol/public-page.ts';
 
 const workspace = Effect.fnUntraced(function* (files: Readonly<Record<string, string>>) {
@@ -53,21 +53,22 @@ it.live('compiles a public component and renders its caller query in the isolate
 		const loaded = yield* load(root, found.files);
 		expect(loaded.errors).toEqual([]);
 		expect(manifestErrors(loaded.manifest)).toEqual([]);
-		const manifest = { ...fixtureManifest, apps: { site: app } };
+		const manifest = { ...fixture_manifest, apps: { site: app } };
 		const pages = yield* buildServerPages(root, found.files, manifest, root);
 		expect(Object.keys(pages)).toEqual(['app/site/home']);
 		const fs = yield* FileSystem.FileSystem;
 		const source = yield* fs.readFileString(join(root, 'server/app/site/home.mjs'));
 		const context = yield* Layer.build(
-			guestLayer(
+			guest_layer(
 				{ source: 'export default {};' },
 				{
-					lowerRead: () => ({
-						kind: 'get',
-						model: 'jobs',
-						id: 'job',
-						select: { fields: ['title'], relations: {} }
-					})
+					lower_read: () =>
+						Effect.succeed({
+							kind: 'get',
+							model: 'jobs',
+							id: 'job',
+							select: { fields: ['title'], relations: {} }
+						})
 				}
 			)
 		);
@@ -83,10 +84,24 @@ it.live('compiles a public component and renders its caller query in the isolate
 			describe: false,
 			messages: {},
 			catalog: {},
-			automations: {}
+			// the page decodes its answer against the caller's granted output, so the boot carries it
+			read_catalog: {
+				jobs: {
+					default: {
+						jobs: {
+							model: 'jobs',
+							many: true,
+							list_fields: ['title'],
+							fields: { id: { kind: 'ref', to: 'jobs' }, title: { kind: 'text' } }
+						}
+					}
+				}
+			},
+			automations: {},
+			operation_outputs: { automations: {} }
 		};
 		const calls: CrossCall[] = [];
-		const value = { jobs: { rows: [{ title: 'Admitted row' }], next: null } };
+		const value = { jobs: { rows: [{ id: 'job', title: 'Admitted row' }], next: null, total: 1 } };
 		const result = yield* guest.invokeProgram(
 			{ source },
 			{

@@ -4,20 +4,20 @@
 // (a model's read and write layers, a policy's grant layers), syncs (their connection, parsers, cadence and instance), embedding
 // origins; and, over the model sources, a write callback reading inside a loop and a notice sent through a connection that
 // carries no conversation. Each finding names the declaring file.
-import { Array, Predicate, Result, Schema } from 'effect';
-import { LIMITS, sizeBytes } from '@norbital-ai/bolt/engine';
+import { Array, Predicate, Result } from 'effect';
+import { LIMITS, size_bytes } from '@norbital-ai/bolt/engine';
 import type { EngineManifest, GrantData } from '@norbital-ai/bolt/engine';
 import {
 	FieldsSchema,
-	layerModels,
-	parseCron,
-	parseRate,
+	layer_models,
+	parse_cron,
+	parse_rate,
 	DRIVERS,
 	SYSTEM
 } from '@norbital-ai/bolt/tooling';
 import { type IntegrationSpec } from '@norbital-ai/bolt';
-import { clockDefault } from '@norbital-ai/std/vars';
-import { labelExpression, labelPaths } from '@norbital-ai/std/label';
+import { clock_default } from '@norbital-ai/std/vars';
+import { label_expression, label_paths } from '@norbital-ai/std/label';
 
 export type Finding = { code: string; path: string; message: string; line?: number };
 const isList = <T>(v: T | readonly T[]): v is readonly T[] => Array.isArray(v);
@@ -155,7 +155,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				!(Number.isInteger(k.max) && Number(k.max) > 0)
 			)
 				range('text max is a positive integer');
-			if (k.kind === 'file' && !(sizeBytes(String(k.max)) > 0))
+			if (k.kind === 'file' && !(size_bytes(String(k.max)) > 0))
 				range('file max is a positive size'); // hook:runtime
 			// a precision the kind cannot hold (a JS manifest or a cast: tsc refuses it in a declaration)
 			const units = PRECISION[k.kind === 'period' ? String(k.of) : k.kind] ?? [];
@@ -176,7 +176,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 			)
 				range('min is above max');
 			if (k.kind === 'seq') {
-				const tokens = [...String(k.pattern ?? '{0}').matchAll(/\{([^}]*)\}/g)].map((x) => x[1]!);
+				const tokens = [...String(k.pattern ?? '{0}').matchAll(/\{([^}]*)\}/g)].map((x) => x[0].slice(1, -1));
 				if (
 					tokens.filter((t) => /^0+$/.test(t)).length !== 1 ||
 					tokens.some((t) => !/^(0+|yyyy|yy|mm)$/.test(t))
@@ -209,6 +209,9 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 								model,
 								`${f}: '${s}' moves to '${to}', which is not a state`
 							);
+				for (const [state, rule] of Object.entries(states))
+					if (rule.stamp !== undefined && (spec.fields[rule.stamp]?.kind !== 'instant' || spec.fields[rule.stamp]?.many === true))
+						at('model/state', 'model', model, `${f}.${state}: stamp '${rule.stamp}' must name one stored instant field`);
 				// rule 41, §5.5: every state is reachable from `initial` along `to` edges (an unreachable state's edges are dead)
 				const seen = new Set([String(k.initial)]);
 				for (const s of seen) for (const to of states[s]?.to ?? []) seen.add(to);
@@ -230,7 +233,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				!(
 					Object.keys(d).length === 1 &&
 					typeof d['var'] === 'string' &&
-					clockDefault(d['var']) !== undefined
+					clock_default(d['var']) !== undefined
 				)
 			)
 				at(
@@ -251,26 +254,29 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 		// a label is what a person reads for the row: an id or a foreign key would show as a uuid
 		const identifier = spec.record_label;
 		if (typeof identifier === 'string') {
-			const program = labelExpression(identifier);
+			const program = label_expression(identifier);
 			if ('error' in program) at('model/label', 'model', model, program.error);
 		}
-		for (const l of labelPaths(identifier)) {
-			// a label may follow one-relations; labelRead brings the target's label in the same read
-			let owner = model;
-			for (const [index, field] of l.split('.').entries()) {
-				const relation = m.relationships[`${owner}.${field}`];
-				if (relation !== undefined) {
-					owner = list(relation.to)[0] ?? owner;
+		for (const l of label_paths(identifier)) {
+			const [field = l, ...tail] = l.split('.');
+			const relation = m.relationships[`${model}.${field}`];
+			if (relation === undefined) {
+				if (spec.fields[field] === undefined && spec.computed?.[field] === undefined && field !== 'id')
+					at('model/label', 'model', model, `label reads unknown field '${l}'`);
+				const kind = spec.fields[field];
+				if (tail.length > 0 && kind?.kind === 'ref' && kind.many === true)
+					at('model/label', 'model', model, `label '${l}' must follow a to-one relation`);
+			} else if (tail.length > 0) {
+				const targets = list(relation.to), target = targets[0], leaf = tail[0];
+				if (targets.length !== 1 || target === undefined) {
+					at('model/label', 'model', model, `label '${l}' must follow a single-target to-one relation`);
 					continue;
 				}
-				const own = m.models[owner] ?? SYSTEM.models[owner];
-				if (
-					own?.fields[field] === undefined &&
-					own?.computed?.[field] === undefined &&
-					field !== 'id'
-				)
+				const own = m.models[target] ?? SYSTEM.models[target];
+				if (leaf === undefined || (own?.fields[leaf] === undefined && own?.computed?.[leaf] === undefined && leaf !== 'id'))
 					at('model/label', 'model', model, `label reads unknown field '${l}'`);
-				if (index < l.split('.').length - 1) break;
+				if (leaf !== undefined && tail.length > 1 && (m.relationships[`${target}.${leaf}`] ?? SYSTEM.relationships[`${target}.${leaf}`]) !== undefined)
+					at('model/label', 'model', model, `label '${l}' crosses more than one relation`);
 			}
 			if (l === 'id' || m.relationships[`${model}.${l}`] !== undefined)
 				at(
@@ -353,7 +359,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 }
 
 /**
- * Layer maps (decision 1): each model's read and write paths resolve segment by segment (`layerModels`); a layer names
+ * Layer maps (decision 1): each model's read and write paths resolve segment by segment (`layer_models`); a layer names
  * fields its model has, a write layer only writable columns and never the FK that ties its rows to the layer above
  * (the engine sets it); `filled` stays within `create.columns`. A policy grants
  * outputs its model declares and filters only their paths, and it grants a write verb only beside the model's own.
@@ -385,17 +391,16 @@ function layerRules({ m, at }: RuleContext): void {
 	};
 	/** The FK on a child layer's model that runs back to the layer above. */
 	const backFk = (above: string, rel: string): string | undefined => {
-		const key = Object.keys(relationships).find((k) => {
-			const r = relationships[k]!;
+		const entry = Object.entries(relationships).find(([, r]) => {
 			return (
 				r.inverse === rel && (typeof r.to === 'string' ? r.to === above : r.to.includes(above))
 			);
 		});
-		return key?.slice(key.indexOf('.') + 1);
+		return entry?.[0].slice(entry[0].indexOf('.') + 1);
 	};
 	const resolved: { [model: string]: { readonly [path: string]: string } } = {};
 	for (const [model, c] of Object.entries(m.exposures)) {
-		const { models, errors } = layerModels(model, c, relationships);
+		const { models, errors } = layer_models(model, c, relationships);
 		resolved[model] = models;
 		for (const e of errors) at('model/layer', 'model', model, e);
 		const unknown = (
@@ -489,24 +494,14 @@ function layerRules({ m, at }: RuleContext): void {
 /** Rule 38: a rate admits at least one request per window. */
 const validRate = (rate: string): boolean => {
 	const parsed = Result.try(() => {
-		const r = parseRate(rate);
+		const r = parse_rate(rate);
 		return Number.isInteger(r.limit) && r.limit > 0 && r.windowMs > 0;
 	});
 	return Result.isSuccess(parsed) && parsed.success;
 };
 
-function toolRules({ m, at }: RuleContext): void {
-	for (const [name, tool] of Object.entries(m.agent.tools ?? {})) {
-		const input = Schema.decodeUnknownResult(FieldsSchema)(tool.input ?? {});
-		if (Result.isFailure(input)) at('tool/input', 'tool', name, `input: ${input.failure.message}`);
-	}
-}
-
 function automationRules({ m, bodies, at }: RuleContext): void {
 	for (const [name, a] of Object.entries(m.automations)) {
-		const input = Schema.decodeUnknownResult(FieldsSchema)(a.input ?? {});
-		if (Result.isFailure(input))
-			at('automation/input', 'automation', name, `input: ${input.failure.message}`);
 		// a run holds exactly its declared policies: at least one, each declared
 		const policies: readonly unknown[] = Array.isArray(a.policies) ? a.policies : [];
 		if (policies.length === 0)
@@ -524,6 +519,14 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 					name,
 					`policies: there is no policy '${String(p)}'`
 				);
+		for (const [field, kind] of Object.entries(a.input ?? {})) {
+			if (kind.kind !== 'rows') continue;
+			const model = m.exposures[kind.of] ?? SYSTEM.exposures[kind.of];
+			if (kind.of === 'sys_run' || model === undefined)
+				at('automation/rows', 'automation', name, `input.${field}: '${kind.of}' is no readable model`);
+			else if (!a.policies.some((policy) => m.policies[policy]?.grants[kind.of]?.outputs?.['default'] !== undefined))
+				at('automation/rows', 'automation', name, `input.${field}: the automation's policies must grant ${kind.of}'s default output`);
+		}
 		if (!bodies.automations.includes(name))
 			at(
 				'automation/no-body',
@@ -533,7 +536,7 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 			);
 		for (const on of a.on ?? []) {
 			if (!('cron' in on)) continue;
-			const parsed = parseCron(on.cron, on.tz ?? m.workspace.tz);
+			const parsed = parse_cron(on.cron, on.tz ?? m.workspace.tz);
 			if (Result.isFailure(parsed))
 				at('automation/cron', 'automation', name, `'${on.cron}': ${parsed.failure.message}`);
 		}
@@ -548,6 +551,15 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 			for (const p of aud.public) publicOf.set(p, [...(publicOf.get(p) ?? []), app]);
 	}
 	for (const [p, spec] of Object.entries(m.policies)) {
+		for (const automation of spec.capabilities?.automations ?? [])
+			if (m.automations[automation] === undefined)
+				at('access/automation', 'policy', p, `'${automation}' is not an automation; manual sync controls use capabilities.syncs`);
+		for (const key of spec.capabilities?.syncs ?? []) {
+			const dot = key.lastIndexOf('.'), model = key.slice(0, dot), sync = key.slice(dot + 1);
+			const entry = m.exposures[model]?.syncs?.[sync];
+			if (dot < 1 || entry === undefined || entry.with === 'file' || entry.read !== true)
+				at('access/sync', 'policy', p, `'${key}' is not a remote read sync (model.sync_name)`);
+		}
 		for (const [key, v] of Object.entries(spec.limits ?? {})) {
 			// rule 38: a rate admits at least one request per window
 			for (const x of list(v)) {
@@ -679,12 +691,6 @@ const MEDIA_TOPS = [
 	'text',
 	'video'
 ];
-/** The FK value a ref's `where` pins its `sys_integration` target to (`{ integration: { eq: '<definition>' } }`). */
-const pinnedTo = (where: unknown): unknown =>
-	Predicate.isObject(where) && Predicate.isObject(where['integration'])
-		? where['integration']['eq']
-		: undefined;
-
 function syncRules({ m, at }: RuleContext): void {
 	for (const [model, c] of Object.entries(m.exposures))
 		for (const [name, sync] of Object.entries(c.syncs ?? {})) {
@@ -723,19 +729,6 @@ function syncRules({ m, at }: RuleContext): void {
 				bad('every', `'${sync.every}' is not a duration ('15min', '1h')`);
 			if (sync.partitions !== undefined && d.configuration?.[sync.partitions] === undefined)
 				bad('partitions', `'${sync.partitions}' is no configuration field of '${sync.with}'`);
-			// an FK pinned to the definition picks the instance per row; else a write goes through its one named connection
-			const pinned = Object.entries(m.relationships).some(
-				([key, r]) =>
-					key.startsWith(`${model}.`) &&
-					r.to === 'sys_integration' &&
-					pinnedTo(r.where) === sync.with
-			);
-			const slots = Object.values(m.connections).filter((x) => x.integration === sync.with).length;
-			if (sync.write === true && !pinned && slots !== 1)
-				bad(
-					'instance',
-					`a write goes through one instance of '${sync.with}': pin an FK to sys_integration (where: { integration: { eq: '${sync.with}' } }) or declare exactly one connection of it (there are ${slots})`
-				);
 		}
 }
 
@@ -757,7 +750,6 @@ const RULES = [
 	modelRules,
 	layerRules,
 	automationRules,
-	toolRules,
 	policyRules,
 	visitorRules,
 	kioskRules,
@@ -816,7 +808,7 @@ function visitorShape(
 					bad(`${c}: a ${options.title} may only read or create, never ${k}`);
 			for (const [output, read] of grantedOutputs(g)) {
 				const fields = outputFields(m, c, output);
-				const label = labelPaths(m.models[c]?.record_label).map(
+				const label = label_paths(m.models[c]?.record_label).map(
 					(path) => path.split('.')[0] ?? path
 				);
 				if (fields === undefined)

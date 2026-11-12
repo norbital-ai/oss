@@ -1,3 +1,4 @@
+import { single_act } from './act-envelope.ts';
 import './dom.ts';
 import { viewFixture, browser } from './view-fixture.ts';
 import { Deferred, Effect, Fiber, Schema } from 'effect';
@@ -5,7 +6,8 @@ import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { Json } from '@norbital-ai/std/wire';
-import type { FormSpec, Outcome } from '../src/form/draft.ts';
+import type { FormSpec } from '../src/form/draft.ts';
+import type { Outcome } from '../src/client/contract.ts';
 import type { Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 
 const d = await import('../src/form/draft.ts');
@@ -26,12 +28,13 @@ const exposure = {
 		status: {
 			kind: 'state',
 			initial: 'draft',
-			states: { draft: { to: ['submitted'] }, submitted: { edit: ['note'] } }
+			states: { draft: { to: ['submitted'] }, submitted: {} }
 		}
 	},
 	relations: { account: { targets: ['accounts'] } },
 	create: { columns: ['title', 'total', 'note', 'account'] },
-	update: { columns: ['title', 'total', 'note'] }
+	update: { columns: ['title', 'total', 'note'] },
+	locks: [{ where: { status: { eq: 'submitted' } }, except: ['note'] }]
 } as const;
 const automations = {
 	hire: { input: { name: { kind: 'text' }, start: { kind: 'date' } } },
@@ -90,9 +93,9 @@ it.live('reset starts a new create request after an unknown outcome', () =>
 		const keys: string[] = [];
 		const { bolt } = yield* browser(() =>
 			viewFixture({
-				act: (_callable, _input, options) => {
-					keys.push(options.key);
-					return { kind: 'unknown', invocation: options.key };
+				act: (_body, key) => {
+					keys.push(key);
+					return { kind: 'unknown', invocation: key };
 				}
 			})
 		);
@@ -175,8 +178,8 @@ it.effect('an update sends only changed fields; nothing changed sends nothing', 
 		assert.ok(base.total instanceof Decimal);
 		assert.equal(base.total.toString(), '10.00');
 		assert.equal(d.payload(spec, base, base), null);
-		assert.deepEqual(d.payload(spec, base, { ...base, note: 'x' }), {
-			target: 'q1',
+		assert.deepEqual(d.payload(spec, base, { ...base, note: 'x' }, 7), {
+			target: { id: 'q1', revision: 7 },
 			set: { note: 'x' }
 		});
 	})
@@ -232,8 +235,9 @@ it.live('an automation submit reports queue admission and retains its native run
 			const inputs: Json[] = [];
 			const { bolt } = yield* browser(() =>
 				viewFixture({
-					act: (callable, input) => {
-						assert.equal(callable, 'start');
+					act: (body) => {
+						const { callable, input } = single_act(body);
+						assert.equal(callable, 'run');
 						const request = Schema.decodeUnknownSync(
 							Schema.Struct({
 								automation: Schema.String,
@@ -265,16 +269,16 @@ it.live('an automation submit reports queue admission and retains its native run
 				specOf({ automation: 'close' }, undefined, 'create', undefined, automations.close),
 				null,
 				{ target: 'q1', reason: 'Duplicate' },
-				(callable, input, options) => {
+				(acts, options) => {
 					writes++;
-					return bolt.act(callable, input, options);
+					return bolt.act(acts, options);
 				},
 				text,
 				undefined,
 				(automation, input) => bolt.run(automation, input)
 			);
 			const observed: Outcome[] = [];
-			form.onOutcome((outcome) => observed.push(outcome));
+			form.on_outcome((outcome) => observed.push(outcome));
 			const submitted = yield* form.submit().pipe(Effect.forkScoped);
 			yield* Deferred.await(started);
 			assert.equal(form.pending, true);
@@ -306,8 +310,9 @@ it.live(
 			const { bolt } = yield* browser(() =>
 				viewFixture({
 					uuid: () => `run-${++minted}`,
-					act: (callable, input) => {
-						assert.equal(callable, 'start');
+					act: (body) => {
+						const { callable, input } = single_act(body);
+						assert.equal(callable, 'run');
 						const request = Schema.decodeUnknownSync(
 							Schema.Struct({
 								automation: Schema.String,
@@ -331,7 +336,7 @@ it.live(
 				specOf({ automation: 'close' }, undefined, 'create', undefined, automations.close),
 				null,
 				{ target: 'q1', reason: 'Duplicate' },
-				(callable, input, options) => bolt.act(callable, input, options),
+				(acts, options) => bolt.act(acts, options),
 				text,
 				undefined,
 				(automation, input) => bolt.run(automation, input)
@@ -414,7 +419,7 @@ it.effect('committed: an update re-bases on what was sent; a create resets to de
 			create,
 			{},
 			{ title: 'B', total: '1', note: null, account: 'a' },
-			{ kind: 'pending_approval', requestId: 'r', records: [] },
+			{ kind: 'pending_approval', request_id: 'r', records: [] },
 			text
 		);
 		assert.deepEqual(c.draft, { title: null, total: null, note: null, account: null });
@@ -422,7 +427,7 @@ it.effect('committed: an update re-bases on what was sent; a create resets to de
 	})
 );
 
-it.effect('only an unknown outcome retries under the same key; a conflict marks the fields', () =>
+it.effect('only an unknown outcome retries under the same key; a conflict warns', () =>
 	Effect.sync(() => {
 		const spec = specOf('quotes', exposure, 'update', 'q1');
 		const base = { title: 'A', total: '1', note: null };
@@ -434,10 +439,11 @@ it.effect('only an unknown outcome retries under the same key; a conflict marks 
 			spec,
 			base,
 			base,
-			{ kind: 'conflict', records: [{ model: 'quotes', id: 'q1', fields: ['title'] }] },
+			{ kind: 'conflict', records: [{ model: 'quotes', id: 'q1' }] },
 			text
 		);
-		assert.deepEqual([...c.errors], [['title', 'conflict']]);
+		assert.deepEqual([...c.errors], []);
+		assert.deepEqual(c.notice, { tone: 'warning', text: 'conflict' });
 		assert.equal(c.newKey, true);
 	})
 );
@@ -455,7 +461,7 @@ it.effect('a running outcome keeps the draft and key, and its notice names the r
 
 it.effect('a state lock makes fields read-only as advice', () =>
 	Effect.sync(() => {
-		const lock = d.locked(exposure.fields, { status: 'submitted' });
+		const lock = d.locked(exposure.fields, { status: 'submitted' }, exposure.locks);
 		assert.equal(lock('note'), false);
 		assert.equal(lock('total'), true);
 		assert.equal(d.locked(exposure.fields, null)('total'), false);
@@ -520,7 +526,7 @@ it.effect(
 			);
 			assert.deepEqual(
 				d.payload(spec, base, { ...base, note: 'Local note', status: 'draft', account: 'a2' }),
-				{ target: 'q1', set: { note: 'Local note' } }
+				{ target: { id: 'q1' }, set: { note: 'Local note' } }
 			);
 		})
 );
@@ -535,7 +541,8 @@ it.live(
 				const calls: Json[] = [];
 				const { bolt } = yield* browser(() =>
 					viewFixture({
-						act: (_callable, input) => {
+						act: (body) => {
+							const { input } = single_act(body);
 							calls.push(input);
 							return { kind: 'committed', output: null, records: [] };
 						}
@@ -556,7 +563,7 @@ it.live(
 				);
 				const form = new FormState(spec, null, { title: 'Paint' }, bolt.act, text);
 				let validated = false;
-				form.beforeSubmit(() =>
+				form.before_submit(() =>
 					Effect.sync(() => {
 						validated = true;
 						return true;
@@ -594,12 +601,12 @@ it.live('a draft survives a reload keyed to the form, and each changed field say
 		const form = new FormState(spec, null, {}, bolt.act, text, undefined, undefined, key);
 		assert.equal(form.dirty, false);
 		form.set('title', 'Paint');
-		assert.equal(form.fieldDirty('title'), true);
-		assert.equal(form.fieldDirty('total'), false);
+		assert.equal(form.field_dirty('title'), true);
+		assert.equal(form.field_dirty('total'), false);
 		const restored = new FormState(spec, null, {}, bolt.act, text, undefined, undefined, key);
 		assert.equal(restored.get('title'), 'Paint');
-		assert.equal(restored.fieldDirty('title'), true);
-		const childKey = form.childStorageKey('lines', 'l1');
+		assert.equal(restored.field_dirty('title'), true);
+		const childKey = form.child_storage_key('lines', 'l1');
 		assert.ok(childKey);
 		const child = new FormState(spec, null, {}, bolt.act, text, undefined, undefined, childKey);
 		child.set('title', 'Unmounted child');

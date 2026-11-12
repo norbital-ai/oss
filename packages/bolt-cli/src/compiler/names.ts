@@ -1,36 +1,18 @@
 /// <reference types="node" />
 // The names index (§3.1, rule 8): `.norbital/names.ts` and path-bound declaration modules. `bolt sync` evaluates the declarations and
 // prints each part's data as literal type text (strings and numbers as literals, arrays as readonly tuples, bodies
-// dropped); a model is printed as its three parts (`splitModel`). No part reads a source file, so a body typed from the
+// dropped); a model is printed as its three parts (`split_model`). No part reads a source file, so a body typed from the
 // index is never circular; the path-derived parts (pages, groups, skills) are unions of names.
-import { Array, Effect, FileSystem, Path, Predicate } from 'effect';
+import { Effect, FileSystem, Path, Predicate } from 'effect';
 import { discover, type Discovered } from './discover.ts';
 import { writeDeclarations } from './declarations.ts';
 import type { Role } from '@norbital-ai/bolt/tooling';
-import { layerModels, splitModel, SYSTEM } from '@norbital-ai/bolt/tooling';
-import { type ModelLiteral, type ModelParts } from '@norbital-ai/bolt';
+import { layer_models, literal, split_model, SYSTEM } from '@norbital-ai/bolt/tooling';
+import { type ModelParts } from '@norbital-ai/bolt';
 import type { RelationshipSpec } from '@norbital-ai/bolt';
 import { type Manifest, spec } from './load.ts';
 
 const key = JSON.stringify;
-/**
- * Data as literal type text: strings, numbers, booleans and `null` as literals, arrays as `readonly` tuples, objects
- * with their keys quoted. A function (a body) or `undefined` is not data: an object drops it, a tuple types it `unknown`.
- */
-export function literal(value: unknown, indent = ''): string {
-	if (value === null) return 'null';
-	if (typeof value === 'string') return key(value);
-	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-	if (Array.isArray(value)) return `readonly [${value.map((v) => literal(v, indent)).join(', ')}]`;
-	if (!Predicate.isObject(value)) return 'unknown';
-	const inner = `${indent}\t`;
-	const entries = Object.entries(value).filter(
-		([, v]) => v !== undefined && typeof v !== 'function'
-	);
-	return entries.length === 0
-		? '{}'
-		: `{\n${entries.map(([k, v]) => `${inner}${key(k)}: ${literal(v, inner)};`).join('\n')}\n${indent}}`;
-}
 const record = (entries: readonly (readonly [string, string])[], indent: string) =>
 	entries.length === 0
 		? '{}'
@@ -39,15 +21,9 @@ const record = (entries: readonly (readonly [string, string])[], indent: string)
 				.map(([k, v]) => `${indent}\t${key(k)}: ${v};`)
 				.join('\n')}\n${indent}}`;
 
-const isModelLiteral = (u: unknown): u is ModelLiteral =>
-	Predicate.isObject(u) && typeof u['description'] === 'string' && Predicate.isObject(u['fields']);
 /** Each model's three parts, by name; a literal that is no model literal is refused (`check` keeps the last good index). */
 export function modelParts(models: { readonly [name: string]: unknown }): [string, ModelParts][] {
-	return Object.entries(models).map(([name, d]) => {
-		const literal = spec(d);
-		if (!isModelLiteral(literal)) throw new Error(`model '${name}' declares no model literal`);
-		return [name, splitModel(name, literal)];
-	});
+	return Object.entries(models).map(([name, d]) => [name, split_model(name, spec(d))]);
 }
 /**
  * The three model parts as `Names` parts, and `layers`: each exposed model's declared paths below its root → the model
@@ -68,7 +44,7 @@ function modelTypes(
 		layers: record(
 			parts.flatMap(([name, p]): [string, string][] => {
 				if (p.exposure === undefined) return [];
-				const deep = Object.entries(layerModels(name, p.exposure, relationships).models).filter(
+				const deep = Object.entries(layer_models(name, p.exposure, relationships).models).filter(
 					([path]) => path !== name
 				);
 				return deep.length === 0 ? [] : [[name, literal(Object.fromEntries(deep), `${indent}\t`)]];
@@ -102,7 +78,7 @@ const PARTS: { part: string; role: Role; shape: 'each' | 'spec' | 'one' }[] = [
 	{ part: 'apps', role: 'app', shape: 'each' },
 	{ part: 'automations', role: 'automation', shape: 'spec' },
 	{ part: 'integrations', role: 'integration_definition', shape: 'spec' },
-	{ part: 'customFields', role: 'custom_field', shape: 'spec' },
+	{ part: 'custom_fields', role: 'custom_field', shape: 'spec' },
 	{ part: 'mcp', role: 'mcp', shape: 'each' },
 	{ part: 'locales', role: 'locale', shape: 'each' },
 	{ part: 'messages', role: 'messages', shape: 'one' },
@@ -126,7 +102,6 @@ const HOST_TOOLS = [
 	'browser_snapshot',
 	'http',
 	'reference',
-	'run_tool',
 	'web_search',
 	'workspace_commit',
 	'workspace_diagnose',
@@ -153,11 +128,12 @@ export function namesIndex(
 	const lines = new Map<string, string>();
 	for (const { part, role, shape } of PARTS) {
 		const of = Object.entries(manifest[role]);
-		if (of.length === 0) continue;
+		const first = of.at(0);
+		if (first === undefined) continue;
 		lines.set(
 			part,
 			shape === 'one'
-				? literal(of[0]![1], t)
+				? literal(first[1], t)
 				: record(
 						of.map(([name, d]): [string, string] => [
 							name,
@@ -209,7 +185,7 @@ export function namesIndex(
 			)
 		);
 	lines.set(
-		'hostTools',
+		'host_tools',
 		record(
 			HOST_TOOLS.map((tool) => [tool, 'true']),
 			t
@@ -230,68 +206,6 @@ ${[...lines]
 
 // Every cross-file declaration error of the workspace fails here (§3.3.9, X-12).
 export const __verify: Check<Verify> = true;
-`;
-}
-
-/**
- * The built-in layer's index, `src/system/index.ts`: bolt's own models and conversation integration definitions,
- * discovered under `src/system` exactly as a workspace's are (`discover(root, 'system')`) and loaded (`manifest`). Its
- * names are printed as a workspace's names index prints them (literal data, each model as its three parts); `SYSTEM`
- * splits the imported declarations at load, so the schema plan, the catalogue and the names types merge the same layer
- * into every workspace. A test compares the file with this text.
- */
-export function systemIndex(files: readonly Discovered[], manifest: Manifest): string {
-	const rel = (f: Discovered) => `./${f.path.slice('src/system/'.length)}`;
-	const of = (role: Role) =>
-		files.filter((f) => f.role === role).sort((a, b) => (a.name < b.name ? -1 : 1));
-	const models = of('model'),
-		integrations = of('integration_definition');
-	const types = modelTypes(manifest.model, '\t');
-	return `// Generated by bolt from the declarations under src/system (\`systemIndex\`, compiler/names.ts): the built-in layer,
-// compiled as a workspace is. Never edited; tests/system-layer.test.ts fails when it drifts from the declarations.
-import { splitModel, type ExposureSpec, type ModelParts, type ModelSpec } from '../decl/model.ts';
-import type { RelationshipSpec } from '../decl/names.ts';
-import type { IntegrationSpec } from '../decl/runtime/integration.ts';
-${[
-	...models.map((f) => `import m_${f.name} from ${key(rel(f))};`),
-	...integrations.map((f) => `import i_${f.name} from ${key(rel(f))};`)
-].join('\n')}
-
-/** The layer's names index, printed as a workspace's \`.norbital/names.ts\` prints one. */
-export type SystemNames = {
-	models: ${types.models};
-	relationships: ${types.relationships};
-	exposures: ${types.exposures};
-	integrations: ${record(
-		integrations.map((f) => [
-			f.name,
-			`{ spec: ${literal(spec(manifest.integration_definition[f.name]), '\t\t')} }`
-		]),
-		'\t'
-	)};
-};
-const parts = [${models.map((f) => `m_${f.name}`).join(', ')}].map((m): [string, ModelParts] => [
-	m.name,
-	splitModel(m.name, m.spec)
-]);
-/** The layer's manifest: merged into every workspace's schema plan, catalogue and names. */
-export const SYSTEM: {
-	models: { readonly [model: string]: ModelSpec };
-	relationships: { readonly [key: string]: RelationshipSpec };
-	exposures: { readonly [model: string]: ExposureSpec };
-	integrations: { readonly [integration: string]: IntegrationSpec };
-} = {
-	models: Object.fromEntries(parts.map(([name, p]): [string, ModelSpec] => [name, p.model])),
-	relationships: Object.fromEntries(parts.flatMap(([, p]) => Object.entries(p.relationships))),
-	exposures: Object.fromEntries(
-		parts.flatMap(([name, p]): [string, ExposureSpec][] =>
-			p.exposure === undefined ? [] : [[name, p.exposure]]
-		)
-	),
-	integrations: {
-${integrations.map((f) => `\t\t${f.name}: i_${f.name}.spec,`).join('\n')}
-	}
-};
 `;
 }
 
@@ -345,7 +259,7 @@ declare module '*?bytes' {
 	export default bytes;
 }
 /** Brands \`{ id, name, mime }\` as a stored-file handle for guest writes (prelude; not \`/client\`). */
-declare function fileRef(file: { readonly id: string; readonly name: string; readonly mime: string }): import('@norbital-ai/bolt').FileRef;
+declare function file_ref(file: { readonly id: string; readonly name: string; readonly mime: string }): import('@norbital-ai/bolt').FileRef;
 `;
 export const writeTypeSetup = Effect.fn('bolt.writeTypeSetup')(function* (
 	root: string,

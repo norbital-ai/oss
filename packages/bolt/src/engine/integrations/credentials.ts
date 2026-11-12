@@ -44,7 +44,7 @@ const Fence = Schema.Struct({ held: Schema.Number, known: Schema.Boolean });
 const owner = (instance: string) => `instance:${instance}`;
 const ROW = 'integration, owner, active, configuration, import_start';
 const unknown = (instance: string) =>
-	BoltError.make('notFound', 'facility', `no integration instance '${instance}'`);
+	BoltError.make('not_found', 'facility', `no integration instance '${instance}'`);
 const invalid = (name: string) =>
 	BoltError.make('sealed', 'facility', `the credential '${name}' is not sealed JSON`);
 
@@ -133,7 +133,7 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 				const rows = yield* db.returning(Fence, {
 					text: `WITH fence AS (SELECT id FROM sys_integration WHERE id = $1 AND epoch IS NOT DISTINCT FROM $2 FOR UPDATE),
 			moved AS (UPDATE sys_integration SET epoch = $5::text WHERE $6::boolean AND id IN (SELECT id FROM fence) RETURNING 1),
-			rested AS (UPDATE sys_sync SET health = health - 'failures' - 'retryAt' WHERE instance IN (SELECT id FROM fence)),
+			rested AS (UPDATE sys_sync SET health = health - 'failures' - 'retry_at' WHERE instance IN (SELECT id FROM fence)),
 			up AS (INSERT INTO bolt_credential (instance, name, sealed) SELECT $1, v.name, v.sealed FROM jsonb_to_recordset($3::jsonb) AS v(name text, sealed text) WHERE EXISTS (SELECT 1 FROM fence) ON CONFLICT (instance, name) DO UPDATE SET sealed = excluded.sealed RETURNING 1),
 			gone AS (DELETE FROM bolt_credential WHERE instance = $1 AND name IN (SELECT jsonb_array_elements_text($4::jsonb)) AND EXISTS (SELECT 1 FROM fence) RETURNING 1)
 			SELECT (SELECT count(*) FROM fence)::int AS held, EXISTS (SELECT 1 FROM sys_integration WHERE id = $1) AS known`,

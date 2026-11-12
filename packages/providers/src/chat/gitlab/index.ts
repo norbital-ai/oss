@@ -1,6 +1,6 @@
 // GitLab, through its REST API. A thread is a merge request or an issue, named by its API path: `42/merge_requests/7` or
 // `42/issues/7`. Its comment hook carries new and edited notes and no deleted one, so a delete shows only as an id gone
-// from `history`. A note says its discussion and not what it answers, so no `replyTo`; files are links in its markdown.
+// from `history`. A note says its discussion and not what it answers, so no `reply_to`; files are links in its markdown.
 import { Schema } from 'effect';
 import { parse as parseJson, json, request as requestHttp } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
@@ -108,7 +108,7 @@ export const gitlab: ChatPlatform = {
 		const parse = (note: Written, text: string, from: User, thread: string): Incoming => ({
 			id: String(note.id),
 			thread,
-			sentAt: instant(note.created_at),
+			sent_at: instant(note.created_at),
 			from: { handle: String(from.id), name: from.name },
 			text,
 			group: true,

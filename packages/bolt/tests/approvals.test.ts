@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@effect/vitest';
+import { Schema } from 'effect';
 import { Verdict } from '../src/decl/access/policy.ts';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import {
@@ -12,6 +13,7 @@ import {
 import { decisionsFor, moveOf, transition } from '../src/engine/approvals/machine.ts';
 import { rowApproval } from '../src/engine/approvals/lock.ts';
 import { inboxRequests } from '../src/engine/approvals/inbox.ts';
+import { Checkpoint } from '../src/engine/approvals/snapshot.ts';
 import { authority } from './write-fixture.ts';
 
 const actor = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
@@ -45,7 +47,13 @@ const request: Request = {
 };
 
 describe('approval flows', () => {
-	it('shows requesters their pending status with only withdraw, without exposing it to strangers', () => {
+	it('keeps checkpoint storage keys stable while native rollback reads model names', () => {
+		const stored = { collection: 'orders', id: 'order', op: 'update', before: 3 };
+		const checkpoint = Schema.decodeUnknownSync(Checkpoint)(stored);
+		expect(checkpoint).toEqual({ model: 'orders', id: 'order', op: 'update', before: 3 });
+		expect(Schema.encodeSync(Checkpoint)(checkpoint)).toEqual(stored);
+	});
+	it('shows requesters their pending status without giving them a decision or exposing it to strangers', () => {
 		const row = {
 			id: 'request',
 			state: 'Pending',
@@ -78,18 +86,18 @@ describe('approval flows', () => {
 	});
 	it('decodes held approval steps and rejects malformed stored metadata', () => {
 		const held = {
-			requestId: 'request',
+			request_id: 'request',
 			state: request.state,
 			step: request.step,
 			steps: request.route.steps,
 			by: 'Requester'
 		};
 		expect(rowApproval(held)).toEqual({
-			requestId: 'request',
+			request_id: 'request',
 			state: 'Pending',
 			step: 0,
 			steps: request.route.steps,
-			requestedBy: 'Requester'
+			requested_by: 'Requester'
 		});
 		expect(rowApproval({ ...held, steps: [] })).toBeUndefined();
 		expect(

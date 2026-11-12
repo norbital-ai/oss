@@ -1,16 +1,16 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import {
-	catalogOf,
+	catalog_of,
 	compile,
-	isOperand,
+	is_operand,
 	semantic,
 	similar,
 	where,
 	type Scope
 } from '../src/index.ts';
 
-const cat = catalogOf({
+const cat = catalog_of({
 	tables: {
 		document: {
 			fields: {
@@ -42,7 +42,7 @@ describe('read contract', () => {
 				expect((yield* Effect.flip(where(cat, 'document', { [field]: { gte: clock } }))).code).toBe(
 					'invalid'
 				);
-				expect(isOperand(clock)).toBe(false);
+				expect(is_operand(clock)).toBe(false);
 			}
 			expect(
 				(yield* Effect.flip(
@@ -57,7 +57,7 @@ describe('read contract', () => {
 				op: 'gte',
 				arg: { _tag: 'Lit', value: '2026-10-01' }
 			});
-			for (const text of ['today', 'today - days(7)', 'startOfMonth(today)'])
+			for (const text of ['today', 'today - days(7)', 'start_of_month(today)'])
 				expect(
 					(yield* Effect.flip(where(cat, 'document', { day: { gte: { var: text } } }))).message
 				).toContain('materialize time before reading');

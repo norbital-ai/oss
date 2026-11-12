@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider, type ChatHost } from '../../src/chat/adapter.ts';
 import { velt } from '../../src/chat/velt/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const key = Buffer.alloc(24, 5);
@@ -50,13 +50,13 @@ const headers = (body: string, signing: Buffer = key, at = Math.floor(Date.now()
 const delivery = (body: string) => webhook(body, headers(body));
 const history = (since: string) =>
 	Effect.promise(async () =>
-		(
+		required((
 			await velt.connect(settings, {
 				fetch,
-				webhookUrl: 'https://hook.test/',
+				webhook_url: 'https://hook.test/',
 				receive: async () => {}
 			} satisfies ChatHost)
-		).history!(thread, since)
+		).history)(thread, since)
 	);
 
 describe('Velt', () => {
@@ -65,14 +65,14 @@ describe('Velt', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(velt, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'Norbius' });
-			expect((yield* h.link.webhook!(delivery(hook('comment.add')))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(hook('comment.add')))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'ann:11',
 						thread,
-						sentAt: new Date(1_793_527_200_000).toISOString(),
+						sent_at: new Date(1_793_527_200_000).toISOString(),
 						from: { handle: 'ada', name: 'Ada' },
 						text: 'hello',
 						group: true,
@@ -88,10 +88,10 @@ describe('Velt', () => {
 			const h = yield* connected(velt, settings),
 				body = hook('comment.add');
 			const forged = webhook(body, headers(body, Buffer.alloc(24, 1)));
-			expect((yield* h.link.webhook!(forged)).status).toBe(401);
+			expect((yield* required(h.link.webhook)(forged)).status).toBe(401);
 			const old = webhook(body, headers(body, key, Math.floor(Date.now() / 1000) - 3600));
-			expect((yield* h.link.webhook!(old)).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(old)).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -101,7 +101,7 @@ describe('Velt', () => {
 			const h = yield* connected(velt, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(delivery(hook('comment.add')))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(delivery(hook('comment.add')))).status).toBe(500);
 		})
 	);
 	it.live('reads an edit, a delete, a mention token, a first comment and a file', () =>
@@ -109,15 +109,15 @@ describe('Velt', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(velt, settings);
 			const edited = comment({ commentText: 'hi', isEdited: true, lastUpdated: 1_793_530_800_000 });
-			yield* h.link.webhook!(delivery(hook('comment.update', { targetComment: edited })));
-			yield* h.link.webhook!(delivery(hook('comment.delete')));
+			yield* required(h.link.webhook)(delivery(hook('comment.update', { targetComment: edited })));
+			yield* required(h.link.webhook)(delivery(hook('comment.delete')));
 			const mention = comment({
 				commentId: 12,
 				commentText: 'ask {{bot}} and {{u2}}',
 				to: [{ userId: 'bot', name: 'Norbius' }],
 				taggedUserContacts: [{ userId: 'u2', contact: { userId: 'u2', name: 'Grace' } }]
 			});
-			yield* h.link.webhook!(delivery(hook('comment.add', { targetComment: mention })));
+			yield* required(h.link.webhook)(delivery(hook('comment.add', { targetComment: mention })));
 			const first = {
 				commentAnnotation: {
 					annotationId: 'ann',
@@ -134,7 +134,7 @@ describe('Velt', () => {
 				},
 				targetComment: undefined
 			};
-			yield* h.link.webhook!(delivery(hook('comment_annotation.add', first)));
+			yield* required(h.link.webhook)(delivery(hook('comment_annotation.add', first)));
 			expect(h.events[0]).toMatchObject({
 				messages: [{ id: 'ann:11', text: 'hi', version: new Date(1_793_530_800_000).toISOString() }]
 			});
@@ -163,7 +163,7 @@ describe('Velt', () => {
 				hook('comment.add', { metadata: {} }),
 				hook('comment.reaction_add')
 			])
-				expect((yield* h.link.webhook!(delivery(body))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(delivery(body))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -171,9 +171,9 @@ describe('Velt', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer());
 			const h = yield* connected(velt, settings);
-			const sent = yield* h.link.send!({ to: thread, text: 'Done' }, []);
-			yield* h.link.send!({ to: thread, text: 'Again' }, []);
-			expect(sent).toMatchObject({ providerId: 'ann:77' });
+			const sent = yield* required(h.link.send)({ to: thread, text: 'Done' }, []);
+			yield* required(h.link.send)({ to: thread, text: 'Again' }, []);
+			expect(sent).toMatchObject({ provider_id: 'ann:77' });
 			expect(api.calls.filter(({ url }) => url.endsWith('/generate_token'))).toHaveLength(1);
 			const call = api.calls.at(-2);
 			expect(call?.url).toBe('https://api.velt.dev/v2/commentannotations/comments/add');
@@ -199,11 +199,11 @@ describe('Velt', () => {
 			const h = yield* connected(velt, settings);
 			const made = () => api.calls.filter(({ url }) => url.endsWith('/generate_token')).length;
 			expect(made()).toBe(1);
-			yield* h.link.send!({ to: thread, text: 'x' }, []);
+			yield* required(h.link.send)({ to: thread, text: 'x' }, []);
 			expect(made()).toBe(2);
-			yield* h.link.send!({ to: 'other:doc:ann', text: 'x' }, []);
+			yield* required(h.link.send)({ to: 'other:doc:ann', text: 'x' }, []);
 			expect(made()).toBe(3);
-			yield* h.link.send!({ to: thread, text: 'x' }, []);
+			yield* required(h.link.send)({ to: thread, text: 'x' }, []);
 			expect(made()).toBe(4);
 		})
 	);
@@ -215,7 +215,7 @@ describe('Velt', () => {
 					: answer()(call)
 			);
 			const h = yield* connected(velt, settings);
-			const lost = yield* Effect.flip(h.link.send!({ to: thread, text: 'x' }, []));
+			const lost = yield* Effect.flip(required(h.link.send)({ to: thread, text: 'x' }, []));
 			expect(lost).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 		})
 	);
@@ -223,8 +223,8 @@ describe('Velt', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ error: 'unauthorized' }, 401));
 			const h = yield* host(chatProvider(velt), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
-			yield* Effect.flip(h.link.pair!({ ...settings, webhookSecret: 'whsec_' }));
+			yield* Effect.flip(required(h.link.pair)(settings));
+			yield* Effect.flip(required(h.link.pair)({ ...settings, webhookSecret: 'whsec_' }));
 			expect(h.values.size).toBe(0);
 		})
 	);

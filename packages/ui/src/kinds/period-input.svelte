@@ -9,7 +9,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	/** A date period `{ from, to | null }` (inclusive) or an instant period `{ start, end | null }` (closed-open). */
 	export type PeriodInputProps = {
 		value: Value;
-		onChange(next: Value): void;
+		on_change(next: Value): void;
 		of: 'date' | 'instant';
 		/**
 		 * The unit both ends are picked in (a field's declared `precision`), snapped: a date period runs from the first day
@@ -32,14 +32,14 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	import Icon from '@iconify/svelte';
 	import { getLocalTimeZone, parseAbsolute, type DateValue } from '@internationalized/date';
 	import { DatePicker, DateRangePicker } from 'bits-ui';
-	import { cn, narrowViewport, uiText, useControls } from '../primitives/utils.js';
+	import { cn, narrowViewport, ui_text, use_controls } from '../primitives/utils.js';
 	import CalendarGrid from './calendar-grid.svelte';
 	import { SEGMENT, SEGMENTS } from './classes.js';
 	import { useKinds } from './context.js';
 	import { dateText, dateValue, fromDay, localDay, snapHour } from './date-input.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { CONTROL } from './classes.js';
-	import { format, valueObject } from './kind.js';
+	import { format, value_object } from './kind.js';
 	import { datePrecision, unitEnd, unitNext, unitStart, type DatePrecision } from './precision.js';
 	import Show from './show.svelte';
 	import UnitPicker from './unit-picker.svelte';
@@ -47,7 +47,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 
 	let {
 		value,
-		onChange,
+		on_change,
 		of,
 		precision,
 		variant,
@@ -56,9 +56,9 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 		disabled: ownDisabled,
 		invalid = false
 	}: PeriodInputProps = $props();
-	const controls = useControls();
+	const controls = use_controls();
 	const disabled = $derived(ownDisabled ?? controls.disabled);
-	const t = uiText();
+	const t = ui_text();
 	let fieldAnchor = $state<HTMLElement | null>(null);
 	let calendarContent = $state<HTMLElement | null>(null);
 	const calendarAlignment = fieldPopoverAlignment(
@@ -70,7 +70,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	const [a, b] = $derived(of === 'date' ? ['from', 'to'] : ['start', 'end']);
 	const v = $derived.by(() => {
 		const x = value;
-		return valueObject(x) ? x : {};
+		return value_object(x) ? x : {};
 	});
 	const str = (x: Value | undefined) => (typeof x === 'string' ? x : null);
 	const unit = $derived(
@@ -98,10 +98,11 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	const endDay = $derived(days === null ? null : lastDay(str(v[b])));
 	/** A period from the first unit's start to the last unit's end, as the kind stores its ends. */
 	function emit(from: string | null, to: string | null) {
-		const p = days!;
+		const p = days;
+		if (p === null) return;
 		const lo = from === null ? null : fromDay(of, unitStart(from, p));
 		const hi = to === null ? null : of === 'date' ? unitEnd(to, p) : fromDay(of, unitNext(to, p));
-		onChange(lo === null && hi === null ? null : { [a]: lo, [b]: hi });
+		on_change(lo === null && hi === null ? null : { [a]: lo, [b]: hi });
 	}
 	const range = $derived(
 		days !== null
@@ -130,7 +131,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 			);
 		const from = dateText(of, next.start && snapHour(next.start, precision)),
 			to = dateText(of, next.end && snapHour(next.end, precision));
-		onChange(from === null && to === null ? null : { [a]: from, [b]: to });
+		on_change(from === null && to === null ? null : { [a]: from, [b]: to });
 	}
 </script>
 
@@ -139,7 +140,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 {:else if unit !== null}
 	<Popover.Root
 		bind:open={unitOpen}
-		onOpenChange={(open) => {
+		on_open_change={(open) => {
 			if (open) {
 				unitFrom = firstDay;
 				choosingEnd = false;
@@ -161,10 +162,10 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 			<UnitPicker
 				{unit}
 				inline
-				pickingEnd={choosingEnd}
+				picking_end={choosingEnd}
 				value={unitFrom === null ? null : unitStart(unitFrom, unit)}
 				end={choosingEnd || endDay === null ? null : unitStart(endDay, unit)}
-				onChange={(d) => {
+				on_change={(d) => {
 					if (d === null) return;
 					if (!choosingEnd || unitFrom === null) {
 						unitFrom = d;
@@ -250,7 +251,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 							{months}
 							{weekdays}
 							{placeholder}
-							onPlaceholder={(p) => (placeholder = p)}
+							on_placeholder={(p) => (placeholder = p)}
 							{locale}
 							range
 						/>

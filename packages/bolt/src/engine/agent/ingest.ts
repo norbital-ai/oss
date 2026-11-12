@@ -14,6 +14,7 @@ import type { Ingested } from '../contracts.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { Files } from '../ports.ts';
 import { row } from '../system/rows.ts';
+import { BoltError } from '../../protocol/errors.ts';
 import { toBase64 } from '../crypto.ts';
 import { size } from './context.ts';
 
@@ -30,7 +31,7 @@ export function filePart(f: { mime: string; bytes: Uint8Array }, name: string): 
 }
 /** What a file with no parser answers (plan 12 rule 7): the agent builds one, never guesses. */
 export const unparsed = (name: string, mime: string) =>
-	`${name} (${mime || 'unknown type'}): no parser. A tool you declare in src/agent/tool runs any package on it in a VM; run_js with files: [{ id }] reads its bytes. Never guess what it contains.`;
+	`${name} (${mime || 'unknown type'}): no parser. A call-mode automation can use a workspace package in its isolated VM; run_js with files: [{ id }] reads its bytes. Never guess what it contains.`;
 
 const OOXML = 'application/vnd.openxmlformats-officedocument.';
 const CONVERTS: ReadonlySet<string> = new Set([
@@ -133,9 +134,16 @@ const pageRanges = (pages: readonly number[]) => {
 	const ranges: string[] = [];
 	let length = 0;
 	for (let i = 0; i < pages.length;) {
-		let last = i;
-		while (pages[last + 1] === pages[last]! + 1) last++;
-		const range = last === i ? `${pages[i]}` : `${pages[i]}–${pages[last]}`;
+		const first = pages[i];
+		if (first === undefined) throw new RangeError('A page range has a missing page.');
+		let last = i, end = first;
+		for (;;) {
+			const next = pages[last + 1];
+			if (next === undefined || next !== end + 1) break;
+			end = next;
+			last++;
+		}
+		const range = last === i ? `${first}` : `${first}–${end}`;
 		if ((length += range.length + 2) > 300) return [...ranges, '…'].join(', ');
 		ranges.push(range);
 		i = last + 1;
@@ -155,9 +163,9 @@ export function indexOf(html: string): IngestIndex {
 	lines.forEach((line, i) => {
 		tables += line.match(/<table\b/g)?.length ?? 0;
 		const h = /^<h([1-6])>(.*)<\/h\1>$/.exec(line);
-		if (h !== null) {
+		if (h?.[2] !== undefined) {
 			speaker = undefined;
-			outline.push({ title: plain(h[2]!), level: Number(h[1]), from: i + 1, to: lines.length });
+			outline.push({ title: plain(h[2]), level: Number(h[1]), from: i + 1, to: lines.length });
 			return;
 		}
 		const s = SECTION.exec(line);
@@ -198,8 +206,8 @@ export function indexOf(html: string): IngestIndex {
 		slides,
 		outline,
 		tables,
-		images: [...new Set([...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]!))],
-		...(textless.length === 0 ? {} : { noText: pageRanges(textless) })
+		images: [...new Set(imageNames(html))],
+		...(textless.length === 0 ? {} : { no_text: pageRanges(textless) })
 	};
 }
 /** An audio ingest's transcript from its speaker sections (none: not a recording); its length is the last segment's end. */
@@ -220,7 +228,7 @@ export function transcriptOf(html: string): Transcript | undefined {
 	return last === undefined
 		? undefined
 		: {
-				durationMs: Math.round(last.end * 1000),
+				duration_ms: Math.round(last.end * 1000),
 				speakers: [...new Set(segments.map((s) => s.speaker))],
 				segments
 			};
@@ -231,8 +239,8 @@ const clock = (seconds: number) =>
 		.join(':');
 
 // ── the cache: `ingest/<sha256>/…` in the file store, shared by every conversation ──
-const Stored = row('sys_file', ['id', 'name', 'mime', 'size', 'key']);
-export type StoredFile = typeof Stored.Type;
+export const StoredFile = row('sys_file', ['id', 'name', 'mime', 'size', 'key']);
+export type StoredFile = typeof StoredFile.Type;
 const IndexJson = Schema.fromJsonString(IngestIndexSchema);
 /** A stored ingest's files may be large; one read answers at most this many bytes. */
 export const INGEST_BYTES = 256 * 1024 * 1024;
@@ -251,7 +259,7 @@ export const cached = Effect.fn('Agents.ingestCached')(function* (
 	sha256: string
 ) {
 	// ponytail: a prefix scan on sys_file.name; an index on (field, name) when ingests grow
-	const rows = yield* db.rows(Stored, {
+	const rows = yield* db.rows(StoredFile, {
 		text: `SELECT id, name, mime, size, key FROM sys_file WHERE field = 'sys_conversation.outputs' AND starts_with(name, $1) ORDER BY created_at`,
 		params: [prefix(sha256)]
 	});
@@ -316,7 +324,9 @@ export const stash = Effect.fn('Agents.ingestStash')(function* (
 		return stored.map(({ file }) => file);
 	});
 	const put = (path: string, mime: string, bytes: Uint8Array) =>
-		Effect.map(putAll([{ path, mime, bytes }]), ([file]) => file!);
+		Effect.flatMap(putAll([{ path, mime, bytes }]), ([file]) => file === undefined
+			? Effect.fail(BoltError.make('corrupt', 'commit', 'The ingest store returned no file.'))
+			: Effect.succeed(file));
 	const picture = (image: Ingested['images'][number]) => ({
 		path: `images/${image.name}`,
 		mime: image.mime,
@@ -377,13 +387,22 @@ export function blocks(lines: readonly string[]): ([number, number] | undefined)
 /**
  * Lines `from`–`to` within `bytes`, never cutting a table or section: a window starting inside one starts at its open,
  * one ending inside it runs to its close, and one that has no room for it stops before it. Only a lone block larger
- * than the bound is cut (the rest follows from `next`).
+ * than the bound is cut (the rest follows from `next`). Plain text uses exact line bounds and its smaller envelope.
  */
-export function window(html: string, from = 1, to = Number.MAX_SAFE_INTEGER, bytes = WINDOW_BYTES) {
+export function window(
+	html: string,
+	from = 1,
+	to = Number.MAX_SAFE_INTEGER,
+	bytes?: number,
+	format: 'html' | 'text' = 'html'
+) {
 	const all = html.split('\n'),
-		spans = blocks(all),
-		last = Math.min(all.length, Math.max(1, Math.trunc(to) || all.length));
-	let first = Math.min(all.length, Math.max(1, Math.trunc(from) || 1));
+		spans = format === 'html' ? blocks(all) : [],
+		bound = bytes ?? (format === 'html' ? WINDOW_BYTES : 40_000),
+		requested = Math.trunc(to) || all.length,
+		last = Math.min(all.length, format === 'html' ? Math.max(1, requested) : requested);
+	let first = Math.max(1, Math.trunc(from) || 1);
+	if (format === 'html') first = Math.min(all.length, first);
 	first = spans[first - 1]?.[0] ?? first;
 	const lines: string[] = [];
 	let used = 0,
@@ -394,10 +413,10 @@ export function window(html: string, from = 1, to = Number.MAX_SAFE_INTEGER, byt
 		const end = span !== undefined && span[0] === n ? span[1] : n;
 		let block = 0;
 		for (let k = n; k <= end; k++) block += cost(k);
-		if (used + block > bytes) {
+		if (used + block > bound) {
 			if (lines.length > 0) break;
 			// a lone block over the bound: as much of it as fits
-			for (let k = n; k <= end && (lines.length === 0 || used + cost(k) <= bytes); k++) {
+			for (let k = n; k <= end && (lines.length === 0 || used + cost(k) <= bound); k++) {
 				lines.push(`${k}: ${all[k - 1]}`);
 				used += cost(k);
 			}
@@ -413,23 +432,22 @@ export function window(html: string, from = 1, to = Number.MAX_SAFE_INTEGER, byt
 		from: first,
 		to: end,
 		lines,
-		...(end < all.length ? { next: end + 1 } : {})
+		...(end < (format === 'html' ? all.length : last) ? { next: end + 1 } : {})
 	};
 }
 /** The lines holding `text` (case-insensitive), in `workspace_search`'s line shape: a line inside a table or section names it whole. */
-export function grep(html: string, text: string, limit: number) {
+export function grep(html: string, text: string, limit: number, format: 'html' | 'text' = 'html') {
 	const all = html.split('\n'),
-		spans = blocks(all),
+		spans = format === 'html' ? blocks(all) : [],
 		// a|b finds either: plain words, so no pattern can run away on a long document
-		wants = text
-			.toLowerCase()
-			.split('|')
-			.filter((want) => want !== ''),
+		wants = format === 'text'
+			? [text.toLowerCase()]
+			: text.toLowerCase().split('|').filter((want) => want !== ''),
 		hits: { page?: number; from: number; to: number; text: string }[] = [];
 	let total = 0,
 		page: number | undefined;
 	all.forEach((line, i) => {
-		const section = SECTION.exec(line);
+		const section = format === 'html' ? SECTION.exec(line) : null;
 		if (section?.[1] === 'page') page = Number(section[2]);
 		const lower = line.toLowerCase();
 		if (!wants.some((want) => lower.includes(want)) || ++total > limit) return;
@@ -438,17 +456,19 @@ export function grep(html: string, text: string, limit: number) {
 			...(page === undefined ? {} : { page }),
 			from: span[0],
 			to: span[1],
-			text: line.trim().slice(0, 300)
+			text: line.trim().slice(0, format === 'html' ? 300 : 200)
 		});
 	});
 	return { total, hits };
 }
+const imageNames = (html: string) => [...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)]
+	.flatMap((match) => match[1] === undefined ? [] : [match[1]]);
 /** The images a window's lines reference (`<img src="name">`), in order, each once. */
 export const imagesIn = (lines: readonly string[], names: readonly string[]) => {
 	const known = new Set(names);
 	return [
 		...new Set(
-			lines.flatMap((l) => [...l.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]!))
+			lines.flatMap(imageNames)
 		)
 	].filter((name) => known.has(name));
 };
@@ -460,7 +480,7 @@ const plural = (v: number, one: string) => `${n(v)} ${one}${v === 1 ? '' : 's'}`
 export function summary(index: IngestIndex, transcript: Transcript | undefined): string {
 	return [
 		transcript !== undefined
-			? `${clock(transcript.durationMs / 1000)} · ${plural(transcript.speakers.length, 'speaker')}`
+			? `${clock(transcript.duration_ms / 1000)} · ${plural(transcript.speakers.length, 'speaker')}`
 			: index.pages > 0
 				? `${n(index.pages)} pages`
 				: index.slides > 0
@@ -469,7 +489,7 @@ export function summary(index: IngestIndex, transcript: Transcript | undefined):
 		`${n(index.lines)} lines`,
 		index.images.length === 0 ? undefined : `${n(index.images.length)} images`,
 		index.tables === 0 ? undefined : `${n(index.tables)} tables`,
-		index.noText === undefined ? undefined : `no text on pages ${index.noText}`
+		index.no_text === undefined ? undefined : `no text on pages ${index.no_text}`
 	]
 		.filter((p) => p !== undefined)
 		.join(' · ');

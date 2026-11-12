@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
 	import { Layer, ManagedRuntime } from 'effect';
-	import { mountEdge } from '../../../ui/src/effect/index.js';
-	import { provideBolt } from '../../../ui/src/client/context.js';
+	import { mount_edge } from '../../../ui/src/effect/index.js';
+	import { provide_bolt } from '../../../ui/src/client/context.js';
 	import type { ViewBolt } from '../../../ui/src/client/contract.js';
 	import type { ModelExposure } from '../../../ui/src/kinds/context.js';
 	import type { FilterVariables } from '../../../ui/src/filter/filter.js';
-	import { provideKinds } from '../../../ui/src/kinds/context.js';
-	import { filterCatalog as baseCatalog } from './filter-catalog.ts';
+	import { provide_kinds } from '../../../ui/src/kinds/context.js';
+	import { filter_catalog as baseCatalog } from './filter-catalog.ts';
 	import FilterEditor, { type FilterValue } from '../../../ui/src/filter/FilterEditor.svelte';
 
 	let {
@@ -25,10 +25,10 @@
 		variables?: FilterVariables;
 		readonly?: boolean;
 	} = $props();
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(() => bolt);
-	provideKinds({
+	provide_bolt(() => bolt);
+	provide_kinds({
 		get catalog() {
 			return catalog;
 		},
@@ -45,7 +45,7 @@
 		submitted++;
 	}}
 >
-	<FilterEditor {model} {value} {variables} {readonly} onChange={(next) => (value = next)} />
+	<FilterEditor {model} {value} {variables} {readonly} on_change={(next) => (value = next)} />
 	<output data-saved-filter>{JSON.stringify(value)}</output>
 	<output data-submitted>{submitted}</output>
 </form>

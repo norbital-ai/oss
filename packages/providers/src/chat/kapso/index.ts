@@ -136,7 +136,7 @@ const parse = (
 	return {
 		id: raw.id,
 		thread: from,
-		sentAt: new Date(Number.isFinite(seconds) ? seconds * 1000 : raw.timestamp).toISOString(),
+		sent_at: new Date(Number.isFinite(seconds) ? seconds * 1000 : raw.timestamp).toISOString(),
 		from: {
 			handle: from,
 			name:
@@ -147,7 +147,7 @@ const parse = (
 				null
 		},
 		text: textOf(raw),
-		replyTo: raw.context?.id ?? null,
+		reply_to: raw.context?.id ?? null,
 		files: KINDS.flatMap((kind): IncomingFile[] => {
 			const media = raw[kind],
 				id = media?.id;

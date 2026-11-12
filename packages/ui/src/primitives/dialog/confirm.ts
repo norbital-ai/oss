@@ -9,15 +9,15 @@ export type ConfirmOptions = {
 	title: string;
 	body?: string | undefined;
 	/** The accept button's label: the action itself ("Disconnect"), never a bare "OK". */
-	confirmLabel: string;
+	confirm_label: string;
 	/** Defaults to the UI kit's "Cancel". */
-	cancelLabel?: string | undefined;
+	cancel_label?: string | undefined;
 	/** Draws the accept button as destructive. */
 	destructive?: boolean | undefined;
 };
 
 /** `true` when the person confirmed; `false` on cancel, Escape or dismissal. */
-export const confirmAction = (options: ConfirmOptions): Effect.Effect<boolean> =>
+export const confirm_action = (options: ConfirmOptions): Effect.Effect<boolean> =>
 	Effect.callback<boolean>((resume) => {
 		const target = document.body.appendChild(document.createElement('div'));
 		let view: ReturnType<typeof mount> | null = null;
@@ -31,8 +31,8 @@ export const confirmAction = (options: ConfirmOptions): Effect.Effect<boolean> =
 			target,
 			props: {
 				...options,
-				onAnswer: (confirmed: boolean) => resume(Effect.succeed(confirmed)),
-				onClosed: remove
+				on_answer: (confirmed: boolean) => resume(Effect.succeed(confirmed)),
+				on_closed: remove
 			}
 		});
 		return Effect.sync(remove);

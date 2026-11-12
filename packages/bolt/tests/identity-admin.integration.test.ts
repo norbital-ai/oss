@@ -11,26 +11,26 @@ import { RateWindows } from '../src/engine/access/rate.ts';
 import type { MembershipPort, TransportPort } from '../src/engine/contracts.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Authorities, previewAs } from '../src/engine/identity/actor.ts';
+import { Authorities, preview_as } from '../src/engine/identity/actor.ts';
 import {
-	assignTeam,
+	assign_team,
 	deactivate,
 	invite,
 	inviteMany,
-	membershipRun,
+	membership_run,
 	reactivate,
 	resendInvitation,
 	setAdmin
 } from '../src/engine/identity/members.ts';
 import {
-	founderBootstrap,
-	loadKeys,
-	makeIdentityHost,
-	sendCode,
-	verifyCode
+	founder_bootstrap,
+	load_keys,
+	make_identity_host,
+	send_code,
+	verify_code
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { memoryAuditLayer } from '../../bolt-cli/src/test/index.ts';
+import { memory_audit_layer } from '../../bolt-cli/src/test/index.ts';
 
 const m: EngineManifest = {
 	needs: [],
@@ -45,18 +45,17 @@ const m: EngineManifest = {
 		finance: { description: '', grants: {} }
 	},
 	teams: {
-		Sales: ['sales', 'finance'],
-		Field: ['field'],
-		Ops: ['finance'],
+		Sales: { policies: ['sales', 'finance'] },
+		Field: { policies: ['field'] },
+		Ops: { policies: ['finance'] },
 		Region: { parent: 'Ops', policies: ['sales'] },
 		Depot: { parent: 'Region', policies: [] },
-		Crew: ['sales']
+		Crew: { policies: ['sales'] }
 	},
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const Mail = Schema.Struct({ to: Schema.String, text: Schema.String });
@@ -69,16 +68,16 @@ const fixture = Effect.gen(function* () {
 	const mail: TransportPort = {
 		async send(_kind, message) {
 			outbox.push(Schema.decodeUnknownSync(Mail)(message));
-			return { providerId: 'x' };
+			return { provider_id: 'x' };
 		}
 	};
-	const h = yield* makeIdentityHost({
+	const h = yield* make_identity_host({
 		db,
 		now: Clock.currentTimeMillis.pipe(Effect.map((ms) => new Date(ms))),
 		windows: new RateWindows(),
-		keys: yield* loadKeys(db),
+		keys: yield* load_keys(db),
 		mail,
-		publicUrl: 'https://acme.example'
+		public_url: 'https://acme.example'
 	});
 	const bound = {
 		...h,
@@ -89,10 +88,10 @@ const fixture = Effect.gen(function* () {
 				})
 		}
 	};
-	const founder = (yield* founderBootstrap(h, 'boss@acme.example')).user;
+	const founder = (yield* founder_bootstrap(h, 'boss@acme.example')).user;
 	const authorities = new Authorities(m, 'r1');
 	const as = Effect.fnUntraced(function* (user: string) {
-		const authority = yield* authorities.member(db, user);
+		const authority = yield* authorities.member(db, 'bootstrap', user);
 		if (authority === null) throw new Error(`No active test member ${user}`);
 		return authority;
 	});
@@ -129,7 +128,7 @@ class AdministrationFixture extends Context.Service<
 	Effect.Success<typeof fixture>
 >()('test/AdministrationFixture') {}
 const AdministrationFixtureLive = Layer.effect(AdministrationFixture, fixture).pipe(
-	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer))
+	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer))
 );
 
 layer(AdministrationFixtureLive)((it) => {
@@ -138,14 +137,14 @@ layer(AdministrationFixtureLive)((it) => {
 			Effect.gen(function* () {
 				const { db, h, founder, as, external } = yield* AdministrationFixture;
 				const boss = yield* as(founder);
-				expect(yield* assignTeam(h, m, boss, founder, 'Sales')).toBeNull();
-				expect(yield* Effect.flip(assignTeam(h, m, boss, founder, 'sales'))).toMatchObject({
+				expect(yield* assign_team(h, m, boss, founder, 'Sales')).toBeNull();
+				expect(yield* Effect.flip(assign_team(h, m, boss, founder, 'sales'))).toMatchObject({
 					_tag: 'IdentityRefusal',
-					code: 'notFound'
+					code: 'not_found'
 				});
-				expect(yield* Effect.flip(assignTeam(h, m, boss, founder, 'forged'))).toMatchObject({
+				expect(yield* Effect.flip(assign_team(h, m, boss, founder, 'forged'))).toMatchObject({
 					_tag: 'IdentityRefusal',
-					code: 'notFound'
+					code: 'not_found'
 				});
 				expect((yield* as(founder)).policies).toEqual(['sales', 'finance']);
 				yield* db.write({
@@ -153,9 +152,9 @@ layer(AdministrationFixtureLive)((it) => {
 					params: [external]
 				});
 				expect(
-					yield* Effect.flip(assignTeam(h, m, yield* as(external), founder, 'Field'))
+					yield* Effect.flip(assign_team(h, m, yield* as(external), founder, 'Field'))
 				).toMatchObject({ _tag: 'IdentityRefusal', code: 'forbidden' });
-				yield* assignTeam(h, m, boss, founder, null);
+				yield* assign_team(h, m, boss, founder, null);
 			})
 		);
 
@@ -165,7 +164,7 @@ layer(AdministrationFixtureLive)((it) => {
 				Effect.gen(function* () {
 					const { h, founder, as, one } = yield* AdministrationFixture;
 					const boss = yield* as(founder);
-					expect(yield* assignTeam(h, m, boss, founder, 'Region')).toBeNull();
+					expect(yield* assign_team(h, m, boss, founder, 'Region')).toBeNull();
 					const member = yield* as(founder);
 					if (member.actor.kind !== 'member') throw new Error('Expected native member');
 					expect(member.actor.team_path).toEqual(['Region', 'Ops']);
@@ -174,7 +173,7 @@ layer(AdministrationFixtureLive)((it) => {
 					expect(yield* one(`SELECT to_regclass('sys_team') IS NULL AS absent`)).toEqual([
 						{ absent: true }
 					]);
-					yield* assignTeam(h, m, boss, founder, null);
+					yield* assign_team(h, m, boss, founder, null);
 				})
 		);
 	});
@@ -205,7 +204,7 @@ layer(AdministrationFixtureLive)((it) => {
 					});
 					expect(yield* Effect.flip(resendInvitation(h, boss, id))).toMatchObject({
 						_tag: 'IdentityRefusal',
-						code: 'notFound'
+						code: 'not_found'
 					});
 					expect(yield* Effect.flip(resendInvitation(h, yield* as(external), id))).toMatchObject({
 						_tag: 'IdentityRefusal',
@@ -217,13 +216,13 @@ layer(AdministrationFixtureLive)((it) => {
 
 	describe('preview as a team (rule 39)', () => {
 		it.effect(
-			'holds the source team policies, never admin; admin-only; an unknown team is notFound',
+			'holds the source team policies, never admin; admin-only; an unknown team is not_found',
 			() =>
 				Effect.gen(function* () {
 					const { db, founder, authorities, as, external } = yield* AdministrationFixture;
 					const boss = yield* as(founder);
 					const team = 'Sales';
-					const p = yield* previewAs(boss, authorities, db, { team });
+					const p = yield* preview_as(boss, authorities, db, 'bootstrap', { team });
 					expect([...p.authority.policies].sort()).toEqual(['finance', 'sales']);
 					expect(p.authority).toMatchObject({
 						admin: false,
@@ -239,10 +238,10 @@ layer(AdministrationFixtureLive)((it) => {
 					expect(p.authority.key.startsWith('preview:')).toBe(true); // never links a sender handle (rule 39)
 					expect(p.impersonatedBy).toBe(founder);
 					expect(
-						yield* Effect.flip(previewAs(boss, authorities, db, { team: 'nope' }))
-					).toMatchObject({ code: 'notFound' });
+						yield* Effect.flip(preview_as(boss, authorities, db, 'bootstrap', { team: 'nope' }))
+					).toMatchObject({ code: 'not_found' });
 					expect(
-						yield* Effect.flip(previewAs(yield* as(external), authorities, db, { team }))
+						yield* Effect.flip(preview_as(yield* as(external), authorities, db, 'bootstrap', { team }))
 					).toMatchObject({ code: 'forbidden' });
 				})
 		);
@@ -270,12 +269,12 @@ layer(AdministrationFixtureLive)((it) => {
 					announced.length = 0;
 					const inv = yield* invite(bound, m, boss, { email: 'new@acme.example' });
 					expect(inv).toMatchObject({ id: expect.any(String) });
-					yield* sendCode(bound, 'new@acme.example', '5.5.5.5');
-					const s = yield* verifyCode(bound, 'new@acme.example', lastCode(), '5.5.5.5');
+					yield* send_code(bound, 'new@acme.example', '5.5.5.5');
+					const s = yield* verify_code(bound, 'new@acme.example', lastCode(), '5.5.5.5');
 					const user = s.user,
 						team = 'Crew';
 					yield* TestClock.adjust('1 second');
-					expect(yield* assignTeam(bound, m, boss, user, team)).toBeNull();
+					expect(yield* assign_team(bound, m, boss, user, team)).toBeNull();
 					yield* TestClock.adjust('1 second');
 					expect(yield* deactivate(bound, boss, user)).toBeNull();
 					yield* TestClock.adjust('1 second');
@@ -316,14 +315,14 @@ layer(AdministrationFixtureLive)((it) => {
 					team: null,
 					state: 'active'
 				};
-				expect(yield* membershipRun(port)(input)).toBeNull();
+				expect(yield* membership_run(port)(input)).toBeNull();
 				expect(seen).toEqual([input]);
 				const broken: MembershipPort = {
 					async project() {
 						throw new Error('directory down');
 					}
 				};
-				expect(yield* Effect.flip(membershipRun(broken)(input))).toMatchObject({
+				expect(yield* Effect.flip(membership_run(broken)(input))).toMatchObject({
 					code: 'upstream',
 					message: 'directory down'
 				});
@@ -341,8 +340,8 @@ layer(AdministrationFixtureLive)((it) => {
 					let wakes = 0;
 					const host = {
 						...bound,
-						events: {
-							announce: Effect.sync(() => {
+						membership: {
+							announce: () => Effect.sync(() => {
 								wakes++;
 							})
 						}
@@ -352,10 +351,10 @@ layer(AdministrationFixtureLive)((it) => {
 						email,
 						team: 'Field'
 					});
-					yield* sendCode(host, email, '7.7.7.7');
+					yield* send_code(host, email, '7.7.7.7');
 					const code = lastCode();
 					wakes = 0;
-					const session = yield* verifyCode(host, email, code, '7.7.7.7');
+					const session = yield* verify_code(host, email, code, '7.7.7.7');
 					expect(wakes).toBe(1);
 					expect(
 						yield* one('SELECT email, name, kind, team FROM sys_user WHERE id = $1', session.user)
@@ -394,8 +393,8 @@ layer(AdministrationFixtureLive)((it) => {
 							params: [session.user]
 						})
 					).toBe(1);
-					expect(yield* Effect.flip(verifyCode(host, email, code, '7.7.7.7'))).toMatchObject({
-						code: 'invalidCode'
+					expect(yield* Effect.flip(verify_code(host, email, code, '7.7.7.7'))).toMatchObject({
+						code: 'invalid_code'
 					});
 					expect(wakes).toBe(1);
 				})
@@ -407,14 +406,13 @@ layer(AdministrationFixtureLive)((it) => {
 				Effect.gen(function* () {
 					const { h, founder, as, one, outbox, mail } = yield* AdministrationFixture;
 					const manifest = m;
-					let wakes = 0;
+					let commits = 0;
 					const host = {
 						...h,
 						sms: mail,
-						events: {
-							announce: Effect.sync(() => {
-								wakes++;
-							})
+						publication: () => {
+							commits++;
+							return 0;
 						}
 					};
 					const auth = yield* as(founder);
@@ -431,7 +429,7 @@ layer(AdministrationFixtureLive)((it) => {
 							sent.ids
 						)
 					).toEqual([{ n: 3 }]);
-					expect(wakes).toBe(1);
+					expect(commits).toBe(1);
 					expect(outbox.slice(-3).map((message) => message.to)).toContain('bulk-one@example.com');
 					const [before] = yield* one('SELECT count(*)::int AS n FROM sys_invitation');
 					if (typeof before?.['n'] !== 'number') throw new Error('Missing invitation count');
@@ -472,7 +470,7 @@ layer(AdministrationFixtureLive)((it) => {
 							const { to } = Schema.decodeUnknownSync(Mail)(message);
 							if (to === 'failed@example.com') throw new Error('Provider failed');
 							delivered.push(to);
-							return { providerId: 'test' };
+							return { provider_id: 'test' };
 						}
 					};
 					const host = { ...h, mail };

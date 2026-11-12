@@ -22,8 +22,9 @@ Add no browser launcher or `.svelte` mounts to templates. Never give a suite its
 
 - `TestWorkspace.layer({ root })` compiles real source and supplies the engine, fake facilities, clock and a `node:vm` guest runner; it owns database cleanup.
 - One file's tests share one workspace, in order: rows stay from test to test, so filter to the rows a test made. A cron slot that wrote runs once per file: start each test's clock past the last one's.
-- A model `effect`, an automation start and a schedule queue a run: `t.runDue()` runs it and answers the failed ones; `t.settled()` only waits.
-- `t.storedRead` supplies the native whole-row reader; `t.bodyActs(holder)` the native `many` writer. Keep declared types; never cast a fake `ctx`.
+- A model `effect`, a job automation and a schedule queue a run: `t.run_due()` runs it and answers the failed ones; `t.settled()` only waits. Use `caller.run(name, input, JobResult)` for a job receipt, then inspect that run's completion separately. Import the real `JobResult` schema from `@norbital-ai/bolt-cli/test`.
+- A call automation returns its native output immediately, without a run row. `caller.run(name, input, outputSchema)` requires its actual result decoder; the decoder determines the result type and a mismatch fails with `SchemaError`. Pass job options after the decoder. There is no arbitrary result type argument or omitted-decoder fallback.
+- `query`, `history` and `act` return schemas derived from the running manifest. `t.stored_query` supplies the native whole-row reader; `yield* t.body_acts(holder)` the native atomic act-map writer. Their dynamic fields are not an unrelated authored type. Decode the page or fields a test uses with `Schema.decodeUnknownEffect`; for already-revived decimal/date values, use the native type schema (`Schema.toType(input_schema(...))`). Preserve native values rather than serializing them through JSON. Never cast a fake `ctx` or fabricate a generic schema predicate.
 - Native engine tests use PGlite and maintained migration fixtures. Dispose resources.
 
 ## Test seed pack
@@ -34,11 +35,11 @@ Add no browser launcher or `.svelte` mounts to templates. Never give a suite its
 
 ## Syncs and envoys
 
-- Named instances are `connections`; seed unnamed ones as `sys_integration` rows or create them.
-- Inbound conversation: `t.receive('<slot>', message)` ingests and waits for queued work.
+- Create runtime accounts as `sys_integration` rows or seed unpaired rows. No source connection slot names an account.
+- Inbound conversation: `t.receive('<instance id>', message)` ingests and waits for queued work.
 - Remote reads: `t.syncs.read('<model>.sync.<sync>', { instance })`; set `t.fakes.links.answer` or `.page`. `answer(instance, op)` answers `{ status, body }`, `body` the decoded value `ctx.request` yields; `op` is the request as made. Assert rows, cursor and a repeated read.
 - Queued writes: `t.syncs.deliver()` drains the outbox; sends appear in `t.fakes.links.sent`. Read the row's `$sync['<sync>']` status.
-- File syncs: `t.as(member).start('<model>.sync.<sync>', input)` after `upload('<model>.$import.<sync>', file)`; `t.runDue()` executes. Decode the `sys_run` output; resolve that run's exact file through `sys_file` and `t.fakes.files.blobs`.
+- File syncs: `(yield* t.as(member)).sync_control('<model>', '<sync>', input)` after `upload('<model>.$import.<sync>', file)`; `t.run_due()` executes. Decode the `sys_run` output; resolve that run's exact file through `sys_file` and `t.fakes.files.blobs`. Manual remote refresh uses the same native control with `{}`, a read grant and `capabilities.syncs: ['model.sync_name']`; `ctx.run` and `ctx.schedule` accept only automations.
 - Read a run through `t.db.rows`; `Sql` is a plain `{ text, params }` value.
 - Templates do not retest envoy admission or transport.
 

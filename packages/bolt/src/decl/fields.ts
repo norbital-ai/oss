@@ -18,7 +18,6 @@ import type {
 	InstantPeriod,
 	Json,
 	MimePattern,
-	Msg,
 	PlainDate,
 	PlainTime,
 	Point,
@@ -47,14 +46,14 @@ export type {
 	Precision as InstantPrecision
 } from '@norbital-ai/std/kind';
 type SeqPattern = `${string}{${string}}${string}`;
-/** One state of a `state` field: where a write may move it, and what a write may change while the row is in it. */
+/** One state of a state field, its outgoing transitions and its automatic entry timestamp. */
 type StateSpec = {
 	/** The states a write may move to from this one. Absent, this state is terminal: any move out is refused. */
 	to?: readonly string[];
-	/** The other fields a write may change in this state: `'all'` (the default), `'none'`, or these fields. */
-	edit?: 'all' | 'none' | readonly string[];
+	/** The instant field filled with the invocation clock when a row enters this state. */
+	stamp?: string;
 };
-/** Options every field kind takes: `optional`, `default`, `unique`, a `label` and `help` message, and `hidden`. */
+/** Shared storage options. Labels and help text come from the message catalogue. */
 export type FieldCommon = {
 	many?: true;
 	min_items?: number;
@@ -69,14 +68,11 @@ export type FieldCommon = {
 	default?: Json;
 	/** No two rows hold the same value: a native constraint, so a duplicate write is refused. */
 	unique?: true;
-	label?: Msg;
-	/** Guidance shown under the field in a form. */
-	help?: Msg;
 	/** Left out of generated forms; the value is still stored and read. */
 	hidden?: true;
 };
 
-/** Each stored field kind with its own options, beside the options every field shares (`label`, `optional`, …). */
+/** Each stored field kind with its own options, beside the options every field shares (`optional`, `default`, …). */
 export type StoredArm =
 	| { kind: 'text'; format?: TextFormat; max?: number; many?: true }
 	| { kind: 'int'; min?: number; max?: number }
@@ -323,11 +319,9 @@ type Common<D> = {
 	optional?: true;
 	default?: D;
 	unique?: true;
-	label?: Msg;
-	help?: Msg;
 	hidden?: true;
 };
-type DerivedCommon = { unique?: true; label?: Msg; help?: Msg; hidden?: true };
+type DerivedCommon = { unique?: true; hidden?: true };
 // one table built once: `Extract` over the arms re-distributes for every literal
 type Arms = { [A in StoredArm | InputArm as A['kind']]: A };
 type ArmOf<K> = K extends keyof Arms ? Arms[K] : never;
@@ -415,8 +409,7 @@ export type ValidField<T, F> = T extends {
 		? {
 				kind: 'state';
 				initial: keyof S & string;
-				// `edit` may also name an owned relationship's inverse: checked by `Verify`, not here
-				states: StateTransitions<S>;
+				states: StateTransitions<S, KeyFor<F, { kind: 'instant'; many?: never }>>;
 			} & DerivedCommon
 		: T extends { kind: 'money' }
 			? {
@@ -443,5 +436,6 @@ type MoneyCurrency<T> = T extends { currency: string }
 		? unknown
 		: { currency: 'error: money needs a currency (none in +workspace.ts)' };
 
-type StateTransitions<S> = { [K in keyof S]: StateTransition<keyof S & string> };
-type StateTransition<Keys> = { to?: readonly Keys[]; edit?: 'all' | 'none' | readonly string[] };
+type StateTransitions<S, Stamp extends string> = {
+	[K in keyof S]: { to?: readonly (keyof S & string)[]; stamp?: Stamp };
+};

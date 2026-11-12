@@ -60,7 +60,7 @@
 				{/each}
 				<div>
 					<dt class="text-muted-foreground">{t('Duration')}</dt>
-					<dd class="text-base font-semibold">{(run.summary.durationMs / 1000).toFixed(2)}s</dd>
+					<dd class="text-base font-semibold">{(run.summary.duration_ms / 1000).toFixed(2)}s</dd>
 				</div>
 			</dl>
 		{/if}

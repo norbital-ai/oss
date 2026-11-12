@@ -1,48 +1,19 @@
 import { Effect, Schema } from 'effect';
-import { KindSchema, type OutputKind } from '@norbital-ai/std/kind';
-import type { Json } from '../decl/values.ts';
+import { KindSchema } from '@norbital-ai/std/kind';
 import type { WireRead } from './wire.ts';
 import type { ShellBoot } from '../shell/nav.ts';
+import { ReadCatalog } from './read-answer.ts';
+import { EngineActorSchema } from './schema.ts';
+import { OperationOutputs } from './output-contract.ts';
 
 const optionalString = Schema.optionalKey(Schema.String);
 const strings = Schema.Array(Schema.String);
 const trueKey = Schema.optionalKey(Schema.Literal(true));
-const common = {
-	many: trueKey,
-	min_items: Schema.optionalKey(Schema.Number),
-	max_items: Schema.optionalKey(Schema.Number),
-	key: optionalString,
-	optional: trueKey,
-	default: Schema.optionalKey(Schema.Json),
-	unique: trueKey,
-	label: optionalString,
-	help: optionalString,
-	hidden: trueKey
-};
 const predicate = Schema.Record(Schema.String, Schema.Json);
 const kind = KindSchema;
 const fields = () => Schema.Record(Schema.String, kind);
 /** Metadata codecs are shared by browser-catalog emission and public hydration. */
 export const FieldsSchema = fields();
-export const OutputKindSchema: Schema.Codec<OutputKind, Json> = Schema.suspend(() =>
-	Schema.Union([
-		kind,
-		Schema.Struct({ ...common, kind: Schema.Literal('row'), of: Schema.String }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('object'),
-			fields: Schema.Record(Schema.String, OutputKindSchema),
-			rest: Schema.optionalKey(OutputKindSchema)
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('record'), of: OutputKindSchema }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('union'),
-			by: Schema.String,
-			arms: Schema.Record(Schema.String, Schema.Record(Schema.String, OutputKindSchema))
-		})
-	])
-);
 const SyncExposureSchema = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('file'),
@@ -61,7 +32,7 @@ const childIdentity = { model: Schema.String, parent: Schema.String, owned: true
 const child = Schema.Struct({
 	...childIdentity,
 	create: Schema.optionalKey(
-		Schema.Struct({ columns: strings, filled: Schema.optionalKey(strings), proposalOnly: trueKey })
+		Schema.Struct({ columns: strings, filled: Schema.optionalKey(strings), proposal_only: trueKey })
 	),
 	update: Schema.optionalKey(Schema.Struct({ columns: strings })),
 	delete: trueKey,
@@ -80,18 +51,12 @@ const relation = {
 const exposure = {
 	label: strings,
 	record_label: optionalString,
-	labelPaths: Schema.optionalKey(strings),
+	label_paths: Schema.optionalKey(strings),
 	search: Schema.optionalKey(strings),
 	semantic: trueKey,
 	audit: Schema.optionalKey(Schema.Literal(false)),
 	indexes: Schema.optionalKey(
 		Schema.Record(Schema.String, Schema.Struct({ input: fields(), description: Schema.String }))
-	),
-	queries: Schema.optionalKey(
-		Schema.Record(
-			Schema.String,
-			Schema.Struct({ input: fields(), output: OutputKindSchema, description: Schema.String })
-		)
 	),
 	fields: fields(),
 	relations: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct(relation))),
@@ -103,13 +68,13 @@ const exposure = {
 		Schema.Struct({
 			columns: strings,
 			filled: Schema.optionalKey(strings),
-			proposalOnly: trueKey,
+			proposal_only: trueKey,
 			with: children
 		})
 	),
 	update: Schema.optionalKey(Schema.Struct({ columns: strings, with: children })),
-	readonlyFields: Schema.optionalKey(
-		Schema.Record(Schema.String, Schema.Literals(['syncOwned', 'ownedParent']))
+	readonly_fields: Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.Literals(['sync_owned', 'owned_parent']))
 	),
 	description: optionalString,
 	delete: trueKey,
@@ -128,11 +93,12 @@ export const ModelExposureSchema = Schema.Struct({
 		)
 	),
 	layers: Schema.optionalKey(strings),
-	locked: Schema.optionalKey(predicate)
+	locks: Schema.optionalKey(Schema.Array(Schema.Struct({ where: predicate, except: Schema.optionalKey(strings) })))
 });
 /** A declared automation the caller may start (ui's `AutomationExposure`). */
 export const AutomationExposureSchema = Schema.Struct({
 	input: fields(),
+	mode: Schema.optionalKey(Schema.Literals(['job', 'call'])),
 	description: optionalString
 });
 
@@ -146,21 +112,23 @@ export const PublicBoot = Schema.Struct({
 		handle: optionalString,
 		currency: optionalString
 	}),
-	actor: Schema.Json,
+	actor: Schema.NullOr(EngineActorSchema),
 	location: Schema.Struct({ pathname: Schema.String, search: Schema.String }),
 	base: Schema.String,
-	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, siteKey: optionalString })),
+	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, site_key: optionalString })),
 	kiosk: Schema.NullOr(Schema.String),
 	contract: Schema.String,
 	describe: Schema.Boolean,
 	messages: Schema.Record(Schema.String, Schema.String),
 	catalog: PublicCatalog,
-	automations: Schema.Record(Schema.String, AutomationExposureSchema)
+	read_catalog: ReadCatalog,
+	automations: Schema.Record(Schema.String, AutomationExposureSchema),
+	operation_outputs: OperationOutputs
 });
 export interface PublicBoot extends Schema.Schema.Type<typeof PublicBoot> {}
 
 /** A page query and its first streamed registration use the same request key. */
-export const publicReadKey = (read: WireRead) => JSON.stringify(read);
+export const public_read_key = (read: WireRead) => JSON.stringify(read);
 export const PublicReads = Schema.Record(Schema.String, Schema.Json);
 export type PublicReads = typeof PublicReads.Type;
 
@@ -203,10 +171,12 @@ export const toPublicBoot = (
 		visitor: boot.visitor,
 		kiosk: options.kiosk,
 		contract: boot.contract,
-		describe: options.describe ?? (boot.visitor === null && boot.aiUnconfigured !== true),
+		describe: options.describe ?? (boot.visitor === null && boot.ai_unconfigured !== true),
 		messages: options.messages ?? {},
 		catalog: boot.catalog,
-		automations: boot.automations
+		read_catalog: boot.read_catalog,
+		automations: boot.automations,
+		operation_outputs: boot.operation_outputs
 	});
 
 export class PublicHydrationFailure extends Schema.TaggedError<PublicHydrationFailure>()(

@@ -34,7 +34,8 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	import { Button } from '../primitives/button/index.js';
 	import { useBolt } from '../client/context.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
-	import { localExposure, matches, sortable, sortRows } from '../filter/filter.js';
+	import { localExposure, matches, sortRows } from '../filter/local.js';
+	import { sortable } from '../filter/order.js';
 	import { humanize, msg } from '../text/messages.js';
 	import { searchRows } from '../table/model.js';
 	import { viewState } from '../filter/view-state.svelte.js';
@@ -53,7 +54,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 		key: () => key,
 		model: () => LOCAL,
 		catalog: () => catalog,
-		initialFilter: () => undefined
+		initial_filter: () => undefined
 	});
 	let q = $state('');
 	const shown = $derived(
@@ -92,16 +93,16 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 		<EmptyState
 			variant="card"
 			icon="search"
-			title={msg(bolt, 'view.noMatch', 'Nothing matches this search or filter')}
-			hint={msg(bolt, 'table.noMatchHint', 'Try a different search, or clear the filters.')}
+			title={msg(bolt, 'view.noMatch')}
+			hint={msg(bolt, 'table.noMatchHint')}
 		>
 			<Button
 				variant="outline"
 				onclick={() => {
 					view.clear();
 					q = '';
-				}}>{msg(bolt, 'view.clearAll', 'Clear all')}</Button
+				}}>{msg(bolt, 'view.clearAll')}</Button
 			>
 		</EmptyState>
-	{:else}<EmptyState variant="card" title={msg(bolt, 'view.empty', 'Nothing here yet')} />{/if}
+	{:else}<EmptyState variant="card" title={msg(bolt, 'view.empty')} />{/if}
 </Cover>

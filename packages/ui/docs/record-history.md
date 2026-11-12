@@ -13,11 +13,11 @@ Use `history` to include related models: each source names its model and the `wh
 ```svelte
 <RecordShell
 	of="projects"
-	id={projectId}
+	id={project_id}
 	history={{
 		sources: [
-			{ of: 'trials', where: { project_id: { eq: projectId } } },
-			{ of: 'submissions', where: { project_id: { eq: projectId } } }
+			{ of: 'trials', where: { project_id: { eq: project_id } } },
+			{ of: 'submissions', where: { project_id: { eq: project_id } } }
 		]
 	}}
 />

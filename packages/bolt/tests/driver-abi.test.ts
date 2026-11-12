@@ -8,7 +8,7 @@ import { SendRefused } from '../src/engine/conversations/status.ts';
 import { linkCalls, openLink } from '../src/engine/integrations/abi.ts';
 import type { DriverOpen, Link, Provider } from '../src/engine/integrations/driver.ts';
 import type { Json } from '../src/decl/values.ts';
-import { loopbackTcpPort } from '../src/node/tcp.ts';
+import { loopback_tcp_port } from '../src/node/tcp.ts';
 
 describe('the driver ABI, engine side', () => {
 	it.effect('interrupting a call aborts the signal the provider was given', () =>
@@ -77,7 +77,7 @@ describe('the driver ABI, engine side', () => {
 					close: async () => {},
 					send: async () => {
 						sent++;
-						if (sent === 1) return { providerId: 'p1', presumeAfterMs: 60_000 };
+						if (sent === 1) return { provider_id: 'p1', presume_after_ms: 60_000 };
 						throw foreign;
 					},
 					renew: async () => '2026-10-15T00:00:00.000Z',
@@ -86,8 +86,8 @@ describe('the driver ABI, engine side', () => {
 				const run = yield* FiberSet.makeRuntimePromise<never>();
 				const calls = linkCalls(link, run, 'test');
 				expect(yield* calls.send({ to: '+65', text: 'hi' })).toEqual({
-					providerId: 'p1',
-					presumeAfterMs: 60_000
+					provider_id: 'p1',
+					presume_after_ms: 60_000
 				});
 				const refused = yield* Effect.flip(calls.send({ to: '+65', text: 'hi' }));
 				expect(refused).toBeInstanceOf(SendRefused);
@@ -97,7 +97,7 @@ describe('the driver ABI, engine side', () => {
 					permanent: true
 				});
 				// A foreign JavaScript provider can violate the ABI despite this graph's typed interface.
-				Object.defineProperty(link, 'send', { value: async () => ({ providerId: 7 }) });
+				Object.defineProperty(link, 'send', { value: async () => ({ provider_id: 7 }) });
 				expect(
 					yield* Effect.flip(linkCalls(link, run, 'test').send({ to: '+65', text: 'hi' }))
 				).toMatchObject({ _tag: 'FacilityFailure', kind: 'upstream' });
@@ -154,12 +154,12 @@ describe('the driver ABI, engine side', () => {
 				syncs: [],
 				personal: false,
 				configuration: {},
-				webhookUrl: 'https://test.example/hooks/test',
-				redirectUrl: 'https://test.example/hooks/oauth/callback',
+				webhook_url: 'https://test.example/hooks/test',
+				redirect_url: 'https://test.example/hooks/oauth/callback',
 				state: async () => 'test-state',
 				fetch: globalThis.fetch,
-				tcp: loopbackTcpPort,
-				oauthClient: async () => undefined,
+				tcp: loopback_tcp_port,
+				oauth_client: async () => undefined,
 				credentials: { load: async () => new Map<string, Json>(), write: async () => undefined },
 				emit: async () => undefined,
 				status: async () => undefined,

@@ -2,24 +2,25 @@
 // row: literals and the row's own fields only, never a relation. With `fields` it is DDL: literals typed and inlined,
 // two-valued; else literals are bound through `bind`.
 import { Effect, Predicate } from 'effect';
+import { literal as quote_literal } from '@norbital-ai/std/sql';
 import { isArray } from 'effect/Array';
 import type { Json } from '../values.ts';
 import type { Arg, Pred } from '../ir.ts';
 import { q, type FieldInfo } from '../catalog.ts';
 import { StoreError } from '../errors.ts';
-import { databaseValue, periodTest } from '../read/values.ts';
+import { database_value, period_test } from '../read/values.ts';
 
 /** What binds a literal of a statement being built: its `$n`. */
 export type Binder = { p(v: Json): string };
-const derive = (message: string) => Effect.fail(StoreError.of('invalidWhere', 'derive', message));
+const derive = (message: string) => Effect.fail(StoreError.of('invalid_where', 'derive', message));
 
-export const ownPredSql: (
+export const own_pred_sql: (
 	p: Pred,
 	row: string,
 	c: Binder,
 	twoValued?: boolean,
 	fields?: ReadonlyMap<string, FieldInfo>
-) => Effect.Effect<string, StoreError> = Effect.fn('Store.ownPredSql')(function* (
+) => Effect.Effect<string, StoreError> = Effect.fn('Store.own_pred_sql')(function* (
 	p: Pred,
 	row: string,
 	c: Binder,
@@ -32,19 +33,19 @@ export const ownPredSql: (
 		return row === '' ? q(name) : row.endsWith('.') ? `${row}${q(name)}` : `(${row}).${q(name)}`;
 	};
 	const literal = (value: Json, type?: string): string => {
-		if (!ddl) return c.p(databaseValue(value));
+		if (!ddl) return c.p(database_value(value));
 		if (value === null) return 'null';
 		if (typeof value === 'boolean') return String(value);
-		return `'${String(typeof value === 'object' ? JSON.stringify(value) : value).replaceAll("'", "''")}'::${type ?? 'text'}`;
+		return `${quote_literal(String(typeof value === 'object' ? JSON.stringify(value) : value))}::${type ?? 'text'}`;
 	};
 	const val = (arg: Arg, field: string, type = fields?.get(field)?.pg) =>
 		arg._tag === 'Field'
 			? Effect.succeed(col(arg.field))
 			: arg._tag === 'Lit'
-				? Effect.succeed(literal(databaseValue(arg.value), type))
+				? Effect.succeed(literal(database_value(arg.value), type))
 				: derive("a same-row where takes literals and the row's own fields only");
 	const leaf = (sql: string) => (twoValued ? `coalesce(${sql}, false)` : ddl ? sql : `(${sql})`);
-	const child = (pred: Pred) => ownPredSql(pred, row, c, twoValued, fields);
+	const child = (pred: Pred) => own_pred_sql(pred, row, c, twoValued, fields);
 	const OPS = {
 		eq: '=',
 		ne: ddl ? 'is distinct from' : 'IS DISTINCT FROM',
@@ -81,19 +82,19 @@ export const ownPredSql: (
 			if (fields !== undefined) {
 				const type = fields.get(p.field)?.pg ?? 'text';
 				if (!twoValued)
-					return `${col(p.field)}${p.negated ? ' not' : ''} in (${p.args.map((value) => literal(databaseValue(value), type)).join(', ')})`;
+					return `${col(p.field)}${p.negated ? ' not' : ''} in (${p.args.map((value) => literal(database_value(value), type)).join(', ')})`;
 				const hit = leaf(
-					`${col(p.field)} = any(array[${p.args.map((value) => literal(databaseValue(value), type)).join(', ')}]::${type}[])`
+					`${col(p.field)} = any(array[${p.args.map((value) => literal(database_value(value), type)).join(', ')}]::${type}[])`
 				);
 				return p.negated ? `not ${hit}` : hit;
 			}
 			return leaf(
-				`${col(p.field)}::text ${p.negated ? 'NOT ' : ''}IN (SELECT jsonb_array_elements_text(${c.p(p.args.map((value) => databaseValue(value)))}::jsonb))`
+				`${col(p.field)}::text ${p.negated ? 'NOT ' : ''}IN (SELECT jsonb_array_elements_text(${c.p(p.args.map((value) => database_value(value)))}::jsonb))`
 			);
 		}
 		case 'like':
 			return leaf(
-				`${col(p.field)} ${ddl ? 'ilike' : 'ILIKE'} ${ddl ? `'${p.pattern.replaceAll("'", "''")}'` : c.p(p.pattern)}`
+				`${col(p.field)} ${ddl ? 'ilike' : 'ILIKE'} ${ddl ? quote_literal(p.pattern) : c.p(p.pattern)}`
 			);
 		case 'text': {
 			const normalize = (value: string) =>
@@ -106,30 +107,24 @@ export const ownPredSql: (
 						'database-clock age predicates belong to queries, not persistent schema rules'
 					)
 				: leaf(`${col(p.field)} < now() - ${literal(p.seconds, 'float8')} * interval '1 second'`);
-		case 'list': {
-			if (p.op === 'isEmpty')
-				return leaf(`cardinality(${col(p.field)}) ${p.arg === true ? '= 0' : '> 0'}`);
-			const values = isArray<typeof p.arg>(p.arg) ? p.arg : [p.arg];
+		case 'has': {
+			const values = [p.arg];
 			const array = ddl
 				? `array[${values.map((value) => literal(value, 'text')).join(', ')}]::text[]`
 				: `ARRAY(SELECT jsonb_array_elements_text(${c.p(values)}::jsonb))`;
-			return leaf(`${col(p.field)} ${p.op === 'hasAny' ? '&&' : '@>'} ${array}`);
+			return leaf(`${col(p.field)} @> ${array}`);
 		}
 		case 'period': {
 			const field = fields?.get(p.field),
-				date = field?.periodOf === 'date',
+				date = field?.period_of === 'date',
 				type = date ? 'date' : 'timestamptz';
 			if (p.op === 'contains')
 				return leaf(`${col(p.field)} @> ${yield* val(p.arg, p.field, type)}`);
 			const range = `${date ? 'daterange' : 'tstzrange'}(${yield* val(p.lo, p.field, type)}, ${yield* val(p.hi, p.field, type)}, '${date ? '[]' : '[)'}')`;
-			return leaf(periodTest(p.op, col(p.field), range, date));
+			return leaf(period_test(p.op, col(p.field), range, date));
 		}
 		case 'json':
-			return leaf(
-				'contains' in p
-					? `${col(p.field)} @> ${literal(p.contains, 'jsonb')}`
-					: `(${col(p.field)} = '[]'::jsonb) = ${p.isEmpty}`
-			);
+			return leaf(`${col(p.field)} @> ${literal(p.contains, 'jsonb')}`);
 		case 'one':
 		case 'many':
 		case 'count':

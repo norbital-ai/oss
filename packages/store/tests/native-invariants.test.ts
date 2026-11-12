@@ -174,7 +174,7 @@ it.effect('raw partial uniqueness and range exclusion retain their native atomic
 					room: { kind: 'text' },
 					during: { kind: 'period', of: 'date' }
 				},
-				noOverlap: [{ key: ['room'], period: 'during' }]
+				no_overlap: [{ key: ['room'], period: 'during' }]
 			})
 		});
 		const pg = yield* database;
@@ -211,7 +211,6 @@ const stateDeclaration = schema({
 	ticket: table({
 		key: 'text',
 		audit: true,
-		managedDeletes: true,
 		fields: {
 			title: { kind: 'text' },
 			note: { kind: 'text', optional: true },
@@ -223,12 +222,16 @@ const stateDeclaration = schema({
 				initial: 'draft',
 				states: {
 					draft: { to: ['review'] },
-					review: { to: ['draft', 'done'], edit: ['note'] },
-					done: { edit: 'none' }
+					review: { to: ['draft', 'done'] },
+					done: {}
 				}
 			}
 		},
-		computed: { shout: { kind: 'text', expr: { upper: { field: 'title' } } } }
+		computed: { shout: { kind: 'text', expr: { upper: { field: 'title' } } } },
+		locks: {
+			review: { where: { status: { eq: 'review' } }, except: ['status', 'note'] },
+			done: { where: { status: { eq: 'done' } } }
+		}
 	})
 });
 
@@ -242,12 +245,16 @@ it.effect('raw owned-child and through-link writes respect the locked parent sta
 						kind: 'state',
 						initial: 'open',
 						states: {
-							open: { to: ['closed'], edit: ['children', 'tags'] },
-							closed: { edit: 'none' }
+							open: { to: ['closed'] },
+							closed: {}
 						}
 					}
 				},
-				through: { tags: { table: 'link', from: 'parent', to: 'tag' } }
+				through: { tags: { table: 'link', from: 'parent', to: 'tag' } },
+				locks: {
+					open: { where: { status: { eq: 'open' } }, except: ['status', 'children', 'tags'] },
+					closed: { where: { status: { eq: 'closed' } } }
+				}
 			}),
 			child: table({
 				key: 'text',
@@ -260,7 +267,7 @@ it.effect('raw owned-child and through-link writes respect the locked parent sta
 			link: table({
 				key: 'text',
 				fields: {
-					parent: { kind: 'ref', to: 'parent', onDelete: 'cascade' },
+					parent: { kind: 'ref', to: 'parent', on_delete: 'cascade' },
 					tag: { kind: 'ref', to: 'tag' }
 				}
 			})
@@ -283,8 +290,10 @@ it.effect('raw owned-child and through-link writes respect the locked parent sta
 		])
 			yield* rejected(pg, text, '23514');
 		expect(yield* query(pg, 'SELECT note FROM child')).toEqual([{ note: 'old' }]);
-		// Referential deletion is still owned by PostgreSQL; its absent parent cannot be edited by a child.
-		yield* script(pg, "DELETE FROM parent WHERE id='parent'");
+		yield* rejected(pg, "DELETE FROM parent WHERE id='parent'", '23514');
+		// Native restore can remove the locked root; referential deletion still owns its children.
+		yield* script(pg, `BEGIN; SELECT set_config('store.write','{"mode":"restore","actor":"restorer","at":null}',true);
+			DELETE FROM parent WHERE id='parent'; COMMIT;`);
 		expect(yield* query(pg, 'SELECT count(*)::int AS n FROM child')).toEqual([{ n: 0 }]);
 		expect(yield* query(pg, 'SELECT count(*)::int AS n FROM link')).toEqual([{ n: 0 }]);
 	})
@@ -334,7 +343,7 @@ it.effect(
 );
 
 it.effect(
-	'state edit guards use OLD state and compare physical values, including polymorphic arms',
+	'predicate locks use the OLD row and compare physical values, including polymorphic arms',
 	() =>
 		Effect.gen(function* () {
 			const pg = yield* stateDatabase;

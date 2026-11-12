@@ -22,8 +22,8 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
 	import { Popover as P } from 'bits-ui';
-	import { cn, uiText } from '../primitives/utils.js';
-	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
+	import { cn, ui_text } from '../primitives/utils.js';
+	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
 	import {
 		applyItem,
 		caretRect,
@@ -33,7 +33,7 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	} from './command-menu.js';
 
 	let { textarea, triggers }: CommandMenuProps = $props();
-	const t = uiText();
+	const t = ui_text();
 	// raw: the trigger is compared by identity
 	let found = $state.raw<Found | null>(null),
 		items = $state.raw<readonly CommandItem[]>([]),
@@ -41,26 +41,27 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 		anchor = $state.raw<DOMRect | null>(null);
 	let list = $state<HTMLElement | null>(null);
 	let pending = $state(false);
-	let requestId = 0;
+	let request_id = 0;
 	/** Esc closes the menu for this trigger until the writer types a new one. */
 	let dismissed = -1;
 	const open = $derived(found !== null && anchor !== null);
 	// a group heading is its own entry, so a long list windows over measured entries (as `Combobox`)
 	const entries = $derived(
-		items.flatMap((item, i): ({ head: string; i: number } | { i: number })[] =>
+		items.flatMap((item, i): ({ head: string; i: number } | { item: CommandItem; i: number })[] =>
 			item.group !== undefined && item.group !== items[i - 1]?.group
-				? [{ head: item.group, i }, { i }]
-				: [{ i }]
+				? [{ head: item.group, i }, { item, i }]
+				: [{ item, i }]
 		)
 	);
 	const entryOf = $derived(
 		new Map(entries.flatMap((e, k) => ('head' in e ? [] : [[e.i, k] as const])))
 	);
 	const entryKey = (k: number) => {
-		const e = entries[k]!;
-		return 'head' in e ? `head:${e.i}` : `item:${items[e.i]?.id}`;
+		const e = entries[k];
+		if (e === undefined) throw new RangeError('The command menu entry is outside its list.');
+		return 'head' in e ? `head:${e.i}` : `item:${e.item.id}`;
 	};
-	const win = virtualList({
+	const win = virtual_list({
 		count: () => entries.length,
 		key: entryKey,
 		estimate: 32,
@@ -95,13 +96,13 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 		if (ta === null) return;
 		anchor = caretRect(ta, f.start);
 		if (same) return;
-		const current = ++requestId;
+		const current = ++request_id;
 		pending = true;
 		items = [];
 		const work = f.trigger.items(f.query).pipe(
 			Effect.tap((next) =>
 				Effect.sync(() => {
-					if (current === requestId && found?.trigger === f.trigger && found.query === f.query) {
+					if (current === request_id && found?.trigger === f.trigger && found.query === f.query) {
 						items = [...next];
 						active = Math.max(
 							-1,
@@ -114,7 +115,7 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 				Effect.logWarning(error).pipe(
 					Effect.tap(() =>
 						Effect.sync(() => {
-							if (current === requestId)
+							if (current === request_id)
 								items = [{ id: 'error', label: error.message, disabled: true }];
 						})
 					)
@@ -122,7 +123,7 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 			),
 			Effect.ensuring(
 				Effect.sync(() => {
-					if (current === requestId) pending = false;
+					if (current === request_id) pending = false;
 				})
 			)
 		);
@@ -141,6 +142,10 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 		found = null;
 		refresh();
 	}
+	function explore(item: CommandItem) {
+		const drill = item.drill;
+		if (drill !== undefined) pick({ ...item, insert: drill.insert, keep: true });
+	}
 	function keydown(e: KeyboardEvent) {
 		if (!open || e.isComposing) return;
 		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -151,12 +156,10 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 		} else if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowRight') {
 			const item = items[active];
 			if (e.key === 'ArrowRight' && item?.drill === undefined) return;
-			if (item !== undefined)
-				pick(
-					e.key !== 'Enter' && item.drill
-						? { ...item, insert: item.drill.insert, keep: true }
-						: item
-				);
+			if (item !== undefined) {
+				if (e.key !== 'Enter' && item.drill !== undefined) explore(item);
+				else pick(item);
+			}
 		} else if (
 			e.key === 'Escape' ||
 			((e.key === 'Backspace' || e.key === 'ArrowLeft') &&
@@ -243,7 +246,6 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 							></li>{/if}
 						{#each win.slice(entries) as e, j (entryKey(win.start + j))}
 							{@const i = e.i}
-							{@const item = items[i]!}
 							{#if 'head' in e}
 								<li
 									role="presentation"
@@ -253,6 +255,7 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 									{e.head}
 								</li>
 							{:else}
+								{@const item = e.item}
 								<li
 									role="option"
 									aria-selected={i === active && !item.disabled}
@@ -303,7 +306,7 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 											title={item.drill.label}
 											class="absolute inset-y-0 right-0 grid w-8 place-items-center rounded-sm text-muted-foreground hover:bg-accent"
 											onmousedown={(e) => e.preventDefault()}
-											onclick={() => pick({ ...item, insert: item.drill!.insert, keep: true })}
+											onclick={() => explore(item)}
 											><Icon icon="lucide:chevron-right" class="size-3.5" /></button
 										>{/if}
 								</li>

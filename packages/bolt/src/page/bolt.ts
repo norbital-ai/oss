@@ -2,21 +2,23 @@
 import {
 	Clock,
 	Deferred,
-	type Duration,
 	Effect,
 	FiberMap,
 	Option,
 	Predicate,
 	Queue,
-	Schedule,
+	Result,
 	Schema,
+	Semaphore,
 	Stream,
 	SubscriptionRef
 } from 'effect';
 import type { HttpClient } from 'effect/http';
+import { tick } from 'svelte';
 import type { FileRef, Json } from '../decl/values.ts';
 import { Instant, PlainDate } from '@norbital-ai/std/date';
-import { reactiveClock, reactiveQuery } from '@norbital-ai/ui/effect';
+import { local_of } from '@norbital-ai/std/zone';
+import { reactive_clock, reactive_query, run } from '@norbital-ai/ui/effect';
 import type { FileUrlOptions } from '@norbital-ai/std/kind';
 import {
 	ActConflict,
@@ -29,7 +31,7 @@ import {
 	TransportFailed,
 	Unavailable
 } from '../decl/errors.ts';
-import type { ActOutcome } from '../engine/contracts.ts';
+import type { ActOutcome, EngineActor } from '../engine/contracts.ts';
 import {
 	RecordCapabilitiesSchema,
 	RestorePreviewSchema,
@@ -39,14 +41,14 @@ import { ApprovalViewSchema } from '../protocol/approval-view.ts';
 import {
 	HEADERS,
 	PATHS,
-	refusalOfStatus,
+	refusal_of_status,
 	uuidv7,
 	type Frame,
 	type LiveBody,
 	type PatchOp,
 	type WireRead
 } from '../protocol/wire.ts';
-import { ActReply, LiveReply, QReply, WireError } from '../protocol/schema.ts';
+import { ActReply, EngineActorSchema, LiveReply, QReply, WireError, type LocalFilterField } from '../protocol/schema.ts';
 import {
 	liveStream,
 	pageSignals,
@@ -55,43 +57,61 @@ import {
 	type EventSourceLike,
 	type Signals
 } from './stream.ts';
-import { browserCatalog, type BrowserCatalog } from '../protocol/catalog.ts';
-import { decodeView, type Catalog } from '@norbital-ai/store';
-import { storeSync } from '../protocol/errors.ts';
+import { browser_catalog, type BrowserCatalog } from '../protocol/catalog.ts';
+import { decode_view, type Catalog } from '@norbital-ai/store';
 import type { Query } from './page-bolt.ts';
-import { readValue } from './read-value.ts';
+import { page_reads, readValue } from './read-value.ts';
+import { read_wire, type ReadCatalog } from '../protocol/read-answer.ts';
+import { act_output, call_output, job_receipt, type OperationOutputs } from '../protocol/output-contract.ts';
 import type { ConvertSource, PreviewPdfOptions } from '../decl/runtime/facilities.ts';
 import { browserTransport } from '../protocol/client.ts';
-import { FileRefSchema, storedFileUrl } from './file-ref.ts';
-import { encodeWire, type Wired } from '@norbital-ai/std/wire';
+import { FileRefSchema, stored_file_url } from './file-ref.ts';
+import { encode_wire, type Wired } from '@norbital-ai/std/wire';
+
+/** The optional document bridge a fleet host uses to inspect mounted snapshot clients without a live stream. */
+export interface PageSnapshotHost {
+	/** Set before the page boots; absent or `stream` keeps normal browser streaming. */
+	bolt_live_mode?: 'stream' | 'snapshot';
+	/** Installed read-only while snapshot clients are mounted; removed when the last client's scope closes.
+	 * Resolves after their current queries consume refreshed answers and Svelte renders; read failures reject. */
+	readonly bolt_refresh?: () => Promise<void>;
+}
+declare global {
+	interface Window extends PageSnapshotHost {}
+}
 
 export type BoltConfig = {
-	actor: Json;
+	/** Native shape; source identity admission establishes the actor's declared names in this release. */
+	actor: EngineActor | null;
+	/** The declared results of the automations this caller may start; every committed answer decodes against them. */
+	operation_outputs: OperationOutputs;
 	locale: string;
 	tz?: string;
 	messages?: Readonly<Record<string, string>>;
 	base?: string;
 	fetch?: typeof fetch;
-	httpClient?: HttpClient.HttpClient;
-	openStream?: (url: string) => EventSourceLike;
-	/** Current reads are read again on this interval instead of streamed: an engine whose responses never stream. */
-	poll?: Duration.Input;
+	http_client?: HttpClient.HttpClient;
+	open_stream?: (url: string) => EventSourceLike;
+	/** A browser without streams reads on mount and explicit refresh, with no polling timer. */
+	live?: NonNullable<PageSnapshotHost['bolt_live_mode']>;
 	signals?: Signals;
 	uuid?: () => string;
 	now?: () => string;
-	initialRead?: (read: WireRead) => Json | undefined;
+	initial_read?: (read: WireRead) => Json | undefined;
 	catalog?: BrowserCatalog;
+	read_catalog?: ReadCatalog;
 	describe?: boolean;
 	contract?: string;
-	onNotice?: (notice: Row) => void;
+	on_notice?: (notice: Row) => void;
 };
 type Row = { readonly [field: string]: Json };
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 type Paint = { model: string; apply(page: Json): Json };
-type ViewState = { value: Json | undefined; error: ReadFailed | undefined; sequence: number };
+type ViewState = { value: Json | undefined; error: ReadFailed | TransportFailed | undefined; sequence: number };
 type ViewConsumer = {
 	readonly fiberId: number;
 	readonly delivered: SubscriptionRef.SubscriptionRef<number>;
+	readonly validate: (value: Json) => ReadFailed | undefined;
 };
 type View = {
 	id: string;
@@ -103,7 +123,17 @@ type View = {
 	registered: boolean;
 	state: SubscriptionRef.SubscriptionRef<ViewState>;
 };
-const typed = readValue<Json>;
+/** The fleet marks a document before it boots; ordinary workspace tabs retain streaming. */
+export const page_live_mode = (): NonNullable<PageSnapshotHost['bolt_live_mode']> =>
+	typeof window !== 'undefined' && Object.getOwnPropertyDescriptor(window, 'bolt_live_mode')?.value === 'snapshot'
+		? 'snapshot' : 'stream';
+const snapshot_refreshers = new Set<() => Effect.Effect<void, ReadFailed | TransportFailed>>();
+/** The host awaits this before inspecting a fleet document, including its next Svelte render. */
+const refresh_page: NonNullable<PageSnapshotHost['bolt_refresh']> = () => run(
+	Effect.forEach([...snapshot_refreshers], (refresh) => refresh(), { discard: true }).pipe(
+		Effect.andThen(Effect.promise(tick))
+	)
+);
 const CapabilitiesAnswer = Schema.Struct({ value: RecordCapabilitiesSchema });
 const FileAnswer = FileRefSchema;
 const FilterStep = Schema.Union([
@@ -170,6 +200,17 @@ function settled(
 			return Effect.fail(new ActUnknown({ invocation: outcome.invocation }));
 	}
 }
+/** A committed operation already happened: an answer that breaks its declared result is a protocol failure, never a refusal. */
+const declared = <A>(schema: () => Schema.Decoder<A>, output: Json) =>
+	Effect.try({
+		try: () => Schema.decodeUnknownSync(schema())(output),
+		catch: (error) => new ProtocolFailed({
+			message: `The operation committed, but its answer does not match its declared result: ${error instanceof Error ? error.message : String(error)}`
+		})
+	});
+const committedAs = <A>(read: (output: Json) => Effect.Effect<A, ProtocolFailed>, message: string) =>
+	(outcome: Effect.Success<ReturnType<typeof settled>>): Effect.Effect<A, ProtocolFailed> =>
+		outcome.kind === 'committed' ? read(outcome.output) : Effect.fail(new ProtocolFailed({ message }));
 const isRow = (v: Json | undefined): v is Row => Predicate.isObject(v);
 const list = (value: Json): readonly Json[] => (jsonArray(value) ? value : [value]);
 const RELATION_OPS = ['create', 'update', 'delete', 'upsert', 'link', 'unlink'];
@@ -179,14 +220,18 @@ const PAINTED = new Set(['create', 'update', 'delete']);
 export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json | undefined {
 	if (value === undefined) return undefined;
 	const pageRows = isRow(value) ? value['rows'] : undefined;
-	let page = isRow(value) && jsonArray(pageRows) ? value : null;
+	let record = isRow(value) ? value : null;
+	const page = jsonArray(pageRows);
+	let changedRows = false;
 	let rows: Json[] = jsonArray(pageRows) ? [...pageRows] : value === null ? [] : [value];
 	for (const o of ops) {
-		if (o.op === 'meta') {
-			if (page === null) return undefined;
-			page = { ...page, [o.key]: o.value };
+		if (o.op === 'meta' || o.op === 'unset') {
+			if (record === null) return undefined;
+			if (o.op === 'meta') record = { ...record, [o.key]: o.value };
+			else { const { [o.key]: _removed, ...rest } = record; record = rest; }
 			continue;
 		}
+		changedRows = true;
 		rows = rows.filter(
 			(r) => !isRow(r) || r['id'] !== (o.op === 'remove' ? o.id : isRow(o.row) ? o.row['id'] : null)
 		);
@@ -195,7 +240,8 @@ export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json 
 			rows.splice(o.index, 0, o.row);
 		}
 	}
-	if (page !== null) return { ...page, rows };
+	if (page && record !== null) return { ...record, rows };
+	if (!changedRows && record !== null) return record;
 	return rows.length > 1 ? undefined : (rows[0] ?? null);
 }
 
@@ -224,7 +270,7 @@ function paintOf(model: string, verb: string, input: Json, key: string): Paint {
 		return { model, apply: (v) => rows(v, (rs) => [...created, ...rs]) };
 	}
 	if (verb === 'delete') {
-		const gone = new Set(list((isRow(input) ? input['target'] : null) ?? null).map(String));
+		const gone = new Set(list(input).flatMap((row) => isRow(row) && isRow(row['target']) ? [String(row['target']['id'])] : []));
 		return {
 			model,
 			apply: (v) => rows(v, (rs) => rs.filter((r) => !gone.has(String(r['id']))))
@@ -239,7 +285,7 @@ function paintOf(model: string, verb: string, input: Json, key: string): Paint {
 					([, v]) => !(isRow(v) && Object.keys(v).some((k) => RELATION_OPS.includes(k)))
 				)
 			);
-			for (const id of list(x['target'] as Json)) sets.set(String(id), set);
+			if (isRow(x['target'])) sets.set(String(x['target']['id']), set);
 		}
 	return {
 		model,
@@ -250,21 +296,23 @@ function paintOf(model: string, verb: string, input: Json, key: string): Paint {
 	};
 }
 
-export const createBolt = (config: BoltConfig) =>
+export const create_bolt = (config: BoltConfig) =>
 	Effect.gen(function* () {
+		const actor = yield* decode(Schema.NullOr(EngineActorSchema), config.actor);
+		const live_mode = config.live ?? page_live_mode();
 		const base = config.base ?? '';
 		const transport = browserTransport(config);
 		const uuid = config.uuid ?? uuidv7;
 		const views = new Map<string, View>();
 		const paints = new Set<Paint>();
-		const revisions = new Map<string, number>();
 		const waiters = new Map<Deferred.Deferred<void>, number>();
 		const grace = yield* FiberMap.make<string, void, never>();
 		const reconnects = yield* Queue.sliding<void>(1);
 		const status = yield* SubscriptionRef.make<SyncStatus>('idle');
+		const refresh_lock = yield* Semaphore.make(1);
 		const live = `${base}${PATHS.live}`;
-		// a page's own stream is shared with the browser's other tabs (`sharedSource`); a given `openStream` is not
-		const shared = config.openStream === undefined && shareable();
+		// a page's own stream is shared with the browser's other tabs (`sharedSource`); a given `open_stream` is not
+		const shared = live_mode !== 'snapshot' && config.open_stream === undefined && shareable();
 		const tab = shared ? `${uuid()}:` : '';
 		let conn: string | null = null,
 			applied = 0,
@@ -274,30 +322,25 @@ export const createBolt = (config: BoltConfig) =>
 			decoder: Catalog | undefined;
 		let noticeVersion = -1;
 		const noticeIds = new Set<string>();
-		const track = (value: Json | undefined): void => {
-			// a read request's answer is a page per root
-			if (isRow(value) && value['rows'] === undefined && value['id'] === undefined) {
-				for (const page of Object.values(value))
-					if (isRow(page) && jsonArray(page['rows'])) track(page);
-				return;
+		const validate = (view: View, value: Json): ReadFailed | undefined => {
+			for (const consumer of view.consumers) {
+				const failure = consumer.validate(value);
+				if (failure !== undefined) return failure;
 			}
-			for (const row of jsonArray(value)
-				? value
-				: isRow(value) && jsonArray(value['rows'])
-					? value['rows']
-					: [value ?? null])
-				if (isRow(row) && typeof row['id'] === 'string' && typeof row['revision'] === 'number')
-					revisions.set(row['id'], row['revision']);
+			return undefined;
 		};
 		const shown = (view: View) => {
 			let value = view.server;
 			if (value !== undefined)
 				for (const paint of paints)
-					if (isRow(value) && rootsOf(view.read).includes(paint.model))
-						value = { ...value, [paint.model]: paint.apply(value[paint.model] ?? null) };
+					if (isRow(value) && rootsOf(view.read).includes(paint.model)) {
+						const next: Row = { ...value, [paint.model]: paint.apply(value[paint.model] ?? null) };
+						// A partial create cannot invent the defaults or computed values of a typed row.
+						if (validate(view, next) === undefined) value = next;
+					}
 			return value;
 		};
-		const notify = (view: View, error?: ReadFailed) =>
+		const notify = (view: View, error?: ReadFailed | TransportFailed) =>
 			SubscriptionRef.modify(view.state, (state) => {
 				const sequence = state.sequence + 1;
 				return [sequence, { value: shown(view), error, sequence }] as const;
@@ -317,7 +360,10 @@ export const createBolt = (config: BoltConfig) =>
 			Effect.gen(function* () {
 				const changed = yield* Effect.forEach(
 					[...views.values()].filter((view) => rootsOf(view.read).includes(model)),
-					(view) => notify(view).pipe(Effect.map((sequence) => ({ view, sequence })))
+					(view) => SubscriptionRef.get(view.state).pipe(
+						Effect.flatMap((state) => notify(view, state.error)),
+						Effect.map((sequence) => ({ view, sequence }))
+					)
 				);
 				yield* Effect.forEach(
 					changed,
@@ -382,7 +428,7 @@ export const createBolt = (config: BoltConfig) =>
 				const errors = answer.success;
 				if (
 					errors.some(
-						(error) => error.code === 'notFound' && error.message === 'the live connection is gone'
+						(error) => error.code === 'not_found' && error.message === 'the live connection is gone'
 					)
 				) {
 					generation++;
@@ -397,6 +443,28 @@ export const createBolt = (config: BoltConfig) =>
 						yield* notify(view, new ReadFailed({ code: error.code, message: error.message }));
 				}
 			}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+		const receiveNotices = (frame: Extract<Frame, { t: 'answer' | 'patch' }>, view: View | undefined) => {
+			if (
+				view !== undefined &&
+				view.read.m === 'inbox' &&
+				frame.v > view.v &&
+				frame.v >= noticeVersion
+			) {
+				if (frame.v > noticeVersion) {
+					noticeVersion = frame.v;
+					noticeIds.clear();
+				}
+				for (const notice of frame.arrivals ?? [])
+					if (
+						isRow(notice) &&
+						typeof notice['id'] === 'string' &&
+						!noticeIds.has(notice['id'])
+					) {
+						noticeIds.add(notice['id']);
+						config.on_notice?.(notice);
+					}
+			}
+		};
 		const onFrame = (frame: Frame) =>
 			Effect.gen(function* () {
 				const view = 'view' in frame ? views.get(frame.view) : undefined;
@@ -416,30 +484,18 @@ export const createBolt = (config: BoltConfig) =>
 						yield* register([...views.values()]).pipe(Effect.forkScoped);
 						return;
 					case 'answer':
-						if (
-							view !== undefined &&
-							view.read.m === 'inbox' &&
-							frame.v > view.v &&
-							frame.v >= noticeVersion
-						) {
-							if (frame.v > noticeVersion) {
-								noticeVersion = frame.v;
-								noticeIds.clear();
-							}
-							for (const notice of frame.arrivals ?? [])
-								if (
-									isRow(notice) &&
-									typeof notice['id'] === 'string' &&
-									!noticeIds.has(notice['id'])
-								) {
-									noticeIds.add(notice['id']);
-									config.onNotice?.(typed(notice) as Row);
-								}
-						}
+						receiveNotices(frame, view);
 						if (view !== undefined) {
-							view.server = typed(frame.value);
+							if (frame.v < view.v) return yield* advance(frame.v);
+							const failure = validate(view, frame.value);
+							if (failure !== undefined) {
+								yield* notify(view, failure);
+								view.server = undefined;
+								view.registered = false;
+								return yield* advance(frame.v);
+							}
+							view.server = frame.value;
 							view.v = frame.v;
-							track(view.server);
 							yield* notify(view);
 						}
 						return yield* advance(frame.v);
@@ -447,15 +503,22 @@ export const createBolt = (config: BoltConfig) =>
 						if (view === undefined || frame.v <= view.v) return yield* advance(frame.v);
 						const next = patched(
 							view.server,
-							frame.ops.map((op) => (op.op === 'upsert' ? { ...op, row: typed(op.row) } : op))
+							frame.ops
 						);
 						if (next === undefined) {
 							view.registered = false;
 							return yield* register([view]);
 						}
+						const failure = validate(view, next);
+						if (failure !== undefined) {
+							yield* notify(view, failure);
+							view.server = undefined;
+							view.registered = false;
+							return yield* register([view]);
+						}
+						receiveNotices(frame, view);
 						view.server = next;
 						view.v = frame.v;
-						for (const op of frame.ops) if (op.op === 'upsert') track(op.row);
 						yield* notify(view);
 						return yield* advance(frame.v);
 					}
@@ -493,8 +556,8 @@ export const createBolt = (config: BoltConfig) =>
 				Effect.sync(() => window.removeEventListener('pagehide', leave))
 			);
 		}
-		const frames = yield* liveStream(
-			() => config.openStream?.(live) ?? (shared ? sharedSource(live, open) : open()),
+		const frames = live_mode === 'snapshot' ? Stream.empty : yield* liveStream(
+			() => config.open_stream?.(live) ?? (shared ? sharedSource(live, open) : open()),
 			Effect.gen(function* () {
 				leave();
 				conn = null;
@@ -524,6 +587,8 @@ export const createBolt = (config: BoltConfig) =>
 		);
 		const caughtUp = (version: number, initiatingFiber?: number) =>
 			Effect.gen(function* () {
+				// A read failure must not turn an acknowledged write into an uncertain write.
+				if (live_mode === 'snapshot') return yield* refresh(initiatingFiber).pipe(Effect.ignore);
 				if (conn === null) return;
 				if (applied >= version) return yield* visible(initiatingFiber);
 				const waiter = yield* Deferred.make<void>();
@@ -553,35 +618,84 @@ export const createBolt = (config: BoltConfig) =>
 					);
 				return first;
 			});
-		const q = <T>(method: WireRead['m'], args: readonly Wired[]): Query<T> => {
-			const read: WireRead = { m: method, a: args.map(encodeWire) };
+		const read_view = (view: View) =>
+			Effect.gen(function* () {
+				const before = yield* SubscriptionRef.get(view.state);
+				const result = yield* Effect.result(answer(view.read));
+				const current = yield* SubscriptionRef.get(view.state);
+				// A streamed frame that arrived during this request owns the newer image.
+				if (current.sequence !== before.sequence || views.get(view.id) !== view) return;
+				if (Result.isFailure(result)) {
+					yield* notify(view, result.failure);
+					return yield* Effect.fail(result.failure);
+				}
+				const failure = validate(view, result.success);
+				if (failure !== undefined) {
+					yield* notify(view, failure);
+					return yield* Effect.fail(failure);
+				}
+				// an unchanged answer over a settled image is not repeated
+				const unchanged = current.error === undefined && view.server !== undefined &&
+					JSON.stringify(view.server) === JSON.stringify(result.success);
+				view.server = result.success;
+				if (!unchanged) yield* notify(view);
+			});
+		const refresh = (initiating_fiber?: number) => Effect.gen(function* () {
+			const active = [...views.values()].filter((view) => view.consumers.size > 0);
+			if (live_mode === 'snapshot') {
+				const results = yield* refresh_lock.withPermit(Effect.forEach(
+					active, (view) => Effect.result(read_view(view))
+				));
+				yield* visible(initiating_fiber);
+				for (const result of results)
+					if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
+				return;
+			}
+			if (active.length === 0) return;
+			if (closed !== null) return yield* Effect.fail(new ReadFailed({ code: 'closed', message: 'The workspace release has changed. Reopen the page.' }));
+			const before = yield* Effect.forEach(active, (view) => SubscriptionRef.get(view.state).pipe(
+				Effect.map((state) => ({ view, sequence: state.sequence }))
+			));
+			if (conn === null) yield* Queue.offer(reconnects, undefined);
+			else yield* register(active);
+			const updated = yield* Effect.forEach(before, ({ view, sequence }) => SubscriptionRef.changes(view.state).pipe(
+				Stream.filter((state) => state.sequence > sequence),
+				Stream.take(1),
+				Stream.runHead
+			), { concurrency: 'unbounded' }).pipe(Effect.timeoutOption('5 seconds'));
+			if (Option.isNone(updated)) return yield* Effect.fail(new ReadFailed({ code: 'transport', message: 'The workspace did not finish refreshing. Try again.' }));
+			yield* visible(initiating_fiber);
+			for (const state of updated.value)
+				if (Option.isSome(state) && state.value.error !== undefined) return yield* Effect.fail(state.value.error);
+		});
+		if (live_mode === 'snapshot' && typeof window !== 'undefined') {
+			const owned_refresh = () => Effect.fiberId.pipe(Effect.flatMap(refresh));
+			snapshot_refreshers.add(owned_refresh);
+			Object.defineProperty(window, 'bolt_refresh', { configurable: true, value: refresh_page });
+			yield* Effect.addFinalizer(() => Effect.sync(() => {
+				snapshot_refreshers.delete(owned_refresh);
+				if (snapshot_refreshers.size === 0 && Object.getOwnPropertyDescriptor(window, 'bolt_refresh')?.value === refresh_page)
+					Reflect.deleteProperty(window, 'bolt_refresh');
+			}));
+		}
+		const q = <A>(method: WireRead['m'], args: readonly Wired[], schema: () => Schema.Decoder<A>): Query<A> => {
+			const read: WireRead = { m: method, a: args.map(read_wire) };
+			let prepared: Schema.Decoder<A> | undefined;
+			const decoder = () => prepared ?? (prepared = schema());
 			const once = answer(read).pipe(
-				Effect.tap((value) => Effect.sync(() => track(value))),
-				Effect.map(readValue<T>)
+				Effect.flatMap((value) => Effect.fromResult(readValue(decoder, value)))
 			);
-			const seeded = config.initialRead?.(read);
-			if (seeded !== undefined) track(seeded);
-			const initial = seeded === undefined ? Option.none<T>() : Option.some(readValue<T>(seeded));
-			return Object.assign(reactiveQuery(once, observe<T>({ read }), initial), { read });
+			const seeded = config.initial_read?.(read);
+			const initial = seeded === undefined ? undefined : readValue(decoder, seeded);
+			const updates = observe_results({ read }, decoder);
+			return Object.assign(reactive_query(once,
+				initial !== undefined && Result.isFailure(initial) ? Stream.concat(Stream.succeed(initial), updates) : updates,
+				initial !== undefined && Result.isSuccess(initial) ? Option.some(initial.success) : Option.none<A>()
+			), { read });
 		};
-		function observe<T>(query: {
+		function observe_results<A>(query: {
 			readonly read: WireRead;
-		}): Stream.Stream<T, ReadFailed | TransportFailed> {
-			if (config.poll !== undefined)
-				// a dropped request is asked again on the next tick, as a stream reconnects
-				return Stream.fromEffectSchedule(
-					answer(query.read).pipe(
-						Effect.tap((value) => Effect.sync(() => track(value))),
-						Effect.map((value) => Option.some(typed(value))),
-						Effect.catchTag('TransportFailed', () => Effect.succeed(Option.none<Json>()))
-					),
-					Schedule.spaced(config.poll)
-				).pipe(
-					Stream.filter(Option.isSome),
-					Stream.map((some) => some.value),
-					Stream.changesWith((a, b) => JSON.stringify(a) === JSON.stringify(b)),
-					Stream.map((value) => value as T)
-				);
+		}, schema: () => Schema.Decoder<A>): Stream.Stream<Result.Result<A, ReadFailed | TransportFailed>> {
 			const key = JSON.stringify(query.read);
 			return Stream.unwrap(
 				Effect.gen(function* () {
@@ -607,7 +721,11 @@ export const createBolt = (config: BoltConfig) =>
 					yield* FiberMap.remove(grace, current.id);
 					const consumer: ViewConsumer = {
 						fiberId: yield* Effect.fiberId,
-						delivered: yield* SubscriptionRef.make(0)
+						delivered: yield* SubscriptionRef.make(0),
+						validate: (value) => {
+							const decoded = readValue(schema, value);
+							return Result.isFailure(decoded) ? decoded.failure : undefined;
+						}
 					};
 					current.consumers.add(consumer);
 					yield* Effect.addFinalizer(() =>
@@ -631,54 +749,61 @@ export const createBolt = (config: BoltConfig) =>
 							);
 						})
 					);
-					if (closed === null)
-						yield* SubscriptionRef.set(status, conn === null ? 'connecting' : 'live');
-					yield* Stream.runDrain(frames).pipe(Effect.forkScoped);
-					if (!current.registered) yield* register([current]).pipe(Effect.forkScoped);
+					if (live_mode === 'snapshot') {
+						yield* refresh_lock.withPermit(Effect.result(read_view(current)));
+					} else {
+						if (closed === null)
+							yield* SubscriptionRef.set(status, conn === null ? 'connecting' : 'live');
+						yield* Stream.runDrain(frames).pipe(Effect.forkScoped);
+						if (!current.registered) yield* register([current]).pipe(Effect.forkScoped);
+					}
 					return SubscriptionRef.changes(current.state).pipe(
 						Stream.flatMap((state) => {
-							if (state.error !== undefined) return Stream.fail(state.error);
 							const acknowledge = Stream.fromEffect(
 								SubscriptionRef.set(consumer.delivered, state.sequence)
 							).pipe(Stream.drain);
 							// This continuation runs after the downstream pull has consumed the value.
-							return state.value === undefined
+							const result = state.error !== undefined
+								? Result.fail(state.error)
+								: state.value === undefined ? undefined : readValue(schema, state.value);
+							return result === undefined
 								? acknowledge
-								: Stream.succeed(state.value as T).pipe(Stream.concat(acknowledge));
+								: Stream.succeed(result).pipe(Stream.concat(acknowledge));
 						})
 					);
 				})
 			);
 		}
+		const observe = <A>(query: { readonly read: WireRead }, schema: Schema.Decoder<A>) => observe_results(query, () => schema).pipe(
+			Stream.flatMap((result) => Result.isSuccess(result) ? Stream.succeed(result.success) : Stream.fail(result.failure))
+		);
+		const post = <A, E, R>(
+			prepare: (issued_at: string) => { readonly body: Json; readonly key: string },
+			request: (body: Json, headers: Readonly<Record<string, string>>) => Effect.Effect<A, E, R>
+		) => Effect.gen(function* () {
+			const issued_at = config.now === undefined
+				? yield* Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis).toISOString())
+				: config.now();
+			const { body, key } = prepare(issued_at);
+			return yield* request(body, {
+				[HEADERS.key]: key,
+				...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract })
+			});
+		});
 		const send = (
-			callable: string,
-			input: Wired,
+			body: Readonly<Record<string, Json>>,
 			key: string,
 			observed?: Readonly<Record<string, number>>,
-			initiatingFiber?: number
+			initiatingFiber?: number,
+			path: string = PATHS.act
 		) =>
 			Effect.gen(function* () {
-				const issuedAt =
-					config.now === undefined
-						? yield* Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis).toISOString())
-						: config.now();
-				const response = yield* transport.request(
-					'POST',
-					PATHS.act,
-					{
-						callable,
-						input: encodeWire(input),
-						issuedAt,
-						...(observed === undefined ? {} : { observed })
-					},
-					{
-						[HEADERS.key]: key,
-						...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract })
-					}
-				);
+				const response = yield* post((issued_at) => ({
+					body: { ...body, issued_at, ...(observed === undefined ? {} : { observed }) }, key
+				}), (body, headers) => transport.request('POST', path, body, headers));
 				const refusal = errorOf(response.body);
 				if (Option.isSome(refusal)) {
-					const code = refusalOfStatus(response.status);
+					const code = refusal_of_status(response.status);
 					return code === null
 						? { kind: 'unknown' as const, invocation: key }
 						: { kind: 'refused' as const, code, message: refusal.value.error.message };
@@ -686,48 +811,41 @@ export const createBolt = (config: BoltConfig) =>
 				const reply = yield* decode(ActReply, response.body);
 				if (reply.outcome.kind === 'committed' || reply.outcome.kind === 'pending_approval')
 					yield* caughtUp(reply.v, initiatingFiber);
-				return reply.outcome.kind === 'committed'
-					? { ...reply.outcome, output: typed(reply.outcome.output) }
-					: reply.outcome;
+				return reply.outcome;
 			}).pipe(Effect.catch(() => Effect.succeed({ kind: 'unknown' as const, invocation: key })));
+		/** A queue admission's committed answer is exactly the receipt of the runs this client allocated. */
+		const admit = (body: Readonly<Record<string, Json>>, key: string, automation: string, ids: readonly string[], path?: string) =>
+			send(body, key, undefined, undefined, path).pipe(Effect.flatMap((outcome) => Effect.gen(function* () {
+				if (outcome.kind !== 'committed') return outcome;
+				return { ...outcome, output: yield* declared(() => job_receipt(automation, ids), outcome.output) };
+			})));
+		const command = (callable: string, input: Wired, options: { observed?: Readonly<Record<string, number>> } = {}) =>
+			send({ callable, input: encode_wire(input) }, uuid(), options.observed).pipe(Effect.flatMap(settled));
 		const act = (
-			callable: string,
-			input: Wired,
-			options: { key?: string; observed?: Readonly<Record<string, number>> } = {}
-		) =>
-			Effect.gen(function* () {
-				const initiatingFiber = yield* Effect.fiberId;
-				const wireInput = encodeWire(input);
-				const dot = callable.lastIndexOf('.'),
-					model = callable.slice(0, dot),
-					verb = callable.slice(dot + 1);
-				const key = options.key ?? uuid();
-				let observed = options.observed === undefined ? undefined : { ...options.observed };
-				if (options.observed === undefined && (verb === 'update' || verb === 'delete'))
-					for (const item of list(wireInput))
-						for (const id of list(isRow(item) ? (item['target'] ?? null) : null)) {
-							const revision = revisions.get(String(id));
-							if (revision !== undefined) (observed ??= {})[String(id)] = revision;
-						}
-				const paint = PAINTED.has(verb) ? paintOf(model, verb, typed(wireInput), key) : null;
-				if (paint !== null) paints.add(paint);
-				const request = Effect.gen(function* () {
-					if (paint !== null) yield* repaint(model, initiatingFiber);
-					return yield* send(callable, input, key, observed, initiatingFiber).pipe(
-						Effect.flatMap(settled)
-					);
-				});
-				return yield* request.pipe(
-					Effect.ensuring(
-						Effect.gen(function* () {
-							if (paint !== null) {
-								paints.delete(paint);
-								yield* repaint(model, initiatingFiber);
-							}
-						})
-					)
-				);
+			inputs: Readonly<Record<string, Wired>>,
+			options: { key?: string } = {}
+		) => Effect.gen(function* () {
+			const initiatingFiber = yield* Effect.fiberId;
+			const key = options.key ?? uuid();
+			const acts = Object.fromEntries(Object.entries(inputs).map(([name, input]) => [name, encode_wire(input)]));
+			const pending = Object.entries(acts).flatMap(([name, input]) => {
+				const dot = name.lastIndexOf('.');
+				const model = name.slice(0, dot), verb = name.slice(dot + 1);
+				return PAINTED.has(verb) ? [paintOf(model, verb, input, key)] : [];
 			});
+			for (const paint of pending) paints.add(paint);
+			const repaintAll = Effect.forEach([...new Set(pending.map((paint) => paint.model))], (model) => repaint(model, initiatingFiber), { discard: true });
+			return yield* Effect.gen(function* () {
+				yield* repaintAll;
+				const outcome = yield* send({ acts }, key, undefined, initiatingFiber).pipe(Effect.flatMap(settled));
+				return outcome.kind === 'committed'
+					? { ...outcome, output: yield* declared(() => act_output(acts), outcome.output) }
+					: outcome;
+			}).pipe(Effect.ensuring(Effect.gen(function* () {
+				for (const paint of pending) paints.delete(paint);
+				yield* repaintAll;
+			})));
+		});
 		const getValue = <A>(
 			path: string,
 			schema: Schema.Codec<A, unknown>,
@@ -761,28 +879,17 @@ export const createBolt = (config: BoltConfig) =>
 				})
 			);
 		return {
-			aggregate: <T = Row[]>(model: string, options: Wired) => q<T>('aggregate', [model, options]),
-			history: <T = Json>(
-				model: string,
-				id: string,
-				options: { at?: Json; output?: string; view?: true } = {}
-			) => q<T>('history', [model, id, options]),
-			/** One read request: `query({ <root>: { … }, '<root>.<layer>': { … } })`, answered as a page per root. */
-			query: <T = Json>(request: Readonly<Record<string, Wired>>) => q<T>('query', [request]),
+			refresh: () => Effect.fiberId.pipe(Effect.flatMap(refresh)),
+			...page_reads(config.read_catalog, q),
+			/** Native controls bind runtime-built requests to their actual answer codec. */
+			native_query: <A>(read: WireRead, schema: Schema.Decoder<A>) => q(read.m, read.a, () => schema),
 			/** Internal stream edge for shell surfaces. Pages read Query properties directly. */
 			observe,
 			clock: (unit?: 'minute' | 'hour' | 'day') =>
-				reactiveClock(
+				reactive_clock(
 					(at) => ({
 						now: Instant(at),
-						today: PlainDate(
-							new Intl.DateTimeFormat('en-CA', {
-								timeZone: config.tz ?? 'UTC',
-								year: 'numeric',
-								month: '2-digit',
-								day: '2-digit'
-							}).format(at)
-						)
+						today: PlainDate(local_of(at.getTime(), config.tz ?? 'UTC').date)
 					}),
 					unit,
 					config.tz,
@@ -791,16 +898,16 @@ export const createBolt = (config: BoltConfig) =>
 			act,
 			record_capabilities: (model: string, id: string, parent?: RecordParentContext) =>
 				getValue(
-					`${PATHS.recordCapabilities}?${new URLSearchParams({
+					`${PATHS.record_capabilities}?${new URLSearchParams({
 						model,
 						id,
 						...(parent === undefined
 							? {}
 							: {
-									parentModel: parent.model,
-									parentId: parent.id,
+									parent_model: parent.model,
+									parent_id: parent.id,
 									relation: parent.relation,
-									parentRevision: String(parent.revision)
+									parent_revision: String(parent.revision)
 								})
 					})}`,
 					Schema.NullOr(CapabilitiesAnswer),
@@ -810,21 +917,23 @@ export const createBolt = (config: BoltConfig) =>
 			decode(model: string, view: { where?: Json; order_by?: Json }) {
 				if (config.catalog === undefined)
 					throw new Error('This client has no catalog to decode against.');
-				return storeSync(decodeView((decoder ??= browserCatalog(config.catalog)), model, view));
+				// the page edge runs the decoder; an unknown model drops the whole view
+				return Effect.runSync(
+					decode_view((decoder ??= browser_catalog(config.catalog)), model, view).pipe(
+						Effect.catch((error) =>
+							Effect.succeed({ where: {}, dropped: [{ path: '', message: error.message }] })
+						)
+					)
+				);
 			},
 			...(config.describe === true
 				? {
 						describe: (
 							model: string,
 							text: string,
-							fields?: readonly {
-								name: string;
-								label: string;
-								kind: 'text' | 'number' | 'bool';
-								optional?: boolean;
-							}[]
+							fields?: readonly LocalFilterField[]
 						) =>
-							act('filter.describe', {
+							command('filter.describe', {
 								model,
 								text,
 								...(fields === undefined ? {} : { fields })
@@ -833,42 +942,33 @@ export const createBolt = (config: BoltConfig) =>
 									duration: '15 seconds',
 									orElse: () => Effect.fail(new DescribeTimeout())
 								}),
-								Effect.flatMap((outcome) =>
-									outcome.kind === 'committed'
-										? decode(
-												Schema.Struct({
-													where: Schema.optionalKey(Schema.Json),
-													order_by: Schema.optionalKey(Schema.Json)
-												}),
-												outcome.output
-											)
-										: Effect.fail(
-												new ProtocolFailed({
-													message: 'Could not build a filter from that description.'
-												})
-											)
-								)
+								Effect.flatMap(committedAs((output) => decode(Schema.Struct({
+									where: Schema.optionalKey(Schema.Json), order_by: Schema.optionalKey(Schema.Json)
+								}), output), 'Could not build a filter from that description.'))
 							)
 					}
 				: {}),
 			options: (
 				model: string,
-				fields?: readonly {
-					name: string;
-					label: string;
-					kind: 'text' | 'number' | 'bool';
-					optional?: boolean;
-				}[]
+				fields?: readonly LocalFilterField[]
 			) =>
-				act('filter.options', { model, ...(fields === undefined ? {} : { fields }) }).pipe(
-					Effect.flatMap((outcome) =>
-						outcome.kind === 'committed'
-							? decode(FilterOptionsAnswer, outcome.output)
-							: Effect.fail(new ProtocolFailed({ message: 'Could not load filter options.' }))
-					)
+				command('filter.options', { model, ...(fields === undefined ? {} : { fields }) }).pipe(
+					Effect.flatMap(committedAs((output) => decode(FilterOptionsAnswer, output), 'Could not load filter options.'))
 				),
+			/** Native controls retain durable execution tracking without exposing syncs as automation starts. */
+			sync_control(model: string, sync: string, input: Wired) {
+				const id = uuid(), automation = `${model}.sync.${sync}`;
+				return Object.assign(admit({ model, sync, id, input: encode_wire(input) }, id, automation, [id], PATHS.sync_control),
+					{ mode: 'job' as const, id, ids: [id], automation });
+			},
 			// many inputs are one request queueing one run each (a bulk action), not one request per record
 			run(automation: string, input: Wired | readonly Wired[]) {
+				const declared_call = Object.hasOwn(config.operation_outputs.automations, automation)
+					? config.operation_outputs.automations[automation] : undefined;
+				if (declared_call?.mode === 'call')
+					return Object.assign(command('run', { automation, input: encode_wire(input) }).pipe(Effect.flatMap((answer) => answer.kind === 'committed'
+						? declared(() => call_output(config.operation_outputs, automation), answer.output)
+						: Effect.fail(new ProtocolFailed({ message: 'A call answered with a durable run outcome instead of its result.' })))), { mode: 'call' as const, automation });
 				const inputs: readonly Wired[] = Array.isArray(input) ? input : [input];
 				const runs = inputs.map((one) => ({
 					input: one,
@@ -877,7 +977,7 @@ export const createBolt = (config: BoltConfig) =>
 				const ids = runs.map((run) => run.id);
 				const id = ids[0];
 				if (id === undefined) throw new RangeError('An automation batch needs at least one input.');
-				return Object.assign(send('start', { automation, runs }, id), { id, ids, automation });
+				return Object.assign(admit({ callable: 'run', input: encode_wire({ automation, runs }) }, id, automation, ids), { mode: 'job' as const, id, ids, automation });
 			},
 			upload: (
 				file: Blob & { name?: string },
@@ -893,30 +993,19 @@ export const createBolt = (config: BoltConfig) =>
 							const refusal = errorOf(response.body);
 							return Option.isSome(refusal)
 								? Effect.fail(new ActRefused(refusal.value.error))
-								: decode(FileAnswer, response.body).pipe(
-										Effect.map((file) => ({
-											...(isRow(response.body) ? (typed(response.body) as Row) : {}),
-											...file
-										}))
-									);
+								: decode(FileAnswer, response.body);
 						}),
 						Effect.mapError((error) =>
 							error instanceof ProtocolFailed ? new TransportFailed({ status: 0 }) : error
 						)
 					),
 			file_url: (ref: { readonly id: string }, options: FileUrlOptions = {}) =>
-				storedFileUrl(base, ref.id, options),
+				stored_file_url(base, ref.id, options),
 			preview_pdf: (source: ConvertSource, options: PreviewPdfOptions = {}) =>
 				Effect.gen(function* () {
-					const issuedAt = config.now?.() ?? new Date(yield* Clock.currentTimeMillis).toISOString();
-					const response = yield* transport.requestPdf(
-						PATHS.act,
-						{ callable: 'convert.previewPdf', input: encodeWire({ source, options }), issuedAt },
-						{
-							[HEADERS.key]: uuid(),
-							...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract })
-						}
-					);
+					const response = yield* post((issued_at) => ({
+						body: { callable: 'convert.previewPdf', input: encode_wire({ source, options }), issued_at }, key: uuid()
+					}), (body, headers) => transport.requestPdf(PATHS.act, body, headers));
 					if (response.body instanceof Uint8Array) return response.body;
 					const refusal = errorOf(response.body);
 					if (Option.isSome(refusal) && refusal.value.error.code === 'unavailable')
@@ -927,7 +1016,7 @@ export const createBolt = (config: BoltConfig) =>
 					const outcome = Schema.decodeUnknownOption(ActReply)(response.body);
 					if (Option.isSome(outcome) && outcome.value.outcome.kind === 'refused')
 						return yield* new ActRefused(outcome.value.outcome);
-					const code = refusalOfStatus(response.status);
+					const code = refusal_of_status(response.status);
 					if (code !== null && Option.isSome(refusal))
 						return yield* new ActRefused({ code, message: refusal.value.error.message });
 					return yield* new TransportFailed({ status: response.status });
@@ -935,40 +1024,20 @@ export const createBolt = (config: BoltConfig) =>
 			// a per-record restore (rule 17), never point-in-time recovery or a source rollback
 			restore: {
 				preview: (model: string, record: string, revision: number) =>
-					act('history.preview', { model, record, revision }).pipe(
-						Effect.flatMap((outcome) =>
-							outcome.kind === 'committed'
-								? decode(RestorePreviewSchema, encodeWire(outcome.output))
-								: Effect.fail(
-										new ProtocolFailed({ message: 'The restore preview could not be loaded.' })
-									)
-						),
-						// values as the record body reads them (a decimal revived)
-						Effect.map((preview) => ({
-							...preview,
-							changes: preview.changes.map((c) => ({
-								...c,
-								current: typed(c.current),
-								restored: typed(c.restored)
-							})),
-							skipped: preview.skipped.map((c) => ({
-								...c,
-								current: typed(c.current),
-								restored: typed(c.restored)
-							}))
-						}))
+					command('history.preview', { model, record, revision }).pipe(
+						Effect.flatMap(committedAs((output) => decode(RestorePreviewSchema, encode_wire(output)), 'The restore preview could not be loaded.')),
 					),
 				run: (model: string, record: string, revision: number, live: number) =>
-					act('history.restore', { model, record, revision }, { observed: { [record]: live } })
+					command('history.restore', { model, record, revision }, { observed: { [record]: live } })
 			},
 			approvals: {
 				decide: (
-					requestId: string,
+					request_id: string,
 					decision: { decision: 'approve' | 'reject' | 'request_changes'; reason?: string }
-				) => act('approvals.decide', { requestId, ...decision }),
-				get: (requestId: string) =>
+				) => command('approvals.decide', { request_id, ...decision }),
+				get: (request_id: string) =>
 					getValue(
-						`${PATHS.approval}?id=${encodeURIComponent(requestId)}`,
+						`${PATHS.approval}?id=${encodeURIComponent(request_id)}`,
 						Schema.NullOr(Schema.Struct({ value: Schema.NullOr(ApprovalViewSchema) })),
 						null
 					).pipe(Effect.map((answer) => answer?.value ?? null)),
@@ -992,7 +1061,7 @@ export const createBolt = (config: BoltConfig) =>
 				}
 			},
 			session: {
-				sendCode: (address: string) => session(PATHS.session.code, { address }),
+				send_code: (address: string) => session(PATHS.session.code, { address }),
 				verify: (address: string, code: string) =>
 					session(PATHS.session.verify, { address, code }).pipe(
 						Effect.tap(() =>
@@ -1002,7 +1071,7 @@ export const createBolt = (config: BoltConfig) =>
 						)
 					)
 			},
-			actor: config.actor,
+			actor,
 			locale: config.locale,
 			t: (key: string, vars: Readonly<Record<string, string | number>> = {}) =>
 				(config.messages?.[key] ?? key).replace(/\{(\w+)\}/g, (match, name: string) =>
@@ -1014,5 +1083,5 @@ export const createBolt = (config: BoltConfig) =>
 			sync: SubscriptionRef.changes(status)
 		};
 	});
-export type Bolt = Effect.Success<ReturnType<typeof createBolt>>;
+export type Bolt = Effect.Success<ReturnType<typeof create_bolt>>;
 export type SyncStatus = 'idle' | 'connecting' | 'live' | 'closed';

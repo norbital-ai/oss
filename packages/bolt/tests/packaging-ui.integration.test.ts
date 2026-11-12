@@ -5,13 +5,13 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result } from 'effect';
 import type { Authority } from '../src/engine/contracts.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { runList } from '../src/engine/runs/index.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { runList } from '../src/engine/runs/rows.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
-		workspace: { tz: 'UTC', locale: 'en', apps: [] },
+	decode_projected_manifest({
+		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			jobs: {
 				description: 'Jobs',
@@ -29,9 +29,9 @@ const manifest = Result.getOrThrow(
 		apps: {},
 		teams: {},
 		automations: {},
-		connections: {},
+
 		mcp: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -100,7 +100,7 @@ describe('/runs', () => {
 						admin: false,
 						party: null
 					},
-					capabilities: { apps: [], tools: [], mcp: [] }
+					capabilities: { apps: [], syncs: [], tools: [], mcp: [] }
 				});
 				const holder = yield* runList(t.db, who('u1', ['export'], true), 10, 'export');
 				expect(holder.map((r) => [r.automation, r.error])).toEqual([

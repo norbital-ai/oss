@@ -1,16 +1,17 @@
 import { Effect, Schema } from 'effect';
+import { q } from '@norbital-ai/std/sql';
 import {
 	answer,
-	catalogOf,
+	catalog_of,
 	compile,
 	read as decodeRead,
 	schema,
 	type Row,
 	type store
 } from '@norbital-ai/store';
-import { catalog, tableOf } from '../../protocol/catalog.ts';
-import { BoltError, fromStore } from '../../protocol/errors.ts';
-import { splitModel } from '../../decl/model.ts';
+import { catalog, table_of } from '../../protocol/catalog.ts';
+import { BoltError, from_store } from '../../protocol/errors.ts';
+import { split_system_model } from '../../decl/model-data.ts';
 import user from '../../system/data/model/sys_user/+model.ts';
 import type { Rows } from '../contracts.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
@@ -19,7 +20,7 @@ import type { EngineManifest } from '../manifest.ts';
 const { party_id, phone_key, ...storedFields } = user.spec.fields;
 const declaration = schema({
 	sys_user: {
-		...tableOf(splitModel(user.name, user.spec).model),
+		...table_of(split_system_model(user.name, user.spec).model),
 		fields: storedFields,
 		computed: {
 			party_id: { kind: party_id.kind, expr: party_id.computed },
@@ -28,7 +29,7 @@ const declaration = schema({
 		key: user.spec.table.primary
 	}
 });
-const contacts = catalogOf(declaration);
+const contacts = catalog_of(declaration);
 type User = Row<typeof declaration, 'sys_user'>;
 export type DirectoryPerson = Pick<User, 'email' | 'phone'>;
 export type DirectoryMember = Pick<User, 'email' | 'phone' | 'team'> & { readonly user: string };
@@ -56,7 +57,7 @@ const prepare = (query: Query) =>
 		Effect.flatMap((ir) =>
 			compile(contacts, ir).pipe(Effect.map((compiled) => ({ ir, compiled })))
 		),
-		Effect.mapError(fromStore)
+		Effect.mapError(from_store)
 	);
 const decode = <A>(
 	schema: Schema.Decoder<A>,
@@ -64,7 +65,7 @@ const decode = <A>(
 	rows: Rows | undefined
 ) =>
 	answer(prepared.ir, prepared.compiled, rows?.rows.map((row) => row['j'] ?? null) ?? []).pipe(
-		Effect.mapError(fromStore),
+		Effect.mapError(from_store),
 		Effect.flatMap((page) =>
 			Schema.decodeUnknownEffect(Schema.Struct({ rows: Schema.Array(schema) }))(page).pipe(
 				Effect.mapError((cause) => BoltError.make('internal', 'decode', cause.message)),
@@ -74,7 +75,7 @@ const decode = <A>(
 	);
 
 /** Host identity reads compile from the system model's source declaration, including its indexed contact keys. */
-export const directory = (db: TenantDbShape) => {
+export const member_directory = (db: TenantDbShape) => {
 	const read = <A>(schema: Schema.Decoder<A>, query: Query) =>
 		Effect.gen(function* () {
 			const prepared = yield* prepare(query);
@@ -147,7 +148,6 @@ export const captureIdentity = (db: TenantDbShape) =>
 		params: []
 	});
 
-const q = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export const restoreIdentity = (db: TenantDbShape, manifest: EngineManifest, snapshot: string) => {
 	const models = catalog(manifest).models;
 	const columns = (table: string) =>

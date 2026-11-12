@@ -49,7 +49,7 @@ describe('route', () => {
 		expect(route('', 'meeting.m4a')).toBe('audio');
 		expect(route('application/octet-stream', 'plan.dwg')).toBe('unsupported');
 		expect(unparsed('plan.dwg', 'application/acad')).toContain(
-			'no parser. A tool you declare in src/agent/tool'
+			'no parser. A call-mode automation'
 		);
 	});
 });
@@ -104,7 +104,7 @@ describe('windows', () => {
 			'</section>',
 			...scan(4)
 		].join('\n');
-		expect(indexOf(pdf).noText).toBe('1–2, 4');
+		expect(indexOf(pdf).no_text).toBe('1–2, 4');
 		expect(summary(indexOf(pdf), undefined)).toContain('no text on pages 1–2, 4');
 		expect(grep(pdf, 'bond', 30).hits[0]?.page).toBe(3);
 		expect(grep(pdf, 'bond|no text', 30).total).toBe(4);
@@ -173,7 +173,7 @@ describe('what the HTML holds', () => {
 			{ title: 'S2 00:04:12', level: 7, from: 3, to: 3 }
 		]);
 		expect(transcriptOf(recording)).toEqual({
-			durationMs: 2_412_000,
+			duration_ms: 2_412_000,
 			speakers: ['S1', 'S2'],
 			segments: [
 				{ speaker: 'S1', start: 0, end: 4.5, text: 'We agree on Friday & Monday.' },
@@ -200,7 +200,7 @@ describe('what the HTML holds', () => {
 				name: 'Rates',
 				columns: ['Item', 'Rate'],
 				rows: 7,
-				first: json.sheets[0]!.rows.slice(0, 5),
+				first: json.sheets[0]?.rows.slice(0, 5),
 				images: [{ name: 'image-1.png', row: 0, col: 1 }]
 			},
 			{ name: 'Notes', columns: [], rows: 1, first: [['one']] }

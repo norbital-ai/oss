@@ -3,7 +3,7 @@ import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { act, type ActRequest } from '../src/engine/write/act.ts';
-import { restoreSource, seed } from '../src/engine/write/seed.ts';
+import { restore_source, seed } from '../src/engine/write/seed.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
 
@@ -16,12 +16,14 @@ const manifest: EngineManifest = {
 			description: 'A parent named after a PostgreSQL type, with its child roll-up.',
 			record_label: 'record.code',
 			key: ['code'],
+            unique: [{ fields: ['code'], import_key: true }],
 			fields: { code: { kind: 'text' }, total: { kind: 'sum', of: 'lines.amount' } }
 		},
 		line: {
 			description: 'A child named after a PostgreSQL type, with row alias collisions.',
 			record_label: 'record.code',
 			key: ['code'],
+            unique: [{ fields: ['code'], import_key: true }],
 			fields: {
 				code: { kind: 'text' },
 				amount: { kind: 'int' },
@@ -52,7 +54,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 		yield* seed(
 			manifest,
 			db,
-			restoreSource({
+			restore_source({
 				point: [{ id: PARENT, code: 'P', total: 2 }],
 				line: [{ id: CHILD, code: 'L', point: PARENT, amount: 2 }]
 			}),

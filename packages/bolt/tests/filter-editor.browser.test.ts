@@ -2,8 +2,8 @@ import { expect, it } from '@effect/vitest';
 import { mount, unmount } from 'svelte';
 import { Effect, Schema } from 'effect';
 import type { Json } from '../../ui/src/client/contract.ts';
-import { filterOffers as fields, filterCatalog } from './support/filter-catalog.ts';
-import { fromWhere } from '../../ui/src/filter/filter.ts';
+import { filter_offers as fields, filter_catalog } from './support/filter-catalog.ts';
+import { fromWhere } from '../../ui/src/filter/where.ts';
 import { page } from 'vitest/browser';
 import { scriptedBolt } from '../../ui/tests/scripted-bolt.ts';
 import Editor from './support/filter-editor.svelte';
@@ -178,7 +178,7 @@ function expectParsableWhere() {
 	const raw = new URL(location.href).searchParams.get('filter-browser.where');
 	const where =
 		raw === null ? {} : Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(raw);
-	expect(fromWhere(filterCatalog, 'people', where), JSON.stringify(where)).not.toBeNull();
+	expect(fromWhere(filter_catalog, 'people', where), JSON.stringify(where)).not.toBeNull();
 }
 
 it('preserves compatible text and operator edits while leaving the other rule untouched', async () => {
@@ -209,9 +209,9 @@ it('preserves compatible text and operator edits while leaving the other rule un
 		expect(await operator('window')).toEqual([
 			'contains',
 			'overlaps',
-			'within',
-			'startsWithin',
-			'endsWithin'
+			'contained_by',
+			'starts_within',
+			'ends_within'
 		]);
 		expect(
 			document.querySelector('[data-cond=window] [data-field-type=fieldPeriod]')
@@ -274,7 +274,7 @@ it('shows model structure in the picker and never carries scalar or child state 
 		expect(element<HTMLInputElement>('[data-cond="employer.name"] input').value).toBe('Acme');
 		await field('[data-cond="employer.name"]', 'employer');
 		expect(document.querySelector('[data-cond=employer] [data-field-type=link]')).not.toBeNull();
-		expect(await operator('employer')).toEqual(['eq', 'ne', 'in', 'nin']);
+		expect(await operator('employer')).toEqual(['eq', 'ne', 'in', 'not_in']);
 		expect(document.querySelector('[data-cond=employer] input[type=text]')).toBeNull();
 		await field('[data-cond=employer]', 'contracts');
 		expect(document.querySelector('[data-many=contracts] [data-field-type=links]')).not.toBeNull();
@@ -362,7 +362,7 @@ it('keeps every control transition inside the catalogue grammar', async () => {
 		expectParsableWhere();
 		await field('[data-cond=window]', 'employer');
 		expectParsableWhere();
-		expect(await operator('employer')).toEqual(['eq', 'ne', 'in', 'nin']);
+		expect(await operator('employer')).toEqual(['eq', 'ne', 'in', 'not_in']);
 		await operator('employer', 'in');
 		expectParsableWhere();
 		await field('[data-cond=employer]', 'contracts');
@@ -386,11 +386,11 @@ it('keeps every control transition inside the catalogue grammar', async () => {
 		await field('[data-many=contracts]', 'name');
 		expectParsableWhere();
 		const textOps = await operator('name');
-		expect(textOps).toEqual(['eq', 'ne', 'like', 'in', 'nin']);
+		expect(textOps).toEqual(['eq', 'ne', 'like', 'in', 'not_in']);
 		await field('[data-cond=name]', 'sequence');
 		expectParsableWhere();
 		const seqOps = await operator('sequence');
-		expect(seqOps).toEqual(['eq', 'ne', 'in', 'nin']);
+		expect(seqOps).toEqual(['eq', 'ne', 'in', 'not_in']);
 	} finally {
 		await close();
 	}

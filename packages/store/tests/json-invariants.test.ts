@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Exit, Schema } from 'effect';
-import { inputSchema } from '@norbital-ai/std/kind';
+import { input_schema } from '@norbital-ai/std/kind';
 import { build, schema, table, type FieldSpec, type Json, type TableSpec } from '../src/index.ts';
 import { database, exec, script } from './support.ts';
 
@@ -56,10 +56,10 @@ const cases: readonly Case[] = [
 	{
 		kind: {
 			kind: 'union',
-			of: [{ kind: 'int' }, { kind: 'object', fields: { ok: { kind: 'bool' } } }]
+			of: [{ kind: 'int' }, { kind: 'bool' }]
 		},
-		valid: [3, { ok: true }],
-		invalid: [null, '3', { ok: 'true' }]
+		valid: [3, true],
+		invalid: [null, '3', 'true']
 	},
 	{
 		kind: {
@@ -78,7 +78,7 @@ const cases: readonly Case[] = [
 		invalid: [[], { first: null }, { first: 'c' }]
 	},
 	{
-		kind: { kind: 'file', accept: ['application/pdf'], max: '1MB' },
+		kind: { kind: 'file', accept: ['application/pdf'], max: '1MiB' },
 		valid: [file, { ...file, size: -1 }, { ...file, ignored: true }],
 		invalid: [
 			{ ...file, size: null },
@@ -88,7 +88,7 @@ const cases: readonly Case[] = [
 		]
 	},
 	{
-		kind: { kind: 'file', accept: [], max: '1MB', many: true },
+		kind: { kind: 'file', accept: [], max: '1MiB', many: true },
 		valid: [[], Array.from({ length: 25 }, () => file)],
 		invalid: [[null], [file, {}]]
 	},
@@ -145,7 +145,7 @@ it.effect(
 			const pg = yield* database;
 			yield* script(pg, (yield* build(schema(tables))).join(';\n'));
 			for (const [index, test] of cases.entries()) {
-				const codec = inputSchema(test.kind);
+				const codec = input_schema(test.kind);
 				const groups: readonly (readonly [boolean, readonly Json[]])[] = [
 					[true, test.valid],
 					[false, test.invalid]

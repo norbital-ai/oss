@@ -1,3 +1,3 @@
 import { team } from '../../../../../../src/index.ts';
 
-export default team({ Sales: ['sales_rep'] });
+export default team({ sales: { name: 'Sales', policies: ['sales_rep'] } });

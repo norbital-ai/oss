@@ -6,7 +6,7 @@ import { Effect, Schema } from 'effect';
 import { chatProvider, nothing, recent, type ChatPlatform } from '../../src/chat/adapter.ts';
 import { hmac } from '../../src/chat/verify.ts';
 import { line } from '../../src/chat/line/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook } from './kit.ts';
 
 setFlagsFromString('--expose-gc');
@@ -64,7 +64,7 @@ describe('over a long life', () => {
 							}
 						]
 					});
-					yield* h.link.webhook!(
+					yield* required(h.link.webhook)(
 						webhook(body, { 'x-line-signature': hmac('secret', body, 'base64') })
 					);
 					h.events.length = 0;
@@ -88,12 +88,12 @@ describe('over a long life', () => {
 		Effect.gen(function* () {
 			const { counted, open } = counting();
 			const h = yield* host(chatProvider(counted), fetch);
-			for (let n = 0; n < 200; n += 1) yield* h.link.pair!({});
+			for (let n = 0; n < 200; n += 1) yield* required(h.link.pair)({});
 			expect(open()).toBe(1);
-			yield* h.link.unpair!();
+			yield* required(h.link.unpair)();
 			expect(open()).toBe(0);
-			yield* h.link.pair!({});
-			yield* h.link.close!;
+			yield* required(h.link.pair)({});
+			yield* required(h.link.close);
 			expect(open()).toBe(0);
 		})
 	);
@@ -103,7 +103,7 @@ describe('over a long life', () => {
 			const h = yield* host(chatProvider(counted), fetch, undefined, {
 				write: () => Promise.reject(new Error('the store refused'))
 			});
-			yield* Effect.flip(h.link.pair!({}));
+			yield* Effect.flip(required(h.link.pair)({}));
 			expect(open()).toBe(0);
 		})
 	);

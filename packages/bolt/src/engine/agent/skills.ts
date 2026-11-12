@@ -12,7 +12,7 @@ description: Protocol for reading and writing a workspace's records.
 1. Know: describe_workspace { names } gives every model the task touches, in one call, before any read of them, unless the conversation shows them.
 2. Read: one request with every root; narrow by where, never by paging. Pick rows by their relations with is/some/none/every/count. Every read answers total, its match count, beside its rows; aggregate is for sums, averages and groups, and answers measures instead of rows. A value may be a { var } over requestor, today, now.
 3. Resolve: each referenced record by one exact read. Missing and stated in the source: create it nested if the write allows, else ask. A word search is ranking, not proof of identity or a category count.
-4. Write: one act, the whole change as a batch, related rows inside their root. A computed or large batch is a JSON file run_js returned, given as inputFile.
+4. Write: one act, the whole change as a batch, related rows inside their root. A computed or large batch is a JSON file run_js returned, given as input_file.
 5. Report from the answer, with no read after it: a committed write returns its stored rows; a held write awaits its approvers, say so; a refused one names why, say that. An empty read earns one different read, then a question.
 `),
 	ingest: skill(`---

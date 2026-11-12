@@ -18,28 +18,30 @@
 		Textarea,
 		format,
 		label,
-		openRecord,
+		open_record,
 		singular
 	} from '@norbital-ai/ui';
 	import type { InboxRequest } from './data.ts';
+	import { InboxReadAnswer } from '../api-types.ts';
+	import { humanise_word } from '../i18n.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
 	import SystemPage from '../SystemPage.svelte';
 	import approvalsBanner from '../assets/banners/approvals.jpg';
 
-	/** `onCount`: the requests the viewer may decide, as it changes: the sidebar's badge. */
+	/** `on_count`: the requests the viewer may decide, as it changes: the sidebar's badge. */
 	let {
 		bolt,
 		t,
-		onCount
-	}: { bolt: ShellBolt; t: (key: string) => string; onCount?: (n: number) => void } = $props();
+		on_count
+	}: { bolt: ShellBolt; t: (key: string) => string; on_count?: (n: number) => void } = $props();
 
 	// svelte-ignore state_referenced_locally
 	const inbox = observe(() =>
-		bolt.observe<{ requests: readonly InboxRequest[] }>({
+		bolt.observe({
 			read: { m: 'inbox', a: [{ requests: true }] }
-		})
+		}, InboxReadAnswer)
 	);
 	const requests = $derived(inbox.current?.requests ?? null);
 	let message = $state<string | null>(null);
@@ -108,10 +110,10 @@
 			variant: move.decision === 'approve' ? 'default' : 'outline'
 		}));
 
-	// the model's catalog label and the action as a verb (`create` → `Create`); `model` stays the key openRecord needs
+	// the model's catalog label and the action as a verb (`create` → `Create`); `model` stays the key open_record needs
 	const verb = (a: string) => {
 		const s = t(a);
-		return s !== a ? s : a.replace(/_/g, ' ').replace(/^\w/, (x) => x.toUpperCase());
+		return s !== a ? s : humanise_word(a);
 	};
 	const requestRows = $derived(
 		(requests ?? []).map((r) => ({
@@ -136,7 +138,7 @@
 	watch(
 		() => waiting,
 		(n) => {
-			if (n !== null) onCount?.(n);
+			if (n !== null) on_count?.(n);
 		}
 	);
 
@@ -151,7 +153,7 @@
 {#snippet record_({ row }: { row: InboxRequest; value: unknown })}
 	{#if row.action === 'create'}<span>{t('New')} {singular(bolt, row.model)}</span>
 	{:else}<span class="[&_[data-readonly]]:text-xs"
-			><Picker of={row.model} value={row.record} onChange={() => {}} readonly /></span
+			><Picker of={row.model} value={row.record} on_change={() => {}} readonly /></span
 		>{/if}
 {/snippet}
 {#snippet decide_({ row }: { row: InboxRequest; value: unknown })}<Acts
@@ -173,7 +175,7 @@
 			of={requestRows}
 			key="approvals"
 			toolbar={{ title: t('All approvals'), export: true }}
-			onOpen={(r) => openRecord(r.model, r.record)}
+			on_open={(r) => open_record(r.model, r.record)}
 			columns={[
 				{ field: 'record', label: t('Record'), cell: record_ },
 				{ field: 'of', label: t('Model') },
@@ -198,15 +200,15 @@
 
 <Dialog.Root
 	open={chosen !== null}
-	onOpenChange={(open) => {
+	on_open_change={(open) => {
 		if (!open && !busy) chosen = null;
 	}}
 >
 	<Dialog.Content
 		class={busy ? 'max-w-md [&>button]:hidden' : 'max-w-md'}
 		aria-busy={busy}
-		onEscapeKeydown={keepWhileBusy}
-		onInteractOutside={keepWhileBusy}
+		on_escape_keydown={keepWhileBusy}
+		on_interact_outside={keepWhileBusy}
 	>
 		{#if chosen !== null}
 			<Dialog.Header>

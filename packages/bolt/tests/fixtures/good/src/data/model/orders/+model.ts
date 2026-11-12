@@ -1,6 +1,6 @@
-import { bind_model } from '../../../../../../../src/declarations.ts';
+import { model } from '../../../../.norbital/models/orders.ts';
 
-export default bind_model('orders')({
+export default model({
 	description: 'Sales orders',
 	record_label: 'record.number',
 	fields: {
@@ -10,9 +10,10 @@ export default bind_model('orders')({
 		status: {
 			kind: 'state',
 			initial: 'draft',
-			states: { draft: { to: ['placed'] }, placed: { edit: 'none' } }
+			states: { draft: { to: ['placed'] }, placed: {} }
 		}
 	},
+	constraints: { placed: { locked: { status: { eq: 'placed' } } } },
 	outputs: { default: { fields: 'all', customer: { fields: ['name', 'rating'] } } },
-	create: { columns: { orders: ['customer', 'amount'] } }
+	create: { columns: { fields: ['customer', 'amount'] } }
 });

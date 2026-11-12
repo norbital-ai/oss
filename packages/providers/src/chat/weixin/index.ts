@@ -152,17 +152,17 @@ const parse = (raw: Raw, read: (url: string) => Promise<Uint8Array>): Incoming |
 		return null;
 	const said = items.find((item) => item.text_item?.text ?? item.voice_item?.text),
 		text = said?.text_item?.text ?? said?.voice_item?.text ?? '',
-		replyTo = said?.ref_msg?.message_item?.msg_id,
+		reply_to = said?.ref_msg?.message_item?.msg_id,
 		files = items.flatMap((item) => fileOf(item, read));
 	if (text === '' && files.length === 0) return null;
 	return {
 		id: String(id),
 		thread: user,
-		sentAt: new Date(raw.create_time_ms ?? Date.now()).toISOString(),
+		sent_at: new Date(raw.create_time_ms ?? Date.now()).toISOString(),
 		from: { handle: user, name: null },
 		text,
 		files,
-		...(replyTo === undefined ? {} : { replyTo })
+		...(reply_to === undefined ? {} : { reply_to })
 	};
 };
 

@@ -15,7 +15,7 @@ import type {
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const is = <T extends true>(): T => true as T;
+const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 type System = 'id' | 'revision' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by';
 
 // ── the generated path unions and the model behind each path ──
@@ -49,9 +49,9 @@ export const layered = policy({
 				logistics: { where: { status: { ne: 'draft' } } }
 			},
 			create: {
-				columns: { orders: ['customer', 'note'], 'orders.lines': ['item', 'qty'] },
+				columns: { fields: ['customer', 'note'], lines: { fields: ['item', 'qty'] } },
 				verdict: function* (rows, ctx) {
-					const bad = rows.findIndex((o) => (o.lines ?? []).some((l) => l.item === ''));
+					const bad = rows.findIndex((o) => (o.after.lines ?? []).some((l) => l.item === ''));
 					if (bad >= 0)
 						return yield* ctx.refuse('Every line names its item.', {
 							row: bad,
@@ -59,7 +59,7 @@ export const layered = policy({
 							field: 'item'
 						});
 					const { customers } = yield* ctx.query({
-						customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['tier'] }
+						customers: { where: { id: { in: rows.map((r) => r.after.customer) } }, fields: ['tier'] }
 					});
 					return customers.rows.every((c) => c.tier === 'gold')
 						? ctx.allow()
@@ -67,7 +67,7 @@ export const layered = policy({
 				}
 			},
 			update: {
-				columns: { orders: ['status', 'note'] },
+				columns: { fields: ['status', 'note'] },
 				verdict: function* (changes, ctx) {
 					const me = ctx.actor.kind === 'member' ? ctx.actor.id : null;
 					const mine = changes.every((c) => c.before.owner === me && c.before.lines.length < 100);
@@ -103,12 +103,12 @@ policy({
 policy({
 	description: 'x',
 	// @ts-expect-error a column the model's create does not declare
-	grants: { orders: { create: { columns: { orders: ['status'] } } } }
+	grants: { orders: { create: { columns: { fields: ['status'] } } } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error a write path the model's create does not declare
-	grants: { orders: { create: { columns: { 'orders.customer': ['name'] } } } }
+	grants: { orders: { create: { columns: { customer: { fields: ['name'] } } } } }
 });
 policy({
 	description: 'x',
@@ -197,7 +197,7 @@ policy({
 			create: {
 				verdict: function* (rows, ctx) {
 					// @ts-expect-error a relation the create does not declare is not in its rows
-					return rows[0]?.notes === undefined ? ctx.allow() : ctx.allow();
+					return rows[0]?.after.notes === undefined ? ctx.allow() : ctx.allow();
 				}
 			}
 		}

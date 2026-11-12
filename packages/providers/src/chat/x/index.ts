@@ -171,10 +171,10 @@ const DmPage = Schema.Struct({
 });
 
 const postOf = Schema.decodeUnknownOption(Post);
-const direct = (id: string, sender: string, text: string, sentAt: string, name: string | null) => ({
+const direct = (id: string, sender: string, text: string, sent_at: string, name: string | null) => ({
 	id,
 	thread: `dm:${sender}`,
-	sentAt,
+	sent_at,
 	from: { handle: sender, name },
 	text
 });
@@ -191,7 +191,7 @@ const parse = (event: Activity, me: string): readonly Incoming[] => {
 			{
 				id: post.id,
 				thread: `post:${post.id}`,
-				sentAt: post.created_at ?? new Date().toISOString(),
+				sent_at: post.created_at ?? new Date().toISOString(),
 				from: {
 					handle: post.author_id ?? 'unknown',
 					name: author?.name ?? author?.username ?? null

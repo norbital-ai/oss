@@ -4,7 +4,7 @@
 // period is two columns `<name>.from` / `<name>.to` (inclusive, blank `to` = open), and an unknown header is an error.
 import { Decimal } from './decimal.ts';
 import * as Result from 'effect/Result';
-import { addDays, PlainDate, type DatePeriod } from './date.ts';
+import { add_days, PlainDate, type DatePeriod } from './date.ts';
 
 /** One spreadsheet cell's value. */
 export type Cell = string | number | boolean | null;
@@ -91,11 +91,11 @@ function cell(c: Scalar, v: Cell): unknown {
 		// A number cell is a double: its shortest digits are what the sheet shows (an exponent form is rounded to 10 places).
 		case 'decimal':
 			return typeof v === 'number' && /e/i.test(text)
-				? Decimal.fromNumber(v, 10)
+				? Decimal.from_number(v, 10)
 				: Decimal.of(text);
 		case 'date':
 			return typeof v === 'number'
-				? addDays(EXCEL_EPOCH, Math.floor(v))
+				? add_days(EXCEL_EPOCH, Math.floor(v))
 				: PlainDate(text.slice(0, 10));
 		case 'time': {
 			if (typeof v === 'number') {
@@ -103,8 +103,9 @@ function cell(c: Scalar, v: Cell): unknown {
 				return `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 			}
 			const m = /^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/.exec(text);
-			if (m === null || Number(m[1]) > 23) throw new Error('expected a time HH:MM');
-			return `${m[1]!.padStart(2, '0')}:${m[2]}`;
+			const hour = m?.[1], minute = m?.[2];
+			if (hour === undefined || minute === undefined || Number(hour) > 23) throw new Error('expected a time HH:MM');
+			return `${hour.padStart(2, '0')}:${minute}`;
 		}
 		case 'bool': {
 			if (typeof v === 'boolean') return v;
@@ -149,11 +150,11 @@ export function decode<const C extends Spec>(
 			before = errors.length;
 		const read = (column: string, c: Scalar, optional: boolean) => {
 			const v = line[at.get(column) ?? -1];
-			if (blank(v)) {
+			if (v === undefined || blank(v)) {
 				if (!optional) errors.push({ row: i + 2, column, message: 'required' });
 				return null;
 			}
-			const decoded = Result.try(() => cell(c, v!));
+			const decoded = Result.try(() => cell(c, v));
 			if (Result.isSuccess(decoded)) return decoded.success;
 			errors.push({
 				row: i + 2,

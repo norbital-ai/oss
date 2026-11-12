@@ -1,17 +1,18 @@
 // The workspace kit is a scoped Effect layer; its callers use the same routes as a real host.
-import { inputSchema, type Kind } from '@norbital-ai/std/kind';
+import { input_schema, type Kind } from '@norbital-ai/std/kind';
 import {
-	auditFromAbi,
-	applyMigrations,
-	readMigrations,
-	readApplied,
-	outputSchema,
-	auditShape,
-	compileAuthority,
-	parseCallable,
+	audit_from_abi,
+	AiPortResponseSchema,
+	apply_migrations,
+	read_migrations,
+	read_applied,
+	output_schema,
+	audit_shape,
+	compile_authority,
+	decode_acts,
 	AgentHost,
 	DOWNLOAD,
-	mediaType,
+	media_type,
 	EnvoyConfig,
 	RateWindows,
 	TenantDb,
@@ -20,15 +21,16 @@ import {
 	type EngineError,
 	BoltError,
 	EngineLive,
+	Live,
 	type EngineServices,
 	Authorities,
-	loadKeys,
-	loggedPhone,
-	makeIdentityHost,
+	load_keys,
+	logged_phone,
+	make_identity_host,
 	mint,
-	signupOf,
+	signup_of,
 	type IdentityHost,
-	decodeManifest,
+	decode_manifest,
 	layered,
 	layers,
 	type EngineManifest,
@@ -51,7 +53,7 @@ import {
 	WebRead,
 	Browser,
 	type TransportMessage,
-	lowerRead,
+	lower_read,
 	Activation,
 	Callables,
 	Conversations,
@@ -60,67 +62,65 @@ import {
 	RunHandlers,
 	Runs,
 	SmartThrottle,
-	type ActsRequest,
 	type OutboundFile,
 	type ShapeOf,
 	duration,
-	loadPack,
-	readPack,
-	sourceOf,
+	load_pack,
+	read_pack,
+	source_of,
 	type Pack,
-	restoreSource,
+	restore_source,
 	seed as restore,
 	type SeedPack,
 	BoltHost,
 	BoltHostLive,
 	PublicPages,
-	publicPages,
+	public_pages,
 	RateLimits,
 	SessionAuthority,
 	HostIdentity,
 	ShellConfig,
 	ShellRoutes,
 	Turnstile,
-	sessionAuthority,
+	session_authority,
 	type ShellHostConfig
 } from '@norbital-ai/bolt/engine';
-import { memoryAudit } from './audit.ts';
+import { memory_audit } from './audit.ts';
 import {
 	Diagnostic,
-	fileRef,
+	file_ref,
 	BUILTIN_FIELDS,
-	nullableOfExpr,
+	nullable_of_expr,
 	type Holder,
-	isBatchCallable,
-	withBrowser,
-	loopbackHttpPort,
-	memberColumn,
-	memberValue,
-	parseAddress,
-	syncsOf,
+	with_browser,
+	loopback_http_port,
+	member_column,
+	member_value,
+	parse_address,
+	syncs_of,
 	SYNC_DELIVER,
 	IDENTITY,
 	catalog,
 	bindings,
-	planReadRequest,
+	plan_read_request,
 	type ReadPlan,
 	HEADERS,
 	PATHS,
-	refusalOfStatus,
+	refusal_of_status,
 	uuidv7,
-	cookieNames,
-	nodePorts,
-	tenantDbPort,
-	keysPort,
-	loopbackTcpPort,
-	schemaSlice,
+	cookie_names,
+	node_ports,
+	tenant_db_port,
+	keys_port,
+	loopback_tcp_port,
+	schema_slice,
 	fingerprint
 } from '@norbital-ai/bolt/tooling';
 import type {
 	AuditRecord,
 	Json,
 	AiRequest,
-	AiResponse,
+	AiPortResponse,
 	Authority,
 	DriverPage,
 	EngineActor,
@@ -160,28 +160,24 @@ import type { PlatformError } from 'effect/PlatformError';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type {
-	StartableName,
-	Act,
-	ActBatch,
+	ModelName,
+	FileSyncName,
+	ReadSyncName,
+	SyncControlInput,
+	ActMap,
+	ActOptions,
+	WriteTarget,
 	ActInput,
-	ActManyInput,
-	ActManyOutput,
-	ActOutput,
 	Callable,
-	CallerQuery,
 	Committed,
-	Eff,
 	PendingApproval,
-	DynamicAnswer,
 	HistoryOptions,
-	ReadAnswer,
 	ReadRequest,
 	ReadRequestBase,
-	Revision,
-	WorkspaceQuery,
 	ReadableName,
-	RunHandle,
 	StartInput,
+	AutomationName,
+	AutomationSpecOf,
 	FileRef,
 	Id
 } from '@norbital-ai/bolt';
@@ -189,12 +185,12 @@ import {
 	type ActFailure,
 	ActRefused,
 	ActUnknown,
-	actFailure,
+	act_failure,
 	FacilityFailure,
 	ReadFailed
 } from '@norbital-ai/bolt/errors';
 import type { Is } from '@norbital-ai/bolt/tooling';
-import { CHECKPOINTS, inputs, keep, prune, treeHash } from './checkpoint.ts';
+import { CHECKPOINTS, inputs, keep, prune, tree_hash } from './checkpoint.ts';
 import { TestDb } from './database.ts';
 import {
 	off,
@@ -203,13 +199,13 @@ import {
 	type System1,
 	type System2
 } from '@norbital-ai/bolt/facilities';
-import { facilityLayers } from '@norbital-ai/bolt/host-api';
-import { nodeGuests } from '../guests.ts';
+import { facility_layers } from '@norbital-ai/bolt/host-api';
+import { node_guests } from '../guests.ts';
 import type { Artifact } from '@norbital-ai/bolt/artifact';
 import { SYSTEM_COLUMNS } from '@norbital-ai/store';
 import {
-	decodeReadRequest,
-	type ReadRequestJson,
+	decode_read_request,
+	type DynamicRead,
 	ActReply,
 	QReply,
 	WireError
@@ -226,45 +222,62 @@ export const layer = EffectVitest.layer;
 export const describe = EffectVitest.describe;
 /** Assert workspace values and typed operation outcomes with Vitest's matchers. */
 export const expect = EffectVitest.expect;
-/** A test act's idempotency key and retry marker, conflict handling, and observed record revisions for concurrency checks. */
-export type ActOptions = {
-	key?: string;
-	retry?: boolean;
-	on_conflict?: 'update' | 'keep';
-	observed?: { readonly [id: string]: number };
-};
+export type { ActOptions } from '@norbital-ai/bolt';
 /** The workspace's generated write callables, including model erase operations exercised by the test host. */
 export type KitCallable = Callable | `${ReadableName}.erase`;
 /** A callable's native typed input; erase operations accept one or more model ids and an optional replacement set. */
 export type KitInput<N> = N extends `${infer C}.erase`
-	? { target: Id<C> | readonly Id<C>[]; set?: Readonly<Record<string, Json>> }
+	? { target: WriteTarget<C> | readonly WriteTarget<C>[]; set?: Readonly<Record<string, Json>> }
 	: ActInput<N>;
 /**
  * Reads, writes, approval decisions, uploads and automation starts through the real host routes under one authority, with
- * native decoded values and typed failures. `query` is the one read API with the page's and `ctx.query`'s forms: a read
- * request (a layer map of roots and their declared layers, answered per root), a page of a model (`where`, `select`,
- * `order_by`, a text or index `search`) or one record (`{ id }`, or `{ id, revision }`). Writes are batches: `act` takes a
- * verb's rows as an array; a policy `check` that denies fails with `ActRefused` (`rule`, `row`, `path`, `field`), one that
+	 * native decoded values and typed failures. `query` takes the page's and `ctx.query`'s read request: a layer map of
+	 * roots and their declared layers, answered per root. Result schemas describe the running manifest; use an explicit
+	 * decoder when a test needs a more specific output type. Writes are batches: `act` takes a
+ * map of generated callables to their inputs; a policy `check` that denies fails with `ActRefused` (`rule`, `row`, `path`, `field`), one that
  * approves answers `pending_approval`.
  */
+type NativeAnswers = ReturnType<typeof nativeAnswers>;
+/** A manifest-dependent query's decoded pages or aggregates; dynamic field values retain their native values. */
+export type NativeReadAnswer = Effect.Success<ReturnType<NativeAnswers['read']>>;
+/** Actual revision images decoded against the running manifest, without an unrelated authored type claim. */
+export type NativeHistory = Effect.Success<ReturnType<NativeAnswers['history']>>;
+/** A native map-write outcome, with each import result decoded using its actual model. */
+export type NativeActAnswer = Effect.Success<ReturnType<NativeAnswers['map']>>;
+/** A native queued-job receipt, including the actual written records or held approval. */
+export type NativeJobAnswer = Effect.Success<ReturnType<NativeAnswers['queued']>>;
+export interface KitQuery {
+	<const R extends ReadRequestBase>(request: ReadRequest<R> | DynamicRead): Effect.Effect<NativeReadAnswer, ReadFailed>;
+}
+type KitActInput<A extends ActMap> = A & (string extends keyof A
+	? Readonly<Record<string, Json>>
+	: { readonly [N in keyof A]: N extends KitCallable ? NoInfer<KitInput<N>> : never });
+export interface KitAct {
+	<const A extends ActMap>(acts: KitActInput<A>, options?: ActOptions): Effect.Effect<NativeActAnswer, ActFailure>;
+}
 export interface Caller {
 	readonly authority: Authority;
-	readonly query: CallerQuery<ReadFailed>['query'];
+	readonly query: KitQuery;
 	/**
 	 * A record's revisions as the page's `bolt.history` reads them, oldest first; `at` starts from an instant, a revision
 	 * or just before an approval request. A record as of a revision: take its `at`, then read the root with `as_of`.
 	 */
-	readonly history: CallerQuery<ReadFailed>['history'];
-	act<const N extends string>(
-		callable: Is<N, KitCallable>,
-		input: NoInfer<KitInput<N>>,
-		options?: ActOptions
-	): Effect.Effect<Committed<ActOutput<N>, N> | PendingApproval<N>, ActFailure>;
-	start<const A extends string>(
-		automation: Is<A, StartableName>,
+	history<C extends string>(
+		model: Is<C, ReadableName>, id: NoInfer<Id<C>>, options?: HistoryOptions<C>
+	): Effect.Effect<NativeHistory, ReadFailed>;
+	readonly act: KitAct;
+	/** Decodes the native job receipt or call output with the supplied result schema. */
+	run<const A extends string, O>(
+		automation: Is<A, AutomationName>,
 		input: NoInfer<StartInput<A>>,
-		options?: { id?: string }
-	): Effect.Effect<Committed<RunHandle<A>> | PendingApproval, ActFailure>;
+		output: Schema.Decoder<O>,
+		options?: NoInfer<AutomationSpecOf<A> extends { mode: 'call' } ? never : { id?: string }>
+	): Effect.Effect<O, ActFailure | Schema.SchemaError>;
+	/** Native manual sync control through its real host route. */
+	sync_control<const M extends string, const S extends string>(
+		model: Is<M, ModelName>, sync: Is<S, FileSyncName<M> | ReadSyncName<M>>,
+		input: NoInfer<SyncControlInput<M, S>>, options?: { id?: string }
+	): Effect.Effect<NativeJobAnswer, ActFailure>;
 	upload(
 		field: `${string}.${string}`,
 		file: { name: string; mime: string; bytes: Uint8Array; id?: string }
@@ -272,7 +285,7 @@ export interface Caller {
 	/** `bolt.approvals.decide`: approve, reject or request changes on a request this caller may decide now (a reason for the last two), or withdraw their own. */
 	readonly approvals: {
 		decide(
-			requestId: string,
+			request_id: string,
 			input: { decision: 'approve' | 'reject' | 'request_changes'; reason?: string }
 		): Effect.Effect<void, ActFailure>;
 	};
@@ -282,9 +295,9 @@ const FailedRun = Schema.Struct({
 	automation: Schema.String,
 	error: Schema.NullOr(Schema.String)
 });
-/** A run that failed, as `runDue` answers it. */
+/** A run that failed, as `run_due` answers it. */
 export type FailedRun = typeof FailedRun.Type;
-/** `runDue` passes before it dies: a chain longer than this is a run requeueing itself at the same instant. */
+/** `run_due` passes before it dies: a chain longer than this is a run requeueing itself at the same instant. */
 const DRAIN_PASSES = 32;
 /** Invalid test configuration, fixture input or compiler setup; these failures cannot be mistaken for a business refusal. */
 export class KitInvalid extends Schema.TaggedError<KitInvalid>()('KitInvalid', {
@@ -293,7 +306,7 @@ export class KitInvalid extends Schema.TaggedError<KitInvalid>()('KitInvalid', {
 /** Failures while acquiring or operating a test workspace: invalid fixtures, engine faults, port failures and platform I/O errors. */
 export type KitFailure = KitInvalid | EngineError | PortFailure | PlatformError;
 /** Ordered AI responses per model class, supplied inline or by a JSON file containing a `turns` array. */
-export type Cassette = { readonly [modelClass: string]: readonly AiResponse[] | string };
+export type Cassette = { readonly [modelClass: string]: readonly AiPortResponse[] | string };
 /** AI playback configuration: response cassettes and an optional System 1 responder. */
 export type CassetteOptions = {
 	cassette: Cassette;
@@ -338,7 +351,7 @@ export type Fakes = {
 };
 const RANK = { info: 0, warn: 1, error: 2 } as const;
 /** The kit host's runtime log reader: a host store's page over `rows`, newest first (the tail reads forward). */
-export const readLogRows = (rows: readonly LogRow[], x: LogQuery): readonly LogRow[] => {
+export const read_log_rows = (rows: readonly LogRow[], x: LogQuery): readonly LogRow[] => {
 	const text = x.text?.toLowerCase();
 	const kept = rows.filter(
 		(r) =>
@@ -377,7 +390,7 @@ export type TestPorts =
 	| Ai;
 /**
  * Workspace fixture and host configuration: use a verified release, check authored source, or supply a manifest/guest (with
- * `transforms`, the write callbacks it carries per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`); choose
+ * `transforms`, the write callbacks it carries per verb: `'<model>.create'`, `'<model>.update'`); choose
  * seed data, control time, and native ports.
  */
 export type TestOptions<P extends TestPorts = never> = {
@@ -385,11 +398,11 @@ export type TestOptions<P extends TestPorts = never> = {
 	seed?: 'none' | SeedPack;
 	pack?: Pack;
 	now?: string;
-	secretsKey?: Redacted.Redacted<Uint8Array>;
+	secrets_key?: Redacted.Redacted<Uint8Array>;
 	/** The workspace guest CPU budget; the kit default is the host's 3000 ms. */
-	guestCpuMs?: number;
+	guest_cpu_ms?: number;
 	/** Optional meter for each guest run's CPU, for profiling a workspace. */
-	guestMeter?: (session: string, nanos: bigint) => void;
+	guest_meter?: (session: string, nanos: bigint) => void;
 	db?: Layer.Layer<TenantDb, KitFailure>;
 	ports?: Layer.Layer<P, KitFailure>;
 	fakes?: { ai?: CassetteOptions };
@@ -400,7 +413,7 @@ export type TestOptions<P extends TestPorts = never> = {
 	};
 } & (
 	| {
-			/** A release verified by readArtifact; public HTTP requests execute its isolated server programs. */
+			/** A release verified by read_artifact; public HTTP requests execute its isolated server programs. */
 			artifact: Artifact;
 			root?: never;
 			manifest?: never;
@@ -422,9 +435,9 @@ export type Kit = {
 	readonly release: string;
 	readonly db: TenantDbShape;
 	/** A write callback's native stored reader (`ctx.query`), unscoped, in this workspace. */
-	readonly storedQuery: WorkspaceQuery['query'];
+	readonly stored_query: KitQuery;
 	/** An automation's native batch writer, under this caller's authority. */
-	bodyActs(who: Holder | Authority): Pick<Act, 'many' | 'checked'>;
+	body_acts(who: Holder | Authority): Effect.Effect<KitAct, BoltError>;
 	readonly fakes: Fakes;
 	/** Runs a remote sync read or drains committed writes through the workspace's real sync engine. */
 	readonly syncs: {
@@ -441,17 +454,17 @@ export type Kit = {
 		policies: readonly string[],
 		over?: Partial<Extract<EngineActor, { kind: 'member' }>>
 	): Holder & { readonly id: string };
-	as(who: Holder | Authority): Caller;
-	visitor(app: string, options?: { readonly ip?: string }): Caller;
-	signIn(address: string): Effect.Effect<Authority, KitFailure>;
+	as(who: Holder | Authority): Effect.Effect<Caller, BoltError>;
+	visitor(app: string, options?: { readonly ip?: string }): Effect.Effect<Caller, BoltError>;
+	sign_in(address: string): Effect.Effect<Authority, KitFailure>;
 	/**
 	 * Fires crons due at the clock and drains every run due at it, chained runs included; dies if work stays due. Answers
 	 * the runs that failed in this call, each with its own error.
 	 */
-	runDue(): Effect.Effect<{ readonly failed: readonly FailedRun[] }, EngineError>;
+	run_due(): Effect.Effect<{ readonly failed: readonly FailedRun[] }, EngineError>;
 	/** The host dies as `runId` ends, before its end is recorded; the next boot requeues it to rerun from the start. */
 	crash(runId: string): Effect.Effect<void, KitFailure>;
-	/** Waits for background work to go quiet. It runs nothing queued: `runDue` runs model effects and started automations. */
+	/** Waits for background work to go quiet. It runs nothing queued: `run_due` runs model effects and started automations. */
 	settled(): Effect.Effect<void>;
 	receive(
 		instance: string,
@@ -495,27 +508,58 @@ export type WorkspaceServices =
 const field = (o: unknown, key: string): unknown =>
 	Predicate.hasProperty(o, key) ? o[key] : undefined;
 
+const outcomes = ActReply.fields.outcome.pipe(Schema.toTaggedUnion('kind')).cases;
+const jobHandle = Schema.Struct({ id: Schema.String, automation: Schema.String });
+/** A queued automation's actual native receipt, suitable as a `run` result decoder. */
+export const JobResult = Schema.Union([
+	outcomes.pending_approval,
+	Schema.Struct({ ...outcomes.committed.fields, output: jobHandle })
+]);
+export type JobResult = typeof JobResult.Type;
+const rowState = {
+	$label: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	$sync: Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.Struct({
+			status: Schema.Literals(['pending', 'ok', 'failed']),
+			message: Schema.optionalKey(Schema.String)
+		}))
+	),
+	$approval: Schema.optionalKey(Schema.Struct({
+		request_id: Schema.String,
+		state: Schema.Literals(['Pending', 'ChangesRequested']),
+		step: Schema.Number,
+		steps: Schema.Array(Schema.Struct({ name: Schema.String, teams: Schema.Array(Schema.String), users: Schema.Array(Schema.String) })),
+		requested_by: Schema.String
+	}))
+};
+/** A native query row's fixed metadata; its manifest-dependent fields retain their decoded values. */
+export const NativeReadRow = Schema.StructWithRest(
+	Schema.Struct({ id: Schema.String, $distance: Schema.optionalKey(Schema.Number), ...rowState }),
+	[Schema.Record(Schema.String, Schema.Unknown)]
+);
+export type NativeReadRow = typeof NativeReadRow.Type;
+
 /** Native results use the host's catalogue and kind codecs. */
 const nativeAnswers = (manifest: EngineManifest) => {
 	const m = layered(manifest),
 		cat = catalog(m);
 	const absent = Schema.Null;
-	const kind = (spec: Kind): Schema.Decoder<unknown> => outputSchema(m, spec);
+	const kind = (spec: Kind): Schema.Decoder<unknown> => output_schema(m, spec);
 	const identity = (model: string) => {
 		const info = cat.models.get(model);
 		if (info === undefined) throw new KitInvalid({ message: `unknown model '${model}'` });
 		return info.fields.get('id')?.pg === 'uuid'
-			? inputSchema({ kind: 'ref', to: model })
+			? input_schema({ kind: 'ref', to: model }).pipe(Schema.decodeTo(Schema.String))
 			: Schema.String;
 	};
 	const computedKinds = {
-		text: inputSchema({ kind: 'text' }),
-		int: inputSchema({ kind: 'int' }),
-		decimal: inputSchema({ kind: 'money' }),
-		money: inputSchema({ kind: 'money' }),
-		bool: inputSchema({ kind: 'bool' }),
-		date: inputSchema({ kind: 'date' }),
-		instant: inputSchema({ kind: 'instant' })
+		text: input_schema({ kind: 'text' }),
+		int: input_schema({ kind: 'int' }),
+		decimal: input_schema({ kind: 'money' }),
+		money: input_schema({ kind: 'money' }),
+		bool: input_schema({ kind: 'bool' }),
+		date: input_schema({ kind: 'date' }),
+		instant: input_schema({ kind: 'instant' })
 	};
 	/** A field's native codec on `model`: a ref's id (or arc), its declared kind, a computed value or a system column. */
 	const fieldCodec = (model: string, name: string): Schema.Decoder<unknown> => {
@@ -537,45 +581,18 @@ const nativeAnswers = (manifest: EngineManifest) => {
 		if (declared !== undefined) return kind(declared);
 		if (computed !== undefined) {
 			const value = computedKinds[computed.kind];
-			return spec === undefined || nullableOfExpr(computed.expr, spec)
+			return spec === undefined || nullable_of_expr(computed.expr, spec)
 				? Schema.NullOr(value)
 				: value;
 		}
 		if (name === 'revision') return Schema.Int;
-		if (name === 'created_at' || name === 'updated_at') return inputSchema({ kind: 'instant' });
+		if (name === 'created_at' || name === 'updated_at') return input_schema({ kind: 'instant' });
 		if (name === 'created_by' || name === 'updated_by') return Schema.NullOr(identity('sys_user'));
 		throw new KitInvalid({ message: `unknown field '${model}.${name}'` });
 	};
-	const rowState = {
-		$label: Schema.optionalKey(Schema.NullOr(Schema.String)),
-		$sync: Schema.optionalKey(
-			Schema.Record(
-				Schema.String,
-				Schema.Struct({
-					status: Schema.Literals(['pending', 'ok', 'failed']),
-					message: Schema.optionalKey(Schema.String)
-				})
-			)
-		),
-		$approval: Schema.optionalKey(
-			Schema.Struct({
-				requestId: Schema.String,
-				state: Schema.Literals(['Pending', 'ChangesRequested']),
-				step: Schema.Number,
-				steps: Schema.Array(
-					Schema.Struct({
-						name: Schema.String,
-						teams: Schema.Array(Schema.String),
-						users: Schema.Array(Schema.String)
-					})
-				),
-				requestedBy: Schema.String
-			})
-		)
-	};
 	const loose = Schema.optionalKey(Schema.Record(Schema.String, Schema.Json));
 	const decimals = Schema.optionalKey(
-		Schema.Record(Schema.String, Schema.NullOr(inputSchema({ kind: 'money' })))
+		Schema.Record(Schema.String, Schema.NullOr(input_schema({ kind: 'money' })))
 	);
 	/** One aggregate row of a read request's root or many-layer: bucket `key`, `count` and the measures. */
 	const aggRow = Schema.Struct({
@@ -613,7 +630,7 @@ const nativeAnswers = (manifest: EngineManifest) => {
 		Schema.Array(
 			Schema.Struct({
 				revision: Schema.Int,
-				at: inputSchema({ kind: 'instant' }),
+				at: input_schema({ kind: 'instant' }).pipe(Schema.decodeTo(Schema.String)),
 				actor: Schema.NullOr(Schema.Struct({ kind: Schema.String, id: Schema.String })),
 				cause: Schema.Literals(['direct', 'cascade', 'derived', 'seed', 'erased']),
 				changed: Schema.Struct(anyColumns(model))
@@ -623,14 +640,14 @@ const nativeAnswers = (manifest: EngineManifest) => {
 		root: string,
 		path: string,
 		named: ReadPlan[string]
-	): Schema.Decoder<unknown> => {
+	): Schema.Decoder<NativeReadRow> => {
 		const model = layers(m)[root]?.[path];
 		if (model === undefined)
 			throw new KitInvalid({ message: `'${path}' is not a read layer ${root} declares` });
 		const columns: Record<
 			string,
 			Schema.Decoder<unknown> | Schema.optionalKey<Schema.Decoder<unknown>>
-		> = { id: identity(model), ...anyColumns(model) };
+		> = anyColumns(model);
 		for (const [sub, layer] of Object.entries(named)) {
 			const name = sub.slice(path.length + 1);
 			if (!sub.startsWith(`${path}.`) || name.includes('.')) continue;
@@ -645,14 +662,14 @@ const nativeAnswers = (manifest: EngineManifest) => {
 		}
 		return Schema.Struct(
 			path === root
-				? { ...columns, $distance: Schema.optionalKey(Schema.Number), ...rowState }
-				: columns
+				? { id: identity(model), ...columns, $distance: Schema.optionalKey(Schema.Number), ...rowState }
+				: { id: identity(model), ...columns, $label: rowState.$label }
 		);
 	};
 	/** A read request's answer: per root a page of layer rows, or its aggregate (a page of buckets with `by`). */
-	const requestAnswer = (request: unknown): Schema.Decoder<unknown> => {
+	const requestAnswer = (request: unknown) => {
 		const plan = Result.match(
-			Result.flatMap(decodeReadRequest(request), (json) => planReadRequest(json, m.exposures)),
+			Result.flatMap(decode_read_request(request), (json) => plan_read_request(json, m.exposures)),
 			{
 				onSuccess: (value) => value,
 				onFailure: (message) => {
@@ -662,7 +679,7 @@ const nativeAnswers = (manifest: EngineManifest) => {
 		);
 		return Schema.Struct(
 			Object.fromEntries(
-				Object.entries(plan).map(([root, named]): [string, Schema.Decoder<unknown>] => {
+				Object.entries(plan).map(([root, named]) => {
 					const aggregate = named[root]?.aggregate;
 					return [
 						root,
@@ -671,12 +688,12 @@ const nativeAnswers = (manifest: EngineManifest) => {
 							: aggregate.by === undefined
 								? aggRow
 								: page(aggRow)
-					];
+					] as const;
 				})
 			)
 		);
 	};
-	const page = (member: Schema.Decoder<unknown>) =>
+	const page = <A>(member: Schema.Decoder<A>) =>
 		Schema.Struct({
 			rows: Schema.Array(member),
 			next: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -693,54 +710,46 @@ const nativeAnswers = (manifest: EngineManifest) => {
 			)
 		)
 	);
-	const outputOf = (method: 'act' | 'start', name: string): Schema.Decoder<unknown> => {
+	const outputOf = (name: string) => {
 		const dot = name.lastIndexOf('.'),
 			model = name.slice(0, dot),
 			callable = name.slice(dot + 1);
-		return method === 'start'
-			? Schema.Struct({ id: identity('sys_run'), automation: Schema.String })
-			: callable === 'upsert'
-				? Schema.Array(Schema.NullOr(identity(model)))
-				: callable === 'import'
-					? Schema.Struct({
-							rows: Schema.Array(
-								Schema.Struct({
-									index: Schema.NullOr(Schema.Int),
-									id: Schema.NullOr(identity(model)),
-									action: Schema.Literals(['created', 'updated', 'kept', 'skipped', 'deleted'])
-								})
-							)
-						})
-					: absent;
+		return callable === 'import'
+				? Schema.Struct({
+						rows: Schema.Array(
+							Schema.Struct({
+								index: Schema.NullOr(Schema.Int),
+								id: Schema.NullOr(identity(model)),
+								action: Schema.Literals(['created', 'updated', 'kept', 'skipped', 'deleted'])
+							})
+						)
+					})
+				: absent;
 	};
-	const actCodec = (method: 'act' | 'start', name: string) =>
+	const pendingApproval = Schema.Struct({
+		...outcomes.pending_approval.fields,
+		records
+	});
+	const startCodec =
 		Schema.Union([
+			pendingApproval,
 			Schema.Struct({
-				kind: Schema.Literal('pending_approval'),
-				requestId: Schema.String,
-				records
-			}),
-			Schema.Struct({
-				kind: Schema.Literal('committed'),
-				output: outputOf(method, name),
+				...outcomes.committed.fields,
+				output: jobHandle,
 				records
 			})
 		]);
-	const manyCodec = (acts: ActBatch) =>
+	const mapCodec = (acts: ActMap) =>
 		Schema.Union([
+			pendingApproval,
 			Schema.Struct({
-				kind: Schema.Literal('pending_approval'),
-				requestId: Schema.String,
-				records
-			}),
-			Schema.Struct({
-				kind: Schema.Literal('committed'),
-				output: Schema.Tuple(acts.map((act) => outputOf('act', act.callable))),
+				...outcomes.committed.fields,
+				output: Schema.Struct(Object.fromEntries(Object.keys(acts).map((name) => [name, outputOf(name)]))),
 				records
 			})
 		]);
-	/** Decodes `value` with the codec `make` builds, then claims the native type `T` it proved. */
-	const native = <T>(make: () => Schema.Decoder<unknown>, value: unknown) =>
+	/** The returned value's type comes from its actual decoder. */
+	const native = <A>(make: () => Schema.Decoder<A>, value: unknown) =>
 		Effect.gen(function* () {
 			const schema = yield* Effect.try({
 				try: make,
@@ -748,49 +757,27 @@ const nativeAnswers = (manifest: EngineManifest) => {
 					error instanceof KitInvalid
 						? error
 						: BoltError.make(
-								'badAnswer',
+								'bad_answer',
 								'decode',
 								error instanceof Error ? error.message : String(error),
 								error
 							)
 			});
-			const decoded = yield* Schema.decodeUnknownEffect(schema)(value);
-			// This is the sole static brand boundary: the exact native schema decoded and revived every claimed value above.
-			const branded = Schema.declare((answer: unknown): answer is T =>
-				Schema.is(Schema.toType(schema))(answer)
-			);
-			return yield* Schema.decodeUnknownEffect(branded)(decoded);
+			return yield* Schema.decodeUnknownEffect(schema)(value);
 		});
 	return {
 		/** A read request's answer, per root, as native values (a runtime-built `ReadRequestJson`'s too). */
 		read: (request: unknown, value: unknown) =>
-			native<unknown>(() => requestAnswer(request), value),
-		history: (model: string, value: unknown) => native<unknown>(() => revisions(model), value),
-		act: <N extends string>(name: Is<N, KitCallable>, value: unknown) =>
-			native<Committed<ActOutput<N>, N> | PendingApproval<N>>(() => actCodec('act', name), value),
-		start: <A extends string>(value: unknown) =>
-			native<Committed<RunHandle<A>> | PendingApproval>(() => actCodec('start', ''), value),
-		many: <const A extends ActBatch>(value: unknown, input: A) =>
-			native<
-				Committed<ActManyOutput<A>, A[number]['callable']> | PendingApproval<A[number]['callable']>
-			>(() => manyCodec(input), value),
-		checked: (value: unknown) =>
-			native<Effect.Success<ReturnType<Act['checked']>>>(
-				() =>
-					Schema.Union([
-						Schema.Struct({
-							kind: Schema.Literal('pending_approval'),
-							requestId: Schema.String,
-							records
-						}),
-						Schema.Struct({
-							kind: Schema.Literal('committed'),
-							output: Schema.Array(Schema.Json),
-							records
-						})
-					]),
-				value
-			)
+			native(() => requestAnswer(request), value),
+		history: (model: string, value: unknown) => native(() => revisions(model), value),
+		run: (name: string, value: unknown) => Effect.gen(function* () {
+			const automation = m.automations[name];
+			if (automation?.mode !== 'call') return yield* native(() => startCodec, value);
+			const result = yield* Schema.decodeUnknownEffect(Schema.Struct({ kind: Schema.Literal('committed'), output: Schema.Unknown }))(value);
+			return yield* native(() => output_schema(m, automation.output), result.output);
+		}),
+		map: (value: unknown, input: ActMap) => native(() => mapCodec(input), value),
+		queued: (value: unknown) => native(() => startCodec, value)
 	};
 };
 const invalid = (e: unknown) =>
@@ -804,9 +791,9 @@ function markedTransforms(manifest: EngineManifest, names: ReadonlySet<string>):
 			model = name.slice(0, dot),
 			verb = name.slice(dot + 1),
 			spec = exposures[model];
-		if (dot < 1 || (verb !== 'create' && verb !== 'update' && verb !== 'delete'))
+		if (dot < 1 || (verb !== 'create' && verb !== 'update'))
 			throw new KitInvalid({
-				message: `TestWorkspace transform '${name}' must name '<model>.create', '<model>.update' or '<model>.delete'.`
+				message: `TestWorkspace transform '${name}' must name '<model>.create' or '<model>.update'.`
 			});
 		if (spec === undefined)
 			throw new KitInvalid({
@@ -818,18 +805,12 @@ function markedTransforms(manifest: EngineManifest, names: ReadonlySet<string>):
 					message: `TestWorkspace transform '${name}' has no declared write verb.`
 				});
 			exposures[model] = { ...spec, create: { ...spec.create, transform: true } };
-		} else if (verb === 'update') {
+		} else {
 			if (spec.update === undefined)
 				throw new KitInvalid({
 					message: `TestWorkspace transform '${name}' has no declared write verb.`
 				});
 			exposures[model] = { ...spec, update: { ...spec.update, transform: true } };
-		} else {
-			if (spec.delete === undefined)
-				throw new KitInvalid({
-					message: `TestWorkspace transform '${name}' has no declared write verb.`
-				});
-			exposures[model] = { ...spec, delete: { ...spec.delete, check: true } };
 		}
 	}
 	return { ...manifest, exposures };
@@ -842,7 +823,7 @@ const compiled = new Map<string, Effect.Effect<CheckResult, KitInvalid>>();
 // Keep the cache's existing permissive base64 decoder.
 const CachedGuest = Schema.Struct({
 	source: Schema.String,
-	sourceMap: Schema.optionalKey(Schema.String),
+	source_map: Schema.optionalKey(Schema.String),
 	assets: Schema.optionalKey(
 		Schema.Record(
 			Schema.String,
@@ -896,7 +877,7 @@ const fromRun = (r: typeof RunChecked.Type) =>
 		const manifest =
 			r.manifest === undefined
 				? undefined
-				: yield* Effect.fromResult(decodeManifest(r.manifest)).pipe(Effect.mapError(invalid));
+				: yield* Effect.fromResult(decode_manifest(r.manifest)).pipe(Effect.mapError(invalid));
 		const result: CheckResult = {
 			stages: [...r.stages],
 			errors: r.errors.map((e) => ({ ...e })),
@@ -917,7 +898,7 @@ const KEPT_CHECKS = 64,
 const sourceKey = (root: string, modules: Effect.Effect<string>) =>
 	Effect.gen(function* () {
 		return createHash('sha256')
-			.update(`${yield* modules}\0${yield* treeHash(root)}`)
+			.update(`${yield* modules}\0${yield* tree_hash(root)}`)
 			.digest('hex');
 	}).pipe(Effect.mapError(invalid));
 /** A workspace's check, from its checkpoint when its source and the compiler are unchanged, else checked once and kept. */
@@ -985,7 +966,7 @@ const readTestPack = (root: string, manifest: EngineManifest) =>
 					.pipe(Effect.catch(() => fs.remove(temporary, { recursive: true, force: true })));
 				yield* prune(dirname(shared), KEPT_SEEDS);
 			});
-		return yield* readPack(join(shared, 'test'));
+		return yield* read_pack(join(shared, 'test'));
 	}).pipe(Effect.provide(node), Effect.mapError(invalid));
 const packs = new Map<string, Effect.Effect<Pack, KitInvalid>>();
 /** The test pack, read once per process (hashing the source tree and decoding every row are not per-test work). */
@@ -999,30 +980,10 @@ const testPack = (root: string, manifest: EngineManifest) =>
 		return yield* cached;
 	});
 
-const ResponseCassette = Schema.Struct({
-	content: Schema.Json,
-	toolCalls: Schema.Array(
-		Schema.Struct({
-			id: Schema.String,
-			name: Schema.String,
-			input: Schema.Json,
-			invalid: Schema.optionalKey(Schema.String)
-		})
-	),
-	finish: Schema.Literals(['stop', 'tool', 'cut']),
-	usage: Schema.Struct({
-		input: Schema.Number,
-		output: Schema.Number,
-		cost: Schema.optionalKey(Schema.Number),
-		call: Schema.optionalKey(Schema.String)
-	}),
-	continuation: Schema.optionalKey(Schema.String),
-	reasoning: Schema.optionalKey(Schema.String)
-});
 /** A deterministic, zero-cost System 1 responder for tests: prefer the `respond` choice, otherwise the first choice, and return zero scores. */
-export const respondSystem1: Ai['Service']['ask'] = (request) =>
+export const respond_system_1: Ai['Service']['ask'] = (request) =>
 	Effect.sync(() => ({
-		costUsd: 0,
+		cost_usd: 0,
 		provider: 'test',
 		answers: Object.fromEntries(
 			Object.entries(request.questions).map(([id, question]) => [
@@ -1043,10 +1004,10 @@ export const respondSystem1: Ai['Service']['ask'] = (request) =>
 		)
 	}));
 /** Schema-decoded cassettes as the intelligence group's `system1` and `system2`. */
-export const CassetteAi = (options: CassetteOptions) =>
+export const cassette_ai = (options: CassetteOptions) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
-		const turns = new Map<string, AiResponse[]>();
+		const turns = new Map<string, AiPortResponse[]>();
 		for (const [modelClass, record] of Object.entries(options.cassette)) {
 			const raw =
 				typeof record === 'string'
@@ -1054,14 +1015,14 @@ export const CassetteAi = (options: CassetteOptions) =>
 							Schema.fromJsonString(Schema.Struct({ turns: Schema.Array(Schema.Unknown) }))
 						)(yield* fs.readFileString(record))).turns
 					: record;
-			const decoded: AiResponse[] = [];
+			const decoded: AiPortResponse[] = [];
 			for (const [turn, value] of raw.entries())
 				decoded.push(
-					yield* Schema.decodeUnknownEffect(ResponseCassette)(value).pipe(
+					yield* Schema.decodeUnknownEffect(AiPortResponseSchema)(value).pipe(
 						Effect.mapError(
 							() =>
 								new KitInvalid({
-									message: `cassette: '${modelClass}' turn ${turn} is not an AiResponse`
+									message: `cassette: '${modelClass}' turn ${turn} is not an AiPortResponse`
 								})
 						)
 					)
@@ -1069,7 +1030,7 @@ export const CassetteAi = (options: CassetteOptions) =>
 			turns.set(modelClass, decoded);
 		}
 		const requests: AiRequest[] = [];
-		const ask = options.sys_1 ?? respondSystem1;
+		const ask = options.sys_1 ?? respond_system_1;
 		const system1: System1 = {
 			ask: (request, signal) => Effect.runPromise(ask(request), { signal })
 		};
@@ -1097,9 +1058,9 @@ export const CassetteAi = (options: CassetteOptions) =>
 	}).pipe(Effect.provide(node), Effect.mapError(invalid));
 
 /** A durable in-process audit facility for a bare engine context; `TestWorkspace.layer` builds its own. */
-export const memoryAuditLayer: Layer.Layer<never> = Layer.unwrap(
-	Effect.map(Effect.sync(memoryAudit), (store) =>
-		auditFromAbi(store.port).pipe(Layer.provide(NodeCrypto.layer))
+export const memory_audit_layer: Layer.Layer<never> = Layer.unwrap(
+	Effect.map(Effect.sync(memory_audit), (store) =>
+		audit_from_abi(store.port).pipe(Layer.provide(NodeCrypto.layer))
 	)
 );
 
@@ -1113,6 +1074,7 @@ const MailBody = Schema.Struct({
 });
 const SmsBody = Schema.Struct({ to: Schema.String, text: Schema.String });
 const PushBody = Schema.Struct({
+	id: Schema.String,
 	subscription: Schema.Struct({
 		kind: Schema.Literals(['web', 'apns']),
 		endpoint: Schema.String,
@@ -1162,7 +1124,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					const fs = yield* FileSystem.FileSystem.pipe(Effect.provide(node));
 					const directory = join(options.root, 'migrations');
 					if (yield* fs.exists(join(directory, 'snapshot.json')).pipe(Effect.mapError(invalid)))
-						migrations = yield* readMigrations(directory).pipe(
+						migrations = yield* read_migrations(directory).pipe(
 							Effect.provide(node),
 							Effect.mapError(invalid)
 						);
@@ -1246,13 +1208,13 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						)
 				});
 				let now = options.now ?? '2026-09-25T10:00:00.000Z';
-				// the host's cron clock, stepped by `runDue`: a slot at or before this instant has had its turn
+				// the host's cron clock, stepped by `run_due`: a slot at or before this instant has had its turn
 				let cronsThrough = Date.parse(now);
 				const ranSlots = new Set<string>();
 				const liveClock = Context.get(Context.empty(), Clock.Clock);
 				// engine sleeps (debounce, wake and refresh timers) wait on this virtual time: `set`/`advance` wakes them, never the wall clock
 				const sleepers = new Set<{ readonly at: number; readonly wake: () => void }>();
-				// fibers a clock step woke that have not yet slept again or ended: `runDue` and `settled` wait for them, so work
+				// fibers a clock step woke that have not yet slept again or ended: `run_due` and `settled` wait for them, so work
 				// a step made due (a debounce timer, a heartbeat) finishes before the host's own due work looks at the rows
 				const woken = new Set<Fiber.Fiber<unknown, unknown>>(),
 					observed = new WeakSet<Fiber.Fiber<unknown, unknown>>();
@@ -1301,7 +1263,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					currentTimeNanosUnsafe: () => BigInt(Date.parse(now)) * 1_000_000n,
 					currentTimeNanos: Effect.sync(() => BigInt(Date.parse(now)) * 1_000_000n)
 				};
-				const auditStore = memoryAudit();
+				const auditStore = memory_audit();
 				const f: Fakes = {
 					audit: auditStore.records,
 					files: { blobs: new Map(), origin: new Map() },
@@ -1326,7 +1288,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						message: 'TestWorkspace: provide an Ai port or fakes.ai, not both'
 					});
 				const cassette =
-					options.fakes?.ai === undefined ? undefined : yield* CassetteAi(options.fakes.ai);
+					options.fakes?.ai === undefined ? undefined : yield* cassette_ai(options.fakes.ai);
 				const fakes: Fakes = {
 					...f,
 					...(cassette === undefined
@@ -1339,25 +1301,19 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					secure: hostSecure,
 					...shellConfig
 				} = options.host ?? {};
-				const publicUrl = shellConfig.publicUrl ?? 'http://localhost';
-				const secure = hostSecure ?? new URL(publicUrl).protocol === 'https:';
+				const public_url = shellConfig.public_url ?? 'http://localhost';
+				const secure = hostSecure ?? new URL(public_url).protocol === 'https:';
 				const record = (message: TransportMessage) => {
 					f.sent.push(message);
-					return { providerId: `${message._tag}:${f.sent.length}` };
+					return { provider_id: `${message._tag}:${f.sent.length}` };
 				};
-				const mail: TransportPort = {
-					send: async (_kind, value) =>
-						record({ _tag: 'Mail', ...Schema.decodeUnknownSync(MailBody)(value) })
-				};
-				const sms: TransportPort = {
-					send: async (_kind, value) =>
-						record({ _tag: 'Sms', ...Schema.decodeUnknownSync(SmsBody)(value) })
-				};
-				const push: TransportPort = {
-					send: async (_kind, value) =>
-						record({ _tag: 'Push', ...Schema.decodeUnknownSync(PushBody)(value) })
-				};
-				const phone = loggedPhone(() => {}, true);
+				const transport = (decode: (value: unknown) => TransportMessage): TransportPort => ({
+					send: async (_kind, value) => record(decode(value))
+				});
+				const mail = transport((value) => ({ _tag: 'Mail', ...Schema.decodeUnknownSync(MailBody)(value) }));
+				const sms = transport((value) => ({ _tag: 'Sms', ...Schema.decodeUnknownSync(SmsBody)(value) }));
+				const push = transport((value) => ({ _tag: 'Push', ...Schema.decodeUnknownSync(PushBody)(value) }));
+				const phone = logged_phone(() => {}, true);
 				const files: FilesPort = {
 					put: async (bytes, meta) => {
 						const key = randomUUID();
@@ -1393,7 +1349,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								message: 'The URL answered 404.',
 								status: 404
 							});
-						const mime = mediaType(bytes.subarray(0, DOWNLOAD.headBytes));
+						const mime = media_type(bytes.subarray(0, DOWNLOAD.headBytes));
 						if (mime === undefined)
 							throw new FacilityFailure({
 								kind: 'invalid',
@@ -1420,13 +1376,13 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					});
 				// the kit is a host like any other: one `Facilities` record, its needs check, the shared ABI adapters
 				const facilities: Facilities = {
-					storage: { database: tenantDbPort(db), files },
+					storage: { database: tenant_db_port(db), files },
 					logs: {
 						runtime: {
 							write: (event) => {
 								f.logs.push({ ...event, id: String(f.logs.length + 1) });
 							},
-							query: async (query) => readLogRows(f.logs, query)
+							query: async (query) => read_log_rows(f.logs, query)
 						},
 						audit: auditStore.port
 					},
@@ -1435,13 +1391,13 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						sms,
 						phone,
 						push: () => push,
-						challenge: { siteKey: 'dev', verify: async (token) => token === 'dev-pass' },
-						fixedCodes: true
+						challenge: { site_key: 'dev', verify: async (token) => token === 'dev-pass' },
+						fixed_codes: true
 					},
 					intelligence: {
 						// the deterministic decision a cassette also starts from: a workspace with an `ai` block needs system1
 						system1: cassette?.system1 ?? {
-							ask: (request, signal) => Effect.runPromise(respondSystem1(request), { signal })
+							ask: (request, signal) => Effect.runPromise(respond_system_1(request), { signal })
 						},
 						system2: cassette?.system2 ?? {
 							models: [],
@@ -1450,16 +1406,16 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						embed: { embed: () => scripted('ai.embed') }
 					},
 					ports: {
-						webhooks: { publicUrl },
+						webhooks: { public_url },
 						websockets: off,
 						outbound: {
-							http: loopbackHttpPort,
-							tcp: loopbackTcpPort
+							http: loopback_http_port,
+							tcp: loopback_tcp_port
 						}
 					},
 					sandbox: off,
-					keys: keysPort(
-						options.secretsKey === undefined ? randomBytes(32) : Redacted.value(options.secretsKey)
+					keys: keys_port(
+						options.secrets_key === undefined ? randomBytes(32) : Redacted.value(options.secrets_key)
 					)
 				};
 				const missing = unmet(m.needs, facilities);
@@ -1479,7 +1435,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 											message,
 											...(attachments === undefined ? {} : { attachments })
 										});
-										return { providerId: `${instance}:${f.links.sent.length}` };
+										return { provider_id: `${instance}:${f.links.sent.length}` };
 									}),
 								typing: (instance, to, on) =>
 									Effect.sync(() => {
@@ -1491,14 +1447,14 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 									f.links.page(instance, sync, partition, cursor),
 								changed: () => Effect.void
 							});
-				const native = yield* nodePorts(artifact === undefined ? {} : { release: artifact.dir });
+				const native = yield* node_ports(artifact === undefined ? {} : { release: artifact.dir });
 				const ports = Layer.mergeAll(
-					facilityLayers(facilities),
+					facility_layers(facilities),
 					// the kit's own runner: guest code runs in this process's `node:vm` contexts
 					GuestIsolates.fromAbi(
-						nodeGuests({
-							...(options.guestCpuMs == null ? {} : { cpuMs: options.guestCpuMs }),
-							...(options.guestMeter == null ? {} : { meter: options.guestMeter })
+						node_guests({
+							...(options.guest_cpu_ms == null ? {} : { cpu_ms: options.guest_cpu_ms }),
+							...(options.guest_meter == null ? {} : { meter: options.guest_meter })
 						})
 					),
 					links,
@@ -1522,30 +1478,30 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					overrides === undefined ? ports : Layer.merge(ports, Layer.succeedContext(overrides));
 				// Identity loads its keys from native tables, including on an injected database.
 				if (options.db !== undefined) {
-					const applied = yield* readApplied(db);
-					if (applied === null || fingerprint(applied) !== fingerprint(schemaSlice(m))) {
+					const applied = yield* read_applied(db);
+					if (applied === null || applied.fingerprint !== fingerprint(schema_slice(m))) {
 						if (migrations === undefined) yield* TestDb.migrate(db, m, { accept: true });
-						else yield* applyMigrations(db, m, migrations);
+						else yield* apply_migrations(db, m, migrations);
 					}
 				}
-				const identityHost: IdentityHost = yield* makeIdentityHost({
-					audit: yield* auditShape(auditStore.port).pipe(Effect.provide(NodeCrypto.layer)),
+				const identityHost: IdentityHost = yield* make_identity_host({
+					audit: yield* audit_shape(auditStore.port).pipe(Effect.provide(NodeCrypto.layer)),
 					db,
 					now: Effect.sync(() => new Date(now)),
 					windows: new RateWindows(),
-					keys: yield* loadKeys(db),
+					keys: yield* load_keys(db),
 					mail,
 					sms,
 					phone,
-					devSink: true,
-					publicUrl,
-					...(signupOf(m) === undefined ? {} : { signup: signupOf(m) })
+					dev_sink: true,
+					public_url,
+					...(signup_of(m) === undefined ? {} : { signup: signup_of(m) })
 				}).pipe(Effect.provide(NodeCrypto.layer));
 				const base = Layer.mergeAll(
 					Layer.succeed(HostIdentity, identityHost),
 					node,
 					Layer.succeed(EnvoyConfig, envoyConfig ?? {}),
-					Layer.effect(AgentHost, withBrowser(agentConfig ?? {})).pipe(Layer.provide(hostPorts)),
+					Layer.effect(AgentHost, with_browser(agentConfig ?? {})).pipe(Layer.provide(hostPorts)),
 					hostPorts,
 					Layer.succeed(TenantDb, db),
 					Layer.succeed(Clock.Clock, clock),
@@ -1553,7 +1509,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						scope: 'test',
 						epoch: '',
 						release: artifact?.artifact.hash ?? 'test',
-						publicUrl,
+						public_url,
 						guest: Option.fromNullishOr(guest)
 					})
 				);
@@ -1566,7 +1522,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					});
 					const portContext = yield* Layer.build(hostPorts);
 					yield* artifact
-						.loadPackWithAssets(db, m, sourceOf(pack), Context.get(portContext, Files), now)
+						.load_pack_with_assets(db, m, source_of(pack), Context.get(portContext, Files), now)
 						.pipe(Effect.provide(node));
 				} else if (typeof seed === 'object' && Object.keys(seed).length > 0) {
 					if (IDENTITY.some((model) => seed[model] !== undefined)) {
@@ -1584,11 +1540,12 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								)
 							}
 						};
-						yield* loadPack(db, m, sourceOf(pack), now);
-					} else yield* restore(m, db, restoreSource(seed), now);
+						yield* load_pack(db, m, source_of(pack), now);
+					} else yield* restore(m, db, restore_source(seed), now);
 				}
 				const engineContext = yield* Layer.build(EngineLive(m).pipe(Layer.provideMerge(base)));
 				const runs = Context.get(engineContext, Runs),
+					live = Context.get(engineContext, Live),
 					runHandlers = Context.get(engineContext, RunHandlers),
 					envoys = Context.get(engineContext, Envoys),
 					throttle = Context.get(engineContext, SmartThrottle),
@@ -1597,7 +1554,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				const shellBase = Layer.mergeAll(
 					RateLimits.layer.pipe(Layer.provide(Layer.succeed(TenantDb, db))),
 					Layer.succeed(ShellConfig, {
-						publicUrl,
+						public_url,
 						workspace: () => ({ name: 'Test', handle: 'test' }),
 						secure,
 						...shellConfig
@@ -1607,7 +1564,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				// built once, as a host does: what it holds lives as long as the workspace
 				const shellContext = yield* Layer.build(shellBase);
 				const authorities = new Map<string, Authority>();
-				const resolve = yield* sessionAuthority.pipe(
+				const resolve = yield* session_authority.pipe(
 					Effect.provide(shellContext),
 					Effect.provideService(TenantDb, db)
 				);
@@ -1636,7 +1593,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						: Option.some(
 								Context.get(
 									yield* Layer.build(
-										publicPages(artifact).pipe(Layer.provide(Layer.succeedContext(hostContext)))
+										public_pages(artifact).pipe(Layer.provide(Layer.succeedContext(hostContext)))
 									).pipe(Effect.mapError(invalid)),
 									PublicPages
 								)
@@ -1679,7 +1636,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					error instanceof BoltError
 						? error
 						: BoltError.make(
-								'invalidInput',
+								'invalid_input',
 								'decode',
 								error instanceof Error ? error.message : String(error),
 								error
@@ -1690,19 +1647,12 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					);
 				const decodeArgs = (args: readonly unknown[]) =>
 					Effect.flatMap(wireJson(args), Schema.decodeUnknownEffect(Schema.Array(Schema.Json)));
-				function storedQuery<const R extends ReadRequestBase>(
-					request: ReadRequest<R>
-				): Eff<ReadAnswer<R>>;
-				function storedQuery(request: ReadRequestJson): Eff<DynamicAnswer, ReadFailed>;
-				function storedQuery(request: unknown): Effect.Effect<unknown, ReadFailed> {
+				const stored_query: KitQuery = (request) => {
 					const query = Effect.gen(function* () {
 						const b = yield* bindings;
 						// a read request crosses as its one argument, all roots in one crossing
 						const args = yield* decodeArgs([request]);
-						const ir = yield* Effect.try({
-							try: () => lowerRead(m, 'db.query', args),
-							catch: decodeFailure
-						});
+						const ir = yield* lower_read(m, 'db.query', args);
 						const value = (yield* storedReads.run([ir], { as: 'workspace' }, b))[0];
 						if (value === undefined)
 							return yield* Effect.fail(
@@ -1714,90 +1664,26 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						return yield* answer.read(request, value);
 					});
 					return query.pipe(Effect.mapError(readFailure), Effect.provide(hostContext));
-				}
-				const bodyActs: Kit['bodyActs'] = (who) => {
-					const authority =
-						'models' in who ? who : compileAuthority(m, who, `test:${randomUUID()}`);
-					const batch = (acts: unknown) =>
-						Effect.gen(function* () {
-							const input = yield* Schema.decodeUnknownEffect(
-								Schema.Array(
-									Schema.Struct({
-										callable: Schema.String,
-										input: Schema.Json,
-										observed: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
-										on_conflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
-									})
-								),
-								{ onExcessProperty: 'error' }
-							)(acts).pipe(
-								Effect.mapError(
-									(error) => new ActRefused({ code: 'invalidInput', message: error.message })
-								)
-							);
-							const native: ActsRequest['acts'][number][] = [];
-							for (const act of input) {
-								const callable = yield* Effect.fromResult(parseCallable(act.callable, m)).pipe(
-									Effect.mapError(
-										(error) => new ActRefused({ code: error.code, message: error.message })
-									)
-								);
-								if (!isBatchCallable(callable))
-									return yield* Effect.fail(
-										new ActRefused({
-											code: 'invalidInput',
-											message: 'An act batch takes create, update, upsert or delete.'
-										})
-									);
-								if (
-									callable.verb === 'upsert'
-										? act.on_conflict === undefined
-										: act.on_conflict !== undefined
-								)
-									return yield* Effect.fail(
-										new ActRefused({
-											code: 'invalidInput',
-											message: 'A batch upsert requires on_conflict; other verbs do not take it.'
-										})
-									);
-								native.push({
-									model: callable.model,
-									verb: callable.verb,
-									input: act.input,
-									...(act.observed === undefined ? {} : { observed: act.observed }),
-									...(act.on_conflict === undefined ? {} : { on_conflict: act.on_conflict })
-								});
-							}
-							const b = yield* bindings,
-								key = randomUUID();
-							const { outcome } = yield* calls
-								.acts({
-									name: 'act.many',
-									acts: native,
-									key,
-									issuedAt: b.now,
-									authority,
-									bindings: b,
-									invocationId: key,
-									from: 'Server'
-								})
-								.pipe(Effect.orDie);
-							const failure = actFailure(outcome);
-							if (Option.isSome(failure)) return yield* Effect.fail(failure.value);
-							return outcome;
-						}).pipe(Effect.provide(hostContext));
-					return {
-						checked: (acts) =>
-							batch(acts).pipe(
-								Effect.flatMap((outcome) => answer.checked(outcome).pipe(Effect.orDie))
-							),
-						many: <const A extends ActBatch>(acts: ActManyInput<A>) =>
-							Effect.gen(function* () {
-								const outcome = yield* batch(acts);
-								return yield* answer.many<A>(outcome, acts).pipe(Effect.orDie);
-							}).pipe(Effect.provide(hostContext))
-					};
 				};
+				const authorityOf = (who: Holder | Authority) =>
+					'models' in who ? Effect.succeed(who) : compile_authority(m, who, `test:${randomUUID()}`);
+				const body_acts: Kit['body_acts'] = (who) => Effect.map(authorityOf(who), (authority): KitAct =>
+					<const A extends ActMap>(acts: KitActInput<A>, options: ActOptions = {}) => Effect.gen(function* () {
+						const decoded = yield* wireJson(acts).pipe(
+							Effect.flatMap((input) => decode_acts(m, input, options)),
+							Effect.mapError((error) => new ActRefused({ code: error instanceof BoltError ? error.code : 'invalid_input', message: error.message }))
+						);
+						const b = yield* bindings;
+						const key = options.key ?? randomUUID();
+						const { outcome } = yield* calls.acts({
+							name: 'act', acts: decoded.acts, outputs: decoded.outputs, key, issuedAt: b.now,
+							authority, bindings: b, invocationId: key, from: 'Server'
+						}).pipe(Effect.orDie);
+						const failure = act_failure(outcome);
+						if (Option.isSome(failure)) return yield* Effect.fail(failure.value);
+						return yield* answer.map(outcome, acts).pipe(Effect.orDie);
+					}).pipe(Effect.provide(hostContext))
+				);
 				const caller = (authority: Authority, address = '203.0.113.7'): Caller => {
 					const key = randomUUID();
 					authorities.set(key, authority);
@@ -1838,18 +1724,19 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 									: new ReadFailed({ code: 'internal', message: e.message })
 							)
 						);
-					const act = (callable: string, input: unknown, opts: ActOptions = {}) =>
+					const sendAct = (body: Readonly<Record<string, unknown>>, opts: ActOptions = {}, path: string = PATHS.act) =>
 						Effect.gen(function* () {
-							const { key: id = randomUUID(), retry, ...rest } = opts;
+							const { key } = opts;
+							const id = key ?? randomUUID();
 							const response = yield* request(
-								PATHS.act,
-								{ callable, input, issuedAt: now, ...rest },
-								{ [HEADERS.key]: id, ...(retry ? { [HEADERS.retry]: '1' } : {}) }
+								path,
+								{ ...body, issued_at: now },
+								{ [HEADERS.key]: id }
 							);
 							const answer = yield* responseJson(response);
 							const error = Schema.decodeUnknownOption(WireError)(answer);
 							if (Option.isSome(error)) {
-								const code = refusalOfStatus(response.status);
+								const code = refusal_of_status(response.status);
 								return yield* Effect.fail(
 									code === null
 										? new ActUnknown({ invocation: id })
@@ -1860,7 +1747,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								);
 							}
 							const reply = yield* Schema.decodeUnknownEffect(ActReply)(answer).pipe(Effect.orDie);
-							const failure = actFailure(reply.outcome);
+							const failure = act_failure(reply.outcome);
 							if (Option.isSome(failure)) return yield* Effect.fail(failure.value);
 							// past the person-wait the write runs on as its run: `running` is an outcome, not a defect
 							if (
@@ -1874,80 +1761,55 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					const readError = (error: { readonly message: string }) =>
 						new ReadFailed({ code: 'protocol', message: error.message });
 					// a read request crosses as `{ m: 'query', a: [request] }`, as the page's and a body's do
-					function callerQuery<const R extends ReadRequestBase>(
-						request: ReadRequest<R>
-					): Eff<ReadAnswer<R>, ReadFailed>;
-					function callerQuery(request: ReadRequestJson): Eff<DynamicAnswer, ReadFailed>;
-					function callerQuery(request: unknown): Effect.Effect<unknown, ReadFailed> {
+					const callerQuery: KitQuery = (request) => {
 						return read('query', [request]).pipe(
 							Effect.flatMap((value) =>
 								answer.read(request, value).pipe(Effect.mapError(readError))
 							)
 						);
-					}
-					// `history(model, id, { at })` crosses as `{ m: 'history', a: [model, id, at?] }`, as the page's does
-					function history<C extends string>(
+					};
+					// History crosses with its full options object, including the selected output.
+					const history = <C extends string>(
 						model: Is<C, ReadableName>,
 						id: NoInfer<Id<C>>,
-						options?: HistoryOptions
-					): Eff<readonly Revision<C>[], ReadFailed>;
-					function history(
-						model: string,
-						id: string,
-						options: HistoryOptions = {}
-					): Effect.Effect<unknown, ReadFailed> {
-						return read('history', [
-							model,
-							id,
-							...(options.at === undefined ? [] : [options.at])
-						]).pipe(
+						options: HistoryOptions<C> = {}
+					) => {
+						return read('history', [model, id, options]).pipe(
 							Effect.flatMap((value) =>
 								answer.history(model, value).pipe(Effect.mapError(readError))
 							)
 						);
-					}
+					};
 					return {
 						authority,
 						query: callerQuery,
 						history,
-						act: <const N extends string>(
-							name: Is<N, KitCallable>,
-							input: NoInfer<KitInput<N>>,
-							opts?: ActOptions
-						) =>
-							act(String(name), input, opts).pipe(
-								Effect.flatMap(
-									(value): Effect.Effect<Committed<ActOutput<N>, N> | PendingApproval<N>> =>
-										// a kit's write answers within its call (no person waits 60 s on a test): a hand-off is a broken fixture
-										value.kind === 'running'
-											? Effect.die(
-													new Error(
-														`${String(name)} was handed off to run ${value.run}; a kit write answers within its call`
-													)
-												)
-											: answer.act<N>(name, value).pipe(Effect.orDie)
-								)
-							),
-						start: <const A extends string>(
-							name: Is<A, StartableName>,
-							input: NoInfer<StartInput<A>>,
-							opts?: { id?: string }
-						) =>
-							act('start', {
-								automation: name,
-								input,
-								id: opts?.id ?? uuidv7(Date.parse(now))
-							}).pipe(
-								Effect.flatMap((value) =>
-									// a start answers once the run is recorded, never past the person-wait
-									value.kind === 'running'
-										? Effect.die(value)
-										: answer.start<A>(value).pipe(Effect.orDie)
-								)
-							),
+						act: <const A extends ActMap>(acts: KitActInput<A>, opts?: ActOptions) =>
+							sendAct({ acts }, opts).pipe(Effect.flatMap((value) =>
+								value.kind === 'running'
+									? Effect.die(new Error(`A kit write was handed off to run ${value.run}.`))
+									: answer.map(value, acts).pipe(Effect.orDie)
+							)),
+						run: <const A extends string, O>(
+							name: Is<A, AutomationName>, input: NoInfer<StartInput<A>>, output: Schema.Decoder<O>, opts?: { id?: string }
+						) => sendAct({ callable: 'run', input: {
+							automation: name, input,
+							...(m.automations[name]?.mode === 'call' ? {} : { id: opts?.id ?? uuidv7(Date.parse(now)) })
+						} }).pipe(
+							Effect.flatMap((value) => value.kind === 'running' ? Effect.die(value) : answer.run(name, value).pipe(Effect.orDie)),
+							Effect.flatMap(Schema.decodeUnknownEffect(output))
+						),
+						sync_control: <const M extends string, const S extends string>(
+							model: Is<M, ModelName>, sync: Is<S, FileSyncName<M> | ReadSyncName<M>>, input: NoInfer<SyncControlInput<M, S>>, opts?: { id?: string }
+						) => {
+							const id = opts?.id ?? uuidv7(Date.parse(now));
+							return sendAct({ model, sync, id, input }, { key: id }, PATHS.sync_control).pipe(
+								Effect.flatMap((value) => answer.queued(value).pipe(Effect.orDie))
+							);
+						},
 						approvals: {
-							decide: (requestId, input) =>
-								act('approvals.decide', { requestId, ...input }).pipe(
+							decide: (request_id, input) =>
+								sendAct({ callable: 'approvals.decide', input: { request_id, ...input } }).pipe(
 									Effect.flatMap((value) =>
 										value.kind === 'committed' ? Effect.void : Effect.die(value)
 									)
@@ -1980,7 +1842,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								)(answer).pipe(Effect.orDie);
 								return {
 									kind: 'committed' as const,
-									output: { ...output, ...fileRef(output) },
+									output: { ...output, ...file_ref(output) },
 									records: []
 								};
 							}).pipe(Effect.catchTag('KitInvalid', Effect.die))
@@ -2028,12 +1890,12 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					manifest: m,
 					release: artifact?.artifact.hash ?? 'test',
 					db,
-					storedQuery,
-					bodyActs,
+					stored_query,
+					body_acts,
 					fakes,
 					syncs: {
 						read: (name, options = {}) =>
-							syncsOf(m).get(name)?.read === true
+							syncs_of(m).get(name)?.read === true
 								? syncRun(name, options, Schema.Struct({ pages: Schema.Int }))
 								: Effect.fail(new KitInvalid({ message: `No remote read sync '${name}'.` })),
 						deliver: () => syncRun(SYNC_DELIVER, {}, Schema.Struct({ delivered: Schema.Int }))
@@ -2056,21 +1918,20 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							wakeDue();
 						}
 					},
-					as: (who) =>
-						caller('models' in who ? who : compileAuthority(m, who, `test:${randomUUID()}`)),
+					as: (who) => Effect.map(authorityOf(who), (authority) => caller(authority)),
 					visitor: (app, opts) =>
-						caller(new Authorities(m, 'test').visitor(app, randomUUID()), opts?.ip),
-					signIn: (address) =>
+						Effect.map(new Authorities(m, 'test').visitor(app, randomUUID()), (authority) => caller(authority, opts?.ip)),
+					sign_in: (address) =>
 						Effect.gen(function* () {
-							const addressParts = parseAddress(address);
+							const addressParts = parse_address(address);
 							if (addressParts === null)
 								return yield* Effect.fail(
 									new KitInvalid({ message: `no active member with the address ${address}` })
 								);
 							const [result] = yield* db.read([
 								{
-									text: `SELECT id FROM sys_user WHERE ${memberColumn(addressParts, '$1')}`,
-									params: [memberValue(addressParts)]
+									text: `SELECT id FROM sys_user WHERE ${member_column(addressParts, '$1')}`,
+									params: [member_value(addressParts)]
 								}
 							]);
 							const id = result?.rows[0]?.['id'];
@@ -2078,14 +1939,14 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								return yield* Effect.fail(
 									new KitInvalid({ message: `no active member with the address ${address}` })
 								);
-							const authority = yield* new Authorities(m, 'test').member(db, id);
+							const authority = yield* new Authorities(m, 'test').member(db, live.publish, id);
 							if (authority === null)
 								return yield* Effect.fail(
 									new KitInvalid({ message: `no active member with the address ${address}` })
 								);
 							return authority;
 						}),
-					runDue: () =>
+					run_due: () =>
 						Effect.gen(function* () {
 							yield* quiet;
 							const failedBefore = new Set((yield* failedRuns).map((run) => run.id));
@@ -2103,7 +1964,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								if (ranSlots.has(key))
 									return yield* Effect.die(
 										new KitInvalid({
-											message: `runDue: ${key} already ran in this file, whose tests share one workspace: start this test's clock past it`
+											message: `run_due: ${key} already ran in this file, whose tests share one workspace: start this test's clock past it`
 										})
 									);
 								if ((yield* runs.fire(entry.id, slot.toISOString())).ran) ranSlots.add(key);
@@ -2130,7 +1991,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								if (pass === DRAIN_PASSES)
 									return yield* Effect.die(
 										new KitInvalid({
-											message: `runDue: work is still due at ${now} after ${DRAIN_PASSES} passes (a run requeues itself at the current instant)`
+											message: `run_due: work is still due at ${now} after ${DRAIN_PASSES} passes (a run requeues itself at the current instant)`
 										})
 									);
 							}
@@ -2166,7 +2027,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					handle,
 					session: (id) =>
 						mint(identityHost, id).pipe(
-							Effect.map((session) => `${cookieNames(secure).session}=${session.token}`),
+							Effect.map((session) => `${cookie_names(secure).session}=${session.token}`),
 							Effect.mapError(invalid)
 						)
 				};

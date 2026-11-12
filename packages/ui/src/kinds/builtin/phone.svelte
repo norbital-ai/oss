@@ -22,7 +22,7 @@ The built-in `phone` custom field's renderer: calling code and number when edite
 {#if view.mode === 'edit'}
 	<PhoneInput
 		value={view.value}
-		onChange={view.onChange}
+		on_change={view.on_change}
 		id={view.id}
 		disabled={view.disabled}
 		invalid={view.error !== undefined}

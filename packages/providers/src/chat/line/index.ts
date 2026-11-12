@@ -67,11 +67,11 @@ const parse = async (
 	const event = await Schema.decodeUnknownPromise(Event)(raw);
 	const thread = threadOf(event.source),
 		from = senderOf(event.source),
-		sentAt = new Date(event.timestamp).toISOString();
+		sent_at = new Date(event.timestamp).toISOString();
 	if (thread === undefined || from === undefined) return null;
 	const base = {
 		thread,
-		sentAt,
+		sent_at,
 		from: { handle: from, name: null },
 		group: event.source?.type !== 'user'
 	};

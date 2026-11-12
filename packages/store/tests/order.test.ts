@@ -1,8 +1,8 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { catalogOf, order } from '../src/index.ts';
+import { catalog_of, order } from '../src/index.ts';
 
-const catalog = catalogOf({
+const catalog = catalog_of({
 	tables: {
 		customer: { fields: { name: { kind: 'text' } } },
 		order: {

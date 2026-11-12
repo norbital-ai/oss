@@ -41,7 +41,7 @@
 
 ## Authoring contract
 
-- Template tests use the bolt-cli test kit: `TestWorkspace.layer({ root })`, `t.as(actor)` inside `it.effect`. Suites run standalone without Colony.
+- Template tests use the bolt-cli test kit: `TestWorkspace.layer({ root })`, `yield* t.as(actor)` inside `it.effect`. Suites run standalone without Colony.
 - Identities use `sys_user.kind`, `active`, boolean `admin`. Teams and policy links are source; never emulate them with runtime assignments.
 - Assert a refusal through the failure channel (`Effect.flip` or `Effect.result`).
 - Seed mode bypasses callbacks: create executable configuration through guarded writes, including publication.

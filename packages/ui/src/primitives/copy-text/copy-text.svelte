@@ -5,7 +5,7 @@ A readonly value as selectable text, with a copy button on hover or focus (alway
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { onDestroy, type Snippet } from 'svelte';
-	import { cn, uiText } from '../utils.js';
+	import { cn, ui_text } from '../utils.js';
 
 	let {
 		text,
@@ -20,7 +20,7 @@ A readonly value as selectable text, with a copy button on hover or focus (alway
 		/** A richer rendering of the same value (a link, a badge); `text` is still what is copied. */
 		children?: Snippet;
 	} = $props();
-	const t = uiText();
+	const t = ui_text();
 	let copied = $state(false);
 	let reset: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
@@ -69,7 +69,7 @@ A readonly value as selectable text, with a copy button on hover or focus (alway
 	{id}
 	data-readonly
 	class={cn(
-		'group/copy inline-flex max-w-full min-w-0 items-start gap-1 text-sm text-foreground',
+		'group/copy relative inline-flex max-w-full min-w-0 items-start gap-1 text-sm text-foreground',
 		className
 	)}
 >

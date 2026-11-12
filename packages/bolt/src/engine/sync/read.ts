@@ -12,18 +12,18 @@
 // only when it changes. A sync over a driver that pushes (a conversation's messages, a calendar's items) hears its news
 // from hints, so while healthy its slots rest until tomorrow; a page that found nothing and moved nothing commits nothing.
 import { Clock, Effect, Predicate, Schema, Struct } from 'effect';
-import { dec } from '@norbital-ai/std/decimal';
-import { canonical, databaseValue, q, sha256Hex } from '@norbital-ai/store';
+import { canonical, database_value, q, sha256_hex } from '@norbital-ai/store';
 import { DRIVERS } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { LIMITS, type Authority, type DriverPage, type EngineActor } from '../contracts.ts';
-import { isTransient, type EngineError } from '../errors.ts';
-import { Port } from '../port.ts';
+import { is_transient, type EngineError } from '../errors.ts';
+import { Port, uuid } from '../port.ts';
 import { enqueue } from '../runs/queue.ts';
 import { iso } from '../runs/time.ts';
 import { modelKey } from '../write/flatten.ts';
-import { Chain, GATED } from '../write/sql.ts';
+import { Chain, fingerprintAsserts, fingerprinting, GATED, type ReadGuards } from '../write/sql.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { filesOf, stableId } from '../conversations/store.ts';
 import {
 	conversationOf,
@@ -32,7 +32,8 @@ import {
 	integrationBody,
 	type Instance
 } from '../integrations/instances.ts';
-import { syncActor, syncsOf, type RemoteSync, type SyncEngine } from './index.ts';
+import { syncActor, syncs_of, type RemoteSync, type SyncEngine } from './index.ts';
+import { remoteVersionNewer } from './version.ts';
 
 type Obj = { readonly [k: string]: Json };
 /** Rows a page commits at most (rule 25a). */
@@ -45,7 +46,7 @@ const HealthSchema = Schema.Struct({
 	message: Schema.optionalKey(Schema.String),
 	/** On `sys_sync` alone: the slots this read has failed in a row, and when the next one may read again. */
 	failures: Schema.optionalKey(Schema.Number),
-	retryAt: Schema.optionalKey(Schema.String)
+	retry_at: Schema.optionalKey(Schema.String)
 });
 type Health = typeof HealthSchema.Type;
 const READY: Health = { state: 'ready' };
@@ -60,7 +61,7 @@ const restEnd = (failures: number, now: number) => {
 	return Math.ceil((now + length) / length) * length;
 };
 const restOf = (health: Health | null | undefined) =>
-	health?.retryAt === undefined ? 0 : Date.parse(health.retryAt);
+	health?.retry_at === undefined ? 0 : Date.parse(health.retry_at);
 /** The UTC midnight after `at`: a whole multiple, so a workspace's resting syncs wake its database together. */
 const dayAfter = (at: number) => (Math.floor(at / DAY) + 1) * DAY;
 const SyncRowSchema = Schema.Record(Schema.String, Schema.Json).check(
@@ -122,28 +123,33 @@ type Effects = {
 };
 const NONE: Effects = { marks: [], gone: [], consumed: [], changed: false };
 const worst = (all: Iterable<Health | null>): Health => {
-	for (const h of all) if (h?.state === 'attention') return Struct.omit(h, ['failures', 'retryAt']);
+	for (const h of all) if (h?.state === 'attention') return Struct.omit(h, ['failures', 'retry_at']);
 	return READY;
 };
-/** Whether remote version `a` is newer than `b`: numbers and ISO instants compare by value; any other change is newer. */
-export const remoteVersionNewer = (a: string, b: string): boolean => {
-	if (a === b) return false;
-	if (/^-?\d+(\.\d+)?$/.test(a) && /^-?\d+(\.\d+)?$/.test(b)) return dec(a).gt(dec(b));
-	const [x, y] = [Date.parse(a), Date.parse(b)];
-	return /^\d{4}-\d{2}-\d{2}/.test(a) &&
-		/^\d{4}-\d{2}-\d{2}/.test(b) &&
-		Number.isFinite(x) &&
-		Number.isFinite(y)
-		? x > y
-		: true;
-};
 const text = (v: Json) => {
-	const x = databaseValue(v);
+	const x = database_value(v);
 	return typeof x === 'string' ? x : JSON.stringify(x);
 };
 
 export function makeRead(e: SyncEngine) {
 	const { manifest: m, db } = e;
+	const enqueue_read = Effect.fn('Syncs.enqueue_read')(function* (
+		automation: string,
+		input: { instance: string; partition: string },
+		admission: { cause: 'continue'; key: string } | { cause: 'provider' }
+	) {
+		const at = iso(yield* Clock.currentTimeMillis), c = new Chain();
+		const options = admission.cause === 'continue' ? { conflict: 'keep' as const } : {
+			when: `NOT EXISTS (SELECT 1 FROM sys_run WHERE automation = ${c.p(automation)} AND state = 'queued' AND input = ${c.p(input)}::jsonb)`
+		};
+		enqueue(c, [{
+			automation, input, due_at: at,
+			...(admission.cause === 'continue' ? { key: admission.key } : {}),
+			cause: admission.cause, depth: 0
+		}], options);
+		yield* nativeCommit(db.write, e.live.publish, c, CapturedResult);
+		yield* e.announce(at);
+	});
 	/** One read run's work on one instance, as that sync's actor. */
 	function session(s: RemoteSync, inst: Instance, run: string, authority: Authority) {
 		const actor: EngineActor = syncActor(s, inst.id, run);
@@ -167,8 +173,9 @@ export function makeRead(e: SyncEngine) {
 		revision: (record: string) => string
 	) => {
 		const [sync, inst, part] = [c.p(x.s.name), c.p(x.inst.id), c.p(partition)];
-		c.cte(
+		capturePiece(c,
 			'sync_cursor',
+			'sys_sync',
 			`INSERT INTO sys_sync (id, sync, instance, partition, cursor, cycle, phase, health, digest, version, last_read_at, last_change_at)
 			SELECT gen_random_uuid(), ${sync}, ${inst}, ${part}, ${c.p(next.cursor === null ? null : JSON.stringify(next.cursor))}::jsonb,
 				${c.p(next.cycle)}, ${c.p(next.phase)}, ${c.p(JSON.stringify(next.health))}::jsonb, ${c.p(next.digest)}, ${c.p(state.version + 1)},
@@ -176,28 +183,31 @@ export function makeRead(e: SyncEngine) {
 			ON CONFLICT (sync, instance, partition) DO UPDATE SET cursor = excluded.cursor, cycle = excluded.cycle, phase = excluded.phase,
 				health = excluded.health, digest = excluded.digest, version = excluded.version, last_read_at = excluded.last_read_at,
 				last_change_at = coalesce(excluded.last_change_at, sys_sync.last_change_at)
-			WHERE sys_sync.version = ${c.p(state.version)} RETURNING version`
+			WHERE sys_sync.version = ${c.p(state.version)}`, { returning: 'version' }
 		);
 		const after = `${gate} AND EXISTS (SELECT 1 FROM sync_cursor)`;
 		if (fx.marks.length > 0)
-			c.cte(
+			capturePiece(c,
 				'sync_marks',
+				'sys_sync_row',
 				`INSERT INTO sys_sync_row (id, sync, instance, partition, remote_id, record, remote_version, cycle, acked_revision)
 				SELECT gen_random_uuid(), ${sync}, ${inst}, ${part}, k.rid, k.record, k.version, ${c.p(next.cycle)}, ${revision('k.record')}
 				FROM jsonb_to_recordset(${c.p(fx.marks)}::jsonb) AS k(rid text, record text, version text) WHERE ${after}
-				ON CONFLICT (sync, instance, remote_id) DO UPDATE SET record = excluded.record, partition = excluded.partition,
+				ON CONFLICT (sync, instance, record) DO UPDATE SET remote_id = excluded.remote_id, partition = excluded.partition,
 					remote_version = coalesce(excluded.remote_version, sys_sync_row.remote_version), cycle = excluded.cycle,
 					acked_revision = coalesce(excluded.acked_revision, sys_sync_row.acked_revision)`
 			);
 		if (fx.gone.length > 0)
-			c.cte(
+			capturePiece(c,
 				'sync_gone',
+				'sys_sync_row',
 				`DELETE FROM sys_sync_row WHERE sync = ${sync} AND instance = ${inst}
 				AND remote_id IN (SELECT jsonb_array_elements_text(${c.p(fx.gone)}::jsonb)) AND ${after}`
 			);
 		if (fx.consumed.length > 0)
-			c.cte(
+			capturePiece(c,
 				'sync_consumed',
+				'sys_inbox',
 				`UPDATE sys_inbox SET consumed_at = ${c.p(now)}::timestamptz WHERE consumed_at IS NULL
 				AND id::text IN (SELECT jsonb_array_elements_text(${c.p(fx.consumed)}::jsonb)) AND ${after}`
 			);
@@ -208,16 +218,23 @@ export function makeRead(e: SyncEngine) {
 		partition: string,
 		state: State,
 		next: State,
-		fx: Effects = NONE
+		fx: Effects = NONE,
+		reads?: ReadGuards
 	) {
 		const c = new Chain(),
 			now = iso(yield* Clock.currentTimeMillis);
+		fingerprintAsserts(c, reads?.fingerprints ?? [], 'true');
 		statePieces(c, x, partition, state, next, now, fx, 'true', () => 'NULL::int');
-		const rows = yield* db.returning(
-			Schema.Struct({ n: Schema.Number }),
-			c.sql('(SELECT count(*) FROM sync_cursor)::int AS n')
-		);
-		if (rows[0]?.n !== 1)
+		const answer = yield* nativeCommit(
+			(statement) => db.write(statement, { tables: [...(reads?.tables ?? ['sys_sync_row'])].sort(), mode: 'SHARE ROW EXCLUSIVE' }),
+			e.live.publish, c,
+			Schema.Struct({ ...CapturedResult.fields, n: Schema.Number }),
+			'(SELECT count(*) FROM sync_cursor)::int AS n'
+		).pipe(Effect.mapError((error) =>
+			error._tag === 'DbError' && error.sqlstate === 'BA001' && /^fingerprint(?: |$)/.test(error.message)
+				? BoltError.make('conflict', 'commit', `${x.s.name}: the replica changed while planning the page`, error)
+				: error));
+		if (answer.n !== 1)
 			return yield* Effect.fail(
 				BoltError.make(
 					'conflict',
@@ -235,17 +252,14 @@ export function makeRead(e: SyncEngine) {
 		next: State,
 		upserts: readonly Obj[],
 		deletes: readonly string[],
-		fx: Effects
+		fx: Effects,
+		reads: ReadGuards
 	) {
 		const s = x.s,
 			b = yield* e.bindings();
-		const key = JSON.stringify(['sync', s.name, x.inst.id, partition, state.version]);
-		const fields = [
-			...new Set([
-				...upserts.flatMap((row) => Object.keys(row).filter((k) => k !== 'id')),
-				...(s.fk === undefined ? [] : [s.fk])
-			])
-		];
+		// The cursor compare-and-set owns page deduplication; a fresh plan must not replay a prior conflict receipt.
+		const key = JSON.stringify(['sync', s.name, x.inst.id, partition, state.version, yield* uuid(e.crypto)]);
+		const fields = [...new Set(upserts.flatMap((row) => Object.keys(row).filter((k) => k !== 'id')))];
 		const pieces = (c: Chain) => {
 			statePieces(
 				c,
@@ -275,6 +289,7 @@ export function makeRead(e: SyncEngine) {
 			authority: x.authority,
 			bindings: b,
 			invocationId: key,
+			readGuards: reads,
 			mode: { _tag: 'Sync', sync: s.name, instance: x.inst.id, fields, deletes, pieces }
 		})).outcome;
 		if (o.kind !== 'committed')
@@ -303,7 +318,7 @@ export function makeRead(e: SyncEngine) {
 			health: page.health ?? READY
 		};
 		// a row is its `$id`, else its model key's values; the last of a page wins
-		const key = modelKey(m, s.model).filter((f) => f !== s.fk);
+		const key = modelKey(m, s.model);
 		const last = new Map<string, Obj>();
 		for (const row of page.rows) {
 			const rid =
@@ -315,7 +330,7 @@ export function makeRead(e: SyncEngine) {
 			if (rid === undefined)
 				return yield* Effect.fail(
 					BoltError.make(
-						'badAnswer',
+						'bad_answer',
 						'guest',
 						`${s.name}: a row has no $id, and ${s.model} has no key to match it by`
 					)
@@ -333,9 +348,10 @@ export function makeRead(e: SyncEngine) {
 			last.set(rid, row);
 		}
 		if (last.size === 0) return yield* advance(x, partition, state, next, { ...NONE, consumed });
+		const observed = fingerprinting(db);
 		const rids = [...last.keys()];
 		const mapped = new Map(
-			(yield* db.rows(
+			(yield* observed.db.rows(
 				Schema.Struct({
 					remote_id: Schema.String,
 					record: Schema.String,
@@ -343,7 +359,7 @@ export function makeRead(e: SyncEngine) {
 				}),
 				{
 					text: `SELECT remote_id, record, remote_version FROM sys_sync_row WHERE sync = $1 AND instance = $2
-				AND remote_id IN (SELECT jsonb_array_elements_text($3::jsonb))`,
+				AND remote_id IN (SELECT jsonb_array_elements_text($3::jsonb)) ORDER BY remote_id`,
 					params: [s.name, x.inst.id, JSON.stringify(rids)]
 				}
 			)).map((r) => [r.remote_id, r])
@@ -358,21 +374,22 @@ export function makeRead(e: SyncEngine) {
 		const adopted = new Map(
 			unmapped.length === 0
 				? []
-				: (yield* db.rows(Schema.Struct({ rid: Schema.String, id: Schema.String }), {
+				: (yield* observed.db.rows(Schema.Struct({ rid: Schema.String, id: Schema.String }), {
 						text: `SELECT k.rid, t.id::text AS id FROM jsonb_to_recordset($1::jsonb) AS k(rid text, v jsonb)
-				JOIN ${q(s.model)} t ON ${key.map((f, i) => `t.${q(f)}::text = k.v ->> ${i}`).join(' AND ')}${s.fk === undefined ? '' : ` AND t.${q(s.fk)}::text = $2`}`,
+					JOIN ${q(s.model)} t ON ${key.map((f, i) => `t.${q(f)}::text = k.v ->> ${i}`).join(' AND ')}
+					WHERE NOT EXISTS (SELECT 1 FROM sys_sync_row r WHERE r.sync = $2 AND r.instance = $3
+						AND r.record = t.id::text AND r.remote_id IS NOT NULL AND r.remote_id <> k.rid)
+					ORDER BY k.rid, t.id::text`,
 						params: [
 							JSON.stringify(
 								unmapped.map(([rid, row]) => ({ rid, v: key.map((k) => text(row[k] ?? null)) }))
-							),
-							...(s.fk === undefined ? [] : [x.inst.id])
+							), s.name, x.inst.id
 						]
 					})).map((r) => [r.rid, r.id])
 		);
 		const upserts: Obj[] = [],
 			deletes: string[] = [],
-			marks: Mark[] = [],
-			gone: string[] = [];
+			marks: Mark[] = [];
 		for (const [rid, row] of last) {
 			const known = mapped.get(rid);
 			const record = known?.record ?? adopted.get(rid);
@@ -388,39 +405,46 @@ export function makeRead(e: SyncEngine) {
 			}
 			upserts.push({
 				...Object.fromEntries(Object.entries(row).filter(([k]) => !k.startsWith('$'))),
-				...(s.fk === undefined ? {} : { [s.fk]: x.inst.id }),
 				id
 			});
 		}
 		const fx: Effects = {
+			...NONE,
 			marks,
-			gone,
 			consumed,
 			changed: upserts.length > 0 || deletes.length > 0
 		};
+		const reads: ReadGuards = {
+			sourceEpoch: e.epoch, fingerprints: observed.fingerprints(), tables: [s.model, 'sys_outbox', 'sys_sync_row']
+		};
 		return upserts.length === 0 && deletes.length === 0
-			? yield* advance(x, partition, state, next, fx)
-			: yield* write(x, partition, state, next, upserts, deletes, fx);
+			? yield* advance(x, partition, state, next, fx, reads)
+			: yield* write(x, partition, state, next, upserts, deletes, fx, reads);
 	});
 	const reconcile = Effect.fn('Syncs.reconcile')(function* (
 		x: Session,
 		partition: string,
 		state: State
 	) {
-		const rows = yield* db.rows(
+		const observed = fingerprinting(db);
+		const rows = yield* observed.db.rows(
 			Schema.Struct({ remote_id: Schema.String, id: Schema.NullOr(Schema.String) }),
 			{
 				text: `SELECT r.remote_id, t.id::text AS id FROM sys_sync_row r LEFT JOIN ${q(x.s.model)} t ON t.id::text = r.record
-			WHERE r.sync = $1 AND r.instance = $2 AND r.partition = $3 AND r.cycle < $4 ORDER BY r.remote_id LIMIT ${PAGE_ROWS}`,
+			WHERE r.sync = $1 AND r.instance = $2 AND r.partition = $3 AND r.remote_id IS NOT NULL
+			AND r.cycle < $4 ORDER BY r.remote_id LIMIT ${PAGE_ROWS}`,
 				params: [x.s.name, x.inst.id, partition, state.cycle]
 			}
 		);
 		const next: State = { ...state, phase: rows.length === PAGE_ROWS ? 'reconcile' : 'read' };
 		const live = rows.flatMap((r) => (r.id === null ? [] : [r.id]));
 		const fx: Effects = { ...NONE, gone: rows.map((r) => r.remote_id), changed: live.length > 0 };
+		const reads: ReadGuards = {
+			sourceEpoch: e.epoch, fingerprints: observed.fingerprints(), tables: [x.s.model, 'sys_outbox', 'sys_sync_row']
+		};
 		return yield* live.length === 0
-			? advance(x, partition, state, next, fx)
-			: write(x, partition, state, next, [], live, fx);
+			? advance(x, partition, state, next, fx, reads)
+			: write(x, partition, state, next, [], live, fx, reads);
 	});
 	/** The deliveries the inbox holds for this sync and instance, oldest first, as `read` receives them. */
 	const deliveries = Effect.fn('Syncs.deliveries')(function* (x: Session) {
@@ -477,9 +501,9 @@ export function makeRead(e: SyncEngine) {
 					: {
 							id: r['provider_id'] ?? '',
 							thread: r['thread'] ?? '',
-							sentAt: r['sent_at'] ?? null,
+							sent_at: r['sent_at'] ?? null,
 							from: { handle: r['sender'] ?? '', name: r['sender_name'] ?? null },
-							replyTo: r['reply_to'] ?? null,
+							reply_to: r['reply_to'] ?? null,
 							text: r['text'] ?? '',
 							group: r['kind'] === 'group',
 							...(Array.isArray(r['participants']) ? { participants: r['participants'] } : {}),
@@ -513,11 +537,13 @@ export function makeRead(e: SyncEngine) {
 			target: s.target,
 			args: [
 				{
-					cursor,
 					partition: partition === '' ? null : partition,
 					instance: inst.id,
-					deliveries: inbox.deliveries,
-					items: pushed?.items ?? []
+					...(DRIVERS[inst.definition.driver].read === 'items'
+						? { items: pushed?.items ?? [] }
+						: DRIVERS[inst.definition.driver].read === 'deliveries'
+							? { deliveries: inbox.deliveries }
+							: { cursor })
 				},
 				{ $ctx: true }
 			],
@@ -529,7 +555,7 @@ export function makeRead(e: SyncEngine) {
 			onExcessProperty: 'error'
 		}).pipe(
 			Effect.mapError((error) =>
-				BoltError.make('badAnswer', 'guest', `${s.name}: read ${error.message}`)
+				BoltError.make('bad_answer', 'guest', `${s.name}: read ${error.message}`)
 			)
 		);
 		const page: Page = {
@@ -566,24 +592,9 @@ export function makeRead(e: SyncEngine) {
 			if (state.phase !== 'reconcile' && done) return { state, pages };
 			if (pages >= PAGES) {
 				// rule 25a: a continuation run resumes this instance and partition, never an in-process loop past the cap
-				const at = iso(yield* Clock.currentTimeMillis);
-				const c = new Chain();
-				enqueue(
-					c,
-					[
-						{
-							automation: s.name,
-							input: { instance: x.inst.id, partition },
-							dueAt: at,
-							key: JSON.stringify(['sync:continue', s.name, x.inst.id, partition, state.version]),
-							cause: 'continue',
-							depth: 0
-						}
-					],
-					{ conflict: 'keep' }
-				);
-				yield* db.write(c.sql('NULL AS outcome'));
-				yield* e.announce(at);
+				yield* enqueue_read(s.name, { instance: x.inst.id, partition }, {
+					cause: 'continue', key: JSON.stringify(['sync:continue', s.name, x.inst.id, partition, state.version])
+				});
 				return { state, pages };
 			}
 			pages++;
@@ -608,7 +619,7 @@ export function makeRead(e: SyncEngine) {
 				if (state.cursor === null)
 					return yield* Effect.fail(
 						BoltError.make(
-							'noProgress',
+							'no_progress',
 							'commit',
 							`${s.name}: the source lost its history even from no cursor`
 						)
@@ -625,7 +636,7 @@ export function makeRead(e: SyncEngine) {
 			if (page.more && canonical(page.cursor) === canonical(state.cursor))
 				return yield* Effect.fail(
 					BoltError.make(
-						'noProgress',
+						'no_progress',
 						'commit',
 						`${s.name}: the page answered its own cursor again`
 					)
@@ -748,7 +759,7 @@ export function makeRead(e: SyncEngine) {
 			params: [JSON.stringify(instances.map((i) => i.id))]
 		});
 		// a changed declaration of what is read (its integration, its partitions) starts again from no cursor
-		const digest = sha256Hex(canonical({ with: s.definition, partitions: s.partitions ?? null }));
+		const digest = sha256_hex(canonical({ with: s.definition, partitions: s.partitions ?? null }));
 		const failures: EngineError[] = [];
 		let pages = 0;
 		for (const inst of instances) {
@@ -774,11 +785,11 @@ export function makeRead(e: SyncEngine) {
 				// a partition the configuration dropped releases its cursor and id map; its rows stay as they are
 				const dropped = [...states.keys()].filter((p) => !partitions.includes(p));
 				if (dropped.length > 0) {
-					yield* db.write({
-						text: `WITH released AS (DELETE FROM sys_sync_row WHERE sync = $1 AND instance = $2 AND partition IN (SELECT jsonb_array_elements_text($3::jsonb)))
-						DELETE FROM sys_sync WHERE sync = $1 AND instance = $2 AND partition IN (SELECT jsonb_array_elements_text($3::jsonb))`,
-						params: [s.name, inst.id, JSON.stringify(dropped)]
-					});
+					const c = new Chain(), where = `sync = ${c.p(s.name)} AND instance = ${c.p(inst.id)}
+						AND partition IN (SELECT jsonb_array_elements_text(${c.p(dropped)}::jsonb))`;
+					capturePiece(c, 'released', 'sys_sync_row', `DELETE FROM sys_sync_row WHERE ${where}`);
+					capturePiece(c, 'dropped', 'sys_sync', `DELETE FROM sys_sync WHERE ${where}`);
+					yield* nativeCommit(db.write, e.live.publish, c, CapturedResult);
 					for (const p of dropped) healths.delete(`${s.name}\u0000${p}`);
 				}
 				for (partition of typeof args['partition'] === 'string'
@@ -810,8 +821,8 @@ export function makeRead(e: SyncEngine) {
 							code: error instanceof BoltError ? error.code : 'processingFailure',
 							message: error instanceof Error ? error.message.slice(0, 500) : String(error),
 							failures: slots,
-							retryAt: iso(
-								inst.definition.driver === 'sqlserver' && isTransient(error)
+							retry_at: iso(
+								inst.definition.driver === 'sqlserver' && is_transient(error)
 									? now
 									: restEnd(slots, now)
 							)
@@ -819,19 +830,13 @@ export function makeRead(e: SyncEngine) {
 						healths.set(`${s.name}\u0000${partition ?? ''}`, failed);
 						// A failure before reading a partition belongs to the connection health.
 						if (partition === undefined) return;
-						yield* db
-							.write({
-								text: `INSERT INTO sys_sync (id, sync, instance, partition, health, digest, cycle, version) VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb, $5, $6, 1)
-							ON CONFLICT (sync, instance, partition) DO UPDATE SET health = excluded.health`,
-								params: [
-									s.name,
-									inst.id,
-									partition,
-									JSON.stringify(failed),
-									prior?.digest ?? digest,
-									prior?.cycle ?? 0
-								]
-							})
+						const c = new Chain();
+						capturePiece(c, 'sync_failed', 'sys_sync',
+							`INSERT INTO sys_sync (id, sync, instance, partition, health, digest, cycle, version)
+							VALUES (gen_random_uuid(), ${c.p(s.name)}, ${c.p(inst.id)}, ${c.p(partition)},
+								${c.p(JSON.stringify(failed))}::jsonb, ${c.p(prior?.digest ?? digest)}, ${c.p(prior?.cycle ?? 0)}, 1)
+							ON CONFLICT (sync, instance, partition) DO UPDATE SET health = excluded.health`);
+						yield* nativeCommit(db.write, e.live.publish, c, CapturedResult)
 							.pipe(Effect.catch((written) => Effect.sync(() => failures.push(written))));
 					})
 				)
@@ -866,32 +871,14 @@ export function makeRead(e: SyncEngine) {
 			partition: string
 		) {
 			const [inst] = yield* instancesOf(m, db, { ids: [instance] });
-			const s = [...syncsOf(m).values()].find(
+			const s = [...syncs_of(m).values()].find(
 				(x) => x.target === sync && x.read && x.definition === inst?.integration
 			);
 			if (inst === undefined || s === undefined || !('items' in DRIVERS[inst.definition.driver]))
 				return yield* Effect.fail(
-					BoltError.make('invalidInput', 'decode', `'${instance}' has no pushed sync '${sync}'`)
+					BoltError.make('invalid_input', 'decode', `'${instance}' has no pushed sync '${sync}'`)
 				);
-			const at = iso(yield* Clock.currentTimeMillis);
-			const c = new Chain();
-			enqueue(
-				c,
-				[
-					{
-						automation: s.name,
-						input: { instance, partition },
-						dueAt: at,
-						cause: 'provider',
-						depth: 0
-					}
-				],
-				{
-					when: `NOT EXISTS (SELECT 1 FROM sys_run WHERE automation = ${c.p(s.name)} AND state = 'queued' AND input = ${c.p({ instance, partition })}::jsonb)`
-				}
-			);
-			yield* db.write(c.sql('NULL AS outcome'));
-			yield* e.announce(at);
+			yield* enqueue_read(s.name, { instance, partition }, { cause: 'provider' });
 		})
 	};
 }

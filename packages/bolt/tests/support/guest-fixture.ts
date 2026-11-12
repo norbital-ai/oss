@@ -1,6 +1,6 @@
 // The guest fixture manifest and a native guest activation without a database.
 import { Effect, Layer, Option, Result } from 'effect';
-import { decodeProjectedManifest } from '../../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../../src/engine/manifest.ts';
 import {
 	GuestConfig,
 	GuestLive,
@@ -17,8 +17,8 @@ import {
 	type InvocationEvents
 } from '../../src/engine/services.ts';
 
-export const fixtureManifest = Result.getOrThrow(
-	decodeProjectedManifest({
+export const fixture_manifest = Result.getOrThrow(
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},
@@ -38,16 +38,15 @@ export const fixtureManifest = Result.getOrThrow(
 		},
 		integrations: {},
 		teams: {},
-		connections: {},
 		mcp: {},
 		apps: {},
 		groups: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
 /** A native guest activation without a database; tests supply the crossing host. */
-export const guestLayer = (
+export const guest_layer = (
 	guest: GuestProgram,
 	options: GuestOptions = {},
 	events?: (ids: EventIds) => Effect.Effect<InvocationEvents>,
@@ -58,12 +57,12 @@ export const guestLayer = (
 		Layer.provideMerge(
 			Layer.mergeAll(
 				Layer.succeed(GuestConfig, options),
-				Layer.succeed(Manifest, fixtureManifest),
+				Layer.succeed(Manifest, fixture_manifest),
 				Layer.succeed(Activation, {
 					scope: 'test',
 					epoch: '',
 					release: 'test',
-					publicUrl: 'http://localhost',
+					public_url: 'http://localhost',
 					guest: Option.some(guest)
 				}),
 				Layer.succeed(Telemetry, {

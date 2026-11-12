@@ -30,6 +30,42 @@ const Sent = Schema.Struct({ message_id: Schema.Number });
 const File = Schema.Struct({ file_path: Schema.String });
 const Message = Schema.Struct({ to: Schema.NonEmptyString, text: Schema.String });
 type Bot = { id?: number; username?: string };
+const UpdateMessage = Schema.StructWithRest(
+	Schema.Struct({
+		message_id: Schema.Number,
+		date: Schema.Number,
+		chat: Schema.Struct({
+			id: Schema.Number,
+			type: Schema.String,
+			title: Schema.optionalKey(Schema.String)
+		}),
+		from: Schema.optionalKey(
+			Schema.Struct({
+				id: Schema.Number,
+				first_name: Schema.optionalKey(Schema.String),
+				last_name: Schema.optionalKey(Schema.String)
+			})
+		),
+		text: Schema.optionalKey(Schema.String),
+		caption: Schema.optionalKey(Schema.String),
+		is_topic_message: Schema.optionalKey(Schema.Boolean),
+		message_thread_id: Schema.optionalKey(Schema.Number),
+		reply_to_message: Schema.optionalKey(
+			Schema.Struct({
+				message_id: Schema.Number,
+				from: Schema.optionalKey(Schema.Struct({ id: Schema.Number }))
+			})
+		),
+		edit_date: Schema.optionalKey(Schema.Number)
+	}),
+	[Schema.Record(Schema.String, Schema.Unknown)]
+);
+const Update = Schema.decodeUnknownOption(
+	Schema.Struct({
+		message: Schema.optionalKey(UpdateMessage),
+		edited_message: Schema.optionalKey(UpdateMessage)
+	})
+);
 
 export function telegram(o: { readonly api?: string } = {}): ProviderDef {
 	const api = o.api ?? API;
@@ -135,7 +171,7 @@ export function telegram(o: { readonly api?: string } = {}): ProviderDef {
 			const activate = Effect.fn('Telegram.activate')(function* (value: string) {
 				bot = yield* call(BotSchema, value, 'getMe', {});
 				yield* call(Schema.Boolean, value, 'setWebhook', {
-					url: ctx.webhookUrl,
+					url: ctx.webhook_url,
 					secret_token: secret(value),
 					allowed_updates: ['message', 'edited_message']
 				});
@@ -197,7 +233,7 @@ export function telegram(o: { readonly api?: string } = {}): ProviderDef {
 						if (thread !== undefined) form.set('message_thread_id', thread);
 						yield* call(Sent, value, 'sendDocument', form);
 					}
-					return { providerId: `${chat}:${sent.message_id}` };
+					return { provider_id: `${chat}:${sent.message_id}` };
 				}),
 				// a chat action lapses by itself (5 s): there is nothing to send to stop it
 				typing: (to: string, on: boolean) =>
@@ -278,57 +314,41 @@ export function telegramUpdate(
 	update: unknown,
 	bot: Bot
 ): { message: Obj; media: TelegramMedia | null } | null {
-	if (!Predicate.isObject(update)) return null;
-	const edited = Predicate.isObject(update['edited_message']);
-	const msg = edited ? update['edited_message'] : update['message'];
-	if (
-		!Predicate.isObject(msg) ||
-		!Predicate.isObject(msg['chat']) ||
-		typeof msg['message_id'] !== 'number' ||
-		typeof msg['date'] !== 'number'
-	)
-		return null;
-	const chat = msg['chat'],
-		chatId = String(chat['id']);
-	const group = chat['type'] !== 'private';
-	const text =
-		typeof msg['text'] === 'string'
-			? msg['text']
-			: typeof msg['caption'] === 'string'
-				? msg['caption']
-				: '';
-	const from = Predicate.isObject(msg['from']) ? msg['from'] : {};
-	const name = [from['first_name'], from['last_name']]
-		.filter((p) => typeof p === 'string' && p !== '')
+	const decoded = Update(update);
+	if (decoded._tag === 'None') return null;
+	const edited = decoded.value.edited_message !== undefined;
+	const msg = decoded.value.edited_message ?? decoded.value.message;
+	if (msg === undefined) return null;
+	const chat = msg.chat,
+		chatId = String(chat.id);
+	const group = chat.type !== 'private';
+	const text = msg.text ?? msg.caption ?? '';
+	const name = [msg.from?.first_name, msg.from?.last_name]
+		.filter((p) => p !== undefined && p !== '')
 		.join(' ');
 	const thread =
-		msg['is_topic_message'] === true && typeof msg['message_thread_id'] === 'number'
-			? `${chatId}:thread:${msg['message_thread_id']}`
+		msg.is_topic_message === true && msg.message_thread_id !== undefined
+			? `${chatId}:thread:${msg.message_thread_id}`
 			: chatId;
-	const reply = Predicate.isObject(msg['reply_to_message']) ? msg['reply_to_message'] : null;
-	const sentAt = new Date(msg['date'] * 1000).toISOString();
+	const sent_at = new Date(msg.date * 1000).toISOString();
 	const media = mediaOf(msg);
 	return {
 		media,
 		message: {
 			// a Bot API message id is per chat, so the chat is part of the provider id
-			id: `${chatId}:${msg['message_id']}`,
+			id: `${chatId}:${msg.message_id}`,
 			thread,
-			sentAt,
+			sent_at,
 			text: text === '' ? said(msg) : text,
 			group,
-			...(group && str(chat['title']) !== null ? { title: str(chat['title']) } : {}),
-			from: { handle: String(from['id'] ?? ''), name: name === '' ? null : name },
-			replyTo:
-				reply !== null && typeof reply['message_id'] === 'number'
-					? `${chatId}:${reply['message_id']}`
-					: null,
+			...(group && str(chat.title) !== null ? { title: str(chat.title) } : {}),
+			from: { handle: String(msg.from?.id ?? ''), name: name === '' ? null : name },
+			reply_to:
+				msg.reply_to_message === undefined ? null : `${chatId}:${msg.reply_to_message.message_id}`,
 			invocation: group ? invocationOf(msg, text, bot) : 'direct',
 			...(edited
 				? {
-						version: new Date(
-							(typeof msg['edit_date'] === 'number' ? msg['edit_date'] : msg['date']) * 1000
-						).toISOString()
+						version: new Date((msg.edit_date ?? msg.date) * 1000).toISOString()
 					}
 				: {}),
 			// named before its bytes: a file getFile refuses (over 20 MB) or a failed download stays on the message
@@ -401,7 +421,7 @@ function said(msg: Readonly<Record<string, unknown>>): string {
 	return str(field('sticker')?.['emoji']) ?? '';
 }
 function invocationOf(
-	msg: Readonly<Record<string, unknown>>,
+	msg: typeof UpdateMessage.Type,
 	text: string,
 	bot: Bot
 ): 'mention' | 'reply' | 'ambient' {
@@ -421,11 +441,5 @@ function invocationOf(
 		if (e['type'] === 'bot_command' && handle !== undefined && part.endsWith(handle))
 			return 'mention';
 	}
-	const reply = msg['reply_to_message'];
-	return Predicate.isObject(reply) &&
-		Predicate.isObject(reply['from']) &&
-		bot.id !== undefined &&
-		reply['from']['id'] === bot.id
-		? 'reply'
-		: 'ambient';
+	return bot.id !== undefined && msg.reply_to_message?.from?.id === bot.id ? 'reply' : 'ambient';
 }

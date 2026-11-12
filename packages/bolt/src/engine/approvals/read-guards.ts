@@ -18,7 +18,7 @@ export type StoredReadGuards = typeof StoredReadGuards.Type;
 
 /** Initial admission never replaces an existing baseline on an idempotent retry. Decisions refresh only after validation. */
 export function readGuardBaseline(
-	requestId: string,
+	request_id: string,
 	guards: ReadGuards,
 	sourceEpoch: string,
 	refresh?: string
@@ -30,7 +30,7 @@ export function readGuardBaseline(
 			`jsonb_build_object('sql', ${c.p({ text: fingerprint.sql.text, params: fingerprint.sql.params })}::jsonb, 'digest', ${digestOf(inline(fingerprint.sql))})`
 	);
 	const baseline = `jsonb_build_object('sourceEpoch', ${c.p(sourceEpoch)}::text, 'tables', ${c.p(guards.tables)}::jsonb, 'fingerprints', jsonb_build_array(${fingerprints.join(', ')}))`;
-	const id = c.p(requestId);
+	const id = c.p(request_id);
 	const replace =
 		refresh === undefined
 			? " AND NOT (route ? '__boltReadGuards')"
@@ -43,7 +43,7 @@ WHERE id::text = ${id}${replace} RETURNING id`
 	c.assert(
 		`(SELECT count(*) FROM read_guard_baseline) = 1 OR EXISTS (SELECT 1 FROM bolt_approvals WHERE id::text = ${id} AND route ? '__boltReadGuards')`,
 		'conflict',
-		JSON.stringify({ model: 'approval_request', ids: [requestId] })
+		JSON.stringify({ model: 'approval_request', ids: [request_id] })
 	);
 	return c.sql('(SELECT count(*) FROM read_guard_baseline)::int AS updated');
 }

@@ -21,7 +21,7 @@ Author pages with Bolt's page roles; add no SvelteKit routes. A record opens thr
 Every box takes the same `size`:
 
 - `content` (default): its own size, never squeezed; the nearest scroll owner scrolls.
-- `fill`: the space left, shared with `fill` siblings, floored by `minHeight`. In a definite-height parent it takes that height.
+- `fill`: the space left, shared with `fill` siblings, floored by `min_height`. In a definite-height parent it takes that height.
 - `Bound` adds `viewport`: a height below the page chrome, for a view inside content that already scrolls.
 
 There is no `grow`, `shrink` or `h-full`. A view never takes `min-h-[…]`. Nothing scrolls sideways except `Scroll axis="x"`.
@@ -29,7 +29,7 @@ There is no `grow`, `shrink` or `h-full`. A view never takes `min-h-[…]`. Noth
 | Context | Write |
 | --- | --- |
 | view is the region | the view directly: it fills |
-| view beside other content | `Section size="fill"` or a `fill` primitive, `minHeight` its floor |
+| view beside other content | `Section size="fill"` or a `fill` primitive, `min_height` its floor |
 | view inside a `Scroll` | `<Bound size="viewport">` |
 | board | horizontal board, vertical lanes, never the page |
 | clip region (map, video) | `<Bound size="fill" clip>` |
@@ -43,16 +43,19 @@ There is no `grow`, `shrink` or `h-full`. A view never takes `min-h-[…]`. Noth
 
 ## Who owns scroll
 
-- Yes: `Table`, `Board`, `Matrix`, `Form`, `Sheet`, `Scroll size="fill"`.
+- Yes: `Table`, `Board`, `Matrix`, `Form`, `RecordShell`, `Sheet`, `Scroll size="fill"`.
 - No: `Tabs`, `Chart`, `Pivot`, cards.
 
 ## The scroll contract
 
 - Never nest two scrollports on one axis: the inner one traps scroll. Remove a `Scroll` around `Form`, `Table`, `Board`, `Matrix`, `Tabs` or another `Scroll`. Drop height fights around a matrix inside a `Form`.
 - A tab panel never owns scroll. Each tab snippet is one body owner: a self-scrolling view, or a named `Scroll size="fill" inset`, or a `fill` `Split` whose panes are `fill` boxes.
-- Use `Scroll` for the hidden thumb and edge fade; a primitive that cannot render it attaches `scrollAffordance()`. No local scrollbar CSS or scroll listeners.
+- Use `Scroll` for the hidden thumb and edge fade; a primitive that cannot render it attaches `scroll_affordance()`. No local scrollbar CSS or scroll listeners.
 - No generic `overflow` wrappers or flex chains. Clip only for truncation, `Frame` media or an audited sheet boundary.
 - A compound component keeps its chrome outside its scrollport: month controls, headers, filters, pagination stay mounted.
+- `RecordShell` always owns a visible native footer and a fixed header. Its main content overflows inside that frame,
+  including custom representations, tabs, read-only views and create/edit forms. Use `footer` and `footer_actions`
+  to decorate the existing footer; do not add a second record footer or scroll the whole record frame.
 - Loading keeps the outer shell mounted: replace only the data region with shape-matched placeholders and set `aria-busy`. Replacing the component is a layout shift.
 
 ## Responsive

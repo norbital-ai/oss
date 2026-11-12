@@ -11,7 +11,7 @@ and goes full screen from its header.
 	/** The props of `Sheet`: `open`, the side, the title or header, actions and body. */
 	export type SheetProps = {
 		open?: boolean;
-		onOpenChange?: (open: boolean) => void;
+		on_open_change?: (open: boolean) => void;
 		side?: 'left' | 'right';
 		/** The heading and accessible name; a record view inside that claims the header names the dialog when this is absent. */
 		title?: string;
@@ -39,9 +39,9 @@ and goes full screen from its header.
 	import { setContext } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { watch } from 'runed';
-	import { resetInset } from '../../layout/inset.svelte.js';
+	import { reset_inset } from '../../layout/inset.svelte.js';
 	import { TAB_LEVEL } from '../tabs/level.js';
-	import { cn, uiText } from '../utils.js';
+	import { cn, ui_text } from '../utils.js';
 	import { watchKeyboard } from './keyboard.js';
 	import {
 		escapes,
@@ -53,7 +53,7 @@ and goes full screen from its header.
 
 	let {
 		open = $bindable(false),
-		onOpenChange,
+		on_open_change,
 		side = 'right',
 		title,
 		header,
@@ -63,7 +63,7 @@ and goes full screen from its header.
 	}: SheetProps = $props();
 	let shown = $state(open);
 	let depth = $state(0);
-	const t = uiText();
+	const t = ui_text();
 	const me = {};
 	// hook:view-ui — a record view inside claims this header for its label, pills and actions: one header, not two
 	let claimed = $state<Snippet | null>(null);
@@ -79,7 +79,7 @@ and goes full screen from its header.
 	let chrome = $state<{ tools: Snippet } | null>(null);
 	setContext(Symbol.for('ui.sheet.chrome'), (c: { tools: Snippet } | null) => (chrome = c));
 	// an overlay is a new page edge, a new tab hierarchy and a new record frame (an opener's carried record is not a parent)
-	resetInset(true);
+	reset_inset(true);
 	setContext(TAB_LEVEL, undefined);
 	setContext('ui.views.record', undefined);
 
@@ -119,7 +119,7 @@ and goes full screen from its header.
 			if (!open) shown = false;
 			if (asked) {
 				asked = false;
-				onOpenChange?.(false);
+				on_open_change?.(false);
 			}
 		};
 		const { x, y } = shift();

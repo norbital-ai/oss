@@ -2,8 +2,10 @@
 // system table's from `system/rows.ts`). A row that does not decode is an engine fault, `BoltError('internal')` naming
 // the Schema's table; tenant rows a caller only relays stay `Rows` (D5).
 import { Effect, Option, Result, Schema, SchemaAST } from 'effect';
-import type { Rows } from '../contracts.ts';
+import type { RowData, Rows } from '../contracts.ts';
+import type { Catalog } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
+import { storedRow } from './stored.ts';
 
 const malformed = (schema: Schema.Top, issue: string): BoltError =>
 	BoltError.make(
@@ -11,6 +13,24 @@ const malformed = (schema: Schema.Top, issue: string): BoltError =>
 		'decode',
 		`a ${SchemaAST.resolveIdentifier(schema.ast) ?? 'database'} row is malformed: ${issue}`
 	);
+
+const StoredRow = Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+	Schema.Record(Schema.String, Schema.Json)
+]);
+/** Decode composed stored rows at the database boundary, including scalar and list timestamp normalization. */
+export const storedRows = Effect.fn('Bolt.storedRows')(function* (
+	cat: Catalog,
+	table: string,
+	result: Rows | undefined
+) {
+	if (result === undefined)
+		return yield* Effect.fail(
+			BoltError.make('internal', 'decode', `the database did not answer the ${table} read`)
+		);
+	const schema = Schema.Struct({ j: StoredRow }).annotate({ identifier: table });
+	const decoded = yield* decodeRows(schema, result);
+	return decoded.map(({ j }): RowData & { readonly id: string } => ({ ...storedRow(cat, table, j), id: j.id }));
+});
 
 /** Every row of `r`, decoded. */
 export function decodeRows<A>(

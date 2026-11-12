@@ -4,13 +4,13 @@ export { default as Editor, type EditorProps } from './editor.svelte';
 export { default as FileInput, type FileInputProps } from './file-input.svelte';
 export { default as MoneyInput, type MoneyInputProps } from './money-input.svelte';
 export { default as PhoneInput, type PhoneInputProps } from './phone-input.svelte';
-export { formatHandle } from './phone.js';
-export { BUILTIN_FIELDS, fieldEntry } from './builtin/index.js';
+export { format_handle } from './phone.js';
+export { BUILTIN_FIELDS, field_entry } from './builtin/index.js';
 /** A relation/id picker that searches only rows and labels the viewer may read, displays the chosen record's label, and emits its typed id. */
 export { default as Picker, type PickerProps } from './picker.svelte';
 export {
 	default as NumberTuple,
-	splitNumbers,
+	split_numbers,
 	type NumberTupleProps,
 	type NumberTupleSegment,
 	type NumberTupleValue
@@ -21,9 +21,9 @@ export { default as StateBadge, type StateBadgeProps } from './state-badge.svelt
 export { default as StructuredData, type StructuredDataProps } from './structured-data.svelte';
 export { default as TimeRangeInput, type TimeRangeInputProps } from './time-range-input.svelte';
 export {
-	provideKinds,
+	provide_kinds,
 	DEFAULT_BASEMAP,
-	photonGeocoder,
+	photon_geocoder,
 	type ModelExposure,
 	type AutomationExposure,
 	type CustomFieldEntry,
@@ -33,13 +33,13 @@ export {
 } from './context.js';
 export type { DatePrecision, Precision, TimePrecision } from './precision.js';
 export {
-	enumText,
-	fieldsText,
+	enum_text,
+	fields_text,
 	format,
-	formatValue,
-	fieldName,
-	pickerRead,
-	valueObject,
+	format_value,
+	field_name,
+	picker_read,
+	value_object,
 	type EnumScope,
 	type ShowOptions,
 	type Fields,
@@ -52,19 +52,19 @@ export {
 } from './kind.js';
 export { KINDS, presentation, sortable } from './registry.js';
 export {
-	isJsonSchema,
-	isJsonSchemaDocument,
-	jsonSchemaKind,
-	resolveJsonSchema,
+	is_json_schema,
+	is_json_schema_document,
+	json_schema_kind,
+	resolve_json_schema,
 	type JsonSchema
 } from './json-schema.js';
-export { jsonSchemaFromRows, jsonSchemaRows, type JsonSchemaRow } from './json-schema-rows.js';
+export { json_schema_from_rows, json_schema_rows, type JsonSchemaRow } from './json-schema-rows.js';
 
 export {
-	inferJsonSchema,
-	kindJsonSchema,
-	dataChanged,
-	dataEqual,
-	pairDataRows,
+	infer_json_schema,
+	kind_json_schema,
+	data_changed,
+	data_equal,
+	pair_data_rows,
 	type ArrayKeys
 } from './structured-data.js';

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { attachDotField } from './dot-field.js';
-	import { accretionDiscGeometry } from './accretion-geometry.js';
+	import { attach_dot_field } from './dot-field.js';
+	import { accretion_disc_geometry } from './accretion-geometry.js';
 
 	/**
 	 * The loading mark: a black hole's accretion disc in dots, at the size a full surface can carry (the agent's orb
@@ -26,8 +26,8 @@
 		const swatch = root.querySelector('[data-swatch]');
 		if (!(canvas instanceof HTMLCanvasElement) || !(swatch instanceof HTMLElement)) return;
 		// the disc is wider than tall and sits alone, so it reaches further into its box than the strip does
-		return attachDotField(root, canvas, swatch, {
-			geometry: accretionDiscGeometry,
+		return attach_dot_field(root, canvas, swatch, {
+			geometry: accretion_disc_geometry,
 			size,
 			radius: 0.46,
 			readState: () => 'ready',

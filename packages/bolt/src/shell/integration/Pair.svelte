@@ -5,9 +5,10 @@
 	different data, so a different screen. Secrets are masked and cleared once sent; nothing stored is shown back.
 -->
 <script lang="ts">
+	import { everySecond } from '../seconds.ts';
 	import { Effect } from 'effect';
 	import { fork } from '@norbital-ai/ui/effect';
-	import { Button, Combobox, confirmAction, Input, Qr } from '@norbital-ai/ui';
+	import { Button, Combobox, confirm_action, Input, Qr } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
 	import type { ImportStartInput, SetupField } from '../../protocol/instance-status.ts';
@@ -53,12 +54,12 @@
 	let picked = $state<string | null>(null);
 	const choice = $derived(
 		providers.find(
-			(p) => p.id === (picked ?? c?.provider ?? (providers.length === 1 ? providers[0]!.id : null))
+			(p) => p.id === (picked ?? c?.provider ?? (providers.length === 1 ? providers[0]?.id : null))
 		)
 	);
 	let boundary = $state<ImportStartInput | undefined>(undefined);
 	const draft = $derived(
-		choice === undefined ? undefined : (boundary ?? importStartDraft(c?.importStart, choice))
+		choice === undefined ? undefined : (boundary ?? importStartDraft(c?.import_start, choice))
 	);
 	const valid = $derived(
 		choice === undefined || draft === undefined || validImportStart(draft, choice)
@@ -70,13 +71,13 @@
 		}
 	);
 	watch(
-		() => JSON.stringify(c?.importStart ?? null),
+		() => JSON.stringify(c?.import_start ?? null),
 		(current, previous) => {
 			if (previous !== undefined && current !== previous) boundary = undefined;
 		}
 	);
-	const webhookUrl = $derived.by(() => {
-		const u = aboutOf(c)['webhookUrl'];
+	const webhook_url = $derived.by(() => {
+		const u = aboutOf(c)['webhook_url'];
 		return typeof u === 'string' ? u : null;
 	});
 	/** A value a step says to paste into the provider: the webhook URL, or the OAuth redirect URI. */
@@ -95,14 +96,13 @@
 	);
 	// the code's own deadline, counted down; past it the code is refused, so the page offers a fresh one
 	let now = $state(Date.now());
-	const expiresAt = $derived(shown?.expiresAt === undefined ? null : Date.parse(shown.expiresAt));
+	const expiresAt = $derived(shown?.expires_at === undefined ? null : Date.parse(shown.expires_at));
 	watch(
 		() => expiresAt,
 		(deadline) => {
 			if (deadline === null || Number.isNaN(deadline)) return;
 			now = Date.now();
-			const timer = setInterval(() => (now = Date.now()), 1_000);
-			return () => clearInterval(timer);
+			return everySecond((at) => (now = at));
 		}
 	);
 	const left = $derived(
@@ -134,8 +134,8 @@
 		fork(
 			pair({
 				...(providers.length > 1 ? { provider: choice.id } : {}),
-				...(choice.importStart !== undefined && boundary !== undefined
-					? { importStart: boundary }
+				...(choice.import_start !== undefined && boundary !== undefined
+					? { import_start: boundary }
 					: {})
 			})
 		);
@@ -155,7 +155,7 @@
 		e.preventDefault();
 		if (choice === undefined || !valid) return;
 		const input: { [k: string]: Json } = providers.length > 1 ? { provider: choice.id } : {};
-		if (choice.importStart !== undefined && boundary !== undefined) input.importStart = boundary;
+		if (choice.import_start !== undefined && boundary !== undefined) input.import_start = boundary;
 		for (const f of fields) {
 			const v = (values[f.name] ?? '').trim();
 			if (v !== '') input[f.name] = v;
@@ -178,7 +178,7 @@
 					<Combobox
 						aria-label={say(f.label)}
 						value={values[f.name] ?? f.options[0]?.value ?? null}
-						onChange={(v) => {
+						on_change={(v) => {
 							if (v !== null) values[f.name] = v;
 						}}
 						options={f.options.map((o) => ({ value: o.value, label: say(o.label) }))}
@@ -244,11 +244,11 @@
 			</Stack>
 		</Stack>
 	{:else if choice !== undefined && c?.state !== 'connecting'}
-		{#if choice.importStart !== undefined && draft !== undefined && !waiting && shown === null && signIn === null}
+		{#if choice.import_start !== undefined && draft !== undefined && !waiting && shown === null && signIn === null}
 			<ImportStart
 				provider={choice}
 				value={draft}
-				onChange={(value) => (boundary = value)}
+				on_change={(value) => (boundary = value)}
 				{busy}
 				{t}
 				{locale}
@@ -291,11 +291,11 @@
 				{/each}
 			</ol>
 		{/if}
-		{#if choice.setup.webhook === true && webhookUrl !== null && !choice.setup.steps.some((s) => s.copy === 'webhookUrl')}
-			<Facts facts={[['webhookUrl', webhookUrl]]} {t} />
+		{#if choice.setup.webhook === true && webhook_url !== null && !choice.setup.steps.some((s) => s.copy === 'webhook_url')}
+			<Facts facts={[['webhook_url', webhook_url]]} {t} />
 		{/if}
 		{#if choice.setup.kind === 'none'}
-			<Facts facts={Object.entries(aboutOf(c)).filter(([k]) => k !== 'webhookUrl')} {t} />
+			<Facts facts={Object.entries(aboutOf(c)).filter(([k]) => k !== 'webhook_url')} {t} />
 		{/if}
 
 		{#if shown !== null}
@@ -385,14 +385,14 @@
 				data-disconnect
 				onclick={() =>
 					fork(
-						confirmAction({
+						confirm_action({
 							title: t('Disconnect {name}?').replace(
 								'{name}',
 								choice === undefined ? '' : say(choice.label)
 							),
 							body: t('This logs the account out and deletes its stored credentials.'),
-							confirmLabel: t('Disconnect'),
-							cancelLabel: t('Cancel'),
+							confirm_label: t('Disconnect'),
+							cancel_label: t('Cancel'),
 							destructive: true
 						}).pipe(Effect.flatMap((confirmed) => (confirmed ? unpair() : Effect.void)))
 					)}>{t('Disconnect')}</Button

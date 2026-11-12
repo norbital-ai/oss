@@ -13,6 +13,7 @@ import type {
 	PlainDate,
 	RowApproval,
 	RowState,
+	Row,
 	Running
 } from '../../src/index.ts';
 import './registry.ts';
@@ -21,7 +22,7 @@ declare const ctx: PageContext;
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
-declare const order: Id<'orders'>, customer: Id<'customers'>, since: PlainDate;
+declare const order: Row<'orders'>, customer: Id<'customers'>, since: PlainDate;
 
 // ── reads: one read request (a layer map) per read ──
 ctx.query({ orders: { where: { status: { eq: 'draft' } }, order_by: { due: 'asc' }, limit: 10 } });
@@ -54,7 +55,7 @@ ctx.query({ sites: { limit: 10 } }).pipe(
 		}
 	})
 );
-ctx.query({ orders: { where: { id: { eq: order } }, limit: 1 } }).pipe(
+ctx.query({ orders: { where: { id: { eq: order.id } }, limit: 1 } }).pipe(
 	Effect.map(({ orders }) => {
 		const row = orders.rows[0];
 		if (row !== undefined) is<Eq<typeof row.total, Decimal>>();
@@ -63,8 +64,7 @@ ctx.query({ orders: { where: { id: { eq: order } }, limit: 1 } }).pipe(
 // a read request: roots and their declared layers, answered per root in one read
 ctx
 	.query({
-		orders: { where: { due: { gte: since } }, fields: ['total'] },
-		'orders.lines': { fields: ['qty'] }
+		orders: { where: { due: { gte: since } }, fields: ['total'], lines: { fields: ['qty'] } }
 	})
 	.pipe(
 		Effect.map((answer) => {
@@ -92,18 +92,18 @@ ctx.query({ orders: { limit: 1 } }).then(() => {});
 
 // ── acts ──
 ctx
-	.act('orders.update', [{ target: order, set: { note: 'x' } }])
+	.act({ 'orders.update': [{ target: order, set: { note: 'x' } }] })
 	.pipe(
 		Effect.map((outcome) =>
 			is<
 				Eq<
 					typeof outcome,
-					Committed<null, 'orders.update'> | PendingApproval<'orders.update'> | Running
+					Committed<{ readonly 'orders.update': null }> | PendingApproval | Running
 				>
 			>()
 		)
 	);
-ctx.act('orders.create', [{ customer, note: 'x' }]).pipe(
+ctx.act({ 'orders.create': [{ customer, note: 'x' }] }).pipe(
 	Effect.map((o) => {
 		if (o.kind === 'committed')
 			for (const record of o.records) {
@@ -114,32 +114,32 @@ ctx.act('orders.create', [{ customer, note: 'x' }]).pipe(
 // an import is one act: its rows and how it meets the stored rows its key matches
 declare const notice: Id<'notices'>;
 ctx
-	.act('notice_notes.import', {
+	.act({ 'notice_notes.import': {
 		rows: [{ notice, note: 'x' }],
 		on_conflict: 'update',
 		dry_run: true
-	})
+	} })
 	.pipe(
 		Effect.map((o) => {
-			if (o.kind === 'committed') is<Eq<typeof o.output, ActOutput<'notice_notes.import'>>>();
+			if (o.kind === 'committed') is<Eq<typeof o.output, { readonly 'notice_notes.import': ActOutput<'notice_notes.import'> }>>();
 		})
 	);
 // @ts-expect-error P11 an import is not a bare batch of rows
-ctx.act('notice_notes.import', [{ notice, note: 'x' }]);
+ctx.act({ 'notice_notes.import': [{ notice, note: 'x' }] });
 // @ts-expect-error P12 an import names how it meets a stored row
-ctx.act('notice_notes.import', { rows: [{ notice, note: 'x' }] });
+ctx.act({ 'notice_notes.import': { rows: [{ notice, note: 'x' }] } });
 // @ts-expect-error P8 an automation's input
-ctx.run('orders_renote', { ids: [order], note: 5 });
+ctx.run('orders_renote', { ids: [order.id], note: 5 });
 // @ts-expect-error P9 an unknown callable
-ctx.act('orders.nope', {});
-ctx.act('orders.update', [{ target: order, set: { note: 'x' } }]);
+ctx.act({ 'orders.nope': {} });
+ctx.act({ 'orders.update': [{ target: order, set: { note: 'x' } }] });
 // @ts-expect-error P10 a field the update allowlist leaves out
-ctx.act('orders.update', [{ target: order, set: { number: 'x' } }]);
+ctx.act({ 'orders.update': [{ target: order, set: { number: 'x' } }] });
 ctx.run('nightly', {});
 // a file sync's export input, one or a batch (`format` is part of the export arm)
-ctx.run('orders.sync.sheet', { mode: 'export', format: 'json' });
-ctx.run('orders.sync.sheet', [{ mode: 'export', format: 'csv' }]);
-ctx.run('orders_renote', { ids: [order], note: 'x' }).pipe(
+ctx.sync_control('orders', 'sheet', { mode: 'export', format: 'json' });
+ctx.sync_control('orders', 'sheet', { mode: 'export', format: 'csv' });
+ctx.run('orders_renote', { ids: [order.id], note: 'x' }).pipe(
 	Effect.map((outcome) => {
 		is<
 			Eq<

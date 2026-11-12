@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { attachDotField, markRadius } from './dot-field.js';
+	import { attach_dot_field, markRadius } from './dot-field.js';
 	import {
 		NORBIUS_STRIP_STATES,
 		norbiusStripGeometry,
@@ -38,7 +38,7 @@
 		const canvas = root.querySelector('canvas');
 		const swatch = root.querySelector('[data-swatch]');
 		if (!(canvas instanceof HTMLCanvasElement) || !(swatch instanceof HTMLElement)) return;
-		return attachDotField(root, canvas, swatch, {
+		return attach_dot_field(root, canvas, swatch, {
 			geometry: norbiusStripGeometry,
 			size,
 			radius: markRadius(size),

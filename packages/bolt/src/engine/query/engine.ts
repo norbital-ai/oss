@@ -1,5 +1,5 @@
 // The read engine (A4, rule 12): one batch = one pipelined round trip. Identical reads run once; an index search's
-// probe runs before the round trip and its re-rank after. Nothing is clamped (rule 9): `all` past its cap is `tooLarge`.
+// probe runs before the round trip and its re-rank after. Nothing is clamped (rule 9): `all` past its cap is `too_large`.
 import { uuid } from '../port.ts';
 import {
 	Cache,
@@ -9,7 +9,6 @@ import {
 	Latch,
 	Request,
 	RequestResolver,
-	Result,
 	Layer,
 	Predicate,
 	Schema
@@ -24,34 +23,36 @@ import { syncState } from '../sync/index.ts';
 import { approvable, heldModels, rowApproval } from '../approvals/lock.ts';
 import { LIMITS } from '../contracts.ts';
 import { DbError, type EngineError } from '../errors.ts';
-import { BoltError, fromStore } from '../../protocol/errors.ts';
+import { BoltError, from_store } from '../../protocol/errors.ts';
 import { Reads, Manifest, Guest } from '../services.ts';
 import { SqlReadCapture, TenantDb as TenantDbService } from '../db/tenant-db.ts';
 import { Ai } from '../ports.ts';
 
 import { decodeInput, type Decoded } from '../callables/decode.ts';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/std/wire';
 import { agentRead } from '../agent/reads.ts';
-import { runList } from '../runs/index.ts';
-import { readHistory } from './history.ts';
+import { runList } from '../runs/rows.ts';
+import { read_history } from './history.ts';
+import { ReadSnapshots, readSnapshot } from './snapshot.ts';
+import { decodeValue } from '../db/rows.ts';
 import type { Json } from '../../decl/values.ts';
 import {
-	exposureOf,
+	exposure_of,
 	compile as compileSource,
-	compileGets as compileSourceGets,
-	defaultFields,
-	encodeCursor,
+	compile_gets as compileSourceGets,
+	default_fields,
+	encode_cursor,
 	OVER,
-	totalOf,
+	total_of,
 	q,
 	SEMANTIC,
-	storedFields,
+	stored_fields,
 	where,
 	type Catalog,
 	type Compiled,
 	type Probe
 } from '@norbital-ai/store';
-import { catalogOf } from '../access/pred.ts';
+import { catalog_of } from '../access/pred.ts';
 import { composable, isComposable, readOptions } from './reader.ts';
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 /** A `search.indexes` entry's bodies, run in the guest: `probe` picks the vector, `rerank` re-measures a page. */
@@ -99,13 +100,13 @@ const checkedRead = <A>(read: () => A) =>
 			error instanceof BoltError
 				? error
 				: BoltError.make(
-						'badAnswer',
+						'bad_answer',
 						'decode',
 						error instanceof Error ? error.message : String(error),
 						error
 					)
 	});
-const tooLarge = (message: string) => BoltError.make('tooLarge', 'deliver', message);
+const too_large = (message: string) => BoltError.make('too_large', 'deliver', message);
 /** H8: while provided, every read this engine runs adds the models it touched, so a view re-runs on exactly those. */
 export const ReadDeps = Context.Reference<Set<string> | undefined>('bolt/ReadDeps', {
 	defaultValue: () => undefined
@@ -170,7 +171,13 @@ export function readTargets(cat: Catalog, ir: ReadIR, authority?: Authority): Re
 	function add(model: string): void {
 		if (out.has(model)) return;
 		out.add(model);
-		for (const target of cat.models.get(model)?.labelLink?.targets ?? []) add(target);
+		const info = cat.models.get(model);
+		for (const target of info?.label_link?.targets ?? []) add(target);
+		if (info?.record_label?.stored === false)
+			for (const path of info.record_label.paths) {
+				const [field = path, leaf] = path.split('.');
+				if (leaf !== undefined) for (const target of info.one.get(field)?.targets ?? []) add(target);
+			}
 		const grant = authority === undefined || authority.admin ? undefined : authority.models[model];
 		for (const arm of Object.values(grant?.read ?? {}).flatMap((paths) =>
 			Object.values(paths).flat()
@@ -178,6 +185,17 @@ export function readTargets(cat: Catalog, ir: ReadIR, authority?: Authority): Re
 			pred(arm.where);
 	}
 	add(ir.model);
+	if (ir.kind === 'transcript') add('sys_conversation');
+	if (ir.kind === 'runs') add('sys_user');
+	if (ir.kind === 'conversations') {
+		add('sys_message');
+		add('sys_user');
+		add('sys_envoy');
+	}
+	if (ir.kind === 'inbox' && ir.requests) {
+		add('bolt_approvals');
+		add('sys_user');
+	}
 	if ('where' in ir) pred(ir.where);
 	if ('select' in ir && ir.select !== undefined) select(ir.select);
 	if (ir.kind === 'read') for (const t of sortTargets(cat, ir.model, ir.order)) add(t);
@@ -193,14 +211,14 @@ type Plan = {
 	};
 	answer?: Effect.Effect<Json, EngineError>;
 };
-export function readEngine(config: ReadEngineConfig): ReadEngine & {
+export function read_engine(config: ReadEngineConfig): ReadEngine & {
 	catalog: Catalog;
 } {
 	const options = (reader: Reader, bindings: Bindings) =>
 		readOptions(reader, bindings, { sources: config.querySources?.sources, approvals, allBytes });
 	const compile = (cat: Catalog, ir: ReadIR, reader: Reader, bindings: Bindings, probe?: Probe) =>
 		ir.kind === 'read' || ir.kind === 'get' || ir.kind === 'aggregate' || ir.kind === 'similar'
-			? compileSource(cat, ir, options(reader, bindings), probe).pipe(Effect.mapError(fromStore))
+			? compileSource(cat, ir, options(reader, bindings), probe).pipe(Effect.mapError(from_store))
 			: Effect.fail(BoltError.make('invalid', 'decode', `'${ir.kind}' is not a statement read`));
 	const compileGets = (
 		cat: Catalog,
@@ -211,9 +229,9 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		bindings: Bindings
 	) =>
 		compileSourceGets(cat, model, ids, select, options(reader, bindings)).pipe(
-			Effect.mapError(fromStore)
+			Effect.mapError(from_store)
 		);
-	const cat = catalogOf(config.manifest);
+	const cat = catalog_of(config.manifest);
 	// a request opens only on a model today's grants route, or one an earlier release's request still holds
 	const approvals = new Set(approvable(config.manifest, cat));
 	const allBytes = config.allBytes ?? LIMITS.page.allBytes;
@@ -226,9 +244,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		if (config.ready !== undefined) yield* config.ready;
 		for (const model of config.held ?? []) approvals.add(model);
 		if (ir.kind === 'request')
-			return yield* Effect.fail(
-				BoltError.make('internal', 'decode', 'a read request is answered by its roots')
-			);
+			return yield* BoltError.make('internal', 'decode', 'a read request is answered by its roots');
 		if (
 			ir.kind === 'history' ||
 			ir.kind === 'after' ||
@@ -239,9 +255,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		) {
 			const d = config.delegate?.[ir.kind];
 			if (d === undefined)
-				return yield* Effect.fail(
-					BoltError.make('unsupported', 'decode', `this host answers no '${ir.kind}' read`)
-				);
+				return yield* BoltError.make('unsupported', 'decode', `this host answers no '${ir.kind}' read`);
 			return { answer: d(ir, reader, bindings, from) };
 		}
 		if (
@@ -255,21 +269,16 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 			ir.where !== undefined &&
 			JSON.stringify(ir.where).includes('"t":"similar"')
 		) {
-			if (config.embed === undefined)
-				return yield* Effect.fail(
-					BoltError.make(
-						'unavailable',
-						'facility',
-						'this host embeds no text: $similar is unavailable'
-					)
-				);
+			const embed = config.embed;
+			if (embed === undefined)
+				return yield* BoltError.make('unavailable', 'facility', 'this host embeds no text: $similar is unavailable');
 			const probes = new Map<string, Effect.Effect<readonly number[], EngineError>>();
 			const walk = (p: Pred, c: string): void => {
 				if (p.t === 'and' || p.t === 'or') p.of.forEach((x) => walk(x, c));
 				else if (p.t === 'not') walk(p.of, c);
 				else if (p.t === 'one' || p.t === 'many') walk(p.pred, p.target);
 				else if (p.t === 'similar' && !probes.has(`${c}\n${p.to}`))
-					probes.set(`${c}\n${p.to}`, config.embed!(c, p.to));
+					probes.set(`${c}\n${p.to}`, embed(c, p.to));
 			};
 			walk(ir.where, ir.model);
 			const vectors = new Map(
@@ -285,43 +294,35 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 					{ concurrency: 'unbounded' }
 				)
 			);
-			const put = (p: Pred, c: string): Pred =>
-				p.t === 'and' || p.t === 'or'
-					? { ...p, of: p.of.map((x) => put(x, c)) }
-					: p.t === 'not'
-						? { ...p, of: put(p.of, c) }
-						: p.t === 'one' || p.t === 'many'
-							? { ...p, pred: put(p.pred, p.target) }
-							: p.t === 'similar'
-								? { ...p, vector: vectors.get(`${c}\n${p.to}`)! }
-								: p;
-			ir = { ...ir, where: put(ir.where, ir.model) };
+			const put = (p: Pred, c: string): Pred => {
+				if (p.t === 'and' || p.t === 'or') return { ...p, of: p.of.map((x) => put(x, c)) };
+				if (p.t === 'not') return { ...p, of: put(p.of, c) };
+				if (p.t === 'one' || p.t === 'many') return { ...p, pred: put(p.pred, p.target) };
+				if (p.t !== 'similar') return p;
+				const vector = vectors.get(`${c}\n${p.to}`);
+				if (vector === undefined) throw BoltError.make('corrupt', 'decode', 'The similarity predicate has no embedding.');
+				return { ...p, vector };
+			};
+			const predicate = ir.where, model = ir.model;
+			const where = yield* Effect.try({ try: () => put(predicate, model), catch: (error) =>
+				error instanceof BoltError ? error : BoltError.make('corrupt', 'decode', 'The similarity predicate did not assemble.', error) });
+			ir = { ...ir, where };
 		}
 		// L-BOLT-123: `/semantic <text>` and `similar(c, { to })` over `search.semantic`
 		const embed = Effect.fnUntraced(function* (text: string) {
 			if (
-				(yield* exposureOf(cat, ir.model).pipe(Effect.mapError(fromStore))).model.semantic ===
+				(yield* exposure_of(cat, ir.model).pipe(Effect.mapError(from_store))).model.semantic ===
 				undefined
 			)
-				return yield* Effect.fail(
-					BoltError.make('invalid', 'decode', `'${ir.model}' declares no search.semantic (rule 16)`)
-				);
+				return yield* BoltError.make('invalid', 'decode', `'${ir.model}' declares no search.semantic (rule 16)`);
 			if (config.embed === undefined)
-				return yield* Effect.fail(
-					BoltError.make(
-						'unavailable',
-						'facility',
-						'this host embeds no text: semantic search is unavailable'
-					)
-				);
+				return yield* BoltError.make('unavailable', 'facility', 'this host embeds no text: semantic search is unavailable');
 			return yield* config.embed(ir.model, text);
 		});
 		if (ir.kind === 'read' && ir.search !== undefined && /^\/semantic(\s|$)/.test(ir.search)) {
 			const text = ir.search.replace(/^\/semantic\s*/, '');
 			if (text === '')
-				return yield* Effect.fail(
-					BoltError.make('invalid', 'decode', '/semantic needs something to search for')
-				);
+				return yield* BoltError.make('invalid', 'decode', '/semantic needs something to search for');
 			return {
 				compiled: yield* compile(cat, ir, reader, bindings, {
 					field: SEMANTIC,
@@ -354,49 +355,44 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		const bodies = config.index?.(ir.model, ir.index, bindings);
 		const spec = config.manifest.models[ir.model]?.search?.indexes?.[ir.index];
 		if (bodies === undefined || spec === undefined)
-			return yield* Effect.fail(
-				BoltError.make('invalid', 'decode', `'${ir.model}' has no search index '${ir.index}'`)
-			);
-		const decoded = decodeInput(spec.input, ir.input, config.manifest.customFields ?? {});
+			return yield* BoltError.make('invalid', 'decode', `'${ir.model}' has no search index '${ir.index}'`);
+		const decoded = decodeInput(spec.input, ir.input, config.manifest.custom_fields ?? {});
 		if (decoded.problems.length > 0)
 			return yield* BoltError.make(
-				'invalidInput',
+				'invalid_input',
 				'decode',
 				decoded.problems.map((problem) => `${problem.path}: ${problem.message}`).join('; ')
 			);
-		const input = encodeWire(decoded.value);
+		const input = encode_wire(decoded.value);
 		const probe = yield* bodies.probe(input, decoded.custom ?? []);
 		const candidates =
 			bodies.rerank === undefined
 				? 1
-				: ((yield* exposureOf(cat, ir.model).pipe(Effect.mapError(fromStore))).model.indexes[
+				: ((yield* exposure_of(cat, ir.model).pipe(Effect.mapError(from_store))).model.indexes[
 						ir.index
 					]?.candidates ?? 4);
 		const take = ir.limit * candidates;
 		if (take > LIMITS.page.max)
-			return yield* Effect.fail(
-				tooLarge(
-					`the search asks the index for ${take} rows (limit × candidates ≤ ${LIMITS.page.max})`
-				)
-			);
+			return yield* too_large(`the search asks the index for ${take} rows (limit × candidates ≤ ${LIMITS.page.max})`);
 		const w: Pred | undefined =
 			probe.where === undefined
 				? undefined
-				: yield* where(cat, ir.model, probe.where).pipe(Effect.mapError(fromStore));
+				: yield* where(cat, ir.model, probe.where).pipe(Effect.mapError(from_store));
 		// a rerank measures the whole row: a narrowed select is widened for it and narrowed back after (hook:reads)
-		const want = bodies.rerank === undefined ? null : (ir.select?.fields ?? null);
-		const c = yield* exposureOf(cat, ir.model).pipe(Effect.mapError(fromStore));
+		const selected = bodies.rerank === undefined ? undefined : ir.select;
+		const want = selected?.fields ?? null;
+		const c = yield* exposure_of(cat, ir.model).pipe(Effect.mapError(from_store));
 		const wide =
-			want === null
+			selected === undefined || want === null
 				? ir
 				: {
 						...ir,
 						select: {
-							...ir.select!,
+							...selected,
 							fields: [
 								...new Set([
 									...want,
-									...(reader.as === 'caller' ? defaultFields(c) : storedFields(c.model))
+									...(reader.as === 'caller' ? default_fields(c) : stored_fields(c.model))
 								])
 							]
 						}
@@ -412,7 +408,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 				bodies,
 				input,
 				limit: ir.limit,
-				...(want === null
+				...(selected === undefined || want === null
 					? {}
 					: {
 							keep: new Set([
@@ -420,7 +416,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 								'$distance',
 								'$approval',
 								...want,
-								...Object.keys(ir.select!.relations)
+								...Object.keys(selected.relations)
 							])
 						})
 			}
@@ -433,8 +429,9 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 			readonly [c: string]: Json;
 		}[]
 	) {
-		const c = p.compiled!;
-		const counted = totalOf(
+		const c = p.compiled;
+		if (c === undefined) return yield* BoltError.make('corrupt', 'decode', 'The statement read has no compiled plan.');
+		const counted = total_of(
 			rows.map(
 				(r) =>
 					r.j as {
@@ -451,7 +448,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		yield* checkedRead(() => armsFit(ir, js));
 		if (c.kind === 'one' || c.kind === 'agg') return js[0] ?? null;
 		if (ir.kind === 'similar' && over)
-			return yield* Effect.fail(tooLarge(`the search${of} is larger than ${allBytes} bytes`));
+			return yield* too_large(`the search${of} is larger than ${allBytes} bytes`);
 		if (ir.kind === 'similar' && p.similar === undefined) return { rows: js, next: null }; // search.semantic: nearest first, already limited
 		if (p.similar !== undefined) {
 			const { bodies, input, limit, keep } = p.similar;
@@ -472,27 +469,20 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		}
 		if (c.limit === 'all') {
 			if (js.length > LIMITS.page.all)
-				return yield* Effect.fail(
-					tooLarge(`the read${of} matches more than ${LIMITS.page.all} rows; page it (rule 9)`)
-				);
+				return yield* too_large(`the read${of} matches more than ${LIMITS.page.all} rows; page it (rule 9)`);
 			if (over)
-				return yield* Effect.fail(
-					tooLarge(`the read${of} is larger than ${allBytes} bytes; page it (rule 9)`)
-				);
+				return yield* too_large(`the read${of} is larger than ${allBytes} bytes; page it (rule 9)`);
 			return { rows: js, next: null, ...total };
 		}
 		// a page ends early at one crossing's bytes, its cursor after the last row that fits
 		if (over && js.length === 0)
-			return yield* Effect.fail(
-				tooLarge(
-					`a row${of} is larger than ${LIMITS.crossingBytes} bytes; select fewer fields (rule 9)`
-				)
-			);
-		const more = over || js.length > c.limit!;
-		const page = js.slice(0, c.limit!);
+			return yield* too_large(`a row${of} is larger than ${LIMITS.crossingBytes} bytes; select fewer fields (rule 9)`);
+		if (c.limit === null) return yield* BoltError.make('corrupt', 'decode', 'The paged read has no limit.');
+		const more = over || js.length > c.limit;
+		const page = js.slice(0, c.limit);
 		const last = page.at(-1);
 		const next =
-			more && last !== undefined ? encodeCursor(c.hash, last.$k as (string | null)[]) : null;
+			more && last !== undefined ? encode_cursor(c.hash, last.$k as (string | null)[]) : null;
 		return { rows: page.map(({ $k: _, ...row }) => row), next, ...total };
 	});
 	const run: ReadEngine['run'] = Effect.fn('Bolt.read')(function* (
@@ -509,8 +499,12 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 					: [ir];
 			const values = yield* run(batch.flatMap(parts), reader, bindings, from);
 			let at = 0;
-			const next = () => values[at++] ?? null;
-			return batch.map((ir): Json => {
+			const next = (): Json => {
+				const value = values[at++];
+				if (value === undefined) throw BoltError.make('corrupt', 'decode', 'The read request returned no root answer.');
+				return value;
+			};
+			return yield* Effect.try({ try: () => batch.map((ir): Json => {
 				if (ir.kind !== 'request') return next();
 				return Object.fromEntries(
 					ir.roots.map((r) => {
@@ -525,10 +519,10 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 									: Object.fromEntries(Object.entries(row).filter(([k]) => keep.has(k)))
 							];
 						});
-						return [r.root, { rows, next: null }];
+						return [r.root, { rows, next: null, total: rows.length }];
 					})
 				);
-			});
+			}), catch: (error) => error instanceof BoltError ? error : BoltError.make('corrupt', 'decode', 'The read request did not assemble.', error) });
 		}
 		const deps = yield* ReadDeps;
 		if (deps !== undefined)
@@ -539,9 +533,14 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 					reader.as === 'caller' ? reader.authority : undefined
 				))
 					deps.add(model);
-		const keys = batch.map((ir) => JSON.stringify(ir));
-		const unique = [...new Set(keys)];
-		const irs = unique.map((k) => batch[keys.indexOf(k)]!);
+		const distinct = new Map<string, ReadIR>();
+		const keys = batch.map((ir) => {
+			const key = JSON.stringify(ir);
+			if (!distinct.has(key)) distinct.set(key, ir);
+			return key;
+		});
+		const unique = [...distinct.keys()];
+		const irs = [...distinct.values()];
 		// rule 12: `get`s of one shape merge into one lateral statement
 		const merged = new Map<
 			number,
@@ -555,14 +554,15 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 			ir.kind === 'get' && ir.cte === undefined ? [[ir, i] as const] : []
 		);
 		for (const g of Map.groupBy(gets, ([ir]) => JSON.stringify([ir.model, ir.select])).values()) {
-			if (g.length < 2) continue;
+			const first = g[0];
+			if (g.length < 2 || first === undefined) continue;
 			mergedSql.push(
 				composable(
 					yield* compileGets(
 						cat,
-						g[0]![0].model,
+						first[0].model,
 						g.map(([ir]) => ir.id),
-						g[0]![0].select,
+						first[0].select,
 						reader,
 						bindings
 					)
@@ -593,28 +593,45 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		);
 		const base = statements.length;
 		statements.push(...mergedSql);
-		const results = statements.length === 0 ? [] : yield* readComposed(config.db, statements, ctes);
+		const snapshots = yield* ReadSnapshots;
+		const snapshotIndex = snapshots !== undefined && statements.length > 0 ? statements.length : undefined;
+		if (snapshotIndex !== undefined)
+			statements.push({ text: 'SELECT pg_current_snapshot()::text AS snapshot', params: [] });
+		const results = statements.length === 0 ? [] : yield* read_composed(config.db, statements, ctes);
+		if (snapshotIndex !== undefined && snapshots !== undefined) {
+			const result = results[snapshotIndex];
+			if (result === undefined) return yield* BoltError.make('corrupt', 'decode', 'The read batch returned no snapshot.');
+			const value = yield* decodeValue(Schema.String, result);
+			const snapshot = yield* Effect.try({ try: () => readSnapshot(value), catch: (error) =>
+				error instanceof BoltError ? error : BoltError.make('corrupt', 'decode', 'The read snapshot did not decode.', error) });
+			for (const [index, ir] of irs.entries())
+				if (plans[index]?.compiled !== undefined || merged.has(index)) snapshots.set(JSON.stringify(ir), snapshot);
+		}
 		let i = 0;
 		const answers = yield* Effect.all(
 			plans.map(
 				Effect.fnUntraced(function* (p: Plan, k: number) {
 					const at = merged.get(k);
+					const ir = irs[k];
+					if (ir === undefined) return yield* BoltError.make('corrupt', 'decode', 'The read plan has no source.');
 					return yield* Effect.gen(function* () {
-						if (at === undefined) return yield* p.answer ?? finish(p, irs[k]!, results[i++]!.rows);
-						const j = (results[base + at.s]!.rows[at.n]?.['j'] ?? null) as {
-							[k: string]: Json;
-						} | null;
-						yield* checkedRead(() => armsFit(irs[k]!, j === null ? [] : [j]));
+						if (at === undefined) {
+							if (p.answer !== undefined) return yield* p.answer;
+							const result = results[i++];
+							if (result === undefined) return yield* BoltError.make('corrupt', 'decode', 'The read returned no statement answer.');
+							return yield* finish(p, ir, result.rows);
+						}
+						const result = results[base + at.s]?.rows[at.n];
+						if (result === undefined) return yield* BoltError.make('corrupt', 'decode', 'The grouped get returned no row envelope.');
+						const { j } = yield* Schema.decodeUnknownEffect(Schema.Struct({ j: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)) }))(result).pipe(
+							Effect.mapError((error) => BoltError.make('corrupt', 'decode', 'The grouped get returned an invalid row.', error)));
+						yield* checkedRead(() => armsFit(ir, j === null ? [] : [j]));
 						return j;
 					}).pipe(
 						Effect.catch((e) =>
 							Effect.gen(function* () {
 								// a keyed read's member names itself in its cap (`ctx.read({ … })`)
-								const member = (
-									irs[k] as {
-										member?: string;
-									}
-								).member;
+								const member = 'member' in ir && typeof ir.member === 'string' ? ir.member : undefined;
 								return yield* Effect.fail(
 									member === undefined || !(e instanceof BoltError)
 										? e
@@ -631,7 +648,8 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		const exposed = yield* Effect.all(
 			answers.map(
 				Effect.fnUntraced(function* (answer: Json, index: number) {
-					const ir = irs[index]!;
+					const ir = irs[index];
+					if (ir === undefined) return yield* BoltError.make('corrupt', 'decode', 'The answer has no source read.');
 					if ((ir.kind !== 'get' && ir.kind !== 'read' && ir.kind !== 'similar') || answer === null)
 						return answer;
 					const rows =
@@ -644,7 +662,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 						.filter((row) => Predicate.isObject(row))
 						.filter((row) => typeof row['id'] === 'string');
 					const ids = records.map((row) => String(row['id']));
-					// a record a write sync sends carries each sync's latest delivery state as `$sync`
+					// `$sync` summarizes each sync's latest state per connection: failure before pending before acknowledged.
 					// Delivery status is advisory; its worker must not invalidate a business read.
 					const states = yield* syncState(config.manifest, config.db, ir.model, ids).pipe(
 						Effect.provideService(SqlReadCapture, undefined)
@@ -671,7 +689,13 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 			),
 			{ concurrency: 'unbounded' }
 		);
-		return keys.map((k) => exposed[unique.indexOf(k)]!);
+		const out: Json[] = [];
+		for (const key of keys) {
+			const answer = exposed[unique.indexOf(key)];
+			if (answer === undefined) return yield* BoltError.make('corrupt', 'decode', 'The read batch returned no answer.');
+			out.push(answer);
+		}
+		return out;
 	});
 	return { catalog: cat, run };
 }
@@ -683,7 +707,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
  * continues in a further statement of the same round trip. A keyed read's members (`ctes`) are named CTEs, so a later
  * member's `MemberRef` reads an earlier one inside the statement.
  */
-export const readComposed = Effect.fn('Bolt.readComposed')(function* (
+export const read_composed = Effect.fn('Bolt.read_composed')(function* (
 	db: TenantDb,
 	statements: readonly Sql[],
 	ctes: readonly (string | undefined)[] = []
@@ -692,7 +716,12 @@ export const readComposed = Effect.fn('Bolt.readComposed')(function* (
 	const folded = statements.flatMap((s, i) =>
 		isComposable(s) || ctes[i] !== undefined ? [i] : []
 	);
-	if (folded.length < 2 && !named) return yield* db.read(statements);
+	if (folded.length < 2 && !named) {
+		const result = yield* db.read(statements);
+		if (result.length !== statements.length || result.some((row) => row === undefined))
+			return yield* Effect.fail(DbError.make('22P02', 'The read batch returned an incomplete answer.'));
+		return result;
+	}
 	const composed: Sql[] = [];
 	let withs: string[] = [],
 		parts: string[] = [],
@@ -710,7 +739,8 @@ export const readComposed = Effect.fn('Bolt.readComposed')(function* (
 		params = [];
 	};
 	for (const m of folded) {
-		const s = statements[m]!;
+		const s = statements[m];
+		if (s === undefined) return yield* Effect.fail(DbError.make('22P02', 'The composed read has no source statement.'));
 		// one statement while any member is named: a reference never straddles two
 		if (!named && parts.length > 0 && params.length + s.params.length > LIMITS.statement.params)
 			flush();
@@ -729,12 +759,16 @@ export const readComposed = Effect.fn('Bolt.readComposed')(function* (
 	flush();
 	const others = statements.flatMap((s, i) => (folded.includes(i) ? [] : [[i, s] as const]));
 	const res = yield* db.read([...composed, ...others.map(([, s]) => s)]);
+	if (res.length !== composed.length + others.length)
+		return yield* Effect.fail(DbError.make('22P02', 'The composed read returned the wrong number of answers.'));
 	const out: Rows[] = [];
-	for (const result of res.slice(0, composed.length))
+	for (const result of res.slice(0, composed.length)) {
+		if (result === undefined)
+			return yield* Effect.fail(DbError.make('22P02', 'The composed read returned no statement answer.'));
 		for (const row of result.rows) {
 			const decoded = yield* Schema.decodeUnknownEffect(
 				Schema.Struct({
-					m: Schema.Number,
+					m: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: statements.length - 1 })),
 					j: Schema.Array(Schema.Record(Schema.String, Schema.Json))
 				})
 			)(row).pipe(
@@ -742,23 +776,39 @@ export const readComposed = Effect.fn('Bolt.readComposed')(function* (
 					DbError.make('22P02', `The composed read answer is invalid: ${error.message}`)
 				)
 			);
+			if (out[decoded.m] !== undefined)
+				return yield* Effect.fail(DbError.make('22P02', 'The composed read returned a duplicate answer.'));
 			out[decoded.m] = { rows: decoded.j, affected: decoded.j.length };
 		}
-	others.forEach(([i], n) => {
-		out[i] = res[composed.length + n]!;
-	});
-	return out;
+	}
+	for (const [n, [i]] of others.entries()) {
+		const result = res[composed.length + n];
+		if (result === undefined) return yield* Effect.fail(DbError.make('22P02', 'The read returned no statement answer.'));
+		out[i] = result;
+	}
+	const answers: Rows[] = [];
+	for (const index of statements.keys()) {
+		const result = out[index];
+		if (result === undefined) return yield* Effect.fail(DbError.make('22P02', 'The composed read omitted a statement answer.'));
+		answers.push(result);
+	}
+	return answers;
 });
 /** This allocation belongs to one act; cache failures as well as successful first answers. */
-export const memoReads = Effect.fn('Bolt.memoReads')(function* (db: TenantDb) {
+export const memo_reads = Effect.fn('Bolt.memo_reads')(function* (db: TenantDb) {
 	const statements = new Map<string, Sql>();
 	const cache = yield* Cache.make({
 		capacity: Infinity,
 		lookup: (key: string) => {
 			const statement = statements.get(key);
-			return statement === undefined
-				? Effect.die('memoReads: missing registered statement')
-				: db.read([statement]).pipe(Effect.map((rows) => rows[0] ?? { rows: [], affected: 0 }));
+			if (statement === undefined) return Effect.die('memo_reads: missing registered statement');
+			return Effect.gen(function* () {
+				const rows = yield* db.read([statement]);
+				const row = rows[0];
+				if (rows.length !== 1 || row === undefined)
+					return yield* Effect.fail(DbError.make('22P02', 'The memoized read returned no statement answer.'));
+				return row;
+			});
 		}
 	});
 	// only the read path is memoized: every other member stays the caller's own (same function identity)
@@ -809,7 +859,7 @@ export const coalescing = Effect.fn('Bolt.coalescing')(function* (
 		) {
 			waiting = undefined;
 			yield* ready.close;
-			const rows = yield* readComposed(
+			const rows = yield* read_composed(
 				db,
 				entries.flatMap((entry) => entry.request.statements)
 			);
@@ -859,7 +909,7 @@ function armsFit(
 					r.page._tag === 'All' &&
 					list.length > LIMITS.page.relationArm
 				)
-					throw tooLarge(
+					throw too_large(
 						`relation '${rel}' holds more than ${LIMITS.page.relationArm} rows; state a limit (rule 9)`
 					);
 				for (const item of list) {
@@ -874,27 +924,30 @@ function armsFit(
  * The one read API's call (`query(request)`; `db.query` as the workspace) as the decoder's member: a read request, the
  * only shape `query` takes. Other members (`aggregate`, `history`, the engine's own `get`, `read`, `after`) pass through.
  */
-function decoderCall(member: string, args: readonly Json[]): [string, readonly Json[]] {
-	if (member !== 'query' && member !== 'db.query') return [member, args];
+function decoderCall(member: string, args: readonly Json[]): Effect.Effect<[string, readonly Json[]], BoltError> {
+	if (member !== 'query' && member !== 'db.query') return Effect.succeed<[string, readonly Json[]]>([member, args]);
 	const [request] = args;
 	if (args.length !== 1 || !Predicate.isObject(request))
-		throw BoltError.make(
-			'invalid',
-			'decode',
-			'query takes one read request: query({ <model>: { where?, fields?, order_by?, limit? }, … })'
+		return Effect.fail(
+			BoltError.make(
+				'invalid',
+				'decode',
+				'query takes one read request: query({ <model>: { where?, fields?, order_by?, limit? }, … })'
+			)
 		);
-	return [member === 'db.query' ? 'db.request' : 'request', [request]];
+	return Effect.succeed<[string, readonly Json[]]>([member === 'db.query' ? 'db.request' : 'request', [request]]);
 }
-/** The host maps the Result decoder at its one wire edge. */
-export function lowerRead(m: EngineManifest, member: string, args: readonly Json[]): ReadIR {
-	const [decoded, decodedArgs] = decoderCall(member, args);
-	return Result.match(decodeRead(catalogOf(m), decoded, decodedArgs), {
-		onSuccess: (value) => value,
-		onFailure: (error) => {
-			throw BoltError.make('invalid', 'decode', error.message, error);
-		}
-	});
-}
+/** The host's one wire edge: every decode refusal is `invalid`. */
+export const lower_read = Effect.fn('Bolt.lower_read')(function* (
+	m: EngineManifest,
+	member: string,
+	args: readonly Json[]
+): Effect.fn.Return<ReadIR, BoltError> {
+	const [decoded, decodedArgs] = yield* decoderCall(member, args);
+	return yield* decodeRead(catalog_of(m), decoded, decodedArgs).pipe(
+		Effect.mapError((error) => BoltError.make('invalid', 'decode', error.message, error))
+	);
+});
 
 /** No acquired Callables/Agents dependency: search bodies run in the guest. */
 export const ReadsLive = Layer.effect(
@@ -952,15 +1005,15 @@ export const ReadsLive = Layer.effect(
 			);
 			if (outcome.kind === 'failed') return yield* Effect.fail(outcome.error);
 			if (outcome.kind === 'refused')
-				return yield* Effect.fail(BoltError.make('forbidden', 'guest', outcome.message));
+				return yield* BoltError.make('forbidden', 'guest', outcome.message);
 			return outcome.output;
 		});
 		const make = (over: TenantDb): ReadEngine => {
 			const history = (read: ReadIR, reader: Reader, bindings: Bindings) =>
 				read.kind === 'history'
-					? readHistory(over, manifest, read, reader, bindings)
+					? read_history(over, manifest, read, reader, bindings)
 					: Effect.fail(BoltError.make('invalid', 'decode', 'Expected a history read.'));
-			return readEngine({
+			return read_engine({
 				db: over,
 				manifest,
 				held,
@@ -973,11 +1026,9 @@ export const ReadsLive = Layer.effect(
 					runs: (read, who) =>
 						read.kind !== 'runs' || who.as !== 'caller'
 							? Effect.fail(BoltError.make('invalid', 'decode', 'Expected a caller runs read.'))
-							: runList(over, who.authority, read.limit, read.automation, read.id).pipe(
+							: runList(over, who.authority, read.limit, read.automation, read.id, read.brief).pipe(
 									Effect.map((rows) => ({
-										rows: read.brief
-											? rows.map(({ input: _i, result: _r, attempts: _a, ...row }) => row)
-											: rows,
+										rows,
 										next: null
 									}))
 								)
@@ -1000,12 +1051,12 @@ export const ReadsLive = Layer.effect(
 								Effect.mapError((error) =>
 									error instanceof BoltError
 										? error
-										: BoltError.make('badAnswer', 'guest', error.message, error)
+										: BoltError.make('bad_answer', 'guest', error.message, error)
 								)
 							);
 							if (checked.length !== values.length)
 								return yield* BoltError.make(
-									'badAnswer',
+									'bad_answer',
 									'guest',
 									'A custom validation returns one result per value.'
 								);
@@ -1013,7 +1064,7 @@ export const ReadsLive = Layer.effect(
 							const value = values[bad];
 							if (value !== undefined)
 								return yield* BoltError.make(
-									'invalidInput',
+									'invalid_input',
 									'decode',
 									`${value.path}: ${checked[bad]}`
 								);
@@ -1030,7 +1081,7 @@ export const ReadsLive = Layer.effect(
 							Effect.mapError((error) =>
 								error instanceof BoltError
 									? error
-									: BoltError.make('badAnswer', 'guest', error.message, error)
+									: BoltError.make('bad_answer', 'guest', error.message, error)
 							)
 						);
 					});
@@ -1070,7 +1121,7 @@ export const ReadsLive = Layer.effect(
 								? Effect.succeed(vectors[0])
 								: Effect.fail(
 										BoltError.make(
-											'badAnswer',
+											'bad_answer',
 											'facility',
 											'The embedding width differs from its declared dimension.'
 										)

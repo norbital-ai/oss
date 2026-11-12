@@ -8,7 +8,7 @@
 	import {
 		Button,
 		Combobox,
-		confirmAction,
+		confirm_action,
 		Dialog,
 		EmptyState,
 		format,
@@ -17,13 +17,14 @@
 		Tabs
 	} from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
+	import { read_answer } from '../../protocol/read-answer.ts';
 	import type { AiModel } from '../../engine/contracts.ts';
 	import type { SettingsTab, ShellBoot } from '../nav.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
-	import { chosenLocale } from '../i18n.ts';
+	import { chosenLocale, usd } from '../i18n.ts';
 	import { workspaceConnection, type IntegrationSetupEntry } from '../integration/setup.ts';
 	import { SYSTEM_UI, type SystemUiIntent } from '../../protocol/system-ui.ts';
 	import DetailSheet from '../DetailSheet.svelte';
@@ -39,7 +40,8 @@
 		t,
 		tab,
 		workspace,
-		integrationSetups,
+		read_catalog,
+		integration_setups,
 		configuration = null
 	}: {
 		api: ShellApi;
@@ -47,8 +49,9 @@
 		t: (key: string) => string;
 		tab: SettingsTab;
 		workspace: ShellBoot['workspace'];
+		read_catalog: ShellBoot['read_catalog'];
 		/** The definitions' own setup components (`integration/<name>/+integration.svelte`); the generic setup otherwise. */
-		integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry } | undefined;
+		integration_setups?: { readonly [integration: string]: IntegrationSetupEntry } | undefined;
 		configuration?: SystemUiIntent | null;
 	} = $props();
 
@@ -75,7 +78,9 @@
 	let invalidate: (() => void) | undefined;
 	const settings = observe(() => {
 		const owner = api,
-			source = bolt;
+			source = bolt,
+			catalog = read_catalog;
+		const revisions = { sys_integration: { fields: ['revision'] } };
 		const requested = Stream.callback<void>((queue) =>
 			Effect.acquireRelease(
 				Effect.sync(() => {
@@ -95,12 +100,15 @@
 		return Stream.merge(
 			requested,
 			source
-				.observe(source.query({ sys_integration: { fields: ['revision'] } }))
+				.observe(
+					{ read: { m: 'query', a: [revisions] } },
+					Schema.suspend(() => read_answer(catalog, revisions))
+				)
 				.pipe(Stream.map(() => undefined))
 		).pipe(Stream.switchMap(() => Stream.fromEffect(owner.settings())));
 	});
 	const s = $derived(settings.current ?? null);
-	const hasConnections = $derived(s?.instances.some(workspaceConnection) ?? false);
+	const hasConnections = $derived((s?.integrations.length ?? 0) > 0);
 	let mutationError = $state<string | null>(null);
 	const error = $derived(mutationError ?? settings.error?.message ?? null);
 	// Invalidation switches only the inner read, keeping the open integration sheet mounted while it refreshes.
@@ -115,7 +123,7 @@
 					value === undefined ? [] : [[key, value]]
 				)
 			);
-			const result = yield* Effect.result(api.settingsOp(name, body));
+			const result = yield* Effect.result(api.settings_op(name, body));
 			if (result._tag === 'Failure') {
 				mutationError = result.failure.message;
 				return undefined;
@@ -173,13 +181,13 @@
 						label: t('Revoke'),
 						run: () =>
 							fork(
-								confirmAction({
+								confirm_action({
 									title: t('Revoke the key {name}? Programs using it stop at once.').replace(
 										'{name}',
 										k.name
 									),
-									confirmLabel: t('Revoke'),
-									cancelLabel: t('Cancel'),
+									confirm_label: t('Revoke'),
+									cancel_label: t('Cancel'),
 									destructive: true
 								}).pipe(
 									Effect.flatMap((confirmed) =>
@@ -324,8 +332,6 @@
 		}
 	);
 	const limit = (v: string) => (v.trim() === '' ? null : Math.max(0, Number(v)));
-	const usd = (n: number) =>
-		new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(n);
 </script>
 
 {#snippet card(title: string, description: string, body: Snippet)}
@@ -415,7 +421,7 @@
 					onsubmit={(e) => {
 						e.preventDefault();
 						fork(
-							op('setAgent', {
+							op('set_agent', {
 								monthly: limit(a.monthly),
 								member: limit(a.member),
 								policies: Object.fromEntries(
@@ -526,7 +532,7 @@
 								value={null}
 								placeholder={a.models.length === 0 ? t('Every model') : t('Add a model')}
 								aria-label={t('Models members may use')}
-								onChange={(id) => {
+								on_change={(id) => {
 									if (id !== null) a.models = [...a.models, id];
 								}}
 							/>
@@ -551,7 +557,7 @@
 				{t}
 				settings={s}
 				locale={chosenLocale(workspace.locale)}
-				{integrationSetups}
+				{integration_setups}
 				reload={load}
 			/>
 		{/snippet}
@@ -563,7 +569,7 @@
 				{t}
 				settings={s}
 				locale={chosenLocale(workspace.locale)}
-				{integrationSetups}
+				{integration_setups}
 				reload={load}
 			/>
 		{/snippet}
@@ -571,7 +577,7 @@
 			<Table
 				of={keys}
 				key="keys"
-				onOpen={show('key')}
+				on_open={show('key')}
 				toolbar={{
 					title: t('API keys'),
 					description: t('Keys for programmatic access. A new key is shown once.'),
@@ -601,7 +607,7 @@
 			<Table
 				of={remotes}
 				key="mcp-servers"
-				onOpen={show('remote')}
+				on_open={show('remote')}
 				toolbar={{
 					title: t('MCP servers'),
 					description: t('MCP servers this workspace connects to.'),
@@ -625,7 +631,7 @@
 		{/snippet}
 		<Tabs
 			value={integrationTab ?? (hasConnections ? 'connections' : 'envoys')}
-			onValueChange={(value) => (integrationTab = value)}
+			on_value_change={(value) => (integrationTab = value)}
 			orientation="horizontal"
 			tabs={[
 				...(hasConnections
@@ -647,7 +653,7 @@
 		<Table
 			of={secrets}
 			key="secrets"
-			onOpen={(x) => {
+			on_open={(x) => {
 				open = { kind: 'secret', id: x.id };
 				secretValue = '';
 			}}
@@ -683,7 +689,7 @@
 			<DetailSheet
 				title={k.name}
 				acts={keyActs(k)}
-				onClose={close}
+				on_close={close}
 				fields={[
 					{ label: t('Key'), value: k.prefix },
 					{ label: t('Team'), value: k.team },
@@ -698,7 +704,7 @@
 		{#if r !== undefined}
 			<DetailSheet
 				title={r.name}
-				onClose={close}
+				on_close={close}
 				fields={[{ label: t('URL secret'), value: r.url }]}
 				acts={r.secrets.map((name) => ({
 					label: t('Set {name}').replace('{name}', name),
@@ -715,7 +721,7 @@
 			<DetailSheet
 				title={x.label}
 				acts={secretActs(x)}
-				onClose={close}
+				on_close={close}
 				fields={[
 					{ label: t('Variable'), value: x.name },
 					{ label: t('Status'), value: x.status }
@@ -755,7 +761,7 @@
 <!-- The API key secret is shown once. -->
 <Dialog.Root
 	open={creating}
-	onOpenChange={(o) => {
+	on_open_change={(o) => {
 		if (!o) closeDialog();
 	}}
 >
@@ -790,7 +796,7 @@
 					aria-label={t('Team')}
 					options={teams}
 					value={form.keyTeam || null}
-					onChange={(v) => (form.keyTeam = v ?? '')}
+					on_change={(v) => (form.keyTeam = v ?? '')}
 				/>
 				{#if error !== null}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
 				<Dialog.Footer>

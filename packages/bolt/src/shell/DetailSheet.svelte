@@ -17,7 +17,7 @@
 		summary,
 		children,
 		footer,
-		onClose
+		on_close
 	}: {
 		title: string;
 		fields?: readonly { label: string; value: Json | undefined; kind?: Kind }[];
@@ -25,7 +25,7 @@
 		summary?: Snippet;
 		children?: Snippet;
 		footer?: Snippet;
-		onClose: () => void;
+		on_close: () => void;
 	} = $props();
 	const details = $derived(fields.filter((field) => field.value !== undefined));
 </script>
@@ -33,8 +33,8 @@
 <Sheet
 	open
 	{title}
-	onOpenChange={(open) => {
-		if (!open) onClose();
+	on_open_change={(open) => {
+		if (!open) on_close();
 	}}
 >
 	<div class={['flex min-w-0 flex-col gap-4', footer && 'h-full min-h-0']}>

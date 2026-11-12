@@ -1,24 +1,18 @@
-// Notifications as code (spec §2.2): a model's `notify` receives each write or approval event after the commit, as the
-// queued platform run `bolt.notify`, reads the workspace, and returns notices; `ctx.notify` takes the same shape. Every
-// notice reaches the in-app inbox of its recipients, and each `via` connection gets one delivery row (write/sql.ts
-// `noticeInsert`). A notice never delays or fails the write that caused it.
-import { Clock, Effect, Predicate, Schema } from 'effect';
-import { localOf } from '@norbital-ai/std/zone';
-import { CONVERT_TARGETS, LIMITS, type Invocation, type QueuedRun } from '../contracts.ts';
+// Effects and automations send notices through ctx.notify. Recipient expansion and attachment preparation
+// belong here; the captured notice writer queues each inbox push and connection delivery with its inserted row.
+import { Effect, Schema } from 'effect';
+import { CONVERT_TARGETS, LIMITS } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';
-import { Guest, Live, Manifest, Wake, type RunHandler } from '../services.ts';
+import { Captured, CapturedResult, capturedFields, nativeCommit } from '../db/captured.ts';
+import { Live, Wake } from '../services.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { Chain, noticeCaptures, noticeInsert } from '../write/sql.ts';
-import { CommitAnswer } from '../write/commit.ts';
-import { transformBridge } from '../write/act.ts';
-import { nextDue } from '../runs/queue.ts';
-import { iso } from '../runs/time.ts';
+import { Chain } from '../write/sql.ts';
+import { NOTICE_DELIVER, noticePiece } from './queue.ts';
+import { next_due } from '../runs/queue.ts';
 import { convertDocument } from '../facilities.ts';
-import { Snapshot } from '../approvals/snapshot.ts';
+import type { ApprovalRecipients } from '../../protocol/effect-events.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
-
-export const NOTIFY = 'bolt.notify';
 
 /** A workspace event as the host publishes it (a change merged, maintenance scheduled, a payment due): `at` is ISO. */
 export type WorkspaceNote = {
@@ -31,66 +25,20 @@ export type WorkspaceNote = {
 export const announce = Effect.fn('Bolt.announce')(function* (notes: readonly WorkspaceNote[]) {
 	if (notes.length === 0) return;
 	const db = yield* TenantDb,
-		live = yield* Live;
-	const inserted = yield* db.returning(Schema.Struct({ id: Schema.String }), {
-		text: `INSERT INTO sys_notification (id, recipient, member, title, body, link, once, attachments, at)
+		live = yield* Live,
+		wake = yield* Wake;
+	const c = new Chain();
+	c.params.push(JSON.stringify(notes));
+	noticePiece(c, 'announced', `INSERT INTO sys_notification (id, recipient, member, title, body, link, once, attachments, at)
 	SELECT 'event:' || e.id || ':' || u.id, '{"channel":"inbox","recipients":[]}'::jsonb, u.id, e.title, e.body, NULL,
 		'event:' || e.id || ':' || u.id, '[]'::jsonb, e.at::timestamptz
 	FROM jsonb_to_recordset($1::jsonb) AS e(id text, at text, title text, body text)
 	CROSS JOIN sys_user u WHERE u.active AND u.kind = 'staff'
-	ON CONFLICT (once) DO NOTHING RETURNING id`,
-		params: [JSON.stringify(notes)]
-	});
-	if (inserted.length > 0)
-		live.syncChanged(
-			'sys_notification',
-			inserted.map((row) => row.id)
-		);
-});
-
-const Approvers = Schema.Struct({
-	teams: Schema.Array(Schema.String),
-	users: Schema.Array(Schema.String)
-});
-/** A `NotifyEvent` as JSON (decl/ctx.ts): what the `bolt.notify` run carries and the model's `notify` receives. */
-export const NotifyWire = Schema.Union([
-	Schema.Struct({
-		kind: Schema.Literal('write'),
-		action: Schema.String,
-		records: Schema.Array(Schema.Json),
-		previous: Schema.Array(Schema.NullOr(Schema.Json)),
-		actor: Schema.Json
-	}),
-	Schema.Struct({
-		kind: Schema.Literal('approval'),
-		move: Schema.Literals([
-			'request',
-			'approve',
-			'reject',
-			'request_changes',
-			'resubmit',
-			'supersede',
-			'withdraw'
-		]),
-		step: Schema.Number,
-		steps: Snapshot.fields.steps,
-		done: Schema.Boolean,
-		request: Schema.String,
-		records: Schema.Array(Schema.Json),
-		requester: Schema.NullOr(Schema.String),
-		approvers: Approvers
-	})
-]);
-export type NotifyWire = typeof NotifyWire.Type;
-const NotifyInput = Schema.Struct({ model: Schema.String, event: NotifyWire });
-
-/** H1: the queued run that hands `event` to `model`'s `notify` after the causing statement commits. */
-export const notifyRun = (input: { model: string; event: NotifyWire }, now: string): QueuedRun => ({
-	automation: NOTIFY,
-	input,
-	dueAt: now,
-	cause: 'schedule',
-	depth: 0
+	ON CONFLICT (once) DO NOTHING`);
+	const result = yield* nativeCommit(db.write, live.publish, c,
+		Schema.Struct({ ...CapturedResult.fields, next_due: Schema.NullOr(Schema.String) }),
+		`${next_due(c)}::text AS next_due`);
+	if (result.next_due !== null) yield* wake.at(result.next_due);
 });
 
 const Recipient = Schema.Union([
@@ -142,7 +90,7 @@ export type NoticeContext = {
 	readonly link?: { readonly model: string; readonly id: string } | undefined;
 	/** An approval event's requester and current approvers; elsewhere `'requester'` and `'approvers'` reach nobody. */
 	readonly approval?:
-		{ readonly requester: string | null; readonly approvers: typeof Approvers.Type } | undefined;
+		{ readonly requester: string | null; readonly approvers: typeof ApprovalRecipients.Type } | undefined;
 };
 
 /** H1: notices as an author returns them (one or a list) → `noticeInsert` rows, recipients expanded and checked. */
@@ -156,7 +104,7 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 	).pipe(
 		Effect.mapError((error) =>
 			BoltError.make(
-				'invalidInput',
+				'invalid_input',
 				'guest',
 				`a notice is { title, description?, to: [recipient], via?, attachments?, link?, once? }: ${error.message}`,
 				error
@@ -164,7 +112,14 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 		)
 	);
 	if (list.length > LIMITS.changesPerAct)
-		return yield* Effect.fail(BoltError.make('tooLarge', 'guest', 'too many notices at once'));
+		return yield* Effect.fail(BoltError.make('too_large', 'guest', 'too many notices at once'));
+	const channels = [...new Set(list.flatMap((notice) => notice.via ?? []))];
+	const accounts = channels.length === 0 ? [] : yield* (yield* TenantDb).rows(
+		Schema.Struct({ id: Schema.String, integration: Schema.String, owner: Schema.NullOr(Schema.String) }),
+		{ text: 'SELECT id,integration,owner FROM sys_integration WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))',
+			params: [JSON.stringify(channels)] }
+	);
+	const byId = new Map(accounts.map((account) => [account.id, account]));
 	const requester = ctx.approval?.requester ?? null;
 	const expand = (to: Notice['to'][number]): Addressee[] =>
 		to === 'requester'
@@ -181,7 +136,7 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 	for (const [index, notice] of list.entries()) {
 		if (notice.to.length === 0)
 			return yield* Effect.fail(
-				BoltError.make('invalidInput', 'guest', 'a notice names at least one recipient')
+				BoltError.make('invalid_input', 'guest', 'a notice names at least one recipient')
 			);
 		const to = [...new Map(notice.to.flatMap(expand).map((r) => [JSON.stringify(r), r])).values()];
 		const unknown = to.find(
@@ -192,19 +147,19 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 		if (unknown !== undefined)
 			return yield* Effect.fail(
 				BoltError.make(
-					'invalidInput',
+					'invalid_input',
 					'guest',
 					`a notice names ${JSON.stringify(unknown)}: no such team or policy in this workspace`
 				)
 			);
 		if (to.length === 0) continue;
 		for (const channel of notice.via ?? []) {
-			const slot = ctx.manifest.connections[channel],
-				definition = slot === undefined ? undefined : definitionOf(ctx.manifest, slot.integration);
-			if (definition === undefined || conversationOf(definition) === undefined)
+			const account = byId.get(channel);
+			const definition = account === undefined ? undefined : definitionOf(ctx.manifest, account.integration);
+			if (account === undefined || account.owner !== null || definition === undefined || conversationOf(definition) === undefined)
 				return yield* Effect.fail(
 					BoltError.make(
-						'invalidInput',
+						'invalid_input',
 						'guest',
 						`A notice channel '${channel}' must name a conversation connection.`
 					)
@@ -225,13 +180,13 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 	return rows;
 });
 
-/** A document attachment converted (H5) into a file the `bolt.notify` run owns; a stored file stays as it is. */
+/** A document attachment converted (H5) into a file the notification delivery owns; a stored file stays as it is. */
 const attached = (attachment: Attachment) =>
 	'document' in attachment
 		? convertDocument(attachment.document, {
 				to: attachment.to,
 				name: attachment.name,
-				for: NOTIFY
+				for: NOTICE_DELIVER
 			}).pipe(
 				Effect.map((file): Attachment => ({ id: file.id, name: file.name, mime: file.mime })),
 				Effect.mapError((error) =>
@@ -261,122 +216,22 @@ export const prepareNoticeFiles = Effect.fn('Bolt.prepareNoticeFiles')(function*
 			params: [JSON.stringify(ids)]
 		}
 	);
-	for (const row of rows) {
-		if (!row.attachments.some((attachment) => 'document' in attachment)) continue;
-		const attachments = yield* Effect.forEach(row.attachments, attached);
-		yield* db.write({
-			text: 'UPDATE sys_notification SET attachments = $2::jsonb WHERE id = $1 AND attachments = $3::jsonb',
-			params: [row.id, JSON.stringify(attachments), JSON.stringify(row.attachments)]
-		});
-		live.syncChanged('sys_notification', [row.id]);
-	}
+	const converted = yield* Effect.forEach(
+		rows.filter((row) => row.attachments.some((attachment) => 'document' in attachment)),
+		(row) =>
+			Effect.map(Effect.forEach(row.attachments, attached), (attachments) => ({
+				id: row.id,
+				attachments,
+				before: row.attachments
+			}))
+	);
+	if (converted.length === 0) return;
+	// every converted notice in one statement, each only while it still holds the attachments read
+	const captured = yield* db.returning(Captured, {
+		text: `UPDATE sys_notification n SET attachments = v.attachments FROM jsonb_to_recordset($1::jsonb) AS v(id text, attachments jsonb, before jsonb)
+	WHERE n.id = v.id AND n.attachments = v.before RETURNING ${capturedFields("'sys_notification'")}`,
+		params: [JSON.stringify(converted)]
+	});
+	live.publish(captured);
 });
 
-/**
- * H1: the `bolt.notify` run handler. Invokes the model's `notify` with the event (guest kind `notify`, workspace reads,
- * no I/O), expands `'requester'`/`'approvers'` from an approval event, converts document attachments, and inserts the
- * notices in one statement keyed by the run, so a retried attempt delivers nothing twice.
- */
-export const runNotify = Effect.gen(function* () {
-	const m = yield* Manifest,
-		db = yield* TenantDb,
-		guest = yield* Guest,
-		live = yield* Live,
-		wake = yield* Wake,
-		context = yield* Effect.context<Effect.Services<ReturnType<typeof convertDocument>>>();
-	const run: RunHandler = (input, current) =>
-		Effect.gen(function* () {
-			const { model, event } = yield* Schema.decodeUnknownEffect(NotifyInput)(input).pipe(
-				Effect.mapError((error) =>
-					BoltError.make(
-						'invalidInput',
-						'decode',
-						'a bolt.notify run carries { model, event }',
-						error
-					)
-				)
-			);
-			// a release that dropped the model's `notify` since the event was queued
-			if (m.exposures[model]?.notify !== true) return { notices: 0 };
-			const now = iso(yield* Clock.currentTimeMillis);
-			const invocation: Invocation = {
-				id: current.id,
-				run: current.id,
-				kind: 'notify',
-				target: model,
-				input: event,
-				ctx: {
-					actor: { kind: 'system', run: current.id, by: { platform: NOTIFY } },
-					now,
-					today: localOf(Date.parse(now), m.workspace.tz).date,
-					tz: m.workspace.tz,
-					seed: current.id
-				},
-				budget: { crossings: LIMITS.crossings.sync, readBytes: LIMITS.readBytes }
-			};
-			const result = yield* guest.invoke(invocation, transformBridge(m, db, invocation));
-			if (result.kind === 'failed') return yield* Effect.fail(result.error);
-			if (result.kind === 'refused')
-				return yield* Effect.fail(BoltError.make('guestError', 'guest', result.message));
-			const approvers =
-				event.kind === 'approval'
-					? yield* db.rows(Schema.Struct({ id: Schema.String }), {
-							text: `SELECT u.id FROM bolt_approvals a JOIN sys_user u ON
-						(a.route -> 'steps' -> a.step -> 'users' ? u.id OR
-						(a.route -> 'steps' -> a.step -> 'teams' ? u.team AND u.team IN (SELECT jsonb_array_elements_text($2::jsonb))))
-					WHERE a.id = $1::uuid AND a.state = 'Pending' AND u.active AND u.kind = 'staff'
-						AND a.requestor <> 'member:' || u.id AND a.requestor_user IS DISTINCT FROM u.id`,
-							params: [event.request, JSON.stringify(Object.keys(m.teams))]
-						})
-					: [];
-			const first = event.records[0];
-			const record = !Array.isArray(first) && Predicate.hasProperty(first, 'id') ? first.id : null;
-			const rows = yield* noticeRows(result.output, {
-				manifest: m,
-				id: event.kind === 'approval' ? `${event.request}:${current.id}` : current.id,
-				link:
-					typeof record === 'string' && (event.kind === 'approval' || event.records.length === 1)
-						? { model, id: record }
-						: undefined,
-				approval:
-					event.kind === 'approval'
-						? {
-								requester: event.requester,
-								approvers: { teams: [], users: approvers.map((user) => user.id) }
-							}
-						: undefined
-			});
-			if (rows.length === 0) return { notices: 0 };
-			const delivered = new Set(
-				(yield* db.rows(Schema.Struct({ id: Schema.String }), {
-					text: `SELECT r.id FROM jsonb_to_recordset($1::jsonb) AS r(id text, once text)
-				WHERE EXISTS (SELECT 1 FROM sys_notification n WHERE left(n.once, length(r.once) + 1) = r.once || ':')`,
-					params: [JSON.stringify(rows)]
-				})).map((row) => row.id)
-			);
-			const converted = yield* Effect.forEach(
-				rows.filter((row) => !delivered.has(row.id)),
-				(row) =>
-					Effect.map(Effect.forEach(row.attachments, attached), (attachments): NoticeInsert => ({
-						...row,
-						attachments
-					}))
-			).pipe(Effect.provideContext(context));
-			if (converted.length === 0) return { notices: 0 };
-			const c = new Chain();
-			noticeInsert(c, 'n', converted, now, 'true', m.teams, m.workspace.signup?.policies);
-			const [answer] = yield* db.returning(
-				Schema.Struct({
-					captured: CommitAnswer.fields.captured,
-					next_due: CommitAnswer.fields.next_due
-				}),
-				c.sql(`${noticeCaptures(c)} AS captured, ${nextDue(c)} AS next_due`)
-			);
-			if (answer !== undefined) {
-				live.publish(answer.captured);
-				if (answer.next_due !== null) yield* wake.at(answer.next_due);
-			}
-			return { notices: converted.length };
-		});
-	return run;
-});

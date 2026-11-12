@@ -1,7 +1,7 @@
 // An invocation's events: each written to the host's runtime log as it happens.
 import { Clock, Effect, Layer, type Scope } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
-import type { LogQuery } from '../contracts.ts';
+import { LIMITS, type LogQuery } from '../contracts.ts';
 import { Logs, type LogsShape } from '../ports.ts';
 import { Telemetry, type EventIds, type InvocationEvents } from '../services.ts';
 /** A page of the runtime log from the host's store, newest first; the caller has checked the reader may see it. */
@@ -17,11 +17,9 @@ export const readLog = (logs: LogsShape, query: LogQuery) =>
 				)
 			)
 		);
-/** How many of a run's latest lines its readers get. */
-const RUN_LOG_LINES = 100;
 /** A run's latest log lines, oldest first; a store that cannot answer says so in place of the lines, never as an empty log. */
-export const runLog = (logs: LogsShape, run: string) =>
-	readLog(logs, { run, limit: RUN_LOG_LINES }).pipe(
+export const runLog = (logs: LogsShape, run: string, after?: string) =>
+	readLog(logs, { run, limit: LIMITS.runLog.lines, ...(after === undefined ? {} : { after }) }).pipe(
 		Effect.map((lines) => lines.toReversed()),
 		Effect.catch((error) => Effect.succeed(error.message))
 	);

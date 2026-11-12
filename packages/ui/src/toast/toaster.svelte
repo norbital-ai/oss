@@ -4,10 +4,10 @@ The page's toasts, bottom right (bottom centre on a phone, above the safe area).
 -->
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { cn, uiText } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
 	import { dismiss, toasts, type ToastTone } from './toast.svelte.js';
 
-	const t = uiText();
+	const t = ui_text();
 	const ICON: { readonly [k in ToastTone]: string | null } = {
 		default: null,
 		success: 'lucide:circle-check',
@@ -31,6 +31,7 @@ The page's toasts, bottom right (bottom centre on a phone, above the safe area).
 >
 	<ol class="flex w-full max-w-sm flex-col gap-2" aria-live="polite">
 		{#each toasts as toast (toast.id)}
+			{@const icon = ICON[toast.tone]}
 			<li
 				role={toast.tone === 'error' ? 'alert' : 'status'}
 				data-toast={toast.tone}
@@ -39,8 +40,8 @@ The page's toasts, bottom right (bottom centre on a phone, above the safe area).
 					TONE[toast.tone]
 				)}
 			>
-				{#if ICON[toast.tone]}<Icon
-						icon={ICON[toast.tone]!}
+				{#if icon}<Icon
+						{icon}
 						class="mt-0.5 size-4 shrink-0"
 						aria-hidden="true"
 					/>{/if}

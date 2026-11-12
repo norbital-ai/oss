@@ -1,7 +1,7 @@
 // Skill folders for file runs (P24's table): a CommonJS report with siblings and a vendored dayjs-like package, an ES
 // module with top-level await and an ES-module-only package, and what an author gets wrong.
 import { Effect } from 'effect';
-import { treeDigest } from '../../src/engine/artifact/read.ts';
+import { tree_digest } from '../../src/engine/artifact/read.ts';
 import type { Skill } from '../../src/engine/agent/tools.ts';
 import { Port } from '../../src/engine/port.ts';
 
@@ -122,17 +122,17 @@ export const BROKEN: Tree = {
 
 const encoder = new TextEncoder();
 /** A tree as the bundler takes it: every file by its path. */
-export const filesOf = (tree: Tree): (readonly [string, Uint8Array])[] =>
+export const files_of = (tree: Tree): (readonly [string, Uint8Array])[] =>
 	Object.entries(tree).map(([path, text]): readonly [string, Uint8Array] => [
 		path,
 		encoder.encode(text)
 	]);
 /** A tree as the agent holds a skill: its listing, digest and each file's bytes. */
-export const skillOf = (tree: Tree): Skill => {
-	const files = new Map(filesOf(tree));
+export const skill_of = (tree: Tree): Skill => {
+	const files = new Map(files_of(tree));
 	return {
 		text: tree['SKILL.md'] ?? '',
-		digest: treeDigest(files),
+		digest: tree_digest(files),
 		files: [...files.keys()].sort(),
 		read: (path) => {
 			const bytes = files.get(path);

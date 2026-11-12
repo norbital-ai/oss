@@ -60,9 +60,9 @@ type RollUp<M, P extends string, K> = K extends { kind: 'sum' | 'count' | 'state
 			: K extends { kind: 'state'; states: infer S }
 				? Unknown<
 						M,
-						{ [X in keyof S]: S[X] extends { edit: readonly (infer E)[] } ? E : never }[keyof S],
-						FieldName<M> | OwnedInverse<M>,
-						`${P}.edit`
+						{ [X in keyof S]: S[X] extends { stamp: infer F } ? F : never }[keyof S],
+						{ [F in keyof Columns<M>]: Columns<M>[F] extends { kind: 'instant' } ? F : never }[keyof Columns<M>],
+						`${P}.stamp`
 					>
 				: K extends { kind: 'seq'; per: infer L }
 					? Unknown<M, Listed<L>, FieldName<M>, `${P}.per`>
@@ -82,7 +82,7 @@ type ModelErrors<M, D = Models[M & keyof Models]> =
 			FieldName<M>,
 			'indexes'
 	  >
-	| Unknown<M, Each<D extends { noOverlap: infer L } ? L : never, 'key'>, FieldName<M>, 'noOverlap'>
+	| Unknown<M, Each<D extends { no_overlap: infer L } ? L : never, 'key'>, FieldName<M>, 'no_overlap'>
 	| Unknown<
 			M,
 			D extends { locks: infer L }

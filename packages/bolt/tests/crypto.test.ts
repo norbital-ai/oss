@@ -9,7 +9,7 @@ import {
 	toBase64,
 	toBase64url
 } from '../src/engine/crypto.ts';
-import { sha256, toHex } from '@norbital-ai/store';
+import { sha256, to_hex } from '@norbital-ai/store';
 
 // every length around the 55/56/64-byte padding seams, then a few multi-block sizes
 const lengths = [...Array.from({ length: 130 }, (_, i) => i), 1000, 4095, 65536];
@@ -24,8 +24,8 @@ describe('engine crypto matches node:crypto', () => {
 			expect(sha256(data)).toEqual(digest('sha256', data));
 		}
 		const text = 'grüße, 世界 🌍';
-		expect(toHex(sha256(text))).toBe(node.createHash('sha256').update(text).digest('hex'));
-		expect(toHex(sha1(''))).toBe(node.createHash('sha1').update('').digest('hex'));
+		expect(to_hex(sha256(text))).toBe(node.createHash('sha256').update(text).digest('hex'));
+		expect(to_hex(sha1(''))).toBe(node.createHash('sha1').update('').digest('hex'));
 	});
 
 	it('hmacSha256 with short, block-sized and long keys', () => {
@@ -36,9 +36,23 @@ describe('engine crypto matches node:crypto', () => {
 					new Uint8Array(node.createHmac('sha256', key).update(data).digest())
 				);
 		}
-		expect(toHex(hmacSha256('secret', 'body'))).toBe(
+		expect(to_hex(hmacSha256('secret', 'body'))).toBe(
 			node.createHmac('sha256', 'secret').update('body').digest('hex')
 		);
+	});
+
+	it('hashes and encodes the exact bytes of offset views', () => {
+		for (const length of [0, 1, 2, 3, 55, 56, 63, 64, 65, 127, 128]) {
+			const backing = new Uint8Array(node.randomBytes(length + 19));
+			const data = backing.subarray(7, 7 + length), key = backing.subarray(2, 18);
+			expect(sha1(data)).toEqual(digest('sha1', data));
+			expect(hmacSha256(key, data)).toEqual(new Uint8Array(node.createHmac('sha256', key).update(data).digest()));
+			expect(toBase64(data)).toBe(Buffer.from(data).toString('base64'));
+			expect(toBase64url(data)).toBe(Buffer.from(data).toString('base64url'));
+			const equal = new Uint8Array(length + 5);
+			equal.set(data, 3);
+			expect(timingSafeEqual(data, equal.subarray(3, 3 + length))).toBe(true);
+		}
 	});
 
 	it('timingSafeEqual', () => {
@@ -46,7 +60,9 @@ describe('engine crypto matches node:crypto', () => {
 		expect(timingSafeEqual(a, a.slice())).toBe(true);
 		expect(timingSafeEqual(new Uint8Array(0), new Uint8Array(0))).toBe(true);
 		const b = a.slice();
-		b[31] = b[31]! ^ 1;
+		const last = b.at(31);
+		if (last === undefined) throw new Error('Expected a 32-byte digest');
+		b[31] = last ^ 1;
 		expect(timingSafeEqual(a, b)).toBe(false);
 		expect(timingSafeEqual(a, a.subarray(1))).toBe(false);
 	});
@@ -54,7 +70,7 @@ describe('engine crypto matches node:crypto', () => {
 	it('hex and base64', () => {
 		for (const data of inputs) {
 			const buffer = Buffer.from(data);
-			expect(toHex(data)).toBe(buffer.toString('hex'));
+			expect(to_hex(data)).toBe(buffer.toString('hex'));
 			expect(buffer.equals(fromHex(buffer.toString('hex')))).toBe(true);
 			expect(toBase64(data)).toBe(buffer.toString('base64'));
 			expect(toBase64url(data)).toBe(buffer.toString('base64url'));

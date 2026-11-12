@@ -108,15 +108,6 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Payment provider callback';
 					policies: readonly ['sales_rep'];
-					on: readonly [
-						{
-							webhook: '/payments';
-							verify: {
-								scheme: 'stripe';
-								secret: 'HOOK_SECRET';
-							};
-						}
-					];
 					input: {
 						order: {
 							kind: 'text';
@@ -161,7 +152,7 @@ declare module '../../src/index.ts' {
 				update: {
 					columns: { customers: readonly ['name', 'email', 'tier', 'tags'] };
 				};
-				delete: { check: true };
+				delete: {};
 				syncs: {
 					crm: {
 						with: 'erp';
@@ -190,6 +181,7 @@ declare module '../../src/index.ts' {
 					};
 					filled: { orders: readonly ['note'] };
 					transform: true;
+					effect: true;
 				};
 				update: {
 					columns: {
@@ -197,11 +189,9 @@ declare module '../../src/index.ts' {
 						'orders.lines': readonly ['item', 'qty', 'price'];
 					};
 					transform: true;
+					effect: true;
 				};
-				delete: {
-					check: true;
-				};
-				notify: true;
+				delete: { effect: true };
 				syncs: {
 					ledger: {
 						with: 'kingdee';
@@ -220,7 +210,6 @@ declare module '../../src/index.ts' {
 						schema: {
 							customer: {
 								kind: 'text';
-								label: 'Customer';
 							};
 							note: {
 								kind: 'text';
@@ -339,7 +328,7 @@ declare module '../../src/index.ts' {
 				};
 			};
 		};
-		customFields: {
+		custom_fields: {
 			rating: {
 				spec: {
 					description: 'A score with an optional note';
@@ -405,7 +394,7 @@ declare module '../../src/index.ts' {
 				};
 			};
 		};
-		hostTools: {
+		host_tools: {
 			browser: true;
 		};
 		integrations: {
@@ -414,7 +403,7 @@ declare module '../../src/index.ts' {
 					description: 'The ERP API.';
 					driver: 'http';
 					configuration: {
-						baseUrl: {
+						base_url: {
 							kind: 'text';
 							format: 'url';
 						};
@@ -435,15 +424,13 @@ declare module '../../src/index.ts' {
 					credential: {
 						token: {
 							kind: 'text';
-							label: 'API token';
 						};
-						signingSecret: {
+						signing_secret: {
 							kind: 'text';
-							label: 'Webhook signing secret';
 						};
 					};
 					http: {
-						baseUrl: 'baseUrl';
+						base_url: 'base_url';
 						auth: {
 							bearer: 'token';
 						};
@@ -451,7 +438,7 @@ declare module '../../src/index.ts' {
 					webhook: {
 						verify: {
 							scheme: 'standard';
-							secret: 'signingSecret';
+							secret: 'signing_secret';
 						};
 					};
 					rate: '10/s';
@@ -464,11 +451,10 @@ declare module '../../src/index.ts' {
 					credential: {
 						connection: {
 							kind: 'text';
-							label: 'Connection string';
 						};
 					};
 					configuration: {
-						maxLagMinutes: {
+						max_lag_minutes: {
 							kind: 'int';
 							min: 1;
 							default: 15;
@@ -603,7 +589,7 @@ declare module '../../src/index.ts' {
 					due_soon: {
 						kind: 'date';
 						expr: {
-							plusDays: readonly [
+							plus_days: readonly [
 								{
 									field: 'due';
 								},
@@ -633,10 +619,8 @@ declare module '../../src/index.ts' {
 							};
 							submitted: {
 								to: readonly ['ordered', 'draft'];
-								edit: readonly ['status', 'note', 'lines'];
 							};
 							ordered: {
-								edit: 'none';
 							};
 						};
 					};
@@ -756,11 +740,7 @@ declare module '../../src/index.ts' {
 			notice_notes: {
 				description: 'What we add about a notice';
 				record_label: 'record.notice';
-				unique: readonly [
-					{
-						fields: readonly ['notice'];
-					}
-				];
+				key: readonly ['notice'];
 				fields: {
 					note: {
 						kind: 'text';
@@ -770,7 +750,7 @@ declare module '../../src/index.ts' {
 			sites: {
 				description: 'Customer sites';
 				record_label: 'record.name';
-				noOverlap: readonly [
+				no_overlap: readonly [
 					{
 						key: readonly ['name'];
 						period: 'open';
@@ -804,7 +784,7 @@ declare module '../../src/index.ts' {
 					};
 					slot: {
 						kind: 'int';
-						default: '30min';
+						default: 1800;
 					};
 					photos: {
 						kind: 'file';
@@ -931,15 +911,15 @@ declare module '../../src/index.ts' {
 						};
 					};
 					sys_user: {
-						outputs: { directory: { where: { team: { in: { var: 'requestor.teamTree' } } } } };
+						outputs: { directory: { where: { team: { in: { var: 'requestor.team_tree' } } } } };
 					};
 				};
-				automations: readonly ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote'];
 				capabilities: {
 					apps: readonly ['sales'];
 					tools: readonly ['browser'];
 					mcp: readonly ['erp'];
-					skills: readonly ['quoting'];
+					automations: readonly ['nightly', 'orders_submit', 'orders_renote'];
+					syncs: readonly ['products.ledger'];
 				};
 				limits: {
 					act: '600/min';
@@ -1034,7 +1014,7 @@ declare module '../../src/index.ts' {
 			'sites.customer': {
 				to: 'customers';
 				optional: true;
-				onDelete: 'setNull';
+				on_delete: 'set_null';
 				inverse: 'sites';
 				where: {
 					tier: {
@@ -1061,31 +1041,31 @@ declare module '../../src/index.ts' {
 		};
 		secrets: {
 			ERP_URL: {
-				record_label: 'record.ERP base URL';
+				label: 'ERP base URL';
 			};
 			ERP_TOKEN: {
-				record_label: 'record.ERP API token';
+				label: 'ERP API token';
 			};
 			MCP_URL: {
-				record_label: 'record.Docs MCP server';
+				label: 'Docs MCP server';
 			};
 			HOOK_SECRET: {
-				record_label: 'record.Webhook signing secret';
+				label: 'Webhook signing secret';
 				description: 'Signs inbound webhooks.';
 			};
 			CALENDAR_CLIENT: {
-				record_label: 'record.Calendar OAuth client';
+				label: 'Calendar OAuth client';
 			};
 			CALENDAR_SECRET: {
-				record_label: 'record.Calendar OAuth secret';
+				label: 'Calendar OAuth secret';
 			};
 		};
 		skills: {
 			quoting: true;
 		};
 		teams: {
-			finance: readonly [];
-			sales: readonly ['sales_rep'];
+			finance: { policies: readonly [] };
+			sales: { policies: readonly ['sales_rep'] };
 		};
 		workspace: {
 			tz: 'Asia/Singapore';
@@ -1093,8 +1073,6 @@ declare module '../../src/index.ts' {
 			currency: 'SGD';
 			apps: readonly ['sales', 'portal'];
 			ai: {
-				models: readonly ['default', 'fast', 'strong'];
-				default: 'default';
 				embeddings: readonly ['text_small'];
 			};
 			convert: {
@@ -1102,20 +1080,6 @@ declare module '../../src/index.ts' {
 			};
 			csp: {
 				connect: readonly ['https://huggingface.co'];
-			};
-			connections: {
-				erp: {
-					integration: 'erp';
-				};
-				ledger_main: {
-					integration: 'kingdee';
-				};
-				support: {
-					integration: 'support_mail';
-				};
-				whatsapp: {
-					integration: 'whatsapp';
-				};
 			};
 		};
 		pages: { sales: 'overview' | 'orders'; portal: 'tickets' };

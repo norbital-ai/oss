@@ -30,15 +30,15 @@ const parse = (
 	const base = {
 		id: message.mid,
 		thread: sender.id,
-		sentAt: new Date(timestamp).toISOString(),
+		sent_at: new Date(timestamp).toISOString(),
 		from: { handle: sender.id, name: null }
 	};
 	if (message.is_deleted === true) return { ...base, text: '', deleted: true };
 	const files = filesOf(message.attachments, fetch),
 		text = message.text ?? '',
-		replyTo = message.reply_to?.mid;
+		reply_to = message.reply_to?.mid;
 	if (text === '' && files.length === 0) return null;
-	return { ...base, text, files, ...(replyTo === undefined ? {} : { replyTo }) };
+	return { ...base, text, files, ...(reply_to === undefined ? {} : { reply_to }) };
 };
 
 export const instagram: ChatPlatform = {

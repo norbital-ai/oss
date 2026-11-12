@@ -1,6 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
-import { fromWhere, toWhere, matches, taggedArg, type Node } from '../src/filter/filter.ts';
+import { fromWhere, toWhere } from '../src/filter/where.ts';
+import { matches } from '../src/filter/local.ts';
+import { taggedArg, type Node } from '../src/filter/node.ts';
 import type { ModelExposure } from '../src/kinds/context.ts';
 import type { Json } from '@norbital-ai/std/wire';
 const catalog: Record<string, ModelExposure> = {

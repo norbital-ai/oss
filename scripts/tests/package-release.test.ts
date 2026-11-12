@@ -25,7 +25,7 @@ import { ScriptLive } from '../runtime.ts';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const entries = [
 	{
-		name: '-ai/bolt',
+		name: '@norbital-ai/bolt',
 		version: '0.0.1',
 		tarball: 'https://registry.example.test/bolt-a.tgz',
 		integrity: sha512Integrity(Buffer.from('bolt archive'))

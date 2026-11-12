@@ -1,17 +1,21 @@
 import { Context, Effect, Layer, ManagedRuntime, Option, Schema } from 'effect';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/std/wire';
 import type { Value } from '@norbital-ai/std/kind';
-import { createBolt, type Bolt } from '../../bolt/build/page/bolt.js';
+import { create_bolt, type Bolt, type BoltConfig } from '../../bolt/build/page/bolt.js';
 import type { EventSourceLike } from '../../bolt/build/page/stream.js';
+import { view_client } from '../../bolt/build/page/view-client.js';
+import type { ReadCatalog } from '../../bolt/build/protocol/read-answer.js';
 import {
 	ActBody,
 	LiveBody,
 	QBody,
+	SyncControlBody,
 	WireError,
 	WireRead,
 	type Frame,
 	type Outcome as WireOutcome
 } from '../../bolt/build/protocol/schema.js';
+import { admitted, committed } from './act-envelope.ts';
 import type { ApprovalView, ViewBolt } from '../src/client/contract.ts';
 import type { RecordCapabilities } from '../src/record/types.ts';
 
@@ -21,6 +25,11 @@ export type Script = {
 	answer(read: WireRead): ReadReply;
 	start?(automation: string, input: Value): void;
 	act?(body: ActBody, key: string): WireOutcome | Effect.Effect<WireOutcome, Error>;
+	sync_control?(body: SyncControlBody, key: string): WireOutcome | Effect.Effect<WireOutcome, Error>;
+	operation_outputs?: BoltConfig['operation_outputs'];
+	/** The granted read outputs every model view and answer decodes against. */
+	read_catalog?: ReadCatalog;
+	catalog?: Parameters<typeof view_client>[2];
 	capabilities?(
 		params: URLSearchParams
 	): RecordCapabilities | null | Response | Promise<RecordCapabilities | null | Response>;
@@ -39,6 +48,50 @@ export type Script = {
 	uuid?: () => string;
 };
 const decodeError = Schema.decodeUnknownOption(WireError);
+type Catalog = Parameters<typeof view_client>[2];
+type Level = ReadCatalog[string][string][string];
+
+/**
+ * The read outputs a host grants for a model catalogue, as `read_catalog` builds them from the same manifest: each model's
+ * `default` (and named `output`) reads its fields, relation refs, `id` and audit columns, nesting its declared layers.
+ */
+export function read_catalog_of(catalog: Catalog): ReadCatalog {
+	const level = (model: string, exposure: Catalog[string], many: boolean): Level => {
+		const fields: Level['fields'] = {
+			// the host expands a custom field to JSON of its shape; the fixture knows no shapes
+			...Object.fromEntries(Object.entries(exposure.fields).map(([name, kind]) => {
+				if (kind.kind !== 'custom') return [name, kind];
+				const { kind: _kind, of: _of, ...common } = kind;
+				return [name, { kind: 'json', ...common }];
+			})),
+			...Object.fromEntries(Object.entries(exposure.relations ?? {}).map(([name, relation]) => {
+				const [first, ...rest] = relation.targets;
+				return [name, {
+					kind: 'ref', to: first !== undefined && rest.length === 0 ? first : relation.targets,
+					...(relation.optional === true ? { optional: true } : {})
+				}] as const;
+			})),
+			id: { kind: 'ref', to: model },
+			...(exposure.audit === false ? {} : { revision: { kind: 'int' } })
+		};
+		// a list reads every field but the heavy ones (json, custom, file), as the store's `default_fields`
+		const list_fields = Object.entries(fields).filter(([, kind]) => !['json', 'custom', 'file'].includes(kind.kind)).map(([name]) => name);
+		return { model, many, list_fields, fields };
+	};
+	return Object.fromEntries(Object.entries(catalog).map(([model, exposure]) => {
+		const root = level(model, exposure, false);
+		const layers = [
+			// every one-relation nests (fixture catalogues seldom list `layers`)
+			...Object.entries(exposure.relations ?? {}).map(([rel, relation]) => [rel, relation.targets[0], false] as const),
+			...(exposure.many ?? []).map((rel) => [rel, exposure.children?.[rel]?.model, true] as const)
+		].flatMap(([rel, target, many]) => {
+			const nested = target === undefined ? undefined : catalog[target];
+			return target === undefined || nested === undefined ? [] : [[`${model}.${rel}`, level(target, nested, many)] as const];
+		});
+		const output = { [model]: root, ...Object.fromEntries(layers) };
+		return [model, { default: output, ...(exposure.output === undefined ? {} : { [exposure.output]: output }) }];
+	}));
+}
 
 /**
  * Script decoded wire requests; the real browser client owns reads (once over `/q`, live over `/live` and its stream),
@@ -56,7 +109,7 @@ export async function scriptedBolt(script: Script) {
 	const answer = async (view: string, read: WireRead) => {
 		const reply = await script.answer(read);
 		if (!(reply instanceof Response))
-			return push({ t: 'answer', view, v: ++version, value: encodeWire(reply) });
+			return push({ t: 'answer', view, v: ++version, value: encode_wire(reply) });
 		const failure = Option.getOrUndefined(decodeError(await reply.json().catch(() => null)));
 		push({
 			t: 'error',
@@ -93,7 +146,7 @@ export async function scriptedBolt(script: Script) {
 				(await script.approval?.(url.searchParams)) ?? (url.searchParams.has('id') ? null : []);
 			return value instanceof Response
 				? value
-				: Response.json(value === null ? null : { value: encodeWire(value) });
+				: Response.json(value === null ? null : { value: encode_wire(value) });
 		}
 		const text = await request.text();
 		if (path.endsWith('/live')) {
@@ -117,38 +170,43 @@ export async function scriptedBolt(script: Script) {
 				if (reply instanceof Response) return reply;
 				answers.push(reply);
 			}
-			return Response.json({ answers: answers.map(encodeWire) });
+			return Response.json({ answers: answers.map(encode_wire) });
 		}
 		if (path.endsWith('/act')) {
 			const body = Schema.decodeUnknownSync(Schema.fromJsonString(ActBody))(text);
-			if (body.callable === 'start') {
+			if ('callable' in body && body.callable === 'run') {
 				const start = Schema.decodeUnknownSync(
 					Schema.Struct({
 						automation: Schema.String,
-						runs: Schema.Array(Schema.Struct({ input: Schema.Json }))
+						runs: Schema.optionalKey(Schema.Array(Schema.Struct({ input: Schema.Json })))
 					})
 				)(body.input);
-				for (const run of start.runs) script.start?.(start.automation, run.input);
+				for (const run of start.runs ?? []) script.start?.(start.automation, run.input);
 			}
-			const reply = script.act?.(body, request.headers.get('Idempotency-Key') ?? '') ?? {
-				kind: 'committed',
-				output: null,
-				records: []
-			};
+			const reply: WireOutcome | Effect.Effect<WireOutcome, Error> = script.act?.(body, request.headers.get('Idempotency-Key') ?? '') ?? committed(body);
+			const outcome = Effect.isEffect(reply) ? await runtime.runPromise(reply) : reply;
+			return Response.json({ outcome, v: 0 });
+		}
+		if (path.endsWith('/sync')) {
+			const body = Schema.decodeUnknownSync(Schema.fromJsonString(SyncControlBody))(text);
+			const reply: WireOutcome | Effect.Effect<WireOutcome, Error> = script.sync_control?.(body, request.headers.get('Idempotency-Key') ?? '') ?? admitted(body);
 			const outcome = Effect.isEffect(reply) ? await runtime.runPromise(reply) : reply;
 			return Response.json({ outcome, v: 0 });
 		}
 		throw new Error(`Unexpected fixture request ${path}`);
 	};
+	const read_catalog = script.read_catalog ?? read_catalog_of(script.catalog ?? {});
 	const runtime = ManagedRuntime.make(
 		Layer.effect(
 			Client,
-			createBolt({
+			create_bolt({
 				actor: null,
 				locale: 'en',
 				base: 'https://fixture.test',
 				fetch,
-				openStream,
+				open_stream: openStream,
+				operation_outputs: script.operation_outputs ?? { automations: {} },
+				read_catalog,
 				uuid: script.uuid ?? (() => 'r1'),
 				now: () => '2026-01-02T03:04:05.000Z'
 			})
@@ -156,8 +214,8 @@ export async function scriptedBolt(script: Script) {
 	);
 	const native = await runtime.runPromise(Client);
 	const { decode: _decode, options: _options, record_capabilities: _capabilities, ...core } = native;
-	const bolt: ViewBolt = {
-		...core,
+	const bolt: ReturnType<typeof view_client> = {
+		...view_client(core, read_catalog, script.catalog ?? {}),
 		clock: () => ({ today: '2026-01-02', now: '2026-01-02T03:04:05.000Z' }),
 		...(script.capabilities === undefined ? {} : { record_capabilities: native.record_capabilities }),
 		...(script.t === undefined ? {} : { t: script.t }),

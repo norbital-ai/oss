@@ -13,8 +13,8 @@ import { manifest } from './catalogue-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import {
-	validateDatabaseRequest,
-	validateDatabaseResult,
+	validate_database_request,
+	validate_database_result,
 	DATABASE_MAX_BYTES
 } from '../src/engine/integrations/database.ts';
 import { instanceRequest } from '../src/engine/integrations/instances.ts';
@@ -166,10 +166,12 @@ it.live('interrupts a SQL batch and drains native rollback before closing its da
 	})
 );
 
-it('request shape and transport-independent bounds reject malformed operations', () => {
+it.effect('request shape and transport-independent bounds reject malformed operations', () =>
+	Effect.gen(function* () {
 	for (const value of [
-		{ ...request, maxRows: 1001 },
-		{ ...request, maxRows: 1.5 },
+		{ ...request, maxRows: 10 },
+		{ ...request, max_rows: 1001 },
+		{ ...request, max_rows: 1.5 },
 		{ ...request, transaction: 'unsafe' },
 		{ ...request, values: { value: Infinity } },
 		{
@@ -177,15 +179,23 @@ it('request shape and transport-independent bounds reject malformed operations',
 			procedure: { schema: 'dbo', name: 'submit' },
 			arguments: { 'name; DROP TABLE x': 'Ada' }
 		},
+		{
+			op: 'read',
+			table: { schema: 'dbo', name: 'contacts', extra: 'not part of the table descriptor' },
+			columns: ['name']
+		},
 		{ ...request, values: { text: 'x'.repeat(DATABASE_MAX_BYTES + 1) } }
 	])
-		expect(() => validateDatabaseRequest(value)).toThrow();
-	expect(validateDatabaseRequest(request)).toEqual(request);
-	expect(() => validateDatabaseResult({ rows: [{ v: 'x'.repeat(DATABASE_MAX_BYTES) }] })).toThrow(
+		expect(yield* Effect.flip(validate_database_request(value))).toMatchObject({ code: 'invalid_input' });
+	expect(yield* validate_database_request(request)).toEqual(request);
+	expect(
+		(yield* Effect.flip(validate_database_result({ rows: [{ v: 'x'.repeat(DATABASE_MAX_BYTES) }] }))).message
+	).toContain('bounds');
+	expect((yield* Effect.flip(validate_database_result({ rows: [{ v: 1 }, { v: 2 }] }, 1))).message).toContain(
 		'bounds'
 	);
-	expect(() => validateDatabaseResult({ rows: [{ v: 1 }, { v: 2 }] }, 1)).toThrow('bounds');
-});
+	})
+);
 
 it.effect(
 	'an instance runs a checked statement through its link; an invalid op never reaches it, a result over its rows is refused',
@@ -204,18 +214,18 @@ it.effect(
 			});
 			expect(sent).toEqual([['books', request]]);
 			expect(
-				yield* instanceRequest({ manifest: m, db, links }, 'books', { ...request, maxRows: 0 })
-			).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalidInput' } });
+				yield* instanceRequest({ manifest: m, db, links }, 'books', { ...request, max_rows: 0 })
+			).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalid_input' } });
 			expect(sent).toHaveLength(1);
 			expect(
-				yield* instanceRequest({ manifest: m, db, links }, 'books', { ...request, maxRows: 1 })
+				yield* instanceRequest({ manifest: m, db, links }, 'books', { ...request, max_rows: 1 })
 			).toMatchObject({
 				ok: false,
 				error: { kind: 'upstream', message: expect.stringContaining('bounds') }
 			});
 			expect(
 				yield* instanceRequest({ manifest: m, db, links }, 'books', { method: 'GET', path: 'x' })
-			).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalidInput' } });
+			).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalid_input' } });
 		})
 );
 

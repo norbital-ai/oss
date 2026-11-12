@@ -9,7 +9,8 @@ import exifr from 'exifr';
 import { convertIndexedToRgb, decode as decodePng, encode as encodePng } from 'fast-png';
 import jpeg from 'jpeg-js';
 import type { ImagePreview, ImageCrop as CropBox } from '../engine/contracts.ts';
-import { ImageCrop, ImagePreviewMime, ImagePreviewSize } from './images.ts';
+import { ImagePreviewMimeSchema } from '../engine/media.ts';
+import { ImageCrop, ImagePreviewSize } from './images.ts';
 class ImageError extends Schema.TaggedError<ImageError>()('ImageError', {
 	message: Schema.String
 }) {}
@@ -213,18 +214,19 @@ const decode = Effect.fn('Image.decode')(function* (
 		if (d.channels !== 1 && d.channels !== 2 && d.channels !== 3)
 			return yield* Effect.fail(failed(new Error('the PNG channels are invalid')));
 		const rgba = new Uint8Array(d.width * d.height * 4);
+		const pixels = new DataView(d.data.buffer, d.data.byteOffset, d.data.byteLength);
 		for (let pixel = 0; pixel < d.width * d.height; pixel++) {
 			const from = pixel * d.channels,
 				to = pixel * 4;
-			const red = d.data[from]!,
-				green = d.channels === 3 ? d.data[from + 1]! : red,
-				blue = d.channels === 3 ? d.data[from + 2]! : red;
+			const red = pixels.getUint8(from),
+				green = d.channels === 3 ? pixels.getUint8(from + 1) : red,
+				blue = d.channels === 3 ? pixels.getUint8(from + 2) : red;
 			rgba[to] = red;
 			rgba[to + 1] = green;
 			rgba[to + 2] = blue;
 			rgba[to + 3] =
 				d.channels === 2
-					? d.data[from + 1]!
+					? pixels.getUint8(from + 1)
 					: d.transparency !== undefined &&
 						  red === d.transparency[0] &&
 						  (d.channels === 1 || (green === d.transparency[1] && blue === d.transparency[2]))
@@ -294,6 +296,7 @@ function shrink(r: Raster, edge: number, out: 3 | 4) {
 		height = Math.max(1, Math.floor(r.height / f)),
 		area = f * f;
 	const data = new Uint8Array(width * height * out);
+	const pixels = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
 	for (let y = 0; y < height; y++)
 		for (let x = 0; x < width; x++) {
 			let red = 0,
@@ -305,9 +308,9 @@ function shrink(r: Raster, edge: number, out: 3 | 4) {
 					dx < f;
 					dx++, i += r.channels
 				) {
-					red += r.data[i]!;
-					green += r.data[i + 1]!;
-					blue += r.data[i + 2]!;
+					red += pixels.getUint8(i);
+					green += pixels.getUint8(i + 1);
+					blue += pixels.getUint8(i + 2);
 				}
 			const o = (y * width + x) * out;
 			data[o] = Math.round(red / area);
@@ -319,23 +322,22 @@ function shrink(r: Raster, edge: number, out: 3 | 4) {
 }
 // pdq-wasm's ESM entry cannot find its wasm; the CommonJS one loads it
 const pdqModule: unknown = createRequire(import.meta.url)('pdq-wasm');
-const PdqModule = Schema.Struct({
-	PDQ: Schema.declare(
-		(value: unknown): value is Pick<typeof import('pdq-wasm').PDQ, 'init' | 'hash'> =>
-			(Predicate.isObject(value) || typeof value === 'function') &&
-			'init' in value &&
-			typeof value.init === 'function' &&
-			'hash' in value &&
-			typeof value.hash === 'function'
-	)
-});
-const { PDQ } = Schema.decodeUnknownSync(PdqModule)(pdqModule);
+const { PDQ } = Schema.decodeUnknownSync(Schema.Struct({ PDQ: Schema.Unknown }))(pdqModule);
+const pdqCallback = Schema.decodeUnknownSync(Schema.declare(
+	(value: unknown): value is (...args: readonly unknown[]) => unknown => typeof value === 'function'
+));
+const pdqInit = pdqCallback(Predicate.hasProperty(PDQ, 'init') ? PDQ.init : undefined);
+const pdqHash = pdqCallback(Predicate.hasProperty(PDQ, 'hash') ? PDQ.hash : undefined);
+const PdqHash = Schema.Struct({ hash: Schema.Uint8Array, quality: Schema.Number });
 /** PDQ reduces every image to 64×64 itself; a larger raster only buys CPU. */
 const PDQ_MAX_SIDE = 512;
 const facts = Effect.fn('Image.facts')(function* (bytes: Uint8Array) {
 	const r = yield* decode(bytes);
-	yield* Effect.tryPromise({ try: () => PDQ.init(), catch: failed });
-	const pdq = PDQ.hash({ ...shrink(r, PDQ_MAX_SIDE, 3), channels: 3 });
+	yield* Effect.tryPromise({ try: async () => { await pdqInit.call(PDQ); }, catch: failed });
+	const pdq = yield* Effect.try({
+		try: () => Schema.decodeUnknownSync(PdqHash)(pdqHash.call(PDQ, { ...shrink(r, PDQ_MAX_SIDE, 3), channels: 3 })),
+		catch: failed
+	});
 	// EXIF is third-party and often malformed: an unreadable block is simply absent
 	const raw: unknown = yield* Effect.tryPromise({
 		try: (): Promise<unknown> =>
@@ -366,7 +368,7 @@ const facts = Effect.fn('Image.facts')(function* (bytes: Uint8Array) {
 		height: r.height,
 		pdq: Buffer.from(pdq.hash).toString('hex'),
 		exif: {
-			...(at !== undefined && !Number.isNaN(at.getTime()) ? { takenAt: at.toISOString() } : {}),
+			...(at !== undefined && !Number.isNaN(at.getTime()) ? { taken_at: at.toISOString() } : {}),
 			...gps,
 			...text('Software'),
 			...text('Make'),
@@ -421,6 +423,18 @@ function heifTransform(bytes: Uint8Array) {
 	}
 	return false;
 }
+const raster_orientation = Effect.fn('Image.rasterOrientation')(function* (bytes: Uint8Array) {
+	const raster = yield* decode(bytes);
+	const containerOriented =
+		raster.format === 'heic' &&
+		(yield* Effect.try({ try: () => heifTransform(bytes), catch: failed }));
+	const orientation = containerOriented
+		? 1
+		: ((yield* Effect.tryPromise({ try: () => exifr.orientation(bytes), catch: failed })) ?? 1);
+	if (!Number.isInteger(orientation) || orientation < 1 || orientation > 8)
+		return yield* Effect.fail(failed(new Error('the EXIF orientation is invalid')));
+	return { raster, orientation };
+});
 function orient(raster: { data: Uint8Array; width: number; height: number }, orientation: number) {
 	if (orientation === 1) return raster;
 	const width = orientation >= 5 ? raster.height : raster.width,
@@ -452,6 +466,7 @@ function orient(raster: { data: Uint8Array; width: number; height: number }, ori
 }
 /** Alpha-weighted box filtering, with no upscaling or full-sized rotated copy. */
 function thumbnail(raster: Raster, edge: number) {
+	const pixels = new DataView(raster.data.buffer, raster.data.byteOffset, raster.data.byteLength);
 	const scale = Math.min(1, edge / Math.max(raster.width, raster.height));
 	const width = Math.max(1, Math.round(raster.width * scale)),
 		height = Math.max(1, Math.round(raster.height * scale));
@@ -474,10 +489,10 @@ function thumbnail(raster: Raster, edge: number) {
 					sx++
 				) {
 					const from = (sy * raster.width + sx) * raster.channels,
-						a = raster.channels === 4 ? raster.data[from + 3]! : 255;
-					red += raster.data[from]! * a;
-					green += raster.data[from + 1]! * a;
-					blue += raster.data[from + 2]! * a;
+						a = raster.channels === 4 ? pixels.getUint8(from + 3) : 255;
+					red += pixels.getUint8(from) * a;
+					green += pixels.getUint8(from + 1) * a;
+					blue += pixels.getUint8(from + 2) * a;
 					alpha += a;
 					count++;
 				}
@@ -515,15 +530,7 @@ const preview = Effect.fn('Image.preview')(function* (
 		});
 		if (sequence) return { bytes, mime, derived: false };
 	}
-	const raster = yield* decode(bytes);
-	const containerOriented =
-		raster.format === 'heic' &&
-		(yield* Effect.try({ try: () => heifTransform(bytes), catch: failed }));
-	const orientation = containerOriented
-		? 1
-		: ((yield* Effect.tryPromise({ try: () => exifr.orientation(bytes), catch: failed })) ?? 1);
-	if (!Number.isInteger(orientation) || orientation < 1 || orientation > 8)
-		return yield* Effect.fail(failed(new Error('the EXIF orientation is invalid')));
+	const { raster, orientation } = yield* raster_orientation(bytes);
 	const scaled = orient(thumbnail(raster, edge), orientation);
 	const png = raster.format === 'png';
 	const result = yield* Effect.try({
@@ -574,15 +581,7 @@ const crop = Effect.fn('Image.crop')(function* (bytes: Uint8Array, box: CropBox)
 		return yield* Effect.fail(
 			failed(new Error('crop bounds must form a rectangle within zero and one'))
 		);
-	const raster = yield* decode(bytes);
-	const containerOriented =
-		raster.format === 'heic' &&
-		(yield* Effect.try({ try: () => heifTransform(bytes), catch: failed }));
-	const orientation = containerOriented
-		? 1
-		: ((yield* Effect.tryPromise({ try: () => exifr.orientation(bytes), catch: failed })) ?? 1);
-	if (!Number.isInteger(orientation) || orientation < 1 || orientation > 8)
-		return yield* Effect.fail(failed(new Error('the EXIF orientation is invalid')));
+	const { raster, orientation } = yield* raster_orientation(bytes);
 	let rgba = raster.data;
 	if (raster.channels === 3) {
 		rgba = new Uint8Array(raster.width * raster.height * 4);
@@ -604,7 +603,7 @@ const crop = Effect.fn('Image.crop')(function* (bytes: Uint8Array, box: CropBox)
 	const output = yield* Effect.try({
 		try: () =>
 			encodePng({
-				...enlarged({ data, width, height }, box.minEdge ?? 0),
+				...enlarged({ data, width, height }, box.min_edge ?? 0),
 				channels: 4,
 				depth: 8
 			}),
@@ -620,7 +619,7 @@ const Job = Schema.Struct({
 	bytes: Schema.declare((value: unknown): value is Uint8Array => value instanceof Uint8Array),
 	maxEdge: Schema.optionalKey(Schema.Number),
 	crop: Schema.optionalKey(ImageCrop),
-	preview: Schema.optionalKey(Schema.Struct({ maxEdge: ImagePreviewSize, mime: ImagePreviewMime }))
+	preview: Schema.optionalKey(Schema.Struct({ maxEdge: ImagePreviewSize, mime: ImagePreviewMimeSchema }))
 });
 const job = Schema.decodeUnknownSync(Job)(workerData);
 const outcome: Exit.Exit<

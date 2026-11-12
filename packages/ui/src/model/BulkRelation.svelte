@@ -10,7 +10,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 	import { formSpec } from '../form/draft.js';
 
 	/** A many-relation's bulk commands, as the update's relation actions name them. */
-	export type Links = { create: Values[]; link: string[]; unlink: string[]; delete: string[] };
+	export type Links = { create: Values[]; link: Values[]; unlink: Values[]; delete: Values[] };
 	export const NO_LINKS: Links = { create: [], link: [], unlink: [], delete: [] };
 	/** The commands that need one selected record: an existing child belongs to exactly one parent. */
 	export const SINGLE = ['link', 'unlink', 'delete'] as const;
@@ -27,6 +27,9 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 
 <script lang="ts">
 	import { Button } from '../primitives/button/index.js';
+	import { Effect } from 'effect';
+	import { fork } from '../effect/index.js';
+	import { by_id, first_of } from '../read/request.js';
 	import Editor from '../kinds/editor.svelte';
 	import Picker from '../kinds/picker.svelte';
 	import Show from '../kinds/show.svelte';
@@ -34,13 +37,14 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 	import { useKinds } from '../kinds/context.js';
 	import { useBolt } from '../client/context.js';
 	import { label, msg } from '../text/messages.js';
+	import { toast } from '../toast/toast.svelte.js';
 
 	let {
 		name,
 		child,
-		parentId,
+		parent_id,
 		value,
-		onChange,
+		on_change,
 		id,
 		errors,
 		disabled = false
@@ -49,9 +53,9 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 		name: string;
 		child: ChildInput;
 		/** The one selected record; `undefined` over several, when only new children apply. */
-		parentId: string | undefined;
+		parent_id: string | undefined;
 		value: Links;
-		onChange(next: Links): void;
+		on_change(next: Links): void;
 		id: string;
 		errors: ReadonlyMap<string, string>;
 		disabled?: boolean;
@@ -62,10 +66,10 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 	const ops = $derived(SINGLE.filter((op) => child[op] === true));
 	const opText = (op: (typeof SINGLE)[number]) =>
 		op === 'link'
-			? msg(bolt, 'child.link', 'Link existing')
+			? msg(bolt, 'child.link')
 			: op === 'unlink'
-				? msg(bolt, 'child.unlink', 'Unlink')
-				: msg(bolt, 'child.delete', 'Delete row');
+				? msg(bolt, 'child.unlink')
+				: msg(bolt, 'child.delete');
 	const at = (i: number, field: string) => `${name}.create.${i}.${field}`;
 </script>
 
@@ -79,8 +83,8 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 				<Editor
 					kind={field.kind}
 					value={row[field.name] ?? null}
-					onChange={(next) =>
-						onChange({
+					on_change={(next) =>
+						on_change({
 							...value,
 							create: value.create.map((r, j) => (j === i ? { ...r, [field.name]: next } : r))
 						})}
@@ -102,9 +106,9 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 				variant="ghost"
 				class="justify-self-start"
 				{disabled}
-				onclick={() => onChange({ ...value, create: value.create.filter((_, j) => j !== i) })}
+				onclick={() => on_change({ ...value, create: value.create.filter((_, j) => j !== i) })}
 			>
-				{msg(bolt, 'view.removeNew', 'Remove')}
+				{msg(bolt, 'view.removeNew')}
 			</Button>
 		</div>
 	{/each}
@@ -116,7 +120,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 			{disabled}
 			data-bulk-relation-add
 			onclick={() =>
-				onChange({
+				on_change({
 					...value,
 					create: [
 						...value.create,
@@ -124,16 +128,13 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 					]
 				})}
 		>
-			{msg(bolt, 'view.addEach', 'Add a new one to each selected record')}
+			{msg(bolt, 'view.addEach')}
 		</Button>
 	{/if}
-	{#if parentId === undefined}
+	{#if parent_id === undefined}
 		{#if ops.length > 0}
 			<p class="text-meta">
-				{msg(
-					bolt,
-					'view.relationOne',
-					'Select one record to link, unlink or delete existing ones.'
+				{msg(bolt, 'view.relationOne'
 				)}
 			</p>
 		{/if}
@@ -141,27 +142,38 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 		{#each ops as op (op)}
 			<div class="grid min-w-0 gap-1.5" data-bulk-relation-op={op}>
 				<label class="text-meta" for={`${id}-${op}`}>{opText(op)}</label>
-				{#each value[op] as chosen (chosen)}
+				{#each value[op] as chosen (chosen.id)}
 					<div class="flex min-w-0 items-center gap-2">
-						<Show kind={{ kind: 'ref', to: child.model }} value={chosen} readonly />
+						<Show kind={{ kind: 'ref', to: child.model }} value={chosen.id ?? null} readonly />
 						<Button
 							type="button"
 							variant="ghost"
 							{disabled}
-							onclick={() => onChange({ ...value, [op]: value[op].filter((x) => x !== chosen) })}
+							onclick={() => on_change({ ...value, [op]: value[op].filter((x) => x !== chosen) })}
 						>
-							{msg(bolt, 'view.removeNew', 'Remove')}
+							{msg(bolt, 'view.removeNew')}
 						</Button>
 					</div>
 				{/each}
 				<Picker
 					of={child.model}
 					value={null}
-					onChange={(next) => {
-						if (next !== null && !value[op].includes(next))
-							onChange({ ...value, [op]: [...value[op], next] });
+					on_change={(next) => {
+						if (next === null || value[op].some((row) => row.id === next)) return;
+						// an audited child is linked at the revision it was read at
+						const stamp = kinds.catalog?.[child.model]?.audit === false ? [] : ['revision'];
+						fork(bolt.query(by_id(child.model, next, stamp)).pipe(
+							Effect.tap((answer) => Effect.sync(() => {
+								const row = first_of(answer, child.model);
+								if (row !== null && !value[op].some((chosen) => chosen.id === next))
+									on_change({ ...value, [op]: [...value[op], row] });
+							})),
+							Effect.catch((error) => Effect.sync(() => {
+								toast.error(bolt.t(error.message));
+							}))
+						));
 					}}
-					where={op === 'link' ? undefined : { [child.parent]: parentId }}
+					where={op === 'link' ? undefined : { [child.parent]: parent_id }}
 					id={`${id}-${op}`}
 					{disabled}
 				/>

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
-import { facts, validateFacts, type FactSpec } from '../src/facts.ts';
+import { facts, validate_facts, type FactSpec } from '../src/facts.ts';
 import { Decimal } from '../src/decimal.ts';
-import { label, labelExpression, labelPaths } from '../src/label.ts';
+import { label, label_expression, label_paths } from '../src/label.ts';
 
 describe('std/facts', () => {
 	const specs: FactSpec[] = [
@@ -35,25 +35,25 @@ describe('std/facts', () => {
 		assert.throws(() => facts([{ key: '1x', type: 'string' }]), /a key is/);
 	});
 	it('validates values: undeclared keys, types, constraints; required only when complete', () => {
-		assert.equal(validateFacts(specs, { dependants: 2, status: 'K1' }), null);
+		assert.equal(validate_facts(specs, { dependants: 2, status: 'K1' }), null);
 		assert.equal(
-			validateFacts(specs, { dependants: 2 }, { complete: true }),
+			validate_facts(specs, { dependants: 2 }, { complete: true }),
 			'resident is required.'
 		);
-		assert.equal(validateFacts(specs, { dependants: 1.5 }), 'Dependants must be a whole number.');
+		assert.equal(validate_facts(specs, { dependants: 1.5 }), 'Dependants must be a whole number.');
 		assert.equal(
-			validateFacts(specs, { dependants: '2' }),
+			validate_facts(specs, { dependants: '2' }),
 			'Dependants must be a number; this value is a string.'
 		);
-		assert.equal(validateFacts(specs, { status: 'K9' }), 'status must be one of: K0, K1.');
-		assert.equal(validateFacts(specs, { other: 1 }), 'other is not a declared fact.');
+		assert.equal(validate_facts(specs, { status: 'K9' }), 'status must be one of: K0, K1.');
+		assert.equal(validate_facts(specs, { other: 1 }), 'other is not a declared fact.');
 	});
 });
 
 describe('std/label', () => {
 	it('evaluates CEL from the record and reports the fields needed to read it', () => {
 		const expression = "record.code + ' · ' + (record.name != null ? record.name : 'Unnamed')";
-		assert.deepEqual(labelPaths(expression), ['code', 'name']);
+		assert.deepEqual(label_paths(expression), ['code', 'name']);
 		assert.equal(label({ code: 'Q-7', name: 'Acme' }, expression), 'Q-7 · Acme');
 		assert.equal(label({ code: 'Q-7', name: null }, expression), 'Q-7 · Unnamed');
 		assert.equal(label({ customer: { name: 'Acme' } }, 'record.customer.name'), 'Acme');
@@ -68,12 +68,12 @@ describe('std/label', () => {
 			),
 			'Q-7 · Acme'
 		);
-		assert.deepEqual(labelPaths("[record.code].map(x, x + record.name).join('')"), [
+		assert.deepEqual(label_paths("[record.code].map(x, x + record.name).join('')"), [
 			'code',
 			'name'
 		]);
-		assert.ok('error' in labelExpression('record.name +'));
-		assert.ok('error' in labelExpression('42'));
+		assert.ok('error' in label_expression('record.name +'));
+		assert.ok('error' in label_expression('42'));
 		assert.equal(label({}, 'record.missing'), null);
 	});
 	it('joins the label paths per kind, dropping empty terms, uuids and blobs', () => {

@@ -1,18 +1,18 @@
 import type { FileUrlOptions } from '@norbital-ai/std/kind';
-import { resolveDevice } from '../../page/device.ts';
-import { storedFileUrl } from '../../page/file-ref.ts';
+import { resolve_device } from '../../page/device.ts';
+import { stored_file_url } from '../../page/file-ref.ts';
 import type { PublicBoot } from '../../protocol/public-page.ts';
 import { href } from '../nav.ts';
 
 /** Metadata and URLs shared by the public server render and its hydrated page. */
-export const publicContext = (boot: PublicBoot) => ({
+export const public_context = (boot: PublicBoot) => ({
 	org: { name: boot.workspace.name, logo: boot.workspace.logo ?? null },
-	device: resolveDevice(),
+	device: resolve_device(),
 	tz: boot.workspace.tz,
 	location: boot.location,
 	href: (...args: Parameters<typeof href>) => `${boot.base}${href(...args)}`,
 	file_url: (ref: { readonly id: string }, options: FileUrlOptions = {}) =>
-		storedFileUrl(
+		stored_file_url(
 			boot.base,
 			ref.id,
 			options,

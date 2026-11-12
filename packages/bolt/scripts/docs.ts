@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { Effect, Schema } from 'effect';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
-import { skillFile } from '../src/engine/docs-corpus.ts';
+import { skill_file } from '../src/engine/docs-corpus.ts';
 import type {
 	DocIndex,
 	DocKind,
@@ -34,7 +34,7 @@ class DocsFailed extends Schema.TaggedError<DocsFailed>()('DocsFailed', {
 const PACKAGES = ['bolt', 'ui', 'std'];
 /** The reference a workspace author reads (§7.3): bolt's root and `/page`, bolt-cli's test kit, ui's authoring entries and std. */
 const REFERENCE = (ns: string) =>
-	['bolt', 'bolt/page', 'bolt-cli/test', 'ui', 'ui/layout', 'ui/capture'].includes(ns) ||
+	['bolt', 'bolt/page', 'bolt/page/integrations', 'bolt-cli/test', 'ui', 'ui/layout', 'ui/capture'].includes(ns) ||
 	ns.startsWith('std/');
 /** What an author reads for each role: these symbols' shapes, generated into `bolt-contract` so a card cannot drift. */
 const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: readonly string[] } } = {
@@ -44,7 +44,6 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 			'FieldCommon',
 			'StoredArm',
 			'RefField',
-			'TableSpec',
 			'ReadLayers',
 			'LayerColumns'
 		]
@@ -56,8 +55,9 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 			'Grant',
 			'ReadGrant',
 			'WriteGrant',
-			'CreateCheck',
-			'UpdateCheck',
+			'CreateVerdict',
+			'UpdateVerdict',
+			'DeleteVerdict',
 			'PolicyCtx',
 			'Expr',
 			'ApprovalFlow'
@@ -68,6 +68,9 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 			'automation',
 			'Trigger',
 			'AutomationCtx',
+			'Browser',
+			'BrowserSnapshot',
+			'BrowserStep',
 			'ReadRequestBase',
 			'OutputKind',
 			'Act',
@@ -76,12 +79,15 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 		'bolt/errors': ['Refusal']
 	},
 	sync: {
-		bolt: ['IntegrationDeclaration', 'RemoteSync', 'FileSync', 'SyncCtx', 'RemoteReadInput']
+		bolt: ['IntegrationDeclaration', 'RemoteSync', 'FileSync', 'SyncCtx', 'RemoteReadInput', 'SyncChange', 'FileSyncInput', 'SyncControlInput']
 	},
-	tool: { bolt: ['tool', 'ToolRun', 'ToolFiles'] },
+	integration: {
+		bolt: ['IntegrationDeclaration', 'IntegrationSpec', 'ConfigurationOf', 'InstanceId', 'SendInput', 'Send', 'Request', 'RequestOf', 'RequestResult', 'instance_id', 'is_instance'],
+		'bolt/page/integrations': ['IntegrationCard', 'IntegrationSetup', 'IntegrationClient', 'integration_client', 'integration_offers']
+	},
 	page: {
 		bolt: ['app', 'Page', 'group'],
-		'bolt/page': ['PageBolt'],
+		'bolt/page': ['PageBolt', 'PageSnapshotHost'],
 		ui: [
 			'Table',
 			'Col',
@@ -95,11 +101,14 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 			'Chart'
 		]
 	},
-	test: { 'bolt-cli/test': ['TestWorkspace', 'Kit', 'Caller', 'TestOptions', 'layer'] }
+	test: { 'bolt-cli/test': [
+		'TestWorkspace', 'Kit', 'Caller', 'TestOptions', 'KitQuery', 'KitAct', 'JobResult', 'NativeReadRow',
+		'NativeReadAnswer', 'NativeHistory', 'NativeActAnswer', 'NativeJobAnswer', 'layer'
+	] }
 };
 /** What the symbols alone leave out: a role's first file, so no conversation goes looking for it. */
 const CONTRACT_HEAD: { readonly [role: string]: string } = {
-	automation: `An automation is a job its declared \`policies\` run. They must read every model it reads or links to, \`sys_user\` included:
+	automation: `An automation runs under its declared \`policies\`. They must read every model it reads or links to, \`sys_user\` included:
 
 \`\`\`ts
 // src/automation/+<name>.automation.ts
@@ -107,22 +116,26 @@ import { automation } from '@norbital-ai/bolt';
 
 export default automation({
 	description: '<what it does>',
-	on: [{ cron: '0 2 * * *' }], // or a webhook; a row write runs its model's effect, never an automation
+	on: [{ cron: '0 2 * * *' }], // integrations own webhooks; row writes run their model's effect
 	policies: ['<policy>'],
 	run: function* (input, ctx) {
 		const { rows } = (yield* ctx.query({ <model>: { fields: ['<field>'] } })).<model>;
-		yield* ctx.act('<model>.create', [{ <field>: <value> }]);
+		yield* ctx.act({ '<model>.create': [{ <field>: <value> }] });
 	}
 });
 \`\`\`
 
+The default mode is a durable job. \`mode: 'call'\` returns its typed \`output\` in the request; a positive \`cache\` duration shares read-only answers. \`agent: 'direct'\`, \`'confirm'\` or \`'never'\` controls its use as an agent tool. Jobs alone accept cron triggers and retries.
+
 A model answers \`yield* ctx.ai.sys_2.infer({ system: '<role>', prompt: '<task>', output: { kind: 'object', fields: { <field>: { kind: 'text' } } } })\` with the \`output\`'s value (text when absent).
 
-\`yield* ctx.notify({ title: '<title>', to: [{ team: '<team>' }], via: ['<connection>'] })\` reaches each recipient in the app and through \`via\`. WhatsApp, Telegram, email and the other conversation integrations are built in, never a \`src/integration/\` of your own: \`via\` names a slot \`+workspace.ts\` declares, \`connections: { <connection>: { integration: 'whatsapp' } }\`.
+Runtime accounts are durable \`sys_integration\` rows, created in Settings or through \`sys_integration.create\`; source declares no connection slots. \`yield* ctx.notify({ title: '<title>', to: [{ team: '<team>' }], via: [instance_id('<integration>', account)] })\` reaches each recipient in the app and on the selected account. Built-in conversation definitions need no duplicate source declaration.
 
-Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string: \`@norbital-ai/std/date\` has \`addDays\` and \`addMonths\` for a date, and \`add_instant\` and \`diff_instants\` work with signed durations. A model's \`effect\` has the same two.
+For a daily channel message, read the intended active workspace account (\`owner\` null, with its intended \`envoy\`) and use \`yield* ctx.send(instance_id('whatsapp', account), { to: '<recipient handle or conversation id>', text: '<message>' })\` in the cron body. Import \`instance_id\` from \`@norbital-ai/bolt\`. Refuse when the account is missing or ambiguous; never silently choose another account. Sends are durably queued, and the provider's acknowledgement and retry outcome appear on the message. Retries of an automation may repeat committed sends: do not promise exactly-once delivery. The recipient's later replies use that account's envoy and the same conversation, with delivered messages in context.
 
-In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.runDue()\` fires what is due at that instant. Assert \`expect(failed).toEqual([])\` first: a run that failed says why there, and nothing else will.`,
+Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string: \`@norbital-ai/std/date\` has \`add_days\` and \`add_months\` for a date, and \`add_instant\` and \`diff_instants\` work with signed durations. A model's \`effect\` has the same two.
+
+In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.run_due()\` fires what is due at that instant. Assert \`expect(failed).toEqual([])\` first: a run that failed says why there, and nothing else will.`,
 	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares:
 
 \`\`\`ts
@@ -137,13 +150,18 @@ export default model({
 		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', on_delete: 'restrict' }
 	},
 	outputs: { default: { fields: 'all' } },
-	// a write layer is a path from the model's own name: '<name>', then '<name>.<relation>' for children; never 'default'
-	create: { columns: { <name>: ['<field>', '<other>'] } },
-	update: { columns: { <name>: ['<field>', '<other>'] } }
+	// columns use the same nested tree as outputs: fields, then child-relation keys
+	create: { columns: { fields: ['<field>', '<other>'] } },
+	update: { columns: { fields: ['<field>', '<other>'] } }
 });
 \`\`\`
 
 A required field added to a model with rows needs a data step in its generated migration, filling them.`,
+	integration: `A definition lives at \`src/integration/<name>/+integration.ts\` and uses that folder's generated binding. Read the definition's exported types before authoring it. Built-in conversation definitions already exist.
+
+Accounts and envoys are runtime records: \`sys_envoy\` holds the assistant's name, task and policies; \`sys_integration\` holds one account, its configuration, optional envoy and durable sealed pairing. Create any number of workspace accounts with no owner. Settings → Envoys creates an envoy then pairs its provider; Settings → Connections creates and configures other workspace accounts. Keep a supplied \`+integration.svelte\` companion.
+
+For native setup in a root web conversation, read \`describe_workspace { names: ['system'] }\`; use the returned capability and account id with \`page { path, configure }\`. The native form collects credentials directly from the person. Envoys and delegated agents have no user tab. Never ask for a secret in chat or invent an envoy source file. Cron jobs send through a concrete paired workspace account with \`ctx.send\`; see the automation card.`,
 	access: `A policy is one file; a grant names only verbs its model declares. Every team is in the one team file:
 
 \`\`\`ts
@@ -152,7 +170,7 @@ import { policy } from '@norbital-ai/bolt';
 
 export default policy({
 	description: '<what holders may do>',
-	grants: { <model>: { read: true, create: true, update: true } }
+	grants: { <model>: { outputs: { default: true }, create: true, update: true } }
 });
 
 // src/access_control/team/+team.ts
@@ -160,30 +178,6 @@ import { team } from '@norbital-ai/bolt';
 
 export default team({ <team>: { name: '<Team name>', policies: ['<policy>'] } });
 \`\`\``,
-	tool: `A tool is its folder: \`+tool.ts\`, data the compiler reads, and \`run.ts\`, its body, on Node in a VM of its own:
-
-\`\`\`ts
-// src/agent/tool/<name>/+tool.ts
-import { tool } from '@norbital-ai/bolt';
-
-export default tool({
-	description: '<what it does>',
-	input: { <field>: { kind: 'text', optional: true } }
-});
-
-// src/agent/tool/<name>/run.ts
-import type { ToolRun } from '@norbital-ai/bolt';
-import type spec from './+tool.ts';
-
-const run: ToolRun<typeof spec> = async (input, files) => {
-	const bytes = await files.read(files.names[0]!);
-	await files.write('<name>.csv', '<text>');
-	return { <what you read back> };
-};
-export default run;
-\`\`\`
-
-\`workspace_install\` brings a package; \`await import\` it inside \`run\`. \`run_tool { name, input, files: [{ id }] }\` runs your working tree's. A merge tells every staff conversation of it, with its input, below what it holds. A test imports \`run.ts\` and passes its own \`files\`.`,
 	page: `An app is its folder: \`+app.ts\` and one \`+<page>.page.svelte\` per page. A list of records needs nothing else:
 
 \`\`\`ts
@@ -216,13 +210,15 @@ it.layer(TestWorkspace.layer({ root: new URL('..', import.meta.url).pathname }))
 	it.effect('<what it proves>', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
-			const caller = t.as(t.member(['<policy>'])); // or t.as(t.admin)
-			yield* caller.act('<model>.create', [{ <field>: <value> }]);
-			const refused = yield* Effect.exit(caller.act('<model>.create', [{ <field>: <bad value> }]));
+			const caller = yield* t.as(t.member(['<policy>'])); // or yield* t.as(t.admin)
+			yield* caller.act({ '<model>.create': [{ <field>: <value> }] });
+			const refused = yield* Effect.exit(caller.act({ '<model>.create': [{ <field>: <bad value> }] }));
 			expect(Exit.isFailure(refused)).toBe(true);
 			const { rows } = (yield* caller.query({ <model>: { fields: ['<field>'] } })).<model>;
 			expect(rows).toHaveLength(1);
-			yield* caller.act('<model>.update', [{ target: rows[0]!.id, set: { <field>: <value> } }]);
+			const [row] = rows;
+			if (row === undefined) throw new Error('Expected the created row.');
+			yield* caller.act({ '<model>.update': [{ target: row, set: { <field>: <value> } }] });
 		})
 	);
 });
@@ -628,7 +624,7 @@ export const generateDocs = Effect.try({
 			if (description === '')
 				throw new Error(`[docs] oss/skills/${name}/SKILL.md has no description`);
 			const skill: DocSkill = { name, description, files };
-			writeFileSync(join(out, skillFile(name)), `${JSON.stringify(skill, null, '\t')}\n`);
+			writeFileSync(join(out, skill_file(name)), `${JSON.stringify(skill, null, '\t')}\n`);
 			index.skills.push({ name, description, files: paths });
 		}
 		for (const e of entries) {
@@ -716,7 +712,7 @@ export const generateDocs = Effect.try({
 			]
 		};
 		writeFileSync(
-			join(out, skillFile(CONTRACT_SKILL)),
+			join(out, skill_file(CONTRACT_SKILL)),
 			`${JSON.stringify(contract, null, '\t')}\n`
 		);
 		index.skills.push({
@@ -816,7 +812,7 @@ export const generateDocs = Effect.try({
 				"adds the parts served around it (`Serving`). The host file is never part of the release's source. `off` is the only",
 				'way to leave an optional member out; `mail` has none. Activation refuses a bundle whose recorded needs name a member',
 				'left `off`, naming each one. The guest runner is no facility: each host owns its own (`HostPorts.guests`; bolt-server',
-				"and `bolt dev` run bolt-cli's `nodeGuests`, Colony its isolated-vm runner).",
+				"and `bolt dev` run bolt-cli's `node_guests`, Colony its isolated-vm runner).",
 				...groups.flatMap((g) =>
 					g.type !== undefined && ts.isTypeLiteralNode(g.type)
 						? ['', `## ${g.name.getText()}`, '', ...table(g.type.members)]

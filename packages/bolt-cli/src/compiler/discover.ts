@@ -8,8 +8,8 @@ import {
 	LAYOUT_HELP,
 	NAME,
 	ROLES,
-	fileRe,
-	matchDir,
+	file_re,
+	match_dir,
 	type Role
 } from '@norbital-ai/bolt/tooling';
 
@@ -70,11 +70,12 @@ export const discover = Effect.fn('bolt.discover')(function* (
 	const paths = yield* walk(src);
 	for (const path of paths) {
 		const segs = path.split('/').slice(system ? 2 : 1);
-		const base = segs.pop()!;
+		const base = segs.pop() ?? '';
 		if (!base.startsWith('+')) continue;
-		const byFile = ROLES.map((r) => ({ r, m: fileRe(r.file).exec(base) })).filter(
-			(x) => x.m !== null
-		);
+		const byFile = ROLES.flatMap((r) => {
+			const match = file_re(r.file).exec(base);
+			return match === null ? [] : [{ r, fileName: match[1] }];
+		});
 		if (byFile.length === 0) {
 			const own = ROLES.find((r) => !r.file.includes('*') && base.endsWith(`.${r.file.slice(1)}`));
 			if (own)
@@ -91,9 +92,10 @@ export const discover = Effect.fn('bolt.discover')(function* (
 				);
 			continue;
 		}
-		const hit = byFile
-			.map(({ r, m }) => ({ r, fileName: m![1], folder: matchDir(r.dir, segs) }))
-			.find((x) => x.folder !== undefined);
+		const hit = byFile.flatMap(({ r, fileName }) => {
+			const folder = match_dir(r.dir, segs);
+			return folder === undefined ? [] : [{ r, fileName, folder }];
+		}).at(0);
 		if (!hit) {
 			const plural = segs.find((s) => s.endsWith('s') && FOLDERS.has(s.slice(0, -1)));
 			const where = byFile
@@ -109,7 +111,7 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			continue;
 		}
 		const { r, fileName, folder } = hit;
-		const bad = [...folder!.split('/'), fileName].find(
+		const bad = [...folder.split('/'), fileName].find(
 			(s) => s !== undefined && s !== '' && !NAME.test(s)
 		);
 		if (bad !== undefined) {
@@ -120,14 +122,10 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			r.role === 'page'
 				? `${folder}/${fileName}`
 				: r.role === 'model' || r.role === 'representation'
-					? folder!.split('/').at(-1)!
-					: (fileName ?? folder!);
+					? folder.slice(folder.lastIndexOf('/') + 1)
+					: (fileName ?? folder);
 		files.push({ role: r.role, name, path });
 	}
-
-	for (const file of files.filter((file) => file.role === 'tool'))
-		if (!paths.includes(file.path.replace('+tool.ts', 'run.ts')))
-			fail('tool-entry', file.path, "a tool's body is run.ts beside its +tool.ts");
 
 	// A source declaration has one owner.
 	const declarations = new Map<string, Discovered>();
@@ -213,11 +211,11 @@ export const discover = Effect.fn('bolt.discover')(function* (
 	const spaced = ['model', 'automation', 'integration_definition'] as const;
 	const seen = new Map<string, Discovered>();
 	for (const f of files
-		.filter((x) => spaced.includes(x.role as (typeof spaced)[number]))
+		.filter((x) => spaced.some((role) => role === x.role))
 		.sort(
 			(a, b) =>
-				spaced.indexOf(a.role as (typeof spaced)[number]) -
-				spaced.indexOf(b.role as (typeof spaced)[number])
+				spaced.findIndex((role) => role === a.role) -
+				spaced.findIndex((role) => role === b.role)
 		)) {
 		const first = seen.get(f.name);
 		if (first) fail('name-clash', f.path, `'${f.name}' is already the ${first.role} ${first.path}`);
@@ -233,13 +231,14 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			if (path === 'seed/+seeder.ts') continue;
 			if (/^seed\/(?:public|test)\/assets(?:\.json$|\/)/.test(path)) continue;
 			const m = /^seed\/(?:public|test)\/(?:.+\/)?([^/]+)\.json(?:\.gz)?$/.exec(path);
-			if (m === null)
+			const model = m?.[1];
+			if (model === undefined)
 				fail(
 					'seed-layout',
 					path,
 					'seed/ holds +seeder.ts and public/** and test/** rows and their assets; private rows live in a bank tree'
 				);
-			else if (!models.has(m[1]!)) fail('seed-unknown-model', path, `'${m[1]}' names no model`);
+			else if (!models.has(model)) fail('seed-unknown-model', path, `'${model}' names no model`);
 		}
 	return { files, errors };
 });

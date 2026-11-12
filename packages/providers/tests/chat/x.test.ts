@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { x } from '../../src/chat/x/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = {
@@ -96,7 +96,7 @@ describe('X', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(x, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'norbot' });
-			expect((yield* h.link.webhook!(webhook(mention, sign(mention)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(mention, sign(mention)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
@@ -104,7 +104,7 @@ describe('X', () => {
 						id: 'p1',
 						thread: 'post:p1',
 						text: '@norbot hi',
-						sentAt: '2026-10-01T10:00:00.000Z',
+						sent_at: '2026-10-01T10:00:00.000Z',
 						from: { handle: '2', name: 'Mei' },
 						group: true,
 						invocation: 'mention'
@@ -119,16 +119,16 @@ describe('X', () => {
 			const h = yield* connected(x, settings),
 				own = dm('1', 'dm.sent'),
 				theirs = dm('2');
-			yield* h.link.webhook!(webhook(own, sign(own)));
+			yield* required(h.link.webhook)(webhook(own, sign(own)));
 			expect(h.events).toEqual([]);
-			yield* h.link.webhook!(webhook(theirs, sign(theirs)));
+			yield* required(h.link.webhook)(webhook(theirs, sign(theirs)));
 			expect(h.events[0]).toMatchObject({
 				messages: [
 					{
 						id: 'dm1',
 						thread: 'dm:2',
 						text: 'hello',
-						sentAt: new Date(1_790_000_000_000).toISOString(),
+						sent_at: new Date(1_790_000_000_000).toISOString(),
 						from: { handle: '2', name: 'Mei' },
 						invocation: 'direct'
 					}
@@ -140,7 +140,7 @@ describe('X', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(x, settings);
-			const refused = yield* h.link.webhook!(
+			const refused = yield* required(h.link.webhook)(
 				webhook(mention, { 'x-twitter-webhooks-signature': 'sha256=forged' })
 			);
 			expect(refused.status).toBe(401);
@@ -153,7 +153,7 @@ describe('X', () => {
 			const h = yield* connected(x, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(webhook(mention, sign(mention)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(mention, sign(mention)))).status).toBe(500);
 		})
 	);
 	it.live('answers the CRC challenge, and signs nothing that is not a token', () =>
@@ -161,13 +161,13 @@ describe('X', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(x, settings),
 				token = 'abcdefghijklmnop1234';
-			const answered = yield* h.link.webhook!(
+			const answered = yield* required(h.link.webhook)(
 				new Request(`https://hook.test/?crc_token=${token}`)
 			);
 			expect(yield* Effect.promise(() => answered.json())).toEqual({
 				response_token: `sha256=${createHmac('sha256', 'consumer-secret').update(token).digest('base64')}`
 			});
-			const oracle = yield* h.link.webhook!(
+			const oracle = yield* required(h.link.webhook)(
 				new Request(`https://hook.test/?crc_token=${encodeURIComponent(mention)}`)
 			);
 			expect(oracle.status).toBe(401);
@@ -177,9 +177,9 @@ describe('X', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(x, settings);
-			expect(oauthHolds(api.calls[0]!, 'GET')).toBe(true);
-			expect(yield* h.link.send!({ to: 'post:p1', text: 'Hello' }, [])).toMatchObject({
-				providerId: 'out1'
+			expect(oauthHolds(required(api.calls[0]), 'GET')).toBe(true);
+			expect(yield* required(h.link.send)({ to: 'post:p1', text: 'Hello' }, [])).toMatchObject({
+				provider_id: 'out1'
 			});
 			const post = api.calls.at(-1);
 			expect(post?.url).toBe('https://api.x.com/2/tweets');
@@ -187,9 +187,9 @@ describe('X', () => {
 				text: 'Hello',
 				reply: { in_reply_to_tweet_id: 'p1' }
 			});
-			expect(oauthHolds(post!, 'POST')).toBe(true);
-			expect(yield* h.link.send!({ to: 'dm:2', text: 'Hi' }, [])).toMatchObject({
-				providerId: 'out2'
+			expect(oauthHolds(required(post), 'POST')).toBe(true);
+			expect(yield* required(h.link.send)({ to: 'dm:2', text: 'Hi' }, [])).toMatchObject({
+				provider_id: 'out2'
 			});
 			const direct = api.calls.at(-1);
 			expect(direct?.url).toBe('https://api.x.com/2/dm_conversations/with/2/messages');
@@ -200,7 +200,7 @@ describe('X', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(x, settings);
-			yield* h.link.test!({ to: '2' });
+			yield* required(h.link.test)({ to: '2' });
 			expect(api.calls.at(-1)?.url).toBe('https://api.x.com/2/dm_conversations/with/2/messages');
 		})
 	);
@@ -210,7 +210,7 @@ describe('X', () => {
 				call.url.endsWith('/2/tweets') ? json({ title: 'Forbidden' }, 403) : answer(call)
 			);
 			const h = yield* connected(x, settings);
-			const failure = yield* Effect.flip(h.link.send!({ to: 'post:p1', text: 'Hello' }, []));
+			const failure = yield* Effect.flip(required(h.link.send)({ to: 'post:p1', text: 'Hello' }, []));
 			expect(failure.message).toContain('403');
 		})
 	);
@@ -218,7 +218,7 @@ describe('X', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ title: 'Unauthorized' }, 401));
 			const h = yield* host(chatProvider(x), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -226,22 +226,22 @@ describe('X', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const connection = yield* Effect.promise(() =>
-				x.connect(settings, { fetch, webhookUrl: 'https://hook.test/', receive: async () => {} })
+				x.connect(settings, { fetch, webhook_url: 'https://hook.test/', receive: async () => {} })
 			);
 			const read = yield* Effect.promise(() =>
-				connection.history!('dm:2', '2026-09-15T00:00:00.000Z')
+				required(connection.history)('dm:2', '2026-09-15T00:00:00.000Z')
 			);
 			expect(read.complete).toBe(true);
 			expect(read.messages.map((message) => message.id)).toEqual(['d4', 'd2']);
 			expect(read.messages[1]).toMatchObject({
 				thread: 'dm:2',
 				text: 'in the window',
-				sentAt: '2026-10-01T10:00:00.000Z',
+				sent_at: '2026-10-01T10:00:00.000Z',
 				from: { handle: '2' }
 			});
-			expect(oauthHolds(api.calls.at(-1)!, 'GET')).toBe(true);
+			expect(oauthHolds(required(api.calls.at(-1)), 'GET')).toBe(true);
 			expect(
-				yield* Effect.promise(() => connection.history!('post:p1', '2026-09-15T00:00:00.000Z'))
+				yield* Effect.promise(() => required(connection.history)('post:p1', '2026-09-15T00:00:00.000Z'))
 			).toEqual({ messages: [], complete: false });
 		})
 	);

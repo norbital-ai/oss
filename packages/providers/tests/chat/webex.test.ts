@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { webex } from '../../src/chat/webex/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { botToken: 'token', webhookSecret: 'secret' };
@@ -37,7 +37,7 @@ const signature = (body: string) => ({
 });
 const hostFor = (fetch: typeof globalThis.fetch) => ({
 	fetch,
-	webhookUrl: 'https://hook.test/',
+	webhook_url: 'https://hook.test/',
 	receive: () => Promise.resolve()
 });
 
@@ -48,7 +48,7 @@ describe('Webex', () => {
 			const h = yield* connected(webex, settings),
 				body = event('M1');
 			expect(h.status).toMatchObject({ state: 'connected', account: 'Acme' });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				bins: [new Uint8Array([1, 2, 3])],
@@ -56,11 +56,11 @@ describe('Webex', () => {
 					{
 						id: 'M1',
 						thread: 'R1:P1',
-						sentAt: '2026-11-05T10:00:00.000Z',
+						sent_at: '2026-11-05T10:00:00.000Z',
 						from: { handle: 'U1', name: 'Ann' },
 						text: 'hello',
 						group: true,
-						replyTo: 'P1',
+						reply_to: 'P1',
 						invocation: 'mention',
 						attachments: [{ name: 'F1', bin: 0 }]
 					}
@@ -75,7 +75,7 @@ describe('Webex', () => {
 			const h = yield* connected(webex, settings),
 				body = event('M1'),
 				before = api.calls.length;
-			const refused = yield* h.link.webhook!(webhook(body, { 'x-spark-signature': 'forged' }));
+			const refused = yield* required(h.link.webhook)(webhook(body, { 'x-spark-signature': 'forged' }));
 			expect(refused.status).toBe(401);
 			expect(h.events).toEqual([]);
 			expect(api.calls.length).toBe(before);
@@ -88,7 +88,7 @@ describe('Webex', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = event('M1');
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live('skips its own message, one already gone, and other events', () =>
@@ -100,7 +100,7 @@ describe('Webex', () => {
 				event('GONE'),
 				JSON.stringify({ resource: 'memberships', event: 'created', data: { id: 'M1' } })
 			])
-				expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -108,8 +108,8 @@ describe('Webex', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(webex, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: 'R1:P1', text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: 'R1:P1', text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			expect(api.calls.at(-1)?.url).toBe('https://webexapis.com/v1/messages');
 			expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toEqual({
 				roomId: 'R1',
@@ -122,7 +122,7 @@ describe('Webex', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ message: 'unauthorized' }, 401));
 			const h = yield* host(chatProvider(webex), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -144,7 +144,7 @@ describe('Webex', () => {
 				return json({ items });
 			})
 		);
-		const read = await connection.history!('R1', '2026-11-05T00:00:00.000Z');
+		const read = await required(connection.history)('R1', '2026-11-05T00:00:00.000Z');
 		expect(read.complete).toBe(true);
 		expect(read.messages.map((one) => one.id)).toEqual(['NEW']);
 		const query = new URL(calls.at(-1) ?? '').searchParams;
@@ -164,7 +164,7 @@ describe('Webex', () => {
 				return json({ items });
 			})
 		);
-		const read = await connection.history!('R1:P1', '2026-11-05T00:00:00.000Z');
+		const read = await required(connection.history)('R1:P1', '2026-11-05T00:00:00.000Z');
 		expect(read.complete).toBe(false);
 		expect(new URL(calls.at(-1) ?? '').searchParams.get('beforeMessage')).toBe('M99');
 		expect(new URL(calls.at(-1) ?? '').searchParams.get('mentionedPeople')).toBeNull();

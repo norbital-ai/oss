@@ -221,9 +221,9 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 			message: {
 				id,
 				thread: null,
-				sentAt: sentAtOf(head.get('date'), receivedAt, now),
+				sent_at: sentAtOf(head.get('date'), receivedAt, now),
 				from: { address, name: null },
-				replyTo: null,
+				reply_to: null,
 				to: [],
 				cc: [],
 				subject: head.get('subject')?.slice(0, 998) ?? '',
@@ -308,9 +308,9 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 		message: {
 			id,
 			thread: null,
-			sentAt: sentAtOf(e.date, receivedAt, now),
+			sent_at: sentAtOf(e.date, receivedAt, now),
 			from: from.address === '' ? { ...from, address: NOBODY } : from,
-			replyTo: flat(e.replyTo)[0] ?? null,
+			reply_to: flat(e.replyTo)[0] ?? null,
 			to: flat(e.to),
 			cc: flat(e.cc),
 			subject,

@@ -8,14 +8,14 @@ import { Context, Deferred, Effect, Exit, Layer, Queue, Schema, Scope, Stream } 
 import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { catalogOf } from '../src/engine/access/pred.ts';
-import { lowerRead } from '../src/engine/index.ts';
+import { catalog_of } from '../src/engine/access/pred.ts';
+import { lower_read } from '../src/engine/index.ts';
 import { aggregate } from '@norbital-ai/store';
 import type { Frame } from '../src/protocol/wire.ts';
-import { fromStore } from '../src/protocol/errors.ts';
+import { from_store } from '../src/protocol/errors.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { Live, Reads } from '../src/engine/services.ts';
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const columns = ['name', 'amount', 'day', 'at', 'span', 'slot', 'notes'];
@@ -49,10 +49,9 @@ const manifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -105,14 +104,14 @@ const open = Effect.fn('Test.wireCodec')(function* () {
 		})
 	);
 	const t = Context.get(context, TestWorkspace),
-		route = yield* routeFixture(context),
-		authority = t.as(t.admin).authority;
-	const act = (callable: string, value: Json) =>
-		actReply(route, authority, { callable, input: value, issuedAt: t.clock.now() }).pipe(
+		route = yield* route_fixture(context),
+		authority = (yield* t.as(t.admin)).authority;
+	const act = (acts: Readonly<Record<string, Json>>) =>
+		act_reply(route, authority, { acts, issued_at: t.clock.now() }).pipe(
 			Effect.map((reply) => reply.outcome)
 		);
 	const get = (id: string) =>
-		qReply(route, authority, {
+		q_reply(route, authority, {
 			reads: [{ m: 'query', a: [{ items: { where: { id: { eq: id } } } }] }]
 		}).pipe(
 			Effect.flatMap((reply) =>
@@ -140,12 +139,12 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			const reads = Context.get(a.context, Reads);
 			const [page] = yield* reads.run(
 				[
-					yield* aggregate(catalogOf(manifest), 'items', {
+					yield* aggregate(catalog_of(manifest), 'items', {
 						by: [{ month: 'day' }],
 						count: true,
 						sum: ['amount'],
 						all: true
-					}).pipe(Effect.mapError(fromStore))
+					}).pipe(Effect.mapError(from_store))
 				],
 				{ as: 'workspace' },
 				{ now: a.t.clock.now(), today: a.t.clock.now().slice(0, 10), tz: 'UTC' }
@@ -164,17 +163,19 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 	it.live('date both ways: q gives back exactly what act took and the read row goes back in', () =>
 		Effect.gen(function* () {
 			const a = yield* shared;
-			const id = createdId(yield* a.act('items.create', [input]));
+			const id = createdId(yield* a.act({ 'items.create': [input] }));
 			const row = yield* a.get(id);
 			if (row === null) throw new Error('Missing created row');
 			expect(row).toMatchObject(input);
 			committed(
-				yield* a.act('items.update', [
-					{
-						target: id,
-						set: Object.fromEntries(columns.map((f) => [f, row[f] ?? null]))
-					}
-				])
+				yield* a.act({
+					'items.update': [
+						{
+							target: row,
+							set: Object.fromEntries(columns.map((f) => [f, row[f] ?? null]))
+						}
+					]
+				})
 			);
 			expect(yield* a.get(id)).toMatchObject(input);
 		})
@@ -182,8 +183,10 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 	it.live('the callback reads the same shapes through before and ctx.query', () =>
 		Effect.gen(function* () {
 			const a = yield* shared;
-			const id = createdId(yield* a.act('items.create', [input]));
-			committed(yield* a.act('items.update', [{ target: id, set: { name: 'b' } }]));
+			const id = createdId(yield* a.act({ 'items.create': [input] }));
+			const before = yield* a.get(id);
+			if (before === null) throw new Error('Missing created row');
+			committed(yield* a.act({ 'items.update': [{ target: before, set: { name: 'b' } }] }));
 			const shape = {
 				amount: '1.50',
 				day: input.day,
@@ -214,9 +217,9 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			const conn = yield* Deferred.await(ready);
 			const select = Object.fromEntries(columns.map((f) => [f, true]));
 			yield* live.register(conn, 'items', {
-				read: lowerRead(manifest, 'read', ['items', { all: true, select }])
+				read: yield* lower_read(manifest, 'read', ['items', { all: true, select }])
 			});
-			committed(yield* a.act('items.create', [input]));
+			committed(yield* a.act({ 'items.create': [input] }));
 			yield* live.settled;
 			let last = frames.filter((frame) => frame.t === 'patch').at(-1);
 			while (last === undefined) {

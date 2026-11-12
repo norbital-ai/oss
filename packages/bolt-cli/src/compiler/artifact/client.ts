@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, posix } from 'node:path';
 import type { Server } from 'node:http';
 import { build, createServer, type Connect, type InlineConfig, type Rolldown } from 'vite';
-import { pageRouteKey, publicPageKeys } from '@norbital-ai/bolt/artifact';
+import { page_route_key, public_page_keys } from '@norbital-ai/bolt/artifact';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
 import type { ShellManifest } from '@norbital-ai/bolt/tooling';
 import type { Discovered } from '../discover.ts';
@@ -32,7 +32,7 @@ import {
 import { publicWrapper } from './public-wrapper.ts';
 import { cachedSvelte } from './svelte-cache.ts';
 import { BOLT, BOLT_PACKAGE, EXT } from '../bolt.ts';
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 
 const BOLT_INDEX = join(BOLT, `index${EXT}`);
 /** The modules the SPA's entry and pages reach Bolt by path: `bolt dev` pre-bundles each (`bolt:prebundled-platform`). */
@@ -126,7 +126,7 @@ const document = (
 	entry: string,
 	css: readonly string[],
 	preloads: readonly string[],
-	nativeModules: readonly string[],
+	native_modules: readonly string[],
 	accessStyles: string
 ) => `<!doctype html>
 <html lang="en">
@@ -152,7 +152,7 @@ ${accessStyles}
 </style>
 ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
 ${preloads.map((file) => `<link rel="modulepreload" href="/${file}">`).join('\n')}
-<script type="application/json" id="bolt-initial-modules">${key({ css, nativeModules }).replaceAll('<', '\\u003c')}</script>
+<script type="application/json" id="bolt-initial-modules">${key({ css, native_modules }).replaceAll('<', '\\u003c')}</script>
 <script type="module" src="/${entry}"></script>
 </head>
 <body><div id="bolt"></div><div id="bolt-loading" role="status" aria-live="polite" aria-busy="true" class="access-frame"><main class="access-loading-content"><div class="access-loading-cluster"><img class="access-loading-mark" src="/assets/bolt-apple-icon.png" alt=""><h1 class="access-loading-name">${escape(title)}</h1><p class="access-loading-status">Opening workspace…</p><div class="access-loading-track" aria-hidden="true"></div></div></main></div></body>
@@ -313,11 +313,11 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	title: string
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	const publicRoutes = new Set(publicPageKeys(m));
+	const public_routes = new Set(public_page_keys(m));
 	const pageFiles = files.filter((file) => file.role === 'page');
-	const publicFiles = pageFiles.filter((file) => publicRoutes.has(pageRouteKey(m, file.name)));
+	const publicFiles = pageFiles.filter((file) => public_routes.has(page_route_key(m, file.name)));
 	const pages = pageFiles.map((file) => {
-		const route = pageRouteKey(m, file.name);
+		const route = page_route_key(m, file.name);
 		const name = route.startsWith('app/') ? file.name : route;
 		return `${key(name)}: () => import(${key(join(root, file.path))})`;
 	});
@@ -342,12 +342,12 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	const reps = files
 		.filter((f) => f.role === 'representation')
 		.map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`);
-	const integrationSetups = files
+	const integration_setups = files
 		.filter((f) => f.role === 'integration_setup')
 		.map((f) => `${key(f.name)}: { load: () => import(${key(join(root, f.path))}) }`);
 	// custom fields: the manifest's shape, and the renderer (imported with the entry: display grids render it synchronously)
 	const renderers = files.filter((f) => f.role === 'renderer');
-	const customFields = Object.entries(m.customFields).map(([name, spec]) => {
+	const custom_fields = Object.entries(m.custom_fields).map(([name, spec]) => {
 		const r = renderers.findIndex((f) => f.name === name);
 		return `${key(name)}: { shape: ${key(spec.shape)}${typeof spec.label === 'string' ? `, label: ${key(spec.label)}` : ''}${r < 0 ? '' : `, renderer: F${r}`} }`;
 	});
@@ -361,7 +361,7 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		node: process.versions.node
 	};
 	const entry = `import ${key(styles)};
-import { initializeShellAssets, mountShell } from ${key(join(SHELL, `mount${EXT}`))};
+import { initialize_shell_assets, mount_shell } from ${key(join(SHELL, `mount${EXT}`))};
 ${base === undefined ? 'const base = {};' : `import base from ${key(join(root, base.path))};`}
 ${locales.map((l, i) => `import L${i} from ${key(join(root, l.path))};`).join('\n')}
 ${sessions.map((s, i) => `import S${i} from ${key(join(root, s.path))};`).join('\n')}
@@ -370,11 +370,11 @@ const locales = { ${locales.map((l, i) => `${key(l.name.toLowerCase())}: L${i}`)
 const workspaceLocale = ${key(shell.workspace.locale)}.toLowerCase();
 const tag = [workspaceLocale, workspaceLocale.split('-')[0]].find((l) => l in locales);
 globalThis.__BOLT_BUILD__ = ${key(versions)};
-const ready = initializeShellAssets(import.meta.url);
-ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceName: ${key(title)}, publicRoutes: ${key([...publicRoutes])}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
+const ready = initialize_shell_assets(import.meta.url);
+ready.then(() => mount_shell(document.getElementById('bolt'), { ready, workspace_name: ${key(title)}, public_routes: ${key([...public_routes])}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
 	sessions: { ${sessions.map((s, i) => `${key(s.name)}: S${i}`).join(', ')} },
 	messages: { ...base, ...(tag === undefined ? {} : locales[tag]) },
-	integrationSetups: { ${integrationSetups.join(', ')} }, representations: { ${reps.join(', ')} }, customFields: { ${customFields.join(', ')} } })).catch((cause) => {
+	integration_setups: { ${integration_setups.join(', ')} }, representations: { ${reps.join(', ')} }, custom_fields: { ${custom_fields.join(', ')} } })).catch((cause) => {
 	const status = document.querySelector('#bolt-loading p');
 	if (status !== null) { status.textContent = 'The workspace could not finish loading. Reload to try again.'; status.setAttribute('role', 'alert'); }
 	console.error(cause);
@@ -505,8 +505,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			visit(entry);
 			return reached;
 		};
-		const nativeModules = reach(chunk.fileName);
-		nativeModules.delete(chunk.fileName);
+		const native_modules = reach(chunk.fileName);
+		native_modules.delete(chunk.fileName);
 		const preloads = reach(chunk.fileName, false);
 		preloads.delete(chunk.fileName);
 		const sourcesFor = (entry: string) => {
@@ -539,7 +539,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			entry: chunk.fileName,
 			css,
 			preloads: [...preloads],
-			nativeModules: [...nativeModules].sort(),
+			native_modules: [...native_modules].sort(),
 			chunks,
 			sourcesFor,
 			manifest
@@ -594,7 +594,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 				? yield* layerBuild
 				: yield* cachedPlatformLayer(
 						join(root, '.norbital', 'cache', 'platform-layer'),
-						sha256Hex(JSON.stringify([PLATFORM_CACHE_VERSION, import.meta.url, lock, overlay])),
+						sha256_hex(JSON.stringify([PLATFORM_CACHE_VERSION, import.meta.url, lock, overlay])),
 						out,
 						layerBuild
 					));
@@ -617,7 +617,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			internal.entry,
 			css,
 			internal.preloads,
-			internal.nativeModules,
+			internal.native_modules,
 			yield* fs.readFileString(require.resolve('@norbital-ai/ui/brand/access.css'))
 		)
 	);
@@ -626,7 +626,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	const publicEntries: Record<string, string> = {};
 	const publicStylesheets = new Map<string, string>();
 	for (const file of internalOnly ? [] : publicFiles) {
-		const route = pageRouteKey(m, file.name);
+		const route = page_route_key(m, file.name);
 		const publicStyles = join(gen, `${encodeURIComponent(route)}.css`);
 		yield* fs.writeFileString(
 			publicStyles,
@@ -641,8 +641,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			`import ${key(publicStyles)};
 import { Effect } from 'effect';
 import Page from ${key(wrapper)};
-import { hydratePublicPage } from ${key(join(SHELL, 'public', `client${EXT}`))};
-Effect.runPromise(hydratePublicPage(Page, ${key(route)})).catch((cause) => {
+import { hydrate_public_page } from ${key(join(SHELL, 'public', `client${EXT}`))};
+Effect.runPromise(hydrate_public_page(Page, ${key(route)})).catch((cause) => {
 	console.error('Public page could not hydrate', cause);
 	const status = document.createElement('p'); status.setAttribute('role', 'alert'); status.textContent = 'This page could not become interactive. Reload to try again.'; document.getElementById('bolt')?.append(status);
 });`

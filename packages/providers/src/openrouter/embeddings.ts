@@ -21,14 +21,14 @@ export type EmbedInput =
 				readonly bytes: number;
 			};
 	  };
-export type Endpoint = { readonly baseUrl: string; readonly apiKey?: string | undefined };
+export type Endpoint = { readonly base_url: string; readonly api_key?: string | undefined };
 export type EmbeddingsConfig<E> = Endpoint & {
 	/** The host's scoped file reader; stored media never returns through the Cell. */
 	readonly files?: (key: string, max: number) => Effect.Effect<Uint8Array, E>;
 	/** The provider model a workspace's embedding name runs and how many inputs one request may carry; `undefined`: none is mapped. */
 	readonly model: (name: string) => { readonly id: string; readonly batch: number } | undefined;
 	/** Records the provider's charge for one request (USD) under its id; a failure is logged, never the embedding's. */
-	readonly meter?: ((costUsd: number, id: string) => Effect.Effect<void, E>) | undefined;
+	readonly meter?: ((cost_usd: number, id: string) => Effect.Effect<void, E>) | undefined;
 };
 
 const RETRIES = 3;
@@ -43,7 +43,7 @@ const Answer = Schema.Struct({
 	usage: Schema.optionalKey(Schema.Struct({ cost: Schema.optionalKey(Schema.Number) }))
 });
 const auth = (e: Endpoint) =>
-	e.apiKey === undefined ? {} : { authorization: `Bearer ${e.apiKey}` };
+	e.api_key === undefined ? {} : { authorization: `Bearer ${e.api_key}` };
 /** A file as an OpenAI-style image or file content part, its bytes inline. */
 const part = (f: {
 	readonly name: string;
@@ -68,8 +68,8 @@ const wire = (batch: readonly Exclude<EmbedInput, { readonly $stored: unknown }>
  * request carries at most the model's batch; a rate limit or a 5xx is retried up to three times, after the provider's
  * `retry-after` (at most 10 s) or exponentially from 1 s.
  */
-export const openAiEmbeddings = <E>(config: EmbeddingsConfig<E>) => {
-	const call = jsonApi(config.baseUrl, auth(config));
+export const open_ai_embeddings = <E>(config: EmbeddingsConfig<E>) => {
+	const call = jsonApi(config.base_url, auth(config));
 	return Effect.fn('openrouter.embed')(function* (
 		inputs: readonly EmbedInput[],
 		name: string,
@@ -118,8 +118,8 @@ export const openAiEmbeddings = <E>(config: EmbeddingsConfig<E>) => {
 							Effect.succeed(
 								Math.min(
 									10_000,
-									input instanceof ProviderUnavailable && input.retryAfterMs !== undefined
-										? input.retryAfterMs
+									input instanceof ProviderUnavailable && input.retry_after_ms !== undefined
+										? input.retry_after_ms
 										: Duration.toMillis(duration)
 								)
 							)
@@ -155,14 +155,14 @@ export type ModalityCheck = {
 
 /**
  * P39 before activation: each model must take images, by the provider's published metadata (`GET /models` and
- * `/embeddings/models`, `architecture.input_modalities`, as OpenRouter publishes them). One message per refused model, naming the system, the model id and its modalities. `tolerateUnread`: a
+ * `/embeddings/models`, `architecture.input_modalities`, as OpenRouter publishes them). One message per refused model, naming the system, the model id and its modalities. `tolerate_unread`: a
  * listing that did not answer is no evidence against a model (one blip must not refuse the host); it is
  * logged and passed.
  */
-export const aiModalityRefusals = Effect.fn('openrouter.modalities')(function* (
+export const ai_modality_refusals = Effect.fn('openrouter.modalities')(function* (
 	checks: readonly ModalityCheck[],
 	options: {
-		readonly tolerateUnread: boolean;
+		readonly tolerate_unread: boolean;
 		readonly listings?: ReadonlyMap<string, ModelCatalogue>;
 	}
 ) {
@@ -173,20 +173,20 @@ export const aiModalityRefusals = Effect.fn('openrouter.modalities')(function* (
 	>();
 	const out: string[] = [];
 	for (const check of checks) {
-		let read = listings.get(check.endpoint.baseUrl);
+		let read = listings.get(check.endpoint.base_url);
 		if (read === undefined) {
 			const catalogue =
-				options.listings?.get(check.endpoint.baseUrl) ?? (yield* models(check.endpoint));
+				options.listings?.get(check.endpoint.base_url) ?? (yield* models(check.endpoint));
 			const meta = new Map<string, readonly string[]>();
 			for (const model of [...catalogue.chat, ...catalogue.embeddings])
 				if (model.architecture?.input_modalities !== undefined)
 					meta.set(model.id, model.architecture.input_modalities);
-			listings.set(check.endpoint.baseUrl, (read = { meta, unread: catalogue.unread }));
+			listings.set(check.endpoint.base_url, (read = { meta, unread: catalogue.unread }));
 		}
 		for (const id of new Set(check.models)) {
 			const mods = read.meta.get(id);
 			if (mods?.includes('image') === true) continue;
-			if (mods === undefined && read.unread && options.tolerateUnread) {
+			if (mods === undefined && read.unread && options.tolerate_unread) {
 				yield* Effect.logWarning(
 					`${check.system} model '${id}': the provider's model list did not answer; its modalities are unchecked`
 				);

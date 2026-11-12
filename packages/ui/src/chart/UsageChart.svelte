@@ -22,7 +22,7 @@
 	};
 	const BYTES = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
 	/** A reading in its unit, for people. */
-	export function formatMetricValue(unit: string, value: number | null, locale?: string): string {
+	export function format_metric_value(unit: string, value: number | null, locale?: string): string {
 		if (value === null) return 'Unavailable';
 		if (unit === 'bytes' || unit === 'MiB') {
 			let scaled = unit === 'MiB' ? value * 1024 * 1024 : value,
@@ -50,13 +50,13 @@
 
 <script lang="ts">
 	import { useKinds } from '../kinds/context.js';
-	import { uiText } from '../primitives/utils.js';
+	import { ui_text } from '../primitives/utils.js';
 
 	let { title, unit, lines, utilization = null }: UsageChartProps = $props();
 	const host = useKinds();
-	const t = uiText();
+	const t = ui_text();
 	const metric = (value: number | null) =>
-		value === null ? t('unavailable') : formatMetricValue(unit, value, host.locale);
+		value === null ? t('unavailable') : format_metric_value(unit, value, host.locale);
 	const W = 600,
 		H = 160;
 	// the use is the brand line; its bounds take the chart palette after it

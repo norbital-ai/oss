@@ -3,7 +3,7 @@
 // approval flow among them, spec §8), capabilities, manual starts and limits. A grant never changes an output's shape.
 // Everything a grant says is typed from the model's own declaration; nothing else type-checks.
 import { Schema } from 'effect';
-import type { CreateCheck, DeleteCheck, UpdateCheck } from '../ctx.ts';
+import type { CreateVerdict, DeleteVerdict, UpdateVerdict } from '../ctx.ts';
 import type { Checked, Exact } from '../fields.ts';
 import type {
 	AppName,
@@ -18,7 +18,7 @@ import type {
 	PathModel,
 	ReadPath,
 	ReadableName,
-	SyncCallable,
+	SyncKey,
 	TeamName,
 	WritePath
 } from '../names.ts';
@@ -145,6 +145,12 @@ type Scope<C extends ModelName, O, P extends string> = {
 /** A grant of an output: every row, or a scope on its root and any of its relations. History uses the root scope. */
 export type ReadGrant<C extends ModelName, O = 'default'> =
 	true | (Scope<C, O, C> & { history?: true });
+/** A write grant narrows the model's declared fields at each nested child. */
+type WriteColumns<C, O extends 'create' | 'update', P extends string = C & string> = {
+	readonly fields: readonly LayerColumn<C, O, P>[];
+} & {
+	readonly [Child in ChildPath<P, WritePath<C, O>> as Child extends `${P}.${infer Relation}` ? Relation : never]?: WriteColumns<C, O, Child>;
+};
 /**
  * A create or update grant: `true` (every declared column, allowed), or the `columns` per write layer it admits (every
  * declared one when omitted, checked before the `check` runs, without guest code) and the `check` that judges the whole
@@ -154,13 +160,13 @@ export type ReadGrant<C extends ModelName, O = 'default'> =
 export type WriteGrant<C extends ModelName, O extends 'create' | 'update'> =
 	| true
 	| ({
-			columns?: { [P in WritePath<C, O>]?: readonly LayerColumn<C, O, P>[] } & object;
-			verdict?: O extends 'create' ? CreateCheck<C> : UpdateCheck<C>;
+			columns?: WriteColumns<C, O>;
+			verdict?: O extends 'create' ? CreateVerdict<C> : UpdateVerdict<C>;
 	  } & (O extends 'update'
 			? { moves?: 'all' | { [F in StateField<C>]?: readonly Edge<C, F>[] } }
 			: object));
 /** A delete grant: `true`, or `{ verdict }`. */
-export type DeleteGrant<C extends ModelName> = true | ({ verdict?: DeleteCheck<C> } & object);
+export type DeleteGrant<C extends ModelName> = true | ({ verdict?: DeleteVerdict<C> } & object);
 type Declares<C, V> = ExposureSpecOf<C> extends { [P in V & string]: unknown } ? true : false;
 /**
  * A model grant names the `outputs` its holders may read and the model verbs they may call.
@@ -182,9 +188,9 @@ type Grantable = Exclude<ReadableName, 'sys_api_key'>;
 /** Contextual typing for each write grant's verdict callback. */
 type VerdictSlots = {
 	readonly [C in Grantable]?: {
-		readonly create?: true | (object & { readonly verdict?: CreateCheck<C> });
-		readonly update?: true | (object & { readonly verdict?: UpdateCheck<C> });
-		readonly delete?: true | (object & { readonly verdict?: DeleteCheck<C> });
+		readonly create?: true | (object & { readonly verdict?: CreateVerdict<C> });
+		readonly update?: true | (object & { readonly verdict?: UpdateVerdict<C> });
+		readonly delete?: true | (object & { readonly verdict?: DeleteVerdict<C> });
 	} & { readonly [key: string]: unknown };
 };
 
@@ -206,14 +212,14 @@ type EnvoyKey = 'envoys.receive' | 'envoys.unrecognised';
 export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'convert' | EnvoyKey;
 
 // ── the policy ──
-/** What `capabilities.automations` may start: automations, and remote syncs with a `read` (`'<model>.sync.<sync>'`). */
-export type StartableName = AutomationName | SyncCallable;
 type Grants<P> = P extends { grants: infer G } ? G : {};
 interface PolicyFor<C extends Grantable> {
 	description: string;
 	grants: { [K in C]?: K extends Identity ? IdentityGrant<K> : Grant<K> };
 	capabilities?: {
-		automations?: readonly StartableName[];
+		automations?: readonly AutomationName[];
+		/** Remote reads the holder may refresh through the native sync controls (`model.sync_name`). */
+		syncs?: readonly SyncKey[];
 		apps?: readonly (AppName | GroupName)[];
 		tools?: readonly HostToolName[];
 		mcp?: readonly McpName[];
@@ -235,11 +241,11 @@ type PolicyBase = {
  * `src/access_control/policy/+<name>.policy.ts`: what holders may do: per-model `grants` (the read outputs they read —
  * the default and named `outputs` and a row filter per layer of each, and `create`, `update` and `delete`
  * with their `columns` per layer and a `verdict` returning `allow` or `approve`, or refusing), the
- * automations and syncs they may start by hand, capabilities (apps, host tools, MCP servers) and rate `limits`.
+ * automations they may start, remote syncs they may refresh, capabilities (apps, host tools, MCP servers) and rate `limits`.
  * A model's policy alone guards its access points and every layer under them. Teams and automations hold policies.
  * `approve(flow)` is the whole approval mechanism: the write is held as a native approval request, the named step
  * approvers decide it in the record's approval panel, and a rejection restores the checkpoint. A page needs no
- * separate approval control. `notify` on the model receives the write and approval events.
+ * separate approval control. The model's verb effects receive the write and approval events.
  * Returns the literal.
  * @example
  * export default policy({
@@ -248,10 +254,10 @@ type PolicyBase = {
  * 		variation_requests: {
  * 			outputs: { default: { where: { raised_by: { eq: { var: 'requestor.id' } } } } },
  * 			create: {
- * 				columns: { variation_requests: ['job_assignment_id', 'title', 'amount'] },
+ * 				columns: { fields: ['job_assignment_id', 'title', 'amount'] },
  * 				verdict: function* (rows, ctx) {
  * 					const { job_assignments } = yield* ctx.query({
- * 						job_assignments: { where: { id: { in: rows.map((r) => r.job_assignment_id) } }, fields: ['assignee_user_id'] }
+ * 						job_assignments: { where: { id: { in: rows.map((r) => r.after.job_assignment_id) } }, fields: ['assignee_user_id'] }
  * 					});
  * 					const mine = job_assignments.rows.every((j) => j.assignee_user_id === ctx.actor.id);
  * 					return mine

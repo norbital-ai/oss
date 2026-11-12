@@ -1,5 +1,5 @@
-// The integration workspace: customers ← orders (a seq, a state with a per-state `edit`, a roll-up) → owned lines; a
-// callbacks on orders that read the customer and refuse a blocked one; two policies, `rep` (own rows; its write `check`s
+// The integration workspace: customers ← orders (a seq, a state with an explicit lock, a roll-up) → owned lines; a
+// callbacks on orders that read the customer and refuse a blocked one; two policies, `rep` (own rows; its write verdicts
 // keep orders in the north) and `auditor` (every row through the narrower `audit` output, which omits `note`). Lines are a layer of orders (read and written through it) and their own access point.
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
@@ -23,7 +23,7 @@ export const manifest = {
 				status: {
 					kind: 'state',
 					initial: 'draft',
-					states: { draft: { to: ['submitted'] }, submitted: { to: ['draft'], edit: ['note'] } }
+					states: { draft: { to: ['submitted'] }, submitted: { to: ['draft'] } }
 				},
 				note: { kind: 'text', optional: true },
 				archived: { kind: 'bool', default: false },
@@ -36,6 +36,7 @@ export const manifest = {
 				total: { kind: 'sum', of: 'lines.amount' }
 			},
 			locks: {
+				submitted: { where: { status: { eq: 'submitted' } }, except: ['note', 'status'] },
 				archived: { where: { archived: { eq: true } } },
 				won: { where: { stage: { eq: 'won' } }, except: ['archived', 'note'] }
 			}
@@ -117,10 +118,9 @@ export const manifest = {
 	},
 	teams: {},
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -139,7 +139,7 @@ export const callbacks = {
 } satisfies EngineManifest;
 
 /**
- * `guest.mjs`: each callback batches customer references into one query; `spin` burns CPU past the wall. `rep`'s checks
+ * `guest.mjs`: each callback batches customer references into one query; `spin` burns CPU past the wall. `rep`'s verdicts
  * deny a write that leaves the north (`rule: 'rep.orders.<op>'`), a delete of another member's order, and a line change
  * on an order outside the north (one read over the batch).
  */
@@ -151,29 +151,29 @@ export const guest = {
 }
 const trim = (rows) => rows.map((row) => row.title === undefined ? row : { ...row, title: row.title.trim() });
 export default { model: { orders: { bodies: {
-	create: function* (rows, ctx) {
-		if (rows.some((row) => row.title === 'spin')) for (;;) {}
-		yield* checkCustomers(rows, ctx);
-		return trim(rows);
+	create: function* (changes, ctx) {
+		if (changes.some(({ set }) => set.title === 'spin')) for (;;) {}
+		yield* checkCustomers(changes.map(({ after }) => after), ctx);
+		return trim(changes.map(({ set }) => set));
 	},
 	update: function* (changes, ctx) {
 		if (changes.some(({ set }) => set.title === 'spin')) for (;;) {}
-		yield* checkCustomers(changes.map(({ before, set }) => ({ ...before, ...set })), ctx);
+		yield* checkCustomers(changes.map(({ after }) => after), ctx);
 		return trim(changes.map(({ set }) => set));
 	}
 } } },
 policy: { rep: { grants: {
 	orders: {
-		create: { verdict: function* (rows, ctx) {
-			const row = rows.findIndex((r) => r.region !== 'north');
+		create: { verdict: function* (changes, ctx) {
+			const row = changes.findIndex(({ after }) => after.region !== 'north');
 			return row >= 0 ? yield* ctx.refuse('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
 		} },
 		update: { verdict: function* (changes, ctx) {
-			const row = changes.findIndex(({ before, set }) => before.region !== 'north' || (set.region ?? before.region) !== 'north');
+			const row = changes.findIndex(({ before, after }) => before.region !== 'north' || after.region !== 'north');
 			return row >= 0 ? yield* ctx.refuse('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
 		} },
-		delete: { verdict: function* (rows, ctx) {
-			return rows.every((r) => r.created_by === ctx.actor.id) ? ctx.allow() : yield* ctx.refuse('Reps delete their own orders.');
+		delete: { verdict: function* (changes, ctx) {
+			return changes.every(({ before }) => before.created_by === ctx.actor.id) ? ctx.allow() : yield* ctx.refuse('Reps delete their own orders.');
 		} }
 	},
 	lines: {

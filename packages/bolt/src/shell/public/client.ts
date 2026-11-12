@@ -1,22 +1,24 @@
 import { Effect, Exit, Layer, ManagedRuntime, Queue, Scope } from 'effect';
 import { hydrate, mount, tick, unmount, type Component } from 'svelte';
-import { mountEdge } from '@norbital-ai/ui/effect';
-import { createBolt, type Bolt, type BoltConfig } from '../../page/bolt.ts';
-import { awaitDevice } from '../../page/device.ts';
-import { publicContext } from './context.ts';
+import { mount_edge } from '@norbital-ai/ui/effect';
+import { create_bolt, type Bolt, type BoltConfig } from '../../page/bolt.ts';
+import { await_device } from '../../page/device.ts';
+import { public_context } from './context.ts';
+import { view_client } from '../../page/view-client.ts';
+import type { ViewBolt } from '@norbital-ai/ui';
 import {
 	decodePublicHydration,
 	PublicHydrationFailure,
 	PUBLIC_HYDRATION_ID,
-	publicReadKey,
+	public_read_key,
 	type PublicBoot
 } from '../../protocol/public-page.ts';
 import Turnstile from '../auth/Turnstile.svelte';
 import type { ChallengeQueue } from '../runtime.ts';
 import { HEADERS, PATHS } from '../../protocol/wire.ts';
 
-export type PublicClient = Omit<Bolt, 'observe' | 'closed' | 'sync'> &
-	ReturnType<typeof publicContext>;
+export type PublicClient = Omit<Bolt, 'native_query' | 'observe' | 'closed' | 'sync'> &
+	ReturnType<typeof public_context>;
 
 const scopedFetch =
 	(
@@ -50,12 +52,12 @@ const scopedFetch =
 	};
 
 /** Hydrates the same wrapper and decoded props the isolated server rendered; navigation stays document based. */
-export const hydratePublicPage = (
-	component: Component<{ boot: PublicBoot; ctx: PublicClient }>,
+export const hydrate_public_page = (
+	component: Component<{ boot: PublicBoot; ctx: PublicClient; views: ViewBolt }>,
 	route: string,
 	options: {
 		readonly fetch?: typeof globalThis.fetch;
-		readonly openStream?: BoltConfig['openStream'];
+		readonly open_stream?: BoltConfig['open_stream'];
 	} = {}
 ) =>
 	Effect.gen(function* () {
@@ -74,12 +76,12 @@ export const hydratePublicPage = (
 			});
 		const props = yield* decodePublicHydration(text, { route, release });
 		let initialReads = props.reads;
-		yield* Effect.tryPromise(awaitDevice);
+		yield* Effect.tryPromise(await_device);
 		const scope = yield* Scope.make();
 		const tokens = yield* Queue.unbounded<string>();
 		let reset = () => {};
 		const challenge: ChallengeQueue | null =
-			props.boot.visitor?.siteKey === undefined
+			props.boot.visitor?.site_key === undefined
 				? null
 				: {
 						put: (token) => {
@@ -90,42 +92,46 @@ export const hydratePublicPage = (
 							reset = next;
 						}
 					};
-		const pageClient = yield* createBolt({
+		const pageClient = yield* create_bolt({
 			actor: props.boot.actor,
 			locale: props.boot.workspace.locale,
 			tz: props.boot.workspace.tz,
 			messages: props.boot.messages,
 			base: props.boot.base,
 			catalog: props.boot.catalog,
+			read_catalog: props.boot.read_catalog,
+			operation_outputs: props.boot.operation_outputs,
 			describe: props.boot.describe,
 			contract: props.boot.contract,
-			initialRead: (read) => initialReads[publicReadKey(read)],
+			initial_read: (read) => initialReads[public_read_key(read)],
 			fetch: scopedFetch(props.boot, challenge, options.fetch ?? globalThis.fetch),
-			openStream: (url) => {
+			open_stream: (url) => {
 				const scoped = new URL(url, location.href);
 				if (props.boot.visitor !== null && props.boot.kiosk === null)
 					scoped.searchParams.set('app', props.boot.visitor.app);
 				if (props.boot.kiosk !== null) scoped.searchParams.set('kiosk', props.boot.kiosk);
 				return (
-					options.openStream?.(scoped.href) ?? new EventSource(scoped, { withCredentials: true })
+					options.open_stream?.(scoped.href) ?? new EventSource(scoped, { withCredentials: true })
 				);
 			}
 		}).pipe(
 			Scope.provide(scope),
 			Effect.onError(() => Scope.close(scope, Exit.void))
 		);
-		const ctx = Object.assign(pageClient, publicContext(props.boot));
-		const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+		const { native_query: _native_query, observe: _observe, closed: _closed, sync: _sync, ...authored } = pageClient;
+		const ctx = Object.assign(authored, public_context(props.boot));
+		const views = view_client({ ...pageClient, ...public_context(props.boot) }, props.boot.read_catalog, props.boot.catalog);
+		const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 		const view = yield* Effect.try({
-			try: () => hydrate(component, { target, props: { boot: props.boot, ctx }, recover: false }),
+			try: () => hydrate(component, { target, props: { boot: props.boot, ctx, views }, recover: false }),
 			catch: (cause) => new PublicHydrationFailure({ reason: String(cause) })
 		}).pipe(
 			Effect.onError(() =>
 				Scope.close(scope, Exit.void).pipe(Effect.ensuring(Effect.promise(dispose)))
 			)
 		);
-		const mountWidget = (target: HTMLElement, siteKey: string, queue: ChallengeQueue) =>
-			mount(Turnstile, { target, props: { siteKey, queue } });
+		const mountWidget = (target: HTMLElement, site_key: string, queue: ChallengeQueue) =>
+			mount(Turnstile, { target, props: { site_key, queue } });
 		let widget: ReturnType<typeof mountWidget> | null = null;
 		let closed = false;
 		const cleanup = Effect.suspend(() => {
@@ -149,11 +155,11 @@ export const hydratePublicPage = (
 		if (
 			challenge !== null &&
 			challengeTarget !== null &&
-			props.boot.visitor?.siteKey !== undefined
+			props.boot.visitor?.site_key !== undefined
 		) {
-			const siteKey = props.boot.visitor.siteKey;
+			const site_key = props.boot.visitor.site_key;
 			widget = yield* Effect.try({
-				try: () => mountWidget(challengeTarget, siteKey, challenge),
+				try: () => mountWidget(challengeTarget, site_key, challenge),
 				catch: (cause) => new PublicHydrationFailure({ reason: String(cause) })
 			}).pipe(Effect.onError(() => cleanup.pipe(Effect.orDie)));
 		}

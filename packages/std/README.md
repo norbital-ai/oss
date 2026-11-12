@@ -11,9 +11,14 @@ import { PlainDate } from '@norbital-ai/std/date';
 ```
 
 Public subpaths are `billing`, `calendar`, `csv`, `date`, `decimal`, `facts`, `formula`, `host-op`,
-`json`, `kind`, `label`, `pricing`, `sheet`, `versioned`, `wire` and `zone`. There is no package root.
+`hash`, `id`, `json`, `kind`, `label`, `pricing`, `rows`, `sheet`, `sql`, `vars`, `versioned`, `wire` and `zone`. There is no package root.
 
-`csvRows` from `@norbital-ai/std/csv` returns raw string cells; callers own headers, blank-row handling and value decoding.
+`csv_rows` from `@norbital-ai/std/csv` returns raw string cells; callers own headers, blank-row handling and value decoding.
+
+Decimal methods use `from_number`, `round_to`, `is_zero` and `to_number`. Standard JavaScript
+hooks `toString`, `toJSON` and `valueOf` retain their required names; `$dec` remains the wire tag.
+Calendar cycles use `opens_on`, `second_opens_on` and `every: 'semi_month'`; `cycle_of` refuses
+unknown keys instead of treating retired keys as omitted defaults.
 
 ## Development
 

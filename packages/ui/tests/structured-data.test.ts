@@ -4,13 +4,13 @@ import { it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { JsonSchema } from '../src/kinds/json-schema.ts';
 import {
-	dataChanged,
+	data_changed,
 	dataDefaults,
 	dataEntries,
-	dataEqual,
-	inferJsonSchema,
-	kindJsonSchema,
-	pairDataRows,
+	data_equal,
+	infer_json_schema,
+	kind_json_schema,
+	pair_data_rows,
 	structuredSchema
 } from '../src/kinds/structured-data.ts';
 
@@ -44,7 +44,7 @@ it('a new form fills schema defaults only into absent or null places', () => {
 
 it('inference merges every record and nested list without inventing constraints', () => {
 	assert.deepEqual(
-		inferJsonSchema([
+		infer_json_schema([
 			{ code: 'a', amount: 1, rows: [{ enabled: false }] },
 			{ code: 'b', amount: 1.5, rows: [{ note: '' }], date: '2026-10-25' }
 		]),
@@ -70,30 +70,30 @@ it('inference merges every record and nested list without inventing constraints'
 			}
 		}
 	);
-	assert.deepEqual(inferJsonSchema([]), { type: 'array', items: {} });
-	assert.deepEqual(inferJsonSchema([false, 0, '', null]), {
+	assert.deepEqual(infer_json_schema([]), { type: 'array', items: {} });
+	assert.deepEqual(infer_json_schema([false, 0, '', null]), {
 		type: 'array',
 		items: { type: ['boolean', 'integer', 'string', 'null'] }
 	});
-	assert.deepEqual(inferJsonSchema(undefined), {});
+	assert.deepEqual(infer_json_schema(undefined), {});
 });
 
 it('equality distinguishes missing, null, false, zero and empty text, ignoring object key order', () => {
 	const values = [undefined, null, false, 0, ''];
 	for (const [i, before] of values.entries())
-		for (const [j, value] of values.entries()) assert.equal(dataEqual(before, value), i === j);
-	assert.equal(dataEqual({ b: 0, a: false }, { a: false, b: 0 }), true);
-	assert.equal(dataEqual({ value: null }, {}), false);
-	assert.equal(dataEqual([1, 2], [2, 1]), false);
+		for (const [j, value] of values.entries()) assert.equal(data_equal(before, value), i === j);
+	assert.equal(data_equal({ b: 0, a: false }, { a: false, b: 0 }), true);
+	assert.equal(data_equal({ value: null }, {}), false);
+	assert.equal(data_equal([1, 2], [2, 1]), false);
 });
 
 it('decimals remain opaque and exact values do not expose their internals', () => {
 	const held = Decimal.of('9007199254740993.10');
 	assert.equal(dataEntries(held), undefined);
-	assert.equal(dataEqual(held, Decimal.of('9007199254740993.100')), true);
-	assert.equal(dataEqual(held, Decimal.of('9007199254740993.11')), false);
-	assert.equal(dataEqual(held, '9007199254740993.10'), false);
-	assert.deepEqual(inferJsonSchema(held), { type: 'number' });
+	assert.equal(data_equal(held, Decimal.of('9007199254740993.100')), true);
+	assert.equal(data_equal(held, Decimal.of('9007199254740993.11')), false);
+	assert.equal(data_equal(held, '9007199254740993.10'), false);
+	assert.deepEqual(infer_json_schema(held), { type: 'number' });
 });
 
 it('composite identities pair new row order and append removed rows without pairing unrelated records', () => {
@@ -107,7 +107,7 @@ it('composite identities pair new row order and append removed rows without pair
 		{ family: 'leave', code: 'a', value: 1 },
 		{ family: 'leave', code: 'new', value: 4 }
 	];
-	const pairs = pairDataRows(before, value, ['family', 'code']);
+	const pairs = pair_data_rows(before, value, ['family', 'code']);
 	assert.deepEqual(
 		pairs.map((pair) => [pair.beforeIndex, pair.index]),
 		[
@@ -120,7 +120,7 @@ it('composite identities pair new row order and append removed rows without pair
 	assert.equal(pairs[0].before, before[1]);
 	assert.equal(pairs[0].value, value[0]);
 	assert.equal(
-		dataChanged(
+		data_changed(
 			{ rows: before.slice(0, 2) },
 			{ rows: [before[1], before[0]] },
 			{ '/rows': ['family', 'code'] }
@@ -128,7 +128,7 @@ it('composite identities pair new row order and append removed rows without pair
 		false
 	);
 	assert.equal(
-		dataChanged({ rows: before }, { rows: value }, { '/rows': ['family', 'code'] }),
+		data_changed({ rows: before }, { rows: value }, { '/rows': ['family', 'code'] }),
 		true
 	);
 });
@@ -143,16 +143,16 @@ it('ambiguous or absent identities fall back to positional semantics', () => {
 		{ code: 'a', value: 1 }
 	];
 	assert.deepEqual(
-		pairDataRows(before, value, 'code').map((pair) => pair.beforeIndex),
+		pair_data_rows(before, value, 'code').map((pair) => pair.beforeIndex),
 		[0, 1]
 	);
-	assert.equal(dataChanged(before, value, { '': 'code' }), true);
+	assert.equal(data_changed(before, value, { '': 'code' }), true);
 	assert.deepEqual(
-		pairDataRows([{ code: null }], [{ code: 'b' }], 'code').map((pair) => pair.beforeIndex),
+		pair_data_rows([{ code: null }], [{ code: 'b' }], 'code').map((pair) => pair.beforeIndex),
 		[0]
 	);
 	assert.equal(
-		dataChanged(
+		data_changed(
 			{ 'a/b': { '~rows': [{ code: 'a' }, { code: 'b' }] } },
 			{ 'a/b': { '~rows': [{ code: 'b' }, { code: 'a' }] } },
 			{ '/a~1b/~0rows': 'code' }
@@ -163,7 +163,7 @@ it('ambiguous or absent identities fall back to positional semantics', () => {
 
 it('native kind descriptions retain structure, hidden fields and primitive semantics', () => {
 	assert.deepEqual(
-		kindJsonSchema({
+		kind_json_schema({
 			kind: 'object',
 			label: 'Profile',
 			fields: {
@@ -174,22 +174,15 @@ it('native kind descriptions retain structure, hidden fields and primitive seman
 		}),
 		{
 			title: 'Profile',
-			description: undefined,
 			type: 'object',
 			properties: {
-				active: { title: undefined, description: undefined, type: 'boolean' },
-				amount: {
-					title: undefined,
-					description: undefined,
-					type: 'number',
-					minimum: 0,
-					maximum: undefined
-				}
+				active: { type: 'boolean' },
+				amount: { type: 'number', minimum: 0 }
 			},
 			required: ['amount']
 		}
 	);
-	const period = kindJsonSchema({ kind: 'period', of: 'instant' });
+	const period = kind_json_schema({ kind: 'period', of: 'instant' });
 	assert.ok(typeof period !== 'boolean');
 	assert.deepEqual(period.properties?.end, { type: ['string', 'null'], format: 'date-time' });
 });
@@ -225,7 +218,9 @@ it('display plans fold local structural allOf without changing the source schema
 			{ type: 'number', minimum: 0 }
 		]
 	});
-	assert.deepEqual(structuredSchema(plan.properties!.rate, root, 2), {
+	assert.ok(plan.properties);
+	assert.ok(plan.properties.rate);
+	assert.deepEqual(structuredSchema(plan.properties.rate, root, 2), {
 		type: 'number',
 		maximum: 10,
 		minimum: 0

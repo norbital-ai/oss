@@ -15,7 +15,7 @@ it('a workspace_list_dir step shows the tree itself, with no tabs', async () => 
 		text: '',
 		state: null,
 		tag: null,
-		tool: { name: 'workspace_list_dir', failed: false, args: '{}', result: tree }
+		tool: { behavior: {}, name: 'workspace_list_dir', failed: false, args: '{}', result: tree }
 	};
 	const host = document.body.appendChild(document.createElement('div'));
 	const view = mount(Steps, {

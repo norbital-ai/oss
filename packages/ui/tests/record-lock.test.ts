@@ -29,6 +29,6 @@ describe('a record lock declared on a model', () => {
 		).toBe(true);
 		expect(matchesLock({ settled: true }, { not: { settled: { eq: true } } })).toBe(false);
 		expect(matchesLock({ count: 3 }, { count: { in: [1, 3] } })).toBe(true);
-		expect(matchesLock({ count: 3 }, { count: { nin: [1, 3] } })).toBe(false);
+		expect(matchesLock({ count: 3 }, { not: { count: { in: [1, 3] } } })).toBe(false);
 	});
 });

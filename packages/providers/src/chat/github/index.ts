@@ -78,14 +78,14 @@ export const github: ChatPlatform = {
 		const parse = (comment: Comment, thread: string, review: boolean): Incoming => ({
 			id: review ? `review:${comment.id}` : String(comment.id),
 			thread,
-			sentAt: comment.created_at,
+			sent_at: comment.created_at,
 			from: { handle: String(comment.user?.id ?? ''), name: comment.user?.login ?? null },
 			text: comment.body ?? '',
 			group: true,
 			mentioned: named.test(prose(comment.body ?? '')),
 			...(comment.in_reply_to_id === undefined
 				? {}
-				: { replyTo: `review:${comment.in_reply_to_id}` }),
+				: { reply_to: `review:${comment.in_reply_to_id}` }),
 			...(comment.updated_at === comment.created_at ? {} : { version: comment.updated_at })
 		});
 		const others = (comment: Comment) => comment.user?.id !== me.id;

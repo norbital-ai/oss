@@ -1,8 +1,9 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import type { Value } from '../kinds/kind.js';
-	import type { Outcome, Row } from './draft.js';
-	import { byId, firstOf } from '../read/request.js';
+	import type { Row } from './draft.js';
+	import type { Outcome } from '../client/contract.js';
+	import { by_id, first_of } from '../read/request.js';
 	import type {
 		AutomationInputOf,
 		AutomationKey,
@@ -62,7 +63,7 @@
 		/** Every field stays an editor, muted and inert, and the submit is disabled; a `Field` or `Fieldset` may override it. */
 		disabled?: boolean;
 		/** An automation reports queue admission here; its retained run is followed separately by RunStatus. */
-		onOutcome?(outcome: Outcome): void;
+		on_outcome?(outcome: Outcome): void;
 		/** Asks before a valid draft saves: the dialog to show for this change, or `null` to save without asking. */
 		confirm?: FormConfirm;
 		/** Pure semantic checks over the draft. Reuse this validator in the server's guarded write. */
@@ -76,13 +77,13 @@
 
 <script lang="ts" generics="S extends FormSource">
 	import { Effect } from 'effect';
-	import { run } from '../effect/index.js';
+	import ReadOnce from '../read/ReadOnce.svelte';
 	import Alert from '../primitives/alert/alert.svelte';
-	import { uiText } from '../primitives/utils.js';
+	import { ui_text } from '../primitives/utils.js';
 	import { useKinds } from '../kinds/context.js';
-	import { provideModel } from '../model/context.js';
+	import { provide_model, provide_field_text } from '../model/context.js';
 	import { useBolt } from '../client/context.js';
-	import { useRecordView } from '../record/context.js';
+	import { use_record_view } from '../record/context.js';
 	import { formSpec } from './draft.js';
 	import FormBody from './form-body.svelte';
 
@@ -97,7 +98,7 @@
 		submit,
 		readonly,
 		disabled,
-		onOutcome,
+		on_outcome,
 		confirm,
 		validate,
 		children,
@@ -106,14 +107,15 @@
 	}: FormProps<S> = $props();
 	const bolt = useBolt();
 	const host = useKinds();
-	const t = uiText();
+	const t = ui_text();
 	const model = $derived(typeof of === 'string' ? of : '');
 	const exposure = $derived(host.catalog?.[model]);
 	const automation = $derived(
 		typeof of === 'string' ? undefined : host.automations?.[of.automation]
 	);
 	// its fields' labels and enum words read this model's catalog keys
-	provideModel(() => model);
+	provide_model(() => model);
+	provide_field_text(() => typeof of === 'string' ? `models.${of}` : `automations.${of.automation}.input`);
 	const resolved = $derived(
 		mode === 'create'
 			? 'create'
@@ -135,14 +137,13 @@
 	});
 	const updating = $derived(typeof of === 'string' && resolved === 'update');
 	const act = (
-		callable: string,
-		input: Value,
-		options?: { key?: string; observed?: Readonly<Record<string, number>> }
-	) => bolt.act(callable, input, options);
+		acts: Readonly<Record<string, Value>>,
+		options?: { key?: string }
+	) => bolt.act(acts, options);
 
 	// an update needs its row: the page's, else the record shell's shown one (the scrubbed revision while one is picked),
 	// else one read; a stale link shows "Not found or no access" (§5.10)
-	const view = useRecordView();
+	const view = use_record_view();
 	const shown = $derived.by(() => {
 		const v = view?.current;
 		return v !== undefined &&
@@ -163,8 +164,8 @@
 					? Effect.succeed(shown)
 					: id === undefined
 						? Effect.succeed(undefined)
-						: bolt.query(byId(model, id)).pipe(
-								Effect.map((answer): Row | null => firstOf(answer, model)),
+						: bolt.query(by_id(model, id)).pipe(
+								Effect.map((answer): Row | null => first_of(answer, model)),
 								Effect.catch(() => Effect.succeed(null))
 							)
 	);
@@ -193,8 +194,8 @@
 		Effect.forEach(
 			parents,
 			(parent) =>
-				bolt.query(byId(parent.of, parent.id, parent.fields)).pipe(
-					Effect.map((answer) => firstOf(answer, parent.of)),
+				bolt.query(by_id(parent.of, parent.id, parent.fields)).pipe(
+					Effect.map((answer) => first_of(answer, parent.of)),
 					Effect.map((record) =>
 						Object.fromEntries(
 							parent.fields.map((field): [string, Value] => [field, record?.[field] ?? null])
@@ -225,38 +226,38 @@
 {#if spec === null}
 	<Alert variant="secondary">{t('noAccess')}</Alert>
 {:else}
-	{#await run(row)}
-		{@render loading()}
-	{:then stored}
-		{#if stored === undefined}
-			{@render loading()}
-		{:else if updating && stored === null}
-			<Alert variant="secondary">{t('notFound')}</Alert>
-		{:else}
-			{#await run(prefill)}
+	<ReadOnce effect={row} pending={loading}>
+		{#snippet ready(stored)}
+			{#if stored === undefined}
 				{@render loading()}
-			{:then inherited}
-				{#key `${spec.callable}:${id ?? ''}`}
-					<FormBody
-						{spec}
-						record={stored}
-						values={{ ...inherited, ...seeded }}
-						modelFields={exposure?.fields ?? {}}
-						{act}
-						{fields}
-						{sections}
-						{submit}
-						readonly={readOnly}
-						{disabled}
-						{onOutcome}
-						{confirm}
-						{validate}
-						{children}
-						{actions}
-						class={className}
-					/>
-				{/key}
-			{/await}
-		{/if}
-	{/await}
+			{:else if updating && stored === null}
+				<Alert variant="secondary">{t('not_found')}</Alert>
+			{:else}
+				<ReadOnce effect={prefill} pending={loading}>
+					{#snippet ready(inherited)}
+						{#key `${spec.callable}:${id ?? ''}`}
+							<FormBody
+								{spec}
+								record={stored}
+								values={{ ...inherited, ...seeded }}
+								model_fields={exposure?.fields ?? {}}
+								{act}
+								{fields}
+								{sections}
+								{submit}
+								readonly={readOnly}
+								{disabled}
+								{on_outcome}
+								{confirm}
+								{validate}
+								{children}
+								{actions}
+								class={className}
+							/>
+						{/key}
+					{/snippet}
+				</ReadOnce>
+			{/if}
+		{/snippet}
+	</ReadOnce>
 {/if}

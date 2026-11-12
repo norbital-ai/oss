@@ -11,12 +11,11 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
-import { TenantDb, applyMigrations, type MigrationBundle } from '@norbital-ai/bolt/engine';
+import { TenantDb, apply_migrations, type MigrationBundle } from '@norbital-ai/bolt/engine';
 import {
-	dbError,
-	schemaSlice,
+	db_error,
+	schema_slice,
 	type SchemaSlice,
-	CAPTURE_TABLES,
 	PgliteDb,
 	Pristine
 } from '@norbital-ai/bolt/tooling';
@@ -79,8 +78,8 @@ const freshImage = (slice: SchemaSlice, migrations?: MigrationBundle) =>
 			const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
 			const db = PgliteDb.make(pg);
 			if (migrations === undefined) yield* migrate(db, slice, { accept: true });
-			else yield* applyMigrations(db, slice, migrations);
-			const shape = yield* Effect.tryPromise({ try: () => shapeOf(pg), catch: dbError });
+			else yield* apply_migrations(db, slice, migrations);
+			const shape = yield* Effect.tryPromise({ try: () => shapeOf(pg), catch: db_error });
 			return { blob: yield* PgliteDb.dump(pg), shape };
 		})
 	);
@@ -176,8 +175,6 @@ const SESSION = [
  * newer `xmin`, a delete a smaller count): only the others are emptied and refilled.
  */
 const capture = async (pg: PGlite, { tables, counts, sequences }: Shape) => {
-	// the write buffers every session keeps exist before the baseline fingerprint, so a test's first write is no DDL change
-	for (const table of CAPTURE_TABLES) await pg.exec(table);
 	await pg.exec(`prepare bolt_kit_fingerprint as ${FINGERPRINT}`);
 	await pg.exec(
 		'create temp table bolt_kit_base (x bigint); insert into pg_temp.bolt_kit_base values (0);'
@@ -248,7 +245,7 @@ const load = <E>(
 			if (prepare !== undefined) yield* prepare(pg);
 			const state = yield* Effect.tryPromise({
 				try: async () => capture(pg, checkpoint.shape ?? (await shapeOf(pg))),
-				catch: dbError
+				catch: db_error
 			});
 			return { key, checkpoint, pg, scope, ...state } satisfies Pooled;
 		}).pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
@@ -261,7 +258,7 @@ const restored = (entry: Pooled) =>
 			await entry.restore();
 			return true;
 		},
-		catch: dbError
+		catch: db_error
 	}).pipe(Effect.orDie);
 const acquire = <E>(
 	key: string,
@@ -301,7 +298,7 @@ const open = (
 	migrations?: MigrationBundle
 ): Effect.Effect<PGlite, TestDbFailure, Scope.Scope> => {
 	const slice =
-		schema === undefined ? undefined : 'workspace' in schema ? schemaSlice(schema) : schema;
+		schema === undefined ? undefined : 'workspace' in schema ? schema_slice(schema) : schema;
 	const key = slice === undefined ? 'pristine' : JSON.stringify([slice, migrations?.lock]);
 	return Effect.acquireRelease(
 		acquire<never>(key, slice === undefined ? pristine : image(slice, key, migrations)),
@@ -319,7 +316,7 @@ const open = (
 };
 export const TestDb = {
 	open,
-	prepareMigrations: (
+	prepare_migrations: (
 		db: TenantDbShape,
 		next: EngineManifest | SchemaSlice,
 		options: MigrationOptions = {}

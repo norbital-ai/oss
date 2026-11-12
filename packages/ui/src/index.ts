@@ -21,7 +21,7 @@ export { default as Chart, type ChartProps } from './chart/Chart.svelte';
 /** A workspace metric's measured trend, with shared units and optional capacity lines. */
 export {
 	default as UsageChart,
-	formatMetricValue,
+	format_metric_value,
 	type UsageChartLine,
 	type UsageChartProps
 } from './chart/UsageChart.svelte';
@@ -46,10 +46,11 @@ export type {
 } from './record/RecordShell.svelte';
 export type { ApprovalView, HistorySnapshot } from './client/contract.js';
 export type { AutomationInputOf, AutomationKey, InsertOf, RecordOf, RowOf } from './model/types.js';
+export type { SourceData, SourceColumns, SourceRow, ViewSource } from './model/types.js';
 /** An approval request: its timeline of steps and the decisions the host allows the viewer. */
 export { default as ApprovalPanel } from './approval/ApprovalPanel.svelte';
 export { default as Rows, type RowsProps } from './relations/Rows.svelte';
-export { labelRead } from './relations/select.js';
+export { label_read } from './relations/select.js';
 export { default as RunsFor, type RunsForProps } from './runs/RunsFor.svelte';
 export { default as RunStatus, type RunStatusProps } from './runs/RunStatus.svelte';
 export type {
@@ -75,11 +76,11 @@ export {
 	type FilterEditorProps,
 	type FilterValue
 } from './filter/FilterEditor.svelte';
-export type { FilterVariables } from './filter/filter.js';
-export { carriedContexts, onPageContexts, openRecord, pageContexts } from './record/navigation.js';
-export { provideBolt } from './client/context.js';
-export { provideModel, useEnumText } from './model/context.js';
-export { useRecordView, provideRepresentations } from './record/context.js';
+export type { FilterVariables } from './filter/operators.js';
+export { carried_contexts, on_page_contexts, open_record, page_contexts } from './record/navigation.js';
+export { provide_bolt } from './client/context.js';
+export { provide_model, use_enum_text } from './model/context.js';
+export { use_record_view, provide_representations } from './record/context.js';
 export {
 	type RecordCapabilities,
 	type RecordRestriction,
@@ -89,6 +90,7 @@ export {
 	type RestorePreview,
 	type RestoreSkip
 } from './record/types.js';
+export { automation_outcome } from './actions/outcome.js';
 export { type ViewBolt } from './client/contract.js';
 export { type Workspace } from './model/types.js';
 export { default as LogView, type LogViewProps } from './logs/LogView.svelte';
@@ -96,13 +98,13 @@ export { default as EmptyState } from './primitives/empty-state/EmptyState.svelt
 export { default as TableSkeleton } from './read/TableSkeleton.svelte';
 /** A model's or field's label and a record's singular noun, from the catalog (`models.<c>.label|singular|fields.<f>`). */
 export { label, singular } from './text/messages.js';
-export { LOG_LEVELS, filterLogs, type LogLevel, type LogLine } from './logs/logs.js';
+export { LOG_LEVELS, filter_logs, type LogLevel, type LogLine } from './logs/logs.js';
 
 /** Uses the shared localized feedback for a custom action's typed outcome. */
-export { notify as notifyOutcome } from './actions/outcome.js';
-export { downloadTextFiles } from './utilities/download.js';
-export { beginWorkspaceNavigation, workspaceNavigation } from './utilities/workspace-navigation.js';
-export { filesSummary, joinedSummary, notesSummary } from './utilities/summary.js';
+export { notify as notify_outcome } from './actions/outcome.js';
+export { download_text_files } from './utilities/download.js';
+export { begin_workspace_navigation, workspace_navigation } from './utilities/workspace-navigation.js';
+export { files_summary, joined_summary, notes_summary } from './utilities/summary.js';
 /** A read request scoped per path: policy, prefilter, then viewer; `where` ANDs, `fields` intersect, `limit` caps. */
 export { compose } from './filter/scope.js';
 export * from './kinds/index.js';
@@ -129,8 +131,8 @@ export {
 	type ReleaseTimelineProps
 } from './releases/ReleaseTimeline.svelte';
 export {
-	rollbackReason,
-	timelineEntries,
+	rollback_reason,
+	timeline_entries,
 	type ReleaseBuild,
 	type ReleaseVersion,
 	type ReleaseChange,
@@ -143,7 +145,7 @@ export {
 	default as WorkspaceOperations,
 	type WorkspaceOperationsProps
 } from './workspaces/WorkspaceOperations.svelte';
-export { releaseWindow } from './workspaces/filters.js';
+export { release_window } from './workspaces/filters.js';
 export type {
 	WorkspaceOperationsData,
 	WorkspaceScope,

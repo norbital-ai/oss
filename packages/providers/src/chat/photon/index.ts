@@ -146,7 +146,7 @@ export const photon: ChatPlatform = {
 				return {
 					...base,
 					id: event.messageGuid,
-					sentAt: event.retractedAt.toISOString(),
+					sent_at: event.retractedAt.toISOString(),
 					text: '',
 					deleted: true
 				};
@@ -154,7 +154,7 @@ export const photon: ChatPlatform = {
 				return {
 					...base,
 					id: event.messageGuid,
-					sentAt: event.editedAt.toISOString(),
+					sent_at: event.editedAt.toISOString(),
 					version: event.editedAt.toISOString(),
 					text: event.content.text ?? ''
 				};
@@ -167,11 +167,11 @@ export const photon: ChatPlatform = {
 			return {
 				...base,
 				id: message.guid,
-				sentAt: event.occurredAt.toISOString(),
+				sent_at: event.occurredAt.toISOString(),
 				from: { handle: message.sender?.address ?? '', name: null },
 				text: content.text?.replace(OBJECT, '').trim() ?? '',
 				title: message.groupTitle ?? null,
-				replyTo: message.replyTargetGuid ?? message.threadOriginatorGuid ?? null,
+				reply_to: message.replyTargetGuid ?? message.threadOriginatorGuid ?? null,
 				mentioned: content.mentions.some((mention) => mention.address === line.phone),
 				files: content.attachments.map((file): IncomingFile => ({
 					name: file.fileName,
@@ -218,21 +218,21 @@ export const photon: ChatPlatform = {
 					line = lines.find((one) => one.phone === phone) ?? first,
 					chat = message.space.id,
 					target = message.content.type === 'reply' ? message.content.target?.id : undefined,
-					replyTo = target?.replace(/^p:\d+\//, '') ?? null;
+					reply_to = target?.replace(/^p:\d+\//, '') ?? null;
 				return {
 					messages: [
 						{
 							id: message.id,
 							thread: threadOf(chat, line.phone),
-							sentAt: message.timestamp ?? new Date(Number(at) * 1000).toISOString(),
+							sent_at: message.timestamp ?? new Date(Number(at) * 1000).toISOString(),
 							from: { handle: message.sender?.id ?? '', name: null },
 							text,
 							group: isGroup(chat),
-							replyTo,
-							repliedTo:
+							reply_to,
+							replied_to:
 								isGroup(chat) &&
-								replyTo !== null &&
-								(await line.client.messages.get(replyTo).then(
+								reply_to !== null &&
+								(await line.client.messages.get(reply_to).then(
 									(found) => found.isFromMe,
 									() => false
 								)),

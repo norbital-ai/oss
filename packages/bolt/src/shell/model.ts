@@ -6,7 +6,7 @@
 import type { FeatureColorKey } from '@norbital-ai/ui/brand';
 import {
 	based,
-	commandCenterTabs,
+	command_center_tabs,
 	type NavNode,
 	type NavPage,
 	type ShellBoot,
@@ -29,7 +29,7 @@ export interface NavItem {
 	/** An app's pages, when it has more than one: the tab strip under its banner. */
 	readonly pages?: readonly NavItem[];
 	/** The icon tile's hue (ui's `FEATURE_COLORS`): an application wears `customApps`, for applications. */
-	readonly featureColor?: FeatureColorKey;
+	readonly feature_color?: FeatureColorKey;
 }
 export interface NavModel {
 	/** The switcher's workspace: its handle, name and logo (the host's brand icon), else initials; `others` are its options. */
@@ -83,7 +83,7 @@ function item(n: NavNode, path: string, t: Translate): NavItem {
 		href: n.href,
 		description: n.description === undefined ? null : t(n.description),
 		thumbnail: n.kind === 'app' && n.banner !== undefined ? media(n.banner) : null,
-		featureColor: 'customApps',
+		feature_color: 'customApps',
 		active: n.kind === 'app' ? under(path, `/app/${n.name}`) : children.some((c) => c.active),
 		...(children.length === 0 ? {} : { children }),
 		...(pages.length === 0 ? {} : { pages })
@@ -93,15 +93,17 @@ function item(n: NavNode, path: string, t: Translate): NavItem {
 function ordinary(n: NavNode): NavNode | null {
 	if (n.kind === 'app') {
 		const pages = n.pages.filter((p) => p.portal !== true);
-		return pages.length === 0 ? null : { ...n, pages, href: pages[0]!.href };
+		const first = pages[0];
+		return first === undefined ? null : { ...n, pages, href: first.href };
 	}
 	const children = n.children.map(ordinary).filter((c) => c !== null);
-	return children.length === 0
+	const first = children[0];
+	return first === undefined
 		? null
 		: {
 				...n,
 				children,
-				href: children.some((c) => c.href === n.href) ? n.href : children[0]!.href
+				href: children.some((c) => c.href === n.href) ? n.href : first.href
 			};
 }
 const portalPages = (n: NavNode): (NavPage & { app: string })[] =>
@@ -110,7 +112,7 @@ const portalPages = (n: NavNode): (NavPage & { app: string })[] =>
 		: n.children.flatMap(portalPages);
 
 /** The open app's row (in a group or not): its banner and page tabs sit above the page. */
-export function activeApp(model: NavModel): NavItem | null {
+export function active_app(model: NavModel): NavItem | null {
 	const find = (items: readonly NavItem[]): NavItem | null => {
 		for (const i of items) {
 			if (!i.active) continue;
@@ -121,7 +123,7 @@ export function activeApp(model: NavModel): NavItem | null {
 	return find(model.sections.find((s) => s.key === 'applications')?.items ?? []);
 }
 
-export function navigationModel(boot: ShellBoot, path: string, t: Translate): NavModel {
+export function navigation_model(boot: ShellBoot, path: string, t: Translate): NavModel {
 	const actor = boot.actor?.kind === 'member' ? boot.actor : null;
 	const s = boot.surfaces;
 	const apps = boot.nav
@@ -156,19 +158,17 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 				]
 			: [])
 	]; // hook:agent-ui
-	const group = (key: string, label: string, children: NavItem[]): NavItem[] =>
-		children.length === 0
-			? []
-			: [
-					{
-						key,
-						label: t(label),
-						icon: null,
-						href: children[0]!.href,
-						active: children.some((c) => c.active),
-						children
-					}
-				];
+	const group = (key: string, label: string, children: NavItem[]): NavItem[] => {
+		const first = children[0];
+		return first === undefined ? [] : [{
+			key,
+			label: t(label),
+			icon: null,
+			href: first.href,
+			active: children.some((c) => c.active),
+			children
+		}];
+	};
 	const preview = boot.workspace.live !== undefined;
 	const utilities = [
 		...group(
@@ -177,7 +177,7 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 			s.settings
 				? [
 						leaf('organization', 'Organization', 'lucide:building-2', '/settings/organization'),
-						// a preview serves no integration endpoints: they are the live workspace's (`previewRoute`)
+						// a preview serves no integration endpoints: they are the live workspace's (`preview_route`)
 						...(preview
 							? []
 							: [leaf('integrations', 'Integrations', 'lucide:plug', '/settings/integrations')]),
@@ -186,7 +186,7 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 				: []
 		),
 		...group('system', 'System', [
-			...(commandCenterTabs(s, boot.admin, preview).length > 0
+			...(command_center_tabs(s, boot.admin, preview).length > 0
 				? [leaf('command-center', 'Command center', 'lucide:radar', '/command-center')]
 				: []),
 			...(s.studio ? [leaf('studio', 'Workspace Studio', 'lucide:code-xml', '/studio')] : [])

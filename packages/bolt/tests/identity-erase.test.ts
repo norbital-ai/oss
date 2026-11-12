@@ -1,5 +1,6 @@
+import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { compileAuthority } from '../src/engine/access/authority.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { erasableFields, judgeErase } from '../src/engine/identity/erase.ts';
 
@@ -11,6 +12,7 @@ const m: EngineManifest = {
 			description: '',
 			record_label: 'record.number',
 			key: ['number'],
+			locks: { paid: { where: { status: { eq: 'paid' } } } },
 			fields: {
 				number: { kind: 'text' },
 				employee_name: { kind: 'text' },
@@ -22,7 +24,7 @@ const m: EngineManifest = {
 				status: {
 					kind: 'state',
 					initial: 'draft',
-					states: { draft: { to: ['paid'] }, paid: { edit: 'none' } }
+					states: { draft: { to: ['paid'] }, paid: {} }
 				}
 			},
 			check: { positive: { net: { gte: 0 } } },
@@ -43,10 +45,9 @@ const m: EngineManifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const member = {
@@ -60,12 +61,13 @@ const member = {
 	admin: true,
 	party: null
 } as const;
-const admin = compileAuthority(m, { actor: member, admin: true, policies: [] }, 'a');
-const rep = compileAuthority(
+const admin = Effect.runSync(compile_authority(m, { actor: member, admin: true, policies: [] }, 'a'));
+const rep = Effect.runSync(compile_authority(
 	m,
 	{ actor: { ...member, admin: false }, admin: false, policies: [] },
 	'r'
-);
+));
+const bindings = { now: '2026-01-01T00:00:00.000Z', today: '2026-01-01', tz: 'UTC' };
 
 describe('engine/identity: erasure admission (rule 38e(d))', () => {
 	it('erasable = stored authored fields outside keys, unique, states, relations, checks and roll-ups', () => {
@@ -75,33 +77,33 @@ describe('engine/identity: erasure admission (rule 38e(d))', () => {
 
 	it('remove refuses a locked row; anonymise of a personal field on it commits; naming a fixed field is `locked`', () => {
 		const paid = { id: 'p1', status: 'paid' };
-		expect(judgeErase(m, admin, 'payslips', [paid], { mode: 'remove' })).toMatchObject({
+		expect(Effect.runSync(judgeErase(m, admin, 'payslips', [paid], { mode: 'remove' }, bindings))).toMatchObject({
 			ok: false,
 			code: 'locked'
 		});
 		expect(
-			judgeErase(m, admin, 'payslips', [{ ...paid, status: 'draft' }], { mode: 'remove' })
+			Effect.runSync(judgeErase(m, admin, 'payslips', [{ ...paid, status: 'draft' }], { mode: 'remove' }, bindings))
 		).toEqual({ ok: true });
 		expect(
-			judgeErase(m, admin, 'payslips', [paid], {
+			Effect.runSync(judgeErase(m, admin, 'payslips', [paid], {
 				mode: 'anonymise',
 				set: { employee_name: 'Erased' }
-			})
+			}, bindings))
 		).toEqual({ ok: true });
 		expect(
-			judgeErase(m, admin, 'payslips', [paid], { mode: 'anonymise', set: { net: '0' } })
+			Effect.runSync(judgeErase(m, admin, 'payslips', [paid], { mode: 'anonymise', set: { net: '0' } }, bindings))
 		).toMatchObject({ code: 'locked' });
 		expect(
-			judgeErase(m, admin, 'payslips', [paid], { mode: 'anonymise', set: { lines_total: '0' } })
-		).toMatchObject({ code: 'invalidInput' });
+			Effect.runSync(judgeErase(m, admin, 'payslips', [paid], { mode: 'anonymise', set: { lines_total: '0' } }, bindings))
+		).toMatchObject({ code: 'invalid_input' });
 	});
 
 	it('erasure is admin-only and never routes to source approval', () => {
 		expect(
-			judgeErase(m, rep, 'payslips', [{ id: 'p', status: 'draft' }], { mode: 'remove' })
+			Effect.runSync(judgeErase(m, rep, 'payslips', [{ id: 'p', status: 'draft' }], { mode: 'remove' }, bindings))
 		).toMatchObject({ code: 'forbidden' });
 		expect(
-			judgeErase(m, admin, 'payslips', [{ id: 'p', status: 'draft' }], { mode: 'remove' })
+			Effect.runSync(judgeErase(m, admin, 'payslips', [{ id: 'p', status: 'draft' }], { mode: 'remove' }, bindings))
 		).toEqual({ ok: true });
 	});
 });

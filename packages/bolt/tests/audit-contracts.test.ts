@@ -9,15 +9,16 @@ import {
 	AuditRecord,
 	AuditSummary
 } from '../src/protocol/audit.ts';
-import { shellApi } from '../src/shell/runtime.ts';
+import { shell_api } from '../src/shell/runtime.ts';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import { auditShape } from '../src/engine/audit.ts';
+import { audit_shape } from '../src/engine/audit.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
-import { memoryAudit } from '../../bolt-cli/src/test/audit.ts';
+import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
+import { auditRecord, storedAuditEvent, StoredAuditRecord } from '../src/node/audit-storage.ts';
 
 const event: AuditEvent = {
 	id: 'act-1/accounts/account-1/2/committed',
-	operationId: 'act-1',
+	operation_id: 'act-1',
 	at: '2026-10-25T00:00:00.000Z',
 	category: 'write',
 	action: 'accounts.update',
@@ -31,19 +32,50 @@ const event: AuditEvent = {
 	payload: { before: { balance: '20.00' }, after: { balance: '15.00' } }
 };
 const stored = {
-	recordedAt: '2026-10-25T00:00:01.000Z',
-	payloadBytes: new TextEncoder().encode(JSON.stringify(event.payload)).byteLength
+	recorded_at: '2026-10-25T00:00:01.000Z',
+	payload_bytes: new TextEncoder().encode(JSON.stringify(event.payload)).byteLength
 };
 const record: AuditRecord = { ...event, ...stored };
 
+it('preserves format:1 disk metadata and opaque payload keys behind the public audit adapter', () => {
+	const payload = { operationId: 'provider-owned', recordedAt: 'verbatim', payloadBytes: 'µΩ' };
+	const publicEvent = { ...event, payload };
+	const payloadBytes = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+	const nativeEvent = storedAuditEvent(publicEvent);
+	expect(nativeEvent).toEqual({
+		id: event.id,
+		operationId: 'act-1',
+		at: event.at,
+		category: 'write',
+		action: 'accounts.update',
+		status: 'committed',
+		actor: event.actor,
+		subject: event.subject,
+		invocation: 'act-1',
+		transaction: null,
+		run: null,
+		approval: null,
+		payload
+	});
+	expect(nativeEvent).not.toHaveProperty('operation_id');
+	const historical = Schema.decodeUnknownSync(StoredAuditRecord)({
+		...nativeEvent,
+		recordedAt: '2026-10-25T00:00:01.000Z',
+		payloadBytes
+	});
+	expect(auditRecord(historical)).toEqual({ ...publicEvent, recorded_at: '2026-10-25T00:00:01.000Z', payload_bytes: payloadBytes });
+	expect(auditRecord(historical)).not.toHaveProperty('recordedAt');
+	expect(auditRecord(historical).payload).toEqual(payload);
+});
+
 it.effect('audit caller failures remain invalid while store outages remain unavailable', () =>
 	Effect.gen(function* () {
-		const store = memoryAudit();
-		const buffered = yield* auditShape({ ...store.port, mode: 'buffered' });
+		const store = memory_audit();
+		const buffered = yield* audit_shape({ ...store.port, mode: 'buffered' });
 		expect(buffered.mode).toBe('buffered');
 		yield* buffered.append([event]);
 		expect((yield* buffered.detail(event.id))?.payload).toEqual(event.payload);
-		const invalid = yield* auditShape({
+		const invalid = yield* audit_shape({
 			...store.port,
 			query: async () => {
 				throw new FacilityFailure({ kind: 'invalid', message: 'Cursor belongs to another query.' });
@@ -53,7 +85,7 @@ it.effect('audit caller failures remain invalid while store outages remain unava
 			code: 'invalid',
 			message: 'Cursor belongs to another query.'
 		});
-		const offline = yield* auditShape({
+		const offline = yield* audit_shape({
 			...store.port,
 			query: async () => {
 				throw new Error('database offline');
@@ -80,7 +112,7 @@ it('audit filters validate bounded pages and native actor, event and lifecycle c
 		expect(() => Schema.decodeUnknownSync(AuditQuery)({ limit })).toThrow();
 	}
 	for (const query of [
-		{ actorKind: 'administrator' },
+		{ actor_kind: 'administrator' },
 		{ category: 'source-code-audit' },
 		{ status: 'assumedCommitted' },
 		{ order: 'payload' }
@@ -89,16 +121,16 @@ it('audit filters validate bounded pages and native actor, event and lifecycle c
 	}
 	expect(
 		Schema.decodeUnknownSync(AuditQuery)({
-			actorKind: 'member',
-			actorId: 'member-1',
+			actor_kind: 'member',
+			actor_id: 'member-1',
 			category: 'write',
 			status: 'unknown',
 			order: 'oldest',
 			limit: 200
 		})
 	).toEqual({
-		actorKind: 'member',
-		actorId: 'member-1',
+		actor_kind: 'member',
+		actor_id: 'member-1',
 		category: 'write',
 		status: 'unknown',
 		order: 'oldest',
@@ -123,7 +155,7 @@ it.effect('the shell forwards server filters and fetches a full payload only for
 		const queries: AuditQuery[] = [];
 		const details: string[] = [];
 		const summary = Schema.decodeUnknownSync(AuditSummary)(record);
-		const api = shellApi(
+		const api = shell_api(
 			async (input, init) => {
 				const url = new URL(String(input), 'https://workspace.example');
 				if (url.pathname.endsWith('/audit/query')) {
@@ -146,7 +178,7 @@ it.effect('the shell forwards server filters and fetches a full payload only for
 		const query: AuditQuery = {
 			text: 'balance',
 			model: 'accounts',
-			actorId: 'member-1',
+			actor_id: 'member-1',
 			status: 'committed',
 			since: '2026-10-24T00:00:00Z',
 			until: '2026-10-26T00:00:00Z',
@@ -158,14 +190,14 @@ it.effect('the shell forwards server filters and fetches a full payload only for
 		expect(details).toEqual([]);
 		expect(page.rows).toEqual([summary]);
 		expect(Object.hasOwn(page.rows[0] ?? {}, 'payload')).toBe(false);
-		expect((yield* api.auditDetail(event.id))?.payload).toEqual(event.payload);
+		expect((yield* api.audit_detail(event.id))?.payload).toEqual(event.payload);
 		expect(details).toEqual([event.id]);
 	})
 );
 
 it.effect('audit unavailability and malformed pages remain errors, not empty history', () =>
 	Effect.gen(function* () {
-		const unavailable = shellApi(
+		const unavailable = shell_api(
 			async () =>
 				Response.json(
 					{ error: { code: 'unavailable', message: 'Audit store is not configured.' } },
@@ -174,13 +206,13 @@ it.effect('audit unavailability and malformed pages remain errors, not empty his
 			{ base: 'https://workspace.example' }
 		);
 		expect((yield* Effect.flip(unavailable.audit({}))).code).toBe('unavailable');
-		const malformed = shellApi(async () => Response.json({ value: [] }), {
+		const malformed = shell_api(async () => Response.json({ value: [] }), {
 			base: 'https://workspace.example'
 		});
 		expect((yield* Effect.flip(malformed.audit({}))).code).toBe('protocol');
-		const absent = shellApi(async () => Response.json({ value: null }), {
+		const absent = shell_api(async () => Response.json({ value: null }), {
 			base: 'https://workspace.example'
 		});
-		expect(yield* absent.auditDetail('missing')).toBeNull();
+		expect(yield* absent.audit_detail('missing')).toBeNull();
 	})
 );

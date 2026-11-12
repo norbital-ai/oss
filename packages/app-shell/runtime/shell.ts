@@ -1,7 +1,7 @@
 /**
  * The native Device runtime. The shell injects this bundle at document start into workspace pages (iOS
  * WKUserScript, Android WebViewCompat.addDocumentStartJavaScript) after Capacitor's bridge script, and it installs
- * `window.boltDevice` + `window.boltDeviceReady` before the workspace bundle runs. It never polls:
+ * `window.bolt_device` + `window.bolt_device_ready` before the workspace bundle runs. It never polls:
  * the Bolt shell drives `notifications.show` from its own live lane.
  */
 import { Capacitor } from '@capacitor/core';
@@ -18,7 +18,7 @@ const ShellConfig = Schema.Struct({
 	host: Schema.String,
 	/** Set when the app is pinned to one workspace. */
 	workspace: Schema.optionalKey(Schema.String),
-	allowNavigation: Schema.Array(Schema.String),
+	allow_navigation: Schema.Array(Schema.String),
 	location: Schema.optionalKey(Schema.Struct({ background: Schema.Boolean })),
 	notifications: Schema.Boolean
 });
@@ -90,7 +90,7 @@ const install = Effect.gen(function* () {
 	const platform = Capacitor.getPlatform();
 	if (platform !== 'ios' && platform !== 'android') return;
 	const run = yield* FiberSet.makeRuntimePromise();
-	const previous = Object.getOwnPropertyDescriptor(window, 'boltDevice');
+	const previous = Object.getOwnPropertyDescriptor(window, 'bolt_device');
 
 	if (shell.location !== undefined) {
 		yield* installLocation(shell.location.background);
@@ -118,7 +118,7 @@ const install = Effect.gen(function* () {
 		Effect.map((value) => accessOf(value.display))
 	);
 
-	Object.defineProperty(window, 'boltDevice', {
+	Object.defineProperty(window, 'bolt_device', {
 		value: Object.freeze({
 			platform,
 			// a pinned app (`norbital.app.ts` `workspace`) offers no other workspace; an unpinned one keeps the switcher
@@ -133,7 +133,7 @@ const install = Effect.gen(function* () {
 								? {
 										background: Object.freeze({
 											status: () => run(backgroundLocation.status),
-											openSettings: () => run(backgroundLocation.openSettings)
+											open_settings: () => run(backgroundLocation.openSettings)
 										})
 									}
 								: {})
@@ -149,7 +149,7 @@ const install = Effect.gen(function* () {
 										Effect.map((value) => accessOf(value.display))
 									)
 								),
-							openSettings: () => run(backgroundLocation.openSettings),
+							open_settings: () => run(backgroundLocation.openSettings),
 							show: (notice: { id: string; title: string; body: string | null; path: string }) =>
 								run(
 									permission.pipe(
@@ -171,7 +171,7 @@ const install = Effect.gen(function* () {
 										)
 									)
 								),
-							onOpen: (listener: (path: string) => void) => {
+							on_open: (listener: (path: string) => void) => {
 								opened.add(listener);
 								if (pending !== undefined) {
 									const path = pending;
@@ -196,7 +196,7 @@ const install = Effect.gen(function* () {
 														keys: {
 															topic: registration.topic,
 															environment: registration.environment,
-															teamId: registration.teamId
+															team_id: registration.teamId
 														}
 													}))
 												)
@@ -206,14 +206,16 @@ const install = Effect.gen(function* () {
 							: {
 									notices: Object.freeze({
 										start: (options: { url: string }) =>
-											run(native(() => NorbitalShell.startNotices({ url: options.url }))),
-										stop: () => run(native(() => NorbitalShell.stopNotices()))
+											run(
+												native(() => NorbitalShell.startNotices({ url: options.url })).pipe(Effect.asVoid)
+											),
+										stop: () => run(native(() => NorbitalShell.stopNotices()).pipe(Effect.asVoid))
 									})
 								})
 					}
 				: {}),
 			navigation: Object.freeze({
-				openExternal: (url: string) => run(native(() => Browser.open({ url })))
+				open_external: (url: string) => run(native(() => Browser.open({ url })).pipe(Effect.asVoid))
 			})
 		}),
 		configurable: true
@@ -222,7 +224,7 @@ const install = Effect.gen(function* () {
 	yield* Effect.acquireRelease(
 		native(() =>
 			App.addListener('appUrlOpen', ({ url }) => {
-				if (trusted(url, host, workspace, shell.allowNavigation)) location.assign(url);
+				if (trusted(url, host, workspace, shell.allow_navigation)) location.assign(url);
 			})
 		),
 		(listener) =>
@@ -244,8 +246,8 @@ const install = Effect.gen(function* () {
 		);
 	yield* Effect.addFinalizer(() =>
 		Effect.sync(() => {
-			if (previous === undefined) Reflect.deleteProperty(window, 'boltDevice');
-			else Object.defineProperty(window, 'boltDevice', previous);
+			if (previous === undefined) Reflect.deleteProperty(window, 'bolt_device');
+			else Object.defineProperty(window, 'bolt_device', previous);
 		})
 	);
 });
@@ -259,7 +261,7 @@ const readyPromise = new Promise<void>((resolve, reject) => {
 	ready.resolve = resolve;
 	ready.reject = reject;
 });
-Object.defineProperty(window, 'boltDeviceReady', {
+Object.defineProperty(window, 'bolt_device_ready', {
 	value: readyPromise,
 	configurable: true
 });

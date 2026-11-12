@@ -3,7 +3,7 @@
 	creates the member and accepts in one act; a signed-in member of the invited address accepts here.
 -->
 <script lang="ts">
-	import { observeOnce, fork } from '@norbital-ai/ui/effect';
+	import { observe_once, fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import { Button, Spinner } from '@norbital-ai/ui';
@@ -15,17 +15,17 @@
 		api,
 		t,
 		id,
-		signedIn,
+		signed_in,
 		workspace
 	}: {
 		api: ShellApi;
 		t: (key: string) => string;
 		id: string;
-		signedIn: boolean;
+		signed_in: boolean;
 		workspace?: string | undefined;
 	} = $props();
 
-	const view = observeOnce(() => api.invitation(id));
+	const view = observe_once(() => api.invitation(id));
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 
@@ -40,7 +40,7 @@
 	});
 </script>
 
-{#if view.current?.status === 'open' && !signedIn}
+{#if view.current?.status === 'open' && !signed_in}
 	<SignIn {api} {t} next="/" address={view.current.email ?? view.current.phone ?? ''} {workspace} />
 {:else}
 	<Stack gap="sm" size="fill" class="access-invitation" aria-busy={view.loading || busy}>

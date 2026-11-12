@@ -11,14 +11,14 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 		title: string;
 		icon?: string;
 		/** A semantic status color, when the icon represents state. */
-		iconClass?: string;
+		icon_class?: string;
 		href?: string;
 		count?: number;
 	};
 	export type TabStripProps = {
 		items: readonly TabStripItem[];
 		value: string | undefined;
-		onValueChange?: (value: string) => void;
+		on_value_change?: (value: string) => void;
 		/** The strip's accessible name. */
 		label: string;
 		/** The type's level (1 segmented, 2 underline, 3 chips); omitted, one below the enclosing `Tabs`. */
@@ -29,16 +29,18 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 
 <script lang="ts">
 	import { getContext } from 'svelte';
+	import { watch } from 'runed';
 	import * as Popover from '../popover/index.js';
 	import Icon from '../icon/icon-wrapper.svelte';
-	import { cn, uiText } from '../utils.js';
+	import { cn, ui_text } from '../utils.js';
 	import { TAB_LEVEL, tabLevel, tabVariant } from './level.js';
 	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
 	import { observeTabOverflow } from './overflow.js';
+	import OverflowTrigger from './overflow-trigger.svelte';
 
-	let { items, value, onValueChange, label, level, class: className }: TabStripProps = $props();
+	let { items, value, on_value_change, label, level, class: className }: TabStripProps = $props();
 	const parent = getContext<{ level: TabLevel } | undefined>(TAB_LEVEL);
-	const t = uiText();
+	const t = ui_text();
 	const variant = $derived(tabVariant(level ?? tabLevel(parent?.level, undefined).level));
 	const links = $derived(items.some((item) => item.href !== undefined));
 	const trigger = $derived(cn(TAB_TRIGGER, TAB_TYPE[variant]));
@@ -46,10 +48,13 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 		measure = $state<HTMLElement | null>(null),
 		fit = $state(Infinity),
 		moreOpen = $state(false);
-	$effect(() => {
-		if (list === null || measure === null) return;
-		return observeTabOverflow(list, measure, (count) => (fit = count));
-	});
+	watch(
+		() => list === null || measure === null ? null : { list, measure },
+		(elements) => {
+			if (elements === null) return;
+			return observeTabOverflow(elements.list, elements.measure, (count) => (fit = count));
+		}
+	);
 	const shown = $derived(items.slice(0, fit));
 	const overflow = $derived(items.slice(fit));
 	const activeInMore = $derived(overflow.some((item) => item.name === value));
@@ -64,7 +69,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 </script>
 
 {#snippet content(item: TabStripItem)}
-	{#if item.icon}<Icon name={item.icon} class={cn(TAB_ICON, item.iconClass)} />{/if}
+	{#if item.icon}<Icon name={item.icon} class={cn(TAB_ICON, item.icon_class)} />{/if}
 	<span class="truncate">{item.title}</span>
 	{#if item.count !== undefined}<span class="text-muted-foreground tabular-nums">{item.count}</span
 		>{/if}
@@ -93,25 +98,13 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 				aria-selected={item.name === value}
 				data-state={item.name === value ? 'active' : 'inactive'}
 				class={trigger}
-				onclick={() => onValueChange?.(item.name)}>{@render content(item)}</button
+				onclick={() => on_value_change?.(item.name)}>{@render content(item)}</button
 			>
 		{/if}
 	{/each}
 	{#if overflow.length > 0}
 		<Popover.Root bind:open={moreOpen}>
-			<Popover.Trigger>
-				{#snippet child({ props })}
-					<button
-						{...props}
-						type="button"
-						class={cn(trigger, 'ml-auto')}
-						data-tabs-more
-						data-state={activeInMore ? 'active' : 'inactive'}
-					>
-						<Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span>
-					</button>
-				{/snippet}
-			</Popover.Trigger>
+			<OverflowTrigger active={activeInMore} label={t('moreTabs')} class={trigger} />
 			<Popover.Content align="end" class="flex w-56 flex-col gap-0.5 p-1">
 				{#each overflow as item (item.name)}
 					{#if links}
@@ -127,7 +120,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 							aria-current={item.name === value ? 'page' : undefined}
 							class="flex h-7 items-center gap-1.5 rounded-sm px-2 text-left text-xs font-medium hover:bg-muted aria-[current=page]:bg-muted"
 							onclick={() => {
-								onValueChange?.(item.name);
+								on_value_change?.(item.name);
 								moreOpen = false;
 							}}>{@render content(item)}</button
 						>

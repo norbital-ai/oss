@@ -11,14 +11,14 @@
 	let {
 		model,
 		t,
-		onNavigate,
-		onAsk = null
+		on_navigate,
+		on_ask = null
 	}: {
 		model: NavModel;
 		t: (key: string) => string;
-		onNavigate: (href: string) => void;
+		on_navigate: (href: string) => void;
 		/** Opens Norbius with a starter prompt: an empty workspace offers it as the way to its first app. */
-		onAsk?: ((prompt: string) => void) | null;
+		on_ask?: ((prompt: string) => void) | null;
 	} = $props();
 
 	const apps = $derived(model.sections.find((s) => s.key === 'applications')?.items ?? []);
@@ -31,7 +31,7 @@
 		href={based(app.href)}
 		onclick={(e) => {
 			e.preventDefault();
-			onNavigate(app.href);
+			on_navigate(app.href);
 		}}
 		class="group w-68 max-w-[calc(100vw-3rem)] shrink-0 snap-start overflow-hidden rounded-xl border bg-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
 	>
@@ -42,7 +42,7 @@
 						src={app.thumbnail}
 						alt=""
 						class="absolute inset-0 size-full"
-						imageClass="size-full object-cover"
+						image_class="size-full object-cover"
 						loading="lazy"
 					/>
 				{:else}
@@ -88,12 +88,12 @@
 					>
 						<Icon name="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
 						<span class="text-meta">{t('No applications yet')}</span>
-						{#if onAsk === null}<span
+						{#if on_ask === null}<span
 								class="max-w-72 pt-1 text-center text-micro text-muted-foreground"
 								>{t('Add an application to this workspace to see it here.')}</span
 							>{:else}<Button
 								class="mt-2"
-								onclick={() => onAsk(t('Build my first app: '))}
+								onclick={() => on_ask(t('Build my first app: '))}
 								data-home-ask
 								><Icon name="lucide:sparkles" class="size-3.5" />{t(
 									'Ask Norbius to build your first app'

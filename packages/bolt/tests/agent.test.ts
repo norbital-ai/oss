@@ -1,7 +1,7 @@
 // The agent engine's pure parts (rules 60, 62, 63): bounded tool results, context projection and native AI streams.
 import { describe, expect, it } from '@effect/vitest';
 import { TestClock } from 'effect/testing';
-import { Cause, Deferred, Effect, Exit, Fiber, Schema, Stream } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Stream } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
@@ -10,7 +10,7 @@ import type { Ai, AiEvent } from '../src/engine/ports.ts';
 import type { FacilityCall } from '../src/engine/services.ts';
 import {
 	applyEdit,
-	inferFacility,
+	infer_facility,
 	MODEL_FILES,
 	modelCall,
 	STALL_MS
@@ -18,19 +18,24 @@ import {
 import { jsonDiff } from '../src/engine/agent/draft.ts';
 import {
 	bound,
+	bounded,
 	BOUNDS,
 	messages,
 	pageNote,
 	pageWaiting,
 	projection,
+	storedToolResult,
 	system
 } from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
-import { toolsUntold } from '../src/engine/agent/context.ts';
-import { toolsListing } from '../src/engine/agent/tools.ts';
 import { preview } from '../src/engine/conversations/store.ts';
-import { respondSystem1 } from '../../bolt-cli/src/test/effect.ts';
-import { clockProbe } from './support/clock-probe.ts';
+import { respond_system_1 } from '../../bolt-cli/src/test/effect.ts';
+import { clock_probe } from './support/clock-probe.ts';
+
+const required = <A>(value: A | null | undefined): A => {
+	if (value === null || value === undefined) throw new Error('Missing fixture value');
+	return value;
+};
 
 const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
 const promptSchema = (content: unknown) => {
@@ -58,43 +63,37 @@ const row = (
 	...over
 });
 type Step = Ai['Service']['infer'];
-describe('the tools a conversation is told of', () => {
-	const none = toolsListing({}),
-		one = toolsListing({
-			plans: { description: 'Reads a plan.', input: { sheet: { kind: 'text' } } }
-		}),
-		two = toolsListing({
-			plans: { description: 'Reads a plan.' },
-			pcn: { description: 'Reads a notice.' }
-		});
-	const told = (seq: number, text: string) =>
-		row(seq, { role: 'system', text, content: { text }, meta: { tag: 'tools' } });
-	const conv = { plan: null };
-	it('lists them with their input, and a workspace with none says nothing', () => {
-		expect(one).toContain('- plans(sheet: text): Reads a plan.');
-		expect(toolsUntold([row(1)], conv, none, none)).toBeUndefined();
+describe('guidance follows the tools actually available', () => {
+	it('adds source guidance only with source tooling and names supplied preview/merge tools', () => {
+		expect(system({ skills: {} })).not.toContain('# Source');
+		const prompt = system({ skills: {}, tools: [
+			{ name: 'workspace_search' }, { name: 'show_preview', studio: 'preview' }, { name: 'take_live', studio: 'merge' }
+		] });
+		expect(prompt).toContain('show_preview builds and serves');
+		expect(prompt).toContain('take_live asks the person');
+		expect(prompt).toContain('never invent a reference filename');
+		expect(prompt).not.toContain('envoy.md');
 	});
-	it('appends on the first step, and once', () => {
-		expect(toolsUntold([row(1)], conv, one, none)).toBe(one);
-		expect(toolsUntold([row(1), told(2, one)], conv, one, none)).toBeUndefined();
+	it('a channel conversation gets its own browser and native-question guidance', () => {
+		const prompt = system({ envoy: 'Desk', skills: {} });
+		expect(prompt).toContain("There is no user's workspace browser tab in this channel.");
+		expect(prompt).toContain('Use ask for questions and choices, then wait.');
+		expect(prompt).toContain('Do not repeat its question, choices or summary');
 	});
-	it('appends again after a merge changed them, and when the last one goes', () => {
-		expect(toolsUntold([row(1), told(2, one)], conv, two, none)).toBe(two);
-		expect(toolsUntold([row(1), told(2, one)], conv, none, none)).toBe(none);
-	});
-	it('appends again after a compaction dropped the listing, as on a first step', () => {
-		const compacted = [
-			row(1),
-			told(2, one),
-			row(3, {
-				role: 'system',
-				text: 'summary',
-				content: { text: 'summary' },
-				meta: { tag: 'compact', cutoff: 2, keep: [] }
-			})
-		];
-		expect(toolsUntold(compacted, conv, one, none)).toBe(one);
-		expect(toolsUntold([...compacted, told(4, one)], conv, one, none)).toBeUndefined();
+});
+
+describe('programmatic messages in follow-up context', () => {
+	it('keeps confirmed sends as assistant context and excludes unsent, uncertain and deleted messages', () => {
+		const statuses = ['queued', 'sending', 'uncertain', 'failed', 'sent', 'delivered', 'read', 'opened', 'replied'];
+		const outbound = statuses.map((status, index) => row(index + 1, {
+			role: null, direction: 'outbound', state: null, status,
+			text: `Daily report: ${status}`, content: null, deleted_at: null
+		}));
+		const removed = row(20, { role: null, direction: 'outbound', state: null, status: 'sent', text: 'Deleted report', content: null, deleted_at: '2026-09-25T10:00:00.000Z' });
+		const followup = row(21, { text: 'What changed since that report?', content: { text: 'What changed since that report?' } });
+		const expected = ['sent', 'delivered', 'read', 'opened', 'replied'].map((status) => ({ role: 'assistant', content: `Daily report: ${status}` }));
+		expect(messages([...outbound, removed, followup])).toEqual([...expected, { role: 'user', content: { text: 'What changed since that report?' } }]);
+		expect(projection([...outbound, removed, followup], { plan: null }).map(({ id }) => id)).toEqual(['m5', 'm6', 'm7', 'm8', 'm9', 'm21']);
 	});
 });
 
@@ -102,12 +101,13 @@ describe('a page step', () => {
 	const step = (result: Json): MessageRow => ({
 		...row(2),
 		role: 'tool',
-		content: { id: 'c1', name: 'page', result }
+		state: null,
+		content: { id: 'c1', assistant: 'a1', name: 'page', behavior: { page: true }, result }
 	});
 	it('waits for its tab, then closes the context with what the tab shows', () => {
 		const asked = { requested: true, navigation: '/app/ops' };
 		expect(pageWaiting([row(1), step(asked)])).toBe(true);
-		const shown = step({ ...asked, pageResult: { ok: true, screen: 'Orders · New' } });
+		const shown = step({ ...asked, page_result: { ok: true, screen: 'Orders · New' } });
 		expect(pageWaiting([row(1), shown])).toBe(false);
 		expect(pageNote([row(1), shown])).toBe(
 			'Your last page step ran. Their page shows: Orders · New'
@@ -116,7 +116,7 @@ describe('a page step', () => {
 	});
 	it('stays the message it was sent, whatever the tab answers', () => {
 		const sent = { requested: true, navigation: '/app/ops' };
-		const later = step({ ...sent, pageClaim: true, pageResult: { ok: true, screen: 'Orders' } });
+		const later = step({ ...sent, pageClaim: true, page_result: { ok: true, screen: 'Orders' } });
 		expect(messages([later], [later])).toEqual(messages([step(sent)], [step(sent)]));
 	});
 });
@@ -126,7 +126,7 @@ const port = (answers: readonly Step[]) => {
 	const requests: AiRequest[] = [];
 	let index = 0;
 	const p: Ai['Service'] = {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Effect.succeed({ models: [{ id: 'default', label: 'Default' }], default: 'default' }),
@@ -156,19 +156,24 @@ const done =
 	(text: string): Step =>
 	() =>
 		response({ content: text, toolCalls: [], finish: 'stop', usage: { input: 1, output: 1 } });
-const elapsed = clockProbe;
+const elapsed = clock_probe;
 
 describe('tool results are bounded (rule 62)', () => {
-	it('a stored result rides the transcript whole up to the result bound, its start past it', () => {
-		const stored = (bytes: number) =>
-			messages([
+	it('a result is bounded once when stored and rides the transcript as stored: whole within its bound, its start past it', () => {
+		// stored as the engine settles a call: bounded once, the whole kept for read_file
+		const stored = (bytes: number) => {
+			const whole = 'x'.repeat(bytes);
+			return messages([
 				{
 					...row(1),
 					role: 'tool',
-					content: { id: 'c', name: 'skill', result: 'x'.repeat(bytes) }
+					state: null,
+					content: { id: 'c', assistant: 'a1', name: 'skill', result: storedToolResult('c', bounded(whole).value, whole).result }
 				}
 			])[0];
-		expect(JSON.stringify(stored(BOUNDS.resultBytes - 1_000))).not.toContain('truncated');
+		};
+		expect(JSON.stringify(stored(BOUNDS.cellBytes - 1_000))).not.toContain('truncated');
+		expect(stored(BOUNDS.cellBytes - 1_000)).toEqual({ role: 'tool', content: { id: 'c', name: 'skill', result: 'x'.repeat(BOUNDS.cellBytes - 1_000) } });
 		expect(JSON.stringify(stored(BOUNDS.resultBytes + 1_000))).toContain('truncated');
 	});
 	it('clips long cells and drops trailing rows with a note, within the result bound', () => {
@@ -184,7 +189,7 @@ describe('tool results are bounded (rule 62)', () => {
 			})
 		)(result);
 		expect(size(result)).toBeLessThanOrEqual(BOUNDS.resultBytes);
-		expect(out.rows[0]!.note).toMatch(new RegExp(`clipped, ${BOUNDS.cellBytes + 802} bytes`));
+		expect(required(out.rows[0]).note).toMatch(new RegExp(`clipped, ${BOUNDS.cellBytes + 802} bytes`));
 		expect(out.clipped).toMatch(new RegExp(`showing ${out.rows.length} of 200 rows`));
 		expect(bound({ a: 1 })).toEqual({ a: 1 });
 		// a read page's total is what the note counts against
@@ -459,7 +464,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	it.effect('ctx.ai.sys_2.infer: a cut response continues as two calls and one answer', () =>
 		Effect.gen(function* () {
 			const { p, requests } = port([stalls('The answer '), done('is 42.')]);
-			const infer = inferFacility(p, { wallMs: 20 });
+			const infer = infer_facility(p, { wallMs: 20 });
 			const call: Extract<FacilityCall, { _tag: 'ai.sys_2.infer' }> = {
 				_tag: 'ai.sys_2.infer',
 				args: [{ prompt: 'q' }]
@@ -469,16 +474,16 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				value: 'The answer is 42.'
 			});
 			expect(requests).toHaveLength(2);
-			expect(requests[1]!.messages).toEqual([
+			expect(required(requests[1]).messages).toEqual([
 				{ role: 'user', content: 'q' },
 				{ role: 'assistant', content: 'The answer ' }
 			]);
-			const json = inferFacility(port([stalls('{"n":'), done('42}')]).p, { wallMs: 20 });
+			const json = infer_facility(port([stalls('{"n":'), done('42}')]).p, { wallMs: 20 });
 			expect(
 				yield* elapsed(json({ ...call, args: [{ prompt: 'q', output: { kind: 'json' } }] }), 21)
 			).toEqual({ ok: true, value: { n: 42 } });
 			// no step budget and no time limit: a model that keeps streaming and never finishes runs until its caller's wall ends it
-			const never = inferFacility(port(Array.from({ length: 200 }, () => stalls('a'))).p, {
+			const never = infer_facility(port(Array.from({ length: 200 }, () => stalls('a'))).p, {
 				wallMs: 20
 			});
 			expect(
@@ -550,12 +555,12 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					),
 					tool('submit', {}, 's2')
 				]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q', output }))).toEqual({
+				expect(yield* infer_facility(p)(at({ prompt: 'q', output }))).toEqual({
 					ok: true,
 					value: { n: 3, note: 'seen' }
 				});
-				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(DRAFT_TOOLS);
-				expect(requests[0]!.output).toBeUndefined();
+				expect(required(required(requests[0]).tools).map((t) => t.name)).toEqual(DRAFT_TOOLS);
+				expect(required(requests[0]).output).toBeUndefined();
 				// the shape to build is in the prompt, as JSON Schema
 				expect(promptSchema(requests[0]?.messages[0]?.content)).toEqual({
 					type: 'object',
@@ -564,14 +569,14 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					required: ['n']
 				});
 				// each op is checked as it applies: the refused value never reaches the draft
-				expect(requests[1]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[1]).messages.at(-1)).toMatchObject({
 					role: 'tool',
 					content: {
 						id: 'e1',
 						result: { applied: 0, errors: [{ op: 0, error: '/n: expected a number' }] }
 					}
 				});
-				expect(requests[2]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[2]).messages.at(-1)).toMatchObject({
 					role: 'tool',
 					content: { id: 's1', result: { error: expect.stringContaining('/n: is required') } }
 				});
@@ -594,12 +599,12 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('submit', {}, 's1')
 				]);
 				expect(
-					yield* elapsed(inferFacility(p, { wallMs: 20 })(at({ prompt: 'q', output })), 41)
+					yield* elapsed(infer_facility(p, { wallMs: 20 })(at({ prompt: 'q', output })), 41)
 				).toEqual({ ok: true, value: { n: 3 } });
 				expect(requests).toHaveLength(4);
 				// silence alone asks again unchanged; silence while writing a call asks for smaller calls
-				expect(requests[1]!.messages).toEqual(requests[0]!.messages);
-				expect(requests[2]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[1]).messages).toEqual(required(requests[0]).messages);
+				expect(required(requests[2]).messages.at(-1)).toMatchObject({
 					role: 'user',
 					content: expect.stringContaining('Make smaller calls')
 				});
@@ -633,11 +638,11 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('edit', { ops: [{ path: '', set: draft('True', '95') }] }, 'e2'),
 					tool('submit', {}, 's2')
 				]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q', output: quoted }))).toEqual({
+				expect(yield* infer_facility(p)(at({ prompt: 'q', output: quoted }))).toEqual({
 					ok: true,
 					value: { ok: true, pct: 95, parts: [{ n: 3, flags: [false, true] }] }
 				});
-				expect(requests[1]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[1]).messages.at(-1)).toMatchObject({
 					role: 'tool',
 					content: {
 						id: 'e1',
@@ -655,7 +660,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				// the same model re-edited the identical draft and never submitted: an unchanged draft that holds is the answer
 				const repeat = () => tool('edit', { ops: [{ path: '', set: draft('true', '95') }] }, 'e');
 				expect(
-					yield* inferFacility(port([repeat(), repeat()]).p)(at({ prompt: 'q', output: quoted }))
+					yield* infer_facility(port([repeat(), repeat()]).p)(at({ prompt: 'q', output: quoted }))
 				).toEqual({
 					ok: true,
 					value: { ok: true, pct: 95, parts: [{ n: 3, flags: [false, true] }] }
@@ -683,7 +688,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					done(JSON.stringify({ ...answer, metadata: { source: 'pcn', rogue: true } })),
 					done(JSON.stringify(answer))
 				]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q', output: declared }))).toEqual({
+				expect(yield* infer_facility(p)(at({ prompt: 'q', output: declared }))).toEqual({
 					ok: true,
 					value: answer
 				});
@@ -709,7 +714,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					done(JSON.stringify({ intent: answer.intent, summary: answer.summary }))
 				]);
 				expect(
-					yield* inferFacility(closed.p)(
+					yield* infer_facility(closed.p)(
 						at({
 							prompt: 'q',
 							output: { kind: 'object', fields: declared.fields }
@@ -738,7 +743,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			],
 			tags: ['a']
 		};
-		const edit = (d: Json, op: Parameters<typeof applyEdit>[1]) => applyEdit(d, op, leave);
+		const edit = (d: Json, op: Parameters<typeof applyEdit>[1]) => Result.getOrThrow(applyEdit(d, op, leave));
 		let d: Json = edit(doc, { path: '/leave/ANNUAL', remove: true });
 		d = edit(d, { path: '/leave/UNPAID/days', set: '2' }); // by index this was item 2, now item 1
 		d = edit(d, { path: '/leave/MATERNITY', set: { days: 98 } }); // a new item, its key filled from the path
@@ -844,17 +849,17 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('edit', { ops: [{ path: '/n', set: 3 }] }),
 					tool('submit', {})
 				]);
-				expect(yield* inferFacility(p)(at({ prompt: 'research', initial, output }))).toEqual({
+				expect(yield* infer_facility(p)(at({ prompt: 'research', initial, output }))).toEqual({
 					ok: true,
 					value: { n: 3, note: 'keep' }
 				});
 				expect(initial).toEqual({ n: 2, note: 'keep' });
-				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(DRAFT_TOOLS);
-				expect(requests[1]!.messages.at(-1)).toMatchObject({
+				expect(required(required(requests[0]).tools).map((t) => t.name)).toEqual(DRAFT_TOOLS);
+				expect(required(requests[1]).messages.at(-1)).toMatchObject({
 					role: 'tool',
 					content: { id: 'r1', result: { value: 'keep' } }
 				});
-				expect(yield* inferFacility(p)(at({ prompt: 'q', initial }))).toMatchObject({
+				expect(yield* infer_facility(p)(at({ prompt: 'q', initial }))).toMatchObject({
 					ok: false,
 					error: { kind: 'invalid' }
 				});
@@ -868,6 +873,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				name: 'read',
 				description: 'Read records',
 				input: { type: 'object' },
+				behavior: {},
 				call: (input: Json) =>
 					Effect.sync(() => {
 						seen.push(input);
@@ -880,13 +886,13 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				tool('submit', {})
 			]);
 			expect(
-				yield* inferFacility(p)(
+				yield* infer_facility(p)(
 					at({ prompt: 'q', initial: { n: 2, note: 'keep' }, output, tools: ['read'] }),
 					[records]
 				)
 			).toEqual({ ok: true, value: { n: 2, note: 'keep' } });
 			expect(seen).toEqual([{ model: 'purchase_orders' }]);
-			expect(requests[0]!.tools!.map((t) => t.name)).toEqual([
+			expect(required(required(requests[0]).tools).map((t) => t.name)).toEqual([
 				'read',
 				'edit',
 				'submit',
@@ -894,7 +900,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				'find',
 				'diff'
 			]);
-			expect(requests[2]!.messages.at(-1)).toMatchObject({
+			expect(required(requests[2]).messages.at(-1)).toMatchObject({
 				content: { id: 'r2', result: { value: 'keep' } }
 			});
 		})
@@ -911,9 +917,9 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 							Effect.as(
 								Stream.fail(
 									Port.failure('ai')({
-										kind: 'rateLimited',
+										kind: 'rate_limited',
 										status: 402,
-										retryAfterMs: 120_000,
+										retry_after_ms: 120_000,
 										message: 'in-flight capacity'
 									})
 								)
@@ -940,7 +946,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				]);
 				expect(
 					yield* modelCall(partial.p, { model: 'default', messages: [] }).pipe(Effect.flip)
-				).toMatchObject({ kind: 'rateLimited' });
+				).toMatchObject({ kind: 'rate_limited' });
 				expect(partial.requests).toHaveLength(1);
 				const unpaid = port([
 					() =>
@@ -952,7 +958,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 							})
 						)
 				]);
-				expect(yield* inferFacility(unpaid.p)(at({ prompt: 'research', output }))).toMatchObject({
+				expect(yield* infer_facility(unpaid.p)(at({ prompt: 'research', output }))).toMatchObject({
 					ok: false,
 					error: { kind: 'upstream', status: 402 }
 				});
@@ -973,29 +979,29 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				]);
 				expect(
 					yield* elapsed(
-						inferFacility(p)(at({ prompt: 'research', initial: { n: 2, note: 'keep' }, output })),
+						infer_facility(p)(at({ prompt: 'research', initial: { n: 2, note: 'keep' }, output })),
 						1_001
 					)
 				).toEqual({ ok: true, value: { n: 3, note: 'keep' } });
 				expect(requests).toHaveLength(3);
-				expect(requests[2]!.messages).toEqual(requests[1]!.messages);
+				expect(required(requests[2]).messages).toEqual(required(requests[1]).messages);
 				// six retries backing off from 1 s (1 + 2 + … + 32 = 63 s) before the failure ends the inference
 				const exhausted = port(Array.from({ length: 7 }, () => fail));
 				expect(
-					yield* elapsed(inferFacility(exhausted.p)(at({ prompt: 'research', output })), 63_001)
+					yield* elapsed(infer_facility(exhausted.p)(at({ prompt: 'research', output })), 63_001)
 				).toMatchObject({ ok: false, error: { kind: 'upstream' } });
 				expect(exhausted.requests).toHaveLength(7);
 				const capacity: Step = () =>
 					Stream.fail(
 						new FacilityFailure({
-							kind: 'rateLimited',
+							kind: 'rate_limited',
 							status: 429,
 							message: 'capacity'
 						})
 					);
 				const mixed = port([capacity, capacity, capacity, fail, fail, fail, fail]);
 				expect(
-					yield* elapsed(inferFacility(mixed.p)(at({ prompt: 'research', output })), 63_001)
+					yield* elapsed(infer_facility(mixed.p)(at({ prompt: 'research', output })), 63_001)
 				).toMatchObject({
 					ok: false,
 					error: { kind: 'upstream' }
@@ -1026,7 +1032,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					);
 				const { p, requests } = port([reasons]);
 				expect(
-					yield* elapsed(inferFacility(p, { wallMs: 30 })(at({ prompt: 'q', output })), 101)
+					yield* elapsed(infer_facility(p, { wallMs: 30 })(at({ prompt: 'q', output })), 101)
 				).toEqual({ ok: true, value: { n: 5 } });
 				expect(requests).toHaveLength(1);
 			})
@@ -1038,12 +1044,12 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			Effect.gen(function* () {
 				// one impossible field used to end the inference, which cost the automation that owned it the whole answer
 				const { p, requests } = port([done('{"n":3.5}'), done('{"n":4}')]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q', output }))).toEqual({
+				expect(yield* infer_facility(p)(at({ prompt: 'q', output }))).toEqual({
 					ok: true,
 					value: { n: 4 }
 				});
 				expect(requests).toHaveLength(2);
-				expect(requests[1]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[1]).messages.at(-1)).toMatchObject({
 					role: 'user',
 					content: expect.stringContaining('/n: Expected an integer')
 				});
@@ -1059,16 +1065,16 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					done('Sure! Here is the verdict: suspicious.'),
 					done('{"n":3}')
 				]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q', output }))).toEqual({
+				expect(yield* infer_facility(p)(at({ prompt: 'q', output }))).toEqual({
 					ok: true,
 					value: { n: 3 }
 				});
-				expect(requests[1]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[1]).messages.at(-1)).toMatchObject({
 					role: 'user',
 					content: expect.stringContaining('Build the answer with edit')
 				});
 				expect(
-					yield* inferFacility(
+					yield* infer_facility(
 						port([done('prose'), done('more prose'), done('still prose'), done('never json')]).p
 					)(at({ prompt: 'q', output }))
 				).toMatchObject({
@@ -1092,7 +1098,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					...Array.from({ length: 20 }, same)
 				]);
 				expect(
-					yield* inferFacility(p)(at({ prompt: 'q', initial: { n: 'x' }, output }))
+					yield* infer_facility(p)(at({ prompt: 'q', initial: { n: 'x' }, output }))
 				).toMatchObject({
 					ok: false,
 					error: { kind: 'invalid', message: expect.stringContaining('/n: expected a number') }
@@ -1106,16 +1112,16 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		() =>
 			Effect.gen(function* () {
 				const { p, requests } = port([done(''), done('hi')]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q' }))).toEqual({
+				expect(yield* infer_facility(p)(at({ prompt: 'q' }))).toEqual({
 					ok: true,
 					value: 'hi'
 				});
-				expect(requests[1]!.messages.at(-1)).toEqual({
+				expect(required(requests[1]).messages.at(-1)).toEqual({
 					role: 'user',
 					content: 'Continue, and give your answer.'
 				});
 				expect(
-					yield* inferFacility(port([done(''), done(''), done(''), done('')]).p)(
+					yield* infer_facility(port([done(''), done(''), done(''), done('')]).p)(
 						at({ prompt: 'q' })
 					)
 				).toMatchObject({ ok: false, error: { kind: 'invalid' } });
@@ -1126,7 +1132,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		Effect.gen(function* () {
 			const { p, requests } = port([done('unused')]);
 			for (const output of [{ jsonSchema: {} }, { json_schema: {}, jsonSchema: {} }]) {
-				expect(yield* Effect.flip(inferFacility(p)(at({ prompt: 'q', output })))).toMatchObject({
+				expect(yield* Effect.flip(infer_facility(p)(at({ prompt: 'q', output })))).toMatchObject({
 					kind: 'invalid'
 				});
 			}
@@ -1176,16 +1182,16 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('submit', {}, 's2')
 				]);
 				expect(
-					yield* inferFacility(p)(at({ prompt: 'q', output: { json_schema, rules } }))
+					yield* infer_facility(p)(at({ prompt: 'q', output: { json_schema, rules } }))
 				).toEqual({ ok: true, value: { test: { status: 'unable', reason: 'VTs connected' } } });
-				expect(requests[0]!.messages[0]!.content).toContain('an unperformed test has no reading');
-				const back = JSON.stringify(requests[2]!.messages.at(-1));
+				expect(required(required(requests[0]).messages[0]).content).toContain('an unperformed test has no reading');
+				const back = JSON.stringify(required(requests[2]).messages.at(-1));
 				expect(back).toContain('/test/reading');
 				expect(back).toContain('reason');
 				expect(back).toContain('rule broken: an unperformed test has no reading');
 				// a rule that does not compile is the caller's, refused before any model call
 				expect(
-					yield* inferFacility(port([]).p)(
+					yield* infer_facility(port([]).p)(
 						at({
 							prompt: 'q',
 							output: { json_schema, rules: [{ expression: 'test.(', message: 'x' }] }
@@ -1215,22 +1221,22 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 							usage: { input: 1, output: 1 }
 						});
 				const clean = port([both([{ path: '/n', set: 3 }], '1')]);
-				expect(yield* inferFacility(clean.p)(at({ prompt: 'q', output }))).toEqual({
+				expect(yield* infer_facility(clean.p)(at({ prompt: 'q', output }))).toEqual({
 					ok: true,
 					value: { n: 3 }
 				});
 				expect(clean.requests).toHaveLength(1);
-				expect(clean.requests[0]!.messages[0]!.content).toContain('in the same reply');
+				expect(required(required(clean.requests[0]).messages[0]).content).toContain('in the same reply');
 				const fixed = port([
 					both([{ path: '/n', set: 'x' }], '1'),
 					both([{ path: '/n', set: 4 }], '2')
 				]);
-				expect(yield* inferFacility(fixed.p)(at({ prompt: 'q', output }))).toEqual({
+				expect(yield* infer_facility(fixed.p)(at({ prompt: 'q', output }))).toEqual({
 					ok: true,
 					value: { n: 4 }
 				});
 				expect(fixed.requests).toHaveLength(2);
-				expect(fixed.requests[1]!.messages.slice(-2)).toMatchObject([
+				expect(required(fixed.requests[1]).messages.slice(-2)).toMatchObject([
 					{
 						role: 'tool',
 						content: {
@@ -1269,7 +1275,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				]);
 				const files = Array.from({ length: MODEL_FILES.count + 2 }, (_, i) => ({ id: `f${i}` }));
 				expect(
-					yield* inferFacility(p, { load })(at({ prompt: 'q', files, output: { json_schema } }))
+					yield* infer_facility(p, { load })(at({ prompt: 'q', files, output: { json_schema } }))
 				).toEqual({ ok: true, value: { rows: ['a', 'b'] } });
 				expect(requests.map((r) => r.files?.length)).toEqual([
 					MODEL_FILES.count,
@@ -1279,10 +1285,10 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				]);
 				expect(loads).toEqual(files.map((f) => f.id));
 				// the second batch starts from the first one's draft, which minItems alone would have refused
-				expect(requests[2]!.messages[0]!.content).toContain(
+				expect(required(required(requests[2]).messages[0]).content).toContain(
 					`files ${MODEL_FILES.count + 1}–${MODEL_FILES.count + 2}`
 				);
-				expect(requests[2]!.messages[0]!.content).toContain('{"rows":["a"]}');
+				expect(required(required(requests[2]).messages[0]).content).toContain('{"rows":["a"]}');
 			})
 	);
 
@@ -1295,6 +1301,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					name: 'browse',
 					description: 'Read a page',
 					input: { type: 'object' },
+				behavior: {},
 					call: (input: Json) =>
 						Effect.sync(() => {
 							seen.push(input);
@@ -1307,11 +1314,11 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('submit', {}, 's1')
 				]);
 				expect(
-					yield* inferFacility(p)(at({ prompt: 'q', output, tools: ['browse'] }), [browse])
+					yield* infer_facility(p)(at({ prompt: 'q', output, tools: ['browse'] }), [browse])
 				).toEqual({ ok: true, value: { n: 3 } });
 				expect(seen).toEqual([{ url: 'https://x' }]);
-				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(['browse', ...DRAFT_TOOLS]);
-				expect(requests[1]!.messages.at(-1)).toEqual({
+				expect(required(required(requests[0]).tools).map((t) => t.name)).toEqual(['browse', ...DRAFT_TOOLS]);
+				expect(required(requests[1]).messages.at(-1)).toEqual({
 					role: 'tool',
 					content: { id: 'browse', name: 'browse', result: { text: 'rate is 3' } }
 				});
@@ -1324,6 +1331,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			name: 'browse',
 			description: 'Read a page',
 			input: { type: 'object' },
+				behavior: {},
 			call: (input: Json) =>
 				Effect.sync(() => {
 					seen.push(input);
@@ -1354,15 +1362,15 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					editAndSubmit
 				]);
 				expect(
-					yield* inferFacility(p)(at({ prompt: 'q', output, tools: ['browse'], steps: 2 }), [
+					yield* infer_facility(p)(at({ prompt: 'q', output, tools: ['browse'], steps: 2 }), [
 						browse
 					])
 				).toEqual({ ok: true, value: { n: 3 } });
 				expect(seen).toHaveLength(2);
 				expect(requests).toHaveLength(3);
-				expect(requests[1]!.tools!.map((t) => t.name)).toEqual(['browse', ...DRAFT_TOOLS]);
-				expect(requests[2]!.tools!.map((t) => t.name)).toEqual(DRAFT_TOOLS);
-				expect(requests[2]!.messages.at(-1)).toMatchObject({
+				expect(required(required(requests[1]).tools).map((t) => t.name)).toEqual(['browse', ...DRAFT_TOOLS]);
+				expect(required(required(requests[2]).tools).map((t) => t.name)).toEqual(DRAFT_TOOLS);
+				expect(required(requests[2]).messages.at(-1)).toMatchObject({
 					role: 'user',
 					content: expect.stringContaining('budget')
 				});
@@ -1385,7 +1393,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					editAndSubmit
 				]);
 				expect(
-					yield* inferFacility(p)(
+					yield* infer_facility(p)(
 						at({ prompt: 'q', output, initial: {}, tools: ['browse'], steps: 8 }),
 						[browse]
 					)
@@ -1403,6 +1411,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					name: 'browse',
 					description: 'Read a page',
 					input: { type: 'object' },
+				behavior: {},
 					call: () => Effect.never
 				};
 				const held = port([
@@ -1411,14 +1420,14 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				]);
 				expect(
 					yield* elapsed(
-						inferFacility(held.p)(at({ prompt: 'q', output, tools: ['browse'] }), [hangs]),
+						infer_facility(held.p)(at({ prompt: 'q', output, tools: ['browse'] }), [hangs]),
 						STALL_MS + 1
 					)
 				).toEqual({ ok: true, value: { n: 3 } });
 				const empty = port([tool('browse', { url: 'https://a' }, 'b1')]);
 				expect(
 					yield* elapsed(
-						inferFacility(empty.p)(at({ prompt: 'q', output, tools: ['browse'] }), [hangs]),
+						infer_facility(empty.p)(at({ prompt: 'q', output, tools: ['browse'] }), [hangs]),
 						STALL_MS + 1
 					)
 				).toEqual({
@@ -1435,6 +1444,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				name: 'browse',
 				description: 'Read a page',
 				input: { type: 'object' },
+				behavior: {},
 				call: () => Effect.sleep('4 minutes').pipe(Effect.as({ text: 'rate is 3' }))
 			};
 			const { p, requests } = port([
@@ -1445,7 +1455,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			]);
 			expect(
 				yield* elapsed(
-					inferFacility(p)(at({ prompt: 'q', output, tools: ['browse'] }), [slow]),
+					infer_facility(p)(at({ prompt: 'q', output, tools: ['browse'] }), [slow]),
 					12 * 60_000 + 1
 				)
 			).toEqual({ ok: true, value: { n: 3 } });
@@ -1465,7 +1475,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('browse', {}, 'b4')
 				]);
 				expect(
-					yield* inferFacility(one.p)(at({ prompt: 'q', output, tools: ['browse'], steps: 1 }), [
+					yield* infer_facility(one.p)(at({ prompt: 'q', output, tools: ['browse'], steps: 1 }), [
 						spent.browse
 					])
 				).toEqual({
@@ -1483,7 +1493,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					done('')
 				]);
 				expect(
-					yield* inferFacility(two.p)(at({ prompt: 'q', output, tools: ['browse'], steps: 2 }), [
+					yield* infer_facility(two.p)(at({ prompt: 'q', output, tools: ['browse'], steps: 2 }), [
 						held.browse
 					])
 				).toEqual({ ok: true, value: { n: 3 } });
@@ -1491,7 +1501,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				expect(two.requests).toHaveLength(3);
 
 				expect(
-					yield* Effect.flip(inferFacility(port([]).p)(at({ prompt: 'q', output, steps: 0 })))
+					yield* Effect.flip(infer_facility(port([]).p)(at({ prompt: 'q', output, steps: 0 })))
 				).toMatchObject({ kind: 'invalid' });
 			})
 	);
@@ -1527,7 +1537,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('find', { text: 'unp' }, 'f1'),
 					tool('submit', {}, 's1')
 				]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q', initial, output: leave }))).toEqual({
+				expect(yield* infer_facility(p)(at({ prompt: 'q', initial, output: leave }))).toEqual({
 					ok: true,
 					value: {
 						leave: [
@@ -1539,8 +1549,8 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					}
 				});
 				// the output says which lists are keyed, and by what
-				expect(requests[0]!.messages[0]!.content).toContain('Keyed by \\"code\\"');
-				expect(requests[1]!.messages.at(-1)).toMatchObject({
+				expect(required(required(requests[0]).messages[0]).content).toContain('Keyed by \\"code\\"');
+				expect(required(requests[1]).messages.at(-1)).toMatchObject({
 					content: {
 						id: 'e1',
 						result: {
@@ -1552,7 +1562,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						}
 					}
 				});
-				expect(requests[2]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[2]).messages.at(-1)).toMatchObject({
 					content: {
 						id: 'r1',
 						result: {
@@ -1564,7 +1574,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						}
 					}
 				});
-				expect(requests[3]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[3]).messages.at(-1)).toMatchObject({
 					content: {
 						id: 'd1',
 						result: {
@@ -1576,7 +1586,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						}
 					}
 				});
-				expect(requests[4]!.messages.at(-1)).toMatchObject({
+				expect(required(requests[4]).messages.at(-1)).toMatchObject({
 					content: {
 						id: 'f1',
 						result: { matches: [{ path: '/leave/UNPAID/code', excerpt: 'UNPAID' }] }
@@ -1625,7 +1635,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('submit', {}, 's4')
 				]);
 				expect(
-					yield* inferFacility(p)(at({ prompt: 'q', initial, output: review, rules, steps: 2 }))
+					yield* infer_facility(p)(at({ prompt: 'q', initial, output: review, rules, steps: 2 }))
 				).toEqual({
 					ok: false,
 					error: {
@@ -1634,8 +1644,8 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					}
 				});
 				expect(requests).toHaveLength(5);
-				expect(requests[0]!.messages[0]!.content).toContain('every area is reviewed');
-				expect(requests[1]!.messages.at(-1)).toMatchObject({
+				expect(required(required(requests[0]).messages[0]).content).toContain('every area is reviewed');
+				expect(required(requests[1]).messages.at(-1)).toMatchObject({
 					content: {
 						id: 's1',
 						result: { error: expect.stringContaining('rule broken: every area is reviewed') }
@@ -1650,11 +1660,11 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('submit', {}, 's3')
 				]);
 				expect(
-					yield* inferFacility(repaired.p)(
+					yield* infer_facility(repaired.p)(
 						at({ prompt: 'q', initial, output: review, rules, steps: 2 })
 					)
 				).toMatchObject({ ok: true });
-				expect(repaired.requests.at(-1)!.tools?.map((t) => t.name)).not.toContain('browse');
+				expect(required(required(repaired.requests.at(-1)).tools).map((t) => t.name)).not.toContain('browse');
 				const finished = port([
 					tool(
 						'edit',
@@ -1669,7 +1679,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('submit', {}, 's')
 				]);
 				expect(
-					yield* inferFacility(finished.p)(at({ prompt: 'q', initial, output: review, rules }))
+					yield* infer_facility(finished.p)(at({ prompt: 'q', initial, output: review, rules }))
 				).toEqual({
 					ok: true,
 					value: {

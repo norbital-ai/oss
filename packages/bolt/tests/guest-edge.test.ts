@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // The guest edge (D8): generator bodies run through `runBody` over the lifted ctx, in the real isolate runner, over a
-// bundle `bolt check` builds. Typed failures settle as an async body's do (refused message and field, guestError name
+// bundle `bolt check` builds. Typed failures settle as an async body's do (refused message and field, guest_error name
 // and message); a concurrent `Effect.all` crosses once; an interrupted sibling never leaves a call unawaited; an unyielded
 // call never crosses; scheduler yields are microtasks; a bundle without generator bodies carries no Effect.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,9 +14,11 @@ import { eachMapping, TraceMap } from '@jridgewell/trace-mapping';
 import { Guest, type Bridge, type CrossCall } from '../src/engine/services.ts';
 import { GuestIsolates } from '../src/engine/ports.ts';
 import { guests } from './support/guests.ts';
-import { guestLayer } from './support/guest-fixture.ts';
+import { guest_layer } from './support/guest-fixture.ts';
 import { check } from '../../bolt-cli/src/test/effect.ts';
-import { attached } from '../src/decl/body.ts';
+import { attached, attached_verdict } from '../src/decl/body.ts';
+import { Verdict } from '../src/decl/access/policy.ts';
+import { Refusal } from '../src/decl/errors/refusal.ts';
 import { install as installEdge } from '../src/decl/runtime/guest.ts';
 import type { Json } from '../src/decl/values.ts';
 import {
@@ -31,6 +33,14 @@ import { type GuestOptions, type GuestProgram } from '../src/engine/guest/runner
 const EFFECT = JSON.stringify(createRequire(import.meta.url).resolve('effect'));
 const ERRORS = JSON.stringify(fileURLToPath(new URL('../src/decl/errors.ts', import.meta.url)));
 
+/** Unknown module exports cross the real runtime attachment boundary without acquiring a claimed callback type. */
+const attach_unknown = (body: unknown): void => {
+	const attach: unknown = attached;
+	if (typeof attach !== 'function') throw new Error('The attachment entry is missing.');
+	const result: unknown = attach(body, -1);
+	void result;
+};
+
 // two generator automations and one over the facilities; none imports the edge:
 // `bolt check` installs it in a module that holds a generator body
 const EDGE_BODIES = `import { automation } from '@norbital-ai/bolt';
@@ -39,14 +49,14 @@ import { Refusal } from ${ERRORS};
 const gen = function* (input, ctx) {
 	switch (input.case) {
 		case 'refuse': return yield* Effect.fail(new Refusal({ message: 'no', field: 'x' }));
-		case 'act': return yield* ctx.act('t.create', [{}]);
+		case 'act': return yield* ctx.act({ 't.create': [{}] });
 		case 'boom': throw new Error('boom');
 		case 'read': return yield* ctx.query({ t: { where: { id: { eq: 'x' } } } });
-		case 'caught': return yield* ctx.act('t.create', [{}]).pipe(Effect.catchTag('ActRefused', (refused) => Effect.succeed(refused.code)));
+		case 'caught': return yield* ctx.act({ 't.create': [{}] }).pipe(Effect.catchTag('ActRefused', (refused) => Effect.succeed(refused.code)));
 		case 'all': return yield* Effect.all([ctx.query({ t: { where: { id: { eq: 'x' } } } }), ctx.query({ t: { where: { id: { eq: 'y' } } } }), ctx.query({ t: { where: { id: { eq: 'z' } } } })], { concurrency: 'unbounded' });
 		case 'sequential': return yield* Effect.all([ctx.query({ t: { where: { id: { eq: 'x' } } } }), ctx.query({ t: { where: { id: { eq: 'y' } } } }), ctx.query({ t: { where: { id: { eq: 'z' } } } })]);
 		case 'sibling': return yield* Effect.all([ctx.query({ t: { where: { id: { eq: 'x' } } } }), Effect.die(new Error('sibling'))], { concurrency: 'unbounded' });
-		case 'unyielded': { ctx.act('t.create', [{}]); return 1; }
+		case 'unyielded': { ctx.act({ 't.create': [{}] }); return 1; }
 		case 'timers': {
 			const real = globalThis.setTimeout;
 			let timers = 0;
@@ -59,7 +69,7 @@ const gen = function* (input, ctx) {
 const reference = function* (input, ctx) {
 	switch (input.case) {
 		case 'refuse': return yield* Effect.fail(new Refusal({ message: 'no', field: 'x' }));
-		case 'act': return yield* ctx.act('t.create', [{}]);
+		case 'act': return yield* ctx.act({ 't.create': [{}] });
 		case 'boom': throw new Error('boom');
 		case 'read': return yield* ctx.query({ t: { where: { id: { eq: 'x' } } } });
 	}
@@ -146,14 +156,14 @@ const IdRequest = Schema.Record(
 	Schema.String,
 	Schema.Struct({ where: Schema.Struct({ id: Schema.Struct({ eq: Schema.String }) }) })
 );
-const lowerRead: GuestOptions['lowerRead'] = (_member, args) => {
+const lower_read: GuestOptions['lower_read'] = (_member, args) => {
 	const [root = '', layer] = Object.entries(Schema.decodeUnknownSync(IdRequest)(args[0]))[0] ?? [];
-	return {
+	return Effect.succeed({
 		kind: 'get',
 		model: root,
 		id: layer?.where.id.eq ?? '',
 		select: { fields: null, relations: {} }
-	};
+	});
 };
 /** A bridge answering each call with `answer`, recording every crossing. */
 const recorder = (answer: (call: CrossCall) => CrossAnswer = () => ({ ok: true, value: 1 })) => {
@@ -172,7 +182,7 @@ const isolates = GuestIsolates.fromAbi(guests);
 const run = (kind: InvocationKind, target: string, input: Json, bridge = recorder().bridge) =>
 	Guest.pipe(
 		Effect.flatMap((guest) => guest.invoke(invocation(kind, target, input), bridge)),
-		Effect.provide(guestLayer(edge, { lowerRead, console: () => {} }, undefined, isolates))
+		Effect.provide(guest_layer(edge, { lower_read, console: () => {} }, undefined, isolates))
 	);
 const edgeRun = (
 	body: 'gen' | 'reference',
@@ -227,12 +237,12 @@ describe('typed failures settle as an async body settles', () => {
 		{
 			name: 'a conflicted act',
 			input: { case: 'act' },
-			answer: acts({ kind: 'conflict', records: [{ model: 't', id: '1', fields: ['a'] }] }),
+			answer: acts({ kind: 'conflict', records: [{ model: 't', id: '1' }] }),
 			expected: {
 				kind: 'refused',
 				code: 'conflict',
 				message: 'another write changed these records since they were read',
-				records: [{ model: 't', id: '1', fields: ['a'] }]
+				records: [{ model: 't', id: '1' }]
 			}
 		},
 		{
@@ -249,13 +259,13 @@ describe('typed failures settle as an async body settles', () => {
 		{
 			name: 'a throw',
 			input: { case: 'boom' },
-			expected: { kind: 'failed', code: 'guestError', message: 'boom' }
+			expected: { kind: 'failed', code: 'guest_error', message: 'boom' }
 		},
 		{
 			name: 'an engine fault',
 			input: { case: 'read' },
 			answer: () => ({ ok: false, error: { kind: 'bolt', code: 'forbidden', message: 'no read' } }),
-			expected: { kind: 'failed', code: 'guestError', message: 'no read' }
+			expected: { kind: 'failed', code: 'guest_error', message: 'no read' }
 		}
 	];
 	for (const c of cases)
@@ -301,7 +311,7 @@ describe('typed failures settle as an async body settles', () => {
 					yield* run('automation', 'facility', { case: 'uncaught' }, timeout.bridge)
 				).toMatchObject({
 					kind: 'failed',
-					error: { code: 'guestError', message: 'slow', cause: { name: 'FacilityFailure' } }
+					error: { code: 'guest_error', message: 'slow', cause: { name: 'FacilityFailure' } }
 				});
 				expect(ok(yield* run('automation', 'facility', { case: 'caught' }, timeout.bridge))).toBe(
 					'timeout'
@@ -343,7 +353,7 @@ describe('crossings', () => {
 			const { crossings, bridge } = recorder(ids);
 			expect(shape(yield* run('automation', 'edge_gen', { case: 'sibling' }, bridge))).toEqual({
 				kind: 'failed',
-				code: 'guestError',
+				code: 'guest_error',
 				message: 'sibling'
 			});
 			expect(crossings.map((c) => c.length)).toEqual([1]);
@@ -366,8 +376,8 @@ describe('crossings', () => {
 describe('the bundle', () => {
 	const sources = (program: GuestProgram): readonly string[] => {
 		const mapped = new Set<string>();
-		if (program.sourceMap !== undefined)
-			eachMapping(new TraceMap(program.sourceMap), (mapping) => {
+		if (program.source_map !== undefined)
+			eachMapping(new TraceMap(program.source_map), (mapping) => {
 				if (mapping.source !== null) mapped.add(mapping.source);
 			});
 		return [...mapped];
@@ -395,7 +405,7 @@ describe('the bundle', () => {
 						expect(() => attached(body, -1)).toThrow(
 							'ctx-bearing body must be a generator function; guest edge missing'
 						);
-						expect(() => attached(() => 1, -1)).toThrow(
+						expect(() => attach_unknown(() => 1)).toThrow(
 							'ctx-bearing body must be a generator function; guest edge missing'
 						);
 						installEdge();
@@ -406,7 +416,7 @@ describe('the bundle', () => {
 								yield 1;
 							}
 						])
-							expect(() => attached(invalid, -1)).toThrow(
+							expect(() => attach_unknown(invalid)).toThrow(
 								'a ctx-bearing body must be a generator function'
 							);
 						const wrapped = attached(body, -1);
@@ -418,5 +428,57 @@ describe('the bundle', () => {
 						attached.wrap = previous;
 					})
 			)
+	);
+
+	it.effect('attachments retain their typed tuple and policy verdicts cross as native data', () =>
+		Effect.gen(function* () {
+			installEdge();
+			const echo = attached(function* (count: number, input: { suffix: string }) {
+				return { count: yield* Effect.succeed(count + 1), suffix: input.suffix };
+			}, -1);
+			expect(yield* Effect.promise(() => echo(4, { suffix: 'done' }))).toEqual({ count: 5, suffix: 'done' });
+			const allow = attached_verdict(function* () { return Verdict.allow(); }, -1);
+			expect(yield* Effect.promise(() => allow())).toEqual({ kind: 'allow' });
+			const deny = attached_verdict(function* () {
+				return yield* Effect.fail(new Refusal({ message: 'No update.', field: 'title', row: 2, path: 'orders.lines' }));
+			}, -1);
+			expect(yield* Effect.promise(() => deny())).toEqual({
+				kind: 'deny', message: 'No update.', at: { field: 'title', row: 2, path: 'orders.lines' }
+			});
+		})
+	);
+
+	it.effect('data-only seed attachments retain generator metadata and refuse execution without an edge', () =>
+		Effect.acquireUseRelease(
+			Effect.sync(() => ({ wrap: attached.wrap, verdict: attached.verdict,
+				seed: Object.getOwnPropertyDescriptor(globalThis, Symbol.for('norbital.bolt.seedBuild')) })),
+			() => Effect.gen(function* () {
+				attached.wrap = undefined;
+				attached.verdict = undefined;
+				Object.defineProperty(globalThis, Symbol.for('norbital.bolt.seedBuild'), { value: true, configurable: true });
+				let invoked = false;
+				const body = function* namedSeedBody() { invoked = true; return 3; };
+				const wrapped = attached(body, -1);
+				expect(wrapped.name).toBe(body.name);
+				expect(Reflect.get(wrapped, Symbol.for('norbital.bolt.generator'))).toBe(body);
+				const verdict_body = function* () { invoked = true; return Verdict.allow(); };
+				const verdict = attached_verdict(verdict_body, -1);
+				expect(Reflect.get(verdict, Symbol.for('norbital.bolt.generator'))).toBe(verdict_body);
+				const rejected = yield* Effect.flip(Effect.tryPromise({ try: () => wrapped(), catch: (error) => error }));
+				const denied = yield* Effect.flip(Effect.tryPromise({ try: () => verdict(), catch: (error) => error }));
+				for (const failure of [rejected, denied]) {
+					expect(failure).toBeInstanceOf(Error);
+					expect(failure).toMatchObject({ message: 'a declaration body cannot run in a data-only seed build' });
+				}
+				expect(invoked).toBe(false);
+			}),
+			(previous) => Effect.sync(() => {
+				attached.wrap = previous.wrap;
+				attached.verdict = previous.verdict;
+				const key = Symbol.for('norbital.bolt.seedBuild');
+				if (previous.seed === undefined) Reflect.deleteProperty(globalThis, key);
+				else Object.defineProperty(globalThis, key, previous.seed);
+			})
+		)
 	);
 });

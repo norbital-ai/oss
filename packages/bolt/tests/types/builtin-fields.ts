@@ -14,7 +14,7 @@ import type {
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const is = <T extends true>(): T => true as T;
+const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // one namespace: built-ins and the workspace's
 is<

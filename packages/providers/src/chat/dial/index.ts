@@ -68,10 +68,10 @@ export const dial: ChatPlatform = {
 		const parse = (message: typeof Message.Type): Incoming => ({
 			id: message.id,
 			thread: message.from,
-			sentAt: message.createdAt,
+			sent_at: message.createdAt,
 			from: { handle: message.from, name: null },
 			text: message.body,
-			replyTo: message.replyToId ?? null,
+			reply_to: message.replyToId ?? null,
 			files: message.media.map((item) => ({
 				name: item.id,
 				mime: item.contentType,

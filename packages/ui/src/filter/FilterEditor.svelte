@@ -1,6 +1,6 @@
 <script module lang="ts">
 	import type { Json } from '../client/contract.js';
-	import type { FilterVariables } from './filter.js';
+	import type { FilterVariables } from './operators.js';
 
 	/** A saved native filter, independent of a table's viewer preferences and URL. */
 	export type FilterValue = { readonly where?: Json; readonly order_by?: Json };
@@ -9,7 +9,7 @@
 		value?: FilterValue;
 		readonly?: boolean;
 		variables?: FilterVariables;
-		onChange?(value: FilterValue): void;
+		on_change?(value: FilterValue): void;
 	};
 </script>
 
@@ -20,24 +20,14 @@
 	import { useKinds } from '../kinds/context.js';
 	import { msg } from '../text/messages.js';
 	import FilterPanel from './FilterPanel.svelte';
-	import {
-		fromWhere,
-		localFilterFields,
-		orderKeys,
-		orderOf,
-		orderText,
-		parseOrder,
-		rowsWhere,
-		savedFilterCatalog,
-		resolve,
-		operatorsFor,
-		sortable,
-		type Node,
-		type Offer,
-		type SortKey
-	} from './filter.js';
+	import { fromWhere, rowsWhere } from './where.js';
+	import { localFilterFields } from './local.js';
+	import { orderKeys, orderOf, orderText, parseOrder, sortable, type SortKey } from './order.js';
+	import { savedFilterCatalog, resolve, type Offer } from './catalog.js';
+	import { operatorsFor } from './operators.js';
+	import type { Node } from './node.js';
 
-	let { model, value = {}, readonly = false, variables, onChange }: FilterEditorProps = $props();
+	let { model, value = {}, readonly = false, variables, on_change }: FilterEditorProps = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
 	const catalog = $derived(savedFilterCatalog(kinds.catalog ?? {}));
@@ -96,10 +86,7 @@
 			unsupported = parsed === null;
 			notice =
 				parsed === null
-					? msg(
-							bolt,
-							'view.unsupportedSaved',
-							'This filter references a field or condition unavailable in the current model. It is kept unchanged below.'
+					? msg(bolt, 'view.unsupportedSaved'
 						)
 					: null;
 			source = key;
@@ -115,7 +102,7 @@
 		};
 		source = JSON.stringify([model, next, catalog[model]]);
 		sourceVariables = variables;
-		onChange?.(next);
+		on_change?.(next);
 	}
 	const loadOffers = () =>
 		Effect.suspend(() => {
@@ -185,10 +172,7 @@
 					Effect.map((result) => {
 						const parsed = parse(result);
 						if (parsed === null) {
-							notice = msg(
-								bolt,
-								'view.describeFailed',
-								'Could not build a filter from that description'
+							notice = msg(bolt, 'view.describeFailed'
 							);
 							return false;
 						}
@@ -220,7 +204,7 @@
 			2
 		)}{#if value.order_by !== undefined}{`\n${JSON.stringify(value.order_by, null, 2)}`}{/if}</pre>
 	{#if !readonly}<button type="button" class="text-sm underline" onclick={() => view.clear()}
-			>{msg(bolt, 'view.replaceSaved', 'Replace filter')}</button
+			>{msg(bolt, 'view.replaceSaved')}</button
 		>{/if}
 {:else}
 	<FilterPanel {view} {catalog} {model} sortable={sortFields} {variables} {readonly} expanded />

@@ -6,8 +6,6 @@ import { BoltError } from '../../protocol/errors.ts';
 import { Turns, type TurnVia } from '../services.ts';
 
 export const TURN_RUN = 'agent.turn';
-/** A running turn renews this lease; past it the queued run takes the conversation over (rule 48). */
-export const TURN_LEASE_MS = 180_000;
 /** The conversation's one queued `agent.turn` run, due at `due`: input is answered if the process that took it dies. */
 export const enqueueTurn = (chain: Chain, conversation: string, due: string, when = 'true') =>
 	enqueue(chain, {
@@ -51,7 +49,7 @@ const handlers = Layer.effect(
 					const drain = drains.get(via);
 					return drain === undefined
 						? Effect.fail(
-								BoltError.make('notReady', 'guest', `the ${via} turn handler is not registered`)
+								BoltError.make('not_ready', 'guest', `the ${via} turn handler is not registered`)
 							)
 						: drain(conversation);
 				}),

@@ -2,13 +2,14 @@
 	// A kind typed as text (int, number, decimal, text): the value changes only when the text parses, so a
 	// half-typed "1." never reaches the draft as a wrong number, and a parse problem shows under the box.
 	import { KINDS } from './registry.js';
+	import { watch } from 'runed';
 	import Input from '../primitives/input/input.svelte';
 	import { format, parse, type Value, type Kind } from './kind.js';
 
 	let {
 		kind,
 		value,
-		onChange,
+		on_change,
 		id,
 		disabled = false,
 		invalid = false,
@@ -16,7 +17,7 @@
 	}: {
 		kind: Kind;
 		value: Value;
-		onChange(next: Value): void;
+		on_change(next: Value): void;
 		id?: string;
 		disabled?: boolean;
 		invalid?: boolean;
@@ -27,7 +28,7 @@
 	let text = $state('');
 	let problem = $state<string | null>(null);
 	let last: Value | undefined;
-	$effect.pre(() => {
+	watch.pre(() => value, (value) => {
 		// an outside change (reset, refusal, another field's transform echo) replaces the text; our own echo does not
 		if (value !== last) {
 			text = shown(value);
@@ -42,7 +43,7 @@
 		problem = 'error' in p ? p.error : null;
 		if ('value' in p) {
 			last = p.value;
-			onChange(p.value);
+			on_change(p.value);
 		}
 	}
 	/** A parsed number leaves the box in its canonical spelling ('.56' becomes '0.56') once typing pauses. */

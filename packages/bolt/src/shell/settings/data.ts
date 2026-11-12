@@ -32,11 +32,11 @@ const InstanceRow = Schema.Struct({
 	name: Schema.String,
 	integration: Schema.String,
 	owner: nullableText,
-	named: Schema.Boolean,
 	envoy: nullableText,
 	active: Schema.Boolean,
 	status: Schema.Json,
-	configuration: Schema.Json
+	configuration: Schema.Json,
+	revision: Schema.Number
 });
 const EnvoyRow = Schema.Struct({
 	id: Schema.String,
@@ -75,19 +75,19 @@ export type Settings = {
 		active: boolean;
 	}[];
 	/**
-	 * Every integration instance (`sys_integration`): `named` is a connection of `+workspace.ts`, `status` the host's last
-	 * durable transition, `delivery` its last day of outbound deliveries.
+	 * Every durable runtime integration account: `status` is the host's last transition, `delivery` its last day of outbound deliveries.
 	 */
 	instances: {
 		id: string;
 		name: string;
 		integration: string;
 		owner: string | null;
-		named: boolean;
 		envoy: string | null;
 		active: boolean;
 		status: Json;
 		configuration: Json;
+		/** The row's revision as read: a delete is guarded by it. */
+		revision: number;
 		delivery: Delivery;
 	}[];
 	mcp: { name: string; url: Json; secrets?: readonly string[] }[];
@@ -136,8 +136,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 	secrets?: SecretsShape
 ) {
 	const now = yield* h.now;
-	const refusal = requireAdmin(auth);
-	if (refusal !== null) return yield* Effect.fail(refusal);
+	yield* requireAdmin(auth);
 	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read(
 		[
 			// administrators first, then staff, then external members; by name, else address (L-BOLT-516). Anonymous visitors are no members.
@@ -163,7 +162,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 			),
 			sql(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
 			sql(
-				'SELECT id, name, integration, owner, named, envoy, active, status, configuration FROM sys_integration ORDER BY name, id'
+				'SELECT id, name, integration, owner, envoy, active, status, configuration, revision::int AS revision FROM sys_integration ORDER BY name, id'
 			),
 			sql(
 				'SELECT id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
@@ -307,7 +306,7 @@ export const SettingsOp = Schema.Union([
 		input: Schema.Struct({ ...id, admin: Schema.Boolean })
 	}),
 	Schema.Struct({
-		op: Schema.Literal('assignTeam'),
+		op: Schema.Literal('assign_team'),
 		input: Schema.Struct({ ...id, team: Schema.NullOr(Schema.NonEmptyString) })
 	}),
 	Schema.Struct({
@@ -335,24 +334,23 @@ export const SettingsOp = Schema.Union([
 		op: Schema.Literal('clearSecret'),
 		input: Schema.Struct({ name: Schema.NonEmptyString })
 	}),
-	Schema.Struct({ op: Schema.Literal('setAgent'), input: AgentSettings })
+	Schema.Struct({ op: Schema.Literal('set_agent'), input: AgentSettings })
 ]);
 export type SettingsOp = typeof SettingsOp.Type;
 /** Settings dispatch uses the decoded union; identity owns authorization and database errors. */
-export const applySettings = Effect.fn('shell.settingsOp')(function* (
+export const applySettings = Effect.fn('shell.settings_op')(function* (
 	h: IdentityHost,
 	m: EngineManifest,
 	auth: Authority,
 	op: SettingsOp,
 	secrets: SecretsShape
 ) {
-	const refusal = requireAdmin(auth);
-	if (refusal !== null) return yield* Effect.fail(refusal);
+	yield* requireAdmin(auth);
 	const secret = (name: string, effect: Effect.Effect<void, EngineError>) =>
 		Effect.gen(function* () {
 			if (m.workspace.secrets?.[name] === undefined)
 				return yield* Effect.fail(
-					BoltError.make('notFound', 'decode', `'${name}' is no declared secret.`)
+					BoltError.make('not_found', 'decode', `'${name}' is no declared secret.`)
 				);
 			yield* effect;
 			return null;
@@ -374,8 +372,8 @@ export const applySettings = Effect.fn('shell.settingsOp')(function* (
 			return yield* members.deactivate(h, auth, op.input.id);
 		case 'reactivate':
 			return yield* members.reactivate(h, auth, op.input.id);
-		case 'assignTeam':
-			return yield* members.assignTeam(h, m, auth, op.input.id, op.input.team);
+		case 'assign_team':
+			return yield* members.assign_team(h, m, auth, op.input.id, op.input.team);
 		case 'setHandles':
 			return yield* members.setHandles(h, auth, op.input.id, op.input);
 		case 'issueKey':
@@ -388,7 +386,7 @@ export const applySettings = Effect.fn('shell.settingsOp')(function* (
 			return yield* secret(op.input.name, secrets.set('workspace', op.input.name, op.input.value));
 		case 'clearSecret':
 			return yield* secret(op.input.name, secrets.clear('workspace', op.input.name));
-		case 'setAgent': {
+		case 'set_agent': {
 			const unknown = Object.keys(op.input.policies).filter((p) => m.policies[p] === undefined);
 			if (unknown.length > 0)
 				return yield* Effect.fail(

@@ -2,11 +2,11 @@
 	// A create form whose fields are required or not by their exposed kinds, one rendered by its own `editor` snippet.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
-	import { provideKinds, type KindsHost } from '../src/kinds/context.js';
+	import { mount_edge } from '../src/effect/index.js';
+	import { provide_kinds, type KindsHost } from '../src/kinds/context.js';
 	import Field from '../src/form/field.svelte';
 	import Form from '../src/form/form.svelte';
-	import { provideBolt } from '../src/client/context.js';
+	import { provide_bolt } from '../src/client/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
 
 	let {
@@ -19,10 +19,10 @@
 		/** Given, the form views this stored record instead of creating one. */
 		record?: Record<string, string | boolean> & { id: string };
 	} = $props();
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(() => bolt);
-	provideKinds({
+	provide_bolt(() => bolt);
+	provide_kinds({
 		get catalog() {
 			return catalog;
 		},

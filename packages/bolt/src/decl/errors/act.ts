@@ -1,6 +1,6 @@
 import { Option, Predicate } from 'effect';
 import * as Schema from 'effect/Schema';
-import { actFailureTag } from './act-failure-tag.ts';
+import { act_failure_tag } from './act-failure-tag.ts';
 
 /**
  * A write refused (rule 32): `code` is `refused` for an authored refusal, else the engine's code (`forbidden`, `unique`,
@@ -15,18 +15,12 @@ export class ActRefused extends Schema.TaggedError<ActRefused>()('ActRefused', {
 	row: Schema.optional(Schema.Number),
 	rows: Schema.optional(Schema.Array(Schema.Number)),
 	rule: Schema.optional(Schema.String),
-	data: Schema.optional(Schema.Struct({ requestId: Schema.String }))
+	data: Schema.optional(Schema.Struct({ request_id: Schema.String }))
 }) {}
 
-/** A write that lost a race: another write changed the named fields of these records since they were read. */
+/** A write that lost a race: another write changed these records since they were read. */
 export class ActConflict extends Schema.TaggedError<ActConflict>()('ActConflict', {
-	records: Schema.Array(
-		Schema.Struct({
-			model: Schema.String,
-			id: Schema.String,
-			fields: Schema.Array(Schema.String)
-		})
-	)
+	records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String }))
 }) {
 	readonly message = 'another write changed these records since they were read';
 }
@@ -46,8 +40,8 @@ const decodeAct = Schema.decodeUnknownOption(
 );
 
 /** A write's outcome as its failure, by its `kind`: `refused`, `conflict`, `unknown`; none for any other value. */
-export const actFailure = (outcome: unknown): Option.Option<ActFailure> => {
-	const tag = actFailureTag(outcome);
+export const act_failure = (outcome: unknown): Option.Option<ActFailure> => {
+	const tag = act_failure_tag(outcome);
 	return tag === undefined || !Predicate.isObject(outcome)
 		? Option.none()
 		: decodeAct({ ...outcome, _tag: tag });

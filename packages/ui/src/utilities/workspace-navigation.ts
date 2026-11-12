@@ -1,5 +1,5 @@
 /** Report a normal workspace handoff without replacing its current screen or moving focus. */
-export function beginWorkspaceNavigation(message: string): () => void {
+export function begin_workspace_navigation(message: string): () => void {
 	const cover = document.createElement('div');
 	cover.className = 'workspace-opening access-loading-track';
 	cover.setAttribute('role', 'status');
@@ -49,7 +49,7 @@ export function beginWorkspaceNavigation(message: string): () => void {
 }
 
 /** A normal link retains its browser navigation, modifiers and cancellation; only its waiting state changes. */
-export function workspaceNavigation(node: HTMLAnchorElement, message: string) {
+export function workspace_navigation(node: HTMLAnchorElement, message: string) {
 	let stop: (() => void) | undefined;
 	const click = (event: MouseEvent) => {
 		if (
@@ -64,7 +64,7 @@ export function workspaceNavigation(node: HTMLAnchorElement, message: string) {
 		)
 			return;
 		stop?.();
-		const close = beginWorkspaceNavigation(message);
+		const close = begin_workspace_navigation(message);
 		stop = close;
 		queueMicrotask(() => {
 			if (event.defaultPrevented) close();

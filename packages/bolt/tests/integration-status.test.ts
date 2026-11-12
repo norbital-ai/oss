@@ -1,8 +1,9 @@
 // An integration instance's status (§4.5): the host's answer decoded at the trust boundary and the state wording every
 // provider's frame shares. The pairing itself is the host's; what is testable here is that the shell cannot be misled
 // by a malformed answer and never words a retry as a failure.
+import { required } from './support/required.ts';
 import { describe, expect, it } from '@effect/vitest';
-import { decodeStatus, localText, type InstanceStatus } from '../src/protocol/instance-status.ts';
+import { decode_status, local_text, type InstanceStatus } from '../src/protocol/instance-status.ts';
 import { statusLabel, driverLabel } from '../src/shell/integration/setup.ts';
 
 const t = (k: string) => k;
@@ -17,13 +18,13 @@ const status = (over: Partial<InstanceStatus>): InstanceStatus => ({
 
 describe('a host answer, decoded', () => {
 	it('keeps what the provider published and names the instance it is', () => {
-		const c = decodeStatus({
+		const c = decode_status({
 			instance: 'field_ops_whatsapp',
 			integration: 'whatsapp',
 			driver: 'whatsapp',
 			state: 'pairing',
 			stored: true,
-			pairing: { kind: 'qr', value: '2@abc,DEF+ghi==', expiresAt: '2026-09-29T12:00:00.000Z' },
+			pairing: { kind: 'qr', value: '2@abc,DEF+ghi==', expires_at: '2026-09-29T12:00:00.000Z' },
 			account: '+65 9123'
 		});
 		expect(c).toMatchObject({
@@ -33,37 +34,37 @@ describe('a host answer, decoded', () => {
 			state: 'pairing',
 			stored: true,
 			account: '+65 9123',
-			pairing: { kind: 'qr', value: '2@abc,DEF+ghi==', expiresAt: '2026-09-29T12:00:00.000Z' }
+			pairing: { kind: 'qr', value: '2@abc,DEF+ghi==', expires_at: '2026-09-29T12:00:00.000Z' }
 		});
 	});
 
 	it('refuses an answer it cannot read, rather than inventing a state', () => {
 		// an unknown state, a non-object, no instance, an unknown driver, a pairing of a shape no provider publishes
 		expect(
-			decodeStatus({ instance: 'c', driver: 'whatsapp', state: 'definitely-connected' })
+			decode_status({ instance: 'c', driver: 'whatsapp', state: 'definitely-connected' })
 		).toBeNull();
-		expect(decodeStatus('connected')).toBeNull();
-		expect(decodeStatus({ driver: 'whatsapp', state: 'connected' })).toBeNull();
-		expect(decodeStatus({ instance: 'c', driver: 'pigeon', state: 'connected' })).toBeNull();
+		expect(decode_status('connected')).toBeNull();
+		expect(decode_status({ driver: 'whatsapp', state: 'connected' })).toBeNull();
+		expect(decode_status({ instance: 'c', driver: 'pigeon', state: 'connected' })).toBeNull();
 		expect(
-			decodeStatus({
+			decode_status({
 				instance: 'c',
 				driver: 'whatsapp',
 				state: 'pairing',
 				pairing: { kind: 'telepathy', value: 'x' }
 			})?.pairing
 		).toBeNull();
-		expect(decodeStatus({})).toBeNull();
+		expect(decode_status({})).toBeNull();
 	});
 
 	it('defaults `stored` to false, so an answer that omits it never reads as paired', () => {
-		expect(decodeStatus({ instance: 'c', driver: 'telegram', state: 'connected' })?.stored).toBe(
+		expect(decode_status({ instance: 'c', driver: 'telegram', state: 'connected' })?.stored).toBe(
 			false
 		);
 	});
 
 	it('decodes localized setup text and picks it by locale, English when a locale has none', () => {
-		const c = decodeStatus({
+		const c = required(decode_status({
 			instance: 'a',
 			driver: 'whatsapp',
 			state: 'unpaired',
@@ -82,17 +83,17 @@ describe('a host answer, decoded', () => {
 				}
 			],
 			test: { to: { name: 'to', label: 'To' } }
-		})!;
-		const p = c.providers![0]!;
+		}));
+		const p = required(required(c.providers)[0]);
 		expect(p).toMatchObject({
 			name: 'Provider',
 			description: { en: 'Sync messages', zh: '同步消息' },
 			icon: 'lucide:mail'
 		});
-		expect(localText(p.label, 'zh-CN')).toBe('官方');
-		expect(localText(p.setup.steps[0]!.text, 'zh')).toBe('Paste it');
+		expect(local_text(p.label, 'zh-CN')).toBe('官方');
+		expect(local_text(required(p.setup.steps[0]).text, 'zh')).toBe('Paste it');
 		expect(p.setup.steps).toHaveLength(1);
-		expect(localText(p.setup.fields![0]!.label, 'en')).toBe('Key');
+		expect(local_text(required(required(p.setup.fields)[0]).label, 'en')).toBe('Key');
 		expect(c.test).toEqual({ to: { name: 'to', label: 'To' } });
 	});
 });

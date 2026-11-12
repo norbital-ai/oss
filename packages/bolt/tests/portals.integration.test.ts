@@ -6,7 +6,9 @@
 import { describe, expect, it, layer } from '@effect/vitest';
 import { Effect, Result, Schema } from 'effect';
 import { checkRules } from '../../bolt-cli/src/compiler/check/rules.ts';
-import { decodeProjectedManifest, type EngineManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest, type EngineManifest } from '../src/engine/manifest.ts';
+import { ShellBootAnswer } from '../src/shell/api-types.ts';
+import { Outcome, WireError } from '../src/protocol/schema.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const page = { title: 'Home' };
@@ -130,23 +132,23 @@ const source = {
 			pages: { home: page }
 		}
 	},
-	teams: { Staff: ['staff'] },
+	teams: { Staff: { policies: ['staff'] } },
 	automations: {},
-	connections: { mail: { integration: 'email' } },
 	mcp: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
-const manifest = Result.getOrThrow(decodeProjectedManifest(source));
+const manifest = Result.getOrThrow(decode_projected_manifest(source));
 
 const ORIGIN = 'https://acme.example';
 const OTHER = 'someone-else';
 type Jar = Map<string, string>;
 const cookieOf = (j: Jar) => [...j].map(([k, v]) => `${k}=${v}`).join('; ');
 const Reply = Schema.Struct({
-	value: Schema.optionalKey(Schema.Unknown),
-	outcome: Schema.optionalKey(Schema.Struct({ kind: Schema.String })),
-	answers: Schema.optionalKey(Schema.Array(Schema.Unknown))
+	value: Schema.optionalKey(Schema.Json),
+	outcome: Schema.optionalKey(Outcome),
+	answers: Schema.optionalKey(Schema.Array(Schema.Json)),
+	error: Schema.optionalKey(WireError.fields.error)
 });
 const call = (
 	j: Jar,
@@ -218,7 +220,7 @@ const act = (j: Jar, callable: string, input: unknown, kiosk?: string, address?:
 			j,
 			'POST',
 			'/__bolt/act',
-			{ callable, input, issuedAt: t.clock.now() },
+			{ acts: { [callable]: input }, issued_at: t.clock.now() },
 			kiosk,
 			address
 		);
@@ -231,17 +233,13 @@ const signIn = (address: string, j: Jar = new Map()) =>
 		).toBe(200);
 		return j;
 	});
-const BootActor = Schema.Struct({
-	actor: Schema.Struct({
-		kind: Schema.String,
-		id: Schema.optionalKey(Schema.String),
-		visitor: Schema.optionalKey(Schema.String),
-		anonymous: Schema.optionalKey(Schema.Boolean)
-	}),
-	nav: Schema.Array(Schema.Struct({ name: Schema.String }))
-});
 const bootOf = (j: Jar, kiosk?: string) =>
-	boot(j, kiosk).pipe(Effect.flatMap((r) => Schema.decodeUnknownEffect(BootActor)(r.body?.value)));
+	boot(j, kiosk).pipe(Effect.flatMap((r) => Schema.decodeUnknownEffect(ShellBootAnswer)(r.body?.value)));
+const member_boot = (j: Jar, kiosk?: string) => bootOf(j, kiosk).pipe(Effect.map((boot) => {
+	const actor = boot.actor;
+	if (actor?.kind !== 'member') throw new Error('Expected a signed-in member boot');
+	return { ...boot, actor };
+}));
 
 describe('portal declarations', () => {
 	const findings = (m: EngineManifest) =>
@@ -252,7 +250,7 @@ describe('portal declarations', () => {
 			Effect.sync(() => {
 				expect(findings(manifest)).toEqual([]);
 				const broken = Result.getOrThrow(
-					decodeProjectedManifest({
+					decode_projected_manifest({
 						...source,
 						policies: {
 							...source.policies,
@@ -284,7 +282,7 @@ layer(
 			],
 			services: [{ id: '0199a000-0000-4000-8000-0000000000c1', name: 'Wash', cost: '9' }]
 		},
-		host: { publicUrl: ORIGIN }
+		host: { public_url: ORIGIN }
 	})
 )('portals', (it) => {
 	it.effect('a no-sign-in portal: the visitor holds exactly its policies', () =>
@@ -320,7 +318,7 @@ layer(
 				expect((yield* read(out, 'bookings', 'account')).status).toBe(403);
 				// a newcomer signs up by email and becomes an external member
 				const ada = yield* signIn('ada@example.com');
-				const me = yield* bootOf(ada, 'account');
+				const me = yield* member_boot(ada, 'account');
 				expect(me.actor.kind).toBe('member');
 				expect(yield* rows(ada, 'bookings', 'account', 'own')).toEqual([]);
 				expect(
@@ -349,8 +347,11 @@ layer(
 	const VISITOR = '__Secure-bolt-visitor';
 	const anonymous = (j: Jar, kiosk = 'shop', address?: string) =>
 		call(j, 'GET', `/__bolt/shell?kiosk=${kiosk}`, undefined, undefined, address).pipe(
-			Effect.flatMap((r) => Schema.decodeUnknownEffect(BootActor)(r.body?.value)),
-			Effect.map((b) => b.actor)
+			Effect.flatMap((r) => Schema.decodeUnknownEffect(ShellBootAnswer)(r.body?.value)),
+			Effect.map((boot) => {
+				if (boot.actor?.kind !== 'visitor') throw new Error('Expected a visitor boot');
+				return boot.actor;
+			})
 		);
 	const notes = (j: Jar) =>
 		rows(j, 'orders', 'shop', 'own').pipe(Effect.map((r) => r.map((x) => x['note'])));
@@ -463,14 +464,14 @@ layer(
 		() =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
-				const existing = (yield* bootOf(yield* signIn('old@example.com'), 'shop')).actor.id;
+				const existing = (yield* member_boot(yield* signIn('old@example.com'), 'shop')).actor.id;
 				const j: Jar = new Map(),
 					ip = '198.51.100.22';
 				const me = yield* anonymous(j, 'shop', ip);
 				expect(yield* order(j, 'guest order', ip)).toBe('committed');
 				yield* signIn('old@example.com', j);
 				expect(j.has(VISITOR)).toBe(false);
-				expect((yield* bootOf(j, 'shop')).actor.id).toBe(existing);
+				expect((yield* member_boot(j, 'shop')).actor.id).toBe(existing);
 				expect(yield* owners('guest order')).toEqual([existing]);
 				expect(yield* notes(j)).toEqual(['guest order']);
 				expect(yield* user(me.visitor ?? '')).toEqual([
@@ -482,7 +483,7 @@ layer(
 				const owner = (yield* anonymous(kept)).visitor ?? '';
 				expect(yield* order(kept, 'kept')).toBe('committed');
 				t.clock.advance('31d');
-				yield* t.runDue();
+				yield* t.run_due();
 				expect(yield* user(me.visitor ?? '')).toEqual([]);
 				expect(yield* user(idle)).toEqual([]);
 				expect(yield* user(owner)).toEqual([{ kind: 'anonymous', active: true, sessions: 0 }]);

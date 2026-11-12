@@ -1,6 +1,13 @@
 // The current tab's closed page bridge: find a link/card/button or a writable text field by its visible label, and
 // fill a field with native events. No selector, script or password/file field enters this module, and an approval is
 // never a target: the person decides those themselves.
+import { fork, run } from '@norbital-ai/ui/effect';
+import { confirm_action } from '@norbital-ai/ui';
+import { Effect } from 'effect';
+import type { PageResult } from '../../protocol/schema.ts';
+import type { ShellApi } from '../api-types.ts';
+import type { ClientPageAction } from './navigation.ts';
+import { logical } from '../nav.ts';
 
 const normalized = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -32,7 +39,8 @@ export function pageFieldLabel(el: HTMLElement): string {
 		el.getAttribute('aria-label') ??
 		el.getAttribute('placeholder') ??
 		el.getAttribute('name') ??
-		(el as HTMLInputElement).labels?.[0]?.innerText ??
+		('labels' in el && el.labels instanceof NodeList && el.labels[0] instanceof HTMLElement
+			? el.labels[0].innerText : undefined) ??
 		''
 	)
 		.replace(/\s+/g, ' ')
@@ -127,8 +135,7 @@ export function pageField(label: string): HTMLElement | null {
 				!el.hasAttribute('disabled') &&
 				!el.hasAttribute('readonly') &&
 				el.getAttribute('aria-disabled') !== 'true' &&
-				(el as HTMLInputElement).type !== 'password' &&
-				(el as HTMLInputElement).type !== 'file' &&
+				(!('type' in el) || (el.type !== 'password' && el.type !== 'file')) &&
 				el.getClientRects().length > 0
 		);
 	return (
@@ -156,4 +163,162 @@ export function fillField(field: HTMLElement, value: string, submit: boolean): v
 	field.dispatchEvent(new Event('change', { bubbles: true }));
 	if (submit && (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement))
 		field.form?.requestSubmit();
+}
+
+/** The active tab's page-action dispatcher; the shell supplies current eligibility and navigation. */
+export function clientPageAction({ api, eligible, navigate, open_external, closePanel, t }: {
+	api: Pick<ShellApi['agent'], 'page_result' | 'claim_page_action'>;
+	eligible(): boolean;
+	navigate(href: string): void;
+	open_external(href: string): void;
+	closePanel(): void;
+	t(key: string): string;
+}): ClientPageAction {
+	/** The active tab's claim on a page action: the server lets exactly one tab own it, across windows and devices. */
+	const claimedBy = (output: unknown): boolean =>
+		typeof output === 'object' && output !== null && 'claimed' in output && output.claimed === true;
+
+	/** The page settles first: what it then shows reaches Norbius with the answer. */
+	const answerPage = (step: string, result: PageResult) =>
+		setTimeout(() => {
+			void run(api.page_result(step, { ...result, screen: pageScreen() })).catch(() => {});
+		}, 700);
+	return {
+		arrived(step) {
+			if (document.visibilityState === 'visible') answerPage(step, { ok: true });
+		},
+		run(action, _conversation, step) {
+			const ack = (result: PageResult) => answerPage(step, result);
+			// a hidden or ineligible tab stays silent: a second tab must never overwrite the acting tab's result
+			if (!eligible()) return;
+			const act = () => {
+				if (action.highlight !== undefined) {
+					const target = pageMark(action.highlight);
+					if (target === null) {
+						ack({ ok: false, note: `Nothing visible reads “${action.highlight}”.` });
+						return;
+					}
+					target.scrollIntoView({ block: 'center' });
+					// the panel must not sit over what it points at
+					if (pageCovered(target)) closePanel();
+					ringOn(target);
+					ack({ ok: true, note: `Highlighted “${action.highlight}”.` });
+					return;
+				}
+				if (action.scroll !== undefined) {
+					let scroller: HTMLElement | null = document.querySelector<HTMLElement>('main');
+					while (scroller !== null && scroller.scrollHeight <= scroller.clientHeight + 1)
+						scroller = scroller.parentElement;
+					(scroller ?? document.scrollingElement ?? window).scrollBy({
+						top: action.scroll,
+						behavior: 'smooth'
+					});
+					ack({ ok: true, note: `Scrolled ${action.scroll}px.` });
+					return;
+				}
+				if (action.go !== undefined) {
+					if (action.go === 'back') history.back();
+					else history.forward();
+					ack({ ok: true, note: `Went ${action.go}.` });
+					return;
+				}
+				if (action.type !== undefined) {
+					const fill = action.type;
+					const field = pageField(fill.label);
+					if (field === null) {
+						ack({ ok: false, note: `No visible field “${fill.label}”.` });
+						return;
+					}
+					const shown = fill.text.length > 120 ? `${fill.text.slice(0, 120)}…` : fill.text;
+					fork(
+						confirm_action({
+							title: t('Norbius wants to type into this page'),
+							body: t('Fill “{field}” with “{value}”? It can change your workspace.')
+								.replace('{field}', pageFieldLabel(field) || fill.label)
+								.replace('{value}', shown),
+							confirm_label: t('Fill it'),
+							destructive: true
+						}).pipe(
+							Effect.tap((yes) =>
+								Effect.sync(() => {
+									if (yes) {
+										fillField(field, fill.text, fill.submit === true);
+										ack({ ok: true, note: `Filled “${pageFieldLabel(field) || fill.label}”.` });
+									} else ack({ ok: false, note: 'The person declined.' });
+								})
+							)
+						)
+					);
+					return;
+				}
+				if (action.click === undefined) return;
+				const control = pageClickable(action.click);
+				if (control === null) {
+					ack({ ok: false, note: `No visible control “${action.click}”.` });
+					return;
+				}
+				// a board card is a record opener, not a mutation: it is the card the person sees.
+				if (control.matches('[data-board-card]')) {
+					control.click();
+					ack({ ok: true, note: `Opened “${pageLabel(control)}”.` });
+					return;
+				}
+				const link = control.closest<HTMLAnchorElement>('a[href]');
+				if (link !== null && !link.hasAttribute('download')) {
+					const next = logical(link.href);
+					if (next !== null && !next.pathname.startsWith('/__bolt/')) {
+						navigate(next.href);
+						ack({ ok: true, url: next.href });
+						return;
+					}
+					if (new URL(link.href, location.href).origin !== location.origin) {
+						fork(
+							confirm_action({
+								title: t('Norbius wants to open a link'),
+								body: t('Open “{link}” in your browser?').replace('{link}', link.href),
+								confirm_label: t('Open it')
+							}).pipe(
+								Effect.tap((yes) =>
+									Effect.sync(() => {
+										if (yes) {
+											open_external(link.href);
+											ack({ ok: true, note: 'Opened the external link.' });
+										} else ack({ ok: false, note: 'The person declined.' });
+									})
+								)
+							)
+						);
+						return;
+					}
+					ack({ ok: false, note: 'That link is outside the workspace.' });
+					return;
+				}
+				fork(
+					confirm_action({
+						title: t('Norbius wants to use this page'),
+						body: t('Press “{control}”? It can change your workspace.').replace(
+							'{control}',
+							pageLabel(control) || action.click
+						),
+						confirm_label: t('Press it'),
+						destructive: true
+					}).pipe(
+						Effect.tap((yes) =>
+							Effect.sync(() => {
+								if (yes) {
+									control.click();
+									ack({ ok: true, note: `Pressed “${pageLabel(control)}”.` });
+								} else ack({ ok: false, note: 'The person declined.' });
+							})
+						)
+					)
+				);
+			};
+			void run(api.claim_page_action(step))
+				.then((answer) => {
+					if (answer.kind === 'committed' && claimedBy(answer.output)) act();
+				})
+				.catch(() => {});
+		}
+	};
 }

@@ -6,6 +6,7 @@
 // a provider's setup is data (`SetupDescription`), its state one of a few words, its facts an `about` object.
 import type { DriverName, IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
+import type { SendReceipt } from '../conversations/status.ts';
 import type {
 	DriverEvent,
 	DriverPage,
@@ -24,8 +25,8 @@ import type {
 /** An authorization server whose OAuth client a host may provide, so a workspace need not register its own. */
 export type OAuthVendor = 'google';
 export type OAuthClient = { readonly id: string; readonly secret: string };
-/** The client `DriverOpen.oauthClient` answers: the definition's own when both its secrets are set, else the host's. */
-export const oauthClientOf = (
+/** The client `DriverOpen.oauth_client` answers: the definition's own when both its secrets are set, else the host's. */
+export const oauth_client_of = (
 	definition: Pick<IntegrationSpec, 'oauth'>,
 	secrets: Readonly<Record<string, string>> | undefined,
 	host: Partial<Record<OAuthVendor, OAuthClient>> | undefined,
@@ -55,14 +56,14 @@ export type DriverOpen = {
 	personal: boolean;
 	configuration: Json;
 	/** Frozen source import boundary; absent or null retains all history. */
-	importStart?: ImportStart | null;
+	import_start?: ImportStart | null;
 	/** This instance's own inbound URL, shown to the operator and registered with the provider where it can. */
-	webhookUrl: string;
+	webhook_url: string;
 	/**
 	 * The host's one OAuth redirect URI (`<public URL>/hooks/oauth/callback`), the same for every instance: register it
 	 * with the OAuth app once. Its callback reaches this link's `webhook` by the `state` it carries, minted by `state()`.
 	 */
-	redirectUrl: string;
+	redirect_url: string;
 	/**
 	 * A fresh, unguessable OAuth `state` that routes its callback back to this instance; the link still checks it is its
 	 * own. Asynchronous, as every call into the engine: the engine may be in another isolate.
@@ -79,7 +80,7 @@ export type DriverOpen = {
 	 * workspace's secrets), else the host's (`LinksHost.oauth`); `undefined` when neither is configured. Without a
 	 * vendor, only the definition's own.
 	 */
-	oauthClient(vendor?: OAuthVendor): Promise<OAuthClient | undefined>;
+	oauth_client(vendor?: OAuthVendor): Promise<OAuthClient | undefined>;
 	/**
 	 * The instance's credentials as they were when the link opened (`provider` is the manager's); a write is one fenced
 	 * statement retried until it lands, and rejects for good once another link opened the instance (`fenced`) — for a
@@ -108,7 +109,7 @@ export type Link = { close(): Promise<void> } & Partial<{
 		message: Json,
 		signal: AbortSignal,
 		attachments?: readonly OutboundAttachment[]
-	): Promise<{ providerId: string; presumeAfterMs?: number }>;
+	): Promise<SendReceipt>;
 	/** The chat shows this account typing to `to` (`on`), or stops showing it. */
 	typing(to: string, signal: AbortSignal, on: boolean): Promise<void>;
 	/** A request driver's op (an http `{ method, path, … }` answering `{ status, body }`, a database request its rows), or a pushing driver's `call` through this link. */
@@ -129,19 +130,19 @@ export type Link = { close(): Promise<void> } & Partial<{
 	discover(): Promise<readonly { id: string; label: string }[]>;
 	/** Renews what the provider expires (a calendar watch); the next instant to renew at, or `null`. */
 	renew(): Promise<string | null>;
-	/** Inbound HTTP on `webhookUrl` and the paths under it (a pixel), and its OAuth callback on `redirectUrl`, as the public request: the signature is checked here. */
+	/** Inbound HTTP on `webhook_url` and the paths under it (a pixel), and its OAuth callback on `redirect_url`, as the public request: the signature is checked here. */
 	webhook(request: Request): Promise<Response>;
 }>;
 /** A provider (`@norbital-ai/providers`, or a host's own), registered by the host for one driver kind. Bolt never names one. */
 export type Provider = ProviderChoice & {
 	driver: DriverName;
 	/** Required for a native boundary: validates and normalizes only this provider's declared fields. */
-	validateImportStart?(
+	validate_import_start?(
 		values: Readonly<Record<string, string>>
 	): Promise<Readonly<Record<string, string>>>;
 	/** It imports a personal account (history and own sent messages) without sending. */
 	personal?: boolean;
-	/** It signs in with this vendor's OAuth client (`DriverOpen.oauthClient`); offered only where one is configured. */
+	/** It signs in with this vendor's OAuth client (`DriverOpen.oauth_client`); offered only where one is configured. */
 	oauth?: OAuthVendor;
 	/** The provider can send a test message once connected (`POST …/test`). */
 	test?: TestSend;
@@ -149,7 +150,7 @@ export type Provider = ProviderChoice & {
 	 * `send` is idempotent by `message.id`: a repeat reaches the customer once, so a send that timed out is sent again.
 	 * Otherwise such a message stays `uncertain`, since the first send may have arrived.
 	 */
-	idempotentSends?: boolean;
+	idempotent_sends?: boolean;
 	/** Provider-owned registration text for a personal or a workspace instance of `definition`; credentials and pairing keep the same runtime. */
 	describe?(options: {
 		readonly personal: boolean;

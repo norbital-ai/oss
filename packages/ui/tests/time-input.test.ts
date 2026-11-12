@@ -40,7 +40,7 @@ test('a day picker opens on its first activation after its native mount complete
 		props: {
 			id: 'report-day',
 			value: '2026-10-15',
-			onChange: (next: Value) => changes.push(next)
+			on_change: (next: Value) => changes.push(next)
 		}
 	});
 	mounted.push(async () => {
@@ -62,7 +62,7 @@ test('a date range commits only after both dates are chosen', async () => {
 		of: 'date',
 		precision: 'day',
 		value: { from: '2026-10-01', to: '2026-10-10' },
-		onChange: (v: Value) => changes.push(v)
+		on_change: (v: Value) => changes.push(v)
 	});
 	assert.ok(target.textContent?.includes('2026'));
 	element(target, '[data-period-input]').click();
@@ -80,7 +80,7 @@ test('time values accept arrays and expose add/remove only when editable', async
 		of: 'date',
 		precision: 'month',
 		value: ['2026-10-01', '2026-11-01'],
-		onChange: (v: Value) => changes.push(v)
+		on_change: (v: Value) => changes.push(v)
 	});
 	assert.equal(target.querySelectorAll('[data-unit-picker="month"]').length, 2);
 	const remove = [...target.querySelectorAll('button')].find((b) => b.textContent === 'Remove');
@@ -93,7 +93,7 @@ test('time values accept arrays and expose add/remove only when editable', async
 		precision: 'month',
 		value: ['2026-10-01'],
 		readonly: true,
-		onChange: () => assert.fail('readonly')
+		on_change: () => assert.fail('readonly')
 	});
 	assert.ok(
 		![...readonly.querySelectorAll('button')].some((b) =>
@@ -109,7 +109,7 @@ test('range arrays preserve the other ranges when removing an entry', async () =
 		of: 'date',
 		precision: 'day',
 		value: [first, second],
-		onChange: (v: Value) => (next = v)
+		on_change: (v: Value) => (next = v)
 	});
 	assert.equal(target.querySelectorAll('[data-period-input]').length, 2);
 	const remove = [...target.querySelectorAll('button')].find((b) => b.textContent === 'Remove');
@@ -125,7 +125,7 @@ test('month ranges can move beyond the old end and commit whole units', async ()
 		of: 'date',
 		precision: 'month',
 		value: { from: '2026-10-01', to: '2026-10-31' },
-		onChange: (v: Value) => changes.push(v)
+		on_change: (v: Value) => changes.push(v)
 	});
 	element(target, '[data-period-input]').click();
 	await settle();
@@ -145,7 +145,7 @@ test('month ranges expose selected intermediate units', async () => {
 		of: 'date',
 		precision: 'month',
 		value: { from: '2026-09-01', to: '2026-11-30' },
-		onChange: () => {}
+		on_change: () => {}
 	});
 	element(target, '[data-period-input]').click();
 	await settle();

@@ -10,7 +10,8 @@ import { baileys, type WaOpen, type WaSocket } from '../baileys/index.ts';
 import { chatProvider, type ChatPlatform, type Incoming } from '../chat/adapter.ts';
 import { hmac, signed } from '../chat/verify.ts';
 import { telegram } from '../telegram/index.ts';
-import type { SimulatedChatMessage } from './server.ts';
+import { json, parse } from '../chat/http.ts';
+import { SimulatedChatMessage } from './server.ts';
 
 const Paired = Schema.Struct({ me: Schema.Struct({ id: Schema.String }) });
 const accountOf = (creds: unknown) => {
@@ -100,7 +101,7 @@ const SIMULATED = { en: 'Simulated (no real account)', zh: '模拟（无需真�
 const incoming = (message: SimulatedChatMessage): Incoming => ({
 	id: message.id,
 	thread: message.thread,
-	sentAt: message.sentAt,
+	sent_at: message.sent_at,
 	from: { handle: message.from, name: message.name },
 	text: message.text
 });
@@ -117,32 +118,34 @@ const simulatedChat = (url: string): ChatPlatform => ({
 	fields: [],
 	async connect(_settings, host) {
 		const secret = randomUUID();
-		const call = async <A>(path: string, body: object) => {
+		const call = async <A>(schema: Schema.Decoder<A>, path: string, body: object) => {
 			const response = await fetch(`${url}${path}`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body)
 			});
 			if (!response.ok) throw new Error(`the simulator refused ${path}: ${response.status}`);
-			return (await response.json()) as A;
+			return json(schema, response);
 		};
-		const { account } = await call<{ account: string }>('/chat/connect', {
-			url: host.webhookUrl,
+		const { account } = await call(Schema.Struct({ account: Schema.String }), '/chat/connect', {
+			url: host.webhook_url,
 			secret
 		});
 		return {
 			account,
 			async deliver(request, body) {
 				signed(request.headers.get('x-simulator-signature'), hmac(secret, body, 'hex'));
-				return { messages: [incoming(JSON.parse(body) as SimulatedChatMessage)] };
+				return { messages: [incoming(await parse(SimulatedChatMessage, body))] };
 			},
-			send: (thread, text) => call<{ id: string }>('/chat/send', { account, thread, text }),
+			send: (thread, text) =>
+				call(Schema.Struct({ id: Schema.String }), '/chat/send', { account, thread, text }),
 			async history(thread, since) {
 				const found = new URLSearchParams({ account, thread, since });
 				const response = await fetch(`${url}/chat/history?${found}`);
-				const { messages } = (await response.json()) as {
-					readonly messages: readonly SimulatedChatMessage[];
-				};
+				const { messages } = await json(
+					Schema.Struct({ messages: Schema.Array(SimulatedChatMessage) }),
+					response
+				);
 				return { messages: messages.map(incoming), complete: true };
 			}
 		};

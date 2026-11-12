@@ -2,7 +2,7 @@
 	// A filter row's words on one line (a chip, the author's scope): field, operator and value styled apart, truncated,
 	// the whole sentence in the tooltip.
 	import { cn } from '../primitives/utils.js';
-	import { partsText, spaced, type Part } from './filter.js';
+	import { partsText, spaced, type Part } from './text.js';
 
 	let { parts, class: className }: { parts: readonly Part[]; class?: string } = $props();
 	const ROLE = {

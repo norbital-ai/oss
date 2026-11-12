@@ -30,7 +30,7 @@ type Shop = typeof shop;
 
 it('infers set-based host query results without widening fields or scalar values', () => {
 	const db = store(shop);
-	const changed = db.updateMany(
+	const changed = db.update_many(
 		'environment',
 		[{ key: { tenant: 'acme', name: 'live' }, match: { generation: 2 }, set: { generation: 3 } }],
 		{ select: { generation: true } }
@@ -66,7 +66,7 @@ it('infers set-based host query results without widening fields or scalar values
 		by: ['source'],
 		time: 'at',
 		value: 'value',
-		stepMillis: 60_000,
+		step_millis: 60_000,
 		combine: 'max'
 	});
 	expectTypeOf<Answer<typeof window>[number]['at']>().toEqualTypeOf<number>();
@@ -75,11 +75,11 @@ it('infers set-based host query results without widening fields or scalar values
 		by: ['source'],
 		time: 'at',
 		value: 'value',
-		latestPer: ['source'],
+		latest_per: ['source'],
 		carry: {
 			from: Instant('2026-01-01T00:00:00.000Z'),
 			until: Instant('2026-01-01T00:01:00.000Z'),
-			stepMillis: 60_000
+			step_millis: 60_000
 		}
 	});
 	expectTypeOf<Answer<typeof carried>[number]['at']>().toEqualTypeOf<number>();
@@ -94,7 +94,7 @@ it('keeps literal projections and polymorphic result arms exact', () => {
 	expectTypeOf<keyof Listed<typeof selected>>().toEqualTypeOf<'id' | 'number'>();
 	expectTypeOf<Listed<typeof selected>['id']>().toEqualTypeOf<Id<'order'>>();
 	expectTypeOf<Listed<typeof selected>['number']>().toEqualTypeOf<string>();
-	const grouped = db.read('order', { firstPer: ['status'], select: { number: true }, all: true });
+	const grouped = db.read('order', { first_per: ['status'], select: { number: true }, all: true });
 	expectTypeOf<keyof Listed<typeof grouped>>().toEqualTypeOf<'id' | 'number'>();
 
 	const nested = db.read('order', {
@@ -142,6 +142,13 @@ it('refuses invalid literal fields, values, paths and relation operators', () =>
 	expectTypeOf<{ missing: { eq: 1 } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
 	expectTypeOf<{ total: { eq: 'twelve' } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
 	expectTypeOf<{ status: { eq: 'cancelled' } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
+	expectTypeOf<{ total: { eq: null } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
+	expectTypeOf<{ total: { ne: null } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
+	expectTypeOf<{ total: { in: readonly ['1.25', null] } }>().not.toMatchTypeOf<
+		Where<Shop, 'order'>
+	>();
+	expectTypeOf<{ total: { is_null: true } }>().toMatchTypeOf<Where<Shop, 'order'>>();
+	expectTypeOf<{ total: { in: readonly [] } }>().toMatchTypeOf<Where<Shop, 'order'>>();
 	expectTypeOf<{ customer: { some: {} } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
 	expectTypeOf<{ address: { floor: { gt: 'high' } } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
 	expectTypeOf<{ labels: { some: { eq: 1 } } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();

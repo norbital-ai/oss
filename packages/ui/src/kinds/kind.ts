@@ -7,14 +7,14 @@ import { Predicate } from 'effect';
 
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { Fields, FileRef, Json, Kind, KindOf, Point, Value } from '@norbital-ai/std/kind';
-import { inputSchema } from '@norbital-ai/std/kind';
+import { input_schema } from '@norbital-ai/std/kind';
 import { Schema, Result } from 'effect';
 import { KINDS, sortable } from './registry.js';
 import { label as title } from '@norbital-ai/std/label';
 export type { Fields, FileRef, Json, Kind, KindOf, Point, Value };
 
 /** The custom renderer registered for a built-in or tenant field. */
-export function fieldName(kind: Kind): string | undefined {
+export function field_name(kind: Kind): string | undefined {
 	if (kind.kind === 'custom') return kind.of;
 	if (kind.kind === 'money' || kind.kind === 'file' || kind.kind === 'point') return kind.kind;
 	if (kind.kind === 'sum' && 'money' in kind && kind.money !== undefined) return 'money';
@@ -131,7 +131,7 @@ export type EnumScope = { t?: (key: string) => string; model?: string; field?: s
  * `Pending review`). An upper-case word without a vowel or with a digit stays an acronym (`SG_CPF` → `SG CPF`), as does
  * an upper-case word inside a lower-case value (`sent_to_HR`).
  */
-export function enumText(value: string, o: EnumScope = {}): string {
+export function enum_text(value: string, o: EnumScope = {}): string {
 	if (o.t !== undefined && o.model && o.field) {
 		const key = `models.${o.model}.fields.${o.field}.${value}`,
 			s = o.t(key);
@@ -164,7 +164,7 @@ export const shownKind = (kind: Kind): Kind =>
 			}
 		: kind;
 /** A `Value` that is a plain object (not a list, not a `Decimal`): the one narrowing of the union's object arm. */
-export const valueObject = (v: unknown): v is { readonly [k: string]: Value } =>
+export const value_object = (v: unknown): v is { readonly [k: string]: Value } =>
 	typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof Decimal);
 /**
  * The kind an undeclared JSON value shows as: scalars by their type, objects field by field, and a list of objects as
@@ -175,14 +175,14 @@ export function inferKind(v: Value): Kind {
 	if (typeof v === 'number') return { kind: 'number' };
 	if (typeof v === 'boolean') return { kind: 'bool' };
 	if (Arr.isArray<Value>(v)) {
-		if (v.length === 0 || !v.every(valueObject)) return { kind: 'json', many: true };
+		if (v.length === 0 || !v.every(value_object)) return { kind: 'json', many: true };
 		const fields: { [k: string]: Kind } = {};
 		for (const item of v)
 			for (const [k, held] of Object.entries(item))
 				if (fields[k] === undefined || held !== null) fields[k] = inferKind(held);
 		return { kind: 'object', fields, many: true };
 	}
-	if (valueObject(v))
+	if (value_object(v))
 		return {
 			kind: 'object',
 			fields: Object.fromEntries(Object.entries(v).map(([k, held]) => [k, inferKind(held)]))
@@ -195,7 +195,7 @@ export const wideKind = (kind: Kind): boolean =>
 	(kind.kind === 'text' && (kind.format === 'cel' || kind.format === 'markdown'));
 
 /** Named fields of a row as one line by kind (a record's title, a subtitle): `Q-1 · Jan 2, 2026 · On hold`; empties left out. */
-export function fieldsText(
+export function fields_text(
 	fields: Fields,
 	row: { readonly [f: string]: Value | undefined },
 	names: readonly string[],
@@ -266,7 +266,7 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 		case 'time':
 			return String(v).slice(0, kind.precision === 'hour' ? 2 : 5);
 		case 'period': {
-			if (!valueObject(v)) return '';
+			if (!value_object(v)) return '';
 			const temporal: Kind =
 				kind.of === 'date'
 					? { kind: 'date', ...(kind.precision === undefined ? {} : { precision: kind.precision }) }
@@ -295,7 +295,7 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 		}
 		case 'enum':
 		case 'state':
-			return (Arr.isArray(v) ? v : [v]).map((x) => enumText(String(x), o)).join(', ');
+			return (Arr.isArray(v) ? v : [v]).map((x) => enum_text(String(x), o)).join(', ');
 		case 'text':
 			return Arr.isArray(v) ? v.join(', ') : String(v);
 		case 'point':
@@ -312,13 +312,13 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 		case 'object':
 		case 'union':
 		case 'record':
-			return valueObject(v) && typeof v['label'] === 'string' ? v['label'] : JSON.stringify(v);
+			return value_object(v) && typeof v['label'] === 'string' ? v['label'] : JSON.stringify(v);
 		default:
 			return String(v);
 	}
 }
 /** One native value as text, shared by views and kind renderers. */
-export function formatValue(value: Value | undefined, locale = 'en'): string {
+export function format_value(value: Value | undefined, locale = 'en'): string {
 	if (value === null || value === undefined) return '';
 	if (value instanceof Decimal) return decimalText(String(value), locale);
 	if (typeof value === 'boolean') return value ? '✓' : '✗';
@@ -327,10 +327,10 @@ export function formatValue(value: Value | undefined, locale = 'en'): string {
 		return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value)
 			? new Date(value).toLocaleString(locale, AT)
 			: value;
-	if (Arr.isArray<Value>(value)) return value.map((item) => formatValue(item, locale)).join(', ');
-	if (!valueObject(value)) return String(value);
+	if (Arr.isArray<Value>(value)) return value.map((item) => format_value(item, locale)).join(', ');
+	if (!value_object(value)) return String(value);
 	if ('from' in value || 'start' in value)
-		return `${formatValue(value['from'] ?? value['start'], locale)} – ${formatValue(value['to'] ?? value['end'], locale) || '…'}`;
+		return `${format_value(value['from'] ?? value['start'], locale)} – ${format_value(value['to'] ?? value['end'], locale) || '…'}`;
 	if (isPoint(value)) return `${value.lat}, ${value.lng}`;
 	if (isFile(value)) return value.name;
 	if ('model' in value && typeof value['id'] === 'string') return value['id'];
@@ -476,7 +476,7 @@ export function problem(kind: Kind, value: Value | undefined): string | null {
 				: `expected one of ${kind.values.join(', ')}`;
 		}
 		case 'period': {
-			if (!valueObject(v)) return 'expected a period';
+			if (!value_object(v)) return 'expected a period';
 			const [a, b] = kind.of === 'date' ? [v['from'], v['to']] : [v['start'], v['end']];
 			if (a === null || a === undefined) return 'needs a start';
 			// empty or inverted periods are refused (rule 68): a date period is inclusive, an instant one closed-open
@@ -511,7 +511,7 @@ export function problems(kind: Kind, value: Value | undefined, at = ''): Map<str
 		}
 		const x = v ?? null;
 		if (x === null) return;
-		const object = valueObject(x) ? x : null;
+		const object = value_object(x) ? x : null;
 		const join = (key: string | number) => (path === '' ? String(key) : `${path}.${key}`);
 		if (k.many === true && Arr.isArray<Value>(x))
 			x.forEach((item, i) => walk(item_kind(k), item, join(i)));
@@ -535,7 +535,7 @@ export function problems(kind: Kind, value: Value | undefined, at = ''): Map<str
 export function initial(kind: Kind): Value {
 	const d = kind.default;
 	if (d !== undefined) {
-		const schema = inputSchema(kind);
+		const schema = input_schema(kind);
 		if (Schema.is(schema)(d)) return d;
 		const result = Schema.decodeUnknownResult(schema)(d);
 		if (Result.isSuccess(result)) return result.success;
@@ -570,17 +570,12 @@ export function armValue(kind: Extract<KindOf<'union'>, { by: string }>, tag: st
 
 /** An arc's value (a polymorphic relation): `{ model, id }`, as the engine reads and writes it. */
 export const arcOf = (x: Value | undefined): { model: string; id: string } | null =>
-	valueObject(x) && typeof x['model'] === 'string' && typeof x['id'] === 'string'
+	value_object(x) && typeof x['model'] === 'string' && typeof x['id'] === 'string'
 		? { model: x['model'], id: x['id'] }
 		: null;
 /** State edges out of `from` (the state machine's `to`), for a badge's move menu. */
 export const edgesFrom = (kind: KindOf<'state'>, from: string): readonly string[] =>
 	kind.states[from]?.to ?? [];
-/** Whether `field` may change while the row is in `state` (the state's `edit` list); advice, the host enforces it. */
-export function editable(kind: KindOf<'state'>, state: string, field: string): boolean {
-	const e = kind.states[state]?.edit ?? 'all';
-	return e === 'all' ? true : e === 'none' ? false : e.includes(field);
-}
 /** A stable tone per state name, so the same state reads the same colour on every page. */
 const SUCCESS = /^(approv|done|complet|paid|won|closed|activ|sealed|sent|accept|confirm|deliver)/;
 export function tone(state: string): 'neutral' | 'info' | 'success' | 'warning' | 'danger' {
@@ -629,10 +624,10 @@ export function likeWhere(
 		: { or: searchable.map((f) => ({ [f]: { like: likePattern(text) } })) };
 }
 /**
- * A picker's read request root layer (`query({ [of]: pickerRead(…) })`, §3.6): the target's `search.text` when it declares one, else `like` over the label's text and
+ * A picker's read request root layer (`query({ [of]: picker_read(…) })`, §3.6): the target's `search.text` when it declares one, else `like` over the label's text and
  * patterned `seq` fields; sorted by `order_by`, else by the first sortable label field (a typed search ranks instead).
  */
-export function pickerRead(
+export function picker_read(
 	target: { readonly search?: readonly string[]; readonly fields: Fields } | undefined,
 	labels: readonly string[],
 	o: { where?: Json | undefined; order_by?: Json | undefined; limit: number },

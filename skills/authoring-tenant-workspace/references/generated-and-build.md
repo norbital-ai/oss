@@ -32,8 +32,8 @@ Contract: Bolt `seeding.md`.
 - `seed/public/**/<model>.json[.gz]` (basename is the model) plus `assets.json` and `assets/**` form the `base` pack every release carries. `seed/test/**` in the same shape is the `test` pack. `seed/+seeder.ts` names the private bank tree, read only by `bolt seed`.
 - Rows restore through the model engine with no write callback or approval; a pack's `start` automations queue with its rows. Validate executable catalogue defaults at author time.
 - Keep `seed/` synthetic; never copy bank or customer rows into it.
-- Seed member identities and business records. Never seed teams, policy assignments, approval routes, envoys, credentials or API keys. Named instances come from `connections`.
-- A pack may carry unnamed `sys_integration` rows (`id, integration, name, owner, active, configuration`). Any other key, or a connection slot id, fails the seed.
+- Seed member identities and business records. Never seed teams, policy assignments, approval routes, envoys, credentials or API keys. Accounts are runtime records; source declares no connection slots.
+- A pack may carry unpaired `sys_integration` rows (`id, integration, name, owner, active, configuration`). Any other key fails the seed. Pairing and envoy deployment happen at runtime.
 
 ## Migrations
 

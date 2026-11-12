@@ -1,5 +1,10 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
+import { it as effect_it } from '@effect/vitest';
+import { Effect, Layer, ManagedRuntime, Queue, Schema, Stream } from 'effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
+import { create_bolt, page_live_mode } from '../src/page/bolt.ts';
+import type { PageSnapshotHost } from '../src/page/index.ts';
 import { fillField, pageClickable, pageField, pageFieldLabel, pageLabel } from '../src/shell/agent/page.ts';
 
 describe('the current-tab page bridge', () => {
@@ -76,3 +81,59 @@ describe('the current-tab page bridge', () => {
 		expect(events).toEqual(['input', 'change']);
 	});
 });
+
+effect_it.effect('a fleet snapshot exposes an awaited refresh bridge and removes it on teardown', () =>
+	Effect.gen(function* () {
+		yield* Effect.acquireRelease(
+			Effect.sync(() => mount_edge(ManagedRuntime.make(Layer.empty))),
+			(dispose) => Effect.promise(dispose)
+		);
+		yield* Effect.acquireRelease(
+			Effect.sync(() => {
+				const previous = Object.getOwnPropertyDescriptor(window, 'bolt_live_mode');
+				Object.defineProperty(window, 'bolt_live_mode', { configurable: true, value: 'snapshot' });
+				return previous;
+			}),
+			(previous) => Effect.sync(() => {
+				if (previous === undefined) Reflect.deleteProperty(window, 'bolt_live_mode');
+				else Object.defineProperty(window, 'bolt_live_mode', previous);
+			})
+		);
+		expect(page_live_mode()).toBe('snapshot');
+		const host: PageSnapshotHost = window;
+		expect(host.bolt_live_mode).toBe('snapshot');
+		let count = 1;
+		const seen: number[] = [];
+		yield* Effect.scoped(Effect.gen(function* () {
+			const delivered = yield* Queue.unbounded<number>();
+			const bolt = yield* create_bolt({
+				operation_outputs: { automations: {} },
+				actor: null,
+				locale: 'en',
+				base: 'https://workspace.test',
+				fetch: async () => Response.json({ answers: [{ jobs: { count } }] }),
+				open_stream: () => { throw new Error('A fleet snapshot must not open a live stream.'); }
+			});
+			yield* bolt.observe(
+				{ read: { m: 'query', a: [{ jobs: { aggregate: { count: true } } }] } },
+				Schema.Struct({ jobs: Schema.Struct({ count: Schema.Number }) })
+			).pipe(
+				Stream.runForEach((answer) => Effect.sync(() => { seen.push(answer.jobs.count); }).pipe(Effect.andThen(Queue.offer(delivered, answer.jobs.count)))),
+				Effect.forkScoped
+			);
+			expect(yield* Queue.take(delivered)).toBe(1);
+			const bridge = host.bolt_refresh;
+			if (bridge === undefined) throw new Error('The fleet refresh bridge is missing.');
+			expect(Object.getOwnPropertyDescriptor(window, 'bolt_refresh')).toMatchObject({
+				value: bridge, configurable: true, writable: false
+			});
+			count = 2;
+			const refreshed = bridge();
+			expect(refreshed).toBeInstanceOf(Promise);
+			yield* Effect.promise(() => refreshed);
+			expect(seen).toEqual([1, 2]);
+		}));
+		expect(host.bolt_refresh).toBeUndefined();
+		expect(Object.getOwnPropertyDescriptor(window, 'bolt_refresh')).toBeUndefined();
+	})
+);

@@ -82,7 +82,7 @@
 		const state = states[requirement];
 		fork(
 			(state?.state === 'denied' && state.settings
-				? access.openSettings(requirement)
+				? access.open_settings(requirement)
 				: access.request(requirement)
 			).pipe(
 				Effect.ensuring(

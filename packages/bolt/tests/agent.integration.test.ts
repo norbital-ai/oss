@@ -1,4 +1,5 @@
-import { withEnvoys } from './support/envoys.ts';
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // Native agent turns over scoped PGlite workspaces, provider streams and a local MCP ABI fixture.
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -12,6 +13,7 @@ import {
 	Fiber,
 	FiberSet,
 	Layer,
+	Option,
 	Predicate,
 	Queue,
 	Result,
@@ -32,19 +34,24 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
 import { Ai, Convert, Files, Mcp, RunUnits, type AiEvent } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/off.ts';
-import { openAiChat } from '../src/engine/agent/openai-chat.ts';
-import { mcpPort } from '../src/node/mcp.ts';
-import { Agents, Live } from '../src/engine/services.ts';
+import { open_ai_chat } from '../src/engine/agent/openai-chat.ts';
+import { mcp_port } from '../src/node/mcp.ts';
+import { Agents, Live, RunHandlers } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { announce, type WorkspaceNote } from '../src/engine/notifications/notify.ts';
-import { AgentConversation, AgentRow, type Frame } from '../src/protocol/schema.ts';
+import { AgentConversation, AgentRow, type Frame, type ToolBehavior } from '../src/protocol/schema.ts';
 import {
 	KitInvalid,
 	TestWorkspace,
-	respondSystem1,
+	respond_system_1,
 	type Kit
 } from '../../bolt-cli/src/test/effect.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+
+const runtime_accounts = [
+	{ id: 'desk', integration: 'whatsapp' },
+	{ id: 'field', integration: 'whatsapp' },
+] as const;
 
 const manifest: EngineManifest = {
 	needs: [],
@@ -100,7 +107,7 @@ const manifest: EngineManifest = {
 		}
 	},
 	integrations: {},
-	teams: { rep: ['rep'], reader: ['reader'], narrow: ['narrow'] },
+	teams: { rep: { policies: ['rep'] }, reader: { policies: ['reader'] }, narrow: { policies: ['narrow'] } },
 	automations: {
 		quotes_mark: {
 			description: 'Mark a quote',
@@ -116,19 +123,16 @@ const manifest: EngineManifest = {
 			policies: ['rep']
 		}
 	},
-	connections: {
-		desk: { integration: 'whatsapp' },
-		field: { integration: 'whatsapp' }
-	},
+	
 	apps: {},
-	customFields: {}
+	custom_fields: {}
 };
 const salesDeskEnvoy = '0199a000-0000-7000-8000-0000000000e1';
 const fieldEnvoy = '0199a000-0000-7000-8000-0000000000e2';
 const runtimeEnvoys = [
 	{
 		id: salesDeskEnvoy,
-		connections: ['desk'],
+		accounts: ['desk'],
 		audience: 'public',
 		name: 'Norbius',
 		policies: ['reader'],
@@ -139,7 +143,7 @@ const runtimeEnvoys = [
 	},
 	{
 		id: fieldEnvoy,
-		connections: ['field'],
+		accounts: ['field'],
 		audience: 'private',
 		name: 'Norbius',
 		policies: ['reader'],
@@ -151,7 +155,7 @@ const runtimeEnvoys = [
 ] as const;
 
 const guest = program(`export default { automation: { quotes_mark: { body: function* (input, ctx) {
-	return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id;
+	return (yield* ctx.act({ 'quotes.create': [{ title: input.title }] })).records[0].id;
 } }, quotes_tally: { body: function* (input) {
 	if (input.fail) throw new Error('no tally for ' + input.title);
 	return input.title;
@@ -181,7 +185,7 @@ const cassette = (steps: readonly Step[] = []) => {
 	const requests: AiRequest[] = [];
 	const script = { steps, catalog: CATALOG, index: 0 };
 	const port: Ai['Service'] = {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Effect.sync(() => script.catalog),
@@ -205,6 +209,15 @@ const cassette = (steps: readonly Step[] = []) => {
 };
 const toolNames = (request: AiRequest | undefined) =>
 	(request?.tools ?? []).map((tool) => tool.name);
+const discovery = (request: AiRequest | undefined) => {
+	const prefix = '[Available actions for this step]\n';
+	const note = request?.messages.findLast((message) => typeof message.content === 'string' && message.content.includes(prefix));
+	const text = Schema.decodeUnknownSync(Schema.String)(note?.content);
+	return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({
+		tools: Schema.Array(Schema.String), callables: Schema.Array(Schema.String),
+		host_tools: Schema.Array(Schema.String), mcp_servers: Schema.Array(Schema.String)
+	})))(text.slice(text.indexOf(prefix) + prefix.length));
+};
 const toolResults = (request: AiRequest) =>
 	request.messages
 		.filter((message) => message.role === 'tool')
@@ -317,7 +330,7 @@ it.live('SDK close aborts an already-running MCP request without a second drain 
 			const { hq } = yield* shared;
 			const scope = yield* Scope.make();
 			yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
-			const mcp = Mcp.fromAbi(yield* mcpPort);
+			const mcp = Mcp.fromAbi(yield* mcp_port);
 			const sessions = yield* mcpSessions(manifest, {
 				secret: (name) => Effect.succeed(name === 'HQ_URL' ? hq.url : 's3cret')
 			}).pipe(Scope.provide(scope), Effect.provide(mcp));
@@ -362,8 +375,7 @@ const TENDER: Ingested = {
 };
 const build = (
 	ai: ReturnType<typeof cassette>,
-	host: Pick<AgentHostConfig, 'hostTools' | 'hostInlineMs' | 'onTurnStart' | 'events'> = {},
-	tools: EngineManifest['agent']['tools'] = {}
+	host: Pick<AgentHostConfig, 'host_tools' | 'host_inline_ms' | 'on_turn_start' | 'events'> = {}
 ) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture;
@@ -373,9 +385,9 @@ const build = (
 			DOWN_URL: 'http://127.0.0.1:1/mcp'
 		};
 		const context = yield* Layer.build(
-			withEnvoys(
-				TestWorkspace.layer({
-					manifest: { ...manifest, agent: { ...manifest.agent, tools } },
+			with_envoys(
+				with_accounts(TestWorkspace.layer({
+					manifest,
 					guest: yield* guest,
 					ports: Layer.merge(
 						ai.layer,
@@ -388,7 +400,7 @@ const build = (
 					// the host clock starts at the wall clock, as a turn drained from a live test reads it
 					now: new Date().toISOString(),
 					host: { agent: { ...host, mcp: { secret: (name) => Effect.succeed(values[name]) } } }
-				}),
+				}), runtime_accounts),
 				runtimeEnvoys
 			)
 		);
@@ -416,7 +428,7 @@ const build = (
 			});
 		const authority = (id: string) =>
 			Effect.gen(function* () {
-				const resolved = yield* new Authorities(manifest, 'test').member(t.db, id);
+				const resolved = yield* new Authorities(manifest, 'test').member(t.db, 'bootstrap', id);
 				if (resolved === null)
 					return yield* Effect.fail(new KitInvalid({ message: `fixture member ${id} is absent` }));
 				return resolved;
@@ -539,25 +551,26 @@ describe('in-app turns', () => {
 				Effect.gen(function* () {
 					const ai = cassette();
 					ai.arm([
-						use('request_publish', {}),
+						use('host', { op: 'call', tool: 'request_publish', input: {} }),
 						say('Waiting for approval.'),
 						say('Previous request rejected.')
 					]);
 					const pending = new Set<string>();
 					let starts = 0;
 					const { agent, user } = yield* build(ai, {
-						onTurnStart: async () => {
+						on_turn_start: async () => {
 							starts++;
 							const ids = [...pending];
 							pending.clear();
 							return ids;
 						},
-						hostTools: [
+						host_tools: [
 							{
 								name: 'request_publish',
 								description: 'Fixture publish request',
+		behavior: {},
 								input: { type: 'object', properties: {}, additionalProperties: false },
-								readOnly: true,
+								read_only: true,
 								call: async () => {
 									pending.add('request');
 									return { approval: { id: 'request' } };
@@ -579,7 +592,8 @@ describe('in-app turns', () => {
 					expect(pending.size).toBe(0);
 					const settled = (yield* agent.transcript(c)).find((row) => row.id === held.id);
 					if (settled === undefined) throw new Error('Missing settled tool');
-					expect(settled).toMatchObject({ content: { result: { declined: true } } });
+					// the call's own result stays as it was answered; the expiry is recorded beside it
+					expect(settled).toMatchObject({ content: { result: { approval: { id: 'request' } }, approval_result: { declined: true } } });
 					expect(transcriptRow(settled, true, false)?.tool?.approval).toBeUndefined();
 				})
 			)
@@ -588,15 +602,16 @@ describe('in-app turns', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const ai = cassette();
-				ai.arm([use('workspace_test', {}), say('Tests are running.'), say('They failed: fixing.')]);
+				ai.arm([use('host', { op: 'call', tool: 'workspace_test', input: {} }), say('Tests are running.'), say('They failed: fixing.')]);
 				const finish = yield* Deferred.make<void>();
 				const { agent, user } = yield* build(ai, {
-					hostTools: [
+					host_tools: [
 						{
 							name: 'workspace_test',
 							description: 'Fixture tests',
+		behavior: {},
 							input: { type: 'object', properties: {}, additionalProperties: false },
-							readOnly: true,
+							read_only: true,
 							call: async () => {
 								await Effect.runPromise(Deferred.await(finish));
 								return { tests: { failed: 1 }, error: '1 failing: adds up' };
@@ -654,14 +669,15 @@ describe('in-app turns', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const ai = cassette();
-				ai.arm([use('read', { path: 'a' }), use('read', { path: 'b' }), say('Done.')]);
+				ai.arm([use('host', { op: 'call', tool: 'read', input: { path: 'a' } }), use('host', { op: 'call', tool: 'read', input: { path: 'b' } }), say('Done.')]);
 				const { agent, user } = yield* build(ai, {
-					hostTools: [
+					host_tools: [
 						{
 							name: 'read',
 							description: 'Fixture read',
+		behavior: {},
 							input: { type: 'object' as const, additionalProperties: true },
-							readOnly: true,
+							read_only: true,
 							call: async () => ({ text: 'x' })
 						}
 					]
@@ -683,25 +699,26 @@ describe('in-app turns', () => {
 				const ai = cassette();
 				ai.arm(
 					Array.from({ length: 8 }, (_, n) => [
-						use('workspace_write', { path: 'tests/a.test.ts', content: `round ${n}` }),
-						use('workspace_diagnose', { only: 'tests' })
+						use('host', { op: 'call', tool: 'workspace_write', input: { path: 'tests/a.test.ts', content: `round ${n}` } }),
+						use('host', { op: 'call', tool: 'workspace_diagnose', input: { only: 'tests' } })
 					]).flat()
 				);
 				let validations = 0;
-				const fixture = (name: string, call: () => Promise<Json>) => ({
+				const fixture = (name: string, call: () => Promise<Json>, behavior: ToolBehavior = {}) => ({
 					name,
 					description: `Fixture ${name}`,
+					behavior,
 					input: { type: 'object' as const, additionalProperties: true },
-					readOnly: true,
+					read_only: true,
 					call
 				});
 				const { agent, user } = yield* build(ai, {
-					hostTools: [
+					host_tools: [
 						fixture('workspace_write', async () => ({ saved: ['tests/a.test.ts'] })),
 						fixture('workspace_diagnose', async () => ({
 							error: 'A test failed.',
 							rounds: ++validations
-						}))
+						}), { progress_check: true, diagnostics: true })
 					]
 				});
 				const ann = yield* user('red-rounds', { admin: true });
@@ -733,8 +750,9 @@ describe('in-app turns', () => {
 				const rows = yield* agent.transcript(c);
 				const last = rows.filter((row) => row.role === 'assistant').at(-1);
 				expect(last?.meta).toMatchObject({ tag: 'reply', asked: true });
-				expect(last?.text).toContain('Which pages should this workspace have?');
-				expect(last?.text).toContain('1. Dashboard + Reports');
+				expect(last?.meta).toMatchObject({ question: { question: 'Which pages should this workspace have?', options: ['Dashboard + Reports', 'Something else'] } });
+				// channels receive the question in plain words; the shell keeps its choices as controls
+				expect(last?.text).toBe('Which pages should this workspace have?\n\n1. Dashboard + Reports\n\n2. Something else');
 				expect(
 					rows.some(
 						(row) => row.role === 'tool' && JSON.stringify(row.content).includes('"name":"ask"')
@@ -749,26 +767,27 @@ describe('in-app turns', () => {
 				const ai = cassette();
 				ai.arm(
 					Array.from({ length: 8 }, (_, n) => [
-						use('workspace_write', { path: 'src/a.ts', content: `round ${n}` }),
-						use('workspace_diagnose', {})
+						use('host', { op: 'call', tool: 'workspace_write', input: { path: 'src/a.ts', content: `round ${n}` } }),
+						use('host', { op: 'call', tool: 'workspace_diagnose', input: {} })
 					]).flat()
 				);
 				let validations = 0;
-				const fixture = (name: string, call: () => Promise<Json>) => ({
+				const fixture = (name: string, call: () => Promise<Json>, behavior: ToolBehavior = {}) => ({
 					name,
 					description: `Fixture ${name}`,
+					behavior,
 					input: { type: 'object' as const, additionalProperties: true },
-					readOnly: true,
+					read_only: true,
 					call
 				});
 				const { agent, user } = yield* build(ai, {
-					hostTools: [
+					host_tools: [
 						fixture('workspace_write', async () => ({ saved: ['src/a.ts'] })),
 						// 65, 60, 55 … still red each round, each a new low
 						fixture('workspace_diagnose', async () => ({
 							failing: 65 - 5 * validations++,
 							types: { total: 65 - 5 * (validations - 1), diagnostics: [] }
-						}))
+						}), { progress_check: true, diagnostics: true })
 					]
 				});
 				const ann = yield* user('falling-rounds', { admin: true });
@@ -946,7 +965,7 @@ describe('in-app turns', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('mcp__hq__echo', { text: 'hi' }),
+						use('mcp', { op: 'call', server: 'hq', tool: 'echo', input: { text: 'hi' } }),
 						say('HQ said hi.'),
 						say('Nothing to add.')
 					]);
@@ -958,10 +977,10 @@ describe('in-app turns', () => {
 						yield* agent.post({ conversation: c, as: { member: ann }, text: 'ask hq' });
 						yield* agent.drain(c);
 						expect(toolNames(ai.requests[0])).toEqual(
-							expect.arrayContaining(['read', 'act', 'skill', 'mcp__hq__echo', 'subagent'])
+							expect.arrayContaining(['read', 'act', 'skill', 'mcp', 'subagent'])
 						);
 						// an unreachable server is unavailable, never a failed turn
-						expect(toolNames(ai.requests[0]).some((n) => n.startsWith('mcp__down__'))).toBe(false);
+						expect(discovery(ai.requests[0]).mcp_servers).not.toContain('down');
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 							content: [{ type: 'text', text: 'echo: hi' }]
 						});
@@ -973,8 +992,8 @@ describe('in-app turns', () => {
 						// a skill is procedure, not authority: every actor may load every workspace skill
 						expect(names).toContain('skill');
 						expect(ai.requests[2]?.system).toContain('- pricing: ');
-						expect(names.some((n) => n.startsWith('mcp__'))).toBe(false);
-						expect(names).not.toContain('act');
+						expect(discovery(ai.requests[2])).toMatchObject({ callables: [], mcp_servers: [] });
+						expect(discovery(ai.requests[0]).mcp_servers).toEqual(['hq']);
 						expect({ mcp: mcpServers(manifest, yield* authority(ann)) }).toMatchObject({
 							mcp: [{ name: 'hq' }]
 						});
@@ -1039,11 +1058,14 @@ describe('in-app turns', () => {
 								.filter((m) => !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE)))
 								.map((m) => JSON.stringify(m))
 						);
-						sent.slice(1).forEach((later, i) => {
-							const before = sent[i]!;
-							expect(later.length).toBeGreaterThan(before.length);
-							expect(later.slice(0, before.length)).toEqual(before);
-						});
+						let before: readonly string[] | undefined;
+						for (const later of sent) {
+							if (before !== undefined) {
+								expect(later.length).toBeGreaterThan(before.length);
+								expect(later.slice(0, before.length)).toEqual(before);
+							}
+							before = later;
+						}
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
@@ -1092,7 +1114,7 @@ describe('in-app turns', () => {
 						yield* agent.drain(c);
 						expect(ai.requests[0]!.system).toContain('Customer brief.');
 						expect(ai.requests[0]!.system).not.toContain('Staff brief.');
-						expect(toolNames(ai.requests[0])).not.toContain('subagent');
+						expect(discovery(ai.requests[0]).tools).not.toContain('subagent');
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
@@ -1105,6 +1127,74 @@ const envoyAs = (name: string, sender: string, member: string | null, dm: boolea
 });
 
 describe('envoy conversations', () => {
+	it.live('read_messages separates created time from confirmed send evidence before pairing', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fixture = yield* setup([
+					use('read_messages', { all: true }, 'delivery-evidence'),
+					say('I checked the delivery evidence.')
+				]);
+				return yield* Effect.gen(function* () {
+					const { t, agent } = fixture;
+					expect(yield* t.db.value(Schema.Null, {
+						text: 'SELECT status FROM sys_integration WHERE id = $1', params: ['desk']
+					})).toBeNull();
+					const sentBefore = t.fakes.links.sent.length;
+					const c = yield* agent.start({ envoy: salesDeskEnvoy, integration: 'desk' });
+					const now = Date.parse(t.clock.now());
+					const created = new Date(now - 300_000).toISOString();
+					const accepted = new Date(now - 240_000).toISOString();
+					const samples = [
+						{ text: 'legacy queued', status: 'queued', direction: 'outbound', confirmed: false },
+						{ text: 'legacy failed', status: 'failed', direction: 'outbound', confirmed: false },
+						{ text: 'uncertain submission', status: 'uncertain', direction: 'outbound', confirmed: false },
+						{ text: 'accepted submission', status: 'sent', direction: 'outbound', confirmed: true },
+						{ text: 'delivered submission', status: 'delivered', direction: 'outbound', confirmed: true },
+						{ text: 'replied submission', status: 'replied', direction: 'outbound', confirmed: true },
+						{ text: 'incoming without authored time', status: null, direction: 'inbound', confirmed: false }
+					] as const;
+					for (const sample of samples)
+						yield* t.db.write({
+							text: `INSERT INTO sys_message (id, conversation, integration, content, text, direction, status, created_at, sent_at, provider_id)
+								VALUES ($1, $2, 'desk', $3::jsonb, $4, $5, $6, $7::timestamptz, $8::timestamptz, $9)`,
+							params: [randomUUID(), c, { text: sample.text }, sample.text, sample.direction, sample.status,
+								created, sample.direction === 'outbound' ? accepted : null,
+								sample.status === 'queued' ? 'registered-before-submission' : null]
+						});
+					yield* agent.post({ conversation: c, as: envoyAs(salesDeskEnvoy, 'reader', null, true), text: 'Inspect delivery evidence.' });
+					yield* agent.drain(c);
+					const tool = (yield* agent.transcript(c)).find((row) =>
+						row.role === 'tool' && row.content.id === 'delivery-evidence'
+					);
+					if (tool?.role !== 'tool') throw new KitInvalid({ message: 'Missing delivery evidence tool result' });
+					const result = yield* Schema.decodeUnknownEffect(Schema.Struct({
+						messages: Schema.Array(Schema.Struct({
+							text: Schema.NullOr(Schema.String),
+							status: Schema.NullOr(Schema.String),
+							created: Schema.NullOr(Schema.String),
+							sent: Schema.NullOr(Schema.String)
+						}))
+					}))(tool.content.result);
+					for (const sample of samples) {
+						const projected = result.messages.find((row) => row.text === sample.text);
+						if (projected === undefined || projected.created === null)
+							throw new KitInvalid({ message: `Missing created evidence for ${sample.text}` });
+						expect(projected.status).toBe(sample.status);
+						expect(Date.parse(projected.created)).toBe(Date.parse(created));
+						if (sample.confirmed) {
+							if (projected.sent === null) throw new KitInvalid({ message: `Missing acceptance evidence for ${sample.text}` });
+							expect(Date.parse(projected.sent)).toBe(Date.parse(accepted));
+						} else expect(projected.sent).toBeNull();
+					}
+					expect(yield* t.db.rows(Schema.Struct({ text: Schema.String, stamped: Schema.Boolean }), {
+						text: `SELECT text, sent_at IS NOT NULL AS stamped FROM sys_message WHERE conversation = $1 AND text = 'legacy queued'`, params: [c]
+					})).toEqual([{ text: 'legacy queued', stamped: true }]);
+					expect(t.fakes.links.sent).toHaveLength(sentBefore);
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+
 	it.live(
 		'a failed turn sends a public sender the fixed reply, never the internal error, and writes an error event (§5.12)',
 		() =>
@@ -1141,6 +1231,8 @@ describe('envoy conversations', () => {
 						);
 						expect(trace.map((r) => r.event)).toEqual(['ai.request', 'ai.request.finished']);
 						expect(trace[1]?.attributes).toMatchObject({ status: 'failed', finish: null });
+						for (const event of [...trace, ...t.fakes.logs.filter((r) => r.conversation === c && r.event === 'agent.failed')])
+							expect(event).toMatchObject({ invocation: reply?.turn, turn: reply?.turn, run: null });
 						expect(JSON.stringify(trace)).not.toContain('sk-123');
 					}).pipe(Effect.provide(fixture.context));
 				})
@@ -1199,6 +1291,22 @@ describe('envoy conversations', () => {
 });
 
 describe('durable turns (rule 48)', () => {
+	it.live('a native turn refuses malformed input before any database or model work', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const fixture = yield* setup([]);
+			return yield* Effect.gen(function* () {
+				const { t, ai } = fixture;
+				const handler = yield* (yield* RunHandlers).handler('agent.turn');
+				if (Option.isNone(handler)) throw new Error('The native agent turn handler is missing.');
+				const inputs: readonly Json[] = [null, [], {}, { conversation: 1 }, { conversation: 'c', extra: true }];
+				t.count.reset();
+				for (const input of inputs)
+					expect(yield* Effect.flip(handler.value(input, { id: 'malformed-turn-input', starter: null }))).toMatchObject({ _tag: 'BoltError', code: 'invalid_input' });
+				expect(t.count.reads).toBe(0);
+				expect(t.count.writes).toBe(0);
+				expect(ai.requests).toHaveLength(0);
+			}).pipe(Effect.provide(fixture.context));
+		})));
 	it.live(
 		'a dropped chat turn reruns from its saved turns: the next model call sees the whole history',
 		() =>
@@ -1218,7 +1326,7 @@ describe('durable turns (rule 48)', () => {
 				INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES (gen_random_uuid()::text, 'agent.turn', jsonb_build_object('conversation', $1::text), $2::timestamptz, 'schedule', 0)`,
 							params: [c, t.clock.now()]
 						});
-						yield* t.runDue();
+						yield* t.run_due();
 						expect(ai.requests).toHaveLength(2);
 						const history = JSON.stringify(ai.requests[1]!.messages);
 						const at = ['first question', 'first answer', 'second question'].map((text) =>
@@ -1331,7 +1439,7 @@ describe('durable turns (rule 48)', () => {
 					expect(script.requests).toHaveLength(1);
 					yield* Scope.close(engine, Exit.void);
 					t.clock.set(new Date().toISOString());
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(ai.requests).toHaveLength(1);
 					const rows = yield* fixture.agent.transcript(c);
 					expect(rows.at(-1)).toMatchObject({ role: 'assistant', text: 'Two quotes.' });
@@ -1365,7 +1473,7 @@ describe('durable turns (rule 48)', () => {
 							INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES (gen_random_uuid()::text, 'agent.turn', jsonb_build_object('conversation', $1::text), $2::timestamptz, 'schedule', 0)`,
 							params: [c, t.clock.now()]
 						});
-						yield* t.runDue();
+						yield* t.run_due();
 						expect(ai.requests).toHaveLength(3);
 						const closing = ai.requests[2]!.messages.filter(
 							(message) => message.role === 'user'
@@ -1396,8 +1504,10 @@ describe('durable turns (rule 48)', () => {
 						text: `INSERT INTO sys_message (id, conversation, role, content, text, seq, state, mode, "as")
 							VALUES
 								('dead-question', $1, 'user', '{"text":"How many quotes?"}'::jsonb, 'How many quotes?', 1, 'consumed', 'agent', $3::jsonb),
-								('dead-call', $1, 'tool', jsonb_build_object('id', 'dead-call', 'name', 'read', 'args', $2::text), '', 2, 'running', NULL, NULL)`,
-						params: [c, JSON.stringify(input), JSON.stringify({ member: root })]
+								('dead-assistant', $1, 'assistant', jsonb_build_object('text','', 'toolCalls', jsonb_build_array(jsonb_build_object('id','dead-call','name','read','input',$2::jsonb))), '', 2, NULL, NULL, NULL),
+								('dead-call', $1, 'tool', jsonb_build_object('id', 'dead-call', 'assistant', 'dead-assistant', 'name', 'read', 'behavior', '{}'::jsonb, 'args', $4::text), '', 3, 'running', NULL, NULL)`,
+						// args is the call's input as the engine serialized it: its own text parameter, never a jsonb's rendering
+						params: [c, JSON.stringify(input), JSON.stringify({ member: root }), JSON.stringify(input)]
 					});
 					yield* t.db.write({
 						text: `UPDATE sys_conversation SET status = 'running', lease_until = $2::timestamptz - interval '1 second' WHERE id = $1`,
@@ -1411,7 +1521,7 @@ describe('durable turns (rule 48)', () => {
 					// the resumed step repeats the same call, then answers
 					const call = randomUUID();
 					fixture.ai.arm([use('read', input, call), say('Two quotes.')]);
-					yield* t.runDue();
+					yield* t.run_due();
 					const rows = yield* agent.transcript(c);
 					const tool = rows.filter((row) => row.role === 'tool');
 					// the call is on the transcript twice: the one that may have landed, and the one not run again
@@ -1529,7 +1639,7 @@ describe('an agent-started automation run is a job', () => {
 						sharedAi.arm([say('The tally is in.')]);
 						// the act stamped its run at the wall clock; the shared kit's clock started with the file
 						t.clock.set(new Date().toISOString());
-						yield* t.runDue();
+						yield* t.run_due();
 						const got = yield* replies(t, c, 2);
 						expect(got.at(-1)?.text).toBe('The tally is in.');
 						expect(ai.requests).toHaveLength(1);
@@ -1549,7 +1659,7 @@ describe('an agent-started automation run is a job', () => {
 					sharedAi.arm([say('The tally failed.')]);
 					// the act stamped its run at the wall clock; the shared kit's clock started with the file
 					t.clock.set(new Date().toISOString());
-					yield* t.runDue();
+					yield* t.run_due();
 					yield* replies(t, c, 2);
 					expect(notes(ai.requests[0])).toEqual([
 						expect.stringMatching(
@@ -1597,7 +1707,7 @@ describe('an agent-started automation run is a job', () => {
 						rows = yield* queued;
 					}
 					t.clock.set(new Date().toISOString());
-					yield* t.runDue();
+					yield* t.run_due();
 					open();
 					expect((yield* Fiber.join(turn)).reply?.text).toBe('Lamp tallied.');
 					const { job } = Schema.decodeUnknownSync(Schema.Struct({ job: Schema.String }))(
@@ -1667,7 +1777,7 @@ describe('an agent-started automation run is a job', () => {
 					}
 					// the act stamped its run at the wall clock; the shared kit's clock started with the file
 					t.clock.set(new Date().toISOString());
-					yield* t.runDue();
+					yield* t.run_due();
 					expect((yield* Fiber.join(turn)).reply?.text).toBe('Chair tallied.');
 					expect(toolResults(ai.requests[2]!).at(-1)).toMatchObject({
 						settled: { result: { status: 'succeeded', result: 'Chair' } }
@@ -1694,7 +1804,7 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 			Effect.scoped(
 				Effect.gen(function* () {
 					const ai = cassette();
-					const fixture = yield* build(ai, { hostInlineMs: 1 });
+					const fixture = yield* build(ai, { host_inline_ms: 1 });
 					return yield* Effect.gen(function* () {
 						const { agent, user, t } = fixture;
 						const root = yield* user('root', { admin: true });
@@ -1788,30 +1898,32 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 			)
 	);
 });
-describe('the tools a workspace declares', () => {
-	it.live('are appended below the transcript, and the turn goes on to answer', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const ai = cassette();
-				ai.arm([say('Done.')]);
-				const { agent, user, context } = yield* build(
-					ai,
-					{},
-					{ plans: { description: 'Reads a plan.' } }
-				);
-				return yield* Effect.gen(function* () {
-					const root = yield* user('root', { admin: true });
-					const c = yield* agent.start({ owner: root });
-					yield* agent.post({ conversation: c, as: { member: root }, text: 'A plan?' });
-					yield* agent.drain(c);
-					const [request] = ai.requests;
-					expect(request?.messages.at(-1)?.role).toBe('user');
-					expect(JSON.stringify(request?.messages)).toContain('plans(): Reads a plan.');
-					expect(JSON.stringify(request?.system)).not.toContain('Reads a plan.');
-					expect(ai.requests).toHaveLength(1);
-				}).pipe(Effect.provide(context));
-			})
-		)
+describe('the host tool catalogue', () => {
+	it.live('offers a complete native tool schema without repeating its description in the transcript', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm([use('host', { op: 'list', tool: 'plans' }), use('host', { op: 'call', tool: 'plans', input: {} }), say('Done.')]);
+			const { agent, user, context } = yield* build(ai, { host_tools: [{
+				name: 'plans', description: 'Reads a plan.', input: { type: 'object' },
+				behavior: { data: true }, read_only: true, call: async () => ({ plan: 'Current plan' })
+			}] });
+			return yield* Effect.gen(function* () {
+				const root = yield* user('root', { admin: true });
+				const c = yield* agent.start({ owner: root });
+				yield* agent.post({ conversation: c, as: { member: root }, text: 'A plan?' });
+				yield* agent.drain(c);
+				const [request, listed, called] = ai.requests;
+				if (request === undefined || listed === undefined || called === undefined) throw new Error('The native host script needs three model steps.');
+				expect(request?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'host' })]));
+				expect(request?.tools?.some((tool) => tool.name === 'plans')).toBe(false);
+				expect(discovery(request).host_tools).toContain('plans');
+				expect(toolResults(listed)).toContainEqual({ tools: [expect.objectContaining({ name: 'plans', description: 'Reads a plan.', input: { type: 'object' } })] });
+				expect(toolResults(called)).toContainEqual({ plan: 'Current plan' });
+				expect(JSON.stringify(request?.messages)).not.toContain('Reads a plan.');
+				expect(JSON.stringify(request?.system)).not.toContain('Reads a plan.');
+				expect(ai.requests).toHaveLength(3);
+			}).pipe(Effect.provide(context));
+		}))
 	);
 });
 
@@ -1940,7 +2052,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 					const c = yield* agent.start({ owner: root });
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'Quotes?' });
 					yield* agent.drain(c);
-					const last = toolResults(ai.requests[5]!).at(-1) as { error?: string };
+					const last = Schema.decodeUnknownSync(Schema.Struct({ error: Schema.String }))(toolResults(ai.requests[5]!).at(-1));
 					expect(last.error).toBeDefined();
 					expect(last.error).not.toContain('Not run');
 				}).pipe(Effect.provide(fixture.context));
@@ -1948,12 +2060,13 @@ describe('a tool answer that stops short says where the rest is', () => {
 		)
 	);
 	it('paged tools and a tool that cut its own answer: one line each naming the call that reads on', () => {
-		expect(rest('runs', 'r1', { runs: [], next: '["t","id"]' })).toEqual([
+		expect(rest('runs', 'r1', { runs: [], next: '["t","id"]' }, { argument: 'cursor' })).toEqual([
 			`runs (call 'r1'): more follows; the rest: call runs again with the same arguments and cursor: "[\\"t\\",\\"id\\"]"`
 		]);
-		expect(rest('logs', 'l1', { entries: [], next: 'e9' })[0]).toContain('cursor: "e9"');
-		expect(rest('read_file', 'o1', { text: '…', next: 1200 })[0]).toContain('offset: 1200');
-		expect(rest('browser', 'b1', { text: '…', next: 300 })[0]).toContain('from: 300');
+		expect(rest('logs', 'l1', { entries: [], next: 'e9' }, { argument: 'cursor' })[0]).toContain('cursor: "e9"');
+		expect(rest('read_file', 'o1', { text: '…', next: 1200 }, { argument: 'offset' })[0]).toContain('offset: 1200');
+		expect(rest('browser', 'b1', { text: '…', next: 300 }, { argument: 'from' }, true)[0]).toContain('call host with op: "call", tool: "browser", and the same input with from: 300');
+		expect(rest('browser', 'b1', { text: '…', next: 300 })).toEqual([]);
 		expect(
 			rest('read_file', 'f1', {
 				text: '…',
@@ -1963,7 +2076,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 		expect(rest('runs', 'r2', { runs: [] })).toEqual([]);
 		expect(rest('read', 'q1', { quotes: { rows: [] } })).toEqual([]);
 		expect(
-			rest('read', 'q2', { quotes: { rows: [{ id: 'a' }], next: 'c', total: 1284 } })[0]
+			rest('read', 'q2', { quotes: { rows: [{ id: 'a' }], next: 'c', total: 1284 } }, { argument: 'after', roots: true })[0]
 		).toContain('more "quotes" rows follow the 1 shown of 1284');
 	});
 	it('the repeat guards compare the normalised call: invisible characters, compatibility forms and key order aside', () => {
@@ -2076,6 +2189,8 @@ describe('metering (L-BOLT-432, L-BOLT-547)', () => {
 							'ai.request',
 							'ai.request.finished'
 						]);
+						for (const event of t.fakes.logs.filter((row) => row.conversation === c && (row.event.startsWith('ai.request') || row.event === 'ai.call')))
+							expect(event).toMatchObject({ invocation: reply?.turn, turn: reply?.turn, run: null });
 						const calls = yield* events(t, c);
 						const requestOf = Schema.decodeUnknownSync(Schema.Struct({ request: Schema.String }));
 						for (const [index, request] of ai.requests.entries()) {

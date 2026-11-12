@@ -83,7 +83,7 @@ const parse = (
 	return {
 		id: event.id,
 		thread,
-		sentAt: new Date(event.timestamp).toISOString(),
+		sent_at: new Date(event.timestamp).toISOString(),
 		from: { handle: from, name: event.member?.nick ?? author.username ?? null },
 		text: event.content ?? '',
 		group: thread.startsWith('group:') || thread.startsWith('channel:'),

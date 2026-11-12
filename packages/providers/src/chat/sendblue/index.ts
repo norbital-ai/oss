@@ -31,20 +31,20 @@ const GROUP = 'group:',
 	HISTORY_PAGES = 20;
 /** A person's message to `line`: an account's lines can share one webhook, and a reaction is no message. */
 const parse = (raw: Raw, line: string, fetch: ChatHost['fetch']): Incoming | null => {
-	const { message_handle: id, from_number: from, date_sent: sentAt, group_id: group } = raw;
-	if (id === undefined || from === undefined || sentAt === undefined) return null;
+	const { message_handle: id, from_number: from, date_sent: sent_at, group_id: group } = raw;
+	if (id === undefined || from === undefined || sent_at === undefined) return null;
 	if (raw.is_outbound === true || raw.is_reaction === true || raw.status !== 'RECEIVED')
 		return null;
 	if (raw.sendblue_number != null && raw.sendblue_number !== line) return null;
 	return {
 		id,
 		thread: group ? `${GROUP}${group}` : from,
-		sentAt,
+		sent_at,
 		from: { handle: from, name: null },
 		text: raw.content ?? '',
 		group: Boolean(group),
 		title: raw.group_display_name ?? null,
-		replyTo: raw.reply_to?.message_handle ?? null,
+		reply_to: raw.reply_to?.message_handle ?? null,
 		...(raw.media_url ? { files: [fileOf(raw.media_url, fetch)] } : {})
 	};
 };
@@ -83,14 +83,14 @@ export const sendblue: ChatPlatform = {
 				signed(request.headers.get('sb-signing-secret'), webhookSecret);
 				const message = parse(await parseJson(Raw, body), fromNumber, host.fetch);
 				if (message === null) return nothing();
-				const repliedTo =
+				const replied_to =
 					message.group === true &&
-					typeof message.replyTo === 'string' &&
-					(await client.messages.retrieve(message.replyTo).then(
+					typeof message.reply_to === 'string' &&
+					(await client.messages.retrieve(message.reply_to).then(
 						(found) => found.data?.is_outbound === true,
 						() => false
 					));
-				return { messages: [{ ...message, repliedTo }] };
+				return { messages: [{ ...message, replied_to }] };
 			},
 			async send(thread, text, key) {
 				const sent = await (

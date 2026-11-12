@@ -1,8 +1,8 @@
 // An API key (§5.11.2): `Authorization: Bearer nbk_<prefix>_<secret>`, stored as the secret's SHA-256. Administrators
 // read it (X-18 identity); no grant, and never the secret's hash.
-import { bind_model } from '../../../../declarations.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default bind_model('sys_api_key')({
+export default bind_system_model('sys_api_key')({
 	description: 'An API key: its name, lookup prefix and the hash of its secret.',
 	record_label: 'record.name',
 	fields: {

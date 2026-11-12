@@ -25,10 +25,10 @@ it.live(
 	'NumberTuple: a typed or pasted line fills the cells in order; one number edits its own cell',
 	() =>
 		Effect.gen(function* () {
-			const { default: NumberTuple, splitNumbers } = yield* browser(
+			const { default: NumberTuple, split_numbers } = yield* browser(
 				() => import('../src/kinds/number-tuple.svelte')
 			);
-			assert.deepEqual(splitNumbers('62.4, 18.1; x 12.9'), ['62.4', '18.1', '12.9']);
+			assert.deepEqual(split_numbers('62.4, 18.1; x 12.9'), ['62.4', '18.1', '12.9']);
 			const seen: NumberTupleValue[] = [];
 			const v = show(NumberTuple, {
 				segments: [
@@ -37,7 +37,7 @@ it.live(
 					{ name: 'b', label: 'b' }
 				],
 				value: { l: null, a: null, b: null },
-				onChange: (x: NumberTupleValue) => seen.push(x)
+				on_change: (x: NumberTupleValue) => seen.push(x)
 			});
 			const cells = v.target.querySelectorAll<HTMLInputElement>('input');
 			assert.equal(cells.length, 3);

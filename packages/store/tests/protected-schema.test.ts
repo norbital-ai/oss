@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { schema, schemaObjects, table } from '../src/index.ts';
+import { schema, schema_objects, table } from '../src/index.ts';
 
 it.effect('keeps custom hidden vector columns and their HNSW index in the Store schema', () =>
 	Effect.gen(function* () {
@@ -16,7 +16,7 @@ it.effect('keeps custom hidden vector columns and their HNSW index in the Store 
 				}
 			})
 		});
-		const objects = yield* schemaObjects(declaration);
+		const objects = yield* schema_objects(declaration);
 		expect(objects.find((object) => object.id === 'extension:vector')?.create).toEqual([
 			'create extension if not exists vector'
 		]);
@@ -37,7 +37,7 @@ it.effect('keeps custom hidden vector columns and their HNSW index in the Store 
 				search: { text: [], indexes: { stored: { field: 'embedding', dim: 2, metric: 'l2' } } }
 			})
 		});
-		expect((yield* Effect.flip(schemaObjects(mismatch))).message).toContain(
+		expect((yield* Effect.flip(schema_objects(mismatch))).message).toContain(
 			"must match its vector field 'embedding'"
 		);
 	})
