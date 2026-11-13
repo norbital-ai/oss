@@ -54,7 +54,9 @@ export default seeder({
 
 `bolt check` loads the seeder (a seeder that cannot load is a `seed/seeder` error) and decodes every public and test
 row against the manifest (`seed/decode`); `bolt seed` decodes the public rows joined with the private rows the same
-way, checks `start` names automations (`seed/start`) and that every named asset exists, before anything is sent.
+way, checks `start` names automations (`seed/start`) and that every named asset exists, then restores the rows into a
+scratch database as the host loads them, before anything is sent: a seed the host would refuse mid-restore (a row
+naming an integration instance the seed lacks) fails there and leaves the environment as it was.
 
 ## Commands
 

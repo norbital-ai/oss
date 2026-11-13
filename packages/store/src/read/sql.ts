@@ -62,10 +62,11 @@ const counted = (rows: string, total: boolean, source: string, filter: string) =
 /**
  * The byte budget, kept by the database: rows leave in their order while the row text before them fits `bytes`; the
  * first row that does not becomes `{"$over": true}` and nothing follows it. A read never brings more than its budget
- * into the caller's heap, whatever its rows weigh.
+ * into the caller's heap, whatever its rows weigh. `OFFSET 0` fences each level, so the planner never inlines a row's
+ * JSON into the size and the running sum: each row is built and measured once.
  */
 export const budgeted = (rows: string, bytes: number) =>
-	`SELECT CASE WHEN w."$b" > ${bytes} THEN '{"${OVER}": true}'::jsonb ELSE w.j END AS j FROM (SELECT v.j, v.n, sum(v.n) OVER (ROWS UNBOUNDED PRECEDING) AS "$b" FROM (SELECT u.j, octet_length(u.j::text) AS n FROM (${rows}) u) v) w WHERE w."$b" - w.n <= ${bytes}`;
+	`SELECT CASE WHEN w."$b" > ${bytes} THEN '{"${OVER}": true}'::jsonb ELSE w.j END AS j FROM (SELECT v.j, v.n, sum(v.n) OVER (ROWS UNBOUNDED PRECEDING) AS "$b" FROM (SELECT u.j, octet_length(u.j::text) AS n FROM (${rows} OFFSET 0) u OFFSET 0) v) w WHERE w."$b" - w.n <= ${bytes}`;
 
 /**
  * Who reads, as the compiler needs it: present, names are held to each model's read exposure, a read without a

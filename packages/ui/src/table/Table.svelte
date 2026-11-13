@@ -145,7 +145,7 @@
 	import { pageRead } from '../read/paging.js';
 	import { like, valueAt } from '../cell/value.js';
 	import { humanize, label, lowerLead, msg, catalogText } from '../text/messages.js';
-	import { listRequest, refOf, unref } from '../relations/select.js';
+	import { label_wave, labelled, listRequest, refOf, unref } from '../relations/select.js';
 	import { page_of, READ_LIMIT, request_json, roots_of } from '../read/request.js';
 	import {
 		rangeText,
@@ -481,11 +481,16 @@
 	);
 	// a long page (page_size 100/200, a local grid) renders a window of rows, one per layout, measured and keyed by id
 	const shownRows = $derived(view.kind === 'ready' ? view.value : []);
+	// a relation its output reads as no layer (a `sys_user` owner) labels its targets in one read after the page
+	const labelRequest = $derived(kind === 'model' ? label_wave(kinds.catalog, model, refs, shownRows) : null);
+	const labels = $derived(labelRequest === null ? null : host().query(labelRequest));
 	const presented = $derived(
 		new Map(
 			shownRows.map<[ReadRow, Values]>((row) => [
 				row,
-				typeof row['id'] === 'string' ? (unref(kinds.catalog, model, refs, [row])[0] ?? row) : row
+				typeof row['id'] === 'string'
+					? (labelled(kinds.catalog, model, refs, unref(kinds.catalog, model, refs, [row]), labels?.current)[0] ?? row)
+					: row
 			])
 		)
 	);

@@ -219,7 +219,7 @@
 	let bolt = $state.raw<ShellBolt | null>(null);
 	const pageContext = (): ShellPageContext => {
 		if (bolt === null) throw new Error('The workspace shell has not booted.');
-		return page_context(bolt, ctx.ui);
+		return page_context(bolt, ui);
 	};
 	const viewContext = () => {
 		if (bolt === null || boot === null) throw new Error('The workspace shell has not booted.');
@@ -277,9 +277,10 @@
 		if (agentRequest !== null) agentRequest = { ...agentRequest, conversation: id };
 		setSearchParam('agent', id ?? 'new', { replace: true });
 	}
-	// what every ui view takes as `ctx` (a page's context carries the same `ui`): the view client, and the generated forms'
-	// and record views' kinds: the caller's exposure from the boot, pickers paging through `bolt.read`
-	const ctx: UiContext = { ui: { get bolt() {
+	// the `ui` every page context carries (`pageContext()`, the one ctx the shell hands any view or authored component): the
+	// view client, and the generated forms' and record views' kinds: the caller's exposure from the boot, pickers paging
+	// through `bolt.read`
+	const ui: UiContext['ui'] = { get bolt() {
 		return bolt === null || boot === null ? undefined : viewContext();
 	}, kinds: {
 		get catalog() {
@@ -308,7 +309,7 @@
 		get custom_fields() {
 			return config.custom_fields;
 		}
-	} } };
+	} };
 	// the record views of every `RecordShell` under the shell, the `?record=` sheet's and a page's alike
 	// a page's AppShell publishes its identity and actions here; the hero above the page renders them
 	const identity = $state<AppIdentitySlot>({ current: null });
@@ -762,7 +763,7 @@
 	{#key bolt}
 		{#each sessions as session (session.name)}
 			{@const Session = session.component}
-			<Session ctx={bolt} />
+			<Session ctx={pageContext()} />
 		{/each}
 	{/key}
 {/if}
@@ -860,13 +861,13 @@
 			</svelte:boundary>
 		{/if}
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
-		<Inbox {ctx} {bolt} {t} on_count={(n) => (waiting = n)} />
+		<Inbox ctx={pageContext()} {bolt} {t} on_count={(n) => (waiting = n)} />
 	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
 		{#await import('./settings/Settings.svelte')}
 			{@render openingFeature()}
 		{:then { default: Settings }}
 			<Settings
-				{ctx}
+				ctx={pageContext()}
 				{configuration}
 				{api}
 				{bolt}
@@ -884,7 +885,7 @@
 			{@render openingFeature()}
 		{:then { default: CommandCenter }}
 			<CommandCenter
-				{ctx}
+				ctx={pageContext()}
 				automation={url.searchParams.get('automation')}
 				on_automation_close={() => {
 					if (url.searchParams.has('automation')) {
@@ -936,7 +937,7 @@
 	{/if}
 	{#if bolt !== null}
 		{#each records as r, i (`${i}:${r.model}/${r.id}`)}
-			<RecordSheet {ctx} model={r.model} id={r.id} on_close={() => closeRecord(i)} />
+			<RecordSheet ctx={pageContext()} model={r.model} id={r.id} on_close={() => closeRecord(i)} />
 		{/each}
 	{/if}
 {/snippet}
@@ -1225,7 +1226,7 @@
 						{@render openingFeature()}
 					{:then { default: AgentPanel }}
 						<AgentPanel
-							{ctx}
+							ctx={pageContext()}
 							{api}
 							{bolt}
 							read={(request) => viewContext().query(request)}

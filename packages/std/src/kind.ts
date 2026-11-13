@@ -309,6 +309,25 @@ export type FileRef = {
 	readonly mime: string;
 	readonly size?: number;
 };
+const FileRefSchema = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	mime: Schema.String,
+	size: Schema.optionalKey(Schema.Int)
+});
+/** A file field's input: a stored ref, or an upload's answer (`bytes`, `sha256` beside it) decoded to the same ref. */
+const FileInput = Schema.Struct({
+	...FileRefSchema.fields,
+	bytes: Schema.optionalKey(Schema.Int),
+	sha256: Schema.optionalKey(Schema.String)
+}).pipe(
+	Schema.decodeTo(FileRefSchema, {
+		decode: SchemaGetter.transform(({ bytes, sha256: _sha256, ...ref }) =>
+			bytes === undefined || ref.size !== undefined ? ref : { ...ref, size: bytes }
+		),
+		encode: SchemaGetter.transform((ref: FileRef) => ref)
+	})
+);
 /** A bounded image preview; omit the options to download the original stored file. */
 export type FileUrlOptions = { readonly preview?: 64 | 512 | 1024 };
 /** A latitude and longitude in degrees. */
@@ -618,13 +637,7 @@ export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 		traits: PLAIN
 	},
 	file: {
-		schema: () =>
-			Schema.Struct({
-				id: Schema.String,
-				name: Schema.String,
-				mime: Schema.String,
-				size: Schema.optionalKey(Schema.Int)
-			}),
+		schema: () => FileInput,
 		view: (_k, { common }) => ({ ...common, type: 'object' }),
 		label: (_k, many) => `file reference, as a message lists it${many}`,
 		traits: OPAQUE
