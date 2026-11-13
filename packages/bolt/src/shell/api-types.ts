@@ -155,6 +155,8 @@ export const Member = Schema.Struct({
 	email: NullableString,
 	phone: NullableString,
 	telegram: NullableString,
+	slack: NullableString,
+	discord: NullableString,
 	name: NullableString,
 	kind: Schema.Literals(['staff', 'external']),
 	active: Schema.Boolean,

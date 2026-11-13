@@ -12,17 +12,14 @@
 // from the platform's view of one through this same path.
 import { sql } from '../db/sql.ts';
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
-import * as EffectArray from 'effect/Array';
-import { teams } from '../manifest.ts';
 import { enqueue, next_due } from '../runs/queue.ts';
 import type { Json } from '../../decl/values.ts';
-import type { DriverEvent, ReconcilePage, RowData } from '../contracts.ts';
+import type { DriverEvent, ReconcilePage } from '../contracts.ts';
 import { Files, Logs, type LogsShape } from '../ports.ts';
 import { Port, uuid } from '../port.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { DbError } from '../errors.ts';
-import { decodeRows } from '../db/rows.ts';
 import {
 	Conversations as ConversationsTag,
 	Manifest,
@@ -36,7 +33,7 @@ import { LIMITS } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { AgentEngine } from '../agent/index.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
-import { prepareNoticeFiles } from '../notifications/notify.ts';
+import { notice_sends, prepareNoticeFiles } from '../notifications/notify.ts';
 import { NOTICE_DELIVER } from '../notifications/queue.ts';
 import { inboxPiece } from '../sync/hint.ts';
 import { canonical } from '@norbital-ai/store';
@@ -659,95 +656,13 @@ export function conversations(cfg: ConversationsConfig) {
 		return id;
 	});
 	const notify = Effect.fn('Agents.notify')(function* (input: Json) {
-		const teamPolicies = teams(m),
-			signupPolicies = m.workspace.signup?.policies ?? [];
 		const ids =
 			Predicate.isObject(input) && Array.isArray(input['ids']) ? input['ids'].map(String) : [];
 		if (ids.length === 0) return { queued: 0, skipped: 0 };
 		yield* cfg.filesReady(ids);
-		const [notes, users] = yield* db.read([
-			sql(
-				`SELECT n.id,n.recipient,n.title,n.body,n.attachments,i.integration,i.owner
-				FROM sys_notification n LEFT JOIN sys_integration i ON i.id=n.recipient->>'channel'
-				WHERE n.member IS NULL AND n.id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
-				JSON.stringify(ids)
-			),
-			sql(
-				`SELECT u.id, u.email, u.phone, u.telegram, u.team, u.signup FROM sys_user u WHERE u.active AND u.kind = 'staff'`
-			)
-		]);
-		if (notes === undefined || users === undefined)
-			return yield* Effect.fail(DbError.make('XX000', 'The database did not answer the notification delivery reads.'));
-		const notices = yield* decodeRows(Schema.Struct({
-			id: Schema.String, recipient: Schema.Json, title: Schema.String,
-			body: Schema.NullOr(Schema.String), attachments: Schema.Json,
-			integration: Schema.NullOr(Schema.String), owner: Schema.NullOr(Schema.String)
-		}), notes);
-		const recipients = yield* decodeRows(Schema.Struct({
-			id: Schema.String, email: Schema.NullOr(Schema.String), phone: Schema.NullOr(Schema.String),
-			telegram: Schema.NullOr(Schema.String), team: Schema.NullOr(Schema.String), signup: Schema.Boolean
-		}), users);
-		let queued = 0,
-			skipped = 0;
-		for (const n of notices) {
-			const to = Predicate.isObject(n['recipient']) ? n['recipient'] : {};
-			const slot = String(to['channel'] ?? ''),
-				list = EffectArray.isArray(to['recipients'])
-					? to['recipients'].filter((x) => Predicate.isObject(x))
-					: [];
-			const def = n.integration === null ? undefined : definitionOf(m, n.integration);
-			const conv = def === undefined ? undefined : conversationOf(def);
-			if (n.owner !== null || def === undefined || conv === undefined) {
-				skipped++;
-				continue;
-			}
-			const members = recipients.filter((u) =>
-				list.some(
-					(r) =>
-						r['user'] === u['id'] ||
-						(typeof r['team'] === 'string' &&
-							typeof u['team'] === 'string' &&
-							r['team'] === u['team'] &&
-							Object.hasOwn(teamPolicies, u['team'])) ||
-						(typeof r['policy'] === 'string' &&
-							((typeof u['team'] === 'string' &&
-								(teamPolicies[u['team']]?.policies ?? []).includes(r['policy'])) ||
-								(u['signup'] === true && signupPolicies.includes(r['policy']))))
-				)
-			);
-			const title = String(n['title']),
-				text = typeof n['body'] === 'string' && n['body'] !== '' ? String(n['body']) : title;
-			for (const u of members) {
-				const digits = typeof u['phone'] === 'string' ? u['phone'].replace(/\D/g, '') : '';
-				const handle =
-					conv.handle === 'email'
-						? u['email']
-						: conv.handle === 'telegram'
-							? u['telegram']
-							: conv.handle === 'phone'
-								? digits === ''
-									? null
-									: def.driver === 'whatsapp'
-										? `${digits}@s.whatsapp.net`
-										: digits
-								: null;
-				if (typeof handle !== 'string' || handle === '') {
-					skipped++;
-					continue;
-				}
-				const message: RowData =
-					conv.kind === 'email'
-						? { to: [handle], subject: title, text, attachments: n['attachments'] ?? [] }
-						: {
-								to: handle,
-								text: text === title ? title : `${title}\n${text}`,
-								attachments: n['attachments'] ?? []
-							};
-				yield* send(slot, message, { id: stableId('notice', String(n['id']), String(u['id'])) });
-				queued++;
-			}
-		}
-		return { queued, skipped };
+		const { sends, skipped } = yield* notice_sends(m, db, ids);
+		for (const s of sends) yield* send(s.slot, s.message, { id: s.id });
+		return { queued: sends.length, skipped };
 	});
 	return {
 		receive,

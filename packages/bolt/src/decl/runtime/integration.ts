@@ -74,8 +74,8 @@ export const DRIVERS = {
 	whatsapp: { read: 'deliveries', conversation: { kind: 'chat', handle: 'phone' }, personal: true },
 	email: { read: 'deliveries', conversation: { kind: 'email', handle: 'email' }, personal: true },
 	telegram: { read: 'deliveries', conversation: { kind: 'chat', handle: 'telegram' } },
-	slack: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
-	discord: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
+	slack: { read: 'deliveries', conversation: { kind: 'chat', handle: 'slack' } },
+	discord: { read: 'deliveries', conversation: { kind: 'chat', handle: 'discord' } },
 	wechat: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
 	/** Any other chat platform: the host's providers name them, and a connection picks one. */
 	chat: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
@@ -84,8 +84,8 @@ export const DRIVERS = {
 /** A driver kind: what a definition's `driver` names. */
 export type DriverName = keyof typeof DRIVERS;
 type Contract<D> = D extends DriverName ? (typeof DRIVERS)[D] : never;
-/** The member handle a conversation's senders are matched by. */
-export type HandleKind = 'phone' | 'email' | 'telegram';
+/** The member handle a conversation's senders are matched by (`sys_user.<kind>`). */
+export type HandleKind = 'phone' | 'email' | 'telegram' | 'slack' | 'discord';
 
 // ── messages ──
 /** A file a message carries: `id` names the stored file; none when the row could not store its bytes (too large, never received). */
@@ -151,7 +151,8 @@ type Outgoing<K> = K extends 'email'
 			/** Stored files only: a message row keeps references, never bytes. */
 			attachments?: readonly FileRef[];
 		}
-	: // the handle is the provider's own: a WhatsApp number or JID, a Slack channel, a Discord channel, a WeChat openid
+	: // the handle is the provider's own: a WhatsApp number or JID, a Slack channel, a Discord channel, a WeChat openid;
+		// `@<user id>` on Slack or Discord is a direct message to that person
 		K extends 'chat'
 		? Common & {
 				to: Handle | Id<'sys_conversation'>;

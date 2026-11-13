@@ -39,6 +39,7 @@ import { mayUpdate } from '../engine/write/act.ts';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { Logs } from '../engine/ports.ts';
+import { RenderGrants } from '../engine/render.ts';
 import {
 	header,
 	invalid,
@@ -368,7 +369,8 @@ const makeShell = Effect.gen(function* () {
 		turnstile = yield* Turnstile,
 		rateLimits = yield* RateLimits,
 		logs = yield* Logs,
-		audit = yield* Audit;
+		audit = yield* Audit,
+		grants = yield* RenderGrants;
 	const release = (yield* Activation).release;
 	const authorities = new Authorities(m, release, { remember: true });
 	// Run reader columns are immutable. A grant is usable only under the same release and current authority.
@@ -529,6 +531,13 @@ const makeShell = Effect.gen(function* () {
 				token: null,
 				preview: null
 			};
+		}
+		// a render grant (`ctx.convert.record`'s print) reads as its run, and only reads: GETs and the query route
+		const printing = /^Bearer (nbr_\S+)$/.exec(getHeader(request, 'authorization') ?? '')?.[1];
+		if (printing !== undefined) {
+			const reads = request.method === 'GET' || requestUrl(request).pathname === PATHS.q;
+			const a = reads ? (grants.of(printing) ?? null) : null;
+			return { authority: a, real: a, token: null, preview: null };
 		}
 		const bearer = /^Bearer (nbk_\S+)$/.exec(getHeader(request, 'authorization') ?? '')?.[1];
 		if (bearer !== undefined) {
@@ -749,6 +758,8 @@ const makeShell = Effect.gen(function* () {
 			return ready(b, auth, visitorCookie(v));
 		}
 		const auth = x.authority;
+		// a print (`?print`) boots its run's reads alone: no navigation, no member surfaces
+		if (auth?.render === true) return ready({ ...(yield* bootFor(m, ws, auth)), nav: [] }, auth);
 		// the access pages name the workspace (and its environment) to a signed-out caller
 		if (auth === null || auth.actor.kind !== 'member')
 			return rejected(

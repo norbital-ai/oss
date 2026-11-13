@@ -515,6 +515,11 @@ function facility_dispatch(ports: FacilityPorts): Facilities['Service']['dispatc
 					);
 					return answered(yield* convertWith(ports)(source, request));
 				}
+				// it reads as the caller's identity: an automation's or effect's run answers it (`render.ts`)
+				case 'convert.record':
+					return yield* Effect.fail(
+						FacilityFailure.invalid('convert.record prints only in an automation or effect')
+					);
 				case 'convert.ingest': {
 					const row = yield* rowOf(first);
 					const { for: owner, ...options } = yield* decode(

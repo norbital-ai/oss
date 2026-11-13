@@ -18,6 +18,7 @@ import {
 	GuestIsolates,
 	Images,
 	Mcp,
+	Render,
 	WebRead
 } from '../src/engine/ports.ts';
 import { node_ports } from '../src/node/ports.ts';
@@ -73,6 +74,7 @@ export const bare_host = (db: TenantDbShape, options: { readonly guest?: GuestPr
 				Docs.fromAbi(ports.docs),
 				Mcp.fromAbi(ports.mcp),
 				Convert.fromAbi(off),
+				Render.fromAbi(off),
 				Browser.fromAbi({
 					open: async (profile) => {
 						pages.set(profile, { url: 'about:blank', title: null, text: '' });

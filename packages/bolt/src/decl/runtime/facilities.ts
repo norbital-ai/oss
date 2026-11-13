@@ -168,11 +168,12 @@ export type Recipient =
 	| 'requester'
 	| 'approvers';
 /**
- * A file a notice carries: a stored file, or a document converted at delivery (after the commit, retried with the
- * delivery) from Markdown or HTML to a target `+workspace.ts` declares under `convert.to`.
+ * A file a notice carries: a stored file, bytes the run holds (`ctx.convert.record`'s answer, kept by the delivery until
+ * sent), or a document converted at delivery (after the commit, retried with the delivery) from Markdown or HTML to a
+ * target `+workspace.ts` declares under `convert.to`.
  */
 type NoticeAttachment =
-	FileRef | { document: ConvertSource; to: ConvertTarget; name: string };
+	FileRef | TransientFile | { document: ConvertSource; to: ConvertTarget; name: string };
 type ConversationDefinition = {
 	[D in IntegrationName]: [ConversationOf<D>] extends [never] ? never : D;
 }[IntegrationName];
@@ -203,6 +204,8 @@ export type Notice = {
 /**
  * `ctx.notify`: queues notices, delivered after the current write commits; a notice never delays or fails it.
  * Automations notify as their policies; model effects as the writer, after a committed write or an approval move.
+ * `messages` are the outbound messages its `via` deliveries will queue, one per recipient with a handle there, by
+ * their `sys_message` ids (queue admission, as `ctx.send`'s).
  * @example
  * update: { effect: function* (changes, ctx) {
  * 	if (ctx.event.kind !== 'write') return;
@@ -210,7 +213,9 @@ export type Notice = {
  * 		link: { model: 'projects', id: after.id }, once: `project-moved:${after.id}` })));
  * } }
  */
-export type Notify = (notice: Notice | readonly Notice[]) => Eff<void>;
+export type Notify = (
+	notice: Notice | readonly Notice[]
+) => Eff<{ readonly messages: readonly Id<'sys_message'>[] }>;
 
 // ── facility errors ──
 /** What a facility call fails with. */
@@ -247,12 +252,16 @@ export const browser_start = <A, E, R>(
 	use: (browser: Browser) => Effect.Effect<A, E, R>
 ): Effect.Effect<A, E, R> => use(ctx.browser);
 
+/** A message whose attachments may also be bytes the run holds (`ctx.convert.record`'s answer). */
+type Attaching<P> = P extends { attachments?: readonly FileRef[] }
+	? Omit<P, 'attachments'> & { attachments?: readonly (FileRef | TransientFile)[] }
+	: P;
 type SendPayload<N> =
 	IsUnion<N> extends true
 		? 'error: send names one connection'
 		: [ConversationOf<IntegrationOf<N>>] extends [never]
 			? 'error: this integration carries no conversation; send goes through a conversation instance'
-			: SendInput<IntegrationOf<N>>;
+			: Attaching<SendInput<IntegrationOf<N>>>;
 /**
  * `ctx.send` (automations and model effects; a sync `write` sends through its own instance): queues a message through
  * one conversation instance (the outbox delivers it after the run's write commits); a union-typed target is a type
@@ -369,6 +378,13 @@ export type ConvertTarget = keyof ConvertTargets;
 export type ConvertSource =
 	{ readonly markdown: string } | { readonly html: string } | { readonly layout_html: string };
 export type PreviewPdfOptions = Pick<ConvertTargets['pdf'], 'page' | 'landscape'>;
+/**
+ * A file's bytes held by the run for one delivery, never stored as a record's file: `ctx.convert.record` answers one,
+ * and `ctx.send` and `ctx.notify` attach it (the outbox keeps it until the message is sent).
+ */
+export type TransientFile = { readonly name: string; readonly mime: string; readonly bytes: Uint8Array };
+/** `ctx.convert.record`'s options: a PDF (declared under `convert.to`), named `name` (default `<model>-<id>.pdf`). */
+export type RecordRenderOptions = { to: Extract<DeclaredConvertTarget, 'pdf'>; name?: string };
 /** A declared target, its file name and options, and the owner of the stored output. */
 export type ConvertOptions = {
 	[T in DeclaredConvertTarget]: { to: T; name: string; for: FileOwner } & ConvertTargets[T];
@@ -384,6 +400,13 @@ export type ConvertOptions = {
  */
 export type Convert = {
 	document: Call<[source: ConvertSource, options: ConvertOptions], FileRef>;
+	/**
+	 * Prints a record as the shell shows it (its `+representation.svelte`, else the generated view, with print CSS), read
+	 * as this run's identity (the automation's policies, an effect's writer) in the workspace's locale and zone, by the
+	 * host's browser (optional host capability). It sees every write this run committed before it. The bytes are not
+	 * stored: attach them to `ctx.send` or `ctx.notify`. A record the identity cannot read fails `invalid`.
+	 */
+	record: Call<[model: ModelName, id: string, options: RecordRenderOptions], TransientFile>;
 	/**
 	 * Reads a stored file (optional host capability: Norbital Convert): a document as sanitised HTML, one block element per
 	 * line, and its index (audio also its diarised `transcript`); a spreadsheet, CSV or JSON as `data`. A format with no

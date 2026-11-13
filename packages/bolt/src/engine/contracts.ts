@@ -61,7 +61,9 @@ export const LIMITS = {
 		other: 20_000,
 		/** One Convert job (`ctx.convert.ingest`): a long recording's transcription takes minutes. */
 		ingest: 600_000,
-		attachment: 20_000
+		attachment: 20_000,
+		/** One record printed by the host's browser (`ctx.convert.record`): the page loads, its reads settle, it prints. */
+		render: 60_000
 	},
 	/** Read crossings per invocation: `write` for one create/update transform, reading the whole batch;
 	 * `sync` for every other synchronous body. */
@@ -98,6 +100,7 @@ export function facility_wall_ms(member: FacilityMember, crossing_wall_ms?: numb
 		case 'ai.sys_1.decide':
 		case 'ai.embed': return crossing_wall_ms ?? LIMITS.callMs.ai;
 		case 'convert.document': return crossing_wall_ms ?? LIMITS.callMs.database;
+		case 'convert.record': return LIMITS.callMs.render;
 		default: return crossing_wall_ms ?? LIMITS.callMs.other;
 	}
 }
@@ -221,6 +224,8 @@ export type Authority = {
 	 * agent's, acting for this authority's own member in `conversation`. A host holds live-changing work from it.
 	 */
 	agent?: { readonly conversation: string };
+	/** Set on a render grant's requests (`RenderGrants`): the run's reads, every write and start stripped. */
+	render?: true;
 	/**
 	 * Set inside an automation or effect run (runs/index.ts `invoke`): the run's chain depth and the holder it runs as,
 	 * which the model effects its writes queue run as, one deeper (`writerOf`).
@@ -387,6 +392,18 @@ export interface ConvertPort {
 		options: PreviewPdfOptions,
 		signal: AbortSignal
 	): Promise<Uint8Array>;
+}
+/**
+ * The host's headless browser printing one workspace page to PDF (`ctx.convert.record`). `path` is under the
+ * workspace's public URL (`/?record=<model>/<id>&print`); every request the page makes carries the header
+ * `authorization: <authorization>` (a render grant, valid only while this call runs). The host loads the page with
+ * print media, waits until `<html data-bolt-print="ready">` (or `"failed"`, a refusal: answer it as an error), and
+ * answers `page.pdf()` with its CSS page size and backgrounds. The shell answers the grant as the run's authority marked
+ * `render`, for GET requests and the query route only, with a boot that carries no navigation; any other request with it
+ * is signed out. The print route shows the record's own view alone (`RecordPrint.svelte`), in the workspace's locale.
+ */
+export interface RenderPort {
+	pdf(page: { path: string; authorization: string }, signal: AbortSignal): Promise<Uint8Array>;
 }
 /**
  * Plan 12, Norbital Convert's ingest: parsing only, never OCR; a host may add a scanned page's transcript under its image in a `data-read` section. A `document` (pdf, office, html, text, images, audio) is

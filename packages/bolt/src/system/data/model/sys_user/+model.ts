@@ -23,6 +23,10 @@ export default bind_system_model('sys_user')({
 		/** A mobile number in international form (`+6581234567`). */
 		phone: { kind: 'text', optional: true },
 		telegram: { kind: 'text', optional: true },
+		/** Their Slack member id (`U…`): notices `via` a Slack connection reach them by direct message, and an envoy knows them there. */
+		slack: { kind: 'text', optional: true },
+		/** Their Discord user id (a snowflake), as `slack` for a Discord connection. */
+		discord: { kind: 'text', optional: true },
 		revision: { kind: 'int', default: 1 },
 		created_at: { kind: 'instant', default: { var: 'now' } },
 		/** Their last visit of their own, to the hour; an impersonator or an agent is not them. */

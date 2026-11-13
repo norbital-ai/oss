@@ -44,7 +44,8 @@ A dropped run reruns from the start, up to 3 times; a retry also starts over. No
 
 - `on` is a list of cron literals `{ cron, tz?, rest? }`. Incoming webhooks belong to integration definitions and their native sync deliveries, never automation triggers.
 - Business I/O runs in automations: `ctx.request`, `ctx.send`, `ctx.web.read`, `ctx.files.*`, `ctx.geo.*`, `ctx.convert.*`, `ctx.ai.*`. Integration bodies call `ctx.request(op)` on their own instance.
-- `ctx.convert.document` and `ctx.convert.ingest` are optional. Recover `Unavailable` only when absence is allowed; other failures propagate unless the workflow recovers them.
+- `ctx.convert.record(model, id, { to: 'pdf' })` prints a record's own view as the run's identity and answers its bytes, unstored; attach them to `ctx.send` or `ctx.notify` (which answers `{ messages }`). A PDF of a record is this, never a hand-built document.
+- `ctx.convert.document`, `ctx.convert.record` and `ctx.convert.ingest` are optional. Recover `Unavailable` only when absence is allowed; other failures propagate unless the workflow recovers them.
 - Discover each member's input on `AutomationCtx` and `Ai`.
 
 ## Browser work

@@ -259,6 +259,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				},
 				convert: {
 					document: facility('convert.document'),
+					record: facility('convert.record'),
 					ingest: facility('convert.ingest')
 				},
 				browser: {

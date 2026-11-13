@@ -14,6 +14,7 @@ export type {
 	ReconcilePage,
 	OutboundAttachment,
 	TransportPort,
+	RenderPort,
 	LogRow,
 	LogQuery,
 	TcpSocket
@@ -29,7 +30,7 @@ export {
 } from '../protocol/audit.ts';
 export { DbError, Fenced, ManifestInvalid } from './errors.ts';
 export { BoltError, CODE } from '../protocol/errors.ts';
-export { Files, Convert, WebRead, Geo, Transport, Ai, Http } from './ports.ts';
+export { Files, Convert, Render, WebRead, Geo, Transport, Ai, Http } from './ports.ts';
 export type { PushMessage } from './ports.ts';
 export { Port, type PortFailure } from './port.ts';
 export { TenantDb, type TenantDbShape } from './db/tenant-db.ts';

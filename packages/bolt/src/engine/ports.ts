@@ -49,6 +49,7 @@ import type {
 	BrowserTarget,
 	BrowserWorkspaceTarget,
 	ConvertPort,
+	RenderPort,
 	DeadlinesPort,
 	Downloaded,
 	DriverPage,
@@ -199,6 +200,25 @@ export class Convert extends Context.Service<
 							)
 					})
 		});
+	}
+}
+
+// ── render ──
+/** The host's browser printing a workspace page (`RenderPort`); a host that turns it off fails each call as unavailable. */
+export class Render extends Context.Service<
+	Render,
+	{
+		readonly pdf: (page: {
+			readonly path: string;
+			readonly authorization: string;
+		}) => Effect.Effect<Uint8Array, PortFailure>;
+	}
+>()('bolt/Render') {
+	static fromAbi(port: RenderPort | Off): Layer.Layer<Render> {
+		return Layer.succeed(
+			Render,
+			is_off(port) ? { pdf: () => turnedOff('render') } : { pdf: lift('render', port.pdf.bind(port)) }
+		);
 	}
 }
 

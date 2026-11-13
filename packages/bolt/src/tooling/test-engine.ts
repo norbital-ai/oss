@@ -83,6 +83,7 @@ import {
 	Ai,
 	Browser,
 	Convert,
+	Render,
 	DeadlinePort,
 	Docs,
 	Drivers,
@@ -309,6 +310,7 @@ type TestPorts =
 	| Images
 	| Mcp
 	| Convert
+	| Render
 	| WebRead
 	| Browser
 	| Geo
@@ -427,6 +429,7 @@ type WorkspaceServices =
 	| BoltHost
 	| Files
 	| Convert
+	| Render
 	| WebRead
 	| Browser
 	| Geo
@@ -1175,6 +1178,7 @@ export const test_engine = <P extends TestPorts = never>(
 				Docs.fromAbi(native.docs),
 				Mcp.fromAbi(native.mcp),
 				Convert.fromAbi(off),
+				Render.fromAbi(off),
 				WebRead.fromAbi(off),
 				Browser.fromAbi(off),
 				Geo.fromAbi(off),

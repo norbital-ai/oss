@@ -6,6 +6,7 @@ import type {
 	AiPort,
 	BrowserPort,
 	ConvertPort,
+	RenderPort,
 	EmbeddingsPort,
 	GeocoderPort,
 	FilesPort,
@@ -183,6 +184,8 @@ export type Serving = {
 	readonly providers?: readonly Provider[];
 	readonly oauth?: LinkHost['oauth'];
 	readonly convert?: ConvertPort;
+	/** A headless browser printing a record's print route to PDF (`ctx.convert.record`). */
+	readonly render?: RenderPort;
 	/** Norbital Convert's `document_ingester`: a file as sanitised HTML and its images, for the agent and `ctx.convert.ingest`. */
 	readonly ingest?: AgentPorts['ingest'];
 	/** Capabilities the host supplies to agent turns and `ctx.ai.sys_2.infer` (`web_search`); a policy still has to name each. */

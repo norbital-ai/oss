@@ -32,6 +32,7 @@ import { nominatim, openAi, s3Files } from './ports.ts';
 import { apns, push } from './push.ts';
 import { webSearch } from './search.ts';
 import { publicWeb } from './web.ts';
+import { chromium_render } from './render.ts';
 
 /** One optional facility's selection: the provider name, its endpoint and credential. */
 export type Provider = { provider: string; endpoint?: string; credential?: string };
@@ -75,6 +76,8 @@ export type HostSettings = {
 	turnstile: { site_key: string; secret: string } | null;
 	/** `production`, `staging`, `development`, …: every other than production shows the shell's badge. */
 	environment: string | null;
+	/** `ctx.convert.record`'s browser: headless Chromium launched here (`cdp: null`) or the one at a CDP endpoint; `null`, off. */
+	render: { cdp: string | null } | null;
 };
 
 // the settings carry every AI endpoint: none is guessed
@@ -288,6 +291,8 @@ export const host: (
 			: yield* nominatim(config.providers.GEO.endpoint);
 	const web = config.providers.WEB === undefined ? undefined : publicWeb();
 	const search = config.providers.SEARCH;
+	const render = config.render === null ? undefined : chromium_render(config.public_url, config.render.cdp);
+	if (render !== undefined) yield* Effect.addFinalizer(() => Effect.promise(() => render.close()));
 	const serving: Serving = {
 		providers: yield* to_drivers(drivers(), run),
 		...(config.google_oauth === null ? {} : { oauth: { google: config.google_oauth } }),
@@ -315,6 +320,7 @@ export const host: (
 		...(web === undefined
 			? {}
 			: { web: { read: (url, signal, o) => run(web.read(url, o), { signal }) } }),
+		...(render === undefined ? {} : { render: { pdf: render.pdf } }),
 		...(search?.endpoint === undefined || search.credential === undefined
 			? {}
 			: {

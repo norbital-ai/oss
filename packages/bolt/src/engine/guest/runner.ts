@@ -122,11 +122,16 @@ const lower = (
 					operation: args.length >= 2 ? (args[1] ?? null) : (args[0] ?? null)
 				};
 			case 'notify':
-				return { _tag: 'notify', notices: args[0] ?? null };
+				return { _tag: 'notify', notices: args[0] ?? null, ...(bins.length === 0 ? {} : { bins }) };
 			// `ctx.send(to, message)` in an automation; a sync body's `ctx.send(message)` goes through its instance (`to` null)
 			case 'send':
 				return args.length >= 2
-					? { _tag: 'send', to: yield* decode(Schema.String, args[0]), message: args[1] ?? null }
+					? {
+							_tag: 'send',
+							to: yield* decode(Schema.String, args[0]),
+							message: args[1] ?? null,
+							...(bins.length === 0 ? {} : { bins })
+						}
 					: { _tag: 'send', to: null, message: args[0] ?? null };
 			case 'progress':
 				return { _tag: 'progress', progress: args[0] ?? null };

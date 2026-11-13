@@ -182,6 +182,10 @@ describe('the inbound decode and the outbound check', () => {
 				});
 				expect(conversationOf({ description: 'x', driver: 'slack' })).toEqual({
 					kind: 'chat',
+					handle: 'slack'
+				});
+				expect(conversationOf({ description: 'x', driver: 'wechat' })).toEqual({
+					kind: 'chat',
 					handle: null
 				});
 				expect(conversationOf({ description: 'x', driver: 'email' })).toEqual({

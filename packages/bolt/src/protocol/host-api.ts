@@ -72,6 +72,7 @@ import type {
 	Lock,
 	McpPort,
 	DocsPort,
+	RenderPort,
 	Rows,
 	Sql,
 	TcpPort,
@@ -100,6 +101,7 @@ import {
 	Docs,
 	Keys,
 	Mcp,
+	Render,
 	WebRead,
 	Browser,
 	RunUnits
@@ -156,7 +158,7 @@ export { MigrationImpact } from './migration-impact.ts';
 import { IntegrationManager, integration_routes } from './integrations.ts';
 
 /** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
-export const HOST_API_VERSION = 18;
+export const HOST_API_VERSION = 19;
 export type { CellEnd, Kernel } from './cell.ts';
 
 // ── failures (D10a) ──
@@ -253,6 +255,8 @@ export type HostPorts = {
 	/** The confined bundler for the agent's file runs; `off`, `run_js` runs inline code only. */
 	readonly bundler: BundlerPort | Off;
 	readonly convert: ConvertPort | Off;
+	/** The host's headless browser printing a record's print route (`ctx.convert.record`); `off`, that call is unavailable. */
+	readonly render: RenderPort | Off;
 	readonly geocoder: GeocoderPort | Off;
 	readonly web: WebReadPort | Off;
 	readonly browser: BrowserPort | Off;
@@ -619,6 +623,7 @@ const portLayers = ({ units, ...ports }: HostPorts) =>
 		facility_layers(ports.facilities),
 		GuestIsolates.fromAbi(ports.guests),
 		Convert.fromAbi(ports.convert, ports.agent.ingest),
+		Render.fromAbi(ports.render),
 		WebRead.fromAbi(ports.web),
 		Browser.fromAbi(ports.browser),
 		Geo.fromAbi(ports.geocoder),

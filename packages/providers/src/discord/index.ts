@@ -65,6 +65,7 @@ const Payload = Schema.Struct({
 const ObjectBody = Schema.Record(Schema.String, Schema.Json);
 const Me = Schema.Struct({ id: Schema.NonEmptyString, username: Schema.String });
 const Sent = Schema.Struct({ id: Schema.NonEmptyString });
+const Opened = Schema.Struct({ id: Schema.NonEmptyString });
 const Message = Schema.Struct({
 	id: Schema.optionalKey(Schema.String),
 	to: Schema.NonEmptyString,
@@ -428,11 +429,15 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 							files.forEach((file, index) => form.set(`files[${index}]`, blobOf(file), file.name));
 							body = form;
 						}
+						// `@<user id>`: a direct message, in the DM channel Discord opens (or reopens) with that person
+						const channel = m.to.startsWith('@')
+							? (yield* rest(Opened, 'POST', '/users/@me/channels', { recipient_id: m.to.slice(1) })).id
+							: m.to;
 						return {
 							provider_id: (yield* rest(
 								Sent,
 								'POST',
-								`/channels/${encodeURIComponent(m.to)}/messages`,
+								`/channels/${encodeURIComponent(channel)}/messages`,
 								body
 							)).id
 						};
@@ -477,7 +482,7 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 					),
 				// the typing indicator lapses by itself (10 s) or with the next message: nothing stops it early
 				typing: (to: string, on: boolean) =>
-					cred === null || !on
+					cred === null || !on || to.startsWith('@')
 						? Effect.void
 						: rest(Schema.Unknown, 'POST', `/channels/${encodeURIComponent(to)}/typing`).pipe(
 								Effect.asVoid

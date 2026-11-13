@@ -86,6 +86,8 @@
 			email: u.email ?? '',
 			phone: u.phone ?? '',
 			telegram: u.telegram ?? '',
+			slack: u.slack ?? '',
+			discord: u.discord ?? '',
 			kind: u.kind === 'external' ? t('External') : t('Staff'),
 			external: u.kind === 'external',
 			team: teamName(u.team),
@@ -126,6 +128,8 @@
 		active: boolean;
 		phone: string | null;
 		telegram: string;
+		slack: string;
+		discord: string;
 	};
 	let draft = $state<Draft | null>(null);
 	let saving = $state(false);
@@ -137,14 +141,19 @@
 				? [{ name: d.active ? 'reactivate' : 'deactivate', input: { id: u.id } }]
 				: []),
 			// what a private envoy knows them by; a key left out is unchanged
-			...((d.phone ?? '') !== u.phone || d.telegram !== u.telegram
+			...((d.phone ?? '') !== u.phone ||
+			d.telegram !== u.telegram ||
+			d.slack !== u.slack ||
+			d.discord !== u.discord
 				? [
 						{
 							name: 'setHandles',
 							input: {
 								id: u.id,
 								...((d.phone ?? '') !== u.phone ? { phone: d.phone } : {}),
-								...(d.telegram !== u.telegram ? { telegram: d.telegram } : {})
+								...(d.telegram !== u.telegram ? { telegram: d.telegram } : {}),
+								...(d.slack !== u.slack ? { slack: d.slack } : {}),
+								...(d.discord !== u.discord ? { discord: d.discord } : {})
 							}
 						}
 					]
@@ -413,7 +422,9 @@
 								admin: u.admin,
 								active: u.active,
 								phone: u.phone || null,
-								telegram: u.telegram
+								telegram: u.telegram,
+								slack: u.slack,
+								discord: u.discord
 							})}>{t('Edit')}</Button
 					>
 				{:else}
@@ -453,7 +464,9 @@
 								{ label: t('Team'), value: u.team },
 								{ label: t('Admin'), value: u.admin ? t('Yes') : t('No') },
 								{ label: t('Active'), value: u.active ? t('Yes') : t('No') },
-								{ label: t('Telegram'), value: u.telegram }
+								{ label: t('Telegram'), value: u.telegram },
+								{ label: t('Slack'), value: u.slack },
+								{ label: t('Discord'), value: u.discord }
 							]
 						: [])
 				]}
@@ -497,6 +510,24 @@
 								placeholder="@handle"
 								aria-label={t('Telegram')}
 								bind:value={draft.telegram}
+							/></label
+						>
+						<label class="flex flex-col gap-1"
+							><span class="text-meta">{t('Slack')}</span>
+							<Input
+								class="h-8"
+								placeholder="U0123ABCD"
+								aria-label={t('Slack')}
+								bind:value={draft.slack}
+							/></label
+						>
+						<label class="flex flex-col gap-1"
+							><span class="text-meta">{t('Discord')}</span>
+							<Input
+								class="h-8"
+								placeholder="123456789012345678"
+								aria-label={t('Discord')}
+								bind:value={draft.discord}
 							/></label
 						>
 					</div>

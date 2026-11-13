@@ -140,7 +140,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read(
 		[
 			// administrators first, then staff, then external members; by name, else address. Anonymous visitors are no members.
-			sql(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
+			sql(`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
 			FROM sys_user u WHERE u.kind <> 'anonymous' ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
 			sql(
 				`SELECT id, email, phone, team, external, CASE WHEN accepted_at IS NOT NULL THEN 'accepted' WHEN revoked_at IS NOT NULL THEN 'revoked'
@@ -314,7 +314,9 @@ export const SettingsOp = Schema.Union([
 		input: Schema.Struct({
 			...id,
 			phone: Schema.optionalKey(Schema.NullOr(Schema.String)),
-			telegram: Schema.optionalKey(Schema.NullOr(Schema.String))
+			telegram: Schema.optionalKey(Schema.NullOr(Schema.String)),
+			slack: Schema.optionalKey(Schema.NullOr(Schema.String)),
+			discord: Schema.optionalKey(Schema.NullOr(Schema.String))
 		})
 	}),
 	Schema.Struct({

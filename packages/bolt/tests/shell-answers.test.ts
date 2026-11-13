@@ -157,6 +157,8 @@ const settings = {
 			email: 'a@example.test',
 			phone: null,
 			telegram: null,
+			slack: null,
+			discord: null,
 			name: 'Ann',
 			kind: 'staff',
 			active: true,

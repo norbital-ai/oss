@@ -28,7 +28,7 @@ Everything here is native unless stated. A facility a host left `off` fails `Una
 | Scheduled and manual durable work, immediate typed calls | automations; model effects handle row writes; integrations verify webhooks |
 | Source teams, policies, inline approvals, decision audit | `access_control/` |
 | Formula evaluation; exact decimal and money; calendars and business days | std modules |
-| Documents (Markdown or HTML to declared targets) and spreadsheets | `ctx.convert.document`, std sheet; conversion is an optional host capability |
+| Documents (Markdown or HTML to declared targets), a record's own view as a PDF, spreadsheets | `ctx.convert.document`, `ctx.convert.record`, std sheet; both are optional host capabilities |
 
 ## People, communication, AI
 

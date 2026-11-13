@@ -1,9 +1,14 @@
 // Effects and automations send notices through ctx.notify. Recipient expansion and attachment preparation
 // belong here; the captured notice writer queues each inbox push and connection delivery with its inserted row.
-import { Effect, Schema } from 'effect';
-import { CONVERT_TARGETS, LIMITS } from '../contracts.ts';
-import type { EngineManifest } from '../manifest.ts';
-import { TenantDb } from '../db/tenant-db.ts';
+import { Effect, Predicate, Schema } from 'effect';
+import * as EffectArray from 'effect/Array';
+import { CONVERT_TARGETS, LIMITS, type RowData } from '../contracts.ts';
+import { teams, type EngineManifest } from '../manifest.ts';
+import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
+import { sql } from '../db/sql.ts';
+import { decodeRows } from '../db/rows.ts';
+import { DbError } from '../errors.ts';
+import { stableId } from '../conversations/store.ts';
 import { Captured, CapturedResult, capturedFields, nativeCommit } from '../db/captured.ts';
 import { Live, Wake } from '../services.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -235,3 +240,105 @@ export const prepareNoticeFiles = Effect.fn('Bolt.prepareNoticeFiles')(function*
 	live.publish(captured);
 });
 
+
+/**
+ * The messages channel notices send (`notifications.deliver`): one per recipient member with a handle on the channel's
+ * conversation, each under a stable id, so `ctx.notify` answers them before delivery and a retried delivery queues none
+ * twice. `ids` are channel notice rows (`member IS NULL`); an inbox row is skipped.
+ */
+export const notice_sends = Effect.fn('Bolt.noticeSends')(function* (
+	m: EngineManifest,
+	db: TenantDbShape,
+	ids: readonly string[]
+) {
+	const teamPolicies = teams(m),
+		signupPolicies = m.workspace.signup?.policies ?? [];
+	const [notes, users] = yield* db.read([
+		sql(
+			`SELECT n.id,n.recipient,n.title,n.body,n.attachments,i.integration,i.owner
+			FROM sys_notification n LEFT JOIN sys_integration i ON i.id=n.recipient->>'channel'
+			WHERE n.member IS NULL AND n.id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+			JSON.stringify(ids)
+		),
+		sql(
+			`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, u.team, u.signup FROM sys_user u WHERE u.active AND u.kind = 'staff'`
+		)
+	]);
+	if (notes === undefined || users === undefined)
+		return yield* Effect.fail(DbError.make('XX000', 'The database did not answer the notification delivery reads.'));
+	const notices = yield* decodeRows(Schema.Struct({
+		id: Schema.String, recipient: Schema.Json, title: Schema.String,
+		body: Schema.NullOr(Schema.String), attachments: Schema.Json,
+		integration: Schema.NullOr(Schema.String), owner: Schema.NullOr(Schema.String)
+	}), notes);
+	const recipients = yield* decodeRows(Schema.Struct({
+		id: Schema.String, email: Schema.NullOr(Schema.String), phone: Schema.NullOr(Schema.String),
+		telegram: Schema.NullOr(Schema.String), slack: Schema.NullOr(Schema.String), discord: Schema.NullOr(Schema.String),
+		team: Schema.NullOr(Schema.String), signup: Schema.Boolean
+	}), users);
+	const sends: { readonly slot: string; readonly message: RowData; readonly id: string }[] = [];
+	let skipped = 0;
+	for (const n of notices) {
+		const to = Predicate.isObject(n['recipient']) ? n['recipient'] : {};
+		const slot = String(to['channel'] ?? ''),
+			list = EffectArray.isArray(to['recipients'])
+				? to['recipients'].filter((x) => Predicate.isObject(x))
+				: [];
+		const def = n.integration === null ? undefined : definitionOf(m, n.integration);
+		const conv = def === undefined ? undefined : conversationOf(def);
+		if (n.owner !== null || def === undefined || conv === undefined) {
+			skipped++;
+			continue;
+		}
+		const members = recipients.filter((u) =>
+			list.some(
+				(r) =>
+					r['user'] === u['id'] ||
+					(typeof r['team'] === 'string' &&
+						typeof u['team'] === 'string' &&
+						r['team'] === u['team'] &&
+						Object.hasOwn(teamPolicies, u['team'])) ||
+					(typeof r['policy'] === 'string' &&
+						((typeof u['team'] === 'string' &&
+							(teamPolicies[u['team']]?.policies ?? []).includes(r['policy'])) ||
+							(u['signup'] === true && signupPolicies.includes(r['policy']))))
+			)
+		);
+		const title = String(n['title']),
+			text = typeof n['body'] === 'string' && n['body'] !== '' ? String(n['body']) : title;
+		for (const u of members) {
+			const digits = typeof u['phone'] === 'string' ? u['phone'].replace(/\D/g, '') : '';
+			const handle =
+				conv.handle === 'email'
+					? u['email']
+					: conv.handle === 'telegram'
+						? u['telegram']
+						: // a person on Slack or Discord: a direct message the driver opens (`@<user id>`)
+							conv.handle === 'slack' || conv.handle === 'discord'
+							? (u[conv.handle] ?? '') === ''
+								? null
+								: `@${u[conv.handle]}`
+							: conv.handle === 'phone'
+								? digits === ''
+									? null
+									: def.driver === 'whatsapp'
+										? `${digits}@s.whatsapp.net`
+										: digits
+								: null;
+			if (typeof handle !== 'string' || handle === '') {
+				skipped++;
+				continue;
+			}
+			const message: RowData =
+				conv.kind === 'email'
+					? { to: [handle], subject: title, text, attachments: n['attachments'] ?? [] }
+					: {
+							to: handle,
+							text: text === title ? title : `${title}\n${text}`,
+							attachments: n['attachments'] ?? []
+						};
+			sends.push({ slot, message, id: stableId('notice', String(n['id']), String(u['id'])) });
+		}
+	}
+	return { sends, skipped };
+});

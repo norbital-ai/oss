@@ -34,7 +34,7 @@ export type Pack = {
 /** The system models a pack may seed, in load order: members, then integration instances (a personal one names its member). */
 export const IDENTITY = ['sys_user', 'sys_integration'] as const;
 const IDENTITY_COLUMNS = {
-	sys_user: ['id', 'name', 'email', 'kind', 'active', 'admin', 'team', 'phone', 'telegram'],
+	sys_user: ['id', 'name', 'email', 'kind', 'active', 'admin', 'team', 'phone', 'telegram', 'slack', 'discord'],
 	sys_integration: ['id', 'integration', 'name', 'owner', 'active', 'configuration']
 } satisfies Record<(typeof IDENTITY)[number], readonly string[]>;
 /**

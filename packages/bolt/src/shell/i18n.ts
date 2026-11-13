@@ -664,6 +664,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Change email': '更换邮箱',
 	'Mobile number': '手机号码',
 	Telegram: 'Telegram',
+	Slack: 'Slack',
+	Discord: 'Discord',
 	'Sign in or sign up': '登录或注册',
 	'Use email instead': '改用邮箱',
 	'Use a mobile number instead': '改用手机号码',

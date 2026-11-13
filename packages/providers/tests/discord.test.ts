@@ -56,6 +56,7 @@ const api = () =>
 					? json({ id: '100', username: 'crewbot' })
 					: json({ message: '401: Unauthorized' }, 401)
 				: undefined,
+		(c) => (c.url.endsWith('/users/@me/channels') ? json({ id: '77', type: 1 }) : undefined),
 		(c) => (c.url.endsWith('/messages') ? json({ id: 'm-out' }) : undefined),
 		(c) => (c.url.endsWith('/typing') ? new Response(null, { status: 204 }) : undefined)
 	]);
@@ -632,6 +633,22 @@ describe('Discord', () => {
 					'{"content":"on it"}'
 				],
 				['POST', 'https://discord.com/api/v10/channels/55/typing', 'Bot good', '']
+			]);
+			yield* h.link.close ?? Effect.void;
+		})
+	);
+	it.effect('sends to `@<user id>` in the DM channel Discord opens with that person', () =>
+		Effect.gen(function* () {
+			const g = gateway(),
+				f = api(),
+				h = yield* host(discord({ socket: g.socket }), f, CREDENTIAL);
+			expect(yield* required(h.link.send)({ to: '@123456789012345678', text: 'Your report' }, undefined)).toEqual({
+				provider_id: 'm-out'
+			});
+			yield* required(h.link.typing)('@123456789012345678', true); // a person has no channel to type in yet
+			expect(f.calls.map((c) => [c.method, c.url, c.body])).toEqual([
+				['POST', 'https://discord.com/api/v10/users/@me/channels', '{"recipient_id":"123456789012345678"}'],
+				['POST', 'https://discord.com/api/v10/channels/77/messages', '{"content":"Your report"}']
 			]);
 			yield* h.link.close ?? Effect.void;
 		})

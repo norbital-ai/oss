@@ -241,6 +241,7 @@ const portsOf = (
 	docs: host.docs,
 	bundler: off,
 	convert: off,
+	render: off,
 	geocoder: off,
 	web: off,
 	browser: off,

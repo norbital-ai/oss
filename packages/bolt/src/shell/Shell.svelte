@@ -87,6 +87,7 @@
 	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
 	import StudioSlot from './studio/StudioSlot.svelte';
 	import RecordSheet from './RecordSheet.svelte';
+	import RecordPrint from './RecordPrint.svelte';
 	import Turnstile from './auth/Turnstile.svelte';
 	import Nav from './Nav.svelte';
 	import Finder from './finder/Finder.svelte';
@@ -138,9 +139,11 @@
 	});
 
 	let challenge = $state<import('./runtime.ts').ChallengeQueue | null>(null);
+	// a print (`?record=…&print`, `ctx.convert.record`) shows the record alone, in the workspace's locale
+	const printing = new URL(location.href).searchParams.has('print');
 	// the framework's own copy in the viewer's locale (their choice, else the workspace's); the workspace's messages win
 	// svelte-ignore state_referenced_locally
-	const locale = chosenLocale(config.manifest.workspace.locale);
+	const locale = printing ? config.manifest.workspace.locale : chosenLocale(config.manifest.workspace.locale);
 	const framework = framework_text(locale);
 	const t = (key: string) => config.messages?.[key] ?? framework[key] ?? key;
 	const ui_text = ui_text_for(locale);
@@ -441,7 +444,7 @@
 			if (result._tag === 'Failure') {
 				boot = null;
 				guest = result.failure.workspace ?? null;
-				if (result.failure.status === 401 && !is_open_route(config.manifest, current))
+				if (result.failure.status === 401 && !printing && !is_open_route(config.manifest, current))
 					navigate(`/sign-in?next=${encodeURIComponent(url.pathname + url.search)}`, true);
 				else if (
 					result.failure.status !== 401 ||
@@ -957,7 +960,14 @@
 			: '3rem'
 		: '0px'}"
 >
-	{#if failure !== null}
+	{#if printing}
+		{@const printed = records.at(-1)}
+		{#if failure !== null || printed === undefined}
+			<span hidden {@attach () => void (document.documentElement.dataset['boltPrint'] = 'failed')}></span>
+		{:else if boot !== null && bolt !== null}
+			<RecordPrint ctx={pageContext()} model={printed.model} id={printed.id} />
+		{/if}
+	{:else if failure !== null}
 		<Access
 			{t}
 			environment={workspace?.environment}

@@ -736,6 +736,8 @@ const EXPECTED: { [table: string]: Shape } = {
 			party: 'jsonb',
 			phone: 'text',
 			telegram: 'text',
+			slack: 'text',
+			discord: 'text',
 			revision: 'int not null default 1',
 			created_at: 'timestamptz not null default now()',
 			last_seen: 'timestamptz',

@@ -13,6 +13,7 @@ export const FACILITY_MEMBERS = [
 	'files.image',
 	'files.put',
 	'convert.document',
+	'convert.record',
 	'convert.ingest',
 	'ai.sys_1.decide',
 	'ai.sys_2.infer',

@@ -26,13 +26,16 @@ import { SqlReadCapture, TenantDb } from '../db/tenant-db.ts';
 import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { DecisionTrace, readableFile } from '../decision.ts';
 import { is_transient, type EngineError } from '../errors.ts';
-import { EmbedInputs, ImageOptions, Reference } from '../facilities.ts';
+import { EmbedInputs, ImageOptions, Reference, storeFile } from '../facilities.ts';
 import { makeParking } from '../parking.ts';
 import { instanceRequest } from '../integrations/instances.ts';
 import type { EngineManifest } from '../manifest.ts';
-import { noticeRows } from '../notifications/notify.ts';
+import { notice_sends, noticeRows } from '../notifications/notify.ts';
+import { NOTICE_DELIVER } from '../notifications/queue.ts';
+import { DELIVER } from '../integrations/outbound.ts';
+import { RenderGrants, render_record } from '../render.ts';
 import { Port, uuid, type PortFailure } from '../port.ts';
-import { Ai, Browser, Drivers, Logs } from '../ports.ts';
+import { Ai, Browser, Drivers, Files, Logs, Render } from '../ports.ts';
 import { ReadDeps } from '../query/engine.ts';
 import { bindingsAt } from '../query/reader.ts';
 import { Activation, Automations, Callables, Facilities, Guest, Identity, Live, Manifest, Reads, Wake,
@@ -56,6 +59,12 @@ type CallFacts = {
 	readonly stores: boolean;
 	readonly tools: readonly string[] | undefined;
 };
+/** A `TransientFile` as a crossing carries it: its bytes in the call's `bins`. */
+const TransientAttachment = Schema.Struct({
+	name: Schema.String,
+	mime: Schema.String,
+	bytes: Schema.Struct({ $bin: Schema.Int })
+});
 const NO_FACTS: CallFacts = { reads: [], stores: false, tools: undefined };
 function factsOf(call: FacilityCall): CallFacts {
 	// built per call: `facilities.ts` reaches this module through `decisions`, so its schemas are not there at load
@@ -153,10 +162,43 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 	const m = yield* Manifest, db = yield* TenantDb, activation = yield* Activation,
 		guest = yield* Guest, reads = yield* Reads, calls = yield* Callables, identity = yield* Identity,
 		live = yield* Live, facilities = yield* Facilities, browser = yield* Browser,
-		drivers = yield* Drivers, wake = yield* Wake, ai = yield* Ai, logs = yield* Logs, agentHost = yield* AgentHost;
+		drivers = yield* Drivers, wake = yield* Wake, ai = yield* Ai, logs = yield* Logs, agentHost = yield* AgentHost,
+		render = yield* Render, grants = yield* RenderGrants, files = yield* Files;
 	const crypto = yield* Crypto.Crypto;
 	const newId = uuid(crypto);
 	const parking = makeParking();
+	/**
+	 * A message's or notice's attachments with the run's bytes (`TransientFile`: `{ name, mime, bytes: { $bin } }`) stored
+	 * for `owner`, the delivery: the outbox's own file, never a record's.
+	 */
+	// ponytail: a retried attempt stores its bytes again; the delivery's files are never collected, as converted notice documents
+	const hold = (value: Json, bins: readonly Uint8Array[], owner: string): Effect.Effect<Json, BoltError> => {
+		const object = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json))(value);
+		const list = Option.flatMap(object, (o) => Schema.decodeUnknownOption(Schema.Array(Schema.Json))(o['attachments']));
+		if (Option.isNone(object) || Option.isNone(list)) return Effect.succeed(value);
+		return Effect.forEach(list.value, (attachment): Effect.Effect<Json, BoltError> => {
+			const held = Schema.decodeUnknownOption(TransientAttachment)(attachment);
+			if (Option.isNone(held)) return Effect.succeed(attachment);
+			const bytes = bins[held.value.bytes.$bin];
+			if (bytes === undefined)
+				return Effect.fail(BoltError.make('invalid_input', 'guest', 'an attachment names bytes its call did not carry'));
+			return storeFile({ db, manifest: m, files })(
+				bytes,
+				{ name: held.value.name, mime: held.value.mime, for: owner },
+				owner,
+				LIMITS.crossingBytes
+			).pipe(
+				Effect.map((file): Json => ({ id: file.id, name: file.name, mime: file.mime })),
+				Effect.mapError((error) =>
+					BoltError.make(
+						error._tag === 'Unavailable' ? 'unavailable' : 'upstream',
+						'facility',
+						error._tag === 'Unavailable' ? error.reason : error.message
+					)
+				)
+			);
+		}).pipe(Effect.map((attachments): Json => ({ ...object.value, attachments })));
+	};
 	// Pending cache dependencies must stay acyclic even when different callers own the two lookups.
 	const waiting = new Map<string, Map<string, number>>();
 		const invoke = (
@@ -315,6 +357,10 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 				/** A facility call, gated by its `facts`; `key` names an infer's session. */
 				const facility = (call: FacilityCall, facts: CallFacts, key: string) =>
 					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
+						if (call._tag === 'convert.record')
+							return yield* render_record({ manifest: m, render, grants }, call.args, authority, readCaller).pipe(
+								Port.call('convert.record', LIMITS.callMs.render)
+							);
 						const withProfile = call._tag.startsWith('browser.')
 							? { ...call, args: [browseProfile, ...call.args] }
 							: call;
@@ -668,7 +714,12 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 									params: [approval.request, JSON.stringify(Object.keys(m.teams))]
 								});
 								const first = approval?.records[0];
-								const rows = yield* noticeRows(call.notices, {
+								const bins = call.bins ?? [];
+								const many = Schema.decodeUnknownOption(Schema.Array(Schema.Json))(call.notices);
+								const notices: Json = Option.isSome(many)
+									? yield* Effect.forEach(many.value, (notice) => hold(notice, bins, NOTICE_DELIVER))
+									: yield* hold(call.notices, bins, NOTICE_DELIVER);
+								const rows = yield* noticeRows(notices, {
 									manifest: m,
 									id: key,
 									...(modelEffect === undefined || first === undefined ? {} : { link: { model: modelEffect.model, id: first.id } }),
@@ -677,8 +728,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 										approvers: { teams: [], users: approvers.map((user) => user.id) }
 									} })
 								}).pipe(Effect.provideService(TenantDb, db));
-								report(
-									yield* effect(
+								const outcome = yield* effect(
 										(c) =>
 											noticeInsert(
 												c,
@@ -690,15 +740,22 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 												m.workspace.signup?.policies
 											),
 										() =>
-											`jsonb_build_object('unaddressed', (SELECT coalesce(jsonb_agg(title), '[]'::jsonb) FROM n_to WHERE member IS NULL AND coalesce("to"->>'channel', 'inbox') = 'inbox'))`
-									)
-								);
-								return { ok: true, value: null };
+											`jsonb_build_object('unaddressed', (SELECT coalesce(jsonb_agg(title), '[]'::jsonb) FROM n_to WHERE member IS NULL AND coalesce("to"->>'channel', 'inbox') = 'inbox'),
+											'channels', (SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM n_to WHERE member IS NULL AND "to"->>'channel' <> 'inbox'))`
+									);
+								report(outcome);
+								// the messages its channel deliveries will queue, by the ids that delivery gives them
+								const channels = Schema.decodeUnknownOption(Schema.Struct({ channels: Schema.Array(Schema.String) }))(outcome);
+								const { sends } = Option.isSome(channels) && channels.value.channels.length > 0
+									? yield* notice_sends(m, db, channels.value.channels)
+									: { sends: [] };
+								return { ok: true, value: { messages: sends.map((sent) => sent.id) } };
 							}
 							case 'send': {
 								if (call.to === null)
 									return cross_failure('invalid_input', 'ctx.send names its connection or instance');
-								const prepared = yield* prepareSend(m, db, call.to, call.message, crypto);
+								const message = yield* hold(call.message, call.bins ?? [], DELIVER);
+								const prepared = yield* prepareSend(m, db, call.to, message, crypto);
 								if ('error' in prepared) return cross_failure('invalid_input', prepared.error);
 								const id = yield* newId;
 								const value = yield* effect(

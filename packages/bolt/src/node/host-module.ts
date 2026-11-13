@@ -195,7 +195,7 @@ const serving = (input: unknown): Serving => {
 	const port = decode(Schema.Struct({
 		providers: Schema.optionalKey(Schema.Array(Schema.Unknown)),
 		oauth: Schema.optionalKey(Schema.Struct({ google: Schema.optionalKey(Schema.Struct({ id: Schema.String, secret: Schema.String })) })),
-		convert: Schema.optionalKey(Schema.Unknown), ingest: Schema.optionalKey(Callback), host_tools: Schema.optionalKey(Schema.Unknown),
+		convert: Schema.optionalKey(Schema.Unknown), render: Schema.optionalKey(Schema.Unknown), ingest: Schema.optionalKey(Callback), host_tools: Schema.optionalKey(Schema.Unknown),
 		geocoder: Schema.optionalKey(Schema.Unknown), web: Schema.optionalKey(Schema.Unknown), browser: Schema.optionalKey(Schema.Unknown),
 		shell: Schema.optionalKey(Schema.Struct({ environment: Schema.optionalKey(Schema.String), push: Schema.optionalKey(Schema.Struct({ public_key: Schema.String })) })),
 		close: Schema.optionalKey(Callback)
@@ -208,6 +208,7 @@ const serving = (input: unknown): Serving => {
 		...(port.host_tools === undefined ? {} : { host_tools: hostTools(port.host_tools) }),
 		...(port.close === undefined ? {} : { close: complete(input, port.close) }),
 		...(port.convert === undefined ? {} : { convert: converter(port.convert) }),
+		...(port.render === undefined ? {} : { render: renderer(port.render) }),
 		...(port.geocoder === undefined ? {} : { geocoder: geocoder(port.geocoder) }),
 		...(port.web === undefined ? {} : { web: web(port.web) }),
 		...(port.browser === undefined ? {} : { browser: browser(port.browser) })
@@ -216,6 +217,10 @@ const serving = (input: unknown): Serving => {
 const converter = (input: unknown): NonNullable<Serving['convert']> => {
 	const port = decode(Schema.Struct({ targets: Schema.Array(Schema.Literals(['pdf', 'docx', 'pptx', 'odt', 'epub', 'html'])), convert: Callback, preview_pdf: Schema.optionalKey(Callback) }))(input);
 	return { targets: port.targets, convert: call(input, port.convert, Schema.Uint8Array), ...(port.preview_pdf === undefined ? {} : { preview_pdf: call(input, port.preview_pdf, Schema.Uint8Array) }) };
+};
+const renderer = (input: unknown): NonNullable<Serving['render']> => {
+	const port = decode(Schema.Struct({ pdf: Callback }))(input);
+	return { pdf: call(input, port.pdf, Schema.Uint8Array) };
 };
 const GeoHit = Schema.Struct({ point: Schema.Struct({ lat: Schema.Number, lng: Schema.Number }), label: Schema.String, address: Schema.String });
 const geocoder = (input: unknown): NonNullable<Serving['geocoder']> => {

@@ -17,6 +17,8 @@
 //   Transcription is Norbital Convert's (`CONVERT`).
 // - Optional pairs: `BOLT_GOOGLE_OAUTH_CLIENT_ID`/`_SECRET`, `BOLT_VAPID_PUBLIC_KEY`/`_PRIVATE_KEY`,
 //   `BOLT_TURNSTILE_SITE_KEY`/`_SECRET`; `BOLT_APNS_KEYS` (JSON by team id); `BOLT_ENVIRONMENT` (the shell's badge).
+// - `BOLT_RENDER` (optional): `chromium` launches headless Chromium for `ctx.convert.record`, a `ws://`/`http://` URL
+//   connects to a running one over CDP; unset, record printing is off.
 import { Effect, Exit, Layer, ManagedRuntime, Option, Schema, Scope } from 'effect';
 import { FetchHttpClient } from 'effect/http';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -160,7 +162,9 @@ const settings: HostSettings = {
 		'{}'
 	),
 	turnstile: turnstile === null ? null : { site_key: turnstile[0], secret: turnstile[1] },
-	environment: env('BOLT_ENVIRONMENT') ?? null
+	environment: env('BOLT_ENVIRONMENT') ?? null,
+	render: ((value) =>
+		value === undefined ? null : { cdp: value === 'chromium' ? null : value })(env('BOLT_RENDER'))
 };
 
 const databaseUrl = env('BOLT_DATABASE_URL'),

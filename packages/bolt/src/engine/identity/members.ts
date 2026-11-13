@@ -459,8 +459,8 @@ export const assign_team = Effect.fn('Bolt.assign_team')(function* (
 });
 /**
  * Sets a member's conversation handles: the mobile number a private envoy knows them by on WhatsApp (international
- * form, stored as `+` and its digits) and their Telegram handle. A key left out keeps its value; `null` or `''` clears it.
- * A number another member holds is refused.
+ * form, stored as `+` and its digits), their Telegram handle, their Slack member id (`U…`/`W…`) and Discord user id (its
+ * digits). A key left out keeps its value; `null` or `''` clears it. A number another member holds is refused.
  */
 export const setHandles = Effect.fn('Bolt.setHandles')(function* (
 	h: IdentityHost,
@@ -469,6 +469,8 @@ export const setHandles = Effect.fn('Bolt.setHandles')(function* (
 	input: {
 		phone?: string | null;
 		telegram?: string | null;
+		slack?: string | null;
+		discord?: string | null;
 	}
 ) {
 	yield* requireAdmin(auth);
@@ -479,10 +481,18 @@ export const setHandles = Effect.fn('Bolt.setHandles')(function* (
 			refuse('check', 'Enter a mobile number with its country code (+65 8123 4567).')
 		);
 	const telegram = input.telegram?.trim().replace(/^@/, '') || null;
+	const slack = input.slack?.trim().replace(/^@/, '').toUpperCase() || null,
+		discord = input.discord?.trim().replace(/^@/, '') || null;
+	if (slack !== null && !/^[UW][A-Z0-9]{2,}$/.test(slack))
+		return yield* Effect.fail(refuse('check', 'Enter a Slack member id (U…), from their profile’s “Copy member ID”.'));
+	if (discord !== null && !/^\d{15,25}$/.test(discord))
+		return yield* Effect.fail(refuse('check', 'Enter a Discord user id (its digits), from “Copy User ID”.'));
 	const s = new IdentityStatement();
 	const set = [
 		...(input.phone === undefined ? [] : [`phone = ${s.p(phone?.value ?? null)}`]),
-		...(input.telegram === undefined ? [] : [`telegram = ${s.p(telegram)}`])
+		...(input.telegram === undefined ? [] : [`telegram = ${s.p(telegram)}`]),
+		...(input.slack === undefined ? [] : [`slack = ${s.p(slack)}`]),
+		...(input.discord === undefined ? [] : [`discord = ${s.p(discord)}`])
 	];
 	if (set.length === 0) return yield* Effect.fail(refuse('check', 'Nothing to change.'));
 	return yield* Effect.gen(function* () {

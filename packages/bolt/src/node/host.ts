@@ -176,6 +176,7 @@ export const serve_release = Effect.fn('bolt.serve_release')(function* (options:
 					mcp: options.native.mcp,
 					bundler: off,
 					convert: serving.convert ?? off,
+					render: serving.render ?? off,
 					geocoder: serving.geocoder ?? off,
 					web: serving.web ?? off,
 					browser: serving.browser ?? off,

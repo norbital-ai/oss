@@ -1,7 +1,7 @@
 // Who an envoy sender is: the active member whose registered handle is the sender's, by the handle the
 // definition's conversation carries — `sys_user.email` for `email`, `sys_user.phone` for `phone` (WhatsApp, a custom chat
-// that names phones), `sys_user.telegram` for `telegram`. An administrator sets them (the command center's People). A conversation
-// with no handle (Slack, Discord, WeChat) names no member: every sender is unknown.
+// that names phones), `sys_user.telegram`, `.slack` and `.discord` for theirs. An administrator sets them (the command center's
+// People). A conversation with no handle (WeChat, a custom chat) names no member: every sender is unknown.
 import { Effect, Schema } from 'effect';
 import { sql } from '../db/sql.ts';
 import type { HandleKind } from '../../decl/runtime/integration.ts';
@@ -24,7 +24,9 @@ const CANONICAL: {
 } = {
 	email: `lower(trim(u.email))`,
 	phone: `regexp_replace(split_part(split_part(ltrim(u.phone, '@'), '@', 1), ':', 1), '\\D', '', 'g')`,
-	telegram: `lower(trim(split_part(ltrim(u.telegram, '@'), '@', 1)))`
+	telegram: `lower(trim(split_part(ltrim(u.telegram, '@'), '@', 1)))`,
+	slack: `lower(trim(split_part(ltrim(u.slack, '@'), '@', 1)))`,
+	discord: `lower(trim(split_part(ltrim(u.discord, '@'), '@', 1)))`
 };
 /** The active member one registered handle names, or `null` (unknown, ambiguous, or unidentifiable). */
 export const memberByHandle = Effect.fn('Agents.memberByHandle')(function* (

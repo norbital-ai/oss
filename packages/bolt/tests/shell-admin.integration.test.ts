@@ -235,6 +235,17 @@ layer(workspace)('shell administration', (it) => {
 					phone: '+6581234567',
 					telegram: null
 				});
+				// Slack and Discord ids: a direct message's address, checked for their shape
+				expect((yield* op(admin, 'setHandles', { id, slack: 'not an id' })).body?.error?.code).toBe('check');
+				expect((yield* op(admin, 'setHandles', { id, discord: '@rep' })).body?.error?.code).toBe('check');
+				expect(
+					(yield* op(admin, 'setHandles', { id, slack: '@u07abc123', discord: '123456789012345678' })).status
+				).toBe(200);
+				expect((yield* settings(admin)).members.find((u) => u['id'] === id)).toMatchObject({
+					telegram: null,
+					slack: 'U07ABC123',
+					discord: '123456789012345678'
+				});
 			})
 	);
 

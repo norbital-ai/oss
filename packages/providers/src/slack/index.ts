@@ -34,6 +34,7 @@ const Auth = Schema.Struct({
 });
 const Sent = Schema.Struct({ channel: Schema.String, ts: Schema.String });
 const Upload = Schema.Struct({ upload_url: Schema.String, file_id: Schema.String });
+const Opened = Schema.Struct({ channel: Schema.Struct({ id: Schema.String }) });
 const Message = Schema.Struct({ to: Schema.NonEmptyString, text: Schema.String });
 const Payload = Schema.Record(Schema.String, Schema.Json);
 const History = Schema.Struct({
@@ -64,8 +65,8 @@ export function slack(): ProviderDef {
 				},
 				{
 					text: {
-						en: 'OAuth & Permissions → Bot Token Scopes: add chat:write, files:read, files:write, channels:history, groups:history, im:history, mpim:history, users:read. Install the app to the workspace.',
-						zh: 'OAuth & Permissions → Bot Token Scopes：添加 chat:write、files:read、files:write、channels:history、groups:history、im:history、mpim:history、users:read，然后将应用安装到工作区。'
+						en: 'OAuth & Permissions → Bot Token Scopes: add chat:write, files:read, files:write, channels:history, groups:history, im:history, im:write, mpim:history, users:read. Install the app to the workspace.',
+						zh: 'OAuth & Permissions → Bot Token Scopes：添加 chat:write、files:read、files:write、channels:history、groups:history、im:history、im:write、mpim:history、users:read，然后将应用安装到工作区。'
 					}
 				},
 				{
@@ -215,7 +216,11 @@ export function slack(): ProviderDef {
 					const m = yield* Schema.decodeUnknownEffect(Message)(message).pipe(
 						Effect.mapError(() => answerFailure('a Slack message needs `to` and `text`', 400))
 					);
-					const [channel = '', thread] = m.to.split(':');
+					const [to = '', thread] = m.to.split(':');
+					// `@<member id>`: a direct message, in the app's DM with that person
+					const channel = to.startsWith('@')
+						? (yield* call(Opened, value.botToken, 'conversations.open', { users: to.slice(1) })).channel.id
+						: to;
 					const sent = yield* call(Sent, value.botToken, 'chat.postMessage', {
 						channel,
 						text: m.text,

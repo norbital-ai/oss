@@ -702,9 +702,10 @@ export type CrossCall =
 			readonly at?: string | { readonly var: string } | undefined;
 			readonly key?: string | undefined;
 	  }
-	| { readonly _tag: 'notify'; readonly notices: Json }
+	/** Attachments may carry the run's bytes (`TransientFile`), in `bins`. */
+	| ({ readonly _tag: 'notify'; readonly notices: Json } & Bins)
 	/** `ctx.send`: `to` is an automation's addressee, `null` in a sync body (its instance's conversation driver). */
-	| { readonly _tag: 'send'; readonly to: string | null; readonly message: Json }
+	| ({ readonly _tag: 'send'; readonly to: string | null; readonly message: Json } & Bins)
 	/** `ctx.request`: `to` is the automation's target, `null` in a sync or integration body (its instance). */
 	| { readonly _tag: 'request'; readonly to: string | null; readonly operation: Json }
 	/** `ctx.progress` (automations only). */

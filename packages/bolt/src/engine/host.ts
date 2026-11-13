@@ -43,6 +43,7 @@ import {
 	Keys,
 	Logs,
 	Mcp,
+	Render,
 	Transport,
 	WebRead
 } from './ports.ts';
@@ -71,6 +72,7 @@ import { Syncs, SyncsLive } from './sync/index.ts';
 import { OutboundLive } from './integrations/outbound.ts';
 import { FacilitiesLive } from './facilities.ts';
 import { GuestLive } from './guest/runner.ts';
+import { RenderGrants } from './render.ts';
 import { TelemetryLive } from './guest/telemetry.ts';
 
 export type EngineServices =
@@ -102,13 +104,15 @@ export type EngineServices =
 	| TurnHandlers
 	| SmartThrottle
 	| MessageQueue
-	| AgentDrains;
+	| AgentDrains
+	| RenderGrants;
 export type EngineHost =
 	| Crypto.Crypto
 	| TenantDb
 	| Activation
 	| Files
 	| Convert
+	| Render
 	| WebRead
 	| Browser
 	| Geo
@@ -183,7 +187,8 @@ export function EngineLive(
 		TelemetryLive,
 		TurnsLive,
 		DeadlinesLive,
-		RunHandlersLive
+		RunHandlersLive,
+		RenderGrants.layer
 	).pipe(Layer.provideMerge(values));
 	const wake = WakeLive.pipe(Layer.provideMerge(bottom));
 	const guest = GuestLive.pipe(Layer.provideMerge(wake));

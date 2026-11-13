@@ -22,6 +22,10 @@ const api = () =>
 				? json({ ok: true, channel: 'C1', ts: '1790000001.000200' })
 				: undefined,
 		(c) =>
+			c.url.endsWith('/conversations.open')
+				? json({ ok: true, channel: { id: 'D9' } })
+				: undefined,
+		(c) =>
 			c.url.endsWith('/files.getUploadURLExternal')
 				? json({ ok: true, upload_url: 'https://files.slack.com/upload/v1/abc', file_id: 'F1' })
 				: undefined,
@@ -555,6 +559,18 @@ describe('Slack', () => {
 			expect(
 				(yield* Effect.flip(required(h.link.send)({ to: 'C1', text: 'x' }, undefined))).message
 			).toMatch(/not connected/);
+		})
+	);
+	it.effect('sends to `@<member id>` in the DM conversations.open opens with that person', () =>
+		Effect.gen(function* () {
+			yield* TestClock.setTime(NOW);
+			const { f, h } = yield* paired();
+			yield* required(h.link.send)({ to: '@U7', text: 'Your report' }, undefined);
+			const [opened, posted] = f.calls.slice(-2);
+			expect(required(opened).url).toBe('https://slack.com/api/conversations.open');
+			expect(JSON.parse(required(opened).body)).toEqual({ users: 'U7' });
+			expect(required(posted).url).toBe('https://slack.com/api/chat.postMessage');
+			expect(JSON.parse(required(posted).body)).toEqual({ channel: 'D9', text: 'Your report' });
 		})
 	);
 });
