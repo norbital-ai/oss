@@ -39,21 +39,32 @@ import {
 import { PgliteDb, Pristine } from '@norbital-ai/bolt/node';
 import { migration_objects, migration_schema, BoltError } from '@norbital-ai/bolt/engine';
 
-/** `function <name> <definition>` lines by name: what a body comparison reads off an introspection. */
-const functionLines = (lines: readonly string[]): ReadonlyMap<string, string> =>
+/** `<kind> <name> <definition>` lines by name (a trigger's is `table.trigger`): what a comparison reads off an introspection. */
+const kindLines = (kind: 'function' | 'trigger', lines: readonly string[]): ReadonlyMap<string, string> =>
 	new Map(
 		[
 			...Map.groupBy(
-				lines.filter((line) => line.startsWith('function ')),
+				lines.filter((line) => line.startsWith(`${kind} `)),
 				(line) => line.split(' ', 2)[1] ?? ''
 			)
 		].map(([name, defs]) => [name, canonical([...defs].sort())])
 	);
+/** Names whose declared definition neither the verified history (`physical.json` at its last file) nor this replay holds. */
+const changedNames = (
+	kind: 'function' | 'trigger',
+	held: readonly string[],
+	replayed: readonly string[],
+	declared: readonly string[]
+): readonly string[] => {
+	const [before, now] = [kindLines(kind, held), kindLines(kind, replayed)];
+	return [...kindLines(kind, declared)]
+		.filter(([name, defs]) => before.get(name) !== defs && now.get(name) !== defs)
+		.map(([name]) => name);
+};
 /**
- * The declared statements re-creating each function whose declared body neither the verified history (`physical.json`
- * at its last file) nor this replay holds: an engine or store runtime body a Bolt release changed, which the schema
+ * The declared statements re-creating each function whose declared body a Bolt release changed, which the schema
  * snapshot cannot see. An edited migration file differs from the held history instead, and stays refused.
- * ponytail: functions only; a changed native trigger or a removed function still fails the proof until handled here.
+ * ponytail: a removed function still fails the proof until handled here.
  */
 const runtimeFunctions = (
 	held: readonly string[],
@@ -61,10 +72,7 @@ const runtimeFunctions = (
 	declared: readonly string[],
 	statements: readonly string[]
 ): readonly string[] => {
-	const [before, now] = [functionLines(held), functionLines(replayed)];
-	const changed = [...functionLines(declared)]
-		.filter(([name, defs]) => before.get(name) !== defs && now.get(name) !== defs)
-		.map(([name]) => name);
+	const changed = changedNames('function', held, replayed, declared);
 	return statements.filter((text) =>
 		changed.some((name) =>
 			new RegExp(`create\\s+or\\s+replace\\s+function\\s+(public\\.)?"?${name}"?\\s*\\(`, 'i').test(
@@ -72,6 +80,38 @@ const runtimeFunctions = (
 			)
 		)
 	);
+};
+/**
+ * Drop and re-create each native trigger a Bolt release changed or added on an existing table, and drop each one it
+ * removed that the held history and this replay both carry. Runs after the history's own files, so every table exists.
+ */
+const runtimeTriggers = (
+	held: readonly string[],
+	replayed: readonly string[],
+	declared: readonly string[],
+	statements: readonly string[]
+): readonly string[] => {
+	const tables = new Set(replayed.filter((line) => line.startsWith('table ')).map((line) => line.split(' ', 3)[1]));
+	const wanted = kindLines('trigger', declared);
+	const before = kindLines('trigger', held);
+	const drop = (key: string) => {
+		const [table = '', trigger = ''] = key.split('.');
+		return `drop trigger if exists ${q(trigger)} on ${q(table)}`;
+	};
+	return [
+		...[...kindLines('trigger', replayed).keys()]
+			.filter((key) => before.has(key) && !wanted.has(key))
+			.map(drop),
+		...changedNames('trigger', held, replayed, declared)
+			.filter((key) => tables.has(key.split('.')[0]))
+			.flatMap((key) => {
+				const [table = '', trigger = ''] = key.split('.');
+				const create = statements.find((text) =>
+					new RegExp(`^\\s*create\\s+trigger\\s+"?${trigger}"?\\s[\\s\\S]*?\\son\\s+(public\\.)?"?${table}"?\\s`, 'i').test(text)
+				);
+				return create === undefined ? [] : [drop(key), create];
+			})
+	];
 };
 
 /**
@@ -338,26 +378,21 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 					.join('\n')
 			);
 			let actual = prefixes.get(files.length) ?? [];
-			const bodies = [
-				...(heldLines !== undefined
-					? runtimeFunctions(heldLines, actual, expected, [
-							...declared,
-							...native.flatMap((object) => object.create)
-						])
-					: [])
-			];
+			const statements = [...declared, ...native.flatMap((object) => object.create)];
+			const bodies =
+				heldLines === undefined ? [] : [...runtimeFunctions(heldLines, actual, expected, statements)];
+			if (bodies.length > 0)
+				bodies.push(
+					...(yield* history_schema_objects(next.tables, next.currency)).flatMap((object) => object.create)
+				);
+			if (heldLines !== undefined) bodies.push(...runtimeTriggers(heldLines, actual, expected, statements));
 			// a check passing here would cache this proof, and the next build would skip generating what the runtime needs
 			if (mode === 'verify' && bodies.length > 0)
 				return yield* BoltError.make(
 					'migration_changed',
 					'admission',
-					'this Bolt release changed runtime functions the migrations do not hold yet; run bolt build to generate the next migration'
+					'this Bolt release changed runtime functions or triggers the migrations do not hold yet; run bolt build to generate the next migration'
 				);
-			if (bodies.length > 0) {
-				bodies.push(
-					...(yield* history_schema_objects(next.tables, next.currency)).flatMap((object) => object.create)
-				);
-			}
 			if (bodies.length > 0) {
 				const name = `${String(files.length + 1).padStart(4, '0')}_runtime_functions.sql`;
 				if (yield* fs.exists(path.join(directory, name)))
@@ -368,7 +403,7 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 					);
 				const file: MigrationFile = {
 					name,
-					sql: `-- ${name}: runtime function bodies this Bolt release changed.\n\n${bodies.map((text) => `${text.trim().replace(/;$/, '')};`).join('\n\n')}\n`
+					sql: `-- ${name}: runtime functions and triggers this Bolt release changed.\n\n${bodies.map((text) => `${text.trim().replace(/;$/, '')};`).join('\n\n')}\n`
 				};
 				yield* check_file(file).pipe(Effect.mapError(from_store));
 				generatedFiles.push([path.join(directory, name), file.sql]);

@@ -23,6 +23,7 @@ import {
 	apply_migrations,
 	migration_lines,
 	read_migrations,
+	migration_objects,
 	migration_schema
 } from '../../bolt/src/engine/schema/migrations.ts';
 import { source_objects } from '../../bolt/src/engine/schema/engine.ts';
@@ -266,6 +267,75 @@ describe('committed workspace migrations', () => {
 					yield* prepare_migrations(directory, current, 'verify');
 				})
 			).pipe(Effect.provide(NodeServices.layer))
+	);
+	it.live('build re-creates the native triggers a Bolt release changed so replay verifies', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fs = yield* FileSystem.FileSystem;
+				const directory = yield* root;
+				const source = join(directory, 'migrations');
+				const locked: EngineManifest = {
+					...initial,
+					models: {
+						entry: {
+							description: 'An entry',
+							record_label: 'record.name',
+							locks: { closed: { where: { status: { eq: 'closed' } } } },
+							fields: { name: { kind: 'text' }, status: { kind: 'text' } }
+						}
+					}
+				};
+				const fresh = yield* generate(
+					null,
+					migration_schema(locked),
+					{ number: 1, name: 'initial' },
+					migration_objects
+				);
+				// the previous release: row locks in the per-row trigger's argument, no statement triggers
+				const sql = fresh.file.sql
+					.replace(/^create trigger store_statement_rules_\w+ .*;\n/gm, '')
+					.replace(`on "entry" for each row execute function store_row_rules('{`, `on "entry" for each row execute function store_row_rules('{"locks":["closed"],`);
+				expect(sql).not.toBe(fresh.file.sql);
+				expect(sql).not.toContain('create trigger store_statement_rules_');
+				const previous = { ...fresh.file, sql };
+				const db = PgliteDb.make(yield* TestDb.open()),
+					inspect = { text: INTROSPECT, params: [] },
+					empty = migration_lines(yield* db.rows(IntrospectRow, inspect), true, true);
+				yield* db.write({ text: executable(previous), params: [] });
+				const lines = migration_lines(yield* db.rows(IntrospectRow, inspect), true, true);
+				yield* fs.makeDirectory(source, { recursive: true });
+				yield* fs.writeFileString(join(source, previous.name), previous.sql);
+				yield* fs.writeFileString(join(source, 'snapshot.json'), fresh.snapshot);
+				yield* fs.writeFileString(
+					join(source, 'physical.json'),
+					physical_definitions_of({ '': empty, [previous.name]: lines })
+				);
+				yield* fs.writeFileString(
+					join(source, 'migrations.lock.json'),
+					lock_of(fresh.snapshot, [previous], {
+						physical: { '': physical_hash(empty), [previous.name]: physical_hash(lines) }
+					})
+				);
+				const refused = yield* prepare_migrations(directory, locked, 'verify').pipe(Effect.flip);
+				expect(refused.message).toContain('run bolt build');
+				yield* prepare_migrations(directory, locked, 'generate');
+				const bundle = yield* read_migrations(source);
+				expect(bundle.files.map((file) => file.name)).toEqual([previous.name, '0002_runtime_functions.sql']);
+				const runtime = bundle.files[1]?.sql ?? '';
+				expect(runtime).toContain('drop trigger if exists "store_row_rules" on "entry"');
+				expect(runtime).toContain('create trigger store_statement_rules_update after update on "entry"');
+				// held history, built again: nothing duplicated, the proof stands
+				yield* prepare_migrations(directory, locked, 'generate');
+				expect((yield* read_migrations(source)).files).toHaveLength(2);
+				yield* prepare_migrations(directory, locked, 'verify');
+				yield* db.write({ text: executable({ name: '0002_runtime_functions.sql', sql: runtime }), params: [] });
+				yield* db.write({ text: "insert into entry(id,name,status) values($1,'a','closed')", params: [ID] });
+				const blocked = yield* db
+					.write({ text: "update entry set name='b' where id=$1", params: [ID] })
+					.pipe(Effect.flip);
+				expect(String(blocked)).toContain('closed');
+			})
+		).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.live(
 		'appends schema versions in sequential SQL without changing applied migration files',
