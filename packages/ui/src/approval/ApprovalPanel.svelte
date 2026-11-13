@@ -1,7 +1,8 @@
 <!--
 @component
 A record's approval requests: a scope selector when there are several, the chosen request's timeline (one
-node for the request, one per step; each node a button whose popover holds that step's back-and-forth) and, for whoever
+node for the request, one per step; each node a button whose popover holds that step's back-and-forth), once it is
+no longer pending its status and the deciding reason, and, for whoever
 may decide now, a two-step form: pick Approve, Reject, Request changes or (the requester) Withdraw, then give the
 reason and confirm.
 -->
@@ -337,6 +338,18 @@ reason and confirm.
 				</li>
 			{/each}
 		</ol>
+
+		{#if v.status !== 'Pending'}
+			<!-- where the request stands and why, for the requester and the approvers alike, not only inside a step's popover -->
+			{@const last = [...v.log].reverse().find((e) => DECISIVE.has(e.move))}
+			<div class="flex flex-col gap-0.5" role="status" data-view="approval-outcome">
+				<p class="font-medium">{approvalStatus(bolt, v.status)}{#if last !== undefined}
+						· {who(last.by)}{/if}</p>
+				{#if last?.reason}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
+						“{last.reason}”
+					</p>{/if}
+			</div>
+		{/if}
 
 		{#if v.status === 'ChangesRequested' && v.mine}<p
 				class="text-caption"

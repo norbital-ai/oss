@@ -510,6 +510,14 @@ layer(workspace)('shell routes', (it) => {
 				})
 		);
 
+		it.effect('a shell write states the booted contract and the act accepts it', () =>
+			Effect.gen(function* () {
+				const shell = yield* api(admin);
+				yield* shell.boot();
+				expect(yield* shell.mark_all_notices_read()).toMatchObject({ kind: 'committed' });
+			})
+		);
+
 		it.effect('preview-as is admin-only and clears the administrator flag', () =>
 			Effect.gen(function* () {
 				expect((yield* call(rep, 'POST', '/__bolt/shell/preview', { user: repId })).status).toBe(

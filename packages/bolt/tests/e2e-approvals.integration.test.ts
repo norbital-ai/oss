@@ -228,7 +228,7 @@ const created = (outcome: Outcome) => {
 
 layer(workspace, { excludeTestServices: true })('an approval flow in the policy grant', (it) => {
 	// first: the finance inbox holds no other test's request yet
-	it.effect('a rejection and an erase each purge their request from open inboxes', () =>
+	it.effect('a rejection closes its request in both inboxes; an erase purges its request', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { t, approvals, sales, finance, held, target, current, post, settled, inboxView } =
@@ -259,7 +259,13 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 						})).status
 					).toBe(200);
 					yield* settled;
-					expect(reviewer.value()).toMatchObject({ requests: [{ id: erased }] });
+					// the decided request stays listed for whoever decided it, closed
+					expect(reviewer.value()).toMatchObject({
+						requests: [
+							{ id: erased, status: 'Pending' },
+							{ id: rejected, status: 'Rejected', moves: [] }
+						]
+					});
 					expect(yield* held(rejectedId)).toBeUndefined();
 					expect(yield* post(sales, 'orders.erase', { target: yield* current(id) })).toMatchObject({
 						status: 403,
@@ -269,8 +275,16 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 						status: 200
 					});
 					yield* settled;
-					expect(own.value()).toEqual({ rows: [], unread: 0, requests: [] });
-					expect(reviewer.value()).toEqual({ rows: [], unread: 0, requests: [] });
+					// the erase purges its request; the rejected one remains, and its requester was told why
+					expect(own.value()).toMatchObject({
+						rows: [{ title: expect.stringMatching(/^Rejected/), body: 'Not accepted.' }],
+						unread: 1,
+						requests: [{ id: rejected, status: 'Rejected' }]
+					});
+					expect(reviewer.value()).toMatchObject({
+						rows: [],
+						requests: [{ id: rejected, status: 'Rejected' }]
+					});
 					expect(yield* held(id)).toBeUndefined();
 					expect(
 						Option.getOrNull(yield* approvals.view(erased, sales(), () => Effect.succeed(false)))

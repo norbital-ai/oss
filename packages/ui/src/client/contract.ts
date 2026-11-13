@@ -146,6 +146,8 @@ export type ApprovalView = {
 	model: string;
 	record: string;
 	action: string;
+	/** The record's label as its request or resubmission left it (a record its rollback removed keeps a name), or null. */
+	label: string | null;
 	at: string;
 	/** Pending, ChangesRequested, Approved, Rejected, Superseded or Withdrawn. */
 	status: string;

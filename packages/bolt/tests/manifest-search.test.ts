@@ -76,6 +76,14 @@ it.effect(
 					(scope) => scope.kind === 'model' && scope.model === 'sys_user'
 				)
 			).toMatchObject({ label: 'Users', searchable: true });
+			// the approval request's requestor table is internal: Find never offers it, even when exposed
+			const users = catalog.sys_user;
+			if (users === undefined) throw new Error('The administrator reads no users.');
+			expect(
+				searchScopes([], { ...catalog, requestor: users }, (key) => key).some(
+					(scope) => scope.kind === 'model' && scope.model === 'requestor'
+				)
+			).toBe(false);
 			expect(all.some((item) => item.name === 'private_pipeline')).toBe(true);
 			expect(all.find((item) => item.kind === 'secret')).toEqual({
 				kind: 'secret',

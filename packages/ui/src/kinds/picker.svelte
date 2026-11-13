@@ -30,7 +30,7 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 		on_change(next: IdOf<C> | null): void;
 		/** Fields that label each row; defaults to the target model's `label`. */
 		label?: readonly FieldOf<C>[];
-		/** A filter ANDed onto every search. */
+		/** Narrows the choices (a versioned catalogue's version in force, say): the caller decides, the picker only reads. */
 		where?: WhereOf<C> & Json;
 		/** Row order; defaults to the label. */
 		order_by?: OrderByOf<C> & Json;
@@ -56,7 +56,7 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 	import { Effect } from 'effect';
 	import { observe_once as queryState } from '../effect/index.js';
 	import { is_id } from '../form/form-state.svelte.js';
-	import { currencyOf, format, picker_read, value_object } from './kind.js';
+	import { currencyOf, format, picker_read } from './kind.js';
 	import { by_id } from '../read/request.js';
 	import { label_read } from '../relations/select.js';
 	import { withOutputs } from '../client/context.js';
@@ -94,50 +94,13 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 					});
 		}) ?? t('none');
 
-	// a catalogue picked from a source row is versioned: only the version in force today is a choice
-	const versionInForce = (read: NonNullable<typeof host.query>, today: string) =>
-		read({
-			jurisdiction_settings: {
-				where: { status: { eq: 'SEALED' } },
-				fields: ['id', 'effective_range'],
-				limit: 1000
-			}
-		}).pipe(
-			Effect.map((answer) => {
-				const rows = answer.jurisdiction_settings?.rows ?? [];
-				const period = (row: (typeof rows)[number]) => {
-					const range = value_object(row.effective_range) ? row.effective_range : {};
-					return {
-						from: typeof range['from'] === 'string' ? range['from'] : '',
-						to: typeof range['to'] === 'string' ? range['to'] : null
-					};
-				};
-				const covering = rows.find((row) => {
-					const { from, to } = period(row);
-					return from !== '' && from <= today && (to === null || today <= to);
-				});
-				const newest = [...rows].sort((left, right) =>
-					period(right).from.localeCompare(period(left).from)
-				)[0];
-				return String((covering ?? newest)?.id ?? '') || null;
-			})
-		);
 	let query = $state('');
 	const options = queryState<Hit[], ReadError>(() => {
 		const read = host.query;
 		if (read === undefined) return null;
 		const q = query;
-		const base: Json | undefined = where ?? undefined;
+		const filter: Json | undefined = where ?? undefined;
 		return Effect.gen(function* () {
-			const scoped = of.endsWith('_catalog')
-				? yield* versionInForce(read, new Date().toISOString().slice(0, 10))
-				: null;
-			const filter: Json | undefined =
-				scoped === null
-					? base
-					: base === undefined
-						? { settings_id: { eq: scoped } }
-						: { and: [base, { settings_id: { eq: scoped } }] };
 			yield* Effect.sleep(q === '' ? 0 : 250);
 			return yield* read(
 				withOutputs(

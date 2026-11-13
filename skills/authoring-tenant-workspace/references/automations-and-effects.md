@@ -12,7 +12,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `i
 
 ## Automations
 
-- An automation runs as the reserved system identity with its declared `policies` (required, non-empty). A `mode: 'job'` automation is durable and may start from cron, a person or `ctx.schedule`; `mode: 'call'` returns its output in the calling request. Every run holds exactly those policies and cannot approve; `ctx.approvals.withdraw(request_id, reason?)` takes back an open request the same automation asked for. A run has 10,000 crossings.
+- An automation runs as the reserved system identity with its declared `policies` (required, non-empty). A `mode: 'job'` automation is durable and may start from cron, a person or `ctx.schedule`; `mode: 'call'` returns its output in the calling request. Every run holds exactly those policies and takes no approval decision, not even withdrawing a request it raised. A run has 10,000 crossings.
 - `ctx.run.trigger` records the job or uncached call's starter. It is never authority: `requestor.*` names the system identity, so a requestor-scoped grant matches nothing and a ref default does not apply. A cached call has no starter metadata and cannot write, send or schedule.
 - A rule about the starter is an explicit check of the trigger in the body. Refs the run writes are set explicitly.
 - `capabilities.automations` grants manual starts only; code needs none.

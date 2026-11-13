@@ -336,6 +336,8 @@ const messageOf = (d: Diagnostic, depth = 0): string =>
 		d.text,
 		...(d.messageChain ?? []).map((m) => `\n${'  '.repeat(depth + 1)}${messageOf(m, depth + 1)}`)
 	].join('');
+/** Unused-declaration and unreachable-code diagnostics: in generated markup they name svelte2tsx's own scaffolding. */
+const SCAFFOLD_ONLY = new Set([6133, 6192, 6196, 6198, 6199, 6205, 7027, 7028]);
 /** What one request sees: its project and how to turn the server's paths and offsets back into the editor's. */
 export function view(project: Project, held: Held) {
 	const sources = new Map<string, Promise<SourceFile | undefined>>();
@@ -347,15 +349,20 @@ export function view(project: Project, held: Held) {
 		}
 		return sf;
 	};
-	/** A server path and offset as an editor position; `undefined` in generated code. */
-	const position = async (path: string, offset: number): Promise<LangPosition | undefined> => {
+	/**
+	 * A server path and offset as an editor position; `undefined` in generated code, unless `near`: a diagnostic in a
+	 * component's generated markup then lands on the nearest mapped code before it (the tag it checks).
+	 */
+	const position = async (path: string, offset: number, near = false): Promise<LangPosition | undefined> => {
 		const served = held.lower.get(path.toLowerCase()) ?? path;
 		if (served.startsWith(`${held.root}/`)) {
 			const rel = served.slice(held.root.length + 1),
 				component = componentOf(rel);
 			if (component !== undefined) {
 				const sh = held.shadows.get(component),
-					original = served.endsWith('.d.svelte.ts') ? undefined : sh?.toOriginal(offset);
+					original = served.endsWith('.d.svelte.ts')
+						? undefined
+						: (sh?.toOriginal(offset) ?? (near ? sh?.nearOriginal(offset) : undefined));
 				const text = held.files.get(component);
 				return original === undefined || text === undefined
 					? undefined
@@ -391,8 +398,8 @@ export function view(project: Project, held: Held) {
 			const at =
 				d.fileName === undefined
 					? { path: 'tsconfig.json', line: 1, column: 1 }
-					: await position(d.fileName, d.pos);
-			// outside the workspace (a dependency, with skipLibCheck off) or in generated markup
+					: await position(d.fileName, d.pos, !SCAFFOLD_ONLY.has(d.code));
+			// outside the workspace (a dependency, with skipLibCheck off) or before any mapped markup
 			if (at === undefined || at.path.startsWith('node_modules/')) continue;
 			out.push({ ...at, code: d.code, category: categoryOf(categories, d.category), message: messageOf(d) });
 		}

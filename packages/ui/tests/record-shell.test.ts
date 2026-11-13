@@ -92,6 +92,7 @@ const approvalView = (request: Partial<ApprovalView> & { id: string }): Approval
 	model: 'jobs',
 	record: 'j1',
 	action: 'update',
+	label: null,
 	at: '2026-09-01T00:00:00Z',
 	status: 'Pending',
 	step: 0,
@@ -1216,5 +1217,50 @@ it.live('a custom create keeps one native submit label and preserves local and i
 		assert.equal(fixture.calls.acts.length, 1);
 		assert.equal(required(fixture.calls.acts[0]).callable, 'jobs.create');
 		assert.deepEqual(required(fixture.calls.acts[0]).input, [{ title: 'Named job' }]);
+	})
+);
+
+it.live('a record its rejected create removed keeps its label, its outcome and no approval badge', () =>
+	browser(async () => {
+		const { target } = await show(null, catalog, undefined, undefined, [
+			{
+				id: 'gone',
+				action: 'create',
+				status: 'Rejected',
+				label: 'Duplicate buyer',
+				records: [{ model: 'jobs', id: 'j1', op: 'create' }],
+				log: [
+					{ move: 'request', by: { ref: 'member:ada', name: 'Ada' }, at: '2026-09-01T00:00:00Z', from: null, to: 'Pending', step: 0, reason: null },
+					{ move: 'reject', by: { ref: 'member:sam', name: 'Sam' }, at: '2026-09-02T00:00:00Z', from: 'Pending', to: 'Rejected', step: 0, reason: 'Already on file' }
+				]
+			}
+		]);
+		assert.match(textOf(element<HTMLElement>(target, '[data-record-head] h2')), /Duplicate buyer/);
+		assert.equal(target.querySelector('[data-view=approval-badge]'), null);
+		assert.match(textOf(element<HTMLElement>(target, '[data-view=approval-outcome]')), /Rejected · Sam.*Already on file/s);
+	})
+);
+it.live('the approval badge says "Changes requested" in words and follows the live row, not stale capabilities', () =>
+	browser(async () => {
+		const asked = await show(LIVE, catalog, undefined, undefined, [{ id: 'asked', status: 'ChangesRequested' }]);
+		assert.equal(textOf(element<HTMLElement>(asked.target, '[data-view=approval-badge]')).trim(), 'Changes requested');
+		// a withdrawn request's record: its capabilities were read while it was held, its row carries no `$approval`
+		const withdrawn = await show(
+			LIVE,
+			catalog,
+			undefined,
+			async () => ({
+				...nativeCapabilities,
+				update: { allowed: false, proposal: false, reasons: ['under_approval'] }
+			}),
+			[{ id: 'withdrawn', status: 'Withdrawn' }]
+		);
+		assert.equal(withdrawn.target.querySelector('[data-view=approval-badge]'), null);
+	})
+);
+it.live('blank text reads as the one empty "—"', () =>
+	browser(async () => {
+		const { target } = await show({ ...LIVE, crew: '  ' });
+		assert.equal(textOf(element<HTMLElement>(target, '[data-field=crew]')).replace('Crew', '').trim(), '—');
 	})
 );

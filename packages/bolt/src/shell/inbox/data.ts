@@ -5,7 +5,7 @@ import type { Authority } from '../../engine/contracts.ts';
 import type { TenantDbShape } from '../../engine/db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { NoticeRow } from '../../protocol/schema.ts';
-import { inboxRequests, openRequests, type InboxRequest } from '../../engine/approvals/inbox.ts';
+import { inboxRequests, inboxSql, type InboxRequest } from '../../engine/approvals/inbox.ts';
 export type { InboxRequest } from '../../engine/approvals/inbox.ts';
 
 export type Inbox = {
@@ -23,7 +23,7 @@ export const inbox = Effect.fn('shell.inbox')(function* (db: TenantDbShape, auth
 	const a = auth.actor;
 	if (a.kind !== 'member' || a.external) return { requests: [], notices: [], unread: 0 };
 	const [open, notes, count] = yield* db.read([
-		openRequests,
+		inboxSql(auth),
 		// L-BOLT-354: an inbox notice is one row per member, fanned out when it was written; the member reads their own
 		sql(
 			`SELECT id, title, body, link, at::text AS at, read_at IS NOT NULL AS read FROM sys_notification WHERE member = $1

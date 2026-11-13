@@ -35,7 +35,7 @@ import { Port, uuid, type PortFailure } from '../port.ts';
 import { Ai, Browser, Drivers, Logs } from '../ports.ts';
 import { ReadDeps } from '../query/engine.ts';
 import { bindingsAt } from '../query/reader.ts';
-import { Activation, Approvals, Automations, Callables, Facilities, Guest, Identity, Live, Manifest, Reads, Wake,
+import { Activation, Automations, Callables, Facilities, Guest, Identity, Live, Manifest, Reads, Wake,
  type AutomationExecution, type AutomationJob, type AutomationRequest, type CrossCall, type FacilityCall, acts_json } from '../services.ts';
 
 import { Chain, GATED, makeReadGuards, noticeInsert } from '../write/sql.ts';
@@ -45,7 +45,7 @@ import { due_at, duration, iso, materialize } from './time.ts';
 type Starter = Holder;
 type CallScope = { readonly guards?: ReturnType<typeof makeReadGuards>; readonly readOnly?: boolean; readonly cacheKey?: string };
 const CallDepth = Context.Reference<number>('bolt/CallDepth', { defaultValue: () => 0 });
-const EFFECTS = new Set(['run', 'act', 'withdraw', 'schedule', 'notify', 'send', 'request', 'progress']);
+const EFFECTS = new Set(['run', 'act', 'schedule', 'notify', 'send', 'request', 'progress']);
 /**
  * What a facility call is to a run's gates, decoded once from its arguments with the shapes the dispatcher takes: the
  * stored files it reads (each must be the run's to read), whether it stores a new one (then the run's own),
@@ -152,7 +152,6 @@ function scheduledBy(m: EngineManifest, run: AutomationExecution, durable: boole
 export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* () {
 	const m = yield* Manifest, db = yield* TenantDb, activation = yield* Activation,
 		guest = yield* Guest, reads = yield* Reads, calls = yield* Callables, identity = yield* Identity,
-		approvals = yield* Approvals,
 		live = yield* Live, facilities = yield* Facilities, browser = yield* Browser,
 		drivers = yield* Drivers, wake = yield* Wake, ai = yield* Ai, logs = yield* Logs, agentHost = yield* AgentHost;
 	const crypto = yield* Crypto.Crypto;
@@ -526,7 +525,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 				): Effect.Effect<CrossAnswer, EngineError> => {
 					const work = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
 						if (job?.stopped() === true) return cross_failure('stopped', 'The run was stopped.');
-						if (readOnly && (['act', 'withdraw', 'schedule', 'notify', 'send', 'browser.act', 'browser.evaluate'].includes(call._tag)))
+						if (readOnly && (['act', 'schedule', 'notify', 'send', 'browser.act', 'browser.evaluate'].includes(call._tag)))
 							return cross_failure('forbidden', 'A cached call may not write.');
 						if ((EFFECTS.has(call._tag) || call._tag.startsWith('ai.')) && !(yield* record))
 							return cross_failure('stopped', 'This cron slot already ran.');
@@ -580,22 +579,6 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								});
 								if (result.readGuardsConsumed === true) priorReads.consume(observedRead.generation);
 								return { ok: true, value: result.outcome };
-							}
-							case 'withdraw': {
-								const decision = yield* approvals.decide({
-									request_id: call.request_id,
-									decision: 'withdraw',
-									...(call.reason === undefined ? {} : { reason: call.reason }),
-									authority,
-									now: b.now
-								});
-								return {
-									ok: true,
-									value:
-										decision.kind === 'decided'
-											? { request_id: decision.request_id, status: decision.status }
-											: decision
-								};
 							}
 							case 'run': {
 								const spec = m.automations[call.automation];
@@ -752,7 +735,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 							}
 						}
 					});
-					return call._tag === 'act' || call._tag === 'withdraw' ? writeLane.withPermit(work) : work;
+					return call._tag === 'act' ? writeLane.withPermit(work) : work;
 				};
 				return yield* guest
 					.invoke(

@@ -76,7 +76,8 @@ rendered, objects, lists and JSON as `StructuredData`, custom kinds through thei
 	const t = ui_text();
 	const words = use_enum_text(() => ctx);
 	const kind = $derived(shownKind(declared));
-	const v = $derived(value ?? null);
+	// blank text is no value: every empty field reads the same "—"
+	const v = $derived(typeof value === 'string' && value.trim() === '' ? null : (value ?? null));
 	const text = $derived(
 		format(kind, value, {
 			locale: host.locale,

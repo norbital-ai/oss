@@ -6,7 +6,7 @@ import { decodeValue } from '../db/rows.ts';
 import { readSnapshot, ReadSnapshots } from '../query/snapshot.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { EngineManifest } from '../manifest.ts';
-import { inboxRequests, openRequests } from '../approvals/inbox.ts';
+import { inboxRequests, inboxSql } from '../approvals/inbox.ts';
 import { INBOX_LIMIT, noticeRow, StoredNotice } from '../notifications/rows.ts';
 import {
 	CONVERSATIONS,
@@ -110,7 +110,7 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 					text: "SELECT jsonb_build_object('unread', count(*)::int, 'snapshot', pg_current_snapshot()::text) AS state FROM sys_notification WHERE member = $1 AND read_at IS NULL",
 					params: [read.member]
 				},
-				...(read.requests ? [openRequests] : [])
+				...(read.requests ? [inboxSql(reader.authority)] : [])
 			]);
 			if (rows === undefined || count === undefined || (read.requests && open === undefined))
 				return yield* BoltError.make('internal', 'decode', 'The inbox read returned an incomplete answer.');

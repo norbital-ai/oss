@@ -2,7 +2,8 @@
 // A `.svelte` component as the checker sees it ("The language tool"), built as svelte-check's
 // TypeScript 7 mode builds it: svelte2tsx's TypeScript is a virtual `X_virtual__.ts` beside `X.svelte` (checked as
 // source), and `X.d.svelte.ts` re-exports it, which is what `import './X.svelte'` resolves to under
-// `allowArbitraryExtensions`. Positions map both ways through svelte2tsx's source map; generated code maps to nothing.
+// `allowArbitraryExtensions`. Positions map both ways through svelte2tsx's source map; generated code maps to nothing,
+// except a diagnostic, which falls back to the nearest mapped code before it.
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -101,6 +102,11 @@ export type Shadow = {
 	readonly error?: { readonly message: string; readonly offset: number };
 	/** A shadow offset → the component's, `undefined` inside generated code; and back. */
 	readonly toOriginal: (offset: number) => number | undefined;
+	/**
+	 * A shadow offset → the component place of the nearest mapped code at or before it: a diagnostic svelte2tsx raises in
+	 * its own markup scaffolding (a component's missing required prop) belongs to the tag that scaffolding stands for.
+	 */
+	readonly nearOriginal: (offset: number) => number | undefined;
 	readonly toGenerated: (offset: number) => number | undefined;
 };
 
@@ -131,6 +137,7 @@ export function shadow(path: string, text: string): Shadow {
 			ts,
 			error: { message, offset },
 			toOriginal: () => undefined,
+			nearOriginal: () => undefined,
 			toGenerated: () => undefined
 		};
 	}
@@ -155,6 +162,7 @@ export function shadow(path: string, text: string): Shadow {
 		code: out.code,
 		ts,
 		toOriginal: (offset) => across(byGenerated, byOriginal, [out.code.length, text.length], offset),
+		nearOriginal: (offset) => byGenerated[floor(byGenerated, offset)]?.[1],
 		toGenerated: (offset) => across(byOriginal, byGenerated, [text.length, out.code.length], offset)
 	};
 }

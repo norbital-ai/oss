@@ -24,6 +24,8 @@ export const ApprovalLogFields = {
 	to: ApprovalStateSchema,
 	step: Schema.Number,
 	reason: Schema.NullOr(Schema.String),
+	/** The record's label as the request or resubmission left it: what names a record its rollback removed. */
+	label: Schema.optionalKey(Schema.String),
 	/** A resubmission's changed fields: the root record's by name, any other held row's as `<model>.<field>`. */
 	changed: Schema.optionalKey(Schema.Array(Schema.String)),
 	rolled_back: Schema.optionalKey(
@@ -56,6 +58,8 @@ export const ApprovalViewSchema = Schema.Struct({
 	model: Schema.String,
 	record: Schema.String,
 	action: Operation,
+	/** The record's label snapshot (the latest request or resubmission's), or null when its label follows a relation. */
+	label: Schema.NullOr(Schema.String),
 	at: Schema.String,
 	status: ApprovalStateSchema,
 	step: Schema.Int,

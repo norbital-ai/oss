@@ -36,8 +36,9 @@ import {
 	type QueuedRun
 } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
+import type { NoticeInsert } from '../notifications/notify.ts';
 import { catalog_of } from '../access/pred.ts';
-import { canonical, q } from '@norbital-ai/store';
+import { canonical, q, RECORD_LABEL_COLUMN } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
 import {
 	act,
@@ -90,11 +91,16 @@ const STATUS = {
 	Superseded: 'SUPERSEDED',
 	Withdrawn: 'WITHDRAWN'
 } as const satisfies { [S in ApprovalState]: string };
+/** What the requester is told of a decision that reaches each state; a step's approval that moves on tells nobody. */
+const DECIDED: { readonly [S in ApprovalState]?: string } = {
+	ChangesRequested: 'Changes requested',
+	Approved: 'Approved',
+	Superseded: 'Approved',
+	Rejected: 'Rejected'
+};
 const LogEntry = Schema.Struct({
 	...ApprovalLogFields,
-	by: Schema.String,
-	/** The automation whose run asked (`by` names only that run): any of its runs may withdraw the request. */
-	automation: Schema.optionalKey(Schema.String)
+	by: Schema.String
 });
 type LogEntry = typeof LogEntry.Type;
 const StoredRow = Schema.Struct({
@@ -167,6 +173,15 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 	const cat = catalog_of(m);
 	const sourceAuthorities = new Authorities(m, 'approval');
 	const table = (model: string) => cat.exposures.get(model)?.model.name ?? model;
+	/** The log entry `entry` with the record's stored label as this statement writes it (`allp`), else as it stands. */
+	const labelled = (c: Chain, entry: LogEntry, model: string, record: string) => {
+		if (cat.exposures.get(model)?.model.record_label?.stored !== true) return `${c.p(entry)}::jsonb`;
+		const col = c.p(table(model)),
+			rec = c.p(record);
+		return `${c.p(entry)}::jsonb || jsonb_strip_nulls(jsonb_build_object('label', coalesce(
+		(SELECT coalesce(p.n, p.o) ->> ${c.p(RECORD_LABEL_COLUMN)}::text FROM allp p WHERE p.c = ${col}::text AND p.id = ${rec}::text ORDER BY p.n IS NULL LIMIT 1),
+		(SELECT t.${q(RECORD_LABEL_COLUMN)} FROM ${q(table(model))} t WHERE t.id::text = ${rec}::text))))`;
+	};
 	const hasEffect = (a: Pick<Stored, 'model' | 'action'>) => m.exposures[a.model]?.[a.action]?.effect === true;
 	const toStored = ({ requestor_user, at_text, ...stored }: typeof StoredRow.Type): Stored => ({
 		...stored,
@@ -292,10 +307,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				from: null,
 				to: 'Pending',
 				step: 0,
-				reason: null,
-				...(auth.actor.kind === 'system' && 'automation' in auth.actor.by
-					? { automation: auth.actor.by.automation }
-					: {})
+				reason: null
 			};
 			const shown = face(route, { state: 'Pending', step: 0 });
 			const runs = approvalEffects(
@@ -322,7 +334,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			SELECT jsonb_build_object('collection', ${col}::text, 'id', ${rec}::text, 'op', 'update', 'before', (SELECT revision FROM ${q(table(act.model))} WHERE id::text = ${rec}))
 				AS e WHERE NOT EXISTS (SELECT 1 FROM allp WHERE c = ${col} AND id = ${rec} AND cause IN ('direct', 'cascade'))
 			UNION ALL SELECT ${checkpoint('x')} FROM (SELECT DISTINCT ON (c, id) * FROM allp WHERE cause IN ('direct', 'cascade') AND NOT erased) x) s),
-		jsonb_build_array(${c.p(entry)}::jsonb), ${c.p(b.now)}::timestamptz
+		jsonb_build_array(${labelled(c, entry, act.model, act.record)}), ${c.p(b.now)}::timestamptz
 	WHERE ${GATED}${held === null ? '' : ` AND NOT EXISTS (SELECT 1 FROM ${held})`} ON CONFLICT (id) DO NOTHING`,
 						{ returning: 'id,records' }
 					);
@@ -409,7 +421,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						'bolt_approvals',
 						`UPDATE bolt_approvals a SET state = ${c.p(next.state)}, step = ${next.step}, route = ${c.p(route)}::jsonb,
 		records = ${held === null ? 'a.records' : `coalesce((SELECT h.records FROM ${held} h WHERE h.id=a.id),a.records)`},
-		log = log || jsonb_build_array(${c.p(entry)}::jsonb), closed_at = NULL
+		log = log || jsonb_build_array(${labelled(c, entry, a.model, a.record)}), closed_at = NULL
 	WHERE id::text = ${c.p(a.id)} AND state = 'ChangesRequested' AND requestor = ${c.p(by)} AND ${GATED}`
 					);
 					c.assert(
@@ -451,33 +463,22 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 	/**
 	 * One decision: the guarded state change, its log entry, the readable face, the approval effect and (reject) the
 	 * rollback. A superseder's approve supersedes; a request whose record or model a release removed ends by reject.
-	 * `withdraw` is the requester's alone: the member who asked, or any run of the automation that did.
+	 * Only members decide; `withdraw` is the requester's alone.
 	 */
 	const decide = Effect.fn('Approvals.decide')(function* (
 		x: DecideInput
 	): Effect.fn.Return<Decision, EngineError> {
 		const actor = x.authority.actor;
-		const automation =
-			x.decision === 'withdraw' && actor.kind === 'system' && 'automation' in actor.by
-				? actor.by.automation
-				: undefined;
-		if (actor.kind !== 'member' && automation === undefined)
-			return refused('forbidden', 'Only a member may decide an approval.');
+		if (actor.kind !== 'member') return refused('forbidden', 'Only a member may decide an approval.');
 		const a = yield* load(x.request_id);
 		if (a === null) return refused('not_found', 'No approval request has this id.');
-		const auth =
-			actor.kind === 'member'
-				? yield* currentMember(actor, x.authority.preview, x.authority.admin)
-				: x.authority;
+		const auth = yield* currentMember(actor, x.authority.preview, x.authority.admin);
 		if (auth === null)
 			return refused('forbidden', 'You are no longer authorized to act on this request.');
-		const roles =
-				automation !== undefined && a.log[0]?.automation === automation
-					? new Set([...rolesOf(a, auth), 'requester' as const])
-					: rolesOf(a, auth),
+		const roles = rolesOf(a, auth),
 			move = moveOf(x.decision, roles),
 			reason = x.reason?.trim() ?? '';
-		// a rerun's withdraw of what its earlier attempt withdrew
+		// a retried withdraw of what its earlier attempt withdrew
 		if (move === 'withdraw' && a.state === 'Withdrawn' && roles.has('requester'))
 			return { kind: 'decided', request_id: a.id, status: a.state };
 		const t = transition(a, a.route.steps.length, move, roles, reason);
@@ -534,6 +535,22 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		};
 		const runs = approvalEffects(a, a.route, move, next, hasEffect(a) ? yield* current(a) : [], now, auth);
 		const refreshKey = `approval:${a.id}:${a.log.length}`;
+		// the requester hears of a decision someone else took on their request: changes asked, approved or rejected
+		const told = DECIDED[next.state];
+		const label = a.log.findLast((e) => e.label !== undefined)?.label;
+		const notice: NoticeInsert[] =
+			told === undefined || a.user === null || by === a.requestor
+				? []
+				: [{
+						id: `${refreshKey}:requester`,
+						to: [{ user: a.user }],
+						via: [],
+						title: label === undefined ? told : `${told} · ${label}`,
+						body: reason === '' ? null : reason,
+						link: { model: a.model, id: a.record },
+						once: `${refreshKey}:requester`,
+						attachments: []
+					}];
 		const mint = minter(`approval:${a.id}:${a.log.length}`, now);
 		const shown = face(a.route, next);
 		const commit: Commit = {
@@ -551,7 +568,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				...runs.map((run) => ({ ...run, id: mint() })),
 				...carried.flatMap((commit) => commit.runs)
 			],
-			notices: carried.flatMap((commit) => commit.notices),
+			notices: [...notice, ...carried.flatMap((commit) => commit.notices)],
 			output: null,
 			restored: plan.restored,
 			approvalDecision: { request: a.id, stands },
@@ -678,7 +695,13 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		for (const row of rows) {
 			const a = toStored(row);
 			// ponytail: a non-participant's read check is one read per request; batch by model when lists grow
-			if (participant(a, auth) || a.requestor === me || (yield* readable(a.model, a.record)))
+			// whoever asked or decided keeps the request, even once a rollback removed its record
+			if (
+				participant(a, auth) ||
+				a.requestor === me ||
+				a.log.some((entry) => entry.by === me) ||
+				(yield* readable(a.model, a.record))
+			)
 				seen.push(a);
 		}
 		const member = 'member:';
@@ -710,6 +733,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			model: a.model,
 			record: a.record,
 			action: a.action,
+			label: a.log.findLast((entry) => entry.label !== undefined)?.label ?? null,
 			at: a.at,
 			status: a.state,
 			step: a.step,
@@ -727,7 +751,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				[...new Set(a.route.steps.flatMap((s) => s.users))].map((id) => [id, name.get(id) ?? id])
 			),
 			requestor: who(a.requestor),
-			log: a.log.map(({ by, automation: _automation, ...entry }) => ({ ...entry, by: who(by) })),
+			log: a.log.map(({ by, ...entry }) => ({ ...entry, by: who(by) })),
 			records: a.records.map(({ model, id, op }) => ({ model, id, op })),
 			moves: decisionsFor(a.state, rolesOf(a, auth)),
 			mine: a.requestor === me,

@@ -55,6 +55,8 @@ export const labelOf = (row: Row, expression?: string) =>
 		? row['$label']
 		: recordTitle(row, expression ?? [])) ?? 'Unnamed record';
 
+/** Bolt's internal models, never a Find scope; people (`sys_user`) and approval requests are. */
+const SYSTEM_MODELS = /^(sys_.*|requestor)$/;
 /** The same model scopes and declared search hints serve Find and Norbius mentions. */
 export function recordScopes(
 	catalog: { readonly [model: string]: ModelExposure },
@@ -181,7 +183,7 @@ export function searchScopes(
 	return [
 		...apps(nav),
 		...recordScopes(catalog, t)
-			.filter((scope) => !scope.model.startsWith('sys_') || scope.model === 'sys_user')
+			.filter((scope) => scope.model === 'sys_user' || !SYSTEM_MODELS.test(scope.model))
 			.map((scope) => ({ ...scope, kind: 'model' as const, command: scope.model })),
 		...entries.map((entry) => ({
 			...entry,

@@ -115,7 +115,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	import ChildGrid from '../relations/ChildGrid.svelte';
 	import Alert from '../primitives/alert/alert.svelte';
 	import { fields_text, format, recordText, type Value as FieldValue } from '../kinds/kind.js';
-	import { open_record } from './navigation.js';
+	import { open_record, remember_create, remembered_create } from './navigation.js';
 	import { provide_model } from '../model/context.js';
 	import { provideRecordView, representations } from './context.js';
 	import { bolt_of } from '../client/context.js';
@@ -440,8 +440,13 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	const submittedId = $derived(
 		submitted?.model === of && submitted.record === id ? submitted.request_id : null
 	);
+	// the row's `$approval` is live: a decision that moves or closes its request refetches the panel and the badge
+	const held = $derived(approvalOf(live));
 	const requests = observe_once(() => {
 		void latest;
+		void held?.request_id;
+		void held?.state;
+		void held?.step;
 		if (submittedId !== null)
 			return bolt.approvals
 				.get(submittedId)
@@ -458,13 +463,13 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	);
 	const approvalId = $derived(submittedId ?? openRequest?.id ?? requests.current?.[0]?.id ?? null);
 	const pending_approval = $derived(openRequest !== null);
-	// A create rolled back by rejection or withdrawal has no row any more; its request remains readable.
-	const createRequest = $derived(
-		mode !== 'create' &&
-			live === null &&
-			(requests.current ?? []).some(
-				(request) => request.action === 'create' && request.model === of && request.record === id
-			)
+	// A held delete, or a create rolled back by rejection or withdrawal, has no row; its request remains readable.
+	const goneRequest = $derived(
+		mode !== 'create' && live === null
+			? ((requests.current ?? []).find(
+					(request) => request.model === of && request.record === id
+				) ?? null)
+			: null
 	);
 	/** The header switches between the stored record and its native proposal. */
 	let pane = $state<'record' | 'approval'>('record');
@@ -597,11 +602,16 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			current.spec.target.model !== of ||
 			current.spec.target.id !== id
 		) {
-			const given: Readonly<Record<string, FieldValue | undefined>> = values ?? {};
+			// a create's prefill (the opener's contexts) is kept in the history entry: a reload has no contexts to carry it
+			const given: Readonly<Record<string, FieldValue | undefined>> = {
+				...(mode === 'create' ? remembered_create(of) : {}),
+				...values
+			};
 			const prefill = Object.fromEntries(
 				Object.entries(given).flatMap(([field, value]): [string, FieldValue][] =>
 					value === undefined ? [] : [[field, value]])
 			);
+			if (mode === 'create') remember_create(of, prefill);
 			localController = new FormState(
 				spec,
 				live,
@@ -729,7 +739,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 					? row['$label']
 					: exposure?.record_label !== undefined && row !== null
 						? recordText(exposure, { ...row, ...related?.current })
-						: shownAs(exposure?.label ?? []) || row?.id || id || ''
+						: shownAs(exposure?.label ?? []) || row?.id || goneRequest?.label || id || ''
 				: '')
 	);
 	const subline = $derived(
@@ -803,11 +813,9 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 					{#if badge || icon}<Badge variant="outline" title={hint}
 							>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
 						>{/if}
-					{#if pending_approval || under_approval}
-						{@const rfc = openRequest?.status === 'ChangesRequested'}
-						{@const full = rfc
-							? msg(bolt, 'approval.requestForChange')
-							: lockReason}
+					{#if pending_approval || held !== null}
+						{@const changes = (openRequest?.status ?? held?.state) === 'ChangesRequested'}
+						{@const full = changes ? msg(bolt, 'approval.status.ChangesRequested') : lockReason}
 						<Tooltip text={full}>
 							{#snippet trigger({ props })}
 								<Badge
@@ -818,7 +826,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 									role="status"
 									aria-label={full}
 									data-view="approval-badge"
-									>{rfc ? 'RFC' : msg(bolt, 'record.pending')}</Badge
+									>{changes ? msg(bolt, 'approval.status.ChangesRequested') : msg(bolt, 'record.pending')}</Badge
 								>
 							{/snippet}
 						</Tooltip>
@@ -1233,7 +1241,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 {/snippet}
 
 {#snippet content()}
-	{#if createRequest}
+	{#if goneRequest !== null}
 		{@render approval()}
 	{:else if mode !== 'create' && live === null && requests.loading}
 		{@render skeleton()}
@@ -1315,7 +1323,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		</fieldset>
 		<footer class="flex min-h-12 shrink-0 flex-wrap items-center justify-end gap-2 border-t pt-3" data-record-foot>
 			<fieldset disabled={viewing !== null || shownPast !== null} class="contents">
-				{#if !onApproval && !createRequest && (mode === 'create' || live !== null)}{@render (decoration?.foot ?? foot)()}{/if}
+				{#if !onApproval && goneRequest === null && (mode === 'create' || live !== null)}{@render (decoration?.foot ?? foot)()}{/if}
 			</fieldset>
 		</footer>
 	</article>

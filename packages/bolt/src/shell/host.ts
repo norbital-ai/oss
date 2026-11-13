@@ -81,14 +81,13 @@ import {
 	keysOf
 } from '../engine/identity/session.ts';
 import { BOLT, HEADERS, PATHS, SW, base_path, canonical_path, under } from '../protocol/wire.ts';
-import { fingerprint, schema_slice } from '../engine/schema/plan.ts';
 import { inbox } from './inbox/data.ts';
 import { instance_messages } from './integration/messages.ts';
 import { runList, visible_run_names } from '../engine/runs/rows.ts';
 import { outputFiles } from '../engine/runs/output-files.ts';
 import { settings, SettingsOp, applySettings } from './settings/data.ts';
 import { exposure, read_catalog } from '../engine/access/exposure.ts';
-import { operation_output_catalog } from '../engine/access/operation-outputs.ts';
+import { client_contract, operation_output_catalog } from '../engine/access/operation-outputs.ts';
 import { manifestItems } from './finder/manifest.ts';
 import { StudioOp, studio_view, type StudioPort } from './studio/model.ts';
 import { StudioInspectInput } from './studio/inspection.ts';
@@ -352,7 +351,7 @@ const bootFor = (
 			automations: automation_inputs(manifest, authority),
 			operation_outputs: operation_output_catalog(manifest, authority),
 			search: manifestItems(manifest, authority, studio),
-			contract: fingerprint(schema_slice(manifest))
+			contract: client_contract(manifest)
 		};
 	});
 const makeShell = Effect.gen(function* () {

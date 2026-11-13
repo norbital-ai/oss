@@ -404,7 +404,6 @@ const VIEW_ZH = {
 	'ui.approval.waitingOn': '等待 {who}',
 	'ui.approval.locked': '审批中：仅其审批人或申请人可以修改',
 	'ui.approval.lockedBy': '审批中：{who} 可以修改',
-	'ui.approval.requestForChange': '修改请求',
 	'ui.approval.status.Pending': '待审批',
 	'ui.approval.status.ChangesRequested': '已要求修改',
 	'ui.approval.status.Approved': '已批准',

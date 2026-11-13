@@ -249,7 +249,6 @@ const lift = (call: Call, raw: unknown): unknown => {
 				attempt: raw['attempt'],
 				// an automation run's id and trigger; an effect has none
 				run: Object.assign(cross('run', 'run'), Predicate.isObject(raw['run']) ? raw['run'] : {}),
-				approvals: { withdraw: cross('approvals.withdraw', 'act') },
 				send: cross('send'),
 				progress: cross('progress'),
 				request: cross('request', 'facility'),

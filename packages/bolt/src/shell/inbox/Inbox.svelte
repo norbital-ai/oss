@@ -58,6 +58,14 @@
 		request_changes: 'Request changes',
 		withdraw: 'Withdraw'
 	};
+	const CLOSED: { readonly [S in InboxRequest['status']]: string } = {
+		Pending: 'Pending',
+		ChangesRequested: 'Changes requested',
+		Approved: 'Approved',
+		Rejected: 'Rejected',
+		Superseded: 'Superseded',
+		Withdrawn: 'Withdrawn'
+	};
 	const ORDER: readonly Decision['decision'][] = [
 		'approve',
 		'reject',
@@ -135,10 +143,12 @@
 								? 'Changes requested · Your changes are needed'
 								: 'Changes requested · Awaiting the requester'
 						)
-					: t('Pending · {name} (step {step} of {total})')
-							.replace('{name}', r.steps[r.step]?.name ?? '')
-							.replace('{step}', String(r.step + 1))
-							.replace('{total}', String(r.steps.length))
+					: r.status === 'Pending'
+						? t('Pending · {name} (step {step} of {total})')
+								.replace('{name}', r.steps[r.step]?.name ?? '')
+								.replace('{step}', String(r.step + 1))
+								.replace('{total}', String(r.steps.length))
+						: t(CLOSED[r.status])
 		}))
 	);
 
@@ -157,9 +167,11 @@
 {#snippet at({ value }: { row: object; value: unknown })}<time class="tabular-nums"
 		>{when(value)}</time
 	>{/snippet}
-<!-- which record: its own label (a trial's title, a submission's name) through the reviewer's read grant, never an id -->
+<!-- which record: the label its request left (a held delete or a rolled-back create has no row to read), else its own
+     label through the reviewer's read grant, never an id -->
 {#snippet record_({ row }: { row: InboxRequest; value: unknown })}
-	{#if row.action === 'create'}<span>{t('New')} {singular(bolt, row.model)}</span>
+	{#if row.label !== null}<span>{row.label}</span>
+	{:else if row.action === 'create'}<span>{t('New')} {singular(bolt, row.model)}</span>
 	{:else}<span class="[&_[data-readonly]]:text-xs"
 			><Picker {ctx} of={row.model} value={row.record} on_change={() => {}} readonly /></span
 		>{/if}

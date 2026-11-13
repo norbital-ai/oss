@@ -95,5 +95,15 @@ it.live(
 			// the Svelte compiler's warnings fail a check too (the type service sees types only)
 			write('src/Photo.svelte', '<img src="photo.png" />\n');
 			expect(yield* diagnostics()).toEqual(['src/Photo.svelte:1:svelte/a11y_missing_attribute']);
+			write('src/Photo.svelte', '<p>fine</p>\n');
+
+			// a component missing a required prop in markup fails on its tag, as a script error does
+			write(
+				'src/Missing.svelte',
+				'<script lang="ts">\n\timport Card from \'./Card.svelte\';\n</script>\n\n<p>above</p>\n<Card />\n'
+			);
+			expect(yield* diagnostics()).toEqual([
+				expect.stringMatching(/^src\/Missing\.svelte:6:types\/TS\d+$/)
+			]);
 		}).pipe(Effect.provide(NodeServices.layer))
 );

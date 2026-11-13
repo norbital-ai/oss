@@ -65,7 +65,9 @@ describe('approval flows', () => {
 			step: 0,
 			route: request.route,
 			at: '2026-10-25T00:00:00.000Z',
-			by: 'Requester'
+			by: 'Requester',
+			label: null,
+			decided: false
 		};
 		for (const state of ['Pending', 'ChangesRequested']) {
 			const rows = [{ ...row, state }];
@@ -198,7 +200,9 @@ describe('approval flows', () => {
 					steps: [{ name: 'Peers', teams: ['finance'], users: ['requester'] }]
 				},
 				at: '2026-10-25T00:00:00.000Z',
-				by: 'Requester'
+				by: 'Requester',
+				label: null,
+				decided: false
 			}
 		];
 		expect(inboxRequests(rows, as('requester', 'finance', true))).toMatchObject([

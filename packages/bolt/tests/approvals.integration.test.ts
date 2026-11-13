@@ -14,7 +14,7 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 import { dynamic_read } from '../src/protocol/read-request.ts';
 import { label, label_expression } from '@norbital-ai/store/label';
-import { inboxRequests, openRequests } from '../src/engine/approvals/inbox.ts';
+import { inboxRequests, inboxSql } from '../src/engine/approvals/inbox.ts';
 
 const required = <A>(value: A | undefined): A => {
  if (value === undefined) throw new Error('Missing approval fixture value.');
@@ -430,7 +430,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 							.moves
 					).toEqual(moves);
 				}
-				const [open] = yield* f.t.db.read([openRequests]);
+				const [open] = yield* f.t.db.read([inboxSql(admin)]);
 				expect(inboxRequests(open?.rows ?? [], admin)).toContainEqual(
 					expect.objectContaining({
 						id: request_id,
@@ -965,6 +965,47 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				expect(again).toMatchObject({ kind: 'pending_approval' });
 			})
 	);
+	it.effect(
+		'a rejected create keeps its label, stays in both inboxes and tells the requester why',
+		() =>
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				const submitted = (yield* f.act('create', [
+					{ name: 'Taxi fare', amount: 50, manager: managerId }
+				])).outcome;
+				if (submitted.kind !== 'pending_approval') throw new Error(JSON.stringify(submitted));
+				const pending = yield* f.t.db.read([inboxSql(f.manager)]);
+				expect(inboxRequests(pending[0]?.rows ?? [], f.manager)).toContainEqual(
+					expect.objectContaining({ id: submitted.request_id, label: 'TAXI FARE · Manager' })
+				);
+				expect(
+					yield* f.decide(submitted.request_id, 'reject', f.manager, 'Duplicate claim')
+				).toMatchObject({ kind: 'decided', status: 'Rejected' });
+				for (const auth of [f.manager, f.requester]) {
+					const [rows] = yield* f.t.db.read([inboxSql(auth)]);
+					expect(inboxRequests(rows?.rows ?? [], auth)).toContainEqual(
+						expect.objectContaining({
+							id: submitted.request_id,
+							status: 'Rejected',
+							label: 'TAXI FARE · Manager',
+							moves: []
+						})
+					);
+				}
+				const approvals = yield* Approvals;
+				expect(
+					Option.getOrThrow(
+						yield* approvals.view(submitted.request_id, f.requester, () => Effect.succeed(false))
+					).label
+				).toBe('TAXI FARE · Manager');
+				expect(
+					yield* f.t.db.rows(Schema.Struct({ title: Schema.String, body: Schema.NullOr(Schema.String) }), {
+						text: 'SELECT title, body FROM sys_notification WHERE member = $1',
+						params: [requesterId]
+					})
+				).toContainEqual({ title: 'Rejected · TAXI FARE · Manager', body: 'Duplicate claim' });
+			})
+	);
 	it.effect('the requester cannot withdraw a request that was already decided', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;
@@ -985,7 +1026,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 		})
 	);
 	it.effect(
-		'any run of the automation that asked withdraws its request; an automation decides nothing else',
+		'an automation decides nothing, not even withdrawing the request it raised',
 		() =>
 			Effect.gen(function* () {
 				const f = yield* fixture;
@@ -1006,11 +1047,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				)).outcome;
 				if (raised.kind !== 'pending_approval') throw new Error(JSON.stringify(raised));
 				const id = required(raised.records[0]).id;
-				expect(yield* f.decide(raised.request_id, 'withdraw', yield* run('payroll'))).toMatchObject({
-					kind: 'refused',
-					code: 'forbidden'
-				});
-				for (const decision of ['approve', 'reject', 'request_changes'] as const)
+				for (const decision of ['approve', 'reject', 'request_changes', 'withdraw'] as const)
 					expect(
 						yield* f.decide(raised.request_id, decision, yield* run('offboard'), 'Automated')
 					).toMatchObject({
@@ -1019,24 +1056,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						message: 'Only a member may decide an approval.'
 					});
 				expect(Option.isSome(yield* f.row(id))).toBe(true);
-				// a later run of the same automation: the cause disappeared
-				const later = yield* run('offboard');
-				expect(
-					yield* f.decide(raised.request_id, 'withdraw', later, 'The employee stays')
-				).toMatchObject({ kind: 'decided', status: 'Withdrawn' });
-				expect(Option.isNone(yield* f.row(id))).toBe(true);
-				expect(yield* f.face(raised.request_id)).toMatchObject({ status: 'WITHDRAWN' });
-
-				// a person's request is never an automation's to withdraw
-				const personal = (yield* f.act('create', [
-					{ name: 'Personal', amount: 50, manager: managerId }
-				])).outcome;
-				if (personal.kind !== 'pending_approval') throw new Error(JSON.stringify(personal));
-				expect(yield* f.decide(personal.request_id, 'withdraw', later)).toMatchObject({
-					kind: 'refused',
-					code: 'forbidden'
-				});
-				expect(yield* f.request(personal.request_id)).toMatchObject({ state: 'Pending' });
+				expect(yield* f.request(raised.request_id)).toMatchObject({ state: 'Pending' });
 			})
 	);
 });

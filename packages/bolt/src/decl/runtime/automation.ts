@@ -4,8 +4,7 @@ import { duration_seconds } from '@norbital-ai/store/vars';
 import type { Actor } from '../access/actor.ts';
 import { attached, type AgentUse, type Body } from '../body.ts';
 import type { Act, BodyReturn, CallerQuery, Clock, Eff, MessageKey, RefuseAt } from '../ctx.ts';
-import type { ActConflict, ActRefused, FacilityFailure, Refusal, Unavailable } from '../errors.ts';
-import type { ActUnknown } from '../errors/act.ts';
+import type { FacilityFailure, Refusal, Unavailable } from '../errors.ts';
 import type {
 	Checked,
 	Exact,
@@ -150,20 +149,6 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 		cause: RunCause;
 		progress(update: { ratio?: number | null; text?: string | null }): Eff<void>;
 		act: Act;
-		/**
-		 * Takes back an open approval request this identity asked for (an automation: any of its runs; an effect: its
-		 * writer), restoring the held records as a rejection does. Anyone else's request, or a decided one, fails
-		 * `ActRefused`. Server code never approves, rejects or requests changes.
-		 */
-		approvals: {
-			withdraw(
-				request_id: RequestId,
-				reason?: string
-			): Eff<
-				{ readonly request_id: RequestId; readonly status: 'Withdrawn' },
-				ActRefused | ActConflict | ActUnknown
-			>;
-		};
 		run: Run;
 		/**
 		 * Stops the current body with an authored refusal: a catalogue key, the input list `row` and `field` it names,

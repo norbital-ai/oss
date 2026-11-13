@@ -20,7 +20,6 @@ const MESSAGES = {
 	'approval.reasonOptional': 'reason (optional)',
 	'approval.reasonRequired': 'reason (required)',
 	'approval.request': 'Request',
-	'approval.requestForChange': 'Request for change',
 	'approval.requested_by': 'Requested by {who}',
 	'approval.resubmitOnSave': 'Saving resubmits for approval',
 	'approval.rolled_back': 'Rolled back',

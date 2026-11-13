@@ -1,4 +1,16 @@
+import { encode_wire, revive_wire } from '@norbital-ai/std/wire';
+import { Result } from 'effect';
+import { value_object, type Value } from '../kinds/kind.js';
+
 let carried: { record: string; contexts: ReadonlyMap<unknown, unknown> } | null = null;
+/** The history entry's create prefill (`remember_create`): a reload keeps what the opener's contexts gave the form. */
+const CREATE = 'ui.create';
+/** `history.state` as an object, without the create prefill a new entry must not inherit. */
+const entryState = (): { readonly [key: string]: unknown } => {
+	const state: unknown = history.state;
+	if (typeof state !== 'object' || state === null) return {};
+	return Object.fromEntries(Object.entries(state).filter(([key]) => key !== CREATE));
+};
 /**
  * Opens the shell's record sheet: `?record=<model>/<id|new>`, the form the shell's `bolt.href` writes and reads,
  * stacked on any sheet already open.
@@ -21,8 +33,27 @@ export function open_record(
 	url.searchParams.delete('record');
 	for (const r of at < 0 ? [...stack, key] : stack.slice(0, at + 1))
 		url.searchParams.append('record', r);
-	history.pushState(history.state, '', url);
+	history.pushState(entryState(), '', url);
 	dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
+}
+/** Keeps a create sheet's prefill (its relation to a party, say) in this history entry, so a reload restores it. */
+export function remember_create(model: string, values: { readonly [field: string]: Value }): void {
+	if (typeof history === 'undefined' || Object.keys(values).length === 0) return;
+	history.replaceState(
+		{ ...entryState(), [CREATE]: { model, values: JSON.stringify(encode_wire(values)) } },
+		'',
+		location.href
+	);
+}
+/** The prefill `remember_create` kept for a create of `model` in this history entry; none is `{}`. */
+export function remembered_create(model: string): { readonly [field: string]: Value } {
+	if (typeof history === 'undefined') return {};
+	const state: unknown = history.state;
+	const kept = value_object(state) ? state[CREATE] : undefined;
+	if (!value_object(kept) || kept['model'] !== model || typeof kept['values'] !== 'string') return {};
+	const text = kept['values'];
+	const values: unknown = Result.getOrUndefined(Result.try(() => JSON.parse(text, revive_wire)));
+	return value_object(values) ? values : {};
 }
 /**
  * The contexts of the views on the page, by model: a sheet opened with nothing carried (a reload or a link with

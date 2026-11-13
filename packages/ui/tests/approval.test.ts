@@ -50,6 +50,7 @@ const request: ApprovalView = {
 	model: 'jobs',
 	record: 'j1',
 	action: 'update',
+	label: null,
 	at: '2026-10-13T12:00:00Z',
 	status: 'Pending',
 	step: 0,
@@ -373,6 +374,43 @@ it.live('several requests: the selector defaults to the open one and switches th
 		yield* browser(() => settle());
 		assert.equal(element(target, '[data-view=approval]').dataset['status'], 'Rejected');
 		assert.equal(nodes(target)[1]?.dataset['look'], 'rejected');
+	})
+);
+it.live('a decided request states its outcome and reason to everyone, a withdrawn one says so', () =>
+	Effect.gen(function* () {
+		const asked: ApprovalView = {
+			...request,
+			status: 'ChangesRequested',
+			mine: true,
+			log: [
+				entry('request', 'Bob', '2026-10-13T12:00:00Z'),
+				entry('request_changes', 'Sam', '2026-10-14T12:00:00Z', {
+					to: 'ChangesRequested',
+					reason: 'Attach the receipt'
+				})
+			]
+		};
+		const changes = yield* panel([asked]);
+		const outcome = element<HTMLElement>(changes.target, '[data-view=approval-outcome]');
+		assert.match(textOf(outcome), /Changes requested · Sam/);
+		assert.match(textOf(element<HTMLElement>(outcome, '[data-reason]')), /Attach the receipt/);
+		const withdrawn = yield* panel([
+			{
+				...request,
+				id: 'r2',
+				status: 'Withdrawn',
+				log: [
+					entry('request', 'Bob', '2026-10-13T12:00:00Z'),
+					entry('withdraw', 'Bob', '2026-10-14T12:00:00Z', { to: 'Withdrawn' })
+				]
+			}
+		]);
+		assert.match(
+			textOf(element<HTMLElement>(withdrawn.target, '[data-view=approval-outcome]')),
+			/Withdrawn · Bob/
+		);
+		const pending = yield* panel([request]);
+		assert.equal(pending.target.querySelector('[data-view=approval-outcome]'), null);
 	})
 );
 it('a row approval decodes once; a malformed `$approval` is no approval', async () => {
