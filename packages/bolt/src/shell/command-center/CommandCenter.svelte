@@ -177,8 +177,8 @@
 		bundle: 'lucide:package',
 		telemetry: 'lucide:activity',
 		logs: 'lucide:scroll-text',
-		audit: 'lucide:shield-check',
-		automations: 'lucide:refresh-cw',
+		audit: 'concept:access',
+		automations: 'concept:automations',
 		inference: 'lucide:sparkles',
 		people: 'lucide:users'
 	};
@@ -239,7 +239,7 @@
 	<!-- the operations views fill the panel (their own regions scroll); the others grow and the panel scrolls -->
 	<div
 		class={[
-			'flex min-w-0 flex-col gap-3 px-4 pb-6 sm:px-6',
+			'flex min-w-0 flex-col gap-3 pb-6',
 			view !== undefined && 'h-full min-h-0'
 		]}
 	>
@@ -283,7 +283,7 @@
 			const picked = tabs.find((x) => x === next);
 			if (picked !== undefined) on_tab(picked);
 		}}
-		class="mt-4 min-h-0 flex-1 gap-3 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6"
+		class="mt-4 min-h-0 flex-1 gap-3"
 		tabs={tabs.map((name) => ({ name, title: t(TITLES[name]), icon: ICONS[name], body }))}
 	/>
 </Stack>

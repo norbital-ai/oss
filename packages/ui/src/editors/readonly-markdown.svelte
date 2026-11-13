@@ -25,7 +25,8 @@ Renders Markdown text for reading.
 <div
 	{...rest}
 	class={cn(
-		'prose prose-sm max-w-none min-w-0 dark:prose-invert [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere]',
+		// a wide table scrolls across inside itself; the page keeps the one vertical scroll
+		'prose prose-sm max-w-none min-w-0 dark:prose-invert [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere] [&_table]:block [&_table]:w-max [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:[overflow-wrap:normal]',
 		className
 	)}
 	data-markdown

@@ -73,12 +73,12 @@ const required = <A>(value: A | null | undefined): A => {
 };
 
 const member = (
-	o: { external?: boolean; admin?: boolean; tools?: readonly string[]; team?: string } = {}
+	o: { external?: boolean; admin?: boolean; tools?: readonly string[]; team?: string; id?: string } = {}
 ): Authority => ({
 	key: 'k',
 	actor: {
 		kind: 'member',
-		id: 'ann',
+		id: o.id ?? 'ann',
 		email: null,
 		phone: null,
 		external: o.external ?? false,
@@ -3346,13 +3346,20 @@ describe('approvals, record history and the audit trail', () => {
 		)(yield* result(x, 'act', { callable: 'tasks.create', input: [{ title: 'audited' }] }));
 		return first(answer.result.stored.tasks.rows).id;
 	});
-	it.effect('record history answers who changed a record to a reader, and refuses one who cannot read it', () =>
+	it.effect('record history names who changed a record by their label to a reader, and refuses one who cannot read it', () =>
 		Effect.gen(function* () {
-			const admin = yield* ctx();
-			const id = yield* created(admin);
-			expect(yield* result(admin, 'record_history', { model: 'tasks', id })).toMatchObject({
-				result: { revisions: [expect.objectContaining({ revision: 1 })] }
+			const ada = '0199a000-0000-4000-8000-00000000ada1';
+			// its own turn: an invocation's ids derive from it, so this create is not a replay of another test's
+			const admin = yield* ctx({ turn: 'ada', authority: member({ admin: true, id: ada }) });
+			yield* admin.engine.db.write({
+				text: "INSERT INTO sys_user (id, email, name, kind, admin) VALUES ($1, 'ada@example.test', 'Ada Lovelace', 'staff', true) ON CONFLICT DO NOTHING",
+				params: [ada]
 			});
+			const id = yield* created(admin);
+			const history = yield* result(admin, 'record_history', { model: 'tasks', id });
+			// the writer reads as the person, never as an account id
+			expect(history).toMatchObject({ result: { revisions: [{ revision: 1, by: 'Ada Lovelace' }] } });
+			expect(history).not.toMatchObject({ result: { revisions: [{ actor: expect.anything() }] } });
 			// staff may create tasks but read none: no history either
 			const staff = yield* ctx({ authority: Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's')) });
 			expect(yield* result(staff, 'record_history', { model: 'tasks', id })).toEqual({

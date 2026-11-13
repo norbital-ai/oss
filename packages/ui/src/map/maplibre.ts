@@ -6,10 +6,12 @@ const VERSION = '6.16.0';
 const DIST = `https://cdn.jsdelivr.net/npm/maplibre-gl@${VERSION}/dist`;
 let loading: Promise<MapLibreModule> | undefined;
 
+// a URL import is untyped; its pinned release's own types name it
+const runtime = (): Promise<MapLibreModule> => import(/* @vite-ignore */ `${DIST}/maplibre-gl.mjs`);
 /** MapLibre, once per page: the ES module, its worker set, and its stylesheet first in `<head>` so ours overrides it. */
 export function load_maplibre(): Promise<MapLibreModule> {
 	loading ??= Promise.all([
-		import(/* @vite-ignore */ `${DIST}/maplibre-gl.mjs`) as Promise<MapLibreModule>,
+		runtime(),
 		// settled either way: without it the controls sit unstyled, the map and its marks still draw
 		new Promise<void>((resolve) => {
 			const link = document.createElement('link');

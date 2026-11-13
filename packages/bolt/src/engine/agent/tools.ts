@@ -3101,7 +3101,25 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				i.id,
 				{ ...(i.at === undefined ? {} : { at: i.at }), ...(i.output === undefined ? {} : { output: i.output }) }
 			]);
-			return ok({ revisions: yield* readAs(x)(read) });
+			const revisions = yield* Schema.decodeUnknownEffect(HistoryRevisions)(yield* readAs(x)(read)).pipe(
+				Effect.mapError((error) => BoltError.make('internal', 'decode', error.message, error))
+			);
+			// a writer reads as the person (name, else handle), never as an account id
+			const ids = [...new Set(revisions.flatMap((r) => (r.actor?.kind === 'member' ? [r.actor.id] : [])))];
+			const people =
+				ids.length === 0
+					? []
+					: yield* e.db.rows(Schema.Struct({ id: Schema.String, label: Schema.NullOr(Schema.String) }), {
+							text: 'SELECT id::text AS id, coalesce(name, email, phone) AS label FROM sys_user WHERE id::text IN (SELECT jsonb_array_elements_text($1::jsonb))',
+							params: [JSON.stringify(ids)]
+						});
+			const label = new Map(people.map((p) => [p.id, p.label]));
+			return ok({
+				revisions: revisions.map(({ actor, ...revision }) => ({
+					...revision,
+					by: actor === null ? null : actor.kind === 'member' ? (label.get(actor.id) ?? 'a member') : actor.kind
+				}))
+			});
 		});
 	}
 	const audit = e.audit;
@@ -3721,9 +3739,14 @@ const approvalsTool = defineTool('approvals', {
 		all: Schema.optionalKey(Schema.Boolean)
 	})
 });
+const HistoryRevisions = Schema.Array(
+	Schema.StructWithRest(Schema.Struct({ actor: Schema.NullOr(Schema.Struct({ kind: Schema.String, id: Schema.String })) }), [
+		Schema.Record(Schema.String, Schema.Json)
+	])
+);
 const recordHistoryTool = defineTool('record_history', {
 	behavior: { data: true },
-	description: "A record's revisions, oldest first: each write's who, when, cause and changed fields. at: { instant }, { revision } or { before: <approval request id> } ends it there; output picks the read output shown.",
+	description: "A record's revisions, oldest first: each write's who (by), when, cause and changed fields. at: { instant }, { revision } or { before: <approval request id> } ends it there; output picks the read output shown.",
 	parameters: Schema.Struct({
 		model: Schema.String,
 		id: Schema.String,
@@ -3734,7 +3757,7 @@ const recordHistoryTool = defineTool('record_history', {
 const { actor_kind: _kind, invocation: _invocation, order: _order, ...AUDIT_FILTERS } = AuditQuery.fields;
 const auditTool = defineTool('audit', {
 	behavior: { data: true, resume: { argument: 'after' } },
-	description: "The workspace's audit trail: who did what, when and how it ended, newest first, filtered by the given fields; id answers one event in full.",
+	description: "Administrators only: the audit trail of who did what, when and how it ended, newest first, filtered by the given fields; id answers one event in full.",
 	parameters: Schema.Struct({
 		id: Schema.optionalKey(Schema.String),
 		...AUDIT_FILTERS
