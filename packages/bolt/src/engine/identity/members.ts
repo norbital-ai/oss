@@ -236,7 +236,7 @@ export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 	);
 	identityPiece(s, 'ins', 'sys_invitation', `INSERT INTO sys_invitation (id, email, phone, team, external, party, invited_by, expires_at)
 	VALUES ${values.join(',')}`);
-	identityHistory(s, 'sys_invitation', 'ins', now, by(auth));
+	identityHistory(s, 'sys_invitation', 'ins', now, by(auth), h.writes);
 	yield* write(h, s, CapturedResult);
 	const failed: string[] = [];
 	for (let offset = 0; offset < prepared.length; offset += 20) {
@@ -340,7 +340,7 @@ export const acceptInvitation = Effect.fn('Bolt.acceptInvitation')(function* (
 	)
 		return yield* Effect.fail(refuse('expired', 'This invitation has expired.'));
 	const s = new IdentityStatement();
-	acceptPieces(s, inv, session.user, now, 'true', false);
+	acceptPieces(s, inv, session.user, now, 'true', false, h.writes);
 	projection(h, s, 'member', now);
 	const result = yield* write(h, s, CapturedResult);
 	if (!result.captured.some((row) => row.model === 'sys_user'))
@@ -357,7 +357,7 @@ export const revokeInvitation = Effect.fn('Bolt.revokeInvitation')(function* (
 		now = yield* h.now;
 	identityPiece(s, 'u', 'sys_invitation', `UPDATE sys_invitation SET revoked_at = ${s.p(now.toISOString())}::timestamptz, revision = revision + 1
 	WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL`);
-	identityHistory(s, 'sys_invitation', 'u', now, by(auth));
+	identityHistory(s, 'sys_invitation', 'u', now, by(auth), h.writes);
 	const result = yield* write(h, s, CapturedResult);
 	if (result.captured.length === 0) return yield* Effect.fail(refuse('not_found', 'No open invitation.'));
 	return null;
@@ -376,7 +376,7 @@ export const resendInvitation = Effect.fn('Bolt.resendInvitation')(function* (
 		now = yield* h.now;
 	identityPiece(s, 'u', 'sys_invitation', `UPDATE sys_invitation SET expires_at = ${s.p(new Date(now.getTime() + INVITE_MS).toISOString())}::timestamptz, revision = revision + 1
 	WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL`);
-	identityHistory(s, 'sys_invitation', 'u', now, by(auth));
+	identityHistory(s, 'sys_invitation', 'u', now, by(auth), h.writes);
 	const result = yield* write(h, s, Schema.Struct({ ...CapturedResult.fields,
 		rows: Schema.Array(Schema.Struct({ email: Schema.NullOr(Schema.String), phone: Schema.NullOr(Schema.String) }))
 	}), "(SELECT coalesce(jsonb_agg(jsonb_build_object('email', n->>'email', 'phone', n->>'phone')), '[]'::jsonb) FROM u) AS rows");
@@ -420,7 +420,7 @@ const setFlag = Effect.fn('Bolt.setFlag')(function* (
 		: `EXISTS (SELECT 1 FROM sys_user WHERE admin AND active AND id <> ${u})`;
 	identityPiece(s, 'changed', 'sys_user', `UPDATE sys_user SET ${flag} = ${s.p(value)}, revision = revision + 1
 	WHERE id = ${u} AND (NOT (admin AND active) OR ${keep})`);
-	identityHistory(s, 'sys_user', 'changed', now, by(auth));
+	identityHistory(s, 'sys_user', 'changed', now, by(auth), h.writes);
 	if (flag === 'active' && !value)
 		s.cte('push', `DELETE FROM bolt_push_subscriptions WHERE "user" = ${u} AND EXISTS (SELECT 1 FROM changed)`);
 	if (flag === 'active') projection(h, s, 'changed', now);
@@ -450,7 +450,7 @@ export const assign_team = Effect.fn('Bolt.assign_team')(function* (
 	const s = new IdentityStatement();
 	identityPiece(s, 'u', 'sys_user', `UPDATE sys_user SET team = ${s.p(team)}, revision = revision + 1 WHERE id = ${s.p(user)}`);
 	const now = yield* h.now;
-	identityHistory(s, 'sys_user', 'u', now, by(auth));
+	identityHistory(s, 'sys_user', 'u', now, by(auth), h.writes);
 	projection(h, s, 'u', now);
 	const result = yield* write(h, s, CapturedResult);
 	if (!result.captured.some((row) => row.model === 'sys_user'))
@@ -498,7 +498,7 @@ export const setHandles = Effect.fn('Bolt.setHandles')(function* (
 	return yield* Effect.gen(function* () {
 		identityPiece(s, 'u', 'sys_user', `UPDATE sys_user SET ${set.join(', ')}, revision = revision + 1 WHERE id = ${s.p(user)}`);
 		const now = yield* h.now;
-		identityHistory(s, 'sys_user', 'u', now, by(auth));
+		identityHistory(s, 'sys_user', 'u', now, by(auth), h.writes);
 		projection(h, s, 'u', now);
 		const result = yield* write(h, s, CapturedResult);
 		if (!result.captured.some((row) => row.model === 'sys_user'))

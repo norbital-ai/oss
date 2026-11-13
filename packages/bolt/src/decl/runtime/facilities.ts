@@ -52,12 +52,13 @@ export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'stopped
  * Why a run started; `effect`: a model's `effect` after a committed write; `handoff`: an act that outlived the
  * person-wait, held by its run.
  */
-export type RunCause = 'cron' | 'effect' | 'schedule' | 'start' | 'retry' | 'handoff';
+export type RunCause = 'cron' | 'effect' | 'event' | 'schedule' | 'start' | 'retry' | 'handoff';
 /**
  * Who or what triggered an automation run (`sys_run.trigger`, `ctx.run.trigger`). It never grants authority: every run
  * executes as the reserved system identity holding its automation's `policies`. A `person` started it by hand (Run now,
  * the `start` callable, an envoy), `agent` set when Norbius started it in that conversation for them; else the `system`
- * did: a `cron`, a model `effect` after `verb` on `records`, or a `schedule` from another run's code (`by`,
+ * did: a `cron`, a model `effect` after `verb` on `records`, an `event` (a committed `verb` on `model`'s `records` the
+ * automation listens to), or a `schedule` from another run's code (`by`,
  * absent on a run queued before triggers were recorded).
  */
 export type RunTrigger =
@@ -69,7 +70,7 @@ export type RunTrigger =
 	| { readonly kind: 'system'; readonly cause: 'cron' }
 	| {
 			readonly kind: 'system';
-			readonly cause: 'effect';
+			readonly cause: 'effect' | 'event';
 			readonly model: ModelName;
 			readonly verb: 'create' | 'update' | 'delete';
 			readonly records: readonly string[];

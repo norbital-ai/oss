@@ -9,6 +9,7 @@ import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Clock, Effect, Schema } from 'effect';
 import { CapturedResult, nativeCommit, type CommitPublication } from '../db/captured.ts';
+import { triggers_of } from '../runs/queue.ts';
 import {
 	identityHistory,
 	identityPiece,
@@ -127,7 +128,7 @@ export class Authorities {
 				const s = new IdentityStatement();
 				identityPiece(s, 'bound', 'sys_user', `UPDATE sys_user SET party = ${s.p(jsonb(party))}::jsonb, revision = revision + 1
 	WHERE id = ${s.p(u.id)} AND party IS NOT DISTINCT FROM ${s.p(jsonb(u.party))}::jsonb`);
-				identityHistory(s, 'sys_user', 'bound', new Date(yield* Clock.currentTimeMillis), `member:${u.id}`);
+				identityHistory(s, 'sys_user', 'bound', new Date(yield* Clock.currentTimeMillis), `member:${u.id}`, triggers_of(this.m).writes);
 				const { revision } = yield* nativeCommit(db.write, publication, s,
 					Schema.Struct({ ...CapturedResult.fields, revision: Schema.NullOr(Schema.Number) }),
 					"(SELECT (n->>'revision')::int FROM bound) AS revision");

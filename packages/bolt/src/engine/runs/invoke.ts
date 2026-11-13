@@ -216,7 +216,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 				const browseProfile = automationBrowserProfile(run.automation, run.id);
 				yield* browser.scoped(browseProfile).pipe(Effect.mapError((error) => BoltError.make(error._tag === 'Unavailable' ? 'unavailable' : 'upstream', 'facility', error.message, error)));
 				const cause = yield* Schema.decodeUnknownEffect(
-					Schema.Literals(['cron', 'effect', 'schedule', 'start', 'retry'])
+					Schema.Literals(['cron', 'effect', 'event', 'schedule', 'start', 'retry'])
 				)(run.cause).pipe(
 					Effect.mapError(() =>
 						BoltError.make('invalid_input', 'admission', 'The automation run has an unknown cause.')

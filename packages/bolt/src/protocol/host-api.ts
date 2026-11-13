@@ -34,6 +34,7 @@ import type { Json } from '../decl/values.ts';
 import type { Holder } from '../engine/access/authority.ts';
 import { Authorities } from '../engine/identity/actor.ts';
 import { RateWindows } from '../engine/access/rate.ts';
+import { triggers_of } from '../engine/runs/queue.ts';
 import {
 	captureIdentity,
 	member_directory,
@@ -655,6 +656,7 @@ const identityLayer = (
 				windows: new RateWindows(),
 				keys: lazyKeys(db),
 				public_url,
+				writes: triggers_of(manifest).writes,
 				...(signup_of(manifest) === undefined ? {} : { signup: signup_of(manifest) })
 			});
 		})

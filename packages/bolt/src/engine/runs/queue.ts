@@ -86,7 +86,10 @@ type Triggers = {
 	crons: readonly CronEntry[];
 	/** How long each cron that declares `rest` may rest, in ms. */
 	rests: ReadonlyMap<string, number>;
+	/** Each automation listening to a model's committed writes (`on: [{ model, verbs }]`). */
+	writes: readonly WriteTrigger[];
 };
+export type WriteTrigger = { readonly automation: string; readonly model: string; readonly verbs: readonly string[] };
 
 const cache = new WeakMap<EngineManifest, Triggers>();
 /** Every declared trigger, compiled once per manifest; the host's clock computes the crons' slots. */
@@ -94,14 +97,19 @@ export function triggers_of(m: EngineManifest): Triggers {
 	const cached = cache.get(m);
 	if (cached !== undefined) return cached;
 	const crons: CronEntry[] = [],
-		rests = new Map<string, number>();
+		rests = new Map<string, number>(),
+		writes: WriteTrigger[] = [];
 	for (const [automation, spec] of Object.entries(m.automations)) {
 		for (const x of spec.on ?? []) {
+			if ('model' in x) {
+				writes.push({ automation, model: x.model, verbs: x.verbs });
+				continue;
+			}
 			crons.push({ id: automation, cron: cronFields(x.cron), zone: x.tz ?? m.workspace.tz });
 			if (x.rest !== undefined) rests.set(automation, duration(x.rest));
 		}
 	}
-	const triggers = { crons, rests };
+	const triggers = { crons, rests, writes };
 	cache.set(m, triggers);
 	return triggers;
 }
@@ -206,6 +214,9 @@ export function queue_effects(
 		c.assert(`NOT EXISTS (SELECT c,id FROM ${rows} GROUP BY c,id HAVING count(*)>1)`,
 			'under_approval', 'A changed record belongs to more than one approval request.');
 	} else if (selects.length > 0) c.cte(rows, `SELECT x.*,NULL::uuid AS request FROM ${source} x`);
+	const { writes } = triggers_of(m);
+	// built only when used: an unused parameter has no type PostgreSQL can determine
+	if (writes.length > 0) queue_events(c, writes, `${c.shared('now', now)}::timestamptz`, requests === null ? source : `(SELECT * FROM ${rows} WHERE request IS NULL)`, writer.depth, GATED);
 	if (selects.length === 0) return;
 	const deep = writer.depth > LIMITS.writeDepth;
 	const jobs = c.cte('effect_jobs',
@@ -220,6 +231,28 @@ export function queue_effects(
 		ON CONFLICT (request,operation,automation) DO NOTHING RETURNING request`);
 	enqueue(c, { select: `SELECT automation,input,due_at,cause,depth,actor,starter,state,error,finished_at
 		FROM ${jobs} WHERE request IS NULL AND ${GATED}` });
+}
+
+/**
+ * One run per listening automation and verb for the rows `source` (`c`, `id`, `op`) committed, as the system identity
+ * (no actor or starter: the executor holds the automation's policies). Past the write depth it is recorded failed.
+ */
+export function queue_events(
+	c: Chain,
+	writes: readonly WriteTrigger[],
+	now: string,
+	source: string,
+	depth: number,
+	when?: string
+): void {
+	if (writes.length === 0) return;
+	const deep = depth > LIMITS.writeDepth;
+	const selects = writes.map((w) => `SELECT ${c.p(w.automation)}::text AS automation,'{}'::jsonb AS input,${now} AS due_at,
+	'event'::text AS cause,${c.p(depth)}::int AS depth,${c.p(deep ? 'failed' : 'queued')}::text AS state,
+	${c.p(deep ? effectDepthFailure : null)}::jsonb AS error,CASE WHEN ${c.p(deep)}::boolean THEN ${now} END AS finished_at,
+	jsonb_build_object('kind','system','cause','event','model',x.c,'verb',x.op,'records',jsonb_agg(x.id ORDER BY x.id)) AS trigger
+	FROM ${source} x WHERE x.c = ${c.p(w.model)} AND x.op = ANY(ARRAY[${w.verbs.map((v) => c.p(v)).join(',')}]::text[]) GROUP BY x.c,x.op`);
+	enqueue(c, { select: selects.join(' UNION ALL ') }, when === undefined ? {} : { when });
 }
 
 /** The closing decision releases frozen jobs atomically, or discards them when the change is rejected. */

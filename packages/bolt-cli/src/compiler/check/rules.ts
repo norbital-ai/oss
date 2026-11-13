@@ -533,7 +533,11 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 				'declare its run body inline: automation({ …, run: function* (input, ctx) { … } })'
 			);
 		for (const on of a.on ?? []) {
-			if (!('cron' in on)) continue;
+			if ('model' in on) {
+				if (m.models[on.model] === undefined)
+					at('automation/write', 'automation', name, `on: there is no model '${on.model}'`);
+				continue;
+			}
 			const parsed = parse_cron(on.cron, on.tz ?? m.workspace.tz);
 			if (Result.isFailure(parsed))
 				at('automation/cron', 'automation', name, `'${on.cron}': ${parsed.failure.message}`);

@@ -13,7 +13,7 @@ import type {
 	OutputKind,
 	ValueOf
 } from '../fields.ts';
-import type { ModelName, PolicyName, Row } from '../names.ts';
+import type { ModelName, PolicyName, ReadableName, Row } from '../names.ts';
 import type { Duration, FileRef, IanaZone, Id, NonEmpty, RequestId } from '../values.ts';
 import type { ApprovalEffectEvent } from '../../protocol/effect-events.ts';
 import type {
@@ -53,16 +53,25 @@ export const CallCacheDuration = DeclaredDuration.check(Schema.makeFilter((value
 	const seconds = duration_seconds(value);
 	return seconds !== undefined && Number.isFinite(seconds) && seconds > 0 ? undefined : 'cache must be a positive duration';
 }));
-/** A cron schedule. Row writes run the model's effect; integrations own incoming webhooks. */
-export const TriggerSpec = Schema.Struct({
+/** A cron schedule. */
+export const CronTriggerSpec = Schema.Struct({
 	cron: Schema.String,
 	tz: Schema.optionalKey(Schema.String),
 	rest: Schema.optionalKey(DeclaredDuration)
 });
+/** A committed write to a model, template or system (`sys_user`, `sys_invitation`, …): see `AutomationSpec.on`. */
+export const WriteTriggerSpec = Schema.Struct({
+	model: Schema.String,
+	verbs: Schema.NonEmptyArray(Schema.Literals(['create', 'update', 'delete']))
+});
+export const TriggerSpec = Schema.Union([CronTriggerSpec, WriteTriggerSpec]);
 export type Trigger = typeof TriggerSpec.Type;
+type WriteVerb = 'create' | 'update' | 'delete';
 type ValidTrigger<T> = T extends { cron: infer S }
 	? { cron: Cron<S>; tz?: IanaZone; rest?: Duration }
-	: Trigger;
+	: T extends { model: unknown }
+		? { model: ReadableName; verbs: NonEmpty<WriteVerb> }
+		: Trigger;
 
 type Attempts = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 type Max = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
@@ -82,9 +91,16 @@ export type AutomationSpec = AutomationMode & {
 	/** The typed result returned by a call or recorded on a job. */
 	output?: OutputKind;
 	/**
-	 * Cron schedules; absent means started only. There are no other triggers: row writes run a model's `effect`,
-	 * integrations own incoming webhooks, and identity changes (invitations, sign-ups) start nothing, so a business
-	 * profile for a member comes from an explicit start or a cron reconciliation keyed by a unique match.
+	 * What starts it besides an explicit start; absent means started only. `{ cron }` fires on a schedule.
+	 * `{ model, verbs }` fires after a committed write of one of `verbs` to `model`, a template model or a system one
+	 * alike (`sys_user`: a sign-up, an accepted invitation, a team or handle change; `sys_invitation`: sent, resent,
+	 * accepted, revoked). The run executes as the reserved system identity with `policies`, never the writer's
+	 * authority, so the follow-up needs nothing from the person who wrote. One committed statement queues one run per
+	 * automation and verb, in that statement (durable, never per row); `ctx.run.trigger` is
+	 * `{ kind: 'system', cause: 'event', model, verb, records }` with the written ids, and the body reads the rows it needs.
+	 * The run takes no input. A write held for approval emits nothing; a run's own writes chain at most 8 deep.
+	 * A model's own reaction to its writes stays its `effect`.
+	 * @example on: [{ model: 'sys_user', verbs: ['create', 'update'] }]
 	 */
 	on?: readonly Trigger[];
 	/**

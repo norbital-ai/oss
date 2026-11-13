@@ -38,6 +38,7 @@ import type { SyncControlInput } from '../decl/runtime/sync.ts';
 import type { FileRef, Id, Json } from '../decl/values.ts';
 import { compile_authority, type Holder } from '../engine/access/authority.ts';
 import { RateWindows } from '../engine/access/rate.ts';
+import { triggers_of } from '../engine/runs/queue.ts';
 import { AgentHost } from '../engine/agent/index.ts';
 import { with_browser } from '../engine/agent/browser.ts';
 import { SmartThrottle } from '../engine/agent/throttle.ts';
@@ -1204,6 +1205,7 @@ export const test_engine = <P extends TestPorts = never>(
 				phone,
 				dev_sink: true,
 				public_url,
+				writes: triggers_of(m).writes,
 				...(signup_of(m) === undefined ? {} : { signup: signup_of(m) })
 			}).pipe(Effect.provide(NodeCrypto.layer));
 			const base = Layer.mergeAll(

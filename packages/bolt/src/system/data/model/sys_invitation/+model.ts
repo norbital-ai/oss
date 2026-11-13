@@ -1,7 +1,8 @@
 // An invitation: the authored team affiliation a member receives on acceptance. It names the person by their
 // email, their mobile number, or both; either proves it. Administrators read it (X-18 identity); no grant.
 // Created at once; acceptance follows address proof and creates or links the `sys_user` with the invitation's team.
-// Identity writes are native administrator operations and start no automation. A bulk invite validates and commits
+// Identity writes are native administrator operations; like any write they start the automations listening to the
+// model (`on: [{ model, verbs }]`). A bulk invite validates and commits
 // every row together, then delivers each, answering the ids that failed for resending. An expired invitation can be
 // resent; the daily prune removes an unreferenced one 90 days after its expiry, acceptance or revocation.
 import { bind_system_model } from '../../../../decl/model.ts';

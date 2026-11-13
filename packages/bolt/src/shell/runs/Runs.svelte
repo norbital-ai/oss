@@ -97,7 +97,7 @@
 			: trigger.kind === 'person'
 				? `${trigger.name ?? trigger.ref}${trigger.agent ? ` · ${t('via Norbius')}` : ''}`
 				: `${t('System')} · ${
-						trigger.cause === 'effect'
+						trigger.cause === 'effect' || trigger.cause === 'event'
 							? `${trigger.model}.${trigger.verb}`
 							: trigger.cause === 'schedule'
 								? (trigger.by?.automation ?? t('schedule'))

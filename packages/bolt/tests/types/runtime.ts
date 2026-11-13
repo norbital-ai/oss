@@ -299,7 +299,7 @@ automation({
 		const trigger = ctx.run.trigger;
 		if (trigger.kind === 'person')
 			void (trigger.actor satisfies Exclude<Actor, { kind: 'system' }>);
-		else void (trigger.cause satisfies 'cron' | 'webhook' | 'effect' | 'schedule');
+		else void (trigger.cause satisfies 'cron' | 'webhook' | 'effect' | 'event' | 'schedule');
 		void (ctx.run.id satisfies Id<'sys_run'>);
 		// @ts-expect-error B3 scheduling an unknown automation
 		yield* ctx.schedule('nigthly', {});

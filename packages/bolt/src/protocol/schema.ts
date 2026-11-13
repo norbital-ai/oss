@@ -112,7 +112,7 @@ const SystemTrigger = [
 	Schema.Struct({ kind: Schema.Literal('system'), cause: Schema.Literal('cron') }),
 	Schema.Struct({
 		kind: Schema.Literal('system'),
-		cause: Schema.Literal('effect'),
+		cause: Schema.Literals(['effect', 'event']),
 		model: Schema.String,
 		verb: Schema.Literals(['create', 'update', 'delete']),
 		records: Schema.Array(Schema.String)

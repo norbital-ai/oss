@@ -269,7 +269,7 @@ describe('versioned record history', () => {
 			yield* TestDb.migrate(db, native);
 			const create = new IdentityStatement();
 			identityPiece(create, 'member', 'sys_user', `insert into sys_user(id,name) values(${create.p(ID)},'Native member')`);
-			identityHistory(create, 'sys_user', 'member', new Date(NOW), 'host');
+			identityHistory(create, 'sys_user', 'member', new Date(NOW), 'host', undefined);
 			yield* db.write(create.sql('1 AS applied'));
 			const version = yield* db.value(Schema.String, {
 				text: "select schema::text from bolt_history_current where model='sys_user' and active", params: []
@@ -283,7 +283,7 @@ describe('versioned record history', () => {
 			yield* db.write({ text: "update bolt_history_current set active=false where model='sys_user'", params: [] });
 			const change = new IdentityStatement();
 			identityPiece(change, 'member', 'sys_user', `update sys_user set name='Uncommitted',revision=revision+1 where id=${change.p(ID)}`);
-			identityHistory(change, 'sys_user', 'member', new Date(NOW), 'host');
+			identityHistory(change, 'sys_user', 'member', new Date(NOW), 'host', undefined);
 			expect(yield* Effect.flip(db.write(change.sql('1 AS applied')))).toMatchObject({ sqlstate: 'BA001' });
 			expect(yield* db.value(Schema.String, { text: 'select name from sys_user where id=$1', params: [ID] })).toBe('Native member');
 			expect(yield* db.value(Schema.Int, { text: 'select count(*)::int from bolt_history where record=$1', params: [ID] })).toBe(1);

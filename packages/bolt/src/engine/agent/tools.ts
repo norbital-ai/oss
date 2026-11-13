@@ -1404,7 +1404,7 @@ export function describeWorkspace(
 	const automation = (name: string) => {
 		const spec = m.automations[name];
 		if (spec === undefined) return name;
-		const on = (spec.on ?? []).map((x) => `cron ${x.cron}`);
+		const on = (spec.on ?? []).map((x) => ('cron' in x ? `cron ${x.cron}` : `on ${x.model} ${x.verbs.join('|')}`));
 		return `${automationSignature(m, name)} "${spec.description}"${on.length === 0 ? '' : ` · ${on.join(', ')}`}${spec.agent === undefined ? '' : ` · agent ${spec.agent}`}`;
 	};
 	const sections = {

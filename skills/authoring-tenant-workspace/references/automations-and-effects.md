@@ -18,8 +18,8 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `i
 - `capabilities.automations` grants manual starts only; code needs none.
 - Records the body acts on are `input: { <name>: { kind: 'rows', of: '<model>' } }`. A caller sends ids; the body receives complete rows read under the run's policies, and an unreadable id refuses the start. Pass each row as the write `target` (it carries its revision): never query the ids again or hand-build `{ id, revision }`.
 - Say no with `return yield* ctx.refuse('<message key>', { row?, field?, values? })`. The message is a catalogue key; `row` indexes the input list; a message with `{placeholders}` takes exactly those `values` (typed, required). `ctx.refuse` is the only refusal: never construct a `Refusal` or build text.
-- A row write runs its model's `effect`, never an automation.
-- Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rate_limited`. Cron and effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
+- A row write runs its model's `effect`. An automation may also listen to a model's committed writes, template or system (`sys_user`, `sys_invitation`): `on: [{ model: 'sys_user', verbs: ['create', 'update'] }]`. Each committed statement queues one run per automation and verb with `ctx.run.trigger = { kind: 'system', cause: 'event', model, verb, records }`; the run takes no input, holds its `policies` (the writer needs none) and reads the rows it needs. A write held for approval emits nothing.
+- Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rate_limited`. Cron, event and effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
 - A safety-net cron depending only on workspace data declares `rest`: when a run writes nothing, no slot fires until the workspace is used or the rest passes. Never on a cron that finds work by time or reads what a connected link writes.
 - Server `ctx.run(name, input)` returns a job's `id` and `automation`, or a call's declared output. A page's job handle exposes `.id`, `.ids` and `.automation`; yielding it confirms queue admission through an outcome, not completion. A page call yields its output. Only jobs may be scheduled. A cached call declares a positive `cache` duration and remains read-only.
 - Every startable automation appears in the Command Center with its typed form; a page form is optional.
@@ -42,7 +42,7 @@ A dropped run reruns from the start, up to 3 times; a retry also starts over. No
 
 ## Facilities
 
-- `on` is a list of cron literals `{ cron, tz?, rest? }`. Incoming webhooks belong to integration definitions and their native sync deliveries, never automation triggers.
+- `on` lists cron literals `{ cron, tz?, rest? }` and write listeners `{ model, verbs }`. Incoming webhooks belong to integration definitions and their native sync deliveries, never automation triggers.
 - Business I/O runs in automations: `ctx.request`, `ctx.send`, `ctx.web.read`, `ctx.files.*`, `ctx.geo.*`, `ctx.convert.*`, `ctx.ai.*`. Integration bodies call `ctx.request(op)` on their own instance.
 - `ctx.convert.record(model, id, { to: 'pdf' })` prints a record's own view as the run's identity and answers its bytes, unstored; attach them to `ctx.send` or `ctx.notify` (which answers `{ messages }`). A PDF of a record is this, never a hand-built document.
 - `ctx.convert.document`, `ctx.convert.record` and `ctx.convert.ingest` are optional. Recover `Unavailable` only when absence is allowed; other failures propagate unless the workflow recovers them.
