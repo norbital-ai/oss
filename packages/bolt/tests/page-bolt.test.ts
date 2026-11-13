@@ -13,7 +13,6 @@ import {
 } from 'effect';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { describe, expect, it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { input_schema } from '@norbital-ai/store/kind';
 import { create_bolt, patched } from '../src/page/bolt.ts';
 import type { EventSourceLike } from '../src/page/stream.ts';
@@ -41,7 +40,7 @@ const page = <Row extends Schema.Struct.Fields>(row: Row) =>
 const Amounts = page({ id: Schema.String, amount: input_schema({ kind: 'decimal', scale: 2 }) });
 const Ids = page({ id: Schema.String });
 const decimal = (value: unknown) => {
-	if (!(value instanceof Decimal)) throw new Error('Expected a Decimal');
+	if (!(typeof value === 'string')) throw new Error('Expected decimal text');
 	return value;
 };
 const all_jobs = { read: { m: 'query', a: [{ jobs: {} }] } } as const;
@@ -78,7 +77,7 @@ describe('reads', () => {
 			const { bolt, sent } = yield* client(() =>
 				Response.json({
 					answers: [
-						{ jobs: { rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null, total: 1 } }
+						{ jobs: { rows: [{ id: 'a', amount: '1.50' }], next: null, total: 1 } }
 					]
 				})
 			);
@@ -87,15 +86,15 @@ describe('reads', () => {
 			expect('then' in read).toBe(true);
 			expect(sent).toHaveLength(0);
 			const answer = yield* read;
-			expect(answer.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
-			expect(decimal(answer.jobs.rows[0]?.amount).plus('1').toString()).toBe('2.50');
+			expect(answer.jobs.rows[0]?.amount).toBeTypeOf('string');
+			expect(Number(decimal(answer.jobs.rows[0]?.amount)) + 1).toBe(2.5);
 			expect(sent).toHaveLength(1);
 			yield* Effect.acquireRelease(
 				Effect.sync(() => mount_edge(ManagedRuntime.make(Layer.empty))),
 				(dispose) => Effect.promise(dispose)
 			);
 			const awaited = yield* Effect.promise(async () => await read);
-			expect(awaited.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
+			expect(awaited.jobs.rows[0]?.amount).toBeTypeOf('string');
 			expect(sent).toHaveLength(2);
 		})
 	);
@@ -174,10 +173,10 @@ describe('reads', () => {
 				t: 'answer',
 				view: 'v1',
 				v: 1,
-				value: { jobs: { rows: [{ id: 'a', amount: { $dec: '2' } }], next: null, total: 1 } }
+				value: { jobs: { rows: [{ id: 'a', amount: '2' }], next: null, total: 1 } }
 			});
 			yield* Queue.take(answered);
-			expect(seen[0]?.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
+			expect(seen[0]?.jobs.rows[0]?.amount).toBeTypeOf('string');
 			push({ t: 'error', view: 'v1', code: 'too_large', message: 'too big' });
 			const exit = yield* Fiber.await(fiber);
 			expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toEqual(
@@ -239,7 +238,7 @@ describe('reads', () => {
 			expect(states.at(-1)).toBe('live');
 		})
 	);
-	it.effect('an optimistic money update keeps the Decimal contract of a live row', () =>
+	it.effect('an optimistic money update keeps the decimal text of a live row', () =>
 		Effect.gen(function* () {
 			let source: EventSourceLike | undefined;
 			const opened = yield* Deferred.make<void>();
@@ -285,18 +284,18 @@ describe('reads', () => {
 				view: 'v1',
 				v: 1,
 				value: {
-					jobs: { rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null, total: 1 }
+					jobs: { rows: [{ id: 'a', amount: '1.50' }], next: null, total: 1 }
 				}
 			});
 			yield* Queue.take(answered);
 			const act = yield* bolt
 				.act({
-					'jobs.update': [{ target: { id: 'a', revision: 1 }, set: { amount: Decimal.of('0') } }]
+					'jobs.update': [{ target: { id: 'a', revision: 1 }, set: { amount: '0' } }]
 				})
 				.pipe(Effect.forkScoped);
 			const painted = yield* Queue.take(answered);
-			expect(painted.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
-			expect(decimal(painted.jobs.rows[0]?.amount).to_number()).toBe(0);
+			expect(painted.jobs.rows[0]?.amount).toBeTypeOf('string');
+			expect(Number(decimal(painted.jobs.rows[0]?.amount))).toBe(0);
 			yield* Deferred.succeed(
 				reply,
 				Response.json({ outcome: { kind: 'committed', output: { 'jobs.update': null }, records: [] }, v: 1 })
@@ -466,13 +465,13 @@ describe('acts, starts, uploads and the session', () => {
 				},
 				fetch: async () =>
 					Response.json({
-						outcome: { kind: 'committed', output: { total: { $dec: '9.00' } }, records: [] },
+						outcome: { kind: 'committed', output: { total: '9.00' }, records: [] },
 						v: 0
 					})
 			});
 			const call = done.run('total', {});
 			if (call.mode !== 'call') throw new Error('expected an in-request call');
-			expect(yield* call).toMatchObject({ total: expect.any(Decimal) });
+			expect(yield* call).toMatchObject({ total: expect.any(String) });
 			const refused = (yield* client(
 				outcome({ kind: 'refused', code: 'forbidden', message: 'No.' })
 			)).bolt;

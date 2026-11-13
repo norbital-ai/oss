@@ -1,7 +1,6 @@
-// The one wire shape per kind (D6, std/wire), both ways: a decimal is `{ $dec }`, a date and an instant their ISO text,
+// The one wire shape per kind (D6), both ways: a decimal is its exact text, a date and an instant their ISO text,
 // a period `{ from, to }` / `{ start, end }` of those. An act takes exactly what q, live, the callback's `before` and
 // `ctx.query`, an aggregate and a seed load give back.
-import { dec } from '@norbital-ai/store/decimal';
 import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
 import { Context, Deferred, Effect, Exit, Layer, Queue, Schema, Scope, Stream } from 'effect';
@@ -67,7 +66,7 @@ const guest =
 
 const input = {
 	name: 'a',
-	amount: { $dec: '1.50' },
+	amount: '1.50',
 	day: '2026-01-02',
 	at: '2026-01-02T03:04:05.000Z',
 	span: { from: '2026-01-01', to: null },
@@ -81,9 +80,9 @@ const committed = (o: Outcome) => {
 };
 
 const Row = Schema.Record(Schema.String, Schema.Json);
-/** A seeded row written from std values (`dec`), as a seed pack holds it. */
+/** A seeded row as a seed pack holds it: a decimal as its exact text. */
 const seeded = Schema.decodeUnknownSync(Schema.fromJsonString(Row))(
-	JSON.stringify({ id: ID, ...input, amount: dec('1.50') })
+	JSON.stringify({ id: ID, ...input, amount: '1.50' })
 );
 // One workspace for the file: the seed pack holds one row, and the update exposure runs the recording callback.
 const open = Effect.fn('Test.wireCodec')(function* () {
@@ -133,7 +132,7 @@ const createdId = (outcome: Outcome) => {
 };
 
 describe('wire codec: one shape per kind, both ways (D6)', () => {
-	it.live('an aggregate keys a date bucket by its ISO day and sums to `{ $dec }`', () =>
+	it.live('an aggregate keys a date bucket by its ISO day and sums to decimal text', () =>
 		Effect.gen(function* () {
 			const a = yield* shared; // before any act: the seeded row alone
 			const reads = Context.get(a.context, Reads);
@@ -150,13 +149,13 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 				{ now: a.t.clock.now(), today: a.t.clock.now().slice(0, 10), tz: 'UTC' }
 			);
 			expect(page).toMatchObject({
-				rows: [{ key: { day: '2026-01-01' }, count: 1, sum: { amount: { $dec: '1.50' } } }]
+				rows: [{ key: { day: '2026-01-01' }, count: 1, sum: { amount: '1.50' } }]
 			});
 		})
 	);
-	it.live('a seed pack written from std values loads back as the read shape', () =>
+	it.live('a seed pack written from plain values loads back as the read shape', () =>
 		Effect.gen(function* () {
-			expect(seeded['amount']).toEqual({ $dec: '1.50' });
+			expect(seeded['amount']).toEqual('1.50');
 			expect(yield* (yield* shared).get(ID)).toMatchObject(input);
 		})
 	);

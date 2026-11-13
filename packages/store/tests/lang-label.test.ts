@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
-import { Decimal } from '../src/lang/decimal.ts';
 import { label, label_expression, label_paths } from '../src/lang/label.ts';
 
 describe('std/label', () => {
@@ -11,7 +10,7 @@ describe('std/label', () => {
 		assert.equal(label({ code: 'Q-7', name: null }, expression), 'Q-7 · Unnamed');
 		assert.equal(label({ customer: { name: 'Acme' } }, 'record.customer.name'), 'Acme');
 		assert.equal(
-			label({ amount: Decimal.of('10.50') }, "'Total ' + string(record.amount)"),
+			label({ amount: '10.50' }, "'Total ' + string(record.amount)"),
 			'Total 10.50'
 		);
 		assert.equal(
@@ -34,7 +33,7 @@ describe('std/label', () => {
 			code: 'Q-7',
 			customer: { label: 'Acme' },
 			at: '2026-03-01T00:00:00Z',
-			total: Decimal.of('10.50'),
+			total: '10.50',
 			meta: '{"a":1}',
 			holder: '0190f1e2-3c4d-7e8f-9a0b-1c2d3e4f5a6b'
 		};

@@ -8,6 +8,7 @@ import {
 	Clock,
 	Context,
 	Crypto,
+	DateTime,
 	Effect,
 	Layer,
 	Option,
@@ -35,7 +36,6 @@ import {
 } from '../engine/services.ts';
 import { Syncs } from '../engine/sync/index.ts';
 import { mayUpdate } from '../engine/write/act.ts';
-import { local_of } from '@norbital-ai/store/zone';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { Logs } from '../engine/ports.ts';
@@ -118,7 +118,7 @@ import { readLog, runLog } from '../engine/guest/telemetry.ts';
 import { Audit } from '../engine/audit.ts';
 import { AuditQuery } from '../protocol/audit.ts';
 import { audited, auditActor } from '../engine/audit-operation.ts';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { canonical } from '@norbital-ai/store';
 import { fromBase64, timingSafeEqual } from '../engine/crypto.ts';
 import { PUSH_WORKER } from './push-worker.ts';
@@ -1021,7 +1021,7 @@ const makeShell = Effect.gen(function* () {
 			auth,
 			{
 				now: at.toISOString(),
-				today: local_of(at.getTime(), m.workspace.tz).date,
+				today: DateTime.formatIsoDate(DateTime.makeZonedUnsafe(at, { timeZone: m.workspace.tz })),
 				tz: m.workspace.tz
 			}
 		);
@@ -1175,11 +1175,11 @@ const makeShell = Effect.gen(function* () {
 							category: 'identity',
 							action: op.op,
 							actor: auditActor(auth.actor),
-							payload: encode_wire(
+							payload: 
 								op.op === 'setSecret'
 									? { op: op.op, input: { name: op.input.name, value: '[credential redacted]' } }
 									: op
-							)
+							
 						},
 						applySettings(h, m, auth, op, secrets)
 					).pipe(Effect.provideService(Audit, audit))

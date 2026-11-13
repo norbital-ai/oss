@@ -1,4 +1,4 @@
-// The persisted JSON structure follows std's kind codecs; file bytes and reference visibility belong to the host.
+// The persisted JSON structure follows the kind codecs; file bytes and reference visibility belong to the host.
 import { UUID_PATTERN } from '../lang/kind.ts';
 export const JSON_VALID = `create or replace function store_json_valid(value jsonb, spec jsonb) returns boolean
 language plpgsql immutable parallel safe set timezone = 'UTC' set datestyle = 'ISO,YMD' as $store_json$
@@ -123,8 +123,7 @@ begin
 			float_value := (value #>> '{}')::double precision;
 			return float_value not in ('NaN'::double precision,'Infinity'::double precision,'-Infinity'::double precision);
 		end if;
-		text_value := case when shape = 'object' and jsonb_typeof(value->'$dec') = 'string' then value->>'$dec'
-			when shape = 'string' then value #>> '{}' else null end;
+		text_value := case when shape = 'string' then value #>> '{}' else null end;
 		return coalesce(text_value ~ '^-?[0-9]+(\\.[0-9]+)?$',false);
 	when 'seq' then
 		return case when spec ? 'pattern' then shape = 'string' else store_json_valid(value,'{"kind":"int"}'::jsonb) end;

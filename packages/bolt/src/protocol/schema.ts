@@ -1,12 +1,11 @@
 // The wire's Schemas (A.4): every body and live frame of `/__bolt/*`, the callables that are not a model's,
 // an integration instance's status, the session and host-operation bodies, and `norbital.template.json`. A body is
 // decoded once where it enters (the host's request, the client's answer); every wire type is its Schema's own.
-import { Effect, Option, Schema, SchemaTransformation } from 'effect';
+import { DateTime, Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { PAPER_SIZES } from '../decl/runtime/facilities.ts';
 import { MessageValues } from '../decl/errors/refusal.ts';
-import { Instant, Zone } from '@norbital-ai/store/date';
 
 /** An authoring phase: diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
@@ -825,25 +824,12 @@ export const SetupDescription = Schema.Struct({
 	webhook: tolerant(Schema.Boolean)
 });
 export type SetupDescription = typeof SetupDescription.Type;
-const ImportInstant = Schema.String.pipe(
-	Schema.refine((value): value is string => {
-		try {
-			Instant(value);
-			return true;
-		} catch {
-			return false;
-		}
-	})
+/** An ISO instant with its zone or offset. */
+const ImportInstant = Schema.String.check(
+	Schema.makeFilter((value: string) => /(Z|[+-]\d{2}:?\d{2})$/i.test(value) && Option.isSome(DateTime.make(value)))
 );
-const ImportZone = Schema.String.pipe(
-	Schema.refine((value): value is string => {
-		try {
-			Zone(value);
-			return value !== '';
-		} catch {
-			return false;
-		}
-	})
+const ImportZone = Schema.String.check(
+	Schema.makeFilter((value: string) => value !== '' && Option.isSome(DateTime.zoneMakeNamed(value)))
 );
 /** A persisted source boundary. A missing boundary retains the instance's previous all-history behavior. */
 export const ImportStart = Schema.Union([

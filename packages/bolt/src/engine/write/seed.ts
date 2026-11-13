@@ -1,6 +1,6 @@
 import { Effect, Stream } from 'effect';
 import { input_schema } from '@norbital-ai/store/kind';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { Schema } from 'effect';
 // Seed mode (X-13): a restore. Stored values go in as given (kept ids of any uuid version, non-initial states,
 // `seq` values, sealed rows) in relationship order, one statement per model per ≤ 1 MiB chunk, each chunk a step
@@ -116,7 +116,7 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 						)
 					)
 				);
-				values[field] = encode_wire(decoded);
+				values[field] = decoded;
 			}
 			return values;
 		});

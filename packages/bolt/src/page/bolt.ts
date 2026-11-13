@@ -1,6 +1,7 @@
 // The scoped browser client: reads and operations are Effects; current reads are Streams.
 import {
 	Clock,
+	DateTime,
 	Deferred,
 	Effect,
 	FiberMap,
@@ -16,8 +17,6 @@ import {
 import type { HttpClient } from 'effect/http';
 import { tick } from 'svelte';
 import type { FileRef, Json } from '../decl/values.ts';
-import { Instant, PlainDate } from '@norbital-ai/store/date';
-import { local_of } from '@norbital-ai/store/zone';
 import { reactive_clock, reactive_query, run } from '@norbital-ai/ui/effect';
 import type { FileUrlOptions } from '@norbital-ai/store/kind';
 import {
@@ -65,7 +64,7 @@ import { act_output, call_output, job_receipt, type OperationOutputs } from '../
 import type { ConvertSource, PreviewPdfOptions } from '../decl/runtime/facilities.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { FileRefSchema, stored_file_url } from './file-ref.ts';
-import { encode_wire, type Wired } from '@norbital-ai/store/wire';
+
 
 /** The optional document bridge a fleet host uses to inspect mounted snapshot clients without a live stream. */
 export interface PageSnapshotHost {
@@ -677,7 +676,7 @@ export const create_bolt = (config: BoltConfig) =>
 					Reflect.deleteProperty(window, 'bolt_refresh');
 			}));
 		}
-		const q = <A>(method: WireRead['m'], args: readonly Wired[], schema: () => Schema.Decoder<A>): Query<A> => {
+		const q = <A>(method: WireRead['m'], args: readonly Json[], schema: () => Schema.Decoder<A>): Query<A> => {
 			const read: WireRead = { m: method, a: args.map(read_wire) };
 			let prepared: Schema.Decoder<A> | undefined;
 			const decoder = () => prepared ?? (prepared = schema());
@@ -818,15 +817,15 @@ export const create_bolt = (config: BoltConfig) =>
 				if (outcome.kind !== 'committed') return outcome;
 				return { ...outcome, output: yield* declared(() => job_receipt(automation, ids), outcome.output) };
 			})));
-		const command = (callable: string, input: Wired, options: { observed?: Readonly<Record<string, number>> } = {}) =>
-			send({ callable, input: encode_wire(input) }, uuid(), options.observed).pipe(Effect.flatMap(settled));
+		const command = (callable: string, input: Json, options: { observed?: Readonly<Record<string, number>> } = {}) =>
+			send({ callable, input }, uuid(), options.observed).pipe(Effect.flatMap(settled));
 		const act = (
-			inputs: Readonly<Record<string, Wired>>,
+			inputs: Readonly<Record<string, Json>>,
 			options: { key?: string } = {}
 		) => Effect.gen(function* () {
 			const initiatingFiber = yield* Effect.fiberId;
 			const key = options.key ?? uuid();
-			const acts = Object.fromEntries(Object.entries(inputs).map(([name, input]) => [name, encode_wire(input)]));
+			const acts = inputs;
 			const pending = Object.entries(acts).flatMap(([name, input]) => {
 				const dot = name.lastIndexOf('.');
 				const model = name.slice(0, dot), verb = name.slice(dot + 1);
@@ -887,8 +886,8 @@ export const create_bolt = (config: BoltConfig) =>
 			clock: (unit?: 'minute' | 'hour' | 'day') =>
 				reactive_clock(
 					(at) => ({
-						now: Instant(at),
-						today: PlainDate(local_of(at.getTime(), config.tz ?? 'UTC').date)
+						now: at.toISOString(),
+						today: DateTime.formatIsoDate(DateTime.makeZonedUnsafe(at, { timeZone: config.tz ?? 'UTC' }))
 					}),
 					unit,
 					config.tz,
@@ -955,20 +954,20 @@ export const create_bolt = (config: BoltConfig) =>
 					Effect.flatMap(committedAs((output) => decode(FilterOptionsAnswer, output), 'Could not load filter options.'))
 				),
 			/** Native controls retain durable execution tracking without exposing syncs as automation starts. */
-			sync_control(model: string, sync: string, input: Wired) {
+			sync_control(model: string, sync: string, input: Json) {
 				const id = uuid(), automation = `${model}.sync.${sync}`;
-				return Object.assign(admit({ model, sync, id, input: encode_wire(input) }, id, automation, [id], PATHS.sync_control),
+				return Object.assign(admit({ model, sync, id, input }, id, automation, [id], PATHS.sync_control),
 					{ mode: 'job' as const, id, ids: [id], automation });
 			},
 			// many inputs are one request queueing one run each (a bulk action), not one request per record
-			run(automation: string, input: Wired | readonly Wired[]) {
+			run(automation: string, input: Json | readonly Json[]) {
 				const declared_call = Object.hasOwn(config.operation_outputs.automations, automation)
 					? config.operation_outputs.automations[automation] : undefined;
 				if (declared_call?.mode === 'call')
-					return Object.assign(command('run', { automation, input: encode_wire(input) }).pipe(Effect.flatMap((answer) => answer.kind === 'committed'
+					return Object.assign(command('run', { automation, input }).pipe(Effect.flatMap((answer) => answer.kind === 'committed'
 						? declared(() => call_output(config.operation_outputs, automation), answer.output)
 						: Effect.fail(new ProtocolFailed({ message: 'A call answered with a durable run outcome instead of its result.' })))), { mode: 'call' as const, automation });
-				const inputs: readonly Wired[] = Array.isArray(input) ? input : [input];
+				const inputs: readonly Json[] = Array.isArray(input) ? input : [input];
 				const runs = inputs.map((one) => ({
 					input: one,
 					id: uuid()
@@ -976,7 +975,7 @@ export const create_bolt = (config: BoltConfig) =>
 				const ids = runs.map((run) => run.id);
 				const id = ids[0];
 				if (id === undefined) throw new RangeError('An automation batch needs at least one input.');
-				return Object.assign(admit({ callable: 'run', input: encode_wire({ automation, runs }) }, id, automation, ids), { mode: 'job' as const, id, ids, automation });
+				return Object.assign(admit({ callable: 'run', input: { automation, runs } }, id, automation, ids), { mode: 'job' as const, id, ids, automation });
 			},
 			upload: (
 				file: Blob & { name?: string },
@@ -1003,7 +1002,7 @@ export const create_bolt = (config: BoltConfig) =>
 			preview_pdf: (source: ConvertSource, options: PreviewPdfOptions = {}) =>
 				Effect.gen(function* () {
 					const response = yield* post((issued_at) => ({
-						body: { callable: 'convert.previewPdf', input: encode_wire({ source, options }), issued_at }, key: uuid()
+						body: { callable: 'convert.previewPdf', input: { source, options }, issued_at }, key: uuid()
 					}), (body, headers) => transport.requestPdf(PATHS.act, body, headers));
 					if (response.body instanceof Uint8Array) return response.body;
 					const refusal = errorOf(response.body);
@@ -1024,7 +1023,7 @@ export const create_bolt = (config: BoltConfig) =>
 			restore: {
 				preview: (model: string, record: string, revision: number) =>
 					command('history.preview', { model, record, revision }).pipe(
-						Effect.flatMap(committedAs((output) => decode(RestorePreviewSchema, encode_wire(output)), 'The restore preview could not be loaded.')),
+						Effect.flatMap(committedAs((output) => decode(RestorePreviewSchema, output), 'The restore preview could not be loaded.')),
 					),
 				run: (model: string, record: string, revision: number, live: number) =>
 					command('history.restore', { model, record, revision }, { observed: { [record]: live } })

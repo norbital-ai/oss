@@ -1,4 +1,4 @@
-import { dec } from '@norbital-ai/store/decimal';
+import { BigDecimal } from 'effect';
 
 const NUMBER = '^-?[0-9]+([.][0-9]+)?$';
 const INSTANT = '^[0-9]{4}-[0-9]{2}-[0-9]{2}';
@@ -7,7 +7,7 @@ const number = new RegExp(NUMBER), instant = new RegExp(INSTANT);
 /** Numeric and ISO versions compare by value; other changed tokens have no ordering. */
 export const remoteVersionNewer = (a: string, b: string): boolean => {
 	if (a === b) return false;
-	if (number.test(a) && number.test(b)) return dec(a).gt(dec(b));
+	if (number.test(a) && number.test(b)) return BigDecimal.isGreaterThan(BigDecimal.fromStringUnsafe(a), BigDecimal.fromStringUnsafe(b));
 	const [x, y] = [Date.parse(a), Date.parse(b)];
 	return instant.test(a) && instant.test(b) && Number.isFinite(x) && Number.isFinite(y)
 		? x > y

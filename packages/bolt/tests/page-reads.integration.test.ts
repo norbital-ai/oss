@@ -101,9 +101,9 @@ const manifest = Result.getOrThrow(
 const guest =
 	program(`export default { custom_field: { probe_window: { check: (window) => window.samples.some((value) => value < 0) ? 'Probe samples cannot be negative.' : undefined } }, model: { orders: { bodies: {
 	indexes: { hue: {
-		probe: (q) => ({ vector: [q.r.to_number(), 0, 0] }),
+		probe: (q) => ({ vector: [Number(q.r), 0, 0] }),
 		// the exact score: nearest to 0.5 on the first channel, whatever the probe
-		rerank: (q, row) => Math.abs(row.color[0] - (0.5 + q.r.to_number())),
+		rerank: (q, row) => Math.abs(row.color[0] - (0.5 + Number(q.r))),
 	} },
 } } } };`);
 

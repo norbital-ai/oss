@@ -1,4 +1,4 @@
-// Typed input decoding and reference discovery share std/kind's one codec.
+// Typed input decoding and reference discovery share the kind table's one codec.
 import {
 	input_schema,
 	type Fields,
@@ -8,7 +8,7 @@ import {
 } from '@norbital-ai/store/kind';
 import { Array as EffectArray, Effect, Predicate, Result, Schema, SchemaIssue } from 'effect';
 import type { Json } from '../../decl/values.ts';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { automation_fields, type AutomationInputSchema } from '../../decl/runtime/automation-input.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { LIMITS } from '../contracts.ts';
@@ -152,7 +152,7 @@ export function decodeInput(
 		if (kind.many !== true && kind.kind === 'custom') {
 			if (custom_fields === undefined) return;
 			if (custom_fields[kind.of]?.check === true)
-				custom.push({ name: kind.of, value: encode_wire(value), path: at });
+				custom.push({ name: kind.of, value, path: at });
 		}
 		if (kind.many !== true && kind.kind === 'ref') {
 			const model = typeof kind.to === 'string' ? kind.to : Predicate.isObject(value) &&

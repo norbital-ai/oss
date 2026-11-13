@@ -191,7 +191,7 @@ export const clientDevServer = Effect.fn('bolt.clientDevServer')(function* (
 					plugins: [
 						{
 							// the shell and Bolt's page entries are imported by path, which Vite serves module by module (~200 requests a
-							// load on HTTP/1.1); each is pre-bundled with svelte, ui, std and effect instead, so they share one copy of
+							// load on HTTP/1.1); each is pre-bundled with svelte, ui and effect instead, so they share one copy of
 							// every runtime, and only the workspace's own modules (hot-updated) remain separate requests
 							name: 'bolt:prebundled-platform',
 							enforce: 'pre',

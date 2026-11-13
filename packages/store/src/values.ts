@@ -1,10 +1,15 @@
-// Value types the store's literals and rows are made of. Type-only: the runtime values are std's (`Decimal`, and dates
-// and instants as std's branded ISO strings).
-import type { Decimal } from './lang/decimal.ts';
-import type { Instant, PlainDate } from './lang/date.ts';
-export type { Json } from './lang/wire.ts';
-export type { Duration, Offset } from './lang/date.ts';
-export type { Decimal, Instant, PlainDate };
+// Value types the store's literals and rows are made of: JSON. A decimal is its exact text, a date and an instant their
+// ISO text; arithmetic on them is Effect's `BigDecimal` and `DateTime`.
+/** A JSON value. Structural, so `Predicate.isObject` narrows it to its object and list arms. */
+export type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
+export type { Duration, Offset } from './lang/vars.ts';
+// Plain text, not brands: decode checks the spelling at every boundary.
+/** A decimal's exact text (`'12.50'`). */
+export type Decimal = string;
+/** A calendar day, `YYYY-MM-DD`. */
+export type PlainDate = string;
+/** An instant, ISO UTC text (`2026-01-05T09:30:00.000Z`). */
+export type Instant = string;
 export declare const brand: unique symbol;
 
 /** A row id, branded by its table so an id of one table never passes for another's. */

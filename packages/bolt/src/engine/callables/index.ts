@@ -3,7 +3,7 @@ import { UUID_PATTERN } from '@norbital-ai/store/kind';
 // Generated-verb batches and queued run starts are reachable only by policy. A batch plans guarded generated verbs and
 // commits their writes in one statement under its idempotency key. A start queues runs without executing them.
 import { Array as EffectArray, Effect, Layer, Predicate, Result, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
@@ -25,7 +25,8 @@ import {
 	type PlannedCommit,
 	type ReadsShape,
 	type CallablesShape,
-	type ShapeOf
+	type ShapeOf,
+	acts_json
 } from '../services.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { enqueue, holderOf, next_due, writerOf } from '../runs/queue.ts';
@@ -215,7 +216,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	 * the whole batch — so they are independent: one names no row another creates (the check sees the stored rows).
 	 */
 	const acts = (r: ActsRequest): Effect.Effect<CallResult, import('../errors.ts').EngineError> => {
-		const input = encode_wire(r.outputs === undefined ? r.acts : { acts: r.acts, outputs: r.outputs });
+		const input = r.outputs === undefined ? acts_json(r.acts) : { acts: acts_json(r.acts), outputs: r.outputs };
 		return atomic(
 			{ ...r, input },
 			r.name,
@@ -503,7 +504,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				if (missing !== undefined)
 					return refused('not_found', `No readable ${missing.model} has this id.`, missing.field);
 			}
-			inputs.push(decoded?.value === undefined ? input : encode_wire(decoded.value));
+			inputs.push(decoded?.value === undefined ? input : decoded.value);
 		}
 		return inputs;
 	});
@@ -591,7 +592,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				return refused('forbidden', `You may not transfer '${r.model}'.`);
 			const decoded = yield* Effect.result(Schema.decodeUnknownEffect(FileSyncInput, { onExcessProperty: 'error' })(r.input));
 			if (Result.isFailure(decoded)) return refused('invalid_input', decoded.failure.message);
-			input = encode_wire(decoded.success);
+			input = decoded.success;
 		} else {
 			if (entry.read !== true || !readsAny(r.authority, r.model) ||
 				(!r.authority.admin && !r.authority.capabilities.syncs.includes(`${r.model}.${r.sync}`)))
@@ -601,7 +602,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			);
 			if (decoded.problems.length > 0)
 				return refused('invalid_input', problems(decoded), decoded.problems[0]?.path);
-			input = encode_wire(decoded.value ?? r.input);
+			input = decoded.value ?? r.input;
 		}
 		return yield* queue({
 			automation, runs: [{ id: r.id, input }], authority: r.authority, bindings: r.bindings,
@@ -615,7 +616,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			e.db,
 			{
 				category: 'automation', action: `${request.model}.${request.sync}.sync_control`,
-				actor: auditActor(request.authority.actor), payload: encode_wire({ model: request.model, sync: request.sync, id: request.id, input: request.input })
+				actor: auditActor(request.authority.actor), payload: { model: request.model, sync: request.sync, id: request.id, input: request.input }
 			},
 			sync_control(request)
 		),
@@ -627,11 +628,11 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					action: 'act',
 					actor: auditActor(request.authority.actor),
 					invocation: request.invocationId,
-					payload: encode_wire(request.acts),
+					payload: acts_json(request.acts),
 					outcomeKey: sha256_hex(
 						`${canonical({ actor: request.authority.actor.kind === 'member' ? request.authority.actor.id : request.authority.actor, callable: request.name })}\u0000${request.key}`
 					),
-					digest: sha256_hex(canonical({ callable: request.name, input: encode_wire(request.outputs === undefined ? request.acts : { acts: request.acts, outputs: request.outputs }) }))
+					digest: sha256_hex(canonical({ callable: request.name, input: request.outputs === undefined ? request.acts : { acts: request.acts, outputs: request.outputs } }))
 				},
 				acts(request)
 			),
@@ -642,7 +643,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					category: 'automation',
 					action: `${request.automation}.start`,
 					actor: auditActor(request.authority.actor),
-					payload: encode_wire({ automation: request.automation, runs: request.runs })
+					payload: { automation: request.automation, runs: request.runs }
 				},
 				start(request)
 			)

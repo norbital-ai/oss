@@ -4,8 +4,7 @@ import { viewFixture, browser } from './view-fixture.ts';
 import { Deferred, Effect, Fiber, Schema } from 'effect';
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/store/decimal';
-import type { Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import type { FormSpec } from '../src/form/draft.ts';
 import type { Outcome } from '../src/client/contract.ts';
 import type { Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
@@ -107,13 +106,13 @@ it.live('reset starts a new create request after an unknown outcome', () =>
 			text
 		);
 		form.set('title', 'Paint');
-		form.set('total', Decimal.of('10'));
+		form.set('total', '10');
 		assert.equal((yield* form.submit())?.kind, 'unknown');
 		assert.equal((yield* form.submit())?.kind, 'unknown');
 		assert.equal(keys[0], keys[1], 'retry checks the same request');
 		form.reset();
 		form.set('title', 'Paint');
-		form.set('total', Decimal.of('10'));
+		form.set('total', '10');
 		assert.equal((yield* form.submit())?.kind, 'unknown');
 		assert.notEqual(keys[2], keys[0], 'a cleared draft starts a fresh request');
 	})
@@ -170,12 +169,12 @@ it.effect('an update sends only changed fields; nothing changed sends nothing', 
 		const base = d.startValues(spec, {
 			id: 'q1',
 			title: 'A',
-			total: Decimal.of('10.00'),
+			total: '10.00',
 			note: null
 		});
 		assert.equal(base.title, 'A');
 		assert.equal(base.note, null);
-		assert.ok(base.total instanceof Decimal);
+		assert.ok(typeof base.total === 'string');
 		assert.equal(base.total.toString(), '10.00');
 		assert.equal(d.payload(spec, base, base), null);
 		assert.deepEqual(d.payload(spec, base, { ...base, note: 'x' }, 7), {
@@ -187,12 +186,12 @@ it.effect('an update sends only changed fields; nothing changed sends nothing', 
 
 it.effect('draft comparisons ignore object key order and observe later nested edits', () =>
 	Effect.sync(() => {
-		const base = { details: { amount: Decimal.of('1.20'), tags: ['a', 'b'] } };
-		const draft = { details: { tags: ['a', 'b'], amount: Decimal.of('1.20') } };
+		const base = { details: { amount: '1.20', tags: ['a', 'b'] } };
+		const draft = { details: { tags: ['a', 'b'], amount: '1.20' } };
 		assert.deepEqual(d.changed(base, draft), {});
-		draft.details.amount = Decimal.of('2.00');
+		draft.details.amount = '2.00';
 		assert.deepEqual(d.changed(base, draft), { details: draft.details });
-		draft.details.amount = Decimal.of('1.20');
+		draft.details.amount = '1.20';
 		assert.deepEqual(d.changed(base, draft), {});
 		draft.details.tags.reverse();
 		assert.deepEqual(d.changed(base, draft), { details: draft.details });

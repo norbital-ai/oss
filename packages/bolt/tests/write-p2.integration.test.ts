@@ -416,7 +416,7 @@ describe('engine/query: history', () => {
 		number: Schema.String,
 		status: Schema.String,
 		note: Schema.NullOr(Schema.String),
-		total: Schema.Struct({ $dec: Schema.String }),
+		total: Schema.String,
 		big_lines: Schema.Number
 	});
 	/** get(…, { revision }): the revisions folded into the full record as of that revision. */

@@ -338,9 +338,6 @@ importers:
       '@norbital-ai/bolt':
         specifier: workspace:*
         version: link:../bolt
-      '@norbital-ai/store':
-        specifier: workspace:*
-        version: link:../store
       effect:
         specifier: 'catalog:'
         version: 4.0.6

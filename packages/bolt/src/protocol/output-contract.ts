@@ -2,7 +2,7 @@
 // This graph contains only decoding information: row/custom references have already been resolved by their owner.
 import { Schema, SchemaGetter } from 'effect';
 import { input_schema, KindSchema, type Kind, type KindCodec, type OutputKind, type Value } from '@norbital-ai/store/kind';
-import type { Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import { ProtocolFailed } from '../decl/errors.ts';
 import { RowStateFields } from './record-contracts.ts';
 
@@ -133,7 +133,7 @@ const output_fields = (declared: Readonly<Record<string, OutputField>>) => {
 	}
 	return fields;
 };
-/** Compile the exact resolved source contract; unshaped JSON keeps literal `$dec` objects as JSON. */
+/** Compile the exact resolved source contract; unshaped JSON stays JSON. */
 function value_output(contract: OutputValueContract): KindCodec {
 	switch (contract.kind) {
 		case 'atom': return input_schema(contract.spec);

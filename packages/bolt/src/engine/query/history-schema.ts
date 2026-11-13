@@ -1,7 +1,6 @@
-import { Predicate, Result, Schema } from 'effect';
+import { BigDecimal, Predicate, Result, Schema } from 'effect';
 import { canonical, field_info, FieldSpec, HistoryTableMetadata, SYSTEM_COLUMN_SET, type Json } from '@norbital-ai/store';
-import { Decimal, minor_digits } from '@norbital-ai/store/decimal';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { input_schema } from '@norbital-ai/store/kind';
 import { decodeInput } from '../callables/decode.ts';
 import type { EngineManifest } from '../manifest.ts';
@@ -157,8 +156,7 @@ export function compatibleHistoryValue(
 		converted = typeof after.to === 'string' ? id : { model: target, id };
 	} else if (after.kind === 'ref' && before.kind !== 'ref' && value !== null) return undefined;
 	else if (value !== null && numeric.has(after.kind)) {
-		const scalar =
-			Predicate.isObject(value) && typeof value['$dec'] === 'string' ? value['$dec'] : value;
+		const scalar = value;
 		if (['decimal', 'money', 'sum'].includes(after.kind)) {
 			if (
 				(typeof scalar !== 'string' && typeof scalar !== 'number') ||
@@ -172,7 +170,8 @@ export function compatibleHistoryValue(
 					: after.kind === 'money'
 						? (after.scale ??
 							(after.currency !== undefined && /^[A-Z]{3}$/.test(after.currency)
-								? minor_digits(after.currency)
+								? new Intl.NumberFormat('en', { style: 'currency', currency: after.currency }).resolvedOptions()
+										.maximumFractionDigits
 								: undefined))
 						: undefined;
 			if (
@@ -185,9 +184,15 @@ export function compatibleHistoryValue(
 				const exponent = after.precision - after.scale;
 				const limit =
 					exponent >= 0 ? `1${'0'.repeat(exponent)}` : `0.${'0'.repeat(-exponent - 1)}1`;
-				if (Decimal.of(String(scalar)).abs().gte(limit)) return undefined;
+				if (
+					BigDecimal.isGreaterThanOrEqualTo(
+						BigDecimal.abs(BigDecimal.fromStringUnsafe(String(scalar))),
+						BigDecimal.fromStringUnsafe(limit)
+					)
+				)
+					return undefined;
 			}
-			converted = { $dec: String(scalar) };
+			converted = String(scalar);
 		} else if (after.kind === 'number' && typeof scalar === 'number') converted = scalar;
 		else {
 			if (
@@ -212,16 +217,11 @@ export function compatibleHistoryValue(
 		after.many !== true &&
 		numeric.has(before.kind)
 	) {
-		converted =
-			Predicate.isObject(value) && typeof value['$dec'] === 'string'
-				? value['$dec']
-				: value === null
-					? null
-					: String(value);
+		converted = value === null ? null : String(value);
 	}
 	const decoded = decodeInput({ value: after }, { value: converted }, custom_fields);
 	if (decoded.problems.length > 0 || decoded.value === undefined) return undefined;
-	const encoded = encode_wire(decoded.value);
+	const encoded = decoded.value;
 	return Predicate.isObject(encoded) ? encoded['value'] : undefined;
 }
 

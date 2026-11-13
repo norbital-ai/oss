@@ -693,10 +693,9 @@ function pathTest(b: Build, value: string, text: string, pg: string, t: PathTest
 // ── rows ──
 const ISO = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`;
 const iso = (x: string) => `to_char(${x} AT TIME ZONE 'UTC', ${ISO})`;
-/** A decimal in wire form (std/wire): `{ $dec }`, the one tag the wire carries. */
-const dec = (x: string) =>
-	`(CASE WHEN ${x} IS NOT NULL THEN jsonb_build_object('$dec', ${x}::text) END)`;
-/** A column in wire form as jsonb (std/wire): `$dec` decimals; dates and instants as ISO text; periods as
+/** A decimal as its exact text. */
+const dec = (x: string) => `to_jsonb(${x}::text)`;
+/** A column in wire form as jsonb: decimals, dates and instants as their text; periods as
  * `{ from, to }` / `{ start, end }` of those; a polymorphic relation as `{ model, id }`. */
 export function wire(f: FieldInfo, x: string, a: string): string {
 	if (f.arms !== undefined)

@@ -1,5 +1,4 @@
 // Type corpus for the P34 filter language: each `@ts-expect-error` is a shape the decoder refuses too.
-import { date_period, Instant, PlainDate } from '@norbital-ai/store/date';
 import type { OrderBy, Sortable, Where } from '../src/decl/where.ts';
 import './types/registry.ts';
 
@@ -7,17 +6,17 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(value: T): T => value;
 
 const ok: Where<'orders'>[] = [
-	{ due: { gte: PlainDate('2026-03-01'), lt: PlainDate('2026-04-01') } }, // a materialized month
+	{ due: { gte: '2026-03-01', lt: '2026-04-01' } }, // a materialized month
 	{
 		placed_at: {
-			gte: Instant('2026-03-16T00:00:00.000Z'),
-			lt: Instant('2026-03-23T00:00:00.000Z')
+			gte: '2026-03-16T00:00:00.000Z',
+			lt: '2026-03-23T00:00:00.000Z'
 		}
 	}, // a materialized week, on an instant
 	{ lines: { sum: { of: 'amount', gte: 100 }, max: { of: 'qty', lt: '5' }, count: { gte: 1 } } },
 	{ lines: { none: {} } }
 ];
-const ok2: Where<'sites'>[] = [{ open: { overlaps: date_period('2026-03-01', '2026-03-25') } }];
+const ok2: Where<'sites'>[] = [{ open: { overlaps: { from: '2026-03-01', to: '2026-03-25' } } }];
 void ok;
 void ok2;
 // @ts-expect-error P1 a count takes eq…gte only (type and decoder admit the same shapes)

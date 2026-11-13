@@ -3,9 +3,8 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it, vi } from '@effect/vitest';
 import { Deferred, Effect } from 'effect';
-import type { Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import type { Value } from '@norbital-ai/store/kind';
-import { Decimal } from '@norbital-ai/store/decimal';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Outcome } from '../../bolt/build/protocol/schema.js';
 import type { Links } from '../src/model/BulkRelation.svelte';
@@ -70,7 +69,7 @@ async function show(
 	// every field the read output promises; the host answers only those requested
 	const values: Readonly<Record<string, Value>> = of === 'orders'
 		? { status: 'draft', about: null }
-		: { enabled: true, count: 8, amount: Decimal.of('1.000'), note: null, locked: 'L', secret: 'S', state: 'open' };
+		: { enabled: true, count: 8, amount: '1.000', note: null, locked: 'L', secret: 'S', state: 'open' };
 	const { bolt } = await viewFixture({
 		catalog: cat,
 		read: () => ({
@@ -169,7 +168,7 @@ it.live(
 					callable: 'jobs.update',
 					input: ['job-a', 'job-b'].map((id, index) => ({
 						target: { id, revision: index + 1 },
-						set: { enabled: false, count: 0, amount: { $dec: '9007199254740993.125' }, note: null }
+						set: { enabled: false, count: 0, amount: '9007199254740993.125', note: null }
 					}))
 				}
 			]);

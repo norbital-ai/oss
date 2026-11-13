@@ -2,7 +2,7 @@
 // a field (a lazy tab, a collapsed section) never drops its value, because the value lives here.
 import { Effect, Fiber, FiberSet, Option, Schema } from 'effect';
 import { flushSync, getContext, setContext } from 'svelte';
-import { encode_wire, revive_wire } from '@norbital-ai/store/wire';
+
 import { value_object, type Value } from '../kinds/kind.js';
 import type { IdOf } from '../model/types.js';
 import type { RecordCapabilities, RecordRestriction } from '../record/types.js';
@@ -205,7 +205,7 @@ export class FormState {
 		const raw = this.#storage()?.getItem(this.#storageKey);
 		if (raw == null) return;
 		try {
-			const saved: unknown = JSON.parse(raw, revive_wire);
+			const saved: unknown = JSON.parse(raw);
 			if (!value_object(saved)) return;
 			const values = value_object(saved['values']) ? saved['values'] : {};
 			this.values = {
@@ -247,7 +247,7 @@ export class FormState {
 			}
 			storage.setItem(
 				this.#storageKey,
-				JSON.stringify({ values: encode_wire(values), children: encode_wire(children) })
+				JSON.stringify({ values, children })
 			);
 		} catch {
 			// storage full or denied: the form still works, the draft is simply not remembered
@@ -511,7 +511,7 @@ export class FormState {
 					throw new Error('An automation form requires a start implementation.');
 				this.notice = null;
 				const sent = { ...this.values };
-				const input = JSON.stringify(encode_wire(scalar));
+				const input = JSON.stringify(scalar);
 				const handle =
 					this.#startAttempt?.key === this.#key && this.#startAttempt.input === input
 						? this.#startAttempt.handle

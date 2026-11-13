@@ -1,7 +1,6 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/store/decimal';
 import type { ComponentProps } from 'svelte';
 import type { Kind, Value } from '../src/kinds/kind.ts';
 import type { JsonSchema } from '../src/kinds/json-schema.ts';
@@ -295,10 +294,10 @@ it.live(
 		})
 );
 
-it.live('inferred Decimal edits retain exact values beyond the safe integer range', () =>
+it.live('inferred numeric text edits retain exact values beyond the safe integer range', () =>
 	browser(async () => {
 		const { target, changes } = await show({
-			initial: { amount: Decimal.of('9007199254740993.01') },
+			initial: { amount: '9007199254740993.01' },
 			mode: 'edit'
 		});
 		await type(
@@ -306,7 +305,7 @@ it.live('inferred Decimal edits retain exact values beyond the safe integer rang
 			'9007199254740993.02'
 		);
 		const amount = required(dataEntries(changes.at(-1))).amount;
-		assert.ok(amount instanceof Decimal);
+		assert.ok(typeof amount === 'string');
 		assert.equal(amount.toString(), '9007199254740993.02');
 	})
 );
@@ -528,8 +527,8 @@ it.live('inline native money differences retain each version currency context', 
 				kind: 'object',
 				fields: { currency: { kind: 'text' }, amount: { kind: 'money', currency: 'currency' } }
 			},
-			before: { currency: 'USD', amount: Decimal.of('1.00') },
-			initial: { currency: 'EUR', amount: Decimal.of('2.00') },
+			before: { currency: 'USD', amount: '1.00' },
+			initial: { currency: 'EUR', amount: '2.00' },
 			mode: 'diff',
 			host: { locale: 'en-US' }
 		});
@@ -583,7 +582,7 @@ it.live('a schema variant switch preserves the prior nested custom visibility ru
 );
 
 it.live(
-	'an unconstrained JSON kind retains schema controls, inference and exact Decimal editing',
+	'an unconstrained JSON kind retains schema controls, inference and exact decimal-text editing',
 	() =>
 		browser(async () => {
 			const date = await show({
@@ -601,13 +600,13 @@ it.live(
 			assert.ok(textOf(inferred.target).includes('integer'));
 			const decimal = await show({
 				kind: { kind: 'json' },
-				initial: Decimal.of('9007199254740993.20'),
+				initial: '9007199254740993.20',
 				mode: 'edit'
 			});
 			const input = element<HTMLInputElement>(decimal.target, 'input');
 			await type(input, '9007199254740993.21');
 			const next = required(decimal.changes.at(-1));
-			assert.ok(next instanceof Decimal);
+			assert.ok(typeof next === 'string');
 			assert.equal(next.toString(), '9007199254740993.21');
 		})
 );

@@ -33,7 +33,6 @@ sits under the table there. -->
 	import type { ShellApi } from '../api-types.ts';
 	import AutoRefresh from '../AutoRefresh.svelte';
 	import DetailSheet from '../DetailSheet.svelte';
-	import { displayWireValue } from '../wire-value.ts';
 	import { date_time } from '../i18n.ts';
 
 	let {
@@ -279,12 +278,12 @@ sits under the table there. -->
 		const before = Object.fromEntries(
 			Object.entries(change.old ?? {})
 				.filter(([field]) => keep(field))
-				.map(([field, value]) => [field, displayWireValue(value)])
+				.map(([field, value]) => [field, value])
 		);
 		const after = Object.fromEntries(
 			Object.entries(change.new ?? {})
 				.filter(([field]) => keep(field))
-				.map(([field, value]) => [field, displayWireValue(value)])
+				.map(([field, value]) => [field, value])
 		);
 		const kindOf = (field: string): Kind => declared?.[field] ?? { kind: 'json' };
 		const fields = Object.fromEntries(

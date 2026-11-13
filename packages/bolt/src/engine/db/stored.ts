@@ -1,8 +1,7 @@
-import { Array as EffectArray, Option, Predicate, Schema } from 'effect';
-import { Decimal } from '@norbital-ai/store/decimal';
+import { Array as EffectArray, BigDecimal, Option, Predicate, Schema } from 'effect';
 import { q } from '@norbital-ai/store';
-import { equal_json } from '@norbital-ai/store/kind';
-import { encode_wire } from '@norbital-ai/store/wire';
+import { decimal_text, equal_json } from '@norbital-ai/store/kind';
+
 import type { Catalog, FieldInfo } from '@norbital-ai/store';
 import type { Json } from '../../decl/values.ts';
 import type { Captured, RowData } from '../contracts.ts';
@@ -71,12 +70,8 @@ function stored_value(field: Pick<FieldInfo, 'pg'>, value: Json): Json {
 	if (value === null) return null;
 	switch (field.pg) {
 		case 'numeric': {
-			const scalar = Predicate.isObject(value) ? value['$dec'] : value;
-			if (typeof scalar === 'number' && Number.isFinite(scalar)) {
-				const text = String(scalar), fraction = /\.(\d+)/.exec(text)?.[1]?.length ?? 0;
-				return Decimal.from_number(scalar, fraction + Number(/e-(\d+)$/.exec(text)?.[1] ?? 0)).toString();
-			}
-			return typeof scalar === 'string' && /^[+-]?\d+(\.\d+)?$/.test(scalar) ? Decimal.of(scalar).toString() : value;
+			if (typeof value === 'number' && Number.isFinite(value)) return decimal_text(BigDecimal.fromNumberUnsafe(value));
+			return typeof value === 'string' && /^[+-]?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(value) ? value.replace(/^\+/, '') : value;
 		}
 		case 'int8':
 			return typeof value === 'string' && /^-?\d+$/.test(value) ? parse(20, value) : value;
@@ -124,10 +119,10 @@ function stored_value(field: Pick<FieldInfo, 'pg'>, value: Json): Json {
 }
 
 /** Exact numeric values share the same native/wire normalization as stored cells. */
-export function storedDecimal(value: Json | undefined): Decimal | undefined {
+export function storedDecimal(value: Json | undefined): BigDecimal.BigDecimal | undefined {
 	if (value == null) return undefined;
 	const stored = stored_value({ pg: 'numeric' }, value);
-	return typeof stored === 'string' && /^-?\d+(\.\d+)?$/.test(stored) ? Decimal.of(stored) : undefined;
+	return typeof stored === 'string' ? Option.getOrUndefined(BigDecimal.fromString(stored)) : undefined;
 }
 
 /** Range bounds before the public timestamp projection drops fractional digits. */
@@ -144,10 +139,10 @@ export function storedOrder(field: Pick<FieldInfo, 'pg'>, left: Json | undefined
 		case 'numeric': case 'int8': case 'int4': case 'int2': {
 			if (field.pg !== 'numeric' && [left, right].some((value) => typeof value === 'number' && !Number.isSafeInteger(value))) return undefined;
 			const a = storedDecimal(left), b = storedDecimal(right);
-			return a === undefined || b === undefined ? undefined : a.cmp(b);
+			return a === undefined || b === undefined ? undefined : BigDecimal.Order(a, b);
 		}
 		case 'float8': case 'float4': {
-			const a = Predicate.isObject(left) ? left['$dec'] : left, b = Predicate.isObject(right) ? right['$dec'] : right;
+			const a = left, b = right;
 			if ((typeof a !== 'number' && typeof a !== 'string') || (typeof b !== 'number' && typeof b !== 'string')) return undefined;
 			const x = Number(a), y = Number(b);
 			return Number.isFinite(x) && Number.isFinite(y) ? x < y ? -1 : x > y ? 1 : 0 : undefined;
@@ -214,7 +209,7 @@ export function storedChanges(cat: Catalog, model: string, row: RowData, set: Ro
 			const previous = before[column] ?? null;
 			if (field?.pg === 'numeric' && previous !== null && next !== null) {
 				const left = storedDecimal(previous), right = storedDecimal(next);
-				if (left !== undefined && right !== undefined) return !left.eq(right);
+				if (left !== undefined && right !== undefined) return !BigDecimal.equals(left, right);
 			}
 			return !equal_json(previous, next);
 		});
@@ -227,8 +222,7 @@ export function storedWireValue(field: Pick<FieldInfo, 'pg'>, value: Json | unde
 	const stored = stored_value(field, value);
 	switch (field.pg) {
 		case 'numeric': {
-			const numeric = storedDecimal(stored);
-			return numeric === undefined ? undefined : encode_wire(numeric);
+			return storedDecimal(stored) === undefined ? undefined : stored;
 		}
 		case 'timestamptz': return typeof stored === 'string' && Number.isFinite(Date.parse(stored)) ? new Date(stored).toISOString() : undefined;
 		case 'vector': return typeof stored === 'string' ? Option.getOrUndefined(Schema.decodeUnknownOption(Vector)(stored)) : undefined;

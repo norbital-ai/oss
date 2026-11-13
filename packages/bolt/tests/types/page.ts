@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { Form, Table, type UiContext } from '@norbital-ai/ui';
 import type { PageContext } from '../../src/page/index.ts';
 import type { ActOutput, Id, Outcome, PlainDate, Row } from '../../src/index.ts';
-import type { Decimal } from '@norbital-ai/store/decimal';
+import type { Decimal } from '@norbital-ai/store';
 import type { Committed, PendingApproval } from '../../src/decl/ctx.ts';
 import './registry.ts';
 import type { RowApproval, RowState } from '../../src/decl/names.ts';

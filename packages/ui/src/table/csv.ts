@@ -1,6 +1,7 @@
 import { format_value as show, currencyOf, minorDigits, shownKind } from '../kinds/kind.js';
 import type { Kind } from '../kinds/kind.js';
-import { Decimal } from '@norbital-ai/store/decimal';
+import { BigDecimal, Option } from 'effect';
+import { decimal_text } from '@norbital-ai/store/kind';
 import type { Values } from '../model/types.js';
 import { valueAt } from '../cell/value.js';
 import { refOf } from '../relations/select.js';
@@ -29,7 +30,12 @@ export function csvCell(
 			numericKind.kind === 'decimal'
 				? numericKind.scale
 				: (numericKind.scale ?? (currency === undefined ? 2 : minorDigits(currency)));
-		return Decimal.of(String(v)).round(scale).toString();
+		const exact = BigDecimal.fromString(String(v));
+		if (Option.isNone(exact)) return String(v);
+		// half away from zero, as Postgres rounds numeric, then padded to the declared scale
+		const text = decimal_text(BigDecimal.round(exact.value, { scale, mode: 'half-from-zero' }));
+		const [whole, fraction = ''] = text.split('.');
+		return scale === 0 ? text : `${whole}.${fraction.padEnd(scale, '0')}`;
 	}
 	if (kind?.kind === 'enum' || kind?.kind === 'state')
 		return (Array.isArray(v) ? v : [v])

@@ -4,7 +4,7 @@ import { Layer, ManagedRuntime, Schema } from 'effect';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { page } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
-import type { Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import type { KindsHost } from '../../ui/src/kinds/context.ts';
 import Harness from '../../ui/tests/record-footer-harness.svelte';
 import type { Outcome } from '../../ui/src/client/contract.ts';

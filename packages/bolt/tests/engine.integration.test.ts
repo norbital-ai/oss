@@ -121,7 +121,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 				title: 'desk',
 				number: 'SO-0001',
 				status: 'draft',
-				total: { $dec: '50.50' }
+				total: '50.50'
 			});
 
 			const lines = (yield* read(route, rep.authority, 'lines', {
@@ -145,7 +145,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 			);
 			expect(yield* get(route, rep.authority, 'orders', id)).toMatchObject({
 				note: 'n',
-				total: { $dec: '11.50' },
+				total: '11.50',
 				revision: 2
 			});
 
@@ -321,7 +321,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 					])
 				);
 				expect(yield* get(route, (yield* t.as(a)).authority, 'orders', id)).toMatchObject({
-					total: { $dec: '7' }
+					total: '7'
 				});
 				ok(
 					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [

@@ -208,6 +208,13 @@ export type ActsRequest = CallerContext & {
 	readonly key: string;
 	readonly issuedAt: string;
 };
+/** The acts as JSON: an absent `observed` or `on_conflict` is left out, as JSON leaves out an undefined member. */
+export const acts_json = (acts: ActsRequest['acts']) =>
+	acts.map(({ observed, on_conflict, ...act }) => ({
+		...act,
+		...(observed === undefined ? {} : { observed }),
+		...(on_conflict === undefined ? {} : { on_conflict })
+	}));
 export type StartRequest = {
 	readonly automation: string;
 	/** One run per entry, queued together in one statement: a bulk start is one request, not one per record. */

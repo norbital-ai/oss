@@ -49,7 +49,7 @@ describe('one invalid row per shape', () => {
 		['orders', 'bad ISO date', { placed: { eq: '2026-02-30' } }],
 		['orders', 'bad instant', { at: { lt: 'soon' } }],
 		['orders', 'decimal tag with extra keys', { total: { eq: { $dec: '1.20', extra: true } } }],
-		['orders', 'malformed decimal tag', { total: { eq: { $dec: '1e3' } } }],
+		['orders', 'malformed decimal tag', { total: { eq: '1e3' } }],
 		[
 			'orders',
 			'reversed date period',
@@ -175,7 +175,7 @@ describe('one wire literal per kind', () => {
 	});
 	it.effect('keeps exact decimal text and scale through the canonical tag and shorthand', () =>
 		Effect.gen(function* () {
-			const value = { $dec: '9007199254740993.123456789000' };
+			const value = '9007199254740993.123456789000';
 			const expected = {
 				t: 'cmp',
 				field: 'total',
@@ -289,7 +289,7 @@ describe('the widened language', () => {
 					row.id === 'a'
 						? []
 						: [
-								{ id: 'l1', amount: { $dec: '10.10' } },
+								{ id: 'l1', amount: '10.10' },
 								{ id: 'l2', amount: '10.20' }
 							]
 			};

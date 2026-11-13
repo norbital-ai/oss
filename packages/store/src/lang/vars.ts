@@ -1,18 +1,34 @@
-// std/vars: a filter value's `{ var: '<CEL>' }`, a typed expression over the requestor (`requestor.id`,
+// vars: a filter value's `{ var: '<CEL>' }`, a typed expression over the requestor (`requestor.id`,
 // `requestor.teams`, `requestor.scopes.<policy>` …) and the clock (`today`, a date; `now`, an instant), evaluated once
 // per read and never per row: `today - days(7)`, `start_of_month(today)`, `now - hours(1)`. Helpers: minutes, hours,
 // days, weeks, months and years spans (`±` on a date or an instant), and start_of_week/start_of_month/start_of_quarter/start_of_year of a date.
 import { Environment, type ASTNode, type ParseResult } from '@marcbachmann/cel-js';
 import { children } from './cel-ast.ts';
+import { DateTime } from 'effect';
 import * as Result from 'effect/Result';
-import { add_days, add_months, PlainDate } from './date.ts';
-import type { Json } from './wire.ts';
+import type { Json } from '../values.ts';
+import { is_plain_date } from './kind.ts';
+
+const UNITS = { s: 1, min: 60, h: 3_600, d: 86_400 };
+const secondsByUnit = new Map(Object.entries(UNITS));
+/** A whole duration in seconds, minutes, hours or days: the authoring grammar of schedules and clock defaults. */
+export type Duration = `${bigint}${keyof typeof UNITS}`;
+/** A signed duration from a clock instant. An empty offset is zero. */
+export type Offset = `${'+' | '-'}${Duration}` | '';
+/** Parses a nonnegative duration literal into seconds. */
+export function duration_seconds(value: string, fractional = false): number | undefined {
+	const match = /^(\d+(\.\d+)?)([a-z]+)$/.exec(value);
+	if (match === null || (!fractional && match[2] !== undefined)) return undefined;
+	const unit = secondsByUnit.get(match[3] ?? '');
+	return unit === undefined ? undefined : Number(match[1]) * unit;
+}
 
 /** A calendar day inside an expression. */
 class Day {
 	readonly iso: string;
 	constructor(iso: string) {
-		this.iso = PlainDate(iso);
+		if (!is_plain_date(iso)) throw new RangeError(`'${iso}' is not a calendar date (YYYY-MM-DD)`);
+		this.iso = iso;
 	}
 }
 /** A shift: whole months, whole days and milliseconds. */
@@ -82,13 +98,14 @@ export function member_admits(f: VarField, m: string): boolean {
 const n = (x: unknown) => Number(x);
 const shift = (d: Day, s: Span, sign: number): Day => {
 	if (s.ms !== 0) throw new RangeError('a date shifts by whole days, weeks, months or years');
-	return new Day(add_days(add_months(d.iso, sign * s.months), sign * s.days));
+	return new Day(
+		DateTime.formatIsoDateUtc(DateTime.add(DateTime.makeUnsafe(d.iso), { months: sign * s.months, days: sign * s.days }))
+	);
 };
-const instant = (t: Date, s: Span, sign: number): Date => {
-	const at = new Date(t.getTime());
-	at.setUTCMonth(at.getUTCMonth() + sign * s.months);
-	return new Date(at.getTime() + sign * (s.days * 86_400_000 + s.ms));
-};
+const instant = (t: Date, s: Span, sign: number): Date =>
+	DateTime.toDateUtc(
+		DateTime.add(DateTime.makeUnsafe(t), { months: sign * s.months, days: sign * s.days, milliseconds: sign * s.ms })
+	);
 const env = new Environment({ homogeneousAggregateLiterals: false })
 	.registerType('Date', Day)
 	.registerType('Span', Span)
@@ -115,8 +132,7 @@ const env = new Environment({ homogeneousAggregateLiterals: false })
 	.registerFunction('months(int): Span', (x) => new Span(n(x), 0, 0))
 	.registerFunction('years(int): Span', (x) => new Span(12 * n(x), 0, 0))
 	.registerFunction('start_of_week(Date): Date', (d: Day) => {
-		const iso = d.iso;
-		return new Day(add_days(iso, -((new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7)));
+		return new Day(DateTime.formatIsoDateUtc(DateTime.startOf(DateTime.makeUnsafe(d.iso), 'week', { weekStartsOn: 1 })));
 	})
 	.registerFunction('start_of_month(Date): Date', (d: Day) => new Day(`${d.iso.slice(0, 7)}-01`))
 	.registerFunction('start_of_quarter(Date): Date', (d: Day) => {

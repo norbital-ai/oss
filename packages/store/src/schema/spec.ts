@@ -1,4 +1,4 @@
-// A schema is a value: its tables (fields of std's kind language, a key, opt-in audit columns, uniqueness, checks,
+// A schema is a value: its tables (fields of the kind language, a key, opt-in audit columns, uniqueness, checks,
 // indexes, computed columns, search), each relation a `ref` field of the table holding it. Every declaration decodes through these
 // Schemas once, wherever it comes from (a `schema(…)` literal, Bolt's compiled models, a committed snapshot), and
 // `SchemaSpec` checks that every name a relation or an index uses exists.

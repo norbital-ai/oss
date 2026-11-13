@@ -127,7 +127,7 @@ export type Bindings = {
 /** Who reads: a caller's Authority (scoped to the outputs it holds), or the workspace (the transform: unscoped). */
 export type Reader = { as: 'caller'; authority: Authority } | { as: 'workspace' };
 // ── changes: everything one act's statement writes besides the engine's bookkeeping ──
-/** A row's stored values in wire form: `$dec` preserves decimal scale; dates and instants are ISO strings. */
+/** A row's stored values in wire form: a decimal as its exact text; dates and instants as ISO strings. */
 export type RowData = { readonly [field: string]: Json };
 /** Where a change came from in the caller's input, for `refused { field, row }`. */
 export type InputPath = readonly (string | number)[];

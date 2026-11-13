@@ -147,7 +147,7 @@ function varResult(r: Resolved, op: Op): VarResult | null {
 	return k === 'date' ? 'date' : k === 'instant' ? 'instant' : 'text';
 }
 
-/** The field a variable's requestor members are admitted against (std/vars `member_admits`). */
+/** The field a variable's requestor members are admitted against (store's vars `member_admits`). */
 const varField = (r: Resolved) =>
 	r.leaf === 'rel'
 		? { kind: 'id', of: r.targets[0] }

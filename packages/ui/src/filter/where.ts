@@ -2,9 +2,8 @@
 import { type FilterClock, varOf, type Arg, type Node, complete, type Op, jsonObject, OpSchema, AggSchema, CmpSchema, type Quant } from './node.js';
 import { type Json, likePattern, isPoint } from '../kinds/kind.js';
 import { compile_var, evaluate_var } from '@norbital-ai/store/vars';
-import { utc_of } from '@norbital-ai/store/zone';
-import { Match, Result, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/store/wire';
+import { DateTime, Match, Result, Schema } from 'effect';
+
 import { type Catalog, childOf, resolve, type Resolved, INDEX, filterable } from './catalog.js';
 import { type Where, input_schema } from '@norbital-ai/store/kind';
 import { type FilterVariables, varError, operandsFor, valueKind, litKind, grammarOps } from './operators.js';
@@ -29,7 +28,13 @@ export function evaluated(text: string, clock: FilterClock | undefined, instant:
 		return { var: text };
 	const v = evaluate_var(c, clock);
 	return instant && typeof v === 'string' && v.length === 10
-		? new Date(utc_of(v, 0, clock.zone)).toISOString()
+		? DateTime.formatIso(
+				DateTime.makeZonedUnsafe(`${v}T00:00:00`, {
+					timeZone: clock.zone,
+					adjustForTimeZone: true,
+					disambiguation: 'compatible'
+				})
+			)
 		: v;
 }
 
@@ -43,8 +48,8 @@ export function bound(value: Json, clock: FilterClock | undefined, instant: bool
 function operand(arg: Arg, clock: FilterClock | undefined, instant: boolean): Json {
 	return Match.value(arg).pipe(
 		Match.tagsExhaustive({
-			lit: (value) => encode_wire(value.lit),
-			list: (value) => encode_wire(value.list),
+			lit: (value) => value.lit,
+			list: (value) => value.list,
 			range: (value) => value.range.map((b) => bound(b, clock, instant)),
 			var: (value) => evaluated(value.var, clock, instant),
 			field: (value) => ({ field: value.field })
@@ -136,7 +141,7 @@ function lowerWhere(cat: Catalog, model: string, n: Node, clock?: FilterClock): 
 	if (n.op === 'has_any' || n.op === 'has_all') {
 		if (n.arg?._tag !== 'list') return null;
 		const join = n.op === 'has_all' ? 'and' : 'or';
-		return wrap(steps, { [join]: n.arg.list.map((value) => ({ [name]: { has: encode_wire(value) } })) });
+		return wrap(steps, { [join]: n.arg.list.map((value) => ({ [name]: { has: value } })) });
 	}
 	let body = leafOps(n, clock, instant);
 	if (body === null) return null;
@@ -201,7 +206,7 @@ export function argOf(r: Resolved, op: Op, v: Json, variables?: FilterVariables)
 		return v.every((x) =>
 			k === null
 				? typeof x === 'string'
-				: Result.isSuccess(Schema.decodeUnknownResult(input_schema(k))(encode_wire(x)))
+				: Result.isSuccess(Schema.decodeUnknownResult(input_schema(k))(x))
 		)
 			? { _tag: 'list', list: v }
 			: null;

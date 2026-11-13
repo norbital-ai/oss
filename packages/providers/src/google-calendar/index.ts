@@ -1,9 +1,8 @@
 // Calendar syncs keep snapshot/sync cursors and sealed watch identities across renewals. Writes are the driver's `call`:
 // an http-shaped op on one calendar's events through this standing link, answered `{ status, body }` for the definition's
 // outbound run to read (a 412 its conflict). A sign-in sealed before it could write keeps importing and says to reconnect.
-import { Clock, Effect, Option, Schema, Predicate, Semaphore } from 'effect';
+import { Clock, DateTime, Effect, Option, Schema, Predicate, Semaphore } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
-import { Instant, PlainDate } from '@norbital-ai/store/date';
 import type { CalendarEvent } from '@norbital-ai/bolt';
 import {
 	OAUTH_CALLBACK,
@@ -705,6 +704,18 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 	};
 });
 
+/** An all-day event's actual Gregorian day; anything else refuses the page. */
+const calendarDay = (day: string): string => {
+	if (/^\d{4}-\d{2}-\d{2}$/.test(day) && Option.exists(DateTime.make(day), (at) => DateTime.formatIsoDateUtc(at) === day))
+		return day;
+	throw new RangeError(`'${day}' is not a calendar date (YYYY-MM-DD)`);
+};
+/** A timed event's instant, which must name its zone or offset; as canonical UTC. */
+const zonedInstant = (text: string): string => {
+	const at = /(Z|[+-]\d{2}:?\d{2})$/i.test(text) ? DateTime.make(text) : Option.none();
+	if (Option.isNone(at)) throw new RangeError(`'${text}' is not an ISO instant with a zone`);
+	return DateTime.formatIso(at.value);
+};
 /** One Google event → the driver's `CalendarEvent`, or `null` without an id. */
 export function calendarEvent(e: Obj): CalendarEvent | null {
 	type Time = CalendarEvent['start'];
@@ -714,9 +725,9 @@ export function calendarEvent(e: Obj): CalendarEvent | null {
 		!Predicate.isObject(t)
 			? null
 			: typeof t['date'] === 'string'
-				? { date: PlainDate(t['date']) }
+				? { date: calendarDay(t['date']) }
 				: typeof t['dateTime'] === 'string'
-					? { at: Instant(t['dateTime']), zone: str(t['timeZone']) }
+					? { at: zonedInstant(t['dateTime']), zone: str(t['timeZone']) }
 					: null;
 	const status =
 		e['status'] === 'cancelled' || e['status'] === 'tentative' ? e['status'] : 'confirmed';
@@ -725,7 +736,7 @@ export function calendarEvent(e: Obj): CalendarEvent | null {
 	if (status !== 'cancelled' && (eventStart === null || eventEnd === null))
 		throw new Error('Calendar event has no start or end');
 	// a cancellation Google reports by its id alone carries no times: its original start, else the epoch (its feed's map removes it)
-	const start = eventStart ?? time(e['originalStartTime']) ?? { date: PlainDate('1970-01-01') };
+	const start = eventStart ?? time(e['originalStartTime']) ?? { date: '1970-01-01' };
 	return {
 		id,
 		summary: str(e['summary']),

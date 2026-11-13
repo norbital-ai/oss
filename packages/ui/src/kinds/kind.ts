@@ -5,7 +5,6 @@ import { Array as Arr } from 'effect';
 // only keep a form from sending what decode would refuse, with the same messages.
 import { Predicate } from 'effect';
 
-import { Decimal } from '@norbital-ai/store/decimal';
 import type { Fields, FileRef, Json, Kind, KindOf, Point, Value } from '@norbital-ai/store/kind';
 import { input_schema } from '@norbital-ai/store/kind';
 import { Schema, Result } from 'effect';
@@ -163,9 +162,9 @@ export const shownKind = (kind: Kind): Kind =>
 				...(kind.money.currency === undefined ? {} : { currency: kind.money.currency })
 			}
 		: kind;
-/** A `Value` that is a plain object (not a list, not a `Decimal`): the one narrowing of the union's object arm. */
+/** A `Value` that is a plain object (not a list): the one narrowing of the union's object arm. */
 export const value_object = (v: unknown): v is { readonly [k: string]: Value } =>
-	typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof Decimal);
+	typeof v === 'object' && v !== null && !Array.isArray(v);
 /**
  * The kind an undeclared JSON value shows as: scalars by their type, objects field by field, and a list of objects as
  * one object kind over every key its items hold (so it shows as a table).
@@ -320,7 +319,6 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 /** One native value as text, shared by views and kind renderers. */
 export function format_value(value: Value | undefined, locale = 'en'): string {
 	if (value === null || value === undefined) return '';
-	if (value instanceof Decimal) return decimalText(String(value), locale);
 	if (typeof value === 'boolean') return value ? '✓' : '✗';
 	if (typeof value === 'number') return new Intl.NumberFormat(locale).format(value);
 	if (typeof value === 'string')
@@ -390,7 +388,7 @@ export function parse(kind: Kind, text: string): Parsed {
 			const scale = kind.kind === 'decimal' ? kind.scale : undefined;
 			if (scale !== undefined && (s.split('.')[1]?.length ?? 0) > scale)
 				return { error: `at most ${scale} decimal places` };
-			return { value: Decimal.of(s) };
+			return { value: s };
 		}
 		case 'point': {
 			const p = parsePoint(t);

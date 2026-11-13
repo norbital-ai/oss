@@ -450,12 +450,7 @@ describe('next query engine (PGlite)', () => {
 				};
 				// the where grammar over the catalogue: a field, an operator its kind admits, an operand its kind admits, a
 				// literal from the column's own values; relations by their quantifiers; combinators; to depth 4
-				const untag = (value: unknown): Json =>
-					Predicate.isObject(value) &&
-					Object.keys(value).length === 1 &&
-					typeof value['$dec'] === 'string'
-						? value['$dec']
-						: Schema.decodeUnknownSync(Schema.Json)(value);
+				const untag = (value: unknown): Json => Schema.decodeUnknownSync(Schema.Json)(value);
 				const pool = (m: string, f: string): Json[] =>
 					[
 						...new Set(
@@ -807,7 +802,7 @@ describe('next query engine (PGlite)', () => {
 					))[0]
 				).rows;
 				const totals = byTotal.map((r) =>
-					Number(Schema.decodeUnknownSync(Schema.Struct({ $dec: Schema.String }))(r.total).$dec)
+					Number(Schema.decodeUnknownSync(Schema.String)(r.total))
 				);
 				expect(totals).toEqual([...totals].sort((a, b) => b - a));
 				const first = Schema.decodeUnknownSync(Page)(
@@ -1517,9 +1512,7 @@ describe('next query engine (PGlite)', () => {
 					(o) => region(o) === key['account.region'] && key.placed === '2026-09-01'
 				);
 				expect(g.count).toBe(members.length);
-				const total = Schema.decodeUnknownSync(
-					Schema.Struct({ total: Schema.Struct({ $dec: Schema.String }) })
-				)(g.sum).total.$dec;
+				const total = Schema.decodeUnknownSync(Schema.Struct({ total: Schema.String }))(g.sum).total;
 				expect(Math.round(Number(total) * 100)).toBe(
 					members.reduce((s, o) => s + Math.round(Number(o.total) * 100), 0)
 				);

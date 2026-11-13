@@ -1,5 +1,4 @@
 import { Schema } from 'effect';
-import { Decimal } from '@norbital-ai/store/decimal';
 import type { Value } from '@norbital-ai/store/kind';
 import type { Values } from '../model/types.js';
 
@@ -10,20 +9,9 @@ export type ChildOperation = (
 	| { action: 'delete' | 'link' | 'unlink'; id: string; revision: number }
 ) & { proposal?: true };
 
-const ValueSchema: Schema.Decoder<Value> = Schema.suspend(() =>
-	Schema.Union([
-		Schema.Null,
-		Schema.Boolean,
-		Schema.Finite,
-		Schema.String,
-		Schema.declare((value: unknown): value is Decimal => value instanceof Decimal),
-		Schema.Array(ValueSchema),
-		Schema.Record(Schema.String, ValueSchema)
-	])
-);
-const ValuesSchema = Schema.Record(Schema.String, ValueSchema);
+const ValuesSchema = Schema.Record(Schema.String, Schema.Json);
 const proposal = Schema.optionalKey(Schema.Literal(true));
-/** A stored draft's child operation (revived with `revive_wire`), decoded before it re-enters a form. */
+/** A stored draft's child operation, decoded before it re-enters a form. */
 export const ChildOperationSchema: Schema.Decoder<ChildOperation> = Schema.Union([
 	Schema.Struct({ action: Schema.Literal('create'), values: ValuesSchema, proposal }),
 	Schema.Struct({ action: Schema.Literal('update'), id: Schema.String, revision: Schema.Number, set: ValuesSchema, proposal }),

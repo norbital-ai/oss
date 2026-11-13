@@ -1,7 +1,4 @@
-import { Effect, Result, Schema } from 'effect';
-import { Instant, PlainDate } from '@norbital-ai/store/date';
-import type { Wired } from '@norbital-ai/store/wire';
-import { local_of } from '@norbital-ai/store/zone';
+import { DateTime, Effect, Result, Schema } from 'effect';
 import type { Query } from '../../page/page-bolt.ts';
 import { page_reads, readValue } from '../../page/read-value.ts';
 import { view_client } from '../../page/view-client.ts';
@@ -21,7 +18,7 @@ const unavailable = (): never => {
 type PublicRead = WireRead & { readonly m: 'query' | 'aggregate' | 'history' };
 type Lookup = (read: PublicRead) => Json | undefined;
 
-const pageRead = <A>(lookup: Lookup, method: PublicRead['m'], args: readonly Wired[], schema: () => Schema.Decoder<A>): Query<A> => {
+const pageRead = <A>(lookup: Lookup, method: PublicRead['m'], args: readonly Json[], schema: () => Schema.Decoder<A>): Query<A> => {
 	const read = { m: method, a: args.map(read_wire) };
 	let prepared: Schema.Decoder<A> | undefined;
 	const decoder = () => prepared ?? (prepared = schema());
@@ -69,8 +66,8 @@ const publicServerContext = (boot: PublicBoot, now: string, lookup: Lookup) => {
 		...page_reads(boot.read_catalog, (method, args, schema) => pageRead(lookup, method, args, schema)),
 		refresh: unavailable,
 		clock: () => ({
-			now: Instant(now),
-			today: PlainDate(local_of(Date.parse(now), boot.workspace.tz).date)
+			now,
+			today: DateTime.formatIsoDate(DateTime.makeZonedUnsafe(now, { timeZone: boot.workspace.tz }))
 		}),
 		preview_pdf: unavailable,
 		record_capabilities: unavailable,

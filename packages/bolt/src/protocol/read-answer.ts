@@ -1,7 +1,6 @@
 import { Result, Schema } from 'effect';
 import { input_schema, KindSchema, type Value } from '@norbital-ai/store/kind';
-import { encode_wire, type Json, type Wired } from '@norbital-ai/store/wire';
-import { Decimal } from '@norbital-ai/store/decimal';
+import type { Json } from '@norbital-ai/store';
 import type { AggRow, Page, Paged, ReadAnswer, ReadRequestBase } from '../decl/ctx.ts';
 import { ReadFailed } from '../decl/errors.ts';
 import { decode_read_request, type LayerRequestJson } from './read-request.ts';
@@ -49,17 +48,16 @@ const PlainArray = Schema.declare((value: unknown): value is readonly unknown[] 
 			descriptor?.enumerable === true && descriptor.get === undefined;
 	});
 });
-const WireInput: Schema.Decoder<Wired> = Schema.suspend(() => Schema.Union([
+const WireInput: Schema.Decoder<Json> = Schema.suspend(() => Schema.Union([
 	Schema.Null, Schema.Boolean, Schema.Finite, Schema.String,
-	Schema.declare((value: unknown): value is Decimal => value instanceof Decimal),
 	PlainArray.pipe(Schema.decodeTo(Schema.Array(WireInput))), PlainObject.pipe(Schema.decodeTo(Schema.Record(Schema.String, WireInput)))
 ]));
 /** Validate rich authored inputs before encoding, so invalid functions and non-JSON values cannot silently disappear. */
 export function read_wire(value: unknown): Json {
 	const decoded = Schema.decodeUnknownResult(WireInput)(value);
 	return Result.isSuccess(decoded)
-		? encode_wire(decoded.success)
-		: failed('A read takes plain JSON values and declared Decimal values.');
+		? decoded.success
+		: failed('A read takes plain JSON values.');
 }
 const own = <A>(record: Readonly<Record<string, A>>, key: string): A | undefined =>
 	Object.hasOwn(record, key) ? record[key] : undefined;

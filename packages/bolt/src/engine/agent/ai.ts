@@ -26,7 +26,7 @@ import type { Ai, AiEvent } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { FacilityCall } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import {
 	LIMITS,
 	type AiMessage,
@@ -827,7 +827,7 @@ export function infer_facility(
 						role: 'assistant',
 						content: {
 							text: typeof r.content === 'string' ? r.content : '',
-							toolCalls: encode_wire(calls)
+							toolCalls: calls
 						}
 					});
 					const completed = yield* run_calls<CrossAnswer, PortFailure, never>(calls, Effect.fn('Ai.inferCall')(function* (c, invalid, stopped) {

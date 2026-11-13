@@ -17,11 +17,10 @@ import { reactive } from './kit-state.svelte.js';
 import { listRequest, unref, refOf, label_read } from '../src/relations/select.ts';
 import { recordText } from '../src/kinds/kind.ts';
 import { Effect } from 'effect';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { format_value as show } from '../src/kinds/kind.ts';
 import { jsonRecord, viewFixture } from './view-fixture.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
-import type { Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 
 const bolt = { t: (k: string) => k };
 
@@ -211,12 +210,11 @@ it.effect("a view's read names each root's view output unless it names one", () 
 
 it.effect('values display by shape', () =>
 	Effect.sync(() => {
-		assert.equal(show(Decimal.of('1234.5'), 'en'), '1,234.5');
+		assert.equal(show(1234.5, 'en'), '1,234.5');
 		assert.equal(show({ from: '2026-01-01', to: null }), '2026-01-01 – …');
 		assert.equal(show({ id: 'f', name: 'a.pdf', mime: 'application/pdf' }), 'a.pdf');
-		// `$bolt` decodes the wire: std's Decimal (no own fields, `toJSON` its `{ $dec }`, `String` its text) and an instant's ISO text
-		const dec = Decimal.of('1234.5');
-		assert.equal(show(dec, 'en'), '1,234.5');
+		// a value without its kind is shown as it is: decimal text verbatim, an instant in the locale
+		assert.equal(show('1234.5', 'en'), '1234.5');
 		assert.equal(
 			show('2026-01-02T03:04:05.000Z', 'en'),
 			new Date('2026-01-02T03:04:05.000Z').toLocaleString('en', {
@@ -253,14 +251,14 @@ it.effect('Rows sends explicit ops; a delete is only what the viewer removed', (
 
 it.effect('Rows ignores reordered object keys while preserving decimal and array edits', () =>
 	Effect.sync(() => {
-		const loaded = [{ id: '1', details: { amount: Decimal.of('1.20'), tags: ['a', 'b'] } }];
-		const current = [{ id: '1', details: { tags: ['a', 'b'], amount: Decimal.of('1.20') } }];
+		const loaded = [{ id: '1', details: { amount: '1.20', tags: ['a', 'b'] } }];
+		const current = [{ id: '1', details: { tags: ['a', 'b'], amount: '1.20' } }];
 		assert.deepEqual(rowsOps(loaded, current, []), {});
-		required(current[0]).details.amount = Decimal.of('2.00');
+		required(current[0]).details.amount = '2.00';
 		assert.deepEqual(rowsOps(loaded, current, []), {
 			update: [{ target: '1', set: { details: required(current[0]).details } }]
 		});
-		required(current[0]).details.amount = Decimal.of('1.20');
+		required(current[0]).details.amount = '1.20';
 		assert.deepEqual(rowsOps(loaded, current, []), {});
 		required(current[0]).details.tags.reverse();
 		assert.deepEqual(rowsOps(loaded, current, []), {
@@ -351,13 +349,13 @@ it.effect('a FK column reads its target label in the page read and shows it besi
 it.effect('Chart reads aggregate rows', () =>
 	Effect.sync(() => {
 		const agg = [
-			{ key: { region: 'N', stage: 'won' }, sum: { amount: Decimal.of('10') } },
-			{ key: { region: 'N', stage: 'lost' }, sum: { amount: Decimal.of('5') } },
-			{ key: { region: 'S', stage: 'won' }, sum: { amount: Decimal.of('2.5') } }
+			{ key: { region: 'N', stage: 'won' }, sum: { amount: '10' } },
+			{ key: { region: 'N', stage: 'lost' }, sum: { amount: '5' } },
+			{ key: { region: 'S', stage: 'won' }, sum: { amount: '2.5' } }
 		];
 		const flattened = flat(required(agg[0])),
 			amount = flattened['sum.amount'];
-		assert.ok(amount instanceof Decimal);
+		assert.ok(typeof amount === 'string');
 		assert.deepEqual(
 			{ ...flattened, 'sum.amount': Number(String(amount)) },
 			{ region: 'N', stage: 'won', 'sum.amount': 10 }

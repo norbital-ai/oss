@@ -65,8 +65,8 @@ describe('the wire Schemas', () => {
 		trip(QReply, { answers: [[{ id: 'o1' }], null] });
 		trip(ActBody, {
 			acts: {
-				'orders.create': [{ total: { $dec: '1.20' } }],
-				'orders.update': [{ target: { id: 'o1', revision: 3 }, set: { total: { $dec: '2.40' } } }],
+				'orders.create': [{ total: '1.20' }],
+				'orders.update': [{ target: { id: 'o1', revision: 3 }, set: { total: '2.40' } }],
 				'orders.delete': [{ target: { id: 'o2', revision: 4 } }]
 			},
 			issued_at: '2026-10-14T00:00:00.000Z'

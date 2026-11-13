@@ -48,9 +48,12 @@ export type {
 export type { Check, Verify } from './decl/verify.ts';
 export type {
 	CurrencyCode,
+	Decimal,
+	Duration,
 	FileRef,
 	Id,
 	Instant,
+	Json,
 	PlainDate,
 	PlainTime,
 	Point

@@ -1,8 +1,6 @@
-// Value types and literal grammars. Type-only: the runtime values are std's, and a row
-// holds exactly them (the guest prelude and the page client decode the wire into them): a `Decimal` instance, and a date and an
-// instant as std's branded ISO strings.
-import type { CurrencyCode as Iso4217, Decimal } from '@norbital-ai/store/decimal';
-import type { Duration, Instant, Offset, PlainDate } from '@norbital-ai/store/date';
+// Value types and literal grammars. Type-only: a row is JSON. A decimal is its exact text, a date `YYYY-MM-DD` and an
+// instant ISO UTC text; their arithmetic is Effect's `BigDecimal` and `DateTime`.
+import type { Decimal, Duration, Instant, Offset, PlainDate } from '@norbital-ai/store';
 export type { Decimal, Duration, Instant, Offset, PlainDate };
 export declare const brand: unique symbol;
 
@@ -32,8 +30,8 @@ export type FileRef = {
 };
 
 // ponytail: ISO 4217 is not enumerated; upper case keeps it apart from field names, the build checks the code list.
-/** An ISO 4217 currency code (`SGD`, `USD`): a literal or std's branded `currency()`. */
-export type CurrencyCode = Iso4217 | Uppercase<string>;
+/** An ISO 4217 currency code (`SGD`, `USD`). */
+export type CurrencyCode = Uppercase<string>;
 /** A key of `src/i18n/+messages.ts` or, outside catalog mode, a literal string. */
 export type Msg = string;
 /** An icon name as the ui's `Icon` takes it (an Iconify name such as `lucide:users`). */
@@ -50,5 +48,5 @@ export type Size = `${bigint}${'KiB' | 'MiB'}`;
 /** A rate literal: a count per unit or per duration (`'60/min'`, `'5/10min'`). */
 export type Rate = `${bigint}/${'s' | 'min' | 'h' | 'd' | Duration}`;
 
-export type { Json } from '@norbital-ai/store/wire';
+export type { Json } from '@norbital-ai/store';
 export type NonEmpty<T> = readonly [T, ...T[]];

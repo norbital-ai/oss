@@ -16,7 +16,7 @@
 import { Array as EffectArray, Clock, Effect, Option, Predicate, Result, Schema } from 'effect';
 import { csv_of } from '../files/csv.ts';
 import { UUID_PATTERN } from '@norbital-ai/store/kind';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { bindingsAt } from '../query/reader.ts';
 import { database_value, read as storeRead } from '@norbital-ai/store';
 import type { Fields, Kind } from '@norbital-ai/store/kind';
@@ -327,7 +327,7 @@ const contextOf = (s: Sync, given: Json | undefined): Effect.Effect<Json, BoltEr
 					`${s.model}.sync.${s.sync} context: ${d.problems.map((p) => `${p.path}: ${p.message}`).join('; ')}`
 				)
 			)
-		: Effect.succeed(encode_wire(d.value));
+		: Effect.succeed(d.value ?? null);
 };
 
 /** Records with a `schema` decoded against it (all problems at once, as refusals at their `$at`), `$at` kept. */
@@ -358,7 +358,7 @@ function decodeRecords(
 				};
 			})
 		};
-	const wire = encode_wire(d.value),
+	const wire = d.value,
 		decoded =
 			Predicate.isObject(wire) && EffectArray.isArray<Json | undefined>(wire['records'])
 				? wire['records']

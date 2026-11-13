@@ -3,7 +3,7 @@
 // every offender at once; nothing is ever deleted by omission.
 import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
 import { input_schema } from '@norbital-ai/store/kind';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import type { Json } from '../../decl/values.ts';
 import type { Change, EngineActor, InputPath, NativeWriteConflict, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
@@ -186,7 +186,7 @@ export class Flattener {
 			}
 			if (shape !== undefined && v !== null) {
 				const decoded = decodeInput({ [k]: shape }, { [k]: v });
-				const wired = encode_wire(decoded.value);
+				const wired = decoded.value;
 				if (!Predicate.isObject(wired) || wired[k] === undefined) {
 					this.bad(at, 'expected the declared field shape');
 					continue;
@@ -512,7 +512,7 @@ export function decodeValue(
 			return str && Object.hasOwn(spec.states, v) ? null : `'${String(v)}' is not a state`;
 		case 'int':
 			return Number.isSafeInteger(v) ? null : 'expected a whole number';
-		// D6: an authored literal (decimal text or a number) or the wire's `{ $dec }`
+		// D6: an authored literal, decimal text or a number
 		case 'decimal':
 		case 'money':
 			return Result.isSuccess(

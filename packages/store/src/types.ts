@@ -126,23 +126,13 @@ type Base<K> = K extends { kind: infer N extends keyof Values<K> } ? Values<K>[N
 type ManyValue<K> = K extends { many: true } ? readonly Base<K>[] : Base<K>;
 export type ValueOf<K> = K extends { optional: true } ? ManyValue<K> | null : ManyValue<K>;
 /** What a write may send for a value: its own type, or the literal a decoder takes for it (ISO text, decimal text). */
-export type Loose<V> = V extends Decimal
-	? Decimal | number | `${number}`
-	: V extends PlainDate
-		? PlainDate | `${number}-${number}-${number}`
-		: V extends Instant
-			? Instant | `${number}-${number}-${number}T${string}`
-			: V extends DatePeriod
-				? { readonly from: Loose<PlainDate>; readonly to: Loose<PlainDate> | null }
-				: V extends InstantPeriod
-					? { readonly start: Loose<Instant>; readonly end: Loose<Instant> | null }
-					: V extends PlainTime
-						? PlainTime | `${number}:${number}`
-						: V extends readonly (infer E)[]
-							? readonly Loose<E>[]
-							: V extends { readonly [key: string]: unknown }
-								? { readonly [K in keyof V]: Loose<V[K]> }
-								: V;
+export type Loose<V> = V extends PlainTime
+	? PlainTime | `${number}:${number}`
+	: V extends readonly (infer E)[]
+		? readonly Loose<E>[]
+		: V extends { readonly [key: string]: unknown }
+			? { readonly [K in keyof V]: Loose<V[K]> }
+			: V;
 
 // ── the index: each table's columns, refs and many-relations, computed once per schema ──
 type Audit = {

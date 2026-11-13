@@ -19,7 +19,6 @@ import {
 	Stream
 } from 'effect';
 import { bindingsAt } from '../query/reader.ts';
-import { Instant } from '@norbital-ai/store/date';
 import { DRIVERS, type DriverName, type IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { under } from '../../protocol/wire.ts';
@@ -980,7 +979,7 @@ export const integration_links = (
 						syncs.hint(instance, {
 							kind: 'webhook',
 							id: verified.delivery,
-							at: Instant(new Date(now)),
+							at: new Date(now).toISOString(),
 							body: verified.body ?? null,
 							headers: shown
 						})

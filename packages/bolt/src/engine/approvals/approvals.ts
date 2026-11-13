@@ -7,7 +7,7 @@ import { constraintIndex } from '../schema/plan.ts';
 import { Clock, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { bindingsAt } from '../query/reader.ts';
 import {
 	Approvals,
@@ -925,11 +925,11 @@ export const ApprovalsLive = Layer.effect(
 						action: input.decision,
 						actor: auditActor(input.authority.actor),
 						approval: input.request_id,
-						payload: encode_wire({
+						payload: {
 							request_id: input.request_id,
 							decision: input.decision,
-							reason: input.reason
-						})
+							...(input.reason === undefined ? {} : { reason: input.reason })
+						}
 					},
 					area.decide(input)
 				).pipe(Effect.provideService(Audit, audit)),

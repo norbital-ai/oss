@@ -4,7 +4,7 @@ import { runPiece } from './rows.ts';
 import { Cache, Cause, Clock, Context, Crypto, Deferred, Effect, Exit, Layer, Option, Predicate, Result, Schema, Semaphore } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { canonical, sha256_hex } from '@norbital-ai/store';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { WriteOutcome } from '../../protocol/schema.ts';
@@ -36,7 +36,7 @@ import { Ai, Browser, Drivers, Logs } from '../ports.ts';
 import { ReadDeps } from '../query/engine.ts';
 import { bindingsAt } from '../query/reader.ts';
 import { Activation, Approvals, Automations, Callables, Facilities, Guest, Identity, Live, Manifest, Reads, Wake,
- type AutomationExecution, type AutomationJob, type AutomationRequest, type CrossCall, type FacilityCall } from '../services.ts';
+ type AutomationExecution, type AutomationJob, type AutomationRequest, type CrossCall, type FacilityCall, acts_json } from '../services.ts';
 
 import { Chain, GATED, makeReadGuards, noticeInsert } from '../write/sql.ts';
 import { effectOf, enqueue, next_due } from './queue.ts';
@@ -562,7 +562,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								return { ok: true, value: null };
 							}
 							case 'act': {
-								const proposed = keyOf('act', 'act', encode_wire({ acts: call.acts, outputs: call.outputs }));
+								const proposed = keyOf('act', 'act', { acts: acts_json(call.acts), outputs: call.outputs });
 								const key = call.options.key ?? proposed;
 								const observedRead = priorReads.snapshot();
 								const guards = observedRead.guards;
@@ -594,7 +594,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 									value:
 										decision.kind === 'decided'
 											? { request_id: decision.request_id, status: decision.status }
-											: encode_wire(decision)
+											: decision
 								};
 							}
 							case 'run': {
@@ -826,7 +826,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 		if (depth > LIMITS.writeDepth) return yield* Effect.fail(BoltError.make('invalid_input', 'admission', `Runs chain at most ${LIMITS.writeDepth} deep.`));
 		const decoded = decodeAutomationInput(spec.input, input);
 		if (decoded.problems.length > 0) return yield* Effect.fail(BoltError.make('invalid_input', 'decode', decoded.problems.map((problem) => `${problem.path}: ${problem.message}`).join('; ')));
-		input = encode_wire(decoded.value);
+		input = decoded.value ?? null;
 		const id = yield* newId;
 		const holder: Holder = { actor: { kind: 'system', run: id, by: { automation } }, policies: spec.policies, admin: false };
 		const outcome = yield* invoke({ id, automation, input, cause: 'start', depth, attempts: 1, starter: null, ...(trigger === undefined ? {} : { trigger }) }, holder, input, undefined, inherited);
@@ -847,7 +847,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 		const decoded = decodeAutomationInput(spec?.input, input);
 		if (decoded.problems.length > 0)
 			return yield* Effect.fail(BoltError.make('invalid_input', 'decode', decoded.problems.map((problem) => `${problem.path}: ${problem.message}`).join('; ')));
-		const key = canonical([automation, encode_wire(decoded.value)]);
+		const key = canonical([automation, decoded.value]);
 		const get = Cache.get(cache, key).pipe(Effect.provideService(CallDepth, depth), Effect.map((value) => value.output));
 		if (parent === undefined) return yield* get;
 		return yield* Effect.acquireUseRelease(

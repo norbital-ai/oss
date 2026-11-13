@@ -3,7 +3,7 @@ import { type Resolved, type Catalog, resolve, type Offer, type FilterStep, chil
 import { CmpSchema, type Op, type Node, type Arg, type Quant } from './node.js';
 import { litKind, type FilterVariables, varError, operandsFor, fieldsFor, operatorsFor, valueKind } from './operators.js';
 import { argOf, fieldNodes } from './where.js';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { Result, Schema } from 'effect';
 import { input_schema } from '@norbital-ai/store/kind';
 
@@ -45,14 +45,14 @@ function retainedArg(
 			: null;
 	if (op === 'during') return null;
 	if (op === 'near' && arg._tag === 'lit') {
-		const n = fieldNodes(cat, model, path, { near: encode_wire(arg.lit) })?.[0];
+		const n = fieldNodes(cat, model, path, { near: arg.lit })?.[0];
 		return n?.t === 'cond' ? n.arg : null;
 	}
 	const list = ['in', 'not_in', 'has_any', 'has_all'].includes(op);
-	if (list) return argOf(to, op, encode_wire(arg._tag === 'list' ? arg.list : [arg.lit]));
+	if (list) return argOf(to, op, arg._tag === 'list' ? arg.list : [arg.lit]);
 	if (arg._tag === 'list')
-		return arg.list.length === 1 ? argOf(to, op, encode_wire(arg.list[0] ?? null)) : null;
-	return argOf(to, op, encode_wire(arg.lit));
+		return arg.list.length === 1 ? argOf(to, op, arg.list[0] ?? null) : null;
+	return argOf(to, op, arg.lit);
 }
 
 /** Field, operator and value move together; unrelated rows are never changed. */

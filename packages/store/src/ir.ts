@@ -7,7 +7,7 @@ import type { Json, Point, Shape } from './values.ts';
 type Lit = { readonly _tag: 'Lit'; readonly value: Json };
 /** A same-row field (`{ field }`): compared within the row, never a relation path. */
 export type Field = { readonly _tag: 'Field'; readonly field: string };
-/** A `{ var }` CEL expression over the requestor (std/vars), checked at decode and bound once per invocation. */
+/** A `{ var }` CEL expression over the requestor (lang/vars), checked at decode and bound once per invocation. */
 export type Var = { readonly _tag: 'Var'; readonly text: string };
 /** A value position resolved at execution. */
 export type Operand = Field | Var;

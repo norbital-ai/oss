@@ -18,7 +18,6 @@ import { setImmediate } from 'node:timers/promises';
 import type { ViewBolt, Json } from '../src/client/contract.ts';
 import type { Row } from '../src/model/types.ts';
 import type { Value } from '@norbital-ai/store/kind';
-import { Decimal } from '@norbital-ai/store/decimal';
 import type { KindsHost } from '../src/kinds/context.ts';
 import { type Offer, type Resolved } from '../src/filter/catalog.ts';
 import { type RawArg, type Node, type Op } from '../src/filter/node.ts';
@@ -625,7 +624,7 @@ const offers = (c: string): readonly Offer[] =>
 /** A job as the host answers it: every field its read output promises. */
 const JOB = {
 	revision: 1, title: '', hours: null, scheduled_on: null, due_on: null, status: 'scheduled', tags: [], meta: null,
-	window: null, salary: Decimal.of('0'), assignee: null, account: 'a1', subject: { model: 'accounts', id: 'a1' }
+	window: null, salary: '0', assignee: null, account: 'a1', subject: { model: 'accounts', id: 'a1' }
 };
 async function scripted(extra: Partial<ViewScript> = {}) {
 	const reads: { c: string; o: ReadOptions }[] = [];

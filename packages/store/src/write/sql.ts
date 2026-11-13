@@ -12,7 +12,7 @@ import { cells } from '../read/values.ts';
 import { null_row_sql } from './row.ts';
 
 type Fx<A> = Effect.Effect<A, StoreError>;
-/** A row's values in wire form, by field (a polymorphic ref as `{ model, id }`, a decimal as `{ $dec }`). */
+/** A row's values in wire form, by field (a polymorphic ref as `{ model, id }`, a decimal as its text). */
 export type WireRow = { readonly [field: string]: Json };
 /**
  * An atomic change of an inline value, sent as the field's value: `$patch` merges an object at its paths (absent

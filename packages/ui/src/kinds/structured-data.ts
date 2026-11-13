@@ -1,5 +1,4 @@
 import { item_kind, view_schema } from '@norbital-ai/store/kind';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { Array as Arr, Schema } from 'effect';
 import { value_object, type Kind, type Value } from './kind.js';
 import { resolve_json_schema, type JsonSchema } from './json-schema.js';
@@ -23,8 +22,6 @@ export function dataEntries(value: Value | undefined): Readonly<Record<string, V
 export function data_equal(before: Value | undefined, value: Value | undefined): boolean {
 	if (before === value) return true;
 	if (before === undefined || value === undefined) return false;
-	if (before instanceof Decimal || value instanceof Decimal)
-		return before instanceof Decimal && value instanceof Decimal && before.eq(value);
 	if (Arr.isArray<Value>(before) || Arr.isArray<Value>(value))
 		return (
 			Arr.isArray<Value>(before) &&
@@ -45,7 +42,6 @@ export function data_equal(before: Value | undefined, value: Value | undefined):
 type ObservedType = 'null' | 'boolean' | 'integer' | 'number' | 'string' | 'array' | 'object';
 const observedType = (value: Value): ObservedType => {
 	if (value === null) return 'null';
-	if (value instanceof Decimal) return 'number';
 	if (Arr.isArray<Value>(value)) return 'array';
 	switch (typeof value) {
 		case 'boolean':
@@ -357,11 +353,6 @@ export function kind_json_schema(kind: Kind): JsonSchema {
 }
 
 const identityPart = (value: Value | undefined): string | undefined => {
-	if (value instanceof Decimal)
-		return `decimal:${value
-			.toString()
-			.replace(/(\.\d*?)0+$/, '$1')
-			.replace(/\.$/, '')}`;
 	return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
 		? `${typeof value}:${String(value)}`
 		: undefined;

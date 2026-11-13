@@ -1,7 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
 import { Effect } from 'effect';
-import { Decimal } from '../src/lang/decimal.ts';
 import { build, read, schema, store, table, type Statement } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import { database, exec, run, script } from './support.ts';
@@ -320,7 +319,7 @@ describe('typed read projections', () => {
 							number: `SO-${n}`,
 							customer: customer.id,
 							placed_on: '2026-10-01',
-							total: n
+							total: String(n)
 						}))
 					)
 				);
@@ -384,7 +383,7 @@ describe('typed read projections', () => {
 							customer: split.id,
 							status: 'open',
 							placed_on: '2026-10-01',
-							total: 1,
+							total: '1',
 							address: { city: 'Penang' }
 						},
 						{
@@ -392,7 +391,7 @@ describe('typed read projections', () => {
 							customer: split.id,
 							status: 'shipped',
 							placed_on: '2026-10-01',
-							total: 2,
+							total: '2',
 							address: { city: 'Singapore' }
 						},
 						{
@@ -400,7 +399,7 @@ describe('typed read projections', () => {
 							customer: same.id,
 							status: 'open',
 							placed_on: '2026-10-01',
-							total: 3,
+							total: '3',
 							address: { city: 'Singapore' }
 						}
 					])
@@ -486,10 +485,10 @@ describe('typed read projections', () => {
 				})
 			);
 			expectTypeOf(totals.count).toEqualTypeOf<number>();
-			expectTypeOf(totals.sum.total).toEqualTypeOf<Decimal | null>();
+			expectTypeOf(totals.sum.total).toEqualTypeOf<string | null>();
 			expect(totals.count).toBe(2);
-			expect(totals.sum.total?.eq('3.50')).toBe(true);
-			expect(totals.avg.total?.eq('1.75')).toBe(true);
+			expect(Number(totals.sum.total)).toBe(3.5);
+			expect(Number(totals.avg.total)).toBe(1.75);
 			expect(totals.min).toEqual({ placed_on: '2026-10-01', 'customer.code': 'C' });
 			const grouped = yield* execute(
 				yield* db.aggregate('order', { by: 'status', count: true, limit: 1 })
@@ -514,7 +513,7 @@ describe('typed read projections', () => {
 			);
 			expect(empty).toEqual({ count: 0, sum: { total: null } });
 			const filtered = yield* execute(
-				yield* db.read('order', { where: { total: { eq: Decimal.of('1.20') } }, all: true })
+				yield* db.read('order', { where: { total: { eq: '1.20' } }, all: true })
 			);
 			expect(filtered.rows.map((row) => row.number)).toEqual(['A']);
 		})
@@ -572,11 +571,11 @@ describe('typed read projections', () => {
 							payload: {
 								location: { city: 'Seoul', floor: 4 },
 								tags: ['a'],
-								price: Decimal.of('0.25')
+								price: '0.25'
 							},
 							owner: owner.id,
 							about: { model: 'owner', id: owner.id },
-							amounts: [Decimal.of('0.80'), 2]
+							amounts: ['0.80', '2']
 						})
 					)
 				);
@@ -600,19 +599,19 @@ describe('typed read projections', () => {
 						yield* db.update('document', {
 							key: { id: document.id },
 							set: {
-								payload: { $patch: { location: { floor: 5 }, price: Decimal.of('2.50') } },
-								amounts: { $append: [Decimal.of('1.20')] }
+								payload: { $patch: { location: { floor: 5 }, price: '2.50' } },
+								amounts: { $append: ['1.20'] }
 							}
 						})
 					)
 				);
 				expect(changed.payload.location).toEqual({ city: 'Seoul', floor: 5 });
-				expect(changed.payload.price?.eq('2.50')).toBe(true);
+				expect(Number(changed.payload.price)).toBe(2.5);
 				expect(changed.amounts.map((amount) => amount.toString())).toEqual(['0.80', '2', '1.20']);
 				const rejected = yield* Effect.flip(
 					db.update('document', {
 						key: { id: document.id },
-						set: { amounts: [Number.NaN] }
+						set: { amounts: ['NaN'] }
 					})
 				);
 				expect(rejected.code).toBe('invalid');

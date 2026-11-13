@@ -136,7 +136,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Decimal } from '@norbital-ai/store/decimal';
 	import { watch } from 'runed';
 	import Self from './structured-data.svelte';
 	import Editor from './editor.svelte';
@@ -436,7 +435,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const scalarList = (value: Value | undefined): value is readonly Value[] =>
 		Array.isArray(value) &&
 		value.length > 0 &&
-		value.every((item) => item === null || typeof item !== 'object' || item instanceof Decimal);
+		value.every((item) => item === null || typeof item !== 'object');
 	const previousList = $derived<readonly Value[]>(Array.isArray(before) ? before : []);
 	const itemKind = $derived(kind?.many === true ? item_kind(kind) : undefined);
 	const itemSchema = $derived(
@@ -551,7 +550,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	});
 	const changed = $derived(currentMode === 'diff' && !data_equal(before, value));
 	const leafKind = $derived.by((): Kind => {
-		if (held instanceof Decimal && !kind) return { kind: 'decimal', scale: held.scale };
 		if (
 			plan.kind !== 'json' &&
 			plan.kind !== 'object' &&
@@ -561,7 +559,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			(plan.kind !== 'custom' || native !== undefined)
 		)
 			return plan;
-		if (held instanceof Decimal) return { kind: 'decimal', scale: held.scale };
 		const inferred = inferKind(held ?? null);
 		return inferred.many === true || ['object', 'record', 'union'].includes(inferred.kind)
 			? { kind: 'json' }
@@ -1017,10 +1014,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	{@const declared = shape(declaredKind, held) ?? json_schema_kind(schema)}
 	{@const field = field_entry(declared, host)}
 	{@const context = previous ? (before_row ?? row) : row}
-	{@const nativeKind =
-		held instanceof Decimal && (shape(declaredKind, held) === undefined || declared.kind === 'json')
-			? { kind: 'decimal' as const, scale: held.scale }
-			: declared}
+	{@const nativeKind = declared}
 	{#if held === undefined}<span class="text-sm text-muted-foreground">Not set</span>
 	{:else if held === null}<span class="text-sm text-muted-foreground">Null</span>
 	{:else if field}<Show {ctx} kind={declared} value={held} {name} row={context} readonly />

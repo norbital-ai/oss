@@ -1,13 +1,13 @@
 import { Result, Schema } from 'effect';
 import { ReadFailed } from '../decl/errors.ts';
-import type { Json, Wired } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import { read_wire, typed_aggregate_answer, typed_read_answer, type AggregateArguments, type ReadCatalog } from '../protocol/read-answer.ts';
 import { HistoryRevisionSchema } from '../protocol/record-contracts.ts';
 import type { Measures, ReadRequest, ReadRequestBase } from '../decl/ctx.ts';
 import type { Is, ReadableName } from '../decl/names.ts';
 import type { Query } from './page-bolt.ts';
 
-type ReadSource = <A>(method: 'query' | 'aggregate' | 'history', args: readonly Wired[], schema: () => Schema.Decoder<A>) => Query<A>;
+type ReadSource = <A>(method: 'query' | 'aggregate' | 'history', args: readonly Json[], schema: () => Schema.Decoder<A>) => Query<A>;
 
 /** Browser reads and server-rendered reads share the same input-linked result types and actual decoders. */
 export const page_reads = (catalog: ReadCatalog | undefined, source: ReadSource) => {

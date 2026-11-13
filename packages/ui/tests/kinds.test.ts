@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { it as test } from '@effect/vitest';
 import './resolve.ts';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { KIND, type Kind } from '@norbital-ai/store/kind';
 import { KINDS, sortable } from '../src/kinds/registry.ts';
 import { sortable as sortableFields } from '../src/filter/order.ts';
@@ -10,12 +9,14 @@ import { locked } from '../src/form/draft.ts';
 const k = await import('../src/kinds/kind.ts');
 
 test('native values keep exact decimals, native ISO dates and nested values', () => {
-	const amount = Decimal.of('12345678901234567.89');
-	assert.equal(k.format_value(amount), '12,345,678,901,234,567.89');
-	assert.equal(k.format_value(amount, 'de-DE'), '12.345.678.901.234.567,89');
+	const amount = '12345678901234567.89';
+	assert.equal(k.format({ kind: 'decimal', scale: 2 }, amount), '12,345,678,901,234,567.89');
+	assert.equal(k.format({ kind: 'decimal', scale: 2 }, amount, { locale: 'de-DE' }), '12.345.678.901.234.567,89');
+	// without its kind, decimal text is text
+	assert.equal(k.format_value(amount), amount);
 	assert.equal(k.format_value('2026-09-25'), '2026-09-25');
 	assert.equal(k.format_value({ from: '2026-01-01', to: null }), '2026-01-01 – …');
-	assert.equal(k.format_value([Decimal.of('1')]), '1');
+	assert.equal(k.format_value(['1']), '1');
 	const kind = {
 		kind: 'object',
 		fields: { amounts: { kind: 'decimal', scale: 2, many: true } }
@@ -52,7 +53,7 @@ test('money formats exactly in its currency minor digits', () => {
 	assert.equal(k.minorDigits('JPY'), 0);
 	assert.equal(k.minorDigits('BHD'), 3);
 	assert.equal(
-		k.format({ kind: 'money', currency: 'SGD' }, Decimal.of('1234567.5'), {
+		k.format({ kind: 'money', currency: 'SGD' }, '1234567.5', {
 			locale: 'en',
 			currency: 'SGD'
 		}),
@@ -86,12 +87,12 @@ test('typed text parses per kind with decode wording', () => {
 	assert.deepEqual(k.parse({ kind: 'int' }, '42'), { value: 42 });
 	assert.deepEqual(k.parse({ kind: 'int' }, '4.2'), { error: 'expected an integer' });
 	assert.deepEqual(k.parse({ kind: 'decimal', scale: 2 }, '1,234.50'), {
-		value: Decimal.of('1234.50')
+		value: '1234.50'
 	});
 	// a typed leading point is corrected, not refused
-	assert.deepEqual(k.parse({ kind: 'decimal', scale: 2 }, '.56'), { value: Decimal.of('0.56') });
+	assert.deepEqual(k.parse({ kind: 'decimal', scale: 2 }, '.56'), { value: '0.56' });
 	assert.deepEqual(k.parse({ kind: 'money', currency: 'SGD' }, '-.5'), {
-		value: Decimal.of('-0.5')
+		value: '-0.5'
 	});
 	assert.deepEqual(k.parse({ kind: 'decimal', scale: 2 }, '1.234'), {
 		error: 'at most 2 decimal places'
@@ -157,7 +158,7 @@ test('structured problems carry decode paths; unions check the chosen arm', () =
 		}
 	} as const;
 	const out = k.problems(kind, {
-		lines: [{ amount: Decimal.of('1.00') }, { amount: null }],
+		lines: [{ amount: '1.00' }, { amount: null }],
 		basis: { type: 'rate', pct: 150 }
 	});
 	assert.deepEqual(

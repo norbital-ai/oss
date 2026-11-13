@@ -2,7 +2,7 @@
 // shell's own routes, and the visitor fetch that names the page's app and spends one Turnstile token per request that
 // needs one.
 import { Clock, Context, Effect, Layer, Option, Queue, Schema, Stream } from 'effect';
-import { encode_wire, type Wired } from '@norbital-ai/store/wire';
+
 import { equal_json } from '@norbital-ai/store/kind';
 import type { Json } from '../decl/values.ts';
 import type { InputKind, ValueOf } from '../decl/fields.ts';
@@ -274,7 +274,7 @@ export function shell_api(
 					}).filter((e): e is [string, string] => e[1] !== undefined && e[1] !== '')
 				)}`
 			),
-		audit: (query) => call(AuditPage, 'POST', `${SHELL}/audit/query`, encode_wire(query)),
+		audit: (query) => call(AuditPage, 'POST', `${SHELL}/audit/query`, query),
 		audit_detail: (id) =>
 			call(Schema.NullOr(AuditRecord), 'GET', `${SHELL}/audit/detail${q('id', id)}`),
 		studio: () => call(StudioViewAnswer, 'GET', `${SHELL}/studio`),
@@ -649,7 +649,7 @@ export function shell_bolt(
 							.pipe(
 								Stream.map((answer) => ({
 									rows: answer.rows.filter((row) => {
-										const values: Readonly<Record<string, Wired>> = row;
+										const values: Readonly<Record<string, Json>> = row;
 										return Object.entries(conditions).every(([field, condition]) =>
 											equal_json(values[field] ?? null, condition.eq)
 										);

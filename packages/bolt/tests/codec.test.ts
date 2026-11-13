@@ -7,7 +7,6 @@ import { Guest, type Bridge } from '../src/engine/services.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { guest_layer } from './support/guest-fixture.ts';
 import { create_bolt } from '../src/page/bolt.ts';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { input_schema } from '@norbital-ai/store/kind';
 
 const invocation = (input: Json): Invocation => ({
@@ -28,20 +27,17 @@ const invocation = (input: Json): Invocation => ({
 	}
 });
 
-describe('codec: guest reads hand real values, not wire tags', () => {
+describe('codec: guest reads hand plain JSON values', () => {
 	it.live(
-		"dates and instants arrive as ISO strings, decimals as the bundle's std Decimal, in answers and in the input",
+		'dates and instants arrive as ISO strings, decimals as their exact text, in answers and in the input',
 		() =>
 			Effect.gen(function* () {
-				// the bundle's decimal module registers its class on load, as `@norbital-ai/store/decimal` does
-				const source = `class Decimal { static of(s) { const d = new Decimal(); d.text = s; return d; } toJSON() { return this.text; } }
-globalThis[Symbol.for('norbital.std.Decimal')] = Decimal;
-export default { automation: { a: { body: function* (input, ctx) {
+				const source = `export default { automation: { a: { body: function* (input, ctx) {
 	const row = (yield* ctx.query({ t: { where: { id: { eq: 'x' } } } })).t.rows[0];
-	return { amount: row.amount instanceof Decimal, text: String(row.amount.text), day: row.day, at: row.at, span: row.span, json: row.json, input: input.due };
+	return { amount: typeof row.amount === 'string', text: row.amount, day: row.day, at: row.at, span: row.span, json: row.json, input: input.due };
 } } } };`;
 				const row = {
-					amount: { $dec: '1.50' },
+					amount: '1.50',
 					day: '2026-01-02',
 					at: '2026-01-02T03:04:05.000Z',
 					span: { from: '2026-01-01', to: null },
@@ -99,10 +95,10 @@ describe('codec: $bolt reads hand pages real values', () => {
 				rows: [
 					{
 						id: 'a',
-						amount: { $dec: '1.50' },
+						amount: '1.50',
 						day: '2026-01-02',
 						span: { start: '2026-01-02T03:04:05.000Z', end: null },
-						lines: [{ price: { $dec: '2' } }]
+						lines: [{ price: '2' }]
 					}
 				],
 				next: null
@@ -132,9 +128,8 @@ describe('codec: $bolt reads hand pages real values', () => {
 			}));
 			const row = page.rows[0];
 			if (row === undefined) throw new Error('The fixture page returned no row');
-			if (!(row.amount instanceof Decimal)) throw new Error('The amount is not a Decimal');
-			expect(row.amount.plus('1').toString()).toBe('2.50');
-			expect(row.lines[0]?.price).toBeInstanceOf(Decimal);
+			expect(row.amount).toBe('1.50');
+			expect(row.lines[0]?.price).toBeTypeOf('string');
 			expect([row.day, row.span.start]).toEqual(['2026-01-02', '2026-01-02T03:04:05.000Z']);
 		})
 	);

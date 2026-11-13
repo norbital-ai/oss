@@ -5,7 +5,7 @@
 // Each user row carries its sender header, which says whom the turn serves; plan, goals and mode ride a closing note.
 import { Predicate, Result } from 'effect';
 import * as EffectArray from 'effect/Array';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import type { Json } from '../../decl/values.ts';
 import type { AiMessage, Authority } from '../contracts.ts';
 import {
@@ -269,7 +269,7 @@ export function messages(
 			}
 			case 'assistant': {
 				if (row.content !== null && typeof row.content === 'object' && row.content.segments !== undefined)
-					return row.content.segments.map((segment): AiMessage => ({ role: 'assistant', content: encode_wire(reasoning ? segment : Object.fromEntries(Object.entries(segment).filter(([key]) => key !== 'reasoning'))) }));
+					return row.content.segments.map((segment): AiMessage => ({ role: 'assistant', content: reasoning ? segment : Object.fromEntries(Object.entries(segment).filter(([key]) => key !== 'reasoning')) }));
 				return [{ role: 'assistant', content: reasoning || row.content === null || typeof row.content !== 'object' ? row.content : Object.fromEntries(Object.entries(row.content).filter(([key]) => key !== 'reasoning')) }];
 			}
 			case 'tool':

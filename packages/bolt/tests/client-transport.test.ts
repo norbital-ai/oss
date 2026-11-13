@@ -2,7 +2,6 @@ import { Deferred, Effect, Fiber, Queue, Schema, Stream, SubscriptionRef } from 
 import { HttpClient, HttpClientResponse } from 'effect/http';
 import { TestClock } from 'effect/testing';
 import { expect, it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { input_schema } from '@norbital-ai/store/kind';
 import { create_bolt } from '../src/page/bolt.ts';
 import { liveStream, type EventSourceLike } from '../src/page/stream.ts';
@@ -23,7 +22,7 @@ it.effect('a fake HttpClient sees the act contract/key headers and reads revive 
 					request,
 					Response.json(
 						request.url.endsWith('/q')
-							? { answers: [{ jobs: { rows: [{ id: 'r1', amount: { $dec: '1.50' } }], next: null, total: 1 } }] }
+							? { answers: [{ jobs: { rows: [{ id: 'r1', amount: '1.50' }], next: null, total: 1 } }] }
 							: { outcome: { kind: 'committed', output: { 'jobs.create': null }, records: [] }, v: 0 }
 					)
 				)
@@ -45,7 +44,7 @@ it.effect('a fake HttpClient sees the act contract/key headers and reads revive 
 				total: Schema.Number
 			})
 		}));
-		expect(answer.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
+		expect(answer.jobs.rows[0]?.amount).toBeTypeOf('string');
 		yield* bolt.act({ 'jobs.create': [{}] });
 		expect(requests[1]?.headers[HEADERS.key.toLowerCase()]).toBe('request1');
 		expect(requests[1]?.headers[HEADERS.contract.toLowerCase()]).toBe('contract1');

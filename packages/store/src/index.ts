@@ -57,7 +57,7 @@ export {
 	type ListRead,
 	type ReadIR
 } from './ir.ts';
-export { type Json } from './values.ts';
+export type { Json, Decimal, PlainDate, Instant, Duration, Offset } from './values.ts';
 export {
 	compile,
 	compile_gets,

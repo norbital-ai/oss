@@ -159,9 +159,9 @@ export const corpus = <E>(read: (file: string) => Effect.Effect<unknown, E>) =>
 			/**
 			 * Symbols whose name, summary or signature contain any word of `text`, best first: an exact name, then a name that
 			 * starts with the words, then by how many words match (a word in the name counts more) — so a sentence ("app page
-			 * table") finds what its words name. `namespaces` narrows the search (a prefix ending in `/` names a family, `std/`
-			 * every std entry).
-			 * @example docs.search('date range', { namespaces: ['std/'] })
+			 * table") finds what its words name. `namespaces` narrows the search (a prefix ending in `/` names a family, `ui/`
+			 * every ui entry).
+			 * @example docs.search('stack gap', { namespaces: ['ui/'] })
 			 */
 			search(text: string, o: { namespaces?: readonly string[]; limit?: number } = {}): DocHit[] {
 				const words = text.toLowerCase().split(/\s+/).filter(Boolean);

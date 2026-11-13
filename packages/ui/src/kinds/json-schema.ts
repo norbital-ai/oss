@@ -160,7 +160,7 @@ const typesOf = (schema: JsonSchemaObject): readonly string[] => {
 };
 /**
  * The datatype an object schema's shape is exactly, if any (implicit: no metadata names it): the same keys, value
- * types and required keys as one of std's `DATATYPE_SHAPES`. Anything extra or different stays a plain object.
+ * types and required keys as one of the kind table's `DATATYPE_SHAPES`. Anything extra or different stays a plain object.
  */
 function shapedKind(schema: JsonSchemaObject): Kind | undefined {
 	if (!sameSet(typesOf(schema), ['object'])) return undefined;

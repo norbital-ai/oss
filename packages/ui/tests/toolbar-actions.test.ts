@@ -8,7 +8,6 @@ import { Deferred, Effect, Queue, Schema, Stream } from 'effect';
 import './dom.ts';
 import assert from 'node:assert/strict';
 import type { Value } from '@norbital-ai/store/kind';
-import { Decimal } from '@norbital-ai/store/decimal';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { ViewBolt, Outcome, RunRow } from '../src/client/contract.ts';
 import type { Page } from '../src/model/types.ts';
@@ -140,15 +139,15 @@ it.live(
 							{
 								name: '中文, "二"',
 								count: 2,
-								amount: Decimal.of('9007199254740993.12'),
-								quantity: Decimal.of('2.5'),
+								amount: '9007199254740993.12',
+								quantity: '2.5',
 								currency: 'SGD'
 							},
 							{
 								name: 'Ada',
 								count: 1,
-								amount: Decimal.of('17'),
-								quantity: Decimal.of('1'),
+								amount: '17',
+								quantity: '1',
 								currency: 'JPY'
 							}
 						],

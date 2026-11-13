@@ -1,11 +1,9 @@
 // Record titles from CEL and caller-specified display fields. Each display field is shown per kind (`show`, the
 // ui's formatter where one is at hand; else a locale-free default for dates, instants, decimals and relations), empty
 // terms are dropped and the rest joined with ' · '. Without a usable label, the record's id is its identifier.
-import { Decimal } from './decimal.ts';
-import type { Value } from './kind.ts';
+import { UUID_PATTERN, type Value } from './kind.ts';
 import { Result, Schema } from 'effect';
 import { label_expression } from './label-expression.ts';
-import { UUID_PATTERN } from './kind.ts';
 export { label_expression, label_text_sql } from './label-expression.ts';
 
 /** The fields a record-label expression reads. */
@@ -17,10 +15,9 @@ export function label_paths(expression: string | undefined): readonly string[] {
 
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-/** The locale-free text of one value: an instant as `YYYY-MM-DD HH:mm` UTC (a UTC midnight as its day), a `Decimal` as its exact text, a relation as its own `label`; anything structured is no title. */
+/** The locale-free text of one value: an instant as `YYYY-MM-DD HH:mm` UTC (a UTC midnight as its day), a decimal as its exact text, a relation as its own `label`; anything structured is no title. */
 function text(v: Value | undefined): string | null {
 	if (v === null || v === undefined) return null;
-	if (v instanceof Decimal) return text(v.toString());
 	if (typeof v === 'object') {
 		const own = members(v)?.['label'];
 		return typeof own === 'string' ? text(own) : null;
@@ -44,7 +41,7 @@ const isJsonContainer = (s: string) => {
 const isList = (v: Value): v is readonly Value[] => Array.isArray(v);
 /** A structured value's members: a relation read `with` its target; a scalar, decimal or list has none. */
 const members = (v: Value | undefined) =>
-	v === null || v === undefined || typeof v !== 'object' || v instanceof Decimal || isList(v)
+	v === null || v === undefined || typeof v !== 'object' || isList(v)
 		? undefined
 		: v;
 

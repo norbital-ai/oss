@@ -2,12 +2,9 @@
 // silently ignored filter. Field names are checked against the model; exposure is the compiler's (it knows who reads).
 // Browser-safe.
 import { Array as EffectArray, Effect, Predicate, Result, Option, Schema } from 'effect';
-import { KIND } from './lang/kind.ts';
-import { UUID_PATTERN } from './lang/kind.ts';
-import { Decimal } from './lang/decimal.ts';
-import { duration_seconds, is_plain_date } from './lang/date.ts';
+import { KIND, UUID_PATTERN, is_plain_date } from './lang/kind.ts';
 import { ELEMENT } from './ir.ts';
-import { compile_var, member_admits } from './lang/vars.ts';
+import { compile_var, duration_seconds, member_admits } from './lang/vars.ts';
 import type {
 	Arg,
 	Bucket,
@@ -28,7 +25,7 @@ import type { Catalog, FieldInfo, ModelInfo } from './catalog.ts';
 import { KindSpec, SEMANTIC, SYSTEM_COLUMN_SET, exposure_of, family, field_info } from './catalog.ts';
 
 /**
- * A value position's operand as a literal writes it: a same-row column, or a `{ var }` CEL expression (std/vars)
+ * A value position's operand as a literal writes it: a same-row column, or a `{ var }` CEL expression (lang/vars)
  * whose type and requestor members the position admits. A read never carries a time variable: its edge evaluates it.
  */
 export type WireOperand = { field: string } | { var: string };
@@ -97,16 +94,8 @@ function literalOf(f: FieldInfo, v: unknown): { readonly ok: Json } | string {
 	if (k === 'int' || k === 'count')
 		return typeof v === 'number' && Number.isSafeInteger(v) ? { ok: v } : 'an integer';
 	if (k === 'decimal' || k === 'money' || k === 'sum' || k === 'number') {
-		if (v instanceof Decimal) return { ok: v.toJSON() };
 		if (typeof v === 'number' && Number.isFinite(v)) return { ok: v };
 		if (typeof v === 'string' && DEC.test(v)) return { ok: v };
-		if (
-			Predicate.isObject(v) &&
-			Object.keys(v).length === 1 &&
-			typeof v.$dec === 'string' &&
-			DEC.test(v.$dec)
-		)
-			return { ok: { $dec: v.$dec } };
 		return 'a decimal';
 	}
 	if (k === 'bool') return typeof v === 'boolean' ? { ok: v } : 'a boolean';
@@ -219,10 +208,9 @@ const periodArg = Effect.fnUntraced(function* (
 	return { lo: a, hi: b };
 });
 
-/** `{ field: value }` is `eq` (a list `in`, null `is_null`); `{ $dec }` is the wire's only tagged literal. */
+/** `{ field: value }` is `eq` (a list `in`, null `is_null`). */
 const shorthand = (f: FieldInfo, ops: unknown): unknown =>
-	f.many ||
-	(Predicate.isObject(ops) && !(Object.keys(ops).length === 1 && Object.hasOwn(ops, '$dec')))
+	f.many || Predicate.isObject(ops)
 		? ops
 		: ops === null
 			? { is_null: true }

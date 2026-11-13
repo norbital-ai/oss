@@ -2,7 +2,6 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { input_schema } from '@norbital-ai/store/kind';
 import { id_of } from '@norbital-ai/bolt';
 import { dynamic_read, uuidv7 } from '@norbital-ai/bolt/protocol';
@@ -243,8 +242,8 @@ it.live(
 			const request = { customers: { limit: 1 } } as const;
 			const called = yield* caller.query(request).pipe(Effect.flatMap(Schema.decodeUnknownEffect(nativeAnswer)));
 			const stored = yield* t.stored_query(request).pipe(Effect.flatMap(Schema.decodeUnknownEffect(nativeAnswer)));
-			expect(called.customers.rows[0]?.balance).toBeInstanceOf(Decimal);
-			expect(stored.customers.rows[0]?.balance).toBeInstanceOf(Decimal);
+			expect(called.customers.rows[0]?.balance).toBeTypeOf('string');
+			expect(stored.customers.rows[0]?.balance).toBeTypeOf('string');
 			expect(called.customers.next).toBeNull();
 			expect(stored.customers.next).toBeNull();
 			expect(called.customers.total).toBe(1);
@@ -302,7 +301,7 @@ it.live(
 					state: 'succeeded',
 					output: expect.objectContaining({
 						id,
-						balance: { $dec: '12.34' },
+						balance: '12.34',
 						document: { note: 'Kept' }
 					})
 				}
@@ -404,12 +403,12 @@ it.live('run requires a real result decoder for queued receipts and native call 
 		expect(yield* t.db.value(Schema.String, { text: 'SELECT state FROM sys_run WHERE id=$1', params: [id] })).toBe('queued');
 
 		const NativeOutput = Schema.Struct({
-			amount: Schema.declare((value: unknown): value is Decimal => value instanceof Decimal),
+			amount: Schema.String,
 			at: Schema.String
 		});
 		const output = yield* caller.run('trig', {}, NativeOutput);
 		expectTypeOf(output).toEqualTypeOf<typeof NativeOutput.Type>();
-		expect(output.amount.plus('0.50').toString()).toBe('13.00');
+		expect(Number(output.amount) + 0.5).toBe(13);
 		expect(output.at).toBe('2026-09-25T10:00:00.000Z');
 		const wrong = yield* Effect.flip(caller.run('trig', {}, Schema.Struct({ amount: Schema.Number, at: Schema.String })));
 		expect(wrong._tag).toBe('SchemaError');

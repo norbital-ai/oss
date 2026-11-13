@@ -29,7 +29,7 @@ import { SqlReadCapture, TenantDb as TenantDbService } from '../db/tenant-db.ts'
 import { Ai } from '../ports.ts';
 
 import { decodeInput, type Decoded } from '../callables/decode.ts';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { agentRead } from '../agent/reads.ts';
 import { runList } from '../runs/rows.ts';
 import { read_history } from './history.ts';
@@ -369,7 +369,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 				'decode',
 				decoded.problems.map((problem) => `${problem.path}: ${problem.message}`).join('; ')
 			);
-		const input = encode_wire(decoded.value);
+		const input = decoded.value ?? null;
 		const probe = yield* bodies.probe(input, decoded.custom ?? []);
 		const candidates =
 			bodies.rerank === undefined

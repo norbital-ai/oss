@@ -4,7 +4,7 @@
 // the name. Each `@ts-expect-error` is a planted mistake `bolt check` must refuse.
 import { bind_model } from '../../src/declarations.ts';
 import type { CustomFieldView, FileRef, Point, ValueOf } from '../../src/index.ts';
-import type { Decimal } from '@norbital-ai/store/decimal';
+import type { Decimal } from '@norbital-ai/store';
 import './registry.ts';
 import type { CustomFieldName } from '../../src/decl/names.ts';
 

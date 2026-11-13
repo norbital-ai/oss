@@ -1,15 +1,15 @@
-// std/formula (D21, M1): user-edited rules as CEL text, compiled against a context declared with field-kind
+// formula (D21, M1): user-edited rules as CEL text, compiled against a context declared with field-kind
 // literals (object roots included) and evaluated over plain values. The numeric mode belongs to the context:
-// 'decimal' (default) evaluates money and decimals exactly as `Decimal`, 'float' in doubles (hr's law, D21).
+// 'decimal' (default) evaluates money and decimals exactly as Effect's `BigDecimal`, 'float' in doubles (hr's law, D21).
 // Registered functions keep today's `registerFunction` signatures, so hr's law seed (`.age_on(`, `.birthday(`) runs
 // unchanged; object roots are `map<string, dyn>` for them, and their member paths are checked here instead.
 import { Environment, type ASTNode, type ParseResult } from '@marcbachmann/cel-js';
 import { children } from './cel-ast.ts';
 import * as Result from 'effect/Result';
-import { Decimal } from './decimal.ts';
-import { PlainDate } from './date.ts';
+import * as BigDecimal from 'effect/BigDecimal';
 import * as Predicate from 'effect/Predicate';
-import type { Json } from './wire.ts';
+import type { Json } from '../values.ts';
+import { is_plain_date } from './kind.ts';
 
 type Scalar =
 	| 'text'
@@ -40,7 +40,7 @@ type Roots = { readonly [name: string]: Kind };
 type Mode = 'decimal' | 'float';
 type Fn = { readonly signature: string; readonly fn: (...args: never[]) => unknown };
 
-type Num<M extends Mode> = M extends 'float' ? number : Decimal;
+type Num<M extends Mode> = M extends 'float' ? number : BigDecimal.BigDecimal;
 type InValue<K> = K extends { many: true } ? readonly In0<K>[] : In0<K>;
 type In<K> = K extends { optional: true } ? InValue<K> | null : InValue<K>;
 type In0<K> = K extends { kind: 'record'; of: infer O }
@@ -48,7 +48,7 @@ type In0<K> = K extends { kind: 'record'; of: infer O }
 	: K extends { kind: 'object'; fields: infer F }
 		? { readonly [N in keyof F]: In<F[N]> }
 		: K extends { kind: 'decimal' | 'money' | 'sum' }
-			? Decimal | number | string
+			? BigDecimal.BigDecimal | number | string
 			: K extends { kind: 'int' | 'number' | 'count' }
 				? number
 				: K extends { kind: 'bool' }
@@ -69,9 +69,7 @@ export type Out<T extends FormulaResult, M extends Mode> = T extends 'json'
 			? number
 			: T extends 'decimal' | 'money'
 				? Num<M>
-				: T extends 'date'
-					? PlainDate
-					: string;
+				: string;
 
 type Reader<T extends FormulaResult, M extends Mode> = (v: unknown, bad: () => TypeError) => Out<T, M>;
 type Readers<M extends Mode> = { readonly [T in FormulaResult]: Reader<T, M> };
@@ -104,6 +102,13 @@ type Compiled<R extends Roots, M extends Mode, T extends FormulaResult> = {
 	readonly program: ParseResult;
 };
 
+/** cel-js types a value by its constructor; a BigDecimal is a plain prototype object, so CEL holds it in this box. */
+class CelDecimal {
+	readonly value: BigDecimal.BigDecimal;
+	constructor(value: BigDecimal.BigDecimal) {
+		this.value = value;
+	}
+}
 const DIV_SCALE = 12; // ponytail: `/` on decimals rounds to 12 places half-up; a formula needing more calls round() itself
 const NUMERIC = new Set<string>(['int', 'decimal', 'money', 'number', 'count', 'sum']);
 const EXACT = new Set<string>(['decimal', 'money', 'sum']);
@@ -146,13 +151,20 @@ function arithmetic(env: Environment, mode: Mode) {
 		}
 		return;
 	}
-	const d = (x: Decimal | number | bigint) =>
-		x instanceof Decimal ? x : typeof x === 'number' ? fromDouble(x) : Decimal.of(x);
+	const d = (x: unknown): BigDecimal.BigDecimal =>
+		x instanceof CelDecimal
+			? x.value
+			: typeof x === 'number'
+				? fromDouble(x)
+				: typeof x === 'bigint'
+					? BigDecimal.fromBigInt(x)
+					: BigDecimal.fromStringUnsafe(String(x));
 	const calc = {
-		'+': (a: Decimal, b: Decimal) => a.plus(b),
-		'-': (a: Decimal, b: Decimal) => a.minus(b),
-		'*': (a: Decimal, b: Decimal) => a.times(b),
-		'/': (a: Decimal, b: Decimal) => a.div(b, DIV_SCALE)
+		'+': BigDecimal.sum,
+		'-': BigDecimal.subtract,
+		'*': BigDecimal.multiply,
+		'/': (a: BigDecimal.BigDecimal, b: BigDecimal.BigDecimal) =>
+			BigDecimal.round(BigDecimal.divideUnsafe(a, b), { scale: DIV_SCALE, mode: 'half-from-zero' })
 	};
 	const test = {
 		'<': (c: number) => c < 0,
@@ -161,8 +173,8 @@ function arithmetic(env: Environment, mode: Mode) {
 		'>=': (c: number) => c >= 0,
 		'==': (c: number) => c === 0
 	};
-	env.registerType('Decimal', { ctor: Decimal });
-	env.registerOperator('-Decimal', (a: Decimal) => a.neg());
+	env.registerType('Decimal', { ctor: CelDecimal });
+	env.registerOperator('-Decimal', (a: CelDecimal) => new CelDecimal(BigDecimal.negate(a.value)));
 	for (const [l, r] of [
 		['Decimal', 'Decimal'],
 		['Decimal', 'int'],
@@ -170,15 +182,15 @@ function arithmetic(env: Environment, mode: Mode) {
 		['Decimal', 'double'],
 		['double', 'Decimal']
 	] as const) {
-		for (const op of ops) env.registerOperator(`${l} ${op} ${r}`, (a, b) => calc[op](d(a), d(b)));
+		for (const op of ops) env.registerOperator(`${l} ${op} ${r}`, (a, b) => new CelDecimal(calc[op](d(a), d(b))));
 		for (const op of cmp)
 			if (op !== '==' || l === 'Decimal')
-				env.registerOperator(`${l} ${op} ${r}`, (a, b) => test[op](d(a).cmp(d(b)))); // == registers its mirror and !=
+				env.registerOperator(`${l} ${op} ${r}`, (a, b) => test[op](BigDecimal.Order(d(a), d(b)))); // == registers its mirror and !=
 	}
-	env.registerFunction('round(Decimal, int): Decimal', (a: Decimal, s: bigint) =>
-		a.round(Number(s))
+	env.registerFunction('round(Decimal, int): Decimal', (a: CelDecimal, s: bigint) =>
+		new CelDecimal(BigDecimal.round(a.value, { scale: Number(s), mode: 'half-from-zero' }))
 	);
-	env.registerFunction('decimal(string): Decimal', (s: string) => Decimal.of(s));
+	env.registerFunction('decimal(string): Decimal', (s: string) => new CelDecimal(BigDecimal.fromStringUnsafe(s)));
 }
 
 /**
@@ -251,8 +263,7 @@ const ACCEPTS: { readonly [T in FormulaResult]: { readonly [M in Mode]: readonly
 	}
 };
 /** A double (a CEL literal like `0.17`) as the decimal it prints as. */
-const fromDouble = (x: number) =>
-	/e/i.test(String(x)) ? Decimal.from_number(x, 15) : Decimal.of(String(x));
+const fromDouble = (x: number) => BigDecimal.fromNumberUnsafe(x);
 const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n', 1).join('');
 /** Replace every null literal with the hidden dyn root so optional branches keep one checkable type. */
 function rewriteNull(node: unknown, nullNode: ASTNode): unknown {
@@ -324,10 +335,12 @@ function input(k: Kind, v: unknown, mode: Mode): unknown {
 	}
 	if (!NUMERIC.has(k.kind)) return v;
 	if (mode === 'float' || k.kind === 'number')
-		return v instanceof Decimal ? v.to_number() : Number(v);
+		return BigDecimal.isBigDecimal(v) ? BigDecimal.toNumberUnsafe(v) : Number(v);
 	if (!EXACT.has(k.kind)) return BigInt(typeof v === 'bigint' || typeof v === 'string' ? v : Number(v));
-	if (v instanceof Decimal || typeof v === 'string' || typeof v === 'number' || typeof v === 'bigint')
-		return Decimal.of(v);
+	if (BigDecimal.isBigDecimal(v)) return new CelDecimal(v);
+	if (typeof v === 'number') return new CelDecimal(fromDouble(v));
+	if (typeof v === 'bigint') return new CelDecimal(BigDecimal.fromBigInt(v));
+	if (typeof v === 'string') return new CelDecimal(BigDecimal.fromStringUnsafe(v));
 	throw new TypeError(`${String(v)} is not a decimal`);
 }
 
@@ -380,7 +393,10 @@ const asText = (v: unknown, bad: () => TypeError): string => {
 	if (typeof v !== 'string') throw bad();
 	return v;
 };
-const asDate = (v: unknown, bad: () => TypeError): PlainDate => PlainDate(asText(v, bad));
+const asDate = (v: unknown, bad: () => TypeError): string => {
+	if (!is_plain_date(v)) throw bad();
+	return v;
+};
 const asInt = (v: unknown, bad: () => TypeError): number => {
 	const n = typeof v === 'bigint' ? Number(v) : v;
 	if (typeof n !== 'number' || !Number.isInteger(n)) throw bad();
@@ -390,9 +406,9 @@ const asDouble = (v: unknown, bad: () => TypeError): number => {
 	if (typeof v !== 'bigint' && typeof v !== 'number') throw bad();
 	return Number(v);
 };
-const asDecimal = (v: unknown, bad: () => TypeError): Decimal => {
-	if (v instanceof Decimal) return v;
-	if (typeof v === 'bigint') return Decimal.of(v);
+const asDecimal = (v: unknown, bad: () => TypeError): BigDecimal.BigDecimal => {
+	if (v instanceof CelDecimal) return v.value;
+	if (typeof v === 'bigint') return BigDecimal.fromBigInt(v);
 	if (typeof v === 'number' && Number.isFinite(v)) return fromDouble(v);
 	throw bad();
 };

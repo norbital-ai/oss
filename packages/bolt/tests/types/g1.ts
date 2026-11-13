@@ -1,10 +1,9 @@
 import { Effect } from 'effect';
 // G1: the families the per-area corpora (data.ts, access.ts, runtime.ts) leave open, one clean case and at least
 // one planted mistake each. Each `@ts-expect-error` line is a planted mistake.
-import { Decimal } from '@norbital-ai/store/decimal';
 import { automation, policy } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
-import type { Id, InputOf, InstanceId, Row, Where } from '../../src/index.ts';
+import type { Decimal, Id, InputOf, InstanceId, Row, Where } from '../../src/index.ts';
 import type { RowState, StoredRow } from '../../src/decl/names.ts';
 import * as rt from './fixture/runtime.ts';
 import * as m from './fixture/models.ts';
@@ -127,7 +126,7 @@ bind_model('orders')({
 		...m.orders.spec.create,
 		// @ts-expect-error T2 a payload writing a roll-up
 		transform: function* (inputs) {
-			return inputs.map((i) => ({ ...i.set, total: Decimal.of(0) }));
+			return inputs.map((i) => ({ ...i.set, total: '0' }));
 		}
 	}
 });
@@ -229,8 +228,8 @@ automation({
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('errors.refused');
+		// @ts-expect-error Q1 `set` naming a computed field
 		yield* ctx.act({ 'orders.update': [
-			// @ts-expect-error Q1 `set` naming a computed field
 			{
 				target,
 				set: { due_soon: target.due_soon }

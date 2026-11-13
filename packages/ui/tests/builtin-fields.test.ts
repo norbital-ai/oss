@@ -13,13 +13,12 @@ const { default: Harness } = await import('./packaging-harness.svelte');
 const { default: Renderer } = await import('./packaging-renderer.svelte');
 const k = await import('../src/kinds/kind.ts');
 const phone = await import('../src/kinds/phone.ts');
-import { Decimal } from '@norbital-ai/store/decimal';
 
 const JOB = {
 	id: 'j1',
 	revision: 1,
 	title: 'Paint',
-	fee: Decimal.of('1234.5'),
+	fee: '1234.5',
 	mobile: '+6591234567'
 };
 const catalog: NonNullable<KindsHost['catalog']> = {
@@ -149,7 +148,7 @@ test('readonly Show renders nested native decimals as copyable values without in
 					nested: { kind: 'decimal', scale: 2, many: true }
 				}
 			},
-			value: { amount: Decimal.of('12345678901234567.89'), nested: [Decimal.of('2.50')] },
+			value: { amount: '12345678901234567.89', nested: ['2.50'] },
 			readonly: true
 		}
 	});

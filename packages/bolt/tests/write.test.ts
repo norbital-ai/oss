@@ -142,10 +142,10 @@ describe('engine/write decode and flatten', () => {
 		]);
 		const child = required(f.items[1]).change;
 		if (child.op !== 'create') throw new Error('The nested action must create a child.');
-		// a decimal is canonical as the wire's exact `{ $dec }` value from the flattener on
+		// a decimal is canonical as its exact text from the flattener on
 		expect(child.values).toEqual({
 			label: 'a',
-			amount: { $dec: '1' },
+			amount: '1',
 			order: 'o1'
 		});
 		const none = new Flattener(manifest, cat, () => 'new');

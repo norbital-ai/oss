@@ -1,7 +1,7 @@
 <!--
 @component
 An exact money amount in `currency`: the currency as the box's leading affix, the amount typed plain and shown grouped in
-the currency's minor digits once the box loses focus. Kept as an exact Decimal.
+the currency's minor digits once the box loses focus. Kept as its exact decimal text.
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -28,7 +28,6 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 	import { cn, use_controls } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
-	import { Decimal } from '@norbital-ai/store/decimal';
 	import { format, minorDigits, moneyProblem } from './kind.js';
 
 	let {
@@ -92,7 +91,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 					? (whole ?? '')
 					: `${whole}.${fraction.slice(0, digits)}`;
 		// a half-typed "1." or "-" never reaches the draft as a wrong amount
-		const next = /^-?\d+(\.\d+)?$/.test(text) ? Decimal.of(text) : text === '' ? null : undefined;
+		const next = /^-?\d+(\.\d+)?$/.test(text) ? text : text === '' ? null : undefined;
 		if (next !== undefined) {
 			last = next;
 			on_change(next);

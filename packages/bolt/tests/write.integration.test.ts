@@ -580,7 +580,7 @@ describe('engine/write: the caller', () => {
 			expect(yield* rows(`select title from orders`)).toEqual([]);
 			expect(calls).toHaveLength(1);
 			// the check reads its rows across the guest wire: decimals travel tagged
-			const wired = batch.map(({ title, lines }) => ({ title, lines: lines.map(({ label, amount }) => ({ label, amount: { $dec: amount } })) }));
+			const wired = batch.map(({ title, lines }) => ({ title, lines: lines.map(({ label, amount }) => ({ label, amount })) }));
 			expect(calls[0]).toMatchObject({ kind: 'policy', target: 'p.orders.create', input: wired.map((set) => ({ before: null, set, after: { ...set, status: 'draft' } })) });
 			committed(
 				(yield* run(

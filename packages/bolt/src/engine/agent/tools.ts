@@ -42,7 +42,6 @@ import { sha256_hex } from '@norbital-ai/store';
 import { FOLDER_NOTES, role_at } from '../../decl/layout.ts';
 import type { Json } from '../../decl/values.ts';
 import { PAPER_SIZES } from '../../decl/runtime/facilities.ts';
-import { encode_wire } from '@norbital-ai/store/wire';
 import {
 	CONVERT_MIME,
 	CONVERT_TARGETS,
@@ -814,10 +813,10 @@ const runEnd = (e: Engine, a: Authority, run: string) =>
 				const state = row.value.state;
 				if (state === 'succeeded' || state === 'skipped') {
 					const view = run_view(a, row.value);
-					return encode_wire({
+					return {
 						status: state,
 						...(view?.result === undefined ? {} : { result: view.result })
-					});
+					};
 				}
 				if (state !== 'queued' && state !== 'running')
 					return yield* Effect.fail(
@@ -913,13 +912,11 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 			return {
 				error: `${APPROVE} takes { request_id, decision: approve | reject | request_changes | withdraw, reason? }`
 			};
-		return encode_wire(
-			yield* x.engine.approvals.decide({
-				...d,
-				authority: x.authority,
-				now: x.bindings.now
-			})
-		);
+		return yield* x.engine.approvals.decide({
+			...d,
+			authority: x.authority,
+			now: x.bindings.now
+		});
 	}
 	if (callable.startsWith(`${AUTOMATION}.`)) {
 		const automation = callable.slice(AUTOMATION.length + 1),
@@ -928,7 +925,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		if (x.engine.manifest.automations[automation]?.agent === 'never')
 			return { error: `You may not run '${callable}'.` };
 		if (x.engine.manifest.automations[automation]?.mode === 'call')
-			return encode_wire(yield* x.engine.automations.call({ automation, input: args, authority: x.authority, bindings: x.bindings, ...agent }));
+			return yield* x.engine.automations.call({ automation, input: args, authority: x.authority, bindings: x.bindings, ...agent });
 		// the same automation over the same input, queued or running, is that run: a model asking again must not queue a
 		// second one (a local probe started one review three times while the first placed 426 photos)
 		const existing = yield* activeRun(x.engine, automation, args);
@@ -943,7 +940,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		});
 		// This receipt commits the queue admission; the run records its business result after execution.
 		receipt(x.receipts, callable, outcome);
-		return { run, outcome: encode_wire(outcome) };
+		return { run, outcome };
 	}
 	const dot = callable.lastIndexOf('.');
 	const [model, name] = [callable.slice(0, dot), callable.slice(dot + 1)];
@@ -967,7 +964,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		outputs: decoded.outputs
 	});
 	receipt(x.receipts, callable, r.outcome);
-	if (r.outcome.kind !== 'committed' || name === 'delete') return encode_wire(r.outcome);
+	if (r.outcome.kind !== 'committed' || name === 'delete') return r.outcome;
 	// the stored rows, as the actor reads them: one read request, a root per written model (at most 20 rows each) with its
 	// first-level layers (child lines, linked records), so the answer is the read-back
 	const reads = Object.entries(
@@ -1110,7 +1107,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 			? {
 					read_back_error: `The write committed. Stored rows could not be read: ${readBack.failure.message}`
 				}
-			: { stored: encode_wire(stored) }),
+			: { stored }),
 		...(Result.isFailure(queued)
 			? {
 					runs_lookup_error: `The write committed. Queued runs could not be read: ${queued.failure.message}`
@@ -1776,7 +1773,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				...(x.inApp ? { agent: { conversation: x.conv.id } } : {})
 			});
 			receipt(x.receipts, automation, outcome);
-			return ok(yield* runJob(x.jobs, e, a, automation, { run, outcome: encode_wire(outcome) }));
+			return ok(yield* runJob(x.jobs, e, a, automation, { run, outcome }));
 		});
 
 	if (x.mode === 'plan' && !x.child) {
@@ -1957,7 +1954,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					sent: r.direction === 'outbound' && !confirmed_send(r.status) ? null : r.sent_at ?? null,
 					created: r.created_at ?? null,
 					text: r.text,
-					files: encode_wire(filesOf(r)),
+					files: filesOf(r),
 					addressed: !ambient(r)
 				})),
 				note: 'Only messages since this account was connected are here; senders may have edited or deleted some since. Open a file with read_file { id }; read further back with before: the oldest seq here.'
@@ -2805,7 +2802,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			Effect.map(() =>
 				ok({
 					settled: null,
-					pending: encode_wire(x.jobs.pending()),
+					pending: x.jobs.pending(),
 					note: 'New input arrived: it is your next message. What you waited for keeps running.'
 				})
 			)
@@ -2840,7 +2837,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 						const isSettled = (view: (typeof views)[number]) =>
 							view.status !== 'queued' && view.status !== 'running';
 						const settled = views.find(isSettled);
-						if (settled !== undefined) return ok({ settled: encode_wire(settled) });
+						if (settled !== undefined) return ok({ settled });
 						const visible = new Set(views.map((view) => view.id));
 						const heard =
 							subscription === null
@@ -2852,12 +2849,12 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 									);
 						const ended = yield* heard.pipe(Effect.timeoutOption(ms));
 						if (Option.isNone(ended))
-							return ok({ settled: null, running: encode_wire(views) });
+							return ok({ settled: null, running: views });
 						const current = yield* read;
 						const answer = current.find(isSettled);
 						return answer === undefined
-							? ok({ settled: null, running: encode_wire(current) })
-							: ok({ settled: encode_wire(answer) });
+							? ok({ settled: null, running: current })
+							: ok({ settled: answer });
 					})
 				);
 			}
@@ -2885,7 +2882,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					note: 'Nothing of this turn is running. To wait for an automation, pass its run id (a write answers the runs it started).'
 				});
 			const got = yield* x.jobs.wait(ids, ms);
-			return ok({ settled: got, pending: encode_wire(x.jobs.pending()) });
+			return ok({ settled: got, pending: x.jobs.pending() });
 		}));
 	});
 	if (a.actor.kind === 'member') {
@@ -2964,10 +2961,10 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			return clippedView((clip) => {
 				const logs =
 					typeof lines === 'string' ? lines : lines.map((line) => clip(line, 1024));
-				return encode_wire({
+				return {
 					...head(row, view),
 					progress: clip(view.progress, 2048),
-					error: clip(encode_wire(view.error), 4096),
+					error: clip(view.error, 4096),
 					...(view.input === undefined
 						? {}
 						: {
@@ -2978,13 +2975,13 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 									: clip(view.attempts ?? null, 4096),
 								logs
 							})
-				});
+				};
 			}, call);
 		}
 		const last = rows.length > limit ? rows[limit - 1] : undefined;
 		return clippedView(
 			(clip) =>
-				encode_wire({
+				({
 					runs: shown.map(({ row, view }) => ({
 						...head(row, view),
 						error:

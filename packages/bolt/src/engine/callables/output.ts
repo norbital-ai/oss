@@ -2,7 +2,7 @@
 import { Effect, Schema } from 'effect';
 import { default_fields } from '@norbital-ai/store';
 import type { OutputKind } from '@norbital-ai/store/kind';
-import { encode_wire, type Json, type Wired } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import { nullable_of_expr } from '../../decl/model.ts';
 import { kind_output, output_value, type OutputContract, type OutputValueContract, type OutputField } from '../../protocol/output-contract.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -57,7 +57,7 @@ export function output_contract(manifest: EngineManifest, output: OutputKind | u
 }
 
 /** The server and the browser compile the very same resolved source contract. */
-export const output_schema = (manifest: EngineManifest, output: OutputKind | undefined): Schema.Decoder<Wired> =>
+export const output_schema = (manifest: EngineManifest, output: OutputKind | undefined): Schema.Decoder<Json | undefined> =>
 	output_value(output_contract(manifest, output));
 
 export const decodeOutput = (manifest: EngineManifest, output: OutputKind | undefined, value: Json): Effect.Effect<Json, BoltError> =>
@@ -66,6 +66,6 @@ export const decodeOutput = (manifest: EngineManifest, output: OutputKind | unde
 		catch: (error) => error instanceof BoltError ? error : BoltError.make('bad_answer', 'guest', String(error), error)
 	}).pipe(
 		Effect.flatMap((codec) => Schema.decodeUnknownEffect(codec)(value)),
-		Effect.map(encode_wire),
+		Effect.map((decoded) => decoded ?? null),
 		Effect.mapError((error) => error instanceof BoltError ? error : BoltError.make('bad_answer', 'guest', error.message, error))
 	);

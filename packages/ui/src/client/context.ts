@@ -1,5 +1,5 @@
 import { Predicate } from 'effect';
-import { encode_wire, type Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import type { Value } from '@norbital-ai/store/kind';
 import type { UiContext, ViewBolt } from './contract.js';
 import type { ModelExposure } from '../kinds/context.js';
@@ -35,7 +35,7 @@ export const optional_bolt_of = (ctx: UiContext): ViewBolt | undefined => {
 					target.query(withOutputs(request, catalog));
 			if (key === 'aggregate')
 				return (model: string, args: Value) =>
-					target.aggregate(model, withOutput(encode_wire(args), catalog?.[model]?.output));
+					target.aggregate(model, withOutput(args, catalog?.[model]?.output));
 			const value: unknown = Reflect.get(target, key);
 			return typeof value === 'function' ? value.bind(target) : value;
 		}

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
 import { Result, Schema } from 'effect';
 import * as fc from 'fast-check';
-import { Decimal } from '../src/lang/decimal.ts';
 import { IdValue, KIND, input_schema, type FieldKind, type Kind } from '../src/lang/kind.ts';
 
 const decode = (k: Kind, v: unknown) => Schema.decodeUnknownResult(input_schema(k))(v);
@@ -27,12 +26,7 @@ const at = fc.date({
 });
 const finite = fc.double({ noNaN: true, noDefaultInfinity: true });
 const decimalText = fc.stringMatching(/^-?\d{1,12}(\.\d{1,8})?$/);
-const decimalIn = fc.oneof(
-	decimalText,
-	decimalText.map(($dec) => ({ $dec })),
-	finite,
-	fc.integer()
-);
+const decimalIn = fc.oneof(decimalText, finite, fc.integer());
 /** JSON as a request body holds it: plain prototypes, no `__proto__` key. */
 const json = fc
 	.jsonValue({ maxDepth: 2 })
@@ -191,7 +185,7 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 	]
 };
 
-describe('std/kind', () => {
+describe('kind', () => {
 	it('the primitive ID codec accepts UUIDs and rejects other values', () => {
 		const primitive = Schema.decodeUnknownResult(IdValue);
 		const cases: readonly (readonly [unknown, boolean])[] = [
@@ -243,15 +237,15 @@ describe('std/kind', () => {
 				);
 		});
 
-	it('decodes to std values: decimals exact, instants canonical UTC, open periods closed with null', () => {
-		const amount = Result.getOrThrow(decode({ kind: 'decimal', scale: 2 }, { $dec: '1.20' }));
-		assert.ok(amount instanceof Decimal && amount.toString() === '1.20');
+	it('decodes to plain values: decimals as exact text, instants canonical UTC, open periods closed with null', () => {
+		const amount = Result.getOrThrow(decode({ kind: 'decimal', scale: 2 }, '1.20'));
+		assert.equal(amount, '1.20');
 		assert.equal(String(Result.getOrThrow(decode({ kind: 'money' }, 0.1))), '0.1');
 		assert.equal(
 			String(Result.getOrThrow(decode({ kind: 'decimal', scale: 8 }, 1.5e-7))),
 			'0.00000015'
 		);
-		assert.deepEqual(wire({ kind: 'decimal', scale: 2 }, '-3.50'), { $dec: '-3.50' });
+		assert.deepEqual(wire({ kind: 'decimal', scale: 2 }, '-3.50'), '-3.50');
 		assert.equal(
 			Result.getOrThrow(decode({ kind: 'instant' }, '2026-01-01T08:00:00+08:00')),
 			'2026-01-01T00:00:00.000Z'
@@ -269,7 +263,8 @@ describe('std/kind', () => {
 		refused({ kind: 'int', max: 10 }, 11);
 		refused({ kind: 'int' }, 1.5);
 		refused({ kind: 'decimal', scale: 2 }, 'abc');
-		refused({ kind: 'decimal', scale: 2 }, { $dec: '1e3' });
+		refused({ kind: 'decimal', scale: 2 }, '1e3');
+		refused({ kind: 'decimal', scale: 2 }, { $dec: '1.20' });
 		refused({ kind: 'decimal', scale: 2 }, Number.NaN);
 		refused({ kind: 'date' }, '2026-02-30');
 		refused({ kind: 'date' }, { $d: '2026-01-01' });

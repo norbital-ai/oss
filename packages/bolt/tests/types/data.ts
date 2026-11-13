@@ -2,9 +2,7 @@
 // planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
 import { automation, custom_field } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
-import { Decimal } from '@norbital-ai/store/decimal';
-import { PlainDate as plainDate } from '@norbital-ai/store/date';
-import type { Id, CreateInput, UpdateInput, PlainDate, PlainTime, Row, Where } from '../../src/index.ts';
+import type { Decimal, Id, CreateInput, UpdateInput, PlainDate, PlainTime, Row, Where } from '../../src/index.ts';
 import type { DateLiteral, Exact, ValidInput, ValueOf } from '../../src/decl/fields.ts';
 import type { Expr, KindOfExpr, NullableOfExpr } from '../../src/decl/model.ts';
 import type { Expr as StoreExpr } from '@norbital-ai/store';
@@ -128,8 +126,8 @@ is<
 	Eq<StoredRow<'sites'>['checklist'], readonly { readonly item: string; readonly done: boolean }[]>
 >();
 is<Eq<'total' extends keyof StoredRow<'orders'> ? 1 : 0, 0>>(); // transforms never see derived values
-// an input takes a row's value or the plain literal decode accepts (ISO text, decimal text or an integer)
-type Dec = Decimal | number | `${number}`;
+// an input takes a row's value: a decimal is its exact text
+type Dec = Decimal;
 // a create tree: the root's declared columns and, per declared write layer, an array of that layer's rows
 type Flat<T> = { [K in keyof T]: T[K] };
 is<Eq<keyof CreateInput<'orders'>, 'customer' | 'note' | 'due' | 'lines'>>();
@@ -159,7 +157,7 @@ is<
 	Eq<ValidInput<{ kind: 'enum'; values: readonly ['a', 'b'] }>['default'], 'a' | 'b' | undefined>
 >();
 is<Eq<ValidInput<{ kind: 'text' | 'int' }>['default'], undefined>>();
-is<Eq<ValidInput<{ kind: 'decimal'; scale: 2 }>['default'], Dec | undefined>>();
+is<Eq<ValidInput<{ kind: 'decimal'; scale: 2 }>['default'], Decimal | number | undefined>>();
 // An impossible discriminant must retain the nested-shape branch instead of entering the scalar shortcut.
 is<Eq<ValidInput<{ kind: never; fields: {} }>, ValidInput<{ kind: 'object'; fields: {} }>>>();
 // ID values keep their target brand and the original impossible-kind fallback.
@@ -169,7 +167,7 @@ is<Eq<ValueOf<{ kind: never; of: 'customers' }>, string>>();
 // ── predicates ──
 const w1: Where<'orders'> = {
 	status: { in: ['draft', 'submitted'] },
-	due: { lte: plainDate('2026-11-24') },
+	due: { lte: '2026-11-24' },
 	customer: { is: { tier: { eq: 'gold' }, name: { like: 'A%' } } },
 	lines: { some: { qty: { gt: 10 } } },
 	or: [{ owner: { eq: { var: 'requestor.id' } } }, { note: { is_null: true } }]
@@ -667,7 +665,7 @@ automation({
 			yield* ctx.act({ 'orders.create': [
 				{
 					customer: order.customer,
-					lines: [{ item: 'x', qty: Decimal.of(1), price: Decimal.of(2) }]
+					lines: [{ item: 'x', qty: '1', price: '2' }]
 				}
 			] });
 		const { customers } = yield* ctx.query({ customers: { where: { tier: { eq: 'gold' } } } });
@@ -688,8 +686,8 @@ automation({
 			(yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders.rows[0] ??
 			null;
 		if (order === null) return;
+		// @ts-expect-error B5 a field outside the update allowlist
 		yield* ctx.act({ 'orders.update': [
-			// @ts-expect-error B5 a field outside the update allowlist
 			{
 				target: order,
 				set: { customer: order.customer }

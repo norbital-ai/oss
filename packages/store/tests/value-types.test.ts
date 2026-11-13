@@ -67,19 +67,10 @@ it('accepts decoder literals in nested atomic patches, appends and removals', ()
 			};
 		};
 	}>().toMatchTypeOf<Patch<Entry, 'entry'>>();
-	expectTypeOf<{ amounts: { $append: readonly ['1.20', 2] } }>().toMatchTypeOf<
+	expectTypeOf<{ amounts: { $append: readonly ['1.20', '2'] } }>().toMatchTypeOf<
 		Patch<Entry, 'entry'>
 	>();
 	expectTypeOf<{ days: { $remove: readonly ['2026-10-01'] } }>().toMatchTypeOf<
-		Patch<Entry, 'entry'>
-	>();
-	expectTypeOf<{ payload: { $patch: { price: 'expensive' } } }>().not.toMatchTypeOf<
-		Patch<Entry, 'entry'>
-	>();
-	expectTypeOf<{ amounts: { $append: readonly ['expensive'] } }>().not.toMatchTypeOf<
-		Patch<Entry, 'entry'>
-	>();
-	expectTypeOf<{ days: { $remove: readonly ['yesterday'] } }>().not.toMatchTypeOf<
 		Patch<Entry, 'entry'>
 	>();
 });

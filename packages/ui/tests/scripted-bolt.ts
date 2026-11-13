@@ -1,5 +1,4 @@
 import { Context, Effect, Layer, ManagedRuntime, Option, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/store/wire';
 import type { Value } from '@norbital-ai/store/kind';
 import { create_bolt, type Bolt, type BoltConfig } from '../../bolt/build/page/bolt.js';
 import type { EventSourceLike } from '../../bolt/build/page/stream.js';
@@ -109,7 +108,7 @@ export async function scriptedBolt(script: Script) {
 	const answer = async (view: string, read: WireRead) => {
 		const reply = await script.answer(read);
 		if (!(reply instanceof Response))
-			return push({ t: 'answer', view, v: ++version, value: encode_wire(reply) });
+			return push({ t: 'answer', view, v: ++version, value: reply });
 		const failure = Option.getOrUndefined(decodeError(await reply.json().catch(() => null)));
 		push({
 			t: 'error',
@@ -146,7 +145,7 @@ export async function scriptedBolt(script: Script) {
 				(await script.approval?.(url.searchParams)) ?? (url.searchParams.has('id') ? null : []);
 			return value instanceof Response
 				? value
-				: Response.json(value === null ? null : { value: encode_wire(value) });
+				: Response.json(value === null ? null : { value });
 		}
 		const text = await request.text();
 		if (path.endsWith('/live')) {
@@ -170,7 +169,7 @@ export async function scriptedBolt(script: Script) {
 				if (reply instanceof Response) return reply;
 				answers.push(reply);
 			}
-			return Response.json({ answers: answers.map(encode_wire) });
+			return Response.json({ answers });
 		}
 		if (path.endsWith('/act')) {
 			const body = Schema.decodeUnknownSync(Schema.fromJsonString(ActBody))(text);

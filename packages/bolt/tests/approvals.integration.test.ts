@@ -109,8 +109,7 @@ const manifest: EngineManifest = {
 	},
 	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] }, finance: { policies: ['reviewer'] } }
 };
-const source = `import { Decimal } from '@norbital-ai/store/decimal';
-const managerStep = (ids) => ({
+const source = `const managerStep = (ids) => ({
 	name: 'Manager',
 	teams: [...new Set(ids.map((id) =>
 		id === '${managerId}' ? 'managers' : id === '${financeId}' ? 'finance' : 'requesters'
@@ -131,19 +130,19 @@ export default { model: { expenses: { bodies: {
 		return ctx.approve({
 			steps: [
 				managerStep(rows.map((row) => row.manager)),
-				...(rows.some((row) => Decimal.of(String(row.amount)).gte(Decimal.of(100))) ? [financeStep] : [])
+				...(rows.some((row) => Number(row.amount) >= 100) ? [financeStep] : [])
 			],
 			...(rows.some((row) => row.name === 'Override by team') ? { superseded_by: ['finance'] } : {})
 		});
 	} },
 	update: { verdict: function* (changes, ctx) {
-		if (!changes.every(({ before }) => before.amount instanceof Decimal)) throw new Error('The stored amount must be a Decimal');
+		if (!changes.every(({ before }) => typeof before.amount === 'string')) throw new Error('The stored amount must be decimal text');
         if (changes.some(({ before, after, set }) => before.name === 'Checkpoint tree' && (before.lines[0]?.name !== 'Original' || !['Proposed', 'Revised'].includes(after.lines[0]?.name) || !set.lines))) throw new Error('Resubmission must retain the original child checkpoint and final proposal.');
 		const material = changes.filter(({ set }) => set.amount !== undefined || set.lines !== undefined || set.receipt !== undefined);
 		return material.length === 0 ? ctx.allow() : ctx.approve({
 			steps: [
 				managerStep(material.map(({ after }) => after.manager)),
-				...(material.some(({ after }) => Decimal.of(String(after.amount)).gte(Decimal.of(100)))
+				...(material.some(({ after }) => Number(after.amount) >= 100)
 					? [financeStep] : [])
 			]
 		});

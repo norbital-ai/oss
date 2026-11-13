@@ -1,10 +1,9 @@
 import { describe, expect, it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { fromWhere, toWhere } from '../src/filter/where.ts';
 import { matches } from '../src/filter/local.ts';
 import { taggedArg, type Node } from '../src/filter/node.ts';
 import type { ModelExposure } from '../src/kinds/context.ts';
-import type { Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 const catalog: Record<string, ModelExposure> = {
 	accounts: {
 		record_label: 'record.name',
@@ -83,7 +82,7 @@ describe('complex filters in the editor and local arrays', () => {
 		expect(match(nested, { active: true, orders: [{ status: 'open' }] })).toBe(false);
 	});
 	it('computes sums exactly and compares averages without rounding a quotient', () => {
-		const row = { orders: [{ amount: Decimal.of('0.1') }, { amount: Decimal.of('0.2') }] };
+		const row = { orders: [{ amount: '0.1' }, { amount: '0.2' }] };
 		expect(match({ orders: { sum: { of: 'amount', eq: 0.3 } } }, row)).toBe(true);
 		expect(match({ orders: { avg: { of: 'amount', gt: 0.14 } } }, row)).toBe(true);
 		expect(match({ orders: { avg: { of: 'amount', eq: 0.15 } } }, row)).toBe(true);

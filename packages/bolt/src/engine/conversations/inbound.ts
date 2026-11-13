@@ -1,7 +1,6 @@
 // The inbound trust boundary is shared by every conversation driver and custom conversation.
 import { Effect, Option, Predicate, Schema } from 'effect';
 import type { RowData } from '../contracts.ts';
-import { Instant } from '@norbital-ai/store/date';
 
 const tolerant = <S extends Schema.Constraint>(schema: S) =>
 	Schema.optionalKey(Schema.catchDecoding<S>(() => Effect.succeedNone)(schema));
@@ -65,11 +64,8 @@ const iso = (value: string | undefined): string | null =>
 	value === undefined || Number.isNaN(Date.parse(value)) ? null : new Date(value).toISOString();
 const sourceInstant = (value: string | undefined): string | null => {
 	if (value === undefined) return null;
-	try {
-		return Instant(value);
-	} catch {
-		return null;
-	}
+	// a source instant names its zone or offset
+	return /(Z|[+-]\d{2}:?\d{2})$/i.test(value) ? iso(value) : null;
 };
 const attachment = Schema.decodeUnknownOption(Attachment),
 	participant = Schema.decodeUnknownOption(Participant);

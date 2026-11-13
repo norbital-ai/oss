@@ -1,9 +1,8 @@
 // Who reads, as the store's read compiler takes it (A4): a caller's Authority as the store's `Scope` — its read arms per
 // output and path conjoined at every level, and the open approval request a root row of a holdable model
 // carries, for every reader — and the invocation's bindings as the operand resolver. A workspace read (the transform) has no scope. Statements a batch may fold into one are marked here.
-import { Effect } from 'effect';
+import { DateTime, Effect } from 'effect';
 import { literal as lit } from '@norbital-ai/store';
-import { local_of } from '@norbital-ai/store/zone';
 import {
 	StoreError,
 	type CompileOptions,
@@ -22,7 +21,7 @@ import { open_sql } from '../approvals/sql.ts';
 export function bindingsAt(at: number | string, tz: string): Bindings {
 	return {
 		now: typeof at === 'string' ? at : new Date(at).toISOString(),
-		today: local_of(typeof at === 'number' ? at : Date.parse(at), tz).date,
+		today: DateTime.formatIsoDate(DateTime.makeZonedUnsafe(at, { timeZone: tz })),
 		tz
 	};
 }

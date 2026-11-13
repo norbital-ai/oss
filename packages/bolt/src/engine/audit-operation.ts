@@ -1,6 +1,6 @@
 // The host intent is durable before acquisition; the tenant keeps only correlation, never an audit payload outbox.
 import { Array as EffectArray, Clock, Effect, Predicate, Result, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import type { AuditActor, AuditEvent } from '../protocol/audit.ts';
 import type { EngineActor } from './contracts.ts';
 import type { Json } from '../decl/values.ts';
@@ -190,12 +190,12 @@ const appendTerminal = Effect.fn('Audit.appendTerminal')(function* (
 		...event,
 		id: `${event.operation_id}:${status === 'unknown' ? 'unknown' : 'terminal'}`,
 		status,
-		payload: encode_wire({
+		payload: {
 			request: event.payload,
 			outcome,
 			records: written,
 			committedAt
-		})
+		}
 	};
 	// the request rides on a row event only when it wrote that one row: a bulk write's request is the terminal event's
 	// alone, as copying it into each of its N row events is N² bytes (a 1,700-row import overran its 2 s of CPU)
@@ -205,9 +205,9 @@ const appendTerminal = Effect.fn('Audit.appendTerminal')(function* (
 		action: `${row.model}.${row.op}`,
 		status,
 		subject: { model: row.model, id: row.id, revision: row.revision },
-		payload: encode_wire(
+		payload: 
 			written.length === 1 ? { request: event.payload, change: row } : { change: row }
-		)
+		
 	}));
 	yield* (yield* Audit).append([...rows, terminal]);
 	return status;

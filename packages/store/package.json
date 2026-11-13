@@ -3,10 +3,7 @@
 	"version": "0.0.31",
 	"description": "One typed data layer for Bolt workspaces and their hosts: schema declarations, the SQL each read, write and migration emits, and the decoders of its rows. It never connects to a database.",
 	"type": "module",
-	"sideEffects": [
-		"./build/lang/decimal.js",
-		"./src/lang/decimal.ts"
-	],
+	"sideEffects": false,
 	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",
@@ -49,22 +46,6 @@
 		"./formula": {
 			"types": "./build/lang/formula.d.ts",
 			"default": "./build/lang/formula.js"
-		},
-		"./wire": {
-			"types": "./build/lang/wire.d.ts",
-			"default": "./build/lang/wire.js"
-		},
-		"./decimal": {
-			"types": "./build/lang/decimal.d.ts",
-			"default": "./build/lang/decimal.js"
-		},
-		"./date": {
-			"types": "./build/lang/date.d.ts",
-			"default": "./build/lang/date.js"
-		},
-		"./zone": {
-			"types": "./build/lang/zone.d.ts",
-			"default": "./build/lang/zone.js"
 		}
 	},
 	"scripts": {

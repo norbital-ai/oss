@@ -6,15 +6,13 @@ import type { Json } from '../values.ts';
 import type { FieldInfo } from '../catalog.ts';
 
 /**
- * Wire decimals (`$dec`) → their text, which Postgres casts per column; dates and instants are ISO strings. With the
+ * Decimals, dates and instants are their text, which Postgres casts per column. With the
  * column's field, a period becomes its range literal: a date period `{ from, to }` is inclusive `[from,to]` (Postgres
  * stores `[from,to+1)`), an instant period `{ start, end }` closed-open; a null end is open; a point `(lng,lat)`.
  */
 export function database_value(v: Json, f?: Pick<FieldInfo, 'kind' | 'period_of'>): Json {
 	if (Predicate.isObject(v)) {
-		const o = v,
-			keys = Object.keys(o);
-		if (keys.length === 1 && keys[0] === '$dec') return o['$dec'] ?? null;
+		const o = v;
 		// a point `{ lat, lng }` is a Postgres `point` literal (x = lng, y = lat)
 		if (f?.kind === 'point') return `(${String(o['lng'])},${String(o['lat'])})`;
 		if (f?.kind === 'period') {

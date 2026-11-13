@@ -1,7 +1,6 @@
 import './resolve.ts';
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/store/decimal';
 import type { JsonSchema } from '../src/kinds/json-schema.ts';
 import {
 	data_changed,
@@ -87,13 +86,12 @@ it('equality distinguishes missing, null, false, zero and empty text, ignoring o
 	assert.equal(data_equal([1, 2], [2, 1]), false);
 });
 
-it('decimals remain opaque and exact values do not expose their internals', () => {
-	const held = Decimal.of('9007199254740993.10');
+it('decimal text in untyped JSON is text: exact, opaque and compared as written', () => {
+	const held = '9007199254740993.10';
 	assert.equal(dataEntries(held), undefined);
-	assert.equal(data_equal(held, Decimal.of('9007199254740993.100')), true);
-	assert.equal(data_equal(held, Decimal.of('9007199254740993.11')), false);
-	assert.equal(data_equal(held, '9007199254740993.10'), false);
-	assert.deepEqual(infer_json_schema(held), { type: 'number' });
+	assert.equal(data_equal(held, '9007199254740993.10'), true);
+	assert.equal(data_equal(held, '9007199254740993.100'), false);
+	assert.deepEqual(infer_json_schema(held), { type: 'string' });
 });
 
 it('composite identities pair new row order and append removed rows without pairing unrelated records', () => {

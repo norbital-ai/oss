@@ -3,7 +3,7 @@
 // most two adapters, `read` (theirs → model rows) and `write` (one committed change → a call to them); the engine owns
 // the inbox, id map, version guard, outbox, retries, rate, rollback and health. Bodies are typed from the generated
 // names, so `S` (the sync's name) finds the sync's own data (`with`, `schema`, `context`) in them.
-import type { BodyReturn, Clock, Eff, Loose, MessageKey, RefuseAt, WorkspaceQuery } from '../ctx.ts';
+import type { BodyReturn, Clock, Eff, MessageKey, RefuseAt, WorkspaceQuery } from '../ctx.ts';
 import type { FacilityFailure, Refusal, Unavailable } from '../errors.ts';
 import type { InputFields, InputOf } from '../fields.ts';
 import type { MediaType } from '../media-types.ts';
@@ -51,7 +51,7 @@ export type SyncControlInput<M, S> = SyncData<M, S> extends { with: 'file' }
 
 
 // ── rows ──
-type SyncValues<M> = { readonly [P in WritableField<M>]?: Loose<ColumnValue<M, P>> };
+type SyncValues<M> = { readonly [P in WritableField<M>]?: ColumnValue<M, P> };
 /**
  * One row a sync's `read` returns: the model's writable fields it carries (those are the synced fields; the model's
  * other fields are local and `read` never touches them), plus up to three markers. `$id` is the other side's identity

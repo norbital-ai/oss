@@ -1,6 +1,5 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit } from 'effect';
-import { Decimal } from '../src/lang/decimal.ts';
 import { build, read, schema, store, table, type StoreError } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import { database, exec as raw, required, run, script } from './support.ts';
@@ -183,7 +182,7 @@ describe('Store over a schema value', () => {
 			const exec = yield* fresh;
 			const [acme] = yield* exec(yield* db.create('customer', { code: 'ACME', name: 'Acme' }));
 			expect(acme?.code).toBe('ACME');
-			expect(acme?.credit).toBeInstanceOf(Decimal);
+			expect(acme?.credit).toBeTypeOf('string');
 			expect(acme?.revision).toBe(1);
 			const orders = yield* exec(
 				yield* db.create(
@@ -192,7 +191,7 @@ describe('Store over a schema value', () => {
 						number: `SO-${n}`,
 						customer: required(acme).id,
 						placed_on: n === 1 ? '2026-10-01' : n === 2 ? '2026-10-02' : '2026-10-03',
-						total: n + 0.5,
+						total: `${n}.5`,
 						address: { city: n === 2 ? 'Penang' : 'Singapore', floor: n }
 					}))
 				)
@@ -223,7 +222,7 @@ describe('Store over a schema value', () => {
 						number: 'SO-9',
 						customer: required(c).id,
 						placed_on: '2026-10-09',
-						total: 9
+						total: '9'
 					})
 				);
 				const lines = yield* exec(
@@ -348,7 +347,7 @@ describe('Store over a schema value', () => {
 	it.effect('upserts on a natural key, updating only where a condition holds', () =>
 		Effect.gen(function* () {
 			const exec = yield* fresh;
-			yield* exec(yield* db.create('customer', { code: 'C', name: 'First', credit: 5 }));
+			yield* exec(yield* db.create('customer', { code: 'C', name: 'First', credit: '5' }));
 			yield* exec(
 				yield* db.upsert(
 					'customer',
@@ -377,25 +376,25 @@ describe('Store over a schema value', () => {
 			const [added] = yield* exec(
 				yield* db.upsert(
 					'customer',
-					{ code: 'C', name: 'Second', credit: 3 },
+					{ code: 'C', name: 'Second', credit: '3' },
 					{
 						on: ['code'],
 						merge: { credit: 'add' }
 					}
 				)
 			);
-			expect(added?.credit).toEqual(Decimal.of(8));
+			expect(added?.credit).toEqual('8');
 			const [peak] = yield* exec(
 				yield* db.upsert(
 					'customer',
-					{ code: 'C', name: 'Second', credit: 2 },
+					{ code: 'C', name: 'Second', credit: '2' },
 					{
 						on: ['code'],
 						merge: { credit: 'max' }
 					}
 				)
 			);
-			expect(peak?.credit).toEqual(Decimal.of(8));
+			expect(peak?.credit).toEqual('8');
 		})
 	);
 
@@ -523,7 +522,7 @@ describe('Store over a schema value', () => {
 				number: `SO-${n}`,
 				customer: required(c).id,
 				placed_on: '2026-10-01',
-				total: n,
+				total: String(n),
 				address: { city, floor: n },
 				events: events.map((what) => ({ at: '2026-10-01T00:00:00.000Z', what }))
 			});

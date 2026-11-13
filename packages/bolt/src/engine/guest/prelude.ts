@@ -1,9 +1,8 @@
 // The guest half of the runner: the isolate's globals and the `ctx` bridge, as source evaluated once per
 // fresh context. It runs as an `evalClosure` body, so the host hooks ($0 log, $1 random, $2 digest, $3 asset) stay in its closure
 // and never become globals; it returns `{ start, take, give }` for the host to call.
-// Kept as `String.raw` so regex escapes survive; its text holds no backtick and no `${` but the one splice: std's
-// `revive_wire`, stringified (D6), which therefore closes over nothing but globals.
-import { revive_wire } from '@norbital-ai/store/wire';
+// Kept as `String.raw` so regex escapes survive; its text holds no backtick and no `${`.
+
 
 export const PRELUDE = String.raw`
 'use strict';
@@ -364,18 +363,15 @@ const failure = (e) => {
 	return ['error', 'Error', show(e), '', ...kind];
 };
 
-// ── values (D6): the wire's one tag, { $dec }, becomes std/decimal's Decimal; dates and instants are their ISO text ──
-const revive_wire = ${String(revive_wire)};
-
 function start(kind, path, inputJson, ctxJson, invocation_id) {
 	const ns = G.__boltGuest; delete G.__boltGuest;
 	let body = ns && ns.default;
 	for (const p of path) body = isObject(body) && Object.hasOwn(body, p) ? body[p] : undefined;
 	if (typeof body !== 'function') { state = ['missing', path.join('.')]; return; }
-	const input = JSON.parse(inputJson, revive_wire);
+	const input = JSON.parse(inputJson);
 	let ctx;
 	if (['create', 'update', 'delete', 'policy', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'page'].includes(kind)) {
-		const raw = JSON.parse(ctxJson, revive_wire);
+		const raw = JSON.parse(ctxJson);
 		Object.defineProperty(G, Symbol.for('norbital.bolt.secrets'), { value: Object.freeze(raw.$secrets ?? {}), configurable: true });
 		delete raw.$secrets;
 		ctx = Object.defineProperty(kind === 'page'
@@ -421,7 +417,7 @@ function give(callIds, texts, bins) {
 	callIds.forEach((id, i) => {
 		const c = inflight.get(id);
 		inflight.delete(id);
-		settle(c, JSON.parse(texts[i], (k, v) => isObject(v) && typeof v.$bin === 'number' ? bins[i][v.$bin] : revive_wire(k, v)));
+		settle(c, JSON.parse(texts[i], (_k, v) => isObject(v) && typeof v.$bin === 'number' ? bins[i][v.$bin] : v));
 	});
 }
 return { start, take, give };

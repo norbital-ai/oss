@@ -93,7 +93,7 @@ import {
 import { bindingsAt } from '../query/reader.ts';
 import type { EngineManifest, SkillSpec } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import type { AiRequest, AiResponse, Authority, Bindings, LogEvent } from '../contracts.ts';
 import { textOf } from './schema.ts';
 import { Authorities } from '../identity/actor.ts';
@@ -659,7 +659,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			state: row.state ?? null,
 			mode: row.mode ?? null,
 			as: row.as ?? null,
-			meta: row.meta === undefined || row.meta === null ? null : storable(encode_wire(row.meta)),
+			meta: row.meta === undefined || row.meta === null ? null : storable(row.meta),
 			files: row.files === undefined ? [] : [...row.files]
 		});
 		const [message] = yield* messageStatement(chain, source);
@@ -1138,7 +1138,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				source = settleMessage(chain, row.id, {
 					content: storable(row.role === 'tool' && isObj(content) ? { ...content, assistant: row.content.assistant } : content),
 					text: text === null ? null : storable(text),
-					meta: meta === null ? null : storable(encode_wire(meta)),
+					meta: meta === null ? null : storable(meta),
 					state: extra.state ?? null,
 					...(extra.as === undefined ? {} : { as: extra.as })
 				});
@@ -1933,8 +1933,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			// envoy prompt has told it not to hand ids to.
 			const content = {
 				text,
-				toolCalls: encode_wire(calls),
-				...(r.finish === 'cut' || current.cut !== null ? { segments: encode_wire(stepped.carry.segments) } : {}),
+				toolCalls: calls,
+				...(r.finish === 'cut' || current.cut !== null ? { segments: stepped.carry.segments } : {}),
 				...(reasoning === '' ? {} : { reasoning })
 			};
 			const meta: Meta | null =

@@ -1,4 +1,4 @@
-import type { Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import { input_schema, type Kind, type Value } from '@norbital-ai/store/kind';
 import { Result, Schema } from 'effect';
 import type { HistoryEntry, HistorySnapshot, ViewBolt } from '../client/contract.js';

@@ -10,10 +10,8 @@ import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Scheduler from 'effect/Scheduler';
 import * as Schema from 'effect/Schema';
+import * as DateTime from 'effect/DateTime';
 import { equal_json } from '@norbital-ai/store/kind';
-import { local_of } from '@norbital-ai/store/zone';
-// Wire decimals must revive even when a body only uses methods on its typed input.
-import '@norbital-ai/store/decimal';
 import { attached, type AttachedBody, type GeneratorBody } from '../body.ts';
 import type { BodyError, BodyReturn } from '../ctx.ts';
 import { Refusal } from '../errors/refusal.ts';
@@ -148,7 +146,8 @@ const lift = (call: Call, raw: unknown): unknown => {
 		now: raw['now'],
 		today: raw['today'],
 		tz: raw['tz'],
-		today_in: (zone: string) => local_of(Date.parse(String(raw['now'])), zone).date
+		today_in: (zone: string) =>
+			DateTime.formatIsoDate(DateTime.makeZonedUnsafe(String(raw['now']), { timeZone: zone }))
 	};
 	const reads = {
 		query: cross('query'),

@@ -1,9 +1,7 @@
 import { it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
 import type { Effect } from 'effect';
-import type { Decimal } from '../src/lang/decimal.ts';
-import type { PlainDate } from '../src/lang/date.ts';
-import { Instant } from '../src/lang/date.ts';
+import type { PlainDate } from '../src/values.ts';
 import { schema, store, table, type Row, type Select, type Statement, type Where } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import type {
@@ -71,8 +69,8 @@ it('infers set-based host query results without widening fields or scalar values
 		value: 'value',
 		latest_per: ['source'],
 		carry: {
-			from: Instant('2026-01-01T00:00:00.000Z'),
-			until: Instant('2026-01-01T00:01:00.000Z'),
+			from: '2026-01-01T00:00:00.000Z',
+			until: '2026-01-01T00:01:00.000Z',
 			step_millis: 60_000
 		}
 	});
@@ -134,7 +132,6 @@ it('refuses invalid literal fields, values, paths and relation operators', () =>
 	expectTypeOf<{ missing: true }>().not.toMatchTypeOf<Select<Shop, 'order'>>();
 	expectTypeOf<{ lines: true }>().not.toMatchTypeOf<Select<Shop, 'order'>>();
 	expectTypeOf<{ missing: { eq: 1 } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
-	expectTypeOf<{ total: { eq: 'twelve' } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
 	expectTypeOf<{ status: { eq: 'cancelled' } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
 	expectTypeOf<{ total: { eq: null } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
 	expectTypeOf<{ total: { ne: null } }>().not.toMatchTypeOf<Where<Shop, 'order'>>();
@@ -302,8 +299,8 @@ it('returns only requested aggregate metrics and typed bucket keys', () => {
 	expectTypeOf<keyof Answer<typeof totals>>().toEqualTypeOf<'count' | 'sum' | 'avg' | 'min'>();
 	expectTypeOf<Answer<typeof totals>['count']>().toEqualTypeOf<number>();
 	expectTypeOf<keyof Answer<typeof totals>['sum']>().toEqualTypeOf<'total'>();
-	expectTypeOf<Answer<typeof totals>['sum']['total']>().toEqualTypeOf<Decimal | null>();
-	expectTypeOf<Answer<typeof totals>['avg']['total']>().toEqualTypeOf<Decimal | null>();
+	expectTypeOf<Answer<typeof totals>['sum']['total']>().toEqualTypeOf<string | null>();
+	expectTypeOf<Answer<typeof totals>['avg']['total']>().toEqualTypeOf<string | null>();
 	expectTypeOf<Answer<typeof totals>['min']['placed_on']>().toEqualTypeOf<PlainDate | null>();
 	expectTypeOf<Answer<typeof totals>['min']['customer.code']>().toEqualTypeOf<string | null>();
 	const grouped = db.aggregate('order', { by: { month: 'placed_on' }, count: true, all: true });

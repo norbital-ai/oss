@@ -4,8 +4,7 @@
 // allowlists fix `integration` and `owner` at create; this keeps the rest true of the definition — a known definition,
 // an owner only where its driver syncs personal accounts, an envoy only on a workspace instance of a conversation
 // definition and a configuration that decodes with its defaults filled. Accounts remain runtime records.
-import { Clock, Crypto, Effect, Option, Predicate, Result, Schema } from 'effect';
-import { local_of } from '@norbital-ai/store/zone';
+import { Clock, Crypto, DateTime, Effect, Option, Predicate, Result, Schema } from 'effect';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { Drivers } from '../ports.ts';
@@ -131,10 +130,10 @@ export function instanceTransform(
 			if (decoded.value.kind === 'since') {
 				const at = Date.parse(decoded.value.at),
 					zone = decoded.value.zone;
-				// the zone functions throw for a zone the runtime does not know
+				// a zone the runtime does not know has no named zone
 				if (
 					!Number.isFinite(at) ||
-					Result.isFailure(Result.try({ try: () => local_of(at, zone), catch: () => zone }))
+					Option.isNone(DateTime.zoneMakeNamed(zone))
 				)
 					return refuse(
 						c.path,

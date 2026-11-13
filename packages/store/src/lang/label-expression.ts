@@ -2,10 +2,9 @@
 import { Environment, type ASTNode } from '@marcbachmann/cel-js';
 import { Result } from 'effect';
 import { children } from './cel-ast.ts';
+import { UUID_PATTERN, type Value } from './kind.ts';
 
 const literal = (text: string): string => `'${text.replaceAll("'", "''")}'`;
-import { UUID_PATTERN, type Value } from './kind.ts';
-import { Decimal } from './decimal.ts';
 
 const string = (sql: string) => `(${sql} #>> '{}')`;
 const bool = (sql: string) =>
@@ -25,13 +24,6 @@ const integer = (node: ASTNode): boolean => {
 };
 const size = (sql: string) =>
 	`(CASE jsonb_typeof(${sql}) WHEN 'array' THEN jsonb_array_length(${sql}) WHEN 'object' THEN (SELECT count(*)::int FROM jsonb_object_keys(${sql})) ELSE length(${string(sql)}) END)`;
-const input = (value: Value): unknown => {
-	if (value instanceof Decimal) return value.toString();
-	if (Array.isArray(value)) return value.map(input);
-	if (value !== null && typeof value === 'object')
-		return Object.fromEntries(Object.entries(value).map(([key, own]) => [key, input(own)]));
-	return value;
-};
 const pathOf = (n: ASTNode): readonly string[] | undefined => {
 	if (n.op === 'id') return [n.args];
 	if (n.op === '.' || n.op === '.?') {
@@ -254,12 +246,7 @@ export function label_expression(expression: string): LabelProgram | { readonly 
 		sql(() => "'null'::jsonb");
 		return {
 			paths: [...paths],
-			evaluate: (row: { readonly [field: string]: Value }) => {
-				const values = Object.fromEntries(
-					Object.entries(row).map(([key, value]) => [key, input(value)])
-				);
-				return program({ ...values, record: values });
-			},
+			evaluate: (row: { readonly [field: string]: Value }) => program({ ...row, record: row }),
 			sql
 		};
 	});

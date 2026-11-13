@@ -1,11 +1,9 @@
-// std/kind (D7): the one field-kind table. The kind literal a model, an input or a shape declares (structurally, so ui
-// and std need no bolt dependency), its traits, and its Schema: `input_schema(spec)` is the one validator of input and
-// stored values (callables, write flatten, IR literals, configuration, feed rows, AI output kinds). A decoded value is
-// JSON with std's `Decimal` for decimals; its encoding is the wire's (std/wire): `{ $dec }`, ISO dates and instants.
-import { Effect, Predicate, Schema, SchemaGetter } from 'effect';
-import { Decimal } from './decimal.ts';
-import { Instant, PlainDate } from './date.ts';
-import type { Json } from './wire.ts';
+// kind (D7): the one field-kind table. The kind literal a model, an input or a shape declares (structurally, so ui
+// and store need no bolt dependency), its traits, and its Schema: `input_schema(spec)` is the one validator of input and
+// stored values (callables, write flatten, IR literals, configuration, feed rows, AI output kinds). A value is JSON: a
+// decimal is its exact text, a date `YYYY-MM-DD`, an instant ISO UTC `…Z`; arithmetic is Effect's `BigDecimal` and `DateTime`.
+import { DateTime, Effect, Option, Predicate, Schema, SchemaGetter, BigDecimal } from 'effect';
+import type { Json } from '../values.ts';
 export type { Json };
 
 /** JSON Schema data shared by kind projections and renderers; references are never executable code. */
@@ -333,9 +331,8 @@ export type FileUrlOptions = { readonly preview?: 64 | 512 | 1024 };
 export type Point = { readonly lat: number; readonly lng: number };
 /** A where literal as it travels (the IR decoder reads it). */
 export type Where = { readonly [key: string]: Json };
-/** A decoded value: JSON, with std's `Decimal` for a decimal, money or sum value. */
-export type Value =
-	null | boolean | number | string | Decimal | readonly Value[] | { readonly [key: string]: Value };
+/** A value: JSON; a decimal is its exact text. */
+export type Value = Json;
 /** A kind's codec: decodes the wire (or an authored literal) into a `Value`, encodes back to the wire. */
 export type KindCodec = Schema.Codec<Value, Json>;
 /** What operators and views may do with a kind's values. */
@@ -352,75 +349,57 @@ const TIME = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?$/;
 const EMAIL = /^[^@\s]+@[^@\s]+$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
-/** The canonical ID value, without retaining the field-kind catalogue. */
 /** The id kind's spelling: any UUID version, the nil id included, either hex case; SQL readers interpolate its source. */
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const IdValue = /*#__PURE__*/ (() =>
 	Schema.String.check(Schema.isPattern(UUID_PATTERN, { message: 'expected an id' })))();
 
-/** A finite double as a decimal of exactly its shortest digits (`0.1` → `0.1`, `1.5e-7` → `0.00000015`). */
-function decimalOfNumber(n: number): Decimal {
-	const m = /(?:\.(\d+))?(?:e([+-]\d+))?$/.exec(String(n));
-	return Decimal.from_number(n, Math.max(0, (m?.[1]?.length ?? 0) - Number(m?.[2] ?? 0)));
-}
-const calendarDay = (s: string) => {
-	const t = DATE.test(s) ? Date.parse(`${s}T00:00:00Z`) : Number.NaN;
-	return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
-};
+/** The date kind's spelling: an actual Gregorian day `YYYY-MM-DD`. */
+export const is_plain_date = (value: unknown): value is string =>
+	typeof value === 'string' &&
+	DATE.test(value) &&
+	Option.exists(DateTime.make(value), (day) => DateTime.formatIsoDateUtc(day) === value);
 
-const DecimalSelf = /*#__PURE__*/ Schema.declare(
-	(u: unknown): u is Decimal => u instanceof Decimal,
-	{
-		title: 'Decimal'
-	}
-);
-/** A decimal: `{ $dec }` on the wire, or an authored decimal text or finite number; encoded as `{ $dec }`. */
+/**
+ * A decimal's exact text, without the exponent `BigDecimal.format` writes for a very small or large value: the wire and
+ * Postgres numeric spell it in plain digits.
+ */
+export const decimal_text = (value: BigDecimal.BigDecimal): string => {
+	const { value: units, scale } = BigDecimal.normalize(value);
+	const sign = units < 0n ? '-' : '',
+		digits = (units < 0n ? -units : units).toString();
+	if (scale <= 0) return `${sign}${digits}${'0'.repeat(-scale)}`;
+	const padded = digits.padStart(scale + 1, '0');
+	return `${sign}${padded.slice(0, -scale)}.${padded.slice(-scale)}`;
+};
+/** A decimal: its exact text, or a finite number as its shortest digits (`0.1` → `'0.1'`). */
 const DecimalValue = /*#__PURE__*/ (() =>
 	Schema.Union([
-		Schema.Struct({
-			$dec: Schema.String.check(Schema.isPattern(DECIMAL, { message: 'expected a decimal' }))
-		}),
 		Schema.String.check(Schema.isPattern(DECIMAL, { message: 'expected a decimal' })),
 		Schema.Finite
 	]).pipe(
-		Schema.decodeTo(DecimalSelf, {
-			decode: SchemaGetter.transform((v: { readonly $dec: string } | string | number) =>
-				typeof v === 'number' ? decimalOfNumber(v) : Decimal.of(typeof v === 'string' ? v : v.$dec)
+		Schema.decodeTo(Schema.String, {
+			decode: SchemaGetter.transform((v: string | number) =>
+				typeof v === 'number' ? decimal_text(BigDecimal.fromNumberUnsafe(v)) : v
 			),
-			encode: SchemaGetter.transform((d: Decimal) => d.toJSON())
+			encode: SchemaGetter.transform((d: string): string | number => d)
 		})
 	))();
-/** A calendar day `YYYY-MM-DD`, as std's branded `PlainDate`. */
-const DateValue = /*#__PURE__*/ (() =>
-	Schema.String.check(
-		Schema.makeFilter(calendarDay, { message: 'expected a date (YYYY-MM-DD)' })
-	).pipe(
-		Schema.decodeTo(
-			Schema.declare((u: unknown): u is PlainDate => typeof u === 'string' && calendarDay(u), {
-				title: 'PlainDate'
-			}),
-			{
-				decode: SchemaGetter.transform((s: string) => PlainDate(s)),
-				encode: SchemaGetter.transform((d: PlainDate): string => d)
-			}
-		)
-	))();
-/** An instant any ISO form names, as std's canonical UTC `Instant` (`…T…:…:….sssZ`). */
+/** A calendar day `YYYY-MM-DD`. */
+const DateValue = /*#__PURE__*/ Schema.String.check(
+	Schema.makeFilter(is_plain_date, { message: 'expected a date (YYYY-MM-DD)' })
+);
+/** An instant any ISO form names, as canonical UTC (`…T…:…:….sssZ`). */
 const InstantValue = /*#__PURE__*/ (() =>
 	Schema.String.check(
-		Schema.makeFilter((s: string) => !Number.isNaN(Date.parse(s)), {
+		Schema.makeFilter((s: string) => Option.isSome(DateTime.make(s)), {
 			message: 'expected an instant'
 		})
 	).pipe(
-		Schema.decodeTo(
-			Schema.declare((u: unknown): u is Instant => typeof u === 'string' && UTC.test(u), {
-				title: 'Instant'
-			}),
-			{
-				decode: SchemaGetter.transform((s: string) => Instant(new Date(Date.parse(s)))),
-				encode: SchemaGetter.transform((i: Instant): string => i)
-			}
-		)
+		Schema.decodeTo(Schema.String.check(Schema.isPattern(UTC)), {
+			decode: SchemaGetter.transform((s: string) => DateTime.formatIso(DateTime.makeUnsafe(s))),
+			encode: SchemaGetter.transform((i: string): string => i)
+		})
 	))();
 /** A date period `{ from, to | null }` (inclusive) or an instant period `{ start, end | null }` (closed-open); a missing end is open. */
 const open = <S extends KindCodec>(s: S) =>
@@ -973,12 +952,11 @@ export type InitialStampFields<Fields> = {
 
 const array = (value: unknown): value is readonly unknown[] => Array.isArray(value);
 /**
- * Structural equality of JSON-shaped values, preserving array order and decimal text. Not Effect's `Equal.equals`: it
- * memoises outer results per object pair, so a draft compared, edited and compared again would read the stale answer.
+ * Structural equality of JSON-shaped values, preserving array order. Not Effect's `Equal.equals`: it memoises outer
+ * results per object pair, so a draft compared, edited through its proxy and compared again would read the stale answer.
  */
 export function equal_json(a: unknown, b: unknown): boolean {
-	const x = a instanceof Decimal ? a.toJSON() : a;
-	const y = b instanceof Decimal ? b.toJSON() : b;
+	const x = a, y = b;
 	if (x === y) return true;
 	if (array(x) || array(y))
 		return array(x) && array(y) && x.length === y.length && x.every((value, index) => equal_json(value, y[index]));

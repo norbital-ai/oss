@@ -1,8 +1,7 @@
 // Native controls share the page transport without choosing an unrelated result type or exposing native reads to authors.
 import { Array as Arr, Effect, Result, Schema, SchemaGetter } from 'effect';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { KindSchema, type Value } from '@norbital-ai/store/kind';
-import { encode_wire, type Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import type { ModelExposure, RecordOf, RowOf, SourceColumns, SourceRow, ViewBolt, ViewSource } from '@norbital-ai/ui';
 import { unref } from '@norbital-ai/ui/read';
 import { ReadFailed } from '../decl/errors.ts';
@@ -20,12 +19,7 @@ type ModelPages<C, M> = Readonly<Record<string, Omit<Pages[string], 'rows'> & { 
 type SourcePages<S> = Readonly<Record<string, Omit<Pages[string], 'rows'> & { rows: readonly (SourceRow<S> & Partial<SourceColumns<S>>)[] }>>;
 type Host = Omit<ViewBolt, 'query' | 'model_query' | 'source_query' | 'project_record' | 'aggregate' | 'history'> & Pick<Bolt, 'native_query'>;
 
-const ValueSelf: Schema.Decoder<Value> = Schema.suspend(() => Schema.Union([
-	Schema.Null, Schema.Boolean, Schema.Finite, Schema.String,
-	Schema.declare((value: unknown): value is Decimal => value instanceof Decimal),
-	Schema.Array(ValueSelf), Schema.Record(Schema.String, ValueSelf)
-]));
-const Values = Schema.Record(Schema.String, ValueSelf);
+const Values = Schema.Record(Schema.String, Schema.Json);
 const Row = Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [Values]);
 const Page = <S extends Schema.Top>(row: S) => Schema.Struct({
 	rows: Schema.Array(row), next: Schema.NullOr(Schema.String), total: Schema.optionalKey(Schema.Number)
@@ -133,7 +127,7 @@ export function view_client(
 	function aggregate(model: string, args: Record<string, Value> & { readonly by: Value }): Query<typeof Buckets.Type>;
 	function aggregate(model: string, args: Value): Query<typeof Values.Type | typeof Buckets.Type>;
 	function aggregate(model: string, args: Value) {
-		const wire = encode_wire(args);
+		const wire = args;
 		const grouped = isObject(wire) && Object.hasOwn(wire, 'by');
 		return grouped
 			? client.native_query({ m: 'aggregate', a: [model, wire] }, Schema.suspend(() =>

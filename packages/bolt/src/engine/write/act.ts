@@ -4,7 +4,7 @@
 import type { Json } from '../../decl/values.ts';
 import { MessageValues, message_text } from '../../decl/errors/refusal.ts';
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import type { ApprovalSnapshot } from '../../decl/access/policy.ts';
@@ -2997,11 +2997,11 @@ export const WritesLive = Layer.effect(
 										invocation: request.invocationId,
 										outcomeKey: operation.key,
 										digest: operation.digest,
-										payload: encode_wire({
+										payload: {
 											input: request.input,
-											observed: request.observed,
-											on_conflict: request.on_conflict
-										})
+											...(request.observed === undefined ? {} : { observed: request.observed }),
+											...(request.on_conflict === undefined ? {} : { on_conflict: request.on_conflict })
+										}
 									},
 									work
 								);

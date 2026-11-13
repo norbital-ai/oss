@@ -1,13 +1,11 @@
 // `Store<S>`: the typed face of the store over one schema value. Every call is pure: it answers a `Statement` — the
 // SQL, its stable shape key, and the decoder of the rows it answers — and the caller executes it with its own
 // connection (Bolt's engine, a host's control store). A statement's rows decode once, by Effect Schema codecs built
-// from the declaration (std's kind codecs: Decimal, PlainDate, Instant, periods, points, inline values), and the
+// from the declaration (the kind codecs: decimal text, dates, instants, periods, points, inline values), and the
 // decoded value is checked against that codec's own type side before it is handed back as `Row<S, T, Q>`.
 import { item_kind } from './lang/kind.ts';
 import { Array as EffectArray, Effect, Predicate, Schema } from 'effect';
 import { input_schema, type Kind } from './lang/kind.ts';
-import { Decimal } from './lang/decimal.ts';
-import { encode_wire, type Wired } from './lang/wire.ts';
 import { catalog_of, exposure_of, type Catalog } from './catalog.ts';
 import { q } from './sql.ts';
 import {
@@ -92,7 +90,7 @@ type RefTargets<Tables> = {
 			}
 		: unknown;
 };
-/** A table: its fields (std's kind language; relations are `ref` fields), its key, and its constraints and indexes. */
+/** A table: its fields (the kind language; relations are `ref` fields), its key, and its constraints and indexes. */
 export const table = <const T extends TableSpec>(spec: T): T => spec;
 /**
  * A schema: its tables by name. Each ref names a declared table (a type error otherwise); `tz` is the zone of
@@ -235,9 +233,9 @@ const column = (
 			? Effect.succeed(value)
 			: Effect.fail(StoreError.of('internal', 'decode', `a result row lacks its '${name}' object`));
 	});
-/** The input boundary admits decoded decimals; encoded results admit JSON alone. Both reject non-finite numbers. */
+/** The input boundary admits an absent member; encoded results admit JSON alone. Both reject non-finite numbers. */
 const isValue = (value: unknown, decoded: boolean): boolean =>
-	value === undefined || value instanceof Decimal
+	value === undefined
 		? decoded
 		: value === null ||
 			typeof value === 'string' ||
@@ -246,7 +244,7 @@ const isValue = (value: unknown, decoded: boolean): boolean =>
 			(EffectArray.isArray(value) && value.every((child) => isValue(child, decoded))) ||
 			(Predicate.isObject(value) && Object.values(value).every((child) => isValue(child, decoded)));
 const isJson = (value: unknown): value is Json => isValue(value, false);
-const isWired = (value: unknown): value is Wired => isValue(value, true);
+const isInput = (value: unknown): boolean => isValue(value, true);
 const isChange = (v: unknown): v is { readonly [key: string]: unknown } =>
 	Predicate.isObject(v) &&
 	Object.keys(v).length === 1 &&
@@ -395,10 +393,11 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 						else return yield* invalid(`'${table}.${name}' does not take ${op}`);
 						input = payload;
 					}
-					if (!isWired(input))
+					if (!isInput(input))
 						return yield* invalid(`'${table}.${name}' does not encode as a wire value`);
 					const wire = yield* Schema.decodeUnknownEffect(codec, { onExcessProperty: 'error' })(
-						encode_wire(input)
+						// JSON drops absent members, as the wire does
+						JSON.parse(JSON.stringify(input))
 					).pipe(
 						Effect.flatMap((v) => Schema.encodeEffect(codec)(v)),
 						Effect.mapError((e) =>

@@ -727,7 +727,7 @@ describe('engine/live: deltas from the RETURNING image', () => {
 						view: 'v',
 						v: 1,
 						ops: [
-							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', total: { $dec: '1.20' } } }
+							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', total: '1.20' } }
 						]
 					}
 				]);
@@ -744,7 +744,7 @@ describe('engine/live: deltas from the RETURNING image', () => {
 					page(),
 					[cap(null, row(1, { total: 1.2 }))],
 					admin,
-					() => page({ id: O(1), title: 't1', total: { $dec: '1.20' } })
+					() => page({ id: O(1), title: 't1', total: '1.20' })
 				);
 				expect(x.asked).toEqual([byId(O(1))]);
 				expect(x.frames).toEqual([
@@ -753,7 +753,7 @@ describe('engine/live: deltas from the RETURNING image', () => {
 						view: 'v',
 						v: 1,
 						ops: [
-							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', total: { $dec: '1.20' } } }
+							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', total: '1.20' } }
 						]
 					}
 				]);

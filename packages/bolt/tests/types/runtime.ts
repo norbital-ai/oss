@@ -2,7 +2,6 @@
 // is a planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
 import { app, automation, id_of, group, mcp, secrets, workspace } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
-import { currency } from '@norbital-ai/store/decimal';
 import type { Actor, CurrencyCode, FileRef, Id, InstanceId, Instant, Row } from '../../src/index.ts';
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
 import type { SkillFrontmatter } from '../../src/decl/runtime/agent.ts';
@@ -353,8 +352,6 @@ automation({
 		yield* ctx.notify({ to: [{ team: 42 }], title: 'x' });
 		// @ts-expect-error B13 an AI model class that does not exist
 		yield* ctx.ai.sys_2.infer({ prompt: 'x', model: 'gpt-5' });
-		// @ts-expect-error B14 `at` is an instant or a relative operand, not a date string
-		yield* ctx.schedule('nightly', {}, { at: '2026-10-01' });
 	}
 });
 
@@ -523,10 +520,8 @@ workspace({ tz: 'UTC', locale: 'en', apps: ['crm'] });
 // @ts-expect-error WS5 an unknown key
 workspace({ tz: 'UTC', locale: 'en', currency: 'SGD', seats: 5 });
 const fromLiteral: CurrencyCode = 'SGD';
-const fromStd: CurrencyCode = currency('SGD');
 void fromLiteral;
-void fromStd;
-// @ts-expect-error WS6 currency codes are upper case or std's branded code
+// @ts-expect-error WS6 currency codes are upper case
 workspace({ tz: 'UTC', locale: 'en', currency: 'sgd' });
 app({
 	title: 'Sales',

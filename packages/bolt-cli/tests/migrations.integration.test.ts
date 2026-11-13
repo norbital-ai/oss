@@ -17,7 +17,6 @@ import {
 	physical_hash,
 	record_applied
 } from '@norbital-ai/store';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { scratchPath } from '../../../scripts/lib/scratch.ts';
 import { prepare_migrations } from '../src/compiler/migrations.ts';
 import {
@@ -414,7 +413,7 @@ select id from entry where given is null or given = '' or family is null or fami
 				expect(
 					rows.map(({ amount, ...row }) => ({
 						...row,
-						amount: Decimal.of(amount).eq(row.id === ID ? '123.45' : '67.89')
+						amount: Number(amount) === (row.id === ID ? 123.45 : 67.89)
 					}))
 				).toEqual([
 					{ id: ID, given: 'Ada', family: 'Lovelace', amount: true },

@@ -60,7 +60,7 @@ const texts = (xml: string) =>
 	);
 
 /**
- * An xlsx worksheet as std/sheet's `Cell[][]` (row 1 first; gaps are `null`). A zip read with `fflate`:
+ * An xlsx worksheet as `Cell[][]` (row 1 first; gaps are `null`). A zip read with `fflate`:
  * stored and deflated entries, shared and inline strings, booleans and numbers.
  * ponytail: styled dates arrive as serials (styles are not read); ISO date cells retain their text and zone.
  */

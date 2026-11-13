@@ -1,6 +1,6 @@
 // Logical queries compile into three retained-view forms; row, counter and metadata changes share one lane.
 import { Effect, Option, Predicate, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import { equal_json } from '@norbital-ai/store/kind';
 import { argument_list, catalog_for, exposure_of, default_fields, type Catalog, type Pred, type SelectIR } from '@norbital-ai/store';
 import type { ReadIR } from '../../protocol/reads.ts';
@@ -21,7 +21,7 @@ import { RunViewRow, listedRun } from '../runs/rows.ts';
 
 export type ViewRow = { readonly [field: string]: Json };
 export const same = (a: Json | undefined, b: Json | undefined): boolean =>
-	a === undefined || b === undefined ? a === b : equal_json(encode_wire(a), encode_wire(b));
+	a === undefined || b === undefined ? a === b : equal_json(a, b);
 const rowOf = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
 const rowsOf = Schema.decodeUnknownOption(Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) }));
 const first = (value: Json): ViewRow | null | undefined => {
@@ -196,7 +196,7 @@ export class ViewCompiler {
 					if (Option.isNone(row)) return undefined;
 					const shown = listedRun(authority, row.value, read.brief);
 					if (shown === null) return null;
-					return Option.getOrUndefined(rowOf(encode_wire(shown)));
+					return Option.getOrUndefined(rowOf(shown));
 				}, fetch: (id) => ({ read: { ...read, id, limit: 1 }, row: first })
 			}, Math.min(Math.max(1, read.limit), 500), 'due_at'), related: (capture, value) => {
 				if (capture.model !== 'sys_user') return 'all';

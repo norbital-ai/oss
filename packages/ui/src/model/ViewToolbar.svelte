@@ -136,7 +136,7 @@
 
 <script lang="ts" generics="R extends object = Row">
 	import { FiberSet, Predicate, Schema } from 'effect';
-	import { encode_wire } from '@norbital-ai/store/wire';
+	
 	import { fork, attach } from '../effect/index.js';
 	import { by_id, first_of, page_of, request_json } from '../read/request.js';
 	import { Button } from '../primitives/button/index.js';
@@ -1174,7 +1174,7 @@
 								data-similar-input={index}
 								onsubmit={(e) => {
 									e.preventDefault();
-									if (ready) on_probe?.({ index: index ?? '', input: encode_wire(values) });
+									if (ready) on_probe?.({ index: index ?? '', input: values });
 								}}
 							>
 								{#each Object.entries(chosen.input) as [f, k] (f)}

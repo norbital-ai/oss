@@ -2,10 +2,9 @@
 // (its `schema`, else the model's writable fields), each with `$at` (its sheet row or line) so findings point at it. A
 // header or key matches a column's name or catalogue caption, any case; an unknown one is ignored. A custom parser runs in the guest
 // (`sync/file.ts`); this module only says which parser an upload is read with.
-import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
+import { Array as EffectArray, DateTime, Predicate, Result, Schema } from 'effect';
 import { csv_delimiter, csv_rows, csv_text } from './csv.ts';
-import { is_plain_date } from '@norbital-ai/store/date';
-import { utc_of } from '@norbital-ai/store/zone';
+import { is_plain_date } from '@norbital-ai/store/kind';
 import type { Fields, Kind } from '@norbital-ai/store/kind';
 import type { SyncEntry } from '../../decl/model.ts';
 import type { BuiltinParser, Finding } from '../../decl/runtime/sync.ts';
@@ -115,7 +114,8 @@ function valueOf(k: Kind, c: Exclude<Cell, null>, tz: string): Json {
 	}
 	if (k.kind === 'instant' && typeof c === 'number') {
 		const date = new Date(EXCEL_EPOCH + Math.floor(c) * DAY).toISOString().slice(0, 10);
-		return new Date(utc_of(date, Math.round((c % 1) * 86_400) * 1000, tz)).toISOString();
+		const wall = new Date(Date.parse(`${date}T00:00:00Z`) + Math.round((c % 1) * 86_400) * 1000).toISOString().slice(0, -1);
+		return DateTime.formatIso(DateTime.makeZonedUnsafe(wall, { timeZone: tz, adjustForTimeZone: true, disambiguation: 'compatible' }));
 	}
 	return text;
 }
@@ -233,11 +233,10 @@ function icsValue(p: { params: ReadonlyMap<string, string>; value: string }, tz:
 	if (t !== null) {
 		const date = `${t[1]}-${t[2]}-${t[3]}`,
 			ms = ((Number(t[4]) * 60 + Number(t[5])) * 60 + Number(t[6])) * 1000;
-		return new Date(
-			t[7] === 'Z'
-				? Date.parse(`${date}T00:00:00Z`) + ms
-				: utc_of(date, ms, p.params.get('TZID') ?? tz)
-		).toISOString();
+		const wall = new Date(Date.parse(`${date}T00:00:00Z`) + ms).toISOString();
+		return t[7] === 'Z'
+			? wall
+			: DateTime.formatIso(DateTime.makeZonedUnsafe(wall.slice(0, -1), { timeZone: p.params.get('TZID') ?? tz, adjustForTimeZone: true, disambiguation: 'compatible' }));
 	}
 	return p.value.replace(/\\([\\;,nN])/g, (_, c: string) => (c === 'n' || c === 'N' ? '\n' : c));
 }

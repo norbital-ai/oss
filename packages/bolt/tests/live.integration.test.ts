@@ -569,7 +569,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						expect(count.reads).toBe(0);
 						expect(
 							titled(Schema.decodeUnknownSync(Rows)(w.held.get('totals')).rows, 'decimal')['total']
-						).toEqual({ $dec: '3.20' });
+						).toEqual('3.20');
 						expect(w.held.get('totals')).toEqual(
 							(yield* queries.run([totals], { as: 'caller', authority: rep }, b()))[0]
 						);
@@ -622,7 +622,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 							w.held.get('tree')
 						);
 						expect(titled(held.orders.rows, 'layered')).toMatchObject({
-							lines: [{ label: 'a', amount: { $dec: '2.50' } }]
+							lines: [{ label: 'a', amount: '2.50' }]
 						});
 						expect(w.held.get('tree')).toEqual(
 							(yield* queries.run([tree], { as: 'caller', authority: rep }, b()))[0]

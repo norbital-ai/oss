@@ -40,7 +40,7 @@ export type Cmp = typeof CmpSchema.Type;
 export const AggSchema = Schema.Literals(['count', 'sum', 'min', 'max', 'avg']);
 
 /** A condition's value: a literal, a list, a date span (with the catalogue's label, when it came from one), a `{ var }`
- * CEL expression (`requestor.id`, `today - days(7)`, std/vars) or a same-row `{ field }`. The view keeps a variable as
+ * CEL expression (`requestor.id`, `today - days(7)`, store's vars) or a same-row `{ field }`. The view keeps a variable as
  * written (its URL too, so "this month" rolls over); a read sends the literal a time variable stands for at the page's
  * clock (`toWhere` with a `FilterClock`), and a requestor variable for the host to bind. */
 export type RawArg =

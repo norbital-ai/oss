@@ -1,6 +1,5 @@
 import { expect, it } from '@effect/vitest';
 import { Cause, Effect, Exit, Schema } from 'effect';
-import { Decimal } from '@norbital-ai/store/decimal';
 import { input_schema } from '@norbital-ai/store/kind';
 import {
 	decodePublicHydration,
@@ -154,7 +153,7 @@ it.effect('seeds the hydrated query with its native decimal before the stream an
 	Effect.gen(function* () {
 		const request = { jobs: { fields: ['total'] } };
 		const key = public_read_key({ m: 'query', a: [request] });
-		const rows = [{ id: 'job', total: { $dec: '12.5' } }];
+		const rows = [{ id: 'job', total: '12.5' }];
 		const props = yield* decodePublicHydration(
 			JSON.stringify({ ...body, reads: { [key]: { jobs: { rows, next: null, total: 1 } } } }),
 			{ route: body.route, release: body.release }
@@ -178,7 +177,7 @@ it.effect('seeds the hydrated query with its native decimal before the stream an
 			})
 		);
 		const total = query.current?.jobs.rows[0]?.total;
-		expect(total).toBeInstanceOf(Decimal);
+		expect(total).toBeTypeOf('string');
 		expect(String(total)).toBe('12.5');
 		expect(query.loading).toBe(false);
 	})

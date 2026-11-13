@@ -1,6 +1,6 @@
 // The run queue's shared time arithmetic.
 import { Array as EffectArray } from 'effect';
-import { duration_seconds } from '@norbital-ai/store/date';
+import { duration_seconds } from '@norbital-ai/store/vars';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { compile_var, evaluate_var, type Requestor } from '@norbital-ai/store/vars';

@@ -1,6 +1,5 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { Instant } from '../src/lang/date.ts';
 import { build, schema, store, table } from '../src/index.ts';
 import { database, run, script } from './support.ts';
 
@@ -53,7 +52,7 @@ const fresh = Effect.gen(function* () {
 it.effect('fences each row of a set update and resolves native joins and unions', () =>
 	Effect.gen(function* () {
 		const execute = yield* fresh;
-		const done = Instant('2026-01-01T00:00:00.000Z');
+		const done = '2026-01-01T00:00:00.000Z';
 		yield* execute(
 			yield* db.create('owner', [
 				{ id: 'a', url: 'A' },
@@ -165,7 +164,7 @@ it.effect(
 			const execute = yield* fresh,
 				start = Date.UTC(2026, 0, 1),
 				step = 300_000;
-			const at = (offset: number) => Instant(new Date(start + offset * step).toISOString());
+			const at = (offset: number) => new Date(start + offset * step).toISOString();
 			yield* execute(
 				yield* db.create('measurement', [
 					{ tenant: 'acme', metric: 'memory', at: at(0), source: 'a', value: 100 },

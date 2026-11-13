@@ -9,7 +9,7 @@ import type { Actor } from './access/actor.ts';
 import type { ApprovalFlow, Verdict } from './access/policy.ts';
 import type { ActConflict, ActRefused, ReadFailed, Refusal } from './errors.ts';
 import type { ActUnknown } from './errors/act.ts';
-import type { Checked, DateLiteral, Exact, InputOf, Simplify } from './fields.ts';
+import type { Checked, Exact, InputOf, Simplify } from './fields.ts';
 import type {
 	AuthoredModelName,
 	AutomationName,
@@ -49,12 +49,10 @@ import type { StartInput } from './runtime/facilities.ts';
 import type { LayerWhere, ModelWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
 import type { DynamicRead } from '../protocol/read-request.ts';
 import type {
-	DatePeriod,
 	Decimal,
 	IanaZone,
 	Id,
 	Instant,
-	InstantPeriod,
 	PlainDate,
 	RequestId,
 	Json
@@ -362,27 +360,14 @@ export interface Clock {
 }
 
 // ── writes: trees typed from the model's write layers (decision 6: every write is a batch of them) ──
-/** A written value: the row's own value, or the plain literal decode accepts for it (ISO date or instant text, decimal
- * text or an integer), at a period's ends too. */
-export type Loose<V> = V extends Decimal
-	? Decimal | number | `${number}`
-	: V extends PlainDate
-		? PlainDate | DateLiteral
-		: V extends Instant
-			? Instant | `${DateLiteral}T${string}`
-			: V extends DatePeriod
-				? { readonly from: Loose<PlainDate>; readonly to: Loose<PlainDate> | null }
-				: V extends InstantPeriod
-					? { readonly start: Loose<Instant>; readonly end: Loose<Instant> | null }
-					: V;
 type OptionalOf<T, Cols extends string> = {
 	[F in Cols]: OmittableOnInsert<T, F> extends true ? F : never;
 }[Cols];
 /** Required columns required, omittable or `filled` ones optional. */
 type Values<T, Cols extends string, Opt> = {
-	readonly [F in Exclude<Cols, Opt>]: Loose<ColumnValue<T, F>>;
+	readonly [F in Exclude<Cols, Opt>]: ColumnValue<T, F>;
 } & {
-	readonly [F in Cols & Opt]?: Loose<ColumnValue<T, F>>;
+	readonly [F in Cols & Opt]?: ColumnValue<T, F>;
 };
 type CreateLayer<
 	C,
@@ -417,7 +402,7 @@ type ChildChanges<C, Q extends string, T, S, Child extends string = PathModel<C,
 	? {}
 	: { readonly link?: readonly WriteTarget<Child>[]; readonly unlink?: readonly WriteTarget<Child>[] });
 type UpdateLayer<C, P extends string, T = PathModel<C, P>> = {
-	readonly [F in LayerColumn<C, 'update', P>]?: Loose<ColumnValue<T, F>>;
+	readonly [F in LayerColumn<C, 'update', P>]?: ColumnValue<T, F>;
 } & {
 	readonly [S in SubLayer<WritePath<C, 'update'>, P>]?: ChildChanges<C, `${P}.${S}`, T, S>;
 };
@@ -660,7 +645,7 @@ type Underived<M, Writable = WritableField<M>> = {
 };
 /** Writable fields the verb's root layer leaves out: a callback derives them (`placed_at`, a total). */
 type Unlisted<M, Cols, Fixed = never> = {
-	readonly [P in Exclude<WritableField<M>, Cols | Fixed>]?: Loose<ColumnValue<M, P>>;
+	readonly [P in Exclude<WritableField<M>, Cols | Fixed>]?: ColumnValue<M, P>;
 };
 /**
  * One create set: its create tree (the root columns the writer sent, required ones

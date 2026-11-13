@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Instant } from '@norbital-ai/store/date';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
 import { afterAll } from 'vitest';
 import { FacilityFailure } from '../src/decl/errors.ts';
@@ -759,7 +758,7 @@ describe('durable model sync', () => {
 					const delivery = {
 						kind: 'webhook' as const,
 						id: 'delivery',
-						at: Instant(f.t.clock.now()),
+						at: new Date(f.t.clock.now()).toISOString(),
 						headers: {},
 						body: {}
 					};

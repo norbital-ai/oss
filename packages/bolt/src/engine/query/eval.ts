@@ -1,10 +1,8 @@
 // `Pred` → JS (K3): the second evaluator, for live routing and tests. It must answer exactly as the SQL compiler does
 // (`sql.ts`); a randomized test holds the two equal. A null never matches (SQL's unknown collapses to false), `ne` and
 // negated membership use "distinct from", and `not` negates the collapsed value.
-import { Predicate } from 'effect';
-import { Decimal } from '@norbital-ai/store/decimal';
-import { equal_json } from '@norbital-ai/store/kind';
-import { utc_of } from '@norbital-ai/store/zone';
+import { BigDecimal, DateTime, Predicate } from 'effect';
+import { decimal_text, equal_json } from '@norbital-ai/store/kind';
 import type { Authority, Bindings, RowData } from '../contracts.ts';
 
 import { BoltError } from '../../protocol/errors.ts';
@@ -45,7 +43,9 @@ export function startOfDate(
 }
 /** The instant of 00:00 on `date` in `tz`. */
 export function midnight(date: string, tz: string): string {
-	return new Date(utc_of(date, 0, tz)).toISOString();
+	return DateTime.formatIso(
+		DateTime.makeZonedUnsafe(`${date}T00:00:00`, { timeZone: tz, adjustForTimeZone: true, disambiguation: 'compatible' })
+	);
 }
 /** Resolve a tagged dynamic operand once against this invocation's fixed bindings. */
 export function operand(
@@ -144,18 +144,21 @@ const cmp = (field: Pick<FieldInfo, 'pg' | 'email'>, op: Cmp, a: Json | undefine
 };
 
 /** PostgreSQL numeric_avg uses numeric division's base-10000 scale selection. */
-function average(sum: Decimal, count: number): Decimal {
-	const leading = (value: Decimal) => {
-		const text = value.abs().toString(), all = text.replace('.', ''), digits = all.replace(/^0+/, '');
-		if (digits === '') return { weight: 0, digit: 0 };
-		const point = text.indexOf('.'), before = point < 0 ? text.length : point;
-		const exponent = before - (all.length - digits.length) - 1, weight = Math.floor(exponent / 4);
+function average(sum: BigDecimal.BigDecimal, count: number): BigDecimal.BigDecimal {
+	const leading = (value: BigDecimal.BigDecimal) => {
+		const n = BigDecimal.normalize(BigDecimal.abs(value)), digits = n.value.toString();
+		if (n.value === 0n) return { weight: 0, digit: 0 };
+		const exponent = digits.length - n.scale - 1, weight = Math.floor(exponent / 4);
 		const width = exponent - weight * 4 + 1;
 		return { weight, digit: Number(digits.slice(0, width).padEnd(width, '0')) };
 	};
-	const a = leading(sum), b = leading(Decimal.of(count));
+	const total = BigDecimal.fromBigInt(BigInt(count));
+	const a = leading(sum), b = leading(total);
 	const weight = a.weight - b.weight - (a.digit <= b.digit ? 1 : 0);
-	return sum.div(count, Math.min(1000, Math.max(0, sum.scale, 16 - weight * 4)));
+	return BigDecimal.round(BigDecimal.divideUnsafe(sum, total), {
+		scale: Math.min(1000, Math.max(0, sum.scale, 16 - weight * 4)),
+		mode: 'half-from-zero'
+	});
 }
 type Range = { lo: bigint | string; hi: bigint | string | null };
 function range(f: FieldInfo, v: Json | undefined): Range | null {
@@ -324,13 +327,13 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 				}, 0);
 				return cmp({ pg: f.pg }, p.op, p.fn === 'avg' ? sum / values.length : sum, p.arg);
 			}
-			let sum = Decimal.of(0);
+			let sum = BigDecimal.fromBigInt(0n);
 			for (const value of values) {
 				const numeric = storedDecimal(value);
 				if (numeric === undefined) throw invalid('a numeric aggregate needs numeric values');
-				sum = sum.plus(numeric);
+				sum = BigDecimal.sum(sum, numeric);
 			}
-			return cmp({ pg: 'numeric' }, p.op, (p.fn === 'avg' ? average(sum, values.length) : sum).toJSON(), p.arg);
+			return cmp({ pg: 'numeric' }, p.op, decimal_text(p.fn === 'avg' ? average(sum, values.length) : sum), p.arg);
 		}
 		case 'json':
 			return contains(field(env, c, row, p.field), p.contains, true);

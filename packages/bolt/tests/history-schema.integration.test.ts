@@ -397,7 +397,7 @@ describe('versioned record history', () => {
 					)
 				);
 				expect(snapshot.values).toMatchObject({
-					amount: { $dec: '9007199254740993.1234' },
+					amount: '9007199254740993.1234',
 					location: { lng: 103.8, lat: 1.3 },
 					span: { from: '2026-01-01', to: '2026-01-31' }
 				});

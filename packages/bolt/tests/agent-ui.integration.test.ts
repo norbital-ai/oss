@@ -5,8 +5,7 @@ import { with_accounts } from './support/accounts.ts';
 // list the envoy conversations with an unread mark; `read_file` reads an xlsx into std/sheet's cells.
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from '@effect/vitest';
-import { parse_instant } from '@norbital-ai/store/date';
-import { Context, Effect, Layer, Option, Result, Schema, Stream } from 'effect';
+import { Context, DateTime, Effect, Layer, Option, Result, Schema, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Agents, Conversations } from '../src/engine/services.ts';
@@ -414,6 +413,6 @@ describe('read_file on an xlsx', () => {
 		]);
 		const clock = cells[0]?.[1];
 		if (typeof clock !== 'string') throw new Error('ISO clock cell missing');
-		expect(parse_instant(clock, 'Asia/Kuala_Lumpur')).toBe('2026-06-03T00:15:30.125Z');
+		expect(DateTime.formatIso(DateTime.makeUnsafe(clock))).toBe('2026-06-03T00:15:30.125Z');
 	});
 });

@@ -57,7 +57,7 @@
 	import { format_value as show } from '../kinds/kind.js';
 	import { Effect, Predicate, Queue, Stream } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { encode_wire } from '@norbital-ai/store/wire';
+	
 	import { fork } from '../effect/index.js';
 	import { Button } from '../primitives/button/index.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
@@ -309,7 +309,7 @@
 						or: found.value.map(
 							(lane): Json =>
 								lane.where ?? {
-									[by]: lane.value === null ? { is_null: true } : { eq: encode_wire(lane.value) }
+									[by]: lane.value === null ? { is_null: true } : { eq: lane.value }
 								}
 						)
 					};
@@ -362,7 +362,7 @@
 		and(
 			scope,
 			lane.where ?? {
-				[by]: lane.value === null ? { is_null: true } : { eq: encode_wire(lane.value) }
+				[by]: lane.value === null ? { is_null: true } : { eq: lane.value }
 			}
 		);
 	// the lane expanded in the dialog, by its key; the button that opened it takes the focus back

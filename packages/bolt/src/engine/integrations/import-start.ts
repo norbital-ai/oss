@@ -1,5 +1,4 @@
-import { Effect } from 'effect';
-import { local_of, utc_of } from '@norbital-ai/store/zone';
+import { DateTime, Effect, Option } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
 import type { ImportStart, ImportStartInput } from '../../protocol/schema.ts';
 
@@ -13,10 +12,9 @@ export const resolveImportStart = (
 		return Effect.succeed({ ...input, selected_at: new Date(now).toISOString() });
 	const refused = () =>
 		BoltError.make('invalid_input', 'admission', 'Choose a valid start date and IANA time zone.');
-	// the zone functions throw for a zone the runtime does not know
-	const zoned = <A>(f: () => A) => Effect.try({ try: f, catch: refused });
 	return Effect.gen(function* () {
-		yield* zoned(() => local_of(now, input.zone));
+		const zone = Option.getOrUndefined(DateTime.zoneMakeNamed(input.zone));
+		if (zone === undefined) return yield* Effect.fail(refused());
 		if (input.kind === 'now') {
 			const since: ImportStart = {
 				kind: 'since',
@@ -33,10 +31,9 @@ export const resolveImportStart = (
 			new Date(parsed).toISOString().slice(0, 10) !== input.date
 		)
 			return yield* Effect.fail(refused());
-		const at = yield* zoned(() => utc_of(input.date, 0, input.zone));
-		if ((yield* zoned(() => local_of(at, input.zone))).date !== input.date)
-			return yield* Effect.fail(refused());
-		const since: ImportStart = { kind: 'since', at: new Date(at).toISOString(), zone: input.zone, origin: 'date' };
+		const at = DateTime.makeZonedUnsafe(`${input.date}T00:00:00`, { timeZone: zone, adjustForTimeZone: true, disambiguation: 'compatible' });
+		if (DateTime.formatIsoDate(at) !== input.date) return yield* Effect.fail(refused());
+		const since: ImportStart = { kind: 'since', at: DateTime.formatIso(at), zone: input.zone, origin: 'date' };
 		return since;
 	});
 };

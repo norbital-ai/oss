@@ -1,6 +1,6 @@
 // Durable attempt execution and settlement share one generation's stop and parking controls.
 import { Clock, Deferred, Effect, Option, Predicate, PubSub, Random } from 'effect';
-import { encode_wire } from '@norbital-ai/store/wire';
+
 import type { EffectEvent } from '../../protocol/effect-events.ts';
 import type { AutomationSpec } from '../../decl/runtime/automation.ts';
 import type { Json } from '../../decl/values.ts';
@@ -162,11 +162,11 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 				action: `${head.automation}.finish`,
 				actor: { kind: 'system', id: head.id, label: null },
 				run: head.id,
-				payload: encode_wire({
+				payload: {
 					automation: head.automation,
 					runIds: rows.map((row) => row.id),
 					result
-				})
+				}
 			},
 			nativeCommit(db.write, live.publish, c, CapturedResult).pipe(Effect.map((answer) => answer.captured.map((row) => row.id)))
 		).pipe(Effect.provideService(Audit, audit));
@@ -227,7 +227,7 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 					error: BoltError.make('invalid_input', 'decode', 'The run input did not decode.')
 				};
 			else {
-				if (decoded?.value !== undefined) input = encode_wire(decoded.value);
+				if (decoded?.value !== undefined) input = decoded.value;
 				// an effect runs as its writer; an automation as the system identity with its policies
 				const automation = m.automations[head.automation];
 				const holder: Holder | undefined =

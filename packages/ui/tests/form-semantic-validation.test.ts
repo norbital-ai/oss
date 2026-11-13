@@ -5,7 +5,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { Effect } from 'effect';
 import { it, afterEach, vi } from '@effect/vitest';
-import type { Json } from '@norbital-ai/store/wire';
+import type { Json } from '@norbital-ai/store';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { FormSpec } from '../src/form/draft.ts';
 import type { FormState as Form, SemanticIssue } from '../src/form/form-state.svelte.ts';

@@ -44,7 +44,7 @@ it.effect('refuses non-JSON current table metadata before registering a history 
 it('refuses destructive shape, precision, currency and reference changes', () => {
 	expect(
 		compatibleHistoryValue(
-			{ $dec: '100.00' },
+			'100.00',
 			{ kind: 'decimal', scale: 2 },
 			{ kind: 'decimal', scale: 2, precision: 4 }
 		)
@@ -52,11 +52,11 @@ it('refuses destructive shape, precision, currency and reference changes', () =>
 	expect(compatibleHistoryValue('2147483648', { kind: 'text' }, { kind: 'int' })).toBeUndefined();
 	expect(
 		compatibleHistoryValue(
-			{ $dec: '1.2345' },
+			'1.2345',
 			{ kind: 'money', currency: 'SGD', scale: 4 },
 			{ kind: 'money', currency: 'SGD', scale: 4 }
 		)
-	).toEqual({ $dec: '1.2345' });
+	).toEqual('1.2345');
 	expect(
 		compatibleHistoryValue(
 			{ title: 'Old', removed: 'Keep me' },
@@ -66,7 +66,7 @@ it('refuses destructive shape, precision, currency and reference changes', () =>
 	).toBeUndefined();
 	expect(
 		compatibleHistoryValue(
-			{ $dec: '1.234' },
+			'1.234',
 			{ kind: 'decimal', scale: 3 },
 			{ kind: 'decimal', scale: 2 }
 		)
@@ -76,7 +76,7 @@ it('refuses destructive shape, precision, currency and reference changes', () =>
 	).toBeUndefined();
 	expect(
 		compatibleHistoryValue(
-			{ $dec: '12.00' },
+			'12.00',
 			{ kind: 'money', currency: 'USD' },
 			{ kind: 'money', currency: 'SGD' }
 		)

@@ -1,6 +1,6 @@
 // Filtering and sorting loaded local rows, with their inferred exposure.
 import type { Value } from '@norbital-ai/store/kind';
-import { Decimal } from '@norbital-ai/store/decimal';
+import { BigDecimal, Option } from 'effect';
 import { type Node, type FilterClock, complete, taggedArg } from './node.js';
 import { value_object, type Kind } from '../kinds/kind.js';
 import { evaluated, bound } from './where.js';
@@ -8,20 +8,30 @@ import type { SortKey } from './order.js';
 import type { ModelExposure } from '../kinds/context.js';
 
 // ── a local array's rows, evaluated in the browser ──
+const DECIMAL = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i;
+/** A decimal's text (or a number) as its exact value, for comparing decimal text by value. */
+const decimalOf = (v: Value): Option.Option<BigDecimal.BigDecimal> =>
+	typeof v === 'number'
+		? BigDecimal.fromNumber(v)
+		: typeof v === 'string' && DECIMAL.test(v)
+			? BigDecimal.fromString(v)
+			: Option.none();
+const cmpDecimal = (a: Value, b: Value): number | undefined => {
+	if (typeof a !== 'string' && typeof b !== 'string') return undefined;
+	const x = decimalOf(a),
+		y = decimalOf(b);
+	return Option.isSome(x) && Option.isSome(y) ? BigDecimal.Order(x.value, y.value) : undefined;
+};
 const cmpVal = (a: Value, b: Value): number =>
-	a instanceof Decimal &&
-	(b instanceof Decimal ||
-		typeof b === 'number' ||
-		(typeof b === 'string' && /^-?\d+(\.\d+)?$/.test(b)))
-		? a.cmp(b instanceof Decimal ? b : String(b))
-		: typeof a === 'string' &&
+	cmpDecimal(a, b) ??
+	(typeof a === 'string' &&
 			  typeof b === 'string' &&
 			  /^\d{4}-\d{2}-\d{2}T/.test(a) &&
 			  /^\d{4}-\d{2}-\d{2}T/.test(b)
 			? Date.parse(a) - Date.parse(b)
 			: typeof a === 'number' && typeof b === 'number'
 				? a - b
-				: String(a).localeCompare(String(b));
+				: String(a).localeCompare(String(b)));
 
 export function matches(
 	row: { readonly [f: string]: Value },
@@ -61,11 +71,19 @@ export function matches(
 				.filter((v) => v !== null);
 			if (n.q === 'sum' || n.q === 'avg') {
 				if (n.q === 'avg' && values.length === 0) return false;
-				value = values.reduce<Decimal>(
-					(sum, v) => sum.plus(Decimal.of(String(v))),
-					Decimal.of('0')
+				value = BigDecimal.format(
+					values.reduce(
+						(sum, v) => BigDecimal.sum(sum, BigDecimal.fromStringUnsafe(String(v))),
+						BigDecimal.fromBigInt(0n)
+					)
 				);
-				if (n.q === 'avg') target = Decimal.of(String(target)).times(String(values.length));
+				if (n.q === 'avg')
+					target = BigDecimal.format(
+						BigDecimal.multiply(
+							BigDecimal.fromStringUnsafe(String(target)),
+							BigDecimal.fromBigInt(BigInt(values.length))
+						)
+					);
 			} else {
 				if (values.length === 0) return false;
 				value = values.reduce((a, b) => (cmpVal(a, b) < 0 === (n.q === 'min') ? a : b));
@@ -125,9 +143,9 @@ export function matches(
 				});
 		}
 		case 'eq':
-			return v !== null && (v instanceof Decimal ? cmpVal(v, a) === 0 : String(v) === String(a));
+			return v !== null && (cmpDecimal(v, a) ?? (String(v) === String(a) ? 0 : 1)) === 0;
 		case 'ne':
-			return v === null || (v instanceof Decimal ? cmpVal(v, a) !== 0 : String(v) !== String(a));
+			return v === null || (cmpDecimal(v, a) ?? (String(v) === String(a) ? 0 : 1)) !== 0;
 		case 'in':
 			return list.some((x) => String(x) === String(v));
 		case 'not_in':
@@ -195,8 +213,6 @@ export function localExposure(
 ): ModelExposure {
 	const kindOf = (f: string): Kind => {
 		const v = rows.map((r) => r[f] ?? null).find((x) => x !== null);
-		if (v instanceof Decimal)
-			return { kind: 'decimal', scale: v.scale, optional: true, label: labels(f) };
 		return {
 			kind: typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'bool' : 'text',
 			optional: true,
