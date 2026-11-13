@@ -253,9 +253,8 @@ export const clientDevServer = Effect.fn('bolt.clientDevServer')(function* (
 						// every Svelte file up front: a dependency found only when a lazy page loads re-bundles the others under a new
 						// version, and the open page then holds two Svelte runtimes (`effect_orphan`)
 						entries: ['src/**/*.svelte'],
-						// ui's dependencies (CommonJS, or imported only when a map mounts): Vite never crawls a package's Svelte files, so
-						// it would not find them to pre-bundle
-						include: [...PREBUNDLED, '@norbital-ai/ui > qrcode', '@norbital-ai/ui > maplibre-gl'],
+						// ui's CommonJS dependencies: Vite never crawls a package's Svelte files, so it would not find them to pre-bundle
+						include: [...PREBUNDLED, '@norbital-ai/ui > qrcode'],
 						// the platform's packages in one chunk, not dozens, each entry a facade over it; other packages split as
 						// imported (a lazy editor or map stays lazy). Strict order: a module in it runs when imported, not when the
 						// chunk loads (`svelte/internal` throws when run)

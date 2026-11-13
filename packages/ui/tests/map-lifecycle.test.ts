@@ -7,13 +7,13 @@ import { basemap_style } from '../src/map/basemap.ts';
 
 type Style = { layers: readonly { id: string; paint?: { readonly [property: string]: unknown } }[] };
 type Bounds = readonly [readonly [number, number], readonly [number, number]];
-// MapLibre at its boundary: happy-dom has no WebGL. Projection is linear (10px a degree) so marks land predictably.
+// MapLibre at its boundary (its CDN load): happy-dom has no WebGL. Projection is linear (10px a degree) so marks land predictably.
 const gl = vi.hoisted(() => {
 	const lands: unknown[] = [], fits: unknown[] = [], eased: unknown[] = [];
 	const live: { zoom: number; fire: (event: string) => void }[] = [];
 	return { maps: 0, removed: 0, zoom: 3, lands, fits, eased, live, inView: false };
 });
-vi.mock('maplibre-gl', () => {
+vi.mock('https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/dist/maplibre-gl.mjs', () => {
 	const land = (style: Style) => style.layers[0]?.paint?.['background-color'];
 	class Map {
 		zoom = gl.zoom;
@@ -45,7 +45,7 @@ vi.mock('maplibre-gl', () => {
 		remove = () => { gl.removed++; };
 	}
 	class NavigationControl {}
-	return { Map, NavigationControl, setWorkerUrl: () => {}, getVersion: () => '6.16.0' };
+	return { Map, NavigationControl, setWorkerUrl: () => {} };
 });
 afterEach(() => {
 	gl.maps = gl.removed = 0;

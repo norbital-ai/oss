@@ -1,6 +1,5 @@
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
-@import 'maplibre-gl/dist/maplibre-gl.css';
 @import 'tailwindcss' source(none);
 /* Every ui component; the bolt bundler adds `@source` for the shell and the workspace's own pages. */
 @source './';
@@ -1153,7 +1152,8 @@ html {
 		opacity: 1;
 	}
 }
-/* MapLibre's controls (zoom, attribution) on our surfaces; the basemap itself is drawn by `map/basemap.ts`. */
+/* MapLibre's controls (zoom, attribution) on our surfaces; its own stylesheet loads first with it (`map/maplibre.ts`), the
+   basemap is drawn by `map/basemap.ts`. */
 .maplibregl-map {
 	font: 0.75rem / 1.4 var(--font-sans);
 }

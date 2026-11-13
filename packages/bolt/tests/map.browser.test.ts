@@ -9,7 +9,7 @@ import { scriptedBolt } from '../../ui/tests/scripted-bolt.ts';
 import { required } from './support/required.ts';
 import './support/shell.css';
 
-// MapLibre draws in a real WebGL context; the marks, card and list over it are ours. Tiles come from the network and are
+// MapLibre (loaded from its CDN) draws in a real WebGL context; the marks, card and list over it are ours. Tiles come from the network and are
 // not waited for: a missing tile leaves the marks working.
 it('mounts MapLibre on a WebGL canvas, places the marks on it and opens a record from the card', async () => {
 	const catalog = {

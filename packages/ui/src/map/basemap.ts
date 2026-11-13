@@ -1,7 +1,8 @@
 // The one basemap every map wears: MapLibre over OpenFreeMap's keyless OpenMapTiles vector tiles, drawn by our own style
-// from the design tokens (paper in light, midnight in dark), labelled in Geist. MapLibre loads only when a map mounts.
+// from the design tokens (paper in light, midnight in dark), labelled in Geist. MapLibre loads from its CDN when a map mounts.
 import { Effect, type Scope } from 'effect';
 import type { Map as MapLibre } from 'maplibre-gl';
+import { load_maplibre } from './maplibre.js';
 
 type Style = Exclude<Parameters<MapLibre['setStyle']>[0], string | null>;
 type Layer = Style['layers'][number];
@@ -207,11 +208,9 @@ export const basemap = (
 ): Effect.Effect<{ map: MapLibre; maplibre: typeof import('maplibre-gl') }, BasemapFailed, Scope.Scope> =>
 	Effect.gen(function* () {
 		const maplibre = yield* Effect.tryPromise({
-			try: () => import('maplibre-gl'),
+			try: load_maplibre,
 			catch: (cause): BasemapFailed => ({ _tag: 'BasemapFailed', cause })
 		});
-		// MapLibre looks for its worker beside its own module, which a bundle moves: the same release's worker from the CDN
-		maplibre.setWorkerUrl(`https://cdn.jsdelivr.net/npm/maplibre-gl@${maplibre.getVersion()}/dist/maplibre-gl-worker.mjs`);
 		const dark = () => node.closest('.dark') !== null;
 		const map = yield* Effect.acquireRelease(
 			Effect.try({
