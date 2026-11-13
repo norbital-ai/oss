@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { q } from '@norbital-ai/std/sql';
+import { q } from '@norbital-ai/store';
 import {
 	answer,
 	catalog_of,

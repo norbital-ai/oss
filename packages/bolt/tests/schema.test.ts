@@ -67,7 +67,7 @@ describe('next schema: fingerprint and plan', () => {
 	});
 
 	it.effect(
-		'plans nothing with keys reordered; adding a field also refreshes its native row guard',
+		'plans nothing with keys reordered; adding a field to an unlocked table leaves its native row guard',
 		() =>
 			Effect.gen(function* () {
 				// jsonb orders keys by length: the applied slice comes back with `states` and predicate fields in another order
@@ -121,8 +121,7 @@ describe('next schema: fingerprint and plan', () => {
 					)
 				).toEqual({
 					'create:column:signings.nickname': 'additive',
-					'replace:history:schema:signings': 'additive',
-					'replace:trigger:signings.store_row_rules': 'additive'
+					'replace:history:schema:signings': 'additive'
 				});
 				// the refusal map names what the plan created
 				expect([...(yield* constraint_index(applied)).keys()].sort()).toEqual(
@@ -180,8 +179,7 @@ describe('next schema: fingerprint and plan', () => {
 				)
 			).toEqual({
 				'create:column:notes.tag': 'additive',
-				'replace:history:schema:notes': 'additive',
-				'replace:trigger:notes.store_row_rules': 'additive'
+				'replace:history:schema:notes': 'additive'
 			});
 			expect(
 				yield* classes(
@@ -191,8 +189,7 @@ describe('next schema: fingerprint and plan', () => {
 			).toEqual({
 				'create:column:notes.tag': 'additive',
 				'create:notNull:notes.tag': 'validating',
-				'replace:history:schema:notes': 'additive',
-				'replace:trigger:notes.store_row_rules': 'additive'
+				'replace:history:schema:notes': 'additive'
 			});
 			expect(
 				yield* classes(

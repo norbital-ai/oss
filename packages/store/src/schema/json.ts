@@ -1,5 +1,5 @@
 // The persisted JSON structure follows std's kind codecs; file bytes and reference visibility belong to the host.
-import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { UUID_PATTERN } from '../lang/kind.ts';
 export const JSON_VALID = `create or replace function store_json_valid(value jsonb, spec jsonb) returns boolean
 language plpgsql immutable parallel safe set timezone = 'UTC' set datestyle = 'ISO,YMD' as $store_json$
 declare

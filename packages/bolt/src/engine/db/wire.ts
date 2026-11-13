@@ -1,7 +1,7 @@
 // What both `TenantDb` adapters share: values cross as JSON, so every row
 // value is parsed from Postgres text the same way on PGlite and node-postgres, and every parameter is sent as text.
 import { Predicate } from 'effect';
-import { q, literal as quote_literal } from '@norbital-ai/std/sql';
+import { q, literal as quote_literal } from '@norbital-ai/store';
 import * as EffectArray from 'effect/Array';
 import type { DbBatch } from './tenant-db.ts';
 import type { Json } from '../../decl/values.ts';

@@ -1,4 +1,4 @@
-import { q } from './catalog.ts';
+import { q } from './sql.ts';
 import type { Sql } from './read/sql.ts';
 
 /** Fixed PostgreSQL catalog/administration programs. Identifiers are quoted; values stay parameters. */

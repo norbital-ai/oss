@@ -2,10 +2,10 @@
 // Find and Norbius mentions share scopes, field hints, labels and record requests.
 import { Cause, Effect, Fiber, FiberHandle } from 'effect';
 import type { Json } from '../../decl/values.ts';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Value } from '@norbital-ai/store/kind';
 import type { CommandItem, KindsHost, ModelExposure } from '@norbital-ai/ui';
 import { label_read } from '@norbital-ai/ui/read';
-import { label as recordTitle } from '@norbital-ai/std/label';
+import { label as recordTitle } from '@norbital-ai/store/label';
 import { based, type NavNode } from '../nav.ts';
 import { handle_words } from '../i18n.ts';
 import type { ManifestItem } from './manifest.ts';

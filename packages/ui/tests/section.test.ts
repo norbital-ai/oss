@@ -8,7 +8,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { it, afterEach, vi } from '@effect/vitest';
 import { viewFixture, jsonArray, jsonRecord, browser, type ViewScript } from './view-fixture.ts';
-import type { Json } from '@norbital-ai/std/wire';
+import type { Json } from '@norbital-ai/store/wire';
 import type { KindsHost } from '../src/kinds/context.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./section-harness.svelte');

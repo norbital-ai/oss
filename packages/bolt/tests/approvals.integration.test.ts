@@ -13,7 +13,7 @@ import { NativeReadRow, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 import { dynamic_read } from '../src/protocol/read-request.ts';
-import { label, label_expression } from '@norbital-ai/std/label';
+import { label, label_expression } from '@norbital-ai/store/label';
 import { inboxRequests, openRequests } from '../src/engine/approvals/inbox.ts';
 
 const required = <A>(value: A | undefined): A => {
@@ -109,7 +109,7 @@ const manifest: EngineManifest = {
 	},
 	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] }, finance: { policies: ['reviewer'] } }
 };
-const source = `import { Decimal } from '@norbital-ai/std/decimal';
+const source = `import { Decimal } from '@norbital-ai/store/decimal';
 const managerStep = (ids) => ({
 	name: 'Manager',
 	teams: [...new Set(ids.map((id) =>

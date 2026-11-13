@@ -1,12 +1,12 @@
 // Filter nodes and Where literals share one round-trip conversion boundary.
 import { type FilterClock, varOf, type Arg, type Node, complete, type Op, jsonObject, OpSchema, AggSchema, CmpSchema, type Quant } from './node.js';
 import { type Json, likePattern, isPoint } from '../kinds/kind.js';
-import { compile_var, evaluate_var } from '@norbital-ai/std/vars';
-import { utc_of } from '@norbital-ai/std/zone';
+import { compile_var, evaluate_var } from '@norbital-ai/store/vars';
+import { utc_of } from '@norbital-ai/store/zone';
 import { Match, Result, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { type Catalog, childOf, resolve, type Resolved, INDEX, filterable } from './catalog.js';
-import { type Where, input_schema } from '@norbital-ai/std/kind';
+import { type Where, input_schema } from '@norbital-ai/store/kind';
 import { type FilterVariables, varError, operandsFor, valueKind, litKind, grammarOps } from './operators.js';
 
 // ── literals ──

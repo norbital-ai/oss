@@ -6,7 +6,7 @@ import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { PAPER_SIZES } from '../decl/runtime/facilities.ts';
 import { MessageValues } from '../decl/errors/refusal.ts';
-import { Instant, Zone } from '@norbital-ai/std/date';
+import { Instant, Zone } from '@norbital-ai/store/date';
 
 /** An authoring phase: diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;

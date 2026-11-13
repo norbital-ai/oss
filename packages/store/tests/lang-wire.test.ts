@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
 import { Schema } from 'effect';
-import { Decimal, dec } from '../src/decimal.ts';
-import { encode_wire, revive_wire } from '../src/wire.ts';
+import { Decimal, dec } from '../src/lang/decimal.ts';
+import { encode_wire, revive_wire } from '../src/lang/wire.ts';
 
 describe('std/wire', () => {
 	it('revives `{ $dec }` and nothing else', () => {

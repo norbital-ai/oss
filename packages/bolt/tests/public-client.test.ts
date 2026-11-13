@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import { Cause, Effect, Exit, Schema } from 'effect';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { input_schema } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { input_schema } from '@norbital-ai/store/kind';
 import {
 	decodePublicHydration,
 	public_read_key,

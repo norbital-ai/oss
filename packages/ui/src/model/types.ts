@@ -1,5 +1,5 @@
-import type { Value } from '@norbital-ai/std/kind';
-import type { Json } from '@norbital-ai/std/wire';
+import type { Value } from '@norbital-ai/store/kind';
+import type { Json } from '@norbital-ai/store/wire';
 import type { OrderBy } from '../filter/order.js';
 import type { Query } from '../client/contract.js';
 export type Values = { readonly [field: string]: Value };

@@ -10,12 +10,12 @@
 // Verify makes an edited file safe: replay every file on a scratch database, build the schema itself on another, and
 // compare what the two hold (`introspect`); and the snapshot must be the schema the code declares.
 import { Effect, Predicate, Result, Schema } from 'effect';
-import { q as ident, literal as lit } from '@norbital-ai/std/sql';
+import { q as ident, literal as lit } from './sql.ts';
 import * as Base64 from 'effect/encoding/Base64';
 import { deflateSync, inflateSync } from 'fflate';
 import { StoreError } from './errors.ts';
-import { canonical, sha256_hex } from '@norbital-ai/std/hash';
-import { equal_json } from '@norbital-ai/std/json';
+import { canonical, sha256_hex } from './hash.ts';
+import { equal_json } from './lang/kind.ts';
 import { plan, statements, type Plan } from './schema/plan.ts';
 import type { SchemaSpec } from './schema/spec.ts';
 import { schema_snapshot, type SchemaSnapshot } from './schema/snapshot.ts';

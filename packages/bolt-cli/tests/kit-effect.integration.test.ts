@@ -2,8 +2,8 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { input_schema } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { input_schema } from '@norbital-ai/store/kind';
 import { id_of } from '@norbital-ai/bolt';
 import { dynamic_read, uuidv7 } from '@norbital-ai/bolt/protocol';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';

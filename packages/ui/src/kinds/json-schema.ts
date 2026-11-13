@@ -1,7 +1,7 @@
 import { Array as Arr, Predicate, Schema } from 'effect';
-import { DATATYPE_SHAPES, type JsonSchema } from '@norbital-ai/std/kind';
+import { DATATYPE_SHAPES, type JsonSchema } from '@norbital-ai/store/kind';
 import type { Json, Kind } from './kind.js';
-export type { JsonSchema } from '@norbital-ai/std/kind';
+export type { JsonSchema } from '@norbital-ai/store/kind';
 type JsonSchemaObject = Exclude<JsonSchema, boolean>;
 
 const optional = Schema.optionalKey;

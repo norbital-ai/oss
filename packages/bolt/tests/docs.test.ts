@@ -102,10 +102,7 @@ it.effect('one namespace per public entry, with its module and the entry summary
 			'bolt/page',
 			'bolt-cli/test',
 			'ui',
-			'ui/layout',
-			'std/date',
-			'std/zone',
-			'std/label'
+			'ui/layout'
 		])
 	);
 	expect(names).toEqual([...names].sort());
@@ -125,9 +122,14 @@ it.effect('the declaration functions are documented, and spec parameters list th
 		'app',
 		'automation',
 		'browser_start',
+		'compile',
+		'context',
 		'custom_field',
+		'evaluate',
+		'formula',
 		'group',
 		'id_of',
+		'input_schema',
 		'instance_id',
 		'is_instance',
 		'mcp',
@@ -192,7 +194,7 @@ it.effect('search ranks an exact name first and narrows by namespace', () => Eff
 		kind: 'type'
 	});
 	expect(
-		docs.search('add days', { namespaces: ['std/'] }).every((h) => h.namespace.startsWith('std/'))
+		docs.search('stack gap', { namespaces: ['ui/'] }).every((h) => h.namespace.startsWith('ui/'))
 	).toBe(true);
 	expect(docs.search('zzzz-no-such-word')).toEqual([]);
 	// a sentence finds what its words name, never nothing when one of them matches
@@ -202,7 +204,7 @@ it.effect('search ranks an exact name first and narrows by namespace', () => Eff
 	expect(names).toContain('app');
 	expect(names.some((n) => n.startsWith('Table'))).toBe(true);
 	expect(names).not.toContain('ApprovalPanel'); // "app" matches where a word starts, not inside "approval"
-	expect(docs.search('enum field kind values options')[0]).toMatchObject({ namespace: 'std/kind', name: 'Kind' });
+	expect(docs.search('enum field kind values options')[0]).toMatchObject({ namespace: 'bolt', name: 'Kind' });
 }));
 
 it.effect('documents native Effect service implementations needed by test layers', () => Effect.gen(function* () {

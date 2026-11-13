@@ -1,7 +1,7 @@
 // Wire values → what a statement binds: decimals as their text, periods as range literals, points as `(lng,lat)`,
 // shared by the read and write compilers and the DDL.
 import { Predicate } from 'effect';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '../sql.ts';
 import type { Json } from '../values.ts';
 import type { FieldInfo } from '../catalog.ts';
 

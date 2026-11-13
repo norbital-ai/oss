@@ -1,4 +1,4 @@
-import { q, literal as lit } from '@norbital-ai/std/sql';
+import { q, literal as lit } from '@norbital-ai/store';
 import type { SchemaObject, TableSpec } from '@norbital-ai/store';
 
 

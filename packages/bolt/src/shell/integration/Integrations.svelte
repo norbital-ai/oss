@@ -3,7 +3,7 @@
 	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
-	import type { Fields, Value } from '@norbital-ai/std/kind';
+	import type { Fields, Value } from '@norbital-ai/store/kind';
 	import { watch } from 'runed';
 	import {
 		Button,

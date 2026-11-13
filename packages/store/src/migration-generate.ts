@@ -1,8 +1,8 @@
 // Migration file authoring is separate from runtime validation, so a cell applying files carries no SQL generator.
 import { Effect } from 'effect';
-import { q, literal as lit } from '@norbital-ai/std/sql';
+import { q, literal as lit } from './sql.ts';
 import { StoreError } from './errors.ts';
-import { canonical } from '@norbital-ai/std/hash';
+import { canonical } from './hash.ts';
 import {
 	archive_of,
 	check_squash_sources,

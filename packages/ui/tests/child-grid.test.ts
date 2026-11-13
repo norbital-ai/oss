@@ -11,7 +11,7 @@ import {
 import { Effect } from 'effect';
 import './dom.ts';
 import assert from 'node:assert/strict';
-import type { Json } from '@norbital-ai/std/wire';
+import type { Json } from '@norbital-ai/store/wire';
 import type { RecordCapabilities, RecordParentContext } from '../src/record/types.ts';
 import type { KindsHost, ChildInput } from '../src/kinds/context.ts';
 import { it } from '@effect/vitest';

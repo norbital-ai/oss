@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@effect/vitest';
-import { compile, context, evaluate } from '../src/formula.ts';
+import { compile, context, evaluate } from '../src/lang/formula.ts';
 
 it('checks a declared object member against the requested result kind', () => {
 	const site = context(

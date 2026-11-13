@@ -1,8 +1,8 @@
 // Value types and literal grammars. Type-only: the runtime values are std's, and a row
 // holds exactly them (the guest prelude and the page client decode the wire into them): a `Decimal` instance, and a date and an
 // instant as std's branded ISO strings.
-import type { CurrencyCode as Iso4217, Decimal } from '@norbital-ai/std/decimal';
-import type { Duration, Instant, Offset, PlainDate } from '@norbital-ai/std/date';
+import type { CurrencyCode as Iso4217, Decimal } from '@norbital-ai/store/decimal';
+import type { Duration, Instant, Offset, PlainDate } from '@norbital-ai/store/date';
 export type { Decimal, Duration, Instant, Offset, PlainDate };
 export declare const brand: unique symbol;
 
@@ -50,5 +50,5 @@ export type Size = `${bigint}${'KiB' | 'MiB'}`;
 /** A rate literal: a count per unit or per duration (`'60/min'`, `'5/10min'`). */
 export type Rate = `${bigint}/${'s' | 'min' | 'h' | 'd' | Duration}`;
 
-export type { Json } from '@norbital-ai/std/wire';
+export type { Json } from '@norbital-ai/store/wire';
 export type NonEmpty<T> = readonly [T, ...T[]];

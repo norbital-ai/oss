@@ -1,6 +1,6 @@
 import { actor_ref } from '../access/actor.ts';
 // A request's flow snapshot and who may act on it: a step is decided by its teams' members or its users.
-import { equal_json } from '@norbital-ai/std/json';
+import { equal_json } from '@norbital-ai/store/kind';
 import type { Authority, EngineActor } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 

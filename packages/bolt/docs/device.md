@@ -62,7 +62,7 @@ rides the live lane: no polling, a `: ping` every 25 s, and it ends on a release
 
 `POST /__bolt/push` stores one device per endpoint, as its member's:
 
-- web: a browser `PushSubscription.toJSON()` (`https://` endpoint);
+- web: a browser `PushSubscription` as its JSON (`https://` endpoint);
 - APNs: `{ kind: 'apns', endpoint: <hex device token>, keys: { topic: <bundle id>, environment: 'development' |
 'production', team_id } }`;
 - `{ endpoint, remove: true }` forgets it.

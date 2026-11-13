@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Exit, Schema } from 'effect';
-import { input_schema } from '@norbital-ai/std/kind';
+import { input_schema } from '../src/lang/kind.ts';
 import { build, schema, table, type FieldSpec, type Json, type TableSpec } from '../src/index.ts';
 import { database, exec, script } from './support.ts';
 

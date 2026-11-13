@@ -3,7 +3,7 @@
 // conjoined with the reader's row filters at every level of the output it reads; an unscoped read is not. Rows come back as one jsonb value each, in wire form.
 // The store never runs a statement: the caller executes it and decodes its rows.
 import { Array as EffectArray, Effect, Result, Schema } from 'effect';
-import { KIND } from '@norbital-ai/std/kind';
+import { KIND } from '../lang/kind.ts';
 import { STORE_LIMITS } from '../limits.ts';
 import { StoreError } from '../errors.ts';
 import { CursorPayload } from '../cursor.ts';
@@ -30,7 +30,6 @@ import {
 	exposed_field,
 	exposed_relation,
 	index_column,
-	q,
 	stored_fields,
 	catalog_for,
 	DEFAULT_OUTPUT
@@ -38,9 +37,9 @@ import {
 import { argument_list, inline_leaf, UNSORTABLE } from '../decode.ts';
 import { ELEMENT, type PathTest } from '../ir.ts';
 import { comparable, inverted, json_path, period_test } from './values.ts';
-import { label_expression, label_text_sql } from '@norbital-ai/std/label';
-import { literal as lit } from '@norbital-ai/std/sql';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { label_expression, label_text_sql } from '../lang/label.ts';
+import { literal as lit, q } from '../sql.ts';
+import { UUID_PATTERN } from '../lang/kind.ts';
 
 /** One statement with positional parameters (`$1…`): its text is its shape, whatever its parameters are. */
 export type Sql = { readonly text: string; readonly params: readonly Json[] };

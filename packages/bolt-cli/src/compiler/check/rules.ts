@@ -15,8 +15,8 @@ import {
 	DRIVERS,
 	SYSTEM
 } from '@norbital-ai/bolt/tooling';
-import { clock_default } from '@norbital-ai/std/vars';
-import { label_expression, label_paths } from '@norbital-ai/std/label';
+import { clock_default } from '@norbital-ai/store/vars';
+import { label_expression, label_paths } from '@norbital-ai/store/label';
 
 export type Finding = { code: string; path: string; message: string; line?: number };
 const isList = <T>(v: T | readonly T[]): v is readonly T[] => Array.isArray(v);

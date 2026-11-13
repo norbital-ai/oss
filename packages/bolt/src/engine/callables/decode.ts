@@ -5,10 +5,10 @@ import {
 	type Kind,
 	type Value,
 	type Where
-} from '@norbital-ai/std/kind';
+} from '@norbital-ai/store/kind';
 import { Array as EffectArray, Effect, Predicate, Result, Schema, SchemaIssue } from 'effect';
 import type { Json } from '../../decl/values.ts';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { automation_fields, type AutomationInputSchema } from '../../decl/runtime/automation-input.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { LIMITS } from '../contracts.ts';

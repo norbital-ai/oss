@@ -1,6 +1,6 @@
 // An automation's source path supplies its name. The run body infers its input and output from its literal.
 import { Schema } from 'effect';
-import { duration_seconds } from '@norbital-ai/std/date';
+import { duration_seconds } from '@norbital-ai/store/date';
 import type { Actor } from '../access/actor.ts';
 import { attached, type AgentUse, type Body } from '../body.ts';
 import type { Act, BodyReturn, CallerQuery, Clock, Eff, MessageKey, RefuseAt } from '../ctx.ts';

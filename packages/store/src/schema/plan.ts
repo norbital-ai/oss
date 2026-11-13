@@ -4,8 +4,8 @@
 // destructive (a table or stored column dropped, or rebuilt; it needs acceptance). Rename hints (`was`) turn a drop plus
 // an add into a RENAME. Pure: the host reads what it applied, passes it in, and executes what comes back.
 import { Effect } from 'effect';
-import { q } from '@norbital-ai/std/sql';
-import { canonical, sha256_hex } from '@norbital-ai/std/hash';
+import { q } from '../sql.ts';
+import { canonical, sha256_hex } from '../hash.ts';
 import { StoreError } from '../errors.ts';
 import { RANK, schema_objects, schemaObjectsForClassification, type SchemaObject } from './ddl.ts';
 import type { SchemaSpec } from './spec.ts';

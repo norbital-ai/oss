@@ -1,5 +1,5 @@
 import { actor_ref } from '../engine/access/actor.ts';
-import { json_schema } from '@norbital-ai/std/kind';
+import { json_schema } from '@norbital-ai/store/kind';
 import { automation_fields } from '../decl/runtime/automation-input.ts';
 import { uuid } from '../engine/port.ts';
 // Each body enters one decoded route; all engine calls remain in the activation's Effect graph.

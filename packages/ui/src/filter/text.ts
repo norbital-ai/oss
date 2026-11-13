@@ -2,7 +2,7 @@
 import { type Catalog, INDEX, type Resolved, childOf, resolve } from './catalog.js';
 import type { SortKey } from './order.js';
 import { type Quant, type Op, varOf, type Arg, type Node, OpSchema } from './node.js';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Value } from '@norbital-ai/store/kind';
 import { litKind, variableName, opWord } from './operators.js';
 import { format, type Json, isPoint } from '../kinds/kind.js';
 import { Match, Schema } from 'effect';

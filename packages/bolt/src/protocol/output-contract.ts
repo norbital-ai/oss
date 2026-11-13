@@ -1,8 +1,8 @@
 // Declared operation results have one resolved wire contract on the server and in the browser.
 // This graph contains only decoding information: row/custom references have already been resolved by their owner.
 import { Schema, SchemaGetter } from 'effect';
-import { input_schema, KindSchema, type Kind, type KindCodec, type OutputKind, type Value } from '@norbital-ai/std/kind';
-import type { Json } from '@norbital-ai/std/wire';
+import { input_schema, KindSchema, type Kind, type KindCodec, type OutputKind, type Value } from '@norbital-ai/store/kind';
+import type { Json } from '@norbital-ai/store/wire';
 import { ProtocolFailed } from '../decl/errors.ts';
 import { RowStateFields } from './record-contracts.ts';
 

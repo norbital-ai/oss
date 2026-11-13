@@ -1,4 +1,4 @@
-import { KIND, type Kind, type FieldKind } from '@norbital-ai/std/kind';
+import { KIND, type Kind, type FieldKind } from '@norbital-ai/store/kind';
 
 type Editor =
 	| 'typed'

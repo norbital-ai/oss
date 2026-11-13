@@ -5,7 +5,7 @@
 // table's columns, refs and inverses are computed once per schema and then read by indexed access. Positions that take
 // a literal (`where`, `select`, `with`) are plain object types over a known table, so an unknown key is an excess
 // property, and TS checks a fresh literal against the instantiated type, not a constraint over every table.
-import type { InitialStampFields } from '@norbital-ai/std/kind';
+import type { InitialStampFields } from './lang/kind.ts';
 import type { Decimal, Duration, Instant, PlainDate } from './values.ts';
 import type {
 	DatePeriod,

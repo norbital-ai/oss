@@ -2,7 +2,7 @@
 // model declaration in `src/system` — its key, fields, computed fields and FKs — and its Schema is built from the same
 // declaration, so neither is a hand copy. A Schema is named for its table: a malformed row is refused naming it.
 import { Schema } from 'effect';
-import type { Kind } from '@norbital-ai/std/kind';
+import type { Kind } from '@norbital-ai/store/kind';
 import type { ComputedKind, ModelSpec } from '../../decl/model.ts';
 import type { Json } from '../../decl/values.ts';
 import { SYSTEM } from '../../system/index.ts';

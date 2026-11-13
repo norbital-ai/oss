@@ -1,16 +1,16 @@
-import { item_kind } from '@norbital-ai/std/kind';
+import { item_kind } from '@norbital-ai/store/kind';
 import { Array as Arr } from 'effect';
 // Field kinds as the ui sees them: the literal a model or an input declares, structurally, so ui needs no bolt
 // dependency. Pure functions only: display text, text parsing, advisory checks and empty values. The host decides; these
 // only keep a form from sending what decode would refuse, with the same messages.
 import { Predicate } from 'effect';
 
-import { Decimal } from '@norbital-ai/std/decimal';
-import type { Fields, FileRef, Json, Kind, KindOf, Point, Value } from '@norbital-ai/std/kind';
-import { input_schema } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import type { Fields, FileRef, Json, Kind, KindOf, Point, Value } from '@norbital-ai/store/kind';
+import { input_schema } from '@norbital-ai/store/kind';
 import { Schema, Result } from 'effect';
 import { KINDS, sortable } from './registry.js';
-import { label as title } from '@norbital-ai/std/label';
+import { label as title } from '@norbital-ai/store/label';
 export type { Fields, FileRef, Json, Kind, KindOf, Point, Value };
 
 /** The custom renderer registered for a built-in or tenant field. */

@@ -5,7 +5,7 @@
 // Each user row carries its sender header, which says whom the turn serves; plan, goals and mode ride a closing note.
 import { Predicate, Result } from 'effect';
 import * as EffectArray from 'effect/Array';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import type { Json } from '../../decl/values.ts';
 import type { AiMessage, Authority } from '../contracts.ts';
 import {
@@ -16,7 +16,7 @@ import {
 	type MessageRow
 } from './schema.ts';
 import type { StudioRole } from './tools.ts';
-import { equal_json } from '@norbital-ai/std/json';
+import { equal_json } from '@norbital-ai/store/kind';
 import { isList, isObj } from './draft.ts';
 import { confirmed_send } from '../conversations/status.ts';
 

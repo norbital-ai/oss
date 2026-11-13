@@ -1,4 +1,4 @@
-import { dec } from '@norbital-ai/std/decimal';
+import { dec } from '@norbital-ai/store/decimal';
 
 const NUMBER = '^-?[0-9]+([.][0-9]+)?$';
 const INSTANT = '^[0-9]{4}-[0-9]{2}-[0-9]{2}';

@@ -2,8 +2,8 @@ import { Deferred, Effect, Fiber, Queue, Schema, Stream, SubscriptionRef } from 
 import { HttpClient, HttpClientResponse } from 'effect/http';
 import { TestClock } from 'effect/testing';
 import { expect, it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { input_schema } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { input_schema } from '@norbital-ai/store/kind';
 import { create_bolt } from '../src/page/bolt.ts';
 import { liveStream, type EventSourceLike } from '../src/page/stream.ts';
 import { browserTransport, updating } from '../src/protocol/client.ts';

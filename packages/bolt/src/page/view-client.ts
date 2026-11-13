@@ -1,8 +1,8 @@
 // Native controls share the page transport without choosing an unrelated result type or exposing native reads to authors.
 import { Array as Arr, Effect, Result, Schema, SchemaGetter } from 'effect';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { KindSchema, type Value } from '@norbital-ai/std/kind';
-import { encode_wire, type Json } from '@norbital-ai/std/wire';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { KindSchema, type Value } from '@norbital-ai/store/kind';
+import { encode_wire, type Json } from '@norbital-ai/store/wire';
 import type { ModelExposure, RecordOf, RowOf, SourceColumns, SourceRow, ViewBolt, ViewSource } from '@norbital-ai/ui';
 import { unref } from '@norbital-ai/ui/read';
 import { ReadFailed } from '../decl/errors.ts';

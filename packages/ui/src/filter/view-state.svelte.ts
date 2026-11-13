@@ -13,7 +13,7 @@ import { complete, type FilterClock, type Node } from './node.js';
 import { localFilterFields } from './local.js';
 import { orderKeys, orderOf, orderText, parseOrder, sortable, type SortKey } from './order.js';
 import type { Catalog, Offer } from './catalog.js';
-import type { Where } from '@norbital-ai/std/kind';
+import type { Where } from '@norbital-ai/store/kind';
 import { msg } from '../text/messages.js';
 import { currentSearchParams, replaceSearchParams } from '../utilities/url.js';
 

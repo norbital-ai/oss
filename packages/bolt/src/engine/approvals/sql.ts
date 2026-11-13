@@ -1,4 +1,4 @@
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 import { OPEN } from './machine.ts';
 
 /** Native state spelling comes from the machine; compact preserves history SQL's existing bytes. */

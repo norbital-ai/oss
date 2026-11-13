@@ -152,7 +152,7 @@ export function unref(
 				const known = refOf(r, rel);
 				if (known !== undefined) refs[rel] = known;
 			}
-		const out: { [f: string]: import('@norbital-ai/std/kind').Value } = { ...r };
+		const out: { [f: string]: import('@norbital-ai/store/kind').Value } = { ...r };
 		for (const rel of rels) {
 			const t = r[rel],
 				child = manyTarget(cat, of, rel);

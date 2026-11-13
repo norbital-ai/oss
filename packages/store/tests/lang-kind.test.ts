@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
 import { Result, Schema } from 'effect';
 import * as fc from 'fast-check';
-import { Decimal } from '../src/decimal.ts';
-import { IdValue, KIND, input_schema, type FieldKind, type Kind } from '../src/kind.ts';
+import { Decimal } from '../src/lang/decimal.ts';
+import { IdValue, KIND, input_schema, type FieldKind, type Kind } from '../src/lang/kind.ts';
 
 const decode = (k: Kind, v: unknown) => Schema.decodeUnknownResult(input_schema(k))(v);
 /** The wire form of an accepted value: decoded, then encoded. */

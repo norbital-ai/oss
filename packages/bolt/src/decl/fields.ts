@@ -6,7 +6,7 @@ import type {
 	TimePrecision,
 	Precision as InstantPrecision,
 	Where as KindWhere
-} from '@norbital-ai/std/kind';
+} from '@norbital-ai/store/kind';
 import type {
 	CurrencyCode,
 	Decimal,
@@ -44,7 +44,7 @@ export type {
 	DatePrecision,
 	TimePrecision,
 	Precision as InstantPrecision
-} from '@norbital-ai/std/kind';
+} from '@norbital-ai/store/kind';
 type SeqPattern = `${string}{${string}}${string}`;
 /** One state of a state field, its outgoing transitions and its automatic entry timestamp. */
 type StateSpec = {

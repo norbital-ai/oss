@@ -5,7 +5,7 @@ import { Effect, Schema } from 'effect';
 // The built-in file field groups stored files in one preview control. Editing also offers upload and removal.
 import './dom.ts';
 import assert from 'node:assert/strict';
-import type { FileRef, Value, Kind } from '@norbital-ai/std/kind';
+import type { FileRef, Value, Kind } from '@norbital-ai/store/kind';
 import type { KindsHost, KindView } from '../src/kinds/context.ts';
 import type { Row } from '../src/model/types.ts';
 import { jsonRecord } from './view-fixture.ts';

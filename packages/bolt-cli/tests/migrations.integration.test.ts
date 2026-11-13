@@ -17,7 +17,7 @@ import {
 	physical_hash,
 	record_applied
 } from '@norbital-ai/store';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { Decimal } from '@norbital-ai/store/decimal';
 import { scratchPath } from '../../../scripts/lib/scratch.ts';
 import { prepare_migrations } from '../src/compiler/migrations.ts';
 import {

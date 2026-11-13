@@ -1,6 +1,6 @@
 import { Schema } from 'effect';
-import { Decimal } from '@norbital-ai/std/decimal';
-import type { Value } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import type { Value } from '@norbital-ai/store/kind';
 import type { Values } from '../model/types.js';
 
 /** Explicit native commands only: an absent or unloaded row never means delete. */

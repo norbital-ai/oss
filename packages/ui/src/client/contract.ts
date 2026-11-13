@@ -1,13 +1,13 @@
 // The structural client boundary supplied by a host; UI has no Bolt package dependency.
 import type { Effect, Stream } from 'effect';
-import type { Json } from '@norbital-ai/std/wire';
-import type { Value, FileRef, FileUrlOptions, Kind } from '@norbital-ai/std/kind';
+import type { Json } from '@norbital-ai/store/wire';
+import type { Value, FileRef, FileUrlOptions, Kind } from '@norbital-ai/store/kind';
 import type { ModelKey, Page, RecordOf, Row, RowOf, SourceColumns, SourceRow, Values, ViewSource } from '../model/types.js';
 import type { RecordCapabilities, RecordParentContext, RestorePreview } from '../record/types.js';
 import type { Offer } from '../filter/catalog.js';
 import type { KindsHost } from '../kinds/context.js';
-export type { Json } from '@norbital-ai/std/wire';
-export type { FileRef } from '@norbital-ai/std/kind';
+export type { Json } from '@norbital-ai/store/wire';
+export type { FileRef } from '@norbital-ai/store/kind';
 /** A read's wire form (`Query<T>['read']`): the host's method and its arguments. */
 export type WireRead = { m: string; a: readonly Json[] };
 export type ReadError = Error &

@@ -1,6 +1,6 @@
 import { Predicate } from 'effect';
-import { encode_wire, type Json } from '@norbital-ai/std/wire';
-import type { Value } from '@norbital-ai/std/kind';
+import { encode_wire, type Json } from '@norbital-ai/store/wire';
+import type { Value } from '@norbital-ai/store/kind';
 import type { UiContext, ViewBolt } from './contract.js';
 import type { ModelExposure } from '../kinds/context.js';
 const withOutput = (layer: Json, output: string | undefined): Json =>

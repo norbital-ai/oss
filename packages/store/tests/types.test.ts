@@ -1,9 +1,9 @@
 import { it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
 import type { Effect } from 'effect';
-import type { Decimal } from '@norbital-ai/std/decimal';
-import type { PlainDate } from '@norbital-ai/std/date';
-import { Instant } from '@norbital-ai/std/date';
+import type { Decimal } from '../src/lang/decimal.ts';
+import type { PlainDate } from '../src/lang/date.ts';
+import { Instant } from '../src/lang/date.ts';
 import { schema, store, table, type Row, type Select, type Statement, type Where } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import type {

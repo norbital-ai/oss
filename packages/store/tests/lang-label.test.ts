@@ -1,54 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
-import { facts, validate_facts, type FactSpec } from '../src/facts.ts';
-import { Decimal } from '../src/decimal.ts';
-import { label, label_expression, label_paths } from '../src/label.ts';
-
-describe('std/facts', () => {
-	const specs: FactSpec[] = [
-		{
-			key: 'dependants',
-			type: 'number',
-			label: 'Dependants',
-			integer: true,
-			minimum: 0,
-			maximum: 9
-		},
-		{ key: 'resident', type: 'boolean', required: true },
-		{ key: 'status', type: 'string', options: ['K0', 'K1'] }
-	];
-	it('accepts sound declarations and refuses a bad one with its key', () => {
-		assert.equal(facts(specs), specs);
-		assert.throws(
-			() => facts([...specs, { key: 'resident', type: 'boolean' }]),
-			/resident: each key is declared once/
-		);
-		assert.throws(() => facts([{ key: 'x', type: 'string', minimum: 1 }]), /numeric constraints/);
-		assert.throws(
-			() => facts([{ key: 'x', type: 'number', required: true, default_value: 1 }]),
-			/required or has a default/
-		);
-		assert.throws(
-			() => facts([{ key: 'x', type: 'string', options: ['a'], default_value: 'b' }]),
-			/must be one of/
-		);
-		assert.throws(() => facts([{ key: '1x', type: 'string' }]), /a key is/);
-	});
-	it('validates values: undeclared keys, types, constraints; required only when complete', () => {
-		assert.equal(validate_facts(specs, { dependants: 2, status: 'K1' }), null);
-		assert.equal(
-			validate_facts(specs, { dependants: 2 }, { complete: true }),
-			'resident is required.'
-		);
-		assert.equal(validate_facts(specs, { dependants: 1.5 }), 'Dependants must be a whole number.');
-		assert.equal(
-			validate_facts(specs, { dependants: '2' }),
-			'Dependants must be a number; this value is a string.'
-		);
-		assert.equal(validate_facts(specs, { status: 'K9' }), 'status must be one of: K0, K1.');
-		assert.equal(validate_facts(specs, { other: 1 }), 'other is not a declared fact.');
-	});
-});
+import { Decimal } from '../src/lang/decimal.ts';
+import { label, label_expression, label_paths } from '../src/lang/label.ts';
 
 describe('std/label', () => {
 	it('evaluates CEL from the record and reports the fields needed to read it', () => {

@@ -1,6 +1,6 @@
 // Hosts execute committed SQL. Store owns immutable histories, alternatives and their physical replay proofs.
 import { Clock, Effect, FileSystem, Path, Schema } from 'effect';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 import {
 	APPLIED,
 	AppliedRow,

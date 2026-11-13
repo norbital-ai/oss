@@ -1,6 +1,6 @@
-import { Decimal } from '@norbital-ai/std/decimal';
-import type { Value } from '@norbital-ai/std/kind';
-import { revive_wire, type Json } from '@norbital-ai/std/wire';
+import { Decimal } from '@norbital-ai/store/decimal';
+import type { Value } from '@norbital-ai/store/kind';
+import { revive_wire, type Json } from '@norbital-ai/store/wire';
 import { Array as Arr, Result } from 'effect';
 
 /** A display projection of stored wire JSON; the original payload remains suitable for copying and storage. */

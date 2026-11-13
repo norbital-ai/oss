@@ -13,8 +13,8 @@ import {
 } from 'effect';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { describe, expect, it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { input_schema } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { input_schema } from '@norbital-ai/store/kind';
 import { create_bolt, patched } from '../src/page/bolt.ts';
 import type { EventSourceLike } from '../src/page/stream.ts';
 import {

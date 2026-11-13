@@ -15,7 +15,7 @@ import {
 } from '../manifest.ts';
 import { DEFAULT_OUTPUT, SYSTEM_COLUMN_SET, type Pred, type Var } from '@norbital-ai/store';
 import { SYSTEM } from '../../system/index.ts';
-import { compile_var, evaluate_var, type Requestor } from '@norbital-ai/std/vars';
+import { compile_var, evaluate_var, type Requestor } from '@norbital-ai/store/vars';
 import { or, toPred, TRUE } from './pred.ts';
 import { BoltError } from '../../protocol/errors.ts';
 

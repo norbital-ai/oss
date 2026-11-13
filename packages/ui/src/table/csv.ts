@@ -1,6 +1,6 @@
 import { format_value as show, currencyOf, minorDigits, shownKind } from '../kinds/kind.js';
 import type { Kind } from '../kinds/kind.js';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { Decimal } from '@norbital-ai/store/decimal';
 import type { Values } from '../model/types.js';
 import { valueAt } from '../cell/value.js';
 import { refOf } from '../relations/select.js';

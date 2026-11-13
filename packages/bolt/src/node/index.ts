@@ -33,3 +33,4 @@ export {
 } from './net.ts';
 export { tcp_port } from './tcp.ts';
 export { type_service } from '../typing/workspace.ts';
+export { OP_HEADERS, OP_WINDOW_MS, OpRefused, sign_op, verify_op, type NonceStore, type OpKey } from './host-op.ts';

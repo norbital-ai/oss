@@ -1,4 +1,4 @@
-import type { FileUrlOptions } from '@norbital-ai/std/kind';
+import type { FileUrlOptions } from '@norbital-ai/store/kind';
 import { resolve_device } from '../../page/device.ts';
 import { stored_file_url } from '../../page/file-ref.ts';
 import type { PublicBoot } from '../../protocol/public-page.ts';

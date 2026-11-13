@@ -2,8 +2,8 @@
 // output and path conjoined at every level, and the open approval request a root row of a holdable model
 // carries, for every reader — and the invocation's bindings as the operand resolver. A workspace read (the transform) has no scope. Statements a batch may fold into one are marked here.
 import { Effect } from 'effect';
-import { literal as lit } from '@norbital-ai/std/sql';
-import { local_of } from '@norbital-ai/std/zone';
+import { literal as lit } from '@norbital-ai/store';
+import { local_of } from '@norbital-ai/store/zone';
 import {
 	StoreError,
 	type CompileOptions,

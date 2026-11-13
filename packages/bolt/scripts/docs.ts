@@ -31,17 +31,14 @@ class DocsFailed extends Schema.TaggedError<DocsFailed>()('DocsFailed', {
 	cause: Schema.Defect()
 }) {}
 
-const PACKAGES = ['bolt', 'ui', 'std'];
-/** The reference a workspace author reads: bolt's root and `/page`, bolt-cli's test kit, ui's authoring entries and std. */
-const REFERENCE = (ns: string) =>
-	['bolt', 'bolt/page', 'bolt-cli/test', 'ui', 'ui/layout'].includes(ns) ||
-	ns.startsWith('std/');
+const PACKAGES = ['bolt', 'ui'];
+/** The reference a workspace author reads: bolt's root and `/page`, bolt-cli's test kit and ui's authoring entries. */
+const REFERENCE = (ns: string) => ['bolt', 'bolt/page', 'bolt-cli/test', 'ui', 'ui/layout'].includes(ns);
 /** What an author reads for each role: these symbols' shapes, generated into `bolt-contract` so a card cannot drift. */
 const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: readonly string[] } } = {
 	model: {
-		bolt: ['CreateInput', 'UpdateInput', 'WriteCtx', 'CarriedWrites'],
-		'bolt/declarations': ['ModelDeclaration', 'ModelLiteral'],
-		'std/kind': ['Kind']
+		bolt: ['CreateInput', 'UpdateInput', 'WriteCtx', 'CarriedWrites', 'Kind'],
+		'bolt/declarations': ['ModelDeclaration', 'ModelLiteral']
 	},
 	access: { bolt: ['team', 'policy', 'PolicyCtx', 'StoredTree', 'ApprovalFlow', 'Verdict'] },
 	automation: {
@@ -92,7 +89,7 @@ Runtime accounts are durable \`sys_integration\` rows, created in Settings or th
 
 For a daily channel message, read the intended active workspace account (\`owner\` null, with its intended \`envoy\`) and use \`yield* ctx.send(instance_id('whatsapp', account), { to: '<recipient handle or conversation id>', text: '<message>' })\` in the cron body. Import \`instance_id\` from \`@norbital-ai/bolt\`. Refuse when the account is missing or ambiguous; never silently choose another account. Sends are durably queued, and the provider's acknowledgement and retry outcome appear on the message. Retries of an automation may repeat committed sends: do not promise exactly-once delivery. The recipient's later replies use that account's envoy and the same conversation, with delivered messages in context.
 
-Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string: \`@norbital-ai/std/date\` has \`add_days\` and \`add_months\` for a date, and \`add_instant\` and \`diff_instants\` work with signed durations. A model's \`effect\` has the same two.
+Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string; do date and duration math with Effect's \`DateTime\` and \`Duration\` (\`DateTime.add(DateTime.makeUnsafe(ctx.today), { months: 1 })\`, \`DateTime.formatIsoDateUtc\`). A model's \`effect\` has the same two.
 
 In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.run_due()\` fires what is due at that instant. Assert \`expect(failed).toEqual([])\` first: a run that failed says why there, and nothing else will.`,
 	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares:

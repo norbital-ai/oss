@@ -35,7 +35,7 @@ const inflated = (name: string, data: Uint8Array): Uint8Array => {
 	return out;
 };
 
-/** std/sheet's cell (`@norbital-ai/std` sheet). */
+/** A worksheet cell. */
 export type Cell = string | number | boolean | null;
 const ENTITY: { readonly [e: string]: string } = {
 	lt: '<',

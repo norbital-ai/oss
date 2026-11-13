@@ -16,7 +16,7 @@ import { asset_path } from '@norbital-ai/bolt/artifact';
 import { rowsIn, seedPack } from '../seed.ts';
 import { BOLT, EXT } from '../bolt.ts';
 import { sha256_hex } from '@norbital-ai/store';
-import { datatype_issues } from '@norbital-ai/std/kind';
+import { datatype_issues } from '@norbital-ai/store/kind';
 
 type SeedAsset = PackJson['assets'][number];
 

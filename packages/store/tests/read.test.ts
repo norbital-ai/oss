@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
 import { Effect } from 'effect';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { Decimal } from '../src/lang/decimal.ts';
 import { build, read, schema, store, table, type Statement } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import { database, exec, run, script } from './support.ts';

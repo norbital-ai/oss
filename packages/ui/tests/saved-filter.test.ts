@@ -1,5 +1,5 @@
 import { expect, it } from '@effect/vitest';
-import { compile, context } from '@norbital-ai/std/formula';
+import { compile, context } from '@norbital-ai/store/formula';
 import { fromWhere, rowsWhere } from '../src/filter/where.ts';
 import { operandsFor, variablesFor, type FilterVariables } from '../src/filter/operators.ts';
 import { resolve, savedFilterCatalog } from '../src/filter/catalog.ts';

@@ -11,7 +11,7 @@ const csv = await import('../src/table/csv.ts');
 const d = await import('../src/form/draft.ts');
 import type { ViewBolt } from '../src/client/contract.ts';
 import type { Row, Page, Values } from '../src/model/types.ts';
-import type { Fields, Value } from '@norbital-ai/std/kind';
+import type { Fields, Value } from '@norbital-ai/store/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { DefaultsPart } from './defaults-harness.svelte';
 import { everyRow, viewFixture, type ReadOptions, type ViewScript } from './view-fixture.ts';

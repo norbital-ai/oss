@@ -81,7 +81,7 @@
 		"@iconify/svelte": "catalog:",
 		"@internationalized/date": "^3.12.4",
 		"@lezer/highlight": "^1.2.5",
-		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/store": "workspace:*",
 		"@tailwindcss/typography": "^0.5.20",
 		"bits-ui": "^2.20.2",
 		"clsx": "^2.1.1",

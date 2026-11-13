@@ -3,9 +3,9 @@ import { type Resolved, type Catalog, resolve, type Offer, type FilterStep, chil
 import { CmpSchema, type Op, type Node, type Arg, type Quant } from './node.js';
 import { litKind, type FilterVariables, varError, operandsFor, fieldsFor, operatorsFor, valueKind } from './operators.js';
 import { argOf, fieldNodes } from './where.js';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { Result, Schema } from 'effect';
-import { input_schema } from '@norbital-ai/std/kind';
+import { input_schema } from '@norbital-ai/store/kind';
 
 const valueFamily = (r: Resolved, op: Op): string => {
 	if (r.leaf === 'rel') return `rel:${[...r.targets].sort().join(',')}`;

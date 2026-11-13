@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Option, Schema } from 'effect';
-import { KindSchema } from '@norbital-ai/std/kind';
+import { KindSchema } from '@norbital-ai/store/kind';
 import { install } from '../src/decl/runtime/guest.ts';
 import { custom_field, policy } from '../src/index.ts';
 import { bind_model } from '../src/declarations.ts';

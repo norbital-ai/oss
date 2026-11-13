@@ -13,7 +13,7 @@ import type { Catalog } from '@norbital-ai/store';
 import type { RowApproval } from '../../decl/names.ts';
 import { GATED, type Chain } from '../write/sql.ts';
 import { capturePiece } from '../db/captured.ts';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 
 import { Snapshot } from './snapshot.ts';
 import { open_sql } from './sql.ts';

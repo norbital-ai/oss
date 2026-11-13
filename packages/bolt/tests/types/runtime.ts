@@ -2,7 +2,7 @@
 // is a planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
 import { app, automation, id_of, group, mcp, secrets, workspace } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
-import { currency } from '@norbital-ai/std/decimal';
+import { currency } from '@norbital-ai/store/decimal';
 import type { Actor, CurrencyCode, FileRef, Id, InstanceId, Instant, Row } from '../../src/index.ts';
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
 import type { SkillFrontmatter } from '../../src/decl/runtime/agent.ts';

@@ -1,7 +1,7 @@
 import { Effect, Result, Schema } from 'effect';
-import { Instant, PlainDate } from '@norbital-ai/std/date';
-import type { Wired } from '@norbital-ai/std/wire';
-import { local_of } from '@norbital-ai/std/zone';
+import { Instant, PlainDate } from '@norbital-ai/store/date';
+import type { Wired } from '@norbital-ai/store/wire';
+import { local_of } from '@norbital-ai/store/zone';
 import type { Query } from '../../page/page-bolt.ts';
 import { page_reads, readValue } from '../../page/read-value.ts';
 import { view_client } from '../../page/view-client.ts';

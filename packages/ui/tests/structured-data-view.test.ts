@@ -1,7 +1,7 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { Decimal } from '@norbital-ai/store/decimal';
 import type { ComponentProps } from 'svelte';
 import type { Kind, Value } from '../src/kinds/kind.ts';
 import type { JsonSchema } from '../src/kinds/json-schema.ts';

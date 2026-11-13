@@ -93,7 +93,7 @@ import {
 import { bindingsAt } from '../query/reader.ts';
 import type { EngineManifest, SkillSpec } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import type { AiRequest, AiResponse, Authority, Bindings, LogEvent } from '../contracts.ts';
 import { textOf } from './schema.ts';
 import { Authorities } from '../identity/actor.ts';

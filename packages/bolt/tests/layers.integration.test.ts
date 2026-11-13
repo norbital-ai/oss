@@ -4,7 +4,7 @@
 // `check` per verb judges the whole batch tree; `deny` refuses it, `approve` holds it.
 import { expect, layer } from '@effect/vitest';
 import { Effect, Layer, Schema, type Scope } from 'effect';
-import { input_schema } from '@norbital-ai/std/kind';
+import { input_schema } from '@norbital-ai/store/kind';
 import type { Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';

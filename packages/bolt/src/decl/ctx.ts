@@ -3,7 +3,7 @@
 // `yield*` them. Pages read through the same `query` (`page/page-bolt.ts`).
 import type { Effect } from 'effect';
 import type { Cursor } from '@norbital-ai/store';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Value } from '@norbital-ai/store/kind';
 import type { REFUSAL_CODES } from '../protocol/schema.ts';
 import type { Actor } from './access/actor.ts';
 import type { ApprovalFlow, Verdict } from './access/policy.ts';

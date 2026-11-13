@@ -1,8 +1,8 @@
 import { Array as EffectArray, Option, Predicate, Schema } from 'effect';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { q } from '@norbital-ai/std/sql';
-import { equal_json } from '@norbital-ai/std/json';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { q } from '@norbital-ai/store';
+import { equal_json } from '@norbital-ai/store/kind';
+import { encode_wire } from '@norbital-ai/store/wire';
 import type { Catalog, FieldInfo } from '@norbital-ai/store';
 import type { Json } from '../../decl/values.ts';
 import type { Captured, RowData } from '../contracts.ts';

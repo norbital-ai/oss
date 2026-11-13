@@ -2,7 +2,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { it as test, afterEach } from '@effect/vitest';
 import type { Component } from 'svelte';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Value } from '@norbital-ai/store/kind';
 import { element } from './elements.ts';
 import { bare_ctx } from './bare-ctx.ts';
 const { mount, unmount, flushSync, tick } = await import('svelte');

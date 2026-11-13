@@ -1,4 +1,4 @@
-import type { FileRef } from '@norbital-ai/std/kind';
+import type { FileRef } from '@norbital-ai/store/kind';
 import type { RunRow } from '../client/contract.js';
 import { Predicate } from 'effect';
 import { filesOf } from '../cell/value.js';

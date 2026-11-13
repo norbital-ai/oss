@@ -1,4 +1,4 @@
-import { equal_json } from '@norbital-ai/std/json';
+import { equal_json } from '@norbital-ai/store/kind';
 import type { Row, Values } from '../model/types.js';
 export type RowsOps = {
 	create?: Values[];

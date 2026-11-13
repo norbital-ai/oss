@@ -136,7 +136,7 @@
 
 <script lang="ts" generics="R extends object = Row">
 	import { FiberSet, Predicate, Schema } from 'effect';
-	import { encode_wire } from '@norbital-ai/std/wire';
+	import { encode_wire } from '@norbital-ai/store/wire';
 	import { fork, attach } from '../effect/index.js';
 	import { by_id, first_of, page_of, request_json } from '../read/request.js';
 	import { Button } from '../primitives/button/index.js';

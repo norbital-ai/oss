@@ -1,8 +1,8 @@
 // A model's own-field lock, evaluated in the browser exactly as the host's `evaluate` does for the predicates the
 // declaration language allows. Only the record's own scalar fields: a lock never reaches through a relation.
 import { Array as Arr } from 'effect';
-import { equal_json } from '@norbital-ai/std/json';
-import type { Json, Value, Where } from '@norbital-ai/std/kind';
+import { equal_json } from '@norbital-ai/store/kind';
+import type { Json, Value, Where } from '@norbital-ai/store/kind';
 import { value_object } from '../kinds/kind.js';
 import type { Values } from '../model/types.js';
 

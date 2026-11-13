@@ -3,19 +3,20 @@
 // connection (Bolt's engine, a host's control store). A statement's rows decode once, by Effect Schema codecs built
 // from the declaration (std's kind codecs: Decimal, PlainDate, Instant, periods, points, inline values), and the
 // decoded value is checked against that codec's own type side before it is handed back as `Row<S, T, Q>`.
-import { item_kind } from '@norbital-ai/std/kind';
+import { item_kind } from './lang/kind.ts';
 import { Array as EffectArray, Effect, Predicate, Schema } from 'effect';
-import { input_schema, type Kind } from '@norbital-ai/std/kind';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { encode_wire, type Wired } from '@norbital-ai/std/wire';
-import { catalog_of, exposure_of, q, type Catalog } from './catalog.ts';
+import { input_schema, type Kind } from './lang/kind.ts';
+import { Decimal } from './lang/decimal.ts';
+import { encode_wire, type Wired } from './lang/wire.ts';
+import { catalog_of, exposure_of, type Catalog } from './catalog.ts';
+import { q } from './sql.ts';
 import {
 	aggregate as decodeAggregate,
 	read as decodeRead,
 	where as decodeWhere
 } from './decode.ts';
 import { StoreError } from './errors.ts';
-import { sha256_hex } from '@norbital-ai/std/hash';
+import { sha256_hex } from './hash.ts';
 import type { ListRead, Pred, SelectIR } from './ir.ts';
 import { budgeted, Build, compile, items, OVER, pred, RAW, wire, type Sql } from './read/sql.ts';
 import { STORE_LIMITS } from './limits.ts';

@@ -2,12 +2,12 @@
 // silently ignored filter. Field names are checked against the model; exposure is the compiler's (it knows who reads).
 // Browser-safe.
 import { Array as EffectArray, Effect, Predicate, Result, Option, Schema } from 'effect';
-import { KIND } from '@norbital-ai/std/kind';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { duration_seconds, is_plain_date } from '@norbital-ai/std/date';
+import { KIND } from './lang/kind.ts';
+import { UUID_PATTERN } from './lang/kind.ts';
+import { Decimal } from './lang/decimal.ts';
+import { duration_seconds, is_plain_date } from './lang/date.ts';
 import { ELEMENT } from './ir.ts';
-import { compile_var, member_admits } from '@norbital-ai/std/vars';
+import { compile_var, member_admits } from './lang/vars.ts';
 import type {
 	Arg,
 	Bucket,

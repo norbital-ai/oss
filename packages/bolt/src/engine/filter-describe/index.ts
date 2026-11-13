@@ -20,9 +20,9 @@
 // No fallback (owner): a System 1 failure, or nothing chosen, applies nothing. The whole answers within
 // `FILTER_DEADLINE_MS`. Sorting is by an own sortable field or, one hop through an exposed one-relation, a target field.
 import { Array as EffectArray, Effect, Predicate, Result, Schema } from 'effect';
-import { equal_json } from '@norbital-ai/std/json';
-import { label_paths } from '@norbital-ai/std/label';
-import { KIND, type Kind } from '@norbital-ai/std/kind';
+import { equal_json } from '@norbital-ai/store/kind';
+import { label_paths } from '@norbital-ai/store/label';
+import { KIND, type Kind } from '@norbital-ai/store/kind';
 import type { ViewBolt } from '@norbital-ai/ui';
 import { Ai } from '../ports.ts';
 import { Decisions, Manifest, Reads, type DecisionsShape, type ReadsShape } from '../services.ts';

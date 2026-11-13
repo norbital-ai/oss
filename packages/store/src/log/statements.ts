@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { q, literal as lit } from '@norbital-ai/std/sql';
+import { q, literal as lit } from '../sql.ts';
 import { StoreError } from '../errors.ts';
 import type { Sql } from '../read/sql.ts';
 import type { Json } from '../values.ts';

@@ -1,6 +1,6 @@
 /** SQL Server integration programs. Declarations cross the guest boundary; only the host compiles TDS statements. */
 import { Schema } from 'effect';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from './sql.ts';
 
 const Name = Schema.NonEmptyString.check(Schema.isMaxLength(128));
 const ParameterName = Name.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/));

@@ -1,14 +1,14 @@
 import { Predicate } from 'effect';
-import type { FileRef } from '@norbital-ai/std/kind';
+import type { FileRef } from '@norbital-ai/store/kind';
 import type { Values } from '../model/types.js';
 import { isFile } from '../kinds/kind.js';
 export const filesOf = (value: unknown): readonly FileRef[] =>
 	(Array.isArray(value) ? value : [value]).filter(isFile);
 /** Typed text in the shape of a sample value of the same field: a number, a boolean, else the literal text. */
 export function like(
-	sample: import('@norbital-ai/std/kind').Value | undefined,
+	sample: import('@norbital-ai/store/kind').Value | undefined,
 	text: string
-): import('@norbital-ai/std/kind').Value {
+): import('@norbital-ai/store/kind').Value {
 	if (text === '') return null;
 	const s = sample ?? null;
 	if (typeof s === 'number') return Number(text);
@@ -19,10 +19,10 @@ export function like(
 export const valueAt = (
 	row: Values,
 	path: string
-): import('@norbital-ai/std/kind').Value | undefined =>
+): import('@norbital-ai/store/kind').Value | undefined =>
 	path
 		.split('.')
-		.reduce<import('@norbital-ai/std/kind').Value | undefined>(
+		.reduce<import('@norbital-ai/store/kind').Value | undefined>(
 			(v, k) => (Predicate.isObject(v) ? v[k] : undefined),
 			row
 		);

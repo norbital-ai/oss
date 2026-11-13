@@ -29,7 +29,7 @@ import { SqlReadCapture, TenantDb as TenantDbService } from '../db/tenant-db.ts'
 import { Ai } from '../ports.ts';
 
 import { decodeInput, type Decoded } from '../callables/decode.ts';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { agentRead } from '../agent/reads.ts';
 import { runList } from '../runs/rows.ts';
 import { read_history } from './history.ts';

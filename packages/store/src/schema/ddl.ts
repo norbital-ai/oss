@@ -7,7 +7,7 @@
 // IMMEDIATE (a natural key is not: it is an `on conflict` arbiter). Every table carries the native row rules.
 import { Effect, Predicate, Schema } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
-import { sha256, to_hex, canonical } from '@norbital-ai/std/hash';
+import { sha256, to_hex, canonical } from '../hash.ts';
 import type { Json } from '../values.ts';
 import type { Catalog } from '../catalog.ts';
 import { catalog_of, index_column, RECORD_LABEL_COLUMN } from '../catalog.ts';
@@ -15,13 +15,13 @@ import { where } from '../decode.ts';
 import { own_pred_sql } from '../write/predicate.ts';
 import { json_path } from '../read/values.ts';
 import { StoreError } from '../errors.ts';
-import { clock_default } from '@norbital-ai/std/vars';
+import { clock_default } from '../lang/vars.ts';
 import { search_functions } from './search.ts';
-import { ROW_RULES } from './rules.ts';
+import { ROW_RULES, STATEMENT_RULES } from './rules.ts';
 import { JSON_VALID } from './json.ts';
 import { SchemaSpec as SchemaSpecSchema, type SchemaSpec, type Expr, type FieldSpec, type RefSpec, type TableSpec } from './spec.ts';
-import { label_expression, label_text_sql } from '@norbital-ai/std/label';
-import { q, literal as lit } from '@norbital-ai/std/sql';
+import { label_expression, label_text_sql } from '../lang/label.ts';
+import { q, literal as lit } from '../sql.ts';
 import { wire } from '../read/sql.ts';
 
 type Fx<A> = Effect.Effect<A, StoreError>;
@@ -604,6 +604,15 @@ const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
 				create: [ROW_RULES],
 				drop: 'drop function if exists store_row_rules()'
 			});
+		if (Object.keys(s.tables).length > 0)
+			push({
+				id: 'function:store_statement_rules',
+				rank: 'function',
+				table: '',
+				deps: [],
+				create: [STATEMENT_RULES],
+				drop: 'drop function if exists store_statement_rules()'
+			});
 		if (Object.values(s.tables).some((m) => (m.no_overlap ?? []).length > 0))
 			push({
 				id: 'extension:btree_gist',
@@ -762,19 +771,8 @@ const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
 					.filter(([, kind]) => !['seq', 'sum', 'count'].includes(kind.kind))
 					.map(([name]): [string, readonly string[]] => [name, t.fieldCols.get(name) ?? [name]])
 			);
-			const config = {
-				locks: yield* locksOf(t),
-				key: keyNames,
-				audit: workspace,
-				states: statesOf(t.spec),
-				fields,
-				parents: parents.sort(
-					(a, b) =>
-						a.table.localeCompare(b.table) ||
-						a.column.localeCompare(b.column) ||
-						a.relation.localeCompare(b.relation)
-				)
-			};
+			const locks = yield* locksOf(t);
+			const states = statesOf(t.spec);
 			push({
 				id: `trigger:${t.model}.store_row_rules`,
 				rank: 'index',
@@ -789,10 +787,39 @@ const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
 					])
 				],
 				create: [
-					`create trigger store_row_rules before insert or update or delete on ${T} for each row execute function store_row_rules(${lit(canonical(config))})`
+					`create trigger store_row_rules before insert or update or delete on ${T} for each row execute function store_row_rules(${lit(canonical({ key: keyNames, audit: workspace, states }))})`
 				],
 				drop: `drop trigger if exists store_row_rules on ${T}`
 			});
+			// a parent is read only for a lock that holds this relation
+			const guarded = parents
+				.map((parent) => ({ ...parent, locks: parent.locks.filter((lock) => !lock.except.includes(parent.relation)) }))
+				.filter((parent) => parent.locks.length > 0)
+				.sort(
+					(a, b) =>
+						a.table.localeCompare(b.table) ||
+						a.column.localeCompare(b.column) ||
+						a.relation.localeCompare(b.relation)
+				);
+			const statement = canonical({ locks, key: keyNames, states, fields, parents: guarded });
+			const deps = [...new Set([...keyNames, ...Object.values(fields).flat(), ...guarded.map((p) => p.column)])];
+			// one trigger per event: transition tables refuse a trigger on several events
+			for (const [event, tables] of [
+				['insert', 'new table as store_new'],
+				['update', 'old table as store_old new table as store_new'],
+				['delete', 'old table as store_old']
+			] as const)
+				if (guarded.length > 0 || (event !== 'insert' && locks.length > 0))
+					push({
+						id: `trigger:${t.model}.store_statement_rules_${event}`,
+						rank: 'index',
+						table: t.model,
+						deps,
+						create: [
+							`create trigger store_statement_rules_${event} after ${event} on ${T} referencing ${tables} for each statement execute function store_statement_rules(${lit(statement)})`
+						],
+						drop: `drop trigger if exists store_statement_rules_${event} on ${T}`
+					});
 
 			// Primary and identity columns already exist, but their declared value constraints still apply.
 			for (const name of [

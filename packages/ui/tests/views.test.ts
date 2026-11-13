@@ -17,11 +17,11 @@ import { reactive } from './kit-state.svelte.js';
 import { listRequest, unref, refOf, label_read } from '../src/relations/select.ts';
 import { recordText } from '../src/kinds/kind.ts';
 import { Effect } from 'effect';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { Decimal } from '@norbital-ai/store/decimal';
 import { format_value as show } from '../src/kinds/kind.ts';
 import { jsonRecord, viewFixture } from './view-fixture.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
-import type { Json } from '@norbital-ai/std/wire';
+import type { Json } from '@norbital-ai/store/wire';
 
 const bolt = { t: (k: string) => k };
 

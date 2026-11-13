@@ -1,6 +1,6 @@
 import { test } from '@effect/vitest';
 import { deepStrictEqual, strictEqual } from 'node:assert';
-import { csv_delimiter, csv_of, csv_rows, csv_text } from '../src/csv.ts';
+import { csv_delimiter, csv_of, csv_rows, csv_text } from '../src/engine/files/csv.ts';
 
 for (const ending of ['\n', '\r', '\r\n'])
 	test(`reads ${JSON.stringify(ending)} endings without adding a trailing row`, () => {

@@ -7,7 +7,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	import { Array as Arr } from 'effect';
 	import type { Value, Kind } from './kind.js';
 	import type { JsonSchema } from './json-schema.js';
-	import type { Where } from '@norbital-ai/std/kind';
+	import type { Where } from '@norbital-ai/store/kind';
 
 	/** The editor of one value by its kind (every kind; derived kinds render read-only). */
 	export type EditorProps = {

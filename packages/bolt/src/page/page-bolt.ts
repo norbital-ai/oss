@@ -4,7 +4,7 @@
 // capabilities, conversions, approval decisions and the session are Effects failing with typed tags; `clock`, `file_url`,
 // `t` and `actor` stay plain. Pages run Effects on the ui edge (`run`, `fork`, `attach` from `@norbital-ai/ui/effect`).
 import type { Effect } from 'effect';
-import type { FileUrlOptions } from '@norbital-ai/std/kind';
+import type { FileUrlOptions } from '@norbital-ai/store/kind';
 import type { Actor } from '../decl/access/actor.ts';
 import type { AutomationName } from '../decl/names.ts';
 import type { AutomationSpecOf } from '../decl/runtime/names.ts';

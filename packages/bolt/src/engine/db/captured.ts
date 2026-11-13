@@ -3,7 +3,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { LiveShape } from '../services.ts';
 import type { Chain } from '../write/sql.ts';
 import { decodeOne } from './rows.ts';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 import type { RawDb } from './tenant-db.ts';
 
 /** The committed pre/post images shared by native writers and the live lane. */

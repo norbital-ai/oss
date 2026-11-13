@@ -1,7 +1,7 @@
 // The one wire shape per kind (D6, std/wire), both ways: a decimal is `{ $dec }`, a date and an instant their ISO text,
 // a period `{ from, to }` / `{ start, end }` of those. An act takes exactly what q, live, the callback's `before` and
 // `ctx.query`, an aggregate and a seed load give back.
-import { dec } from '@norbital-ai/std/decimal';
+import { dec } from '@norbital-ai/store/decimal';
 import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
 import { Context, Deferred, Effect, Exit, Layer, Queue, Schema, Scope, Stream } from 'effect';

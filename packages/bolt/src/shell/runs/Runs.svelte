@@ -6,7 +6,7 @@
 -->
 <script lang="ts">
 	import { watch } from 'runed';
-	import { equal_json } from '@norbital-ai/std/json';
+	import { equal_json } from '@norbital-ai/store/kind';
 	import { fork, observe } from '@norbital-ai/ui/effect';
 	import { Effect, Stream } from 'effect';
 	import {

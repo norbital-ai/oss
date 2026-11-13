@@ -8,7 +8,7 @@ import type { EngineManifest } from '../../engine/manifest.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { Json } from '../../decl/values.ts';
 import { DRIVERS, type DriverName } from '../../decl/runtime/integration.ts';
-import type { Fields } from '@norbital-ai/std/kind';
+import type { Fields } from '@norbital-ai/store/kind';
 import { SYSTEM } from '../../system/index.ts';
 import { conversational } from '../../engine/integrations/instances.ts';
 import * as members from '../../engine/identity/members.ts';

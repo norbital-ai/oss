@@ -1,7 +1,7 @@
 // The inbound trust boundary is shared by every conversation driver and custom conversation.
 import { Effect, Option, Predicate, Schema } from 'effect';
 import type { RowData } from '../contracts.ts';
-import { Instant } from '@norbital-ai/std/date';
+import { Instant } from '@norbital-ai/store/date';
 
 const tolerant = <S extends Schema.Constraint>(schema: S) =>
 	Schema.optionalKey(Schema.catchDecoding<S>(() => Effect.succeedNone)(schema));

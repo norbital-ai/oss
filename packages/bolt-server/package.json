@@ -28,7 +28,6 @@
 		"@norbital-ai/bolt": "workspace:*",
 		"@norbital-ai/bolt-cli": "workspace:*",
 		"@norbital-ai/providers": "workspace:*",
-		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/store": "workspace:*",
 		"effect": "catalog:",
 		"exceljs": "4.4.0",

@@ -1,7 +1,7 @@
 // The names index. `bolt sync` evaluates the declarations and prints each part's data into
 // `.norbital/names.ts` as literal type text (functions dropped), augmenting `Names`; every cross-file type below is read
 // from it. No part reads its own file, so a body typed from it is never circular; it is one sync behind an edit.
-import type { InitialStampFields } from '@norbital-ai/std/kind';
+import type { InitialStampFields } from '@norbital-ai/store/kind';
 import type { SystemNames } from '../system/names.ts';
 import type { BuiltinFields } from './builtin-fields.ts';
 import type { KeyFor, Simplify, ValueOf } from './fields.ts';

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { it as test } from '@effect/vitest';
 import './resolve.ts';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { KIND, type Kind } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { KIND, type Kind } from '@norbital-ai/store/kind';
 import { KINDS, sortable } from '../src/kinds/registry.ts';
 import { sortable as sortableFields } from '../src/filter/order.ts';
 import { locked } from '../src/form/draft.ts';

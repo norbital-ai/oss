@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { KindSchema } from '@norbital-ai/std/kind';
+import { KindSchema } from '@norbital-ai/store/kind';
 import type { WireRead } from './wire.ts';
 import type { ShellBoot } from '../shell/nav.ts';
 import { ReadCatalog } from './read-answer.ts';

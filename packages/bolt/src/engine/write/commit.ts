@@ -1,7 +1,7 @@
 // One write statement per act: guarded direct writes and the referential actions they imply, roll-ups, row history,
 // approvals, queued runs, notices, the sync outbox and the audit receipt, every row image taken from the pieces' RETURNING.
 import type { Json } from '../../decl/values.ts';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
 import type { ApprovalSnapshot } from '../../decl/access/policy.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
 import type { DbBatch, TenantDbShape } from '../db/tenant-db.ts';
@@ -15,7 +15,7 @@ import type { EngineActor, Lock, QueuedRun, RowData, Sql } from '../contracts.ts
 import { relations, type EngineManifest } from '../manifest.ts';
 import { Live, Wake, Links } from '../services.ts';
 import { toOwnSql } from '../access/pred.ts';
-import type { Where } from '@norbital-ai/std/kind';
+import type { Where } from '@norbital-ai/store/kind';
 import { q, cells, null_row_sql, own_pred_sql, type Catalog, type Pred } from '@norbital-ai/store';
 import { enqueue, next_due, queue_effects, type Writer } from '../runs/queue.ts'; // hook:automations
 import { syncOutboxPiece } from '../sync/write.ts'; // hook:syncs (H3)
@@ -33,7 +33,7 @@ import {
 } from './sql.ts';
 import { lockPieces } from '../approvals/lock.ts';
 import { AuditMutation, auditReceipt } from '../audit-context.ts';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 import { actor_id, actor_ref } from '../access/actor.ts';
 
 /** One row change as the statement writes it: upserts are already resolved, updates carry the stored revision. */

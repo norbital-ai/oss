@@ -1,8 +1,8 @@
 // The draft a structured `sys_2.infer` builds, addressed by keyed pointers: RFC 6901 JSON Pointers whose segment for an
 // item of a keyed list (`{ kind: 'list', key }`) is that item's key, not its index, so removing one item never moves
 // another's path. Pure (types only), so `jsonDiff` serves guests as well as the engine's `diff` tool.
-import { item_kind } from '@norbital-ai/std/kind';
-import type { Kind } from '@norbital-ai/std/kind';
+import { item_kind } from '@norbital-ai/store/kind';
+import type { Kind } from '@norbital-ai/store/kind';
 import type { InputKind } from '../../decl/fields.ts';
 import type { Json } from '../../decl/values.ts';
 

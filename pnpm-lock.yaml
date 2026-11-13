@@ -149,9 +149,6 @@ importers:
       '@modelcontextprotocol/client':
         specifier: 2.4.0
         version: 2.4.0
-      '@norbital-ai/std':
-        specifier: workspace:*
-        version: link:../std
       '@norbital-ai/store':
         specifier: workspace:*
         version: link:../store
@@ -249,9 +246,6 @@ importers:
       '@norbital-ai/bolt':
         specifier: workspace:*
         version: link:../bolt
-      '@norbital-ai/std':
-        specifier: workspace:*
-        version: link:../std
       '@norbital-ai/store':
         specifier: workspace:*
         version: link:../store
@@ -298,9 +292,6 @@ importers:
       '@norbital-ai/providers':
         specifier: workspace:*
         version: link:../providers
-      '@norbital-ai/std':
-        specifier: workspace:*
-        version: link:../std
       '@norbital-ai/store':
         specifier: workspace:*
         version: link:../store
@@ -347,9 +338,9 @@ importers:
       '@norbital-ai/bolt':
         specifier: workspace:*
         version: link:../bolt
-      '@norbital-ai/std':
+      '@norbital-ai/store':
         specifier: workspace:*
-        version: link:../std
+        version: link:../store
       effect:
         specifier: 'catalog:'
         version: 4.0.6
@@ -431,30 +422,11 @@ importers:
         specifier: 7.0.0-rc14
         version: 7.0.0-rc14(patch_hash=31f8fbde137d5b67598b366406070017541e5a5dcbb2839914fd191022190fc8)(sharp@0.35.4(@types/node@26.6.5))(supports-color@8.1.1)
 
-  packages/std:
+  packages/store:
     dependencies:
       '@marcbachmann/cel-js':
         specifier: ^8.0.0
         version: 8.0.0
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.6
-    devDependencies:
-      '@types/node':
-        specifier: ^26.6.5
-        version: 26.6.5
-      fast-check:
-        specifier: 4.10.2
-        version: 4.10.2
-      typescript:
-        specifier: 6.0.3
-        version: 6.0.3
-
-  packages/store:
-    dependencies:
-      '@norbital-ai/std':
-        specifier: workspace:*
-        version: link:../std
       fflate:
         specifier: 0.8.3
         version: 0.8.3
@@ -468,6 +440,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.6
+      fast-check:
+        specifier: 4.10.2
+        version: 4.10.2
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -504,9 +479,9 @@ importers:
       '@lezer/highlight':
         specifier: ^1.2.5
         version: 1.2.5
-      '@norbital-ai/std':
+      '@norbital-ai/store':
         specifier: workspace:*
-        version: link:../std
+        version: link:../store
       '@tailwindcss/typography':
         specifier: ^0.5.20
         version: 0.5.20(tailwindcss@4.3.3)

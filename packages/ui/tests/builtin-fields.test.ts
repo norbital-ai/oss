@@ -13,7 +13,7 @@ const { default: Harness } = await import('./packaging-harness.svelte');
 const { default: Renderer } = await import('./packaging-renderer.svelte');
 const k = await import('../src/kinds/kind.ts');
 const phone = await import('../src/kinds/phone.ts');
-import { Decimal } from '@norbital-ai/std/decimal';
+import { Decimal } from '@norbital-ai/store/decimal';
 
 const JOB = {
 	id: 'j1',

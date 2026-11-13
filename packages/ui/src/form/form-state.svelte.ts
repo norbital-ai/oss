@@ -2,7 +2,7 @@
 // a field (a lazy tab, a collapsed section) never drops its value, because the value lives here.
 import { Effect, Fiber, FiberSet, Option, Schema } from 'effect';
 import { flushSync, getContext, setContext } from 'svelte';
-import { encode_wire, revive_wire } from '@norbital-ai/std/wire';
+import { encode_wire, revive_wire } from '@norbital-ai/store/wire';
 import { value_object, type Value } from '../kinds/kind.js';
 import type { IdOf } from '../model/types.js';
 import type { RecordCapabilities, RecordRestriction } from '../record/types.js';

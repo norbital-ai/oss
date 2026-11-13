@@ -1,6 +1,6 @@
 // The host intent is durable before acquisition; the tenant keeps only correlation, never an audit payload outbox.
 import { Array as EffectArray, Clock, Effect, Predicate, Result, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import type { AuditActor, AuditEvent } from '../protocol/audit.ts';
 import type { EngineActor } from './contracts.ts';
 import type { Json } from '../decl/values.ts';

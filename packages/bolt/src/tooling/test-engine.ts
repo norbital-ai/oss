@@ -1,6 +1,6 @@
 // The test kit's engine: a whole workspace host (database, engine, identity, shell, HTTP routes and fake ports) assembled
 // in one scoped Layer, so bolt-cli's kit names this one entry instead of the internals it is built from.
-import { input_schema, type Kind } from '@norbital-ai/std/kind';
+import { input_schema, type Kind } from '@norbital-ai/store/kind';
 import { SYSTEM_COLUMNS } from '@norbital-ai/store';
 import * as NodeChildProcessSpawner from '@effect/platform-node/NodeChildProcessSpawner';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';

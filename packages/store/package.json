@@ -3,7 +3,10 @@
 	"version": "0.0.31",
 	"description": "One typed data layer for Bolt workspaces and their hosts: schema declarations, the SQL each read, write and migration emits, and the decoders of its rows. It never connects to a database.",
 	"type": "module",
-	"sideEffects": false,
+	"sideEffects": [
+		"./build/lang/decimal.js",
+		"./src/lang/decimal.ts"
+	],
 	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",
@@ -30,6 +33,38 @@
 		"./sqlserver": {
 			"types": "./build/sqlserver.d.ts",
 			"default": "./build/sqlserver.js"
+		},
+		"./kind": {
+			"types": "./build/lang/kind.d.ts",
+			"default": "./build/lang/kind.js"
+		},
+		"./vars": {
+			"types": "./build/lang/vars.d.ts",
+			"default": "./build/lang/vars.js"
+		},
+		"./label": {
+			"types": "./build/lang/label.d.ts",
+			"default": "./build/lang/label.js"
+		},
+		"./formula": {
+			"types": "./build/lang/formula.d.ts",
+			"default": "./build/lang/formula.js"
+		},
+		"./wire": {
+			"types": "./build/lang/wire.d.ts",
+			"default": "./build/lang/wire.js"
+		},
+		"./decimal": {
+			"types": "./build/lang/decimal.d.ts",
+			"default": "./build/lang/decimal.js"
+		},
+		"./date": {
+			"types": "./build/lang/date.d.ts",
+			"default": "./build/lang/date.js"
+		},
+		"./zone": {
+			"types": "./build/lang/zone.d.ts",
+			"default": "./build/lang/zone.js"
 		}
 	},
 	"scripts": {
@@ -38,7 +73,7 @@
 		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit"
 	},
 	"dependencies": {
-		"@norbital-ai/std": "workspace:*",
+		"@marcbachmann/cel-js": "^8.0.0",
 		"fflate": "0.8.3"
 	},
 	"peerDependencies": {
@@ -48,6 +83,7 @@
 		"@electric-sql/pglite": "^0.5.12",
 		"@types/node": "^26.6.5",
 		"effect": "catalog:",
+		"fast-check": "4.10.2",
 		"typescript": "catalog:"
 	}
 }

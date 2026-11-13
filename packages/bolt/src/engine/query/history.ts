@@ -1,5 +1,5 @@
 import { Effect, Predicate, Schema } from 'effect';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
 // Committed history is scoped by current reader authority and shows the fields of the output the read names; pending
 // proposals append no revisions.
 import type { Json } from '../../decl/values.ts';

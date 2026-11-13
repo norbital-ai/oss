@@ -1,6 +1,6 @@
 import { Effect, Stream } from 'effect';
-import { input_schema } from '@norbital-ai/std/kind';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { input_schema } from '@norbital-ai/store/kind';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { Schema } from 'effect';
 // Seed mode (X-13): a restore. Stored values go in as given (kept ids of any uuid version, non-initial states,
 // `seq` values, sealed rows) in relationship order, one statement per model per ≤ 1 MiB chunk, each chunk a step
@@ -14,7 +14,7 @@ import { DbError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalog_of, toOwnSql } from '../access/pred.ts';
 import { null_row_sql, q } from '@norbital-ai/store';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 import { constraintIndex } from '../schema/plan.ts';
 import { history_piece, rollups, seqParts, seqScope } from './commit.ts';
 import { cells, database_value } from '@norbital-ai/store';

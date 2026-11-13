@@ -8,7 +8,7 @@
 import { Effect, Schema } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
 import { StoreError } from './errors.ts';
-import { label_paths } from '@norbital-ai/std/label';
+import { label_paths } from './lang/label.ts';
 
 export type FieldInfo = {
 	name: string;
@@ -515,7 +515,7 @@ export function family(f: FieldInfo): string {
 }
 
 /** Quotes an identifier; every name reaching SQL has been checked against the catalog first. */
-export { q } from '@norbital-ai/std/sql';
+
 
 /** The model a read names; an unknown name is `invalid`. */
 export const exposure_of = (cat: Catalog, name: string): Effect.Effect<ExposureInfo, StoreError> => {

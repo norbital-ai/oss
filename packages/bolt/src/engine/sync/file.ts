@@ -14,12 +14,12 @@
 // document, converted to a declared target (`convertDocument`); without `write` they are the rows in view (the page's
 // `where`, read as the member). A template is an export of what the page shows; of a document it is the header alone.
 import { Array as EffectArray, Clock, Effect, Option, Predicate, Result, Schema } from 'effect';
-import { csv_of } from '@norbital-ai/std/csv';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { csv_of } from '../files/csv.ts';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { bindingsAt } from '../query/reader.ts';
 import { database_value, read as storeRead } from '@norbital-ai/store';
-import type { Fields, Kind } from '@norbital-ai/std/kind';
+import type { Fields, Kind } from '@norbital-ai/store/kind';
 import type { SyncEntry } from '../../decl/model.ts';
 import type { BuiltinParser, Finding } from '../../decl/runtime/sync.ts';
 import type { Json } from '../../decl/values.ts';

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { afterEach } from '@effect/vitest';
 import { Cause, Effect, Queue, Schema, Stream } from 'effect';
-import type { Json } from '@norbital-ai/std/wire';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Json } from '@norbital-ai/store/wire';
+import type { Value } from '@norbital-ai/store/kind';
 import type { ActBody, Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 import type { RecordCapabilities, RecordParentContext } from '../src/record/types.ts';
 import type { ViewBolt } from '../src/client/contract.ts';

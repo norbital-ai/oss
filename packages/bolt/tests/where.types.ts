@@ -1,5 +1,5 @@
 // Type corpus for the P34 filter language: each `@ts-expect-error` is a shape the decoder refuses too.
-import { date_period, Instant, PlainDate } from '@norbital-ai/std/date';
+import { date_period, Instant, PlainDate } from '@norbital-ai/store/date';
 import type { OrderBy, Sortable, Where } from '../src/decl/where.ts';
 import './types/registry.ts';
 

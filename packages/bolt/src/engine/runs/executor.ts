@@ -1,6 +1,6 @@
 // Durable attempt execution and settlement share one generation's stop and parking controls.
 import { Clock, Deferred, Effect, Option, Predicate, PubSub, Random } from 'effect';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import type { EffectEvent } from '../../protocol/effect-events.ts';
 import type { AutomationSpec } from '../../decl/runtime/automation.ts';
 import type { Json } from '../../decl/values.ts';

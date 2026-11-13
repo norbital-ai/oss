@@ -1,8 +1,8 @@
 // The source owner resolves rows/custom fields once into the same portable result contract every consumer decodes.
 import { Effect, Schema } from 'effect';
 import { default_fields } from '@norbital-ai/store';
-import type { OutputKind } from '@norbital-ai/std/kind';
-import { encode_wire, type Json, type Wired } from '@norbital-ai/std/wire';
+import type { OutputKind } from '@norbital-ai/store/kind';
+import { encode_wire, type Json, type Wired } from '@norbital-ai/store/wire';
 import { nullable_of_expr } from '../../decl/model.ts';
 import { kind_output, output_value, type OutputContract, type OutputValueContract, type OutputField } from '../../protocol/output-contract.ts';
 import { BoltError } from '../../protocol/errors.ts';

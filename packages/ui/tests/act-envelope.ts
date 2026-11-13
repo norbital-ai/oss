@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { Schema } from 'effect';
 import type { ActBody, Outcome as WireOutcome, SyncControlBody } from '../../bolt/build/protocol/schema.js';
-import type { Json } from '@norbital-ai/std/wire';
+import type { Json } from '@norbital-ai/store/wire';
 
 /** These controls submit one operation; assert the native envelope before inspecting its values. */
 export const single_act = (body: ActBody): {

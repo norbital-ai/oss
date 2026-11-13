@@ -1,7 +1,7 @@
 // Immutable definitions and field identities shared by revisions. Historical payloads keep their original bytes.
 import { canonical, HistoryTableMetadata, type SchemaObject, type SchemaSpec } from '@norbital-ai/store';
 import { Effect, Schema } from 'effect';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
 
 export const HISTORY_SCHEMA_TABLES = [

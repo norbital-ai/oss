@@ -1,5 +1,5 @@
 import { Option, Schema } from 'effect';
-import type { OutputKind, Value } from '@norbital-ai/std/kind';
+import type { OutputKind, Value } from '@norbital-ai/store/kind';
 import type { Json } from '../../decl/values.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { kindChildren } from '../callables/kinds.ts';

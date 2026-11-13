@@ -7,8 +7,8 @@ import { Guest, type Bridge } from '../src/engine/services.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { guest_layer } from './support/guest-fixture.ts';
 import { create_bolt } from '../src/page/bolt.ts';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { input_schema } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { input_schema } from '@norbital-ai/store/kind';
 
 const invocation = (input: Json): Invocation => ({
 	id: 'inv-1',
@@ -33,7 +33,7 @@ describe('codec: guest reads hand real values, not wire tags', () => {
 		"dates and instants arrive as ISO strings, decimals as the bundle's std Decimal, in answers and in the input",
 		() =>
 			Effect.gen(function* () {
-				// the bundle's std/decimal registers its class on load, as `@norbital-ai/std/next/decimal` does
+				// the bundle's decimal module registers its class on load, as `@norbital-ai/store/decimal` does
 				const source = `class Decimal { static of(s) { const d = new Decimal(); d.text = s; return d; } toJSON() { return this.text; } }
 globalThis[Symbol.for('norbital.std.Decimal')] = Decimal;
 export default { automation: { a: { body: function* (input, ctx) {

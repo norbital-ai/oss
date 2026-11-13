@@ -2,10 +2,10 @@
 import { Environment, type ASTNode } from '@marcbachmann/cel-js';
 import { Result } from 'effect';
 import { children } from './cel-ast.ts';
-import type { Value } from './kind.ts';
+
+const literal = (text: string): string => `'${text.replaceAll("'", "''")}'`;
+import { UUID_PATTERN, type Value } from './kind.ts';
 import { Decimal } from './decimal.ts';
-import { literal } from './sql.ts';
-import { UUID_PATTERN } from './id.ts';
 
 const string = (sql: string) => `(${sql} #>> '{}')`;
 const bool = (sql: string) =>

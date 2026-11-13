@@ -1,4 +1,4 @@
-import type { Json } from '@norbital-ai/std/wire';
+import type { Json } from '@norbital-ai/store/wire';
 import { Predicate } from 'effect';
 /** `and` of the author's scope and the viewer's clauses; the viewer never widens the author's `where`. */
 export function and(...parts: readonly (Json | undefined)[]): Json | undefined {

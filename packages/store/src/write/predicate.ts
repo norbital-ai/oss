@@ -2,11 +2,12 @@
 // row: literals and the row's own fields only, never a relation. With `fields` it is DDL: literals typed and inlined,
 // two-valued; else literals are bound through `bind`.
 import { Effect, Predicate } from 'effect';
-import { literal as quote_literal } from '@norbital-ai/std/sql';
+import { literal as quote_literal } from '../sql.ts';
 import { isArray } from 'effect/Array';
 import type { Json } from '../values.ts';
 import type { Arg, Pred } from '../ir.ts';
-import { q, type FieldInfo } from '../catalog.ts';
+import { type FieldInfo } from '../catalog.ts';
+import { q } from '../sql.ts';
 import { StoreError } from '../errors.ts';
 import { database_value, period_test } from '../read/values.ts';
 

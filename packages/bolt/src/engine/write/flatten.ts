@@ -2,15 +2,15 @@
 // row, relation actions made explicit. Decode checks the model's input allowlist at every nesting level and reports
 // every offender at once; nothing is ever deleted by omission.
 import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
-import { input_schema } from '@norbital-ai/std/kind';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { input_schema } from '@norbital-ai/store/kind';
+import { encode_wire } from '@norbital-ai/store/wire';
 import type { Json } from '../../decl/values.ts';
 import type { Change, EngineActor, InputPath, NativeWriteConflict, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { LayerColumns } from '../../decl/model.ts';
 import { LIMITS } from '../contracts.ts';
 import type { Catalog, FieldInfo, ModelInfo } from '@norbital-ai/store';
-import { clock_default, compile_var, evaluate_var } from '@norbital-ai/std/vars';
+import { clock_default, compile_var, evaluate_var } from '@norbital-ai/store/vars';
 import { decodeInput, type InputSpec } from '../callables/decode.ts';
 import { canonicalPhone } from '../identity/address.ts';
 import { storedWireValue } from '../db/stored.ts';

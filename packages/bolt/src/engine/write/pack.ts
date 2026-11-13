@@ -5,7 +5,7 @@ import { EMBED } from '../integrations/embed.ts';
 import { INDEX } from './index-run.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { Effect, FileSystem, Schema, Stream } from 'effect';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 import { enqueue } from '../runs/queue.ts';
 import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { Chain } from './sql.ts';

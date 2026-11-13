@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/std/decimal';
-import type { Json } from '@norbital-ai/std/wire';
-import type { Value } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
+import type { Json } from '@norbital-ai/store/wire';
+import type { Value } from '@norbital-ai/store/kind';
 import { Array as Arr } from 'effect';
 import { displayWireValue } from '../src/shell/wire-value.ts';
 

@@ -1,4 +1,4 @@
-import { item_kind, type Fields, type Kind, type OutputKind, type Value } from '@norbital-ai/std/kind';
+import { item_kind, type Fields, type Kind, type OutputKind, type Value } from '@norbital-ai/store/kind';
 import { Array as EffectArray, Predicate } from 'effect';
 import { BUILTIN_FIELDS } from '../../decl/builtin-fields.ts';
 import type { EngineManifest } from '../manifest.ts';

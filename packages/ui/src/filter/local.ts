@@ -1,6 +1,6 @@
 // Filtering and sorting loaded local rows, with their inferred exposure.
-import type { Value } from '@norbital-ai/std/kind';
-import { Decimal } from '@norbital-ai/std/decimal';
+import type { Value } from '@norbital-ai/store/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
 import { type Node, type FilterClock, complete, taggedArg } from './node.js';
 import { value_object, type Kind } from '../kinds/kind.js';
 import { evaluated, bound } from './where.js';

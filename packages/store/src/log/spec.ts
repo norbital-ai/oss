@@ -1,7 +1,7 @@
 import { Effect, Schema } from 'effect';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '../sql.ts';
 import { StoreError } from '../errors.ts';
-import { canonical } from '@norbital-ai/std/hash';
+import { canonical } from '../hash.ts';
 
 const Strings = Schema.Array(Schema.String);
 const Path = Schema.Array(Schema.String);

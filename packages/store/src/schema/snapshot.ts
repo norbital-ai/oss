@@ -1,6 +1,6 @@
 // Original metadata identity and its current planning schema; no retired author-spelling conversions.
 import { Effect, Schema } from 'effect';
-import { canonical, sha256_hex } from '@norbital-ai/std/hash';
+import { canonical, sha256_hex } from '../hash.ts';
 import { StoreError } from '../errors.ts';
 import { SchemaSpec } from './spec.ts';
 

@@ -3,7 +3,7 @@ import type { Kind } from '../kinds/kind.js';
 import { type Resolved, type Offer, type FilterStep, INDEX, offersFor, type Catalog, resolve } from './catalog.js';
 import { type Op, OpSchema, type Arg } from './node.js';
 import { Match, Schema } from 'effect';
-import { type VarResult, compile_var, member_admits } from '@norbital-ai/std/vars';
+import { type VarResult, compile_var, member_admits } from '@norbital-ai/store/vars';
 
 /** The kind a condition's literal is edited and checked as: state → its states, derived numbers → numbers. */
 export function valueKind(k: Kind): Kind {

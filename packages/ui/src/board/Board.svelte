@@ -15,8 +15,8 @@
 
 	/** A lane: its `by` value (for a relation, the target id), a label, and for a relation its `Where` (default `eq`). */
 	export type Lane =
-		| import('@norbital-ai/std/kind').Value
-		| { value: import('@norbital-ai/std/kind').Value; label: string; where?: Json };
+		| import('@norbital-ai/store/kind').Value
+		| { value: import('@norbital-ai/store/kind').Value; label: string; where?: Json };
 	/** The props of `Board`, typed by the model `of`. */
 	export type BoardProps<C = ModelKey, F = FieldOf<C>, K = RecordFieldOf<C>> = {
 		/** The page context (`ctx`), passed whole. */
@@ -57,7 +57,7 @@
 	import { format_value as show } from '../kinds/kind.js';
 	import { Effect, Predicate, Queue, Stream } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { encode_wire } from '@norbital-ai/std/wire';
+	import { encode_wire } from '@norbital-ai/store/wire';
 	import { fork } from '../effect/index.js';
 	import { Button } from '../primitives/button/index.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
@@ -108,7 +108,7 @@
 	provide_model(() => of);
 	const words = use_enum_text(() => ctx);
 	// a lane of an enum or state value is named in its words
-	const laneText = (v: import('@norbital-ai/std/kind').Value) =>
+	const laneText = (v: import('@norbital-ai/store/kind').Value) =>
 		typeof v === 'string' && ['enum', 'state'].includes(kinds.catalog?.[of]?.fields[by]?.kind ?? '')
 			? words(v, by)
 			: show(v, bolt.locale);
@@ -248,7 +248,7 @@
 	const found = $derived.by<
 		ReadState<
 			{
-				value: import('@norbital-ai/std/kind').Value;
+				value: import('@norbital-ai/store/kind').Value;
 				label: string;
 				where?: Json;
 				count: number | null;
@@ -263,7 +263,7 @@
 		const configured = (
 			lane: Lane
 		): lane is {
-			value: import('@norbital-ai/std/kind').Value;
+			value: import('@norbital-ai/store/kind').Value;
 			label: string;
 			where?: Json;
 		} => Predicate.isObject(lane) && 'value' in lane && typeof lane['label'] === 'string';
@@ -358,7 +358,7 @@
 		refreshCounts();
 	};
 	// a lane's cards: the board's scope AND the lane's own condition (a relation lane's `where`, else `by` is its value)
-	const laneWhere = (lane: { value: import('@norbital-ai/std/kind').Value; where?: Json }) =>
+	const laneWhere = (lane: { value: import('@norbital-ai/store/kind').Value; where?: Json }) =>
 		and(
 			scope,
 			lane.where ?? {
@@ -413,7 +413,7 @@
 		host.replaceChildren(copy);
 	};
 
-	const move = (id: string, lane: import('@norbital-ai/std/kind').Value) => {
+	const move = (id: string, lane: import('@norbital-ai/store/kind').Value) => {
 		const target = [...loaded.values()].flatMap((page) => page.rows).find((row) => row.id === id);
 		if (target === undefined) return;
 		fork(
@@ -427,7 +427,7 @@
 			(error) => toast.error(bolt.t(error.message))
 		);
 	};
-	function drop(event: DragEvent, lane: import('@norbital-ai/std/kind').Value) {
+	function drop(event: DragEvent, lane: import('@norbital-ai/store/kind').Value) {
 		event.preventDefault();
 		dragEnd();
 		const id = event.dataTransfer?.getData('text/x-bolt-id');
@@ -442,7 +442,7 @@
 		danger: 'bg-destructive'
 	} as const;
 	const byKind = $derived(catalog[of]?.fields[by]?.kind);
-	const dotOf = (v: import('@norbital-ai/std/kind').Value) =>
+	const dotOf = (v: import('@norbital-ai/store/kind').Value) =>
 		(byKind === 'state' || byKind === 'enum') && typeof v === 'string' ? DOT[tone(v)] : null;
 	// dragging a card near the board's edge snaps the board one lane over , at most every 450 ms
 	let snapped = 0;

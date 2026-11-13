@@ -11,7 +11,7 @@ import { decode_acts } from '../callables/parse.ts';
 // line or two, and names no model, path or sample; what an actor holds is `describe_workspace`'s, and a wrong name's error
 // lists the right ones. The agent has no authority of its own: every call runs as the actor, so a refusal is
 // the engine's answer, never the agent's.
-import { describe_kind, kind_label, kind_signature } from '@norbital-ai/std/kind';
+import { describe_kind, kind_label, kind_signature } from '@norbital-ai/store/kind';
 import { Validator } from '@cfworker/json-schema';
 import {
 	Clock,
@@ -42,7 +42,7 @@ import { sha256_hex } from '@norbital-ai/store';
 import { FOLDER_NOTES, role_at } from '../../decl/layout.ts';
 import type { Json } from '../../decl/values.ts';
 import { PAPER_SIZES } from '../../decl/runtime/facilities.ts';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import {
 	CONVERT_MIME,
 	CONVERT_TARGETS,

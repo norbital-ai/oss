@@ -5,7 +5,7 @@ import { with_accounts } from './support/accounts.ts';
 // list the envoy conversations with an unread mark; `read_file` reads an xlsx into std/sheet's cells.
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from '@effect/vitest';
-import { parse_instant } from '@norbital-ai/std/date';
+import { parse_instant } from '@norbital-ai/store/date';
 import { Context, Effect, Layer, Option, Result, Schema, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';

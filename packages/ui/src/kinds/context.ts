@@ -6,7 +6,7 @@ import { FetchHttpClient, HttpClient, HttpClientResponse, type HttpClientError }
 import type { Component } from 'svelte';
 import type { ActFailure, ReadError, UiContext } from '../client/contract.js';
 import type { FileRef, Fields, Json, Kind, Point, Value } from './kind.js';
-import type { FileUrlOptions, Where } from '@norbital-ai/std/kind';
+import type { FileUrlOptions, Where } from '@norbital-ai/store/kind';
 
 export type ChildInput = {
 	model: string;

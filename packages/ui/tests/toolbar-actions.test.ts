@@ -7,8 +7,8 @@ import { Deferred, Effect, Queue, Schema, Stream } from 'effect';
 // state (pending, done, failed in place and as a toast) and wires a model's file sync in by itself.
 import './dom.ts';
 import assert from 'node:assert/strict';
-import type { Value } from '@norbital-ai/std/kind';
-import { Decimal } from '@norbital-ai/std/decimal';
+import type { Value } from '@norbital-ai/store/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { ViewBolt, Outcome, RunRow } from '../src/client/contract.ts';
 import type { Page } from '../src/model/types.ts';

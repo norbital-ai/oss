@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit } from 'effect';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { Decimal } from '../src/lang/decimal.ts';
 import { build, read, schema, store, table, type StoreError } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import { database, exec as raw, required, run, script } from './support.ts';

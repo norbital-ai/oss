@@ -62,3 +62,5 @@ export type { Attachment, CalendarEvent } from './decl/runtime/integration.ts';
 export type { Finding, Health, RemoteSync, SyncCtx, FileSyncCtx, SyncRow } from './decl/runtime/sync.ts';
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props
 
+export { input_schema, type Kind, type Value } from '@norbital-ai/store/kind'; // field kinds: the authoring language
+export { compile, context, evaluate, formula } from '@norbital-ai/store/formula'; // user-edited CEL rules

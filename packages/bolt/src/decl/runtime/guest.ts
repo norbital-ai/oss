@@ -10,10 +10,10 @@ import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Scheduler from 'effect/Scheduler';
 import * as Schema from 'effect/Schema';
-import { equal_json } from '@norbital-ai/std/json';
-import { local_of } from '@norbital-ai/std/zone';
+import { equal_json } from '@norbital-ai/store/kind';
+import { local_of } from '@norbital-ai/store/zone';
 // Wire decimals must revive even when a body only uses methods on its typed input.
-import '@norbital-ai/std/decimal';
+import '@norbital-ai/store/decimal';
 import { attached, type AttachedBody, type GeneratorBody } from '../body.ts';
 import type { BodyError, BodyReturn } from '../ctx.ts';
 import { Refusal } from '../errors/refusal.ts';

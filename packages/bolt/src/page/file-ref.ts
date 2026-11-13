@@ -1,5 +1,5 @@
 import type { FileRef } from '../decl/values.ts';
-import { IdValue, type FileUrlOptions } from '@norbital-ai/std/kind';
+import { IdValue, type FileUrlOptions } from '@norbital-ai/store/kind';
 import { Schema } from 'effect';
 import { PATHS } from '../protocol/wire.ts';
 

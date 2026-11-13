@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { local_of, utc_of } from '@norbital-ai/std/zone';
+import { local_of, utc_of } from '@norbital-ai/store/zone';
 import { BoltError } from '../../protocol/errors.ts';
 import type { ImportStart, ImportStartInput } from '../../protocol/schema.ts';
 

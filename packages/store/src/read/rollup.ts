@@ -1,6 +1,7 @@
 /** Combine writers at an instant, then summarize buckets or carry each source's last gauge. */
 import { Effect } from 'effect';
-import { exposure_of, q, type Catalog } from '../catalog.ts';
+import { exposure_of, type Catalog } from '../catalog.ts';
+import { q } from '../sql.ts';
 import { StoreError } from '../errors.ts';
 import type { Pred } from '../ir.ts';
 import { STORE_LIMITS } from '../limits.ts';

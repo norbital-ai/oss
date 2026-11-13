@@ -1,6 +1,6 @@
 // Automation selection fields cross as ids and reach the body as rows loaded under its declared policies.
 import { Schema } from 'effect';
-import { type Fields, type Kind } from '@norbital-ai/std/kind';
+import { type Fields, type Kind } from '@norbital-ai/store/kind';
 import type { InputKind, InputOf, ValidInput } from '../fields.ts';
 import { FieldData } from '../field-data.ts';
 import type { ReadableName } from '../names.ts';

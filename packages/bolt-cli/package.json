@@ -34,7 +34,6 @@
 		"@iconify-json/lucide": "1.2.147",
 		"@iconify/svelte": "catalog:",
 		"@norbital-ai/bolt": "workspace:*",
-		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/store": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",

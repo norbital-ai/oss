@@ -15,8 +15,8 @@ import { READ_LIMIT } from '../src/read/request.ts';
 // record/approval toggle for native proposals, and no per-field history or History tab.
 import './dom.ts';
 import assert from 'node:assert/strict';
-import type { Json } from '@norbital-ai/std/wire';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Json } from '@norbital-ai/store/wire';
+import type { Value } from '@norbital-ai/store/kind';
 import type { ApprovalView, HistoryEntry } from '../src/client/contract.ts';
 import type { RecordCapabilities } from '../src/record/types.ts';
 import type { Row } from '../src/model/types.ts';

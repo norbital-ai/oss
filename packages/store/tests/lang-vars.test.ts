@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@effect/vitest';
-import { clock_default, compile_var, evaluate_var } from '../src/vars.ts';
+import { clock_default, compile_var, evaluate_var } from '../src/lang/vars.ts';
 
 const requestor = {
 	id: 'u1',

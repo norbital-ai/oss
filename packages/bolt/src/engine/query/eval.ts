@@ -2,9 +2,9 @@
 // (`sql.ts`); a randomized test holds the two equal. A null never matches (SQL's unknown collapses to false), `ne` and
 // negated membership use "distinct from", and `not` negates the collapsed value.
 import { Predicate } from 'effect';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { equal_json } from '@norbital-ai/std/json';
-import { utc_of } from '@norbital-ai/std/zone';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { equal_json } from '@norbital-ai/store/kind';
+import { utc_of } from '@norbital-ai/store/zone';
 import type { Authority, Bindings, RowData } from '../contracts.ts';
 
 import { BoltError } from '../../protocol/errors.ts';

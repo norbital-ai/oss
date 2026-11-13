@@ -25,7 +25,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 
 <script lang="ts">
 	import { Schema } from 'effect';
-	import { input_schema } from '@norbital-ai/std/kind';
+	import { input_schema } from '@norbital-ai/store/kind';
 	import { use_enum_text } from '../model/context.js';
 	import Badge from '../primitives/badge/badge.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';

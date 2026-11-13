@@ -1,5 +1,5 @@
 // Shared relation row typing stays independent of Store's mutation compiler.
-import { q } from '../catalog.ts';
+import { q } from '../sql.ts';
 
 /** A typed null from the relation itself: a table's name may also name a built-in type. */
 export const null_row_sql = (table: string, columns: Iterable<string>): string => {

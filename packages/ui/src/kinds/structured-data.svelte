@@ -5,14 +5,14 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
-	import { item_kind } from '@norbital-ai/std/kind';
+	import { item_kind } from '@norbital-ai/store/kind';
 	import type { Value, Kind } from './kind.js';
 	import type { KindsHost } from './context.js';
 	import type { JsonSchema } from './json-schema.js';
 	import type { ArrayKeys } from './structured-data.js';
 	import type { Values } from '../model/types.js';
 	import { Schema } from 'effect';
-	import { input_schema } from '@norbital-ai/std/kind';
+	import { input_schema } from '@norbital-ai/store/kind';
 	/** A schema or native kind with current data, editing controls, or a prior value for comparison. */
 	export type StructuredDataProps = {
 		/** The page context (`ctx`), passed whole. */
@@ -136,7 +136,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Decimal } from '@norbital-ai/std/decimal';
+	import { Decimal } from '@norbital-ai/store/decimal';
 	import { watch } from 'runed';
 	import Self from './structured-data.svelte';
 	import Editor from './editor.svelte';

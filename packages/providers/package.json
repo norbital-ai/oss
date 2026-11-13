@@ -38,7 +38,7 @@
 	},
 	"dependencies": {
 		"@norbital-ai/bolt": "workspace:*",
-		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/store": "workspace:*",
 		"effect": "catalog:",
 		"imapflow": "2.9.1",
 		"nodemailer": "10.2.1",

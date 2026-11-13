@@ -83,7 +83,6 @@
 		"@iconify/svelte": "catalog:",
 		"@jridgewell/trace-mapping": "^0.3.31",
 		"@modelcontextprotocol/client": "2.4.0",
-		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/store": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
 		"@typescript/native": "npm:typescript@7.0.2",

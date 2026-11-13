@@ -3,7 +3,7 @@
 // and never become globals; it returns `{ start, take, give }` for the host to call.
 // Kept as `String.raw` so regex escapes survive; its text holds no backtick and no `${` but the one splice: std's
 // `revive_wire`, stringified (D6), which therefore closes over nothing but globals.
-import { revive_wire } from '@norbital-ai/std/wire';
+import { revive_wire } from '@norbital-ai/store/wire';
 
 export const PRELUDE = String.raw`
 'use strict';

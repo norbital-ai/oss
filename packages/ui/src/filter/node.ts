@@ -1,6 +1,6 @@
 // Filter nodes and decoded operand forms; completeness is shared by every consumer.
 import { Schema } from 'effect';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Value } from '@norbital-ai/store/kind';
 import { type Json, value_object } from '../kinds/kind.js';
 
 export const OpSchema = Schema.Literals([

@@ -1,9 +1,9 @@
 // The run queue's shared time arithmetic.
 import { Array as EffectArray } from 'effect';
-import { duration_seconds } from '@norbital-ai/std/date';
+import { duration_seconds } from '@norbital-ai/store/date';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { compile_var, evaluate_var, type Requestor } from '@norbital-ai/std/vars';
+import { compile_var, evaluate_var, type Requestor } from '@norbital-ai/store/vars';
 
 export const BUCKET_MS = 300_000;
 export function duration(value: string): number {

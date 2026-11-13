@@ -13,8 +13,6 @@ Starter workspaces live in their own repository:
 - [`@norbital-ai/bolt-server`](./packages/bolt-server) — an example untethered host: one workspace's release from one process
 - [`@norbital-ai/store`](./packages/store) — typed schema, query, SQL and migration layer shared by workspaces and hosts
 - [`@norbital-ai/ui`](./packages/ui) — Svelte component library and design tokens
-- [`@norbital-ai/std`](./packages/std) — common schema, field kinds, date, CEL, finance, and
-  utility modules
 - [`@norbital-ai/providers`](./packages/providers) — host-registered integration and inference providers
 - [`@norbital-ai/app-shell`](./packages/app-shell) — native iOS and Android shell and the `norbital-app` CLI
 

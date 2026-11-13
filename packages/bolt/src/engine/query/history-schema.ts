@@ -1,8 +1,8 @@
 import { Predicate, Result, Schema } from 'effect';
 import { canonical, field_info, FieldSpec, HistoryTableMetadata, SYSTEM_COLUMN_SET, type Json } from '@norbital-ai/store';
-import { Decimal, minor_digits } from '@norbital-ai/std/decimal';
-import { encode_wire } from '@norbital-ai/std/wire';
-import { input_schema } from '@norbital-ai/std/kind';
+import { Decimal, minor_digits } from '@norbital-ai/store/decimal';
+import { encode_wire } from '@norbital-ai/store/wire';
+import { input_schema } from '@norbital-ai/store/kind';
 import { decodeInput } from '../callables/decode.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { storedWireValue } from '../db/stored.ts';

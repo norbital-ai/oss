@@ -1,7 +1,7 @@
 // Type corpus for nested read requests (P3): roots are models with `read`, deeper keys the layers a root declares, the
 // answer typed from the named layers. Each `@ts-expect-error` line is a planted mistake.
 import type { Id, Instant, ReadAnswer } from '../../src/index.ts';
-import type { Decimal } from '@norbital-ai/std/decimal';
+import type { Decimal } from '@norbital-ai/store/decimal';
 import type { Eff, WriteTarget } from '../../src/decl/ctx.ts';
 import './registry.ts';
 import type { CallerQuery } from '../../src/decl/ctx.ts';

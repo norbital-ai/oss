@@ -6,7 +6,7 @@ import { teamEntries } from '../manifest.ts';
 import { Effect, Result, Schema } from 'effect';
 import { LIMITS, type Outcome, type RowData, type Sql } from '../contracts.ts';
 import { canonical, sha256, type ConstraintMeta } from '@norbital-ai/store';
-import { literal } from '@norbital-ai/std/sql';
+import { literal } from '@norbital-ai/store';
 import {
 	TenantDb,
 	type RawDb,

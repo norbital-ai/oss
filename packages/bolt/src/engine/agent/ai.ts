@@ -3,7 +3,7 @@
 // stream silent for the wall is closed and its partial output kept as a cut step the next request continues; a request
 // that yields nothing within it is `timeout` (OD-13). `model` is a class or a catalog id; any other is `unavailable`.
 // Chat, compaction, verification and structured inference send the native request through modelCall.
-import { item_kind, json_schema, KindSchema } from '@norbital-ai/std/kind';
+import { item_kind, json_schema, KindSchema } from '@norbital-ai/store/kind';
 import {
 	Cause,
 	Clock,
@@ -26,7 +26,7 @@ import type { Ai, AiEvent } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { FacilityCall } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import {
 	LIMITS,
 	type AiMessage,
@@ -35,7 +35,7 @@ import {
 	type CrossAnswer
 } from '../contracts.ts';
 import { decodeInput } from '../callables/decode.ts';
-import type { Kind } from '@norbital-ai/std/kind';
+import type { Kind } from '@norbital-ai/store/kind';
 import { bound, BOUNDS, size } from './context.ts';
 import {
 	ANY,
@@ -55,7 +55,7 @@ import {
 	type JsonChange
 } from './draft.ts';
 import { Validator } from '@cfworker/json-schema';
-import { compile, context, evaluate } from '@norbital-ai/std/formula';
+import { compile, context, evaluate } from '@norbital-ai/store/formula';
 
 const MiB = 1024 * 1024;
 /** Rule 72: a platform budget checked before the provider's own limit: files and bytes a call, bytes one file. */

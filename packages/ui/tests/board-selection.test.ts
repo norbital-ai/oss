@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { afterEach, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { vi } from 'vitest';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Value } from '@norbital-ai/store/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { BoardProps } from '../src/board/Board.svelte';
 import type { Row } from '../src/model/types.ts';

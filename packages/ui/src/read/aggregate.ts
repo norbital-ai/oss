@@ -1,5 +1,5 @@
 import { Predicate } from 'effect';
-import type { Value } from '@norbital-ai/std/kind';
+import type { Value } from '@norbital-ai/store/kind';
 import type { Values } from '../model/types.js';
 /** An aggregate row flattened: `{ key: { region }, count, sum: { amount } }` → `{ region, count, 'sum.amount' }`, numbers plain. */
 export function flat(row: Values): { [k: string]: Value } {

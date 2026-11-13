@@ -1,7 +1,7 @@
 import { Result, Schema } from 'effect';
-import { input_schema, KindSchema, type Value } from '@norbital-ai/std/kind';
-import { encode_wire, type Json, type Wired } from '@norbital-ai/std/wire';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { input_schema, KindSchema, type Value } from '@norbital-ai/store/kind';
+import { encode_wire, type Json, type Wired } from '@norbital-ai/store/wire';
+import { Decimal } from '@norbital-ai/store/decimal';
 import type { AggRow, Page, Paged, ReadAnswer, ReadRequestBase } from '../decl/ctx.ts';
 import { ReadFailed } from '../decl/errors.ts';
 import { decode_read_request, type LayerRequestJson } from './read-request.ts';

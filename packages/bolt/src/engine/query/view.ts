@@ -1,7 +1,7 @@
 // Logical queries compile into three retained-view forms; row, counter and metadata changes share one lane.
 import { Effect, Option, Predicate, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/std/wire';
-import { equal_json } from '@norbital-ai/std/json';
+import { encode_wire } from '@norbital-ai/store/wire';
+import { equal_json } from '@norbital-ai/store/kind';
 import { argument_list, catalog_for, exposure_of, default_fields, type Catalog, type Pred, type SelectIR } from '@norbital-ai/store';
 import type { ReadIR } from '../../protocol/reads.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';

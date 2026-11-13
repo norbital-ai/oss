@@ -33,7 +33,7 @@
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import Input from '../primitives/input/input.svelte';
-	import { label as title } from '@norbital-ai/std/label';
+	import { label as title } from '@norbital-ai/store/label';
 	import { ui_text, use_controls } from '../primitives/utils.js';
 	import { Effect } from 'effect';
 	import { observe_once as queryState } from '../effect/index.js';

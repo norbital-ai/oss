@@ -28,7 +28,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 	import { cn, use_controls } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
-	import { Decimal } from '@norbital-ai/std/decimal';
+	import { Decimal } from '@norbital-ai/store/decimal';
 	import { format, minorDigits, moneyProblem } from './kind.js';
 
 	let {

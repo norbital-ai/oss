@@ -1,9 +1,9 @@
 import { actor_id, actor_ref } from '../access/actor.ts';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
 // Generated-verb batches and queued run starts are reachable only by policy. A batch plans guarded generated verbs and
 // commits their writes in one statement under its idempotency key. A start queues runs without executing them.
 import { Array as EffectArray, Effect, Layer, Predicate, Result, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';

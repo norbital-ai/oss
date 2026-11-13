@@ -1,5 +1,5 @@
-import type { Json } from '@norbital-ai/std/wire';
-import { input_schema, type Kind, type Value } from '@norbital-ai/std/kind';
+import type { Json } from '@norbital-ai/store/wire';
+import { input_schema, type Kind, type Value } from '@norbital-ai/store/kind';
 import { Result, Schema } from 'effect';
 import type { HistoryEntry, HistorySnapshot, ViewBolt } from '../client/contract.js';
 import { humanize, msg } from '../text/messages.js';

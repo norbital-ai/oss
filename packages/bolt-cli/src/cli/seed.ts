@@ -5,7 +5,7 @@
 // are first restored into a scratch database as the host restores them: a seed the host would refuse mid-restore fails
 // before anything is sent, so the environment stays as it was.
 import { Clock, Effect, FileSystem, Schema } from 'effect';
-import { sign_op } from '@norbital-ai/std/host-op';
+import { sign_op } from '@norbital-ai/bolt/node';
 import { TenantDb, type EngineManifest } from '@norbital-ai/bolt/engine';
 import { load_pack, memory_source } from '@norbital-ai/bolt/tooling';
 import { TestDb } from '../test/database.ts';

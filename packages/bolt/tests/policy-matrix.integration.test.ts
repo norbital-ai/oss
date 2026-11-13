@@ -11,7 +11,7 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { where_sql, type Pred } from '@norbital-ai/store';
-import type { Where } from '@norbital-ai/std/kind';
+import type { Where } from '@norbital-ai/store/kind';
 import { readOptions } from '../src/engine/query/reader.ts';
 import { from_store } from '../src/protocol/errors.ts';
 

@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 // G1: the families the per-area corpora (data.ts, access.ts, runtime.ts) leave open, one clean case and at least
 // one planted mistake each. Each `@ts-expect-error` line is a planted mistake.
-import { Decimal } from '@norbital-ai/std/decimal';
+import { Decimal } from '@norbital-ai/store/decimal';
 import { automation, policy } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
 import type { Id, InputOf, InstanceId, Row, Where } from '../../src/index.ts';

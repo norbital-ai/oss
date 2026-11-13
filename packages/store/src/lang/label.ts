@@ -1,12 +1,11 @@
 // Record titles from CEL and caller-specified display fields. Each display field is shown per kind (`show`, the
 // ui's formatter where one is at hand; else a locale-free default for dates, instants, decimals and relations), empty
 // terms are dropped and the rest joined with ' · '. Without a usable label, the record's id is its identifier.
-import { parse_json_result } from './json.ts';
 import { Decimal } from './decimal.ts';
 import type { Value } from './kind.ts';
-import { Result } from 'effect';
+import { Result, Schema } from 'effect';
 import { label_expression } from './label-expression.ts';
-import { UUID_PATTERN } from './id.ts';
+import { UUID_PATTERN } from './kind.ts';
 export { label_expression, label_text_sql } from './label-expression.ts';
 
 /** The fields a record-label expression reads. */
@@ -38,8 +37,8 @@ function text(v: Value | undefined): string | null {
 }
 
 const isJsonContainer = (s: string) => {
-	const result = parse_json_result(s);
-	return result._tag === 'Success' && typeof result.success === 'object';
+	const result = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Unknown))(s);
+	return Result.isSuccess(result) && typeof result.success === 'object';
 };
 
 const isList = (v: Value): v is readonly Value[] => Array.isArray(v);

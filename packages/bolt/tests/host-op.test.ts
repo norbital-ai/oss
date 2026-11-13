@@ -9,7 +9,7 @@ import {
 	verify_op,
 	type NonceStore,
 	type OpKey
-} from '../src/host-op.ts';
+} from '../src/node/host-op.ts';
 
 const key: OpKey = { secret: 'test-secret', scope: 'acme' };
 const NOW = Date.parse('2026-10-14T00:00:00.000Z');

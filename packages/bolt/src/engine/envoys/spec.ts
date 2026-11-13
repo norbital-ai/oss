@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from 'effect';
-import { IdValue } from '@norbital-ai/std/kind';
+import { IdValue } from '@norbital-ai/store/kind';
 import type { NonEmpty } from '../../decl/values.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { row } from '../system/rows.ts';

@@ -2,7 +2,7 @@
 <script lang="ts">
 	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect, Option, Schema } from 'effect';
-	import { csv_delimiter, csv_rows, csv_text } from '@norbital-ai/std/csv';
+	import { csv_delimiter, csv_rows, csv_text } from '../../engine/files/csv.ts';
 	import { Cluster } from '@norbital-ai/ui/layout';
 	import { watch } from 'runed';
 	import {

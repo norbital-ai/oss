@@ -23,9 +23,9 @@ export {
 	CatalogTable,
 	CatalogExposure,
 	DEFAULT_OUTPUT,
-	q,
 	exposure_of
 } from './catalog.ts';
+export { q, literal } from './sql.ts';
 export { type Cursor, CursorValue } from './cursor.ts';
 export {
 	argument_list,
@@ -44,7 +44,7 @@ export {
 } from './decode.ts';
 export { postgres_maintenance, sqlite_ownership } from './database.ts';
 export { StoreError } from './errors.ts';
-export { sha256, to_hex, sha256_hex, canonical } from '@norbital-ai/std/hash';
+export { sha256, to_hex, sha256_hex, canonical } from './hash.ts';
 export {
 	type Var,
 	type Operand,

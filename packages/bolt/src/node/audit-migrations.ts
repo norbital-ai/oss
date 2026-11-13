@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { Effect, Schema } from 'effect';
-import { equal_json } from '@norbital-ai/std/json';
+import { equal_json } from '@norbital-ai/store/kind';
 import {
 	APPLIED,
 	AppliedRow,

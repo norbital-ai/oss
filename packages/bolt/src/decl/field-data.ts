@@ -1,6 +1,6 @@
 // Declaration descriptors use catalogue text. Standalone UI kinds retain their own presentation options.
 import { Schema } from 'effect';
-import { KindSchema, OutputKindSchema, type OutputKind } from '@norbital-ai/std/kind';
+import { KindSchema, OutputKindSchema, type OutputKind } from '@norbital-ai/store/kind';
 
 const catalogue_text = (kind: OutputKind): boolean => {
 	if (kind.label !== undefined || kind.help !== undefined) return false;

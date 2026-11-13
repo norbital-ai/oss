@@ -2,8 +2,8 @@
 // planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
 import { automation, custom_field } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
-import { Decimal } from '@norbital-ai/std/decimal';
-import { PlainDate as plainDate } from '@norbital-ai/std/date';
+import { Decimal } from '@norbital-ai/store/decimal';
+import { PlainDate as plainDate } from '@norbital-ai/store/date';
 import type { Id, CreateInput, UpdateInput, PlainDate, PlainTime, Row, Where } from '../../src/index.ts';
 import type { DateLiteral, Exact, ValidInput, ValueOf } from '../../src/decl/fields.ts';
 import type { Expr, KindOfExpr, NullableOfExpr } from '../../src/decl/model.ts';

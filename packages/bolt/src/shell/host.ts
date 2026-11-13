@@ -35,7 +35,7 @@ import {
 } from '../engine/services.ts';
 import { Syncs } from '../engine/sync/index.ts';
 import { mayUpdate } from '../engine/write/act.ts';
-import { local_of } from '@norbital-ai/std/zone';
+import { local_of } from '@norbital-ai/store/zone';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { Logs } from '../engine/ports.ts';
@@ -118,7 +118,7 @@ import { readLog, runLog } from '../engine/guest/telemetry.ts';
 import { Audit } from '../engine/audit.ts';
 import { AuditQuery } from '../protocol/audit.ts';
 import { audited, auditActor } from '../engine/audit-operation.ts';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { canonical } from '@norbital-ai/store';
 import { fromBase64, timingSafeEqual } from '../engine/crypto.ts';
 import { PUSH_WORKER } from './push-worker.ts';

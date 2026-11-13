@@ -1,5 +1,5 @@
-import { item_kind, view_schema } from '@norbital-ai/std/kind';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { item_kind, view_schema } from '@norbital-ai/store/kind';
+import { Decimal } from '@norbital-ai/store/decimal';
 import { Array as Arr, Schema } from 'effect';
 import { value_object, type Kind, type Value } from './kind.js';
 import { resolve_json_schema, type JsonSchema } from './json-schema.js';

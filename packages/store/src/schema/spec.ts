@@ -4,7 +4,7 @@
 // `SchemaSpec` checks that every name a relation or an index uses exists.
 import { Predicate, Schema } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
-import { KindSchema, type Kind } from '@norbital-ai/std/kind';
+import { KindSchema, type Kind } from '../lang/kind.ts';
 
 export const FieldSpec = KindSchema;
 const Bool = Schema.optionalKey(Schema.Literal(true));

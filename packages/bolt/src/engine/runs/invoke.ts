@@ -4,7 +4,7 @@ import { runPiece } from './rows.ts';
 import { Cache, Cause, Clock, Context, Crypto, Deferred, Effect, Exit, Layer, Option, Predicate, Result, Schema, Semaphore } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { canonical, sha256_hex } from '@norbital-ai/store';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { WriteOutcome } from '../../protocol/schema.ts';

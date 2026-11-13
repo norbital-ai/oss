@@ -1,8 +1,8 @@
 // A time field's `precision`: the unit a picker offers and the value it emits, snapped to that unit's start.
 // Weeks start on Monday, as the workspace's weeks do. Pure: `YYYY-MM-DD` and `HH:MM` text only.
 /** The date units a picker offers and snaps to. */
-export type { DatePrecision, TimePrecision, Precision } from '@norbital-ai/std/kind';
-import type { DatePrecision, TimePrecision, Precision } from '@norbital-ai/std/kind';
+export type { DatePrecision, TimePrecision, Precision } from '@norbital-ai/store/kind';
+import type { DatePrecision, TimePrecision, Precision } from '@norbital-ai/store/kind';
 /** The coarse units a unit picker pages through (a year grid, a month grid, a month's week rows). */
 export type Unit = Exclude<DatePrecision, 'day'>;
 

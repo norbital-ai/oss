@@ -1,6 +1,6 @@
 // One read shape (a read request, the layer map `bolt.query` takes): what views build and how they take its answer apart.
 import { Predicate } from 'effect';
-import type { Json } from '@norbital-ai/std/wire';
+import type { Json } from '@norbital-ai/store/wire';
 import type { QueryAnswer, WireRead } from '../client/contract.js';
 import type { Page } from '../model/types.js';
 

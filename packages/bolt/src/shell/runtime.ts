@@ -2,8 +2,8 @@
 // shell's own routes, and the visitor fetch that names the page's app and spends one Turnstile token per request that
 // needs one.
 import { Clock, Context, Effect, Layer, Option, Queue, Schema, Stream } from 'effect';
-import { encode_wire, type Wired } from '@norbital-ai/std/wire';
-import { equal_json } from '@norbital-ai/std/json';
+import { encode_wire, type Wired } from '@norbital-ai/store/wire';
+import { equal_json } from '@norbital-ai/store/kind';
 import type { Json } from '../decl/values.ts';
 import type { InputKind, ValueOf } from '../decl/fields.ts';
 import type { ModelName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
@@ -506,11 +506,11 @@ export type RecordView<C extends string = string> =
 	| { model: C; mode: 'create'; values: Partial<RowFor<C>> };
 type CustomValue<F> = F extends CustomFieldName
 	? ValueOf<CustomShape<F>>
-	: import('@norbital-ai/std/kind').Value;
+	: import('@norbital-ai/store/kind').Value;
 type ViewCommon<F> = {
 	name: F;
 	value: CustomValue<F> | null;
-	row?: { readonly [field: string]: import('@norbital-ai/std/kind').Value };
+	row?: { readonly [field: string]: import('@norbital-ai/store/kind').Value };
 	kind?: F extends CustomFieldName ? CustomShape<F> : InputKind;
 	id?: string;
 	address?: { value: string | null; on_change?(next: string | null): void };

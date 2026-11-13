@@ -1,5 +1,5 @@
 // Native audit function SQL; the cell build packs these exact bytes.
-import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
 export const AUDIT_FUNCTIONS: readonly string[] = [
 	// An engine write statement sets `bolt.write` to its own statement_timestamp(): its rows' history and erasure
 	// columns come from the statement itself, so the row trigger stays for raw SQL alone.

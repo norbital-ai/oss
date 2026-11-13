@@ -3,10 +3,10 @@
 // header or key matches a column's name or catalogue caption, any case; an unknown one is ignored. A custom parser runs in the guest
 // (`sync/file.ts`); this module only says which parser an upload is read with.
 import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
-import { csv_delimiter, csv_rows, csv_text } from '@norbital-ai/std/csv';
-import { is_plain_date } from '@norbital-ai/std/date';
-import { utc_of } from '@norbital-ai/std/zone';
-import type { Fields, Kind } from '@norbital-ai/std/kind';
+import { csv_delimiter, csv_rows, csv_text } from './csv.ts';
+import { is_plain_date } from '@norbital-ai/store/date';
+import { utc_of } from '@norbital-ai/store/zone';
+import type { Fields, Kind } from '@norbital-ai/store/kind';
 import type { SyncEntry } from '../../decl/model.ts';
 import type { BuiltinParser, Finding } from '../../decl/runtime/sync.ts';
 import type { Json } from '../../decl/values.ts';

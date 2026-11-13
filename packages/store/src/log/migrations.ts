@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { StoreError } from '../errors.ts';
-import { canonical } from '@norbital-ai/std/hash';
-import { equal_json } from '@norbital-ai/std/json';
+import { canonical } from '../hash.ts';
+import { equal_json } from '../lang/kind.ts';
 import {
 	APPLIED,
 	MIGRATION_GUARD_CODES,
@@ -16,7 +16,7 @@ import {
 import { INTROSPECT } from '../migration-introspect.ts';
 import type { Sql } from '../read/sql.ts';
 import { log_spec, read_log_snapshot, type AppendOnlyLogSpec } from './spec.ts';
-import { literal as lit } from '@norbital-ai/std/sql';
+import { literal as lit } from '../sql.ts';
 
 const invalid = (message: string) =>
 	StoreError.of('migration_changed', 'admission', `append-only log: ${message}`);

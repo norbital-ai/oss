@@ -24,7 +24,7 @@
 	} from '../model/types.js';
 	import type { Json } from '../client/contract.js';
 	import type { OrderBy } from '../filter/order.js';
-	import type { Where } from '@norbital-ai/std/kind';
+	import type { Where } from '@norbital-ai/store/kind';
 	import type { Toolbar, ToolbarItem } from '../model/ViewToolbar.svelte';
 	import type { Kind } from '../kinds/kind.js';
 

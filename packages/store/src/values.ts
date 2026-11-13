@@ -1,9 +1,9 @@
 // Value types the store's literals and rows are made of. Type-only: the runtime values are std's (`Decimal`, and dates
 // and instants as std's branded ISO strings).
-import type { Decimal } from '@norbital-ai/std/decimal';
-import type { Instant, PlainDate } from '@norbital-ai/std/date';
-export type { Json } from '@norbital-ai/std/wire';
-export type { Duration, Offset } from '@norbital-ai/std/date';
+import type { Decimal } from './lang/decimal.ts';
+import type { Instant, PlainDate } from './lang/date.ts';
+export type { Json } from './lang/wire.ts';
+export type { Duration, Offset } from './lang/date.ts';
 export type { Decimal, Instant, PlainDate };
 export declare const brand: unique symbol;
 

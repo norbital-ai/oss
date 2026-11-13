@@ -2,10 +2,9 @@
 // and std need no bolt dependency), its traits, and its Schema: `input_schema(spec)` is the one validator of input and
 // stored values (callables, write flatten, IR literals, configuration, feed rows, AI output kinds). A decoded value is
 // JSON with std's `Decimal` for decimals; its encoding is the wire's (std/wire): `{ $dec }`, ISO dates and instants.
-import { Effect, Schema, SchemaGetter } from 'effect';
+import { Effect, Predicate, Schema, SchemaGetter } from 'effect';
 import { Decimal } from './decimal.ts';
 import { Instant, PlainDate } from './date.ts';
-import { UUID_PATTERN } from './id.ts';
 import type { Json } from './wire.ts';
 export type { Json };
 
@@ -354,6 +353,8 @@ const EMAIL = /^[^@\s]+@[^@\s]+$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 /** The canonical ID value, without retaining the field-kind catalogue. */
+/** The id kind's spelling: any UUID version, the nil id included, either hex case; SQL readers interpolate its source. */
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const IdValue = /*#__PURE__*/ (() =>
 	Schema.String.check(Schema.isPattern(UUID_PATTERN, { message: 'expected an id' })))();
 
@@ -969,3 +970,22 @@ export type InitialStampFields<Fields> = {
 			: never
 		: never;
 }[keyof Fields];
+
+const array = (value: unknown): value is readonly unknown[] => Array.isArray(value);
+/**
+ * Structural equality of JSON-shaped values, preserving array order and decimal text. Not Effect's `Equal.equals`: it
+ * memoises outer results per object pair, so a draft compared, edited and compared again would read the stale answer.
+ */
+export function equal_json(a: unknown, b: unknown): boolean {
+	const x = a instanceof Decimal ? a.toJSON() : a;
+	const y = b instanceof Decimal ? b.toJSON() : b;
+	if (x === y) return true;
+	if (array(x) || array(y))
+		return array(x) && array(y) && x.length === y.length && x.every((value, index) => equal_json(value, y[index]));
+	if (!Predicate.isReadonlyObject(x) || !Predicate.isReadonlyObject(y)) return false;
+	const entries = (value: Readonly<Record<string, unknown>>) =>
+		Object.entries(value).filter(([, item]) => item !== undefined);
+	const left = entries(x);
+	const right = new Map(entries(y));
+	return left.length === right.size && left.every(([key, value]) => right.has(key) && equal_json(value, right.get(key)));
+}

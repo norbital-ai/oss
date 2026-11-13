@@ -3,7 +3,7 @@
 // insert, so a resent upload adds no row and no count and answers the first `FileRef`. Refused before its bytes are
 // stored (grant, `accept`, `max`) it costs no statement.
 import { Effect, Schema } from 'effect';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
 import { LIMITS, type Authority, type Outcome } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';

@@ -10,7 +10,7 @@ import type { EngineError } from '../errors.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { LIMITS } from '../contracts.ts';
 import { output_schema } from '../callables/output.ts';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { EffectEvent } from '../../protocol/effect-events.ts';
 
 const Ids = Schema.Array(Schema.String).check(Schema.isBetweenLength(0, LIMITS.page.max));

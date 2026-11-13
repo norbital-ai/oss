@@ -16,10 +16,10 @@ import {
 import type { HttpClient } from 'effect/http';
 import { tick } from 'svelte';
 import type { FileRef, Json } from '../decl/values.ts';
-import { Instant, PlainDate } from '@norbital-ai/std/date';
-import { local_of } from '@norbital-ai/std/zone';
+import { Instant, PlainDate } from '@norbital-ai/store/date';
+import { local_of } from '@norbital-ai/store/zone';
 import { reactive_clock, reactive_query, run } from '@norbital-ai/ui/effect';
-import type { FileUrlOptions } from '@norbital-ai/std/kind';
+import type { FileUrlOptions } from '@norbital-ai/store/kind';
 import {
 	ActConflict,
 	ActRefused,
@@ -65,7 +65,7 @@ import { act_output, call_output, job_receipt, type OperationOutputs } from '../
 import type { ConvertSource, PreviewPdfOptions } from '../decl/runtime/facilities.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { FileRefSchema, stored_file_url } from './file-ref.ts';
-import { encode_wire, type Wired } from '@norbital-ai/std/wire';
+import { encode_wire, type Wired } from '@norbital-ai/store/wire';
 
 /** The optional document bridge a fleet host uses to inspect mounted snapshot clients without a live stream. */
 export interface PageSnapshotHost {

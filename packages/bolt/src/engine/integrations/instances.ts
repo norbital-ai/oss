@@ -5,7 +5,7 @@
 // an owner only where its driver syncs personal accounts, an envoy only on a workspace instance of a conversation
 // definition and a configuration that decodes with its defaults filled. Accounts remain runtime records.
 import { Clock, Crypto, Effect, Option, Predicate, Result, Schema } from 'effect';
-import { local_of } from '@norbital-ai/std/zone';
+import { local_of } from '@norbital-ai/store/zone';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { Drivers } from '../ports.ts';
@@ -15,7 +15,7 @@ import { prepareSend, sendPiece } from '../conversations/outbound.ts';
 import { stableId } from '../conversations/store.ts';
 import { parse_rate } from '../access/rate.ts';
 import { Port } from '../port.ts';
-import { KindSchema } from '@norbital-ai/std/kind';
+import { KindSchema } from '@norbital-ai/store/kind';
 import type { EngineManifest } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
 import {

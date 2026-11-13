@@ -1,6 +1,6 @@
 import { Result, Schema } from 'effect';
 import { ReadFailed } from '../decl/errors.ts';
-import type { Json, Wired } from '@norbital-ai/std/wire';
+import type { Json, Wired } from '@norbital-ai/store/wire';
 import { read_wire, typed_aggregate_answer, typed_read_answer, type AggregateArguments, type ReadCatalog } from '../protocol/read-answer.ts';
 import { HistoryRevisionSchema } from '../protocol/record-contracts.ts';
 import type { Measures, ReadRequest, ReadRequestBase } from '../decl/ctx.ts';

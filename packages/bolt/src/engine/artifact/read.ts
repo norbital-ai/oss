@@ -18,7 +18,7 @@ import type { GuestProgram } from '../guest/runner.ts';
 import { fingerprint, schema_slice } from '../schema/plan.ts';
 import { migration_schema, read_migrations, type MigrationBundle } from '../schema/migrations.ts';
 import { current } from '@norbital-ai/store';
-import { equal_json } from '@norbital-ai/std/json';
+import { equal_json } from '@norbital-ai/store/kind';
 import { from_store } from '../../protocol/errors.ts';
 import { packLoader, type Pack, type PackSource, type SeedAsset } from '../write/pack.ts';
 

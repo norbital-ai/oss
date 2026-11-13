@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { UiContext } from '../client/contract.js';
-	import { item_kind } from '@norbital-ai/std/kind';
+	import { item_kind } from '@norbital-ai/store/kind';
 	import { format_value as show, format, inferKind, currencyOf } from '../kinds/kind.js';
 	// One stored value, read-only: by its kind through the kit's `Show` when the catalog knows the field, else by shape
 	// (files open through `/files`, where the viewer's read grant decides; a mask shows locked).
@@ -40,7 +40,7 @@
 		link: linked = true
 	}: {
 		ctx: UiContext;
-		value: import('@norbital-ai/std/kind').Value | undefined;
+		value: import('@norbital-ai/store/kind').Value | undefined;
 		kind?: Kind | undefined;
 		row?: Values;
 		ref?: Ref | undefined;
@@ -78,7 +78,7 @@
 					(Array.isArray(value) || dataEntries(value) !== undefined)))
 	);
 	function preview(
-		held: import('@norbital-ai/std/kind').Value | undefined,
+		held: import('@norbital-ai/store/kind').Value | undefined,
 		declared?: Kind,
 		depth = 0
 	): string {

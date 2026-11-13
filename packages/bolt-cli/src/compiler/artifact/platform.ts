@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // The platform layer ("Sharing package code in memory"): the browser code of Bolt's shell and page entries, ui,
-// svelte, effect, std and the packages they pin, built with no workspace input at all. Every artifact on one Bolt
+// svelte, effect and the packages they pin, built with no workspace input at all. Every artifact on one Bolt
 // release carries the same `assets/platform/**` byte for byte, so the CAS, a host's byte cache and a browser's cache
 // hold one copy. A workspace's own build imports every module the layer exposes (an entry, its exports kept exactly)
 // from there, and bundles only its own code and the packages it added.
@@ -30,19 +30,6 @@ const ENTRIES = [
 /** Bare specifiers the layer exposes, resolved as the shell resolves them, else as ui does; one a release lacks is left out. */
 const SPECIFIERS = [
 	...['', '/layout', '/brand', '/effect'].map((sub) => `@norbital-ai/ui${sub}`),
-	...[
-		'csv',
-		'date',
-		'decimal',
-		'formula',
-		'json',
-		'kind',
-		'label',
-		'sheet',
-		'versioned',
-		'wire',
-		'zone'
-	].map((sub) => `@norbital-ai/std/${sub}`),
 	...[
 		'',
 		'/animate',

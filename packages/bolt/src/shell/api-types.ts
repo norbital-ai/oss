@@ -3,7 +3,7 @@
 // show). Agent acts answer their `Outcome`: a refusal there is a business answer the panel renders. Pinned for
 // R6a (the implementation in `runtime.ts`) and R6b (the Svelte components that run it on the ui edge).
 import { Schema, type Effect } from 'effect';
-import type { FileRef } from '@norbital-ai/std/kind';
+import type { FileRef } from '@norbital-ai/store/kind';
 import type { Attachment } from '../decl/runtime/integration.ts';
 import { SyncDeadLetter, SyncHealth } from '../engine/sync/health-schema.ts';
 import type { Json } from '../decl/values.ts';

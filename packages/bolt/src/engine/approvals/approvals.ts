@@ -7,7 +7,7 @@ import { constraintIndex } from '../schema/plan.ts';
 import { Clock, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/store/wire';
 import { bindingsAt } from '../query/reader.ts';
 import {
 	Approvals,

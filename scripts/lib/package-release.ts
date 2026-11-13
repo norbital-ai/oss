@@ -48,7 +48,6 @@ export const publicPackageDirectories = [
 	'bolt-cli',
 	'bolt-server',
 	'providers',
-	'std',
 	'store',
 	'ui'
 ] as const;

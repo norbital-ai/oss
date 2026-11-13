@@ -13,7 +13,7 @@
 	import { filterable, INDEX, offeredPaths, resolve, childOf, type FilterStep, type Offer } from './catalog.js';
 	import { pathLabel } from './text.js';
 	import { humanize, msg } from '../text/messages.js';
-	import type { Kind } from '@norbital-ai/std/kind';
+	import type { Kind } from '@norbital-ai/store/kind';
 
 	type Entry = { path: string; label: string; depth: number; many?: true; open?: boolean };
 	let {

@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { Instant } from '@norbital-ai/std/date';
+import { Instant } from '../src/lang/date.ts';
 import { build, schema, store, table } from '../src/index.ts';
 import { database, run, script } from './support.ts';
 

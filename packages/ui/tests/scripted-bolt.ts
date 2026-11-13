@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, ManagedRuntime, Option, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/std/wire';
-import type { Value } from '@norbital-ai/std/kind';
+import { encode_wire } from '@norbital-ai/store/wire';
+import type { Value } from '@norbital-ai/store/kind';
 import { create_bolt, type Bolt, type BoltConfig } from '../../bolt/build/page/bolt.js';
 import type { EventSourceLike } from '../../bolt/build/page/stream.js';
 import { view_client } from '../../bolt/build/page/view-client.js';

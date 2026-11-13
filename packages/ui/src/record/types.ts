@@ -1,6 +1,6 @@
 import type { UiContext } from '../client/contract.js';
 import type { Component } from 'svelte';
-import type { Json } from '@norbital-ai/std/wire';
+import type { Json } from '@norbital-ai/store/wire';
 import type { RecordOf, InsertOf } from '../model/types.js';
 /** Native advisory capabilities of the current record; saving always rechecks the backend rules. */
 export type RecordRestriction =

@@ -2,7 +2,7 @@
 // that history records `restored` from that revision. Later history stays; restoring an earlier entry undoes it. Not
 // point-in-time recovery (the whole database to a moment) and not a source rollback (the workspace code).
 import { Effect, Option, Predicate, Schema } from 'effect';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, Outcome, RowData } from '../contracts.ts';
 import type { ActRequest, ActResult } from '../services.ts';

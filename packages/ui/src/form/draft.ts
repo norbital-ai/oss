@@ -11,9 +11,9 @@ import {
 	type Kind
 } from '../kinds/kind.js';
 import { matchesLock } from '../record/lock.js';
-import { equal_json } from '@norbital-ai/std/json';
-import { UUID_PATTERN } from '@norbital-ai/std/id';
-import type { Where } from '@norbital-ai/std/kind';
+import { equal_json } from '@norbital-ai/store/kind';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
+import type { Where } from '@norbital-ai/store/kind';
 import type { Outcome } from '../client/contract.js';
 
 /** A row's values by field name. */

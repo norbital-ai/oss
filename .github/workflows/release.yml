@@ -54,7 +54,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 26.0.0
+          node-version: 26.13.1
           package-manager-cache: false
 
       # npm owns the final normalized tar stream. Pinning it makes the package key independent of
