@@ -1,9 +1,13 @@
 // An automation listening to a system model's writes: an accepted invitation creates the `sys_user`, and the
-// automation runs once after that commit, as the system identity with its policies, with the written ids.
+// automation runs once after that commit, as the system identity with its policies, with the written ids. An identity
+// write made inside a run chains one deeper, so a listener rewriting the user it heard stops at the depth limit.
 import { expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { founder_bootstrap } from '../src/engine/identity/session.ts';
+import { setHandles } from '../src/engine/identity/members.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
+import { LIMITS } from '../src/engine/contracts.ts';
 import { HostIdentity } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
@@ -40,6 +44,11 @@ const manifest = Result.getOrThrow(
 				description: 'A profile for each new or changed member',
 				policies: ['provisioner'],
 				on: [{ model: 'sys_user', verbs: ['create'] }]
+			},
+			echo: {
+				description: 'Rewrites the member it heard',
+				policies: ['staff'],
+				on: [{ model: 'sys_user', verbs: ['update'] }]
 			}
 		},
 		mcp: {},
@@ -124,6 +133,45 @@ layer(workspace)('write triggers', (it) => {
 					'Idempotency-Key': crypto.randomUUID()
 				})
 			).toBe(403);
+		})
+	);
+
+	it.effect('an identity write inside a run chains one deeper, so a self-rewriting listener stops at the limit', () =>
+		Effect.gen(function* () {
+			const t = yield* TestWorkspace;
+			const h = yield* HostIdentity;
+			const boss = yield* t.db.value(Schema.String, {
+				text: `SELECT id FROM sys_user WHERE email = 'boss@acme.example'`,
+				params: []
+			});
+			const admin = yield* compile_authority(
+				manifest,
+				{
+					actor: { kind: 'member', id: boss, email: 'boss@acme.example', phone: null, external: false, teams: [], team_path: [], admin: true, party: null },
+					policies: [],
+					admin: true
+				},
+				boss
+			);
+			const last = () =>
+				t.db.rows(Schema.Struct({ depth: Schema.Number, state: Schema.String, code: Schema.NullOr(Schema.String) }), {
+					text: `SELECT depth, state, error->>'code' AS code FROM sys_run WHERE automation = 'echo' ORDER BY depth DESC, due_at DESC LIMIT 1`,
+					params: []
+				});
+			// the listener's body: every run it gets rewrites the same member, as that run (a person starts the chain)
+			let run: number | undefined;
+			for (let hop = 0; hop < 20; hop++) {
+				yield* setHandles(h, run === undefined ? admin : { ...admin, run: { depth: run, holder: { actor: admin.actor, policies: [], admin: true, teamTree: [], scopes: {} } } }, boss, {
+					telegram: `hop${hop}`
+				});
+				const [heard] = yield* last();
+				if (heard === undefined || heard.state === 'failed') break;
+				run = heard.depth;
+			}
+			expect(yield* last()).toEqual([{ depth: LIMITS.writeDepth + 1, state: 'failed', code: 'depth' }]);
+			expect(
+				yield* t.db.value(Schema.Number, { text: `SELECT count(*)::int FROM sys_run WHERE automation = 'echo'`, params: [] })
+			).toBe(LIMITS.writeDepth + 2);
 		})
 	);
 });

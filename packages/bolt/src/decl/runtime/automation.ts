@@ -98,7 +98,9 @@ export type AutomationSpec = AutomationMode & {
 	 * authority, so the follow-up needs nothing from the person who wrote. One committed statement queues one run per
 	 * automation and verb, in that statement (durable, never per row); `ctx.run.trigger` is
 	 * `{ kind: 'system', cause: 'event', model, verb, records }` with the written ids, and the body reads the rows it needs.
-	 * The run takes no input. A write held for approval emits nothing; a run's own writes chain at most 8 deep.
+	 * The run takes no input. A write held for approval emits when the approving decision commits it, with each held
+	 * record's net verb; a rejected or withdrawn one emits nothing. Every write a run makes, identity ones included,
+	 * chains one deeper; past 8 the queued run is recorded failed (`depth`) instead of running.
 	 * A model's own reaction to its writes stays its `effect`.
 	 * @example on: [{ model: 'sys_user', verbs: ['create', 'update'] }]
 	 */

@@ -255,11 +255,26 @@ export function queue_events(
 	enqueue(c, { select: selects.join(' UNION ALL ') }, when === undefined ? {} : { when });
 }
 
-/** The closing decision releases frozen jobs atomically, or discards them when the change is rejected. */
-export function settleApprovalEffects(c: Chain, request: string, stands: boolean): void {
+/**
+ * The closing decision releases frozen jobs atomically, or discards them when the change is rejected. A standing
+ * change emits its held records' write events now, each with its net verb, at the decider's depth.
+ */
+export function settleApprovalEffects(
+	m: EngineManifest,
+	c: Chain,
+	request: string,
+	stands: boolean,
+	now: string,
+	depth: number
+): void {
 	const released = c.cte('ap_released_effects',
 		`DELETE FROM bolt_approval_effect WHERE request=${c.p(request)}::uuid
 		AND EXISTS (SELECT 1 FROM up) AND ${GATED} RETURNING *`);
-	if (stands) enqueue(c, { select: `SELECT automation,input,due_at,'effect'::text AS cause,
+	if (!stands) return;
+	enqueue(c, { select: `SELECT automation,input,due_at,'effect'::text AS cause,
 		depth,actor,starter,state,error,finished_at FROM ${released}` });
+	const { writes } = triggers_of(m);
+	if (writes.length > 0)
+		queue_events(c, writes, `${c.p(now)}::timestamptz`, `(SELECT r->>'collection' AS c,r->>'id' AS id,r->>'op' AS op
+		FROM bolt_approvals a CROSS JOIN LATERAL jsonb_array_elements(a.records) r WHERE a.id IN (SELECT id FROM up))`, depth, GATED);
 }

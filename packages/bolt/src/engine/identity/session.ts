@@ -418,7 +418,8 @@ export function identityHistory(
 	cte: string,
 	at: Date,
 	actor: string | null,
-	writes: readonly WriteTrigger[] | undefined
+	writes: readonly WriteTrigger[] | undefined,
+	depth: number
 ): void {
 	const source = s.cte(
 		`${cte}_changes`,
@@ -429,9 +430,8 @@ export function identityHistory(
 	);
 	// identity writes run in the audited batch, which names its operation for the transaction
 	history_piece(s, source, { operation: "nullif(current_setting('bolt.audit',true),'')" });
-	// ponytail: identity writes chain at depth 0; pass the writer's run depth if an automation's identity write loops
 	const listening = (writes ?? []).filter((w) => w.model === table);
-	if (listening.length > 0) queue_events(s, listening, `${s.p(at.toISOString())}::timestamptz`, source, 0);
+	if (listening.length > 0) queue_events(s, listening, `${s.p(at.toISOString())}::timestamptz`, source, depth);
 }
 /** The actor a history row names: `member:<id>` (as the write area's `actor_ref`), or the host. */
 export const by = (auth: Authority | null): string =>
@@ -482,12 +482,12 @@ export function acceptPieces(
 	const actor = `member:${user}`;
 	identityPiece(s, 'accepted', 'sys_invitation', `UPDATE sys_invitation SET accepted_at = ${s.p(now.toISOString())}::timestamptz, revision = revision + 1
 	WHERE ${openInvitation(s, inv.id, now)} AND ${gate}`);
-	identityHistory(s, 'sys_invitation', 'accepted', now, actor, writes);
+	identityHistory(s, 'sys_invitation', 'accepted', now, actor, writes, 0);
 	if (born) s.cte('member', 'SELECT id FROM born WHERE EXISTS (SELECT 1 FROM accepted)');
 	else {
 		identityPiece(s, 'member', 'sys_user', `UPDATE sys_user SET team = coalesce(${s.p(inv.team)}, team), kind = ${s.p(inv.external ? 'external' : 'staff')},
 		party = ${s.p(jsonb(inv.party))}::jsonb, revision = revision + 1 WHERE id = ${s.p(user)} AND EXISTS (SELECT 1 FROM accepted)`);
-		identityHistory(s, 'sys_user', 'member', now, actor, writes);
+		identityHistory(s, 'sys_user', 'member', now, actor, writes, 0);
 	}
 }
 const openInvitation = (s: IdentityStatement, id: string, now: Date) =>
@@ -672,7 +672,7 @@ export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 					.map(([k, v]) => `${k} = ${v}`)
 					.join(', ')}, revision = revision + 1
 	WHERE id = ${s.p(userId)} AND kind = 'anonymous' AND active AND ${when}`);
-		identityHistory(s, 'sys_user', 'born', now, `member:${userId}`, h.writes);
+		identityHistory(s, 'sys_user', 'born', now, `member:${userId}`, h.writes, 0);
 		if (upgraded !== undefined)
 			capturePiece(s, 'anonymous_sessions', 'sys_session', `DELETE FROM sys_session WHERE "user" IN (SELECT id FROM born) AND via = ${s.p(ANONYMOUS)}`);
 	};
@@ -713,7 +713,7 @@ export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 	} else if (user?.kind === 'external' && user.party === null && party !== null) {
 		identityPiece(s, 'bound', 'sys_user', `UPDATE sys_user SET party = ${s.p(jsonb(party))}::jsonb, revision = revision + 1
 	WHERE id = ${s.p(userId)} AND party IS NULL AND EXISTS (SELECT 1 FROM used)`);
-		identityHistory(s, 'sys_user', 'bound', now, `member:${userId}`, h.writes);
+		identityHistory(s, 'sys_user', 'bound', now, `member:${userId}`, h.writes, 0);
 	}
 	// a member born by accepting an invitation or signing up is projected, in this statement
 	const project = born && projection(h, s, 'born', now, signup ? 'true' : 'EXISTS (SELECT 1 FROM accepted)');
@@ -757,7 +757,7 @@ export const mintAnonymous = Effect.fn('Bolt.mintAnonymous')(function* (h: Ident
 		s = new IdentityStatement(),
 		at = s.p(now.toISOString());
 	identityPiece(s, 'born', 'sys_user', `INSERT INTO sys_user (id, name, kind) VALUES (${s.p(user)}, 'Anonymous', ${s.p(ANONYMOUS)})`);
-	identityHistory(s, 'sys_user', 'born', now, `visitor:${user}`, h.writes);
+	identityHistory(s, 'sys_user', 'born', now, `visitor:${user}`, h.writes, 0);
 	capturePiece(s, 'sess', 'sys_session', `INSERT INTO sys_session ${SESSION_COLUMNS} SELECT ${s.p(session)}, id, ${s.p(sha256(token))}, ${s.p(ANONYMOUS)},
 	${at}::timestamptz, ${s.p(new Date(now.getTime() + ANONYMOUS_MS).toISOString())}::timestamptz, ${at}::timestamptz FROM born`);
 	yield* nativeCommit(h.db.write, h.publication, s, CapturedResult);
@@ -790,7 +790,7 @@ export const mergeAnonymous = Effect.fn('Bolt.mergeAnonymous')(function* (
 	}
 	capturePiece(s, 'gone', 'sys_session', `DELETE FROM sys_session WHERE "user" = ${anon}`);
 	identityPiece(s, 'retired', 'sys_user', `UPDATE sys_user SET active = false, revision = revision + 1 WHERE id = ${anon} AND active`);
-	identityHistory(s, 'sys_user', 'retired', now, `member:${to}`, h.writes);
+	identityHistory(s, 'sys_user', 'retired', now, `member:${to}`, h.writes, 0);
 	yield* nativeCommit(h.db.write, h.publication, s, CapturedResult)
 		.pipe(
 			Effect.catchTag('DbError', (error) =>
@@ -1013,7 +1013,7 @@ export const founder_bootstrap = Effect.fn('Bolt.founder_bootstrap')(function* (
 		ON CONFLICT (${a.kind === 'email' ? 'lower(email)' : 'phone_key'}) DO UPDATE
 		SET admin = true, revision = sys_user.revision + 1
 		WHERE sys_user.kind = 'staff' AND sys_user.active AND NOT EXISTS (SELECT 1 FROM sys_user WHERE admin)`);
-		identityHistory(s, 'sys_user', 'ins', now, 'host', h.writes);
+		identityHistory(s, 'sys_user', 'ins', now, 'host', h.writes, 0);
 		s.cte('u', 'SELECT id FROM existing UNION ALL SELECT id FROM ins');
 		capturePiece(s, 'sess', 'sys_session', `INSERT INTO sys_session ${SESSION_COLUMNS} SELECT v.id, u.id, v.h, v.via, v.c, v.e, v.r
 		FROM u, (VALUES (${sessionValues(s, now, 'host', sha256(token), sessionId)})) v(id, h, via, c, e, r)

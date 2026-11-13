@@ -616,7 +616,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						preserve_local: true,
 						missing_only: true
 					});
-				if (!open) settleApprovalEffects(c, a.id, stands);
+				if (!open) settleApprovalEffects(m, c, a.id, stands, now, writerOf(auth).depth);
 				c.assert(
 					'(SELECT count(*) FROM up) = 1',
 					'conflict',
