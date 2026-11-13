@@ -2,6 +2,11 @@
 @component
 An exact money amount in `currency`: the currency as the box's leading affix, the amount typed plain and shown grouped in
 the currency's minor digits once the box loses focus. Kept as its exact decimal text.
+
+@example
+```svelte
+<MoneyInput {ctx} currency="SGD" value={amount} on_change={(next) => (amount = next)} />
+```
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -11,13 +16,21 @@ the currency's minor digits once the box loses focus. Kept as its exact decimal 
 	export type MoneyInputProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The amount as a Decimal; `null` when empty. */
 		value: Value;
+		/** Called with a Decimal once the text is a whole number (`null` when cleared); half-typed text like `1.` is held back. */
 		on_change(next: Value): void;
+		/** ISO 4217 code shown as the leading affix; sets the minor digits. Omitted, digits are unbounded. */
 		currency?: string;
+		/** Decimal places allowed, overriding the currency's minor digits. */
 		scale?: number;
+		/** The id on the input, for `<label for>`. */
 		id?: string;
+		/** Shows the formatted amount as copyable text; defaults to the enclosing `Form`/`Field` mode. */
 		readonly?: boolean;
+		/** Muted and inert; defaults to the enclosing `Form`/`Field` mode. */
 		disabled?: boolean;
+		/** Marks the box invalid (a value problem marks it too). */
 		invalid?: boolean;
 	};
 </script>

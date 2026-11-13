@@ -170,6 +170,7 @@ export type HostFailure = typeof HostFailure.Type;
 /** Anything else: the database went away, a host port threw. The host may retry it elsewhere; an engine answer stands. */
 const HostDefect = Schema.TaggedStruct('HostDefect', { message: Schema.String });
 type HostDefect = typeof HostDefect.Type;
+/** What a Host API call rejects with: an engine answer (`HostFailure`) or a retryable host defect (`HostDefect`). */
 export const HostApiFailure = Schema.Union([HostFailure, HostDefect]);
 export type HostApiFailure = typeof HostApiFailure.Type;
 
@@ -307,7 +308,11 @@ export type ActiveWorkspace = {
 	 * webhooks; `null` when none is Bolt's. Event streams end when the generation closes.
 	 */
 	handle(request: Request, options: { readonly address: string }): Promise<Response | null>;
-	/** Protected public-page loading and HTML rendering share one read-only guest invocation. */
+	/**
+	 * Protected public-page loading and HTML rendering share one read-only guest invocation. A host routes public
+	 * documents here before static client serving, passing the original request and keeping the returned cookies,
+	 * status, cache and content-security headers; serving `index.html` for a public route bypasses rendering.
+	 */
 	render(
 		request: Request,
 		options: Signal & { readonly address: string }
@@ -407,6 +412,10 @@ export type WorkspaceLinks = {
 	/** `/__bolt/integrations/*` for an authorized caller; `null` otherwise. */
 	admin(request: Request, authority: Authority): Promise<Response | null>;
 };
+/**
+ * The versioned boundary a host drives one Bolt release through: Promise + AbortSignal calls with Schema JSON answers,
+ * so hosts and releases on different module graphs interoperate.
+ */
 export type HostApi = {
 	/** Hosts admit only runtimes that evaluate tenant source without restoring native snapshots. */
 	readonly guest_execution: 'source';
@@ -435,6 +444,12 @@ export type HostApi = {
 			options: Signal
 		): Promise<readonly string[]>;
 	};
+	/**
+	 * Applies the artifact's verified migration files (checksummed, one transaction each under the `bolt:schema`
+	 * advisory lock, ledger and receipt committed with the file) and activates the release. Refuses a bundle whose
+	 * recorded needs name a facility left `off`, live schema drift from the verified lock (even when every applied
+	 * checksum matches), and a database with no migration ledger: an existing schema is never adopted.
+	 */
 	activate(ports: HostPorts, options: Signal): Promise<ActiveWorkspace>;
 	branch(ports: BranchPorts, options: Signal): Promise<WorkspaceBranch>;
 	links(host: LinkHost, options: Signal): Promise<WorkspaceLinks>;
@@ -1076,6 +1091,7 @@ class LinkManagerService extends Context.Service<
 	import('../engine/integrations/links.ts').LinkManager
 >()('bolt/HostApiLinks') {}
 
+/** This release's `HostApi` implementation, the one value a host imports from a release. */
 export const HOST_API: HostApi = {
 	guest_execution: 'source',
 	version: HOST_API_VERSION,

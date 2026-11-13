@@ -13,15 +13,21 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	export type FileInputProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The `file` kind: its accept list and max size; `many` allows up to 20 files. */
 		kind: KindOf<'file'>;
+		/** The uploaded file ref, or a list of refs when `many`. */
 		value: Value;
+		/** Called with the next ref(s) once an upload finishes or a file is removed. */
 		on_change(next: Value): void;
 		/** Standalone request forms keep submit disabled while bytes are uploading. */
 		on_pending_change?(pending: boolean): void;
 		/** The field name the upload is checked against. */
 		name: string;
+		/** The id on the trigger, for `<label for>`. */
 		id?: string;
+		/** Blocks uploads and removal. */
 		disabled?: boolean;
+		/** Marks the field invalid. */
 		invalid?: boolean;
 	};
 </script>

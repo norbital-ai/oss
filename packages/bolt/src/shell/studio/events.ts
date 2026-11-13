@@ -23,6 +23,10 @@ const FrameSchema = Schema.Union([
 		state: Schema.Literals(['running', 'done', 'failed'])
 	})
 ]);
+/**
+ * Studio's server-sent frames (log lines, source, change, tests and phase moves) as a stream; the event source closes
+ * with the stream. An undecodable event or a dropped connection fails it with `StudioStreamFailed`.
+ */
 export const studio_events = (url = based(`${SHELL}/studio/events`)) =>
 	Stream.callback<StudioFrame, StudioStreamFailed>((queue) =>
 		Effect.acquireRelease(

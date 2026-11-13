@@ -234,6 +234,7 @@ const create = (from: PgliteSource | undefined): Effect.Effect<PGlite, DbError, 
 		});
 	});
 
+/** The tenant database adapter over an in-process PGlite, for local and test hosts. */
 export const PgliteDb = {
 	/** The adapter over an open PGlite (its session zone must be UTC; `open` sets it). */
 	make: (pg: PgliteClient): TenantDbShape => {

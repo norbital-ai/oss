@@ -33,6 +33,7 @@ Every `+<page>.page.svelte` renders inside one.
 		variant?: AppShellVariant;
 		/** Header actions the shell places beside the hero title (today's `AppHeaderActions`). */
 		actions?: Snippet;
+		/** The page body; it fills the space below the hero. */
 		children: Snippet;
 	}
 </script>

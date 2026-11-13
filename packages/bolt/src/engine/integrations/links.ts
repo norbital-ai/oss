@@ -65,6 +65,7 @@ import { Syncs, syncs_of } from '../sync/index.ts';
 import { verifiedWebhook } from './webhook.ts';
 
 export const HOOKS = '/hooks/integration/';
+/** The host path an OAuth provider redirects back to after a link's consent. */
 export const OAUTH_CALLBACK = '/hooks/oauth/callback';
 export const webhook_url = (public_url: string, instance: string): string =>
 	under(public_url, `${HOOKS}${encodeURIComponent(instance)}`);

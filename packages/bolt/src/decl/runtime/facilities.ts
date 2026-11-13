@@ -131,12 +131,20 @@ export type StartOutput<A> = A extends AutomationName ? OutputOf<AutomationSpecO
 type RunResult<A> = A extends AutomationName
 	? AutomationSpecOf<A> extends { mode: 'call' } ? StartOutput<A> : RunHandle<A>
 	: never;
-/** Code invokes a call in this request or queues a job, according to its declaration. */
+/**
+ * `ctx.run`: invokes a call in this request (answering its declared output) or queues a job (answering its durable
+ * handle), according to its declaration. Automations and model effects run it; a page has its own `run`. The started
+ * run executes as its own automation's `policies`, never the caller's. A person's start needs a policy's
+ * `capabilities.automations` grant (30 starts per automation and starter a minute); code that runs or schedules needs none.
+ */
 export interface Run {
 	<const A extends string>(automation: Is<A, AutomationName>, input: StartInput<A>): Eff<RunResult<A>, ActRefused>;
 }
 type JobName = { [A in AutomationName]: AutomationSpecOf<A> extends { mode: 'call' } ? never : A }[AutomationName];
-/** `ctx.schedule`: queues a job automation after the current write commits. */
+/**
+ * `ctx.schedule`: queues a job automation after the current write commits (automations and model effects). Follow its
+ * progress and result in the runs catalogue (`ctx.runs`, ui's `RunStatus`).
+ */
 export interface Schedule {
 	/** Due at once without `at`; with `key`, a queued run under the same key is replaced. */
 	<const A extends string>(
@@ -150,7 +158,8 @@ export interface Schedule {
 /**
  * Whom a notice goes to: a team's members, one member, a policy's holders, or, in an approval effect
  * event, the request's `'requester'` or the current step's `'approvers'` (teams and users); elsewhere those two resolve
- * to nobody.
+ * to nobody. `'approvers'` resolves at delivery against active staff, leaves out the requester, and sends nothing once
+ * the request has closed.
  */
 export type Recipient =
 	| { team: TeamName }
@@ -164,29 +173,43 @@ export type Recipient =
  */
 type NoticeAttachment =
 	FileRef | { document: ConvertSource; to: ConvertTarget; name: string };
+type ConversationDefinition = {
+	[D in IntegrationName]: [ConversationOf<D>] extends [never] ? never : D;
+}[IntegrationName];
 /**
- * One notice. The in-app inbox always gets it; `via` also sends it through persisted conversation instances
- * to each recipient's handle there. `link` defaults to the record the event is about; `once`
- * delivers at most one notice per key.
+ * One notice. The in-app inbox always gets it (and every device of each recipient through the live lane and push).
+ * Code decides wording, grouping and which events notify; approval inbox notices already exist.
  * @example
  * { title: 'New review job', description: `${name} is waiting on the board.`, to: [{ team: 'reviewers' }],
  *   via: [hotline.id], attachments: [{ document: { html }, to: 'pdf', name: 'Brief.pdf' }] }
  */
-type ConversationDefinition = {
-	[D in IntegrationName]: [ConversationOf<D>] extends [never] ? never : D;
-}[IntegrationName];
 export type Notice = {
 	/** Plain text, stored and shown as written; not a message key. */
 	title: Msg;
 	/** Plain text, as `title`. */
 	description?: Msg;
 	to: readonly Recipient[];
+	/**
+	 * Persisted conversation instances (runtime `sys_integration` rows, by `instance_id`) that also send it to each
+	 * recipient's handle there.
+	 */
 	via?: readonly InstanceId<ConversationDefinition>[];
 	attachments?: readonly NoticeAttachment[];
+	/** Defaults to the record the event is about; it opens in the workspace's record sheet. */
 	link?: RecordRef;
+	/** At most one notice per key, so retried business work does not repeat it. */
 	once?: string;
 };
-/** `ctx.notify`: queues notices, delivered after the current write commits; a notice never delays or fails it. */
+/**
+ * `ctx.notify`: queues notices, delivered after the current write commits; a notice never delays or fails it.
+ * Automations notify as their policies; model effects as the writer, after a committed write or an approval move.
+ * @example
+ * update: { effect: function* (changes, ctx) {
+ * 	if (ctx.event.kind !== 'write') return;
+ * 	yield* ctx.notify(changes.map(({ after }) => ({ title: 'Project moved', to: [{ team: 'reviewers' }],
+ * 		link: { model: 'projects', id: after.id }, once: `project-moved:${after.id}` })));
+ * } }
+ */
 export type Notify = (notice: Notice | readonly Notice[]) => Eff<void>;
 
 // ── facility errors ──
@@ -199,7 +222,8 @@ type Out<O> = O & Checked<InputKind, O, Exact<O, ValidInput<O>>>;
 
 // ── browser: a run-scoped tab, closed when the run's scope ends ──
 /**
- * `ctx.browser`: the automation run's own browser tab. It has no person's cookies: its profile is
+ * `ctx.browser` (automations and model effects; the host must provide the facility): the run's own browser tab. Use
+ * `ctx.web.read` for page text that needs no interaction. It has no person's cookies: its profile is
  * `BROWSER_RUN_PROFILE + run.id`, sealed under the tenant's browser key and closed when the run ends.
  * `navigate` opens an http(s) URL; `snapshot`, `act` and `evaluate` read and act on it; `close` closes it now.
  * `download` keeps the media file at a URL (an image, audio, video, a PDF, or a CAD model or drawing, at most 100 MiB,
@@ -230,10 +254,16 @@ type SendPayload<N> =
 			? 'error: this integration carries no conversation; send goes through a conversation instance'
 			: SendInput<IntegrationOf<N>>;
 /**
- * Queues a message through one conversation instance (the outbox delivers it after the run's write commits); a
- * union-typed target is a type error, and a member's personal instance refuses at run time. The returned id is
- * queue admission, not provider acceptance. An unpaired account keeps it queued; read sys_message status/sent_at with
- * an explicit output grant before recording delivery or a sent timestamp in a business model.
+ * `ctx.send` (automations and model effects; a sync `write` sends through its own instance): queues a message through
+ * one conversation instance (the outbox delivers it after the run's write commits); a union-typed target is a type
+ * error, and a member's personal instance refuses at run time. The returned `sys_message` id is queue admission, not
+ * provider acceptance: keep it on the business record. An unpaired account keeps the message queued without spending
+ * attempts, and pairing releases the queue, after a host restart too; order holds per account and conversation. Read
+ * the message's status and `sent_at` under an explicit output grant before recording delivery or a Sent timestamp. A
+ * provider timeout leaves the send `uncertain`; it is repeated only where the provider dedupes (`idempotent_sends`), and
+ * a retried run may repeat its committed sends. A confirmed send joins the conversation, so a reply continues it.
+ * @example
+ * yield* ctx.send(instance_id('whatsapp', account), { to: manager_phone, text: summary });
  */
 export type Send = <const N extends string>(
 	to: Is<N, InstanceId>,
@@ -246,9 +276,11 @@ type RequestPayload<N, O> =
 			? 'error: this integration takes no request'
 			: RequestOf<IntegrationOf<N>, O>;
 /**
- * A live request through one `http` or `sqlserver` instance: an HTTP op (its path under the definition's base URL) or a
- * database statement, with the credential host-side; it fails with a `FacilityFailure`, or `Unavailable`
- * while the instance is unpaired.
+ * `ctx.request` (automations and model effects; a remote sync or pairing test requests through its own instance): a live
+ * request through one `http` or `sqlserver` instance, an HTTP op (its path under the definition's base URL) or a
+ * structured database program, with the credential host-side; it fails with a `FacilityFailure`, or `Unavailable`
+ * while the instance is unpaired. Decode the provider's answer once. A later write of a row read before the request
+ * carries that row's observed revision to `ctx.act`.
  */
 export interface Request {
 	<const N extends string, const O extends InputKind = { kind: 'json' }>(
@@ -270,7 +302,7 @@ export type WebPage = {
 	readonly html?: string;
 	readonly links?: readonly string[];
 };
-/** Refuses private, loopback and link-local addresses. */
+/** `ctx.web` (automations and model effects): reads a public page's text; refuses private, loopback and link-local addresses. */
 export type Web = { read: Call<[url: string, options?: { raw?: boolean }], WebPage> };
 
 // ── files: handles by default, bytes only on request ──
@@ -298,7 +330,10 @@ type FileFieldOf<C> = {
 }[keyof Columns<C> & string];
 /** Where a stored file belongs: a model's file field, or an automation's run (collected with it). */
 type FileOwner = { [C in ModelName]: `${C}.${FileFieldOf<C>}` }[ModelName] | AutomationName;
-/** `ctx.files`: stored files by reference; bytes only on request. */
+/**
+ * `ctx.files` (automations and model effects; file sync bodies get `get`, exports `image` too): stored files by
+ * reference, bytes only on request. A page uploads with `upload` and links with `file_url`.
+ */
 export type Files = {
 	meta: Call<[ref: FileRef], FileMeta>;
 	/** At most `max` bytes (default and ceiling 4MiB). */
@@ -339,15 +374,21 @@ export type ConvertOptions = {
 	[T in DeclaredConvertTarget]: { to: T; name: string; for: FileOwner } & ConvertTargets[T];
 }[DeclaredConvertTarget];
 /**
- * `ctx.convert` (optional host capability): only the targets `+workspace.ts` declares under `convert.to` type-check, and
- * the host confirms at start that it serves them. The output is stored like `files.put`'s, owned by `for`.
+ * `ctx.convert` (automations and model effects; optional host capability): only the targets `+workspace.ts` declares
+ * under `convert.to` type-check, and the host confirms at start that it serves them (a declared target it does not serve
+ * is a check warning and fails `Unavailable` when used). The output is stored like `files.put`'s, owned by `for`; a page
+ * downloads it with `file_url`. A page previews PDF bytes with `preview_pdf` instead; a notice attachment or a file
+ * sync's document export converts at delivery or export.
+ * @example
+ * const quote = yield* ctx.convert.document({ html }, { to: 'pdf', name: 'Quote.pdf', for: 'make_quote' });
  */
 export type Convert = {
 	document: Call<[source: ConvertSource, options: ConvertOptions], FileRef>;
 	/**
 	 * Reads a stored file (optional host capability: Norbital Convert): a document as sanitised HTML, one block element per
 	 * line, and its index (audio also its diarised `transcript`); a spreadsheet, CSV or JSON as `data`. A format with no
-	 * parser fails `unsupported`.
+	 * parser fails `unsupported`; a host without the ingest port, `Unavailable`. It reads through the same host port as the
+	 * agent's `read_file`, never OCR, and shares its cache: the same bytes are parsed once.
 	 */
 	ingest: Call<[file: FileRef, options?: IngestOptions], Ingest>;
 };
@@ -362,7 +403,10 @@ export type IngestOptions = {
 	pictures?: boolean;
 	/** That one page of a PDF as a picture: what a text read of a scan or a drawing leaves in the file. */
 	page?: number;
-	/** A locked PDF's or Office file's password (xlsx, xls, docx, doc, pptx, ppt): it opens this read and is never stored. */
+	/**
+	 * A locked PDF's or Office file's password (xlsx, xls, docx, doc, pptx, ppt): it opens this read and is never stored.
+	 * Without it a locked file fails `<name> is password-protected`; a wrong one, `the password does not open <name>`.
+	 */
 	password?: string;
 	diarize?: boolean;
 	language?: string;
@@ -553,6 +597,20 @@ type DecisionAnswers<Q extends { readonly [id: string]: DecisionQuestion }> = {
 				}
 			: { type: 'noul'; noul: number };
 };
+/**
+ * `ctx.ai.sys_1.decide`: answers independent typed questions over one `state` in one call. A choice returns its option
+ * key and probabilities, a score its expected score, level and probabilities, a noul the probability of true; code then
+ * composes the selected entries (a choice's `where`, say) and validates the result. Inline PNG/JPEG evidence goes in
+ * `state` as `{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,…' } }`; remote URLs are refused. Each
+ * decision records an `ai.call` (`category: 'decisions'`) and is metered once.
+ * @example
+ * const { answers } = yield* ctx.ai.sys_1.decide({
+ * 	state: { description },
+ * 	questions: { filter: { type: 'choice', instructions: 'Which filter does `description` ask for?',
+ * 		criteria: { open: { where: { status: { eq: 'open' } } }, none: { where: null } } } }
+ * });
+ * answers.filter.choice; // 'open' | 'none'
+ */
 interface Decide {
 	<const Q extends { readonly [id: string]: DecisionQuestion }>(request: {
 		state: DecisionState;
@@ -560,6 +618,7 @@ interface Decide {
 	}): Eff<{ answers: DecisionAnswers<Q>; cost_usd: number }, Failure>;
 }
 /**
+ * `ctx.ai` (automations; a model effect gets it without host tools; a page starts an automation instead):
  * `sys_1` decides from text/images; `sys_2` is the LLM; `embed` takes text and files. A result is a proposal: a write
  * still runs through the caller's grants, checks and approvals, and a person confirms anything that changes money or
  * access. The host does not run an LLM itself; the provider is a declared integration with sealed credentials.
@@ -578,7 +637,7 @@ export type Ai<Tools> = {
 };
 /** A geocoding result: the point, a short label and the full address. */
 export type GeoHit = { readonly point: Point; readonly label: string; readonly address: string };
-/** Geocoding is optional: an absent provider fails the call with `Unavailable`. */
+/** `ctx.geo` (automations and model effects): geocoding is optional; an absent provider fails the call with `Unavailable`. */
 export type Geo = {
 	search(query: string): Eff<readonly GeoHit[], Failure>;
 	reverse(point: Point): Eff<GeoHit, Failure>;

@@ -24,6 +24,10 @@ const real = (at: string) =>
 		)
 	).pipe(Effect.map(Option.fromNullOr));
 
+/**
+ * The `ArtifactPort` over a release directory on disk, plus its seed packs at `../seed/<pack>/…`. Symlinks resolve
+ * here, and a path that resolves outside its root fails `invalid`.
+ */
 export function artifact_port(release: string): ArtifactPort {
 	const locate = (path: string) =>
 		Effect.gen(function* () {

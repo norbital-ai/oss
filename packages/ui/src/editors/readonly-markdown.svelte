@@ -13,7 +13,12 @@ Renders Markdown text for reading.
 		value,
 		class: className,
 		...rest
-	}: { value: string; class?: string } & Omit<HTMLAttributes<HTMLDivElement>, 'class'> = $props();
+	}: {
+		/** The Markdown text; raw HTML is escaped and script-capable links neutered. */
+		value: string;
+		/** Classes for the rendered block. */
+		class?: string;
+	} & Omit<HTMLAttributes<HTMLDivElement>, 'class'> = $props();
 </script>
 
 <!-- markdown_html escapes raw HTML and neuters script-capable hrefs -->

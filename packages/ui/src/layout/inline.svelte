@@ -8,9 +8,13 @@ A single non-wrapping row of children with a gap and alignment: a toolbar, a lab
 
 	/** The props of `Inline`. */
 	interface InlineProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** Space between children (default `sm`). */
 		gap?: LayoutGap;
+		/** Vertical placement of children (default `center`). */
 		align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch';
+		/** Horizontal placement of children (default `start`). */
 		justify?: 'start' | 'center' | 'end' | 'between';
 		/** `content` (default): its own size, never squeezed; `fill`: the space left in its parent, down to `min_height`. */
 		size?: LayoutSize;
@@ -18,6 +22,7 @@ A single non-wrapping row of children with a gap and alignment: a toolbar, a lab
 		min_height?: string;
 		/** A hairline between children — a segmented strip. Pair with `gap="none"`. */
 		divided?: boolean;
+		/** The row's children; they never wrap. */
 		children: Snippet;
 	}
 </script>

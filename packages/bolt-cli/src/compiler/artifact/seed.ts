@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// Seed packs (docs/seeding.md): the public `base` pack from `seed/public/**` and the `test` pack from
+// Seed packs (see `seeder`): the public `base` pack from `seed/public/**` and the `test` pack from
 // `seed/test/**`, rows as stored (the template's own tests seed from `test`; no host provisions it). A pack is a sibling of the artifact with its own hash: `pack.json`, `rows/<model>.jsonl`,
 // `assets/**`. A bank tree's private `rows/**` are never a pack: `seedRows` reads them into memory for `bolt seed`.
 import { createHash } from 'node:crypto';

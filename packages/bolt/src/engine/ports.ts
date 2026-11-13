@@ -336,6 +336,7 @@ export class Browser extends Context.Service<
 		});
 	}
 }
+/** The geocoder service behind `ctx.geo`: place search and reverse lookup; with the port off, both fail as turned off. */
 export class Geo extends Context.Service<
 	Geo,
 	{

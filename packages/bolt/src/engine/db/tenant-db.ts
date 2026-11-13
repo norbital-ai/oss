@@ -41,6 +41,7 @@ export const SqlReadCapture = Context.Reference<SqlReadCaptureService | undefine
 	'bolt/SqlReadCapture',
 	{ defaultValue: () => undefined }
 );
+/** One tenant database as the engine uses it: the adapter's raw calls plus deferred setup, wake tracking and decoding reads. */
 export type TenantDbShape = RawDb & {
 	/**
 	 * Work this generation owes its database, run once just before its first statement. A cold start owes it rather
@@ -96,6 +97,7 @@ const complete = (rows: readonly Rows[], expected: number, operation: string): E
 			return Effect.fail(protocolFailure(operation, `no result for statement ${index + 1}`));
 	return Effect.succeed(rows);
 };
+/** The activation's tenant database service; `TenantDb.typed` wraps a host adapter into its shape. */
 export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/TenantDb') {
 	/** An adapter's calls with the decoding reads over them. */
 	static readonly typed = (adapter: RawDb): TenantDbShape => {

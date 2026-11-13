@@ -11,7 +11,8 @@ Read the owning package's scripts and config. A filename outside its include pat
 | Shared controls | the ui package's mounted tests in happy-dom |
 | Real Chromium platform tests | `oss/packages/bolt` Vitest browser mode |
 
-Add no browser launcher or `.svelte` mounts to templates. Never give a suite its own pool.
+Add no browser launcher or `.svelte` mounts to templates. Never give a suite its own pool. Suites that hold native memory
+(PGlite, browsers) run with Vitest `pool: 'forks'`: the threads pool keeps native memory in the main process.
 
 ## Effect time
 

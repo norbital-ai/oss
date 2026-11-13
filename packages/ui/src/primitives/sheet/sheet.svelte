@@ -10,8 +10,11 @@ and goes full screen from its header.
 
 	/** The props of `Sheet`: `open`, the side, the title or header, actions and body. */
 	export type SheetProps = {
+		/** Whether it shows; bindable. */
 		open?: boolean;
+		/** Called with `false` once a close the sheet itself asked for (scrim, Escape, close button, drag) has animated out. */
 		on_open_change?: (open: boolean) => void;
+		/** The wide-screen edge it slides from; default `right`. On a phone every sheet is the bottom drawer. */
 		side?: 'left' | 'right';
 		/** The heading and accessible name; a record view inside that claims the header names the dialog when this is absent. */
 		title?: string;
@@ -19,7 +22,9 @@ and goes full screen from its header.
 		header?: Snippet;
 		/** Header content beside the close button (record actions). */
 		actions?: Snippet;
+		/** The body, scrolled below the header. */
 		children: Snippet;
+		/** Classes on the panel. */
 		class?: string;
 	};
 

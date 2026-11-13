@@ -87,11 +87,13 @@ interface Outbound {
 }
 
 // ── 6. sandbox ──
+/** The CPU, memory and wall-clock bounds one sandboxed command runs under. */
 export type SandboxLimits = {
 	readonly cpu_ms: number;
 	readonly memory_mib: number;
 	readonly wall_ms: number;
 };
+/** What a sandboxed command left: its exit code, output streams and resulting working tree. */
 export type SandboxResult = {
 	readonly exit_code: number;
 	readonly stdout: string;
@@ -110,31 +112,65 @@ interface Sandbox {
 }
 
 /**
- * Everything a host supplies. `keys` seals the tenant's secrets under a key only the host holds. The guest runner is no
- * facility: each host owns its own (`HostPorts.guests`).
+ * Everything a host supplies to run a bundle.
+ *
+ * Without a host file, Colony supplies them all (tethered, the default). A workspace's `norbital.host.ts`, or the file
+ * `bolt dev --host=<file>` names, serves it untethered (`bolt dev`, bolt-server): its default export is this record
+ * (`satisfies Facilities`), and an optional `serving` export adds the parts served around it ({@link Serving}). The
+ * host file never enters the release's source. Every key is required: {@link off} is the only way to leave an optional
+ * member out, and `mail` has none. Activation refuses a bundle whose recorded needs name a member left `off`, naming
+ * each one. The guest runner is no facility: each host owns its own (`HostPorts.guests`; bolt-server and `bolt dev`
+ * run bolt-cli's `node_guests`, Colony an isolated-vm runner).
  */
 export type Facilities = {
-	readonly storage: { readonly database: Database; readonly files: Files };
-	readonly logs: { readonly runtime: RuntimeLog; readonly audit: AuditLog };
+	readonly storage: {
+		/** Tenant rows (run status and chat history included): the engine's SQL over the host's driver. */
+		readonly database: Database;
+		/** Uploads and blobs. */
+		readonly files: Files;
+	};
+	readonly logs: {
+		/** Runtime events; the host may drop entries under load. */
+		readonly runtime: RuntimeLog;
+		/** The durable audit stream, outside the tenant database, surviving a tenant restore. */
+		readonly audit: AuditLog;
+	};
 	readonly transactional: {
+		/** Emailed codes and invitations. Mandatory for every host. */
 		readonly mail: Mail;
+		/** Texted invitations. */
 		readonly sms: Optional<Sms>;
+		/** Sends and checks a mobile number's sign-in code. */
 		readonly phone: Optional<Phone>;
+		/** Web and native push for inbox notices. */
 		readonly push: Optional<Push>;
+		/** Bot protection for public sign-up; with none, the host refuses strangers (except a local host). */
 		readonly challenge: Optional<Challenge>;
+		/** `true` on a local host: every sign-in code is `123456`; a deployed host's are random. */
 		readonly fixed_codes: FixedCodes;
 	};
 	readonly intelligence: {
+		/** Fast structured decisions (`ctx.ai.sys_1.decide`, triage). */
 		readonly system1: Optional<System1>;
+		/** The LLM (`ctx.ai.sys_2.infer`, agents). */
 		readonly system2: Optional<System2>;
+		/** Multimodal embeddings (`ctx.ai.embed`). */
 		readonly embed: Optional<Embed>;
 	};
 	readonly ports: {
+		/** The public URL under which the host routes `/hooks/integration/<instance>` and OAuth callbacks. */
 		readonly webhooks: Optional<Webhooks>;
+		/** Client WebSockets (Discord, WhatsApp, CDP). */
 		readonly websockets: Optional<Websockets>;
+		/** HTTP and TCP/TLS egress under the host's policy. */
 		readonly outbound: Optional<Outbound>;
 	};
+	/** Agents' bash: one command over a working tree, confined by the host. */
 	readonly sandbox: Optional<Sandbox>;
+	/**
+	 * The tenant's secrets key, held by the host: AES-256-GCM envelopes (`iv ‖ tag ‖ ciphertext`) bound to
+	 * `bolt\0<owner>\0<name>`, so a copied envelope never opens under another owner or name.
+	 */
 	readonly keys: KeysPort;
 };
 

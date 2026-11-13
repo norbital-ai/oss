@@ -5,6 +5,10 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { Effect, Result } from 'effect';
 import type { KeysPort } from '../engine/contracts.ts';
 
+/**
+ * The `KeysPort` over a 32-byte tenant secrets key: AES-256-GCM envelopes bound to their `aad`. An envelope opened
+ * under different `aad` answers `null`; a key of another length throws.
+ */
 export function keys_port(key: Uint8Array): KeysPort {
 	if (key.byteLength !== 32) throw new Error('the secrets key must be 32 bytes (AES-256)');
 	const seal = (plain: Uint8Array, aad: Uint8Array) => {

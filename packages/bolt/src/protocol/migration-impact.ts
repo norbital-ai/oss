@@ -10,6 +10,7 @@ export const MigrationStepImpact = /*#__PURE__*/ Schema.Struct({
 	summary: Schema.String
 });
 export type MigrationStepImpact = typeof MigrationStepImpact.Type;
+/** What applying pending migrations did where it ran: each step's impact and the whole migrate's duration (live's expected downtime). */
 export const MigrationImpact = /*#__PURE__*/ Schema.Struct({
 	duration_ms: Schema.Number,
 	steps: Schema.Array(MigrationStepImpact)

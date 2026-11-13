@@ -49,6 +49,7 @@ export function random_stream(seed: string): (n: unknown) => Uint8Array {
 }
 
 type Statement = ReturnType<typeof parseSync>['program']['body'][number];
+/** An `import` statement of the parsed guest module, as `module_script` hands it to its `imports` rewriter. */
 export type ImportDeclaration = Extract<Statement, { type: 'ImportDeclaration' }>;
 type ExportName = Extract<
 	Statement,

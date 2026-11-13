@@ -44,7 +44,13 @@ export type FileSyncInput<M, S> = (
 		readonly where?: Where<M>;
 	}
 ) & { readonly context?: SyncData<M, S> extends { context: infer F } ? InputOf<F> : {} };
-/** Native controls accept a transfer for a file sync, or an optional connection/partition for a remote read. */
+/**
+ * Native controls (a page's `sync_control`, the view toolbar, the agent's `sync` tool) accept a transfer for a file sync,
+ * or an optional connection/partition for a remote "Sync now". They are not automations: `run` and `schedule` cannot
+ * start them. File imports need the caller's create/update grants, templates and exports its read grants; "Sync now"
+ * needs a readable model and `capabilities: { syncs: ['<model>.<sync>'] }`, or administrator authority. Periodic reads
+ * and webhook wakes stay engine-owned.
+ */
 export type SyncControlInput<M, S> = SyncData<M, S> extends { with: 'file' }
 	? FileSyncInput<M, S>
 	: { readonly instance?: Id<'sys_integration'>; readonly partition?: string };
@@ -109,10 +115,11 @@ export type SyncCtx<D = never> = Clock &
 export type FileSyncCtx = Clock & WorkspaceQuery & SyncRefusal;
 
 // ── files ──
-/** A built-in parser, run on the host: `xlsx` (row 1 headers match a field's name or `label`, any case; Excel date and
+/** A built-in parser, run on the host: `xlsx` (row 1 headers match a field's name or caption, any case; Excel date and
  * time serials become dates and times), `csv` (RFC 4180, encoding and delimiter detected), `tsv` (as csv, with tabs),
- * `json` (an array of records, or `{ "records": [...] }`), `ics` (iCalendar `VEVENT`s), `txt` (one non-empty line per
- * record, read into the first declared column). */
+ * `json` (an array of records, or `{ "records": [...] }`; exports keep raw field keys), `ics` (iCalendar `VEVENT`s),
+ * `txt` (bank and fixed-width files: one non-empty line per record, read into the first declared column; an export
+ * concatenates each record's columns in order with no separator, so `write` owns the padding). */
 export type BuiltinParser = 'xlsx' | 'csv' | 'tsv' | 'json' | 'ics' | 'txt';
 /** One parsed record and where it came from: `$at` is its sheet row or line, so findings and refusals point at it. */
 type FileRecord<R = { readonly [field: string]: Json }> = R & { readonly $at: number };
@@ -162,14 +169,23 @@ type FileReadResult<M> = {
 type FileWriteInput<X = {}> = { readonly context: ContextOf<X> };
 /**
  * What a file sync's `write` returns for Export and Download template: records (written as each declared parser's
- * format), or one document the Export menu converts to each target `+workspace.ts` declares under `convert.to`.
+ * format), or one document the Export menu converts to each target `+workspace.ts` declares under `convert.to`
+ * (`parser: []` makes such a sync export-only). Its reads keep the exporter's authority; `context` is input, never
+ * authority, so a record id it names does not bypass that member's read scope.
+ * @example
+ * document: { with: 'file', parser: [], context: { title: { kind: 'text' }, markdown: { kind: 'text' } },
+ * 	write: function* ({ context }) { return { document: { markdown: context.markdown }, name: `${context.title}.pdf` }; } }
  */
 type FileWriteResult<M, X = {}> =
 	readonly RecordOf<M, X>[] | { readonly document: ConvertSource; readonly name: string };
 /**
  * A sync with a file. The view toolbar offers Import (upload), Download template and Export by itself.
  * - `parser`: exactly what an upload may be (the file picker accepts these and nothing else; default `['xlsx', 'csv']`).
- * - `schema`: the sheet's columns, when they are not the model's writable fields (headers are their labels).
+ * - `schema`: the sheet's columns, when they are not the model's writable fields. Headers are captions from the message
+ *   catalogue: `models.<model>.syncs.<sync>.schema.fields.<field>`, then `models.<model>.fields.<field>`, then the raw
+ *   name (in the workspace locale, else its language, else the base); a schema declares no inline `label` or `help`.
+ *   Imports accept a caption or a field name, any case (a raw name wins over another column's caption); bodies and
+ *   custom parsers always use raw field names.
  * - `context`: what the page the toolbar sits on passes (an entity, a period); it narrows and defaults, never authorizes.
  * - Without `read`, an import writes the records as rows matched by the model's `key`; without `write`, Export writes the
  *   schema's fields of the rows in view.
@@ -179,7 +195,7 @@ type FileWriteResult<M, X = {}> =
  * 	work_sheet: {
  * 		with: 'file',
  * 		parser: ['xlsx', 'csv'],
- * 		schema: { employee_number: { kind: 'text', label: 'Employee no.' }, work_date: { kind: 'date', label: 'Date' } },
+ * 		schema: { employee_number: { kind: 'text' }, work_date: { kind: 'date' } },
  * 		context: { company_id: { kind: 'id', of: 'entity' } },
  * 		read: function* ({ records, context }, ctx) {
  * 			const known = yield* sheetKnown(records, context, ctx);
@@ -217,7 +233,10 @@ export type RemoteReadInput<D = IntegrationName> = D extends unknown ? {
 /**
  * One page a remote `read` returns. Its rows and its cursor commit in one statement. `more` reads on in the same run;
  * `snapshot: 'begin'` … `'end'` brackets a full listing, after which the rows it did not see are deleted; `retained:
- * false` (the source lost its history) starts a fresh snapshot; `health` sets the sync's health.
+ * false` (the source lost its history) starts a fresh snapshot; `health` sets the sync's health (lag, retention risk).
+ * A page with no rows and an unchanged cursor commits nothing, so a quiet source leaves the database asleep. Rows apply
+ * through the ordinary write path: a locked row refuses an incoming delete or an unexempted change, failing the page,
+ * which retries like any failed read.
  */
 type RemoteReadResult<M> = {
 	readonly rows: readonly SyncRow<M>[];
@@ -283,6 +302,11 @@ type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } |
  * | Both sides edited the same record | Send `If-Match: $version`: the conflict rolls the local change back to the last acknowledged revision, and the row shows the failure. |
  * | The other side refuses a change | Rolled back the same way (a refused create deletes the row), the row marked failed with their message, the writer notified. |
  * | A webhook subscription silently dies | Health raises "webhooks quiet while reads find changes", beside last read, lag, pending and dead counts. |
+ *
+ * A dead letter keeps the locally committed record (a `sqlserver` write retries transient failures while the connection
+ * is active). Whoever may update the instance replays it (always the saved payload) or retires it: retiring marks only
+ * that write skipped, keeps its payload and error, records who and when, and releases later writes of the record; it
+ * neither cancels an in-flight request nor undoes a remote commit, so settle the remote state first.
  * @example
  * syncs: {
  * 	crm: {
@@ -303,6 +327,10 @@ type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } |
  */
 export type RemoteSync<M, S extends string = string, X = SyncData<M, S>, D = DefOf<X>> = {
 	with: IntegrationName;
+	/**
+	 * How often each connection reads (default `'15min'`). Over a conversation or `items` driver, hints bring the news, so
+	 * a healthy sync reads once a day as a backstop; a failing one keeps its own shorter rest.
+	 */
 	every?: Duration;
 	partitions?: string;
 	read?: (input: RemoteReadInput<D>, ctx: SyncCtx<D>) => BodyReturn<RemoteReadResult<M>>;

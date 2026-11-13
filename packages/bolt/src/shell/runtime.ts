@@ -527,6 +527,7 @@ export type CustomFieldView<F extends string = string> =
 			mode: 'edit';
 			disabled: boolean;
 			error?: string;
+			/** The typed next value, or `null` to clear it; never a JSON round-trip. */
 			on_change(next: CustomValue<F> | null): void;
 	  });
 
@@ -603,6 +604,10 @@ export function shell_bolt(
 			...(f === undefined ? {} : { fetch: f })
 		});
 		return Object.assign(client, {
+			/**
+			 * The device this page runs on (`DeviceApi`): the shell's installed one, else the browser's. Pages only; declare an
+			 * app's `requires` to hold its pages until the member grants a permission.
+			 */
 			device: resolve_device(options.device),
 			/** An integration instance's host verbs: its status, pairing, test and status stream (`IntegrationSetup` draws them). */
 			integration: instances,

@@ -1,6 +1,8 @@
 <!--
 @component
 The kit's select: a field-like trigger and a searchable option list in a popover, filtered locally or through `on_search`.
+@example
+<Combobox options={[{ value: 'low', label: 'Low' }, { value: 'high', label: 'High' }]} {value} on_change={(v) => (value = v)} />
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -21,27 +23,37 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	 * a popover. Filters locally, or hands each keystroke to `on_search` (the caller replaces `options`, as `Picker` does).
 	 */
 	type ComboboxCommonProps<V extends string = string> = {
+		/** The choices, in order; with `on_search` the caller replaces them per query. */
 		options: readonly ComboboxOption<V>[];
 		/** Offer a "none" row that clears the value. */
 		clearable?: boolean;
+		/** The trigger's text with nothing chosen, and its accessible name without `aria-label`. */
 		placeholder?: string;
 		/** The trigger's text when `value` is not among `options` (a picker's chosen row on another page). */
 		display?: string;
 		/** Show the search box; default when there are more than 8 options or `on_search` is given. */
 		searchable?: boolean;
+		/** Each keystroke's query (and `''` on open) instead of local filtering; the caller supplies matching `options`. */
 		on_search?(query: string): void;
+		/** Called as the list opens or closes. */
 		on_open_change?(open: boolean): void;
+		/** The list shows the loading message in place of options. */
 		loading?: boolean;
+		/** The list shows the failure message in place of options. */
 		failed?: boolean;
 		/** `ghost`: no border, fill or shadow; for a combobox in chrome or a toolbar, not a form. Same size either way. */
 		variant?: 'default' | 'ghost';
+		/** The trigger's id, for a `<label for>`; an enclosing `Field` supplies one. */
 		id?: string;
 		/** Shows the chosen label as copyable text, no trigger; an enclosing readonly form sets it. */
 		readonly?: boolean;
 		/** The trigger stays, muted and inert; an enclosing disabled form sets it. */
 		disabled?: boolean;
+		/** Marks the trigger `aria-invalid` (error styling). */
 		invalid?: boolean;
+		/** Classes on the trigger. */
 		class?: string;
+		/** The trigger's accessible name; the chosen labels are appended. */
 		'aria-label'?: string;
 		/** Rendered between the search box and the list (tabs that scope `options`, with `on_search`). */
 		header?: Snippet;
@@ -62,8 +74,13 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	export type ComboboxProps<
 		V extends string = string,
 		M extends boolean = false
-	> = ComboboxCommonProps<V> & { multiple?: M } & {
+	> = ComboboxCommonProps<V> & {
+		/** `true`: `value` is an array and each pick toggles one choice, the list staying open. */
+		multiple?: M;
+	} & {
+		/** The chosen value (`null` for none), or the chosen values when `multiple`. */
 		value: M extends true ? readonly V[] : V | null;
+		/** Called with the next value (or values) on each pick or clear. */
 		on_change(next: M extends true ? readonly V[] : V | null): void;
 	};
 </script>

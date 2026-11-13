@@ -17,28 +17,41 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	export type EventCalendarProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The events shown; after a create or move, pass the updated list back. */
 		events: readonly CalendarEvent[];
+		/** The initial view. Default `'week'`; the viewer's switch fires `on_view_change`. */
 		view?: CalendarView;
+		/** The views the switcher offers (hidden when only one). Default day, week and month. */
 		views?: readonly CalendarView[];
 		/** The day shown first; navigation moves away from it until it changes. */
 		date?: Date;
+		/** The time grid's first hour. Default 0. */
 		start_hour?: number;
+		/** The time grid's end hour (exclusive). Default 24. */
 		end_hour?: number;
 		/** Pixels per hour on the time grid. */
 		hour_height?: number;
+		/** Drags snap to this many minutes. Default 15. */
 		snap_minutes?: number;
 		/** The narrowest a week column gets before the grid scrolls sideways. */
 		col_width?: number;
+		/** No creating, moving or resizing; clicks still open events. Default false. */
 		readonly?: boolean;
+		/** The viewer switched views. */
 		on_view_change?(view: CalendarView): void;
+		/** The viewer navigated (previous, next, today, or a day picked in the narrow layouts). */
 		on_date_change?(date: Date): void;
+		/** An event was clicked or tapped. */
 		on_event_click?(event: CalendarEvent): void;
+		/** A drag (or tap, under touch) on empty grid selected this slot. */
 		on_event_create?(slot: CreateSlot): void;
+		/** An event was moved or resized to `start`–`end`; the calendar does not write it. */
 		on_event_move?(event: CalendarEvent, start: Date, end: Date): void;
 		/** An event's body in place of its title (and time, on a box). */
 		event_content?: Snippet<[CalendarEvent, EventRenderContext]>;
 		/** Connection or other calendar actions beside the displayed date. */
 		actions?: Snippet;
+		/** Extra classes on the calendar's root. */
 		class?: string;
 	};
 </script>

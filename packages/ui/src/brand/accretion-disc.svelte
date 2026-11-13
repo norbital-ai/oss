@@ -1,3 +1,7 @@
+<!--
+@component
+The loading mark: a black hole's accretion disc drawn in dots.
+-->
 <script lang="ts">
 	import { attach_dot_field } from './dot-field.js';
 	import { accretion_disc_geometry } from './accretion-geometry.js';
@@ -10,7 +14,14 @@
 		size = 96,
 		label,
 		class: className = ''
-	}: { size?: number; label?: string; class?: string } = $props();
+	}: {
+		/** The box's width and height in pixels. Default 96. */
+		size?: number;
+		/** The accessible name; without it the mark is hidden from assistive technology. */
+		label?: string;
+		/** Extra classes on the box. */
+		class?: string;
+	} = $props();
 </script>
 
 <!-- the box is sized inline: a code-split sheet cannot size chrome through a stylesheet that has not loaded -->

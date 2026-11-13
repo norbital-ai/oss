@@ -1,14 +1,17 @@
 /// <reference types="node" />
 // The API reference generator, run by bolt's build after the package compiles: `node scripts/docs.ts`.
-// It walks the `exports` of bolt and of the packages it builds on (ui, std), reads each entry's built
+// It walks every public entry (`exports`, `./tooling` aside) of bolt, ui, std and bolt-cli, reads each entry's
 // declarations with the TypeScript checker (no TypeDoc) and writes one JSON document per namespace plus `index.json`
-// to `build/docs/`, where `@norbital-ai/bolt/docs` reads them. Output is sorted and carries no time, so a build of
-// the same sources is byte-identical. Svelte components are read through svelte-package's `.svelte.d.ts`: their
-// props are the second parameter of the component's call signature. `index.json` marks the reference namespaces an
-// author reads, and `missing` lists every symbol of them with no doc comment; `tests/docs.test.ts` fails on it. A docs page (`docs/*.md`) naming a call the corpus does not declare fails the build. bolt-server and bolt-cli build after bolt: only bolt-cli's test kit (`@norbital-ai/bolt-cli/test`) joins the corpus, read from its source; `./tooling` is bolt-cli's, not an author's.
+// to `build/docs/`, where `@norbital-ai/bolt/docs` reads them. bolt and its dependencies are read from their built
+// `.d.ts`; bolt-cli builds after bolt, so its entries are read from source, and its `bolt` command's verbs become the
+// `bolt-cli/cli` namespace (each `Command.make` const's doc comment, its flags' and arguments' descriptions).
+// Output is sorted and carries no time, so a build of the same sources is byte-identical. Svelte components are read
+// through svelte-package's `.svelte.d.ts`: their props are the second parameter of the component's call signature,
+// and a prop of an object type lists its fields. Each symbol carries its `group`, the source folder it lives in under
+// the entry. `index.json`'s `missing` lists every symbol and component prop without a doc comment; `tests/docs.test.ts`
+// fails on it.
 // `oss/skills/` (the one source of authoring skills, which realm agents read by path) compiles beside it:
 // one `skill.<name>.json` per skill folder holding every Markdown file, listed in `index.json`'s `skills`.
-// `docs/hosts.md` is generated from the `Facilities` type (`src/facilities/index.ts`): what a host supplies.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,9 +34,9 @@ class DocsFailed extends Schema.TaggedError<DocsFailed>()('DocsFailed', {
 	cause: Schema.Defect()
 }) {}
 
-const PACKAGES = ['bolt', 'ui'];
-/** The reference a workspace author reads: bolt's root and `/page`, bolt-cli's test kit and ui's authoring entries. */
-const REFERENCE = (ns: string) => ['bolt', 'bolt/page', 'bolt-cli/test', 'ui', 'ui/layout'].includes(ns);
+const PACKAGES = ['bolt', 'ui', 'bolt-cli'];
+/** Packages read from source: they build after bolt. */
+const FROM_SOURCE = new Set(['bolt-cli']);
 /** What an author reads for each role: these symbols' shapes, generated into `bolt-contract` so a card cannot drift. */
 const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: readonly string[] } } = {
 	model: {
@@ -187,11 +190,7 @@ const CARDED = new Set(Object.values(CONTRACT).flatMap((named) => Object.values(
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..'); // oss/packages
 const out = join(root, 'bolt', 'build', 'docs');
 const SKILLS = join(root, '..', 'skills'); // oss/skills: the authoring skills
-const FACILITIES = join(root, 'bolt', 'build', 'facilities', 'index.d.ts');
-const HOSTS = join(root, 'bolt', 'docs', 'hosts.md');
-const writeIfChanged = (file: string, text: string) => {
-	if (!existsSync(file) || readFileSync(file, 'utf8') !== text) writeFileSync(file, text);
-};
+const CLI = join(root, 'bolt-cli', 'src', 'cli');
 const posix = (p: string) => p.split(sep).join('/');
 const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
 /** Code-unit order: the same on every machine, whatever its locale. */
@@ -227,20 +226,19 @@ export const generateDocs = Effect.try({
 					{
 						namespace: key === '.' ? pkg : `${pkg}/${key.slice(2)}`,
 						module: `@norbital-ai/${pkg}${key.slice(1)}`,
-						file: join(root, pkg, types)
+						file: join(
+							root,
+							pkg,
+							FROM_SOURCE.has(pkg)
+								? types.replace(/^\.\/build\//, 'src/').replace(/\.d\.ts$/, '.ts')
+								: types
+						)
 					}
 				];
 			});
-		})
-			// bolt-cli builds after bolt: its test kit, which a workspace's tests import, is read from source
-			.concat({
-				namespace: 'bolt-cli/test',
-				module: '@norbital-ai/bolt-cli/test',
-				file: join(root, 'bolt-cli', 'src', 'test', 'index.ts')
-			})
-			.sort((a, b) => byCode(a.namespace, b.namespace));
+		}).sort((a, b) => byCode(a.namespace, b.namespace));
 
-		const program = ts.createProgram([...entries.map((e) => e.file), FACILITIES], {
+		const program = ts.createProgram(entries.map((e) => e.file), {
 			noEmit: true,
 			skipLibCheck: true,
 			strict: true,
@@ -338,8 +336,11 @@ export const generateDocs = Effect.try({
 			);
 		}
 
-		/** The first-party properties of a type, with their docs; at most 80. */
-		function membersOf(type: ts.Type, at: ts.Node): DocMember[] {
+		const isObjectLike = (t: ts.Type) =>
+			!!(t.flags & ts.TypeFlags.Object) ||
+			(t.isIntersection() && t.types.every((x) => !!(x.flags & ts.TypeFlags.Object)));
+		/** The first-party properties of a type, with their docs; at most 80. `expand`: an object-typed one lists its fields. */
+		function membersOf(type: ts.Type, at: ts.Node, expand = false): DocParam[] {
 			return checker
 				.getPropertiesOfType(type)
 				.filter(
@@ -352,19 +353,24 @@ export const generateDocs = Effect.try({
 				.map((p) => {
 					const { text, examples } = comment(p, p);
 					const summary = first(text);
+					// a prop of one object shape (`false | { … }` included) lists that shape's fields
+					const own = checker.getNonNullableType(checker.getTypeOfSymbolAtLocation(p, at));
+					const shapes = (own.isUnion() ? own.types : [own]).filter(
+						(t) => isObjectLike(t) && checker.getSignaturesOfType(t, ts.SignatureKind.Call).length === 0
+					);
+					const shape = shapes.length === 1 ? shapes[0] : undefined;
+					const fields = expand && shape !== undefined ? membersOf(shape, at) : [];
 					return {
 						name: p.name,
 						type: typeText(p, at),
 						...(p.flags & ts.SymbolFlags.Optional ? { optional: true as const } : {}),
 						...(summary === '' ? {} : { summary }),
 						...(text.replace(/\s+/g, ' ').trim() === summary ? {} : { docs: text }),
-						...(examples.length === 0 ? {} : { examples })
+						...(examples.length === 0 ? {} : { examples }),
+						...(fields.length === 0 ? {} : { fields })
 					};
 				});
 		}
-		const isObjectLike = (t: ts.Type) =>
-			!!(t.flags & ts.TypeFlags.Object) ||
-			(t.isIntersection() && t.types.every((x) => !!(x.flags & ts.TypeFlags.Object)));
 
 		function paramsOf(sig: ts.Signature, at: ts.Node): DocParam[] {
 			const tags = new Map(
@@ -451,7 +457,7 @@ export const generateDocs = Effect.try({
 			let kind: DocKind,
 				signature: string,
 				params: DocParam[] | undefined,
-				props: DocMember[] | undefined,
+				props: DocParam[] | undefined,
 				members: DocMember[] | undefined;
 			if (f & (ts.SymbolFlags.Function | ts.SymbolFlags.Variable)) {
 				const type = checker.getTypeOfSymbolAtLocation(sym, d);
@@ -459,7 +465,7 @@ export const generateDocs = Effect.try({
 				const sigs = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
 				if (propsType !== undefined) {
 					kind = 'component';
-					props = membersOf(propsType, d);
+					props = membersOf(propsType, d, true);
 					signature = `component ${name}(props: ${clip(checker.typeToString(propsType, d, FORMAT), 600)})`;
 				} else if (
 					sigs[0] !== undefined &&
@@ -545,9 +551,172 @@ export const generateDocs = Effect.try({
 			return lines.join(' ').replace(/\s+/g, ' ').trim();
 		}
 
+		/** Each symbol's `group`: its source folder under the entry, past the folders all its symbols share. */
+		function grouped(symbols: DocSymbol[]): DocSymbol[] {
+			const paths = symbols.map((s) => {
+				const file = s.source.replace(/:\d+$/, '');
+				const vendor = [...file.matchAll(/\/node_modules\/((?:@[^/]+\/)?[^/]+)\//g)].pop()?.[1];
+				return vendor !== undefined
+					? null
+					: file
+							.replace(/^packages\/[^/]+\/(src\/)?/, '')
+							.replace(/(\.svelte)?\.(ts|js)$|\.svelte$/, '')
+							.split('/');
+			});
+			const own = paths.filter((p): p is string[] => p !== null);
+			let shared = 0;
+			while (
+				own.length > 0 &&
+				own.every((p) => shared < p.length - 1 && p[shared] === own[0]?.[shared])
+			)
+				shared++;
+			return symbols.map((s, i) => ({
+				...s,
+				group:
+					paths[i]?.[shared] ??
+					[...s.source.matchAll(/\/node_modules\/((?:@[^/]+\/)?[^/]+)\//g)].pop()?.[1] ??
+					''
+			}));
+		}
+
+		/**
+		 * The `bolt` command's verbs, read from bolt-cli's source: each `const x = Command.make('verb', { …config }, …)`
+		 * with the doc comment above it, its flags and arguments (`Flag.String('name')`, `Argument.String('name')`, through
+		 * a local const or helper) with their `withDescription` text, and its parents through `Command.withSubcommands`.
+		 */
+		function cliNamespace(): DocNamespace {
+			type Verb = { file: string; name: string; at: ts.VariableDeclaration; make: ts.CallExpression };
+			const files = readdirSync(CLI)
+				.filter((f) => f.endsWith('.ts'))
+				.sort(byCode)
+				.map((f) => ts.createSourceFile(join(CLI, f), readFileSync(join(CLI, f), 'utf8'), ts.ScriptTarget.ESNext, true));
+			const consts = new Map<string, ts.VariableDeclaration>();
+			for (const sf of files)
+				for (const st of sf.statements)
+					if (ts.isVariableStatement(st))
+						for (const d of st.declarationList.declarations)
+							if (ts.isIdentifier(d.name)) consts.set(`${sf.fileName}#${d.name.text}`, d);
+			/** A const by name, in its own file or the file exporting it. */
+			const lookup = (sf: ts.SourceFile, name: string) =>
+				consts.get(`${sf.fileName}#${name}`) ??
+				[...consts.entries()].find(
+					([key, d]) =>
+						key.endsWith(`#${name}`) &&
+						(d.parent.parent.modifiers ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+				)?.[1];
+			const calls = (node: ts.Node): ts.CallExpression[] => {
+				const found: ts.CallExpression[] = [];
+				const visit = (n: ts.Node): void => {
+					if (ts.isCallExpression(n)) found.push(n);
+					n.forEachChild(visit);
+				};
+				visit(node);
+				return found;
+			};
+			const callee = (c: ts.CallExpression) => c.expression.getText();
+			const literal = (n: ts.Node | undefined) =>
+				n !== undefined && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : undefined;
+			const verbs: Verb[] = [];
+			for (const d of consts.values()) {
+				const make =
+					d.initializer === undefined
+						? undefined
+						: calls(d.initializer).find((c) => callee(c) === 'Command.make');
+				if (make !== undefined && ts.isIdentifier(d.name))
+					verbs.push({ file: d.getSourceFile().fileName, name: d.name.text, at: d, make });
+			}
+			const parent = new Map<ts.VariableDeclaration, ts.VariableDeclaration>();
+			for (const v of verbs)
+				for (const c of calls(v.at).filter((c) => callee(c) === 'Command.withSubcommands'))
+					for (const id of c.arguments[0] !== undefined && ts.isArrayLiteralExpression(c.arguments[0])
+						? c.arguments[0].elements
+						: [])
+						if (ts.isIdentifier(id)) {
+							const child = lookup(v.at.getSourceFile(), id.text);
+							if (child !== undefined) parent.set(child, v.at);
+						}
+			const verbName = (v: Verb): string => literal(v.make.arguments[0]) ?? v.name;
+			const path = (d: ts.VariableDeclaration): string[] => {
+				const v = verbs.find((x) => x.at === d);
+				const up = parent.get(d);
+				return [...(up === undefined ? [] : path(up)), ...(v === undefined ? [] : [verbName(v)])];
+			};
+			/** One flag or argument: its kind, name and description, through a local const or helper. */
+			const option = (sf: ts.SourceFile, key: string, expr: ts.Expression): DocParam => {
+				const all = calls(expr);
+				const ref = ts.isIdentifier(expr) ? lookup(sf, expr.text) : undefined;
+				const helpers = [
+					...all.flatMap((c) => (ts.isIdentifier(c.expression) ? [lookup(sf, c.expression.text)] : [])),
+					ref
+				].flatMap((d) => (d?.initializer === undefined ? [] : [d.initializer]));
+				const chain = [...all, ...helpers.flatMap(calls)];
+				const base = chain.find((c) => /^(Flag|Argument)\.(String|Boolean|Integer|Float|Choice|Path|File|Directory)$/.test(callee(c)));
+				const named =
+					literal(base?.arguments[0]) ?? literal(all.find((c) => ts.isIdentifier(c.expression))?.arguments[0]) ?? key;
+				const flag = base === undefined ? true : callee(base).startsWith('Flag.');
+				const kind = base === undefined ? 'String' : callee(base).split('.')[1];
+				const variadic = chain.some((c) => callee(c) === 'Argument.variadic');
+				const optional =
+					variadic ||
+					kind === 'Boolean' ||
+					[expr, ...helpers].some((n) => /\b(Flag|Argument)\.(optional|withDefault)\b/.test(n.getText()));
+				const description = chain
+					.filter((c) => /\.withDescription$/.test(callee(c)))
+					.map((c) => literal(c.arguments[0]))
+					.find((t) => t !== undefined);
+				return {
+					name: flag ? `--${named}` : `<${named}${variadic ? '…' : ''}>`,
+					type: kind === 'Boolean' ? 'boolean' : kind === 'Integer' || kind === 'Float' ? 'number' : 'string',
+					...(optional ? { optional: true as const } : {}),
+					...(description === undefined ? {} : { summary: description })
+				};
+			};
+			const symbols = verbs.map((v): DocSymbol => {
+				const sf = v.at.getSourceFile();
+				const config = v.make.arguments[1];
+				const params =
+					config !== undefined && ts.isObjectLiteralExpression(config)
+						? config.properties.flatMap((p) =>
+								ts.isPropertyAssignment(p)
+									? [option(sf, p.name.getText(), p.initializer)]
+									: ts.isShorthandPropertyAssignment(p)
+										? [option(sf, p.name.text, p.name)]
+										: []
+							)
+						: [];
+				const text = ts
+					.getJSDocCommentsAndTags(v.at.parent.parent)
+					.filter(ts.isJSDoc)
+					.map((doc) => ts.getTextOfJSDocComment(doc.comment) ?? '')
+					.join('\n')
+					.trim();
+				const name = ['bolt', ...path(v.at)].filter((w, i) => i === 0 || w !== 'bolt').join(' ');
+				const usage = params
+					.map((p) => (p.optional === true ? `[${p.name}]` : p.name))
+					.join(' ');
+				const summary = first(text);
+				return {
+					name,
+					kind: 'command',
+					signature: `${name}${usage === '' ? '' : ` ${usage}`}`,
+					summary,
+					...(text.replace(/\s+/g, ' ').trim() !== summary ? { docs: text } : {}),
+					...(params.length === 0 ? {} : { params }),
+					source: `${posix(relative(root, sf.fileName))}:${sf.getLineAndCharacterOfPosition(v.at.getStart()).line + 1}`,
+					group: path(v.at)[0] === 'templates' ? 'templates' : 'workspace'
+				};
+			});
+			return {
+				namespace: 'bolt-cli/cli',
+				module: 'bolt',
+				summary:
+					"The `bolt` command (`@norbital-ai/bolt-cli`'s bin): a workspace's verbs, run inside it or given its directory, and the template repository's `bolt templates` CI verbs. Exit 0 ok, 1 author errors, 2 tool failure.",
+				symbols: symbols.sort((a, b) => byCode(a.name, b.name))
+			};
+		}
+
 		mkdirSync(out, { recursive: true });
-		const index: DocIndex = { namespaces: [], missing: [], skills: [], guides: [] };
-		const corpusSymbols: DocSymbol[] = [];
+		const index: DocIndex = { namespaces: [], missing: [], skills: [] };
 		const contractSymbols = new Map<string, DocSymbol>();
 		for (const name of readdirSync(SKILLS)
 			.filter((n) => existsSync(join(SKILLS, n, 'SKILL.md')))
@@ -583,39 +752,43 @@ export const generateDocs = Effect.try({
 			writeFileSync(join(out, skill_file(name)), `${JSON.stringify(skill, null, '\t')}\n`);
 			index.skills.push({ name, description, files: paths });
 		}
-		for (const e of entries) {
+		const namespaces: DocNamespace[] = entries.map((e) => {
 			const sf = program.getSourceFile(e.file);
 			const mod = sf === undefined ? undefined : checker.getSymbolAtLocation(sf);
 			if (sf === undefined || mod === undefined)
 				throw new Error(`[docs] ${e.namespace}: ${posix(relative(root, e.file))} is not built`);
-			const symbols = checker
-				.getExportsOfModule(mod)
-				.map(symbolOf)
-				.filter((s): s is DocSymbol => s !== null)
-				.sort((a, b) => byCode(a.name, b.name));
-			corpusSymbols.push(...symbols);
-			for (const s of symbols) contractSymbols.set(`${e.namespace}#${s.name}`, s);
-			const ns: DocNamespace = {
+			return {
 				namespace: e.namespace,
 				module: e.module,
 				summary: entrySummary(e),
-				symbols
+				symbols: grouped(
+					checker
+						.getExportsOfModule(mod)
+						.map(symbolOf)
+						.filter((s): s is DocSymbol => s !== null)
+						.sort((a, b) => byCode(a.name, b.name))
+				)
 			};
+		});
+		namespaces.push(cliNamespace());
+		namespaces.sort((a, b) => byCode(a.namespace, b.namespace));
+		for (const ns of namespaces) {
+			for (const s of ns.symbols) contractSymbols.set(`${ns.namespace}#${s.name}`, s);
 			writeFileSync(
-				join(out, `${e.namespace.replaceAll('/', '.')}.json`),
+				join(out, `${ns.namespace.replaceAll('/', '.')}.json`),
 				`${JSON.stringify(ns, null, '\t')}\n`
 			);
 			index.namespaces.push({
 				namespace: ns.namespace,
 				module: ns.module,
 				summary: ns.summary,
-				symbols: symbols.length,
-				reference: REFERENCE(e.namespace)
+				symbols: ns.symbols.length
 			});
-			if (REFERENCE(e.namespace))
-				index.missing.push(
-					...symbols.filter((s) => s.summary === '').map((s) => `${e.namespace}#${s.name}`)
-				);
+			for (const s of ns.symbols) {
+				if (s.summary === '') index.missing.push(`${ns.namespace}#${s.name}`);
+				for (const p of s.props ?? [])
+					if (p.summary === undefined) index.missing.push(`${ns.namespace}#${s.name}.${p.name}`);
+			}
 		}
 
 		const sentence = (text: string) =>
@@ -676,122 +849,6 @@ export const generateDocs = Effect.try({
 			description,
 			files: contract.files.map((file) => file.path)
 		});
-		// every call a docs page names (`` `ctx.allow()` ``, `` `model(name, spec)` ``) names something the corpus declares:
-		// a symbol, a member, a parameter or an identifier of their types
-		const declared = new Set<string>(),
-			words = (text: string) => text.match(/[A-Za-z_$][\w$]*/g) ?? [];
-		const member = (m: DocParam): void => {
-			declared.add(m.name);
-			for (const w of words(m.type)) declared.add(w);
-			for (const f of m.fields ?? []) member(f);
-		};
-		for (const s of corpusSymbols) {
-			declared.add(s.name);
-			for (const w of words(s.signature)) declared.add(w);
-			for (const m of [...(s.params ?? []), ...(s.props ?? []), ...(s.members ?? [])]) member(m);
-		}
-		const pages = join(root, 'bolt', 'docs');
-		const unknown = readdirSync(pages)
-			.filter((f) => f.endsWith('.md'))
-			.sort(byCode)
-			.flatMap((f) =>
-				[
-					...readFileSync(join(pages, f), 'utf8').matchAll(
-						/`([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\([^`]*\)`/g
-					)
-				]
-					.filter((m) => !declared.has(m[1]?.split('.').pop() ?? ''))
-					.map((m) => `docs/${f}: ${m[0]}`)
-			);
-		if (unknown.length > 0)
-			throw new Error(
-				`[docs] pages name calls the corpus does not declare:\n  ${unknown.join('\n  ')}`
-			);
-
-		// docs/hosts.md: each facility group and member of `Facilities`, from its declared type and that type's comment
-		const facilitiesFile = program.getSourceFile(FACILITIES);
-		const facilities =
-			facilitiesFile === undefined
-				? undefined
-				: facilitiesFile.statements
-						.filter(ts.isTypeAliasDeclaration)
-						.find((d) => d.name.text === 'Facilities');
-		if (facilities === undefined || !ts.isTypeLiteralNode(facilities.type))
-			throw new Error(`[docs] ${posix(relative(root, FACILITIES))} declares no Facilities type`);
-		const row = (member: ts.TypeElement) => {
-			if (!ts.isPropertySignature(member) || member.type === undefined) return [];
-			const declared = member.type;
-			const optional =
-				ts.isTypeReferenceNode(declared) &&
-				declared.typeName.getText() === 'Optional' &&
-				declared.typeArguments?.[0] !== undefined;
-			const inner = optional ? (declared.typeArguments?.[0] ?? declared) : declared;
-			const target = ts.isTypeReferenceNode(inner)
-				? checker.getSymbolAtLocation(inner.typeName)
-				: undefined;
-			const summary =
-				target === undefined
-					? ''
-					: first(
-							ts.displayPartsToString(
-								(target.flags & ts.SymbolFlags.Alias
-									? checker.getAliasedSymbol(target)
-									: target
-								).getDocumentationComment(checker)
-							)
-						);
-			return [
-				`| \`${member.name.getText()}\` | \`${inner.getText()}\` | ${optional ? 'or `off`' : 'required'} | ${summary.replaceAll('|', '\\|')} |`
-			];
-		};
-		const table = (members: readonly ts.TypeElement[]) => [
-			'| Member | Interface | Supply | What it is |',
-			'| --- | --- | --- | --- |',
-			...members.flatMap(row)
-		];
-		const groups = facilities.type.members.filter(
-			(m): m is ts.PropertySignature =>
-				ts.isPropertySignature(m) && m.type !== undefined && ts.isTypeLiteralNode(m.type)
-		);
-		const single = facilities.type.members.filter((m) => !groups.some((g) => g === m));
-		// written only when it changes: the overlay watch counts any write under the package as a fresh edit
-		writeIfChanged(
-			HOSTS,
-			[
-				'# Host facilities',
-				'',
-				'Generated by `scripts/docs.ts` from the `Facilities` type in `src/facilities/index.ts`; do not edit.',
-				'',
-				'A host wraps a bundle and supplies every member below. Without a host file, Colony supplies them all (tethered, the',
-				"default). A workspace's `norbital.host.ts`, or the file `--host=<file>` names, makes `bolt dev` and bolt-server serve it",
-				'untethered: its default export is this `Facilities` record (`satisfies Facilities`), and an optional `serving` export',
-				"adds the parts served around it (`Serving`). The host file is never part of the release's source. `off` is the only",
-				'way to leave an optional member out; `mail` has none. Activation refuses a bundle whose recorded needs name a member',
-				'left `off`, naming each one. The guest runner is no facility: each host owns its own (`HostPorts.guests`; bolt-server',
-				"and `bolt dev` run bolt-cli's `node_guests`, Colony its isolated-vm runner).",
-				...groups.flatMap((g) =>
-					g.type !== undefined && ts.isTypeLiteralNode(g.type)
-						? ['', `## ${g.name.getText()}`, '', ...table(g.type.members)]
-						: []
-				),
-				'',
-				'## Host-wide',
-				'',
-				...table(single),
-				''
-			].join('\n')
-		);
-		for (const file of readdirSync(pages)
-			.filter((file) => file.endsWith('.md'))
-			.sort(byCode)) {
-			const text = readFileSync(join(pages, file), 'utf8');
-			index.guides.push({
-				slug: file === 'README.md' ? 'overview' : file.slice(0, -3),
-				title: /^# (.+)$/m.exec(text)?.[1] ?? file,
-				source: `packages/bolt/docs/${file}`,
-				text
-			});
-		}
 		writeFileSync(join(out, 'index.json'), `${JSON.stringify(index, null, '\t')}\n`);
 		console.log(
 			`[docs] ${index.namespaces.map((n) => `${n.namespace} ${n.symbols}`).join(', ')}; ${index.missing.length} reference symbols without a summary; skills ${index.skills.map((k) => k.name).join(', ')}`

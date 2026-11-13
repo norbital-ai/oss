@@ -1,3 +1,7 @@
+<!--
+@component
+Norbius's mark: a band of dots that moves with the agent's state.
+-->
 <script lang="ts">
 	import { attach_dot_field, markRadius } from './dot-field.js';
 	import {
@@ -15,7 +19,16 @@
 		size = 20,
 		label,
 		class: className = ''
-	}: { state?: NorbiusStripState; size?: number; label?: string; class?: string } = $props();
+	}: {
+		/** The agent's state the band moves with. Default `'ready'`. */
+		state?: NorbiusStripState;
+		/** The box's width and height in pixels. Default 20. */
+		size?: number;
+		/** The accessible name; without it the mark is hidden from assistive technology. */
+		label?: string;
+		/** Extra classes on the box. */
+		class?: string;
+	} = $props();
 
 	/** The live attribute Svelte keeps in sync: the attach closure must not snapshot `state`. */
 	const liveState = (root: Element): NorbiusStripState => {

@@ -10,12 +10,15 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 	type GridMinimum = 'compact' | 'card' | 'panel';
 	/** The props of `Grid`. */
 	interface GridProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** Space between cells (default `md`). */
 		gap?: LayoutGap;
 		/** Space between rows when it differs from `gap` (a definition list: wide columns, tight rows). */
 		row_gap?: LayoutGap;
 		/** Block-axis placement of every cell. */
 		align?: 'start' | 'center' | 'end' | 'stretch';
+		/** Smallest cell width before wrapping: `compact` 12rem, `card` 18rem (default), `panel` 26rem. */
 		minimum?: GridMinimum;
 		/**
 		 * Explicit column tracks. When set, this is the grid template (via `style`, not a Tailwind
@@ -23,6 +26,7 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 		 * when the columns are a known, uneven measure — a log table, a definition list.
 		 */
 		tracks?: string;
+		/** The cells; wrap one in `Column span="all"` to take a whole row. */
 		children: Snippet;
 	}
 </script>

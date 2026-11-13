@@ -40,6 +40,7 @@ import { engineBeside, fingerprint, readAppliedRecord, schema_slice, type Applie
 import { impact_text, type MigrationImpact } from '../../protocol/migration-impact.ts';
 
 const MigrationFileSchema = Schema.Struct({ name: Schema.String, sql: Schema.String });
+/** Schema of a workspace's committed `migrations/` folder as one bundle: SQL files, squashes, snapshot, lock and physical definitions. */
 export const MigrationBundleSchema = Schema.Struct({
 	files: Schema.Array(MigrationFileSchema),
 	squashes: Schema.Array(MigrationFileSchema),
@@ -48,6 +49,7 @@ export const MigrationBundleSchema = Schema.Struct({
 	lock: MigrationLock,
 	physical: Schema.Record(Schema.String, Schema.Array(Schema.String))
 });
+/** A verified `migrations/` folder, as `read_migrations` returns it. */
 export type MigrationBundle = typeof MigrationBundleSchema.Type;
 const invalidMigration = (message: string) => BoltError.make('migration_invalid', 'admission', message);
 const changedMigration = (message: string) => BoltError.make('migration_changed', 'admission', message);
@@ -65,6 +67,7 @@ function appliedGuard(held: AppliedSchemaRecord | null): Sql {
 	end`;
 	return { text: `do ${literal(body)}`, params: [] };
 }
+/** The migratable schema of a manifest or schema slice: its tables, time zone and currency. */
 export const migration_schema = (next: EngineManifest | SchemaSlice): SchemaSpec => {
 	const { tables, tz, currency } = 'workspace' in next ? schema_slice(next) : next;
 	return { tables, tz, currency };
@@ -152,6 +155,10 @@ export const read_migration_sources = /*#__PURE__*/ (() =>
 		};
 	}))();
 
+/**
+ * Reads and verifies a `migrations/` folder against its lock: SQL history, archived squashes, snapshot digest and
+ * physical definitions. Any missing or changed file fails `migration_invalid` or `migration_changed`.
+ */
 export const read_migrations = /*#__PURE__*/ (() =>
 	Effect.fn('Bolt.read_migrations')(function* (directory: string) {
 		const fs = yield* FileSystem.FileSystem;

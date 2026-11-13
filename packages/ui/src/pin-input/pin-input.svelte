@@ -1,6 +1,6 @@
 <!--
 @component
-A one-time code in separate cells (bits-ui PinInput): the sign-in code step. Focused on mount: the code step appears only once a code is sent.
+A one-time code in separate digit cells (bits-ui PinInput): the sign-in code step. Digits only, `one-time-code` autofill; focused on mount, since the code step appears only once a code is sent.
 -->
 <script lang="ts">
 	import { Inline } from '../layout/index.js';
@@ -13,14 +13,22 @@ A one-time code in separate cells (bits-ui PinInput): the sign-in code step. Foc
 	import type { SnakeProps } from '../primitives/bits.js';
 
 	type Props = SnakeProps<Omit<WithoutChildrenOrChild<PinInputPrimitive.RootProps>, 'maxlength' | 'onComplete'>, {
+		/** Called with the code on every keystroke or paste. */
 		on_value_change: 'onValueChange';
+		/** Rewrites pasted text before it fills the cells (strip spaces or dashes). */
 		paste_transformer: 'pasteTransformer';
+		/** How the hidden input makes room for a password manager's badge (bits-ui `pushPasswordManagerStrategy`). */
 		push_password_manager_strategy: 'pushPasswordManagerStrategy';
+		/** The `id` of the hidden input, for a `Label for`. */
 		input_id: 'inputId';
+		/** The hidden input element (bindable). */
 		input_ref: 'inputRef';
 	}> & {
+		/** Number of digit cells (default 6). */
 		maxlength?: number;
+		/** Classes added to every cell. */
 		cell_class?: string;
+		/** Called with the code once every cell is filled. */
 		on_complete?: (value: string) => void;
 	};
 

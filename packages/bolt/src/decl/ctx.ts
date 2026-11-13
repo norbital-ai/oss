@@ -66,7 +66,14 @@ import type {
 export interface Eff<out A, out E = never> extends Effect.Effect<A, E> {}
 /** A body's failure: every failure is tagged (D3), and a body requires no service. */
 export type BodyError = { readonly _tag: string };
-/** What a ctx-bearing body returns: a generator (`function*`) whose return is the body's output. */
+/**
+ * What a ctx-bearing body returns: a generator (`function*`) whose return is the body's output.
+ *
+ * Each guest invocation has 3 s cumulative CPU and a 256 MiB heap; CPU admission is released while it waits on host I/O.
+ * An ordinary body may cross into host facilities 40 times, a write callback or policy verdict 10, an automation 10,000.
+ * Budgets apply per invocation, each 1000-row write chunk included, so business I/O belongs in an automation or remote
+ * sync, never a transform. Streamed progress refreshes the 20 s idle deadline of a host I/O answer.
+ */
 export type BodyReturn<O> = Effect.fn.Return<O, BodyError>;
 
 // ── reads ──
@@ -212,6 +219,7 @@ type ReadNodeBase = {
 	readonly as_of?: string;
 	readonly [relation: string]: unknown;
 };
+/** The loose shape every read request satisfies: read roots mapped to their options and nested relation layers. */
 export type ReadRequestBase = Readonly<Record<string, ReadNodeBase>>;
 type ReadOption = 'output' | 'where' | 'fields' | 'order_by' | 'limit' | 'after' | 'search' | 'aggregate' | 'as_of';
 /** The output root `C` of request `R` names (`default` when it names none). */
@@ -233,7 +241,14 @@ type RequestSpec<R> = {
 		? RootRequest<C, OutputOf<R, C>> & RequestChildren<C, C, R[C], OutputOf<R, C>>
 		: `error: '${C & string}' is no read root`;
 };
-/** A read request literal, checked exactly: an unknown key, path, field or option fails to type-check. */
+/**
+ * A read request literal, checked exactly: an unknown key, path, field or option fails to type-check (and is refused at
+ * run time). The same JSON tree serves pages, server `ctx.query`, policy verdicts and the agent's `read` tool. Each root
+ * appears once; relations nest under their parent, never as dotted keys. The caller's `where`, a view's prefilter and
+ * the granting policy compose per root (`where` ANDed, `limit` capped), so nothing widens the policy; one answer page is
+ * at most 4 MiB. Derive several views of one root from one read on the client. A past state is `as_of` on the root; a
+ * revision is `history(…, { at: { revision } })`.
+ */
 export type ReadRequest<R> = R & NoInfer<Checked<ReadRequestBase, R, Exact<R, RequestSpec<R>>>>;
 type At<R, P> = P extends `${infer Head}.${infer Tail}`
 	? Head extends keyof R ? At<R[Head], Tail> : {}
@@ -314,7 +329,8 @@ export type ReadAnswer<R> = {
 /**
  * The one read API as the caller (queries, automations under their policies, page loaders): each root reads one named
  * output, the rows its granting policies admit. Pages call the same `query` on `bolt` (`PageBolt`); every read is one
- * read request (a layer map).
+ * read request (a layer map). An automation reads as its `policies`, a model effect as its writer; a recoverable read
+ * failure is `ReadFailed` (a page's read may also fail `TransportFailed`).
  */
 export interface CallerQuery {
 	/**
@@ -338,7 +354,12 @@ export interface CallerQuery {
 	 * checked host-side against the declarations exactly as the literal form is, answered untyped.
 	 */
 	query(request: DynamicRead): Eff<DynamicAnswer, ReadFailed>;
-	/** A record's revisions, oldest first, up to an instant, a revision or just before an approval request. */
+	/**
+	 * A record's revisions, oldest first, up to an instant, a revision or just before an approval request. Every
+	 * committed write appends one (who, when, cause, changed fields); pruning keeps the newest 256 per record and folds
+	 * the rest into a full-row anchor. Each revision keeps the schema version it was written under and is marked
+	 * `valid` when it projects into today's schema. Reading needs the record's current output grant (`history: true`).
+	 */
 	history<C extends string>(
 		model: Is<C, ReadableName>,
 		id: NoInfer<Id<C>>,
@@ -346,11 +367,16 @@ export interface CallerQuery {
 	): Eff<readonly Revision[], ReadFailed>;
 }
 /**
- * The one read API as the workspace (policy/model callbacks and sync bodies): the same shapes as `CallerQuery`,
- * answered with every stored row under no grant.
+ * The one read API as the workspace (policy verdicts, write callbacks and remote sync bodies): the same shapes as
+ * `CallerQuery`, answered with every stored row under no grant. A file sync's body reads as the member importing or
+ * exporting instead (`FileSyncCtx`).
  */
 export type WorkspaceQuery = Pick<CallerQuery, 'query'>;
-/** What every server body knows of its moment: who it runs as, the instant, today and the zone (`today_in` another zone). */
+/**
+ * What every server body knows of its moment: who it runs as, the instant, today and the zone (`today_in` another zone).
+ * `now` and `today` are fixed for the invocation (a page uses `clock(unit)` instead). Read predicates, grant scopes
+ * included, hold literal date and instant values, never clock operators.
+ */
 export interface Clock {
 	readonly actor: Actor;
 	now: Instant;
@@ -475,12 +501,15 @@ export type ActInput<N> = N extends `${infer C}.${infer V}`
 					? readonly { target: WriteTarget<C> }[]
 					: never
 	: never;
-/** An import's rows and how it meets the stored rows its key matches. */
+/**
+ * An import's rows and how it meets the stored rows its key matches. Callbacks run in chunks of 1,000 rows, each with
+ * its own CPU budget, all inside the import's one transaction: any refusal rolls back the whole file.
+ */
 export type ImportInput<C> = {
 	readonly rows: readonly CreateInput<C>[];
 	/** `refuse` refuses a row already on file. */
 	readonly on_conflict: 'update' | 'keep' | 'refuse';
-	/** `skip` only updates rows already on file. */
+	/** A row not on file: `create` (the default) or `skip`, which only updates rows already on file. */
 	readonly on_missing?: 'create' | 'skip';
 	/** Deletes the caller-readable rows inside this predicate whose key the import does not name. */
 	readonly prune?: Where<C>;
@@ -513,6 +542,7 @@ export type WriteTarget<C extends string> = { readonly id: Id<C> } & (C extends 
 	: { readonly revision: number });
 /** Explicit idempotency for one atomic write. Import conflict policy belongs to its input. */
 export type ActOptions = {
+	/** The same key commits once; without one, a retried run may repeat its earlier writes. */
 	readonly key?: string;
 };
 export type ActMap = Readonly<Record<string, unknown>>;
@@ -569,7 +599,7 @@ export type Conflict = {
 /** The outcome could not be confirmed (a lost connection); `invocation` is the id to look the write up by. */
 export type Unknown = { kind: 'unknown'; invocation: string };
 /**
- * The act outlived the 60 s a person waits: the write continues in the background as run `run`; its
+ * Pages only. The act outlived the 60 s a person waits: the write continues in the background as run `run`; its
  * row reports the outcome. A page follows it with ui's `<RunStatus {ctx} automation="<callable>" {run} />`.
  */
 export type Running = { kind: 'running'; run: Id<'sys_run'> };
@@ -579,7 +609,20 @@ export type Running = { kind: 'running'; run: Id<'sys_run'> };
  */
 export type Outcome<O> =
 	Committed<O> | PendingApproval | Refused | Conflict | Unknown | Running;
-/** One map of generated writes, planned together and committed as one statement. */
+/**
+ * One map of generated writes, planned together and committed as one SQL statement whatever the row count: the rows,
+ * the cascades and `set_null` unlinks their deletes imply, roll-ups, history, the approval hold, queued effects and
+ * notices, the sync outbox and the idempotency outcome. Separate acts are separate commits: put writes that must commit
+ * together in one map; nest dependent children in the parent's write layers. A row written directly that a delete also
+ * cascades to is a conflict. Its output is keyed by the same callable names; update and delete targets carry the
+ * observed revision, checked before commit (`ActConflict` when it moved).
+ *
+ * Pages, automations (as their policies), model effects (as the writer) and the test kit call it; write callbacks
+ * return sets and carried rows instead, verdicts return a verdict, syncs return rows. The agent's `act` tool sends one
+ * `{ callable, input }` down the same decoder and commit path.
+ * @example
+ * yield* ctx.act({ 'orders.update': [{ target: order, set: { notes } }] }, { key: `notes:${order.id}` });
+ */
 export interface Act {
 	<const A extends ActMap>(
 		acts: ActMapInput<A>,
@@ -668,8 +711,11 @@ export type UpdateSet<M> = UpdateInput<M> &
 	Underived<M>;
 /** The same row change in every model hook. `changed` compares stored values, including nested values. */
 export type Change<Before, Set, After> = {
+	/** The stored row (`null` on create). */
 	readonly before: Before;
+	/** What the writer sent (`{}` on delete). */
 	readonly set: Set;
+	/** The row as this write leaves it: stored values with `set` applied; a create's carries its future id; `null` on delete. */
 	readonly after: After;
 	changed(...fields: readonly ((keyof NonNullable<Before> | keyof Set | keyof NonNullable<After>) & string)[]): boolean;
 };
@@ -724,6 +770,8 @@ interface ProspectiveQuery {
  * What a write callback sees: the clock, the writer's policies, the workspace reads (unmasked; `query.after` sees
  * this act's rows) and `refuse`. A callback reads at most 10 times per call, whatever the batch size: read for the whole
  * batch at once (`yield* ctx.query({ customers: …, prices: … })` is one read), never inside a loop over the rows.
+ * Checks, effects and approval callbacks read the same way: once per dependency wave, each request counting toward
+ * the limit of 10.
  * It writes nothing itself: what it returns is written in the writer's one transaction.
  */
 export interface WriteCtx<in out M> extends Clock, WorkspaceQuery {

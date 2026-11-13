@@ -72,7 +72,7 @@ type Pack = Effect.Success<ReturnType<NonNullable<EngineOptions<never>['pack']>>
  * Workspace fixture and host configuration: use a verified release, check authored source, or supply a manifest/guest (with
  * `transforms`, the write callbacks it carries per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`); choose
  * seed data, control time, and native ports. `seed` defaults to the template's `test` pack when `root` has `seed/test/`,
- * else none; rows here replace it.
+ * else none; rows here (or `'none'`) replace it. The public `base` pack and bank rows never load in a test.
  */
 export type TestOptions<P extends TestPorts = never> = Pick<
 	EngineOptions<P>,

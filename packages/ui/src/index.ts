@@ -96,10 +96,14 @@ export {
 	type Row
 } from './form/index.js';
 export {
+	/** Collapsible sections: `Accordion.Root` holds `Accordion.Item`s, each a `Trigger` and its `Content`. */
 	Accordion,
+	/** A modal dialog: `Dialog.Root`, its `Trigger`, and `Content` with a header, title, description and footer. */
 	Dialog,
+	/** Where the portals beneath it land: a mount with its own stylesheet keeps its floating content under it. */
 	BitsConfig,
 	confirm_action,
+	/** Floating content anchored to a trigger: `Popover.Root`, `Popover.Trigger`, `Popover.Content`. */
 	Popover,
 	Drawer,
 	Sheet,

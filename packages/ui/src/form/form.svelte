@@ -1,3 +1,12 @@
+<!--
+@component
+Edits a model row or an automation's input from authorized metadata: permitted fields only, drafts kept until the
+outcome, only changed values sent. Defaults, required checks, state moves and approval routing come from the
+declaration; a save routed to approval answers a held outcome that the native approval panel decides, so add no second
+approval control and repeat no declared default.
+@example
+<Form {ctx} of="invoice" id={row.id} fields={['customer', 'due_on']} />
+-->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
@@ -18,17 +27,8 @@
 	import type { RecordSection } from './section.svelte';
 	import type { ConfirmOptions } from '../primitives/dialog/confirm.js';
 
-	/**
-	 * `Form of="<c>" mode="create" | "update"` edits a model's allowlisted fields; `Form of={{ automation: '<a>' }}`
-	 * renders an automation's input and queues a run. Generated from authorized metadata: without
-	 * `children` every allowlisted field renders in order; with `children` the page lays out its own `Field`s.
-	 * Defaults, required checks, state moves and approval routing come from the declaration. A save routed to
-	 * approval answers a held outcome and the native approval panel decides it; do not add a second approval
-	 * control or repeat the declaration's defaults in the page.
-	 */
 	/** What a form edits: a model's row, or a declared automation's input. */
 	export type FormSource = ModelKey | { [A in AutomationKey]: { automation: A } }[AutomationKey];
-	/** The props of `Form`: what it edits (`of`), create or update, the row id, and the layout of its fields. */
 	/**
 	 * A save that asks first: given the draft (`values`) and what it was opened with (`before`), the confirmation to
 	 * show — its title, body and the accept button's words — or `null` to save without asking.
@@ -37,10 +37,13 @@
 		readonly values: Readonly<Record<string, Value>>;
 		readonly before: Readonly<Record<string, Value>>;
 	}) => ConfirmOptions | null;
+	/** The props of `Form`: what it edits (`of`), create or update, the row id, and the layout of its fields. */
 	export type FormProps<S = FormSource> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** What it edits: a model handle, or `{ automation }` for an automation's input (a submit queues a run). */
 		of: S;
+		/** `create` inserts; `update`/`edit` save the row `id`; `view` is `readonly`. Default: `update` with a model `id`, else `create`. */
 		mode?: 'view' | 'edit' | 'create' | 'update';
 		/** The row a model update edits. */
 		id?: S extends string ? IdOf<S> : never;
@@ -56,6 +59,7 @@
 			: RecordFieldOf<S>)[];
 		/** The generated fields grouped into collapsible `Section`s, in order; fields no section lists follow, untitled. */
 		sections?: readonly RecordSection[];
+		/** The submit button's label; default the create/save word. */
 		submit?: string;
 		/**
 		 * Every field shows its value as copyable text, no field chrome, and no submit: the form as a view of the row. It
@@ -71,9 +75,11 @@
 		confirm?: FormConfirm;
 		/** Pure semantic checks over the draft. Reuse this validator in the server's guarded write. */
 		validate?: (values: Readonly<Record<string, Value>>) => readonly SemanticIssue[];
+		/** The page's own layout of `Field`s, given the `FormState`; without it every permitted field renders in order. */
 		children?: Snippet<[FormState]>;
 		/** Extra buttons beside submit. */
 		actions?: Snippet<[FormState]>;
+		/** Classes on the form element. */
 		class?: string;
 	};
 </script>

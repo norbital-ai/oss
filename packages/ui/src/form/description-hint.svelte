@@ -7,7 +7,12 @@ A field's description as an info button beside its label: a tap or click opens t
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { cn } from '../primitives/utils.js';
 
-	let { text, class: className }: { text: string; class?: string } = $props();
+	let { text, class: className }: {
+		/** The description, opened in a popover and used as the button's label. */
+		text: string;
+		/** Extra classes on the button. */
+		class?: string;
+	} = $props();
 </script>
 
 <Popover.Root>

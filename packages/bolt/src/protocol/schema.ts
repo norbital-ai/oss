@@ -386,8 +386,12 @@ const ApnsKeys = Schema.Struct({
 	team_id: Schema.NonEmptyString
 });
 /**
- * `POST /__bolt/push`: `{ endpoint, remove: true }`; a browser `PushSubscription.toJSON()` (kind `web`); or a native
- * iOS device, `{ kind: 'apns', endpoint: <hex device token>, keys: ApnsKeys }`.
+ * `POST /__bolt/push`: `{ endpoint, remove: true }`; a browser `PushSubscription.toJSON()` (kind `web`, an `https://`
+ * endpoint); or a native iOS device, `{ kind: 'apns', endpoint: <hex device token>, keys: ApnsKeys }`. One device is
+ * stored per endpoint, as its member's. Each inbox notice's durable `bolt.push` run hands the host one message per
+ * device (its `kind`, the notice's `id` and `path`), retried three times; the host deletes a device its service reports
+ * gone. Delivery is not exactly once: the notice id is the browser tag and a hashed APNs collapse id. The service worker
+ * suppresses a system alert only while a visible, focused window of that workspace can toast it.
  */
 export const PushBody = Schema.Union([
 	Schema.Struct({ endpoint: Schema.String, remove: Schema.Literal(true) }),

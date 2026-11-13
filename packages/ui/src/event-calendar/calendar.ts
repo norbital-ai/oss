@@ -3,10 +3,13 @@
 export type CalendarView = 'day' | 'week' | 'month';
 /** One calendar event: id, start and end, title, all-day flag, accent colour, and whether it may be moved. */
 export type CalendarEvent = {
+	/** The caller's key, handed back in callbacks. */
 	id: string | number;
 	start: Date;
+	/** An event starting and ending on one day is a timed box; otherwise it is a bar. */
 	end: Date;
 	title: string;
+	/** A bar in the all-day band whatever its times. */
 	all_day?: boolean;
 	/** A CSS colour for the event's accent; the brand colour by default. */
 	color?: string;

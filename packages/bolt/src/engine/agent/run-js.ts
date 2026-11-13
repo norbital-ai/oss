@@ -480,6 +480,7 @@ export const REFERENCE = {
 	mime: 'application/vnd.norbital.reference+json',
 	treeBytes: 32 * MiB
 } as const;
+/** Schema of a repository reference file: repository, commit, tree digest and each file's path, blob key and size. */
 export const ReferenceIndex = Schema.Struct({
 	repository: Schema.String,
 	commit: Schema.NullOr(Schema.String),

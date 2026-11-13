@@ -13,6 +13,7 @@ import { LIMITS, type AiRequest, type AiResponse } from '../contracts.ts';
 import { filePart } from './ingest.ts';
 import { SaidContent, StepContent, textOf } from './schema.ts';
 
+/** An OpenAI-compatible `/chat/completions` endpoint for `open_ai_chat`: base URL, key, model map and metering. */
 export type OpenAiChatConfig = {
 	/** The API base, e.g. `https://openrouter.ai/api/v1`. */
 	endpoint: string;
@@ -189,6 +190,10 @@ export const provide_http =
 	};
 /** One call is a cancellable stream; its final event carries the assembled response. */
 export type OpenAiChat = (request: AiRequest) => Stream.Stream<AiEvent, PortFailure>;
+/**
+ * Model inference over an OpenAI-compatible endpoint: each request is one streamed completion whose text deltas arrive
+ * as events and whose last event carries the assembled response. A refusal fails with the HTTP status.
+ */
 export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}): OpenAiChat {
 	return (request) =>
 		Stream.callback<AiEvent, PortFailure>((queue) =>

@@ -42,6 +42,7 @@ A small label tag in a colour variant.
 		children,
 		...restProps
 	}: WithElementRef<HTMLAnchorAttributes> & {
+		/** The colour: `default`/`brand`, `outline`, `destructive`, `info`, `success` or `warning`. */
 		variant?: BadgeVariant;
 	} = $props();
 </script>

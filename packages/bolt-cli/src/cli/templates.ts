@@ -896,18 +896,47 @@ export const publishTemplates = Effect.fn('bolt.templatesPublish')(function* (
 });
 const optional = (name: string) => Flag.String(name).pipe(Flag.optional);
 const boolean = (name: string) => Flag.Boolean(name).pipe(Flag.withDefault(false));
-const checkCommand = Command.make('check', { filter: optional('filter') }, ({ filter }) =>
-	checkTemplates(process.cwd(), Option.getOrUndefined(filter))
+/**
+ * `bolt templates check`: each template's repository contract: a private package with `build` and `test` scripts, an
+ * exact `@norbital-ai/bolt` pin, no local-protocol dependencies or foreign package-manager files, a `bun.lock`
+ * satisfying first-party peer pins, `norbital.template.json` counts matching its source, and committed migrations under
+ * `migrations/`. A template pinning another Bolt release is checked by that release's CLI. Run in CI from the
+ * repository root. Exit 0 ok, 2 on a failed check.
+ */
+const checkCommand = Command.make(
+	'check',
+	{
+		filter: optional('filter').pipe(
+			Flag.withDescription('one template directory or handle; every template when absent')
+		)
+	},
+	({ filter }) => checkTemplates(process.cwd(), Option.getOrUndefined(filter))
 );
+/**
+ * `bolt templates lock`: writes each template's pinned Bolt toolchain set (from that release's published
+ * `toolchain.json`) into its `package.json` and re-resolves its `bun.lock`. Run only when moving dependencies; with
+ * `--check` (CI) it writes nothing and fails on drift. Exit 0 ok, 2 on drift or a failed resolution.
+ */
 const lockCommand = Command.make(
 	'lock',
-	{ filter: optional('filter'), check: boolean('check') },
+	{
+		filter: optional('filter').pipe(
+			Flag.withDescription('one template directory or handle; every template when absent')
+		),
+		check: boolean('check').pipe(
+			Flag.withDescription('write nothing; fail when a package.json or bun.lock differs from its resolution')
+		)
+	},
 	({ filter, check }) =>
 		lockTemplates({
 			check,
 			...(Option.isSome(filter) ? { filter: filter.value } : {})
 		})
 );
+/**
+ * `bolt templates test`: every template's own `bolt test` (through its `test` script), standalone on its own pins, up
+ * to three at once sharing the machine's workers; prints each suite's totals. Exit 0 ok, 2 when any suite fails.
+ */
 const testCommand = Command.make(
 	'test',
 	{
@@ -916,7 +945,9 @@ const testCommand = Command.make(
 				'comma-separated template directories or handles; every template when absent'
 			)
 		),
-		args: Argument.variadic(Argument.String('args'))
+		args: Argument.variadic(Argument.String('args')).pipe(
+			Argument.withDescription('passed to each template’s Vitest')
+		)
 	},
 	({ only, args }) =>
 		testTemplates(
@@ -932,15 +963,43 @@ const testCommand = Command.make(
 			args
 		)
 );
-const verifyCommand = Command.make('verify', { filter: optional('filter') }, ({ filter }) =>
-	verifyTemplates(process.cwd(), Option.getOrUndefined(filter))
+/**
+ * `bolt templates verify`: each template as a tenant receives it: its tracked files alone in a scratch directory,
+ * installed from its frozen lock, `bolt check`ed and built once, then tested against that build. Unfiltered, only the
+ * templates changed since `origin/main`. Run in CI before publishing. Exit 0 ok, 2 on any failed step.
+ */
+const verifyCommand = Command.make(
+	'verify',
+	{
+		filter: optional('filter').pipe(
+			Flag.withDescription('one template directory or handle; the templates changed since origin/main when absent')
+		)
+	},
+	({ filter }) => verifyTemplates(process.cwd(), Option.getOrUndefined(filter))
 );
+/**
+ * `bolt templates publish --out=<dir>`: packs each built template's release for CI to upload by digest:
+ * `bundle/<b>.tar.gz`, `source/<s>.tar.gz`, `seed/<p>.tar.gz` (the `base` pack; `test` is never published) and
+ * `template/<directory>/<b>.json` (its `release.json`). Run after `bolt build`. Nothing serves a release until the host
+ * is told its bundle digest; the host fetches and verifies each part, then cuts the template's demo workspaces over
+ * (same schema: flip; changed: pause, migrate, flip). Customer workspaces own their source and never follow. Exit 0 ok,
+ * 2 when a template has no `.norbital/release.json`.
+ */
 const publishCommand = Command.make(
 	'publish',
-	{ out: Flag.String('out'), filter: optional('filter') },
+	{
+		out: Flag.String('out').pipe(Flag.withDescription('the directory the release objects are written under')),
+		filter: optional('filter').pipe(
+			Flag.withDescription('one template directory or handle; every template when absent')
+		)
+	},
 	({ out, filter }) =>
 		publishTemplates({ out, ...(Option.isSome(filter) ? { filter: filter.value } : {}) })
 );
+/**
+ * `bolt templates`: the template repository's CI verbs (`check`, `lock`, `test`, `verify`, `publish`), run from its
+ * root. A template pinning another Bolt release is delegated to that release's CLI.
+ */
 export const templatesCommand = Command.make('templates').pipe(
 	Command.withSubcommands([checkCommand, lockCommand, testCommand, verifyCommand, publishCommand])
 );

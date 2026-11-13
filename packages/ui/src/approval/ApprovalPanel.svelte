@@ -12,7 +12,9 @@ reason and confirm.
 	export type ApprovalPanelProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The record's requests; the open one is shown first, else the latest. */
 		requests: readonly ApprovalView[];
+		/** Each decision's outcome once it settles (the panel also shows it). */
 		on_outcome?: (outcome: Outcome) => void;
 	};
 </script>

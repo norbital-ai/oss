@@ -28,18 +28,32 @@ export type DeviceNotifications = {
 export type PushRegistration = Exclude<PushBody, { readonly remove: true }>;
 
 /**
- * the device a shell (the native app shell, a desktop shell) installs as `window.bolt_device`
- * before the workspace bundle runs; every member is optional and feature-detected. Without one, Bolt uses the
- * browser's own device. Availability grants no server authority.
+ * The device a shell (the native app shell, a desktop shell) installs as `window.bolt_device` (with
+ * `window.bolt_device_ready` when installation is asynchronous) before the workspace bundle runs; the same bundle runs
+ * on every platform. `mount_shell`'s `device` overrides it. Bolt reads it from an own data property, validates its
+ * members and every native result, callback value and unsubscribe handle, and ignores a malformed installation. Every
+ * member is optional and feature-detected; without one, Bolt uses the browser's own. Pages read it as `ctx.device`.
+ * Availability grants no server authority, and nothing here survives the OS ending the app.
  */
 export type DeviceApi = {
 	platform?: 'ios' | 'android' | 'web' | 'desktop';
-	/** A shell bound to one workspace (an app): the page offers no way to another workspace. */
+	/**
+	 * A shell bound to one workspace (an app): the shell hides its workspace switcher and platform link. An unpinned app
+	 * shell leaves it absent and switches workspaces in place; any value but `true` is malformed.
+	 */
 	pinned?: true;
-	/** Native notifications: their permission, raising one, and the path a tapped one opens. */
+	/**
+	 * Native notifications: their permission, raising one, and the path a tapped one opens. For a signed-in staff member
+	 * the shell raises each new unread inbox notice with `show` while the page is hidden (a visible page shows a toast)
+	 * and follows a tapped one's path. Without it, the browser's Notification API.
+	 */
 	notifications?: NativePermission & DeviceNotifications;
-	/** Native camera permission, where the host's web view needs one. */
+	/** Native camera permission, where the host's web view needs one; without it, `getUserMedia`. */
 	camera?: NativePermission;
+	/**
+	 * Native geolocation takes precedence over `navigator.geolocation`; a native denial never switches providers.
+	 * `background` reports and opens the OS setting; it cannot grant permission, and a foreground fix does not prove it.
+	 */
 	geolocation?: {
 		source: 'native' | 'browser';
 		api: Geolocation;
@@ -49,11 +63,21 @@ export type DeviceApi = {
 			open_settings(): Promise<void>;
 		};
 	};
-	/** This device's push endpoint (it asks the platform for it, and for permission where the platform needs to). */
+	/**
+	 * This device's push endpoint (it asks the platform for it, and for permission where the platform needs to), stored
+	 * for the member at sign-in and forgotten at sign-out; every device receives, with no setting. Without it, web push
+	 * (a service worker and the host's VAPID keys), asked on the member's first click since browsers prompt only on a
+	 * gesture; a browser that blocks notifications stores none.
+	 */
 	push?: { register(): Promise<PushRegistration> };
-	/** A native service holding `GET /__bolt/notices` open while the app is in the background. */
+	/**
+	 * A native service holding the absolute `GET /__bolt/notices` URL open with the web view's session cookie while the
+	 * app is in the background; stopped at sign-out. The stream sends each notice created after it opened as
+	 * `{ id, title, body, path }` (event id: its instant), replays unread ones after `Last-Event-ID` once, pings every 25 s
+	 * and ends on a release change; reconnect with `Last-Event-ID`.
+	 */
 	notices?: { start(options: { url: string }): Promise<void>; stop(): Promise<void> };
-	/** Opens a URL outside the workspace in the system browser. */
+	/** Opens a URL outside the workspace in the system browser; the shell routes every link off the workspace origin here. */
 	navigation?: { open_external(url: string): Promise<void> };
 };
 

@@ -20,6 +20,7 @@ const close = (client: Client) =>
 		Effect.ignore
 	);
 
+/** The `McpPort` over the MCP SDK's streamable HTTP client, one client per session; every session closes with the scope. */
 export const mcp_port: Effect.Effect<McpPort, never, Scope.Scope> = Effect.gen(function* () {
 	const sessions = new Map<string, Client>();
 	yield* Effect.addFinalizer(() =>

@@ -24,6 +24,7 @@
 		t = (key: string) => key,
 		locale = 'en'
 	}: {
+		/** The instance's client (`bolt.integrations` for one connection): its status feed and pairing calls. */
 		client: Pick<
 			IntegrationClient,
 			'instance' | 'status' | 'pair' | 'import_start' | 'unpair' | 'test' | 'watch'
@@ -42,7 +43,9 @@
 			| undefined;
 		/** A containing connection row can render the shared status and setup controls in its own layout. */
 		children?: Snippet<[IntegrationSetupProps]> | undefined;
+		/** Translates the setup's English strings (keys are the English text). Default: identity. */
 		t?: (key: string) => string;
+		/** The locale dates and numbers are formatted in. Default `'en'`. */
 		locale?: string;
 	} = $props();
 	const failure = (e: unknown) =>

@@ -1,3 +1,7 @@
+<!--
+@component
+A model's records placed by a `point` field on the host's keyless basemap, with its toolbar; a click opens the record.
+-->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	import type { ModelKey, FieldOf, RecordFieldOf, RowOf, WhereOf } from '../model/types.js';
@@ -6,18 +10,26 @@
 	export type MapOverlay = {
 		lat: number;
 		lng: number;
+		/** The mark's label. */
 		text?: string;
+		/** Draws a dashed line from here to the mark. */
 		from?: { lat: number; lng: number };
 	};
 	/** Rows of `of` with a `point` field `at`, on the host's keyless basemap; a click opens the record. */
 	type MapProps<C = ModelKey> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The model whose records are placed. */
 		of: C;
+		/** The `point` field that places each record; rows without one are left out. */
 		at: FieldOf<C>;
+		/** The author's fixed scope; the viewer's filter is ANDed under it. */
 		where?: WhereOf<C>;
+		/** The field (or relation, by its target's label) that names each point. */
 		label?: RecordFieldOf<C>;
+		/** Pan, zoom and click-to-open. Default true; false is a static picture. */
 		interactive?: boolean;
+		/** The most rows read. Default 500. */
 		limit?: number;
 		/** `always`: each row's label sits beside its point instead of appearing on hover. */
 		labels?: 'hover' | 'always';
@@ -25,6 +37,7 @@
 		overlays?: readonly MapOverlay[];
 		/** The chrome (`ViewToolbar`); search and filter narrow the places. */
 		toolbar?: Toolbar<RowOf<C>>;
+		/** The URL parameter prefix; defaults to `of`. */
 		key?: string;
 	};
 </script>

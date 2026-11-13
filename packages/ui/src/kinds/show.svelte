@@ -1,6 +1,15 @@
 <!--
 @component
 Shows any stored or input value by its kind; readonly form values stay copyable.
+
+States render as a `StateBadge`, enums as badges in their catalogue words, refs as the target's label, markdown
+rendered, objects, lists and JSON as `StructuredData`, custom kinds through their field renderer; a missing value
+(or an empty readonly list) shows "none".
+
+@example
+```svelte
+<Show {ctx} kind={{ kind: 'money', currency: 'SGD' }} value={1250} />
+```
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -11,14 +20,23 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	export type ShowProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The declared kind that picks the renderer and formatting. */
 		kind: Kind;
+		/** The value to show; `undefined` and `null` show "none". */
 		value: Value | undefined;
+		/** The field name: scopes enum/state words and labels the value. */
 		name?: string;
+		/** The owning row, read for a money field's currency and a custom renderer's context. */
 		row?: { readonly [field: string]: Value };
+		/** Classes for the rendered value. */
 		class?: string;
+		/** Form-style read-only output: plain values become copyable, refs a read-only picker, CEL a read-only code view. */
 		readonly?: boolean;
+		/** Relation targets; with `readonly`, the value shows as a label of the first target model. */
 		relation?: { targets: readonly string[] };
+		/** The row field holding an address, handed to a custom renderer. */
 		address?: string;
+		/** The id on the rendered element, for label association. */
 		id?: string;
 	};
 </script>

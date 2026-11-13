@@ -108,6 +108,7 @@ export const utf8Bytes = (text: string): number => new TextEncoder().encode(text
 // ── the tenant database (C11 per activation) ──
 /** One statement with positional parameters (`$1…`); values are JSON (numeric, timestamps and dates as strings). */
 export type Sql = { readonly text: string; readonly params: readonly Json[] };
+/** A statement's result: its rows as JSON column maps and the number of rows it affected. */
 export type Rows = {
 	readonly rows: readonly { readonly [column: string]: Json }[];
 	readonly affected: number;
@@ -336,6 +337,7 @@ export type GuestOutcome =
 export type Blob = { key: string; bytes: number; sha256: string; mime: string };
 /** A media file the host fetched for a tool: classified by its bytes, stored, never run. */
 export type Downloaded = Blob & { name: string };
+/** The host's blob store behind `ctx.files` and the `sys_file` rows: put, bounded get, signed URL, remove and media download. */
 export interface FilesPort {
 	put(bytes: Uint8Array, meta: { name: string; mime: string }, signal: AbortSignal): Promise<Blob>;
 	/** At most `max` bytes; more is `invalid`, never a truncation. */
@@ -415,6 +417,7 @@ export interface IngestPort {
 }
 
 export type AiMessage = { role: 'user' | 'assistant' | 'tool'; content: Json };
+/** One model call the engine hands the AI port: model, system prompt, messages, tools, optional output schema and files. */
 export type AiRequest = {
 	model: string;
 	/** Host usage attribution; omitted for utility inference, set by the conversation engine for chat work. */
@@ -611,6 +614,7 @@ export type LogRow = Omit<LogEvent, 'attributes'> & {
 	readonly id: string;
 	readonly attributes: Json;
 };
+/** A filter over the tenant's stored log events; every given condition must hold. */
 export type LogQuery = {
 	/** rows older than this id */
 	readonly before?: string;

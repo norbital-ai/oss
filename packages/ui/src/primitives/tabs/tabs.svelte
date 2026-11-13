@@ -20,9 +20,13 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 	};
 	/** The props of `Tabs`: the tabs, the bindable selected `value`, and trailing content. */
 	export type TabsProps = {
+		/** The tabs, in order. */
 		tabs: readonly TabItem[];
+		/** The selected tab's `name`; bindable. Omitted, the first enabled tab. */
 		value?: string;
+		/** Called with the tab the user selects. */
 		on_value_change?: (value: string) => void;
+		/** Classes on the root (the strip and body grid). */
 		class?: string;
 		/** Rendered at the list's end (a toolbar, a trailing action). */
 		trailing?: Snippet;

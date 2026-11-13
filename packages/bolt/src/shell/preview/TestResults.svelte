@@ -1,10 +1,21 @@
+<!--
+	@component
+	A Studio test run's report: its state, totals and duration, then each file and test with its error, failed files
+	first and open. `run` absent reads as not yet run.
+	@example <TestResults run={state.tests} {t} />
+-->
 <script lang="ts">
 	import { Icon, Spinner } from '@norbital-ai/ui';
 	import type { StudioTestRun } from '../studio/test-results.ts';
 	let {
 		run,
 		t = (key: string) => key
-	}: { run: StudioTestRun | undefined; t?: (key: string) => string } = $props();
+	}: {
+		/** The run to report; absent reads as not yet run. */
+		run: StudioTestRun | undefined;
+		/** Translates the report's English strings (keys are the English text). Default: identity. */
+		t?: (key: string) => string;
+	} = $props();
 	const label = $derived(
 		run?.state === 'running'
 			? 'Running tests'

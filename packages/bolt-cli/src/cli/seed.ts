@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// `bolt seed` (docs/seeding.md): a bank tree's private rows, read into memory through `seed/+seeder.ts`, decoded, and
+// `bolt seed`: a bank tree's private rows, read into memory through `seed/+seeder.ts`, decoded, and
 // sent to one environment of a host as signed operations: each asset (`seed.asset`, kept once by its digest), then
 // the rows (`seed`), which the host restores over a reset of the environment. Nothing is written to either disk. The rows
 // are first restored into a scratch database as the host restores them: a seed the host would refuse mid-restore fails

@@ -22,10 +22,13 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 		precision?: Precision;
 		/** A range summary trigger; use input for directly editable date/time segments. */
 		variant?: 'picker' | 'input';
+		/** The id on the trigger, for `<label for>`. */
 		id?: string;
 		/** Shows the value as copyable text; an enclosing readonly form sets it. */
 		readonly?: boolean;
+		/** Muted and inert. */
 		disabled?: boolean;
+		/** Marks the control invalid. */
 		invalid?: boolean;
 	};
 </script>

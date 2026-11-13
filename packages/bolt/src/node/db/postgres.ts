@@ -159,6 +159,7 @@ function raw(pool: PgPool): RawDb {
 	};
 }
 
+/** The tenant database adapter over a host-owned `pg` pool, as deployed hosts use. */
 export const PostgresDb = {
 	/** The adapter over a pool the host keeps (a multi-workspace host shares its pool across a cell's work). */
 	make: (pool: PgPool): TenantDbShape => TenantDb.typed(raw(pool)),

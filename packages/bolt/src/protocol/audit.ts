@@ -119,9 +119,17 @@ export const AuditPendingPage = Schema.Struct({
 });
 export type AuditPendingPage = typeof AuditPendingPage.Type;
 
-/** The environment-bound host facility; callers cannot supply tenant or environment scope. */
+/**
+ * The environment-bound host facility; callers cannot supply tenant or environment scope.
+ *
+ * A separate store from the control and tenant databases (`bolt_history` stays in the tenant for restore and
+ * rollback). Records expire 30 days after `recorded_at`; permanent tenant deletion purges them earlier, while a tenant
+ * erase sanitizes history but leaves appended payloads until expiry. Workspace code has no append facility. The
+ * stores share no atomic commit: an audited write's prepared intent is acknowledged before the tenant lease, and
+ * recovery reconciles unresolved intents from the tenant's receipt and retained revisions.
+ */
 export interface AuditPort {
-	/** Buffered facilities acknowledge before disk flush; a host crash can lose accepted records. */
+	/** Buffered facilities acknowledge before disk flush; a host crash can lose accepted records. Disabled hosts refuse audited writes. */
 	readonly mode: 'durable' | 'buffered' | 'disabled';
 	/** Append with the host's declared persistence guarantee; identical ids deduplicate, changed content conflicts. */
 	append(events: readonly AuditEvent[], signal: AbortSignal): Promise<void>;

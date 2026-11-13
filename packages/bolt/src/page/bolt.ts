@@ -66,7 +66,17 @@ import { browserTransport } from '../protocol/client.ts';
 import { FileRefSchema, stored_file_url } from './file-ref.ts';
 
 
-/** The optional document bridge a fleet host uses to inspect mounted snapshot clients without a live stream. */
+/**
+ * The optional document bridge a fleet host uses to inspect mounted snapshot clients without a live stream.
+ *
+ * Set `window.bolt_live_mode = 'snapshot'` before the page boots; once a client mounts, check that `bolt_refresh`
+ * exists and await it before inspecting the page (its absence means no snapshot client is mounted). There is no
+ * polling interval. Page code can yield `ctx.refresh()` for the same re-read; a normal tab re-registers its views over
+ * its stream instead. Queries keep a failure until a later good answer, so a refresh can recover them.
+ *
+ * @example
+ * await window.bolt_refresh?.();
+ */
 export interface PageSnapshotHost {
 	/** Set before the page boots; absent or `stream` keeps normal browser streaming. */
 	bolt_live_mode?: 'stream' | 'snapshot';

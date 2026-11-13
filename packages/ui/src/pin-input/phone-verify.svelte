@@ -17,9 +17,11 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 	export interface PhoneVerifyProps {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** Sends the code and checks it; a Bolt page passes `bolt.session`. A failure's `message` shows under the field. */
 		session: CodeSession;
 		/** The number's label; the kit's "Mobile number" by default. */
 		label?: string;
+		/** The phone input's `id` (default `phone-verify`). */
 		id?: string;
 	}
 </script>

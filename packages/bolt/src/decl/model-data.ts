@@ -22,9 +22,15 @@ const ModelMetadata = {
 	was: Schema.optionalKey(Schema.String),
 	icon: Schema.optionalKey(Schema.String),
 	/**
-	 * Pure CEL over `record`, reused by record titles, references and search. Own/inline expressions are generated
-	 * text indexed with the row; one-hop ref fields resolve at read time under related field and row grants.
-	 * Use conditionals for optional values. Clocks and authority are excluded; an omitted label falls back to the id.
+	 * Pure CEL over `record`: the one identifier for record titles, the primary table column, board cards, pickers,
+	 * references, approval requests and record search in Find and the agent (explicit titles and snippets override it).
+	 * An own-field label is a generated `bolt_record_label` column in the row's text search document, recomputed on
+	 * every write; changing the expression migrates existing rows. One-hop ref fields resolve at read time from the
+	 * selected output under its grants, unstored; a hidden dependency shows the id. Use conditionals for optional values
+	 * (`record.name != null ? record.name : 'Unnamed'`) and `string(...)` for numbers; clocks and `requestor` are excluded.
+	 * Omitted, records show their id, and record search needs a `text` index.
+	 * @example
+	 * record_label: "record.code + ' · ' + record.name"
 	 */
 	record_label: Schema.optionalKey(Schema.String)
 };

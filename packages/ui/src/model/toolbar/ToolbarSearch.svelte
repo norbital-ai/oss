@@ -1,6 +1,8 @@
 <!--
 @component
 A toolbar search trigger and popover with a bound text value or a custom indexed-search body.
+@example
+<ToolbarSearch label="Search people" bind:value={q} />
 -->
 <script lang="ts" module>
 	import type { ComponentProps, Snippet } from 'svelte';
@@ -8,12 +10,19 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 
 	/** The shared toolbar search popover; a custom body keeps a view's indexed search UI. */
 	type ToolbarSearchProps = {
+		/** Whether the popover is open (bindable). Enter or Escape in the default input closes it. */
 		open?: boolean;
+		/** The search text (bindable), edited by the default input. */
 		value?: string;
+		/** The trigger's hint and accessible name, and the input's placeholder. */
 		label: string;
+		/** Highlights the trigger as searching. Default: `value` is not empty. */
 		active?: boolean;
+		/** Extra classes on the popover panel. */
 		panel_class?: string;
+		/** Replaces the default focus of the input when the popover opens. */
 		on_open_auto_focus?: ComponentProps<typeof PopoverControls.Content>['on_open_auto_focus'];
+		/** A custom body in place of the default input. */
 		children?: Snippet;
 	};
 </script>

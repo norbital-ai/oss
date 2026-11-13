@@ -1,3 +1,9 @@
+<!--
+@component
+A live kanban board of a model's records in lanes by a state, enum or relation field; dropping a card on another lane updates that field, and a refusal rolls it back.
+@example
+<Board {ctx} of="job" by="status" card={['title', 'assignee']} />
+-->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
@@ -21,6 +27,7 @@
 	export type BoardProps<C = ModelKey, F = FieldOf<C>, K = RecordFieldOf<C>> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The model whose records are the cards. */
 		of: C;
 		/** The lane field: a `state`, an `enum` or a relation. */
 		by: F;
@@ -45,6 +52,7 @@
 		initial_filter?: WhereOf<C>;
 		/** The cards' order within each lane; a viewer's sort replaces it (lane order stays the lanes'). */
 		order_by?: OrderByOf<C>;
+		/** Cards each lane loads per page (default 25); the next page loads as the lane scrolls near its end. */
 		page_size?: number;
 		/** The chrome (`ViewToolbar`): title, description, search, filter and sort (a sort orders the cards within each lane), actions, New. */
 		toolbar?: Toolbar<RowOf<C>>;

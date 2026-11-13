@@ -1,6 +1,15 @@
 <!--
 @component
 The editor of one value by its field kind: every kind's input in one component (derived kinds read-only).
+
+Derived and `state` values are never typed (a state moves by its transitions); an enum with declared transitions
+offers only the current state and its next ones; a relation with several targets picks the target model first and
+writes `{ model, id }`. Cleared text writes `null`.
+
+@example
+```svelte
+<Editor {ctx} kind={{ kind: 'date' }} name="start" value={start} on_change={(next) => (start = next)} />
+```
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -13,15 +22,19 @@ The editor of one value by its field kind: every kind's input in one component (
 	export type EditorProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The field's kind; it picks the input. */
 		kind: Kind;
 		/** JSON Schema for a generated structured editor; omitted infers the stored structure. */
 		json_schema?: JsonSchema;
 		/** Edit an untyped value as source JSON, retaining invalid text until it parses. */
 		raw_json?: boolean;
+		/** The current value; `null` when empty. */
 		value: Value;
+		/** Called with the next value on every edit; the parent owns the state. */
 		on_change(next: Value): void;
 		/** The field's name (file uploads, custom renderers) and the dotted path errors are keyed by. */
 		name: string;
+		/** The id on the input, for `<label for>`. */
 		id?: string;
 		/** The label naming a control that has no single input to point at (a group of boxes). */
 		labelledby?: string;
@@ -35,6 +48,7 @@ The editor of one value by its field kind: every kind's input in one component (
 		row?: { readonly [f: string]: Value };
 		/** A `point` field's address sibling: its name in `row` (shown in the search box) and the writer of what is typed or found. */
 		address?: string;
+		/** Called with the address a `point` field's search typed or found; omitted leaves the address unwritten. */
 		on_address?(address: string | null): void;
 		/** One-relation target(s), when `kind` is the FK column of a relationship. */
 		relation?: { targets: readonly string[]; where?: Where | undefined };

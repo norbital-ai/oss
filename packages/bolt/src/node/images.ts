@@ -92,6 +92,7 @@ const image = <A>(
 		})
 	);
 
+/** The `ImagesPort` for Node hosts: facts, JPEG, crop and preview, each in a memory-capped worker under the image wall. */
 export const images_port: ImagesPort = {
 	facts: (bytes, signal) => Effect.runPromise(image(bytes, {}, ImageMetadataSchema), { signal }),
 	jpeg: (bytes, maxEdge, signal) =>

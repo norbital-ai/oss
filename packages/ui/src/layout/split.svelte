@@ -1,6 +1,12 @@
 <!--
 @component
 Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) that stack, or switch with a tab pair, below a width.
+The Split measures its own width, so one in a narrow cell collapses even on a wide screen.
+@example
+<Split ratio="sidebar" collapse="switch" switch_labels={['List', 'Detail']} size="fill">
+	{#snippet start()}<List />{/snippet}
+	{#snippet end()}<Detail />{/snippet}
+</Split>
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -12,17 +18,25 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 	type SplitCollapse = 'stack' | 'switch' | 'none';
 	/** The props of `Split`. */
 	interface SplitProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** Width of `start` against `end`: `rail` 10–14rem, `sidebar` 14–20rem, `third` 1:2, `half` (default), `wide` 2:1. */
 		ratio?: SplitRatio;
+		/** Below `collapse_at`: `stack` the panes (default), `switch` between them with a tab pair, or `none`. */
 		collapse?: SplitCollapse;
+		/** The Split's own width to collapse below: `narrow` 40rem (default) or `compact` 30rem. */
 		collapse_at?: 'compact' | 'narrow';
+		/** Space between the panes (default `md`). */
 		gap?: LayoutGap;
 		/** `content` (default): its own height; `fill`: the space left in its parent, handed to both panes (down to `min_height`). */
 		size?: LayoutSize;
 		/** A `fill` split's floor (a CSS length; default 0). */
 		min_height?: string;
+		/** The first pane (left, or top when stacked). */
 		start: Snippet;
+		/** The second pane. */
 		end: Snippet;
+		/** Tab labels for `start` and `end` when `collapse="switch"`; "First" and "Second" by default. */
 		switch_labels?: readonly [string, string];
 	}
 </script>

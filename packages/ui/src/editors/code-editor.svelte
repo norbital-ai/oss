@@ -9,18 +9,27 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	 * The props of `CodeEditor`: the text and `on_change`, the language, read-only and invalid states, and the minimum height.
 	 */
 	export type CodeEditorProps = {
+		/** The text; an outside change replaces the document without echoing through `on_change`. */
 		value: string;
+		/** Called with the whole text on every edit. */
 		on_change?(next: string): void;
+		/** Syntax highlighting (default `plaintext`). */
 		language?: CodeEditorLanguage;
+		/** Not editable; shown on a muted background. */
 		readonly?: boolean;
+		/** Marks the editor invalid (a destructive border). */
 		invalid?: boolean;
 		/** CSS min-height of the editing area; one line is `2.25rem` (a field's height). */
 		min_height?: string;
 		/** Long lines wrap at the editor's width instead of scrolling sideways (an expression, prose). */
 		wrap?: boolean;
+		/** The id on the editing area, for `<label for>`. */
 		id?: string;
+		/** Classes for the outer frame. */
 		class?: string;
+		/** Accessible name of the editing area. */
 		'aria-label'?: string;
+		/** The id of the element that names the editing area. */
 		'aria-labelledby'?: string;
 	};
 </script>

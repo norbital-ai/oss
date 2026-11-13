@@ -29,7 +29,11 @@ export default bind_system_model('sys_conversation')({
 		 * `sys_file` id; a received one too large to store has none). A message's files are these; its row holds none.
 		 */
 		inputs: { kind: 'json', default: [] },
-		/** What its work made: downloads, screenshots, generated and sandbox files, oldest first. */
+		/**
+		 * What its work made: downloads, screenshots, generated and sandbox files, oldest first. A browser download is at
+		 * most 20 MiB; a host-fetched public media URL at most 100 MiB and kept only if its first bytes are media; a
+		 * `run_js` file is classified by its bytes, and an executable or unrecognized binary is refused.
+		 */
 		outputs: { kind: 'json', default: [] },
 		status: { kind: 'text', default: 'idle' },
 		lease_until: { kind: 'instant', optional: true },

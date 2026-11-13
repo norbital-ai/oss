@@ -47,7 +47,11 @@ const answer = (options: Options, method: 'GET' | 'POST', url: string, body?: Js
 			})
 		);
 
-/** Every definition with the providers this host offers for it (`GET /__bolt/integrations`). */
+/**
+ * Every definition with the providers this host offers for it, personal and workspace (`GET /__bolt/integrations`); a
+ * provider whose sign-in needs an OAuth client is offered only where the definition or the host configures one. It
+ * never carries secret values.
+ */
 export const integration_offers = (options: Options = {}) =>
 	answer(options, 'GET', list(options)).pipe(
 		Effect.flatMap((value) =>

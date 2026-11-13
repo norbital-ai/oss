@@ -16,8 +16,14 @@ export const under = (publicUrl: string, path: string): string =>
 export const base_path = (publicUrl: string): string =>
 	new URL(publicUrl).pathname.replace(/\/+$/, '');
 /**
- * The one spelling of a workspace path (`docs/hosts.md`, URL scheme): repeated slashes collapse and a trailing slash
- * goes, the root `/` aside. A host answers any other spelling with one 308 to this one.
+ * The one spelling of a workspace path (every host's workspace URL scheme): repeated slashes collapse and a trailing slash
+ * goes, the root `/` aside. A host answers any other spelling with one 308 to this one, query kept.
+ *
+ * Every host serves the same workspace-relative paths: an untethered host at its root, a tethered one under its
+ * `public_url` base. `/` (shell home), `/sign-in[?next=<path>]`, the shell routes (`/inbox`, `/settings/<tab>`,
+ * `/command-center[/<tab>]`, `/studio[/<tab>]`, `/app/<app>/<page>`, `/kiosk/<kiosk>/<page>`, `/invite/<id>`),
+ * `/__bolt/*` (the wire, {@link PATHS}), `/hooks/integration/<instance>` and `/hooks/oauth/callback`, then the PWA
+ * manifest and client files.
  */
 export const canonical_path = (path: string): string =>
 	path.replace(/\/{2,}/g, '/').replace(/(.)\/$/, '$1');

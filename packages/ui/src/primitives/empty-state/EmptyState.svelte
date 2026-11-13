@@ -19,13 +19,21 @@ space left in its parent.
 		children,
 		read = 'empty'
 	}: {
+		/** The heading: what is empty or what went wrong. */
 		title: string;
+		/** A line below the title: why, or what to do. */
 		hint?: string;
+		/** The glyph above the title; default `inbox`. */
 		icon?: GlyphName;
+		/** `danger` colours it destructive and announces it as an alert (else a status). */
 		tone?: 'muted' | 'danger';
+		/** `card` draws its own bordered card; `page` and `inset` sit on the surrounding surface. */
 		variant?: 'page' | 'inset' | 'card';
+		/** `fill` centres it in the space left in its parent; default `content` (at least 12rem tall). */
 		size?: LayoutSize;
+		/** The way forward: actions centred below the hint. */
 		children?: Snippet;
+		/** The `data-read` state it reports to readers and tests; default `empty`. */
 		read?: string;
 	} = $props();
 	const danger = $derived(tone === 'danger');

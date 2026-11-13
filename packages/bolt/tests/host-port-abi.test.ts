@@ -57,12 +57,10 @@ describe('fromAbi', () => {
 											namespace: 'bolt',
 											module: '@norbital-ai/bolt',
 											summary: 'Bolt',
-											symbols: 1,
-											reference: true
+											symbols: 1
 										}
 									],
 									missing: [],
-									guides: [],
 									skills: []
 								}
 							: { namespace: 'bolt', module: '@norbital-ai/bolt', summary: 'Bolt', symbols: 'bad' }

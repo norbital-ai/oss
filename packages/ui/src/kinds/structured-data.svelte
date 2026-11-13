@@ -17,29 +17,45 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	export type StructuredDataProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** A JSON Schema for the value; in `schema` mode, the schema itself shown (or edited with `on_change`). */
 		schema?: JsonSchema;
+		/** A native kind for the value; with neither `schema` nor `kind`, the structure is inferred from the value. */
 		kind?: Kind;
+		/** The current data. */
 		value?: Value;
+		/** The prior data compared against in `diff` mode. */
 		before?: Value;
+		/** `view`, `edit`, `schema` (the schema as a field table) or `diff`; defaults to `edit` with `on_change`, else `view`. */
 		mode?: 'view' | 'edit' | 'schema' | 'diff';
+		/** Called with the whole next value on any nested edit. */
 		on_change?(next: Value): void;
+		/** The field name; nested controls are named, and errors keyed, by dotted path under it. */
 		name?: string;
+		/** The id on the root control. */
 		id?: string;
+		/** Renders every leaf read-only; inherited by nested controls. */
 		readonly?: boolean;
+		/** Renders every leaf muted and inert; inherited by nested controls. */
 		disabled?: boolean;
+		/** Problems by dotted path; defaults to the enclosing form's field errors. */
 		errors?: ReadonlyMap<string, string>;
+		/** The owning row, for money currency siblings and custom renderers. */
 		row?: Values;
 		/** Prior row context for native currency and related-value formatting. */
 		before_row?: Values;
 		/** Explicit row identities, indexed by JSON Pointer. Unkeyed lists compare by position. */
 		array_keys?: ArrayKeys;
+		/** In `diff` mode, hide unchanged fields and list items. */
 		changes_only?: boolean;
 		/** A new record: schema defaults fill as the editor opens; an edit offers them by control instead. */
 		create?: boolean;
 		/** Internal recursion context. */
 		root?: JsonSchema;
+		/** Internal: this node's JSON Pointer within `root`. */
 		path?: string;
+		/** Internal: nesting level; past 24 the value falls back to raw JSON. */
 		depth?: number;
+		/** A collapsible section title wrapped around the content. */
 		heading?: string;
 		/** `false`: one border only, the outer one: a first-level section lies flat inside it instead of being its own card. */
 		frame?: boolean;

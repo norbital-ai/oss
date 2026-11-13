@@ -30,10 +30,11 @@ const DocKindSchema = Schema.Literals([
 	'interface',
 	'type',
 	'enum',
-	'namespace'
+	'namespace',
+	'command'
 ]);
 export type DocKind = typeof DocKindSchema.Type;
-/** The exported symbol and its repository source location. */
+/** The exported symbol (or a `bolt` command verb), its source location and its `group`: the source folder it lives in. */
 const DocSymbolSchema = Schema.Struct({
 	name: Schema.String,
 	kind: DocKindSchema,
@@ -41,10 +42,11 @@ const DocSymbolSchema = Schema.Struct({
 	summary: Schema.String,
 	docs: Schema.optionalKey(Schema.String),
 	params: Schema.optionalKey(Schema.Array(DocParamSchema).pipe(Schema.mutable)),
-	props: Schema.optionalKey(Schema.Array(DocMemberSchema).pipe(Schema.mutable)),
+	props: Schema.optionalKey(Schema.Array(DocParamSchema).pipe(Schema.mutable)),
 	members: Schema.optionalKey(Schema.Array(DocMemberSchema).pipe(Schema.mutable)),
 	examples: Schema.optionalKey(Schema.Array(Schema.String).pipe(Schema.mutable)),
-	source: Schema.String
+	source: Schema.String,
+	group: Schema.String
 }).mapFields(Struct.map(Schema.mutableKey));
 export type DocSymbol = typeof DocSymbolSchema.Type;
 /** One package entry point and its complete exported symbol list. */
@@ -55,14 +57,6 @@ const DocNamespaceSchema = Schema.Struct({
 	symbols: Schema.Array(DocSymbolSchema).pipe(Schema.mutable)
 }).mapFields(Struct.map(Schema.mutableKey));
 export type DocNamespace = typeof DocNamespaceSchema.Type;
-/** A maintained mechanism guide shipped by the package. */
-const DocGuideSchema = Schema.Struct({
-	slug: Schema.String,
-	title: Schema.String,
-	source: Schema.String,
-	text: Schema.String
-}).mapFields(Struct.map(Schema.mutableKey));
-export type DocGuide = typeof DocGuideSchema.Type;
 /** An authoring skill and its source files. */
 const DocSkillSchema = Schema.Struct({
 	name: Schema.String,
@@ -74,19 +68,17 @@ const DocSkillSchema = Schema.Struct({
 	).pipe(Schema.mutable)
 }).mapFields(Struct.map(Schema.mutableKey));
 export type DocSkill = typeof DocSkillSchema.Type;
-/** The release's namespace, guide and authoring skill inventory. */
+/** The release's namespaces, the symbols and component props without a doc comment, and the authoring skills. */
 const DocIndexSchema = Schema.Struct({
 	namespaces: Schema.Array(
 		Schema.Struct({
 			namespace: Schema.String,
 			module: Schema.String,
 			summary: Schema.String,
-			symbols: Schema.Number,
-			reference: Schema.Boolean
+			symbols: Schema.Number
 		}).mapFields(Struct.map(Schema.mutableKey))
 	).pipe(Schema.mutable),
 	missing: Schema.Array(Schema.String).pipe(Schema.mutable),
-	guides: Schema.Array(DocGuideSchema).pipe(Schema.mutable),
 	skills: Schema.Array(
 		Schema.Struct({
 			name: Schema.String,
@@ -113,7 +105,7 @@ const decoded =
 		);
 
 /**
- * The API reference corpus: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)` and `guide(slug)`, over the
+ * The API reference corpus: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)` and `skill(name)`, over the
  * index and every namespace and skill it lists, each read through `read` and decoded once.
  * @example
  * docs.symbol('bolt', 'ModelDeclaration')?.signature
@@ -140,10 +132,6 @@ export const corpus = <E>(read: (file: string) => Effect.Effect<unknown, E>) =>
 		const docs = {
 			/** Every namespace with its module specifier, summary and symbol count. */
 			index: (): DocIndex => index,
-			/** One mechanism guide, or null for an unknown slug. */
-			guide(slug: string): DocGuide | null {
-				return docs.index().guides.find((guide) => guide.slug === slug) ?? null;
-			},
 			/** One namespace's symbols, or `null` for an unknown one. */
 			namespace(namespace: string): DocNamespace | null {
 				return namespaces.get(namespace) ?? null;

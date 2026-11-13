@@ -12,6 +12,7 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 	type BoundSize = LayoutSize | 'viewport';
 	/** The props of `Bound`. */
 	interface BoundProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
 		/**
 		 * `content` (default): its own height — a clip or inset boundary; `fill`: the space left in
@@ -21,9 +22,13 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 		size?: BoundSize;
 		/** A `fill` bound's floor (a CSS length; default 0). */
 		min_height?: string;
+		/** Padding on every side (default `none`); ignored when `inset` pads. */
 		pad?: LayoutPad;
+		/** Pad with the app inset, unless an enclosing region already owns it. */
 		inset?: boolean;
+		/** Clip content that overflows the box. */
 		clip?: boolean;
+		/** The bounded content. */
 		children: Snippet;
 	}
 </script>

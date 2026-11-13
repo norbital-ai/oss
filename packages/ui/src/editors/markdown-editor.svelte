@@ -13,9 +13,13 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 	 * renders the text only (`ReadonlyMarkdown`).
 	 */
 	export type MarkdownEditorProps = {
+		/** The Markdown text. */
 		value: string;
+		/** Called with the whole text on every keystroke. */
 		on_change?(next: string): void;
+		/** Renders the text only (`ReadonlyMarkdown`). */
 		readonly?: boolean;
+		/** Adds a Write/Preview switch above the box. */
 		preview?: boolean;
 		/** The `/` rows, or a scoped search provider; `[]` turns `/` off. */
 		commands?:
@@ -23,15 +27,25 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 			| ((query: string) => EffectType.Effect<readonly CommandItem[], ReadError | Error>);
 		/** Where `/` counts: a line's start (Markdown blocks), or only as the text's first character (an agent command). */
 		command_start?: 'line' | 'text' | 'word';
+		/** The `@` mention rows for a query; omitted turns `@` off. */
 		mentions?(query: string): EffectType.Effect<readonly CommandItem[], ReadError | Error>;
+		/** Placeholder of the empty box. */
 		placeholder?: string;
+		/** Visible text rows (default 8). */
 		rows?: number;
+		/** The id on the textarea, for `<label for>`. */
 		id?: string;
+		/** Disables the textarea. */
 		disabled?: boolean;
+		/** Marks the textarea invalid. */
 		invalid?: boolean;
+		/** Classes for the outer block. */
 		class?: string;
+		/** Accessible name of the textarea. */
 		'aria-label'?: string;
+		/** Keydown on the textarea, e.g. to submit on Enter. */
 		onkeydown?(event: KeyboardEvent): void;
+		/** Paste on the textarea, e.g. to take pasted files. */
 		onpaste?(event: ClipboardEvent): void;
 		/** The textarea, bindable: a page inserts at its caret (`selectionStart`) or focuses it. */
 		textarea?: HTMLTextAreaElement | null;

@@ -1,4 +1,10 @@
 // @norbital-ai/bolt: author declarations, small composition helpers and their types. Native services use separate entries.
+// Terms: server code (transforms, verdicts, effects, automations, syncs, integrations) receives a `ctx` from these
+// declarations; the page SDK is `@norbital-ai/bolt/page`; Device is what the shell running a page provides
+// (`ctx.device`); a shell is the container a workspace runs in (the web shell, or a native app); a host runs a bundle
+// and supplies its `Facilities` (`@norbital-ai/bolt/facilities`); secrets are encrypted tenant values declared with
+// `secrets`; an environment (local, staging, production, and a tenant inside one) is an operator concern, never a
+// workspace setting.
 export { custom_field } from './decl/custom-field.ts';
 export { policy } from './decl/access/policy.ts';
 export { team } from './decl/access/team.ts';

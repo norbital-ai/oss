@@ -22,9 +22,15 @@ A checkbox, bindable `checked` (and `indeterminate`). `readonly` (or an enclosin
 		on_indeterminate_change,
 		...restProps
 	}: SnakeProps<Omit<WithoutChildrenOrChild<CheckboxPrimitive.RootProps>, 'name'>, {
+		/** Called with the next `checked` state when the person toggles it. */
 		on_checked_change: 'onCheckedChange';
+		/** Called with the next `indeterminate` state when it changes. */
 		on_indeterminate_change: 'onIndeterminateChange';
-	}> & { readonly?: boolean; name?: string } = $props();
+	}> & {
+		readonly?: boolean;
+		/** The form field name it submits under. */
+		name?: string;
+	} = $props();
 	const controls = use_controls();
 	const t = ui_text();
 </script>

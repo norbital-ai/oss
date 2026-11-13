@@ -109,6 +109,11 @@ export type ChatConnection = {
  * How far a platform can be repaired. `changes`: it keeps a change log, so we catch up from a cursor and nothing is lost
  * while it holds that log. `history`: its threads can be read back, so a missed or deleted message is found by comparing
  * a recent window. `webhook`: it offers neither, so what falls outside its own retries is lost.
+ *
+ * A repair reads at connect and daily: active threads only (activity in 7 days, at most 200 per connection, one at a
+ * time, against at most 1,000 stored rows); a pass that finds nothing writes nothing. Deletes are found only where a
+ * read is `complete` (one read covers the window). A repaired message keeps its files' names and sizes, not their bytes,
+ * and starts no envoy turn unless it is new and recent enough that its sender may still be waiting.
  */
 export type Consistency = 'changes' | 'history' | 'webhook';
 export type ChatField = {

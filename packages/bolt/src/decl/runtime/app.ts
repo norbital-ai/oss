@@ -42,11 +42,16 @@ type WorkspaceBase = {
 	currency?: CurrencyCode;
 	/** App order in the launcher. */
 	apps?: readonly string[];
-	/** Requires AI facilities and declares embedding models; administrators choose allowed chat models at runtime. */
+	/**
+	 * Requires AI facilities and declares embedding models. Allowed chat models and monthly USD caps (workspace, default
+	 * member, per policy) are runtime settings in `sys_config` under `agent`, applied at the next step; an empty allowed
+	 * list permits the host catalogue, else its first model is the fallback. Policy `limits.agent` still limits rate.
+	 */
 	ai?: { embeddings?: readonly string[] };
 	/**
 	 * The document formats Markdown or HTML converts to (`ctx.convert.document`, notice attachments, a
-	 * file sync's document export); the host must serve each.
+	 * file sync's document export); the host must serve each. A declared target the host does not serve is a check
+	 * warning and fails `Unavailable` when used.
 	 */
 	convert?: { to: readonly ConvertTarget[] };
 	/** Origins pages may connect to beyond the workspace. */
@@ -62,12 +67,24 @@ type WorkspaceBase = {
  * `match[email | phone]` field holds the proven address — so a guest already on file (a customer who booked without an
  * account) is promoted to a registered member bound to their own rows (`{ var: 'requestor.party' }`). An administrator can close
  * sign-up in Settings without a release.
+ *
+ * Sign-in codes go only to active members, open invitations and newcomers this admits; any other address is
+ * `not_member` before a code is sent. Sign-up texts are capped at 50 an hour per workspace and 10 per address.
  */
 type Signup = {
 	via: NonEmpty<'email' | 'phone'>;
 	policies: NonEmpty<string>;
+	/**
+	 * The link to the party record lasts only while that record holds the proven address, rechecked on every request:
+	 * when the address changes or the record goes, the old holder sees nothing and the new holder takes it. A party
+	 * named on an invitation is never rechecked.
+	 */
 	party?: { model: string; match: { email?: string; phone?: string } };
-	/** A stranger's code is paid for: the page they join on must pass this first. Members sign in without it. */
+	/**
+	 * A stranger's code is paid for: the public page or kiosk they join on must pass this bot check first. Members sign
+	 * in without it. The workspace's own sign-in page has no widget, so it stops offering sign-up; a host with no
+	 * `challenge` facility refuses strangers, except a local one.
+	 */
 	challenge?: 'turnstile';
 };
 type SignupFor = {
@@ -96,6 +113,21 @@ type WorkspaceFor = {
 
 /**
  * `src/+workspace.ts`, exactly one: timezone, locale, app order and workspace capabilities.
+ * Declarations are found by path and named by it; each takes one literal and no name, and every callback sits inside
+ * the declaration that invokes it. `bolt sync` (run by `bolt dev` on save and first by `bolt check`) writes their data
+ * shapes into the generated, never-edited `.norbital/`.
+ * ```text
+ * src/+workspace.ts, +secrets.ts
+ * src/data/model/<name>/+model.ts, +representation.svelte    (folders may nest; the leaf names the model)
+ * src/data/custom_field/<name>/+definition.ts, +renderer.svelte
+ * src/access_control/team/+team.ts, policy/+<name>.policy.ts
+ * src/integration/<name>/+integration.ts, +integration.svelte
+ * src/automation/+<name>.automation.ts
+ * src/agent/+agent.md, +agent.external.md, skill/<name>/+skill.md, mcp/+<name>.mcp.ts
+ * src/app/, src/i18n/+messages.ts, src/lib/ (ordinary helpers)
+ * seed/ (public/ ships in the release, test/ serves bolt test, +seeder.ts)
+ * migrations/ (generated, editable SQL and its proofs), tests/
+ * ```
  * @param spec Workspace settings; integration accounts and credentials are created at runtime.
  * @returns The typed declaration unchanged. Compilation validates its references against this workspace's names.
  * @example
@@ -112,6 +144,10 @@ const appContent = {
 	description: Schema.String,
 	icon: Schema.String,
 	banner: Schema.optionalKey(Schema.String),
+	/**
+	 * Origins allowed to frame the app's pages; by default only the workspace itself. Framing grants no data authority:
+	 * embedded sessions use `SameSite=None; Secure; Partitioned` cookies, one session per embedding site.
+	 */
 	embed: Schema.optionalKey(Schema.Array(Schema.TemplateLiteral(['https://', Schema.String]))),
 	requires: Schema.optionalKey(
 		Schema.Array(Schema.Literals(['location', 'location:background', 'notifications', 'camera']))
@@ -156,11 +192,31 @@ export const AppData = Schema.Union([
 type SignedInAudience = typeof SignedInAudience.Type;
 type PublicAudience<P extends string> = { public: NonEmpty<P>; challenge?: 'turnstile' };
 type AppAccess<P extends string> =
-	| { shell?: never; audience?: SignedInAudience | PublicAudience<P>; policies?: never }
-	| { shell: 'kiosk'; audience?: SignedInAudience; policies: NonEmpty<P> }
+	| {
+			shell?: never;
+			/**
+			 * Who opens the app: `members` (default) through the workspace SPA; `external`, `all` or `{ public }` are
+			 * server-rendered per page and hydrated, and a signed-out request for a sign-in page answers `303` to
+			 * `/sign-in?next=<path>`. `{ public: policies }` serves anyone, minting an anonymous visitor (`sys_user` kind
+			 * `anonymous`, a 30-day sliding session) whose `requestor.id` owns what it creates; signing in links it to the
+			 * account.
+			 */
+			audience?: SignedInAudience | PublicAudience<P>;
+			policies?: never;
+	  }
+	| {
+			/** Serves the pages at `/kiosk/<app>/<page>` under fixed policies. */
+			shell: 'kiosk';
+			audience?: SignedInAudience;
+			/** A signed-in kiosk caller's entire authority on its pages. Capabilities are refused for `external`. */
+			policies: NonEmpty<P>;
+	  }
 	| { shell: 'kiosk'; audience: PublicAudience<P>; policies?: never };
 
-/** Device permissions that must be granted before an app's pages open. */
+/**
+ * Device permissions (`location`, `location:background`, `notifications`, `camera`) an app's `requires` holds its pages
+ * behind until the member grants them.
+ */
 export type DeviceRequirement = NonNullable<AppSpec['requires']>[number];
 /** An app's pages and audience. The kiosk shell runs under its assigned policies. */
 export type AppSpec = typeof AppData.Type;
@@ -174,7 +230,17 @@ type AppFor = Omit<AppContent, 'pages'> &
 
 /**
  * `src/app/<a>/+app.ts`: an app's title, description, icon and banner, its `audience`, and its pages in nav order (each
- * `+<page>.page.svelte` in the folder needs an entry).
+ * `+<page>.page.svelte` in the folder needs an entry). An optional `+session.svelte` beside it mounts once for every
+ * signed-in caller the app is granted to, receives `ctx` like a page, stays mounted across navigation and is disposed with
+ * the signed-in client: run its device work (a position watch) with `{@attach attach(...)}` so disposal interrupts it.
+ * It grants no server policy. A page's browser graph may not reach server declaration roles, `.env` files,
+ * server-named files or `server/` directories (type-only imports are fine): share browser values through `src/lib/`.
+ *
+ * Kiosks: staff open them through `capabilities.apps`, administrators directly, external members those that admit
+ * them. Public visitors: minting is limited per IP (`register`); past it a page opens with a per-request identity that
+ * owns nothing. When a visitor signs in, a newcomer's account is the anonymous user; an existing account absorbs its
+ * `sys_user` refs (except state-locked fields) and the anonymous user is deactivated. The daily prune deletes
+ * anonymous users with no live session that no record references.
  * @example
  * export default app({
  * 	title: 'app.crm.title',

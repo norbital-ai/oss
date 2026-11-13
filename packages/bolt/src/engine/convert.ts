@@ -128,6 +128,7 @@ const submit = <A>(
 			: { result: seen.result };
 	});
 
+/** The `ctx.convert` service over a Norbital Convert server: document conversion to every target, plus in-memory PDF previews. */
 export function document_converter(
 	config: DocumentConverterConfig
 ): Convert['Service'] & Required<Pick<Convert['Service'], 'previewPdf'>> {
@@ -297,8 +298,10 @@ const ingestJob = (
 	});
 
 /**
- * The `IngestPort` over Norbital Convert's job routes (plan 12): a host constructs it from Convert's URL and key. A
- * converter with no transcription model rejects audio as `unavailable`.
+ * The `IngestPort` over Norbital Convert's job routes (plan 12): a host constructs it from Convert's URL and key. A 415
+ * answers `{ unsupported }`, and a converter with no transcription model rejects audio as `unavailable`. A password travels as
+ * the `x-ingest-password` header, never the URL. The answer's `meta.stats` is the conversion's compute and audio's
+ * `meta.usage` its model calls, which the host meters once per call id.
  */
 export function document_ingester(config: DocumentConverterConfig): IngestPort {
 	return {

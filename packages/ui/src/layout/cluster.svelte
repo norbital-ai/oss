@@ -8,9 +8,13 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 
 	/** The props of `Cluster`. */
 	interface ClusterProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** Space between items, across and between lines (default `sm`). */
 		gap?: LayoutGap;
+		/** Vertical placement of items within a line (default `center`). */
 		align?: 'start' | 'center' | 'end' | 'baseline';
+		/** Horizontal placement of items within a line (default `start`). */
 		justify?: 'start' | 'center' | 'end' | 'between';
 		/** `content` (default): its own size, never squeezed; `fill`: the space left in its parent, down to `min_height`. */
 		size?: LayoutSize;
@@ -18,6 +22,7 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 		min_height?: string;
 		/** A hairline between children — a segmented strip. Pair with `gap="none"`. */
 		divided?: boolean;
+		/** The items. */
 		children: Snippet;
 	}
 </script>

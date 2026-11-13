@@ -2,6 +2,10 @@
 @component
 The standard toolbar over a custom view (a roster grid, a calendar, cards): title and description, search, the filter and
 sort popover over the page's own rows, the actions menu and the page's scope controls. The body gets the rows they leave.
+@example
+<CustomView {ctx} of={rows} fields={['name', 'team']} key="roster">
+	{#snippet children(shown)}<RosterGrid rows={shown} />{/snippet}
+</CustomView>
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -18,6 +22,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 		ctx: UiContext;
 		/** The rows the custom view draws; the toolbar narrows and orders them. */
 		of: readonly R[];
+		/** The fields the toolbar searches, filters and sorts on; a bare name is labelled by humanizing it. */
 		fields: readonly CustomField<R>[];
 		/** The URL prefix of the viewer's filter and sort. */
 		key: string;

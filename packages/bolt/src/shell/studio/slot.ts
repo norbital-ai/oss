@@ -5,6 +5,7 @@ import { Predicate } from 'effect';
 import type { UiTextKey } from '@norbital-ai/ui';
 import type { StudioTab } from '../nav.ts';
 
+/** The plain values the shell hands a host's Studio bundle: copy, locale, the open tab and file, and navigation callbacks. */
 export type StudioProps = {
 	/** The shell's copy: the workspace's messages, then the framework's. A key it lacks comes back unchanged. */
 	readonly t: (key: string) => string;

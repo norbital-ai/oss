@@ -9,7 +9,9 @@ A loading spinner.
 		class: className,
 		label = 'Loading'
 	}: {
+		/** Classes on the svg; default size 1rem. */
 		class?: string;
+		/** Its accessible name (a `status` role); default `Loading`. */
 		label?: string;
 	} = $props();
 </script>

@@ -11,11 +11,21 @@ A related-record grid with explicit child operations, original revisions and par
 	type ChildGridProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The parent model. */
 		of: string;
+		/** The parent's child relation whose records the grid lists. */
 		relation: string;
+		/** The parent record's id; unset (a new parent) reads no rows. */
 		id?: string;
+		/**
+		 * `'parent'` (default): edits follow the enclosing record form's edit mode and save with the parent through its
+		 * child contract. `'independent'`: the grid has its own Edit toggle and saves each child through the child model's
+		 * own verbs.
+		 */
 		save?: 'parent' | 'independent';
+		/** The child columns. Default: the contract's create and update columns, then every exposed field but the parent ref. */
 		columns?: readonly Col<Row>[];
+		/** A filter ANDed with the parent scope. */
 		where?: Json;
 	};
 </script>

@@ -205,7 +205,12 @@ type EnvoyKey = 'envoys.receive' | 'envoys.unrecognised';
 /**
  * What a `limits` entry throttles: acts, reads, agent turns, registration, uploads, page PDF previews
  * (`convert`, `ctx.preview_pdf`; default `30/min`) or envoy traffic. Requests only: automation bodies are never limited,
- * and manual starts have a separate fixed quota per automation and starter.
+ * and manual starts have a separate fixed quota per automation and starter (30 a minute).
+ *
+ * Undeclared keys take defaults: members `act 600/min`, `read 3000/min`, `upload 120/min`, `convert 30/min`,
+ * `agent 100/h`, `envoys.unrecognised 1/15min` per sender; visitors, per IP: `act 120/h`, `read 600/min`, `upload 20/h`, `register 20/h`. Windows are fixed and
+ * counted in the serving cell's memory (acts also persist theirs). A refusal is `429` with `Retry-After` and
+ * `{ code: 'rate_limited' }`.
  */
 export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'convert' | EnvoyKey;
 

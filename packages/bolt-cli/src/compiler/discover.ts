@@ -223,7 +223,7 @@ export const discover = Effect.fn('bolt.discover')(function* (
 		else seen.set(f.name, f);
 	}
 
-	// Seeds (docs/seeding.md): seed/+seeder.ts, and seed/public/** and seed/test/** rows (<model>.json[.gz]) beside
+	// Seeds (see `seeder`): seed/+seeder.ts, and seed/public/** and seed/test/** rows (<model>.json[.gz]) beside
 	// their assets.json and assets/**. Nothing else lives in seed/. A workspace seeds its own
 	// models and the exposed system models.
 	const models = new Set([...of('model').map((f) => f.name), ...Object.keys(SYSTEM.exposures)]);

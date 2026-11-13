@@ -1,4 +1,5 @@
 <!--
+	@component
 	A resizable preview web view, the only place a preview shows (it is never a destination of its own). One compact
 	header: what it previews, a running build's status, the device (Phone, Tablet, Desktop as icons), the caller's details
 	(ⓘ) and actions (…), Reload. Below, the page sits in a device bezel on a blueprint grid, so it never reads as part of
@@ -32,8 +33,11 @@
 		on_close,
 		t = (key: string) => key
 	}: {
+		/** The page's address; `null` while there is nothing to show (the Tests pane opens instead). */
 		src: string | null;
+		/** The latest test run, shown in a Tests pane beside the preview. */
 		tests?: StudioTestRun | undefined;
+		/** The frame's accessible title. Default `'Preview'`. */
 		title?: string;
 		/** What it previews (a draft, a commit): the header reads "Preview · <label>". */
 		label?: string | undefined;
@@ -45,7 +49,9 @@
 		details?: Snippet;
 		/** The caller's actions (rebuild, live data, exit): behind …; each receives a closer for the menu. */
 		menu?: Snippet<[() => void]>;
+		/** Shows a Close button that calls it. */
 		on_close?: () => void;
+		/** Translates the frame's English strings (keys are the English text). Default: identity. */
 		t?: (key: string) => string;
 	} = $props();
 

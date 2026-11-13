@@ -16,7 +16,9 @@ scroll owner scrolls when boxes do not fit) or `size="fill"` (the space left in 
 
 	/** The props of `Stack`. */
 	interface StackProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** Space between children (default `md`). */
 		gap?: LayoutGap;
 		/** Cross-axis (horizontal) placement of the children. */
 		align?: 'start' | 'center' | 'end' | 'stretch';
@@ -36,6 +38,7 @@ scroll owner scrolls when boxes do not fit) or `size="fill"` (the space left in 
 		divided?: boolean;
 		/** Last child on top: a log read newest-first without reversing the data. */
 		reverse?: boolean;
+		/** The stacked children. */
 		children: Snippet;
 	}
 </script>

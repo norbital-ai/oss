@@ -1,3 +1,12 @@
+<!--
+@component
+Picks one row of a model by searching it through the viewer's own read grant; the value is the row's id.
+
+@example
+```svelte
+<Picker {ctx} of="employee" where={{ active: { eq: true } }} value={id} on_change={(next) => (id = next)} />
+```
+-->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	import type { Json, Value } from './kind.js';
@@ -13,18 +22,27 @@
 	export type PickerProps<C = ModelKey> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The target model's handle. */
 		of: C;
 		/** The chosen id; any text is shown as not found, never trusted. */
 		value: string | null;
+		/** Called with the picked id, or `null` when cleared. */
 		on_change(next: IdOf<C> | null): void;
+		/** Fields that label each row; defaults to the target model's `label`. */
 		label?: readonly FieldOf<C>[];
+		/** A filter ANDed onto every search. */
 		where?: WhereOf<C> & Json;
+		/** Row order; defaults to the label. */
 		order_by?: OrderByOf<C> & Json;
+		/** Rows shown per search (default 20); never caps what is searched. */
 		limit?: number;
+		/** The id on the control, for `<label for>`. */
 		id?: string;
 		/** Shows the chosen row's label as copyable text; an enclosing readonly form sets it. */
 		readonly?: boolean;
+		/** Muted and inert; defaults to the enclosing `Form`/`Field` mode. */
 		disabled?: boolean;
+		/** Marks the control invalid. */
 		invalid?: boolean;
 	};
 </script>

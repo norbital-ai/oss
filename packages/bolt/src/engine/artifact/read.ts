@@ -22,6 +22,7 @@ import { equal_json } from '@norbital-ai/store/kind';
 import { from_store } from '../../protocol/errors.ts';
 import { packLoader, type Pack, type PackSource, type SeedAsset } from '../write/pack.ts';
 
+/** Schema of a release's `artifact.json`: its contract, handle, schema fingerprint, entries and recorded digests. */
 export const ArtifactJson = Schema.Struct({
 	format: Schema.Literal(1),
 	/** The engine contract this artifact was built against; a host refuses one it does not implement. */
@@ -32,7 +33,10 @@ export const ArtifactJson = Schema.Struct({
 	/** The schema fingerprint `plan`/`apply_migrations` record. */
 	schema: Schema.String,
 	client: Schema.Struct({ entry: Schema.String, css: Schema.Array(Schema.String) }),
-	/** Public routes carry their own browser entry and a private, bounded server program. */
+	/**
+	 * Public routes (`app/<app>/<page>`, `kiosk/<kiosk>/<page>`) carry their own browser entry and CSS and a private,
+	 * bounded server program under `server/`, outside the statically served `client/`.
+	 */
 	pages: Schema.Record(
 		Schema.String,
 		Schema.Struct({
@@ -53,6 +57,7 @@ export const ArtifactJson = Schema.Struct({
 	hash: Schema.String
 });
 export type ArtifactJson = typeof ArtifactJson.Type;
+/** A release `read_artifact` verified and decoded: its descriptor, manifest, migrations and loaded guest programs. */
 export type Artifact = {
 	dir: string;
 	artifact: ArtifactJson;
@@ -84,9 +89,14 @@ export function public_page_keys(m: EngineManifest): readonly string[] {
 }
 
 // ponytail: the digest is of the package release, not yet of the C1 JSON Schema + C2 ABI descriptor;
-// switch when those descriptors exist as files. A host implements a set of these.
+// switch when those descriptors exist as files.
+/**
+ * This engine's contract digest, recorded in each `artifact.json` it builds. A host implements a set of these and
+ * refuses an artifact built for any other.
+ */
 export const CONTRACT = sha256_hex(`${release.name}@${release.version}`);
 
+/** Sorted `/`-separated relative paths of every file under `dir`; empty when `dir` does not exist. */
 export const tree = Effect.fn('bolt.artifactTree')(function* (dir: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
@@ -113,6 +123,7 @@ export const tree_hash = Effect.fn('bolt.artifactTreeHash')(function* (dir: stri
 		if (!file.endsWith('.map')) files.push([file, yield* fs.readFile(path.join(dir, file))]);
 	return tree_digest(files);
 });
+/** An artifact's `hash`: sha256 over its descriptor body and the tree hashes of its assets, skills, workspace source and migrations. */
 export const artifact_hash = Effect.fn('bolt.artifactHash')(function* (
 	dir: string,
 	body: Omit<ArtifactJson, 'hash'>

@@ -50,6 +50,7 @@ import {
 import { GuestIsolates, type GuestSession } from '../ports.ts';
 import { PRELUDE } from './prelude.ts';
 
+/** A compiled guest bundle the runner loads: its JavaScript source, optional source map and embedded assets. */
 export type GuestProgram = {
 	source: string;
 	source_map?: string;

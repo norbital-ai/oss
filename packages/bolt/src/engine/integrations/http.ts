@@ -88,6 +88,7 @@ export type HttpInstance = {
 export type HttpOptions = {
 	readonly secrets?: Readonly<Record<string, string>> | undefined;
 };
+/** An `http` integration's OAuth client, when its definition declares both `authorize` and `token` URLs; else `undefined`. */
 export const http_oauth = (
 	def: IntegrationSpec
 ):
@@ -100,6 +101,11 @@ export const http_oauth = (
 };
 const invalid = (message: string) => BoltError.make('invalid_input', 'facility', message);
 const unavailable = (message: string) => BoltError.make('unavailable', 'facility', message);
+/**
+ * Sends one `{ method, path, query?, headers?, body? }` request for an `http` integration instance against its base URL,
+ * authenticated by its OAuth token (refreshed when expired), bearer, basic or header credential. Answers the status,
+ * the JSON (else text) body and, on a 429 or 503, `retryAfter` in seconds.
+ */
 export const http_request = (
 	def: IntegrationSpec,
 	instance: HttpInstance,

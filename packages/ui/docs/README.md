@@ -87,7 +87,7 @@ configuration: callables and model syncs (remote reads, file Import, Download te
 Export CSV, "Update selected records" (declared and permitted update fields) and "Delete selected records" (declared and
 permitted delete). An undeclared or unpermitted row is absent. It watches an import run to its
 end in one step: a spinner, then the counts as a toast with any warnings in the menu, or, when a finding refuses, its
-findings and nothing written ([Bolt's sync guide](../../bolt/docs/syncs.md)). A page adds ad-hoc rows (running an automation by hand) with
+findings and nothing written. A page adds ad-hoc rows (running an automation by hand) with
 `toolbar.actions`, listed under Actions, each pure configuration:
 
 ```ts

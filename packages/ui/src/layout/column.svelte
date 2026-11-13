@@ -10,8 +10,11 @@ One cell of a `Grid` or `Columns` spanning `span` columns (or `all`); it throws 
 	type ColumnSpan = 1 | 2 | 3 | 4 | 5 | 6 | 'all';
 	/** The props of `Column`. */
 	interface ColumnProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** Columns spanned (default 1); in a `Grid` only 1 or `all`, in `Columns` at most its `count`. */
 		span?: ColumnSpan;
+		/** The cell's content. */
 		children: Snippet;
 	}
 </script>

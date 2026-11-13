@@ -5,7 +5,7 @@ import type { RowData } from '@norbital-ai/bolt/engine';
 import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 
 /**
- * The rows of a seed directory (docs/seeding.md), in natural path order: every `**\/<model>.json[.gz]` under `dir` is
+ * The rows of a seed directory, in natural path order: every `**\/<model>.json[.gz]` under `dir` is
  * that model's rows, as stored; its `assets.json` and `assets/**` are not rows. `label` names `dir` in diagnostics (`seed/public`,
  * `seed/test`, a bank tree's `rows`).
  */

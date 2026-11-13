@@ -5,7 +5,16 @@ A `state` field's value as a coloured pill, in its words (`label`, else the cata
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	/** The props of `StateBadge`. */
-	export type StateBadgeProps = { ctx: UiContext; state: string; label?: string; class?: string };
+	export type StateBadgeProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
+		/** The state value; its tone picks the colour. */
+		state: string;
+		/** Overrides the shown words. */
+		label?: string;
+		/** Classes for the badge. */
+		class?: string;
+	};
 </script>
 
 <script lang="ts">

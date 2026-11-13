@@ -13,10 +13,13 @@ low-contrast code in dark mode is one that simply does not scan.
 		alt = 'Scannable code',
 		class: className
 	}: {
+		/** The payload to encode; `''` draws nothing. */
 		value: string;
 		/** The rendered pixel size; the code keeps its own quiet zone. */
 		size?: number;
+		/** The image's alternative text; default `Scannable code`. */
 		alt?: string;
+		/** Classes on the image. */
 		class?: string;
 	} = $props();
 

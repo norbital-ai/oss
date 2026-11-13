@@ -9,7 +9,9 @@ Native dimensions, responsive sources and loading attributes pass through; provi
 
 	/** Native image attributes with required alternative text and separate container/image styling. */
 	export type ImageProps = Omit<HTMLImgAttributes, 'alt'> & {
+		/** Required alternative text; `""` marks a decorative image. */
 		alt: string;
+		/** Classes on the `<img>` itself (its fit); `class` sizes the outer span. */
 		image_class?: HTMLImgAttributes['class'];
 	};
 

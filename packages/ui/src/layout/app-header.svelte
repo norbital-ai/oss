@@ -16,7 +16,9 @@
 		src?: string | null;
 		/** App icon (`bolt:icon`). Opaque chip so it stays readable on any banner. */
 		icon?: string | null;
+		/** The app title, the page's one `h1`; truncated to one line. */
 		title?: string | null;
+		/** One line under the title (two on a phone); behind an info button when `compact`. */
 		description?: string | null;
 		/**
 		 * Trailing controls for the running app — a scope picker, an export button.
@@ -34,6 +36,7 @@
 		leading?: Snippet;
 		/** Shell controls after the identity (the bell, Norbius). Compact only. */
 		trailing?: Snippet;
+		/** Classes for the header element. */
 		class?: string;
 	}
 </script>

@@ -44,7 +44,9 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		size?: 'content' | 'fill';
 		/** A `fill` section's floor (a CSS length; default its content or 16rem, whichever is less). */
 		min_height?: string;
+		/** Extra classes on the `<section>`. */
 		class?: string;
+		/** The section's content: its fields or a view. */
 		children: Snippet;
 	};
 	/**
@@ -54,11 +56,17 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	export type RecordSection = {
 		/** The stable key the open state is remembered under. */
 		name: string;
+		/** The heading; without one the fields render untitled. */
 		title?: string;
+		/** An Iconify id before the title. */
 		icon?: string;
+		/** One sentence behind an info icon beside the title. */
 		hint?: string;
+		/** The fields it holds, in order; a field listed by an earlier section stays there. */
 		fields: readonly string[];
+		/** Open until the viewer chooses otherwise. Default true. */
 		default_open?: boolean;
+		/** Shown beside the title while collapsed; a function reads the row shown. */
 		summary?: string | ((row: { readonly [field: string]: unknown }) => string);
 	};
 	/** `names` grouped by `sections` in each section's order; names no section lists follow in one untitled group. */

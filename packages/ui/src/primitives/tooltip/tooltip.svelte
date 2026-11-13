@@ -42,8 +42,11 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 		 * only keyboard focus does.
 		 */
 		ignore_non_keyboard_focus?: boolean;
+		/** The trigger's side it opens on; default `top`. */
 		side?: ContentProps['side'] | undefined;
+		/** The gap from the trigger, in px; default 0. */
 		side_offset?: ContentProps['side_offset'];
+		/** Its alignment along that side: `start`, `center` or `end`. */
 		align?: ContentProps['align'] | undefined;
 		/**
 		 * Let Floating UI flip/shift the content to keep it on screen. Bits UI defaults this to
@@ -53,21 +56,30 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 		 * must still cap their own height, or they overflow the viewport no matter what.
 		 */
 		avoid_collisions?: ContentProps['avoid_collisions'];
+		/** The viewport gutter kept while avoiding collisions, in px; default 8. */
 		collision_padding?: ContentProps['collision_padding'];
 		/** Simple string body. Prefer `content` for richer markup. */
 		text?: string | undefined;
+		/** Classes on the content surface (a wider cap, another surface). */
 		content_class?: string;
 		/** Text-color class for the SVG arrow; match this when overriding the content surface. */
 		arrow_classes?: string;
+		/** The element it describes; spread the given `props` onto it. Rendered alone without a body or when `disabled`. */
 		trigger: Snippet<[{ props: Record<string, unknown> }]>;
+		/** A rich body, in place of `text`. */
 		content?: Snippet;
+		/** Called as it opens or closes. */
 		on_open_change?: TooltipPrimitive.RootProps['onOpenChange'];
+		/** Called once the open or close animation finishes. */
 		on_open_change_complete?: TooltipPrimitive.RootProps['onOpenChangeComplete'];
 	} & SnakeProps<Omit<TooltipPrimitive.RootProps, 'children' | 'onOpenChange' | 'onOpenChangeComplete'>, {
 		delay_duration: 'delayDuration';
 		ignore_non_keyboard_focus: 'ignoreNonKeyboardFocus';
+		/** `true`: the tooltip closes as the pointer leaves the trigger, even onto the tooltip itself. */
 		disable_hoverable_content: 'disableHoverableContent';
+		/** `true`: clicking the trigger leaves an open tooltip open. */
 		disable_close_on_trigger_click: 'disableCloseOnTriggerClick';
+		/** The trigger element's id, for a trigger rendered elsewhere. */
 		trigger_id: 'triggerId';
 	}> = $props();
 

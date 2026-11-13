@@ -51,6 +51,7 @@ const GrantData = Schema.Struct({
 	update: Schema.optionalKey(UpdateGrantData),
 	delete: Schema.optionalKey(DeleteGrantData)
 });
+/** A policy's decoded grant on one model: per-output read scopes and its create, update and delete grants. */
 export type GrantData = typeof GrantData.Type;
 /** One `limits` entry: a bare rate counts per actor (an envoy key: per sender); a list applies every rule. */
 const LimitData = Schema.Union([
@@ -175,6 +176,7 @@ export const SkillSchema = Schema.Struct({
 	files: Schema.Array(Schema.String)
 });
 export type SkillSpec = typeof SkillSchema.Type;
+/** Most bytes one skill's folder may hold (10 MiB). */
 export const SKILL_BYTES = 10 * 1024 * 1024;
 /** The skill's text in its tree (in a workspace's source, the folder's `+skill.md`). */
 export const SKILL_FILE = 'SKILL.md';

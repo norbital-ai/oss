@@ -2,7 +2,7 @@
 	"$schema": "https://turbo.build/schema.json",
 	"extends": ["//"],
 	"tasks": {
-		// the docs corpus compiles `oss/skills/` and bolt-cli's source, for its test kit (scripts/docs.ts)
+		// the docs corpus compiles `oss/skills/` and bolt-cli's source, for its test kit, guest runner and `bolt` verbs (scripts/docs.ts)
 		"build": {
 			"inputs": [
 				"$TURBO_EXTENDS$",

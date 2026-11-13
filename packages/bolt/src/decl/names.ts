@@ -470,6 +470,7 @@ type ColumnValues<M, P extends PropertyKey, Rels = OneRels<M>> = {
  * columns. This is a read shape, not an insert/update input and not the complete stored row. Relationship layers
  * and a query's selected fields are reflected by `ReadAnswer` instead. The type does not grant access: runtime
  * policies still filter the rows a caller can read. Names and outputs come from the workspace's generated registry.
+ * Keep it through helpers (with `ValueOf<Kind>` for custom values) rather than widening to JSON and re-guarding.
  * @example
  * type Order = Row<'orders'>;
  * type PublicOrder = Row<'orders', 'public'>;

@@ -136,6 +136,7 @@ export type StudioMigration = {
 	impact?: MigrationImpact;
 	checks?: readonly { sql: string; before: Json; after: Json }[];
 };
+/** A workspace's Studio state as the host reports it: commit, working tree, checks, tests, manifest, log, preview and releases. */
 export type StudioState = {
 	commit: string;
 	/** The commit holding the viewer's uncommitted edits; `files`, `changes` and `conflicts` read it. Absent: none. */
@@ -376,6 +377,7 @@ export type StudioView = Omit<StudioState, 'manifest'> & {
 	stale?: true;
 };
 
+/** Projects a `StudioState` into the browser's `StudioView`, listing each section's declarations by source path. */
 export function studio_view({ manifest: m, ...rest }: StudioState): StudioView {
 	if (m === null) return { ...rest, sections: null };
 	const at = (o: object | undefined, path: (name: string) => string) =>

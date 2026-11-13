@@ -14,8 +14,11 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 
 	/** The props of `Cover`. */
 	interface CoverProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** Space between `top`, the body and `bottom` (default `md`). */
 		gap?: LayoutGap;
+		/** Padding on every side (default `none`). */
 		pad?: LayoutPad;
 		/** `content` (default): its own height; `fill`: the space left in its parent, down to `min_height`. */
 		size?: LayoutSize;
@@ -27,8 +30,11 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 		 * slot and starts at the top.
 		 */
 		center?: boolean;
+		/** Chrome pinned above the body (a header), stacked over it. */
 		top?: Snippet;
+		/** Chrome pinned below the body (a footer bar). */
 		bottom?: Snippet;
+		/** The body: the height between `top` and `bottom`, clipped. */
 		children: Snippet;
 	}
 </script>

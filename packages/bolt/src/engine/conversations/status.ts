@@ -5,13 +5,19 @@ import type { Json } from '../../decl/values.ts';
 import { Predicate, Schema } from 'effect';
 
 export type { DeliveryKind };
-/** A provider-chosen id persisted before I/O; registration alone is no delivery acknowledgement. */
+/**
+ * A provider-chosen id persisted before I/O; registration alone is no delivery acknowledgement. Registration refuses
+ * another account's message, a paused or personal account, a changed id or another environment epoch.
+ */
 export const OutboundReference = Schema.Struct({
 	message: Schema.NonEmptyString,
 	provider_id: Schema.NonEmptyString
 });
 export type OutboundReference = typeof OutboundReference.Type;
-/** A send's acknowledgement, decoded once where the provider crosses into the engine. */
+/**
+ * A send's acknowledgement, decoded once where the provider crosses into the engine: the `provider_id` delivery events
+ * name, and optionally how long a quiet window lasts before the message is presumed delivered.
+ */
 export const SendReceipt = Schema.Struct({
 	provider_id: Schema.NonEmptyString,
 	presume_after_ms: Schema.optional(Schema.Number)

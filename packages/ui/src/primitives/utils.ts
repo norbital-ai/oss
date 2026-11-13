@@ -41,7 +41,10 @@ export function format_file_size(bytes: number): string {
 export type WithoutChild<T> = T extends { child?: unknown } ? Omit<T, 'child'> : T;
 export type WithoutChildren<T> = T extends { children?: unknown } ? Omit<T, 'children'> : T;
 export type WithoutChildrenOrChild<T> = WithoutChildren<WithoutChild<T>>;
-export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & { ref?: U | null };
+export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & {
+	/** The rendered element; bindable (`bind:ref`). */
+	ref?: U | null;
+};
 
 /** A tick the finger feels where the platform allows it (Android); a no-op elsewhere, never relied on. */
 export type HapticKind = 'tap' | 'success' | 'warning';

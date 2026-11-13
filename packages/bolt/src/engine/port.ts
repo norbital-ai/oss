@@ -45,6 +45,7 @@ const failureOf =
 					: new FacilityFailure(f)
 		});
 
+/** Helpers that run host port calls under a wall and turn a port's throw or bad answer into a typed `PortFailure`. */
 export const Port = {
 	/** Bounds one port call by its wall: past `wallMs` the call is interrupted and fails `timeout`. */
 	call:

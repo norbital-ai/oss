@@ -44,7 +44,10 @@ const reason = (error: unknown): string => {
 /** An author's failure: its diagnostics, or with none its message, never a bare count. */
 const failed = (error: AuthorErrors) =>
 	error.errors.length === 0 ? Console.error(reason(error)) : print(error.errors);
-const dir = Argument.String('dir').pipe(Argument.withDefault('.'));
+const dir = Argument.String('dir').pipe(
+	Argument.withDescription('the workspace directory (default: the current one)'),
+	Argument.withDefault('.')
+);
 const log: Log = (line) => console.log(line);
 const json = Flag.Boolean('json').pipe(
 	Flag.withDescription('a job: the errors also as one JSON line on stderr'),
@@ -62,6 +65,11 @@ const reported = (json: boolean) => (error: AuthorErrors) =>
 				Effect.andThen(Effect.fail(error))
 			)
 		: Effect.fail(error);
+/**
+ * `bolt check`: every author error of every stage in one run, then one type check over the workspace's own
+ * `node_modules`. Runs `bolt sync`, then discover → names → bundle → evaluate → manifest → seed decode → schema and
+ * migration history → types. Run it before a commit and in CI. Exit 0 ok, 1 author errors, 2 tool failure.
+ */
 const checkCommand = Command.make('check', { dir, json, noTypes }, ({ dir, json, noTypes }) =>
 	Effect.gen(function* () {
 		const { diagnose } = yield* Effect.tryPromise({
@@ -78,7 +86,11 @@ const checkCommand = Command.make('check', { dir, json, noTypes }, ({ dir, json,
 		);
 	}).pipe(Effect.catchTag('AuthorErrors', reported(json)))
 );
-/** `bolt sync`: the declarations evaluated, `.norbital/names.ts` written; `bolt dev` and `bolt check` run it first. */
+/**
+ * `bolt sync`: the declarations evaluated, `.norbital/names.ts` written; `bolt dev` and `bolt check` run it first.
+ * Run it after adding or renaming a declaration so its generated names resolve. Exit 0 ok, 1 author errors, 2 tool
+ * failure.
+ */
 const syncCommand = Command.make('sync', { dir, json }, ({ dir, json }) =>
 	Effect.gen(function* () {
 		const { sync } = yield* Effect.tryPromise({
@@ -119,6 +131,27 @@ const watching = (dir: string) =>
 		// this process alive, serving nothing
 		Effect.andThen(Effect.sync(() => process.exit(0)))
 	);
+/**
+ * `bolt build`: the release, built once in the template's CI and run unchanged in every environment.
+ *
+ * Writes `.norbital/bundle/` (manifest, guest, client and server pages, assets, migrations: what a host runs),
+ * `.norbital/source/` (the authored tree without tests: a customer workspace's starting source), `.norbital/seed/<pack>/`
+ * (`base` from `seed/public/`, which a release carries; `test` from `seed/test/`, never published) and, last,
+ * `.norbital/release.json` naming each part's SHA-256 digest (over its file tree, `*.map` excluded), so a reader that
+ * finds it finds every part. Identical source gives an identical bundle digest. An unchanged seed input reuses its
+ * packs; unchanged public page graphs reuse `.norbital/cache/pages`. No type check (`bolt check` owns it).
+ *
+ * Schema: when the declared schema changed it generates the next editable SQL migration under `migrations/`, then
+ * replays the whole history on a fresh database and compares the physical schema with the declaration. Commit the SQL,
+ * `snapshot.json`, `migrations.lock.json` and `physical.json` together. A destructive step needs its acceptance line; a
+ * build that would generate an unaccepted one writes nothing (`BOLT_ACCEPT_DESTRUCTIVE=1` generates it accepted). Hand
+ * edits to generated SQL are kept as long as replay still equals the declaration; a `-- check: <name>` line followed
+ * by one `SELECT` is a post-condition that fails the file (SQLSTATE `BM005`) when it returns a row. Each file runs in
+ * one transaction under the host's lock (5 s) and statement (15 s) timeouts; `CONCURRENTLY` is refused, and a backfill
+ * past that budget must be reshaped.
+ *
+ * Exit 0 ok, 1 author errors, 2 tool failure.
+ */
 const buildCommand = Command.make(
 	'build',
 	{
@@ -127,7 +160,7 @@ const buildCommand = Command.make(
 		squash: Flag.String('squash').pipe(
 			Flag.optional,
 			Flag.withDescription(
-				'verify a fresh-database schema prefix baseline, retaining original archives and any procedural/data suffix'
+				'verify a fresh-database schema prefix baseline (name: lowercase letters, digits, _), archiving the originals under migrations/archive/ and retaining any procedural/data or checked suffix; commit migrations/archive/, migrations/squashes/ and the lock'
 			)
 		),
 		platform: Flag.String('platform').pipe(
@@ -166,12 +199,28 @@ const overlaid = (root: string) =>
  * `bolt dev`: the workspace's `norbital.host.ts` (or `--host=<file>`) serves it untethered with that file's Facilities,
  * pages hot reloaded from source. Neither, or `--tethered` (which ignores any host file): tethered, it builds on save,
  * serves its pages from source for local Colony to proxy, and Colony serves the rest of each build.
+ *
+ * Tethered: one build, then one per burst of edits under `src/`, `seed/` and `migrations/*.sql` (150 ms debounce); a
+ * failed rebuild prints its errors and the loop goes on. No type check. Internal-SPA pages are served by a Vite dev
+ * server under `/__bolt/dev/<directory>/`, recorded in `.norbital/dev.json` (`origin`, `base`, `artifact`) after each
+ * good build; a host serving that `artifact` routes the base there. A page-only `.svelte` edit hot-updates and keeps
+ * the artifact hash; any other edit is a new artifact the host cuts over to, reloading open pages.
+ *
+ * Untethered: the host file default-exports a `Facilities` record; guest code runs on bolt-cli's `node_guests`. Each build
+ * is migrated on its `database` and activated through the needs check, so a bundle needing a member left `off`
+ * refuses to start, naming it. Served at `http://127.0.0.1:<port>`; the optional `serving` export adds integration
+ * links, a converter, geocoder and web reader.
+ *
+ * Runs until stopped; exit 2 on a tool failure.
  */
 const devCommand = Command.make(
 	'dev',
 	{
 		dir,
-		port: Flag.Int('port').pipe(Flag.withDefault(5180)),
+		port: Flag.Int('port').pipe(
+			Flag.withDescription('the untethered dev server’s port on 127.0.0.1'),
+			Flag.withDefault(5180)
+		),
 		host: Flag.String('host').pipe(
 			Flag.optional,
 			Flag.withDescription(
@@ -203,9 +252,23 @@ const devCommand = Command.make(
 			);
 		})
 );
+/**
+ * `bolt test [dir] [vitest args…]`: the workspace's own Vitest, in process, with the test kit preconfigured (Svelte
+ * compiled, `@norbital-ai/bolt-cli/test`, forks without per-file isolation, one per free core and at least 4, a
+ * one-minute hang guard and the test lint). Needs no prior `bolt build`. Each `TestWorkspace` seeds from the `test`
+ * pack (`seed/test/`, built once per source hash), never from `base` or bank rows. Run it before a commit and in CI.
+ * Exit 0 ok, 1 author errors or failing tests, 2 tool failure.
+ *
+ * @example bolt test . tests/payroll.test.ts
+ */
 const testCommand = Command.make(
 	'test',
-	{ dir, args: Argument.variadic(Argument.String('args')) },
+	{
+		dir,
+		args: Argument.variadic(Argument.String('args')).pipe(
+			Argument.withDescription('passed to Vitest: test file filters and flags')
+		)
+	},
 	({ dir, args }) =>
 		Effect.gen(function* () {
 			// the first positional is the workspace directory, never a test file: a file there would become a build root
@@ -221,7 +284,14 @@ const testCommand = Command.make(
 );
 /**
  * `bolt seed --bank=<checkout>`: the seeder's bank tree read and decoded in memory; with `--target=<host url>` and
- * `--tenant=<handle>`, loaded into that demo environment, signed with `NORBITAL_OPS_SECRET` for `NORBITAL_OPS_SCOPE`.
+ * `--tenant=<handle>`, loaded into that demo environment, signed with `NORBITAL_OPS_SECRET` for `NORBITAL_OPS_SCOPE`
+ * (default `local`).
+ *
+ * Decodes the public rows joined with the private ones, checks `start` names automations and every named asset
+ * exists, then restores them into a scratch database before sending anything, so a seed the host would refuse fails
+ * here and leaves the environment as it was. The target resets the environment to public ∪ private rows: assets go to
+ * its object store, rows in the request; the host keeps neither. A host's reset runs it for every template whose
+ * seeder names a bank tree. Exit 0 ok, 1 author errors, 2 tool failure.
  */
 const seedCommand = Command.make(
 	'seed',
@@ -265,6 +335,11 @@ const testArgv = (rest: readonly string[]): string[] => {
 		? ['test', '.', '--', ...rest.filter((a) => a !== '--')]
 		: ['test', first, '--', ...more.filter((a) => a !== '--')];
 };
+/**
+ * `bolt`: the workspace CLI, the workspace's own pinned `@norbital-ai/bolt-cli` (a devDependency at its Bolt's
+ * release that never enters a release). Every verb runs in the workspace or takes its directory first; `templates`
+ * runs from a template repository root. Exit codes: 0 ok, 1 author error, 2 tool failure.
+ */
 export const boltCommand = Command.make('bolt').pipe(
 	Command.withSubcommands([
 		devCommand,

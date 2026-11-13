@@ -9,7 +9,9 @@ The live status of one automation run: queued, running with its progress, or its
 	type RunStatusProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The automation's name (`jobs.send_pdf`). */
 		automation: string;
+		/** The run: its id or `RunHandle` (watched live), or a row already read (shown as given). */
 		run: string | { readonly id: string } | RunRow;
 		/** The automation's name; else its catalog label (`automations.<key>.label`), else its name in words (`jobs.send_pdf` → `Send pdf`). */
 		title?: string;

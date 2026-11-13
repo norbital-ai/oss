@@ -157,14 +157,20 @@ export interface PageBolt {
 	): PageAct<Readonly<Record<string, Json>>>;
 	/**
 	 * Calls return their declared output in this request. Jobs queue one run per input, with `id`/`ids` available
-	 * before admission settles so native controls can follow them. A job batch needs at least one input.
+	 * before admission settles so native controls can follow them. Yielding a job confirms queue admission, not completed
+	 * execution. A job batch needs at least one input.
 	 */
 	run<const A extends string>(
 		automation: Is<A, AutomationName>,
 		input: NoInfer<AutomationSpecOf<A> extends { mode: 'call' } ? StartInput<A> : StartInput<A> | readonly StartInput<A>[]>
 	): AutomationSpecOf<A> extends { mode: 'call' }
 		? PageCall<StartOutput<A>, ActRefused | ActConflict | ActUnknown | ProtocolFailed> & { readonly mode: 'call'; readonly automation: A } : PageRun<A>;
-	/** Native sync controls, separate from automation calls and schedules; execution stays visible in the run ledger. */
+	/**
+	 * Native sync controls, separate from automation calls and schedules; execution stays visible in the run ledger as
+	 * `<model>.sync.<name>`, and the handle's run id follows progress and the exported file. Grants as `SyncControlInput`.
+	 * @example
+	 * ctx.sync_control('work_logs', 'work_sheet', { mode: 'import', file, context: { company } });
+	 */
 	sync_control<const M extends string, const S extends string>(
 		model: Is<M, ModelName>, sync: Is<S, FileSyncName<M> | ReadSyncName<M>>, input: NoInfer<SyncControlInput<M, S>>
 	): PageRun<`${M}.sync.${S}`>;
@@ -173,12 +179,20 @@ export interface PageBolt {
 		file: Blob & { name?: string },
 		field: UploadField
 	): PageCall<FileRef, ActRefused | TransportFailed>;
-	/** Renders a PDF for this page and returns its bytes without storing a file or a conversion job. */
+	/**
+	 * Renders a PDF for this page and returns its bytes without storing a file or a conversion job, for content the
+	 * viewer already has; limited by the policy's `convert` rate (default `30/min`). A stored document comes from an
+	 * automation's `ctx.convert.document`.
+	 */
 	preview_pdf(
 		source: ConvertSource,
 		options?: PreviewPdfOptions
 	): PageCall<Uint8Array, ActRefused | TransportFailed | Unavailable>;
-	/** The URL a page shows or downloads a stored file from. */
+	/**
+	 * The URL a page shows or downloads a stored file from: the original, or with `{ preview: 64 | 512 | 1024 }` an image
+	 * preview of that maximum edge. Reading it still needs the file's record or conversation authority; a public page's
+	 * URL keeps its app or kiosk scope.
+	 */
 	file_url(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
 	/** Approval requests: decide the current step, read one request's view, or list the requests the viewer may see. */
 	approvals: {

@@ -60,7 +60,11 @@ export type FieldCommon = {
 	max_items?: number;
 	/** A many-valued object's stable item key. */
 	key?: string;
-	/** Previous stored field name, preserved by a schema rename. Not on `state`, `seq`, `sum` or `count`, which cannot rename. */
+	/**
+	 * Previous stored field name, preserved by a schema rename. Not on `state`, `seq`, `sum` or `count`, which cannot rename.
+	 * A migration's value transform cannot update a sealed (locked) row: a demo following the template refuses it and
+	 * needs a reset.
+	 */
 	was?: string;
 	/** The field may be left empty; without it a create must fill it, unless `default` does. */
 	optional?: true;
@@ -88,9 +92,10 @@ export type StoredArm =
 			kind: 'enum';
 			values: readonly string[];
 			many?: true;
-			/** The states one value may move to; a write naming another transition is refused. */
+			/** The values each value may move to; a write naming another is refused, and the editor offers only these. */
 			transitions?: Readonly<Record<string, readonly string[]>>;
 	  }
+	/** A lifecycle: `initial`, each state's `to` and `stamp`; policies authorize its moves through `update.moves`. */
 	| { kind: 'state'; initial: string; states: { readonly [state: string]: StateSpec } }
 	| { kind: 'seq'; pattern?: SeqPattern; per?: readonly string[] }
 	| { kind: 'sum'; of: `${string}.${string}`; where?: KindWhere } // checked by `Verify`
@@ -221,6 +226,7 @@ type PlainFieldValue<K> = K extends { kind: 'text' }
 																			: K extends { kind: 'custom'; of: infer F }
 																				? ValueOf<CustomShape<F>>
 																				: never;
+type ManyValue<K> = K extends { many: true } ? readonly Base<K>[] : Base<K>;
 /**
  * The runtime value type of a field-kind declaration. `optional: true` adds `null`; it does not make an object key
  * optional. Numeric, date and id kinds retain their Bolt value types rather than accepting arbitrary wire strings.
@@ -228,7 +234,6 @@ type PlainFieldValue<K> = K extends { kind: 'text' }
  * type Notes = ValueOf<{ kind: 'text'; optional: true }>; // string | null
  * @see InputOf
  */
-type ManyValue<K> = K extends { many: true } ? readonly Base<K>[] : Base<K>;
 export type ValueOf<K> = K extends { optional: true } ? ManyValue<K> | null : ManyValue<K>;
 type OptionalKeys<F> = {
 	[P in keyof F]-?: F[P] extends { optional: true }

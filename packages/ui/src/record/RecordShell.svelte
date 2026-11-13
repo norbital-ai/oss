@@ -1,3 +1,10 @@
+<!--
+@component
+A record's frame: heading, state pill, actions, tabs, history and runs around its body (a registered representation, the
+`children` snippet, or the generated view), with Edit / Save in the footer; a past revision shows read-only.
+@example
+<RecordShell {ctx} of="invoice" id={row.id} />
+-->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
@@ -12,9 +19,13 @@
 
 	/** An authored tab; a `keep_alive` tab stays mounted while hidden, so a form inside it keeps its state. */
 	export type RecordTab = {
+		/** The stable key; the record reopens on the tab it was last on. */
 		name: string;
+		/** The tab's label. */
 		title: string;
+		/** The tab's content. */
 		body: Snippet;
+		/** An Iconify id before the title. */
 		icon?: string;
 		keep_alive?: true;
 	};
@@ -22,9 +33,11 @@
 	type RecordShellProps<C extends ModelKey = ModelKey> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The record's model. */
 		of: C;
 		/** The stored row; absent with `mode="create"`. */
 		id?: FormProps<C>['id'];
+		/** `view` (default) reads with an Edit button; `edit` opens in edit mode; `create` drafts a new record. */
 		mode?: 'view' | 'edit' | 'create';
 		/** Create mode: the pre-filled values (a page's scope). */
 		values?: Partial<InsertOf<C>>;
@@ -62,6 +75,7 @@
 		 * unsaved changes the footer says so instead.
 		 */
 		footer?: string | Snippet;
+		/** Authored tabs after the record's own; a tab an enclosing page's strip already shows is not repeated. */
 		tabs?: readonly RecordTab[];
 		/** Related records included in the native History popover, scoped by read queries. */
 		history?: RecordHistoryConfig;
@@ -73,6 +87,7 @@
 		 * `+representation.svelte` takes `{ view: RecordView<C> }` or reads `use_record_view()`, never `$props().row`/`record`.
 		 */
 		children?: Snippet<[RecordView<C>]>;
+		/** A committed or approval-held save, after it is toasted. Default: a create opens the new record. */
 		on_done?: (outcome: Outcome) => void;
 	};
 	// the tab each record was last on, for this page's life: reopening a record after a child record closes (a trial

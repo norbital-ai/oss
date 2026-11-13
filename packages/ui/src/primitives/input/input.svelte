@@ -14,8 +14,20 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 	type Props = WithElementRef<
 		Omit<HTMLInputAttributes, 'type'> &
 			(
-				| { type: 'file'; files?: FileList; on_files?: (files: FileList | null) => void }
-				| { type?: InputType; files?: undefined; on_files?: undefined }
+				| {
+						/** The input type; `file` binds `files` instead of `value`. */
+						type: 'file';
+						/** The chosen files of a `type="file"` input; bindable. */
+						files?: FileList;
+						/** Called with the chosen files of a `type="file"` input on each change. */
+						on_files?: (files: FileList | null) => void;
+				  }
+				| {
+						/** The input type; default `text`. A readonly `password` or non-text type keeps its control, never shown as text. */
+						type?: InputType;
+						files?: undefined;
+						on_files?: undefined;
+				  }
 			)
 	>;
 

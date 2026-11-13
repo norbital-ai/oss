@@ -16,12 +16,19 @@ and the browser's location also set the point.
 	export type PointInputProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The current point; anything that is not a point counts as empty. */
 		value: Value;
+		/** Called with the chosen point, or `null` when cleared. */
 		on_change(next: Point | null): void;
+		/** The sibling address text, shown in the trigger (else the looked-up address, else the coordinates). */
 		address?: string | null;
+		/** Called with the address typed or looked up for the point. */
 		on_address?(address: string | null): void;
+		/** The id on the trigger, for `<label for>`. */
 		id?: string;
+		/** Muted and inert. */
 		disabled?: boolean;
+		/** Marks the trigger invalid. */
 		invalid?: boolean;
 		/** Show the map (default true). */
 		map?: boolean;

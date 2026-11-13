@@ -50,9 +50,11 @@
 	export type ToolbarItem<R = Row> = {
 		/** An Iconify id (`lucide:upload`). */
 		icon: string;
+		/** The item's label. */
 		name: string;
 		/** One line under the name. */
 		description?: string;
+		/** The handler, given the selected record ids (empty without selection). */
 		run: (selected: IdIn<R>[]) => Effect.Effect<unknown, Error> | void;
 		/** Turns row selection on; the item is disabled until records are selected. */
 		requires_selection?: true;

@@ -2,6 +2,8 @@
 @component
 One field of the enclosing `Form` by name: its label, help, the kind's editor (or an `editor` snippet) and its error.
 Readonly, it is a label over the value as copyable text (or a `view` snippet): no field chrome, and no `editor` snippet.
+@example
+<Field {ctx} name="email" />
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -28,14 +30,19 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	export type FieldProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The field's exposed name in the enclosing `Form`'s model. */
 		name: string;
+		/** The label. Default: the field's catalogue label. */
 		label?: string | undefined;
 		/** The field's description: an info button beside the label, never text under the control. */
 		help?: string;
+		/** A custom editor in place of the kind's, given the value, an `on_change` and the label's `id`; unused while readonly. */
 		editor?: Snippet<[FieldEditor]>;
 		/** Renders the value when the field is readonly, in place of the kind's display (a value shaped by another record's schema, say). */
 		view?: Snippet<[Pick<FieldEditor, 'value' | 'kind' | 'name' | 'id'>]>;
+		/** A `point` field only: the text field its geocoded address is written to. */
 		address?: string;
+		/** Extra classes on the field's wrapper. */
 		class?: string;
 		/**
 		 * `true` keeps this field read-only while its `Form` edits (shown as its value, never saved from here):

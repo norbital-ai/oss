@@ -563,9 +563,17 @@ export type RefField = {
 	/** The many-relation on the target that lists this model's rows (`customer.orders`). */
 	inverse?: string;
 	optional?: true;
-	/** Composition: the child is written through its parent's write layers and deleted with it; its key never changes. */
+	/**
+	 * Composition: the child is written through its parent's write layers and deleted with it; its key never changes.
+	 * A child written or read through its parent is judged by the root model's grant alone (its own policy is not
+	 * consulted on that path); its transforms and constraints still run, after the parent's, batched per child model.
+	 */
 	owned?: true;
-	/** What deleting the target does: refuse (`restrict`, default), delete this row (`cascade`), or clear the ref (`set_null`). */
+	/**
+	 * What deleting the target does: refuse (`restrict`, default), delete this row (`cascade`), or clear an optional ref
+	 * (`set_null`); `owned` always cascades. The database runs it, cascades included: never loop deletes in a callback.
+	 * There is no update action.
+	 */
 	on_delete?: 'restrict' | 'cascade' | 'set_null';
 	/** Which target rows the ref may name: a static predicate over the target's own fields (`{ integration: { eq } }` for an instance). */
 	where?: Readonly<Record<string, Json>>;
@@ -654,12 +662,15 @@ type NativeIndex = {
 };
 type CustomIndex = {
 	description: string;
+	/** Vector length, at most 2000. */
 	dim: number;
 	metric: Metric;
 	vector: unknown;
+	/** The search mode's probe form; the toolbar renders it, custom field renderers included. */
 	input: InputFields;
 	probe: unknown;
 	rerank?: unknown;
+	/** With `rerank`: the requested page is multiplied by this many nearest candidates, then reranked ascending. */
 	candidates?: Candidates;
 };
 type IndexLiteral =
@@ -768,12 +779,21 @@ interface BodiesFor<K> {
 		 * through its parent's write layers, after the parent's own callback, in the same statement. One call per batch (up
 		 * to 1,000 rows), never per row: each row carries the `id` it will have; returns the rows to insert with derived
 		 * values filled, or refuses. It may instead return `{ sets, with, on_approved }`, carrying rows of other models in the
-		 * same commit (`Carried`). Seed packs (restored data) and derived roll-ups do not run it.
+		 * same commit (`Carried`). Seed packs (restored data) and derived roll-ups do not run it. It runs in the caller's
+		 * transaction with a 3 s CPU budget per invocation, reads as the workspace and performs no writes or I/O itself.
+		 * Read values from `c.after` (the row as the write leaves it), never `c.set.x ?? c.before.x`.
 		 */
 		transform?: (
 			changes: readonly Change<null, CreateSet<K>, CreatedRow<K>>[],
 			ctx: WriteCtx<K>
 		) => BodyReturn<TransformAnswer<CreateSet<K>>>;
+		/**
+		 * Work that follows a committed write: queued by the write's own statement, run after the commit once per batch as
+		 * the durable, retried run `<model>.effect.create`. It runs as the writer and holds no policy; its rows are the root
+		 * fields of the writer's output (`default` when held, else the first named output held). Approval moves call it
+		 * with no changes and `ctx.event.kind === 'approval'`; a held write's effects wait for final approval and are
+		 * discarded on rejection. Writes it makes may queue further effects, at most eight deep.
+		 */
 		effect?: (changes: readonly Change<null, Partial<Row<K>>, Row<K>>[], ctx: EffectCtx<K>) => BodyReturn<void>;
 	};
 	update?: {
@@ -789,6 +809,7 @@ interface BodiesFor<K> {
 			changes: readonly Change<StoredTree<K, 'update'>, UpdateSet<K>, ProposedTree<K>>[],
 			ctx: WriteCtx<K>
 		) => BodyReturn<TransformAnswer<UpdateSet<K>>>;
+		/** As `create.effect`, run as `<model>.effect.update`. */
 		effect?: (changes: readonly Change<Row<K>, Partial<Row<K>>, Row<K>>[], ctx: EffectCtx<K>) => BodyReturn<void>;
 	};
 	delete?: {
@@ -802,6 +823,7 @@ interface BodiesFor<K> {
 			changes: readonly Change<StoredRow<K>, Readonly<Record<string, never>>, null>[],
 			ctx: WriteCtx<K>
 		) => BodyReturn<DeleteAnswer>;
+		/** As `create.effect`, run as `<model>.effect.delete`. */
 		effect?: (changes: readonly Change<Row<K>, Readonly<Record<string, never>>, null>[], ctx: EffectCtx<K>) => BodyReturn<void>;
 	};
 	indexes?: { [I in IndexName<K>]?: IndexBodies<K, InputOf<IndexInput<K, I>>> };
@@ -842,15 +864,37 @@ export type ModelLiteral = ModelMetadata & {
 	fields: {
 		readonly [name: string]: Exclude<FieldKind, { kind: 'ref' }> | RefField | ComputedField;
 	};
-	/** Named unique, check, period exclusion and write-lock rules. */
+	/**
+	 * Named rules, enforced natively on every write path: `unique` (one may be the `import_key` that enables the `import`
+	 * verb), `check`, `no_overlap` of a period `per` key, and `locked`. A `locked` predicate makes a matching row
+	 * read-only: update and delete are refused and the record page shows a lock; `except` names fields every matching lock
+	 * still lets through. Each takes an optional `message` (a catalogue key without placeholders) a violation refuses with,
+	 * naming the field when the rule has one column; changing it needs no migration. Do not repeat these in a transform.
+	 * @example
+	 * constraints: { placed: { locked: { status: { eq: 'placed' } }, except: ['notes'] } }
+	 */
 	constraints?: Readonly<Record<string, Constraint>>;
-	/** Named physical, text, semantic and custom-vector indexes. */
+	/**
+	 * Named indexes: physical (`{ on }`), text (`{ text }`, fields matched beside `record_label`), `{ semantic }` and custom
+	 * vector indexes (pure `vector`, `probe`, optional `rerank`; the engine computes the vector on every committed write,
+	 * keeps it in a hidden HNSW column, and `null` leaves a row out; a vector that needs I/O is an ordinary `vector` field
+	 * an automation fills, named as `vector: '<field>'`). Search one with `query({ m: { search: { <index>: input } } })`;
+	 * rows carry `$distance` and the output and grants still apply. Each also appears as a toolbar search mode.
+	 */
 	indexes?: Readonly<Record<string, IndexLiteral>>;
-	/** A default read output and optional named outputs. A policy grants an output and scopes its rows. */
+	/**
+	 * A `default` read output and optional named outputs: each lists `fields` (or `'all'`) and nests one projection per
+	 * relation it exposes. A read names one output (`default` when absent); a policy grants outputs and filters their
+	 * rows, never their fields. A model without outputs still stores rows and may appear in another model's output tree.
+	 */
 	outputs?: { readonly default: ReadOutput; readonly [output: string]: ReadOutput };
-	/** The generated `create`: per layer the columns a writer sends and those its `transform` fills (`filled`). */
+	/**
+	 * The generated `create`: per layer the columns a writer sends and those its `transform` fills when omitted
+	 * (`filled`). A layer below the root is a many-relation (the child rows) and never lists the key to its parent; a
+	 * non-owned child may also be an existing `{ id, revision }`, which links it.
+	 */
 	create?: { columns: ColumnTree; filled?: ColumnTree; transform?: GeneratorBody; effect?: GeneratorBody };
-	/** The generated `update`: per layer the columns a writer changes, and its `transform`. */
+	/** The generated `update`: per layer the columns a writer changes (child layers take `create`, `update`, `delete`, `link`, `unlink`), and its `transform`. */
 	update?: { columns: ColumnTree; transform?: GeneratorBody; effect?: GeneratorBody };
 	/** The generated delete, its `transform` and its optional post-commit effect. */
 	delete?: { transform?: GeneratorBody; effect?: GeneratorBody };
@@ -990,7 +1034,13 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
  * constraints, computed fields and indexes), its exposure (`outputs`; `create`, `update` and `delete` with their column
  * trees, transforms and effects) and `syncs`. Every callback sits on what triggers it, inside the literal, and is
  * typed by the binding generated for this file. Until the next sync a body does not see a field just added.
+ * Model folders may nest under other models or grouping folders; the leaf folder names the model, unique across the
+ * workspace, and its `+representation.svelte` (receiving `RecordView<'<name>'>`) sits beside it. Import the binding
+ * `.norbital/models/<name>.ts`, one more `../` per nesting level.
  * Declaring an exposure makes the operation available; policies still decide which callers and rows may use it.
+ * The writes are the guarded `create`, `update`, `delete` and, with an `import_key` constraint, `import`; there are no
+ * named queries or actions (a computed answer is a read request plus a pure `src/lib` helper; a business operation is
+ * an automation). Raw SQL is privileged: native constraints and history apply, policies and callbacks do not.
  * Native surfaces derive from this one declaration: `Table` and `Form` render the permitted columns and defaults, a
  * declared file sync adds Import/Export/Template to the toolbar, record history is automatic, effects receive write and
  * approval events, and a policy verdict returning `ctx.approve` holds the write for its flow. Pages and agents

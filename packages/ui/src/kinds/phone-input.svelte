@@ -10,10 +10,15 @@ A phone number: a country calling-code picker (flag and code) joined to the numb
 	export type PhoneInputProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The E.164 number; `null` when empty. The region starts at the viewer's locale. */
 		value: Value;
+		/** Called on every keystroke; an incomplete number is still written (as `+` and its digits) so the field's check names it. */
 		on_change(next: Value): void;
+		/** The id on the number box, for `<label for>`. */
 		id?: string;
+		/** Disables both the code picker and the number box. */
 		disabled?: boolean;
+		/** Marks the number box invalid. */
 		invalid?: boolean;
 	};
 </script>

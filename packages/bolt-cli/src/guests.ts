@@ -108,6 +108,7 @@ const refuseImport = (node: ImportDeclaration): string => {
 	throw new Error(`guest.mjs is one module; it imports '${node.source.value}'`);
 };
 
+/** `node_guests`'s options: each session's CPU budget and a CPU meter. */
 export type NodeGuestsOptions = {
 	/** Each session's CPU budget, its module evaluation included (default `LIMITS.guestCpuMs`); past it, `cpu_budget`. */
 	readonly cpu_ms?: number | undefined;
@@ -122,7 +123,12 @@ type Session = {
 	readonly said: { readonly lines: [string, string][]; dropped: number };
 };
 
-/** A host's guest sessions: bolt-server's and `bolt dev`'s runner, and the test kit's. */
+/**
+ * A host's guest sessions as `node:vm` contexts in this process: bolt-server's and `bolt dev`'s runner, and the test
+ * kit's. Each call runs under a timeout of what is left of the session's CPU budget. A vm context shares the host's heap
+ * and is no security boundary: it caps no guest memory and runs operator-trusted code only; a multi-tenant host brings
+ * native isolates.
+ */
 export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort => {
 	const budget = options.cpu_ms ?? LIMITS.guestCpuMs,
 		limit = BigInt(budget) * 1_000_000n;

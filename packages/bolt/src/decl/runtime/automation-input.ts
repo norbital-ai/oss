@@ -5,6 +5,10 @@ import type { InputKind, InputOf, ValidInput } from '../fields.ts';
 import { FieldData } from '../field-data.ts';
 import type { ReadableName } from '../names.ts';
 
+/**
+ * Records an automation acts on: the caller sends ids, the body receives the rows read under the run's policies (an
+ * unreadable id refuses the start), ready to pass as write `target`s.
+ */
 type RowsInput = { readonly kind: 'rows'; readonly of: string; readonly optional?: true };
 export type AutomationInputFields = Readonly<Record<string, InputKind | RowsInput>>;
 export type ValidAutomationInputs<F> = {

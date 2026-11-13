@@ -70,6 +70,7 @@ function layersOf(request: Readonly<Record<string, Json>>): Result.Result<ReadLa
 	}
 	return Result.succeed(Object.fromEntries(layers));
 }
+/** Schema of a read request as JSON: an object of model roots and nested relations that lowers to valid read layers. */
 export const ReadRequestJson = Schema.JsonObject.check(Schema.makeFilter((request) => {
 	const decoded = layersOf(request);
 	return Result.isFailure(decoded) ? decoded.failure : undefined;

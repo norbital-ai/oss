@@ -1,6 +1,8 @@
 <!--
-	Studio's place in the shell: an empty element the host's bundle mounts into (`slot.ts`). Unmounts on leave, and says so
-	plainly when the bundle cannot be loaded.
+	@component
+	Studio's place in the shell: an element the host's Studio `bundle` mounts into with `props`. The bundle path is read
+	once; new `props` update the mounted Studio without a remount. It unmounts on leave and shows an empty state when the
+	bundle cannot be loaded.
 -->
 <script lang="ts">
 	import { EmptyState } from '@norbital-ai/ui';
@@ -17,6 +19,7 @@
 	}: {
 		/** Where the host serves it; absent: this host serves none. */
 		bundle: string | undefined;
+		/** What the shell hands Studio; a change updates the mounted Studio in place. */
 		props: StudioProps;
 	} = $props();
 	let failed = $state(false);

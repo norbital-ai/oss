@@ -3,7 +3,7 @@
 A bar, line, area or donut chart over an aggregate's buckets, a declared query's rows or rows, live while shown: `x` names the category, `y` the
 numbers (`count`, `sum.amount`).
 @example
-<Chart of={bolt.aggregate('jobs', { count: true, by: 'status', limit: 20 })} x="status" y="count" kind="bar" />
+<Chart {ctx} of={bolt.aggregate('jobs', { count: true, by: 'status', limit: 20 })} x="status" y="count" kind="bar" />
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -12,14 +12,21 @@ numbers (`count`, `sum.amount`).
 	type ChartProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The data: an aggregate's buckets, a declared query's rows or page, or rows; re-read live while shown. */
 		of: ViewSource;
+		/** The category field: one bar, point or slice per value. */
 		x: string;
+		/** The numeric field, or several as series in palette order; a donut plots only the first. */
 		y: string | readonly string[];
+		/** The chart type. Default `'bar'`. */
 		kind?: 'bar' | 'line' | 'area' | 'donut' | 'scatter';
 		/** Hold each value until the next x position. Applies to line charts. */
 		interpolation?: 'linear' | 'step';
+		/** Bar charts only: `'horizontal'` lays categories down the side. Default `'vertical'`. */
 		orientation?: 'horizontal' | 'vertical';
+		/** Bar and area charts: stack the `y` series instead of grouping (bars) or overlapping (areas). Default false. */
 		stack?: boolean;
+		/** A caption above the chart; also names the data in loading and error states. */
 		title?: string;
 	};
 </script>

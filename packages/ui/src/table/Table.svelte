@@ -1,3 +1,9 @@
+<!--
+@component
+A paged, searchable, filterable grid of a model's records, a read's rows or a local array, with its toolbar; on a phone it becomes a card list.
+@example
+<Table {ctx} of="invoice" columns={['number', 'customer', 'total']} />
+-->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
@@ -39,15 +45,23 @@
 	type ColumnOptions = {
 		/** The value's declared kind, including numeric scale, for authored value columns. */
 		kind?: Kind;
+		/** The header text. Default: the field's catalogue label, else the humanized name. */
 		label?: string;
+		/** A tooltip on the header. */
 		description?: string;
+		/** The initial width in pixels; the viewer may resize it, and the layout remembers their width. */
 		width?: number;
+		/** `'narrow'` leaves the column out of the phone's card layout. */
 		hide?: 'narrow';
+		/** An inline input in each cell, for a local array with `on_change` and no custom `cell`. */
 		edit?: true;
+		/** `'end'` right-aligns in tabular figures; numeric kinds already do. */
 		align?: 'start' | 'end';
 	};
 	type ColumnDefinition<R, K, F extends keyof K & string> = ColumnOptions & {
+		/** The row field the column shows. */
 		field: F;
+		/** A custom cell, given the row, the field's value and its name; replaces the kind renderer. */
 		cell?: Snippet<[{ row: R; value: K[F] | undefined; field: F }]>;
 	};
 	/** Catalogue columns have dynamic names and no authored, statically typed cell. */
@@ -61,15 +75,20 @@
 	}[keyof K & string];
 	/** A row's labelled native handler, optionally confirmed before it runs. */
 	export type RowAction<R = Row> = {
+		/** The button text in the row's action menu. */
 		label: string;
+		/** A confirmation question asked first; declining runs nothing. */
 		confirm?: string;
+		/** The handler; a returned Effect is run, and its failure is toasted. */
 		run: (row: R) => Effect.Effect<unknown, Error> | void;
 	};
 	/** Typed by the source `of` names, including the native row and authored column field types. */
 	export type TableProps<S = TableSource, R extends Values = RowIn<S>, K = ColumnsIn<S>> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The rows: a model name (paged, filtered and sorted by the host), a `bolt.query` read, or a local array. */
 		of: S & TableSource<R & Partial<K>>;
+		/** The columns in order. Default: every field the model exposes to the viewer. */
 		columns?: readonly Col<R, K>[];
 		/** The author's fixed scope: ANDed under every viewer filter, shown read-only in the view popover, never clearable. */
 		where?: S extends string ? WhereOf<S> : Where;
@@ -79,6 +98,7 @@
 		initial_filter?: S extends string ? WhereOf<S> : Where;
 		/** The initial sort; a viewer's sort replaces it and clearing restores it. */
 		order_by?: S extends string ? OrderByOf<S> : OrderBy;
+		/** Rows per page (default 25); the viewer's choice in the footer replaces it and is remembered. */
 		page_size?: 10 | 25 | 50 | 100 | 200;
 		/** Financial reports retain a horizontally scrollable grid on narrow screens. */
 		layout?: 'responsive' | 'grid';
@@ -94,14 +114,19 @@
 		row_class?: (row: R) => string | undefined;
 		/** An overlay at the row's right edge, sticky while scrolling; revealed on hover or keyboard focus. */
 		row_trailing?: Snippet<[R]>;
+		/** Per-row actions, in a menu at the row's end when there is more than one. */
 		actions?: readonly RowAction<R>[];
 		/** The URL parameter prefix; defaults to the source's name. */
 		key?: string;
+		/** Replaces the default empty state (which offers New when the viewer may create). */
 		empty?: Snippet;
+		/** A row click. Default: a model row opens its record sheet; other rows do not open. */
 		on_open?: (row: R) => void;
 		/** Local arrays only: editable when given; each change is a fresh array. */
 		on_change?: (next: R[]) => void;
+		/** Local arrays with `on_change`: the New button appends the row this returns. */
 		add?: () => R;
+		/** Local arrays with `on_change`: each row gets a Remove action. */
 		remove?: boolean;
 	};
 	const localSource = <R extends Values>(value: TableSource<R>): value is readonly R[] =>

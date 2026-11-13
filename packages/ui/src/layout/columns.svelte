@@ -11,14 +11,18 @@ form fields stay two to a row down to 20rem: a field that needs the row spans it
 	type ColumnCount = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 	/** The props of `Columns`. */
 	interface ColumnsProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** Columns per row (default 2). */
 		count?: ColumnCount;
+		/** Space between cells (default `md`). */
 		gap?: LayoutGap;
 		/**
 		 * Below this width of the Columns itself, every child takes a full row. `none` keeps the
 		 * count at any width — only for content that is meaningless stacked (a calendar week).
 		 */
 		collapse?: 'compact' | 'narrow' | 'none';
+		/** The cells; wrap one in `Column` to span. */
 		children: Snippet;
 	}
 </script>

@@ -46,14 +46,20 @@ A button (or a link, with `href`) in a variant and size.
 	/** The props of `Button`: the button's (or link's) attributes, `variant`, `size` and `haptic`. */
 	export type ButtonProps = WithElementRef<HTMLButtonAttributes> &
 		WithElementRef<HTMLAnchorAttributes> & {
+			/** `default`, `brand` (the one chromatic action per view), `destructive`, `outline`, `secondary`, `ghost` or `link`. */
 			variant?: ButtonVariant;
+			/** `default` (the field height), `icon` (square) or `lg` (a lone call to action outside forms and toolbars). */
 			size?: ButtonSize;
-			readonly?: boolean; // Prevents interactions but keeps normal styling
+			/** Inert like `disabled` but keeps its normal styling. */
+			readonly?: boolean;
 			/** A tick on tap where the device has a motor; for decisions, not for every button. */
 			haptic?: HapticKind;
-			hint?: string; // Tooltip hint
-			disabled_message?: string; // Tooltip message when disabled
-			readonly_message?: string; // Tooltip message when readonly
+			/** A tooltip on hover. */
+			hint?: string;
+			/** The tooltip while `disabled`, in place of `hint`: why it cannot be pressed. */
+			disabled_message?: string;
+			/** The tooltip while `readonly`, in place of `hint`. */
+			readonly_message?: string;
 		};
 </script>
 

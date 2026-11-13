@@ -1,21 +1,29 @@
 <!--
+@component
 	One metric's trend over time as an inline SVG line chart: the first line is the use, dashed lines are what bounds it
 	(a capacity, a machine's total). Hovering reads every line at that time.
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	type UsageChartLine = Readonly<{
+		/** The legend name. */
 		label: string;
+		/** A bound (capacity, total) drawn dashed and faded, rather than the use. */
 		bound: boolean;
+		/** Samples in time order (`at` in epoch milliseconds); a null value is a gap. */
 		points: ReadonlyArray<Readonly<{ at: number; value: number | null }>>;
 	}>;
 
 	export type UsageChartProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The metric's name above the chart; also its accessible label. */
 		title: string;
+		/** How values read: `bytes`, `MiB`, `micro-SGD`, `seconds`, `load per core`, else a suffix. */
 		unit: string;
+		/** The series: the first is the use; the x axis follows its sample times. */
 		lines: ReadonlyArray<UsageChartLine>;
+		/** Peak use as a fraction of capacity (0–1), shown as a percentage beside the title; null hides it. */
 		utilization?: number | null;
 	};
 

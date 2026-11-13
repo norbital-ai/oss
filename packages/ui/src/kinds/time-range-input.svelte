@@ -8,9 +8,13 @@ Edits date, instant or clock ranges, singly or as an array, at the requested pre
 	import type { PeriodInputProps } from './period-input.svelte';
 	/** The datatype, precision and controlled scalar or array ranges of TimeRangeInput. */
 	export type TimeRangeInputProps = Omit<PeriodInputProps, 'of' | 'value' | 'on_change'> & {
+		/** `date` → `{ from, to }` (inclusive); `instant` → `{ start, end }` (closed-open); `time` → `{ start, end }` clocks. */
 		of: 'date' | 'instant' | 'time';
+		/** One range, or a list of ranges each edited on its own row. */
 		value: Value;
+		/** Called with the next range or list, matching the shape of `value`. */
 		on_change(next: Value): void;
+		/** Accessible name for the range control. */
 		'aria-label'?: string;
 	};
 </script>

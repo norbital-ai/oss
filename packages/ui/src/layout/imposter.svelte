@@ -24,6 +24,7 @@ A layer positioned over its `relative` parent: a scrim, a pinned badge, a bar or
 	type ImposterLayer = 'under' | 'raised' | 'overlay' | 'modal';
 	/** The props of `Imposter`. */
 	interface ImposterProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
 		/**
 		 * Where the layer sits over its positioned (`relative`) parent. `fill` covers it (a scrim, a

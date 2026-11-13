@@ -105,6 +105,12 @@ export type Link = { close(): Promise<void> } & Partial<{
 	unpair(): Promise<void>;
 	/** The provider's own test (send, then read it back); absent → bolt sends a short message to the test target. */
 	test(input: Json): Promise<void>;
+	/**
+	 * Sends one queued conversation message; answers the `provider_id` its delivery reports will name. A provider that
+	 * picks the id before contacting the recipient (SMTP) first awaits `emit({ kind: 'outbound_ref', … })`, so a reply
+	 * finds the queued conversation before this resolves. Throw `SendRefused` for a refusal; any other failure after
+	 * handoff leaves the message `uncertain`.
+	 */
 	send(
 		message: Json,
 		signal: AbortSignal,
@@ -133,7 +139,13 @@ export type Link = { close(): Promise<void> } & Partial<{
 	/** Inbound HTTP on `webhook_url` and the paths under it (a pixel), and its OAuth callback on `redirect_url`, as the public request: the signature is checked here. */
 	webhook(request: Request): Promise<Response>;
 }>;
-/** A provider (`@norbital-ai/providers`, or a host's own), registered by the host for one driver kind. Bolt never names one. */
+/**
+ * A provider (`@norbital-ai/providers`, or a host's own), registered by the host for one driver kind. Bolt never names one.
+ * It runs in the host, outside the guest wall, with sealed credentials, raw network and direct `emit`, which is why a
+ * workspace cannot supply one. The contract stays Promise + AbortSignal + JSON; the engine adapts it once, aborting the
+ * signal on interruption and decoding every answer. A provider acknowledges an inbound delivery only after `emit`
+ * resolves, so a refused store is redelivered.
+ */
 export type Provider = ProviderChoice & {
 	driver: DriverName;
 	/** Required for a native boundary: validates and normalizes only this provider's declared fields. */

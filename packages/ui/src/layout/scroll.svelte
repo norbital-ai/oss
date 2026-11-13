@@ -17,9 +17,13 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 	type ScrollLayout = 'block' | 'inline' | 'stack';
 	/** The props of `Scroll`. */
 	interface ScrollProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** The scrolling axis: `y` (default), `x` (a reel; the other axis clips) or `both`. */
 		axis?: ScrollAxis;
+		/** The region's accessible name; also identifies it so a page restores its scroll position. */
 		name: string;
+		/** Pad with the app inset: the scrollport owns it, taking it over from a provisional panel above. */
 		inset?: boolean;
 		/**
 		 * Fade the edges that have content beyond them. On by default: it is what tells a
@@ -30,8 +34,11 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 		fade?: boolean;
 		/** Arrange direct children without introducing a second wrapper or scroll owner. */
 		layout?: ScrollLayout;
+		/** Space between children (default `none`); ignored for `layout="block"`. */
 		gap?: LayoutGap;
+		/** Cross-axis placement of children; `center` for `inline`, `stretch` otherwise. */
 		align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch';
+		/** Main-axis placement of children (default `start`); ignored for `layout="block"`. */
 		justify?: 'start' | 'center' | 'end' | 'between';
 		/** `content` (default): its own height, up to `max`; `fill`: the space left in its parent, scrolling inside, down to `min_height`. */
 		size?: LayoutSize;
@@ -45,6 +52,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 		 */
 		max?: 'compact' | 'standard' | 'tall';
 		ref?: HTMLElement | null;
+		/** The scrolled content. */
 		children: Snippet;
 	}
 </script>

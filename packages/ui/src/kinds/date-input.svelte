@@ -20,13 +20,17 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		 * an instant or a time) as typed. An instant snaps in the viewer's zone.
 		 */
 		precision?: Precision;
+		/** The id on the first segment, for `<label for>`. */
 		id?: string;
-		/** `sm` matches a compact toolbar or tab strip; default is the form control height. */
 		/** Shows the value as copyable text; an enclosing readonly form sets it. */
 		readonly?: boolean;
+		/** Muted and inert. */
 		disabled?: boolean;
+		/** Marks the control invalid. */
 		invalid?: boolean;
+		/** The earliest pickable value, in the stored format of `of`. */
 		min?: string;
+		/** The latest pickable value, in the stored format of `of`. */
 		max?: string;
 	};
 	import {

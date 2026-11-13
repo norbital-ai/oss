@@ -13,7 +13,7 @@ bunx bolt test
 ```
 
 - `bolt` — `sync`, `check`, `build`, `test`, `dev`, `seed` on one workspace, and `templates` (`check`, `lock`, `test`,
-  `verify`, `publish`) from a template repository root ([the dev loop](../bolt/docs/dev-loop.md)).
+  `verify`, `publish`) from a template repository root ([API reference](https://norbital.ai/docs/api-reference)).
 - `@norbital-ai/bolt-cli/test` — the test kit: `TestWorkspace.layer(options)` and the Effect Vitest helpers. Guest
   code runs on the kit's own runner.
 - `@norbital-ai/bolt-cli/guests` — `node_guests(options?)`, a guest runner (`HostPorts.guests`) as `node:vm` contexts in

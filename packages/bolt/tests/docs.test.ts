@@ -1,8 +1,11 @@
 // The API reference: `scripts/docs.ts` writes it into `build/docs/` at the end of bolt's build, so this reads
-// the corpus the last build produced (`pnpm --dir oss build` first). Every symbol a workspace imports has a summary;
-// declaration functions carry their option shapes; `workspace_lang` reads the same source JSDoc through the compiler.
+// the corpus the last build produced (`pnpm --dir oss build` first). Every public entry is a namespace and every symbol
+// and component prop has a doc comment; declaration functions carry their option shapes; `workspace_lang` reads the
+// same source JSDoc through the compiler.
+/// <reference types="node" />
+import { readFileSync } from 'node:fs';
 import { expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { docs as cached } from '../src/docs/index.ts';
 import { corpus } from '../src/engine/docs-corpus.ts';
 
@@ -19,12 +22,10 @@ it.effect('validates and decodes each documentation document once', () => Effect
 					namespace: 'bolt',
 					module: '@norbital-ai/bolt',
 					summary: 'Bolt',
-					symbols: 1,
-					reference: true
+					symbols: 1
 				}
 			],
 			missing: [],
-			guides: [],
 			skills: [{ name: 'authoring', description: 'Authoring', files: ['SKILL.md'] }]
 		},
 		'bolt.json': {
@@ -37,7 +38,8 @@ it.effect('validates and decodes each documentation document once', () => Effect
 					kind: 'type',
 					signature: 'type Row = {}',
 					summary: 'A row',
-					source: 'row.ts:1'
+					source: 'row.ts:1',
+					group: 'row'
 				}
 			]
 		},
@@ -70,12 +72,10 @@ it.effect('rejects malformed documents and mismatched document identities', () =
 				namespace: 'bolt',
 				module: '@norbital-ai/bolt',
 				summary: 'Bolt',
-				symbols: 0,
-				reference: true
+				symbols: 0
 			}
 		],
 		missing: [],
-		guides: [],
 		skills: [{ name: 'authoring', description: 'Authoring', files: [] }]
 	};
 	yield* Effect.flip(corpus(() => Effect.succeed({ ...index, namespaces: 'bad' })));
@@ -109,8 +109,55 @@ it.effect('one namespace per public entry, with its module and the entry summary
 	expect(docs.index().namespaces.find((n) => n.namespace === 'bolt/page')?.module).toBe(
 		'@norbital-ai/bolt/page'
 	);
-	for (const n of docs.index().namespaces.filter((x) => x.reference))
-		expect(n.summary, n.namespace).not.toBe('');
+	for (const n of docs.index().namespaces) expect(n.summary, n.namespace).not.toBe('');
+}));
+
+const Manifest = Schema.fromJsonString(
+	Schema.Struct({
+		exports: Schema.optionalKey(
+			Schema.Record(Schema.String, Schema.Union([Schema.String, Schema.Struct({ types: Schema.optionalKey(Schema.String) })]))
+		)
+	})
+);
+
+it.effect('the reference holds every public entry point, every verb, and a doc comment on every symbol and prop', () => Effect.gen(function* () {
+	const docs = yield* cached;
+	const names = docs.index().namespaces.map((n) => n.namespace);
+	for (const pkg of ['bolt', 'ui', 'std', 'bolt-cli']) {
+		const manifest = yield* Schema.decodeUnknownEffect(Manifest)(
+			readFileSync(new URL(`../../${pkg}/package.json`, import.meta.url), 'utf8')
+		);
+		for (const [key, target] of Object.entries(manifest.exports ?? {})) {
+			if (typeof target === 'string' || target.types === undefined || key.includes('*') || key.startsWith('./tooling'))
+				continue;
+			expect(names, `${pkg} ${key}`).toContain(key === '.' ? pkg : `${pkg}/${key.slice(2)}`);
+		}
+	}
+	const verbs = required(docs.namespace('bolt-cli/cli')).symbols.map((s) => s.name);
+	expect(verbs).toEqual(
+		expect.arrayContaining([
+			'bolt',
+			'bolt build',
+			'bolt check',
+			'bolt dev',
+			'bolt seed',
+			'bolt test',
+			'bolt templates check',
+			'bolt templates lock',
+			'bolt templates publish',
+			'bolt templates test',
+			'bolt templates verify'
+		])
+	);
+	expect(docs.symbol('bolt-cli/cli', 'bolt templates lock')?.params?.map((p) => p.name)).toEqual(['--filter', '--check']);
+	// std's comments belong to its own refactor; everything else is documented
+	expect(docs.index().missing.filter((m) => !m.startsWith('std/'))).toEqual([]);
+	for (const name of ['Table', 'Board', 'Chart', 'RecordShell', 'Form', 'Field', 'Show', 'Editor', 'ToolbarSearch', 'Combobox'])
+		expect(docs.symbol('ui', name)?.props?.length, name).toBeGreaterThan(0);
+	const toolbar = docs.symbol('ui', 'Table')?.props?.find((p) => p.name === 'toolbar');
+	expect(toolbar?.fields?.length).toBeGreaterThan(0);
+	expect(docs.symbol('ui', 'Table')?.group).toBe('table');
+	expect(new Set(required(docs.namespace('ui')).symbols.map((s) => s.group)).size).toBeGreaterThan(5);
 }));
 
 it.effect('the declaration functions are documented, and spec parameters list their fields', () => Effect.gen(function* () {
@@ -223,25 +270,6 @@ it.effect('documents native Effect service implementations needed by test layers
 	expect(docs.symbol('bolt/engine', 'Sql')?.signature).toContain('readonly params');
 }));
 
-it.effect('ships every maintained mechanism guide with source and complete text', () => Effect.gen(function* () {
-	const docs = yield* cached;
-	const guides = docs.index().guides;
-	expect(guides.map((guide) => guide.slug)).toEqual(
-		expect.arrayContaining([
-			'overview',
-			'mechanisms',
-			'models',
-			'apis',
-			'documents',
-			'hosts',
-			'seeding'
-		])
-	);
-	expect(docs.guide('mechanisms')?.text).toContain('reserved system identity');
-	expect(docs.guide('models')?.source).toBe('packages/bolt/docs/models.md');
-	expect(docs.guide('not-a-guide')).toBeNull();
-}));
-
 it.effect('bolt-contract holds a generated card per role, naming what a role is written with', () => Effect.gen(function* () {
 	const docs = yield* cached;
 	const contract = docs.skill('bolt-contract');
@@ -277,5 +305,5 @@ it.effect('documents the optional snapshot host bridge from its public source ty
 	const card = docs.skill('bolt-contract')?.files.find((file) => file.path === 'page.md')?.text;
 	expect(card).toContain('## PageSnapshotHost');
 	expect(card).toContain('- bolt_refresh?: () => Promise<void>');
-	expect(docs.guide('client-bundling')?.text).toContain('window.bolt_refresh()');
+	expect(bridge.docs ?? bridge.summary).toContain('snapshot');
 }));

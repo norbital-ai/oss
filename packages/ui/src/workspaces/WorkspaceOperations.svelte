@@ -1,3 +1,7 @@
+<!--
+@component
+A workspace's operations panel: bundle, telemetry, logs and users views over data its owner reads for the chosen scope.
+-->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
@@ -10,13 +14,19 @@
 	type WorkspaceOperationsProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** Everything the views show, read by the owner for the current scope. */
 		data: WorkspaceOperationsData;
+		/** The telemetry trend window. */
 		range: WorkspaceRange;
+		/** The view shown. */
 		view: WorkspaceView;
 		/** The views to offer, in order (all four by default); with one, it renders without its own tab strip. */
 		views?: readonly WorkspaceView[];
+		/** Marks the panel busy while the owner reads. Default false. */
 		busy?: boolean;
+		/** The viewer changed the view, range or run filter: only the changed keys; the owner rereads `data`. */
 		on_change: (next: WorkspaceScope) => void;
+		/** Translates the panel's English strings (keys are the English text). Default: identity. */
 		t?: (key: string) => string;
 		/**
 		 * The release whose logs Logs shows, by its publication instant (`at`): omitted, the serving release; `null`, every

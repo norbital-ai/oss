@@ -16,13 +16,17 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 		count?: number;
 	};
 	export type TabStripProps = {
+		/** The items, in order; those that do not fit move to a More menu. */
 		items: readonly TabStripItem[];
+		/** The active item's `name`. */
 		value: string | undefined;
+		/** Called with the button item the user selects (links navigate instead). */
 		on_value_change?: (value: string) => void;
 		/** The strip's accessible name. */
 		label: string;
 		/** The type's level (1 segmented, 2 underline, 3 chips); omitted, one below the enclosing `Tabs`. */
 		level?: TabLevel;
+		/** Classes on the list. */
 		class?: string;
 	};
 </script>

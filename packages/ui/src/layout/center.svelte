@@ -11,13 +11,19 @@ Centres its content at a reading measure (`narrow`, `reading`, `wide`, `full`), 
 	type CenterLayout = 'block' | 'stack' | 'inline' | 'cluster' | 'grid';
 	/** The props of `Center`. */
 	interface CenterProps extends LayoutAttributes {
+		/** The element rendered; `div` by default. */
 		as?: LayoutElement;
+		/** The maximum width: `narrow` (a card or form), `reading` (default), `wide`, `full`. */
 		measure?: CenterMeasure;
 		/** Arrange direct children while keeping centring and composition on the same element. */
 		layout?: CenterLayout;
+		/** Space between children (default `none`); ignored for `layout="block"`. */
 		gap?: LayoutGap;
+		/** Cross-axis placement of children; `stretch` for a stack or grid, `center` otherwise. */
 		align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch';
+		/** Main-axis placement of children (default `start`); ignored for `layout="block"`. */
 		justify?: 'start' | 'center' | 'end' | 'between';
+		/** The centred content. */
 		children: Snippet;
 	}
 </script>

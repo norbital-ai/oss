@@ -67,18 +67,26 @@ type ValidTrigger<T> = T extends { cron: infer S }
 
 type Attempts = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 type Max = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
-/** An automation literal's data: what the manifest holds (the `run` body is not data). */
-/** Cached calls have no starter metadata and cannot write, including through nested runs. */
+/**
+ * `job` (the default) queues a durable run and answers its handle; `call` runs in the request and answers its output.
+ * A call may `cache` its answer per input for a positive duration; a cached call has no starter metadata and cannot
+ * write, schedule, notify, send, store files or convert, nested runs included.
+ */
 type AutomationMode =
 	| { mode?: 'job'; cache?: never }
 	| { mode: 'call'; cache?: Duration; on?: never; retry?: never; concurrency?: never };
+/** An automation literal's data: what the manifest holds (the `run` body is not data). */
 export type AutomationSpec = AutomationMode & {
 	description: string;
 	/** The typed input a start or schedule passes. */
 	input?: AutomationInputFields;
 	/** The typed result returned by a call or recorded on a job. */
 	output?: OutputKind;
-	/** Cron schedules; absent means started only. */
+	/**
+	 * Cron schedules; absent means started only. There are no other triggers: row writes run a model's `effect`,
+	 * integrations own incoming webhooks, and identity changes (invitations, sign-ups) start nothing, so a business
+	 * profile for a member comes from an explicit start or a cron reconciliation keyed by a unique match.
+	 */
 	on?: readonly Trigger[];
 	/**
 	 * The policies every run holds, whoever or whatever starts it: a run executes as the reserved system identity, and
@@ -115,19 +123,20 @@ export type RunInput<S> = Simplify<S extends { input: infer I } ? AutomationInpu
 /** What `run` returns: the declared output. */
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
-/**
- * `run`'s ctx: reads (`ctx.query`), writes and schedules as its `policies`; the only place for I/O. A failed
- * `yield*` ends the body: `try`/`catch` never sees it, so recover with `Effect.catch` or `Effect.catchTag` on the yielded
- * Effect (`yield* ctx.browser.download(url, options).pipe(Effect.catch(...))`). `actor` is
- * the reserved system identity; `run.trigger` records who or what started the run. Code acting for a starter checks it
- * explicitly (`trigger.kind === 'person'`, then their id, party or teams against the rows it touches).
- */
 type SystemRunCtx = RunCtx<Extract<Actor, { kind: 'system' }>, true>;
 type CachedCtx = Omit<SystemRunCtx, 'act' | 'schedule' | 'notify' | 'send' | 'files' | 'convert' | 'browser'> & {
 	files: Pick<Files, 'meta' | 'get' | 'url'> & { image(ref: FileRef): Eff<ImageFacts, FacilityFailure | Unavailable> };
 	convert: { ingest(file: FileRef, options?: Omit<IngestOptions, 'for'> & { for?: never }): ReturnType<Convert['ingest']> };
 	browser: Pick<Browser, 'navigate' | 'snapshot' | 'close'>;
 };
+/**
+ * `run`'s ctx: reads (`ctx.query`), writes and schedules as its `policies`; the only place for I/O. A failed
+ * `yield*` ends the body: `try`/`catch` never sees it, so recover with `Effect.catch` or `Effect.catchTag` on the yielded
+ * Effect (`yield* ctx.browser.download(url, options).pipe(Effect.catch(...))`). `actor` is
+ * the reserved system identity; `run.trigger` records who or what started the run. Code acting for a starter checks it
+ * explicitly (`trigger.kind === 'person'`, then their id, party or teams against the rows it touches). A `cache`d call
+ * gets a read-only ctx: no `act`, `schedule`, `notify` or `send`, and only reading file, ingest and browser members.
+ */
 export type AutomationCtx<S = AutomationSpec> = (S extends { cache: Duration } ? CachedCtx : SystemRunCtx) & {
 	readonly run: Run & (S extends { mode: 'call' }
 		? S extends { cache: Duration } ? {} : { readonly trigger: RunTrigger }
@@ -143,7 +152,8 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 		act: Act;
 		/**
 		 * Takes back an open approval request this identity asked for (an automation: any of its runs; an effect: its
-		 * writer), restoring the held records as a rejection does. Anyone else's request fails `ActRefused`.
+		 * writer), restoring the held records as a rejection does. Anyone else's request, or a decided one, fails
+		 * `ActRefused`. Server code never approves, rejects or requests changes.
 		 */
 		approvals: {
 			withdraw(
@@ -173,10 +183,7 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 		ai: Ai<Tools>;
 		geo: Geo;
 	};
-/**
- * A model `effect`'s ctx: an automation run's facilities, as the writer whose committed write ran it (its actor, its
- * authority); an effect holds no policy of its own.
- */
+/** What started a model `effect`: a committed write, or an approval move with its request, records and requester. */
 export type EffectEvent<M = ModelName> =
 	| { readonly kind: 'write' }
 	| (Omit<ApprovalEffectEvent, 'request' | 'records' | 'requester'> & {
@@ -184,6 +191,17 @@ export type EffectEvent<M = ModelName> =
 		readonly records: readonly { readonly id: Id<M & string>; readonly row: Readonly<Partial<Row<M>>> | null }[];
 		readonly requester: Id<'sys_user'> | null;
 	});
+/**
+ * A model `effect`'s ctx (`create.effect`, `update.effect`, `delete.effect`): an automation run's facilities, as the
+ * writer whose committed write ran it (member, envoy, visitor or automation run, with that authority); an effect holds
+ * no policy of its own and its `ai` has no host tools. Each committed batch queues one durable run
+ * `<model>.effect.<verb>` in the write's own statement, retried for over an hour on a transient failure and never rate
+ * limited; a failure never undoes the write. Changes carry `before`, `set`, `after` and `changed(...)` over the root
+ * fields of the writer's output (`default` when held, else the first named output it holds). An effect's writes run
+ * effects one level deeper; past 8 levels the run fails with `depth`. A write held for approval freezes its changes
+ * and writer until final approval releases them; rejection discards them. The writer sees its effect run's status and
+ * error code; an administrator also sees its input.
+ */
 export type EffectCtx<M = ModelName> = RunCtx<Actor, false> & {
 	/** Approval moves have no committed change list; their frozen data is carried here. */
 	readonly event: EffectEvent<M>;

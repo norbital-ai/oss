@@ -19,6 +19,7 @@ import { restorer } from './seed.ts';
 import { decodeConfiguration, definitionOf } from '../integrations/instances.ts';
 import { catalog_of } from '../access/pred.ts';
 import { null_row_sql, q } from '@norbital-ai/store';
+/** A seed pack's decoded `pack.json`: its name, hash, starting automations, row counts per model and asset list. */
 export type PackJson = typeof PackSchema.Type;
 export type SeedAsset = PackJson['assets'][number];
 export type Pack = {

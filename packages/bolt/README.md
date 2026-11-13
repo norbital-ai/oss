@@ -22,10 +22,5 @@ Entries:
 - `@norbital-ai/bolt/docs` — the API reference and authoring skills as data (the agent's `skill` tool reads the compiled skills)
 - `@norbital-ai/bolt/tooling` — internals bolt-cli builds on; not an API
 
-Read [the Bolt documentation](./docs/README.md) for terms, authoring, pages, hosts and tests. The
-generated API reference is published as `@norbital-ai/bolt/docs` and rendered at
+The API reference, generated from the TSDoc on these exports, is published as `@norbital-ai/bolt/docs` and rendered at
 <https://norbital.ai/docs/api-reference>.
-
-## Behavior reference
-
-The [mechanism map](docs/mechanisms.md) connects declarations to runtime semantics and source owners. All maintained guides ship in `@norbital-ai/bolt/docs` as `index().guides` and `guide(slug)` and are published in the website handbook together with the generated API reference.

@@ -144,6 +144,7 @@ const DecisionAnswerSchema = Schema.Union([
 	})
 ]);
 export type DecisionAnswer = typeof DecisionAnswerSchema.Type;
+/** Schema of a System 1 answer set: one answer per question key, with the provider, model, cost and token usage. */
 export const DecisionResult = Schema.Struct({
 	answers: Schema.Record(Schema.String, DecisionAnswerSchema),
 	cost_usd: Schema.Finite,
@@ -159,6 +160,7 @@ export interface System1Port {
 	ask(request: System1Request, signal: AbortSignal): Promise<DecisionResult>;
 	readonly max_choices?: number;
 }
+/** The engine's Effect view of a `System1Port`: one bounded decision call, failing as a facility failure or `unavailable`. */
 export type System1 = {
 	readonly ask: (
 		request: DecisionRequest
@@ -622,6 +624,10 @@ function openAiDecisionWire(response: typeof OpenAiDecisionResponse.Type) {
 		)
 	};
 }
+/**
+ * System 1 over an HTTP decisions API (the native wire or OpenAI's format), bearer-authenticated. Provider refusals and
+ * HTTP errors fail as facility failures; the call is bounded by `timeout_ms` (default 3 s).
+ */
 export function decisions_system_1(config: DecisionsApiConfig, options: HttpOptions = {}): System1 {
 	const Response = Schema.Struct({
 		id: Schema.optionalKey(Schema.String),
@@ -736,6 +742,7 @@ export function decisions_system_1(config: DecisionsApiConfig, options: HttpOpti
 		)
 	};
 }
+/** System 1 over a chat model's structured output: each question becomes a probability object in one JSON-schema answer. */
 export function structured_system_1(infer: OpenAiChat, model: string): System1 {
 	return {
 		ask: Effect.fn('Decisions.structuredAsk')(function* (request) {

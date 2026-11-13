@@ -1,4 +1,5 @@
 <!--
+@component
 	`AccessFrame`: the one access look — Bolt's sign-in and invitation, and a host's workspace picker. The
 	Norbius band behind, the Norbital mark and environment badge, the language and theme switches and the "secure access"
 	overline, then one content-sized card. Every string is the caller's, in its own locale.
@@ -31,11 +32,17 @@
 		home?: string | undefined;
 		/** The next language's own name; the switch cycles to it. */
 		language: string;
+		/** The language switch was pressed; the caller changes locale and `language`. */
 		on_language: () => void;
+		/** The current theme is dark: the theme switch offers light. */
 		dark: boolean;
+		/** The theme switch was pressed; the caller toggles `dark`. */
 		on_theme: () => void;
+		/** The chrome's accessible names and the overline, in the caller's locale. */
 		labels: { switchLanguage: string; lightMode: string; darkMode: string; secureAccess: string };
+		/** A full-measure card instead of the narrow one. Default false. */
 		wide?: boolean;
+		/** The card's content. */
 		children: Snippet;
 		/** Navigation below the card, such as changing workspace. */
 		footer?: Snippet;

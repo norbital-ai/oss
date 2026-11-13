@@ -1,3 +1,7 @@
+<!--
+@component
+Edits a saved native filter (`where` and `order_by`) of one model, apart from any table's viewer preferences and URL.
+-->
 <script module lang="ts">
 	import type { Json } from '../client/contract.js';
 	import type { FilterVariables } from './operators.js';
@@ -7,10 +11,15 @@
 	type FilterEditorProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
+		/** The model the filter reads. */
 		model: string;
+		/** The saved filter; a filter the editor cannot represent is shown as JSON with a Replace button. */
 		value?: FilterValue;
+		/** Shows the filter without editing it. Default false. */
 		readonly?: boolean;
+		/** The variables a condition may hold in place of a value, and their validation; default the requestor and clock variables. */
 		variables?: FilterVariables;
+		/** Each edit: the whole new filter (`where` and `order_by`, either omitted when empty). */
 		on_change?(value: FilterValue): void;
 	};
 </script>

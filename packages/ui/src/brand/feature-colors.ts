@@ -2,6 +2,7 @@
 // icon and its accent chip. Class strings are literal so Tailwind's scan of this package generates them.
 import { ENTITY_ICONS } from '../primitives/icon/entity-icons.js';
 
+/** A platform feature that has its own brand colour. */
 export type FeatureColorKey =
 	| 'accessControl'
 	| 'agents'
@@ -31,6 +32,7 @@ const slate = {
 		'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-400/10 dark:text-slate-200 dark:ring-slate-400/20'
 };
 
+/** Each feature's icon and Tailwind classes for its icon tile (`iconWrapperClass`), bare icon and accent chip. */
 export const FEATURE_COLORS: { readonly [K in FeatureColorKey]: FeatureColorStyles } = {
 	accessControl: {
 		icon: m.accessControl,

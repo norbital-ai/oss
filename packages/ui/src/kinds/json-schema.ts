@@ -200,7 +200,9 @@ function namedKind(schema: JsonSchemaObject): Kind | undefined {
 /**
  * A conservative rendering plan. Validation remains the caller/server's JSON Schema validator. A datatype is chosen
  * explicitly (`format: '<datatype>'`, or `x-norbital.datatype` for a custom one) or implicitly by an exact shape
- * (`DATATYPE_SHAPES`); explicit wins.
+ * (`DATATYPE_SHAPES`); explicit wins. An exact shape matches required keys, key set and types (`{from,to}` dates,
+ * `{start,end}` instants, `{lat,lng}` numbers); a near-miss stays an ordinary object, while an explicit name whose
+ * shape mismatches fails `bolt check` on a seeded schema. A string `duration` keeps JSON Schema's ISO meaning.
  */
 export function json_schema_kind(schema: JsonSchema): Kind {
 	if (typeof schema === 'boolean') return { kind: 'json' };
