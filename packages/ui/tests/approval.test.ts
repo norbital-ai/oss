@@ -145,16 +145,16 @@ it.live(
 			yield* browser(() => settle());
 			const log = popover();
 			assert.deepEqual(
-				[...log.querySelectorAll<HTMLElement>('[data-move]')].map((li) => li.dataset['move']),
+				[...log.querySelectorAll<HTMLElement>('[data-action]')].map((li) => li.dataset['action']),
 				['request_changes', 'resubmit', 'reject']
 			);
 			assert.deepEqual([...log.querySelectorAll('[data-reason]')].map(textOf), [
 				'“Add the quote”',
 				'“Too costly”'
 			]);
-			assert.equal(textOf(element(log, '[data-changed]')).trim(), 'Changed: Title, Crew');
-			assert.match(textOf(element(log, '[data-rolled-back]')), /Rolled back: Jobs restored/);
-			assert.match(textOf(element(log, '[data-skipped]')), /The linked record was deleted/);
+			assert.equal(textOf(element(log, '[data-note=changed]')).trim(), 'Changed: Title, Crew');
+			assert.match(textOf(element(log, '[data-note=rolled-back]')), /Rolled back: Jobs restored/);
+			assert.match(textOf(element(log, '[data-note=skipped]')), /The linked record was deleted/);
 			// a closed request has no form
 			assert.equal(target.querySelector('[data-view=approval-controls]'), null);
 
@@ -165,7 +165,7 @@ it.live(
 				await settle();
 			});
 			assert.deepEqual(
-				[...popover().querySelectorAll<HTMLElement>('[data-move]')].map((li) => li.dataset['move']),
+				[...popover().querySelectorAll<HTMLElement>('[data-action]')].map((li) => li.dataset['action']),
 				['request']
 			);
 		})
@@ -377,7 +377,7 @@ it.live('several requests: the selector defaults to the open one and switches th
 		assert.equal(nodes(target)[1]?.dataset['look'], 'rejected');
 	})
 );
-it.live('a decided request states its outcome to everyone and its reason once, a withdrawn one says so', () =>
+it.live('a decided request reads as the last entry of its history, its reason once, no closing repeat', () =>
 	Effect.gen(function* () {
 		const asked: ApprovalView = {
 			...request,
@@ -392,11 +392,13 @@ it.live('a decided request states its outcome to everyone and its reason once, a
 			]
 		};
 		const changes = yield* panel([asked]);
-		const outcome = element<HTMLElement>(changes.target, '[data-view=approval-outcome]');
-		assert.match(textOf(outcome), /Changes requested · Sam/);
-		// the reason is quoted once, in the history, not again on the closing line
-		assert.deepEqual([...changes.target.querySelectorAll('[data-view=approval-history] [data-reason]')].map(textOf), ['“Attach the receipt”']);
-		assert.equal(outcome.querySelector('[data-reason]'), null);
+		const history = element<HTMLElement>(changes.target, '[data-view=approval-history]');
+		const last = required([...history.querySelectorAll<HTMLElement>('[data-action]')].at(-1));
+		assert.equal(last.dataset['action'], 'request_changes');
+		assert.match(textOf(element(last, '[data-line]')), /^Requested changes · Sam · /);
+		assert.deepEqual([...changes.target.querySelectorAll('[data-reason]')].map(textOf), ['“Attach the receipt”']);
+		assert.equal(changes.target.querySelector('[data-view=approval-outcome]'), null);
+		assert.doesNotMatch(textOf(changes.target), /Changes requested · Sam/);
 		const withdrawn = yield* panel([
 			{
 				...request,
@@ -409,8 +411,8 @@ it.live('a decided request states its outcome to everyone and its reason once, a
 			}
 		]);
 		assert.match(
-			textOf(element<HTMLElement>(withdrawn.target, '[data-view=approval-outcome]')),
-			/Withdrawn · Bob/
+			textOf(element<HTMLElement>(withdrawn.target, '[data-view=approval-history] [data-action=withdraw] [data-line]')),
+			/^Withdrew · Bob · /
 		);
 		// the withdrawn step is not shown as done by the requester
 		assert.match(
@@ -486,7 +488,7 @@ it.live('a resubmitted request keeps its earlier rounds in the pane: changes ask
 		]);
 		const history = element<HTMLElement>(target, '[data-view=approval-history]');
 		assert.deepEqual(
-			[...history.querySelectorAll<HTMLElement>('[data-move]')].map((li) => li.dataset['move']),
+			[...history.querySelectorAll<HTMLElement>('[data-action]')].map((li) => li.dataset['action']),
 			['request', 'request_changes', 'resubmit']
 		);
 		assert.match(

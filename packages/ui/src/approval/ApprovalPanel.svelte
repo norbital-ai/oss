@@ -1,8 +1,8 @@
 <!--
 @component
 A record's approval requests: a scope selector when there are several, the chosen request's timeline (one
-node for the request, one per step; each node a button whose popover holds that step's back-and-forth), once it is
-no longer pending its status and the deciding reason, and, for whoever
+node for the request, one per step; each node a button whose popover holds that step's back-and-forth), its history
+as the shared compact timeline (the last entry says where it stands and why), and, for whoever
 may decide now, a two-step form: pick Approve, Reject, Request changes or (the requester) Withdraw, then give the
 reason and confirm.
 -->
@@ -33,6 +33,8 @@ reason and confirm.
 	import { label, msg, catalogText } from '../text/messages.js';
 	import { skipText } from '../record/history.js';
 	import { approvalStatus, moveText } from './row.js';
+	import Timeline from '../timeline/Timeline.svelte';
+	import type { TimelineEntry } from '../timeline/timeline.js';
 
 	let { ctx, requests, on_outcome }: ApprovalPanelProps = $props();
 	const bolt = $derived(bolt_of(ctx));
@@ -154,6 +156,35 @@ reason and confirm.
 		DECISIONS.flatMap((d) => v.moves.filter((m) => m.decision === d));
 	const changedText = (v: ApprovalView, e: Entry) =>
 		(e.changed ?? []).map((f) => label(bolt, v.model, f)).join(', ');
+	/** One move as a timeline entry: what · who · when, its reason quoted, what it changed or rolled back below. */
+	const entryOf = (v: ApprovalView, e: Entry, k: number): TimelineEntry => ({
+		key: `${k}`,
+		action: e.move,
+		line: [moveText(bolt, e.move), who(e.by), at(e.at)],
+		quote: e.reason,
+		notes: [
+			...(e.move === 'resubmit' && changedText(v, e) !== ''
+				? [{ kind: 'changed', text: msg(bolt, 'approval.changed', { fields: changedText(v, e) }) }]
+				: []),
+			...(e.rolled_back !== undefined && e.rolled_back.length > 0
+				? [{
+						kind: 'rolled-back',
+						text: `${msg(bolt, 'approval.rolled_back')}: ${e.rolled_back
+							.map((r) => `${label(bolt, r.model)} ${catalogText(bolt, `approval.action.${r.action}`, r.action)}`)
+							.join(', ')}`
+					}]
+				: []),
+			...(e.skipped !== undefined && e.skipped.length > 0
+				? [{
+						kind: 'skipped',
+						warn: true,
+						text: `${msg(bolt, 'approval.skipped')}: ${e.skipped
+							.map((x) => `${label(bolt, x.model, x.field)} (${skipText(bolt, x.reason)})`)
+							.join(', ')}`
+					}]
+				: [])
+		]
+	});
 
 	// the node whose popover is open: hover, keyboard focus or a tap opens it, Escape or leaving it closes it
 	let shown = $state<string | null>(null);
@@ -202,36 +233,6 @@ reason and confirm.
 	}
 </script>
 
-{#snippet entry(v: ApprovalView, e: Entry)}
-	<li class="flex flex-col gap-0.5" data-move={e.move}>
-		<p class="text-sm font-medium">
-			{moveText(bolt, e.move)} · {who(e.by)}
-		</p>
-		<p class="text-meta"><time datetime={e.at}>{at(e.at)}</time></p>
-		{#if e.reason}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
-				“{e.reason}”
-			</p>{/if}
-		{#if e.move === 'resubmit' && changedText(v, e) !== ''}<p class="text-caption" data-changed>
-				{msg(bolt, 'approval.changed', { fields: changedText(v, e) })}
-			</p>{/if}
-		{#if e.rolled_back !== undefined && e.rolled_back.length > 0}
-			<p class="text-caption" data-rolled-back>
-				{msg(bolt, 'approval.rolled_back')}: {e.rolled_back
-					.map(
-						(r) => `${label(bolt, r.model)} ${catalogText(bolt, `approval.action.${r.action}`, r.action)}`
-					)
-					.join(', ')}
-			</p>
-		{/if}
-		{#if e.skipped !== undefined && e.skipped.length > 0}
-			<p class="text-caption text-warning-foreground dark:text-warning" data-skipped>
-				{msg(bolt, 'approval.skipped')}: {e.skipped
-					.map((s) => `${label(bolt, s.model, s.field)} (${skipText(bolt, s.reason)})`)
-					.join(', ')}
-			</p>
-		{/if}
-	</li>
-{/snippet}
 
 {#if current !== null}
 	{@const v = current}
@@ -325,9 +326,7 @@ reason and confirm.
 										? msg(bolt, 'approval.noDecision')
 										: lookText(node.look)}
 								</p>
-							{:else}<ol class="flex flex-col gap-2">
-									{#each node.entries as e, k (k)}{@render entry(v, e)}{/each}
-								</ol>{/if}
+							{:else}<Timeline entries={node.entries.map((e, k) => entryOf(v, e, k))} />{/if}
 						</Popover.Content>
 					</Popover.Root>
 					<span class="max-w-full truncate text-sm font-medium" data-label>{node.label}</span>
@@ -342,19 +341,16 @@ reason and confirm.
 			<!-- every round in order (requested, changes asked and why, resubmitted, …), not only the current step's -->
 			<section class="flex flex-col gap-2" data-view="approval-history">
 				<p class="text-label">{msg(bolt, 'approval.history')}</p>
-				<ol class="flex flex-col gap-2">
-					{#each v.log as e, k (k)}{@render entry(v, e)}{/each}
-				</ol>
+				<Timeline entries={v.log.map((e, k) => entryOf(v, e, k))} label={msg(bolt, 'approval.history')} />
 			</section>
 		{/if}
 
-		{#if v.status !== 'Pending'}
-			<!-- where the request stands and why, for the requester and the approvers alike, not only inside a step's popover -->
+		{#if v.status !== 'Pending' && v.log.length <= 1}
+			<!-- where a request with no history stands; once it has one, its last entry says so and why -->
 			{@const last = [...v.log].reverse().find((e) => DECISIVE.has(e.move))}
 			<div class="flex flex-col gap-0.5" role="status" data-view="approval-outcome">
 				<p class="font-medium">{approvalStatus(bolt, v.status)}{last === undefined ? '' : ` · ${who(last.by)}`}</p>
-				<!-- the history above already quotes the deciding reason -->
-				{#if last?.reason && v.log.length <= 1}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
+				{#if last?.reason}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
 						“{last.reason}”
 					</p>{/if}
 			</div>

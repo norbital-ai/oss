@@ -321,7 +321,7 @@ async function show(
 const pickHistory = async (revision: number) => {
 	element<HTMLElement>(
 		document,
-		`[data-record-timeline] [data-history-pick="${revision}"]`
+		`[data-record-timeline] [data-history-revision="${revision}"] [data-pick]`
 	).click();
 	await settle();
 };
@@ -361,7 +361,8 @@ it.live('history renders old field labels and values with an incompatible indica
 			textOf(element<HTMLElement>(document, '[data-history-revision="2"]')),
 			/Not valid/
 		);
-		assert.match(textOf(element<HTMLElement>(document, '[data-history-revision="1"]')), /Valid/);
+		// a valid past revision carries no mark; only the current one and an invalid one do
+		assert.equal(document.querySelector('[data-history-revision="1"] [data-mark]'), null);
 		yield* browser(() => pickHistory(2));
 		const old = element<HTMLElement>(v.target, '[data-history-field=old_title]');
 		assert.match(textOf(old), /Original title/);
@@ -706,7 +707,7 @@ it.live('native history merges scoped related records and keeps its scrubber', (
 		const [firstEvent, secondEvent] = events.querySelectorAll<HTMLElement>('[data-history-model]');
 		assert.equal(required(firstEvent).dataset.historyModel, 'jobs');
 		assert.equal(required(secondEvent).dataset.historyModel, 'activities');
-		assert.ok(element<HTMLElement>(document, '[data-record-timeline] [data-history-pick]'));
+		assert.ok(element<HTMLElement>(document, '[data-record-timeline] [data-pick]'));
 	})
 );
 
@@ -1237,8 +1238,10 @@ it.live('a record its rejected create removed keeps its label, its outcome and n
 		]);
 		assert.match(textOf(element<HTMLElement>(target, '[data-record-head] h2')), /Duplicate buyer/);
 		assert.equal(target.querySelector('[data-view=approval-badge]'), null);
-		assert.match(textOf(element<HTMLElement>(target, '[data-view=approval-outcome]')), /Rejected · Sam/);
-		assert.match(textOf(element<HTMLElement>(target, '[data-view=approval-history]')), /Already on file/);
+		assert.match(
+			textOf(element<HTMLElement>(target, '[data-view=approval-history] [data-action=reject]')),
+			/Rejected · Sam.*Already on file/s
+		);
 	})
 );
 it.live('the approval badge says "Changes requested" in words and follows the live row, not stale capabilities', () =>

@@ -11,13 +11,13 @@ revision returns to the live record.
 	import { recordText } from '../kinds/kind.js';
 	import { Effect } from 'effect';
 	import { observe_once } from '../effect/index.js';
-	import ReadOnce from '../read/ReadOnce.svelte';
 	import { format } from '../kinds/kind.js';
 	import type { RecordHistoryConfig } from './history.js';
 	import { bolt_of } from '../client/context.js';
 	import * as Popover from '../primitives/popover/index.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
-	import Badge from '../primitives/badge/badge.svelte';
+	import Timeline from '../timeline/Timeline.svelte';
+	import { revisionAction, type TimelineEntry } from '../timeline/timeline.js';
 	import { checkpoints, type Checkpoint } from './history.js';
 	import { by_id, first_of, page_of, READ_LIMIT, request_json } from '../read/request.js';
 	import { label, msg, catalogText } from '../text/messages.js';
@@ -75,6 +75,7 @@ revision returns to the live record.
 	let refresh = $state(0);
 	let open = $state(false);
 
+	const actorKey = (actor: NonNullable<Checkpoint['actor']>) => `${actor.kind}:${actor.id}`;
 	// who wrote a revision: a member by name when this caller may read them, else what kind of actor it was
 	const names = new Map<string, string>();
 	function who(actor: Checkpoint['actor']): Effect.Effect<string> {
@@ -110,39 +111,32 @@ revision returns to the live record.
 				);
 	}
 
-	function what(c: Checkpoint, model = of): string {
-		const base = described(c, model);
-		// an approval's provisional change says where its request stands; a rollback says it was the request's
-		return c.approval === null || c.approval.state === null
-			? base
-			: c.restored_from !== null
-				? msg(bolt, 'record.rolledBackBy', {
-						what: base,
-						state: historyStatus(bolt, c.approval.state)
-					})
-				: msg(bolt, 'record.underRequest', {
-						what: base,
-						state: historyStatus(bolt, c.approval.state)
-					});
-	}
-	function described(c: Checkpoint, model: string): string {
-		if (c.restored_from !== null)
-			return msg(bolt, 'record.restored_from', { n: c.restored_from });
-		if (c.revision === 1) return msg(bolt, 'record.created');
+	/** A revision's changed fields, at most three named. */
+	function changed(c: Checkpoint, model: string): string {
 		if (c.fields.length === 0) return msg(bolt, 'record.noVisibleChanges');
 		const named = c.fields
 			.slice(0, 3)
 			.map((f) => label(bolt, model, f))
 			.join(', ');
 		return c.fields.length > 3
-			? msg(bolt, 'record.changedMore', {
-					fields: named,
-					more: c.fields.length - 3
-				})
+			? msg(bolt, 'record.changedMore', { fields: named, more: c.fields.length - 3 })
 			: named;
 	}
+	const ACTION_TEXT = {
+		create: 'record.created',
+		update: 'record.updated',
+		move: 'record.moved',
+		delete: 'record.erased',
+		rollback: 'record.rolledBack'
+	} as const;
+	const states = (model: string) =>
+		new Set(
+			Object.entries(kinds.catalog?.[model]?.fields ?? {})
+				.filter(([, kind]) => kind.kind === 'state')
+				.map(([field]) => field)
+		);
 	type Event = { key: string; of: string; subject: string; checkpoint: Checkpoint; own: boolean };
-	type LoadedHistory = { list: readonly Event[]; partial: boolean };
+	type LoadedHistory = { list: readonly Event[]; partial: boolean; names: ReadonlyMap<string, string> };
 	function visible(c: Checkpoint, model: string, fields?: readonly string[]): Checkpoint {
 		return {
 			...c,
@@ -217,7 +211,17 @@ revision returns to the live record.
 								event.checkpoint.approval !== null
 						)
 					);
+			// every writer named once, before the timeline shows
+			const actors = new Map(
+				list.flatMap((e) => (e.checkpoint.actor === null ? [] : [[actorKey(e.checkpoint.actor), e.checkpoint.actor] as const]))
+			);
+			const names = new Map(
+				yield* Effect.forEach([...actors], ([key, actor]) => Effect.map(who(actor), (name) => [key, name] as const), {
+					concurrency: 'unbounded'
+				})
+			);
 			return {
+				names,
 				list: list.sort(
 					(a, b) =>
 						// the live record's current revision anchors the timeline, whatever related records did later
@@ -233,7 +237,7 @@ revision returns to the live record.
 		});
 	});
 	// a decision on the record's requests is an entry of its own, among the revisions by when it was made
-	type Decision = { key: string; at: string; text: string; reason: string | null };
+	type Decision = TimelineEntry & { at: string };
 	const DECIDED = new Set<ApprovalView['log'][number]['move']>([
 		'approve',
 		'reject',
@@ -250,8 +254,10 @@ revision returns to the live record.
 								{
 									key: `${request.id}:${i}`,
 									at: e.at,
-									text: `${moveText(bolt, e.move)} · ${e.by.name ?? e.by.ref.replace(/^[a-z]+:/i, '')}`,
-									reason: e.reason
+									action: e.move,
+									line: [moveText(bolt, e.move), e.by.name ?? e.by.ref.replace(/^[a-z]+:/i, ''), stamp(e.at)],
+									quote: e.reason,
+									data: { 'data-history-decision': `${request.id}:${i}` }
 								}
 							]
 						: []
@@ -259,17 +265,54 @@ revision returns to the live record.
 			)
 			.sort((a, b) => b.at.localeCompare(a.at))
 	);
-	/** The events newest first (the current revision leads), each decision before the revisions written ahead of it. */
-	const merged = (list: readonly Event[]): readonly (Event | Decision)[] => {
-		const out: (Event | Decision)[] = [];
+	/** One revision as a timeline entry: what it did · who · when, its fields and request state quietly below. */
+	function revisionEntry(event: Event, names: ReadonlyMap<string, string>): TimelineEntry {
+		const c = event.checkpoint;
+		const current = event.own && c.revision >= latest;
+		const action = revisionAction(c, states(event.of));
+		const what =
+			action === 'restore'
+				? msg(bolt, 'record.restored_from', { n: c.restored_from ?? 0 })
+				: msg(bolt, ACTION_TEXT[action]);
+		const by = c.actor === null ? msg(bolt, 'record.actor.unknown') : (names.get(actorKey(c.actor)) ?? c.actor.id);
+		return {
+			key: event.key,
+			action,
+			line: [
+				event.own ? what : `${event.subject} · ${what}`,
+				by,
+				c.at === null ? stamp(c.at) : `${stamp(c.at)} (${ago(c.at)})`,
+				`#${c.revision}`
+			],
+			notes: [
+				...(action === 'update' || action === 'move' ? [{ kind: 'fields', text: changed(c, event.of) }] : []),
+				...(c.approval?.state == null ? [] : [{ kind: 'approval', text: historyStatus(bolt, c.approval.state) }])
+			],
+			...(current
+				? { mark: { text: msg(bolt, 'record.current') } }
+				: c.valid
+					? {}
+					: { mark: { text: msg(bolt, 'record.historyInvalid'), warn: true } }),
+			current,
+			...(event.own ? { onpick: () => pick(event) } : {}),
+			data: {
+				'data-history-model': event.of,
+				'data-history-revision': c.revision,
+				'data-history-valid': c.valid
+			}
+		};
+	}
+	/** The entries newest first (the current revision leads), each decision before the revisions written ahead of it. */
+	const merged = (result: LoadedHistory): readonly TimelineEntry[] => {
+		const out: TimelineEntry[] = [];
 		let next = 0;
-		for (const event of list) {
+		for (const event of result.list) {
 			const at = event.own && event.checkpoint.revision >= latest ? null : event.checkpoint.at;
 			for (; at !== null && next < decisions.length && (decisions[next]?.at ?? '') > at; next++) {
 				const d = decisions[next];
 				if (d !== undefined) out.push(d);
 			}
-			out.push(event);
+			out.push(revisionEntry(event, result.names));
 		}
 		return [...out, ...decisions.slice(next)];
 	};
@@ -329,103 +372,14 @@ revision returns to the live record.
 					{msg(bolt, 'record.noHistory')}
 				</p>
 			{:else}
-				{@const result = loaded.current ?? { list: [], partial: false }}
-				{@const items = merged(result.list)}
+				{@const result = loaded.current ?? { list: [], partial: false, names: new Map() }}
 				<div class="max-h-96 overflow-y-auto px-3 py-3" data-record-history-events>
 					{#if result.partial}<p role="status" class="text-muted-foreground mb-2 text-xs">
 							{msg(bolt, 'record.historyPartial')}
 						</p>{/if}
-					<ol class="flex flex-col" aria-label={msg(bolt, 'record.history')}>
-						{#each items as item, i (item.key)}
-							{#if !('checkpoint' in item)}
-								<li class="relative flex gap-3 pb-3 last:pb-0" data-history-decision={item.key}>
-									{#if i < items.length - 1}<span
-											aria-hidden="true"
-											class="bg-border absolute top-4 bottom-0 left-[5px] w-px"
-										></span>{/if}
-									<span
-										aria-hidden="true"
-										class="border-warning bg-background relative mt-1.5 size-3 shrink-0 rounded-full border-2"
-									></span>
-									<div class="-my-1.5 min-w-0 flex-1 px-2 py-1.5">
-										<span class="text-foreground text-xs font-medium tabular-nums">{stamp(item.at)}</span>
-										<span class="mt-0.5 block truncate text-sm font-medium">{item.text}</span>
-										{#if item.reason}<span
-												class="text-muted-foreground block text-xs whitespace-pre-wrap wrap-anywhere"
-												data-reason>“{item.reason}”</span
-											>{/if}
-									</div>
-								</li>
-							{:else}
-							{@const event = item}
-							{@const c = event.checkpoint}
-							{@const current = event.own && c.revision >= latest}
-							<li
-								class="relative flex gap-3 pb-3 last:pb-0"
-								data-history-model={event.of}
-								data-history-revision={c.revision}
-								data-history-valid={c.valid}
-							>
-								{#if i < items.length - 1}<span
-										aria-hidden="true"
-										class="bg-border absolute top-4 bottom-0 left-[5px] w-px"
-									></span>{/if}
-								<span
-									aria-hidden="true"
-									class={[
-										'relative mt-1.5 size-3 shrink-0 rounded-full border-2',
-										current
-											? 'border-brand bg-brand'
-											: c.valid
-												? 'border-border bg-background'
-												: 'border-warning bg-warning/20'
-									]}
-								></span>
-								{#if event.own}<button
-										type="button"
-										aria-current={current ? 'true' : undefined}
-										data-history-pick={c.revision}
-										class="hover:bg-muted focus-visible:ring-ring/40 -my-1.5 min-w-0 flex-1 rounded-md px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none"
-										onclick={() => pick(event)}
-									>
-										{@render entry(event, current)}
-									</button>
-								{:else}<div class="-my-1.5 min-w-0 flex-1 px-2 py-1.5">
-										{@render entry(event, false)}
-									</div>{/if}
-							</li>
-							{/if}
-						{/each}
-					</ol>
+					<Timeline entries={merged(result)} label={msg(bolt, 'record.history')} />
 				</div>
 			{/if}
 		{/if}
 	</Popover.Content>
 </Popover.Root>
-
-{#snippet entry(event: Event, current: boolean)}
-	{@const c = event.checkpoint}
-	<span class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-		<span class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-			<span class="text-foreground text-xs font-medium tabular-nums">{stamp(c.at)}</span>
-			{#if c.at !== null}<span class="text-muted-foreground text-tiny tabular-nums"
-					>({ago(c.at)})</span
-				>{/if}
-			<span class="text-muted-foreground text-tiny tabular-nums">#{c.revision}</span>
-		</span>
-		<span class="shrink-0">
-			{#if current}<Badge variant="default">{msg(bolt, 'record.current')}</Badge>
-			{:else if c.valid}<Badge variant="outline">{msg(bolt, 'record.historyValid')}</Badge>
-			{:else}<Badge variant="warning">{msg(bolt, 'record.historyInvalid')}</Badge>{/if}
-		</span>
-	</span>
-	<span class="mt-0.5 block truncate text-sm font-medium">
-		{event.own ? what(c, event.of) : `${event.subject} · ${what(c, event.of)}`}
-	</span>
-	<span class="text-muted-foreground block truncate text-xs">
-		<ReadOnce effect={who(c.actor)}>
-			{#snippet pending()}…{/snippet}
-			{#snippet ready(name)}{name}{/snippet}
-		</ReadOnce>
-	</span>
-{/snippet}
