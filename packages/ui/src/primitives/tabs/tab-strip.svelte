@@ -24,7 +24,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 		on_value_change?: (value: string) => void;
 		/** The strip's accessible name. */
 		label: string;
-		/** The type's level (1 segmented, 2 underline, 3 chips); omitted, one below the enclosing `Tabs`. */
+		/** The type's level (1 default, 2 underline, 3 chips); omitted, one below the enclosing `Tabs`. */
 		level?: TabLevel;
 		/** Classes on the list. */
 		class?: string;

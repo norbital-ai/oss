@@ -1,9 +1,9 @@
-// The strict tab hierarchy (owner rule): level 1 is `segmented`, level 2 `underline`, level 3 `chips`. A page never
+// The strict tab hierarchy (owner rule): level 1 is `default`, level 2 `underline`, level 3 `chips`. A page never
 // shows two levels in one style, and there is no fourth level.
 /** The context key carrying the enclosing `Tabs` level; an overlay (a sheet) clears it to start a new hierarchy. */
 export const TAB_LEVEL = Symbol.for('norbital.ui.tabs.level');
 
-export const TAB_VARIANTS = ['segmented', 'underline', 'chips'] as const;
+export const TAB_VARIANTS = ['default', 'underline', 'chips'] as const;
 export type TabLevel = 1 | 2 | 3;
 export type TabVariant = (typeof TAB_VARIANTS)[number];
 
@@ -21,6 +21,6 @@ export function tabLevel(
 	if (level === expected) return { level };
 	return {
 		level,
-		warning: `Tabs level ${level} (${tabVariant(level)}) under ${parent ? `level ${parent}` : 'no tabs'}: expected level ${expected} (${tabVariant(expected)}). Hierarchy: segmented > underline > chips.`
+		warning: `Tabs level ${level} (${tabVariant(level)}) under ${parent ? `level ${parent}` : 'no tabs'}: expected level ${expected} (${tabVariant(expected)}). Hierarchy: default > underline > chips.`
 	};
 }

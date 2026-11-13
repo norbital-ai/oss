@@ -23,7 +23,7 @@ Do not import from `build/` or `src/` directly.
 **One tab size.** Every tab strip in the realm (an app's page strip, a page's `Tabs`, Workspace
 Studio, Command Center, settings, record sheets, a calendar's view switch, a `Split` switch) is the
 same compact size: a 1.75rem trigger with `px-3`, `text-xs` and a `size-3.5` icon, in a 2rem strip
-(`src/primitives/tabs/style.ts`). There is no size prop. The three types, segmented (the default),
+(`src/primitives/tabs/style.ts`). There is no size prop. The three types, default,
 underline and chips, differ in appearance only; the nesting level picks the type (`level` overrides
 it). `Tabs` (a strip with bodies) and `TabStrip` (a strip alone: page links, or buttons switching a
 view the caller renders) are the only tab implementations: never hand-roll a `role="tab"` strip or

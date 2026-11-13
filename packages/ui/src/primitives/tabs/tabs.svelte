@@ -5,7 +5,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import { TAB_LEVEL, tabLevel, tabVariant, type TabLevel } from './level.js';
-	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
+	import { RAIL_LIST, RAIL_TYPE, TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
 
 	/** One tab: a `keep_alive` tab stays mounted while hidden, so a form inside keeps its state. */
 	export type TabItem = {
@@ -33,24 +33,20 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 		/** Rendered before the list (a scope picker the tabs read): the tabs then sit flush right, wrapping below on narrow. */
 		leading?: Snippet;
 		/**
-		 * The hierarchy level: 1 `segmented` (top), 2 `underline`, 3 `chips`. Omitted, it is one below the enclosing
+		 * The hierarchy level: 1 `default` (top), 2 `underline`, 3 `chips`. Omitted, it is one below the enclosing
 		 * `Tabs` (1 at the top); an explicit level out of that order warns in the console.
 		 */
 		level?: TabLevel;
 		/**
-		 * `vertical`: a rail beside the body (a compact scroller on a narrow container). Omitted,
-		 * horizontal: the body keeps the full width.
+		 * `vertical`: a rail on the left of the body, in its level's type (a horizontal scroller on a narrow container).
+		 * Omitted, horizontal: the body keeps the full width.
 		 */
 		orientation?: 'horizontal' | 'vertical';
-		/** Which side holds a vertical rail. Defaults to `start`. */
-		side?: 'start' | 'end';
 	};
 
-	// the vertical rail: chips on a narrow container, a column of full-width rows on a wide one (`@2xl`)
-	const RAIL_LIST =
-		'gap-1.5 py-0.5 @2xl:flex-col @2xl:items-stretch @2xl:gap-0.5 @2xl:overflow-x-clip @2xl:overflow-y-auto';
-	const RAIL_TRIGGER =
-		'rounded-full border data-[state=active]:border-foreground @2xl:justify-start @2xl:rounded-md @2xl:border-transparent @2xl:data-[state=active]:border-transparent @2xl:data-[state=active]:bg-muted';
+	// the vertical rail: a column of full-width rows on a wide container (`@2xl`), a scrolling strip on a narrow one
+	const RAIL =
+		'@2xl:flex-col @2xl:items-stretch @2xl:self-start @2xl:max-h-full @2xl:overflow-x-clip @2xl:overflow-y-auto';
 </script>
 
 <script lang="ts">
@@ -74,8 +70,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 		trailing,
 		leading,
 		level: explicit,
-		orientation,
-		side = 'start'
+		orientation
 	}: TabsProps = $props();
 	const parent = getContext<{ level: TabLevel; shown: readonly string[] } | undefined>(TAB_LEVEL);
 	const t = ui_text();
@@ -83,7 +78,6 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 	const placed = $derived(tabLevel(parent?.level, explicit));
 	const variant = $derived(tabVariant(placed.level));
 	const vertical = $derived(orientation === 'vertical');
-	const railEnd = $derived(vertical && side === 'end');
 	// `shown`: every tab name and title of the strips around a body, so a record view inside one does not repeat them
 	setContext(TAB_LEVEL, {
 		get level() {
@@ -114,7 +108,9 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 	const shownTabs = $derived(vertical || fit >= tabs.length ? tabs : tabs.slice(0, fit));
 	const overflow = $derived(tabs.filter((t) => !shownTabs.includes(t)));
 	const activeInMore = $derived(overflow.some((t) => t.name === active));
-	const triggerClass = $derived(cn(TAB_TRIGGER, vertical ? RAIL_TRIGGER : TAB_TYPE[variant]));
+	const triggerClass = $derived(
+		cn(TAB_TRIGGER, TAB_TYPE[variant], vertical && ['@2xl:justify-start', RAIL_TYPE[variant]])
+	);
 	// a tab is mounted once visited and, unless keep_alive, dropped when left
 	let visited = $state<Record<string, true>>({});
 	watch.pre(() => active, (active) => {
@@ -139,11 +135,8 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 		class={cn(
 			// one column of the container's width: a strip measured against its own contents would shrink as tabs move to More
 			'grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3',
-			vertical && '@2xl:grid-rows-[minmax(0,1fr)] @2xl:gap-4',
 			vertical &&
-				(railEnd
-					? '@2xl:grid-cols-[minmax(0,1fr)_minmax(9rem,13rem)]'
-					: '@2xl:grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)]'),
+				'@2xl:grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)] @2xl:grid-rows-[minmax(0,1fr)] @2xl:gap-4',
 			className
 		)}
 		data-tabs-orientation={vertical ? 'vertical' : 'horizontal'}
@@ -153,20 +146,19 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 				'flex w-full min-w-0 items-center gap-2',
 				leading && 'flex-wrap items-end',
 				vertical && '@2xl:flex-col @2xl:items-stretch',
-				railEnd && '@2xl:col-start-2 @2xl:row-start-1',
 				!hasInset() && INSET_X_CLASS
 			)}
 		>
 			{#if leading}<div class="min-w-0 flex-1 basis-64">{@render leading()}</div>{/if}
 			<Tabs.List
 				bind:ref={list}
-				data-tabs-variant={vertical ? 'rail' : variant}
+				data-tabs-variant={variant}
 				class={cn(
 					'relative flex min-w-0 flex-nowrap items-center',
 					leading ? 'ml-auto min-w-0 flex-1' : 'flex-1',
 					TAB_TRACK,
-					vertical ? RAIL_LIST : TAB_LIST[variant],
-					vertical ? SCROLL_AXIS_CLASSES.x : 'overflow-x-clip'
+					TAB_LIST[variant],
+					vertical ? [SCROLL_AXIS_CLASSES.x, RAIL, RAIL_LIST[variant]] : 'overflow-x-clip'
 				)}
 			>
 				{#each shownTabs as tab (tab.name)}
@@ -211,11 +203,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 			{@render trailing?.()}
 		</div>
 		{#each tabs as tab (tab.name)}
-			<TabPanel
-				value={tab.name}
-				label={tab.title}
-				class={railEnd ? '@2xl:col-start-1 @2xl:row-start-1' : ''}
-			>
+			<TabPanel value={tab.name} label={tab.title}>
 				{#if tab.name === active || (tab.keep_alive && visited[tab.name])}
 					{@render tab.body()}
 				{/if}

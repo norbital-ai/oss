@@ -12,12 +12,11 @@ it('owns primitive and model-view translations', () => {
 });
 
 it.each([
-	{ orientation: 'horizontal', side: 'start', arrow: 'ArrowRight' },
-	{ orientation: 'vertical', side: 'start', arrow: 'ArrowDown' },
-	{ orientation: 'vertical', side: 'end', arrow: 'ArrowDown' }
+	{ orientation: 'horizontal', arrow: 'ArrowRight' },
+	{ orientation: 'vertical', arrow: 'ArrowDown' }
 ] as const)(
-	'$orientation tabs at $side retain keyboard navigation and panel links',
-	async ({ orientation, side, arrow }) => {
+	'$orientation tabs retain keyboard navigation and panel links',
+	async ({ orientation, arrow }) => {
 		const body = createRawSnippet(() => ({ render: () => '<p>Tab content</p>' }));
 		const tabs = ['Overview', 'Measurements', 'History'].map((title) => ({
 			name: title,
@@ -25,7 +24,7 @@ it.each([
 			body
 		}));
 		const target = document.body.appendChild(document.createElement('div'));
-		const view = mount(Tabs, { target, props: { tabs, orientation, side } });
+		const view = mount(Tabs, { target, props: { tabs, orientation } });
 		await tick();
 		const selected = () =>
 			target.querySelector('[role=tab][aria-selected=true]')?.textContent?.trim();
@@ -50,6 +49,29 @@ it.each([
 		await unmount(view);
 	}
 );
+
+it.each([
+	{ level: 1, variant: 'default' },
+	{ level: 2, variant: 'underline' },
+	{ level: 3, variant: 'chips' }
+] as const)('a vertical rail at level $level keeps the $variant type', async ({ level, variant }) => {
+	const body = createRawSnippet(() => ({ render: () => '<p>Tab content</p>' }));
+	const tabs = ['Leave', 'Claim'].map((title) => ({ name: title, title, body }));
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(Tabs, { target, props: { tabs, orientation: 'vertical', level } });
+	await tick();
+	const list = target.querySelector('[role=tablist]');
+	expect(list?.getAttribute('data-tabs-variant')).toBe(variant);
+	const vertical = target.querySelector('[role=tab]')?.className ?? '';
+	const horizontal = document.body.appendChild(document.createElement('div'));
+	const flat = mount(Tabs, { target: horizontal, props: { tabs, level } });
+	await tick();
+	// the same type's look, laid out as a rail
+	for (const cls of (horizontal.querySelector('[role=tab]')?.className ?? '').split(/\s+/))
+		expect(vertical.split(/\s+/)).toContain(cls);
+	await unmount(view);
+	await unmount(flat);
+});
 
 it.each([250, 100])(
 	'page navigation keeps overflow links and the active page under More at %ipx',
