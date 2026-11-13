@@ -56,7 +56,7 @@ describe('lexical tokenizer', () => {
 	it.live('indexes CJK suffixes, pinyin syllables and joins, and Latin skeletons', () =>
 		Effect.gen(function* () {
 			yield* setup();
-			expect(yield* lexemes('北京市 Kismis')).toEqual(
+			expect(yield* lexemes('北京市 Bismis')).toEqual(
 				expect.arrayContaining([
 					'北京市',
 					'京市',
@@ -64,8 +64,8 @@ describe('lexical tokenizer', () => {
 					'bei',
 					'beijing',
 					'beijingshi',
-					'kismis',
-					'#ksms'
+					'bismis',
+					'#bsms'
 				])
 			);
 			expect(yield* lexemes('厦门')).toEqual(expect.arrayContaining(['xiamen', 'shamen']));
@@ -77,8 +77,8 @@ describe('lexical tokenizer', () => {
 	it.live('builds a prefix query from the same terms', () =>
 		Effect.gen(function* () {
 			yield* setup();
-			expect(yield* value('bolt_search_query($1, false)::text', 'kizmi')).toBe(
-				"'#ksm':* | 'kizmi':*"
+			expect(yield* value('bolt_search_query($1, false)::text', 'bizmi')).toBe(
+				"'#bsm':* | 'bizmi':*"
 			);
 			expect(yield* value('bolt_search_query($1, true)::text', 'bei jing')).toBe(
 				"'bei':* & 'jing':*"
@@ -100,7 +100,7 @@ describe('lexical tokenizer', () => {
 				expect(yield* hit('北京市朝阳区建国路', 'beijing')).toBe(true);
 				expect(yield* hit('北京市朝阳区建国路', '朝阳')).toBe(true);
 				expect(yield* hit('Москва', 'moskva')).toBe(true);
-				expect(yield* hit('Kismis Raya Bakery', 'kizmis')).toBe(true);
+				expect(yield* hit('Bismis Raya Bakery', 'bizmis')).toBe(true);
 				expect(yield* hit('Kimchi House', 'zzqx')).toBe(false);
 				// a possessive names its owner ("Bob's jobs" found no Bob Tan), and still prefixes a stored possessive
 				const found = Effect.fnUntraced(function* (doc: string, term: string) {

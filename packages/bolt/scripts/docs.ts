@@ -702,7 +702,7 @@ export const generateDocs = Effect.try({
 					summary,
 					...(text.replace(/\s+/g, ' ').trim() !== summary ? { docs: text } : {}),
 					...(params.length === 0 ? {} : { params }),
-					source: `${posix(relative(root, sf.fileName))}:${sf.getLineAndCharacterOfPosition(v.at.getStart()).line + 1}`,
+					source: `packages/${posix(relative(root, sf.fileName))}:${sf.getLineAndCharacterOfPosition(v.at.getStart()).line + 1}`,
 					group: path(v.at)[0] === 'templates' ? 'templates' : 'workspace'
 				};
 			});

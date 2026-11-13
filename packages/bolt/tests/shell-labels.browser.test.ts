@@ -153,6 +153,8 @@ it('an audited write is named after its writes, in the catalog’s words', async
 		.element(page.getByText('Updated Sales orders, Created Lines', { exact: true }).first())
 		.toBeVisible();
 	expect(rows.every((row) => row.includes('Sales orders'))).toBe(true);
+	// the Who column names the person from the event's label while the directory has not answered
+	expect(rows.every((row) => row.includes('Ada'))).toBe(true);
 });
 
 it('the approvals table heads its record kind in words and shows the model’s label', async () => {

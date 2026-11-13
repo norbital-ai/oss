@@ -150,6 +150,8 @@ it.effect('the reference holds every public entry point, every verb, and a doc c
 		])
 	);
 	expect(docs.symbol('bolt-cli/cli', 'bolt templates lock')?.params?.map((p) => p.name)).toEqual(['--filter', '--check']);
+	// every source path is realm-relative under `packages/`, as the website links it
+	expect(docs.symbol('bolt-cli/cli', 'bolt templates lock')?.source).toMatch(/^packages\/bolt-cli\/src\/cli\/.+:\d+$/);
 	expect(docs.index().missing).toEqual([]);
 	for (const name of ['Table', 'Board', 'Chart', 'RecordShell', 'Form', 'Field', 'Show', 'Editor', 'ToolbarSearch', 'Combobox'])
 		expect(docs.symbol('ui', name)?.props?.length, name).toBeGreaterThan(0);

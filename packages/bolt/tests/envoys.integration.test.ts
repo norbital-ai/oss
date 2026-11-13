@@ -213,7 +213,7 @@ const setup = Effect.gen(function* () {
 	const job = () =>
 		Effect.gen(function* () {
 			const o = (yield* act_reply(r, (yield* t.as(t.admin)).authority, {
-				acts: { 'jobs.create': [{ title: 'Kismis', status: 'open' }] },
+				acts: { 'jobs.create': [{ title: 'Bismis', status: 'open' }] },
 				issued_at: t.clock.now()
 			})).outcome;
 			if (o.kind !== 'committed') throw new Error(o.kind);

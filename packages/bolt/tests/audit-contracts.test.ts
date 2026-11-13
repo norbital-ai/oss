@@ -15,6 +15,7 @@ import { audit_shape } from '../src/engine/audit.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
 import { auditRecord, storedAuditEvent, StoredAuditRecord } from '../src/node/audit-storage.ts';
+import { auditActor } from '../src/engine/audit-operation.ts';
 
 const event: AuditEvent = {
 	id: 'act-1/accounts/account-1/2/committed',
@@ -36,6 +37,16 @@ const stored = {
 	payload_bytes: new TextEncoder().encode(JSON.stringify(event.payload)).byteLength
 };
 const record: AuditRecord = { ...event, ...stored };
+
+it('a member actor is recorded with their handle, so the audit names a person without the directory', () => {
+	const member = {
+		kind: 'member', id: 'member-1', email: 'avery@example.test', phone: null, external: false,
+		teams: [], team_path: [], admin: false, party: null
+	} as const;
+	expect(auditActor(member)).toEqual({ kind: 'member', id: 'member-1', label: 'avery@example.test' });
+	expect(auditActor({ ...member, email: null, phone: '+6500000000' }).label).toBe('+6500000000');
+	expect(auditActor({ kind: 'api_key', key: 'k1' })).toEqual({ kind: 'api_key', id: 'k1', label: null });
+});
 
 it('preserves format:1 disk metadata and opaque payload keys behind the public audit adapter', () => {
 	const payload = { operationId: 'provider-owned', recordedAt: 'verbatim', payloadBytes: 'µΩ' };

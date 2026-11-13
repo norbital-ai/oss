@@ -24,7 +24,8 @@ const jsonPayload = (value: unknown) =>
 	);
 export const auditActor = (actor: EngineActor): AuditActor => ({
 	kind: actor.kind,
-	label: null,
+	// a person's handle as of the event; the audit view names them by their current directory name when it has one
+	label: actor.kind === 'member' ? (actor.email ?? actor.phone) : null,
 	id:
 		actor.kind === 'member'
 			? actor.id

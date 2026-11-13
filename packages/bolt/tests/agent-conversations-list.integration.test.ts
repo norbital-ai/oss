@@ -118,7 +118,7 @@ layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
 				yield* s.agent.post({
 					conversation: first,
 					as: { member: 'ann' },
-					text: 'Draft the Kismis quote\nwith two lines'
+					text: 'Draft the Bismis quote\nwith two lines'
 				});
 				s.t.clock.advance('1s');
 				const second = yield* s.agent.start({ owner: 'ann', title: 'Budget review' });
@@ -133,7 +133,7 @@ layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
 				expect(rows.map((c) => c.id)).toEqual([second, first]);
 				expect(rows.map((c) => c.title)).toEqual([
 					'Budget review',
-					'Draft the Kismis quote\nwith two lines'
+					'Draft the Bismis quote\nwith two lines'
 				]);
 				expect(rows.map((c) => c.id)).not.toContain(other);
 			})

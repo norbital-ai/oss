@@ -296,6 +296,8 @@ it.live('a row its held delete keeps is listed in place, marked pending deletion
 		const held = element<HTMLElement>(target, '[data-table-wide] tbody tr[data-pending-delete]');
 		assert.match(textOf(held), /B/);
 		assert.match(held.title, /^Pending deletion · Requested by Ada/);
+		// visible on the row itself, not only in its tooltip
+		assert.equal(textOf(element<HTMLElement>(held, '[data-pending-delete-badge]')).trim(), 'Pending deletion');
 		assert.equal(
 			target.querySelectorAll('[data-table-wide] tbody tr[data-pending-delete]').length,
 			1

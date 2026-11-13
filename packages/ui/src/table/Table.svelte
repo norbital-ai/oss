@@ -187,6 +187,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	import Overflow from '../cell/Overflow.svelte';
 	import ApprovalAccent from '../approval/ApprovalAccent.svelte';
 	import { approvalOf, approvalText } from '../approval/row.js';
+	import Badge from '../primitives/badge/badge.svelte';
 
 	let {
 		ctx,
@@ -1430,6 +1431,11 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 														]}
 														title={fullText(row, col.field) || undefined}
 													>
+														{#if ci === 0 && held?.pending_delete === true}<Badge
+																variant="destructive"
+																class="mr-1.5 align-middle"
+																data-pending-delete-badge>{msg(text, 'table.pendingDelete')}</Badge
+															>{/if}
 														{@render cell(row, col, ci === 0 && opens)}
 													</div>
 												{/if}

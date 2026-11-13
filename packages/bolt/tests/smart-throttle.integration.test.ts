@@ -347,10 +347,10 @@ describe('hold: at most 3 s, once', () => {
 	it.live('a complete message goes at once, asked once', () =>
 		Effect.gen(function* () {
 			yield* open();
-			yield* say(DM, 'mark the Kismis job done');
+			yield* say(DM, 'mark the Bismis job done');
 			yield* t.settled();
 			expect(port.inputs.map((i) => i.asked)).toEqual([['text', 'hold']]);
-			expect((yield* row('mark the Kismis job done'))['delivered_turn']).not.toBeNull();
+			expect((yield* row('mark the Bismis job done'))['delivered_turn']).not.toBeNull();
 			expect(yield* queued()).toEqual([]);
 		})
 	);
@@ -358,9 +358,9 @@ describe('hold: at most 3 s, once', () => {
 		Effect.gen(function* () {
 			yield* open();
 			port.script = [{ action: 'wait', hold: 2 }];
-			yield* say(DM, 'the Kismis job and');
+			yield* say(DM, 'the Bismis job and');
 			yield* covered();
-			expect(yield* row('the Kismis job and')).toMatchObject({ state: 'pending' });
+			expect(yield* row('the Bismis job and')).toMatchObject({ state: 'pending' });
 			expect(String((yield* queued())[0]?.['due'])).toBe(
 				(yield* q(`SELECT $1::timestamptz::text AS due`, until(2)))[0]?.['due']
 			);
@@ -373,7 +373,7 @@ describe('hold: at most 3 s, once', () => {
 			yield* t.settled();
 			expect(port.inputs).toHaveLength(1); // a hold is spent once: nothing is left to ask a direct conversation
 			expect(ai.requests).toHaveLength(1);
-			expect(ai.requests[0]?.slice(-2)).toEqual(['the Kismis job and', 'the van']);
+			expect(ai.requests[0]?.slice(-2)).toEqual(['the Bismis job and', 'the van']);
 			expect(yield* queued()).toEqual([]);
 		})
 	);
@@ -495,7 +495,7 @@ describe('filter: only an envoy group', () => {
 			yield* open();
 			port.script = ['ignore'];
 			const sentBefore = t.fakes.links.sent.length;
-			yield* say(DM, '@bot the Kismis job needs a contractor', {
+			yield* say(DM, '@bot the Bismis job needs a contractor', {
 				...group(2),
 				invocation: 'mention'
 			});

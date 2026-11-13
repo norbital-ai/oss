@@ -353,7 +353,8 @@ reason and confirm.
 			{@const last = [...v.log].reverse().find((e) => DECISIVE.has(e.move))}
 			<div class="flex flex-col gap-0.5" role="status" data-view="approval-outcome">
 				<p class="font-medium">{approvalStatus(bolt, v.status)}{last === undefined ? '' : ` · ${who(last.by)}`}</p>
-				{#if last?.reason}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
+				<!-- the history above already quotes the deciding reason -->
+				{#if last?.reason && v.log.length <= 1}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
 						“{last.reason}”
 					</p>{/if}
 			</div>

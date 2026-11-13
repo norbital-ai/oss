@@ -1237,7 +1237,8 @@ it.live('a record its rejected create removed keeps its label, its outcome and n
 		]);
 		assert.match(textOf(element<HTMLElement>(target, '[data-record-head] h2')), /Duplicate buyer/);
 		assert.equal(target.querySelector('[data-view=approval-badge]'), null);
-		assert.match(textOf(element<HTMLElement>(target, '[data-view=approval-outcome]')), /Rejected · Sam.*Already on file/s);
+		assert.match(textOf(element<HTMLElement>(target, '[data-view=approval-outcome]')), /Rejected · Sam/);
+		assert.match(textOf(element<HTMLElement>(target, '[data-view=approval-history]')), /Already on file/);
 	})
 );
 it.live('the approval badge says "Changes requested" in words and follows the live row, not stale capabilities', () =>

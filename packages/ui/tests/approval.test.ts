@@ -377,7 +377,7 @@ it.live('several requests: the selector defaults to the open one and switches th
 		assert.equal(nodes(target)[1]?.dataset['look'], 'rejected');
 	})
 );
-it.live('a decided request states its outcome and reason to everyone, a withdrawn one says so', () =>
+it.live('a decided request states its outcome to everyone and its reason once, a withdrawn one says so', () =>
 	Effect.gen(function* () {
 		const asked: ApprovalView = {
 			...request,
@@ -394,7 +394,9 @@ it.live('a decided request states its outcome and reason to everyone, a withdraw
 		const changes = yield* panel([asked]);
 		const outcome = element<HTMLElement>(changes.target, '[data-view=approval-outcome]');
 		assert.match(textOf(outcome), /Changes requested · Sam/);
-		assert.match(textOf(element<HTMLElement>(outcome, '[data-reason]')), /Attach the receipt/);
+		// the reason is quoted once, in the history, not again on the closing line
+		assert.deepEqual([...changes.target.querySelectorAll('[data-view=approval-history] [data-reason]')].map(textOf), ['“Attach the receipt”']);
+		assert.equal(outcome.querySelector('[data-reason]'), null);
 		const withdrawn = yield* panel([
 			{
 				...request,

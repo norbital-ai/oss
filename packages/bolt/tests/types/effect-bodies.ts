@@ -140,7 +140,7 @@ automation({
 		const page = ctx.web.read('https://a.test');
 		is<Eq<Effect.Error<typeof page>, FacilityFailure | Unavailable>>();
 		const hits = yield* ctx.geo
-			.search('Kismis')
+			.search('Bismis')
 			.pipe(Effect.catchTag('Unavailable', () => Effect.succeed([])));
 		void hits;
 		yield* ctx.progress({ text: 'done' });
@@ -207,7 +207,7 @@ childRun.pipe(
 );
 
 // ── geo may fail at the facility boundary or have no provider ──
-const geocoded = automationCtx.geo.search('Kismis');
+const geocoded = automationCtx.geo.search('Bismis');
 const reversed = automationCtx.geo.reverse({ lat: 1.33, lng: 103.77 });
 is<Eq<Effect.Error<typeof geocoded>, FacilityFailure | Unavailable>>();
 is<Eq<Effect.Error<typeof reversed>, FacilityFailure | Unavailable>>();

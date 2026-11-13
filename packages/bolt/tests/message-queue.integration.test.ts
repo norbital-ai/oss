@@ -244,10 +244,10 @@ describe('the message queue', () => {
 					const p = yield* panel();
 					p.holds();
 					yield* p.post('draft a note');
-					yield* p.post('for the Kismis job');
+					yield* p.post('for the Bismis job');
 					expect(p.turns).toHaveLength(0);
 					yield* p.respondNow;
-					expect(p.turns).toEqual([['draft a note', 'for the Kismis job']]);
+					expect(p.turns).toEqual([['draft a note', 'for the Bismis job']]);
 					yield* p.post('first part');
 					yield* p.post('second part', true);
 					expect(p.turns).toHaveLength(2);

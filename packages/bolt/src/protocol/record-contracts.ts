@@ -10,9 +10,11 @@ export type {
 	RestoreSkip
 } from '@norbital-ai/ui';
 const RowCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+/** A row's resolved label: the engine answers it on every read level, related rows included. */
+export const RowLabelField = { $label: Schema.optionalKey(Schema.NullOr(Schema.String)) };
 /** Native root-row state shared by query answers and declared row outputs. */
 export const RowStateFields = {
-	$label: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	...RowLabelField,
 	$sync: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({
 		status: Schema.Literals(['pending', 'ok', 'failed']), message: Schema.optionalKey(Schema.String)
 	}))),

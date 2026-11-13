@@ -4,7 +4,7 @@ import type { Json } from '@norbital-ai/store';
 import type { AggRow, Page, Paged, ReadAnswer, ReadRequestBase } from '../decl/ctx.ts';
 import { ReadFailed } from '../decl/errors.ts';
 import { decode_read_request, type LayerRequestJson } from './read-request.ts';
-import { RowStateFields } from './record-contracts.ts';
+import { RowLabelField, RowStateFields } from './record-contracts.ts';
 import { kind_value } from './output-contract.ts';
 
 /** Exact field descriptors of each granted output; a layer uses its root's grant, never its target's root grant. */
@@ -145,7 +145,7 @@ export function read_answer(catalog: ReadCatalog, request: unknown): Codec {
 					? aggregate(target, child_node.aggregate, false)
 					: target.many ? Schema.Array(row(child)) : Schema.NullOr(row(child)));
 			}
-			if (path === root) for (const [name, field] of Object.entries(RowStateFields)) fields.set(name, field);
+			for (const [name, field] of Object.entries(path === root ? RowStateFields : RowLabelField)) fields.set(name, field);
 			if (distance) fields.set('$distance', Schema.Finite);
 			return Schema.Struct(Object.fromEntries(fields));
 		};

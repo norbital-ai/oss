@@ -116,7 +116,7 @@ const mixed = automation({
 		});
 		// ctx.ai.embed takes text and files
 		void ((yield* ctx.ai.embed(['a caption', ref0])) satisfies readonly (readonly number[])[]);
-		const hits = yield* ctx.geo.search('Kismis');
+		const hits = yield* ctx.geo.search('Bismis');
 		if (!('kind' in hits)) void hits.map((h) => h.point.lat);
 		const ref: FileRef = yield* ctx.files.put(new Uint8Array(), {
 			name: 'a.txt',

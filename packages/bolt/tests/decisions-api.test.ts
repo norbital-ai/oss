@@ -77,7 +77,7 @@ const request: System1Request = {
 		pending: [
 			{
 				from: 'Ann',
-				text: 'the pump at Kismis',
+				text: 'the pump at Bismis',
 				attachments: [{ name: 'p.png', mime: 'image/png', size: 2 }]
 			}
 		]

@@ -170,10 +170,9 @@ sits under the table there. -->
 		)
 	);
 	const nameOf = (actor: AuditSummary['actor']) =>
+		(actor.kind === 'member' ? names.get(actor.id ?? '') : undefined) ||
 		actor.label ||
-		(actor.kind === 'member'
-			? (names.get(actor.id ?? '') ?? actorName('member'))
-			: actorName(actor.kind));
+		actorName(actor.kind);
 	const error = $derived(customError ?? page.error?.message ?? null);
 	const activeFilters = $derived(
 		[
