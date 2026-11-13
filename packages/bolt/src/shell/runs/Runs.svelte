@@ -124,14 +124,14 @@
 			: { namespace: automation.slice(0, dot), name: automation.slice(dot + 1) };
 	};
 	const NAMESPACE_ICONS: Readonly<Record<string, string>> = {
-		automation: 'lucide:workflow',
-		effect: 'lucide:git-commit-horizontal',
-		sync: 'lucide:refresh-cw',
+		automation: 'concept:automations',
+		effect: 'concept:effects',
+		sync: 'concept:integrations',
 		bolt: 'lucide:zap',
-		agent: 'lucide:sparkles',
+		agent: 'concept:agents',
 		envoys: 'lucide:send',
 		notifications: 'lucide:bell',
-		integrations: 'lucide:plug',
+		integrations: 'concept:integrations',
 		link: 'lucide:link'
 	};
 	const runRow = (r: RunView) => {

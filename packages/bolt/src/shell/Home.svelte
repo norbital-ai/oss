@@ -95,7 +95,7 @@
 								class="mt-2"
 								onclick={() => on_ask(t('Build my first app: '))}
 								data-home-ask
-								><Icon name="lucide:sparkles" class="size-3.5" />{t(
+								><Icon name="concept:agents" class="size-3.5" />{t(
 									'Ask Norbius to build your first app'
 								)}</Button
 							>{/if}

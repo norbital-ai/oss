@@ -133,32 +133,45 @@ A model's records placed by a `point` field on the host's keyless basemap, with 
 		layer: LayerGroup | undefined,
 		L: typeof import('leaflet') | undefined;
 
+	/** A point's mark: its initial in an accent ring, and under it its label as a pill when labels are `always`. */
+	function point_mark(text: string, shown: 'hover' | 'always'): HTMLElement {
+		const root = document.createElement('span');
+		root.className = 'map-point';
+		const mark = root.appendChild(document.createElement('span'));
+		mark.className = 'map-point-mark';
+		mark.textContent = text.trim().charAt(0).toUpperCase() || '•';
+		if (shown === 'always' && text) {
+			const pill = root.appendChild(document.createElement('span'));
+			pill.className = 'map-point-pill';
+			pill.textContent = text;
+		}
+		return root;
+	}
 	function draw() {
 		if (map === undefined || layer === undefined || L === undefined) return;
 		layer.clearLayers();
 		for (const o of overlays) {
-			if (o.from)
-				L.polyline(
-					[
-						[o.from.lat, o.from.lng],
-						[o.lat, o.lng]
-					],
-					{ weight: 2, dashArray: '6 6', opacity: 0.7 }
-				).addTo(layer);
+			if (o.from) {
+				const route: [number, number][] = [
+					[o.from.lat, o.from.lng],
+					[o.lat, o.lng]
+				];
+				L.polyline(route, { weight: 10, className: 'map-route-glow', interactive: false }).addTo(layer);
+				L.polyline(route, { weight: 2, className: 'map-route', interactive: false }).addTo(layer);
+			}
 			const m = L.circleMarker([o.lat, o.lng], {
-				radius: 5,
-				fillOpacity: 0.15,
-				dashArray: '2 3'
+				radius: 6,
+				dashArray: '2 3',
+				className: 'map-mark'
 			}).addTo(layer);
-			if (o.text) m.bindTooltip(o.text, { direction: 'bottom', opacity: 0.85 });
+			if (o.text) m.bindTooltip(o.text, { direction: 'bottom' });
 		}
 		for (const p of points) {
-			const m = L.circleMarker([p.lat, p.lng], { radius: 7, fillOpacity: 0.6 }).addTo(layer);
-			if (p.text)
-				m.bindTooltip(
-					p.text,
-					labels === 'always' ? { permanent: true, direction: 'right', offset: [8, 0] } : {}
-				);
+			const m = L.marker([p.lat, p.lng], {
+				icon: L.divIcon({ className: '', iconSize: [0, 0], html: point_mark(p.text, labels) }),
+				keyboard: interactive
+			}).addTo(layer);
+			if (p.text && labels === 'hover') m.bindTooltip(p.text, { direction: 'top', offset: [0, -18] });
 			if (interactive) m.on('click', () => open_record(of, p.id));
 		}
 		const all = [...points, ...overlays].map((p): [number, number] => [p.lat, p.lng]);
@@ -245,7 +258,7 @@ A model's records placed by a `point` field on the host's keyless basemap, with 
 <ReadGate {ctx} state={page} what={labelOf(bolt, of)}>
 	{#snippet children(value)}
 		<div class="flex flex-col gap-1" data-view="map">
-			<div class="h-80 w-full rounded-md border" {@attach mount}></div>
+			<div class="isolate z-0 h-80 w-full overflow-clip rounded-lg border" {@attach mount}></div>
 			{#if failed}<p class="text-muted-foreground text-xs">
 					{msg(bolt, 'map.tiles')}
 				</p>{/if}

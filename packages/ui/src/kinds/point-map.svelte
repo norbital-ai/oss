@@ -54,7 +54,7 @@ error leaves the rest of the field working.
 					className: '',
 					iconSize: [20, 20],
 					iconAnchor: [10, 10],
-					html: '<span class="block size-5 rounded-full border-2 border-background bg-primary shadow-md"></span>'
+					html: '<span class="block size-5 rounded-full border-2 border-background bg-brand shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-brand)_25%,transparent)]"></span>'
 				})
 			}).addTo(map);
 			marker = placed;
@@ -125,9 +125,7 @@ error leaves the rest of the field working.
 
 <div
 	class={cn(
-		'relative isolate z-0 h-56 overflow-clip rounded-md border border-input bg-muted/30 sm:h-64',
-		// dark mode: the light OpenStreetMap tiles inverted into a dim map, markers and controls untouched
-		'dark:[&_.leaflet-tile-pane]:[filter:invert(1)_hue-rotate(180deg)_brightness(0.9)_contrast(0.9)]',
+		'relative isolate z-0 h-56 overflow-clip rounded-md border border-input sm:h-64',
 		disabled && 'pointer-events-none opacity-60 saturate-50',
 		className
 	)}

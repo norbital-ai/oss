@@ -143,7 +143,7 @@ export function navigation_model(boot: ShellBoot, path: string, t: Translate): N
 					{
 						key: 'norbius',
 						label: t('Norbius'),
-						icon: 'lucide:sparkles',
+						icon: 'concept:agents',
 						href: NORBIUS,
 						active: false
 					}
@@ -152,7 +152,7 @@ export function navigation_model(boot: ShellBoot, path: string, t: Translate): N
 		...(s.inbox
 			? [
 					{
-						...leaf('approvals', 'Approvals', 'lucide:shield-check', '/inbox'),
+						...leaf('approvals', 'Approvals', 'concept:approvals', '/inbox'),
 						...(boot.inbox > 0 ? { badge: String(boot.inbox) } : {})
 					}
 				]
@@ -176,11 +176,11 @@ export function navigation_model(boot: ShellBoot, path: string, t: Translate): N
 			'Settings',
 			s.settings
 				? [
-						leaf('organization', 'Organization', 'lucide:building-2', '/settings/organization'),
+						leaf('organization', 'Organization', 'concept:workspace', '/settings/organization'),
 						// a preview serves no integration endpoints: they are the live workspace's (`preview_route`)
 						...(preview
 							? []
-							: [leaf('integrations', 'Integrations', 'lucide:plug', '/settings/integrations')]),
+							: [leaf('integrations', 'Integrations', 'concept:integrations', '/settings/integrations')]),
 						leaf('secrets', 'Secrets', 'lucide:key-round', '/settings/secrets')
 					]
 				: []
@@ -189,7 +189,7 @@ export function navigation_model(boot: ShellBoot, path: string, t: Translate): N
 			...(command_center_tabs(s, boot.admin, preview).length > 0
 				? [leaf('command-center', 'Command center', 'lucide:radar', '/command-center')]
 				: []),
-			...(s.studio ? [leaf('studio', 'Workspace Studio', 'lucide:code-xml', '/studio')] : [])
+			...(s.studio ? [leaf('studio', 'Workspace Studio', 'concept:studio', '/studio')] : [])
 		]),
 		...group(
 			'portals',

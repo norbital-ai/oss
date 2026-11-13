@@ -64,8 +64,8 @@
 		secrets: 'Secrets'
 	};
 	const ICONS: { readonly [k in SettingsTab]: string } = {
-		organization: 'lucide:building-2',
-		integrations: 'lucide:plug',
+		organization: 'concept:workspace',
+		integrations: 'concept:integrations',
 		secrets: 'lucide:key-round'
 	};
 	const DESCRIPTIONS: { readonly [k in SettingsTab]: string } = {
@@ -642,12 +642,12 @@
 							{
 								name: 'connections',
 								title: t('Connections'),
-								icon: 'lucide:plug',
+								icon: 'concept:integrations',
 								body: connectionsTab
 							}
 						]
 					: []),
-				{ name: 'envoys', title: t('Envoys'), icon: 'lucide:bot', body: envoysTab },
+				{ name: 'envoys', title: t('Envoys'), icon: 'concept:agents', body: envoysTab },
 				{ name: 'keys', title: t('API keys'), icon: 'lucide:key-round', body: keysTab },
 				{ name: 'mcp', title: t('MCP servers'), icon: 'lucide:server', body: mcpTab }
 			]}

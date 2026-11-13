@@ -682,7 +682,7 @@
 					orientation="horizontal"
 					bind:value={active_tab}
 					tabs={[
-						{ name: 'connection', title: t('Connection'), icon: 'lucide:plug', body: connectionTab, keep_alive: true },
+						{ name: 'connection', title: t('Connection'), icon: 'concept:integrations', body: connectionTab, keep_alive: true },
 						{
 							name: 'settings',
 							title: t('Configuration'),

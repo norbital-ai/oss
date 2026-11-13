@@ -141,12 +141,16 @@ export const scopeKind = (scope: SearchScope) =>
 	})[scope.kind];
 export const scopeIcon = (scope: SearchScope) =>
 	scope.kind === 'model'
-		? 'lucide:database'
+		? 'concept:models'
 		: scope.kind === 'app'
-			? 'lucide:layout-grid'
-			: scope.kind === 'automation' || scope.kind === 'sync'
-				? 'lucide:workflow'
-				: 'lucide:box';
+			? 'concept:apps'
+			: scope.kind === 'automation'
+				? 'concept:automations'
+				: scope.kind === 'sync'
+					? 'concept:integrations'
+					: scope.kind === 'workspace'
+						? 'concept:workspace'
+						: 'lucide:box';
 export const canDrill = (scope: SearchScope) =>
 	scope.kind === 'app' || (scope.kind === 'model' && scope.searchable);
 export const scopeHref = (scope: SearchScope) =>
@@ -387,7 +391,7 @@ export const recordMentions = Effect.fn('Finder.recordMentions')(function* (
 			id: 'scope',
 			label: scope.label,
 			description: `${t(scopeKind(scope))}${scope.description ? ` · ${scope.description}` : ''}`,
-			icon: scope.kind === 'model' ? 'lucide:database' : 'lucide:layout-grid',
+			icon: scopeIcon(scope),
 			insert: '/',
 			keep: true,
 			back: true

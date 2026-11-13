@@ -9,5 +9,5 @@
 	aria-hidden="true"
 	data-agent-avatar={id}
 >
-	<Icon name="lucide:bot" class="size-full" />
+	<Icon name="concept:agents" class="size-full" />
 </span>

@@ -2,9 +2,9 @@
 // system maps to exactly one icon. All icon consumers resolve through this
 // registry — never hardcode icon strings directly.
 //
-// References may point to Iconify or the canonical `product:*` icon family.
-// Render them through `IconWrapper` so product concepts never drift to a
-// substitute glyph in another surface.
+// References may point to Iconify or a Bolt concept's own icon (`concept:*`,
+// `@norbital-ai/ui/brand`'s `ConceptIcon`). Render them through `IconWrapper`
+// so product concepts never drift to a substitute glyph in another surface.
 
 export const ENTITY_ICONS = {
 	// ── Data types (Postgres column types) ──────────────────────────
@@ -29,17 +29,17 @@ export const ENTITY_ICONS = {
 
 	// ── System modules / features ───────────────────────────────────
 	module: {
-		accessControl: 'product:organization',
-		agents: 'product:norbius',
-		applications: 'product:apps',
-		approvals: 'product:approvals',
-		automations: 'product:automations',
-		workspaceStudio: 'product:studio',
+		accessControl: 'concept:policies',
+		agents: 'concept:agents',
+		applications: 'concept:apps',
+		approvals: 'concept:approvals',
+		automations: 'concept:automations',
+		workspaceStudio: 'concept:studio',
 		builtin: 'lucide:blocks',
-		customApps: 'product:apps',
-		dataBrowser: 'product:models',
-		moduleStudio: 'product:studio',
-		permissions: 'product:policies',
+		customApps: 'concept:apps',
+		dataBrowser: 'concept:models',
+		moduleStudio: 'concept:studio',
+		permissions: 'concept:policies',
 		tasks: 'lucide:list-todo'
 	},
 

@@ -100,7 +100,7 @@
 					<span class="relative shrink-0" aria-hidden="true">
 						<AccretionDisc size={80} class="text-muted-foreground" />
 						<span class="absolute inset-0 grid place-items-center">
-							<Icon name="lucide:plug" class="size-5" />
+							<Icon name="concept:integrations" class="size-5" />
 						</span>
 					</span>
 				{/if}

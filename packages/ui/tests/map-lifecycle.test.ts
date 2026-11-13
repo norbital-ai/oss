@@ -10,9 +10,22 @@ type TileStub = { on: () => TileStub; addTo: () => TileStub };
 type GroupStub = { addTo: () => GroupStub; clearLayers: () => void };
 type MarkerStub = { addTo: () => MarkerStub; bindTooltip: (text: string, options: { permanent?: boolean }) => MarkerStub; on: () => MarkerStub };
 const leaflet = vi.hoisted(() => {
-	const markers: MarkerSnapshot[] = [], lines: unknown[] = [], fits: unknown[] = [];
-	return { maps: 0, removed: 0, clears: 0, markers, lines, fits };
+	const markers: MarkerSnapshot[] = [], lines: unknown[] = [], fits: unknown[] = [], marks: string[] = [];
+	return { maps: 0, removed: 0, clears: 0, markers, lines, fits, marks };
 });
+/** A marker's snapshot: its tooltip, or the label pill its icon hangs (`permanent`); its mark carries the accent class. */
+function marker_stub(at: readonly [number, number], html: HTMLElement | null): MarkerStub {
+	const pill = html?.querySelector('.map-point-pill')?.textContent ?? null;
+	if (html !== null) leaflet.marks.push(html.querySelector('.map-point-mark')?.textContent ?? '');
+	const data: MarkerSnapshot = { at, text: pill, permanent: pill !== null, clickable: false };
+	leaflet.markers.push(data);
+	const marker: MarkerStub = {
+		addTo: () => marker,
+		bindTooltip: (text: string, options: { permanent?: boolean }) => { data.text = text; data.permanent = options.permanent === true; return marker; },
+		on: () => { data.clickable = true; return marker; }
+	};
+	return marker;
+}
 vi.mock('leaflet', () => ({
 	Browser: { mobile: false },
 	map: () => {
@@ -32,20 +45,13 @@ vi.mock('leaflet', () => ({
 	layerGroup: () => {
 		const layer: GroupStub = {
 			addTo: () => layer,
-			clearLayers: () => { leaflet.clears++; leaflet.markers.splice(0); leaflet.lines.splice(0); }
+			clearLayers: () => { leaflet.clears++; leaflet.markers.splice(0); leaflet.lines.splice(0); leaflet.marks.splice(0); }
 		};
 		return layer;
 	},
-	circleMarker: (at: readonly [number, number]) => {
-		const data: MarkerSnapshot = { at, text: null, permanent: false, clickable: false };
-		leaflet.markers.push(data);
-		const marker: MarkerStub = {
-			addTo: () => marker,
-			bindTooltip: (text: string, options: { permanent?: boolean }) => { data.text = text; data.permanent = options.permanent === true; return marker; },
-			on: () => { data.clickable = true; return marker; }
-		};
-		return marker;
-	},
+	circleMarker: (at: readonly [number, number]) => marker_stub(at, null),
+	divIcon: (options: { html: HTMLElement }) => options,
+	marker: (at: readonly [number, number], options: { icon: { html: HTMLElement } }) => marker_stub(at, options.icon.html),
 	polyline: (points: unknown) => { leaflet.lines.push(points); return { addTo: () => {} }; },
 	latLngBounds: (points: unknown) => points
 }));
@@ -65,7 +71,9 @@ it('redraws changed overlay values and marker options without replacing the scop
 		app.change_overlay();
 		flushSync();
 		expect(leaflet.markers).toContainEqual({ at: [3, 4], text: 'Updated destination', permanent: false, clickable: false });
-		expect(leaflet.lines).toEqual([[[5, 6], [3, 4]]]);
+		// the route is drawn twice: its accent halo, then the line
+		expect(leaflet.lines).toEqual([[[5, 6], [3, 4]], [[5, 6], [3, 4]]]);
+		expect(leaflet.marks).toEqual(['O']);
 		app.always_label();
 		flushSync();
 		expect(leaflet.markers).toContainEqual({ at: [7, 8], text: 'Office', permanent: true, clickable: true });

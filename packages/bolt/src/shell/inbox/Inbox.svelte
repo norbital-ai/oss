@@ -183,7 +183,7 @@
 <SystemPage
 	name="inbox"
 	title={t('Approvals')}
-	icon="lucide:shield-check"
+	icon="concept:approvals"
 	banner={approvalsBanner}
 	description={t('Requests awaiting your decision and requests you made.')}
 	error={message ?? inbox.error?.message ?? null}
