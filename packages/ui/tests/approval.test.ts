@@ -7,7 +7,7 @@ import { afterEach, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import type { ApprovalView, Outcome } from '../src/client/contract.ts';
 import { element } from './elements.ts';
-import { browser, required, textOf, viewFixture } from './view-fixture.ts';
+import { browser, required, textOf, viewFixture, type ViewScript } from './view-fixture.ts';
 
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
@@ -67,16 +67,17 @@ const request: ApprovalView = {
 };
 const panel = (
 	requests: readonly ApprovalView[],
-	act?: (callable: string, input: unknown) => void
+	act?: (callable: string, input: unknown) => void,
+	reply: ViewScript['act'] = () => ({ kind: 'committed', output: null, records: [] })
 ) =>
 	Effect.gen(function* () {
 		const outcomes: Outcome[] = [];
 		const { bolt } = yield* browser(() =>
 			viewFixture({
-				act: (body) => {
+				act: (body, key) => {
 					const { callable, input } = single_act(body);
 					act?.(callable, input);
-					return { kind: 'committed', output: null, records: [] };
+					return reply(body, key);
 				}
 			})
 		);
@@ -409,6 +410,11 @@ it.live('a decided request states its outcome and reason to everyone, a withdraw
 			textOf(element<HTMLElement>(withdrawn.target, '[data-view=approval-outcome]')),
 			/Withdrawn · Bob/
 		);
+		// the withdrawn step is not shown as done by the requester
+		assert.match(
+			textOf(nodes(withdrawn.target)[1]?.querySelector('[data-caption]')),
+			/^Withdrawn by Bob · /
+		);
 		const pending = yield* panel([request]);
 		assert.equal(pending.target.querySelector('[data-view=approval-outcome]'), null);
 	})
@@ -428,3 +434,62 @@ it('a row approval decodes once; a malformed `$approval` is no approval', async 
 	assert.equal(approvalOf({ $approval: { ...$approval, steps: [{ name: 'Review' }] } }), null);
 	assert.equal(approvalOf(null), null);
 });
+
+it.live('a failed decision says why in the pane and leaves the request decidable', () =>
+	Effect.gen(function* () {
+		const busy = 'This workspace is busy. Please try again shortly.';
+		const sent: unknown[] = [];
+		const { target, outcomes } = yield* panel(
+			[{ ...request, moves: [{ decision: 'reject', reason: 'required' }] }],
+			(_callable, input) => sent.push(input),
+			() => ({ kind: 'refused', code: 'rate_limited', message: busy })
+		);
+		required(decisions(target)[0]).click();
+		yield* browser(() => settle());
+		const note = element<HTMLTextAreaElement>(target, '[data-view=approval-controls] textarea');
+		note.value = 'Too costly';
+		note.dispatchEvent(new Event('input', { bubbles: true }));
+		yield* browser(() => settle());
+		element<HTMLButtonElement>(target, '[data-confirm]').click();
+		yield* browser(() => settle());
+		assert.equal(sent.length, 1);
+		assert.equal(outcomes[0]?.kind, 'refused');
+		const notice = element<HTMLElement>(target, '[data-view=approval-notice]');
+		assert.equal(notice.getAttribute('role'), 'alert');
+		assert.equal(textOf(notice).trim(), busy);
+		// the form, its reason and its confirm stay: trying again is one click
+		const form = element<HTMLFormElement>(target, '[data-view=approval-controls] form');
+		assert.equal(element<HTMLTextAreaElement>(form, 'textarea').value, 'Too costly');
+		assert.equal(element<HTMLButtonElement>(form, '[data-confirm]').disabled, false);
+	})
+);
+
+it.live('a resubmitted request keeps its earlier rounds in the pane: changes asked and why, then resubmitted', () =>
+	Effect.gen(function* () {
+		const { target } = yield* panel([
+			{
+				...request,
+				log: [
+					...request.log,
+					entry('request_changes', 'Sam', '2026-10-14T12:00:00Z', {
+						to: 'ChangesRequested',
+						reason: 'Add the quote'
+					}),
+					entry('resubmit', 'Bob', '2026-10-15T12:00:00Z', {
+						from: 'ChangesRequested',
+						changed: ['title']
+					})
+				]
+			}
+		]);
+		const history = element<HTMLElement>(target, '[data-view=approval-history]');
+		assert.deepEqual(
+			[...history.querySelectorAll<HTMLElement>('[data-move]')].map((li) => li.dataset['move']),
+			['request', 'request_changes', 'resubmit']
+		);
+		assert.match(
+			textOf(history),
+			/Requested changes · Sam.*“Add the quote”.*Resubmitted · Bob.*Changed: Title/s
+		);
+	})
+);

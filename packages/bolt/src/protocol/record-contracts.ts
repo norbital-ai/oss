@@ -21,7 +21,8 @@ export const RowStateFields = {
 		state: Schema.Literals(['Pending', 'ChangesRequested']),
 		step: RowCount,
 		steps: Schema.Array(Schema.Struct({ name: Schema.String, teams: Schema.Array(Schema.String), users: Schema.Array(Schema.String) })),
-		requested_by: Schema.String
+		requested_by: Schema.String,
+		pending_delete: Schema.optionalKey(Schema.Literal(true))
 	}))
 };
 const Reason = Schema.Literals([

@@ -60,7 +60,8 @@ A routed write commits at once, held by its request; `pending_approval` carries 
 
 - `ctx.approvals.decide(id, { decision, reason? })`; reject and request_changes need a reason. Comments exist only as decision reasons. Render the view's `moves`; never infer eligibility.
 - Only the requester withdraws an open request, through `ctx.approvals.decide(id, { decision: 'withdraw' })` on a page. An approver rejects instead. Automations and model effects take no decision.
-- Rollback restores updates, deletes creates, re-creates deletes, as `restored` history. Missing fields are reported and skipped. Roll-ups follow their rows.
+- A held delete commits only its request: its transform runs at once (a refusal answers at once), its rows stay, read with `$approval.pending_delete`, and nothing it carries commits. Approval asks the transform again (`ctx.approving`) and deletes the rows with its `with` and `on_approved` in the decision's commit; reject and withdraw change nothing.
+- Rollback restores updates, deletes creates, re-creates deletes an approver made while joining, as `restored` history. Missing fields are reported and skipped. Roll-ups follow their rows.
 - Finished requests stay. `ctx.approvals.list({ model, records, all: true })` gives a record's history.
 - The submitter cannot review their own request, even if named, on a reviewing team, an administrator, a linked envoy sender, or previewing. Others on the same team can.
 - Resubmitting keeps the request pending even if policy would now allow directly.

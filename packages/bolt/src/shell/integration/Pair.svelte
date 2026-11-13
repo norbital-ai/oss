@@ -170,8 +170,8 @@
 		{#each fields as f (f.name)}
 			<label class="flex flex-col gap-1 text-sm">
 				<span class="text-label"
-					>{say(f.label)}{#if f.optional === true}
-						<span class="text-meta">({t('optional')})</span>{/if}</span
+					>{say(f.label)}{#if f.optional === true}{' '}<span class="text-meta">({t('optional')})</span
+						>{/if}</span
 				>
 				{#if f.options !== undefined}
 					<!-- a choice: the first option is the default, so an untouched control sends nothing -->

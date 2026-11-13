@@ -289,9 +289,9 @@ it.live(
 				{ callable: 'jobs.delete', input: [{ target: { id: 'c', revision: 1 } }] }
 			]);
 			assert.deepEqual(confirmations, [
-				'Delete 1 records?',
-				'Delete 1 records?',
-				'Delete 1 records?'
+				'Delete 1 record?',
+				'Delete 1 record?',
+				'Delete 1 record?'
 			]);
 			assert.equal(target.querySelector('[data-selected-count]'), null);
 			assert.equal(select(target, 'c').getAttribute('aria-checked'), 'false');

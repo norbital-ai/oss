@@ -47,9 +47,11 @@ The page's toasts, bottom right (bottom centre on a phone, above the safe area).
 					/>{/if}
 				<div class="min-w-0 flex-1">
 					<p class="font-medium break-words">{toast.text}</p>
-					{#if toast.description}<p class="text-muted-foreground mt-0.5 break-words">
-							{toast.description}
-						</p>{/if}
+					<!-- a report keeps its lines and scrolls inside the toast, never past it -->
+					{#if toast.description}<p
+							class="text-muted-foreground mt-0.5 max-h-48 overflow-y-auto break-words whitespace-pre-line"
+							data-toast-description
+						>{toast.description}</p>{/if}
 				</div>
 				<button
 					type="button"

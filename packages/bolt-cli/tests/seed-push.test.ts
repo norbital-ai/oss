@@ -51,3 +51,56 @@ it.live('a seed that does not restore is refused before the host is called', () 
 		expect(calls).toEqual(['http://host.test/__colony/ops']);
 	}).pipe(Effect.scoped)
 );
+
+it.live("a bank row's `{ asset }` file value restores as the file reference the host stores", () =>
+	Effect.gen(function* () {
+		const original = globalThis.fetch;
+		globalThis.fetch = async () => Response.json({ value: null });
+		yield* Effect.addFinalizer(() => Effect.sync(() => (globalThis.fetch = original)));
+		const withFile = Result.getOrThrow(
+			decode_projected_manifest({
+				workspace: { tz: 'UTC', locale: 'en' },
+				models: {
+					photos: {
+						description: 'A photo',
+						record_label: 'record.id',
+						fields: {
+							photo: { kind: 'file', accept: ['image/jpeg'], max: '1MiB' },
+							pages: { kind: 'file', accept: ['image/jpeg'], max: '1MiB', many: true, optional: true }
+						}
+					}
+				},
+				relationships: {},
+				exposures: { photos: { outputs: { default: { photos: { fields: 'all' } } } } },
+				integrations: {},
+				policies: {},
+				teams: {},
+				automations: {},
+				mcp: {},
+				apps: {},
+				custom_fields: {},
+				agent: { skills: {} }
+			})
+		);
+		const bytes = new TextEncoder().encode('jpeg');
+		yield* pushSeed(
+			withFile,
+			{
+				tree: 'acme',
+				rows: {
+					photos: [
+						{
+							id: '0190f1e2-3c4d-7e8f-9a0b-1c2d3e4f5a6b',
+							photo: { asset: 'assets/a.jpg' },
+							pages: [{ asset: 'assets/a.jpg' }]
+						}
+					]
+				},
+				start: [],
+				assets: [{ path: 'assets/a.jpg', sha256: 'a'.repeat(64), bytes: bytes.byteLength, content_type: 'image/jpeg' }],
+				bytes: () => bytes
+			},
+			target
+		);
+	}).pipe(Effect.scoped)
+);

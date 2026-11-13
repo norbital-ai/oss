@@ -32,7 +32,7 @@ reason and confirm.
 	import { bolt_of } from '../client/context.js';
 	import { label, msg, catalogText } from '../text/messages.js';
 	import { skipText } from '../record/history.js';
-	import { approvalStatus } from './row.js';
+	import { approvalStatus, moveText } from './row.js';
 
 	let { ctx, requests, on_outcome }: ApprovalPanelProps = $props();
 	const bolt = $derived(bolt_of(ctx));
@@ -77,15 +77,6 @@ reason and confirm.
 			null
 	);
 
-	const MOVE_TEXT: Readonly<Record<Entry['move'], string>> = {
-		request: 'Requested',
-		approve: 'Approved',
-		reject: 'Rejected',
-		request_changes: 'Requested changes',
-		resubmit: 'Resubmitted',
-		supersede: 'Superseded',
-		withdraw: 'Withdrew'
-	};
 	const DECISION_TEXT: Readonly<Record<Move['decision'], string>> = {
 		approve: 'Approve',
 		reject: 'Reject',
@@ -138,7 +129,9 @@ reason and confirm.
 							? lookText(look)
 							: last === undefined
 								? ''
-								: `${who(last.by)} · ${day(last.at)}`,
+								: look === 'withdrawn'
+									? `${msg(bolt, 'approval.withdrawnBy', { who: who(last.by) })} · ${day(last.at)}`
+									: `${who(last.by)} · ${day(last.at)}`,
 					look,
 					entries
 				};
@@ -170,7 +163,8 @@ reason and confirm.
 	let chosen = $state<{ request: string; move: Move } | null>(null);
 	let reason = $state('');
 	let busy = $state(false);
-	let notice = $state<string | null>(null);
+	// a decision's answer; a failed one is an alert and leaves the form as it was, to try again
+	let notice = $state<{ text: string; failed: boolean } | null>(null);
 	function decide(v: ApprovalView, move: Move) {
 		if (busy || (move.reason === 'required' && reason.trim() === '')) return;
 		busy = true;
@@ -184,7 +178,10 @@ reason and confirm.
 			).pipe(
 				Effect.tap((outcome) =>
 					Effect.sync(() => {
-						notice = outcomeText(bolt, outcome);
+						notice = {
+							text: outcomeText(bolt, outcome),
+							failed: outcome.kind !== 'committed' && outcome.kind !== 'pending_approval' && outcome.kind !== 'running'
+						};
 						if (outcome.kind === 'committed') {
 							reason = '';
 							chosen = null;
@@ -198,7 +195,9 @@ reason and confirm.
 					})
 				)
 			),
-			(error) => { notice = bolt.t(error.message); }
+			(error) => {
+				notice = { text: bolt.t(error.message), failed: true };
+			}
 		);
 	}
 </script>
@@ -206,7 +205,7 @@ reason and confirm.
 {#snippet entry(v: ApprovalView, e: Entry)}
 	<li class="flex flex-col gap-0.5" data-move={e.move}>
 		<p class="text-sm font-medium">
-			{catalogText(bolt, `approval.move.${e.move}`, MOVE_TEXT[e.move])} · {who(e.by)}
+			{moveText(bolt, e.move)} · {who(e.by)}
 		</p>
 		<p class="text-meta"><time datetime={e.at}>{at(e.at)}</time></p>
 		{#if e.reason}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
@@ -339,6 +338,16 @@ reason and confirm.
 			{/each}
 		</ol>
 
+		{#if v.log.length > 1}
+			<!-- every round in order (requested, changes asked and why, resubmitted, …), not only the current step's -->
+			<section class="flex flex-col gap-2" data-view="approval-history">
+				<p class="text-label">{msg(bolt, 'approval.history')}</p>
+				<ol class="flex flex-col gap-2">
+					{#each v.log as e, k (k)}{@render entry(v, e)}{/each}
+				</ol>
+			</section>
+		{/if}
+
 		{#if v.status !== 'Pending'}
 			<!-- where the request stands and why, for the requester and the approvers alike, not only inside a step's popover -->
 			{@const last = [...v.log].reverse().find((e) => DECISIVE.has(e.move))}
@@ -419,6 +428,12 @@ reason and confirm.
 			</div>
 		{/if}
 
-		{#if notice}<p role="status" class="text-muted-foreground">{notice}</p>{/if}
+		{#if notice}<p
+				role={notice.failed ? 'alert' : 'status'}
+				class={notice.failed ? 'text-destructive' : 'text-muted-foreground'}
+				data-view="approval-notice"
+			>
+				{notice.text}
+			</p>{/if}
 	</div>
 {/if}

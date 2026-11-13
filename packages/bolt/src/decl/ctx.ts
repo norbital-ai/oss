@@ -734,9 +734,10 @@ export type CarriedWrites = {
 	};
 };
 /**
- * What a write carries: `with`, part of the write (held with it, rolled back with it, like owned children); and
- * `on_approved`, what follows once it is approved: at once when no approval holds it, else in the approving decision's
- * one commit (the decision asks the callback again, `ctx.approving`), never when it is rejected.
+ * What a write carries: `with`, part of the write (held with it, rolled back with it, like owned children; a held
+ * delete's waits for the decision that deletes); and `on_approved`, what follows once it is approved: at once when no
+ * approval holds it, else in the approving decision's one commit (the decision asks the callback again,
+ * `ctx.approving`), never when it is rejected.
  */
 export type Carried = { readonly with?: CarriedWrites; readonly on_approved?: CarriedWrites };
 /** What create/update transforms return: their sets in order, optionally with carried writes. */
@@ -783,7 +784,8 @@ export interface WriteCtx<in out M> extends Clock, WorkspaceQuery {
 	/**
 	 * `true` when the decision that approves a held write asks again: the rows are the records as they now stand (an
 	 * update's `{ before: row, set: {}, after: row }`), and only the answer's `on_approved` is written, in the
-	 * decision's commit. A refusal refuses the approval.
+	 * decision's commit. A held delete's rows are still stored: the decision deletes them and writes both `with` and
+	 * `on_approved`. A refusal refuses the approval.
 	 */
 	readonly approving: boolean;
 	/**

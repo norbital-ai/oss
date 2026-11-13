@@ -8,8 +8,8 @@ import type { Authority, Invocation } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { read_engine } from '../src/engine/query/engine.ts';
 import { toPred } from '../src/engine/access/pred.ts';
-import { act, record_capabilities, type WriteEngine } from '../src/engine/write/act.ts';
-import { admin, arm, authority, grants, manifest, NOW, TODAY, write_arm } from './write-fixture.ts';
+import { act, delete_verdict, record_capabilities, type WriteEngine } from '../src/engine/write/act.ts';
+import { admin, arm, authority, delete_arm, grants, manifest, NOW, TODAY, write_arm } from './write-fixture.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import type { RecordParentContext } from '../src/protocol/record-contracts.ts';
 
@@ -532,5 +532,31 @@ it.live('sync-owned fields stay readable and local fields remain writable', () =
 		expect(
 			(yield* exposure(source, { ...reader, capabilities: { ...reader.capabilities, syncs: ['orders.erp'] } }))['orders']?.syncs
 		).toEqual({ erp: { kind: 'remote', with: 'erp' } });
+	})
+);
+
+it.live('a delete verdict reads every record once and judges them in one verdict', () =>
+	Effect.gen(function* () {
+		const { db, write } = yield* setup();
+		const ids = (yield* write('orders', 'create', [{ title: 'Desk' }, { title: 'Chair' }]))
+			.filter((row) => row.model === 'orders')
+			.map((row) => row.id);
+		const auth = authority({ orders: grants('orders', { delete: [delete_arm(true)] }) });
+		const calls: Invocation[] = [];
+		let reads = 0;
+		const counted: TenantDbShape = { ...db, read: (statements) => (reads++, db.read(statements)) };
+		const engine: WriteEngine = {
+			manifest,
+			db: counted,
+			...checks(() => ({ kind: 'approve', flow: { kind: 'steps', steps: [{ name: 'Review', teams: ['t'], users: [] }], superseded_by: [] } }), calls)
+		};
+		expect(yield* delete_verdict(engine, 'orders', ids, auth, bindings)).toBe('approve');
+		expect(reads).toBe(1);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({
+			target: 'p.orders.delete',
+			input: ids.map((id) => ({ before: { id }, set: {}, after: null }))
+		});
+		expect(yield* delete_verdict(engine, 'orders', [ids[0] ?? '', crypto.randomUUID()], auth, bindings)).toBe('deny');
 	})
 );

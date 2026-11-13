@@ -9,6 +9,8 @@ import type { Settings } from '../src/shell/settings/data.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { SystemUiIntent } from '../src/protocol/system-ui.ts';
 import type { InstanceStatus } from '../src/protocol/instance-status.ts';
+import type { ReadCatalog } from '../src/protocol/read-answer.ts';
+import type { ShellBoot } from '../src/shell/nav.ts';
 import { shell_api, shell_bolt } from '../src/shell/runtime.ts';
 import './support/shell.css';
 
@@ -270,6 +272,128 @@ it('an invitation request opens the native invitation dialog without sending an 
 	}
 });
 
+it("the members table names each member's team by its label, never its handle", async () => {
+	// the table's read answers once from the fixture's fetch, with no live stream
+	Object.defineProperty(window, 'bolt_live_mode', { value: 'snapshot', configurable: true });
+	const runtime = ManagedRuntime.make(Layer.empty),
+		dispose = mount_edge(runtime);
+	const scope = Effect.runSync(Scope.make());
+	const fields = {
+		id: { kind: 'text' },
+		name: { kind: 'text' },
+		revision: { kind: 'int' },
+		email: { kind: 'text', optional: true },
+		phone: { kind: 'text', optional: true },
+		team: { kind: 'text', format: 'team', optional: true },
+		kind: { kind: 'text' },
+		admin: { kind: 'bool' },
+		active: { kind: 'bool' },
+		last_seen: { kind: 'instant', optional: true }
+	} satisfies ShellBoot['catalog'][string]['fields'];
+	const catalog: ShellBoot['catalog'] = {
+		sys_user: { record_label: 'record.name', label: ['name'], fields }
+	};
+	const read_catalog: ReadCatalog = {
+		sys_user: {
+			default: {
+				sys_user: {
+					model: 'sys_user',
+					many: false,
+					fields,
+					list_fields: Object.keys(fields)
+				}
+			}
+		}
+	};
+
+	const bolt = await runtime.runPromise(
+		shell_bolt(
+			{
+				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
+				actor: null,
+				name: null,
+				admin: true,
+				preview: null,
+				nav: [],
+				inbox: 0,
+				kiosks: [],
+				push: null,
+				visitor: null,
+				automations: {},
+				read_catalog,
+				operation_outputs: { automations: {} },
+				surfaces: { inbox: false, runs: false, settings: true, agent: false, studio: false },
+				catalog
+			},
+			{
+				fetch: async () =>
+					Response.json({
+						answers: [
+							{
+								sys_user: {
+									rows: [
+										{
+											id: 'u1',
+											name: 'Ada',
+											team: 'commercial_managers',
+											revision: 1,
+											email: 'ada@example.test',
+											phone: null,
+											kind: 'staff',
+											admin: false,
+											active: true,
+											last_seen: null
+										}
+									],
+									next: null,
+									total: 1
+								}
+							}
+						]
+					}),
+				open_stream: () => ({ onmessage: null, onerror: null, close() {} })
+			}
+		).pipe(Effect.provideService(Scope.Scope, scope))
+	);
+	const api = {
+		...nativeApi,
+		settings: () =>
+			Effect.succeed({
+				...settings,
+				teams: [{ id: 'commercial_managers', name: 'Commercial Managers' }]
+			})
+	};
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(Configuration, {
+		target,
+		props: {
+			api,
+			bolt,
+			people: true,
+			read_catalog,
+			tab: 'organization',
+			workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
+			t: (x: string) => x,
+			configuration: { key: 'members', request: { capability: 'member.manage', record: 'nobody' } }
+		}
+	});
+	const previous = { width: window.innerWidth, height: window.innerHeight };
+	// the members table, not its phone cards
+	await page.viewport(1200, 900);
+	try {
+		await expect.element(page.getByText('Commercial Managers', { exact: true }).first()).toBeVisible();
+		expect(page.getByText('commercial_managers', { exact: true }).elements()).toHaveLength(0);
+	} finally {
+		Reflect.deleteProperty(window, 'bolt_live_mode');
+		await page.viewport(previous.width, previous.height);
+		await unmount(view);
+		await runtime.runPromise(Scope.close(scope, Exit.void));
+		await dispose();
+		target.remove();
+	}
+});
+
 it('deleting a connection is guarded by the revision the settings read', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty),
 		dispose = mount_edge(runtime);
@@ -304,8 +428,14 @@ it('deleting a connection is guarded by the revision the settings read', async (
 				fetch: async (input, init) => {
 					const request = new Request(input, init);
 					if (!new URL(request.url).pathname.endsWith('/act'))
-						return Response.json({ answers: [{ sys_integration: { rows: [], next: null, total: 0 } }] });
-					acts.push(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ acts: Schema.Json })))(await request.text()).acts);
+						return Response.json({
+							answers: [{ sys_integration: { rows: [], next: null, total: 0 } }]
+						});
+					acts.push(
+						Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ acts: Schema.Json })))(
+							await request.text()
+						).acts
+					);
 					return Response.json({ outcome: { kind: 'committed', output: null, records: [] }, v: 0 });
 				},
 				open_stream: () => ({ onmessage: null, onerror: null, close() {} })
@@ -337,9 +467,9 @@ it('deleting a connection is guarded by the revision the settings read', async (
 	try {
 		await page.getByRole('button', { name: 'Delete connection', exact: true }).click();
 		await page.getByRole('button', { name: 'Delete', exact: true }).click();
-		await expect.poll(() => acts).toEqual([
-			{ 'sys_integration.delete': [{ target: { id: 'erp', revision: 3 } }] }
-		]);
+		await expect
+			.poll(() => acts)
+			.toEqual([{ 'sys_integration.delete': [{ target: { id: 'erp', revision: 3 } }] }]);
 	} finally {
 		await unmount(view);
 		await runtime.runPromise(Scope.close(scope, Exit.void));

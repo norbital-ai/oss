@@ -75,7 +75,9 @@ import {
 	logged_phone,
 	make_identity_host,
 	mint,
+	send_code,
 	signup_of,
+	verify_code,
 	type IdentityHost
 } from '../engine/identity/session.ts';
 import { layered, layers, type EngineManifest } from '../engine/manifest.ts';
@@ -397,6 +399,7 @@ type Kit = {
 	): Holder & { readonly id: string };
 	as(who: Holder | Authority): Effect.Effect<Caller, BoltError>;
 	visitor(app: string, options?: { readonly ip?: string }): Effect.Effect<Caller, BoltError>;
+	/** A sign-in by `address`, as a host's: an invited (or signing-up) newcomer joins, writing `sys_user` and waking its listeners. */
 	sign_in(address: string): Effect.Effect<Authority, KitFailure>;
 	/**
 	 * Fires crons due at the clock and drains every run due at it, chained runs included; dies if work stays due. Answers
@@ -708,6 +711,8 @@ const nativeAnswers = (manifest: EngineManifest) => {
 		queued: (value: unknown) => native(() => startCodec, value)
 	};
 };
+/** The address the kit's sign-ins come from. */
+const KIT_IP = '127.0.0.1';
 const invalid = (e: unknown) =>
 	new KitInvalid({ message: e instanceof Error ? e.message : String(e) });
 /** Explicit fixture callbacks activate the same per-verb markers that compiled model declarations carry. */
@@ -1680,11 +1685,18 @@ export const test_engine = <P extends TestPorts = never>(
 								params: [member_value(addressParts)]
 							}
 						]);
-						const id = result?.rows[0]?.['id'];
-						if (typeof id !== 'string')
-							return yield* Effect.fail(
-								new KitInvalid({ message: `no active member with the address ${address}` })
-							);
+						const known = result?.rows[0]?.['id'];
+						// a newcomer (an invitation, or the workspace's signup) joins as a real sign-in does: the emailed or texted
+						// code (the kit's fixed one) proves the address, and acceptance writes `sys_user` and wakes its listeners
+						const id =
+							typeof known === 'string'
+								? known
+								: yield* Effect.gen(function* () {
+										yield* send_code(identityHost, address, KIT_IP);
+										const session = yield* verify_code(identityHost, address, '123456', KIT_IP);
+										yield* runs.tick;
+										return session.user;
+									}).pipe(Effect.mapError(invalid));
 						const authority = yield* new Authorities(m, 'test').member(db, live.publish, id);
 						if (authority === null)
 							return yield* Effect.fail(

@@ -742,7 +742,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			}
 			// many-relations, at the root and one relation hop on ("Customer › Invoices (any) › Status"): has any / none (and, at
 			// the root, all) of the related records, how many, and child totals. A related record's own relations are not walked:
-			// the catalogue the builder receives grows with every hop (hr-payroll: 0.4 MB → 3 MB a model at full depth).
+			// the catalogue the builder receives grows with every hop (hrms: 0.4 MB → 3 MB a model at full depth).
 			if (hops > 0 && steps.every((x) => x.k === 'is'))
 				for (const [r, rel] of tc.model.many) {
 					const child = levelOf(view, tc, r, rel.child);

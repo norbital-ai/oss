@@ -149,6 +149,11 @@ export interface PageBolt {
 		id: NoInfer<Id<C>>,
 		parent?: RecordParentContext
 	): PageCall<RecordCapabilities | null, TransportFailed | ProtocolFailed>;
+	/** Whether deleting these records would commit (`allow`), be held for approval (`approve`) or be refused (`deny`), in one read. */
+	delete_verdict<C extends string>(
+		model: Is<C, ReadableName>,
+		ids: readonly NoInfer<Id<C>>[]
+	): PageCall<'allow' | 'approve' | 'deny', TransportFailed | ProtocolFailed>;
 	/** Plans every named generated write together and commits them as one statement. */
 	act<const A extends ActMap>(acts: ActMapInput<A>, options?: ActOptions): PageAct<ActMapOutput<A>>;
 	act<const A extends Readonly<Record<string, Json>>>(

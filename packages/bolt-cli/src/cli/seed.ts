@@ -4,10 +4,12 @@
 // the rows (`seed`), which the host restores over a reset of the environment. Nothing is written to either disk. The rows
 // are first restored into a scratch database as the host restores them: a seed the host would refuse mid-restore fails
 // before anything is sent, so the environment stays as it was.
+import { createHash } from 'node:crypto';
 import { Clock, Effect, FileSystem, Schema } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { sign_op } from '@norbital-ai/bolt/node';
-import { TenantDb, type EngineManifest } from '@norbital-ai/bolt/engine';
-import { load_pack, memory_source } from '@norbital-ai/bolt/tooling';
+import { Files, TenantDb, type EngineManifest } from '@norbital-ai/bolt/engine';
+import { drain, memory_source, pack_asset_loader } from '@norbital-ai/bolt/tooling';
 import { TestDb } from '../test/database.ts';
 import { compile } from '../compiler/check/index.ts';
 import { seedRows, type Seeding } from '../compiler/artifact/seed.ts';
@@ -59,7 +61,23 @@ const call = (target: SeedTarget, op: string, input: object) =>
 		return answer.value;
 	});
 
-/** `seeding` restored into a scratch database of `manifest`'s schema, the host's pack load (rows, identities, `start`). */
+/** The rehearsal's file store: it reads each asset and keeps no bytes; the scratch database is all it restores into. */
+const scratchFiles: Files['Service'] = {
+	put: (bytes, meta) =>
+		Effect.sync(() => {
+			const sha256 = createHash('sha256').update(bytes).digest('hex');
+			return { key: sha256, bytes: bytes.byteLength, sha256, mime: meta.mime };
+		}),
+	get: () => Effect.die('the seed rehearsal keeps no files'),
+	url: () => Effect.die('the seed rehearsal keeps no files'),
+	remove: () => Effect.void,
+	download: () => Effect.die('the seed rehearsal downloads nothing')
+};
+
+/**
+ * `seeding` restored into a scratch database of `manifest`'s schema, the host's pack load (rows, identities, `start`,
+ * and each `{ asset }` file value as the `sys_file` reference the host stores).
+ */
 const rehearse = (manifest: EngineManifest, seeding: Seeding) =>
 	Effect.gen(function* () {
 		const db = yield* TenantDb;
@@ -67,9 +85,10 @@ const rehearse = (manifest: EngineManifest, seeding: Seeding) =>
 		const source = memory_source('bank', seeding.rows, seeding.start, seeding.assets, (path) =>
 			Effect.sync(() => seeding.bytes(path))
 		);
-		yield* load_pack(db, manifest, source, now);
+		yield* drain((yield* pack_asset_loader(db, manifest, source, scratchFiles, now)).step);
 	}).pipe(
 		Effect.provide(TestDb.layer(manifest)),
+		Effect.provide(NodeServices.layer),
 		Effect.mapError(
 			(cause) => new ToolFailure({ message: `the seed does not restore: ${cause.message}`, cause })
 		)

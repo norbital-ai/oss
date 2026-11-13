@@ -30,7 +30,7 @@
 	import DetailSheet from '../DetailSheet.svelte';
 	import type { ShellBolt } from '../runtime.ts';
 	import { RunsReadAnswer, type ShellApi } from '../api-types.ts';
-	import { date_time } from '../i18n.ts';
+	import { date_time, humanise_word } from '../i18n.ts';
 
 	let {
 		ctx,
@@ -90,6 +90,14 @@
 				)
 			);
 	});
+	/** A state, cause or namespace handle in words through the shell's copy: `succeeded` → Succeeded, `cron` → Cron. */
+	const words = (handle: string) => t(humanise_word(handle));
+	/** An automation's catalog label, else its handle in words (`source_health` → Source health). */
+	const automationName = (name: string) => {
+		const key = `automations.${name}.label`,
+			s = t(key);
+		return s !== key ? s : words(name);
+	};
 	// who or what started a run: a person (and Norbius when it started it for them), else the system and why
 	const triggerOf = (trigger: RunView['trigger']) =>
 		trigger === null
@@ -100,8 +108,10 @@
 						trigger.cause === 'effect' || trigger.cause === 'event'
 							? `${trigger.model}.${trigger.verb}`
 							: trigger.cause === 'schedule'
-								? (trigger.by?.automation ?? t('schedule'))
-								: trigger.cause
+								? trigger.by === undefined
+									? t('schedule')
+									: automationName(trigger.by.automation)
+								: words(trigger.cause)
 					}`;
 	// the queue holds every run: an authored automation (a source handle never holds a dot), a model's effect or sync
 	// (`<model>.effect.<verb>`, `<model>.sync.<sync>`), else platform work named by its area (`bolt.notify`, `agent.turn`)
@@ -129,9 +139,9 @@
 		return {
 			id: r.id,
 			namespace,
-			name,
+			name: namespace === 'automation' ? automationName(name) : name,
 			trigger: triggerOf(r.trigger),
-			cause: r.cause,
+			cause: words(r.cause),
 			status: r.status,
 			due_at: r.due_at,
 			started: r.started,
@@ -208,7 +218,7 @@
 				? 'text-destructive'
 				: row.status === 'running'
 					? 'text-foreground'
-					: 'text-muted-foreground'}>{t(row.status)}</span
+					: 'text-muted-foreground'}>{words(row.status)}</span
 		>
 		{#if row.status === 'running' && typeof row.progress === 'number'}<progress
 				class="h-1 w-16"
@@ -226,7 +236,7 @@
 		><Icon
 			name={NAMESPACE_ICONS[row.namespace] ?? 'lucide:box'}
 			class="size-3"
-		/>{row.namespace}</Badge
+		/>{words(row.namespace)}</Badge
 	>
 {/snippet}
 {#snippet at({ value }: { row: RunRow; value: unknown })}<time class="tabular-nums"
@@ -240,7 +250,7 @@
 			class="w-56"
 			options={startable.map((a) => ({
 				value: a.name,
-				label: a.name,
+				label: automationName(a.name),
 				description: a.description
 			}))}
 			value={chosen}
@@ -296,13 +306,13 @@
 	{@const w = warnings(one)}
 	{@const input = bolt.automations?.[one.automation]?.input}
 	<DetailSheet {ctx}
-		title={`${one.automation} · ${t(one.status)}`}
+		title={`${automationName(one.automation)} · ${words(one.status)}`}
 		acts={acts(one)}
 		on_close={() => on_run(null)}
 		fields={[
 			{ label: t('Triggered by'), value: triggerOf(one.trigger) },
-			{ label: t('Cause'), value: one.cause },
-			{ label: t('Status'), value: t(one.status) },
+			{ label: t('Cause'), value: words(one.cause) },
+			{ label: t('Status'), value: words(one.status) },
 			{ label: t('Due'), value: when(one.due_at) },
 			{ label: t('Started'), value: when(one.started) },
 			{ label: t('Attempts'), value: one.attempt_count },
@@ -366,7 +376,7 @@
 	>
 		<Dialog.Content class="max-w-xl" data-run-automation-form>
 			<Dialog.Header>
-				<Dialog.Title>{t('Run')} {entering}</Dialog.Title>
+				<Dialog.Title>{t('Run')} {automationName(entering)}</Dialog.Title>
 				<Dialog.Description
 					>{t('Fill in this automation’s input before it runs.')}</Dialog.Description
 				>

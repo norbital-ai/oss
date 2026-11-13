@@ -20,6 +20,7 @@ describe('host route contract', () => {
 				'GET /__bolt/agent',
 				'GET /__bolt/approval',
 				'GET /__bolt/record-capabilities',
+			'GET /__bolt/delete-verdict',
 				'GET /__bolt/openapi.json'
 			]);
 		})

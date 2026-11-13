@@ -122,7 +122,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	import { type RestorePreview } from './types.js';
 	import * as Dialog from '../primitives/dialog/index.js';
 	import Value from '../cell/Value.svelte';
-	import type { HistorySnapshot } from '../client/contract.js';
+	import type { ApprovalView, HistorySnapshot } from '../client/contract.js';
 	import { humanize } from '../text/messages.js';
 	import { actOutcome, notify } from '../actions/outcome.js';
 	import ApprovalPanel from '../approval/ApprovalPanel.svelte';
@@ -205,10 +205,17 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		readonly entries: readonly FormSubmit[];
 		add(entry: FormSubmit): () => void;
 	};
+	type Approvals = {
+		readonly current: readonly ApprovalView[] | undefined;
+		readonly loading: boolean;
+		readonly error: unknown;
+		refetch(): Effect.Effect<void>;
+	};
 	const parent = getContext<
 		| {
 				readonly of: string;
 				readonly id: string | undefined;
+				readonly approvals: Approvals;
 				scrub?: Scrub;
 				history?: { set(config: RecordHistoryConfig): void };
 				decorate?: (entry: Decoration) => () => void;
@@ -276,6 +283,9 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		},
 		get id() {
 			return id;
+		},
+		get approvals() {
+			return requests;
 		},
 		scrub,
 		history: owner
@@ -442,7 +452,10 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	);
 	// the row's `$approval` is live: a decision that moves or closes its request refetches the panel and the badge
 	const held = $derived(approvalOf(live));
-	const requests = observe_once(() => {
+	// a same-record representation's shell reads its owner's requests: one source for the header badge and the panel
+	const inherited = untrack(() => sameRecord) ? parent?.approvals : undefined;
+	const fetched = observe_once(() => {
+		if (inherited !== undefined) return null;
 		void latest;
 		void held?.request_id;
 		void held?.state;
@@ -456,6 +469,27 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			? Effect.succeed([])
 			: bolt.approvals.list({ model: readOf, records: [readId], all: true });
 	});
+	// a reload (after a decision, a new revision) keeps this record's last answer on screen: the panel, its error and
+	// its form stay mounted until the next answer replaces them
+	let kept = $state.raw<{ key: string; list: readonly ApprovalView[] } | null>(null);
+	changes(
+		() => fetched.current,
+		(list) => {
+			if (list !== undefined) kept = { key: `${readOf}/${readId}`, list };
+		}
+	);
+	const requests: Approvals = inherited ?? {
+		get current() {
+			return fetched.current ?? (kept?.key === `${readOf}/${readId}` ? kept.list : undefined);
+		},
+		get loading() {
+			return fetched.loading;
+		},
+		get error() {
+			return fetched.error;
+		},
+		refetch: () => fetched.refetch()
+	};
 	const openRequest = $derived(
 		(requests.current ?? []).find(
 			(request) => request.status === 'Pending' || request.status === 'ChangesRequested'
@@ -463,6 +497,16 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	);
 	const approvalId = $derived(submittedId ?? openRequest?.id ?? requests.current?.[0]?.id ?? null);
 	const pending_approval = $derived(openRequest !== null);
+	// the badge: the requests once they are read (a decision refetches them), the row's `$approval` only until then
+	const openState = $derived(
+		requests.current === undefined
+			? (held?.state ?? null)
+			: openRequest === null
+				? null
+				: openRequest.status === 'ChangesRequested'
+					? 'ChangesRequested'
+					: 'Pending'
+	);
 	// A held delete, or a create rolled back by rejection or withdrawal, has no row; its request remains readable.
 	const goneRequest = $derived(
 		mode !== 'create' && live === null
@@ -813,8 +857,8 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 					{#if badge || icon}<Badge variant="outline" title={hint}
 							>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
 						>{/if}
-					{#if pending_approval || held !== null}
-						{@const changes = (openRequest?.status ?? held?.state) === 'ChangesRequested'}
+					{#if openState !== null}
+						{@const changes = openState === 'ChangesRequested'}
 						{@const full = changes ? msg(bolt, 'approval.status.ChangesRequested') : lockReason}
 						<Tooltip text={full}>
 							{#snippet trigger({ props })}
@@ -1042,6 +1086,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 					{viewing}
 					{history}
 					config={historyConfig}
+					approvals={requests.current ?? []}
 					onload={() => (wanted = true)}
 					onpick={pick}
 				/>{/if}

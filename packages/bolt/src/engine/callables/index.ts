@@ -625,7 +625,8 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				e.db,
 				{
 					category: 'write',
-					action: 'act',
+					// named after its writes (`orders.update`), each distinct model and verb once
+					action: [...new Set(request.acts.map((a) => `${a.model}.${a.verb}`))].join(', '),
 					actor: auditActor(request.authority.actor),
 					invocation: request.invocationId,
 					payload: acts_json(request.acts),

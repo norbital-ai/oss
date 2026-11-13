@@ -127,6 +127,11 @@ export type Delivery = {
 	lastError: string | null;
 };
 const AUDIT_LIMIT = 200;
+/** A source team's declared name, else its handle. */
+export const teamName = (m: EngineManifest, id: string): string => {
+	const team = m.teams[id];
+	return team !== undefined && 'name' in team && typeof team.name === 'string' ? team.name : id;
+};
 
 /** The settings pages' rows: one row per member with sessions collapsed to a last-seen time; admins only. */
 export const settings = Effect.fn('shell.settings')(function* (
@@ -196,11 +201,8 @@ export const settings = Effect.fn('shell.settings')(function* (
 	const runtimeEnvoys = yield* decode(EnvoyRow, envoys?.rows ?? []);
 	return {
 		members: yield* decode(Member, users?.rows ?? []),
-		teams: Object.entries(m.teams)
-			.map(([id, team]) => ({
-				id,
-				name: 'name' in team && typeof team.name === 'string' ? team.name : id
-			}))
+		teams: Object.keys(m.teams)
+			.map((id) => ({ id, name: teamName(m, id) }))
 			.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
 		invitations: yield* decode(InvitationRow, invitations?.rows ?? []),
 		keys: yield* decode(KeyRow, keys?.rows ?? []),

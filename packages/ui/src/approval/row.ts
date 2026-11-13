@@ -1,5 +1,5 @@
 // A read row's `$approval` (the host attaches it to every record an open approval request holds) and its one-line text.
-import type { RowApproval, ViewBolt } from '../client/contract.js';
+import type { ApprovalView, RowApproval, ViewBolt } from '../client/contract.js';
 import { msg, catalogText } from '../text/messages.js';
 import { Option, Schema } from 'effect';
 
@@ -14,7 +14,8 @@ const RowApprovalSchema: Schema.Codec<RowApproval> = Schema.Struct({
 			users: Schema.Array(Schema.String)
 		})
 	),
-	requested_by: Schema.String
+	requested_by: Schema.String,
+	pending_delete: Schema.optionalKey(Schema.Literal(true))
 });
 // `$approval` is a host-attached system member no model declares: it arrives untyped on the row and decodes here once.
 const decodeApproval = Schema.decodeUnknownOption(Schema.Struct({ $approval: RowApprovalSchema }));
@@ -37,6 +38,7 @@ export function approvalText(bolt: Pick<ViewBolt, 't'>, a: RowApproval): string 
 				})
 			: msg(bolt, 'approval.status.ChangesRequested');
 	return [
+		...(a.pending_delete === true ? [msg(bolt, 'table.pendingDelete')] : []),
 		msg(bolt, 'approval.requested_by', { who: a.requested_by }),
 		status,
 		msg(bolt, 'approval.waitingOn', { who: waiting(a) })
@@ -68,3 +70,20 @@ export function approvalStatus(bolt: Pick<ViewBolt, 't'>, status: string): strin
 	};
 	return catalogText(bolt, `approval.status.${status}`, words[status] ?? status);
 }
+
+/** Where a request stands in a record's history: "Waiting for approval" while pending, else its status in words. */
+export const historyStatus = (bolt: Pick<ViewBolt, 't'>, status: string): string =>
+	status === 'Pending' ? msg(bolt, 'approval.waiting') : approvalStatus(bolt, status);
+
+const MOVE_TEXT: Readonly<Record<ApprovalView['log'][number]['move'], string>> = {
+	request: 'Requested',
+	approve: 'Approved',
+	reject: 'Rejected',
+	request_changes: 'Requested changes',
+	resubmit: 'Resubmitted',
+	supersede: 'Superseded',
+	withdraw: 'Withdrew'
+};
+/** One log entry's move in words ("Requested changes"). */
+export const moveText = (bolt: Pick<ViewBolt, 't'>, move: ApprovalView['log'][number]['move']): string =>
+	catalogText(bolt, `approval.move.${move}`, MOVE_TEXT[move]);

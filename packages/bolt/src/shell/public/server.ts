@@ -71,6 +71,7 @@ const publicServerContext = (boot: PublicBoot, now: string, lookup: Lookup) => {
 		}),
 		preview_pdf: unavailable,
 		record_capabilities: unavailable,
+		delete_verdict: unavailable,
 		act: unavailable,
 		run: unavailable,
 		sync_control: unavailable,

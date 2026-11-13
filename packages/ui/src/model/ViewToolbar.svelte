@@ -881,14 +881,29 @@
 	};
 	function remove(): void {
 		const target = [...picked];
+		// a delete the viewer may only propose is held for approval, not done: the question says so
+		const verdict = bolt.delete_verdict;
+		const held =
+			verdict === undefined
+				? Effect.succeed(false)
+				: verdict(model, target).pipe(
+						Effect.map((v) => v === 'approve'),
+						Effect.catch(() => Effect.succeed(false))
+					);
 		fork(
-			confirm_action({
-				title: msg(bolt, 'table.confirmDelete', { n: target.length }),
-				body: msg(bolt, 'view.deleteBody'),
-				confirm_label: msg(bolt, 'view.deleteButton'),
-				cancel_label: msg(bolt, 'record.cancel'),
-				destructive: true
-			}).pipe(
+			held.pipe(
+				Effect.flatMap((approval) =>
+					confirm_action({
+						title:
+							target.length === 1
+								? msg(bolt, 'table.confirmDeleteOne')
+								: msg(bolt, 'table.confirmDelete', { n: target.length }),
+						body: msg(bolt, approval ? 'view.deleteApproval' : 'view.deleteBody'),
+						confirm_label: msg(bolt, 'view.deleteButton'),
+						cancel_label: msg(bolt, 'record.cancel'),
+						destructive: true
+					})
+				),
 				Effect.tap((confirmed) =>
 					Effect.sync(() => {
 						if (confirmed)

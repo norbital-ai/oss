@@ -306,6 +306,10 @@
 {#snippet at({ value }: { row: object; value: unknown })}<time class="tabular-nums"
 		>{when(typeof value === 'string' ? value : null)}</time
 	>{/snippet}
+<!-- a live `sys_user` row carries its team's handle; the table shows the team's declared name -->
+{#snippet teamCell({ value }: { row: object; value: unknown })}{teamName(
+		typeof value === 'string' ? value : null
+	)}{/snippet}
 {#snippet invitationCell({ row }: { row: Invitation; value: unknown })}<Acts
 		acts={invitationActs(row)}
 	/>{/snippet}
@@ -331,7 +335,7 @@
 				{ field: 'name', label: t('Name') },
 				{ field: 'email', label: t('Email') },
 				{ field: 'phone', label: t('Mobile number') },
-				{ field: 'team', label: t('Team') },
+				{ field: 'team', label: t('Team'), cell: teamCell },
 				{ field: 'kind', label: t('Kind') },
 				{ field: 'admin', label: t('Admin') },
 				{ field: 'active', label: t('Active') },

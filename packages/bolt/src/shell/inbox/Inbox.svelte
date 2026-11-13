@@ -91,7 +91,7 @@
 				result._tag === 'Success'
 					? null
 					: result.failure._tag === 'ActRefused'
-						? result.failure.message
+						? t(result.failure.message)
 						: result.failure._tag === 'ActConflict'
 							? t('This request is no longer pending.')
 							: t('The outcome is unknown; refresh to see it.');
@@ -198,7 +198,7 @@
 			on_open={(r) => open_record(r.model, r.record)}
 			columns={[
 				{ field: 'record', label: t('Record'), cell: record_ },
-				{ field: 'of', label: t('Model') },
+				{ field: 'of', label: t('Record type') },
 				{ field: 'verb', label: t('Action') },
 				{ field: 'progress', label: t('Status') },
 				{ field: 'by', label: t('Requested by') },

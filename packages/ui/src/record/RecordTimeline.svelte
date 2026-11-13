@@ -6,7 +6,8 @@ revision returns to the live record.
 -->
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import type { UiContext } from '../client/contract.js';
+	import type { ApprovalView, UiContext } from '../client/contract.js';
+	import { historyStatus, moveText } from '../approval/row.js';
 	import { recordText } from '../kinds/kind.js';
 	import { Effect } from 'effect';
 	import { observe_once } from '../effect/index.js';
@@ -29,10 +30,13 @@ revision returns to the live record.
 		viewing,
 		history,
 		config = {},
+		approvals = [],
 		onload,
 		onpick
 	}: {
 		ctx: UiContext;
+		/** The record's approval requests: their decisions join the timeline (a request for changes writes no revision). */
+		approvals?: readonly ApprovalView[];
 		of: string;
 		config?: RecordHistoryConfig;
 		/** The live record's revision. */
@@ -114,11 +118,11 @@ revision returns to the live record.
 			: c.restored_from !== null
 				? msg(bolt, 'record.rolledBackBy', {
 						what: base,
-						state: c.approval.state
+						state: historyStatus(bolt, c.approval.state)
 					})
 				: msg(bolt, 'record.underRequest', {
 						what: base,
-						state: c.approval.state
+						state: historyStatus(bolt, c.approval.state)
 					});
 	}
 	function described(c: Checkpoint, model: string): string {
@@ -228,6 +232,47 @@ revision returns to the live record.
 			};
 		});
 	});
+	// a decision on the record's requests is an entry of its own, among the revisions by when it was made
+	type Decision = { key: string; at: string; text: string; reason: string | null };
+	const DECIDED = new Set<ApprovalView['log'][number]['move']>([
+		'approve',
+		'reject',
+		'request_changes',
+		'supersede',
+		'withdraw'
+	]);
+	const decisions = $derived(
+		approvals
+			.flatMap((request) =>
+				request.log.flatMap((e, i): Decision[] =>
+					DECIDED.has(e.move)
+						? [
+								{
+									key: `${request.id}:${i}`,
+									at: e.at,
+									text: `${moveText(bolt, e.move)} · ${e.by.name ?? e.by.ref.replace(/^[a-z]+:/i, '')}`,
+									reason: e.reason
+								}
+							]
+						: []
+				)
+			)
+			.sort((a, b) => b.at.localeCompare(a.at))
+	);
+	/** The events newest first (the current revision leads), each decision before the revisions written ahead of it. */
+	const merged = (list: readonly Event[]): readonly (Event | Decision)[] => {
+		const out: (Event | Decision)[] = [];
+		let next = 0;
+		for (const event of list) {
+			const at = event.own && event.checkpoint.revision >= latest ? null : event.checkpoint.at;
+			for (; at !== null && next < decisions.length && (decisions[next]?.at ?? '') > at; next++) {
+				const d = decisions[next];
+				if (d !== undefined) out.push(d);
+			}
+			out.push(event);
+		}
+		return [...out, ...decisions.slice(next)];
+	};
 	const pick = (event: Event) =>
 		onpick(
 			event.checkpoint.revision >= latest ? null : event.checkpoint.revision,
@@ -285,12 +330,34 @@ revision returns to the live record.
 				</p>
 			{:else}
 				{@const result = loaded.current ?? { list: [], partial: false }}
+				{@const items = merged(result.list)}
 				<div class="max-h-96 overflow-y-auto px-3 py-3" data-record-history-events>
 					{#if result.partial}<p role="status" class="text-muted-foreground mb-2 text-xs">
 							{msg(bolt, 'record.historyPartial')}
 						</p>{/if}
 					<ol class="flex flex-col" aria-label={msg(bolt, 'record.history')}>
-						{#each result.list as event, i (event.key)}
+						{#each items as item, i (item.key)}
+							{#if !('checkpoint' in item)}
+								<li class="relative flex gap-3 pb-3 last:pb-0" data-history-decision={item.key}>
+									{#if i < items.length - 1}<span
+											aria-hidden="true"
+											class="bg-border absolute top-4 bottom-0 left-[5px] w-px"
+										></span>{/if}
+									<span
+										aria-hidden="true"
+										class="border-warning bg-background relative mt-1.5 size-3 shrink-0 rounded-full border-2"
+									></span>
+									<div class="-my-1.5 min-w-0 flex-1 px-2 py-1.5">
+										<span class="text-foreground text-xs font-medium tabular-nums">{stamp(item.at)}</span>
+										<span class="mt-0.5 block truncate text-sm font-medium">{item.text}</span>
+										{#if item.reason}<span
+												class="text-muted-foreground block text-xs whitespace-pre-wrap wrap-anywhere"
+												data-reason>“{item.reason}”</span
+											>{/if}
+									</div>
+								</li>
+							{:else}
+							{@const event = item}
 							{@const c = event.checkpoint}
 							{@const current = event.own && c.revision >= latest}
 							<li
@@ -299,7 +366,7 @@ revision returns to the live record.
 								data-history-revision={c.revision}
 								data-history-valid={c.valid}
 							>
-								{#if i < result.list.length - 1}<span
+								{#if i < items.length - 1}<span
 										aria-hidden="true"
 										class="bg-border absolute top-4 bottom-0 left-[5px] w-px"
 									></span>{/if}
@@ -327,6 +394,7 @@ revision returns to the live record.
 										{@render entry(event, false)}
 									</div>{/if}
 							</li>
+							{/if}
 						{/each}
 					</ol>
 				</div>

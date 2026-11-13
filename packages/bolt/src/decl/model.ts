@@ -816,8 +816,11 @@ interface BodiesFor<K> {
 		/**
 		 * Runs for every row deleted in this model, by every path, before it is written: a page, the agent and `ctx.act`.
 		 * One call per batch: each change carries the stored row (`before`). It returns nothing, or `{ with, on_approved }`:
-		 * rows of other models committed in the delete's own statement (`Carried`), held and rolled back with it. It never
-		 * returns rows; it may refuse.
+		 * rows of other models committed in the delete's own statement (`Carried`). It never returns rows; it may refuse.
+		 * A delete held for approval commits only its request: it runs at once, so a refusal answers at once, yet its rows
+		 * stay (read with `$approval.pending_delete`) and nothing it carries commits. The approving decision asks it again
+		 * (`ctx.approving`) and deletes the rows with both `with` and `on_approved` in its one commit; reject and withdraw
+		 * leave everything as it stood.
 		 */
 		transform?: (
 			changes: readonly Change<StoredRow<K>, Readonly<Record<string, never>>, null>[],

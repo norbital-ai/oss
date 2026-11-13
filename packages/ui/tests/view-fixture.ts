@@ -87,6 +87,7 @@ export type ViewScript = {
 		parent?: RecordParentContext
 	) => RecordCapabilities | null | Response | Promise<RecordCapabilities | null | Response>;
 	approval?: Script['approval'];
+	delete_verdict?: Script['delete_verdict'];
 	options?: NonNullable<ViewBolt['options']>;
 	describe?: NonNullable<ViewBolt['describe']>;
 	changes?: Script['changes'];
@@ -236,6 +237,7 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 		...(script.approval === undefined
 			? {}
 			: { approval: (params) => script.approval?.(params) ?? null }),
+		...(script.delete_verdict === undefined ? {} : { delete_verdict: script.delete_verdict }),
 		changes: (read, emit) => script.changes?.(read, emit) ?? (() => {}),
 		...(script.start === undefined ? {} : { start: script.start }),
 		...(script.sync_control === undefined ? {} : { sync_control: script.sync_control }),

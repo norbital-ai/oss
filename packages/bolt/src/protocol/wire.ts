@@ -58,7 +58,9 @@ export const PATHS = {
 	 * ones too).
 	 */
 	approval: `${BOLT}/approval`,
-	record_capabilities: `${BOLT}/record-capabilities`
+	record_capabilities: `${BOLT}/record-capabilities`,
+	/** `GET ?model=&id=` (repeated): whether deleting those records would commit (`allow`), be held for approval (`approve`) or be refused (`deny`). */
+	delete_verdict: `${BOLT}/delete-verdict`
 } as const;
 /** The workspace path a notice opens: its linked record over the inbox, or the inbox. */
 export const notice_path = (link: { readonly model: string; readonly id: string } | null): string =>

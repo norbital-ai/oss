@@ -190,6 +190,8 @@ export type RowApproval = {
 	readonly step: number;
 	readonly steps: readonly ApprovalStep[];
 	readonly requested_by: string;
+	/** The request deletes this row: it stays listed, marked, until the deletion is approved. */
+	readonly pending_delete?: true;
 };
 /**
  * What every view, input and editor takes as its `ctx` prop: pass the page's `ctx` whole (`<Table {ctx} of="projects">`),
@@ -236,6 +238,8 @@ export type ViewBolt = {
 		id: string,
 		parent?: RecordParentContext
 	): Effect.Effect<RecordCapabilities | null, Error>;
+	/** Whether deleting these records would commit, be held for approval or be refused: one read for them all. */
+	delete_verdict?(model: string, ids: readonly string[]): Effect.Effect<'allow' | 'approve' | 'deny', Error>;
 	act(
 		acts: Readonly<Record<string, Value>>,
 		options?: { key?: string }

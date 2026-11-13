@@ -495,6 +495,8 @@ export type RowApproval = {
 	readonly step: number;
 	readonly steps: readonly ApprovalStep[];
 	readonly requested_by: string;
+	/** The request deletes this row: it stays, marked, until the approving decision deletes it. */
+	readonly pending_delete?: true;
 };
 /** Where a row's latest change stands with one write sync (`$sync.<name>`): queued, acknowledged, or refused with `message`. */
 type SyncState = {

@@ -219,6 +219,10 @@ it('draws the QR, then the code, the provider publishes while pairing; an option
 	expect(required(el.querySelector<HTMLInputElement>('[data-setup-form] input[name=phone]')).required).toBe(
 		false
 	);
+	// the optional mark is its own word: "Phone (optional)", never "Phone(optional)"
+	expect(
+		required(el.querySelector('[data-setup-form] .text-label')).textContent?.replace(/\s+/g, ' ').trim()
+	).toBe('Phone (optional)');
 	required(el.querySelector<HTMLFormElement>('[data-setup-form]')).requestSubmit();
 	await waitPair();
 	await settle();

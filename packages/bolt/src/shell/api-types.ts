@@ -233,7 +233,7 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 	preview: Schema.NullOr(
 		Schema.Union([
 			Schema.Struct({ user: Schema.String, by: Schema.String }),
-			Schema.Struct({ team: Schema.String, by: Schema.String })
+			Schema.Struct({ team: Schema.String, name: Schema.String, by: Schema.String })
 		])
 	),
 	client: Schema.optionalKey(Schema.String),

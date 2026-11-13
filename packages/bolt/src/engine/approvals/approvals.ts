@@ -1,10 +1,11 @@
 import { actor_id, actor_ref } from '../access/actor.ts';
-// Approval requests, the provisional-commit model: a routed write is committed at once and held by
-// its request; each move of the state machine (machine.ts) is one guarded statement with every effect it has — the log
+// Approval requests, the provisional-commit model: a routed create or update is committed at once and held by
+// its request; a routed delete commits only its request, holding its rows at their current revisions, and the approving
+// decision deletes them (reject and withdraw restore nothing). Each move of the state machine (machine.ts) is one guarded statement with every effect it has — the log
 // entry, the readable `approval_request` face, the queued approval effect and on rejection the rollback of every held
 // record to its checkpoint. The requester's save in ChangesRequested resubmits inside that write (`resubmit`).
 import { constraintIndex } from '../schema/plan.ts';
-import { Clock, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
+import { Clock, Effect, Layer, Option, Result, Schema } from 'effect';
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 
@@ -22,8 +23,7 @@ import {
 } from '../services.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { capturePiece } from '../db/captured.ts';
-import { storedCaptures, storedRow, storedRowSql } from '../db/stored.ts';
-import { read_history } from '../query/history.ts';
+import { storedCaptures, storedRowSql } from '../db/stored.ts';
 import { teams, type EngineManifest } from '../manifest.ts';
 import {
 	LIMITS,
@@ -33,7 +33,8 @@ import {
 	type Invocation,
 	type Lock,
 	type Outcome,
-	type QueuedRun
+	type QueuedRun,
+	type RowData
 } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import type { NoticeInsert } from '../notifications/notify.ts';
@@ -45,6 +46,9 @@ import {
 	answerOf,
 	guestFailure,
 	hasCallback,
+	k,
+	readRows,
+	wireRows,
 	storedTrees,
 	transformBridge,
 	type ApprovalHook,
@@ -59,7 +63,7 @@ import {
 	ApprovalStateSchema,
 	type ApprovalView
 } from '../../protocol/approval-view.ts';
-import { affectedTables, compileCommit, committed, runCommit, type Commit, type CommitAnswer } from '../write/commit.ts';
+import { affectedTables, compileCommit, committed, runCommit, type Commit, type CommitAnswer, type Write } from '../write/commit.ts';
 import { Chain, GATED, minter, decided } from '../write/sql.ts';
 import { effectDepthFailure, effectRun, enqueue, settleApprovalEffects, writerOf } from '../runs/queue.ts';
 import { syncOutboxPiece } from '../sync/write.ts';
@@ -319,21 +323,38 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				b.now,
 				auth
 			);
+			// a held delete writes nothing yet: the request holds each row at the revision it would delete (write/act.ts `plan`)
+			const deletes = act.records.flatMap((r) =>
+				r.action === 'delete'
+					? [{ collection: act.model, id: r.id, op: 'delete', before: Number(r.values['revision']) }]
+					: []
+			);
 			return {
 				request_id,
 				route,
 				pieces: (c: Chain, held: string | null) => {
 					const col = c.p(act.model),
 						rec = c.p(act.record);
+					if (deletes.length > 0)
+						c.assert(
+							`NOT EXISTS (SELECT 1 FROM jsonb_to_recordset(${c.p(deletes)}::jsonb) AS r(id text, before int)
+	LEFT JOIN ${q(table(act.model))} t ON t.id::text = r.id WHERE t.revision IS DISTINCT FROM r.before)`,
+							'conflict',
+							JSON.stringify({ model: act.model, ids: deletes.map((d) => d.id) })
+						);
+					const records =
+						deletes.length > 0
+							? `${c.p(deletes)}::jsonb`
+							: `(SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM (
+			SELECT jsonb_build_object('collection', ${col}::text, 'id', ${rec}::text, 'op', 'update', 'before', (SELECT revision FROM ${q(table(act.model))} WHERE id::text = ${rec}))
+				AS e WHERE NOT EXISTS (SELECT 1 FROM allp WHERE c = ${col} AND id = ${rec} AND cause IN ('direct', 'cascade'))
+			UNION ALL SELECT ${checkpoint('x')} FROM (SELECT DISTINCT ON (c, id) * FROM allp WHERE cause IN ('direct', 'cascade') AND NOT erased) x) s)`;
 					capturePiece(c,
 						'ap_state',
 						'bolt_approvals',
 						`INSERT INTO bolt_approvals (id, state, step, collection, record, action, requestor, requestor_user, route, records, log, at)
 	SELECT ${c.p(request_id)}::uuid, 'Pending', 0, ${col}, ${rec}, ${c.p(act.action)}, ${c.p(requestor)}, ${c.p(user)}, ${c.p(route)}::jsonb,
-		(SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM (
-			SELECT jsonb_build_object('collection', ${col}::text, 'id', ${rec}::text, 'op', 'update', 'before', (SELECT revision FROM ${q(table(act.model))} WHERE id::text = ${rec}))
-				AS e WHERE NOT EXISTS (SELECT 1 FROM allp WHERE c = ${col} AND id = ${rec} AND cause IN ('direct', 'cascade'))
-			UNION ALL SELECT ${checkpoint('x')} FROM (SELECT DISTINCT ON (c, id) * FROM allp WHERE cause IN ('direct', 'cascade') AND NOT erased) x) s),
+		${records},
 		jsonb_build_array(${labelled(c, entry, act.model, act.record)}), ${c.p(b.now)}::timestamptz
 	WHERE ${GATED}${held === null ? '' : ` AND NOT EXISTS (SELECT 1 FROM ${held})`} ON CONFLICT (id) DO NOTHING`,
 						{ returning: 'id,records' }
@@ -518,6 +539,13 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		const approved =
 			stands && options.approved !== undefined ? yield* options.approved(a, auth, b) : [];
 		if ('kind' in approved) return approved;
+		// a held delete is performed by the decision that approves it, in its one commit (write/act.ts `plan` deferred it)
+		const deletes = a.records.filter((r) => r.op === 'delete' && cat.models.has(r.model));
+		const live = stands && deletes.length > 0 ? yield* readRows(db, cat, deletes.map((r) => [r.model, r.id] as const)) : new Map<string, RowData>();
+		const deletions: Write[] = deletes.flatMap((r) => {
+			const row = live.get(k(r.model, r.id));
+			return row === undefined ? [] : [{ model: r.model, id: r.id, op: 'delete' as const, revision: Number(row['revision']) }];
+		});
 		const carried = approved.map((planned) => planned.commit);
 		const fingerprints = [
 			...(readGuards?.fingerprints ?? []),
@@ -561,7 +589,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			today: b.today,
 			actor: auth.actor,
 			writer: writerOf(auth),
-			writes: [...plan.writes, ...carried.flatMap((commit) => commit.writes)],
+			writes: [...plan.writes, ...deletions, ...carried.flatMap((commit) => commit.writes)],
 			owned: carried.flatMap((commit) => commit.owned),
 			rate: [],
 			runs: [
@@ -628,7 +656,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			...new Set([
 				...(readGuards?.tables ?? []),
 				...plan.observations.map((observation) => observation.model),
-				...affectedTables(m, cat, plan.writes),
+				...affectedTables(m, cat, [...plan.writes, ...deletions]),
 				...approved.flatMap((planned) => [
 					...(planned.lock?.tables ?? []),
 					...affectedTables(m, cat, planned.commit.writes)
@@ -638,7 +666,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			])
 		].sort();
 		const decisionLock: Lock | undefined =
-			readGuards === undefined && plan.observations.length === 0 && approved.length === 0
+			readGuards === undefined && plan.observations.length === 0 && approved.length === 0 && deletions.length === 0
 				? undefined
 				: { tables: lockedTables, mode: 'SHARE ROW EXCLUSIVE' };
 		const result = yield* Effect.result(
@@ -781,8 +809,9 @@ const bindingOf = (m: EngineManifest, at?: string) =>
 /**
  * The approving decision's `on_approved`, in bulk: every held row of the request's model asked again as it now stands
  * (`ctx.approving`), one invocation per verb, and what they answer planned as acts (their own callbacks, carried by that
- * model) all at once over one coalesced reader, for the decision's one statement. A refusal or a conflict leaves the
- * request pending.
+ * model) all at once over one coalesced reader, for the decision's one statement. A held delete's rows still stand: its
+ * callback is asked with each as it now is, and both its `with` and its `on_approved` join the decision that deletes
+ * them. A refusal or a conflict leaves the request pending.
  */
 const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 	m: EngineManifest,
@@ -799,30 +828,14 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 			(record) => record.op
 		)
 	].flatMap(([verb, records]) => hasCallback(m, a.model, verb) ? [{ verb, records }] : []);
-	// a held delete's rows are gone: the decision asks again with each as it stood at the checkpoint, in one coalesced read
-	const deleted = Effect.fn('Approvals.deletedRows')(function* (records: readonly Checkpoint[]) {
-		const shared = yield* coalescing(db, records.length);
-		return yield* Effect.forEach(
-			records,
-			(record) =>
-				read_history(
-					shared,
-					m,
-					{ kind: 'history', model: a.model, id: record.id, at: { _tag: 'Revision', revision: record.before ?? 0 }, full: true },
-					{ as: 'workspace' },
-					b
-				).pipe(Effect.ensuring(shared.done)),
-			{ concurrency: 'unbounded' }
-		);
-	});
 	const ask = Effect.fn('Approvals.askAgain')(function* (
 		verb: 'create' | 'update' | 'delete',
 		records: readonly Checkpoint[]
 	): Effect.fn.Return<readonly CarriedWrite[] | Refusal, EngineError> {
 		const ids = records.map((record) => record.id);
+		// a held delete's rows still stand: the decision deletes them, asking with each as it now is
 		const input = verb === 'delete'
-			? (yield* deleted(records)).flatMap((row) =>
-					Predicate.isObject(row) && !Array.isArray(row) ? [{ before: storedRow(cat, a.model, row), set: {}, after: null }] : [])
+			? (yield* wireRows(db, cat, a.model, ids, b)).flatMap((row) => row === null ? [] : [{ before: row, set: {}, after: null }])
 			: (yield* storedTrees(db, m, cat, a.model, ids, b, Object.keys(m.exposures[a.model]?.[verb]?.columns ?? {}))).flatMap((row) =>
 					row === null ? [] : [{ before: verb === 'create' ? null : row, set: verb === 'create' ? row : {}, after: row }]);
 		if (input.length === 0) return [];
@@ -861,7 +874,8 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 		}
 		const answer = answerOf(verb, g.output, input.length, m, a.model);
 		if (typeof answer === 'string') return yield* BoltError.make('transform_shape', 'guest', answer);
-		return answer.on_approved;
+		// a held delete committed nothing when asked: what it carries `with` commits now, with the delete
+		return verb === 'delete' ? [...answer.with, ...answer.on_approved] : answer.on_approved;
 	});
 	const asked = yield* Effect.forEach(
 		held,

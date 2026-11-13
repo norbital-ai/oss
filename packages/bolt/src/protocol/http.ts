@@ -58,7 +58,7 @@ import { previewPdf } from '../engine/facilities.ts';
 import { lower_read } from '../engine/query/engine.ts';
 import { readsAny, viewOutput } from '../engine/access/authority.ts';
 import { client_contract } from '../engine/access/operation-outputs.ts';
-import { record_capabilities, transformBridge } from '../engine/write/act.ts';
+import { delete_verdict, record_capabilities, transformBridge } from '../engine/write/act.ts';
 import { restorePreview, restoreRecord } from '../engine/write/restore.ts';
 import { subscribe } from '../engine/runs/push.ts';
 import { visible_run_names } from '../engine/runs/rows.ts';
@@ -1131,6 +1131,23 @@ export const BoltRoutes = {
 			return value === null
 				? response_error(BoltError.make('not_found', 'admission', 'Not found or no access.'))
 				: HttpServerResponse.jsonUnsafe({ value });
+		})
+	},
+	[`GET ${PATHS.delete_verdict}` as const]: {
+		guest: false,
+		run: Effect.fn('protocol.deleteVerdict')(function* (
+			request: HttpServerRequest.HttpServerRequest,
+			authority: Authority
+		) {
+			const p = requestUrl(request).searchParams,
+				model = p.get('model'),
+				ids = p.getAll('id');
+			if (!model || ids.length === 0) return yield* Effect.fail(invalid('model and id are required'));
+			if ([...p.keys()].some((key) => key !== 'model' && key !== 'id'))
+				return yield* Effect.fail(invalid('Unknown delete verdict parameter.'));
+			return HttpServerResponse.jsonUnsafe({
+				value: yield* delete_verdict(yield* probe, model, ids, authority, yield* bindings)
+			});
 		})
 	},
 	[`GET ${PATHS.openapi}` as const]: {

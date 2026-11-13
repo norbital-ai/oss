@@ -2125,7 +2125,9 @@ const plan = Effect.fn('Bolt.plan')(function* (
 	const indexed = yield* indexChanges(context, draft.writes, routed.guest);
 	if (typeof indexed !== 'boolean') return indexed;
 	const guest = indexed, m = e.manifest, auth = r.authority, b = r.bindings, cat = env.cat;
-	const { writes, unchanged, report } = draft, { approval, resubmit } = routed;
+	const { unchanged, report } = draft, { approval, resubmit } = routed;
+	// a held delete commits only its request: its rows, and what its transform carries, wait for the approving decision
+	const writes = approval !== undefined && r.verb === 'delete' ? [] : draft.writes;
 	const { importRows, upsertOutput, readTables, fingerprints } = prepared, { sync } = modeContext(r.mode);
 	const resolvedImportIndices = new Set(importRows.map((row) => row.index));
 	const stop = (outcome: Outcome): StoppedPlan => ({ guest, outcome });
@@ -2351,8 +2353,9 @@ export const wireRows = Effect.fn('Bolt.wireRows')(function* (
 });
 type Probe = Pick<WriteEngine, 'manifest' | 'db' | 'guest' | 'bridge'>;
 /**
- * What a write's verdict answers for an unchanged stored record: the same before/set/after envelope as an act.
- * Without a guest no verdict can run, so a guarded verb reads as denied (the act judges for real).
+ * What a write's verdict answers for unchanged stored records: the same before/set/after envelope as an act, every row
+ * read at once and judged in one verdict. Without a guest no verdict can run, so a guarded verb reads as denied (the
+ * act judges for real); a missing row is denied.
  */
 const opened = Effect.fn('Bolt.opened')(function* (
 	e: Probe,
@@ -2360,7 +2363,7 @@ const opened = Effect.fn('Bolt.opened')(function* (
 	bindings: Bindings,
 	model: string,
 	verb: 'update' | 'delete',
-	id: string
+	ids: readonly string[]
 ): Effect.fn.Return<Judgement['kind'], EngineError> {
 	if (authority.admin) return 'allow';
 	const arms = authority.models[model]?.[verb] ?? [];
@@ -2368,23 +2371,39 @@ const opened = Effect.fn('Bolt.opened')(function* (
 	if (arms.some((arm) => !arm.check)) return 'allow';
 	if (e.guest === undefined) return 'deny';
 	const cat = catalog_of(e.manifest);
-	const [before] =
+	const before =
 		verb === 'update'
-			? yield* storedTrees(e.db, e.manifest, cat, model, [id], bindings)
-			: yield* wireRows(e.db, cat, model, [id], bindings);
-	if (before === null || before === undefined) return 'deny';
+			? yield* storedTrees(e.db, e.manifest, cat, model, ids, bindings)
+			: yield* wireRows(e.db, cat, model, ids, bindings);
+	const rows = before.filter((row) => row !== null);
+	if (rows.length !== ids.length) return 'deny';
 	const { verdict } = yield* judge(
 		e,
 		e.db,
 		authority,
 		bindings,
-		`open:${model}:${id}`,
+		`open:${model}:${ids.join(',')}`,
 		model,
 		verb,
 		arms,
-		[{ before, set: {}, after: verb === 'update' ? before : null }]
+		rows.map((row) => ({ before: row, set: {}, after: verb === 'update' ? row : null }))
 	);
 	return verdict.kind;
+});
+/**
+ * Whether deleting `ids` of `model` would commit (`allow`), be held for approval (`approve`) or be refused (`deny`): the
+ * delete's admission over every row in one read and one verdict, as the act judges them together.
+ */
+export const delete_verdict = Effect.fn('Bolt.deleteVerdict')(function* (
+	e: Probe,
+	model: string,
+	ids: readonly string[],
+	authority: Authority,
+	bindings: Bindings
+) {
+	const m = Object.hasOwn(SYSTEM.exposures, model) ? layered(e.manifest) : e.manifest;
+	if (m.exposures[model]?.delete === undefined || ids.length === 0) return 'deny' as const;
+	return yield* opened({ ...e, manifest: m }, authority, bindings, model, 'delete', [...new Set(ids)]);
 });
 /**
  * Whether `authority` may update the row at all (its update checks allow it unchanged, or the admin bypass), and `null`
@@ -2401,7 +2420,7 @@ export const mayUpdate = Effect.fn('Bolt.mayUpdate')(function* (
 	const pre = yield* readRows(e.db, catalog_of(m), [[model, id]]);
 	if (!pre.has(k(model, id))) return null;
 	return (
-		(yield* opened({ ...e, manifest: m }, authority, bindings, model, 'update', id)) === 'allow'
+		(yield* opened({ ...e, manifest: m }, authority, bindings, model, 'update', [id])) === 'allow'
 	);
 });
 /**
@@ -2492,7 +2511,7 @@ export const record_capabilities = Effect.fn('Bolt.recordCapabilities')(function
 		gate =
 			spec?.update === undefined
 				? 'deny'
-				: yield* opened(probe, authority, bindings, model, 'update', id);
+				: yield* opened(probe, authority, bindings, model, 'update', [id]);
 	const declared = m.exposures[owner]?.update?.columns ?? {};
 	const arms = authority.models[owner]?.update ?? [];
 	const covered = (at: string, field?: string) =>
@@ -2608,7 +2627,7 @@ export const record_capabilities = Effect.fn('Bolt.recordCapabilities')(function
 		parent !== undefined
 			? gate
 			: deleteDeclared
-				? yield* opened(probe, authority, bindings, model, 'delete', id)
+				? yield* opened(probe, authority, bindings, model, 'delete', [id])
 				: 'deny';
 	const deleteReasons = [...restrictions, ...parentReasons];
 	if ((yield* modelLock(env, m, model, row)) !== null) deleteReasons.push('state_locked');

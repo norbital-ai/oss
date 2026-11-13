@@ -33,7 +33,7 @@ export function scopeOf(authority: Authority, outputs: 'named' | 'any' = 'named'
 		rows: (path, output) => readPredicates(authority, path, outputs === 'any' ? undefined : output)
 	};
 }
-/** The open request holding a root row of a held model, as `$approval`: every reader sees it, scoped or not. */
+/** The open request holding a root row of a held model, as `$approval`: every reader sees it, scoped or not, and that it deletes the row. */
 export const heldColumns =
 	(approvals: ReadonlySet<string>) =>
 	(c: string, a: string): readonly string[] =>
@@ -41,6 +41,8 @@ export const heldColumns =
 			? [
 					`(SELECT jsonb_build_object('request_id', ap.id::text, 'state', ap.state, 'step', ap.step,
 		'steps', ap.route -> 'steps', 'by', coalesce(apu.name, apu.email, ap.requestor))
+		|| CASE WHEN ap.records @> jsonb_build_array(jsonb_build_object('collection', ${lit(c)}::text, 'id', ${a}."id"::text, 'op', 'delete'))
+			THEN '{"pending_delete":true}'::jsonb ELSE '{}'::jsonb END
 	FROM bolt_approvals ap LEFT JOIN sys_user apu ON apu.id::text = ap.requestor_user
 	WHERE ${open_sql('ap.state')}
 		AND ap.records @> jsonb_build_array(jsonb_build_object('collection', ${lit(c)}::text, 'id', ${a}."id"::text))

@@ -119,7 +119,7 @@ const manifest = Result.getOrThrow(
 				pages: { home: { title: 'Home' } }
 			}
 		},
-		teams: { Sales: { policies: ['rep'] }, Finance: { policies: [] }, Proposer: { policies: ['proposer'] } },
+		teams: { Sales: { policies: ['rep'] }, Finance: { name: 'Finance desk', policies: [] }, Proposer: { policies: ['proposer'] } },
 		automations: {},
 		mcp: {},
 		custom_fields: {},
@@ -538,6 +538,20 @@ layer(workspace)('shell routes', (it) => {
 					204
 				);
 				expect(yield* bootValue(admin)).toMatchObject({ admin: true, preview: null });
+			})
+		);
+
+		it.effect('a team preview names the team by its declared name for the banner', () =>
+			Effect.gen(function* () {
+				expect((yield* call(admin, 'POST', '/__bolt/shell/preview', { team: 'Finance' })).status).toBe(
+					204
+				);
+				expect(yield* bootValue(admin)).toMatchObject({
+					preview: { team: 'Finance', name: 'Finance desk' }
+				});
+				expect((yield* call(admin, 'POST', '/__bolt/shell/preview', { team: null })).status).toBe(
+					204
+				);
 			})
 		);
 

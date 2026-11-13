@@ -191,7 +191,8 @@ const Held = Schema.Struct({
 	state: Schema.Literals(['Pending', 'ChangesRequested']),
 	step: Schema.Number,
 	steps: Snapshot.fields.steps,
-	by: Schema.String
+	by: Schema.String,
+	pending_delete: Schema.optionalKey(Schema.Literal(true))
 });
 const decodeHeld = Schema.decodeUnknownOption(Held);
 /** `$approval` of a row from the raw request its read selected (query/sql.ts `root`): its named steps and who asked. */

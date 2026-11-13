@@ -257,7 +257,8 @@ export function queue_events(
 
 /**
  * The closing decision releases frozen jobs atomically, or discards them when the change is rejected. A standing
- * change emits its held records' write events now, each with its net verb, at the decider's depth.
+ * change emits its held records' write events now, each with its net verb, at the decider's depth; a record the decision
+ * itself writes (a held delete it performs) emits from its own write.
  */
 export function settleApprovalEffects(
 	m: EngineManifest,
@@ -276,5 +277,6 @@ export function settleApprovalEffects(
 	const { writes } = triggers_of(m);
 	if (writes.length > 0)
 		queue_events(c, writes, `${c.p(now)}::timestamptz`, `(SELECT r->>'collection' AS c,r->>'id' AS id,r->>'op' AS op
-		FROM bolt_approvals a CROSS JOIN LATERAL jsonb_array_elements(a.records) r WHERE a.id IN (SELECT id FROM up))`, depth, GATED);
+		FROM bolt_approvals a CROSS JOIN LATERAL jsonb_array_elements(a.records) r WHERE a.id IN (SELECT id FROM up)
+		AND NOT EXISTS (SELECT 1 FROM allp p WHERE p.c = r->>'collection' AND p.id = r->>'id'))`, depth, GATED);
 }

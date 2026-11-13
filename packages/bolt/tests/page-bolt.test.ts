@@ -417,6 +417,17 @@ describe('acts, starts, uploads and the session', () => {
 			expect(sent).toHaveLength(1);
 		})
 	);
+	it.effect("a busy host's refusal is refused (nothing ran), not unknown", () =>
+		Effect.gen(function* () {
+			const busy = 'This workspace is busy. Please try again shortly.';
+			const { bolt } = yield* client(() =>
+				Response.json({ error: { code: 'busy', message: busy } }, { status: 503 })
+			);
+			expect(
+				yield* Effect.flip(bolt.approvals.decide('r1', { decision: 'reject', reason: 'No' }))
+			).toMatchObject({ _tag: 'ActRefused', code: 'rate_limited', message: busy });
+		})
+	);
 	it.effect('conflicts and unconfirmed acts fail; a committed output is revived', () =>
 		Effect.gen(function* () {
 			const conflict = (yield* client(

@@ -811,7 +811,9 @@ export const create_bolt = (config: BoltConfig) =>
 				}), (body, headers) => transport.request('POST', path, body, headers));
 				const refusal = errorOf(response.body);
 				if (Option.isSome(refusal)) {
-					const code = refusal_of_status(response.status);
+					// `busy` is the host's admission refusal: nothing ran, so the person may simply try again
+					const code =
+						refusal.value.error.code === 'busy' ? 'rate_limited' : refusal_of_status(response.status);
 					return code === null
 						? { kind: 'unknown' as const, invocation: key }
 						: { kind: 'refused' as const, code, message: refusal.value.error.message };
@@ -922,6 +924,13 @@ export const create_bolt = (config: BoltConfig) =>
 					null,
 					'Record permissions could not be loaded.'
 				).pipe(Effect.map((answer) => answer?.value ?? null)),
+			delete_verdict: (model: string, ids: readonly string[]) =>
+				getValue(
+					`${PATHS.delete_verdict}?${new URLSearchParams([['model', model], ...ids.map((id) => ['id', id])])}`,
+					Schema.Struct({ value: Schema.Literals(['allow', 'approve', 'deny']) }),
+					undefined,
+					'Delete permissions could not be loaded.'
+				).pipe(Effect.map((answer) => answer.value)),
 			decode(model: string, view: { where?: Json; order_by?: Json }) {
 				if (config.catalog === undefined)
 					throw new Error('This client has no catalog to decode against.');

@@ -293,8 +293,9 @@
 			<div class="flex flex-col gap-1 text-sm">
 				<div class="flex min-w-0 items-center gap-1">
 					<label class="text-label" for={`${id}-${name}`}
-						>{labelOf(definition, name)}{#if f.optional === true}
-							<span class="text-meta">({t('optional')})</span>{/if}</label
+						>{labelOf(definition, name)}{#if f.optional === true}{' '}<span class="text-meta"
+								>({t('optional')})</span
+							>{/if}</label
 					>
 					{#if help}<DescriptionHint text={help} />{/if}
 				</div>

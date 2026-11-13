@@ -13,7 +13,7 @@ type Answer<X> = X extends Eff<infer A, unknown> ? A : never;
 
 declare const caller: CallerQuery;
 declare const db: WorkspaceQuery;
-/** A template's reader over both native reads (hr-payroll's `Read`): one read request, either answer. */
+/** A template's reader over both native reads (hrms's `Read`): one read request, either answer. */
 declare const both: <const R extends ReadRequestBase>(
 	request: ReadRequest<R>
 ) => Eff<ReadAnswer<R>>;

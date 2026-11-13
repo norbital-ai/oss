@@ -253,6 +253,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Unable to open the workspace': '无法打开工作区',
 	'Try again': '重试',
 	'Too many requests. Wait a moment and try again.': '请求过多，请稍后重试。',
+	'This workspace is busy. Please try again shortly.': '工作区繁忙，请稍后重试。',
 	'The workspace is temporarily unavailable. Wait a moment and try again.':
 		'工作区暂时不可用，请稍后重试。',
 	'The workspace server did not respond in time. Try again shortly.':
@@ -564,8 +565,18 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Output: '输出',
 	'from cache': '其中来自缓存',
 	reasoning: '其中推理',
-	'Previewing as a team. Its grants apply; you are recorded as the previewer.':
-		'正在以团队身份预览。适用该团队的权限；系统记录您为预览者。',
+	'Previewing as the {team} team. Its grants apply; you are recorded as the previewer.':
+		'正在以 {team} 团队身份预览。适用该团队的权限；系统记录您为预览者。',
+	'Record type': '记录类型',
+	Write: '写入',
+	Succeeded: '成功',
+	Running: '运行中',
+	Cron: '定时任务',
+	Start: '手动启动',
+	Effect: '效果',
+	Continue: '续跑',
+	Webhook: 'Webhook',
+	Link: '链接',
 	'Previewing as another member. Their grants apply; you are recorded as the previewer.':
 		'正在以其他成员身份预览。适用其权限；系统记录您为预览者。',
 	Progress: '进度',

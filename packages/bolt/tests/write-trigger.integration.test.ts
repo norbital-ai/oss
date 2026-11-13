@@ -136,6 +136,27 @@ layer(workspace)('write triggers', (it) => {
 		})
 	);
 
+	it.effect("the kit's sign-in of an invited address accepts the invitation as a real one: the listener runs", () =>
+		Effect.gen(function* () {
+			const t = yield* TestWorkspace;
+			const admin = yield* signIn('boss@acme.example');
+			expect(yield* call(admin, '/__bolt/shell/settings', { op: 'invite', input: { email: 'kit@acme.example', team: 'crew' } })).toBe(200);
+			const signed = yield* t.sign_in('kit@acme.example');
+			const kit = yield* t.db.value(Schema.String, {
+				text: `SELECT id FROM sys_user WHERE email = 'kit@acme.example'`,
+				params: []
+			});
+			expect(signed.actor).toMatchObject({ kind: 'member', id: kit });
+			yield* t.run_due();
+			expect(
+				yield* t.db.value(Schema.Array(Schema.String), {
+					text: `SELECT coalesce(array_agg("user"), '{}') FROM profiles WHERE "user" LIKE '%' || $1`,
+					params: [kit]
+				})
+			).toEqual([`event:sys_user:create:${kit}`]);
+		})
+	);
+
 	it.effect('an identity write inside a run chains one deeper, so a self-rewriting listener stops at the limit', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;

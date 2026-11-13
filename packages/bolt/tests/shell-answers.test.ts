@@ -41,7 +41,7 @@ const boot = {
 	},
 	name: 'Ann',
 	admin: true,
-	preview: { team: 'ops', by: 'u2' },
+	preview: { team: 'ops', name: 'Operations', by: 'u2' },
 	notice: { text: 'Trial ends', tone: 'warning', href: '/billing', action: 'Upgrade' },
 	workspaces: [{ handle: 'beta', name: 'Beta', href: '/beta' }],
 	nav: [

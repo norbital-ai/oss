@@ -1264,3 +1264,91 @@ it.live('blank text reads as the one empty "—"', () =>
 		assert.equal(textOf(element<HTMLElement>(target, '[data-field=crew]')).replace('Crew', '').trim(), '—');
 	})
 );
+
+it.live('a failed decision keeps the approval pane, its error and its form while the requests reload', () =>
+	browser(async () => {
+		const busy = 'This workspace is busy. Please try again shortly.';
+		const fixture = await fake(LIVE, [{ id: 'busy', moves: [{ decision: 'reject', reason: 'required' }] }]);
+		const answered = fixture.script.approval;
+		let hang = false;
+		// the reload after the decision waits on a host that is still busy
+		fixture.script.approval = (params) => (hang ? new Promise(() => {}) : (answered?.(params) ?? []));
+		fixture.script.act = () => ({ kind: 'refused', code: 'rate_limited', message: busy });
+		const target = await showFooter(fixture, { representation: 'generated' });
+		element<HTMLButtonElement>(target, '[data-record-pane=approval]').click();
+		await settle();
+		element<HTMLButtonElement>(target, 'button[data-decision=reject]').click();
+		await settle();
+		const reason = element<HTMLTextAreaElement>(target, '[data-view=approval-controls] textarea');
+		reason.value = 'Too costly';
+		reason.dispatchEvent(new Event('input', { bubbles: true }));
+		await settle();
+		hang = true;
+		element<HTMLButtonElement>(target, '[data-confirm]').click();
+		await settle();
+		assert.equal(textOf(element<HTMLElement>(target, '[data-view=approval-notice][role=alert]')).trim(), busy);
+		assert.ok(target.querySelector('form[data-decision=reject]'), 'the request stays decidable');
+		assert.ok(target.querySelector('[data-view=approval-badge]'));
+	})
+);
+
+it.live('Withdraw clears the header badge at once, in a represented record too, though the row still carries `$approval`', () =>
+	browser(async () => {
+		let status: ApprovalView['status'] = 'Pending';
+		const fixture = await fake({
+			...LIVE,
+			$approval: { request_id: 'mine', state: 'Pending', step: 0, steps: [{ name: 'Review', teams: ['reviewers'], users: [] }], requested_by: 'Ada' }
+		});
+		fixture.script.approval = () => [
+			approvalView({ id: 'mine', status, mine: true, moves: status === 'Pending' ? [{ decision: 'withdraw', reason: 'optional' }] : [] })
+		];
+		fixture.script.act = (body) => {
+			status = 'Withdrawn';
+			return committed(body);
+		};
+		const target = await showFooter(fixture);
+		await represented(target);
+		assert.ok(target.querySelector('[data-view=approval-badge]'));
+		element<HTMLButtonElement>(target, '[data-record-pane=approval]').click();
+		await settle();
+		assert.ok(target.querySelector('[data-view=approval-badge]'), 'the badge stays while the pane is open');
+		element<HTMLButtonElement>(target, 'button[data-decision=withdraw]').click();
+		await settle();
+		element<HTMLButtonElement>(target, '[data-confirm]').click();
+		// a boolean: a failing assert would format the whole DOM node on every poll
+		await vi.waitFor(() => assert.ok(target.querySelector('[data-view=approval-badge]') === null, 'the badge is gone'));
+	})
+);
+
+it.live('record history lists a request for changes and says where a request stands in plain words', () =>
+	Effect.gen(function* () {
+		const v = yield* browser(() =>
+			show(
+				LIVE,
+				catalog,
+				undefined,
+				undefined,
+				[
+					{
+						id: 'asked',
+						status: 'ChangesRequested',
+						log: [
+							{ move: 'request', by: { ref: 'member:ada', name: 'Ada' }, at: '2026-09-03T00:00:00Z', from: null, to: 'Pending', step: 0, reason: null },
+							{ move: 'request_changes', by: { ref: 'member:sam', name: 'Sam' }, at: '2026-09-04T00:00:00Z', from: 'Pending', to: 'ChangesRequested', step: 0, reason: 'Add the quote' }
+						]
+					}
+				],
+				() =>
+					HISTORY.map((entry) =>
+						entry.revision === 3 ? { ...entry, approval: { request: 'asked', state: 'Pending' } } : entry
+					)
+			)
+		);
+		yield* browser(() => v.openHistory());
+		const events = required(v.history());
+		assert.match(textOf(element<HTMLElement>(events, '[data-history-revision="3"]')), /Waiting for approval/);
+		assert.doesNotMatch(textOf(events), /approval Pending/);
+		const asked = element<HTMLElement>(events, '[data-history-decision]');
+		assert.match(textOf(asked), /Requested changes · Sam.*“Add the quote”/s);
+	})
+);

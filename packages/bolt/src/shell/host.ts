@@ -86,7 +86,7 @@ import { inbox } from './inbox/data.ts';
 import { instance_messages } from './integration/messages.ts';
 import { runList, visible_run_names } from '../engine/runs/rows.ts';
 import { outputFiles } from '../engine/runs/output-files.ts';
-import { settings, SettingsOp, applySettings } from './settings/data.ts';
+import { settings, SettingsOp, applySettings, teamName } from './settings/data.ts';
 import { exposure, read_catalog } from '../engine/access/exposure.ts';
 import { client_contract, operation_output_catalog } from '../engine/access/operation-outputs.ts';
 import { manifestItems } from './finder/manifest.ts';
@@ -567,7 +567,9 @@ const makeShell = Effect.gen(function* () {
 					real,
 					token,
 					preview:
-						team === null ? { user: target, by: p.impersonatedBy } : { team, by: p.impersonatedBy },
+						team === null
+							? { user: target, by: p.impersonatedBy }
+							: { team, name: teamName(m, team), by: p.impersonatedBy },
 					...expiresAt
 				};
 			}

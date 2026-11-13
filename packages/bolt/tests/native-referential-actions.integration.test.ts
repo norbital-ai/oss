@@ -331,77 +331,61 @@ describe('database-owned referential actions', () => {
 	);
 
 	it.live(
-		'a provisional delete unlinks both SET NULL references in one revision and keeps its checkpoint across key replay',
+		'a held delete changes nothing until approved, then unlinks both SET NULL references in one revision of its request',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* fixture;
 					const key = randomUUID(),
 						input = [{ target: f.root }];
+					const before = yield* f.history();
 					const first = yield* f.act('roots', 'delete', input, f.requester, key);
 					assert.ok(first.outcome.kind === 'pending_approval');
 					const request_id = first.outcome.request_id;
 					yield* f.cleanJournal;
-					assert.deepEqual(yield* f.counts(), [{ roots: 0, branches: 0, leaves: 0, archives: 1 }]);
-					assert.equal((yield* f.watcherRows())[0]?.revision, 2);
-					const checkpoints = yield* f.t.db.value(Schema.Array(Checkpoint), {
-						text: 'SELECT records FROM bolt_approvals WHERE id=$1',
-						params: [request_id]
-					});
+					assert.deepEqual(yield* f.counts(), [{ roots: 1, branches: 1, leaves: 1, archives: 1 }]);
+					assert.equal((yield* f.watcherRows())[0]?.revision, 1);
 					assert.deepEqual(
-						[...checkpoints].sort((a, b) => a.model.localeCompare(b.model)),
-						[
-							{ model: 'branches', id: f.branch, op: 'delete', before: 1 },
-							{ model: 'leaves', id: f.leaf, op: 'delete', before: 1 },
-							{ model: 'roots', id: f.root, op: 'delete', before: 1 },
-							{ model: 'watchers', id: f.watcher, op: 'update', before: 1 }
-						]
+						yield* f.t.db.value(Schema.Array(Checkpoint), {
+							text: 'SELECT records FROM bolt_approvals WHERE id=$1',
+							params: [request_id]
+						}),
+						[{ model: 'roots', id: f.root, op: 'delete', before: 1 }]
 					);
-					const history = yield* f.history();
-					assert.deepEqual(
-						history
-							.filter((row) => row.model === 'watchers' && row.op === 'update')
-							.map((row) => ({
-								revision: row.revision,
-								request: row.request
-							})),
-						[{ revision: 2, request: request_id }]
-					);
+					assert.deepEqual(yield* f.history(), before);
 					assert.deepEqual(
 						(yield* f.act('roots', 'delete', input, f.requester, key, true)).outcome,
 						first.outcome
 					);
-					assert.deepEqual(yield* f.history(), history);
+					assert.deepEqual(yield* f.history(), before);
 					yield* f.cleanJournal;
 					assert.deepEqual(
 						yield* f.approvals.decide({
 							request_id,
-							decision: 'reject',
-							reason: 'Keep the root and both references',
+							decision: 'approve',
 							authority: f.reviewer,
 							now: f.t.clock.now()
 						}),
-						{ kind: 'decided', request_id, status: 'Rejected' }
+						{ kind: 'decided', request_id, status: 'Approved' }
 					);
 					yield* f.cleanJournal;
-					assert.deepEqual(yield* f.counts(), [{ roots: 1, branches: 1, leaves: 1, archives: 1 }]);
+					assert.deepEqual(yield* f.counts(), [{ roots: 0, branches: 0, leaves: 0, archives: 1 }]);
 					assert.deepEqual(yield* f.watcherRows(), [
 						{
 							id: f.watcher,
 							name: 'Watcher',
-							first__roots: f.root,
+							first__roots: null,
 							first__archives: null,
-							second__roots: f.root,
+							second__roots: null,
 							second__archives: null,
-							revision: 3
+							revision: 2
 						}
 					]);
-					const restored = (yield* f.history()).filter(
-						(row) => row.request === request_id && row.cause === 'restored'
-					);
 					assert.deepEqual(
-						restored.map((row) => row.model),
-						['branches', 'leaves', 'roots', 'watchers']
+						(yield* f.history())
+							.filter((row) => row.request === request_id)
+							.map((row) => `${row.model}:${row.op}`),
+						['branches:delete', 'leaves:delete', 'roots:delete', 'watchers:update']
 					);
 				})
 			)

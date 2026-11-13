@@ -960,6 +960,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 					<Combobox
 						variant="ghost"
 						class="w-24"
+						readonly={false}
 						aria-label={msg(text, 'table.pageSize')}
 						searchable={false}
 						options={SIZES.map((n) => ({
@@ -1363,9 +1364,11 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 											held !== null &&
 												(held.state === 'Pending'
 													? '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-warning)]'
-													: '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-primary)]')
+													: '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-primary)]'),
+											held?.pending_delete === true && '[&>td]:text-muted-foreground [&>td]:line-through'
 										]}
 										data-approval={held?.state}
+										data-pending-delete={held?.pending_delete}
 										title={held === null ? undefined : approvalText(text, held)}
 										{@attach wide.measure(rowKey(i))}
 										tabindex={opens ? 0 : undefined}

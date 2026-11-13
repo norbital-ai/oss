@@ -1,5 +1,6 @@
-// A delete's transform carries rows of other models into the delete's own commit: they run their own callbacks, commit
-// in its one statement or not at all, are held with it when an approval holds it, and roll back when it is rejected.
+// A delete's transform carries rows of other models into the delete's own commit: they run their own callbacks and
+// commit in its one statement or not at all. A held delete commits only its request: its rows stay, marked, and what it
+// carries waits; the approving decision deletes them with everything carried, and a rejection restores nothing.
 import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';
 import { Effect, Layer, Schema } from 'effect';
@@ -7,7 +8,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { Authority, EngineActor, Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
-import { Approvals, Writes } from '../src/engine/services.ts';
+import { Approvals, Reads, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
@@ -47,10 +48,13 @@ const manifest: EngineManifest = {
 		},
 		reviewer: {
 			description: 'Reviews',
-			grants: { approval_request: { outputs: { default: {} } } }
+			grants: { approval_request: { outputs: { default: {} } }, entries: { outputs: { default: {} } } }
 		}
 	},
-	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] } }
+	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] } },
+	automations: {
+		heard: { description: 'Hears deletes', policies: ['reviewer'], on: [{ model: 'entries', verbs: ['delete'] }] }
+	}
 };
 const source = `export default { model: {
 	entries: { bodies: {
@@ -62,7 +66,6 @@ const source = `export default { model: {
 			const { ledger } = yield* ctx.query({ ledger: { where: { source: { in: rows.map((row) => 'counted ' + row.name) } } } });
 			const counted = rows.findIndex((row) => ledger.rows.some((entry) => entry.source === 'counted ' + row.name));
 			if (counted >= 0) return yield* ctx.refuse('A later run already counted it.', { row: counted, field: 'name' });
-			if (ctx.approving) return { on_approved: { ledger: { create: rows.map((row) => ({ source: 'approved ' + row.name })) } } };
 			return {
 				with: { ledger: { create: [...rows.map((row) => ({ source: 'undo ' + row.name })), { source: 'batch of ' + rows.length }] } },
 				on_approved: { ledger: { create: rows.map((row) => ({ source: 'approved ' + row.name })) } }
@@ -98,6 +101,7 @@ const workspace = Layer.unwrap(
 const fixture = Effect.gen(function* () {
 	const t = yield* TestWorkspace,
 		writes = yield* Writes,
+		reads = yield* Reads,
 		approvals = yield* Approvals;
 	yield* t.db.write({
 		text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Requester','staff','requesters'),($2,'Manager','staff','managers') ON CONFLICT (id) DO NOTHING",
@@ -166,7 +170,20 @@ const fixture = Effect.gen(function* () {
 				WHERE h.collection = 'ledger' AND l.source IN (SELECT jsonb_array_elements_text($1::jsonb)) ORDER BY l.source`,
 			params: [sources]
 		});
-	return { t, requester, act, make, targets, decide, entries, ledger, history };
+	/** The row as `authority` reads it, with its `$approval`. */
+	const read = (id: string, authority: Authority) => {
+		const now = t.clock.now();
+		return reads
+			.run([{ kind: 'get', model: 'entries', id, select: { fields: null, relations: {} } }], { as: 'caller', authority }, { now, today: now.slice(0, 10), tz: 'UTC' })
+			.pipe(Effect.map(([row]) => row));
+	};
+	const heard = (id: string) =>
+		t.db.rows(Schema.Struct({ verb: Schema.String, records: Schema.Array(Schema.String) }), {
+			text: `SELECT trigger->>'verb' AS verb, ARRAY(SELECT jsonb_array_elements_text(trigger->'records')) AS records
+			FROM sys_run WHERE automation = 'heard' AND trigger->'records' ? $1`,
+			params: [id]
+		});
+	return { t, requester, manager, act, make, targets, decide, entries, ledger, history, read, heard };
 });
 const held = (outcome: Outcome) => {
 	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
@@ -245,33 +262,55 @@ layer(workspace, { excludeTestServices: true })('delete.transform', (it) => {
 		})
 	);
 
-	it.effect('holds its carried rows with a held delete and keeps them on approval', () =>
+	it.effect('a held delete commits only its request and deletes on approval, with what it carries', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;
-			const rows = yield* f.make('sick');
+			const rows = yield* f.make('sick', 'leave');
+			f.t.count.reset();
 			const request = held(yield* f.act('delete', f.targets(rows), f.requester));
-			expect(yield* f.entries('sick')).toEqual([]);
-			expect(yield* f.ledger('undo sick', 'approved sick')).toEqual([
-				{ source: 'undo sick', carrier: 'entries' }
-			]);
+			expect(f.t.count.writes).toBe(1);
+			expect(yield* f.entries('sick', 'leave')).toEqual(['leave', 'sick']);
+			expect(yield* f.ledger('undo sick', 'approved sick', 'batch of 2')).toEqual([]);
+			for (const authority of [f.requester, f.manager])
+				expect(yield* f.read(rows[0]?.id ?? '', authority)).toMatchObject({
+					$approval: { request_id: request, state: 'Pending', pending_delete: true }
+				});
+			expect(yield* f.heard(rows[0]?.id ?? '')).toEqual([]);
 			expect(yield* f.decide(request, 'approve')).toMatchObject({ status: 'Approved' });
-			expect(yield* f.entries('sick')).toEqual([]);
-			expect(yield* f.ledger('undo sick', 'approved sick')).toEqual([
+			expect(yield* f.entries('sick', 'leave')).toEqual([]);
+			// the decision's own delete emits the write event, once
+			expect(yield* f.heard(rows[0]?.id ?? '')).toEqual([
+				{ verb: 'delete', records: rows.map((row) => row.id).toSorted() }
+			]);
+			expect(yield* f.ledger('undo sick', 'approved sick', 'batch of 2')).toEqual([
 				{ source: 'approved sick', carrier: 'entries' },
+				{ source: 'batch of 2', carrier: 'entries' },
 				{ source: 'undo sick', carrier: 'entries' }
 			]);
+			expect(yield* f.history('undo sick')).toEqual([{ op: 'create', source: 'undo sick' }]);
 		})
 	);
 
-	it.effect('rolls its carried rows back with a rejected delete', () =>
+	it.effect('refuses a held delete at once when its transform refuses', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const rows = yield* f.make('refuse');
+			expect(yield* f.act('delete', f.targets(rows), f.requester)).toMatchObject({
+				kind: 'refused',
+				message: 'This entry stays.'
+			});
+		})
+	);
+
+	it.effect('restores nothing when a held delete is rejected', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;
 			const rows = yield* f.make('unpaid');
 			const request = held(yield* f.act('delete', f.targets(rows), f.requester));
-			expect(yield* f.ledger('undo unpaid')).toEqual([{ source: 'undo unpaid', carrier: 'entries' }]);
 			expect(yield* f.decide(request, 'reject')).toMatchObject({ status: 'Rejected' });
 			expect(yield* f.entries('unpaid')).toEqual(['unpaid']);
 			expect(yield* f.ledger('undo unpaid', 'approved unpaid')).toEqual([]);
+			expect(yield* f.read(rows[0]?.id ?? '', f.requester)).not.toHaveProperty('$approval');
 		})
 	);
 });

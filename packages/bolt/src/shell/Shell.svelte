@@ -1174,7 +1174,10 @@
 						<Inline role="status" justify="between" class="bg-warning/15 px-4 py-2 text-xs">
 							<span
 								>{'team' in boot.preview
-									? t('Previewing as a team. Its grants apply; you are recorded as the previewer.')
+									? t('Previewing as the {team} team. Its grants apply; you are recorded as the previewer.').replace(
+											'{team}',
+											boot.preview.name
+										)
 									: t(
 											'Previewing as another member. Their grants apply; you are recorded as the previewer.'
 										)}</span

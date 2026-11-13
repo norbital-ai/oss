@@ -40,6 +40,8 @@ export type Script = {
 		| readonly ApprovalView[]
 		| Response
 		| Promise<ApprovalView | null | readonly ApprovalView[] | Response>;
+	/** `delete-verdict`: the model and every id asked about, in one request. */
+	delete_verdict?(model: string, ids: readonly string[]): 'allow' | 'approve' | 'deny';
 	/** A live read's changes: `emit` answers the read again; the returned function ends the subscription. */
 	changes?(read: WireRead, emit: () => void): () => void;
 	t?: ViewBolt['t'];
@@ -139,6 +141,10 @@ export async function scriptedBolt(script: Script) {
 		if (path.endsWith('/record-capabilities')) {
 			const value = (await script.capabilities?.(url.searchParams)) ?? null;
 			return value instanceof Response ? value : Response.json(value === null ? null : { value });
+		}
+		if (path.endsWith('/delete-verdict')) {
+			const value = script.delete_verdict?.(url.searchParams.get('model') ?? '', url.searchParams.getAll('id'));
+			return value === undefined ? new Response(null, { status: 404 }) : Response.json({ value });
 		}
 		if (path.endsWith('/approval')) {
 			const value =

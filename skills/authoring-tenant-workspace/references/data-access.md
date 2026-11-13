@@ -65,7 +65,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 
 ## Revisions
 
-An update or delete names its selected row as `target`; its revision guards the write even after external work. There is no separate observed-revision map. An act yields `committed` or `pending_approval`; refusals, conflicts and uncertain writes are typed failures. A pending approval is written and held.
+An update or delete names its selected row as `target`; its revision guards the write even after external work. There is no separate observed-revision map. An act yields `committed` or `pending_approval`; refusals, conflicts and uncertain writes are typed failures. A pending create or update is written and held; a pending delete leaves its rows until approval deletes them.
 
 ## Aggregates
 

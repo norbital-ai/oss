@@ -147,7 +147,7 @@ export type ShellBoot = {
 	name: string | null;
 	admin: boolean;
 	/** Rule 39: the member or team being previewed and the administrator previewing. */
-	preview: { user: string; by: string } | { team: string; by: string } | null;
+	preview: { user: string; by: string } | { team: string; name: string; by: string } | null;
 	/** The host's banner for this member (`ShellHost.notice`: a billing notice). */
 	notice?: ShellNotice;
 	/** The release's client hash: a live link that comes back under another reloads the page. */

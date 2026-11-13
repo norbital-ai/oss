@@ -31,6 +31,8 @@
 		upload?: KindsHost['upload'];
 		query?: KindsHost['query'];
 		zone?: string;
+		/** Mounts the view inside a readonly form's controls (a viewed record). */
+		readonly?: boolean;
 	} & (
 		| (Extract<ViewPart, { part: 'point' | 'picker' }> & { bolt?: ViewBolt })
 		| (Exclude<ViewPart, { part: 'point' | 'picker' }> & { bolt: ViewBolt })
@@ -42,11 +44,13 @@
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';
+	import { provideControls } from '../src/primitives/utils.js';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
 	import type { BoardProps } from '../src/board/Board.svelte';
 
 	let fixture: ViewHarnessProps = $props();
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
+	provideControls(() => ({ readonly: fixture.readonly }));
 	// svelte-ignore state_referenced_locally
 	const client = fixture.bolt;
 	const ctx: UiContext = { ui: { bolt: client, kinds: {

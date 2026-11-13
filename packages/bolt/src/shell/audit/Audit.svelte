@@ -9,6 +9,7 @@ sits under the table there. -->
 		Dialog,
 		Icon,
 		Input,
+		label,
 		Popover,
 		StructuredData,
 		Table,
@@ -211,22 +212,33 @@ sits under the table there. -->
 		erase: 'Erased'
 	};
 	const word = (value: string) => value.replaceAll(/[._]/g, ' ').replaceAll(/\s+/g, ' ').trim();
-	/** `orders.update` reads as a sentence; an action without a verb (an automation, a decision) keeps its words. */
-	const phrase = (action: string) => {
-		const dot = action.lastIndexOf('.');
-		const verb = VERBS[dot <= 0 ? action : action.slice(dot + 1)];
-		if (verb === undefined)
-			return word(action).replace(/^./, (character) => character.toUpperCase());
-		return dot <= 0 ? t(verb) : t(`${verb} {what}`).replace('{what}', word(action.slice(0, dot)));
-	};
+	/** A model's (or automation's) catalog label, else its handle in words. */
+	const named = (handle: string) => label({ t }, handle);
+	/** `orders.update` reads as a sentence; an action without a verb (an automation, a decision) keeps its words. A write
+	 * names each of its writes (`orders.update, lines.create`). */
+	const phrase = (action: string) =>
+		action
+			.split(', ')
+			.map((one) => {
+				const dot = one.lastIndexOf('.');
+				const verb = VERBS[dot <= 0 ? one : one.slice(dot + 1)];
+				if (verb === undefined) return word(one).replace(/^./, (character) => character.toUpperCase());
+				return dot <= 0 ? t(verb) : t(`${verb} {what}`).replace('{what}', named(one.slice(0, dot)));
+			})
+			.join(', ');
 	/** A row event's record model; an operation's own events (prepared, settled) name the model or automation their action
 	 * leads with (`orders.update`, `bolt.notify.finish`). */
 	const whatOf = (e: Pick<AuditSummary, 'subject' | 'action'>) =>
 		e.subject !== null
-			? word(e.subject.model)
-			: e.action.includes('.')
-				? word(e.action.slice(0, e.action.lastIndexOf('.')))
-				: '';
+			? named(e.subject.model)
+			: [
+					...new Set(
+						e.action
+							.split(', ')
+							.filter((one) => one.includes('.'))
+							.map((one) => named(one.slice(0, one.lastIndexOf('.'))))
+					)
+				].join(', ');
 	const rows = $derived(
 		(answer?.rows ?? []).map((row) => ({
 			id: row.id,
@@ -294,7 +306,7 @@ sits under the table there. -->
 		);
 		const verb = VERBS[change.op] ?? word(change.op).replace(/^./, (c) => c.toUpperCase());
 		return {
-			heading: t(`${verb} {what}`).replace('{what}', word(change.model)),
+			heading: t(`${verb} {what}`).replace('{what}', named(change.model)),
 			before,
 			after,
 			kind: { kind: 'object' as const, fields }
