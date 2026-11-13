@@ -1,4 +1,3 @@
-import { encode_wire, revive_wire } from '@norbital-ai/std/wire';
 import { Result } from 'effect';
 import { value_object, type Value } from '../kinds/kind.js';
 
@@ -40,7 +39,7 @@ export function open_record(
 export function remember_create(model: string, values: { readonly [field: string]: Value }): void {
 	if (typeof history === 'undefined' || Object.keys(values).length === 0) return;
 	history.replaceState(
-		{ ...entryState(), [CREATE]: { model, values: JSON.stringify(encode_wire(values)) } },
+		{ ...entryState(), [CREATE]: { model, values: JSON.stringify(values) } },
 		'',
 		location.href
 	);
@@ -52,7 +51,7 @@ export function remembered_create(model: string): { readonly [field: string]: Va
 	const kept = value_object(state) ? state[CREATE] : undefined;
 	if (!value_object(kept) || kept['model'] !== model || typeof kept['values'] !== 'string') return {};
 	const text = kept['values'];
-	const values: unknown = Result.getOrUndefined(Result.try(() => JSON.parse(text, revive_wire)));
+	const values: unknown = Result.getOrUndefined(Result.try(() => JSON.parse(text)));
 	return value_object(values) ? values : {};
 }
 /**

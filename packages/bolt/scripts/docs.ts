@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // The API reference generator, run by bolt's build after the package compiles: `node scripts/docs.ts`.
-// It walks every public entry (`exports`, `./tooling` aside) of bolt, ui, std and bolt-cli, reads each entry's
+// It walks every public entry (`exports`, `./tooling` aside) of bolt, ui and bolt-cli, reads each entry's
 // declarations with the TypeScript checker (no TypeDoc) and writes one JSON document per namespace plus `index.json`
 // to `build/docs/`, where `@norbital-ai/bolt/docs` reads them. bolt and its dependencies are read from their built
 // `.d.ts`; bolt-cli builds after bolt, so its entries are read from source, and its `bolt` command's verbs become the

@@ -1,3 +1,8 @@
+// The kit draws lucide icons; populate Iconify's cache so no file waits on (or leaves) a CDN request for them.
+import { icons as lucide } from '@iconify-json/lucide/index.js';
+import { addCollection } from '@iconify/svelte/dist/functions';
+addCollection(lucide);
+
 // A desktop, whatever the host reports: a fine pointer that hovers. A Linux runner's headless Chromium reports
 // `hover: none`, which neither a launch flag nor media emulation overrides, and the kit then opens hints by tap rather
 // than by hover or focus. Until a test emulates touch (`Emulation.setTouchEmulationEnabled`), the hover and pointer

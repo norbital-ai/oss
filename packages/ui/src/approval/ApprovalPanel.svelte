@@ -343,8 +343,7 @@ reason and confirm.
 			<!-- where the request stands and why, for the requester and the approvers alike, not only inside a step's popover -->
 			{@const last = [...v.log].reverse().find((e) => DECISIVE.has(e.move))}
 			<div class="flex flex-col gap-0.5" role="status" data-view="approval-outcome">
-				<p class="font-medium">{approvalStatus(bolt, v.status)}{#if last !== undefined}
-						· {who(last.by)}{/if}</p>
+				<p class="font-medium">{approvalStatus(bolt, v.status)}{last === undefined ? '' : ` · ${who(last.by)}`}</p>
 				{#if last?.reason}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
 						“{last.reason}”
 					</p>{/if}

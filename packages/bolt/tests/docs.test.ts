@@ -123,7 +123,7 @@ const Manifest = Schema.fromJsonString(
 it.effect('the reference holds every public entry point, every verb, and a doc comment on every symbol and prop', () => Effect.gen(function* () {
 	const docs = yield* cached;
 	const names = docs.index().namespaces.map((n) => n.namespace);
-	for (const pkg of ['bolt', 'ui', 'std', 'bolt-cli']) {
+	for (const pkg of ['bolt', 'ui', 'bolt-cli']) {
 		const manifest = yield* Schema.decodeUnknownEffect(Manifest)(
 			readFileSync(new URL(`../../${pkg}/package.json`, import.meta.url), 'utf8')
 		);
@@ -150,8 +150,7 @@ it.effect('the reference holds every public entry point, every verb, and a doc c
 		])
 	);
 	expect(docs.symbol('bolt-cli/cli', 'bolt templates lock')?.params?.map((p) => p.name)).toEqual(['--filter', '--check']);
-	// std's comments belong to its own refactor; everything else is documented
-	expect(docs.index().missing.filter((m) => !m.startsWith('std/'))).toEqual([]);
+	expect(docs.index().missing).toEqual([]);
 	for (const name of ['Table', 'Board', 'Chart', 'RecordShell', 'Form', 'Field', 'Show', 'Editor', 'ToolbarSearch', 'Combobox'])
 		expect(docs.symbol('ui', name)?.props?.length, name).toBeGreaterThan(0);
 	const toolbar = docs.symbol('ui', 'Table')?.props?.find((p) => p.name === 'toolbar');

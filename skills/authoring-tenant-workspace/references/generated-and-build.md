@@ -27,7 +27,7 @@ A workspace author writes `src/`, `seed/`, `tests/`, `assets/`. The compiler wri
 
 ## Seeds
 
-Contract: Bolt `seeding.md`.
+Contract: `seeder` and the `bolt seed` verb in the Bolt API reference.
 
 - `seed/public/**/<model>.json[.gz]` (basename is the model) plus `assets.json` and `assets/**` form the `base` pack every release carries. `seed/test/**` in the same shape is the `test` pack. `seed/+seeder.ts` names the private bank tree, read only by `bolt seed`.
 - Rows restore through the model engine with no write callback or approval; a pack's `start` automations queue with its rows. Validate executable catalogue defaults at author time.

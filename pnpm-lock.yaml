@@ -192,6 +192,9 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
     devDependencies:
+      '@iconify-json/lucide':
+        specifier: 1.2.147
+        version: 1.2.147
       '@iconify-json/vscode-icons':
         specifier: 1.2.94
         version: 1.2.94
@@ -313,6 +316,9 @@ importers:
       pg:
         specifier: ^8.23.1
         version: 8.23.1
+      playwright:
+        specifier: 1.64.1
+        version: 1.64.1
       web-push:
         specifier: ^3.6.7
         version: 3.6.7(supports-color@8.1.1)

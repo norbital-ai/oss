@@ -76,8 +76,11 @@ rendered, objects, lists and JSON as `StructuredData`, custom kinds through thei
 	const t = ui_text();
 	const words = use_enum_text(() => ctx);
 	const kind = $derived(shownKind(declared));
-	// blank text is no value: every empty field reads the same "—"
-	const v = $derived(typeof value === 'string' && value.trim() === '' ? null : (value ?? null));
+	const field = $derived(field_entry(kind, host));
+	// blank text is no value: every empty field reads the same "—", unless a custom renderer shows it
+	const v = $derived(
+		typeof value === 'string' && value.trim() === '' && !field?.entry.renderer ? null : (value ?? null)
+	);
 	const text = $derived(
 		format(kind, value, {
 			locale: host.locale,
@@ -85,7 +88,6 @@ rendered, objects, lists and JSON as `StructuredData`, custom kinds through thei
 			currency: kind.kind === 'money' ? currencyOf(kind, row, host.currency) : undefined
 		})
 	);
-	const field = $derived(field_entry(kind, host));
 	const shape = $derived(
 		kind.kind === 'custom' && field?.entry.renderer === undefined
 			? field?.entry.shape

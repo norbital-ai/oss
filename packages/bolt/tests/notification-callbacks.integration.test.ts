@@ -387,7 +387,10 @@ describe('notifications from durable model effects', () => {
 				expect(yield* Context.get(f.context, Approvals).decide({ request_id: saved.request_id, decision,
 					reason: 'Reviewed', authority: reviewer, now: f.t.clock.now() })).toMatchObject({ kind: 'decided' });
 				expect((yield* f.t.run_due()).failed).toEqual([]);
-				expect(yield* f.notes()).toEqual(decision === 'approve' ? [{ title: 'Approved order', member: recipient }] : []);
+				// the effect's own notice, once, beside the requester's decision notice
+				expect(yield* f.notes()).toEqual(decision === 'approve'
+					? [{ title: 'Approved order', member: recipient }, { title: 'Approved · held-approve', member: requester }]
+					: [{ title: 'Rejected · held-reject', member: requester }]);
 				expect(yield* f.t.db.value(Schema.Number, {
 					text: 'SELECT count(*)::int FROM bolt_approval_effect WHERE request=$1::uuid', params: [saved.request_id]
 				})).toBe(0);

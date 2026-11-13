@@ -245,6 +245,8 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 						(yield* post(sales, 'orders.create', [{ title: 'reject' }])).reply.outcome
 					);
 					const rejectedId = yield* target(rejected);
+					// the inbox lists newest first; a later request needs a later instant
+					t.clock.advance('1s');
 					const erased = request(
 						(yield* post(sales, 'orders.update', [{ target: yield* current(id), set: { note: 'Prospective' } }]))
 							.reply.outcome

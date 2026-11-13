@@ -511,6 +511,7 @@ describe('acts, starts, uploads and the session', () => {
 				model: 'jobs',
 				record: 'j1',
 				action: 'create',
+				label: null,
 				at: '2026-10-13T00:00:00Z',
 				status: 'Pending',
 				step: 0,
