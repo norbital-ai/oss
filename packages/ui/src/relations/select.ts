@@ -2,6 +2,7 @@ import { Predicate } from 'effect';
 import { recordText } from '../kinds/kind.js';
 import type { ModelExposure } from '../kinds/context.js';
 import type { Row, Values } from '../model/types.js';
+import type { QueryAnswer } from '../client/contract.js';
 import { READ_LIMIT, request_json, type Layer, type Request } from '../read/request.js';
 const HEAVY = new Set(['json', 'custom', 'file']);
 type Catalog = { readonly [model: string]: ModelExposure } | undefined;
@@ -183,6 +184,59 @@ export function unref(
 			if (target !== undefined) refs[rel] = { of: target, text: text(rel, t) };
 		}
 		return { ...out, $refs: refs };
+	});
+}
+/** The one-relations in `refs` its root reads as no layer (a `sys_user` owner the output does not nest) whose single
+ * target the caller can label. */
+const unlayered = (cat: Catalog, of: string, refs: readonly string[]) =>
+	refs.flatMap((rel) => {
+		const targets = cat?.[of]?.relations?.[rel]?.targets ?? [];
+		const target = targets.length === 1 ? targets[0] : undefined;
+		return target !== undefined &&
+			!(cat?.[of]?.layers ?? []).includes(rel) &&
+			(cat?.[target]?.label.length ?? 0) > 0
+			? [{ rel, target }]
+			: [];
+	});
+/** Those relations' labels for `rows`, every target's ids in one read after the rows' (null: nothing to label). */
+export function label_wave(cat: Catalog, of: string, refs: readonly string[], rows: readonly Values[]) {
+	const ids = new Map<string, Set<string>>();
+	for (const { rel, target } of unlayered(cat, of, refs)) {
+		const held = ids.get(target) ?? new Set<string>();
+		for (const row of rows) {
+			const id = row[rel];
+			if (typeof id === 'string') held.add(id);
+		}
+		if (held.size > 0) ids.set(target, held);
+	}
+	if (ids.size === 0) return null;
+	return Object.fromEntries(
+		[...ids].flatMap(([target, held]) =>
+			Object.entries(label_read(cat, target, { where: { id: { in: [...held] } }, limit: held.size }))
+		)
+	);
+}
+/** `rows` (as `unref` gives them) with `label_wave`'s answer beside each unlayered relation in `$refs`. */
+export function labelled(
+	cat: Catalog,
+	of: string,
+	refs: readonly string[],
+	rows: readonly Values[],
+	answer: QueryAnswer | undefined
+): readonly Values[] {
+	const rels = answer === undefined ? [] : unlayered(cat, of, refs);
+	if (rels.length === 0) return rows;
+	return rows.map((row) => {
+		const known: { [rel: string]: Ref } = {};
+		for (const { rel, target } of rels) {
+			const id = row[rel],
+				hit = answer?.[target]?.rows.find((t) => t.id === id);
+			if (typeof id === 'string' && hit !== undefined)
+				known[rel] = { of: target, text: recordText(cat?.[target], hit) || id };
+		}
+		return Object.keys(known).length === 0
+			? row
+			: { ...row, $refs: { ...(Predicate.isObject(row['$refs']) ? row['$refs'] : {}), ...known } };
 	});
 }
 export function refOf(row: Values, relation: string): Ref | undefined {

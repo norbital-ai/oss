@@ -2,14 +2,16 @@
 	The record sheet the shell opens for `?record=<model>/<id|new>`: ui's `RecordShell` over the page client. The shell
 	provides the representation registry (lazy, one chunk each) above it and above every page; the opener's contexts
 	(`open_record`'s third argument) are set above it, so a create keeps the scope of the page that opened it.
+	The record view gets the page context a page receives (`ctx`), which `RecordShell` hands its representation.
 -->
 <script lang="ts">
-	import { Sheet, type UiContext } from '@norbital-ai/ui';
+	import { Sheet } from '@norbital-ai/ui';
 	import { carried_contexts, on_page_contexts, page_contexts, RecordShell } from '@norbital-ai/ui';
 	import { onDestroy } from 'svelte';
 	import Carry from './Carry.svelte';
+	import type { ShellPageContext } from './runtime.ts';
 
-	let { ctx, model, id, on_close }: { ctx: UiContext; model: string; id: string; on_close: () => void } = $props();
+	let { ctx, model, id, on_close }: { ctx: ShellPageContext; model: string; id: string; on_close: () => void } = $props();
 	// the opener's contexts; else the page's (a reload or a link), which may mount after this sheet: it remounts once then
 	// svelte-ignore state_referenced_locally
 	const carried = carried_contexts(model, id);

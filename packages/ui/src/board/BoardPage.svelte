@@ -39,7 +39,7 @@
 	import { open_record } from '../record/navigation.js';
 	import { bolt_of } from '../client/context.js';
 	import { label, msg } from '../text/messages.js';
-	import { listRequest, refOf, unref } from '../relations/select.js';
+	import { label_wave, labelled, listRequest, refOf, unref } from '../relations/select.js';
 	import { request_json } from '../read/request.js';
 	import { pageRead } from '../read/paging.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
@@ -136,6 +136,9 @@
 			? state.value.rows.filter((row) => typeof row.id === 'string' && row.id.trim() !== '')
 			: []
 	);
+	// a relation its output reads as no layer (a `sys_user` owner) labels its targets in one read after the page
+	const labelRequest = $derived(label_wave(kinds.catalog, of, fields, cards));
+	const labels = $derived(labelRequest === null ? null : bolt.query(labelRequest));
 	const pageKey = Symbol();
 	const reportRows = () =>
 		on_rows?.(
@@ -189,7 +192,7 @@
 					{@attach lane.anchor}
 				></div>{/if}
 			{#each grid ? cards : lane.slice(cards) as row (row['id'])}
-				{@const displayed = unref(kinds.catalog, of, fields, [row])[0] ?? row}
+				{@const displayed = labelled(kinds.catalog, of, fields, unref(kinds.catalog, of, fields, [row]), labels?.current)[0] ?? row}
 				<!-- not a <button>: a card snippet's own buttons and links must receive their clicks; the card opens on the rest -->
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 				<div

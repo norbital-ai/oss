@@ -211,7 +211,7 @@ export class Flattener {
 				? this.m.custom_fields[spec.of]?.['shape']
 				: spec?.kind === 'json'
 					? spec.shape
-					: spec?.many === true || spec?.kind === 'object'
+					: spec?.many === true || spec?.kind === 'object' || spec?.kind === 'file'
 						? spec
 						: undefined;
 		if (!isInputKind(shape)) return undefined;
@@ -484,7 +484,8 @@ export function decodeValue(
 	shape?: InputSpec[string]
 ): string | null {
 	if (v === null) return null;
-	if (spec?.many === true && spec.kind !== 'text' && spec.kind !== 'enum')
+	// a file ref, one or many, decodes once (an upload's answer to the stored ref)
+	if ((spec?.many === true && spec.kind !== 'text' && spec.kind !== 'enum') || spec?.kind === 'file')
 		return Result.isSuccess(Schema.decodeUnknownResult(input_schema(spec))(v))
 			? null
 			: 'expected the declared field shape';

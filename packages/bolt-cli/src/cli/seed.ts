@@ -1,9 +1,14 @@
 /// <reference types="node" />
 // `bolt seed` (docs/seeding.md): a bank tree's private rows, read into memory through `seed/+seeder.ts`, decoded, and
 // sent to one environment of a host as signed operations: each asset (`seed.asset`, kept once by its digest), then
-// the rows (`seed`), which the host restores over a reset of the environment. Nothing is written to either disk.
-import { Effect, FileSystem, Schema } from 'effect';
+// the rows (`seed`), which the host restores over a reset of the environment. Nothing is written to either disk. The rows
+// are first restored into a scratch database as the host restores them: a seed the host would refuse mid-restore fails
+// before anything is sent, so the environment stays as it was.
+import { Clock, Effect, FileSystem, Schema } from 'effect';
 import { sign_op } from '@norbital-ai/std/host-op';
+import { TenantDb, type EngineManifest } from '@norbital-ai/bolt/engine';
+import { load_pack, memory_source } from '@norbital-ai/bolt/tooling';
+import { TestDb } from '../test/database.ts';
 import { compile } from '../compiler/check/index.ts';
 import { seedRows, type Seeding } from '../compiler/artifact/seed.ts';
 import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
@@ -54,11 +59,29 @@ const call = (target: SeedTarget, op: string, input: object) =>
 		return answer.value;
 	});
 
-/** Sends `seeding` to `target`: its assets first, then the rows the host restores into the environment. */
+/** `seeding` restored into a scratch database of `manifest`'s schema, the host's pack load (rows, identities, `start`). */
+const rehearse = (manifest: EngineManifest, seeding: Seeding) =>
+	Effect.gen(function* () {
+		const db = yield* TenantDb;
+		const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+		const source = memory_source('bank', seeding.rows, seeding.start, seeding.assets, (path) =>
+			Effect.sync(() => seeding.bytes(path))
+		);
+		yield* load_pack(db, manifest, source, now);
+	}).pipe(
+		Effect.provide(TestDb.layer(manifest)),
+		Effect.mapError(
+			(cause) => new ToolFailure({ message: `the seed does not restore: ${cause.message}`, cause })
+		)
+	);
+
+/** Sends `seeding` to `target` once it restores: its assets first, then the rows the host restores into the environment. */
 export const pushSeed = Effect.fn('bolt.pushSeed')(function* (
+	manifest: EngineManifest,
 	seeding: Seeding,
 	target: SeedTarget
 ) {
+	yield* rehearse(manifest, seeding);
 	yield* Effect.forEach(
 		seeding.assets,
 		(asset) =>
@@ -77,7 +100,7 @@ export const pushSeed = Effect.fn('bolt.pushSeed')(function* (
 	});
 });
 
-/** `bolt seed`: without `target`, the bank's rows are read and decoded only. */
+/** `bolt seed`: without `target`, the bank's rows are read, decoded and restored into a scratch database only. */
 export const seedWorkspace = Effect.fn('bolt.seedWorkspace')(function* (
 	dir: string,
 	bank: string,
@@ -103,7 +126,10 @@ export const seedWorkspace = Effect.fn('bolt.seedWorkspace')(function* (
 		return yield* Effect.fail(authorErrors(errors, `${errors.length} seed errors`));
 	const counted = Object.values(seeding.rows).reduce((n, rows) => n + rows.length, 0);
 	const summary = `${counted} rows of ${Object.keys(seeding.rows).length} models and ${seeding.assets.length} assets from '${seeding.tree}'`;
-	if (target === undefined) return yield* Effect.sync(() => log(`${summary}: decoded`));
-	yield* pushSeed(seeding, target);
+	if (target === undefined)
+		return yield* rehearse(compiled.manifest, seeding).pipe(
+			Effect.andThen(Effect.sync(() => log(`${summary}: decoded and restored into a scratch database`)))
+		);
+	yield* pushSeed(compiled.manifest, seeding, target);
 	log(`${summary}: loaded into ${target.tenant}`);
 });
