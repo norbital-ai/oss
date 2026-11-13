@@ -203,7 +203,11 @@ it.effect('keeps implementation guidance and parameter documentation on the core
 			`## ${name}`
 		);
 	}
-	expect(docs.skill('bolt-contract')?.files.find((file) => file.path === 'model.md')?.text).toContain(
+	// one read starts a build: every role's starter is in the primer, and a card holds only the shapes
+	const primer = docs.skill('bolt-primer')?.files.find((file) => file.path === 'SKILL.md')?.text ?? '';
+	for (const starter of ['export default model(', 'export default policy(', 'export default automation(', 'export default app(', 'TestWorkspace.layer('])
+		expect(primer, starter).toContain(starter);
+	expect(docs.skill('bolt-contract')?.files.find((file) => file.path === 'model.md')?.text).not.toContain(
 		'export default model('
 	);
 	for (const name of ['workspace', 'automation', 'secrets']) {

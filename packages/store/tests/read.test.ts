@@ -504,6 +504,14 @@ describe('typed read projections', () => {
 				})
 			);
 			expect(first(next.rows).key.status).toBe('shipped');
+			// several buckets at once, one through a one-relation
+			const crossed = yield* execute(
+				yield* db.aggregate('order', { by: ['status', 'customer.code'], count: true, all: true })
+			);
+			expect(crossed.rows.map((row) => [row.key, row.count])).toEqual([
+				[{ status: 'open', 'customer.code': 'C' }, 1],
+				[{ status: 'shipped', 'customer.code': 'C' }, 1]
+			]);
 			const empty = yield* execute(
 				yield* db.aggregate('order', {
 					where: { number: { eq: 'missing' } },

@@ -5,7 +5,7 @@ import { Deferred, Effect, Exit, Fiber, FiberSet, Schema, Stream } from 'effect'
 import { TestClock } from 'effect/testing';
 import type { AiRequest } from '../src/engine/contracts.ts';
 import { Port } from '../src/engine/port.ts';
-import { filePart } from '../src/engine/agent/ingest.ts';
+import { fileParts, pixelSize } from '../src/engine/agent/ingest.ts';
 import { open_ai_chat, type OpenAiChat } from '../src/engine/agent/openai-chat.ts';
 
 const Sent = Schema.Struct({
@@ -457,6 +457,7 @@ describe('open_ai_chat', () => {
 				expect(first(sent.messages).content).toBe('look');
 				expect(sent.messages[2]?.content).toEqual([
 					{ type: 'text', text: 'again' },
+					{ type: 'text', text: 'attachment-1' },
 					{ type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } },
 					{
 						type: 'text',
@@ -519,10 +520,12 @@ describe('open_ai_chat', () => {
 					'user'
 				]);
 				expect(sent.messages[4]?.content).toEqual([
+					{ type: 'text', text: 'attachment-1' },
 					{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,Ag==' } }
 				]);
 				expect(sent.messages[6]?.content).toEqual([
 					{ type: 'text', text: '[conversation state: …]' },
+					{ type: 'text', text: 'attachment-2' },
 					{ type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } }
 				]);
 			})
@@ -587,10 +590,21 @@ describe('open_ai_chat', () => {
 			'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 			'application/zip'
 		])
-			expect(filePart({ mime, bytes: new Uint8Array([1]) }, 'a')).toEqual({
+			expect(fileParts({ mime, bytes: new Uint8Array([1]) }, 'a')).toEqual([{
 				type: 'text',
 				text: `a (${mime}): read_file reads it`
-			});
+			}]);
+	});
+	it('an image is introduced by its pixel size, so a crop can be worked out', () => {
+		const png = new Uint8Array(readFileSync(new URL('./fixtures/files/photo.png', import.meta.url))),
+			jpeg = new Uint8Array(readFileSync(new URL('./fixtures/files/photo.jpg', import.meta.url)));
+		expect(pixelSize(png)).toEqual({ width: 32, height: 24 });
+		expect(pixelSize(jpeg)).toEqual({ width: 80, height: 60 });
+		expect(pixelSize(new Uint8Array([1, 2, 3]))).toBeUndefined();
+		expect(fileParts({ mime: 'image/png', bytes: png }, 'attachment-1')[0]).toEqual({
+			type: 'text',
+			text: 'attachment-1: 32×24 px'
+		});
 	});
 	it.effect('a request opens with the one before it, byte for byte: reasoning, images and later turns included', () =>
 		Effect.gen(function* () {

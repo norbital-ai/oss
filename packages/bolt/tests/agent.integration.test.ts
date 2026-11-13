@@ -48,6 +48,7 @@ import {
 	type Kit
 } from '../../bolt-cli/src/test/effect.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import type { HostTool } from '../src/engine/agent/tools.ts';
 
 const runtime_accounts = [
 	{ id: 'desk', integration: 'whatsapp' },
@@ -552,7 +553,7 @@ describe('in-app turns', () => {
 				Effect.gen(function* () {
 					const ai = cassette();
 					ai.arm([
-						use('run_tool', { name: 'request_publish', input: {} }),
+						use('request_publish', {}),
 						say('Waiting for approval.'),
 						say('Previous request rejected.')
 					]);
@@ -603,7 +604,7 @@ describe('in-app turns', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const ai = cassette();
-				ai.arm([use('run_tool', { name: 'workspace_test', input: {} }), say('Tests are running.'), say('They failed: fixing.')]);
+				ai.arm([use('workspace_test', {}), say('Tests are running.'), say('They failed: fixing.')]);
 				const finish = yield* Deferred.make<void>();
 				const { agent, user } = yield* build(ai, {
 					host_tools: [
@@ -670,11 +671,11 @@ describe('in-app turns', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const ai = cassette();
-				ai.arm([use('run_tool', { name: 'read', input: { path: 'a' } }), use('run_tool', { name: 'read', input: { path: 'b' } }), say('Done.')]);
+				ai.arm([use('fixture_read', { path: 'a' }), use('fixture_read', { path: 'b' }), say('Done.')]);
 				const { agent, user } = yield* build(ai, {
 					host_tools: [
 						{
-							name: 'read',
+							name: 'fixture_read',
 							description: 'Fixture read',
 		behavior: {},
 							input: { type: 'object' as const, additionalProperties: true },
@@ -700,8 +701,8 @@ describe('in-app turns', () => {
 				const ai = cassette();
 				ai.arm(
 					Array.from({ length: 8 }, (_, n) => [
-						use('run_tool', { name: 'workspace_write', input: { path: 'tests/a.test.ts', content: `round ${n}` } }),
-						use('run_tool', { name: 'workspace_diagnose', input: { only: 'tests' } })
+						use('workspace_write', { path: 'tests/a.test.ts', content: `round ${n}` }),
+						use('workspace_diagnose', { only: 'tests' })
 					]).flat()
 				);
 				let validations = 0;
@@ -768,8 +769,8 @@ describe('in-app turns', () => {
 				const ai = cassette();
 				ai.arm(
 					Array.from({ length: 8 }, (_, n) => [
-						use('run_tool', { name: 'workspace_write', input: { path: 'src/a.ts', content: `round ${n}` } }),
-						use('run_tool', { name: 'workspace_diagnose', input: {} })
+						use('workspace_write', { path: 'src/a.ts', content: `round ${n}` }),
+						use('workspace_diagnose', {})
 					]).flat()
 				);
 				let validations = 0;
@@ -1902,14 +1903,15 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 	);
 });
 describe('the host tool catalogue', () => {
-	it.live('lists a host tool whole in the actions note, so it runs by name with no listing step', () =>
+	const plans: HostTool = {
+		name: 'plans', description: 'Reads a plan.', input: { type: 'object' },
+		behavior: { data: true }, read_only: true, call: async () => ({ plan: 'Current plan' })
+	};
+	it.live('lists a host tool in the fixed tool list, called by its own name', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const ai = cassette();
-			ai.arm([use('run_tool', { name: 'plans', input: {} }), say('Done.')]);
-			const { agent, user, context } = yield* build(ai, { host_tools: [{
-				name: 'plans', description: 'Reads a plan.', input: { type: 'object' },
-				behavior: { data: true }, read_only: true, call: async () => ({ plan: 'Current plan' })
-			}] });
+			ai.arm([use('plans', {}), say('Done.')]);
+			const { agent, user, context } = yield* build(ai, { host_tools: [plans] });
 			return yield* Effect.gen(function* () {
 				const root = yield* user('root', { admin: true });
 				const c = yield* agent.start({ owner: root });
@@ -1917,35 +1919,26 @@ describe('the host tool catalogue', () => {
 				yield* agent.drain(c);
 				const [request, called] = ai.requests;
 				if (request === undefined || called === undefined) throw new Error('The native host script needs two model steps.');
-				expect(request?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'run_tool' })]));
-				expect(request?.tools?.some((tool) => tool.name === 'plans')).toBe(false);
-				expect(discovery(request).run_tool).toContainEqual({ name: 'plans', description: 'Reads a plan.', input: { type: 'object' } });
+				expect(request.tools).toContainEqual(expect.objectContaining({ name: 'plans', description: 'Reads a plan.' }));
+				expect(called.tools).toEqual(request.tools);
+				expect(discovery(request).run_tool.map(({ name }) => name)).not.toContain('plans');
 				expect(toolResults(called)).toContainEqual({ plan: 'Current plan' });
-				// the listing rides the appended note once, never the cached system prompt
-				expect(JSON.stringify(request?.system)).not.toContain('Reads a plan.');
-				expect(JSON.stringify(called.messages).split('Reads a plan.')).toHaveLength(2);
 				expect(ai.requests).toHaveLength(2);
 			}).pipe(Effect.provide(context));
 		}))
 	);
-});
-
-describe('a listed tool called by its own name', () => {
-	it.live('is told it runs through run_tool', () =>
+	it.live('a host tool called through run_tool is told to call it by name', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const ai = cassette();
-			ai.arm([use('plans', {}), say('Done.')]);
-			const { agent, user, context } = yield* build(ai, { host_tools: [{
-				name: 'plans', description: 'Reads a plan.', input: { type: 'object' },
-				behavior: { data: true }, read_only: true, call: async () => ({ plan: 'Current plan' })
-			}] });
+			ai.arm([use('run_tool', { name: 'plans', input: {} }), say('Done.')]);
+			const { agent, user, context } = yield* build(ai, { host_tools: [plans] });
 			return yield* Effect.gen(function* () {
 				const root = yield* user('root', { admin: true });
 				const c = yield* agent.start({ owner: root });
 				yield* agent.post({ conversation: c, as: { member: root }, text: 'A plan?' });
 				yield* agent.drain(c);
 				expect(toolResults(required(ai.requests[1]))).toContainEqual({
-					error: "'plans' runs through run_tool: run_tool { name: 'plans', input }."
+					error: "'plans' is in your tool list: call it by its own name."
 				});
 			}).pipe(Effect.provide(context));
 		}))
@@ -2090,7 +2083,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 		]);
 		expect(rest('logs', 'l1', { entries: [], next: 'e9' }, { argument: 'cursor' })[0]).toContain('cursor: "e9"');
 		expect(rest('read_file', 'o1', { text: '…', next: 1200 }, { argument: 'offset' })[0]).toContain('offset: 1200');
-		expect(rest('browser', 'b1', { text: '…', next: 300 }, { argument: 'from' }, true)[0]).toContain('call run_tool with name: "browser" and the same input with from: 300');
+		expect(rest('kagi.fetch', 'b1', { text: '…', next: 300 }, { argument: 'from' }, true)[0]).toContain('call run_tool with name: "kagi.fetch" and the same input with from: 300');
 		expect(rest('browser', 'b1', { text: '…', next: 300 })).toEqual([]);
 		expect(
 			rest('read_file', 'f1', {

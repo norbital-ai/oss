@@ -1232,7 +1232,8 @@ function searchOf(m: EngineManifest, model: string, readable: readonly string[])
  * state its values), the layers declared below it, and on a root how it may be searched, the outputs the caller may read
  * and the writes it may call with the columns each takes (a create's required ones named). The model API in one small answer, instead of its source.
  */
-function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'default'): Json {
+/** A read key's fields in one output, each with its kind: a link names its model. */
+function fieldKinds(m: EngineManifest, path: string, output: string): Record<string, string> {
 	const root = before(path, '.'),
 		model = layers(m)[root]?.[path] ?? root,
 		all = layered(m);
@@ -1243,7 +1244,14 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 		if (d === undefined) return 'system';
 		return kind_label(d);
 	};
-	const fields = exposed(m, root, path, model, output);
+	return Object.fromEntries(exposed(m, root, path, model, output).map((f) => [f, kind(f)]));
+}
+function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'default'): Json {
+	const root = before(path, '.'),
+		model = layers(m)[root]?.[path] ?? root,
+		all = layered(m);
+	const kinds = fieldKinds(m, path, output),
+		fields = Object.keys(kinds);
 	const below = Object.keys(outputLayers(m, root, output)).filter(
 		(p) => p.startsWith(`${path}.`) && !p.slice(path.length + 1).includes('.')
 	);
@@ -1267,7 +1275,7 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 		model,
 		...(output === 'default' ? {} : { output }),
 		...(outputs.length > 1 || outputs[0] !== output ? { outputs } : {}),
-		fields: Object.fromEntries(fields.map((f) => [f, kind(f)])),
+		fields: kinds,
 		...(path.includes('.') ? {} : { search: searchOf(m, model, fields) }),
 		...(below.length === 0
 			? {}
@@ -1341,7 +1349,8 @@ export function describeWorkspace(
 	m: EngineManifest,
 	a: Authority,
 	messages: ReadonlyMap<string, string>,
-	names: readonly string[] = []
+	names: readonly string[] = [],
+	totals: ReadonlyMap<string, number> = new Map()
 ): string {
 	const all = layered(m),
 		t = (key: string) => messages.get(key) ?? key,
@@ -1386,9 +1395,18 @@ export function describeWorkspace(
 			.map((c) => c.slice(name.length + 1));
 		const line = (label: string, items: readonly string[]) =>
 			items.length === 0 ? [] : [`  ${label} ${items.join(' · ')}`];
+		const outputs = roots.has(name) ? readOutputs(m, a, name) : [],
+			total = totals.get(name);
 		return [
-			`${name} "${before(spec.description, '\n').trim()}"`,
-			...line('reads', roots.has(name) ? readOutputs(m, a, name) : []),
+			`${name} "${before(spec.description, '\n').trim()}"${total === undefined ? '' : ` · ${total} rows`}`,
+			...line('reads', outputs),
+			// a named model answers its fields in its shape below instead
+			...line(
+				'fields',
+				outputs[0] === undefined || names.length > 0
+					? []
+					: Object.entries(fieldKinds(m, name, outputs[0])).map(([field, kind]) => `${field} ${kind}`)
+			),
 			...line('writes', writes),
 			...line('links', links),
 			...line('state', states),
@@ -1610,7 +1628,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		acts = callablesFor(e.manifest, a, x.inApp && !x.child && e.identity !== undefined),
 		agent = x.mode === 'agent',
 		hosted = x.host_tools;
-	const entries = new Map<string, BoundTool>(), hostEntries = new Map<string, BoundTool>();
+	const entries = new Map<string, BoundTool>(), mcpEntries = new Map<string, BoundTool>();
+	/** The host tools this role holds, offered in the tool list whatever the mode: a role's list never changes mid-conversation. */
+	const hostOffered: AgentTool[] = [];
 	/** Binds a definition's handler under this step's actor: a refused input or a failure is the model's answer. */
 	const add = <A>(
 		definition: ToolDefinition<A>,
@@ -1653,7 +1673,19 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				: yield* Port.attempt('workspace', () => workspace.read('src/i18n/+messages.ts')).pipe(
 						Effect.orElseSucceed(() => null)
 					);
-		return ok(describeWorkspace(e.manifest, a, messageCatalogue(source), names));
+		// the plain map counts each readable model's rows in one read, so an empty table needs no read of its own
+		const roots = names.length > 0 ? [] : readPaths(e.manifest, a).filter((path) => !path.includes('.'));
+		const counted = roots.length === 0 || read === undefined
+			? undefined
+			: yield* read.run({ request: Object.fromEntries(roots.map((root) => [root, { limit: 1 }])) });
+		const whole = counted === undefined || !('result' in counted) ? undefined : 'full' in counted ? counted.full : counted.result;
+		const totals = new Map(
+			roots.flatMap((root) => {
+				const total = isObj(whole) && isObj(whole[root]) ? whole[root]['total'] : undefined;
+				return typeof total === 'number' ? [[root, total] as const] : [];
+			})
+		);
+		return ok(describeWorkspace(e.manifest, a, messageCatalogue(source), names, totals));
 	});
 	if (agent && x.inApp && !x.child && x.conv.owner !== null && x.conv.integration === null && x.conv.envoy === null && x.conv.run == null && a.actor.kind === 'member' && !a.actor.external) {
 		const allowed = navigation_paths(nav(e.manifest, a), a.admin);
@@ -2694,7 +2726,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	const inner = (call: string) => {
 		let used = 0;
 		return (name: string, input: unknown): Effect.Effect<ToolAnswer> =>
-			self === undefined || UNSCRIPTED.has(name) || (!entries.has(name) && !hostEntries.has(name))
+			self === undefined || UNSCRIPTED.has(name) || (!entries.has(name) && !mcpEntries.has(name))
 				? Effect.succeed(err(`A script cannot call '${name}': it calls your other tools by name.`))
 				: ++used > RUN_JS.toolCalls
 					? Effect.succeed(err(`A run makes at most ${RUN_JS.toolCalls} tool calls.`))
@@ -3032,7 +3064,8 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			);
 		});
 	}
-	// an MCP tool is reached as `<server>.<tool>`, beside the host's own tools; it runs only while acting
+	// an MCP tool changes with the workspace, so it stays out of the fixed tool list: run_tool reaches it as `<server>.<tool>`,
+	// only while acting
 	if (agent)
 		for (const tool of x.mcpTools) {
 			if (!Predicate.isObject(tool.input)) continue;
@@ -3044,24 +3077,25 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					return typeof input === 'string' ? err(input) : ok(yield* x.mcp.call(tool.server, tool.name, input));
 				},
 				{},
-				hostEntries
+				mcpEntries
 			);
 		}
 	add(runToolTool, function* (i, callId) {
-		return yield* runHost(i.name, i.input === undefined ? {} : i.input, callId);
+		if (FIXED_NAMES.has(i.name) || hostOffered.some((tool) => tool.name === i.name))
+			return err(`'${i.name}' is in your tool list: call it by its own name.`);
+		return yield* runMcp(i.name, i.input === undefined ? {} : i.input, callId);
 	});
-	// Host tools keep their raw JSON Schema, checked by its validator; the workspace's own search wins: an MCP tool named
-	// like a host search tool hides the host's
-	const own = new Set(x.mcpTools.map((t) => t.name));
+	// Host tools are fixed per host and role, so they sit in the tool list by their own names; each keeps its raw JSON
+	// Schema, checked by its validator. A planning turn binds only the read-only ones
 	for (const host of [...x.browser_tools, ...(x.inApp && staff ? hosted : [])]) {
 		const { name, description, input: schema, behavior } = host;
 		if (
 			!Predicate.isObject(schema) ||
-			(WORKSPACE_OVERRIDES.has(name) && own.has(name)) ||
-			!(agent || host.read_only === true) ||
 			!(a.admin || a.capabilities.tools.includes(name) || (host.source === true && host.read_only === true))
 		)
 			continue;
+		hostOffered.push({ name, description, input: schema, behavior });
+		if (!(agent || host.read_only === true)) continue;
 		const valid = validatorFor(schema);
 		add({ name, description, input: schema, behavior, decode: Effect.succeed }, function* (given, id) {
 			const input = valid(given);
@@ -3111,7 +3145,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			return ok(
 				inline?.result ?? { job, note: 'Still running; keep working. Its result arrives by itself, or wait returns it.' }
 			);
-		}, host.studio === undefined ? {} : { studio: host.studio }, hostEntries);
+		}, host.studio === undefined ? {} : { studio: host.studio });
 	}
 	const encodeAnswer = Schema.encodeUnknownEffect(ToolAnswer);
 	const execute = (registry: ReadonlyMap<string, BoundTool>, name: string, input: unknown, callId: string) => {
@@ -3128,16 +3162,19 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		);
 	};
 	const run: Catalogue['run'] = (name, input, callId) => execute(entries, name, input, callId);
-	const runHost: Catalogue['run'] = (name, input, callId) => execute(hostEntries, name, input, callId);
-	// a script and run_tool reach a host or MCP tool by the one name the tools note lists
-	self = (name, input, callId) => entries.has(name) ? run(name, input, callId) : runHost(name, input, callId);
-	const available = [...entries.values(), ...hostEntries.values()].map((entry) => entry.tool);
+	const runMcp: Catalogue['run'] = (name, input, callId) => execute(mcpEntries, name, input, callId);
+	// a script reaches every tool by the one name it is called by: a listed one by its own, an MCP tool by run_tool's
+	self = (name, input, callId) => entries.has(name) ? run(name, input, callId) : runMcp(name, input, callId);
+	const available = [...entries.values(), ...mcpEntries.values()].map((entry) => entry.tool);
 	return {
-		tools: entries.has(pageTool.name) ? FIXED_TOOLS : FIXED_TOOLS.filter((tool) => tool.name !== pageTool.name),
+		tools: [
+			...(entries.has(pageTool.name) ? FIXED_TOOLS : FIXED_TOOLS.filter((tool) => tool.name !== pageTool.name)),
+			...hostOffered
+		],
 		available,
 		discovery: JSON.stringify({
 			tools: [...entries.keys()],
-			run_tool: [...hostEntries.values()].map(({ tool }) => ({ name: tool.name, description: tool.description, input: tool.input })),
+			run_tool: [...mcpEntries.values()].map(({ tool }) => ({ name: tool.name, description: tool.description, input: tool.input })),
 			callables: [...acts.keys()],
 			automations: automations.flatMap((name) => {
 				const spec = e.manifest.automations[name];
@@ -3148,7 +3185,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		}),
 		presentation: (name, input) => {
 			const host = name === runToolTool.name && isObj(input) && typeof input['name'] === 'string'
-				? hostEntries.get(input['name']) : undefined;
+				? mcpEntries.get(input['name']) : undefined;
 			const definition = host?.tool ?? entries.get(name)?.tool;
 			const given = host !== undefined && isObj(input) ? input['input'] : input;
 			return {
@@ -3373,21 +3410,19 @@ const validatorFor = (input: { readonly [key: string]: Json }) => {
 };
 /** The tools a script's `tool()` never reaches: they steer the turn or the person's tab. */
 const UNSCRIPTED: ReadonlySet<string> = new Set(['ask', 'ask_parent', 'wait', 'run_js', 'subagent', 'update_plan', 'goals', 'page']);
-/** The host tool a workspace may replace with its own same-named MCP tool; every other host name stays the host's. */
-const WORKSPACE_OVERRIDES: ReadonlySet<string> = new Set(['web_search']);
 
 // Tool text and model schemas are shared; handlers bind only when a step is admitted.
 const recordsTool = defineTool('read', {
 	behavior: { data: true, resume: { argument: 'after', roots: true } },
 	description: `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. output: omit it for "default", else one of the reads describe_workspace lists for that model. order_by: "<field>", { <field>: "desc" } or a list of those.
 where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
-search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } }.
+search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } or a list of those }; a field there may be "<link>.<field>" through links to one record.
 Answers each model's { rows, next, total } (total counts every match), or with aggregate its measures. Long values are clipped.`,
 	parameters: ReadInput
 });
 const describeTool = defineTool('describe_workspace', {
 	behavior: { data: true },
-	description: "The workspace as you may use it: apps, pages, models, automations. names answers each in full, 'system' the native setup pages, secrets and MCP servers.",
+	description: "The workspace as you may use it: apps, pages, models with their fields and row counts, automations. names answers each in full, 'system' the native setup pages, secrets and MCP servers.",
 	parameters: Schema.Struct({ names: Schema.optionalKey(Schema.Array(Schema.String)) }),
 });
 const pageTool = defineTool('page', {
@@ -3633,3 +3668,4 @@ const FIXED_TOOLS: readonly AgentTool[] = [
 	readMessagesTool, readFileTool, geocodeTool, readSource, searchSource, listSource, subagentTool,
 	documentTool, downloadTool, runJsTool, askParentTool, askTool, waitTool, runsTool, logsTool, runToolTool
 ].map(({ name, description, input, behavior }) => ({ name, description, input, behavior }));
+const FIXED_NAMES: ReadonlySet<string> = new Set(FIXED_TOOLS.map((tool) => tool.name));

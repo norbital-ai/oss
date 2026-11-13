@@ -3,7 +3,7 @@ name: bolt-primer
 description: Build a Bolt workspace with no other skill - source roles, contract queries, authoring order, pitfalls.
 ---
 
-This page and `workspace_lang` are enough for a normal build. The Studio tools named here run through `run_tool { name, input }`. Read a reference only for a diagnostic this page does not resolve. Ask for several types in one `workspace_lang` call.
+This page, its starters at the end and `workspace_lang` are enough for a normal build: read no other skill first. Read a reference only for a diagnostic this page does not resolve. Ask for several types in one `workspace_lang` call.
 
 ## Roles
 
@@ -28,7 +28,7 @@ Beside `src/`: `seed/+seeder.ts` `seeder(spec)`; rows `seed/public/**/<model>.js
 
 ## Contracts
 
-`bolt-contract` is the API authority: `skill { name: 'bolt-contract', file: 'model.md' }`, one generated card per listed role. Read its actual file list before selecting a card. A role without a card is answered by `workspace_lang` on the exported type; never guess a filename. Read a role's card once, before writing that role.
+Write each role from its starter below. A role's card in `bolt-contract` lists its symbols' fields and types, generated from them: read it once, only for a field the starter does not show. A role without a card is answered by `workspace_lang` on the exported type; never guess a filename.
 
 A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a transform, an effect or a `run`. It goes through `yield*`.
 

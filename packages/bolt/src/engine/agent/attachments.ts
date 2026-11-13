@@ -8,7 +8,7 @@ import { row } from '../system/rows.ts';
 import { MODEL_FILES } from './ai.ts';
 import type { AttachmentPort } from './tools.ts';
 import type { FileRef as MessageFile } from './schema.ts';
-import { route } from './ingest.ts';
+import { imageLabel, route } from './ingest.ts';
 import { toBase64 } from '../crypto.ts';
 
 const Ref = Schema.Struct({ id: Schema.String, name: Schema.optionalKey(Schema.String) });
@@ -145,7 +145,7 @@ export const triageAttachments = Effect.fn('Agents.triageAttachments')(function*
 						1024
 					).pipe(Effect.provideService(Images, ports.images));
 					const label = `message-${message.id}-image-${images}`;
-					parts.push(label, {
+					parts.push(imageLabel(label, jpeg), {
 						type: 'image_url',
 						image_url: { url: `data:image/jpeg;base64,${toBase64(jpeg)}` }
 					});

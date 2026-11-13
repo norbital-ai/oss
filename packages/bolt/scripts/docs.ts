@@ -65,7 +65,7 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 		]
 	}
 };
-/** What the symbols alone leave out: a role's first file, so no conversation goes looking for it. */
+/** Each role's first file, appended to the primer so one read starts a build; the cards hold only the symbols' shapes. */
 const CONTRACT_HEAD: { readonly [role: string]: string } = {
 	automation: `An automation runs under its declared \`policies\`. They must read every model it reads or links to, \`sys_user\` included:
 
@@ -186,6 +186,7 @@ it.layer(TestWorkspace.layer({ root: new URL('..', import.meta.url).pathname }))
 A file shares one workspace: rows stay between its tests, so assert on your own rows.`
 };
 const CONTRACT_SKILL = 'bolt-contract';
+const PRIMER_SKILL = 'bolt-primer';
 const CARDED = new Set(Object.values(CONTRACT).flatMap((named) => Object.values(named).flat()));
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..'); // oss/packages
 const out = join(root, 'bolt', 'build', 'docs');
@@ -735,10 +736,18 @@ export const generateDocs = Effect.try({
 					.filter((p) => p !== 'SKILL.md')
 					.sort(byCode)
 			];
-			const files = paths.map((path) => ({
-				path,
-				text: readFileSync(join(SKILLS, name, path), 'utf8')
-			}));
+			const files = paths.map((path) => {
+				const text = readFileSync(join(SKILLS, name, path), 'utf8');
+				return {
+					path,
+					text:
+						name === PRIMER_SKILL && path === 'SKILL.md'
+							? `${text.trimEnd()}\n\n## Starters\n\nEach role's first file. Its symbols field by field, for a field a starter does not show: \`skill { name: '${CONTRACT_SKILL}', file: '<role>.md' }\`, roles ${Object.keys(CONTRACT).join(', ')}.\n\n${Object.keys(CONTRACT)
+									.flatMap((role) => CONTRACT_HEAD[role] === undefined ? [] : [`### ${role}\n\n${CONTRACT_HEAD[role]}`])
+									.join('\n\n')}\n`
+							: text
+				};
+			});
 			const description = (
 				/^---\n[\s\S]*?^description:\s*(?:>-?\n)?([\s\S]*?)\n(?:\S[^\n]*:|---)/m.exec(
 					files[0]?.text ?? ''
@@ -816,7 +825,7 @@ export const generateDocs = Effect.try({
 		};
 		const roles = Object.entries(CONTRACT).map(([role, named]) => ({
 			path: `${role}.md`,
-			text: `# ${role}\n\n${CONTRACT_HEAD[role] === undefined ? '' : `${CONTRACT_HEAD[role]}\n\n`}${Object.entries(
+			text: `# ${role}\n\n${Object.entries(
 				named
 			)
 				.flatMap(([namespace, names]) =>

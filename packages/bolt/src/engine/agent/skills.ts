@@ -69,7 +69,7 @@ description: How to model a domain with the fewest, most general models, and how
 	'product-ux': skill(`---
 description: How a workspace page and form should be composed.
 ---
-1. Read the page and layout references before the first page. Compose from the shell, layout and view primitives the contract names; a page root is never raw markup.
+1. Compose from the shell, layout and view primitives; a page root is never raw markup. Read a page or layout reference only for what the authoring primer leaves open.
 2. The shell owns the page. A page with more than one section scrolls inside its shell, never on the browser body.
 3. Reveal detail progressively: group a form's fields by meaning into sections, never one long flat list.
 4. Records show in the native views (table, board, chart) and the record sheet for one row; give every record model a representation. Use them before any custom component, and never render a model as ad-hoc markup.
@@ -83,7 +83,7 @@ description: How a workspace page and form should be composed.
 	engineering: skill(`---
 description: General engineering practice for a workspace change.
 ---
-1. Read the source, the contract and the relevant references before writing. Do not guess an API when a type or a reference answers it.
+1. Read the source and the authoring primer before writing; a contract card or reference only for what the primer leaves open. Do not guess an API when a type answers it.
 2. Make the smallest complete change. No unasked feature, no abstraction without two real call sites, no dead model, page or field.
 3. Write Effect code: bodies are function* and yield* their ctx Effects; helpers return Effects with typed failures; no Promise wrappers.
 4. src/lib/<domain>/ holds reusable services. Logic a server body and a page both need lives there once and both import it. No lone file: a helper with one caller stays beside that caller.

@@ -32,4 +32,4 @@ The output is a plan a non-technical person can read, correct and sign, with imp
 
 ## Handoff
 
-A confirmed plan is the input to authoring: `bolt-primer`, then `authoring-test-suites` and `norbital-platform`. Keep feasibility verdicts attached so a scope change is re-classified, not re-argued.
+A confirmed plan is the input to authoring: `bolt-primer`; another skill only for what it leaves open. Keep feasibility verdicts attached so a scope change is re-classified, not re-argued.

@@ -10,7 +10,7 @@ import { Port, type PortFailure } from '../port.ts';
 import type { AiEvent } from '../ports.ts';
 import type { Json } from '../../decl/values.ts';
 import { LIMITS, type AiRequest, type AiResponse } from '../contracts.ts';
-import { filePart } from './ingest.ts';
+import { fileParts } from './ingest.ts';
 import { SaidContent, StepContent, textOf } from './schema.ts';
 
 /** An OpenAI-compatible `/chat/completions` endpoint for `open_ai_chat`: base URL, key, model map and metering. */
@@ -56,7 +56,7 @@ function messagesOf(r: AiRequest): Wire[] {
 	// prefix holds. Dropping it at a new turn re-billed the whole conversation at each message a person sent.
 	const files = (r.files ?? []).map((f, n) => ({
 		call: f.call,
-		part: filePart(f, `attachment-${n + 1}`)
+		parts: fileParts(f, `attachment-${n + 1}`)
 	}));
 	const calls = new Set(
 		r.messages.flatMap((m) =>
@@ -70,7 +70,7 @@ function messagesOf(r: AiRequest): Wire[] {
 	const opened = () => {
 		const parts = files
 			.filter((f) => f.call !== undefined && ran.includes(f.call))
-			.map((f) => f.part);
+			.flatMap((f) => f.parts);
 		if (parts.length > 0) out.push({ role: 'user', content: parts });
 		ran = [];
 	};
@@ -116,7 +116,7 @@ function messagesOf(r: AiRequest): Wire[] {
 		} else out.push({ role: 'user', content: textOf(m.content) });
 	}
 	opened();
-	const loose = files.filter((f) => f.call === undefined || !calls.has(f.call)).map((f) => f.part);
+	const loose = files.filter((f) => f.call === undefined || !calls.has(f.call)).flatMap((f) => f.parts);
 	if (loose.length > 0) {
 		const last = out.findLast((m) => m['role'] === 'user' && typeof m['content'] === 'string');
 		if (last === undefined) out.push({ role: 'user', content: loose });
