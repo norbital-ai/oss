@@ -158,9 +158,10 @@ const inlineAnswer = (
 			const decoded = Schema.decodeUnknownOption(ToolCall)(args);
 			if (Option.isNone(decoded)) return refuse('tool takes (name, input)');
 			const answer = yield* tool(decoded.value[0], decoded.value[1]);
-			return 'result' in answer
-				? answered({ ok: true, value: answer.result })
-				: refuse("this call needs the person's confirmation: make it as its own tool call");
+			if (!('result' in answer)) return refuse("this call needs the person's confirmation: make it as its own tool call");
+			// a failed call throws at its line with the tool's own words, never a value the script reads on past
+			const failed = Predicate.isObject(answer.result) && typeof answer.result['error'] === 'string' ? answer.result['error'] : undefined;
+			return failed === undefined ? answered({ ok: true, value: answer.result }) : refuse(`${decoded.value[0]}: ${failed}`);
 		}
 		if (member !== 'http' || http === undefined)
 			return refuse(

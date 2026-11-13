@@ -3555,7 +3555,7 @@ const downloadTool = defineTool('download', {
 });
 const runJsTool = defineTool('run_js', {
 	behavior: { data: true },
-	description: "Run JavaScript in a fresh billed isolate; only its return value and prints come back. code: an async function body of input, without require, process, fetch or timers. await tool(name, input) calls your other tools by name, as you, ≤ 200 calls. files: [{ id }] arrive as input.files { name: text | { base64 } }. http: true adds await http({ method?, url, headers?, body? }) answering { status, headers, text }, public https only. Return { files: [{ name, text | base64 }] } to give the person files. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out instead of code. Walls: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.",
+	description: "Run JavaScript in a fresh billed isolate; only its return value and prints come back. code: an async function body of input, without require, process, fetch or timers. await tool(name, input) calls your other tools by name, as you, ≤ 200 calls; a failed call throws its error. files: [{ id }] arrive as input.files { name: text | { base64 } }. http: true adds await http({ method?, url, headers?, body? }) answering { status, headers, text }, public https only. Return { files: [{ name, text | base64 }] } to give the person files. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out instead of code. Walls: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.",
 	parameters: Schema.Struct({
 		code: Schema.optionalKey(Schema.String),
 		input: Schema.optionalKey(ToolJson),

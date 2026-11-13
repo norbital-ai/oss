@@ -3297,15 +3297,15 @@ describe('host web search', () => {
 			});
 		})
 	);
-	it.live('a script calls a host tool by the name run_tool takes, never a tool that steers the turn', () =>
+	it.live('a script calls a host tool by the name run_tool takes; a tool that steers the turn throws', () =>
 		Effect.gen(function* () {
 			const x = yield* ctx({ host_tools });
 			expect(
 				yield* result(x, 'run_js', {
-					code: "return { found: await tool('web_search', {}), asked: await tool('ask', { question: 'x' }) };"
+					code: "const found = await tool('web_search', {}); let asked; try { await tool('ask', { question: 'x' }) } catch (e) { asked = e.message } return { found, asked };"
 				})
 			).toMatchObject({
-				result: { answer: { found: { ok: 'web_search' }, asked: { error: expect.stringContaining("cannot call 'ask'") } } }
+				result: { answer: { found: { ok: 'web_search' }, asked: expect.stringContaining("cannot call 'ask'") } }
 			});
 		})
 	);

@@ -1181,7 +1181,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								source = streamMessage(chain, row.id, text, content);
 							row = (yield* messageStatement(chain, source))[0] ?? row;
 						}
-					})
+					}).pipe(
+						// a flush only shows progress: one the database refuses is skipped, and the next writes everything so far
+						Effect.catch((error) => Effect.logWarning('agent stream flush skipped', error))
+					)
 				),
 				Effect.forkScoped
 			);
