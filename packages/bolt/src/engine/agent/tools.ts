@@ -3137,13 +3137,13 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		available,
 		discovery: JSON.stringify({
 			tools: [...entries.keys()],
+			run_tool: [...hostEntries.values()].map(({ tool }) => ({ name: tool.name, description: tool.description, input: tool.input })),
 			callables: [...acts.keys()],
 			automations: automations.flatMap((name) => {
 				const spec = e.manifest.automations[name];
 				return spec === undefined ? [] : [{ name, mode: spec.mode ?? 'job', description: spec.description, input: spec.input ?? {} }];
 			}),
 			syncs: sync_controls,
-			run_tool: [...hostEntries.values()].map(({ tool }) => ({ name: tool.name, description: tool.description, input: tool.input })),
 			document_targets: convert?.targets ?? []
 		}),
 		presentation: (name, input) => {
@@ -3615,7 +3615,7 @@ const logsTool = defineTool('logs', {
 	})
 });
 const runToolTool = defineTool('run_tool', {
-	description: 'Run a host or MCP tool by name with its input, as the run_tool list of the latest actions note describes them.',
+	description: 'Run one of your other tools: each one the latest actions note lists under run_tool, with its description and input schema, is called as run_tool { name, input }.',
 	parameters: Schema.Struct({ name: Schema.String, input: Schema.optionalKey(ToolJson) })
 });
 const documentTool = defineTool('document', {

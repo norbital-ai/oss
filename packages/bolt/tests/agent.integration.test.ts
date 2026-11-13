@@ -1930,6 +1930,28 @@ describe('the host tool catalogue', () => {
 	);
 });
 
+describe('a listed tool called by its own name', () => {
+	it.live('is told it runs through run_tool', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm([use('plans', {}), say('Done.')]);
+			const { agent, user, context } = yield* build(ai, { host_tools: [{
+				name: 'plans', description: 'Reads a plan.', input: { type: 'object' },
+				behavior: { data: true }, read_only: true, call: async () => ({ plan: 'Current plan' })
+			}] });
+			return yield* Effect.gen(function* () {
+				const root = yield* user('root', { admin: true });
+				const c = yield* agent.start({ owner: root });
+				yield* agent.post({ conversation: c, as: { member: root }, text: 'A plan?' });
+				yield* agent.drain(c);
+				expect(toolResults(required(ai.requests[1]))).toContainEqual({
+					error: "'plans' runs through run_tool: run_tool { name: 'plans', input }."
+				});
+			}).pipe(Effect.provide(context));
+		}))
+	);
+});
+
 describe('a tool answer with binary text', () => {
 	it.live('stays in the transcript: PostgreSQL holds no NUL, and the turn goes on', () =>
 		Effect.scoped(

@@ -1327,7 +1327,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const skip = tool === undefined || skipped !== undefined;
 				const answer: ToolAnswer =
 					tool === undefined
-						? { result: { error: `No tool '${call.name}'.` } }
+						? {
+								result: {
+									error: toolset.available.some((t) => t.name === call.name)
+										? `'${call.name}' runs through run_tool: run_tool { name: '${call.name}', input }.`
+										: `No tool '${call.name}'.`
+								}
+							}
 						: invalid !== undefined
 							? { result: invalid }
 							: skipped !== undefined
