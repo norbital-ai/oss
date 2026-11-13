@@ -46,6 +46,12 @@ There is no `grow`, `shrink` or `h-full`. A view never takes `min-h-[…]`. Noth
 - Yes: `Table`, `Board`, `Form`, `RecordShell`, `Sheet`, `Scroll size="fill"`.
 - No: `Tabs`, `Chart`, cards.
 
+## Tables, boards and tabs
+
+- A table or board fills its parent region and scrolls inside itself; it never makes its parent overflow. Only when the parent's available height is below the view's `min_height` may it exceed it, and then the parent scrolls.
+- `Tabs` follow their nesting level: the first level is the default style (`level` 1), the second underline (2), the third chips (3).
+- Choose orientation by the layout's complexity: many sections or deep nesting take `orientation="vertical"`, always on the left (`side="start"`), never the right; otherwise horizontal.
+
 ## The scroll contract
 
 - Never nest two scrollports on one axis: the inner one traps scroll. Remove a `Scroll` around `Form`, `Table`, `Board`, `Tabs` or another `Scroll`.

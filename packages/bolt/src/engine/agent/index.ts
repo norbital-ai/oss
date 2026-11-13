@@ -257,9 +257,6 @@ export const AGENT_LIMITS = {
 	subagents: 4,
 	verifyAttempts: 2,
 	sameFailure: 3,
-	/** Failed API-discovery calls in one turn before a nudge, and before discovery pauses and asks the person. */
-	discoveryNudge: 5,
-	discoveryPause: 12,
 	failingSteps: 4,
 	leaseMs: LEASE_MS.turn,
 	heartbeatMs: 60000,
@@ -351,7 +348,7 @@ export function rest(name: string, call: string, result: Json, resume?: ToolBeha
 			: [
 					...lines,
 					`${head}: more follows; the rest: ${throughHost
-						? `call host with op: "call", tool: ${JSON.stringify(name)}, and the same input with ${arg}: ${JSON.stringify(result['next'])}`
+						? `call run_tool with name: ${JSON.stringify(name)} and the same input with ${arg}: ${JSON.stringify(result['next'])}`
 						: `call ${name} again with the same arguments and ${arg}: ${JSON.stringify(result['next'])}`}`
 				];
 	return [
@@ -361,7 +358,7 @@ export function rest(name: string, call: string, result: Json, resume?: ToolBeha
 				? []
 				: [
 						`${head}: more "${key}" rows follow${Array.isArray(page['rows']) ? ` the ${page['rows'].length} shown${typeof page['total'] === 'number' ? ` of ${page['total']}` : ''}` : ''}; the rest: ${throughHost
-							? `call host with op: "call", tool: ${JSON.stringify(name)}, and the same "${key}" input options with "${arg}": ${JSON.stringify(page['next'])}`
+							? `call run_tool with name: ${JSON.stringify(name)} and the same "${key}" input options with "${arg}": ${JSON.stringify(page['next'])}`
 							: `call ${name} again with the same "${key}" options and "${arg}": ${JSON.stringify(page['next'])}`}`
 					]
 		)
@@ -396,11 +393,7 @@ export const NUDGE = {
 		`Some answers stopped short; the rest is not above:\n${lines.map((l) => `- ${l}`).join('\n')}`,
 	truncated: (calls: readonly string[]) =>
 		`Some results were too large and you saw only part of them: ${calls.join(', ')}. Do not treat them as complete. ` +
-		'read_file { call, offset } reads the rest; or narrow the read.',
-	discovery:
-		'Your API-discovery queries keep failing. Stop guessing shapes: read one exported type with host { op: "call", tool: "workspace_lang", input: { op: "type" } }, or ask the one blocking question.',
-	discoveryPaused:
-		'API discovery is paused for this turn after repeated failed queries. Answer the person now: say what you tried and ask the one question that unblocks you. Do not call host with tool: "workspace_lang" again this turn.'
+		'read_file { call, offset } reads the rest; or narrow the read.'
 } as const;
 /** Rule 59: fixed replies; internal error text never reaches a sender. */
 export const FIXED = {
@@ -447,8 +440,6 @@ type TurnState = {
 	lastError: string;
 	emptied: boolean;
 	cutTools: number;
-	discovery: number;
-	discoveryPaused: boolean;
 	compactions: number;
 	lastInput: number;
 	as: As | null;
@@ -960,7 +951,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		const current: TurnState = {
 			model: '', steps: 0, failing: 0, red: 0, lowest: Number.POSITIVE_INFINITY,
 			toldRed: false, lastError: '', emptied: false, cutTools: 0,
-			discovery: 0, discoveryPaused: false, compactions: 0, lastInput: 0,
+			compactions: 0, lastInput: 0,
 			as: null, mode: 'agent', force: options.force === true, question: null,
 			cut: null, reply: null, previous: '', heard: true, typingIn: null, streaming: null,
 			inputs: [], usage: { input: 0, output: 0, calls: 0 },
@@ -1320,15 +1311,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				});
 				const tool = tools.find((t) => t.name === call.name),
 					key = callKey(call.name, call.input);
-				const discoveryCall = operation.behavior.discovery === true;
 				// a call the dead generation made (its result never recorded) is not made again; nor is a call identical to the
 				// one just made (beside it or the step before), whose answer the model already has, or one that already failed
 				// this often
 				const skipped = current.replayed.delete(stepKey(call.name, args))
 					? NUDGE.replayed
-					: discoveryCall && current.discoveryPaused
-						? NUDGE.discoveryPaused
-						: key === current.previous
+					: key === current.previous
 							? 'Not run: you just made this exact call; its answer is above. Change the arguments to get something new.'
 							: (current.failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure
 								? 'Not run: this exact call already failed several times this turn.'
@@ -1360,28 +1348,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						if (!skip || current.lastError === '') current.lastError = String(result['error']); // staff see the real failure, not the cut-short
 						if (n >= AGENT_LIMITS.sameFailure) result = { ...result, guidance: RECOVERY };
 					} else current.failures.clear(); // a call that worked is progress: an earlier failure is worth one fresh try
-					// compiler and shape errors on discovery are still no answer: count them across different queries
-					if (discoveryCall) {
-						const unanswered =
-							failedResult(result) || (isObj(result) && typeof result['code'] === 'string');
-						if (!unanswered) current.discovery = 0;
-						else if (
-							++current.discovery === AGENT_LIMITS.discoveryNudge ||
-							current.discovery === AGENT_LIMITS.discoveryPause - 1
-						)
-							yield* appendNote(NUDGE.discovery);
-						else if (current.discovery >= AGENT_LIMITS.discoveryPause && !current.discoveryPaused) {
-							current.discoveryPaused = true;
-							yield* appendNote(NUDGE.discoveryPaused);
-						}
-					}
 					// the model sees a bounded result; a clipped one keeps the whole output for `read_file { call }`
 					const own = 'bounded' in answer && answer.bounded === true,
 						whole = own && answer.full !== undefined ? answer.full : result,
 						shown = own ? result : bounded(result).value;
 					const stored = storedToolResult(call.id, shown, whole);
 					if (stored.full !== undefined) truncated.push(`${operation.name} (call '${call.id}')`);
-					rests.push(...rest(operation.name, call.id, shown, operation.behavior.resume, call.name === 'host'));
+					rests.push(...rest(operation.name, call.id, shown, operation.behavior.resume, call.name === 'run_tool'));
 					yield* finish(stored.result, stored.full === undefined ? null : { tag: 'output', full: stored.full });
 				}
 				return Option.none();

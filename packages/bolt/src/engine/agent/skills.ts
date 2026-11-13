@@ -39,9 +39,10 @@ description: Protocol for web research, scraping and downloading.
 description: Protocol for analysing data and producing charts and reports.
 ---
 1. A count is a read's total. A sum, average or group is one read with aggregate. Read rows only for what those cannot give.
-2. Anything further is run_js over the read's rows; verify its totals against an aggregate.
-3. A chart is an SVG file run_js returns. A report is document, with numbers as tables and charts inline.
-4. State what the numbers show in a sentence or two.
+2. Money adds up only within one currency: group every money sum by its currency, and never add or rank across currencies.
+3. Anything further is run_js over the read's rows; verify its totals against an aggregate.
+4. A chart is an SVG file run_js returns. A report is document, with numbers as tables and charts inline.
+5. State what the numbers show in a sentence or two.
 `),
 	requirements: skill(`---
 description: How to turn a brief into the smallest product that fits.
@@ -56,7 +57,7 @@ description: How to turn a brief into the smallest product that fits.
 description: How to model a domain with the fewest, most general models, and how to lay them out.
 ---
 1. Learn the domain first: its jobs, actors, inputs and the variations its users need. Design so a new variation is a new configuration record created at runtime, never new source.
-2. Generic over specific: one engine model plus the records that configure it. A parser model whose rows hold the instructions and output schema an inference uses; a settings model holding rates, rules and templates. Code reads the configuration and never branches on a customer or a case.
+2. Generic over specific: one engine model plus the runtime records that configure it. Code reads the configuration and never branches on a customer or a case.
 3. Fewest models. A fact is, in order of preference: a field; a custom datatype or shaped json on its owner; an owned child model; a separate model.
 4. A model earns its table over a custom datatype only when the fact needs a foreign-key constraint, its own view, its own lifecycle, permissions or approval, history, or relational queries.
 5. Lay models out as a hierarchy: a model's folder nests under the model that owns it (data/model/<root>/<child>/+model.ts); catalogues and settings group under one settings root. The tree reads as the domain.
@@ -68,15 +69,16 @@ description: How to model a domain with the fewest, most general models, and how
 	'product-ux': skill(`---
 description: How a workspace page and form should be composed.
 ---
-1. Read the page and layout references before the first page. Use the shell and layout primitives; a page root is not a raw flex/grid div.
-2. AppShell and Scroll own the page. A page with more than one section scrolls inside its shell; the page never relies on the browser body for scrolling.
-3. Use Section to reveal detail progressively. Group forms by meaning; do not present a long flat field list.
-4. The main views are Table, Board (a kanban) and Chart, with the record sheet for one row; give record models a representation. Use them before any custom component, and never render a model as ad-hoc markup.
-5. One scroll owner per region. Never nest scrolling containers: two scrollbars on one axis read as broken.
-6. A table takes size="fill" with a min_height floor: it grows to fill its container without pushing the page past it, then scrolls its own rows. Lay out every growing region the same way (layout-and-scrolling reference).
-7. The simplest, most general layout that serves the job is the better UX. Prefer fewer pages and fewer components.
-8. Artwork is part of the app identity: a banner or thumbnail is a real image, not an empty placeholder. Give every image a working source and alt text.
-9. Verify with workspace_preview: pages render, scroll, and show no broken images or console errors.
+1. Read the page and layout references before the first page. Compose from the shell, layout and view primitives the contract names; a page root is never raw markup.
+2. The shell owns the page. A page with more than one section scrolls inside its shell, never on the browser body.
+3. Reveal detail progressively: group a form's fields by meaning into sections, never one long flat list.
+4. Records show in the native views (table, board, chart) and the record sheet for one row; give every record model a representation. Use them before any custom component, and never render a model as ad-hoc markup.
+5. One scroll owner per region. Never nest scrolling containers on one axis.
+6. A table or board fills its parent region and scrolls inside itself; it never makes its parent overflow. Only when the parent's available height is below its minimum height may it exceed it, and then the parent scrolls.
+7. Tabs follow their nesting level: the first level is default tabs, the second underline, the third chips. Many sections or deep nesting take vertical tabs, always on the left, never the right; otherwise horizontal.
+8. The simplest, most general layout that serves the job is the better one: fewer pages, fewer components.
+9. Artwork is part of the app identity: a banner or thumbnail is a real image with a working source and alt text, never a placeholder.
+10. Verify in the preview: pages render, scroll, and show no broken images or console errors.
 `),
 	engineering: skill(`---
 description: General engineering practice for a workspace change.
@@ -86,7 +88,7 @@ description: General engineering practice for a workspace change.
 3. Write Effect code: bodies are function* and yield* their ctx Effects; helpers return Effects with typed failures; no Promise wrappers.
 4. src/lib/<domain>/ holds reusable services. Logic a server body and a page both need lives there once and both import it. No lone file: a helper with one caller stays beside that caller.
 5. Keep values in the form the platform already gives them; decode at the boundary once. Do not erase types or fabricate partial data.
-6. Tests are evidence for the risky paths. A write, a state move, a live read and a refusal each need a case.
+6. Tests prove this workspace's own flows: which write its policies hold, for whom, and who approves. Never test what the platform already guarantees.
 7. Finish the source, then verify in this order: types, tests, build, preview. Report what failed and what you fixed.
 8. When feedback says the result is wrong, remove or merge before adding. A larger diff is not progress.
 `),
@@ -100,10 +102,9 @@ description: What a workspace can do on its own, to compose a solution to a pers
 5. Messaging: envoys converse on a paired account; ctx.send sends through it; a scheduled message is a cron automation; replies continue in the same conversation.
 6. Syncs and integrations: syncs exchange rows with remote systems and with files (import, export, templates); connections are runtime records the person creates and pairs.
 7. Policies and approvals: grants decide who may do what; a verdict can route a write for approval.
-8. Agent work: run_js computes over reads and files; the browser works the web; an automation marked for agents becomes a tool; a workspace skill (agent/skill/<s>/+skill.md) records a repeated procedure.
-9. Platform skills: records, ingest, research, analysis, requirements, data-modelling, product-ux, engineering and workspace-eval. Open the one the task needs.
-10. Onboarding and configuration: set up envoys, connections and runtime catalogues through native records and the integration page. Never collect a credential in chat.
-11. When a step repeats, build a tool for it; when a procedure repeats, write a skill. Prefer the least complex composition.
+8. Agent work: scripts compute over reads and files; the browser works the web; an automation marked for agents becomes your own tool; a workspace skill records a repeated procedure and the brief records standing rules.
+9. Onboarding and configuration: set up envoys, connections and runtime catalogues through native records and the integration page. Never collect a credential in chat.
+10. When a step repeats, build a tool for it; when a procedure repeats, write a skill. Prefer the least complex composition.
 `),
 	'workspace-eval': skill(`---
 description: How to grade a workspace against its brief before merge.

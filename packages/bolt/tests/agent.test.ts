@@ -65,21 +65,18 @@ const row = (
 });
 type Step = Ai['Service']['infer'];
 describe('guidance follows the tools actually available', () => {
-	it('adds source guidance only with source tooling and names supplied preview/merge tools', () => {
+	it('adds what source is only with source tooling, and names no tool or step', () => {
 		expect(system({ skills: {} })).not.toContain('# Source');
 		const prompt = system({ skills: {}, tools: [
 			{ name: 'workspace_search' }, { name: 'show_preview', studio: 'preview' }, { name: 'take_live', studio: 'merge' }
 		] });
-		expect(prompt).toContain('show_preview builds and serves');
-		expect(prompt).toContain('take_live asks the person');
-		expect(prompt).toContain('never invent a reference filename');
-		expect(prompt).not.toContain('envoy.md');
+		expect(prompt).toContain('# Source');
+		expect(prompt).not.toMatch(/show_preview|take_live|workspace_|bolt-primer|run_tool|\bhost\b/);
 	});
 	it('a channel conversation gets its own browser and native-question guidance', () => {
 		const prompt = system({ envoy: 'Desk', skills: {} });
 		expect(prompt).toContain("There is no user's workspace browser tab in this channel.");
-		expect(prompt).toContain('Use ask for questions and choices, then wait.');
-		expect(prompt).toContain('Do not repeat its question, choices or summary');
+		expect(prompt).toContain('do not repeat its question, choices or summary');
 	});
 });
 
@@ -279,7 +276,7 @@ describe('the context projection', () => {
 			tools: [{ name: 'workspace_search' }]
 		});
 		expect(layout).toContain('\n\n# Source\n');
-		expect(layout).toContain('workspace_list_dir shows it');
+		expect(layout).not.toMatch(/workspace_list|workspace_search|workspace_lang/);
 		expect(layout.indexOf('# Source')).toBeLessThan(layout.indexOf('# Skills'));
 	});
 });

@@ -216,7 +216,7 @@ const discovery = (request: AiRequest | undefined) => {
 	const text = Schema.decodeUnknownSync(Schema.String)(note?.content);
 	return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({
 		tools: Schema.Array(Schema.String), callables: Schema.Array(Schema.String),
-		host_tools: Schema.Array(Schema.String), mcp_servers: Schema.Array(Schema.String)
+		run_tool: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String, input: Schema.Json }))
 	})))(text.slice(text.indexOf(prefix) + prefix.length));
 };
 const toolResults = (request: AiRequest) =>
@@ -552,7 +552,7 @@ describe('in-app turns', () => {
 				Effect.gen(function* () {
 					const ai = cassette();
 					ai.arm([
-						use('host', { op: 'call', tool: 'request_publish', input: {} }),
+						use('run_tool', { name: 'request_publish', input: {} }),
 						say('Waiting for approval.'),
 						say('Previous request rejected.')
 					]);
@@ -603,7 +603,7 @@ describe('in-app turns', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const ai = cassette();
-				ai.arm([use('host', { op: 'call', tool: 'workspace_test', input: {} }), say('Tests are running.'), say('They failed: fixing.')]);
+				ai.arm([use('run_tool', { name: 'workspace_test', input: {} }), say('Tests are running.'), say('They failed: fixing.')]);
 				const finish = yield* Deferred.make<void>();
 				const { agent, user } = yield* build(ai, {
 					host_tools: [
@@ -670,7 +670,7 @@ describe('in-app turns', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const ai = cassette();
-				ai.arm([use('host', { op: 'call', tool: 'read', input: { path: 'a' } }), use('host', { op: 'call', tool: 'read', input: { path: 'b' } }), say('Done.')]);
+				ai.arm([use('run_tool', { name: 'read', input: { path: 'a' } }), use('run_tool', { name: 'read', input: { path: 'b' } }), say('Done.')]);
 				const { agent, user } = yield* build(ai, {
 					host_tools: [
 						{
@@ -700,8 +700,8 @@ describe('in-app turns', () => {
 				const ai = cassette();
 				ai.arm(
 					Array.from({ length: 8 }, (_, n) => [
-						use('host', { op: 'call', tool: 'workspace_write', input: { path: 'tests/a.test.ts', content: `round ${n}` } }),
-						use('host', { op: 'call', tool: 'workspace_diagnose', input: { only: 'tests' } })
+						use('run_tool', { name: 'workspace_write', input: { path: 'tests/a.test.ts', content: `round ${n}` } }),
+						use('run_tool', { name: 'workspace_diagnose', input: { only: 'tests' } })
 					]).flat()
 				);
 				let validations = 0;
@@ -768,8 +768,8 @@ describe('in-app turns', () => {
 				const ai = cassette();
 				ai.arm(
 					Array.from({ length: 8 }, (_, n) => [
-						use('host', { op: 'call', tool: 'workspace_write', input: { path: 'src/a.ts', content: `round ${n}` } }),
-						use('host', { op: 'call', tool: 'workspace_diagnose', input: {} })
+						use('run_tool', { name: 'workspace_write', input: { path: 'src/a.ts', content: `round ${n}` } }),
+						use('run_tool', { name: 'workspace_diagnose', input: {} })
 					]).flat()
 				);
 				let validations = 0;
@@ -966,7 +966,7 @@ describe('in-app turns', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('mcp', { op: 'call', server: 'hq', tool: 'echo', input: { text: 'hi' } }),
+						use('run_tool', { name: 'hq.echo', input: { text: 'hi' } }),
 						say('HQ said hi.'),
 						say('Nothing to add.')
 					]);
@@ -978,10 +978,11 @@ describe('in-app turns', () => {
 						yield* agent.post({ conversation: c, as: { member: ann }, text: 'ask hq' });
 						yield* agent.drain(c);
 						expect(toolNames(ai.requests[0])).toEqual(
-							expect.arrayContaining(['read', 'act', 'skill', 'mcp', 'subagent'])
+							expect.arrayContaining(['read', 'act', 'skill', 'run_tool', 'subagent'])
 						);
+						const listed = (request: AiRequest | undefined) => discovery(request).run_tool.map(({ name }) => name);
 						// an unreachable server is unavailable, never a failed turn
-						expect(discovery(ai.requests[0]).mcp_servers).not.toContain('down');
+						expect(listed(ai.requests[0]).some((name) => name.startsWith('down.'))).toBe(false);
 						expect(toolResults(required(ai.requests[1]))[0]).toMatchObject({
 							content: [{ type: 'text', text: 'echo: hi' }]
 						});
@@ -993,8 +994,9 @@ describe('in-app turns', () => {
 						// a skill is procedure, not authority: every actor may load every workspace skill
 						expect(names).toContain('skill');
 						expect(ai.requests[2]?.system).toContain('- pricing: ');
-						expect(discovery(ai.requests[2])).toMatchObject({ callables: [], mcp_servers: [] });
-						expect(discovery(ai.requests[0]).mcp_servers).toEqual(['hq']);
+						expect(discovery(ai.requests[2])).toMatchObject({ callables: [] });
+						expect(listed(ai.requests[2]).some((name) => name.startsWith('hq.'))).toBe(false);
+						expect(listed(ai.requests[0])).toContain('hq.echo');
 						expect({ mcp: mcpServers(manifest, yield* authority(ann)) }).toMatchObject({
 							mcp: [{ name: 'hq' }]
 						});
@@ -1900,10 +1902,10 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 	);
 });
 describe('the host tool catalogue', () => {
-	it.live('offers a complete native tool schema without repeating its description in the transcript', () =>
+	it.live('lists a host tool whole in the actions note, so it runs by name with no listing step', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const ai = cassette();
-			ai.arm([use('host', { op: 'list', tool: 'plans' }), use('host', { op: 'call', tool: 'plans', input: {} }), say('Done.')]);
+			ai.arm([use('run_tool', { name: 'plans', input: {} }), say('Done.')]);
 			const { agent, user, context } = yield* build(ai, { host_tools: [{
 				name: 'plans', description: 'Reads a plan.', input: { type: 'object' },
 				behavior: { data: true }, read_only: true, call: async () => ({ plan: 'Current plan' })
@@ -1913,16 +1915,16 @@ describe('the host tool catalogue', () => {
 				const c = yield* agent.start({ owner: root });
 				yield* agent.post({ conversation: c, as: { member: root }, text: 'A plan?' });
 				yield* agent.drain(c);
-				const [request, listed, called] = ai.requests;
-				if (request === undefined || listed === undefined || called === undefined) throw new Error('The native host script needs three model steps.');
-				expect(request?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'host' })]));
+				const [request, called] = ai.requests;
+				if (request === undefined || called === undefined) throw new Error('The native host script needs two model steps.');
+				expect(request?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'run_tool' })]));
 				expect(request?.tools?.some((tool) => tool.name === 'plans')).toBe(false);
-				expect(discovery(request).host_tools).toContain('plans');
-				expect(toolResults(listed)).toContainEqual({ tools: [expect.objectContaining({ name: 'plans', description: 'Reads a plan.', input: { type: 'object' } })] });
+				expect(discovery(request).run_tool).toContainEqual({ name: 'plans', description: 'Reads a plan.', input: { type: 'object' } });
 				expect(toolResults(called)).toContainEqual({ plan: 'Current plan' });
-				expect(JSON.stringify(request?.messages)).not.toContain('Reads a plan.');
+				// the listing rides the appended note once, never the cached system prompt
 				expect(JSON.stringify(request?.system)).not.toContain('Reads a plan.');
-				expect(ai.requests).toHaveLength(3);
+				expect(JSON.stringify(called.messages).split('Reads a plan.')).toHaveLength(2);
+				expect(ai.requests).toHaveLength(2);
 			}).pipe(Effect.provide(context));
 		}))
 	);
@@ -2066,7 +2068,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 		]);
 		expect(rest('logs', 'l1', { entries: [], next: 'e9' }, { argument: 'cursor' })[0]).toContain('cursor: "e9"');
 		expect(rest('read_file', 'o1', { text: '…', next: 1200 }, { argument: 'offset' })[0]).toContain('offset: 1200');
-		expect(rest('browser', 'b1', { text: '…', next: 300 }, { argument: 'from' }, true)[0]).toContain('call host with op: "call", tool: "browser", and the same input with from: 300');
+		expect(rest('browser', 'b1', { text: '…', next: 300 }, { argument: 'from' }, true)[0]).toContain('call run_tool with name: "browser" and the same input with from: 300');
 		expect(rest('browser', 'b1', { text: '…', next: 300 })).toEqual([]);
 		expect(
 			rest('read_file', 'f1', {

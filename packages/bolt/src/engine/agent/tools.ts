@@ -2694,8 +2694,8 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	const inner = (call: string) => {
 		let used = 0;
 		return (name: string, input: unknown): Effect.Effect<ToolAnswer> =>
-			self === undefined || !SCRIPTED.has(name) || (!entries.has(name) && !hostEntries.has(name))
-				? Effect.succeed(err(`A script cannot call '${name}': ${RUN_JS.tools.join(', ')} only.`))
+			self === undefined || UNSCRIPTED.has(name) || (!entries.has(name) && !hostEntries.has(name))
+				? Effect.succeed(err(`A script cannot call '${name}': it calls your other tools by name.`))
 				: ++used > RUN_JS.toolCalls
 					? Effect.succeed(err(`A run makes at most ${RUN_JS.toolCalls} tool calls.`))
 					: self(name, input, `${call}:${used}`).pipe(Effect.provideService(Scripted, true));
@@ -3032,28 +3032,23 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			);
 		});
 	}
-	add(mcpTool, function* (i) {
-		if (i.op === 'list')
-			return ok({ tools: x.mcpTools.filter((tool) => i.server === undefined || tool.server === i.server) });
-		if (!agent) return err('External MCP tools cannot run while planning.');
-		if (i.server === undefined || i.tool === undefined)
-			return err('Give server and tool from mcp { op: "list" }.');
-		const tool = x.mcpTools.find((tool) => tool.server === i.server && tool.name === i.tool);
-		if (tool === undefined)
-			return err(`No MCP tool '${i.server}.${i.tool}' is available to you. mcp { op: "list" } lists yours.`);
-		if (!Predicate.isObject(tool.input)) return err('This MCP tool has no object input schema.');
-		const checked = validatorFor(tool.input)(i.input ?? {});
-		return typeof checked === 'string'
-			? err(checked)
-			: ok(yield* x.mcp.call(tool.server, tool.name, checked));
-	});
-	add(hostTool, function* (i, callId) {
-		if (i.op === 'list')
-			return ok({ tools: [...hostEntries.values()]
-				.map((entry) => entry.tool).filter((tool) => i.tool === undefined || tool.name === i.tool) });
-		return i.tool === undefined
-			? err('Give tool from host { op: "list" }.')
-			: yield* runHost(i.tool, i.input === undefined ? {} : i.input, callId);
+	// an MCP tool is reached as `<server>.<tool>`, beside the host's own tools; it runs only while acting
+	if (agent)
+		for (const tool of x.mcpTools) {
+			if (!Predicate.isObject(tool.input)) continue;
+			const valid = validatorFor(tool.input);
+			add(
+				{ name: `${tool.server}.${tool.name}`, description: tool.description, input: tool.input, behavior: {}, decode: Effect.succeed },
+				function* (given) {
+					const input = valid(given);
+					return typeof input === 'string' ? err(input) : ok(yield* x.mcp.call(tool.server, tool.name, input));
+				},
+				{},
+				hostEntries
+			);
+		}
+	add(runToolTool, function* (i, callId) {
+		return yield* runHost(i.name, i.input === undefined ? {} : i.input, callId);
 	});
 	// Host tools keep their raw JSON Schema, checked by its validator; the workspace's own search wins: an MCP tool named
 	// like a host search tool hides the host's
@@ -3134,7 +3129,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	};
 	const run: Catalogue['run'] = (name, input, callId) => execute(entries, name, input, callId);
 	const runHost: Catalogue['run'] = (name, input, callId) => execute(hostEntries, name, input, callId);
-	// Scripts retain their declared tool(name, input) API; model calls use the fixed host discovery tool.
+	// a script and run_tool reach a host or MCP tool by the one name the tools note lists
 	self = (name, input, callId) => entries.has(name) ? run(name, input, callId) : runHost(name, input, callId);
 	const available = [...entries.values(), ...hostEntries.values()].map((entry) => entry.tool);
 	return {
@@ -3148,13 +3143,12 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				return spec === undefined ? [] : [{ name, mode: spec.mode ?? 'job', description: spec.description, input: spec.input ?? {} }];
 			}),
 			syncs: sync_controls,
-			host_tools: [...hostEntries.keys()],
-			mcp_servers: [...new Set(x.mcpTools.map((tool) => tool.server))],
+			run_tool: [...hostEntries.values()].map(({ tool }) => ({ name: tool.name, description: tool.description, input: tool.input })),
 			document_targets: convert?.targets ?? []
 		}),
 		presentation: (name, input) => {
-			const host = name === 'host' && isObj(input) && input['op'] === 'call' && typeof input['tool'] === 'string'
-				? hostEntries.get(input['tool']) : undefined;
+			const host = name === runToolTool.name && isObj(input) && typeof input['name'] === 'string'
+				? hostEntries.get(input['name']) : undefined;
 			const definition = host?.tool ?? entries.get(name)?.tool;
 			const given = host !== undefined && isObj(input) ? input['input'] : input;
 			return {
@@ -3377,24 +3371,15 @@ const validatorFor = (input: { readonly [key: string]: Json }) => {
 	dynamics.set(input, valid);
 	return valid;
 };
-/** What a script's `tool()` reaches. */
-const SCRIPTED: ReadonlySet<string> = new Set(RUN_JS.tools);
+/** The tools a script's `tool()` never reaches: they steer the turn or the person's tab. */
+const UNSCRIPTED: ReadonlySet<string> = new Set(['ask', 'ask_parent', 'wait', 'run_js', 'subagent', 'update_plan', 'goals', 'page']);
 /** The host tool a workspace may replace with its own same-named MCP tool; every other host name stays the host's. */
 const WORKSPACE_OVERRIDES: ReadonlySet<string> = new Set(['web_search']);
 
 // Tool text and model schemas are shared; handlers bind only when a step is admitted.
-const mcpTool = defineTool('mcp', {
-	description: 'External MCP tools. op "list": your servers and their tools with input schemas; server narrows it. op "call": server, tool, input. Read the listed schema before calling.',
-	parameters: Schema.Struct({
-		op: Schema.Literals(['list', 'call']),
-		server: Schema.optionalKey(Schema.String),
-		tool: Schema.optionalKey(Schema.String),
-		input: Schema.optionalKey(Schema.Record(Schema.String, ToolJson))
-	})
-});
 const recordsTool = defineTool('read', {
 	behavior: { data: true, resume: { argument: 'after', roots: true } },
-	description: `Read records. request: { "<model>": { output, where, fields, order_by, limit, after, search, aggregate, as_of, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. order_by: "<field>", { <field>: "desc" } or a list.
+	description: `Read records. request: { "<model>": { output, where, fields, order_by, limit, after, search, aggregate, as_of, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. output: one of the read outputs the model declares, "default" when omitted. order_by: "<field>", { <field>: "desc" } or a list of those.
 where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } }.
 Answers each model's { rows, next, total } (total counts every match), or with aggregate its measures. Long values are clipped.`,
@@ -3570,7 +3555,7 @@ const downloadTool = defineTool('download', {
 });
 const runJsTool = defineTool('run_js', {
 	behavior: { data: true },
-	description: "Run JavaScript in a fresh billed isolate; only its return value and prints come back. code: an async function body of input, without require, process, fetch or timers. await tool(name, input) calls read, act, browser, web_search, describe_workspace, read_file or workspace_read as you, ≤ 200 calls. files: [{ id }] arrive as input.files { name: text | { base64 } }. http: true adds await http({ method?, url, headers?, body? }) answering { status, headers, text }, public https only. Return { files: [{ name, text | base64 }] } to give the person files. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out instead of code. Walls: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.",
+	description: "Run JavaScript in a fresh billed isolate; only its return value and prints come back. code: an async function body of input, without require, process, fetch or timers. await tool(name, input) calls your other tools by name, as you, ≤ 200 calls. files: [{ id }] arrive as input.files { name: text | { base64 } }. http: true adds await http({ method?, url, headers?, body? }) answering { status, headers, text }, public https only. Return { files: [{ name, text | base64 }] } to give the person files. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out instead of code. Walls: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.",
 	parameters: Schema.Struct({
 		code: Schema.optionalKey(Schema.String),
 		input: Schema.optionalKey(ToolJson),
@@ -3629,13 +3614,9 @@ const logsTool = defineTool('logs', {
 		cursor: Schema.optionalKey(Schema.String)
 	})
 });
-const hostTool = defineTool('host', {
-	description: 'Host tools. op "list": their descriptions and input schemas; tool narrows it. op "call": tool, input, run with your current authority. Read the listed schema before calling.',
-	parameters: Schema.Struct({
-		op: Schema.Literals(['list', 'call']),
-		tool: Schema.optionalKey(Schema.String),
-		input: Schema.optionalKey(ToolJson)
-	})
+const runToolTool = defineTool('run_tool', {
+	description: 'Run a host or MCP tool by name with its input, as the run_tool list of the latest actions note describes them.',
+	parameters: Schema.Struct({ name: Schema.String, input: Schema.optionalKey(ToolJson) })
 });
 const documentTool = defineTool('document', {
 	description: 'Make a file from markdown (tables and inline HTML allowed) and offer it to the person; a file field takes its reference. In pptx each ## starts a slide.',
@@ -3650,5 +3631,5 @@ const documentTool = defineTool('document', {
 const FIXED_TOOLS: readonly AgentTool[] = [
 	recordsTool, describeTool, pageTool, actTool, syncTool, updatePlanTool, goalsTool, skillTool, historyTool,
 	readMessagesTool, readFileTool, geocodeTool, readSource, searchSource, listSource, subagentTool,
-	documentTool, downloadTool, runJsTool, askParentTool, askTool, waitTool, runsTool, logsTool, mcpTool, hostTool
+	documentTool, downloadTool, runJsTool, askParentTool, askTool, waitTool, runsTool, logsTool, runToolTool
 ].map(({ name, description, input, behavior }) => ({ name, description, input, behavior }));

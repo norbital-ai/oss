@@ -1406,7 +1406,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 				])
 					expect(offered).not.toContain(mutating);
 				expect(
-					yield* result(x, 'host', { op: 'call', tool: 'workspace_lang', input: {} })
+					yield* result(x, 'run_tool', { name: 'workspace_lang', input: {} })
 				).toMatchObject({
 					result: { ok: 'workspace_lang' }
 				});
@@ -2963,7 +2963,7 @@ describe('run_js over a repository reference', () => {
 			};
 			const x = yield* ctx({ host_tools: [reference], inlineMs: 1 }, { bundler: service, http });
 			store = x.engine.files;
-			yield* result(x, 'host', { op: 'call', tool: 'reference', input: {} });
+			yield* result(x, 'run_tool', { name: 'reference', input: {} });
 			// past the inline wall the file is still recorded, and `wait` hands it over
 			expect(yield* result(x, 'wait', { jobs: [first(x.jobs.pending()).job] })).toMatchObject({
 				result: {
@@ -3266,7 +3266,7 @@ describe('host web search', () => {
 		Effect.gen(function* () {
 			const plain = yield* names(yield* ctx({ host_tools }));
 			expect(plain).toEqual(expect.arrayContaining(['web_search', 'browser']));
-			// Host and MCP operations use their native discovery envelopes.
+			// host and MCP tools are reached through run_tool, by the names the actions note lists
 			expect(plain).not.toContain('tools');
 			const own = yield* names(
 				yield* ctx({
@@ -3277,7 +3277,7 @@ describe('host web search', () => {
 					]
 				})
 			);
-			expect(own).toEqual(expect.arrayContaining(['mcp', 'browser']));
+			expect(own).toEqual(expect.arrayContaining(['kagi.web_search', 'kagi.browser', 'browser']));
 			expect(own).not.toContain('web_search');
 		})
 	);
@@ -3288,9 +3288,8 @@ describe('host web search', () => {
 				input: { type: 'object', properties: { x: { $ref: '#/$defs/Gone' } } }
 			};
 			expect(
-				yield* result(yield* ctx({ host_tools: [dangling] }), 'host', {
-					op: 'call',
-					tool: 'dangling',
+				yield* result(yield* ctx({ host_tools: [dangling] }), 'run_tool', {
+					name: 'dangling',
 					input: { x: 1 }
 				})
 			).toEqual({
@@ -3298,12 +3297,23 @@ describe('host web search', () => {
 			});
 		})
 	);
+	it.live('a script calls a host tool by the name run_tool takes, never a tool that steers the turn', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({ host_tools });
+			expect(
+				yield* result(x, 'run_js', {
+					code: "return { found: await tool('web_search', {}), asked: await tool('ask', { question: 'x' }) };"
+				})
+			).toMatchObject({
+				result: { answer: { found: { ok: 'web_search' }, asked: { error: expect.stringContaining("cannot call 'ask'") } } }
+			});
+		})
+	);
 	it.effect('the host call carries the turn question', () =>
 		Effect.gen(function* () {
 			seen.length = 0;
-			yield* result(yield* ctx({ host_tools, question: 'who won?' }), 'host', {
-				op: 'call',
-				tool: 'web_search',
+			yield* result(yield* ctx({ host_tools, question: 'who won?' }), 'run_tool', {
+				name: 'web_search',
 				input: {}
 			});
 			expect(seen.map((c) => c.question)).toEqual(['who won?']);
@@ -3325,7 +3335,7 @@ describe('a transcript row', () => {
 
 describe('the catalogue', () => {
 	it.effect(
-		'keeps model tools fixed while actor discovery and host/MCP calls use their envelopes',
+		'keeps model tools fixed; host and MCP tools are listed whole and run by name',
 		() =>
 			Effect.gen(function* () {
 				const host_calls: HostToolContext[] = [];
@@ -3366,7 +3376,7 @@ describe('the catalogue', () => {
 					ordinary.tools.map(({ name }) => name)
 				);
 				expect(offered.tools.map(({ name }) => name)).toEqual(
-					expect.arrayContaining(['host', 'mcp', 'read', 'act'])
+					expect.arrayContaining(['run_tool', 'read', 'act'])
 				);
 				expect(offered.tools.map(({ name }) => name)).not.toContain('workspace_lang');
 				expect(offered.available.map(({ name }) => name)).toContain('workspace_lang');
@@ -3374,29 +3384,24 @@ describe('the catalogue', () => {
 				const discovery = Schema.decodeUnknownSync(
 					Schema.fromJsonString(
 						Schema.Struct({
-							host_tools: Schema.Array(Schema.String),
-							mcp_servers: Schema.Array(Schema.String)
+							run_tool: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String, input: Schema.Json }))
 						})
 					)
 				)(offered.discovery);
-				expect(discovery).toEqual({ host_tools: ['workspace_lang'], mcp_servers: ['search'] });
+				expect(discovery.run_tool).toEqual([
+					{ name: 'search.web_search', description: 'Search', input: { type: 'object' } },
+					{ name: 'workspace_lang', description: 'Read exported types', input: { type: 'object' } }
+				]);
 				expect(yield* offered.run('workspace_lang', {}, 'direct')).toMatchObject({
 					result: { error: expect.stringContaining('not available') }
 				});
 				expect(host_calls).toEqual([]);
 				expect(
-					yield* offered.run('host', { op: 'call', tool: 'workspace_lang', input: {} }, 'host-call')
+					yield* offered.run('run_tool', { name: 'workspace_lang', input: {} }, 'host-call')
 				).toEqual({ result: { ok: true } });
 				expect(host_calls).toMatchObject([{ call_id: 'host-call', conversation: x.conv.id }]);
-				expect(yield* offered.run('mcp', { op: 'list', server: 'search' }, 'list')).toEqual({
-					result: { tools: [external] }
-				});
 				expect(
-					yield* offered.run(
-						'mcp',
-						{ op: 'call', server: 'search', tool: 'web_search', input: { q: 'news' } },
-						'mcp-call'
-					)
+					yield* offered.run('run_tool', { name: 'search.web_search', input: { q: 'news' } }, 'mcp-call')
 				).toEqual({ result: { ok: true } });
 				expect(mcp_calls).toEqual([{ server: 'search', tool: 'web_search', input: { q: 'news' } }]);
 			})

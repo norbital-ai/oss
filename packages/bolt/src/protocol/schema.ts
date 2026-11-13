@@ -26,7 +26,6 @@ export const ToolBehavior = Schema.Struct({
 	pure: Schema.optionalKey(Schema.Literal(true)),
 	progress_check: Schema.optionalKey(Schema.Literal(true)),
 	diagnostics: Schema.optionalKey(Schema.Literal(true)),
-	discovery: Schema.optionalKey(Schema.Literal(true)),
 	data: Schema.optionalKey(Schema.Literal(true)),
 	page: Schema.optionalKey(Schema.Literal(true)),
 	downloads: Schema.optionalKey(Schema.Literal(true)),
