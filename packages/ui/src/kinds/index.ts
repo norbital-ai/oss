@@ -14,7 +14,6 @@ export { default as StateBadge, type StateBadgeProps } from './state-badge.svelt
 export { default as StructuredData, type StructuredDataProps } from './structured-data.svelte';
 export { default as TimeRangeInput, type TimeRangeInputProps } from './time-range-input.svelte';
 export {
-	DEFAULT_BASEMAP,
 	photon_geocoder,
 	type ModelExposure,
 	type AutomationExposure,

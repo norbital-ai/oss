@@ -5,7 +5,7 @@
 // is Svelte's generic-component shape over its own name-erased implementation.
 /** Live model rows grouped into state, enum or relation lanes; dragging a card updates its lane field under the viewer's grants. */
 export { default as Board } from './board/Board.svelte';
-/** Live model points on the host's basemap, with labels, overlays and record opening; search and filters retain the viewer's read scope. */
+/** Live model points on our vector basemap, with clusters, a detail card, an optional side list, overlays and record opening; search and filters retain the viewer's read scope. */
 export { default as Map } from './map/Map.svelte';
 /** A record frame with its label, permissions, approvals, revision history and authored tabs; renders the registered representation or generated form. */
 export { default as RecordShell } from './record/RecordShell.svelte';

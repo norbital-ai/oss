@@ -13,6 +13,7 @@
 	import type ApprovalPanel from '../src/approval/ApprovalPanel.svelte';
 	import type ChildGrid from '../src/relations/ChildGrid.svelte';
 	import type BulkRelation from '../src/model/BulkRelation.svelte';
+	import type Map from '../src/map/Map.svelte';
 	type Table = typeof NativeTable<TableSource>;
 	export type ViewPart =
 		| { part: 'table'; view: Table; props: Omit<ComponentProps<Table>, 'ctx'> }
@@ -23,7 +24,8 @@
 		| { part: 'form'; view: typeof Form; props: Omit<ComponentProps<typeof Form>, 'ctx'> }
 		| { part: 'approval'; view: typeof ApprovalPanel; props: Omit<ComponentProps<typeof ApprovalPanel>, 'ctx'> }
 		| { part: 'child'; view: typeof ChildGrid; props: Omit<ComponentProps<typeof ChildGrid>, 'ctx'> }
-		| { part: 'bulk-relation'; view: typeof BulkRelation; props: Omit<ComponentProps<typeof BulkRelation>, 'ctx'> };
+		| { part: 'bulk-relation'; view: typeof BulkRelation; props: Omit<ComponentProps<typeof BulkRelation>, 'ctx'> }
+		| { part: 'map'; view: typeof Map; props: Omit<ComponentProps<typeof Map>, 'ctx'> };
 	export type ViewHarnessProps = {
 		catalog: NonNullable<KindsHost['catalog']>;
 		automations?: KindsHost['automations'];
@@ -113,6 +115,8 @@
 {:else if fixture.part === 'approval'}
 	<fixture.view {ctx} {...fixture.props} />
 {:else if fixture.part === 'bulk-relation'}
+	<fixture.view {ctx} {...fixture.props} />
+{:else if fixture.part === 'map'}
 	<fixture.view {ctx} {...fixture.props} />
 {:else}
 	<fixture.view {ctx} {...fixture.props} />

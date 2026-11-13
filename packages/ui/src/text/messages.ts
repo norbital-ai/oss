@@ -62,6 +62,7 @@ const MESSAGES = {
 	'form.unknown': 'The outcome is unknown. Retry to check the same request.',
 	'map.empty': 'No places to show',
 	'map.limit': 'Showing the first {n}',
+	'map.open': 'Open',
 	'map.tiles': 'The map could not load; the places are listed below.',
 	'outcome.conflict': 'Someone else changed this; reload and try again',
 	'outcome.pending': 'Submitted for review',

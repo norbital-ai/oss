@@ -1,6 +1,6 @@
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
-@import 'leaflet/dist/leaflet.css';
+@import 'maplibre-gl/dist/maplibre-gl.css';
 @import 'tailwindcss' source(none);
 /* Every ui component; the bolt bundler adds `@source` for the shell and the workspace's own pages. */
 @source './';
@@ -117,10 +117,6 @@
 	--brand-muted: var(--brand-100);
 	/** Product icon accents (and the Agent thinking orb's sweep) share one canonical brand stroke. */
 	--product-icon-accent: var(--brand);
-	/* Map skin: the raster basemap drained to paper — fine grey roads, land and water a step apart; the base is the
-	   drained land, so a tile seam never shows. */
-	--map-base: #dddcd8;
-	--map-tiles: grayscale(1) sepia(0.06) contrast(0.7) brightness(1.08);
 
 	/* Motion: one ease-out, three durations, nothing over 300ms. Finger-driven surfaces (sheets,
 	   swipes) use springs instead — a duration on something the finger moves feels wrong. */
@@ -185,9 +181,6 @@
 	--brand-muted: oklch(0.26 0.06 48);
 	/** Product icon accents (and the Agent thinking orb's sweep) share one canonical brand stroke. */
 	--product-icon-accent: var(--brand);
-	/* Map skin: the same basemap inverted to near-void land with fine light-grey roads. */
-	--map-base: #030304;
-	--map-tiles: invert(1) grayscale(1) brightness(0.55) contrast(1.35);
 
 	color-scheme: dark;
 }
@@ -1160,136 +1153,26 @@ html {
 		opacity: 1;
 	}
 }
-/* Every Leaflet map (`Map`, the point editor) wears one skin: the tiles drained through `--map-tiles`, our type,
-   control and card chrome from the surface tokens, and the brand accent for points, selection and routes. */
-.leaflet-container {
-	background: var(--map-base);
-	font-family: var(--font-sans);
-	font-size: 0.75rem;
-	color: var(--foreground);
-	/* a card's edge over the basemap: the hairline alone vanishes on the midnight map */
-	--map-edge: color-mix(in oklab, var(--foreground) 14%, transparent);
+/* MapLibre's controls (zoom, attribution) on our surfaces; the basemap itself is drawn by `map/basemap.ts`. */
+.maplibregl-map {
+	font: 0.75rem / 1.4 var(--font-sans);
 }
-/* per tile: a filter over the whole pane opens hairline seams between tiles */
-.leaflet-container .leaflet-tile {
-	filter: var(--map-tiles);
-}
-.leaflet-container a {
-	color: var(--brand-text);
-}
-.leaflet-container .leaflet-control-attribution {
-	background: color-mix(in oklab, var(--background) 72%, transparent);
+.maplibregl-ctrl.maplibregl-ctrl-group,
+.maplibregl-ctrl.maplibregl-ctrl-attrib {
+	background: var(--popover);
 	color: var(--muted-foreground);
-	font-size: 10px;
-	border-top-left-radius: var(--radius-sm);
+	border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
+	box-shadow: var(--shadow-deep);
 }
-.leaflet-container .leaflet-control-attribution a {
+.maplibregl-ctrl-group button + button {
+	border-top-color: color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+.maplibregl-ctrl-attrib a {
 	color: inherit;
 }
-.leaflet-container .leaflet-bar {
-	border: 1px solid var(--map-edge);
-	border-radius: var(--radius-sm);
-	box-shadow: var(--shadow-deep);
-	overflow: hidden;
-}
-.leaflet-container .leaflet-bar a {
-	background: var(--popover);
-	color: var(--popover-foreground);
-	border-bottom-color: var(--map-edge);
-}
-.leaflet-container .leaflet-bar a:hover {
-	background: var(--accent);
-}
-.leaflet-container .leaflet-tooltip,
-.leaflet-container .leaflet-popup-content-wrapper {
-	background: var(--popover);
-	color: var(--popover-foreground);
-	border: 1px solid var(--map-edge);
-	box-shadow: var(--shadow-deep);
-}
-.leaflet-container .leaflet-tooltip {
-	border-radius: var(--radius-sm);
-	padding: 0.25rem 0.5rem;
-	font-weight: 510;
-}
-.leaflet-container .leaflet-tooltip::before {
-	display: none;
-}
-.leaflet-container .leaflet-popup-content-wrapper {
-	border-radius: var(--radius-lg);
-}
-.leaflet-container .leaflet-popup-content {
-	margin: 0.75rem 1rem;
-	font-size: 0.875rem;
-	line-height: 1.4;
-}
-.leaflet-container .leaflet-popup-tip {
-	background: var(--popover);
-	box-shadow: none;
-}
-/* A record's point: a round mark with its initial, ringed in the accent; `always` labels hang a pill under it. */
-.map-point {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 0.25rem;
-	width: max-content;
-	transform: translate(-50%, -0.875rem);
-}
-.map-point-mark {
-	display: grid;
-	place-items: center;
-	width: 1.75rem;
-	height: 1.75rem;
-	border-radius: 9999px;
-	background: var(--brand-muted);
-	color: var(--brand-text);
-	border: 2px solid var(--brand);
-	box-shadow:
-		0 0 0 3px color-mix(in oklab, var(--brand) 18%, transparent),
-		var(--shadow-deep);
-	font-size: 11px;
-	font-weight: 590;
-	transition:
-		transform var(--motion-fast) var(--ease-out),
-		box-shadow var(--motion-fast) var(--ease-out);
-}
-.map-point-pill {
-	max-width: 10rem;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	padding: 0.0625rem 0.5rem;
-	border-radius: 9999px;
-	background: var(--popover);
-	color: var(--popover-foreground);
-	border: 1px solid var(--map-edge);
-	box-shadow: var(--shadow-deep);
-	font-size: 11px;
-	font-weight: 510;
-}
-.leaflet-interactive:hover > .map-point .map-point-mark,
-.leaflet-interactive:focus-visible > .map-point .map-point-mark {
-	transform: scale(1.12);
-	background: var(--brand);
-	color: var(--brand-foreground);
-	box-shadow:
-		0 0 0 5px color-mix(in oklab, var(--brand) 28%, transparent),
-		var(--shadow-deep);
-}
-/* A route: a soft accent halo under a fine accent line; a computed mark is a dashed accent ring. */
-.leaflet-container path.map-route-glow {
-	stroke: var(--brand);
-	stroke-opacity: 0.22;
-}
-.leaflet-container path.map-route {
-	stroke: var(--brand);
-	stroke-opacity: 1;
-}
-.leaflet-container path.map-mark {
-	stroke: var(--brand);
-	fill: var(--brand);
-	fill-opacity: 0.12;
+.dark .maplibregl-ctrl button .maplibregl-ctrl-icon,
+.dark .maplibregl-ctrl-attrib-button {
+	filter: invert(1);
 }
 /* A route change cross-fades on the motion scale; the shell starts the transition, this times it. */
 ::view-transition-old(root),

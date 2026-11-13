@@ -5,11 +5,11 @@
 	import Map, { type MapOverlay } from '../src/map/Map.svelte';
 	import type { ViewBolt } from '../src/client/contract.ts';
 	import { mount_edge } from '../src/effect/index.ts';
-	let { bolt }: { bolt: ViewBolt } = $props();
+	let { bolt, card = false }: { bolt: ViewBolt; card?: boolean } = $props();
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	const ctx: UiContext = { ui: { get bolt() { return bolt; }, kinds: { catalog: { places: {
 		record_label: 'record.name', label: ['name'],
-		fields: { name: { kind: 'text' }, position: { kind: 'point' } }
+		fields: { name: { kind: 'text' }, position: { kind: 'point' }, stage: { kind: 'text' }, crew: { kind: 'number' }, note: { kind: 'text' } }
 	} } } } };
 	let overlays = $state<MapOverlay[]>([{ lat: 1, lng: 2, text: 'Initial destination', from: { lat: 0, lng: 0 } }]);
 	let labels = $state<'hover' | 'always'>('hover');
@@ -27,4 +27,8 @@
 	export function disable_clicks(): void { interactive = false; }
 </script>
 
-<Map {ctx} of="places" at="position" label="name" {overlays} {labels} {interactive} toolbar={false} />
+{#if card}
+	<Map {ctx} of="places" at="position" label="name" status="stage" fields={['crew']} description="note" badge="crew" list toolbar={false} />
+{:else}
+	<Map {ctx} of="places" at="position" label="name" {overlays} {labels} {interactive} toolbar={false} />
+{/if}

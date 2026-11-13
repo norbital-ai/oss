@@ -347,7 +347,7 @@ and the browser's location also set the point.
 			{:else if failed}<p class="text-xs text-muted-foreground">
 					{t('addressSearchUnavailable')}
 				</p>{/if}
-			{#if map}<PointMap {ctx} value={point} on_pick={set} {disabled} class="h-48 sm:h-56" />{/if}
+			{#if map}<PointMap value={point} on_pick={set} {disabled} class="h-48 sm:h-56" />{/if}
 			{#if point !== null}<p class="text-meta tabular-nums">{formatPoint(point)}</p>{/if}
 			{#if locateError}<p class="text-xs text-muted-foreground">{t('locationDenied')}</p>{/if}
 		</Popover.Content>

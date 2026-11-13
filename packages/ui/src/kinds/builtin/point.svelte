@@ -46,6 +46,6 @@ when shown; one OpenStreetMap link in a dense line.
 	<div id={view.id} class="grid min-w-0 gap-1.5">
 		{#if where !== null && where !== ''}<CopyText text={where} />{/if}
 		<CopyText text={formatPoint(v)} class="text-meta tabular-nums">{@render link(v)}</CopyText>
-		<PointMap {ctx} value={v} class="h-40 sm:h-44" />
+		<PointMap value={v} class="h-40 sm:h-44" />
 	</div>
 {/if}

@@ -76,7 +76,6 @@ const BROWSER_DEPS = [
 	'bits-ui',
 	'codemirror',
 	'layerchart',
-	'leaflet',
 	'marked',
 	'qrcode',
 	'tailwind-merge',
@@ -135,7 +134,7 @@ export default defineConfig({
 				// this project inherits nothing (`extends: false`): without the list a dependency found mid-run is
 				// optimized late, Vite reloads, and every file after it fails to import
 				optimizeDeps: {
-					include: [...BROWSER_DEPS, '@norbital-ai/ui > leaflet', '@norbital-ai/ui > codemirror']
+					include: [...BROWSER_DEPS, '@norbital-ai/ui > maplibre-gl', '@norbital-ai/ui > codemirror']
 				},
 				test: {
 					name: 'browser',

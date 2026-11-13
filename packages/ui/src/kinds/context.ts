@@ -131,7 +131,7 @@ export type Geocoder = {
 	reverse?(point: Point): Effect.Effect<string | null, Error>;
 };
 /**
- * What the kind editors take from the host: the catalog, custom fields, uploads and file URLs, the geocoder and basemap, the picker's read, locale, zone and default currency.
+ * What the kind editors take from the host: the catalog, custom fields, uploads and file URLs, the geocoder, the picker's read, locale, zone and default currency.
  */
 export type KindsHost = {
 	catalog?: { readonly [model: string]: ModelExposure } | undefined;
@@ -148,8 +148,6 @@ export type KindsHost = {
 	file_url?(ref: FileRef, options?: FileUrlOptions): string;
 	/** The host's geocoder; without one, address search uses the keyless `photon_geocoder`. */
 	geocoder?: Geocoder;
-	/** A keyless tile template; the host may override the OpenStreetMap default. */
-	basemap?: { url: string; attribution: string };
 	/** The read a picker pages through: `bolt.query` of one read request, a page per root. Without it an `id` is typed. */
 	query?(request: { readonly [path: string]: Json }): Effect.Effect<
 		{
@@ -164,12 +162,6 @@ export type KindsHost = {
 	zone?: string | undefined;
 	/** The workspace default currency for a money field without one. */
 	currency?: string | undefined;
-};
-
-/** The keyless OpenStreetMap tile template used when the host names no basemap. */
-export const DEFAULT_BASEMAP = {
-	url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-	attribution: '&copy; OpenStreetMap contributors'
 };
 
 /** A region code's English name (`SG` → `Singapore`), or `null` when there is none or the runtime cannot name it. */

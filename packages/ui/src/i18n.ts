@@ -288,6 +288,7 @@ const VIEW_ZH = {
 	'ui.map.tiles': '地图无法加载；地点列于下方。',
 	'ui.map.empty': '暂无地点',
 	'ui.map.limit': '显示前 {n} 项',
+	'ui.map.open': '打开',
 	'ui.board.none': '无',
 	'ui.view.type.text': '文本字段',
 	'ui.view.type.date': '日期字段',
