@@ -80,6 +80,8 @@ const isTransientUpstream = (e: PortFailure): boolean =>
 	e instanceof FacilityFailure &&
 	e.kind === 'upstream' &&
 	(e.status === undefined || e.status === 408 || e.status === 429 || e.status >= 500);
+/** A call whose provider failed before it began answering is tried again this often before the step fails. */
+const QUIET_RETRIES = 2;
 /** Six retries, with the provider's delay as a floor on exponential backoff. */
 const TRANSIENT_RETRIES = 6;
 const retryBackoff: Schedule.Schedule<Duration.Duration, PortFailure> = Schedule.exponential(
@@ -137,7 +139,8 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 		progressed = false,
 		begun = false;
 	let response: AiResponse | undefined;
-	let upstreamRetries = 0;
+	let upstreamRetries = 0,
+		quietRetries = 0;
 	// Each pull races a native sleep. Business time may be frozen or adjusted independently.
 	yield* Stream.transformPull(
 		Stream.suspend(() => {
@@ -208,8 +211,13 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 			while: (error) => {
 				if (error instanceof FacilityFailure && error.kind === 'rate_limited')
 					return partial === '' && !progressed && response === undefined;
-				if (!isTransientUpstream(error) || upstreamRetries >= (options.retryUpstream ?? 0))
-					return false;
+				if (!isTransientUpstream(error)) return false;
+				// a provider that failed before it began answering (a dropped connection, a 5xx) showed nobody anything
+				if (!begun && quietRetries < QUIET_RETRIES) {
+					quietRetries++;
+					return true;
+				}
+				if (upstreamRetries >= (options.retryUpstream ?? 0)) return false;
 				upstreamRetries++;
 				return true;
 			}

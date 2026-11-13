@@ -331,6 +331,25 @@ describe('the AI port under the 20 s idle wall', () => {
 			expect(requests).toHaveLength(2);
 		})
 	);
+	it.effect('a chat call whose provider failed before answering is tried twice more; one that began is not', () =>
+		Effect.gen(function* () {
+			const dropped: Step = () =>
+				Stream.fail(new FacilityFailure({ kind: 'upstream', message: 'Transport error' }));
+			const quiet = port([dropped, dropped, stalls('answered')]);
+			expect(yield* elapsed(modelCall(quiet.p, req, { wallMs: 20 }), 3_021)).toMatchObject({
+				content: 'answered'
+			});
+			expect(quiet.requests).toHaveLength(3);
+			const begun: Step = () =>
+				Stream.concat(
+					Stream.succeed<AiEvent>({ _tag: 'Delta', text: 'half' }),
+					Stream.fail(new FacilityFailure({ kind: 'upstream', status: 503, message: 'lost connection' }))
+				);
+			const shown = port([begun, stalls('never')]);
+			expect(yield* Effect.flip(modelCall(shown.p, req, { wallMs: 20 }))).toMatchObject({ kind: 'upstream' });
+			expect(shown.requests).toHaveLength(1);
+		})
+	);
 	it.effect(
 		'the default response deadline cancels and settles a silent provider after 60 seconds to its first event',
 		() =>
