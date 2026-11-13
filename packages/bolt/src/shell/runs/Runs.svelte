@@ -125,7 +125,7 @@
 	};
 	const NAMESPACE_ICONS: Readonly<Record<string, string>> = {
 		automation: 'concept:automations',
-		effect: 'concept:effects',
+		effect: 'concept:writes',
 		sync: 'concept:integrations',
 		bolt: 'lucide:zap',
 		agent: 'concept:agents',

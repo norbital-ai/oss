@@ -6,6 +6,11 @@ import { CONCEPT_ICONS, ConceptIcon } from '../src/brand/index.ts';
 import IconWrapper from '../src/primitives/icon/icon-wrapper.svelte';
 
 it('every concept renders its own glyph with one accent group, and `Icon` takes it as `concept:<name>`', () => {
+	// the one vocabulary the shell and the website name icons by
+	expect(Object.keys(CONCEPT_ICONS)).toEqual([
+		'workspace', 'model', 'access', 'automation', 'interface', 'studio', 'models', 'writes', 'data', 'history',
+		'policies', 'approvals', 'automations', 'agents', 'apps', 'integrations', 'releases', 'quick-start', 'examples', 'api'
+	]);
 	const target = document.body.appendChild(document.createElement('div'));
 	try {
 		for (const name of Object.keys(CONCEPT_ICONS)) {
