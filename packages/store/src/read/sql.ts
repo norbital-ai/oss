@@ -206,7 +206,13 @@ const col = Effect.fnUntraced(function* (
 	return `${a}.${q(f.column)}`;
 });
 /** The reader's row filter on `c` at alias `a`, or null when unscoped; a reader with no arm sees nothing. */
-const scope = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, lv: Level, output = b.outputOf(c.path)) {
+const scope = Effect.fnUntraced(function* (
+	b: Build,
+	c: ExposureInfo,
+	a: string,
+	lv: Level,
+	output = b.outputOf(c.path)
+) {
 	const arms = lv.scoped ? b.scope?.rows(c.path, output) : undefined;
 	if (arms === undefined) return null;
 	if (arms.length === 0) return 'false';
@@ -220,7 +226,14 @@ const value = (b: Build, f: FieldInfo, v: Json): Fx<string> => {
 	if (p !== null && f.pg === 'uuid' && (typeof p !== 'string' || !UUID_PATTERN.test(p)))
 		return invalid(`'${f.name}' takes an id`);
 	return Effect.succeed(
-		b.bind(f.pg === 'jsonb' && p !== null ? JSON.stringify(p) : f.email === true && typeof p === 'string' ? p.toLowerCase() : p, f.pg)
+		b.bind(
+			f.pg === 'jsonb' && p !== null
+				? JSON.stringify(p)
+				: f.email === true && typeof p === 'string'
+					? p.toLowerCase()
+					: p,
+			f.pg
+		)
 	);
 };
 const rhs = Effect.fnUntraced(function* (
@@ -333,9 +346,16 @@ const searchLinks = Effect.fnUntraced(function* (
 });
 
 /** The label interpreter takes exact decimals as text and every other field in the same JSON form as materialization. */
-const labelValue = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, path: string, lv: Level) {
+const labelValue = Effect.fnUntraced(function* (
+	b: Build,
+	c: ExposureInfo,
+	a: string,
+	path: string,
+	lv: Level
+) {
 	const [field = path, ...tail] = path.split('.');
-	if (!c.model.fields.has(field)) return yield* invalid(`${c.name}.record_label: unknown field '${path}'`);
+	if (!c.model.fields.has(field))
+		return yield* invalid(`${c.name}.record_label: unknown field '${path}'`);
 	if (lv.exposed && !exposed_field(c, field)) return undefined;
 	const f = yield* fieldOf(b, c, field, lv);
 	const column = `${a}.${q(f.column)}`;
@@ -344,8 +364,12 @@ const labelValue = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: st
 });
 /** One-hop labels use their declaring output's related layers and scopes, never an unrelated target grant. */
 const recordLabel = Effect.fnUntraced(function* (
-	b: Build, c: ExposureInfo, a: string, lv: Level,
-	output = b.outputOf(c.path), layers: ReadonlyMap<string, ExposureInfo> = b.cat.layers
+	b: Build,
+	c: ExposureInfo,
+	a: string,
+	lv: Level,
+	output = b.outputOf(c.path),
+	layers: ReadonlyMap<string, ExposureInfo> = b.cat.layers
 ) {
 	const label = c.model.record_label;
 	if (label === undefined) return undefined;
@@ -373,9 +397,16 @@ const recordLabel = Effect.fnUntraced(function* (
 		if (lv.exposed && !exposed_relation(c, field)) return undefined;
 		const declared = layers.get(`${c.path}.${field}`);
 		const model = b.cat.models.get(target);
-		if (model === undefined) return yield* invalid(`${c.name}.record_label: unknown target '${target}'`);
+		if (model === undefined)
+			return yield* invalid(`${c.name}.record_label: unknown target '${target}'`);
 		if (lv.exposed && declared === undefined) return undefined;
-		const t: ExposureInfo = declared ?? { name: target, path: target, model, fields: 'all', relations: 'all' };
+		const t: ExposureInfo = declared ?? {
+			name: target,
+			path: target,
+			model,
+			fields: 'all',
+			relations: 'all'
+		};
 		if (t.model.one.has(tail[0] ?? '') && tail.length > 1)
 			return yield* invalid(`${c.name}.record_label: '${path}' crosses more than one relation`);
 		const x = b.alias();
@@ -386,9 +417,15 @@ const recordLabel = Effect.fnUntraced(function* (
 		available.push(`EXISTS (SELECT 1 FROM ${from})`);
 		values.set(path, `(SELECT ${value} FROM ${from})`);
 	}
-	const expression = program.sql((path) => values.get(path) ?? "'null'::jsonb");
-	const value = `(${label_text_sql(expression)})`;
-	return available.length === 0 ? value : `(CASE WHEN ${available.join(' AND ')} THEN ${value} END)`;
+	// every value once, in a fenced row: a related lookup is one subplan however often the expression names it
+	const inputs = b.alias(),
+		columns = [...values.values()].map((value, i) => `${value} AS p${i}`),
+		position = new Map([...values.keys()].map((path, i) => [path, `${inputs}.p${i}`]));
+	const expression = program.sql((path) => position.get(path) ?? "'null'::jsonb", true);
+	const value = `(${label_text_sql(expression, `(SELECT ${columns.join(', ') || '1 AS unused'} OFFSET 0) ${inputs}`, true)})`;
+	return available.length === 0
+		? value
+		: `(CASE WHEN ${available.join(' AND ')} THEN ${value} END)`;
 });
 /** Resolve live label references under the target's own readable outputs and row grants, including named-only outputs. */
 const labelReferences = Effect.fnUntraced(function* (
@@ -407,7 +444,8 @@ const labelReferences = Effect.fnUntraced(function* (
 	for (const target of link.targets) {
 		const model = b.cat.models.get(target);
 		const primary = model?.key[0];
-		if (model?.record_label === undefined || model.key.length !== 1 || primary === undefined) continue;
+		if (model?.record_label === undefined || model.key.length !== 1 || primary === undefined)
+			continue;
 		const outputs = [
 			[DEFAULT_OUTPUT, b.cat.exposures.get(target)] as const,
 			...[...(b.cat.outputs.get(target) ?? [])].map(
@@ -419,8 +457,16 @@ const labelReferences = Effect.fnUntraced(function* (
 			const arms = lv.scoped ? b.scope?.rows(target, output) : undefined;
 			if (arms?.length === 0) continue;
 			const x = b.alias();
-			const label = yield* recordLabel(b, t, x, lv, output,
-				output === DEFAULT_OUTPUT ? b.cat.layers : b.cat.outputs.get(target)?.get(output)?.layers ?? b.cat.layers);
+			const label = yield* recordLabel(
+				b,
+				t,
+				x,
+				lv,
+				output,
+				output === DEFAULT_OUTPUT
+					? b.cat.layers
+					: (b.cat.outputs.get(target)?.get(output)?.layers ?? b.cat.layers)
+			);
 			if (label === undefined) continue;
 			const rowScope =
 				arms === undefined
@@ -443,7 +489,9 @@ const labelReferences = Effect.fnUntraced(function* (
 					rowScope
 				),
 				label,
-				document: model.record_label.stored ? `${x}.${q(SEARCH_COLUMN)}` : `bolt_search_document(${label})`
+				document: model.record_label.stored
+					? `${x}.${q(SEARCH_COLUMN)}`
+					: `bolt_search_document(${label})`
 			});
 		}
 	}
@@ -459,9 +507,7 @@ const exposedAll = (
 	const hidden = fields.find((f) => lv.exposed && !exposed_field(c, f));
 	return hidden === undefined
 		? Effect.void
-		: forbidden(
-				`${what} on '${c.name}' covers '${hidden}', which this caller does not read`
-			);
+		: forbidden(`${what} on '${c.name}' covers '${hidden}', which this caller does not read`);
 };
 /**
  * The search document a reader matches: the stored one when its output reads every field the document holds, else one
@@ -475,7 +521,11 @@ const searchDoc = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: str
 	const stored = `${a}.${q(SEARCH_COLUMN)}`;
 	const label = c.model.record_label;
 	const readableLabel = yield* recordLabel(b, c, a, lv);
-	if (label?.stored !== false && hidden.length === 0 && (label === undefined || readableLabel !== undefined)) {
+	if (
+		label?.stored !== false &&
+		hidden.length === 0 &&
+		(label === undefined || readableLabel !== undefined)
+	) {
 		b.touch(c.model.name, SEARCH_COLUMN);
 		return stored;
 	}
@@ -854,11 +904,7 @@ function metres(b: Build, x: string, pt: { lat: number; lng: number }): string {
 }
 // ── order and keyset cursors ──
 type Key = { expr: string; pg: string; dir: 'asc' | 'desc' };
-const UNORDERED = new Set([
-	...UNSORTABLE,
-	'daterange',
-	'tstzrange'
-]);
+const UNORDERED = new Set([...UNSORTABLE, 'daterange', 'tstzrange']);
 /** The sort keys, then the primary key's columns: a total order, so a keyset cursor is exact. */
 const order_by = Effect.fnUntraced(function* (
 	b: Build,
@@ -917,9 +963,7 @@ const readable = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, p: stri
 		const [target] = rel?.targets ?? [];
 		if (rel === undefined || target === undefined || rel.targets.length > 1)
 			return yield* bad(`'${x.path}.${s}' is not a relation this caller reads`);
-		const t = yield* level(b, x, s, target, lv).pipe(
-			Effect.catch((error) => bad(error.message))
-		);
+		const t = yield* level(b, x, s, target, lv).pipe(Effect.catch((error) => bad(error.message)));
 		if (lv.scoped && b.scope?.rows(t.path, b.outputOf(t.path))?.length === 0)
 			return yield* bad(`'${t.path}' is not read by this caller`);
 		x = t;
@@ -1257,7 +1301,11 @@ export const compile_gets = Effect.fn('Store.compile_gets')(function* (
 	FROM unnest(${list}) WITH ORDINALITY v(id, n) ORDER BY v.n`);
 });
 
-const NUM = new Set(Object.entries(KIND).filter(([, entry]) => entry.traits.summable).map(([kind]) => kind));
+const NUM = new Set(
+	Object.entries(KIND)
+		.filter(([, entry]) => entry.traits.summable)
+		.map(([kind]) => kind)
+);
 /** A field reached by a one-relation path (`'account.region'`), each hop scoped. */
 const path: (
 	b: Build,

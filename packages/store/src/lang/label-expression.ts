@@ -37,18 +37,29 @@ const pathOf = (n: ASTNode): readonly string[] | undefined => {
 export type LabelProgram = {
 	readonly paths: readonly string[];
 	readonly evaluate: (row: { readonly [field: string]: Value }) => unknown;
-	readonly sql: (read: (path: string) => string) => string;
+	/**
+	 * `fenced`: each operand is evaluated once (`OFFSET 0`), so the planner never copies a related lookup into every
+	 * place an operator names it. Stored-label functions keep the unfenced text their versioned names hash.
+	 */
+	readonly sql: (read: (path: string) => string, fenced?: boolean) => string;
 };
 
-/** Native label text uses the same scalar/fallback rules as the browser; `from` supplies a materializer's row. */
-export const label_text_sql = (expression: string, from?: string): string => `SELECT CASE
+/**
+ * Native label text uses the same scalar/fallback rules as the browser; `from` supplies a materializer's row; `fenced`
+ * evaluates the expression once (see `LabelProgram.sql`).
+ */
+export const label_text_sql = (
+	expression: string,
+	from?: string,
+	fenced = false
+): string => `SELECT CASE
 		WHEN value ~* '${UUID_PATTERN.source}' THEN NULL
 		WHEN left(value, 1) IN ('{', '[') AND pg_input_is_valid(value, 'jsonb') THEN NULL
 		WHEN value ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}([.]\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$' THEN
 			CASE WHEN (value::timestamptz AT TIME ZONE 'UTC')::time = '00:00:00'::time THEN to_char(value::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD')
 			ELSE to_char(value::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') END
 		ELSE nullif(btrim(value), '') END
-		FROM (SELECT (${expression} #>> '{}') AS value${from === undefined ? '' : ` FROM ${from}`}) label_value`;
+		FROM (SELECT (${expression} #>> '{}') AS value${from === undefined ? '' : ` FROM ${from}`}${fenced ? ' OFFSET 0' : ''}) label_value`;
 const cache = new Map<string, LabelProgram | { readonly error: string }>();
 
 /** Compile pure CEL over `record` (bare field names also work). Unsupported native operators fail at authoring. */
@@ -90,7 +101,7 @@ export function label_expression(expression: string): LabelProgram | { readonly 
 				`A label must return text, got ${checked.type}. Use string(value) for numbers.`
 			);
 		const program = env.parse(expression);
-		const sql = (read: (path: string) => string) => {
+		const sql = (read: (path: string) => string, fenced = false) => {
 			let serial = 0;
 			const emit = (n: ASTNode, locals: ReadonlyMap<string, string> = new Map()): string => {
 				const path = pathOf(n);
@@ -152,7 +163,7 @@ export function label_expression(expression: string): LabelProgram | { readonly 
 							alias = `label_${serial++}`;
 						const a = `${alias}.left_value`,
 							b = `${alias}.right_value`;
-						return `(SELECT CASE WHEN jsonb_typeof(${a}) = 'string' AND jsonb_typeof(${b}) = 'string' THEN ${json(`${string(a)} || ${string(b)}`)} WHEN jsonb_typeof(${a}) = 'array' AND jsonb_typeof(${b}) = 'array' THEN ${a} || ${b} ELSE ${json(`${number(a)} + ${number(b)}`)} END FROM (SELECT ${left} AS left_value, ${right} AS right_value) ${alias})`;
+						return `(SELECT CASE WHEN jsonb_typeof(${a}) = 'string' AND jsonb_typeof(${b}) = 'string' THEN ${json(`${string(a)} || ${string(b)}`)} WHEN jsonb_typeof(${a}) = 'array' AND jsonb_typeof(${b}) = 'array' THEN ${a} || ${b} ELSE ${json(`${number(a)} + ${number(b)}`)} END FROM (SELECT ${left} AS left_value, ${right} AS right_value${fenced ? ' OFFSET 0' : ''}) ${alias})`;
 					}
 					case '-':
 					case '*':

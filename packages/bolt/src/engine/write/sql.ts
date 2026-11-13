@@ -15,7 +15,7 @@ import {
 } from '../db/tenant-db.ts';
 import { DbError } from '../errors.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
-import { copiedSql, db_error, inline } from '../db/wire.ts';
+import { copiedSql, db_error, rebased } from '../db/wire.ts';
 import { composable } from '../query/reader.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { refusalOf, type RuleMeta } from '../schema/refusal.ts';
@@ -63,7 +63,8 @@ export const noticeInsert = (
 		v.title, v.body, v.link, v.once || ':' || ch, v.attachments
 	FROM ${name}_source v CROSS JOIN LATERAL jsonb_array_elements_text(v.via) ch`
 		),
-		noticePiece(c,
+		noticePiece(
+			c,
 			name,
 			`INSERT INTO sys_notification (id, recipient, member, title, body, link, once, attachments, at)
 	SELECT id, "to", member, title, body, link, once, attachments, ${c.shared('now', now)}::timestamptz FROM ${name}_to
@@ -100,7 +101,14 @@ export class Chain {
 	}
 	/** Fails unless `ok` while its gate is open; native statements may supply their own admission gate. */
 	assert(ok: string, code: string, detail: Json = null, when = GATED): string {
-		return this.assertWith(ok, code, detail === null ? 'NULL' : literal(typeof detail === 'string' ? detail : JSON.stringify(detail)), when);
+		return this.assertWith(
+			ok,
+			code,
+			detail === null
+				? 'NULL'
+				: literal(typeof detail === 'string' ? detail : JSON.stringify(detail)),
+			when
+		);
 	}
 	/** `assert` whose detail is computed in the statement (`detail` is SQL text, evaluated only on failure). */
 	assertWith(ok: string, code: string, detail: string, when = GATED): string {
@@ -110,6 +118,12 @@ export class Chain {
 		);
 		this.asserts.push(name);
 		return name;
+	}
+	/** A whole statement as a fragment of this one, its parameters appended to these (`rebased`). */
+	embed(s: Sql): string {
+		const text = rebased(s, this.params.length);
+		this.params.push(...s.params);
+		return text;
 	}
 	sql(select: string): { text: string; params: readonly Json[] } {
 		const guards = this.asserts.map((a) => `(SELECT count(*) FROM ${a})`).join(' + ') || '0';
@@ -255,7 +269,8 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, RuleMeta>):
 export const decideError = (error: unknown, constraints: ReadonlyMap<string, RuleMeta>) =>
 	Effect.try({
 		try: () => decided(error, constraints),
-		catch: (cause) => cause instanceof BoltError ? cause : BoltError.make('bug', 'commit', String(cause), cause)
+		catch: (cause) =>
+			cause instanceof BoltError ? cause : BoltError.make('bug', 'commit', String(cause), cause)
 	});
 const ConflictDetail = Schema.fromJsonString(
 	Schema.Struct({
@@ -461,5 +476,6 @@ export function fingerprinting(db: TenantDbShape): {
 }
 /** One assert per fingerprint: the rows read then are the rows now. */
 export function fingerprintAsserts(c: Chain, fps: readonly Fingerprint[], when = GATED): void {
-	for (const f of fps) c.assert(`${digestOf(inline(f.sql))} = ${c.p(f.digest)}`, 'fingerprint', null, when);
+	for (const f of fps)
+		c.assert(`${digestOf(c.embed(f.sql))} = ${c.p(f.digest)}`, 'fingerprint', null, when);
 }

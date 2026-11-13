@@ -1,7 +1,6 @@
 // Native read plans persisted only after a provisional commit; guest flow output never supplies them.
 import { Schema } from 'effect';
 import type { Sql } from '../contracts.ts';
-import { inline } from '../db/wire.ts';
 import { Chain, digestOf, type ReadGuards } from '../write/sql.ts';
 
 export const StoredReadGuards = Schema.Struct({
@@ -27,7 +26,7 @@ export function readGuardBaseline(
 	c.cte('idem', 'SELECT 1 AS active');
 	const fingerprints = guards.fingerprints.map(
 		(fingerprint) =>
-			`jsonb_build_object('sql', ${c.p({ text: fingerprint.sql.text, params: fingerprint.sql.params })}::jsonb, 'digest', ${digestOf(inline(fingerprint.sql))})`
+			`jsonb_build_object('sql', ${c.p({ text: fingerprint.sql.text, params: fingerprint.sql.params })}::jsonb, 'digest', ${digestOf(c.embed(fingerprint.sql))})`
 	);
 	const baseline = `jsonb_build_object('sourceEpoch', ${c.p(sourceEpoch)}::text, 'tables', ${c.p(guards.tables)}::jsonb, 'fingerprints', jsonb_build_array(${fingerprints.join(', ')}))`;
 	const id = c.p(request_id);

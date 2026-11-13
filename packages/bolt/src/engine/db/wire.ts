@@ -64,9 +64,9 @@ const ARRAY: { readonly [oid: number]: number } = {
 };
 /** Match jsonb's existing key order when a wire object is constructed outside SQL. */
 export const jsonbOrder = (value: Readonly<Record<string, Json>>): Record<string, Json> =>
-	Object.fromEntries(Object.entries(value).sort(([a], [b]) =>
-		a.length - b.length || (a < b ? -1 : a > b ? 1 : 0)
-	));
+	Object.fromEntries(
+		Object.entries(value).sort(([a], [b]) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))
+	);
 /** Postgres text → JSON: numbers and booleans as JSON, json as itself, everything else (numeric, date, uuid, ranges) as text. */
 export function parse(oid: number, s: string): Json {
 	const el = ARRAY[oid];
@@ -181,7 +181,9 @@ export function db_error(e: unknown): DbError {
 		constraint: Predicate.isString(constraint) ? constraint : undefined,
 		column: Predicate.isString(column) ? column : undefined
 	};
-	return field('outcome_unknown') === true ? DbError.make({ ...fields, outcome_unknown: true }) : DbError.make(fields);
+	return field('outcome_unknown') === true
+		? DbError.make({ ...fields, outcome_unknown: true })
+		: DbError.make(fields);
 }
 /** What a call the database wall (or its caller) cancelled fails with: `refusalOf` answers it `timeout`. */
 export const cancelled = (): DbError =>
@@ -192,8 +194,15 @@ export const literal = (v: Json): string => {
 	return p === null ? 'null' : quote_literal(p);
 };
 /** `$n` → its literal, outside quoted strings and identifiers. Needs `standard_conforming_strings` (the default). */
-export function inline(s: Sql): string {
-	if (s.params.length === 0) return s.text;
+export const inline = (s: Sql): string =>
+	s.params.length === 0 ? s.text : substituted(s, (_n, value) => literal(value));
+/**
+ * `s` as a fragment of a statement whose own parameters precede it: `$n` → `$(n + offset)`, its values appended
+ * after them. The fragment's text stays the same per shape, so the statement's text does too.
+ */
+export const rebased = (s: Sql, offset: number): string =>
+	s.params.length === 0 || offset === 0 ? s.text : substituted(s, (n) => `$${n + offset}`);
+function substituted(s: Sql, to: (n: number, value: Json) => string): string {
 	let out = '';
 	for (let i = 0; i < s.text.length; i++) {
 		const c = s.text.charAt(i);
@@ -212,7 +221,7 @@ export function inline(s: Sql): string {
 		const n = Number(m[1]);
 		const value = s.params[n - 1];
 		if (value === undefined) throw DbError.make('08P01', `parameter $${n} has no value`);
-		out += literal(value);
+		out += to(n, value);
 		i += m[0].length - 1;
 	}
 	return out;
