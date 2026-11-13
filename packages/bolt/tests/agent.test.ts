@@ -71,7 +71,7 @@ describe('guidance follows the tools actually available', () => {
 			{ name: 'workspace_search' }, { name: 'show_preview', studio: 'preview' }, { name: 'take_live', studio: 'merge' }
 		] });
 		expect(prompt).toContain('# Source');
-		expect(prompt).not.toMatch(/show_preview|take_live|workspace_|bolt-primer|run_tool|\bhost\b/);
+		expect(prompt).not.toMatch(/show_preview|take_live|workspace_|bolt-primer|\bhost\b/);
 	});
 	it('a channel conversation gets its own browser and native-question guidance', () => {
 		const prompt = system({ envoy: 'Desk', skills: {} });

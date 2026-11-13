@@ -3,7 +3,7 @@ name: bolt-primer
 description: Build a Bolt workspace with no other skill - source roles, contract queries, authoring order, pitfalls.
 ---
 
-This page and `workspace_lang` are enough for a normal build. Read a reference only for a diagnostic this page does not resolve. Ask for several types in one `workspace_lang` call.
+This page and `workspace_lang` are enough for a normal build. The Studio tools named here run through `run_tool { name, input }`. Read a reference only for a diagnostic this page does not resolve. Ask for several types in one `workspace_lang` call.
 
 ## Roles
 
