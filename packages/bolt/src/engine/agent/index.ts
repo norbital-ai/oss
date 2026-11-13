@@ -152,6 +152,7 @@ import {
 	type ToolContext,
 	type WorkspacePort
 } from './tools.ts';
+import { Audit, type AuditShape } from '../audit.ts';
 import { PLATFORM_SKILLS } from './skills.ts';
 import { requestEvidence, sequenceRanges } from './request.ts';
 import { sha256_hex } from '@norbital-ai/store';
@@ -169,6 +170,8 @@ export type AgentEngine = {
 	automations: import('../services.ts').AutomationsShape;
 	read: ReadsShape['run'];
 	approvals: ApprovalsShape;
+	/** The administrator audit trail, where the host keeps one: the `audit` tool. */
+	audit?: AuditShape | undefined;
 	files?: Files['Service'] | undefined;
 	images?: Images['Service'] | undefined;
 	/** The host's document converter: the `document` tool, and its ingest port `read_file`. */
@@ -2474,6 +2477,7 @@ export const AgentsLive = Layer.effectContext(
 			http = yield* Http,
 			bundler = yield* Effect.serviceOption(Bundler),
 			identity = yield* Effect.serviceOption(HostIdentity),
+			audit = yield* Audit,
 			geo = yield* Geo,
 			wake = yield* Wake,
 			turnHandlers = yield* TurnHandlers,
@@ -2514,6 +2518,7 @@ export const AgentsLive = Layer.effectContext(
 				automations,
 				read: reads.run,
 				approvals,
+				...(audit.mode === 'disabled' ? {} : { audit }),
 				files,
 				images,
 				convert,

@@ -17,7 +17,7 @@ import type { Authority, Bindings, CrossAnswer, Reader, RowData, Rows, Sql } fro
 import type { Order, Pred, SelectIR } from '@norbital-ai/store';
 import { decodeRead, type ReadIR } from '../../protocol/reads.ts';
 import type { EngineManifest } from '../manifest.ts';
-import type { Entry, ReadsShape as ReadEngine } from '../services.ts';
+import type { Entry, ReadsShape as ReadEngine, ReadsShape } from '../services.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { syncState } from '../sync/index.ts';
 import { approvable, heldModels, rowApproval } from '../approvals/lock.ts';
@@ -53,6 +53,7 @@ import {
 	type Probe
 } from '@norbital-ai/store';
 import { catalog_of } from '../access/pred.ts';
+import { viewOutput } from '../access/authority.ts';
 import { composable, isComposable, readOptions } from './reader.ts';
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 /** A `search.indexes` entry's bodies, run in the guest: `probe` picks the vector, `rerank` re-measures a page. */
@@ -948,6 +949,25 @@ export const lower_read = Effect.fn('Bolt.lower_read')(function* (
 		Effect.mapError((error) => BoltError.make('invalid', 'decode', error.message, error))
 	);
 });
+
+/** One record as the caller's generic views read it: through its view output (`default` when held). */
+export const viewGet = (m: EngineManifest, authority: Authority, model: string, id: string) =>
+	Effect.map(lower_read(m, 'get', [model, id]), (read): ReadIR => {
+		const output = viewOutput(m, authority, model);
+		return read.kind === 'get' && output !== undefined ? { ...read, output } : read;
+	});
+/** Whether the caller may read that record, as an approval's reader asks: a refusal is a no. */
+export const readableBy = (
+	read: ReadsShape['run'],
+	m: EngineManifest,
+	authority: Authority,
+	b: Bindings
+) => (model: string, id: string) =>
+	viewGet(m, authority, model, id).pipe(
+		Effect.flatMap((ir) => read([ir], { as: 'caller', authority }, b)),
+		Effect.map(([row]) => row !== null && row !== undefined),
+		Effect.catchTag('BoltError', () => Effect.succeed(false))
+	);
 
 /** No acquired Callables/Agents dependency: search bodies run in the guest. */
 export const ReadsLive = Layer.effect(

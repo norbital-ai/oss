@@ -61,7 +61,8 @@ import {
 	type ReadRequestJson
 } from '../../protocol/read-request.ts';
 import type { AgentEngine as Engine } from './index.ts';
-import { lower_read } from '../query/engine.ts';
+import { AuditQuery } from '../../protocol/audit.ts';
+import { lower_read, readableBy } from '../query/engine.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
 import { materializeEach } from '../runs/time.ts';
 import {
@@ -510,6 +511,13 @@ const GENERATED = /^migrations\/(?:snapshot|migrations\.lock|physical)\.json$/;
 /** A search hit's line: enough to place it; workspace_read shows the rest. */
 const HIT_CHARS = 240;
 const PACKAGES = ': installed packages are outside the workspace: workspace_lang reads their types.';
+/** What a source tool answers for a path outside the source: installed packages, or what the build writes from it. */
+const outsideSource = (asked: string, path: string): string | undefined =>
+	path === 'node_modules' || path.startsWith('node_modules/')
+		? `${asked}${PACKAGES}`
+		: path === '.norbital' || path.startsWith('.norbital/')
+			? `${asked}: the build writes .norbital from your source (a model's binding from its +model.ts) and it is never read: workspace_lang reads its types.`
+			: undefined;
 const GENERATED_NOTE =
 	'The build writes this. Never read or edit it: the schema is in each +model.ts and every step in migrations/*.sql.';
 const documentAnswer = (answer: { readonly [key: string]: Json }, key: string): ToolAnswer => {
@@ -1398,7 +1406,7 @@ export function describeWorkspace(
 		const outputs = roots.has(name) ? readOutputs(m, a, name) : [],
 			total = totals.get(name);
 		return [
-			`${name} "${before(spec.description, '\n').trim()}"${total === undefined ? '' : ` · ${total} rows`}`,
+			`${name} "${before(spec.description, '\n').trim()}"${total === undefined ? '' : ` · ${total} ${total === 1 ? 'row' : 'rows'}`}`,
 			...line('reads', outputs),
 			// a named model answers its fields in its shape below instead
 			...line(
@@ -2460,6 +2468,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			(found.ingest.status !== 'failed' || found.ingest.output === id)
 		)
 			return yield* readIngest(found, i);
+		// a repository reference's own file is its index: read by id as by its name, the person's own
+		const [indexed] = yield* sourceFile(id);
+		if (indexed?.mime === REFERENCE.mime) return yield* readReference(x, indexed.name, i);
 		const attachments = x.attachments;
 		if (attachments === undefined) return err('This host reads no files.');
 		// a file attached to this conversation's messages is this conversation's to read, by its own type
@@ -2485,7 +2496,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				`No file you can read has this id; a truncated result is read with call, not id.${files.length === 0 ? '' : ` This conversation's files: ${files.join(', ')}`}`
 			);
 		}
-		const [file] = yield* sourceFile(id);
+		const file = indexed;
 		if (file === undefined) return yield* readStored(attachments, input ?? { id });
 		const how = route(file.mime, file.name);
 		if (how === 'unsupported') return err(unparsed(file.name, file.mime));
@@ -2560,8 +2571,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				limit = Math.min(Math.max(1, i.limit ?? READ_LINES), READ_LINES);
 			const one = Effect.fn('AgentTool.readSource')(function* (asked: string) {
 				// the same normalisation workspace_search uses: `./src/a.ts` is `src/a.ts`
-				const path = sourcePath(asked);
-				if (path.startsWith('node_modules/') || path === 'node_modules') return { error: `${asked}${PACKAGES}` };
+				const path = sourcePath(asked),
+					outside = outsideSource(asked, path);
+				if (outside !== undefined) return { error: outside };
 				if (!files.includes(path))
 					return {
 						error: files.some((file) => file.startsWith(`${path}/`))
@@ -2586,9 +2598,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			return 'error' in answer ? err(answer.error) : textAnswer(answer.text);
 		});
 		add(searchSource, function* (i) {
-			const within = sourcePath(i.path ?? '');
-			if (within === 'node_modules' || within.startsWith('node_modules/'))
-				return err(`${i.path}${PACKAGES}`);
+			const within = sourcePath(i.path ?? ''),
+				outside = outsideSource(i.path ?? '', within);
+			if (outside !== undefined) return err(outside);
 			// ripgrep over an administrator's checkout; a member reads only what `visible` lets through
 			const search = x.search?.bind(x);
 			const found =
@@ -2646,7 +2658,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			return textAnswer(grepAnswer(hits, false, i.files === true));
 		});
 		add(listSource, function* (i) {
-			const under = sourcePath(i.path ?? '');
+			const under = sourcePath(i.path ?? ''),
+				outside = outsideSource(i.path ?? '', under);
+			if (outside !== undefined) return err(outside);
 			const shown = (yield* Port.attempt('workspace.files', () => source.files())).filter(
 				(file) => under === '' || file.startsWith(`${under}/`)
 			);
@@ -3064,6 +3078,39 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			);
 		});
 	}
+	// what the person may see of approvals and of a record's past, by the same reader as their own screens
+	if (a.actor.kind === 'member') {
+		const readable = readableBy(e.read, e.manifest, a, x.bindings);
+		add(approvalsTool, function* (i) {
+			if (i.id !== undefined) {
+				const view = yield* e.approvals.view(i.id, a, readable);
+				return Option.isNone(view) ? err(`No approval request ${i.id} you may see.`) : ok(view.value);
+			}
+			return ok({
+				requests: yield* e.approvals.list(
+					{ model: i.model, records: i.records, ids: i.ids, all: i.all },
+					a,
+					readable
+				)
+			});
+		});
+		add(recordHistoryTool, function* (i) {
+			if (!(yield* readable(i.model, i.id))) return err(`No ${i.model} ${i.id} you may read.`);
+			const read = yield* lower_read(e.manifest, 'history', [
+				i.model,
+				i.id,
+				{ ...(i.at === undefined ? {} : { at: i.at }), ...(i.output === undefined ? {} : { output: i.output }) }
+			]);
+			return ok({ revisions: yield* readAs(x)(read) });
+		});
+	}
+	const audit = e.audit;
+	if (audit !== undefined && a.admin && a.actor.kind === 'member' && !a.actor.external)
+		add(auditTool, function* ({ id, ...query }) {
+			if (id === undefined) return ok(yield* audit.query({ order: 'newest', ...query }));
+			const event = yield* audit.detail(id);
+			return event === null ? err(`No audit event ${id}.`) : ok(event);
+		});
 	// an MCP tool changes with the workspace, so it stays out of the fixed tool list: run_tool reaches it as `<server>.<tool>`,
 	// only while acting
 	if (agent)
@@ -3663,9 +3710,40 @@ const documentTool = defineTool('document', {
 		landscape: Schema.optionalKey(Schema.Boolean)
 	})
 });
+const approvalsTool = defineTool('approvals', {
+	behavior: { data: true },
+	description: "Approval requests you may see: yours to decide or asked for, and those on records you read. id answers one; else the open ones by model, records and ids, all: true adds decided ones. Each has its steps and deciders, every move with its reason, moves: what you may decide now (waiting on you when any), mine: you asked.",
+	parameters: Schema.Struct({
+		id: Schema.optionalKey(Schema.String),
+		model: Schema.optionalKey(Schema.String),
+		records: Schema.optionalKey(Schema.Array(Schema.String)),
+		ids: Schema.optionalKey(Schema.Array(Schema.String)),
+		all: Schema.optionalKey(Schema.Boolean)
+	})
+});
+const recordHistoryTool = defineTool('record_history', {
+	behavior: { data: true },
+	description: "A record's revisions, oldest first: each write's who, when, cause and changed fields. at: { instant }, { revision } or { before: <approval request id> } ends it there; output picks the read output shown.",
+	parameters: Schema.Struct({
+		model: Schema.String,
+		id: Schema.String,
+		at: Schema.optionalKey(Schema.Record(Schema.String, Schema.Union([Schema.String, Schema.Number]))),
+		output: Schema.optionalKey(Schema.String)
+	})
+});
+const { actor_kind: _kind, invocation: _invocation, order: _order, ...AUDIT_FILTERS } = AuditQuery.fields;
+const auditTool = defineTool('audit', {
+	behavior: { data: true, resume: { argument: 'after' } },
+	description: "The workspace's audit trail: who did what, when and how it ended, newest first, filtered by the given fields; id answers one event in full.",
+	parameters: Schema.Struct({
+		id: Schema.optionalKey(Schema.String),
+		...AUDIT_FILTERS
+	})
+});
 const FIXED_TOOLS: readonly AgentTool[] = [
 	recordsTool, describeTool, pageTool, actTool, syncTool, updatePlanTool, goalsTool, skillTool, historyTool,
 	readMessagesTool, readFileTool, geocodeTool, readSource, searchSource, listSource, subagentTool,
-	documentTool, downloadTool, runJsTool, askParentTool, askTool, waitTool, runsTool, logsTool, runToolTool
+	documentTool, downloadTool, runJsTool, askParentTool, askTool, waitTool, runsTool, logsTool, auditTool,
+	approvalsTool, recordHistoryTool, runToolTool
 ].map(({ name, description, input, behavior }) => ({ name, description, input, behavior }));
 const FIXED_NAMES: ReadonlySet<string> = new Set(FIXED_TOOLS.map((tool) => tool.name));

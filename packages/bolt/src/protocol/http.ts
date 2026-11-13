@@ -55,8 +55,8 @@ import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
 import { mcpServers } from '../engine/agent/mcp.ts';
 import { agentSettings, allowedModel, spent } from '../engine/agent/settings.ts';
 import { previewPdf } from '../engine/facilities.ts';
-import { lower_read } from '../engine/query/engine.ts';
-import { readsAny, viewOutput } from '../engine/access/authority.ts';
+import { lower_read, readableBy, viewGet } from '../engine/query/engine.ts';
+import { readsAny } from '../engine/access/authority.ts';
 import { client_contract } from '../engine/access/operation-outputs.ts';
 import { delete_verdict, record_capabilities, transformBridge } from '../engine/write/act.ts';
 import { restorePreview, restoreRecord } from '../engine/write/restore.ts';
@@ -322,12 +322,6 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 		}), Effect.succeed);
 });
 /** Public page loaders and wire reads obey the same visitor surface restrictions. */
-/** One record as the caller's generic views read it: through its view output (`default` when held). */
-const viewGet = (m: EngineManifest, authority: Authority, model: string, id: string) =>
-	Effect.map(lower_read(m, 'get', [model, id]), (read): ReadIR => {
-		const output = viewOutput(m, authority, model);
-		return read.kind === 'get' && output !== undefined ? { ...read, output } : read;
-	});
 export const readAdmitted = (
 	authority: Authority,
 	read:
@@ -1054,12 +1048,7 @@ export const BoltRoutes = {
 				reads = yield* Reads,
 				b = yield* bindings,
 				m = yield* Manifest;
-			const readable = (model: string, id: string) =>
-				viewGet(m, authority, model, id).pipe(
-					Effect.flatMap((read) => reads.run([read], { as: 'caller', authority }, b)),
-					Effect.map(([row]) => row !== null && row !== undefined),
-					Effect.catchTag('BoltError', () => Effect.succeed(false))
-				);
+			const readable = readableBy(reads.run, m, authority, b);
 			const id = p.get('id');
 			// an absent repeated param filters nothing; `[]` would match no request
 			const many = (key: string) => (p.has(key) ? p.getAll(key) : undefined);

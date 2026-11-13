@@ -14,6 +14,7 @@ import {
 	Fiber,
 	FiberSet,
 	Layer,
+	Option,
 	Predicate,
 	Schema,
 	Scope
@@ -55,6 +56,9 @@ import { BOUNDS } from '../src/engine/agent/context.ts';
 import { tree_digest } from '../src/engine/artifact/read.ts';
 import { Approvals, Automations, Callables, Live, Reads } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/effect.ts';
+import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
+import { audit_shape } from '../src/engine/audit.ts';
+import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
 import { storable } from '../src/engine/agent/schema.ts';
 import { file_attachments } from '../src/engine/agent/attachments.ts';
 import type { Ingested } from '../src/engine/contracts.ts';
@@ -186,7 +190,8 @@ const ctx = (
 				...(engine.convert === undefined ? {} : { convert: engine.convert }),
 				guest: engine.guest ?? Context.get(native, GuestIsolates),
 				...(engine.http === undefined ? {} : { http: engine.http }),
-				...(engine.bundler === undefined ? {} : { bundler: engine.bundler })
+				...(engine.bundler === undefined ? {} : { bundler: engine.bundler }),
+				...(engine.audit === undefined ? {} : { audit: engine.audit })
 			},
 			authority: member({ admin: true }),
 			bindings: { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'UTC' },
@@ -1323,6 +1328,15 @@ describe('working-source tools', () => {
 				).toMatchObject({
 					result: { error: expect.stringContaining('installed packages are outside the workspace') }
 				});
+				// what the build writes is not source: each source tool says so instead of "no such file"
+				for (const [name, input] of [
+					['workspace_read', { path: '.norbital/models/notes.ts' }],
+					['workspace_list_dir', { path: '.norbital' }],
+					['workspace_search', { pattern: 'x', path: '.norbital' }]
+				] as const)
+					expect(yield* result(x, name, input)).toMatchObject({
+						result: { error: expect.stringContaining('the build writes .norbital') }
+					});
 				expect(
 					yield* tool(
 						yield* ctx({ workspace, authority: member({ external: true }) }),
@@ -1630,7 +1644,7 @@ describe('describe_workspace', () => {
 			const map = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.String }))(
 				yield* result(yield* ctx(), 'describe_workspace', {})
 			).result;
-			expect(map).toMatch(/\n\w+ ".*" · \d+ rows\n/);
+			expect(map).toMatch(/\n\w+ ".*" · \d+ rows?\n/);
 		})
 	);
 	it.effect('names answer each item in full, through the tool', () =>
@@ -2975,12 +2989,20 @@ describe('run_js over a repository reference', () => {
 			store = x.engine.files;
 			yield* result(x, 'reference', {});
 			// past the inline wall the file is still recorded, and `wait` hands it over
-			expect(yield* result(x, 'wait', { jobs: [first(x.jobs.pending()).job] })).toMatchObject({
+			const waited = yield* result(x, 'wait', { jobs: [first(x.jobs.pending()).job] });
+			expect(waited).toMatchObject({
 				result: {
 					settled: { result: { reference: NAME, files: [{ name: NAME, mime: REFERENCE.mime }] } }
 				}
 			});
 			const listing = (input: Json) => result(x, 'read_file', input);
+			// the index's own file id reads as its name: the tree
+			const kept = Schema.decodeUnknownSync(
+				Schema.Struct({ result: Schema.Struct({ settled: Schema.Struct({ result: Schema.Struct({ files: Schema.Array(Schema.Struct({ id: Schema.String })) }) }) }) })
+			)(waited);
+			expect(yield* listing({ id: first(kept.result.settled.result.files).id })).toMatchObject({
+				result: expect.stringContaining('src/lib/add.js')
+			});
 			expect(yield* listing({ id: `${NAME}/src/lib` })).toMatchObject({
 				result: expect.stringContaining('src/lib/add.js')
 			});
@@ -3317,6 +3339,62 @@ describe('host web search', () => {
 	);
 });
 
+describe('approvals, record history and the audit trail', () => {
+	const created = Effect.fnUntraced(function* (x: ToolContext) {
+		const answer = Schema.decodeUnknownSync(
+			Schema.Struct({ result: Schema.Struct({ stored: Schema.Struct({ tasks: Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) }) }) }) })
+		)(yield* result(x, 'act', { callable: 'tasks.create', input: [{ title: 'audited' }] }));
+		return first(answer.result.stored.tasks.rows).id;
+	});
+	it.effect('record history answers who changed a record to a reader, and refuses one who cannot read it', () =>
+		Effect.gen(function* () {
+			const admin = yield* ctx();
+			const id = yield* created(admin);
+			expect(yield* result(admin, 'record_history', { model: 'tasks', id })).toMatchObject({
+				result: { revisions: [expect.objectContaining({ revision: 1 })] }
+			});
+			// staff may create tasks but read none: no history either
+			const staff = yield* ctx({ authority: Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's')) });
+			expect(yield* result(staff, 'record_history', { model: 'tasks', id })).toEqual({
+				result: { error: `No tasks ${id} you may read.` }
+			});
+		})
+	);
+	it.effect('approvals are judged by whether the person reads the record, as their own screens are', () =>
+		Effect.gen(function* () {
+			const id = yield* created(yield* ctx());
+			const seen: boolean[] = [];
+			const approvals: Partial<AgentEngine['approvals']> = {
+				list: (_filter, _authority, readable) =>
+					Effect.map(readable('tasks', id), (can) => {
+						seen.push(can);
+						return [];
+					}),
+				view: () => Effect.succeed(Option.none())
+			};
+			const staff = Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's'));
+			for (const authority of [member({ admin: true }), staff])
+				expect(yield* result(yield* ctx({ authority }, { approvals }), 'approvals', {})).toEqual({
+					result: { requests: [] }
+				});
+			expect(seen).toEqual([true, false]);
+			expect(yield* result(yield* ctx({}, { approvals }), 'approvals', { id: 'r1' })).toEqual({
+				result: { error: 'No approval request r1 you may see.' }
+			});
+		})
+	);
+	it.effect('only an administrator reads the audit trail', () =>
+		Effect.gen(function* () {
+			const audit = yield* audit_shape(memory_audit().port).pipe(Effect.provide(NodeCrypto.layer));
+			const admin = yield* ctx({}, { audit });
+			expect(yield* result(admin, 'audit', { limit: 5 })).toEqual({ result: { rows: [], next: null } });
+			expect(yield* names(yield* ctx({ authority: member() }, { audit }))).not.toContain('audit');
+			expect(yield* names(yield* ctx({ authority: member({ admin: true, external: true }) }, { audit }))).not.toContain('audit');
+			expect(yield* names(yield* ctx())).not.toContain('audit');
+		})
+	);
+});
+
 describe('a transcript row', () => {
 	it('holds no NUL, and keeps a backslash that only reads like one', () => {
 		expect(storable({ text: 'AC\0\0', code: '\\u0000', [`k\0`]: 1 })).toEqual({
@@ -3415,9 +3493,10 @@ describe('the catalogue', () => {
 					},
 					{ convert: { targets: ['pdf'], convert: () => Effect.succeed(new Uint8Array()) } }
 				);
-				const texts = (yield* catalogue(x)).tools.map(
-					(t) => `${t.description ?? ''}${JSON.stringify(t.input)}`
-				);
+				// the host's own tools (here the browser) are the host's budget
+				const texts = (yield* catalogue(x)).tools
+					.filter((t) => !x.host_tools.some((host) => host.name === t.name))
+					.map((t) => `${t.description ?? ''}${JSON.stringify(t.input)}`);
 				expect(texts.join('').length).toBeLessThan(16_000);
 				for (const model of Object.keys(manifest.models))
 					for (const text of texts) expect(text).not.toContain(model);
