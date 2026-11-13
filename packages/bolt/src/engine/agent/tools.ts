@@ -1140,7 +1140,7 @@ const attach = (files: OpenedFile[], file: OpenedFile): 'shown' | 'none' => {
 };
 /** What the model is told of a file it opened. */
 const ATTACHED = {
-	shown: 'shown on your next step only: take what you need from it there',
+	shown: 'shown on your next step only: note there every value you need from it, then work from your notes',
 	none: 'not shown, too many images at once: read it again on your next step'
 } as const;
 const guard = (
@@ -2211,7 +2211,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					? {}
 					: {
 							images: shown,
-							note: `each <img> named in images is shown to you: ${SCAN_NOTE}${shown.length > TILED_PAGES ? ` These are whole pages, too small for fine print: read_file { id: ${o}, image: n } adds a page's quarters.` : ''}`
+							note: `each <img> named in images is shown on your next step only: note there every value you need from it, then work from your notes. ${SCAN_NOTE}${shown.length > TILED_PAGES ? ` These are whole pages, too small for fine print: read_file { id: ${o}, image: n } adds a page's quarters.` : ''}`
 						}),
 				...(refs.length > shown.length
 					? {
@@ -3379,7 +3379,7 @@ const WORKSPACE_OVERRIDES: ReadonlySet<string> = new Set(['web_search']);
 // Tool text and model schemas are shared; handlers bind only when a step is admitted.
 const recordsTool = defineTool('read', {
 	behavior: { data: true, resume: { argument: 'after', roots: true } },
-	description: `Read records. request: { "<model>": { output, where, fields, order_by, limit, after, search, aggregate, as_of, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. output: one of the read outputs the model declares, "default" when omitted. order_by: "<field>", { <field>: "desc" } or a list of those.
+	description: `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. output: omit it for "default", else one of the reads describe_workspace lists for that model. order_by: "<field>", { <field>: "desc" } or a list of those.
 where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } }.
 Answers each model's { rows, next, total } (total counts every match), or with aggregate its measures. Long values are clipped.`,
