@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // `bolt check`'s build rules over a manifest: model/label, model/instant-date, model/default, model/range,
-// sync/*, kiosk/embed, app/embed, write/read-in-loop, notify/via, automation/cron. The full compile pipeline is not run
+// sync/*, kiosk/embed, app/embed, write/read-in-loop, notify/via, automation/cron, automation/write. The full compile pipeline is not run
 // here: templates' `bolt check` gate runs it.
 import { Effect, Result } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -73,6 +73,25 @@ describe('bolt check', () => {
 				(finding) => finding.code === 'automation/input'
 			)
 		).toEqual([]);
+	});
+	it('a write listener names a template or system model (automation/write)', () => {
+		const m: EngineManifest = {
+			...emptyManifest,
+			policies: { staff: { description: 'Staff', grants: {} } },
+			automations: {
+				greet: {
+					description: 'Greets members',
+					policies: ['staff'],
+					on: [{ model: 'sys_user', verbs: ['create', 'update'] }, { model: 'sys_invitation', verbs: ['create'] }]
+				},
+				lost: { description: 'Listens to nothing', policies: ['staff'], on: [{ model: 'nowhere', verbs: ['create'] }] }
+			}
+		};
+		expect(
+			checkRules(m, { automations: ['greet', 'lost'] }, (_r, n) => n)
+				.filter((f) => f.code === 'automation/write')
+				.map((f) => f.message)
+		).toEqual(["lost: on: there is no model 'nowhere'"]);
 	});
 	it.live(
 		'refuses a label naming an id or a foreign key, and an instant named as a calendar day (model/label, model/instant-date)',

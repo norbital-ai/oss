@@ -70,16 +70,28 @@ export type RunTrigger =
 	| { readonly kind: 'system'; readonly cause: 'cron' }
 	| {
 			readonly kind: 'system';
-			readonly cause: 'effect' | 'event';
+			readonly cause: 'effect';
 			readonly model: ModelName;
 			readonly verb: 'create' | 'update' | 'delete';
 			readonly records: readonly string[];
 	  }
+	| EventTrigger
 	| {
 			readonly kind: 'system';
 			readonly cause: 'schedule';
 			readonly by?: { readonly automation: string } & ({ readonly run: Id<'sys_run'> } | { readonly invocation: string });
 	  };
+/**
+ * A committed `verb` on `model`'s `records` that an automation listens to (`on: [{ model, verbs }]`); in a listener's
+ * body it narrows per declared listener, its records typed as that model's ids.
+ */
+export type EventTrigger<M extends string = ModelName, V extends 'create' | 'update' | 'delete' = 'create' | 'update' | 'delete'> = {
+	readonly kind: 'system';
+	readonly cause: 'event';
+	readonly model: M;
+	readonly verb: V;
+	readonly records: readonly Id<M>[];
+};
 /** A run's trigger as the run ledger shows it: a person by reference and display name. */
 export type RunTriggerView =
 	| Exclude<RunTrigger, { kind: 'person' }>

@@ -29,6 +29,7 @@ import type {
 	Run,
 	RunCause,
 	RunTrigger,
+	EventTrigger,
 	Schedule,
 	Send,
 	Web
@@ -156,9 +157,17 @@ type CachedCtx = Omit<SystemRunCtx, 'act' | 'schedule' | 'notify' | 'send' | 'fi
  */
 export type AutomationCtx<S = AutomationSpec> = (S extends { cache: Duration } ? CachedCtx : SystemRunCtx) & {
 	readonly run: Run & (S extends { mode: 'call' }
-		? S extends { cache: Duration } ? {} : { readonly trigger: RunTrigger }
-		: { readonly id: Id<'sys_run'>; readonly trigger: RunTrigger });
+		? S extends { cache: Duration } ? {} : { readonly trigger: TriggerOf<S> }
+		: { readonly id: Id<'sys_run'>; readonly trigger: TriggerOf<S> });
 };
+/** The triggers a run of `S` can carry: an event only from a declared listener, narrowed to its model and verbs. */
+type TriggerOf<S> =
+	| Exclude<RunTrigger, { cause: 'event' }>
+	| (S extends { on: readonly (infer T)[] }
+			? T extends { model: infer M extends string; verbs: readonly (infer V extends WriteVerb)[] }
+				? EventTrigger<M, V>
+				: never
+			: never);
 type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 	CallerQuery & { invocation_id: string } & {
 		actor: A;
@@ -209,17 +218,21 @@ export type EffectCtx<M = ModelName> = RunCtx<Actor, false> & {
 	/** Approval moves have no committed change list; their frozen data is carried here. */
 	readonly event: EffectEvent<M>;
 };
-type AutomationLiteral<I extends AutomationInputFields, O extends OutputKind | undefined, M extends 'job' | 'call', C extends Duration | undefined> = Omit<
-	AutomationSpec,
-	'input' | 'output' | 'mode' | 'cache'
-> & {
+type AutomationLiteral<
+	I extends AutomationInputFields,
+	O extends OutputKind | undefined,
+	M extends 'job' | 'call',
+	C extends Duration | undefined,
+	T extends readonly Trigger[] = readonly Trigger[]
+> = Omit<AutomationSpec, 'input' | 'output' | 'mode' | 'cache' | 'on'> & {
 	input?: I;
 	output?: O;
 	mode?: M;
 	cache?: C;
+	on?: T;
 	run: (
 		input: RunInput<{ input: I }>,
-		ctx: AutomationCtx<{ mode: M; cache: C }>
+		ctx: AutomationCtx<{ mode: M; cache: C; on: T }>
 	) => BodyReturn<O extends OutputKind ? ValueOf<O> : void>;
 };
 /** The literal and the body the guest calls. The file supplies its name. */
@@ -254,14 +267,15 @@ export function automation<
 	const O extends OutputKind | undefined = undefined,
 	const M extends 'job' | 'call' = 'job',
 	const C extends Duration | undefined = undefined,
-	const S extends AutomationLiteral<I, O, M, C> = AutomationLiteral<I, O, M, C>
+	const T extends readonly Trigger[] = readonly [],
+	const S extends AutomationLiteral<I, O, M, C, T> = AutomationLiteral<I, O, M, C, T>
 >(
-	spec: { input?: I; output?: O; mode?: M; cache?: C } & S &
+	spec: { input?: I; output?: O; mode?: M; cache?: C; on?: T } & S &
 		NoInfer<
 			Checked<
-				AutomationLiteral<I, O, M, C>,
+				AutomationLiteral<I, O, M, C, T>,
 				S,
-				Exact<S, AutomationFor<S, AutomationLiteral<I, O, M, C>['run']>>
+				Exact<S, AutomationFor<S, AutomationLiteral<I, O, M, C, T>['run']>>
 			>
 		>
 ): Automation<S> {

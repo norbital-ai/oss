@@ -534,7 +534,7 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 			);
 		for (const on of a.on ?? []) {
 			if ('model' in on) {
-				if (m.models[on.model] === undefined)
+				if ((m.models[on.model] ?? SYSTEM.models[on.model]) === undefined)
 					at('automation/write', 'automation', name, `on: there is no model '${on.model}'`);
 				continue;
 			}
