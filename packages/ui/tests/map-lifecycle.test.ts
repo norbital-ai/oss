@@ -1,5 +1,5 @@
 import './dom.ts';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import Harness from './map-harness.svelte';
 import { viewFixture } from './view-fixture.ts';
@@ -47,6 +47,8 @@ vi.mock('https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/dist/maplibre-gl.mjs', 
 	class NavigationControl {}
 	return { Map, NavigationControl, setWorkerUrl: () => {} };
 });
+// another file in this worker may have left a record open in the shared location
+beforeEach(() => history.replaceState(null, '', '/'));
 afterEach(() => {
 	gl.maps = gl.removed = 0;
 	gl.zoom = 3;
