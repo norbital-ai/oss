@@ -500,10 +500,11 @@ const validRate = (rate: string): boolean => {
 	return Result.isSuccess(parsed) && parsed.success;
 };
 
-/** Whether a grant tree holds a `{ var: 'actor.…' }` operand at any depth. */
-const namesActor = (v: unknown): boolean =>
+/** Whether a grant tree holds a `{ var: 'actor.…' }` operand other than `except` at any depth. */
+const namesActor = (v: unknown, except?: string): boolean =>
 	Predicate.isObject(v) &&
-	((typeof v['var'] === 'string' && v['var'].startsWith('actor.')) || Object.values(v).some(namesActor));
+	((typeof v['var'] === 'string' && v['var'].startsWith('actor.') && v['var'] !== except) ||
+		Object.values(v).some((x) => namesActor(x, except)));
 
 function automationRules({ m, bodies, at }: RuleContext): void {
 	for (const [name, a] of Object.entries(m.automations)) {
@@ -754,6 +755,8 @@ function syncRules({ m, at }: RuleContext): void {
 			const bad = (code: string, message: string) =>
 				at(`sync/${code}`, 'sync', `${model}.${name}`, message);
 			if (sync.with === 'file') {
+				if (sync.policies !== undefined)
+					bad('file', "a file's rows enter as the member importing; policies are a remote sync's");
 				if (sync.every !== undefined || sync.partitions !== undefined)
 					bad(
 						'file',
@@ -772,6 +775,17 @@ function syncRules({ m, at }: RuleContext): void {
 					}
 				continue;
 			}
+			// its pages are written as the system identity holding exactly these: at least one, each declared, none
+			// scoped by an actor operand it lacks (it carries only `actor.instance`)
+			const policies = sync.policies ?? [];
+			if (policies.length === 0) bad('policies', 'policies: name at least one policy its pages are written as');
+			for (const p of policies)
+				if (m.policies[p] === undefined) bad('policies', `policies: there is no policy '${p}'`);
+				else if (namesActor(m.policies[p].grants, 'actor.instance'))
+					bad(
+						'policies',
+						`policies: '${p}' scopes by actor.*; a sync's pages are written as the system identity; only actor.instance matches`
+					);
 			const d = definition(m, sync.with);
 			if (d === undefined) {
 				bad('with', `with '${sync.with}' is 'file' or an integration definition`);

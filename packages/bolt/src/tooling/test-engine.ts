@@ -417,7 +417,8 @@ type Kit = {
 	run_due(): Effect.Effect<{ readonly failed: readonly FailedRun[] }, EngineError>;
 	/**
 	 * The host dies as `runId` ends, before its end is recorded: nothing more reaches the database, no retry runs, and the
-	 * run stays `running` for its lease to reclaim (`run_due` past the lease) to rerun from the start.
+	 * run stays `running` for its lease to reclaim (`run_due` past the lease) to rerun from the start. Every other run in
+	 * flight in that wake dies with it and waits for its lease the same way.
 	 */
 	crash(runId: string): Effect.Effect<void, KitFailure>;
 	/** Waits for background work to go quiet. It runs nothing queued: `run_due` runs model effects and started automations. */
@@ -1742,16 +1743,9 @@ export const test_engine = <P extends TestPorts = never>(
 							yield* runs.tick;
 							yield* quiet;
 							yield* throttle.settled;
-							const [due] = yield* Effect.andThen(
-								flush,
-								inner.read([
-									{
-										text: `SELECT 1 FROM sys_run WHERE state = 'queued' AND due_at <= $1::timestamptz LIMIT 1`,
-										params: [now]
-									}
-								])
-							);
-							if ((due?.rows.length ?? 0) === 0)
+							// due as a claim sees it: a run behind a running one (a crashed one included) waits for its lease
+							const due = yield* runs.next;
+							if (due === null || Date.parse(due) > Date.parse(now))
 								return {
 									failed: (yield* failedRuns).filter((run) => !failedBefore.has(run.id))
 								};

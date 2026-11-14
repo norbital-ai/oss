@@ -380,35 +380,6 @@ export class Authorities {
 			`visitor:${app}:${visitor}:${anonymous}`
 		);
 	}
-	/**
-	 * A system actor: an automation's declared policies, or a platform run or a remote sync (the workspace's own work).
-	 * Syncs hold no authored policies or team and cannot approve.
-	 */
-	system(
-		run: string,
-		by: Extract<
-			EngineActor,
-			{
-				kind: 'system';
-			}
-		>['by']
-	): Effect.Effect<Authority, BoltError> {
-		const actor: EngineActor = { kind: 'system', run, by };
-		if ('platform' in by)
-			return this.compile(
-				{ actor, admin: false, platform: true, policies: [] },
-				`platform:${by.platform}:${run}`
-			);
-		if ('sync' in by)
-			return this.compile(
-				{ actor, admin: false, platform: true, policies: [] },
-				`sync:${by.sync}:${by.instance}:${run}`
-			);
-		const policies = this.m.automations[by.automation]?.policies;
-		if (policies === undefined)
-			return Effect.fail(BoltError.make('unknown_automation', 'admission', `no automation '${by.automation}'`));
-		return this.compile({ actor, admin: false, policies }, `automation:${by.automation}:${run}`);
-	}
 }
 /** Rule 39: admin-only; the Authority becomes the previewed member's (or team's, `{ team }`), administrator flag cleared. */
 export const preview_as = Effect.fn('Bolt.preview_as')(function* (

@@ -8,7 +8,12 @@ import {
 	packedArchiveFilename,
 	unexportedSpecifiers
 } from './lib/package-archive.ts';
-import { publicPackageDirectories, readManifest, type Manifest } from './lib/package-release.ts';
+import {
+	publicPackageDirectories,
+	readManifest,
+	readPublicPackageEntries,
+	type Manifest
+} from './lib/package-release.ts';
 import { scratchRoot } from './lib/scratch.ts';
 import { capture } from './lib/process.ts';
 import { PublicationFailed } from './lib/error.ts';
@@ -101,6 +106,7 @@ export const validatePackagePublication = Effect.scoped(
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
 		const license = yield* fs.readFileString(path.join(repositoryRoot, 'LICENSE'));
+		yield* readPublicPackageEntries(repositoryRoot);
 		yield* assertSpecifiersExported();
 		const output = yield* fs.makeTempDirectoryScoped({
 			directory: yield* scratchRoot(),

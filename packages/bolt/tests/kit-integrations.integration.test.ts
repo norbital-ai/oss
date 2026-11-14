@@ -25,13 +25,21 @@ const manifest = {
 		products: {
 			outputs: { default: { products: { fields: 'all' } } },
 			create: { columns: { products: ['code', 'name'] } },
-			syncs: { erp: { with: 'erp', read: true } }
+			update: { columns: { products: ['code', 'name'] } },
+			delete: {},
+			syncs: { erp: { with: 'erp', policies: ['erp_sync'], read: true } }
 		}
 	},
 	integrations: {
 		erp: { description: 'The ERP', driver: 'http', test: true, http: { base_url: 'https://erp.example/api' } }
 	},
-	policies: { clerk: { description: 'Reads products', grants: { products: { outputs: { default: {} }, create: {} } } } },
+	policies: {
+		clerk: { description: 'Reads products', grants: { products: { outputs: { default: {} }, create: {} } } },
+		erp_sync: {
+			description: 'Writes synced products',
+			grants: { products: { outputs: { default: {} }, create: {}, update: {}, delete: {} } }
+		}
+	},
 	teams: {},
 	automations: {},
 	mcp: {},

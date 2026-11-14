@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { Effect, FileSystem, Schema } from 'effect';
+import { FIRST_PARTY_PACKAGES } from '../../packages/host-api/src/first-party.ts';
 import { PublicationFailed } from './error.ts';
 const StringMap = Schema.Record(Schema.String, Schema.String);
 export const Manifest = Schema.StructWithRest(
@@ -42,16 +43,10 @@ export const readManifest = Effect.fn('Publication.readManifest')(function* (fil
 		Effect.mapError(() => new PublicationFailed({ message: `${filePath} is not a JSON object.` }))
 	);
 });
-export const publicPackageDirectories = [
-	'app-shell',
-	'bolt',
-	'bolt-cli',
-	'bolt-server',
-	'host-api',
-	'providers',
-	'store',
-	'ui'
-] as const;
+/** Each published package's directory under `packages/`, named after it. */
+export const publicPackageDirectories = FIRST_PARTY_PACKAGES.map((name) =>
+	name.slice('@norbital-ai/'.length)
+);
 export type PackageEntry = {
 	readonly name: string;
 	readonly version: string;
@@ -74,7 +69,7 @@ export const readPublicPackageEntries = Effect.fn('Publication.entries')(functio
 				);
 				if (manifest.private)
 					return yield* new PublicationFailed({ message: `${manifest.name} is private.` });
-				if (manifest.name === undefined || !manifest.name.startsWith('@norbital-ai/'))
+				if (manifest.name !== `@norbital-ai/${directory}`)
 					return yield* new PublicationFailed({
 						message: `Unexpected public package name in packages/${directory}.`
 					});
@@ -104,6 +99,16 @@ export const readPublicPackageEntries = Effect.fn('Publication.entries')(functio
 			}),
 		{ concurrency: 'unbounded' }
 	);
+	// a public package FIRST_PARTY_PACKAGES does not name would ship outside every host's and template's first-party set
+	const fs = yield* FileSystem.FileSystem;
+	for (const directory of yield* fs.readDirectory(path.join(repositoryRoot, 'packages'))) {
+		const file = path.join(repositoryRoot, 'packages', directory, 'package.json');
+		if (publicPackageDirectories.includes(directory) || !(yield* fs.exists(file))) continue;
+		if (!(yield* readManifest(file)).private)
+			return yield* new PublicationFailed({
+				message: `packages/${directory} is public but not in @norbital-ai/host-api FIRST_PARTY_PACKAGES.`
+			});
+	}
 	return entries.sort((left, right) => left.name.localeCompare(right.name));
 });
 export function platformPackageKey(entries: ReadonlyArray<PackageEntry>): string {

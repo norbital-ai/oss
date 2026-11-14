@@ -19,7 +19,7 @@ import { Live, Wake, Links } from '../services.ts';
 import { toOwnSql } from '../access/pred.ts';
 import type { Where } from '@norbital-ai/store/kind';
 import { q, cells, null_row_sql, type Catalog } from '@norbital-ai/store';
-import { enqueue, next_due, PARTS_TABLE, queue_effects, type Writer } from '../runs/queue.ts'; // hook:automations
+import { enqueue, next_due, PARTS, PARTS_TABLE, queue_effects, type Writer } from '../runs/queue.ts'; // hook:automations
 import { syncOutboxPiece } from '../sync/write.ts'; // hook:syncs (H3)
 import { purgeProposals } from '../approvals/erase.ts';
 import {
@@ -92,8 +92,11 @@ export type Commit = {
 	approvalDecision?: { request: string; stands: boolean };
 	/** An engine sync rollback owns peer recovery explicitly, outside the ordinary outbox hook. */
 	rollback?: true;
-	/** hook:syncs — pieces after `allp` (a sync read page's cursor, id map and version stamps). */
-	pieces?: (c: Chain) => void;
+	/**
+	 * hook:syncs — pieces after `allp` (a sync read page's cursor, id map and version stamps), in a split act's last
+	 * statement only. `rows` names the act's rows (`c`, `id`, `revision`): `allp`, and the rows its earlier statements parked.
+	 */
+	pieces?: (c: Chain, rows: string) => void;
 	/** Rule 26: the write callbacks' reads, re-digested under the table lock ahead of the writes (`checked`). */
 	fingerprints?: readonly Fingerprint[];
 	/** Native prior automation query intent, fixed across retries and persisted for held approvals. */
@@ -123,21 +126,46 @@ export type Part = { readonly index: number; readonly last: boolean; readonly ac
 /** What one statement of a large act holds at most: Neon runs each statement in bounded memory. */
 const PART = { rows: 1_000, bytes: 1_048_576 };
 /**
- * A large act as bounded statements of one transaction, or `undefined` for one statement. Only creates and updates
- * split: a table's rows follow those of every table it references (a parent before its children, so a reference and a
- * roll-up find their row), in input order. A delete, erasure, restore, approval, decision, notice or sync page stays one
- * statement: its pieces read every row at once.
+ * `items` in order as statements' worth: at most `PART.rows` items and `PART.bytes` of JSON each (an item alone may
+ * exceed them), and at least one chunk (none is one empty statement's).
  */
-export function parts(m: EngineManifest, x: Commit): readonly Commit[] | undefined {
+export function chunked<T>(items: readonly T[]): T[][] {
+	const chunks: T[][] = [[]];
+	let rows = 0,
+		bytes = 0;
+	for (const item of items) {
+		const size = utf8Bytes(JSON.stringify(item));
+		if (rows >= PART.rows || (rows > 0 && bytes + size > PART.bytes)) {
+			chunks.push([]);
+			rows = 0;
+			bytes = 0;
+		}
+		chunks.at(-1)?.push(item);
+		rows++;
+		bytes += size;
+	}
+	return chunks;
+}
+/**
+ * A large act as bounded statements of one transaction, or `undefined` for one statement. Creates and updates go first,
+ * a table's rows after those of every table it references (a parent before its children, so a reference and a roll-up
+ * find their row); deletes last, children before parents; each in input order. A delete splits only when its cascades,
+ * unlinks and roll-ups reach no other table the act writes: a later statement would find that row already changed.
+ * Erasures and restores travel with their rows; a sync page's pieces run in the last statement over every statement's
+ * rows. An approval, resubmit, joined write, decision or sync rollback stays one statement: its request's records,
+ * checkpoint and lock outcome are one row and one answer over every row of the act.
+ */
+export function parts(m: EngineManifest, cat: Catalog, x: Commit): readonly Commit[] | undefined {
 	if (x.writes.length <= PART.rows && utf8Bytes(JSON.stringify(x.writes)) <= PART.bytes) return undefined;
 	if (
-		x.writes.some((w) => w.op === 'delete' || w.erased === true) ||
-		x.erase !== undefined || (x.erasures?.length ?? 0) > 0 || (x.restored?.length ?? 0) > 0 ||
 		x.approval !== undefined || x.resubmit !== undefined || x.joined === true || x.before !== undefined ||
-		x.approvalDecision !== undefined || x.rollback === true || (x.notices?.length ?? 0) > 0 || x.pieces !== undefined
+		x.approvalDecision !== undefined || x.rollback === true || (x.notices?.length ?? 0) > 0
 	)
 		return undefined;
 	const written = new Set(x.writes.map((w) => w.model));
+	const deletes = new Map(x.writes.flatMap((w) => (w.op === 'delete' ? [[w.model, w] as const] : [])));
+	if ([...deletes].some(([table, w]) => affectedTables(m, cat, [w]).some((t) => t !== table && written.has(t))))
+		return undefined;
 	const edges = relations(m).all.flatMap((r) =>
 		written.has(r.from) ? r.targets.filter((to) => written.has(to)).map((to) => ({ from: r.from, to })) : []
 	);
@@ -153,21 +181,23 @@ export function parts(m: EngineManifest, x: Commit): readonly Commit[] | undefin
 				moved = true;
 			}
 	}
-	const chunks: Write[][] = [];
-	let rows = PART.rows,
-		bytes = 0;
-	for (const w of [...x.writes].sort((a, b) => (depth.get(a.model) ?? 0) - (depth.get(b.model) ?? 0))) {
-		const size = utf8Bytes(JSON.stringify(w));
-		if (rows >= PART.rows || (rows > 0 && bytes + size > PART.bytes)) {
-			chunks.push([]);
-			rows = 0;
-			bytes = 0;
-		}
-		chunks.at(-1)?.push(w);
-		rows++;
-		bytes += size;
-	}
-	return chunks.length < 2 ? undefined : chunks.map((writes) => ({ ...x, writes }));
+	const rank = (w: Write) => (w.op === 'delete' ? 2 * written.size + 1 - (depth.get(w.model) ?? 0) : (depth.get(w.model) ?? 0));
+	const chunks = chunked([...x.writes].sort((a, b) => rank(a) - rank(b)));
+	if (chunks.length < 2) return undefined;
+	return chunks.map((writes) => {
+		const own = new Set(writes.map((w) => `${w.model}/${w.id}`));
+		const mine = (spec: NonNullable<Commit['erase']>) =>
+			spec.mode === 'remove' ? spec : { ...spec, ids: spec.ids.filter((id) => own.has(`${spec.model}/${id}`)) };
+		return {
+			...x,
+			writes,
+			...(x.erase === undefined ? {} : { erase: mine(x.erase) }),
+			...(x.erasures === undefined
+				? {}
+				: { erasures: x.erasures.map(mine).filter((spec) => spec.mode === 'remove' || spec.ids.length > 0) }),
+			...(x.restored === undefined ? {} : { restored: x.restored.filter((r) => own.has(`${r.model}/${r.id}`)) })
+		};
+	});
 }
 
 /** One RETURNING shape for every row piece: its model, id, revision, op, cause, erasure flag and both images. */
@@ -564,7 +594,7 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		);
 	if (first && x.runs.length > 0) enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
 	if ((x.notices?.length ?? 0) > 0) noticeInsert(c, 'notices', x.notices ?? [], x.now, GATED, m.teams, m.workspace.signup?.policies);
-	x.pieces?.(c); // hook:syncs
+	if (last) x.pieces?.(c, part === undefined ? 'allp' : c.cte('actp', `SELECT c, id, revision FROM allp UNION ALL SELECT c, id, revision FROM ${PARTS}`)); // hook:syncs
 
 	// in the act's own order (the input's; `records[0]` is what was written), anything else after by model and id; a
 	// split act's last statement reads the earlier statements' rows back, at the revision a later roll-up left them
@@ -572,10 +602,11 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		const records = part === undefined
 			? `(SELECT coalesce(jsonb_agg(jsonb_build_object('model', x.c, 'id', x.id, 'revision', x.revision) ORDER BY i.ord NULLS LAST, x.c, x.id), '[]'::jsonb)
 		FROM allp x LEFT JOIN input i ON i.j->>'id' = x.id WHERE x.cause IN ('direct', 'erased'))`
-			: `(SELECT coalesce(jsonb_agg(jsonb_build_object('model', w.c, 'id', w.id, 'revision', coalesce(a.revision, CASE w.c ${[...new Set(part.act.map((w) => w.model))]
+			: `(SELECT coalesce(jsonb_agg(jsonb_build_object('model', w.c, 'id', w.id, 'revision', coalesce(a.revision, w.deleted, CASE w.c ${[...new Set(part.act.map((w) => w.model))]
 					.map((table) => `WHEN ${literal(table)} THEN (SELECT t.revision FROM ${q(table)} t WHERE t.id = w.id::${cat.models.get(table)?.fields.get('id')?.pg ?? 'text'})`)
 					.join(' ')} END)) ORDER BY w.ord), '[]'::jsonb)
-		FROM (SELECT e.j->>0 AS c, e.j->>1 AS id, e.ord FROM jsonb_array_elements(${c.p(part.act.map((w) => [w.model, w.id]))}::jsonb) WITH ORDINALITY AS e(j, ord)) w
+		FROM (SELECT e.j->>0 AS c, e.j->>1 AS id, (e.j->>2)::int AS deleted, e.ord
+		FROM jsonb_array_elements(${c.p(part.act.map((w) => [w.model, w.id, w.op === 'delete' ? w.revision + 1 : null]))}::jsonb) WITH ORDINALITY AS e(j, ord)) w
 		LEFT JOIN (SELECT c, id, max(revision) AS revision FROM allp GROUP BY c, id) a ON a.c = w.c AND a.id = w.id)`;
 		const commitOutcome = () =>
 			`jsonb_build_object('kind', 'committed', 'output', ${c.p(JSON.stringify(x.output))}::jsonb, 'records', ${records}${x.unchanged === undefined ? '' : `, 'unchanged', ${c.p(JSON.stringify(x.unchanged))}::jsonb`})`;
@@ -951,7 +982,7 @@ export const executeCommit = Effect.fn('Bolt.executeCommit')(function* (
 			: lock?.tables;
 	const locked: Lock | undefined =
 		tables === undefined ? lock : { ...lock, tables, mode: 'SHARE ROW EXCLUSIVE' };
-	const split = parts(manifest, commit) ?? [commit];
+	const split = parts(manifest, catalog, commit) ?? [commit];
 	const part = (index: number): Part | undefined =>
 		split.length === 1 ? undefined : { index, last: index === split.length - 1, act: commit.writes };
 	const answers = yield* runCommit(

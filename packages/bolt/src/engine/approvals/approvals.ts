@@ -210,7 +210,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		const found = new Map(rows.map((r) => [r.id, r.row]));
 		return ids.map((id) => ({ id, row: found.get(id) ?? null }));
 	});
-	/** Every approval move is an event for its verb's effect, separate from committed row changes. */
+	/** The request, a resubmit and the standing decision are events for the verb's effect, separate from committed row changes. */
 	const approvalEffects = (
 		a: Pick<Stored, 'id' | 'model' | 'user' | 'action'>,
 		route: StepsSnapshot,
@@ -565,7 +565,11 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			reason: reason === '' ? null : reason,
 			...(edge.rollback === true ? { rolled_back: plan.rolled_back, skipped: plan.skipped } : {})
 		};
-		const runs = approvalEffects(a, a.route, move, next, hasEffect(a) ? yield* current(a) : [], now, auth);
+		// only the decision that makes the held change stand calls the verb's effect; one that leaves the rows as they
+		// are or discards the change (a step's approval, changes asked, reject, withdraw) has no change for it
+		const runs = stands
+			? approvalEffects(a, a.route, move, next, hasEffect(a) ? yield* current(a) : [], now, auth)
+			: [];
 		const refreshKey = `approval:${a.id}:${a.log.length}`;
 		// the requester hears of a decision someone else took on their request: changes asked, approved or rejected
 		const told = DECIDED[next.state];

@@ -455,7 +455,6 @@ describe('engine/access: Authority', () => {
 			const x = yield* as.compile(h, 'x');
 			expect(yield* as.compile(h, 'x')).toBe(x);
 			expect(yield* as.compile(h, 'y')).not.toBe(x);
-			expect((yield* as.system('run1', { automation: 'nightly' })).policies).toEqual(['auditor']);
 			expect((yield* as.visitor('careers', 'v1')).policies).toEqual(['auditor']);
 		})
 	);

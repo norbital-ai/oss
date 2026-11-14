@@ -498,7 +498,8 @@ it.live('sync-owned fields stay readable and local fields remain writable', () =
 	Effect.gen(function* () {
 		const { create, capabilities } = yield* setup();
 		const { parent } = yield* create();
-		// A read-only ERP sync owns every field outside the local update columns.
+		// A read-only ERP sync owns every field outside the local update columns: `update` fields not in `create`, which
+		// only the sync writes (its policies are granted `title` there).
 		const orders = required(manifest.exposures['orders']);
 		const source: EngineManifest = {
 			...manifest,
@@ -506,7 +507,8 @@ it.live('sync-owned fields stay readable and local fields remain writable', () =
 				...manifest.exposures,
 				orders: {
 					...orders,
-					update: { columns: { ...required(orders.update).columns, orders: ['note', 'status'] } },
+					create: { columns: { orders: ['title'] } },
+					update: { columns: { ...required(orders.update).columns, orders: ['title', 'note', 'status'] } },
 					syncs: { erp: { with: 'erp', read: true } }
 				}
 			},
@@ -521,7 +523,7 @@ it.live('sync-owned fields stay readable and local fields remain writable', () =
 		expect(caps?.fields['title']).toEqual({
 			writable: false,
 			proposal: false,
-			reasons: ['no_grant', 'sync_owned']
+			reasons: ['sync_owned']
 		});
 		expect(caps?.fields['note']).toEqual({ writable: true, proposal: false, reasons: [] });
 		expect((yield* exposure(source, admin))['orders']).toMatchObject({

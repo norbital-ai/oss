@@ -78,6 +78,7 @@ void onAny;
 
 sync('products', 'ledger', {
 	with: 'kingdee',
+	policies: ['sales_rep'],
 	read: function* ({ cursor, instance }, ctx) {
 		expectTypeOf(instance).toEqualTypeOf<InstanceId<'kingdee'>>();
 		expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
@@ -94,6 +95,7 @@ sync('products', 'ledger', {
 });
 sync('entries', 'calendar', {
 	with: 'calendar',
+	policies: ['sales_rep'],
 	partitions: 'calendars',
 	read: function* ({ items, partition }, ctx) {
 		expectTypeOf(items).toEqualTypeOf<readonly CalendarEvent[]>();
@@ -104,6 +106,7 @@ sync('entries', 'calendar', {
 });
 sync('orders', 'ledger', {
 	with: 'kingdee',
+	policies: ['sales_rep'],
 	write: function* ({ row, $id, $version, instance }, ctx) {
 		expectTypeOf(instance).toEqualTypeOf<InstanceId<'kingdee'>>();
 		expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();

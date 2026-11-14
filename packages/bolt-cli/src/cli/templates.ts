@@ -15,6 +15,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } fr
 import { stripVTControlCharacters } from 'node:util';
 import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { FIRST_PARTY_BUNFIG } from '@norbital-ai/host-api';
 import { TemplateManifest } from '@norbital-ai/bolt/protocol';
 import { read_artifact } from '@norbital-ai/bolt/artifact';
 import { ReleaseJson, schemaSql } from '../compiler/artifact/index.ts';
@@ -621,6 +622,15 @@ export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (
 			for (const template of foreign)
 				yield* delegate(template, options.check ? ['lock', '--check'] : ['lock']);
 			const drifted: string[] = [];
+			// every bunfig carries this release's first-party set; the repo root's only on an unfiltered run, so a
+			// delegated release (filtered, its root a link to this one's) never writes it
+			const bunfig = Effect.fnUntraced(function* (file: string, label: string) {
+				const current = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : undefined;
+				if (current === FIRST_PARTY_BUNFIG) return;
+				if (options.check) drifted.push(`${label}: bunfig.toml differs from FIRST_PARTY_BUNFIG`);
+				else yield* fs.writeFileString(file, FIRST_PARTY_BUNFIG);
+			});
+			if (options.filter === undefined) yield* bunfig(path.join(root, 'bunfig.toml'), 'repo root');
 			const resolution = yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-lock-shared-' });
 			// network-bound resolutions sharing one store and metadata cache
 			yield* Effect.forEach(
@@ -636,6 +646,7 @@ export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (
 						);
 					else if (!options.check && tooled !== manifest)
 						yield* fs.writeFileString(manifestPath, tooled);
+					yield* bunfig(path.join(template.directory, 'bunfig.toml'), template.slug);
 					const committedPath = path.join(template.directory, 'bun.lock');
 					const resolved = yield* resolveLockfile(template, run, resolution);
 					const committed = (yield* fs.exists(committedPath))
@@ -914,7 +925,8 @@ const checkCommand = Command.make(
 );
 /**
  * `bolt templates lock`: writes each template's pinned Bolt toolchain set (from that release's published
- * `toolchain.json`) into its `package.json` and re-resolves its `bun.lock`. Run only when moving dependencies; with
+ * `toolchain.json`) into its `package.json`, `FIRST_PARTY_BUNFIG` into its and the repo root's `bunfig.toml`, and
+ * re-resolves its `bun.lock`. Run only when moving dependencies; with
  * `--check` (CI) it writes nothing and fails on drift. Exit 0 ok, 2 on drift or a failed resolution.
  */
 const lockCommand = Command.make(
@@ -924,7 +936,7 @@ const lockCommand = Command.make(
 			Flag.withDescription('one template directory or handle; every template when absent')
 		),
 		check: boolean('check').pipe(
-			Flag.withDescription('write nothing; fail when a package.json or bun.lock differs from its resolution')
+			Flag.withDescription('write nothing; fail when a package.json, bunfig.toml or bun.lock differs from its resolution')
 		)
 	},
 	({ filter, check }) =>

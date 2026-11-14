@@ -1,6 +1,7 @@
 import { it } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path, Schema } from 'effect';
+import { FIRST_PARTY_BUNFIG } from '@norbital-ai/host-api';
 import { describe, expect } from 'vitest';
 import {
 	actualCounts,
@@ -183,6 +184,28 @@ describe('bolt templates', () => {
 				['older', ['lock', '--check']],
 				['older', ['publish', `--out=${root}/out`]]
 			]);
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
+	it.live('fails on a repo root bunfig.toml that drifts from FIRST_PARTY_BUNFIG, and writes it', () =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const path = yield* Path.Path;
+			const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-template-bunfig-' });
+			yield* template(root, 'older', { key: 'norbital_older' }, '0.0.1');
+			const delegate = () => Effect.succeed('');
+			const file = path.join(root, 'bunfig.toml');
+			yield* fs.writeFileString(
+				file,
+				FIRST_PARTY_BUNFIG.replace('"@norbital-ai/host-api", ', '')
+			);
+			expect(
+				(yield* lockTemplates({ root, check: true }, delegate).pipe(Effect.flip)).message
+			).toContain('repo root: bunfig.toml differs from FIRST_PARTY_BUNFIG');
+			// a filtered run is a delegated release's: it leaves the root alone
+			yield* lockTemplates({ root, filter: 'older', check: true }, delegate);
+			yield* lockTemplates({ root, check: false }, delegate);
+			expect(yield* fs.readFileString(file)).toBe(FIRST_PARTY_BUNFIG);
+			yield* lockTemplates({ root, check: true }, delegate);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.live(

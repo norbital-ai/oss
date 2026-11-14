@@ -390,8 +390,8 @@ export const operand_value = (operand: Var, authority: Authority): Json => {
 
 /**
  * A model a read-only remote sync owns (a sync with `read` and no `write`): its rows come from that sync, so
- * every other writer, administrators included, changes only its local fields (its `update.columns`) and never creates
- * or deletes one. A read+write sync leaves the fields editable (each edit reaches the outbox).
+ * every other writer, administrators included, changes only its local fields (`update` columns outside `create`, which
+ * only the sync writes) and never creates or deletes one. A read+write sync leaves the fields editable (each edit reaches the outbox).
  */
 export function sync_owned(
 	m: EngineManifest,
@@ -400,6 +400,9 @@ export function sync_owned(
 	const spec = m.exposures[model];
 	for (const [name, s] of Object.entries(spec?.syncs ?? {}))
 		if (s.with !== 'file' && s.read === true && s.write !== true)
-			return { sync: `${model}.sync.${name}`, local: spec?.update?.columns[model] ?? [] };
+			return {
+				sync: `${model}.sync.${name}`,
+				local: (spec?.update?.columns[model] ?? []).filter((f) => !(spec?.create?.columns[model] ?? []).includes(f))
+			};
 	return undefined;
 }

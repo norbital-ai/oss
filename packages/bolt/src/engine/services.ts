@@ -134,8 +134,8 @@ export type SyncPage = {
 	readonly fields: readonly string[];
 	/** Stored rows this page deletes (`$deleted`, or a closed snapshot's unseen rows). */
 	readonly deletes: readonly string[];
-	/** Pieces after `allp`: the cursor compare-and-set, `sys_sync_row` id map and `$version` stamps, inbox marks. */
-	readonly pieces: (chain: Chain) => void;
+	/** Pieces after `allp` (`Commit.pieces`): the cursor compare-and-set, `sys_sync_row` id map and `$version` stamps, inbox marks. */
+	readonly pieces: (chain: Chain, rows: string) => void;
 };
 /** Where a planned act goes: every act is planned into a batch's `sink`; `pending` rows are readable as refs. */
 export type ActMode = {
@@ -441,6 +441,11 @@ export type RunsShape = {
 		authority: Authority,
 		id: string
 	) => Effect.Effect<Option.Option<RunView>, EngineError>;
+	/**
+	 * When a claim next has work: the earliest queued run or waiting deadline whose automation has room, or the
+	 * earliest running lease to run out (a crashed run's reclaim). `null`: nothing will be due.
+	 */
+	readonly next: Effect.Effect<string | null, EngineError>;
 	/** Every cron the manifest declares (automations' and remote syncs' periodic reads); the host's clock computes their slots. */
 	readonly crons: Effect.Effect<readonly CronEntry[]>;
 	/** Runs cron `id` for `slot` (an ISO minute), keyed by `(id, slot)`; the run writes its `sys_run` row only with its first effect. */

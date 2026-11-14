@@ -280,6 +280,7 @@ export const RunsLive = Layer.effect(
 			park: parking.park,
 			view,
 			stop,
+			next,
 			crons: Effect.succeed(crons),
 			fire
 		};

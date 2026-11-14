@@ -79,6 +79,8 @@ export const SyncData = Schema.Struct({
 	]))),
 	schema: Schema.optionalKey(ModelFields), context: Schema.optionalKey(ModelFields),
 	every: Schema.optionalKey(Schema.String), partitions: Schema.optionalKey(Schema.String),
+	/** A remote sync's: the policies its pages are written as. */
+	policies: Schema.optionalKey(Schema.Array(Schema.String)),
 	read: ModelMarker, write: ModelMarker
 });
 
@@ -154,6 +156,7 @@ const SourceModelData = Schema.Struct({
 		]))),
 		schema: Schema.optionalKey(ModelFields), context: Schema.optionalKey(ModelFields),
 		every: Schema.optionalKey(Schema.String), partitions: Schema.optionalKey(Schema.String),
+		policies: Schema.optionalKey(Schema.Array(Schema.String)),
 		read: Schema.optionalKey(Schema.Unknown), write: Schema.optionalKey(Schema.Unknown)
 	})))
 });
@@ -358,6 +361,7 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 						...(x.context === undefined ? {} : { context: x.context }),
 						...(x.every === undefined ? {} : { every: x.every }),
 						...(x.partitions === undefined ? {} : { partitions: x.partitions }),
+						...(x.policies === undefined ? {} : { policies: x.policies }),
 						...(x.read === undefined ? {} : { read: true }),
 						...(x.write === undefined ? {} : { write: true })
 					}))

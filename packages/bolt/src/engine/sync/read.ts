@@ -245,7 +245,7 @@ export function makeRead(e: SyncEngine) {
 			);
 		return { ...next, version: state.version + 1 };
 	});
-	/** A page that writes rows: one act on the sync's model, its state pieces in the same statement. */
+	/** A page that writes rows: one act on the sync's model, its state pieces in the act's (last) statement. */
 	const write = Effect.fn('Syncs.write')(function* (
 		x: Session,
 		partition: string,
@@ -261,7 +261,7 @@ export function makeRead(e: SyncEngine) {
 		// The cursor compare-and-set owns page deduplication; a fresh plan must not replay a prior conflict receipt.
 		const key = JSON.stringify(['sync', s.name, x.inst.id, partition, state.version, yield* uuid(e.crypto)]);
 		const fields = [...new Set(upserts.flatMap((row) => Object.keys(row).filter((k) => k !== 'id')))];
-		const pieces = (c: Chain) => {
+		const pieces = (c: Chain, rows: string) => {
 			statePieces(
 				c,
 				x,
@@ -272,7 +272,7 @@ export function makeRead(e: SyncEngine) {
 				fx,
 				GATED,
 				(record) =>
-					`(SELECT a.revision FROM allp a WHERE a.c = ${c.p(s.model)} AND a.id = ${record})`
+					`(SELECT max(a.revision) FROM ${rows} a WHERE a.c = ${c.p(s.model)} AND a.id = ${record})`
 			);
 			c.assert(
 				'(SELECT count(*) FROM sync_cursor) = 1',
@@ -778,7 +778,7 @@ export function makeRead(e: SyncEngine) {
 					inst,
 					runId,
 					yield* e.authority(
-						{ actor: syncActor(s, inst.id, runId), policies: [], admin: true },
+						{ actor: syncActor(s, inst.id, runId), policies: s.entry.policies ?? [], admin: false },
 						`sync:${s.name}:${inst.id}`
 					)
 				);
@@ -876,7 +876,7 @@ export function makeRead(e: SyncEngine) {
 			inst,
 			runId,
 			yield* e.authority(
-				{ actor: syncActor(s, inst.id, runId), policies: [], admin: true },
+				{ actor: syncActor(s, inst.id, runId), policies: s.entry.policies ?? [], admin: false },
 				`sync:${s.name}:${inst.id}`
 			)
 		);

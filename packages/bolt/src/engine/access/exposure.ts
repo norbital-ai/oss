@@ -7,7 +7,7 @@ import { relations as manifestRelations } from '../manifest.ts';
 import { nullable_of_expr, type LayerColumns } from '../../decl/model.ts';
 import { FieldsSchema } from '../../protocol/public-page.ts';
 import { SYSTEM } from '../../system/index.ts';
-import { grantedArms, historyArms, viewOutput } from './authority.ts';
+import { grantedArms, historyArms, sync_owned, viewOutput } from './authority.ts';
 import { label_paths } from '@norbital-ai/store/label';
 import { catalog_of } from './pred.ts';
 import { default_fields, type ExposureInfo, type OutputInfo } from '@norbital-ai/store';
@@ -150,14 +150,11 @@ const initialStamps = (m: EngineManifest, model: string): readonly string[] =>
 		const stamp = kind.kind === 'state' ? kind.states[kind.initial]?.stamp : undefined;
 		return stamp === undefined ? [] : [stamp];
 	});
-/** The fields a read-only remote sync writes for `model` (everything but its local `update.columns`). */
+/** The fields a read-only remote sync writes for `model` (everything but its local fields). */
 function syncFields(m: EngineManifest, model: string): readonly string[] {
-	const spec = m.exposures[model];
-	const owned = Object.values(spec?.syncs ?? {}).some(
-		(s) => s.with !== 'file' && s.read === true && s.write !== true
-	);
-	if (!owned) return [];
-	const local = spec?.update?.columns[model] ?? [];
+	const owned = sync_owned(m, model);
+	if (owned === undefined) return [];
+	const local = owned.local;
 	const fields = [
 		...Object.keys(m.models[model]?.fields ?? {}),
 		...Object.keys(m.relationships)

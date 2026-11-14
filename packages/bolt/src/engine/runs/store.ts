@@ -106,15 +106,15 @@ export const makeRunStore = Effect.fn('Runs.store')(function* (
 			return result.runs;
 		});
 	/**
-	 * When a claim next has work: the earliest queued run with room, or the earliest lease to run out. A run whose
-	 * automation has no room is no reason to wake; its turn comes when the run ahead of it settles or loses its lease.
+	 * When a claim next has work: the earliest queued run or waiting deadline with room, or the earliest lease to run
+	 * out. A run whose automation has no room is no reason to wake; its turn comes when the run ahead of it settles or
+	 * loses its lease (a crashed one: at its lease's end).
 	 */
 	const next = Effect.gen(function* () {
 		const c = new Chain();
 		return yield* db.value(Schema.NullOr(Schema.String), {
 			text: `WITH busy AS (${busy}) SELECT least(
-				(SELECT min(q.due_at) FROM sys_run q LEFT JOIN busy b ON b.automation = q.automation WHERE q.state = 'queued' AND ${room(c, 'q')} > 0),
-				(SELECT min(due_at) FROM sys_run WHERE state = 'waiting' AND due_at < 'infinity'),
+				(SELECT min(q.due_at) FROM sys_run q LEFT JOIN busy b ON b.automation = q.automation WHERE q.state IN ('queued', 'waiting') AND q.due_at < 'infinity' AND ${room(c, 'q')} > 0),
 				(SELECT min(started_at) FROM sys_run WHERE state = 'running') + interval '${RUN_LEASE_MS} milliseconds')::text AS next`,
 			params: c.params
 		});

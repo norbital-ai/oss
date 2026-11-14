@@ -285,8 +285,8 @@ export function makeDeliver(e: SyncEngine) {
 			today: bindings.today,
 			actor,
 			writer: {
-				// the holder a sync page writes as (`syncActor`, admin): its rollback's effects run as the same
-				starter: { actor, policies: [], admin: true, platform: true },
+				// the holder a sync page writes as: its rollback's effects run as the same
+				starter: { actor, policies: sync.entry.policies ?? [], admin: false },
 				actor: actor_ref(actor),
 				depth: 0
 			},

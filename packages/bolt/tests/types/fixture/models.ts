@@ -46,6 +46,7 @@ export const customers = model('customers', {
 // two ways with the ERP: `read` pulls changed customers, `write` sends each committed change
 export const customers_crm = sync('customers', 'crm', {
 	with: 'erp',
+	policies: ['sales_rep'],
 	every: '1h',
 	read: function* ({ cursor }, ctx) {
 		const page = yield* ctx.request({
@@ -192,6 +193,7 @@ export const orders = model('orders', {
 // one way out: an ordered order is submitted to the ledger
 export const orders_ledger = sync('orders', 'ledger', {
 	with: 'kingdee',
+	policies: ['sales_rep'],
 	write: function* ({ op, row, $id }, ctx) {
 		if (op === 'delete') return null;
 		yield* ctx.request({
@@ -297,6 +299,7 @@ export const notices = model('notices', {
 // one way in: the mailbox's messages are its deliveries
 export const notices_mail = sync('notices', 'mail', {
 	with: 'support_mail',
+	policies: ['sales_rep'],
 	read: function* ({ deliveries }) {
 		return {
 			rows: deliveries.flatMap((d): readonly SyncRow<'notices'>[] =>
@@ -393,6 +396,7 @@ export const products = model('products', {
 // one way in from the ledger database, every 15 minutes by default
 export const products_ledger = sync('products', 'ledger', {
 	with: 'kingdee',
+	policies: ['sales_rep'],
 	read: function* (_, ctx) {
 		const { rows } = yield* ctx.request({
 			op: 'read',
@@ -430,6 +434,7 @@ export const entries = model('entries', {
 // the calendar driver pushes events; one cursor per chosen calendar
 export const entries_calendar = sync('entries', 'calendar', {
 	with: 'calendar',
+	policies: ['sales_rep'],
 	partitions: 'calendars',
 	read: function* ({ items, partition }) {
 		return {

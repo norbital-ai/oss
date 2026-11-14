@@ -107,6 +107,39 @@ layer(ScriptLive, { excludeTestServices: true })('release files and archives', (
 			assert.match(error.message, /is not a JSON object/);
 		})
 	);
+	it.effect('fails on a public package outside FIRST_PARTY_PACKAGES or a renamed one', () =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const root = yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-first-party-test-' });
+			const manifest = (directory: string, fields: object) =>
+				Effect.gen(function* () {
+					yield* fs.makeDirectory(path.join(root, 'packages', directory), { recursive: true });
+					yield* fs.writeFileString(
+						path.join(root, 'packages', directory, 'package.json'),
+						JSON.stringify({ version: '0.0.1', ...fields })
+					);
+				});
+			yield* fs.writeFileString(path.join(root, 'package.json'), '{"version":"0.0.1"}');
+			for (const directory of publicPackageDirectories)
+				yield* manifest(directory, { name: `@norbital-ai/${directory}` });
+			yield* manifest('internal', { name: '@norbital-ai/internal', private: true });
+			assert.equal(
+				(yield* readPublicPackageEntries(root)).length,
+				publicPackageDirectories.length
+			);
+			yield* manifest('extra', { name: '@norbital-ai/extra' });
+			assert.match(
+				(yield* Effect.flip(readPublicPackageEntries(root))).message,
+				/packages\/extra is public but not in @norbital-ai\/host-api FIRST_PARTY_PACKAGES/
+			);
+			yield* fs.remove(path.join(root, 'packages', 'extra'), { recursive: true });
+			yield* manifest('ui', { name: '@norbital-ai/renamed' });
+			assert.match(
+				(yield* Effect.flip(readPublicPackageEntries(root))).message,
+				/Unexpected public package name in packages\/ui/
+			);
+		})
+	);
 	it.effect('refuses a registry version with missing integrity before requesting an archive', () =>
 		Effect.gen(function* () {
 			const locals = yield* readPublicPackageEntries(repositoryRoot);

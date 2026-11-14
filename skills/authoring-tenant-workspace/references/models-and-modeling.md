@@ -77,10 +77,12 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 Each sync is its own `+<sync>.sync.ts` beside the model's `+model.ts`: `sync('<model>', '<sync>', { … })`. Discover: `import('@norbital-ai/bolt').RemoteSync`, `FileSyncCtx`.
 
+- A remote sync declares `policies`: each page it writes is admitted, planned and its effects run as the reserved system identity holding exactly those, never as admin; a refused change rolls back the same way. Choose the narrowest policy granting what it writes; none may scope by `actor.*` other than `actor.instance`. A read-only synced model declares the synced fields in `create` (and `update`); its `update` fields outside `create` are the local ones others may edit.
+
 - Remote: `with: '<integration>'`, optional `every` and partitions, inline `read` and `write`. A read returns rows (`$id`, `$version`, `$deleted`), cursor and more; only returned source fields sync; page progress commits atomically. A write returns the acknowledged id and version, or null for local changes.
 - The engine owns no-echo, ordering, idempotency, retries, approval timing, conflict rollback and dead letters. A failing read rests per connection, one minute doubling to one hour, until a manual start, connection change or good read.
 - Local changes fan out to every active account of that integration, including changes imported from another account. Do not invent a per-row connection selector.
-- File: `with: 'file'`, `parser`, optional schema and context. Reads keep the caller's scope and outputs; remote syncs read as trusted workspace. Context never elevates authority.
+- File: `with: 'file'`, `parser`, optional schema and context. Reads and imports keep the caller's scope, outputs and grants; remote bodies read as trusted workspace. Context never elevates authority.
 - A file read gets records with `$at` positions and returns rows plus findings. A write returns records or `{ document: { html }, name }`. One refusal rolls back the file. A `txt` export concatenates columns with no separator.
 - Custom parsers declare an IANA `type`, extensions and an inline generator. Remote data never uses a parser.
 

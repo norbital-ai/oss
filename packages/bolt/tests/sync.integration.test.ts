@@ -32,7 +32,7 @@ const manifest: EngineManifest = {
 			create: { columns: { contacts: ['name', 'note'] } },
 			update: { columns: { contacts: ['name', 'note'] } },
 			delete: {},
-			syncs: { crm: { with: 'crm', read: true, write: true } }
+			syncs: { crm: { with: 'crm', policies: ['crm_sync'], read: true, write: true } }
 		}
 	},
 	integrations: {
@@ -40,6 +40,10 @@ const manifest: EngineManifest = {
 	},
 
 	policies: {
+		crm_sync: {
+			description: 'Writes synced contacts',
+			grants: { contacts: { outputs: { default: {} }, create: {}, update: {}, delete: {} } }
+		},
 		annotator: {
 			description: 'Annotates a queried contact',
 			grants: { contacts: { outputs: { default: {} }, update: {} } }
@@ -249,7 +253,7 @@ describe('durable model sync', () => {
 				exposures: { contacts: {
 					outputs: { default: { contacts: { fields: 'all' } } },
 					create: { columns: { contacts: ['name', 'note', 'visits'] } },
-					syncs: { crm: { with: 'crm', read: true, write: true } }
+					syncs: { crm: { with: 'crm', policies: ['crm_sync'], read: true, write: true } }
 				} }
 			};
 			const f = yield* setupFor(typed, `export default { model: { contacts: { bodies: { syncs: { crm: {
@@ -319,7 +323,7 @@ describe('durable model sync', () => {
 			expect(f.accepted.size).toBe(0);
 		}))
 	);
-	it.live('a sync page is admitted, planned and its effects queued as one holder: the sync, an admin outside any run', () =>
+	it.live('a sync page is admitted, planned and its effects queued as one holder: the system identity holding the sync\'s policies', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const contacts = manifest.exposures.contacts;
 			if (contacts === undefined) throw new Error('Missing contact exposure');
@@ -335,24 +339,56 @@ describe('durable model sync', () => {
 			expect(runs).toMatchObject([{
 				depth: 0,
 				starter: {
-					admin: true,
-					platform: true,
-					policies: [],
+					admin: false,
+					policies: ['crm_sync'],
 					actor: { kind: 'system', by: { sync: 'contacts.sync.crm', instance: 'crm' } }
 				}
 			}]);
-			// any other holder would admit as one authority and queue effects as another
-			const now = f.t.clock.now(), key = randomUUID();
-			const member = yield* Context.get(f.context, Identity).authority(f.t.admin);
-			const page = (authority: typeof member) => Context.get(f.context, Callables).acts({
-				name: 'contacts.upsert', from: 'Server', key, issuedAt: now, invocationId: key, authority,
-				bindings: { now, today: now.slice(0, 10), tz: 'UTC' },
-				acts: [{ model: 'contacts', verb: 'upsert', on_conflict: 'update', input: [{ name: 'Not a sync' }] }],
-				sync: { sync: 'contacts.sync.crm', instance: 'crm', fields: ['name'], deletes: [], pieces: () => {} }
-			}).pipe(Effect.flip);
-			expect(yield* page({ ...member, admin: false })).toMatchObject({ code: 'invalid' });
-			expect(yield* page({ ...member, run: { depth: 0, holder: { actor: member.actor, policies: [], admin: true } } }))
-				.toMatchObject({ code: 'invalid' });
+		}))
+	);
+	it.live('a large page commits as bounded statements of one transaction, its cursor and id map in the last', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const gates: number[] = [];
+			let stale = false;
+			const f = yield* setupFor(manifest, source, (db) => ({
+				...db,
+				transaction: (batch) => Effect.gen(function* () {
+					// every statement of a split act opens or follows its gate; one statement names none
+					gates.push(batch.statements.filter((statement) => statement.text.includes("'bolt.gate'")).length);
+					if (stale) yield* db.write({ text: 'UPDATE sys_sync SET version = version + 1', params: [] });
+					return yield* db.transaction(batch);
+				})
+			}));
+			// within a read's row cap, past a statement's bytes
+			const page = (prefix: string) => f.page({
+				rows: Array.from({ length: 900 }, (_, i) => ({ $id: `${prefix}-${i}`, $version: '1', name: `${prefix} ${i}`, note: 'x'.repeat(2_000) })),
+				cursor: `${prefix}-cursor`,
+				more: false
+			});
+			const state = (prefix: string) => f.t.db.value(
+				Schema.Struct({ rows: Schema.Number, acked: Schema.Number, transactions: Schema.Number, cursor: Schema.Json }),
+				{
+					text: `SELECT jsonb_build_object('rows', (SELECT count(*)::int FROM contacts WHERE name LIKE $1::text || ' %'),
+					'acked', (SELECT count(*)::int FROM contacts c JOIN sys_sync_row r ON r.record = c.id::text
+						WHERE c.name LIKE $1::text || ' %' AND r.remote_id = $1::text || '-' || substr(c.name, length($1::text) + 2) AND r.acked_revision = c.revision),
+					'transactions', (SELECT count(DISTINCT x)::int FROM (SELECT xmin::text AS x FROM contacts WHERE name LIKE $1::text || ' %'
+						UNION SELECT xmin::text FROM sys_sync_row WHERE remote_id LIKE $1::text || '-%') t),
+					'cursor', (SELECT cursor FROM sys_sync WHERE sync = 'contacts.sync.crm' AND instance = 'crm'))`,
+					params: [prefix]
+				}
+			);
+			page('bulk');
+			yield* f.t.syncs.read('contacts.sync.crm', { instance: 'crm' });
+			expect(gates).toContain(2);
+			// the last statement's id map acknowledges the first statement's rows at the revision they hold
+			expect(yield* state('bulk')).toEqual({ rows: 900, acked: 900, transactions: 1, cursor: 'bulk-cursor' });
+
+			// the cursor compare-and-set fails in the last statement: the earlier statement's rows go with it
+			stale = true;
+			page('late');
+			yield* f.t.syncs.read('contacts.sync.crm', { instance: 'crm' }).pipe(Effect.exit);
+			stale = false;
+			expect(yield* state('late')).toEqual({ rows: 0, acked: 0, transactions: 0, cursor: 'bulk-cursor' });
 		}))
 	);
 	it('compares versions exactly and caps retry delays', () => {
@@ -584,7 +620,7 @@ describe('durable model sync', () => {
 						contacts: {
 							...manifest.exposures.contacts,
 							outputs: { default: { contacts: { fields: 'all' } } },
-							syncs: { crm: { with: 'crm', partitions: 'areas', read: true } }
+							syncs: { crm: { with: 'crm', policies: ['crm_sync'], partitions: 'areas', read: true } }
 						}
 					},
 					integrations: {

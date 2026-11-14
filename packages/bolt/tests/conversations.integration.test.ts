@@ -76,7 +76,7 @@ const manifest = Result.getOrThrow(
 			sent_emails: {
 				outputs: { default: { sent_emails: { fields: 'all' } } },
 				create: { columns: { sent_emails: ['to', 'subject', 'body'] } },
-				syncs: { mail: { with: 'customer_notices', read: true, write: true } },
+				syncs: { mail: { with: 'customer_notices', policies: ['mail_sync'], read: true, write: true } },
 				update: {
 					columns: {
 						sent_emails: [
@@ -92,7 +92,10 @@ const manifest = Result.getOrThrow(
 			},
 			supplier_mail: {
 				outputs: { default: { supplier_mail: { fields: 'all' } } },
-				syncs: { inbox: { with: 'mail_import', read: true } }
+				create: { columns: { supplier_mail: ['message_id', 'subject', 'files'] } },
+				update: { columns: { supplier_mail: ['message_id', 'subject', 'files'] } },
+				delete: {},
+				syncs: { inbox: { with: 'mail_import', policies: ['inbox_sync'], read: true } }
 			}
 		},
 		integrations: {
@@ -112,6 +115,11 @@ const manifest = Result.getOrThrow(
 				grants: {
 					sent_emails: { outputs: { default: {} }, create: {}, update: { moves: 'all' } }
 				}
+			},
+			mail_sync: { description: 'Records deliveries', grants: { sent_emails: { outputs: { default: {} }, update: {} } } },
+			inbox_sync: {
+				description: 'Files supplier mail',
+				grants: { supplier_mail: { outputs: { default: {} }, create: {}, update: {}, delete: {} } }
 			}
 		},
 		teams: {

@@ -516,8 +516,9 @@ interface BodiesFor<K> {
 		 * Work that follows a committed write: queued by the write's own statement, run after the commit once per batch as
 		 * the durable, retried run `<model>.effect.create`. It runs with the writer's authority (the writer's policies, never
 		 * a policy of its own); its rows are the root fields of the writer's output (`default` when held, else the first
-		 * named output held; a writer with no read output of the model sees its rows as stored). Approval moves call it
-		 * with no changes and `ctx.event.kind === 'approval'`: check `ctx.event.kind` before reading `changes`. A held write's
+		 * named output held; a writer with no read output of the model sees its rows as stored). The request, a resubmit
+		 * and the decision that makes it stand call it with no changes and `ctx.event.kind === 'approval'`: check
+		 * `ctx.event.kind` before reading `changes`; a step's approval, changes asked, reject and withdraw do not call it. A held write's
 		 * effects wait for final approval and are discarded on rejection. Writes it makes may queue further effects; one
 		 * past `LIMITS.writeDepth` (8) is refused.
 		 */

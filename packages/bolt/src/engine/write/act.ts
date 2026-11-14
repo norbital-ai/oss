@@ -30,7 +30,7 @@ import { LIMITS, utf8Bytes } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import { LOST_OUTCOME } from './result.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
-import { admitMove, readsAny } from '../access/authority.ts';
+import { admitMove, readsAny, sync_owned } from '../access/authority.ts';
 import { catalog_of } from '../access/pred.ts';
 
 import { read_history } from '../query/history.ts';
@@ -1872,12 +1872,6 @@ const ENGINE_TRANSFORMS: {
 		return instanceTransform(m, items, (id) => pre.get(k('sys_integration', id)), active);
 	})
 };
-/** Read-only syncs own their model; caller updates are limited to its declared local columns. */
-export function readOnlySync(m: EngineManifest, model: string): string | undefined {
-	return Object.entries(m.exposures[model]?.syncs ?? {}).find(
-		([, sync]) => sync.with !== 'file' && sync.read === true && sync.write !== true
-	)?.[0];
-}
 function syncOwnership(m: EngineManifest, r: ActRequest, items: readonly Item[]): Outcome | null {
 	const { sync } = r.mode;
 	for (const { change: c } of items) {
@@ -1898,14 +1892,13 @@ function syncOwnership(m: EngineManifest, r: ActRequest, items: readonly Item[])
 				]);
 			continue;
 		}
-		const owner = readOnlySync(m, c.model);
-		if (owner === undefined) continue;
+		const owned = sync_owned(m, c.model);
+		if (owned === undefined) continue;
 		if (c.op !== 'update')
-			return refused('forbidden', `${c.model} is written by its sync ${owner}.`, c.path);
-		const local = m.exposures[c.model]?.update?.columns[c.model] ?? [];
-		const field = written.find((field) => !local.includes(field));
+			return refused('forbidden', `${c.model} is written by its sync ${owned.sync}.`, c.path);
+		const field = written.find((field) => !owned.local.includes(field));
 		if (field !== undefined)
-			return refused('forbidden', `'${field}' of ${c.model} is written by its sync ${owner}.`, [
+			return refused('forbidden', `'${field}' of ${c.model} is written by its sync ${owned.sync}.`, [
 				...c.path,
 				field
 			]);

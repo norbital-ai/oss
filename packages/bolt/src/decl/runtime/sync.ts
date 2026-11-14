@@ -16,6 +16,7 @@ import type {
 	InstanceId,
 	IntegrationName,
 	AuthoredModelName,
+	PolicyName,
 	Row,
 	WritableField
 } from '../names.ts';
@@ -280,7 +281,8 @@ type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } |
  * Active connections initialize existing rows in durable batches. Rows held for approval wait until the request
  * stands or closes; initialization never exports provisional values.
  *
- * **Fields.** The fields `read` returns are the synced fields. A read-only sync locks them for everyone else; with
+ * **Fields.** The fields `read` returns are the synced fields; the model's `create` and `update` declare them, so its
+ * `policies` can grant them. A read-only sync locks them (its model's `create` fields) for everyone else; with
  * `write` they stay editable and every edit is queued. An imported change is sent to the other active connections,
  * and every request in `write` carries `Idempotency-Key`. A conversation integration's `write` sends
  * with `ctx.send` and returns `{ $id: messageId }`; the delivery reports reach `read` as `deliveries`.
@@ -312,6 +314,7 @@ type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } |
  * // src/data/model/customers/+crm.sync.ts
  * export default sync('customers', 'crm', {
  * 	with: 'crm',
+ * 	policies: ['crm_sync'],
  * 	read: function* ({ cursor }, ctx) {
  * 		const page = yield* ctx.request({ method: 'GET', path: '/customers', query: { since: String(cursor ?? '') }, output: { kind: 'json' } });
  * 		return { rows: toRows(page), cursor: nextCursor(page), more: hasMore(page) };
@@ -327,6 +330,12 @@ type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } |
  */
 export type RemoteSync<M, S extends string = string, X = SyncData<M, S>, D = DefOf<X>> = {
 	with: IntegrationName;
+	/**
+	 * The policies every page the sync writes holds (its reads, a refused change's rollback): it is admitted, planned and
+	 * its effects run as the reserved system identity with exactly these, never as admin. `bolt check` refuses none, an
+	 * unknown one, or one scoped by `actor.*` other than `actor.instance` (the instance it reads or writes).
+	 */
+	policies: NonEmpty<PolicyName>;
 	/**
 	 * How often each connection reads (default `'15min'`). Over a conversation or `items` driver, hints bring the news, so
 	 * a healthy sync reads once a day as a backstop; a failing one keeps its own shorter rest.
@@ -346,6 +355,7 @@ interface SyncFor<X> {
 	context?: Inputs<X, 'context'>;
 	every?: Duration;
 	partitions?: string;
+	policies?: NonEmpty<PolicyName>;
 	read?: unknown;
 	write?: unknown;
 }
@@ -357,6 +367,7 @@ export type SyncLiteral = {
 	context?: InputFields;
 	every?: string;
 	partitions?: string;
+	policies?: readonly string[];
 	read?: GeneratorBody;
 	write?: GeneratorBody;
 };
@@ -384,7 +395,8 @@ const guest = (body: GeneratorBody | undefined) => (body === undefined ? undefin
  * `src/data/model/<…>/<model>/+<sync>.sync.ts`, beside its model's `+model.ts`: how that model's rows are exchanged with a file
  * (`with: 'file'`: the native Import, Download template and Export toolbar actions from its `parser`/`read`/`write`) or
  * with another system through integration `with` (runs on `every`). `model` must be the leaf folder's name and `name`
- * the file's. `context` is input, never authority; only returned source fields change. Run by `ctx.sync`, a native
+ * the file's. A file's rows enter as the member importing; a remote sync's pages are written as the reserved system
+ * identity holding its `policies`, never as admin. `context` is input, never authority; only returned source fields change. Run by `ctx.sync`, a native
  * control or the sync's schedule, never by a page script.
  * @returns Declaration metadata and attached bodies. Calling sync does not read or write records.
  * @param model The model's name: its leaf folder.

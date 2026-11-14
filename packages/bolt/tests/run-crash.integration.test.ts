@@ -70,3 +70,52 @@ it.live('a crashed run is left running, then its lease reclaims and reruns it', 
 		})
 	)
 );
+
+// a run queued behind a crashed one (concurrency 1) is not due at the crash's instant: it waits for the crashed run's lease
+it.live('a run behind a crashed run waits for its lease, then both run', () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const t = Context.get(
+				yield* Layer.build(
+					TestWorkspace.layer({ manifest, guest: yield* program(guestSource), now: '2026-09-25T10:00:00.000Z' })
+				),
+				TestWorkspace
+			);
+			const ops = yield* t.as(t.member(['ops']));
+			const automation: string = 'note';
+			const first = yield* ops.run(automation, {}, JobResult);
+			// the second queues a second later, so the claim takes the first
+			t.clock.advance('1s');
+			const second = yield* ops.run(automation, {}, JobResult);
+			if (first.kind !== 'committed' || second.kind !== 'committed') throw new Error('note was not admitted');
+			const states = t.db.rows(Schema.Struct({ id: Schema.String, state: Schema.String }), {
+				text: 'SELECT id::text AS id, state FROM sys_run WHERE id::text IN (SELECT jsonb_array_elements_text($1::jsonb))',
+				params: [[first.output.id, second.output.id]]
+			});
+			const stateOf = (rows: readonly { id: string; state: string }[], id: string) =>
+				rows.find((row) => row.id === id)?.state;
+			yield* t.crash(first.output.id);
+			// nothing is due: the queued run has no room until the crashed one's lease runs out
+			expect((yield* t.run_due()).failed).toEqual([]);
+			const held = yield* states;
+			expect(stateOf(held, first.output.id)).toBe('running');
+			expect(stateOf(held, second.output.id)).toBe('queued');
+			// a waiting run past its deadline with no room is no reason to wake either
+			yield* t.db.write({
+				text: `UPDATE sys_run SET state = 'waiting', due_at = $2::timestamptz WHERE id = $1`,
+				params: [second.output.id, '2026-09-25T09:59:00.000Z']
+			});
+			expect((yield* t.run_due()).failed).toEqual([]);
+			expect(stateOf(yield* states, second.output.id)).toBe('waiting');
+			yield* t.db.write({
+				text: `UPDATE sys_run SET state = 'queued' WHERE id = $1`,
+				params: [second.output.id]
+			});
+			t.clock.advance('31min');
+			expect((yield* t.run_due()).failed).toEqual([]);
+			const ran = yield* states;
+			expect(stateOf(ran, first.output.id)).toBe('succeeded');
+			expect(stateOf(ran, second.output.id)).toBe('succeeded');
+		})
+	)
+);

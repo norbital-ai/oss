@@ -193,7 +193,11 @@ describe('bolt check', () => {
 			"trials: search.indexes.mismatched: vector 'lab' is a vector field of dim 4"
 		]);
 	});
-	it("checks a sync: its definition, a file's parsers, a remote's cadence and partitions, and runtime account fanout (sync/*)", () => {
+	it("checks a sync: its definition, a file's parsers, a remote's cadence, partitions and policies, and runtime account fanout (sync/*)", () => {
+		const scoped = (v: string) => ({
+			description: 'Scoped customers',
+			grants: { customers: { outputs: { default: { scopes: { customers: { name: { eq: { var: v } } } } } } } }
+		});
 		const m: EngineManifest = {
 			...emptyManifest,
 			models: {
@@ -222,6 +226,11 @@ describe('bolt check', () => {
 					configuration: { calendars: { kind: 'text', many: true } }
 				}
 			},
+			policies: {
+				sync: { description: 'Sync', grants: { customers: { outputs: { default: {} } } } },
+				instance: scoped('actor.instance'),
+				own: scoped('actor.id')
+			},
 			exposures: {
 				customers: {
 					outputs: { default: { customers: { fields: 'all' } } },
@@ -232,16 +241,20 @@ describe('bolt check', () => {
 							parser: ['numbers', { type: 'application/vnd.intu.qfx', extensions: ['ofx'] }],
 							every: '1h'
 						},
-						crm: { with: 'crm', every: 'often', read: true, write: true },
-						mirror: { with: 'crm', read: true },
-						erp: { with: 'erp', read: true }
+						crm: { with: 'crm', policies: ['sync'], every: 'often', read: true, write: true },
+						mirror: { with: 'crm', policies: ['sync', 'instance'], read: true },
+						erp: { with: 'erp', policies: ['sync'], read: true },
+						upload: { with: 'file', parser: ['csv'], policies: ['sync'] },
+						bare: { with: 'crm', read: true },
+						ghost: { with: 'crm', policies: ['ghost'], read: true },
+						mine: { with: 'crm', policies: ['own'], read: true }
 					}
 				},
 				events: {
 					outputs: { default: { events: { fields: 'all' } } },
 					syncs: {
-						calendar: { with: 'calendar', partitions: 'calendars', read: true, write: true },
-						typo: { with: 'calendar', partitions: 'calendar', read: true }
+						calendar: { with: 'calendar', policies: ['sync'], partitions: 'calendars', read: true, write: true },
+						typo: { with: 'calendar', policies: ['sync'], partitions: 'calendar', read: true }
 					}
 				}
 			}
@@ -254,6 +267,10 @@ describe('bolt check', () => {
 			"sync/parser customers.ofx: a custom parser lists its file extensions ('.ofx')",
 			"sync/every customers.crm: 'often' is not a duration ('15min', '1h')",
 			"sync/with customers.erp: with 'erp' is 'file' or an integration definition",
+			"sync/file customers.upload: a file's rows enter as the member importing; policies are a remote sync's",
+			'sync/policies customers.bare: policies: name at least one policy its pages are written as',
+			"sync/policies customers.ghost: policies: there is no policy 'ghost'",
+			"sync/policies customers.mine: policies: 'own' scopes by actor.*; a sync's pages are written as the system identity; only actor.instance matches",
 			"sync/partitions events.typo: 'calendar' is no configuration field of 'calendar'"
 		]);
 	});

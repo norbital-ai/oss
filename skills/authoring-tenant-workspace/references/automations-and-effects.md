@@ -8,7 +8,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `i
 - Every change has `before`, `set`, `after` and `changed(...fields)`. Create has no before row; delete has no after row. Update effects run only when stored values change. Filter the batch in code.
 - It runs as the writer and holds no policy: rows are the root fields of the writer's output, and every read and write needs the writer's grants. Work needing other authority is an automation it schedules; `ctx.schedule` needs no start grant.
 - Its writes run effects one level deeper; past 8 levels the run fails `depth`.
-- Write effects held by an approval retain the frozen changes and writer; final approval releases them atomically and rejection discards them. Approval lifecycle events reach the same verb's effect with an empty change list and `ctx.event.kind === 'approval'`. Custom approval notifications use `ctx.notify` there; built-in inbox notices already exist.
+- Write effects held by an approval retain the frozen changes and writer; final approval releases them atomically and rejection discards them. The request, a resubmit and the standing decision reach the same verb's effect with an empty change list and `ctx.event.kind === 'approval'`; other decisions do not call it. Custom approval notifications use `ctx.notify` there; built-in inbox notices already exist.
 
 ## Automations
 

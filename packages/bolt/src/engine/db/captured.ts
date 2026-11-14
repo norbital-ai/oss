@@ -76,3 +76,23 @@ export function nativeCommit<A extends typeof CapturedResult.Type>(
 		return result.value;
 	}).pipe(Effect.withSpan('Bolt.nativeCommit'));
 }
+/** `nativeCommit` over several statements of one transaction (a split batch): each answer decoded, in order. */
+export function nativeCommits<A extends typeof CapturedResult.Type>(
+	transaction: RawDb['transaction'],
+	publication: LiveShape['publish'],
+	chains: readonly Chain[],
+	schema: Schema.Decoder<A>,
+	select: (c: Chain) => string
+) {
+	return Effect.gen(function* () {
+		const results = yield* transaction({ statements: chains.map((c) => c.sql(`${select(c)}, ${captureRows(c)} AS captured`)) });
+		const answers = yield* Effect.forEach(results, (rows) =>
+			Effect.flatMap(decodeOne(schema, rows), (answer) =>
+				Option.isSome(answer)
+					? Effect.succeed(answer.value)
+					: Effect.fail(BoltError.make('corrupt', 'commit', 'a native statement returned no answer')))
+		);
+		publication(answers.flatMap((answer) => answer.captured));
+		return answers;
+	}).pipe(Effect.withSpan('Bolt.nativeCommits'));
+}

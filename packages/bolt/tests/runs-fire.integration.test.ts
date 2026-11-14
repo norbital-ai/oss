@@ -46,7 +46,9 @@ const manifest = {
 		},
 		products: {
 			outputs: { default: { products: { fields: 'all' } } },
-			syncs: { erp: { with: 'erp', read: true, every: '30min' } }
+			create: { columns: { products: ['code', 'name'] } },
+			update: { columns: { products: ['code', 'name'] } },
+			syncs: { erp: { with: 'erp', policies: ['feeds'], read: true, every: '30min' } }
 		},
 		chats: {
 			outputs: { default: { chats: { fields: 'all' } } },
@@ -69,7 +71,11 @@ const manifest = {
 		cal: { description: 'Calendars', driver: 'calendar' }
 	},
 	policies: {
-		ops: { description: 'Ops', grants: { quotes: { outputs: { default: {} }, create: {} } } }
+		ops: { description: 'Ops', grants: { quotes: { outputs: { default: {} }, create: {} } } },
+		feeds: {
+			description: 'Writes synced rows',
+			grants: { products: { outputs: { default: {} }, create: {}, update: {} } }
+		}
 	},
 	automations: {
 		tidy: { description: 'Files a quote', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },

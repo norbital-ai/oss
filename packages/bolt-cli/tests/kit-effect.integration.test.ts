@@ -429,9 +429,13 @@ it.live(
 					customers: {
 						...manifest.exposures.customers,
 						syncs: {
-							remote: { with: 'calendar', partitions: 'calendars', read: true, write: true }
+							remote: { with: 'calendar', policies: ['sync'], partitions: 'calendars', read: true, write: true }
 						}
 					}
+				},
+				policies: {
+					...manifest.policies,
+					sync: { description: 'Writes synced customers', grants: { customers: { outputs: { default: {} }, create: {} } } }
 				}
 			} satisfies EngineManifest;
 			const guest =

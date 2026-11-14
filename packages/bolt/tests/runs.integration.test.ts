@@ -1099,6 +1099,31 @@ describe('re-queues, attempts and notices', () => {
 				]);
 			})
 	);
+	it.effect('a large notice batch commits as bounded statements of one transaction', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, {
+				classify: (_input, ctx) =>
+					ctx.notify(Array.from({ length: 2_500 }, (_, i) => ({ to: [{ user: 'bulk_holder' }], title: `bulk ${i}` })))
+			});
+			yield* w.db.write({
+				text: `INSERT INTO sys_user(id,name,active,kind) VALUES ('bulk_holder','Holder',true,'staff')`,
+				params: []
+			});
+			yield* w.db.write({
+				text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES ('bulk', 'classify', '{}', $1::timestamptz, 'start', 0)`,
+				params: [iso(T0)]
+			});
+			w.statements.length = 0;
+			yield* w.r.boot();
+			yield* w.until(T0 + 60000);
+			expect(w.statements.filter((statement) => statement.text.includes('INSERT INTO sys_notification'))).toHaveLength(3);
+			expect(
+				yield* w.sql(
+					`SELECT count(*)::int AS notices, count(DISTINCT xmin::text)::int AS transactions FROM sys_notification WHERE member = 'bulk_holder'`
+				)
+			).toEqual([{ notices: 2_500, transactions: 1 }]);
+		})
+	);
 });
 
 describe('run visibility and removed automation webhooks', () => {

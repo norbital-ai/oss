@@ -24,6 +24,8 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 | File sync | the importing or exporting caller |
 | Remote sync | trusted workspace |
 
+A remote sync's pages write as its `policies`; a file's rows as the member importing.
+
 ## Live and one-shot reads in a page
 
 - `ctx.query` subscribes on its first reactive read of `current`, `loading` or `error`. Identical calls share a subscription; it stops after its last reader, with 30 s grace.

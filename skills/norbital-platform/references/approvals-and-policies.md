@@ -71,7 +71,7 @@ A routed write commits at once, held by its request; `pending_approval` carries 
 - While open, held records and owned children change only through the request: current approvers while Pending, the requester in ChangesRequested. Every other writer is refused `locked`, including administrators, automations, syncs, the agent, cascades and restore. Outbound sync writes wait for approval.
 - A pending request keeps its snapshot and lock through releases.
 - Each held read row carries `$approval: { request_id, state, step, steps, requested_by }`. Use the shared approval panel and `RecordShell`. Display `team_names`; eligibility uses handles.
-- The verb's effect gets `ctx.event.kind === 'approval'` with move `request`, `approve`, `reject`, `request_changes`, `resubmit`, `supersede` or `withdraw` and no committed changes. Use `ctx.notify` for custom notices; recipients may be `requester`, `approvers`, teams, users or policies. Built-in inbox notices and counters already exist.
+- The verb's effect gets `ctx.event.kind === 'approval'` with move `request`, `resubmit`, or the final `approve` or `supersede`, and no committed changes. A step's approval, `request_changes`, `reject` and `withdraw` do not call it. Use `ctx.notify` for custom notices; recipients may be `requester`, `approvers`, teams, users or policies. Built-in inbox notices and counters already exist.
 
 ## Preview and evidence
 

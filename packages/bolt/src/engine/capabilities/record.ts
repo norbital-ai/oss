@@ -8,13 +8,13 @@ import { BoltError, from_store } from '../../protocol/errors.ts';
 import { layered, type EngineManifest } from '../manifest.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { grant_sql, type Catalog, type Pred } from '@norbital-ai/store';
-import { admitMove, readPredicates } from '../access/authority.ts';
+import { admitMove, readPredicates, sync_owned } from '../access/authority.ts';
 import { catalog_of, toPred } from '../access/pred.ts';
 import { evaluate, type EvalEnv } from '../query/eval.ts';
 import { resolverOf } from '../query/reader.ts';
 import { holders } from '../approvals/lock.ts';
 import type { Write } from '../write/commit.ts';
-import { k, opened, readOnlySync, readRows, stateField, type Probe } from '../write/act.ts';
+import { k, opened, readRows, stateField, type Probe } from '../write/act.ts';
 
 /** Whether a lock holds the row: without fields, for deletion; an update, for the fields it changes. */
 const modelLock = Effect.fnUntraced(function* (
@@ -202,11 +202,8 @@ export const record_capabilities = Effect.fn('Bolt.recordCapabilities')(function
 	}
 	const holding = yield* holders(e.db, owned, authority.actor);
 	if (holding.some((h) => !h.eligible || h.readGuarded)) restrictions.push('under_approval');
-	const local = spec?.update?.columns[model] ?? [];
-	const remote =
-		readOnlySync(m, model) === undefined
-			? []
-			: Object.keys(stored.fields).filter((field) => !local.includes(field));
+	const synced = sync_owned(m, model);
+	const remote = synced === undefined ? [] : Object.keys(stored.fields).filter((field) => !synced.local.includes(field));
 	const env: EvalEnv = { cat, bindings, authority };
 	const state = stateField(m, model);
 	const stateKind = state === undefined ? undefined : stored.fields[state];

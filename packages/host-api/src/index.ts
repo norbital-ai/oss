@@ -14,6 +14,7 @@
 // Node-only parts (signed host operations and the Node port implementations) are
 // `@norbital-ai/host-api/node`; everything here also runs inside a cell.
 export { HOST_API_VERSION, supports, type HostApiRange } from './version.ts';
+export { FIRST_PARTY_BUNFIG, FIRST_PARTY_PACKAGES } from './first-party.ts';
 export { HostApiFailure, HostDefect, HostFailure } from './failure.ts';
 export { ArtifactHeader, FounderAnswer, MintedSession, ReleaseFacts } from './answers.ts';
 export {

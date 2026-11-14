@@ -928,7 +928,8 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					status: 'WITHDRAWN',
 					closed_by: `member:${requesterId}`
 				});
-				expect((yield* f.notices()).map((n) => n.title)).toContain('approval:withdraw');
+				// a withdrawal discards the held change: the verb's effect is not called with an empty change list
+				expect((yield* f.notices()).map((n) => n.title)).not.toContain('approval:withdraw');
 				// closed: nobody decides it again, and withdrawing it again changes nothing
 				expect(yield* f.decide(request_id, 'approve')).toMatchObject({ kind: 'refused' });
 				expect(yield* f.decide(request_id, 'withdraw', f.requester)).toMatchObject({

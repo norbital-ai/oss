@@ -354,7 +354,7 @@ export const commitActs = (
 					// every field a recorded act plans reaches the one statement, so a verb answers alike whoever calls it
 					...(writes.length === 0 && unchanged.length > 0 ? { unchanged } : {}),
 					...(restored.length === 0 ? {} : { restored }),
-					...(pieces.length === 0 ? {} : { pieces: (c) => pieces.forEach((piece) => piece(c)) }),
+					...(pieces.length === 0 ? {} : { pieces: (c, rows) => pieces.forEach((piece) => piece(c, rows)) }),
 					...(rec.commits.some((x) => x.commit.joined === true) ? { joined: true as const } : {}),
 					...(approval === undefined ? {} : { approval }),
 					...(resubmits[0] === undefined ? {} : { resubmit: resubmits[0] })
@@ -394,9 +394,6 @@ export const commitActs = (
 	const input = r.outputs === undefined ? acts_json(r.acts) : { acts: acts_json(r.acts), outputs: r.outputs };
 	if (r.acts.length !== 1 && (r.restored !== undefined || r.sync !== undefined))
 		return Effect.fail(BoltError.make('invalid', 'decode', 'A restore or sync page is one act.'));
-	// one authority admits, plans and queues a sync page's effects: the sync's workspace authority, outside any run
-	if (r.sync !== undefined && (!r.authority.admin || r.authority.run !== undefined))
-		return Effect.fail(BoltError.make('invalid', 'decode', 'A sync page is written as its sync, an admin outside any run.'));
 	return atomic(
 		{ ...r, input },
 		r.name,

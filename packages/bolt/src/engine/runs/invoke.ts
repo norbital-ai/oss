@@ -30,7 +30,7 @@ import {
 import { prepareSend, sendPiece } from '../conversations/outbound.ts';
 import { preview, stableId } from '../conversations/store.ts';
 import { SqlReadCapture, TenantDb } from '../db/tenant-db.ts';
-import { CapturedResult, nativeCommit } from '../db/captured.ts';
+import { CapturedResult, nativeCommit, nativeCommits } from '../db/captured.ts';
 import { DecisionTrace, readableFile } from '../decision.ts';
 import { is_transient, type EngineError } from '../errors.ts';
 import { EmbedInputs, ImageOptions, Reference, storeFile } from '../facilities.ts';
@@ -49,6 +49,7 @@ import { Activation, Automations, Callables, Facilities, Guest, Identity, Live, 
  type AutomationExecution, type AutomationJob, type AutomationRequest, type CrossCall, type FacilityCall, acts_json } from '../services.ts';
 
 import { Chain, GATED, makeReadGuards, noticeInsert } from '../write/sql.ts';
+import { chunked } from '../write/commit.ts';
 import { effectOf, enqueue, next_due } from './queue.ts';
 import { effectImages, loadInputRows } from './input.ts';
 import { journalEntry, journalFits, replayed, WaitOn, WaitState, Woke } from './wait.ts';
@@ -751,11 +752,6 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 							}
 							case 'notify': {
 								const key = keyOf('notify', '', call.notices);
-								const report = (value: Json) => {
-									if (Predicate.isObject(value) && EffectArray.isArray(value['unaddressed']))
-										for (const title of value['unaddressed'])
-											job?.warnings.push(`notify: '${String(title)}' reached no member`);
-								};
 								const event = job?.event;
 								const approval = event?.kind === 'approval' ? event : undefined;
 								const approvers = approval === undefined ? [] : yield* db.rows(Schema.Struct({ id: Schema.String }), {
@@ -781,27 +777,30 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 										approvers: { teams: [], users: approvers.map((user) => user.id) }
 									} })
 								}).pipe(Effect.provideService(TenantDb, db));
-								const outcome = yield* effect(
-										(c) =>
-											noticeInsert(
-												c,
-												'n',
-												rows,
-												b.now,
-												undefined,
-												m.teams,
-												m.workspace.signup?.policies
-											),
-										() =>
-											`jsonb_build_object('unaddressed', (SELECT coalesce(jsonb_agg(title), '[]'::jsonb) FROM n_to WHERE member IS NULL AND coalesce("to"->>'channel', 'inbox') = 'inbox'),
-											'channels', (SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM n_to WHERE member IS NULL AND "to"->>'channel' <> 'inbox'))`
-									);
-								report(outcome);
+								// a large batch as bounded statements of one transaction
+								const answers = yield* nativeCommits(db.transaction, live.publish,
+									chunked(rows).map((chunk) => {
+										const c = new Chain();
+										c.cte('idem', 'SELECT 1 AS active');
+										noticeInsert(c, 'n', chunk, b.now, undefined, m.teams, m.workspace.signup?.policies);
+										return c;
+									}),
+									Schema.Struct({
+										...CapturedResult.fields,
+										unaddressed: Schema.Array(Schema.String),
+										channels: Schema.Array(Schema.String),
+										next_due: Schema.NullOr(Schema.String)
+									}),
+									(c) => `(SELECT coalesce(jsonb_agg(title), '[]'::jsonb) FROM n_to WHERE member IS NULL AND coalesce("to"->>'channel', 'inbox') = 'inbox') AS unaddressed,
+									(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM n_to WHERE member IS NULL AND "to"->>'channel' <> 'inbox') AS channels,
+									(${next_due(c)})::text AS next_due`
+								);
+								yield* Effect.forEach(answers, (answer) => (answer.next_due === null ? Effect.void : wake.at(answer.next_due)), { discard: true });
+								for (const title of answers.flatMap((answer) => answer.unaddressed))
+									job?.warnings.push(`notify: '${title}' reached no member`);
 								// the messages its channel deliveries will queue, by the ids that delivery gives them
-								const channels = Schema.decodeUnknownOption(Schema.Struct({ channels: Schema.Array(Schema.String) }))(outcome);
-								const { sends } = Option.isSome(channels) && channels.value.channels.length > 0
-									? yield* notice_sends(m, db, channels.value.channels)
-									: { sends: [] };
+								const channels = answers.flatMap((answer) => answer.channels);
+								const { sends } = channels.length > 0 ? yield* notice_sends(m, db, channels) : { sends: [] };
 								return { ok: true, value: { messages: sends.map((sent) => sent.id) } };
 							}
 							case 'send': {
