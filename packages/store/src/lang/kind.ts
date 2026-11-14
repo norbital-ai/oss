@@ -111,7 +111,12 @@ export type Kind = Common &
 					};
 				};
 		  }
-		| { readonly kind: 'seq'; readonly pattern?: `${string}{${string}}${string}`; readonly per?: readonly string[] }
+		| {
+				readonly kind: 'seq';
+				readonly pattern?: `${string}{${string}}${string}`;
+				readonly per?: readonly string[];
+				readonly start?: { readonly [value: string]: number };
+		  }
 		| {
 				readonly kind: 'sum';
 				readonly of: `${string}.${string}`;
@@ -229,7 +234,8 @@ export const KindSchema: Schema.Codec<Kind> = /* @__PURE__ */ (() => {
 		}),
 		descriptor_arm('seq', {
 			pattern: Schema.optionalKey(Schema.TemplateLiteral([Schema.String, '{', Schema.String, '}', Schema.String])),
-			per: Schema.optionalKey(Strings)
+			per: Schema.optionalKey(Strings),
+			start: Schema.optionalKey(Schema.Record(Schema.String, Schema.Int))
 		}),
 		descriptor_arm('sum', {
 			of: Schema.TemplateLiteral([Schema.String, '.', Schema.String]),

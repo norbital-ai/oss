@@ -4,7 +4,8 @@
 // declarations and the evaluation's CPU. Compile-time only: guests at run time take the host's `guests` facility.
 import { parentPort, workerData } from 'node:worker_threads';
 import * as Schema from 'effect/Schema';
-import { asset_hook, digest, random_stream } from '@norbital-ai/host-api/node';
+// the hooks alone: the `./node` barrel loads every port (PGlite, the bundler, the type service) into each worker
+import { asset_hook, digest, random_stream } from '@norbital-ai/host-api/node/guest-hooks';
 import type { EvaluateOutput } from './index.ts';
 
 const Input = Schema.Struct({

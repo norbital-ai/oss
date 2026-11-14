@@ -16,7 +16,7 @@ export { sync } from './decl/runtime/sync.ts';
 export { id_of, new_id } from './decl/id.ts';
 export { model } from './decl/model.ts';
 export { instance_id, integration, is_instance } from './decl/runtime/integration.ts';
-export { dynamic_read, ReadRequestJson, type DynamicRead } from './protocol/read-request.ts';
+export { dynamic_read, query_all, ReadRequestJson, type AllRows, type DynamicRead } from './protocol/read-request.ts';
 
 export type { Actor } from './decl/access/actor.ts';
 export type { ApprovalFlow, Verdict } from './decl/access/policy.ts';

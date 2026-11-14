@@ -41,6 +41,8 @@ export type Expr =
 	| { readonly times: readonly [E, E] }
 	| { readonly div: readonly [E, E] }
 	| { readonly round: readonly [E, number] }
+	/** An integer as text, zero-padded on the left to at least `digits` (`pad(7, 3)` → `'007'`). */
+	| { readonly pad: readonly [E, number] }
 	| { readonly concat: readonly E[] }
 	| { readonly plus_days: readonly [E, E] }
 	| { readonly start_of: readonly [E, 'day' | 'week' | 'month' | 'quarter' | 'year'] }
@@ -78,6 +80,7 @@ export const ExprSchema: Schema.Codec<Expr> = Schema.Union([
 	Schema.Struct({ times: Two }),
 	Schema.Struct({ div: Two }),
 	Schema.Struct({ round: Schema.Tuple([X, Schema.Number]) }),
+	Schema.Struct({ pad: Schema.Tuple([X, Schema.Int]) }),
 	Schema.Struct({ concat: Xs }),
 	Schema.Struct({ plus_days: Two }),
 	Schema.Struct({

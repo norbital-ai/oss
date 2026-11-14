@@ -12,7 +12,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 | `date`, `instant`, `time`, `duration`, `period` | see [dates-and-time.md](dates-and-time.md); an `instant` named `*_on` or `*_date` is refused |
 | `enum` | `values`, `many`, `transitions` |
 | `state` | `initial`, `states: { s: { to, stamp? } }`; declare editable exceptions in a named lock constraint |
-| `seq` | patterned number, never reused; `{yyyy}` in the workspace zone at commit; `per` scope |
+| `seq` | patterned number, never reused; `{yyyy}` in the workspace zone at commit; `per` scope (no draw while null, redrawn when it changes); `start` floors a series |
 | `sum`, `count` | roll-ups through a relationship's `inverse`, optional `where` |
 | `json` | typed by `shape`, the same literal language |
 | `file` | `accept`, `max` up to 20 MiB; `many: true` holds multiple files |

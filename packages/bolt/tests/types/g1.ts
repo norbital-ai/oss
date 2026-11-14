@@ -431,3 +431,17 @@ policy({
 });
 // @ts-expect-error API keys take no grant.
 policy({ description: 'x', grants: { sys_api_key: { outputs: { default: {} } } } });
+
+// ── a computed field in a unique constraint and a text search index; a floored seq per series ──
+model('probe_codes', {
+	description: 'x',
+	record_label: 'record.code',
+	fields: {
+		series: { kind: 'text' },
+		number: { kind: 'seq', per: ['series'], start: { F: 350 } },
+		code: { kind: 'text', computed: 'series + pad(number, 3)' }
+	},
+	constraints: { one_code: { unique: ['code'] } },
+	indexes: { search: { text: ['code'] } },
+	outputs: { default: { fields: ['series', 'number', 'code'] } }
+});

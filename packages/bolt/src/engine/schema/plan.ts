@@ -19,7 +19,7 @@ import { BoltError, from_store } from '../../protocol/errors.ts';
 import { tables_of } from '../../protocol/catalog.ts';
 import { message_text } from '../../decl/errors/refusal.ts';
 import type { RuleMeta } from './refusal.ts';
-import { engineObjects } from './engine.ts';
+import { engineObjects, seq_counter_objects } from './engine.ts';
 import { audit_triggers } from './audit.ts';
 import { history_schema_objects } from './history.ts';
 
@@ -51,7 +51,8 @@ export const engineBeside = (s: SchemaSlice): Effect.Effect<readonly SchemaObjec
 	Effect.map(history_schema_objects(s.tables, s.currency), (history) => [
 		...engineObjects(),
 		...history,
-		...audit_triggers(s.tables)
+		...audit_triggers(s.tables),
+		...seq_counter_objects(s.tables)
 	]);
 
 const AppliedEnvelope = Schema.Struct({

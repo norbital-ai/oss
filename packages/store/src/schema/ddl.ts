@@ -452,6 +452,10 @@ const exprSql: (e: Expr, t: Table, tz: string, depth?: number) => Fx<Typed> = Ef
 				sql: `round((${(yield* x(e.round[0])).sql})::numeric, ${e.round[1]})`,
 				kind: 'decimal'
 			};
+		if ('pad' in e) {
+			const value = `(${(yield* x(e.pad[0])).sql})::bigint::text`;
+			return { sql: `lpad(${value}, greatest(${e.pad[1]}, length(${value})), '0')`, kind: 'text' };
+		}
 		if ('concat' in e) {
 			const parts = yield* Effect.forEach(e.concat, x);
 			return {
@@ -916,9 +920,10 @@ const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
 				if (k.kind === 'seq') {
 					const scope = yield* colsOf(k.per ?? []);
 					const cols = [...scope.map(q), C];
+					// an optional seq is null while a `per` value is: those rows hold no number to clash
 					constraint(
 						'uq',
-						`unique nulls not distinct (${cols.join(', ')})${deferrable}`,
+						`unique${k.optional === true ? '' : ' nulls not distinct'} (${cols.join(', ')})${deferrable}`,
 						[...scope, name],
 						dupes(T, cols),
 						{ model: t.model, kind: 'unique', fields: [...(k.per ?? []), name] }
@@ -1380,6 +1385,7 @@ function children(
 	e: Exclude<Expr, number | string | boolean | { readonly field: string }>
 ): readonly Expr[] {
 	if ('round' in e) return [e.round[0]];
+	if ('pad' in e) return [e.pad[0]];
 	if ('start_of' in e) return [e.start_of[0]];
 	if ('regex_replace' in e) return [e.regex_replace[0]];
 	if ('json_text' in e) return [e.json_text[0]];

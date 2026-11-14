@@ -33,7 +33,7 @@ import { type DbError, impact_text, type MigrationImpact, type Rows, type Sql } 
 import type { EngineManifest } from '../manifest.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
 import { audit_triggers } from './audit.ts';
-import { engineOwned, engineOwns, source_objects } from './engine.ts';
+import { engineOwned, engineOwns, seq_counter_objects, source_objects } from './engine.ts';
 import { history_schema_objects } from './history.ts';
 import { engineBeside, fingerprint, readAppliedRecord, schema_slice, type AppliedSchemaRecord, type SchemaSlice } from './plan.ts';
 
@@ -79,9 +79,10 @@ export const migration_objects = (schema: SchemaSpec): Effect.Effect<readonly Sc
 		? Effect.map(history_schema_objects(schema.tables, schema.currency), (history) => [
 				...source_objects(),
 				...history,
-				...audit_triggers(schema.tables)
+				...audit_triggers(schema.tables),
+				...seq_counter_objects(schema.tables)
 			])
-		: Effect.succeed([]);
+		: Effect.succeed(seq_counter_objects(schema.tables));
 
 /** Exact engine registry exclusions; an unexpected user object is never hidden by a name prefix. */
 export const migration_lines = (

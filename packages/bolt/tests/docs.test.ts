@@ -186,6 +186,7 @@ it.effect('the declaration functions are documented, and spec parameters list th
 		'model',
 		'new_id',
 		'policy',
+		'query_all',
 		'secrets',
 		'seeder',
 		'sync',

@@ -21,6 +21,7 @@ const cases: readonly (readonly [string, Expr])[] = [
 	["lower(regex_replace(trim(email), '^@?', '@'))", { lower: { regex_replace: [{ trim: { field: 'email' } }, '^@?', '@'] } }],
 	["regex_replace(phone, r'\\D', '')", { regex_replace: [{ field: 'phone' }, '\\D', ''] }],
 	["json_text(party, 'id')", { json_text: [{ field: 'party' }, 'id'] }],
+	['name + pad(number, 3)', { concat: [{ field: 'name' }, { pad: [{ field: 'number' }, 3] }] }],
 	[
 		"a > 1 && b || !c ? start_of(d, 'month') : plus_days(d, -2)",
 		{
@@ -41,5 +42,6 @@ describe('computed CEL', () => {
 	it('refuses constructs a generated column cannot express', () => {
 		assert.throws(() => computed_expr('max(a, b)', () => false), /function 'max'/);
 		assert.throws(() => computed_expr('party.id', () => false), /not supported/);
+		assert.throws(() => computed_expr('pad(number, 0)', () => false), /whole number of digits/);
 	});
 });

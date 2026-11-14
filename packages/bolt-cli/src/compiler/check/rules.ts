@@ -191,6 +191,15 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				for (const p of list(k.per))
 					if (spec.fields[p] === undefined && m.relationships[`${model}.${p}`] === undefined)
 						at('model/seq', 'model', model, `${f}: per '${p}' is not a field`);
+				if (k.optional !== true && list(k.per).some((p) => spec.fields[p]?.optional === true))
+					at('model/seq', 'model', model, `${f}: a seq per an optional field is optional (no draw while it is null)`);
+				if (
+					k.start !== undefined &&
+					(k.pattern !== undefined ||
+						list(k.per).length !== 1 ||
+						Object.values(k.start).some((n) => !Number.isInteger(n) || n < 1))
+				)
+					at('model/seq', 'model', model, `${f}: a seq start is a floor of 1 or more per value of its one per field, without a pattern`);
 			}
 			if (k.kind === 'state') {
 				const states = k.states;

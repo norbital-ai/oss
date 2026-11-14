@@ -2,7 +2,7 @@
 import { Environment, type ASTNode } from '@marcbachmann/cel-js';
 import type { Expr } from '../schema/spec.ts';
 
-const TEXT_OPS = ['concat', 'text', 'lower', 'upper', 'trim', 'substring', 'regex_replace', 'json_text'] as const;
+const TEXT_OPS = ['concat', 'text', 'pad', 'lower', 'upper', 'trim', 'substring', 'regex_replace', 'json_text'] as const;
 const UNITS = ['day', 'week', 'month', 'quarter', 'year'] as const;
 const env = new Environment();
 
@@ -100,6 +100,13 @@ export function computed_expr(expression: string, text_field: (field: string) =>
 						const places = literal(digits);
 						if (typeof places !== 'number') throw new Error('round() takes a number of digits');
 						return { round: [x, places] };
+					}
+					case 'pad': {
+						const [x, digits] = two();
+						const width = literal(digits);
+						if (typeof width !== 'number' || !Number.isInteger(width) || width < 1)
+							throw new Error('pad() takes a whole number of digits');
+						return { pad: [x, width] };
 					}
 					case 'plus_days': {
 						const [x, days] = two();

@@ -16,6 +16,7 @@ import type {
 	ActMapOutput,
 	ActOptions,
 	Committed,
+	DynamicAnswer,
 	HistoryOptions,
 	MessageKey,
 	PendingApproval,
@@ -35,6 +36,7 @@ import type { FileRef, Id, Instant, Json, PlainDate, RequestId } from '../decl/v
 import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import type { RecordCapabilities, RecordParentContext } from '../protocol/record-contracts.ts';
 import type { WireRead } from '../protocol/wire.ts';
+import type { DynamicRead } from '../protocol/read-request.ts';
 
 /**
  * A page's read (`ctx.query`, `ctx.history`). Read in a component (`.current`, `.loading`, `.error`,
@@ -120,6 +122,8 @@ export interface PageBolt {
 	 * });
 	 */
 	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Query<ReadAnswer<R>>;
+	/** The same layer map built at runtime by `dynamic_read`, as server code's: checked by the host, answered untyped. */
+	query(request: DynamicRead): Query<DynamicAnswer>;
 	/** A record's revisions, oldest first, up to an instant, a revision or just before an approval request. */
 	history<C extends string>(
 		model: Is<C, ReadableName>,

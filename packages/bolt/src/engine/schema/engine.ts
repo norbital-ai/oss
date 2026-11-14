@@ -3,7 +3,7 @@
 // This is the ONE registry of the rest, each with why it is not a model. Idempotent (`if not exists`, `or replace`),
 // re-asserted on every apply (`apply_migrations`) and never dropped; a private table may reference a system table, so they
 // render after the models (`schemaObjects`).
-import { MINOR_FN, type SchemaObject } from '@norbital-ai/store';
+import { MINOR_FN, literal, q, type SchemaObject, type SchemaSpec } from '@norbital-ai/store';
 import { AUDIT_FUNCTIONS } from './audit.ts';
 import {
 	HISTORY_SCHEMA_TABLES,
@@ -22,6 +22,33 @@ type Private = {
 	/** Native source migrations carry these definitions and must prove them independently of the host registry. */
 	source?: true;
 };
+
+const BOLT_SEQ =
+	'create table if not exists bolt_seq (model text not null, field text not null, scope text not null, value int not null, primary key (model, field, scope))';
+
+/**
+ * The one-time data step of a `seq` with a `start`: each series' counter from its highest stored number, so a draw
+ * never repeats one; the floor itself is the draw's (`commit.ts`). Its scope text is `seqScope('', '', [per])`.
+ */
+export const seq_counter_objects = (tables: SchemaSpec['tables']): readonly SchemaObject[] =>
+	Object.entries(tables).flatMap(([model, table]) =>
+		Object.entries(table.fields).flatMap(([field, k]) => {
+			const per = k.kind === 'seq' && k.start !== undefined ? k.per?.[0] : undefined;
+			if (per === undefined) return [];
+			return [{
+				id: `backfill:${model}.${field}`,
+				rank: 'backfill' as const,
+				table: model,
+				deps: [field, per],
+				derived: true as const,
+				drop: null,
+				create: [
+					BOLT_SEQ,
+					`insert into bolt_seq (model, field, scope, value) select ${literal(model)}, ${literal(field)}, '["","",' || to_jsonb(${q(per)})::text || ']', max(${q(field)}) from ${q(model)} where ${q(field)} is not null and ${q(per)} is not null group by ${q(per)} on conflict (model, field, scope) do update set value = greatest(bolt_seq.value, excluded.value)`
+				]
+			}];
+		})
+	);
 
 const REGISTRY = (): readonly Private[] => [
 	{
@@ -118,9 +145,7 @@ const REGISTRY = (): readonly Private[] => [
 		name: 'bolt_seq',
 		rank: 'table',
 		why: '`seq` counters per model, field and scope: a composite key, no id',
-		sql: [
-			'create table if not exists bolt_seq (model text not null, field text not null, scope text not null, value int not null, primary key (model, field, scope))'
-		]
+		sql: [BOLT_SEQ]
 	},
 	{
 		name: 'bolt_idem',

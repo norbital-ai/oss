@@ -97,7 +97,18 @@ export type StoredArm =
 	  }
 	/** A lifecycle: `initial`, each state's `to` and `stamp`; policies authorize its moves through `update.moves`. */
 	| { kind: 'state'; initial: string; states: { readonly [state: string]: StateSpec } }
-	| { kind: 'seq'; pattern?: SeqPattern; per?: readonly string[] }
+	/**
+	 * A number drawn on create, never written by a caller. Its counter is the `bolt_seq` row keyed by
+	 * `(model, field, scope)`, where `scope` is the JSON array `[text before the counter, text after it, ...per values]`
+	 * with the pattern's `{yyyy}`/`{yy}`/`{mm}` resolved, so each period and each `per` combination counts alone; the
+	 * counter holds the last number drawn. No draw while a `per` value is null (the field is `optional` when a `per`
+	 * field is); the row draws once every `per` value is set, on create or update. An update that changes a `per` value
+	 * redraws from the new series; one that leaves them unchanged keeps the number. `start` (no pattern, one `per`
+	 * field) is a floor per `per` value: a series' first draw is max(floor, highest stored + 1), and `bolt build`
+	 * generates the one-time data step that seeds each series' counter from the stored rows.
+	 * @example colour_number: { kind: 'seq', per: ['series'], start: { F: 350, K: 282 } }
+	 */
+	| { kind: 'seq'; pattern?: SeqPattern; per?: readonly string[]; start?: Readonly<Record<string, number>> }
 	| { kind: 'sum'; of: `${string}.${string}`; where?: KindWhere } // checked by `Verify`
 	| { kind: 'count'; of: string; where?: KindWhere }
 	| { kind: 'json'; shape?: InputKind }

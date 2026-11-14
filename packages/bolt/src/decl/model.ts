@@ -54,7 +54,11 @@ import type { StaticWhere, Where } from './where.ts';
 
 type ComputedField = {
 	readonly kind: ComputedKind;
-	/** CEL over the row's own fields (`lower(email)`, `'Trial ' + string(trial_no)`), stored as a generated column. */
+	/**
+	 * CEL over the row's own fields (`lower(email)`, `'Trial ' + string(trial_no)`), stored as a generated column. Its
+	 * functions: `string`, `pad(int, digits)` (zero-padded text, `pad(7, 3)` → `'007'`), `lower`, `upper`, `trim`,
+	 * `size`, `round`, `plus_days`, `start_of`, `json_text`, `substring`, `regex_replace`, `coalesce`.
+	 */
 	readonly computed: string;
 	readonly scale?: number;
 };
@@ -95,7 +99,7 @@ export type NullableOfExpr<X, F, C = {}, Seen = never> = Expr extends X
 
 /** Operator keys in nullable_of_expr's order; a structural tree with extra keys takes the first present. */
 type Operators = readonly [
-	'plus', 'minus', 'times', 'div', 'round', 'concat', 'plus_days', 'start_of', 'text', 'lower', 'upper', 'trim',
+	'plus', 'minus', 'times', 'div', 'round', 'pad', 'concat', 'plus_days', 'start_of', 'text', 'lower', 'upper', 'trim',
 	'substring', 'regex_replace', 'json_text', 'json_length', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'and', 'or', 'not',
 	'when', 'coalesce'
 ];
@@ -115,7 +119,7 @@ type NullableOperator<K, X, F, C, Seen> = [K] extends [never]
 				? true
 				: K extends 'text' | 'lower' | 'upper' | 'trim' | 'json_length' | 'not'
 					? NullableOfExpr<X[K], F, C, Seen>
-					: K extends 'round' | 'start_of' | 'regex_replace'
+					: K extends 'round' | 'pad' | 'start_of' | 'regex_replace'
 						? X[K] extends readonly [infer A, ...unknown[]]
 							? NullableOfExpr<A, F, C, Seen>
 							: true
@@ -169,6 +173,7 @@ export function nullable_of_expr(
 		if ('times' in x) return x.times.some(nullable);
 		if ('div' in x) return typeof x.div[1] !== 'number' || x.div[1] === 0 || nullable(x.div[0]);
 		if ('round' in x) return nullable(x.round[0]);
+		if ('pad' in x) return nullable(x.pad[0]);
 		if ('concat' in x) return false;
 		if ('plus_days' in x) return x.plus_days.some(nullable);
 		if ('start_of' in x) return nullable(x.start_of[0]);

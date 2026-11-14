@@ -1547,6 +1547,8 @@ const materializeChanges = Effect.fn('Bolt.materializeChanges')(function* (
 			// and state moves are the native rules', refused at commit (refusal.ts)
 			const rule = Object.keys(set).length === 0 ? null : appRules(m, c.model, row, set);
 			if (rule !== null) return stop(refused('invalid_input', rule.message, [...c.path, rule.field]));
+			// a `seq` whose `per` value changes redraws: the commit keys the new series by every `per` value
+			const per = Object.values(m.models[c.model]?.fields ?? {}).flatMap((k) => (k.kind === 'seq' ? (k.per ?? []) : []));
 			if (Object.keys(set).length > 0)
 				writes.push({
 					write: {
@@ -1554,7 +1556,8 @@ const materializeChanges = Effect.fn('Bolt.materializeChanges')(function* (
 						id: c.id,
 						op: 'update',
 						set,
-						revision: Number(row['revision'])
+						revision: Number(row['revision']),
+						...(per.some((p) => Object.hasOwn(set, p)) ? { stored: Object.fromEntries(per.map((p) => [p, row[p] ?? null])) } : {})
 					},
 					item: it
 				});

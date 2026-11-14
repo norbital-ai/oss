@@ -46,7 +46,8 @@ export type Write = { model: string; id: string; erased?: boolean; carried?: tru
 	/** `revision`: a deleted row re-created by an approval rollback at its next revision; its values are stored columns, no `seq` is drawn. */
 	(
 		| { op: 'create'; values: RowData; revision?: number }
-		| { op: 'update'; set: RowData; revision: number }
+		/** `stored`: the stored `per` values of a `seq` the update redraws (`set` changes one of them). */
+		| { op: 'update'; set: RowData; revision: number; stored?: RowData }
 		| { op: 'delete'; revision: number }
 	);
 export type RateCharge = { rule: string; bucket: string; limit: number; windowStart: string };
@@ -283,20 +284,35 @@ const sequenceKey = Schema.decodeUnknownSync(
 	Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String, Schema.String]))
 );
 /**
- * `seq` counters the act draws from (host side): one entry per counter key and its format, and per created row and
- * field the counter's index and how far the row sits back from the counter's new value.
+ * `seq` counters the act draws from (host side): one entry per counter key, its format and floor (`start` less one),
+ * and per created row and field the counter's index and how far the row sits back from the counter's new value; `null`
+ * where a `per` value is null (no draw). A create draws; an update draws again when it changes a `per` value and does
+ * not restore the number itself (an approval rollback does).
  */
 function seqMeta(m: EngineManifest, writes: readonly Write[], today: string) {
-	const counters = new Map<string, { i: number; c: number; pre: string; width: number; post: string; text: boolean }>();
-	const rows = new Map<Write, Record<string, [number, number]>>();
+	const counters = new Map<
+		string,
+		{ i: number; c: number; base: number; pre: string; width: number; post: string; text: boolean }
+	>();
+	const rows = new Map<Write, Record<string, [number, number] | null>>();
 	const placed: { w: Write; field: string; key: string; index: number }[] = [];
 	for (const w of writes) {
-		if (w.op !== 'create' || w.revision !== undefined) continue;
+		if (w.op === 'delete' || (w.op === 'create' && w.revision !== undefined)) continue;
 		for (const [field, k] of Object.entries(m.models[w.model]?.fields ?? {})) {
 			if (k.kind !== 'seq') continue;
+			const per = k.per ?? [];
+			if (w.op === 'update' && (Object.hasOwn(w.set, field) || !per.some((p) => Object.hasOwn(w.set, p)))) continue;
+			const values = per.map((p) =>
+				w.op === 'create' ? (w.values[p] ?? null) : Object.hasOwn(w.set, p) ? (w.set[p] ?? null) : (w.stored?.[p] ?? null)
+			);
+			if (values.includes(null)) {
+				rows.set(w, { ...rows.get(w), [field]: null });
+				continue;
+			}
 			const { pre, width, post } = seqParts(k.pattern, { yyyy: today.slice(0, 4), mm: today.slice(5, 7) });
-			const key = JSON.stringify([w.model, field, seqScope(pre, post, (k.per ?? []).map((p) => w.values[p] ?? null))]);
-			const counter = counters.get(key) ?? { i: counters.size, c: 0, pre, width, post, text: k.pattern !== undefined };
+			const key = JSON.stringify([w.model, field, seqScope(pre, post, values)]);
+			const base = Math.max((k.start?.[String(values[0])] ?? 1) - 1, 0);
+			const counter = counters.get(key) ?? { i: counters.size, c: 0, base, pre, width, post, text: k.pattern !== undefined };
 			counters.set(key, counter);
 			placed.push({ w, field, key, index: counter.c++ });
 		}
@@ -385,10 +401,11 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		};
 		const erased = w.erased ?? x.erase !== undefined;
 		const carried = w.carried === true;
-		const key = [w.model, w.op, erased, carried, ...Object.keys(row).sort()].join('\0');
+		const counters = seq.rows.get(w);
+		const drawn = Object.entries(counters ?? {}).map(([f, at]) => `${at === null ? '-' : '+'}${f}`);
+		const key = [w.model, w.op, erased, carried, ...Object.keys(row).sort(), ...drawn.sort()].join('\0');
 		const group = groups.get(key) ?? { table: w.model, op: w.op, erased, carried, first: w, columns: Object.keys(row), g: groups.size };
 		groups.set(key, group);
-		const counters = seq.rows.get(w);
 		return { ...row, $g: group.g, ...(counters === undefined ? {} : { $seq: counters }) };
 	});
 	c.cte('input', `SELECT e.j, e.ord, (e.j->>'$g')::int AS g FROM jsonb_array_elements(${c.p(data)}::jsonb) WITH ORDINALITY AS e(j, ord)`);
@@ -396,13 +413,15 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		c.cte(
 			'seqs',
 			`SELECT * FROM jsonb_to_recordset(${c.p([...seq.counters].map(([key, s]) => ({ ...s, k: sequenceKey(key) })))}::jsonb)
-	AS v(i int, k jsonb, c int, pre text, width int, post text, text boolean)`
+	AS v(i int, k jsonb, c int, base int, pre text, width int, post text, text boolean)`
 		);
-		// `bolt_seq (model, field, scope, value)` is the schema area's; `key` is the three as a JSON array
+		// `bolt_seq (model, field, scope, value)` is the schema area's; `key` is the three as a JSON array; a counter
+		// below its floor (`base`) draws from the floor: greatest(value, base) + c
 		c.cte(
 			'seq',
-			`INSERT INTO bolt_seq (model, field, scope, value) SELECT v.k->>0, v.k->>1, v.k->>2, v.c FROM seqs v
-	WHERE ${GATED} ON CONFLICT (model, field, scope) DO UPDATE SET value = bolt_seq.value + excluded.value
+			`INSERT INTO bolt_seq (model, field, scope, value) SELECT v.k->>0, v.k->>1, v.k->>2, v.base + v.c FROM seqs v
+	WHERE ${GATED} ON CONFLICT (model, field, scope) DO UPDATE SET value = greatest(bolt_seq.value + (
+		SELECT v.c FROM seqs v WHERE v.k = jsonb_build_array(excluded.model, excluded.field, excluded.scope)), excluded.value)
 	RETURNING jsonb_build_array(model, field, scope) AS key, value AS n`
 		);
 		c.cte('seqv', 'SELECT v.*, s.n FROM seq s JOIN seqs v ON v.k = s.key');
@@ -475,32 +494,35 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		}
 		const fields = cat.models.get(table)?.fields;
 		if (fields === undefined) continue;
-		for (const group of byOp('create').filter((group) => group.table === table)) {
-			const cols = group.columns;
-			const seqCols = Object.keys(seq.rows.get(group.first) ?? {});
-			const seqExpr = (f: string) => {
+		/** A group's drawn `seq` columns and their values; a null `per` value sets none (`NULL`). */
+		const seqSets = (group: Group) =>
+			Object.entries(seq.rows.get(group.first) ?? {}).map(([f, at]): readonly [string, string] => {
 				const field = fields.get(f);
 				if (field === undefined)
 					throw BoltError.make('invalid_spec', 'decode', `The sequence names an unknown field '${table}.${f}'.`);
-				const at = `(e.j->'$seq'->${literal(f)})`;
-				return `(SELECT CASE WHEN s.text THEN s.pre || lpad((s.n - (${at}->>1)::int)::text, greatest(s.width, length((s.n - (${at}->>1)::int)::text)), '0') || s.post
-		ELSE (s.n - (${at}->>1)::int)::text END FROM seqv s WHERE s.i = (${at}->>0)::int)::${field.pg}`;
-			};
+				const j = `(e.j->'$seq'->${literal(f)})`;
+				return [f, at === null ? 'NULL' : `(SELECT CASE WHEN s.text THEN s.pre || lpad((s.n - (${j}->>1)::int)::text, greatest(s.width, length((s.n - (${j}->>1)::int)::text)), '0') || s.post
+		ELSE (s.n - (${j}->>1)::int)::text END FROM seqv s WHERE s.i = (${j}->>0)::int)::${field.pg}`];
+			});
+		for (const group of byOp('create').filter((group) => group.table === table)) {
+			const cols = group.columns;
+			const seqs = seqSets(group);
 			const system = stamps(table, 'create', cols);
 			const revision = fields.has('revision') && !cols.includes('revision') ? [['revision', '1'] as const] : [];
-			const all = [...cols, ...system.map(([k]) => k), ...revision.map(([k]) => k), ...seqCols, ...folds.map((f) => f.field)];
+			const all = [...cols, ...system.map(([k]) => k), ...revision.map(([k]) => k), ...seqs.map(([k]) => k), ...folds.map((f) => f.field)];
 			add(
 				table,
 				'create',
 				`INSERT INTO ${q(table)} (${all.map(q).join(', ')})
-	SELECT ${[...cols.map((k) => `r.${q(k)}`), ...system.map(([, v]) => v), ...revision.map(([, v]) => v), ...seqCols.map(seqExpr), ...folds.map((f) => rollupValue(f, '0', 'r.id'))].join(', ')}
+	SELECT ${[...cols.map((k) => `r.${q(k)}`), ...system.map(([, v]) => v), ...revision.map(([, v]) => v), ...seqs.map(([, v]) => v), ...folds.map((f) => rollupValue(f, '0', 'r.id'))].join(', ')}
 	FROM ${inGroup(group)} AND ${GATED} ${RETURNING(table, 'create', cause(group), String(group.erased))}`
 			);
 		}
 		for (const group of byOp('update').filter((group) => group.table === table)) {
 			const sets = group.columns
 				.filter((k) => k !== 'id' && k !== 'revision')
-				.map((k) => `${q(k)} = r.${q(k)}`);
+				.map((k) => `${q(k)} = r.${q(k)}`)
+				.concat(seqSets(group).map(([k, v]) => `${q(k)} = ${v}`));
 			add(
 				table,
 				'update',

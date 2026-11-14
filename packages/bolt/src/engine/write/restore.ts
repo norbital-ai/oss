@@ -177,7 +177,8 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 			});
 	const state = stateField(m, model);
 	for (const [name, f] of c.model.fields) {
-		if (SYSTEM_COLUMN_SET.has(name) || f.computed || f.derived || name.includes('.')) continue;
+		// the engine's rollback restores a `seq` number too: a reverted `per` change keeps its old number, not a redraw
+		if (SYSTEM_COLUMN_SET.has(name) || f.computed || (f.derived && !(caps === null && f.kind === 'seq')) || name.includes('.')) continue;
 		const cols = f.arms === undefined ? [f.column] : f.arms.map((arm) => `${f.column}__${arm}`);
 		const present = cols.filter((col) => Object.hasOwn(past, col));
 		if (present.length === 0 || !Object.hasOwn(live, name)) continue; // not historied, or not visible

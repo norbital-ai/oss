@@ -4,7 +4,9 @@ import type { Id, Instant, ReadAnswer } from '../../src/index.ts';
 import type { Decimal } from '@norbital-ai/store';
 import type { Eff, WriteTarget } from '../../src/decl/ctx.ts';
 import './registry.ts';
-import type { CallerQuery } from '../../src/decl/ctx.ts';
+import type { CallerQuery, WorkspaceQuery } from '../../src/decl/ctx.ts';
+import { query_all } from '../../src/index.ts';
+import type { Effect } from 'effect';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
@@ -179,3 +181,23 @@ ctx.query({ orders: { lines: { aggregate: { avg: ['order'] } } } });
 ctx.query({ orders: { output: 'logistics', lines: { aggregate: { sum: ['price'] } } } });
 // @ts-expect-error minimum/maximum fields also belong to the selected layer output
 ctx.query({ orders: { output: 'logistics', lines: { aggregate: { max: ['price'] } } } });
+
+// ── a workspace read is unscoped: its `where` crosses any relation, declared as a layer or not ──
+declare const db: WorkspaceQuery;
+db.query({ order_lines: { where: { order: { is: { customer: { is: { name: { eq: 'x' } } } } } } } });
+// @ts-expect-error the hop still lands in the target's own fields
+db.query({ order_lines: { where: { order: { is: { customer: { is: { nam: { eq: 'x' } } } } } } } });
+// @ts-expect-error a caller read crosses only the layers its output declares (order_lines declares none)
+ctx.query({ order_lines: { where: { order: { is: { customer: { is: { name: { eq: 'x' } } } } } } } });
+// an automation's reader is a workspace reader too
+const reader: WorkspaceQuery = ctx;
+void reader;
+
+// ── query_all: every page of a read, typed rows per root ──
+const all = query_all(ctx.query, { orders: { fields: ['number'], customer: { fields: ['name'] } } });
+type AllOrder = Effect.Success<typeof all>['orders'][number];
+is<Eq<AllOrder['number'], string>>();
+is<Eq<NonNullable<AllOrder['customer']>['name'], string>>();
+query_all(db.query, { orders: { fields: ['number'] } });
+// @ts-expect-error checked as `query` checks it
+query_all(ctx.query, { orders: { fields: ['nope'] } });

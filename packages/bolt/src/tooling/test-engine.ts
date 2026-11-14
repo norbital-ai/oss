@@ -418,7 +418,8 @@ type Kit = {
 	/**
 	 * The host dies as `runId` ends, before its end is recorded: nothing more reaches the database, no retry runs, and the
 	 * run stays `running` for its lease to reclaim (`run_due` past the lease) to rerun from the start. Every other run in
-	 * flight in that wake dies with it and waits for its lease the same way.
+	 * flight in that wake dies with it and waits for its lease the same way. Fails when `runId` is not claimed in this
+	 * wake: a run queued behind a running one (a crashed one included) waits for that one's lease before it can be crashed.
 	 */
 	crash(runId: string): Effect.Effect<void, KitFailure>;
 	/** Waits for background work to go quiet. It runs nothing queued: `run_due` runs model effects and started automations. */
@@ -1765,7 +1766,7 @@ export const test_engine = <P extends TestPorts = never>(
 						crashing = null;
 						if (!crashed)
 							return yield* Effect.fail(
-								new KitInvalid({ message: `run ${runId} did not run in this wake` })
+								new KitInvalid({ message: `run ${runId} did not run in this wake (one queued behind a running or crashed run waits for its lease)` })
 							);
 						crashed = false;
 					}).pipe(Effect.provide(hostContext)),
