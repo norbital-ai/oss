@@ -5,13 +5,14 @@
 // host language tool's type setup), the SOURCE Studio edits (`source/`) and the SEED packs (`seed/<pack>/`), each with
 // its own digest in `release.json`. Every host activates the bundle through `read_artifact`.
 import { Effect, FileSystem, Option, Path, Schema } from 'effect';
-import { SKILL_FILE, type EngineManifest, plan } from '@norbital-ai/bolt/engine';
+import { type EngineManifest, plan } from '@norbital-ai/bolt/engine';
 import { TemplateManifest } from '@norbital-ai/bolt/protocol';
-import { HOST_FILE, fingerprint, schema_slice } from '@norbital-ai/bolt/tooling';
+import { fingerprint, schema_slice } from '@norbital-ai/bolt/tooling';
+import { HOST_FILE } from '@norbital-ai/host-api/node';
 import { constants, cpSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
-import type { GuestProgram } from '@norbital-ai/bolt/engine';
+import { type GuestProgram, SKILL_FILE } from '@norbital-ai/host-api';
 import { statements } from '@norbital-ai/store';
 import type { Discovered } from '../discover.ts';
 import { buildClient, BuildError, type Graphs } from './client.ts';

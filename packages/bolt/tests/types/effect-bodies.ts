@@ -4,21 +4,14 @@ import { Context, Effect } from 'effect';
 import { Refusal } from '../../src/decl/errors/refusal.ts';
 import { attached, attached_verdict, type GeneratorBody } from '../../src/decl/body.ts';
 import { Verdict, type VerdictData } from '../../src/decl/access/policy.ts';
-import { automation, browser_start } from '../../src/index.ts';
-import { bind_model } from '../../src/declarations.ts';
+import { automation, model } from '../../src/index.ts';
 import type { Actor, AutomationCtx, EffectCtx, Id, WriteCtx } from '../../src/index.ts';
-import type {
-	ActConflict,
-	ActRefused,
-	FacilityFailure,
-	ReadFailed,
-	Unavailable
-} from '../../src/decl/errors.ts';
+import type { FacilityFailure, Unavailable } from '@norbital-ai/host-api';
+import type { ActConflict, ActRefused, ReadFailed } from '../../src/decl/errors.ts';
 import type { ActUnknown } from '../../src/decl/errors/act.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
 import './registry.ts';
-import type { BrowserSnapshot } from '../../src/decl/runtime/facilities.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
@@ -72,7 +65,7 @@ automation({
 });
 
 // ── refuse is an Effect failing with Refusal: `return yield*` it ──
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -83,7 +76,7 @@ bind_model('orders')({
 	}
 });
 is<Eq<Effect.Error<ReturnType<WriteCtx<'orders'>['refuse']>>, Refusal>>();
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -147,7 +140,7 @@ automation({
 	}
 });
 
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	// @ts-expect-error E5 ctx-bearing bodies must be generators
 	create: { ...m.orders.spec.create, transform: async () => [] }
@@ -190,22 +183,6 @@ literalRead.pipe(
 	Effect.catchTag('ActRefused', () => Effect.void)
 );
 
-// ── calling a named automation preserves its handle and permits refusal recovery ──
-const childRun = automationCtx.run('orders_renote', { ids: [], note: 'Follow up' });
-is<Eq<Effect.Success<typeof childRun>['automation'], 'orders_renote'>>();
-is<Eq<Effect.Error<typeof childRun>, ActRefused>>();
-const recoveredRun = childRun.pipe(
-	Effect.catchTag('ActRefused', (failure) => {
-		is<Eq<typeof failure, ActRefused>>();
-		return Effect.succeed(failure.code);
-	})
-);
-is<Eq<Effect.Error<typeof recoveredRun>, never>>();
-childRun.pipe(
-	// @ts-expect-error E11 a run does not fail with ReadFailed
-	Effect.catchTag('ReadFailed', () => Effect.void)
-);
-
 // ── geo may fail at the facility boundary or have no provider ──
 const geocoded = automationCtx.geo.search('Bismis');
 const reversed = automationCtx.geo.reverse({ lat: 1.33, lng: 103.77 });
@@ -230,28 +207,6 @@ geocoded.pipe(
 	Effect.catchTag('ActRefused', () => Effect.void)
 );
 
-// ── browser_start preserves a callback's failures and its unprovided service ──
-class BrowserDestination extends Context.Service<BrowserDestination, { readonly url: string }>()(
-	'types/BrowserDestination'
-) {}
-const browse = browser_start(automationCtx, (browser) =>
-	Effect.gen(function* () {
-		const destination = yield* BrowserDestination;
-		yield* browser.navigate(destination.url);
-		return yield* browser.snapshot();
-	})
-);
-is<Eq<Effect.Success<typeof browse>, BrowserSnapshot>>();
-is<Eq<Effect.Error<typeof browse>, FacilityFailure | Unavailable>>();
-is<Eq<Effect.Services<typeof browse>, BrowserDestination>>();
-// @ts-expect-error E13 the callback's destination must be provided before running
-Effect.runPromise(browse);
-const providedBrowser = browse.pipe(
-	Effect.provideService(BrowserDestination, { url: 'https://a.test' })
-);
-is<Eq<Effect.Services<typeof providedBrowser>, never>>();
-is<Eq<Effect.Error<typeof providedBrowser>, FacilityFailure | Unavailable>>();
-
 // Attachment keeps the original argument tuple and successful result through the native generator boundary.
 const typedProducer = function* (input: { count: number }, context: { suffix: string }) {
 	if (input.count < 0) return yield* Effect.fail(new Refusal({ message: 'A count is positive.' }));
@@ -272,21 +227,21 @@ is<Eq<Parameters<typeof attachedPolicy>, [input: { id: Id<'orders'> }]>>();
 is<Eq<ReturnType<typeof attachedPolicy>, Promise<VerdictData>>>();
 
 // Runtime inspection does not manufacture a service-free or tagged-failure generator contract.
-const unprovidedProducer = function* () { return (yield* BrowserDestination).url; };
+class Destination extends Context.Service<Destination, { readonly url: string }>()('types/Destination') {}
+const unprovidedProducer = function* () { return (yield* Destination).url; };
 const scalarProducer = function* () { yield 1; return 2; };
 const untaggedProducer = function* () { return yield* Effect.fail('no'); };
 is<Eq<typeof unprovidedProducer extends GeneratorBody<[], string> ? true : false, false>>();
 is<Eq<typeof scalarProducer extends GeneratorBody<[], number> ? true : false, false>>();
 is<Eq<typeof untaggedProducer extends GeneratorBody<[], never> ? true : false, false>>();
-const availableBrowser = providedBrowser.pipe(
-	Effect.catchTag('Unavailable', (failure) => Effect.succeed(failure.reason))
-);
-is<Eq<Effect.Error<typeof availableBrowser>, FacilityFailure>>();
-const recoveredBrowser = availableBrowser.pipe(
-	Effect.catchTag('FacilityFailure', (failure) => Effect.succeed(failure.message))
-);
-is<Eq<Effect.Error<typeof recoveredBrowser>, never>>();
-browse.pipe(
-	// @ts-expect-error E14 a browser callback without reads does not fail with ReadFailed
-	Effect.catchTag('ReadFailed', () => Effect.void)
-);
+
+// ── a defaulted input field reaches the body filled: required there, optional to the starter ──
+automation({
+	description: 'Defaults',
+	policies: ['sales_rep'],
+	input: { unit: { kind: 'enum', values: ['a', 'b'], default: 'a' }, note: { kind: 'text', optional: true } },
+	run: function* (input) {
+		is<Eq<typeof input.unit, 'a' | 'b'>>();
+		is<Eq<typeof input.note, string | null | undefined>>();
+	}
+});

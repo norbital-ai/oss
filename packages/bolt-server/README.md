@@ -4,20 +4,24 @@ An example untethered host (plan 01): one Bolt workspace's built release served 
 workspace's host file. `bolt-server [workspace]` serves `<workspace>/.norbital/bundle` (or `--artifact=<dir>`) with
 `<workspace>/norbital.host.ts` (or `--host=<file>`); a workspace without a host file is Colony's to serve. Flags:
 `--listen` (default `127.0.0.1`), `--port` (default `3100`), `--trust-proxy=<cidrs>`, `--founder=<address>`,
-`--seed=<pack>`. It serves through `serve` (`@norbital-ai/bolt/node`); `bolt dev` loads the same host file the same way
-and serves through the same engine path: integration links, activation, deadline wakes and the cron clock. The example's
-own audit store, keys, outbound network and local files are `default_facilities` from the same entry.
+`--seed=<pack>`. It depends on `@norbital-ai/host-api` alone, never on Bolt: like Colony, it evaluates the release's own
+Bolt — the workspace's installed `@norbital-ai/bolt` `build/cell.js` — in a cell (`vm_cell`, a `node:vm` context) and
+drives it only through HOST_API: verify, branch and migrate, integration links, activation, then deadline wakes and the
+cron clock. `bolt dev` loads the same host file the same way and makes the same calls on its in-process Bolt. The
+example's audit store (`src/audit`, a separate PGlite database), keys, outbound network and local files are this
+package's own.
 
-A host file default-exports its `Facilities` (`@norbital-ai/bolt/facilities`, `satisfies Facilities`) and may export
+A host file default-exports its `Facilities` (`@norbital-ai/host-api`, `satisfies Facilities`) and may export
 `serving` (`Serving`: integration providers, OAuth app, converter, geocoder, web reader, shell badge and push key, and
 `close`). [`example/norbital.host.ts`](example/norbital.host.ts) composes this package's own adapters (`host(settings,
 database, options)`) from `BOLT_*` variables; its header lists them. The variables are the example host file's, not
 Bolt's or bolt-server's: Bolt reads no environment.
 
-Bolt carries no guest runner, and the runner is no facility: this host owns its own, bolt-cli's `node_guests()`
-(`@norbital-ai/bolt-cli/guests`), and hands it to the engine as `HostPorts.guests`. It runs `node:vm` contexts in the
+Bolt carries no guest runner, and the runner is no facility: this host owns its own, `node_guests()`
+(`@norbital-ai/host-api/node`), and hands it to the release as `HostPorts.guests`. It runs `node:vm` contexts in the
 host's process, metered against each session's CPU budget, for operator-trusted code only (no memory cap, no security
-boundary). A host file never names a runner; `bolt dev` and the test kit run on the same one.
+boundary); the release's cell is no security boundary either. A host file never names a runner; `bolt dev` and the test
+kit run on the same one.
 
 Schema changes ship as committed files in `migrations/`: editable SQL, `snapshot.json` and
 `migrations.lock.json`. Review the generated SQL and add `-- accept: <step-id>` within each destructive
@@ -33,7 +37,7 @@ migration checks; runtime flags do not override them.
 - Activation refuses a bundle whose recorded needs the host file leaves `off`, naming each member; nothing is guessed
   from the origin, and no endpoint has a default.
 - `ServerLive(options)` is a scoped Layer providing `Server` (its URL and `ActiveWorkspace`). It loads the host file,
-  verifies, migrates and optionally seeds the artifact, then serves it; `main(argv)` is the CLI Effect, launched once by
+  opens the release's cell, verifies, migrates and optionally seeds the artifact, then serves it; `main(argv)` is the CLI Effect, launched once by
   the Node runtime and closed on SIGTERM or SIGINT, which also closes the host file's `serving`.
 - Deadlines are one scoped fiber sleeping until the next due wake, with no polling. Inbox notices reach devices by their
   subscription's `kind`: `web` sends web push (the example's VAPID keys), `apns` sends to iOS apps over APNs HTTP/2
@@ -41,7 +45,7 @@ migration checks; runtime flags do not override them.
   answers Unavailable. Host messaging is this package's own Resend (`src/resend.ts`) and Twilio (`src/twilio.ts`)
   adapters.
 - `drivers()` is every host's provider list, by driver kind: the conversation and calendar providers
-  `@norbital-ai/providers` ships, then this host's own `http` (bolt's `http_request` under the definition's base URL,
+  `@norbital-ai/providers` ships, then this host's own `http` (`src/http.ts`, under the definition's base URL,
   through the public guard) and `sqlserver` providers. It returns native `ProviderDef` values;
   `to_drivers` from `@norbital-ai/providers/abi` adapts them once to the Promise + AbortSignal + JSON
   driver contract at the host boundary. Every host (bolt-server, a platform's own) links instances from it.
@@ -55,6 +59,8 @@ migration checks; runtime flags do not override them.
 - Gmail and Google Calendar share the host's Google Web application (`serving.oauth`) when a workspace declares no
   app of its own; register `<public URL>/hooks/oauth/callback` as an authorized redirect URI.
 - Runtime events are log lines carrying each event's JSON; the last 10,000 are queryable from memory.
+- The audit store's migrations (`src/audit/standalone`, `src/audit/scoped`) are verified by
+  `pnpm migrations:audit` (`--write` records new native proofs).
 
 The public page reader (`src/web.ts`) reads HTTPS only, pins every checked DNS answer, refuses private
 and reserved networks before a socket opens and follows at most five checked redirects.

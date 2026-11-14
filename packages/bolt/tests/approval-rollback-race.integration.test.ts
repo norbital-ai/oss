@@ -2,15 +2,17 @@ import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Context, Deferred, Effect, Fiber, Layer, Schema } from 'effect';
-import type { Authority, EngineActor, Sql } from '../src/engine/contracts.ts';
+import type { Sql } from '@norbital-ai/host-api';
+import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Approvals, Writes } from '../src/engine/services.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { Approvals, Callables } from '../src/engine/services.ts';
+import { PgliteDb, Pristine } from '@norbital-ai/host-api/node';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const recordId = '0199a000-0000-7000-8000-000000000001',
 	requesterId = '0199a000-0000-7000-8000-000000000002',
@@ -63,8 +65,9 @@ it.live('rejection conflicts when the record or approval changes before the deci
 		Effect.gen(function* () {
 			let paused = yield* Deferred.make<void>(),
 				resume = yield* Deferred.make<void>();
-			const database = yield* Layer.build(PgliteDb.layer());
-			const native = Context.get(database, TenantDb);
+			const native = TenantDb.typed(
+				PgliteDb.make(yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer)))
+			);
 			let armed = false;
 			// Pause after rollback planning, before the native adapter acquires the decision's locks.
 			const beforeDecision = (statements: readonly Sql[]) =>
@@ -90,7 +93,7 @@ it.live('rejection conflicts when the record or approval changes before the deci
 				})
 			);
 			const t = Context.get(context, TestWorkspace),
-				writes = Context.get(context, Writes),
+				writes = Context.get(context, Callables),
 				approvals = Context.get(context, Approvals);
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, name, kind, team) VALUES
@@ -108,7 +111,7 @@ it.live('rejection conflicts when the record or approval changes before the deci
 			const update = (title: string, revision: number, as: Authority) => {
 				const key = randomUUID(),
 					now = t.clock.now();
-				return writes.act({
+				return writes.acts(one_act({
 					model: 'documents',
 					verb: 'update',
 					input: [{ target: recordId, set: { title } }],
@@ -117,9 +120,8 @@ it.live('rejection conflicts when the record or approval changes before the deci
 					key,
 					issuedAt: now,
 					invocationId: key,
-					mode: { _tag: 'Direct' },
 					bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-				});
+				}));
 			};
 			const row = () =>
 				t.db.rows(Schema.Struct({ title: Schema.String, revision: Schema.Number }), {

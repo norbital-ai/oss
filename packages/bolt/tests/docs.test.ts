@@ -169,26 +169,30 @@ it.effect('the declaration functions are documented, and spec parameters list th
 	expect(fns).toEqual([
 		'app',
 		'automation',
-		'browser_start',
 		'compile',
 		'context',
 		'custom_field',
+		'dynamic_read',
 		'evaluate',
 		'formula',
 		'group',
 		'id_of',
 		'input_schema',
 		'instance_id',
+		'integration',
 		'is_instance',
 		'mcp',
 		'messages',
+		'model',
+		'new_id',
 		'policy',
 		'secrets',
 		'seeder',
+		'sync',
 		'team',
 		'workspace'
 	]);
-	const model = required(docs.symbol('bolt/declarations', 'ModelLiteral'));
+	const model = required(docs.symbol('bolt', 'ModelLiteral'));
 	expect(model.signature).toContain('type ModelLiteral');
 	expect(model.source).toMatch(/^packages\/bolt\/src\/decl\/model\.ts:\d+$/);
 	expect(model.members?.map((f) => f.name)).toContain('fields');
@@ -196,9 +200,9 @@ it.effect('the declaration functions are documented, and spec parameters list th
 
 it.effect('keeps implementation guidance and parameter documentation on the core public contracts', () => Effect.gen(function* () {
 	const docs = yield* cached;
-	// `model()` and `integration()` are generated bindings: their literals and role cards carry the guidance
+	// `model()` and `integration()` take their literal types: the literals and role cards carry the guidance
 	for (const [name, role] of [['ModelLiteral', 'model'], ['IntegrationLiteral', 'integration']] as const) {
-		expect(docs.symbol('bolt/declarations', name)?.summary, name).not.toBe('');
+		expect(docs.symbol('bolt', name)?.summary, name).not.toBe('');
 		expect(docs.skill('bolt-contract')?.files.find((file) => file.path === `${role}.md`)?.text, name).toContain(
 			`## ${name}`
 		);
@@ -241,7 +245,7 @@ it.effect('svelte components list their props with the props docs', () => Effect
 it.effect('search ranks an exact name first and narrows by namespace', () => Effect.gen(function* () {
 	const docs = yield* cached;
 	expect(docs.search('ModelLiteral')[0]).toMatchObject({
-		namespace: 'bolt/declarations',
+		namespace: 'bolt',
 		name: 'ModelLiteral',
 		kind: 'type'
 	});
@@ -272,7 +276,7 @@ it.effect('documents native Effect service implementations needed by test layers
 	expect(docs.symbol('bolt/engine', 'Files')?.members?.map((member) => member.name)).toEqual(
 		expect.arrayContaining(['put', 'get', 'url', 'remove', 'download'])
 	);
-	expect(docs.symbol('bolt/engine', 'Sql')?.signature).toContain('readonly params');
+	expect(docs.symbol('host-api', 'Sql')?.signature).toContain('readonly params');
 }));
 
 it.effect('bolt-contract holds a generated card per role, naming what a role is written with', () => Effect.gen(function* () {

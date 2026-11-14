@@ -151,7 +151,7 @@
 	import { enum_text, initial, likeWhere, problems } from '../kinds/kind.js';
 	import { cn, ui_text, stepActive } from '../primitives/utils.js';
 	import { offerContexts, open_record } from '../record/navigation.js';
-	import { bolt_of } from '../client/context.js';
+	import { bolt_of, words_of } from '../client/context.js';
 	import { type Outcome, type ProtocolFailure, type RunHandle } from '../client/contract.js';
 	import { complete } from '../filter/node.js';
 	import { nodeParts, pathLabel, sortText } from '../filter/text.js';
@@ -219,12 +219,14 @@
 		/** A search index's search (`/<index>` and its input, `/semantic` and its text), or `null` back to the box's text; absent: the view shows no ranked rows. */
 		on_probe?: (probe: { index: string; input: Json } | null) => void;
 	} = $props();
+	// a local source (a host's custom view) needs only words; the client is read when a model's action runs
 	const bolt = $derived(bolt_of(ctx));
+	const words = $derived(words_of(ctx));
 	const kinds = $derived(ctx.ui.kinds);
 	const cfg = $derived(config === false ? null : (config ?? {}));
 	const x = $derived(catalog[model] ?? kinds.catalog?.[model]);
 	const title = $derived(
-		cfg?.title === false ? '' : (cfg?.title ?? (model === '' ? '' : label(bolt, model)))
+		cfg?.title === false ? '' : (cfg?.title ?? (model === '' ? '' : label(words, model)))
 	);
 	const about = $derived(
 		cfg?.error ?? (cfg?.description === false ? '' : (cfg?.description ?? x?.description ?? ''))
@@ -349,8 +351,8 @@
 	const searchHint = $derived.by(() => {
 		const f = fieldsSearched.slice(0, 3);
 		return f.length === 0
-			? msg(bolt, 'table.search')
-			: msg(bolt, 'table.searchIn', { fields: f.join(', ') });
+			? msg(words, 'table.search')
+			: msg(words, 'table.searchIn', { fields: f.join(', ') });
 	});
 
 	// ── the actions menu: the model's syncs (Sync now; Import, Download template, Export), export, delete-selected, the author's items ──
@@ -469,8 +471,8 @@
 	};
 	const entries = $derived.by((): Entry[] => {
 		const ids = [...picked];
-		const selectFirst = msg(bolt, 'view.selectRows');
-		const run = msg(bolt, 'view.run');
+		const selectFirst = msg(words, 'view.selectRows');
+		const run = msg(words, 'view.run');
 		return [
 			...items.map((item): Entry => ({
 				key: `item:${item.name}`,
@@ -489,12 +491,12 @@
 				key: `sync:${r.name}`,
 				group: 'import',
 				glyph: 'sync',
-				text: told(msg(bolt, 'view.sync'), r.name, remotes),
-				hint: msg(bolt, 'view.syncFrom', {
+				text: told(msg(words, 'view.sync'), r.name, remotes),
+				hint: msg(words, 'view.syncFrom', {
 					source: humanize(r.with)
 				}),
 				why: null,
-				button: msg(bolt, 'view.syncButton'),
+				button: msg(words, 'view.syncButton'),
 				act: () => bolt.sync_control(model, r.name, {})
 			})),
 			...files.flatMap((f): Entry[] => [
@@ -504,9 +506,9 @@
 								key: importKey(f.name),
 								group: 'import',
 								glyph: 'upload',
-								text: told(msg(bolt, 'view.import'), f.name, files),
+								text: told(msg(words, 'view.import'), f.name, files),
 								why: null,
-								button: msg(bolt, 'view.upload'),
+								button: msg(words, 'view.upload'),
 								act: () => void pickers[f.name]?.click(),
 								sync: f.name
 							} satisfies Entry,
@@ -515,10 +517,10 @@
 								key: `template:${f.name}`,
 								group: 'import',
 								glyph: 'download',
-								text: told(msg(bolt, 'view.template'), f.name, files),
-								hint: msg(bolt, 'view.templateHint'),
+								text: told(msg(words, 'view.template'), f.name, files),
+								hint: msg(words, 'view.templateHint'),
 								why: null,
-								button: msg(bolt, 'view.download'),
+								button: msg(words, 'view.download'),
 								act: () => bolt.sync_control(model, f.name, { mode: 'template', ...scoped() })
 							} satisfies Entry
 						]
@@ -529,14 +531,14 @@
 					glyph: 'download',
 					text: told(
 						f.export.length > 1
-							? msg(bolt, 'view.exportAs', { format: to.toUpperCase() })
-							: msg(bolt, 'view.export'),
+							? msg(words, 'view.exportAs', { format: to.toUpperCase() })
+							: msg(words, 'view.export'),
 						f.name,
 						files
 					),
-					hint: msg(bolt, 'view.exportHint'),
+					hint: msg(words, 'view.exportHint'),
 					why: null,
-					button: msg(bolt, 'view.download'),
+					button: msg(words, 'view.download'),
 					act: () => {
 						const where = shown();
 						return bolt.sync_control(model, f.name, {
@@ -554,10 +556,10 @@
 							key: 'export',
 							group: 'import',
 							glyph: 'download',
-							text: msg(bolt, 'table.export'),
-							hint: msg(bolt, 'view.exportHint'),
+							text: msg(words, 'table.export'),
+							hint: msg(words, 'view.exportHint'),
 							why: null,
-							button: msg(bolt, 'view.download'),
+							button: msg(words, 'view.download'),
 							act: exportCsv
 						} satisfies Entry
 					]
@@ -568,11 +570,11 @@
 							key: 'update',
 							group: 'bulk',
 							glyph: 'play',
-							text: msg(bolt, 'view.editSelected'),
-							hint: msg(bolt, 'view.editSelectedHint'
+							text: msg(words, 'view.editSelected'),
+							hint: msg(words, 'view.editSelectedHint'
 							),
 							why: picked.length === 0 ? selectFirst : null,
-							button: msg(bolt, 'view.editButton'),
+							button: msg(words, 'view.editButton'),
 							act: () => {
 								if (form === `${model}.update`) form = null;
 								else {
@@ -591,9 +593,9 @@
 							key: 'delete',
 							group: 'bulk',
 							glyph: 'trash',
-							text: msg(bolt, 'table.delete'),
+							text: msg(words, 'table.delete'),
 							why: picked.length === 0 ? selectFirst : null,
-							button: msg(bolt, 'view.deleteButton'),
+							button: msg(words, 'view.deleteButton'),
 							act: remove,
 							danger: true
 						} satisfies Entry
@@ -604,10 +606,10 @@
 	const groups = $derived(
 		(
 			[
-				['bulk', msg(bolt, 'view.group.bulk')],
-				['actions', msg(bolt, 'view.group.actions')],
-				['import', msg(bolt, 'view.group.import')],
-				['general', msg(bolt, 'view.group.general')]
+				['bulk', msg(words, 'view.group.bulk')],
+				['actions', msg(words, 'view.group.actions')],
+				['import', msg(words, 'view.group.import')],
+				['general', msg(words, 'view.group.general')]
 			] as const
 		)
 			.map(([g, title]) => ({ g, title, of: entries.filter((e) => e.group === g) }))
@@ -670,7 +672,7 @@
 		'ids' in value &&
 		Array.isArray(value.ids);
 	const say = (outcome: Outcome, saved?: string) => {
-		notify(bolt, outcome, saved);
+		notify(words, outcome, saved);
 		if (outcome.kind === 'committed')
 			for (const file of filesOf(outcome.output))
 				window.open(bolt.file_url(file), '_blank', 'noopener');
@@ -680,7 +682,7 @@
 		Effect.suspend(() => {
 			runs = [...runs, ...handle.ids.map((id) => ({ automation: handle.automation, id }))];
 			menuOpen = false;
-			return handle.pipe(Effect.map((outcome) => (ok(outcome) ? undefined : outcome)));
+			return actOutcome(handle).pipe(Effect.map((outcome) => (ok(outcome) ? undefined : outcome)));
 		});
 	class ToolbarActionFailed extends Schema.TaggedError<ToolbarActionFailed>()(
 		'ToolbarActionFailed',
@@ -729,7 +731,7 @@
 							say(value, saved);
 							// a running act is not a failure: its toast says it goes on in the background
 							if (!ok(value) && value.kind !== 'running') {
-								mark(key, { state: 'failed', message: outcomeText(bolt, value) });
+								mark(key, { state: 'failed', message: outcomeText(words, value) });
 								return;
 							}
 						}
@@ -744,10 +746,10 @@
 					const tag = errorTag(error);
 					const message =
 						tag === 'ActConflict'
-							? outcomeText(bolt, { kind: 'conflict' })
+							? outcomeText(words, { kind: 'conflict' })
 							: tag === 'ActUnknown'
-								? outcomeText(bolt, { kind: 'unknown' })
-								: bolt.t(error.message);
+								? outcomeText(words, { kind: 'unknown' })
+								: words.t(error.message);
 					toast.error(message);
 					mark(key, { state: 'failed', message });
 				})
@@ -799,12 +801,12 @@
 		if (r.status !== 'succeeded')
 			return {
 				state: 'failed',
-				message: r.error?.message ?? r.error?.code ?? catalogText(bolt, `run.status.${r.status}`, r.status)
+				message: r.error?.message ?? r.error?.code ?? catalogText(words, `run.status.${r.status}`, r.status)
 			};
 		if (importOut?.['applied'] === false)
 			return {
 				state: 'failed',
-				message: msg(bolt, 'view.importRefused'
+				message: msg(words, 'view.importRefused'
 				)
 			};
 		return { state: 'done' };
@@ -816,7 +818,7 @@
 	);
 	const counts = $derived(
 		importOut?.['applied'] === true
-			? msg(bolt, 'view.imported', {
+			? msg(words, 'view.imported', {
 					created: Number(importOut['created'] ?? 0),
 					updated: Number(importOut['updated'] ?? 0),
 					deleted: Number(importOut['deleted'] ?? 0)
@@ -844,7 +846,7 @@
 	function startImport(sync: string, file: string) {
 		const h = bolt.sync_control(model, sync, { mode: 'import', file, ...scoped() });
 		if (bolt.runs === undefined) return track(h); // no run reads here: RunStatus says so
-		return h.pipe(
+		return actOutcome(h).pipe(
 			Effect.map((outcome) => {
 				if (!ok(outcome)) return outcome;
 				imported = { sync, id: h.id };
@@ -896,11 +898,11 @@
 					confirm_action({
 						title:
 							target.length === 1
-								? msg(bolt, 'table.confirmDeleteOne')
-								: msg(bolt, 'table.confirmDelete', { n: target.length }),
-						body: msg(bolt, approval ? 'view.deleteApproval' : 'view.deleteBody'),
-						confirm_label: msg(bolt, 'view.deleteButton'),
-						cancel_label: msg(bolt, 'record.cancel'),
+								? msg(words, 'table.confirmDeleteOne')
+								: msg(words, 'table.confirmDelete', { n: target.length }),
+						body: msg(words, approval ? 'view.deleteApproval' : 'view.deleteBody'),
+						confirm_label: msg(words, 'view.deleteButton'),
+						cancel_label: msg(words, 'record.cancel'),
 						destructive: true
 					})
 				),
@@ -915,7 +917,7 @@
 										bolt.query(by_id(model, id, stamp)).pipe(Effect.flatMap((answer) => {
 											const row = first_of(answer, model);
 											return row === null
-												? Effect.succeed<Outcome>({ kind: 'refused', code: 'not_found', message: msg(bolt, 'record.not_found') })
+												? Effect.succeed<Outcome>({ kind: 'refused', code: 'not_found', message: msg(words, 'record.not_found') })
 												: actOutcome(bolt.act({ [`${model}.delete`]: [{ target: targetOf(row) }] }));
 										}))
 									).pipe(
@@ -940,17 +942,17 @@
 											return {
 												kind: 'refused',
 												code: 'kept',
-												message: msg(bolt, 'view.deleteKept',
+												message: msg(words, 'view.deleteKept',
 													{
 														deleted: outcomes.length - kept.length,
 														kept: kept.length,
-														reason: outcomeText(bolt, first)
+														reason: outcomeText(words, first)
 													}
 												)
 											};
 										})
 									),
-								msg(bolt, 'view.deleted', { n: target.length })
+								msg(words, 'view.deleted', { n: target.length })
 							);
 					})
 				)
@@ -967,7 +969,7 @@
 					Effect.flatMap((answer) => {
 						const rows = page_of(answer, model)?.rows ?? [];
 						return rows.length !== target.length
-							? Effect.succeed<Outcome>({ kind: 'refused', code: 'not_found', message: msg(bolt, 'record.not_found') })
+							? Effect.succeed<Outcome>({ kind: 'refused', code: 'not_found', message: msg(words, 'record.not_found') })
 							: actOutcome(bolt.act({ [`${model}.update`]: rows.map((row) => ({ target: targetOf(row), set })) }));
 					}),
 					Effect.tap((outcome) =>
@@ -992,14 +994,14 @@
 			const cell = (s: string) => (/[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s);
 			const kindOf = (f: string) =>
 				exporter.kinds?.[f] ?? (kinds.catalog?.[model] ?? catalog[source])?.fields[f];
-			const words = (f: string) => (v: string) =>
-				enum_text(v, { t: (k) => bolt.t(k), model, field: f });
+			const enumWords = (f: string) => (v: string) =>
+				enum_text(v, { t: (k) => words.t(k), model, field: f });
 			const text =
 				CSV_BOM +
 				[
 					exporter.labels,
 					...rows.map((r) =>
-						exporter.fields.map((f) => csvCell(r, f, kindOf(f), words(f), bolt.locale))
+						exporter.fields.map((f) => csvCell(r, f, kindOf(f), enumWords(f), words.locale))
 					)
 				]
 					.map((line) => line.map(cell).join(','))
@@ -1017,7 +1019,7 @@
 			: view.rows.flatMap((n, i) =>
 					// an incomplete row (a field, no value yet) stays in the builder; it is not applied, so it is no chip
 					complete(n)
-						? [{ i, parts: nodeParts(catalog, source, n, humanize, named, opWords, bolt.locale) }]
+						? [{ i, parts: nodeParts(catalog, source, n, humanize, named, opWords, words.locale) }]
 						: []
 				)
 	);
@@ -1074,10 +1076,10 @@
 		>
 			{#if st?.state === 'pending'}<Spinner
 					class="size-3.5"
-					label={msg(bolt, 'view.running')}
+					label={msg(words, 'view.running')}
 				/>
 			{:else if st?.state === 'done'}<Glyph name="check" class="size-3.5" />{/if}
-			{st?.state === 'done' ? msg(bolt, 'view.done') : e.button}
+			{st?.state === 'done' ? msg(words, 'view.done') : e.button}
 		</Button>
 	</div>
 	{#if watching(e) && imported !== null && findings.length > 0 && (st?.state === 'done' || st?.state === 'failed')}
@@ -1086,7 +1088,7 @@
 			<ul class="grid max-h-48 gap-1 overflow-y-auto text-xs">
 				{#each findings as f, i (i)}
 					{@const at = [
-						f.at === 0 ? '' : msg(bolt, 'view.row', { row: f.at }),
+						f.at === 0 ? '' : msg(words, 'view.row', { row: f.at }),
 						f.field === null ? '' : pathLabel(catalog, model, f.field, humanize)
 					]
 						.filter((x) => x !== '')
@@ -1133,8 +1135,8 @@
 							'hover:bg-accent hover:text-foreground grid size-8 [--hit-target:2rem] shrink-0 place-items-center rounded-sm',
 							cfg.error ? 'text-destructive' : 'text-muted-foreground'
 						]}
-						aria-label={msg(bolt, 'view.about', {
-							what: title || label(bolt, model)
+						aria-label={msg(words, 'view.about', {
+							what: title || label(words, model)
 						})}
 						title={about}
 						data-view-about><Glyph name="info" /></Popover.Trigger
@@ -1328,12 +1330,12 @@
 								{...props}
 								size="icon"
 								variant="ghost"
-								hint={msg(bolt, 'view.actions')}
-								aria-label={msg(bolt, 'view.actions')}
+								hint={msg(words, 'view.actions')}
+								aria-label={msg(words, 'view.actions')}
 								aria-busy={pending}
 								data-view-actions
 							>
-								{#if pending}<Spinner label={msg(bolt, 'view.running')} />{:else}<Glyph
+								{#if pending}<Spinner label={msg(words, 'view.running')} />{:else}<Glyph
 										name="zap"
 										class="size-3.5"
 									/>{/if}
@@ -1369,8 +1371,8 @@
 											}}
 										>
 											<p class="text-meta" data-bulk-update-count>
-												{msg(bolt, 'table.selected', { n: picked.length })}.
-												{msg(bolt, 'view.editOnlyChosen')}
+												{msg(words, 'table.selected', { n: picked.length })}.
+												{msg(words, 'view.editOnlyChosen')}
 											</p>
 											{#each editFields as field (field.name)}
 												{@const chosen = Object.hasOwn(editValues, field.name)}
@@ -1419,12 +1421,12 @@
 																disabled={status['update']?.state === 'pending'}
 																onclick={() => (editValues = { ...editValues, [field.name]: null })}
 															>
-																{msg(bolt, 'view.clearValue')}
+																{msg(words, 'view.clearValue')}
 															</Button>
 														{/if}
 														{#if editProblems.get(field.name)}
 															<p role="alert" class="text-destructive text-xs">
-																{bolt.t(editProblems.get(field.name) ?? '')}
+																{words.t(editProblems.get(field.name) ?? '')}
 															</p>
 														{/if}
 													{/if}
@@ -1472,9 +1474,9 @@
 												data-bulk-update-submit
 											>
 												{#if status['update']?.state === 'pending'}<Spinner
-														label={msg(bolt, 'view.running')}
+														label={msg(words, 'view.running')}
 													/>{/if}
-												{msg(bolt, 'view.applySelected', {
+												{msg(words, 'view.applySelected', {
 													n: picked.length
 												})}
 											</Button>
@@ -1493,12 +1495,12 @@
 				<Button
 					size="default"
 					class={cfg.trailing ? 'px-2.5 @xl:px-3' : 'ml-auto px-2.5 @xl:px-3'}
-					aria-label={msg(bolt, 'table.new')}
+					aria-label={msg(words, 'table.new')}
 					data-view-new
 					onclick={create}
 				>
 					<Glyph name="plus" /><span class="hidden @xl:inline"
-						>{on_add ? msg(bolt, 'table.add') : msg(bolt, 'table.new')}</span
+						>{on_add ? msg(words, 'table.add') : msg(words, 'table.new')}</span
 					>
 				</Button>
 			{/if}
@@ -1514,7 +1516,7 @@
 						<button
 							type="button"
 							class="hover:bg-accent grid size-4 place-items-center rounded-full"
-							aria-label={msg(bolt, 'view.removeFilter')}
+							aria-label={msg(words, 'view.removeFilter')}
 							onclick={() => view?.setRows(view.rows.filter((_, j) => j !== c.i))}
 							><Glyph name="x" class="size-3" /></button
 						>
@@ -1533,7 +1535,7 @@
 						<button
 							type="button"
 							class="hover:bg-accent grid size-4 place-items-center rounded-full"
-							aria-label={msg(bolt, 'view.removeSort')}
+							aria-label={msg(words, 'view.removeSort')}
 							onclick={() => view?.setOrder(view.order.filter((_, j) => j !== i))}
 							><Glyph name="x" class="size-3" /></button
 						>

@@ -1,27 +1,8 @@
-// The wire vocabulary of an integration instance, shared by the host verbs (`protocol/integrations.ts`), the
-// links manager and the browser (`client/integrations.ts`, the shell's setup views): where a link is, what its
-// provider asks of the operator (a setup is data), and the one `InstanceStatus` the shell draws, decoded at the
-// trust boundary by its Schema (`schema.ts`).
+// An integration instance's status as the shell reads it: its operator text in a locale, and the one `InstanceStatus`
+// the shell draws, decoded at the trust boundary by its Schema (`@norbital-ai/host-api`).
 import { Option, Schema } from 'effect';
 import type { Json } from '../decl/values.ts';
-import { InstanceStatus, type LocalText } from './schema.ts';
-
-export type {
-	ImportStart,
-	ImportStartInput,
-	ImportStartCapability,
-	InstanceState,
-	InstanceStatus,
-	IntegrationOffer,
-	LinkStatus,
-	LocalText,
-	Pairing,
-	ProviderChoice,
-	SetupDescription,
-	SetupField,
-	SetupStep,
-	TestSend
-} from './schema.ts';
+import { InstanceStatus, type LocalText } from '@norbital-ai/host-api';
 
 /** `x` in `locale`, English when it has none. */
 export const local_text = (x: LocalText, locale: string): string =>

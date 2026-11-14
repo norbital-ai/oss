@@ -10,10 +10,10 @@ import { scratchPath } from '../../../scripts/lib/scratch.ts';
 import { prepare_migrations } from '../src/compiler/migrations.ts';
 import { TestDb } from '../src/test/database.ts';
 import { apply_migrations, read_migrations } from '../../bolt/src/engine/schema/migrations.ts';
-import { PgliteDb } from '../../bolt/src/node/db/pglite.ts';
-import type { TenantDbShape } from '../../bolt/src/engine/db/tenant-db.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
+import { TenantDb, type TenantDbShape } from '../../bolt/src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
-import { act } from '../../bolt/src/engine/write/act.ts';
+import { act_one } from '../../bolt/tests/support/act-one.ts';
 import { manifest as base } from '../../bolt/tests/engine-fixture.ts';
 import { admin, NOW, TODAY } from '../../bolt/tests/write-fixture.ts';
 
@@ -43,7 +43,7 @@ it.live('a migration failing at cutover leaves the previous release serving and 
 	Effect.scoped(
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
-			const db = PgliteDb.make(yield* TestDb.open());
+			const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open()));
 			const directory = yield* Effect.acquireRelease(scratchPath(`cutover-${randomUUID()}`), (dir) =>
 				fs.remove(dir, { recursive: true, force: true }).pipe(Effect.orDie)
 			);
@@ -51,13 +51,12 @@ it.live('a migration failing at cutover leaves the previous release serving and 
 			const source = join(directory, 'migrations');
 			let n = 0;
 			const create = (m: EngineManifest, d: TenantDbShape, name: string) =>
-				act(
+				act_one(
 					{ manifest: m, db: d },
 					{
 						model: 'entry',
 						verb: 'create',
 						input: [{ name }],
-						mode: { _tag: 'Direct' },
 						key: `cutover-${n}`,
 						invocationId: `cutover-${n++}`,
 						issuedAt: NOW,

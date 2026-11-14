@@ -1,5 +1,5 @@
 import { Deferred, Effect, Latch, Option, Queue, Ref, Semaphore } from 'effect';
-import { BoltError } from '@norbital-ai/bolt/engine';
+import { Unavailable } from '@norbital-ai/host-api';
 /** One activation's FIFO envelope; the first lane is interactive, the second is background work. */
 export const envelope = (max: number) =>
 	Effect.gen(function* () {
@@ -8,11 +8,11 @@ export const envelope = (max: number) =>
 			idle = yield* Latch.make(true),
 			open = yield* Ref.make(true);
 		type Waiter = {
-			readonly ready: Deferred.Deferred<void, BoltError>;
+			readonly ready: Deferred.Deferred<void, Unavailable>;
 			readonly state: Ref.Ref<'Waiting' | 'Granted' | 'Released'>;
 		};
 		const lanes = [yield* Queue.unbounded<Waiter>(), yield* Queue.unbounded<Waiter>()] as const;
-		const busy = () => BoltError.make('busy', 'admission', 'The server is draining.');
+		const busy = () => new Unavailable({ facility: 'admission', reason: 'The server is draining.' });
 		const next = Effect.gen(function* () {
 			while (yield* permits.takeIfAvailable(1)) {
 				const high = yield* Queue.poll(lanes[0]),
@@ -41,7 +41,7 @@ export const envelope = (max: number) =>
 				Effect.gen(function* () {
 					if (!(yield* Ref.get(open))) return yield* Effect.fail(busy());
 					const waiter: Waiter = {
-						ready: yield* Deferred.make<void, BoltError>(),
+						ready: yield* Deferred.make<void, Unavailable>(),
 						state: yield* Ref.make<'Waiting' | 'Granted' | 'Released'>('Waiting')
 					};
 					yield* Queue.offer(lanes[lane], waiter);

@@ -142,7 +142,6 @@ export class ViewCompiler {
 				} });
 				return { ...common, kind: 'request', roots, models: new Set(roots.flatMap((root) => [...root.plan.models])) };
 			}
-			case 'after': return yield* BoltError.make('invalid', 'decode', 'an after read is not liveable');
 			case 'history': return { ...opaque(), target: { model: read.model, id: read.id } };
 			case 'aggregate': case 'similar': return opaque();
 			case 'transcript': return { ...page({
@@ -214,7 +213,7 @@ export class ViewCompiler {
 				const matches: Rows['matches'] = (raw, bindings) => {
 					if (read.kind === 'get' && raw['id'] !== read.id) return false;
 					if (unknown) return undefined;
-					const row = raw, env: EvalEnv = { cat, bindings, authority, scoped: true };
+					const row = raw, env: EvalEnv = { cat, bindings, authority };
 					return canRead(env, model, row, output ?? 'default') && (where === undefined || evaluate(env, model, where, row));
 				};
 				const projected = yield* catalog_for(cat, model, output).pipe(

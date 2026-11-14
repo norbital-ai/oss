@@ -6,26 +6,18 @@ import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { KeysPort } from '../src/engine/contracts.ts';
+import { DbError, type KeysPort, type PackStep } from '@norbital-ai/host-api';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
+import { PgliteDb, type PgliteClient, keys_port } from '@norbital-ai/host-api/node';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
 import { toPred } from '../src/engine/access/pred.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
 import { Keys } from '../src/engine/ports.ts';
 import { Secrets } from '../src/engine/secrets.ts';
-import { keys_port } from '../src/node/keys.ts';
-import { act, record_capabilities, type ActRequest } from '../src/engine/write/act.ts';
-import {
-	load_pack,
-	packLoader,
-	source_of,
-	type Pack,
-	type PackStep
-} from '../src/engine/write/pack.ts';
+import { record_capabilities } from '../src/engine/capabilities/record.ts';
+import { load_pack, packLoader, source_of, type Pack } from '../src/engine/write/pack.ts';
 import {
 	admin,
 	arm,
@@ -38,6 +30,7 @@ import {
 	TODAY,
 	write_arm
 } from './write-fixture.ts';
+import { act_one, type OneAct } from './support/act-one.ts';
 
 const m: EngineManifest = {
 	...base,
@@ -97,7 +90,7 @@ const fixture = Effect.gen(function* () {
 				});
 		}
 	};
-	const db = PgliteDb.make(client);
+	const db = TenantDb.typed(PgliteDb.make(client));
 	yield* seed_envoys(db, runtimeEnvoys);
 	yield* db.write({
 		text: `insert into sys_user (id, name) values ($1, 'Ada'), ('u2', 'Bob')`,
@@ -110,12 +103,11 @@ const fixture = Effect.gen(function* () {
 	let n = 0;
 	const read = <A>(schema: Schema.Decoder<A>, sql: string, params: readonly Json[] = []) =>
 		db.rows(schema, { text: sql, params });
-	const run = (over: Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>) =>
-		act(
+	const run = (over: Partial<OneAct> & Pick<OneAct, 'verb' | 'input'>) =>
+		act_one(
 			{ manifest: m, db },
 			{
 				model: 'sys_integration',
-				mode: { _tag: 'Direct' },
 				key: `key-${n}`,
 				issuedAt: NOW,
 				authority: admin,
@@ -345,7 +337,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 		() =>
 			Effect.gen(function* () {
 				const { db, run, created } = yield* SystemFixture;
-				const own = yield* toPred(m, 'sys_integration', { owner: { eq: { var: 'requestor.id' } } });
+				const own = yield* toPred(m, 'sys_integration', { owner: { eq: { var: 'actor.id' } } });
 				// the kernel directory's staff read (an owner is a readable member), and the instances it owns
 				const caller = authority({
 					sys_user: grants('sys_user', { create: [], update: [], delete: [] }),

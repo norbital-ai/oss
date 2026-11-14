@@ -11,7 +11,7 @@ automation({
 	policies: ['sales_rep'],
 	on: [{ model: 'sys_user', verbs: ['create', 'update'] }, { model: 'sys_invitation', verbs: ['create'] }],
 	run: function* (_, ctx) {
-		const t = ctx.run.trigger;
+		const t = ctx.trigger;
 		if (t.kind === 'system' && t.cause === 'event') {
 			if (t.model === 'sys_user') {
 				expectTypeOf(t.records).toEqualTypeOf<readonly Id<'sys_user'>[]>();
@@ -44,7 +44,7 @@ automation({
 	policies: ['sales_rep'],
 	on: [{ cron: '@daily' }],
 	run: function* (_, ctx) {
-		const t = ctx.run.trigger;
+		const t = ctx.trigger;
 		// @ts-expect-error no listener declared: no event trigger
 		if (t.kind === 'system' && t.cause === 'event') void t.records;
 	}

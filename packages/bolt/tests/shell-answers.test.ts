@@ -2,16 +2,11 @@
 // survives the decode (an excess key refuses), and a malformed answer is the shell's protocol failure.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import {
-	SettingsAnswer,
-	ShellBootAnswer,
-	StudioFileAnswer,
-	StudioViewAnswer
-} from '../src/shell/api-types.ts';
+import { SettingsAnswer, ShellBootAnswer } from '../src/shell/api-types.ts';
 import { shell_api } from '../src/shell/runtime.ts';
 import type { ShellBoot } from '../src/shell/nav.ts';
 import type { Settings } from '../src/shell/settings/data.ts';
-import type { StudioFile, StudioView } from '../src/shell/studio/model.ts';
+import { StudioFile, StudioView } from '@norbital-ai/host-api';
 
 const strict = <A>(schema: Schema.Decoder<A>, value: A) =>
 	expect(Schema.decodeUnknownSync(schema)(value, { onExcessProperty: 'error' })).toEqual(value);
@@ -315,7 +310,7 @@ const studio = {
 	preview_control: { holder: 'norbius', conversation: 'conv', at: '2026-01-01' },
 	base: 'c0',
 	behind: 1,
-	conflicts: ['src/b.ts'],
+	conflicts: [{ path: 'src/b.ts', kind: 'content' }],
 	change_sets: [
 		{
 			id: 'ch1',
@@ -375,8 +370,8 @@ describe('shell answers', () => {
 	it('decode every key their types carry', () => {
 		strict(ShellBootAnswer, boot);
 		strict(SettingsAnswer, settings);
-		strict(StudioViewAnswer, studio);
-		for (const file of files) strict(StudioFileAnswer, file);
+		strict(StudioView, studio);
+		for (const file of files) strict(StudioFile, file);
 	});
 	it.effect('refuse a malformed answer as a protocol failure', () =>
 		Effect.gen(function* () {

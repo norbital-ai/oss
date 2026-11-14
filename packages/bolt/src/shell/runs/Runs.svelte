@@ -23,7 +23,8 @@
 		type UiContext
 	} from '@norbital-ai/ui';
 	import { Cluster } from '@norbital-ai/ui/layout';
-	import { LIMITS, type LogRow } from '../../engine/contracts.ts';
+	import type { LogRow } from '@norbital-ai/host-api';
+	import { LIMITS } from '../../engine/contracts.ts';
 	import type { RunView } from '../../engine/runs/rows.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
@@ -156,7 +157,8 @@
 	let mutationError = $state<string | null>(null);
 	const error = $derived(mutationError ?? runs.error?.message ?? detail.error?.message ?? null);
 
-	const stoppable = (status: string) => status === 'queued' || status === 'running';
+	const stoppable = (status: string) =>
+		status === 'queued' || status === 'running' || status === 'waiting';
 	const retryable = (status: string) => status === 'failed' || status === 'stopped';
 	const stop = Effect.fn('Runs.stop')(function* (id: string) {
 		mutationError = null;
@@ -225,6 +227,9 @@
 				max="1"
 				value={row.progress}
 			></progress>{/if}
+		{#if row.status === 'waiting'}<span class="truncate text-xs text-muted-foreground"
+				>{Number.isNaN(Date.parse(row.due_at)) ? t('until an event') : t('until {at}').replace('{at}', when(row.due_at))}</span
+			>{/if}
 		{#if row.error_code}<span class="truncate text-xs text-destructive">{row.error_code}</span>{/if}
 	</span>
 {/snippet}

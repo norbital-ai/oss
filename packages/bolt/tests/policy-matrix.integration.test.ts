@@ -76,10 +76,10 @@ const manifest = Result.getOrThrow(
 );
 
 // ── the grant predicates, in the new `Where` ──
-const OWN = { assignee: { eq: { var: 'requestor.id' } } };
+const OWN = { assignee: { eq: { var: 'actor.id' } } };
 const UNCHECKED = { suspicion_checked_at: { is_null: true } };
 const OWN_VARIATION = { assignment: { is: OWN } };
-const OWN_EMPLOYMENT = { employee: { is: { email: { eq: { var: 'requestor.email' } } } } };
+const OWN_EMPLOYMENT = { employee: { is: { email: { eq: { var: 'actor.email' } } } } };
 const NOT_A_CORRECTION = { kind: { ne: 'MANUAL_ADJUSTMENT' } };
 type Row = {
 	id: string;
@@ -218,7 +218,7 @@ const matrix: readonly Row[] = [
 	{
 		id: 'employee.case-folded-email',
 		root: 'employees',
-		where: { email: { eq: { var: 'requestor.email' } } },
+		where: { email: { eq: { var: 'actor.email' } } },
 		sql: ['lower('],
 		allow: ['employee-owned'],
 		deny: ['employee-other']

@@ -6,7 +6,7 @@ import { approvable, heldModels, lockPieces } from '../src/engine/approvals/lock
 import { Chain } from '../src/engine/write/sql.ts';
 import { member } from './write-fixture.ts';
 import type { Catalog } from '@norbital-ai/store';
-import { DbError } from '../src/engine/errors.ts';
+import { DbError } from '@norbital-ai/host-api';
 
 it.effect('reports a database failure while loading held approval models', () =>
 	Effect.gen(function* () {

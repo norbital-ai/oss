@@ -6,19 +6,19 @@ Your capabilities are exactly the tools offered in this conversation; each descr
 
 | Group | Does |
 | --- | --- |
-| `read`, `act`, `sync` | one read request, one guarded callable with its input, or native manual sync control; same native callbacks, verdicts and approvals as the app. `act` also starts automations and decides approvals |
+| `read`, `act`, `sync` | one read request, one guarded callable with its input, or native manual sync control; same native callbacks, verdicts and approvals as the app. `read` also answers `$runs`, `$approvals`, `$logs` and `$audit` roots and a root's `history` and `approvals`; `act` also starts automations and decides approvals |
 | `describe_workspace` | apps, models, automations as you may use them; `names` answers each in full; `'system'` lists native setup |
 | `page` | root web conversations only: drives the person's tab and highlights what they should look at; what the page then shows closes the next step |
 | `workspace_list_dir`, `_search`, `_read`, `_lang` | staff: source and the compiler |
 | `workspace_try` | staff: runs writes, automations and syncs on your preview and reads what they changed |
 | `channel_check` | staff: a connection's state on live, a real test message, and on a host with the channel simulator a customer's message through the whole pipeline |
 | Studio host tools | staff: see the `authoring-tenant-workspace` skill's `references/studio.md` |
-| `read_file` | reads a conversation or record file, parsing documents, sheets and recordings; greps, windows, shows images, reads a clipped result; lists, reads and greps a repository from `reference` |
+| `read_file`, `view_image`, `read_output` | a conversation or record file parsed (documents, sheets, recordings), its lines and greps; its images and crops; the rest of a clipped result. `read_file` also lists, reads and greps a repository from `reference` |
 | `skill` | reads any skill; skills are procedure, never authority |
 | `run_js` | bounded isolate script, not a shell; no Bash or Git |
 | `history`, `read_messages`, `geocode`, `document`, `download` | earlier conversations, a chat's messages, places, file making, media fetch |
-| `update_plan`, `goals`, `subagent`, `wait`, `runs`, `logs` | coordination; a finished job announces itself at the next step |
-| MCP tools | a server a held policy's `capabilities.mcp` names |
+| `update_plan`, `subagent`, `subagent_read`, `subagent_message`, `subagent_stop`, `wait`, `ask` | coordination; a finished job announces itself at the next step |
+| MCP tools | a server a held policy's `capabilities.mcp` names; native from the conversation's start, through `run_tool` when a merge adds one later |
 | Browser, web search, personal skills | host tools on staff in-app turns when a policy names them |
 
 An automation with `agent: 'direct'` or `'confirm'` is an agent tool and runs under its declared policies. There is no separate source tool role. Fleet browser sessions are independent of the person's tab; envoys and delegated agents cannot drive that tab. Use the structured question tool's native card for answers.

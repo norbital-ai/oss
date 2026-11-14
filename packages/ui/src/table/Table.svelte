@@ -151,9 +151,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	import { currentSearchParams, replaceSearchParams } from '../utilities/url.js';
 	import { Button } from '../primitives/button/index.js';
 	import { confirm_action } from '../primitives/dialog/confirm.js';
-	import * as Popover from '../primitives/popover/index.js';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
-	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
 	import { likeWhere } from '../kinds/kind.js';
 	import { KINDS } from '../kinds/registry.js';
@@ -162,7 +160,12 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	import { optional_bolt_of } from '../client/context.js';
 	import type { ViewBolt } from '../client/contract.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
-	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
+	import Glyph from '../primitives/icon/Glyph.svelte';
+	import ColumnMenu from './ColumnMenu.svelte';
+	import RowCard from './RowCard.svelte';
+	import RowMenu from './RowMenu.svelte';
+	import SelectionBar from './SelectionBar.svelte';
+	import TablePager from './TablePager.svelte';
 	import { toast } from '../toast/toast.svelte.js';
 	import { localExposure, matches, sortRows } from '../filter/local.js';
 	import { orderOf, sortable } from '../filter/order.js';
@@ -626,6 +629,22 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 				)
 		);
 	}
+	/** A row's actions as its menu shows them: the author's, then a local editable grid's Remove. */
+	const rowMenu = (row: ReadRow) => [
+		...actions.map((a) => ({ label: a.label, run: () => rowAct(a, row) })),
+		...(kind === 'local' && on_change && remove
+			? [
+					{
+						label: msg(text, 'table.remove'),
+						run: () => {
+							if (tableSource._tag !== 'local') return;
+							const index = tableSource.rows.indexOf(row);
+							if (index >= 0) on_change(tableSource.rows.filter((_, i) => i !== index));
+						}
+					}
+				]
+			: [])
+	];
 	function rowAct(a: RowAction<RowIn<S>>, row: RowIn<S>) {
 		const asked =
 			a.confirm === undefined
@@ -909,8 +928,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 				}
 			]
 		>;
-	},
-	title = false
+	}
 )}
 	{@const displayed = presentRow(row)}
 	{#if col.cell}{@render col.cell({
@@ -923,7 +941,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		>
 	{:else if plainText(row, col.field)}<Overflow
 			text={fullText(row, col.field)}
-			expand={title ? 'never' : 'row'}
+			expand="never"
 			><Value {ctx}
 				value={valueAt(displayed, col.field)}
 				kind={kindOf(col.field)}
@@ -952,150 +970,39 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		data-table-footer
 	>
 		{#if customFooter}{@render customFooter()}{:else}
-			{#if selectable && !(kind === 'local' && on_change)}{@render selection(rows)}{:else}<span
-					class="px-1 tabular-nums"
-					data-range>{range}</span
-				>{/if}
-			{#if paged}
-				<div class="flex items-center gap-1" data-pager>
-					<Combobox
-						variant="ghost"
-						class="w-24"
-						readonly={false}
-						aria-label={msg(text, 'table.pageSize')}
-						searchable={false}
-						options={SIZES.map((n) => ({
-							value: String(n),
-							label: msg(text, 'table.perPage', { n })
-						}))}
-						value={String(size)}
-						on_change={(v) => v !== null && setSize(Number(v))}
-					/>
-					<Button
-						size="icon"
-						variant="ghost"
-						hint={msg(text, 'table.prev')}
-						aria-label={msg(text, 'table.prev')}
-						disabled={back.length === 0}
-						onclick={() => {
-							st = { ...st, after: back.at(-1) ?? null };
-							back = back.slice(0, -1);
-						}}><Glyph name="left" /></Button
-					>
-					<span class="min-w-16 text-center tabular-nums" data-page
-						>{pages === null
-							? msg(text, 'table.page', { page: back.length + 1 })
-							: msg(text, 'table.pageOf', {
-									page: back.length + 1,
-									pages
-								})}</span
-					>
-					<Button
-						size="icon"
-						variant="ghost"
-						hint={msg(text, 'table.next')}
-						aria-label={msg(text, 'table.next')}
-						disabled={next === null}
-						onclick={() => {
-							const cursor = next;
-							if (cursor === null) return;
-							back = [...back, st.after];
-							st = { ...st, after: cursor };
-						}}><Glyph name="right" /></Button
-					>
-				</div>
-			{/if}
+			{#if selectable && !(kind === 'local' && on_change)}<SelectionBar
+					{ctx}
+					count={selected.size}
+					all={pageAll(rows)}
+					{matching}
+					busy={matchingRequest !== null}
+					range={range ?? ''}
+					on_page={(on) => togglePage(rows, on)}
+					on_matching={selectMatching}
+					on_clear={clearSelection}
+				/>{:else}<span class="px-1 tabular-nums" data-range>{range}</span>{/if}
+			{#if paged}<TablePager
+					{ctx}
+					{size}
+					sizes={SIZES}
+					page={back.length + 1}
+					{pages}
+					has_previous={back.length > 0}
+					has_next={next !== null}
+					on_size={setSize}
+					on_previous={() => {
+						st = { ...st, after: back.at(-1) ?? null };
+						back = back.slice(0, -1);
+					}}
+					on_next={() => {
+						const cursor = next;
+						if (cursor === null) return;
+						back = [...back, st.after];
+						st = { ...st, after: cursor };
+					}}
+				/>{/if}
 		{/if}
 	</footer>
-{/snippet}
-
-{#snippet colItem(text: string, glyph: GlyphName, onclick: () => void, off = false)}
-	<button
-		type="button"
-		class="hover:bg-accent flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left disabled:opacity-40"
-		disabled={off}
-		{onclick}
-	>
-		<Glyph name={glyph} class="text-muted-foreground size-3.5 shrink-0" />{text}
-	</button>
-{/snippet}
-
-<!-- the grid's sticky actions cell: two or more actions fold into one menu, so the cell stays narrow and never covers the
-     columns it floats over; the phone's card folds them the same way, so they never squeeze the row -->
-{#snippet rowMenu(row: ReadRow)}
-	{#if actions.length + (kind === 'local' && on_change && remove ? 1 : 0) > 1}
-		<Popover.Root>
-			<Popover.Trigger
-				class="text-muted-foreground hover:bg-accent hover:text-foreground grid size-8 [--hit-target:2rem] place-items-center rounded-sm"
-				aria-label={msg(text, 'table.rowActions')}
-				data-row-menu><Glyph name="more" class="size-4" /></Popover.Trigger
-			>
-			<Popover.Content
-				align="end"
-				class="flex w-auto min-w-40 flex-col gap-0.5 p-1.5 [&>button]:justify-start"
-				>{@render rowActions(row)}</Popover.Content
-			>
-		</Popover.Root>
-	{:else}{@render rowActions(row)}{/if}
-{/snippet}
-
-{#snippet rowActions(row: ReadRow)}
-	{#each actions as a (a)}
-		<Button
-			variant="ghost"
-			onclick={(e: MouseEvent) => {
-				e.stopPropagation();
-				rowAct(a, row);
-			}}>{a.label}</Button
-		>
-	{/each}
-	{#if kind === 'local' && on_change && remove}
-		<Button
-			variant="ghost"
-			onclick={() => {
-				if (tableSource._tag !== 'local') return;
-				const index = tableSource.rows.indexOf(row);
-				if (index >= 0) on_change(tableSource.rows.filter((_, i) => i !== index));
-			}}>{msg(text, 'table.remove')}</Button
-		>
-	{/if}
-{/snippet}
-
-<!-- the footer's selection (both layouts): the page's checkbox (the card list has no header), then the count and every
-     matching row in place of the range while rows are selected -->
-{#snippet selection(rows: readonly RowIn<S>[])}
-	{@const all = pageAll(rows)}
-	<div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-1" data-selection>
-		<label class="inline-flex items-center gap-2 md:hidden">
-			<input
-				type="checkbox"
-				checked={all}
-				aria-label={msg(text, 'table.selectPage')}
-				onchange={(e) => togglePage(rows, e.currentTarget.checked)}
-				data-select-page
-			/>
-			{msg(text, 'table.selectPage')}
-		</label>
-		{#if selected.size > 0}
-			<span class="font-medium" data-selected-count
-				>{msg(text, 'table.selected', { n: selected.size })}</span
-			>
-			{#if all && matching !== null && matching > selected.size}
-				<Button
-					variant="link"
-					class="h-auto px-0 text-xs"
-					disabled={matchingRequest !== null}
-					onclick={selectMatching}
-					data-select-matching
-				>
-					{msg(text, 'table.selectMatching', { n: matching })}</Button
-				>
-			{/if}
-			<Button variant="link" class="h-auto px-0 text-xs" onclick={clearSelection} data-select-clear
-				>{msg(text, 'table.clearSelection')}</Button
-			>
-		{:else}<span class="tabular-nums" data-range>{range}</span>{/if}
-	</div>
 {/snippet}
 
 <!-- the view fills a bounded parent (a flex column or a definite height) and scrolls inside its card; it never grows the
@@ -1103,7 +1010,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 <section
 	class={embedded
 		? '@container min-w-0'
-		: '@container flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2'}
+		: '@container flex h-full min-h-72 min-w-0 flex-1 flex-col gap-2'}
 	data-view="table"
 	data-source={kind}
 	data-embedded={embedded || undefined}
@@ -1257,72 +1164,26 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 														name="pin"
 														class="text-muted-foreground size-3 shrink-0"
 													/>{/if}
-												<Popover.Root>
-													<Popover.Trigger
-														class={[
-															'text-muted-foreground hover:bg-background hover:text-foreground ml-auto grid size-6 shrink-0 place-items-center rounded-sm transition-opacity focus-visible:opacity-100 data-[state=open]:opacity-100',
-															'opacity-0 group-hover:opacity-100'
-														]}
-														aria-label={msg(text, 'table.columnMenu',
-															{
-																column: colLabel(c)
-															}
-														)}
-														data-column-menu={f}
-														><Glyph name="more" class="size-3.5" /></Popover.Trigger
-													>
-													<Popover.Content
-														align="start"
-														class="flex w-52 flex-col gap-0.5 p-1.5 text-xs font-normal"
-													>
-														{@render colItem(
-															isPinned
-																? msg(text, 'table.unpin')
-																: msg(text, 'table.pin'),
-															'pin',
-															() => togglePin(f)
-														)}
-														{@render colItem(
-															msg(text, 'table.hideColumn'),
-															'eyeOff',
-															() => toggleHidden(f),
-															ordered.length === 1
-														)}
-														{@render colItem(
-															msg(text, 'table.moveLeft'),
-															'left',
-															() => moveColumn(f, -1),
-															ci === 0
-														)}
-														{@render colItem(
-															msg(text, 'table.moveRight'),
-															'right',
-															() => moveColumn(f, 1),
-															ci === ordered.length - 1
-														)}
-														{#if widths[f] !== undefined}{@render colItem(
-																msg(text, 'table.resetWidth'),
-																'sync',
-																() => {
-																	const { [f]: _, ...rest } = widths;
-																	widths = rest;
-																	keep();
-																}
-															)}{/if}
-														{#if hiddenCols.length > 0}
-															<p
-																class="text-muted-foreground mt-1 border-t px-2 pt-2 pb-1 font-medium"
-															>
-																{msg(text, 'table.hiddenColumns')}
-															</p>
-															{#each hiddenCols as h (colOf(h).field)}{@render colItem(
-																	colLabel(h),
-																	'eye',
-																	() => toggleHidden(colOf(h).field)
-																)}{/each}
-														{/if}
-													</Popover.Content>
-												</Popover.Root>
+												<ColumnMenu
+													{ctx}
+													field={f}
+													label={colLabel(c)}
+													pinned={isPinned}
+													first={ci === 0}
+													last={ci === ordered.length - 1}
+													only={ordered.length === 1}
+													resized={widths[f] !== undefined}
+													hidden={hiddenCols.map((h) => ({ field: colOf(h).field, label: colLabel(h) }))}
+													on_pin={() => togglePin(f)}
+													on_hide={() => toggleHidden(f)}
+													on_move={(by) => moveColumn(f, by)}
+													on_reset_width={() => {
+														const { [f]: _, ...rest } = widths;
+														widths = rest;
+														keep();
+													}}
+													on_show={toggleHidden}
+												/>
 											</span>
 											<!-- the resize handle: drag the column's right edge -->
 											<span
@@ -1404,7 +1265,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 											<td
 												class={[
 													'bg-card',
-													isPinned ? 'sticky z-[1]' : ci === 0 && 'relative',
+													isPinned && 'sticky z-[1]',
 													isPinned && ci === pinCount - 1 && PIN_EDGE,
 													numeric(col.field) && 'text-right tabular-nums',
 													embedded && 'align-middle',
@@ -1436,19 +1297,8 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 																class="mr-1.5 align-middle"
 																data-pending-delete-badge>{msg(text, 'table.pendingDelete')}</Badge
 															>{/if}
-														{@render cell(row, col, ci === 0 && opens)}
+														{@render cell(row, col)}
 													</div>
-												{/if}
-												{#if ci === 0 && opens}
-													<!-- the row's one open control (its record opens in the side panel), over the cell's end while the row is hovered or holds focus -->
-													<button
-														type="button"
-														class="bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))] text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm opacity-0 outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 [@media(hover:none)]:opacity-100"
-														aria-label={msg(text, 'table.openRow')}
-														title={msg(text, 'table.openRow')}
-														onclick={() => open(row)}
-														data-row-open><Glyph name="panel" class="size-3.5" /></button
-													>
 												{/if}
 											</td>
 										{/each}
@@ -1470,7 +1320,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										{/if}
 										{#if actions.length > 0 || (kind === 'local' && on_change && remove)}
 											<td class={['bg-card z-[1]', ACTS_EDGE]} data-row-actions
-												>{@render rowMenu(row)}</td
+												><RowMenu {ctx} actions={rowMenu(row)} /></td
 											>
 										{/if}
 									</tr>
@@ -1538,46 +1388,18 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										/>
 									</label>
 								{/if}
-								<!-- a phone has no hover: the card itself opens the record, and everything on it opens that record; not a
-									     <button>, so a row's own controls inside keep their tap -->
-								<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions -->
-								<div
-									role={opens ? 'button' : undefined}
-									tabindex={opens ? 0 : undefined}
-									class="flex min-w-0 flex-1 cursor-pointer flex-col text-left [&_[data-cell-expand]]:hidden"
-									data-row-card
-									onclick={(e) => rowPress(e, row)}
-									onkeydown={(e) => {
-										if (
-											opens &&
-											e.target === e.currentTarget &&
-											(e.key === 'Enter' || e.key === ' ')
-										) {
-											e.preventDefault();
-											open(row);
-										}
-									}}
+								<!-- a phone has no hover: the card itself opens the record -->
+								<RowCard
+									{opens}
+									fields={fields.map((c) => ({ field: c.field, label: colLabel(c) }))}
+									on_press={(e) => rowPress(e, row)}
+									on_open={() => open(row)}
 								>
-									{#if lead}<span class="truncate text-sm font-medium"
-											>{#if (exposed?.record_label !== undefined || typeof row['$label'] === 'string' || exposed?.label.length === 0) && lead.cell === undefined && recordText(exposed, row)}<span
-													data-record-label>{recordText(exposed, row)}</span
-												>{:else}{@render cell(row, lead, opens)}{/if}</span
-										>{/if}
-									{#if fields.length > 0}
-										<div
-											class="text-muted-foreground flex flex-wrap gap-x-3 text-xs leading-5 [&_[data-enum-list]]:flex-nowrap [&_[data-enum-value]]:h-auto [&_[data-enum-value]]:border-0 [&_[data-enum-value]]:bg-transparent [&_[data-enum-value]]:p-0 [&_[data-enum-value]]:font-normal"
-										>
-											{#each opens ? fields.slice(0, 3) : fields as c (c.field)}
-												<span
-													class="inline-flex max-w-full min-w-0 items-baseline gap-1 whitespace-nowrap"
-													><span class="shrink-0">{colLabel(c)}</span><span
-														class="text-foreground/80 min-w-0 truncate">{@render cell(row, c)}</span
-													></span
-												>
-											{/each}
-										</div>
-									{/if}
-								</div>
+									{#snippet title()}{#if (exposed?.record_label !== undefined || typeof row['$label'] === 'string' || exposed?.label.length === 0) && lead?.cell === undefined && recordText(exposed, row)}<span
+											data-record-label>{recordText(exposed, row)}</span
+										>{:else if lead !== undefined}{@render cell(row, lead)}{/if}{/snippet}
+									{#snippet value(field)}{@const c = fields.find((x) => x.field === field)}{#if c}{@render cell(row, c)}{/if}{/snippet}
+								</RowCard>
 								{#if row_trailing}
 									<div
 										class={[
@@ -1592,7 +1414,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										{@render row_trailing(row)}
 									</div>
 								{/if}
-								{#if actions.length > 0}<div class="shrink-0">{@render rowMenu(row)}</div>{/if}
+								{#if actions.length > 0}<div class="shrink-0"><RowMenu {ctx} actions={rowMenu(row)} /></div>{/if}
 							</li>
 						{/each}
 						{#if narrow.after > 0}<li aria-hidden="true" style="height:{narrow.after}px"></li>{/if}

@@ -10,8 +10,10 @@ import type { Authority, GuestOutcome, Invocation } from '../src/engine/contract
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
-import { act, type WriteEngine } from '../src/engine/write/act.ts';
+import { type WriteEngine } from '../src/engine/write/act.ts';
 import { admin, member, NOW, TODAY } from './write-fixture.ts';
+import { act_one } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 
 const m = Result.getOrThrow(
 	decode_projected_manifest({
@@ -110,7 +112,7 @@ const Changes = Schema.Array(
 );
 /** Each policy's update `check`, as its authored `function*` would answer: the stored row, then the written one. */
 const verdicts: { readonly [target: string]: (c: { before: Json; after: Json }[]) => Json } = {
-	'deletion.orders.delete': (changes) => changes.every(({before,after}) => field(before,'region') === 'north' && after === null) ? {kind:'allow'} : {kind:'deny',message:'Only northern deletions.'},
+	'deletion.orders.delete': (changes) => changes.every(({before,after}) => field(before,'region') === 'north' && after === null) ? {kind:'allow'} : {kind:'refuse',message:'Only northern deletions.'},
 	'routed.orders.update': () => ({
 		kind: 'approve',
 		flow: {
@@ -125,7 +127,7 @@ const verdicts: { readonly [target: string]: (c: { before: Json; after: Json }[]
 				field(before, 'region') === 'north' && field(after, 'region') === 'north'
 		)
 			? { kind: 'allow' }
-			: { kind: 'deny', message: 'Northern orders stay northern.', at: { field: 'region' } },
+			: { kind: 'refuse', message: 'Northern orders stay northern.', at: { field: 'region' } },
 	'kiosk.employees.update': (changes) =>
 		changes.every(
 			({ before, after }) =>
@@ -133,18 +135,18 @@ const verdicts: { readonly [target: string]: (c: { before: Json; after: Json }[]
 				field(after, 'face') === 'APPROVED'
 		)
 			? { kind: 'allow' }
-			: { kind: 'deny', message: 'A kiosk approves a face once.', at: { field: 'face' } },
+			: { kind: 'refuse', message: 'A kiosk approves a face once.', at: { field: 'face' } },
 	'stamp.employees.update': (changes) =>
 		changes.every(
 			({ before, after }) =>
 				field(before, 'checked_at') === null && field(after, 'checked_at') !== null
 		)
 			? { kind: 'allow' }
-			: { kind: 'deny', message: 'A review stamps once.', at: { field: 'checked_at' } }
+			: { kind: 'refuse', message: 'A review stamps once.', at: { field: 'checked_at' } }
 };
 const Row = Schema.Record(Schema.String, Schema.Json);
 const field = (row: Json, name: string): Json => (Schema.is(Row)(row) ? (row[name] ?? null) : null);
-const checks: WriteEngine['guest'] = {
+const policyChecks = with_each({
 	invokeProgram: () =>
 		Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 	invoke: (inv: Invocation) =>
@@ -157,6 +159,15 @@ const checks: WriteEngine['guest'] = {
             const changes = decoded.map(({ before, after }) => ({ before, after }));
 			return { kind: 'ok', output: verdict(changes) };
 		})
+});
+/** How many checks each guest crossing carried: a write's checked arms cross together. */
+const crossings: number[] = [];
+const checks: WriteEngine['guest'] = {
+	...policyChecks,
+	invokeEach: (invocation, parts, bridge) => {
+		crossings.push(parts.length);
+		return policyChecks.invokeEach(invocation, parts, bridge);
+	}
 };
 /** The approval engine's seam: a routed write is held under one request (persistence is the approval suite's). */
 const approval: WriteEngine['approval'] = {
@@ -180,13 +191,12 @@ const fixture = Effect.gen(function* () {
 		input: Json,
 		authority: Authority = admin
 	) =>
-		act(
+		act_one(
 			{ manifest: m, db, guest: checks, approval },
 			{
 				model,
 				verb,
 				input,
-				mode: { _tag: 'Direct' },
 				key: `key-${n}`,
 				issuedAt: NOW,
 				authority,
@@ -290,6 +300,15 @@ describe('engine/write: columns, then one check over the stored and the written 
 				).toMatchObject({ kind: 'refused', code: 'refused', rule: 'stamp.employees.update' });
 			}).pipe(Effect.provide(JudgeFixtureLive))
 	);
+ it.effect('two checked arms on one write cross into the guest once', () =>
+  Effect.gen(function* () {
+   const { create, update } = yield* JudgeFixture;
+   const north = yield* create('orders', { region: 'north', amount: '10' });
+   crossings.length = 0;
+   expect(yield* update('orders', north, { note: 'both' }, as(['mover', 'routed']))).toMatchObject({ kind: 'committed' });
+   expect(crossings).toEqual([2]);
+  }).pipe(Effect.provide(JudgeFixtureLive))
+ );
  it.effect('delete verdicts receive the stored before image, an empty set and null after', () =>
   Effect.gen(function*(){
    const {run,create}=yield* JudgeFixture;

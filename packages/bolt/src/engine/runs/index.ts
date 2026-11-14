@@ -7,7 +7,6 @@ import {
 	Layer,
 	Option,
 	PubSub,
-	Schema,
 	Semaphore
 } from 'effect';
 import type { Row } from './rows.ts';
@@ -42,10 +41,10 @@ import { fileSyncHandlers } from '../sync/file.ts';
 import { syncTriggers } from '../sync/index.ts';
 import { EMBED, embedRun } from '../integrations/embed.ts';
 import { INDEX, indexRun } from '../write/index-run.ts';
-/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
-const LANES = 12,
-	/** How soon a parked generation's wake asks again. */
-	PARKED_WAKE_MS = 5_000;
+/** How soon a parked generation's wake asks again. */
+const PARKED_WAKE_MS = 5_000,
+	/** How often an awake database's queue is checked for a wake lost after its commit: Neon's idle window. */
+	RECHECK_MS = 5 * 60_000;
 export const WakeLive = Layer.effect(
 	Wake,
 	Effect.gen(function* () {
@@ -96,10 +95,7 @@ export const RunsLive = Layer.effect(
 		const stopping = new Set<string>();
 		/** A running run's stop signal: `stop` completes it, which ends the crossing in flight (an inference has no time limit). */
 		const halts = new Map<string, Deferred.Deferred<void>>();
-		// A lane's claim commits before the next one checks the automation's remaining capacity.
-		const lanes = yield* Semaphore.make(LANES),
-			claims = yield* Semaphore.make(1),
-			tickPermit = yield* Semaphore.make(1),
+		const tickPermit = yield* Semaphore.make(1),
 			pulseGate = yield* Semaphore.make(1),
 			/** The running automations: a planned close waits for them, and no run starts after it. */
 			parking = makeParking();
@@ -128,10 +124,10 @@ export const RunsLive = Layer.effect(
 			...(yield* fileSyncHandlers)
 		}, { [NOTICE_PUSH]: { attempts: 3, backoff: '10s' } });
 		const announce = (yield* Wake).at;
-		const { boot, claim, view, stop } = yield* makeRunStore(parking, capacities, halts, stopping);
+		const { boot, claim, next, view, stop } = yield* makeRunStore(parking, capacities, halts, stopping);
 		const { prune, daily } = yield* makePruner();
 
-		const { execute, interrupted } = yield* makeRunExecutor(parking, halts, stopping, prune);
+		const { execute, leased } = yield* makeRunExecutor(parking, halts, stopping, prune);
 		const tick = tickPermit.withPermit(
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -140,8 +136,7 @@ export const RunsLive = Layer.effect(
 					if (parking.parked) return yield* deadlines.settle(iso(now + PARKED_WAKE_MS));
 					const inflight = yield* FiberSet.make<void, never>();
 					const fork = yield* FiberSet.runtime(inflight)();
-					let errors: Cause.Cause<EngineError> = Cause.empty,
-						pruned = false;
+					let errors: Cause.Cause<EngineError> = Cause.empty;
 					const dues: number[] = [];
 					const track = (work: Effect.Effect<void, EngineError>) =>
 						Effect.sync(() => {
@@ -153,9 +148,9 @@ export const RunsLive = Layer.effect(
 								)
 							));
 						});
-					const run = (group: readonly Row[]) =>
-						lock(group[0]?.automation ?? '')
-							.withPermit(execute(group))
+					const run = (rows: readonly Row[]) =>
+						lock(rows[0]?.automation ?? '')
+							.withPermit(execute(rows))
 							.pipe(
 								Effect.tap((times) =>
 									Effect.sync(() => {
@@ -164,53 +159,26 @@ export const RunsLive = Layer.effect(
 								),
 								Effect.asVoid
 							);
-					const custom = Effect.gen(function* () {
-						while (true) {
-							const admitted = yield* lanes.withPermitsIfAvailable(1)(
-								Effect.uninterruptibleMask((restore) =>
-									Effect.gen(function* () {
-										const claimed = yield* claims.withPermit(
-											claim(yield* Clock.currentTimeMillis, pruned, true)
-										);
-										if (claimed.runs.length === 0) return false;
-										yield* restore(run(claimed.runs)).pipe(
-											Effect.onInterrupt(() =>
-												interrupted(
-													claimed.runs,
-													'The admitted run was interrupted before its lane drained.'
-												)
-											)
-										);
-										return true;
-									})
-								)
-							);
-							if (Option.isNone(admitted) || !admitted.value) return;
-						}
-					});
+					const pass = yield* daily(now);
+					let pruned = pass !== undefined;
+					if (pass?.continued !== undefined) dues.push(pass.continued);
+					let requested = false, claiming: object | undefined;
+					// an authored automation's runs side by side, up to its concurrency; a platform automation's one after another.
+					// Each settled run frees room in its automation: it claims again.
 					const start = (claimed: readonly Row[]) => {
 						if (claimed.some((row) => row.automation === PRUNE)) pruned = true;
 						return Effect.forEach(
-							[...Map.groupBy(claimed, (row) => row.automation)],
-							([, rows]) => track(Effect.forEach(rows, (row) => run([row]), { discard: true })),
+							Map.groupBy(claimed, (row) => row.automation),
+							([automation, rows]) => m.automations[automation] === undefined
+								? track(leased(rows, Effect.forEach(rows, (row) => run([row]), { discard: true })).pipe(Effect.ensuring(pulse)))
+								: Effect.forEach(rows, (row) => track(leased([row], run([row])).pipe(Effect.ensuring(pulse))), { discard: true }),
 							{ discard: true }
-						).pipe(
-							Effect.andThen(
-								Effect.forEach(Array.from({ length: LANES }), () => track(custom), {
-									discard: true
-								})
-							)
 						);
 					};
-					const pass = yield* daily(now);
-					pruned = pass !== undefined;
-					if (pass?.continued !== undefined) dues.push(pass.continued);
-					let requested = false, claiming: object | undefined;
 					const scan = (token: object) => Effect.gen(function* () {
 						for (;;) {
 							yield* pulseGate.withPermit(Effect.sync(() => { requested = false; }));
-							const claimed = yield* claim(yield* Clock.currentTimeMillis, pruned);
-							yield* start(claimed.runs);
+							yield* start(yield* claim(yield* Clock.currentTimeMillis, pruned));
 							const again = yield* pulseGate.withPermit(Effect.sync(() => {
 								if (requested) return true;
 								claiming = undefined;
@@ -240,16 +208,23 @@ export const RunsLive = Layer.effect(
 						}));
 						if (closed) break;
 					}
-					const next = yield* db.value(Schema.NullOr(Schema.String), {
-						text: `SELECT min(due_at)::text AS next FROM sys_run WHERE state = 'queued'`,
-						params: []
-					});
-					const earliest = Math.min(...dues, next === null ? Infinity : Date.parse(next));
+					const queued = yield* next;
+					const earliest = Math.min(...dues, queued === null ? Infinity : Date.parse(queued));
 					yield* deadlines.settle(Number.isFinite(earliest) ? iso(earliest) : null);
 					if (errors.reasons.length > 0) return yield* Effect.failCause(errors);
 				}).pipe(Effect.ensuring(pulseGate.withPermit(Effect.sync(() => { activeTick = undefined; }))))
 			)
 		);
+		// A wake lost after its commit (a deadline port that failed): while the database is awake anyway, its next due run
+		// is announced again; an asleep database is never woken for it. A process that died recovers at its next boot.
+		yield* Effect.gen(function* () {
+			for (;;) {
+				yield* Effect.sleep(RECHECK_MS);
+				if (!(yield* db.awake)) continue;
+				const queued = yield* db.quietly(next).pipe(Effect.catch((cause) => Effect.logWarning('runs recheck', cause).pipe(Effect.as(null))));
+				if (queued !== null) yield* announce(queued);
+			}
+		}).pipe(Effect.forkScoped);
 		/** Cron `id` at `slot`: the run id is their digest, so a repeat meets the row its first effect wrote. */
 		const fire = Effect.fn('Runs.fire')(function* (id: string, slot: string) {
 			const at = Date.parse(slot);
@@ -282,16 +257,14 @@ export const RunsLive = Layer.effect(
 			const ledger = yield* cronLedger(run, now).pipe(
 				Effect.provideService(TenantDb, db), Effect.provideService(Live, live)
 			);
-			const running = lock(run.automation).withPermit(
-				execute([run], ledger)
-			);
-			const dues = yield* rest === undefined ? running : db.quietly(running);
+			// a slot that only read leaves the database as idle as it found it, rest or not
+			const dues = yield* db.quietly(leased([run], lock(run.automation).withPermit(execute([run], ledger))));
 			if (dues.length > 0) yield* announce(iso(Math.min(...dues)));
-			// only a slot that used the database prunes it: a pass is no reason to wake it
+			// a slot that used the database ticks once: its settle may have freed room for a queued run, and the tick prunes;
+			// a pass is no reason to wake it
 			if (ledger.written()) {
 				restEnds.delete(id);
-				const pass = yield* daily(now);
-				if (pass?.continued !== undefined) yield* announce(iso(pass.continued));
+				yield* announce(iso(now));
 				return { ran: true };
 			}
 			if (rest === undefined) return { ran: false };

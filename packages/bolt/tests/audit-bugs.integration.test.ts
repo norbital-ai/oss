@@ -16,7 +16,6 @@ import { makeRunExecutor } from '../src/engine/runs/executor.ts';
 import { makePruner } from '../src/engine/runs/prune.ts';
 import type { Row } from '../src/engine/runs/rows.ts';
 import { RunHandlers, Runs } from '../src/engine/services.ts';
-import { act } from '../src/engine/write/act.ts';
 import { restore_source, restorer } from '../src/engine/write/seed.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
@@ -24,6 +23,7 @@ import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { admin, NOW, TODAY } from './write-fixture.ts';
 import { manifest as written, open } from './write-p2.fixture.ts';
 import { memory_audit_layer } from './support/audit.ts';
+import { act_one } from './support/act-one.ts';
 
 const empty: EngineManifest = {
 	needs: [],
@@ -189,14 +189,13 @@ describe('bug 38: a write row of the wrong shape is refused, not cast', () => {
 			const { db } = yield* open(written);
 			let n = 0;
 			const run = (verb: 'update' | 'delete' | 'upsert', input: Json) =>
-				act(
+				act_one(
 					{ manifest: written, db },
 					{
 						model: 'orders',
 						verb,
 						input,
 						...(verb === 'upsert' ? { on_conflict: 'update' as const } : {}),
-						mode: { _tag: 'Direct' },
 						key: `null-row-${n}`,
 						invocationId: `null-row-${n++}`,
 						issuedAt: NOW,

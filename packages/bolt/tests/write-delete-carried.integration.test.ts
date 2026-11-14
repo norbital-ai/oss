@@ -1,5 +1,5 @@
-// A delete's transform carries rows of other models into the delete's own commit: they run their own callbacks and
-// commit in its one statement or not at all. A held delete commits only its request: its rows stay, marked, and what it
+// A delete's transform carries rows of other models into the delete's own commit: straight to storage (no callback,
+// effect or write trigger of their model), under its native rules and history, in its one statement or not at all. A held delete commits only its request: its rows stay, marked, and what it
 // carries waits; the approving decision deletes them with everything carried, and a rejection restores nothing.
 import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';
@@ -8,10 +8,11 @@ import type { Json } from '../src/decl/values.ts';
 import type { Authority, EngineActor, Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
-import { Approvals, Reads, Writes } from '../src/engine/services.ts';
+import { Approvals, Reads, Callables } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const requesterId = '0199a000-0000-7000-8000-000000000011',
 	managerId = '0199a000-0000-7000-8000-000000000012';
@@ -26,7 +27,8 @@ const manifest: EngineManifest = {
 		ledger: {
 			description: 'Ledger',
 			record_label: 'record.source',
-			fields: { source: { kind: 'text' }, carrier: { kind: 'text', optional: true } }
+			fields: { source: { kind: 'text' }, carrier: { kind: 'text', optional: true } },
+			unique: [{ fields: ['source'], name: 'ledger_source_key' }]
 		}
 	},
 	relationships: {},
@@ -38,7 +40,7 @@ const manifest: EngineManifest = {
 		},
 		ledger: {
 			outputs: { default: { ledger: { fields: 'all' } } },
-			create: { columns: { ledger: ['source', 'carrier'] }, transform: true }
+			create: { columns: { ledger: ['source', 'carrier'] }, transform: true, effect: true }
 		}
 	},
 	policies: {
@@ -53,7 +55,8 @@ const manifest: EngineManifest = {
 	},
 	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] } },
 	automations: {
-		heard: { description: 'Hears deletes', policies: ['reviewer'], on: [{ model: 'entries', verbs: ['delete'] }] }
+		heard: { description: 'Hears deletes', policies: ['reviewer'], on: [{ model: 'entries', verbs: ['delete'] }] },
+		posted: { description: 'Hears postings', policies: ['reviewer'], on: [{ model: 'ledger', verbs: ['create'] }] }
 	}
 };
 const source = `export default { model: {
@@ -73,10 +76,8 @@ const source = `export default { model: {
 		}
 	} },
 	ledger: { bodies: {
-		create: function* (changes, ctx) {
-			const rows = changes.map(({ set }) => set);
-			if (rows.some((row) => row.source === 'undo poison')) return yield* ctx.refuse('This posting refuses.');
-			return rows.map((row) => ({ ...row, carrier: ctx.carried_by }));
+		create: function* (changes) {
+			return changes.map(({ set }) => ({ ...set, carrier: 'callback' }));
 		}
 	} }
 }, policy: { requester: { grants: { entries: { delete: { verdict: function* (_rows, ctx) {
@@ -100,7 +101,7 @@ const workspace = Layer.unwrap(
 );
 const fixture = Effect.gen(function* () {
 	const t = yield* TestWorkspace,
-		writes = yield* Writes,
+		writes = yield* Callables,
 		reads = yield* Reads,
 		approvals = yield* Approvals;
 	yield* t.db.write({
@@ -122,7 +123,7 @@ const fixture = Effect.gen(function* () {
 		const key = randomUUID(),
 			now = t.clock.now();
 		return writes
-			.act({
+			.acts(one_act({
 				model: 'entries',
 				verb,
 				input,
@@ -130,9 +131,8 @@ const fixture = Effect.gen(function* () {
 				key,
 				issuedAt: now,
 				invocationId: key,
-				mode: { _tag: 'Direct' },
 				bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-			})
+			}))
 			.pipe(Effect.map((result) => result.outcome));
 	};
 	const make = (...names: string[]) =>
@@ -183,7 +183,14 @@ const fixture = Effect.gen(function* () {
 			FROM sys_run WHERE automation = 'heard' AND trigger->'records' ? $1`,
 			params: [id]
 		});
-	return { t, requester, manager, act, make, targets, decide, entries, ledger, history, read, heard };
+	// the ledger's model effect and write trigger: carried rows queue neither
+	const ledgerRuns = t.db
+		.rows(Schema.Struct({ automation: Schema.String }), {
+			text: "SELECT automation FROM sys_run WHERE automation IN ('posted', 'ledger.effect.create')",
+			params: []
+		})
+		.pipe(Effect.map((rows) => rows.length));
+	return { t, requester, manager, act, make, targets, decide, entries, ledger, history, read, heard, ledgerRuns };
 });
 const held = (outcome: Outcome) => {
 	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
@@ -191,16 +198,18 @@ const held = (outcome: Outcome) => {
 };
 
 layer(workspace, { excludeTestServices: true })('delete.transform', (it) => {
-	it.effect('carries its rows into the delete commit, with their own callbacks and history', () =>
+	it.effect('carries its rows into the delete commit with history, skipping their transform, effect and write trigger', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;
 			const rows = yield* f.make('annual');
+			const before = yield* f.ledgerRuns;
 			expect(yield* f.act('delete', f.targets(rows))).toMatchObject({ kind: 'committed' });
 			expect(yield* f.entries('annual')).toEqual([]);
 			expect(yield* f.ledger('undo annual', 'approved annual')).toEqual([
-				{ source: 'approved annual', carrier: 'entries' },
-				{ source: 'undo annual', carrier: 'entries' }
+				{ source: 'approved annual', carrier: null },
+				{ source: 'undo annual', carrier: null }
 			]);
+			expect(yield* f.ledgerRuns).toBe(before);
 			expect(yield* f.history('undo annual')).toEqual([{ op: 'create', source: 'undo annual' }]);
 		})
 	);
@@ -234,16 +243,14 @@ layer(workspace, { excludeTestServices: true })('delete.transform', (it) => {
 		})
 	);
 
-	it.effect('deletes nothing when a carried row is refused', () =>
+	it.effect('deletes nothing when a carried row breaks a native unique rule', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;
 			const rows = yield* f.make('poison');
-			expect(yield* f.act('delete', f.targets(rows))).toMatchObject({
-				kind: 'refused',
-				message: 'This posting refuses.'
-			});
+			yield* f.t.db.write({ text: "INSERT INTO ledger (id, source) VALUES ($1::uuid, 'undo poison')", params: [randomUUID()] });
+			expect(yield* f.act('delete', f.targets(rows))).toMatchObject({ kind: 'refused' });
 			expect(yield* f.entries('poison')).toEqual(['poison']);
-			expect(yield* f.ledger('undo poison', 'approved poison')).toEqual([]);
+			expect(yield* f.ledger('undo poison', 'approved poison')).toEqual([{ source: 'undo poison', carrier: null }]);
 		})
 	);
 
@@ -258,7 +265,7 @@ layer(workspace, { excludeTestServices: true })('delete.transform', (it) => {
 			expect(yield* f.entries(...names)).toEqual([]);
 			expect((yield* f.ledger(...names.map((name) => `undo ${name}`))).length).toBe(25);
 			// the transform saw the whole batch once
-			expect(yield* f.ledger('batch of 25')).toEqual([{ source: 'batch of 25', carrier: 'entries' }]);
+			expect(yield* f.ledger('batch of 25')).toEqual([{ source: 'batch of 25', carrier: null }]);
 		})
 	);
 
@@ -283,10 +290,11 @@ layer(workspace, { excludeTestServices: true })('delete.transform', (it) => {
 				{ verb: 'delete', records: rows.map((row) => row.id).toSorted() }
 			]);
 			expect(yield* f.ledger('undo sick', 'approved sick', 'batch of 2')).toEqual([
-				{ source: 'approved sick', carrier: 'entries' },
-				{ source: 'batch of 2', carrier: 'entries' },
-				{ source: 'undo sick', carrier: 'entries' }
+				{ source: 'approved sick', carrier: null },
+				{ source: 'batch of 2', carrier: null },
+				{ source: 'undo sick', carrier: null }
 			]);
+			expect(yield* f.ledgerRuns).toBe(0);
 			expect(yield* f.history('undo sick')).toEqual([{ op: 'create', source: 'undo sick' }]);
 		})
 	);

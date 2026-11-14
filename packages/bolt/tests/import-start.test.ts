@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { permitsImport, resolveImportStart } from '../src/engine/integrations/import-start.ts';
-import type { ImportStart } from '../src/protocol/instance-status.ts';
+import type { ImportStart } from '@norbital-ai/host-api';
 
 const NOW = Date.parse('2026-10-21T01:40:12.345Z');
 

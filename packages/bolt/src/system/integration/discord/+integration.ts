@@ -1,6 +1,6 @@
-import { bind_integration } from '../../../declarations.ts';
+import { integration } from '../../../decl/runtime/integration.ts';
 
-export default bind_integration('discord')({
+export default integration('discord', {
 	description: 'Discord: a bot in a server, its channels and direct messages.',
-	driver: 'discord'
+	driver: { name: 'discord', read: 'deliveries', conversation: { kind: 'chat', handle: 'discord', address: '@{}' } }
 });

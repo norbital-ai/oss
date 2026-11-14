@@ -5,9 +5,19 @@ The latest runs of one automation matching `where`, newest first, each with its 
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
 	import type { Json } from '../client/contract.js';
-	/** The latest runs of one automation that match `where` (e.g. those started for a record), newest first; `title`
-	 * names the automation (else its catalog label `automations.<key>.label`, else its name in words). */
-	export type RunsForProps = { ctx: UiContext; automation: string; title?: string; where?: Json; limit?: number };
+	/** The latest runs of one automation that match `where` (e.g. those started for a record), newest first. */
+	export type RunsForProps = {
+		/** The page context. */
+		ctx: UiContext;
+		/** The automation's name. */
+		automation: string;
+		/** Names the automation (else its catalog label `automations.<key>.label`, else its name in words). */
+		title?: string;
+		/** Which runs: a `Where` over their row. */
+		where?: Json;
+		/** How many runs at most (default 5). */
+		limit?: number;
+	};
 	/** Set by a record's Runs tab: each `RunsFor` reports its row count, and the tab alone says when there are none. */
 	export const RUNS_GROUP = Symbol('ui.views.runsGroup');
 </script>

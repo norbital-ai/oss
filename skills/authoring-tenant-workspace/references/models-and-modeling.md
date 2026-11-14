@@ -1,6 +1,6 @@
 # Models and modeling
 
-Every field is required unless `optional: true`. Exact shape: `import('@norbital-ai/bolt/declarations').ModelLiteral`, `FieldKind`.
+Every field is required unless `optional: true`. Exact shape: `import('@norbital-ai/bolt').ModelLiteral`, `FieldKind`.
 
 ## Field kinds
 
@@ -21,7 +21,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 | `custom` | `of`: a workspace custom field, or built-in money, file, point, phone |
 
 - Common keys: `optional default hidden`; `many: true` declares a list. `was` keeps data through a rename. Uniqueness belongs to named constraints. Captions and help come from the message catalog; declaration fields refuse inline `label` and `help`, including nested input and output kinds.
-- Date and instant defaults may be `{ var }` clock expressions, evaluated at write time. A ref default may be `{ var: 'requestor.id' }` or `{ var: 'requestor.party' }`. Read predicates hold no time variables.
+- Date and instant defaults may be `{ var }` clock expressions, evaluated at write time. A ref default may be `{ var: 'actor.id' }` or `{ var: 'actor.party' }`. Read predicates hold no time variables.
 - Inputs (automations, integration records, json shapes, custom fields) also admit number, ref, union and record. One declaration types the stored row and every input.
 - System columns `id revision created_at created_by updated_at updated_by` are not field names.
 
@@ -37,7 +37,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 - `on_delete` accepts `restrict` by default, `cascade`, or `set_null` for optional refs. Owned refs cascade.
 - Named `constraints` enforce uniqueness and checks, guard periods with `no_overlap` and declare locks with `locked`. One unique constraint may set `import_key: true` for import matching. A lock lists editable fields in `except`. Any named constraint may set `message: '<catalogue key>'` (no placeholders) for its refusal text. Computed fields carry their typed expression on `computed`. A value needing I/O or hashing is stored by a transform or automation.
 - Each output is a tree with `fields` and one nested key per relation. Declaring `outputs.default` exposes the model as a read root.
-- `create.columns` and `update.columns` are trees with root `fields` and one nested key per child relation, up to five levels. Each write layer is a many-relation. The engine fills its parent FK. `create.filled` uses the same tree for columns the transform fills.
+- `create` and `update` hold a write tree like an output's: root `fields` and one nested key per child relation, up to five levels, beside `transform` and `effect`; no relation is named `fields`, `filled`, `transform` or `effect`. Each write layer is a many-relation. The engine fills its parent FK. `create.filled` uses the same tree for fields the transform fills.
 - Nothing is deleted by omission: an update names child changes per layer as `{ create, update, delete, link, unlink }`.
 - Use named outputs for narrower audiences. Each layer of an output is visible to its readers under the root's policy.
 - A layer is read or written under the root model's policy alone.
@@ -53,12 +53,12 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 ## Write callbacks
 
 - Create and update transforms get changes with `before`, `set`, `after` and `changed(...fields)`. `after` is the stored row with `set` applied: read `c.after.x`, never `c.set.x ?? c.before.x`. A create's `after` carries its future id. Return sets in order, or `{ sets, with, on_approved }`. A delete transform gets `before` rows and returns nothing or `{ with, on_approved }`, never rows.
-- `with` and `on_approved` hold `{ [model]: { create?, update?: [{ target, set }] } }`. Each target carries the selected revision; related rows run their own transforms (`ctx.carried_by`).
+- `with` and `on_approved` hold `{ [model]: { create?, update?: [{ target, set }] } }`. Each target carries the selected revision. Carried rows are storage writes owned by the carrier's code: their model's transforms, verdicts, effects and write triggers never run; native constraints, locks, state rules and history still apply. Models never call each other implicitly.
 - `with` rows are held and rolled back with the root write. `on_approved` rows commit immediately when no approval holds the write, or once in the final approving decision's statement, all or nothing.
 - The approving decision asks the transform again with `ctx.approving` on the stored rows; return only `on_approved` then and never count those rows twice.
 - Transforms run on every business write path: pages, agent, automations, native sync/import matching, bulk edits, resubmits, restore and nested owned children. Children run after the parent. Seed restores and roll-ups bypass them.
 - Keep semantic validators in browser-safe `src/lib` modules returning `{ field, message }`; forms and the server share them. Client validation never writes.
-- Prefetch the batch through `ctx.query` as the workspace, at most two reads, never per row. `ctx.query.after` overlays this act's prospective rows for checks across the batch.
+- Prefetch the batch through `ctx.query` as the workspace, at most two reads, never per row. A root with `as_of: 'act'` reads the rows as this act will leave them, for checks across the batch.
 - Each 1000-row chunk has 3 s CPU and one callback per verb and model; all chunks share one transaction.
 
 ## Operations
@@ -75,7 +75,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 ## Syncs
 
-Place exchange under `syncs.<name>`. Discover: `import('@norbital-ai/bolt').RemoteSync`, `FileSyncCtx`.
+Each sync is its own `+<sync>.sync.ts` beside the model's `+model.ts`: `sync('<model>', '<sync>', { … })`. Discover: `import('@norbital-ai/bolt').RemoteSync`, `FileSyncCtx`.
 
 - Remote: `with: '<integration>'`, optional `every` and partitions, inline `read` and `write`. A read returns rows (`$id`, `$version`, `$deleted`), cursor and more; only returned source fields sync; page progress commits atomically. A write returns the acknowledged id and version, or null for local changes.
 - The engine owns no-echo, ordering, idempotency, retries, approval timing, conflict rollback and dead letters. A failing read rests per connection, one minute doubling to one hour, until a manual start, connection change or good read.

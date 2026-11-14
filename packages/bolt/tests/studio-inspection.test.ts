@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Schema } from 'effect';
-import { StudioInspectInput, StudioInspection } from '../src/shell/studio/inspection.ts';
+import { StudioInspectInput, StudioInspection } from '@norbital-ai/host-api';
 
 const inspection: StudioInspection = {
 	can_inspect: false,

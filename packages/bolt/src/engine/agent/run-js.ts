@@ -10,16 +10,18 @@ import { Array as EffectArray, Effect, Option, Predicate, Result, Schema } from 
 import type { Json } from '../../decl/values.ts';
 import {
 	CONVERT_MIME,
-	LIMITS,
+	DOWNLOAD,
 	type GuestTurn,
 	type HttpRequest,
-	type HttpResponse
-} from '../contracts.ts';
+	type HttpResponse,
+	media_type,
+	Port,
+	type PortFailure
+} from '@norbital-ai/host-api';
+import { LIMITS } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import { fromBase64 } from '../crypto.ts';
-import { DOWNLOAD, media_type } from '../files/media.ts';
 import { PRELUDE } from '../guest/prelude.ts';
-import { Port, type PortFailure } from '../port.ts';
 import type { Bundler, GuestIsolates, Http } from '../ports.ts';
 import type { BoltError } from '../../protocol/errors.ts';
 import { NODE_SHIM } from './run-js-node.ts';
@@ -472,25 +474,6 @@ export const runJs = Effect.fn('Agents.runJs')(function* (run: RunJs) {
 	return { answer: { ...answer, files: kept }, ...refused, ...printed() } satisfies Json;
 });
 
-/**
- * A repository reference ("Agents' files"): the host's `reference` tool keeps this index as the
- * person's output file, named `<repository>@<commit>`, and a file run reads its tree from it. Each text file is a blob
- * by its content address. A run reads the whole tree, so a reference over `treeBytes` runs no file.
- */
-export const REFERENCE = {
-	mime: 'application/vnd.norbital.reference+json',
-	treeBytes: 32 * MiB
-} as const;
-/** Schema of a repository reference file: repository, commit, tree digest and each file's path, blob key and size. */
-export const ReferenceIndex = Schema.Struct({
-	repository: Schema.String,
-	commit: Schema.NullOr(Schema.String),
-	/** `tree_digest` of the tree: the bundler's cache key. */
-	digest: Schema.String,
-	files: Schema.Array(
-		Schema.Struct({ path: Schema.String, key: Schema.String, bytes: Schema.Number })
-	)
-});
 export type RunFile = {
 	/** The script's path in its tree. */
 	readonly entry: string;

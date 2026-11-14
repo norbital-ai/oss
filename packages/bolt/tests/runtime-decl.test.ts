@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { install } from '../src/decl/runtime/guest.ts';
-import { app, automation, group, mcp, workspace } from '../src/index.ts';
-import { bind_integration, bind_model } from '../src/declarations.ts';
+import { app, automation, group, integration, mcp, sync, workspace } from '../src/index.ts';
+import { with_syncs } from '../src/decl/runtime/sync.ts';
 import * as rt from './types/fixture/runtime.ts';
 import * as models from './types/fixture/models.ts';
 import './types/registry.ts';
@@ -43,36 +43,34 @@ describe('runtime declarations', () => {
 
 	it('wraps an integration pairing test from its inline literal', () => {
 		const test = function* () {};
-		const declared = bind_integration('kingdee')({ ...rt.kingdee.spec, test });
+		const declared = integration('kingdee', { ...rt.kingdee.spec, test });
 		expect(declared.name).toBe('kingdee');
 		expect(declared.spec.driver).toBe('sqlserver');
 		expect(original(declared.bodies.test)).toBe(test);
-		expect(bind_integration('support_mail')(rt.support_mail.spec).bodies).toEqual({});
+		expect(integration('support_mail', rt.support_mail.spec).bodies).toEqual({});
 	});
 
-	it('keeps file sync bodies on their model and remote connection data on the integration', () => {
+	it('keeps sync bodies on their sync, merged into their model, and remote connection data on the integration', () => {
 		const read = function* () {
 			return { rows: [] };
 		};
 		const write = function* () {
 			return [];
 		};
-		const declared = bind_model('notice_notes')({
-			...models.notice_notes.spec,
-			syncs: {
-				sheet: {
-					with: 'file',
-					parser: ['csv'],
-					schema: { code: { kind: 'text' }, note: { kind: 'text' } },
-					context: { notice: { kind: 'ref', to: 'notices' } },
-					read,
-					write
-				}
-			}
+		const sheet = sync('notice_notes', 'sheet', {
+			with: 'file',
+			parser: ['csv'],
+			schema: { code: { kind: 'text' }, note: { kind: 'text' } },
+			context: { notice: { kind: 'ref', to: 'notices' } },
+			read,
+			write
 		});
-		expect(original(declared.bodies.syncs['sheet']?.read)).toBe(read);
-		expect(original(declared.bodies.syncs['sheet']?.write)).toBe(write);
-		expect(declared.bodies.syncs['sheet']?.parse).toEqual({});
+		expect(original(sheet.bodies.read)).toBe(read);
+		expect(original(sheet.bodies.write)).toBe(write);
+		expect(sheet.bodies.parse).toEqual({});
+		const merged = with_syncs(models.notice_notes, { sheet });
+		expect(merged.spec.syncs['sheet']).toBe(sheet.spec);
+		expect(merged.bodies.syncs['sheet']).toBe(sheet.bodies);
 		expect(rt.kingdee.spec).not.toHaveProperty('syncs');
 	});
 });

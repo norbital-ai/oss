@@ -2,11 +2,8 @@
 import { Cause, Effect, Option, Queue, Schema, Stream } from 'effect';
 import { ActRefused, ProtocolFailed } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
-import {
-	decode_status,
-	type ImportStartInput,
-	type InstanceStatus
-} from '../protocol/instance-status.ts';
+import type { ImportStartInput, InstanceStatus } from '@norbital-ai/host-api';
+import { decode_status } from '../protocol/instance-status.ts';
 import { IntegrationOffer, WireError } from '../protocol/schema.ts';
 import { browserTransport } from '../protocol/client.ts';
 

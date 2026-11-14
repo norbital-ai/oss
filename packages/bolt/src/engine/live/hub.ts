@@ -17,6 +17,7 @@ import {
 	Scope,
 	Stream
 } from 'effect';
+import { actor_ref } from '../access/actor.ts';
 import { bindingsAt } from '../query/reader.ts';
 import { Live, Manifest, Reads, type LiveView } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
@@ -165,13 +166,16 @@ export const LiveHubLive = Layer.effect(
 					: { t: 'patch', view: view.id, v: routed, ops, ...(arrivals?.length ? { arrivals } : {}) }
 			);
 		});
+		/** A view whose read failed is dropped (the client registers it again), so no later flush asks it again. */
 		const failed = (conn: Conn, view: View, err: unknown, expected: number) => Effect.suspend(() =>
-			conn.views.get(view.id) !== view || view.readVersion !== expected ? Effect.void : conn.send({
-				t: 'error',
-				view: view.id,
-				code: err instanceof BoltError ? err.code : 'internal',
-				message: err instanceof Error ? err.message : String(err)
-			}));
+			conn.views.get(view.id) !== view || view.readVersion !== expected ? Effect.void : drop(conn, view.id).pipe(
+				Effect.andThen(conn.send({
+					t: 'error',
+					view: view.id,
+					code: err instanceof BoltError ? err.code : 'internal',
+					message: err instanceof Error ? err.message : String(err)
+				}))
+			));
 
 		/** One pipelined read; a failing batch is re-asked per read so one bad view errors alone. */
 		const readAll = Effect.fn('Live.readAll')(function* (
@@ -253,6 +257,15 @@ export const LiveHubLive = Layer.effect(
 			routed = v;
 			const batch = pending;
 			pending = [];
+			// a connection whose principal changed (revoked, deactivated, moved team, signed out) ends before this commit
+			// reaches it: the client reconnects, and its session is judged again
+			const changed = new Set(batch.flatMap(({ captured: c }) =>
+				c.model === 'sys_session' && c.op === 'delete' && typeof c.old?.['user'] === 'string' ? [`member:${c.old['user']}`]
+				: (c.model === 'sys_user' || c.model === 'sys_api_key') && c.old?.['revision'] !== c.new?.['revision']
+					? [`${c.model === 'sys_user' ? 'member' : 'api_key'}:${c.id}`] : []));
+			if (changed.size > 0)
+				for (const conn of [...conns.values()])
+					if (changed.has(actor_ref(conn.authority.actor))) yield* disconnect(conn.id);
 			type Work = { view: View; captured: typeof batch };
 			const interested = new Map<Conn, Map<View, Work>>();
 			const work = (conn: Conn, view: View): Work => {

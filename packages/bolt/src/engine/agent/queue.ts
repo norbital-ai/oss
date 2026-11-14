@@ -91,14 +91,15 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 		return Option.getOrUndefined(found)?.r;
 	});
 	const post = Effect.fn('MessageQueue.post')(function* (o: Parameters<AgentsShape['post']>[0]) {
-		// a follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled
-		// an untitled conversation is named by its first message (the panel's list). Its own statement: posting a file
-		// writes the same conversation row, and one statement cannot write a row twice
+		// a follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled; a post into an
+		// archived conversation unarchives it. An untitled conversation is named by its first message (the panel's list).
+		// Its own statement: posting a file writes the same conversation row, and one statement cannot write a row twice
 		const opened = new Chain();
 		opened.params.push(o.conversation, o.text);
 		capturePiece(opened, 'opened', 'sys_conversation',
-			`UPDATE sys_conversation AS c SET status = CASE WHEN status = 'stopped' THEN 'idle' ELSE status END, title = coalesce(title, left($2, 80))
-			WHERE id = $1 AND (status = 'stopped' OR title IS NULL)`);
+			`UPDATE sys_conversation AS c SET status = CASE WHEN status = 'stopped' THEN 'idle' ELSE status END, title = coalesce(title, left($2, 80)),
+			archived_at = NULL
+			WHERE id = $1 AND (status = 'stopped' OR title IS NULL OR archived_at IS NOT NULL)`);
 		yield* nativeCommit(db.write, cfg.publish, opened, CapturedResult);
 		const due = yield* lease,
 			chain = new Chain();

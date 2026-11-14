@@ -29,15 +29,13 @@ import {
 	SchemaSpec
 } from '@norbital-ai/store';
 import type { TenantDbShape } from '../db/tenant-db.ts';
-import type { Rows, Sql } from '../contracts.ts';
+import { type DbError, impact_text, type MigrationImpact, type Rows, type Sql } from '@norbital-ai/host-api';
 import type { EngineManifest } from '../manifest.ts';
-import type { DbError } from '../errors.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
 import { audit_triggers } from './audit.ts';
 import { engineOwned, engineOwns, source_objects } from './engine.ts';
 import { history_schema_objects } from './history.ts';
 import { engineBeside, fingerprint, readAppliedRecord, schema_slice, type AppliedSchemaRecord, type SchemaSlice } from './plan.ts';
-import { impact_text, type MigrationImpact } from '../../protocol/migration-impact.ts';
 
 const MigrationFileSchema = Schema.Struct({ name: Schema.String, sql: Schema.String });
 /** Schema of a workspace's committed `migrations/` folder as one bundle: SQL files, squashes, snapshot, lock and physical definitions. */

@@ -107,13 +107,12 @@
 				{#if opened.has(s.id)}
 					<div class="mt-1 mb-2 grid min-w-0 w-full gap-1.5 text-xs">
 						{#if report !== null}
-							<div class="max-h-56 overflow-auto rounded-md" data-step-pane="output">
+							<div class="max-h-56 overflow-auto rounded-md text-micro" data-step-pane="output">
 								<CodeEditor
 									value={report.message}
 									readonly
 									wrap
 									min_height="0"
-									class="text-micro"
 									language="plaintext"
 									aria-label={t('Output')}
 								/>

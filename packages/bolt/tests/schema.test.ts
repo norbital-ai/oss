@@ -2,15 +2,14 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result, Schema } from 'effect';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
 import { apply_migrations } from '../src/engine/schema/migrations.ts';
 import { checksum_of } from '@norbital-ai/store';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { DbError, parse } from '@norbital-ai/host-api';
 import { BoltError } from '../src/protocol/errors.ts';
 import { table_of } from '../src/protocol/catalog.ts';
 import { inline } from '../src/engine/db/wire.ts';
-import { parse } from '../src/engine/db/wire.ts';
 import { SchemaSliceSchema, type SchemaSlice } from '../src/engine/schema/plan.ts';
 import { constraint_index, schema_objects, schema_snapshot } from '@norbital-ai/store';
 import { engineBeside, fingerprint, plan } from '../src/engine/schema/plan.ts';
@@ -405,7 +404,7 @@ describe('next schema: fingerprint and plan', () => {
 					throw new Error('touched');
 				}
 			});
-			const db = PgliteDb.make(yield* TestDb.open(s));
+			const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(s)));
 			const target = { ...s, tables };
 			const prepared = yield* TestDb.prepare_migrations(db, target, { accept: true });
 			const files = prepared.files.map((file) => ({
@@ -463,7 +462,12 @@ describe('next schema: SQLSTATE → refusal (every row)', () => {
 			),
 			{ code: 'required', field: 'qty' }
 		],
-		[DbError.make('22003', 'integer out of range'), { code: 'overflow' }]
+		[DbError.make('22003', 'integer out of range'), { code: 'overflow' }],
+		// D2: the native row rules raise unnamed 23514s (a state move); their own text is the refusal
+		[
+			DbError.make('23514', 'status cannot move from draft to done', undefined, 'status'),
+			{ code: 'invalid_input', field: 'status', message: 'status cannot move from draft to done' }
+		]
 	];
 	it.each(cases)('%s', (e, expected) =>
 		expect(refusalOf(e, idx)).toMatchObject({ kind: 'refused', ...expected })
@@ -471,6 +475,8 @@ describe('next schema: SQLSTATE → refusal (every row)', () => {
 	it('serialization and deadlock failures are a conflict to replay; anything else is a bug keeping its cause', () => {
 		expect(refusalOf(DbError.make('40001', 'x'), idx)).toBe('conflict');
 		expect(refusalOf(DbError.make('40P01', 'x'), idx)).toBe('conflict');
+		// A1.7: a lock_timeout is a concurrent act holding a lock, replayed then a conflict, never a bug
+		expect(refusalOf(DbError.make('55P03', 'canceling statement due to lock timeout'), idx)).toBe('conflict');
 		const e = DbError.make('42P01', 'relation "x" does not exist');
 		const bug = refusalOf(e, idx);
 		expect(bug).toBeInstanceOf(BoltError);

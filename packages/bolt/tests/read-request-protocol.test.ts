@@ -5,7 +5,7 @@ import { Effect, Exit, Result, Schema } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import type { Json } from '../src/decl/values.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { DbError } from '@norbital-ai/host-api';
 import { BoltError } from '../src/protocol/errors.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { BoltRoutes, RateLimits } from '../src/protocol/http.ts';

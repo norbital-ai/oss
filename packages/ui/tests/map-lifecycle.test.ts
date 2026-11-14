@@ -61,7 +61,7 @@ const catalog = { places: { record_label: 'record.name', label: ['name'], fields
 	name: { kind: 'text' }, position: { kind: 'point' }, stage: { kind: 'text' }, crew: { kind: 'number' }, note: { kind: 'text' }
 } } } as const;
 async function mounted(rows: readonly { readonly [field: string]: import('@norbital-ai/store/kind').Value }[], card = false) {
-	const { bolt } = await viewFixture({ catalog, read: () => ({ rows: rows.map((row) => ({ stage: '', crew: 0, note: '', ...row })), next: null }) });
+	const { bolt } = await viewFixture({ catalog, read: () => ({ rows: rows.map((row) => ({ stage: '', crew: 0, note: '', revision: 1, ...row })), next: null }) });
 	const target = document.body.appendChild(document.createElement('div'));
 	const app = mount(Harness, { target, props: { bolt, card } });
 	await vi.waitFor(async () => { flushSync(); await tick(); expect(target.querySelector('[data-map-point], [data-map-cluster]')).not.toBeNull(); });

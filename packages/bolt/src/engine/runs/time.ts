@@ -3,7 +3,7 @@ import { Array as EffectArray } from 'effect';
 import { duration_seconds } from '@norbital-ai/store/vars';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { compile_var, evaluate_var, type Requestor } from '@norbital-ai/store/vars';
+import { compile_var, evaluate_var, type ActorVars } from '@norbital-ai/store/vars';
 
 export const BUCKET_MS = 300_000;
 export function duration(value: string): number {
@@ -12,26 +12,20 @@ export function duration(value: string): number {
 		throw BoltError.make('invalid', 'decode', `'${value}' is not a duration`);
 	return seconds * 1_000;
 }
-export function offset_ms(value: string): number {
-	if (value === '') return 0;
-	if (value[0] !== '+' && value[0] !== '-')
-		throw BoltError.make('invalid', 'decode', `'${value}' is not an offset`);
-	return (value[0] === '-' ? -1 : 1) * duration(value.slice(1));
-}
 export const due_at = (now: number, at: number): number =>
 	at - now < BUCKET_MS ? at : Math.ceil(at / BUCKET_MS) * BUCKET_MS;
 export const iso = (ms: number): string => new Date(ms).toISOString();
-/** What an edge evaluates a read's time variables at: its day and instant, and its requestor where it is known. */
+/** What an edge evaluates a read's time variables at: its day and instant, and its actor where it is known. */
 export type VarsAt = {
 	readonly today: string;
 	readonly now: string;
-	readonly requestor?: Requestor;
+	readonly actor?: ActorVars;
 };
 /**
  * A read's time variables at the edge — a `{ var }` CEL expression reading `today` (the workspace-zone date) or `now`
  * (the instant): `{ var: 'today - days(7)' }`, `{ var: 'start_of_month(today)' }` — as the literals they are at `at`. The
  * wire and the store never carry a time variable: the agent's read and a described filter materialize before lowering;
- * a page materializes at `bolt.clock`. A requestor-only variable stays for the read to bind; a faulty one stays for
+ * a page materializes at `bolt.clock`. An actor-only variable stays for the read to bind; a faulty one stays for
  * the read to refuse.
  */
 export function materialize(v: Json, at: VarsAt): Json {

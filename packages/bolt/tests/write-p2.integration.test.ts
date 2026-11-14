@@ -5,34 +5,30 @@ import type { Chain } from '../src/engine/write/sql.ts';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { Authority, GuestOutcome, Invocation, Outcome, Sql } from '../src/engine/contracts.ts';
+import { type LogEvent, Port, type Sql } from '@norbital-ai/host-api';
+import type { Authority, GuestOutcome, Invocation, Outcome } from '../src/engine/contracts.ts';
 import { type EngineError } from '../src/engine/errors.ts';
 import { BoltError, type Code } from '../src/protocol/errors.ts';
 import { TelemetryLive } from '../src/engine/guest/telemetry.ts';
-import type { LogEvent } from '../src/engine/contracts.ts';
 import { Logs } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
 import { Telemetry } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import type { ReadIR } from '../src/protocol/reads.ts';
 import { read_history } from '../src/engine/query/history.ts';
-import {
-	act,
-	type ActRequest,
-	type StepsSnapshot,
-	type WriteEngine
-} from '../src/engine/write/act.ts';
+import type { StepsSnapshot, WriteEngine } from '../src/engine/write/act.ts';
 import { restorePreview, restoreRecord, type RestoreTarget } from '../src/engine/write/restore.ts';
 import { admin, arm, authority, delete_arm, grants, NOW, TODAY, write_arm } from './write-fixture.ts';
 import { manifest } from './write-p2.fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
+import { act_one, acts_on, type OneAct } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 
 const count = { reads: 0, writes: 0 };
 /** Every read statement, oldest first. */
 const statements: Sql[] = [];
 const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
-type Over = Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>;
+type Over = Partial<OneAct> & Pick<OneAct, 'verb' | 'input'>;
 const required = <A>(value: A | undefined, at: string): A => {
 	if (value === undefined) throw new Error(`Missing fixture ${at}`);
 	return value;
@@ -62,11 +58,10 @@ const fixture = Effect.gen(function* () {
 	count.writes = 0;
 	let n = 0;
 	const run = (over: Over, engine: Partial<WriteEngine> = {}) =>
-		act(
+		act_one(
 			{ manifest, db, ...engine },
 			{
 				model: 'orders',
-				mode: { _tag: 'Direct' },
 				key: `key-${n}`,
 				issuedAt: NOW,
 				authority: admin,
@@ -146,10 +141,10 @@ const snapshot: StepsSnapshot = {
 	superseded_by: []
 };
 const holding: Partial<WriteEngine> = {
-	guest: {
+	guest: with_each({
 		invokeProgram: () => Effect.die('The approval fixture does not execute programs'),
 		invoke: () => Effect.succeed({ kind: 'ok', output: { kind: 'approve', flow: snapshot } })
-	},
+	}),
 	approval: {
 		route: () =>
 			Effect.succeed({
@@ -186,11 +181,11 @@ function callback(
 				}
 			}
 		},
-		guest: {
+		guest: with_each({
 			invokeProgram: () =>
 				Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 			invoke: (inv) => Effect.sync(() => (calls.push(inv), body(inv)))
-		}
+		})
 	};
 }
 
@@ -507,7 +502,7 @@ describe('engine/query: history', () => {
 										t: 'cmp',
 										field: 'note',
 										op: 'eq',
-										arg: { _tag: 'Var', text: 'requestor.id' }
+										arg: { _tag: 'Var', text: 'actor.id' }
 									})
 								]
 							}
@@ -540,14 +535,14 @@ describe('engine/write: per-record restore', () => {
 	});
 	const restore = Effect.fnUntraced(function* (
 		target: RestoreTarget,
-		over: Partial<Pick<ActRequest, 'authority' | 'observed'>> = {},
+		over: Partial<Pick<OneAct, 'authority' | 'observed'>> = {},
 		engine: Partial<WriteEngine> = {}
 	) {
 		const { db } = yield* P2Fixture;
 		const i = n++;
 		return (yield* restoreRecord(
 			{ manifest, db, ...engine },
-			(request) => act({ manifest, db, ...engine }, request),
+			acts_on({ manifest, db, ...engine }),
 			target,
 			{
 				authority: admin,
@@ -674,11 +669,12 @@ describe('engine/write: per-record restore', () => {
 });
 
 describe('engine/write: import', () => {
-	const imp = (input: Json, over: Partial<ActRequest> = {}) =>
+	const imp = (input: Json, over: Partial<OneAct> = {}) =>
 		run({ model: 'people', verb: 'import', input, ...over });
 	const report = (o: Outcome) => {
 		if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
-		return Schema.decodeUnknownSync(ImportReport)(o.output).rows.map(
+		// a batch of one answers its one act's output in a list
+		return Schema.decodeUnknownSync(Schema.Tuple([ImportReport]))(o.output)[0].rows.map(
 			(r) => `${r.index}:${r.action}`
 		);
 	};
@@ -863,20 +859,21 @@ describe('engine/write: import', () => {
 	);
 });
 
+const tagModel = manifest.models.tags;
+if (tagModel === undefined) throw new Error('The tag model is required.');
+// a lock is native: the database is built with it
+const locked: EngineManifest = { ...manifest, models: { ...manifest.models, tags: {
+	...tagModel, locks: { in_use: { where: { name: { eq: 't' } } } }
+} } };
 describe('engine/write: relation actions and cascades', () => {
 	it.effect('explicit model locks guard member and administrator deletions', () =>
   Effect.gen(function* () {
-   const tags = manifest.models.tags;
-   if (tags === undefined) throw new Error('The tag model is required.');
-   const locked: EngineManifest = { ...manifest, models: { ...manifest.models, tags: {
-    ...tags, locks: { in_use: { where: { name: { eq: 't' } } } }
-   } } };
    const tag = idOf((yield* run({ model: 'tags', verb: 'create', input: [{ name: 't' }] })).outcome, 'tags');
    for (const who of [authority({ tags: grants('tags', { delete: [delete_arm()] }) }), admin]) {
     expect((yield* run({ model: 'tags', verb: 'delete', input: [{ target: tag }], authority: who }, { manifest: locked })).outcome).toMatchObject({ kind: 'refused', code: 'locked' });
    }
    expect(yield* rows(Schema.Struct({ name: Schema.String }), 'SELECT name FROM tags')).toEqual([{ name: 't' }]);
-  }).pipe(Effect.provide(P2FixtureLive))
+  }).pipe(Effect.provide(Layer.effect(P2Fixture, fixture).pipe(Layer.provide(TestDb.layer(locked)))))
  );
 });
 
@@ -948,17 +945,6 @@ describe('engine/write: pipeline order', () => {
 		return id;
 	});
 	const table: ((calls: Invocation[]) => Row)[] = [
-		(calls) => ({
-			name: 'rate admission before decode',
-			expect: 'rate_limited',
-			guest: false,
-			writes: 0,
-			act: () =>
-				run(
-					{ verb: 'create', input: [{ title: 1 }] },
-					{ ...refusing(calls), admit: () => ({ retryAfter: 1 }) }
-				).pipe(Effect.map((answer) => answer.outcome))
-		}),
 		(calls) => ({
 			name: 'expiry before decode',
 			expect: 'expired',
@@ -1045,14 +1031,14 @@ describe('engine/write: pipeline order', () => {
 						})
 					},
 					{
-						guest: {
+						guest: with_each({
 							invokeProgram: () => Effect.die('The pipeline fixture does not execute programs'),
 							invoke: (inv) =>
 								Effect.sync((): GuestOutcome => {
 									calls.push(inv);
-									return { kind: 'ok', output: { kind: 'deny', message: 'no' } };
+									return { kind: 'ok', output: { kind: 'refuse', message: 'no' } };
 								})
-						},
+						}),
 						approval: {
 							route: () =>
 								Effect.sync(() => {

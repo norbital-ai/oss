@@ -26,7 +26,7 @@ import { KIND, type Kind } from '@norbital-ai/store/kind';
 import type { ViewBolt } from '@norbital-ai/ui';
 import { Ai } from '../ports.ts';
 import { Decisions, Manifest, Reads, type DecisionsShape, type ReadsShape } from '../services.ts';
-import { Unavailable } from '../../decl/errors.ts';
+import { type DecisionRequest, Unavailable } from '@norbital-ai/host-api';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, RowData } from '../contracts.ts';
 import type { Pred } from '@norbital-ai/store';
@@ -34,13 +34,7 @@ import type { EngineManifest } from '../manifest.ts';
 import type { LocalFilterField } from '../../protocol/schema.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
-import {
-	choiceOf,
-	noulOf,
-	type DecisionEntry,
-	type DecisionQuestion,
-	type DecisionRequest
-} from '../decision.ts';
+import { choiceOf, noulOf, type DecisionEntry, type DecisionQuestion } from '../decision.ts';
 import { catalog_of } from '../access/pred.ts';
 import { readsAny, viewOutput } from '../access/authority.ts';
 import { midnight, startOfDate } from '../query/eval.ts';
@@ -90,14 +84,14 @@ const DAY_KINDS = new Set(['date', 'instant']);
 /** The same catalogue and nesting paths the builder receives, without a browser runtime dependency. */
 type CatalogueOffer = Effect.Success<ReturnType<NonNullable<ViewBolt['options']>>>['fields'][number];
 type FilterStep = CatalogueOffer['path'][number];
-/** A value offered for an operator: a literal, a list, a span (`[lo, hi)`) or a requestor variable. */
-type Requestor = 'requestor.id' | 'requestor.email' | 'requestor.party' | 'requestor.teams';
+/** A value offered for an operator: a literal, a list, a span (`[lo, hi)`) or an actor variable. */
+type ActorVar = 'actor.id' | 'actor.email' | 'actor.party' | 'actor.teams';
 type Point = { lat: number; lng: number };
 type FilterArg = { echoed?: true } & (
 	| { lit: Json }
 	| { list: readonly Json[] }
 	| { range: readonly [Json, Json] }
-	| { var: Requestor }
+	| { var: ActorVar }
 	/** A one-relation's records whose text field holds a phrase (the description's words a found record holds). */
 	| { match: { field: string; phrase: string } }
 	/** Within `metres` of a point (a found record's own location). */
@@ -433,8 +427,8 @@ function options(
 	} else if (k === 'bool') for (const v of YES_NO) add(v.label, v.arg);
 	else if (k === 'text') {
 		for (const x of [...lit.strings, ...ws]) add(x, echoed(x));
-		if (f.team) add('my team', { var: 'requestor.teams' });
-		if (f.email) add('my email', { var: 'requestor.email' });
+		if (f.team) add('my team', { var: 'actor.teams' });
+		if (f.email) add('my email', { var: 'actor.email' });
 	} else if (NUMERIC.has(k)) {
 		for (const x of lit.numbers) add(String(x), echoed(x));
 	} else if (k === 'date' || k === 'instant' || k === 'time') {
@@ -503,8 +497,8 @@ const ARGUMENT_OPERATORS = {
 		};
 		return operators[op];
 	},
-	var: (op: string, name: Requestor): Json | undefined =>
-		op === 'eq' || op === 'ne' || (op === 'in' && name === 'requestor.teams')
+	var: (op: string, name: ActorVar): Json | undefined =>
+		op === 'eq' || op === 'ne' || (op === 'in' && name === 'actor.teams')
 			? { [op]: { var: name } }
 			: undefined,
 	match: (op: string, value: { field: string; phrase: string }): Json | undefined =>
@@ -721,9 +715,9 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 						ops: [...EQUALITY_OPS, ...(optional ? NULL_OPS : [])],
 						values: []
 					};
-					if (at === 'sys_user') field.values.push({ label: 'me', arg: { var: 'requestor.id' } });
+					if (at === 'sys_user') field.values.push({ label: 'me', arg: { var: 'actor.id' } });
 					if (a.actor.kind === 'member' && a.actor.party?.model === at)
-						field.values.push({ label: 'my party', arg: { var: 'requestor.party' } });
+						field.values.push({ label: 'my party', arg: { var: 'actor.party' } });
 					out.push(field);
 					const layer = levelOf(view, tc, f.name, at);
 					if (layer !== undefined)

@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { module_hash } from '@norbital-ai/bolt/tooling';
+import { module_hash } from '@norbital-ai/host-api/node';
 import { BOLT, EXT } from '../compiler/bolt.ts';
 
 export const CHECKPOINTS = join(tmpdir(), 'norbital-bolt-test');
@@ -53,18 +53,18 @@ const hashed = (...modules: ReadonlyArray<string>) =>
 				: join(BOLT, `${module}${EXT}`)
 		)
 	);
-/** The modules each kind of checkpoint is built through: the kit's and Bolt's, without extension (`declarations`: what generated model files bind). */
+/** The modules each kind of checkpoint is built through: the kit's and Bolt's, without extension. */
 export const inputs = {
 	/** A schema's planned DDL in PGlite, and the shape the kit reads of it. */
 	image: hashed('kit:test/database'),
 	/** A guest bundled through the attachment edge, with whatever of Bolt it imports. */
 	guest: hashed('kit:test/guest', 'index', 'decl/runtime/guest', 'decl/body', 'decl/errors'),
 	/** A workspace's check: its manifest and guest. */
-	check: hashed('kit:compiler/check/index', 'index', 'declarations'),
+	check: hashed('kit:compiler/check/index', 'index'),
 	/** A workspace's test pack, from its checked manifest. */
-	seed: hashed('kit:compiler/check/index', 'kit:compiler/artifact/seed', 'index', 'declarations'),
+	seed: hashed('kit:compiler/check/index', 'kit:compiler/artifact/seed', 'index'),
 	/** A workspace's whole `bolt build`. */
-	release: hashed('kit:cli/build', 'index', 'declarations')
+	release: hashed('kit:cli/build', 'index')
 };
 
 /** Written whole, then renamed: a parallel test process never reads half a checkpoint. */

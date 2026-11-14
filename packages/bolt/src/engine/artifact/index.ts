@@ -6,8 +6,6 @@ export {
 	public_page_keys,
 	CONTRACT,
 	tree,
-	tree_digest,
-	tree_hash,
 	artifact_hash,
 	read_artifact,
 	asset_path,

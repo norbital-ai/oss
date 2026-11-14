@@ -44,8 +44,6 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		size?: 'content' | 'fill';
 		/** A `fill` section's floor (a CSS length; default its content or 16rem, whichever is less). */
 		min_height?: string;
-		/** Extra classes on the `<section>`. */
-		class?: string;
 		/** The section's content: its fields or a view. */
 		children: Snippet;
 	};
@@ -137,7 +135,6 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		actions,
 		size = 'content',
 		min_height,
-		class: className,
 		children
 	}: SectionProps = $props();
 	const id = $props.id();
@@ -256,8 +253,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	class={cn(
 		'flex min-w-0 flex-col',
 		fill ? 'min-h-0 flex-[1_1_0%]' : 'flex-none',
-		!first && !lone && (editing ? 'border-t pt-4' : 'border-t pt-6'),
-		className
+		!first && !lone && (editing ? 'border-t pt-4' : 'border-t pt-6')
 	)}
 	style:min-height={fill ? floor : undefined}
 	data-section={name ?? title}

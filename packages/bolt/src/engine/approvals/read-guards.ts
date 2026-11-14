@@ -1,6 +1,6 @@
 // Native read plans persisted only after a provisional commit; guest flow output never supplies them.
 import { Schema } from 'effect';
-import type { Sql } from '../contracts.ts';
+import type { Sql } from '@norbital-ai/host-api';
 import { Chain, digestOf, type ReadGuards } from '../write/sql.ts';
 
 export const StoredReadGuards = Schema.Struct({

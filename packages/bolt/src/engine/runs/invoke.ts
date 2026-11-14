@@ -1,7 +1,7 @@
 import { actor_ref } from '../access/actor.ts';
 import { runPiece } from './rows.ts';
 // One body execution path for queued attempts and request calls. Only a durable attempt supplies ledger controls.
-import { Cache, Cause, Clock, Context, Crypto, Deferred, Effect, Exit, Layer, Option, Predicate, Result, Schema, Semaphore } from 'effect';
+import { Cause, Clock, Crypto, Deferred, Effect, Exit, Layer, Option, Predicate, Result, Schema, Semaphore } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { canonical, sha256_hex } from '@norbital-ai/store';
 
@@ -14,12 +14,19 @@ import { AgentHost } from '../agent/index.ts';
 import { inferArgsOf, infer_facility, type InferTool } from '../agent/ai.ts';
 import { automationBrowserProfile } from '../agent/browser.ts';
 import { SaidContent, StepContent } from '../agent/schema.ts';
-import type { ToolBehavior } from '../../protocol/schema.ts';
+import { type AiMessage, Port, type PortFailure, type ToolBehavior } from '@norbital-ai/host-api';
 import { readInferTool } from '../agent/tools.ts';
 import { triggerOf } from '../callables/index.ts';
-import { decodeAutomationInput } from '../callables/decode.ts';
+import { decodeAutomationInput, withInputDefaults } from '../callables/decode.ts';
 import { decodeOutput } from '../callables/output.ts';
-import { LIMITS, cross_failure, type AiMessage, type CrossAnswer, type GuestOutcome, type Outcome, type RunTrigger } from '../contracts.ts';
+import {
+	LIMITS,
+	cross_failure,
+	type CrossAnswer,
+	type GuestOutcome,
+	type Outcome,
+	type RunTrigger
+} from '../contracts.ts';
 import { prepareSend, sendPiece } from '../conversations/outbound.ts';
 import { preview, stableId } from '../conversations/store.ts';
 import { SqlReadCapture, TenantDb } from '../db/tenant-db.ts';
@@ -34,7 +41,7 @@ import { notice_sends, noticeRows } from '../notifications/notify.ts';
 import { NOTICE_DELIVER } from '../notifications/queue.ts';
 import { DELIVER } from '../integrations/outbound.ts';
 import { RenderGrants, render_record } from '../render.ts';
-import { Port, uuid, type PortFailure } from '../port.ts';
+import { uuid } from '../port.ts';
 import { Ai, Browser, Drivers, Files, Logs, Render } from '../ports.ts';
 import { ReadDeps } from '../query/engine.ts';
 import { bindingsAt } from '../query/reader.ts';
@@ -44,11 +51,14 @@ import { Activation, Automations, Callables, Facilities, Guest, Identity, Live, 
 import { Chain, GATED, makeReadGuards, noticeInsert } from '../write/sql.ts';
 import { effectOf, enqueue, next_due } from './queue.ts';
 import { effectImages, loadInputRows } from './input.ts';
-import { due_at, duration, iso, materialize } from './time.ts';
+import { journalEntry, journalFits, replayed, WaitOn, WaitState, Woke } from './wait.ts';
+import { isFacility } from '../guest/runner.ts';
+import { catalog_of } from '../access/pred.ts';
+import { viewOutput } from '../access/authority.ts';
+import * as ir from '../../protocol/reads.ts';
+import { BUCKET_MS, due_at, iso, materialize } from './time.ts';
 type Starter = Holder;
-type CallScope = { readonly guards?: ReturnType<typeof makeReadGuards>; readonly readOnly?: boolean; readonly cacheKey?: string };
-const CallDepth = Context.Reference<number>('bolt/CallDepth', { defaultValue: () => 0 });
-const EFFECTS = new Set(['run', 'act', 'schedule', 'notify', 'send', 'request', 'progress']);
+const EFFECTS = new Set(['act', 'schedule', 'notify', 'send', 'request', 'progress', 'wait']);
 /**
  * What a facility call is to a run's gates, decoded once from its arguments with the shapes the dispatcher takes: the
  * stored files it reads (each must be the run's to read), whether it stores a new one (then the run's own),
@@ -199,14 +209,11 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 			);
 		}).pipe(Effect.map((attachments): Json => ({ ...object.value, attachments })));
 	};
-	// Pending cache dependencies must stay acyclic even when different callers own the two lookups.
-	const waiting = new Map<string, Map<string, number>>();
 		const invoke = (
 			run: AutomationExecution,
 			holder: Holder,
 			input: Json,
-			job?: AutomationJob,
-			inherited: CallScope = {}
+			job?: AutomationJob
 		) =>
 			Effect.gen(function* () {
 				const modelEffect = effectOf(m, run.automation);
@@ -215,22 +222,18 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 				// A run's browser tab is its own: closed by this scope on success, failure or interruption.
 				const browseProfile = automationBrowserProfile(run.automation, run.id);
 				yield* browser.scoped(browseProfile).pipe(Effect.mapError((error) => BoltError.make(error._tag === 'Unavailable' ? 'unavailable' : 'upstream', 'facility', error.message, error)));
-				const cause = yield* Schema.decodeUnknownEffect(
-					Schema.Literals(['cron', 'effect', 'event', 'schedule', 'start', 'retry'])
-				)(run.cause).pipe(
-					Effect.mapError(() =>
-						BoltError.make('invalid_input', 'admission', 'The automation run has an unknown cause.')
-					)
-				);
 				const record = job?.record ?? Effect.succeed(true);
-				const cached = m.automations[run.automation]?.cache !== undefined;
-				const readOnly = cached || inherited.readOnly === true;
-				const now = yield* Clock.currentTimeMillis,
+				// a run that waited runs again from the start on its first clock, its crossings answered from its journal
+				const waited = Option.getOrUndefined(Schema.decodeUnknownOption(WaitState)(run.wait ?? null));
+				const journal: WaitState['journal'][number][] = [];
+				let replay = 0,
+					journalBytes = 0;
+				const now = waited === undefined ? yield* Clock.currentTimeMillis : Date.parse(waited.now),
 					b = bindingsAt(now, m.workspace.tz),
 					// the run's writes queue model effects one deeper, as this holder (`writerOf`)
 					authority = { ...(yield* identity.authority(holder)), run: { depth: run.depth, holder } };
 				// One optimistic read boundary per confirmed commit, retained across failures within this attempt.
-				const priorReads = inherited.guards ?? makeReadGuards(activation.release);
+				const priorReads = makeReadGuards(activation.release);
 				// Only native write admission is sequenced; inference and other facilities remain parallel.
 				const writeLane = yield* Semaphore.make(1);
 				const nativeTables = new Set([
@@ -292,13 +295,14 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 				}
 				input = hydrated.success;
 				const createdFiles = new Set<string>();
-				// keys are per attempt: a rerun starts from the beginning and writes again (no replay)
+				// keys are per run, never per attempt: a rerun starts from the beginning, and each act or notice its last attempt
+				// committed answers again from that commit instead of applying twice
 				const seen = new Map<string, number>();
 				const keyOf = (kind: string, target: string, args: Json) => {
 					const digest = sha256_hex(canonical([kind, target, args])),
 						ordinal = seen.get(digest) ?? 0;
 					seen.set(digest, ordinal + 1);
-					return `${run.id}:${run.attempts}:${digest}:${ordinal}`;
+					return `${run.id}:${digest}:${ordinal}`;
 				};
 				/** One statement of a run's own effect (schedule, notify, send), ungated. */
 				const effect = (pieces: (c: Chain) => void, outcome: (c: Chain) => string) =>
@@ -354,6 +358,66 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 						}
 						return true;
 					});
+				/** Which of `ids`, written to the waited model, match the wait's `where`, read as the run's policies. */
+				const matching = (on: Extract<WaitOn, { model: string }>, ids: readonly string[]) =>
+					Effect.gen(function* () {
+						const some = ids.slice(0, LIMITS.page.max);
+						const request = yield* ir.read(catalog_of(m), on.model, {
+							where: on.where === undefined ? { id: { in: some } } : { and: [{ id: { in: some } }, on.where] },
+							select: { id: true },
+							limit: some.length
+						});
+						const output = viewOutput(m, authority, on.model);
+						const [page] = yield* readCaller([request.kind === 'read' && output !== undefined ? { ...request, output } : request]);
+						const rows = Predicate.isObject(page) && EffectArray.isArray(page['rows']) ? page['rows'] : [];
+						return rows.flatMap((row) => (Predicate.isObject(row) && typeof row['id'] === 'string' ? [row['id']] : []));
+					});
+				/**
+				 * `ctx.wait`: answered at once when what it waits on already happened (or, resumed, by what woke the run);
+				 * otherwise registered on the running row and the attempt ends (`job.waiting`), the run waiting.
+				 */
+				const wait = (on: WaitOn) =>
+					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
+						if (job === undefined) return cross_failure('invalid_input', 'ctx.wait waits in a queued run only.');
+						const until = on.until === undefined ? null : Date.parse(on.until);
+						if (until !== null && !Number.isFinite(until))
+							return cross_failure('invalid_input', 'ctx.wait: until is not an instant.');
+						if ('model' in on && !catalog_of(m).models.has(on.model))
+							return cross_failure('invalid_input', `ctx.wait: there is no model '${on.model}'.`);
+						const answer = (value: Json): CrossAnswer => ({ ok: true, value });
+						const woke = waited !== undefined && replay === waited.journal.length ? waited.woke : undefined;
+						if (woke?.kind === 'approval' && 'approval' in on && woke.request === on.approval)
+							return answer({ kind: 'approval', request: woke.request, state: woke.state });
+						if (woke?.kind === 'event' && 'model' in on) {
+							const records = yield* matching(on, woke.records);
+							if (records.length > 0) return answer({ kind: 'event', model: on.model, records });
+						}
+						const at = yield* Clock.currentTimeMillis;
+						if (until !== null && until <= at) return answer({ kind: 'time', at: iso(at) });
+						// registered before anything is checked: a write or decision from here on is kept for the suspension;
+						// what woke this attempt is consumed unless another wake came since
+						yield* db.write({
+							text: `UPDATE sys_run SET wait = jsonb_build_object('on', $2::jsonb) || CASE WHEN wait->'woke' IS NOT NULL AND wait->'woke' IS DISTINCT FROM $3::jsonb THEN jsonb_build_object('woke', wait->'woke') ELSE '{}'::jsonb END WHERE id = $1 AND state = 'running'`,
+							params: [run.id, Schema.encodeSync(WaitOn)(on), woke === undefined ? null : Schema.encodeSync(Woke)(woke)]
+						});
+						if ('approval' in on) {
+							const state = yield* db.value(Schema.NullOr(Schema.String), {
+								text: 'SELECT state FROM bolt_approvals WHERE id::text = $1',
+								params: [on.approval]
+							});
+							if (state === null) return cross_failure('invalid_input', 'ctx.wait: there is no such approval request.');
+							if (state !== 'Pending' && state !== 'ChangesRequested')
+								return answer({ kind: 'approval', request: on.approval, state });
+						}
+						const state: WaitState = { on, now: b.now, journal: [...journal] };
+						if (journalBytes > LIMITS.waitBytes || !journalFits(state))
+							return cross_failure(
+								'overflow',
+								`A waiting run keeps at most ${LIMITS.waitBytes / 1_048_576} MiB of the answers it had before the wait.`
+							);
+						job.waiting = { state, due: until };
+						return cross_failure('waiting', 'The run waits.');
+					});
 				/** A facility call, gated by its `facts`; `key` names an infer's session. */
 				const facility = (call: FacilityCall, facts: CallFacts, key: string) =>
 					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
@@ -390,7 +454,6 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								: undefined;
 						const records: InferTool[] = reader === undefined ? [] : [reader];
 						const missing = names.find((name) =>
-							(readOnly && name !== 'read' && !hosted.some((tool) => tool.name === name && tool.read_only)) ||
 							(name === 'read'
 								? reader === undefined
 								: !(authority.admin || authority.capabilities.tools.includes(name)) ||
@@ -571,11 +634,16 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 				): Effect.Effect<CrossAnswer, EngineError> => {
 					const work = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
 						if (job?.stopped() === true) return cross_failure('stopped', 'The run was stopped.');
-						if (readOnly && (['act', 'schedule', 'notify', 'send', 'browser.act', 'browser.evaluate'].includes(call._tag)))
-							return cross_failure('forbidden', 'A cached call may not write.');
+						if (job?.waiting !== undefined) return cross_failure('waiting', 'The run waits.');
 						if ((EFFECTS.has(call._tag) || call._tag.startsWith('ai.')) && !(yield* record))
 							return cross_failure('stopped', 'This cron slot already ran.');
 						switch (call._tag) {
+							case 'wait': {
+								const on = Schema.decodeUnknownOption(WaitOn)(call.on);
+								return Option.isNone(on)
+									? cross_failure('invalid_input', 'ctx.wait takes { until }, { model, where?, verbs?, until? } or { approval, until? }.')
+									: yield* wait(on.value);
+							}
 							case 'progress': {
 								if (job === undefined) return { ok: true, value: null };
 								const decoded = yield* Schema.decodeUnknownEffect(
@@ -626,31 +694,11 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								if (result.readGuardsConsumed === true) priorReads.consume(observedRead.generation);
 								return { ok: true, value: result.outcome };
 							}
-							case 'run': {
-								const spec = m.automations[call.automation];
-								if (spec === undefined) return cross_failure('not_found', `No automation '${call.automation}'.`);
-								if (run.depth >= LIMITS.writeDepth) return cross_failure('depth', `Runs chain at most ${LIMITS.writeDepth} deep.`);
-								if (spec.mode !== 'call') return readOnly ? cross_failure('forbidden', 'A cached call may not queue a job.') : yield* crossing({ _tag: 'schedule', automation: call.automation, input: call.input });
-								const outcome = spec.cache === undefined
-									? yield* execute(call.automation, call.input, scheduledBy(m, run, job !== undefined), run.depth + 1, { guards: priorReads, readOnly, ...(inherited.cacheKey === undefined ? {} : { cacheKey: inherited.cacheKey }) })
-									: yield* cachedCall(call.automation, call.input, run.depth + 1, inherited.cacheKey);
-								if (outcome.kind === 'committed') return { ok: true, value: outcome.output };
-								return outcome.kind === 'refused' ? { ok: false, error: outcome } : cross_failure('internal', 'The call did not finish.');
-							}
 							case 'schedule': {
 								const target = m.automations[call.automation];
 								if (target === undefined || target.mode === 'call')
 									return cross_failure('invalid_input', `no automation '${call.automation}'`);
-								const self = call.automation === run.automation;
 								// code schedules without a start grant: `automations` admits manual starts only
-								if (self && call.at === undefined && canonical(call.input) === canonical(run.input))
-									return cross_failure(
-										'hotLoop',
-										'A run cannot schedule itself at once with the same input.'
-									);
-								const depth = self ? run.depth : run.depth + 1;
-								if (depth > LIMITS.writeDepth)
-									return cross_failure('depth', `Runs chain at most ${LIMITS.writeDepth} deep.`);
 								// `{ var }`: a time expression over `now` and `today` (`now + minutes(1)`), read where the run starts it
 								const when = call.at;
 								const at =
@@ -667,6 +715,11 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 												);
 								if (!Number.isFinite(at))
 									return cross_failure('invalid_input', 'schedule: at is not an instant');
+								// a run that schedules itself a bucket or more ahead keeps its depth (a daily pass); any other schedule,
+								// itself at once whatever the input included, runs one deeper, so a loop ends at the chain depth
+								const depth = call.automation === run.automation && at - now >= BUCKET_MS ? run.depth : run.depth + 1;
+								if (depth > LIMITS.writeDepth)
+									return cross_failure('depth', `Runs chain at most ${LIMITS.writeDepth} deep.`);
 								const due = iso(due_at(now, at)),
 									runKey = call.key;
 								const value = yield* effect(
@@ -771,14 +824,13 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								if (call.to === null)
 									return cross_failure('invalid_input', 'ctx.request names its connection or instance');
 								return yield* instanceRequest(
-									{ manifest: m, db, links: drivers, readOnly },
+									{ manifest: m, db, links: drivers },
 									call.to,
 									call.operation
 								);
 							}
 							default: {
 								const facts = factsOf(call);
-								if (readOnly && facts.stores) return cross_failure('forbidden', 'A cached call may not store files.');
 								if (facts.stores && !(yield* record))
 									return cross_failure('stopped', 'This cron slot already ran.');
 								if (!(yield* checkFiles(facts)))
@@ -786,7 +838,8 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 										ok: false,
 										error: { kind: 'invalid', message: 'this run cannot read file' }
 									};
-								const got = yield* facility(call, facts, keyOf(call._tag, '', call.args));
+								// an inference's session is per attempt: a rerun's transcript is its own
+								const got = yield* facility(call, facts, `${run.attempts}:${keyOf(call._tag, '', call.args)}`);
 								yield* rememberFile(facts, got);
 								return got;
 							}
@@ -801,7 +854,10 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 							...(job === undefined ? {} : { run: run.id }),
 							kind: modelEffect === undefined ? 'automation' : 'effect',
 							target: run.automation,
-							input,
+							input:
+								modelEffect === undefined
+									? withInputDefaults(m.automations[run.automation]?.input, input, b)
+									: input,
 							ctx: {
 								...(job?.event === undefined ? {} : { event: job.event }),
 								actor: holder.actor,
@@ -809,7 +865,6 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								today: b.today,
 								tz: b.tz,
 								seed: run.id,
-								cause,
 								attempt: run.attempts,
 								...(modelEffect === undefined &&
 								m.automations[run.automation] !== undefined
@@ -817,10 +872,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 											run: {
 												...(job === undefined ? {} : { id: run.id }),
 												// ponytail: a run queued before triggers were recorded reads as an unattributed schedule
-												...(cached ? {} : { trigger: run.trigger ?? {
-													kind: 'system' as const,
-													cause: 'schedule' as const
-													} })
+												trigger: run.trigger ?? { kind: 'system' as const, cause: 'schedule' as const }
 											}
 										}
 									: {})
@@ -831,8 +883,24 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 							}
 						},
 						{
-							cross: (batch) =>
+							cross: (all) =>
 								Effect.gen(function* () {
+									// resumed: the crossings before the wait answer from the journal, in order
+									const old: CrossAnswer[] = [];
+									for (const call of all) {
+										const entry = waited?.journal[replay];
+										const answer = waited === undefined ? undefined : replayed(waited.journal, replay, call);
+										if (answer === undefined || entry === undefined) break;
+										if (answer === 'diverged')
+											return all.map(() =>
+												cross_failure('diverged', 'The run changed since it waited: its calls before the wait are not the ones it made.')
+											);
+										journal.push(entry);
+										replay++;
+										old.push(answer);
+										if (isFacility(call)) yield* rememberFile(factsOf(call), answer);
+									}
+									const batch = all.slice(old.length);
 									const requests = batch.flatMap((call) =>
 										call._tag === 'read' ? [call.read] : []
 									);
@@ -845,8 +913,8 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 													)
 												);
 									let index = 0;
-									return yield* Effect.forEach(batch, (call): Effect.Effect<CrossAnswer> =>
-										call._tag === 'read'
+									const fresh = yield* Effect.forEach(batch, (call): Effect.Effect<CrossAnswer> =>
+										(call._tag === 'read'
 											? Effect.succeed(
 													answers[index++] ?? cross_failure('internal', 'the read returned no answer')
 												)
@@ -854,68 +922,41 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 													Effect.catch((error) => Effect.succeed(failure(error))),
 													(work) => job === undefined ? work : Effect.raceFirst(work, Deferred.await(job.halt).pipe(Effect.as(cross_failure('stopped', 'The run was stopped.'))))
 												)
+										).pipe(
+											// a job's crossings are journaled until it waits, so a later attempt can answer them again
+											Effect.tap((answer) =>
+												Effect.sync(() => {
+													if (job === undefined || job.waiting !== undefined || journalBytes > LIMITS.waitBytes) return;
+													const entry = journalEntry(call, answer);
+													journalBytes += entry.a.length + (entry.b?.reduce((sum, b) => sum + b.length, 0) ?? 0);
+													journal.push(entry);
+												})
+											)
+										)
 									);
-								})
+									return [...old, ...fresh];
+								}).pipe(
+									// a journaled file answer that no longer decodes fails the whole batch
+									Effect.catch((error) => Effect.succeed(all.map(() => failure(error))))
+								)
 						}
 					);
 			}).pipe(Effect.scoped);
-	const execute = Effect.fn('Automations.callBody')(function* (automation: string, input: Json, trigger?: RunTrigger, depth = 0, inherited: CallScope = {}): Effect.fn.Return<Outcome, EngineError> {
+	const execute = Effect.fn('Automations.callBody')(function* (automation: string, input: Json, trigger?: RunTrigger): Effect.fn.Return<Outcome, EngineError> {
 		const spec = m.automations[automation];
 		if (spec === undefined || spec.mode !== 'call')
 			return yield* Effect.fail(BoltError.make('invalid_input', 'admission', `'${automation}' is not a call-mode automation.`));
-		if (depth > LIMITS.writeDepth) return yield* Effect.fail(BoltError.make('invalid_input', 'admission', `Runs chain at most ${LIMITS.writeDepth} deep.`));
 		const decoded = decodeAutomationInput(spec.input, input);
 		if (decoded.problems.length > 0) return yield* Effect.fail(BoltError.make('invalid_input', 'decode', decoded.problems.map((problem) => `${problem.path}: ${problem.message}`).join('; ')));
 		input = decoded.value ?? null;
 		const id = yield* newId;
 		const holder: Holder = { actor: { kind: 'system', run: id, by: { automation } }, policies: spec.policies, admin: false };
-		const outcome = yield* invoke({ id, automation, input, cause: 'start', depth, attempts: 1, starter: null, ...(trigger === undefined ? {} : { trigger }) }, holder, input, undefined, inherited);
+		const outcome = yield* invoke({ id, automation, input, cause: 'start', depth: 0, attempts: 1, starter: null, ...(trigger === undefined ? {} : { trigger }) }, holder, input);
 		if (outcome.kind === 'failed') return yield* Effect.fail(outcome.error);
 		if (outcome.kind === 'refused')
 			return yield* Schema.decodeUnknownEffect(WriteOutcome)({ ...outcome, code: outcome.code ?? 'refused' }).pipe(Effect.mapError((error) => BoltError.make('corrupt', 'guest', error.message, error)));
 		return { kind: 'committed' as const, output: yield* decodeOutput(m, spec.output, outcome.output), records: [] };
 	});
-	const CacheKey = Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.Json]));
-	const cache = yield* Cache.makeWith((key: string) => Effect.gen(function* () {
-		const [automation, input] = yield* Schema.decodeUnknownEffect(CacheKey)(key).pipe(Effect.mapError((error) => BoltError.make('internal', 'decode', error.message, error)));
-		return { output: yield* execute(automation, input, undefined, yield* CallDepth, { cacheKey: key }), ttl: duration(m.automations[automation]?.cache ?? '0s') };
-	}), { capacity: LIMITS.automationCache.entries, requireServicesAt: 'lookup', timeToLive: (exit) => Exit.isSuccess(exit) && exit.value.output.kind === 'committed' ? exit.value.ttl : 0 });
-	const cachedCall = Effect.fn('Automations.cachedCall')(function* (
-		automation: string, input: Json, depth: number, parent?: string
-	): Effect.fn.Return<Outcome, EngineError> {
-		const spec = m.automations[automation];
-		const decoded = decodeAutomationInput(spec?.input, input);
-		if (decoded.problems.length > 0)
-			return yield* Effect.fail(BoltError.make('invalid_input', 'decode', decoded.problems.map((problem) => `${problem.path}: ${problem.message}`).join('; ')));
-		const key = canonical([automation, decoded.value]);
-		const get = Cache.get(cache, key).pipe(Effect.provideService(CallDepth, depth), Effect.map((value) => value.output));
-		if (parent === undefined) return yield* get;
-		return yield* Effect.acquireUseRelease(
-			Effect.try({
-				try: () => {
-					const pending = [key], visited = new Set<string>();
-					for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-						if (next === parent) throw BoltError.make('invalid_input', 'admission', 'Cached calls may not wait on a cycle of calls.');
-						if (visited.has(next)) continue;
-						visited.add(next);
-						pending.push(...(waiting.get(next)?.keys() ?? []));
-					}
-					const edges = waiting.get(parent) ?? new Map<string, number>();
-					edges.set(key, (edges.get(key) ?? 0) + 1);
-					waiting.set(parent, edges);
-				},
-				catch: (error) => error instanceof BoltError ? error : BoltError.make('internal', 'admission', String(error), error)
-			}),
-			() => get,
-			() => Effect.sync(() => {
-				const edges = waiting.get(parent), count = edges?.get(key) ?? 0;
-				if (count > 1) edges?.set(key, count - 1);
-				else edges?.delete(key);
-				if (edges?.size === 0) waiting.delete(parent);
-			})
-		);
-	});
-
 	const callBody = Effect.fn('Automations.callBodyAdmission')(function* (request: AutomationRequest): Effect.fn.Return<Outcome, EngineError> {
 		const spec = m.automations[request.automation];
 		if (spec === undefined || spec.mode !== 'call')
@@ -924,9 +965,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 		if ('kind' in admitted) return admitted;
 		const input = admitted[0];
 		if (input === undefined) return yield* Effect.fail(BoltError.make('internal', 'admission', 'The admitted call has no input.'));
-		return spec.cache === undefined
-			? yield* execute(request.automation, input, triggerOf(request.authority, request.agent ?? request.authority.agent))
-			: yield* cachedCall(request.automation, input, 0);
+		return yield* execute(request.automation, input, triggerOf(request.authority, request.agent ?? request.authority.agent));
 	});
 	const call = Effect.fn('Automations.call')(function* (request: AutomationRequest) {
 		const id = yield* newId;

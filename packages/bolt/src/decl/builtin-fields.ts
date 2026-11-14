@@ -1,4 +1,4 @@
-// The built-in custom fields: declared exactly as a workspace's `src/data/custom_field/<f>/+definition.ts` is, and
+// The built-in custom fields: declared exactly as a workspace's `src/data/custom_field/<f>/+custom_field.ts` is, and
 // rendered by the ui's built-in `+renderer.svelte` equivalents (`@norbital-ai/ui` `BUILTIN_FIELDS`, same shape, same
 // `{ view: CustomFieldView }` contract). The stored kinds `money`, `file`, `point` and `text` `format: 'phone'` render
 // through them by default; a model may also store one as `{ kind: 'custom', of: '<name>' }`, typed by its shape like any

@@ -43,11 +43,10 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import Tabs from '../primitives/tabs/tabs.svelte';
-	import ToolbarSearch from '../model/toolbar/ToolbarSearch.svelte';
-	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
+	import CustomView from '../model/CustomView.svelte';
 	import LogView from '../logs/LogView.svelte';
 	import UsageChart, { format_metric_value } from '../chart/UsageChart.svelte';
-	import { filterMembers, newestReleases, release_window } from './filters.js';
+	import { memberStatus, newestReleases, release_window } from './filters.js';
 	let {
 		ctx,
 		data,
@@ -60,34 +59,38 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 		release = $bindable(),
 		actions
 	}: WorkspaceOperationsProps = $props();
-	let userSearch = $state(''),
-		userStatus = $state('all');
-	let assetSearch = $state(''),
-		assetStatus = $state('all'),
-		runSearch = $state(''),
-		packageSearch = $state('');
+	let runSearch = $state('');
 	const can_inspect = $derived(data.can_inspect);
 	const studio = $derived(data.studio),
 		members = $derived(data.members),
 		bundles = $derived(data.bundles),
 		cache = $derived(data.cache);
-	const shownMembers = $derived(filterMembers(members ?? [], userSearch, userStatus, data.as_of));
-	const cacheByPath = $derived(new Map((cache?.assets ?? []).map((asset) => [asset.path, asset])));
-	const shownAssets = $derived(
-		(bundles?.assets ?? []).filter(
-			(asset) =>
-				`${asset.path} ${asset.sha256}`.toLowerCase().includes(assetSearch.trim().toLowerCase()) &&
-				(assetStatus === 'all' ||
-					(cache !== null &&
-						(assetStatus === 'cached'
-							? (cacheByPath.get(asset.path)?.cached_bytes ?? 0) > 0
-							: (cacheByPath.get(asset.path)?.cached_bytes ?? 0) === 0)))
-		)
+	const STATUS = {
+		recent: 'Recently active',
+		offline: 'Offline',
+		unknown: 'Unknown',
+		disabled: 'Disabled'
+	} as const;
+	// each list's rows carry the words its toolbar searches, filters and sorts on
+	const memberRows = $derived(
+		(members ?? []).map((member) => ({
+			...member,
+			status: t(STATUS[memberStatus(member, data.as_of)])
+		}))
 	);
-	const shownPackages = $derived(
-		(data.health?.packages ?? []).filter((pkg) =>
-			`${pkg.name} ${pkg.version}`.toLowerCase().includes(packageSearch.trim().toLowerCase())
-		)
+	const cacheByPath = $derived(new Map((cache?.assets ?? []).map((asset) => [asset.path, asset])));
+	const assetRows = $derived(
+		(bundles?.assets ?? []).map((asset) => {
+			const held = cacheByPath.get(asset.path);
+			return {
+				...asset,
+				id: asset.path,
+				variants: held?.variants.map((variant) => variant.encoding).join(', ') || t('Not resident')
+			};
+		})
+	);
+	const packageRows = $derived(
+		(data.health?.packages ?? []).map((pkg) => ({ ...pkg, id: `${pkg.source}:${pkg.name}` }))
 	);
 	const runOptions = $derived.by(() => {
 		const ids = new Set((data.logs ?? []).flatMap((row) => (row.run === null ? [] : [row.run])));
@@ -124,14 +127,12 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 				at: row.at,
 				level: row.severity,
 				message: `${row.event} ${JSON.stringify(row.attributes)}`,
-				...(row.run === null ? {} : { source: `run ${row.run}` })
+				source: row.run === null ? null : `run ${row.run}`
 			}));
 	});
 	const host = $derived(ctx.ui.kinds);
 	const when = (value: string | null) =>
 		value === null ? t('Not recorded') : new Date(value).toLocaleString(host.locale);
-	const online = (value: string | null) =>
-		value !== null && Date.parse(value) > Date.parse(data.as_of) - 300000;
 	const bytes = (value: number | null) => format_metric_value('bytes', value, host.locale);
 	const TABS = {
 		bundle: { title: 'Bundle', icon: 'lucide:package' },
@@ -252,79 +253,75 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 			<summary class="cursor-pointer font-medium"
 				>{t('Recorded package versions')} · {data.health?.packages.length ?? 0}</summary
 			>
-			<div class="mt-2 flex items-center gap-1" data-view-toolbar>
-				<ToolbarSearch bind:value={packageSearch} label={t('Search package names and versions')} />
-			</div>
-			<div class="overflow-x-auto">
-				<table class="w-full text-left">
-					<thead
-						><tr
-							><th scope="col">{t('Package')}</th><th scope="col">{t('Version')}</th><th scope="col"
-								>{t('Recorded in')}</th
-							></tr
-						></thead
-					><tbody
-						>{#each shownPackages as pkg (`${pkg.source}:${pkg.name}`)}<tr
-								><th scope="row" class="font-mono font-normal">{pkg.name}</th><td class="font-mono"
-									>{pkg.version}</td
-								><td class="text-meta">{t(pkg.source)}</td></tr
-							>{:else}<tr
-								><td colspan="3" class="text-meta"
-									>{t('No recorded package versions are available.')}</td
-								></tr
-							>{/each}</tbody
-					>
-				</table>
-			</div>
+			<CustomView
+				{ctx}
+				of={packageRows}
+				fields={[
+					{ field: 'name', label: t('Package') },
+					{ field: 'version', label: t('Version') },
+					{ field: 'source', label: t('Recorded in') }
+				]}
+				key="packages"
+				toolbar={{ title: false, description: false }}
+			>
+				{#snippet children(shown)}
+					<div class="overflow-x-auto">
+						<table class="w-full text-left">
+							<thead
+								><tr
+									><th scope="col">{t('Package')}</th><th scope="col">{t('Version')}</th><th
+										scope="col">{t('Recorded in')}</th
+									></tr
+								></thead
+							><tbody
+								>{#each shown as pkg (pkg.id)}<tr
+										><th scope="row" class="font-mono font-normal">{pkg.name}</th><td class="font-mono"
+											>{pkg.version}</td
+										><td class="text-meta">{t(pkg.source)}</td></tr
+									>{/each}</tbody
+							>
+						</table>
+					</div>
+				{/snippet}
+			</CustomView>
 		</details>
 		<details class="rounded-md border border-border p-3">
 			<summary class="cursor-pointer font-medium"
 				>{t('Bundle files')} · {bundles?.asset_count ?? t('Unavailable')}</summary
 			>
-			<div class="mt-2 flex flex-wrap items-center gap-1" data-view-toolbar>
-				<ToolbarSearch bind:value={assetSearch} label={t('Search client files')} /><ToolbarFilter
-					count={assetStatus === 'all' ? 0 : 1}
-					label={t('Filter client files')}
-					panel_class="w-72"
-					><label class="grid gap-2"
-						><span class="text-label">{t('Cache residency')}</span><Combobox
-							aria-label={t('Cache residency')}
-							value={assetStatus}
-							options={[
-								{ value: 'all', label: t('All files') },
-								{ value: 'cached', label: t('Cached') },
-								{ value: 'cold', label: t('Not resident') }
-							]}
-							on_change={(status) => {
-								assetStatus = status ?? 'all';
-							}}
-						/></label
-					></ToolbarFilter
-				><span class="text-meta ml-auto">{shownAssets.length} {t('files shown')}</span>
-			</div>
-			<div class="overflow-x-auto">
-				<table class="w-full text-left">
-					<thead
-						><tr
-							><th scope="col">{t('Client asset')}</th><th scope="col">{t('On disk')}</th><th
-								scope="col">{t('Cached variants')}</th
-							></tr
-						></thead
-					><tbody
-						>{#each shownAssets as asset (asset.path)}{@const held = cacheByPath.get(asset.path)}<tr
-								><th scope="row" class="max-w-md break-all font-mono font-normal">{asset.path}</th
-								><td class="whitespace-nowrap font-mono">{bytes(asset.bytes)}</td><td
-									class="font-mono"
-									>{held?.variants.map((variant) => variant.encoding).join(', ') ||
-										t('Not resident')}</td
-								></tr
-							>{:else}<tr
-								><td colspan="3" class="text-meta">{t('No client files match these filters.')}</td
-								></tr
-							>{/each}</tbody
-					>
-				</table>
-			</div>
+			<CustomView
+				{ctx}
+				of={assetRows}
+				fields={[
+					{ field: 'path', label: t('Client asset') },
+					{ field: 'sha256', label: 'SHA-256' },
+					{ field: 'bytes', label: t('On disk') },
+					{ field: 'variants', label: t('Cached variants') }
+				]}
+				key="assets"
+				toolbar={{ title: false, description: false }}
+			>
+				{#snippet children(shown)}
+					<div class="overflow-x-auto">
+						<table class="w-full text-left">
+							<thead
+								><tr
+									><th scope="col">{t('Client asset')}</th><th scope="col">{t('On disk')}</th><th
+										scope="col">{t('Cached variants')}</th
+									></tr
+								></thead
+							><tbody
+								>{#each shown as asset (asset.id)}<tr
+										><th scope="row" class="max-w-md break-all font-mono font-normal">{asset.path}</th
+										><td class="whitespace-nowrap font-mono">{bytes(asset.bytes)}</td><td
+											class="font-mono">{asset.variants}</td
+										></tr
+									>{/each}</tbody
+							>
+						</table>
+					</div>
+				{/snippet}
+			</CustomView>
 			{#if bundles?.truncated}<p class="text-meta mt-2">
 					{t(
 						'Only the first 200 client assets are listed. Client byte totals are unavailable when the list is truncated.'
@@ -337,14 +334,8 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 	{#if !can_inspect}{@render restricted()}{:else}<div class="flex min-h-0 flex-1 flex-col gap-3">
 			{#if data.errors?.logs}<p role="alert" class="text-destructive">
 					{data.errors.logs}
-				</p>{/if}<LogView
-				rows={runtimeLines}
-				follow={false}
-				class="min-h-80 flex-1"
-				filter_count={data.filters.run ? 1 : 0}
-				trailing={actions}
-			>
-				{#snippet leading()}
+				</p>{/if}<LogView {ctx} rows={runtimeLines} follow={false} trailing={actions}>
+				{#snippet controls()}
 					<h2 class="px-1 text-sm font-semibold">{t('Runtime & run logs')}</h2>
 					<Combobox
 						class="w-80"
@@ -354,99 +345,68 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 						options={releaseOptions}
 						on_change={(at) => at !== null && (release = at || null)}
 					/>
-				{/snippet}
-				{#snippet filters()}
-					<label class="grid gap-2"
-						><span class="text-label">{t('Automation run')}</span><Combobox
-							aria-label={t('Automation run')}
-							searchable
-							value={data.filters.run}
-							options={runOptions}
-							on_search={(query) => {
-								runSearch = query;
-							}}
-							on_change={(run) => run !== null && on_change({ run: run || null })}
-						/></label
-					>
+					<Combobox
+						class="w-64"
+						aria-label={t('Automation run')}
+						searchable
+						value={data.filters.run}
+						options={runOptions}
+						on_search={(query) => {
+							runSearch = query;
+						}}
+						on_change={(run) => run !== null && on_change({ run: run || null })}
+					/>
 				{/snippet}
 			</LogView>
 		</div>{/if}
 {/snippet}
+{#snippet userCount()}<span class="text-meta"
+		>{memberRows.length}
+		{t('users')} · {memberRows.filter((member) => member.status === t(STATUS.recent)).length}
+		{t('recently active')}</span
+	>{/snippet}
 {#snippet users()}
 	{#if members === null}{#if can_inspect}<p class="text-meta">
 				{data.errors?.access ?? t('The named user inventory is unavailable.')}
-			</p>{:else}{@render restricted()}{/if}{:else}<div class="grid gap-3">
-			<div class="flex min-w-0 flex-wrap items-center gap-1" data-view-toolbar>
-				<h2 class="mr-1 text-sm font-semibold">{t('Users')}</h2>
-				<ToolbarSearch
-					bind:value={userSearch}
-					label={t('Search users by name, email or ID')}
-				/><ToolbarFilter
-					count={userStatus === 'all' ? 0 : 1}
-					label={t('Filter users')}
-					panel_class="w-72"
-					><label class="grid gap-2"
-						><span class="text-label">{t('Status')}</span><Combobox
-							aria-label={t('User status')}
-							value={userStatus}
-							options={[
-								{ value: 'all', label: t('All users') },
-								{ value: 'recent', label: t('Recently active') },
-								{ value: 'enabled', label: t('Enabled') },
-								{ value: 'disabled', label: t('Disabled') },
-								{ value: 'offline', label: t('Offline') },
-								{ value: 'unknown', label: t('No recorded activity') }
-							]}
-							on_change={(status) => {
-								userStatus = status ?? 'all';
-							}}
-						/></label
-					></ToolbarFilter
-				><span class="text-meta ml-auto"
-					>{shownMembers.length}
-					{t('of')}
-					{members.length}
-					{t('users')} · {members.filter((member) => member.active && online(member.last_seen))
-						.length}
-					{t('recently active')}</span
-				>
-			</div>
-			<div class="overflow-x-auto rounded-md border border-border px-3">
-				<table class="w-full text-left">
-					<thead
-						><tr
-							><th scope="col">{t('User')}</th><th scope="col">{t('Email / login identity')}</th><th
-								scope="col">{t('Status')}</th
-							><th scope="col">{t('Last authenticated activity')}</th></tr
-						></thead
-					><tbody
-						>{#each shownMembers as member (member.id)}<tr
-								><th scope="row" class="font-medium"
-									>{member.name}
-									<div class="text-meta font-mono">{member.id}</div></th
-								><td>{member.email ?? t('Not recorded')}</td><td
-									><span
-										class={`inline-flex rounded px-2 py-0.5 text-micro ${!member.active ? 'bg-muted text-muted-foreground' : 'text-foreground'}`}
-										>{t(
-											!member.active
-												? 'Disabled'
-												: online(member.last_seen)
-													? 'Recently active'
-													: member.last_seen === null
-														? 'Unknown'
-														: 'Offline'
-										)}</span
-									></td
-								><td class="whitespace-nowrap">{when(member.last_seen)}</td></tr
-							>{:else}<tr
-								><td colspan="4" class="text-meta"
-									>{t(members.length === 0 ? 'No users.' : 'No users match these filters.')}</td
-								></tr
-							>{/each}</tbody
-					>
-				</table>
-			</div>
-		</div>{/if}
+			</p>{:else}{@render restricted()}{/if}{:else}<CustomView
+			{ctx}
+			of={memberRows}
+			fields={[
+				{ field: 'name', label: t('User') },
+				{ field: 'email', label: t('Email / login identity') },
+				{ field: 'id', label: 'ID' },
+				{ field: 'status', label: t('Status') },
+				{ field: 'last_seen', label: t('Last authenticated activity') }
+			]}
+			key="users"
+			toolbar={{ title: t('Users'), description: false, trailing: userCount }}
+		>
+			{#snippet children(shown)}
+				<div class="overflow-x-auto rounded-md border border-border px-3">
+					<table class="w-full text-left">
+						<thead
+							><tr
+								><th scope="col">{t('User')}</th><th scope="col">{t('Email / login identity')}</th><th
+									scope="col">{t('Status')}</th
+								><th scope="col">{t('Last authenticated activity')}</th></tr
+							></thead
+						><tbody
+							>{#each shown as member (member.id)}<tr
+									><th scope="row" class="font-medium"
+										>{member.name}
+										<div class="text-meta font-mono">{member.id}</div></th
+									><td>{member.email ?? t('Not recorded')}</td><td
+										><span
+											class={`inline-flex rounded px-2 py-0.5 text-micro ${!member.active ? 'bg-muted text-muted-foreground' : 'text-foreground'}`}
+											>{member.status}</span
+										></td
+									><td class="whitespace-nowrap">{when(member.last_seen)}</td></tr
+								>{/each}</tbody
+						>
+					</table>
+				</div>
+			{/snippet}
+		</CustomView>{/if}
 {/snippet}
 
 <style>

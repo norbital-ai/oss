@@ -2,33 +2,31 @@
 import { Effect, FiberSet, Result, Scope } from 'effect';
 import mssql from 'mssql';
 import { compile_sql_server } from '@norbital-ai/store/sqlserver';
+import type { Json } from 'effect/Schema';
 import {
-	BoltError,
 	DATABASE_MAX_BYTES,
 	DATABASE_MAX_ROWS,
-	validate_database_request,
-	type DatabaseDriver,
+	type DatabaseRequest,
 	type DatabaseResult,
-	type Json
-} from '@norbital-ai/bolt/engine';
-import { connect_public } from '@norbital-ai/bolt/node';
+	FacilityFailure,
+	HOST_LIMITS
+} from '@norbital-ai/host-api';
+import { connect_public } from '@norbital-ai/host-api/node';
 
 const QUERY_MS = 8_000;
 const retryableSql = new Set([1205, 1222]); // Deadlock victim and lock timeout.
 const failure = (message: string) => (cause: unknown) => {
-	if (cause instanceof BoltError) return cause;
+	if (cause instanceof FacilityFailure) return cause;
 	if (
 		cause instanceof mssql.RequestError &&
 		cause.code === 'EREQUEST' &&
 		typeof cause.number === 'number'
 	)
-		return BoltError.make(
-			retryableSql.has(cause.number) ? 'upstream' : 'invalid',
-			'facility',
-			message,
-			cause
-		);
-	return BoltError.make('upstream', 'facility', message, cause);
+		return new FacilityFailure({
+			kind: retryableSql.has(cause.number) ? 'upstream' : 'invalid',
+			message
+		});
+	return new FacilityFailure({ kind: 'upstream', message });
 };
 function scalar(value: unknown): Json {
 	if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
@@ -36,53 +34,39 @@ function scalar(value: unknown): Json {
 	if (typeof value === 'bigint') return value.toString();
 	if (Buffer.isBuffer(value)) return `0x${value.toString('hex')}`;
 	if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString();
-	throw BoltError.make(
-		'upstream',
-		'facility',
-		'Database returned an unsupported value; cast it explicitly.'
-	);
+	throw new FacilityFailure({ kind: 'upstream', message: 'Database returned an unsupported value; cast it explicitly.' });
 }
 export function sqlServerDatabase() {
 	return {
-		query: (credential: string, given: Parameters<DatabaseDriver['query']>[1]) =>
+		query: (credential: string, given: DatabaseRequest) =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const validated = yield* validate_database_request(given);
+					if (new TextEncoder().encode(JSON.stringify(given)).byteLength > HOST_LIMITS.argsBytes)
+						return yield* Effect.fail(FacilityFailure.invalid('Database request exceeds its bounds.'));
 					const request = yield* Effect.try({
-						try: () => compile_sql_server(validated),
-						catch: (cause) =>
-							cause instanceof BoltError
-								? cause
-								: BoltError.make('invalid_input', 'admission', 'Database request is invalid.', cause)
+						try: () => compile_sql_server(given),
+						catch: () => FacilityFailure.invalid('Database request is invalid.')
 					});
 					if (!credential.trim())
 						return yield* Effect.fail(
-							BoltError.make('invalid_input', 'admission', 'Database credential is invalid.')
+							new FacilityFailure({ kind: 'invalid', message: 'Database credential is invalid.' })
 						);
 					if (Object.keys(request.parameters).length > 2_100)
 						return yield* Effect.fail(
-							BoltError.make(
-								'invalid_input',
-								'admission',
-								'Database transport parameter limit exceeded.'
-							)
+							new FacilityFailure({ kind: 'invalid', message: 'Database transport parameter limit exceeded.' })
 						);
 					const parsed = yield* Effect.try({
 						try: () => mssql.ConnectionPool.parseConnectionString(credential),
 						catch: () =>
-							BoltError.make('invalid_input', 'admission', 'Database credential is invalid.')
+							new FacilityFailure({ kind: 'invalid', message: 'Database credential is invalid.' })
 					});
 					if (parsed.options?.instanceName !== undefined)
 						return yield* Effect.fail(
-							BoltError.make(
-								'unsupported',
-								'facility',
-								'Named-instance discovery is unavailable; configure an explicit SQL Server TCP port.'
-							)
+							new FacilityFailure({ kind: 'unsupported', message: 'Named-instance discovery is unavailable; configure an explicit SQL Server TCP port.' })
 						);
 					if (typeof parsed.server !== 'string' || parsed.server.trim() === '')
 						return yield* Effect.fail(
-							BoltError.make('invalid_input', 'admission', 'Database server is missing.')
+							new FacilityFailure({ kind: 'invalid', message: 'Database server is missing.' })
 						);
 					if (
 						parsed.authentication !== undefined &&
@@ -95,11 +79,7 @@ export function sqlServerDatabase() {
 						].includes(parsed.authentication.type)
 					)
 						return yield* Effect.fail(
-							BoltError.make(
-								'unsupported',
-								'facility',
-								'Automatic database credential discovery is unavailable.'
-							)
+							new FacilityFailure({ kind: 'unsupported', message: 'Automatic database credential discovery is unavailable.' })
 						);
 					const hostname = parsed.server;
 					const port = parsed.options?.port ?? parsed.port ?? 1433;
@@ -125,11 +105,7 @@ export function sqlServerDatabase() {
 									connection.config.options.connector = () =>
 										connection.routingData !== undefined
 											? Promise.reject(
-													BoltError.make(
-														'unsupported',
-														'facility',
-														'SQL Server rerouting is unavailable.'
-													)
+													new FacilityFailure({ kind: 'unsupported', message: 'SQL Server rerouting is unavailable.' })
 												)
 											: run(
 													connect_public(hostname, port).pipe(
@@ -139,7 +115,7 @@ export function sqlServerDatabase() {
 								}
 							}),
 						catch: () =>
-							BoltError.make('invalid_input', 'admission', 'Database credential is invalid.')
+							new FacilityFailure({ kind: 'invalid', message: 'Database credential is invalid.' })
 					});
 					let closed = false;
 					const close = Effect.tryPromise({
@@ -204,8 +180,8 @@ export function sqlServerDatabase() {
 					});
 					const rows: DatabaseResult['rows'][number][] = [];
 					let size = new TextEncoder().encode('{"rows":[]}').byteLength;
-					let refusal: BoltError | undefined,
-						cancellationFailure: BoltError | undefined,
+					let refusal: FacilityFailure | undefined,
+						cancellationFailure: FacilityFailure | undefined,
 						streamFailure: unknown;
 					yield* Effect.addFinalizer(() =>
 						cancellationFailure === undefined ? Effect.void : Effect.logWarning(cancellationFailure)
@@ -228,11 +204,7 @@ export function sqlServerDatabase() {
 						const accepted = Result.try({
 							try: () => {
 								if (rows.length >= (request.max_rows ?? DATABASE_MAX_ROWS))
-									throw BoltError.make(
-										'overflow',
-										'facility',
-										'Database result exceeds its row limit.'
-									);
+									throw new FacilityFailure({ kind: 'too_large', message: 'Database result exceeds its row limit.' });
 								const value = Object.fromEntries(
 									Object.entries(row).map(([name, value]) => [name, scalar(value)])
 								);
@@ -240,11 +212,7 @@ export function sqlServerDatabase() {
 									new TextEncoder().encode(JSON.stringify(value)).byteLength +
 									(rows.length === 0 ? 0 : 1);
 								if (size > DATABASE_MAX_BYTES)
-									throw BoltError.make(
-										'overflow',
-										'facility',
-										'Database result exceeds its byte limit.'
-									);
+									throw new FacilityFailure({ kind: 'too_large', message: 'Database result exceeds its byte limit.' });
 								rows.push(value);
 							},
 							catch: failure('Database request failed.')
@@ -280,7 +248,7 @@ export function sqlServerDatabase() {
 					duration: QUERY_MS,
 					orElse: () =>
 						Effect.fail(
-							BoltError.make('timeout', 'facility', 'Database request exceeded its wall.')
+							new FacilityFailure({ kind: 'timeout', message: 'Database request exceeded its wall.' })
 						)
 				})
 			)

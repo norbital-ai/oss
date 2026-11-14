@@ -18,7 +18,7 @@ import {
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { SqlReadCapture, type SqlReadCaptureService } from '../src/engine/db/tenant-db.ts';
 import { EngineLive } from '../src/engine/host.ts';
-import { Agents, Live, Reads, Writes, type LiveView } from '../src/engine/services.ts';
+import { Agents, Live, Reads, Callables, type LiveView } from '../src/engine/services.ts';
 import { route_fixture } from './support/route-fixture.ts';
 import { sse } from './support/live-bolt.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
@@ -33,6 +33,7 @@ import { captureRows } from '../src/engine/db/captured.ts';
 import { shell_api } from '../src/shell/runtime.ts';
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { ACME, callbacks, guest, manifest as base, seed, SHADY } from './engine-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -88,7 +89,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 		);
 		const t = Context.get(context, TestWorkspace),
 			live = Context.get(context, Live),
-			writes = Context.get(context, Writes),
+			writes = Context.get(context, Callables),
 			queries = Context.get(context, Reads),
 			agents = Context.get(context, Agents),
 			route = yield* route_fixture(context);
@@ -228,17 +229,16 @@ const cellOf = (m: EngineManifest, source: string) =>
 			input: readonly Json[]
 		) =>
 			Effect.gen(function* () {
-				const result = yield* writes.act({
+				const result = yield* writes.acts(one_act({
 					model: 'orders',
 					verb,
 					input,
-					mode: { _tag: 'Direct' },
 					key: randomUUID(),
 					issuedAt: NOW,
 					authority,
 					bindings: bindings(),
 					invocationId: randomUUID()
-				});
+				}));
 				expect(result.outcome.kind).toBe('committed');
 				yield* settled;
 				if (result.outcome.kind !== 'committed') throw new Error(JSON.stringify(result.outcome));
@@ -249,7 +249,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 			EngineLive(m).pipe(
 				Layer.provide(Layer.mergeAll(NodeCrypto.layer, Layer.succeedContext(context)))
 			)
-		).pipe(Effect.map((context) => Context.get(context, Writes)));
+		).pipe(Effect.map((context) => Context.get(context, Callables)));
 		const other = () => Effect.succeed(another);
 		return {
 			t,
@@ -388,17 +388,16 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						yield* bolt.act({ 'orders.create': [{ title: 'raced', region: 'north', customer: ACME }] });
 						const target = titled(view.rows(), 'raced');
 						const id = String(target['id']);
-						const moved = yield* (yield* other()).act({
+						const moved = yield* (yield* other()).acts(one_act({
 							model: 'orders',
 							verb: 'update',
-							mode: { _tag: 'Direct' },
 							input: [{ target: id, set: { title: 'moved' } }],
 							key: randomUUID(),
 							issuedAt: NOW,
 							authority: rep,
 							bindings: bindings(),
 							invocationId: randomUUID()
-						});
+						}));
 						expect(kind(moved.outcome)).toBe('committed');
 						expect(
 							yield* bolt
@@ -420,17 +419,16 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						yield* register(w, 'orders', {
 							read: yield* lower_read(manifest, 'read', ['orders', { all: true, select: { title: true } }])
 						});
-						const r = yield* writes.act({
+						const r = yield* writes.acts(one_act({
 							model: 'orders',
 							verb: 'create',
-							mode: { _tag: 'Direct' },
 							input: [{ title: 'stamped', region: 'north', customer: ACME }],
 							key: randomUUID(),
 							issuedAt: t.clock.now(),
 							authority: rep,
 							bindings: b(),
 							invocationId: randomUUID()
-						});
+						}));
 						expect(r.outcome.kind).toBe('committed');
 						yield* settled;
 						const last = w.frames.findLast((frame) => frame.t === 'patch');
@@ -500,17 +498,16 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 					]);
 					yield* register(w, 'simple', { read: simple });
 					// another cell's writer commits; its RETURNING set is then routed through this hub alone
-					const r = yield* (yield* other()).act({
+					const r = yield* (yield* other()).acts(one_act({
 						model: 'orders',
 						verb: 'create',
-						mode: { _tag: 'Direct' },
 						input: [{ title: 'simple', region: 'north', customer: ACME }],
 						key: randomUUID(),
 						issuedAt: NOW,
 						authority: rep,
 						bindings: b(),
 						invocationId: randomUUID()
-					});
+					}));
 					count.reset();
 					live.publish(r.captured);
 					yield* settled;
@@ -535,10 +532,9 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 							{ select: { title: true, total: true }, all: true }
 						]);
 						yield* register(w, 'totals', { read: totals });
-						const r = yield* (yield* other()).act({
+						const r = yield* (yield* other()).acts(one_act({
 							model: 'orders',
 							verb: 'create',
-							mode: { _tag: 'Direct' },
 							input: [
 								{
 									title: 'decimal',
@@ -555,7 +551,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 							authority: rep,
 							bindings: b(),
 							invocationId: randomUUID()
-						});
+						}));
 						// both rows keep their scale; capture order between them is not part of the contract
 						expect(
 							r.captured
@@ -589,17 +585,16 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						]);
 						const another = yield* other();
 						const write = (model: string, verb: 'create' | 'update', input: readonly Json[]) =>
-							another.act({
+							another.acts(one_act({
 								model,
 								verb,
-								mode: { _tag: 'Direct' },
 								input,
 								key: randomUUID(),
 								issuedAt: NOW,
 								authority: rep,
 								bindings: b(),
 								invocationId: randomUUID()
-							});
+							}));
 						const made = yield* write('orders', 'create', [
 							{
 								title: 'layered',

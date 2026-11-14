@@ -1,7 +1,7 @@
 // The patched Baileys over a fake WhatsApp, for the link's tests: each socket it opened, as a test drives it.
 import { EventEmitter } from 'node:events';
 import { Effect } from 'effect';
-import type { Json } from '@norbital-ai/bolt/engine';
+import type { Json } from 'effect/Schema';
 import {
 	baileys,
 	type BaileysOptions,

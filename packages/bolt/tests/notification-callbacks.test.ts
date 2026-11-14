@@ -15,7 +15,7 @@ const invocation = (title = 'Desk'): Invocation => ({
 	id: 'notice', kind: 'effect', target: 'orders.effect.create',
 	input: [{ before: null, set: { title }, after: { id: 'order', title } }],
 	ctx: { actor: admin.actor, now: NOW, today: TODAY, tz: 'UTC', seed: 'notice',
-		cause: 'effect', attempt: 1 },
+		attempt: 1 },
 	budget: { crossings: LIMITS.crossings.automation, readBytes: LIMITS.readBytes }
 });
 const no_crossing: Bridge = { cross: () => Effect.die('unexpected host call') };
@@ -109,7 +109,6 @@ yield* ctx.request('mail', {}).pipe(Effect.catchTag('Unavailable', () =>
 		Effect.gen(function* () {
 			for (const [body, code] of [
 				["throw new Error('notice failed');", 'guest_error'],
-				["yield* ctx.query.after('orders', {});", 'guest_error'],
 				[`return [{ title: 'x'.repeat(${LIMITS.argsBytes + 1}), to: [{ user: 'member' }] }];`, 'too_large']
 			] as const) {
 				const context = yield* Layer.build(guest_layer(yield* program(source_of(body)), { console: () => {} }));

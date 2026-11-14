@@ -21,7 +21,12 @@ type InputFieldsFor<F, Loaded extends boolean> = {
 		? Omit<F[K], 'kind' | 'of'> & { readonly many: true } & (Loaded extends true
 			? { readonly kind: 'row'; readonly of: Model }
 			: { readonly kind: 'ref'; readonly to: Model })
-		: F[K];
+		: Loaded extends true
+			? // the body sees a defaulted field filled (`withInputDefaults`)
+				F[K] extends { default: unknown }
+				? Omit<F[K], 'default'>
+				: F[K]
+			: F[K];
 };
 export type AutomationInputOf<F, Loaded extends boolean = true> = InputOf<InputFieldsFor<F, Loaded>>;
 const RowsInputSchema = Schema.Struct({

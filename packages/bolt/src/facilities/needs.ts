@@ -1,8 +1,7 @@
 // What a bundle needs from its host (plan 01): derived from the declarations at build and recorded in the manifest.
 // Never config, never secrets. The check is the only gate: an unmet need refuses activation, naming it.
 import type { EngineManifest } from '../engine/manifest.ts';
-import type { Facilities } from './index.ts';
-import { is_off } from './off.ts';
+import { type Facilities, is_off } from '@norbital-ai/host-api';
 
 /** Every facility member a host may leave `off`, each a need some declaration can record. */
 export const NEEDS = [
@@ -14,18 +13,15 @@ export const NEEDS = [
 	'system2',
 	'embed',
 	'webhooks',
-	'websockets',
-	'outbound',
-	'sandbox'
+	'outbound'
 ] as const;
 export type Need = (typeof NEEDS)[number];
 
 type Manifest = Omit<EngineManifest, 'needs'>;
 const integrations = (m: Manifest) => Object.keys(m.integrations).length > 0;
 /**
- * Which declarations need each member. Push, websockets and the sandbox are reached only from guest code or
- * provider internals, which no declaration records: a notice still reaches the inbox without push, and an unsupported
- * call answers Unavailable at run time.
+ * Which declarations need each member. Push is reached only from provider internals, which no declaration records: a
+ * notice still reaches the inbox without it.
  */
 const NEEDED: { readonly [N in Need]: (m: Manifest) => boolean } = {
 	// a phone sign-up sends its code by `phone` and texts invitations by `sms`
@@ -34,22 +30,20 @@ const NEEDED: { readonly [N in Need]: (m: Manifest) => boolean } = {
 	push: () => false,
 	challenge: (m) =>
 		Object.values(m.apps).some(
-			(app) => typeof app.audience === 'object' && app.audience.challenge === 'turnstile'
+			(app) => typeof app.audience === 'object' && app.audience.challenge === true
 		),
 	system1: (m) => m.workspace.ai !== undefined,
 	system2: (m) => m.workspace.ai !== undefined,
 	embed: (m) => (m.workspace.ai?.embeddings?.length ?? 0) > 0,
 	webhooks: integrations,
-	websockets: () => false,
-	outbound: (m) => integrations(m) || Object.keys(m.workspace.secrets ?? {}).length > 0,
-	sandbox: () => false
+	outbound: (m) => integrations(m) || Object.keys(m.workspace.secrets ?? {}).length > 0
 };
 
 /** The needs of a decoded manifest, in `NEEDS` order. */
 export const needs_of = (m: Manifest): readonly Need[] => NEEDS.filter((need) => NEEDED[need](m));
 
 /** The part of a `Facilities` record the needs check reads: the groups whose members may be `off`. */
-export type Checked = Pick<Facilities, 'transactional' | 'intelligence' | 'ports' | 'sandbox'>;
+export type Checked = Pick<Facilities, 'transactional' | 'intelligence' | 'ports'>;
 /** The facility member each need reads. */
 const member = (f: Checked, need: Need): object => {
 	switch (need) {
@@ -63,11 +57,8 @@ const member = (f: Checked, need: Need): object => {
 		case 'embed':
 			return f.intelligence[need];
 		case 'webhooks':
-		case 'websockets':
 		case 'outbound':
 			return f.ports[need];
-		case 'sandbox':
-			return f.sandbox;
 	}
 };
 /**

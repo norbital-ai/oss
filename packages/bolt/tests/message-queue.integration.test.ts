@@ -15,11 +15,10 @@ import {
 } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { MessageQueue } from '../src/engine/agent/queue.ts';
-import { Port } from '../src/engine/port.ts';
+import { type DecisionRequest, Port } from '@norbital-ai/host-api';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { act_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { System1Request } from '../src/engine/decision.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
@@ -50,7 +49,7 @@ const text = (c: Json) =>
 
 const panel = () =>
 	Effect.gen(function* () {
-		const inputs: System1Request[] = [],
+		const inputs: DecisionRequest[] = [],
 			turns: string[][] = [];
 		/** While set, the model's answer waits here: the turn stays running. */
 		const hold: { gate: Deferred.Deferred<void> | null } = { gate: null };
@@ -84,16 +83,17 @@ const panel = () =>
 			});
 		const infer: Ai['Service']['infer'] = (r) =>
 			Stream.suspend(() => {
-				if (r.messages.at(-1)?.content !== 'Give your verdict.')
+				const last = r.messages.at(-1)?.content;
+				const verifying = typeof last === 'string' && last.startsWith('Verify the plan below');
+				if (!verifying)
 					turns.push(
 						r.messages
 							.filter((m) => m.role === 'user' && !text(m.content).startsWith('Now: ')
-								// the step's action catalogue note, not a posted part
-								&& !text(m.content).startsWith('[Available actions for this step]'))
+								// the conversation's catalogue note, not a posted part
+								&& !text(m.content).startsWith('[Catalogue]'))
 							.map((m) => text(m.content))
 					);
 				const gate = hold.gate;
-				const verifying = r.messages.at(-1)?.content === 'Give your verdict.';
 				const complete = verifying ? (verdicts.shift() ?? true) : true;
 				if (verifying) events.push(`verdict: ${complete}`);
 				else events.push(turns.at(-1)?.at(-1) ?? '');
@@ -296,7 +296,7 @@ describe('the message queue', () => {
 			})
 		)
 	);
-	it.live('after-generation waits for the verifier to clear the work', () =>
+	it.live('after-generation waits for the one verification pass and the work it sends back', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const p = yield* panel();
@@ -304,7 +304,7 @@ describe('the message queue', () => {
 					text: `UPDATE sys_conversation SET plan = '{"revision":1,"body":"Ship it.","status":"active","checkpoint":0,"verdicts":0}'::jsonb WHERE id = $1`,
 					params: [p.id]
 				});
-				p.verdicts.push(false, true);
+				p.verdicts.push(false);
 				const finish = yield* p.running;
 				yield* p.act('sys_message.post', {
 					conversation: p.id,
@@ -312,9 +312,9 @@ describe('the message queue', () => {
 					schedule: 'finish'
 				});
 				yield* finish;
+				// an incomplete verdict sends the plan back to work once; it is never verified again
 				expect(p.events.filter((e) => e.startsWith('verdict') || e === 'next task')).toEqual([
 					'verdict: false',
-					'verdict: true',
 					'next task'
 				]);
 			})

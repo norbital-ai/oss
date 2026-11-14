@@ -49,5 +49,7 @@
 		<span data-text>text</span>
 	</Drawer>
 {:else}
-	<div style="height: 200px"><LogView {rows} load_older={loadOlder} has_older={hasOlder} class="h-full" /></div>
+	<div style="height: 200px">
+		<LogView ctx={{ ui: { kinds: {} } }} {rows} load_older={loadOlder} has_older={hasOlder} />
+	</div>
 {/if}

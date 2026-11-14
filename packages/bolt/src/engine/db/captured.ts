@@ -4,7 +4,7 @@ import type { LiveShape } from '../services.ts';
 import type { Chain } from '../write/sql.ts';
 import { decodeOne } from './rows.ts';
 import { literal } from '@norbital-ai/store';
-import type { RawDb } from './tenant-db.ts';
+import type { RawDb } from '@norbital-ai/host-api';
 
 /** The committed pre/post images shared by native writers and the live lane. */
 export const Captured = Schema.Struct({

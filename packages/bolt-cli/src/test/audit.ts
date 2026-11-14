@@ -1,13 +1,13 @@
 // A complete process-local audit facility for tests. Production hosts must supply a durable separate store.
 import { Result, Schema } from 'effect';
 import { canonical, sha256_hex } from '@norbital-ai/store';
-import { FacilityFailure } from '@norbital-ai/bolt/errors';
 import {
 	AuditEvent,
 	type AuditPort,
 	type AuditRecord,
-	type AuditSummary
-} from '@norbital-ai/bolt/engine';
+	type AuditSummary,
+	FacilityFailure
+} from '@norbital-ai/host-api';
 const Cursor = Schema.Tuple([Schema.String, Schema.String]);
 /** A complete process-local audit facility for tests; production hosts must supply a durable separate store. */
 export const memory_audit = () => {

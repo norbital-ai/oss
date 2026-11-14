@@ -1,15 +1,14 @@
 import { install } from '../../../src/decl/runtime/guest.ts';
 install();
-// A hand-written workspace for the type corpus: the `src/data/model/<name>/+model.ts` literals a template writes, every
+// A hand-written workspace for the type corpus: the `+model.ts` and `+<sync>.sync.ts` literals a template writes, every
 // body inline. `../registry.ts` is what `bolt sync` prints for them: each body is typed from it by the model's name.
-import { custom_field } from '../../../src/index.ts';
-import { bind_model } from '../../../src/declarations.ts';
+import { custom_field, model, sync } from '../../../src/index.ts';
 import type { Finding, InstanceId, SyncRow } from '../../../src/index.ts';
 
 // a runtime conversation instance (never evaluated here)
 declare const whatsapp_account: InstanceId<'whatsapp'>;
 
-export const customers = bind_model('customers')({
+export const customers = model('customers', {
 	description: 'Buyers',
 	record_label: 'record.name',
 	fields: {
@@ -24,68 +23,67 @@ export const customers = bind_model('customers')({
 			optional: true,
 			where: { integration: { eq: 'whatsapp' } }
 		},
-		name_upper: { kind: 'text', computed: { upper: { field: 'name' } } },
-		email_lower: { kind: 'text', computed: { lower: { field: 'email' } } },
-		email_label: { kind: 'text', computed: { concat: [{ field: 'email' }, ' contact'] } },
-		email_default: { kind: 'text', computed: { coalesce: [{ field: 'email' }, 'unknown'] } },
-		email_chain: { kind: 'text', computed: { upper: { field: 'email_lower' } } }
+		name_upper: { kind: 'text', computed: 'upper(name)' },
+		email_lower: { kind: 'text', computed: 'lower(email)' },
+		email_label: { kind: 'text', computed: "email + ' contact'" },
+		email_default: { kind: 'text', computed: "coalesce(email, 'unknown')" },
+		email_chain: { kind: 'text', computed: 'upper(email_lower)' }
 	},
 
 	outputs: { default: { fields: 'all' }, directory: { fields: ['name', 'tier'] } },
 	create: {
-		columns: { fields: ['name', 'email', 'tier'] },
+		fields: ['name', 'email', 'tier'],
 		filled: { fields: ['name'] },
 		transform: function* (rows) {
 			return rows.map(({ set }) => (set.name === undefined ? { ...set, name: set.email ?? 'unknown' } : set));
 		}
 	},
-	update: { columns: { fields: ['name', 'email', 'tier', 'tags'] } },
+	update: { fields: ['name', 'email', 'tier', 'tags'] },
 	delete: {},
-	syncs: {
-		// two ways with the ERP: `read` pulls changed customers, `write` sends each committed change
-		crm: {
-			with: 'erp',
-			every: '1h',
-			read: function* ({ cursor }, ctx) {
-				const page = yield* ctx.request({
-					method: 'GET',
-					path: 'customers',
-					query: { since: String(cursor ?? '') },
-					output: {
-						kind: 'object',
-						fields: { id: { kind: 'text' }, name: { kind: 'text' }, updated: { kind: 'text' } },
-						many: true
-					}
-				});
-				return {
-					rows: page.map((c) => ({ $id: c.id, $version: c.updated, name: c.name })),
-					cursor: page.length,
-					more: false
-				};
-			},
-			write: function* ({ op, row, $id, $version }, ctx) {
-				const sent = yield* ctx.request({
-					method: op === 'create' ? 'POST' : op === 'update' ? 'PATCH' : 'DELETE',
-					path: $id === null ? 'customers' : `customers/${$id}`,
-					headers: $version === null ? {} : { 'If-Match': $version },
-					body: { name: row.name },
-					output: { kind: 'object', fields: { id: { kind: 'text' }, updated: { kind: 'text' } } }
-				});
-				return { $id: sent.id, $version: sent.updated };
-			}
-		}
-	},
 	indexes: { find: { text: ['name'] } }
 });
 
-export const orders = bind_model('orders')({
+// two ways with the ERP: `read` pulls changed customers, `write` sends each committed change
+export const customers_crm = sync('customers', 'crm', {
+	with: 'erp',
+	every: '1h',
+	read: function* ({ cursor }, ctx) {
+		const page = yield* ctx.request({
+			method: 'GET',
+			path: 'customers',
+			query: { since: String(cursor ?? '') },
+			output: {
+				kind: 'object',
+				fields: { id: { kind: 'text' }, name: { kind: 'text' }, updated: { kind: 'text' } },
+				many: true
+			}
+		});
+		return {
+			rows: page.map((c) => ({ $id: c.id, $version: c.updated, name: c.name })),
+			cursor: page.length,
+			more: false
+		};
+	},
+	write: function* ({ op, row, $id, $version }, ctx) {
+		const sent = yield* ctx.request({
+			method: op === 'create' ? 'POST' : op === 'update' ? 'PATCH' : 'DELETE',
+			path: $id === null ? 'customers' : `customers/${$id}`,
+			headers: $version === null ? {} : { 'If-Match': $version },
+			body: { name: row.name },
+			output: { kind: 'object', fields: { id: { kind: 'text' }, updated: { kind: 'text' } } }
+		});
+		return { $id: sent.id, $version: sent.updated };
+	}
+});
+
+export const orders = model('orders', {
 	description: 'Sales orders',
 	record_label:
 		"[record.number != null ? string(record.number) : '', record.customer != null ? string(record.customer) : ''].filter(part, part != '').join(' · ')",
 	fields: {
 		number: { kind: 'seq', pattern: 'SO-{0000}' },
 		customer: { kind: 'ref', to: 'customers', inverse: 'orders' },
-		owner: { kind: 'ref', to: 'sys_user', optional: true, default: { var: 'requestor.id' } },
+		owner: { kind: 'ref', to: 'sys_user', optional: true, default: { var: 'actor.id' } },
 		ledger: {
 			kind: 'ref',
 			to: 'sys_integration',
@@ -107,7 +105,7 @@ export const orders = bind_model('orders')({
 		total: { kind: 'sum', of: 'lines.amount', where: { qty: { gt: 0 } } },
 		line_count: { kind: 'count', of: 'lines' },
 		colour: { kind: 'vector', dim: 3, metric: 'l2', optional: true },
-		due_soon: { kind: 'date', computed: { plus_days: [{ field: 'due' }, -7] } }
+		due_soon: { kind: 'date', computed: 'plus_days(due, -7)' }
 	},
 
 	constraints: {
@@ -121,7 +119,8 @@ export const orders = bind_model('orders')({
 		logistics: { fields: ['number', 'status', 'customer'], lines: { fields: ['item', 'qty'] } }
 	},
 	create: {
-		columns: { fields: ['customer', 'note', 'due'], lines: { fields: ['item', 'qty', 'price'] } },
+		fields: ['customer', 'note', 'due'],
+		lines: { fields: ['item', 'qty', 'price'] },
 		transform: function* (rows, ctx) {
 			const known = yield* ctx.query({
 				customers: {
@@ -150,7 +149,8 @@ export const orders = bind_model('orders')({
 		}
 	},
 	update: {
-		columns: { fields: ['status', 'note', 'due', 'placed_at'], lines: { fields: ['item', 'qty', 'price'] } },
+		fields: ['status', 'note', 'due', 'placed_at'],
+		lines: { fields: ['item', 'qty', 'price'] },
 		transform: function* (changes, ctx) {
 			return changes.map(({ before, set }) =>
 				set.status === 'submitted' && before.status !== 'submitted'
@@ -172,76 +172,6 @@ export const orders = bind_model('orders')({
 			})));
 		}
 	},
-	syncs: {
-		// one way out: an ordered order is submitted to the ledger
-		ledger: {
-			with: 'kingdee',
-			write: function* ({ op, row, $id }, ctx) {
-				if (op === 'delete') return null;
-				yield* ctx.request({
-					op: 'call',
-					procedure: { schema: 'dbo', name: 'submit' },
-					arguments: { reference: row.number }
-				});
-				return { $id: $id ?? row.number };
-			}
-		},
-		// a sheet: import by customer name, export the open orders
-		sheet: {
-			with: 'file',
-			parser: [
-				'xlsx',
-				'csv',
-				{
-					type: 'application/vnd.ms-excel',
-					extensions: ['.xls'],
-					parse: function* (file, ctx) {
-						const text = new TextDecoder('utf-8', { fatal: true }).decode(
-							yield* ctx.files.get(file)
-						);
-						return text.split('\n').map((line, i) => ({ customer: line, note: null, $at: i + 1 }));
-					}
-				}
-			],
-			schema: {
-				customer: { kind: 'text' },
-				note: { kind: 'text', optional: true }
-			},
-			context: { since: { kind: 'date' } },
-			read: function* ({ records, context }, ctx) {
-				const known = yield* ctx.query({
-					customers: {
-						where: { name: { in: records.map((r) => r.customer) } },
-						fields: ['name']
-					}
-				});
-				const id_of = (name: string) => known.customers.rows.find((c) => c.name === name)?.id;
-				return {
-					rows: records.flatMap((r) => {
-						const customer = id_of(r.customer);
-						return customer === undefined
-							? []
-							: [{ customer, note: r.note ?? null, due: context.since }];
-					}),
-					scope: { by: ['customer'], range: 'due' },
-					findings: records.flatMap((r): Finding[] =>
-						id_of(r.customer) === undefined
-							? [{ at: r.$at, field: 'customer', message: 'Unknown customer', severity: 'refuse' }]
-							: []
-					)
-				};
-			},
-			write: function* ({ context }, ctx) {
-				const open = yield* ctx.query({
-					orders: {
-						where: { due: { gte: context.since } },
-						fields: ['customer', 'note']
-					}
-				});
-				return open.orders.rows.map((o) => ({ customer: String(o.customer), note: o.note }));
-			}
-		}
-	},
 	indexes: {
 		by_customer: { on: ['customer'] },
 		by_due: { on: ['due'] },
@@ -259,7 +189,77 @@ export const orders = bind_model('orders')({
 	}
 });
 
-export const order_lines = bind_model('order_lines')({
+// one way out: an ordered order is submitted to the ledger
+export const orders_ledger = sync('orders', 'ledger', {
+	with: 'kingdee',
+	write: function* ({ op, row, $id }, ctx) {
+		if (op === 'delete') return null;
+		yield* ctx.request({
+			op: 'call',
+			procedure: { schema: 'dbo', name: 'submit' },
+			arguments: { reference: row.number }
+		});
+		return { $id: $id ?? row.number };
+	}
+});
+
+// a sheet: import by customer name, export the open orders
+export const orders_sheet = sync('orders', 'sheet', {
+	with: 'file',
+	parser: [
+		'xlsx',
+		'csv',
+		{
+			type: 'application/vnd.ms-excel',
+			extensions: ['.xls'],
+			parse: function* (file, ctx) {
+				const text = new TextDecoder('utf-8', { fatal: true }).decode(
+					yield* ctx.files.get(file)
+				);
+				return text.split('\n').map((line, i) => ({ customer: line, note: null, $at: i + 1 }));
+			}
+		}
+	],
+	schema: {
+		customer: { kind: 'text' },
+		note: { kind: 'text', optional: true }
+	},
+	context: { since: { kind: 'date' } },
+	read: function* ({ records, context }, ctx) {
+		const known = yield* ctx.query({
+			customers: {
+				where: { name: { in: records.map((r) => r.customer) } },
+				fields: ['name']
+			}
+		});
+		const id_of = (name: string) => known.customers.rows.find((c) => c.name === name)?.id;
+		return {
+			rows: records.flatMap((r) => {
+				const customer = id_of(r.customer);
+				return customer === undefined
+					? []
+					: [{ customer, note: r.note ?? null, due: context.since }];
+			}),
+			scope: { by: ['customer'], range: 'due' },
+			findings: records.flatMap((r): Finding[] =>
+				id_of(r.customer) === undefined
+					? [{ at: r.$at, field: 'customer', message: 'Unknown customer', severity: 'refuse' }]
+					: []
+			)
+		};
+	},
+	write: function* ({ context }, ctx) {
+		const open = yield* ctx.query({
+			orders: {
+				where: { due: { gte: context.since } },
+				fields: ['customer', 'note']
+			}
+		});
+		return open.orders.rows.map((o) => ({ customer: String(o.customer), note: o.note }));
+	}
+});
+
+export const order_lines = model('order_lines', {
 	description: 'Lines of an order',
 	record_label: 'record.item',
 	fields: {
@@ -269,14 +269,14 @@ export const order_lines = bind_model('order_lines')({
 		price: { kind: 'money' },
 		amount: {
 			kind: 'money',
-			computed: { round: [{ times: [{ field: 'price' }, { field: 'qty' }] }, 2] }
+			computed: 'round(price * qty, 2)'
 		}
 	},
 
 	outputs: { default: { fields: 'all' } }
 });
 
-export const notices = bind_model('notices')({
+export const notices = model('notices', {
 	description: 'Supplier notices mirrored from the inbox',
 	record_label: 'record.subject',
 	constraints: { one_message: { unique: ['inbox', 'message_id'], import_key: true } },
@@ -288,38 +288,37 @@ export const notices = bind_model('notices')({
 	},
 
 	outputs: { default: { fields: 'all' } },
-	syncs: {
-		// one way in: the mailbox's messages are its deliveries
-		mail: {
-			with: 'support_mail',
-			read: function* ({ deliveries }) {
-				return {
-					rows: deliveries.flatMap((d): readonly SyncRow<'notices'>[] =>
-						d.kind !== 'message'
-							? []
-							: d.message.deleted
-								? [{ $id: d.message.id, $deleted: true }]
-								: [
-										{
-											$id: d.message.id,
-											$version: d.message.version,
-											message_id: d.message.id,
-											subject: d.message.subject || '(no subject)',
-											received_at: d.message.sent_at
-										}
-									]
-					)
-				};
-			}
-		}
-	},
 	indexes: {
 		find: { text: ['subject'] },
 		semantic: { semantic: { fields: ['subject'], model: 'text_small', dim: 1536 } }
 	}
 });
 
-export const notice_notes = bind_model('notice_notes')({
+// one way in: the mailbox's messages are its deliveries
+export const notices_mail = sync('notices', 'mail', {
+	with: 'support_mail',
+	read: function* ({ deliveries }) {
+		return {
+			rows: deliveries.flatMap((d): readonly SyncRow<'notices'>[] =>
+				d.kind !== 'message'
+					? []
+					: d.message.deleted
+						? [{ $id: d.message.id, $deleted: true }]
+						: [
+								{
+									$id: d.message.id,
+									$version: d.message.version,
+									message_id: d.message.id,
+									subject: d.message.subject || '(no subject)',
+									received_at: d.message.sent_at
+								}
+							]
+			)
+		};
+	}
+});
+
+export const notice_notes = model('notice_notes', {
 	description: 'What we add about a notice',
 	record_label: 'record.notice',
 	fields: {
@@ -329,11 +328,11 @@ export const notice_notes = bind_model('notice_notes')({
 	},
 	constraints: { one_notice: { unique: ['notice'], import_key: true } },
 	outputs: { default: { fields: 'all' } },
-	create: { columns: { fields: ['notice', 'note'] } },
-	update: { columns: { fields: ['note'] } }
+	create: { fields: ['notice', 'note'] },
+	update: { fields: ['note'] }
 });
 
-export const sites = bind_model('sites')({
+export const sites = model('sites', {
 	description: 'Customer sites',
 	record_label: 'record.name',
 	fields: {
@@ -372,10 +371,10 @@ export const sites = bind_model('sites')({
 		default: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] },
 		summary: { fields: ['name', 'open'] }
 	},
-	update: { columns: { fields: ['name', 'location'] } }
+	update: { fields: ['name', 'location'] }
 });
 
-export const products = bind_model('products')({
+export const products = model('products', {
 	description: 'Products from the ledger',
 	record_label: 'record.name',
 	constraints: { one_external: { unique: ['source', 'external_code'], import_key: true } },
@@ -388,32 +387,31 @@ export const products = bind_model('products')({
 		commission_factor: { kind: 'decimal', scale: 4, optional: true }
 	},
 	outputs: { default: { fields: 'all' } },
-	update: { columns: { fields: ['commission_factor'] } },
-	syncs: {
-		// one way in from the ledger database, every 15 minutes by default
-		ledger: {
-			with: 'kingdee',
-			read: function* (_, ctx) {
-				const { rows } = yield* ctx.request({
-					op: 'read',
-					table: { schema: 'dbo', name: 'products' },
-					columns: ['code', 'name']
-				});
-				return {
-					rows: rows.map((r) => ({
-						$id: String(r['code']),
-						external_code: String(r['code']),
-						name: String(r['name'])
-					})),
-					snapshot: 'end',
-					more: false
-				};
-			}
-		}
+	update: { fields: ['commission_factor'] }
+});
+
+// one way in from the ledger database, every 15 minutes by default
+export const products_ledger = sync('products', 'ledger', {
+	with: 'kingdee',
+	read: function* (_, ctx) {
+		const { rows } = yield* ctx.request({
+			op: 'read',
+			table: { schema: 'dbo', name: 'products' },
+			columns: ['code', 'name']
+		});
+		return {
+			rows: rows.map((r) => ({
+				$id: String(r['code']),
+				external_code: String(r['code']),
+				name: String(r['name'])
+			})),
+			snapshot: 'end',
+			more: false
+		};
 	}
 });
 
-export const entries = bind_model('entries')({
+export const entries = model('entries', {
 	description: "Calendar entries mirrored from members' calendars",
 	record_label: 'record.subject',
 	constraints: { one_event: { unique: ['account', 'calendar_id', 'external_id'], import_key: true } },
@@ -426,24 +424,23 @@ export const entries = bind_model('entries')({
 		filed: { kind: 'bool', default: false }
 	},
 	outputs: { default: { fields: 'all' } },
-	update: { columns: { fields: ['filed'] } },
-	syncs: {
-		// the calendar driver pushes events; one cursor per chosen calendar
-		calendar: {
-			with: 'calendar',
-			partitions: 'calendars',
-			read: function* ({ items, partition }) {
-				return {
-					rows: items.map((e) => ({
-						$id: e.id,
-						calendar_id: partition ?? '',
-						external_id: e.id,
-						subject: e.summary ?? '(untitled)',
-						event_status: e.status
-					}))
-				};
-			}
-		}
+	update: { fields: ['filed'] }
+});
+
+// the calendar driver pushes events; one cursor per chosen calendar
+export const entries_calendar = sync('entries', 'calendar', {
+	with: 'calendar',
+	partitions: 'calendars',
+	read: function* ({ items, partition }) {
+		return {
+			rows: items.map((e) => ({
+				$id: e.id,
+				calendar_id: partition ?? '',
+				external_id: e.id,
+				subject: e.summary ?? '(untitled)',
+				event_status: e.status
+			}))
+		};
 	}
 });
 

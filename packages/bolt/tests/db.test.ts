@@ -6,8 +6,9 @@ import { describe, expect, expectTypeOf, it } from '@effect/vitest';
 import { Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { LIMITS } from '../src/engine/contracts.ts';
-import { PostgresDb, type PgClient } from '../src/node/db/postgres.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { PostgresDb, type PgClient } from '@norbital-ai/host-api/node';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { DbError } from '@norbital-ai/host-api';
 import { BoltError } from '../src/protocol/errors.ts';
 import { row, type Row } from '../src/engine/system/rows.ts';
 
@@ -45,7 +46,7 @@ describe('PostgresDb', () => {
 		Effect.gen(function* () {
 			const r = reaching('select 1'),
 				f = fake(r.answer);
-			const call = yield* Effect.forkChild(PostgresDb.make(f.pool).read([statement]));
+			const call = yield* Effect.forkChild(TenantDb.typed(PostgresDb.make(f.pool)).read([statement]));
 			yield* Effect.promise(() => r.reached);
 			yield* Fiber.interrupt(call);
 			expect(f.released).toEqual([true]);
@@ -58,7 +59,7 @@ describe('PostgresDb', () => {
 			Effect.gen(function* () {
 				const r = reaching('select 1'),
 					f = fake(r.answer);
-				const call = yield* Effect.forkChild(PostgresDb.make(f.pool).read([statement]));
+				const call = yield* Effect.forkChild(TenantDb.typed(PostgresDb.make(f.pool)).read([statement]));
 				yield* Effect.promise(() => r.reached);
 				yield* TestClock.adjust(LIMITS.callMs.database);
 				const error = yield* Effect.flip(Fiber.join(call));
@@ -79,7 +80,7 @@ describe('PostgresDb', () => {
 						)
 					: Promise.resolve(EMPTY)
 			);
-			const error = yield* Effect.flip(PostgresDb.make(f.pool).write(statement));
+			const error = yield* Effect.flip(TenantDb.typed(PostgresDb.make(f.pool)).write(statement));
 			expect(error).toBeInstanceOf(DbError);
 			expect(error).toMatchObject({
 				sqlstate: '23505',
@@ -96,7 +97,7 @@ describe('PostgresDb', () => {
 			const f = fake(() => Promise.resolve(EMPTY));
 			const client = yield* Effect.promise(() => f.pool.connect());
 			client.on = (event, listener) => events.on(event, listener);
-			yield* PostgresDb.make(f.pool).read([statement]);
+			yield* TenantDb.typed(PostgresDb.make(f.pool)).read([statement]);
 			expect(() => events.emit('error', new Error('Connection terminated'))).not.toThrow();
 		})
 	);
@@ -106,7 +107,7 @@ describe('PostgresDb', () => {
 			const f = fake((text) =>
 				Promise.resolve(text === statement.text ? { rows: [{ n: 7 }], rowCount: 1 } : EMPTY)
 			);
-			const out = yield* PostgresDb.make(f.pool).transaction({
+			const out = yield* TenantDb.typed(PostgresDb.make(f.pool)).transaction({
 				statements: [statement],
 				lock: { advisory: ['k'] }
 			});
@@ -128,7 +129,7 @@ describe('PostgresDb', () => {
 					: Promise.resolve(EMPTY)
 			);
 			const error = yield* Effect.flip(
-				PostgresDb.make(f.pool).transaction({ statements: [statement] })
+				TenantDb.typed(PostgresDb.make(f.pool)).transaction({ statements: [statement] })
 			);
 			expect(error).toMatchObject({ _tag: 'DbError', sqlstate: 'P0001', message: 'refused' });
 			expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
@@ -142,7 +143,7 @@ describe('PostgresDb', () => {
 				Promise.resolve(text === statement.text ? { rows: [{ n: 7 }], rowCount: 1 } : EMPTY)
 			);
 			expect(
-				yield* PostgresDb.make(f.pool).transaction({ statements: [statement], rollback: true })
+				yield* TenantDb.typed(PostgresDb.make(f.pool)).transaction({ statements: [statement], rollback: true })
 			).toEqual([{ rows: [{ n: 7 }], affected: 1 }]);
 			expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
 			expect(f.released).toEqual([false]);
@@ -160,7 +161,7 @@ describe('PostgresDb', () => {
 						: Promise.resolve(EMPTY)
 			);
 			const error = yield* Effect.flip(
-				PostgresDb.make(f.pool).transaction({ statements: [statement] })
+				TenantDb.typed(PostgresDb.make(f.pool)).transaction({ statements: [statement] })
 			);
 			expect(error).toBe(refused);
 			expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
@@ -175,7 +176,7 @@ describe('PostgresDb', () => {
 				const r = reaching('select 1'),
 					f = fake(r.answer);
 				const call = yield* Effect.forkChild(
-					PostgresDb.make(f.pool).transaction({ statements: [statement] })
+					TenantDb.typed(PostgresDb.make(f.pool)).transaction({ statements: [statement] })
 				);
 				yield* Effect.promise(() => r.reached);
 				yield* Fiber.interrupt(call);
@@ -204,7 +205,7 @@ describe('typed reads', () => {
 					rowCount: 1
 				})
 			);
-			expect(yield* PostgresDb.make(f.pool).rows(Claim, statement)).toEqual([
+			expect(yield* TenantDb.typed(PostgresDb.make(f.pool)).rows(Claim, statement)).toEqual([
 				{ id: 'r1', state: 'queued', attempts: 0, extra: true }
 			]);
 		})
@@ -215,7 +216,7 @@ describe('typed reads', () => {
 			const f = fake(() =>
 				Promise.resolve({ rows: [{ id: 'r1', state: 7, attempts: 0 }], rowCount: 1 })
 			);
-			const error = yield* Effect.flip(PostgresDb.make(f.pool).rows(Claim, statement));
+			const error = yield* Effect.flip(TenantDb.typed(PostgresDb.make(f.pool)).rows(Claim, statement));
 			expect(error).toBeInstanceOf(BoltError);
 			expect(error).toMatchObject({ code: 'internal', phase: 'decode' });
 			expect(error.message).toContain('sys_run');
@@ -224,23 +225,23 @@ describe('typed reads', () => {
 
 	it.live('one answers at most one row; value the one column of the one row', () =>
 		Effect.gen(function* () {
-			const one = PostgresDb.make(
+			const one = TenantDb.typed(PostgresDb.make(
 				fake(() => Promise.resolve({ rows: [{ n: 3 }], rowCount: 1 })).pool
-			);
+			));
 			expect(yield* one.value(Schema.Number, statement)).toBe(3);
 			expect(
 				Option.getOrNull(yield* one.one(Schema.Struct({ n: Schema.Number }), statement))
 			).toEqual({ n: 3 });
-			const none = PostgresDb.make(fake(() => Promise.resolve(EMPTY)).pool);
+			const none = TenantDb.typed(PostgresDb.make(fake(() => Promise.resolve(EMPTY)).pool));
 			expect(Option.isNone(yield* none.one(Schema.Struct({ n: Schema.Number }), statement))).toBe(
 				true
 			);
 			expect(yield* Effect.flip(none.value(Schema.Number, statement))).toMatchObject({
 				code: 'internal'
 			});
-			const two = PostgresDb.make(
+			const two = TenantDb.typed(PostgresDb.make(
 				fake(() => Promise.resolve({ rows: [{ n: 1 }, { n: 2 }], rowCount: 2 })).pool
-			);
+			));
 			expect(
 				yield* Effect.flip(two.one(Schema.Struct({ n: Schema.Number }), statement))
 			).toMatchObject({ code: 'internal' });
@@ -253,7 +254,7 @@ describe('native transaction boundaries', () => {
 		Effect.gen(function* () {
 			const r = reaching('select 1'),
 				f = fake(r.answer);
-			const pending = yield* PostgresDb.make(f.pool).read([statement]).pipe(Effect.forkScoped);
+			const pending = yield* TenantDb.typed(PostgresDb.make(f.pool)).read([statement]).pipe(Effect.forkScoped);
 			yield* Effect.promise(() => r.reached);
 			yield* Fiber.interrupt(pending);
 			const exit = yield* Fiber.await(pending);
@@ -269,7 +270,7 @@ describe('native transaction boundaries', () => {
 				text === statement.text ? Promise.reject(mine) : Promise.resolve(EMPTY)
 			);
 			const error = yield* Effect.flip(
-				PostgresDb.make(f.pool).transaction({ statements: [statement] })
+				TenantDb.typed(PostgresDb.make(f.pool)).transaction({ statements: [statement] })
 			);
 			expect(error).toBe(mine);
 			expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
@@ -286,7 +287,7 @@ describe('native transaction boundaries', () => {
 							? Promise.reject(refused)
 							: Promise.resolve(text === 'select 7' ? { rows: [{ n: 7 }], rowCount: 1 } : EMPTY)
 					),
-					db = PostgresDb.make(f.pool);
+					db = TenantDb.typed(PostgresDb.make(f.pool));
 				expect(yield* Effect.flip(db.transaction({ statements: [statement] }))).toBe(refused);
 				expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
 				expect(yield* db.transaction({ statements: [{ text: 'select 7', params: [] }] })).toEqual([

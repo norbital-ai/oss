@@ -3,7 +3,8 @@ import { UUID_PATTERN } from '@norbital-ai/store/kind';
 // Committed history is scoped by current reader authority and shows the fields of the output the read names; pending
 // proposals append no revisions.
 import type { Json } from '../../decl/values.ts';
-import type { Bindings, Reader, Sql } from '../contracts.ts';
+import type { Sql } from '@norbital-ai/host-api';
+import type { Bindings, Reader } from '../contracts.ts';
 import type { Pred, FieldSpec } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
 import type { ReadIR } from '../../protocol/reads.ts';

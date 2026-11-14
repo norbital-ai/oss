@@ -3,10 +3,16 @@
 import { expect, it, vi } from '@effect/vitest';
 import { ConfigProvider, Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
-import { FacilityFailure } from '../src/decl/errors.ts';
-import type { Authority, McpPort, McpServer, McpToolInfo } from '../src/engine/contracts.ts';
+import {
+	FacilityFailure,
+	type McpPort,
+	type McpServer,
+	type McpToolInfo,
+	Port,
+	type PortFailure
+} from '@norbital-ai/host-api';
+import type { Authority } from '../src/engine/contracts.ts';
 import type { Json } from '../src/decl/values.ts';
-import { Port, type PortFailure } from '../src/engine/port.ts';
 import { Mcp } from '../src/engine/ports.ts';
 import { mcpSessions, type McpHost } from '../src/engine/agent/mcp.ts';
 

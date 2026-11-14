@@ -294,7 +294,7 @@ it.effect('raw owned-child and through-link writes respect the locked parent sta
 		expect(yield* query(pg, 'SELECT note FROM child')).toEqual([{ note: 'old' }]);
 		yield* rejected(pg, "DELETE FROM parent WHERE id='parent'", '23514');
 		// Native restore can remove the locked root; referential deletion still owns its children.
-		yield* script(pg, `BEGIN; SELECT set_config('store.write','{"mode":"restore","actor":"restorer","at":null}',true);
+		yield* script(pg, `BEGIN; SELECT set_config('store.write','{"mode":"restore","actor":"restorer","at":null,"rows":["parent/parent"]}',true);
 			DELETE FROM parent WHERE id='parent'; COMMIT;`);
 		expect(yield* query(pg, 'SELECT count(*)::int AS n FROM child')).toEqual([{ n: 0 }]);
 		expect(yield* query(pg, 'SELECT count(*)::int AS n FROM link')).toEqual([{ n: 0 }]);
@@ -435,7 +435,8 @@ it.effect(
 	() =>
 		Effect.gen(function* () {
 			const pg = yield* stateDatabase;
-			const context = `SELECT set_config('store.write','{"mode":"restore","actor":"restorer","at":null}',true)`;
+			// a restore trusts only the rows it names
+			const context = `SELECT set_config('store.write','{"mode":"restore","actor":"restorer","at":null,"rows":["ticket/restored"]}',true)`;
 			yield* script(
 				pg,
 				`BEGIN; ${context}; INSERT INTO ticket (id,title,status,revision) VALUES ('restored','Restored','done',7); COMMIT;`

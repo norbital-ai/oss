@@ -310,9 +310,6 @@ test('Table: a row click opens its record; links, buttons and selected text do n
 	element(tr, 'td').click();
 	assert.deepEqual(records(), ['jobs/j1']);
 	history.replaceState(null, '', '/');
-	element(tr, '[data-row-open]').click();
-	assert.deepEqual(records(), ['jobs/j1'], 'the hover button still opens');
-	history.replaceState(null, '', '/');
 	const link = document.createElement('a');
 	element(tr, 'td div').append(link);
 	link.click();
@@ -322,7 +319,7 @@ test('Table: a row click opens its record; links, buttons and selected text do n
 	assert.equal(tr.tabIndex, 0);
 });
 
-test('Table: a row has one open control, the side-panel glyph, and its title cell no truncation expand', async () => {
+test('Table: a row has no open button and no cell expand: the row itself opens', async () => {
 	const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollWidth');
 	Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
 		configurable: true,
@@ -336,9 +333,8 @@ test('Table: a row has one open control, the side-panel glyph, and its title cel
 			jobs
 		);
 		const tr = element(t, '[data-table-wide] tbody tr:not([aria-hidden])');
-		assert.equal(tr.querySelectorAll('[data-row-open]').length, 1);
-		assert.ok(element(tr, '[data-row-open] [data-icon=panel]'));
-		assert.equal(element(tr, 'td').querySelectorAll('[data-icon=expand]').length, 0);
+		assert.equal(tr.querySelectorAll('[data-row-open]').length, 0);
+		assert.equal(tr.querySelectorAll('[data-cell-expand]').length, 0);
 	} finally {
 		if (scroll) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', scroll);
 	}

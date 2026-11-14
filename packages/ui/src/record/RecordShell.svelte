@@ -50,6 +50,10 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		 * lists follow in one untitled, always-open group. Titles and summaries arrive translated.
 		 */
 		sections?: readonly RecordSection[];
+		/** Generated view: a field's own editor by name, in place of its kind's (`Field editor`). */
+		editors?: FormProps<C>['editors'];
+		/** Generated view: a field's own readonly view by name, in place of its kind's (`Field view`). */
+		viewers?: FormProps<C>['viewers'];
 		/** The heading; default the record's label fields by kind (a create: "New <singular>"). */
 		title?: string;
 		/** Hide the model noun when the authored heading already identifies the record. */
@@ -157,6 +161,8 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		fields = [],
 		validate,
 		sections = [],
+		editors,
+		viewers,
 		title,
 		eyebrow = true,
 		subtitle,
@@ -990,7 +996,9 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		{validate}
 		{...fields.length > 0 ? { fields } : {}}
 		{sections}
-		class="shrink-0"
+		{editors}
+		{viewers}
+		size="content"
 	/>
 {/snippet}
 
@@ -1015,8 +1023,10 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			{validate}
 			{...fields.length > 0 ? { fields } : {}}
 			{sections}
+			{editors}
+			{viewers}
 			readonly={!editing}
-			class="shrink-0"
+			size="content"
 		/>
 	{/if}
 	{#key controller}{#each Object.keys(controller?.spec.children ?? {}) as relation (relation)}

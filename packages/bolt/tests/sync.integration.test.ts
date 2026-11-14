@@ -2,12 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
 import { afterAll } from 'vitest';
-import { FacilityFailure } from '../src/decl/errors.ts';
+import { DbError, FacilityFailure, type RawDb } from '@norbital-ai/host-api';
 import type { Json } from '../src/decl/values.ts';
-import { TenantDb, type RawDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { Identity, RunHandlers, Runs, Writes } from '../src/engine/services.ts';
+import { Identity, RunHandlers, Runs, Callables } from '../src/engine/services.ts';
 import { Syncs, syncTriggers } from '../src/engine/sync/index.ts';
 import { remoteVersionNewer } from '../src/engine/sync/version.ts';
 import { retryDelay } from '../src/engine/queue.ts';
@@ -15,6 +14,7 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -111,7 +111,7 @@ const setupFor = Effect.fnUntraced(function* (
 	);
 	const t = Context.get(context, TestWorkspace),
 		registry = Context.get(context, RunHandlers),
-		writes = Context.get(context, Writes),
+		writes = Context.get(context, Callables),
 		syncs = Context.get(context, Syncs);
 	const admin = t.admin;
 	if (admin.actor.kind !== 'member') throw new Error('Expected member admin');
@@ -170,7 +170,7 @@ const setupFor = Effect.fnUntraced(function* (
 	const act = (verb: 'create' | 'update' | 'delete', input: Json) => {
 		const key = randomUUID(),
 			now = t.clock.now();
-		return writes.act({
+		return writes.acts(one_act({
 			model: 'contacts',
 			verb,
 			input,
@@ -178,9 +178,8 @@ const setupFor = Effect.fnUntraced(function* (
 			key,
 			issuedAt: now,
 			invocationId: key,
-			mode: { _tag: 'Direct' },
 			bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-		});
+		}));
 	};
 	const rows = () =>
 		t.db.rows(Schema.Struct({ id: Schema.String, name: Schema.String, revision: Schema.Number }), {
@@ -318,6 +317,42 @@ describe('durable model sync', () => {
 			}
 			expect(f.calls).toEqual([]);
 			expect(f.accepted.size).toBe(0);
+		}))
+	);
+	it.live('a sync page is admitted, planned and its effects queued as one holder: the sync, an admin outside any run', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const contacts = manifest.exposures.contacts;
+			if (contacts === undefined) throw new Error('Missing contact exposure');
+			const f = yield* setupFor({ ...manifest, exposures: { contacts: {
+				...contacts, create: { columns: { contacts: ['name', 'note'] }, effect: true }
+			} } }, source);
+			f.page({ rows: [{ $id: 'effected', $version: '1', name: 'Effected contact' }], cursor: 'effected-1', more: false });
+			yield* f.t.syncs.read('contacts.sync.crm', { instance: 'crm' });
+			const runs = yield* f.t.db.rows(Schema.Struct({ actor: Schema.String, depth: Schema.Number, starter: Schema.Json }), {
+				text: "SELECT actor, depth, starter FROM sys_run WHERE automation = 'contacts.effect.create'",
+				params: []
+			});
+			expect(runs).toMatchObject([{
+				depth: 0,
+				starter: {
+					admin: true,
+					platform: true,
+					policies: [],
+					actor: { kind: 'system', by: { sync: 'contacts.sync.crm', instance: 'crm' } }
+				}
+			}]);
+			// any other holder would admit as one authority and queue effects as another
+			const now = f.t.clock.now(), key = randomUUID();
+			const member = yield* Context.get(f.context, Identity).authority(f.t.admin);
+			const page = (authority: typeof member) => Context.get(f.context, Callables).acts({
+				name: 'contacts.upsert', from: 'Server', key, issuedAt: now, invocationId: key, authority,
+				bindings: { now, today: now.slice(0, 10), tz: 'UTC' },
+				acts: [{ model: 'contacts', verb: 'upsert', on_conflict: 'update', input: [{ name: 'Not a sync' }] }],
+				sync: { sync: 'contacts.sync.crm', instance: 'crm', fields: ['name'], deletes: [], pieces: () => {} }
+			}).pipe(Effect.flip);
+			expect(yield* page({ ...member, admin: false })).toMatchObject({ code: 'invalid' });
+			expect(yield* page({ ...member, run: { depth: 0, holder: { actor: member.actor, policies: [], admin: true } } }))
+				.toMatchObject({ code: 'invalid' });
 		}))
 	);
 	it('compares versions exactly and caps retry delays', () => {

@@ -1,16 +1,20 @@
 // An automation listening to a system model's writes: an accepted invitation creates the `sys_user`, and the
 // automation runs once after that commit, as the system identity with its policies, with the written ids. An identity
-// write made inside a run chains one deeper, so a listener rewriting the user it heard stops at the depth limit.
-import { expect, layer } from '@effect/vitest';
+// write made inside a run chains one deeper, so a listener rewriting the user it heard stops at the depth limit. A
+// listener follows the same change filter as an effect: a roll-up that moves no stored field queues nothing.
+import { expect, it, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { founder_bootstrap } from '../src/engine/identity/session.ts';
 import { setHandles } from '../src/engine/identity/members.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
-import { HostIdentity } from '../src/engine/services.ts';
+import { HostIdentity, Callables } from '../src/engine/services.ts';
+import type { Json } from '../src/decl/values.ts';
+import { manifest as orders } from './engine-fixture.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import { one_act } from './support/act-one.ts';
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
@@ -87,7 +91,7 @@ const signIn = (email: string) =>
 	});
 
 const guest = program(`export default { automation: { provision: { body: function* (_, ctx) {
-	const t = ctx.run.trigger;
+	const t = ctx.trigger;
 	yield* ctx.act({ 'profiles.create': t.records.map((user) => ({ user: t.cause + ':' + t.model + ':' + t.verb + ':' + user })) });
 } } } };`);
 
@@ -180,19 +184,78 @@ layer(workspace)('write triggers', (it) => {
 					params: []
 				});
 			// the listener's body: every run it gets rewrites the same member, as that run (a person starts the chain)
-			let run: number | undefined;
+			let run: number | undefined, refused: unknown;
 			for (let hop = 0; hop < 20; hop++) {
-				yield* setHandles(h, run === undefined ? admin : { ...admin, run: { depth: run, holder: { actor: admin.actor, policies: [], admin: true, teamTree: [], scopes: {} } } }, boss, {
+				const wrote = yield* Effect.result(setHandles(h, run === undefined ? admin : { ...admin, run: { depth: run, holder: { actor: admin.actor, policies: [], admin: true, teamTree: [], scopes: {} } } }, boss, {
 					telegram: `hop${hop}`
-				});
+				}));
+				if (Result.isFailure(wrote)) {
+					refused = wrote.failure;
+					break;
+				}
 				const [heard] = yield* last();
-				if (heard === undefined || heard.state === 'failed') break;
+				if (heard === undefined) break;
 				run = heard.depth;
 			}
-			expect(yield* last()).toEqual([{ depth: LIMITS.writeDepth + 1, state: 'failed', code: 'depth' }]);
+			// the write that would run its listener past the chain depth is refused whole: no failed run stands in for it
+			expect(refused).toBeDefined();
+			expect(yield* last()).toEqual([{ depth: LIMITS.writeDepth, state: 'queued', code: null }]);
 			expect(
 				yield* t.db.value(Schema.Number, { text: `SELECT count(*)::int FROM sys_run WHERE automation = 'echo'`, params: [] })
-			).toBe(LIMITS.writeDepth + 2);
+			).toBe(LIMITS.writeDepth + 1);
 		})
 	);
 });
+
+// `needs` is derived from the projected manifest, never part of it
+const { needs: _needs, ...ordersSpec } = orders;
+const rolled = Result.getOrThrow(
+	decode_projected_manifest({
+		...ordersSpec,
+		automations: {
+			heard: {
+				description: 'Hears order updates',
+				policies: ['auditor'],
+				on: [{ model: 'orders', verbs: ['update'] }]
+			}
+		}
+	})
+);
+// the body catches around a refused act: the failure ends the body all the same, so the run fails
+const hearing = program(`export default { automation: { heard: { body: function* (_, ctx) {
+	try { yield* ctx.act({ 'customers.create': [{ name: 'not mine to write' }] }); } catch (error) {}
+} } } };`);
+
+it.effect('a roll-up that moves no stored field of its parent queues no write event, as it queues no effect; a caught failure still fails the run', () =>
+	Effect.gen(function* () {
+		const context = yield* Layer.build(TestWorkspace.layer({ manifest: rolled, guest: yield* hearing }));
+		const t = Context.get(context, TestWorkspace), writes = Context.get(context, Callables);
+		const admin = (yield* t.as(t.admin)).authority;
+		const act = (model: 'customers' | 'orders' | 'lines', verb: 'create' | 'update', input: Json) =>
+			Effect.map(writes.acts(one_act({
+				model, verb, input, authority: admin, key: crypto.randomUUID(), issuedAt: t.clock.now(),
+				invocationId: crypto.randomUUID(),
+				bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC' }
+			})), (reply) => reply.outcome);
+		const heard = t.db.rows(Schema.Struct({ state: Schema.String }), {
+			text: `SELECT state FROM sys_run WHERE automation = 'heard'`,
+			params: []
+		});
+		const customer = yield* act('customers', 'create', [{ name: 'Acme' }]);
+		if (customer.kind !== 'committed') throw new Error(JSON.stringify(customer));
+		const created = yield* act('orders', 'create', [
+			{ title: 'Order', region: 'north', customer: customer.records[0]?.id ?? null, lines: [{ label: 'a', amount: '1.00' }] }
+		]);
+		if (created.kind !== 'committed') throw new Error(JSON.stringify(created));
+		const line = created.records.find((record) => record.model === 'lines'),
+			order = created.records.find((record) => record.model === 'orders');
+		if (line === undefined || order === undefined) throw new Error('The order and its line are required');
+		// the line's amount moves the order's roll-up only: no stored field of the order changed
+		expect((yield* act('lines', 'update', [{ target: line.id, set: { amount: '2.00' } }])).kind).toBe('committed');
+		expect(yield* heard).toEqual([]);
+		expect((yield* act('orders', 'update', [{ target: order.id, set: { title: 'Renamed' } }])).kind).toBe('committed');
+		expect(yield* heard).toEqual([{ state: 'queued' }]);
+		yield* t.run_due();
+		expect(yield* heard).toEqual([{ state: 'failed' }]);
+	}).pipe(Effect.scoped)
+);

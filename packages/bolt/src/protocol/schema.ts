@@ -1,37 +1,10 @@
 // The wire's Schemas (A.4): every body and live frame of `/__bolt/*`, the callables that are not a model's,
-// an integration instance's status, the session and host-operation bodies, and `norbital.template.json`. A body is
+// the integration offers, the session and host-operation bodies, and `norbital.template.json`. A body is
 // decoded once where it enters (the host's request, the client's answer); every wire type is its Schema's own.
-import { DateTime, Effect, Option, Schema, SchemaTransformation } from 'effect';
+import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { isArray } from 'effect/Array';
-import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
-import { PAPER_SIZES } from '../decl/runtime/facilities.ts';
+import { PAPER_SIZES, ProviderChoice, STUDIO_ROLES, ToolBehavior } from '@norbital-ai/host-api';
 import { MessageValues } from '../decl/errors/refusal.ts';
-
-/** An authoring phase: diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
-export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
-/**
- * What a host tool is to the shell's Studio surfaces, declared so Bolt never keys behaviour on a host's tool names:
- * - `preview`: its result's `preview` is a preview it built; the agent may show that origin (`page { preview }`).
- * - `view`: a look at a rendered page; the images it attaches are shown to the person too, and its result's `url` is a
- *   preview the panel may show.
- * - `logs`: its result is `{ records: StudioLogLine[] }`, listed in full on the step.
- * - `publish` / `rollback`: a confirmed switch-over; its input is `{ summary, commit }`, its card says what changes.
- * A Studio result's caption facts (`environment`, `release`, `commit`, `message`, `branch`, `url`, `viewport`,
- * `capturedAt`) are read at its top level.
- */
-export const STUDIO_ROLES = ['preview', 'view', 'logs', 'merge', 'rollback'] as const;
-
-/** Native tool behavior, declared by its owner and carried with its stored step. */
-export const ToolBehavior = Schema.Struct({
-	pure: Schema.optionalKey(Schema.Literal(true)),
-	progress_check: Schema.optionalKey(Schema.Literal(true)),
-	diagnostics: Schema.optionalKey(Schema.Literal(true)),
-	data: Schema.optionalKey(Schema.Literal(true)),
-	page: Schema.optionalKey(Schema.Literal(true)),
-	downloads: Schema.optionalKey(Schema.Literal(true)),
-	resume: Schema.optionalKey(Schema.Struct({ argument: Schema.String, roots: Schema.optionalKey(Schema.Literal(true)) }))
-});
-export type ToolBehavior = typeof ToolBehavior.Type;
 
 /** A question keeps its choices through storage, channel delivery and the shell. */
 export const AgentQuestion = Schema.Struct({
@@ -144,10 +117,8 @@ export const RunTriggerViewSchema = Schema.Union([
 	}),
 	...SystemTrigger
 ]);
-/** A driver bolt declares (`DRIVERS`). */
-export const Driver = Schema.String.pipe(
-	Schema.refine<Schema.String, DriverName>((d): d is DriverName => Object.hasOwn(DRIVERS, d))
-);
+/** A driver's name: one of Bolt's kinds or one a definition declares. */
+export const Driver = Schema.String;
 /** An optional key whose value is dropped, not fatal, when it does not decode: one stray member never hides the rest. */
 const tolerant = <S extends Schema.Constraint>(schema: S) =>
 	Schema.optionalKey(Schema.catchDecoding<S>(() => Effect.succeedNone)(schema));
@@ -177,7 +148,8 @@ const READ_METHODS = [
 /**
  * One read as the guest names it (`ctx.query('c', q)` → `{ m: 'query', a: ['c', q] }`; a read request
  * `ctx.query({ … })` → `{ m: 'query', a: [request] }`); `lower_read` decodes `a`.
- * `transcript` (`a: [conversation]`) and `conversations` (`a: []`, the member's own) are the agent panel's, live only:
+ * `transcript` (`a: [conversation]`) and `conversations` (`a: []`, the member's own; `a: [{ archived: true }]` the archived
+ * ones) are the agent panel's, live only:
  * `/live` checks the caller may read them, `/q` refuses them. `runs` (`a: [{ automation?, id?, limit?, brief? }]`) is the runs
  * the caller may see, live through `sys_run` changes.
  */
@@ -540,6 +512,8 @@ export type AgentRow = typeof AgentRow.Type;
 export const AgentConversation = Schema.Struct({
 	id: Schema.String,
 	title: Schema.NullOr(Schema.String),
+	/** Archived by its owner: listed only by the archived read. */
+	archived: Schema.optionalKey(Schema.Boolean),
 	at: Schema.String,
 	status: Schema.Literals(['idle', 'running', 'stopped']),
 	model: Schema.String,
@@ -551,17 +525,6 @@ export const AgentConversation = Schema.Struct({
 			/** The seq execution started after. */
 			checkpoint: Schema.optionalKey(Schema.Number)
 		})
-	),
-	goals: Schema.NullOr(
-		Schema.mutable(
-			Schema.Array(
-				Schema.Struct({
-					id: Schema.String,
-					text: Schema.String,
-					status: Schema.Literals(['pending', 'doing', 'done'])
-				})
-			)
-		)
 	),
 	/** The envoy serving an instance's thread and the instance it is on; both null exactly on a member's own in-app conversation. */
 	envoy: Schema.NullOr(Schema.String),
@@ -687,6 +650,9 @@ export const OwnCall = Schema.Union([
 	own('sys_conversation.resume', ConversationIn),
 	own('sys_conversation.set_model', SetModel),
 	own('sys_conversation.set_agent', SetAgent),
+	own('sys_conversation.archive', ConversationIn),
+	own('sys_conversation.unarchive', ConversationIn),
+	own('sys_conversation.delete', ConversationIn),
 	own('sys_message.revise', Revise),
 	own('sys_message.restart', MessageIn),
 	own('sys_message.dequeue', MessageIn),
@@ -743,6 +709,9 @@ const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = 
 		conversationFirst,
 		[SetAgent, 'sys_conversation.set_agent takes { conversation, agent }']
 	],
+	'sys_conversation.archive': [conversationFirst],
+	'sys_conversation.unarchive': [conversationFirst],
+	'sys_conversation.delete': [conversationFirst],
 	'sys_message.revise': [messageFirst, [Revise, 'sys_message.revise takes { message, text, attachments? }']],
 	'sys_message.restart': [messageFirst],
 	'sys_message.dequeue': [messageFirst],
@@ -773,120 +742,7 @@ export const ownRefusal = (callable: RefusableCall, input: unknown): string => {
 		checks[0])[1];
 };
 
-// ── an integration instance's status: what a link reports and the shell draws ──
-/**
- * Where an instance's link is. `pairing` is the provider asking for something; `reconnecting` is a retry after a drop
- * and is progress, not failure; `error` is the only terminal one and names its own recovery in `error`.
- */
-export const InstanceState = Schema.Literals([
-	'unpaired',
-	'connecting',
-	'pairing',
-	'connected',
-	'reconnecting',
-	'error'
-]);
-export type InstanceState = typeof InstanceState.Type;
-/** Operator-facing text a provider supplies: English, and each framework locale it is written in (the shell picks by locale). */
-export const LocalText = Schema.Union([
-	Schema.String,
-	Schema.Struct({ en: Schema.String, zh: tolerant(Schema.String) })
-]);
-export type LocalText = typeof LocalText.Type;
-/** One input a provider's setup collects. `secret` is drawn masked and never echoed back in `about`. */
-export const SetupField = Schema.Struct({
-	name: Schema.String,
-	label: LocalText,
-	secret: tolerant(Schema.Boolean),
-	hint: tolerant(LocalText),
-	optional: tolerant(Schema.Boolean),
-	/** A choice among these values (the first is the default), instead of free text. */
-	options: Schema.optionalKey(listOf(Schema.Struct({ value: Schema.String, label: LocalText })))
-});
-export type SetupField = typeof SetupField.Type;
-/**
- * One instruction, in order. `href` is where to do it (the provider's console); `copy` a value to paste there: the
- * instance's `webhook_url`, or `redirect_url` (the host's one OAuth callback, to register with an OAuth app once).
- */
-export const SetupStep = Schema.Struct({
-	text: LocalText,
-	href: tolerant(Schema.String),
-	copy: tolerant(Schema.Literals(['webhook_url', 'redirect_url']))
-});
-export type SetupStep = typeof SetupStep.Type;
-/**
- * How a provider is set up, as data the shell renders with no provider-named component. `kind` is what `pair`
- * takes: `form` sends `fields`; `qr`/`code` sends the optional `fields` and then shows what `pairing` publishes; `oauth`
- * sends nothing and publishes a sign-in; `none` needs nothing. A `qr`, `code` or `oauth` setup starts on Connect.
- * `webhook`: the operator pastes `about.webhook_url` into the provider.
- */
-export const SetupDescription = Schema.Struct({
-	kind: Schema.Literals(['form', 'qr', 'code', 'oauth', 'none']),
-	steps: listOf(SetupStep).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
-	fields: Schema.optionalKey(listOf(SetupField)),
-	webhook: tolerant(Schema.Boolean)
-});
-export type SetupDescription = typeof SetupDescription.Type;
-/** An ISO instant with its zone or offset. */
-const ImportInstant = Schema.String.check(
-	Schema.makeFilter((value: string) => /(Z|[+-]\d{2}:?\d{2})$/i.test(value) && Option.isSome(DateTime.make(value)))
-);
-const ImportZone = Schema.String.check(
-	Schema.makeFilter((value: string) => value !== '' && Option.isSome(DateTime.zoneMakeNamed(value)))
-);
-/** A persisted source boundary. A missing boundary retains the instance's previous all-history behavior. */
-export const ImportStart = Schema.Union([
-	Schema.Struct({ kind: Schema.Literal('all') }),
-	Schema.Struct({
-		kind: Schema.Literal('since'),
-		at: ImportInstant,
-		zone: ImportZone,
-		origin: Schema.Literals(['now', 'date'])
-	}),
-	Schema.Struct({
-		kind: Schema.Literal('native'),
-		selected_at: ImportInstant,
-		provider: Schema.String,
-		values: Schema.Record(Schema.String, Schema.String)
-	})
-]);
-export type ImportStart = typeof ImportStart.Type;
-/** The host freezes From now and resolves a selected civil day's midnight in its chosen IANA zone. */
-export const ImportStartInput = Schema.Union([
-	Schema.Struct({ kind: Schema.Literal('all') }),
-	Schema.Struct({ kind: Schema.Literal('now'), zone: Schema.String }),
-	Schema.Struct({ kind: Schema.Literal('since'), date: Schema.String, zone: Schema.String }),
-	Schema.Struct({
-		kind: Schema.Literal('native'),
-		provider: Schema.String,
-		values: Schema.Record(Schema.String, Schema.String)
-	})
-]);
-export type ImportStartInput = typeof ImportStartInput.Type;
-export const ImportStartCapability = Schema.Union([
-	Schema.Struct({
-		kind: Schema.Literal('timestamp'),
-		precision: Schema.optionalKey(Schema.Literal('second'))
-	}),
-	Schema.Struct({ kind: Schema.Literal('native'), fields: Schema.Array(SetupField) })
-]);
-export type ImportStartCapability = typeof ImportStartCapability.Type;
-/** A provider as the shell offers it: a driver with several (WhatsApp) asks which, by `label`, first. */
-export const ProviderChoice = Schema.Struct({
-	id: Schema.String,
-	label: LocalText,
-	setup: SetupDescription,
-	import_start: Schema.optionalKey(ImportStartCapability),
-	/** Short catalogue name; the full registration label remains in `label`. */
-	name: tolerant(LocalText),
-	/** Concise catalogue description, localized by the authored surface. */
-	description: tolerant(LocalText),
-	/** Iconify provider mark, with a generic plug fallback when absent. */
-	icon: tolerant(Schema.String),
-	/** `false`: the host has no OAuth client for its sign-in (`Provider.oauth`), so it cannot connect here. */
-	available: tolerant(Schema.Boolean)
-});
-export type ProviderChoice = typeof ProviderChoice.Type;
+// ── integration offers: a definition's providers as the shell offers them ──
 /**
  * One definition a member may connect (`GET /__bolt/integrations`): its providers for a member's own account
  * (`personal`) and for a workspace instance (`workspace`), each possibly empty on this host.
@@ -901,75 +757,6 @@ export const IntegrationOffer = Schema.Struct({
 	workspace: listOf(ProviderChoice)
 });
 export type IntegrationOffer = typeof IntegrationOffer.Type;
-/** A connected instance's test send: a short test message, to the handle the operator types in `to` (absent: to the connected account itself). */
-export const TestSend = Schema.Struct({ to: Schema.optionalKey(SetupField) });
-export type TestSend = typeof TestSend.Type;
-/** What the provider wants from the operator, when it wants something. `value` is the payload to draw (a QR, a code). */
-export const Pairing = Schema.Struct({
-	/**
-	 * `qr`: scan `value`; `code`: show `value` for the operator to type; `credential`: collect a secret and send it back;
-	 * `form`: collect `fields` and send them back as one object; `oauth`: open `value` (the provider's authorize URL) in a
-	 * popup, where the operator signs in; the provider's redirect lands on the host's one OAuth callback.
-	 */
-	kind: Schema.Literals(['qr', 'code', 'credential', 'form', 'oauth']),
-	value: Schema.NullOr(Schema.String).pipe(
-		Schema.catchDecoding(() => Effect.succeedSome(null)),
-		Schema.withDecodingDefaultKey(Effect.succeed(null))
-	),
-	/** The provider's own deadline for `value` (ISO), when it publishes one. */
-	expires_at: tolerant(Schema.String),
-	/** What to call the field, for `credential` (a Telegram bot token is not "credential"); `oauth`: the sign-in button. */
-	label: tolerant(Schema.String),
-	/** `form`: what to collect, sent back as `{ [name]: value }`. */
-	fields: Schema.optionalKey(listOf(SetupField))
-});
-export type Pairing = typeof Pairing.Type;
-const LinkStatusFields = {
-	state: InstanceState,
-	/** The verified identity it is connected as (a number with its device suffix stripped, a mailbox, a bot). */
-	account: tolerant(Schema.NullOr(Schema.String)),
-	/** Operator-readable context for a non-terminal state. */
-	detail: tolerant(Schema.String),
-	/** The recovery `error` needs, operator action. */
-	error: tolerant(Schema.String),
-	/** A terminal error's kind (`replaced`, `loggedOut`, `forbidden`, …), for a notice that names its action. */
-	code: tolerant(Schema.String),
-	/** The provider's last disconnect (its code, tag and instant). */
-	last_disconnect: Schema.optionalKey(Schema.Json),
-	/**
-	 * Facts the connected view shows generically: `webhook_url`, `address` (email), `botName`, `workspace`/`team` (Slack),
-	 * `guilds`/`inviteUrl` (Discord), `account` (WeChat), `from` (Twilio number).
-	 */
-	about: Schema.optionalKey(Schema.Json)
-};
-/** What a link reports of itself (`DriverOpen.status`): where it is, as whom, and the facts the connected view shows. */
-export const LinkStatus = Schema.Struct(LinkStatusFields);
-export type LinkStatus = typeof LinkStatus.Type;
-/**
- * One instance as the shell shows it (`GET`/`stream` of `/__bolt/integrations/<instance>`): its link's status and the
- * host's choices. A malformed member is dropped; a malformed state, instance or driver refuses the whole answer.
- */
-export const InstanceStatus = Schema.Struct({
-	...LinkStatusFields,
-	instance: Schema.String,
-	integration: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(''))),
-	driver: Driver,
-	/** A credential is stored, so reconnecting needs no new pairing. */
-	stored: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
-	/** When `state` was entered. */
-	since: tolerant(Schema.String),
-	pairing: Schema.optionalKey(
-		Schema.NullOr(Pairing).pipe(Schema.catchDecoding(() => Effect.succeedSome(null)))
-	),
-	/** The active provider's id (`twilio` | `baileys` for WhatsApp), once one is chosen. */
-	provider: tolerant(Schema.String),
-	/** What the driver can be set up with on this host; the shell asks which when there are several. */
-	providers: Schema.optionalKey(listOf(ProviderChoice)),
-	import_start: Schema.optionalKey(Schema.NullOr(ImportStart)),
-	/** Present when the connected provider can send a test message: the shell offers Test, asking for `to` when it names one. */
-	test: tolerant(TestSend)
-});
-export type InstanceStatus = typeof InstanceStatus.Type;
 
 // ── sessions and host operations ──
 /** `POST /__bolt/session/code`: where to send a sign-in code, and by which channel for a mobile number. */

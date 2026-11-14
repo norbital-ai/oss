@@ -3,13 +3,13 @@ import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import type { PGlite } from '@electric-sql/pglite';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
+import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import { toPred } from '../src/engine/access/pred.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { act } from '../src/engine/write/act.ts';
 import { admin, arm, authority, grants, manifest, NOW, TODAY, write_arm } from './write-fixture.ts';
+import { act_one } from './support/act-one.ts';
 const orderModel = manifest.models.orders,
 	orderExposure = manifest.exposures.orders;
 if (orderModel === undefined || orderExposure === undefined)
@@ -57,7 +57,7 @@ const m: EngineManifest = {
 		}
 	}
 };
-let pg: PGlite, db: TenantDb;
+let pg: PGlite, db: TenantDbShape;
 let n = 0;
 const visible = authority({
 	orders: grants('orders', {
@@ -69,13 +69,12 @@ const visible = authority({
 	})
 });
 const run = (input: Json, verb: 'create' | 'update' = 'create', caller = visible) =>
-	act(
+	act_one(
 		{ manifest: m, db },
 		{
 			model: 'orders',
 			verb,
 			input: [input],
-			mode: { _tag: 'Direct' },
 			key: `nested-${n}`,
 			invocationId: `nested-${n++}`,
 			issuedAt: NOW,
@@ -86,13 +85,12 @@ const run = (input: Json, verb: 'create' | 'update' = 'create', caller = visible
 let allowed: string, hidden: string;
 const setup = Effect.fnUntraced(function* () {
 	pg = yield* TestDb.open(m);
-	db = PgliteDb.make(pg);
-	const tags = yield* act(
+	db = TenantDb.typed(PgliteDb.make(pg));
+	const tags = yield* act_one(
 		{ manifest: m, db },
 		{
 			model: 'tags',
 			verb: 'create',
-			mode: { _tag: 'Direct' },
 			input: [{ name: 'visible' }, { name: 'hidden' }],
 			key: `tags-${n}`,
 			invocationId: `tags-${n++}`,

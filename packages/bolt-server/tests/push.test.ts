@@ -1,7 +1,8 @@
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import type { PushMessage, Sql } from '@norbital-ai/bolt/engine';
+import type { Sql } from '@norbital-ai/host-api';
+import type { PushMessage } from '../src/push.ts';
 import type webpush from 'web-push';
 import { apns, push, type ApnsRequest } from '../src/push.ts';
 

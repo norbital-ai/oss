@@ -47,6 +47,7 @@ export const publicPackageDirectories = [
 	'bolt',
 	'bolt-cli',
 	'bolt-server',
+	'host-api',
 	'providers',
 	'store',
 	'ui'

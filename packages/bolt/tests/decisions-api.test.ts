@@ -5,12 +5,12 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema, Stream } from 'effect';
 import {
+	type DecisionRequest,
 	DecisionRequestSchema,
 	decisions_system_1,
-	structured_system_1,
-	decisionEvent,
-	type System1Request
-} from '../src/engine/decision.ts';
+	structured_system_1
+} from '@norbital-ai/host-api';
+import { decisionEvent } from '../src/engine/decision.ts';
 
 type Mode = 'ok' | 'slow' | 'down' | 'context' | 'malformed';
 const answerBody = (mode: Mode) => ({
@@ -72,7 +72,7 @@ const fake = (mode: Mode) => {
 	return { seen, transport };
 };
 
-const request: System1Request = {
+const request: DecisionRequest = {
 	state: {
 		pending: [
 			{
@@ -254,7 +254,7 @@ describe('the Decisions API sys_1 client', () => {
 		'preserves structured questions in one HTTP call and restores a structured score legend',
 		() =>
 			Effect.gen(function* () {
-				const structured: System1Request = {
+				const structured: DecisionRequest = {
 					state: [{ message: 'Refund the duplicate payment' }],
 					questions: {
 						action: {
@@ -288,7 +288,7 @@ describe('the Decisions API sys_1 client', () => {
 		'the structured chat adapter preserves JSON questions and structured rubrics in one call',
 		() =>
 			Effect.gen(function* () {
-				const structured: System1Request = {
+				const structured: DecisionRequest = {
 					state: 'A duplicate charge',
 					questions: {
 						route: {
@@ -353,7 +353,7 @@ describe('the Decisions API sys_1 client', () => {
 
 	it.live('maps the unified contract to native OpenAI Decisions in one call', () =>
 		Effect.gen(function* () {
-			const structured: System1Request = {
+			const structured: DecisionRequest = {
 				state: { description: 'Open jobs' },
 				questions: {
 					filter: {

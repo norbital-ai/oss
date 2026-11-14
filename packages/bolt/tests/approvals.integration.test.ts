@@ -6,7 +6,7 @@ import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
 import { prune_history } from '../src/engine/query/history.ts';
-import { Approvals, Writes } from '../src/engine/services.ts';
+import { Approvals, Callables } from '../src/engine/services.ts';
 import { Files } from '../src/engine/ports.ts';
 import { storeFile } from '../src/engine/facilities.ts';
 import { NativeReadRow, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
@@ -15,6 +15,7 @@ import { manifest as base } from './write-fixture.ts';
 import { dynamic_read } from '../src/protocol/read-request.ts';
 import { label, label_expression } from '@norbital-ai/store/label';
 import { inboxRequests, inboxSql } from '../src/engine/approvals/inbox.ts';
+import { one_act } from './support/act-one.ts';
 
 const required = <A>(value: A | undefined): A => {
  if (value === undefined) throw new Error('Missing approval fixture value.');
@@ -168,7 +169,7 @@ const workspace = Layer.unwrap(
 );
 const fixture = Effect.gen(function* () {
 	const t = yield* TestWorkspace,
-		writes = yield* Writes,
+		writes = yield* Callables,
 		approvals = yield* Approvals;
 	yield* t.db.write({
 		text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Requester','staff','requesters'),($2,'Manager','staff','managers'),($3,'Finance','staff','finance') ON CONFLICT (id) DO NOTHING",
@@ -182,7 +183,7 @@ const fixture = Effect.gen(function* () {
 	const act = (verb: 'create' | 'update', input: Json, authority = requester) => {
 		const key = randomUUID(),
 			now = t.clock.now();
-		return writes.act({
+		return writes.acts(one_act({
 			model: 'expenses',
 			verb,
 			input,
@@ -190,9 +191,8 @@ const fixture = Effect.gen(function* () {
 			key,
 			issuedAt: now,
 			invocationId: key,
-			mode: { _tag: 'Direct' },
 			bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-		});
+		}));
 	};
 	const decide = (
 		request_id: string,

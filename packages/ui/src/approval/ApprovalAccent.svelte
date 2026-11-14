@@ -7,7 +7,15 @@ one-line tooltip: who asked, where it stands, whom it waits on. Its container is
 	import type { UiContext } from '../client/contract.js';
 	import { bolt_of } from '../client/context.js';
 	import { approvalOf, approvalText } from './row.js';
-	let { ctx, row }: { ctx: UiContext; row: unknown } = $props();
+	let {
+		ctx,
+		row
+	}: {
+		/** The page context the tooltip's words come from. */
+		ctx: UiContext;
+		/** The row or card as read, its `$approval` included. */
+		row: unknown;
+	} = $props();
 	const bolt = $derived(bolt_of(ctx));
 	const a = $derived(approvalOf(row));
 	const text = $derived(a === null ? '' : approvalText(bolt, a));

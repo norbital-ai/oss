@@ -7,7 +7,8 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber, Random, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { LinkClosed, ProviderUnavailable } from '../src/errors.ts';
-import { Fenced, type Json } from '@norbital-ai/bolt/engine';
+import type { Json } from 'effect/Schema';
+import { Fenced } from '@norbital-ai/host-api';
 import {
 	baileysGroupReceipt,
 	baileysReceipt,

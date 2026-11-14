@@ -3,7 +3,6 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { Outcome } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import type { ActResult } from '../services.ts';
-import type { WriteEngine } from './act.ts';
 import type { CommitAnswer } from './commit.ts';
 
 export const LOST_OUTCOME: Extract<Outcome, { kind: 'refused' }> = {
@@ -14,7 +13,7 @@ export const LOST_OUTCOME: Extract<Outcome, { kind: 'refused' }> = {
 export const settleCommit = Effect.fn('Bolt.settleCommit')(function* (
 	answer: CommitAnswer | undefined,
 	stored: () => Effect.Effect<Outcome | null, EngineError>,
-	publish: WriteEngine['committed'],
+	publish: (answer: CommitAnswer) => Effect.Effect<number>,
 	missing?: Pick<BoltError, 'code' | 'message'>
 ): Effect.fn.Return<ActResult, EngineError> {
 	if (answer === undefined)
@@ -22,7 +21,7 @@ export const settleCommit = Effect.fn('Bolt.settleCommit')(function* (
 	const outcome: Outcome = answer.outcome ?? (yield* stored())
 		?? LOST_OUTCOME;
 	const result: ActResult = {
-		outcome, captured: answer.captured, v: publish === undefined ? 0 : yield* publish(answer)
+		outcome, captured: answer.captured, v: yield* publish(answer)
 	};
 	return answer.read_guards_applied === true && (outcome.kind === 'committed' || outcome.kind === 'pending_approval')
 		? { ...result, readGuardsConsumed: true }

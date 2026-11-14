@@ -1,12 +1,8 @@
 // The guest fixture manifest and a native guest activation without a database.
 import { Effect, Layer, Option, Result } from 'effect';
 import { decode_projected_manifest } from '../../src/engine/manifest.ts';
-import {
-	GuestConfig,
-	GuestLive,
-	type GuestOptions,
-	type GuestProgram
-} from '../../src/engine/guest/runner.ts';
+import type { GuestProgram } from '@norbital-ai/host-api';
+import { GuestConfig, GuestLive, type GuestOptions } from '../../src/engine/guest/runner.ts';
 import { GuestIsolates } from '../../src/engine/ports.ts';
 import { guests } from './guests.ts';
 import {

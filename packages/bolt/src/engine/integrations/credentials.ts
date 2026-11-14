@@ -2,9 +2,10 @@ import { uuid } from '../port.ts';
 import { Crypto, Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
-import { Fenced, type EngineError } from '../errors.ts';
+import type { EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { SecretsCodec } from '../secrets.ts';
+import { Fenced } from '@norbital-ai/host-api';
 
 const InstanceRowSchema = Schema.Struct({
 	integration: Schema.String,

@@ -19,7 +19,8 @@ import {
 } from '../../bolt/src/engine/contracts.ts';
 import { is_transient } from '../../bolt/src/engine/errors.ts';
 import type { IsolateGlobals } from '../../bolt/src/engine/guest/globals.ts';
-import type { GuestOptions, GuestProgram } from '../../bolt/src/engine/guest/runner.ts';
+import type { GuestProgram } from '@norbital-ai/host-api';
+import type { GuestOptions } from '../../bolt/src/engine/guest/runner.ts';
 import {
 	Guest,
 	type Bridge,
@@ -27,7 +28,7 @@ import {
 	type InvocationEvents
 } from '../../bolt/src/engine/services.ts';
 import { GuestIsolates } from '../../bolt/src/engine/ports.ts';
-import { node_guests, type NodeGuestsOptions } from '../src/guests.ts';
+import { node_guests, type NodeGuestsOptions } from '@norbital-ai/host-api/node';
 import { check as compilerCheck } from '../src/compiler/check/index.ts';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { program } from '../src/test/guest.ts';
@@ -247,7 +248,6 @@ describe('next guest runner', () => {
 					today: base.ctx.today,
 					keys: [
 						'actor',
-						'aggregate',
 						'history',
 						'invocation_id',
 						'now',
@@ -388,7 +388,7 @@ describe('next guest runner', () => {
 					kind: 'allow'
 				});
 				expect(ok(yield* runIn(source, invocation([{ before: null, set: {}, after: {} }], {}, 'policy', target)))).toEqual({
-					kind: 'deny',
+					kind: 'refuse',
 					message:
 						'Keys: actor,allow,approve,invocation_id,now,policies,query,refuse,today,today_in,tz',
 					at: { row: 0, field: 'qty' }
@@ -472,7 +472,6 @@ describe('next guest runner', () => {
 						'actor',
 						'admin',
 						'approving',
-						'carried_by',
 						'invocation_id',
 						'now',
 						'policies',
@@ -482,7 +481,7 @@ describe('next guest runner', () => {
 						'today_in',
 						'tz'
 					],
-					query: ['after']
+					query: []
 				});
 			})
 	);

@@ -4,12 +4,11 @@
 // omits missing or unreachable servers with their typed failure logged; secret-provider failures still fail discovery
 //.
 import { Cache, Config, Effect, Option, Predicate, Redacted, Ref, Result, Scope } from 'effect';
-import { Unavailable } from '../../decl/errors.ts';
-import { Port, type PortFailure } from '../port.ts';
+import { type McpServer, Port, type PortFailure, Unavailable } from '@norbital-ai/host-api';
 import { Mcp, type McpSession } from '../ports.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
-import { LIMITS, type Authority, type McpServer } from '../contracts.ts';
+import { LIMITS, type Authority } from '../contracts.ts';
 
 /** The workspace's secrets (URL, client ids, tokens, client secrets) by `SecretName`. */
 export type McpHost = {

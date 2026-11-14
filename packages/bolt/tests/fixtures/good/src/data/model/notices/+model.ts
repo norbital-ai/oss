@@ -1,6 +1,6 @@
-import { model } from '../../../../.norbital/models/notices.ts';
+import { model } from '@norbital-ai/bolt';
 
-export default model({
+export default model('notices', {
 	description: 'Mirrored notices',
 	record_label: 'record.subject',
 	fields: {
@@ -11,13 +11,5 @@ export default model({
 	constraints: {
 		one_message: { unique: ['inbox', 'message_id'], import_key: true }
 	},
-	outputs: { default: { fields: 'all' } },
-	syncs: {
-		messages: {
-			with: 'mail',
-			read: function* () {
-				return { rows: [] };
-			}
-		}
-	}
+	outputs: { default: { fields: 'all' } }
 });

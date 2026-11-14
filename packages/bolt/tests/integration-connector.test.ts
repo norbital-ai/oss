@@ -10,7 +10,7 @@ import { mount_edge } from '@norbital-ai/ui/effect';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, expect, it, vi } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
-import type { InstanceStatus, ProviderChoice } from '../src/protocol/instance-status.ts';
+import type { InstanceStatus, ProviderChoice } from '@norbital-ai/host-api';
 import type { IntegrationClient } from '../src/page/integrations.ts';
 import IntegrationCard from '../src/page/IntegrationCard.svelte';
 

@@ -28,7 +28,8 @@ import {
 	type InvocationKind,
 	LIMITS
 } from '../src/engine/contracts.ts';
-import { type GuestOptions, type GuestProgram } from '../src/engine/guest/runner.ts';
+import type { GuestProgram } from '@norbital-ai/host-api';
+import { type GuestOptions } from '../src/engine/guest/runner.ts';
 
 const EFFECT = JSON.stringify(createRequire(import.meta.url).resolve('effect'));
 const ERRORS = JSON.stringify(fileURLToPath(new URL('../src/decl/errors/refusal.ts', import.meta.url)));
@@ -92,9 +93,9 @@ export default automation({ description: 'Facilities', policies: ['edge'], input
 `;
 
 const model = (name: string) => ({
-	[`src/data/model/${name}/+model.ts`]: `import { model } from "../../../../.norbital/models/${name}.ts";
+	[`src/data/model/${name}/+model.ts`]: `import { model } from '@norbital-ai/bolt';
 
-export default model({ description: 'A ${name}', record_label: 'record.title', fields: { title: { kind: 'text' } }, outputs: { default: { fields: 'all' } } });
+export default model('${name}', { description: 'A ${name}', record_label: 'record.title', fields: { title: { kind: 'text' } }, outputs: { default: { fields: 'all' } } });
 `
 });
 
@@ -443,7 +444,7 @@ describe('the bundle', () => {
 				return yield* Effect.fail(new Refusal({ message: 'No update.', field: 'title', row: 2 }));
 			}, -1);
 			expect(yield* Effect.promise(() => deny())).toEqual({
-				kind: 'deny', message: 'No update.', at: { field: 'title', row: 2 }
+				kind: 'refuse', message: 'No update.', at: { field: 'title', row: 2 }
 			});
 		})
 	);

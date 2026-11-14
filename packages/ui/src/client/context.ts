@@ -41,6 +41,9 @@ export const optional_bolt_of = (ctx: UiContext): ViewBolt | undefined => {
 		}
 	});
 };
+/** `ctx`'s words and locale: the view client's, else the ui's English (a host's local view without a tenant client). */
+export const words_of = (ctx: UiContext): Pick<ViewBolt, 't' | 'locale'> =>
+	optional_bolt_of(ctx) ?? { t: (key) => key, locale: ctx.ui.kinds.locale ?? 'en' };
 /** `ctx`'s view client for native reads, actions and translated text. */
 export function bolt_of(ctx: UiContext): ViewBolt {
 	const bolt = optional_bolt_of(ctx);

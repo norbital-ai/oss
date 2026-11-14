@@ -16,9 +16,6 @@ bunx bolt test
   `verify`, `publish`) from a template repository root ([API reference](https://norbital.ai/docs/api-reference)).
 - `@norbital-ai/bolt-cli/test` — the test kit: `TestWorkspace.layer(options)` and the Effect Vitest helpers. Guest
   code runs on the kit's own runner.
-- `@norbital-ai/bolt-cli/guests` — `node_guests(options?)`, a guest runner (`HostPorts.guests`) as `node:vm` contexts in
-  this process, metered against each session's CPU budget: operator-trusted code only, with no memory cap and no
-  security boundary. bolt-server, `bolt dev` and the test kit run on it; a multi-tenant host brings native isolates.
 
 The compiler bundles Bolt's own modules (the shell, the page SDK, the declaration edge) from the `@norbital-ai/bolt` it
 resolves; in the oss checkout, running from source, it bundles Bolt's source beside it. Its view of Bolt's internals is

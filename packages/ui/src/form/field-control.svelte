@@ -25,15 +25,23 @@
 		children,
 		...rest
 	}: Omit<HTMLAttributes<HTMLDivElement>, 'id' | 'children'> & {
+		/** The control's element id, which the label names. */
 		id: string;
+		/** The field's label. */
 		label: string;
+		/** A hint beside the label, shown when there is no error. */
 		help?: string;
+		/** The field's error, shown in place of `help`. */
 		error?: string;
+		/** A value shown, not edited: no required or dirty mark, the label names a group. */
 		readonly?: boolean;
+		/** Marks the label as required. */
 		required?: boolean;
 		/** The draft differs from what the form opened with (the row, else the defaults). */
 		dirty?: boolean;
+		/** A compact row (a grid's or inspector's): tighter spacing and no hint. */
 		dense?: boolean;
+		/** The control. */
 		children: Snippet;
 	} = $props();
 	const t = ui_text();

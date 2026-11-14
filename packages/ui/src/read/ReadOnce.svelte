@@ -4,8 +4,11 @@
 	import { observe_once } from '../effect/index.js';
 
 	let { effect, pending, ready }: {
+		/** The read, run once per change of it; a failure throws to the nearest boundary. */
 		effect: Effect.Effect<T, E>;
+		/** Shown until the read answers. */
 		pending: Snippet;
+		/** Shown with the read's value. */
 		ready: Snippet<[T]>;
 	} = $props();
 	const read = observe_once(() => effect);

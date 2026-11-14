@@ -23,32 +23,31 @@ import {
 } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { Drivers } from '../src/engine/ports.ts';
-import { loopback_tcp_port } from '../src/node/tcp.ts';
+import { loopback_tcp_port } from '@norbital-ai/host-api/node';
 import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it, vi } from '@effect/vitest';
-import type { DriverName, IntegrationSpec } from '../src/decl/runtime/integration.ts';
+import type { IntegrationSpec } from '../src/decl/runtime/integration.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { Unavailable } from '../src/decl/errors.ts';
-import { DbError, Fenced } from '../src/engine/errors.ts';
+import {
+	DbError,
+	type DriverOpen,
+	type InstanceStatus,
+	type Link,
+	type LinkStatus,
+	Fenced,
+	type Provider,
+	Unavailable
+} from '@norbital-ai/host-api';
 import { LINK_DOWN } from '../src/engine/integrations/abi.ts';
 import { Conversations, Outbound } from '../src/engine/services.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { credentials, type Credentials } from '../src/engine/integrations/credentials.ts';
-import {
-	oauth_client_of,
-	type DriverOpen,
-	type Link,
-	type Provider
-} from '../src/engine/integrations/driver.ts';
-import {
-	decode_status,
-	type InstanceStatus,
-	type LinkStatus
-} from '../src/protocol/instance-status.ts';
+import { oauth_client_of } from '../src/engine/integrations/driver.ts';
+import { decode_status } from '../src/protocol/instance-status.ts';
 import {
 	integration_links,
 	type LinkManager,
@@ -173,7 +172,7 @@ class PairingInvalid extends Schema.TaggedError<PairingInvalid>()('PairingInvali
 const fake = (
 	id: string,
 	opened: DriverOpen[] = [],
-	driver: DriverName = 'whatsapp',
+	driver = 'whatsapp',
 	over: { open?: Provider['open']; import_start?: NonNullable<Provider['import_start']>; idempotent_sends?: boolean } = {}
 ): Provider => ({
 	driver,

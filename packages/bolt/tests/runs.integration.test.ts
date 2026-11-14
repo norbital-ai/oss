@@ -20,40 +20,29 @@ import {
 import { TestClock } from 'effect/testing';
 import type { Json } from '../src/decl/values.ts';
 import type { Holder } from '../src/engine/access/authority.ts';
-import type { Invocation, Rows, Outcome as WriteOutcome } from '../src/engine/contracts.ts';
+import { DbError, type Rows } from '@norbital-ai/host-api';
+import type { Invocation, Outcome as WriteOutcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { type EngineError } from '../src/engine/errors.ts';
 import { BoltError, CODES } from '../src/protocol/errors.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb, keys_port } from '@norbital-ai/host-api/node';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { EngineLive, type EngineHost, type EngineServices } from '../src/engine/host.ts';
 import { bare_host, browser_probe } from './effect-engine.ts';
-import {
-	Agents,
-	Callables,
-	Guest,
-	Identity,
-	RunHandlers,
-	Runs,
-	Writes,
-	type CrossCall,
-	type GuestShape,
-	type IdentityShape,
-	type RunHandler,
-	type RunsShape,
-	type WritesShape
-} from '../src/engine/services.ts';
+import { Agents, Callables, Guest, Identity, RunHandlers, Runs, type CrossCall, type GuestShape, type IdentityShape, type RunHandler, type RunsShape, type CallablesShape } from '../src/engine/services.ts';
 import { DeadlinePort, Keys } from '../src/engine/ports.ts';
-import { keys_port } from '../src/node/keys.ts';
 import { Secrets, type SecretsShape } from '../src/engine/secrets.ts';
 import { RunsLive } from '../src/engine/runs/index.ts';
+import { RUN_LEASE_MS } from '../src/engine/runs/executor.ts';
 import { AutomationsLive } from '../src/engine/runs/invoke.ts';
 import { decode_acts } from '../src/engine/callables/index.ts';
 import { Outcome } from '../src/protocol/schema.ts';
 import { canonical } from '@norbital-ai/store';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import type { Verb } from '../src/engine/write/act.ts';
+import { one_act } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 const base: EngineManifest = {
 	needs: [],
 	workspace: {
@@ -118,6 +107,11 @@ const base: EngineManifest = {
 			description: 'Write quotes; starts nothing',
 			grants: { quotes: { outputs: { default: {} }, create: {} } }
 		},
+		// a writer that reads no output of quotes: its effects see its own write as stored
+		blind: {
+			description: 'Create quotes, read none',
+			grants: { quotes: { create: {} } }
+		},
 		starter: {
 			description: 'Starts a retitle',
 			grants: {},
@@ -129,7 +123,7 @@ const base: EngineManifest = {
 			grants: {
 				quotes: {
 					outputs: {
-						default: { scopes: { quotes: { created_by: { eq: { var: 'requestor.id' } } } } }
+						default: { scopes: { quotes: { created_by: { eq: { var: 'actor.id' } } } } }
 					},
 					update: {}
 				}
@@ -216,7 +210,7 @@ function fakeGuest(
 	},
 	calls: Invocation[]
 ): GuestShape {
-	return {
+	return with_each({
 		invokeProgram: () =>
 			Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 		invoke: (inv, bridge) =>
@@ -303,13 +297,13 @@ function fakeGuest(
 					)
 				);
 			})
-	};
+	});
 }
 type World = {
 	/** The engine graph, for routes served over it. */
 	context: Context.Context<EngineServices | EngineHost>;
 	e: {
-		act: WritesShape['act'];
+		acts: CallablesShape['acts'];
 		authority: IdentityShape['authority'];
 	};
 	r: RunsShape;
@@ -336,7 +330,11 @@ const shared: {
 	clock: { ms: number };
 	statements: { at: number; text: string; params: readonly Json[] }[];
 	next: number | null;
+	/** A statement this answers true for fails as a lost connection would. */
+	fail?: ((text: string) => boolean) | undefined;
 } = { inner: undefined, clock: { ms: T0 }, statements: [], next: null };
+const lostConnection = (texts: readonly string[]) =>
+	texts.some((text) => shared.fail?.(text) === true) ? Effect.fail(DbError.make('08006', 'the connection was lost')) : undefined;
 const current = () => {
 	if (shared.inner === undefined) throw new Error('no test database');
 	return shared.inner;
@@ -356,7 +354,7 @@ const sharedDb = TenantDb.typed({
 				text: statement.text,
 				params: statement.params
 			});
-			return current().write(statement, lock);
+			return lostConnection([statement.text]) ?? current().write(statement, lock);
 		}),
 	// Keep every native batch statement visible, including audit receipts and acknowledgements.
 	transaction: (batch) =>
@@ -364,7 +362,7 @@ const sharedDb = TenantDb.typed({
 			shared.statements.push(
 				...batch.statements.map((x) => ({ at: shared.clock.ms, text: x.text, params: x.params }))
 			);
-			return current().transaction(batch);
+			return lostConnection(batch.statements.map((x) => x.text)) ?? current().transaction(batch);
 		})
 });
 const fileScope = Effect.runSync(Scope.make());
@@ -394,7 +392,7 @@ const engineOnce = Effect.runSync(
 			// the engine reads its database while it builds: a checkpoint database for the build alone
 			return yield* Effect.scoped(
 				Effect.gen(function* () {
-					shared.inner = PgliteDb.make(yield* TestDb.open(base));
+					shared.inner = TenantDb.typed(PgliteDb.make(yield* TestDb.open(base)));
 					// queue fixtures isolate recovery retries: the engine builds on the live clock
 					return yield* TestClock.withLive(
 						Layer.build(EngineLive(base).pipe(Layer.provideMerge(host))).pipe(
@@ -418,13 +416,14 @@ const world = Effect.fn('TestRuns.world')(function* (
 	} = {}
 ) {
 	const context = yield* engineOnce;
-	const inner = PgliteDb.make(yield* TestDb.open(manifest));
+	const inner = TenantDb.typed(PgliteDb.make(yield* TestDb.open(manifest)));
 	shared.inner = inner;
 	const clock = shared.clock,
 		statements = shared.statements,
 		db = sharedDb;
 	clock.ms = T0;
 	shared.next = null;
+	shared.fail = undefined;
 	yield* TestClock.setTime(T0);
 	const calls: Invocation[] = [];
 	const runContext = yield* Layer.build(
@@ -440,9 +439,9 @@ const world = Effect.fn('TestRuns.world')(function* (
 		)
 	);
 	const r = Context.get(runContext, Runs),
-		writes = Context.get(context, Writes),
+		writes = Context.get(context, Callables),
 		identity = Context.get(context, Identity);
-	const e = { act: writes.act, authority: identity.authority };
+	const e = { acts: writes.acts, authority: identity.authority };
 	if (extra.platform !== undefined)
 		yield* Context.get(context, RunHandlers).register(extra.platform);
 	const admin: Holder = {
@@ -475,11 +474,10 @@ const world = Effect.fn('TestRuns.world')(function* (
 		clock,
 		act: (model: string, verb: Verb, input: Json) =>
 			Effect.gen(function* () {
-				return (yield* e.act({
+				return (yield* e.acts(one_act({
 					model,
 					verb,
 					input,
-					mode: { _tag: 'Direct' },
 					key: randomUUID(),
 					issuedAt: iso(clock.ms),
 					authority: yield* e.authority(admin),
@@ -489,7 +487,7 @@ const world = Effect.fn('TestRuns.world')(function* (
 						tz: 'UTC'
 					},
 					invocationId: randomUUID()
-				})).outcome;
+				}))).outcome;
 			}),
 		until: (end: number) =>
 			Effect.gen(function* () {
@@ -777,9 +775,8 @@ describe('model effects and starts', () => {
 				const clerk = member(['clerk']);
 				const as = (verb: Verb, input: Json) =>
 					Effect.gen(function* () {
-						return (yield* w.e.act({
+						return (yield* w.e.acts(one_act({
 							model: 'quotes',
-							mode: { _tag: 'Direct' },
 							verb,
 							input,
 							key: randomUUID(),
@@ -787,7 +784,7 @@ describe('model effects and starts', () => {
 							authority: yield* w.e.authority(clerk),
 							bindings: { now: iso(w.clock.ms), today: '2026-09-25', tz: 'UTC' },
 							invocationId: randomUUID()
-						})).outcome;
+						}))).outcome;
 					});
 				const at = T0 + 6 * 60000;
 				yield* setNow(w, at + 17000);
@@ -870,7 +867,7 @@ describe('model effects and starts', () => {
 			})
 	);
 	it.effect(
-		'an effect retries a transient failure; one whose writes run their own effects stops at the chain depth with a failed run; an automation run’s write runs its effect as that run',
+		'an effect retries a transient failure; a write that would run effects past the chain depth is refused; an automation run’s write runs its effect as that run',
 		() =>
 			Effect.gen(function* () {
 				let failures = 1;
@@ -901,9 +898,11 @@ describe('model effects and starts', () => {
 				const chain = yield* w.sql(
 					`SELECT depth, state, error->>'code' AS code FROM sys_run WHERE automation = 'quotes.effect.update' ORDER BY depth`
 				);
-				expect(chain.map((r) => r['depth'])).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
-				expect(chain.slice(0, 8).every((r) => r['state'] === 'succeeded')).toBe(true);
-				expect(chain[8]).toEqual({ depth: 9, state: 'failed', code: 'depth' });
+				// the deepest effect's write would run its effect one past the chain depth: refused whole, so nothing it wrote
+				// commits and no failed run stands in for the effect
+				expect(chain.map((r) => r['depth'])).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+				expect(chain.slice(0, 7).every((r) => r['state'] === 'succeeded')).toBe(true);
+				expect(chain[7]).toMatchObject({ depth: 8, state: 'failed' });
 
 				yield* w.db.write({
 					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES ('classify-run', 'classify', '{}', $1::timestamptz, 'start', 0)`,
@@ -947,9 +946,8 @@ describe('a run is the system holding its policies; its trigger records who star
 				const writer = member(['writer']),
 					starter = member(['starter']);
 				const bindings = { now: iso(T0), today: '2026-09-25', tz: 'UTC' };
-				const created = yield* w.e.act({
+				const created = yield* w.e.acts(one_act({
 					model: 'quotes',
-					mode: { _tag: 'Direct' },
 					verb: 'create',
 					input: [{ title: 'mine' }],
 					key: randomUUID(),
@@ -957,7 +955,7 @@ describe('a run is the system holding its policies; its trigger records who star
 					authority: yield* w.e.authority(writer),
 					bindings,
 					invocationId: randomUUID()
-				});
+				}));
 				if (created.outcome.kind !== 'committed') throw new Error('Missing quote');
 				const selected = created.outcome.records[0];
 				if (selected === undefined) throw new Error('Missing quote identity');
@@ -1094,7 +1092,7 @@ describe('re-queues, attempts and notices', () => {
 					)
 				).toEqual([{ state: 'failed', attempts: 1, code: 'guest_error' }]);
 				expect(yield* w.sql(`SELECT count(*)::int AS n FROM quotes WHERE title = 'once'`)).toEqual([
-					{ n: 3 }
+					{ n: 1 }
 				]);
 				expect(yield* w.sql('SELECT member,title FROM sys_notification')).toEqual([
 					{ member: 'holder', title: 'For ops' }
@@ -1122,9 +1120,8 @@ describe('run visibility and removed automation webhooks', () => {
 				if (holder.actor.kind !== 'member') throw new Error('Expected a member actor');
 				const as = (verb: Verb, input: Json) =>
 					Effect.gen(function* () {
-						return (yield* w.e.act({
+						return (yield* w.e.acts(one_act({
 							model: 'quotes',
-							mode: { _tag: 'Direct' },
 							verb,
 							input,
 							key: randomUUID(),
@@ -1132,7 +1129,7 @@ describe('run visibility and removed automation webhooks', () => {
 							authority: yield* w.e.authority(holder),
 							bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC' },
 							invocationId: randomUUID()
-						})).outcome;
+						}))).outcome;
 					});
 				const created = yield* as('create', [{ title: 'x', status: 'draft' }]);
 				if (created.kind !== 'committed' || created.records[0] === undefined)
@@ -1165,7 +1162,7 @@ describe('run visibility and removed automation webhooks', () => {
 });
 
 describe('lanes', () => {
-	it.effect('twelve automations run side by side in one workspace; the thirteenth waits', () =>
+	it.effect('one claim admits an automation’s declared concurrency at once; the rest wait', () =>
 		Effect.gen(function* () {
 			const full = yield* Deferred.make<void>(),
 				release = yield* Deferred.make<void>();
@@ -1175,13 +1172,13 @@ describe('lanes', () => {
 				wide: () =>
 					Effect.gen(function* () {
 						most = Math.max(most, ++running);
-						if (running === 12) yield* Deferred.succeed(full, undefined);
+						if (running === 16) yield* Deferred.succeed(full, undefined);
 						yield* Deferred.await(release);
 						running -= 1;
 						return { done: true };
 					})
 			});
-			for (let at = 0; at < 14; at++) yield* queue(w, `run-${at}`, 'wide', T0 - 20_000 + at);
+			for (let at = 0; at < 18; at++) yield* queue(w, `run-${at}`, 'wide', T0 - 20_000 + at);
 			const ticking = yield* Effect.forkChild(w.r.tick);
 			yield* Deferred.await(full);
 			expect(
@@ -1190,11 +1187,13 @@ describe('lanes', () => {
 				)
 			).toEqual([
 				{ state: 'queued', n: 2 },
-				{ state: 'running', n: 12 }
+				{ state: 'running', n: 16 }
 			]);
+			// one claim took all sixteen: no claim per lane
+			expect(w.statements.filter((x) => x.text.includes('row_number() OVER (PARTITION BY q.automation')).length).toBe(1);
 			yield* Deferred.succeed(release, undefined);
 			yield* Fiber.join(ticking);
-			expect(most).toBe(12);
+			expect(most).toBe(16);
 		})
 	);
 	it.effect(
@@ -1279,5 +1278,139 @@ describe('lanes', () => {
 				expect(mostPairs).toBe(2);
 				expect(pairs).toBe(0);
 			})
+	);
+});
+
+describe('leases, settles, keys and wakes', () => {
+	const done = () => Effect.succeed({ done: true });
+	const running = (w: World, id: string, started: number) =>
+		w.db.write({
+			text: `UPDATE sys_run SET state = 'running', attempts = 1, started_at = $2::timestamptz WHERE id = $1`,
+			params: [id, iso(started)]
+		});
+	it.effect('a run stuck running past its lease goes back to the queue at the next claim and runs, at the cost of one lease', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, { classify: done });
+			yield* queue(w, 'stuck', 'classify', T0 - RUN_LEASE_MS - 60_000);
+			yield* running(w, 'stuck', T0 - RUN_LEASE_MS - 1);
+			yield* w.r.tick;
+			expect(yield* w.sql(`SELECT state, leases FROM sys_run WHERE id = 'stuck'`)).toEqual([{ state: 'queued', leases: 1 }]);
+			expect(shared.next).toBe(T0);
+			yield* w.until(T0);
+			expect(yield* w.sql(`SELECT state, attempts, leases FROM sys_run WHERE id = 'stuck'`)).toEqual([
+				{ state: 'succeeded', attempts: 2, leases: 1 }
+			]);
+		})
+	);
+	it.effect('a due run behind one its automation still runs wakes at that run’s lease, never at once', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, { classify: done });
+			yield* queue(w, 'ahead', 'classify', T0 - 2000);
+			yield* queue(w, 'behind', 'classify', T0 - 1000);
+			yield* running(w, 'ahead', T0);
+			yield* w.r.tick;
+			expect(yield* w.sql(`SELECT state FROM sys_run WHERE id = 'behind'`)).toEqual([{ state: 'queued' }]);
+			expect(shared.next).toBe(T0 + RUN_LEASE_MS);
+		})
+	);
+	it.effect('a settle the database fails is retried until it lands', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, { classify: done });
+			yield* queue(w, 'settles', 'classify', T0);
+			let failures = 2;
+			shared.fail = (text) => text.includes('results = s.results') && failures-- > 0;
+			const ticking = yield* Effect.forkChild(w.r.tick);
+			const clock = yield* Effect.forkChild(Effect.forever(TestClock.adjust('1 second').pipe(
+				Effect.andThen(Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0))))
+			)));
+			yield* Fiber.join(ticking);
+			yield* Fiber.interrupt(clock);
+			expect(failures).toBeLessThan(0);
+			expect(yield* w.sql(`SELECT state FROM sys_run WHERE id = 'settles'`)).toEqual([{ state: 'succeeded' }]);
+		})
+	);
+	it.effect('only the attempt that runs settles its row: one its lease handed on stays as the later attempt left it', () =>
+		Effect.gen(function* () {
+			const entered = yield* Deferred.make<void>(),
+				release = yield* Deferred.make<void>();
+			const w = yield* world(base, {
+				classify: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as({ done: true }))
+			});
+			yield* queue(w, 'handed', 'classify', T0);
+			const ticking = yield* Effect.forkChild(w.r.tick);
+			yield* Deferred.await(entered);
+			yield* w.db.write({ text: `UPDATE sys_run SET attempts = attempts + 1 WHERE id = 'handed'`, params: [] });
+			yield* Deferred.succeed(release, undefined);
+			yield* Fiber.join(ticking);
+			expect(yield* w.sql(`SELECT state, attempts, results FROM sys_run WHERE id = 'handed'`)).toEqual([
+				{ state: 'running', attempts: 2, results: [] }
+			]);
+		})
+	);
+	it.effect('a retried run’s act answers from the commit its first attempt made, never writing again', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, {
+				flaky: (_, ctx) =>
+					Effect.gen(function* () {
+						yield* ctx.act({ 'quotes.create': [{ title: 'once' }] });
+						if (ctx.attempt === 1) return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
+						return 'done';
+					})
+			});
+			yield* queue(w, 'twice', 'flaky', T0);
+			yield* w.r.tick;
+			yield* w.until(T0 + 10 * 60_000);
+			expect(yield* w.sql(`SELECT state, attempts FROM sys_run WHERE id = 'twice'`)).toEqual([{ state: 'succeeded', attempts: 2 }]);
+			expect(yield* w.sql(`SELECT count(*)::int AS n FROM quotes WHERE title = 'once'`)).toEqual([{ n: 1 }]);
+		})
+	);
+	it.effect('a run that schedules itself at once runs one deeper each time, whatever its input, so the loop ends at the chain depth', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, {
+				classify: (_, ctx) => ctx.schedule('classify', { n: randomUUID() }, { at: { var: 'now' } })
+			});
+			yield* queue(w, 'loop', 'classify', T0);
+			yield* w.r.tick;
+			yield* w.until(T0 + 60_000);
+			const runs = yield* w.sql(`SELECT depth, state, error->>'code' AS code FROM sys_run WHERE automation = 'classify' ORDER BY depth`);
+			expect(runs.map((run) => run['depth'])).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+			expect(runs.slice(0, 8).every((run) => run['state'] === 'succeeded')).toBe(true);
+			expect(runs[8]).toMatchObject({ depth: 8, state: 'failed' });
+		})
+	);
+	it.effect('a writer that reads no output of the model sees its own write in its effect, as stored', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, { 'quotes.effect.create': () => Effect.void });
+			const outcome = (yield* w.e.acts(one_act({
+				model: 'quotes',
+				verb: 'create',
+				input: [{ title: 'unseen' }],
+				key: randomUUID(),
+				issuedAt: iso(T0),
+				authority: yield* w.e.authority(member(['blind'])),
+				bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC' },
+				invocationId: randomUUID()
+			}))).outcome;
+			expect(outcome.kind).toBe('committed');
+			yield* w.until(T0 + 60_000);
+			expect(w.calls.find((call) => call.target === 'quotes.effect.create')?.input).toEqual([{
+				before: null,
+				set: expect.objectContaining({ title: 'unseen', status: 'draft' }),
+				after: expect.objectContaining({ title: 'unseen', status: 'draft' })
+			}]);
+		})
+	);
+	it.effect('a wake lost after its commit is announced again while the database is awake', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, { classify: done });
+			yield* TestClock.setTime(T0 + 4 * 60_000);
+			// queued with no wake, as a deadline port that failed would leave it
+			yield* queue(w, 'unwoken', 'classify', T0 + 10 * 60_000);
+			expect(shared.next).toBe(null);
+			yield* TestClock.setTime(T0 + 5 * 60_000);
+			for (let wait = 0; wait < 200 && shared.next === null; wait++)
+				yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+			expect(shared.next).toBe(T0 + 10 * 60_000);
+		})
 	);
 });

@@ -16,7 +16,7 @@ type Role = (typeof ROLES)[number]['role'];
 
 /**
  * A discovered role file. `name` is the path-derived name: the folder's (`orders`, `hr/kiosk`) or the file's
- * (`sales_rep`); a page is `<app>/<page>`; singletons (`workspace`, `team`, …) have `''`.
+ * (`sales_rep`); a page is `<app>/<page>`, a sync `<model>.<sync>`; singletons (`workspace`, `team`, …) have `''`.
  */
 export type Discovered = { role: Role; name: string; path: string };
 export type Diagnostic = {
@@ -119,12 +119,15 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			fail('bad-name', path, `'${bad}' is not a name (${NAME.source})`);
 			continue;
 		}
+		const leaf = folder.slice(folder.lastIndexOf('/') + 1);
 		const name =
 			r.role === 'page'
 				? `${folder}/${fileName}`
-				: r.role === 'model' || r.role === 'representation'
-					? folder.slice(folder.lastIndexOf('/') + 1)
-					: (fileName ?? folder);
+				: r.role === 'sync'
+					? `${leaf}.${fileName}`
+					: r.role === 'model' || r.role === 'representation'
+						? leaf
+						: (fileName ?? folder);
 		files.push({ role: r.role, name, path });
 	}
 
@@ -148,16 +151,16 @@ export const discover = Effect.fn('bolt.discover')(function* (
 		fail('workspace-missing', 'src/+workspace.ts', 'a workspace has exactly one src/+workspace.ts');
 	for (const f of files) {
 		if (
-			f.role === 'representation' &&
+			(f.role === 'representation' || f.role === 'sync') &&
 			!files.some(
 				(model) =>
 					model.role === 'model' &&
-					model.path === f.path.replace(/\+representation\.svelte$/, '+model.ts')
+					model.path === f.path.replace(/\+[^/]+$/, '+model.ts')
 			)
 		)
-			fail('representation-without-model', f.path, 'no +model.ts beside it');
+			fail(`${f.role}-without-model`, f.path, 'no +model.ts beside it');
 		if (f.role === 'renderer' && !has('custom_field', f.name))
-			fail('custom-field-without-definition', f.path, `no +definition.ts beside it`);
+			fail('custom-field-without-definition', f.path, `no +custom_field.ts beside it`);
 		if (f.role === 'integration_setup' && !has('integration_definition', f.name))
 			fail('setup-without-integration', f.path, 'no +integration.ts beside this setup component');
 		if (f.role === 'session' && !has('app', f.name))

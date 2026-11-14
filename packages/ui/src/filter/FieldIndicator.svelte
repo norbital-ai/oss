@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { UiContext } from '../client/contract.js';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
-	import { bolt_of } from '../client/context.js';
+	import { words_of } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	import type { Resolved } from './catalog.js';
 	let {
@@ -10,7 +10,7 @@
 		many = false,
 		nested = false
 	}: { ctx: UiContext; resolved?: Resolved | null; many?: boolean; nested?: boolean } = $props();
-	const bolt = $derived(bolt_of(ctx));
+	const bolt = $derived(words_of(ctx));
 	const info = $derived.by((): { name: GlyphName; label: string } => {
 		if (many) return { name: 'links', label: msg(bolt, 'view.type.many') };
 		if (resolved?.leaf === 'rel')

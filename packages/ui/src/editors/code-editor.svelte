@@ -4,6 +4,7 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 -->
 <script lang="ts" module>
 	import type { CodeEditorLanguage } from './code-setup.js';
+	import type { LayoutSize } from '../layout/layout.shared.js';
 	export type { CodeEditorLanguage };
 	/**
 	 * The props of `CodeEditor`: the text and `on_change`, the language, read-only and invalid states, and the minimum height.
@@ -21,12 +22,14 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		invalid?: boolean;
 		/** CSS min-height of the editing area; one line is `2.25rem` (a field's height). */
 		min_height?: string;
+		/** `content` (default): its text's height, down to `min_height`; `fill`: the height left in its parent, scrolling inside. */
+		size?: LayoutSize;
+		/** The field's box (border, radius, shadow). Default true; false for an editor that is a whole pane. */
+		framed?: boolean;
 		/** Long lines wrap at the editor's width instead of scrolling sideways (an expression, prose). */
 		wrap?: boolean;
 		/** The id on the editing area, for `<label for>`. */
 		id?: string;
-		/** Classes for the outer frame. */
-		class?: string;
 		/** Accessible name of the editing area. */
 		'aria-label'?: string;
 		/** The id of the element that names the editing area. */
@@ -50,7 +53,8 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		min_height = '7rem',
 		wrap = false,
 		id,
-		class: className,
+		size = 'content',
+		framed = true,
 		'aria-label': ariaLabel,
 		'aria-labelledby': ariaLabelledby
 	}: CodeEditorProps = $props();
@@ -121,10 +125,12 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 
 <div
 	class={cn(
-		'overflow-hidden rounded-sm border bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30',
-		invalid ? 'border-destructive' : 'border-input',
+		'overflow-hidden bg-background',
+		framed &&
+			'rounded-sm border shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30',
+		framed && (invalid ? 'border-destructive' : 'border-input'),
 		readonly && 'bg-muted',
-		className
+		size === 'fill' && 'h-full min-h-0'
 	)}
 	style:min-height={min_height}
 	data-code-editor={language}

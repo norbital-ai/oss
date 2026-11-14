@@ -3,12 +3,17 @@
 // name), a member the provider lacks is `Unavailable`, and closing the link's scope closes it and aborts its signal.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber, FiberSet, Scope, Exit } from 'effect';
-import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
-import { SendRefused } from '../src/engine/conversations/status.ts';
+import {
+	type DriverOpen,
+	FacilityFailure,
+	type Link,
+	type Provider,
+	SendRefused,
+	Unavailable
+} from '@norbital-ai/host-api';
 import { linkCalls, openLink } from '../src/engine/integrations/abi.ts';
-import type { DriverOpen, Link, Provider } from '../src/engine/integrations/driver.ts';
 import type { Json } from '../src/decl/values.ts';
-import { loopback_tcp_port } from '../src/node/tcp.ts';
+import { loopback_tcp_port } from '@norbital-ai/host-api/node';
 
 describe('the driver ABI, engine side', () => {
 	it.effect('interrupting a call aborts the signal the provider was given', () =>

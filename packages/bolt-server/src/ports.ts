@@ -2,17 +2,19 @@ import { Clock, Crypto, Effect, Schema, Stream } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import {
-	Files,
-	Geo,
-	Port,
+	type AiResponse,
 	decisions_system_1,
-	open_ai_chat,
-	structured_system_1,
-	type AiResponse
-} from '@norbital-ai/bolt/engine';
-import { off, type Facilities } from '@norbital-ai/bolt/facilities';
-import { download_media } from '@norbital-ai/bolt/node';
+	type Facilities,
+	type GeoHit,
+	off,
+	type Point,
+	Port,
+	type PortFailure,
+	structured_system_1
+} from '@norbital-ai/host-api';
+import { download_media } from '@norbital-ai/host-api/node';
 import { open_ai_embeddings, open_router_chat } from '@norbital-ai/providers/openrouter';
+import type { FilesStore } from './files.ts';
 import type { HostSettings } from './host.ts';
 
 /** S3-compatible SigV4, with a provider-requested signed URL expiry. */
@@ -20,7 +22,7 @@ export const s3Files: (
 	endpoint: string,
 	credential: string,
 	downloads?: NonNullable<Parameters<typeof download_media>[2]>
-) => Effect.Effect<Files['Service'], never, HttpClient.HttpClient> = Effect.fn('server.s3Files')(function* (
+) => Effect.Effect<FilesStore, never, HttpClient.HttpClient> = Effect.fn('server.s3Files')(function* (
 	endpoint: string,
 	credential: string,
 	downloads: NonNullable<Parameters<typeof download_media>[2]> = {}
@@ -131,7 +133,7 @@ export const s3Files: (
 			);
 		return response;
 	});
-	return Files.of({
+	const store: FilesStore = {
 		put: (bytes, meta) =>
 			Effect.gen(function* () {
 				const key = randomUUID();
@@ -234,7 +236,8 @@ export const s3Files: (
 				},
 				downloads
 			)
-	});
+	};
+	return store;
 });
 export type Endpoint = { endpoint: string; credential?: string | undefined };
 type Run = <A, E>(
@@ -248,7 +251,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 	endpoints: { sys1: Endpoint & { provider?: string }; sys2: Endpoint; embed?: Endpoint },
 	config: HostSettings['ai'],
 	declared: readonly string[],
-	files: Files['Service']['get'],
+	files: FilesStore['get'],
 	run: Run
 ) {
 	const context = yield* Effect.context<HttpClient.HttpClient | Crypto.Crypto>();
@@ -267,7 +270,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 					{ http_client: client }
 				)
 			: structured_system_1(
-					open_ai_chat(
+					open_router_chat(
 						{ ...endpoints.sys1, models: { sys_1: config.sys1 ?? '' } },
 						{ http_client: client }
 					),
@@ -341,11 +344,16 @@ const Hit = Schema.Struct({
 	name: Schema.optionalKey(Schema.String),
 	display_name: Schema.String
 });
+/** A geocoder as Effects: the host serves it as its `GeocoderPort`. */
+export type GeoStore = {
+	readonly search: (query: string) => Effect.Effect<readonly GeoHit[], PortFailure>;
+	readonly reverse: (point: Point) => Effect.Effect<GeoHit | null, PortFailure>;
+};
 export const nominatim: (
 	endpoint: string
-) => Effect.Effect<Geo['Service'], never, HttpClient.HttpClient> = Effect.fn('server.nominatim')(function* (
+) => Effect.Effect<GeoStore, never, HttpClient.HttpClient> = Effect.fn('server.nominatim')(function* (
 	endpoint: string
-): Effect.fn.Return<Geo['Service'], never, HttpClient.HttpClient> {
+): Effect.fn.Return<GeoStore, never, HttpClient.HttpClient> {
 	const client = yield* HttpClient.HttpClient;
 	const base = endpoint.replace(/\/$/, '');
 	const hit = (value: typeof Hit.Type) => ({
@@ -362,7 +370,7 @@ export const nominatim: (
 				Effect.flatMap(HttpClientResponse.schemaBodyJson(schema)),
 				Effect.mapError(Port.failure('geo'))
 			);
-	return Geo.of({
+	const geo: GeoStore = {
 		search: (query) =>
 			get(`/search?format=jsonv2&limit=5&q=${encodeURIComponent(query)}`, Schema.Array(Hit)).pipe(
 				Effect.map((rows) => rows.map(hit))
@@ -372,5 +380,6 @@ export const nominatim: (
 				`/reverse?format=jsonv2&lat=${point.lat}&lon=${point.lng}`,
 				Schema.Union([Hit, Schema.Struct({ error: Schema.String })])
 			).pipe(Effect.map((value) => ('error' in value ? null : hit(value))))
-	});
+	};
+	return geo;
 });

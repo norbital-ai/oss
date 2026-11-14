@@ -1,6 +1,6 @@
 import { Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
-import { storedInstant } from '../db/wire.ts';
+import { storedInstant } from '@norbital-ai/host-api';
 
 export const INBOX_LIMIT = 200;
 export const StoredNotice = Schema.Struct({

@@ -3,13 +3,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { Logs } from '../src/engine/ports.ts';
-import type { LogEvent } from '../src/engine/contracts.ts';
-import {
-	decisionEvent,
-	decisionUsage,
-	type DecisionRequest,
-	type DecisionResult
-} from '../src/engine/decision.ts';
+import type { DecisionRequest, DecisionResult, LogEvent } from '@norbital-ai/host-api';
+import { decisionEvent, decisionUsage } from '../src/engine/decision.ts';
 
 const request: DecisionRequest = {
 	state: {

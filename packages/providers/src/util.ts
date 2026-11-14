@@ -2,8 +2,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import { Effect, Option, Predicate, Schema } from 'effect';
 import { FetchHttpClient, type HttpClient } from 'effect/http';
-import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
-import { Fenced } from '@norbital-ai/bolt/engine';
+import { type DriverOpen, Fenced, type OutboundAttachment } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import { PairingInvalid, ProviderRefused, ProviderUnavailable } from './errors.ts';
 
 export type Obj = { readonly [k: string]: Json };

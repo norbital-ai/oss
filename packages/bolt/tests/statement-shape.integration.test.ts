@@ -9,11 +9,12 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Writes } from '../src/engine/services.ts';
+import { Callables } from '../src/engine/services.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
 import { dynamic_read } from '../src/protocol/read-request.ts';
 import { admin, manifest as base } from './write-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -96,13 +97,13 @@ it.live(
 					})
 				);
 				const t = Context.get(context, TestWorkspace),
-					writes = Context.get(context, Writes);
+					writes = Context.get(context, Callables);
 				const commits: string[] = [];
 				for (const period of periods) {
 					texts.length = 0;
 					const key = randomUUID(),
 						now = t.clock.now();
-					const { outcome } = yield* writes.act({
+					const { outcome } = yield* writes.acts(one_act({
 						model: 'runs',
 						verb: 'create',
 						input: [{ period }],
@@ -110,9 +111,8 @@ it.live(
 						key,
 						issuedAt: now,
 						invocationId: key,
-						mode: { _tag: 'Direct' },
 						bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-					});
+					}));
 					expect(outcome, JSON.stringify(outcome)).toMatchObject({ kind: 'committed' });
 					const commit = texts.find((text) => text.includes('bolt_idem'));
 					if (commit === undefined) throw new Error('no commit statement');

@@ -5,14 +5,23 @@ import { describe, expect, it, layer } from '@effect/vitest';
 import { Effect, Layer, Result, Schema } from 'effect';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
-import { RATE_LIMITED, uuidv7 } from '../src/protocol/wire.ts';
+import { RATE_LIMITED } from '../src/protocol/wire.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { SHELL } from '../src/shell/nav.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
-		workspace: { tz: 'UTC', locale: 'en' },
+		workspace: {
+			tz: 'UTC',
+			locale: 'en',
+			limits: {
+				writer: { act: '2/min', read: '2/min' },
+				chatter: { agent: [{ rate: '2/min', per: 'actor' }] },
+				reader: { read: { rate: '2/min', per: 'ip' } }
+			}
+		},
 		models: {
 			notes: {
 				description: 'A note',
@@ -31,18 +40,15 @@ const manifest = Result.getOrThrow(
 		policies: {
 			writer: {
 				description: 'Writes notes, two a minute',
-				grants: { notes: { outputs: { default: {} }, create: {} } },
-				limits: { act: '2/min', read: '2/min' }
+				grants: { notes: { outputs: { default: {} }, create: {} } }
 			},
 			chatter: {
 				description: 'Two agent posts a minute',
-				grants: { notes: { outputs: { default: {} } } },
-				limits: { agent: [{ rate: '2/min', per: 'actor' }] }
+				grants: { notes: { outputs: { default: {} } } }
 			},
 			reader: {
 				description: 'Public reads, two a minute per IP',
-				grants: { notes: { outputs: { default: {} } } },
-				limits: { read: { rate: '2/min', per: 'ip' } }
+				grants: { notes: { outputs: { default: {} } } }
 			}
 		},
 		teams: {
@@ -310,7 +316,7 @@ describe('RateWindows', () => {
 // model effect runs, and the acts any run's body performs, are never limited.
 const runs = Result.getOrThrow(
 	decode_projected_manifest({
-		workspace: { tz: 'UTC', locale: 'en' },
+		workspace: { tz: 'UTC', locale: 'en', limits: { worker: { act: '1000/min' } } },
 		models: {
 			notes: {
 				description: 'A note',
@@ -342,8 +348,7 @@ const runs = Result.getOrThrow(
 					notes: { outputs: { default: {} }, create: {} },
 					logs: { outputs: { default: {} }, create: {} }
 				},
-				capabilities: { automations: ['manual'] },
-				limits: { act: '1000/min' }
+				capabilities: { automations: ['manual'] }
 			}
 		},
 		teams: { Workers: { name: 'Workers', policies: ['worker'] } },

@@ -35,7 +35,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 ## Time and operands
 
 - Pass `ctx.clock('day').today` or a minute or hour clock's `now` as literal inputs. See [dates-and-time.md](dates-and-time.md).
-- A value position may hold `{ field: '<column>' }` or `{ var: '<CEL>' }` over `requestor` (`id`, `email`, `phone`, `party`, `visitor`, `instance`, `teams`, `team_tree`, `scopes.<policy>`) and the clock, evaluated once per read and checked against the field's kind.
+- A value position may hold `{ field: '<column>' }` or `{ var: '<CEL>' }` over `actor` (`id`, `email`, `phone`, `party`, `visitor`, `instance`, `teams`, `team_tree`, `scopes.<policy>`) and the clock, evaluated once per read and checked against the field's kind.
 - Time expressions are edge-only: view filters, the agent's read and described filters evaluate them; the store refuses them.
 - A prior state of a record is `ctx.history` on a page, or a root `as_of` instant in server code.
 
@@ -69,7 +69,7 @@ An update or delete names its selected row as `target`; its revision guards the 
 
 ## Aggregates
 
-- Counts, sums and groups use a root or layer `aggregate`, or roll-up fields, never loops. Pages also expose `ctx.aggregate`; server bodies use the nested read request.
+- Counts, sums and groups use a root or layer `aggregate`, or roll-up fields, never loops. Pages and server bodies use the same read request.
 - Ungrouped answers one object (`count` only when asked); grouped pages buckets, each with `key` and `count`.
 - View counts describe the full authorized scope: reuse them. A figure reused across screens is a roll-up or a shared helper.
 

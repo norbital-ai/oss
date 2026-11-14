@@ -8,7 +8,7 @@ import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
 import { integration_links } from '../src/engine/integrations/links.ts';
-import { loopback_tcp_port } from '../src/node/tcp.ts';
+import { loopback_tcp_port } from '@norbital-ai/host-api/node';
 import { Secrets } from '../src/engine/secrets.ts';
 import { bindings } from '../src/protocol/http.ts';
 import { IntegrationManager, integration_routes } from '../src/protocol/integrations.ts';

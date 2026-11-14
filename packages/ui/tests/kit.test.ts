@@ -8,7 +8,7 @@ import { browser, required } from './view-fixture.ts';
 import { confirmDialog, element } from './elements.ts';
 import type { ComponentProps } from 'svelte';
 import { escapes, navigates, openSheets, popSheet, pushSheet } from '../src/primitives/sheet/dismiss.ts';
-import { filter_logs, logPreview, wantsOlder, type LogLine } from '../src/logs/logs.ts';
+import { logPreview, wantsOlder, type LogLine } from '../src/logs/logs.ts';
 import { offsets, windowOf } from '../src/primitives/virtual/virtual.ts';
 
 // after the DOM hook: static imports link before it registers
@@ -207,25 +207,8 @@ it.live('drawer: closes on a nav tap and on a route change, not on other clicks'
 	})
 );
 
-it.live('logs: level + text filter; a virtual window; older pages near the top', () =>
+it.live('logs: a virtual window; older pages near the top', () =>
 	browser(async () => {
-		const rows: LogLine[] = [
-			{ id: '1', at: 0, level: 'info', message: 'boot' },
-			{ id: '2', at: 1, level: 'error', message: 'DB timeout', source: 'sync' },
-			{ id: '3', at: 2, level: 'debug', message: 'tick' }
-		];
-		assert.deepEqual(
-			filter_logs(rows, { debug: true }, '').map((r) => r.id),
-			['1', '2']
-		);
-		assert.deepEqual(
-			filter_logs(rows, {}, 'sync').map((r) => r.id),
-			['2']
-		);
-		assert.deepEqual(
-			filter_logs(rows, {}, 'db').map((r) => r.id),
-			['2']
-		);
 		const offs = offsets([20, 60, 20, 20, 20]); // row 1 wrapped to three lines
 		assert.deepEqual(offs, [0, 20, 80, 100, 120, 140]);
 		assert.deepEqual(windowOf(offs, 70, 20, 0), { start: 1, end: 3 });
@@ -255,7 +238,8 @@ it.live('logs: 10k rows render a window and load an older page on scroll to top'
 			id: String(i),
 			at: i * 1000,
 			level: i % 7 ? 'info' : 'warn',
-			message: `line ${i}`
+			message: `line ${i}`,
+			source: null
 		}));
 		let calls = 0;
 		const v = show({
@@ -266,7 +250,7 @@ it.live('logs: 10k rows render a window and load an older page on scroll to top'
 				Effect.sync(() => {
 					calls++;
 					v.state.rows = [
-						{ id: 'old', at: -1, level: 'info', message: 'older' },
+						{ id: 'old', at: -1, level: 'info', message: 'older', source: null },
 						...required(v.state.rows)
 					];
 				})

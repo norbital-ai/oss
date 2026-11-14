@@ -18,7 +18,7 @@ export type FieldInfo = {
 	many?: true;
 	email?: true;
 	phone?: true;
-	/** A source team handle (`format: 'team'`): `requestor.teams` / `requestor.team_tree` compare it. */
+	/** A source team handle (`format: 'team'`): `actor.teams` / `actor.team_tree` compare it. */
 	team?: true;
 	period_of?: 'date' | 'instant';
 	metric?: 'l2' | 'cosine' | 'ip';
@@ -545,9 +545,9 @@ export function default_fields(c: ExposureInfo, heavy = false): string[] {
 		)
 		.map((f) => f.name);
 }
-/** An unscoped default row: stored fields and FKs plus the key and audit columns; no seq, roll-up or computed field. */
+/** An unscoped default row: stored fields, computed (generated stored) fields and FKs plus the key and audit columns; no seq or roll-up. */
 export function stored_fields(m: ModelInfo): string[] {
 	return [...m.fields.values()]
-		.filter((f) => !f.name.includes('.') && !f.computed && !f.derived)
+		.filter((f) => !f.name.includes('.') && !f.derived)
 		.map((f) => f.name);
 }

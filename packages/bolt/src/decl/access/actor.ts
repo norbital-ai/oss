@@ -29,8 +29,9 @@ type Member = {
  * the instance it is deployed on, a public `visitor` of an app, an `api_key`, or the `system` running an automation, a
  * remote sync's read or write for one instance (`'<model>.sync.<sync>'`: the engine never sends a sync's own writes back
  * through it), or a platform run. `system` is the one reserved identity of the platform's own work: an automation run is
- * it, holding the automation's `policies` whoever started it (who did is the run's `trigger`, `ctx.run.trigger`), and
- * its `requestor.*` operands name no member, party or team, so a requestor-scoped grant matches nothing.
+ * it, holding the automation's `policies` whoever started it (who did is the run's `trigger`, `ctx.trigger`), and
+ * its `actor.*` operands name no member, party or team, so an actor-scoped grant matches nothing (`bolt check` refuses an
+ * automation holding one).
  */
 export type Actor =
 	| Member

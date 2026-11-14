@@ -15,7 +15,7 @@ import {
 } from '../manifest.ts';
 import { DEFAULT_OUTPUT, SYSTEM_COLUMN_SET, type Pred, type Var } from '@norbital-ai/store';
 import { SYSTEM } from '../../system/index.ts';
-import { compile_var, evaluate_var, type Requestor } from '@norbital-ai/store/vars';
+import { compile_var, evaluate_var, type ActorVars } from '@norbital-ai/store/vars';
 import { or, toPred, TRUE } from './pred.ts';
 import { BoltError } from '../../protocol/errors.ts';
 
@@ -140,7 +140,7 @@ function directory(actor: EngineActor): Arm | undefined {
 		t: 'cmp',
 		field: 'id',
 		op: 'eq',
-		arg: { _tag: 'Var', text: 'requestor.id' }
+		arg: { _tag: 'Var', text: 'actor.id' }
 	};
 	return {
 		policy: KERNEL,
@@ -151,7 +151,7 @@ function directory(actor: EngineActor): Arm | undefined {
 						t: 'cmp',
 						field: 'party_id',
 						op: 'eq',
-						arg: { _tag: 'Var', text: 'requestor.party' }
+						arg: { _tag: 'Var', text: 'actor.party' }
 					}
 				])
 			: { t: 'cmp', field: 'kind', op: 'eq', arg: { _tag: 'Lit', value: 'staff' } }
@@ -264,11 +264,12 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 	};
 	const automations = new Set<string>();
 	const declared: LimitRule[] = [];
-	for (const { spec } of policySpecs) {
+	for (const { name: policyName, spec } of policySpecs) {
 		for (const k of ['apps', 'syncs', 'tools', 'mcp'] as const)
 			for (const x of spec.capabilities?.[k] ?? []) caps[k].add(x);
 		for (const x of spec.capabilities?.automations ?? []) automations.add(x);
-		for (const [k, v] of Object.entries(spec.limits ?? {})) declared.push(...limitRules(k, v));
+		for (const [k, v] of Object.entries(m.workspace.limits?.[policyName] ?? {}))
+			declared.push(...limitRules(k, v));
 	}
 	const defaults = holder.actor.kind === 'visitor' ? VISITOR_DEFAULTS : DEFAULTS;
 	const limits = [...declared, ...defaults.filter((d) => !declared.some((x) => x.key === d.key))];
@@ -357,9 +358,9 @@ export const writable_columns = (
 		(authority.models[model]?.[verb] ?? []).flatMap((arm) => arm.columns[model] ?? [])
 	);
 };
-/** What the requestor variables read off an authority. */
-export function requestorOf(authority: Authority): Requestor {
-	// the system identity (an automation run) names no person: its `requestor.*` operands match nothing
+/** What the actor variables read off an authority. */
+export function actorVarsOf(authority: Authority): ActorVars {
+	// the system identity (an automation run) names no person: its `actor.*` operands match nothing
 	const actor = authority.actor;
 	const member =
 		actor.kind === 'member' ? actor : actor.kind === 'envoy' ? (actor.linked ?? null) : null;
@@ -380,11 +381,11 @@ export function requestorOf(authority: Authority): Requestor {
 		scopes: authority.scopes
 	};
 }
-/** Requestor variables have one interpretation across SQL, live evaluation and write admission. */
+/** Actor variables have one interpretation across SQL, live evaluation and write admission. */
 export const operand_value = (operand: Var, authority: Authority): Json => {
 	const c = compile_var(operand.text);
 	if ('error' in c) throw BoltError.make('invalid', 'decode', c.error);
-	return evaluate_var(c, { requestor: requestorOf(authority) });
+	return evaluate_var(c, { actor: actorVarsOf(authority) });
 };
 
 /**

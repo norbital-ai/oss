@@ -80,10 +80,7 @@ export const indexRun = Effect.gen(function* () {
 					const now = yield* Clock.currentTimeMillis;
 					const g = yield* pureVectors(
 						guest,
-						model,
-						name,
-						dim,
-						pending.map((row) => ({ ...rows.get(k(model, row.id)), id: row.id })),
+						[{ model, name, dim, rows: pending.map((row) => ({ ...rows.get(k(model, row.id)), id: row.id })) }],
 						{
 							actor: { kind: 'system', run: id, by: { platform: INDEX } },
 							...bindingsAt(now, manifest.workspace.tz),
@@ -92,7 +89,7 @@ export const indexRun = Effect.gen(function* () {
 					);
 					if ('failed' in g) return yield* Effect.fail(g.failed);
 					const set = pending.flatMap((row, position) => {
-						const vector = g.vectors[position];
+						const vector = g.vectors[0]?.[position];
 						return vector == null
 							? []
 							: [{ id: row.id, revision: row.revision, v: JSON.stringify(vector) }];

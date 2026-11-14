@@ -11,8 +11,8 @@ A `+` file is a compiler role, default-exporting its declaration; its path is it
 
 - `+workspace.ts` `workspace(spec)`: zone, locale, currency, apps, capabilities
 - `+secrets.ts` `secrets(spec)`: secret names
-- `data/model/<name>/+model.ts` `model(spec)`: fields, reads, writes, state, search, syncs, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view
-- `data/custom_field/<name>/+definition.ts` `custom_field(spec)`, `+renderer.svelte`: value type
+- `data/model/<name>/+model.ts` `model(spec)`: fields, reads, writes, state, search, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view; `+<sync>.sync.ts` `sync('<model>', '<sync>', spec)`: a file or remote sync
+- `data/custom_field/<name>/+custom_field.ts` `custom_field(spec)`, `+renderer.svelte`: value type
 - `access_control/policy/+<name>.policy.ts` `policy(spec)`: what holders may do
 - `access_control/team/+team.ts` `team(spec)`: team handles to policies
 - `automation/+<name>.automation.ts` `automation(spec)`: job or call with its own policies; `agent` controls its use as a tool
@@ -43,16 +43,16 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 
 1. Author in order: model, access, automation or sync, page, tests. Add a page only for a task the model's table and record sheet do not cover.
 2. Edit with `workspace_write`, `workspace_edit` and `workspace_move`, one file a call, or `workspace_patch`, any number of files in one call. Edits stay in your working tree and check nothing: finish the source, then diagnose. After a schema change `workspace_generate` writes the generated migrations into the working tree; a diagnosis fails until they exist. `workspace_migrate` runs them on your own workspace's database, with SQL reads before and after, so you see what they do to real rows. Only a merge migrates live.
-3. `workspace_commit` with a message, in any state; new commits join your line on top of live. If live moved, `workspace_rebase` replays them on top of it, migrations too, so you test against it now; otherwise the merge queue replays them. Reverting to redo work never helps.
-4. `workspace_diagnose` runs the diagnosis on the working tree. `workspace_test` runs the tests; a long run goes on in the background and reports by itself. Both run by hand. Fix what they name. Tests `empty` proves nothing: every automation and refused state carries a test.
+3. `workspace_diagnose` runs the diagnosis on the working tree. `workspace_test` runs the tests; a long run goes on in the background and reports by itself. Both run by hand. Fix what they name. Tests `empty` proves nothing: every automation and refused state carries a test.
+4. `workspace_commit` with a message, in any state; new commits join your line on top of live. `workspace_rebase` replays them on top of live, migrations too, when you want to test against live as it is now; a merge never needs it. Reverting to redo work never helps.
 5. `workspace_preview` builds the last commit, serves it and opens every page. `workspace_try` runs each automation once on the preview and reads what it changed. A preview binds no integration links: a sync's decoding is proved in a test. After the merge, create its connection on live with `sys_integration.create { integration, name }`, start it, and read the rows.
-6. `workspace_merge` with the last commit, a summary and a ledger saying for each capability what implements it, or `skip: reason`. It needs no uncommitted edits and a preview of that commit, and is refused over a known failed diagnosis or failed tests. Merges land one at a time: the queue replays your commits on live as it stands, runs any diagnosis or tests that head lacks, and checks again if the replay changed anything, so you never rebase first.
+6. `workspace_merge` with the last commit, a summary and a ledger saying for each capability what implements it, or `skip: reason`. It needs no uncommitted edits and a preview of that commit, and is refused over a known failed diagnosis or failed tests. Merges land one at a time: the queue replays your commits on live as it stands, runs any diagnosis or tests that head lacks, and checks again if the replay changed anything.
 
 ## Rules
 
 - A model exposes guarded verbs only. A business operation is an automation.
 - A policy can only grant a verb the model declares; it filters rows, never shape.
-- An automation runs with its declared `policies`, never its starter's; `requestor.*` there matches nothing.
+- An automation runs with its declared `policies`, never its starter's; `actor.*` there matches nothing.
 - Effectful bodies are `function*` and `yield*` their `ctx` Effects.
 - Decimals in policy and model code use `dec` values from the decimal module, never plain numbers.
 - Named constraints take arrays for `unique` and `per`. Mark one unique constraint `import_key: true` for matching imports. Computed expressions live on fields; physical and search indexes live under `indexes`.

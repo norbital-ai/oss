@@ -4,8 +4,7 @@
 // dropped); a model is printed as its three parts (`split_model`). No part reads a source file, so a body typed from the
 // index is never circular; the path-derived parts (pages, groups, skills) are unions of names.
 import { Effect, FileSystem, Path, Predicate } from 'effect';
-import { discover, type Discovered } from './discover.ts';
-import { writeDeclarations } from './declarations.ts';
+import type { Discovered } from './discover.ts';
 import { layer_models, literal, split_model, SYSTEM } from '@norbital-ai/bolt/tooling';
 import { type Manifest, spec } from './load.ts';
 
@@ -261,15 +260,11 @@ declare module '*?bytes' {
 /** Brands \`{ id, name, mime }\` as a stored-file handle for guest writes (prelude; not \`/client\`). */
 declare function file_ref(file: { readonly id: string; readonly name: string; readonly mime: string }): import('@norbital-ai/bolt').FileRef;
 `;
-export const writeTypeSetup = Effect.fn('bolt.writeTypeSetup')(function* (
-	root: string,
-	files?: readonly Discovered[]
-) {
+export const writeTypeSetup = Effect.fn('bolt.writeTypeSetup')(function* (root: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const dir = path.join(root, '.norbital');
 	yield* fs.makeDirectory(dir, { recursive: true });
-	yield* writeDeclarations(root, files ?? (yield* discover(root)).files);
 	for (const [file, text] of [
 		['tsconfig.json', TSCONFIG],
 		['bolt.d.ts', BOLT_DTS]

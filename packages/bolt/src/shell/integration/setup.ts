@@ -8,13 +8,8 @@ import type { ActOutcome } from '../../engine/contracts.ts';
 import type { Component } from 'svelte';
 import type { ShellPageContext } from '../runtime.ts';
 import type { Json } from '../../decl/values.ts';
-import {
-	local_text,
-	type ImportStartInput,
-	type InstanceStatus,
-	type LocalText,
-	type ProviderChoice
-} from '../../protocol/instance-status.ts';
+import type { ImportStartInput, InstanceStatus, LocalText, ProviderChoice } from '@norbital-ai/host-api';
+import { local_text } from '../../protocol/instance-status.ts';
 
 /** What an instance's setup view is given (a definition's `+integration.svelte` too): the host is reached through the verbs. */
 export type IntegrationSetupProps = {

@@ -44,35 +44,31 @@ export default bind_system_model('sys_envoy')({
 	table: { primary: 'uuid' },
 	outputs: { default: { fields: 'all' } },
 	create: {
-		columns: {
-			fields: [
-				'name',
-				'audience',
-				'task',
-				'policies',
-				'group_messages',
-				'delegation',
-				'triage',
-				'triage_scope',
-				'dm'
-			]
-		}
+		fields: [
+			'name',
+			'audience',
+			'task',
+			'policies',
+			'group_messages',
+			'delegation',
+			'triage',
+			'triage_scope',
+			'dm'
+		]
 	},
 	update: {
-		columns: {
-			fields: [
-				'name',
-				'audience',
-				'task',
-				'policies',
-				'group_messages',
-				'delegation',
-				'triage',
-				'triage_scope',
-				'dm',
-				'active'
-			]
-		}
+		fields: [
+			'name',
+			'audience',
+			'task',
+			'policies',
+			'group_messages',
+			'delegation',
+			'triage',
+			'triage_scope',
+			'dm',
+			'active'
+		]
 	},
 	delete: {}
 });

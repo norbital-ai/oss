@@ -1,8 +1,4 @@
-import type {
-	ImportStart,
-	ImportStartInput,
-	ProviderChoice
-} from '../../protocol/instance-status.ts';
+import type { ImportStart, ImportStartInput, ProviderChoice } from '@norbital-ai/host-api';
 
 const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 export const importDate = (at: string, timeZone: string): string => {

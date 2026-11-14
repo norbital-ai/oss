@@ -4,13 +4,13 @@ import { TestClock } from 'effect/testing';
 import { Callables, Approvals, Runs } from '../src/engine/services.ts';
 import { acquire_engine } from './effect-engine.ts';
 import type { EngineManifest, GrantData } from '../src/engine/manifest.ts';
-import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
-import { db_error } from '../src/engine/db/wire.ts';
+import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
+import { db_error } from '@norbital-ai/host-api';
 import type { PGlite } from '@electric-sql/pglite';
 import type { Authority, Outcome } from '../src/engine/contracts.ts';
 type Engine = Effect.Success<ReturnType<typeof acquire_engine>>;
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { NOW, TODAY } from './write-fixture.ts';
 import { actor_ref } from '../src/engine/access/actor.ts';
@@ -63,7 +63,7 @@ const guest = program(`export default {
   verdict: function*(_changes,ctx){ return ctx.approve({ steps: [{ name: 'Finance', teams: ['Finance'] }] }); }
  } } } } }
 };`);
-let pg: PGlite, db: TenantDb, e: Engine, sales: Authority, finance: Authority;
+let pg: PGlite, db: TenantDbShape, e: Engine, sales: Authority, finance: Authority;
 const exec = (text: string) => Effect.tryPromise({ try: () => pg.exec(text), catch: db_error });
 const view = (...args: Parameters<ReturnType<typeof Approvals.of>['view']>) =>
 	Context.get(e, Approvals)
@@ -109,7 +109,7 @@ const fixture = Layer.effectDiscard(
 		// runs are due at the act's NOW; the queue claims by the test clock
 		yield* TestClock.setTime(Date.parse(NOW));
 		pg = yield* TestDb.open(manifest);
-		db = PgliteDb.make(pg);
+		db = TenantDb.typed(PgliteDb.make(pg));
 		yield* exec(
 			`INSERT INTO sys_user(id,name,team) VALUES('${salesId}','Sales','Sales'),('${financeId}','Finance','Finance');INSERT INTO orders(id,title) VALUES('${left}','Left'),('${right}','Right')`
 		);

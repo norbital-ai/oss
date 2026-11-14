@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { Effect, Schema } from 'effect';
-import { FacilityFailure } from '@norbital-ai/bolt/errors';
+import { FacilityFailure } from '@norbital-ai/host-api';
 const failure = (error: unknown) =>
 	new FacilityFailure({
 		kind: 'upstream',

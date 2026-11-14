@@ -9,13 +9,13 @@ import { afterAll } from 'vitest';
 import { Context, Effect, Exit, Layer, Option, Result, Schema, Scope, Stream } from 'effect';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { Agents } from '../src/engine/services.ts';
-import { Ai, type AiEvent } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { Ai } from '../src/engine/ports.ts';
+import type { AiEvent } from '@norbital-ai/host-api';
+import { type AiResponse, Port } from '@norbital-ai/host-api';
 import { ActReply, AgentRow, WireError } from '../src/protocol/schema.ts';
 import { ActRefused } from '../src/decl/errors.ts';
 import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiResponse } from '../src/engine/contracts.ts';
 import { transcriptRow } from '../src/engine/agent/schema.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
 import { KitInvalid, respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
@@ -99,14 +99,14 @@ const build = Effect.gen(function* () {
 		infer: (req) =>
 			Stream.unwrap(
 				Effect.sync(() => {
-					answers.push(
-						req.system?.includes('independent verification') === true ? 'verdict' : 'turn'
-					);
+					const last = req.messages.at(-1)?.content;
+					const verifying = typeof last === 'string' && last.startsWith('Verify the plan below');
+					answers.push(verifying ? 'verdict' : 'turn');
 					return Stream.fromIterable<AiEvent>([
 						{
 							_tag: 'Response',
 							response: reply(
-								req.system?.includes('independent verification') === true
+								verifying
 									? JSON.stringify({ complete: true, gaps: [], summary: 'ok' })
 									: 'ok'
 							)

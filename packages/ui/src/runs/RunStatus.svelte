@@ -1,6 +1,6 @@
 <!--
 @component
-The live status of one automation run: queued, running with its progress, or its result or error.
+The live status of one automation run: queued, running with its progress, waiting until it resumes, or its result or error.
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -26,6 +26,7 @@ The live status of one automation run: queued, running with its progress, or its
 	import { watch } from '../read/live.svelte.js';
 	import { humanize, msg, catalogText } from '../text/messages.js';
 	import { progressOf, runFiles } from './facts.js';
+	import { format } from '../kinds/kind.js';
 	import ReadGate from '../read/ReadGate.svelte';
 
 	let { ctx, automation, run, title, download = false }: RunStatusProps = $props();
@@ -84,6 +85,16 @@ The live status of one automation run: queued, running with its progress, or its
 								>{msg(bolt, 'run.attempt', { n: r.attempt_count ?? 0 })}</span
 							>{/if}
 					</div>
+					{#if r.status === 'waiting'}<p class="text-muted-foreground text-xs">
+							{r.due_at === undefined || Number.isNaN(Date.parse(r.due_at))
+								? msg(bolt, 'run.waiting')
+								: msg(bolt, 'run.waitingUntil', {
+										at: format({ kind: 'instant' }, r.due_at, {
+											locale: bolt.locale,
+											zone: ctx.ui.kinds.zone
+										})
+									})}
+						</p>{/if}
 					{#if p !== null && r.status === 'running'}<progress class="h-1 w-full" max="1" value={p}
 						></progress>{/if}
 					{#if r.error}<p role="alert" class="text-destructive text-xs">

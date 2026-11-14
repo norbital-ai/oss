@@ -2,10 +2,11 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { act, type ActRequest } from '../src/engine/write/act.ts';
+import { type ActRequest } from '../src/engine/write/act.ts';
 import { restore_source, seed } from '../src/engine/write/seed.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
+import { act_one } from './support/act-one.ts';
 
 const PARENT = '0199a000-0000-7000-8000-000000000001';
 const CHILD = '0199a000-0000-7000-8000-000000000002';
@@ -67,14 +68,13 @@ it.effect('writes models named after Postgres types using their actual relation 
 			input: Json,
 			on_conflict?: 'update' | 'keep'
 		) =>
-			act(
+			act_one(
 				{ manifest, db },
 				{
 					model,
 					verb,
 					input,
 					on_conflict,
-					mode: { _tag: 'Direct' },
 					key: `rowtype-${serial}`,
 					invocationId: `rowtype-${serial++}`,
 					issuedAt: NOW,

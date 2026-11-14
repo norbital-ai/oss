@@ -46,7 +46,7 @@ const manifest: EngineManifest = {
 			grants: {
 				documents: {
 					outputs: {
-						default: { scopes: { documents: { owner: { eq: { var: 'requestor.id' } } } } }
+						default: { scopes: { documents: { owner: { eq: { var: 'actor.id' } } } } }
 					}
 				}
 			}

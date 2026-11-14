@@ -17,7 +17,9 @@ import {
 	Reads,
 	Wake,
 	Links,
+	Telemetry,
 	type CallerContext,
+	type InvocationEvents,
 	type CallResult,
 	type StartRequest,
 	type SyncControlRequest,
@@ -54,9 +56,9 @@ import { readsAny, viewOutput } from '../access/authority.ts';
 
 import * as ir from '../../protocol/reads.ts';
 import { constraintIndex } from '../schema/plan.ts';
-import { coalescing, memo_reads } from '../query/engine.ts';
-import { act, transformBridge, type Verb, type WriteEngine } from '../write/act.ts';
-import { executeCommit, compile_outcome_record, CommitAnswer, committed, type Commit, type RateCharge } from '../write/commit.ts';
+import { coalescing } from '../query/engine.ts';
+import { act, dry_run, transformBridge, type Verb, type WriteEngine } from '../write/act.ts';
+import { compileCommit, executeCommit, compile_outcome_record, CommitAnswer, committed, type Commit, type RateCharge } from '../write/commit.ts';
 import { settleCommit } from '../write/result.ts';
 import { canonical, sha256_hex } from '@norbital-ai/store';
 import { Chain, decided, KEY_REUSE, storedOutcome } from '../write/sql.ts';
@@ -64,15 +66,13 @@ import { decodeInput, decodeAutomationInput, type Decoded } from './decode.ts';
 export { parse_callable, decode_acts, VERBS } from './parse.ts';
 
 type Caller = CallerContext & {};
-type Sink = (planned: PlannedCommit) => void;
-type ActsRequest = import('../services.ts').ActsRequest & {
-	sink?: Sink | undefined;
-};
+type ActsRequest = import('../services.ts').ActsRequest;
 type CallablesConfig = {
 	engine: WriteEngine & { read: ReadsShape['run'] };
 	live: ShapeOf<typeof Live>;
 	wake: ShapeOf<typeof Wake>;
 	links: ShapeOf<typeof Links>;
+	telemetry: ShapeOf<typeof Telemetry>;
 };
 
 type Refused = Extract<Outcome, { kind: 'refused' }>;
@@ -80,12 +80,12 @@ type Planned = PlannedCommit;
 /** Planned generated verbs share their outer batch's commit and pending created rows. */
 type Recorder = {
 	commits: Planned[];
-	issuedAt: string;
-	db: TenantDbShape;
 	/** Rows created by earlier planned verbs, keyed `model␀id`. */
 	pending: Map<string, RowData>;
+	/** Whether any act ran guest code: only a refusal guest code decided is recorded for a retry to answer. */
+	guest: boolean;
 };
-type Performed = { output: Json; preview?: Extract<Outcome, { kind: 'committed' }> } | { outcome: Outcome; guest: boolean } | { error: BoltError };
+type Performed = { output: Json; preview?: true } | { outcome: Outcome; guest: boolean } | { error: BoltError };
 
 const refused = (code: Refused['code'], message: string, field?: string): Refused => ({
 	kind: 'refused',
@@ -134,24 +134,25 @@ export const startCharge = (automation: string, authority: Authority): Charge =>
 	...parse_rate(START_LIMIT)
 });
 
-function makeCallables(config: CallablesConfig): CallablesShape {
-	const e = config.engine,
-		m = e.manifest,
+/** What a batch commits through: the write engine over the request's tenant, the live sequence and the commit's publication. */
+export type BatchEngine = WriteEngine & {
+	readonly v: Effect.Effect<number>;
+	readonly publish: (answer: CommitAnswer) => Effect.Effect<number>;
+};
+/**
+ * The one act pipeline: every generated verb, however it is called, is a batch planned by `act` and committed here.
+ * Each act records into the one commit; the first (in order) that does not commit is the outcome, recorded (it ran
+ * guest code). Independent acts are planned at once over one coalesced reader — one round trip, one statement per step
+ * for the whole batch. A batch that creates a row under a writer-minted `id` is planned in order instead, each act
+ * seeing the rows the acts before it create, so a later act's ref may name one.
+ */
+export const commitActs = (
+	e: BatchEngine,
+	r: ActsRequest,
+	log?: InvocationEvents
+): Effect.Effect<CallResult, import('../errors.ts').EngineError> => {
+	const m = e.manifest,
 		cat = catalog_of(m);
-	// only manual starts (the `start` callable, Run now, the agent) come through here; cron and model effect
-	// runs, and the acts a run's body performs, are never rate limited
-	const starts = new RateWindows();
-
-	/** Rule 33: a start or schedule needs the automation in `capabilities.automations`; its input decodes. */
-	function startable(name: string, auth: Authority): Refused | null {
-		if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not start runs.');
-		const spec = m.automations[name];
-		if (spec === undefined) return refused('not_found', `'${name}' is not an automation.`);
-		if (!auth.admin && !auth.automations.includes(name))
-			return refused('forbidden', `You may not start '${name}'.`);
-		return null;
-	}
-
 	/** One generated verb through the act pipeline, its planned commit recorded (`sink`), its creates readable by later acts. */
 	const recordVerb = Effect.fn('Callables.recordVerb')(function* (
 		model: string,
@@ -159,31 +160,45 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		input: Json,
 		c: Caller,
 		rec: Recorder,
-		on_conflict?: NativeWriteConflict,
-		batch?: { db: TenantDbShape; into: (planned: Recorder['commits'][number]) => void }
+		on_conflict: NativeWriteConflict | undefined,
+		batch: { db: TenantDbShape; into: (planned: Recorder['commits'][number]) => void },
+		one: Pick<ActsRequest, 'restored' | 'sync'>
 	): Effect.fn.Return<Outcome, import('../errors.ts').EngineError> {
 		let planned: Planned | undefined;
-		const result = yield* act(
-			{ ...e, db: batch?.db ?? rec.db },
+		const guest = e.guest;
+		const outcome = yield* act(
+			{
+				...e,
+				db: batch.db,
+				...(log === undefined ? {} : { log }),
+				...(guest === undefined
+					? {}
+					: {
+							guest: {
+								invoke: (invocation, bridge) => (rec.guest = true, guest.invoke(invocation, bridge)),
+								invokeEach: (invocation, parts, bridge) => (rec.guest = true, guest.invokeEach(invocation, parts, bridge)),
+								invokeProgram: (program, invocation, bridge) => (rec.guest = true, guest.invokeProgram(program, invocation, bridge))
+							}
+						})
+			},
 			{
 				model,
 				verb,
 				input,
 				key: c.invocationId,
-				issuedAt: rec.issuedAt,
 				authority: c.authority,
 				observed: c.observed,
 				readGuards: c.readGuards,
 				bindings: c.bindings,
 				invocationId: c.invocationId,
 				on_conflict,
+				...(one.restored === undefined ? {} : { restored: one.restored }),
 				mode: {
-					_tag: 'Record',
+					...(one.sync === undefined ? {} : { sync: one.sync }),
 					pending: rec.pending,
 					sink: (value) => {
 						planned = value;
-						if (batch === undefined) rec.commits.push(value);
-						else batch.into(value);
+						batch.into(value);
 						for (const write of value.commit.writes)
 							if (write.op === 'create')
 								rec.pending.set(`${write.model}\u0000${write.id}`, {
@@ -197,7 +212,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			}
 		);
 		// The recorder already simulates successful writes until its outer statement; a routed one too (it commits there).
-		if (result.outcome.kind === 'pending_approval' && planned !== undefined)
+		if (outcome.kind === 'pending_approval' && planned !== undefined)
 			return {
 				kind: 'committed',
 				output: planned.commit.output,
@@ -207,79 +222,8 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					revision: write.op === 'create' ? 1 : write.revision + 1
 				}))
 			};
-		return result.outcome;
+		return outcome;
 	});
-
-	/**
-	 * Each act records into the one commit; the first (in order) that does not commit is the outcome, recorded (it ran
-	 * guest code). The acts are planned at once over one coalesced reader — one round trip, one statement per step for
-	 * the whole batch — so they are independent: one names no row another creates (the check sees the stored rows).
-	 */
-	const acts = (r: ActsRequest): Effect.Effect<CallResult, import('../errors.ts').EngineError> => {
-		const input = r.outputs === undefined ? acts_json(r.acts) : { acts: acts_json(r.acts), outputs: r.outputs };
-		return atomic(
-			{ ...r, input },
-			r.name,
-			input,
-			Effect.fn('Callables.body')(function* (rec) {
-				const roots = r.acts.reduce((count, act) => {
-					if (EffectArray.isArray(act.input)) return count + act.input.length;
-					if (!Predicate.isObject(act.input)) return count;
-					const rows = act.verb === 'import' ? act.input['rows'] : act.verb === 'erase' ? act.input['target'] : undefined;
-					return count + (EffectArray.isArray(rows) ? rows.length : rows === undefined ? 0 : 1);
-				}, 0);
-				if (roots > LIMITS.act.rows || utf8Bytes(JSON.stringify(input)) > LIMITS.act.inputBytes)
-					return { outcome: refused('overflow', 'The batch exceeds its native input budget.'), guest: false };
-				const previews = r.acts.filter((act) => act.verb === 'import' &&
-					Predicate.isObject(act.input) && act.input['dry_run'] === true);
-				const preview = previews.length > 0 && previews.length === r.acts.length;
-				const invalid = r.acts.findIndex((act) =>
-					act.verb === 'upsert' ? act.on_conflict === undefined : act.on_conflict !== undefined
-				);
-				if (invalid >= 0)
-					return {
-						outcome: refused(
-							'invalid_input',
-							'A batch upsert requires on_conflict; other verbs do not take it.',
-							`${invalid}.on_conflict`
-						),
-						guest: false
-					};
-				const db = yield* coalescing(e.db, r.acts.length);
-				const plans: (Recorder['commits'][number] | undefined)[] = r.acts.map(() => undefined);
-				// each act its own invocation: its minted ids are its own (two creates of one model mint apart)
-				const outcomes = yield* Effect.forEach(
-					r.acts,
-					(a, i) =>
-						recordVerb(
-							a.model,
-							a.verb,
-							a.input,
-							{ ...r, observed: a.observed, invocationId: `${r.invocationId}/${i}` },
-							rec,
-							a.on_conflict,
-							{
-								db,
-								into: (p) => {
-									plans[i] = p;
-								}
-							}
-						).pipe(Effect.ensuring(db.done)),
-					{ concurrency: 'unbounded' }
-				);
-				const bad = outcomes.find((o) => o.kind !== 'committed');
-				if (bad !== undefined) return { outcome: bad, guest: !preview };
-				for (const p of plans) if (p !== undefined) rec.commits.push(p);
-				const outputs = outcomes.map((outcome) => outcome.kind === 'committed' ? outcome.output : null);
-				const output = r.outputs === undefined ? outputs
-					: Object.fromEntries(r.outputs.map((name, index) => [name, outputs[index] ?? null]));
-				return { output, ...(preview ? { preview: {
-					kind: 'committed' as const, output,
-					records: outcomes.flatMap((outcome) => outcome.kind === 'committed' ? outcome.records : [])
-				} } : {}) };
-			})
-		);
-	};
 
 	/** One act of recorded writes under one idempotency key: `body` records into the recorder, committed as one statement. */
 	const atomic = Effect.fn('Callables.atomic')(function* (
@@ -289,13 +233,12 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			retry?: boolean | undefined;
 			rate?: readonly RateCharge[] | undefined;
 			input: Json;
-			sink?: Sink | undefined;
 		},
 		callable: string,
 		input: Json,
 		body: (rec: Recorder) => Effect.Effect<Performed, import('../errors.ts').EngineError>
 	): Effect.fn.Return<CallResult, import('../errors.ts').EngineError> {
-		const currentV = yield* config.live.v;
+		const currentV = yield* e.v;
 		const none = (outcome: Outcome, error?: BoltError): CallResult => ({
 			outcome,
 			captured: [],
@@ -320,11 +263,8 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			const previous = yield* stored();
 			if (previous !== null) return none(previous);
 		}
-		// One batch owns its first read answers across replay.
-		const db = yield* memo_reads(yield* coalescing(e.db));
 		const common = { key, digest, issuedAt: r.issuedAt, rate: r.rate ?? [] };
 		const record = Effect.fn('Callables.recordOutcome')(function* (outcome: Outcome) {
-			if (r.sink !== undefined) return none(outcome);
 			const answer = (yield* e.db.returning(
 				CommitAnswer,
 				compile_outcome_record(common, outcome)
@@ -335,12 +275,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		// a serialization failure replays the body once with the same clock and minted ids
 		return yield* replayOnce<CallResult, import('../errors.ts').EngineError, never>(
 			Effect.fn('Callables.replay')(function* (replay) {
-				const rec: Recorder = {
-					commits: [],
-					issuedAt: r.issuedAt,
-					db,
-					pending: new Map()
-				};
+				const rec: Recorder = { commits: [], pending: new Map(), guest: false };
 				const p = yield* body(rec);
 				if ('error' in p) {
 					// the wire outcome is only `unknown`: the cause is logged here and rides `CallResult.error`
@@ -350,7 +285,6 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					return none({ kind: 'unknown', invocation: r.invocationId }, p.error);
 				}
 				if ('outcome' in p) return p.guest ? yield* record(p.outcome) : none(p.outcome);
-				if (p.preview !== undefined) return none(p.preview);
 				const writes = rec.commits.flatMap((plan) =>
 					plan.commit.writes.map((write) => ({
 						...write,
@@ -401,6 +335,9 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 						plan.commit.erasures ?? (plan.commit.erase === undefined ? [] : [plan.commit.erase])
 				);
 
+				const unchanged = rec.commits.flatMap((x) => x.commit.unchanged ?? []);
+				const pieces = rec.commits.flatMap((x) => x.commit.pieces ?? []);
+				const restored = rec.commits.flatMap((x) => x.commit.restored ?? []);
 				const commit: Commit = {
 					...common,
 					now: r.bindings.now,
@@ -408,39 +345,31 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					actor,
 					writer: writerOf(r.authority),
 					writes,
-					owned: rec.commits.flatMap((x) => x.commit.owned),
 					fingerprints: rec.commits.flatMap((x) => x.commit.fingerprints ?? []),
 					...(r.readGuards === undefined ? {} : { readGuards: r.readGuards }),
 					erasures,
 					// each act's queued platform runs (a stale embedding's `bolt.embed`) commit with the batch
 					runs: rec.commits.flatMap((x) => x.commit.runs),
-					notices: rec.commits.flatMap((x) => x.commit.notices),
 					output: p.output,
+					// every field a recorded act plans reaches the one statement, so a verb answers alike whoever calls it
+					...(writes.length === 0 && unchanged.length > 0 ? { unchanged } : {}),
+					...(restored.length === 0 ? {} : { restored }),
+					...(pieces.length === 0 ? {} : { pieces: (c) => pieces.forEach((piece) => piece(c)) }),
+					...(rec.commits.some((x) => x.commit.joined === true) ? { joined: true as const } : {}),
 					...(approval === undefined ? {} : { approval }),
 					...(resubmits[0] === undefined ? {} : { resubmit: resubmits[0] })
 				};
-				if (r.sink !== undefined) {
-					r.sink({
-						commit,
-						...(tables.length > 0 ? { lock: { tables, mode: 'SHARE ROW EXCLUSIVE' as const } } : {})
-					});
-					return none({
-						kind: 'committed',
-						output: p.output,
-						records: writes.map((write) => ({
-							model: write.model,
-							id: write.id,
-							revision: write.op === 'create' ? 1 : write.revision + 1
-						}))
-					});
-				}
+				const lock = tables.length > 0 ? { tables, mode: 'SHARE ROW EXCLUSIVE' as const } : undefined;
+				if (p.preview === true)
+					return none(yield* dry_run(e.db, [yield* compileCommit(m, cat, commit)], lock, yield* constraintIndex(m)));
+				if (log !== undefined) yield* log.emit('info', 'act.settled', { callable, writes: writes.length });
 				const result = yield* Effect.result(
 					executeCommit(
 						e.db,
 						m,
 						cat,
 						commit,
-						tables.length > 0 ? { tables, mode: 'SHARE ROW EXCLUSIVE' } : undefined
+						lock
 					)
 				);
 				if (Result.isFailure(result)) {
@@ -448,17 +377,119 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					const settle = decision.record
 						? record(decision.outcome)
 						: Effect.succeed(none(decision.outcome));
-					if (decision.replay) return yield* replay(settle);
+					// a keep upsert that lost a race to create its row replays and finds it kept
+					const lost = decision.outcome.kind === 'refused' && decision.outcome.code === 'unique' &&
+						rec.commits.some((x) => x.commit.kept === true);
+					if (decision.replay || lost) return yield* replay(settle);
 					return yield* settle;
 				}
-				return yield* settleCommit(result.success[0], stored, (answer) => committed(answer).pipe(
-					Effect.provideService(Live, config.live),
-					Effect.provideService(Wake, config.wake),
-					Effect.provideService(Links, config.links)
-				), { code: 'internal', message: 'the commit returned no answer' });
+				return yield* settleCommit(result.success[0], stored, e.publish, {
+					code: 'internal',
+					message: 'the commit returned no answer'
+				});
 			})
 		);
 	});
+
+	const input = r.outputs === undefined ? acts_json(r.acts) : { acts: acts_json(r.acts), outputs: r.outputs };
+	if (r.acts.length !== 1 && (r.restored !== undefined || r.sync !== undefined))
+		return Effect.fail(BoltError.make('invalid', 'decode', 'A restore or sync page is one act.'));
+	// one authority admits, plans and queues a sync page's effects: the sync's workspace authority, outside any run
+	if (r.sync !== undefined && (!r.authority.admin || r.authority.run !== undefined))
+		return Effect.fail(BoltError.make('invalid', 'decode', 'A sync page is written as its sync, an admin outside any run.'));
+	return atomic(
+		{ ...r, input },
+		r.name,
+		input,
+		Effect.fn('Callables.body')(function* (rec) {
+			const roots = r.acts.reduce((count, act) => {
+				if (EffectArray.isArray(act.input)) return count + act.input.length;
+				if (!Predicate.isObject(act.input)) return count;
+				const rows = act.verb === 'import' ? act.input['rows'] : act.verb === 'erase' ? act.input['target'] : undefined;
+				return count + (EffectArray.isArray(rows) ? rows.length : rows === undefined ? 0 : 1);
+			}, 0);
+			if (roots > LIMITS.act.rows || utf8Bytes(JSON.stringify(input)) > LIMITS.act.inputBytes)
+				return { outcome: refused('overflow', 'The batch exceeds its native input budget.'), guest: false };
+			const previews = r.acts.filter((act) => act.verb === 'import' &&
+				Predicate.isObject(act.input) && act.input['dry_run'] === true);
+			const preview = previews.length > 0 && previews.length === r.acts.length;
+			if (previews.length > 0 && !preview)
+				return {
+					outcome: refused('invalid_input', 'A dry-run import is previewed in a batch of dry runs only.'),
+					guest: false
+				};
+			const invalid = r.acts.findIndex((act) =>
+				act.verb === 'upsert' ? act.on_conflict === undefined : act.on_conflict !== undefined
+			);
+			if (invalid >= 0)
+				return {
+					outcome: refused(
+						'invalid_input',
+						'A batch upsert requires on_conflict; other verbs do not take it.',
+						`${invalid}.on_conflict`
+					),
+					guest: false
+				};
+			// a writer-minted id is the only way a later act names a row an earlier one creates
+			const ordered = r.acts.length > 1 && r.acts.some((act) => act.verb === 'create' &&
+				EffectArray.isArray(act.input) && act.input.some((row) => Predicate.isObject(row) && typeof row['id'] === 'string'));
+			const db = yield* coalescing(e.db, ordered ? undefined : r.acts.length);
+			const plans: (Recorder['commits'][number] | undefined)[] = r.acts.map(() => undefined);
+			// each act its own invocation: its minted ids are its own (two creates of one model mint apart)
+			const outcomes = yield* Effect.forEach(
+				r.acts,
+				(a, i) =>
+					recordVerb(
+						a.model,
+						a.verb,
+						a.input,
+						{ ...r, observed: a.observed, invocationId: `${r.invocationId}/${i}` },
+						rec,
+						a.on_conflict,
+						{
+							db,
+							into: (p) => {
+								plans[i] = p;
+							}
+						},
+						r
+					).pipe(Effect.ensuring(db.done)),
+				{ concurrency: ordered ? 1 : 'unbounded' }
+			);
+			const bad = outcomes.find((o) => o.kind !== 'committed');
+			if (bad !== undefined) return { outcome: bad, guest: rec.guest && !preview };
+			for (const p of plans) if (p !== undefined) rec.commits.push(p);
+			const outputs = outcomes.map((outcome) => outcome.kind === 'committed' ? outcome.output : null);
+			const output = r.outputs === undefined ? outputs
+				: Object.fromEntries(r.outputs.map((name, index) => [name, outputs[index] ?? null]));
+			return { output, ...(preview ? { preview: true as const } : {}) };
+		})
+	);
+};
+
+function makeCallables(config: CallablesConfig): CallablesShape {
+	const e = config.engine,
+		m = e.manifest,
+		cat = catalog_of(m);
+	// only manual starts (the `start` callable, Run now, the agent) come through here; cron and model effect
+	// runs, and the acts a run's body performs, are never rate limited
+	const starts = new RateWindows();
+	const publish = (answer: CommitAnswer) =>
+		committed(answer).pipe(
+			Effect.provideService(Live, config.live),
+			Effect.provideService(Wake, config.wake),
+			Effect.provideService(Links, config.links)
+		);
+
+	/** Rule 33: a start or schedule needs the automation in `capabilities.automations`; its input decodes. */
+	function startable(name: string, auth: Authority): Refused | null {
+		if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not start runs.');
+		const spec = m.automations[name];
+		if (spec === undefined) return refused('not_found', `'${name}' is not an automation.`);
+		if (!auth.admin && !auth.automations.includes(name))
+			return refused('forbidden', `You may not start '${name}'.`);
+		return null;
+	}
 
 	const admitAutomation = Effect.fn('Callables.admitAutomation')(function* (
 		r: Omit<AutomationRequest, 'input'> & { readonly inputs: readonly Json[] }
@@ -621,7 +652,23 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			sync_control(request)
 		),
 		acts: (request: ActsRequest) =>
-			audited(
+			Effect.scoped(Effect.gen(function* () {
+				const log = yield* config.telemetry.open({ invocation: request.invocationId });
+				// whether the batch sent a statement that may carry its audit receipt: a refusal decided before any
+				// statement settles its audit operation without reading the tenant
+				let issued = false;
+				const tracked = TenantDb.typed({
+					...e.db,
+					write: (statement, lock) => Effect.suspend(() => {
+						issued = true;
+						return e.db.write(statement, lock);
+					}),
+					transaction: (batch) => Effect.suspend(() => {
+						issued = true;
+						return e.db.transaction(batch);
+					})
+				});
+				return yield* audited(
 				e.db,
 				{
 					category: 'write',
@@ -635,8 +682,10 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					),
 					digest: sha256_hex(canonical({ callable: request.name, input: request.outputs === undefined ? request.acts : { acts: request.acts, outputs: request.outputs } }))
 				},
-				acts(request)
-			),
+				commitActs({ ...e, db: tracked, v: config.live.v, publish }, request, log),
+				() => issued
+			);
+			})),
 		start: (request: StartRequest) =>
 			audited(
 				e.db,
@@ -690,7 +739,8 @@ export const CallablesLive = Layer.effect(
 			reader = yield* Reads;
 		const live = yield* Live,
 			wake = yield* Wake,
-			links = yield* Links;
+			links = yield* Links,
+			telemetry = yield* Telemetry;
 		const native: WriteEngine & { read: ReadsShape['run'] } = {
 			manifest,
 			db,
@@ -703,7 +753,8 @@ export const CallablesLive = Layer.effect(
 			engine: native,
 			live,
 			wake,
-			links
+			links,
+			telemetry
 		});
 		return Callables.of({
 			admitAutomation: callables.admitAutomation,

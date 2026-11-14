@@ -1,5 +1,5 @@
 // Literal names generated from the type corpus declarations; local declaration probes add their named shapes.
-import type { Check, Verify } from '../../src/index.ts';
+import type { Check, Verify } from '../../src/decl/verify.ts';
 
 declare module '../../src/index.ts' {
 	interface Names {
@@ -878,7 +878,7 @@ declare module '../../src/index.ts' {
 				grants: {
 					orders: {
 						outputs: {
-							default: { history: true; where: { owner: { eq: { var: 'requestor.id' } } } };
+							default: { history: true; where: { owner: { eq: { var: 'actor.id' } } } };
 						};
 						create: {
 							columns: {
@@ -897,7 +897,7 @@ declare module '../../src/index.ts' {
 					customers: {
 						outputs: {
 							directory: {
-								where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } };
+								where: { orders: { some: { owner: { eq: { var: 'actor.id' } } } } };
 							};
 						};
 						update: {};
@@ -906,12 +906,12 @@ declare module '../../src/index.ts' {
 					sites: {
 						outputs: {
 							summary: {
-								where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } };
+								where: { customer: { in: { var: 'actor.scopes.sales_rep' } } };
 							};
 						};
 					};
 					sys_user: {
-						outputs: { directory: { where: { team: { in: { var: 'requestor.team_tree' } } } } };
+						outputs: { directory: { where: { team: { in: { var: 'actor.team_tree' } } } } };
 					};
 				};
 				capabilities: {
@@ -920,35 +920,6 @@ declare module '../../src/index.ts' {
 					mcp: readonly ['erp'];
 					automations: readonly ['nightly', 'orders_submit', 'orders_renote'];
 					syncs: readonly ['products.ledger'];
-				};
-				limits: {
-					act: '600/min';
-					agent: {
-						rate: '100/h';
-						per: 'actor';
-					};
-					read: readonly [
-						{
-							rate: '3000/min';
-							per: 'actor';
-						},
-						{
-							rate: '600/min';
-							per: 'ip';
-						}
-					];
-					convert: '10/min';
-					'envoys.receive': readonly [
-						{
-							rate: '8/min';
-							per: 'sender';
-						},
-						{
-							rate: '300/min';
-							per: 'subject';
-						}
-					];
-					'envoys.unrecognised': '1/15min';
 				};
 			};
 			// reads the narrow logistics output of every order
@@ -977,7 +948,7 @@ declare module '../../src/index.ts' {
 				to: 'sys_user';
 				optional: true;
 				default: {
-					var: 'requestor.id';
+					var: 'actor.id';
 				};
 			};
 			'orders.ledger': {

@@ -1,5 +1,5 @@
 // `Form` and `Field`: generated from a model's exposure, drafts kept until the outcome, only changed fields sent.
-export { default as Field, type FieldEditor, type FieldProps } from './field.svelte';
+export { default as Field, type FieldEditor, type FieldProps, type FieldView } from './field.svelte';
 export { default as DescriptionHint } from './description-hint.svelte';
 export { default as Section, type RecordSection, type SectionProps } from './section.svelte';
 /** Edits a model row or an automation's typed input using permitted fields; drafts survive pending work and updates submit only changed values. */

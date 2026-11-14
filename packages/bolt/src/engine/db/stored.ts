@@ -5,7 +5,8 @@ import { decimal_text, equal_json } from '@norbital-ai/store/kind';
 import type { Catalog, FieldInfo } from '@norbital-ai/store';
 import type { Json } from '../../decl/values.ts';
 import type { Captured, RowData } from '../contracts.ts';
-import { jsonbOrder, literal, parse, storedInstant } from './wire.ts';
+import { parse, storedInstant } from '@norbital-ai/host-api';
+import { jsonbOrder, literal } from './wire.ts';
 
 const textColumn = (field: FieldInfo) => field.pg === 'numeric' || field.pg === 'int8';
 const objectSql = (entries: readonly string[]): string => Array.from(

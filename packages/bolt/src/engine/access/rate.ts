@@ -187,56 +187,6 @@ const ipv6 = (a: string): number[] | null => {
 	if (halves.length === 1 ? fill !== 0 : fill < 1) return null;
 	return [...head, ...Array<number>(fill).fill(0), ...tail];
 };
-/** Any address as IPv6 words; IPv4 as its mapped form, so `::ffff:a.b.c.d` matches an IPv4 subnet, as `BlockList` does. */
-const ipWords = (a: string): number[] | null => {
-	const quad = ipv4(a);
-	return quad === null
-		? ipv6(a)
-		: [0, 0, 0, 0, 0, 0xffff, (quad[0] << 8) | quad[1], (quad[2] << 8) | quad[3]];
-};
-/** The client address: the TCP peer, stepping right to left through X-Forwarded-For while the hop is trusted. */
-export function client_address(
-	peer: string,
-	forwardedFor: string | undefined,
-	trusted: readonly string[]
-): string {
-	// a malformed entry trusts nothing
-	const subnets = trusted.flatMap((cidr) => {
-		const [net, bits] = cidr.split('/');
-		if (net === undefined) return [];
-		const words = ipWords(net),
-			max = ipv4(net) === null ? 128 : 32,
-			n = bits === undefined ? max : Number(bits);
-		return words === null || !Number.isInteger(n) || n < 0 || n > max
-			? []
-			: [{ words, bits: n + 128 - max }];
-	});
-	const isTrusted = (a: string) => {
-		const words = ipWords(a);
-		return (
-			words !== null &&
-			subnets.some((s) =>
-				words.every((w, i) => {
-					const left = Math.min(16, Math.max(0, s.bits - i * 16)),
-						mask = (0xffff << (16 - left)) & 0xffff;
-					const expected = s.words[i];
-					return expected !== undefined && (w & mask) === (expected & mask);
-				})
-			)
-		);
-	};
-	const hops = (forwardedFor ?? '')
-		.split(',')
-		.map((s) => s.trim())
-		.filter((s) => s !== '');
-	let address = peer;
-	while (isTrusted(address)) {
-		const next = hops.pop();
-		if (next === undefined) break;
-		address = next;
-	}
-	return address;
-}
 /** An IPv4 address counts as itself, an IPv6 address by its /64 (one host is routinely given a whole /64). */
 export function addressBucket(address: string): string {
 	const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address)?.[1];

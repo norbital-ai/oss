@@ -10,11 +10,11 @@ import { enqueue } from '../runs/queue.ts';
 import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { Chain } from './sql.ts';
 import type { Json } from '../../decl/values.ts';
-import type { RowData, Sql } from '../contracts.ts';
+import { DbError, type PackStep, type Sql } from '@norbital-ai/host-api';
+import type { RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { DbError } from '../errors.ts';
 import { restorer } from './seed.ts';
 import { decodeConfiguration, definitionOf } from '../integrations/instances.ts';
 import { catalog_of } from '../access/pred.ts';
@@ -197,7 +197,6 @@ export const read_pack = Effect.fn('Bolt.read_pack')(function* (dir: string) {
 	return { dir, meta: source.meta, rows: Object.fromEntries(entries) } satisfies Pack;
 });
 /** A pack load's step: `more` while steps remain; `loaded`, or `hadRows` when the database had rows and nothing changed. */
-export type PackStep = 'more' | 'loaded' | 'hadRows';
 /**
  * Rule 70: loads a pack only into a database with no workspace rows, in bounded steps (one unit of
  * work each): identity first, then the restore of every model in relationship order (`restorer`'s steps).

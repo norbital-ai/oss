@@ -66,6 +66,7 @@ export const agentRead = Effect.fn('Agents.read')(function* (
     JOIN sys_user u ON u.id = COALESCE(p."as"->'envoy'->>'member', p."as"->>'member', p.author) WHERE p.conversation = c.id
     ORDER BY p.seq LIMIT 1) END) AS r FROM sys_conversation c WHERE c.parent IS NULL AND
     (c.owner = $1 OR ${sharedConversations({ member: '$1', admin: '$2', staff: '$3' })})${read.id === undefined ? '' : ' AND c.id = $4'}
+    AND c.archived_at IS ${read.archived === true ? 'NOT NULL' : 'NULL'}
     ORDER BY updated_at DESC, id COLLATE "C" DESC LIMIT ${CONVERSATIONS}`,
 					// an automation's inference transcripts are an administrator's to read
 					params: [

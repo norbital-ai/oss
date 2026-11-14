@@ -3,7 +3,7 @@
 import { Effect } from 'effect';
 import { Form, Table, type UiContext } from '@norbital-ai/ui';
 import type { PageContext } from '../../src/page/index.ts';
-import type { ActOutput, Id, Outcome, PlainDate, Row } from '../../src/index.ts';
+import type { ActOutput, Id, PlainDate, Row } from '../../src/index.ts';
 import type { Decimal } from '@norbital-ai/store';
 import type { Committed, PendingApproval } from '../../src/decl/ctx.ts';
 import './registry.ts';
@@ -137,19 +137,17 @@ ctx.run('orders_renote', { ids: [order.id], note: 'x' }).pipe(
 		is<
 			Eq<
 				typeof outcome,
-				Outcome<{
+				Committed<{
 					readonly id: Id<'sys_run'>;
 					readonly ids: readonly Id<'sys_run'>[];
 					readonly automation: 'orders_renote';
 				}>
 			>
 		>();
-		if (outcome.kind === 'committed') {
-			is<Eq<typeof outcome.output.id, Id<'sys_run'>>>();
-			// @ts-expect-error queue admission never pretends to be the automation's eventual number output
-			const result: number = outcome.output;
-			void result;
-		}
+		is<Eq<typeof outcome.output.id, Id<'sys_run'>>>();
+		// @ts-expect-error queue admission never pretends to be the automation's eventual number output
+		const result: number = outcome.output;
+		void result;
 	})
 );
 // ── i18n: the fixture declares no messages, so no key is one ──

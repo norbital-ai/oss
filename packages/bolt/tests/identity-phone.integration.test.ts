@@ -8,7 +8,7 @@ import { TestClock } from 'effect/testing';
 import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
-import type { TransportPort } from '../src/engine/contracts.ts';
+import { logged_phone, type PhoneVerifier, type TransportPort } from '@norbital-ai/host-api';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
@@ -18,14 +18,12 @@ import {
 	authenticate,
 	founder_bootstrap,
 	load_keys,
-	logged_phone,
 	make_identity_host,
 	send_code,
 	SIGNUP_TEXTS,
 	SIGNUP_TEXTS_PER_IP,
 	verify_code,
-	type IdentityHost,
-	type PhoneVerifier
+	type IdentityHost
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { memory_audit_layer } from './support/audit.ts';

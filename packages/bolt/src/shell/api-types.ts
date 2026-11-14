@@ -7,7 +7,20 @@ import type { FileRef } from '@norbital-ai/store/kind';
 import type { Attachment } from '../decl/runtime/integration.ts';
 import { SyncDeadLetter, SyncHealth } from '../engine/sync/health-schema.ts';
 import type { Json } from '../decl/values.ts';
-import type { ActOutcome, AiModel } from '../engine/contracts.ts';
+import {
+	type AiModel,
+	type AuditPage,
+	type AuditQuery,
+	type AuditRecord,
+	type LogQuery,
+	type LogRow,
+	type StudioFile,
+	type StudioInspectInput,
+	StudioInspection,
+	type StudioOp,
+	type StudioView
+} from '@norbital-ai/host-api';
+import type { ActOutcome } from '../engine/contracts.ts';
 import { AgentSettings } from '../engine/agent/settings.ts';
 import { FileRef as ConversationFile } from '../engine/agent/schema.ts';
 import type { InboxRequest } from '../engine/approvals/inbox.ts';
@@ -24,8 +37,6 @@ import {
 } from '../protocol/schema.ts';
 import { ApprovalViewSchema } from '../protocol/approval-view.ts';
 import type { PageResult } from '../protocol/schema.ts';
-import { Diagnostic } from '../protocol/diagnostic.ts';
-import { MigrationImpact } from '../protocol/migration-impact.ts';
 import {
 	AutomationExposureSchema,
 	FieldsSchema,
@@ -33,21 +44,12 @@ import {
 } from '../protocol/public-page.ts';
 import type { PushBody } from '../protocol/wire.ts';
 import type { integration_client, integration_offers } from '../page/integrations.ts';
-import type { LogQuery, LogRow } from '../engine/contracts.ts';
-import type { AuditPage, AuditQuery, AuditRecord } from '../protocol/audit.ts';
 import type { Settings } from './settings/data.ts';
 import type { SignInMethods } from './host.ts';
 import type { NavNode, ShellBoot } from './nav.ts';
 import { ManifestItemSchema } from './finder/manifest.ts';
 import { ReadCatalog } from '../protocol/read-answer.ts';
 import { OperationOutputs } from '../protocol/output-contract.ts';
-import { StudioTestRun } from './studio/test-results.ts';
-import {
-	StudioOp,
-	type StudioFile,
-	type StudioView
-} from './studio/model.ts';
-import { StudioInspection, type StudioInspectInput } from './studio/inspection.ts';
 
 const Optional = Schema.optionalKey(Schema.String);
 export const RestartChat = Schema.Struct({
@@ -371,175 +373,6 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 		Schema.Struct({ via: Schema.Array(Schema.Literals(['email', 'phone'])), open: Schema.Boolean })
 	)
 });
-const StudioLogLineAnswer = Schema.Struct({
-	at: Schema.String,
-	level: Schema.Literals(['info', 'warn', 'error']),
-	message: Schema.String
-});
-const StudioDiagnosticAnswer = Schema.Struct({
-	...Diagnostic.fields,
-	severity: Schema.optionalKey(Schema.Literals(['error', 'warn']))
-});
-const StudioPreviewAnswer = Schema.Struct({
-	url: NullableString,
-	commit: Schema.String,
-	artifact: Schema.String,
-	stale: Schema.Boolean,
-	shelved: True,
-	destructive: Schema.optionalKey(Strings),
-	impact: Schema.optionalKey(MigrationImpact)
-});
-const StudioBuildAnswerFields = Schema.Struct({
-	commit: Schema.String,
-	at: Schema.String,
-	status: Schema.Literals(['built', 'failed']),
-	message: Schema.String,
-	deployed: Schema.Boolean,
-	live: Schema.Boolean,
-	lines: Schema.Number,
-	diagnostics: Schema.Number
-});
-const StudioEntryAnswer = Schema.Array(
-	Schema.Struct({ name: Schema.String, path: Schema.String, href: Optional })
-);
-export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
-	commit: Schema.String,
-	working: Optional,
-	tree: Optional,
-	diagnosis: Schema.optionalKey(Schema.Literals(['passed', 'failed'])),
-	tests: Schema.optionalKey(StudioTestRun),
-	migration: Schema.optionalKey(
-		Schema.Struct({
-			state: Schema.Literals(['passed', 'failed']),
-			error: Optional,
-			impact: Schema.optionalKey(MigrationImpact),
-			checks: Schema.optionalKey(
-				Schema.Array(Schema.Struct({ sql: Schema.String, before: Schema.Json, after: Schema.Json }))
-			)
-		})
-	),
-	message: Optional,
-	zone: Optional,
-	files: Schema.Record(Schema.String, Schema.Struct({ bytes: Schema.Number })),
-	changes: Schema.Array(
-		Schema.Struct({
-			path: Schema.String,
-			change: Schema.Literals(['added', 'modified', 'deleted']),
-			text: Optional,
-			baseline: Optional
-		})
-	),
-	log: Schema.Array(StudioLogLineAnswer),
-	preview: NullableString,
-	releases: Schema.Array(
-		Schema.Struct({
-			commit: Schema.String,
-			at: Schema.String,
-			message: Schema.String,
-			current: Schema.Boolean,
-			checkpoint: Schema.optionalKey(NullableString),
-			rollback: Optional,
-			undo: True,
-			discards: Optional,
-			replaced: True
-		})
-	),
-	environments: Schema.optionalKey(
-		Schema.Array(
-			Schema.Struct({ name: Schema.String, release: Schema.String, url: NullableString })
-		)
-	),
-	change: Optional,
-	branch: Optional,
-	preview_of: Schema.optionalKey(StudioPreviewAnswer),
-	preview_control: Schema.optionalKey(
-		Schema.Struct({
-			holder: Schema.Literals(['norbius', 'person']),
-			conversation: Optional,
-			at: Optional
-		})
-	),
-	base: Optional,
-	behind: Schema.optionalKey(Schema.Number),
-	conflicts: Schema.optionalKey(Strings),
-	conflict_notes: Schema.optionalKey(Strings),
-	change_sets: Schema.optionalKey(
-		Schema.Array(
-			Schema.Struct({
-				id: Schema.String,
-				title: Schema.String,
-				state: Schema.Literals(['open', 'merged', 'closed']),
-				opened_by: Schema.String,
-				contributors: Strings,
-				branch: Schema.String,
-				base: Schema.String,
-				head: Schema.String,
-				commits: Schema.Array(Schema.String),
-				files: Schema.optionalKey(
-					Schema.Array(
-						Schema.Struct({
-							path: Schema.String,
-							change: Schema.Literals(['added', 'modified', 'deleted'])
-						})
-					)
-				),
-				history: Schema.optionalKey(
-					Schema.Array(Schema.Struct({ commit: Schema.String, message: Schema.String }))
-				),
-				behind: Schema.Number,
-				preview: Schema.NullOr(StudioPreviewAnswer),
-				merge: Schema.optionalKey(
-					Schema.Struct({
-						state: Schema.Literals(['scheduled', 'queued', 'running', 'failed']),
-						at: Schema.String,
-						head: Schema.String,
-						error: Optional,
-						run_at: Optional
-					})
-				),
-				log: Schema.Array(StudioLogLineAnswer),
-				created_at: Schema.String,
-				updated_at: Schema.String,
-				diagnostics: Schema.optionalKey(Schema.Array(StudioDiagnosticAnswer))
-			})
-		)
-	),
-	diagnostics: Schema.optionalKey(Schema.Array(StudioDiagnosticAnswer)),
-	builds: Schema.optionalKey(Schema.Array(StudioBuildAnswerFields)),
-	approvals: Schema.optionalKey(
-		Schema.Array(
-			Schema.Struct({
-				id: Schema.String,
-				op: StudioOp,
-				requestor: Schema.String,
-				conversation: Schema.String,
-				at: Schema.String,
-				head: Optional,
-				destructive: Schema.optionalKey(Strings)
-			})
-		)
-	),
-	sections: Schema.NullOr(
-		Schema.Struct({
-			models: StudioEntryAnswer,
-			apps: StudioEntryAnswer,
-			kiosks: StudioEntryAnswer,
-			policies: StudioEntryAnswer,
-			automations: StudioEntryAnswer,
-			secrets: StudioEntryAnswer
-		})
-	),
-	stale: True
-});
-export const StudioFileAnswer: Schema.Decoder<StudioFile | null> = Schema.NullOr(
-	Schema.Union([
-		Schema.Struct({
-			text: Schema.String,
-			truncated: Schema.optionalKey(Schema.Struct({ limit: Schema.Number, bytes: Schema.Number }))
-		}),
-		Schema.Struct({ binary: Schema.Literal(true), bytes: Schema.Number })
-	])
-);
 export const SignInMethodsAnswer: Schema.Decoder<SignInMethods> = Schema.Struct({
 	email: Schema.Boolean,
 	phone: Schema.Boolean,
@@ -736,6 +569,9 @@ export type ShellApi = {
 		reorder(conversation: string, messages: readonly string[]): AgentAct;
 		execute_plan(conversation: string): AgentAct;
 		discard_plan(conversation: string): AgentAct;
+		archive(conversation: string): AgentAct;
+		unarchive(conversation: string): AgentAct;
+		delete(conversation: string): AgentAct;
 		resume(conversation: string): AgentAct;
 		transcript(conversation: string): Call<typeof Transcript.Type>;
 		/** The `limit` messages just before `seq` `before` (the panel's older page); `more`: another may lie before `first`. */

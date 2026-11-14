@@ -18,9 +18,9 @@ A related-record grid with explicit child operations, original revisions and par
 		/** The parent record's id; unset (a new parent) reads no rows. */
 		id?: string;
 		/**
-		 * `'parent'` (default): edits follow the enclosing record form's edit mode and save with the parent through its
-		 * child contract. `'independent'`: the grid has its own Edit toggle and saves each child through the child model's
-		 * own verbs.
+		 * `'parent'` (the default inside a record): edits follow the enclosing record form's edit mode and save with the parent
+		 * through its child contract. `'independent'` (the default on its own): the grid has its own Edit toggle and saves
+		 * each child through the child model's own verbs.
 		 */
 		save?: 'parent' | 'independent';
 		/** The child columns. Default: the contract's create and update columns, then every exposed field but the parent ref. */
@@ -55,11 +55,19 @@ A related-record grid with explicit child operations, original revisions and par
 	import ReadGate from '../read/ReadGate.svelte';
 	import Table from '../table/Table.svelte';
 	import ChildCell from './ChildCell.svelte';
-	let { ctx, of, relation, id, save = 'parent', columns, where }: ChildGridProps = $props();
-	const bolt = $derived(bolt_of(ctx)),
-		kinds = $derived(ctx.ui.kinds),
-		scope = use_record_controller(),
+	const scope = use_record_controller(),
 		owner = scope?.current;
+	let {
+		ctx,
+		of,
+		relation,
+		id,
+		save = scope === undefined ? 'independent' : 'parent',
+		columns,
+		where
+	}: ChildGridProps = $props();
+	const bolt = $derived(bolt_of(ctx)),
+		kinds = $derived(ctx.ui.kinds);
 	const contract = $derived(owner?.spec.children?.[relation]);
 	const identity = $derived(contract ?? kinds.catalog?.[of]?.children?.[relation]);
 	const model = $derived(identity?.model ?? '');

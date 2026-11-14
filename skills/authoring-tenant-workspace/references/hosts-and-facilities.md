@@ -23,7 +23,7 @@ The build records needs from declarations. Needs are never config or secrets.
 | Need | Recorded when | Member |
 | --- | --- | --- |
 | `sms`, `phone` | phone sign-up | `transactional.sms`, `.phone` |
-| `challenge` | an app with `challenge: 'turnstile'` | `transactional.challenge` |
+| `challenge` | an app with `challenge: true` | `transactional.challenge` |
 | `system1`, `system2` | an `ai` block | `intelligence.system1`, `.system2` |
 | `embed` | `ai.embeddings` | `intelligence.embed` |
 | `webhooks` | an integration definition | `ports.webhooks` |

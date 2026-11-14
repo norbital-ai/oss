@@ -38,6 +38,7 @@
 		open_record,
 		provide_representations,
 		set_ui_text,
+		StudioSlot,
 		ui_text_for,
 		type UiContext
 	} from '@norbital-ai/ui';
@@ -85,7 +86,6 @@
 	import { clientPageAction } from './agent/page.ts';
 	import Inbox from './inbox/Inbox.svelte';
 	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
-	import StudioSlot from './studio/StudioSlot.svelte';
 	import RecordSheet from './RecordSheet.svelte';
 	import RecordPrint from './RecordPrint.svelte';
 	import Turnstile from './auth/Turnstile.svelte';
@@ -915,7 +915,7 @@
 		{/await}
 	{:else if current.kind === 'studio' && boot?.surfaces.studio}
 		<StudioSlot
-			bundle={boot.studio_bundle}
+			bundle={boot.studio_bundle === undefined ? undefined : based(boot.studio_bundle)}
 			props={{
 				t,
 				locale,

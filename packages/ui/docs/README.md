@@ -80,6 +80,26 @@ controller. After an action changes the record, refresh from the latest readable
 capabilities before calling `current.edit()`. Check `historical` first: a displayed revision stays readonly.
 The controller retains its field permissions, state locks, drafts and native child editors.
 
+## Composing views
+
+1. Every view takes `ctx` and a model name (`of`) and works alone or nested: `Chart of="jobs" x="status" y="count"`
+   reads one aggregate bucketed by `x`; `ChildGrid` alone edits through the child model's own verbs (inside a record
+   it saves with the parent).
+2. Custom content goes through props and snippets: `RecordShell` and `Form` take `editors` and `viewers` (a field's
+   own editor or readonly view by name), `Board` takes `card` and `lane_header`, `Map` takes `card` and `item`.
+3. The parts the views are built from are exported: `TablePager`, `RowMenu`, `SelectionBar`, `ColumnMenu`,
+   `RowCard`, `CellValue`, `CellOverflow`, `ReadGate`, `ReadOnce`, `ApprovalAccent`, `FieldControl`, `RunsFor`,
+   `BoardLane`, `Rows` and `Timeline`.
+4. Size comes from the layout primitives, never a class: `Table`, `Board`, `Map` and `Chart` fill their parent and
+   scroll inside, down to `min(18rem, 100%)`; `Form` and `CodeEditor` take `size` (`fill` or `content`); `Field`
+   takes `wide` to span its grid's row.
+5. A row or card opens its own record: no open button or expand control inside it. A row that stands for another
+   record passes `on_open` (`Table`, `Board`, `Map`).
+6. A custom grid sits under `CustomView`'s toolbar; `LogView` and `WorkspaceOperations` do.
+
+A page's write is one call: `const save = use_act(ctx)`, then `save.run(ctx.act({ … }), { saved, then })`.
+`save.pending` is true while it runs; the commit, the hold or the typed failure is toasted in the shared words.
+
 ## Toolbar actions
 
 The view toolbar's ⚡ menu derives its standard rows from the model's exposure to the viewer, with no page

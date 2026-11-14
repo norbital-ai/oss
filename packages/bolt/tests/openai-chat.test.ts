@@ -3,10 +3,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Exit, Fiber, FiberSet, Schema, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
-import type { AiRequest } from '../src/engine/contracts.ts';
-import { Port } from '../src/engine/port.ts';
+import { type AiRequest, type OpenAiChat, Port } from '@norbital-ai/host-api';
 import { fileParts, pixelSize } from '../src/engine/agent/ingest.ts';
-import { open_ai_chat, type OpenAiChat } from '../src/engine/agent/openai-chat.ts';
+import { open_ai_chat } from '../src/engine/agent/openai-chat.ts';
 
 const Sent = Schema.Struct({
 	model: Schema.String,

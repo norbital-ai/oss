@@ -19,13 +19,12 @@ import {
 } from 'effect';
 import { TestClock } from 'effect/testing';
 import { Ai, RunUnits, WebRead } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { FacilityFailure, Port } from '@norbital-ai/host-api';
 import { Runs } from '../src/engine/services.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { FacilityFailure } from '../src/decl/errors.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
 import { TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { load_pack, source_of } from '../src/engine/write/pack.ts';

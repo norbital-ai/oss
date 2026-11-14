@@ -26,7 +26,7 @@ import { KindSpec, SEMANTIC, SYSTEM_COLUMN_SET, exposure_of, family, field_info 
 
 /**
  * A value position's operand as a literal writes it: a same-row column, or a `{ var }` CEL expression (lang/vars)
- * whose type and requestor members the position admits. A read never carries a time variable: its edge evaluates it.
+ * whose type and actor members the position admits. A read never carries a time variable: its edge evaluates it.
  */
 export type WireOperand = { field: string } | { var: string };
 type Obj = { readonly [k: string]: unknown };
@@ -153,7 +153,7 @@ const operand = (
 		return invalid(
 			`${path}: a read takes a value, not ${JSON.stringify(o)}; materialize time before reading`
 		);
-	return c.requestor.every((m) => member_admits(f, m)) ? Effect.succeed(tagged_operand(o)) : refuse;
+	return c.actor.every((m) => member_admits(f, m)) ? Effect.succeed(tagged_operand(o)) : refuse;
 };
 const val = (
 	info: ModelInfo,

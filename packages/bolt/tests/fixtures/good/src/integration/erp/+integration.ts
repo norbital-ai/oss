@@ -1,6 +1,6 @@
-import { integration } from '../../../.norbital/integrations/erp.ts';
+import { integration } from '@norbital-ai/bolt';
 
-export default integration({
+export default integration('erp', {
 	description: 'The ERP API',
 	driver: 'http',
 	credential: { token: { kind: 'text' } },

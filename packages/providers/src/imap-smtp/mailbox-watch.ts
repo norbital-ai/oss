@@ -1,6 +1,7 @@
 import { createStreamsTransport, ImapFlow, type MessageStructureObject } from 'imapflow';
 import { Clock, Effect, Queue, Semaphore, Stream } from 'effect';
-import type { Json, ReconcilePage } from '@norbital-ai/bolt/engine';
+import type { ReconcilePage } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import { ProviderUnavailable, type ProviderFailure } from '../errors.ts';
 import type { Named } from './reports.ts';
 import {

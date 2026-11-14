@@ -5,6 +5,10 @@ import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import { send_input_schema } from '../src/engine/integrations/outbound.ts';
 import { conversationOf } from '../src/engine/integrations/instances.ts';
+import slack from '../src/system/integration/slack/+integration.ts';
+import telegram from '../src/system/integration/telegram/+integration.ts';
+import wechat from '../src/system/integration/wechat/+integration.ts';
+import whatsapp from '../src/system/integration/whatsapp/+integration.ts';
 import { is_auto_reply, status_after } from '../src/engine/conversations/status.ts';
 import { InboundMessage, normalizeInbound } from '../src/engine/conversations/inbound.ts';
 import { canonicalHandle } from '../src/engine/envoys/senders.ts';
@@ -176,15 +180,17 @@ describe('the inbound decode and the outbound check', () => {
 		"a definition carries its driver's conversation and sender handle; request drivers carry none",
 		() =>
 			Effect.gen(function* () {
-				expect(conversationOf({ description: 'x', driver: 'whatsapp' })).toEqual({
+				expect(conversationOf({ description: 'x', driver: whatsapp.spec.driver })).toEqual({
 					kind: 'chat',
-					handle: 'phone'
+					handle: 'phone',
+					address: '{}@s.whatsapp.net'
 				});
-				expect(conversationOf({ description: 'x', driver: 'slack' })).toEqual({
+				expect(conversationOf({ description: 'x', driver: slack.spec.driver })).toEqual({
 					kind: 'chat',
-					handle: 'slack'
+					handle: 'slack',
+					address: '@{}'
 				});
-				expect(conversationOf({ description: 'x', driver: 'wechat' })).toEqual({
+				expect(conversationOf({ description: 'x', driver: wechat.spec.driver })).toEqual({
 					kind: 'chat',
 					handle: null
 				});
@@ -195,7 +201,7 @@ describe('the inbound decode and the outbound check', () => {
 				expect(
 					conversationOf({
 						description: 'x',
-						driver: 'telegram'
+						driver: telegram.spec.driver
 					})
 				).toEqual({ kind: 'chat', handle: 'telegram' });
 				expect(conversationOf({ description: 'x', driver: 'http' })).toBeUndefined();

@@ -1,10 +1,10 @@
 /// <reference types="node" />
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Exit, Layer, Scope } from 'effect';
-import { LIMITS, type Invocation, type LogEvent } from '../src/engine/contracts.ts';
+import { type LogEvent, Port } from '@norbital-ai/host-api';
+import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
 import { TelemetryLive } from '../src/engine/guest/telemetry.ts';
 import { Logs } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
 import { Guest, Telemetry, type Bridge, type InvocationEvents } from '../src/engine/services.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { guest_layer } from './support/guest-fixture.ts';

@@ -5,7 +5,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { Sql } from '../src/engine/contracts.ts';
+import type { Sql } from '@norbital-ai/host-api';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';

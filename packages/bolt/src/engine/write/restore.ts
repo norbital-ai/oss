@@ -5,7 +5,7 @@ import { Effect, Option, Predicate, Schema } from 'effect';
 import { UUID_PATTERN } from '@norbital-ai/store/kind';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, Outcome, RowData } from '../contracts.ts';
-import type { ActRequest, ActResult } from '../services.ts';
+import type { ActsRequest, CallablesShape } from '../services.ts';
 import type { EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalog_of } from '../access/pred.ts';
@@ -16,7 +16,8 @@ import { decodeValue } from './flatten.ts';
 import type { RestorePreview, RestoreSkip } from '../../protocol/record-contracts.ts';
 import { HistorySnapshotSchema } from '../../protocol/record-contracts.ts';
 import { storedRow } from '../db/stored.ts';
-import { k, readRows, record_capabilities, stateField, type WriteEngine } from './act.ts';
+import { k, readRows, stateField, type WriteEngine } from './act.ts';
+import { record_capabilities } from '../capabilities/record.ts';
 
 export type RestoreTarget = { model: string; record: string; revision: number };
 type Previewed =
@@ -267,10 +268,10 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 /** Restores the record's own fields as one ordinary update against the observed live revision. */
 export const restoreRecord = Effect.fn('Bolt.restoreRecord')(function* (
 	e: Pick<WriteEngine, 'manifest' | 'db' | 'guest' | 'bridge'>,
-	write: (request: ActRequest) => Effect.Effect<ActResult, EngineError>,
+	write: CallablesShape['acts'],
 	target: RestoreTarget,
 	request: Pick<
-		ActRequest,
+		ActsRequest,
 		'authority' | 'bindings' | 'key' | 'issuedAt' | 'retry' | 'invocationId' | 'observed' | 'rate'
 	>
 ): Effect.fn.Return<{ outcome: Outcome; v?: number }, EngineError> {
@@ -287,16 +288,21 @@ export const restoreRecord = Effect.fn('Bolt.restoreRecord')(function* (
 		};
 	return yield* write({
 		...request,
-		model: target.model,
-		verb: 'update',
-		mode: { _tag: 'Direct' },
-		input: [
+		from: 'Client',
+		name: `${target.model}.update`,
+		acts: [
 			{
-				target: target.record,
-				set: Object.fromEntries(preview.changes.map((change) => [change.field, change.restored]))
+				model: target.model,
+				verb: 'update',
+				input: [
+					{
+						target: target.record,
+						set: Object.fromEntries(preview.changes.map((change) => [change.field, change.restored]))
+					}
+				],
+				observed: request.observed ?? { [target.record]: preview.live }
 			}
 		],
-		observed: request.observed ?? { [target.record]: preview.live },
 		restored: { id: target.record, revision: target.revision }
 	});
 });

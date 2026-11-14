@@ -34,14 +34,15 @@ export const layered = policy({
 			outputs: {
 				default: {
 					history: true,
-					where: { owner: { eq: { var: 'requestor.id' } } },
+					where: { owner: { eq: { var: 'actor.id' } } },
 					customer: { where: { tier: { eq: 'gold' } } },
 					lines: { where: { item: { ne: '' } } }
 				},
 				logistics: { where: { status: { ne: 'draft' } } }
 			},
 			create: {
-				columns: { fields: ['customer', 'note'], lines: { fields: ['item', 'qty'] } },
+				fields: ['customer', 'note'],
+				lines: { fields: ['item', 'qty'] },
 				verdict: function* (rows, ctx) {
 					const bad = rows.findIndex((o) => (o.after.lines ?? []).some((l) => l.item === ''));
 					if (bad >= 0)
@@ -55,7 +56,7 @@ export const layered = policy({
 				}
 			},
 			update: {
-				columns: { fields: ['status', 'note'] },
+				fields: ['status', 'note'],
 				verdict: function* (changes, ctx) {
 					const me = ctx.actor.kind === 'member' ? ctx.actor.id : null;
 					const mine = changes.every((c) => c.before.owner === me && c.before.lines.length < 100);
@@ -91,12 +92,12 @@ policy({
 policy({
 	description: 'x',
 	// @ts-expect-error a column the model's create does not declare
-	grants: { orders: { create: { columns: { fields: ['status'] } } } }
+	grants: { orders: { create: { fields: ['status'] } } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error a write path the model's create does not declare
-	grants: { orders: { create: { columns: { customer: { fields: ['name'] } } } } }
+	grants: { orders: { create: { fields: ['customer'], customer: { fields: ['name'] } } } }
 });
 policy({
 	description: 'x',

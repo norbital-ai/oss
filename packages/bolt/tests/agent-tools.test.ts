@@ -21,39 +21,43 @@ import {
 } from 'effect';
 import { TestClock } from 'effect/testing';
 import type { Json } from '../src/decl/values.ts';
-import type {
-	Authority,
-	HttpFetchOptions,
-	HttpRequest,
-	HttpResponse,
-	LogRow
-} from '../src/engine/contracts.ts';
-import { DbError } from '../src/engine/errors.ts';
+import {
+	DbError,
+	FacilityFailure,
+	type HostTool,
+	type HostToolContext,
+	type HttpFetchOptions,
+	type HttpRequest,
+	type HttpResponse,
+	type Ingested,
+	type LogRow,
+	off,
+	Port,
+	type RawDb,
+	REFERENCE,
+	type WorkspacePort
+} from '@norbital-ai/host-api';
+import type { Authority } from '../src/engine/contracts.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import type { AgentEngine } from '../src/engine/agent/index.ts';
 import {
 	catalogue,
 	jobs,
-	type HostTool,
-	type HostToolContext,
 	type ToolContext,
-	type WorkspacePort,
-	workspaceSchema,
+	catalogueNote,
 	describeWorkspace,
+	readPaths,
 	messageCatalogue,
 	OVERVIEW_BYTES
 } from '../src/engine/agent/tools.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
-import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { layered, type EngineManifest } from '../src/engine/manifest.ts';
-import { Port } from '../src/engine/port.ts';
 import { Browser, Bundler, Files, GuestIsolates, Http, Images, Logs } from '../src/engine/ports.ts';
 import { browserTools } from '../src/engine/agent/browser.ts';
-import { off } from '../src/facilities/index.ts';
 import { files_of, skill_of } from './support/run-file-trees.ts';
-import { REFERENCE } from '../src/engine/agent/run-js.ts';
 import { BOUNDS } from '../src/engine/agent/context.ts';
-import { tree_digest } from '../src/engine/artifact/read.ts';
+import { tree_digest } from '@norbital-ai/host-api';
 import { Approvals, Automations, Callables, Live, Reads } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/effect.ts';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
@@ -61,8 +65,6 @@ import { audit_shape } from '../src/engine/audit.ts';
 import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
 import { storable } from '../src/engine/agent/schema.ts';
 import { file_attachments } from '../src/engine/agent/attachments.ts';
-import type { Ingested } from '../src/engine/contracts.ts';
-import { FacilityFailure } from '../src/decl/errors.ts';
 import type { ToolAnswer } from '../src/engine/agent/ai.ts';
 import { randomUUID } from 'node:crypto';
 import { actor_ref } from '../src/engine/access/actor.ts';
@@ -206,8 +208,7 @@ const ctx = (
 				parent: null,
 				status: 'idle',
 				model: 'default',
-				plan: null,
-				goals: []
+				plan: null
 			},
 			mode: 'agent',
 			inApp: true,
@@ -221,11 +222,13 @@ const ctx = (
 			host_tools: [],
 			browser_tools: [],
 			receipts: [],
-			read: new Map(),
+			audience: 'staff',
+			zooms: new Map(),
+			reading: new Set(),
+			validators: new WeakMap(),
 			files: [],
 			jobs: yield* jobs(),
 			setPlan: () => Effect.void,
-			setGoals: () => Effect.void,
 			ask: () => true,
 			messages: () => Effect.succeed([]),
 			output: () => Effect.succeed(undefined),
@@ -233,7 +236,6 @@ const ctx = (
 			heard: Effect.never,
 			subagent: {
 				spawn: () => Effect.succeed(null),
-				list: () => Effect.succeed(null),
 				read: () => Effect.succeed(null),
 				message: () => Effect.succeed(null),
 				stop: () => Effect.succeed(null),
@@ -301,7 +303,7 @@ describe('native question and browser boundaries', () => {
 						options: [' Singapore ', '', 'Malaysia', 'Singapore']
 					})
 				).toEqual({
-					result: { asked: true, note: 'Stop here: your question goes to the person.' }
+					result: { asked: true, to: 'the person' }
 				});
 				expect(questions).toEqual([
 					{ question: 'Which account?', options: ['Singapore', 'Malaysia'] }
@@ -422,7 +424,7 @@ describe('job steering lines', () => {
 				expect(yield* list.wait([c], 1000)).toMatchObject({ job: c, result: 3 });
 				expect(list.take()).toEqual([
 					`[job ${a} done] first: {"ok":true}`,
-					`[job ${b} failed] second: bad input; tell the person`
+					`[job ${b} failed] second: bad input`
 				]);
 				expect(list.take()).toEqual([]);
 				expect(list.pending()).toEqual([]);
@@ -496,9 +498,9 @@ describe('tool schemas', () => {
 					read: async () => null
 				};
 				const tools = [
-					...(yield* catalogue(yield* ctx({ inApp: false }))).tools,
-					...(yield* catalogue(yield* ctx({ inApp: false }))).available,
-					...(yield* catalogue(yield* ctx({ workspace, authority: member() }))).tools,
+					...(yield* catalogue(yield* ctx({ inApp: false, audience: 'channel' }))).fixed,
+					...(yield* catalogue(yield* ctx({ inApp: false, audience: 'channel' }))).available,
+					...(yield* catalogue(yield* ctx({ workspace, authority: member() }))).fixed,
 					...(yield* catalogue(yield* ctx({ workspace, authority: member() }))).available
 				];
 				expect(tools.map((t) => t.name)).toEqual(
@@ -709,7 +711,7 @@ describe('fewer calls for the common paths', () => {
 					request: {
 						tasks: {
 							where: {
-								title: { eq: { var: 'requestor.id' } },
+								title: { eq: { var: 'actor.id' } },
 								due: { gte: { var: 'today - days(7)' }, lte: { var: 'today' } },
 								seen: { lt: { var: 'now + hours(1)' } }
 							}
@@ -794,11 +796,10 @@ describe('fewer calls for the common paths', () => {
 							})
 					}
 				);
-				// the prompt names the models only; fields are describe's
-				const schema = workspaceSchema(outputs, viewer) ?? '';
-				expect(schema).toContain('# Models you read\n');
-				expect(schema).toContain('tasks');
-				expect(schema).not.toContain('cost');
+				// the catalogue note gives each model's fields in the output the caller holds, never another's
+				const line = (yield* catalogue(x)).index['model:tasks'] ?? '';
+				expect(line).toContain('title: text');
+				expect(line).not.toContain('cost');
 				// the read names its output; the engine reads it
 				yield* result(x, 'read', { request: { tasks: { output: 'brief' } } });
 				expect(JSON.stringify(reads)).toContain('"output":"brief"');
@@ -1330,7 +1331,7 @@ describe('working-source tools', () => {
 				});
 				// what the build writes is not source: each source tool says so instead of "no such file"
 				for (const [name, input] of [
-					['workspace_read', { path: '.norbital/models/notes.ts' }],
+					['workspace_read', { path: '.norbital/names.ts' }],
 					['workspace_list_dir', { path: '.norbital' }],
 					['workspace_search', { pattern: 'x', path: '.norbital' }]
 				] as const)
@@ -1465,9 +1466,9 @@ describe('reading the source is every staff member’s; changing it is an admini
 					'a'
 				);
 				const x = yield* ctx({ authority: admin });
-				expect(workspaceSchema(manifest, admin)).toContain('sys_user');
+				expect(readPaths(manifest, admin)).toContain('sys_user');
 				// other built-in models stay a grant's
-				expect(workspaceSchema(manifest, admin)).not.toContain('sys_conversation');
+				expect(readPaths(manifest, admin)).not.toContain('sys_conversation');
 				expect(yield* result(x, 'read', { request: { sys_conversation: {} } })).toEqual({
 					result: { error: expect.stringContaining("You read no 'sys_conversation'") }
 				});
@@ -1598,7 +1599,7 @@ describe('describe_workspace', () => {
 				expect(shape.writes['sys_envoy.create'].columns['sys_envoy']).toEqual(
 					expect.arrayContaining(['name', 'policies', 'audience'])
 				);
-				expect(workspaceSchema(all, admin)).not.toContain('sys_envoy');
+				expect(readPaths(all, admin)).not.toContain('sys_envoy');
 				expect(describeWorkspace(all, matcher, messages, ['sys_envoy'])).toBe(
 					'Nothing named sys_envoy that you can reach.'
 				);
@@ -1690,17 +1691,9 @@ it.effect(
 	() =>
 		Effect.gen(function* () {
 			const x = yield* ctx();
-			expect(yield* result(x, 'describe_workspace', { names: ['system'] })).toMatchObject({
-				result: {
-					capabilities: expect.arrayContaining([
-						{
-							capability: 'api_key.create',
-							path: '/settings/integrations',
-							tab: 'keys',
-							followUp: expect.any(String)
-						}
-					])
-				}
+			// the setup answers as text, like every describe answer
+			expect(yield* result(x, 'describe_workspace', { names: ['system'] })).toEqual({
+				result: expect.stringContaining('api_key.create {"path":"/settings/integrations","tab":"keys"')
 			});
 			expect(
 				yield* result(x, 'page', {
@@ -1718,7 +1711,7 @@ it.effect(
 			).toMatchObject({ result: { error: expect.any(String) } });
 			const ordinary = yield* ctx({ authority: member() });
 			expect(yield* result(ordinary, 'describe_workspace', { names: ['system'] })).toEqual({
-				result: { capabilities: [] }
+				result: 'system: nothing you may set up.'
 			});
 			expect(
 				yield* result(ordinary, 'page', {
@@ -1857,7 +1850,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 							images: [{ name: 'image-1.png', row: 0, col: 1 }]
 						}
 					],
-					note: `compute from data.json, never retype: run_js { files: [{ id: '${dataId}' }] }; its images: read_file { id: o1, image: n }`
+					note: `its data: run_js { files: [{ id: '${dataId}' }] }; its images: view_image { id: o1, image: n }`
 				};
 				expect(answer).toEqual({
 					result: {
@@ -1874,7 +1867,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				expect(yield* result(x, 'read_file', { id: 'o1', text: 'Labour' })).toEqual({
 					result: { error: expect.stringContaining('o1 is data, not lines: find it with run_js') }
 				});
-				expect(yield* result(x, 'read_file', { id: 'o1', image: 1 })).toMatchObject({
+				expect(yield* result(x, 'view_image', { id: 'o1', image: 1 })).toMatchObject({
 					result: { image: 'image-1.png' }
 				});
 				// a page image comes with its four overlapping quarters
@@ -1886,18 +1879,18 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					'image/jpeg'
 				]);
 				const crops = [[0, 0, 0.5, 1]];
-				expect(yield* result(x, 'read_file', { id: 'o1', image: 1, crops })).toMatchObject({
+				expect(yield* result(x, 'view_image', { id: 'o1', image: 1, crops })).toMatchObject({
 					result: { image: 'image-1.png', crops: 1 }
 				});
 				expect(x.files).toHaveLength(6);
 				expect(x.files[5]?.id).toContain('#crop:');
 				// a lone image needs no number; a document takes three zoom calls a turn
-				expect(yield* result(x, 'read_file', { id: 'o1', crops })).toMatchObject({
+				expect(yield* result(x, 'view_image', { id: 'o1', crops })).toMatchObject({
 					result: { image: 'image-1.png', crops: 1 }
 				});
-				yield* result(x, 'read_file', { id: 'o1', crops });
-				expect(yield* result(x, 'read_file', { id: 'o1', crops })).toEqual({
-					result: { error: expect.stringContaining('o1 has had its 3 zooms this turn') }
+				yield* result(x, 'view_image', { id: 'o1', crops });
+				expect(yield* result(x, 'view_image', { id: 'o1', crops })).toEqual({
+					result: { error: 'o1 has had its 3 zooms this turn.' }
 				});
 				expect(
 					kitLogs
@@ -1927,7 +1920,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			}
 		);
 	it.live(
-		'a script always gets the lines, and what it read stays unread for the conversation',
+		'a read answers its lines every time: nothing is withheld as already read',
 		() =>
 			Effect.gen(function* () {
 				const { x, id } = yield* scan();
@@ -1935,9 +1928,10 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					code: `const r = await tool('read_file', { id: '${id}', from: 1, to: 4 }); return r.lines?.length ?? r.note;`
 				};
 				expect(yield* result(x, 'run_js', count)).toEqual({ result: { answer: 4 } });
-				expect(yield* result(x, 'read_file', { id: 'o1', from: 1, to: 4 })).toMatchObject({
-					result: { lines: expect.arrayContaining(['3: <p>Plates: 15</p>']) }
-				});
+				for (let again = 0; again < 2; again++)
+					expect(yield* result(x, 'read_file', { id: 'o1', from: 1, to: 4 })).toMatchObject({
+						result: { lines: expect.arrayContaining(['3: <p>Plates: 15</p>']) }
+					});
 				expect(yield* result(x, 'run_js', count)).toEqual({ result: { answer: 4 } });
 			})
 	);
@@ -1962,7 +1956,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				}
 			);
 			yield* result(x, 'read_file', { id, from: 1, to: 1 });
-			expect(yield* result(x, 'read_file', { id: 'o1', crops: [[0, 0, 1, 1]] })).toEqual({
+			expect(yield* result(x, 'view_image', { id: 'o1', crops: [[0, 0, 1, 1]] })).toEqual({
 				result: { error: 'o1 has 2 images: give image, the 1-based one to crop.' }
 			});
 		})
@@ -2036,7 +2030,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				]);
 				expect(x.files).toEqual([]);
 				expect(yield* result(x, 'read_file', { id: 'o1', from: 4, to: 7 })).toMatchObject({
-					result: { note: expect.stringContaining('already above') }
+					result: { lines: expect.arrayContaining(['4: <table>']) }
 				});
 				expect(yield* result(x, 'read_file', { id, from: 8 })).toMatchObject({
 					result: {
@@ -2058,7 +2052,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 						hits: [{ from: 4, to: 7, text: '<tr><td>7</td><td>12.50</td></tr>' }]
 					}
 				});
-				expect(yield* result(x, 'read_file', { id: 'o1', image: 1 })).toMatchObject({
+				expect(yield* result(x, 'view_image', { id: 'o1', image: 1 })).toMatchObject({
 					result: { image: 'image-1.png' }
 				});
 				// the same file again is the same output
@@ -2193,7 +2187,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			yield* Deferred.succeed(gate, undefined);
 			yield* x.jobs.settled(10_000);
 			expect(x.jobs.take()).toEqual([
-				`[job ${j} failed] reading bad.pdf: the PDF is encrypted; tell the person`
+				`[job ${j} failed] reading bad.pdf: the PDF is encrypted`
 			]);
 		})
 	);
@@ -3034,24 +3028,24 @@ describe('run_js over a repository reference', () => {
 	);
 });
 describe('a sub-agent', () => {
-	it.effect('keeps its checklist but has no plan or sub-agents of its own: one level deep', () =>
+	it.effect('has no plan or sub-agents of its own: one level deep, and its question goes to its delegating agent', () =>
 		Effect.gen(function* () {
-			// update_plan is a plan-mode tool, subagent an agent-mode one; goals is in both
-			expect(yield* names(yield* ctx({ mode: 'plan' }))).toEqual(
-				expect.arrayContaining(['update_plan', 'goals'])
-			);
+			expect(yield* names(yield* ctx({ mode: 'plan' }))).toContain('update_plan');
 			expect(yield* names(yield* ctx({ delegation: true, agents: ['workspace'] }))).toEqual(
-				expect.arrayContaining(['goals', 'subagent'])
+				expect.arrayContaining(['subagent', 'subagent_read', 'subagent_message', 'subagent_stop'])
 			);
 			const child = [
 				...(yield* names(yield* ctx({ mode: 'plan', child: true }))),
 				...(yield* names(yield* ctx({ child: true })))
 			];
 			for (const n of ['update_plan', 'subagent']) expect(child).not.toContain(n);
-			expect(child).toEqual(expect.arrayContaining(['read', 'act', 'wait', 'goals', 'ask_parent']));
-			expect(yield* names(yield* ctx({ delegation: true, agents: ['workspace'] }))).not.toContain(
-				'ask_parent'
-			);
+			expect(child).toEqual(expect.arrayContaining(['read', 'act', 'wait', 'ask']));
+			expect(yield* result(yield* ctx({ child: true }), 'ask', { question: 'Which one?' })).toEqual({
+				result: { asked: true, to: 'the delegating agent' }
+			});
+			// a child's fixed list leaves the delegation and planning tools out
+			const fixed = (yield* catalogue(yield* ctx({ child: true }))).fixed.map((t) => t.name);
+			for (const n of ['subagent', 'subagent_read', 'update_plan']) expect(fixed).not.toContain(n);
 		})
 	);
 });
@@ -3071,49 +3065,51 @@ describe('runs and logs', () => {
 		Schema.decodeUnknownSync(
 			Schema.Struct({
 				result: Schema.Struct({
-					runs: Schema.Array(Schema.Struct({ id: Schema.String })),
-					next: Schema.optionalKey(Schema.String)
+					rows: Schema.Array(Schema.Struct({ id: Schema.String })),
+					next: Schema.NullOr(Schema.String)
 				})
 			})
 		)(answer).result;
+	/** `read`'s `$runs` root: answered alone, as itself. */
+	const $runs = (x: ToolContext, node: Json) => result(x, 'read', { request: { $runs: node } });
 	it.effect(
 		'lists runs by automation, status and time, pages with the cursor, and hides what the actor may not read',
 		() =>
 			Effect.gen(function* () {
 				const x = yield* ctx();
 				yield* runs(x);
-				const all = ids(yield* result(x, 'runs', {}));
-				expect(all.runs.map((r) => r.id)).toEqual(['r5', 'r4', 'r3', 'r2', 'r1']);
+				const all = ids(yield* $runs(x, {}));
+				expect(all.rows.map((r) => r.id)).toEqual(['r5', 'r4', 'r3', 'r2', 'r1']);
 				expect(
-					ids(yield* result(x, 'runs', { automation: 'billing.*' })).runs.map((r) => r.id)
+					ids(yield* $runs(x, { automation: 'billing.*' })).rows.map((r) => r.id)
 				).toEqual(['r3', 'r2', 'r1']);
-				expect(ids(yield* result(x, 'runs', { automation: 'billing' })).runs).toEqual([]);
-				expect(ids(yield* result(x, 'runs', { status: 'failed' })).runs.map((r) => r.id)).toEqual([
+				expect(ids(yield* $runs(x, { automation: 'billing' })).rows).toEqual([]);
+				expect(ids(yield* $runs(x, { status: 'failed' })).rows.map((r) => r.id)).toEqual([
 					'r2'
 				]);
 				expect(
-					ids(yield* result(x, 'runs', { status: 'cancelled' })).runs.map((r) => r.id)
+					ids(yield* $runs(x, { status: 'cancelled' })).rows.map((r) => r.id)
 				).toEqual(['r4']);
 				expect(
 					ids(
-						yield* result(x, 'runs', {
+						yield* $runs(x, {
 							since: '2026-09-21T00:00:00Z',
 							until: '2026-09-23T00:00:00Z'
 						})
-					).runs.map((r) => r.id)
+					).rows.map((r) => r.id)
 				).toEqual(['r3', 'r2']);
-				const one = ids(yield* result(x, 'runs', { limit: 2 }));
-				expect([one.runs.map((r) => r.id), one.next !== undefined]).toEqual([['r5', 'r4'], true]);
-				const two = ids(yield* result(x, 'runs', { limit: 2, cursor: one.next ?? '' }));
-				const three = ids(yield* result(x, 'runs', { limit: 2, cursor: two.next ?? '' }));
-				expect([two.runs.map((r) => r.id), three.runs.map((r) => r.id), three.next]).toEqual([
+				const one = ids(yield* $runs(x, { limit: 2 }));
+				expect([one.rows.map((r) => r.id), one.next !== null]).toEqual([['r5', 'r4'], true]);
+				const two = ids(yield* $runs(x, { limit: 2, after: one.next ?? '' }));
+				const three = ids(yield* $runs(x, { limit: 2, after: two.next ?? '' }));
+				expect([two.rows.map((r) => r.id), three.rows.map((r) => r.id), three.next]).toEqual([
 					['r3', 'r2'],
 					['r1'],
-					undefined
+					null
 				]);
-				expect(yield* result(x, 'runs', { status: 'failed' })).toMatchObject({
+				expect(yield* $runs(x, { status: 'failed' })).toMatchObject({
 					result: {
-						runs: [
+						rows: [
 							{
 								id: 'r2',
 								status: 'failed',
@@ -3143,37 +3139,44 @@ describe('runs and logs', () => {
 						attributes: {}
 					}
 				]);
-				expect(yield* result(x, 'runs', { id: 'r2' })).toMatchObject({
+				expect(yield* $runs(x, { id: 'r2' })).toMatchObject({
 					result: {
-						id: 'r2',
-						input: { month: '10' },
-						attempts: [{ error: { code: 'timeout' } }, { error: { code: 'guest' } }],
-						logs: [{ event: 'console', severity: 'error', attributes: { line: 'boom' } }]
+						rows: [{
+							id: 'r2',
+							input: { month: '10' },
+							attempts: [{ error: { code: 'timeout' } }, { error: { code: 'guest' } }],
+							logs: [{ event: 'console', severity: 'error', attributes: { line: 'boom' } }]
+						}],
+						next: null
 					}
 				});
-				expect(yield* result(x, 'runs', { cursor: 'nope' })).toEqual({
-					result: { error: 'That cursor is not one a page answered.' }
+				expect(yield* $runs(x, { after: 'nope' })).toEqual({
+					result: { error: '$runs: after is a next a page answered.' }
+				});
+				// a model and a ledger in one read: each answers under its own name
+				expect(yield* result(x, 'read', { request: { tasks: { limit: 1 }, $runs: { id: 'r2' } } })).toMatchObject({
+					result: { tasks: { rows: expect.any(Array) }, $runs: { rows: [{ id: 'r2' }] } }
 				});
 				// a member holding billing.invoice: its runs in full, a run they started with its result, nobody else's
 				const holder = yield* ctx({ authority: { ...member(), automations: ['billing.invoice'] } });
 				yield* runs(holder);
-				expect(ids(yield* result(holder, 'runs', {})).runs.map((r) => r.id)).toEqual([
+				expect(ids(yield* $runs(holder, {})).rows.map((r) => r.id)).toEqual([
 					'r4',
 					'r2',
 					'r1'
 				]);
-				expect(yield* result(holder, 'runs', { id: 'r1' })).toMatchObject({
-					result: { input: { month: '09' } }
+				expect(yield* $runs(holder, { id: 'r1' })).toMatchObject({
+					result: { rows: [{ input: { month: '09' } }] }
 				});
-				expect(yield* result(holder, 'runs', { id: 'r4' })).toMatchObject({
-					result: { status: 'cancelled', error: { code: 'stopped' }, input: { secret: 1 } }
+				expect(yield* $runs(holder, { id: 'r4' })).toMatchObject({
+					result: { rows: [{ status: 'cancelled', error: { code: 'stopped' }, input: { secret: 1 } }] }
 				});
-				expect(yield* result(holder, 'runs', { id: 'r5' })).toEqual({
-					result: { error: 'No automation run r5 you may read.' }
+				expect(yield* $runs(holder, { id: 'r5' })).toEqual({
+					result: { error: '$runs: no automation run r5 you may read.' }
 				});
 			})
 	);
-	it.effect("a run's clipped values name read_file's call id, and the whole run stays for it", () =>
+	it.effect("a run's clipped values name read_output's call id, and the whole run stays for it", () =>
 		Effect.gen(function* () {
 			const x = yield* ctx();
 			const big = { text: 'x'.repeat(6_000) };
@@ -3184,15 +3187,15 @@ describe('runs and logs', () => {
 			});
 			const answer = Schema.decodeUnknownSync(
 				Schema.Struct({
-					result: Schema.Struct({ input: Schema.String }),
-					full: Schema.Struct({ input: Schema.Struct({ text: Schema.String }) }),
+					result: Schema.Struct({ rows: Schema.Tuple([Schema.Struct({ input: Schema.String })]) }),
+					full: Schema.Struct({ rows: Schema.Tuple([Schema.Struct({ input: Schema.Struct({ text: Schema.String }) })]) }),
 					bounded: Schema.Literal(true)
 				})
-			)(yield* result(x, 'runs', { id: 'rb' }));
-			expect(answer.result.input).toMatch(
-				/\.\.\. \[clipped, \d+ bytes; read_file \{ call: 'call' \} reads it whole\]$/
+			)(yield* $runs(x, { id: 'rb' }));
+			expect(answer.result.rows[0].input).toMatch(
+				/\.\.\. \[clipped, \d+ bytes; read_output \{ call: 'call' \} reads it whole\]$/
 			);
-			expect(answer.full.input.text).toBe(big.text);
+			expect(answer.full.rows[0].input.text).toBe(big.text);
 		})
 	);
 	it.effect(
@@ -3236,12 +3239,12 @@ describe('runs and logs', () => {
 				]);
 				const events = (input: Json) =>
 					Effect.map(
-						result(x, 'logs', input),
+						result(x, 'read', { request: { $logs: input } }),
 						(answer) =>
 							Schema.decodeUnknownSync(
 								Schema.Struct({
 									result: Schema.Struct({
-										lines: Schema.Array(
+										rows: Schema.Array(
 											Schema.Struct({
 												id: Schema.String,
 												event: Schema.String,
@@ -3249,33 +3252,35 @@ describe('runs and logs', () => {
 												attributes: Schema.Json
 											})
 										),
-										next: Schema.optionalKey(Schema.String)
+										next: Schema.NullOr(Schema.String)
 									})
 								})
 							)(answer).result
 					);
-				expect((yield* events({ level: 'warn' })).lines.map((l) => l.level)).toEqual([
+				expect((yield* events({ level: 'warn' })).rows.map((l) => l.level)).toEqual([
 					'error',
 					'warn'
 				]);
-				expect((yield* events({ text: 'STARTING' })).lines.map((l) => l.event)).toEqual([
+				expect((yield* events({ text: 'STARTING' })).rows.map((l) => l.event)).toEqual([
 					'console'
 				]);
-				expect((yield* events({ run: 'r2' })).lines).toHaveLength(3);
-				expect((yield* events({ automation: 'billing.invoice' })).lines).toHaveLength(3);
+				expect((yield* events({ run: 'r2' })).rows).toHaveLength(3);
+				expect((yield* events({ automation: 'billing.invoice' })).rows).toHaveLength(3);
 				expect(
 					(yield* events({
 						since: '2026-09-21T01:00:02Z',
 						until: '2026-09-22T00:00:00Z'
-					})).lines.map((l) => l.level)
+					})).rows.map((l) => l.level)
 				).toEqual(['error', 'warn']);
-				const newest = (yield* events({ run: 'r2' })).lines[0];
+				const newest = (yield* events({ run: 'r2' })).rows[0];
 				expect(typeof newest?.attributes).toBe('string');
 				const page = yield* events({ run: 'r2', limit: 2 });
 				expect(
-					(yield* events({ run: 'r2', cursor: page.next ?? '' })).lines.map((l) => l.event)
+					(yield* events({ run: 'r2', after: page.next ?? '' })).rows.map((l) => l.event)
 				).toEqual(['console']);
-				expect(yield* tool(yield* ctx({ authority: member() }), 'logs')).toBeUndefined();
+				expect(yield* result(yield* ctx({ authority: member() }), 'read', { request: { $logs: {} } })).toEqual({
+					result: { error: "No '$logs' you may read. Ledgers: $runs, $approvals" }
+				});
 			})
 	);
 });
@@ -3302,7 +3307,7 @@ describe('host web search', () => {
 					mcpTools: [{ server: 'kagi', name: 'web_search', description: 'Kagi', input: { type: 'object' } }]
 				})
 			);
-			expect(own).toEqual(expect.arrayContaining(['kagi.web_search', 'web_search', 'browser']));
+			expect(own).toEqual(expect.arrayContaining(['kagi__web_search', 'web_search', 'browser']));
 		})
 	);
 	it.effect('a schema the validator cannot follow never ends the turn', () =>
@@ -3356,15 +3361,16 @@ describe('approvals, record history and the audit trail', () => {
 				params: [ada]
 			});
 			const id = yield* created(admin);
-			const history = yield* result(admin, 'record_history', { model: 'tasks', id });
+			const history = yield* result(admin, 'read', { request: { tasks: { where: { id: { eq: id } }, history: true } } });
 			// the writer reads as the person, never as an account id
-			expect(history).toMatchObject({ result: { revisions: [{ revision: 1, by: 'Ada Lovelace' }] } });
-			expect(history).not.toMatchObject({ result: { revisions: [{ actor: expect.anything() }] } });
+			expect(history).toMatchObject({ result: { tasks: { rows: [{ id, $history: [{ revision: 1, by: 'Ada Lovelace' }] }] } } });
+			expect(history).not.toMatchObject({ result: { tasks: { rows: [{ $history: [{ actor: expect.anything() }] }] } } });
 			// staff may create tasks but read none: no history either
 			const staff = yield* ctx({ authority: Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's')) });
-			expect(yield* result(staff, 'record_history', { model: 'tasks', id })).toEqual({
-				result: { error: `No tasks ${id} you may read.` }
+			expect(yield* result(staff, 'read', { request: { tasks: { history: true } } })).toEqual({
+				result: { error: expect.stringContaining("You read no 'tasks'") }
 			});
+
 		})
 	);
 	it.effect('approvals are judged by whether the person reads the record, as their own screens are', () =>
@@ -3381,23 +3387,28 @@ describe('approvals, record history and the audit trail', () => {
 			};
 			const staff = Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's'));
 			for (const authority of [member({ admin: true }), staff])
-				expect(yield* result(yield* ctx({ authority }, { approvals }), 'approvals', {})).toEqual({
-					result: { requests: [] }
+				expect(yield* result(yield* ctx({ authority }, { approvals }), 'read', { request: { $approvals: {} } })).toEqual({
+					result: { rows: [], next: null }
 				});
 			expect(seen).toEqual([true, false]);
-			expect(yield* result(yield* ctx({}, { approvals }), 'approvals', { id: 'r1' })).toEqual({
-				result: { error: 'No approval request r1 you may see.' }
-			});
+			// a row's own requests ride on it
+			expect(
+				yield* result(yield* ctx({}, { approvals }), 'read', { request: { tasks: { where: { id: { eq: id } }, approvals: true } } })
+			).toMatchObject({ result: { tasks: { rows: [{ id, $approvals: [] }] } } });
 		})
 	);
 	it.effect('only an administrator reads the audit trail', () =>
 		Effect.gen(function* () {
 			const audit = yield* audit_shape(memory_audit().port).pipe(Effect.provide(NodeCrypto.layer));
 			const admin = yield* ctx({}, { audit });
-			expect(yield* result(admin, 'audit', { limit: 5 })).toEqual({ result: { rows: [], next: null } });
-			expect(yield* names(yield* ctx({ authority: member() }, { audit }))).not.toContain('audit');
-			expect(yield* names(yield* ctx({ authority: member({ admin: true, external: true }) }, { audit }))).not.toContain('audit');
-			expect(yield* names(yield* ctx())).not.toContain('audit');
+			const trail = (x: ToolContext) => result(x, 'read', { request: { $audit: { limit: 5 } } });
+			expect(yield* trail(admin)).toEqual({ result: { rows: [], next: null } });
+			for (const x of [
+				yield* ctx({ authority: member() }, { audit }),
+				yield* ctx({ authority: member({ admin: true, external: true }) }, { audit }),
+				yield* ctx()
+			])
+				expect(yield* trail(x)).toEqual({ result: { error: expect.stringContaining("No '$audit' you may read.") } });
 		})
 	);
 });
@@ -3416,7 +3427,7 @@ describe('a transcript row', () => {
 
 describe('the catalogue', () => {
 	it.effect(
-		'lists host tools by name for the roles holding them; MCP tools run through run_tool',
+		'lists host tools by name for the roles holding them; MCP tools are native by a provider-safe name',
 		() =>
 			Effect.gen(function* () {
 				const host_calls: HostToolContext[] = [];
@@ -3437,7 +3448,7 @@ describe('the catalogue', () => {
 					server: 'search',
 					name: 'web_search',
 					description: 'Search',
-					input: { type: 'object' }
+					input: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] }
 				};
 				const x = yield* ctx({
 					host_tools: [operation],
@@ -3453,39 +3464,75 @@ describe('the catalogue', () => {
 				});
 				const offered = yield* catalogue(x);
 				const ordinary = yield* catalogue(yield* ctx({ authority: member() }));
-				expect(offered.tools.map(({ name }) => name)).toEqual([
-					...ordinary.tools.map(({ name }) => name),
-					'workspace_lang'
+				const listed = (c: typeof offered) => [...c.fixed, ...c.host].map(({ name }) => name);
+				expect(listed(offered)).toEqual([...listed(ordinary), 'workspace_lang']);
+				expect(listed(offered)).toEqual(expect.arrayContaining(['run_tool', 'read', 'act']));
+				expect(offered.mcp).toEqual([
+					{ name: 'search__web_search', description: 'Search', input: external.input, behavior: {} }
 				]);
-				expect(offered.tools.map(({ name }) => name)).toEqual(
-					expect.arrayContaining(['run_tool', 'read', 'act'])
-				);
-				expect(offered.tools.map(({ name }) => name)).not.toContain('search.web_search');
 				// planning binds only read-only host tools, yet the list stays the same
 				const planning = yield* catalogue(yield* ctx({ host_tools: [{ ...operation, read_only: false }], mode: 'plan' }));
-				expect(planning.tools.map(({ name }) => name)).toContain('workspace_lang');
-				const discovery = Schema.decodeUnknownSync(
-					Schema.fromJsonString(
-						Schema.Struct({
-							run_tool: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String, input: Schema.Json }))
-						})
-					)
-				)(offered.discovery);
-				expect(discovery.run_tool).toEqual([
-					{ name: 'search.web_search', description: 'Search', input: { type: 'object' } }
-				]);
+				expect(listed(planning)).toContain('workspace_lang');
+				expect(offered.index['tool:search__web_search']).toBe('search__web_search(q: string) — Search');
 				expect(yield* offered.run('run_tool', { name: 'workspace_lang', input: {} }, 'direct')).toMatchObject({
 					result: { error: expect.stringContaining('call it by its own name') }
 				});
 				expect(host_calls).toEqual([]);
 				expect(yield* offered.run('workspace_lang', {}, 'host-call')).toEqual({ result: { ok: true } });
 				expect(host_calls).toMatchObject([{ call_id: 'host-call', conversation: x.conv.id }]);
+				// by its own name when native, through run_tool when a merge added it later
+				expect(yield* offered.run('search__web_search', { q: 'news' }, 'mcp-call')).toEqual({ result: { ok: true } });
 				expect(
-					yield* offered.run('run_tool', { name: 'search.web_search', input: { q: 'news' } }, 'mcp-call')
+					yield* offered.run('run_tool', { name: 'search__web_search', input: { q: 'more' } }, 'mcp-later')
 				).toEqual({ result: { ok: true } });
-				expect(mcp_calls).toEqual([{ server: 'search', tool: 'web_search', input: { q: 'news' } }]);
+				expect(mcp_calls).toEqual([
+					{ server: 'search', tool: 'web_search', input: { q: 'news' } },
+					{ server: 'search', tool: 'web_search', input: { q: 'more' } }
+				]);
 			})
 	);
+	it.effect('fixes each audience its own tool list: a channel never sees the source, the tab or download', () =>
+		Effect.gen(function* () {
+			const listOf = (audience: 'staff' | 'member' | 'channel') =>
+				Effect.flatMap(ctx({ audience }), (x) => Effect.map(catalogue(x), (c) => c.fixed.map((t) => t.name)));
+			const channel = yield* listOf('channel'),
+				staff = yield* listOf('staff'),
+				external = yield* listOf('member');
+			for (const hidden of ['workspace_read', 'workspace_search', 'workspace_list_dir', 'page', 'download'])
+				expect(channel).not.toContain(hidden);
+			expect(channel).toContain('read_messages');
+			expect(staff).toEqual(expect.arrayContaining(['page', 'workspace_read', 'update_plan']));
+			expect(staff).not.toContain('read_messages');
+			expect(external).not.toContain('workspace_read');
+			// the list is the audience's, whatever the step's mode or authority
+			expect((yield* catalogue(yield* ctx({ mode: 'plan' }))).fixed).toEqual((yield* catalogue(yield* ctx())).fixed);
+			expect((yield* catalogue(yield* ctx({ authority: member() }))).fixed).toEqual((yield* catalogue(yield* ctx())).fixed);
+		})
+	);
+	it('a merge appends only what changed: added or changed lines and removed names, counts past ten', () => {
+		const base = {
+			'skill:pricing': 'pricing — How we price',
+			'model:tasks': 'tasks(title: text) writes create',
+			'tool:search__web_search': 'search__web_search(q: string) — Search'
+		};
+		// the first note lists everything but the native tools
+		expect(catalogueNote(base, undefined)).toBe(
+			'[Catalogue]\nSkills (skill reads one):\n- pricing — How we price\nModels (fields; reads and writes beyond the default):\n- tasks(title: text) writes create'
+		);
+		expect(catalogueNote(base, base)).toBeUndefined();
+		const merged = {
+			'skill:pricing': 'pricing — How we price now',
+			'model:tasks': 'tasks(title: text) writes create',
+			'tool:search__news': 'search__news(q: string) — News'
+		};
+		expect(catalogueNote(merged, base)).toBe(
+			'[Catalogue changed by a merge]\nSkills (skill reads one):\n- pricing — How we price now\nTools (run_tool { name, input }):\n- search__news(q: string) — News\nRemoved: search__web_search'
+		);
+		const many = Object.fromEntries(Array.from({ length: 11 }, (_, n) => [`skill:s${n}`, `s${n} — x`]));
+		expect(catalogueNote(many, base)).toBe(
+			'[Catalogue changed by a merge] 11 added, 0 changed, 3 removed: describe_workspace and skill read them.'
+		);
+	});
 	it.effect(
 		'for an administrator with no MCP stays under 16,000 characters and names no model of the workspace',
 		() =>
@@ -3501,7 +3548,7 @@ describe('the catalogue', () => {
 					{ convert: { targets: ['pdf'], convert: () => Effect.succeed(new Uint8Array()) } }
 				);
 				// the host's own tools (here the browser) are the host's budget
-				const texts = (yield* catalogue(x)).tools
+				const texts = (yield* catalogue(x)).fixed
 					.filter((t) => !x.host_tools.some((host) => host.name === t.name))
 					.map((t) => `${t.description ?? ''}${JSON.stringify(t.input)}`);
 				expect(texts.join('').length).toBeLessThan(16_000);
@@ -3511,37 +3558,3 @@ describe('the catalogue', () => {
 	);
 });
 
-describe('the checklist', () => {
-	it.effect('keeps a done goal omitted from the next list, and never rewrites it', () =>
-		Effect.gen(function* () {
-			let captured: Parameters<ToolContext['setGoals']>[0] | undefined;
-			const base = yield* ctx();
-			const x = yield* ctx({
-				conv: {
-					...base.conv,
-					goals: [{ id: 'read', text: 'Read the source', status: 'done' }]
-				},
-				setGoals: (goals) => Effect.sync(() => void (captured = goals))
-			});
-			const answer = yield* result(x, 'goals', {
-				items: [
-					{ id: 'build', text: 'Build the change', status: 'doing' },
-					{ id: 'read', text: 'Something else', status: 'pending' }
-				]
-			});
-			expect(answer).toMatchObject({
-				result: {
-					saved: true,
-					goals: [
-						{ id: 'build', status: 'doing' },
-						{ id: 'read', text: 'Read the source', status: 'done' }
-					]
-				}
-			});
-			expect(captured).toEqual([
-				{ id: 'build', text: 'Build the change', status: 'doing' },
-				{ id: 'read', text: 'Read the source', status: 'done' }
-			]);
-		})
-	);
-});

@@ -2,8 +2,7 @@
 @component
 A dense cell's value on one line of fixed height; when it is wider or taller than the cell, an expand button opens a
 bounded, scrollable popover holding it whole: `full` when given, else `text` as plain text, else the value again.
-`expand="row"` shows that button only while its table row (`group/row`) is hovered or holds focus; `"never"` drops it
-(a row's title cell, whose row opens the record). A phone's row card has none: the whole card opens the record.
+`expand="never"` drops it: a table row's cells, since the row opens its record.
 -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
@@ -13,17 +12,18 @@ bounded, scrollable popover holding it whole: `full` when given, else `text` as 
 
 	let {
 		text,
-		class: className,
 		children,
 		full,
 		expand = 'always'
 	}: {
+		/** The value as plain text, for the popover when `full` is absent. */
 		text?: string;
-		class?: string;
+		/** The value as the cell shows it. */
 		children: Snippet;
 		/** The whole value for the popover, when the cell shows a shorter preview of it. */
 		full?: Snippet;
-		expand?: 'always' | 'row' | 'never';
+		/** `never` drops the expand button (default `always`). */
+		expand?: 'always' | 'never';
 	} = $props();
 	const t = ui_text();
 	let probe = $state<HTMLElement | null>(null);
@@ -41,18 +41,14 @@ bounded, scrollable popover holding it whole: `full` when given, else `text` as 
 	});
 </script>
 
-<span class={cn('flex max-w-full min-w-0 items-center gap-1', className)}>
+<span class="flex max-w-full min-w-0 items-center gap-1">
 	<span bind:this={probe} class="block max-h-7 min-w-0 flex-1 truncate [&_*]:whitespace-nowrap!"
 		>{@render children()}</span
 	>
 	{#if overflow && expand !== 'never'}
 		<Popover.Root>
 			<Popover.Trigger
-				class={cn(
-					'text-muted-foreground hover:text-foreground grid size-5 shrink-0 place-items-center rounded-sm',
-					expand === 'row' &&
-						'opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100'
-				)}
+				class="text-muted-foreground hover:text-foreground grid size-5 shrink-0 place-items-center rounded-sm"
 				aria-label={t('expand')}
 				data-cell-expand
 				onclick={(event: MouseEvent) => event.stopPropagation()}

@@ -1,19 +1,25 @@
 <!--
 @component
-A bar, line, area or donut chart over an aggregate's buckets, a declared query's rows or rows, live while shown: `x` names the category, `y` the
-numbers (`count`, `sum.amount`).
+A bar, line, area or donut chart over a model (bucketed by `x`), an aggregate's buckets, a declared query's rows or rows,
+live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`). It fills its parent, down to 18rem.
 @example
-<Chart {ctx} of={bolt.aggregate('jobs', { count: true, by: 'status', limit: 20 })} x="status" y="count" kind="bar" />
+<Chart {ctx} of="jobs" x="status" y="count" kind="bar" />
 -->
 <script lang="ts" module>
-	import type { UiContext } from '../client/contract.js';
+	import type { Json, UiContext } from '../client/contract.js';
+	import type { ModelKey } from '../model/types.js';
 	import type { ViewSource } from '../read/source.js';
-	/** `of` is an aggregate's page of buckets, a declared query's rows or page, or rows; `y` names numbers (`count`, `sum.amount`). */
+	/** `of` is a model, an aggregate's page of buckets, a declared query's rows or page, or rows; `y` names numbers (`count`, `sum.amount`). */
 	type ChartProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
-		/** The data: an aggregate's buckets, a declared query's rows or page, or rows; re-read live while shown. */
-		of: ViewSource;
+		/**
+		 * The data: a model (one aggregate bucketed by `x`, measuring each `y`), an aggregate's buckets, a declared query's
+		 * rows or page, or rows; re-read live while shown.
+		 */
+		of: ModelKey | ViewSource;
+		/** A model's scope: only its rows are measured. */
+		where?: Json;
 		/** The category field: one bar, point or slice per value. */
 		x: string;
 		/** The numeric field, or several as series in palette order; a donut plots only the first. */
@@ -29,6 +35,15 @@ numbers (`count`, `sum.amount`).
 		/** A caption above the chart; also names the data in loading and error states. */
 		title?: string;
 	};
+	/** A model chart's one aggregate: bucketed by `x`, a `count` and each `sum.f`/`avg.f`/`min.f`/`max.f` the series name. */
+	const measures = (x: string, ys: readonly string[], where: Json | undefined) => {
+		const by: Record<string, string[]> = {};
+		for (const y of ys) {
+			const dot = y.indexOf('.');
+			if (dot > 0) (by[y.slice(0, dot)] ??= []).push(y.slice(dot + 1));
+		}
+		return { by: [x], count: true, ...by, ...(where === undefined ? {} : { where }) };
+	};
 </script>
 
 <script lang="ts">
@@ -42,6 +57,7 @@ numbers (`count`, `sum.amount`).
 	let {
 		ctx,
 		of,
+		where,
 		x,
 		y,
 		kind = 'bar',
@@ -57,7 +73,9 @@ numbers (`count`, `sum.amount`).
 	const xAxis = { tickSpacing: 80 };
 	let plotWidth = $state(Infinity);
 	const ys = $derived(typeof y === 'string' ? [y] : [...y]);
-	const read = $derived(sourceState(of));
+	const read = $derived(
+		sourceState(typeof of === 'string' ? bolt.aggregate(of, measures(x, ys, where)) : of)
+	);
 	const loadPlots = () => import('./plots.js');
 	const COLORS = [
 		'var(--chart-1, #2563eb)',
@@ -75,7 +93,7 @@ numbers (`count`, `sum.amount`).
 	);
 </script>
 
-<figure class="flex min-w-0 flex-col gap-2" data-view="chart">
+<figure class="flex h-full min-h-72 min-w-0 flex-1 flex-col gap-2" data-view="chart">
 	{#if title}<figcaption class="text-sm font-semibold">{title}</figcaption>{/if}
 	<ReadGate {ctx} state={read} what={title ?? msg(bolt, 'chart.data')}>
 		{#snippet children(value)}
@@ -90,10 +108,10 @@ numbers (`count`, `sum.amount`).
 				</p>
 			{:else}
 				{#await loadPlots()}
-					<div class={kind === 'donut' ? 'h-56' : 'h-72'} aria-busy="true"></div>
+					<div class="min-h-0 flex-1" aria-busy="true"></div>
 				{:then { AreaChart, BarChart, LineChart, PieChart, ScatterChart }}
 					{#if kind === 'donut'}
-						<div class="h-56">
+						<div class="min-h-0 flex-1">
 							<PieChart
 								data={data.map((d) => ({ key: String(d[x]), value: first_y === undefined ? 0 : Number(d[first_y] ?? 0) }))}
 								key="key"
@@ -103,7 +121,7 @@ numbers (`count`, `sum.amount`).
 							/>
 						</div>
 					{:else}
-						<div class="h-72 min-w-0 overflow-x-auto" bind:clientWidth={plotWidth}>
+						<div class="min-h-0 min-w-0 flex-1 overflow-x-auto" bind:clientWidth={plotWidth}>
 							{#if kind === 'scatter'}<ScatterChart
 									{data}
 									{x}

@@ -8,9 +8,11 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { type GuestShape } from '../src/engine/services.ts';
-import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
+import { type WriteEngine } from '../src/engine/write/act.ts';
 import { restore_source, seed } from '../src/engine/write/seed.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
+import { act_one, type OneAct } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 
 const cols = ['name', 'span', 'slot'];
 const manifest: EngineManifest = {
@@ -60,14 +62,13 @@ const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
 	let n = 0;
 	const run = (
-		over: Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>,
+		over: Partial<OneAct> & Pick<OneAct, 'verb' | 'input'>,
 		engine: Partial<WriteEngine> = {}
 	) =>
-		act(
+		act_one(
 			{ manifest, db, ...engine },
 			{
 				model: 'shifts',
-				mode: { _tag: 'Direct' },
 				key: `key-${n}`,
 				issuedAt: NOW,
 				authority: admin,
@@ -178,7 +179,7 @@ describe('codec: the update callback reads `before` in wire form', () => {
 					})).outcome
 				);
 				let seen: Json = null;
-				const guest: GuestShape = {
+				const guest: GuestShape = with_each({
 					invokeProgram: () =>
 						Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 					invoke: (inv: Invocation) =>
@@ -197,7 +198,7 @@ describe('codec: the update callback reads `before` in wire form', () => {
 							seen = change.before;
 							return { kind: 'ok', output: [change.set] };
 						})
-				};
+				});
 				committed(
 					(yield* run(
 						{ verb: 'update', input: [{ target: id, set: { name: 'b' } }] },

@@ -268,7 +268,7 @@ describe('next query: decode', () => {
 				expect(is(yield* where(cat, 'orders', { note: { eq: 'x' } }))).toBe(false);
 				expect(is(yield* where(cat, 'orders', { note: { ne: 'x' } }))).toBe(true);
 				expect(is(yield* where(cat, 'orders', { not: { note: { eq: 'x' } } }))).toBe(true);
-				expect(is(yield* where(cat, 'orders', { email: { eq: { var: 'requestor.email' } } }))).toBe(
+				expect(is(yield* where(cat, 'orders', { email: { eq: { var: 'actor.email' } } }))).toBe(
 					true
 				);
 				expect(
@@ -298,10 +298,10 @@ describe('next query: decode', () => {
 				const guestIs = (p: Pred) =>
 					evaluate({ cat, bindings, authority: guest }, 'orders', p, { ...row, note: 'v-1' });
 				expect(
-					guestIs(yield* where(cat, 'orders', { note: { eq: { var: 'requestor.visitor' } } }))
+					guestIs(yield* where(cat, 'orders', { note: { eq: { var: 'actor.visitor' } } }))
 				).toBe(true);
 				expect(
-					is(yield* where(cat, 'orders', { note: { eq: { var: 'requestor.visitor' } } }))
+					is(yield* where(cat, 'orders', { note: { eq: { var: 'actor.visitor' } } }))
 				).toBe(false);
 			})
 	);

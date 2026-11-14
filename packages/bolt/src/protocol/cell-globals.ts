@@ -6,7 +6,7 @@
 // Also installed, because Effect needs them where Bolt hands it a body or a log: `console` (its loggers) and a
 // `ReadableStream` (`HttpServerResponse.toWeb` streams, `HttpServerRequest.stream` reads).
 // No runtime import: in a cell this module evaluates first, so Effect and the engine find their globals installed.
-import type { Kernel } from './cell.ts';
+import type { Kernel } from '@norbital-ai/host-api';
 
 export type CellGlobals = {
 	/** The kernel's system calls, from `open` on; before it a system call throws. */
@@ -16,6 +16,7 @@ export type CellGlobals = {
 };
 
 /** A Request's or Response's unread body bytes, where this realm holds them: the membrane sends them inline. */
+// the membrane (`@norbital-ai/host-api`) reads it by this registry key: no runtime import here (see above)
 export const BODY_BYTES = Symbol.for('norbital.bolt.bodyBytes');
 
 const named = (name: string, message: string) => {

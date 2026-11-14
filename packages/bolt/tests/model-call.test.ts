@@ -1,9 +1,10 @@
 // The model idle wall preserves partial text and identifies a cut tool call separately from no output.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result, Stream } from 'effect';
-import { Unavailable } from '../src/decl/errors.ts';
+import { Unavailable } from '@norbital-ai/host-api';
 import { modelCall } from '../src/engine/agent/ai.ts';
-import type { Ai, AiEvent } from '../src/engine/ports.ts';
+import type { Ai } from '../src/engine/ports.ts';
+import type { AiEvent } from '@norbital-ai/host-api';
 import { clock_probe } from './support/clock-probe.ts';
 
 const request = { model: 'default', system: '', messages: [] };

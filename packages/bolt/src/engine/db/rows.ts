@@ -2,7 +2,8 @@
 // system table's from `system/rows.ts`). A row that does not decode is an engine fault, `BoltError('internal')` naming
 // the Schema's table; tenant rows a caller only relays stay `Rows` (D5).
 import { Effect, Option, Result, Schema, SchemaAST } from 'effect';
-import type { RowData, Rows } from '../contracts.ts';
+import type { Rows } from '@norbital-ai/host-api';
+import type { RowData } from '../contracts.ts';
 import type { Catalog } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
 import { storedRow } from './stored.ts';

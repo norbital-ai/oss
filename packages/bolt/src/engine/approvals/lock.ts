@@ -8,7 +8,7 @@ import { Effect, Option, Schema } from 'effect';
 import type { EngineActor } from '../contracts.ts';
 import { relations, teams, type EngineManifest, type GrantData } from '../manifest.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
-import { DbError } from '../errors.ts';
+import { DbError } from '@norbital-ai/host-api';
 import type { Catalog } from '@norbital-ai/store';
 import type { RowApproval } from '../../decl/names.ts';
 import { GATED, type Chain } from '../write/sql.ts';
@@ -140,8 +140,11 @@ const Holder = Schema.Struct({
 	requester: Schema.Boolean,
 	model: Schema.String,
 	record: Schema.String,
-	action: Schema.Literals(['create', 'update', 'delete'])
+	action: Schema.Literals(['create', 'update', 'delete']),
+	/** The asked refs (model, id) this request holds. */
+	refs: Schema.Array(Schema.Tuple([Schema.String, Schema.String]))
 });
+export type Holder = typeof Holder.Type;
 /**
  * The open requests holding any of `refs`, and whether `actor` may change them: a routed write on a held record joins
  * its request instead of opening one, a requester's save resubmits theirs, and record capabilities refuse the others'
@@ -156,10 +159,10 @@ export const holders = Effect.fn('Approvals.holders')(function* (
 	const { team, id } = own(actor);
 	return yield* db.rows(Holder, {
 		text: `SELECT a.id::text AS id, ${eligible('$2', '$3', '$4')} AS eligible, a.route ? '__boltReadGuards' AS "readGuarded", a.state, a.requestor = $4 AS requester,
-		a.collection AS model, a.record, a.action FROM bolt_approvals a
-	WHERE ${open_sql('a.state')}
-		AND EXISTS (SELECT 1 FROM jsonb_array_elements(a.records) r JOIN jsonb_to_recordset($1::jsonb) AS t(c text, id text)
-			ON t.c = r ->> 'collection' AND t.id = r ->> 'id')`,
+		a.collection AS model, a.record, a.action, hit.refs FROM bolt_approvals a
+	CROSS JOIN LATERAL (SELECT jsonb_agg(DISTINCT jsonb_build_array(t.c, t.id)) AS refs FROM jsonb_array_elements(a.records) r
+		JOIN jsonb_to_recordset($1::jsonb) AS t(c text, id text) ON t.c = r ->> 'collection' AND t.id = r ->> 'id') hit
+	WHERE ${open_sql('a.state')} AND hit.refs IS NOT NULL`,
 		params: [JSON.stringify(refs.map(([c, id]) => ({ c, id }))), team, id, actor_ref(actor)]
 	});
 });

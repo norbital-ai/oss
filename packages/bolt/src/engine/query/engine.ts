@@ -13,7 +13,8 @@ import {
 	Predicate,
 	Schema
 } from 'effect';
-import type { Authority, Bindings, CrossAnswer, Reader, RowData, Rows, Sql } from '../contracts.ts';
+import { DbError, type Rows, type Sql } from '@norbital-ai/host-api';
+import type { Authority, Bindings, CrossAnswer, Reader, RowData } from '../contracts.ts';
 import type { Order, Pred, SelectIR } from '@norbital-ai/store';
 import { decodeRead, type ReadIR } from '../../protocol/reads.ts';
 import type { EngineManifest } from '../manifest.ts';
@@ -22,7 +23,7 @@ import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { syncState } from '../sync/index.ts';
 import { approvable, heldModels, rowApproval } from '../approvals/lock.ts';
 import { LIMITS } from '../contracts.ts';
-import { DbError, type EngineError } from '../errors.ts';
+import { type EngineError } from '../errors.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
 import { Reads, Manifest, Guest } from '../services.ts';
 import { SqlReadCapture, TenantDb as TenantDbService } from '../db/tenant-db.ts';
@@ -127,7 +128,7 @@ export function sortTargets(
 	return out;
 }
 /** Models a selection's relation arms read, with their own order keys. */
-export const selectTargets = (cat: Catalog, s: SelectIR, out = new Set<string>()): Set<string> => {
+const selectTargets = (cat: Catalog, s: SelectIR, out = new Set<string>()): Set<string> => {
 	for (const r of Object.values(s.relations))
 		for (const target of r.targets ?? [r.target])
 			selectTargets(
@@ -219,15 +220,50 @@ const isRow = (v: Json): v is { readonly [k: string]: Json } =>
 	typeof v === 'object' && v !== null && !Array.isArray(v);
 const decodeCursorKey = Schema.decodeUnknownEffect(Schema.Array(Schema.NullOr(Schema.String)));
 
+/** Compiled read statements one reader keeps (`read_engine`); the oldest goes first. */
+export const COMPILED_ENTRIES = 256;
 export function read_engine(config: ReadEngineConfig): ReadEngine & {
 	catalog: Catalog;
 } {
 	const options = (reader: Reader, bindings: Bindings) =>
 		readOptions(reader, bindings, { sources: config.querySources?.sources, approvals, allBytes });
-	const compile = (cat: Catalog, ir: ReadIR, reader: Reader, bindings: Bindings, probe?: Probe) =>
-		ir.kind === 'read' || ir.kind === 'get' || ir.kind === 'aggregate' || ir.kind === 'similar'
-			? compileSource(cat, ir, options(reader, bindings), probe).pipe(Effect.mapError(from_store))
-			: Effect.fail(BoltError.make('invalid', 'decode', `'${ir.kind}' is not a statement read`));
+	// compiled statements by reader (its authority, or the workspace) and read: one that resolved no binding (`now`,
+	// `actor.*`) is the same text and parameters at any time, so a repeated read compiles once
+	const compiled = new WeakMap<object, Map<string, Compiled>>(),
+		workspace = {};
+	const compile = (cat: Catalog, ir: ReadIR, reader: Reader, bindings: Bindings, probe?: Probe) => {
+		if (ir.kind !== 'read' && ir.kind !== 'get' && ir.kind !== 'aggregate' && ir.kind !== 'similar')
+			return Effect.fail(BoltError.make('invalid', 'decode', `'${ir.kind}' is not a statement read`));
+		const owner = reader.as === 'caller' ? reader.authority : workspace,
+			key = `${bindings.tz}\u0000${approvals.size}\u0000${JSON.stringify(ir)}`,
+			memo = probe === undefined ? compiled.get(owner)?.get(key) : undefined;
+		if (memo !== undefined) return Effect.succeed(memo);
+		const given = options(reader, bindings),
+			resolve = given.resolve;
+		let bound = false;
+		const tracked = resolve === undefined ? given : {
+			...given,
+			resolve: (o: Parameters<typeof resolve>[0]) => {
+				bound = true;
+				return resolve(o);
+			}
+		};
+		return compileSource(cat, ir, tracked, probe).pipe(
+			Effect.mapError(from_store),
+			Effect.tap((statement) =>
+				Effect.sync(() => {
+					if (bound || probe !== undefined) return;
+					const held = compiled.get(owner) ?? new Map<string, Compiled>();
+					compiled.set(owner, held);
+					if (held.size >= COMPILED_ENTRIES) {
+						const oldest = held.keys().next();
+						if (!oldest.done) held.delete(oldest.value);
+					}
+					held.set(key, statement);
+				})
+			)
+		);
+	};
 	const compileGets = (
 		cat: Catalog,
 		model: string,
@@ -253,8 +289,6 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		for (const model of config.held ?? []) approvals.add(model);
 		if (ir.kind === 'request')
 			return yield* BoltError.make('internal', 'decode', 'a read request is answered by its roots');
-		if (ir.kind === 'after')
-			return yield* BoltError.make('internal', 'decode', 'an after read is answered by the write compiler');
 		if (
 			ir.kind === 'history' ||
 			ir.kind === 'transcript' ||
@@ -500,6 +534,9 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 	) {
 		// a read request is its roots' reads, all in this one round trip, answered keyed by root
 		if (batch.some((ir) => ir.kind === 'request')) {
+			const act = batch.flatMap((ir) => (ir.kind === 'request' ? ir.roots : [])).find((r) => 'read' in r && r.prospective === true);
+			if (act !== undefined)
+				return yield* BoltError.make('invalid', 'decode', `'${act.root}': as_of 'act' reads only in a write callback`);
 			const parts = (ir: ReadIR): readonly ReadIR[] =>
 				ir.kind === 'request'
 					? ir.roots.flatMap((r): readonly ReadIR[] => ('read' in r ? [r.read] : r.as_of))

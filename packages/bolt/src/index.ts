@@ -2,7 +2,7 @@
 // Terms: server code (transforms, verdicts, effects, automations, syncs, integrations) receives a `ctx` from these
 // declarations; the page SDK is `@norbital-ai/bolt/page`; Device is what the shell running a page provides
 // (`ctx.device`); a shell is the container a workspace runs in (the web shell, or a native app); a host runs a bundle
-// and supplies its `Facilities` (`@norbital-ai/bolt/facilities`); secrets are encrypted tenant values declared with
+// and supplies its `Facilities` (`@norbital-ai/host-api`, the host contract); secrets are encrypted tenant values declared with
 // `secrets`; an environment (local, staging, production, and a tenant inside one) is an operator concern, never a
 // workspace setting.
 export { custom_field } from './decl/custom-field.ts';
@@ -11,10 +11,12 @@ export { team } from './decl/access/team.ts';
 export { mcp } from './decl/runtime/agent.ts';
 export { app, group, messages, secrets, workspace } from './decl/runtime/app.ts';
 export { automation } from './decl/runtime/automation.ts';
-export { browser_start } from './decl/runtime/facilities.ts';
 export { seeder } from './decl/seeder.ts';
-export { id_of } from './decl/id.ts';
-export { instance_id, is_instance } from './decl/runtime/integration.ts';
+export { sync } from './decl/runtime/sync.ts';
+export { id_of, new_id } from './decl/id.ts';
+export { model } from './decl/model.ts';
+export { instance_id, integration, is_instance } from './decl/runtime/integration.ts';
+export { dynamic_read, ReadRequestJson, type DynamicRead } from './protocol/read-request.ts';
 
 export type { Actor } from './decl/access/actor.ts';
 export type { ApprovalFlow, Verdict } from './decl/access/policy.ts';
@@ -28,11 +30,10 @@ export type {
 	Clock,
 	CreateInput,
 	Eff,
-	IndexSearch,
 	MessageKey,
 	Cursor,
 	ListRow,
-	Outcome,
+	IndexSearch,
 	Page,
 	PolicyCtx,
 	ReadAnswer,
@@ -51,6 +52,7 @@ export type {
 	Row,
 	StoredRow
 } from './decl/names.ts';
+/** For the generated `.norbital/names.ts` only: its declarations' compile-time verdict. */
 export type { Check, Verify } from './decl/verify.ts';
 export type {
 	CurrencyCode,
@@ -67,8 +69,16 @@ export type {
 export type { LayerWhere, Where } from './decl/where.ts'; // hook:query (OrderBy)
 export type { AutomationCtx, EffectCtx } from './decl/runtime/automation.ts';
 export type { ImageFacts, StartInput } from './decl/runtime/facilities.ts';
-export type { Attachment, CalendarEvent } from './decl/runtime/integration.ts';
-export type { Finding, Health, RemoteSync, SyncCtx, FileSyncCtx, SyncRow } from './decl/runtime/sync.ts';
+export type { Model, ModelLiteral, ModelLiteralInput } from './decl/model.ts';
+export type {
+	Attachment,
+	CalendarEvent,
+	Integration,
+	IntegrationLiteral,
+	IntegrationLiteralInput
+} from './decl/runtime/integration.ts';
+export type { Finding, Health, SyncCtx, SyncRow } from './decl/runtime/sync.ts';
+export type { DatabaseRequest, DatabaseResult } from '@norbital-ai/host-api';
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props
 
 export { input_schema, type Kind, type Value } from '@norbital-ai/store/kind'; // field kinds: the authoring language

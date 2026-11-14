@@ -16,7 +16,7 @@
 	import type { Value } from '../kinds/kind.js';
 	import Picker from '../kinds/picker.svelte';
 	import { cn, stepActive } from '../primitives/utils.js';
-	import { bolt_of } from '../client/context.js';
+	import { words_of } from '../client/context.js';
 	import FieldPicker from './FieldPicker.svelte';
 	import { selectField, selectOperator, selectQuantifier, aggregateValue, aggFn, aggOf } from './edit.js';
 	import { argKind, fieldsFor, litKind, operandsFor, operatorsFor, OP_LABEL, varError, variableOf, variablesFor, type FilterVariables } from './operators.js';
@@ -52,7 +52,7 @@
 		on_change(next: Node): void;
 		on_remove(): void;
 	} = $props();
-	const bolt = $derived(bolt_of(ctx));
+	const bolt = $derived(words_of(ctx));
 	let expanded = $state(true);
 	let operandOpen = $state(false);
 	const scopeId = $props.id();
@@ -592,8 +592,7 @@
 						{:else if draft !== null && c.arg !== null && 'var' in c.arg}
 							{@const error = varError(r, c.op, draft, variables)}
 							<div class="flex min-w-48 flex-col gap-0.5" data-variable-editor>
-								<CodeEditor
-									class={cn(CONTROL, 'h-auto w-64 py-1')}
+								<div class="w-64"><CodeEditor
 									language="javascript"
 									wrap
 									min_height="1.75rem"
@@ -605,7 +604,7 @@
 										if (varError(r, c.op, next, variables) === undefined)
 											setArg({ _tag: 'var', var: next });
 									}}
-								/>
+								/></div>
 								{#if error !== undefined}<span class="text-destructive text-xs" data-variable-error
 										>{error}</span
 									>{/if}

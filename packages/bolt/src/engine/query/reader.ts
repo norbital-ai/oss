@@ -49,7 +49,7 @@ export const heldColumns =
 	ORDER BY ap.seq DESC LIMIT 1) AS "$approval"`
 				]
 			: [];
-/** The invocation's requestor variables (`{ var: 'requestor.…' }`), fixed per invocation. */
+/** The invocation's actor variables (`{ var: 'actor.…' }`), fixed per invocation. */
 export const resolverOf =
 	(bindings: Bindings, authority: Authority | null) =>
 	(o: Operand): Effect.Effect<Json, StoreError> =>

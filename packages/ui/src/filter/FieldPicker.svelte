@@ -9,7 +9,7 @@
 	import type { ModelExposure } from '../kinds/context.js';
 	import { cn, stepActive } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
-	import { bolt_of } from '../client/context.js';
+	import { words_of } from '../client/context.js';
 	import { filterable, INDEX, offeredPaths, resolve, childOf, type FilterStep, type Offer } from './catalog.js';
 	import { pathLabel } from './text.js';
 	import { humanize, msg } from '../text/messages.js';
@@ -39,7 +39,7 @@
 		many?: boolean;
 		on_pick(path: string, many: boolean): void;
 	} = $props();
-	const bolt = $derived(bolt_of(ctx));
+	const bolt = $derived(words_of(ctx));
 	let open = $state(false),
 		query = $state(''),
 		active = $state(0);

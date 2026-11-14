@@ -5,18 +5,28 @@
 	import type { BoardProps } from './Board.svelte';
 
 	export type BoardPageProps<C extends ModelKey> = Pick<BoardProps<C>, 'ctx' | 'of' | 'card'> & {
+		/** The lane's label, naming its cards to assistive technology. */
 		lane: string;
+		/** The lane's condition: the board's filter and this lane's value. */
 		where: Json | undefined;
+		/** The cards' order within the lane. */
 		order_by: Json | undefined;
+		/** The board's search text. */
 		search?: string;
+		/** Cards per loaded page. */
 		page_size: number;
 		index: number;
 		after: string | null;
 		on_next: (next: string | null) => void;
+		/** Each card carries a selection checkbox. */
 		selectable?: boolean;
+		/** The selected cards' ids. */
 		selected?: ReadonlySet<RowOf<C>['id']>;
+		/** A card's checkbox changed. */
 		on_select?: (id: RowOf<C>['id'], selected: boolean) => void;
+		/** A page's loaded cards, keyed by the page; the answer forgets them when the page goes. */
 		on_rows?: (page: symbol, rows: readonly (RowOf<C> & Values)[]) => () => void;
+		/** A loaded page's rows changed live. */
 		on_change?: () => void;
 		/** The expanded lane: cards are items of the parent's grid, unwindowed (pages bound them) and not draggable. */
 		grid?: boolean;

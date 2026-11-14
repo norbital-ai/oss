@@ -1,23 +1,26 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Predicate } from 'effect';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
-import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
+import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, Invocation } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { read_engine } from '../src/engine/query/engine.ts';
 import { toPred } from '../src/engine/access/pred.ts';
-import { act, delete_verdict, record_capabilities, type WriteEngine } from '../src/engine/write/act.ts';
+import { delete_verdict, type WriteEngine } from '../src/engine/write/act.ts';
+import { record_capabilities } from '../src/engine/capabilities/record.ts';
 import { admin, arm, authority, delete_arm, grants, manifest, NOW, TODAY, write_arm } from './write-fixture.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import type { RecordParentContext } from '../src/protocol/record-contracts.ts';
+import { act_one } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 
 const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
 const FALSE = { t: 'const', value: false } as const;
 /** A guest answering every policy `check` with `verdict`'s data (the dry run at record open), recording each call. */
 const checks = (verdict: () => Json, calls: Invocation[] = []): Partial<WriteEngine> => ({
-	guest: {
+	guest: with_each({
 		invokeProgram: () =>
 			Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 		invoke: (inv) =>
@@ -25,14 +28,14 @@ const checks = (verdict: () => Json, calls: Invocation[] = []): Partial<WriteEng
 				calls.push(inv);
 				return { kind: 'ok' as const, output: inv.kind === 'policy' ? verdict() : null };
 			})
-	}
+	})
 });
 const required = <T>(value: T | undefined): T => {
 	if (value === undefined) throw new Error('fixture value missing');
 	return value;
 };
 /** A pooled database for the capability reads. */
-const setup = () => Effect.flatMap(TestDb.open(manifest), (pg) => withDb(PgliteDb.make(pg)));
+const setup = () => Effect.flatMap(TestDb.open(manifest), (pg) => withDb(TenantDb.typed(PgliteDb.make(pg))));
 const withDb = (db: TenantDbShape) =>
 	Effect.gen(function* () {
 		let n = 0;
@@ -43,13 +46,12 @@ const withDb = (db: TenantDbShape) =>
 			source: EngineManifest = manifest
 		) =>
 			Effect.gen(function* () {
-				const result = yield* act(
+				const result = yield* act_one(
 					{ manifest: source, db },
 					{
 						model,
 						verb,
 						input,
-						mode: { _tag: 'Direct' },
 						authority: admin,
 						bindings,
 						key: `cap-${n}`,
@@ -211,7 +213,7 @@ it.live(
 			expect(
 				yield* capabilities('lines', child, auth, { manifest: source }, { ...context, revision: 2 })
 			).toBeNull();
-			const result = yield* act(
+			const result = yield* act_one(
 				{ manifest: source, db },
 				{
 					model: 'orders',
@@ -222,7 +224,6 @@ it.live(
 							set: { lines: { update: [{ target: child, set: { amount: '2' } }] } }
 						}
 					],
-					mode: { _tag: 'Direct' },
 					authority: auth,
 					bindings,
 					observed: { [parent]: 1, [child]: 1 },
@@ -345,7 +346,7 @@ it.live(
 			let editable = false;
 			const calls: Invocation[] = [];
 			const engine = checks(
-				() => (editable ? { kind: 'allow' } : { kind: 'deny', message: 'Not editable yet.' }),
+				() => (editable ? { kind: 'allow' } : { kind: 'refuse', message: 'Not editable yet.' }),
 				calls
 			);
 			expect((yield* capabilities('lines', child, auth, engine))?.fields['amount']).toMatchObject({
@@ -557,6 +558,6 @@ it.live('a delete verdict reads every record once and judges them in one verdict
 			target: 'p.orders.delete',
 			input: ids.map((id) => ({ before: { id }, set: {}, after: null }))
 		});
-		expect(yield* delete_verdict(engine, 'orders', [ids[0] ?? '', crypto.randomUUID()], auth, bindings)).toBe('deny');
+		expect(yield* delete_verdict(engine, 'orders', [ids[0] ?? '', crypto.randomUUID()], auth, bindings)).toBe('refuse');
 	})
 );

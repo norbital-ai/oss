@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from '@effect/vitest';
 import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 import { DeadlinePort } from '../src/engine/ports.ts';
-import type { PortFailure } from '../src/engine/port.ts';
+import type { PortFailure } from '@norbital-ai/host-api';
 import { is_transient } from '../src/engine/errors.ts';
 import { BoltError, type Code } from '../src/protocol/errors.ts';
 import { due_at } from '../src/engine/runs/time.ts';

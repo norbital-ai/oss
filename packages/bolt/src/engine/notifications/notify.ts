@@ -2,12 +2,12 @@
 // belong here; the captured notice writer queues each inbox push and connection delivery with its inserted row.
 import { Effect, Predicate, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
-import { CONVERT_TARGETS, LIMITS, type RowData } from '../contracts.ts';
+import { CONVERT_TARGETS, DbError, type WorkspaceNote } from '@norbital-ai/host-api';
+import { LIMITS, type RowData } from '../contracts.ts';
 import { teams, type EngineManifest } from '../manifest.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { sql } from '../db/sql.ts';
 import { decodeRows } from '../db/rows.ts';
-import { DbError } from '../errors.ts';
 import { stableId } from '../conversations/store.ts';
 import { Captured, CapturedResult, capturedFields, nativeCommit } from '../db/captured.ts';
 import { Live, Wake } from '../services.ts';
@@ -19,13 +19,6 @@ import { convertDocument } from '../facilities.ts';
 import type { ApprovalRecipients } from '../../protocol/effect-events.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
 
-/** A workspace event as the host publishes it (a change merged, maintenance scheduled, a payment due): `at` is ISO. */
-export type WorkspaceNote = {
-	readonly id: string;
-	readonly at: string;
-	readonly title: string;
-	readonly body?: string | undefined;
-};
 /** Workspace events as inbox notices to every active staff member, each once per member (a re-announce adds nothing). */
 export const announce = Effect.fn('Bolt.announce')(function* (notes: readonly WorkspaceNote[]) {
 	if (notes.length === 0) return;
@@ -307,24 +300,10 @@ export const notice_sends = Effect.fn('Bolt.noticeSends')(function* (
 		const title = String(n['title']),
 			text = typeof n['body'] === 'string' && n['body'] !== '' ? String(n['body']) : title;
 		for (const u of members) {
-			const digits = typeof u['phone'] === 'string' ? u['phone'].replace(/\D/g, '') : '';
-			const handle =
-				conv.handle === 'email'
-					? u['email']
-					: conv.handle === 'telegram'
-						? u['telegram']
-						: // a person on Slack or Discord: a direct message the driver opens (`@<user id>`)
-							conv.handle === 'slack' || conv.handle === 'discord'
-							? (u[conv.handle] ?? '') === ''
-								? null
-								: `@${u[conv.handle]}`
-							: conv.handle === 'phone'
-								? digits === ''
-									? null
-									: def.driver === 'whatsapp'
-										? `${digits}@s.whatsapp.net`
-										: digits
-								: null;
+			// the member's handle of the conversation's kind (a phone as its digits), at the driver's `address`
+			const own = conv.handle === null ? null : u[conv.handle],
+				raw = typeof own !== 'string' ? '' : conv.handle === 'phone' ? own.replace(/\D/g, '') : own;
+			const handle = raw === '' ? null : (conv.address ?? '{}').replace('{}', raw);
 			if (typeof handle !== 'string' || handle === '') {
 				skipped++;
 				continue;

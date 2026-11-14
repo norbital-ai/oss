@@ -3,10 +3,11 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { Writes } from '../src/engine/services.ts';
+import { Callables } from '../src/engine/services.ts';
 import { rollbackPlan } from '../src/engine/approvals/rollback.ts';
 import { restorePreview } from '../src/engine/write/restore.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { one_act } from './support/act-one.ts';
 
 const manifest: EngineManifest = {
 	needs: [],
@@ -62,7 +63,7 @@ const fixture = Effect.gen(function* () {
 		})
 	);
 	const t = Context.get(context, TestWorkspace),
-		writes = Context.get(context, Writes),
+		writes = Context.get(context, Callables),
 		admin = (yield* t.as(t.admin)).authority;
 	const bindings = {
 		now: t.clock.now(),
@@ -71,7 +72,7 @@ const fixture = Effect.gen(function* () {
 	};
 	const act = (model: 'folders' | 'documents', verb: 'create' | 'delete', input: Json) => {
 		const key = randomUUID();
-		return writes.act({
+		return writes.acts(one_act({
 			model,
 			verb,
 			input,
@@ -79,9 +80,8 @@ const fixture = Effect.gen(function* () {
 			key,
 			issuedAt: bindings.now,
 			invocationId: key,
-			mode: { _tag: 'Direct' },
 			bindings
-		});
+		}));
 	};
 	const create = Effect.fnUntraced(function* (model: 'folders' | 'documents', input: Json) {
 		const { outcome } = yield* act(model, 'create', [input]);

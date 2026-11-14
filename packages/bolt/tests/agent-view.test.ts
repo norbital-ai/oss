@@ -23,7 +23,7 @@ import {
 	stepArgs,
 	stepView
 } from '../src/shell/agent/view.ts';
-import type { StudioChangeSet } from '../src/shell/studio/model.ts';
+import type { StudioChangeSet } from '@norbital-ai/host-api';
 import { checkFailing } from '../src/engine/agent/index.ts';
 
 const row = (seq: number, o: Partial<AgentRow> = {}): AgentRow => ({
@@ -174,6 +174,20 @@ describe('source edits on the panel', () => {
 		});
 		expect(stepView('workspace_preview', {}).verb).toBe('Built the preview');
 	});
+	it('names each agent tool by its own name and input', () => {
+		expect(stepView('view_image', { id: 'f1', crops: [[0, 0, 1, 1]] })).toMatchObject({
+			verb: 'Zoomed into a page',
+			target: '1 regions'
+		});
+		expect(stepView('read_output', { call: 'c1' }).verb).toBe('Read the full result');
+		expect(stepView('subagent', { task: 'Review\nall' })).toMatchObject({ verb: 'Started a subagent', target: 'Review' });
+		expect(stepView('subagent_message', { conversation: 'c', text: 'Go on' })).toMatchObject({
+			verb: 'Sent a message to a subagent',
+			target: 'Go on'
+		});
+		expect(stepView('subagent_stop', { conversation: 'c' }).verb).toBe('Stopped a subagent');
+		expect(stepView('read', { $runs: { limit: 5 }, sys_audit_log: {} }).target).toBe('runs, sys audit log');
+	});
 });
 
 describe('the context view (L-BOLT-546)', () => {
@@ -284,7 +298,7 @@ describe('subagent messages', () => {
 			reportView(
 				row(1, {
 					report: { conversation, asked: true },
-					text: `Sub-agent "Review invoices" (conversation ${conversation}) asks you: ${message}\nAnswer it with subagent message.`
+					text: `Sub-agent "Review invoices" (conversation ${conversation}) asks you: ${message}\nAnswer it with subagent_message.`
 				})
 			)
 		).toEqual({

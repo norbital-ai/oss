@@ -206,20 +206,20 @@ export function varError(
 	}
 	if ('error' in c) return c.error;
 	const f = varField(r);
-	const refused = c.requestor.find((m) => !member_admits(f, m));
+	const refused = c.actor.find((m) => !member_admits(f, m));
 	return refused === undefined
 		? undefined
-		: `requestor.${refused} does not compare with this field`;
+		: `actor.${refused} does not compare with this field`;
 }
 
 /** The `@` presets a value position offers: requestor members and clock expressions its kind admits. */
 const PRESETS = [
-	'requestor.id',
-	'requestor.email',
-	'requestor.phone',
-	'requestor.party',
-	'requestor.teams',
-	'requestor.team_tree',
+	'actor.id',
+	'actor.email',
+	'actor.phone',
+	'actor.party',
+	'actor.teams',
+	'actor.team_tree',
 	'today',
 	'today - days(7)',
 	'start_of_week(today)',
@@ -238,7 +238,7 @@ export const variablesFor = (
 		.filter(
 			(text) =>
 				varError(r, op, text, variables) === undefined &&
-				(text !== 'requestor.id' || r.leaf === 'rel')
+				(text !== 'actor.id' || r.leaf === 'rel')
 		)
 		.map((text) => ({
 			name: variableName(text),
@@ -246,7 +246,7 @@ export const variablesFor = (
 		}));
 
 /** A variable's chip text: `requestor` for the requestor's id, else the expression itself. */
-export const variableName = (text: string): string => (text === 'requestor.id' ? 'requestor' : text);
+export const variableName = (text: string): string => (text === 'actor.id' ? 'requestor' : text);
 
 /** The variable a value is (`requestor`, `today - days(7)`), or `undefined` for a literal or another operand. */
 export const variableOf = (arg: Arg | null): string | undefined =>

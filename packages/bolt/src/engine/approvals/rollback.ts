@@ -3,6 +3,9 @@
 // A record it updated is restored (per-record restore, restore.ts); one it created is deleted; one it deleted is
 // re-created from its history. A field restore must skip (a link to a since-deleted target) is reported, never fatal.
 import { Array, Effect, Predicate, Schema } from 'effect';
+import { BoltError } from '../../protocol/errors.ts';
+import { coalescing } from '../query/engine.ts';
+import { UUID_PATTERN } from '@norbital-ai/store/kind';
 import type { Json } from '../../decl/values.ts';
 import type { Bindings } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
@@ -41,6 +44,8 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 	EngineError
 > {
 	const cat = catalog_of(m);
+	// each wave of reads below crosses once: concurrent reads of the coalescing reader share one round trip
+	const own = yield* coalescing(db);
 	const first = new Map<string, Checkpoint>();
 	for (const r of records) if (!first.has(k(r.model, r.id))) first.set(k(r.model, r.id), r);
 	// a model a release removed has no rows to restore: reported, never fatal
@@ -49,7 +54,7 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 		.filter((r) => cat.models.get(r.model) === undefined)
 		.map((r) => ({ model: r.model, id: r.id, field: '*', reason: 'modelRemoved' }));
 	const live = yield* readRows(
-		db,
+		own,
 		cat,
 		entries.map((r) => [r.model, r.id] as const)
 	);
@@ -65,29 +70,39 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 		string,
 		{ readonly past: Readonly<Record<string, Json>>; readonly revision: number }
 	>();
-	for (const r of entries) {
-		if (r.before === null || live.has(k(r.model, r.id))) continue;
-		const past = yield* read_history(
-			db,
+	// only a uuid-keyed record keeps history to re-create it from
+	const gone = entries.filter((r) => r.before !== null && !live.has(k(r.model, r.id)) && UUID_PATTERN.test(r.id));
+	const [pasts, lasts] = yield* Effect.all([
+		Effect.forEach(gone, (r) => read_history(
+			own,
 			m,
 			{
 				kind: 'history',
 				model: r.model,
 				id: r.id,
-				at: { _tag: 'Revision', revision: r.before },
+				at: { _tag: 'Revision', revision: r.before ?? 0 },
 				full: true
 			},
 			{ as: 'workspace' },
 			bindings
-		);
+		), { concurrency: 'unbounded' }),
+		gone.length === 0
+			? Effect.succeed([])
+			: own.read([{
+				text: `SELECT x.c, x.id, coalesce((SELECT max(h.revision) FROM bolt_history h WHERE h.collection = x.c AND h.record = x.id::uuid), 0)::int AS n
+				FROM jsonb_to_recordset($1::jsonb) AS x(c text, id text)`,
+				params: [JSON.stringify(gone.map((r) => ({ c: r.model, id: r.id })))]
+			}]).pipe(Effect.flatMap(([rows]) => Schema.decodeUnknownEffect(
+				Schema.Array(Schema.Struct({ c: Schema.String, id: Schema.String, n: Schema.Number }))
+			)(rows?.rows ?? []).pipe(Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error)))))
+	], { concurrency: 'unbounded' });
+	const last = new Map(lasts.map((row) => [k(row.c, row.id), row.n]));
+	for (const [index, r] of gone.entries()) {
+		const past = pasts[index];
 		if (!Predicate.isObject(past) || Array.isArray(past)) continue;
-		const last = yield* db.rows(Schema.Struct({ n: Schema.Number }), {
-			text: 'SELECT coalesce(max(revision), 0)::int AS n FROM bolt_history WHERE collection = $1 AND record = $2::uuid',
-			params: [r.model, r.id]
-		});
 		recreations.set(k(r.model, r.id), {
 			past: storedRow(cat, r.model, past),
-			revision: (last[0]?.n ?? r.before) + 1
+			revision: (last.get(k(r.model, r.id)) ?? r.before ?? 0) + 1
 		});
 	}
 	const prospectiveTargets = new Set(recreations.keys());
@@ -95,6 +110,26 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 		restored: { model: string; id: string; revision: number }[] = [],
 		rolled_back: RolledBack[] = [],
 		skipped: Skipped[] = [...removed];
+	// every restore preview, and every recreated row's link targets, read in one wave each
+	const previews = new Map(yield* Effect.forEach(
+		entries.filter((r) => r.before !== null && live.has(k(r.model, r.id)) && Number(live.get(k(r.model, r.id))?.['revision']) !== r.before),
+		(r) => Effect.map(restorePreview(
+			{ manifest: m, db: own },
+			{ model: r.model, record: r.id, revision: r.before ?? 0 },
+			null,
+			bindings,
+			prospectiveTargets
+		), (previewed) => [k(r.model, r.id), previewed] as const),
+		{ concurrency: 'unbounded' }
+	));
+	const linked = [...recreations].flatMap(([key, { past }]) => {
+		const r = first.get(key), model = r === undefined ? undefined : cat.models.get(r.model);
+		return Object.entries(past).flatMap(([column, value]) => {
+			const target = model?.one.get(column)?.targets[0];
+			return target !== undefined && typeof value === 'string' ? [[target, value] as const] : [];
+		});
+	});
+	const targets = yield* readRows(own, cat, linked);
 	for (const r of entries) {
 		const model = cat.models.get(r.model);
 		if (model === undefined) continue;
@@ -113,13 +148,8 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 		}
 		if (now !== undefined) {
 			if (Number(now['revision']) === r.before) continue;
-			const previewed = yield* restorePreview(
-				{ manifest: m, db },
-				{ model: r.model, record: r.id, revision: r.before },
-				null,
-				bindings,
-				prospectiveTargets
-			);
+			const previewed = previews.get(k(r.model, r.id));
+			if (previewed === undefined) continue;
 			if (!previewed.ok) {
 				skipped.push({
 					model: r.model,
@@ -161,11 +191,6 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 				links.push([column, target, value]);
 			values[column] = value;
 		}
-		const targets = yield* readRows(
-			db,
-			cat,
-			links.map(([, target, id]) => [target, id] as const)
-		);
 		for (const [column, target, id] of links)
 			if (!targets.has(k(target, id)) && !prospectiveTargets.has(k(target, id))) {
 				values[column] = null;

@@ -3,7 +3,7 @@
 // through `Docs`. Every document is read and decoded once, up front; the corpus then only answers.
 
 import { Effect, Schema, Struct } from 'effect';
-import { FacilityFailure } from '../decl/errors.ts';
+import { FacilityFailure } from '@norbital-ai/host-api';
 
 /** A property, prop or parameter field with its authoring guidance. */
 const DocMemberSchema = Schema.Struct({
@@ -108,7 +108,7 @@ const decoded =
  * The API reference corpus: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)` and `skill(name)`, over the
  * index and every namespace and skill it lists, each read through `read` and decoded once.
  * @example
- * docs.symbol('bolt', 'ModelDeclaration')?.signature
+ * docs.symbol('bolt', 'model')?.signature
  */
 export const corpus = <E>(read: (file: string) => Effect.Effect<unknown, E>) =>
 	Effect.gen(function* () {

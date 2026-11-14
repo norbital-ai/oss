@@ -1,10 +1,8 @@
 // An automation's source path supplies its name. The run body infers its input and output from its literal.
 import { Schema } from 'effect';
-import { duration_seconds } from '@norbital-ai/store/vars';
 import type { Actor } from '../access/actor.ts';
 import { attached, type AgentUse, type Body } from '../body.ts';
-import type { Act, BodyReturn, CallerQuery, Clock, Eff, MessageKey, RefuseAt } from '../ctx.ts';
-import type { FacilityFailure, Refusal, Unavailable } from '../errors.ts';
+import type { Act, BodyReturn, CallerQuery, Clock, Eff, Refuse } from '../ctx.ts';
 import type {
 	Checked,
 	Exact,
@@ -14,20 +12,21 @@ import type {
 	ValueOf
 } from '../fields.ts';
 import type { ModelName, PolicyName, ReadableName, Row } from '../names.ts';
-import type { Duration, FileRef, IanaZone, Id, NonEmpty, RequestId } from '../values.ts';
+import type { Duration, IanaZone, Id, Instant, NonEmpty, RequestId } from '../values.ts';
+import type { Where } from '../where.ts';
+import type { ApprovalStateSchema } from '../../protocol/approval-view.ts';
+type ApprovalState = typeof ApprovalStateSchema.Type;
 import type { ApprovalEffectEvent } from '../../protocol/effect-events.ts';
 import type {
 	Ai,
+	ApprovalRecipient,
 	Browser,
 	Convert,
 	Files,
 	Geo,
-	ImageFacts,
-	IngestOptions,
 	Notify,
+	Recipient,
 	Request,
-	Run,
-	RunCause,
 	RunTrigger,
 	EventTrigger,
 	Schedule,
@@ -50,10 +49,6 @@ export const DeclaredDuration = Schema.TemplateLiteral([
 	Schema.BigInt,
 	Schema.Literals(['s', 'min', 'h', 'd'])
 ]);
-export const CallCacheDuration = DeclaredDuration.check(Schema.makeFilter((value) => {
-	const seconds = duration_seconds(value);
-	return seconds !== undefined && Number.isFinite(seconds) && seconds > 0 ? undefined : 'cache must be a positive duration';
-}));
 /** A cron schedule. */
 export const CronTriggerSpec = Schema.Struct({
 	cron: Schema.String,
@@ -77,13 +72,13 @@ type ValidTrigger<T> = T extends { cron: infer S }
 type Attempts = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 type Max = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
 /**
- * `job` (the default) queues a durable run and answers its handle; `call` runs in the request and answers its output.
- * A call may `cache` its answer per input for a positive duration; a cached call has no starter metadata and cannot
- * write, schedule, notify, send, store files or convert, nested runs included.
+ * `job` (the default) queues a durable run; `call` is the page RPC: a page's `run` executes it in the request and
+ * answers its declared output (the one request/response path from a page to server code). Server code never starts a
+ * call; it calls the same `src/lib` function directly.
  */
 type AutomationMode =
-	| { mode?: 'job'; cache?: never }
-	| { mode: 'call'; cache?: Duration; on?: never; retry?: never; concurrency?: never };
+	| { mode?: 'job' }
+	| { mode: 'call'; on?: never; retry?: never; concurrency?: never };
 /** An automation literal's data: what the manifest holds (the `run` body is not data). */
 export type AutomationSpec = AutomationMode & {
 	description: string;
@@ -97,18 +92,18 @@ export type AutomationSpec = AutomationMode & {
 	 * alike (`sys_user`: a sign-up, an accepted invitation, a team or handle change; `sys_invitation`: sent, resent,
 	 * accepted, revoked). The run executes as the reserved system identity with `policies`, never the writer's
 	 * authority, so the follow-up needs nothing from the person who wrote. One committed statement queues one run per
-	 * automation and verb, in that statement (durable, never per row); `ctx.run.trigger` is
+	 * automation and verb, in that statement (durable, never per row); `ctx.trigger` is
 	 * `{ kind: 'system', cause: 'event', model, verb, records }` with the written ids, and the body reads the rows it needs.
 	 * The run takes no input. A write held for approval emits when the approving decision commits it, with each held
 	 * record's net verb; a rejected or withdrawn one emits nothing. Every write a run makes, identity ones included,
-	 * chains one deeper; past 8 the queued run is recorded failed (`depth`) instead of running.
+	 * chains one deeper; a write that would queue a run past depth 8 (`LIMITS.writeDepth`) is refused.
 	 * A model's own reaction to its writes stays its `effect`.
 	 * @example on: [{ model: 'sys_user', verbs: ['create', 'update'] }]
 	 */
 	on?: readonly Trigger[];
 	/**
 	 * The policies every run holds, whoever or whatever starts it: a run executes as the reserved system identity, and
-	 * who triggered it (`ctx.run.trigger`) never changes its authority.
+	 * who triggered it (`ctx.trigger`) never changes its authority.
 	 */
 	policies: NonEmpty<string>;
 	/**
@@ -116,7 +111,10 @@ export type AutomationSpec = AutomationMode & {
 	 * the first included, so `1` never retries. `backoff` (default `10s`) doubles each attempt, up to an hour, with jitter.
 	 */
 	retry?: { attempts: Attempts; backoff?: Duration };
-	/** At most `max` runs of this automation at once; absent, one. The rest wait queued. */
+	/**
+	 * At most `max` runs of this automation at once; absent, one. The rest wait queued. A host runs as many runs at
+	 * once as the sum of its automations' `max`.
+	 */
 	concurrency?: { max: Max };
 	/** How the agent may start it (`direct`, `confirm`, `never`). */
 	agent?: AgentUse;
@@ -141,25 +139,51 @@ export type RunInput<S> = Simplify<S extends { input: infer I } ? AutomationInpu
 /** What `run` returns: the declared output. */
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
-type SystemRunCtx = RunCtx<Extract<Actor, { kind: 'system' }>, true>;
-type CachedCtx = Omit<SystemRunCtx, 'act' | 'schedule' | 'notify' | 'send' | 'files' | 'convert' | 'browser'> & {
-	files: Pick<Files, 'meta' | 'get' | 'url'> & { image(ref: FileRef): Eff<ImageFacts, FacilityFailure | Unavailable> };
-	convert: { ingest(file: FileRef, options?: Omit<IngestOptions, 'for'> & { for?: never }): ReturnType<Convert['ingest']> };
-	browser: Pick<Browser, 'navigate' | 'snapshot' | 'close'>;
-};
 /**
  * `run`'s ctx: reads (`ctx.query`), writes and schedules as its `policies`; the only place for I/O. A failed
- * `yield*` ends the body: `try`/`catch` never sees it, so recover with `Effect.catch` or `Effect.catchTag` on the yielded
- * Effect (`yield* ctx.browser.download(url, options).pipe(Effect.catch(...))`). `actor` is
- * the reserved system identity; `run.trigger` records who or what started the run. Code acting for a starter checks it
- * explicitly (`trigger.kind === 'person'`, then their id, party or teams against the rows it touches). A `cache`d call
- * gets a read-only ctx: no `act`, `schedule`, `notify` or `send`, and only reading file, ingest and browser members.
+ * `yield*` ends the body: `try`/`catch` never sees it (`bolt check` refuses one), so recover with `Effect.catch` or
+ * `Effect.catchTag` on the yielded Effect (`yield* ctx.browser.download(url, options).pipe(Effect.catch(...))`). `actor`
+ * is the reserved system identity; `trigger` records who or what started the run and, for a job, its run `id`. Code
+ * acting for a starter checks it explicitly (`trigger.kind === 'person'`, then their id, party or teams against the
+ * rows it touches).
  */
-export type AutomationCtx<S = AutomationSpec> = (S extends { cache: Duration } ? CachedCtx : SystemRunCtx) & {
-	readonly run: Run & (S extends { mode: 'call' }
-		? S extends { cache: Duration } ? {} : { readonly trigger: TriggerOf<S> }
-		: { readonly id: Id<'sys_run'>; readonly trigger: TriggerOf<S> });
-};
+export type AutomationCtx<S = AutomationSpec> = RunCtx<Extract<Actor, { kind: 'system' }>, true, Recipient> & {
+	readonly trigger: TriggerOf<S> & (S extends { mode: 'call' } ? {} : { readonly id: Id<'sys_run'> });
+} & (S extends { mode: 'call' } ? {} : { wait: Wait });
+/** What woke a wait: its deadline `until` (`at`), a write on the waited model (`records`), or the approval's decision. */
+export type Woke<M extends string = never> =
+	| { readonly kind: 'time'; readonly at: Instant }
+	| { readonly kind: 'event'; readonly model: M; readonly records: readonly Id<M>[] }
+	| { readonly kind: 'approval'; readonly request: RequestId; readonly state: ApprovalState };
+/**
+ * Waits durably, holding no lane and waking nothing while it waits: until the instant `until`; until a write commits
+ * to `model` (one of `verbs`, any by default) whose written rows match `where`, read as the run's policies; or until
+ * approval request `approval` is decided. An event wait may take `until` too, and answers `time` when it passes first.
+ * A wait already met answers at once: a decided approval, a passed `until`; a write counts from the wait on.
+ *
+ * The run resumes across restarts and releases by running its body again from the start with the same input, clock
+ * (`ctx.now` stays the run's first) and random seed: every call before the wait answers what it answered then
+ * (reads, acts, sends, inference) without running again, so the code before a wait must make the same calls. A body
+ * changed under a waiting run fails it (`diverged`). At most `LIMITS.waitBytes` (4 MiB) of earlier answers are kept.
+ * Job runs only: a call or a model effect has no run to wait in.
+ * @example
+ * const held = yield* ctx.act({ 'quotes.update': [{ target: quote, set: { state: 'review' } }] });
+ * if (held.kind === 'pending_approval') {
+ * 	const until = DateTime.formatIso(DateTime.add(DateTime.makeUnsafe(ctx.now), { days: 3 }));
+ * 	const woke = yield* ctx.wait({ approval: held.request_id, until });
+ * 	if (woke.kind === 'time') yield* ctx.schedule('remind_reviewers', { quote: quote.id });
+ * }
+ */
+export interface Wait {
+	(on: { readonly until: Instant }): Eff<Extract<Woke, { kind: 'time' }>>;
+	<const M extends ReadableName>(on: {
+		readonly model: M;
+		readonly where?: Where<M>;
+		readonly verbs?: NonEmpty<WriteVerb>;
+		readonly until?: Instant;
+	}): Eff<Exclude<Woke<M>, { kind: 'approval' }>>;
+	(on: { readonly approval: RequestId; readonly until?: Instant }): Eff<Exclude<Woke, { kind: 'event' }>>;
+}
 /** The triggers a run of `S` can carry: an event only from a declared listener, narrowed to its model and verbs. */
 type TriggerOf<S> =
 	| Exclude<RunTrigger, { cause: 'event' }>
@@ -168,22 +192,17 @@ type TriggerOf<S> =
 				? EventTrigger<M, V>
 				: never
 			: never);
-type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
+type RunCtx<A, Tools extends boolean, To> = Omit<Clock, 'actor'> &
 	CallerQuery & { invocation_id: string } & {
 		actor: A;
 		/** 1 on the first attempt. */
 		attempt: number;
-		cause: RunCause;
 		progress(update: { ratio?: number | null; text?: string | null }): Eff<void>;
 		act: Act;
-		run: Run;
-		/**
-		 * Stops the current body with an authored refusal: a catalogue key, the input list `row` and `field` it names,
-		 * and the message's placeholder `values`.
-		 */
-		refuse<K extends MessageKey>(message: K, ...at: RefuseAt<K, { field?: string; row?: number }>): Eff<never, Refusal>;
+		/** Stops the current body with an authored refusal; `row` and `field` name the input list row and field. */
+		refuse: Refuse<{ field?: string; row?: number }>;
 		schedule: Schedule;
-		notify: Notify;
+		notify: Notify<To>;
 		send: Send;
 		request: Request;
 		web: Web;
@@ -209,12 +228,14 @@ export type EffectEvent<M = ModelName> =
  * no policy of its own and its `ai` has no host tools. Each committed batch queues one durable run
  * `<model>.effect.<verb>` in the write's own statement, retried for over an hour on a transient failure and never rate
  * limited; a failure never undoes the write. Changes carry `before`, `set`, `after` and `changed(...)` over the root
- * fields of the writer's output (`default` when held, else the first named output it holds). An effect's writes run
- * effects one level deeper; past 8 levels the run fails with `depth`. A write held for approval freezes its changes
+ * fields of the writer's output (`default` when held, else the first named output it holds; a writer holding no read
+ * output of the model sees its rows as stored). An effect's writes run effects one level deeper; a write that would
+ * queue one past depth 8 (`LIMITS.writeDepth`) is refused. `ctx.notify` may also address the approval's `'requester'`
+ * and `'approvers'`; they resolve only when `ctx.event.kind === 'approval'`. A write held for approval freezes its changes
  * and writer until final approval releases them; rejection discards them. The writer sees its effect run's status and
  * error code; an administrator also sees its input.
  */
-export type EffectCtx<M = ModelName> = RunCtx<Actor, false> & {
+export type EffectCtx<M = ModelName> = RunCtx<Actor, false, Recipient | ApprovalRecipient> & {
 	/** Approval moves have no committed change list; their frozen data is carried here. */
 	readonly event: EffectEvent<M>;
 };
@@ -222,17 +243,15 @@ type AutomationLiteral<
 	I extends AutomationInputFields,
 	O extends OutputKind | undefined,
 	M extends 'job' | 'call',
-	C extends Duration | undefined,
 	T extends readonly Trigger[] = readonly Trigger[]
-> = Omit<AutomationSpec, 'input' | 'output' | 'mode' | 'cache' | 'on'> & {
+> = Omit<AutomationSpec, 'input' | 'output' | 'mode' | 'on'> & {
 	input?: I;
 	output?: O;
 	mode?: M;
-	cache?: C;
 	on?: T;
 	run: (
 		input: RunInput<{ input: I }>,
-		ctx: AutomationCtx<{ mode: M; cache: C; on: T }>
+		ctx: AutomationCtx<{ mode: M; on: T }>
 	) => BodyReturn<O extends OutputKind ? ValueOf<O> : void>;
 };
 /** The literal and the body the guest calls. The file supplies its name. */
@@ -242,10 +261,11 @@ export type Automation<S> = {
 };
 
 /**
- * `src/automation/+<a>.automation.ts`: a job on a trigger or a call in the request, executed by
- * the reserved system identity with the declared `policies` (`ctx.run.trigger` records who started it), with typed `input` and `output`, retries and concurrency. `run` is a generator in the literal; `ctx` carries reads (`ctx.query`), `act`, files, AI and the other facilities.
- * A person's permission to start a job does not grant the job that person's authority. Check `ctx.run.trigger`
- * explicitly when business rules depend on the starter. External calls can repeat when a failed run retries.
+ * `src/automation/+<a>.automation.ts`: a job on a trigger, or a call (a page's request/response), executed by
+ * the reserved system identity with the declared `policies` (`ctx.trigger` records who started it), with typed `input` and `output`, retries and concurrency. `run` is a generator in the literal; `ctx` carries reads (`ctx.query`), `act`, files, AI and the other facilities.
+ * A person's permission to start a job does not grant the job that person's authority. Check `ctx.trigger`
+ * explicitly when business rules depend on the starter. A retried run's `act` answers from its earlier commit;
+ * `ctx.send` and external requests can repeat.
  * Every declared automation the caller may start appears in the native Command Center Automations, with this typed
  * input rendered by `Form`; a page form is optional, not required. A start queues a run and is followed by the native
  * run status — the page does not poll or reimplement the queue.
@@ -266,16 +286,15 @@ export function automation<
 	const I extends AutomationInputFields = {},
 	const O extends OutputKind | undefined = undefined,
 	const M extends 'job' | 'call' = 'job',
-	const C extends Duration | undefined = undefined,
 	const T extends readonly Trigger[] = readonly [],
-	const S extends AutomationLiteral<I, O, M, C, T> = AutomationLiteral<I, O, M, C, T>
+	const S extends AutomationLiteral<I, O, M, T> = AutomationLiteral<I, O, M, T>
 >(
-	spec: { input?: I; output?: O; mode?: M; cache?: C; on?: T } & S &
+	spec: { input?: I; output?: O; mode?: M; on?: T } & S &
 		NoInfer<
 			Checked<
-				AutomationLiteral<I, O, M, C, T>,
+				AutomationLiteral<I, O, M, T>,
 				S,
-				Exact<S, AutomationFor<S, AutomationLiteral<I, O, M, C, T>['run']>>
+				Exact<S, AutomationFor<S, AutomationLiteral<I, O, M, T>['run']>>
 			>
 		>
 ): Automation<S> {

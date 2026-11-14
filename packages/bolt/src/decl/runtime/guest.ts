@@ -27,7 +27,7 @@ const SECRETS: unique symbol = Symbol.for('norbital.bolt.secrets');
 const outside: Call = () =>
 	Promise.reject(new Error('a generator body runs inside the guest prelude only'));
 
-type Family = 'engine' | 'act' | 'facility' | 'read' | 'run';
+type Family = 'engine' | 'act' | 'facility' | 'read';
 const engineFault = (error: unknown): unknown => {
 	if (!Predicate.hasProperty(error, 'kind') || error.kind !== 'bolt') return error;
 	const fault = new Error(
@@ -39,11 +39,6 @@ const engineFault = (error: unknown): unknown => {
 	});
 };
 const FAILED = {
-	run: (error: unknown) => Effect.promise(() => import('../errors/act.ts')).pipe(Effect.flatMap(({ ActRefused }) => {
-		if (!Predicate.isObject(error) || (error['kind'] !== 'bolt' && error['kind'] !== 'refused')) return Effect.die(engineFault(error));
-		const refusal = Schema.decodeUnknownOption(ActRefused)({ ...error, _tag: 'ActRefused' });
-		return Option.isSome(refusal) ? Effect.fail(refusal.value) : Effect.die(engineFault(error));
-	})),
 	engine: (error: unknown) => Effect.die(engineFault(error)),
 	read: (error: unknown) =>
 		Effect.promise(() => import('../errors/read.ts')).pipe(
@@ -73,7 +68,7 @@ const FAILED = {
 			)
 		)
 };
-const READS = new Set(['query', 'db.query', 'db.after', 'history', 'aggregate']);
+const READS = new Set(['query', 'db.query', 'history']);
 type CrossingFailure = Effect.Error<ReturnType<(typeof FAILED)[Family]>>;
 /**
  * One member as an Effect: uninterruptible, so a sibling's failure never leaves its queued or in-flight call `unawaited`;
@@ -81,7 +76,7 @@ type CrossingFailure = Effect.Error<ReturnType<(typeof FAILED)[Family]>>;
  */
 const lifted = (call: Call, member: string, family: Family) => {
 	const cross = (...args: readonly unknown[]): Effect.Effect<unknown, CrossingFailure> => {
-		// every read (a request, its prospective `after`, a record's history, a page aggregate) fails with `ReadFailed`
+		// every read (a request, a record's history) fails with `ReadFailed`
 		const failureFamily = family === 'engine' && READS.has(member) ? 'read' : family;
 		const at: { stack?: string } = {};
 		Error.captureStackTrace(at, cross); // the author's frame: by the time the Effect runs the stack is the fiber's
@@ -155,7 +150,6 @@ const lift = (call: Call, raw: unknown): unknown => {
 	};
 	const writes = {
 		act: cross('act', 'act'),
-		run: cross('run', 'run'),
 		schedule: cross('schedule'),
 		notify: cross('notify')
 	};
@@ -179,11 +173,9 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...actor,
 				policies,
 				admin: raw['admin'] === true,
-				carried_by: typeof raw['carriedBy'] === 'string' ? raw['carriedBy'] : null,
 				approving: raw['approving'] === true,
 				refuse,
-				...workspace,
-				query: Object.assign(workspace.query, { after: cross('db.after') })
+				...workspace
 			};
 		case 'syncRead':
 			return { ...clock, ...actor, ...workspace, refuse, ...instance };
@@ -224,7 +216,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				approve: Verdict.approve
 			};
 		case 'page':
-			return { ...clock, ...actor, ...reads, aggregate: cross('aggregate') };
+			return { ...clock, ...actor, ...reads };
 		case 'tool':
 			return {
 				...clock,
@@ -245,10 +237,20 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...reads,
 				...writes,
 				refuse,
-				cause: raw['cause'],
 				attempt: raw['attempt'],
-				// an automation run's id and trigger; an effect has none
-				run: Object.assign(cross('run', 'run'), Predicate.isObject(raw['run']) ? raw['run'] : {}),
+				// an automation's trigger with its run id (a call has no id); an effect has none
+				...(Predicate.isObject(raw['run']) && Predicate.isObject(raw['run']['trigger'])
+					? {
+							trigger: {
+								...raw['run']['trigger'],
+								...(raw['run']['id'] === undefined ? {} : { id: raw['run']['id'] })
+							}
+						}
+					: {}),
+				// a job's run waits durably; a call or an effect has no run to wait in
+				...(kind === 'automation' && Predicate.isObject(raw['run']) && raw['run']['id'] !== undefined
+					? { wait: cross('wait') }
+					: {}),
 				send: cross('send'),
 				progress: cross('progress'),
 				request: cross('request', 'facility'),
@@ -279,6 +281,17 @@ const lift = (call: Call, raw: unknown): unknown => {
 			};
 		case 'integration':
 			return { configuration: instance.configuration, request: instance.request };
+		// a definition's webhook handler: reads and acts as the webhook's policies
+		case 'webhook':
+			return {
+				...clock,
+				...actor,
+				...reads,
+				act: writes.act,
+				refuse,
+				instance: raw['instance'],
+				configuration: instance.configuration
+			};
 		default:
 			return raw;
 	}
@@ -365,7 +378,7 @@ const wrap = <A extends readonly unknown[], O>(
 const wrap_verdict = <A extends readonly unknown[]>(
 	body: GeneratorBody<A, Verdict>, at: number
 ): AttachedBody<A, VerdictData> => described_body(body, (...args: A) =>
-		// A policy refusal is one arm's denial. Other admitting arms still get their verdict.
+		// A policy refusal is one arm's refusal. Other admitting arms still get their verdict.
 		runBody(function* () {
 			return yield* body_effect(() => body(...args)).pipe(
 				Effect.map(Verdict.dataOf),
@@ -373,7 +386,7 @@ const wrap_verdict = <A extends readonly unknown[]>(
 					(error): error is Refusal => error instanceof Refusal,
 					({ message, values, field, row }) =>
 						Effect.succeed({
-							kind: 'deny' as const,
+							kind: 'refuse' as const,
 							message,
 							...(values === undefined ? {} : { values }),
 							at: { ...(field === undefined ? {} : { field }), ...(row === undefined ? {} : { row }) }

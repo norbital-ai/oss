@@ -14,16 +14,11 @@ import { buildPacks } from '../compiler/artifact/seed.ts';
 import { layerLines, preparedLayer } from '../compiler/artifact/platform.ts';
 import { CONTRACT, read_artifact, type Artifact } from '@norbital-ai/bolt/artifact';
 import { read_pack_source, type PackJson } from '@norbital-ai/bolt/engine';
-import type {
-	BoltError,
-	EngineManifest,
-	GuestProgram,
-	ManifestInvalid
-} from '@norbital-ai/bolt/engine';
+import { type CheckDiagnostic, Diagnostic, type GuestProgram } from '@norbital-ai/host-api';
+import type { BoltError, EngineManifest, ManifestInvalid } from '@norbital-ai/bolt/engine';
 import type { PlatformError } from 'effect/PlatformError';
 import { BundleError, compile, EvalError } from '../compiler/check/index.ts';
 import { BuildError } from '../compiler/artifact/client.ts';
-import { Diagnostic, type CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 import { discover, type Discovered } from '../compiler/discover.ts';
 
 export type Log = (line: string) => void;

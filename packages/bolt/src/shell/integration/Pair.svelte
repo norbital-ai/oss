@@ -11,7 +11,7 @@
 	import { Button, Combobox, confirm_action, Input, Qr } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
-	import type { ImportStartInput, SetupField } from '../../protocol/instance-status.ts';
+	import type { ImportStartInput, SetupField } from '@norbital-ai/host-api';
 	import { watch } from 'runed';
 	import Facts from './Facts.svelte';
 	import ImportStart from './ImportStart.svelte';

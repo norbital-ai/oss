@@ -1,28 +1,23 @@
 import { expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { Effect, Layer } from 'effect';
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { FacilitiesLive } from '../src/engine/facilities.ts';
-import { local_files } from '../src/node/files.ts';
 import {
-	DecisionsLive,
-	DecisionTrace,
+	DbError,
 	type DecisionRequest,
-	type DecisionResult
-} from '../src/engine/decision.ts';
+	type DecisionResult,
+	type EmbedInput,
+	FacilityFailure,
+	type LogEvent,
+	off,
+	Port
+} from '@norbital-ai/host-api';
+import { DecisionsLive, DecisionTrace } from '../src/engine/decision.ts';
 import { Facilities, Manifest, Decisions } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Ai, Browser, Convert, Files, Geo, Images, Logs, WebRead } from '../src/engine/ports.ts';
-import { off } from '../src/facilities/index.ts';
-import { images_port } from '../src/node/images.ts';
+import { images_port } from '@norbital-ai/host-api/node';
 import { refused_files } from './support/refused.ts';
-import type { EmbedInput, LogEvent } from '../src/engine/contracts.ts';
-import { FacilityFailure } from '../src/decl/errors.ts';
-import { DbError } from '../src/engine/errors.ts';
-import { Port } from '../src/engine/port.ts';
 import { manifest } from './catalogue-fixture.ts';
 
 it.effect(
@@ -346,24 +341,4 @@ it.effect(
 			})
 		);
 	}
-);
-
-it.live('local files store a real sha256 of their bytes', () =>
-	Effect.acquireUseRelease(
-		Port.attempt('files', async () => {
-			const root = join(tmpdir(), 'norbital-scratch');
-			await mkdir(root, { recursive: true });
-			return mkdtemp(join(root, 'facilities-'));
-		}),
-		(dir) =>
-			Effect.gen(function* () {
-				const files = local_files(dir),
-					bytes = new TextEncoder().encode('a stored document');
-				const result = yield* files.put(bytes, { name: 'a.txt', mime: 'text/plain' });
-				expect(result.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
-				expect(yield* files.get(result.key, 100)).toEqual(bytes);
-			}),
-		(dir) =>
-			Port.attempt('files', () => rm(dir, { recursive: true, force: true })).pipe(Effect.orDie)
-	)
 );

@@ -7,26 +7,15 @@ import {
 	TenantDb as TenantDbService,
 	type TenantDbShape as TenantDb
 } from '../src/engine/db/tenant-db.ts';
-import { db_error } from '../src/engine/db/wire.ts';
+import { db_error, type Lock } from '@norbital-ai/host-api';
 import type { Json } from '../src/decl/values.ts';
 import type { ApprovalSnapshot } from '../src/decl/access/policy.ts';
-import {
-	LIMITS,
-	type GuestOutcome,
-	type Invocation,
-	type Lock,
-	type Outcome
-} from '../src/engine/contracts.ts';
-import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
+import { LIMITS, type GuestOutcome, type Invocation, type Outcome } from '../src/engine/contracts.ts';
+import { PgliteDb, type PgliteClient } from '@norbital-ai/host-api/node';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { catalog_of } from '../src/engine/access/pred.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import {
-	act,
-	type ActRequest,
-	type ApprovalHook,
-	type WriteEngine
-} from '../src/engine/write/act.ts';
+import { type ApprovalHook, type WriteEngine } from '../src/engine/write/act.ts';
 import { executeCommit, type Commit } from '../src/engine/write/commit.ts';
 import { restorer, restore_source, seed } from '../src/engine/write/seed.ts';
 import { aggregate } from '@norbital-ai/store';
@@ -44,6 +33,8 @@ import {
 	TODAY,
 	write_arm
 } from './write-fixture.ts';
+import { act_one, type OneAct } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 
 const required = <A>(value: A | undefined): A => {
  if (value === undefined) throw new Error('Missing write fixture value.');
@@ -77,7 +68,7 @@ const fixtureFor = (schema: EngineManifest) =>
 						});
 				}
 			};
-			db = PgliteDb.make(client);
+			db = TenantDbService.typed(PgliteDb.make(client));
 			const inner = db;
 			db = TenantDbService.typed({
 				read: (statements) => (count.reads++, inner.read(statements)),
@@ -135,7 +126,7 @@ const ext = {
 	relationships: {
 		...manifest.relationships,
 		'activities.regarding': { to: ['projects', 'quotes'], optional: true, inverse: 'activities' },
-		'projects.owner': { to: 'sys_user', optional: true, default: { var: 'requestor.id' } },
+		'projects.owner': { to: 'sys_user', optional: true, default: { var: 'actor.id' } },
 		'notes.line': { to: 'lines', inverse: 'notes' }
 	},
 	exposures: {
@@ -180,7 +171,7 @@ const outsideBatch = <A, E, R>(source: Stream.Stream<A, E, R>) =>
 		})
 	);
 
-type Over = Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>;
+type Over = Partial<OneAct> & Pick<OneAct, 'verb' | 'input'>;
 /**
  * A write engine whose guest answers each policy `check` (`kind: 'policy'`, `'<policy>.<model>.<op>'`) with the verdict
  * data `verdict` gives, recording every invocation; it runs no other body.
@@ -189,7 +180,7 @@ const checking = (
 	verdict: (inv: Invocation) => Json,
 	calls: Invocation[] = []
 ): Partial<WriteEngine> => ({
-	guest: {
+	guest: with_each({
 		invokeProgram: () =>
 			Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 		invoke: (inv) =>
@@ -197,15 +188,14 @@ const checking = (
 				calls.push(inv);
 				return { kind: 'ok', output: inv.kind === 'policy' ? verdict(inv) : null };
 			})
-	}
+	})
 });
 const orderColumns = manifest.exposures['orders']?.update?.columns ?? {};
 const run = (over: Over, engine: Partial<WriteEngine> = {}) =>
-	act(
+	act_one(
 		{ manifest, db, ...engine },
 		{
 			model: 'orders',
-			mode: { _tag: 'Direct' },
 			key: `key-${n}`,
 			issuedAt: NOW,
 			authority: admin,
@@ -239,6 +229,14 @@ describe('engine/write: one statement per act', () => {
 			expect(outcome).toMatchObject({ kind: 'refused', code: 'overflow' });
 			expect(count.writes).toBe(0);
 		})
+	);
+
+	it.effect('an update that changes nothing answers unchanged through the one batch pipeline', () =>
+		Effect.gen(function* () {
+			const id = yield* order('unchanged desk');
+			const { outcome } = yield* run({ verb: 'update', input: [{ target: id, set: { title: 'unchanged desk' } }] });
+			expect(outcome).toMatchObject({ kind: 'committed', unchanged: [{ model: 'orders', id }] });
+		}).pipe(Effect.provide(fixture))
 	);
 
 	it.effect(
@@ -417,26 +415,26 @@ describe('engine/write: rows', () => {
 					(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'x' } }] })).outcome
 				).toEqual({
 					kind: 'committed',
-					output: null,
+					output: [null],
 					records: [],
 					unchanged: [{ model: 'orders', id }]
 				});
 				const kept = committed(
 					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], on_conflict: 'keep' })).outcome
 				);
-				expect(kept).toMatchObject({ output: [id], records: [] });
+				expect(kept).toMatchObject({ output: [[id]], records: [] });
 				const updated = committed(
 					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], on_conflict: 'update' }))
 						.outcome
 				);
-				expect(updated).toMatchObject({ output: [id], records: [{ id, revision: 3 }] });
+				expect(updated).toMatchObject({ output: [[id]], records: [{ id, revision: 3 }] });
 				const made = (yield* run({
 					verb: 'upsert',
 					input: [{ title: 'chair' }],
 					on_conflict: 'update'
 				})).outcome;
 				if (made.kind !== 'committed') throw new Error(JSON.stringify(made));
-				expect(made.output).toEqual([required(made.records[0]).id]);
+				expect(made.output).toEqual([[required(made.records[0]).id]]);
 				expect(
 					(yield* run({
 						verb: 'upsert',
@@ -515,7 +513,7 @@ describe('engine/write: the caller', () => {
 					})).outcome
 				).toMatchObject({ code: 'not_found' });
 				const calls: Invocation[] = [];
-				const deny = checking(() => ({ kind: 'deny', message: 'Not this order.' }), calls);
+				const deny = checking(() => ({ kind: 'refuse', message: 'Not this order.' }), calls);
 				expect(
 					(yield* run(
 						{
@@ -563,7 +561,7 @@ describe('engine/write: the caller', () => {
 				const row = rows.findIndex((r) => r.title !== r.title.toUpperCase());
 				return row < 0
 					? { kind: 'allow' }
-					: { kind: 'deny', message: 'Titles are upper case.', at: { row, field: 'title' } };
+					: { kind: 'refuse', message: 'Titles are upper case.', at: { row, field: 'title' } };
 			}, calls);
 			const caller = authority({
 				orders: grants('orders', {
@@ -627,11 +625,11 @@ function callbackEngine(
 				}
 			}
 		},
-		guest: {
+		guest: with_each({
 			invokeProgram: () =>
 				Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 			invoke: (inv) => Effect.sync(() => (calls.push(inv), body(inv)))
-		}
+		})
 	};
 }
 
@@ -678,7 +676,7 @@ describe('engine/write: locks and queued pieces', () => {
 					bridge: () => ({ cross: () => Effect.succeed([]), tables: () => ['tags'] })
 				};
 				committed((yield* run({ verb: 'create', input: [{ title: 'a' }] }, engine)).outcome);
-				expect(locks).toEqual([{ tables: ['bolt_approvals', 'lines', 'orders', 'tags'], mode: 'SHARE ROW EXCLUSIVE' }]);
+				expect(locks).toEqual([{ tables: ['lines', 'orders', 'tags'], mode: 'SHARE ROW EXCLUSIVE' }]);
 			}).pipe(Effect.provide(fixture))
 	);
 
@@ -693,7 +691,6 @@ describe('engine/write: locks and queued pieces', () => {
 				actor: admin.actor,
 				writer: { starter: null, actor: 'test', depth: 0 },
 				writes: [],
-				owned: [],
 				rate: [],
 				output: null,
 				runs: [
@@ -764,14 +761,14 @@ describe('engine/write: approval hook points', () => {
 				};
 				const calls: Invocation[] = [];
 				const engine: Partial<WriteEngine> = {
-					guest: {
+					guest: with_each({
 						invokeProgram: () => Effect.die('The approval hook test does not execute programs'),
 						invoke: (invocation) =>
 							Effect.sync(() => {
 								calls.push(invocation);
 								return { kind: 'ok', output: { kind: 'approve', flow: snapshot } };
 							})
-					},
+					}),
 					approval
 				};
 				const o = (yield* run(
@@ -931,7 +928,7 @@ describe('engine/write: references read scopes; mutations answer to their own ch
 				);
 				// the lines check stands in for a read of the parent's status, once it is no longer a draft
 				const lines = checking(() => ({
-					kind: 'deny',
+					kind: 'refuse',
 					message: 'The order is no longer a draft.'
 				}));
 				const caller = authority({
@@ -1083,7 +1080,7 @@ it.live(
 			let invoked = 0,
 				arrived = 0;
 			const both = yield* Deferred.make<void>();
-			const guest: GuestShape = {
+			const guest: GuestShape = with_each({
 				invokeProgram: () =>
 					Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 				invoke: (inv, bridge) =>
@@ -1114,13 +1111,12 @@ it.live(
 							n >= 2 ? { kind: 'refused', message: 'quota' } : { kind: 'ok', output: callbackRows(inv) };
 						return outcome;
 					}).pipe(Effect.orDie)
-			};
+			});
 			const e = { manifest: callbacks, db, guest, bridge: bridge_on(db, callbacks) };
 			const create = (title: string) =>
-				act(e, {
+				act_one(e, {
 					model: 'orders',
 					verb: 'create',
-					mode: { _tag: 'Direct' },
 					input: [{ title }],
 					key: title,
 					issuedAt: NOW,
@@ -1144,3 +1140,77 @@ it.live(
 			expect(invoked).toBe(4); // 'first', a, b, and b's one replay
 		})
 );
+
+describe('engine/write: release audit reproductions', () => {
+	it.effect('A1.1: a write that joined a held request asserts the request still holds it at commit', () =>
+		Effect.gen(function* () {
+			const id = yield* order('joined');
+			const revision = Number((yield* one(`select revision from orders where id = '${id}'`))['revision']);
+			// planned as a join, but no request holds the row any more (decided between the read and the commit)
+			const failure = yield* Effect.flip(
+				executeCommit(db, manifest, catalog_of(manifest), {
+					key: 'joined',
+					digest: 'd',
+					issuedAt: NOW,
+					now: NOW,
+					today: TODAY,
+					actor: admin.actor,
+					writer: { starter: null, actor: 'test', depth: 0 },
+					writes: [{ model: 'orders', id, op: 'update', set: { note: 'unreviewed' }, revision }],
+					rate: [],
+					runs: [],
+					output: null,
+					joined: true
+				})
+			);
+			expect(String(failure)).toMatch(/fingerprint/);
+			expect((yield* one(`select note from orders where id = '${id}'`))['note']).toBeNull();
+		}).pipe(Effect.provide(fixture))
+	);
+
+	it.effect('E: a child written since the header was read moves its revision without conflicting its editor', () =>
+		Effect.gen(function* () {
+			const id = yield* order('header', [{ label: 'a', amount: '1' }]);
+			const seen = Number((yield* one(`select revision from orders where id = '${id}'`))['revision']);
+			committed(
+				(yield* run({ model: 'lines', verb: 'create', input: [{ label: 'b', amount: '2', order: id }] })).outcome
+			);
+			expect(Number((yield* one(`select revision from orders where id = '${id}'`))['revision'])).toBe(seen + 1);
+			committed(
+				(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'edited' } }], observed: { [id]: seen } }))
+					.outcome
+			);
+			// a change to the header's own fields since is still a conflict
+			const now = Number((yield* one(`select revision from orders where id = '${id}'`))['revision']);
+			committed((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'again' } }] })).outcome);
+			expect(
+				(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'stale' } }], observed: { [id]: now } }))
+					.outcome
+			).toMatchObject({ kind: 'conflict' });
+		}).pipe(Effect.provide(fixture))
+	);
+
+	it.effect('A1.11: a restore statement trusts only the rows it restores', () =>
+		Effect.gen(function* () {
+			const a = yield* order('restored'),
+				b = yield* order('bystander');
+			for (const id of [a, b])
+				committed((yield* run({ verb: 'update', input: [{ target: id, set: { status: 'submitted' } }] })).outcome);
+			const retitle = (rows: readonly string[]) =>
+				Effect.tryPromise({
+					try: () =>
+						pg.transaction(async (tx) => {
+							await tx.query(`select set_config('store.write', $1, true)`, [
+								JSON.stringify({ mode: 'restore', rows, actor: null, at: NOW })
+							]);
+							await tx.query(`update orders set title = title || '!' where id in ($1, $2)`, [a, b]);
+						}),
+					catch: (error) => error
+				});
+			// the bystander's lock still holds inside a restore statement
+			expect(String(yield* Effect.flip(retitle([`orders/${a}`])))).toMatch(/locked/);
+			yield* retitle([`orders/${a}`, `orders/${b}`]);
+			expect((yield* one(`select count(*)::int n from orders where title like '%!'`))['n']).toBe(2);
+		}).pipe(Effect.provide(fixture))
+	);
+});

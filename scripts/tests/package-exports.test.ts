@@ -92,7 +92,7 @@ it('keeps declarations and the CLI test kit on their current entries and refuses
 	]);
 	const sources: Array<[string, string]> = [
 		['current.ts', `
-			import { bind_model } from '@norbital-ai/bolt/declarations';
+			import { model } from '@norbital-ai/bolt';
 			import { TestWorkspace } from '@norbital-ai/bolt-cli/test';
 			import { read_artifact } from '@norbital-ai/bolt/artifact';
 		`],
@@ -101,12 +101,14 @@ it('keeps declarations and the CLI test kit on their current entries and refuses
 			import '@norbital-ai/bolt/cell';
 			import '@norbital-ai/bolt/protocol/cursor';
 			import '@norbital-ai/bolt/isolate-globals';
+			import '@norbital-ai/bolt/declarations';
 		`]
 	];
 	assert.deepEqual(unexportedSpecifiers(sources, manifests), [
 		'retired.ts: @norbital-ai/bolt/test',
 		'retired.ts: @norbital-ai/bolt/cell',
 		'retired.ts: @norbital-ai/bolt/protocol/cursor',
-		'retired.ts: @norbital-ai/bolt/isolate-globals'
+		'retired.ts: @norbital-ai/bolt/isolate-globals',
+		'retired.ts: @norbital-ai/bolt/declarations'
 	]);
 });

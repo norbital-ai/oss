@@ -1,6 +1,6 @@
-import { bind_integration } from '../../../declarations.ts';
+import { integration } from '../../../decl/runtime/integration.ts';
 
-export default bind_integration('chat')({
+export default integration('chat', {
 	description: 'Any other chat platform: Teams, Messenger, LINE and more. A connection picks one.',
 	driver: 'chat'
 });

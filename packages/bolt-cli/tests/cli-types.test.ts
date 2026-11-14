@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect } from 'effect';
-import { types } from '../src/cli/check.ts';
+import { typeKey, types } from '../src/cli/check.ts';
 
 const SVELTE = realpathSync(fileURLToPath(new URL('../node_modules/svelte', import.meta.url)));
 const CONFIG = {
@@ -106,4 +106,17 @@ it.live(
 				expect.stringMatching(/^src\/Missing\.svelte:6:types\/TS\d+$/)
 			]);
 		}).pipe(Effect.provide(NodeServices.layer))
+);
+it.effect('a relinked Bolt at the same version changes the type cache key', () =>
+	Effect.gen(function* () {
+		const root = mkdtempSync(join(tmpdir(), 'bolt-type-key-'));
+		const bolt = join(root, 'node_modules', '@norbital-ai', 'bolt');
+		mkdirSync(join(bolt, 'build'), { recursive: true });
+		writeFileSync(join(bolt, 'package.json'), '{"name":"@norbital-ai/bolt","version":"0.0.41"}');
+		writeFileSync(join(bolt, 'build', 'index.d.ts'), 'export type A = 1;');
+		const before = yield* typeKey(root, new Map());
+		writeFileSync(join(bolt, 'build', 'index.d.ts'), 'export type A = 2;');
+		expect(yield* typeKey(root, new Map())).not.toBe(before);
+		rmSync(root, { recursive: true, force: true });
+	}).pipe(Effect.provide(NodeServices.layer))
 );

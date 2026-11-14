@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-cli",
-	"version": "0.0.40",
+	"version": "0.0.41",
 	"description": "Bolt's tooling: the compiler, the `bolt` command (check, build, test, dev, seed, templates) and the test kit.",
 	"type": "module",
 	"sideEffects": false,
@@ -9,10 +9,6 @@
 		"./test": {
 			"types": "./build/test/index.d.ts",
 			"default": "./build/test/index.js"
-		},
-		"./guests": {
-			"types": "./build/guests.d.ts",
-			"default": "./build/guests.js"
 		}
 	},
 	"bin": {
@@ -34,6 +30,7 @@
 		"@iconify-json/lucide": "1.2.147",
 		"@iconify/svelte": "catalog:",
 		"@norbital-ai/bolt": "workspace:*",
+		"@norbital-ai/host-api": "workspace:*",
 		"@norbital-ai/store": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",

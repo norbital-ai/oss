@@ -7,19 +7,13 @@ import { afterAll } from 'vitest';
 import { Context, Effect, Exit, Layer, Option, Result, Schema, Scope, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { MODEL_FILES } from '../src/engine/agent/ai.ts';
-import { Port } from '../src/engine/port.ts';
+import { type AiRequest, type AiResponse, type DecisionRequest, Port } from '@norbital-ai/host-api';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
 import { ActRefused } from '../src/decl/errors.ts';
 import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
-import type {
-	AiRequest,
-	AiResponse,
-	Authority,
-	ActOutcome as Outcome
-} from '../src/engine/contracts.ts';
-import type { System1Request } from '../src/engine/decision.ts';
+import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { upload } from '../src/engine/callables/upload.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { KitInvalid, TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
@@ -110,7 +104,7 @@ const conversation = (effect: Effect.Effect<Outcome, unknown>) =>
 let recordFile = '';
 const setup = Effect.gen(function* () {
 	const requests: AiRequest[] = [],
-		states: System1Request['state'][] = [];
+		states: DecisionRequest['state'][] = [];
 	const ports = Layer.succeed(Ai, {
 		maxChoices: undefined,
 		models: ['default'],
@@ -149,7 +143,7 @@ const setup = Effect.gen(function* () {
 					);
 					// a posted attachment is read by its id; else the record's file
 					const id =
-						/\[attachment: [^\]]*\] read_file id ([0-9a-f]{8}); file reference/.exec(
+						/\[attachment: [^\]]*\] id ([0-9a-f]{8})/.exec(
 							JSON.stringify(r.messages)
 						)?.[1] ?? recordFile;
 					const response: AiResponse =
@@ -267,9 +261,7 @@ describe('in-app attachments', () => {
 				const firstMessage = first.messages[0],
 					attachment = second.files?.[0];
 				if (firstMessage === undefined || attachment === undefined) throw new Error('attachment was not passed to the model');
-				expect(String(firstMessage.content)).toContain(
-					`file reference ${JSON.stringify({ id, name: 'pump.png', mime: 'image/png', sha256: digest })}`
-				);
+				expect(String(firstMessage.content)).toContain(`] id ${id.slice(0, 8)}`);
 				expect([...attachment.bytes]).toEqual([...PNG]);
 				expect(attachment.mime).toBe('image/png');
 				// the posted file is one of the conversation's inputs
@@ -364,7 +356,7 @@ describe('read_file', () => {
 					const refused = yield* ask('bob');
 					expect(refused.files ?? []).toHaveLength(0);
 					expect(JSON.stringify(refused.messages)).toContain(
-						'No file you can read has this id; a truncated result is read with call, not id.'
+						"No file you can read has this id; a clipped result is read_output's."
 					);
 				})
 			)

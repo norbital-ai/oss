@@ -46,6 +46,6 @@ Policies, teams, limits, approvals: `norbital-platform`, `references/approvals-a
 - A compatible type does not prove runtime authority. A green build is not a test run.
 - On a failed probe, use its diagnostic or narrow it; never cast or guess.
 - A generated name appears after the next check.
-- Adjacent acts are separate commits. Put independent writes in one act map and parent/child writes in nested layers.
+- Adjacent acts are separate commits. Writes that commit together go in one act map, in dependency order; a later entry names an earlier created row by an id minted with `new_id(model)`. Parent/child writes go in nested layers.
 - Decode unknown data at its boundary; keep typed failures.
 - Keep customer data out of tests and evidence.

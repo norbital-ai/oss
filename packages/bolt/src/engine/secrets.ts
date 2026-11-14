@@ -2,10 +2,9 @@
 // key. The workspace's live ConfigProvider reads the declared sealed values.
 import { ConfigProvider, Context, Effect, Layer, Option, Schema } from 'effect';
 import { TenantDb } from './db/tenant-db.ts';
-import { type DbError } from './errors.ts';
+import type { DbError, PortFailure } from '@norbital-ai/host-api';
 import { BoltError } from '../protocol/errors.ts';
 import { Keys } from './ports.ts';
-import type { PortFailure } from './port.ts';
 import { fromBase64, toBase64 } from './crypto.ts';
 
 export type SecretsCodec = {

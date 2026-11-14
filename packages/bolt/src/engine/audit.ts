@@ -1,16 +1,16 @@
 // Durable administrator audit is a host capability, separately stored from rollback history and runtime logs.
 import { Context, Crypto, Effect, Layer, PubSub, Schema } from 'effect';
 import {
+	type AuditEvent,
 	AuditPage,
 	AuditPendingPage,
-	AuditRecord,
-	type AuditEvent,
 	type AuditPendingQuery,
 	type AuditPort,
-	type AuditQuery
-} from '../protocol/audit.ts';
+	type AuditQuery,
+	AuditRecord,
+	Port
+} from '@norbital-ai/host-api';
 import { BoltError } from '../protocol/errors.ts';
-import { Port } from './port.ts';
 
 export type AuditShape = {
 	readonly mode: AuditPort['mode'];

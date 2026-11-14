@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // The API reference generator, run by bolt's build after the package compiles: `node scripts/docs.ts`.
-// It walks every public entry (`exports`, `./tooling` aside) of bolt, ui and bolt-cli, reads each entry's
+// It walks every public entry (`exports`, `./tooling` aside) of bolt, host-api, ui and bolt-cli, reads each entry's
 // declarations with the TypeScript checker (no TypeDoc) and writes one JSON document per namespace plus `index.json`
 // to `build/docs/`, where `@norbital-ai/bolt/docs` reads them. bolt and its dependencies are read from their built
 // `.d.ts`; bolt-cli builds after bolt, so its entries are read from source, and its `bolt` command's verbs become the
@@ -34,28 +34,26 @@ class DocsFailed extends Schema.TaggedError<DocsFailed>()('DocsFailed', {
 	cause: Schema.Defect()
 }) {}
 
-const PACKAGES = ['bolt', 'ui', 'bolt-cli'];
+const PACKAGES = ['bolt', 'host-api', 'ui', 'bolt-cli'];
 /** Packages read from source: they build after bolt. */
 const FROM_SOURCE = new Set(['bolt-cli']);
 /** What an author reads for each role: these symbols' shapes, generated into `bolt-contract` so a card cannot drift. */
 const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: readonly string[] } } = {
 	model: {
-		bolt: ['CreateInput', 'UpdateInput', 'WriteCtx', 'CarriedWrites', 'Kind'],
-		'bolt/declarations': ['ModelDeclaration', 'ModelLiteral']
+		bolt: ['model', 'ModelLiteral', 'CreateInput', 'UpdateInput', 'WriteCtx', 'CarriedWrites', 'Kind']
 	},
-	access: { bolt: ['team', 'policy', 'PolicyCtx', 'StoredTree', 'ApprovalFlow', 'Verdict'] },
+	access: { bolt: ['team', 'policy', 'StoredTree', 'ApprovalFlow', 'Verdict'] },
 	automation: {
-		bolt: ['automation', 'AutomationCtx', 'browser_start', 'ReadRequestBase', 'Outcome'],
+		bolt: ['automation', 'AutomationCtx', 'dynamic_read'],
 		'bolt/errors': ['Refusal']
 	},
-	sync: { bolt: ['RemoteSync', 'SyncCtx', 'SyncRow', 'Health', 'FileSyncCtx'] },
+	sync: { bolt: ['sync', 'SyncCtx', 'SyncRow', 'Finding'] },
 	integration: {
-		bolt: ['InstanceId', 'instance_id', 'is_instance'],
-		'bolt/declarations': ['IntegrationDeclaration', 'IntegrationLiteral', 'Integration'],
+		bolt: ['integration', 'IntegrationLiteral', 'Integration', 'InstanceId', 'instance_id', 'is_instance'],
 		'bolt/page': ['IntegrationSetup']
 	},
 	page: {
-		bolt: ['app', 'Page', 'group'],
+		bolt: ['app', 'group'],
 		'bolt/page': ['PageBolt', 'PageSnapshotHost'],
 		ui: ['Table', 'Col', 'Form', 'Field', 'Section', 'RecordShell', 'Board', 'Chart']
 	},
@@ -98,9 +96,9 @@ In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.run_d
 	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares:
 
 \`\`\`ts
-import { model } from '../../../../.norbital/models/<name>.ts';
+import { model } from '@norbital-ai/bolt';
 
-export default model({
+export default model('<name>', {
 	description: '<what one record is>',
 	icon: 'lucide:<icon>',
 	record_label: 'record.<field>',
@@ -116,7 +114,7 @@ export default model({
 \`\`\`
 
 A required field added to a model with rows needs a data step in its generated migration, filling them.`,
-	integration: `A definition lives at \`src/integration/<name>/+integration.ts\` and uses that folder's generated binding. Read the definition's exported types before authoring it. Built-in conversation definitions already exist.
+	integration: `A definition lives at \`src/integration/<name>/+integration.ts\` and declares \`integration('<name>', { … })\` (\`<name>\` is its folder). Read the definition's exported types before authoring it. Built-in conversation definitions already exist.
 
 Accounts and envoys are runtime records: \`sys_envoy\` holds the assistant's name, task and policies; \`sys_integration\` holds one account, its configuration, optional envoy and durable sealed pairing. Create any number of workspace accounts with no owner. Settings → Envoys creates an envoy then pairs its provider; Settings → Connections creates and configures other workspace accounts. Keep a supplied \`+integration.svelte\` companion.
 

@@ -230,7 +230,7 @@ it.effect(
 				cond('title', 'like', { lit: 'a_b%' }),
 				cond('status', 'in', { list: ['scheduled', 'done'] }),
 				cond('assignee', 'eq', { lit: 'u1' }),
-				cond('assignee', 'eq', { var: 'requestor.id' }),
+				cond('assignee', 'eq', { var: 'actor.id' }),
 				cond('assignee', 'is_null'),
 				cond('account.owner.name', 'like', { lit: 'bo' }),
 				cond('subject:accounts', 'in', { list: ['a1', 'a2'] }),
@@ -276,7 +276,7 @@ it.effect(
 				assignee: { is: { id: { eq: 'u1' } } }
 			});
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[3])), {
-				assignee: { eq: { var: 'requestor.id' } }
+				assignee: { eq: { var: 'actor.id' } }
 			});
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[6])), {
 				subject: { accounts: { is: { id: { in: ['a1', 'a2'] } } } }
@@ -308,7 +308,7 @@ it.effect(
 				{ today: '' },
 				{ clock: 'today' },
 				{ startOf: 'week' },
-				{ var: 'requestor.email' }
+				{ var: 'actor.email' }
 			];
 			for (const old of formerOrWrong)
 				assert.equal(fromWhere(catalog, 'jobs', { scheduled_on: { lt: old } }), null);
@@ -943,7 +943,7 @@ it.effect(
 			const rel = required(resolve(catalog, 'jobs', 'assignee'));
 			const day = required(resolve(catalog, 'jobs', 'scheduled_on'));
 			const names = (r: Resolved, op: Op) => variablesFor(r, op).map((v) => v.name);
-			assert.deepEqual(names(rel, 'eq'), ['requestor', 'requestor.party']);
+			assert.deepEqual(names(rel, 'eq'), ['requestor', 'actor.party']);
 			assert.deepEqual(names(rel, 'in'), []);
 			assert.deepEqual(names(day, 'lt'), [
 				'today',
@@ -959,16 +959,16 @@ it.effect(
 				label: 'Email'
 			};
 			assert.deepEqual(variablesFor(email, 'eq'), [
-				{ name: 'requestor.email', arg: { _tag: 'var', var: 'requestor.email' } }
+				{ name: 'actor.email', arg: { _tag: 'var', var: 'actor.email' } }
 			]);
 			assert.equal(variableOf(taggedArg({ var: 'today - days(7)' })), 'today - days(7)');
-			assert.equal(variableOf(taggedArg({ var: 'requestor.id' })), 'requestor');
+			assert.equal(variableOf(taggedArg({ var: 'actor.id' })), 'requestor');
 			assert.equal(variableOf(taggedArg({ lit: 'x' })), undefined);
 			// an expression is typed against its position: an email is no date
 			assert.equal(varError(day, 'lt', 'today - days(1)'), undefined);
-			assert.match(varError(day, 'lt', 'requestor.email') ?? '', /not a date/);
-			const rows = nodesOf(catalog, 'jobs', { assignee: { eq: { var: 'requestor.id' } } });
-			assert.deepEqual(rows, [cond('assignee', 'eq', { var: 'requestor.id' })]);
+			assert.match(varError(day, 'lt', 'actor.email') ?? '', /not a date/);
+			const rows = nodesOf(catalog, 'jobs', { assignee: { eq: { var: 'actor.id' } } });
+			assert.deepEqual(rows, [cond('assignee', 'eq', { var: 'actor.id' })]);
 		})
 );
 
@@ -1417,7 +1417,7 @@ it.live(
 			const variables = [...document.querySelectorAll<HTMLElement>('[data-variable-option]')];
 			assert.deepEqual(
 				variables.map((option) => option.dataset['variableOption']),
-				['requestor', 'requestor.party']
+				['requestor', 'actor.party']
 			);
 			const activeVariable = () =>
 				document.querySelector<HTMLElement>('[data-variable-option][data-active=true]')?.dataset[
@@ -1425,7 +1425,7 @@ it.live(
 				];
 			menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
 			flushSync();
-			assert.equal(activeVariable(), 'requestor.party');
+			assert.equal(activeVariable(), 'actor.party');
 			menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
 			flushSync();
 			assert.equal(activeVariable(), 'requestor');

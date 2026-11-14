@@ -24,37 +24,41 @@ import {
 	artifact_hash,
 	CONTRACT,
 	read_artifact,
-	tree_hash,
 	type Artifact
 } from '../src/engine/artifact/read.ts';
-import type {
-	CronEntry,
-	CronFired,
-	DeadlinesPort,
-	FilesPort,
-	TransportPort
-} from '../src/engine/contracts.ts';
-import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
+import {
+	conformance,
+	type CronEntry,
+	type CronFired,
+	DbError,
+	type DeadlinesPort,
+	type Facilities,
+	type FilesPort,
+	HOST_API_VERSION,
+	HostFailure,
+	type HostPorts,
+	off,
+	tree_hash,
+	type TransportPort
+} from '@norbital-ai/host-api';
+import { PgliteDb, Pristine, type PgliteClient, artifact_port, tenant_db_port, keys_port, module_hash } from '@norbital-ai/host-api/node';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { DOCS_DIR } from '../src/node/docs.ts';
 import { BoltError } from '../src/protocol/errors.ts';
-import { DbError, Interrupted } from '../src/engine/errors.ts';
+import { Interrupted } from '../src/engine/errors.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { fingerprint, schema_slice } from '../src/engine/schema/plan.ts';
 import { sha256_hex } from '@norbital-ai/store';
-import { HOST_API, HostFailure, type HostPorts } from '../src/protocol/host-api.ts';
-import { off, type Facilities } from '../src/facilities/index.ts';
+import { HOST_API } from '../src/protocol/host-api.ts';
 import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
 import { Frame } from '../src/protocol/schema.ts';
 import { response_error } from '../src/protocol/http.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { prepare_migrations } from '../../bolt-cli/src/compiler/migrations.ts';
-import { artifact_port } from '../src/node/artifact.ts';
-import { tenant_db_port } from '../src/node/db/port.ts';
-import { keys_port } from '../src/node/keys.ts';
 import { node_ports, type NodePorts } from '../src/node/ports.ts';
 import { guests } from './support/guests.ts';
 import { callbacks, guest } from './engine-fixture.ts';
 import { CHECKPOINTS } from '../../bolt-cli/src/test/checkpoint.ts';
-import { module_hash } from '../src/node/module-hash.ts';
 import { client_contract } from '../src/engine/access/operation-outputs.ts';
 
 const ORIGIN = 'https://acme.example',
@@ -219,8 +223,7 @@ const facilitiesOf = (database: Facilities['storage']['database'], sent: string[
 		logs: { runtime: { write: () => {}, query: async () => [] }, audit: memory_audit().port },
 		transactional: { mail, sms: off, phone: off, push: off, challenge: off, fixed_codes: false },
 		intelligence: { system1: off, system2: off, embed: off },
-		ports: { webhooks: off, websockets: off, outbound: off },
-		sandbox: off,
+		ports: { webhooks: off, outbound: off },
 		keys: keys_port(randomBytes(32))
 	};
 };
@@ -238,7 +241,6 @@ const portsOf = (
 	guests,
 	deadlines: deadlines(calls),
 	images: host.images,
-	docs: host.docs,
 	bundler: off,
 	convert: off,
 	render: off,
@@ -256,8 +258,8 @@ const viaHostApi = async (client: PgliteClient, at: string): Promise<Side> => {
 	const calls: string[] = [],
 		sent: string[] = [];
 	const host = await hostPorts();
-	const release = { id: RELEASE_ID, artifact: artifact_port(at) };
-	const database = tenant_db_port(PgliteDb.make(client));
+	const release = { id: RELEASE_ID, artifact: artifact_port(at, fileURLToPath(DOCS_DIR)) };
+	const database = tenant_db_port(TenantDb.typed(PgliteDb.make(client)));
 	const facilities = facilitiesOf(database, sent);
 	const branch = await HOST_API.branch(
 		{ release, database, audit: facilities.logs.audit },
@@ -364,7 +366,7 @@ describe('HOST_API conformance (D10a)', () => {
 					const first = yield* PgliteDb.open({ dataDir, loadDataDir: yield* yield* Pristine }).pipe(
 						Scope.provide(owner)
 					);
-					const firstDb = PgliteDb.make(first);
+					const firstDb = TenantDb.typed(PgliteDb.make(first));
 					expect(
 						yield* firstDb.value(Schema.String, {
 							text: "SELECT current_setting('TimeZone')",
@@ -386,7 +388,7 @@ describe('HOST_API conformance (D10a)', () => {
 					);
 					const reopened = yield* PgliteDb.open({ dataDir }).pipe(Scope.provide(again));
 					expect(
-						(yield* PgliteDb.make(reopened).read([
+						(yield* TenantDb.typed(PgliteDb.make(reopened)).read([
 							{ text: 'SELECT n, at FROM pglite_boundary_probe', params: [] }
 						]))[0]?.rows
 					).toEqual([{ n: 7, at: '2026-10-16T00:00:00.123456Z' }]);
@@ -410,6 +412,32 @@ describe('HOST_API conformance (D10a)', () => {
 			).pipe(Effect.provide(Pristine.layer), Effect.provide(NodeServices.layer))
 	);
 
+	it.live('passes the host-api conformance kit, and refuses a release whose guest changed after its build', () =>
+		Effect.tryPromise({
+			try: async () => {
+				const at = mkdtempSync(join(tmpdir(), 'bolt-host-api-kit-')),
+					tampered = mkdtempSync(join(tmpdir(), 'bolt-host-api-kit-tampered-'));
+				try {
+					await built(at, sliceManifest);
+					cpSync(at, tampered, { recursive: true });
+					writeFileSync(join(tampered, 'guest.mjs'), '// changed after the build\n', { flag: 'a' });
+					for (const check of conformance({
+						api: HOST_API,
+						range: { from: HOST_API_VERSION, to: HOST_API_VERSION },
+						release: { id: 'kit', artifact: artifact_port(at, fileURLToPath(DOCS_DIR)) },
+						tampered: { id: 'kit-tampered', artifact: artifact_port(tampered, fileURLToPath(DOCS_DIR)) }
+					}))
+						await check.run().catch((error: unknown) => {
+							throw new Error(`${check.name}: ${String(error)}`);
+						});
+				} finally {
+					rmSync(at, { recursive: true, force: true });
+					rmSync(tampered, { recursive: true, force: true });
+				}
+			},
+			catch: (error) => error
+		})
+	);
 	it.live('answers sign in, q, act, live, a wake, crons and fire, and close', () =>
 		Effect.tryPromise({
 			try: async () => {
@@ -520,8 +548,8 @@ describe('HOST_API conformance (D10a)', () => {
 				// the needs check refuses a bundle whose need the host leaves off, before it reads the database
 				await built(needsDir, { ...sliceManifest, needs: ['outbound'] }, dir);
 				// a release id names its contents: this bundle differs, so it is its own release
-				const release = { id: `${RELEASE_ID}-needs`, artifact: artifact_port(needsDir) };
-				const database = tenant_db_port(PgliteDb.make(client));
+				const release = { id: `${RELEASE_ID}-needs`, artifact: artifact_port(needsDir, fileURLToPath(DOCS_DIR)) };
+				const database = tenant_db_port(TenantDb.typed(PgliteDb.make(client)));
 				const refused = await HOST_API.activate(
 					portsOf(facilitiesOf(database, []), release, await hostPorts(), []),
 					{ signal }
@@ -537,7 +565,7 @@ describe('HOST_API conformance (D10a)', () => {
 				});
 
 				// a cell reads a release once, however many static calls arrive together (each page load makes one)
-				const files = artifact_port(needsDir);
+				const files = artifact_port(needsDir, fileURLToPath(DOCS_DIR));
 				let reads = 0;
 				const counted = {
 					id: `${RELEASE_ID}-counted`,
@@ -559,7 +587,7 @@ describe('HOST_API conformance (D10a)', () => {
 
 				// failures cross as encoded data, never this release's class
 				const missing = await HOST_API.verify(
-					{ id: 'x', artifact: artifact_port(join(dir, 'missing')) },
+					{ id: 'x', artifact: artifact_port(join(dir, 'missing'), fileURLToPath(DOCS_DIR)) },
 					{ signal }
 				).then(
 					() => null,

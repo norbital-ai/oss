@@ -1,9 +1,13 @@
 import { Cache, Context, Data, Effect, Layer, Option, Schema, Semaphore } from 'effect';
-import { LIMITS, type ImagePreview, type ImagePreviewSize } from '../engine/contracts.ts';
+import {
+	type ImagePreview,
+	ImagePreviewMimeSchema,
+	type ImagePreviewSize,
+	type PortFailure
+} from '@norbital-ai/host-api';
+import { LIMITS } from '../engine/contracts.ts';
 import { Files, Images } from '../engine/ports.ts';
-import type { PortFailure } from '../engine/port.ts';
 import { imagePreview } from '../engine/files/image.ts';
-import { ImagePreviewMimeSchema } from '../engine/media.ts';
 
 class PreviewKey extends Data.Class<{
 	key: string;

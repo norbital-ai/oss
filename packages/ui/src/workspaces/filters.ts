@@ -1,50 +1,21 @@
 import type { WorkspaceMember } from './types.js';
-import type { ReleaseBuild, ReleaseVersion } from '../releases/model.js';
+import type { ReleaseVersion } from '../releases/model.js';
 
-export const filterMembers = (
-	members: ReadonlyArray<WorkspaceMember>,
-	search: string,
-	status: string,
+/**
+ * A member's activity, which the users list filters on: `disabled`; else `recent` within five minutes of `now`;
+ * `unknown` with no readable activity; else `offline`.
+ */
+export const memberStatus = (
+	member: WorkspaceMember,
 	now: string
-) => {
-	const query = search.trim().toLowerCase();
-	const cutoff = Date.parse(now) - 300_000;
-	return members.filter((member) => {
-		if (!`${member.name} ${member.email ?? ''} ${member.id}`.toLowerCase().includes(query))
-			return false;
-		const last_seen = member.last_seen === null ? NaN : Date.parse(member.last_seen);
-		switch (status) {
-			case 'recent':
-				return member.active && last_seen > cutoff;
-			case 'enabled':
-				return member.active;
-			case 'disabled':
-				return !member.active;
-			case 'offline':
-				return member.active && last_seen <= cutoff;
-			case 'unknown':
-				return !Number.isFinite(last_seen);
-			default:
-				return true;
-		}
-	});
-};
-
-export const filterBuilds = (
-	builds: ReadonlyArray<ReleaseBuild>,
-	search: string,
-	status: string
-) => {
-	const query = search.trim().toLowerCase();
-	return builds.filter(
-		(build) =>
-			`${build.commit} ${build.at} ${build.message}`.toLowerCase().includes(query) &&
-			(status === 'live'
-				? build.live
-				: status === 'built' || status === 'failed'
-					? build.status === status
-					: true)
-	);
+): 'recent' | 'offline' | 'unknown' | 'disabled' => {
+	if (!member.active) return 'disabled';
+	const last_seen = member.last_seen === null ? NaN : Date.parse(member.last_seen);
+	return !Number.isFinite(last_seen)
+		? 'unknown'
+		: last_seen > Date.parse(now) - 300_000
+			? 'recent'
+			: 'offline';
 };
 
 /** Releases newest first. */

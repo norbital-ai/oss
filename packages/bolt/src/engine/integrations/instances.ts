@@ -13,18 +13,18 @@ import type { GuestShape } from '../services.ts';
 import { prepareSend, sendPiece } from '../conversations/outbound.ts';
 import { stableId } from '../conversations/store.ts';
 import { parse_rate } from '../access/rate.ts';
-import { Port } from '../port.ts';
+import { type DatabaseRequest, ImportStart, Port } from '@norbital-ai/host-api';
 import { KindSchema } from '@norbital-ai/store/kind';
 import type { EngineManifest } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
 import {
 	configuration_defaults,
-	DRIVERS,
-	type HandleKind,
+	driver_name,
+	driver_of,
+	type DriverContract,
 	type IntegrationSpec
 } from '../../decl/runtime/integration.ts';
 import { SYSTEM } from '../../system/index.ts';
-import { ImportStart } from '../../protocol/schema.ts';
 import {
 	LIMITS,
 	cross_failure,
@@ -42,11 +42,7 @@ import { decodeInput } from '../callables/decode.ts';
 import { enqueue, next_due } from '../runs/queue.ts';
 import type { Item } from '../write/flatten.ts';
 import { Chain } from '../write/sql.ts';
-import {
-	validate_database_request,
-	validate_database_result,
-	type DatabaseRequest
-} from './database.ts';
+import { validate_database_request, validate_database_result } from './database.ts';
 
 /** A definition by name: the workspace's, else one of bolt's conversation definitions. */
 export const definitionOf = (m: EngineManifest, name: string): IntegrationSpec | undefined =>
@@ -58,10 +54,7 @@ export const definitionOf = (m: EngineManifest, name: string): IntegrationSpec |
 /** The conversation a definition's driver carries, with the handle its senders are matched by. */
 export const conversationOf = (
 	def: IntegrationSpec
-): { kind: 'chat' | 'email'; handle: HandleKind | null } | undefined => {
-	const driver = DRIVERS[def.driver];
-	return 'conversation' in driver ? driver.conversation : undefined;
-};
+): DriverContract['conversation'] => driver_of(def).conversation;
 /** Whether a definition carries a conversation. */
 export const conversational = (def: IntegrationSpec): boolean => conversationOf(def) !== undefined;
 
@@ -120,8 +113,8 @@ export function instanceTransform(
 		if (def === undefined)
 			return refuse(c.path, 'integration', `No integration '${name}' is defined.`);
 		const owner = pre === undefined ? (values['owner'] ?? null) : (pre['owner'] ?? null);
-		if (pre === undefined && owner !== null && !('personal' in DRIVERS[def.driver]))
-			return refuse(c.path, 'owner', `A ${def.driver} instance is never personal.`);
+		if (pre === undefined && owner !== null && driver_of(def).personal !== true)
+			return refuse(c.path, 'owner', `A ${driver_name(def)} instance is never personal.`);
 		const start = values['import_start'];
 		if (start !== undefined && start !== null) {
 			const decoded = Schema.decodeUnknownOption(ImportStart)(start);
@@ -255,11 +248,10 @@ const HttpOp = Schema.Struct({
 const HttpResponse = Schema.Struct({
 	status: Schema.Number,
 	body: Schema.optionalKey(Schema.Json),
-	/** A `429`'s or `503`'s `Retry-After`, in seconds (engine/integrations/http.ts). */
+	/** A `429`'s or `503`'s `Retry-After`, in seconds (a host's http driver). */
 	retryAfter: Schema.optionalKey(Schema.Number)
 });
 type RequestConfig = {
-	readonly readOnly?: boolean;
 	manifest: EngineManifest;
 	db: TenantDbShape;
 	links: Drivers['Service'];
@@ -297,12 +289,12 @@ export const instanceRequest = (
 		const instance = yield* known ??
 			instancesOf(cfg.manifest, cfg.db, { ids: [to] }).pipe(Effect.map(([first]) => first));
 		if (instance === undefined) return cross_failure('invalid_input', `No integration instance '${to}'.`);
-		const driver = DRIVERS[instance.definition.driver],
-			kind = 'request' in driver ? driver.request : 'call' in driver ? driver.call : undefined;
+		const driver = driver_of(instance.definition),
+			kind = driver.request ?? driver.call;
 		if (kind === undefined)
 			return cross_failure(
 				'invalid_input',
-				`'${to}' is a ${instance.definition.driver} instance; it takes no request.`
+				`'${to}' is a ${driver_name(instance.definition)} instance; it takes no request.`
 			);
 		// a member's own account answers only its definition's bodies (they pass `known`), never an automation
 		if (instance.owner !== null && known === undefined)
@@ -329,8 +321,6 @@ export const instanceRequest = (
 					);
 		const wire = yield* decode.pipe(Effect.catch((error) => Effect.succeed(error)));
 		if (wire instanceof BoltError) return cross_failure(wire.code, wire.message);
-		if (cfg.readOnly && ('method' in wire ? wire.method !== 'GET' : !['values', 'read', 'cdc_captures', 'cdc_identity', 'cdc_clock', 'cdc_age', 'cdc_page'].includes(wire.op)))
-			return cross_failure('forbidden', 'A cached call may issue only a read request.');
 		const { output, ...plain } = 'output' in wire ? wire : { ...wire, output: undefined };
 		const http =
 			key === undefined || !('method' in plain)

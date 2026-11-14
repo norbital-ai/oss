@@ -1,25 +1,25 @@
 /// <reference types="node" />
 // `bolt dev` untethered: the workspace's `norbital.host.ts` (or `--host=<file>`) default-exports every facility
 // (`satisfies Facilities`) and optionally its `serving` parts. Each build is migrated on the host's own database and
-// served through `serve_release` on this package's `node_guests` runner, the path bolt-server takes: integration links,
+// served through `serve_release` on host-api's `node_guests` runner, the calls bolt-server makes on a cell: integration links,
 // `activate` (whose needs check is the only gate), deadline wakes and crons. The internal SPA is served from source by a
 // Vite dev server, so a page edit is a hot update; a model edit rebuilds the manifest and guest only.
 import { Effect, FileSystem, Option, Path, Scope, ScopedRef } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
-import { node_guests } from '../guests.ts';
 import { clientDevServer } from '../compiler/artifact/client.ts';
-import { artifact_port } from '@norbital-ai/bolt/node';
+import { fileURLToPath } from 'node:url';
+import { artifact_port, load_host, node_guests } from '@norbital-ai/host-api/node';
+import { DOCS_DIR } from '@norbital-ai/bolt/docs';
 import {
 	call,
-	load_host,
 	serve_release,
 	node_ports,
 	response_error
 } from '@norbital-ai/bolt/tooling';
 import { HOST_API } from '@norbital-ai/bolt/host-api';
-import { client_page } from '@norbital-ai/bolt/protocol';
+import { client_page } from '@norbital-ai/host-api';
 import { buildWorkspace, ToolFailure, watchWorkspace, type Built, type Log } from './build.ts';
 
 /**
@@ -110,7 +110,7 @@ export const dev = Effect.fn('bolt.dev')(function* (
 		Effect.gen(function* () {
 			const release = {
 				id: built.artifact.artifact.hash,
-				artifact: artifact_port(built.artifact.dir)
+				artifact: artifact_port(built.artifact.dir, fileURLToPath(DOCS_DIR))
 			};
 			const branch = yield* call((signal) =>
 				HOST_API.branch(
@@ -132,7 +132,7 @@ export const dev = Effect.fn('bolt.dev')(function* (
 				admit: (work) => work,
 				log: options.log
 			});
-			return { ...served, built };
+			return { ...served, built, release };
 		}).pipe(
 			Effect.mapError(
 				(cause) => new ToolFailure({ message: 'The build could not be activated.', cause })
@@ -155,33 +155,28 @@ export const dev = Effect.fn('bolt.dev')(function* (
 		const incoming = yield* HttpServerRequest.HttpServerRequest;
 		const request = yield* HttpServerRequest.toWeb(incoming);
 		const address = Option.getOrElse(incoming.remoteAddress, () => '127.0.0.1');
-		const { workspace, links, built } = yield* ScopedRef.get(active);
+		const { workspace, links, built, release } = yield* ScopedRef.get(active);
 		const pathname = new URL(incoming.url, public_url).pathname;
 		const response = yield* pathname.startsWith('/hooks/integration/') ||
 		pathname === '/hooks/oauth/callback'
 			? call(() => links.hook(request))
 			: pathname === '/__bolt/integrations' || pathname.startsWith('/__bolt/integrations/')
-				? call(async (signal) => {
-						const authority = await workspace.identity.authority(request.clone(), { signal });
-						return authority === null
-							? Response.json(
-									{
-										error: { code: 'unauthenticated', message: 'Sign in to manage integrations.' }
-									},
-									{ status: 401 }
-								)
-							: links.admin(request, authority);
-					})
+				? call(() => links.admin(request))
 				: call(
 						async (signal) =>
 							(await workspace.handle(request, { address })) ??
 							(await workspace.render(request, { address, signal }))
 					);
 		if (response !== null) return HttpServerResponse.fromWeb(response);
-		const page = yield* client_page(built.artifact.dir, pathname, built.artifact.manifest);
+		const page = yield* client_page(built.artifact.dir, pathname);
 		if (page === undefined) return HttpServerResponse.empty({ status: 404 });
 		return page.document
-			? HttpServerResponse.text(client.document, { headers: page.headers })
+			? HttpServerResponse.text(client.document, {
+					headers: {
+						...page.headers,
+						'content-security-policy': yield* call((signal) => HOST_API.frame_policy(release, pathname, { signal }))
+					}
+				})
 			: yield* HttpServerResponse.file(page.file, { headers: page.headers });
 	}).pipe(Effect.catch((error) => Effect.succeed(response_error(error))));
 	const bolt = yield* NodeHttpServer.makeHandler(app, { scope: yield* Effect.scope }).pipe(

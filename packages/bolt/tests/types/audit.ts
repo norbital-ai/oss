@@ -7,7 +7,7 @@ import type {
 	AuditQuery,
 	AuditRecord,
 	AuditSummary
-} from '../../src/protocol/audit.ts';
+} from '@norbital-ai/host-api';
 import type { ShellApi } from '../../src/shell/api-types.ts';
 import { automation } from '../../src/index.ts';
 import * as rt from './fixture/runtime.ts';

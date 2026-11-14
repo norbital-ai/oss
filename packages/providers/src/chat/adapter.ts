@@ -3,7 +3,8 @@
 // between an adapter and the engine is `chatProvider`, so every platform stores before it acknowledges, dedupes and
 // recovers the same way. An adapter holds no unbounded state.
 import { Effect, Predicate, Schedule, Schema, Semaphore } from 'effect';
-import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
+import type { DriverOpen, OutboundAttachment } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import type { LinkDef, ProviderDef, ProviderText } from '../abi.ts';
 import { answerFailure, notConnected, PairingInvalid, ProviderUnavailable } from '../errors.ts';
 import { inbound, type ChatMessage } from '../inbound.ts';

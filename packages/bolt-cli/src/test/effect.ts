@@ -7,6 +7,7 @@ import * as NodePath from '@effect/platform-node/NodePath';
 import { Context, Effect, FileSystem, Layer, Option, Schema, SchemaGetter } from 'effect';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { type CheckDiagnostic, Diagnostic, type GuestProgram } from '@norbital-ai/host-api';
 import {
 	apply_migrations,
 	decode_manifest,
@@ -15,21 +16,12 @@ import {
 	read_pack,
 	TenantDb,
 	type EngineManifest,
-	type GuestProgram,
 	type MigrationBundle,
 	type TenantDbShape
 } from '@norbital-ai/bolt/engine';
-import {
-	Diagnostic,
-	fingerprint,
-	KitInvalid,
-	schema_slice,
-	TestEngine,
-	test_engine,
-	type CheckDiagnostic
-} from '@norbital-ai/bolt/tooling';
+import { fingerprint, KitInvalid, schema_slice, TestEngine, test_engine } from '@norbital-ai/bolt/tooling';
 import type { Artifact } from '@norbital-ai/bolt/artifact';
-import { node_guests } from '../guests.ts';
+import { node_guests } from '@norbital-ai/host-api/node';
 import { memory_audit } from './audit.ts';
 import { CHECKPOINTS, inputs, keep, prune, tree_hash } from './checkpoint.ts';
 import { TestDb } from './database.ts';

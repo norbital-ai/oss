@@ -2,11 +2,12 @@ import { id_of } from '../../src/decl/id.ts';
 import { Schema } from 'effect';
 // Type corpus for access. Each `@ts-expect-error` line is a planted mistake; a
 // clean tsc proves every valid literal compiles and every mistake is refused at its literal.
-import { policy } from '../../src/index.ts';
+import { policy, workspace } from '../../src/index.ts';
 import type { Actor } from '../../src/index.ts';
 import './registry.ts';
 import type { CreateVerdict, UpdateVerdict } from '../../src/decl/ctx.ts';
-import type { Edge, Grant, LimitKey, WriteField } from '../../src/decl/access/policy.ts';
+import type { Edge, Grant, WriteField } from '../../src/decl/access/policy.ts';
+import type { LimitKey } from '../../src/decl/runtime/app.ts';
 import type { TeamName } from '../../src/decl/names.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -23,14 +24,15 @@ is<Eq<'outputs' extends keyof Grant<'notices'> ? 1 : 0, 1>>();
 is<Eq<TeamName, 'finance' | 'sales'>>();
 
 // ── valid: today's template behaviour as literals ──
-const ownOrders = { owner: { eq: { var: 'requestor.id' } } } as const;
+const ownOrders = { owner: { eq: { var: 'actor.id' } } } as const;
 export const salesRep = policy({
 	description: 'Sell to our customers',
 	grants: {
 		orders: {
 			outputs: { default: { history: true, where: ownOrders } },
 			create: {
-				columns: { fields: ['customer', 'note'], lines: { fields: ['item', 'qty'] } },
+				fields: ['customer', 'note'],
+				lines: { fields: ['item', 'qty'] },
 				// one read over the batch replaces the old relation-hop `where`; steps in order, `if` adds one only when it
 				// holds, finance may decide in any step's place
 				verdict: function* (rows, ctx) {
@@ -51,7 +53,7 @@ export const salesRep = policy({
 				}
 			},
 			update: {
-				columns: { fields: ['status', 'note'] },
+				fields: ['status', 'note'],
 				moves: { status: ['draft->submitted', 'submitted->draft'] },
 				// the pre-image check `previous` was; the owner's team reviews a status change
 				verdict: function* (changes, ctx) {
@@ -82,9 +84,9 @@ export const salesRep = policy({
 		},
 		notices: { outputs: { default: {} } },
 		sites: {
-			outputs: { summary: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } }
+			outputs: { summary: { where: { customer: { in: { var: 'actor.scopes.sales_rep' } } } } }
 		},
-		sys_user: { outputs: { directory: { where: { team: { in: { var: 'requestor.team_tree' } } } } } }
+		sys_user: { outputs: { directory: { where: { team: { in: { var: 'actor.team_tree' } } } } } }
 	},
 	capabilities: {
 		apps: ['sales'],
@@ -92,20 +94,6 @@ export const salesRep = policy({
 		mcp: ['erp'],
 		automations: ['nightly', 'orders_submit', 'orders_renote'],
 		syncs: ['products.ledger']
-	},
-	limits: {
-		act: '600/min',
-		agent: { rate: '100/h', per: 'actor' },
-		read: [
-			{ rate: '3000/min', per: 'actor' },
-			{ rate: '600/min', per: 'ip' }
-		],
-		convert: '10/min',
-		'envoys.receive': [
-			{ rate: '8/min', per: 'sender' },
-			{ rate: '300/min', per: 'subject' }
-		],
-		'envoys.unrecognised': '1/15min'
 	}
 });
 // A visitor policy: the shape is ordinary; what a public policy may hold is the build's `access/visitor-grant`.
@@ -113,9 +101,30 @@ export const applicant = policy({
 	description: 'Anyone may apply',
 	grants: {
 		customers: { outputs: { directory: { where: { tier: { eq: 'gold' } } } } },
-		orders: { create: { columns: { fields: ['customer'] } } }
-	},
-	limits: { register: { rate: '10/h', per: 'ip' } }
+		orders: { create: { fields: ['customer'] } }
+	}
+});
+// Rate limits per policy are the workspace's.
+workspace({
+	tz: 'Asia/Singapore',
+	locale: 'en-SG',
+	limits: {
+		sales_rep: {
+			act: '600/min',
+			agent: { rate: '100/h', per: 'actor' },
+			read: [
+				{ rate: '3000/min', per: 'actor' },
+				{ rate: '600/min', per: 'ip' }
+			],
+			convert: '10/min',
+			'envoys.receive': [
+				{ rate: '8/min', per: 'sender' },
+				{ rate: '300/min', per: 'subject' }
+			],
+			'envoys.unrecognised': '1/15min'
+		},
+		auditor: { register: { rate: '10/h', per: 'ip' } }
+	}
 });
 // A kiosk-style pre-image scope (once `previous` + `where`) is the update check over `before` and `set`; `moves: 'all'`.
 export const clerk = policy({
@@ -175,10 +184,10 @@ policy({
 policy({ description: 'x', grants: { orders: { outputs: { default: { where: { nope: { eq: 1 } } } } } } });
 // @ts-expect-error A3b a bare `Where` is wrapped in the output's `where`
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { outputs: { default: { owner: { eq: { var: 'requestor.id' } } } } } } });
+policy({ description: 'x', grants: { orders: { outputs: { default: { owner: { eq: { var: 'actor.id' } } } } } } });
 // @ts-expect-error A4 a create column outside the declared create columns
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { columns: { fields: ['status'] } } } } });
+policy({ description: 'x', grants: { orders: { create: { fields: ['status'] } } } });
 // @ts-expect-error A5 the `'read'` write shorthand is gone
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { outputs: { default: {} }, update: 'read' } } });
@@ -193,7 +202,7 @@ policy({ description: 'x', grants: { orders: { create: { where: { note: { is_nul
 policy({ description: 'x', grants: { order_lines: { via: 'order' } } });
 // @ts-expect-error A8 a write layer is a declared write path (orders.customer is a read layer only)
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { columns: { customer: { fields: ['name'] } } } } } });
+policy({ description: 'x', grants: { orders: { create: { fields: ['customer'], customer: { fields: ['name'] } } } } });
 // @ts-expect-error A9 a move along an undeclared edge
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { moves: { status: ['draft->ordered'] } } } } });
@@ -316,22 +325,22 @@ policy({ description: 'x', grants: {}, capabilities: { apps: ['crm'] } });
 policy({ description: 'x', grants: {}, capabilities: { mcp: ['sap'] } });
 // @ts-expect-error A35 an unknown limit key
 // prettier-ignore
-policy({ description: 'x', grants: {}, limits: { unknown_limit: '600/min' } });
+workspace({ tz: 'UTC', locale: 'en', limits: { sales_rep: { unknown_limit: '600/min' } } });
 // @ts-expect-error A36 a `'<model>.<query>'` limit key is gone with declared queries
 // prettier-ignore
-policy({ description: 'x', grants: {}, limits: { 'orders.open_total': '1/min' } });
+workspace({ tz: 'UTC', locale: 'en', limits: { sales_rep: { 'orders.open_total': '1/min' } } });
 // @ts-expect-error A37 a rate outside the grammar
 // prettier-ignore
-policy({ description: 'x', grants: {}, limits: { act: '600/week' } });
+workspace({ tz: 'UTC', locale: 'en', limits: { sales_rep: { act: '600/week' } } });
 // @ts-expect-error A38 `per: 'sender'` on a non-envoy key
 // prettier-ignore
-policy({ description: 'x', grants: {}, limits: { act: { rate: '1/s', per: 'sender' } } });
+workspace({ tz: 'UTC', locale: 'en', limits: { sales_rep: { act: { rate: '1/s', per: 'sender' } } } });
 // @ts-expect-error A39 `per: 'ip'` on an envoy key
 // prettier-ignore
-policy({ description: 'x', grants: {}, limits: { 'envoys.receive': { rate: '1/s', per: 'ip' } } });
+workspace({ tz: 'UTC', locale: 'en', limits: { sales_rep: { 'envoys.receive': { rate: '1/s', per: 'ip' } } } });
 // @ts-expect-error A40 `per: 'surface'` does not exist
 // prettier-ignore
-policy({ description: 'x', grants: {}, limits: { read: { rate: '1/s', per: 'surface' } } });
+workspace({ tz: 'UTC', locale: 'en', limits: { sales_rep: { read: { rate: '1/s', per: 'surface' } } } });
 
 // ── Actor ──
 const user_id = Schema.decodeUnknownSync(id_of('sys_user'))('0199a000-0000-7000-8000-0000000000a1');

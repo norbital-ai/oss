@@ -4,7 +4,7 @@
 // auto-replies are ordinary mail here: bolt tells them apart (RFC 3834).
 import PostalMime from 'postal-mime';
 import { Clock, Effect } from 'effect';
-import type { DeliveryReport } from '@norbital-ai/bolt/engine';
+import type { DeliveryReport } from '@norbital-ai/host-api';
 import type { Obj } from '../util.ts';
 
 /** A file a message's structure names, its bytes not read. */

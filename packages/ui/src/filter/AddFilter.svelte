@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { UiContext } from '../client/contract.js';
 	import * as Popover from '../primitives/popover/index.js';
-	import { bolt_of } from '../client/context.js';
+	import { words_of } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	let {
 		ctx,
@@ -10,7 +10,7 @@
 		on_condition,
 		on_group
 	}: { ctx: UiContext; nested?: boolean; icon_only?: boolean; on_condition(): void; on_group(): void } = $props();
-	const bolt = $derived(bolt_of(ctx));
+	const bolt = $derived(words_of(ctx));
 	let open = $state(false);
 </script>
 

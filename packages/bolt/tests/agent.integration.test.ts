@@ -24,23 +24,32 @@ import {
 } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import { mcpServers, mcpSessions } from '../src/engine/agent/mcp.ts';
-import type { AiRequest, AiResponse, Ingested } from '../src/engine/contracts.ts';
-import { callKey, FIXED, rest, type AgentHostConfig } from '../src/engine/agent/index.ts';
+import {
+	type AiRequest,
+	type AiResponse,
+	type HostSkill,
+	type HostTool,
+	type Ingested,
+	Port,
+	type PortFailure,
+	type ToolBehavior,
+	type WorkspaceNote
+} from '@norbital-ai/host-api';
+import { AGENT_LIMITS, callKey, FIXED, type AgentHostConfig } from '../src/engine/agent/index.ts';
 import { transcriptRow } from '../src/engine/agent/schema.ts';
 import { BOUNDS, COMPACT_FORMAT, STATE_NOTE } from '../src/engine/agent/context.ts';
 import { requestEvidence } from '../src/engine/agent/request.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { Port, type PortFailure } from '../src/engine/port.ts';
-import { Ai, Convert, Files, Mcp, RunUnits, type AiEvent } from '../src/engine/ports.ts';
-import { off } from '../src/facilities/off.ts';
+import { Ai, Convert, Files, Mcp, RunUnits } from '../src/engine/ports.ts';
+import type { AiEvent } from '@norbital-ai/host-api';
 import { open_ai_chat } from '../src/engine/agent/openai-chat.ts';
-import { mcp_port } from '../src/node/mcp.ts';
+import { mcp_port } from '@norbital-ai/host-api/node';
 import { Agents, Live, RunHandlers } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { announce, type WorkspaceNote } from '../src/engine/notifications/notify.ts';
-import { AgentConversation, AgentRow, type Frame, type ToolBehavior } from '../src/protocol/schema.ts';
+import { announce } from '../src/engine/notifications/notify.ts';
+import { AgentConversation, AgentRow, type Frame } from '../src/protocol/schema.ts';
 import {
 	KitInvalid,
 	TestWorkspace,
@@ -48,7 +57,6 @@ import {
 	type Kit
 } from '../../bolt-cli/src/test/effect.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import type { HostTool } from '../src/engine/agent/tools.ts';
 
 const runtime_accounts = [
 	{ id: 'desk', integration: 'whatsapp' },
@@ -211,15 +219,11 @@ const cassette = (steps: readonly Step[] = []) => {
 };
 const toolNames = (request: AiRequest | undefined) =>
 	(request?.tools ?? []).map((tool) => tool.name);
-const discovery = (request: AiRequest | undefined) => {
-	const prefix = '[Available actions for this step]\n';
-	const note = request?.messages.findLast((message) => typeof message.content === 'string' && message.content.includes(prefix));
-	const text = Schema.decodeUnknownSync(Schema.String)(note?.content);
-	return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({
-		tools: Schema.Array(Schema.String), callables: Schema.Array(Schema.String),
-		run_tool: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String, input: Schema.Json }))
-	})))(text.slice(text.indexOf(prefix) + prefix.length));
-};
+/** Every catalogue note a request carries, oldest first: the conversation's start, then each merge's changes. */
+const catalogueNotes = (request: AiRequest | undefined) =>
+	(request?.messages ?? []).flatMap((message) =>
+		typeof message.content === 'string' && /^\[note\]\n\[Catalogue/.test(message.content) ? [message.content] : []
+	);
 const toolResults = (request: AiRequest) =>
 	request.messages
 		.filter((message) => message.role === 'tool')
@@ -377,7 +381,7 @@ const TENDER: Ingested = {
 };
 const build = (
 	ai: ReturnType<typeof cassette>,
-	host: Pick<AgentHostConfig, 'host_tools' | 'host_inline_ms' | 'on_turn_start' | 'events'> = {}
+	host: Pick<AgentHostConfig, 'host_tools' | 'host_inline_ms' | 'on_turn_start' | 'events' | 'skills'> = {}
 ) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture;
@@ -394,9 +398,13 @@ const build = (
 					ports: Layer.merge(
 						ai.layer,
 						// the host's ingest port (Norbital Convert): every document here is the tender
-						Convert.fromAbi(off, async () => {
-							await ingestGate;
-							return TENDER;
+						Convert.fromAbi({
+							targets: [],
+							convert: () => Promise.reject(new Error('This host only ingests.')),
+							ingest: async () => {
+								await ingestGate;
+								return TENDER;
+							}
 						})
 					),
 					// the host clock starts at the wall clock, as a turn drained from a live test reads it
@@ -695,7 +703,7 @@ describe('in-app turns', () => {
 			})
 		)
 	);
-	it.live('edit and test rounds that stay red are told to stop, then stopped', () =>
+	it.live('edit and test rounds that stay red are stopped, with no coaching note first', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const ai = cassette();
@@ -728,8 +736,9 @@ describe('in-app turns', () => {
 				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Add the test' });
 				yield* agent.drain(c);
 				const rows = yield* agent.transcript(c);
-				expect(validations).toBe(6);
-				expect(rows.filter((r) => r.text?.startsWith('Your last checks'))).toHaveLength(1);
+				expect(validations).toBe(5);
+				// no coaching note between the rounds: only the conversation's catalogue
+				expect(rows.filter((r) => r.role === 'system' && !(r.meta?.tag === 'note' && r.meta.catalogue !== undefined))).toEqual([]);
 				expect(rows.at(-1)?.text).toContain('the checks kept failing');
 			})
 		)
@@ -798,7 +807,6 @@ describe('in-app turns', () => {
 				yield* agent.drain(c);
 				const rows = yield* agent.transcript(c);
 				expect(validations).toBe(8);
-				expect(rows.filter((r) => r.text?.startsWith('Your last checks'))).toHaveLength(0);
 				expect(rows.some((r) => r.text?.includes('the checks kept failing'))).toBe(false);
 			})
 		)
@@ -967,7 +975,7 @@ describe('in-app turns', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('run_tool', { name: 'hq.echo', input: { text: 'hi' } }),
+						use('hq__echo', { text: 'hi' }),
 						say('HQ said hi.'),
 						say('Nothing to add.')
 					]);
@@ -979,11 +987,11 @@ describe('in-app turns', () => {
 						yield* agent.post({ conversation: c, as: { member: ann }, text: 'ask hq' });
 						yield* agent.drain(c);
 						expect(toolNames(ai.requests[0])).toEqual(
-							expect.arrayContaining(['read', 'act', 'skill', 'run_tool', 'subagent'])
+							expect.arrayContaining(['read', 'act', 'skill', 'run_tool', 'subagent', 'hq__echo'])
 						);
-						const listed = (request: AiRequest | undefined) => discovery(request).run_tool.map(({ name }) => name);
+						const listed = toolNames;
 						// an unreachable server is unavailable, never a failed turn
-						expect(listed(ai.requests[0]).some((name) => name.startsWith('down.'))).toBe(false);
+						expect(listed(ai.requests[0]).some((name) => name.startsWith('down__'))).toBe(false);
 						expect(toolResults(required(ai.requests[1]))[0]).toMatchObject({
 							content: [{ type: 'text', text: 'echo: hi' }]
 						});
@@ -994,10 +1002,10 @@ describe('in-app turns', () => {
 						const names = toolNames(ai.requests[2]);
 						// a skill is procedure, not authority: every actor may load every workspace skill
 						expect(names).toContain('skill');
-						expect(ai.requests[2]?.system).toContain('- pricing: ');
-						expect(discovery(ai.requests[2])).toMatchObject({ callables: [] });
-						expect(listed(ai.requests[2]).some((name) => name.startsWith('hq.'))).toBe(false);
-						expect(listed(ai.requests[0])).toContain('hq.echo');
+						expect(catalogueNotes(ai.requests[2]).join('\n')).toContain('- pricing — ');
+						expect(ai.requests[2]?.system).not.toContain('pricing');
+						expect(listed(ai.requests[2]).some((name) => name.startsWith('hq__'))).toBe(false);
+						expect(listed(ai.requests[0])).toContain('hq__echo');
 						expect({ mcp: mcpServers(manifest, yield* authority(ann)) }).toMatchObject({
 							mcp: [{ name: 'hq' }]
 						});
@@ -1028,7 +1036,10 @@ describe('in-app turns', () => {
 						const c = yield* agent.start({ owner: root });
 						yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
 						yield* agent.drain(c);
-						expect(required(ai.requests[1]).system).toBe(COMPACT_FORMAT);
+						// the checkpoint is asked on the step's own prefix: its system and tools, the instruction last
+						expect(required(ai.requests[1]).system).toBe(required(ai.requests[0]).system);
+						expect(required(ai.requests[1]).tools).toEqual(required(ai.requests[0]).tools);
+						expect(required(ai.requests[1]).messages.at(-1)).toEqual({ role: 'user', content: COMPACT_FORMAT });
 						const after = required(ai.requests[2]).messages.map((x) => JSON.stringify(x.content));
 						expect(after.some((x) => x.includes('context checkpoint'))).toBe(true);
 						expect(after.some((x) => x.includes('d1'))).toBe(false);
@@ -1096,7 +1107,7 @@ describe('in-app turns', () => {
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
 					yield* agent.drain(c);
 					// 200k is 20% of a 1M window: no checkpoint is forced
-					expect(required(ai.requests[1]).system).not.toBe(COMPACT_FORMAT);
+					expect(required(ai.requests[1]).messages.at(-1)).not.toEqual({ role: 'user', content: COMPACT_FORMAT });
 					const after = required(ai.requests[1]).messages.map((x) => JSON.stringify(x.content));
 					expect(after.some((x) => x.includes('context checkpoint'))).toBe(false);
 				}).pipe(Effect.provide(fixture.context));
@@ -1118,7 +1129,7 @@ describe('in-app turns', () => {
 						yield* agent.drain(c);
 						expect(required(ai.requests[0]).system).toContain('Customer brief.');
 						expect(required(ai.requests[0]).system).not.toContain('Staff brief.');
-						expect(discovery(ai.requests[0]).tools).not.toContain('subagent');
+						expect(toolNames(ai.requests[0])).not.toContain('workspace_read');
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
@@ -1135,7 +1146,7 @@ describe('envoy conversations', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const fixture = yield* setup([
-					use('read_messages', { all: true }, 'delivery-evidence'),
+					use('read_messages', {}, 'delivery-evidence'),
 					say('I checked the delivery evidence.')
 				]);
 				return yield* Effect.gen(function* () {
@@ -1574,8 +1585,10 @@ describe('a replayed ingest takes its fewest calls', () => {
 						});
 						yield* agent.drain(c);
 						expect(ai.requests).toHaveLength(3);
-						const prompt = required(ai.requests[0]).system ?? '';
-						expect(prompt).toContain('# Models you read\nsys_user, quotes');
+						// the catalogue note gives each readable model with its fields: no describe step first
+						const note = catalogueNotes(ai.requests[0]).join('\n');
+						expect(note).toMatch(/- sys_user\(/);
+						expect(note).toMatch(/- quotes\(.*title: text/);
 						expect(toolResults(required(ai.requests[1]))[0]).toMatchObject({
 							sys_user: { rows: [{ id: poa, name: 'Poa', team: 'rep' }] },
 							quotes: { rows: [] }
@@ -1668,7 +1681,7 @@ describe('an agent-started automation run is a job', () => {
 					expect(notes(ai.requests[0])).toEqual([
 						expect.stringMatching(
 							new RegExp(
-								`^\\[note\\]\\n\\[job ${job} failed\\] automation quotes_tally: .*no tally for Desk.*; tell the person$`
+								`^\\[note\\]\\n\\[job ${job} failed\\] automation quotes_tally: .*no tally for Desk.*$`
 							)
 						)
 					]);
@@ -1921,7 +1934,7 @@ describe('the host tool catalogue', () => {
 				if (request === undefined || called === undefined) throw new Error('The native host script needs two model steps.');
 				expect(request.tools).toContainEqual(expect.objectContaining({ name: 'plans', description: 'Reads a plan.' }));
 				expect(called.tools).toEqual(request.tools);
-				expect(discovery(request).run_tool.map(({ name }) => name)).not.toContain('plans');
+				expect(catalogueNotes(request).join('\n')).not.toContain('plans');
 				expect(toolResults(called)).toContainEqual({ plan: 'Current plan' });
 				expect(ai.requests).toHaveLength(2);
 			}).pipe(Effect.provide(context));
@@ -1966,10 +1979,8 @@ describe('a tool answer with binary text', () => {
 	);
 });
 
-describe('a tool answer that stops short says where the rest is', () => {
-	const notes = (request: AiRequest | undefined) =>
-		JSON.stringify((request?.messages ?? []).filter((message) => message.role === 'user'));
-	it.live("a read page with a next cursor: the step's note names read again with after", () =>
+describe('a tool answer that stops short says so in itself', () => {
+	it.live("a read page carries its next cursor in its own answer; no note repeats it", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const titles = ['Paged one', 'Paged two', 'Paged three'];
@@ -1986,15 +1997,15 @@ describe('a tool answer that stops short says where the rest is', () => {
 					const c = yield* agent.start({ owner: root });
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'Paged quotes?' });
 					yield* agent.drain(c);
-					expect(notes(ai.requests[1])).not.toContain('stopped short');
-					expect(notes(ai.requests[2])).toContain(
-						'more \\"quotes\\" rows follow the 2 shown of 3; the rest: call read again with the same \\"quotes\\" options and \\"after\\":'
-					);
+					expect(toolResults(required(ai.requests[2])).at(-1)).toMatchObject({
+						quotes: { total: 3, next: expect.any(String) }
+					});
+					expect(JSON.stringify(ai.requests[2]?.messages)).not.toContain('stopped short');
 				}).pipe(Effect.provide(fixture.context));
 			})
 		)
 	);
-	it.live("a result past the bound: the step's note names read_file with its call id", () =>
+	it.live("a result past the bound says so in itself, naming read_output with its call id", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const fixture = yield* setup([
@@ -2015,14 +2026,14 @@ describe('a tool answer that stops short says where the rest is', () => {
 					const c = yield* agent.start({ owner: root });
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'Long quotes?' });
 					yield* agent.drain(c);
-					expect(notes(ai.requests[2])).toContain("read (call 'long-read')");
-					expect(notes(ai.requests[2])).toContain('read_file { call, offset } reads the rest');
+					expect(JSON.stringify(toolResults(required(ai.requests[2])).at(-1))).toContain('read_output');
+					expect(JSON.stringify(ai.requests[2]?.messages)).not.toContain('too large and you saw');
 				}).pipe(Effect.provide(fixture.context));
 			})
 		)
 	);
 	it.live(
-		'read_file with an unknown call falls back to the latest clipped result, with a note',
+		'read_output with an unknown call falls back to the latest clipped result, with a note',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -2036,7 +2047,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 							{ request: { quotes: { where: { title: { like: 'Long %' } } } } },
 							'long-read'
 						),
-						use('read_file', { call: 'not-a-call', offset: 0 }, 'read-more'),
+						use('read_output', { call: 'not-a-call', offset: 0 }, 'read-more'),
 						say('One.')
 					]);
 					return yield* Effect.gen(function* () {
@@ -2077,26 +2088,6 @@ describe('a tool answer that stops short says where the rest is', () => {
 			})
 		)
 	);
-	it('paged tools and a tool that cut its own answer: one line each naming the call that reads on', () => {
-		expect(rest('runs', 'r1', { runs: [], next: '["t","id"]' }, { argument: 'cursor' })).toEqual([
-			`runs (call 'r1'): more follows; the rest: call runs again with the same arguments and cursor: "[\\"t\\",\\"id\\"]"`
-		]);
-		expect(rest('logs', 'l1', { entries: [], next: 'e9' }, { argument: 'cursor' })[0]).toContain('cursor: "e9"');
-		expect(rest('read_file', 'o1', { text: '…', next: 1200 }, { argument: 'offset' })[0]).toContain('offset: 1200');
-		expect(rest('kagi.fetch', 'b1', { text: '…', next: 300 }, { argument: 'from' }, true)[0]).toContain('call run_tool with name: "kagi.fetch" and the same input with from: 300');
-		expect(rest('browser', 'b1', { text: '…', next: 300 })).toEqual([]);
-		expect(
-			rest('read_file', 'f1', {
-				text: '…',
-				truncated: 'only the first 65536 of 70000 characters are shown'
-			})
-		).toEqual([`read_file (call 'f1'): only the first 65536 of 70000 characters are shown`]);
-		expect(rest('runs', 'r2', { runs: [] })).toEqual([]);
-		expect(rest('read', 'q1', { quotes: { rows: [] } })).toEqual([]);
-		expect(
-			rest('read', 'q2', { quotes: { rows: [{ id: 'a' }], next: 'c', total: 1284 } }, { argument: 'after', roots: true })[0]
-		).toContain('more "quotes" rows follow the 1 shown of 1284');
-	});
 	it('the repeat guards compare the normalised call: invisible characters, compatibility forms and key order aside', () => {
 		const call = callKey('read', { quotes: { fields: ['title'], limit: 5 } });
 		expect(callKey('read', { quotes: { limit: 5, fields: ['ti\u200btle'] } })).toBe(call);
@@ -2280,5 +2271,117 @@ describe('metering', () => {
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
+	);
+});
+
+describe('a conversation keeps its prefix, its steps and its verifier bounded', () => {
+	const fixtureRead: HostTool = {
+		name: 'fixture_read', description: 'Fixture read.', input: { type: 'object', additionalProperties: true },
+		behavior: { data: true }, read_only: true, call: async () => ({ ok: true })
+	};
+	it.live('a merge never wakes an idle conversation; its next turn hears only what changed, under the same tools', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			let skills: Record<string, HostSkill> = {};
+			const { t, agent, user, context } = yield* build(ai, { skills: async () => skills });
+			return yield* Effect.gen(function* () {
+				const ann = yield* user('merge', { admin: true });
+				ai.arm([say('One.'), say('Two.'), say('Three.'), say('Four.')]);
+				const conversations: string[] = [];
+				for (const n of [1, 2, 3]) {
+					const c = yield* agent.start({ owner: ann });
+					yield* agent.post({ conversation: c, as: { member: ann }, text: `hi ${n}` });
+					yield* agent.drain(c);
+					conversations.push(c);
+				}
+				expect(ai.requests).toHaveLength(3);
+				// the merge: a skill lands while all three are idle, and no model is called for it
+				skills = {
+					quoting: { text: '---\ndescription: How we quote\n---\nbody', digest: '', files: ['SKILL.md'], read: async () => new Uint8Array() }
+				};
+				// time passes and every due timer and wake runs: still no call
+				t.clock.advance('60s');
+				yield* t.settled();
+				expect(ai.requests).toHaveLength(3);
+				const first = required(conversations[0]);
+				yield* agent.post({ conversation: first, as: { member: ann }, text: 'again' });
+				yield* agent.drain(first);
+				const before = required(ai.requests[0]),
+					after = required(ai.requests[3]);
+				// the tool list and system prompt are the conversation's, unchanged by the merge
+				expect(after.tools).toEqual(before.tools);
+				expect(after.system).toBe(before.system);
+				// one appended note of what changed, before the new message's step closes
+				expect(catalogueNotes(after).at(-1)).toBe(
+					'[note]\n[Catalogue changed by a merge]\nSkills (skill reads one):\n- quoting — How we quote'
+				);
+				// everything the first step sent but its closing note is the same bytes now
+				expect(after.messages.slice(0, before.messages.length - 1)).toEqual(before.messages.slice(0, -1));
+				expect(ai.requests).toHaveLength(4);
+			}).pipe(Effect.provide(context));
+		}))
+	);
+	it.live('a turn of distinct successful calls stops at the step cap', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm(Array.from({ length: AGENT_LIMITS.steps + 5 }, (_, n) => use('fixture_read', { n })));
+			const { agent, user, context } = yield* build(ai, { host_tools: [fixtureRead] });
+			return yield* Effect.gen(function* () {
+				const ann = yield* user('steps-cap', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Read on' });
+				yield* agent.drain(c);
+				expect(ai.requests).toHaveLength(AGENT_LIMITS.steps);
+				const last = (yield* agent.transcript(c)).at(-1);
+				expect(last?.meta).toMatchObject({ tag: 'failed', code: 'stepCap' });
+				expect(last?.text).toBe(FIXED.steps);
+			}).pipe(Effect.provide(context));
+		}))
+	);
+	it.live("an executed plan is verified once, on the step's own prefix; an incomplete verdict sends it back once", () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm([say('Done.'), say('{"complete":false,"gaps":["No test was added."]}'), say('Added the test.')]);
+			const { t, agent, user, context } = yield* build(ai);
+			return yield* Effect.gen(function* () {
+				const ann = yield* user('verify-once', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* t.db.write({
+					text: `UPDATE sys_conversation SET plan = '{"revision":1,"body":"1. Add a test","status":"active","checkpoint":0,"verdicts":0}'::jsonb WHERE id = $1`,
+					params: [c]
+				});
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Execute the plan.' });
+				yield* agent.drain(c);
+				// the turn, one verifier pass, the work it sent back: never a second verifier pass
+				expect(ai.requests).toHaveLength(3);
+				const [step, verifier] = [required(ai.requests[0]), required(ai.requests[1])];
+				expect(verifier.system).toBe(step.system);
+				expect(verifier.tools).toEqual(step.tools);
+				expect(String(verifier.messages.at(-1)?.content)).toMatch(/^Verify the plan below/);
+				expect((yield* agent.conversation(c)).plan).toMatchObject({ status: 'active', verdicts: 1 });
+			}).pipe(Effect.provide(context));
+		}))
+	);
+	it.live('the owner deletes a conversation for good, with its messages; no one else may', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm([say('Hi.')]);
+			const { t, agent, user, authority, context } = yield* build(ai);
+			return yield* Effect.gen(function* () {
+				const ann = yield* user('deleter', { admin: true }),
+					bob = yield* user('other', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'hello' });
+				yield* agent.drain(c);
+				expect(yield* Effect.flip(agent.remove(c, yield* authority(bob)))).toMatchObject({ _tag: 'AgentRefusal' });
+				yield* agent.remove(c, yield* authority(ann));
+				expect(yield* Effect.flip(agent.conversation(c))).toMatchObject({ _tag: 'AgentRefusal' });
+				const left = yield* t.db.rows(Schema.Struct({ n: Schema.Number }), {
+					text: 'SELECT count(*)::int AS n FROM sys_message WHERE conversation = $1',
+					params: [c]
+				});
+				expect(left).toEqual([{ n: 0 }]);
+			}).pipe(Effect.provide(context));
+		}))
 	);
 });

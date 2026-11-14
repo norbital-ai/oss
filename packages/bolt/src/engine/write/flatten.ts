@@ -611,8 +611,8 @@ export function stateStamps(
 
 /**
  * Defaults and the required check, on a create's payload as the engine will write it. A state lands in its
- * initial value; `{ var: 'now' }`/`{ var: 'today + days(7)' }` resolve against the invocation clock; requestor defaults
- * (`{ var: 'requestor.id' }`) apply only when the requestor has that value (the system identity, an automation run, has
+ * initial value; `{ var: 'now' }`/`{ var: 'today + days(7)' }` resolve against the invocation clock; actor defaults
+ * (`{ var: 'actor.id' }`) apply only when the actor has that value (the system identity, an automation run, has
  * none: its code sets the field). Returns the first missing required field, or a native failure for absent model metadata.
  */
 export function withDefaults(
@@ -642,25 +642,24 @@ export function withDefaults(
 			text !== undefined && clock_default(text) !== undefined ? compile_var(text) : undefined;
 		values[name] = compiled === undefined || 'error' in compiled ? d : evaluate_var(compiled, clock);
 	}
-	// a visitor's anonymous user is its requestor id too (it owns what it creates)
-	const requestor = actor;
+	// a visitor's anonymous user is its actor id too (it owns what it creates)
 	const id =
-		requestor?.kind === 'member'
-			? requestor.id
-			: requestor?.kind === 'visitor' && requestor.anonymous === true
-				? requestor.visitor
+		actor?.kind === 'member'
+			? actor.id
+			: actor?.kind === 'visitor' && actor.anonymous === true
+				? actor.visitor
 				: undefined;
 	for (const [fk, rel] of info.one) {
 		const r = m.relationships[`${model}.${fk}`];
 		if (values[fk] !== undefined || r?.default === undefined || id === undefined) continue;
-		if (r.default.var === 'requestor.id' && rel.targets.includes('sys_user')) values[fk] = id;
+		if (r.default.var === 'actor.id' && rel.targets.includes('sys_user')) values[fk] = id;
 		else if (
-			requestor?.kind === 'member' &&
-			r.default.var === 'requestor.party' &&
-			requestor.party !== null &&
-			rel.targets.includes(requestor.party.model)
+			actor?.kind === 'member' &&
+			r.default.var === 'actor.party' &&
+			actor.party !== null &&
+			rel.targets.includes(actor.party.model)
 		)
-			values[fk] = requestor.party.id;
+			values[fk] = actor.party.id;
 	}
 	Object.assign(values, stateStamps(m, model, values, undefined, clock.now));
 	const required = Object.entries(spec.fields).find(

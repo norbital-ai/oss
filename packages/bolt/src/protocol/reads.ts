@@ -54,13 +54,6 @@ export type ReadIR =
 	  }
 	/** A read request: each root's read, answered together in one crossing, the answer keyed by root. */
 	| { readonly kind: 'request'; readonly roots: readonly RequestRoot[] }
-	/** The transform's `query.after`: stored rows overlaid with this batch. */
-	| {
-			readonly kind: 'after';
-			readonly model: string;
-			readonly where: Pred;
-			readonly query?: ListRead | undefined;
-	  }
 	/** The agent panel's messages of one conversation in `seq` order. */
 	| {
 			readonly kind: 'transcript';
@@ -85,6 +78,8 @@ export type ReadIR =
 			readonly member: string;
 			/** Native row fetch uses the same visibility and projection as the list. */
 			readonly id?: string;
+			/** The archived conversations instead of the rest. */
+			readonly archived?: boolean;
 	  }
 	/** Automation runs as the caller may see them, newest first: one automation's, or one run by id. */
 	| {
@@ -99,10 +94,11 @@ export type ReadIR =
 
 /**
  * One root of a read request: its read (a page, an aggregate or a search), or with `as_of` the history fold of each
- * record its `where` pins, as a page of the `fields` asked for.
+ * record its `where` pins, as a page of the `fields` asked for. `prospective`: `as_of: 'act'`, a page a write callback
+ * reads as the act will leave it (only its bridge answers one).
  */
 export type RequestRoot =
-	| { readonly root: string; readonly read: ReadIR }
+	| { readonly root: string; readonly read: ReadIR; readonly prospective?: true | undefined }
 	| {
 			readonly root: string;
 			readonly as_of: readonly Extract<ReadIR, { kind: 'history' }>[];
@@ -292,7 +288,11 @@ export const request = Effect.fn('Bolt.read.request')(function* (
 						: { fields: ['id', ...fields], relations };
 				});
 			const asOf = top.as_of;
-			if (asOf !== undefined) {
+			if (asOf === 'act') {
+				yield* only("an as_of 'act' read");
+				if (top.aggregate !== undefined || Predicate.isObject(top.search))
+					return yield* invalid(`'${root}': as_of 'act' reads a page of rows`);
+			} else if (asOf !== undefined) {
 				yield* only('an as_of read');
 				const ids = pinned(top.where);
 				if (ids === undefined)
@@ -358,7 +358,7 @@ export const request = Effect.fn('Bolt.read.request')(function* (
 				...(top.order_by === undefined ? {} : { order: yield* store(order(top.order_by, cat, root)) }),
 				...(typeof top.search === 'string' && top.search !== '' ? { search: top.search } : {})
 			};
-			return { root, read: listed };
+			return { root, read: listed, ...(asOf === 'act' ? { prospective: true as const } : {}) };
 		})
 	);
 	return { kind: 'request', roots };
@@ -432,15 +432,6 @@ export const decodeRead = Effect.fn('Bolt.read.decode')(function* (
 						? semantic(cat, model, object(a))
 						: similar(cat, model, String(a), b ?? null, object(d))
 				);
-			case 'after': {
-				const query = b === undefined ? undefined : yield* read(cat, model, { ...object(b), where: a });
-				return {
-					kind: 'after',
-					model,
-					where: yield* store(where(cat, model, a)),
-					...(query?.kind === 'read' ? { query } : {})
-				};
-			}
 			case 'history': {
 				const options = yield* historyOptions(b === undefined ? {} : b).pipe(
 					Effect.mapError((error) => invalid(error.message))

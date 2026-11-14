@@ -178,7 +178,7 @@ describe('layer maps at compile time (bolt check)', () => {
 			expect.arrayContaining([
 				"model/layer orders: outputs.default: orders.customer: 'customer' is no relation of orders",
 				"model/layer orders: outputs.default: orders.notes.about: 'about' is an arc (a ref to several models) and cannot be a layer",
-				"model/layer orders: create.columns: 'orders.party' is a ref; a write layer is a many-relation (its child rows)",
+				"model/layer orders: create: 'orders.party' is a ref; a write layer is a many-relation (its child rows)",
 				"model/layer orders: outputs.default: 'nope' is no field of orders (orders)",
 				"model/layer orders: create: 'total' is no writable column of orders (orders)",
 				"model/layer orders: create: orders.lines lists 'order', the key the engine sets from its parent row"

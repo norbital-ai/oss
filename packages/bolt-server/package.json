@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.40",
+	"version": "0.0.41",
 	"description": "An example untethered Bolt host: one workspace artifact served on its own facility adapters.",
 	"type": "module",
 	"sideEffects": false,
@@ -19,14 +19,15 @@
 		"package.json"
 	],
 	"scripts": {
-		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
+		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {} --then cp -R src/audit/standalone src/audit/scoped build/audit/",
 		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"migrations:audit": "node --experimental-strip-types scripts/audit-migrations.ts",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-server"
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:",
-		"@norbital-ai/bolt": "workspace:*",
-		"@norbital-ai/bolt-cli": "workspace:*",
+		"@electric-sql/pglite": "^0.5.12",
+		"@norbital-ai/host-api": "workspace:*",
 		"@norbital-ai/providers": "workspace:*",
 		"@norbital-ai/store": "workspace:*",
 		"effect": "catalog:",

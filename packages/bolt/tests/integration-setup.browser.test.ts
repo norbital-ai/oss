@@ -4,7 +4,7 @@ import { mount_edge } from '@norbital-ai/ui/effect';
 import { page } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import { IntegrationSetup } from '../src/page/index.ts';
-import type { InstanceStatus } from '../src/protocol/instance-status.ts';
+import type { InstanceStatus } from '@norbital-ai/host-api';
 import type { IntegrationClient } from '../src/page/integrations.ts';
 
 it('the shared instance setup renders and pairs in Chromium without server-only imports', async () => {

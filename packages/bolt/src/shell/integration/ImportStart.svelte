@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Combobox, Input } from '@norbital-ai/ui';
-	import type { ImportStartInput, ProviderChoice } from '../../protocol/instance-status.ts';
+	import type { ImportStartInput, ProviderChoice } from '@norbital-ai/host-api';
 	import { importDate } from './import-start.ts';
 	import { sayOf } from './setup.ts';
 

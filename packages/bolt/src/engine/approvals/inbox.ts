@@ -1,7 +1,8 @@
 import { actor_ref } from '../access/actor.ts';
 import { Option, Schema } from 'effect';
 import { ApprovalStateSchema } from '../../protocol/approval-view.ts';
-import type { Authority, RowData, Sql } from '../contracts.ts';
+import type { Sql } from '@norbital-ai/host-api';
+import type { Authority, RowData } from '../contracts.ts';
 
 import { canApprove, canSupersede, rolesOf } from './route.ts';
 import { Snapshot } from './snapshot.ts';

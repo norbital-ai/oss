@@ -2,10 +2,9 @@
 // are Errors named for themselves, and `CODE` alone decides what a run retries.
 import { describe, expect, it } from '@effect/vitest';
 import { Schema } from 'effect';
+import { DbError, Fenced } from '@norbital-ai/host-api';
 import {
 	Conflict,
-	DbError,
-	Fenced,
 	IdentityRefusal,
 	Interrupted,
 	is_transient,

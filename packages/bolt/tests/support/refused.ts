@@ -1,6 +1,5 @@
 // Members a test host serves none of: each call rejects as the facility's `Unavailable`.
-import { Unavailable } from '../../src/decl/errors.ts';
-import type { FilesPort } from '../../src/engine/contracts.ts';
+import { type FilesPort, Unavailable } from '@norbital-ai/host-api';
 
 export const refused = (facility: string) => () =>
 	Promise.reject(new Unavailable({ facility, reason: `the host provides no ${facility}` }));

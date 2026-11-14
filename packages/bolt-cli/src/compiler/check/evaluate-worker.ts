@@ -4,7 +4,7 @@
 // declarations and the evaluation's CPU. Compile-time only: guests at run time take the host's `guests` facility.
 import { parentPort, workerData } from 'node:worker_threads';
 import * as Schema from 'effect/Schema';
-import { asset_hook, digest, random_stream } from '@norbital-ai/bolt/node';
+import { asset_hook, digest, random_stream } from '@norbital-ai/host-api/node';
 import type { EvaluateOutput } from './index.ts';
 
 const Input = Schema.Struct({

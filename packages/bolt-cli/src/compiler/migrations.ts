@@ -36,8 +36,8 @@ import {
 	history_schema_objects,
 	from_store
 } from '@norbital-ai/bolt/tooling';
-import { PgliteDb, Pristine } from '@norbital-ai/bolt/node';
-import { migration_objects, migration_schema, BoltError } from '@norbital-ai/bolt/engine';
+import { PgliteDb, Pristine } from '@norbital-ai/host-api/node';
+import { migration_objects, migration_schema, BoltError, TenantDb } from '@norbital-ai/bolt/engine';
 
 /** `<kind> <name> <definition>` lines by name (a trigger's is `table.trigger`): what a comparison reads off an introspection. */
 const kindLines = (kind: 'function' | 'trigger', lines: readonly string[]): ReadonlyMap<string, string> =>
@@ -125,7 +125,7 @@ const definitionsOf = Effect.fn('Bolt.pristineDefinitions')(function* (script: s
 	if (held !== undefined) return held;
 	const lines = yield* Effect.scoped(
 		Effect.gen(function* () {
-			const db = PgliteDb.make(yield* PgliteDb.open());
+			const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 			yield* db.write({ text: script, params: [] });
 			return migration_lines(
 				yield* db.rows(IntrospectRow, { text: INTROSPECT, params: [] }),
@@ -325,7 +325,7 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 			const replay = yield* Effect.cached(
 				Effect.gen(function* () {
 					const pg = yield* PgliteDb.open(prefixImages.get(keys[start] ?? ''));
-					const db = PgliteDb.make(pg);
+					const db = TenantDb.typed(PgliteDb.make(pg));
 					if (all)
 						for (const file of history) yield* db.write({ text: executable(file), params: [] });
 					return { pg, db };

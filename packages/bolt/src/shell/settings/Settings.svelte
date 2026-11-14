@@ -19,7 +19,7 @@
 	} from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
 	import { read_answer } from '../../protocol/read-answer.ts';
-	import type { AiModel } from '../../engine/contracts.ts';
+	import type { AiModel } from '@norbital-ai/host-api';
 	import type { SettingsTab, ShellBoot } from '../nav.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';

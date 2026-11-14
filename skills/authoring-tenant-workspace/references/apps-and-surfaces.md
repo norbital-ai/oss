@@ -4,7 +4,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Pa
 
 ## Workspace and secrets
 
-- `+workspace.ts` declares zone, locale, currency, launcher order (`apps`), `ai` classes and embeddings (the host maps them to providers), `agent`, `csp`, `convert` and `signup`. Accounts and envoys are runtime records; administrators choose chat models and spending limits in Settings.
+- `+workspace.ts` declares zone, locale, currency, launcher order (`apps`), `ai` classes and embeddings (the host maps them to providers), `agent`, `csp`, `convert`, `signup` and rate `limits` per policy. Accounts and envoys are runtime records; administrators choose chat models and spending limits in Settings.
 - `+secrets.ts` is the one place secrets are declared: `UPPER_SNAKE` name, `label`, optional `description`; no defaults or non-secret values. Values are set in Settings and sealed in the tenant database.
 - Secret names hold OAuth clients, MCP URLs and credentials, and webhook secrets. An integration's own secret is its `credential`, sealed per instance at pairing.
 - Server Effect bodies read declared values through `Config.Redacted(name)` from `effect`, in automations, callbacks and syncs; `Config.option` for optional ones. A required unset value fails. Use `Redacted.value` only where plaintext is needed.
@@ -24,7 +24,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Pa
 - `audience`: `members`, `external`, `all`, or `{ public: [...policies], challenge? }`.
 - A public app runs as an anonymous visitor holding exactly those policies: `create` on a submission model and declared output grants for published or own rows. The build refuses the rest.
 - A public app can use the kiosk shell. The policies in `audience.public` govern access inside it.
-- External newcomers join through `signup` or invitation. `signup.policies` are what they hold outside portals: keep that an empty `grants: {}` policy for portal-only customers. Scope rows with `{ var: 'requestor.id' }` or `{ var: 'requestor.party' }`.
+- External newcomers join through `signup` or invitation. `signup.policies` are what they hold outside portals: keep that an empty `grants: {}` policy for portal-only customers. Scope rows with `{ var: 'actor.id' }` or `{ var: 'actor.party' }`.
 - External members open no members app. Staff open a signed-in kiosk through `capabilities.apps`. An external portal's policies grant narrow outputs and write columns, never delete, and hold no `capabilities`.
 - A page with `portal: true` renders alone and is listed under the account menu. The app’s `embed` allows the named sites to frame any of its pages. `audience` decides who opens each page.
 
@@ -47,11 +47,11 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Pa
 
 ## Anonymous users
 
-- A visitor of a public app is a `sys_user` of kind `anonymous`, held by a cookie for 30 unused days. Never a member; it holds exactly the surface's policies; `requestor.id` is that user.
-- A public policy reads a model it creates only through an owner ref defaulting to `{ var: 'requestor.id' }`.
+- A visitor of a public app is a `sys_user` of kind `anonymous`, held by a cookie for 30 unused days. Never a member; it holds exactly the surface's policies; `actor.id` is that user.
+- A public policy reads a model it creates only through an owner ref defaulting to `{ var: 'actor.id' }`.
 - Limits per IP: `act 120/h`, `register 20/h`; past that the page opens with no identity.
-- Signing in links the user: a newcomer keeps id and rows; an existing account takes over owner refs unless state locks them. `requestor.visitor` text copies and `created_by` do not move: scope ownership with a `sys_user` ref.
-- Phone sign-up: declare `signup` (`via`, `policies`, `party` and its `match` field, and `challenge: 'turnstile'`, since each stranger's code is paid for); the kit's phone verify control is the whole UI. A challenged sign-up happens on a public app or kiosk page, never the workspace sign-in page. A proven newcomer becomes an external member. Scope rows with `requestor.party` or `requestor.phone`. The link lasts only while the record holds that number: changing it moves access to the new holder at once, so the match field is authority, and only staff may write it. Sends are capped per workspace per hour.
+- Signing in links the user: a newcomer keeps id and rows; an existing account takes over owner refs unless state locks them. `actor.visitor` text copies and `created_by` do not move: scope ownership with a `sys_user` ref.
+- Phone sign-up: declare `signup` (`via`, `policies`, `party` and its `match` field, and `challenge: true`, since each stranger's code is paid for); the kit's phone verify control is the whole UI. A challenged sign-up happens on a public app or kiosk page, never the workspace sign-in page. A proven newcomer becomes an external member. Scope rows with `actor.party` or `actor.phone`. The link lasts only while the record holds that number: changing it moves access to the new holder at once, so the match field is authority, and only staff may write it. Sends are capped per workspace per hour.
 
 ## Record views
 

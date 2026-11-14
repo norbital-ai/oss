@@ -42,6 +42,15 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 		/** Required for a relation `by`; otherwise the lanes the aggregate finds, in value order. */
 		lanes?: readonly Lane[];
 		/**
+		 * A lane's title in its header, in place of its dot, label and count (`null` while searching or recounting); the
+		 * select and expand controls stay.
+		 */
+		lane_header?: Snippet<
+			[{ value: import('@norbital-ai/store/kind').Value; label: string; count: number | null }]
+		>;
+		/** Opening a card (a card that stands for another record); default its own record. */
+		on_open?: (id: string) => void;
+		/**
 		 * Lanes per row. Unset is the horizontal reel, which scrolls sideways; a count lays the lanes
 		 * out in a grid of that many columns whose rows share the board's height.
 		 */
@@ -103,6 +112,8 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 		by,
 		card,
 		lanes,
+		lane_header,
+		on_open,
 		columns,
 		where,
 		initial_filter,
@@ -471,7 +482,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 </script>
 
 <!-- like Table: fills a bounded parent; each lane scrolls inside itself, the board never grows its parent -->
-<section class="@container flex h-full min-w-0 flex-1 flex-col gap-2" data-view="board">
+<section class="@container flex h-full min-h-72 min-w-0 flex-1 flex-col gap-2" data-view="board">
 	<ViewToolbar {ctx}
 		config={toolbar}
 		model={of}
@@ -541,8 +552,8 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class={columns === undefined
-							? 'flex max-h-[calc(100dvh-8rem)] min-h-72 flex-1 snap-x gap-3 overflow-x-auto pb-2'
-							: 'grid max-h-[calc(100dvh-8rem)] min-h-72 flex-1 auto-rows-fr gap-3 overflow-auto pb-2'}
+							? 'flex min-h-0 flex-1 snap-x gap-3 overflow-x-auto pb-2'
+							: 'grid min-h-0 flex-1 auto-rows-fr gap-3 overflow-auto pb-2'}
 						style={columns === undefined
 							? undefined
 							: `grid-template-columns: repeat(${columns}, minmax(min(100%, 16rem), 1fr))`}
@@ -577,14 +588,18 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 								<header
 									class="flex items-center justify-between gap-2 border-b pb-2 text-sm font-medium dark:border-b-0 dark:pb-0"
 								>
-									<span class="flex min-w-0 items-center gap-1.5"
-										>{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"
-											></span>{/if}<span class="truncate">{lane.label}</span
-										>{#if search === ''}<span
-												class="text-muted-foreground shrink-0 text-xs tabular-nums"
-												data-lane-count>{lane.count}</span
-											>{/if}</span
-									>
+									{#if lane_header}{@render lane_header({
+											value: lane.value,
+											label: lane.label,
+											count: search === '' ? lane.count : null
+										})}{:else}<span class="flex min-w-0 items-center gap-1.5"
+											>{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"
+												></span>{/if}<span class="truncate">{lane.label}</span
+											>{#if search === ''}<span
+													class="text-muted-foreground shrink-0 text-xs tabular-nums"
+													data-lane-count>{lane.count}</span
+												>{/if}</span
+										>{/if}
 									<span class="flex shrink-0 items-center gap-2">
 										{#if selectable}
 											<Checkbox
@@ -636,6 +651,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 										{page_size}
 										where={laneWhere(lane)}
 										on_change={() => invalidateCounts()}
+										{on_open}
 										moves={list
 											.filter((other) => other !== lane)
 											.map((other) => ({
@@ -690,7 +706,8 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 					on_open={(id) => {
 						// the record sheet layers under a modal: the dialog closes first, then the card opens as on the board
 						expanded = null;
-						open_record(of, id);
+						if (on_open) on_open(id);
+						else open_record(of, id);
 					}}
 				/>
 			{/if}

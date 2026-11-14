@@ -7,10 +7,11 @@ import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { lower_read } from '../src/engine/query/engine.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
 import { Ai } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
-import { Live, Reads, Writes } from '../src/engine/services.ts';
+import { Port } from '@norbital-ai/host-api';
+import { Live, Reads, Callables } from '../src/engine/services.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
-import { uuidv7, uuidv7_within, type Frame } from '../src/protocol/wire.ts';
+import type { Frame } from '../src/protocol/wire.ts';
+import { uuidv7, uuidv7_within } from '@norbital-ai/host-api';
 import {
 	respond_system_1,
 	TestWorkspace,
@@ -18,6 +19,7 @@ import {
 	type WorkspaceServices
 } from '../../bolt-cli/src/test/index.ts';
 import { act_reply, json, route_fixture } from './support/route-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
@@ -303,12 +305,11 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 					})
 					.pipe(Effect.provide(context));
 				expect(yield* Queue.take(queue)).toMatchObject({ t: 'answer', view: 'v' });
-				const r = yield* Context.get(context, Writes)
-					.act({
+				const r = yield* Context.get(context, Callables)
+					.acts(one_act({
 						model: 'docs',
 						verb: 'erase',
 						input: { target: id },
-						mode: { _tag: 'Direct' },
 						key: 'e1',
 						issuedAt: t.clock.now(),
 						authority: admin,
@@ -318,7 +319,7 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 							tz: 'UTC'
 						},
 						invocationId: 'e1'
-					})
+					}))
 					.pipe(Effect.provide(context));
 				expect(r.outcome.kind).toBe('committed');
 				yield* live.settled.pipe(Effect.provide(context));

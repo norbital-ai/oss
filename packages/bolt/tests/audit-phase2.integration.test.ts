@@ -2,7 +2,7 @@
 import { expect, it } from '@effect/vitest';
 import { randomUUID } from 'node:crypto';
 import { Context, Effect, Layer } from 'effect';
-import type { BrowserSnapshot } from '../src/decl/runtime/browser.ts';
+import type { BrowserSnapshot } from '@norbital-ai/host-api';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Browser } from '../src/engine/ports.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';

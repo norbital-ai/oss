@@ -1,5 +1,5 @@
 // Durable attempt execution and settlement share one generation's stop and parking controls.
-import { Clock, Deferred, Effect, Option, Predicate, PubSub, Random } from 'effect';
+import { Clock, Deferred, Effect, Option, Predicate, PubSub, Random, Schedule, Schema } from 'effect';
 
 import type { EffectEvent } from '../../protocol/effect-events.ts';
 import type { AutomationSpec } from '../../decl/runtime/automation.ts';
@@ -15,11 +15,12 @@ import { TenantDb } from '../db/tenant-db.ts';
 import { storedWireValue } from '../db/stored.ts';
 import { catalog_of } from '../access/pred.ts';
 import { CapturedResult, nativeCommit } from '../db/captured.ts';
-import { DbError, is_transient } from '../errors.ts';
+import { DbError } from '@norbital-ai/host-api';
+import { is_transient } from '../errors.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { makeParking } from '../parking.ts';
 import { RunUnits } from '../ports.ts';
-import { Automations, Identity, Live, Manifest, RunEnds, RunHandlers, type RunHandler } from '../services.ts';
+import { Automations, Identity, Live, Manifest, RunEnds, RunHandlers, type AutomationJob, type RunHandler } from '../services.ts';
 import { retryDelay } from '../queue.ts';
 import { Chain } from '../write/sql.ts';
 import type { RunAttempt } from './attempt.ts';
@@ -29,6 +30,7 @@ import { PRUNE, type makePruner } from './prune.ts';
 import { effectOf } from './queue.ts';
 import { runPiece, type Row } from './rows.ts';
 import { duration, due_at, iso } from './time.ts';
+import { waitJson } from './wait.ts';
 
 /**
  * Rule 54: a run retries a transient failure and a write that lost a race. The guest settles an act conflict as a
@@ -56,8 +58,8 @@ const policyHolder = (head: Row, policies: readonly string[]): Holder => ({
 });
 /**
  * An effect's images as its writer reads them: the root fields of the writer's output of the model (`default` when it
- * holds it, else the first named output it holds, in declaration order); nothing when it holds none. The rows
- * themselves are the writer's own write, admitted by its grant.
+ * holds it, else the first named output it holds, in declaration order). A writer holding none sees its own write as
+ * stored, as a system read does: the rows are its own write, admitted by its grant.
  */
 function writerInput(
 	m: EngineManifest,
@@ -66,17 +68,17 @@ function writerInput(
 	input: typeof EffectInput.Type
 ): { readonly changes: Json; readonly event: EffectEvent } {
 	const output = viewOutput(m, a, model);
-	const keep = new Set(output === undefined ? [] : ['id', 'revision', ...exposed(m, model, model, model, output)]);
+	const keep = a.admin || output === undefined ? undefined : new Set(['id', 'revision', ...exposed(m, model, model, model, output)]);
 	// stored images keep int8 and numeric cells as exact text; the body reads them as the read compiler's wire values
 	const columns = new Map([...(catalog_of(m).models.get(model)?.fields.values() ?? [])]
 		.filter((field) => field.arms === undefined).map((field) => [field.column, field]));
 	const shown = (image: RowData): RowData => Object.fromEntries(Object.entries(image)
-		.filter(([field]) => a.admin || keep.has(field))
+		.filter(([field]) => keep === undefined || keep.has(field))
 		.map(([column, value]) => {
 			const field = columns.get(column);
 			return [column, field === undefined ? value : storedWireValue(field, value) ?? value];
 		}));
-	const changes = !a.admin && output === undefined ? [] : input.changes.map((change) => ({
+	const changes = input.changes.map((change) => ({
 		before: change.before === null ? null : shown(change.before),
 		set: shown(change.set),
 		after: change.after === null ? null : shown(change.after)
@@ -90,6 +92,13 @@ function writerInput(
 	};
 	return { changes, event };
 }
+/** Row `s` is one of `rows` at the attempt this generation runs. */
+const attemptOf = (c: Chain, rows: readonly Row[]): string =>
+	`EXISTS (SELECT 1 FROM jsonb_to_recordset(${c.p(rows.map((row) => ({ id: row.id, attempts: row.attempts })))}::jsonb)
+	AS x(id text, attempts int) WHERE x.id = s.id AND x.attempts = s.attempts)`;
+/** How long a running attempt holds its row (`started_at` is its stamp), and how often it renews it while it runs. */
+export const RUN_LEASE_MS = 30 * 60_000;
+const HEARTBEAT_MS = RUN_LEASE_MS / 3;
 export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 	parking: ReturnType<typeof makeParking>,
 	halts: Map<string, Deferred.Deferred<void>>,
@@ -100,11 +109,24 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 	const identity = yield* Identity, automations = yield* Automations, registry = yield* RunHandlers, ends = yield* RunEnds;
 	const interrupted = Effect.fn('Runs.interrupted')(function* (rows: readonly Row[], message: string) {
 			const c = new Chain();
-			runPiece(c, 'interrupted', `UPDATE sys_run r SET error = ${c.p({ code: 'interrupted', message })}::jsonb
-				WHERE r.state = 'running' AND EXISTS (SELECT 1 FROM jsonb_to_recordset(${c.p(rows.map((row) => ({ id: row.id, attempts: row.attempts })))}::jsonb)
-				AS x(id text, attempts int) WHERE x.id = r.id AND x.attempts = r.attempts)`);
+			runPiece(c, 'interrupted', `UPDATE sys_run s SET error = ${c.p({ code: 'interrupted', message })}::jsonb
+				WHERE s.state = 'running' AND ${attemptOf(c, rows)}`);
 			yield* nativeCommit(db.write, live.publish, c, CapturedResult);
 		});
+	/**
+	 * `work` with the lease of each of `rows` renewed while it runs (a claimed batch waiting its turn included); a renewal
+	 * that fails is retried at the next beat, inside the lease.
+	 */
+	const leased = <A, E, R>(rows: readonly Row[], work: Effect.Effect<A, E, R>) => Effect.scoped(Effect.andThen(Effect.forkScoped(Effect.gen(function* () {
+		for (;;) {
+			yield* Effect.sleep(HEARTBEAT_MS);
+			const c = new Chain();
+			yield* db.write({
+				text: `UPDATE sys_run s SET started_at = ${c.p(iso(yield* Clock.currentTimeMillis))}::timestamptz WHERE s.state = 'running' AND ${attemptOf(c, rows)}`,
+				params: c.params
+			}).pipe(Effect.catch((cause) => Effect.logWarning('A run lease did not renew.', cause)));
+		}
+	})), work));
 	const settle = Effect.fn('Runs.settle')(function* (
 		rows: readonly Row[], head: Row, spec: ExecutionSpec | undefined,
 		outcome: GuestOutcome, now: number, warnings: readonly string[]
@@ -151,9 +173,10 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 				: {})
 		};
 		const c = new Chain();
+		// only this attempt settles its row: a stopped run, or one its lease handed to a later attempt, stays as it is
 		runPiece(c,
 			'done',
-			`UPDATE sys_run s SET state = ${c.p(state)}, output = ${c.p(outcome.kind === 'ok' ? JSON.stringify(outcome.output) : null)}::jsonb, error = ${c.p(error)}::jsonb, finished_at = ${state === 'queued' ? 'NULL' : `${c.p(iso(at))}::timestamptz`}, due_at = coalesce(${c.p(due === null ? null : iso(due))}::timestamptz, s.due_at), results = s.results || jsonb_build_array(${c.p(result)}::jsonb) WHERE s.id IN (SELECT jsonb_array_elements_text(${c.p(rows.map((row) => row.id))}::jsonb)) AND s.state <> 'stopped'`
+			`UPDATE sys_run s SET state = ${c.p(state)}, output = ${c.p(outcome.kind === 'ok' ? JSON.stringify(outcome.output) : null)}::jsonb, error = ${c.p(error)}::jsonb, finished_at = ${state === 'queued' ? 'NULL' : `${c.p(iso(at))}::timestamptz`}, due_at = coalesce(${c.p(due === null ? null : iso(due))}::timestamptz, s.due_at), results = s.results || jsonb_build_array(${c.p(result)}::jsonb) WHERE s.state = 'running' AND ${attemptOf(c, rows)}`
 		);
 		const committed = yield* audited(
 			db,
@@ -168,14 +191,49 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 					result
 				}
 			},
-			nativeCommit(db.write, live.publish, c, CapturedResult).pipe(Effect.map((answer) => answer.captured.map((row) => row.id)))
-		).pipe(Effect.provideService(Audit, audit));
+			nativeCommit(db.write, live.publish, c, CapturedResult).pipe(
+				Effect.retry({ schedule: Schedule.exponential('1 second'), times: 4, while: is_transient }),
+				Effect.map((answer) => answer.captured.map((row) => row.id))
+			)
+		).pipe(
+			Effect.provideService(Audit, audit),
+			// the row stays running: its lease hands it to a later attempt
+			Effect.catch((cause) => Effect.logError('A run did not settle; its lease will reclaim it.', { run: head.id, cause }).pipe(Effect.as(undefined)))
+		);
+		if (committed === undefined) return null;
+		if (state === 'failed') yield* Effect.logWarning('A run failed.', { run: head.id, automation: head.automation, error });
 		if (state !== 'queued')
 			yield* PubSub.publish(
 				ends,
 				committed
 			);
 		return due;
+	});
+	/**
+	 * The attempt ended at `ctx.wait`: the run waits, holding no lane, until its deadline or a wake; one that was woken
+	 * while the attempt ended is queued at once. Its attempts count afresh, so every resumption keeps its retries.
+	 */
+	const suspend = Effect.fn('Runs.suspend')(function* (rows: readonly Row[], waiting: NonNullable<AutomationJob['waiting']>) {
+		const c = new Chain(),
+			now = c.p(iso(yield* Clock.currentTimeMillis)),
+			woken = `s.wait->'woke' IS NOT NULL`;
+		runPiece(c,
+			'waited',
+			`UPDATE sys_run s SET state = CASE WHEN ${woken} THEN 'queued' ELSE 'waiting' END, attempts = 0, started_at = NULL,
+			due_at = CASE WHEN ${woken} THEN ${now}::timestamptz ELSE ${waiting.due === null ? `'infinity'::timestamptz` : `${c.p(iso(waiting.due))}::timestamptz`} END,
+			wait = ${c.p(waitJson(waiting.state))}::jsonb || CASE WHEN ${woken} THEN jsonb_build_object('woke', s.wait->'woke') ELSE '{}'::jsonb END
+			WHERE s.state = 'running' AND ${attemptOf(c, rows)}`,
+			{ returning: "s.id, CASE WHEN s.state = 'queued' THEN s.due_at ELSE NULL END AS due_at" }
+		);
+		const answer = yield* nativeCommit(db.write, live.publish, c,
+			Schema.Struct({ ...CapturedResult.fields, due: Schema.NullOr(Schema.String) }),
+			`(SELECT min(due_at)::text FROM waited) AS due`
+		).pipe(
+			Effect.retry({ schedule: Schedule.exponential('1 second'), times: 4, while: is_transient }),
+			// the row stays running: its lease hands it to a later attempt, which waits again
+			Effect.catch((cause) => Effect.logError('A run did not start waiting; its lease will reclaim it.', { run: rows[0]?.id, cause }).pipe(Effect.as(undefined)))
+		);
+		return answer === undefined ? null : answer.due !== null ? Date.parse(answer.due) : waiting.due;
 	});
 	const execute = Effect.fn('Runs.execute')(function* (rows: readonly Row[], ledger: Ledger = QUEUED) {
 			const head = rows[0];
@@ -264,11 +322,17 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 					}
 					const halt = yield* Deferred.make<void>();
 					halts.set(head.id, halt);
-					outcome = yield* automations.invoke(head, holder, input, {
+					const job: AutomationJob = {
 						...(event === undefined ? {} : { event }),
 						ids: rows.map((row) => row.id), record: ledger.record, halt,
 						stopped: () => stopping.has(head.id), stop: () => stopping.add(head.id), dues, warnings
-					}).pipe(Effect.ensuring(Effect.sync(() => halts.delete(head.id))));
+					};
+					outcome = yield* automations.invoke(head, holder, input, job).pipe(Effect.ensuring(Effect.sync(() => halts.delete(head.id))));
+					if (job.waiting !== undefined) {
+						const due = yield* suspend(rows, job.waiting);
+						if (due !== null) dues.push(due);
+						return dues;
+					}
 				}
 			}
 			if (outcome.kind === 'ok' && spec !== undefined) {
@@ -305,5 +369,5 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 				})
 			)
 		));
-	return { execute, interrupted };
+	return { execute, leased };
 });

@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from '@effect/vitest';
 import { Effect, Fiber, Queue, Stream } from 'effect';
 import { integration_clients } from '../src/page/integrations.ts';
-import type { InstanceStatus } from '../src/protocol/instance-status.ts';
+import type { InstanceStatus } from '@norbital-ai/host-api';
 
 afterEach(() => vi.unstubAllGlobals());
 

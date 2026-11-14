@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { BUCKET_MS, due_at, duration, offset_ms } from '../src/engine/runs/time.ts';
+import { BUCKET_MS, due_at, duration } from '../src/engine/runs/time.ts';
 import { enqueue, next_due } from '../src/engine/runs/queue.ts';
 import { retryDelay } from '../src/engine/queue.ts';
 import { Chain } from '../src/engine/write/sql.ts';
@@ -12,7 +12,6 @@ describe('run time and the one enqueue builder', () => {
 			expect(due_at(1_001, 2_001)).toBe(2_001);
 			expect(due_at(1_001, 1_001 + BUCKET_MS)).toBe(2 * BUCKET_MS);
 			expect(duration('15min')).toBe(900_000);
-			expect(offset_ms('-1h')).toBe(-3_600_000);
 			expect(retryDelay(2, duration('1min'), 3_600_000)).toBe(120_000);
 			expect(retryDelay(10, duration('1h'), 3_600_000)).toBe(3_600_000);
 		})

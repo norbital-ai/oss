@@ -6,8 +6,7 @@ import { mount_edge } from '@norbital-ai/ui/effect';
 import { Layer, ManagedRuntime } from 'effect';
 import { mount, tick, unmount } from 'svelte';
 import { page } from 'vitest/browser';
-import StudioSlot from '../src/shell/studio/StudioSlot.svelte';
-import type { StudioProps } from '../src/shell/studio/slot.ts';
+import { StudioSlot, type StudioProps } from '@norbital-ai/ui';
 import { reactive } from './support/reactive.svelte.ts';
 import './support/shell.css';
 

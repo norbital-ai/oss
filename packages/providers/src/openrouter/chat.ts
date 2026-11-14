@@ -1,9 +1,5 @@
-import {
-	open_ai_chat,
-	type AiRequest,
-	type OpenAiChat,
-	type OpenAiChatConfig
-} from '@norbital-ai/bolt/engine';
+import type { AiRequest, OpenAiChat } from '@norbital-ai/host-api';
+import { open_ai_chat, type OpenAiChatConfig } from '@norbital-ai/bolt/engine';
 import { Array as EffectArray, Hash } from 'effect';
 
 type DeepSeekRouting = {

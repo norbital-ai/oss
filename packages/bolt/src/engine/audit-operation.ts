@@ -1,7 +1,7 @@
 // The host intent is durable before acquisition; the tenant keeps only correlation, never an audit payload outbox.
 import { Array as EffectArray, Clock, Effect, Predicate, Result, Schema } from 'effect';
 
-import type { AuditActor, AuditEvent } from '../protocol/audit.ts';
+import type { AuditActor, AuditEvent, DbError } from '@norbital-ai/host-api';
 import type { EngineActor } from './contracts.ts';
 import type { Json } from '../decl/values.ts';
 import type { TenantDbShape } from './db/tenant-db.ts';
@@ -294,11 +294,16 @@ export const recoverAudit = Effect.fn('Audit.recover')(
 	},
 	(effect) => effect.pipe(Effect.provideService(AuditRecoveryActive, true))
 );
+/**
+ * Runs `effect` as one audited operation. `issued`, when given, says whether `effect` sent a statement that may carry the
+ * operation's receipt: without one, nothing in the tenant can settle it, so its terminal event is appended unread.
+ */
 export const audited = <A, E, R>(
 	db: TenantDbShape,
 	intent: AuditIntent,
-	effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, E | BoltError | import('./errors.ts').DbError, R> =>
+	effect: Effect.Effect<A, E, R>,
+	issued?: () => boolean
+): Effect.Effect<A, E | BoltError | DbError, R> =>
 	Effect.gen(function* () {
 		if ((yield* AuditMutation) !== undefined) return yield* effect;
 		const pending = acknowledgements(db);
@@ -314,9 +319,11 @@ export const audited = <A, E, R>(
 			const committed = operation.committed.value;
 			// the statement that committed acknowledged the earlier operations it carried
 			if (committed !== undefined && !committed.erase) for (const id of operation.acknowledge ?? []) pending.delete(id);
-			const resolved = yield* (committed === undefined
-				? settleAudit(db, operation.event)
-				: appendCommitted(db, operation.event, committed)
+			const resolved = yield* (committed !== undefined
+				? appendCommitted(db, operation.event, committed)
+				: issued?.() === false
+					? Effect.succeed(false)
+					: settleAudit(db, operation.event)
 			).pipe(Effect.catch((error) => Effect.andThen(Effect.logWarning(error), Effect.succeed(undefined))));
 			// settleAudit wakes recovery itself for an unknown commit
 			if (resolved === true) settled = true;

@@ -5,7 +5,8 @@ import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { Effect, FiberSet, Semaphore } from 'effect';
 import { FirstSyncs, ProviderRuntime, type ProviderDef, type LinkDef } from '../src/abi.ts';
-import type { DriverEvent, DriverOpen, Json, LinkStatus } from '@norbital-ai/bolt/engine';
+import type { DriverEvent, DriverOpen, LinkStatus } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 
 type OAuthClient = NonNullable<Awaited<ReturnType<DriverOpen['oauth_client']>>>;
 type Pairing = NonNullable<Parameters<DriverOpen['pairing']>[0]>;

@@ -8,10 +8,11 @@ import type { Json } from '../src/decl/values.ts';
 import type { Authority, EngineActor, Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
-import { Approvals, Writes } from '../src/engine/services.ts';
+import { Approvals, Callables } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const requesterId = '0199a000-0000-7000-8000-000000000001',
 	managerId = '0199a000-0000-7000-8000-000000000002';
@@ -79,6 +80,10 @@ const source = `export default { model: {
             const rows = changes.map(({ after }) => after);
 			if (ctx.approving && rows.some((row) => row.name === 'refused on approval')) return yield* ctx.refuse('Not on approval.');
 			if (rows.some((row) => row.name === 'stepped') && rows.some((row) => (row.steps ?? []).length !== 2)) return yield* ctx.refuse('Steps went missing.');
+			if (rows.some((row) => row.name === 'counted')) {
+				const { leaves } = yield* ctx.query({ leaves: { as_of: 'act', where: { name: { eq: 'counted' } } } });
+				if (leaves.rows.length !== 1) return yield* ctx.refuse('The act read lost its row.');
+			}
 			return {
 				sets: changes.map(({ set }) => set),
 				with: { holds: { create: rows.map((row) => ({ name: 'hold ' + row.name })) } },
@@ -90,10 +95,8 @@ const source = `export default { model: {
 		}
 	} },
 	postings: { bodies: {
-		create: function* (changes, ctx) {
-            const rows = changes.map(({ set }) => set);
-			if (rows.some((row) => row.source === 'posting refused')) return yield* ctx.refuse('This posting refuses.');
-			return rows.map((row) => ({ ...row, carrier: ctx.carried_by }));
+		create: function* (changes) {
+			return changes.map(({ set }) => ({ ...set, carrier: 'callback' }));
 		}
 	} }
 }, policy: { requester: { grants: { leaves: { create: { verdict: function* (_rows, ctx) {
@@ -117,7 +120,7 @@ const workspace = Layer.unwrap(
 );
 const fixture = Effect.gen(function* () {
 	const t = yield* TestWorkspace,
-		writes = yield* Writes,
+		writes = yield* Callables,
 		approvals = yield* Approvals;
 	yield* t.db.write({
 		text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Requester','staff','requesters'),($2,'Manager','staff','managers') ON CONFLICT (id) DO NOTHING",
@@ -137,7 +140,7 @@ const fixture = Effect.gen(function* () {
 		const key = randomUUID(),
 			now = t.clock.now();
 		return writes
-			.act({
+			.acts(one_act({
 				model: 'leaves',
 				verb,
 				input,
@@ -145,9 +148,8 @@ const fixture = Effect.gen(function* () {
 				key,
 				issuedAt: now,
 				invocationId: key,
-				mode: { _tag: 'Direct' },
 				bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-			})
+			}))
 			.pipe(Effect.map((result) => result.outcome));
 	};
 	const decide = (
@@ -209,18 +211,24 @@ layer(workspace, { excludeTestServices: true })('on_approved', (it) => {
 			const id = yield* f.idOf('annual');
 			expect(yield* f.heard(id)).toEqual([]);
 			expect(yield* f.decide(request, 'approve')).toMatchObject({ status: 'Approved' });
-			expect(yield* f.postings('annual')).toEqual([{ source: 'annual', carrier: 'leaves' }]);
+			expect(yield* f.postings('annual')).toEqual([{ source: 'annual', carrier: null }]);
 			expect(yield* f.heard(id)).toEqual([{ verb: 'create', records: [id] }]);
 		})
 	);
 
-	it.effect('leaves the request pending and writes nothing when anything it carries refuses', () =>
+	it.effect("asks again with an as_of 'act' read, answered from the held rows already stored", () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;
-			for (const [name, message] of [
-				['refused on approval', 'Not on approval.'],
-				['posting refused', 'This posting refuses.']
-			] as const) {
+			const request = held(yield* f.act('create', [{ name: 'counted' }]));
+			expect(yield* f.decide(request, 'approve')).toMatchObject({ status: 'Approved' });
+			expect(yield* f.postings('counted')).toEqual([{ source: 'counted', carrier: null }]);
+		})
+	);
+
+	it.effect('leaves the request pending and writes nothing when the approving callback refuses', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			for (const [name, message] of [['refused on approval', 'Not on approval.']] as const) {
 				const request = held(yield* f.act('create', [{ name }]));
 				expect(yield* f.decide(request, 'approve')).toMatchObject({ kind: 'refused', message });
 				expect(yield* f.state(request)).toBe('Pending');
@@ -270,7 +278,7 @@ layer(workspace, { excludeTestServices: true })('on_approved', (it) => {
 				expect(yield* f.postings('edit', 'edited')).toEqual([]);
 				expect(yield* f.decide(request, 'approve')).toMatchObject({ status: 'Approved' });
 				expect(yield* f.postings('edit', 'edited')).toEqual([
-					{ source: 'edited', carrier: 'leaves' }
+					{ source: 'edited', carrier: null }
 				]);
 				// the held create and the approver's edit to it commit as one create
 				expect(yield* f.heard(target)).toEqual([{ verb: 'create', records: [target] }]);
@@ -298,7 +306,7 @@ layer(workspace, { excludeTestServices: true })('on_approved', (it) => {
 				yield* f.act('create', [{ name: 'stepped', steps: [{ label: 'one' }, { label: 'two' }] }])
 			);
 			expect(yield* f.decide(request, 'approve')).toMatchObject({ status: 'Approved' });
-			expect(yield* f.postings('stepped')).toEqual([{ source: 'stepped', carrier: 'leaves' }]);
+			expect(yield* f.postings('stepped')).toEqual([{ source: 'stepped', carrier: null }]);
 		})
 	);
 
@@ -308,7 +316,7 @@ layer(workspace, { excludeTestServices: true })('on_approved', (it) => {
 			expect(
 				yield* f.act('create', [{ name: 'direct' }], { ...f.requester, admin: true })
 			).toMatchObject({ kind: 'committed' });
-			expect(yield* f.postings('direct')).toEqual([{ source: 'direct', carrier: 'leaves' }]);
+			expect(yield* f.postings('direct')).toEqual([{ source: 'direct', carrier: null }]);
 			const id = yield* f.idOf('direct');
 			expect(yield* f.heard(id)).toEqual([{ verb: 'create', records: [id] }]);
 		})

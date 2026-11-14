@@ -8,7 +8,6 @@ import { discover } from '../../bolt-cli/src/compiler/discover.ts';
 import { load, type Manifest } from '../../bolt-cli/src/compiler/load.ts';
 import { ManifestInvalid } from '../src/engine/errors.ts';
 import {
-	challengedApps,
 	declared_secrets,
 	decode_manifest,
 	decode_projected_manifest,
@@ -44,7 +43,7 @@ const refusal = (u: unknown) =>
 	Result.match(decode_manifest(u), { onFailure: (e) => e, onSuccess: () => undefined });
 const loaded = (over: Partial<Manifest>): Manifest => ({
 	workspace: { '': { tz: 'UTC', locale: 'en' } },
-	secrets: {}, model: {}, representation: {}, custom_field: {}, renderer: {},
+	secrets: {}, model: {}, representation: {}, sync: {}, custom_field: {}, renderer: {},
 	integration_definition: {}, integration_setup: {}, policy: {}, team: {},
 	agent: {}, agent_external: {}, skill: {}, mcp: {}, automation: {}, app: {},
 	session: {}, page: {}, messages: {}, locale: {}, group: {},
@@ -237,7 +236,7 @@ describe('project_manifest', () => {
 								fields: {
 									title: { kind: 'text' },
 									amount: { kind: 'int' },
-									doubled: { kind: 'int', computed: { times: [{ field: 'amount' }, 2] } }
+									doubled: { kind: 'int', computed: 'amount * 2' }
 								},
 								indexes: { by_title: { on: ['title'] }, find: { text: ['title'] } },
 								outputs: { default: { fields: 'all' } }
@@ -301,8 +300,8 @@ describe('project_manifest', () => {
 										unassigned: { locked: { customer: { is_null: true } }, except: ['customer'] }
 									},
 									outputs: { default: { fields: 'all' } },
-									create: { columns: { fields: ['number', 'customer'] }, transform: true },
-									update: { columns: { fields: ['number'] }, transform: () => [] },
+									create: { fields: ['number', 'customer'], transform: true },
+									update: { fields: ['number'], transform: () => [] },
 									delete: {}
 								},
 								bodies: {}
@@ -345,7 +344,7 @@ describe('project_manifest', () => {
 								description: '',
 								grants: {
 									orders: {
-										update: { columns: { fields: ['number'] }, verdict: function* () {} },
+										update: { fields: ['number'], verdict: function* () {} },
 										delete: { verdict: function* () {} },
 										outputs: { default: {} }
 									}
@@ -417,7 +416,7 @@ describe('manifest accessors', () => {
 				title: 'Shop',
 				description: 'Shop',
 				icon: 'cart',
-				audience: { public: ['rep'], challenge: 'turnstile' },
+				audience: { public: ['rep'], challenge: true },
 				pages: {}
 			},
 			crm: {
@@ -430,9 +429,8 @@ describe('manifest accessors', () => {
 		}
 	};
 
-	it('derive the secrets, challenged apps and normalised teams', () => {
+	it('derive the secrets and normalised teams', () => {
 		expect(declared_secrets(m)).toEqual(['API_URL', 'API_KEY']);
-		expect(challengedApps(m)).toEqual(['shop']);
 		expect(teams(m)).toEqual({
 			sales: { name: 'sales', parent: null, policies: ['rep'] },
 			leads: { name: 'Leads', parent: 'sales', policies: ['lead'] }

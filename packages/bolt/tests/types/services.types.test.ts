@@ -1,21 +1,27 @@
-import type { ImportStart } from '../../src/protocol/schema.ts';
+import type {
+	AiRequest,
+	AiResponse,
+	CronEntry,
+	CronFired,
+	DecisionResult,
+	DeliveryReport,
+	DriverEvent,
+	FacilityFailure,
+	ImportStart,
+	PortFailure,
+	Unavailable
+} from '@norbital-ai/host-api';
 // Type corpus for the engine service contracts (K2): each pinned member's parameters and answer, exactly. Never run,
 // only checked (`tsgo -p tests/tsconfig.json`): a Shape that drifts from its pin is a type error on its line.
 import type { Effect, Option, Stream } from 'effect';
 import type { Json } from '../../src/decl/values.ts';
-import type { FacilityFailure, Unavailable } from '../../src/decl/errors.ts';
 import type { Frame } from '../../src/protocol/schema.ts';
 import type { ReadIR } from '../../src/protocol/reads.ts';
 import type {
-	AiRequest,
-	AiResponse,
 	Authority,
 	Bindings,
 	Captured,
-	CronEntry,
-	CronFired,
 	CrossAnswer,
-	DriverEvent,
 	GuestOutcome,
 	Invocation,
 	Outcome,
@@ -25,13 +31,9 @@ import type { EngineError, IdentityRefusal } from '../../src/engine/errors.ts';
 import type { BoltError } from '../../src/protocol/errors.ts';
 import type { EngineManifest } from '../../src/engine/manifest.ts';
 import type { Holder } from '../../src/engine/access/authority.ts';
-import type { DeliveryReport } from '../../src/engine/conversations/status.ts';
-import type { DecisionResult } from '../../src/engine/decision.ts';
 import type { Verb } from '../../src/engine/write/act.ts';
-import type { DeadlineTimer } from '../../src/engine/runs/deadlines.ts';
-import type { OpenAiChat } from '../../src/engine/agent/openai-chat.ts';
-import type { AiEvent } from '../../src/engine/ports.ts';
-import type { PortFailure } from '../../src/engine/port.ts';
+import type { DeadlineTimer } from '@norbital-ai/host-api';
+import type { AiEvent, OpenAiChat } from '@norbital-ai/host-api';
 import type { Syncs, SyncsShape } from '../../src/engine/sync/index.ts';
 import type {
 	ActMode,
@@ -88,9 +90,7 @@ import type {
 	TurnsShape,
 	TurnVia,
 	Wake,
-	WakeShape,
-	Writes,
-	WritesShape
+	WakeShape
 } from '../../src/engine/services.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -100,7 +100,6 @@ type Answer<F> = F extends (...args: never[]) => infer R ? R : never;
 
 // ── every tag carries its Shape ──
 is<Eq<ShapeOf<typeof Reads>, ReadsShape>>();
-is<Eq<ShapeOf<typeof Writes>, WritesShape>>();
 is<Eq<ShapeOf<typeof Callables>, CallablesShape>>();
 is<Eq<ShapeOf<typeof Approvals>, ApprovalsShape>>();
 is<Eq<ShapeOf<typeof Decisions>, DecisionsShape>>();
@@ -136,10 +135,8 @@ is<
 >();
 is<Eq<Answer<ReadsShape['run']>, Effect.Effect<readonly Json[], EngineError>>>();
 
-// ── writes: one request, its mode a tagged union decided once, no hook-only fields ──
-is<Eq<Args<WritesShape['act']>, [request: ActRequest]>>();
-is<Eq<Answer<WritesShape['act']>, Effect.Effect<ActResult, EngineError>>>();
-is<Eq<ActMode['_tag'], 'Direct' | 'Sync' | 'Record'>>();
+// ── writes: one planner request, its mode a sink; the batch path commits and owns key, expiry and retry ──
+is<Eq<keyof ActMode, 'sink' | 'pending' | 'carriedBy' | 'sync'>>();
 is<
 	Eq<
 		keyof ActRequest,
@@ -148,14 +145,11 @@ is<
 		| 'input'
 		| 'mode'
 		| 'key'
-		| 'issuedAt'
-		| 'retry'
 		| 'authority'
 		| 'bindings'
 		| 'invocationId'
 		| 'observed'
 		| 'on_conflict'
-		| 'rate'
 		| 'restored'
 		| 'readGuards'
 	>
@@ -270,7 +264,7 @@ is<
 is<
 	Eq<
 		Exclude<CrossCall['_tag'], FacilityCall['_tag']>,
-		'read' | 'act' | 'run' | 'schedule' | 'notify' | 'send' | 'request' | 'progress'
+		'read' | 'act' | 'schedule' | 'notify' | 'send' | 'request' | 'progress' | 'wait'
 	>
 >();
 is<

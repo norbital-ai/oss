@@ -24,6 +24,40 @@ export type { SourceColumns, SourceRow, ViewSource } from './model/types.js';
 export { default as ApprovalPanel } from './approval/ApprovalPanel.svelte';
 export { default as RunStatus } from './runs/RunStatus.svelte';
 export type { Col, ColumnsIn, RowIn, TableProps } from './table/Table.svelte';
+// The parts the built-in views are assembled from, for a page composing its own.
+/** A paged view's page size, previous and next, and "Page X of Y". */
+export { default as TablePager } from './table/TablePager.svelte';
+/** A row's actions: one as its button, two or more folded into one menu. */
+export { default as RowMenu } from './table/RowMenu.svelte';
+/** A view's selection line: the page's checkbox, the count, select every matching row, clear. */
+export { default as SelectionBar } from './table/SelectionBar.svelte';
+/** A column heading's menu: pin, hide, move, reset width, show a hidden column. */
+export { default as ColumnMenu } from './table/ColumnMenu.svelte';
+/** A row as a phone card: its title and three fields, the whole card opening the record. */
+export { default as RowCard } from './table/RowCard.svelte';
+/** A value as a view's cell shows it, by its kind. */
+export { default as CellValue } from './cell/Value.svelte';
+/** A dense value on one line; wider than its cell, an expand button shows it whole (`expand="never"` in a row). */
+export { default as CellOverflow } from './cell/Overflow.svelte';
+/** A view's loading, no-access and error states around its ready content. */
+export { default as ReadGate } from './read/ReadGate.svelte';
+/** One read's pending and ready states. */
+export { default as ReadOnce } from './read/ReadOnce.svelte';
+/** The accent a row or card carries while an open approval request holds its record. */
+export { default as ApprovalAccent } from './approval/ApprovalAccent.svelte';
+/** A field's label, help, required and dirty marks and error around its control. */
+export { default as FieldControl } from './form/field-control.svelte';
+/** The latest runs of one automation matching `where`, each with its `RunStatus`. */
+export { default as RunsFor, type RunsForProps } from './runs/RunsFor.svelte';
+/** One board lane's cards: live keyset pages, the next loading as the lane scrolls near its end. */
+export { default as BoardLane } from './board/BoardLane.svelte';
+export type { BoardProps, Lane } from './board/Board.svelte';
+/** An editable list of child rows inside a parent's form, sent as the parent's relation operations. */
+export { default as Rows } from './relations/Rows.svelte';
+/** A compact vertical timeline of actions. */
+export { default as Timeline } from './timeline/Timeline.svelte';
+export type { TimelineEntry } from './timeline/timeline.js';
+export type { Toolbar, ToolbarItem } from './model/ViewToolbar.svelte';
 export { default as ToolbarSearch } from './model/toolbar/ToolbarSearch.svelte';
 /** The toolbar's condition, description and sort controls for a saved model filter. */
 export { default as FilterEditor, type FilterValue } from './filter/FilterEditor.svelte';
@@ -41,6 +75,8 @@ export {
 	type RestoreSkip
 } from './record/types.js';
 export { automation_outcome } from './actions/outcome.js';
+/** A page's write in one call: a `pending` flag while it runs, and its commit, hold or typed failure toasted. */
+export { use_act } from './actions/act.svelte.js';
 export { type UiContext, type ViewBolt } from './client/contract.js';
 export { type Workspace } from './model/types.js';
 export { default as EmptyState } from './primitives/empty-state/EmptyState.svelte';
@@ -85,6 +121,7 @@ export {
 export {
 	Field,
 	type FieldEditor,
+	type FieldView,
 	DescriptionHint,
 	Section,
 	type RecordSection,
@@ -150,6 +187,12 @@ export { default as Toaster } from './toast/toaster.svelte';
 export { toast } from './toast/toast.svelte.js';
 export { PinInput, PhoneVerify } from './pin-input/index.js';
 
+/** Studio's place in a page, and the preview and test report the shell's agent pane and Studio share. */
+export { default as StudioSlot } from './studio/StudioSlot.svelte';
+export type { StudioMount, StudioProps } from './studio/slot.js';
+export { default as PreviewFrame } from './studio/PreviewFrame.svelte';
+export { default as TestResults } from './studio/TestResults.svelte';
+export { elapsed_text } from './studio/elapsed.js';
 /** The same tenant operational surface in Workspace Studio and Realm. */
 export { default as WorkspaceOperations } from './workspaces/WorkspaceOperations.svelte';
 export { release_window } from './workspaces/filters.js';

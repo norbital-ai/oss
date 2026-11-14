@@ -24,11 +24,7 @@
 	import { catalogText } from '../text/messages.js';
 	import { type Ref } from '../relations/select.js';
 
-	/** `ref`: a relation's target and label (`unref`), shown as a link opening that record (`?record=`); a many-relation
-	 * shows its first label and a "+N" chip listing the rest. The glyph tells one link from many.
-	 * `dense` (a table cell, a card): a structured value previews its fields and opens the same structured renderer.
-	 * `name` reaches a custom field's renderer. `link={false}` (a row of a list, which opens the row's own record) shows a
-	 * relation as text, so a tap on a row never lands on the related record instead. */
+	// a relation link's glyph tells one link from many
 	let {
 		ctx,
 		value,
@@ -39,13 +35,21 @@
 		dense = false,
 		link: linked = true
 	}: {
+		/** The page context. */
 		ctx: UiContext;
+		/** The stored value. */
 		value: import('@norbital-ai/store/kind').Value | undefined;
+		/** The field's kind; without it the value shows by its shape. */
 		kind?: Kind | undefined;
+		/** The row the value is in: its money currency and custom renderers read it. */
 		row?: Values;
+		/** A relation's target and label (`unref`), shown as a link opening that record; a many-relation shows its first label and a "+N" chip listing the rest. */
 		ref?: Ref | undefined;
+		/** The field's name, which reaches a custom field's renderer. */
 		name?: string;
+		/** A table cell or card: a structured value previews its fields and opens the same structured renderer. */
 		dense?: boolean;
+		/** `false` in a row that opens its own record: a relation shows as text, so a tap never lands on the related record. */
 		link?: boolean;
 	} = $props();
 	const bolt = $derived(optional_bolt_of(ctx));
@@ -213,8 +217,8 @@
 {:else if kind === undefined && (value === null || value === undefined)}
 	<span class="text-muted-foreground">—</span>
 {:else if kind?.kind === 'text' && kind.format === 'cel' && dense && typeof value === 'string'}
-	<!-- one highlighted line of an expression; expand shows it whole -->
-	<Overflow>
+	<!-- one highlighted line of an expression; outside a row, expand shows it whole -->
+	<Overflow expand={linked ? 'always' : 'never'}>
 		<code class="bg-muted rounded-sm px-1.5 py-0.5 font-mono text-xs" data-cel
 			>{#each highlighted_line(value) as token, i (i)}<span class={token.class || undefined}
 					>{token.text}</span

@@ -16,7 +16,7 @@ import { integration_clients, integration_offers } from '../page/integrations.ts
 import type { IntegrationSetupEntry } from './integration/setup.ts';
 import { resolve_device, type DeviceApi } from '../page/device.ts';
 import type { ActOutcome } from '../engine/contracts.ts';
-import { BOLT, HEADERS, PATHS, RATE_LIMITED, uuidv7, type PushBody } from '../protocol/wire.ts';
+import { BOLT, HEADERS, PATHS, RATE_LIMITED, type PushBody } from '../protocol/wire.ts';
 import {
 	AgentModels,
 	InstanceMessage,
@@ -36,9 +36,7 @@ import {
 	ShellError,
 	ShellWorkspace,
 	SignInMethodsAnswer,
-	StudioFileAnswer,
 	StudioInspectionAnswer,
-	StudioViewAnswer,
 	Transcript,
 	VerifiedAnswer,
 	type ShellApi
@@ -46,7 +44,7 @@ import {
 import { browserTransport } from '../protocol/client.ts';
 import { ProtocolFailed, TransportFailed } from '../decl/errors/browser.ts';
 import { ActReply, WireError, type PageResult } from '../protocol/schema.ts';
-import { AuditPage, AuditRecord } from '../protocol/audit.ts';
+import { AuditPage, AuditRecord, StudioFile, StudioView, uuidv7 } from '@norbital-ai/host-api';
 import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
 const requestFailure = (status: number): ShellError =>
@@ -256,7 +254,7 @@ export function shell_api(
 			),
 		retire_instance_sync: (instance: string, id: string) =>
 			call(SyncRetireAnswer, 'POST', `${SHELL}/instance-sync-retire`, { instance, id }),
-		logs: (x: import('../engine/contracts.ts').LogQuery) =>
+		logs: (x: import('@norbital-ai/host-api').LogQuery) =>
 			call(
 				Schema.Array(LogRowAnswer),
 				'GET',
@@ -277,12 +275,12 @@ export function shell_api(
 		audit: (query) => call(AuditPage, 'POST', `${SHELL}/audit/query`, query),
 		audit_detail: (id) =>
 			call(Schema.NullOr(AuditRecord), 'GET', `${SHELL}/audit/detail${q('id', id)}`),
-		studio: () => call(StudioViewAnswer, 'GET', `${SHELL}/studio`),
-		studio_run: (op: import('./studio/model.ts').StudioOp) =>
-			call(StudioViewAnswer, 'POST', `${SHELL}/studio`, { op }),
+		studio: () => call(StudioView, 'GET', `${SHELL}/studio`),
+		studio_run: (op: import('@norbital-ai/host-api').StudioOp) =>
+			call(StudioView, 'POST', `${SHELL}/studio`, { op }),
 		studio_file: (commit: string, path: string) =>
 			call(
-				StudioFileAnswer,
+				Schema.NullOr(StudioFile),
 				'GET',
 				`${SHELL}/studio/file?${new URLSearchParams({ commit, path })}`
 			),
@@ -388,6 +386,9 @@ export function shell_api(
 				act('sys_message.reorder', { conversation, messages: [...messages] }),
 			execute_plan: (conversation: string) => act('sys_message.execute_plan', { conversation }),
 			discard_plan: (conversation: string) => act('sys_message.discard_plan', { conversation }),
+			archive: (conversation: string) => act('sys_conversation.archive', { conversation }),
+			unarchive: (conversation: string) => act('sys_conversation.unarchive', { conversation }),
+			delete: (conversation: string) => act('sys_conversation.delete', { conversation }),
 			resume: (conversation: string) => act('sys_conversation.resume', { conversation }),
 			transcript: (conversation: string) =>
 				call(Transcript, 'GET', `${PATHS.agent}${q('conversation', conversation)}`),

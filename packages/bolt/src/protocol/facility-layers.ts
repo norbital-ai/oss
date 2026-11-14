@@ -4,8 +4,7 @@ import { sha256 } from '@norbital-ai/store';
 import { audit_from_abi } from '../engine/audit.ts';
 import { sha1 } from '../engine/crypto.ts';
 import { Ai, Files, Http, Keys, Logs, Transport } from '../engine/ports.ts';
-import type { Facilities } from '../facilities/index.ts';
-import { is_off, off } from '../facilities/off.ts';
+import { type Facilities, is_off, off } from '@norbital-ai/host-api';
 import { Turnstile } from '../shell/host.ts';
 
 /** Random bytes from the runtime's `crypto`; the digests are this release's own (a cell has no `crypto.subtle`). */

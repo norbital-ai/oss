@@ -13,8 +13,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { Files } from '../ports.ts';
 import { decode_manifest, type EngineManifest } from '../manifest.ts';
-import type { WorkspacePort } from '../agent/tools.ts';
-import type { GuestProgram } from '../guest/runner.ts';
+import { tree_hash, type GuestProgram, type WorkspacePort } from '@norbital-ai/host-api';
 import { fingerprint, schema_slice } from '../schema/plan.ts';
 import { migration_schema, read_migrations, type MigrationBundle } from '../schema/migrations.ts';
 import { current } from '@norbital-ai/store';
@@ -106,22 +105,6 @@ export const tree = Effect.fn('bolt.artifactTree')(function* (dir: string) {
 		if ((yield* fs.stat(path.join(dir, name))).type === 'File')
 			files.push(name.split(path.sep).join('/'));
 	return files.sort();
-});
-/** sha256 hex of a tree's sorted `<path>\0<sha256 hex>` lines, `\n`-joined: a folder's `tree_hash`, a skill's digest. */
-export const tree_digest = (files: Iterable<readonly [path: string, bytes: Uint8Array]>): string =>
-	sha256_hex(
-		Array.from(files, ([file, bytes]) => `${file}\0${sha256_hex(bytes)}`)
-			.sort()
-			.join('\n')
-	);
-/** A tree's digest; `*.map` files are left out: the bundler writes random names into them, so they are not byte-stable. */
-export const tree_hash = Effect.fn('bolt.artifactTreeHash')(function* (dir: string) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
-	const files: (readonly [string, Uint8Array])[] = [];
-	for (const file of yield* tree(dir))
-		if (!file.endsWith('.map')) files.push([file, yield* fs.readFile(path.join(dir, file))]);
-	return tree_digest(files);
 });
 /** An artifact's `hash`: sha256 over its descriptor body and the tree hashes of its assets, skills, workspace source and migrations. */
 export const artifact_hash = Effect.fn('bolt.artifactHash')(function* (

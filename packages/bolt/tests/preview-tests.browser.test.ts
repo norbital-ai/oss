@@ -2,9 +2,8 @@
 import { expect, it } from '@effect/vitest';
 import { page } from 'vitest/browser';
 import { mount, tick, unmount } from 'svelte';
-import PreviewFrame from '../src/shell/preview/PreviewFrame.svelte';
-import TestResults from '../src/shell/preview/TestResults.svelte';
-import type { StudioTestRun } from '../src/shell/studio/test-results.ts';
+import { PreviewFrame, TestResults } from '@norbital-ai/ui';
+import type { StudioTestRun } from '@norbital-ai/host-api';
 import './support/shell.css';
 
 const failed: StudioTestRun = {

@@ -1,6 +1,7 @@
 // The strictness the type-cost work keeps: a cheaper Bolt type
 // must answer the same types and refuse the same mistakes. Each `@ts-expect-error` line is a planted mistake.
-import type { Cursor, Id, PlainDate, ReadAnswer, ReadRequest, ReadRequestBase, Where, WorkspaceQuery } from '../../src/index.ts';
+import type { Cursor, Id, PlainDate, ReadAnswer, Where, WorkspaceQuery } from '../../src/index.ts';
+import type { ReadRequest, ReadRequestBase } from '../../src/decl/ctx.ts';
 import type { ReadableName } from '../../src/decl/names.ts';
 import type { ModelWhere } from '../../src/decl/where.ts';
 import type { Eff } from '../../src/decl/ctx.ts';

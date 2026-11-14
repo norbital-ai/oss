@@ -1,6 +1,6 @@
 import { DateTime, Effect, Option } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
-import type { ImportStart, ImportStartInput } from '../../protocol/schema.ts';
+import type { ImportStart, ImportStartInput } from '@norbital-ai/host-api';
 
 export const resolveImportStart = (
 	input: ImportStartInput,

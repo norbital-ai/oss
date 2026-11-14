@@ -2,12 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { Option, Schema } from 'effect';
 import { KindSchema } from '@norbital-ai/store/kind';
 import { install } from '../src/decl/runtime/guest.ts';
-import { custom_field, policy } from '../src/index.ts';
-import { bind_model } from '../src/declarations.ts';
+import { custom_field, model, policy } from '../src/index.ts';
 import { split_model, split_system_model } from '../src/decl/model-data.ts';
 import { FieldData, OutputData } from '../src/decl/field-data.ts';
 import { nullable_of_expr } from '../src/decl/model.ts';
-import * as declarations from '../src/declarations.ts';
+import * as bolt from '../src/index.ts';
 import message from '../src/system/data/model/sys_message/+model.ts';
 import configuration from '../src/system/data/model/sys_config/+model.ts';
 import { salesRep } from './types/access.ts';
@@ -32,7 +31,7 @@ describe('declarations', () => {
 
 	it('keeps one named model literal and wraps every inline guest body at its own path', () => {
 		const spec = fixtures.orders.spec;
-		const declared = bind_model('orders')(spec);
+		const declared = model('orders', spec);
 		expect(declared.name).toBe('orders');
 		expect(declared.spec).toBe(spec);
 		expect(original(declared.bodies.create)).toBe(spec.create.transform);
@@ -91,7 +90,7 @@ describe('declarations', () => {
 	});
 
 	it('keeps physical key metadata private to native models and rejects it at the workspace boundary', () => {
-		expect(declarations).not.toHaveProperty('bind_system_model');
+		expect(bolt).not.toHaveProperty('bind_system_model');
 		for (const table of [{ primary: 'text' }, { primary: 'uuid', identity: 'sequence' }])
 			expect(() => split_model('notes', {
 				description: 'Notes', fields: { note: { kind: 'text' } }, table
@@ -106,26 +105,26 @@ describe('declarations', () => {
 	});
 
 	it('lowers canonical JSON array lengths and propagates their actual NULL guarantees', () => {
-		const arrays = bind_model('array_lengths')({
+		const arrays = model('array_lengths', {
 			description: 'Array lengths',
 			fields: {
 				required: { kind: 'json', shape: { kind: 'int', many: true }, default: [] },
 				optional: { kind: 'json', shape: { kind: 'int', many: true }, optional: true },
-				length: { kind: 'int', computed: { json_length: { field: 'required' } } },
-				optional_length: { kind: 'int', computed: { json_length: { field: 'optional' } } },
-				plus_one: { kind: 'int', computed: { plus: [{ json_length: { field: 'optional' } }, 1] } },
-				safe_length: { kind: 'int', computed: { coalesce: [{ json_length: { field: 'optional' } }, 0] } },
-				chosen_length: { kind: 'int', computed: { when: [false, { json_length: { field: 'optional' } }, { json_length: { field: 'required' } }] } }
+				length: { kind: 'int', computed: 'size(required)' },
+				optional_length: { kind: 'int', computed: 'size(optional)' },
+				plus_one: { kind: 'int', computed: 'size(optional) + 1' },
+				safe_length: { kind: 'int', computed: 'coalesce(size(optional), 0)' },
+				chosen_length: { kind: 'int', computed: 'false ? size(optional) : size(required)' }
 			}
 		});
-		const model = split_model(arrays.name, arrays.spec).model;
-		expect(model.computed?.['length']?.expr).toEqual({ json_length: { field: 'required' } });
+		const split = split_model(arrays.name, arrays.spec).model;
+		expect(split.computed?.['length']?.expr).toEqual({ json_length: { field: 'required' } });
 		for (const [name, expected] of [
 			['length', false], ['optional_length', true], ['plus_one', true], ['safe_length', false], ['chosen_length', false]
 		] as const) {
-			const computed = model.computed?.[name];
+			const computed = split.computed?.[name];
 			if (computed === undefined) throw new Error(`Missing computed field ${name}`);
-			expect(nullable_of_expr(computed.expr, model)).toBe(expected);
+			expect(nullable_of_expr(computed.expr, split)).toBe(expected);
 		}
 		expect(nullable_of_expr({ json_length: { field: 'items' } }, {
 			fields: { items: { kind: 'json', optional: false } }

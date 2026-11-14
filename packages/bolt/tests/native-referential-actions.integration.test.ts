@@ -4,10 +4,11 @@ import { describe, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { Approvals, Writes } from '../src/engine/services.ts';
+import { Approvals, Callables } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -117,7 +118,7 @@ type Model = 'roots' | 'archives' | 'branches' | 'leaves' | 'watchers';
 const fixture = Effect.gen(function* () {
 	const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
 	const t = Context.get(context, TestWorkspace),
-		writes = Context.get(context, Writes),
+		writes = Context.get(context, Callables),
 		approvals = Context.get(context, Approvals),
 		admin = (yield* t.as(t.admin)).authority,
 		requester = (yield* t.as(
@@ -135,7 +136,7 @@ const fixture = Effect.gen(function* () {
 		retry = false
 	) => {
 		const now = t.clock.now();
-		return writes.act({
+		return writes.acts(one_act({
 			model,
 			verb,
 			input,
@@ -144,9 +145,8 @@ const fixture = Effect.gen(function* () {
 			retry,
 			issuedAt: now,
 			invocationId: key,
-			mode: { _tag: 'Direct' },
 			bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-		});
+		}));
 	};
 	const create = Effect.fnUntraced(function* (model: Model, input: Json) {
 		const { outcome } = yield* act(model, 'create', [input]);

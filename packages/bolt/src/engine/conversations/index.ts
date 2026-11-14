@@ -14,12 +14,11 @@ import { sql } from '../db/sql.ts';
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
 import { enqueue, next_due } from '../runs/queue.ts';
 import type { Json } from '../../decl/values.ts';
-import type { DriverEvent, ReconcilePage } from '../contracts.ts';
+import { DbError, type DriverEvent, ImportStart, Port, type ReconcilePage } from '@norbital-ai/host-api';
 import { Files, Logs, type LogsShape } from '../ports.ts';
-import { Port, uuid } from '../port.ts';
+import { uuid } from '../port.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
-import { DbError } from '../errors.ts';
 import {
 	Conversations as ConversationsTag,
 	Manifest,
@@ -40,7 +39,6 @@ import { canonical } from '@norbital-ai/store';
 import { Chain } from '../write/sql.ts';
 import { heldLonger } from '../agent/throttle.ts';
 import { InboundMessage, normalizeInbound, type Inbound } from './inbound.ts';
-import { ImportStart } from '../../protocol/schema.ts';
 import { permitsImport } from '../integrations/import-start.ts';
 import { prepareSend, sendPiece } from './outbound.ts';
 import { is_auto_reply, is_reported } from './status.ts';

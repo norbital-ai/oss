@@ -4,13 +4,8 @@
 import { Clock, DateTime, Effect, Option, Schema, Predicate, Semaphore } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { CalendarEvent } from '@norbital-ai/bolt';
-import {
-	OAUTH_CALLBACK,
-	type DriverOpen,
-	type DriverPage,
-	type Json,
-	type LinkStatus
-} from '@norbital-ai/bolt/engine';
+import { type DriverOpen, type DriverPage, type LinkStatus, OAUTH_CALLBACK } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, LinkClosed, PairingInvalid, ProviderUnavailable } from '../errors.ts';
 import {

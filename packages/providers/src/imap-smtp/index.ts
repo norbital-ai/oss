@@ -3,13 +3,13 @@ import { createHmac } from 'node:crypto';
 import { Clock, Effect, FiberHandle, Option, Schedule, Predicate, Schema } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import {
-	OAUTH_CALLBACK,
 	type DriverOpen,
 	type InstanceState,
-	type Json,
 	type LinkStatus,
+	OAUTH_CALLBACK,
 	type OutboundAttachment
-} from '@norbital-ai/bolt/engine';
+} from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import type { ProviderDef, ProviderText } from '../abi.ts';
 
 type ProviderSetup = ProviderDef['setup'];

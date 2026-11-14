@@ -47,7 +47,6 @@ const fixture = (preview = false) => {
 		status: 'idle',
 		model: 'default',
 		plan: null,
-		goals: [{ id: 'visual', text: 'Inspect the preview', status: 'doing' }],
 		envoy: null,
 		integration: null,
 		kind: null,
@@ -100,18 +99,18 @@ const fixture = (preview = false) => {
 				failed: false,
 				child: child.id,
 				ms: 20,
-				args: JSON.stringify({ action: 'spawn', task: taskNames[index] })
+				args: JSON.stringify({ task: taskNames[index] })
 			}
 		});
-	for (const [index, args] of [
-		{ action: 'message', conversation: 'rail-child-0', text: 'Please include permissions.' },
-		{ action: 'stop', conversation: 'rail-child-5' }
-	].entries())
+	for (const [index, [name, args]] of ([
+		['subagent_message', { conversation: 'rail-child-0', text: 'Please include permissions.' }],
+		['subagent_stop', { conversation: 'rail-child-5' }]
+	] as const).entries())
 		rows.push({
 			...row(`subagent-action-${index}`, index + 10, ''),
 			role: 'tool',
 			at,
-			tool: { behavior: {}, name: 'subagent', failed: false, ms: 20, args: JSON.stringify(args) }
+			tool: { behavior: {}, name, failed: false, ms: 20, args: JSON.stringify(args) }
 		});
 	rows.push({
 		...row(
@@ -144,7 +143,9 @@ const fixture = (preview = false) => {
 			});
 		const { reads } = Schema.decodeUnknownSync(QBody)(await request.json());
 		const read = reads[0];
-		if (read?.m === 'conversations') return Response.json({ answers: [{ rows: conversations }] });
+		// the open list holds every conversation; the archived read, none
+		if (read?.m === 'conversations')
+			return Response.json({ answers: [{ rows: read.a.length === 0 ? conversations : [] }] });
 		const id = read?.a[0];
 		if (id === conversation.id)
 			return Response.json({
@@ -266,7 +267,7 @@ const withComposer = async (
 								.element(page.getByRole('textbox', { name: 'Message', exact: true }))
 								.toBeVisible();
 							await expect
-								.poll(() => target.querySelectorAll('[data-step][data-tool="subagent"]').length)
+								.poll(() => target.querySelectorAll('[data-step][data-tool^="subagent"]').length)
 								.toBe(10);
 							await document.fonts.ready;
 							await settleMotion(target);
@@ -434,8 +435,6 @@ it('Preview opens as a separate panel, Session stays separate, and Escape restor
 	await withComposer(
 		false,
 		async (target) => {
-			expect(target.querySelector('[data-goals] [data-goal="doing"]')).not.toBeNull();
-			expect(target.querySelector('[data-goals] [role="status"]')).toBeNull();
 			await page.getByRole('button', { name: 'New preview', exact: true }).click();
 			await expect
 				.element(page.getByRole('complementary', { name: 'Preview', exact: true }))

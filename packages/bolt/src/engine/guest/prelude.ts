@@ -365,12 +365,14 @@ const failure = (e) => {
 
 function start(kind, path, inputJson, ctxJson, invocation_id) {
 	const ns = G.__boltGuest; delete G.__boltGuest;
-	let body = ns && ns.default;
-	for (const p of path) body = isObject(body) && Object.hasOwn(body, p) ? body[p] : undefined;
-	if (typeof body !== 'function') { state = ['missing', path.join('.')]; return; }
+	const bodyAt = (at) => {
+		let body = ns && ns.default;
+		for (const p of at) body = isObject(body) && Object.hasOwn(body, p) ? body[p] : undefined;
+		return body;
+	};
 	const input = JSON.parse(inputJson);
 	let ctx;
-	if (['create', 'update', 'delete', 'policy', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'page'].includes(kind)) {
+	if (['create', 'update', 'delete', 'policy', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'webhook', 'page'].includes(kind)) {
 		const raw = JSON.parse(ctxJson);
 		Object.defineProperty(G, Symbol.for('norbital.bolt.secrets'), { value: Object.freeze(raw.$secrets ?? {}), configurable: true });
 		delete raw.$secrets;
@@ -378,21 +380,34 @@ function start(kind, path, inputJson, ctxJson, invocation_id) {
 			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocation_id }
 			: { ...raw, invocation_id }, Symbol.for('norbital.bolt.ctx'), { value: kind });
 	}
-	const args = kind === 'tool' || kind === 'integration'
-		? (Array.isArray(input) ? input : [input]).map((a) => isObject(a) && a.$ctx === true ? ctx : a)
-		: ctx === undefined ? [input] : [input, ctx];
-	const invoke = () => {
+	// pure bodies run once per element of one invocation's batch: a rerank over the candidate page (input [query, rows],
+	// one score per row); a validation over every value of its kind (one message or undefined each); an index's vector
+	// over a chunk of rows (one vector or null each).
+	const run = (body, input) => {
+		if (kind === 'rerank') return input[1].map((row) => body(input[0], row));
+		if (kind === 'validation' || kind === 'vector') return input.map((v) => body(v));
+		const args = kind === 'tool' || kind === 'integration' || kind === 'webhook'
+			? (Array.isArray(input) ? input : [input]).map((a) => isObject(a) && a.$ctx === true ? ctx : a)
+			: ctx === undefined ? [input] : [input, ctx];
 		const prepare = body[Symbol.for('norbital.bolt.prepare')];
 		const prepared = typeof prepare === 'function' ? prepare(args) : args;
 		if (!Array.isArray(prepared)) throw new TypeError('a declaration body returned invalid invocation arguments');
 		return body(...prepared);
 	};
-	// pure bodies run once per element of one invocation's batch: a rerank over the candidate page (input [query, rows],
-	// one score per row); a validation over every value of its kind (one message or undefined each); an index's vector
-	// over a chunk of rows (one vector or null each).
-	Promise.resolve().then(() => kind === 'rerank' ? input[1].map((row) => body(input[0], row)) : kind === 'validation' || kind === 'vector' ? input.map((v) => body(v)) : invoke()).then(
-		(v) => { state = ['ok', JSON.stringify(v === undefined ? null : v)]; },
-		(e) => { state = failure(e); });
+	const ended = (body, input) => Promise.resolve().then(() => run(body, input)).then(
+		(v) => ['ok', JSON.stringify(v === undefined ? null : v)],
+		failure);
+	// an empty path starts several bodies of the kind together ([path, input] each): one end state each, in order
+	if (path.length === 0) {
+		Promise.all(input.map(([at, x]) => {
+			const body = bodyAt(at);
+			return typeof body === 'function' ? ended(body, x) : ['missing', at.join('.')];
+		})).then((states) => { state = ['ok', JSON.stringify(states)]; });
+		return;
+	}
+	const body = bodyAt(path);
+	if (typeof body !== 'function') { state = ['missing', path.join('.')]; return; }
+	ended(body, input).then((end) => { state = end; });
 }
 /**
  * After a drain: the body's end state (a call still queued then is unawaited), and the calls that cross now. With

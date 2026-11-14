@@ -24,14 +24,8 @@ import { Captured, capturedFields } from '../engine/db/captured.ts';
 import { relations, type EngineManifest } from '../engine/manifest.ts';
 import { catalog_of } from '../engine/access/pred.ts';
 import { bindingsAt } from '../engine/query/reader.ts';
-import {
-	Conflict,
-	Fenced,
-	IdentityRefusal,
-	Interrupted,
-	type DbError,
-	type EngineError
-} from '../engine/errors.ts';
+import { type DbError, Fenced, OAUTH_CALLBACK, uuidv7_within } from '@norbital-ai/host-api';
+import { Conflict, IdentityRefusal, Interrupted, type EngineError } from '../engine/errors.ts';
 import { BoltError, CODE } from './errors.ts';
 import {
 	addressBucket,
@@ -58,7 +52,8 @@ import { previewPdf } from '../engine/facilities.ts';
 import { lower_read, readableBy, viewGet } from '../engine/query/engine.ts';
 import { readsAny } from '../engine/access/authority.ts';
 import { client_contract } from '../engine/access/operation-outputs.ts';
-import { delete_verdict, record_capabilities, transformBridge } from '../engine/write/act.ts';
+import { delete_verdict, transformBridge } from '../engine/write/act.ts';
+import { record_capabilities } from '../engine/capabilities/record.ts';
 import { restorePreview, restoreRecord } from '../engine/write/restore.ts';
 import { subscribe } from '../engine/runs/push.ts';
 import { visible_run_names } from '../engine/runs/rows.ts';
@@ -69,7 +64,6 @@ import { TenantDb } from '../engine/db/tenant-db.ts';
 import {
 	Manifest,
 	Reads,
-	Writes,
 	Callables,
 	Automations,
 	Approvals,
@@ -100,10 +94,9 @@ import {
 	RATE_LIMITED,
 	redact,
 	status_of,
-	uuidv7_within,
 	wire_error
 } from './wire.ts';
-import { HOOKS, OAUTH_CALLBACK } from '../engine/integrations/links.ts';
+import { HOOKS } from '../engine/integrations/links.ts';
 import { sseResponse } from './sse.ts';
 
 export class SessionAuthority extends Context.Service<
@@ -535,8 +528,8 @@ export const dispatch_act = Effect.fn('protocol.dispatchAct')(function* (
 			const previewed = yield* restorePreview(yield* probe, decoded.input, authority, b);
 			outcome = previewed.ok ? committed(previewed.preview) : previewed.outcome;
 		} else if (decoded.callable === 'history.restore') {
-			const writes = yield* Writes;
-			const restored = yield* restoreRecord(yield* probe, writes.act, decoded.input, {
+			const callables = yield* Callables;
+			const restored = yield* restoreRecord(yield* probe, callables.acts, decoded.input, {
 				...call,
 				...(admitted === undefined ? {} : { rate: [...(call.rate ?? []), ...admitted.charges] }),
 				authority,
@@ -602,11 +595,18 @@ export const dispatch_act = Effect.fn('protocol.dispatchAct')(function* (
 		invocationId: yield* uuid(yield* Crypto.Crypto)
 	};
 	if (callable._tag === 'Verb')
-		return yield* (yield* Writes).act({
+		return yield* (yield* Callables).acts({
 			...context,
-			model: callable.model,
-			verb: callable.verb,
-			mode: { _tag: 'Direct' }
+			from: 'Client',
+			name: call.callable,
+			acts: [
+				{
+					model: callable.model,
+					verb: callable.verb,
+					input: call.input,
+					...(call.observed === undefined ? {} : { observed: call.observed })
+				}
+			]
 		});
 	return yield* Effect.fail(
 		BoltError.make('unknown_callable', 'decode', `there is no callable '${call.callable}'`)
@@ -656,9 +656,14 @@ const lower = Effect.fn('protocol.lower_read')(function* (
 		if (authority.actor.kind !== 'member' || (read.m === 'inbox' && authority.actor.external))
 			return yield* Effect.fail(
 				forbidden('Not available to this member.'));
-		if (read.m === 'conversations')
-			return { kind: 'conversations', model: 'sys_conversation', member: authority.actor.id };
 		const options = read.a[0];
+		if (read.m === 'conversations')
+			return {
+				kind: 'conversations',
+				model: 'sys_conversation',
+				member: authority.actor.id,
+				...(Schema.is(JsonObject)(options) && options['archived'] === true ? { archived: true } : {})
+			};
 		return {
 			kind: 'inbox',
 			model: 'sys_notification',

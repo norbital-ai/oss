@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
-import { document_ingester } from '../src/engine/convert.ts';
+import { document_ingester } from '@norbital-ai/host-api';
 
 const result = {
 	kind: 'document',

@@ -1,24 +1,26 @@
 /// <reference types="node" />
-// The kernel ports of a same-graph host (bolt-server, `bolt dev`, the test kit): every Node dependency the engine had,
+// The kernel ports of a same-graph host (`bolt dev`, the test kit): every Node dependency the engine had,
 // served from this process. A kernel hosting cells serves its own, reusing these pieces.
+import { fileURLToPath } from 'node:url';
 import { Effect } from 'effect';
 import type {
 	ArtifactPort,
-	DocsPort,
+	HostTenantDb,
 	HttpPort,
 	ImagesPort,
 	KeysPort,
 	McpPort
-} from '../engine/contracts.ts';
+} from '@norbital-ai/host-api';
 import type { TenantDbShape } from '../engine/db/tenant-db.ts';
-import type { HostTenantDb } from '../protocol/host-api.ts';
-import { artifact_port } from './artifact.ts';
-import { docs_port } from './docs.ts';
-import { tenant_db_port } from './db/port.ts';
-import { images_port } from './images.ts';
-import { keys_port } from './keys.ts';
-import { mcp_port } from './mcp.ts';
-import { http_port } from './net.ts';
+import {
+	artifact_port,
+	http_port,
+	images_port,
+	keys_port,
+	mcp_port,
+	tenant_db_port
+} from '@norbital-ai/host-api/node';
+import { DOCS_DIR } from './docs.ts';
 
 type NodePortsOptions = {
 	/** The release directory; its seed packs are `../seed/<pack>`. Without one there is no artifact port. */
@@ -35,19 +37,17 @@ export type NodePorts = {
 	readonly http: HttpPort;
 	readonly images: ImagesPort;
 	readonly mcp: McpPort;
-	readonly docs: DocsPort;
 };
 
 /** The ports, alive until the scope closes: MCP sessions end with it. */
 export const node_ports = Effect.fn('node.ports')(function* (options: NodePortsOptions = {}) {
 	const ports: NodePorts = {
-		...(options.release === undefined ? {} : { artifact: artifact_port(options.release) }),
+		...(options.release === undefined ? {} : { artifact: artifact_port(options.release, fileURLToPath(DOCS_DIR)) }),
 		...(options.secrets_key === undefined ? {} : { keys: keys_port(options.secrets_key) }),
 		...(options.database === undefined ? {} : { database: tenant_db_port(options.database) }),
 		http: http_port,
 		images: images_port,
-		mcp: yield* mcp_port,
-		docs: docs_port()
+		mcp: yield* mcp_port
 	};
 	return ports;
 });

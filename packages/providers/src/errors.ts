@@ -2,8 +2,7 @@
 // the driver ABI in the shape the engine reads: a refusal as the engine's `SendRefused`, any other as itself (an
 // `Error` named by its tag).
 import { Schema } from 'effect';
-import type { Fenced } from '@norbital-ai/bolt/engine';
-import type { FacilityFailure } from '@norbital-ai/bolt/errors';
+import type { FacilityFailure, Fenced } from '@norbital-ai/host-api';
 
 /**
  * The provider's API refused: `permanent` (a 4xx other than 429) fails a send at once, otherwise bolt retries it.

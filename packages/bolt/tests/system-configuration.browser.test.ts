@@ -8,7 +8,7 @@ import ConfigurationTab from './support/configuration-tab.svelte';
 import type { Settings } from '../src/shell/settings/data.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { SystemUiIntent } from '../src/protocol/system-ui.ts';
-import type { InstanceStatus } from '../src/protocol/instance-status.ts';
+import type { InstanceStatus } from '@norbital-ai/host-api';
 import type { ReadCatalog } from '../src/protocol/read-answer.ts';
 import type { ShellBoot } from '../src/shell/nav.ts';
 import { shell_api, shell_bolt } from '../src/shell/runtime.ts';

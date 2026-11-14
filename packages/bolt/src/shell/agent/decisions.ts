@@ -1,6 +1,6 @@
 import { Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
-import type { LogRow } from '../../engine/contracts.ts';
+import type { LogRow } from '@norbital-ai/host-api';
 
 /** One `decision.made` event's attributes as the decision matrix reads them (`decisionEvent`); a missing answer is a dash. */
 const DecisionAnswer = Schema.Struct({

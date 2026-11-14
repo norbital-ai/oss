@@ -1,7 +1,7 @@
 // Native compiled model metadata. The authoring module imports only its types; executable codecs stay off the guest edge.
-import { Predicate, Record as EffectRecord, Schema } from 'effect';
+import { Predicate, Record as EffectRecord, Result, Schema } from 'effect';
 import { FieldData } from './field-data.ts';
-import { ExprSchema, COMPUTED_KINDS } from '@norbital-ai/store';
+import { ExprSchema, COMPUTED_KINDS, computed_expr } from '@norbital-ai/store';
 import { column_layers, LAYER_MAX_DEPTH, type ExposureSpec, type ModelParts, type ModelSpec, type ReadLayers, type SearchIndexSpec, type SyncEntry } from './model.ts';
 import type { RelationshipSpec } from './names.ts';
 
@@ -27,7 +27,7 @@ const ModelMetadata = {
 	 * An own-field label is a generated `bolt_record_label` column in the row's text search document, recomputed on
 	 * every write; changing the expression migrates existing rows. One-hop ref fields resolve at read time from the
 	 * selected output under its grants, unstored; a hidden dependency shows the id. Use conditionals for optional values
-	 * (`record.name != null ? record.name : 'Unnamed'`) and `string(...)` for numbers; clocks and `requestor` are excluded.
+	 * (`record.name != null ? record.name : 'Unnamed'`) and `string(...)` for numbers; clocks and `actor` are excluded.
 	 * Omitted, records show their id, and record search needs a `text` index.
 	 * @example
 	 * record_label: "record.code + ' · ' + record.name"
@@ -107,7 +107,7 @@ export const ConstraintData = /* @__PURE__ */ (() => {
 export const RelationshipData = Schema.Struct({
 	to: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
 	inverse: Schema.optionalKey(Schema.String), optional: ModelMarker,
-	default: Schema.optionalKey(Schema.Struct({ var: Schema.Literals(['requestor.id', 'requestor.party']) })),
+	default: Schema.optionalKey(Schema.Struct({ var: Schema.Literals(['actor.id', 'actor.party']) })),
 	on_delete: Schema.optionalKey(Schema.Literals(['restrict', 'cascade', 'set_null'])),
 	owned: ModelMarker, where: Schema.optionalKey(Schema.JsonObject)
 });
@@ -129,23 +129,24 @@ const SourceModelData = Schema.Struct({
 	...ModelMetadata,
 	fields: Schema.Record(Schema.String, Schema.Union([
 		FieldData,
-		Schema.Struct({ kind: Schema.Literals(COMPUTED_KINDS), computed: ExprSchema, scale: Schema.optionalKey(Schema.Number) })
+		Schema.Struct({ kind: Schema.Literals(COMPUTED_KINDS), computed: Schema.String, scale: Schema.optionalKey(Schema.Number) })
 	])),
 	constraints: Schema.optionalKey(ConstraintData),
 	indexes: Schema.optionalKey(Schema.Record(Schema.String, SourceIndexData)),
 	outputs: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({ default: Schema.Unknown }), [
 		Schema.Record(Schema.String, Schema.Unknown)
 	])),
-	create: Schema.optionalKey(Schema.Struct({
-		columns: Schema.Unknown, filled: Schema.optionalKey(Schema.Unknown),
+	create: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
+		filled: Schema.optionalKey(Schema.Unknown),
 		transform: Schema.optionalKey(Schema.Unknown), effect: Schema.optionalKey(Schema.Unknown)
-	})),
-	update: Schema.optionalKey(Schema.Struct({
-		columns: Schema.Unknown, transform: Schema.optionalKey(Schema.Unknown), effect: Schema.optionalKey(Schema.Unknown)
-	})),
+	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	update: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
+		transform: Schema.optionalKey(Schema.Unknown), effect: Schema.optionalKey(Schema.Unknown)
+	}), [Schema.Record(Schema.String, Schema.Unknown)])),
 	delete: Schema.optionalKey(Schema.Struct({
 		transform: Schema.optionalKey(Schema.Unknown), effect: Schema.optionalKey(Schema.Unknown)
 	})),
+	/** Each `+<sync>.sync.ts` beside the model, merged in by the compiler (`with_syncs`). */
 	syncs: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({
 		with: Schema.String,
 		parser: Schema.optionalKey(Schema.Array(Schema.Union([
@@ -193,11 +194,13 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 	const own: Record<string, ModelSpec['fields'][string]> = {};
 	const computed: Record<string, NonNullable<ModelSpec['computed']>[string]> = {};
 	const relationships: { [key: string]: RelationshipSpec } = {};
+	const text_field = (field: string) => ['text', 'enum', 'state', 'currency'].includes(fields[field]?.kind ?? '');
 	for (const [field, kind] of Object.entries(fields)) {
 		if ('computed' in kind)
 			computed[field] = {
 				kind: kind.kind,
-				expr: kind.computed,
+				expr: Result.getOrThrowWith(Result.try(() => computed_expr(kind.computed, text_field)), (error) =>
+					new Error(`model '${name}': field '${field}': ${error instanceof Error ? error.message : String(error)}`)),
 				...(kind.scale === undefined ? {} : { scale: kind.scale })
 			};
 		else if (kind.kind !== 'ref') own[field] = kind;
@@ -294,7 +297,10 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 					}
 				})
 	};
-	if (outputs === undefined) return { model: stored, relationships };
+	if (outputs === undefined) {
+		if (syncs !== undefined) throw new Error(`${name}: a sync exchanges an exposed model's rows; declare outputs.default`);
+		return { model: stored, relationships };
+	}
 	const { default: defaultOutput, ...named } = outputs;
 	const layersOf = (output: unknown): ReadLayers => {
 		const layers: Record<string, { fields: 'all' | readonly string[] }> = {};
@@ -317,7 +323,7 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 			? {}
 			: {
 					create: {
-						columns: column_layers(name, create.columns),
+						columns: column_layers(name, create, ['filled', 'transform', 'effect']),
 						...(create.filled === undefined ? {} : { filled: column_layers(name, create.filled) }),
 						...(create.transform === undefined ? {} : { transform: true }),
 						...(create.effect === undefined ? {} : { effect: true }),
@@ -327,7 +333,7 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 			? {}
 			: {
 					update: {
-						columns: column_layers(name, update.columns),
+						columns: column_layers(name, update, ['transform', 'effect']),
 						...(update.transform === undefined ? {} : { transform: true }),
 						...(update.effect === undefined ? {} : { effect: true })
 					}

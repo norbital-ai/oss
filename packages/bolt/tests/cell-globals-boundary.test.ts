@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
-import type { Kernel } from '../src/protocol/cell.ts';
+import type { Kernel } from '@norbital-ai/host-api';
 
 // The cell bundle a host loads into a bare isolate; opening it attaches the cell globals over the kernel.
 const bundle = readFileSync(new URL('../build/cell.js', import.meta.url), 'utf8');

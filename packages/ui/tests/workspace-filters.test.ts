@@ -1,140 +1,23 @@
 import { describe, expect, it } from '@effect/vitest';
-import {
-	filterBuilds,
-	filterMembers,
-	newestReleases,
-	release_window
-} from '../src/workspaces/filters.js';
+import { memberStatus, newestReleases, release_window } from '../src/workspaces/filters.js';
 
 const now = '2026-10-26T00:10:00.000Z';
-const members = [
-	{
-		id: 'ada-id',
-		name: 'Ada Lovelace',
-		email: 'ada@example.com',
-		active: true,
-		last_seen: '2026-10-26T00:05:00.001Z'
-	},
-	{
-		id: 'boundary',
-		name: 'Boundary',
-		email: null,
-		active: true,
-		last_seen: '2026-10-26T00:05:00.000Z'
-	},
-	{
-		id: 'quiet',
-		name: 'Quiet',
-		email: 'quiet@example.com',
-		active: true,
-		last_seen: '2026-10-25T00:00:00.000Z'
-	},
-	{ id: 'unknown', name: 'Unknown', email: null, active: true, last_seen: null },
-	{
-		id: 'disabled',
-		name: 'Disabled',
-		email: 'disabled@example.com',
-		active: false,
-		last_seen: '2026-10-26T00:09:00.000Z'
-	}
-] satisfies Parameters<typeof filterMembers>[0];
-const memberIds = (status: string, search = '') =>
-	filterMembers(members, search, status, now).map((member) => member.id);
-
-describe('workspace member filters', () => {
-	it('uses the five-minute boundary and excludes disabled users from activity filters', () => {
-		expect(memberIds('recent')).toEqual(['ada-id']);
-		expect(memberIds('offline')).toEqual(['boundary', 'quiet']);
-		expect(memberIds('enabled')).toEqual(['ada-id', 'boundary', 'quiet', 'unknown']);
-		expect(memberIds('disabled')).toEqual(['disabled']);
-		expect(memberIds('unknown')).toEqual(['unknown']);
-	});
-	it('searches names, email addresses and IDs case-insensitively with trimmed input', () => {
-		expect(memberIds('all', '  LOVELACE ')).toEqual(['ada-id']);
-		expect(memberIds('all', ' ADA@EXAMPLE.COM ')).toEqual(['ada-id']);
-		expect(memberIds('all', ' ADA-ID ')).toEqual(['ada-id']);
-		expect(memberIds('disabled', 'lovelace')).toEqual([]);
-		expect(memberIds('all', 'null')).toEqual([]);
-	});
-	it('preserves unknown timestamps and handles empty results without mutating input', () => {
-		const invalid = {
-			...members[0],
-			id: 'invalid',
-			name: 'Invalid',
-			email: null,
-			active: true,
-			last_seen: 'invalid'
-		};
-		expect(filterMembers([invalid], '', 'unknown', now)).toEqual([invalid]);
-		expect(filterMembers([invalid], '', 'offline', now)).toEqual([]);
-		expect(filterMembers([], '', 'all', now)).toEqual([]);
-		const answer = filterMembers(members, ' ', 'all', now);
-		expect(answer).toEqual(members);
-		expect(answer).not.toBe(members);
-		expect(members.map((member) => member.id)).toEqual([
-			'ada-id',
-			'boundary',
-			'quiet',
-			'unknown',
-			'disabled'
-		]);
-	});
+const member = (id: string, active: boolean, last_seen: string | null) => ({
+	id,
+	name: id,
+	email: null,
+	active,
+	last_seen
 });
 
-const builds = [
-	{
-		commit: 'aaa111',
-		at: '2026-10-26T00:10:00Z',
-		status: 'failed',
-		message: 'Broken migration',
-		deployed: false,
-		live: false,
-		lines: 3,
-		diagnostics: 1
-	},
-	{
-		commit: 'bbb222',
-		at: '2026-10-26T00:09:00Z',
-		status: 'built',
-		message: 'Current release',
-		deployed: true,
-		live: true,
-		lines: 1,
-		diagnostics: 0
-	},
-	{
-		commit: 'ccc333',
-		at: '2026-10-25T00:08:00Z',
-		status: 'built',
-		message: 'Earlier build',
-		deployed: false,
-		live: false,
-		lines: 1,
-		diagnostics: 0
-	}
-] satisfies Parameters<typeof filterBuilds>[0];
-const buildCommits = (status: string, search = '') =>
-	filterBuilds(builds, search, status).map((build) => build.commit);
-
-describe('workspace build filters', () => {
-	it('keeps live separate from successful builds', () => {
-		expect(buildCommits('live')).toEqual(['bbb222']);
-		expect(buildCommits('built')).toEqual(['bbb222', 'ccc333']);
-		expect(buildCommits('failed')).toEqual(['aaa111']);
-	});
-	it('searches commit, timestamp and message together with status', () => {
-		expect(buildCommits('all', ' BBB222 ')).toEqual(['bbb222']);
-		expect(buildCommits('all', '2026-10-25')).toEqual(['ccc333']);
-		expect(buildCommits('failed', '  MIGRATION ')).toEqual(['aaa111']);
-		expect(buildCommits('built', 'migration')).toEqual([]);
-	});
-	it('preserves backend order and input for all or empty matches', () => {
-		const answer = filterBuilds(builds, ' ', 'all');
-		expect(answer).toEqual(builds);
-		expect(answer).not.toBe(builds);
-		expect(buildCommits('all')).toEqual(['aaa111', 'bbb222', 'ccc333']);
-		expect(filterBuilds([], '', 'all')).toEqual([]);
-		expect(filterBuilds(builds, 'missing', 'all')).toEqual([]);
+describe('workspace member status', () => {
+	it('uses the five-minute boundary; a disabled member is disabled whatever its activity', () => {
+		expect(memberStatus(member('ada', true, '2026-10-26T00:05:00.001Z'), now)).toBe('recent');
+		expect(memberStatus(member('boundary', true, '2026-10-26T00:05:00.000Z'), now)).toBe('offline');
+		expect(memberStatus(member('quiet', true, '2026-10-25T00:00:00.000Z'), now)).toBe('offline');
+		expect(memberStatus(member('none', true, null), now)).toBe('unknown');
+		expect(memberStatus(member('invalid', true, 'invalid'), now)).toBe('unknown');
+		expect(memberStatus(member('off', false, '2026-10-26T00:09:00.000Z'), now)).toBe('disabled');
 	});
 });
 

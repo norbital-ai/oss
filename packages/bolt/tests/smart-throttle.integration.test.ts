@@ -20,12 +20,11 @@ import {
 	Stream
 } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { type DecisionRequest, type DecisionResult, Port } from '@norbital-ai/host-api';
 import { Agents } from '../src/engine/services.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
 import { HOLD_MAX_MS, SmartThrottle, TAKEOVER_MS } from '../src/engine/agent/throttle.ts';
-import type { DecisionResult, System1Request } from '../src/engine/decision.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
 const runtime_accounts = [
@@ -134,7 +133,7 @@ type Seen = {
 	asked: readonly string[];
 	exchange?: { talkingWith: string; assistantLastMessage: string };
 };
-const seen = (r: System1Request): Seen => {
+const seen = (r: DecisionRequest): Seen => {
 	const st = Schema.decodeUnknownSync(
 		Schema.Struct({
 			directive: Schema.String,

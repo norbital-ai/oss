@@ -4,7 +4,7 @@
 	import { Button, Combobox, Icon, Input, MarkdownEditor, Popover, type CommandItem, type ModelExposure } from '@norbital-ai/ui';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
-	import type { AiModel } from '../../engine/contracts.ts';
+	import type { AiModel } from '@norbital-ai/host-api';
 	import type { ManifestItem } from '../finder/manifest.ts';
 	import type { NavNode } from '../nav.ts';
 	import type { AgentDraft } from './drafts.ts';

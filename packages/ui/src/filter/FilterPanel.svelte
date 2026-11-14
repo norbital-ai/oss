@@ -11,7 +11,7 @@
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { cn } from '../primitives/utils.js';
 	import type { Json } from '../client/contract.js';
-	import { bolt_of } from '../client/context.js';
+	import { bolt_of, optional_bolt_of, words_of } from '../client/context.js';
 	import { fromWhere } from './where.js';
 	import { nodeParts, pathLabel, sortText, type Part } from './text.js';
 	import { ORDER_MAX_KEYS, type SortKey } from './order.js';
@@ -63,9 +63,9 @@
 		readonly?: boolean;
 		variables?: FilterVariables;
 	} = $props();
-	const bolt = $derived(bolt_of(ctx));
+	const bolt = $derived(words_of(ctx));
 	const kinds = $derived(ctx.ui.kinds);
-	const named = record_labels(() => bolt, () => kinds.catalog ?? catalog);
+	const named = record_labels(() => bolt_of(ctx), () => kinds.catalog ?? catalog);
 	let text = $state(''),
 		busy = $state(false),
 		applied = $state(false),
@@ -78,7 +78,7 @@
 	);
 	const blank: FilterRow = { t: 'cond', path: '', op: 'eq', arg: null };
 	// the badge counts what applies: an incomplete row (a field, no value yet) is not sent
-	const describes = $derived(bolt.describe !== undefined);
+	const describes = $derived(optional_bolt_of(ctx)?.describe !== undefined);
 	/** The catalogue's words for an operator on a path (the fallback is the machine operator). */
 	const opWords = (op: string, path: string) =>
 		view.offers.find((o) => o.op === op && pathOf(o.path).endsWith(path))?.opLabel ?? op;

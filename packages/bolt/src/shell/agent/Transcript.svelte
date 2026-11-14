@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { Effect, Stream } from 'effect';
 	import { observe as liveEdge } from '@norbital-ai/ui/effect';
-	import { Button, Icon, ReadonlyMarkdown, Spinner, StructuredData, virtual_list, type UiContext } from '@norbital-ai/ui';
+	import { Button, Icon, ReadonlyMarkdown, StructuredData, virtual_list, type UiContext } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { watch } from 'runed';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
-	import type { LogRow } from '../../engine/contracts.ts';
+	import type { LogRow } from '@norbital-ai/host-api';
 	import type { ShellApi } from '../api-types.ts';
 	import { everySecond } from '../seconds.ts';
 	import { based } from '../nav.ts';
@@ -22,7 +22,7 @@
 	import { decision_of, type Decided } from './decisions.ts';
 	import { AgentPanelFailed, refused } from './actions.ts';
 	import { checkpointSections, contextView, doingOf, failedVerbs, modelDividers, revisable, waiting_question } from './view.ts';
-	let { ctx, api, t, zone, admin, conversation, rows, status, sent, thread, automation, goals, plan, before,
+	let { ctx, api, t, zone, admin, conversation, rows, status, sent, thread, automation, plan, before,
 		loading_older, load_older, port = $bindable(null), pinned = $bindable(true), latest,
 		load_failed, on_retry, decision_frame, dispatch, on_error, file_href, model_label,
 		on_revise, revision_pending, on_restart, restart }: {
@@ -37,7 +37,6 @@
 		sent: string | null;
 		thread: boolean;
 		automation: boolean;
-		goals: AgentConversation['goals'] | undefined;
 		plan: AgentConversation['plan'] | undefined;
 		before: number | null;
 		loading_older: boolean;
@@ -856,48 +855,6 @@
 							<li class="text-xs text-muted-foreground" data-role="thinking" data-thinking>
 								<span class="agent-shimmer">{t('Working…')}</span>
 								<span class="tabular-nums">{thinking}s</span>
-							</li>
-						{/if}
-						{#if goals?.length}
-							<!-- the goals: one checklist under the latest message, each step's state at a glance; collapsible -->
-							<li data-goals>
-								<details class="group/goals rounded-xl border border-border/70 px-4 py-3" open>
-									<summary
-										class="flex cursor-pointer list-none items-center gap-2 text-xs text-muted-foreground focus-visible:ring-ring/40 rounded focus-visible:ring-2 focus-visible:outline-none [&::-webkit-details-marker]:hidden"
-									>
-										<Icon
-											name="lucide:chevron-right"
-											class="size-3.5 shrink-0 transition-transform group-open/goals:rotate-90"
-										/>
-										<span class="font-medium">{t('Goals')}</span>
-										<span class="tabular-nums"
-											>{goals.filter((g) => g.status === 'done').length}/{goals
-												.length}</span
-										>
-									</summary>
-									<ol class="mt-2 grid gap-1.5" aria-label={t('Goal steps')}>
-										{#each goals as g (g.id)}
-											<li class="flex min-w-0 items-start gap-2" data-goal={g.status}>
-												{#if g.status === 'done'}<Icon
-														name="lucide:circle-check"
-														class="mt-1 size-4 shrink-0 text-muted-foreground"
-													/>
-												{:else if g.status === 'doing' && status === 'running'}<Spinner
-														class="mt-1 size-4 shrink-0"
-														label={t('In progress')}
-													/>
-												{:else}<Icon
-														name="lucide:circle-dashed"
-														class="mt-1 size-4 shrink-0 text-muted-foreground"
-													/>{/if}
-												<span
-													class="min-w-0 {g.status === 'pending' ? 'text-muted-foreground' : ''}"
-													>{g.text}</span
-												>
-											</li>
-										{/each}
-									</ol>
-								</details>
 							</li>
 						{/if}
 					</ol>

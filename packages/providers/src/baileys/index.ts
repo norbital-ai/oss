@@ -20,13 +20,8 @@ import {
 	Predicate,
 	Stream
 } from 'effect';
-import type {
-	DriverEvent,
-	DriverOpen,
-	Json,
-	LinkStatus,
-	OutboundAttachment
-} from '@norbital-ai/bolt/engine';
+import type { DriverEvent, DriverOpen, LinkStatus, OutboundAttachment } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import { createHash } from 'node:crypto';
 import type { GroupMetadata } from '@whiskeysockets/baileys';
 import { FirstSyncs, ProviderRuntime, type ProviderDef } from '../abi.ts';
@@ -701,12 +696,13 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			const phone = sender?.endsWith('@lid') ? yield* resolvePhone(got.socket, sender) : sender;
 			const media = yield* hostCall('read WhatsApp media', () => got.media(raw, live));
 			if (found['text'] === '' && media === null) return null;
+			const from = found['from'];
 			const message = yield* Schema.decodeUnknownEffect(InboundMessage)({
 				...found,
 				source_at: found['sent_at'],
-				...(phone?.endsWith('@s.whatsapp.net') && Predicate.isObject(found['from'])
+				...(phone?.endsWith('@s.whatsapp.net') && typeof from === 'object' && from !== null
 					? {
-							from: { ...found['from'], handle: phone },
+							from: { ...from, handle: phone },
 							...(found['group'] === true
 								? {}
 								: { thread: phone.replace(/:\d+(?=@s\.whatsapp\.net$)/, '') })

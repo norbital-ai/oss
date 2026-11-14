@@ -3,21 +3,21 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path } from 'effect';
 import { cpSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, expect } from 'vitest';
 import {
 	artifact_hash,
 	CONTRACT,
 	read_artifact,
-	tree_hash,
 	public_page_keys,
 	type ArtifactJson
 } from '../../bolt/src/engine/artifact/read.ts';
-import { Port } from '../../bolt/src/engine/port.ts';
+import { Port, tree_hash } from '@norbital-ai/host-api';
 import { read_lock, read_snapshot, sha256_hex, snapshot_of } from '@norbital-ai/store';
-import { artifact_port } from '../../bolt/src/node/artifact.ts';
+import { artifact_port, Pristine } from '@norbital-ai/host-api/node';
+import { DOCS_DIR } from '../../bolt/src/node/docs.ts';
 import { prepare_migrations } from '../src/compiler/migrations.ts';
 import { writeSource } from '../src/compiler/artifact/index.ts';
-import { Pristine } from '../../bolt/src/node/db/pglite.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { fingerprint, schema_slice } from '../../bolt/src/engine/schema/plan.ts';
 import { TestWorkspace } from '../src/test/index.ts';
@@ -264,7 +264,7 @@ it.live(
 				path.join(outside, 'page.mjs'),
 				path.join(fixture.dir, 'server', 'app', 'site', 'home.mjs')
 			);
-			const release = artifact_port(fixture.dir);
+			const release = artifact_port(fixture.dir, fileURLToPath(DOCS_DIR));
 			expect(
 				yield* Effect.flip(
 					Port.attempt('artifact', (signal) => release.read('server/app/site/home.mjs', signal))

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { Automations, Callables } from '../src/engine/services.ts';
+import { Callables } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
@@ -157,48 +157,4 @@ it.live('an invalid reference in a bulk start prevents every run from enqueueing
 			expect(yield* f.count).toBe(1);
 		})
 	)
-);
-
-it.live('a cached call returns its value without a queued run and expires by its declared lifetime', () =>
-	Effect.scoped(Effect.gen(function* () {
-		const context = yield* Layer.build(TestWorkspace.layer({
-			manifest: {
-				...manifest,
-				integrations: { crm: { description: 'Quote source', driver: 'http', http: { base_url: 'https://quotes.test' } } },
-				policies: { starter: { description: 'Calls quotes', grants: {}, capabilities: { automations: ['quote'] } } },
-				automations: { quote: {
-					description: 'Cached quote', mode: 'call', cache: '30s', policies: ['starter'],
-					input: { symbol: { kind: 'text' } }, output: { kind: 'int' }
-				} }
-			},
-			guest: yield* program(`export default { automation: { quote: { body: function* (input, ctx) {
-				return yield* ctx.request('crm', {method:'GET',path:'/quote',query:{symbol:input.symbol},output:{kind:'int'}});
-			} } } };`),
-			now: '2026-10-25T08:00:00.000Z',
-			seed: { sys_integration: [{ id: 'crm', integration: 'crm', name: 'Quotes' }] }
-		}));
-		const t = Context.get(context, TestWorkspace),
-			automations = Context.get(context, Automations),
-			calls = Context.get(context, Callables),
-			authority = (yield* t.as(t.member(['starter']))).authority;
-		let requests = 0;
-		t.fakes.links.answer = () => Effect.sync(() => ({ status: 200, body: ++requests }));
-		const call = (symbol: string) => automations.call({
-			automation: 'quote', input: { symbol }, authority,
-			bindings: { now: t.clock.now(), today: '2026-10-25', tz: 'UTC' }
-		}).pipe(Effect.provide(context));
-		expect(yield* call('SGD')).toMatchObject({ kind: 'committed', output: 1, records: [] });
-		expect(yield* call('SGD')).toMatchObject({ kind: 'committed', output: 1 });
-		expect(requests).toBe(1);
-		expect(yield* call('MYR')).toMatchObject({ kind: 'committed', output: 2 });
-		t.clock.advance('31s');
-		expect(yield* call('SGD')).toMatchObject({ kind: 'committed', output: 3 });
-		expect(yield* calls.start({
-			automation: 'quote', runs: [{ id: randomUUID(), input: { symbol: 'SGD' } }],
-			authority, bindings: { now: t.clock.now(), today: '2026-10-25', tz: 'UTC' }
-		})).toMatchObject({ kind: 'refused', code: 'invalid_input' });
-		expect(yield* t.db.value(Schema.Number, {
-			text: "SELECT count(*)::int FROM sys_run WHERE automation='quote'", params: []
-		})).toBe(0);
-	}))
 );

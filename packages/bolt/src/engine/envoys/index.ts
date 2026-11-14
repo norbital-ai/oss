@@ -12,7 +12,7 @@
 // compiles — a group's the envoy's policies alone, a linked member's DM theirs joined (`dm: 'union'`) or bound (`'envoy'`).
 import { sql } from '../db/sql.ts';
 import { Clock, Context, Effect, FiberSet, Layer, Schema } from 'effect';
-import type { HandleKind } from '../../decl/runtime/integration.ts';
+import { driver_name, type HandleKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { charges_for, RateWindows } from '../access/rate.ts';
 import { AGENT_LIMITS, AgentDrains, type As } from '../agent/index.ts';
@@ -242,7 +242,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 				proven: conv.kind !== 'email' || r.authenticated === 'true',
 				status: r.status,
 				handle: conv.handle,
-				label: def.driver,
+				label: driver_name(def),
 				sender: r.sender ?? '',
 				sender_name: r.sender_name,
 				text: r.text,

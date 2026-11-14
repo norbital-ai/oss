@@ -20,9 +20,20 @@ import {
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import * as Headers from 'effect/http/Headers';
-import { Unavailable } from '../decl/errors.ts';
-import type { Challenge } from '../facilities/index.ts';
-import { is_off, type Off } from '../facilities/off.ts';
+import {
+	AuditQuery,
+	type Challenge,
+	is_off,
+	type LogQuery,
+	type Off,
+	type ShellNotice,
+	type ShellPorts,
+	StudioInspectInput,
+	StudioOp,
+	studio_view,
+	Unavailable,
+	type WorkspaceLink
+} from '@norbital-ai/host-api';
 import {
 	Activation,
 	Agents,
@@ -58,7 +69,7 @@ import { sseResponse } from '../protocol/sse.ts';
 import type { Handler } from '../protocol/host.ts';
 import { requestKiosk, kioskAuthority, kioskBoot, KIOSK_PATH } from './public/kiosk.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
-import type { Authority, LogQuery } from '../engine/contracts.ts';
+import type { Authority } from '../engine/contracts.ts';
 import { type EngineError } from '../engine/errors.ts';
 import { BoltError, CODES, PHASES } from '../protocol/errors.ts';
 import { addressBucket, charges_for, macKey, type RateKind } from '../engine/access/rate.ts';
@@ -90,8 +101,6 @@ import { settings, SettingsOp, applySettings, teamName } from './settings/data.t
 import { exposure, read_catalog } from '../engine/access/exposure.ts';
 import { client_contract, operation_output_catalog } from '../engine/access/operation-outputs.ts';
 import { manifestItems } from './finder/manifest.ts';
-import { StudioOp, studio_view, type StudioPort } from './studio/model.ts';
-import { StudioInspectInput } from './studio/inspection.ts';
 import {
 	audience_of,
 	can_open,
@@ -110,13 +119,10 @@ import {
 	SHELL,
 	surfaces,
 	VISITOR_APP,
-	type ShellBoot,
-	type ShellNotice,
-	type WorkspaceLink
+	type ShellBoot
 } from './nav.ts';
 import { readLog, runLog } from '../engine/guest/telemetry.ts';
 import { Audit } from '../engine/audit.ts';
-import { AuditQuery } from '../protocol/audit.ts';
 import { audited, auditActor } from '../engine/audit-operation.ts';
 
 import { canonical } from '@norbital-ai/store';
@@ -169,33 +175,12 @@ export class Turnstile extends Context.Service<Turnstile, TurnstileShape>()('bol
 		);
 	}
 }
-export type ShellHostConfig = {
+/** The shell's host parts (`HostPorts.shell`), and what the release sets beside them. */
+export type ShellHostConfig = ShellPorts & {
 	readonly public_url: string;
-	/** Read on every request: the host may rename or rebrand the workspace while it serves. */
-	readonly workspace: () => {
-		readonly name: string;
-		readonly handle: string;
-		readonly icons?: readonly {
-			readonly src: string;
-			readonly sizes: string;
-			readonly type: string;
-		}[];
-	};
-	readonly push?: { readonly public_key: string };
-	readonly studio?: StudioPort;
 	readonly secure?: boolean;
-	readonly ai?: boolean;
-	readonly environment?: string;
 	/** The release's client hash (`ShellBoot.client`). */
 	readonly client?: string;
-	readonly notice?: (auth: Authority) => Promise<ShellNotice | null>;
-	readonly organization?: {
-		write(auth: Authority, branding: { logo: string | null }): Promise<void>;
-	};
-	readonly apex?: string;
-	/** Set when this shell serves a preview environment: the live workspace's address (the preview banner's link). */
-	readonly live?: string;
-	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
 };
 export class ShellConfig extends Context.Service<ShellConfig, ShellHostConfig>()(
 	'bolt/ShellConfig'
@@ -1324,7 +1309,7 @@ const makeShell = Effect.gen(function* () {
 						403
 					);
 				return sseResponse(
-					Stream.callback<import('./studio/model.ts').StudioFrame>((queue) =>
+					Stream.callback<import('@norbital-ai/host-api').StudioFrame>((queue) =>
 						Effect.acquireRelease(
 							Effect.sync(() => watch(auth, (frame) => Queue.offerUnsafe(queue, frame))),
 							(off) => Effect.sync(off)

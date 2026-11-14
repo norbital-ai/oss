@@ -1,9 +1,9 @@
 // Skill folders for file runs (P24's table): a CommonJS report with siblings and a vendored dayjs-like package, an ES
 // module with top-level await and an ES-module-only package, and what an author gets wrong.
 import { Effect } from 'effect';
-import { tree_digest } from '../../src/engine/artifact/read.ts';
+import { tree_digest } from '@norbital-ai/host-api';
 import type { Skill } from '../../src/engine/agent/tools.ts';
-import { Port } from '../../src/engine/port.ts';
+import { Port } from '@norbital-ai/host-api';
 
 const lines = (...text: readonly string[]) => `${text.join('\n')}\n`;
 export type Tree = { readonly [path: string]: string };

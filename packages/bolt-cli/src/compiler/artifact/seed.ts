@@ -8,10 +8,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build, type Rolldown } from 'vite';
-import type { Json, EngineManifest } from '@norbital-ai/bolt/engine';
+import type { Json } from 'effect/Schema';
+import type { EngineManifest } from '@norbital-ai/bolt/engine';
 import { decode_seed, type PackJson } from '@norbital-ai/bolt/engine';
 import { decode_identity, IDENTITY } from '@norbital-ai/bolt/tooling';
-import type { CheckDiagnostic } from '../check/index.ts';
+import type { CheckDiagnostic } from '@norbital-ai/host-api';
 import { asset_path } from '@norbital-ai/bolt/artifact';
 import { rowsIn, seedPack } from '../seed.ts';
 import { BOLT, EXT } from '../bolt.ts';
@@ -57,13 +58,7 @@ const seederOf = Effect.fn('bolt.seederOf')(function* (root: string, cache: stri
 				logLevel: 'silent',
 				root,
 				resolve: {
-					alias: [
-						{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX },
-						{
-							find: /^@norbital-ai\/bolt\/declarations$/,
-							replacement: join(BOLT, `declarations${EXT}`)
-						}
-					]
+					alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX }]
 				},
 				build: {
 					write: false,

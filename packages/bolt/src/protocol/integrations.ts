@@ -2,11 +2,11 @@ import { Context, Effect, Option, Schema, Stream } from 'effect';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import { BoltError } from './errors.ts';
-import { HOOKS, OAUTH_CALLBACK, type LinkManager } from '../engine/integrations/links.ts';
+import { HOOKS, type LinkManager } from '../engine/integrations/links.ts';
 import { requestBody, requestUrl, response_error, SessionAuthority } from './http.ts';
 import { sseResponse } from './sse.ts';
 import { INTEGRATION_LIST, INTEGRATIONS } from './wire.ts';
-import { ImportStartInput } from './schema.ts';
+import { ImportStartInput, OAUTH_CALLBACK } from '@norbital-ai/host-api';
 
 /** No manager is needed by hosts that offer no integration providers (the test kit). */
 export const IntegrationManager = Context.Reference<Option.Option<LinkManager>>(

@@ -13,10 +13,13 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 		ctx: UiContext;
 		/** The child rows as loaded (empty on create). */
 		rows: readonly Row[];
+		/** The child rows' editable columns. */
 		columns: readonly Col[];
 		/** A new child row's initial values. */
 		add: () => Row;
+		/** The fewest rows: a row is removable only above it (default 0). */
 		min?: number;
+		/** The most rows: a row is addable only below it (default unbounded). */
 		max?: number;
 		/** Each edit: the explicit relation ops for the parent's one act, and the rows as shown. */
 		on_change: (ops: RowsOps, current: readonly Row[]) => void;

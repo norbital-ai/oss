@@ -6,8 +6,9 @@ A setting's name does not say which side it belongs on: inspect the declaration 
 
 | Change | Home |
 | --- | --- |
-| Fields, enums, constraints, indexes, refs, layers, transforms, effects and syncs | the model's `+model.ts` |
-| A connection's driver, configuration shape, credentials shape, webhook verification, rate, `test` | `src/integration/<name>/+integration.ts` |
+| Fields, enums, constraints, indexes, refs, layers, transforms and effects | the model's `+model.ts` |
+| Syncs | `+<sync>.sync.ts` beside it |
+| A connection's driver, configuration shape, credentials shape, webhook verification and handler, rate, `test` | `src/integration/<name>/+integration.ts` |
 | A value the built-in kinds cannot express | `src/data/custom_field/<name>/` |
 | What a policy permits: outputs, apps, tools, MCP, limits | `src/access_control/policy/` |
 | Teams and policy links | `src/access_control/team/+team.ts` |

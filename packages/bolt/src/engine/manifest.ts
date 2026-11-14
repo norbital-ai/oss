@@ -5,6 +5,7 @@
 // without its zone is `ManifestInvalid`. The accessors derive, once per manifest, what interiors recomputed and cast.
 // Runtime codecs stay with their owners; `contracts.ts` imports their derived types.
 import { Predicate, Result, Schema } from 'effect';
+import { SkillSchema } from '@norbital-ai/host-api';
 import { FieldData, OutputData } from '../decl/field-data.ts';
 import type { TeamEntries, SourceTeam } from '../decl/access/team.ts';
 import type { FieldKind } from '../decl/fields.ts';
@@ -12,7 +13,7 @@ import { layer_models, column_layers } from '../decl/model.ts';
 import { ModelData, RelationshipData, SyncData, split_model } from '../decl/model-data.ts';
 import type { Role } from '../decl/layout.ts';
 import { AppData, GroupSpec } from '../decl/runtime/app.ts';
-import { CallCacheDuration, DeclaredDuration, TriggerSpec } from '../decl/runtime/automation.ts';
+import { DeclaredDuration, TriggerSpec } from '../decl/runtime/automation.ts';
 import { AutomationInputSchema } from '../decl/runtime/automation-input.ts';
 import { IntegrationSpec } from '../decl/runtime/integration.ts';
 import { SYSTEM } from '../system/index.ts';
@@ -59,6 +60,8 @@ const LimitData = Schema.Union([
 	Schema.Struct({ rate: Schema.String, per: Schema.Literals(['actor', 'ip', 'sender', 'subject']) })
 ]);
 export type LimitData = typeof LimitData.Type;
+/** A policy's rate limits (`workspace({ limits })`), by limit key. */
+const PolicyLimits = Schema.Record(Schema.String, Schema.Union([LimitData, Schema.Array(LimitData)]));
 /** A `+*.policy.ts` literal; its grants decode here once, and the access compiler reads them (`access/authority.ts`). */
 const PolicyData = Schema.Struct({
 	description: Schema.String,
@@ -71,9 +74,6 @@ const PolicyData = Schema.Struct({
 			mcp: Schema.optionalKey(Schema.Array(Schema.String)),
 			tools: Schema.optionalKey(Schema.Array(Schema.String))
 		})
-	),
-	limits: Schema.optionalKey(
-		Schema.Record(Schema.String, Schema.Union([LimitData, Schema.Array(LimitData)]))
 	)
 });
 const Marker = Schema.optionalKey(Schema.Literal(true));
@@ -135,7 +135,7 @@ const Signup = Schema.Struct({
 			})
 		})
 	),
-	challenge: Schema.optionalKey(Schema.Literal('turnstile'))
+	challenge: Schema.optionalKey(Schema.Literal(true))
 });
 /** Workspace capabilities with the separately declared secrets joined into the workspace. */
 const Workspace = Schema.Struct({
@@ -154,7 +154,9 @@ const Workspace = Schema.Struct({
 		Schema.Struct({ connect: Schema.optionalKey(Schema.Array(Schema.String)) })
 	),
 	agent: Schema.optionalKey(Schema.Struct({ triage: Schema.optionalKey(Schema.Literal(false)) })), // hook:triage
-	signup: Schema.optionalKey(Signup)
+	signup: Schema.optionalKey(Signup),
+	/** Rate limits by policy: what a caller holding that policy may send. */
+	limits: Schema.optionalKey(Schema.Record(Schema.String, PolicyLimits))
 });
 /** `+team.ts`: each handle owns one structured definition. */
 const Teams = Schema.Record(
@@ -165,21 +167,7 @@ const Teams = Schema.Record(
 		policies: Schema.Array(Schema.String)
 	})
 );
-/**
- * A skill ("Running a file"): a folder of `SKILL.md`, its scripts and the pure-JavaScript packages it
- * vendors, at most `SKILL_BYTES`. Its `SKILL.md` text, the digest of its tree (sha256 hex of the sorted
- * `<path>\0<sha256 hex>` lines, `\n`-joined) and its file paths, sorted; the bytes are the artifact's `skills/<name>/`.
- */
-export const SkillSchema = Schema.Struct({
-	text: Schema.String,
-	digest: Schema.String,
-	files: Schema.Array(Schema.String)
-});
 export type SkillSpec = typeof SkillSchema.Type;
-/** Most bytes one skill's folder may hold (10 MiB). */
-export const SKILL_BYTES = 10 * 1024 * 1024;
-/** The skill's text in its tree (in a workspace's source, the folder's `+skill.md`). */
-export const SKILL_FILE = 'SKILL.md';
 /** `+agent.md`, `+agent.external.md` (text) and the skills. */
 const Agent = Schema.Struct({
 	internal: Schema.optionalKey(Schema.String),
@@ -195,12 +183,11 @@ const AutomationBase = {
 	agent: Schema.optionalKey(Schema.Literals(['direct', 'confirm', 'never']))
 };
 const Absent = Schema.optionalKey(Schema.Never);
-/** A job may trigger, retry and queue; a call may cache and does none of those. */
+/** A job may trigger, retry and queue; a call (the page RPC) does none of those. */
 const AutomationData = Schema.Union([
 	Schema.Struct({
 		...AutomationBase,
 		mode: Schema.optionalKey(Schema.Literal('job')),
-		cache: Absent,
 		on: Schema.optionalKey(Schema.Array(TriggerSpec)),
 		retry: Schema.optionalKey(
 			Schema.Struct({
@@ -215,7 +202,6 @@ const AutomationData = Schema.Union([
 	Schema.Struct({
 		...AutomationBase,
 		mode: Schema.Literal('call'),
-		cache: Schema.optionalKey(CallCacheDuration),
 		on: Absent,
 		retry: Absent,
 		concurrency: Absent
@@ -243,7 +229,7 @@ const manifestFields = {
 };
 export const EngineManifest = Schema.Struct({
 	...manifestFields,
-	/** What the bundle needs from its host (`@norbital-ai/bolt/facilities`), recorded at build. */
+	/** What the bundle needs from its host (`Facilities`, `@norbital-ai/host-api`), recorded at build. */
 	needs: Schema.Array(Schema.Literals(NEEDS))
 });
 /** Pure data: declaration literals by path-derived name, bodies stripped (they run in the guest). */
@@ -284,6 +270,13 @@ const marked = (role: Record<string, unknown>, body: string, as?: string) =>
 			return [name, as === undefined || fn === undefined ? data : { ...data, [as]: true }];
 		})
 	);
+/** A definition's webhook handler is a guest body; the manifest marks it (`webhook.handle: true`). */
+const handled = (d: { readonly [key: string]: unknown }) => {
+	const webhook = d['webhook'];
+	return Predicate.isObject(webhook) && webhook['handle'] !== undefined
+		? { ...d, webhook: { ...webhook, handle: true } }
+		: d;
+};
 /** Lower an output's nested scopes to the same paths as the model output. */
 function outputGrant(model: string, output: unknown): unknown {
 	if (!Predicate.isObject(output)) return output;
@@ -305,12 +298,16 @@ function outputGrant(model: string, output: unknown): unknown {
 		history: output['history']
 	});
 }
-const writeGrant = (model: string, arm: unknown): unknown =>
-	Predicate.isObject(arm) ? {
-		...arm,
-		...(arm['columns'] === undefined ? {} : { columns: column_layers(model, arm['columns']) }),
-		...(typeof arm['verdict'] === 'function' ? { verdict: true } : {})
-	} : arm;
+/** A write grant's flat tree (`{ fields, <relation>: {…}, verdict, moves }`) as its admitted column layers. */
+const writeGrant = (model: string, arm: unknown): unknown => {
+	if (!Predicate.isObject(arm)) return arm;
+	const { verdict, moves, ...tree } = arm;
+	return {
+		...(Object.keys(tree).length === 0 ? {} : { columns: column_layers(model, tree) }),
+		...(moves === undefined ? {} : { moves }),
+		...(typeof verdict === 'function' || verdict === true ? { verdict: true } : {})
+	};
+};
 /** Lower the read scopes and mark each write grant's guest verdict callback as present. */
 const policyData = (p: unknown): unknown =>
 	Predicate.isObject(p) && 'grants' in p && Predicate.isObject(p.grants)
@@ -390,7 +387,9 @@ export function project_manifest(m: LoadedManifest): unknown {
 		workspace: secrets === undefined ? workspace : { ...workspace, secrets },
 		...(messages === undefined ? {} : { messages }),
 		...modelParts(m.model),
-		integrations: marked(m.integration_definition, 'test', 'test'),
+		integrations: Object.fromEntries(
+			Object.entries(marked(m.integration_definition, 'test', 'test')).map(([name, d]) => [name, handled(d)])
+		),
 		policies: Object.fromEntries(
 			Object.entries(m.policy).map(([name, v]) => [name, policyData(literal(v))])
 		),
@@ -425,12 +424,6 @@ const memo = <A>(derive: (m: EngineManifest) => A) => {
 /** The secret names `+secrets.ts` declares, their values sealed in the tenant store. */
 export const declared_secrets = memo((m): readonly string[] =>
 	Object.keys(m.workspace.secrets ?? {})
-);
-/** The apps whose public pages a visitor opens through a Turnstile challenge. */
-export const challengedApps = memo((m): readonly string[] =>
-	Object.entries(m.apps)
-		.filter(([, a]) => typeof a.audience === 'object' && a.audience.challenge === 'turnstile')
-		.map(([name]) => name)
 );
 /** A schema slice's team entries in the same runtime shape as the manifest catalogue. */
 export function teamEntries(entries: TeamEntries): { readonly [handle: string]: SourceTeam } {

@@ -1,3 +1,3 @@
-import { integration } from '../../../.norbital/integrations/mail.ts';
+import { integration } from '@norbital-ai/bolt';
 
-export default integration({ description: 'The notices mailbox', driver: 'email' });
+export default integration('mail', { description: 'The notices mailbox', driver: 'email' });

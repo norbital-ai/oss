@@ -25,13 +25,13 @@ import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { capturePiece } from '../db/captured.ts';
 import { storedCaptures, storedRowSql } from '../db/stored.ts';
 import { teams, type EngineManifest } from '../manifest.ts';
+import type { Lock } from '@norbital-ai/host-api';
 import {
 	LIMITS,
 	type Authority,
 	type Bindings,
 	type EngineActor,
 	type Invocation,
-	type Lock,
 	type Outcome,
 	type QueuedRun,
 	type RowData
@@ -65,7 +65,7 @@ import {
 } from '../../protocol/approval-view.ts';
 import { affectedTables, compileCommit, committed, runCommit, type Commit, type CommitAnswer, type Write } from '../write/commit.ts';
 import { Chain, GATED, minter, decided } from '../write/sql.ts';
-import { effectDepthFailure, effectRun, enqueue, settleApprovalEffects, writerOf } from '../runs/queue.ts';
+import { EFFECT_DEPTH_MESSAGE, effectRun, enqueue, settleApprovalEffects, writerOf } from '../runs/queue.ts';
 import { syncOutboxPiece } from '../sync/write.ts';
 import type { ApprovalEffectEvent } from '../../protocol/effect-events.ts';
 import { participant, rolesOf, sameFlow, unknownTeam } from './route.ts';
@@ -241,9 +241,11 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			cause: 'effect',
 			...writer
 		};
-		return [writer.depth > LIMITS.writeDepth
-			? { ...run, state: 'failed', error: effectDepthFailure, finished_at: now }
-			: run];
+		return [run];
+	};
+	/** A move whose effect would run past the chain depth is refused whole, as `runs/queue.ts` refuses a write's. */
+	const refuseDeep = (c: Chain, runs: readonly QueuedRun[], when: string) => {
+		if (runs.some((run) => run.depth > LIMITS.writeDepth)) c.assert('false', 'depth', EFFECT_DEPTH_MESSAGE, when);
 	};
 	/**
 	 * Released rows use this statement's images first, including carried writes. Approval sends every change;
@@ -372,6 +374,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						'requestor',
 						`INSERT INTO requestor (id, approval_request_id, user_id) SELECT id::text || ':' || ${c.p(requestor)}, id, ${c.p(user ?? requestor)} FROM ap_state`
 					);
+					refuseDeep(c, runs, 'EXISTS (SELECT 1 FROM ap_state)');
 					if (runs.length > 0) enqueue(c, runs, { when: 'EXISTS (SELECT 1 FROM ap_state)' });
 				}
 			};
@@ -458,6 +461,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		superseder_teams = ${c.p(shown.superseders)}::jsonb, closed_at = NULL,
 		closed_by = NULL, revision = revision + 1 WHERE id IN (SELECT id FROM ap_resubmit)`
 					);
+					refuseDeep(c, runs, 'EXISTS (SELECT 1 FROM ap_resubmit)');
 					if (runs.length > 0) enqueue(c, runs, { when: 'EXISTS (SELECT 1 FROM ap_resubmit)' });
 				}
 			};
@@ -590,18 +594,18 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			actor: auth.actor,
 			writer: writerOf(auth),
 			writes: [...plan.writes, ...deletions, ...carried.flatMap((commit) => commit.writes)],
-			owned: carried.flatMap((commit) => commit.owned),
 			rate: [],
 			runs: [
 				...runs.map((run) => ({ ...run, id: mint() })),
 				...carried.flatMap((commit) => commit.runs)
 			],
-			notices: [...notice, ...carried.flatMap((commit) => commit.notices)],
+			notices: [...notice, ...carried.flatMap((commit) => commit.notices ?? [])],
 			output: null,
 			restored: plan.restored,
 			approvalDecision: { request: a.id, stands },
 			...(fingerprints.length === 0 ? {} : { fingerprints }),
 			before: (c) => {
+				refuseDeep(c, runs, GATED);
 				for (const observation of plan.observations) {
 					const selected = `SELECT revision FROM ${q(table(observation.model))} WHERE id::text = ${c.p(observation.id)}`;
 					c.assert(
@@ -629,7 +633,8 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 					'up',
 					'bolt_approvals',
 					`UPDATE bolt_approvals SET state = ${c.p(next.state)}, step = ${next.step}, log = log || jsonb_build_array(${c.p(entry)}::jsonb),
-	closed_at = ${c.p(open ? null : now)}::timestamptz${readGuards === undefined ? '' : `, route = jsonb_set(route, '{__boltReadGuardRefresh}', to_jsonb(${c.p(refreshKey)}::text))`} WHERE id IN (SELECT id FROM ap_authorize)`
+	closed_at = ${c.p(open ? null : now)}::timestamptz${readGuards === undefined ? '' : `, route = jsonb_set(route, '{__boltReadGuardRefresh}', to_jsonb(${c.p(refreshKey)}::text))`} WHERE id IN (SELECT id FROM ap_authorize)`,
+					{ returning: (_, after) => `${after}.id, ${after}.state` }
 				);
 				capturePiece(c,
 					'pr',
@@ -808,8 +813,8 @@ const bindingOf = (m: EngineManifest, at?: string) =>
 	});
 /**
  * The approving decision's `on_approved`, in bulk: every held row of the request's model asked again as it now stands
- * (`ctx.approving`), one invocation per verb, and what they answer planned as acts (their own callbacks, carried by that
- * model) all at once over one coalesced reader, for the decision's one statement. A held delete's rows still stand: its
+ * (`ctx.approving`), one invocation per verb, and what they answer planned as acts (carried by that model: straight to
+ * storage) all at once over one coalesced reader, for the decision's one statement. A held delete's rows still stand: its
  * callback is asked with each as it now is, and both its `with` and its `on_approved` join the decision that deletes
  * them. A refusal or a conflict leaves the request pending.
  */
@@ -857,7 +862,16 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 			},
 			budget: { crossings: LIMITS.crossings.write, readBytes: LIMITS.readBytes }
 		};
-		const g = yield* guest.invoke(invocation, transformBridge(m, db, invocation));
+		// the held rows are stored already: an `as_of: 'act'` root reads them as a plain read
+		const bridge = transformBridge(m, db, invocation);
+		const g = yield* guest.invoke(invocation, {
+			...bridge,
+			cross: (calls) =>
+				bridge.cross(calls.map((call) =>
+					call._tag === 'read' && call.read.kind === 'request'
+						? { ...call, read: { ...call.read, roots: call.read.roots.map((root) => { if (!('read' in root)) return root; const { prospective: _, ...plain } = root; return plain; }) } }
+						: call))
+		});
 		if (g.kind === 'refused')
 			return {
 				kind: 'refused',
@@ -907,7 +921,6 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 						: { target: write.target ?? null, set: write.set ?? null }
 				),
 				mode: {
-					_tag: 'Record',
 					carriedBy: a.model,
 					pending: new Map(),
 					sink: (commit) => {
@@ -917,13 +930,12 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 				authority: { ...auth, admin: true },
 				key: `approval:${a.id}:${a.log.length}:${first.model}:${first.op}`,
 				invocationId: `approval:${a.id}:${a.log.length}:${first.model}:${first.op}`,
-				issuedAt: b.now,
 				bindings: b
 			}).pipe(Effect.ensuring(shared.done));
 		},
 		{ concurrency: 'unbounded' }
 	);
-	for (const [index, { outcome }] of outcomes.entries()) {
+	for (const [index, outcome] of outcomes.entries()) {
 		if (outcome.kind === 'refused' || outcome.kind === 'conflict') return outcome;
 		if (outcome.kind !== 'committed')
 			return refused(
@@ -933,7 +945,7 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 	}
 	return planned.flatMap((commit) => (commit === undefined ? [] : [commit]));
 });
-/** Source routing is a direct planner dependency; it never acquires Approvals or Writes. */
+/** Source routing is a direct planner dependency; it never acquires Approvals or Callables. */
 export const approval_hook = (manifest: EngineManifest, db: TenantDbShape, publication: Live['Service']['publish']): ApprovalHook =>
 	makeApprovals(manifest, db, { publication, bindings: (at) => bindingOf(manifest, at) }).hook;
 export const ApprovalsLive = Layer.effect(

@@ -83,6 +83,7 @@ export {
 	SchemaSpec,
 	HistoryTableMetadata
 } from './schema/spec.ts';
+export { computed_expr } from './lang/computed.ts';
 export { schema_snapshot, type SchemaSnapshot } from './schema/snapshot.ts';
 export {
 	check_of,

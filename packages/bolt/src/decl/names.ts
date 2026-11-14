@@ -25,7 +25,7 @@ type NamesShape = {
 	models: { [model: string]: ModelSpec };
 	/** Each ref field, keyed `'<model>.<field>'` (`split_model(name, literal).relationships`). */
 	relationships: { [key: `${string}.${string}`]: RelationshipSpec };
-	/** Each exposed model's exposure (`split_model(name, literal).exposure`); a model without `read` has none. */
+	/** Each exposed model's exposure (`split_model(name, literal).exposure`); a model without `outputs.default` has none. */
 	exposures: { [model: string]: ExposureSpec };
 	/** Each exposed model's declared layer paths below its root → the model behind each (`layer_models`). */
 	layers: { [model: string]: { [path: string]: string } };
@@ -54,7 +54,7 @@ export type NamesPart<K extends keyof NamesShape> = K extends keyof Names ? Name
 
 /**
  * One ref field as the relationships part holds it (`'<model>.<field>'`): its target (`to`), the `inverse` many-relation
- * name, `optional`, a default from the requestor, `on_delete`, `owned` children and a `where` on the target.
+ * name, `optional`, a default from the actor, `on_delete`, `owned` children and a `where` on the target.
  */
 export type RelationshipSpec = typeof RelationshipData.Type;
 

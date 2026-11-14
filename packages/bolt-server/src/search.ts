@@ -1,5 +1,6 @@
 import { Option, Schema } from 'effect';
-import type { HostTool, Json } from '@norbital-ai/bolt/engine';
+import type { HostTool } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 
 const CALL_MS = 10_000;
 /** DeepSeek's bound on a query, operators included. */

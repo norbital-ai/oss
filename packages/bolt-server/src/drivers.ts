@@ -3,18 +3,16 @@ import { Clock, Effect, Option, Schema } from 'effect';
 import {
 	DatabaseRequest,
 	DatabaseResult,
-	http_oauth,
-	http_request,
-	OAUTH_CALLBACK,
-	Http,
-	Port,
 	type DriverOpen,
-	type Json,
+	type HttpPort,
+	OAUTH_CALLBACK,
+	Port,
 	type SetupDescription,
 	type SetupField
-} from '@norbital-ai/bolt/engine';
-import { http_port, public_fetch } from '@norbital-ai/bolt/node';
-import { FacilityFailure } from '@norbital-ai/bolt/errors';
+} from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
+import { http_port, public_fetch } from '@norbital-ai/host-api/node';
+import { http_oauth, http_request } from './http.ts';
 import {
 	attempt,
 	authorizeUrl,
@@ -42,8 +40,8 @@ type DriversOptions = {
 	/** A channel simulator's URL: its providers are offered beside the real ones. */
 	readonly simulator?: string | undefined;
 };
-/** An injected fetch (a test's) as the engine's HTTP port; without one, requests take the public-network guard. */
-const fetchHttp = (fetcher: typeof fetch): typeof http_port => ({
+/** An injected fetch (a test's) as the HTTP port; without one, requests take the public-network guard. */
+const fetchHttp = (fetcher: typeof fetch): HttpPort => ({
 	fetch: async (request, _limits, signal) => {
 		const response = await fetcher(request.url, {
 			method: request.method,
@@ -131,9 +129,9 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 			const definition = ctx.definition,
 				oauth = http_oauth(definition);
 			const run = yield* ProviderRuntime;
-			// OAuth token exchanges take a fetch; the definition's own requests take the engine's HTTP port
+			// OAuth token exchanges take a fetch; the definition's own requests take the host's HTTP port
 			const guarded = { fetch: options.fetch ?? public_fetch(run) };
-			const http = Http.fromAbi(options.fetch === undefined ? http_port : fetchHttp(options.fetch));
+			const http = options.fetch === undefined ? http_port : fetchHttp(options.fetch);
 			let pending: { state: string; verifier: string; at: number } | null = null;
 			/** The definition's own OAuth app, from the workspace's secrets. */
 			const own = Effect.gen(function* () {
@@ -172,11 +170,9 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 									)
 							},
 							operation,
+							http,
 							{ secrets }
-						).pipe(
-							Effect.provide(http),
-							Effect.mapError((error) => (error._tag === 'Fenced' ? error : unavailable(error)))
-						);
+						).pipe(Effect.mapError(unavailable));
 					}),
 				pair: Effect.fn('HTTP.pair')(function* (input: Json) {
 					if (oauth === undefined) {
@@ -287,20 +283,7 @@ export function sqlServerProvider(database: ReturnType<typeof sqlServerDatabase>
 							() => new ProviderRefused({ message: 'Invalid database request.', permanent: true })
 						)
 					);
-					const result = yield* database.query(connection, request).pipe(
-						Effect.mapError(
-							(error) =>
-								new FacilityFailure({
-									kind:
-										error.code === 'timeout'
-											? 'timeout'
-											: error.code === 'upstream'
-												? 'upstream'
-												: 'invalid',
-									message: error.message
-								})
-						)
-					);
+					const result = yield* database.query(connection, request);
 					return yield* Schema.decodeUnknownEffect(DatabaseResult)(result).pipe(
 						Effect.mapError(() => new ProviderUnavailable({ message: 'Invalid database result.' }))
 					);

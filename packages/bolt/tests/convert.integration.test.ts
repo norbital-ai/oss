@@ -1,6 +1,6 @@
 // `ctx.convert.document` (optional host capability): Markdown or HTML to a target the workspace declares, over the host's
 // ConvertPort, stored like `files.put`; then the converter client against a local Norbital Convert service.
-import { uuidv7 } from '../src/protocol/wire.ts';
+import { document_converter, uuidv7 } from '@norbital-ai/host-api';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,7 +14,6 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 import { service } from '../../../services/convert/src/server.ts';
 import { ConversionFailed } from '../../../services/convert/src/convert.ts';
 import type { Json } from '../src/decl/values.ts';
-import { document_converter } from '../src/engine/convert.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(

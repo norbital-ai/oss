@@ -3,7 +3,7 @@ import { expect, it } from '@effect/vitest';
 import { Context, Deferred, Effect, Layer, Schema } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { DbError } from '@norbital-ai/host-api';
 import { Callables } from '../src/engine/services.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';

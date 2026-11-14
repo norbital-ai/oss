@@ -7,7 +7,7 @@ import type { Json } from '../../decl/values.ts';
 import type { Authority, RunTriggerView } from '../contracts.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { capturePiece } from '../db/captured.ts';
-import { storedInstant } from '../db/wire.ts';
+import { storedInstant } from '@norbital-ai/host-api';
 
 import type { Chain } from '../write/sql.ts';
 import { RunAttempt, RunError } from './attempt.ts';
@@ -39,7 +39,8 @@ export const RowSchema = Schema.Struct({
 	leases: Schema.Number,
 	actor: Schema.NullOr(Schema.String),
 	starter: Schema.NullOr(HolderSchema),
-	trigger: Schema.NullOr(RunTriggerSchema)
+	trigger: Schema.NullOr(RunTriggerSchema),
+	wait: Schema.optionalKey(Schema.Json)
 });
 export type Row = typeof RowSchema.Type;
 export const RunViewRow = Schema.Struct({

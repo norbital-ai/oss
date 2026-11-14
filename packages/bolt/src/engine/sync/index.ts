@@ -24,18 +24,19 @@ import {
 	RunHandlers,
 	type RunHandler,
 	Wake,
-	Writes,
+	Callables,
 	type GuestShape,
 	type IdentityShape,
 	type LiveShape,
 	type ReadsShape,
-	type WritesShape
+	type CallablesShape
 } from '../services.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { SyncEntry } from '../../decl/model.ts';
 import type { Json } from '../../decl/values.ts';
 import type { WebhookDelivery } from '../../decl/runtime/integration.ts';
-import type { Bindings, CronEntry, EngineActor } from '../contracts.ts';
+import type { CronEntry } from '@norbital-ai/host-api';
+import type { Bindings, EngineActor } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { duration, iso } from '../runs/time.ts';
@@ -171,7 +172,7 @@ export class Syncs extends Context.Service<Syncs, SyncsShape>()('bolt/Syncs') {}
 export type SyncEngine = {
 	readonly manifest: EngineManifest;
 	readonly db: TenantDbShape;
-	readonly act: WritesShape['act'];
+	readonly act: CallablesShape['acts'];
 	readonly read: ReadsShape['run'];
 	readonly authority: IdentityShape['authority'];
 	readonly bindings: () => Effect.Effect<Bindings>;
@@ -194,7 +195,7 @@ export const SyncsLive = Layer.effect(
 	Effect.gen(function* () {
 		const manifest = yield* Manifest,
 			db = yield* TenantDb,
-			writes = yield* Writes,
+			callables = yield* Callables,
 			reads = yield* Reads,
 			identity = yield* Identity,
 			guest = yield* Guest,
@@ -207,7 +208,7 @@ export const SyncsLive = Layer.effect(
 		const e: SyncEngine = {
 			manifest,
 			db,
-			act: writes.act,
+			act: callables.acts,
 			read: reads.run,
 			authority: identity.authority,
 			bindings: () =>

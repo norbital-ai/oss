@@ -102,7 +102,7 @@
 		new Date(millis).toLocaleString(host.locale, { dateStyle: 'short', timeStyle: 'short' });
 </script>
 
-<figure class="grid min-w-0 gap-2 rounded-md border border-border p-3 text-xs">
+<figure class="flex h-full min-w-0 flex-col gap-2 rounded-md border border-border p-3 text-xs">
 	<figcaption class="flex flex-wrap items-baseline justify-between gap-2">
 		<span class="text-xs font-medium">{title}</span>
 		<span class="text-meta">
@@ -115,7 +115,7 @@
 	<svg
 		viewBox={`0 0 ${W} ${H}`}
 		preserveAspectRatio="none"
-		class="h-32 w-full touch-pan-y"
+		class="min-h-32 w-full flex-1 touch-pan-y"
 		role="img"
 		aria-label={`${title} ${t('overTime')}`}
 		onpointerdown={move}

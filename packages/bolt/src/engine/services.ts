@@ -8,39 +8,49 @@ import { Context } from 'effect';
 import type { Effect, Option, PubSub, Scope, Stream } from 'effect';
 import type { Json } from '../decl/values.ts';
 import type { FacilityMember } from '../decl/runtime/facility-members.ts';
-import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
-import type { Frame, ImportStart, PageResult } from '../protocol/schema.ts';
+import type {
+	AiModel,
+	CronEntry,
+	CronFired,
+	DecisionRequest,
+	DecisionResult,
+	DeliveryReport,
+	DriverEvent,
+	FacilityFailure,
+	Fenced,
+	GuestProgram,
+	ImportStart,
+	OutboundReference,
+	PortFailure,
+	ReconcilePage,
+	SendReceipt,
+	SendRefused,
+	Unavailable
+} from '@norbital-ai/host-api';
+import type { Frame, PageResult } from '../protocol/schema.ts';
 import type { EffectEvent } from '../protocol/effect-events.ts';
 import type { ReadIR } from '../protocol/reads.ts';
 import { LIMITS } from './contracts.ts';
 import type {
-	AiModel,
 	Authority,
 	Bindings,
 	Captured,
-	CronEntry,
-	CronFired,
 	CrossAnswer,
-	DriverEvent,
-	ReconcilePage,
 	Invocation,
 	NativeWriteConflict,
 	Outcome,
 	Reader,
 	RowData,
-	GuestOutcome
+	GuestOutcome,
+	GuestPart
 } from './contracts.ts';
-import type { EngineError, Fenced, IdentityRefusal } from './errors.ts';
+import type { EngineError, IdentityRefusal } from './errors.ts';
 import type { BoltError } from '../protocol/errors.ts';
 import type { EngineManifest } from './manifest.ts';
 import type { Transport } from './ports.ts';
-import type { PortFailure } from './port.ts';
 import type { Holder } from './access/authority.ts';
 import type { As, ConversationRow, MessageRow } from './agent/schema.ts';
 import type { ApprovalView, DecideInput, Decision } from './approvals/approvals.ts';
-import type { DeliveryReport, OutboundReference, SendReceipt, SendRefused } from './conversations/status.ts';
-import type { DecisionRequest, DecisionResult } from './decision.ts';
-import type { GuestProgram } from './guest/runner.ts';
 import type { RunView } from './runs/rows.ts';
 import type { Commit, RateCharge } from './write/commit.ts';
 import type { Chain, ReadGuards } from './write/sql.ts';
@@ -109,46 +119,40 @@ export type PlannedCommit = {
 	readonly lock?:
 		{ readonly tables: readonly string[]; readonly mode: 'SHARE ROW EXCLUSIVE' } | undefined;
 };
-/** How an act is judged and where its commit goes, decided once (H7); no hook-only request fields. */
-export type ActMode =
-	/** A caller's act: a page or Form, the agent, an automation's `ctx.act`, a per-record restore. */
-	| { readonly _tag: 'Direct' }
-	/**
-	 * A remote sync's read page (B6): one act on the sync's own model, judged by no grant. The input is `verb: 'upsert'`,
-	 * `on_conflict: 'update'`, rows `{ id, ...fields }`: every row names its id (the id map's record, or one minted
-	 * replay-stably for a new remote record), and an id with no stored row is CREATED with that id (this mode only). The
-	 * model's `create.transform` / `update.transform` run on the split; lock constraints refuse incoming changes as they do local writes.
-	 */
-	| {
-			readonly _tag: 'Sync';
-			/** `'<model>.sync.<sync>'`. */
-			readonly sync: string;
-			/** The `sys_integration` instance the page was read for. */
-			readonly instance: string;
-			/** The fields this page writes (the fields `read` returned); a row may write no other field. */
-			readonly fields: readonly string[];
-			/** Stored rows this page deletes (`$deleted`, or a closed snapshot's unseen rows). */
-			readonly deletes: readonly string[];
-			/** Pieces after `allp`: the cursor compare-and-set, `sys_sync_row` id map and `$version` stamps, inbox marks. */
-			readonly pieces: (chain: Chain) => void;
-	  }
-	/** A generated verb planned into a batch's `sink`; `pending` rows are readable as refs. */
-	| {
-			readonly _tag: 'Record';
-			readonly sink: (planned: PlannedCommit) => void;
-			readonly pending: ReadonlyMap<string, RowData>;
-			/** The model whose approved write carries these rows (its `on_approved`, planned by the approving decision). */
-			readonly carriedBy?: string;
-	  };
+/**
+ * A remote sync's read page (B6): one act on the sync's own model, judged by no grant. The input is `verb: 'upsert'`,
+ * `on_conflict: 'update'`, rows `{ id, ...fields }`: every row names its id (the id map's record, or one minted
+ * replay-stably for a new remote record), and an id with no stored row is CREATED with that id (this mode only). The
+ * model's `create.transform` / `update.transform` run on the split; lock constraints refuse incoming changes as they do local writes.
+ */
+export type SyncPage = {
+	/** `'<model>.sync.<sync>'`. */
+	readonly sync: string;
+	/** The `sys_integration` instance the page was read for. */
+	readonly instance: string;
+	/** The fields this page writes (the fields `read` returned); a row may write no other field. */
+	readonly fields: readonly string[];
+	/** Stored rows this page deletes (`$deleted`, or a closed snapshot's unseen rows). */
+	readonly deletes: readonly string[];
+	/** Pieces after `allp`: the cursor compare-and-set, `sys_sync_row` id map and `$version` stamps, inbox marks. */
+	readonly pieces: (chain: Chain) => void;
+};
+/** Where a planned act goes: every act is planned into a batch's `sink`; `pending` rows are readable as refs. */
+export type ActMode = {
+	readonly sink: (planned: PlannedCommit) => void;
+	readonly pending: ReadonlyMap<string, RowData>;
+	/** The model whose approved write carries these rows (its `on_approved`, planned by the approving decision): written straight to storage. */
+	readonly carriedBy?: string;
+	readonly sync?: SyncPage;
+};
+/** One generated verb as the planner takes it; `Callables.acts` commits what it plans. */
 export type ActRequest = {
 	readonly model: string;
 	readonly verb: Verb;
 	readonly input: Json;
 	readonly mode: ActMode;
-	/** Rule 31: the client-minted key, its `issuedAt`, and whether the client marked the request a retry. */
+	/** The client-minted key: replays of the act's guest code draw from it. */
 	readonly key: string;
-	readonly issuedAt: string;
-	readonly retry?: boolean | undefined;
 	readonly authority: Authority;
 	readonly bindings: Bindings;
 	readonly invocationId: string;
@@ -156,8 +160,6 @@ export type ActRequest = {
 	readonly observed?: { readonly [id: string]: number } | undefined;
 	/** Rule 28: required on `upsert`. */
 	readonly on_conflict?: NativeWriteConflict | undefined;
-	/** Rule 38: the persisted buckets this act charges. */
-	readonly rate?: readonly RateCharge[] | undefined;
 	/** A per-record restore (`history.restore`): the record's revision is recorded as restored from `revision`. */
 	readonly restored?: { readonly id: string; readonly revision: number } | undefined;
 	/** Native automation read intent; never supplied by authored callable input. */
@@ -171,10 +173,6 @@ export type ActResult = {
 	readonly captured: readonly Captured[];
 	readonly v: number;
 };
-export type WritesShape = {
-	readonly act: (request: ActRequest) => Effect.Effect<ActResult, EngineError>;
-};
-export class Writes extends Context.Service<Writes, WritesShape>()('bolt/Writes') {}
 
 // ── callables (E6) ──
 /** A callable name decoded once (`parse_callable`, M3): a generated verb or an automation. */
@@ -198,6 +196,10 @@ export type ActsRequest = CallerContext & {
 	readonly outputs?: readonly string[] | undefined;
 	readonly retry?: boolean | undefined;
 	readonly rate?: readonly import('./write/commit.ts').RateCharge[] | undefined;
+	/** A per-record restore: the one act's record is recorded as restored from `revision`. */
+	readonly restored?: ActRequest['restored'];
+	/** The one act is a remote sync's read page, under the sync's admin authority (outside any run) throughout. */
+	readonly sync?: SyncPage | undefined;
 	readonly acts: readonly {
 		readonly model: string;
 		readonly verb: Verb;
@@ -267,6 +269,8 @@ export type AutomationExecution = {
 	readonly attempts: number;
 	readonly starter: Holder | null;
 	readonly trigger?: import('./contracts.ts').RunTrigger | null;
+	/** A run that waited: its journal and what woke it (`sys_run.wait`). */
+	readonly wait?: Json;
 };
 export type AutomationJob = {
 	/** Decoded effect event from the durable input; absent for automations. */
@@ -278,6 +282,8 @@ export type AutomationJob = {
 	readonly stop: () => void;
 	readonly dues: number[];
 	readonly warnings: string[];
+	/** Set by `ctx.wait`: the attempt ends and the run waits (`runs/wait.ts`); `due` is its deadline. */
+	waiting?: { readonly state: import('./runs/wait.ts').WaitState; readonly due: number | null };
 };
 export type AutomationsShape = {
 	readonly park: Effect.Effect<void>;
@@ -594,6 +600,10 @@ export type AgentsShape = {
 	) => Effect.Effect<void, EngineError>;
 	readonly execute_plan: (id: string, as: As) => Effect.Effect<TurnResult, EngineError>;
 	readonly discard_plan: (id: string) => Effect.Effect<void, EngineError>;
+	/** Archives (or restores) an in-app conversation, by its owner: off the list, nothing else changes. */
+	readonly archive: (id: string, archived: boolean, by: Authority) => Effect.Effect<void, EngineError>;
+	/** Deletes an in-app conversation for good, by its owner, with its messages and sub-agents. */
+	readonly remove: (id: string, by: Authority) => Effect.Effect<void, EngineError>;
 	readonly file: (
 		messageId: string,
 		about: { readonly model: string; readonly id: string } | null
@@ -684,7 +694,6 @@ type FacilityArm<T extends string> = { readonly _tag: T; readonly args: readonly
 export type FacilityCall = { [K in FacilityMember]: FacilityArm<K> }[FacilityMember];
 /** A guest request to the host, decoded once at the crossing (M2); calls issued before the microtask queue drains cross together. */
 export type CrossCall =
-	| { readonly _tag: 'run'; readonly automation: string; readonly input: Json }
 	| {
 			readonly _tag: 'read';
 			readonly read: ReadIR;
@@ -710,6 +719,8 @@ export type CrossCall =
 	| { readonly _tag: 'request'; readonly to: string | null; readonly operation: Json }
 	/** `ctx.progress` (automations only). */
 	| { readonly _tag: 'progress'; readonly progress: Json }
+	/** `ctx.wait` (a job's run only): what it waits on, decoded by the run (`runs/wait.ts`). */
+	| { readonly _tag: 'wait'; readonly on: Json }
 	| FacilityCall;
 /** The host half of a crossing: answers in call order. Interrupting it ends the crossing (no signal). */
 export type Bridge = {
@@ -718,6 +729,15 @@ export type Bridge = {
 export type GuestShape = {
 	/** One fresh-isolate run of one body; a budget, a throw or a bad answer is a `failed` outcome, never a failure of this Effect. */
 	readonly invoke: (invocation: Invocation, bridge: Bridge) => Effect.Effect<GuestOutcome>;
+	/**
+	 * Several bodies of one kind in one isolate run, so a wave crosses once: one outcome per part, in order. A budget
+	 * (crossings and reads are the invocation's, shared) or an isolate failure fails every part.
+	 */
+	readonly invokeEach: (
+		invocation: Omit<Invocation, 'target' | 'input'>,
+		parts: readonly GuestPart[],
+		bridge: Bridge
+	) => Effect.Effect<readonly GuestOutcome[]>;
 	/** Runs a host-selected source program through the same generation, isolate ownership and cumulative budgets. */
 	readonly invokeProgram: (
 		program: GuestProgram,

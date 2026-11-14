@@ -2,7 +2,7 @@
 // The sender and the Verify service are discovered once; failures are never retained by their caches.
 import { Cache, Effect, Exit, Schema } from 'effect';
 import type { HttpClient } from 'effect/http';
-import type { Json } from '@norbital-ai/bolt/engine';
+import type { Json } from 'effect/Schema';
 import {
 	decodeMessage,
 	ProviderUnavailable,

@@ -1,39 +1,11 @@
 // Engine failures (D3). `BoltError` carries a literal `code`; a separate tag exists only where code branches
 // on it. `CODE` is the one table of each code's wire status and retry class; `is_transient` reads it.
 import { Match, Option, Schema } from 'effect';
-import { FACILITY_KINDS } from '../decl/errors/facility.ts';
+import { DbError, FACILITY_KINDS, Fenced } from '@norbital-ai/host-api';
 import type { AgentRefusal } from './agent/schema.ts';
 export type { AgentRefusal } from './agent/schema.ts';
 
 import { BoltError, CODE } from '../protocol/errors.ts';
-
-const DbErrorFields = {
-	sqlstate: Schema.String,
-	message: Schema.String,
-	outcome_unknown: Schema.optionalKey(Schema.Literal(true)),
-	constraint: Schema.optional(Schema.String),
-	column: Schema.optional(Schema.String)
-};
-type DbErrorProps = Schema.Struct.MakeIn<typeof DbErrorFields>;
-type DbErrorArgs =
-	| [sqlstate: string, message: string, constraint?: string, column?: string]
-	| [props: DbErrorProps, options?: Schema.MakeOptions];
-/** What a Postgres adapter fails with: the SQLSTATE and constraint the write compiler maps to a refusal. */
-export class DbError extends Schema.TaggedError<DbError>()('DbError', DbErrorFields) {
-	static override make(
-		...args: [sqlstate: string, message: string, constraint?: string, column?: string]
-	): DbError;
-	/** The Schema class's own form (`new DbError(props)`), which the static side keeps. */
-	static override make(...args: [props: DbErrorProps, options?: Schema.MakeOptions]): DbError;
-	static override make(...args: DbErrorArgs): DbError {
-		if (isDbProps(args)) return new DbError(args[0], args[1]);
-		const [sqlstate, message, constraint, column] = args;
-		return new DbError({ sqlstate, message, constraint, column });
-	}
-}
-const isDbProps = (
-	args: DbErrorArgs
-): args is [props: DbErrorProps, options?: Schema.MakeOptions] => typeof args[0] !== 'string';
 
 /** The write lost a race: another write changed the named fields of these records since they were read. */
 export class Conflict extends Schema.TaggedError<Conflict>()('Conflict', {
@@ -44,11 +16,6 @@ export class Conflict extends Schema.TaggedError<Conflict>()('Conflict', {
 			fields: Schema.Array(Schema.String)
 		})
 	)
-}) {}
-/** Another link opened the instance since this one did (its epoch moved); terminal for the fenced link. */
-export class Fenced extends Schema.TaggedError<Fenced>()('Fenced', {
-	instance: Schema.String,
-	message: Schema.String
 }) {}
 /** The work's generation is draining. */
 export class Interrupted extends Schema.TaggedError<Interrupted>()('Interrupted', {}) {}

@@ -6,9 +6,9 @@ import { vi } from 'vitest';
 import { Context, Effect, Layer, ManagedRuntime, Option, Result, Schema } from 'effect';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { DbError, StudioOp, studio_view, suggest_message, type StudioState } from '@norbital-ai/host-api';
 import { Files, Images } from '../src/engine/ports.ts';
-import { images_port } from '../src/node/images.ts';
+import { images_port } from '@norbital-ai/host-api/node';
 import { manifest as baseManifest } from './engine-fixture.ts';
 import type { Authority, ModelAuthority, EngineActor } from '../src/engine/contracts.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
@@ -33,12 +33,6 @@ import { challenge_queue, kiosk_fetch, visitor_fetch, shell_api } from '../src/s
 import { BoltRoutes } from '../src/protocol/http.ts';
 import { active_app, media, navigation_model } from '../src/shell/model.ts';
 import { file_attachments } from '../src/engine/agent/attachments.ts';
-import {
-	StudioOp,
-	studio_view,
-	suggest_message,
-	type StudioState
-} from '../src/shell/studio/model.ts';
 import { decode_manifest, type EngineManifest } from '../src/engine/manifest.ts';
 /** The Node host's image port, as the agent's attachments read through it. */
 const hostImages = Effect.map(Layer.build(Images.fromAbi(images_port)), (context) =>
@@ -95,7 +89,7 @@ const m: EngineManifest = {
 			title: 'Careers',
 			description: 'd',
 			icon: 'i',
-			audience: { public: ['applicant'], challenge: 'turnstile' },
+			audience: { public: ['applicant'], challenge: true },
 			pages: { apply: { title: 'Apply' } }
 		},
 		clock: {

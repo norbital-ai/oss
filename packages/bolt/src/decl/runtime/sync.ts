@@ -1,11 +1,13 @@
-// A model's syncs: `model({ syncs: { <s>: FileSync | RemoteSync } })`. A sync says "these rows are exchanged
+// A model's syncs: `src/data/model/<…>/<model>/+<sync>.sync.ts` beside its `+model.ts`, `sync('<model>', '<sync>', FileSync |
+// RemoteSync)`; the compiler merges each into its model (`with_syncs`). A sync says "these rows are exchanged
 // with X": a file someone uploads or downloads, or another system through an integration instance. The author writes at
 // most two adapters, `read` (theirs → model rows) and `write` (one committed change → a call to them); the engine owns
 // the inbox, id map, version guard, outbox, retries, rate, rollback and health. Bodies are typed from the generated
 // names, so `S` (the sync's name) finds the sync's own data (`with`, `schema`, `context`) in them.
-import type { BodyReturn, Clock, Eff, MessageKey, RefuseAt, WorkspaceQuery } from '../ctx.ts';
-import type { FacilityFailure, Refusal, Unavailable } from '../errors.ts';
-import type { InputFields, InputOf } from '../fields.ts';
+import { attached, type Body, type GeneratorBody } from '../body.ts';
+import type { BodyReturn, Clock, Eff, Refuse, WorkspaceQuery } from '../ctx.ts';
+import type { ConvertSource, FacilityFailure, Unavailable } from '@norbital-ai/host-api';
+import type { Checked, Exact, InputFields, InputOf, ValidInputs } from '../fields.ts';
 import type { MediaType } from '../media-types.ts';
 import type {
 	ExposureSpecOf,
@@ -18,7 +20,7 @@ import type {
 	WritableField
 } from '../names.ts';
 import type { Duration, FileRef, Id, Json, NonEmpty } from '../values.ts';
-import type { ConvertSource, Files } from './facilities.ts';
+import type { Files } from './facilities.ts';
 import type { DeclaredConvertTarget } from './names.ts';
 import type { Where } from '../where.ts';
 import type {
@@ -93,8 +95,8 @@ type SendOn<D> = [ConversationOf<D>] extends [never]
 			send(message: SendInput<D>): Eff<Id<'sys_message'>, Failure>;
 		};
 interface SyncRefusal {
-	/** Stops the body with a catalogue key, the `row` and `field` it names, and the message's placeholder `values`. */
-	refuse<K extends MessageKey>(message: K, ...at: RefuseAt<K, { field?: string; row?: number }>): Eff<never, Refusal>;
+	/** Stops the body; `row` and `field` name the record and column. */
+	refuse: Refuse<{ field?: string; row?: number }>;
 }
 
 /**
@@ -173,8 +175,8 @@ type FileWriteInput<X = {}> = { readonly context: ContextOf<X> };
  * (`parser: []` makes such a sync export-only). Its reads keep the exporter's authority; `context` is input, never
  * authority, so a record id it names does not bypass that member's read scope.
  * @example
- * document: { with: 'file', parser: [], context: { title: { kind: 'text' }, markdown: { kind: 'text' } },
- * 	write: function* ({ context }) { return { document: { markdown: context.markdown }, name: `${context.title}.pdf` }; } }
+ * export default sync('reports', 'document', { with: 'file', parser: [], context: { title: { kind: 'text' }, markdown: { kind: 'text' } },
+ * 	write: function* ({ context }) { return { document: { markdown: context.markdown }, name: `${context.title}.pdf` }; } });
  */
 type FileWriteResult<M, X = {}> =
 	readonly RecordOf<M, X>[] | { readonly document: ConvertSource; readonly name: string };
@@ -191,18 +193,17 @@ type FileWriteResult<M, X = {}> =
  *   schema's fields of the rows in view.
  * Imports enter as the member importing, through the model's `create.transform` / `update.transform` and grants.
  * @example
- * syncs: {
- * 	work_sheet: {
- * 		with: 'file',
- * 		parser: ['xlsx', 'csv'],
- * 		schema: { employee_number: { kind: 'text' }, work_date: { kind: 'date' } },
- * 		context: { company_id: { kind: 'id', of: 'entity' } },
- * 		read: function* ({ records, context }, ctx) {
- * 			const known = yield* sheetKnown(records, context, ctx);
- * 			return { rows: records.flatMap((r) => sheetRow(r, known) ?? []), scope: { by: ['employment_id'], range: 'work_date' } };
- * 		}
+ * // src/data/model/work_entries/+work_sheet.sync.ts
+ * export default sync('work_entries', 'work_sheet', {
+ * 	with: 'file',
+ * 	parser: ['xlsx', 'csv'],
+ * 	schema: { employee_number: { kind: 'text' }, work_date: { kind: 'date' } },
+ * 	context: { company_id: { kind: 'id', of: 'entity' } },
+ * 	read: function* ({ records, context }, ctx) {
+ * 		const known = yield* sheetKnown(records, context, ctx);
+ * 		return { rows: records.flatMap((r) => sheetRow(r, known) ?? []), scope: { by: ['employment_id'], range: 'work_date' } };
  * 	}
- * }
+ * });
  */
 export type FileSync<M, S extends string = string, X = SyncData<M, S>> = {
 	with: 'file';
@@ -308,22 +309,21 @@ type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } |
  * that write skipped, keeps its payload and error, records who and when, and releases later writes of the record; it
  * neither cancels an in-flight request nor undoes a remote commit, so settle the remote state first.
  * @example
- * syncs: {
- * 	crm: {
- * 		with: 'crm',
- * 		read: function* ({ cursor }, ctx) {
- * 			const page = yield* ctx.request({ method: 'GET', path: '/customers', query: { since: String(cursor ?? '') }, output: { kind: 'json' } });
- * 			return { rows: toRows(page), cursor: nextCursor(page), more: hasMore(page) };
- * 		},
- * 		write: function* ({ op, row, $id, $version }, ctx) {
- * 			if (op === 'delete' && $id === null) return null;
- * 			const c = yield* ctx.request({ method: op === 'delete' ? 'DELETE' : $id === null ? 'POST' : 'PATCH',
- * 				path: $id === null ? '/customers' : `/customers/${$id}`, headers: $version === null ? {} : { 'If-Match': $version },
- * 				body: { name: row.name }, output: { kind: 'json' } });
- * 			return acknowledged(c);
- * 		}
+ * // src/data/model/customers/+crm.sync.ts
+ * export default sync('customers', 'crm', {
+ * 	with: 'crm',
+ * 	read: function* ({ cursor }, ctx) {
+ * 		const page = yield* ctx.request({ method: 'GET', path: '/customers', query: { since: String(cursor ?? '') }, output: { kind: 'json' } });
+ * 		return { rows: toRows(page), cursor: nextCursor(page), more: hasMore(page) };
+ * 	},
+ * 	write: function* ({ op, row, $id, $version }, ctx) {
+ * 		if (op === 'delete' && $id === null) return null;
+ * 		const c = yield* ctx.request({ method: op === 'delete' ? 'DELETE' : $id === null ? 'POST' : 'PATCH',
+ * 			path: $id === null ? '/customers' : `/customers/${$id}`, headers: $version === null ? {} : { 'If-Match': $version },
+ * 			body: { name: row.name }, output: { kind: 'json' } });
+ * 		return acknowledged(c);
  * 	}
- * }
+ * });
  */
 export type RemoteSync<M, S extends string = string, X = SyncData<M, S>, D = DefOf<X>> = {
 	with: IntegrationName;
@@ -336,3 +336,93 @@ export type RemoteSync<M, S extends string = string, X = SyncData<M, S>, D = Def
 	read?: (input: RemoteReadInput<D>, ctx: SyncCtx<D>) => BodyReturn<RemoteReadResult<M>>;
 	write?: (change: SyncChange<M, D>, ctx: SyncCtx<D>) => BodyReturn<RemoteWriteResult>;
 };
+
+// ── the declaration: the data is checked against the literal, `read`, `write` and a custom `parse` typed by name ──
+type Inputs<X, K extends string> = X extends { [P in K]: infer F } ? ValidInputs<F> : never;
+interface SyncFor<X> {
+	with: 'file' | IntegrationName;
+	parser?: readonly (BuiltinParser | { type: MediaType; extensions: readonly `.${string}`[]; parse: unknown })[];
+	schema?: Inputs<X, 'schema'>;
+	context?: Inputs<X, 'context'>;
+	every?: Duration;
+	partitions?: string;
+	read?: unknown;
+	write?: unknown;
+}
+/** A sync literal as `sync()` takes it. */
+export type SyncLiteral = {
+	with: string;
+	parser?: readonly (string | { type: string; extensions: readonly string[]; parse: GeneratorBody })[];
+	schema?: InputFields;
+	context?: InputFields;
+	every?: string;
+	partitions?: string;
+	read?: GeneratorBody;
+	write?: GeneratorBody;
+};
+/** `SyncLiteral` with its bodies unknown: a body's type comes from the sync's name (`FileSync`, `RemoteSync`), never the constraint. */
+type SyncShape = Omit<SyncLiteral, 'parser' | 'read' | 'write'> & {
+	parser?: readonly (string | { type: string; extensions: readonly string[]; parse: unknown })[];
+	read?: unknown;
+	write?: unknown;
+};
+/** The bodies of one sync as the guest calls them (`model.<model>.bodies.syncs.<sync>.…`). */
+export type SyncBodies = {
+	readonly read?: Body;
+	readonly write?: Body;
+	readonly parse: { readonly [type: string]: Body };
+};
+/** What `sync()` returns: its model, its name, the literal and the bodies the guest calls. */
+export type Sync<M extends string, S extends string, X> = {
+	readonly model: M;
+	readonly name: S;
+	readonly spec: X;
+	readonly bodies: SyncBodies;
+};
+const guest = (body: GeneratorBody | undefined) => (body === undefined ? undefined : attached(body, 1));
+/**
+ * `src/data/model/<…>/<model>/+<sync>.sync.ts`, beside its model's `+model.ts`: how that model's rows are exchanged with a file
+ * (`with: 'file'`: the native Import, Download template and Export toolbar actions from its `parser`/`read`/`write`) or
+ * with another system through integration `with` (runs on `every`). `model` must be the leaf folder's name and `name`
+ * the file's. `context` is input, never authority; only returned source fields change. Run by `ctx.sync`, a native
+ * control or the sync's schedule, never by a page script.
+ * @returns Declaration metadata and attached bodies. Calling sync does not read or write records.
+ * @param model The model's name: its leaf folder.
+ * @param name The sync's name: its file.
+ * @param spec `FileSync` or `RemoteSync`.
+ */
+/* @__NO_SIDE_EFFECTS__ */
+export function sync<const M extends string, const S extends string, const X extends SyncShape>(
+	model: M,
+	name: S,
+	spec: X & NoInfer<Checked<SyncLiteral, X, Exact<X, SyncFor<X>>>> & NoInfer<FileSync<M, S> | RemoteSync<M, S>>
+): Sync<M, S, X>;
+export function sync<M extends string, S extends string>(model: M, name: S, literal: SyncLiteral): Sync<M, S, SyncLiteral> {
+	const read = guest(literal.read),
+		write = guest(literal.write);
+	return {
+		model,
+		name,
+		spec: literal,
+		bodies: {
+			...(read === undefined ? {} : { read }),
+			...(write === undefined ? {} : { write }),
+			parse: Object.fromEntries(
+				(literal.parser ?? []).flatMap((p): [string, Body][] =>
+					typeof p === 'string' ? [] : [[p.type, attached(p.parse, 1)]]
+				)
+			)
+		}
+	};
+}
+
+type Declared = { readonly spec: object; readonly bodies: object };
+/**
+ * A model declaration with its sync files merged in, as the compiler hands it on before anything reads the model:
+ * each sync's literal at `spec.syncs.<sync>`, its bodies at `bodies.syncs.<sync>`.
+ */
+export function with_syncs<D extends Declared>(model: D, syncs: { readonly [sync: string]: Declared }) {
+	const each = (part: 'spec' | 'bodies') =>
+		Object.fromEntries(Object.entries(syncs).map(([name, s]) => [name, s[part]]));
+	return { ...model, spec: { ...model.spec, syncs: each('spec') }, bodies: { ...model.bodies, syncs: each('bodies') } };
+}

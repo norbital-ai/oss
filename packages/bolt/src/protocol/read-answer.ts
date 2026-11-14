@@ -1,7 +1,7 @@
 import { Result, Schema } from 'effect';
 import { input_schema, KindSchema, type Value } from '@norbital-ai/store/kind';
 import type { Json } from '@norbital-ai/store';
-import type { AggRow, Page, Paged, ReadAnswer, ReadRequestBase } from '../decl/ctx.ts';
+import type { ReadAnswer, ReadRequestBase } from '../decl/ctx.ts';
 import { ReadFailed } from '../decl/errors.ts';
 import { decode_read_request, type LayerRequestJson } from './read-request.ts';
 import { RowLabelField, RowStateFields } from './record-contracts.ts';
@@ -174,9 +174,6 @@ const AggregateArguments = Schema.Struct({
 	min: Schema.optionalKey(Schema.Array(Schema.String)), max: Schema.optionalKey(Schema.Array(Schema.String)),
 	by: Schema.optionalKey(Schema.Json)
 });
-export type AggregateArguments = Omit<typeof AggregateArguments.Type, 'by'> &
-	({ readonly by?: never } | ({ readonly by: Json } & Paged));
-type AggregateAnswer<C, A> = A extends { readonly by: infer B } ? Page<AggRow<C, B>> : AggRow<C>;
 export const aggregate_answer = (catalog: ReadCatalog, model: string, args: unknown): Codec => {
 	const decoded = Schema.decodeUnknownResult(AggregateArguments)(read_wire(args));
 	if (Result.isFailure(decoded)) return failed(decoded.failure.message);
@@ -186,7 +183,3 @@ export const aggregate_answer = (catalog: ReadCatalog, model: string, args: unkn
 	const { output: _output, ...measures } = options;
 	return aggregate(level, measures, true);
 };
-export function typed_aggregate_answer<const C extends string, const A extends AggregateArguments>(catalog: ReadCatalog, model: C, args: A) {
-	const answer = aggregate_answer(catalog, model, args), valid = Schema.is(Schema.toType(answer));
-	return answer.pipe(Schema.decodeTo(Schema.declare((value: unknown): value is AggregateAnswer<C, A> => valid(value))));
-}

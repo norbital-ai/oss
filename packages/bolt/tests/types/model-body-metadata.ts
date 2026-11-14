@@ -1,7 +1,6 @@
 // Fresh nested declarations keep their metadata and their generated callback contexts together.
 import { expectTypeOf } from '@effect/vitest';
-import { automation } from '../../src/index.ts';
-import { bind_model } from '../../src/declarations.ts';
+import { automation, model } from '../../src/index.ts';
 import type { CreatedRow, Id, WriteCtx } from '../../src/index.ts';
 import type { CreateSet } from '../../src/decl/ctx.ts';
 import type { AutomationCtx } from '../../src/index.ts';
@@ -12,10 +11,11 @@ import './registry.ts';
 import type { Change } from '../../src/decl/ctx.ts';
 import type { Vector } from '../../src/decl/values.ts';
 
-bind_model('orders')({
+model('orders', {
 	...orders.spec,
 	create: {
-		columns: { fields: ['customer', 'note', 'due'], lines: { fields: ['item', 'qty', 'price'] } },
+		fields: ['customer', 'note', 'due'],
+		lines: { fields: ['item', 'qty', 'price'] },
 		transform: function* (rows, ctx) {
 			expectTypeOf(rows).toEqualTypeOf<readonly Change<null, CreateSet<'orders'>, CreatedRow<'orders'>>[]>();
 			expectTypeOf(ctx).toEqualTypeOf<WriteCtx<'orders'>>();

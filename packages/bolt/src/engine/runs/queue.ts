@@ -6,7 +6,8 @@ import { runPiece } from './rows.ts';
 // (`syncTriggers`, engine/sync/index.ts).
 import { Schema } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
-import { LIMITS, type Authority, type CronEntry, type QueuedRun } from '../contracts.ts';
+import type { CronEntry } from '@norbital-ai/host-api';
+import { LIMITS, type Authority, type QueuedRun } from '../contracts.ts';
 import type { Json } from '../../decl/values.ts';
 import type { Holder } from '../access/authority.ts';
 import type { EngineManifest } from '../manifest.ts';
@@ -57,6 +58,38 @@ export function enqueue(
 		{ returning: "id, CASE WHEN state = 'queued' THEN due_at ELSE NULL END AS due_at" }
 	);
 }
+/**
+ * Marks the runs `where` (over `sys_run r` and `from`) names as woken by `woke` (a jsonb expression): a waiting one is
+ * queued again, due `now`; a running one that registered its wait keeps it for its suspension (`runs/wait.ts`).
+ */
+function wake(c: Chain, name: string, now: string, woke: string, from: string, where: string): void {
+	const names = pieces.get(c) ?? [];
+	pieces.set(c, names);
+	names.push(name);
+	runPiece(c,
+		name,
+		`UPDATE sys_run r SET state = CASE WHEN r.state = 'waiting' THEN 'queued' ELSE r.state END,
+		due_at = CASE WHEN r.state = 'waiting' THEN ${now} ELSE r.due_at END, wait = r.wait || jsonb_build_object('woke', ${woke})
+		FROM ${from} WHERE r.state IN ('waiting', 'running') AND (${where}) AND ${GATED}`,
+		{ returning: "r.id, CASE WHEN r.state = 'queued' THEN r.due_at ELSE NULL END AS due_at" }
+	);
+}
+/**
+ * The runs waiting on a write to a model one of `source`'s rows (`c`, `id`, `op`) committed, with every written id
+ * since it waited. The wait's `where` is checked by the woken run against those records: a write it does not match
+ * puts it back to wait.
+ */
+// ponytail: a write to a waited model wakes every run waiting on that model; match `where` here if spurious wakes cost
+export const wakeWrites = (c: Chain, source: string, now: string): void =>
+	wake(c, 'woke_writes', now,
+		`jsonb_build_object('kind', 'event', 'model', x.c, 'records', coalesce(r.wait->'woke'->'records', '[]'::jsonb) || x.records)`,
+		`(SELECT s.c, jsonb_agg(DISTINCT s.id) AS records, array_agg(DISTINCT s.op) AS ops FROM ${source} s GROUP BY s.c) x`,
+		`r.wait->'on'->>'model' = x.c AND (NOT r.wait->'on' ? 'verbs' OR r.wait->'on'->'verbs' ?| x.ops)`);
+/** The runs waiting on approval request `request`, which the decision in `up` closes. */
+export const wakeApproval = (c: Chain, request: string, now: string): void =>
+	wake(c, 'woke_approval', now,
+		`jsonb_build_object('kind', 'approval', 'request', u.id::text, 'state', u.state)`,
+		'up u', `r.wait->'on'->>'approval' = ${c.p(request)}`);
 /** Drain keys belong only to waiting work: claiming the run releases its key for the next pass. */
 export const DRAIN_KEY_PREFIX = 'bolt.drain:';
 const drains = new WeakMap<Chain, Map<string, string[]>>();
@@ -114,6 +147,10 @@ export function triggers_of(m: EngineManifest): Triggers {
 	return triggers;
 }
 
+/** A split act's rows parked by its earlier statements for its last (`queue_effects`), dropped at commit. */
+export const PARTS = 'bolt_act_parts';
+export const PARTS_TABLE = `CREATE TEMP TABLE IF NOT EXISTS ${PARTS} (part int, c text, id text, revision int, op text, cause text,
+	erased boolean, o jsonb, n jsonb, request uuid) ON COMMIT DROP`;
 /**
  * Who committed a write: the holder its model effects run as (`sys_run.starter`), its actor ref, and the depth the
  * effects run at (one below the run that wrote, 0 for a write outside any run).
@@ -155,25 +192,26 @@ export function effectOf(
 		: undefined;
 }
 
-/** Fields whose change runs an update effect: stored values, never roll-ups, computed or system columns. */
-function storedFields(m: EngineManifest, model: string): readonly string[] {
+/**
+ * Whether row `x` (images `x.o`, `x.n`) of `model` changed a stored value: never a roll-up, computed or system column.
+ * Update effects and write events share it, so a cascade or roll-up row that changes nothing stored runs neither.
+ */
+function storedChange(m: EngineManifest, c: Chain, model: string): string {
 	const info = catalog_of(m).models.get(model);
-	if (info === undefined)
-		throw BoltError.make('internal', 'decode', `the effect names missing model ${model}`);
-	return [
+	if (info === undefined) return 'true';
+	const fields = [
 		...[...info.fields.values()]
-			.filter(
-				(f) => !f.derived && !f.computed && !SYSTEM_COLUMN_SET.has(f.name)
-			)
+			.filter((f) => !f.derived && !f.computed && !SYSTEM_COLUMN_SET.has(f.name))
 			.map((f) => f.column),
 		...[...info.one.keys()].filter((k) => !info.fields.has(k))
 	];
+	return `(${fields.map((f) => `(x.o -> ${c.p(f)}) IS DISTINCT FROM (x.n -> ${c.p(f)})`).join(' OR ') || 'false'})`;
 }
 
-export const effectDepthFailure = {
-	code: 'depth',
-	message: `Effects chain at most ${LIMITS.writeDepth} deep: this write's effect did not run.`
-};
+export const EFFECT_DEPTH_MESSAGE = `Effects chain at most ${LIMITS.writeDepth} deep: this write would run one past it.`;
+/** A write whose effects or events would run past the chain depth is refused whole: nothing commits without them. */
+const refuseDeep = (c: Chain, queued: string, when: string) =>
+	c.assert(`NOT EXISTS (${queued})`, 'depth', EFFECT_DEPTH_MESSAGE, when);
 /** Freeze the actual change and writer; held jobs have no runnable row until the approval accepts them. */
 export function queue_effects(
 	m: EngineManifest,
@@ -182,20 +220,25 @@ export function queue_effects(
 	writer: Writer,
 	source: string,
 	operation: string,
-	requests: string | null
+	requests: string | null,
+	/** One statement of a split act (`commit.ts` `parts`): an earlier one parks its rows; the last queues the act's. */
+	part?: { readonly index: number; readonly last: boolean }
 ): void {
 	const catalog = catalog_of(m);
 	const rows = 'effect_rows';
+	const own = requests === null
+		? `SELECT x.*,NULL::uuid AS request FROM ${source} x`
+		: `SELECT x.*,h.id AS request FROM ${source} x LEFT JOIN ${requests} h ON
+		EXISTS (SELECT 1 FROM jsonb_array_elements(h.records) r
+		WHERE r->>'collection'=x.c AND r->>'id'=x.id)`;
+	if (part !== undefined && !part.last) {
+		c.cte('effect_parked', `INSERT INTO ${PARTS} (part,c,id,revision,op,cause,erased,o,n,request)
+		SELECT ${part.index},c,id,revision,op,cause,erased,o,n,request FROM (${own}) x WHERE ${GATED}`);
+		return;
+	}
 	const selects = Object.entries(m.exposures).flatMap(([model, spec]) =>
 		EFFECT_VERBS.filter((verb) => spec[verb]?.effect === true).map((verb) => {
-			const changed =
-				verb !== 'update'
-					? 'true'
-					: `(${
-							storedFields(m, model)
-								.map((f) => `(x.o -> ${c.p(f)}) IS DISTINCT FROM (x.n -> ${c.p(f)})`)
-								.join(' OR ') || 'false'
-						})`;
+			const changed = verb === 'update' ? storedChange(m, c, model) : 'true';
 			const before = storedImageSql(catalog, [model], 'x.o');
 			const after = storedImageSql(catalog, [model], 'x.n');
 			const set = verb === 'delete' ? "'{}'::jsonb" : verb === 'create' ? after
@@ -207,35 +250,50 @@ export function queue_effects(
 			GROUP BY x.request HAVING count(*) > 0`;
 		})
 	);
-	if (requests !== null) {
-		c.cte(rows, `SELECT x.*,h.id AS request FROM ${source} x LEFT JOIN ${requests} h ON
-		EXISTS (SELECT 1 FROM jsonb_array_elements(h.records) r
-		WHERE r->>'collection'=x.c AND r->>'id'=x.id)`);
+	// a split act's rows, each once: as the act's first statement found it, as its last left it
+	if (part !== undefined) {
+		const all = `SELECT ${part.index} AS part,c,id,revision,op,cause,erased,o,n,request FROM (${own}) y
+		UNION ALL SELECT part,c,id,revision,op,cause,erased,o,n,request FROM ${PARTS}`;
+		c.cte(rows, `SELECT f.c,f.id,l.revision,f.op,f.cause,f.erased,f.o,l.n,f.request
+		FROM (SELECT DISTINCT ON (c,id) * FROM (${all}) a ORDER BY c,id,part) f
+		JOIN (SELECT DISTINCT ON (c,id) c,id,revision,n FROM (${all}) a ORDER BY c,id,part DESC) l USING (c,id)`);
+	} else if (requests !== null || selects.length > 0) c.cte(rows, own);
+	if (requests !== null)
 		c.assert(`NOT EXISTS (SELECT c,id FROM ${rows} GROUP BY c,id HAVING count(*)>1)`,
 			'under_approval', 'A changed record belongs to more than one approval request.');
-	} else if (selects.length > 0) c.cte(rows, `SELECT x.*,NULL::uuid AS request FROM ${source} x`);
+	const viaRows = part !== undefined || requests !== null;
+	wakeWrites(c, `(SELECT * FROM ${viaRows ? rows : source} x${viaRows ? ' WHERE x.request IS NULL' : ''})`,
+		`${c.shared('now', now)}::timestamptz`);
 	const { writes } = triggers_of(m);
 	// built only when used: an unused parameter has no type PostgreSQL can determine
-	if (writes.length > 0) queue_events(c, writes, `${c.shared('now', now)}::timestamptz`, requests === null ? source : `(SELECT * FROM ${rows} WHERE request IS NULL)`, writer.depth, GATED);
+	if (writes.length > 0) {
+		const listened = [...new Set(writes.map((w) => w.model))];
+		queue_events(c, writes, `${c.shared('now', now)}::timestamptz`,
+			`(SELECT * FROM ${viaRows ? rows : source} x WHERE ${viaRows ? 'x.request IS NULL AND ' : ''}(x.op <> 'update' OR CASE x.c ${
+				listened.map((model) => `WHEN ${c.p(model)} THEN ${storedChange(m, c, model)}`).join(' ')} ELSE true END))`,
+			writer.depth, GATED);
+	}
 	if (selects.length === 0) return;
-	const deep = writer.depth > LIMITS.writeDepth;
+	if (writer.depth > LIMITS.writeDepth) {
+		refuseDeep(c, selects.join(' UNION ALL '), GATED);
+		return;
+	}
 	const jobs = c.cte('effect_jobs',
 		`SELECT t.request,t.a AS automation,t.input,${c.shared('now', now)}::timestamptz AS due_at,'effect'::text AS cause,
-		${c.p(writer.depth)}::int AS depth,${c.p(writer.actor)}::text AS actor,${c.p(writer.starter)}::jsonb AS starter,
-		${c.p(deep ? 'failed' : 'queued')}::text AS state,${c.p(deep ? effectDepthFailure : null)}::jsonb AS error,
-		${c.p(deep ? now : null)}::timestamptz AS finished_at FROM (${selects.join(' UNION ALL ')}) t`);
+		${c.p(writer.depth)}::int AS depth,${c.p(writer.actor)}::text AS actor,${c.p(writer.starter)}::jsonb AS starter
+		FROM (${selects.join(' UNION ALL ')}) t`);
 	c.cte('ap_deferred_effects',
-		`INSERT INTO bolt_approval_effect(request,operation,automation,input,due_at,actor,starter,depth,state,error,finished_at)
-		SELECT request,${c.p(operation)}::text || ':' || pg_current_xact_id()::text,automation,input,due_at,actor,starter,depth,state,error,finished_at
+		`INSERT INTO bolt_approval_effect(request,operation,automation,input,due_at,actor,starter,depth,state)
+		SELECT request,${c.p(operation)}::text || ':' || pg_current_xact_id()::text,automation,input,due_at,actor,starter,depth,'queued'
 		FROM ${jobs} WHERE request IS NOT NULL AND ${GATED}
 		ON CONFLICT (request,operation,automation) DO NOTHING RETURNING request`);
-	enqueue(c, { select: `SELECT automation,input,due_at,cause,depth,actor,starter,state,error,finished_at
+	enqueue(c, { select: `SELECT automation,input,due_at,cause,depth,actor,starter
 		FROM ${jobs} WHERE request IS NULL AND ${GATED}` });
 }
 
 /**
  * One run per listening automation and verb for the rows `source` (`c`, `id`, `op`) committed, as the system identity
- * (no actor or starter: the executor holds the automation's policies). Past the write depth it is recorded failed.
+ * (no actor or starter: the executor holds the automation's policies). Past the write depth the write is refused.
  */
 export function queue_events(
 	c: Chain,
@@ -246,13 +304,12 @@ export function queue_events(
 	when?: string
 ): void {
 	if (writes.length === 0) return;
-	const deep = depth > LIMITS.writeDepth;
 	const selects = writes.map((w) => `SELECT ${c.p(w.automation)}::text AS automation,'{}'::jsonb AS input,${now} AS due_at,
-	'event'::text AS cause,${c.p(depth)}::int AS depth,${c.p(deep ? 'failed' : 'queued')}::text AS state,
-	${c.p(deep ? effectDepthFailure : null)}::jsonb AS error,CASE WHEN ${c.p(deep)}::boolean THEN ${now} END AS finished_at,
+	'event'::text AS cause,${c.p(depth)}::int AS depth,
 	jsonb_build_object('kind','system','cause','event','model',x.c,'verb',x.op,'records',jsonb_agg(x.id ORDER BY x.id)) AS trigger
 	FROM ${source} x WHERE x.c = ${c.p(w.model)} AND x.op = ANY(ARRAY[${w.verbs.map((v) => c.p(v)).join(',')}]::text[]) GROUP BY x.c,x.op`);
-	enqueue(c, { select: selects.join(' UNION ALL ') }, when === undefined ? {} : { when });
+	if (depth > LIMITS.writeDepth) refuseDeep(c, selects.join(' UNION ALL '), when ?? 'true');
+	else enqueue(c, { select: selects.join(' UNION ALL ') }, when === undefined ? {} : { when });
 }
 
 /**
@@ -268,6 +325,7 @@ export function settleApprovalEffects(
 	now: string,
 	depth: number
 ): void {
+	wakeApproval(c, request, `${c.p(now)}::timestamptz`);
 	const released = c.cte('ap_released_effects',
 		`DELETE FROM bolt_approval_effect WHERE request=${c.p(request)}::uuid
 		AND EXISTS (SELECT 1 FROM up) AND ${GATED} RETURNING *`);

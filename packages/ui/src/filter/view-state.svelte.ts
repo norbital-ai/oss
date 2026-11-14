@@ -175,7 +175,8 @@ export function viewState(
 	// what the read sends: the viewer's rows at the page's clock, each re-checked by `bolt.decode` when the client has it
 	//
 	const lowered = $derived.by(() => {
-		if (o.enabled?.() === false) return { where: undefined, dropped: 0 };
+		// no filter reads no clock
+		if (o.enabled?.() === false || rows.length === 0) return { where: undefined, dropped: 0 };
 		const c = o.model(),
 			at = clock(),
 			parts: Where[] = [];

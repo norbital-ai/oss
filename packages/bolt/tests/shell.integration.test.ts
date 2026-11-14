@@ -10,8 +10,7 @@ import { shell_api } from '../src/shell/runtime.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { founder_bootstrap } from '../src/engine/identity/session.ts';
 import { HostIdentity } from '../src/engine/services.ts';
-import type { StudioOp, StudioPort, StudioState } from '../src/shell/studio/model.ts';
-import type { StudioInspectInput } from '../src/shell/studio/inspection.ts';
+import type { StudioInspectInput, StudioOp, StudioPort, StudioState } from '@norbital-ai/host-api';
 import { BoltError } from '../src/protocol/errors.ts';
 import { HEADERS, PATHS } from '../src/protocol/wire.ts';
 import { SHELL, type ShellBoot } from '../src/shell/nav.ts';
@@ -24,7 +23,7 @@ const manifest = Result.getOrThrow(
 			tz: 'UTC',
 			locale: 'en',
 			apps: ['sales'],
-			signup: { via: ['email'], policies: ['applicant'], challenge: 'turnstile' }
+			signup: { via: ['email'], policies: ['applicant'], challenge: true }
 		},
 		models: {
 			openings: {
@@ -89,7 +88,7 @@ const manifest = Result.getOrThrow(
 				title: 'Careers',
 				description: 'Jobs',
 				icon: 'i',
-				audience: { public: ['applicant'], challenge: 'turnstile' },
+				audience: { public: ['applicant'], challenge: true },
 				pages: { apply: { title: 'Apply' } }
 			},
 			lobby: {

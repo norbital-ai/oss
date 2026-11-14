@@ -14,12 +14,7 @@
 	import { Button, confirm_action, Icon } from '@norbital-ai/ui';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../decl/values.ts';
-	import type {
-		ImportStartInput,
-		InstanceState,
-		InstanceStatus,
-		ProviderChoice
-	} from '../protocol/instance-status.ts';
+	import type { ImportStartInput, InstanceState, InstanceStatus, ProviderChoice } from '@norbital-ai/host-api';
 	import IntegrationSetup from './IntegrationSetup.svelte';
 	import Setup from '../shell/integration/Setup.svelte';
 	import ImportStart from '../shell/integration/ImportStart.svelte';

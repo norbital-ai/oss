@@ -84,14 +84,26 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 		? manifest.exposures[u.model]?.syncs?.[u.field.slice('$import.'.length)]
 		: undefined;
 	const parsers = sync?.with === 'file' ? parsersOf(sync) : null;
+	// an automation's `file` input (`<automation>.$input.<input>`): a member who may start it; the file is the
+	// automation's, so its runs read it
+	const input = u.field.startsWith('$input.')
+		? manifest.automations[u.model]?.input?.[u.field.slice('$input.'.length)]
+		: undefined;
 	const kind =
 		panel || parsers !== null
 			? { kind: 'file' as const, accept: [], max: UNBOUNDED }
-			: manifest.models[u.model]?.fields[u.field];
+			: input !== undefined
+				? input.kind === 'file'
+					? input
+					: undefined
+				: manifest.models[u.model]?.fields[u.field];
 	const size = u.stored?.bytes ?? u.bytes.byteLength;
 	const allowed = panel
 		? u.authority.actor.kind === 'member'
-		: parsers !== null
+		: input !== undefined
+			? u.authority.actor.kind === 'member' &&
+				(u.authority.admin || u.authority.automations.includes(u.model))
+			: parsers !== null
 			? u.authority.actor.kind === 'member' &&
 				(u.authority.admin ||
 					(u.authority.models[u.model]?.create.length ?? 0) > 0 ||
@@ -127,7 +139,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	c.cte(
 		'idem',
 		`INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-	VALUES (${c.p(u.id)}, ${c.p(u.name)}, ${c.p(u.mime)}, ${c.p(size)}, ${c.p(blob.key)}, ${c.p(sha256)}, ${c.p(`${u.model}.${u.field}`)},
+	VALUES (${c.p(u.id)}, ${c.p(u.name)}, ${c.p(u.mime)}, ${c.p(size)}, ${c.p(blob.key)}, ${c.p(sha256)}, ${c.p(input === undefined ? `${u.model}.${u.field}` : u.model)},
 		${c.p(u.now)}::timestamptz, ${c.p(u.authority.actor.kind === 'member' ? u.authority.actor.id : null)})
 	ON CONFLICT (id) DO NOTHING RETURNING id, name, mime, size, sha256`
 	);

@@ -4,14 +4,14 @@ import { describe, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb, Pristine } from '@norbital-ai/host-api/node';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Live } from '../src/engine/services.ts';
 import { ActReply } from '../src/protocol/schema.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { uuidv7 } from '../src/protocol/wire.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -223,7 +223,14 @@ describe('a read request (`bolt.query({ … })`)', () => {
 									})
 							});
 						})
-					).pipe(Layer.provide(PgliteDb.layer()));
+					).pipe(
+						Layer.provide(
+							Layer.effect(
+								TenantDb,
+								Effect.map(PgliteDb.open(), (pg) => TenantDb.typed(PgliteDb.make(pg)))
+							).pipe(Layer.provide(Pristine.layer))
+						)
+					);
 					const context = yield* Layer.build(TestWorkspace.layer({ manifest: keyed, db }));
 					const t = Context.get(context, TestWorkspace),
 						route = yield* route_fixture(context);

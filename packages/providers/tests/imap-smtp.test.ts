@@ -7,7 +7,7 @@ import { Clock, Deferred, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { ProviderUnavailable } from '../src/errors.ts';
 import type { LinkDef } from '../src/abi.ts';
-import type { DriverEvent } from '@norbital-ai/bolt/engine';
+import type { DriverEvent } from '@norbital-ai/host-api';
 import { Cursor } from '../src/imap-smtp/model.ts';
 import { mailbox } from '../src/imap-smtp/index.ts';
 import { readMail } from '../src/imap-smtp/reports.ts';

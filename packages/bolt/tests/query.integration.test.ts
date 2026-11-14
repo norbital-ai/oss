@@ -1,9 +1,9 @@
 import type { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Predicate, Schema } from 'effect';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { db_error } from '../src/engine/db/wire.ts';
+import { db_error } from '@norbital-ai/host-api';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, Reader, RowData } from '../src/engine/contracts.ts';
@@ -144,7 +144,7 @@ const JsonRow = Schema.Record(Schema.String, Schema.Json);
 const Page = Schema.Struct({ rows: Schema.Array(JsonRow), next: Schema.NullOr(Schema.String) });
 const fill = Effect.fnUntraced(function* (fresh: PGlite) {
 	pg = fresh;
-	native = PgliteDb.make(pg);
+	native = TenantDb.typed(PgliteDb.make(pg));
 	yield* exec(DDL);
 	for (const a of ACCOUNTS)
 		yield* query('insert into accounts (id, name, region, secret) values ($1, $2, $3, $4)', [
@@ -195,7 +195,7 @@ const fill = Effect.fnUntraced(function* (fresh: PGlite) {
 });
 const setup = Effect.fnUntraced(function* () {
 	pg = yield* TestDb.prepared('query.integration', fill);
-	native = PgliteDb.make(pg);
+	native = TenantDb.typed(PgliteDb.make(pg));
 });
 describe('next query engine (PGlite)', () => {
 	it.live(
@@ -420,34 +420,15 @@ describe('next query engine (PGlite)', () => {
 					lines: yield* all('lines', workspace),
 					notes: yield* all('notes', workspace)
 				};
-				const related = (
-					c: string,
-					rel: string,
-					target: string,
-					row: RowData
-				): readonly RowData[] => {
-					const one = present(cat.models.get(c)).one.get(rel);
-					if (one !== undefined) {
-						const v = Schema.decodeUnknownSync(
-							Schema.NullOr(
-								Schema.Union([
-									Schema.String,
-									Schema.Struct({ model: Schema.String, id: Schema.String })
-								])
-							)
-						)(row[rel]);
-						const to = typeof v === 'string' ? v : v?.model === target ? v.id : null;
-						return present(rows[target]).filter((r) => r.id === to);
-					}
-					const m = present(present(cat.models.get(c)).many.get(rel));
-					const fk = present(m.column.split('__')[0]);
-					return present(rows[target]).filter((r) => {
-						const v = Schema.decodeUnknownSync(
-							Schema.NullOr(Schema.Union([Schema.String, Schema.Struct({ id: Schema.String })]))
-						)(r[fk]);
-						return (typeof v === 'string' ? v : v?.id) === row.id;
-					});
-				};
+				// a relation is decided only in SQL (one scoping rule): the in-memory oracle checks the rest
+				const relational = (p: Pred): boolean =>
+					p.t === 'one' || p.t === 'many' || p.t === 'count' || p.t === 'agg'
+						? true
+						: p.t === 'and' || p.t === 'or'
+							? p.of.some(relational)
+							: p.t === 'not'
+								? relational(p.of)
+								: false;
 				// the where grammar over the catalogue: a field, an operator its kind admits, an operand its kind admits, a
 				// literal from the column's own values; relations by their quantifiers; combinators; to depth 4
 				const untag = (value: unknown): Json => Schema.decodeUnknownSync(Schema.Json)(value);
@@ -571,7 +552,7 @@ describe('next query engine (PGlite)', () => {
 								{ is_null: rnd() < 0.5 },
 								...texts.map((g) => ({ [pick(['eq', 'ne'])]: { field: g.name } })),
 								...(f.email && o.actor
-									? [{ eq: { var: 'requestor.email' } }, { eq: { var: 'requestor.email' } }]
+									? [{ eq: { var: 'actor.email' } }, { eq: { var: 'actor.email' } }]
 									: []),
 								...(o.text ? [{ [pick(['lt', 'gte'])]: s }] : [])
 							]);
@@ -724,16 +705,19 @@ describe('next query engine (PGlite)', () => {
 							where_sql(cat, 'orders', p, readOptions(reader, bindings))
 						)
 					);
-					const env = { cat, bindings, authority, scoped: authority !== null, related };
-					const inScope = (r: RowData) =>
-						authority === null ||
-						authority.admin ||
-						(present(authority.models.orders).read['default']?.['orders'] ?? []).some((a) =>
-							evaluate({ ...env, scoped: false }, 'orders', a.where, r)
-						);
-					let telling = 0;
+					const env = { cat, bindings, authority };
+					// the reader's scope may be relational, which only SQL decides: the rows an always-true read admits
+					const [all] = yield* db.read([
+						yield* where_sql(cat, 'orders', { t: 'const', value: true }, readOptions(reader, bindings))
+					]);
+					const admitted = new Set(present(all).rows.map((r) => r.id));
+					const inScope = (r: RowData) => admitted.has(r.id);
+					let telling = 0,
+						compared = 0;
 					const scoped = present(rows.orders).filter(inScope).length;
 					preds.forEach((p, i) => {
+						if (relational(p)) return;
+						compared++;
 						const js = present(rows.orders)
 							.filter((r) => inScope(r) && evaluate(env, 'orders', p, r))
 							.map((r) => r.id)
@@ -745,7 +729,7 @@ describe('next query engine (PGlite)', () => {
 						if (js.length > 0 && js.length < scoped) telling++;
 					});
 					// most predicates split the rows: an all-empty or all-full run would prove nothing
-					expect(telling).toBeGreaterThan(preds.length / 3);
+					expect(telling).toBeGreaterThan(compared / 3);
 					// text ordering follows the database collation, which the JS evaluator does not model: SQL only
 					const text = Array.from({ length: 3 }, () => gen('orders', 0, { ...o, text: true }));
 					yield* db.read(
@@ -1387,7 +1371,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'a workspace row is its stored fields; a caller default row omits json; an explicit select returns it',
+		'a workspace row is its stored and computed fields; a caller default row omits json; an explicit select returns it',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1402,8 +1386,7 @@ describe('next query engine (PGlite)', () => {
 						{ concurrency: 'unbounded' }
 					)
 				);
-				expect(ws[0]).toMatchObject({ name: 'alpha acme', secret: 'shh', revision: 1 });
-				expect(ws[0]).not.toHaveProperty('shout');
+				expect(ws[0]).toMatchObject({ name: 'alpha acme', secret: 'shh', revision: 1, shout: 'ALPHA ACME' });
 				expect(call[0]).toMatchObject({ shout: 'ALPHA ACME', secret: 'shh' });
 				const [dflt, explicit] = Schema.decodeUnknownSync(Schema.Tuple([Page, Page]))(
 					yield* run(

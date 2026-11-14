@@ -1,6 +1,6 @@
-import { model } from '../../../../.norbital/models/orders.ts';
+import { model } from '@norbital-ai/bolt';
 
-export default model({
+export default model('orders', {
 	description: 'Sales orders',
 	record_label: 'record.number',
 	fields: {
@@ -15,5 +15,5 @@ export default model({
 	},
 	constraints: { placed: { locked: { status: { eq: 'placed' } } } },
 	outputs: { default: { fields: 'all', customer: { fields: ['name', 'rating'] } } },
-	create: { columns: { fields: ['customer', 'amount'] } }
+	create: { fields: ['customer', 'amount'] }
 });

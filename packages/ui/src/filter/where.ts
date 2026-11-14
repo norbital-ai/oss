@@ -24,7 +24,7 @@ const unlike = (p: string): string | null => {
  * itself when it reads only the requestor (the host binds it) or without a clock (the URL). */
 export function evaluated(text: string, clock: FilterClock | undefined, instant: boolean): Json {
 	const c = compile_var(text);
-	if (clock === undefined || 'error' in c || !c.time || c.requestor.length > 0)
+	if (clock === undefined || 'error' in c || !c.time || c.actor.length > 0)
 		return { var: text };
 	const v = evaluate_var(c, clock);
 	return instant && typeof v === 'string' && v.length === 10

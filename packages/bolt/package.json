@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.40",
+	"version": "0.0.41",
 	"description": "Bolt: the business OS framework — declarations, page SDK, protocol and the engine hosts run.",
 	"type": "module",
 	"sideEffects": [
@@ -21,11 +21,6 @@
 			"svelte": "./build/page/index.js",
 			"default": "./build/page/index.js"
 		},
-		"./page/studio": {
-			"types": "./build/page/studio.d.ts",
-			"svelte": "./build/page/studio.js",
-			"default": "./build/page/studio.js"
-		},
 		"./engine": {
 			"types": "./build/engine/index.d.ts",
 			"default": "./build/engine/index.js"
@@ -38,17 +33,9 @@
 			"types": "./build/protocol/index.d.ts",
 			"default": "./build/protocol/index.js"
 		},
-		"./facilities": {
-			"types": "./build/facilities/index.d.ts",
-			"default": "./build/facilities/index.js"
-		},
 		"./host-api": {
 			"types": "./build/host-api.d.ts",
 			"default": "./build/host-api.js"
-		},
-		"./node": {
-			"types": "./build/node/index.d.ts",
-			"default": "./build/node/index.js"
 		},
 		"./docs": {
 			"types": "./build/docs/index.d.ts",
@@ -57,10 +44,6 @@
 		"./tooling": {
 			"types": "./build/tooling/index.d.ts",
 			"default": "./build/tooling/index.js"
-		},
-		"./declarations": {
-			"types": "./build/declarations.d.ts",
-			"default": "./build/declarations.js"
 		}
 	},
 	"files": [
@@ -72,29 +55,19 @@
 		"build": "node scripts/system-names.ts && node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json --then node scripts/docs.ts --then node scripts/cell-bundle.ts",
 		"lint": "node scripts/system-names.ts && svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
 		"types:compat": "node scripts/system-names.ts && tsc -p tests/tsconfig.json --noEmit",
-		"migrations:audit": "node --experimental-strip-types scripts/audit-migrations.ts",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
 	},
 	"dependencies": {
 		"@cfworker/json-schema": "4.1.1",
 		"@effect/platform-node": "catalog:",
 		"@electric-sql/pglite": "^0.5.12",
-		"@electric-sql/pglite-pgvector": "^0.0.13",
 		"@iconify/svelte": "catalog:",
 		"@jridgewell/trace-mapping": "^0.3.31",
-		"@modelcontextprotocol/client": "2.4.0",
+		"@norbital-ai/host-api": "workspace:*",
 		"@norbital-ai/store": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
-		"@typescript/native": "npm:typescript@7.0.2",
-		"exifr": "7.1.3",
-		"fast-png": "8.0.0",
 		"fflate": "0.8.3",
-		"jpeg-js": "0.4.4",
-		"libheif-js": "1.23.5",
-		"pdq-wasm": "0.3.9",
-		"rolldown": "1.2.15",
 		"runed": "catalog:",
-		"svelte2tsx": "0.7.62",
 		"tailwindcss": "4.3.3",
 		"typescript": "catalog:"
 	},
@@ -111,7 +84,10 @@
 		"@types/node": "^26.6.5",
 		"@types/pg": "^8.23.1",
 		"effect": "catalog:",
+		"fast-png": "8.0.0",
+		"jpeg-js": "0.4.4",
 		"pg": "^8.23.1",
+		"rolldown": "1.2.15",
 		"svelte": "catalog:",
 		"svelte-check": "^4.7.7",
 		"vite": "catalog:"

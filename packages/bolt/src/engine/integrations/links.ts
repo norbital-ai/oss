@@ -19,30 +19,36 @@ import {
 	Stream
 } from 'effect';
 import { bindingsAt } from '../query/reader.ts';
-import { DRIVERS, type DriverName, type IntegrationSpec } from '../../decl/runtime/integration.ts';
+import { driver_name, driver_of, type IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { under } from '../../protocol/wire.ts';
 import {
+	FacilityFailure,
+	Fenced,
 	ImportStart,
 	ImportStartInput,
-	LinkStatus as LinkStatusSchema
-} from '../../protocol/schema.ts';
+	type InstanceStatus,
+	type LinkStatus,
+	LinkStatus as LinkStatusSchema,
+	OAUTH_CALLBACK,
+	type OAuthClient,
+	type OAuthVendor,
+	type Pairing,
+	Port,
+	type PortFailure,
+	type Provider,
+	type ProviderChoice,
+	type SendRefused,
+	type TcpPort,
+	Unavailable
+} from '@norbital-ai/host-api';
 import { resolveImportStart } from './import-start.ts';
-import type {
-	InstanceStatus,
-	IntegrationOffer,
-	LinkStatus,
-	Pairing,
-	ProviderChoice
-} from '../../protocol/instance-status.ts';
-import { LIMITS, type Authority, type TcpPort } from '../contracts.ts';
+import type { IntegrationOffer } from '../../protocol/schema.ts';
+import { LIMITS, type Authority } from '../contracts.ts';
 import { TenantDb } from '../db/tenant-db.ts';
-import { SendRefused } from '../conversations/status.ts';
-import { Fenced, is_transient, type EngineError } from '../errors.ts';
+import { is_transient, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import { Drivers } from '../ports.ts';
-import { Port, type PortFailure } from '../port.ts';
 import {
 	Conversations,
 	Guest,
@@ -52,12 +58,14 @@ import {
 	Outbound,
 	Reads,
 	Wake,
-	Writes
+	Callables,
+	Identity
 } from '../services.ts';
+import { inbound } from './inbound.ts';
 import { mayUpdate } from '../write/act.ts';
 import { canonical } from '@norbital-ai/store';
 import type { Credentials, InstanceRow } from './credentials.ts';
-import { oauth_client_of, type OAuthClient, type OAuthVendor, type Provider } from './driver.ts';
+import { oauth_client_of } from './driver.ts';
 import { LINK_DOWN, linkCalls, linkFailure, type LinkCalls } from './abi.ts';
 import { conversational, definitionOf, writeStatus } from './instances.ts';
 import { SYSTEM } from '../../system/index.ts';
@@ -65,12 +73,10 @@ import { Syncs, syncs_of } from '../sync/index.ts';
 import { verifiedWebhook } from './webhook.ts';
 
 export const HOOKS = '/hooks/integration/';
-/** The host path an OAuth provider redirects back to after a link's consent. */
-export const OAUTH_CALLBACK = '/hooks/oauth/callback';
 export const webhook_url = (public_url: string, instance: string): string =>
 	under(public_url, `${HOOKS}${encodeURIComponent(instance)}`);
 export type LinkAdmission =
-	TenantDb | Manifest | Conversations | Outbound | Syncs | Live | Wake | Reads | Writes | Guest;
+	TenantDb | Manifest | Conversations | Outbound | Syncs | Live | Wake | Reads | Callables | Guest | Identity;
 export type LinksHost = {
 	readonly providers: readonly Provider[];
 	/** A link's own work on the workspace (an ingest, a status), outside the compute envelope. */
@@ -121,6 +127,8 @@ export type LinkManager = {
 	readonly webhook: (instance: string, request: Request) => Effect.Effect<Response, LinkError>;
 	readonly callback: (request: Request) => Effect.Effect<Response, LinkError>;
 	readonly close: Effect.Effect<void>;
+	/** How many links this manager holds open. */
+	readonly open: Effect.Effect<number>;
 };
 const PROVIDER = 'provider';
 const DURABLE = new Set<LinkStatus['state']>(['connected', 'unpaired', 'error']);
@@ -132,7 +140,7 @@ const TEST_TEXT = 'Norbital test message: this integration is connected.';
 const DAY = 86_400_000;
 /** The least time between two reconciles of a link, however often it reconnects. */
 const RECONCILE_GAP_MS = 3_600_000;
-const isRequest = (driver: DriverName) => 'request' in DRIVERS[driver];
+const isRequest = (definition: IntegrationSpec) => driver_of(definition).request !== undefined;
 const unavailable = (reason: string) => BoltError.make('unavailable', 'facility', reason);
 const gone = (instance: string) =>
 	BoltError.make('not_found', 'facility', `no integration instance '${instance}'`);
@@ -227,12 +235,12 @@ export const integration_links = (
 					)
 				)
 			);
-		const choices = (driver: DriverName, personal: boolean) =>
+		const choices = (definition: IntegrationSpec, personal: boolean) =>
 			h.providers.filter(
-				(provider) => provider.driver === driver && (!personal || provider.personal === true)
+				(provider) => provider.driver === driver_name(definition) && (!personal || provider.personal === true)
 			);
-		const pick = (driver: DriverName, stored: Json | undefined, personal: boolean) => {
-			const providers = choices(driver, personal);
+		const pick = (definition: IntegrationSpec, stored: Json | undefined, personal: boolean) => {
+			const providers = choices(definition, personal);
 			return stored === undefined
 				? providers.length === 1
 					? providers[0]
@@ -241,7 +249,7 @@ export const integration_links = (
 		};
 		/** The providers an instance of `definition` is offered, each saying whether this host can sign it in. */
 		const offered = (definition: IntegrationSpec, personal: boolean) =>
-			choices(definition.driver, personal).map((provider): ProviderChoice => ({
+			choices(definition, personal).map((provider): ProviderChoice => ({
 				id: provider.id,
 				...(provider.name === undefined ? {} : { name: provider.name }),
 				...(provider.description === undefined ? {} : { description: provider.description }),
@@ -297,7 +305,7 @@ export const integration_links = (
 			const providers = offered(x.definition, x.personal);
 			const stored = Schema.decodeUnknownOption(LinkStatusSchema)(x.status);
 			const verified =
-				x.definition.driver !== 'sqlserver' ||
+				driver_name(x.definition) !== 'sqlserver' ||
 				(Predicate.isObject(x.status) && x.status['databaseVerified'] === true);
 			const base: LinkStatus & { since?: string; pairing?: Pairing | null } =
 				held !== undefined
@@ -312,7 +320,8 @@ export const integration_links = (
 				...base,
 				instance,
 				integration: x.integration,
-				driver: x.definition.driver,
+				driver: driver_name(x.definition),
+				conversation: conversational(x.definition),
 				stored: held === undefined ? x.stored : held.values.size > 0,
 				...(held === undefined ? {} : { provider: held.provider.id }),
 				...(!x.personal && held?.provider.test !== undefined && base.state === 'connected'
@@ -587,7 +596,7 @@ export const integration_links = (
 				const loaded = yield* h.credentials.read(instance),
 					def = yield* definition(loaded.row);
 				const provider = pick(
-					def.driver,
+					def,
 					provider_id ?? loaded.values.get(PROVIDER),
 					loaded.row.owner !== null
 				);
@@ -607,14 +616,19 @@ export const integration_links = (
 				const key = yield* newId;
 				const outcome = yield* h.enter(
 					Effect.gen(function* () {
-						const writes = yield* Writes,
+						const callables = yield* Callables,
 							manifest = yield* Manifest;
 						const at = new Date(now).toISOString();
-						return (yield* writes.act({
-							model: 'sys_integration',
-							verb: 'update',
-							input: [{ target: instance, set: { import_start: start } }],
-							mode: { _tag: 'Direct' },
+						return (yield* callables.acts({
+							name: 'sys_integration.update',
+							acts: [
+								{
+									model: 'sys_integration',
+									verb: 'update',
+									input: [{ target: instance, set: { import_start: start } }]
+								}
+							],
+							from: 'Client',
 							key,
 							issuedAt: at,
 							authority,
@@ -677,7 +691,7 @@ export const integration_links = (
 					personal: o.row.owner !== null,
 					import_start,
 					provider,
-					request: isRequest(o.definition.driver),
+					request: isRequest(o.definition),
 					epoch: o.epoch,
 					values: new Map(o.values),
 					status: { state: 'connecting' },
@@ -818,7 +832,7 @@ export const integration_links = (
 					if (chosen !== undefined) return yield* acquire(instance, chosen.provider, chosen.opened);
 					const loaded = yield* h.credentials.open(instance);
 					const def = yield* definition(loaded.row);
-					const provider = pick(def.driver, loaded.values.get(PROVIDER), loaded.row.owner !== null);
+					const provider = pick(def, loaded.values.get(PROVIDER), loaded.row.owner !== null);
 					if (provider === undefined || loaded.values.get(PROVIDER) === undefined)
 						return yield* Effect.fail(
 							unavailable(`this host has no registered provider for '${instance}'`)
@@ -850,7 +864,7 @@ export const integration_links = (
 		/** Re-read durable state before each reopen; an account may be paused, removed or unpaired during startup. */
 		const restore = (instance: string) => Effect.gen(function* () {
 			const current = yield* row(instance);
-			if (current?.active === true && current.stored && !isRequest(current.definition.driver))
+			if (current?.active === true && current.stored && !isRequest(current.definition))
 				yield* start(instance);
 		});
 		const retryOpening = (error: EngineError | PortFailure): boolean => {
@@ -878,7 +892,7 @@ export const integration_links = (
 					if (stopped) return yield* Effect.fail(unavailable('the integration links are closed'));
 					const loaded = yield* h.credentials.read(instance),
 						def = yield* definition(loaded.row);
-					const provider = pick(def.driver, loaded.values.get(PROVIDER), loaded.row.owner !== null);
+					const provider = pick(def, loaded.values.get(PROVIDER), loaded.row.owner !== null);
 					if (provider === undefined)
 						return yield* Effect.fail(unavailable(`this host has no provider for '${instance}'`));
 					return yield* use(yield* acquire(instance, provider, { ...loaded, definition: def }));
@@ -921,7 +935,7 @@ export const integration_links = (
 			request: (instance, op) =>
 				Effect.gen(function* () {
 					const x = yield* row(instance);
-					if (x !== undefined && !isRequest(x.definition.driver))
+					if (x !== undefined && !isRequest(x.definition))
 						return yield* linked(instance).pipe(Effect.flatMap((held) => held.calls.request(op)));
 					return yield* transient(instance, (held) => held.calls.request(op));
 				}).pipe(Effect.mapError(linkFailure(instance))),
@@ -973,8 +987,20 @@ export const integration_links = (
 				);
 				if ('answer' in verified)
 					return new Response(verified.answer.body ?? null, { status: verified.answer.status });
-				if (verified.body === undefined) return new Response(null, { status: 400 });
 				const { authorization: _, ...shown } = headers;
+				// a handler answers each delivery itself; without one, a delivery is a sync's hint
+				if (d.webhook.handle === true)
+					return yield* h.admit(
+						inbound(yield* newId, found.row.integration, { id: instance, configuration: found.row.configuration },
+							d.webhook.policies ?? [], {
+								method: request.method,
+								headers: shown,
+								query: Object.fromEntries(new URL(request.url).searchParams),
+								body: verified.body ?? null,
+								text: new TextDecoder().decode(body)
+							})
+					);
+				if (verified.body === undefined) return new Response(null, { status: 400 });
 				yield* h.admit(
 					Effect.flatMap(Syncs, (syncs) =>
 						syncs.hint(instance, {
@@ -1012,6 +1038,7 @@ export const integration_links = (
 		return {
 			port,
 			close,
+			open: Effect.sync(() => live.size),
 			resume: h
 				.enter(
 					Effect.gen(function* () {
@@ -1026,7 +1053,7 @@ export const integration_links = (
 						);
 						return rows.flatMap((x) => {
 							const d = definitionOf(manifest, x.integration);
-							return d === undefined || isRequest(d.driver) ? [] : [x.id];
+							return d === undefined || isRequest(d) ? [] : [x.id];
 						});
 					})
 				)
@@ -1057,10 +1084,10 @@ export const integration_links = (
 						...Object.entries(manifest.integrations)
 					].map(([integration, definition]): IntegrationOffer => ({
 						integration,
-						driver: definition.driver,
+						driver: driver_name(definition),
 						description: definition.description,
 						conversation: conversational(definition),
-						personal: 'personal' in DRIVERS[definition.driver] ? offered(definition, true) : [],
+						personal: driver_of(definition).personal === true ? offered(definition, true) : [],
 						workspace: offered(definition, false)
 					}))
 				)
@@ -1128,10 +1155,10 @@ export const integration_links = (
 							const x = yield* row(instance);
 							if (x === undefined) return yield* Effect.fail(gone(instance));
 							const body = Predicate.isObject(input) ? input : {},
-								ps = choices(x.definition.driver, x.personal);
+								ps = choices(x.definition, x.personal);
 							if (ps.length === 0)
 								return yield* Effect.fail(
-									unavailable(`this host has no registered ${x.definition.driver} provider`)
+									unavailable(`this host has no registered ${driver_name(x.definition)} provider`)
 								);
 							const provider =
 								typeof body['provider'] === 'string'
@@ -1144,13 +1171,13 @@ export const integration_links = (
 									BoltError.make(
 										'invalid_input',
 										'facility',
-										`choose how to connect this ${x.definition.driver} instance: ${ps.map((p) => p.id).join(', ')}`
+										`choose how to connect this ${driver_name(x.definition)} instance: ${ps.map((p) => p.id).join(', ')}`
 									)
 								);
 							const { provider: _, import_start: _start, ...rest } = body;
 							const current = live.get(instance);
 							if (
-								x.definition.driver !== 'sqlserver' &&
+								driver_name(x.definition) !== 'sqlserver' &&
 								current !== undefined &&
 								current.provider.id === provider.id &&
 								!current.replaced
@@ -1168,7 +1195,7 @@ export const integration_links = (
 											instance,
 											loaded.epoch,
 											wipe(loaded.values.keys()),
-											isRequest(x.definition.driver)
+											isRequest(x.definition)
 										)
 									: loaded.epoch;
 							selected.set(instance, {
@@ -1188,7 +1215,7 @@ export const integration_links = (
 								)
 							);
 							const next = yield* linked(instance);
-							const database = x.definition.driver === 'sqlserver';
+							const database = driver_name(x.definition) === 'sqlserver';
 							if (database)
 								yield* status(instance, {
 									state: 'unpaired',
@@ -1242,12 +1269,12 @@ export const integration_links = (
 					Effect.gen(function* () {
 						const x = yield* row(instance);
 						if (x === undefined) return yield* Effect.fail(gone(instance));
-						if (x.definition.driver === 'sqlserver')
+						if (driver_name(x.definition) === 'sqlserver')
 							return yield* verifyDatabase(
 								instance,
 								transient(instance, (held) => held.calls.test(input))
 							);
-						if (conversational(x.definition) && !isRequest(x.definition.driver)) {
+						if (conversational(x.definition) && !isRequest(x.definition)) {
 							if (x.personal)
 								return yield* Effect.fail(
 									BoltError.make(
@@ -1256,7 +1283,7 @@ export const integration_links = (
 										'A personal account sends no test message.'
 									)
 								);
-							if (!live.has(instance) && choices(x.definition.driver, false).length === 0)
+							if (!live.has(instance) && choices(x.definition, false).length === 0)
 								return yield* Effect.fail(
 									unavailable(`this host has no registered provider for '${instance}'`)
 								);
@@ -1296,7 +1323,7 @@ export const integration_links = (
 											);
 										const id = yield* newId;
 										yield* held.calls.send(
-											x.definition.driver === 'email'
+											driver_name(x.definition) === 'email'
 												? {
 														id,
 														to: [to],
@@ -1308,7 +1335,7 @@ export const integration_links = (
 									})
 								)
 							);
-						} else if (isRequest(x.definition.driver))
+						} else if (isRequest(x.definition))
 							yield* transient(instance, (held) => held.calls.test(input));
 						else yield* linked(instance).pipe(Effect.flatMap((held) => held.calls.test(input)));
 						yield* testSync(instance);
@@ -1320,7 +1347,7 @@ export const integration_links = (
 					Effect.gen(function* () {
 						const x = yield* row(instance);
 						if (x === undefined) return yield* Effect.fail(gone(instance));
-						return yield* isRequest(x.definition.driver)
+						return yield* isRequest(x.definition)
 							? transient(instance, (held) => held.calls.discover)
 							: linked(instance).pipe(Effect.flatMap((held) => held.calls.discover));
 					})

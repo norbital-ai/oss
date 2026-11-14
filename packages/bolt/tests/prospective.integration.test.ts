@@ -8,6 +8,7 @@ import type { Item } from '../src/engine/write/flatten.ts';
 import type { Bridge } from '../src/engine/services.ts';
 import { admin, manifest, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
+import { with_each } from './support/guest-each.ts';
 
 it.effect(
 	'a child-only prospective read ignores an unread staged parent sequence, while a read of it still refuses',
@@ -32,10 +33,10 @@ it.effect(
 			const engine: WriteEngine = {
 				db,
 				manifest,
-				guest: {
+				guest: with_each({
 					invoke: () => Effect.die('No guest is invoked by a prospective read.'),
 					invokeProgram: () => Effect.die('No program is invoked by a prospective read.')
-				}
+				})
 			};
 			const order = '0199a000-0000-7000-8000-000000000001';
 			const line = '0199a000-0000-7000-8000-000000000002';
@@ -72,13 +73,33 @@ it.effect(
 				new Map(),
 				original
 			);
-			const result = yield* bridge.cross([
-			{ _tag: 'read', read: { kind: 'after', model: 'lines', where: { t: 'const', value: true } } }
-			]);
-			expect(result).toMatchObject([{ ok: true, value: [{ id: line, label: 'Child' }] }]);
-			const generated = yield* bridge.cross([
-			{ _tag: 'read', read: { kind: 'after', model: 'orders', where: { t: 'const', value: true } } }
-			]);
+			// an `as_of: 'act'` root of a read request: every row of the model as the act leaves it
+			const act = (model: string, fields: readonly string[]) =>
+				bridge.cross([
+					{
+						_tag: 'read',
+						read: {
+							kind: 'request',
+							roots: [
+								{
+									root: model,
+									prospective: true,
+									read: {
+										kind: 'read',
+										model,
+										where: { t: 'const', value: true },
+										select: { fields, relations: {} },
+										page: { _tag: 'All' }
+									}
+								}
+							]
+						}
+					}
+				]);
+			const result = yield* act('lines', ['id', 'label']);
+			expect(result).toMatchObject([{ ok: true, value: { lines: { rows: [{ id: line, label: 'Child' }] } } }]);
+			// a workspace row holds no seq or roll-up: the read names the staged sequence to depend on it
+			const generated = yield* act('orders', ['id', 'number']);
 			expect(generated).toMatchObject([{ ok: false, error: { code: 'prepared_computed' } }]);
 		})
 );

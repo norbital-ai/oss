@@ -1,15 +1,16 @@
 // Image inspection and derivation through the host's `Images` port (the decoders run host-side): bytes past the stored
 // file limit never leave the engine, and every call runs under the image wall.
 import { Effect } from 'effect';
-import { FacilityFailure } from '../../decl/errors.ts';
 import {
-	LIMITS,
+	FacilityFailure,
+	type ImageCrop,
 	type ImagePreviewMime,
-	type ImagePreviewSize
-} from '../contracts.ts';
-import type { ImageCrop } from '../contracts.ts';
+	type ImagePreviewSize,
+	Port,
+	type PortFailure
+} from '@norbital-ai/host-api';
+import { LIMITS } from '../contracts.ts';
 import { Images } from '../ports.ts';
-import { Port, type PortFailure } from '../port.ts';
 
 const image = <A>(
 	bytes: Uint8Array,

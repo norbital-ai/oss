@@ -65,7 +65,7 @@ export function manifestItems(
 	add('policy', m.policies, (name) => `src/access_control/policy/+${name}.policy.ts`);
 	add('team', m.teams, () => 'src/access_control/team/+team.ts');
 	add('relationship', m.relationships, (name) => `src/data/model/${name.split('.')[0]}/+model.ts`);
-	add('field', m.custom_fields, (name) => `src/data/custom_field/${name}/+definition.ts`);
+	add('field', m.custom_fields, (name) => `src/data/custom_field/${name}/+custom_field.ts`);
 	add('skill', m.agent.skills, (name) => `src/agent/skill/${name}/+skill.md`);
 	add('secret', m.workspace.secrets, () => 'src/+secrets.ts');
 	add('group', m.groups, (name) => `src/app/${name}/+group.ts`);

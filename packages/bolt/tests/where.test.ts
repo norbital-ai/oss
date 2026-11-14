@@ -1,7 +1,7 @@
 // Rule 11a: the strict `Where`/`OrderBy` decoder, materialized time bounds, child aggregates, json contains, `bolt.decode`.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import type { Reader, RowData } from '../src/engine/contracts.ts';
+import type { Reader } from '../src/engine/contracts.ts';
 import { browser_catalog, catalog } from '../src/protocol/catalog.ts';
 import { contains, evaluate, midnight, startOfDate } from '../src/engine/query/eval.ts';
 import {
@@ -58,8 +58,8 @@ describe('one invalid row per shape', () => {
 		['orders', 'former parameter operand', { span: { overlaps: { param: 'window' } } }],
 		['orders', 'former actor operand', { note: { eq: { actor: 'id' } } }],
 		['orders', 'time variable', { placed: { gte: { var: 'today - days(7)' } } }],
-		['orders', 'requestor email on a date', { placed: { eq: { var: 'requestor.email' } } }],
-		['orders', 'unknown requestor member', { note: { eq: { var: 'requestor.boss' } } }],
+		['orders', 'requestor email on a date', { placed: { eq: { var: 'actor.email' } } }],
+		['orders', 'unknown actor member', { note: { eq: { var: 'actor.boss' } } }],
 		['orders', 'id not a uuid', { account: { eq: 'x' } }],
 		['orders', 'in not a list', { status: { in: 'open' } }],
 		['orders', 'hasAny not a list', { tags: { hasAny: 'a' } }],
@@ -96,9 +96,9 @@ describe('one invalid row per shape', () => {
 		['orders', 'today on an instant', { at: { lt: { today: '' } } }],
 		['orders', 'startOf on text', { note: { eq: { startOf: 'month' } } }],
 		['orders', 'startOf with a bad unit', { placed: { gte: { startOf: 'fortnight' } } }],
-		['orders', 'actor id on a non-member id', { account: { eq: { var: 'requestor.id' } } }],
-		['orders', 'actor email on plain text', { note: { eq: { var: 'requestor.email' } } }],
-		['orders', 'teams outside in/nin', { account: { eq: { var: 'requestor.teams' } } }],
+		['orders', 'actor id on a non-member id', { account: { eq: { var: 'actor.id' } } }],
+		['orders', 'actor email on plain text', { note: { eq: { var: 'actor.email' } } }],
+		['orders', 'teams outside in/nin', { account: { eq: { var: 'actor.teams' } } }],
 		['orders', 'field operand of another family', { total: { gt: { field: 'note' } } }],
 		['orders', 'bad offset', { placed: { gte: { today: '+-5d' } } }],
 		['accounts', 'relation without a quantifier', { orders: { status: { eq: 'open' } } }],
@@ -278,32 +278,6 @@ describe('the widened language', () => {
 			expect(sql.params).toContain(month);
 			expect(sql.params).toContain(nextMonth);
 			expect(sql.params).toContain(week);
-		})
-	);
-	it.effect('child aggregates: sum of none is 0, min/max/avg of none match nothing', () =>
-		Effect.gen(function* () {
-			const env = {
-				cat,
-				bindings,
-				related: (_c: string, _r: string, _t: string, row: RowData): RowData[] =>
-					row.id === 'a'
-						? []
-						: [
-								{ id: 'l1', amount: '10.10' },
-								{ id: 'l2', amount: '10.20' }
-							]
-			};
-			const is = (w: object, id: string) =>
-				where(cat, 'orders', w).pipe(Effect.map((p) => evaluate(env, 'orders', p, { id })));
-			expect(yield* is({ lines: { sum: { of: 'amount', eq: 0 } } }, 'a')).toBe(true);
-			expect(yield* is({ lines: { avg: { of: 'amount', ne: 1 } } }, 'a')).toBe(false);
-			expect(yield* is({ lines: { sum: { of: 'amount', eq: '20.3' } } }, 'b')).toBe(true);
-			expect(
-				yield* is(
-					{ lines: { max: { of: 'amount', gte: '10.2' }, min: { of: 'amount', lt: 10.2 } } },
-					'b'
-				)
-			).toBe(true);
 		})
 	);
 	it.effect('json contains is jsonb @>', () =>

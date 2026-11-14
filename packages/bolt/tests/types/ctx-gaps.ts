@@ -2,8 +2,7 @@
 // `on_conflict`, transform-filled create fields, custom `default`/`many`, untagged unions. Each `@ts-expect-error` is a
 // planted mistake.
 import { Effect } from 'effect';
-import { automation, custom_field } from '../../src/index.ts';
-import { bind_model } from '../../src/declarations.ts';
+import { automation, custom_field, model } from '../../src/index.ts';
 import type { AutomationCtx, CreateInput } from '../../src/index.ts';
 import type { ValueOf } from '../../src/decl/fields.ts';
 import * as m from './fixture/models.ts';
@@ -90,7 +89,7 @@ automation({
 });
 
 // (5) a custom field takes a default and `many`
-bind_model('probe')({
+model('probe', {
 	description: 'x',
 	record_label: 'record.a',
 	fields: {
@@ -105,7 +104,7 @@ is<
 		readonly { readonly score: number; readonly note?: string | null }[]
 	>
 >();
-bind_model('probe')({
+model('probe', {
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error K1 a custom default of the wrong shape

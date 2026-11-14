@@ -3,7 +3,7 @@
 import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
 import type { AppName, ModelName, PolicyName } from '../names.ts';
-import type { CurrencyCode, IanaZone, IconName, Msg, NonEmpty } from '../values.ts';
+import type { CurrencyCode, IanaZone, IconName, NonEmpty, Rate } from '../values.ts';
 import type { ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
 
@@ -45,7 +45,7 @@ type WorkspaceBase = {
 	/**
 	 * Requires AI facilities and declares embedding models. Allowed chat models and monthly USD caps (workspace, default
 	 * member, per policy) are runtime settings in `sys_config` under `agent`, applied at the next step; an empty allowed
-	 * list permits the host catalogue, else its first model is the fallback. Policy `limits.agent` still limits rate.
+	 * list permits the host catalogue, else its first model is the fallback. `limits.<policy>.agent` still limits rate.
 	 */
 	ai?: { embeddings?: readonly string[] };
 	/**
@@ -60,12 +60,14 @@ type WorkspaceBase = {
 	agent?: { triage?: false }; // hook:triage
 	/** Who may join without an invitation; absent, only invited members join. */
 	signup?: Signup;
+	/** Rate limits per policy, applied to every caller holding it. */
+	limits?: { readonly [policy: string]: { readonly [key: string]: unknown } };
 };
 /**
  * Self sign-up: a newcomer proves an address (`via`: a code by email, by SMS to a mobile number, or either) and becomes
  * an external member holding `policies`. `party` names the record that is them — the row of `model` whose
  * `match[email | phone]` field holds the proven address — so a guest already on file (a customer who booked without an
- * account) is promoted to a registered member bound to their own rows (`{ var: 'requestor.party' }`). An administrator can close
+ * account) is promoted to a registered member bound to their own rows (`{ var: 'actor.party' }`). An administrator can close
  * sign-up in Settings without a release.
  *
  * Sign-in codes go only to active members, open invitations and newcomers this admits; any other address is
@@ -83,15 +85,15 @@ type Signup = {
 	/**
 	 * A stranger's code is paid for: the public page or kiosk they join on must pass this bot check first. Members sign
 	 * in without it. The workspace's own sign-in page has no widget, so it stops offering sign-up; a host with no
-	 * `challenge` facility refuses strangers, except a local one.
+	 * `challenge` facility refuses strangers, except a local one. The host's facility chooses the provider.
 	 */
-	challenge?: 'turnstile';
+	challenge?: true;
 };
 type SignupFor = {
 	via: NonEmpty<'email' | 'phone'>;
 	policies: NonEmpty<PolicyName>;
 	party?: { model: ModelName; match: { email?: string; phone?: string } };
-	challenge?: 'turnstile';
+	challenge?: true;
 };
 type WorkspaceFor = {
 	tz: IanaZone;
@@ -108,18 +110,44 @@ type WorkspaceFor = {
 	agent?: { triage?: false };
 	/** Self sign-up by a proven email or mobile number; the build checks `party.match` names text fields. */
 	signup?: SignupFor;
-
+	/**
+	 * Rate limits per policy: what a caller holding that policy may send. Undeclared keys take the defaults (`LimitKey`).
+	 * @example limits: { field_ops_contractor: { act: '600/min', read: '600/min', agent: '100/h' } }
+	 */
+	limits?: { [P in PolicyName]?: { [K in LimitKey]?: K extends EnvoyKey ? EnvoyLimit : Limit } };
 };
 
+/** A rate limit: `'<n>/<unit>'`, optionally `per` actor or IP; a list applies every rule. */
+export type Limit =
+	Rate | { rate: Rate; per: 'actor' | 'ip' } | readonly { rate: Rate; per: 'actor' | 'ip' }[];
+/** A rate limit on an envoy's inbound traffic, counted `per` sender or per subject. */
+type EnvoyLimit =
+	| Rate
+	| { rate: Rate; per: 'sender' | 'subject' }
+	| readonly { rate: Rate; per: 'sender' | 'subject' }[];
+type EnvoyKey = 'envoys.receive' | 'envoys.unrecognised';
 /**
- * `src/+workspace.ts`, exactly one: timezone, locale, app order and workspace capabilities.
- * Declarations are found by path and named by it; each takes one literal and no name, and every callback sits inside
- * the declaration that invokes it. `bolt sync` (run by `bolt dev` on save and first by `bolt check`) writes their data
- * shapes into the generated, never-edited `.norbital/`.
+ * What a `limits` entry throttles: acts, reads, agent turns, registration, uploads, page PDF previews
+ * (`convert`, `ctx.preview_pdf`; default `30/min`) or envoy traffic. Requests only: automation bodies are never limited,
+ * and manual starts have a separate fixed quota per automation and starter (30 a minute).
+ *
+ * Undeclared keys take defaults: members `act 600/min`, `read 3000/min`, `upload 120/min`, `convert 30/min`,
+ * `agent 100/h`, `envoys.unrecognised 1/15min` per sender; visitors, per IP: `act 120/h`, `read 600/min`, `upload 20/h`,
+ * `register 20/h`. Windows are fixed and counted in the serving cell's memory (acts also persist theirs). A refusal is
+ * `429` with `Retry-After` and `{ code: 'rate_limited' }`.
+ */
+export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'convert' | EnvoyKey;
+
+/**
+ * `src/+workspace.ts`, exactly one: timezone, locale, app order, workspace capabilities and rate limits per policy.
+ * Declarations are found by path and named by it; each takes one literal (`model` and `integration` first repeat
+ * their name, which must match the path), and every callback sits inside the declaration that invokes it. `bolt sync`
+ * (run by `bolt dev` on save and first by `bolt check`) writes their data shapes into the generated, never-edited
+ * `.norbital/`.
  * ```text
  * src/+workspace.ts, +secrets.ts
  * src/data/model/<name>/+model.ts, +representation.svelte    (folders may nest; the leaf names the model)
- * src/data/custom_field/<name>/+definition.ts, +renderer.svelte
+ * src/data/custom_field/<name>/+custom_field.ts, +renderer.svelte
  * src/access_control/team/+team.ts, policy/+<name>.policy.ts
  * src/integration/<name>/+integration.ts, +integration.svelte
  * src/automation/+<name>.automation.ts
@@ -166,7 +194,7 @@ const SignedInAudience = Schema.Literals(['members', 'external', 'all']);
 const AppPolicies = Schema.NonEmptyArray(Schema.String);
 const PublicAudience = Schema.Struct({
 	public: AppPolicies,
-	challenge: Schema.optionalKey(Schema.Literal('turnstile'))
+	challenge: Schema.optionalKey(Schema.Literal(true))
 });
 export const AppData = Schema.Union([
 	Schema.Struct({
@@ -190,7 +218,8 @@ export const AppData = Schema.Union([
 ]);
 
 type SignedInAudience = typeof SignedInAudience.Type;
-type PublicAudience<P extends string> = { public: NonEmpty<P>; challenge?: 'turnstile' };
+/** `challenge: true`: each request that needs one passes the host's bot check (its `challenge` facility). */
+type PublicAudience<P extends string> = { public: NonEmpty<P>; challenge?: true };
 type AppAccess<P extends string> =
 	| {
 			shell?: never;
@@ -198,7 +227,7 @@ type AppAccess<P extends string> =
 			 * Who opens the app: `members` (default) through the workspace SPA; `external`, `all` or `{ public }` are
 			 * server-rendered per page and hydrated, and a signed-out request for a sign-in page answers `303` to
 			 * `/sign-in?next=<path>`. `{ public: policies }` serves anyone, minting an anonymous visitor (`sys_user` kind
-			 * `anonymous`, a 30-day sliding session) whose `requestor.id` owns what it creates; signing in links it to the
+			 * `anonymous`, a 30-day sliding session) whose `actor.id` owns what it creates; signing in links it to the
 			 * account.
 			 */
 			audience?: SignedInAudience | PublicAudience<P>;

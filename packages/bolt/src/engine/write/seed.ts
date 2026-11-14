@@ -7,10 +7,10 @@ import { Schema } from 'effect';
 // of its own (`restorer`) in one statement; the database's constraints apply; roll-ups are derived and compared with any given value (`seed_drift`); each `seq`
 // counter is raised to the highest seeded value. No transform, trigger, run, outbox row, approval route or rate limit.
 import type { Json } from '../../decl/values.ts';
-import { LIMITS, utf8Bytes, type RowData, type Sql } from '../contracts.ts';
+import { DbError, type Sql } from '@norbital-ai/host-api';
+import { LIMITS, utf8Bytes, type RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
-import { DbError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalog_of, toOwnSql } from '../access/pred.ts';
 import { null_row_sql, q } from '@norbital-ai/store';

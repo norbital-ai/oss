@@ -1,14 +1,19 @@
 // One path-bound integration per `src/integration/<name>/+integration.ts`.
-// A definition is the connection only: one driver kind, its typed configuration and credential, OAuth, the HTTP base and
-// auth, webhook verification, a request rate and an inline `test` body. What a connection exchanges is declared on the
-// models it syncs (`model(…).syncs`, `./sync.ts`). Bolt's conversation definitions (whatsapp, email, telegram, slack,
-// discord, wechat) are this same declaration in its system layer.
-import type { Handle } from '../access/actor.ts';
+// A definition is the connection only: one driver (a Bolt kind or one it declares), its typed configuration and
+// credential, OAuth, the HTTP base and auth, webhook verification and handler, a request rate and an inline `test` body.
+// What a connection exchanges is declared on the models it syncs (`model(…).syncs`, `./sync.ts`). Bolt's conversation
+// definitions (whatsapp, email, telegram, slack, discord, wechat, chat) are this same declaration in its system layer.
+import type { Actor, Handle } from '../access/actor.ts';
 import { Record as EffectRecord, Schema } from 'effect';
 import { FieldData } from '../field-data.ts';
 import { attached, type Body } from '../body.ts';
-import type { BodyReturn, Eff } from '../ctx.ts';
-import type { FacilityFailure, Unavailable } from '../errors.ts';
+import type { Act, BodyReturn, CallerQuery, Clock, Eff, Refuse } from '../ctx.ts';
+import type {
+	DatabaseRequest,
+	DatabaseResult,
+	FacilityFailure,
+	Unavailable
+} from '@norbital-ai/host-api';
 import type {
 	Checked,
 	Exact,
@@ -19,22 +24,25 @@ import type {
 	ValidInputs,
 	ValueOf
 } from '../fields.ts';
-import type { InstanceId, IntegrationName, IntegrationSpecOf, Is } from '../names.ts';
+import type { InstanceId, IntegrationName, IntegrationSpecOf, Is, PolicyName } from '../names.ts';
 import type {
 	FileRef,
 	IanaZone,
 	Id,
 	Instant,
 	Json,
+	NonEmpty,
 	PlainDate,
 	Rate,
 	RecordRef
 } from '../values.ts';
-import type { DatabaseRequest, DatabaseResult } from '../../engine/integrations/database.ts';
 import type { SecretName } from './names.ts';
 
-/** How an integration signs incoming webhooks; Standard Webhooks also accepts Svix headers. */
-export type WebhookScheme = 'standard' | 'hmac-sha256' | 'stripe' | 'slack' | 'meta' | 'bearer';
+/**
+ * How an integration signs incoming webhooks: `standard` (Standard Webhooks, Svix headers too), `hmac-sha256`,
+ * `bearer`, or a provider's own scheme the host names; a scheme the host does not verify refuses every delivery.
+ */
+export type WebhookScheme = string;
 
 /**
  * Checks the definition of a read integration instance before using its id in a definition-pinned ref (`ctx.send`,
@@ -59,33 +67,60 @@ export function is_instance<const D extends string>(
 	return instance.integration === definition;
 }
 
-// ── drivers: Bolt's kinds, each a static contract; the host implements a kind with its providers ──
+// ── drivers: a static contract each; the host implements one with its providers, registered by the driver's name ──
+/** The member handle a conversation's senders are matched by (`sys_user.<kind>`). */
+export const HANDLE_KINDS = ['phone', 'email', 'telegram', 'slack', 'discord'] as const;
+export type HandleKind = (typeof HANDLE_KINDS)[number];
 /**
- * Each driver's contract: `request`, what `ctx.request` takes (`http` ops or `database` statements); `credential`, the
- * definition declares the secret the host seals at pairing; `conversation`, the messages it carries and the member handle
- * a sender is matched by (`null`: none, so a private envoy admits nobody); `items`, what it pushes to a sync's `read`
- * (`items`); `oauth`, the host may run an OAuth grant with the definition's `oauth` client; `personal`, a member's own
- * account syncs (never sends a message, never an envoy; a sync `write` may write back to it); `call`, what `ctx.request`
- * takes through a pushing driver's standing link (its provider's own API under its sign-in: a calendar's event writes).
+ * A driver's contract: `read`, what it supplies a sync's `read` (`cursor`: the sync pages itself; `deliveries`: inbound
+ * messages and delivery reports; `items`: what it pushes); `request`, what `ctx.request` takes (`http` ops or `database`
+ * statements); `credential`, the definition declares the secret the host seals at pairing; `conversation`, the messages
+ * it carries, the member handle a sender is matched by (`null`: none, so a private envoy admits nobody) and the
+ * `address` a member's handle is sent to (`{}` stands for the handle: `'@{}'`; the handle itself by default); `items`,
+ * what it pushes; `oauth`, the host may run an OAuth grant with the definition's `oauth` client; `personal`, a member's
+ * own account syncs (never sends a message, never an envoy; a sync `write` may write back to it); `call`, what
+ * `ctx.request` takes through a pushing driver's standing link (its provider's own API under its sign-in).
+ */
+export const DriverContract = Schema.Struct({
+	read: Schema.Literals(['cursor', 'deliveries', 'items']),
+	request: Schema.optionalKey(Schema.Literals(['http', 'database'])),
+	call: Schema.optionalKey(Schema.Literal('http')),
+	credential: Schema.optionalKey(Schema.Literal(true)),
+	oauth: Schema.optionalKey(Schema.Literal(true)),
+	personal: Schema.optionalKey(Schema.Literal(true)),
+	items: Schema.optionalKey(Schema.Literal('calendar')),
+	conversation: Schema.optionalKey(Schema.Struct({
+		kind: Schema.Literals(['chat', 'email']),
+		handle: Schema.NullOr(Schema.Literals(HANDLE_KINDS)),
+		address: Schema.optionalKey(Schema.String)
+	}))
+});
+export type DriverContract = typeof DriverContract.Type;
+/**
+ * Bolt's own driver kinds. Any other driver is declared by the integration that uses it (`driver: { name, ...contract }`)
+ * and implemented by a host provider registered under that name; a workspace cannot supply a provider.
  */
 export const DRIVERS = {
 	http: { read: 'cursor', request: 'http', credential: true, oauth: true },
 	sqlserver: { read: 'cursor', request: 'database', credential: true },
-	whatsapp: { read: 'deliveries', conversation: { kind: 'chat', handle: 'phone' }, personal: true },
 	email: { read: 'deliveries', conversation: { kind: 'email', handle: 'email' }, personal: true },
-	telegram: { read: 'deliveries', conversation: { kind: 'chat', handle: 'telegram' } },
-	slack: { read: 'deliveries', conversation: { kind: 'chat', handle: 'slack' } },
-	discord: { read: 'deliveries', conversation: { kind: 'chat', handle: 'discord' } },
-	wechat: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
-	/** Any other chat platform: the host's providers name them, and a connection picks one. */
+	/** Any chat platform the host's providers name: a connection picks one. */
 	chat: { read: 'deliveries', conversation: { kind: 'chat', handle: null } },
 	calendar: { read: 'items', items: 'calendar', oauth: true, personal: true, call: 'http' }
-} as const;
-/** A driver kind: what a definition's `driver` names. */
+} as const satisfies Record<string, DriverContract>;
+/** One of Bolt's own driver kinds. */
 export type DriverName = keyof typeof DRIVERS;
-type Contract<D> = D extends DriverName ? (typeof DRIVERS)[D] : never;
-/** The member handle a conversation's senders are matched by (`sys_user.<kind>`). */
-export type HandleKind = 'phone' | 'email' | 'telegram' | 'slack' | 'discord';
+/** A driver an integration declares: its name, which host providers register under, and its contract. */
+export const DeclaredDriver = Schema.Struct({ name: Schema.String, ...DriverContract.fields });
+/** What a definition's `driver` holds: one of Bolt's kinds by name, or a driver it declares. */
+export const DriverSpec = Schema.Union([Schema.Literals(EffectRecord.keys(DRIVERS)), DeclaredDriver]);
+/** The name a definition's driver is registered under (host providers declare it). */
+export const driver_name = (def: Pick<IntegrationSpec, 'driver'>): string =>
+	typeof def.driver === 'string' ? def.driver : def.driver.name;
+/** The contract of a definition's driver. */
+export const driver_of = (def: Pick<IntegrationSpec, 'driver'>): DriverContract =>
+	typeof def.driver === 'string' ? DRIVERS[def.driver] : def.driver;
+type Contract<D> = D extends DriverName ? (typeof DRIVERS)[D] : D;
 
 // ── messages ──
 /** A file a message carries: `id` names the stored file; none when the row could not store its bytes (too large, never received). */
@@ -248,7 +283,7 @@ export type CalendarEvent = {
 	readonly source: Json;
 };
 /** What definition `D`'s driver pushes to a sync's `read` as `items`; `never` for a driver that pushes nothing. */
-export type DriverItemOf<D> = DriverOf<D> extends 'calendar' ? CalendarEvent : never;
+export type DriverItemOf<D> = Contract<DriverOf<D>> extends { items: 'calendar' } ? CalendarEvent : never;
 
 // ── requests ──
 /** An HTTP request through an `http` instance: `path` resolves under the definition's base URL (never another host). */
@@ -303,9 +338,9 @@ type ConfigurationIn<S, F = Part<S, 'configuration'>> = Simplify<
 		readonly [P in Unset<F>]?: ValueOf<F[P]>;
 	}
 >;
-/** The driver definition `D` names. */
+/** The driver definition `D` names: a kind's name or its declared driver. */
 export type DriverOf<D> = DriverIn<IntegrationSpecOf<D>>;
-type ReadMode<K> = K extends DriverName ? (typeof DRIVERS)[K]['read'] : never;
+type ReadMode<K> = Contract<K> extends { read: infer R } ? R : never;
 /** The single read payload a definition's driver supplies to a sync. */
 export type DriverReadOf<D> = ReadMode<DriverOf<D>>;
 /** The message kind definition `D` carries (`chat` | `email`); `never` for a definition with no conversation. */
@@ -335,7 +370,7 @@ type HttpAuth<C> =
 /** A definition literal's data: what the manifest holds (the `test` body is not data). */
 export const IntegrationSpec = Schema.Struct({
 	description: Schema.String,
-	driver: Schema.Literals(EffectRecord.keys(DRIVERS)),
+	driver: DriverSpec,
 	/** Safe settings each instance edits at run time (with history), decoded against these fields. */
 	configuration: Schema.optionalKey(Schema.Record(Schema.String, FieldData)),
 	/** The secret each instance pairs with, sealed host-side and never readable (`http` and `sqlserver` only). */
@@ -360,14 +395,19 @@ export const IntegrationSpec = Schema.Struct({
 	})),
 	/**
 	 * `http` only: how the provider signs its webhooks, verified with a credential field. The instance page shows the
-	 * endpoint URL to paste into the provider. A verified delivery is stored (a duplicate delivery id is acknowledged and
-	 * dropped) and is a hint: the engine runs `read` of every sync over this connection at once, debounced, and passes the
-	 * stored deliveries to `read` as `deliveries`. With no read sync over the definition nothing is stored and the delivery
-	 * is still answered 200. `standard` is Standard Webhooks (`webhook-*` and Svix's `svix-*` headers).
+	 * endpoint URL to paste into the provider. Without `handle`, a verified delivery is stored (a duplicate delivery id is
+	 * acknowledged and dropped) and is a hint: the engine runs `read` of every sync over this connection at once,
+	 * debounced, and passes the stored deliveries to `read` as `deliveries`; with no read sync over the definition nothing
+	 * is stored and the delivery is still answered 200. With `handle`, each verified delivery runs that body instead
+	 * (`WebhookBody`), holding `policies`. `standard` is Standard Webhooks (`webhook-*` and Svix's `svix-*` headers).
 	 */
-	webhook: Schema.optionalKey(Schema.Struct({ verify: Schema.Struct({
-		scheme: Schema.Literals(['standard', 'hmac-sha256', 'stripe', 'slack', 'meta', 'bearer']), secret: Schema.String
-	}) })),
+	webhook: Schema.optionalKey(Schema.Struct({
+		verify: Schema.Struct({ scheme: Schema.String, secret: Schema.String }),
+		/** The policies the handler holds; required with `handle`. */
+		policies: Schema.optionalKey(Schema.NonEmptyArray(Schema.String)),
+		/** The manifest's mark of a handler body (the body itself is the guest's). */
+		handle: Schema.optionalKey(Schema.Literal(true))
+	})),
 	/**
 	 * At most this many requests through one instance (`'10/s'`, `'600/min'`): every sync `read`, `write` and
 	 * `ctx.request` waits its turn; a `429` with `Retry-After` is honoured on top. Request drivers only.
@@ -415,6 +455,38 @@ type OAuthFor<S, D = DriverIn<S>> =
 			: { client: SecretName; secret: SecretName; scopes?: readonly string[] }
 		: 'error: only an oauth driver (http, calendar) declares oauth';
 
+// ── the webhook handler ──
+/** A verified delivery as `handle` receives it: `text` is the raw body, `body` the same decoded as JSON (else `null`). */
+export type WebhookRequest = {
+	readonly method: string;
+	readonly headers: { readonly [lowercase: string]: string };
+	readonly query: { readonly [name: string]: string };
+	readonly body: Json;
+	readonly text: string;
+};
+/** What `handle` answers the provider: `status` (200 by default) and `body` (a string as text, other JSON as JSON). */
+export type WebhookReply = { readonly status?: number; readonly body?: Json } | void;
+/**
+ * `handle`'s ctx: reads (`query`) and writes (`act`) as the reserved system identity holding the webhook's `policies`,
+ * the receiving instance and its configuration. Each act commits on its own; one act map commits together.
+ */
+export type WebhookCtx<S> = Omit<Clock, 'actor'> &
+	CallerQuery & {
+		readonly actor: Extract<Actor, { kind: 'system' }>;
+		readonly invocation_id: string;
+		readonly instance: Id<'sys_integration'>;
+		readonly configuration: ConfigurationIn<S>;
+		act: Act;
+		/** Answers the provider 422 with this message. */
+		refuse: Refuse<{}>;
+	};
+/**
+ * Runs for each verified delivery to an instance and answers the provider: what it returns is the response (a refusal
+ * 422, a failure 500, so the provider redelivers). A provider that redelivers repeats the body: key an act by the
+ * delivery's own id (`{ key }`) to write once.
+ */
+type WebhookBody<N> = (request: WebhookRequest, ctx: WebhookCtx<SpecOf<N>>) => BodyReturn<WebhookReply>;
+
 // ── the test body ──
 /** The `test` body's ctx: the instance's configuration and its live request. */
 interface TestCtx<S> {
@@ -425,11 +497,15 @@ interface TestCtx<S> {
 type SpecOf<N> = [IntegrationSpecOf<N>] extends [never] ? IntegrationSpec : IntegrationSpecOf<N>;
 /** Checks a freshly paired instance (the host's `test` verb): fails with any failure to refuse the pairing. */
 type TestBody<N> = (ctx: TestCtx<SpecOf<N>>) => BodyReturn<void>;
-/** The literal an integration takes, with its inline test typed by the path-derived binding. */
-export type IntegrationLiteral<N> = IntegrationSpec & { test?: TestBody<N> };
+type WebhookSpec = NonNullable<IntegrationSpec['webhook']>;
+/** The literal an integration takes, with its inline test and webhook handler typed by the path-derived binding. */
+export type IntegrationLiteral<N> = Omit<IntegrationSpec, 'webhook'> & {
+	webhook?: Omit<WebhookSpec, 'handle'> & { handle?: WebhookBody<N> };
+	test?: TestBody<N>;
+};
 interface IntegrationFor<N, S, D = DriverIn<S>> {
 	description: string;
-	driver: DriverName;
+	driver: DriverName | typeof DeclaredDriver.Type;
 	configuration?: ValidInputs<Part<S, 'configuration'>>;
 	credential?: Contract<D> extends { credential: true }
 		? ValidInputs<Part<S, 'credential'>>
@@ -437,7 +513,13 @@ interface IntegrationFor<N, S, D = DriverIn<S>> {
 	oauth?: OAuthFor<S>;
 	http?: HttpFor<S>;
 	webhook?: D extends 'http'
-		? { verify: { scheme: WebhookScheme; secret: keyof Part<S, 'credential'> & string } }
+		? {
+				verify: { scheme: WebhookScheme; secret: keyof Part<S, 'credential'> & string };
+				policies?: NonEmpty<PolicyName>;
+				handle?: Part<S, 'webhook'> extends { policies: unknown }
+					? WebhookBody<N>
+					: 'error: a webhook handler holds policies: declare webhook.policies';
+			}
 		: 'error: only an http integration declares a webhook';
 	rate?: [RequestIn<S>] extends [never] ? 'error: only a request driver takes a rate' : Rate;
 	test?: TestBody<N>;
@@ -446,53 +528,60 @@ interface IntegrationFor<N, S, D = DriverIn<S>> {
 export type Integration<N extends string, S> = {
 	readonly name: N;
 	readonly spec: S;
-	readonly bodies: { readonly test?: Body };
+	readonly bodies: { readonly test?: Body; readonly webhook?: Body };
 };
 
 /**
  * `src/integration/<name>/+integration.ts`: one external system's connection: its driver, configuration, credential,
- * OAuth client, HTTP base and auth, webhook verification and request `rate`, with an optional `test` body run when an
- * instance is paired. Its durable instances (connections) are runtime `sys_integration` rows made by people or the
+ * OAuth client, HTTP base and auth, webhook verification and handler, and request `rate`, with an optional `test` body
+ * run when an instance is paired. Its durable instances (connections) are runtime `sys_integration` rows made by people or the
  * agent; source never declares one, and a release neither provisions nor deletes them. Each row's configuration is
  * decoded with its defaults on every write; its credential is collected masked at pairing and sealed host-side, never
  * entering a guest or the browser. What it exchanges is declared on models:
- * `model({ syncs: { <s>: { with: '<name>', read?, write? } } })`. The typed binding is generated by `bolt check` in
- * `.norbital/integrations/<name>.ts`, checked against the folder name. The definition carries no provider protocol:
+ * `sync('<model>', '<sync>', { with: '<name>', read?, write? })` in the model's `+<sync>.sync.ts`. `name` must equal the folder name. The definition carries no provider protocol:
  * conversation platforms are the host's providers, which a workspace cannot supply.
  * @returns Declaration metadata and its attached pairing-test body.
  * @example
- * import { integration } from '../../../.norbital/integrations/crm.ts';
- * export default integration({
+ * import { integration } from '@norbital-ai/bolt';
+ * export default integration('crm', {
  * 	description: 'The CRM account.',
  * 	driver: 'http',
  * 	http: { base_url: 'https://api.crm.example', auth: { bearer: 'api_key' } },
  * 	credential: { api_key: { kind: 'text', label: 'API key' }, signing_secret: { kind: 'text', label: 'Webhook signing secret' } },
- * 	webhook: { verify: { scheme: 'standard', secret: 'signing_secret' } },
+ * 	webhook: {
+ * 		verify: { scheme: 'standard', secret: 'signing_secret' },
+ * 		policies: ['crm_inbound'],
+ * 		handle: function* (request, ctx) {
+ * 			yield* ctx.act({ 'leads.import': { rows: [{ ref: String(request.headers['webhook-id']) }], on_conflict: 'keep' } });
+ * 			return { status: 202 };
+ * 		}
+ * 	},
  * 	rate: '10/s',
  * 	test: function* (ctx) {
  * 		yield* ctx.request({ method: 'GET', path: '/me', output: { kind: 'json' } });
  * 	}
  * });
+ * @param name The integration's name: its folder.
+ * @param spec Driver, configuration, credentials and the optional pairing test.
  */
-export interface IntegrationDeclaration<N extends IntegrationName> {
-	/** @param spec Driver, configuration, credentials and the optional pairing test. */
-	<const S extends IntegrationLiteral<N>>(spec: IntegrationLiteralInput<N, S>): Integration<N, S>;
+/* @__NO_SIDE_EFFECTS__ */
+export function integration<const N extends IntegrationName, const S extends IntegrationLiteral<N>>(
+	name: N,
+	spec: IntegrationLiteralInput<N, S>
+): Integration<N, S> {
+	const handle = spec.webhook?.handle;
+	return {
+		name,
+		spec,
+		bodies: {
+			...(spec.test === undefined ? {} : { test: attached(spec.test, 0) }),
+			...(handle === undefined ? {} : { webhook: attached(handle, 1) })
+		}
+	};
 }
 
-/** An integration binding's literal with its driver-specific checks. */
+/** An integration literal with its driver-specific checks. */
 export type IntegrationLiteralInput<
 	N extends IntegrationName,
 	S extends IntegrationLiteral<N>
 > = S & NoInfer<Checked<IntegrationLiteral<N>, S, Exact<S, IntegrationFor<N, S>>>>;
-
-/** Binds the discovered integration path for generated declarations and the built-in layer. */
-/* @__NO_SIDE_EFFECTS__ */
-export function bind_integration<const N extends IntegrationName>(
-	name: N
-): IntegrationDeclaration<N> {
-	return /* @__NO_SIDE_EFFECTS__ */ (spec) => ({
-		name,
-		spec,
-		bodies: spec.test === undefined ? {} : { test: attached(spec.test, 0) }
-	});
-}

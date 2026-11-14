@@ -2,8 +2,9 @@
 // their engine shape, and each link's owned resources close on link close or a failed opening.
 import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Exit, Fiber, FiberSet, Schema } from 'effect';
-import type { DriverOpen, Json } from '@norbital-ai/bolt/engine';
-import { to_drivers, type LinkDef, type ProviderDef, type Run } from '../src/abi.ts';
+import type { DriverOpen, Run } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
+import { to_drivers, type LinkDef, type ProviderDef } from '../src/abi.ts';
 import { PairingInvalid, ProviderRefused, ProviderUnavailable } from '../src/errors.ts';
 import { fakeFetch, HOOK, loopback_tcp, REDIRECT } from './kit.ts';
 

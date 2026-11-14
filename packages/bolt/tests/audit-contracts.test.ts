@@ -7,14 +7,13 @@ import {
 	AuditPendingQuery,
 	AuditQuery,
 	AuditRecord,
-	AuditSummary
-} from '../src/protocol/audit.ts';
+	AuditSummary,
+	FacilityFailure
+} from '@norbital-ai/host-api';
 import { shell_api } from '../src/shell/runtime.ts';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { audit_shape } from '../src/engine/audit.ts';
-import { FacilityFailure } from '../src/decl/errors.ts';
 import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
-import { auditRecord, storedAuditEvent, StoredAuditRecord } from '../src/node/audit-storage.ts';
 import { auditActor } from '../src/engine/audit-operation.ts';
 
 const event: AuditEvent = {
@@ -46,37 +45,6 @@ it('a member actor is recorded with their handle, so the audit names a person wi
 	expect(auditActor(member)).toEqual({ kind: 'member', id: 'member-1', label: 'avery@example.test' });
 	expect(auditActor({ ...member, email: null, phone: '+6500000000' }).label).toBe('+6500000000');
 	expect(auditActor({ kind: 'api_key', key: 'k1' })).toEqual({ kind: 'api_key', id: 'k1', label: null });
-});
-
-it('preserves format:1 disk metadata and opaque payload keys behind the public audit adapter', () => {
-	const payload = { operationId: 'provider-owned', recordedAt: 'verbatim', payloadBytes: 'µΩ' };
-	const publicEvent = { ...event, payload };
-	const payloadBytes = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
-	const nativeEvent = storedAuditEvent(publicEvent);
-	expect(nativeEvent).toEqual({
-		id: event.id,
-		operationId: 'act-1',
-		at: event.at,
-		category: 'write',
-		action: 'accounts.update',
-		status: 'committed',
-		actor: event.actor,
-		subject: event.subject,
-		invocation: 'act-1',
-		transaction: null,
-		run: null,
-		approval: null,
-		payload
-	});
-	expect(nativeEvent).not.toHaveProperty('operation_id');
-	const historical = Schema.decodeUnknownSync(StoredAuditRecord)({
-		...nativeEvent,
-		recordedAt: '2026-10-25T00:00:01.000Z',
-		payloadBytes
-	});
-	expect(auditRecord(historical)).toEqual({ ...publicEvent, recorded_at: '2026-10-25T00:00:01.000Z', payload_bytes: payloadBytes });
-	expect(auditRecord(historical)).not.toHaveProperty('recordedAt');
-	expect(auditRecord(historical).payload).toEqual(payload);
 });
 
 it.effect('audit caller failures remain invalid while store outages remain unavailable', () =>

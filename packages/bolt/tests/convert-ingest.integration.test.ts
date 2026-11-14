@@ -1,13 +1,12 @@
 // An authored ingest reads the stored file, decodes the host's answer and stores the images of an owned result.
-import { uuidv7 } from '../src/protocol/wire.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 import { Effect, Exit, Layer, Result, Schema, Scope } from 'effect';
 import { afterAll } from 'vitest';
 import { Convert } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { type Ingested, Port } from '@norbital-ai/host-api';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { act_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import type { Ingested } from '../src/engine/contracts.ts';
 import { expect } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
 import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';

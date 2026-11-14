@@ -10,8 +10,11 @@ import {
 	type IngestIndex,
 	type Transcript
 } from '../../decl/runtime/facilities.ts';
-import type { Ingested } from '../contracts.ts';
+import type { Ingested } from '@norbital-ai/host-api';
 import type { TenantDbShape } from '../db/tenant-db.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
+import type { LiveShape } from '../services.ts';
+import { Chain } from '../write/sql.ts';
 import type { Files } from '../ports.ts';
 import { row } from '../system/rows.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -313,6 +316,7 @@ export const cached = Effect.fn('Agents.ingestCached')(function* (
 const PUTS = 16;
 export const stash = Effect.fn('Agents.ingestStash')(function* (
 	db: TenantDbShape,
+	publish: LiveShape['publish'],
 	files: Files['Service'],
 	o: { sha256: string; base: string; member: string | null; now: string },
 	ingested: Ingested
@@ -336,17 +340,15 @@ export const stash = Effect.fn('Agents.ingestStash')(function* (
 				})),
 			{ concurrency: PUTS }
 		);
-		if (stored.length > 0)
-			yield* db.write({
-				text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-				SELECT f.id::uuid, f.name, f.mime, f.size, f.key, f.sha256, 'sys_conversation.outputs', $2::timestamptz, $3
-				FROM jsonb_to_recordset($1::jsonb) AS f(id text, name text, mime text, size bigint, key text, sha256 text)`,
-				params: [
-					JSON.stringify(stored.map(({ file, sha256 }) => ({ ...file, sha256 }))),
-					o.now,
-					o.member
-				]
-			});
+		// one native statement, published to live readers as any engine write is
+		if (stored.length > 0) {
+			const chain = new Chain();
+			capturePiece(chain, 'filed', 'sys_file', `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
+				SELECT f.id::uuid, f.name, f.mime, f.size, f.key, f.sha256, 'sys_conversation.outputs', ${chain.p(o.now)}::timestamptz, ${chain.p(o.member)}
+				FROM jsonb_to_recordset(${chain.p(JSON.stringify(stored.map(({ file, sha256 }) => ({ ...file, sha256 }))))}::jsonb)
+					AS f(id text, name text, mime text, size bigint, key text, sha256 text)`);
+			yield* nativeCommit(db.write, publish, chain, CapturedResult);
+		}
 		return stored.map(({ file }) => file);
 	});
 	const put = (path: string, mime: string, bytes: Uint8Array) =>

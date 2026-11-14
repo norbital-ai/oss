@@ -9,15 +9,17 @@ import { afterAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, FileSystem, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { artifact_hash, CONTRACT, read_artifact, tree_hash } from '../src/engine/artifact/read.ts';
+import { artifact_hash, CONTRACT, read_artifact } from '../src/engine/artifact/read.ts';
+import { tree_hash } from '@norbital-ai/host-api';
 import { prepare_migrations } from '../../bolt-cli/src/compiler/migrations.ts';
-import { Pristine } from '../src/node/db/pglite.ts';
+import { Pristine } from '@norbital-ai/host-api/node';
 import { sha256_hex } from '@norbital-ai/store';
 import type { Outcome as EngineOutcome } from '../src/engine/contracts.ts';
 import { ManifestInvalid } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { fingerprint, schema_slice } from '../src/engine/schema/plan.ts';
+import { client_page, InstanceStatus } from '@norbital-ai/host-api';
 import {
 	ActBody,
 	ActReply,
@@ -26,7 +28,6 @@ import {
 	Frame,
 	HostOperation,
 	HostOperationResult,
-	InstanceStatus,
 	LiveBody,
 	LiveReply,
 	OwnCall,
@@ -43,7 +44,6 @@ import {
 	type Outcome,
 	type WriteOutcome
 } from '../src/protocol/schema.ts';
-import { client_page } from '../src/protocol/static.ts';
 import { refusal_of_status, status_of, wire_error } from '../src/protocol/wire.ts';
 
 /** `value` decodes, and its encoding decodes to the same value. */
@@ -167,7 +167,6 @@ describe('the wire Schemas', () => {
 			status: 'idle',
 			model: 'default',
 			plan: { revision: 1, body: '- a', status: 'draft' },
-			goals: [{ id: 'g', text: 'x', status: 'doing' }],
 			envoy: null,
 			integration: null,
 			kind: null,
@@ -375,7 +374,7 @@ describe('an instance status', () => {
 		expect(
 			decode({ instance: 'i', driver: 'email', state: 'pairing', pairing: { kind: 'qr' } })
 		).toMatchObject({ value: { pairing: { kind: 'qr', value: null } } });
-		expect(decode({ instance: 'i', driver: 'fax', state: 'connected' })._tag).toBe('None');
+		expect(decode({ instance: 'i', driver: 7, state: 'connected' })._tag).toBe('None');
 	});
 });
 
@@ -547,12 +546,12 @@ describe("a workspace's pages", () => {
 				]) {
 					const pathname = new URL(path, 'https://workspace.invalid').pathname;
 					expect(pathname).toBe(path);
-					expect(yield* client_page(dir, pathname, workspace)).toMatchObject({
+					expect(yield* client_page(dir, pathname)).toMatchObject({
 						file: join(dir, 'client', 'index.html'),
 						document: true
 					});
 				}
-				expect(yield* client_page(dir, '/assets/nested%2flogo%20one.svg', workspace)).toEqual({
+				expect(yield* client_page(dir, '/assets/nested%2flogo%20one.svg')).toEqual({
 					file: join(dir, 'assets', 'nested', 'logo one.svg'),
 					document: false,
 					headers: {
@@ -563,39 +562,37 @@ describe("a workspace's pages", () => {
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.effect(
-		'serve the client build, then the workspace assets, then the document under the frame policy',
+		'serve the client build, then the workspace assets, then the document',
 		() =>
 			Effect.gen(function* () {
 				const dir = yield* built;
-				expect(yield* client_page(dir, '/app.js', workspace)).toEqual({
+				expect(yield* client_page(dir, '/app.js')).toEqual({
 					file: join(dir, 'client', 'app.js'),
 					document: false,
 					headers: { 'content-type': 'text/javascript', 'cache-control': 'no-cache' }
 				});
-				expect((yield* client_page(dir, '/assets/logo.png', workspace))?.headers).toEqual({
+				expect((yield* client_page(dir, '/assets/logo.png'))?.headers).toEqual({
 					'content-type': 'image/png',
 					'cache-control': 'public, max-age=31536000, immutable'
 				});
-				expect(yield* client_page(dir, '/__bolt', workspace)).toBeUndefined();
-				expect(yield* client_page(dir, '/__bolt/nope', workspace)).toBeUndefined();
-				expect(yield* client_page(dir, '/orders/o1', workspace)).toEqual({
+				expect(yield* client_page(dir, '/__bolt')).toBeUndefined();
+				expect(yield* client_page(dir, '/__bolt/nope')).toBeUndefined();
+				expect(yield* client_page(dir, '/orders/o1')).toEqual({
 					file: join(dir, 'client', 'index.html'),
 					document: true,
 					headers: {
 						'content-type': 'text/html; charset=utf-8',
-						'cache-control': 'no-cache',
-						'content-security-policy': "frame-ancestors 'self'"
+						'cache-control': 'no-cache'
 					}
 				});
 				// never a file outside the build or the assets
-				expect((yield* client_page(dir, '/../manifest.json', workspace))?.document).toBe(true);
-				expect((yield* client_page(dir, '/manifest.json', workspace))?.document).toBe(true);
+				expect((yield* client_page(dir, '/../manifest.json'))?.document).toBe(true);
+				expect((yield* client_page(dir, '/manifest.json'))?.document).toBe(true);
 				const fs = yield* FileSystem.FileSystem;
 				expect(
 					yield* client_page(
 						yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-empty-' }),
-						'/',
-						workspace
+						'/'
 					)
 				).toBeUndefined();
 			}).pipe(Effect.provide(NodeServices.layer))

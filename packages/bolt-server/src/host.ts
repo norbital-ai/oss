@@ -17,15 +17,20 @@ import { HttpClient } from 'effect/http';
 import { ai_modality_refusals } from '@norbital-ai/providers/openrouter';
 import { to_drivers } from '@norbital-ai/providers';
 import {
-	BoltError,
+	type Challenge,
 	document_converter,
 	document_ingester,
-	Port,
+	type Facilities,
+	FacilityFailure,
 	type FilesPort,
-	type LogRow
-} from '@norbital-ai/bolt/engine';
-import { off, type Challenge, type Facilities, type Serving } from '@norbital-ai/bolt/facilities';
-import { default_facilities } from '@norbital-ai/bolt/node';
+	type LogRow,
+	off,
+	Port,
+	type Serving
+} from '@norbital-ai/host-api';
+import { http_port, keys_port, tcp_port } from '@norbital-ai/host-api/node';
+import { local_audit } from './audit/index.ts';
+import { local_files } from './files.ts';
 import { drivers } from './drivers.ts';
 import { messaging } from './mail.ts';
 import { nominatim, openAi, s3Files } from './ports.ts';
@@ -158,7 +163,7 @@ export const host: (
 	options: { readonly pglite?: string; readonly log: (line: string) => void }
 ) => Effect.Effect<
 	{ facilities: Facilities; serving: Serving },
-	BoltError | PlatformError.PlatformError,
+	FacilityFailure | PlatformError.PlatformError,
 	Scope.Scope | HttpClient.HttpClient | Crypto.Crypto | FileSystem.FileSystem
 > = Effect.fn('server.host')(function* (
 	config: HostSettings,
@@ -192,21 +197,25 @@ export const host: (
 			{ tolerate_unread: false }
 		);
 		if (refusals.length > 0)
-			return yield* Effect.fail(BoltError.make('invalid_spec', 'admission', refusals.join('\n')));
+			return yield* Effect.fail(FacilityFailure.invalid(refusals.join('\n')));
 	}
 	const runtime = yield* FiberSet.makeRuntimePromise<HttpClient.HttpClient>();
 	const run = <A, E>(
 		effect: Effect.Effect<A, E, HttpClient.HttpClient>,
 		options?: { readonly signal?: AbortSignal | undefined }
 	) => runtime(Effect.result(effect), options).then(Result.getOrThrow);
-	const node = yield* default_facilities({
-		audit_dir: config.audit_dir,
-		master_key: config.master_key,
-		pglite: options.pglite
-	});
+	// the durable audit database, never in the tenant's PGlite directory
+	const fs = yield* FileSystem.FileSystem;
+	yield* fs.makeDirectory(config.audit_dir, { recursive: true });
+	const audit_dir = yield* fs.realPath(config.audit_dir);
+	if (options.pglite !== undefined && audit_dir === (yield* fs.realPath(options.pglite)))
+		return yield* Effect.fail(
+			FacilityFailure.invalid('The audit database must be separate from the tenant database.')
+		);
+	const audit = yield* local_audit(audit_dir);
 	const files =
 		config.files.provider === 'local'
-			? node.local_files(config.files.root)
+			? local_files(config.files.root)
 			: yield* s3Files(config.files.endpoint, config.files.credential);
 	const filesPort: FilesPort = {
 		put: (bytes, meta, signal) => run(files.put(bytes, meta), { signal }),
@@ -233,7 +242,7 @@ export const host: (
 	const vapid = config.vapid;
 	const facilities: Facilities = {
 		storage: { database, files: filesPort },
-		logs: { runtime: memoryLog(log), audit: node.audit },
+		logs: { runtime: memoryLog(log), audit },
 		transactional: {
 			mail: messages.mail,
 			sms: messages.sms,
@@ -274,11 +283,9 @@ export const host: (
 		intelligence,
 		ports: {
 			webhooks: { public_url: config.public_url },
-			websockets: off,
-			outbound: node.outbound
+			outbound: { http: http_port, tcp: tcp_port }
 		},
-		sandbox: off,
-		keys: node.keys
+		keys: keys_port(config.master_key)
 	};
 	const converter = config.providers.CONVERT;
 	const documents =
@@ -301,12 +308,12 @@ export const host: (
 		converter.credential === undefined
 			? {}
 			: {
-					ingest: document_ingester({ url: converter.endpoint, key: converter.credential }).ingest,
 					convert: {
 						targets: documents.targets,
 						convert: (source, to, o, signal) => run(documents.convert(source, to, o), { signal }),
 						preview_pdf: (source, options, signal) =>
-							run(documents.previewPdf(source, options), { signal })
+							run(documents.previewPdf(source, options), { signal }),
+						...document_ingester({ url: converter.endpoint, key: converter.credential })
 					}
 				}),
 		...(geo === undefined

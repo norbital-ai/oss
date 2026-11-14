@@ -1,8 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result } from 'effect';
-import type { Sql } from '../src/engine/contracts.ts';
+import { DbError, type Sql } from '@norbital-ai/host-api';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
 import { coalescing, memo_reads } from '../src/engine/query/engine.ts';
 
 const present = <A>(value: A | null | undefined): A => {

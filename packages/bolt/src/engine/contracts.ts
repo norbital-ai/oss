@@ -1,6 +1,5 @@
-// Shared engine budgets and native ABI types. Services live in services.ts, the database in db/tenant-db.ts,
-// compiled source in manifest.ts and the versioned host boundary in protocol/host-api.ts.
-// Runtime schemas own the wire shapes derived here. Host capabilities remain generic.
+// Shared engine budgets and the guest ABI's types. Services live in services.ts, the database in db/tenant-db.ts,
+// compiled source in manifest.ts; the host boundary (ports, facilities, `HostApi`) is `@norbital-ai/host-api`'s.
 import type {
 	EngineActorSchema,
 	RunTriggerSchema,
@@ -9,29 +8,13 @@ import type {
 	Outcome as ActOutcomeSchema,
 	Written as WrittenSchema
 } from '../protocol/schema.ts';
-import type { ImageMetadataSchema, ImagePreviewMimeSchema, IngestedSchema } from './media.ts';
-import type { AiPortResponseSchema } from './ai-schema.ts';
-import type { DeliveryReport, OutboundReference, SendReceipt } from './conversations/status.ts';
 import type { BoltError } from '../protocol/errors.ts';
-import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
+import { HOST_LIMITS, type FacilityFailure, type Unavailable } from '@norbital-ai/host-api';
 import type { MessageValues } from '../decl/errors/refusal.ts';
-import type {
-	ConvertSource,
-	ConvertTarget,
-	PreviewPdfOptions,
-	GeoHit,
-	RunCause,
-	IngestOptions,
-	WebPage
-} from '../decl/runtime/facilities.ts';
-import type { Json, Point } from '../decl/values.ts';
+import type { Json } from '../decl/values.ts';
 import type { Pred } from '@norbital-ai/store';
-import type { GuestProgram } from './guest/runner.ts';
-import type { GuestTurnSchema } from './guest/schema.ts';
 import type { Holder } from './access/authority.ts';
-import type { BrowserSnapshot, BrowserStep } from '../decl/runtime/browser.ts';
 import type { FacilityMember } from '../decl/runtime/facility-members.ts';
-export type { BrowserSnapshot, BrowserStep } from '../decl/runtime/browser.ts';
 
 /** The precise facility failure sent across the guest ABI; interior failures remain tagged errors. */
 export type FacilityError =
@@ -42,29 +25,8 @@ export type FacilityError =
 const MiB = 1024 * 1024;
 /** Every wall and cap as one table; each overrun is a typed `BoltError`, never a clamp. */
 export const LIMITS = {
-	automationCache: { entries: 256 },
 	runLog: { lines: 100, pollMs: 2_000 },
-	/** One unit's guest CPU: Colony's meter budget (`BUDGET_MS`), so the kit and dev refuse what a deployed host refuses. */
-	guestCpuMs: 3_000,
-	guestMemoryMiB: 256,
-	/**
-	 * Per I/O response, never per invocation. Streaming model responses reset their idle deadline on progress;
-	 * a multi-step inference keeps its separate whole-call ceiling.
-	 */
-	callMs: {
-		database: 20_000,
-		ai: 20_000,
-		tool: 20_000,
-		http: 20_000,
-		web: 20_000,
-		image: 20_000,
-		other: 20_000,
-		/** One Convert job (`ctx.convert.ingest`): a long recording's transcription takes minutes. */
-		ingest: 600_000,
-		attachment: 20_000,
-		/** One record printed by the host's browser (`ctx.convert.record`): the page loads, its reads settle, it prints. */
-		render: 60_000
-	},
+	...HOST_LIMITS,
 	/** Read crossings per invocation: `write` for one create/update transform, reading the whole batch;
 	 * `sync` for every other synchronous body. */
 	crossings: { sync: 40, write: 10, automation: 10_000 },
@@ -73,9 +35,6 @@ export const LIMITS = {
 	readBytes: 32 * MiB,
 	/** Coalesced native reads retained between an automation's successful read and its next act. */
 	readGuards: { count: 256, bytes: 4 * MiB },
-	/** One crossing's answer. 8 MiB fits a large jurisdiction's payroll admission while staying far below a cell's heap. */
-	crossingBytes: 8 * MiB,
-	argsBytes: 4 * MiB,
 	changeSetBytes: 16 * MiB,
 	/** A direct act holds its root inputs through the atomic commit. */
 	act: { rows: 10_000, inputBytes: 8 * MiB },
@@ -86,7 +45,8 @@ export const LIMITS = {
 	page: { max: 10_000, all: 50_000, allBytes: 8 * MiB, relationArm: 10_000 },
 	statement: { shapes: 500, params: 30_000 },
 	fileBytes: 4 * MiB,
-	storedFileBytes: 20 * MiB,
+	/** A waiting run's row: what it waits on and the answers of the crossings it made before (`ctx.wait`). */
+	waitBytes: 4 * MiB,
 	/** An outbound conversation message's attachments together, read for its provider; more refuses the message (permanent). */
 	messageAttachmentBytes: 20 * MiB
 } as const;
@@ -109,19 +69,6 @@ export function facility_wall_ms(member: FacilityMember, crossing_wall_ms?: numb
 export const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
 
 // ── the tenant database (C11 per activation) ──
-/** One statement with positional parameters (`$1…`); values are JSON (numeric, timestamps and dates as strings). */
-export type Sql = { readonly text: string; readonly params: readonly Json[] };
-/** A statement's result: its rows as JSON column maps and the number of rows it affected. */
-export type Rows = {
-	readonly rows: readonly { readonly [column: string]: Json }[];
-	readonly affected: number;
-};
-/** Taken before the statement, in sorted order; advisory keys are hashed by the adapter (`pg_advisory_xact_lock`). */
-export type Lock = {
-	tables?: readonly string[];
-	mode?: 'SHARE ROW EXCLUSIVE';
-	advisory?: readonly string[];
-};
 /** What operands resolve against, fixed per invocation (a replay keeps `now` and `today`). */
 export type Bindings = {
 	now: string;
@@ -163,6 +110,8 @@ export type { Captured } from './db/captured.ts';
 // ── outcomes: the author types of decl/ctx with names erased; a write's own `Outcome` is never `running` ──
 export type Written = typeof WrittenSchema.Type;
 export type Outcome = typeof WriteOutcome.Type;
+/** A refused outcome: its code, message and where it points. */
+export type Refused = Extract<Outcome, { kind: 'refused' }>;
 /** Past the person-wait the write continues in the background as run `run`; its row reports the outcome (`Running`). */
 export type Running = Extract<ActOutcome, { kind: 'running' }>;
 /** What an act answers its caller: the write's outcome, or `running` once it outlives the person-wait. */
@@ -182,7 +131,7 @@ export type Arm = { policy: string; where: Pred; history?: true };
  * A create or update arm: the columns it admits per write path (checked before any guest code) and whether its policy
  * declares a `verdict` (`policy.<p>.grants.<model>.<op>.verdict`, invocation kind `policy`); without one the arm allows. The
  * verdicts of every admitting arm combine: any `allow` executes; else the first `approve` in the team's policy order
- * holds the batch for its flow; else the first `deny` refuses it.
+ * holds the batch for its flow; else the first `refuse` refuses it.
  */
 export type WriteArm = {
 	policy: string;
@@ -240,7 +189,7 @@ export type Authority = {
 		mcp: readonly string[];
 	};
 	limits: readonly LimitRule[];
-	/** Requestor variables: `requestor.team_tree`, `requestor.scopes.<policy>`. */
+	/** Actor variables: `actor.team_tree`, `actor.scopes.<policy>`. */
 	teamTree: readonly string[];
 	scopes: { readonly [policy: string]: readonly string[] };
 };
@@ -260,9 +209,12 @@ export type InvocationKind =
 	| 'automation'
 	| 'effect'
 	| 'integration'
+	| 'webhook'
 	| 'page'
 	| 'validation'
 	| 'tool';
+/** One body of a guest batch (`Guest.invokeEach`): its target and input, as an invocation's. */
+export type GuestPart = { readonly target: string; readonly input: Json };
 /**
  * One fresh-isolate run of one body. `target` names it: `'<model>'` (create/update/delete transforms),
  * `'<model>.<index>'` (`vector`, `probe`, `rerank`), `'<model>.<sync>'` (`syncRead`, `syncWrite`),
@@ -282,14 +234,11 @@ export type Invocation = {
 		today: string;
 		tz: string;
 		seed: string;
-		cause?: RunCause;
 		attempt?: number;
-		/** An automation run's id and trigger (`ctx.run`). */
+		/** An automation run's trigger and, for a job, its id (`ctx.trigger`). */
 		run?: { id?: string; trigger?: RunTrigger };
 		admin?: boolean;
 		policies?: readonly string[];
-		/** A write callback's rows carried by this model's write (`with` or `on_approved`). */
-		carriedBy?: string;
 		/** The approving decision asks a held write's callback again, for its `on_approved`. */
 		approving?: true;
 		/** A sync body's or integration test's instance and configuration; `key` a sync write's `Idempotency-Key`. */
@@ -337,331 +286,6 @@ export type GuestOutcome =
 	  }
 	/** A throw, a budget (`cpu_budget`, `crossing_budget`, `read_budget_exceeded`, `memory`) or a bad answer. */
 	| { kind: 'failed'; error: BoltError };
-// ── host ports (`/engine` types): optional ports are absent when the host lacks the provider ──
-/** A stored blob; the `sys_file` row is the engine's. */
-export type Blob = { key: string; bytes: number; sha256: string; mime: string };
-/** A media file the host fetched for a tool: classified by its bytes, stored, never run. */
-export type Downloaded = Blob & { name: string };
-/** The host's blob store behind `ctx.files` and the `sys_file` rows: put, bounded get, signed URL, remove and media download. */
-export interface FilesPort {
-	put(bytes: Uint8Array, meta: { name: string; mime: string }, signal: AbortSignal): Promise<Blob>;
-	/** At most `max` bytes; more is `invalid`, never a truncation. */
-	get(key: string, max: number, signal: AbortSignal): Promise<Uint8Array>;
-	url(key: string, expiresInS: number, signal: AbortSignal): Promise<string>;
-	remove(key: string, signal: AbortSignal): Promise<void>;
-	/**
-	 * Fetches a public http(s) URL under the host's egress policy (every redirect hop re-checked, at most 5) and stores
-	 * its body if its first bytes are media (image, audio, video, PDF); anything else is refused, never stored. The host
-	 * streams it (at most 100 MiB, 20 s without bytes ends it) and names it from the response or the URL.
-	 */
-	download(url: string, signal: AbortSignal): Promise<Downloaded>;
-}
-/** Each conversion target's media type. */
-export const CONVERT_MIME: Record<ConvertTarget, string> = {
-	pdf: 'application/pdf',
-	docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-	pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-	odt: 'application/vnd.oasis.opendocument.text',
-	epub: 'application/epub+zip',
-	html: 'text/html'
-};
-/** Every conversion target, in the order hosts report them. */
-export const CONVERT_TARGETS: readonly ConvertTarget[] = [
-	'pdf',
-	'docx',
-	'pptx',
-	'odt',
-	'epub',
-	'html'
-];
-/**
- * The document converter behind `ctx.convert.document` (optional; absent → `unavailable`). `targets` is what this host
- * serves, checked at start against `workspace.convert.to`. `reference` is the bytes of a styling document (docx, pptx, odt).
- */
-export interface ConvertPort {
-	readonly targets: readonly ConvertTarget[];
-	convert(
-		source: ConvertSource,
-		to: ConvertTarget,
-		options: PreviewPdfOptions & { reference?: Uint8Array },
-		signal: AbortSignal
-	): Promise<Uint8Array>;
-	/** Renders in memory without retaining source or result in a job or file store. */
-	preview_pdf?(
-		source: ConvertSource,
-		options: PreviewPdfOptions,
-		signal: AbortSignal
-	): Promise<Uint8Array>;
-}
-/**
- * The host's headless browser printing one workspace page to PDF (`ctx.convert.record`). `path` is under the
- * workspace's public URL (`/?record=<model>/<id>&print`); every request the page makes carries the header
- * `authorization: <authorization>` (a render grant, valid only while this call runs). The host loads the page with
- * print media, waits until `<html data-bolt-print="ready">` (or `"failed"`, a refusal: answer it as an error), and
- * answers `page.pdf()` with its CSS page size and backgrounds. The shell answers the grant as the run's authority marked
- * `render`, for GET requests and the query route only, with a boot that carries no navigation; any other request with it
- * is signed out. The print route shows the record's own view alone (`RecordPrint.svelte`), in the workspace's locale.
- */
-export interface RenderPort {
-	pdf(page: { path: string; authorization: string }, signal: AbortSignal): Promise<Uint8Array>;
-}
-/**
- * Plan 12, Norbital Convert's ingest: parsing only, never OCR; a host may add a scanned page's transcript under its image in a `data-read` section. A `document` (pdf, office, html, text, images, audio) is
- * sanitised HTML, one block element per line (audio: one `<section data-speaker data-start data-end>` per segment); `data`
- * (a spreadsheet, CSV or JSON) is its cells as `{ sheets }`, or a JSON file's own value. `images` are referenced by name.
- */
-export type Ingested = typeof IngestedSchema.Type;
-/**
- * File ingestion (plan 12) behind the agent's `read_file` and `ctx.convert.ingest`: one file to `Ingested`, or
- * `unsupported` (the format has no parser: CAD). A video container is heard from its audio track.
- * `document_ingester` implements it over Norbital Convert's `/v1/ingest`; a converter without a transcription model rejects audio as `unavailable`.
- */
-export interface IngestPort {
-	ingest(
-		file: {
-			sha256: string;
-			name: string;
-			mime: string;
-			/** Bytes the caller holds, or else `key`: a stored file the host reads, so nothing large crosses into a cell. */
-			bytes?: Uint8Array | ReadableStream<Uint8Array>;
-			key?: string;
-			/** Whose it is: a burst of one tenant's files waits behind that tenant's own. */
-			lane?: string;
-		},
-		options: Omit<IngestOptions, 'for'>,
-		signal: AbortSignal
-	): Promise<Ingested | { readonly unsupported: string }>;
-}
-
-export type AiMessage = { role: 'user' | 'assistant' | 'tool'; content: Json };
-/** One model call the engine hands the AI port: model, system prompt, messages, tools, optional output schema and files. */
-export type AiRequest = {
-	model: string;
-	/** Host usage attribution; omitted for utility inference, set by the conversation engine for chat work. */
-	purpose?: 'chat';
-	system?: string;
-	messages: readonly AiMessage[];
-	tools?: readonly { name: string; description: string; input: Json }[];
-	output?: Json;
-	/** Images and documents for the model to see; `call` is the tool call that opened one, which it follows. */
-	files?: readonly { mime: string; bytes: Uint8Array; call?: string }[];
-	continuation?: string;
-};
-/**
- * A model answer as the engine reads it: the port's own shape. `cut`: the 60 s wall ended a stream; `continuation`
- * resumes it as the next step.
- */
-export type AiResponse = typeof AiPortResponseSchema.Type;
-/** hook:runtime — bytes supplied by a host, or an engine-resolved stored file read by the provider outside the Cell. */
-export type EmbedInput =
-	| string
-	| {
-			readonly $file: {
-				readonly name: string;
-				readonly mime: string;
-				readonly sha256: string;
-				readonly bytes: Uint8Array;
-			};
-	  }
-	| {
-			readonly $stored: {
-				readonly key: string;
-				readonly name: string;
-				readonly mime: string;
-				readonly sha256: string;
-				readonly bytes: number;
-			};
-	  };
-/** One model a person may pick (the panel lists `label`, grouped by `provider`); `context` is its window in tokens. */
-export type AiModel = { id: string; label: string; provider?: string; context?: number };
-export interface EmbeddingsPort {
-	/** `dimensions`: the vector length the caller stores (a model that truncates, Matryoshka-style, answers at it). */
-	embed(
-		inputs: readonly EmbedInput[],
-		model: string,
-		signal: AbortSignal,
-		dimensions?: number
-	): Promise<readonly (readonly number[])[]>;
-}
-/**
- * The AI facility: `sys_1` (fast structured decisions, text only) and `sys_2` (the LLM, multimodal) are both
- * required when the port is bound; `embed` (multimodal) is present when the host maps an embedding model. The host
- * verifies at activation that every `sys_2` and `embed` model takes images; nothing here branches on modality.
- */
-export interface AiPort {
-	sys_1: import('./decision.ts').System1Port;
-	sys_2: {
-		/** The model classes the host maps (`default fast strong`). */
-		models: readonly string[];
-		/**
-		 * The concrete models a person may pick for a conversation and the id a new one starts on (the host's own selection,
-		 * cached as it likes; it answers even offline). `infer` takes any of their ids as `model`, beside the classes.
-		 */
-		catalog?(): Promise<{ models: readonly AiModel[]; default: string }>;
-		/** `onDelta` streams text as it arrives; on the wall the agent keeps it as a cut step. */
-		/** `onProgress`: the stream produced something that is not text (a tool call's arguments, or `reasoning` as it arrives). */
-		infer(
-			request: AiRequest,
-			signal: AbortSignal,
-			onDelta?: (text: string) => void,
-			onProgress?: (reasoning?: string) => void
-		): Promise<AiResponse>;
-	};
-	embed?: EmbeddingsPort['embed'];
-}
-export interface GeocoderPort {
-	search(query: string, signal: AbortSignal): Promise<readonly GeoHit[]>;
-	reverse(point: Point, signal: AbortSignal): Promise<GeoHit | null>;
-}
-export interface WebReadPort {
-	/** Refuses private, loopback and link-local addresses. */
-	/** `raw`: also the markup and its links, for a page that is markup (a provider may omit what it lacks). */ // hook:runtime
-	read(url: string, signal: AbortSignal, options?: { raw?: boolean }): Promise<WebPage>;
-}
-/** Where the agent's browser goes: a page, or back, forward or a reload of the one open. */
-export type BrowserTarget =
-	{ readonly url: string } | { readonly go: 'back' | 'forward' | 'reload' };
-/**
- * The browsing facility the built-in `browser_*` tools drive. Each `profile` is one browser of its own, its sign-ins and
- * site data kept between calls: a person's id, or `BROWSER_RUN_PROFILE` + `<run id>:<inference id>` for one inference of a run.
- * Pages answer as text with a ref on every control; a PDF answers its extracted text, page by page.
- */
-/** The page's own CSS size and pixel density: what the person's browser would lay out at. */
-export type BrowserViewport = {
-	width: number;
-	height: number;
-	device_scale_factor?: number;
-};
-/** A workspace page the agent's browser opens: `live`, or a preview environment by its name. */
-export type BrowserWorkspaceTarget = {
-	readonly environment: string;
-	readonly path?: string;
-	readonly device?: 'desktop' | 'tablet' | 'phone';
-};
-/** Who a workspace page is opened for: the person, the conversation, and the agent's mark when it has one. */
-export type BrowserCaller = {
-	readonly actor: EngineActor;
-	readonly conversation: string;
-	readonly agent?: { readonly conversation: string };
-};
-export interface BrowserPort {
-	/** Open the profile's isolated tab. A failed open is an error, and close must release any partial resources. */
-	open(profile: string, signal: AbortSignal): Promise<void>;
-	navigate(
-		profile: string,
-		to: BrowserTarget,
-		find: string | undefined,
-		signal: AbortSignal,
-		viewport?: BrowserViewport
-	): Promise<BrowserSnapshot>;
-	/**
-	 * Open a page of the workspace as the person, signed in by the host's hand-off: the internal half of `browser`.
-	 * A host that cannot sign its browser in omits it, and the agent is not offered workspace pages.
-	 */
-	open_workspace?(
-		profile: string,
-		target: BrowserWorkspaceTarget,
-		caller: BrowserCaller,
-		signal: AbortSignal
-	): Promise<BrowserSnapshot>;
-	/** Close this profile's tab and release its page resources; its sealed sign-ins stay for the next open. */
-	close(profile: string, signal: AbortSignal): Promise<void>;
-	snapshot(
-		profile: string,
-		options: { find?: string; from?: number },
-		signal: AbortSignal
-	): Promise<BrowserSnapshot>;
-	act(profile: string, steps: readonly BrowserStep[], signal: AbortSignal): Promise<BrowserSnapshot>;
-	evaluate(profile: string, expression: string, signal: AbortSignal): Promise<Json>;
-	screenshot(profile: string, signal: AbortSignal): Promise<Uint8Array>;
-	/**
-	 * A media file at `url` fetched in the profile's session (its sign-ins) and stored as `FilesPort.download` stores one:
-	 * classified by its first bytes, streamed into the store, never held whole.
-	 */
-	download(profile: string, url: string, signal: AbortSignal): Promise<Downloaded>;
-}
-/**
- * What an instance's link hands the engine (`integrations.receive`): inbound conversation messages (each attachment
- * `{ name, mime, bytes, bin? }`, its bytes in `bins` at `bin`; `history` is a backfill nobody waits on), a provider's
- * report on a message it sent (`provider_id` is what its `send` answered), a chat the account cleared or deleted
- * (`clear`: every message of `thread` sent at or before `before` is tombstoned), or a pushing driver's changed sync
- * partition (`sync`: `'<model>.<sync>'`).
- */
-export type DriverEvent =
-	| { kind: 'messages'; messages: readonly Json[]; history?: true; bins?: readonly Uint8Array[] }
-	/** Await registration before sending when the provider chooses its message id before I/O. */
-	| ({ kind: 'outbound_ref' } & OutboundReference)
-	| { kind: 'delivery'; provider_id: string; report: DeliveryReport }
-	| { kind: 'clear'; thread: string; before: string }
-	/** The sender is typing (`typing: true`) in `thread`: a held burst waits for the rest, up to its cap. */
-	| { kind: 'presence'; thread: string; typing: boolean }
-	| { kind: 'invalidate'; sync: string; partition: string };
-/**
- * One of `message.attachments` (stored FileRefs, in order) as bolt hands it to `send`: the bytes read through the host's files
- * port, all of a message's together at most `LIMITS.messageAttachmentBytes`. `url` is a signed link a provider that fetches
- * media itself may pass on (Twilio's MediaUrl); it throws where the host serves no file links.
- */
-export type OutboundAttachment = {
-	readonly id: string;
-	readonly name: string;
-	readonly mime: string;
-	readonly bytes: Uint8Array;
-	url(expiresInS: number): Promise<string>;
-};
-/** The host's transactional mail and SMS (identity codes, invitations) and web push: a send to an address. */
-export interface TransportPort {
-	/** `kind` names what it sends (`email`, `sms`, `inbox` for push); the address is the message's. Any throw is a failed send. */
-	send(kind: string, message: Json, signal: AbortSignal): Promise<{ provider_id: string }>;
-}
-// ── the runtime log ──
-export type LogLevel = 'info' | 'warn' | 'error';
-/** One runtime event as it happens: the host writes it to its log pipe, never to the workspace's database. */
-export type LogEvent = {
-	readonly at: string;
-	readonly severity: LogLevel;
-	readonly event: string;
-	readonly invocation: string;
-	readonly run: string | null;
-	readonly conversation: string | null;
-	readonly turn: string | null;
-	readonly attributes: { readonly [key: string]: Json };
-};
-/** A stored event as the host's log store answers it; `id` is the store's own cursor. */
-export type LogRow = Omit<LogEvent, 'attributes'> & {
-	readonly id: string;
-	readonly attributes: Json;
-};
-/** A filter over the tenant's stored log events; every given condition must hold. */
-export type LogQuery = {
-	/** rows older than this id */
-	readonly before?: string;
-	/** rows newer than this id (the tail) */
-	readonly after?: string;
-	/** exactly this severity */
-	readonly level?: LogLevel;
-	/** this severity or worse */
-	readonly min?: LogLevel;
-	/** the event name or its attributes */
-	readonly text?: string;
-	readonly conversation?: string;
-	readonly run?: string;
-	/** events naming this automation */
-	readonly automation?: string;
-	/** instants bounding `at`: `since` inclusive, `until` exclusive */
-	readonly since?: string;
-	readonly until?: string;
-	/** rows per page, 1 to 200 (default 200) */
-	readonly limit?: number;
-};
-/**
- * The workspace's log facility, held by the host: each event written as it happens, and pages queried back newest first.
- * The host owns identity, time, caps and scope: an event names no tenant, and a query reads only this workspace's log.
- */
-export interface LogPort {
-	write(event: LogEvent): void;
-	query(query: LogQuery, signal: AbortSignal): Promise<readonly LogRow[]>;
-}
-
 export interface MembershipPort {
 	/** `team` is a source team handle (`+team.ts`). */
 	project(
@@ -675,282 +299,3 @@ export interface MembershipPort {
 		signal: AbortSignal
 	): Promise<void>;
 }
-/** One next-due instant per scope, held in host memory; no polling. */
-export interface DeadlinesPort {
-	announce(scope: string, notLaterThan: string): Promise<void>;
-	settle(scope: string, nextDue: string | null): Promise<void>;
-	teardown(scope: string): Promise<void>;
-}
-/** A pushing driver's page of a sync partition: its items (the sync `read`'s `items`), and the page facts a `read` page carries. */
-export type DriverPage = {
-	items: readonly Json[];
-	cursor: Json;
-	more: boolean;
-	snapshot?: 'begin' | 'end';
-	retained?: false;
-	health?: { state: 'ready' | 'attention'; code?: string; message?: string };
-};
-/**
- * The platform's current view of one thread since an instant (`Link.reconcile`). `messages` is what a `messages` event
- * would carry, with `bins` for its bytes: what others wrote, and a personal account's own messages marked `outbound`.
- * `complete` says it holds every message of the window, so what it lacks was deleted; a partial page repairs what it
- * shows and deletes nothing. `since` narrows the window: the instant the platform's history really reaches back to,
- * when that is later than the instant asked for.
- */
-export type ReconcilePage = {
-	messages: readonly Json[];
-	complete: boolean;
-	since?: string;
-	bins?: readonly Uint8Array[];
-};
-/**
- * The host's live side of integration instances, by instance id: a conversation driver `send`s (and shows `typing`),
- * a request driver (http, sqlserver) answers `request` with the instance's credential host-side, a pushing driver `read`s
- * a sync partition's page. A throw is a facility failure; `SendRefused` refuses a send (permanent or retried). An http `request`
- * answers `{ status, body }`, a database one the `DatabaseResult`.
- */
-export interface LinksPort {
-	send?(
-		instance: string,
-		message: Json,
-		signal: AbortSignal,
-		attachments?: readonly OutboundAttachment[]
-	): Promise<SendReceipt>;
-	typing?(instance: string, to: string, signal: AbortSignal, on: boolean): Promise<void>;
-	request?(instance: string, op: Json, signal: AbortSignal): Promise<Json>;
-	read?(
-		instance: string,
-		sync: string,
-		partition: string,
-		cursor: Json | null,
-		signal: AbortSignal
-	): Promise<DriverPage>;
-	/**
-	 * A committed change of what an instance's session link opened with — its `configuration` or its pause — or its
-	 * deletion: the link closes, and opens again from the row as it is then when it is active and paired (a calendar
-	 * watches what it names now; a resumed instance reconnects).
-	 */
-	changed?(instance: string): void;
-}
-
-// ── kernel ports (wave 1): the engine's former Node dependencies, served by the host ──
-/**
- * The release's files, read-only. Paths are posix and relative to the release directory (`artifact.json`,
- * `client/index.html`), with no `.`, empty, `\` or NUL segment; `..` only as `../seed/<pack>/…`, the build's seed packs
- * beside the release (`.norbital/bundle` + `.norbital/seed/<pack>`). The host refuses any other path and resolves
- * symlinks itself, so a path never leaves those roots. `stat` answers `null` for nothing there; `list` answers every
- * file (never a directory) under `dir`, recursively, relative to `dir`, sorted.
- */
-export interface ArtifactPort {
-	read(path: string, signal: AbortSignal): Promise<Uint8Array>;
-	list(dir: string, signal: AbortSignal): Promise<readonly string[]>;
-	stat(path: string, signal: AbortSignal): Promise<ArtifactStat | null>;
-}
-export type ArtifactStat = { readonly kind: 'file' | 'directory'; readonly size: number };
-/**
- * The tenant's secrets key, held by the host: AES-256-GCM envelopes (`iv ‖ tag ‖ ciphertext`) bound to `aad`
- * (`bolt\0<owner>\0<name>`), so a copied envelope never opens under another owner or name. `open` answers `null` for
- * an envelope that does not open under this key and `aad`. A host without a key provides no port.
- */
-export interface KeysPort {
-	seal(plain: Uint8Array, aad: Uint8Array, signal: AbortSignal): Promise<Uint8Array>;
-	open(sealed: Uint8Array, aad: Uint8Array, signal: AbortSignal): Promise<Uint8Array | null>;
-}
-/** A guest session's options: the prelude it evaluates first (the engine's `PRELUDE`), its entropy and its heap. */
-export type GuestSessionOptions = {
-	readonly prelude: string;
-	/** `$1` draws SHA-256 blocks of it (`random_stream`), so a replay with the same seed draws the same values. */
-	readonly seed: string;
-	readonly memory_mib: number;
-	/** A program run once (a `run_js` script): no spare isolates are prepared for it. */
-	readonly once?: true;
-};
-/** The prelude's `start(kind, path, inputJson, ctxJson, invocationId)`, by name. */
-export type GuestStart = {
-	readonly kind: InvocationKind;
-	readonly path: readonly string[];
-	readonly input: string;
-	readonly ctx: string;
-	readonly invocation: string;
-};
-/** One queued ctx call: member, JSON arguments, call site (stack frame) and call id. */
-export type GuestCall = readonly [member: string, args: string, site: string, id: number];
-/** One batch's answers (`give`): call ids, one JSON text per call, and each call's bytes. */
-export type GuestAnswers = {
-	readonly ids: readonly number[];
-	readonly texts: readonly string[];
-	readonly bins: readonly (readonly Uint8Array[])[];
-};
-/**
- * What one native slice leaves: the prelude's `take()` after it, and the console lines (`$0`) said since the last turn,
- * module evaluation's among the first; past 200 lines in one turn the host keeps the first 200 and counts the rest.
- */
-export type GuestTurn = typeof GuestTurnSchema.Type;
-/**
- * Guest isolates, made and metered by the host. `open` evaluates `prelude` as an `evalClosure` body with the hooks
- * `$0` say (lines buffered for the turn), `$1` random (from `seed`), `$2` digest (`crypto.subtle.digest`'s host half)
- * and `$3` asset (`program.assets` by sha256), then `program.source` as one module bound to `__boltGuest`; it answers
- * an opaque session id. `start` and `give` run their prelude hook and then `take()`, `take` only `take()` (after a turn
- * whose timer ran): each call is one native slice, under a CPU slot the host takes for it. A session past its unit's
- * CPU budget or its memory ends and rejects with an encoded `HostFailure` of code `cpu_budget` or `memory`; an aborted
- * call ends its session. `close` disposes it (idempotent).
- */
-export interface GuestIsolatesPort {
-	open(program: GuestProgram, options: GuestSessionOptions, signal: AbortSignal): Promise<string>;
-	start(session: string, start: GuestStart, signal: AbortSignal): Promise<GuestTurn>;
-	take(session: string, signal: AbortSignal): Promise<GuestTurn>;
-	give(session: string, answers: GuestAnswers, signal: AbortSignal): Promise<GuestTurn>;
-	close(session: string): Promise<void>;
-}
-/** An outbound request: absolute URL, headers in order, body bytes (none for GET). */
-export type HttpRequest = {
-	readonly method: string;
-	readonly url: string;
-	readonly headers: readonly (readonly [name: string, value: string])[];
-	readonly body?: Uint8Array;
-};
-/** `redirects`: hops followed (each re-checked); `max_bytes`: the decoded body's ceiling (more fails `too_large`). */
-export type HttpFetchOptions = { readonly redirects: number; readonly max_bytes: number };
-/** The final response: status, lowercase headers, the whole decoded body (empty for 204, 205, 304 and a redirect). */
-export type HttpResponse = {
-	readonly status: number;
-	readonly headers: readonly (readonly [name: string, value: string])[];
-	readonly body: Uint8Array;
-};
-/**
- * Outbound HTTP under the public-network policy: HTTPS on 443 without credentials, DNS resolved once and
- * the checked address pinned, private and reserved networks refused, every redirect hop re-checked (a cross-origin hop
- * keeps only `accept`; a 301-303 of a write becomes a GET), transport headers (`host`, `connection`, `content-length`,
- * `transfer-encoding`, `upgrade`, `te`, `trailer`, `accept-encoding`, `proxy-*`) refused, gzip decoded. A refusal
- * rejects as a FacilityError `invalid`; the wall is the caller's (`Port.call`).
- */
-export interface HttpPort {
-	fetch(
-		request: HttpRequest,
-		options: HttpFetchOptions,
-		signal: AbortSignal
-	): Promise<HttpResponse>;
-}
-/** Where a TCP connection goes; `tls` opens it as TLS, verified against `servername` (default `host`). */
-export type TcpEndpoint = {
-	readonly host: string;
-	readonly port: number;
-	readonly tls: boolean;
-	readonly servername?: string;
-};
-/** One outbound TCP connection as two byte streams. */
-export type TcpSocket = {
-	readonly readable: ReadableStream<Uint8Array>;
-	readonly writable: WritableStream<Uint8Array>;
-	close(): Promise<void>;
-	/**
-	 * STARTTLS: TLS over this cleartext connection, verified as the endpoint says. Release both streams' locks first;
-	 * this socket's streams then end and the returned one carries the connection.
-	 */
-	start_tls(signal: AbortSignal): Promise<TcpSocket>;
-};
-/**
- * Outbound TCP/TLS (IMAP, SMTP) under the host's egress policy: the host resolves and checks the destination (a public
- * host refuses private and reserved networks) and connects. `signal` bounds the connect; `close` ends the connection.
- */
-export interface TcpPort {
-	connect(endpoint: TcpEndpoint, signal: AbortSignal): Promise<TcpSocket>;
-}
-/** A file run's tree (a skill's folder): its digest, the entry's path in it, and every file by its path in the tree. */
-export type BundleRequest = {
-	/** sha256 hex of the sorted `<path>\0<sha256 hex of its bytes>` lines, `\n`-joined. */
-	readonly digest: string;
-	readonly entry: string;
-	readonly files: readonly (readonly [path: string, bytes: Uint8Array])[];
-};
-/**
- * One ES module that imports nothing, with its source map (sources are tree paths), or the errors that stopped it, each
- * `file:line:column: message` and the line. The module's default export is `{ run(input) }`, which calls
- * `globalThis[Symbol.for('norbital.node')].run(input, load)` with `load` evaluating the entry; each Node built-in a run
- * provides (`fs`, `fs/promises`, `path`, `buffer`, `process`, `util`) is `…builtin(name)`, and a `require` that does not
- * resolve throws when called, naming the requirer.
- */
-export type Bundled =
-	{ readonly code: string; readonly map: string } | { readonly errors: readonly string[] };
-/**
- * The confined bundler ("Running a file"): the host resolves the entry's imports inside the tree by
- * Node's rules and bundles them in a confined process that serves one tenant, caching by (digest, entry, bundler version).
- */
-export interface BundlerPort {
-	bundle(request: BundleRequest, signal: AbortSignal): Promise<Bundled>;
-}
-/** What `ctx.files.image` reads from a JPEG, PNG or HEIC: format, size, the PDQ perceptual hash and EXIF. */
-export type ImageMetadata = typeof ImageMetadataSchema.Type;
-export type ImagePreviewSize = 64 | 512 | 1024;
-export type ImagePreviewMime = typeof ImagePreviewMimeSchema.Type;
-/** A rectangle in the oriented image, with coordinates from zero to one. */
-export type ImageCrop = {
-	left: number;
-	top: number;
-	right: number;
-	bottom: number;
-	/** Enlarge a small region until its longer edge reaches this many pixels, at most 4×. */
-	min_edge?: number;
-};
-/** A preview at most `maxEdge` on its long side, EXIF-oriented; `derived: false` is the original (an APNG, a HEIC sequence). */
-export type ImagePreview = {
-	readonly bytes: Uint8Array;
-	readonly mime: string;
-	readonly derived: boolean;
-};
-/**
- * Image decoding off the engine (JPEG, PNG, HEIC; rasters at most 16 million pixels, input at most
- * `LIMITS.storedFileBytes`): `facts`, a JPEG at most `maxEdge` on its long side, and a preview at most 5 MiB.
- */
-export interface ImagesPort {
-	facts(bytes: Uint8Array, signal: AbortSignal): Promise<ImageMetadata>;
-	jpeg(bytes: Uint8Array, maxEdge: number, signal: AbortSignal): Promise<Uint8Array>;
-	/** Lossless PNG of the selected oriented pixels, at most 5 MiB; the source stays unchanged. */
-	crop(bytes: Uint8Array, box: ImageCrop, signal: AbortSignal): Promise<Uint8Array>;
-	preview(
-		bytes: Uint8Array,
-		mime: ImagePreviewMime,
-		maxEdge: ImagePreviewSize,
-		signal: AbortSignal
-	): Promise<ImagePreview>;
-}
-/** An MCP server as the engine resolved it from the workspace's secrets: URL, headers, and its authorization. */
-export type McpServer = {
-	readonly url: string;
-	readonly headers: { readonly [name: string]: string };
-	readonly auth?:
-		| { readonly bearer: string }
-		| {
-				readonly client: {
-					readonly id: string;
-					readonly secret: string;
-					readonly scopes?: readonly string[];
-				};
-		  };
-};
-export type McpToolInfo = {
-	readonly name: string;
-	readonly description: string;
-	readonly input_schema: Json;
-};
-/**
- * MCP over streamable HTTP on the current protocol revision: `connect` answers an opaque session id, `call`
- * answers `{ content, structured?, isError? }`; `close` ends the session (idempotent).
- */
-export interface McpPort {
-	connect(server: McpServer, signal: AbortSignal): Promise<string>;
-	tools(session: string, signal: AbortSignal): Promise<readonly McpToolInfo[]>;
-	call(session: string, tool: string, input: Json, signal: AbortSignal): Promise<Json>;
-	close(session: string): Promise<void>;
-}
-/** This release's API reference (`build/docs/<file>`, `index.json` first), served by the host: a cell reads no disk. */
-export interface DocsPort {
-	read(file: string, signal: AbortSignal): Promise<string>;
-}
-/** One cron the manifest declares: an automation's (`id` its name) or a remote sync's periodic read (the runs area's id). */
-export type CronEntry = { readonly id: string; readonly cron: string; readonly zone: string };
-/**
- * `ran: false`: a repeat of `(id, slot)`, a run that only read and wrote nothing, or a resting cron. `until`: the cron
- * rests, and while the workspace is not in use the host need not fire it before this instant.
- */
-export type CronFired = { readonly ran: boolean; readonly until?: string };

@@ -6,8 +6,9 @@ from the design tokens and following the theme), with its toolbar.
 Each record is a round mark with its initial; `badge` (or the label, with `labels="always"`) hangs a pill under it.
 Marks that crowd one spot draw as one accent-ringed count that splits as the map zooms in (a click zooms to it).
 Hovering or focusing a mark, or a row of the optional side `list`, selects it: a floating card shows its title,
-`status`, `fields` as chips and `description`; the selected row is outlined in the accent. A click on a mark, a row
-or the card's button opens the record. `overlays` add computed marks and glowing accent routes.
+`status`, `fields` as chips and `description` (or the `card` snippet); the selected row (or the `item` snippet) is
+outlined in the accent. A click on a mark, a row or the card's button opens the record (or calls `on_open`).
+`overlays` add computed marks and glowing accent routes. The map fills its parent, down to 18rem.
 @example
 ```svelte
 <Map {ctx} of="sites" at="location" label="name" status="state" fields={['crew', 'due']} badge="open_jobs" list />
@@ -15,6 +16,7 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
+	import type { Snippet } from 'svelte';
 	import type { ModelKey, FieldOf, RecordFieldOf, RowOf, WhereOf } from '../model/types.js';
 	import type { Toolbar } from '../model/ViewToolbar.svelte';
 	/** Extra marks drawn over the rows: a labelled point, and optionally a glowing route to it from `from`. */
@@ -48,6 +50,12 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 		description?: RecordFieldOf<C>;
 		/** A list of the places beside the map, synced with its selection. */
 		list?: boolean;
+		/** The selected place's floating card body, in place of its title, status, chips and description; Open stays. */
+		card?: Snippet<[{ row: RowOf<C> }]>;
+		/** A side `list` row's content, in place of its mark, title, status and badge. */
+		item?: Snippet<[{ row: RowOf<C> }]>;
+		/** Opening a place (one that stands for another record); default its own record. */
+		on_open?: (id: string) => void;
 		/** Pan, zoom, selection and click-to-open. Default true; false is a static picture. */
 		interactive?: boolean;
 		/** The most rows read. Default 500. */
@@ -97,6 +105,9 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 		fields = [],
 		description,
 		list = false,
+		card: cardBody,
+		item,
+		on_open,
 		interactive = true,
 		limit = 500,
 		toolbar = {},
@@ -123,7 +134,8 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 	const page = $derived(
 		queryState(
 			mapped(
-				bolt.query(
+				bolt.model_query(
+					of,
 					request_json(
 						listRequest(
 							host.catalog,
@@ -135,24 +147,27 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 							},
 							shown
 						)
-					)
+					),
+					'list'
 				),
 				(answer) => page_of(answer, of)
 			)
 		)
 	);
-	type Place = { id: string; lat: number; lng: number; text: string; row: Values };
+	type Place = { id: string; lat: number; lng: number; text: string; row: Values; source: RowOf<C> };
 	const points: Place[] = $derived(
 		page.kind === 'ready'
-			? unref(host.catalog, of, shown, page.value.rows).flatMap((row) => {
+			? page.value.rows.flatMap((source) => {
+					const row = unref(host.catalog, of, shown, [source])[0] ?? source;
 					const p = row[at];
 					const text = label ? (refOf(row, label)?.text ?? show(row[label] ?? null)) : '';
 					return isPoint(p)
-						? [{ id: row.id, lat: p.lat, lng: p.lng, row, text: text || recordText(catalog[of], row) }]
+						? [{ id: source.id, lat: p.lat, lng: p.lng, row, source, text: text || recordText(catalog[of], row) }]
 						: [];
 				})
 			: []
 	);
+	const open = (id: string) => (on_open ? on_open(id) : open_record(of, id));
 	const initial = (text: string) => text.trim().charAt(0).toUpperCase() || '•';
 
 	let failed = $state(false),
@@ -255,6 +270,7 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 	);
 </script>
 
+<section class="@container flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2">
 <ViewToolbar {ctx}
 	config={toolbar}
 	model={of}
@@ -275,7 +291,7 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 	{/if}
 {/snippet}
 {#snippet canvas()}
-	<div class="relative isolate z-0 h-80 w-full overflow-clip rounded-lg border bg-background">
+	<div class="relative isolate z-0 h-full min-h-72 w-full flex-1 overflow-clip rounded-lg border bg-background">
 		<div class="size-full" {@attach mount}></div>
 		<!-- marks, routes and the card over the canvas: only they take the pointer; the rest pans the map -->
 		<div
@@ -334,7 +350,7 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 							aria-label={p.text}
 							onpointerenter={() => select(p.id, 'map')}
 							onfocus={() => select(p.id, 'map')}
-							onclick={() => open_record(of, p.id)}
+							onclick={() => open(p.id)}
 						>
 							<span class="map-mark">{initial(p.text)}</span>
 							{@render pill(p)}
@@ -351,6 +367,7 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 						style:top="{at.y}px"
 						data-map-card={card.id}
 					>
+						{#if cardBody}{@render cardBody({ row: card.source })}{:else}
 						<div class="flex min-w-0 items-center gap-2">
 							<span class="map-mark shrink-0">{initial(card.text)}</span>
 							<span class="min-w-0 flex-1 truncate font-medium" data-map-title>{card.text}</span>
@@ -368,7 +385,8 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 						{#if description !== undefined && card.row[description]}
 							<p class="text-muted-foreground line-clamp-2 text-xs">{@render value(card.row, description)}</p>
 						{/if}
-						<Button variant="outline" class="w-full" onclick={() => open_record(of, card.id)}
+						{/if}
+						<Button variant="outline" class="w-full" onclick={() => open(card.id)}
 							>{msg(bolt, 'map.open')}</Button
 						>
 					</div>
@@ -379,12 +397,12 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 {/snippet}
 <ReadGate {ctx} state={page} what={labelOf(bolt, of)}>
 	{#snippet children(result)}
-		<div class="flex flex-col gap-1" data-view="map">
+		<div class="flex min-h-0 flex-1 flex-col gap-1" data-view="map">
 			{#if list}
-				<Split ratio="wide" gap="sm">
+				<Split ratio="wide" gap="sm" size="fill">
 					{#snippet start()}{@render canvas()}{/snippet}
 					{#snippet end()}
-						<ul class="flex h-80 flex-col gap-1 overflow-y-auto" bind:this={rows} data-map-list>
+						<ul class="flex h-full min-h-0 flex-col gap-1 overflow-y-auto" bind:this={rows} data-map-list>
 							{#each points as p (p.id)}
 								<li>
 									<button
@@ -394,13 +412,15 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 										data-selected={selected === p.id || undefined}
 										onpointerenter={() => select(p.id, 'list')}
 										onfocus={() => select(p.id, 'list')}
-										onclick={() => open_record(of, p.id)}
+										onclick={() => open(p.id)}
 									>
+										{#if item}{@render item({ row: p.source })}{:else}
 										<span class="map-mark shrink-0">{initial(p.text)}</span>
 										<span class="min-w-0 flex-1 truncate">{p.text}</span>
 										{#if status !== undefined}{@render value(p.row, status)}{/if}
 										{#if badge !== undefined && p.row[badge] !== null && p.row[badge] !== undefined}
 											<span class="map-pill">{@render value(p.row, badge)}</span>
+										{/if}
 										{/if}
 									</button>
 								</li>
@@ -426,6 +446,7 @@ or the card's button opens the record. `overlays` add computed marks and glowing
 		</div>
 	{/snippet}
 </ReadGate>
+</section>
 
 <style>
 	/* Everything over the canvas sits at its point; the centre of a mark is the point. */

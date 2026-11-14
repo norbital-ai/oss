@@ -1,5 +1,4 @@
-import { Array as EffectArray, Effect, Schema } from 'effect';
-import { WriteOutcome as OutcomeSchema } from '../../protocol/schema.ts';
+import { Array as EffectArray, Effect } from 'effect';
 // `<c>.erase`: the engine write of an administrator's generated `delete` (remove) or `update`
 // (anonymise) with no transform, never routed. Durable audit delays history purge until its full
 // external acknowledgement. Admission (admin-only, `locked`, erasable fields) is identity's `judgeErase`; this file
@@ -10,24 +9,17 @@ import type { Outcome, RowData } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalog_of } from '../access/pred.ts';
 import { exprFields, judgeErase } from '../identity/erase.ts';
-import { constraintIndex } from '../schema/plan.ts';
 import {
 	type ActRequest,
-	type ActResult,
-	expired,
-	idempotency,
 	k,
-	ownedLocks,
 	readRows,
 	refused,
 	type Taker,
 	type WriteEngine
 } from './act.ts';
-import { executeCommit, compile_outcome_record, type Commit, type Write } from './commit.ts';
+import type { Commit, Write } from './commit.ts';
 import { writerOf } from '../runs/queue.ts';
 import { Flattener } from './flatten.ts';
-import { decideError } from './sql.ts';
-import { settleCommit } from './result.ts';
 export const erase = Effect.fn('Bolt.erase')(function* (
 	e: WriteEngine,
 	r: ActRequest,
@@ -39,11 +31,9 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		b = r.bindings,
 		c = r.model,
 		model = m.models[c];
-	const none = (outcome: Outcome): ActResult => ({ outcome, captured: [], v: 0 });
+	const none = (outcome: Outcome): Outcome => outcome;
 	if (model === undefined || m.exposures[c] === undefined)
 		return yield* Effect.fail(BoltError.make('unknown_model', 'decode', `unknown model '${c}'`));
-	const late = expired(r);
-	if (late !== null) return none(late);
 	if (!auth.admin) return none(refused('forbidden', 'Only an administrator can erase.'));
 	// decode: `{ target }` removes, `{ target, set }` anonymises stored authored fields (X-24 shapes)
 	const input = r.input;
@@ -83,11 +73,6 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 	}
 	const req =
 		set === undefined ? { mode: 'remove' as const } : { mode: 'anonymise' as const, set: values };
-	const { key, digest, stored } = yield* idempotency(e, r, auth);
-	if (r.retry) {
-		const o = yield* stored();
-		if (o !== null) return none(o);
-	}
 	const rows = yield* readRows(
 		e.db,
 		cat,
@@ -138,60 +123,24 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 			purge: readers(model.computed ?? {}, Object.keys(values))
 		};
 	}
-	const common = { key, digest, issuedAt: r.issuedAt, rate: r.rate ?? [] };
-	const commit: Commit = {
-		...common,
-		now: b.now,
-		today: b.today,
-		actor: auth.actor,
-		writer: writerOf(auth),
-		writes,
-		owned: req.mode === 'remove' ? yield* ownedLocks(m, cat, writes, rows) : [],
-		runs: [],
-		notices: [],
-		output: null,
-		erase: spec
-	};
 	yield* take('info', 'act.settled', { erased: writes.length });
-	if (r.mode._tag === 'Record') {
-		const { key: _key, digest: _digest, issuedAt: _issuedAt, rate: _rate, ...planned } = commit;
-		r.mode.sink({ commit: planned });
-		return none({
-			kind: 'committed',
+	r.mode.sink({
+		commit: {
+			now: b.now,
+			today: b.today,
+			actor: auth.actor,
+			writer: writerOf(auth),
+			writes,
+			runs: [],
 			output: null,
-			records: writes.map((write) => ({
-				model: write.model,
-				id: write.id,
-				revision: write.op === 'create' ? 1 : write.revision + 1
-			}))
-		});
-	}
-	return yield* Effect.gen(function* () {
-		const rows = yield* executeCommit(e.db, m, cat, commit);
-		return yield* settleCommit(rows[0], stored, e.committed);
-	}).pipe(
-		Effect.catch((err) =>
-			Effect.gen(function* () {
-				const d = yield* decideError(err, yield* constraintIndex(m));
-				if (!d.record) return none(d.outcome);
-				yield* take(
-					'warn',
-					'act.refused',
-					d.outcome.kind === 'refused'
-						? { code: d.outcome.code, message: d.outcome.message }
-						: { code: d.outcome.kind }
-				);
-				const value = yield* Schema.decodeUnknownEffect(Schema.Json)(d.outcome).pipe(
-					Effect.mapError((error) => BoltError.make('bad_answer', 'commit', error.message, error))
-				);
-				const res = yield* e.db.returning(
-					Schema.Struct({ outcome: Schema.NullOr(OutcomeSchema) }),
-					compile_outcome_record(common, value)
-				);
-				return none(res[0]?.outcome ?? d.outcome);
-			})
-		)
-	);
+			erase: spec
+		}
+	});
+	return {
+		kind: 'committed',
+		output: null,
+		records: stored_.map((row) => ({ model: c, id: String(row['id']), revision: Number(row['revision']) + 1 }))
+	} satisfies Outcome;
 });
 /** The anonymised fields plus every computed field that reads one of them, transitively (38e(b)). */
 function readers(

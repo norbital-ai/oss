@@ -5,7 +5,7 @@ import { bind_system_model } from '../../../../decl/model.ts';
 
 export default bind_system_model('sys_conversation')({
 	description:
-		"A conversation: an agent thread or an integration's chat or mail thread, with its status, plan and goals.",
+		"A conversation: an agent thread or an integration's chat or mail thread, with its status and plan.",
 	record_label: 'record.title',
 	fields: {
 		created_at: { kind: 'instant', default: { var: 'now' } },
@@ -37,9 +37,10 @@ export default bind_system_model('sys_conversation')({
 		outputs: { kind: 'json', default: [] },
 		status: { kind: 'text', default: 'idle' },
 		lease_until: { kind: 'instant', optional: true },
+		/** Archived by its owner: off the conversation list until unarchived; nothing else about it changes. */
+		archived_at: { kind: 'instant', optional: true },
 		model: { kind: 'text', default: 'default' },
 		plan: { kind: 'json', optional: true },
-		goals: { kind: 'json', optional: true },
 		read: { kind: 'json', default: {} },
 		revision: { kind: 'int', default: 1 },
 		updated_at: { kind: 'instant', default: { var: 'now' } }

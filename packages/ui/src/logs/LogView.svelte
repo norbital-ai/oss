@@ -1,14 +1,19 @@
 <!--
 @component
-A dense, filterable log: one fixed-height line per event (a JSON payload previewed, highlighted and truncated), oldest first, following the tail and loading older pages on request.
+A dense log: one fixed-height line per event (a JSON payload previewed, highlighted and truncated), oldest first,
+following the tail and loading older pages on request, under CustomView's toolbar (search, filter and sort over its
+level, message and source). It fills its parent.
 -->
 <script lang="ts" module>
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
+	import type { UiContext } from '../client/contract.js';
 	import type { LogLine } from './logs.js';
 
 	/** The props of `LogView`. */
 	export type LogViewProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		/** Oldest first; new events append. */
 		rows: readonly LogLine[];
 		/** Loads the next older page (the caller holds the cursor) and prepends it to `rows`. */
@@ -16,192 +21,47 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		has_older?: boolean;
 		/** Keep the newest line in view; scrolling up pauses it. */
 		follow?: boolean;
-		locale?: string;
-		class?: string;
-		/** At the toolbar line's start (a title, a scope picker): the log's header is this one line. */
-		leading?: Snippet;
-		/** More filter controls in the filter popover (a run picker), and how many of them are active. */
-		filters?: Snippet;
-		filter_count?: number;
+		/** The toolbar's view-local controls, before search (a title, a scope picker, a run picker). */
+		controls?: Snippet;
 		/** Before Follow (an Auto-refresh toggle). */
 		trailing?: Snippet | undefined;
 	};
 </script>
 
 <script lang="ts">
-	import { observe_once } from '../effect/index.js';
-	import { tick } from 'svelte';
-	import { watch } from 'runed';
-	import Overflow from '../cell/Overflow.svelte';
-	import { cn, narrowViewport } from '../primitives/utils.js';
-	import ToolbarSearch from '../model/toolbar/ToolbarSearch.svelte';
-	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
-	import { offsets, windowOf } from '../primitives/virtual/virtual.js';
-	import {
-		LOG_LEVELS,
-		ROW_HEIGHT,
-		atBottom,
-		filter_logs,
-		logPreview,
-		wantsOlder,
-		type LogLevel
-	} from './logs.js';
+	import CustomView from '../model/CustomView.svelte';
+	import { cn } from '../primitives/utils.js';
+	import LogLines from './LogLines.svelte';
 
 	let {
+		ctx,
 		rows,
 		load_older,
 		has_older = false,
 		follow = $bindable(true),
-		locale,
-		class: className,
-		leading,
-		filters,
-		filter_count = 0,
+		controls,
 		trailing
 	}: LogViewProps = $props();
-
-	let hidden = $state<Partial<Record<LogLevel, boolean>>>({});
-	let q = $state('');
-	let port = $state<HTMLDivElement>();
-	let scrollTop = $state(0);
-	let viewport = $state(0);
-	let olderRequest = $state.raw<{
-		load: NonNullable<LogViewProps['load_older']>;
-		port: HTMLDivElement;
-		before: number;
-	} | null>(null);
-	const olderPage = observe_once(() => {
-		const request = olderRequest;
-		return request === null || request.load !== load_older
-			? null
-			: request.load().pipe(
-					Effect.andThen(Effect.tryPromise(tick)),
-					Effect.tap(() =>
-						Effect.sync(() => {
-							if (port === request.port) request.port.scrollTop += total - request.before;
-						})
-					)
-				);
-	});
-	const loading = $derived(olderPage.loading);
-	const notice = $derived(olderPage.error?.message ?? null);
-
-	const shown = $derived(filter_logs(rows, hidden, q));
-	const offs = $derived(offsets(shown.map(() => ROW_HEIGHT)));
-	const total = $derived(offs[offs.length - 1]);
-	const win = $derived(windowOf(offs, scrollTop, viewport));
-	const time = $derived(
-		new Intl.DateTimeFormat(locale, {
-			month: 'short',
-			day: '2-digit',
-			hour: '2-digit',
-			minute: '2-digit',
-			second: '2-digit',
-			hour12: false
-		})
-	);
-	const BADGE: Record<LogLevel, string> = {
-		debug: 'text-muted-foreground',
-		info: 'text-info',
-		warn: 'bg-warning/15 text-warning-foreground dark:text-warning',
-		error: 'bg-destructive/15 text-destructive'
-	};
-
-	const toBottom = () => port && (port.scrollTop = port.scrollHeight);
-	watch([() => total, () => follow], () => {
-		if (follow) toBottom();
-	});
-
-	function older() {
-		if (port === undefined || load_older === undefined || loading) return;
-		olderRequest = { load: load_older, port, before: total };
-	}
-
-	function onscroll() {
-		if (!port) return;
-		scrollTop = port.scrollTop;
-		follow = atBottom(port);
-		if (wantsOlder(scrollTop, has_older && !!load_older, loading)) void older();
-	}
 </script>
 
-<div
-	class={cn('flex min-h-0 flex-col overflow-hidden rounded-md border bg-card', className)}
-	data-log-view
->
-	<div class="flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
-		{@render leading?.()}
-		<ToolbarSearch bind:value={q} label="Search log messages" />
-		<ToolbarFilter
-			count={LOG_LEVELS.filter((level) => hidden[level]).length + filter_count}
-			label="Filter log levels"
-			panel_class="w-64"
-		>
-			{@render filters?.()}
-			<h3 class="text-sm font-medium">Log levels</h3>
-			<div class="flex flex-wrap gap-1.5">
-				{#each LOG_LEVELS as level (level)}
-					<button
-						type="button"
-						aria-pressed={!hidden[level]}
-						onclick={() => (hidden[level] = !hidden[level])}
-						class={cn(
-							'h-8 max-sm:min-h-11 rounded px-2 font-mono text-micro uppercase',
-							hidden[level] ? 'text-muted-foreground/60 line-through' : BADGE[level]
-						)}>{level}</button
-					>
-				{/each}
-			</div>
-		</ToolbarFilter>
-		{#if loading}<span class="text-muted-foreground text-xs">Loading older…</span>{/if}
-		{#if notice}<span role="alert" class="text-destructive text-xs">{notice}</span>{/if}
-		<span class="flex-1"></span>
-		{@render trailing?.()}
-		<button
-			type="button"
-			aria-pressed={follow}
-			onclick={() => (follow = !follow)}
-			class={cn(
-				'h-8 max-sm:min-h-11 rounded border px-2 text-xs',
-				follow && 'bg-foreground text-background'
-			)}>{follow ? 'Following' : 'Follow'}</button
-		>
-	</div>
-	<div
-		bind:this={port}
-		bind:clientHeight={viewport}
-		{onscroll}
-		role="log"
-		aria-live="off"
-		class="@container min-h-0 flex-1 overflow-auto font-mono text-xs leading-5"
+{#snippet tail()}
+	{@render trailing?.()}
+	<button
+		type="button"
+		aria-pressed={follow}
+		onclick={() => (follow = !follow)}
+		class={cn('h-8 max-sm:min-h-11 rounded border px-2 text-xs', follow && 'bg-foreground text-background')}
+		>{follow ? 'Following' : 'Follow'}</button
 	>
-		<div class="relative" style:height="{total}px">
-			<div class="absolute inset-x-0 top-0" style:transform="translateY({offs[win.start]}px)">
-				{#each shown.slice(win.start, win.end) as row (row.id)}
-					<!-- a row is 22px: a 44px floor on its expand button would cover the rows beside it -->
-					<div
-						class="hover:bg-muted/50 grid h-[22px] grid-cols-[auto_3.5rem_minmax(0,1fr)] items-start gap-x-3 px-3 py-px [--hit-target:0px] @max-md:grid-cols-[3.5rem_minmax(0,1fr)]"
-						data-log-level={row.level}
-					>
-						<time
-							class="text-muted-foreground whitespace-nowrap tabular-nums @max-md:hidden"
-							datetime={new Date(row.at).toISOString()}>{time.format(new Date(row.at))}</time
-						>
-						<span class={cn('rounded px-1 text-center text-tiny uppercase', BADGE[row.level])}
-							>{row.level}</span
-						>
-						<code class="min-w-0 [&_span]:whitespace-pre!"
-							><Overflow text={row.message} expand={narrowViewport.current ? 'always' : 'never'}
-								>{#if row.source}<span class="text-muted-foreground"
-										>{row.source}
-									</span>{/if}{#each logPreview(row.message) as token, i (i)}<span
-										class={token.cls || undefined}>{token.text}</span
-									>{/each}</Overflow
-							></code
-						>
-					</div>
-				{/each}
-			</div>
-		</div>
-	</div>
-</div>
+{/snippet}
+
+<CustomView
+	{ctx}
+	of={rows}
+	fields={['level', 'message', 'source']}
+	key="logs"
+	toolbar={{ title: false, description: false, controls, trailing: tail }}
+	empty={false}
+>
+	{#snippet children(shown)}<LogLines {ctx} rows={shown} {load_older} {has_older} bind:follow />{/snippet}
+</CustomView>

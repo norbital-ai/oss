@@ -2,12 +2,14 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { Invocation } from '../src/engine/contracts.ts';
+import type { Invocation, Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
+import { act, type WriteEngine } from '../src/engine/write/act.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
+import { act_one, type OneAct } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 
 const order_model = base.models.orders;
 if (order_model === undefined) throw new Error('The callback fixture needs the orders model.');
@@ -21,7 +23,7 @@ const manifest: EngineManifest = {
 				...model,
 				...(model.create === undefined
 					? {}
-					: { create: { ...model.create, transform: true as const } }),
+					: { create: { ...model.create, transform: true as const, ...(name === 'lines' ? { effect: true as const } : {}) } }),
 				...(model.update === undefined
 					? {}
 					: { update: { ...model.update, transform: true as const } }),
@@ -51,7 +53,7 @@ const setup = Effect.gen(function* () {
 	const engine: WriteEngine = {
 		manifest,
 		db: database,
-		guest: {
+		guest: with_each({
 			invokeProgram: () => Effect.die('This fixture executes native write callbacks only.'),
 			invoke: (invocation) =>
 				Effect.gen(function* () {
@@ -66,12 +68,11 @@ const setup = Effect.gen(function* () {
 						})
 					};
 				})
-		}
+		})
 	};
-	const run = (request: Pick<ActRequest, 'verb' | 'input'> & Partial<ActRequest>) =>
-		act(engine, {
+	const run = (request: Pick<OneAct, 'verb' | 'input'> & Partial<OneAct>) =>
+		act_one(engine, {
 			model: 'orders',
-			mode: { _tag: 'Direct' },
 			key: `callback-${serial}`,
 			invocationId: `callback-${serial++}`,
 			issuedAt: NOW,
@@ -79,10 +80,10 @@ const setup = Effect.gen(function* () {
 			bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 			...request
 		});
-	return { db, calls, run, writes: () => writes };
+	return { db, calls, run, engine, writes: () => writes };
 });
 // Check an outcome before using its ids so a refusal fails the edge case test at its original boundary.
-const ids = (result: Effect.Success<ReturnType<typeof act>>) => {
+const ids = (result: { readonly outcome: Outcome }) => {
 	if (result.outcome.kind !== 'committed') throw new Error(JSON.stringify(result.outcome));
 	return result.outcome.records;
 };
@@ -139,6 +140,23 @@ describe('per-verb write callbacks', () => {
 			})
 	);
 
+	it.effect('a child written through its parent is input: it runs its own transform and queues its own effect', () =>
+		Effect.gen(function* () {
+			const { run, calls, db } = yield* setup;
+			ids(yield* run({ verb: 'create', input: [{ title: 'nesting', lines: [{ label: 'nested', amount: '1' }] }] }));
+			expect(calls.map((call) => call.target)).toEqual(['orders', 'lines']);
+			expect(
+				yield* db.rows(Schema.Struct({ label: Schema.String }), { text: "SELECT label FROM lines WHERE label = 'NESTED'", params: [] })
+			).toEqual([{ label: 'NESTED' }]);
+			expect(
+				yield* db.rows(Schema.Struct({ automation: Schema.String }), {
+					text: "SELECT automation FROM sys_run WHERE automation = 'lines.effect.create'",
+					params: []
+				})
+			).toEqual([{ automation: 'lines.effect.create' }]);
+		})
+	);
+
 	it.effect(
 		'splits a keyed import into creates and updates, while a kept match invokes no callback',
 		() =>
@@ -156,12 +174,14 @@ describe('per-verb write callbacks', () => {
 				ids(result);
 				expect(calls.map((call) => call.kind).sort()).toEqual(['create', 'update']);
 				expect(result.outcome).toMatchObject({
-					output: {
-						rows: [
-							{ index: 0, action: 'updated' },
-							{ index: 1, action: 'created' }
-						]
-					}
+					output: [
+						{
+							rows: [
+								{ index: 0, action: 'updated' },
+								{ index: 1, action: 'created' }
+							]
+						}
+					]
 				});
 				calls.length = 0;
 				ids(
@@ -179,8 +199,7 @@ describe('per-verb write callbacks', () => {
 				verb: 'upsert',
 				input: [{ id, title: 'remote' }],
 				on_conflict: 'update',
-				mode: {
-					_tag: 'Sync',
+				sync: {
 					sync: 'orders.sync.remote',
 					instance: 'instance',
 					fields: ['title', 'note'],
@@ -197,19 +216,23 @@ describe('per-verb write callbacks', () => {
 		'records callback results into the action sink without writing before the owner commits',
 		() =>
 			Effect.gen(function* () {
-				const { run, calls, writes } = yield* setup;
+				const { engine, calls, writes } = yield* setup;
 				const planned: Json[] = [];
-				ids(
-					yield* run({
+				ids({
+					outcome: yield* act(engine, {
+						model: 'orders',
 						verb: 'create',
 						input: [{ title: 'recorded' }],
+						key: 'callback-recorded',
+						invocationId: 'callback-recorded',
+						authority: admin,
+						bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 						mode: {
-							_tag: 'Record',
 							pending: new Map(),
 							sink: (plan) => planned.push(plan.commit.output)
 						}
 					})
-				);
+				});
 				expect(calls.map((call) => call.kind)).toEqual(['create']);
 				expect(planned).toHaveLength(1);
 				expect(writes()).toBe(0);
@@ -248,32 +271,32 @@ describe('per-verb write callbacks', () => {
 				]);
 			})
 	);
- it.effect('a changed native callback input conflicts even when the callback makes no query', () =>
+ it.effect('a changed native callback input replays once, then conflicts, even when the callback makes no query', () =>
   Effect.gen(function* () {
    const {db} = yield* open(manifest);
-   let armed=false, moved=false;
-   const engine: WriteEngine={manifest,db,guest:{
+   let armed=false, moved=0;
+   const engine: WriteEngine={manifest,db,guest:with_each({
     invokeProgram:()=>Effect.die('This case invokes only native callbacks.'),
     invoke:(inv)=>Effect.gen(function*(){
      const changes=yield* Schema.decodeUnknownEffect(Changes)(inv.input).pipe(Effect.orDie);
-     // An independent writer commits after the native input snapshot has crossed into the guest.
-     if(armed&&!moved){
-      moved=true;
+     // An independent writer commits after each native input snapshot has crossed into the guest, the replay's too.
+     if(armed){
+      moved++;
       yield* db.write({text:"UPDATE orders SET note='concurrent',revision=revision+1",params:[]}).pipe(Effect.orDie);
      }
      return {kind:'ok',output:changes.map(({set})=>set)};
     })
-   }};
-   const write=(verb:'create'|'update',input:Json,key:string)=>act(engine,{
+   })};
+   const write=(verb:'create'|'update',input:Json,key:string)=>act_one(engine,{
     model:'orders',verb,input,key,invocationId:key,issuedAt:NOW,authority:admin,
-    mode:{_tag:'Direct'},bindings:{now:NOW,today:TODAY,tz:'UTC'}
+    bindings:{now:NOW,today:TODAY,tz:'UTC'}
    });
    const made=ids(yield* write('create',[{title:'snapshot'}],'input-baseline'));
    const order=made.find(({model})=>model==='orders');
    if(order===undefined)throw new Error('The baseline order is required.');
    armed=true;
    expect((yield* write('update',[{target:order.id,set:{title:'stale proposal'}}],'input-race')).outcome).toMatchObject({kind:'conflict'});
-   expect(moved).toBe(true);
+   expect(moved).toBe(2);
    expect(yield* db.rows(Schema.Struct({title:Schema.String,note:Schema.String}),{text:'SELECT title,note FROM orders',params:[]})).toEqual([{title:'snapshot',note:'concurrent'}]);
   })
  );

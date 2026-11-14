@@ -1,27 +1,30 @@
 // Native host ABI adapters and scoped Effect execution preserve capabilities, failures and interruption.
 import { describe, expect, it } from '@effect/vitest';
 import { Cause, Context, Effect, Exit, Fiber, Layer, Stream } from 'effect';
-import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
-import type {
-	AiPort,
-	AiResponse,
-	BrowserPort,
-	DeadlinesPort,
-	LinksPort,
-	TransportPort
-} from '../src/engine/contracts.ts';
-import { SendRefused } from '../src/engine/conversations/status.ts';
+import {
+	type AiPort,
+	type AiResponse,
+	type BrowserPort,
+	type ConvertPort,
+	DbError,
+	type DeadlinesPort,
+	FacilityFailure,
+	Fenced,
+	type LinksPort,
+	off,
+	Port,
+	SendRefused,
+	type TransportPort,
+	Unavailable
+} from '@norbital-ai/host-api';
 import {
 	Conflict,
-	DbError,
-	Fenced,
 	IdentityRefusal,
 	Interrupted,
 	ManifestInvalid,
 	SerializationReplay
 } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
-import { Port } from '../src/engine/port.ts';
 import {
 	Ai,
 	Browser,
@@ -34,7 +37,6 @@ import {
 	Transport,
 	WebRead
 } from '../src/engine/ports.ts';
-import { off } from '../src/facilities/index.ts';
 
 /** Runs `f` against the service `key` that `layer` provides. */
 const using = <I, S, A, E>(
@@ -47,9 +49,14 @@ const blob = { key: 'k1', bytes: 2, sha256: 'ab', mime: 'text/plain' };
 describe('fromAbi', () => {
 	it.effect('Docs rejects a malformed namespace through the typed failure channel', () =>
 		Effect.gen(function* () {
+			const text = new TextEncoder();
+			// the API reference is the artifact's `../docs/<file>`
 			const loaded = Docs.fromAbi({
-				read: async (file) =>
-					JSON.stringify(
+				list: async () => [],
+				stat: async () => null,
+				read: async (path) => {
+					const file = path.replace('../docs/', '');
+					return text.encode(JSON.stringify(
 						file === 'index.json'
 							? {
 									namespaces: [
@@ -64,7 +71,8 @@ describe('fromAbi', () => {
 									skills: []
 								}
 							: { namespace: 'bolt', module: '@norbital-ai/bolt', summary: 'Bolt', symbols: 'bad' }
-					)
+					));
+				}
 			});
 			expect(yield* Effect.flip(using(Docs, loaded, (d) => d.corpus))).toMatchObject({
 				_tag: 'FacilityFailure',
@@ -150,11 +158,8 @@ describe('fromAbi', () => {
 								id: 'member',
 								external: false,
 								admin: false,
-								team_path: [],
 								email: null,
-								phone: null,
-								party: null,
-								teams: []
+								phone: null
 							},
 							conversation: 'conversation'
 						}
@@ -202,20 +207,27 @@ describe('fromAbi', () => {
 	);
 
 	it.effect(
-		'Convert.ingest: an answer is decoded; a thrown unavailable keeps its kind; no port, no ingest',
+		'Convert.ingest: an answer is decoded; a thrown unavailable keeps its kind; no converter, no ingest',
 		() =>
 			Effect.gen(function* () {
 				const file = { sha256: 'a', name: 'a.mp3', mime: 'audio/mpeg', bytes: new Uint8Array() };
-				const unsupported = Convert.fromAbi(off, async () => ({ unsupported: 'no parser' }));
+				const converter = (ingest: NonNullable<ConvertPort['ingest']>): ConvertPort => ({
+					targets: [],
+					convert: () => Promise.reject(new Error('This converter only ingests.')),
+					ingest
+				});
+				const unsupported = Convert.fromAbi(converter(async () => ({ unsupported: 'no parser' })));
 				expect(
 					yield* using(Convert, unsupported, (c) => c.ingest?.(file, {}) ?? Effect.die('no ingest'))
 				).toEqual({ unsupported: 'no parser' });
-				const mute = Convert.fromAbi(off, async () =>
-					Promise.reject({
-						kind: 'unavailable',
-						facility: 'convert.ingest',
-						reason: 'no transcription model'
-					})
+				const mute = Convert.fromAbi(
+					converter(async () =>
+						Promise.reject({
+							kind: 'unavailable',
+							facility: 'convert.ingest',
+							reason: 'no transcription model'
+						})
+					)
 				);
 				expect(
 					yield* Effect.flip(

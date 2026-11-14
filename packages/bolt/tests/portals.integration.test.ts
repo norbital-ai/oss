@@ -14,7 +14,15 @@ import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 const page = { title: 'Home' };
 const card = { title: 'T', description: 'd', icon: 'i' };
 const source = {
-	workspace: { tz: 'UTC', locale: 'en', signup: { via: ['email'], policies: ['customer'] } },
+	workspace: {
+		tz: 'UTC',
+		locale: 'en',
+		signup: { via: ['email'], policies: ['customer'] },
+		limits: {
+			shopper: { act: { rate: '3/h', per: 'actor' } },
+			stall_visitor: { register: { rate: '2/h', per: 'ip' } }
+		}
+	},
 	models: {
 		services: {
 			description: 'Services',
@@ -38,7 +46,7 @@ const source = {
 		}
 	},
 	relationships: {
-		'orders.owner': { to: 'sys_user', optional: true, default: { var: 'requestor.id' } }
+		'orders.owner': { to: 'sys_user', optional: true, default: { var: 'actor.id' } }
 	},
 	exposures: {
 		services: {
@@ -78,7 +86,7 @@ const source = {
 			grants: {
 				services: { outputs: { listing: {} } },
 				bookings: {
-					outputs: { own: { scopes: { bookings: { customer: { eq: { var: 'requestor.id' } } } } } },
+					outputs: { own: { scopes: { bookings: { customer: { eq: { var: 'actor.id' } } } } } },
 					create: { columns: { bookings: ['note', 'customer'] } }
 				}
 			}
@@ -87,20 +95,18 @@ const source = {
 			description: 'The shop: an anonymous visitor reads and adds its own orders',
 			grants: {
 				orders: {
-					outputs: { own: { scopes: { orders: { owner: { eq: { var: 'requestor.id' } } } } } },
+					outputs: { own: { scopes: { orders: { owner: { eq: { var: 'actor.id' } } } } } },
 					create: { columns: { orders: ['note'] } }
 				}
-			},
-			limits: { act: { rate: '3/h', per: 'actor' } }
+			}
 		},
 		stall_visitor: {
 			description: 'The stall: its own orders, at most two anonymous users per IP an hour',
 			grants: {
 				orders: {
-					outputs: { own: { scopes: { orders: { owner: { eq: { var: 'requestor.id' } } } } } }
+					outputs: { own: { scopes: { orders: { owner: { eq: { var: 'actor.id' } } } } } }
 				}
-			},
-			limits: { register: { rate: '2/h', per: 'ip' } }
+			}
 		},
 		customer: { description: 'Signed up: nothing outside the portal', grants: {} },
 		staff: {

@@ -12,6 +12,7 @@ import type { Json } from '../../decl/values.ts';
 import { automation_fields, type AutomationInputSchema } from '../../decl/runtime/automation-input.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { LIMITS } from '../contracts.ts';
+import { clock_default, compile_var, evaluate_var } from '@norbital-ai/store/vars';
 import { customShape, kindChildren } from './kinds.ts';
 
 export type InputSpec = Fields;
@@ -219,4 +220,25 @@ export const decodeAutomationInput = (
 			decoded.problems.push({ path: name, message: `select at most ${LIMITS.page.max} rows` });
 	}
 	return decoded;
+};
+
+/**
+ * An automation body's input with each declared `default` in place of an absent or null field: the body sees every
+ * defaulted field (its type marks them required). A clock default (`{ var: 'today + days(7)' }`) reads `clock`.
+ */
+export const withInputDefaults = (
+	spec: typeof AutomationInputSchema.Type | undefined,
+	input: Json,
+	clock: { readonly now: string; readonly today: string }
+): Json => {
+	if (spec === undefined || !Predicate.isObject(input) || EffectArray.isArray(input)) return input;
+	const filled: Record<string, Json> = { ...input };
+	for (const [name, kind] of Object.entries(spec)) {
+		if (kind.kind === 'rows' || kind.default === undefined || (filled[name] ?? null) !== null) continue;
+		const d = kind.default;
+		const text = Predicate.isObject(d) && typeof d['var'] === 'string' ? d['var'] : undefined;
+		const compiled = text !== undefined && clock_default(text) !== undefined ? compile_var(text) : undefined;
+		filled[name] = compiled === undefined || 'error' in compiled ? d : evaluate_var(compiled, clock);
+	}
+	return filled;
 };

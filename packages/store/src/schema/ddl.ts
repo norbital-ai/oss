@@ -308,7 +308,7 @@ function sqlValue(v: unknown, type: string): Fx<string> {
 	return Effect.succeed(`${lit(String(v))}::${type}`);
 }
 /** A literal default, or a clock variable (`{ var: 'now' }`, `{ var: 'today + days(7)' }` in the schema's zone); a writer
- * fills the rest (`{ var: 'requestor.id' }`). */
+ * fills the rest (`{ var: 'actor.id' }`). */
 const defaultSql = Effect.fnUntraced(function* (
 	k: FieldSpec,
 	type: string,
@@ -329,7 +329,7 @@ const defaultSql = Effect.fnUntraced(function* (
 		if (clock?.base === 'today' && k.kind === 'date')
 			return `((now()${clock.interval}) at time zone ${lit(tz)})::date`;
 		if (
-			(text === 'requestor.id' || text === 'requestor.party') &&
+			(text === 'actor.id' || text === 'actor.party') &&
 			(k.kind === 'ref' || k.kind === 'text')
 		)
 			return null;

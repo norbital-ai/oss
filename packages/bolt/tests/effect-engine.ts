@@ -5,7 +5,6 @@ import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import * as NodePath from '@effect/platform-node/NodePath';
 import { randomBytes } from 'node:crypto';
 import { refused, refused_files } from './support/refused.ts';
-import { off } from '../src/facilities/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Activation } from '../src/engine/services.ts';
 import {
@@ -22,15 +21,15 @@ import {
 	WebRead
 } from '../src/engine/ports.ts';
 import { node_ports } from '../src/node/ports.ts';
+import { artifact_port, keys_port, tenant_db_port } from '@norbital-ai/host-api/node';
+import { DOCS_DIR } from '../src/node/docs.ts';
+import { fileURLToPath } from 'node:url';
 import { guests } from './support/guests.ts';
-import { keys_port } from '../src/node/keys.ts';
-import { tenant_db_port } from '../src/node/db/port.ts';
 import { facility_layers } from '../src/protocol/facility-layers.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { EngineLive } from '../src/engine/host.ts';
 import { memory_audit } from '../../bolt-cli/src/test/index.ts';
-import type { GuestProgram } from '../src/engine/guest/runner.ts';
-import type { BrowserSnapshot } from '../src/decl/runtime/browser.ts';
+import { type BrowserSnapshot, type GuestProgram, off } from '@norbital-ai/host-api';
 
 export const browser_probe: { calls: { profile: string; url: string }[]; closes: string[] } = {
 	calls: [],
@@ -65,13 +64,12 @@ export const bare_host = (db: TenantDbShape, options: { readonly guest?: GuestPr
 						fixed_codes: false
 					},
 					intelligence: { system1: off, system2: off, embed: off },
-					ports: { webhooks: off, websockets: off, outbound: off },
-					sandbox: off,
+					ports: { webhooks: off, outbound: off },
 					keys: keys_port(randomBytes(32))
 				}),
 				GuestIsolates.fromAbi(guests),
 				Images.fromAbi(ports.images),
-				Docs.fromAbi(ports.docs),
+				Docs.fromAbi(artifact_port(fileURLToPath(DOCS_DIR), fileURLToPath(DOCS_DIR))),
 				Mcp.fromAbi(ports.mcp),
 				Convert.fromAbi(off),
 				Render.fromAbi(off),

@@ -1,7 +1,7 @@
 // SQLSTATE → refusal, through the manifest by constraint name. Any SQLSTATE outside the table is a bug and
 // comes back as a `BoltError` carrying the `DbError`; `conflict` is the write's to replay.
-import type { Refused } from '../../decl/ctx.ts';
-import { type DbError } from '../errors.ts';
+import type { Refused } from '../contracts.ts';
+import type { DbError } from '@norbital-ai/host-api';
 import { BoltError } from '../../protocol/errors.ts';
 import type { ConstraintMeta } from '@norbital-ai/store';
 
@@ -47,6 +47,8 @@ export function refusalOf(
 				: refused('missing_ref', `the referenced record does not exist (${names || e.constraint})`);
 		case '23514': {
 			if (meta?.kind === 'locked') return refused('locked', 'This record is locked and cannot be changed.');
+			// the native row rules (store `rules.ts`) name no constraint: a state move, a new row's initial state, a key
+			if (meta === undefined && e.constraint === undefined) return refused('invalid_input', e.message);
 			const rule = names || e.constraint;
 			return refused(
 				'check',
@@ -78,6 +80,8 @@ export function refusalOf(
 			return refused('overflow', 'a number is out of range', {});
 		case '40001':
 		case '40P01':
+		// `lock_timeout` (wire.ts): a concurrent act held a lock this statement needs; replayed once, then `conflict`
+		case '55P03':
 			return 'conflict';
 		case '57014':
 			return BoltError.make(

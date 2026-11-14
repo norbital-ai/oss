@@ -51,8 +51,6 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		event_content?: Snippet<[CalendarEvent, EventRenderContext]>;
 		/** Connection or other calendar actions beside the displayed date. */
 		actions?: Snippet;
-		/** Extra classes on the calendar's root. */
-		class?: string;
 	};
 </script>
 
@@ -95,8 +93,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		on_event_create,
 		on_event_move,
 		event_content,
-		actions,
-		class: className
+		actions
 	}: EventCalendarProps = $props();
 	const locale = $derived(ctx.ui.kinds.locale);
 	const t = ui_text();
@@ -326,7 +323,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 {/snippet}
 
 <div
-	class={cn('flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card', className)}
+	class="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card"
 	data-event-calendar={shown}
 	bind:clientWidth={width}
 >

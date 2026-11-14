@@ -38,14 +38,13 @@
 </script>
 
 {#snippet code(value: string, language: 'javascript' | 'json' | 'plaintext' = 'plaintext')}
-	<div class="max-h-56 overflow-auto rounded-md border" data-step-pane="code">
+	<div class="max-h-56 overflow-auto rounded-md border text-micro" data-step-pane="code">
 		<CodeEditor
 			{value}
 			{language}
 			readonly
 			wrap
 			min_height="0"
-			class="text-micro"
 			aria-label={t('Code')}
 		/>
 	</div>
@@ -198,22 +197,6 @@
 			</ul>
 		{/if}
 	</div>
-{:else if tool.name === 'goals'}
-	<ul class="grid gap-0.5 text-micro" data-tool-view="goals">
-		{#each list(input['items']) as goal (text(goal['id']))}
-			<li class="flex items-center gap-1.5">
-				<Icon
-					name={goal['status'] === 'done'
-						? 'lucide:circle-check'
-						: goal['status'] === 'doing'
-							? 'lucide:circle-dot'
-							: 'lucide:circle'}
-					class="size-3.5 shrink-0"
-				/>
-				<span class="min-w-0 truncate">{text(goal['text'])}</span>
-			</li>
-		{/each}
-	</ul>
 {:else if tool.name === 'read_file' && Array.isArray(out['lines'])}
 	<div class="grid gap-1" data-tool-view="read_file">
 		{#if text(out['at']) !== ''}<p class="text-micro text-muted-foreground">
@@ -231,14 +214,14 @@
 	)}
 {:else if tool.name === 'workspace_list_dir' || tool.name === 'workspace_search'}
 	<pre class="max-h-96 overflow-auto font-mono text-micro" data-step-pane="tree">{tool.result}</pre>
-{:else if tool.name === 'logs' || tool.name === 'workspace_logs' || tool.name === 'runs'}
-	{@const lines = list(out['lines'] ?? out['records'] ?? out['runs'])}
+{:else if tool.name === 'workspace_logs'}
+	{@const lines = list(out['records'])}
 	<ul class="grid max-h-56 gap-0.5 overflow-auto font-mono text-micro" data-tool-view="logs">
 		{#each lines as line, index (index)}
 			<li class="truncate">
-				{text(line['at']).slice(11, 19) || text(line['due']).slice(11, 19)}
-				{text(line['level']) || text(line['status'])}
-				{text(line['event']) || text(line['message']) || text(line['automation'])}
+				{text(line['at']).slice(11, 19)}
+				{text(line['level'])}
+				{text(line['message'])}
 			</li>
 		{/each}
 	</ul>

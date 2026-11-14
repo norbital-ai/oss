@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
-import { Writes } from '../src/engine/services.ts';
+import { Callables } from '../src/engine/services.ts';
 import { dynamic_read } from '../src/protocol/read-request.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import { manifest as base } from './write-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
+import { one_act } from './support/act-one.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -87,12 +88,12 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 			() =>
 				Effect.gen(function* () {
 					const t = yield* TestWorkspace,
-						writes = yield* Writes;
+						writes = yield* Callables;
 					const admin = yield* t.as(t.admin);
 					const act = (verb: 'create' | 'update', input: Json) => {
 						const key = randomUUID(),
 							now = t.clock.now();
-						return writes.act({
+						return writes.acts(one_act({
 							model: 'entries',
 							verb,
 							input,
@@ -100,9 +101,8 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 							key,
 							issuedAt: now,
 							invocationId: key,
-							mode: { _tag: 'Direct' },
 							bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-						});
+						}));
 					};
 					const outcome = (yield* act('create', [{ first_name: 'Ada', last_name: 'Lovelace' }]))
 						.outcome;

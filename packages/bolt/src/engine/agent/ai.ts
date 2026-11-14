@@ -20,20 +20,22 @@ import {
 import * as EffectArray from 'effect/Array';
 import { model_step, run_calls, type ModelCarry } from './step.ts';
 import { textOf } from './schema.ts';
-import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
-import type { ToolBehavior } from '../../protocol/schema.ts';
-import type { Ai, AiEvent } from '../ports.ts';
-import { Port, type PortFailure } from '../port.ts';
-import type { FacilityCall } from '../services.ts';
-import type { Json } from '../../decl/values.ts';
-
 import {
-	LIMITS,
 	type AiMessage,
 	type AiRequest,
 	type AiResponse,
-	type CrossAnswer
-} from '../contracts.ts';
+	FacilityFailure,
+	Port,
+	type PortFailure,
+	type ToolBehavior,
+	Unavailable
+} from '@norbital-ai/host-api';
+import type { Ai } from '../ports.ts';
+import type { AiEvent } from '@norbital-ai/host-api';
+import type { FacilityCall } from '../services.ts';
+import type { Json } from '../../decl/values.ts';
+
+import { LIMITS, type CrossAnswer } from '../contracts.ts';
 import { decodeInput } from '../callables/decode.ts';
 import type { Kind } from '@norbital-ai/store/kind';
 import { bound, BOUNDS, size } from './context.ts';

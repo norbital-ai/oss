@@ -5,7 +5,7 @@ import { bind_system_model } from '../../../../decl/model.ts';
 
 export default bind_system_model('sys_run')({
 	description:
-		'An automation run: queued, running or finished, with its input, progress and results.',
+		'An automation run: queued, running, waiting or finished, with its input, progress and results.',
 	record_label: 'record.automation',
 	fields: {
 		automation: { kind: 'text' },
@@ -27,13 +27,16 @@ export default bind_system_model('sys_run')({
 		actor: { kind: 'text', optional: true },
 		starter: { kind: 'json', optional: true },
 		// who or what started an automation run (`RunTrigger`); never its authority
-		trigger: { kind: 'json', optional: true }
+		trigger: { kind: 'json', optional: true },
+		// a waiting run's wait (`engine/runs/wait.ts`): what it waits on, the crossings it answered so far, what woke it
+		wait: { kind: 'json', optional: true }
 	},
 	constraints: { key: { unique: ['key'] } },
 	table: { primary: 'text' },
 	outputs: { default: { fields: 'all' } },
 	indexes: {
 		by_due_at: { on: ['due_at'], where: { state: { eq: 'queued' } } },
+		by_waiting: { on: ['due_at'], where: { state: { eq: 'waiting' } } },
 		by_automation_state: { on: ['automation', 'state'] }
 	}
 });

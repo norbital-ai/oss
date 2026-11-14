@@ -5,7 +5,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit, Fiber, FiberSet, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
-import type { DriverEvent, DriverOpen, DriverPage, Json } from '@norbital-ai/bolt/engine';
+import type { DriverEvent, DriverOpen, DriverPage } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import { googleCalendar } from '../src/google-calendar/index.ts';
 import { required, fakeFetch, host, json, until, type Host, type HostOptions, type Route } from './kit.ts';
 

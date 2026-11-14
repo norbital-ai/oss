@@ -21,14 +21,14 @@ import {
 import type { Json } from '../../decl/values.ts';
 import { FACILITY_MEMBERS } from '../../decl/runtime/facility-members.ts';
 import { MessageValues, message_text } from '../../decl/errors/refusal.ts';
-import type {
-	CrossAnswer,
-	GuestCall,
-	GuestOutcome,
-	GuestTurn,
-	Invocation,
-	InvocationKind
-} from '../contracts.ts';
+import {
+	type GuestCall,
+	type GuestFinal,
+	GuestFinalSchema,
+	type GuestProgram,
+	type GuestTurn
+} from '@norbital-ai/host-api';
+import type { CrossAnswer, GuestOutcome, GuestPart, Invocation, InvocationKind } from '../contracts.ts';
 import { LIMITS, cross_failure, facility_wall_ms } from '../contracts.ts';
 import { BoltError, type Code } from '../../protocol/errors.ts';
 import type { EngineManifest } from '../manifest.ts';
@@ -50,12 +50,6 @@ import {
 import { GuestIsolates, type GuestSession } from '../ports.ts';
 import { PRELUDE } from './prelude.ts';
 
-/** A compiled guest bundle the runner loads: its JavaScript source, optional source map and embedded assets. */
-export type GuestProgram = {
-	source: string;
-	source_map?: string;
-	assets?: Readonly<Record<string, Uint8Array>>;
-};
 export type GuestOptions = {
 	readonly lower_read?: ((member: string, args: readonly Json[]) => Effect.Effect<ReadIR, BoltError>) | undefined;
 	readonly console?: ((level: string, line: string, invocation: Invocation) => void) | undefined;
@@ -64,8 +58,8 @@ export type GuestOptions = {
 export const GuestConfig = Context.Reference<GuestOptions>('bolt/GuestConfig', {
 	defaultValue: () => ({})
 });
-const PAGE_READS = new Set(['query', 'aggregate', 'history']);
-const SERVER_READS = new Set(['query', 'history', 'db.query', 'db.after']);
+const PAGE_READS = new Set(['query', 'history']);
+const SERVER_READS = new Set(['query', 'history', 'db.query']);
 const messageOf = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 const utf8 = new TextEncoder();
@@ -79,7 +73,6 @@ const decode = <A>(schema: Schema.Decoder<A>, value: unknown) =>
 	);
 const facility = Schema.Literals(FACILITY_MEMBERS);
 const lower = (
-	kind: InvocationKind,
 	member: string,
 	args: readonly Json[],
 	bins: readonly Uint8Array[],
@@ -87,8 +80,8 @@ const lower = (
 	manifest: EngineManifest
 ): Effect.Effect<CrossCall, BoltError> =>
 	Effect.gen(function* () {
-		// Server bodies aggregate inside a query request. Only page rendering exposes the page aggregate method.
-		if (SERVER_READS.has(member) || (kind === 'page' && member === 'aggregate'))
+		// every body aggregates inside a query request
+		if (SERVER_READS.has(member))
 			return {
 				_tag: 'read',
 				read: yield* read(member, args).pipe(
@@ -100,8 +93,6 @@ const lower = (
 				const decoded = yield* decode_acts(manifest, args[0], args[1]);
 				return { _tag: 'act', ...decoded };
 			}
-			case 'run':
-				return { _tag: 'run', automation: yield* decode(Schema.String, args[0]), input: args[1] ?? {} };
 			case 'schedule': {
 				const automation = yield* decode(Schema.String, args[0]);
 				const options = yield* decode(
@@ -135,6 +126,8 @@ const lower = (
 					: { _tag: 'send', to: null, message: args[0] ?? null };
 			case 'progress':
 				return { _tag: 'progress', progress: args[0] ?? null };
+			case 'wait':
+				return { _tag: 'wait', on: args[0] ?? null };
 			default:
 				return {
 					_tag: yield* decode(facility, member),
@@ -224,7 +217,7 @@ const stackLocation = (program: GuestProgram) => {
 	};
 };
 const isCall = (value: CrossCall | CrossAnswer): value is CrossCall => '_tag' in value;
-const isFacility = (call: CrossCall): call is FacilityCall => FACILITY_MEMBERS.some((member) => member === call._tag);
+export const isFacility = (call: CrossCall): call is FacilityCall => FACILITY_MEMBERS.some((member) => member === call._tag);
 type Landed = {
 	readonly calls: readonly GuestCall[];
 	readonly lowered: readonly (CrossCall | CrossAnswer)[];
@@ -239,9 +232,11 @@ const run = (
 	events: InvocationEvents,
 	invocation: Invocation,
 	bridge: Bridge,
-	secrets: Readonly<Record<string, string>>
+	secrets: Readonly<Record<string, string>>,
+	/** Several bodies of the invocation's kind, started together: one outcome each, in order. */
+	parts?: readonly GuestPart[]
 ) =>
-	Effect.gen(function* () {
+	Effect.gen(function* (): Effect.fn.Return<readonly GuestOutcome[]> {
 		const where = stackLocation(program),
 			wallMs = Math.min(options.call_wall_ms ?? LIMITS.callMs.database, LIMITS.callMs.database);
 		const read = options.lower_read ?? ((member, args) => workspaceRead(manifest, member, args));
@@ -293,6 +288,68 @@ const run = (
 			kind: 'failed',
 			error: BoltError.make(code, 'guest', message, cause)
 		});
+		/** A body's end state as its outcome. */
+		const settle = Effect.fnUntraced(function* (final: GuestFinal): Effect.fn.Return<GuestOutcome, BoltError> {
+			switch (final[0]) {
+				case 'ok':
+					// A write transform returns the expanded change set, including owned rows. Its
+					// existing change-set bound applies; ordinary results and call arguments stay bounded.
+					const resultBytes =
+						invocation.kind === 'create' || invocation.kind === 'update' || invocation.kind === 'delete'
+							? limits.change_set_bytes
+							: limits.args_bytes;
+					if (byteLength(final[1]) > resultBytes)
+						return failed('too_large', `the result is over ${resultBytes} bytes`);
+					return {
+						kind: 'ok',
+						output: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
+							final[1]
+						).pipe(
+							Effect.mapError((error) =>
+								BoltError.make('internal', 'guest', 'the guest isolate failed', error)
+							)
+						)
+					} satisfies GuestOutcome;
+				case 'refused': {
+					const details = yield* Schema.decodeUnknownEffect(RefusalDetails)(final[4]).pipe(
+						Effect.mapError((error) =>
+							BoltError.make(
+								'internal',
+								'guest',
+								'The guest refusal metadata did not decode.',
+								error
+							)
+						)
+					);
+					// an authored refusal leaves the guest as its key: the workspace catalogue renders it once, here
+					return {
+						kind: 'refused',
+						message:
+							details.key === undefined
+								? final[1]
+								: message_text(manifest.messages, details.key, details.values),
+						...details,
+						...(final[2] === null ? {} : { field: final[2] }),
+						...(final[3] === null ? {} : { row: final[3] })
+					} satisfies GuestOutcome;
+				}
+				case 'missing':
+					return failed(
+						'missing_body',
+						`guest.mjs has no ${invocation.kind} body at ${final[1]}`
+					);
+				case 'error': {
+					const at = final[3].split('\n').find((line) => line.includes('guest.mjs'));
+					return failed('guest_error', final[2], {
+						name: final[1],
+						message: final[2],
+						stack: final[3],
+						...(final.length === 5 ? { kind: final[4] } : {}),
+						...(at === undefined ? {} : { at: where(at) })
+					});
+				}
+			}
+		});
 		const landed = yield* Queue.unbounded<Landed>();
 		let pending = 0,
 			crossings = 0,
@@ -300,12 +357,21 @@ const run = (
 		const { seed: _seed, ...ctx } = invocation.ctx;
 		/** One run of the body in one isolate, to its end. */
 		const pass = (session: GuestSession) =>
-			Effect.gen(function* (): Effect.fn.Return<GuestOutcome, BoltError, Scope.Scope> {
+			Effect.gen(function* (): Effect.fn.Return<
+				GuestOutcome | readonly GuestOutcome[],
+				BoltError,
+				Scope.Scope
+			> {
 				let taken = yield* slice(
 					session.start({
 						kind: invocation.kind,
-						path: bodyPath(invocation.kind, invocation.target),
-						input: JSON.stringify(invocation.input),
+						// an empty path starts each part's body (`[path, input]`) instead of one
+						path: parts === undefined ? bodyPath(invocation.kind, invocation.target) : [],
+						input: JSON.stringify(
+							parts === undefined
+								? invocation.input
+								: parts.map((part) => [bodyPath(invocation.kind, part.target), part.input])
+						),
 						ctx: JSON.stringify({ ...ctx, $secrets: secrets }),
 						invocation: invocation.id
 					})
@@ -328,65 +394,18 @@ const run = (
 								'internal',
 								'unawaited: the body returned while a ctx call was pending'
 							);
-						switch (final[0]) {
-							case 'ok':
-								// A write transform returns the expanded change set, including owned rows. Its
-								// existing change-set bound applies; ordinary results and call arguments stay bounded.
-								const resultBytes =
-									invocation.kind === 'create' || invocation.kind === 'update' || invocation.kind === 'delete'
-										? limits.change_set_bytes
-										: limits.args_bytes;
-								if (byteLength(final[1]) > resultBytes)
-									return failed('too_large', `the result is over ${resultBytes} bytes`);
-								return {
-									kind: 'ok',
-									output: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
-										final[1]
-									).pipe(
-										Effect.mapError((error) =>
-											BoltError.make('internal', 'guest', 'the guest isolate failed', error)
-										)
-									)
-								} satisfies GuestOutcome;
-							case 'refused': {
-								const details = yield* Schema.decodeUnknownEffect(RefusalDetails)(final[4]).pipe(
-									Effect.mapError((error) =>
-										BoltError.make(
-											'internal',
-											'guest',
-											'The guest refusal metadata did not decode.',
-											error
-										)
-									)
-								);
-								// an authored refusal leaves the guest as its key: the workspace catalogue renders it once, here
-								return {
-									kind: 'refused',
-									message:
-										details.key === undefined
-											? final[1]
-											: message_text(manifest.messages, details.key, details.values),
-									...details,
-									...(final[2] === null ? {} : { field: final[2] }),
-									...(final[3] === null ? {} : { row: final[3] })
-								} satisfies GuestOutcome;
-							}
-							case 'missing':
-								return failed(
-									'missing_body',
-									`guest.mjs has no ${invocation.kind} body at ${final[1]}`
-								);
-							case 'error': {
-								const at = final[3].split('\n').find((line) => line.includes('guest.mjs'));
-								return failed('guest_error', final[2], {
-									name: final[1],
-									message: final[2],
-									stack: final[3],
-									...(final.length === 5 ? { kind: final[4] } : {}),
-									...(at === undefined ? {} : { at: where(at) })
-								});
-							}
-						}
+						if (parts === undefined) return yield* settle(final);
+						if (final[0] !== 'ok') return failed('internal', 'the guest batch did not answer');
+						const states = yield* Schema.decodeUnknownEffect(
+							Schema.fromJsonString(Schema.Array(GuestFinalSchema))
+						)(final[1]).pipe(
+							Effect.mapError((error) =>
+								BoltError.make('internal', 'guest', 'the guest isolate failed', error)
+							)
+						);
+						if (states.length !== parts.length)
+							return failed('internal', 'the guest batch answered another number of bodies');
+						return yield* Effect.forEach(states, settle);
 					}
 					if (first !== undefined) {
 						if (invocation.kind === 'page') {
@@ -419,7 +438,7 @@ const run = (
 								const args = yield* argsOf(json).pipe(
 									Effect.mapError((error) => BoltError.make('invalid_input', 'guest', error.message))
 								);
-								return yield* lower(invocation.kind, member, args, bins[i] ?? [], read, manifest);
+								return yield* lower(member, args, bins[i] ?? [], read, manifest);
 							}).pipe(
 								Effect.catch((error) =>
 									Effect.succeed(
@@ -610,12 +629,14 @@ const run = (
 		return yield* Effect.gen(function* () {
 			const held = yield* Scope.make();
 			return yield* open.pipe(
-				Scope.provide(held),
 				Effect.flatMap(pass),
+				Scope.provide(held),
 				Effect.ensuring(Scope.close(held, Exit.void))
 			);
 		}).pipe(
-			Effect.catch((error) => Effect.succeed({ kind: 'failed', error } satisfies GuestOutcome))
+			Effect.catch((error) => Effect.succeed({ kind: 'failed', error } satisfies GuestOutcome)),
+			// one failure of the whole run (a budget, the isolate) is every part's
+			Effect.map((outcome) => ('kind' in outcome ? (parts ?? [null]).map(() => outcome) : outcome))
 		);
 	});
 
@@ -648,25 +669,27 @@ export const GuestLive = Layer.effect(
 		const execute = (
 			program: GuestProgram | undefined,
 			invocation: Invocation,
-			bridge: Bridge
-		): Effect.Effect<GuestOutcome> =>
-			Effect.gen(function* () {
+			bridge: Bridge,
+			parts?: readonly GuestPart[]
+		): Effect.Effect<readonly GuestOutcome[]> => {
+			const every = (outcome: GuestOutcome) => (parts ?? [null]).map(() => outcome);
+			return Effect.gen(function* () {
 				if (!(yield* Ref.get(open)))
-					return {
+					return every({
 						kind: 'failed',
 						error: BoltError.make(
 							'interrupted',
 							'guest',
 							'the invocation was interrupted: its generation is draining'
 						)
-					} satisfies GuestOutcome;
+					});
 				const work = Effect.scoped(
 					Effect.gen(function* () {
 						if (program === undefined)
-							return {
+							return every({
 								kind: 'failed',
 								error: BoltError.make('no_guest', 'guest', 'the workspace has no guest program')
-							} satisfies GuestOutcome;
+							});
 						const events = yield* telemetry.open({
 							invocation: invocation.id,
 							run: invocation.run
@@ -702,7 +725,8 @@ export const GuestLive = Layer.effect(
 							events,
 							invocation,
 							bridge,
-							secrets
+							secrets,
+							parts
 						);
 					})
 				);
@@ -711,13 +735,25 @@ export const GuestLive = Layer.effect(
 					Fiber.join,
 					Fiber.interrupt
 				);
-			}).pipe(
-				Effect.catch((error) => Effect.succeed({ kind: 'failed', error } satisfies GuestOutcome))
-			);
+			}).pipe(Effect.catch((error) => Effect.succeed(every({ kind: 'failed', error }))));
+		};
+		const one = (outcomes: readonly GuestOutcome[]): GuestOutcome =>
+			outcomes[0] ?? {
+				kind: 'failed',
+				error: BoltError.make('internal', 'guest', 'the guest answered nothing')
+			};
 		return Guest.of({
 			invoke: (invocation, bridge) =>
-				execute(Option.getOrUndefined(activation.guest), invocation, bridge),
-			invokeProgram: (program, invocation, bridge) => execute(program, invocation, bridge)
+				execute(Option.getOrUndefined(activation.guest), invocation, bridge).pipe(Effect.map(one)),
+			invokeEach: (invocation, parts, bridge) =>
+				execute(
+					Option.getOrUndefined(activation.guest),
+					{ ...invocation, target: parts.map((part) => part.target).join(' '), input: null },
+					bridge,
+					parts
+				),
+			invokeProgram: (program, invocation, bridge) =>
+				execute(program, invocation, bridge).pipe(Effect.map(one))
 		});
 	})
 );

@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
-import { Approvals, Callables, Live, RunHandlers, Writes, Reads } from '../src/engine/services.ts';
+import { Approvals, Callables, Live, RunHandlers, Reads } from '../src/engine/services.ts';
 import { Convert, Transport, type PushMessage } from '../src/engine/ports.ts';
-import { FacilityFailure } from '../src/decl/errors.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
 import { readableFile } from '../src/engine/decision.ts';
 import { noticeRows } from '../src/engine/notifications/notify.ts';
@@ -15,8 +14,10 @@ import type { ApprovalEffectEvent } from '../src/protocol/effect-events.ts';
 import type { Authority, MemberActor } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { FacilityFailure } from '@norbital-ai/host-api';
 import { admin, manifest as base } from './write-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import { one_act } from './support/act-one.ts';
 
 const recipient = '0199a000-0000-7000-8000-000000000001';
 const requester = '0199a000-0000-7000-8000-000000000002';
@@ -74,7 +75,8 @@ const setup = (effect: string, convert?: Convert['Service'], transport?: Transpo
 		now: '2026-10-24T08:00:00.000Z',
 		guest: yield* program(`
 import { Effect } from 'effect';
-import { ActRefused, FacilityFailure } from '@norbital-ai/bolt/errors';
+import { FacilityFailure } from '@norbital-ai/host-api';
+import { ActRefused } from '@norbital-ai/bolt/errors';
 export default {
  model: { orders: { bodies: { effect: { create: ${effect} } } } },
  policy: { author: { grants: { orders: { create: { verdict: function* (_changes, ctx) {
@@ -82,12 +84,12 @@ export default {
  } } } } } },
  automation: { ping: { body: function* (input, ctx) {
   if (input.fail) return yield* Effect.fail(new ActRefused({ code: 'refused', message: 'Refused' }));
-  yield* ctx.notify({ title: 'Ping', to: [{ user: '${recipient}' }], once: 'ping:' + ctx.run.id });
+  yield* ctx.notify({ title: 'Ping', to: [{ user: '${recipient}' }], once: 'ping:' + ctx.trigger.id });
   return 'ack';
  } } }
 };`)
 	}));
-	const t = Context.get(context, TestWorkspace), writes = Context.get(context, Writes);
+	const t = Context.get(context, TestWorkspace), writes = Context.get(context, Callables);
 	yield* t.db.write({
 		text: `INSERT INTO sys_user(id,name,kind,team,admin) VALUES
 		($1,'Reviewer','staff','reviewers',false),($2,'Requester','staff','authors',false),
@@ -98,7 +100,7 @@ export default {
 		model: 'orders', verb: 'create' as const, input: [{ title: key }], key,
 		issuedAt: t.clock.now(), authority,
 		bindings: { now: t.clock.now(), today: '2026-10-24', tz: 'UTC' },
-		invocationId: key, mode: { _tag: 'Direct' as const }
+		invocationId: key
 	});
 	const effect_runs = () => t.db.rows(Schema.Struct({
 		id: Schema.String, input: EffectInput, state: Schema.String, attempts: Schema.Number, error: Schema.Json
@@ -126,7 +128,7 @@ describe('notifications from durable model effects', () => {
  if (ctx.event.kind === 'approval') yield* ctx.notify({ title: 'Review requested', to: ['approvers'],
   once: ctx.event.request + ':' + ctx.event.move });
 }`);
-			const saved = (yield* f.writes.act(f.request('approval-notification'))).outcome;
+			const saved = (yield* f.writes.acts(one_act(f.request('approval-notification')))).outcome;
 			if (saved.kind !== 'committed') throw new Error(JSON.stringify(saved));
 			const record = saved.records[0]?.id;
 			if (record === undefined) throw new Error('Missing order');
@@ -169,7 +171,7 @@ describe('notifications from durable model effects', () => {
  if (ctx.attempt === 1) return yield* Effect.fail(new FacilityFailure({ kind: 'upstream', message: 'Retry this effect' }));
 }`);
 			const request = f.request('order');
-			const saved = yield* f.writes.act(request);
+			const saved = yield* f.writes.acts(one_act(request));
 			expect(saved.outcome.kind).toBe('committed');
 			expect(yield* f.notes()).toEqual([]);
 			const [run] = yield* f.effect_runs();
@@ -182,7 +184,7 @@ describe('notifications from durable model effects', () => {
 			expect((yield* f.t.run_due()).failed).toEqual([]);
 			expect(yield* f.effect_runs()).toMatchObject([{ state: 'succeeded', attempts: 2 }]);
 			expect(yield* f.notes()).toEqual([{ title: 'Committed', member: recipient }]);
-			expect((yield* f.writes.act({ ...request, retry: true })).captured).toEqual([]);
+			expect((yield* f.writes.acts(one_act({ ...request, retry: true }))).captured).toEqual([]);
 			expect(yield* f.effect_runs()).toHaveLength(1);
 		}))
 	);
@@ -195,8 +197,8 @@ describe('notifications from durable model effects', () => {
  if (orders.orders.rows.length !== 1 || orders.orders.rows[0].title !== 'visible') throw new Error('Writer scope escaped');
  yield* ctx.notify({ title: orders.orders.rows[0].title, to: [{ user: '${recipient}' }], once: 'scoped' });
 }`);
-			expect((yield* f.writes.act(f.request('visible'))).outcome.kind).toBe('committed');
-			expect((yield* f.writes.act(f.request('hidden', restricted))).outcome.kind).toBe('committed');
+			expect((yield* f.writes.acts(one_act(f.request('visible')))).outcome.kind).toBe('committed');
+			expect((yield* f.writes.acts(one_act(f.request('hidden', restricted)))).outcome.kind).toBe('committed');
 			expect((yield* f.t.run_due()).failed).toEqual([]);
 			expect(yield* f.notes()).toEqual([{ title: 'visible', member: recipient }]);
 		}))
@@ -205,7 +207,7 @@ describe('notifications from durable model effects', () => {
 	it.live('records a malformed notice as a failed effect while the causing write stays committed', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const f = yield* setup("function* (_changes, ctx) { yield* ctx.notify({ title:'Invalid', to:[{team:'unknown'}] }); }");
-			expect((yield* f.writes.act(f.request('kept'))).outcome.kind).toBe('committed');
+			expect((yield* f.writes.acts(one_act(f.request('kept')))).outcome.kind).toBe('committed');
 			const result = yield* f.t.run_due();
 			expect(result.failed).toMatchObject([{ automation: 'orders.effect.create' }]);
 			expect(yield* f.effect_runs()).toMatchObject([{ state: 'failed', error: { message: expect.stringContaining('unknown') } }]);
@@ -252,7 +254,7 @@ describe('notifications from durable model effects', () => {
 				text: 'INSERT INTO bolt_push_subscriptions(id,"user",kind,endpoint,keys) VALUES ($1,$2,\'web\',\'https://push.example/device\',$3::jsonb)',
 				params: [randomUUID(), recipient, JSON.stringify({ p256dh: 'fixture-public-key', auth: 'fixture-auth' })]
 			});
-			yield* f.writes.act(f.request('attachment'));
+			yield* f.writes.acts(one_act(f.request('attachment')));
 			expect(conversions).toBe(0);
 			expect((yield* f.t.run_due()).failed).toEqual([]);
 			expect(conversions).toBe(1);
@@ -295,7 +297,7 @@ describe('notifications from durable model effects', () => {
 					text: 'INSERT INTO bolt_push_subscriptions(id,"user",kind,endpoint,keys) VALUES ($1,$2,\'web\',$3,\'{}\'::jsonb)',
 					params: [randomUUID(), recipient, `https://push.example/${endpoint}`]
 				});
-			yield* f.writes.act(f.request('push-report'));
+			yield* f.writes.acts(one_act(f.request('push-report')));
 			yield* f.t.run_due();
 			expect(sent).toHaveLength(3);
 			const runs = () => f.t.db.rows(Schema.Struct({ state: Schema.String, attempts: Schema.Number, error: Schema.Json, output: Schema.Json }), {
@@ -330,7 +332,7 @@ describe('notifications from durable model effects', () => {
 				text: 'INSERT INTO bolt_push_subscriptions(id,"user",kind,endpoint,keys) VALUES ($1,$2,\'web\',\'https://push.example/timeout\',\'{}\'::jsonb)',
 				params: [randomUUID(), recipient]
 			});
-			yield* f.writes.act(f.request('push-timeout'));
+			yield* f.writes.acts(one_act(f.request('push-timeout')));
 			yield* f.t.run_due();
 			const ids = yield* f.t.db.rows(Schema.Struct({ id: Schema.String }), { text: 'SELECT id FROM sys_notification', params: [] });
 			const handler = yield* Context.get(f.context, RunHandlers).handler('bolt.push');
@@ -377,7 +379,7 @@ describe('notifications from durable model effects', () => {
  if (ctx.actor.id !== '${requester}') throw new Error('The original writer was lost');
  yield* ctx.notify({ title: 'Approved order', to: [{ user: '${recipient}' }], once: 'approved:' + changes[0].after.id });
 }`);
-				const saved = (yield* f.writes.act(f.request(`held-${decision}`, author))).outcome;
+				const saved = (yield* f.writes.acts(one_act(f.request(`held-${decision}`, author)))).outcome;
 				if (saved.kind !== 'pending_approval') throw new Error(JSON.stringify(saved));
 				expect(yield* f.t.db.value(Schema.Number, {
 					text: 'SELECT count(*)::int FROM bolt_approval_effect WHERE request=$1::uuid', params: [saved.request_id]

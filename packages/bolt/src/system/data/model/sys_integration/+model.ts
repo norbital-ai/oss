@@ -45,10 +45,10 @@ export default bind_system_model('sys_integration')({
 		}
 	},
 	create: {
-		columns: { fields: ['integration', 'name', 'owner', 'envoy', 'configuration'] }
+		fields: ['integration', 'name', 'owner', 'envoy', 'configuration']
 	},
 	update: {
-		columns: { fields: ['name', 'envoy', 'active', 'configuration', 'import_start'] }
+		fields: ['name', 'envoy', 'active', 'configuration', 'import_start']
 	},
 	delete: {}
 });

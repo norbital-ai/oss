@@ -4,6 +4,7 @@ import { Cause, Config, Effect, Option, Schema } from 'effect';
 import * as Errors from '../src/decl/errors.ts';
 import * as Act from '../src/decl/errors/act.ts';
 import * as Browser from '../src/decl/errors/browser.ts';
+import * as HostApi from '@norbital-ai/host-api';
 import * as Facility from '../src/decl/errors/facility.ts';
 import * as Read from '../src/decl/errors/read.ts';
 import { Refusal } from '../src/decl/errors/refusal.ts';
@@ -88,8 +89,8 @@ describe('canonical guest error families', () => {
 		for (const [publicValue, canonical] of [
 			[Errors.ActRefused, Act.ActRefused],
 			[Errors.ActConflict, Act.ActConflict],
-			[Errors.FacilityFailure, Facility.FacilityFailure],
-			[Errors.Unavailable, Facility.Unavailable],
+			[Errors.FacilityFailure, HostApi.FacilityFailure],
+			[Errors.Unavailable, HostApi.Unavailable],
 			[Errors.ReadFailed, Read.ReadFailed],
 			[Errors.ProtocolFailed, Browser.ProtocolFailed]
 		])

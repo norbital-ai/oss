@@ -1,7 +1,6 @@
 import { Effect } from 'effect';
-import { FacilityFailure } from '@norbital-ai/bolt/errors';
-import { WebRead, type PortFailure } from '@norbital-ai/bolt/engine';
-import { read_public_page } from '@norbital-ai/bolt/node';
+import { FacilityFailure, type PortFailure, type WebPage } from '@norbital-ai/host-api';
+import { read_public_page } from '@norbital-ai/host-api/node';
 import { extractDocumentText } from './documents.ts';
 export type PublicPage = {
 	url: string;
@@ -51,9 +50,16 @@ const linksOf = (html: string, base: string): string[] =>
 		)
 	].slice(0, 1_000);
 
+/** A public-page reader as Effects (`WebReadPort` without its signal); `raw` also answers the markup and its links. */
+export type WebReader = {
+	readonly read: (
+		url: string,
+		options?: { readonly raw?: boolean }
+	) => Effect.Effect<WebPage, PortFailure>;
+};
 export const publicWeb = (
 	read: (url: string) => Effect.Effect<PublicPage, PortFailure> = readPublicPage
-): WebRead['Service'] => ({
+): WebReader => ({
 	read: (url, options = {}) =>
 		read(url).pipe(
 			Effect.map((page) => {

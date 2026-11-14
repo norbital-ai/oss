@@ -5,12 +5,10 @@ import { TestClock } from 'effect/testing';
 import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
 import { OPEN_WINDOWS_SQL, OpenWindow, RateWindows } from '../src/engine/access/rate.ts';
-import type { TransportPort } from '../src/engine/contracts.ts';
+import { DbError, type TransportPort } from '@norbital-ai/host-api';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
 import { Authorities, preview_as } from '../src/engine/identity/actor.ts';
-import { member_directory } from '../src/engine/identity/maintenance.ts';
 import {
 	acceptInvitation,
 	assign_team,
@@ -99,42 +97,6 @@ class IdentityFixture extends Context.Service<IdentityFixture, Effect.Success<ty
 ) {}
 const IdentityFixtureLive = Layer.effect(IdentityFixture, fixture).pipe(
 	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer))
-);
-
-it.live(
-	'host directory matches active contacts with email precedence and gates administrator details',
-	() =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const db = yield* TenantDb;
-				yield* db.write({
-					text: `INSERT INTO sys_user(id,name,email,phone,active,admin) VALUES
-			('admin','Boss','Boss@directory.test',null,true,true),
-			('email','Email','Match@directory.test',null,true,false),
-			('phone','Phone',null,'+65 1234 5678',true,false),
-			('inactive','Inactive','old@directory.test',null,false,false)`,
-					params: []
-				});
-				const people = member_directory(db);
-				expect(
-					yield* people.memberOf({ email: ' match@directory.test ', phone: '65-12345678' })
-				).toBe('email');
-				expect(
-					yield* people.memberOf({ email: 'missing@directory.test', phone: '65-12345678' })
-				).toBe('phone');
-				expect(yield* people.memberOf({ email: 'old@directory.test', phone: null })).toBeNull();
-				expect(yield* people.personOf('phone')).toEqual({ email: null, phone: '+65 1234 5678' });
-				expect((yield* people.members).map((member) => member.user).sort()).toEqual([
-					'admin',
-					'email',
-					'phone'
-				]);
-				expect(
-					(yield* people.administered('boss@directory.test'))?.map((member) => member.id).sort()
-				).toEqual(['admin', 'email', 'inactive', 'phone']);
-				expect(yield* people.administered('match@directory.test')).toBeNull();
-			})
-		).pipe(Effect.provide(TestDb.layer(m)))
 );
 
 it.live(

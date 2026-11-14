@@ -4,15 +4,16 @@ import { vi } from 'vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { TenantDb, type DbBatch } from '../src/engine/db/tenant-db.ts';
+import { type DbBatch, DbError } from '@norbital-ai/host-api';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Callables } from '../src/engine/services.ts';
 import { row } from '../src/engine/system/rows.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
-import { HEADERS, uuidv7 } from '../src/protocol/wire.ts';
+import { HEADERS } from '../src/protocol/wire.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority } from '../src/engine/contracts.ts';
-import { DbError } from '../src/engine/errors.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { ActConflict } from '../src/decl/errors.ts';
 import { act_failure } from '../src/decl/errors/act.ts';
@@ -28,7 +29,7 @@ const present = <A>(value: A | null | undefined): A => {
 const ACME = '0199a000-0000-4000-8000-0000000000c1';
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
-		workspace: { tz: 'UTC', locale: 'en' },
+		workspace: { tz: 'UTC', locale: 'en', limits: { applicant: { act: { rate: '3/h', per: 'ip' } } } },
 		models: {
 			customers: {
 				description: 'A customer',
@@ -111,7 +112,7 @@ const manifest = Result.getOrThrow(
 					customers: { outputs: { default: {} } },
 					orders: {
 						outputs: {
-							default: { scopes: { orders: { created_by: { eq: { var: 'requestor.id' } } } } }
+							default: { scopes: { orders: { created_by: { eq: { var: 'actor.id' } } } } }
 						},
 						create: {},
 						update: { moves: { status: ['draft->submitted'] } }
@@ -138,8 +139,7 @@ const manifest = Result.getOrThrow(
 					openings: { outputs: { listing: { scopes: { openings: { status: { eq: 'open' } } } } } },
 					// a closed opening is no ref this visitor reads, so no write `where` is needed
 					applications: { create: {} }
-				},
-				limits: { act: { rate: '3/h', per: 'ip' } }
+				}
 			}
 		},
 		teams: { Rep: { policies: ['rep'] } },
@@ -508,11 +508,17 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 						message: 'not that one',
 						field: 'title'
 					});
-					expect(commits).not.toHaveBeenCalled();
+					// the refusal guest code decided is recorded under its key (an audited outcome write), never a business row
+					const business = () =>
+						commits.mock.calls
+							.flatMap(([b]) => b.statements.map((x) => x.text))
+							.filter((text) => !/^SELECT set_config|bolt_idem|bolt_audit_receipt/.test(text));
+					expect(commits).toHaveBeenCalledTimes(1);
+					expect(business()).toEqual([]);
 					expect(yield* Effect.flip(batch(f, rep.authority, operations, 'refused-batch'))).toEqual(
 						first
 					);
-					expect(commits).not.toHaveBeenCalled();
+					expect(business()).toEqual([]);
 					const id = uuidv7(Date.parse(t.clock.now()));
 					ok(yield* start(f, rep.authority, 'place', { title: 'no', customer: ACME }, { id }));
 					expect((yield* run(f, id)).state).toBe('queued');
@@ -527,7 +533,7 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 		);
 
 		it.effect(
-			'records a terminal serialization conflict after one generated batch replay and returns it on retry',
+			'a serialization conflict after one generated batch replay is never recorded: a retry under the key reads afresh and commits',
 			() =>
 				Effect.gen(function* () {
 					const f = yield* Fx,
@@ -544,16 +550,14 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 					serialization.armed = true;
 					const first = yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'));
 					expect(first).toEqual(new ActConflict({ records: [] }));
-					expect(attempts).toHaveLength(3);
+					// the commit and its one replay, with the same clock and minted ids; the conflict is not written
+					expect(attempts).toHaveLength(2);
 					expect(attempts[1]?.statements).toEqual(attempts[0]?.statements);
 					expect(yield* count(f, bounded)).toBe(0);
 					attempts.length = 0;
-					expect(
-						yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'))
-					).toEqual(first);
-					// A native replay checks the persisted outcome in one batch without adding business rows.
+					yield* batch(f, rep.authority, operations, 'bounded-callable');
 					expect(attempts).toHaveLength(1);
-					expect(yield* count(f, bounded)).toBe(0);
+					expect(yield* count(f, bounded)).toBe(1);
 				}).pipe(Effect.ensuring(Effect.sync(() => void (serialization.armed = false))))
 		);
 

@@ -1,8 +1,6 @@
 import { Context } from 'effect';
-import type { AuditEvent } from '../protocol/audit.ts';
+import type { AuditEvent, DbBatch, Sql } from '@norbital-ai/host-api';
 import type { Json } from '../decl/values.ts';
-import type { DbBatch } from './db/tenant-db.ts';
-import type { Sql } from './contracts.ts';
 
 /** A row change a commit statement kept history for, as the terminal event carries it. */
 export type AuditedRow = {

@@ -2,29 +2,11 @@
 // driver's `DbError` (the SQLSTATE the write compiler maps to a refusal) and, for a typed read, `BoltError`
 // naming the table of a row that does not decode. Batches release their connection before answering.
 import { Clock, Context, Effect, Semaphore, type Option, type Schema } from 'effect';
-import type { Lock, Rows, Sql } from '../contracts.ts';
-import { DbError } from '../errors.ts';
+import { DbError, type DbBatch, type Lock, type RawDb, type Rows, type Sql } from '@norbital-ai/host-api';
 import type { BoltError } from '../../protocol/errors.ts';
 import { decodeOne, decodeRows, decodeValue } from './rows.ts';
 import { AuditMutation, auditedBatch } from '../audit-context.ts';
 
-/** Complete database work, prepared before a connection is acquired; no application callback runs inside it. */
-export type DbBatch = {
-	readonly statements: readonly Sql[];
-	readonly lock?: Lock;
-	/** Native dry-run: execute and answer the statements, then roll back all of their effects. */
-	readonly rollback?: true;
-};
-
-/** What an adapter implements; `TenantDb.typed` adds the decoding reads over it. */
-export type RawDb = {
-	/** Read statements share one snapshot and answer in order; rows are relayed as JSON (D5). */
-	readonly read: (statements: readonly Sql[]) => Effect.Effect<readonly Rows[], DbError>;
-	/** An act's one write statement, with fixed deadlines and native locks before execution. */
-	readonly write: (statement: Sql, lock?: Lock) => Effect.Effect<Rows, DbError>;
-	/** Complete SQL statements atomically; answers are decoded only after commit or native dry-run rollback. */
-	readonly transaction: (batch: DbBatch) => Effect.Effect<readonly Rows[], DbError>;
-};
 export type SqlReadCaptureService = {
 	readonly read: (
 		statements: readonly Sql[],

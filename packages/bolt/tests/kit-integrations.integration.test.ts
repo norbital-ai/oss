@@ -3,7 +3,7 @@
 import { expect, layer } from '@effect/vitest';
 import { Effect, Layer, Predicate, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { Provider } from '../src/engine/integrations/driver.ts';
+import type { Provider } from '@norbital-ai/host-api';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';

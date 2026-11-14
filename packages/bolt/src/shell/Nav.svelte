@@ -27,7 +27,8 @@
 	import { NORBIUS, type NavItem, type NavModel, type Translate } from './model.ts';
 	import Awaiting from './agent/Awaiting.svelte';
 	import type { Awaiting as AwaitingKind } from './agent/chime.ts';
-	import { based, type ShellNotice } from './nav.ts';
+	import type { ShellNotice } from '@norbital-ai/host-api';
+	import { based } from './nav.ts';
 	import { LANGUAGE, LOCALES } from './i18n.ts';
 	import { THEMES, type Theme } from './theme.ts';
 	import { shortcutLabel } from './keyboard.ts';

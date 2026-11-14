@@ -1,6 +1,6 @@
 // Host ports as services (D4, B.1): what the engine asks of its host, by capability, never by provider.
 // Every member fails typed — the facility's failure or `Unavailable`. A port is required; one the host may leave out
-// takes `off` explicitly (`@norbital-ai/bolt/facilities`), and only then answers `Unavailable`. Walls are the caller's
+// takes `off` explicitly (`Facilities`, `@norbital-ai/host-api`), and only then answers `Unavailable`. Walls are the caller's
 // (`Port.call`). The tenant database is `TenantDb` (`db/tenant-db.ts`).
 import {
 	ByteSize,
@@ -18,86 +18,86 @@ import {
 	Stream,
 	type Scope
 } from 'effect';
-import { IngestedSchema } from './media.ts';
-import { BrowserSnapshotSchema, type BrowserSnapshot } from '../decl/runtime/browser.ts';
+import {
+	type AiEvent,
+	type AiModel,
+	type AiPort,
+	AiPortResponseSchema,
+	type AiRequest,
+	type ArtifactPort,
+	type ArtifactStat,
+	type Blob,
+	type BrowserCaller,
+	type BrowserPort,
+	type BrowserSnapshot,
+	BrowserSnapshotSchema,
+	type BrowserStep,
+	type BrowserTarget,
+	type BrowserWorkspaceTarget,
+	type Bundled,
+	type BundleRequest,
+	type BundlerPort,
+	type ConvertPort,
+	type ConvertSource,
+	type DeadlinesPort,
+	type DecisionRequest,
+	type DecisionResult,
+	type Downloaded,
+	type DriverPage,
+	type EmbeddingsPort,
+	type EmbedInput,
+	Fenced,
+	type FilesPort,
+	type GeocoderPort,
+	type GeoHit,
+	type GuestAnswers,
+	type GuestIsolatesPort,
+	type GuestProgram,
+	type GuestSessionOptions,
+	type GuestStart,
+	type GuestTurn,
+	GuestTurnSchema,
+	type HttpFetchOptions,
+	type HttpPort,
+	type HttpRequest,
+	type HttpResponse,
+	type ImageCrop,
+	type ImageMetadata,
+	type ImagePreview,
+	type ImagePreviewMime,
+	type ImagePreviewSize,
+	type ImagesPort,
+	type Ingested,
+	IngestedSchema,
+	is_off,
+	type KeysPort,
+	type LinksPort,
+	type LogEvent,
+	type LogPort,
+	type LogQuery,
+	type LogRow,
+	type McpPort,
+	type McpServer,
+	type McpToolInfo,
+	type Off,
+	Port,
+	type PortFailure,
+	type RenderPort,
+	type SendReceipt,
+	SendRefused,
+	type TransportPort,
+	Unavailable,
+	type WebPage,
+	type WebReadPort
+} from '@norbital-ai/host-api';
 import { LIMITS } from './contracts.ts';
-import { Unavailable } from '../decl/errors.ts';
-import type { SendReceipt } from './conversations/status.ts';
-import type {
-	ConvertSource,
-	ConvertTarget,
-	GeoHit,
-	IngestOptions,
-	WebPage
-} from '../decl/runtime/facilities.ts';
+import type { ConvertTarget, IngestOptions } from '../decl/runtime/facilities.ts';
 import type { Json, Point } from '../decl/values.ts';
-import type {
-	DocsPort,
-	AiModel,
-	AiPort,
-	AiRequest,
-	AiResponse,
-	ArtifactPort,
-	ArtifactStat,
-	Blob,
-	Bundled,
-	BundlerPort,
-	BundleRequest,
-	BrowserPort,
-	BrowserCaller,
-	BrowserStep,
-	BrowserTarget,
-	BrowserWorkspaceTarget,
-	ConvertPort,
-	RenderPort,
-	DeadlinesPort,
-	Downloaded,
-	DriverPage,
-	EmbedInput,
-	EmbeddingsPort,
-	FilesPort,
-	GeocoderPort,
-	GuestAnswers,
-	GuestIsolatesPort,
-	GuestSessionOptions,
-	GuestStart,
-	GuestTurn,
-	HttpFetchOptions,
-	HttpPort,
-	HttpRequest,
-	HttpResponse,
-	ImageMetadata,
-	ImageCrop,
-	ImagePreview,
-	ImagePreviewMime,
-	ImagePreviewSize,
-	ImagesPort,
-	Ingested,
-	IngestPort,
-	KeysPort,
-	LinksPort,
-	LogEvent,
-	LogPort,
-	LogQuery,
-	LogRow,
-	McpPort,
-	McpServer,
-	McpToolInfo,
-	TransportPort,
-	WebReadPort
-} from './contracts.ts';
-import { SendRefused, sendRefusal } from './conversations/status.ts';
-import type { DecisionResult, System1Request } from './decision.ts';
+import { sendRefusal } from './conversations/status.ts';
 import type { OutboundFile } from './services.ts';
-import type { Fenced } from './errors.ts';
-import type { GuestProgram } from './guest/runner.ts';
 import { BoltError, CODES } from '../protocol/errors.ts';
 import { linkFailure } from './integrations/abi.ts';
-import { Port, type PortFailure } from './port.ts';
 import { corpus, type DocsCorpus } from './docs-corpus.ts';
-import { GuestTurnSchema } from './guest/schema.ts';
-import { AiPortResponseSchema } from './ai-schema.ts';
-import { is_off, type Off } from '../facilities/off.ts';
 
 /** Adapt typed ABI methods whose last argument is the interruption signal. */
 const lift =
@@ -148,7 +148,7 @@ const IngestAnswered = Schema.Union([
 ]);
 /**
  * The document converter behind `ctx.convert.document`; `targets` is what this host serves (none when unavailable).
- * `ingest` (the agent's `read_file`, `ctx.convert.ingest`) is absent when the host has no ingest port.
+ * `ingest` (the agent's `read_file`, `ctx.convert.ingest`) is absent when the host's converter does not ingest.
  */
 export class Convert extends Context.Service<
 	Convert,
@@ -175,8 +175,9 @@ export class Convert extends Context.Service<
 		) => Effect.Effect<Ingested | { readonly unsupported: string }, PortFailure>;
 	}
 >()('bolt/Convert') {
-	static fromAbi(port: ConvertPort | Off, ingester?: IngestPort['ingest']): Layer.Layer<Convert> {
-		const previewPdf = is_off(port) ? undefined : port.preview_pdf;
+	static fromAbi(port: ConvertPort | Off): Layer.Layer<Convert> {
+		const previewPdf = is_off(port) ? undefined : port.preview_pdf,
+			ingester = is_off(port) ? undefined : port.ingest?.bind(port);
 		return Layer.succeed(Convert, {
 			...(is_off(port)
 				? { targets: [], convert: () => turnedOff('convert') }
@@ -610,11 +611,6 @@ export class Drivers extends Context.Service<
 }
 
 // ── ai ──
-/** One `sys_2` call as it streams: text as it arrives, progress that is not text (a tool call's arguments, reasoning), then the response. */
-export type AiEvent =
-	| { readonly _tag: 'Delta'; readonly text: string }
-	| { readonly _tag: 'Progress'; readonly reasoning: string | undefined }
-	| { readonly _tag: 'Response'; readonly response: AiResponse };
 /**
  * The AI facility: `ask` is `sys_1` (structured decisions from text and resolved images), `infer` the `sys_2` LLM
  * (multimodal; the 20 s idle wall cuts a stream into a `cut` step), `embed` the embedding model. `models` are the
@@ -623,7 +619,7 @@ export type AiEvent =
 export class Ai extends Context.Service<
 	Ai,
 	{
-		readonly ask: (request: System1Request) => Effect.Effect<DecisionResult, PortFailure>;
+		readonly ask: (request: DecisionRequest) => Effect.Effect<DecisionResult, PortFailure>;
 		readonly maxChoices: number | undefined;
 		readonly models: readonly string[];
 		readonly catalog: Effect.Effect<
@@ -983,19 +979,19 @@ export class Mcp extends Context.Service<
 	}
 }
 /**
- * The release's docs corpus for the agent's `docs` tool, loaded from the host once per activation on first use: the
- * index, then every namespace and skill it lists.
+ * The release's docs corpus for the agent's `docs` tool, read through its artifact port (`../docs/<file>`) once per
+ * activation on first use: the index, then every namespace and skill it lists.
  */
 export class Docs extends Context.Service<
 	Docs,
 	{ readonly corpus: Effect.Effect<DocsCorpus, PortFailure> }
 >()('bolt/Docs') {
-	static fromAbi(port: DocsPort): Layer.Layer<Docs> {
+	static fromAbi(port: ArtifactPort): Layer.Layer<Docs> {
 		const read = (file: string) =>
-			Port.attempt('docs', (signal) => port.read(file, signal)).pipe(
-				Effect.flatMap((text) =>
+			Port.attempt('docs', (signal) => port.read(`../docs/${file}`, signal)).pipe(
+				Effect.flatMap((bytes) =>
 					Effect.try({
-						try: (): unknown => JSON.parse(text),
+						try: (): unknown => JSON.parse(new TextDecoder().decode(bytes)),
 						catch: Port.failure('docs')
 					})
 				)

@@ -30,16 +30,10 @@ import { triageAttachments } from './attachments.ts';
 import { Manifest, Live, Turns, Links, Wake, RunHandlers, type LiveShape } from '../services.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { Port } from '../port.ts';
+import { type DecisionRequest, Port } from '@norbital-ai/host-api';
 import { enqueueTurn, TurnHandlers } from './turns.ts';
 import { LEASE_MS, leaseUntil } from '../queue.ts';
-import {
-	ask,
-	decisionEvent,
-	decisionUsage,
-	failed,
-	type DecisionRequest
-} from '../decision.ts';
+import { ask, decisionEvent, decisionUsage, failed } from '../decision.ts';
 import { FileRef, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
 import { personMessage } from './queue.ts';

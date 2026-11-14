@@ -6,14 +6,17 @@
 // module in the published package.
 import { readFileSync } from 'node:fs';
 import { Effect } from 'effect';
-import { FacilityFailure } from '../decl/errors.ts';
+import { FacilityFailure } from '@norbital-ai/host-api';
 import { corpus } from '../engine/docs-corpus.ts';
 import { DOCS_DIR } from '../node/docs.ts';
+
+/** This build's `build/docs/`: what a host serves as a release's `../docs/<file>` (`artifact_port`'s `docs`). */
+export { DOCS_DIR };
 /**
  * The docs corpus, read on first run and kept: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)` and
  * `skill(name)`.
  * @example
- * (yield* docs).symbol('bolt', 'ModelDeclaration')?.signature
+ * (yield* docs).symbol('bolt', 'model')?.signature
  */
 export const docs = Effect.runSync(
 	Effect.cached(

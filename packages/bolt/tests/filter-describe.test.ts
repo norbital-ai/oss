@@ -8,21 +8,21 @@ import type { Arm, Authority, ModelAuthority } from '../src/engine/contracts.ts'
 import { Deferred, Effect, Fiber, Layer, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { Ai, Logs } from '../src/engine/ports.ts';
-import { off } from '../src/facilities/index.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
-import { DbError } from '../src/engine/errors.ts';
+import {
+	DbError,
+	type DecisionAnswer,
+	type DecisionRequest,
+	off,
+	type System1Port
+} from '@norbital-ai/host-api';
 import { DecisionsLive } from '../src/engine/decision.ts';
 import type { Pred } from '@norbital-ai/store';
 import { viewOutput } from '../src/engine/access/authority.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import type {
-	DecisionAnswer,
-	DecisionQuestion,
-	System1Port,
-	System1Request
-} from '../src/engine/decision.ts';
+import type { DecisionQuestion } from '../src/engine/decision.ts';
 import { filter_describe } from '../src/engine/filter-describe/index.ts';
 import { lower_read, read_engine } from '../src/engine/query/engine.ts';
 import { materialize } from '../src/engine/runs/time.ts';
@@ -267,9 +267,9 @@ describe('the real read boundary strictly validates the query shape the planner 
 			yield* refusesQuery({ scheduled_on: { eq: { var: 'now' } } }, /ISO date/);
 			yield* refusesQuery({ scheduled_on: { eq: { var: 'today - hours(1)' } } }, /whole days/);
 			yield* refusesQuery({ scheduled_on: { eq: { var: 'tomorrow' } } }, /Unknown variable/);
-			yield* refusesQuery({ scheduled_on: { eq: { var: 'requestor.email' } } }, /not a date/);
+			yield* refusesQuery({ scheduled_on: { eq: { var: 'actor.email' } } }, /not a date/);
 			yield* refusesQuery({ scheduled_on: { eq: { clock: 'today' } } });
-			yield* acceptsQuery({ title: { eq: { var: 'requestor.id' } } });
+			yield* acceptsQuery({ title: { eq: { var: 'actor.id' } } });
 			// the store never carries a time variable: one that reaches the boundary unmaterialized is refused
 			yield* refusesQuery({ scheduled_on: { gte: { var: 'today - days(7)' } } }, /materialize time before reading/, undefined, caller(), true);
 		})
@@ -296,7 +296,7 @@ describe('the real read boundary strictly validates the query shape the planner 
 });
 
 /** A scripted System 1: `pick` names the chosen option per question; others take their first option (or false). */
-function system1(pick: (r: System1Request) => { readonly [id: string]: string | boolean }) {
+function system1(pick: (r: DecisionRequest) => { readonly [id: string]: string | boolean }) {
 	const answer = (q: DecisionQuestion, v: string | boolean | undefined): DecisionAnswer => {
 		if (q.type === 'noul') return { type: 'noul', noul: v === true ? 0.9 : 0.1 };
 		const choice =
@@ -305,7 +305,7 @@ function system1(pick: (r: System1Request) => { readonly [id: string]: string | 
 			? { type: 'choice', choice, confidence: 0.9, probabilities: { [choice]: 0.9 } }
 			: { type: 'score', score: 0, level: 0, confidence: 0.9, probabilities: {}, legend: {} };
 	};
-	const port: System1Port & { requests: System1Request[] } = {
+	const port: System1Port & { requests: DecisionRequest[] } = {
 		requests: [],
 		async ask(r) {
 			port.requests.push(r);
@@ -365,14 +365,14 @@ const bindings = {
 const choices = (q: DecisionQuestion | undefined) =>
 	q?.type === 'choice' ? Object.keys(q.criteria) : [];
 /** The field a `f1`-shaped question is about: the state's Nth field. */
-const labelOf = (r: System1Request, id: string) =>
+const labelOf = (r: DecisionRequest, id: string) =>
 	present(
 		Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ label: Schema.String })))(
 			Schema.decodeUnknownSync(Schema.Struct({ fields: Schema.Json }))(r.state).fields
 		)[Number(id.slice(1)) - 1]
 	).label;
 /** Every field label the one request asked about, in the order it asked. */
-const askedFields = (r: System1Request) =>
+const askedFields = (r: DecisionRequest) =>
 	Object.keys(r.questions)
 		.filter((id) => /^f\d+$/.test(id))
 		.map((id) => labelOf(r, id));
@@ -385,7 +385,7 @@ type Plan = {
 };
 const byField =
 	(plan: Plan, extra: { [id: string]: string | boolean } = {}) =>
-	(r: System1Request) => {
+	(r: DecisionRequest) => {
 		const pick: { [id: string]: string | boolean } = { ...extra };
 		for (const [id, q] of Object.entries(r.questions)) {
 			if (q.type !== 'choice' || !/^f\d+$/.test(id)) continue;

@@ -38,10 +38,12 @@
 		confirm,
 		validate,
 		children,
+		editors,
+		viewers,
 		actions,
-		class: className
+		size = 'fill'
 	}: Pick<FormProps, 'ctx' | 'sections' | 'submit' | 'readonly' | 'disabled' | 'on_outcome' |
-		'confirm' | 'validate' | 'children' | 'actions' | 'class'> & {
+		'confirm' | 'validate' | 'children' | 'editors' | 'viewers' | 'actions' | 'size'> & {
 		spec: FormSpec;
 		record: Row | null;
 		values: Row;
@@ -192,7 +194,7 @@
 <svelte:window onbeforeunload={beforeUnload} />
 
 <form
-	class={['flex h-full min-h-0 min-w-0 flex-col', className]}
+	class={['flex min-w-0 flex-col', size === 'fill' ? 'h-full min-h-0' : 'shrink-0']}
 	onsubmit={send}
 	novalidate
 	aria-busy={form.pending}
@@ -221,13 +223,13 @@
 						>
 							<!-- short fields flow across the width; a structured or long one spans its row (Field) -->
 							<Grid minimum="card"
-								>{#each g.names as name (name)}<Field {ctx} {name} />{/each}</Grid
+								>{#each g.names as name (name)}<Field {ctx} {name} editor={editors?.[name]} view={viewers?.[name]} />{/each}</Grid
 							>
 						</Section>
 					{/each}
 				{:else}
 					<Grid minimum="card"
-						>{#each visible as name (name)}<Field {ctx} {name} />{/each}</Grid
+						>{#each visible as name (name)}<Field {ctx} {name} editor={editors?.[name]} view={viewers?.[name]} />{/each}</Grid
 					>
 				{/if}
 				{#if form.notice}

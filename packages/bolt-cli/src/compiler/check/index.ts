@@ -21,9 +21,9 @@ import {
 	decode_seed,
 	type SeedPack
 } from '@norbital-ai/bolt/engine';
-import { PRELUDE, type CheckDiagnostic } from '@norbital-ai/bolt/tooling';
-import { module_script, type ImportDeclaration } from '@norbital-ai/bolt/node';
-import type { GuestProgram } from '@norbital-ai/bolt/engine';
+import type { CheckDiagnostic, GuestProgram } from '@norbital-ai/host-api';
+import { PRELUDE } from '@norbital-ai/bolt/tooling';
+import { module_script, type ImportDeclaration } from '@norbital-ai/host-api/node';
 import type { EvaluateInput } from './evaluate-worker.ts';
 import { discover, type Discovered } from '../discover.ts';
 import { BOLT, EXT } from '../bolt.ts';
@@ -31,7 +31,7 @@ import { load, manifestErrors } from '../load.ts';
 import { namesIndex, writeNames, writeTypeSetup } from '../names.ts';
 import { seedPack } from '../seed.ts';
 import { prepare_migrations } from '../migrations.ts';
-export type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
+import { sourceRules } from './source.ts';
 
 export type Stage =
 	'discover' | 'bundle' | 'evaluate' | 'manifest' | 'names' | 'seed' | 'schema' | 'rules';
@@ -92,7 +92,7 @@ const front = Effect.fn('bolt.front')(function* (
 	stage('discover');
 	const { files, errors: layout } = yield* discover(root);
 	errors.push(...layout);
-	yield* writeTypeSetup(root, files);
+	yield* writeTypeSetup(root);
 
 	stage('bundle');
 	const code = files.filter((f) => f.path.endsWith('.ts'));
@@ -253,6 +253,12 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 		const where = (role: string, name: string) =>
 			files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
 		errors.push(...checkRules(m, bodies, where));
+		const src = join(root, 'src'),
+			sources = new Map<string, string>();
+		for (const entry of yield* fs.readDirectory(src, { recursive: true }))
+			if (/\.(ts|svelte)$/.test(entry) && !entry.split(sep).some((s) => s.startsWith('.') || s === 'node_modules'))
+				sources.set(`src/${entry.split(sep).join('/')}`, yield* fs.readFileString(join(src, entry)));
+		errors.push(...sourceRules(m, sources, files));
 	}
 	if (errors.length === 0) {
 		const runtime = yield* bundle(root, code, errors, true, bodies.models);
@@ -273,6 +279,17 @@ export const compile = (dir: string, options: CompilerOptions = {}) =>
  */
 const VERDICTS = `import { attached_verdict as __attached_verdict } from ${JSON.stringify(join(BOLT, 'decl', `body${EXT}`))};
 const __verdicts = (p) => ({ grants: Object.fromEntries(Object.entries(p?.grants ?? {}).map(([model, g]) => [model, Object.fromEntries(['create', 'update', 'delete'].flatMap((op) => typeof g?.[op]?.verdict === 'function' ? [[op, { verdict: __attached_verdict(g[op].verdict, 1) }]] : []))])) });`;
+/** Merges each `+<sync>.sync.ts` into the model beside it, in both entries, before anything reads the model. */
+const WITH_SYNCS = `import { with_syncs as __withSyncs } from ${JSON.stringify(join(BOLT, 'decl', 'runtime', `sync${EXT}`))};`;
+/** A model's binding with the sync files beside it merged in (`model.<model>.spec.syncs`, `….bodies.syncs`). */
+function withSyncs(code: readonly Discovered[], model: Discovered, binding: string): string {
+	const syncs = code.flatMap((f, i) =>
+		f.role === 'sync' && dirname(f.path) === dirname(model.path)
+			? [`${JSON.stringify(f.name.slice(f.name.indexOf('.') + 1))}: r${i}`]
+			: []
+	);
+	return syncs.length === 0 ? binding : `__withSyncs(${binding}, { ${syncs.join(', ')} })`;
+}
 /**
  * The callback paths selected by the runner (the Guest ABI), retaining every role module's original initialization order:
  * a model's bodies under `model.<model>.bodies`, a policy's write checks, an automation's `body`, a custom
@@ -286,14 +303,18 @@ function runtimeEntry(
 	const groups = new Map<string, string[]>();
 	const callbackModels = new Set(models);
 	const imports = code.map((file, index) => {
-		const binding = `r${index}`;
+		const binding = `r${index}`,
+			path = JSON.stringify(join(root, file.path));
 		let group: string = file.role,
 			value: string | undefined;
 		switch (file.role) {
 			case 'model':
 				group = 'model';
-				if (callbackModels.has(file.name)) value = `{ bodies: ${binding}.bodies }`;
+				if (callbackModels.has(file.name))
+					value = `{ bodies: ${withSyncs(code, file, binding)}.bodies }`;
 				break;
+			case 'sync':
+				return `import ${binding} from ${path};`;
 			case 'policy':
 				value = `__verdicts(${binding})`;
 				break;
@@ -307,7 +328,6 @@ function runtimeEntry(
 				value = `{ bodies: ${binding}.bodies }`;
 				break;
 		}
-		const path = JSON.stringify(join(root, file.path));
 		if (value === undefined) return `import ${path};`;
 		const entries = groups.get(group) ?? [];
 		entries.push(`${JSON.stringify(file.name)}: ${value}`);
@@ -316,6 +336,7 @@ function runtimeEntry(
 	});
 	return [
 		...imports,
+		...(code.some((f) => f.role === 'sync') ? [WITH_SYNCS] : []),
 		...(groups.has('policy') ? [VERDICTS] : []),
 		`export default { ${[...groups].map(([group, entries]) => `${group}: { ${entries.join(', ')} }`).join(', ')} };`
 	].join('\n');
@@ -335,7 +356,8 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 		? runtimeEntry(root, code, models)
 		: [
 				...code.map((f, i) => `import r${i} from ${JSON.stringify(join(root, f.path))};`),
-				`export default { ${[...byRole].map(([role, fs]) => `${role}: { ${fs.map((f) => `${JSON.stringify(f.name)}: r${code.indexOf(f)}`).join(', ')} }`).join(', ')} };`
+				...(byRole.has('sync') ? [WITH_SYNCS] : []),
+				`export default { ${[...byRole].map(([role, fs]) => `${role}: { ${fs.map((f) => `${JSON.stringify(f.name)}: ${role === 'model' ? withSyncs(code, f, `r${code.indexOf(f)}`) : `r${code.indexOf(f)}`}`).join(', ')} }`).join(', ')} };`
 			].join('\n');
 
 	const assets: Record<string, Uint8Array> = {};
@@ -346,13 +368,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 				logLevel: 'silent',
 				root,
 				resolve: {
-					alias: [
-						{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX },
-						{
-							find: /^@norbital-ai\/bolt\/declarations$/,
-							replacement: join(BOLT, `declarations${EXT}`)
-						}
-					]
+					alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX }]
 				},
 				plugins: [
 					{
@@ -471,8 +487,8 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 const FREEZE = `{ const T = ${FROZEN}, D = Date;
 	globalThis.Date = class extends D { constructor(...a) { if (a.length === 0) super(T); else super(...a); } static now() { return T; } };
 	let s = 0x2545f491; Math.random = () => { s = s + 0x6d2b79f5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }`;
-// Declarations are data (functions drop out of JSON). A model's bodies become `true` markers in its literal (`split_model`
-// reads them) and a policy's verdicts `verdict: true`; which write callbacks and automation bodies exist is
+// Declarations are data (functions drop out of JSON). A model's bodies (its merged syncs' included) become `true` markers in
+// its literal (`split_model` reads them), a sync keeps only its declared names, and a policy's verdicts `verdict: true`; which write callbacks and automation bodies exist is
 // read beside them. A ctx-bearing body must be a generator.
 const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transforms: [], automations: [], models: [] };
 	const generator = (body) => {
@@ -493,6 +509,7 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 		mark(m?.spec);
 		d.model[n] = { name: m?.name, spec: m?.spec };
 	}
+	for (const [n, s] of Object.entries(d.sync ?? {})) d.sync[n] = { model: s?.model, name: s?.name };
 	for (const [n, a] of Object.entries(d.automation ?? {})) { generator(a?.body); if (typeof a?.body === 'function') bodies.automations.push(n); }
 	for (const i of Object.values(d.integration_definition ?? {})) { generator(i?.bodies?.test); if (typeof i?.spec?.test === 'function') i.spec.test = true; }
 	for (const f of Object.values(d.custom_field ?? {})) if (typeof f?.check === 'function' && f.spec) f.spec.check = true; // the write path calls the guest's validate

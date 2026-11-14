@@ -30,7 +30,7 @@ sits under the table there. -->
 		AUDIT_STATUSES,
 		type AuditQuery,
 		type AuditSummary
-	} from '../../protocol/audit.ts';
+	} from '@norbital-ai/host-api';
 	import type { ShellApi } from '../api-types.ts';
 	import AutoRefresh from '../AutoRefresh.svelte';
 	import DetailSheet from '../DetailSheet.svelte';

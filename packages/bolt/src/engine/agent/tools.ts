@@ -1,12 +1,14 @@
 import { actor_ref } from '../access/actor.ts';
 import { EFFECT_VERBS } from '../../decl/model.ts';
 import { decode_acts } from '../callables/parse.ts';
-// The agent catalogue: `read` (a layer map over what the actor may read), `act` (guarded writes, approval decisions,
-// automation starts), `sync` (native refresh and file transfer), `describe_workspace`, `page` (the person's open tab), `read_file` (files, ingests and clipped
-// results), `run_js`, the plan and checklist tools, skills, `history`, `runs`, `logs`, `geocode`, `read_messages` on envoy
-// turns, the workspace source tools for staff, `document`, `download`, `subagent` and `wait` under delegation, MCP tools a held
-// policy names, and host tools (Studio, browser, personal skills) on in-app staff turns. Each definition owns its
-// schema and decoder; the step binds its handler under the current actor.
+// The agent catalogue: `read` (a layer map over what the actor may read, with runs, approvals, logs and the audit trail as
+// ledger roots), `act` (guarded writes, approval decisions, automation starts), `sync` (native refresh and file transfer),
+// `describe_workspace`, `page` (the person's open tab), `read_file`, `view_image` and `read_output` (files, ingests and
+// clipped results), `run_js`, the plan tool, skills, `history`, `geocode`, `read_messages` on channel turns, the
+// workspace source tools for staff, `document`, `download`, the sub-agent tools and `wait` under delegation, MCP tools a
+// held policy names, and host tools (Studio, browser, personal skills) on in-app staff turns. A conversation's tool list is
+// fixed by its audience (`fixedTools`); each definition owns its schema and decoder, and the step binds its handler under
+// the current actor.
 // A tool's text is static across workspaces and turns so providers cache the shared prefix: it says what the tool does, in a
 // line or two, and names no model, path or sample; what an actor holds is `describe_workspace`'s, and a wrong name's error
 // lists the right ones. The agent has no authority of its own: every call runs as the actor, so a refusal is
@@ -15,7 +17,6 @@ import { describe_kind, kind_label, kind_signature } from '@norbital-ai/store/ki
 import { Validator } from '@cfworker/json-schema';
 import {
 	Clock,
-	Context,
 	Deferred,
 	Effect,
 	FiberMap,
@@ -30,7 +31,28 @@ import {
 import * as EffectArray from 'effect/Array';
 import { Images, type Geo, type LogsShape } from '../ports.ts';
 import { imageCrop, image_jpeg } from '../files/image.ts';
-import { Port, type PortFailure } from '../port.ts';
+import {
+	AuditQuery,
+	CONVERT_MIME,
+	CONVERT_TARGETS,
+	type Downloaded,
+	type HostTool,
+	type HostToolContext,
+	type ImageCrop,
+	type Ingested,
+	model_schema,
+	PAPER_SIZES,
+	Port,
+	type PortFailure,
+	REFERENCE,
+	ReferenceIndex,
+	type SearchAnswer,
+	SKILL_FILE,
+	type SearchRequest,
+	type StudioRole,
+	type ToolBehavior,
+	type WorkspacePort
+} from '@norbital-ai/host-api';
 import { confirmed_send } from '../conversations/status.ts';
 import type { EngineError } from '../errors.ts';
 import { RUN_VIEW_COLUMNS, RunViewRow, run_view, visible_run_names } from '../runs/rows.ts';
@@ -41,27 +63,16 @@ import { toBase64 } from '../crypto.ts';
 import { sha256_hex } from '@norbital-ai/store';
 import { FOLDER_NOTES, role_at } from '../../decl/layout.ts';
 import type { Json } from '../../decl/values.ts';
-import { PAPER_SIZES } from '../../decl/runtime/facilities.ts';
-import {
-	CONVERT_MIME,
-	CONVERT_TARGETS,
-	type Authority,
-	type Bindings,
-	type Downloaded,
-	type Ingested,
-	type ImageCrop,
-	type Outcome
-} from '../contracts.ts';
+import { type Authority, type Bindings, type Outcome } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { SYSTEM_UI, SystemUiRequest, systemUiPath } from '../../protocol/system-ui.ts';
-import type { AgentQuestion, ToolBehavior } from '../../protocol/schema.ts';
-import { exposed, outputsOf, readsAny, requestorOf, writable_columns } from '../access/authority.ts';
+import type { AgentQuestion } from '../../protocol/schema.ts';
+import { exposed, outputsOf, readsAny, actorVarsOf, writable_columns } from '../access/authority.ts';
 import {
 	LayerRequestSchema,
 	type ReadRequestJson
 } from '../../protocol/read-request.ts';
 import type { AgentEngine as Engine } from './index.ts';
-import { AuditQuery } from '../../protocol/audit.ts';
 import { lower_read, readableBy } from '../query/engine.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
 import { materializeEach } from '../runs/time.ts';
@@ -76,7 +87,6 @@ import {
 	shortId
 } from './context.ts';
 import { MODEL_FILES, ToolAnswer, type InferTool } from './ai.ts';
-import { model_schema } from './json-schema.ts';
 import {
 	cached,
 	dataLine,
@@ -101,62 +111,22 @@ import {
 import { can_open, nav, navigation_paths } from '../../shell/nav.ts';
 import { InvitationInput, inviteMany } from '../identity/members.ts';
 export { ToolAnswer } from './ai.ts';
-import { REFERENCE, ReferenceIndex, RUN_JS, runFile, runJs } from './run-js.ts';
-import { layered, layers, SKILL_FILE, type EngineManifest, type SkillSpec } from '../manifest.ts';
+import { RUN_JS, runFile, runJs } from './run-js.ts';
+import { layered, layers, type EngineManifest, type SkillSpec } from '../manifest.ts';
 import { row as systemRow } from '../system/rows.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { isList, isObj } from './draft.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
+import { Chain } from '../write/sql.ts';
 import type { McpSessions, McpTool } from './mcp.ts';
 import {
 	ambient,
 	authorOf,
 	type ConversationRow,
-	type Goal,
 	type MessageRow,
 	type Receipt
 } from './schema.ts';
 import { routesApproval } from '../approvals/lock.ts';
-import type { StudioRole } from '../../shell/studio/model.ts';
-export type { StudioRole };
-/** What a host tool learns of its call: the person (a Studio draft is theirs), the conversation (its attachments), the key. */
-export type HostToolContext = {
-	actor: Authority['actor'];
-	conversation: string;
-	/** The agent's mark when this turn runs as one (`Authority.agent`): a browser page opened for it is the agent's. */
-	agent?: Authority['agent'];
-	turn: string;
-	call_id: string;
-	/** The person's latest message, when the turn has one (a search host ranks by it). */
-	question?: string;
-	/** An image the model sees on its next step (a screenshot). */
-	attach(file: { mime: string; bytes: Uint8Array }): void;
-	/** A file the host stored (a download), recorded as the person's and offered on the step; the model sees only its reference. */
-	keep?(file: Downloaded): void;
-	/** The conversation files the call named in `files`, by name, for a `files` tool. */
-	files?: readonly (readonly [name: string, bytes: Uint8Array])[];
-};
-
-/**
- * A host capability (`capabilities.tools`): offered to staff members in the app only; `read_only` ones also while planning.
- * An administrator holds every one, another member those their policies grant, and every staff member a read-only
- * `source` tool (it reads the workspace's own source, never a secret or a host file).
- */
-export type HostTool = {
-	name: string;
-	description: string;
-	input: Json;
-	/** Declared once here; the engine does not infer behavior from the operation's name. */
-	readonly behavior: ToolBehavior;
-	read_only?: boolean;
-	source?: true;
-	studio?: StudioRole;
-	/** A call's wall when it is past the usual host call's. */
-	wall_ms?: number;
-	/** The call's `files: [{ id }]` are read for it, as `run_js`'s are. */
-	files?: true;
-
-	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
-};
 /** A skill the agent may read and whose scripts it may run: its tree's listing, and each file's bytes by its path. */
 export type Skill = SkillSpec & {
 	readonly read: (path: string) => Effect.Effect<Uint8Array, EngineError | PortFailure>;
@@ -172,33 +142,7 @@ export type AttachmentPort = {
 		EngineError | PortFailure
 	>;
 };
-/** A `workspace_search` as the host's ripgrep answers it, its hits in path order. */
-export type SearchRequest = {
-	readonly pattern: string;
-	readonly path?: string;
-	readonly include?: string;
-	/** Only the files holding a match, one hit each. */
-	readonly files?: boolean;
-	readonly literal?: boolean;
-	readonly case_sensitive?: boolean;
-	readonly limit?: number;
-};
-export type SearchAnswer =
-	| {
-			readonly hits: readonly {
-				readonly path: string;
-				readonly line: number;
-				readonly text: string;
-			}[];
-			readonly truncated: boolean;
-	  }
-	| { readonly error: string };
 export type SourceSearch = (request: SearchRequest) => Promise<SearchAnswer | undefined>;
-/** The released workspace as built (`artifact/workspace/`): its source files. Every host binds it. */
-export type WorkspacePort = {
-	files(): Promise<readonly string[]>;
-	read(path: string): Promise<string | null>;
-};
 /** A file past this is read for its text alone: a long tender's scans would not fit one answer. */
 export const TEXT_FIRST_BYTES = 16 * 1024 * 1024;
 /** Long work: a host call past 30 s (at most 10 minutes), an ingest. */
@@ -274,7 +218,7 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 						const line =
 							o.alert?.(id, value) ??
 							(failed !== undefined
-								? `[job ${id} failed] ${label}: ${failed}; tell the person`
+								? `[job ${id} failed] ${label}: ${failed}`
 								: (o.done?.(id, value) ??
 									`[job ${id} done] ${label}: ${JSON.stringify(bounded(value).value)}`));
 						if (!closed) {
@@ -355,7 +299,7 @@ export type ToolContext = {
 	/** Envoy turns have no confirmation card: `confirm` executes directly there. */
 	inApp: boolean;
 	delegation: boolean;
-	/** A sub-agent's turn: no plan of its own and no sub-agents (one level deep); it keeps its own checklist. */
+	/** A sub-agent's turn: no plan of its own and no sub-agents (one level deep). */
 	child: boolean;
 	mcp: McpSessions;
 	/** The host's runtime log (`logs`, `automation_runs { id }`). */
@@ -373,8 +317,13 @@ export type ToolContext = {
 	skills: { readonly [name: string]: Skill };
 	agents: readonly string[];
 	receipts: Receipt[];
-	/** What this turn has read (skills, sections, files), each with how the closing note names it: already above. */
-	read: Map<string, string>;
+	/** Whom the conversation serves: its fixed tool list. */
+	audience: Audience;
+	/** `view_image` crops this turn, by document. */
+	zooms: Map<string, number>;
+	/** The ingests this engine is running: a restart leaves none, so one marked running elsewhere was cut short. */
+	reading: Set<string>;
+	validators: Validators;
 	/** The host's ingest port (plan 12, Norbital Convert): a file as HTML and its images. Absent: no document ingests. */
 	ingest?:
 		| ((
@@ -392,16 +341,10 @@ export type ToolContext = {
 	jobs: Jobs;
 	inlineMs?: number | undefined;
 	setPlan(body: string): Effect.Effect<void, EngineError>;
-	setGoals(goals: Goal[]): Effect.Effect<void, EngineError>;
 	/** A sub-agent's question for its delegating agent: its turn ends on it, and the delegating agent's `message` resumes it. */
 	ask(question: AgentQuestion): boolean;
-	/** An instance's history: `unread` = ambient rows not yet read, oldest first, marked read by `key`; else newest first before `before`. */
-	messages(o: {
-		unread: boolean;
-		limit: number;
-		before?: number;
-		key: string;
-	}): Effect.Effect<readonly MessageRow[], EngineError>;
+	/** An instance's history, newest first before `before`. */
+	messages(o: { limit: number; before?: number }): Effect.Effect<readonly MessageRow[], EngineError>;
 	/** The whole output of a clipped call; `null` names the latest clipped call. */
 	output(callId: string | null): Effect.Effect<Json | undefined, EngineError>;
 	history(query: string, scope: 'this' | 'mine', limit: number): Effect.Effect<Json, EngineError>;
@@ -414,7 +357,6 @@ export type ToolContext = {
 			done?: string,
 			format?: string
 		): Effect.Effect<Json, EngineError>;
-		list(): Effect.Effect<Json, EngineError>;
 		read(conversation: string): Effect.Effect<Json, EngineError>;
 		message(conversation: string, text: string): Effect.Effect<Json, EngineError>;
 		stop(conversation: string): Effect.Effect<Json, EngineError>;
@@ -439,9 +381,14 @@ type BoundTool = {
 };
 /** This step's offered tools and their decoded calls, run as the current actor. */
 export type Catalogue = {
-	readonly tools: readonly AgentTool[];
+	/** The audience's fixed tools, the host's, and the workspace's MCP tools as they are now. */
+	readonly fixed: readonly AgentTool[];
+	readonly host: readonly AgentTool[];
+	readonly mcp: readonly AgentTool[];
+	/** What this step may call. */
 	readonly available: readonly AgentTool[];
-	readonly discovery: string;
+	/** The catalogue note's lines by key (`catalogueNote`): skills, models, automations, syncs and MCP tools. */
+	readonly index: CatalogueIndex;
 	readonly presentation: (name: string, input: Json) => ToolPresentation;
 	/** A refused input (closed: an unknown key is a wrong call) or a failure is the model's answer, never the turn's. */
 	readonly run: (name: string, input: unknown, callId: string) => Effect.Effect<ToolAnswer>;
@@ -484,7 +431,7 @@ export const WriteInput = Schema.Struct({
 const ok = (result: Json): ToolAnswer => ({ result });
 /**
  * A document's text as one answer, whole up to the result bound (never clipped cell-wise like a row's field): past it,
- * the start and a pointer, the whole kept for `read_file { call }`.
+ * the start and a pointer, the whole kept for `read_output`.
  */
 /** A page as a model reads it: whole it arrives too small for digits, so its four overlapping quarters come with it. */
 const TILES = [
@@ -499,13 +446,6 @@ const TILED_PAGES = 3;
 const ZOOMS = 3;
 /** A write of at most this many rows answers them whole; a larger batch answers the columns it wrote. */
 const WHOLE_ROWS = 5;
-/** The reads this generation is running: an engine holds them, so a restart leaves none and tells what it cut short. */
-const READING = new Set<string>();
-/** A scan is read by eye: the guard against values made up or slipped between columns. */
-const SCAN_NOTE =
-	'read each value in an image from the image itself, column by column. Ask the person about any value you cannot read for certain.';
-/** A script's own call: what it reads reaches its code, not the conversation, so "already above" would be false. */
-const Scripted = Context.Reference<boolean>('bolt/Scripted', { defaultValue: () => false });
 /** What `bolt build` proves its history with: large, and nothing in them is the author's to read. */
 const GENERATED = /^migrations\/(?:snapshot|migrations\.lock|physical)\.json$/;
 /** A search hit's line: enough to place it; workspace_read shows the rest. */
@@ -539,8 +479,8 @@ const clipJson =
 	(v, bytes) =>
 		size(v) <= bytes
 			? v
-			: `${JSON.stringify(v).slice(0, bytes)}... [clipped, ${size(v)} bytes; read_file { call: '${call}' } reads it whole]`;
-/** A view with its values clipped (bounded as any answer), the whole view kept for `read_file { call }`. */
+			: `${JSON.stringify(v).slice(0, bytes)}... [clipped, ${size(v)} bytes; read_output { call: '${call}' } reads it whole]`;
+/** A view with its values clipped (bounded as any answer), the whole view kept for `read_output`. */
 const clippedView = (view: (clip: Clip) => Json, call: string): ToolAnswer => ({
 	result: bound(view(clipJson(call))),
 	full: view((v) => v),
@@ -1148,8 +1088,8 @@ const attach = (files: OpenedFile[], file: OpenedFile): 'shown' | 'none' => {
 };
 /** What the model is told of a file it opened. */
 const ATTACHED = {
-	shown: 'shown on your next step only: note there every value you need from it, then work from your notes',
-	none: 'not shown, too many images at once: read it again on your next step'
+	shown: 'shown on your next step only',
+	none: 'not shown: too many images at once'
 } as const;
 const guard = (
 	work: Effect.Effect<ToolAnswer, EngineError | PortFailure>
@@ -1326,11 +1266,6 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 					)
 				})
 	};
-}
-/** Every root the actor reads, by name: the prompt's map. `undefined` when nothing is readable. */
-export function workspaceSchema(m: EngineManifest, a: Authority): string | undefined {
-	const roots = readPaths(m, a).filter((path) => !path.includes('.'));
-	return roots.length === 0 ? undefined : `# Models you read\n${roots.join(', ')}`;
 }
 /** An automation with its input, so the first start is the right one (an omitted input runs it over everything). */
 const automationSignature = (m: EngineManifest, name: string) =>
@@ -1511,7 +1446,7 @@ const ReadInput = Schema.Struct({ request: Schema.Record(Schema.String, ReadNode
 /**
  * `read`: one read request, a layer map over the models and declared layers the actor may read, answered in
  * one engine read as the actor and bounded by the tool-result budget (a lone root's page keeps whole rows); `undefined` when nothing is
- * readable. What the bound cut stays readable with `read_file { call }`.
+ * readable. What the bound cut stays readable with `read_output`.
  */
 export function readTool(x: ReadToolContext) {
 	const e = x.engine,
@@ -1521,7 +1456,7 @@ export function readTool(x: ReadToolContext) {
 	const materialize = (node: Json): Json => {
 		if (!isObj(node)) return node;
 		return Object.fromEntries(Object.entries<Json>(node).map(([key, value]) => [key,
-			key === 'where' && isObj(value) ? materializeEach(value, { ...x.bindings, requestor: requestorOf(a) })
+			key === 'where' && isObj(value) ? materializeEach(value, { ...x.bindings, actor: actorVarsOf(a) })
 				: Object.hasOwn(ReadOptions.fields, key) ? value : materialize(value)
 		]));
 	};
@@ -1537,13 +1472,16 @@ export function readTool(x: ReadToolContext) {
 			Effect.flatMap((materialized) => lower_read(e.manifest, 'query', [materialized])),
 			Effect.flatMap(readAs(x))
 		);
-	const run = Effect.fn('AgentTool.read')(function* (request: ReadRequestJson) {
+	const run = Effect.fn('AgentTool.read')(function* (
+		request: ReadRequestJson,
+		enrich: (full: Json) => Effect.Effect<Json, EngineError> = Effect.succeed
+	) {
 		const named = Object.keys(request).filter((path) => !path.includes('.'));
 		const single = named.length === 1 ? named[0] : undefined;
 		const pageOf = (v: Json): Json => (single !== undefined && isObj(v) ? (v[single] ?? null) : v);
 		const wrap = (v: Json): Json => (single === undefined ? v : { [single]: v });
 		return yield* Effect.gen(function* () {
-			const full = yield* answer(request),
+			const full = yield* Effect.flatMap(answer(request), enrich),
 				shown = bounded(pageOf(full));
 			// rows the bound cut lie before the page's cursor: what it left out is read_file's, not the next page's
 			return {
@@ -1577,25 +1515,20 @@ export function readTool(x: ReadToolContext) {
 										})
 									)
 								).pipe(Effect.map((each) => each.flat()));
-					const error = refusals.join('\n');
-					return {
-						result: {
-							error,
-							hint: error.includes("unknown operator 'contains'")
-								? 'Text takes like: "%value%"; contains is only for a period or a JSON field.'
-								: 'describe_workspace { names } gives its fields. If the data cannot answer, say so.'
-						}
-					};
+					return { result: { error: refusals.join('\n') } };
 				})
 			)
 		);
 	});
 	return {
 		tool: recordsTool,
-		run: ({ request }: typeof ReadInput.Type): Effect.Effect<ToolAnswer> => {
+		run: (
+			{ request }: typeof ReadInput.Type,
+			enrich?: (full: Json) => Effect.Effect<Json, EngineError>
+		): Effect.Effect<ToolAnswer> => {
 			const unknown = Object.keys(request).find((path) => !paths.includes(path));
 			return unknown === undefined
-				? guard(run(request))
+				? guard(run(request, enrich))
 				: Effect.succeed(
 						err(
 							`You read no '${unknown}'. ${unknown.includes('.') ? 'describe_workspace { names } lists its layers.' : `Models: ${paths.filter((p) => !p.includes('.')).join(', ')}`}`
@@ -1629,6 +1562,378 @@ export function readInferTool(x: ReadToolContext): InferTool | undefined {
 			)
 	};
 }
+const Instant = Schema.String.check(Schema.makeFilter((v) => !Number.isNaN(Date.parse(v)) || 'an ISO instant'));
+const Limit = Schema.Number.check(Schema.isInt());
+const RunsNode = Schema.Struct({
+	id: Schema.optionalKey(Schema.String),
+	automation: Schema.optionalKey(Schema.String),
+	status: Schema.optionalKey(Schema.Literals(['queued', 'running', 'waiting', 'succeeded', 'failed', 'cancelled', 'skipped'])),
+	cause: Schema.optionalKey(Schema.String),
+	since: Schema.optionalKey(Instant),
+	until: Schema.optionalKey(Instant),
+	limit: Schema.optionalKey(Limit),
+	after: Schema.optionalKey(Schema.String)
+});
+const LogsNode = Schema.Struct({
+	level: Schema.optionalKey(Schema.Literals(['info', 'warn', 'error'])),
+	text: Schema.optionalKey(Schema.String),
+	run: Schema.optionalKey(Schema.String),
+	automation: Schema.optionalKey(Schema.String),
+	conversation: Schema.optionalKey(Schema.String),
+	since: Schema.optionalKey(Schema.String),
+	until: Schema.optionalKey(Schema.String),
+	limit: Schema.optionalKey(Limit),
+	after: Schema.optionalKey(Schema.String)
+});
+const { actor_kind: _kind, invocation: _invocation, order: _order, after: _after, ...AUDIT_FILTERS } = AuditQuery.fields;
+const AuditNode = Schema.Struct({ id: Schema.optionalKey(Schema.String), after: Schema.optionalKey(Schema.NonEmptyString), ...AUDIT_FILTERS });
+const ApprovalsNode = Schema.Struct({
+	model: Schema.optionalKey(Schema.String),
+	ids: Schema.optionalKey(Schema.Array(Schema.String)),
+	all: Schema.optionalKey(Schema.Boolean)
+});
+const RunList = Schema.Struct({ ...RunViewRow.fields, finished: Schema.NullOr(Schema.String) });
+/** A ledger root's options decoded closed: a misplaced key is a wrong call. */
+const ledgerNode = <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S, root: string, node: unknown) =>
+	Schema.decodeUnknownEffect(schema, CLOSED)(node).pipe(
+		Effect.mapError((error) => BoltError.make('invalid_input', 'decode', `${root}: ${error.message}`, error))
+	);
+/**
+ * The workspace's ledgers as `read` roots, each `{ rows, next }` newest first, held as the tools that read them were:
+ * runs and approvals by members, the runtime log by administrators, the audit trail by staff administrators.
+ */
+function ledgerRoots(
+	x: ToolContext
+): { readonly [root: string]: (node: unknown, call: string) => Effect.Effect<ToolAnswer> } {
+	const e = x.engine,
+		a = x.authority;
+	if (a.actor.kind !== 'member') return {};
+	const member = a.actor;
+	const readable = readableBy(e.read, e.manifest, a, x.bindings);
+	const head = (row: typeof RunList.Type, view: NonNullable<ReturnType<typeof run_view>>) => ({
+		id: view.id,
+		automation: view.automation,
+		status: view.status === 'stopped' ? 'cancelled' : view.status,
+		cause: view.cause,
+		due: view.due_at,
+		started: view.started,
+		finished: row.finished,
+		attempt_count: view.attempt_count
+	});
+	const runs = Effect.fn('AgentTool.runs')(function* (node: unknown, call: string) {
+		const i = yield* ledgerNode(RunsNode, '$runs', node);
+		const after = Option.getOrNull(
+			Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String])))(i.after ?? '')
+		);
+		if (i.after !== undefined && after === null) return err('$runs: after is a next a page answered.');
+		const limit = Math.min(Math.max(1, i.limit ?? 20), 100),
+			name = i.automation;
+		const rows = yield* e.db.rows(RunList, {
+			text: `SELECT ${RUN_VIEW_COLUMNS}, finished_at::text AS finished
+	FROM sys_run
+	WHERE ($1 OR actor = $2 OR automation IN (SELECT jsonb_array_elements_text($3::jsonb)))
+		AND ($4::text IS NULL OR id = $4)
+		AND ($5::text IS NULL OR automation = $5) AND ($6::text IS NULL OR starts_with(automation, $6))
+		AND ($7::text IS NULL OR state = $7) AND ($8::text IS NULL OR cause = $8)
+		AND ($9::timestamptz IS NULL OR due_at >= $9::timestamptz) AND ($10::timestamptz IS NULL OR due_at < $10::timestamptz)
+		AND ($11::timestamptz IS NULL OR (due_at, id) < ($11::timestamptz, $12::text))
+	ORDER BY due_at DESC, id DESC LIMIT ${limit + 1}`,
+			params: [
+				a.admin,
+				actor_ref(member),
+				JSON.stringify(visible_run_names(a)),
+				i.id ?? null,
+				name === undefined || name.endsWith('*') ? null : name,
+				name !== undefined && name.endsWith('*') ? name.slice(0, -1) : null,
+				i.status === 'cancelled' ? 'stopped' : (i.status ?? null),
+				i.cause ?? null,
+				i.since ?? null,
+				i.until ?? null,
+				after?.[0] ?? null,
+				after?.[1] ?? null
+			]
+		});
+		const shown = rows.slice(0, limit).flatMap((row) => {
+			const view = run_view(a, row);
+			return view === null ? [] : [{ row, view }];
+		});
+		if (i.id !== undefined) {
+			const one = shown[0];
+			if (one === undefined) return err(`$runs: no automation run ${i.id} you may read.`);
+			const { row, view } = one;
+			// a store that cannot answer says so in place of the lines, never as an empty log
+			const lines =
+				view.input === undefined
+					? []
+					: yield* runLog(x.logs, view.id).pipe(
+							Effect.map((lines) =>
+								typeof lines === 'string'
+									? lines
+									: lines.map(({ id, at, severity, event, attributes }): Json => ({ id, at, severity, event, attributes }))
+							)
+						);
+			return clippedView(
+				(clip) => ({
+					rows: [
+						{
+							...head(row, view),
+							progress: clip(view.progress, 2048),
+							error: clip(view.error, 4096),
+							...(view.input === undefined
+								? {}
+								: {
+										input: clip(view.input, 4096),
+										result: clip(view.result ?? null, 4096),
+										attempts: EffectArray.isArray<typeof view.attempts>(view.attempts)
+											? view.attempts.map((attempt) => clip(attempt, 1024))
+											: clip(view.attempts ?? null, 4096),
+										logs: typeof lines === 'string' ? lines : lines.map((line) => clip(line, 1024))
+									})
+						}
+					],
+					next: null
+				}),
+				call
+			);
+		}
+		const last = rows.length > limit ? rows[limit - 1] : undefined;
+		return clippedView(
+			(clip) => ({
+				rows: shown.map(({ row, view }) => ({
+					...head(row, view),
+					error:
+						view.error === null
+							? null
+							: {
+									code: view.error.code,
+									...(view.error.message === undefined ? {} : { message: clip(view.error.message, 200) })
+								},
+					progress: clip(view.progress, 512)
+				})),
+				next: last === undefined ? null : JSON.stringify([last.due_at, last.id])
+			}),
+			call
+		);
+	});
+	const approvals = Effect.fn('AgentTool.approvals')(function* (node: unknown) {
+		const i = yield* ledgerNode(ApprovalsNode, '$approvals', node);
+		return ok({ rows: yield* e.approvals.list({ model: i.model, ids: i.ids, all: i.all }, a, readable), next: null });
+	});
+	const logs = Effect.fn('AgentTool.logs')(function* (node: unknown, call: string) {
+		const { level, after, limit: asked, ...rest } = yield* ledgerNode(LogsNode, '$logs', node);
+		const limit = Math.min(Math.max(1, asked ?? 50), 200);
+		const rows = yield* readLog(x.logs, {
+			...rest,
+			...(level === undefined ? {} : { min: level }),
+			...(after === undefined ? {} : { before: after }),
+			limit
+		});
+		const last = rows.length === limit ? rows.at(-1) : undefined;
+		return clippedView(
+			(clip) => ({
+				rows: rows.map((row) => ({
+					id: row.id,
+					at: row.at,
+					level: row.severity,
+					event: row.event,
+					invocation: row.invocation,
+					run: row.run,
+					conversation: row.conversation,
+					attributes: clip(row.attributes, 1024)
+				})),
+				next: last === undefined ? null : last.id
+			}),
+			call
+		);
+	});
+	const audit = e.audit;
+	const trail =
+		audit === undefined || !a.admin || member.external
+			? undefined
+			: Effect.fn('AgentTool.audit')(function* (node: unknown) {
+					const { id, ...query } = yield* ledgerNode(AuditNode, '$audit', node);
+					if (id === undefined) return ok(yield* audit.query({ order: 'newest', ...query }));
+					const event = yield* audit.detail(id);
+					return event === null ? err(`$audit: no event ${id}.`) : ok({ rows: [event], next: null });
+				});
+	const guarded =
+		(work: (node: unknown, call: string) => Effect.Effect<ToolAnswer, EngineError | PortFailure>) =>
+		(node: unknown, call: string) =>
+			guard(work(node, call));
+	return {
+		$runs: guarded(runs),
+		$approvals: guarded(approvals),
+		...(a.admin ? { $logs: guarded(logs) } : {}),
+		...(trail === undefined ? {} : { $audit: guarded(trail) })
+	};
+}
+/**
+ * A read's per-root extras on its whole answer: each root row's revisions (`$history`, through the record history read
+ * its output's history grant admits) and approval requests (`$approvals`, those its reader may see).
+ */
+const withExtras = Effect.fn('AgentTool.readExtras')(function* (
+	x: ToolContext,
+	full: Json,
+	extras: {
+		readonly [root: string]: { readonly history: boolean; readonly approvals: boolean; readonly output: string | undefined };
+	}
+) {
+	if (Object.keys(extras).length === 0) return full;
+	const e = x.engine,
+		a = x.authority,
+		readable = readableBy(e.read, e.manifest, a, x.bindings);
+	// the answer holds each root's page under its name
+	const pages: { readonly [root: string]: Json } = isObj(full) ? full : {};
+	const out: { [root: string]: Json } = {};
+	for (const [root, page] of Object.entries(pages)) {
+		const want = extras[root],
+			rows = isObj(page) && isList(page['rows']) ? page['rows'] : undefined;
+		if (want === undefined || rows === undefined || !isObj(page)) {
+			out[root] = page;
+			continue;
+		}
+		if (want.history && rows.length > HISTORY_ROWS)
+			return yield* BoltError.make('invalid_input', 'decode', `${root}: history reads at most ${HISTORY_ROWS} rows; set limit.`);
+		const ids = rows.flatMap((row) => (isObj(row) && typeof row['id'] === 'string' ? [row['id']] : []));
+		const requests = want.approvals ? yield* e.approvals.list({ model: root, records: ids, all: true }, a, readable) : [];
+		const histories = want.history
+			? yield* Effect.forEach(ids, (id) => recordHistory(x, root, id, want.output), { concurrency: 4 })
+			: [];
+		out[root] = {
+			...page,
+			rows: rows.map((row) => {
+				if (!isObj(row) || typeof row['id'] !== 'string') return row;
+				const id = row['id'];
+				return {
+					...row,
+					...(want.history ? { $history: histories[ids.indexOf(id)] ?? [] } : {}),
+					...(want.approvals
+						? { $approvals: requests.filter((request) => request.records.some((r) => r.model === root && r.id === id)) }
+						: {})
+				};
+			})
+		};
+	}
+	return out;
+});
+/** At most this many rows a read answers with their history: each row is one history read. */
+const HISTORY_ROWS = 20;
+/** One record's revisions, oldest first, each writer named as the person (name, else handle), never an account id. */
+const recordHistory = Effect.fn('AgentTool.recordHistory')(function* (
+	x: ToolContext,
+	model: string,
+	id: string,
+	output: string | undefined
+) {
+	const e = x.engine;
+	const ir = yield* lower_read(e.manifest, 'history', [model, id, output === undefined ? {} : { output }]);
+	const revisions = yield* Schema.decodeUnknownEffect(HistoryRevisions)(yield* readAs(x)(ir)).pipe(
+		Effect.mapError((error) => BoltError.make('internal', 'decode', error.message, error))
+	);
+	const people = [...new Set(revisions.flatMap((r) => (r.actor?.kind === 'member' ? [r.actor.id] : [])))];
+	const named =
+		people.length === 0
+			? []
+			: yield* e.db.rows(Schema.Struct({ id: Schema.String, label: Schema.NullOr(Schema.String) }), {
+					text: 'SELECT id::text AS id, coalesce(name, email, phone) AS label FROM sys_user WHERE id::text IN (SELECT jsonb_array_elements_text($1::jsonb))',
+					params: [JSON.stringify(people)]
+				});
+	const label = new Map(named.map((p) => [p.id, p.label]));
+	return revisions.map(({ actor, ...revision }): Json => ({
+		...revision,
+		by: actor === null ? null : actor.kind === 'member' ? (label.get(actor.id) ?? 'a member') : actor.kind
+	}));
+});
+/** The catalogue note's lines by key: `skill:`, `model:`, `automation:`, `sync:`, `act:` and `tool:` (an MCP tool). */
+export type CatalogueIndex = { readonly [key: string]: string };
+/** A model's fields in the note: past this many, the rest are describe_workspace's. */
+const NOTE_FIELDS = 30;
+/** What the actor holds that a merge can change, one line each: the catalogue note's index. */
+function catalogueIndex(
+	m: EngineManifest,
+	a: Authority,
+	skills: { readonly [name: string]: Skill },
+	mcp: readonly AgentTool[],
+	acts: ReadonlyMap<string, Spec>,
+	automations: readonly string[],
+	syncs: readonly { readonly model: string; readonly sync: string; readonly kind: string; readonly modes: readonly string[] }[]
+): CatalogueIndex {
+	const index: { [key: string]: string } = {};
+	for (const [name, skill] of Object.entries(skills)) index[`skill:${name}`] = `${name} — ${skillOf(skill.text).description}`;
+	const roots = readPaths(m, a).filter((path) => !path.includes('.'));
+	const writes = new Map<string, string[]>();
+	for (const callable of acts.keys()) {
+		const dot = callable.lastIndexOf('.'),
+			model = callable.slice(0, dot);
+		if (m.models[model] === undefined) index[`act:${callable}`] = callable;
+		else writes.set(model, [...(writes.get(model) ?? []), callable.slice(dot + 1)]);
+	}
+	for (const model of new Set([...roots, ...writes.keys()])) {
+		const outputs = roots.includes(model) ? readOutputs(m, a, model) : [],
+			fields = outputs[0] === undefined ? [] : Object.entries(fieldKinds(m, model, outputs[0]));
+		const shown = fields.slice(0, NOTE_FIELDS).map(([field, kind]) => `${field}: ${kind}`);
+		index[`model:${model}`] = [
+			`${model}(${shown.join(', ')}${fields.length > shown.length ? `, … ${fields.length - shown.length} more` : ''})`,
+			outputs.length > 1 ? ` reads ${outputs.join(', ')}` : '',
+			writes.has(model) ? ` writes ${writes.get(model)?.join(', ')}` : ''
+		].join('');
+	}
+	for (const name of automations) {
+		const spec = m.automations[name];
+		if (spec !== undefined) index[`automation:${name}`] = `automation.${automationSignature(m, name)} — ${before(spec.description, '\n').trim()}`;
+	}
+	for (const sync of syncs) index[`sync:${sync.model}.${sync.sync}`] = `${sync.model}.${sync.sync} (${sync.kind}: ${sync.modes.join(', ')})`;
+	for (const tool of mcp) index[`tool:${tool.name}`] = toolLine(tool);
+	return index;
+}
+/** A tool in one line: `name(arg: type, …) — what it does`. */
+const toolLine = (tool: Pick<AgentTool, 'name' | 'description' | 'input'>) => {
+	const properties = isObj(tool.input) && isObj(tool.input['properties']) ? tool.input['properties'] : {};
+	const required = isObj(tool.input) && isList(tool.input['required']) ? tool.input['required'] : [];
+	const args = Object.entries(properties).map(([arg, schema]) => {
+		const type = isObj(schema) && typeof schema['type'] === 'string' ? schema['type'] : 'json';
+		return `${arg}${required.includes(arg) ? '' : '?'}: ${type}`;
+	});
+	return `${tool.name}(${args.join(', ')}) — ${before(tool.description, '\n').trim()}`;
+};
+const SECTIONS = [
+	['skill:', 'Skills (skill reads one)'],
+	['model:', 'Models (fields; reads and writes beyond the default)'],
+	['act:', 'Also act'],
+	['automation:', 'Automations (act automation.<name>)'],
+	['sync:', 'Syncs (sync)'],
+	['tool:', 'Tools (run_tool { name, input })']
+] as const;
+/** Past this many changed lines a merge's note gives counts, and describe_workspace and skill the rest. */
+const NOTE_CHANGES = 10;
+/**
+ * The catalogue note: at a conversation's start (or after a compaction), every line but the MCP tools, which are native;
+ * after a merge, only what changed since the last note: added or changed lines, removed names, or counts past
+ * `NOTE_CHANGES`; `undefined` when nothing changed since. A tool added after the start is reached through run_tool.
+ */
+export function catalogueNote(index: CatalogueIndex, previous: CatalogueIndex | undefined): string | undefined {
+	const section = (keys: readonly string[]) =>
+		SECTIONS.flatMap(([prefix, title]) => {
+			const lines = keys.filter((key) => key.startsWith(prefix)).map((key) => index[key] ?? '');
+			return lines.length === 0 ? [] : [`${title}:`, ...lines.map((line) => `- ${line}`)];
+		});
+	// the first note is written even when empty: it is where the conversation's native tools are kept
+	if (previous === undefined)
+		return ['[Catalogue]', ...section(Object.keys(index).filter((key) => !key.startsWith('tool:')))].join('\n');
+	const changed = Object.keys(index).filter((key) => previous[key] !== index[key]);
+	const removed = Object.keys(previous).filter((key) => index[key] === undefined);
+	if (changed.length === 0 && removed.length === 0) return undefined;
+	const name = (key: string) => key.slice(key.indexOf(':') + 1);
+	if (changed.length + removed.length > NOTE_CHANGES) {
+		const added = changed.filter((key) => previous[key] === undefined).length;
+		return `[Catalogue changed by a merge] ${added} added, ${changed.length - added} changed, ${removed.length} removed: describe_workspace and skill read them.`;
+	}
+	return [
+		'[Catalogue changed by a merge]',
+		...section(changed),
+		...(removed.length === 0 ? [] : [`Removed: ${removed.map(name).join(', ')}`])
+	].join('\n');
+}
 /** The actor may change at a steer, so a step binds every handler under its admitted authority. */
 export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolContext) {
 	const e = x.engine,
@@ -1657,23 +1962,86 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		});
 	};
 	const read = readTool(x);
-	if (read !== undefined) add(read.tool, function* (request) { return yield* read.run(request); });
+	const ledgers = ledgerRoots(x);
+	if (read !== undefined || Object.keys(ledgers).length > 0)
+		add(agentReadTool, function* ({ request }, call) {
+			const roots = Object.entries(request);
+			const ledger = roots.filter(([root]) => root.startsWith('$'));
+			const asked = Object.fromEntries(
+				roots
+					.filter(([root]) => !root.startsWith('$'))
+					.map(([root, node]) => {
+						const { history: _history, approvals: _approvals, ...rest } = node;
+						return [root, rest];
+					})
+			);
+			const extras = Object.fromEntries(
+				roots.flatMap(([root, node]) =>
+					!root.startsWith('$') && !root.includes('.') && (node['history'] === true || node['approvals'] === true)
+						? [[root, {
+								history: node['history'] === true,
+								approvals: node['approvals'] === true,
+								output: typeof node['output'] === 'string' ? node['output'] : undefined
+							}] as const]
+						: []
+				)
+			);
+			const unknown = ledger.find(([root]) => ledgers[root] === undefined);
+			if (unknown !== undefined)
+				return err(`No '${unknown[0]}' you may read. Ledgers: ${Object.keys(ledgers).join(', ') || 'none'}`);
+			const records =
+				Object.keys(asked).length === 0
+					? undefined
+					: read === undefined
+						? err('You read no models.')
+						: yield* read.run({ request: asked }, (full) => withExtras(x, full, extras));
+			const answers = yield* Effect.forEach(ledger, ([root, node]) =>
+				Effect.map(ledgers[root]?.(node, call) ?? Effect.succeed<ToolAnswer>(err(`No '${root}'.`)), (answer) => [root, answer] as const)
+			);
+			// a lone root answers as itself; several merge, each under its own name
+			if (records === undefined && answers.length === 1 && answers[0] !== undefined)
+				return answers[0][1];
+			const failed = [records, ...answers.map(([, answer]) => answer)].find(
+				(answer) => answer !== undefined && 'result' in answer && jobFailed(answer.result) !== undefined
+			);
+			if (failed !== undefined) return failed;
+			const part = (answer: ToolAnswer | undefined, key: 'result' | 'full'): Json =>
+				answer === undefined || !('result' in answer)
+					? null
+					: key === 'full' && answer.full !== undefined
+						? answer.full
+						: answer.result;
+			const merge = (key: 'result' | 'full'): Json => {
+				const base = part(records, key);
+				return {
+					...(isObj(base) ? base : {}),
+					...Object.fromEntries(answers.map(([root, answer]) => [root, part(answer, key)]))
+				};
+			};
+			return { result: merge('result'), full: merge('full'), bounded: true };
+		});
 	add(describeTool, function* (i) {
 		const names = i.names ?? [];
-		if (names.includes('system')) {
-			if (!x.inApp || x.child || !a.admin || a.actor.kind !== 'member' || a.actor.external)
-				return ok({ capabilities: [] });
-			const [connected] = yield* x.engine.db.read([
-				{ text: 'SELECT id, name, integration, envoy FROM sys_integration ORDER BY name', params: [] }
-			]);
-			return ok({
-				capabilities: Object.entries(SYSTEM_UI).map(([capability, ui]) => ({ capability, ...ui })),
-				connections: connected?.rows ?? [],
-				secret_names: Object.keys(e.manifest.workspace.secrets ?? {}),
-				mcp: Object.keys(e.manifest.mcp),
-				note: "An envoy and a connection of a declared integration are records, with no source change: act sys_envoy.create, then sys_integration.create { integration, name, envoy: <its id> } with no owner. page { path, configure } opens a native form for what stays the person's (pairing, secrets); it never submits. A new integration or MCP server is declared in source first."
-			});
-		}
+		// the native setup: capabilities a page opens, the connections, secret names and MCP servers, administrators only
+		const setup =
+			!names.includes('system')
+				? undefined
+				: !x.inApp || x.child || !a.admin || a.actor.kind !== 'member' || a.actor.external
+					? 'system: nothing you may set up.'
+					: yield* Effect.map(
+							x.engine.db.read([
+								{ text: 'SELECT id, name, integration, envoy FROM sys_integration ORDER BY name', params: [] }
+							]),
+							([connected]) =>
+								[
+									'# System',
+									`capabilities (page { path, configure }): ${Object.entries(SYSTEM_UI).map(([capability, ui]) => `${capability} ${JSON.stringify(ui)}`).join('; ')}`,
+									`connections: ${JSON.stringify(connected?.rows ?? [])}`,
+									`secrets: ${Object.keys(e.manifest.workspace.secrets ?? {}).join(', ') || 'none'}`,
+									`mcp: ${Object.keys(e.manifest.mcp).join(', ') || 'none'}`
+								].join('\n')
+						);
+		if (setup !== undefined && names.length === 1) return ok(setup);
 		const workspace = x.workspace;
 		const source =
 			workspace === undefined
@@ -1693,7 +2061,8 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				return typeof total === 'number' ? [[root, total] as const] : [];
 			})
 		);
-		return ok(describeWorkspace(e.manifest, a, messageCatalogue(source), names, totals));
+		const described = describeWorkspace(e.manifest, a, messageCatalogue(source), names.filter((name) => name !== 'system'), totals);
+		return ok(setup === undefined ? described : `${described}\n\n${setup}`);
 	});
 	if (agent && x.inApp && !x.child && x.conv.owner !== null && x.conv.integration === null && x.conv.envoy === null && x.conv.run == null && a.actor.kind === 'member' && !a.actor.external) {
 		const allowed = navigation_paths(nav(e.manifest, a), a.admin);
@@ -1767,6 +2136,45 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			Effect.catch((error) => Effect.succeed({ error: `That file is not JSON: ${error.message}` }))
 		);
 	});
+	/** A file field's value given as a file id (whole or short): the stored file's reference, when the actor may read it. */
+	const withFileRefs = Effect.fn('AgentTool.fileRefs')(function* (callable: string, input: Json) {
+		const dot = callable.lastIndexOf('.'),
+			model = callable.slice(0, dot),
+			verb = callable.slice(dot + 1),
+			fields = e.manifest.models[model]?.fields ?? {};
+		const files = Object.keys(fields).filter((f) => fields[f]?.kind === 'file');
+		if (files.length === 0 || !['create', 'update', 'import'].includes(verb)) return input;
+		const ref = Effect.fn('AgentTool.fileRef')(function* (given: Json) {
+			if (typeof given !== 'string') return given;
+			const id = yield* wholeId(x, given);
+			const [file] = yield* sourceFile(id);
+			if (file === undefined || !(yield* canRead(file.id))) return `No file ${given} you can read.`;
+			return { id: file.id, name: file.name, mime: file.mime, size: file.size };
+		});
+		const row: (r: Json) => Effect.Effect<Json, EngineError | PortFailure> = Effect.fn('AgentTool.fileRow')(function* (r: Json) {
+			if (!isObj(r)) return r;
+			const out: { [key: string]: Json } = { ...r };
+			for (const f of files) {
+				const v = r[f];
+				if (v === undefined) continue;
+				const refs = yield* Effect.forEach(isList(v) ? v : [v], ref);
+				const missing = refs.find((one) => typeof one === 'string');
+				if (missing !== undefined) return missing;
+				out[f] = isList(v) ? refs : (refs[0] ?? null);
+			}
+			if (verb === 'update' && isObj(r['set'])) {
+				const set = yield* row(r['set']);
+				if (typeof set === 'string') return set;
+				out['set'] = set;
+			}
+			return out;
+		});
+		const rows = verb === 'import' && isObj(input) && isList(input['rows']) ? input['rows'] : isList(input) ? input : [];
+		const done = yield* Effect.forEach(rows, row);
+		const missing = done.find((one) => typeof one === 'string');
+		if (missing !== undefined) return missing;
+		return verb === 'import' && isObj(input) ? { ...input, rows: done } : done;
+	});
 	const automations = a.automations.filter(
 		(n) => e.manifest.automations[n] !== undefined && e.manifest.automations[n]?.agent !== 'never'
 	);
@@ -1784,6 +2192,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				);
 			if (Array.isArray(i.input) && i.input.length === 0)
 				return err(`'${i.callable}' was given no rows: there is nothing to write.`);
+			const filed = yield* withFileRefs(i.callable, i.input ?? null);
+			if (typeof filed === 'string') return err(filed);
+			i = { ...i, input: filed };
 			if (
 				x.inApp &&
 				(acts.get(i.callable)?.confirm === true ||
@@ -1840,28 +2251,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			return ok({ saved: true, revision: rev + 1 });
 		});
 	}
-	{
-		add(goalsTool, function* (i) {
-			const items = i.items.map((g) => ({ ...g }));
-			if (items.length > 100) return err('At most 100 goals.');
-			if (new Set(items.map((g) => g.id)).size !== items.length)
-				return err('Goal ids must be unique.');
-			if (items.filter((g) => g.status === 'doing').length > 1)
-				return err('At most one goal is doing.');
-			// a done goal is history: resending the live list without it keeps it rather than refusing
-			for (const old of x.conv.goals ?? [])
-				if (old.status === 'done') {
-					const now = items.find((g) => g.id === old.id);
-					if (now === undefined) items.push({ ...old });
-					else if (now.status !== 'done' || now.text !== old.text) {
-						now.status = 'done';
-						now.text = old.text;
-					}
-				}
-			yield* x.setGoals(items);
-			return ok({ saved: true, goals: items });
-		});
-	}
 	// every skill is readable by every actor: a skill is procedure, never authority
 	const skills = Object.entries(x.skills);
 	if (skills.length > 0) {
@@ -1871,13 +2260,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				return err(`No skill '${i.name}'. Skills: ${skills.map(([n]) => n).join(', ')}`);
 			if (i.file !== undefined && i.section !== undefined)
 				return err('Read a section or a file, not both.');
-			const key = `${i.name}#${i.section ?? ''}#${i.file ?? ''}`;
-			if (x.read.has(key))
-				return ok({ note: `You read ${i.name} earlier in this turn; its text is above.` });
-			const remember = () => x.read.set(
-				key,
-				`skill ${i.name}${i.section === undefined ? '' : ` (${i.section})`}${i.file === undefined ? '' : ` file ${i.file}`}`
-			);
 			const s = skillOf(t.text);
 			if (i.file !== undefined && i.file !== SKILL_FILE) {
 				if (!t.files.includes(i.file))
@@ -1888,7 +2270,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 							.join(', ')}`
 					);
 				const bytes = yield* t.read(i.file);
-				remember();
 				return documentAnswer(
 					{ file: i.file, text: new TextDecoder().decode(bytes) },
 					'text'
@@ -1914,7 +2295,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					.slice(shown)
 					.map((p) => /^##\s+(.+)$/m.exec(p)?.[1]?.trim())
 					.filter((name): name is string => name !== undefined);
-				remember();
 				return documentAnswer(
 					{
 						description: s.description,
@@ -1929,23 +2309,14 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				);
 			}
 			const part = section(s.body, i.section);
-			if (part !== undefined) remember();
 			return part === undefined
 				? ok({ error: `No section '${i.section}'.`, sections: s.sections })
 				: textAnswer(part);
 		});
 	}
-	{
-		add(historyTool, function* (i) {
-			return ok(
-				yield* x.history(
-					i.query,
-					i.scope === 'mine' ? 'mine' : 'this',
-					Math.max(1, Math.min(i.limit ?? 20, 50))
-				)
-			);
-		});
-	}
+	add(historyTool, function* (i) {
+		return ok(yield* x.history(i.query, i.scope === 'mine' ? 'mine' : 'this', Math.max(1, Math.min(i.limit ?? 20, 50))));
+	});
 	/** More of a clipped result: the call its clip note names (none for the latest) from a character offset. */
 	const readOutput = Effect.fn('AgentTool.readOutput')(function* (call: string, offset: number) {
 		const named = yield* x.output(call === '' ? null : call),
@@ -1977,12 +2348,10 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		};
 	});
 	if (x.conv.integration !== null) {
-		add(readMessagesTool, function* (i, id) {
+		add(readMessagesTool, function* (i) {
 			const rows = yield* x.messages({
-				unread: i.all !== true && i.before === undefined,
 				limit: Math.max(1, Math.min(i.limit ?? 50, 50)),
-				...(i.before === undefined ? {} : { before: i.before }),
-				key: `${x.turn}:${id}`
+				...(i.before === undefined ? {} : { before: i.before })
 			});
 			return ok({
 				messages: rows.map((r) => ({
@@ -1996,8 +2365,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					text: r.text,
 					files: filesOf(r),
 					addressed: !ambient(r)
-				})),
-				note: 'Only messages since this account was connected are here; senders may have edited or deleted some since. Open a file with read_file { id }; read further back with before: the oldest seq here.'
+				}))
 			});
 		});
 	}
@@ -2022,11 +2390,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		port: NonNullable<typeof x.attachments>,
 		file: Json
 	) {
-		const fileId = isObj(file) && typeof file['id'] === 'string' ? file['id'] : undefined,
-			fileName = isObj(file) && typeof file['name'] === 'string' ? file['name'] : (fileId ?? 'the file');
-		const seen = (yield* Scripted) || fileId === undefined ? undefined : `file:${fileId}`;
-		if (seen !== undefined && x.read.has(seen))
-			return ok({ note: `You read ${fileName} earlier in this turn; its answer is above.` });
+		const fileId = isObj(file) && typeof file['id'] === 'string' ? file['id'] : undefined;
 		const got = yield* port.read(file).pipe(Port.call('files', 30000));
 		if (Predicate.isObject(got) && 'bytes' in got && got.bytes instanceof Uint8Array && 'mime' in got && typeof got.mime === 'string') {
 			const seen = attach(x.files, { mime: got.mime, bytes: got.bytes, ...(fileId === undefined ? {} : { id: fileId }) });
@@ -2036,7 +2400,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		const answer = yield* Schema.decodeUnknownEffect(Schema.Json)(got).pipe(
 			Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
 		);
-		if (seen !== undefined) x.read.set(seen, `file ${fileName}`);
 		// a text file is one long value: whole up to the bound
 		return isObj(answer) && typeof answer['text'] === 'string' ? documentAnswer(answer, 'text') : ok(answer);
 	});
@@ -2080,15 +2443,13 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		);
 	});
 	/** Merges `patch` into an ingest's entry and `state` into its `ingest`, in one statement. */
-	const patchEntry = (output: string, patch: Json, state: Json) =>
-		x.engine.db
-			.write({
-				text: `UPDATE sys_conversation SET outputs = (SELECT jsonb_agg(CASE WHEN e->'ingest'->>'output' = $2
-					THEN (e || $3::jsonb) || jsonb_build_object('ingest', (e->'ingest') || $4::jsonb) ELSE e END ORDER BY n)
-					FROM jsonb_array_elements(outputs) WITH ORDINALITY AS t(e, n)) WHERE id = $1`,
-				params: [x.conv.id, output, JSON.stringify(patch), JSON.stringify(state)]
-			})
-			.pipe(Effect.asVoid);
+	const patchEntry = (output: string, patch: Json, state: Json) => {
+		const chain = new Chain();
+		capturePiece(chain, 'patched', 'sys_conversation', `UPDATE sys_conversation SET outputs = (SELECT jsonb_agg(CASE WHEN e->'ingest'->>'output' = ${chain.p(output)}
+			THEN (e || ${chain.p(JSON.stringify(patch))}::jsonb) || jsonb_build_object('ingest', (e->'ingest') || ${chain.p(JSON.stringify(state))}::jsonb) ELSE e END ORDER BY n)
+			FROM jsonb_array_elements(outputs) WITH ORDINALITY AS t(e, n)) WHERE id = ${chain.p(x.conv.id)}`);
+		return nativeCommit(x.engine.db.write, x.engine.live.publish, chain, CapturedResult).pipe(Effect.asVoid);
+	};
 	/** `read_file` over an ingest: a window of its lines with the images they reference, the lines holding a text, or one image. */
 	const readIngest = Effect.fn('AgentTool.readIngest')(function* (
 		entry: typeof IngestEntry.Type,
@@ -2106,11 +2467,11 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			files = e.files;
 		if (entry.ingest.status === 'ingesting')
 			return ok({
-				note: `Still being read: wait { jobs: ['${entry.ingest.job ?? o}'] } returns when it ends. Reading it again changes nothing.`
+				note: `Still being read: wait { jobs: ['${entry.ingest.job ?? o}'] } returns when it ends.`
 			});
 		if (entry.ingest.status === 'failed' || entry.id === undefined || files === undefined)
 			return err(
-				`The ingest of ${entry.name} failed: ${entry.ingest.error ?? 'its files are not stored'}. Tell the person.`
+				`The ingest of ${entry.name} failed: ${entry.ingest.error ?? 'its files are not stored'}.`
 			);
 		const ids = (entry.files ?? []).map((f) => f.id);
 		const stored = yield* x.engine.db.rows(StoredFile, {
@@ -2153,18 +2514,14 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			const id = `${entry.id}#page-${i.page}`;
 			const seen = attach(x.files, { mime: picture.mime, bytes: picture.bytes, id });
 			if (seen === 'shown') yield* tiled(picture.bytes, id);
-			return ok({ page: i.page, attached: ATTACHED[seen], note: SCAN_NOTE });
+			return ok({ page: i.page, attached: ATTACHED[seen] });
 		}
 		const crops = i.crops ?? [],
-			imageNumber = i.image ?? (crops.length > 0 && images.size === 1 ? 1 : undefined),
-			zoomed = `zoom:${o}`;
+			imageNumber = i.image ?? (crops.length > 0 && images.size === 1 ? 1 : undefined);
+		const taken = x.zooms.get(o) ?? 0;
 		if (crops.length > 0) {
-			const taken = [...x.read.keys()].filter((key) => key.startsWith(zoomed)).length;
-			if (taken >= ZOOMS)
-				return err(
-					`${o} has had its ${ZOOMS} zooms this turn: more shows nothing new. Report what stays unclear as your best reading, marked uncertain.`
-				);
-			x.read.set(`${zoomed}:${taken}`, `zooms of ${o}`);
+			if (taken >= ZOOMS) return err(`${o} has had its ${ZOOMS} zooms this turn.`);
+			x.zooms.set(o, taken + 1);
 		}
 		if (crops.length > 0 && imageNumber === undefined)
 			return err(`${o} has ${images.size} images: give image, the 1-based one to crop.`);
@@ -2195,10 +2552,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					? {}
 					: {
 							crops: crops.length,
-							zoomsLeft: ZOOMS - [...x.read.keys()].filter((key) => key.startsWith(zoomed)).length
+							zoomsLeft: ZOOMS - (x.zooms.get(o) ?? 0)
 						}),
-				attached: ATTACHED.shown,
-				note: SCAN_NOTE
+				attached: ATTACHED.shown
 			});
 		}
 		// a data ingest has no lines: its summary, and run_js computes over its data.json
@@ -2213,7 +2569,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				output: o,
 				file: entry.name,
 				data: dataSummary(json.value),
-				note: `compute from data.json, never retype: ${run}${images.size === 0 ? '' : `; its images: read_file { id: ${o}, image: n }`}`
+				note: `its data: ${run}${images.size === 0 ? '' : `; its images: view_image { id: ${o}, image: n }`}`
 			});
 		}
 		if (i.text !== undefined && i.text !== '') {
@@ -2222,22 +2578,16 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				result: {
 					output: o,
 					...found,
-					note:
-						found.total === 0
-							? `No line of ${o} holds '${i.text}'.`
-							: `read a hit with read_file { id: ${o}, from, to }${found.total > found.hits.length ? `; ${found.total - found.hits.length} more hits: narrow the text` : ''}`
+					...(found.total === 0
+						? { note: `No line of ${o} holds '${i.text}'.` }
+						: found.total > found.hits.length
+							? { note: `${found.total - found.hits.length} more hits` }
+							: {})
 				},
 				bounded: true as const
 			};
 		}
-		const w = window(text, i.from, i.to),
-			seen = `ingest:${o}:${w.from}-${w.to}`;
-		const scripted = yield* Scripted;
-		if (!scripted && x.read.has(seen))
-			return ok({
-				note: `lines ${w.from}–${w.to} of ${o} are already above: read on from ${w.to + 1}`
-			});
-		if (!scripted) x.read.set(seen, `${o} lines ${w.from}–${w.to}`);
+		const w = window(text, i.from, i.to);
 		const refs = imagesIn(w.lines, [...images.keys()]),
 			shown = refs.slice(0, WINDOW_IMAGES);
 		yield* show(shown);
@@ -2251,11 +2601,11 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					? {}
 					: {
 							images: shown,
-							note: `each <img> named in images is shown on your next step only: note there every value you need from it, then work from your notes. ${SCAN_NOTE}${shown.length > TILED_PAGES ? ` These are whole pages, too small for fine print: read_file { id: ${o}, image: n } adds a page's quarters.` : ''}`
+							note: `each <img> named in images is shown on your next step only${shown.length > TILED_PAGES ? '; whole pages without their quarters: view_image { id, image: n } adds them' : ''}`
 						}),
 				...(refs.length > shown.length
 					? {
-							more: `${refs.length - shown.length} more images: read_file { id: ${o}, image: n }`
+							more: `${refs.length - shown.length} more images: view_image { id: ${o}, image: n }`
 						}
 					: {}),
 				at: `lines ${count(w.from)}–${count(w.to)} of ${count(w.total)}${w.next === undefined ? '' : ` · read_file { id: ${o}, from: ${w.next} }`}`
@@ -2274,21 +2624,16 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		// a locked file's parse is kept under its password too: only a reader who holds that password reuses it
 		const cacheKey =
 			password === undefined ? file.sha256 : sha256_hex(`${file.sha256}\0${password}`);
-		const [added] = (yield* x.engine.db.write({
-			text: `UPDATE sys_conversation SET outputs = outputs || jsonb_build_array($2::jsonb || jsonb_build_object('ingest',
-				$3::jsonb || jsonb_build_object('output', 'o' || (1 + (SELECT count(*) FROM jsonb_array_elements(outputs) e WHERE e ? 'ingest')))))
-				WHERE id = $1 RETURNING outputs->-1->'ingest'->>'output' AS output`,
-			params: [
-				x.conv.id,
-				JSON.stringify({
-					name: `${file.name} (${how === 'audio' ? 'transcript' : 'ingested'})`,
-					mime: 'text/html'
-				}),
-				JSON.stringify({ source: file.id, sha256: file.sha256, status: 'ingesting' })
-			]
-		})).rows;
-		const output = typeof added?.['output'] === 'string' ? added['output'] : undefined;
-		if (output === undefined)
+		const chain = new Chain();
+		const entry = JSON.stringify({ name: `${file.name} (${how === 'audio' ? 'transcript' : 'ingested'})`, mime: 'text/html' }),
+			state = JSON.stringify({ source: file.id, sha256: file.sha256, status: 'ingesting' });
+		capturePiece(chain, 'added', 'sys_conversation', `UPDATE sys_conversation SET outputs = outputs || jsonb_build_array(${chain.p(entry)}::jsonb || jsonb_build_object('ingest',
+			${chain.p(state)}::jsonb || jsonb_build_object('output', 'o' || (1 + (SELECT count(*) FROM jsonb_array_elements(outputs) e WHERE e ? 'ingest')))))
+			WHERE id = ${chain.p(x.conv.id)}`, { returning: (_before, after) => `${after}.outputs->-1->'ingest'->>'output' AS output` });
+		const { output } = yield* nativeCommit(x.engine.db.write, x.engine.live.publish, chain,
+			Schema.Struct({ ...CapturedResult.fields, output: Schema.NullOr(Schema.String) }),
+			'(SELECT output FROM added) AS output');
+		if (output === null)
 			return yield* BoltError.make('invalid_input', 'admission', 'This conversation is gone.');
 		const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null,
 			base = file.name.replace(/\.[^./]*$/, '').replaceAll('/', '_') || 'file';
@@ -2356,6 +2701,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					});
 				stored = yield* stash(
 					x.engine.db,
+					x.engine.live.publish,
 					fileStore,
 					{ sha256: cacheKey, base, member, now: x.bindings.now },
 					got
@@ -2416,12 +2762,12 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				patchEntry(output, {}, { status: 'failed', error: error.message }).pipe(Effect.ignore)
 			)
 		);
-		READING.add(readingKey(output));
+		x.reading.add(readingKey(output));
 		const job = yield* x.jobs.add(
 			`reading ${file.name}`,
 			Effect.ensuring(
 				work,
-				Effect.sync(() => READING.delete(readingKey(output)))
+				Effect.sync(() => x.reading.delete(readingKey(output)))
 			),
 			{
 				detach: true,
@@ -2441,10 +2787,17 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		yield* patchEntry(output, {}, { job });
 		return { job, output };
 	});
-	add(readFileTool, function* (i) {
-		if (i.id === undefined && i.call === undefined)
-			return err('read_file needs the id of a file, or call for a clipped result.');
-		if (i.id === undefined) return yield* readOutput(i.call ?? '', i.offset ?? 0);
+	/** A file by id: its lines (`read_file`) or its images (`view_image`), parsed first where it needs it. */
+	const readFile = Effect.fn('AgentTool.readFile')(function* (i: {
+		readonly id: string;
+		readonly from?: number | undefined;
+		readonly to?: number | undefined;
+		readonly text?: string | undefined;
+		readonly image?: number | undefined;
+		readonly page?: number | undefined;
+		readonly crops?: readonly (readonly [number, number, number, number])[] | undefined;
+		readonly password?: string | undefined;
+	}) {
 		if (i.id.includes('@')) return yield* readReference(x, i.id, i);
 		const id = yield* wholeId(x, i.id);
 		let found = (yield* ingests()).findLast(
@@ -2453,7 +2806,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		// a job dies with its generation: a read it left unfinished starts over, never waits for good
 		if (
 			found?.ingest.status === 'ingesting' &&
-			!READING.has(readingKey(found.ingest.output))
+			!x.reading.has(readingKey(found.ingest.output))
 		) {
 			yield* patchEntry(
 				found.ingest.output,
@@ -2493,7 +2846,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				.slice(-20)
 				.map((row) => `${String(row['name'])} ${shortId(String(row['id']))}`);
 			return err(
-				`No file you can read has this id; a truncated result is read with call, not id.${files.length === 0 ? '' : ` This conversation's files: ${files.join(', ')}`}`
+				`No file you can read has this id; a clipped result is read_output's.${files.length === 0 ? '' : ` This conversation's files: ${files.join(', ')}`}`
 			);
 		}
 		const file = indexed;
@@ -2531,6 +2884,17 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		return 'result' in answer && Predicate.isObject(answer.result) && Option.isSome(said)
 			? { ...answer, result: { ...answer.result, about: said.value } }
 			: answer;
+	});
+	add(readFileTool, function* (i) {
+		return yield* readFile(i);
+	});
+	add(viewImageTool, function* (i) {
+		if (i.image === undefined && i.page === undefined && i.crops === undefined)
+			return err('give image, page or crops');
+		return yield* readFile(i);
+	});
+	add(readOutputTool, function* (i) {
+		return yield* readOutput(i.call, i.offset ?? 0);
 	});
 	if (x.geocoder !== undefined) {
 		add(geocodeTool, function* (i) {
@@ -2671,25 +3035,19 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	}
 	if (agent && x.delegation) {
 		add(subagentTool, function* (i) {
-			const conv = i.conversation ?? '';
-			switch (i.action) {
-				case 'spawn': {
-					const which = i.agent ?? null;
-					if (which !== null && !x.agents.includes(which))
-						return err(`No agent '${which}'. Agents: ${x.agents.join(', ')}`);
-					return ok(yield* x.subagent.spawn(i.task ?? '', which, i.done, i.format));
-				}
-				case 'list':
-					return ok(yield* x.subagent.list());
-				case 'read':
-					return ok(yield* x.subagent.read(conv));
-				case 'message':
-					return ok(yield* x.subagent.message(conv, i.text ?? ''));
-				case 'stop':
-					return ok(yield* x.subagent.stop(conv));
-				default:
-					return err('Unknown action.');
-			}
+			const which = i.agent ?? null;
+			if (which !== null && !x.agents.includes(which))
+				return err(`No agent '${which}'. Agents: ${x.agents.join(', ')}`);
+			return ok(yield* x.subagent.spawn(i.task, which, i.done, i.format));
+		});
+		add(subagentReadTool, function* (i) {
+			return ok(yield* x.subagent.read(i.conversation));
+		});
+		add(subagentMessageTool, function* (i) {
+			return ok(yield* x.subagent.message(i.conversation, i.text));
+		});
+		add(subagentStopTool, function* (i) {
+			return ok(yield* x.subagent.stop(i.conversation));
 		});
 	}
 	const convert = e.convert,
@@ -2744,7 +3102,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				? Effect.succeed(err(`A script cannot call '${name}': it calls your other tools by name.`))
 				: ++used > RUN_JS.toolCalls
 					? Effect.succeed(err(`A run makes at most ${RUN_JS.toolCalls} tool calls.`))
-					: self(name, input, `${call}:${used}`).pipe(Effect.provideService(Scripted, true));
+					: self(name, input, `${call}:${used}`);
 	};
 	if (agent && guest !== undefined) {
 		add(runJsTool, function* (i, callId) {
@@ -2833,16 +3191,13 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			);
 		});
 	}
-	const asking = (to: string) =>
-		function* (i: { readonly question: string; readonly options?: readonly string[] }): Effect.gen.Return<ToolAnswer> {
-			const question = i.question.trim();
-			if (question === '') return err('Ask a question.');
-			const options = (i.options ?? []).map((option) => option.trim()).filter((option) => option !== '');
-			if (!x.ask({ question, options: [...new Set(options)] })) return err('One question is already waiting in this step.');
-			return ok({ asked: true, note: `Stop here: your question goes to ${to}.` });
-		};
-	if (x.child) add(askParentTool, asking('the delegating agent'));
-	else add(askTool, asking('the person'));
+	add(askTool, function* (i) {
+		const question = i.question.trim();
+		if (question === '') return err('Ask a question.');
+		const options = (i.options ?? []).map((option) => option.trim()).filter((option) => option !== '');
+		if (!x.ask({ question, options: [...new Set(options)] })) return err('One question is already waiting in this step.');
+		return ok({ asked: true, to: x.child ? 'the delegating agent' : 'the person' });
+	});
 	add(waitTool, function* (i) {
 		const heard = x.heard.pipe(
 			Effect.map(() =>
@@ -2931,220 +3286,25 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			return ok({ settled: got, pending: x.jobs.pending() });
 		}));
 	});
-	if (a.actor.kind === 'member') {
-		const member = a.actor;
-		const RunList = Schema.Struct({ ...RunViewRow.fields, finished: Schema.NullOr(Schema.String) });
-		const head = (row: typeof RunList.Type, view: NonNullable<ReturnType<typeof run_view>>) => ({
-			id: view.id,
-			automation: view.automation,
-			status: view.status === 'stopped' ? 'cancelled' : view.status,
-			cause: view.cause,
-			due: view.due_at,
-			started: view.started,
-			finished: row.finished,
-			attempt_count: view.attempt_count
-		});
-		add(runsTool, function* (i, call) {
-		const bad = [i.since, i.until].find(
-			(v) => v !== undefined && Number.isNaN(Date.parse(v))
+	// an MCP tool changes with the workspace: native in the list a conversation froze at its start, through run_tool when a
+	// merge added it later; callable only while acting
+	const mcpTools: AgentTool[] = [];
+	for (const tool of x.mcpTools) {
+		if (!Predicate.isObject(tool.input)) continue;
+		const definition = { name: mcpName(tool.server, tool.name), description: tool.description, input: tool.input, behavior: {} };
+		mcpTools.push(definition);
+		if (!agent) continue;
+		const valid = validatorFor(x.validators, tool.input);
+		add(
+			{ ...definition, decode: Effect.succeed },
+			function* (given) {
+				const input = valid(given);
+				return typeof input === 'string' ? err(input) : ok(yield* x.mcp.call(tool.server, tool.name, input));
+			},
+			{},
+			mcpEntries
 		);
-		if (bad !== undefined) return err(`'${bad}' is not an instant.`);
-		const after = Option.getOrNull(
-			Schema.decodeUnknownOption(
-				Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String]))
-			)(i.cursor ?? '')
-		);
-		if (i.cursor !== undefined && after === null)
-			return err('That cursor is not one a page answered.');
-		const limit = Math.min(Math.max(1, i.limit ?? 20), 100),
-			detail = i.id !== undefined;
-		const name = i.automation;
-		// the visible runs; one run in detail also reads its log lines from the host's log store
-		const rows = yield* e.db.rows(RunList, {
-			text: `SELECT ${RUN_VIEW_COLUMNS}, finished_at::text AS finished
-	FROM sys_run
-	WHERE ($1 OR actor = $2 OR automation IN (SELECT jsonb_array_elements_text($3::jsonb)))
-		AND ($4::text IS NULL OR id = $4)
-		AND ($5::text IS NULL OR automation = $5) AND ($6::text IS NULL OR starts_with(automation, $6))
-		AND ($7::text IS NULL OR state = $7) AND ($8::text IS NULL OR cause = $8)
-		AND ($9::timestamptz IS NULL OR due_at >= $9::timestamptz) AND ($10::timestamptz IS NULL OR due_at < $10::timestamptz)
-		AND ($11::timestamptz IS NULL OR (due_at, id) < ($11::timestamptz, $12::text))
-	ORDER BY due_at DESC, id DESC LIMIT ${limit + 1}`,
-			params: [
-				a.admin,
-				actor_ref(member),
-				JSON.stringify(visible_run_names(a)),
-				i.id ?? null,
-				name === undefined || name.endsWith('*') ? null : name,
-				name !== undefined && name.endsWith('*') ? name.slice(0, -1) : null,
-				i.status === 'cancelled' ? 'stopped' : (i.status ?? null),
-				i.cause ?? null,
-				i.since ?? null,
-				i.until ?? null,
-				after?.[0] ?? null,
-				after?.[1] ?? null
-			]
-		});
-		const shown = rows.slice(0, limit).flatMap((row) => {
-			const view = run_view(a, row);
-			return view === null ? [] : [{ row, view }];
-		});
-		if (detail) {
-			const one = shown[0];
-			if (one === undefined) return err(`No automation run ${i.id} you may read.`);
-			const { row, view } = one;
-			// a store that cannot answer says so in place of the lines, never as an empty log
-			const lines =
-				view.input === undefined
-					? []
-					: yield* runLog(x.logs, view.id).pipe(
-							Effect.map((lines) =>
-								typeof lines === 'string'
-									? lines
-									: lines.map(({ id, at, severity, event, attributes }): Json => ({ id, at, severity, event, attributes }))
-							)
-						);
-			return clippedView((clip) => {
-				const logs =
-					typeof lines === 'string' ? lines : lines.map((line) => clip(line, 1024));
-				return {
-					...head(row, view),
-					progress: clip(view.progress, 2048),
-					error: clip(view.error, 4096),
-					...(view.input === undefined
-						? {}
-						: {
-								input: clip(view.input, 4096),
-								result: clip(view.result ?? null, 4096),
-								attempts: EffectArray.isArray<typeof view.attempts>(view.attempts)
-									? view.attempts.map((attempt) => clip(attempt, 1024))
-									: clip(view.attempts ?? null, 4096),
-								logs
-							})
-				};
-			}, call);
-		}
-		const last = rows.length > limit ? rows[limit - 1] : undefined;
-		return clippedView(
-			(clip) =>
-				({
-					runs: shown.map(({ row, view }) => ({
-						...head(row, view),
-						error:
-							view.error === null
-								? null
-								: {
-										code: view.error.code,
-										...(view.error.message === undefined
-											? {}
-											: { message: clip(view.error.message, 200) })
-									},
-						progress: clip(view.progress, 512)
-					})),
-					...(last === undefined
-						? {}
-						: { next: JSON.stringify([last.due_at, last.id]) })
-				}),
-			call
-		);
-		});
 	}
-	if (a.admin && a.actor.kind === 'member') {
-		add(logsTool, function* (i, call) {
-			const limit = Math.min(Math.max(1, i.limit ?? 50), 200);
-			const { level, cursor, limit: _limit, ...rest } = i;
-			const rows = yield* readLog(x.logs, {
-				...rest,
-				...(level === undefined ? {} : { min: level }),
-				...(cursor === undefined ? {} : { before: cursor }),
-				limit
-			});
-			const last = rows.length === limit ? rows.at(-1) : undefined;
-			return clippedView(
-				(clip) => ({
-					lines: rows.map((row) => ({
-						id: row.id,
-						at: row.at,
-						level: row.severity,
-						event: row.event,
-						invocation: row.invocation,
-						run: row.run,
-						conversation: row.conversation,
-						attributes: clip(row.attributes, 1024)
-					})),
-					...(last === undefined ? {} : { next: last.id })
-				}),
-				call
-			);
-		});
-	}
-	// what the person may see of approvals and of a record's past, by the same reader as their own screens
-	if (a.actor.kind === 'member') {
-		const readable = readableBy(e.read, e.manifest, a, x.bindings);
-		add(approvalsTool, function* (i) {
-			if (i.id !== undefined) {
-				const view = yield* e.approvals.view(i.id, a, readable);
-				return Option.isNone(view) ? err(`No approval request ${i.id} you may see.`) : ok(view.value);
-			}
-			return ok({
-				requests: yield* e.approvals.list(
-					{ model: i.model, records: i.records, ids: i.ids, all: i.all },
-					a,
-					readable
-				)
-			});
-		});
-		add(recordHistoryTool, function* (i) {
-			if (!(yield* readable(i.model, i.id))) return err(`No ${i.model} ${i.id} you may read.`);
-			const read = yield* lower_read(e.manifest, 'history', [
-				i.model,
-				i.id,
-				{ ...(i.at === undefined ? {} : { at: i.at }), ...(i.output === undefined ? {} : { output: i.output }) }
-			]);
-			const revisions = yield* Schema.decodeUnknownEffect(HistoryRevisions)(yield* readAs(x)(read)).pipe(
-				Effect.mapError((error) => BoltError.make('internal', 'decode', error.message, error))
-			);
-			// a writer reads as the person (name, else handle), never as an account id
-			const ids = [...new Set(revisions.flatMap((r) => (r.actor?.kind === 'member' ? [r.actor.id] : [])))];
-			const people =
-				ids.length === 0
-					? []
-					: yield* e.db.rows(Schema.Struct({ id: Schema.String, label: Schema.NullOr(Schema.String) }), {
-							text: 'SELECT id::text AS id, coalesce(name, email, phone) AS label FROM sys_user WHERE id::text IN (SELECT jsonb_array_elements_text($1::jsonb))',
-							params: [JSON.stringify(ids)]
-						});
-			const label = new Map(people.map((p) => [p.id, p.label]));
-			return ok({
-				revisions: revisions.map(({ actor, ...revision }) => ({
-					...revision,
-					by: actor === null ? null : actor.kind === 'member' ? (label.get(actor.id) ?? 'a member') : actor.kind
-				}))
-			});
-		});
-	}
-	const audit = e.audit;
-	if (audit !== undefined && a.admin && a.actor.kind === 'member' && !a.actor.external)
-		add(auditTool, function* ({ id, ...query }) {
-			if (id === undefined) return ok(yield* audit.query({ order: 'newest', ...query }));
-			const event = yield* audit.detail(id);
-			return event === null ? err(`No audit event ${id}.`) : ok(event);
-		});
-	// an MCP tool changes with the workspace, so it stays out of the fixed tool list: run_tool reaches it as `<server>.<tool>`,
-	// only while acting
-	if (agent)
-		for (const tool of x.mcpTools) {
-			if (!Predicate.isObject(tool.input)) continue;
-			const valid = validatorFor(tool.input);
-			add(
-				{ name: `${tool.server}.${tool.name}`, description: tool.description, input: tool.input, behavior: {}, decode: Effect.succeed },
-				function* (given) {
-					const input = valid(given);
-					return typeof input === 'string' ? err(input) : ok(yield* x.mcp.call(tool.server, tool.name, input));
-				},
-				{},
-				mcpEntries
-			);
-		}
 	add(runToolTool, function* (i, callId) {
 		if (FIXED_NAMES.has(i.name) || hostOffered.some((tool) => tool.name === i.name))
 			return err(`'${i.name}' is in your tool list: call it by its own name.`);
@@ -3161,7 +3321,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			continue;
 		hostOffered.push({ name, description, input: schema, behavior });
 		if (!(agent || host.read_only === true)) continue;
-		const valid = validatorFor(schema);
+		const valid = validatorFor(x.validators, schema);
 		add({ name, description, input: schema, behavior, decode: Effect.succeed }, function* (given, id) {
 			const input = valid(given);
 			if (typeof input === 'string') return err(input);
@@ -3226,28 +3386,17 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			Effect.catch((error) => Effect.succeed(err(error.message)))
 		);
 	};
-	const run: Catalogue['run'] = (name, input, callId) => execute(entries, name, input, callId);
 	const runMcp: Catalogue['run'] = (name, input, callId) => execute(mcpEntries, name, input, callId);
-	// a script reaches every tool by the one name it is called by: a listed one by its own, an MCP tool by run_tool's
-	self = (name, input, callId) => entries.has(name) ? run(name, input, callId) : runMcp(name, input, callId);
-	const available = [...entries.values(), ...mcpEntries.values()].map((entry) => entry.tool);
+	// a native MCP tool is called by its own name, a later one through run_tool; a script reaches both by name
+	const run: Catalogue['run'] = (name, input, callId) =>
+		entries.has(name) || !mcpEntries.has(name) ? execute(entries, name, input, callId) : runMcp(name, input, callId);
+	self = run;
 	return {
-		tools: [
-			...(entries.has(pageTool.name) ? FIXED_TOOLS : FIXED_TOOLS.filter((tool) => tool.name !== pageTool.name)),
-			...hostOffered
-		],
-		available,
-		discovery: JSON.stringify({
-			tools: [...entries.keys()],
-			run_tool: [...mcpEntries.values()].map(({ tool }) => ({ name: tool.name, description: tool.description, input: tool.input })),
-			callables: [...acts.keys()],
-			automations: automations.flatMap((name) => {
-				const spec = e.manifest.automations[name];
-				return spec === undefined ? [] : [{ name, mode: spec.mode ?? 'job', description: spec.description, input: spec.input ?? {} }];
-			}),
-			syncs: sync_controls,
-			document_targets: convert?.targets ?? []
-		}),
+		fixed: fixedTools(x.audience, x.child),
+		host: hostOffered,
+		mcp: mcpTools,
+		available: [...entries.values(), ...mcpEntries.values()].map((entry) => entry.tool),
+		index: catalogueIndex(e.manifest, a, x.skills, mcpTools, acts, automations, sync_controls),
 		presentation: (name, input) => {
 			const host = name === runToolTool.name && isObj(input) && typeof input['name'] === 'string'
 				? mcpEntries.get(input['name']) : undefined;
@@ -3303,7 +3452,7 @@ const wholeId = Effect.fn('Agents.wholeId')(function* (x: ToolContext, id: strin
 	if (!SHORT_ID.test(id)) return id;
 	const [read] = yield* x.engine.db.read([
 		{
-			text: `SELECT i->>'id' AS id FROM sys_conversation c, jsonb_array_elements(c.inputs) i
+			text: `SELECT i->>'id' AS id FROM sys_conversation c, jsonb_array_elements(c.inputs || c.outputs) i
 				WHERE c.id = $1 AND i->>'id' LIKE $2`,
 			params: [x.conv.id, `${id}%`]
 		}
@@ -3384,7 +3533,7 @@ const referenceIndex = Effect.fn('Agents.referenceIndex')(function* (x: ToolCont
 const readReference = Effect.fn('Agents.readReference')(function* (
 	x: ToolContext,
 	id: string,
-	i: { readonly from?: number; readonly to?: number; readonly text?: string }
+	i: { readonly from?: number | undefined; readonly to?: number | undefined; readonly text?: string | undefined }
 ) {
 	const slash = id.indexOf('/'),
 		name = slash < 0 ? id : id.slice(0, slash),
@@ -3446,48 +3595,49 @@ const recordFile = Effect.fn('Agents.recordFile')(function* (x: ToolContext, fil
 	const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null;
 	const id = globalThis.crypto.randomUUID();
 	const ref = { id, name: file.name, mime: file.mime, size: file.bytes };
-	// one statement: the file and its place among the conversation's outputs
-	yield* x.engine.db.write({
-		text: `WITH f AS (INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, 'sys_conversation.outputs', $7::timestamptz, $8))
-		UPDATE sys_conversation SET outputs = outputs || $9::jsonb WHERE id = $10`,
-		params: [
-			id,
-			file.name,
-			file.mime,
-			file.bytes,
-			file.key,
-			file.sha256,
-			x.bindings.now,
-			member,
-			JSON.stringify([ref]),
-			x.conv.id
-		]
-	});
+	// one native statement: the file and its place among the conversation's outputs, published to live readers
+	const chain = new Chain();
+	capturePiece(chain, 'filed', 'sys_file', `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
+		VALUES (${chain.p(id)}, ${chain.p(file.name)}, ${chain.p(file.mime)}, ${chain.p(file.bytes)}, ${chain.p(file.key)}, ${chain.p(file.sha256)},
+			'sys_conversation.outputs', ${chain.p(x.bindings.now)}::timestamptz, ${chain.p(member)})`);
+	capturePiece(chain, 'listed', 'sys_conversation',
+		`UPDATE sys_conversation SET outputs = outputs || ${chain.p(JSON.stringify([ref]))}::jsonb WHERE id = ${chain.p(x.conv.id)}`);
+	yield* nativeCommit(x.engine.db.write, x.engine.live.publish, chain, CapturedResult);
 	return ref;
 });
-/** Only the raw schema's validator is shared; names and descriptions belong to their own registrations. */
-const dynamics = new WeakMap<object, ReturnType<typeof validatorOf>>();
-const validatorFor = (input: { readonly [key: string]: Json }) => {
-	const valid = dynamics.get(input) ?? validatorOf(input);
-	dynamics.set(input, valid);
+/** Raw-schema validators by schema object, held by the engine that compiled them. */
+export type Validators = WeakMap<object, ReturnType<typeof validatorOf>>;
+const validatorFor = (validators: Validators, input: { readonly [key: string]: Json }) => {
+	const valid = validators.get(input) ?? validatorOf(input);
+	validators.set(input, valid);
 	return valid;
 };
+/** An MCP tool's name in a tool list: providers take [A-Za-z0-9_-], and no fixed tool holds a double underscore. */
+const mcpName = (server: string, tool: string) => `${server}__${tool}`.replace(/[^A-Za-z0-9_-]/g, '_');
 /** The tools a script's `tool()` never reaches: they steer the turn or the person's tab. */
-const UNSCRIPTED: ReadonlySet<string> = new Set(['ask', 'ask_parent', 'wait', 'run_js', 'subagent', 'update_plan', 'goals', 'page']);
+const UNSCRIPTED: ReadonlySet<string> = new Set(['ask', 'wait', 'run_js', 'subagent', 'subagent_message', 'subagent_stop', 'update_plan', 'page']);
 
 // Tool text and model schemas are shared; handlers bind only when a step is admitted.
+const READ_TEXT = `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. output: omit it for "default", else one of the model's reads. order_by: "<field>", { <field>: "desc" } or a list of those.
+where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null: value, like: "%text%" (ignores case), contains: value (a period or a JSON field) } }, { "$search": "<words>" } (each word required), and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
+search: words (ranked, not required), { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } or a list of those }; a field there may be "<link>.<field>" through links to one record.
+Answers each model's { rows, next, total } (total counts every match), or with aggregate its measures. Long values are clipped.`;
 const recordsTool = defineTool('read', {
 	behavior: { data: true, resume: { argument: 'after', roots: true } },
-	description: `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. output: omit it for "default", else one of the reads describe_workspace lists for that model. order_by: "<field>", { <field>: "desc" } or a list of those.
-where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
-search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } or a list of those }; a field there may be "<link>.<field>" through links to one record.
-Answers each model's { rows, next, total } (total counts every match), or with aggregate its measures. Long values are clipped.`,
+	description: READ_TEXT,
+	parameters: ReadInput
+});
+/** The agent's `read`: the same request, with its per-root options and the workspace's ledgers as roots. */
+const agentReadTool = defineTool('read', {
+	behavior: recordsTool.behavior,
+	description: `${READ_TEXT}
+On a root, history: true adds each row's revisions as $history (who, when, cause, changed fields; at most 20 rows), approvals: true each row's approval requests as $approvals (steps, deciders, log, moves you may make).
+Ledger roots, each answering { rows, next } newest first: "$runs": { id, automation (a name or prefix*), status, cause, since, until, limit, after } automation runs, id one in full with input, result, attempts and log; "$approvals": { model, ids, all } approval requests you may see, open ones unless all; "$logs": { level, text, run, automation, conversation, since, until, limit, after } live's runtime log; "$audit": { id, text, actor_id, category, action, status, model, record, run, since, until, limit, after } the audit trail.`,
 	parameters: ReadInput
 });
 const describeTool = defineTool('describe_workspace', {
 	behavior: { data: true },
-	description: "The workspace as you may use it: apps, pages, models with their fields and row counts, automations. names answers each in full, 'system' the native setup pages, secrets and MCP servers.",
+	description: "The workspace as you may use it: apps, pages, models with their fields and row counts, automations. names answers each in full; 'system' names the native setup capabilities, connections, secrets and MCP servers.",
 	parameters: Schema.Struct({ names: Schema.optionalKey(Schema.Array(Schema.String)) }),
 });
 const pageTool = defineTool('page', {
@@ -3515,7 +3665,7 @@ const pageTool = defineTool('page', {
 const actTool = defineTool('act', {
 	behavior: { data: true },
 	description: `Write records, decide an approval or start an automation: { callable, input }.
-"<model>.create": [{ column: value, relation: [new row | existing { id, revision }] }]. "<model>.update": [{ target, set: { column, relation: { create, update, delete, link, unlink } } }]. "<model>.delete": [{ target }]. "<model>.import": { rows, on_conflict: "update"|"keep"|"refuse", on_missing?: "create"|"skip", prune?, dry_run? }. A target, link or existing child is { id, revision } with the revision you read; an audited model refuses one without it. A batch commits together, related rows with their root. File fields take file references.
+"<model>.create": [{ column: value, relation: [new row | existing { id, revision }] }]. "<model>.update": [{ target, set: { column, relation: { create, update, delete, link, unlink } } }]. "<model>.delete": [{ target }]. "<model>.import": { rows, on_conflict: "update"|"keep"|"refuse", on_missing?: "create"|"skip", prune?, dry_run? }. A target, link or existing child is { id, revision } with the revision you read; an audited model refuses one without it. A batch commits together, related rows with their root. A file field takes a file's id.
 "automation.<name>": its input; a call answers its output, a job ends at your next step. "approvals.decide": { request_id, decision, reason? }. "sys_invitation.create": [{ email | phone, team? }].
 Answers the stored rows, or holds for approval.`,
 	parameters: WriteInput,
@@ -3531,18 +3681,6 @@ const updatePlanTool = defineTool('update_plan', {
 		body: Schema.optionalKey(Schema.String),
 		patch: Schema.optionalKey(Schema.Struct({ old: Schema.String, new: Schema.String })),
 		expected_revision: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
-	})
-});
-const goalsTool = defineTool('goals', {
-	description: "Set this conversation's checklist, the whole list; at most one doing, done items stay.",
-	parameters: Schema.Struct({
-		items: Schema.Array(
-			Schema.Struct({
-				id: Schema.String,
-				text: Schema.String,
-				status: Schema.Literals(['pending', 'doing', 'done'])
-			})
-		)
 	})
 });
 const skillTool = defineTool('skill', {
@@ -3563,41 +3701,46 @@ const historyTool = defineTool('history', {
 	})
 });
 const readMessagesTool = defineTool('read_messages', {
-	description: "Read this chat's unread messages not addressed to you, oldest first, and mark them read. before: seq (or all: true) reads the history back from there, newest first.",
+	description: "This chat's messages, newest first, before a message seq (default: the newest), at most limit (≤ 50).",
 	parameters: Schema.Struct({
-		all: Schema.optionalKey(Schema.Boolean),
-		limit: Schema.optionalKey(
-			Schema.Number.check(Schema.isInt()).annotate({ description: 'at most 50' })
-		),
-		before: Schema.optionalKey(
-			Schema.Number.check(Schema.isInt()).annotate({
-				description: 'a message seq'
-			})
-		)
+		before: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
+		limit: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
 	})
 });
 const readFileTool = defineTool('read_file', {
-	behavior: { data: true, resume: { argument: 'offset' } },
-	description: "Read a file by id (conversation, record or tool output); documents, scans, sheets and recordings are parsed. A reference lists its paths; read '<reference>/<path>'. A document answers numbered lines and page images (from, to: pages), a sheet columns and first rows. text greps (a|b for either; hits name their page). image: n shows one image; crops up to 8 regions of it. call reads more of a clipped result. password opens a locked PDF or Office file.",
+	behavior: { data: true },
+	description: "Read a file by id (conversation, record or tool output); documents, scans, sheets and recordings are parsed. A reference lists its paths; read '<reference>/<path>'. A document answers numbered lines with the page images they show (from, to: lines), a sheet its columns and first rows. text answers the lines holding it (a|b for either). password opens a locked PDF or Office file.",
 	parameters: Schema.Struct({
-		id: Schema.optionalKey(Schema.String),
+		id: Schema.String,
 		from: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 		to: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 		text: Schema.optionalKey(Schema.String),
+		password: Schema.optionalKey(Schema.String).annotate({
+			description: 'the password the person gave for this file'
+		})
+	})
+});
+const viewImageTool = defineTool('view_image', {
+	behavior: { data: true },
+	description: "Show an image of a read file on your next step: image n (1-based) of a document, or page n of a PDF as a picture; crops shows up to 8 regions of it instead, at most 3 zooms a document a turn.",
+	parameters: Schema.Struct({
+		id: Schema.String,
 		image: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
-		page: Schema.optionalKey(Schema.Number.check(Schema.isInt())).annotate({
-			description: 'a PDF page, shown as a picture'
-		}),
+		page: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 		crops: Schema.optionalKey(
 			Schema.Array(Schema.Tuple([Schema.Number, Schema.Number, Schema.Number, Schema.Number]))
 				.check(Schema.isMaxLength(8))
 				.annotate({ description: '[left, top, right, bottom], fractions 0 to 1' })
 		),
-		call: Schema.optionalKey(Schema.String),
-		offset: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
-		password: Schema.optionalKey(Schema.String).annotate({
-			description: 'the password the person gave for this file'
-		})
+		password: Schema.optionalKey(Schema.String)
+	})
+});
+const readOutputTool = defineTool('read_output', {
+	behavior: { data: true, resume: { argument: 'offset' } },
+	description: 'The rest of a clipped tool result, by its call id, from a character offset.',
+	parameters: Schema.Struct({
+		call: Schema.String,
+		offset: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
 	})
 });
 const geocodeTool = defineTool('geocode', {
@@ -3638,16 +3781,26 @@ const listSource = defineTool('workspace_list_dir', {
 	parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) }),
 });
 const subagentTool = defineTool('subagent', {
-	description: 'Background sub-agents with your authority, ≤ 4: spawn { task, done?, format?, agent? }, list, read { conversation }, message { conversation, text }, stop { conversation }. A report arrives as a message and wakes you.',
+	description: 'Start a background sub-agent with your authority on task (≤ 4 at once): done says when it is finished, format what it returns, agent which agent it is. Answers its conversation; its report arrives as a message and wakes you.',
 	parameters: Schema.Struct({
-		action: Schema.Literals(['spawn', 'list', 'read', 'message', 'stop']),
-		task: Schema.optionalKey(Schema.String),
+		task: Schema.String,
 		done: Schema.optionalKey(Schema.String),
 		format: Schema.optionalKey(Schema.String),
-		agent: Schema.optionalKey(Schema.String),
-		conversation: Schema.optionalKey(Schema.String),
-		text: Schema.optionalKey(Schema.String)
+		agent: Schema.optionalKey(Schema.String)
 	})
+});
+const subagentReadTool = defineTool('subagent_read', {
+	behavior: { data: true },
+	description: "One of your sub-agents: its status, last messages, tool calls and the records it changed.",
+	parameters: Schema.Struct({ conversation: Schema.String })
+});
+const subagentMessageTool = defineTool('subagent_message', {
+	description: 'Send one of your sub-agents a message; it carries on and reports here.',
+	parameters: Schema.Struct({ conversation: Schema.String, text: Schema.String })
+});
+const subagentStopTool = defineTool('subagent_stop', {
+	description: 'Stop one of your sub-agents.',
+	parameters: Schema.Struct({ conversation: Schema.String })
 });
 const downloadTool = defineTool('download', {
 	description: "Save a public http(s) file as the person's: media, a PDF, HTML or CAD, at most 100 MiB.",
@@ -3665,12 +3818,8 @@ const runJsTool = defineTool('run_js', {
 		http: Schema.optionalKey(Schema.Boolean)
 	})
 });
-const askParentTool = defineTool('ask_parent', {
-	description: 'Ask the agent that delegated this task. Your turn ends; its answer is your next message.',
-	parameters: Schema.Struct({ question: Schema.String }),
-});
 const askTool = defineTool('ask', {
-	description: 'Sends the person one question with optional answer choices, then ends the turn.',
+	description: 'Sends one question with optional answer choices to the person, or in a sub-agent to the agent that delegated the task, then ends the turn.',
 	parameters: Schema.Struct({
 		question: Schema.String,
 		options: Schema.optionalKey(Schema.Array(Schema.String))
@@ -3683,43 +3832,12 @@ const waitTool = defineTool('wait', {
 		seconds: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
 	})
 });
-const runsTool = defineTool('runs', {
-	behavior: { data: true, resume: { argument: 'cursor' } },
-	description: 'Automation runs, newest first, filtered by the given fields (automation: a name or prefix*); id answers one with input, result, error, attempts and log.',
-	parameters: Schema.Struct({
-		id: Schema.optionalKey(Schema.String),
-		automation: Schema.optionalKey(Schema.String),
-		status: Schema.optionalKey(
-			Schema.Literals(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'])
-		),
-		cause: Schema.optionalKey(Schema.String),
-		since: Schema.optionalKey(Schema.String),
-		until: Schema.optionalKey(Schema.String),
-		limit: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
-		cursor: Schema.optionalKey(Schema.String)
-	})
-});
-const logsTool = defineTool('logs', {
-	behavior: { data: true, resume: { argument: 'cursor' } },
-	description: "Live's runtime log, newest first: engine events and console lines, filtered by the given fields (level: that or worse).",
-	parameters: Schema.Struct({
-		level: Schema.optionalKey(Schema.Literals(['info', 'warn', 'error'])),
-		text: Schema.optionalKey(Schema.String),
-		run: Schema.optionalKey(Schema.String),
-		automation: Schema.optionalKey(Schema.String),
-		conversation: Schema.optionalKey(Schema.String),
-		since: Schema.optionalKey(Schema.String),
-		until: Schema.optionalKey(Schema.String),
-		limit: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
-		cursor: Schema.optionalKey(Schema.String)
-	})
-});
 const runToolTool = defineTool('run_tool', {
-	description: 'Run one of your other tools: each one the latest actions note lists under run_tool, with its description and input schema, is called as run_tool { name, input }.',
+	description: 'Run a tool a catalogue note added after this conversation began: run_tool { name, input }.',
 	parameters: Schema.Struct({ name: Schema.String, input: Schema.optionalKey(ToolJson) })
 });
 const documentTool = defineTool('document', {
-	description: 'Make a file from markdown (tables and inline HTML allowed) and offer it to the person; a file field takes its reference. In pptx each ## starts a slide.',
+	description: 'Make a file from markdown (tables and inline HTML allowed) and offer it to the person; a file field takes its id. In pptx each ## starts a slide.',
 	parameters: Schema.Struct({
 		to: Schema.Literals(CONVERT_TARGETS),
 		name: Schema.String,
@@ -3728,45 +3846,31 @@ const documentTool = defineTool('document', {
 		landscape: Schema.optionalKey(Schema.Boolean)
 	})
 });
-const approvalsTool = defineTool('approvals', {
-	behavior: { data: true },
-	description: "Approval requests you may see: yours to decide or asked for, and those on records you read. id answers one; else the open ones by model, records and ids, all: true adds decided ones. Each has its steps and deciders, every move with its reason, moves: what you may decide now (waiting on you when any), mine: you asked.",
-	parameters: Schema.Struct({
-		id: Schema.optionalKey(Schema.String),
-		model: Schema.optionalKey(Schema.String),
-		records: Schema.optionalKey(Schema.Array(Schema.String)),
-		ids: Schema.optionalKey(Schema.Array(Schema.String)),
-		all: Schema.optionalKey(Schema.Boolean)
-	})
-});
 const HistoryRevisions = Schema.Array(
 	Schema.StructWithRest(Schema.Struct({ actor: Schema.NullOr(Schema.Struct({ kind: Schema.String, id: Schema.String })) }), [
 		Schema.Record(Schema.String, Schema.Json)
 	])
 );
-const recordHistoryTool = defineTool('record_history', {
-	behavior: { data: true },
-	description: "A record's revisions, oldest first: each write's who (by), when, cause and changed fields. at: { instant }, { revision } or { before: <approval request id> } ends it there; output picks the read output shown.",
-	parameters: Schema.Struct({
-		model: Schema.String,
-		id: Schema.String,
-		at: Schema.optionalKey(Schema.Record(Schema.String, Schema.Union([Schema.String, Schema.Number]))),
-		output: Schema.optionalKey(Schema.String)
-	})
-});
-const { actor_kind: _kind, invocation: _invocation, order: _order, ...AUDIT_FILTERS } = AuditQuery.fields;
-const auditTool = defineTool('audit', {
-	behavior: { data: true, resume: { argument: 'after' } },
-	description: "Administrators only: the audit trail of who did what, when and how it ended, newest first, filtered by the given fields; id answers one event in full.",
-	parameters: Schema.Struct({
-		id: Schema.optionalKey(Schema.String),
-		...AUDIT_FILTERS
-	})
-});
-const FIXED_TOOLS: readonly AgentTool[] = [
-	recordsTool, describeTool, pageTool, actTool, syncTool, updatePlanTool, goalsTool, skillTool, historyTool,
-	readMessagesTool, readFileTool, geocodeTool, readSource, searchSource, listSource, subagentTool,
-	documentTool, downloadTool, runJsTool, askParentTool, askTool, waitTool, runsTool, logsTool, auditTool,
-	approvalsTool, recordHistoryTool, runToolTool
-].map(({ name, description, input, behavior }) => ({ name, description, input, behavior }));
-const FIXED_NAMES: ReadonlySet<string> = new Set(FIXED_TOOLS.map((tool) => tool.name));
+/**
+ * Whom a conversation serves, fixed for its life: an in-app staff member, an in-app external member, or a messaging
+ * channel's sender. Each has one tool list, so a conversation's `tools[]` never changes; a tool its step cannot use
+ * answers why.
+ */
+export type Audience = 'staff' | 'member' | 'channel';
+const ALL_TOOLS = [
+	agentReadTool, describeTool, pageTool, actTool, syncTool, updatePlanTool, skillTool, historyTool, readMessagesTool,
+	readFileTool, viewImageTool, readOutputTool, geocodeTool, readSource, searchSource, listSource, subagentTool,
+	subagentReadTool, subagentMessageTool, subagentStopTool, documentTool, downloadTool, runJsTool, askTool, waitTool,
+	runToolTool
+];
+const AUDIENCE: { readonly [A in Audience]: ReadonlySet<string> } = {
+	staff: new Set(ALL_TOOLS.map((tool) => tool.name).filter((name) => name !== 'read_messages')),
+	member: new Set(ALL_TOOLS.map((tool) => tool.name).filter((name) => !['read_messages', 'download', 'workspace_read', 'workspace_search', 'workspace_list_dir'].includes(name))),
+	channel: new Set(ALL_TOOLS.map((tool) => tool.name).filter((name) => !['page', 'update_plan', 'download', 'workspace_read', 'workspace_search', 'workspace_list_dir'].includes(name)))
+};
+const SUBAGENT_TOOLS: ReadonlySet<string> = new Set(['subagent', 'subagent_read', 'subagent_message', 'subagent_stop', 'update_plan']);
+/** The fixed tool list of an audience; a sub-agent's leaves out delegation and planning. */
+export const fixedTools = (audience: Audience, child: boolean): readonly AgentTool[] =>
+	ALL_TOOLS.filter((tool) => AUDIENCE[audience].has(tool.name) && !(child && SUBAGENT_TOOLS.has(tool.name)))
+		.map(({ name, description, input, behavior }) => ({ name, description, input, behavior }));
+const FIXED_NAMES: ReadonlySet<string> = new Set(ALL_TOOLS.map((tool) => tool.name));

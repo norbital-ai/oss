@@ -2,8 +2,8 @@
 // ranges, `seq` patterns, labels naming an id, calendar days declared as instants, state names and reachability, search
 // index widths, cron strings, event inputs, rates, IP limits, visitor grants and refs, layer maps and outputs
 // (a model's read and write layers, a policy's grant layers), syncs (their connection, parsers, cadence and instance), embedding
-// origins; and, over the model sources, a write callback reading inside a loop and a notice sent through a connection that
-// carries no conversation. Each finding names the declaring file.
+// origins, and an automation holding a policy scoped by `actor.*`. The source checks are `source.ts`'s. Each finding
+// names the declaring file.
 import { Array, Predicate, Result } from 'effect';
 import { LIMITS, size_bytes } from '@norbital-ai/bolt/engine';
 import type { EngineManifest, GrantData } from '@norbital-ai/bolt/engine';
@@ -13,8 +13,10 @@ import {
 	parse_cron,
 	parse_rate,
 	DRIVERS,
+	driver_of,
 	SYSTEM
 } from '@norbital-ai/bolt/tooling';
+import { canonical } from '@norbital-ai/store';
 import { clock_default } from '@norbital-ai/store/vars';
 import { label_expression, label_paths } from '@norbital-ai/store/label';
 
@@ -49,7 +51,7 @@ const outputFields = (
 	const fields = outputLayers(m, c, output)?.[c]?.fields;
 	return fields === undefined || fields === 'all' ? undefined : fields;
 };
-/** A read grant whose root `where` scopes to the requestor's own rows: `{ <sys_user ref>: { eq: { var: 'requestor.id' } } }`. */
+/** A read grant whose root `where` scopes to the actor's own rows: `{ <sys_user ref>: { eq: { var: 'actor.id' } } }`. */
 const ownRows = (
 	m: EngineManifest,
 	c: string,
@@ -63,7 +65,7 @@ const ownRows = (
 				list(m.relationships[`${c}.${f}`]?.to).includes('sys_user') &&
 				Predicate.isObject(op) &&
 				Predicate.isObject(op.eq) &&
-				op.eq.var === 'requestor.id'
+				op.eq.var === 'actor.id'
 		)
 	);
 };
@@ -360,7 +362,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 /**
  * Layer maps: each model's read and write paths resolve segment by segment (`layer_models`); a layer names
  * fields its model has, a write layer only writable columns and never the FK that ties its rows to the layer above
- * (the engine sets it); `filled` stays within `create.columns`. A policy grants
+ * (the engine sets it); `filled` stays within `create`'s fields. A policy grants
  * outputs its model declares and filters only their paths, and it grants a write verb only beside the model's own.
  */
 function layerRules({ m, at }: RuleContext): void {
@@ -447,7 +449,7 @@ function layerRules({ m, at }: RuleContext): void {
 						'model/layer',
 						'model',
 						model,
-						`create.filled: '${f}' is not among create.columns of ${path}`
+						`create.filled: '${f}' is not among create's fields of ${path}`
 					);
 	}
 	for (const [p, spec] of Object.entries(m.policies))
@@ -498,6 +500,11 @@ const validRate = (rate: string): boolean => {
 	return Result.isSuccess(parsed) && parsed.success;
 };
 
+/** Whether a grant tree holds a `{ var: 'actor.…' }` operand at any depth. */
+const namesActor = (v: unknown): boolean =>
+	Predicate.isObject(v) &&
+	((typeof v['var'] === 'string' && v['var'].startsWith('actor.')) || Object.values(v).some(namesActor));
+
 function automationRules({ m, bodies, at }: RuleContext): void {
 	for (const [name, a] of Object.entries(m.automations)) {
 		// a run holds exactly its declared policies: at least one, each declared
@@ -516,6 +523,13 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 					'automation',
 					name,
 					`policies: there is no policy '${String(p)}'`
+				);
+			else if (namesActor(m.policies[p].grants))
+				at(
+					'check/actor-scoped-automation',
+					'automation',
+					name,
+					`policies: '${p}' scopes by actor.*; an automation runs as the system identity; actor.* matches nothing`
 				);
 		for (const [field, kind] of Object.entries(a.input ?? {})) {
 			if (kind.kind !== 'rows') continue;
@@ -562,7 +576,7 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 			if (dot < 1 || entry === undefined || entry.with === 'file' || entry.read !== true)
 				at('access/sync', 'policy', p, `'${key}' is not a remote read sync (model.sync_name)`);
 		}
-		for (const [key, v] of Object.entries(spec.limits ?? {})) {
+		for (const [key, v] of Object.entries(m.workspace.limits?.[p] ?? {})) {
 			// a rate admits at least one request per window
 			for (const x of list(v)) {
 				const rate = String(Predicate.isObject(x) ? x.rate : x);
@@ -583,6 +597,8 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 				);
 		}
 	}
+	for (const p of Object.keys(m.workspace.limits ?? {}))
+		if (m.policies[p] === undefined) at('access/limit', 'workspace', '', `limits names '${p}', which is not a policy`);
 }
 
 function visitorRules({ m, at }: RuleContext): void {
@@ -625,7 +641,7 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 			at('kiosk/pages', 'app', kiosk, 'a kiosk has at least one page');
 		// A kiosk's authority is fixed and always on: its policies admit no open-ended grant. Every output it reads
 		// lists its fields (a narrow named output; its history shows the same), every create and update lists its
-		// columns, and nothing deletes.
+		// fields, and nothing deletes.
 		for (const p of policies) {
 			const held = m.policies[p];
 			if (held === undefined) continue;
@@ -640,7 +656,7 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 						);
 				for (const op of ['create', 'update'] as const)
 					if (g[op] !== undefined && (grantColumns(g[op], c)?.length ?? 0) === 0)
-						narrow(`${c}.${op} lists its columns explicitly; a kiosk takes no open grant`);
+						narrow(`${c}.${op} lists its fields explicitly; a kiosk takes no open grant`);
 				if (g.delete !== undefined) narrow(`${c}: a kiosk never deletes`);
 			}
 		}
@@ -680,7 +696,45 @@ type IntegrationSpec = EngineManifest['integrations'][string];
 const definition = (m: EngineManifest, name: string): IntegrationSpec | undefined =>
 	m.integrations[name] ?? SYSTEM.integrations[name];
 const conversational = (d: IntegrationSpec | undefined): boolean =>
-	d !== undefined && 'conversation' in DRIVERS[d.driver];
+	d !== undefined && driver_of(d).conversation !== undefined;
+/**
+ * A declared driver's contract holds together and keeps one meaning per name across definitions (bolt's included); a
+ * webhook handler holds declared policies that do not scope by `actor.*`.
+ */
+function integrationRules({ m, at }: RuleContext): void {
+	const declared = new Map<string, Set<string>>();
+	for (const d of Object.values({ ...SYSTEM.integrations, ...m.integrations }))
+		if (typeof d.driver !== 'string')
+			declared.set(d.driver.name, (declared.get(d.driver.name) ?? new Set()).add(canonical(driver_of(d))));
+	for (const [name, d] of Object.entries(m.integrations)) {
+		const bad = (code: string, message: string) => at(`integration/${code}`, 'integration_definition', name, message);
+		if (typeof d.driver !== 'string') {
+			const { name: driver, ...contract } = d.driver;
+			if (Object.hasOwn(DRIVERS, driver))
+				bad('driver', `driver: '${driver}' is one of Bolt's kinds; name it as a string or declare another name`);
+			else if ((declared.get(driver)?.size ?? 0) > 1)
+				bad('driver', `driver: '${driver}' is declared with another contract elsewhere; one name, one contract`);
+			if ((contract.conversation !== undefined) !== (contract.read === 'deliveries'))
+				bad('driver', "driver: a conversation is read as 'deliveries', and only a conversation is");
+			if ((contract.items !== undefined) !== (contract.read === 'items'))
+				bad('driver', "driver: pushed items are read as 'items', and only they are");
+			if (contract.credential === true && contract.request === undefined)
+				bad('driver', 'driver: a credential is sealed for requests; declare request or drop credential');
+			if (contract.conversation?.address !== undefined && !contract.conversation.address.includes('{}'))
+				bad('driver', "driver: a conversation's address names the handle as {}");
+		}
+		const webhook = d.webhook;
+		if (webhook?.handle !== true) {
+			if (webhook?.policies !== undefined) bad('webhook', 'webhook: policies are a handler\'s; declare handle or drop them');
+			continue;
+		}
+		for (const p of webhook.policies ?? [])
+			if (m.policies[p] === undefined) bad('webhook', `webhook.policies: there is no policy '${p}'`);
+			else if (namesActor(m.policies[p].grants))
+				bad('webhook', `webhook.policies: '${p}' scopes by actor.*; a handler runs as the system identity; actor.* matches nothing`);
+		if (webhook.policies === undefined) bad('webhook', 'webhook.handle holds declared policies: name them in webhook.policies');
+	}
+}
 const BUILTIN_PARSERS = ['xlsx', 'csv', 'tsv', 'json', 'ics', 'txt'];
 const MEDIA_TOPS = [
 	'application',
@@ -698,7 +752,7 @@ function syncRules({ m, at }: RuleContext): void {
 	for (const [model, c] of Object.entries(m.exposures))
 		for (const [name, sync] of Object.entries(c.syncs ?? {})) {
 			const bad = (code: string, message: string) =>
-				at(`sync/${code}`, 'model', model, `syncs.${name}: ${message}`);
+				at(`sync/${code}`, 'sync', `${model}.${name}`, message);
 			if (sync.with === 'file') {
 				if (sync.every !== undefined || sync.partitions !== undefined)
 					bad(
@@ -757,6 +811,7 @@ const RULES = [
 	visitorRules,
 	kioskRules,
 	syncRules,
+	integrationRules,
 	embedRules
 ] as const;
 
@@ -820,10 +875,10 @@ function visitorShape(
 					);
 				else if (label.some((l) => !fields.includes(l)))
 					bad(`${c}: output '${output}' lists the label (${label.join(', ')})`);
-				// an anonymous visitor reads back only what it owns: a `sys_user` ref holding `requestor.id`
+				// an anonymous visitor reads back only what it owns: a `sys_user` ref holding `actor.id`
 				if (creates.has(c) && !ownRows(m, c, read))
 					bad(
-						`${c}: a ${options.title} reads a model ${options.creates} creates only where a sys_user ref eq requestor.id`
+						`${c}: a ${options.title} reads a model ${options.creates} creates only where a sys_user ref eq actor.id`
 					);
 			}
 			if (g.create !== undefined)

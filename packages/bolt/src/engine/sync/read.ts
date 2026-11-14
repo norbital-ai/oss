@@ -13,12 +13,13 @@
 // from hints, so while healthy its slots rest until tomorrow; a page that found nothing and moved nothing commits nothing.
 import { Clock, Effect, Predicate, Schema, Struct } from 'effect';
 import { canonical, database_value, q, sha256_hex } from '@norbital-ai/store';
-import { DRIVERS } from '../../decl/runtime/integration.ts';
+import { driver_of } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { LIMITS, type Authority, type DriverPage, type EngineActor } from '../contracts.ts';
+import { type DriverPage, Port } from '@norbital-ai/host-api';
+import { LIMITS, type Authority, type EngineActor } from '../contracts.ts';
 import { is_transient, type EngineError } from '../errors.ts';
-import { Port, uuid } from '../port.ts';
+import { uuid } from '../port.ts';
 import { enqueue } from '../runs/queue.ts';
 import { iso } from '../runs/time.ts';
 import { modelKey } from '../write/flatten.ts';
@@ -280,17 +281,16 @@ export function makeRead(e: SyncEngine) {
 			);
 		};
 		const o = (yield* e.act({
-			model: s.model,
-			verb: 'upsert',
-			on_conflict: 'update',
-			input: upserts,
+			name: `${s.model}.upsert`,
+			acts: [{ model: s.model, verb: 'upsert', on_conflict: 'update', input: upserts }],
+			from: 'Server',
 			key,
 			issuedAt: b.now,
 			authority: x.authority,
 			bindings: b,
 			invocationId: key,
 			readGuards: reads,
-			mode: { _tag: 'Sync', sync: s.name, instance: x.inst.id, fields, deletes, pieces }
+			sync: { sync: s.name, instance: x.inst.id, fields, deletes, pieces }
 		})).outcome;
 		if (o.kind !== 'committed')
 			return yield* Effect.fail(
@@ -518,7 +518,7 @@ export function makeRead(e: SyncEngine) {
 		const s = x.s,
 			inst = x.inst;
 		const pushed: DriverPage | undefined =
-			'items' in DRIVERS[inst.definition.driver]
+			driver_of(inst.definition).items !== undefined
 				? yield* e.links.read(inst.id, s.target, partition, cursor).pipe(
 						Port.call(`${s.name} driver`, LIMITS.callMs.http),
 						Effect.mapError((error) =>
@@ -540,9 +540,9 @@ export function makeRead(e: SyncEngine) {
 				{
 					partition: partition === '' ? null : partition,
 					instance: inst.id,
-					...(DRIVERS[inst.definition.driver].read === 'items'
+					...(driver_of(inst.definition).read === 'items'
 						? { items: pushed?.items ?? [] }
-						: DRIVERS[inst.definition.driver].read === 'deliveries'
+						: driver_of(inst.definition).read === 'deliveries'
 							? { deliveries: inbox.deliveries }
 							: { cursor })
 				},
@@ -679,8 +679,8 @@ export function makeRead(e: SyncEngine) {
 	const pushes = (s: RemoteSync) => {
 		const definition = definitionOf(m, s.definition);
 		if (definition === undefined) return false;
-		const driver = DRIVERS[definition.driver];
-		return 'conversation' in driver || 'items' in driver;
+		const driver = driver_of(definition);
+		return driver.conversation !== undefined || driver.items !== undefined;
 	};
 	/** When a slot may read this partition: after a failing read's rest, and a healthy pushed sync from tomorrow. */
 	const readableAt = (s: RemoteSync, instance: string, partition: string, row?: StoredRow) => {
@@ -915,7 +915,7 @@ export function makeRead(e: SyncEngine) {
 			const s = [...syncs_of(m).values()].find(
 				(x) => x.target === sync && x.read && x.definition === inst?.integration
 			);
-			if (inst === undefined || s === undefined || !('items' in DRIVERS[inst.definition.driver]))
+			if (inst === undefined || s === undefined || driver_of(inst.definition).items === undefined)
 				return yield* Effect.fail(
 					BoltError.make('invalid_input', 'decode', `'${instance}' has no pushed sync '${sync}'`)
 				);

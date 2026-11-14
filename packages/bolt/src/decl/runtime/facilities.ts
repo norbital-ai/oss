@@ -1,10 +1,19 @@
 // What server code may cause beyond its own write: runs, notices, and the automation-only I/O
 // facilities. Each answers an Effect (D8); a facility fails with `FacilityFailure` or `Unavailable` (`../errors.ts`).
-import { Schema, type Effect } from 'effect';
+import { Schema } from 'effect';
 import type { Actor } from '../access/actor.ts';
 import type { Eff } from '../ctx.ts';
 import type { OutputOf } from '../body.ts';
-import type { ActRefused, FacilityFailure, Unavailable as UnavailableFailure } from '../errors.ts';
+import type {
+	BrowserSnapshot,
+	BrowserStep,
+	ConvertSource,
+	FacilityFailure,
+	GeoHit,
+	PreviewPdfOptions,
+	Unavailable as UnavailableFailure,
+	WebPage
+} from '@norbital-ai/host-api';
 import type { Checked, Exact, InputKind, InputOf, ValidInput, ValueOf } from '../fields.ts';
 import type {
 	AutomationName,
@@ -23,7 +32,6 @@ import type {
 	Id,
 	Instant,
 	Json,
-	Msg,
 	Point,
 	RecordRef,
 	RequestId,
@@ -31,8 +39,6 @@ import type {
 	Vector
 } from '../values.ts';
 import type { ConversationOf, RequestOf, RequestResult, SendInput } from './integration.ts';
-import type { BrowserSnapshot, BrowserStep } from './browser.ts';
-export type { BrowserSnapshot, BrowserStep } from './browser.ts';
 import type { AutomationInputOf } from './automation-input.ts';
 import type {
 	AiModelClass,
@@ -46,15 +52,15 @@ import type {
 // ── runs ──
 /** A started run: its id and the automation it runs. */
 export type RunHandle<A = AutomationName> = { readonly id: Id<'sys_run'>; readonly automation: A };
-/** Where a run stands. */
-export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'stopped' | 'skipped';
+/** Where a run stands; `waiting`: at `ctx.wait`, holding no lane. */
+export type RunStatus = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'stopped' | 'skipped';
 /**
  * Why a run started; `effect`: a model's `effect` after a committed write; `handoff`: an act that outlived the
  * person-wait, held by its run.
  */
 export type RunCause = 'cron' | 'effect' | 'event' | 'schedule' | 'start' | 'retry' | 'handoff';
 /**
- * Who or what triggered an automation run (`sys_run.trigger`, `ctx.run.trigger`). It never grants authority: every run
+ * Who or what triggered an automation run (`sys_run.trigger`, `ctx.trigger`). It never grants authority: every run
  * executes as the reserved system identity holding its automation's `policies`. A `person` started it by hand (Run now,
  * the `start` callable, an envoy), `agent` set when Norbius started it in that conversation for them; else the `system`
  * did: a `cron`, a model `effect` after `verb` on `records`, an `event` (a committed `verb` on `model`'s `records` the
@@ -102,7 +108,7 @@ export type RunTriggerView =
 			readonly agent?: true;
 	  };
 /**
- * A run as `ctx.runs` and the run ledger show it: cause and trigger, status, due and start time, progress, result
+ * A run as the run ledger shows it: cause and trigger, status, due and start time, progress, result
  * and error. `trigger` is null on an effect's or platform run.
  */
 export type RunRow<O = unknown> = {
@@ -140,26 +146,20 @@ export type StartInput<A> = A extends AutomationName
 	: never;
 /** The result declared by an automation. */
 export type StartOutput<A> = A extends AutomationName ? OutputOf<AutomationSpecOf<A>> : never;
-/** Calls return their declared output; jobs return their durable handle. */
-type RunResult<A> = A extends AutomationName
-	? AutomationSpecOf<A> extends { mode: 'call' } ? StartOutput<A> : RunHandle<A>
-	: never;
-/**
- * `ctx.run`: invokes a call in this request (answering its declared output) or queues a job (answering its durable
- * handle), according to its declaration. Automations and model effects run it; a page has its own `run`. The started
- * run executes as its own automation's `policies`, never the caller's. A person's start needs a policy's
- * `capabilities.automations` grant (30 starts per automation and starter a minute); code that runs or schedules needs none.
- */
-export interface Run {
-	<const A extends string>(automation: Is<A, AutomationName>, input: StartInput<A>): Eff<RunResult<A>, ActRefused>;
-}
 type JobName = { [A in AutomationName]: AutomationSpecOf<A> extends { mode: 'call' } ? never : A }[AutomationName];
 /**
- * `ctx.schedule`: queues a job automation after the current write commits (automations and model effects). Follow its
- * progress and result in the runs catalogue (`ctx.runs`, ui's `RunStatus`).
+ * `ctx.schedule`: the one way server code starts a run. It queues a job automation after the current write commits
+ * (automations and model effects); the run executes as its own automation's `policies`, never the caller's, and needs
+ * no start grant (a person's start needs a policy's `capabilities.automations`, 30 starts per automation and starter a
+ * minute). A run is one level deeper than its scheduler unless it is due at least 5 minutes ahead (a self-schedule then
+ * keeps its depth); a write that would queue one past `LIMITS.writeDepth` (8) is refused. Follow its progress and
+ * result in the run ledger (ui's `RunStatus`).
  */
 export interface Schedule {
-	/** Due at once without `at`; with `key`, a queued run under the same key is replaced. */
+	/**
+	 * Due at once without `at`; `at` is an instant or a CEL time expression over `today` and `now`
+	 * (`{ var: 'today + days(1)' }`); with `key`, a queued run under the same key is replaced.
+	 */
 	<const A extends string>(
 		automation: Is<A, JobName>,
 		input: StartInput<A>,
@@ -168,18 +168,14 @@ export interface Schedule {
 }
 
 // ── notices: one shape for `ctx.notify`, approval effects included ──
+/** Whom a notice goes to: a team's members, one member, or a policy's holders. */
+export type Recipient = { team: TeamName } | { user: Id<'sys_user'> } | { policy: PolicyName };
 /**
- * Whom a notice goes to: a team's members, one member, a policy's holders, or, in an approval effect
- * event, the request's `'requester'` or the current step's `'approvers'` (teams and users); elsewhere those two resolve
- * to nobody. `'approvers'` resolves at delivery against active staff, leaves out the requester, and sends nothing once
- * the request has closed.
+ * A model effect's approval roles: the request's `'requester'` or the current step's `'approvers'` (teams and users),
+ * resolved only in an approval event (`ctx.event.kind === 'approval'`). `'approvers'` resolves at delivery against
+ * active staff, leaves out the requester, and sends nothing once the request has closed.
  */
-export type Recipient =
-	| { team: TeamName }
-	| { user: Id<'sys_user'> }
-	| { policy: PolicyName }
-	| 'requester'
-	| 'approvers';
+export type ApprovalRecipient = 'requester' | 'approvers';
 /**
  * A file a notice carries: a stored file, bytes the run holds (`ctx.convert.record`'s answer, kept by the delivery until
  * sent), or a document converted at delivery (after the commit, retried with the delivery) from Markdown or HTML to a
@@ -197,12 +193,12 @@ type ConversationDefinition = {
  * { title: 'New review job', description: `${name} is waiting on the board.`, to: [{ team: 'reviewers' }],
  *   via: [hotline.id], attachments: [{ document: { html }, to: 'pdf', name: 'Brief.pdf' }] }
  */
-export type Notice = {
+export type Notice<To = Recipient> = {
 	/** Plain text, stored and shown as written; not a message key. */
-	title: Msg;
+	title: string;
 	/** Plain text, as `title`. */
-	description?: Msg;
-	to: readonly Recipient[];
+	description?: string;
+	to: readonly To[];
 	/**
 	 * Persisted conversation instances (runtime `sys_integration` rows, by `instance_id`) that also send it to each
 	 * recipient's handle there.
@@ -226,8 +222,8 @@ export type Notice = {
  * 		link: { model: 'projects', id: after.id }, once: `project-moved:${after.id}` })));
  * } }
  */
-export type Notify = (
-	notice: Notice | readonly Notice[]
+export type Notify<To = Recipient> = (
+	notice: Notice<To> | readonly Notice<To>[]
 ) => Eff<{ readonly messages: readonly Id<'sys_message'>[] }>;
 
 // ── facility errors ──
@@ -256,15 +252,6 @@ export type Browser = {
 	download: Call<[url: string, options: { readonly for: FileOwner }], FileRef>;
 	close: Call<[], void>;
 };
-/**
- * `browser_start(ctx, use)`: runs `use` with the run's browser; the tab closes when the run's scope exits,
- * including on failure or interruption. This is the only browser a run gets.
- */
-export const browser_start = <A, E, R>(
-	ctx: { readonly browser: Browser },
-	use: (browser: Browser) => Effect.Effect<A, E, R>
-): Effect.Effect<A, E, R> => use(ctx.browser);
-
 /** A message whose attachments may also be bytes the run holds (`ctx.convert.record`'s answer). */
 type Attaching<P> = P extends { attachments?: readonly FileRef[] }
 	? Omit<P, 'attachments'> & { attachments?: readonly (FileRef | TransientFile)[] }
@@ -310,20 +297,6 @@ export interface Request {
 		op: RequestPayload<N, O>
 	): Eff<RequestResult<IntegrationOf<N>, O>, Failure>;
 }
-/**
- * A read page: its final URL, title and readable text (a PDF's text), and, when the provider reports them, its content type,
- * SHA-256 of the body and a document's page count; with `{ raw: true }` also the markup and its absolute links (a crawl).
- */ // hook:runtime
-export type WebPage = {
-	readonly url: string;
-	readonly title: string | null;
-	readonly text: string;
-	readonly content_type?: string;
-	readonly sha256?: string;
-	readonly pages?: number;
-	readonly html?: string;
-	readonly links?: readonly string[];
-};
 /** `ctx.web` (automations and model effects): reads a public page's text; refuses private, loopback and link-local addresses. */
 export type Web = { read: Call<[url: string, options?: { raw?: boolean }], WebPage> };
 
@@ -367,14 +340,12 @@ export type Files = {
 };
 
 // ── convert: markdown or HTML to a document the workspace declares (`workspace({ convert: { to } })`) ──
-export const PAPER_SIZES = ['A4', 'A3', 'Letter'] as const;
-export type PaperSize = (typeof PAPER_SIZES)[number];
 /**
  * What each conversion target takes beyond `to` and `name`: a `reference` document styles a Word, PowerPoint or
  * OpenDocument output (its fonts, headers, footers and page setup, as pandoc's reference-doc); a PDF sets its paper.
  */
 type ConvertTargets = {
-	pdf: { page?: PaperSize; landscape?: boolean };
+	pdf: PreviewPdfOptions;
 	docx: { reference?: FileRef };
 	pptx: { reference?: FileRef };
 	odt: { reference?: FileRef };
@@ -383,14 +354,6 @@ type ConvertTargets = {
 };
 /** A document format the converter can produce (`ctx.convert.document`, notice attachments, file exports). */
 export type ConvertTarget = keyof ConvertTargets;
-/**
- * The source of a conversion: Markdown (pandoc's dialect, with pipe tables and front matter) or an HTML document. HTML is
- * read for its structure (headings, tables, images, emphasis); its CSS does not carry into the output, and a PDF is typeset
- * by Typst.
- */
-export type ConvertSource =
-	{ readonly markdown: string } | { readonly html: string } | { readonly layout_html: string };
-export type PreviewPdfOptions = Pick<ConvertTargets['pdf'], 'page' | 'landscape'>;
 /**
  * A file's bytes held by the run for one delivery, never stored as a record's file: `ctx.convert.record` answers one,
  * and `ctx.send` and `ctx.notify` attach it (the outbox keeps it until the message is sent).
@@ -671,8 +634,6 @@ export type Ai<Tools> = {
 		readonly Vector[]
 	>;
 };
-/** A geocoding result: the point, a short label and the full address. */
-export type GeoHit = { readonly point: Point; readonly label: string; readonly address: string };
 /** `ctx.geo` (automations and model effects): geocoding is optional; an absent provider fails the call with `Unavailable`. */
 export type Geo = {
 	search(query: string): Eff<readonly GeoHit[], Failure>;

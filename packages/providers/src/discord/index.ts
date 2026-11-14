@@ -16,7 +16,8 @@ import {
 	Stream
 } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
-import type { DriverOpen, Json, LinkStatus, OutboundAttachment } from '@norbital-ai/bolt/engine';
+import type { DriverOpen, LinkStatus, OutboundAttachment } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, notConnected, ProviderUnavailable } from '../errors.ts';
 import { blobOf, field, hostCall, str, storedCredential, withFetch, type Obj } from '../util.ts';

@@ -1,7 +1,8 @@
 import { Effect, Option, Schema } from 'effect';
 import { createDecipheriv, createHash } from 'node:crypto';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
-import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
+import type { DriverOpen, OutboundAttachment } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, notConnected, ProviderUnavailable, type ProviderFailure } from '../errors.ts';
 import {

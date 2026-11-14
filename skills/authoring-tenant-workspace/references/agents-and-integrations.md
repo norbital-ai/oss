@@ -1,6 +1,6 @@
 # Agents and integrations
 
-Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt').mcp>[0]` and `IntegrationLiteral` from `@norbital-ai/bolt/declarations`. Read the contract skill's actual file list; there is no envoy source declaration or assumed envoy card.
+Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt').mcp>[0]` and `IntegrationLiteral` from `@norbital-ai/bolt`. Read the contract skill's actual file list; there is no envoy source declaration or assumed envoy card.
 
 ## Briefs and skills
 
@@ -25,15 +25,17 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 - Never seed envoys.
 - `private` admits a sender whose handle matches a member (phone, email, telegram, Slack or Discord id); others get one fixed notice per 15 minutes. Drivers with no member handle (wechat, custom chat) admit nobody. A notice `via` a Slack or Discord connection reaches each recipient with that id by direct message; `ctx.send` addresses one as `to: '@<id>'`. `public` admits anyone. Email is always addressed; group chat follows `group_messages`.
 - An email sender links only when the receiving server vouches for the `From` domain (DMARC, or aligned DKIM); otherwise it is unknown. Say so before promising a private email envoy on a mail server outside Google and Microsoft: it needs the connection's Authentication server.
-- A group turn or unlinked DM holds the envoy's `policies` alone, every requestor variable null except `{ var: 'requestor.instance' }`.
+- A group turn or unlinked DM holds the envoy's `policies` alone, every actor variable null except `{ var: 'actor.instance' }`.
 - A linked member's DM: `dm: 'union'` adds the member's own authority, admin included; `dm: 'envoy'` holds the envoy's policies with operands bound to the member, admin false, no member routes, tools or automations.
 - Limits are always the envoy's. Envoys never decide approvals.
-- `requestor.instance` is the arriving instance, or the instance of a remote sync run, null otherwise, so it fails closed. It types only against an FK to `sys_integration`.
+- `actor.instance` is the arriving instance, or the instance of a remote sync run, null otherwise, so it fails closed. It types only against an FK to `sys_integration`.
 
 ## Integration definitions
 
-- `integration(spec)` declares description, driver, typed configuration, credentials or OAuth, webhook verification, optional `rate`, inline `test`. Models own their syncs; definitions own no business projection.
-- Built-in conversation definitions reserve whatsapp, email, telegram, slack, discord and wechat.
+- `integration(spec)` declares description, driver, typed configuration, credentials or OAuth, webhook verification and handler, optional `rate`, inline `test`. Models own their syncs; definitions own no business projection.
+- `driver` names a Bolt kind (http, sqlserver, email, chat, calendar) or declares one: `{ name, read, conversation?, … }`. A declared driver runs only where the host registers a provider under its name.
+- `webhook.handle` answers each verified delivery itself: it reads and acts as `webhook.policies` and returns `{ status, body }`. Key its acts by the delivery id.
+- Built-in conversation definitions reserve whatsapp, email, telegram, slack, discord, wechat and chat.
 - `rate` paces every request. HTTP paths stay under the declared HTTPS base URL.
 - SQL Server takes structured operations (`DatabaseRequest` from `@norbital-ai/bolt/engine`); inspect that contract before constructing a request. The host bounds execution.
 - Keep template-specific SQL, retention, assembly and business meaning in template source. Provider and platform code hold no domain rules.
@@ -55,7 +57,7 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 1. Native channels: whatsapp, email, telegram, slack, discord, wechat.
 2. Through the system `chat` integration: Teams, Google Chat, Lark, WeCom, Webex, Mattermost, Messenger, Instagram, X, XChat, LINE, Zalo, QQ, Weixin, Twitch, SMS, iMessage, Dial, AgentPhone, Zernio, Novu, GitHub, GitLab, Linear, Notion, Liveblocks, Velt, Gmail and Resend. WhatsApp Cloud and Kapso sit under whatsapp.
 3. `sys_integration.create { integration: 'chat', name, envoy }`, then the person pairs it, picking the platform and pasting its settings. Their senders match no member, so give these connections a public envoy.
-4. A platform on neither list has no native channel. An `http` definition cannot host an envoy and a workspace cannot supply a provider. An integration may verify and retain webhooks for a model sync; committed records may trigger an effect or business job. This does not supply native channel conversations, sender identity or typing. Never declare an automation webhook trigger.
+4. A platform on neither list has no native channel. An `http` definition cannot host an envoy and a workspace cannot supply a provider. An integration may verify webhooks and handle each delivery (`webhook.handle`) or retain them for a model sync; committed records may trigger an effect or business job. This does not supply native channel conversations, sender identity or typing. Never declare an automation webhook trigger.
 
 A platform's level decides what can be promised to a customer. Read it from the connection form or `integrations.md` before you say a channel stays in step:
 

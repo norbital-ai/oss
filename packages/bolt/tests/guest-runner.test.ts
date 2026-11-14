@@ -5,8 +5,8 @@ import { LIMITS, type CrossAnswer, type Invocation } from '../src/engine/contrac
 import { Guest, GuestLimits, type Bridge, type CrossCall } from '../src/engine/services.ts';
 import { guest_layer } from './support/guest-fixture.ts';
 import vm from 'node:vm';
-import { module_script } from '../src/node/guest-hooks.ts';
-import { node_guests } from '../../bolt-cli/src/guests.ts';
+import { module_script } from '@norbital-ai/host-api/node';
+import { node_guests } from '@norbital-ai/host-api/node';
 const invocation: Invocation = {
 	id: 'scope',
 	kind: 'automation',

@@ -55,22 +55,22 @@ describe('read contract', () => {
 					(yield* Effect.flip(where(cat, 'document', { day: { gte: { var: text } } }))).message
 				).toContain('materialize time before reading');
 			expect(
-				(yield* Effect.flip(where(cat, 'document', { day: { gte: { var: 'requestor.id' } } })))
+				(yield* Effect.flip(where(cat, 'document', { day: { gte: { var: 'actor.id' } } })))
 					.message
 			).toContain('not a date');
 			expect(
-				(yield* Effect.flip(where(cat, 'document', { title: { eq: { var: 'requestor.email' } } })))
+				(yield* Effect.flip(where(cat, 'document', { title: { eq: { var: 'actor.email' } } })))
 					.code
 			).toBe('invalid');
 			for (const old of [{ param: 'from' }, { actor: 'id' }, { clock: 'today' }])
 				expect((yield* Effect.flip(where(cat, 'document', { title: { eq: old } }))).code).toBe(
 					'invalid'
 				);
-			expect(yield* where(cat, 'document', { title: { eq: { var: 'requestor.id' } } })).toEqual({
+			expect(yield* where(cat, 'document', { title: { eq: { var: 'actor.id' } } })).toEqual({
 				t: 'cmp',
 				field: 'title',
 				op: 'eq',
-				arg: { _tag: 'Var', text: 'requestor.id' }
+				arg: { _tag: 'Var', text: 'actor.id' }
 			});
 		})
 	);

@@ -103,8 +103,8 @@ describe('the envelope', () => {
 			);
 			yield* Effect.yieldNow;
 			const drained = yield* admit.drain(1000).pipe(Effect.forkChild);
-			expect(yield* Fiber.join(request)).toMatchObject({ code: 'busy' });
-			expect(yield* Fiber.join(automation)).toMatchObject({ code: 'busy' });
+			expect(yield* Fiber.join(request)).toMatchObject({ _tag: 'Unavailable', facility: 'admission' });
+			expect(yield* Fiber.join(automation)).toMatchObject({ _tag: 'Unavailable', facility: 'admission' });
 			yield* Deferred.succeed(a, undefined);
 			yield* Deferred.succeed(b, undefined);
 			yield* Effect.forEach(active, Fiber.join);
@@ -151,9 +151,10 @@ describe('the envelope', () => {
 				const drained = yield* admit.drain(50).pipe(Effect.forkChild);
 				yield* TestClock.adjust('50 millis');
 				expect(yield* Fiber.join(drained)).toBe(false);
-				expect(yield* Fiber.join(shed)).toMatchObject({ code: 'busy' });
+				expect(yield* Fiber.join(shed)).toMatchObject({ _tag: 'Unavailable', facility: 'admission' });
 				expect(yield* Effect.flip(admit.admit(0, Effect.succeed('new')))).toMatchObject({
-					code: 'busy'
+					_tag: 'Unavailable',
+					facility: 'admission'
 				});
 				yield* Fiber.interrupt(active);
 				expect(yield* (yield* envelope(1)).drain(10_000)).toBe(true);

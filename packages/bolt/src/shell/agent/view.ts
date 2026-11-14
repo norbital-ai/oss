@@ -2,7 +2,7 @@
 // and the model-change dividers (L-BOLT-547). Each is a function of the rows alone, so a reload shows the same thing.
 import { Array as Arr, Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
-import type { StudioView } from '../studio/model.ts';
+import type { StudioView } from '@norbital-ai/host-api';
 import { humanise, handle_words } from '../i18n.ts';
 
 /** One mark per state: waiting on a person is not failing, and a finished or stopped turn is not idle. */
@@ -181,7 +181,7 @@ export function reportView(row: AgentRow): (StepView & { message: string }) | nu
 		target: parsed ? (match[1]?.split('\n')[0] ?? '') : '',
 		message:
 			parsed && row.report.asked === true
-				? message.replace(/\nAnswer it with subagent message\.$/, '')
+				? message.replace(/\nAnswer it with subagent_message\.$/, '')
 				: message
 	};
 }
@@ -224,7 +224,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 					target: readsOf(a)
 						.map(([key]) => key)
 						.filter((key) => !key.includes('.'))
-						.map((key) => key.replace(/_/g, ' '))
+						.map((key) => key.replace(/^\$/, '').replace(/_/g, ' '))
 						.join(', ')
 				},
 	// an inference's answer, built on its draft
@@ -250,11 +250,6 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target: ''
 	}),
 	update_plan: () => ({ icon: 'lucide:notebook-pen', verb: 'Wrote the plan', target: '' }),
-	goals: (a) => ({
-		icon: 'lucide:list-checks',
-		verb: 'Updated the checklist',
-		target: Arr.isArray(a['items']) ? `${a['items'].length} steps` : ''
-	}),
 	compact: (a) => ({
 		icon: 'lucide:shrink',
 		verb: 'Compacted the context',
@@ -267,14 +262,12 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target: str(a['query'])
 	}),
 	read_messages: () => ({ icon: 'lucide:messages-square', verb: 'Read messages', target: '' }),
-	read_file: (a) =>
-		typeof a['call'] === 'string'
-			? { icon: 'lucide:file-output', verb: 'Read the full result', target: '' }
-			: {
-					icon: 'lucide:file-text',
-					verb: Arr.isArray(a['crops']) ? 'Zoomed into a page' : 'Read file',
-					target: Arr.isArray(a['crops']) ? `${a['crops'].length} regions` : str(a['text'])
-				},
+	read_file: (a) => ({ icon: 'lucide:file-text', verb: 'Read file', target: str(a['text']) }),
+	view_image: (a) =>
+		Arr.isArray(a['crops'])
+			? { icon: 'lucide:zoom-in', verb: 'Zoomed into a page', target: `${a['crops'].length} regions` }
+			: { icon: 'lucide:image', verb: 'Viewed an image', target: '' },
+	read_output: () => ({ icon: 'lucide:file-output', verb: 'Read the full result', target: '' }),
 	geocode: (a) => ({
 		icon: 'lucide:map-pin',
 		verb: 'Looked up a place',
@@ -306,22 +299,18 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target: Arr.isArray(a['paths']) ? `${a['paths'].length} files` : str(a['path'])
 	}),
 	subagent: (a) => ({
-		...(a['action'] === 'message'
-			? { icon: 'lucide:send', verb: 'Sent a message to a subagent' }
-			: a['action'] === 'stop'
-				? { icon: 'lucide:circle-stop', verb: 'Stopped a subagent' }
-				: {
-						icon: 'lucide:bot',
-						verb: a['action'] === 'spawn' ? 'Started a subagent' : 'Checked subagents'
-					}),
-		target: (str(a['task']) || str(a['text'])).split('\n')[0] ?? ''
+		icon: 'lucide:bot',
+		verb: 'Started a subagent',
+		target: str(a['task']).split('\n')[0] ?? ''
 	}),
+	subagent_read: () => ({ icon: 'lucide:bot', verb: 'Checked a subagent', target: '' }),
+	subagent_message: (a) => ({
+		icon: 'lucide:send',
+		verb: 'Sent a message to a subagent',
+		target: str(a['text']).split('\n')[0] ?? ''
+	}),
+	subagent_stop: () => ({ icon: 'lucide:circle-stop', verb: 'Stopped a subagent', target: '' }),
 	wait: () => ({ icon: 'lucide:hourglass', verb: 'Waited for background work', target: '' }),
-	ask_parent: (a) => ({
-		icon: 'lucide:message-circle-question',
-		verb: 'Asked the main agent',
-		target: str(a['question']).split('\n')[0] ?? ''
-	}),
 	document: (a) => ({
 		icon: 'lucide:file-plus',
 		verb: 'Made a document',

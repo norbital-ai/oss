@@ -26,7 +26,7 @@ export type CustomField<Shape extends InputKind, S extends CustomFieldLiteral<Sh
 };
 
 /**
- * `src/data/custom_field/<f>/+definition.ts`: a reusable structured value (`shape`, an input kind literal) that model fields
+ * `src/data/custom_field/<f>/+custom_field.ts`: a reusable structured value (`shape`, an input kind literal) that model fields
  * store as `{ kind: 'custom', of: '<f>' }`, with an optional pure `validate` and a `+renderer.svelte` beside it.
  * It is an inline value, not an entity: use a model when identity, lifecycle, authority, history or relational queries
  * need one. Without a renderer the value is shown and edited from its `shape`; a renderer (`CustomFieldView`) is used

@@ -1,36 +1,40 @@
-// The platform's own skills: how to work with any workspace's records and how to take in unstructured material. Every
-// agent has them beside the workspace's skills (a workspace skill of the same name replaces one); the system prompt
-// lists them and the `skill` tool reads them, so their text costs nothing until an agent opens it.
+// The platform's own skills: how to work with any workspace's records and how to take in unstructured material. An
+// agent has those its audience can use beside the workspace's skills (a workspace skill of the same name replaces one);
+// the catalogue note lists them and the `skill` tool reads them, so their text costs nothing until an agent opens it.
 import type { SkillSpec } from '../manifest.ts';
 
 const skill = (text: string): SkillSpec => ({ text, digest: '', files: [] });
+/** Skills for changing the workspace's source: listed only to an author. */
+export const AUTHORING_SKILLS: ReadonlySet<string> = new Set([
+	'requirements', 'data-modelling', 'product-ux', 'engineering', 'capabilities', 'workspace-eval'
+]);
 
 export const PLATFORM_SKILLS: { readonly [name: string]: SkillSpec } = {
 	records: skill(`---
 description: Protocol for reading and writing a workspace's records.
 ---
-1. Know: describe_workspace { names } gives every model the task touches, in one call, before any read of them, unless the conversation shows them.
-2. Read: one request with every root; narrow by where, never by paging. Pick rows by their relations with is/some/none/every/count. Every read answers total, its match count, beside its rows; aggregate is for sums, averages and groups, and answers measures instead of rows. A value may be a { var } over requestor, today, now.
+1. Know: the catalogue note lists each model you read with its fields and writes; describe_workspace { names } gives a model's outputs, links and write columns.
+2. Read: one request with every root, narrowed by where. Pick rows by their relations with is/some/none/every/count. total is the match count; aggregate answers sums, averages and groups instead of rows.
 3. Resolve: each referenced record by one exact read. Missing and stated in the source: create it nested if the write allows, else ask. A word search is ranking, not proof of identity or a category count.
 4. Write: one act, the whole change as a batch, related rows inside their root. A computed or large batch is a JSON file run_js returned, given as input_file.
-5. Report from the answer, with no read after it: a committed write returns its stored rows; a held write awaits its approvers, say so; a refused one names why, say that. An empty read earns one different read, then a question.
+5. Report from the answer: a committed write returns its stored rows, past five the columns it wrote; a held write awaits its approvers; a refused one names why.
 `),
 	ingest: skill(`---
 description: Protocol for taking in documents, scans, photos, handwriting, sheets or messages, whether or not they touch records.
 ---
-1. Decide what was asked. Reading, summarising or checking material writes nothing. Filing or acting on it follows steps 5 to 7. Matching against records happens only when the task, or the workspace's own paperwork skill, calls for it; a read-only task may cross-reference to raise confidence and says so.
-2. Read everything once: every file, page and sheet. read_file { id } answers lines and shows page images; a scan's lines are its transcript. A locked PDF or Office file opens with read_file { id, password }, the password the person gave; without one, ask for it. A format read_file has no parser for gets a tool of your own, never a decoder written by hand in run_js.
-3. Read images by eye, value by value. Crossings-out, corrections and margin notes are data: report what stands and what was struck. Prove every table: qty × price = amount, amounts = subtotal, subtotal + tax = total; a sum that fails means a misread digit, so zoom that row. Anything unclear: one read_file with crops listing every such region together. Still unclear: name the field and give your best reading marked uncertain, never a confident guess.
-4. Comparing documents: line by line, every field, and report each difference with both values and its amount.
-5. Map: every target column to a source value, kinds and required columns from describe_workspace. Trace each value to where it was read; check numbers, units and dates against the original.
-6. Resolve: every relational field by an exact read of its source identifier (like ignores case, eq does not; read every field you need at once). A transcript's code or name a character or two from the one close record: zoom on it once; if the crop can be that record, LINK and say so. Decide LINK, CREATE or UPDATE with the value, or REFUSE naming the field. Only a required field refuses: an optional value that is blank or unreadable stays empty and you say so. Never take the closest name, the current user, or a record from another row. Create a missing catalogue row only when its required values are stated and the task allows. Find an existing root by its source identity first; an unchanged repeat, same content hash and values, writes nothing.
-7. Write and confirm: a table's numbers or a file's data are computed in run_js from the file itself, never retyped; single values go straight in the write. A file field takes the whole reference the message lists, never its bare id. Report the root model and every relational field as model.field → target, decision, value. Mark any value not from the source MOCKED.
+1. Reading, summarising or checking material writes nothing. Filing or acting on it follows rules 5 to 7; matching against records happens only when the task calls for it.
+2. Read every file, page and sheet. A locked PDF or Office file needs the password the person gave.
+3. An image's values come from the image itself. Crossings-out, corrections and margin notes are data: report what stands and what was struck. Prove every table by its arithmetic (quantity × price = amount, amounts = subtotal, subtotal + tax = total): a failed sum is a misread digit. A value still unclear is named with your best reading marked uncertain.
+4. Comparing documents: line by line, every field; report each difference with both values.
+5. Map every target column to a source value, its kind and whether it is required; trace each value to where it was read.
+6. Resolve every relational field by an exact read of its source identifier. Decide LINK, CREATE or UPDATE, or REFUSE naming the field; only a required field refuses, an optional unreadable one stays empty. Never take the closest name, the current user or another row's record. Find an existing root by its source identity first; an unchanged repeat writes nothing.
+7. Numbers from a table or a file's data are computed from the file, never retyped. Report the root and every relational field as model.field → target, decision, value; mark any value not from the source MOCKED.
 `),
 	research: skill(`---
 description: Protocol for web research, scraping and downloading.
 ---
-1. web_search, then open the primary source: the authority, publisher or vendor, not an aggregator.
-2. One browser call: open, act, evaluate. Extract with one evaluate returning JSON rows, never by reading screens. Loop pages or sites inside run_js with tool('browser', …) and return only the result.
+1. Search, then open the primary source: the authority, publisher or vendor, not an aggregator.
+2. Extract a page's data as JSON rows in one evaluation, never by reading screens; many pages or sites are one script.
 3. Follow pagination until the set is complete. Keep each value's URL and exact wording; cite it.
 4. Media: save the file's own URL, never the page's. What a recording says comes only from its transcript; without one, say so.
 5. When sources disagree, report the disagreement. Change records only if asked, citing the source.
@@ -89,7 +93,7 @@ description: General engineering practice for a workspace change.
 4. src/lib/<domain>/ holds reusable services. Logic a server body and a page both need lives there once and both import it. No lone file: a helper with one caller stays beside that caller.
 5. Keep values in the form the platform already gives them; decode at the boundary once. Do not erase types or fabricate partial data.
 6. Tests prove this workspace's own flows: which write its policies hold, for whom, and who approves. Never test what the platform already guarantees.
-7. Finish the source, then verify in this order: types, tests, build, preview. Report what failed and what you fixed.
+7. Finish the source, then verify in the primer's order: diagnosis and tests on the working tree, commit, preview. Report what failed and what you fixed.
 8. When feedback says the result is wrong, remove or merge before adding. A larger diff is not progress.
 `),
 	capabilities: skill(`---

@@ -26,9 +26,38 @@ import {
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import type { PlatformError } from 'effect/PlatformError';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import type { ActInput, ActMap, ActOptions, Callable, Committed, HistoryOptions, PendingApproval, ReadRequest, ReadRequestBase, WriteTarget } from '../decl/ctx.ts';
 import { ActRefused, ActUnknown, act_failure, type ActFailure } from '../decl/errors/act.ts';
-import { FacilityFailure } from '../decl/errors/facility.ts';
+import {
+	type AiPort,
+	AiPortResponseSchema,
+	type AiRequest,
+	type AiResponse,
+	type AuditPort,
+	type AuditRecord,
+	DbError,
+	DOWNLOAD,
+	type DriverEvent,
+	type DriverPage,
+	type Facilities,
+	FacilityFailure,
+	type FilesPort,
+	type GuestIsolatesPort,
+	type GuestProgram,
+	logged_phone,
+	type LogQuery,
+	type LogRow,
+	media_type,
+	off,
+	Port,
+	type PortFailure,
+	type Provider,
+	type SendRefused,
+	type Sql,
+	type TransportPort,
+	uuidv7
+} from '@norbital-ai/host-api';
 import { ReadFailed } from '../decl/errors/read.ts';
 import { nullable_of_expr } from '../decl/model.ts';
 import type { AutomationName, FileSyncName, Is, ModelName, ReadSyncName, ReadableName } from '../decl/names.ts';
@@ -42,37 +71,19 @@ import { triggers_of } from '../engine/runs/queue.ts';
 import { AgentHost } from '../engine/agent/index.ts';
 import { with_browser } from '../engine/agent/browser.ts';
 import { SmartThrottle } from '../engine/agent/throttle.ts';
-import { AiPortResponseSchema } from '../engine/ai-schema.ts';
 import { pack_asset_loader, type Artifact } from '../engine/artifact/read.ts';
 import { audit_shape } from '../engine/audit.ts';
 import { decode_acts } from '../engine/callables/index.ts';
 import { output_schema } from '../engine/callables/output.ts';
-import type {
-	AiResponse,
-	AiRequest,
-	Authority,
-	DriverEvent,
-	DriverPage,
-	EngineActor,
-	FilesPort,
-	GuestIsolatesPort,
-	LogQuery,
-	LogRow,
-	Sql,
-	TransportPort,
-	AiPort
-} from '../engine/contracts.ts';
+import type { Authority, EngineActor } from '../engine/contracts.ts';
 import { TenantDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { EnvoyConfig } from '../engine/envoys/index.ts';
-import { DbError, type EngineError } from '../engine/errors.ts';
-import { DOWNLOAD, media_type } from '../engine/files/media.ts';
-import type { GuestProgram } from '../engine/guest/runner.ts';
+import { type EngineError } from '../engine/errors.ts';
 import { EngineLive, type EngineServices } from '../engine/host.ts';
 import { Authorities } from '../engine/identity/actor.ts';
 import { member_column, member_value, parse_address } from '../engine/identity/address.ts';
 import {
 	load_keys,
-	logged_phone,
 	make_identity_host,
 	mint,
 	send_code,
@@ -81,7 +92,6 @@ import {
 	type IdentityHost
 } from '../engine/identity/session.ts';
 import { layered, layers, type EngineManifest } from '../engine/manifest.ts';
-import { Port, type PortFailure } from '../engine/port.ts';
 import {
 	Ai,
 	Browser,
@@ -120,22 +130,21 @@ import {
 import { Syncs, syncs_of } from '../engine/sync/index.ts';
 import { integration_links } from '../engine/integrations/links.ts';
 import { credentials } from '../engine/integrations/credentials.ts';
-import type { Provider } from '../engine/integrations/driver.ts';
 import { Secrets } from '../engine/secrets.ts';
-import type { SendRefused } from '../engine/conversations/status.ts';
 import { SYNC_DELIVER } from '../engine/sync/outbox.ts';
 import { IDENTITY, drain, load_pack, source_of, type Pack } from '../engine/write/pack.ts';
 import { restore_source, seed as restore, type SeedPack } from '../engine/write/seed.ts';
-import { off } from '../facilities/off.ts';
 import { unmet } from '../facilities/needs.ts';
-import type { Facilities } from '../facilities/index.ts';
-import { keys_port } from '../node/keys.ts';
-import { tenant_db_port } from '../node/db/port.ts';
-import { loopback_http_port } from '../node/net.ts';
+import {
+	artifact_port,
+	keys_port,
+	loopback_http_port,
+	loopback_tcp_port,
+	tenant_db_port
+} from '@norbital-ai/host-api/node';
 import { node_ports } from '../node/ports.ts';
-import { loopback_tcp_port } from '../node/tcp.ts';
+import { DOCS_DIR } from '../node/docs.ts';
 import { file_ref } from '../page/file-ref.ts';
-import type { AuditPort, AuditRecord } from '../protocol/audit.ts';
 import { catalog } from '../protocol/catalog.ts';
 import { BoltError } from '../protocol/errors.ts';
 import { facility_layers } from '../protocol/facility-layers.ts';
@@ -145,7 +154,7 @@ import { PublicPages, public_pages } from '../protocol/pages.ts';
 import { decode_read_request, plan_read_request, type DynamicRead, type ReadPlan } from '../protocol/read-request.ts';
 import { RowStateFields } from '../protocol/record-contracts.ts';
 import { ActReply, QReply, WireError } from '../protocol/schema.ts';
-import { HEADERS, PATHS, refusal_of_status, uuidv7 } from '../protocol/wire.ts';
+import { HEADERS, PATHS, refusal_of_status } from '../protocol/wire.ts';
 import { cookie_names } from '../shell/nav.ts';
 import {
 	ShellConfig,
@@ -200,8 +209,8 @@ interface Caller {
 	readonly act: KitAct;
 	/** Decodes the native job receipt or call output with the supplied result schema. */
 	run<const A extends string, O>(
-		automation: Is<A, AutomationName>,
-		input: NoInfer<StartInput<A>>,
+		automation: string extends A ? string : Is<A, AutomationName>,
+		input: NoInfer<string extends A ? Json : StartInput<A>>,
 		output: Schema.Decoder<O>,
 		options?: NoInfer<AutomationSpecOf<A> extends { mode: 'call' } ? never : { id?: string }>
 	): Effect.Effect<O, ActFailure | Schema.SchemaError>;
@@ -1135,13 +1144,11 @@ export const test_engine = <P extends TestPorts = never>(
 				},
 				ports: {
 					webhooks: { public_url },
-					websockets: off,
 					outbound: {
 						http: loopback_http_port,
 						tcp: loopback_tcp_port
 					}
 				},
-				sandbox: off,
 				keys: keys_port(
 					options.secrets_key === undefined ? randomBytes(32) : Redacted.value(options.secrets_key)
 				)
@@ -1181,7 +1188,8 @@ export const test_engine = <P extends TestPorts = never>(
 				GuestIsolates.fromAbi(options.guests),
 				links,
 				Images.fromAbi(native.images),
-				Docs.fromAbi(native.docs),
+				// without a release, the docs directory stands in for one: only its `../docs/` reads are made
+				Docs.fromAbi(native.artifact ?? artifact_port(fileURLToPath(DOCS_DIR), fileURLToPath(DOCS_DIR))),
 				Mcp.fromAbi(native.mcp),
 				Convert.fromAbi(off),
 				Render.fromAbi(off),
@@ -1515,7 +1523,7 @@ export const test_engine = <P extends TestPorts = never>(
 								: answer.map(value, acts).pipe(Effect.orDie)
 						)),
 					run: <const A extends string, O>(
-						name: Is<A, AutomationName>, input: NoInfer<StartInput<A>>, output: Schema.Decoder<O>, opts?: { id?: string }
+						name: string extends A ? string : Is<A, AutomationName>, input: NoInfer<string extends A ? Json : StartInput<A>>, output: Schema.Decoder<O>, opts?: { id?: string }
 					) => sendAct({ callable: 'run', input: {
 						automation: name, input,
 						...(m.automations[name]?.mode === 'call' ? {} : { id: opts?.id ?? uuidv7(Date.parse(now)) })

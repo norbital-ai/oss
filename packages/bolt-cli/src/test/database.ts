@@ -12,13 +12,10 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { TenantDb, apply_migrations, type MigrationBundle } from '@norbital-ai/bolt/engine';
-import {
-	db_error,
-	schema_slice,
-	type SchemaSlice
-} from '@norbital-ai/bolt/tooling';
-import { PgliteDb, Pristine } from '@norbital-ai/bolt/node';
-import type { DbError, EngineManifest, BoltError, TenantDbShape } from '@norbital-ai/bolt/engine';
+import { schema_slice, type SchemaSlice } from '@norbital-ai/bolt/tooling';
+import { PgliteDb, Pristine } from '@norbital-ai/host-api/node';
+import { db_error, type DbError } from '@norbital-ai/host-api';
+import type { EngineManifest, BoltError, TenantDbShape } from '@norbital-ai/bolt/engine';
 import { CHECKPOINTS, inputs, keep, prune } from './checkpoint.ts';
 import {
 	migrate,
@@ -75,7 +72,7 @@ const freshImage = (slice: SchemaSlice, migrations?: MigrationBundle) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
-			const db = PgliteDb.make(pg);
+			const db = TenantDb.typed(PgliteDb.make(pg));
 			if (migrations === undefined) yield* migrate(db, slice, { accept: true });
 			else yield* apply_migrations(db, slice, migrations);
 			const shape = yield* Effect.tryPromise({ try: () => shapeOf(pg), catch: db_error });
@@ -306,7 +303,7 @@ const open = (
 		Effect.tap(({ pg }) =>
 			migrations === undefined
 				? Effect.void
-				: PgliteDb.make(pg)
+				: TenantDb.typed(PgliteDb.make(pg))
 						.rows(AppliedRow, { text: APPLIED, params: [] })
 						.pipe(Effect.flatMap((ledger) => rememberMigrations(migrations, ledger)))
 		),
@@ -348,5 +345,5 @@ export const TestDb = {
 		schema?: EngineManifest | SchemaSlice,
 		migrations?: MigrationBundle
 	): Layer.Layer<TenantDb, TestDbFailure> =>
-		Layer.effect(TenantDb, Effect.map(open(schema, migrations), PgliteDb.make))
+		Layer.effect(TenantDb, Effect.map(open(schema, migrations), (pg) => TenantDb.typed(PgliteDb.make(pg))))
 };

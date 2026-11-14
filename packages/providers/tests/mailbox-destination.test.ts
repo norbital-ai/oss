@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { tcp_port } from '@norbital-ai/bolt/node';
+import { tcp_port } from '@norbital-ai/host-api/node';
 import { imap } from '../src/imap-smtp/mailbox-watch.ts';
 import { mailCall, type Mailbox, type MailNet } from '../src/imap-smtp/model.ts';
 import { smtp } from '../src/imap-smtp/submit.ts';

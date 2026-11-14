@@ -2,10 +2,10 @@
 // Schema on a real Postgres (PGlite 18): verified SQL migrations, one test per guarantee.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
+import { DbError } from '@norbital-ai/host-api';
 import { from_store } from '../src/protocol/errors.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { constraint_index } from '@norbital-ai/store';
 import { plan, read_applied, type SchemaSlice } from '../src/engine/schema/plan.ts';
@@ -17,7 +17,7 @@ const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
 	return value;
 };
-let db: TenantDb;
+let db: TenantDbShape;
 const U = (n: number) => `00000000-0000-7000-8000-${String(n).padStart(12, '0')}`;
 const exec = (text: string, params: readonly (string | number | null)[] = []) =>
 	db.write({ text, params });
@@ -46,7 +46,7 @@ const seed = Effect.fnUntraced(function* () {
 	);
 });
 const setup = Effect.fnUntraced(function* () {
-	db = PgliteDb.make(yield* TestDb.open(slice()));
+	db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(slice())));
 });
 describe('next schema on PGlite', () => {
 	it.live(
@@ -165,7 +165,7 @@ describe('next schema on PGlite', () => {
 			).toMatchObject({ code: 'check', message: expect.stringContaining('closed_has_qty') });
 			expect(
 				yield* refusal(exec(`update orders set status = 'lost' where id = $1`, [U(10)]))
-			).toMatchObject({ code: 'check', field: 'status' });
+			).toMatchObject({ code: 'invalid_input', field: 'status' });
 			expect(
 				yield* refusal(exec(`update orders set qty = 3000000000 where id = $1`, [U(10)]))
 			).toMatchObject({ code: 'overflow' });

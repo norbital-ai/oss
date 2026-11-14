@@ -5,7 +5,6 @@ import { defineConfig } from 'vitest/config';
 /** `@norbital-ai/bolt` and its subpaths as Bolt's source: the suite and this source share one copy of every module. */
 const BOLT = Object.entries({
 	'': 'index',
-	'/declarations': 'declarations',
 	'/artifact': 'engine/artifact/index',
 	'/engine': 'engine/index',
 	'/errors': 'decl/errors',

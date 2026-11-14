@@ -1,8 +1,8 @@
 // `Pred` → JS (K3): the second evaluator, for live routing and tests. It must answer exactly as the SQL compiler does
 // (`sql.ts`); a randomized test holds the two equal. A null never matches (SQL's unknown collapses to false), `ne` and
 // negated membership use "distinct from", and `not` negates the collapsed value.
-import { BigDecimal, DateTime, Predicate } from 'effect';
-import { decimal_text, equal_json } from '@norbital-ai/store/kind';
+import { DateTime, Predicate } from 'effect';
+import { equal_json } from '@norbital-ai/store/kind';
 import type { Authority, Bindings, RowData } from '../contracts.ts';
 
 import { BoltError } from '../../protocol/errors.ts';
@@ -18,7 +18,7 @@ import {
 	type Pred
 } from '@norbital-ai/store';
 import { operand_value, readPredicates } from '../access/authority.ts';
-import { instantOrder, storedDecimal, storedField, storedOrder, storedRange } from '../db/stored.ts';
+import { instantOrder, storedField, storedOrder, storedRange } from '../db/stored.ts';
 
 const invalid = (message: string) => BoltError.make('invalid', 'decode', message);
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
@@ -83,14 +83,15 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
 	return R * 2 * Math.asin(Math.sqrt(h));
 }
 
+/**
+ * One row's evaluation. A relation predicate is decided only in SQL, which scopes each hop by the reader's root output
+ * (access/authority.ts): the in-memory evaluator reads no related rows, so it has one scoping rule fewer to keep.
+ */
 export type EvalEnv = {
 	cat: Catalog;
 	bindings: Bindings;
-	/** The caller: operands resolve against it; with `scoped`, related rows are filtered by its scope. */
+	/** The caller: operands resolve against it. */
 	authority?: Authority | null;
-	scoped?: boolean;
-	/** The rows of `target` related to `row` through `rel` of `model` (a one-relation gives 0 or 1). */
-	related?: (model: string, rel: string, target: string, row: RowData) => readonly RowData[];
 };
 
 function field(env: EvalEnv, model: string, row: RowData, name: string): Json {
@@ -115,12 +116,8 @@ export function canRead(env: EvalEnv, model: string, row: RowData, output?: stri
 	if (env.authority == null) return true;
 	const predicates = readPredicates(env.authority, model, output);
 	return predicates === undefined || predicates.some((where) =>
-		evaluate({ ...env, scoped: false }, model, where, row)
+		evaluate(env, model, where, row)
 	);
-}
-function rows(env: EvalEnv, c: string, rel: string, target: string, row: RowData): RowData[] {
-	if (env.related === undefined) throw invalid('this evaluation has no related rows');
-	return env.related(c, rel, target, row).filter((r) => !env.scoped || canRead(env, target, r));
 }
 const cmp = (field: Pick<FieldInfo, 'pg' | 'email'>, op: Cmp, a: Json | undefined, b: Json | undefined): boolean => {
 	const left = comparable(a), right = comparable(b);
@@ -143,23 +140,6 @@ const cmp = (field: Pick<FieldInfo, 'pg' | 'email'>, op: Cmp, a: Json | undefine
 						: order >= 0;
 };
 
-/** PostgreSQL numeric_avg uses numeric division's base-10000 scale selection. */
-function average(sum: BigDecimal.BigDecimal, count: number): BigDecimal.BigDecimal {
-	const leading = (value: BigDecimal.BigDecimal) => {
-		const n = BigDecimal.normalize(BigDecimal.abs(value)), digits = n.value.toString();
-		if (n.value === 0n) return { weight: 0, digit: 0 };
-		const exponent = digits.length - n.scale - 1, weight = Math.floor(exponent / 4);
-		const width = exponent - weight * 4 + 1;
-		return { weight, digit: Number(digits.slice(0, width).padEnd(width, '0')) };
-	};
-	const total = BigDecimal.fromBigInt(BigInt(count));
-	const a = leading(sum), b = leading(total);
-	const weight = a.weight - b.weight - (a.digit <= b.digit ? 1 : 0);
-	return BigDecimal.round(BigDecimal.divideUnsafe(sum, total), {
-		scale: Math.min(1000, Math.max(0, sum.scale, 16 - weight * 4)),
-		mode: 'half-from-zero'
-	});
-}
 type Range = { lo: bigint | string; hi: bigint | string | null };
 function range(f: FieldInfo, v: Json | undefined): Range | null {
 	if (v == null || v === 'empty') return null;
@@ -299,42 +279,12 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 		case 'search':
 		case 'similar':
 			throw invalid(`$${p.t} is decided by a read, not in memory`);
+		// a relation is decided only in SQL, scoped by the reader's root output: one rule, never a second in memory
 		case 'one':
-			return rows(env, c, p.rel, p.target, row).some((r) => evaluate(env, p.target, p.pred, r));
-		case 'many': {
-			const rs = rows(env, c, p.rel, p.target, row);
-			const hit = (r: RowData) => evaluate(env, p.target, p.pred, r);
-			return p.q === 'some' ? rs.some(hit) : p.q === 'none' ? !rs.some(hit) : rs.every(hit);
-		}
+		case 'many':
 		case 'count':
-			return cmp({ pg: 'int8' }, p.op, rows(env, c, p.rel, p.target, row).length, p.n);
-		case 'agg': {
-			const f = info(env, p.target, p.of);
-			const values = rows(env, c, p.rel, p.target, row)
-				.map((r) => field(env, p.target, r, p.of))
-				.filter((value) => value !== null);
-			if (p.fn !== 'sum' && values.length === 0) return false;
-			if (p.fn === 'min' || p.fn === 'max') {
-				const [head, ...tail] = values;
-				if (head === undefined) return false;
-				const value = tail.reduce((a, b) => cmp({ pg: f.pg }, p.fn === 'min' ? 'lt' : 'gt', b, a) ? b : a, head);
-				return cmp({ pg: f.pg }, p.op, value, p.arg);
-			}
-			if (f.pg === 'float8' || f.pg === 'float4') {
-				const sum = values.reduce<number>((sum, value) => {
-					if (typeof value !== 'number' || !Number.isFinite(value)) throw invalid('a floating aggregate needs finite numbers');
-					return sum + value;
-				}, 0);
-				return cmp({ pg: f.pg }, p.op, p.fn === 'avg' ? sum / values.length : sum, p.arg);
-			}
-			let sum = BigDecimal.fromBigInt(0n);
-			for (const value of values) {
-				const numeric = storedDecimal(value);
-				if (numeric === undefined) throw invalid('a numeric aggregate needs numeric values');
-				sum = BigDecimal.sum(sum, numeric);
-			}
-			return cmp({ pg: 'numeric' }, p.op, decimal_text(p.fn === 'avg' ? average(sum, values.length) : sum), p.arg);
-		}
+		case 'agg':
+			throw invalid(`a ${p.t} predicate is decided by a read, not in memory`);
 		case 'json':
 			return contains(field(env, c, row, p.field), p.contains, true);
 	}

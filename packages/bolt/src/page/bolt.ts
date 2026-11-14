@@ -19,13 +19,8 @@ import { tick } from 'svelte';
 import type { FileRef, Json } from '../decl/values.ts';
 import { reactive_clock, reactive_query, run } from '@norbital-ai/ui/effect';
 import type { FileUrlOptions } from '@norbital-ai/store/kind';
-import {
-	ActConflict,
-	ActRefused,
-	ProtocolFailed,
-	ReadFailed,
-	Unavailable
-} from '../decl/errors.ts';
+import { type ConvertSource, type PreviewPdfOptions, Unavailable, uuidv7 } from '@norbital-ai/host-api';
+import { ActConflict, ActRefused, ProtocolFailed, ReadFailed } from '../decl/errors.ts';
 import { DescribeTimeout, TransportFailed } from '../decl/errors/browser.ts';
 import { ActUnknown } from '../decl/errors/act.ts';
 import { Refusal, message_text } from '../decl/errors/refusal.ts';
@@ -40,7 +35,6 @@ import {
 	HEADERS,
 	PATHS,
 	refusal_of_status,
-	uuidv7,
 	type Frame,
 	type LiveBody,
 	type PatchOp,
@@ -61,7 +55,6 @@ import type { Query } from './page-bolt.ts';
 import { page_reads, readValue } from './read-value.ts';
 import { read_wire, type ReadCatalog } from '../protocol/read-answer.ts';
 import { act_output, call_output, job_receipt, type OperationOutputs } from '../protocol/output-contract.ts';
-import type { ConvertSource, PreviewPdfOptions } from '../decl/runtime/facilities.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { FileRefSchema, stored_file_url } from './file-ref.ts';
 
@@ -165,7 +158,7 @@ const FilterArg = Schema.Union([
 		label: Schema.optionalKey(Schema.String)
 	}),
 	Schema.Struct({
-		var: Schema.Literals(['requestor.id', 'requestor.email', 'requestor.party', 'requestor.teams'])
+		var: Schema.Literals(['actor.id', 'actor.email', 'actor.party', 'actor.teams'])
 	})
 ]);
 const FilterOptionsAnswer = Schema.Struct({
@@ -823,12 +816,12 @@ export const create_bolt = (config: BoltConfig) =>
 					yield* caughtUp(reply.v, initiatingFiber);
 				return reply.outcome;
 			}).pipe(Effect.catch(() => Effect.succeed({ kind: 'unknown' as const, invocation: key })));
-		/** A queue admission's committed answer is exactly the receipt of the runs this client allocated. */
+		/** A queue admission commits exactly the receipt of the runs this client allocated; anything else is a failure. */
 		const admit = (body: Readonly<Record<string, Json>>, key: string, automation: string, ids: readonly string[], path?: string) =>
-			send(body, key, undefined, undefined, path).pipe(Effect.flatMap((outcome) => Effect.gen(function* () {
-				if (outcome.kind !== 'committed') return outcome;
-				return { ...outcome, output: yield* declared(() => job_receipt(automation, ids), outcome.output) };
-			})));
+			send(body, key, undefined, undefined, path).pipe(Effect.flatMap(settled), Effect.flatMap((outcome) =>
+				outcome.kind === 'committed'
+					? Effect.map(declared(() => job_receipt(automation, ids), outcome.output), (output) => ({ ...outcome, output }))
+					: Effect.fail(new ProtocolFailed({ message: 'A run admission answered without committing its receipt.' }))));
 		const command = (callable: string, input: Json, options: { observed?: Readonly<Record<string, number>> } = {}) =>
 			send({ callable, input }, uuid(), options.observed).pipe(Effect.flatMap(settled));
 		const act = (
@@ -927,7 +920,7 @@ export const create_bolt = (config: BoltConfig) =>
 			delete_verdict: (model: string, ids: readonly string[]) =>
 				getValue(
 					`${PATHS.delete_verdict}?${new URLSearchParams([['model', model], ...ids.map((id) => ['id', id])])}`,
-					Schema.Struct({ value: Schema.Literals(['allow', 'approve', 'deny']) }),
+					Schema.Struct({ value: Schema.Literals(['allow', 'approve', 'refuse']) }),
 					undefined,
 					'Delete permissions could not be loaded.'
 				).pipe(Effect.map((answer) => answer.value)),

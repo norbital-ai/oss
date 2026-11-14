@@ -3,7 +3,8 @@
 // by a malformed answer and never words a retry as a failure.
 import { required } from './support/required.ts';
 import { describe, expect, it } from '@effect/vitest';
-import { decode_status, local_text, type InstanceStatus } from '../src/protocol/instance-status.ts';
+import type { InstanceStatus } from '@norbital-ai/host-api';
+import { decode_status, local_text } from '../src/protocol/instance-status.ts';
 import { statusLabel, driverLabel } from '../src/shell/integration/setup.ts';
 
 const t = (k: string) => k;
@@ -39,13 +40,13 @@ describe('a host answer, decoded', () => {
 	});
 
 	it('refuses an answer it cannot read, rather than inventing a state', () => {
-		// an unknown state, a non-object, no instance, an unknown driver, a pairing of a shape no provider publishes
+		// an unknown state, a non-object, no instance, a driver that is no name, a pairing of a shape no provider publishes
 		expect(
 			decode_status({ instance: 'c', driver: 'whatsapp', state: 'definitely-connected' })
 		).toBeNull();
 		expect(decode_status('connected')).toBeNull();
 		expect(decode_status({ driver: 'whatsapp', state: 'connected' })).toBeNull();
-		expect(decode_status({ instance: 'c', driver: 'pigeon', state: 'connected' })).toBeNull();
+		expect(decode_status({ instance: 'c', driver: 7, state: 'connected' })).toBeNull();
 		expect(
 			decode_status({
 				instance: 'c',

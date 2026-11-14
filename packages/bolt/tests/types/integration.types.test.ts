@@ -1,13 +1,13 @@
 // Connections are integration declarations; model syncs own their adapters. Checked, never executed.
 import { Effect } from 'effect';
 import { expectTypeOf } from '@effect/vitest';
-import { instance_id, is_instance, policy, workspace } from '../../src/index.ts';
-import { bind_integration, bind_model } from '../../src/declarations.ts';
+import { instance_id, integration, is_instance, model, policy, sync, workspace } from '../../src/index.ts';
 import type { IntegrationName } from '../../src/decl/names.ts';
-import type { AutomationCtx, CalendarEvent, Id, InputOf, InstanceId, StartInput, SyncRow, Where } from '../../src/index.ts';
+import type { AutomationCtx, Id, InputOf, InstanceId, StartInput, SyncRow, Where } from '../../src/index.ts';
+import type { CalendarEvent } from '../../src/decl/runtime/integration.ts';
 import type { SyncKey } from '../../src/decl/names.ts';
 import type { IntegrationSpecOf, StoredRow } from '../../src/decl/names.ts';
-import type { DatabaseResult } from '../../src/engine/integrations/database.ts';
+import type { DatabaseResult } from '@norbital-ai/host-api';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
 import './registry.ts';
@@ -71,65 +71,47 @@ expectTypeOf<InputOf<IntegrationSpecOf<'kingdee'>['configuration']>>().toEqualTy
 	readonly max_lag_minutes?: number;
 	readonly databases?: readonly string[];
 }>();
-const onHotline: Where<'customers'> = { hotline: { eq: { var: 'requestor.instance' } } };
-const onAny: Where<'notice_notes'> = { integration: { eq: { var: 'requestor.instance' } } };
+const onHotline: Where<'customers'> = { hotline: { eq: { var: 'actor.instance' } } };
+const onAny: Where<'notice_notes'> = { integration: { eq: { var: 'actor.instance' } } };
 void onHotline;
 void onAny;
 
-bind_model('products')({
-	...m.products.spec,
-	syncs: {
-		ledger: {
-			with: 'kingdee',
-			read: function* ({ cursor, instance }, ctx) {
-				expectTypeOf(instance).toEqualTypeOf<InstanceId<'kingdee'>>();
-				expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
-				const { rows } = yield* ctx.request({ op: 'values', values: { n: 1 } });
-				void rows;
-				return {
-					rows: [{ $id: 'P1', $deleted: true }],
-					cursor,
-					more: false,
-					retained: false,
-					snapshot: 'begin'
-				};
-			}
-		}
+sync('products', 'ledger', {
+	with: 'kingdee',
+	read: function* ({ cursor, instance }, ctx) {
+		expectTypeOf(instance).toEqualTypeOf<InstanceId<'kingdee'>>();
+		expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
+		const { rows } = yield* ctx.request({ op: 'values', values: { n: 1 } });
+		void rows;
+		return {
+			rows: [{ $id: 'P1', $deleted: true }],
+			cursor,
+			more: false,
+			retained: false,
+			snapshot: 'begin'
+		};
 	}
 });
-bind_model('entries')({
-	...m.entries.spec,
-	syncs: {
-		calendar: {
-			with: 'calendar',
-			partitions: 'calendars',
-			read: function* ({ items, partition }, ctx) {
-				expectTypeOf(items).toEqualTypeOf<readonly CalendarEvent[]>();
-				expectTypeOf(partition).toEqualTypeOf<string | null>();
-				expectTypeOf(ctx.configuration.calendars).toEqualTypeOf<readonly string[]>();
-				return { rows: [] };
-			}
-		}
+sync('entries', 'calendar', {
+	with: 'calendar',
+	partitions: 'calendars',
+	read: function* ({ items, partition }, ctx) {
+		expectTypeOf(items).toEqualTypeOf<readonly CalendarEvent[]>();
+		expectTypeOf(partition).toEqualTypeOf<string | null>();
+		expectTypeOf(ctx.configuration.calendars).toEqualTypeOf<readonly string[]>();
+		return { rows: [] };
 	}
 });
-bind_model('orders')({
-	description: m.orders.spec.description,
-	record_label: m.orders.spec.record_label,
-	fields: m.orders.spec.fields,
-	outputs: { default: { fields: 'all' } },
-	syncs: {
-		ledger: {
-			with: 'kingdee',
-			write: function* ({ row, $id, $version, instance }, ctx) {
-				expectTypeOf(instance).toEqualTypeOf<InstanceId<'kingdee'>>();
-				expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
-				yield* ctx.request({ op: 'values', values: { n: 1 } });
-				return { $id: $id ?? row.number, ...($version === null ? {} : { $version }) };
-			}
-		}
+sync('orders', 'ledger', {
+	with: 'kingdee',
+	write: function* ({ row, $id, $version, instance }, ctx) {
+		expectTypeOf(instance).toEqualTypeOf<InstanceId<'kingdee'>>();
+		expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
+		yield* ctx.request({ op: 'values', values: { n: 1 } });
+		return { $id: $id ?? row.number, ...($version === null ? {} : { $version }) };
 	}
 });
-bind_integration('kingdee')({
+integration('kingdee', {
 	...rt.kingdee.spec,
 	test: function* (ctx) {
 		expectTypeOf(ctx.configuration.max_lag_minutes).toEqualTypeOf<number>();
@@ -169,15 +151,15 @@ Effect.gen(function* () {
 
 // @ts-expect-error source connection slots are retired
 workspace({ tz: 'UTC', locale: 'en', connections: { mail: { integration: 'emial' } } });
-bind_integration('support_mail')({
+integration('support_mail', {
 	description: 'x',
 	driver: 'email',
 	// @ts-expect-error conversation credentials belong to the provider
 	credential: { password: { kind: 'text' } }
 });
 // @ts-expect-error an HTTP base URL is https or a text configuration field
-bind_integration('erp')({ description: 'x', driver: 'http', http: { base_url: 'ftp://erp' } });
-bind_integration('erp')({
+integration('erp', { description: 'x', driver: 'http', http: { base_url: 'ftp://erp' } });
+integration('erp', {
 	description: 'x',
 	driver: 'http',
 	credential: { token: { kind: 'text' } },
@@ -185,10 +167,10 @@ bind_integration('erp')({
 	http: { base_url: 'https://erp', auth: { bearer: 'tokn' } }
 });
 // @ts-expect-error drivers are enumerated
-bind_integration('erp')({ description: 'x', driver: 'ftp' });
+integration('erp', { description: 'x', driver: 'ftp' });
 // @ts-expect-error the declaration name must be known
-bind_integration('erpp')({ description: 'x', driver: 'http' });
-bind_integration('erp')({
+integration('erpp', { description: 'x', driver: 'http' });
+integration('erp', {
 	description: 'x',
 	driver: 'http',
 	http: { base_url: 'https://erp' },
@@ -199,34 +181,26 @@ bind_integration('erp')({
 		token: 'https://idp/token'
 	}
 });
-bind_integration('kingdee')({
+integration('kingdee', {
 	description: 'x',
 	driver: 'sqlserver',
 	// @ts-expect-error a database driver offers no OAuth grant
 	oauth: { client: 'CALENDAR_CLIENT', secret: 'CALENDAR_SECRET' }
 });
-bind_integration('erp')({
+integration('erp', {
 	description: 'x',
 	driver: 'http',
 	http: { base_url: 'https://erp' },
 	// @ts-expect-error an HTTP OAuth grant needs its endpoints
 	oauth: { client: 'CALENDAR_CLIENT', secret: 'CALENDAR_SECRET' }
 });
-bind_integration('calendar')({
+integration('calendar', {
 	description: 'x',
 	driver: 'calendar',
 	// @ts-expect-error OAuth credentials name secrets
 	oauth: { client: 'calendar-client', secret: 'CALENDAR_SECRET' }
 });
-bind_integration('erp')({
-	description: 'x',
-	driver: 'http',
-	credential: { s: { kind: 'text' } },
-	http: { base_url: 'https://chat' },
-	// @ts-expect-error webhook schemes are enumerated
-	webhook: { verify: { scheme: 'google-calendar', secret: 's' } }
-});
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	fields: {
 		...m.orders.spec.fields,
@@ -240,13 +214,13 @@ bind_model('orders')({
 	}
 });
 // @ts-expect-error instance operands require an integration reference
-const onText: Where<'orders'> = { note: { eq: { var: 'requestor.instance' } } };
+const onText: Where<'orders'> = { note: { eq: { var: 'actor.instance' } } };
 void onText;
 policy({
 	description: 'x',
 	grants: {
 		// @ts-expect-error a customer reference is not an integration reference
-		orders: { outputs: { default: { where: { customer: { eq: { var: 'requestor.instance' } } } } } }
+		orders: { outputs: { default: { where: { customer: { eq: { var: 'actor.instance' } } } } } }
 	}
 });
 // @ts-expect-error only declared sync reads are startable

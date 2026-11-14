@@ -3,12 +3,13 @@
 import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';
 import { Cause, Effect, Exit, Layer, Schema } from 'effect';
-import { FacilityFailure } from '../src/decl/errors.ts';
+import { FacilityFailure } from '@norbital-ai/host-api';
 import { id_of } from '../src/decl/id.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Callables, Runs } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import whatsapp from '../src/system/integration/whatsapp/+integration.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const manifest = {
@@ -64,7 +65,7 @@ const manifest = {
 			rate: '1/h',
 			credential: { connection: { kind: 'text' } }
 		},
-		desk: { description: 'The desk', driver: 'whatsapp' },
+		desk: { description: 'The desk', driver: whatsapp.spec.driver },
 		cal: { description: 'Calendars', driver: 'calendar' }
 	},
 	policies: {
@@ -101,7 +102,7 @@ const manifest = {
 const guestSource = `export default {
 	automation: {
 		tidy: { body: function* (input, ctx) {
-			yield* ctx.act({ 'quotes.create': [{ title: ctx.run.trigger.kind === 'system' ? ctx.run.trigger.cause : 'requested' }] }); } },
+			yield* ctx.act({ 'quotes.create': [{ title: ctx.trigger.kind === 'system' ? ctx.trigger.cause : 'requested' }] }); } },
 		nothing: { body: function* () { return 0; } },
 		watch: { body: function* (input, ctx) { yield* ctx.query({ quotes: {} }); } },
 		peek: { body: function* (input, ctx) {

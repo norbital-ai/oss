@@ -2,7 +2,7 @@
 // that every `sys_2` and embedding model a host binds takes images. The one implementation every host uses
 // as one shared provider implementation.
 import { Crypto, Duration, Effect, Schedule, Schema } from 'effect';
-import type { Json } from '@norbital-ai/bolt/engine';
+import type { Json } from 'effect/Schema';
 import { ProviderUnavailable } from '../errors.ts';
 import { jsonApi } from '../transport.ts';
 import { models, type ModelCatalogue } from './models.ts';

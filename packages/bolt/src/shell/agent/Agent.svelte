@@ -3,7 +3,7 @@
 	a confirmation card for a held call, and the running turn's text as it streams. Posting answers at once; the turn
 	runs after it, and everything it writes (the reply growing flush by flush, each tool call running then finished) is
 	rows of the conversation's live transcript, patched in over the page's one live stream; the conversation list, each
-	one's status, plan and goals are a live read too. Nothing polls and there is no second stream. Enter sends (under a coarse
+	one's status and plan are a live read too. Nothing polls and there is no second stream. Enter sends (under a coarse
 	pointer it is a new line and the Send button sends), Shift+Enter is a new line, Cmd/Ctrl+Enter sends now; the timer beside send schedules the message for a time or for when the agent finishes,
 	and what is scheduled lists above the composer (edit, remove). With triage each triaged row carries its state: "reading…"
 	while pending (with respond-now), "responding" once admitted and its turn runs; every message that came in is
@@ -16,7 +16,7 @@
 	several working at once, one level deep; a message sent while a turn runs steers it, waiting in the queue until the step ends (edit, reorder, remove); the context meter reads the
 	last reply's usage; the transcript follows its tail unless the reader scrolled up ("Latest" returns); a running turn
 	stops (asked first) and a stopped one resumes; a draft plan is a collapsed card above the prompt (execute, delete), an
-	executed plan a strip above the transcript (revise, delete), the goals a checklist under the latest message, and a
+	executed plan a strip above the transcript (revise, delete), and a
 	checkpoint one line across the transcript, opening to its summary. The session rail (the
 	header's panel button, or the context meter) shows input, outputs, sub-agents and disclosures for the context, what the conversation changed,
 	the work it left running in the background (its sub-agents and automation runs, each stoppable while it runs), and the connected MCP servers. The composer has no box: one top border.
@@ -42,22 +42,20 @@
 	import { watch } from 'runed';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
-	import { Button, Combobox, Dialog, format_handle, Icon, type ModelExposure, type UiContext } from '@norbital-ai/ui';
-	import type { AiModel } from '../../engine/contracts.ts';
+	import { Button, Combobox, Dialog, format_handle, Icon, PreviewFrame, RowMenu, type ModelExposure, type UiContext } from '@norbital-ai/ui';
+	import { studio_events, type AiModel, type StudioView } from '@norbital-ai/host-api';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 	import type { AgentRequest, ShellBolt } from '../runtime.ts';
 	import { ConversationsReadAnswer, RestartChat, TranscriptReadAnswer, type ShellError } from '../api-types.ts';
 	import { agent_drafts } from './drafts.ts';
 	import { message_outbox, type OutboxRow } from './outbox.svelte.ts';
 	import type { ShellApi } from '../api-types.ts';
-	import type { StudioView } from '../studio/model.ts';
 	import SessionRail from './SessionRail.svelte';
 	import { context_meter } from './usage.ts';
 	import Transcript from './Transcript.svelte';
 	import { AgentPanelFailed, refused } from './actions.ts';
 	import PlanCards from './PlanCards.svelte';
 	import Composer from './Composer.svelte';
-	import PreviewFrame from '../preview/PreviewFrame.svelte';
 	import { attention } from './chime.ts';
 	import { SOUNDS, type Sounds } from '../sounds.ts';
 	import { CLIENT_NAVIGATION, navigationEvents, type ClientNavigation } from './navigation.ts';
@@ -67,9 +65,8 @@
 		pageConversationStarted,
 		type ClientPageAction
 	} from './navigation.ts';
-	import { studio_events } from '../studio/events.ts';
 	import { commandKey, shortcutLabel } from '../keyboard.ts';
-	import type { NavNode } from '../nav.ts';
+	import { based, SHELL, type NavNode } from '../nav.ts';
 	import type { ManifestItem } from '../finder/manifest.ts';
 	import type { FinderRead } from '../finder/model.ts';
 	import { captionOf, ORB, orbState, previewsOf, currentPreview } from './view.ts';
@@ -238,7 +235,7 @@
 		composer?.setSelectionRange(composer.value.length, composer.value.length);
 	}
 
-	/** The member's own conversations and the envoy conversation threads they may read (the selector, and the open one's status, plan, goals and model): a live read. */
+	/** The member's own conversations and the envoy conversation threads they may read (the selector, and the open one's status, plan and model): a live read. */
 	let list = $state<AgentConversation[]>([]);
 	let models = $state<AiModel[]>([]);
 	/** The model a new conversation runs when none is picked (the host's default). */
@@ -340,9 +337,9 @@
 			if (id !== null && !thread) clientPageAction?.run(item.action, id, item.id);
 		}
 	});
-	/** The selector tab a conversation sits in: the member's own (Web UI) or its envoy's. */
+	/** The selector tab a conversation sits in: archived, the member's own (Web UI) or its envoy's. */
 	const tabOf = (c: AgentConversation) =>
-		c.integration === null ? 'web' : `envoy:${c.envoy ?? c.integration}`;
+		c.archived === true ? 'archived' : c.integration === null ? 'web' : `envoy:${c.envoy ?? c.integration}`;
 	const envoyName = (c: AgentConversation) =>
 		envoys[c.envoy ?? ''] ?? humanise(c.envoy ?? c.integration ?? '');
 	/** A conversation's own line: its title, else a DM's peer (the provider's address) or the group's thread. */
@@ -357,10 +354,14 @@
 	const conversations = liveEdge(() =>
 		bolt.observe({ read: { m: 'conversations', a: [] } }, ConversationsReadAnswer)
 	);
+	// svelte-ignore state_referenced_locally
+	const archivedConversations = liveEdge(() =>
+		bolt.observe({ read: { m: 'conversations', a: [{ archived: true }] } }, ConversationsReadAnswer)
+	);
 	watch(
-		() => $conversations,
-		(value) => {
-			list = value === undefined ? [] : [...value.rows];
+		() => [$conversations, $archivedConversations] as const,
+		([live, archived]) => {
+			list = [...(live?.rows ?? []), ...(archived?.rows ?? [])];
 		}
 	);
 	let actions: FiberSet.FiberSet<void, never> | null = null;
@@ -629,8 +630,8 @@
 		);
 	});
 	/**
-	 * The tabs the list holds (Web UI always, then each envoy by name): the server lists only the envoy threads this member
-	 * may read, so a tab is here exactly when it has rows to show.
+	 * The tabs the list holds (Web UI always, then each envoy by name, then Archived): the server lists only the envoy threads
+	 * this member may read, so a tab is here exactly when it has rows to show.
 	 */
 	const counted = (name: string, title: string, icon: string) => ({
 		name, title, icon, count: matches.filter((c) => tabOf(c) === name).length
@@ -640,11 +641,13 @@
 		const envoyTabs = new Map<string, string>();
 		for (const c of list)
 			if (c.integration !== null && c.run == null) envoyTabs.set(tabOf(c), envoyName(c));
+		const archived = counted('archived', t('Archived'), 'lucide:archive');
 		return [
 			web_tab,
 			...[...envoyTabs]
 				.sort((a, b) => a[1].localeCompare(b[1]))
-				.map(([name, title]) => counted(name, title, 'lucide:bot'))
+				.map(([name, title]) => counted(name, title, 'lucide:bot')),
+			...(list.some((c) => c.archived === true) ? [archived] : [])
 		];
 	});
 	const shownTab = $derived(tabs.some((x) => x.name === tab) ? tab : 'web');
@@ -692,7 +695,7 @@
 				// the picker says which run is live, stopped, or idle; a failed turn is its transcript's last row
 				description: `${date_time(c.at, undefined, BRIEF_TIMESTAMP)} · ${c.status === 'running' ? t('Running') : c.status === 'stopped' ? t('Stopped') : t('Idle')}`,
 				// envoy and automation sessions are read-only
-				...(shownTab === 'web' ? {} : { icon: 'lucide:lock' }),
+				...(shownTab.startsWith('envoy:') ? { icon: 'lucide:lock' } : {}),
 				...(group === undefined ? {} : { group })
 			}))
 	);
@@ -736,6 +739,20 @@
 			)
 		);
 	}
+	/** Archive, unarchive or delete a conversation (the member's own); deleting the open one leaves for a new conversation. */
+	function manage(call: 'archive' | 'unarchive' | 'delete', id: string): void {
+		dispatch(
+			Effect.result(api.agent[call](id)).pipe(
+				Effect.tap((answer) =>
+					Effect.sync(() => {
+						error = refused(answer);
+						if (error === null && call === 'delete' && conversation === id) fresh();
+					})
+				),
+				Effect.asVoid
+			)
+		);
+	}
 	const childControl = (id: string, stop: boolean, onRefused: () => void) =>
 		control(stop, id, onRefused);
 	/** Execute starts the draft (plan mode ends with it); delete drops the plan. */
@@ -763,7 +780,9 @@
 	}
 	let starting = $state(false);
 	/** Staging asks before a stop, and before deleting a plan that is running. */
-	let confirming = $state<'stop' | 'plan' | null>(null);
+	let confirming = $state<'stop' | 'plan' | 'delete' | null>(null);
+	/** The conversation a confirmed delete removes. */
+	let deleting = $state<string | null>(null);
 	const drafting = $derived(current?.plan?.status === 'draft');
 	const planning = $derived(mode === 'plan' || drafting);
 
@@ -970,7 +989,7 @@
 	const previewEvents = attachEffect(() =>
 		typeof EventSource === 'undefined'
 			? Effect.void
-			: studio_events().pipe(
+			: studio_events(based(`${SHELL}/studio/events`)).pipe(
 					Stream.runForEach((frame) =>
 						frame.kind === 'tests' || frame.kind === 'source' || frame.kind === 'change'
 							? api.studio().pipe(
@@ -1057,7 +1076,7 @@
 			aria-live="polite"
 			data-agent-view
 		>
-			{#if shownTab !== 'web'}<span class="flex shrink-0 items-center" data-agent-tab-read-only
+			{#if shownTab.startsWith('envoy:')}<span class="flex shrink-0 items-center" data-agent-tab-read-only
 					><Icon name="lucide:lock" class="size-3" /><span class="sr-only">{t('Read only')}</span
 					></span
 				>{/if}
@@ -1083,6 +1102,19 @@
 			</p>
 		</div>
 	</div>
+{/snippet}
+{#snippet conversationActions(row: { value: string })}
+	<!-- a member's own conversation: Archive (or Unarchive) and Delete beside its row; envoy threads are read-only -->
+	{@const c = list.find((x) => x.id === row.value)}
+	{#if c !== undefined && c.integration === null}<RowMenu
+			{ctx}
+			actions={[
+				c.archived === true
+					? { label: t('Unarchive'), run: () => manage('unarchive', c.id) }
+					: { label: t('Archive'), run: () => manage('archive', c.id) },
+				{ label: t('Delete conversation'), run: () => ((deleting = c.id), (confirming = 'delete')) }
+			]}
+		/>{/if}
 {/snippet}
 {#snippet head()}
 	<!-- Panel header: the mark, the name, the conversation picker as plain text, then new (the sheet adds full screen and close) -->
@@ -1119,6 +1151,7 @@
 			}}
 			footer={selectorFooter}
 			empty={selectorEmpty}
+			actions={conversationActions}
 			onkeydown={viewShortcut}
 			on_change={(id) => (id === null ? fresh() : select(id))}
 		/>
@@ -1222,7 +1255,7 @@
 				<div class="flex h-full min-h-0 w-full flex-col">
 					{#if current?.plan && current.plan.status !== 'draft'}<PlanCards plan={current.plan} place="current" {starting} {empty} running={status === 'running'} on_revise={() => (mode = 'plan')} on_execute={() => plan(true)} on_discard={() => status === 'running' ? (confirming = 'plan') : plan(false)} {t} />{/if}
 					<Transcript {ctx} {api} {t} {zone} {admin} {conversation} {rows} {status} {sent} {thread} {automation}
-						goals={current?.goals} plan={current?.plan} {before} loading_older={loadingOlder} load_older={loadOlder}
+						plan={current?.plan} {before} loading_older={loadingOlder} load_older={loadOlder}
 						bind:port bind:pinned {latest} load_failed={transcript.error !== undefined} on_retry={() => fork(transcript.refetch())}
 						decision_frame={$transcript === undefined ? undefined : `${$transcript.rows.length}:${$transcript.rows.at(-1)?.id}`}
 						{dispatch} on_error={(problem) => (error = problem)} file_href={fileHref} model_label={modelLabel}
@@ -1261,7 +1294,7 @@
 
 <svelte:document onkeydown={railKeydown} />
 
-<!-- Ask before stopping a response, and before deleting a plan while it runs -->
+<!-- Ask before stopping a response, before deleting a plan while it runs, and before deleting a conversation -->
 <Dialog.Root
 	open={confirming !== null}
 	on_open_change={(o) => {
@@ -1271,19 +1304,29 @@
 	<Dialog.Content class="max-w-sm">
 		<Dialog.Header>
 			<Dialog.Title
-				>{confirming === 'plan' ? t('Delete this plan?') : t('Stop this response?')}</Dialog.Title
+				>{confirming === 'plan'
+					? t('Delete this plan?')
+					: confirming === 'delete'
+						? t('Delete this conversation?')
+						: t('Stop this response?')}</Dialog.Title
 			>
 			<Dialog.Description
 				>{confirming === 'plan'
 					? t('The agent stops working from it. Conversation history stays available.')
-					: t(
-							'The current response will stop. Completed work is kept; queued messages are cancelled.'
-						)}</Dialog.Description
+					: confirming === 'delete'
+						? t('Removes the conversation and its messages for good. This cannot be undone.')
+						: t(
+								'The current response will stop. Completed work is kept; queued messages are cancelled.'
+							)}</Dialog.Description
 			>
 		</Dialog.Header>
 		<Dialog.Footer>
 			<Button variant="outline" onclick={() => (confirming = null)}
-				>{confirming === 'plan' ? t('Keep plan') : t('Keep working')}</Button
+				>{confirming === 'plan'
+					? t('Keep plan')
+					: confirming === 'delete'
+						? t('Keep conversation')
+						: t('Keep working')}</Button
 			>
 			<Button
 				variant="destructive"
@@ -1291,9 +1334,15 @@
 					const c = confirming;
 					confirming = null;
 					if (c === 'plan') plan(false);
+					else if (c === 'delete' && deleting !== null) manage('delete', deleting);
 					else control(true);
 				}}
-				data-confirm>{confirming === 'plan' ? t('Delete plan') : t('Stop response')}</Button
+				data-confirm
+				>{confirming === 'plan'
+					? t('Delete plan')
+					: confirming === 'delete'
+						? t('Delete conversation')
+						: t('Stop response')}</Button
 			>
 		</Dialog.Footer>
 	</Dialog.Content>

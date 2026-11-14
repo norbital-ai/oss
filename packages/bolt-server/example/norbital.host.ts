@@ -23,9 +23,8 @@ import { Effect, Exit, Layer, ManagedRuntime, Option, Schema, Scope } from 'effe
 import { FetchHttpClient } from 'effect/http';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import pg from 'pg';
-import { TenantDb } from '@norbital-ai/bolt/engine';
-import type { Facilities, Serving } from '@norbital-ai/bolt/facilities';
-import { PgliteDb, PostgresDb, tenant_db_port } from '@norbital-ai/bolt/node';
+import type { Facilities, Serving } from '@norbital-ai/host-api';
+import { PgliteDb, PostgresDb, Pristine, tenant_db_port } from '@norbital-ai/host-api/node';
 import { host, type Facility, type HostSettings, type Provider } from '../src/host.ts';
 
 const env = (name: string): string | undefined => {
@@ -171,35 +170,32 @@ const databaseUrl = env('BOLT_DATABASE_URL'),
 	pglite = env('BOLT_PGLITE_DIR');
 if ((databaseUrl === undefined) === (pglite === undefined))
 	throw new Error('set exactly one of BOLT_DATABASE_URL and BOLT_PGLITE_DIR');
-const database =
-	databaseUrl === undefined
-		? PgliteDb.layer(pglite)
-		: Layer.unwrap(
-				Effect.map(
-					Effect.acquireRelease(
-						Effect.sync(
-							() =>
-								new pg.Pool({
-									connectionString: databaseUrl,
-									...(new URL(databaseUrl).searchParams.has('sslmode') ? {} : { ssl: true }),
-									max: 10
-								})
-						),
-						(pool) => Effect.promise(() => pool.end())
-					),
-					PostgresDb.layer
-				)
-			);
+
+const pool = (url: string) =>
+	Effect.acquireRelease(
+		Effect.sync(
+			() =>
+				new pg.Pool({
+					connectionString: url,
+					...(new URL(url).searchParams.has('sslmode') ? {} : { ssl: true }),
+					max: 10
+				})
+		),
+		(pool) => Effect.promise(() => pool.end())
+	);
 
 // the host's resources live until bolt-server or `bolt dev` stops and calls `serving.close`
 const runtime = ManagedRuntime.make(
-	Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer, database)
+	Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer, Pristine.layer)
 );
 const scope = await runtime.runPromise(Scope.make());
 const served = await runtime.runPromise(
 	Effect.gen(function* () {
-		const db = yield* TenantDb;
-		return yield* host(settings, tenant_db_port(db), {
+		const database =
+			pglite === undefined
+				? PostgresDb.make(yield* pool(required('BOLT_DATABASE_URL')))
+				: PgliteDb.make(yield* PgliteDb.open(pglite));
+		return yield* host(settings, tenant_db_port(database), {
 			...(pglite === undefined ? {} : { pglite }),
 			log: (line) => console.log(`[host] ${line}`)
 		});

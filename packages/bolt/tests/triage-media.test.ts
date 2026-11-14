@@ -4,8 +4,8 @@ import { Context, Effect, Layer } from 'effect';
 import { triageAttachments } from '../src/engine/agent/attachments.ts';
 import { Files, Images, Logs } from '../src/engine/ports.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
-import { images_port } from '../src/node/images.ts';
+import { DbError } from '@norbital-ai/host-api';
+import { images_port } from '@norbital-ai/host-api/node';
 
 const fixture = (name: string, mime: string, bytes: Uint8Array) => {
 	const row = { id: 'f', name, mime, size: bytes.length, key: 'original', sha256: 'a'.repeat(64) };

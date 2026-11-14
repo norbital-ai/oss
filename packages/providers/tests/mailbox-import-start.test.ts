@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Option, Schema } from 'effect';
-import type { DriverOpen } from '@norbital-ai/bolt/engine';
+import type { DriverOpen } from '@norbital-ai/host-api';
 import { mailbox } from '../src/imap-smtp/index.ts';
 import { Cursor } from '../src/imap-smtp/model.ts';
 import { ProviderUnavailable } from '../src/errors.ts';

@@ -1,74 +1,16 @@
 // Delivery status: one order for every provider. A message's status is the most advanced kind reported; a
 // terminal failure wins over anything after it; an auto-reply is recorded and never moves the status.
 import type { DeliveryKind } from '../../decl/runtime/integration.ts';
-import type { Json } from '../../decl/values.ts';
-import { Predicate, Schema } from 'effect';
+import { Predicate } from 'effect';
+import { REPORTED_KINDS, type DeliveryReport } from '@norbital-ai/host-api';
 
 export type { DeliveryKind };
-/**
- * A provider-chosen id persisted before I/O; registration alone is no delivery acknowledgement. Registration refuses
- * another account's message, a paused or personal account, a changed id or another environment epoch.
- */
-export const OutboundReference = Schema.Struct({
-	message: Schema.NonEmptyString,
-	provider_id: Schema.NonEmptyString
-});
-export type OutboundReference = typeof OutboundReference.Type;
-/**
- * A send's acknowledgement, decoded once where the provider crosses into the engine: the `provider_id` delivery events
- * name, and optionally how long a quiet window lasts before the message is presumed delivered.
- */
-export const SendReceipt = Schema.Struct({
-	provider_id: Schema.NonEmptyString,
-	presume_after_ms: Schema.optional(Schema.Number)
-});
-export type SendReceipt = typeof SendReceipt.Type;
-/**
- * What a provider reports about one message it sent, keyed by the `provider_id` its `send` returned. Replies and
- * auto-replies are not reported: they arrive as inbound messages and bolt classifies them.
- */
-export type DeliveryReport = {
-	kind: Exclude<DeliveryKind, 'queued' | 'replied' | 'auto_replied'>;
-	at: string;
-	provider: string;
-	code?: string;
-	reason?: string;
-	permanent?: boolean;
-	presumed?: boolean;
-	approximate?: boolean;
-	/** Bounded to 4 KB by bolt. */
-	raw?: Json;
-};
-const REPORTED: ReadonlySet<string> = new Set([
-	'sent',
-	'deferred',
-	'delivered',
-	'read',
-	'opened',
-	'bounced',
-	'failed',
-	'complained'
-]);
+const REPORTED: ReadonlySet<string> = new Set(REPORTED_KINDS);
 /** Whether a provider may report `kind` (a delivery event arriving from outside is checked here). */
 export const is_reported = (kind: string): kind is DeliveryReport['kind'] => REPORTED.has(kind);
 /** One entry of a message's timeline (`sys_message.delivery`, oldest first). `reply` is the inbound message's row id. */
 export type DeliveryEntry = Omit<DeliveryReport, 'kind'> & { kind: DeliveryKind; reply?: string };
 
-/**
- * A provider's refusal of a send, thrown from `LinksPort.send`: `permanent` (SMTP 5xx, an API 4xx) fails the message
- * at once; otherwise bolt retries it with backoff and records `deferred` (SMTP 4xx). Recognised by `name`, so a copy of
- * this class in another bundle still counts.
- */
-export class SendRefused extends Error {
-	override readonly name = 'SendRefused';
-	readonly code: string | undefined;
-	readonly permanent: boolean;
-	constructor(message: string, code?: string, permanent = true) {
-		super(message);
-		this.code = code;
-		this.permanent = permanent;
-	}
-}
 export const sendRefusal = (
 	e: unknown
 ): { message: string; code?: string; permanent: boolean } | null => {

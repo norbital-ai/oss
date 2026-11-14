@@ -7,12 +7,12 @@ import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
 import { Context, Effect, Exit, Layer, Predicate, Scope, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { type AiResponse, Port } from '@norbital-ai/host-api';
 import { Conversations } from '../src/engine/services.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { act_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace, respond_system_1 } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
 

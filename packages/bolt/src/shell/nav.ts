@@ -10,6 +10,7 @@ import { automation_fields } from '../decl/runtime/automation-input.ts';
 import type { ManifestItem } from './finder/manifest.ts';
 import type { ReadCatalog } from '../protocol/read-answer.ts';
 import type { OperationOutputs } from '../protocol/output-contract.ts';
+import { STUDIO_TABS, type ShellNotice, type StudioTab, type WorkspaceLink } from '@norbital-ai/host-api';
 
 type AppSpec = EngineManifest['apps'][string];
 /** Browser route metadata; agent availability comes from the authorized boot surfaces. */
@@ -193,15 +194,6 @@ export type ShellBoot = {
 	/** The schema fingerprint the page boots against: the page context sends it as `Bolt-Contract`. */
 	contract?: string;
 };
-/** Another workspace the member belongs to; `href` enters it. */
-export type WorkspaceLink = { handle: string; name: string; href: string };
-/** A host banner above every page; `href` is its one action. */
-export type ShellNotice = {
-	text: string;
-	tone?: 'info' | 'warning';
-	href?: string;
-	action?: string;
-};
 /**
  * The environment badge's label: nothing in production (or when unset), `local` for development, and any other name
  * as itself, so an unknown environment is visible rather than mistaken for production.
@@ -239,7 +231,7 @@ export function audience_of(spec: AppSpec | undefined): 'members' | 'external' |
 	const a = spec?.audience ?? 'members';
 	return typeof a === 'object' ? 'public' : a;
 }
-export const challenge_of = (m: ShellManifest, app: string): 'turnstile' | undefined => {
+export const challenge_of = (m: ShellManifest, app: string): true | undefined => {
 	const a = appOf(m, app)?.audience;
 	return typeof a === 'object' ? a.challenge : undefined;
 };
@@ -500,9 +492,6 @@ const COMMAND_CENTER_TABS = [
 	'people'
 ] as const;
 export type CommandCenterTab = (typeof COMMAND_CENTER_TABS)[number];
-/** Studio's tabs, each a stable deep link `/studio/<tab>`; `/studio` is the workbench. */
-const STUDIO_TABS = ['workbench', 'changes', 'versions'] as const;
-export type StudioTab = (typeof STUDIO_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
 	tabs.find((t) => t === value);
 /**

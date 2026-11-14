@@ -7,7 +7,7 @@
 	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Button, Icon } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
-	import { impact_lines, step_name } from '../../protocol/migration-impact.ts';
+	import { impact_lines, step_name } from '@norbital-ai/host-api';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import type { ShellApi } from '../api-types.ts';
 	import { date_time } from '../i18n.ts';

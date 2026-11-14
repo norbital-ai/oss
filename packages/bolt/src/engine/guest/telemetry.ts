@@ -1,7 +1,8 @@
 // An invocation's events: each written to the host's runtime log as it happens.
 import { Clock, Effect, Layer, type Scope } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
-import { LIMITS, type LogQuery } from '../contracts.ts';
+import type { LogQuery } from '@norbital-ai/host-api';
+import { LIMITS } from '../contracts.ts';
 import { Logs, type LogsShape } from '../ports.ts';
 import { Telemetry, type EventIds, type InvocationEvents } from '../services.ts';
 /** A page of the runtime log from the host's store, newest first; the caller has checked the reader may see it. */

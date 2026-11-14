@@ -4,8 +4,7 @@
 // facility's typed errors.
 import { afterAll, describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from 'effect';
-import { Port } from '../src/engine/port.ts';
-import { FacilityFailure } from '../src/decl/errors.ts';
+import { type DecisionRequest, FacilityFailure, Port } from '@norbital-ai/host-api';
 import type { Json } from '../src/decl/values.ts';
 import { Ai } from '../src/engine/ports.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
@@ -18,7 +17,6 @@ import {
 } from './support/route-fixture.ts';
 import type { ActOutcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import type { System1Request } from '../src/engine/decision.ts';
 import { TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 
 const present = <A>(value: A | null | undefined): A => {
@@ -96,7 +94,7 @@ export default { model: { tickets: { bodies: { effect: { create: function* (chan
 } } } } } };`);
 
 type Mode = 'ok' | 'too_large' | 'unsupported' | 'offlist' | 'down' | 'absent';
-type Fake = { mode: Mode; calls: System1Request[] };
+type Fake = { mode: Mode; calls: DecisionRequest[] };
 const aiPort = (fake: Fake): Ai['Service'] => ({
 	ask: (request) =>
 		Effect.gen(function* () {

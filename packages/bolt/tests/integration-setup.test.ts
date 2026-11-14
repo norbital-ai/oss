@@ -12,7 +12,7 @@ import { ActRefused } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import IntegrationSetup from '../src/page/IntegrationSetup.svelte';
 import type { IntegrationClient } from '../src/page/integrations.ts';
-import type { InstanceStatus } from '../src/protocol/instance-status.ts';
+import type { InstanceStatus } from '@norbital-ai/host-api';
 import { reactive } from './support/reactive.svelte.ts';
 
 const mounted: (() => Promise<void>)[] = [];

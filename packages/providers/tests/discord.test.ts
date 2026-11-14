@@ -6,8 +6,7 @@ import { TestClock } from 'effect/testing';
 import { describe, expect, it } from '@effect/vitest';
 import { discord, type GatewaySocket } from '../src/discord/index.ts';
 import { ProviderUnavailable } from '../src/errors.ts';
-import { Fenced } from '@norbital-ai/bolt/engine';
-import type { DriverEvent } from '@norbital-ai/bolt/engine';
+import { type DriverEvent, Fenced } from '@norbital-ai/host-api';
 import { required, fakeFetch, file, host, json, messagesOf, until } from './kit.ts';
 
 const settle = (ok: () => boolean) =>

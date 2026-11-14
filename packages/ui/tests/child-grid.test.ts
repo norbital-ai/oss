@@ -231,6 +231,31 @@ it.live(
 		})
 );
 
+it.live('a grid on its own, outside any record, edits through the child model: it has its own Edit', () =>
+	Effect.gen(function* () {
+		const { bolt } = yield* browser(fixture);
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt,
+				catalog,
+				part: 'child',
+				view: ChildGrid,
+				props: { of: 'jobs', relation: 'lines', id: 'j1', columns: ['amount'] }
+			}
+		});
+		try {
+			yield* browser(() => settle());
+			assert.equal(element(target, '[data-child-grid]').dataset['saveScope'], 'independent');
+			assert.ok(button(target, 'Edit'), 'a standalone grid is editable');
+		} finally {
+			yield* browser(() => unmount(app));
+			target.remove();
+		}
+	})
+);
+
 it.live(
 	'parent-only row editing requests native capabilities through its original parent revision',
 	() =>

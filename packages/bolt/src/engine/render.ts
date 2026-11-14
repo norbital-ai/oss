@@ -3,7 +3,7 @@
 // only while the print runs, honoured for reads alone (`shell/host.ts`).
 import { Context, Effect, Layer, Option, Schema, type Scope } from 'effect';
 import { default_fields, exposure_of } from '@norbital-ai/store';
-import { FacilityFailure } from '../decl/errors.ts';
+import { FacilityFailure, type PortFailure } from '@norbital-ai/host-api';
 import type { Json } from '../decl/values.ts';
 import { request, type ReadIR } from '../protocol/reads.ts';
 import { catalog_of } from './access/pred.ts';
@@ -11,7 +11,6 @@ import { LIMITS, type Authority, type CrossAnswer } from './contracts.ts';
 import type { EngineError } from './errors.ts';
 import type { EngineManifest } from './manifest.ts';
 import type { Render } from './ports.ts';
-import type { PortFailure } from './port.ts';
 
 /** A render grant's bearer prefix (an API key's is `nbk_`). */
 export const RENDER_BEARER = 'nbr_';

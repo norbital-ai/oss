@@ -7,7 +7,7 @@ import type { SecretsShape } from '../../engine/secrets.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { Json } from '../../decl/values.ts';
-import { DRIVERS, type DriverName } from '../../decl/runtime/integration.ts';
+import { driver_name, driver_of } from '../../decl/runtime/integration.ts';
 import type { Fields } from '@norbital-ai/store/kind';
 import { SYSTEM } from '../../system/index.ts';
 import { conversational } from '../../engine/integrations/instances.ts';
@@ -100,7 +100,7 @@ export type Settings = {
 	 */
 	integrations: {
 		name: string;
-		driver: DriverName;
+		driver: string;
 		description: string;
 		conversation: boolean;
 		personal: boolean;
@@ -255,10 +255,10 @@ export const settings = Effect.fn('shell.settings')(function* (
 			.sort(([a], [b]) => a.localeCompare(b))
 			.map(([name, d]) => ({
 				name,
-				driver: d.driver,
+				driver: driver_name(d),
 				description: d.description,
 				conversation: conversational(d),
-				personal: 'personal' in DRIVERS[d.driver],
+				personal: driver_of(d).personal === true,
 				sends:
 					conversational(d) ||
 					Object.values(m.exposures).some((model) =>

@@ -2,8 +2,7 @@
 // is a typed failure — never a throw.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
-import { Port } from '../src/engine/port.ts';
+import { FacilityFailure, Port, Unavailable } from '@norbital-ai/host-api';
 
 describe('Port', () => {
 	it.effect('unavailable: the host provides no such port', () =>

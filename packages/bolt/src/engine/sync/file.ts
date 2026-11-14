@@ -34,10 +34,9 @@ import {
 	type RunHandler
 } from '../services.ts';
 import { Convert, Files } from '../ports.ts';
-import type { PortFailure } from '../port.ts';
+import { CONVERT_TARGETS, type PortFailure } from '@norbital-ai/host-api';
 import { TenantDb } from '../db/tenant-db.ts';
 import {
-	CONVERT_TARGETS,
 	LIMITS,
 	type Authority,
 	type Bindings,

@@ -7,7 +7,7 @@ import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, DateTime, Effect, Layer, Option, Result, Schema, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { Port } from '@norbital-ai/host-api';
 import { Agents, Conversations } from '../src/engine/services.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { ActReply, AgentRow, WireError } from '../src/protocol/schema.ts';

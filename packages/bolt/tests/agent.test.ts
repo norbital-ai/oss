@@ -2,11 +2,16 @@
 import { describe, expect, it } from '@effect/vitest';
 import { TestClock } from 'effect/testing';
 import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Stream } from 'effect';
-import { FacilityFailure } from '../src/decl/errors.ts';
+import {
+	type AiRequest,
+	type AiResponse,
+	FacilityFailure,
+	Port,
+	type PortFailure
+} from '@norbital-ai/host-api';
 import type { Json } from '../src/decl/values.ts';
-import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
-import { Port, type PortFailure } from '../src/engine/port.ts';
-import type { Ai, AiEvent } from '../src/engine/ports.ts';
+import type { Ai } from '../src/engine/ports.ts';
+import type { AiEvent } from '@norbital-ai/host-api';
 import type { FacilityCall } from '../src/engine/services.ts';
 import {
 	applyEdit,
@@ -65,17 +70,15 @@ const row = (
 });
 type Step = Ai['Service']['infer'];
 describe('guidance follows the tools actually available', () => {
-	it('adds what source is only with source tooling, and names no tool or step', () => {
-		expect(system({ skills: {} })).not.toContain('# Source');
-		const prompt = system({ skills: {}, tools: [
-			{ name: 'workspace_search' }, { name: 'show_preview', studio: 'preview' }, { name: 'take_live', studio: 'merge' }
-		] });
+	it('adds what source is only to an author, and names no tool or step', () => {
+		expect(system({ authors: false })).not.toContain('# Source');
+		const prompt = system({ authors: true });
 		expect(prompt).toContain('# Source');
-		expect(prompt).not.toMatch(/show_preview|take_live|workspace_|bolt-primer|\bhost\b/);
+		expect(prompt).not.toMatch(/workspace_|run_tool|bolt-primer|\bhost\b/);
 	});
-	it('a channel conversation gets its own browser and native-question guidance', () => {
-		const prompt = system({ envoy: 'Desk', skills: {} });
-		expect(prompt).toContain("There is no user's workspace browser tab in this channel.");
+	it('a channel conversation gets its own guidance and the native-question rule', () => {
+		const prompt = system({ envoy: 'Desk', authors: false });
+		expect(prompt).toContain("This channel has no workspace tab of the person's.");
 		expect(prompt).toContain('do not repeat its question, choices or summary');
 	});
 });
@@ -253,31 +256,20 @@ describe('the context projection', () => {
 			{ role: 'user', content: '[note]\nok' }
 		]);
 	});
-	it('the system prompt is the kernel, skills list, brief, envoy and task only: no date, actor or conversation state', () => {
-		const s = system({
-			envoy: 'Norbius',
-			brief: 'Brief.',
-			task: 'Task.',
-			skills: { pricing: { text: '---\ndescription: How we price\n---\nbody' } }
-		});
-		// what every conversation shares first (skills, brief), then the envoy's channel guidance and its task
-		expect(s).toContain('# Skills\n- pricing: How we price\n\n# Brief\nBrief.\n\nYou are Norbius');
+	it('the system prompt is the kernel, brief, envoy, task, source note and identity: no skills, date or conversation state', () => {
+		const s = system({ envoy: 'Norbius', brief: 'Brief.', task: 'Task.', authors: false });
+		// what every conversation shares first (the brief), then the envoy's channel guidance and its task
+		expect(s).toContain('\n\n# Brief\nBrief.\n\nYou are Norbius');
 		expect(s.endsWith('\n\nTask.')).toBe(true);
-		expect(s).not.toMatch(/20\d\d|clock|timezone/i);
+		expect(s).not.toMatch(/20\d\d|clock|timezone|# Skills/i);
 		// the channel guidance names the envoy, so a message that says the name is readable as addressed to it
 		expect(s).toContain('You are Norbius, answering on a messaging channel.');
 		// and it may not narrate the workspace's own checks
 		expect(s).toContain("Never describe the workspace's own automated checks");
-		// a turn without the source tools (a public envoy's) is never told to call them; one with them gets the layout
-		expect(system({ skills: {} })).not.toMatch(/workspace_list|workspace_search|workspace_lang/);
-		const layout = system({
-			brief: 'Brief.',
-			skills: { pricing: { text: '---\ndescription: How we price\n---\nbody' } },
-			tools: [{ name: 'workspace_search' }]
-		});
-		expect(layout).toContain('\n\n# Source\n');
+		// the author's source note follows the shared parts
+		const layout = system({ brief: 'Brief.', authors: true });
+		expect(layout.indexOf('# Brief')).toBeLessThan(layout.indexOf('# Source'));
 		expect(layout).not.toMatch(/workspace_list|workspace_search|workspace_lang/);
-		expect(layout.indexOf('# Source')).toBeLessThan(layout.indexOf('# Skills'));
 	});
 });
 

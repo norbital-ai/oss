@@ -11,49 +11,17 @@ import { it } from '@effect/vitest';
 import { discover, sourcePath } from '../src/compiler/discover.ts';
 import { LAYOUT_HELP } from '../../bolt/src/decl/layout.ts';
 import { buildPacks, seedRows } from '../src/compiler/artifact/seed.ts';
-import type { CheckDiagnostic } from '../src/compiler/check/index.ts';
+import type { CheckDiagnostic } from '@norbital-ai/host-api';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { engine_manifest } from '../../bolt/src/engine/manifest.ts';
 import { load, manifestErrors } from '../src/compiler/load.ts';
-import { namesIndex, writeNames, writeTypeSetup } from '../src/compiler/names.ts';
+import { namesIndex, writeNames } from '../src/compiler/names.ts';
 import { install } from '../../bolt/src/decl/runtime/guest.ts';
 install();
 const fixture = (name: string) =>
 	fileURLToPath(new URL(`../../bolt/tests/fixtures/${name}`, import.meta.url));
 const BOLT = '../../../../src/index.ts'; // src as seen from a fixture's .norbital/
 describe('next compiler: discover', () => {
-	it.live('generates typed path bindings and removes a deleted declaration binding', () =>
-		Effect.gen(function* () {
-			const root = yield* scratchPath(`compiler-bindings-${randomUUID()}`);
-			try {
-				yield* writeTypeSetup(root, [
-					{ role: 'model', name: 'orders', path: 'src/data/model/sales/orders/+model.ts' },
-					{
-						role: 'integration_definition',
-						name: 'crm',
-						path: 'src/integration/crm/+integration.ts'
-					}
-				]);
-				expect(readFileSync(join(root, '.norbital/models/orders.ts'), 'utf8')).toContain(
-					'bind_model("orders")'
-				);
-				expect(readFileSync(join(root, '.norbital/integrations/crm.ts'), 'utf8')).toContain(
-					'bind_integration("crm")'
-				);
-				yield* writeTypeSetup(root, [
-					{ role: 'model', name: 'invoices', path: 'src/data/model/invoices/+model.ts' }
-				]);
-				expect(existsSync(join(root, '.norbital/models/orders.ts'))).toBe(false);
-				expect(existsSync(join(root, '.norbital/integrations/crm.ts'))).toBe(false);
-				expect(readFileSync(join(root, '.norbital/models/invoices.ts'), 'utf8')).toContain(
-					'bind_model("invoices")'
-				);
-			} finally {
-				rmSync(root, { recursive: true, force: true });
-			}
-		}).pipe(Effect.provide(NodeServices.layer))
-	);
-
 	it.live(
 		'loads nested model folders by leaf identity, with parent models and sibling representations',
 		() =>
@@ -303,6 +271,7 @@ describe('next compiler: discover', () => {
 				'representation orders',
 				'secrets ',
 				'skill triage',
+				'sync notices.messages',
 				'team ',
 				'workspace '
 			]);
@@ -324,7 +293,7 @@ describe('next compiler: discover', () => {
 					'discover/one-per-folder src/data/model/orders/+erp.integration.ts',
 					'discover/page-without-app src/app/empty/+board.page.svelte',
 					'discover/plural-folder src/automations/+sync.automation.ts',
-					'discover/reserved-name src/data/custom_field/phone/+definition.ts',
+					'discover/reserved-name src/data/custom_field/phone/+custom_field.ts',
 					'discover/reserved-name src/data/model/sys_thing/+model.ts',
 					'discover/reserved-name src/integration/whatsapp/+integration.ts',
 					'discover/seed-layout seed/stray.json',
@@ -413,7 +382,7 @@ describe('next compiler: load', () => {
 			}
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live('splits inline model refs and syncs beside integration definitions and runtime accounts', () =>
+	it.live('splits inline model refs and merges sync files beside integration definitions and runtime accounts', () =>
 		Effect.gen(function* () {
 			const root = yield* scratchPath(`compiler-integration-load-${randomUUID()}`);
 			const write = (path: string, text: string) => {
@@ -430,8 +399,12 @@ describe('next compiler: load', () => {
 					`export default { name: 'entries', spec: {
 					description: 'Ledger entries', record_label: 'record.code', constraints: { one_code: { unique: ['source', 'code'], import_key: true } },
 					fields: { code: { kind: 'text' }, source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'books' } } } },
-					outputs: { default: { fields: 'all' } }, syncs: { ledger: { with: 'books', every: '1h', read: function* () { return { rows: [] }; } } }
-				} };`
+					outputs: { default: { fields: 'all' } }
+				}, bodies: {} };`
+				);
+				write(
+					'src/data/model/entries/+ledger.sync.ts',
+					"export default { model: 'entries', name: 'ledger', spec: { with: 'books', every: '1h', read: function* () { return { rows: [] }; } }, bodies: {} };"
 				);
 				write(
 					'src/integration/books/+integration.ts',
@@ -458,6 +431,54 @@ describe('next compiler: load', () => {
 				expect(names).toContain('"syncs": {');
 				expect(names).toContain('"read": true;');
 				expect(names).not.toContain('typeof import');
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
+
+	it.live('merges each +<sync>.sync.ts into the model beside it and refuses one its path does not name', () =>
+		Effect.gen(function* () {
+			const root = yield* scratchPath(`compiler-sync-files-${randomUUID()}`);
+			const write = (path: string, text: string) => {
+				mkdirSync(dirname(join(root, path)), { recursive: true });
+				writeFileSync(join(root, path), text);
+			};
+			try {
+				write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
+				write(
+					'src/data/model/contacts/+model.ts',
+					"export default { name: 'contacts', spec: { description: 'Contacts', record_label: 'record.name', fields: { name: { kind: 'text' } }, outputs: { default: { fields: 'all' } } }, bodies: {} };"
+				);
+				write(
+					'src/data/model/contacts/+crm.sync.ts',
+					"export default { model: 'contacts', name: 'crm', spec: { with: 'crm' }, bodies: { read: function* () { return { rows: [] }; }, parse: {} } };"
+				);
+				write(
+					'src/data/model/contacts/+sheet.sync.ts',
+					"export default { model: 'contacts', name: 'other', spec: { with: 'file' }, bodies: { parse: {} } };"
+				);
+				write(
+					'src/data/model/ghost/+feed.sync.ts',
+					"export default { model: 'ghost', name: 'feed', spec: { with: 'crm' }, bodies: { parse: {} } };"
+				);
+				const found = yield* discover(root);
+				expect(found.errors.map((e) => `${e.code} ${e.path}`)).toEqual([
+					'discover/sync-without-model src/data/model/ghost/+feed.sync.ts'
+				]);
+				const loaded = yield* load(root, found.files);
+				expect(loaded.errors).toEqual([]);
+				expect(loaded.manifest.model['contacts']).toMatchObject({
+					spec: { syncs: { crm: { with: 'crm' }, sheet: { with: 'file' } } },
+					bodies: { syncs: { sheet: { parse: {} } } }
+				});
+				expect(loaded.manifest.model['contacts']).toHaveProperty(
+					'bodies.syncs.crm.read',
+					expect.any(Function)
+				);
+				expect(
+					manifestErrors(loaded.manifest, 'workspace', found.files).map((e) => `${e.code} ${e.path}`)
+				).toEqual(['load/name-path src/data/model/contacts/+sheet.sync.ts']);
 			} finally {
 				rmSync(root, { recursive: true, force: true });
 			}

@@ -16,12 +16,8 @@ import { describe, expect, it } from '@effect/vitest';
 import { input_schema } from '@norbital-ai/store/kind';
 import { create_bolt, patched } from '../src/page/bolt.ts';
 import type { EventSourceLike } from '../src/page/stream.ts';
-import {
-	ActConflict,
-	ActRefused,
-	ReadFailed,
-	Unavailable
-} from '../src/decl/errors.ts';
+import { Unavailable } from '@norbital-ai/host-api';
+import { ActConflict, ActRefused, ReadFailed } from '../src/decl/errors.ts';
 import { TransportFailed } from '../src/decl/errors/browser.ts';
 import { ActUnknown } from '../src/decl/errors/act.ts';
 import { Refusal } from '../src/decl/errors/refusal.ts';

@@ -29,9 +29,9 @@ import {
 import { source_objects } from '../../bolt/src/engine/schema/engine.ts';
 import { audit_triggers } from '../../bolt/src/engine/schema/audit.ts';
 import { history_schema_objects } from '../../bolt/src/engine/schema/history.ts';
-import { PgliteDb } from '../../bolt/src/node/db/pglite.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
+import { TenantDb, type TenantDbShape } from '../../bolt/src/engine/db/tenant-db.ts';
 import { TestDb } from '../src/test/database.ts';
-import type { TenantDbShape } from '../../bolt/src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { manifest } from '../../bolt/tests/engine-fixture.ts';
 import { read_history } from '../../bolt/src/engine/query/history.ts';
@@ -112,7 +112,7 @@ describe('committed workspace migrations', () => {
 				const bundle = yield* read_migrations(source);
 				yield* Effect.scoped(
 					Effect.gen(function* () {
-						const db = PgliteDb.make(yield* TestDb.open(initial, bundle));
+						const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial, bundle)));
 						expect(
 							yield* db.value(Schema.String, {
 								text: 'select name from entry where id=$1',
@@ -143,7 +143,7 @@ describe('committed workspace migrations', () => {
 				);
 				yield* Effect.scoped(
 					Effect.gen(function* () {
-						const db = PgliteDb.make(yield* TestDb.open(initial, bundle));
+						const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial, bundle)));
 						expect(
 							yield* db.value(Schema.String, {
 								text: 'select name from entry where id=$1',
@@ -161,7 +161,7 @@ describe('committed workspace migrations', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const fs = yield* FileSystem.FileSystem;
-				const db = PgliteDb.make(yield* TestDb.open());
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open()));
 				const directory = yield* root;
 				const source = join(directory, 'migrations');
 				const previous = yield* generate(
@@ -226,7 +226,7 @@ describe('committed workspace migrations', () => {
 						prior_versioned_audit
 					);
 					// The synthetic versioned predecessor is retained byte-for-byte with its original physical proof.
-					const db = PgliteDb.make(yield* TestDb.open()),
+					const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open())),
 						inspect = { text: INTROSPECT, params: [] },
 						empty = migration_lines(yield* db.rows(IntrospectRow, inspect), true, true);
 					yield* db.write({ text: executable(previous.file), params: [] });
@@ -298,7 +298,7 @@ describe('committed workspace migrations', () => {
 				expect(sql).not.toBe(fresh.file.sql);
 				expect(sql).not.toContain('create trigger store_statement_rules_');
 				const previous = { ...fresh.file, sql };
-				const db = PgliteDb.make(yield* TestDb.open()),
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open())),
 					inspect = { text: INTROSPECT, params: [] },
 					empty = migration_lines(yield* db.rows(IntrospectRow, inspect), true, true);
 				yield* db.write({ text: executable(previous), params: [] });
@@ -343,7 +343,7 @@ describe('committed workspace migrations', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fs = yield* FileSystem.FileSystem;
-					const db = PgliteDb.make(yield* TestDb.open());
+					const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open()));
 					const directory = yield* root;
 					const source = join(directory, 'migrations');
 					yield* prepare_migrations(directory, initial, 'generate');
@@ -402,7 +402,7 @@ describe('committed workspace migrations', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const fs = yield* FileSystem.FileSystem;
-				const db = PgliteDb.make(yield* TestDb.open());
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open()));
 				const directory = yield* root;
 				const source = join(directory, 'migrations');
 				const old: EngineManifest = {
@@ -513,7 +513,7 @@ select id from entry where given is null or given = '' or family is null or fami
 			Effect.gen(function* () {
 				const fs = yield* FileSystem.FileSystem;
 				// the kit's database first: the worker's PGlite warm-up is not this file's work
-				const db = PgliteDb.make(yield* TestDb.open());
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open()));
 				const directory = yield* root;
 				const source = join(directory, 'migrations');
 				yield* prepare_migrations(directory, initial, 'generate');

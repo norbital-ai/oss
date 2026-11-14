@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { check } from '../compiler/check/index.ts';
-import { Diagnostic } from '@norbital-ai/bolt/tooling';
+import { Diagnostic } from '@norbital-ai/host-api';
 import { writeTypeSetup } from '../compiler/names.ts';
 import { ToolFailure } from './build.ts';
 
@@ -53,7 +53,7 @@ const typeDiagnostics = Effect.fn('bolt.typeDiagnostics')(function* (
 ) {
 	// a build needs no checker: load its TypeScript 7 API only when a check asks for it
 	const { type_service } = yield* Effect.tryPromise({
-		try: () => import('@norbital-ai/bolt/node'),
+		try: () => import('@norbital-ai/host-api/node'),
 		catch: (cause) => new ToolFailure({ message: `the type check: ${String(cause)}` })
 	});
 	const answer = yield* type_service.check_workspace(files, `${root}/node_modules`).pipe(
@@ -122,11 +122,13 @@ const svelteWarnings = Effect.fn('bolt.svelteWarnings')(function* (
 	return warned.flat();
 });
 const TypeCache = Schema.Struct({ key: Schema.String, diagnostics: Schema.Array(Diagnostic) });
+/** The files of a package that decide what the checker sees: its manifest, declarations and components. */
+const JUDGED = /(^|\/)package\.json$|\.d\.ts$|\.svelte$/;
 /**
- * What the type stage judges: every file the checker reads, and the identity of each judging package (a
- * same-version republish or a relink replaces its files, so its inode and time move with it).
+ * What the type stage judges: every file the checker reads, and the content of each judging package's manifest,
+ * declarations and components (a same-version republish or a relink rewrites them in place).
  */
-const typeKey = Effect.fn('bolt.typeKey')(function* (
+export const typeKey = Effect.fn('bolt.typeKey')(function* (
 	root: string,
 	files: ReadonlyMap<string, string>
 ) {
@@ -143,12 +145,15 @@ const typeKey = Effect.fn('bolt.typeKey')(function* (
 		'svelte'
 	].toSorted();
 	for (const name of judges) {
-		const manifest = path.join(modules, name, 'package.json');
-		if (!(yield* fs.exists(manifest))) continue;
-		const info = yield* fs.stat(yield* fs.realPath(manifest));
-		hash.update(
-			`\0${name}\0${Option.getOrElse(info.ino, () => 0)}\0${Option.match(info.mtime, { onNone: () => 0, onSome: (d) => d.getTime() })}\0`
-		);
+		const dir = path.join(modules, name);
+		if (!(yield* fs.exists(path.join(dir, 'package.json')))) continue;
+		const real = yield* fs.realPath(dir);
+		const judged = (yield* fs.readDirectory(real, { recursive: true }))
+			.filter((file) => JUDGED.test(file) && !file.split(path.sep).includes('node_modules'))
+			.toSorted();
+		hash.update(`\0${name}\0`);
+		for (const file of judged)
+			hash.update(`\0${file}\0`).update(yield* fs.readFile(path.join(real, file)));
 	}
 	return hash.digest('hex');
 });

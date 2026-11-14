@@ -9,10 +9,9 @@ import { afterAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
-import { off } from '../src/facilities/index.ts';
 import { Agents } from '../src/engine/services.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
-import type { AiResponse } from '../src/engine/contracts.ts';
+import { type AiResponse, off } from '@norbital-ai/host-api';
 import { TestWorkspace, type TestOptions } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(

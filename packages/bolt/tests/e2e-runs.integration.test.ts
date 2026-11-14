@@ -7,7 +7,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import { describe, expect, it } from '@effect/vitest';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
-import { uuidv7 } from '../src/protocol/wire.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');

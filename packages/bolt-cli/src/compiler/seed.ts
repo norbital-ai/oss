@@ -2,7 +2,7 @@
 import { Effect, FileSystem, Path, Result, Schema } from 'effect';
 import { gunzipSync } from 'node:zlib';
 import type { RowData } from '@norbital-ai/bolt/engine';
-import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
+import type { CheckDiagnostic } from '@norbital-ai/host-api';
 
 /**
  * The rows of a seed directory, in natural path order: every `**\/<model>.json[.gz]` under `dir` is

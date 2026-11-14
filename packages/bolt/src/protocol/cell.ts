@@ -5,30 +5,7 @@
 // The globals come first: they are installed before any engine module evaluates.
 import { cellGlobals } from './cell-globals.ts';
 import { HOST_API } from './host-api.ts';
-import { CELL_ABI_VERSION, membrane, type Answer, type Message } from './membrane.ts';
-
-export { CELL_ABI_VERSION };
-
-/** The kernel's system calls, each a synchronous host function (`log` is fire and forget). */
-export type Kernel = {
-	/** A membrane message to the kernel; a call's answer when the kernel answered it at once. */
-	readonly send: (message: Message) => Answer;
-	/** Arms timer `id`: in `ms` the kernel enters `fire(id)`, billed to the unit that armed it. */
-	readonly timer: (id: number, ms: number) => void;
-	readonly clear: (id: number) => void;
-	/** Fresh random bytes from the host's CSPRNG. */
-	readonly random: (bytes: number) => Uint8Array<ArrayBuffer>;
-	readonly log: (level: string, line: string) => void;
-};
-/** What `open` answers: the marshalled HOST_API, and the cell's two entries. */
-export type CellEnd = {
-	/** HOST_API in its wire form; `cookie_site` is its two answers, `[insecure, secure]`. */
-	readonly api: unknown;
-	/** One membrane message from the kernel. */
-	readonly receive: (message: unknown) => Answer;
-	/** A timer the kernel fired. */
-	readonly fire: (timer: number) => void;
-};
+import { CELL_ABI_VERSION, membrane, type CellEnd, type Kernel } from '@norbital-ai/host-api';
 
 const open = (kernel: Kernel): CellEnd => {
 	if (cellGlobals === undefined)

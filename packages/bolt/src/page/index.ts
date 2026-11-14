@@ -10,8 +10,16 @@ export { file_ref } from './file-ref.ts';
 export { default as IntegrationSetup } from './IntegrationSetup.svelte';
 export type { IntegrationSetupEntry } from '../shell/integration/setup.ts';
 
-/** A page's `ctx`; its `ui` is what every `@norbital-ai/ui` view takes, so a page passes `ctx` whole (`<Table {ctx} of="projects">`). */
-export type PageContext = Omit<ShellBolt, keyof PageBolt | 'native_query' | 'observe' | 'closed' | 'sync'> & PageBolt & UiContext;
+/**
+ * A page's `ctx`: the typed page operations (`PageBolt`), the page's locale and zone, the viewer's `catalog` (the models
+ * and outputs it may read and write), the `device` it runs on, `href` to app pages, the workspace `org`, the agent panel,
+ * integration instance controls and the run ledger (`runs`). Its `ui` is what every `@norbital-ai/ui` view takes, so a
+ * page passes `ctx` whole (`<Table {ctx} of="projects">`). Nothing else of the shell client is the page's.
+ */
+export interface PageContext
+	extends PageBolt,
+		UiContext,
+		Pick<ShellBolt, 'locale' | 'tz' | 'catalog' | 'device' | 'href' | 'org' | 'agent' | 'integration' | 'runs'> {}
 /**
  * A public page's `ctx`: `PageContext`'s counterpart for apps whose audience is not members, over the public client.
  *
@@ -21,7 +29,10 @@ export type PageContext = Omit<ShellBolt, keyof PageBolt | 'native_query' | 'obs
  * `ctx.location` (workspace-relative pathname and search), and start writes and device work on mount. Each route
  * loads only its own browser graph; navigation is a document request.
  */
-export type PublicPageContext = Omit<PublicClient, keyof PageBolt | 'native_query' | 'observe' | 'closed' | 'sync'> & PageBolt & UiContext;
+export interface PublicPageContext
+	extends PageBolt,
+		UiContext,
+		Pick<PublicClient, 'locale' | 'tz' | 'device' | 'href' | 'org' | 'location'> {}
 
 // ui's views are typed by the same names: `of`, `columns`, `values`, `record` and ids per model.
 declare module '@norbital-ai/ui' {

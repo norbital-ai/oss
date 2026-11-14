@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from '@effect/vitest';
-import type { HostToolContext, Json } from '@norbital-ai/bolt/engine';
+import type { HostToolContext } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import { webSearch } from '../src/search.ts';
 
 const context: HostToolContext = {
-	actor: { kind: 'system', run: 'r', by: { platform: 'test' } },
+	actor: { kind: 'system', run: 'r' },
 	conversation: 'c',
 	turn: 't',
 	call_id: 'k',

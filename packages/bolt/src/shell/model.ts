@@ -4,14 +4,8 @@
 // popover: Settings (Organization, Integrations, Secrets), System (the command center: builds and releases, the
 // audit trail, automation runs, inference and people; and Workspace Studio on a host that serves it), Portals (every `portal: true` page the viewer may open — kiosks and customer-facing pages, never a sidebar row or tab). Host plugins and the organisation list are the host's, so this model carries only the current workspace.
 import type { FeatureColorKey } from '@norbital-ai/ui/brand';
-import {
-	based,
-	command_center_tabs,
-	type NavNode,
-	type NavPage,
-	type ShellBoot,
-	type WorkspaceLink
-} from './nav.ts';
+import type { WorkspaceLink } from '@norbital-ai/host-api';
+import { based, command_center_tabs, type NavNode, type NavPage, type ShellBoot } from './nav.ts';
 
 /** Norbius's row is no page: the shell opens the agent when the navigator is handed this href. */
 export const NORBIUS = '#norbius';

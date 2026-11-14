@@ -2,9 +2,28 @@ import { connect } from 'node:http2';
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 import webpush from 'web-push';
 import { Clock, Effect, Option, Schema } from 'effect';
-import { Port, Transport } from '@norbital-ai/bolt/engine';
-import type { PushMessage, Rows, Sql } from '@norbital-ai/bolt/engine';
+import { Port, type PortFailure, type Rows, type Sql } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import type { HostSettings } from './host.ts';
+
+/** An inbox notice for one device subscription; `id` is the notice's, kept when an uncertain delivery is retried. */
+export type PushMessage = {
+	readonly _tag: 'Push';
+	readonly id: string;
+	readonly subscription: {
+		readonly kind: 'web' | 'apns';
+		readonly endpoint: string;
+		readonly keys: Json;
+	};
+	readonly title: string;
+	readonly body: string | null;
+	readonly link: { readonly model: string; readonly id: string } | null;
+	readonly path: string;
+};
+/** One push transport: a notice sent, or the facility's failure. */
+export type PushSender = {
+	readonly send: (message: PushMessage) => Effect.Effect<{ readonly provider_id: string }, PortFailure>;
+};
 type Db<E> = { readonly write: (statement: Sql) => Effect.Effect<Rows, E> };
 const Subscription = Schema.Struct({
 	endpoint: Schema.String,
@@ -30,12 +49,10 @@ export function push<E>(
 	vapid: { public_key: string; private_key: string },
 	subject: string,
 	send: typeof webpush.sendNotification = webpush.sendNotification.bind(webpush)
-): Transport['Service'] {
+): PushSender {
 	const vapidDetails = { subject, publicKey: vapid.public_key, privateKey: vapid.private_key };
 	return {
 		send: Effect.fn('server.push')(function* (message) {
-			if (message._tag !== 'Push')
-				return yield* Port.unavailable('push', 'This transport sends inbox notices.');
 			const subscription = yield* Schema.decodeUnknownEffect(Subscription)(
 				message.subscription
 			).pipe(Effect.mapError(() => refused('The web push subscription is invalid.', 400)));
@@ -123,7 +140,7 @@ export function apns<E>(
 	db: Db<E>,
 	keys: HostSettings['apns'],
 	request: ApnsRequest = http2Request
-): Transport['Service'] {
+): PushSender {
 	const tokens = new Map<string, { readonly token: string; readonly at: number }>();
 	const token = Effect.fn('server.apns.token')(function* (teamId: string) {
 		const team = keys[teamId];
@@ -149,8 +166,6 @@ export function apns<E>(
 	});
 	return {
 		send: Effect.fn('server.apns')(function* (message) {
-			if (message._tag !== 'Push')
-				return yield* Port.unavailable('push', 'This transport sends inbox notices.');
 			const device = yield* Schema.decodeUnknownEffect(ApnsSubscription)(message.subscription).pipe(
 				Effect.mapError(() => refused('The APNs subscription is invalid.', 400))
 			);

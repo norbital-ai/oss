@@ -3,20 +3,14 @@
 import type { Json } from '../../decl/values.ts';
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
-import type { AuditActor } from '../../protocol/audit.ts';
+import { type AuditActor, DbError, type Lock, Port } from '@norbital-ai/host-api';
 import { fromHex, timingSafeEqual, toBase64url } from '../crypto.ts';
 import { to_hex } from '@norbital-ai/store';
 import { under } from '../../protocol/wire.ts';
 import { Effect, Result, Schema } from 'effect';
-import {
-	LIMITS,
-	type Authority,
-	type Lock,
-	type MembershipPort
-} from '../contracts.ts';
+import { LIMITS, type Authority, type MembershipPort } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
-import { Port } from '../port.ts';
-import { DbError, IdentityRefusal, type EngineError } from '../errors.ts';
+import { IdentityRefusal, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { ADDRESS_HINT, digits, parse_address, type Address } from './address.ts';

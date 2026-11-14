@@ -2,21 +2,15 @@
 // after, and a driver's diagnostics never reaching the guest.
 import { expect, it } from '@effect/vitest';
 import { Effect, Exit, Fiber } from 'effect';
-import { FacilityFailure } from '../src/decl/errors.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { DATABASE_MAX_BYTES, DbError, FacilityFailure, Port } from '@norbital-ai/host-api';
 import { inline } from '../src/engine/db/wire.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
+import { PgliteDb, Pristine, type PgliteClient } from '@norbital-ai/host-api/node';
 import { Drivers } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
 import { manifest } from './catalogue-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import {
-	validate_database_request,
-	validate_database_result,
-	DATABASE_MAX_BYTES
-} from '../src/engine/integrations/database.ts';
+import { validate_database_request, validate_database_result } from '../src/engine/integrations/database.ts';
 import { instanceRequest } from '../src/engine/integrations/instances.ts';
 const request = { op: 'values' as const, values: { name: 'Ada' } };
 const m: EngineManifest = {
@@ -68,7 +62,7 @@ it('rejects unterminated SQL quotes', () => {
 
 it.live('refuses writes through a PGlite read batch and leaves the table intact', () =>
 	Effect.gen(function* () {
-		const db = PgliteDb.make(yield* PgliteDb.open());
+		const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 		yield* db.write({ text: 'create table read_probe (value text)', params: [] });
 		const select = { text: 'select value from read_probe', params: [] };
 		const answer = yield* Effect.result(
@@ -113,7 +107,7 @@ it.live('interrupts a SQL batch and drains native rollback before closing its da
 					});
 				})
 		};
-		const transaction = PgliteDb.make(client).transaction({
+		const transaction = TenantDb.typed(PgliteDb.make(client)).transaction({
 			statements: [
 				{ text: 'select 1', params: [] },
 				{ text: 'select 2', params: [] }

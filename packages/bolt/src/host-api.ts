@@ -1,15 +1,3 @@
-// `@norbital-ai/bolt/host-api`: the Host API between a host and a pinned release (`protocol/host-api.ts`). The types a
-// host hands over or gets back derive from `HostApi` (`Parameters<HostApi['branch']>[0]`,
-// `Awaited<ReturnType<HostApi['activate']>>`) and `HostPorts`.
-export {
-	HOST_API,
-	HOST_API_VERSION,
-	HostApiFailure,
-	HostFailure,
-	MigrationImpact,
-	render_mode,
-	type CellEnd,
-	type HostApi,
-	type HostPorts,
-	type Kernel
-} from './protocol/host-api.ts';
+// `@norbital-ai/bolt/host-api`: this release's `HostApi` (`@norbital-ai/host-api`), the one value a host takes from a
+// release it runs on its own module graph.
+export { HOST_API } from './protocol/host-api.ts';

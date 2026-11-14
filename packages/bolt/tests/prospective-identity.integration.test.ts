@@ -1,13 +1,14 @@
 import { describe, expect, it } from '@effect/vitest';
-import { Deferred, Effect, Schema } from 'effect';
+import { Deferred, Effect, Predicate, Schema } from 'effect';
 import { read } from '@norbital-ai/store';
 import { catalog } from '../src/protocol/catalog.ts';
 import { from_store } from '../src/protocol/errors.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { GuestShape } from '../src/engine/services.ts';
-import { act } from '../src/engine/write/act.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { bridge_on, open } from './write-p2.fixture.ts';
+import { act_one } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -103,7 +104,7 @@ const fixture = Effect.gen(function* () {
 		failures: string[] = [];
 	let serial = 0;
 	const run = (mode: Mode, code: string, gate?: () => Effect.Effect<void>, existing?: string) => {
-		const guest: GuestShape = {
+		const guest: GuestShape = with_each({
 			invokeProgram: () => Effect.die('The fixture invokes native callbacks only.'),
 			invoke: (inv, bridge) =>
 				Effect.gen(function* () {
@@ -170,17 +171,17 @@ const fixture = Effect.gen(function* () {
 							...(mode === 'search' ? { search: code } : {})
 						}
 					).pipe(Effect.mapError(from_store), Effect.orDie);
-					const [answer] = yield* bridge.cross([
+					const [answered] = yield* bridge.cross([
 						{
 							_tag: 'read',
-							read: {
-								kind: 'after',
-								model: query.model,
-								where: query.where ?? { t: 'const', value: true },
-								query
-							}
+							read: { kind: 'request', roots: [{ root: query.model, read: query, prospective: true }] }
 						}
 					]);
+					// the root's page, as an `as_of: 'act'` root answers it
+					const answer =
+						answered?.ok === true && Predicate.isObject(answered.value)
+							? { ok: true as const, value: answered.value[query.model] ?? null }
+							: answered;
 					if (answer?.ok !== true) {
 						if (answer?.ok === false && answer.error.kind === 'bolt') {
 							failures.push(answer.error.code);
@@ -229,13 +230,12 @@ const fixture = Effect.gen(function* () {
 						output: rows.map((row) => ({ ...row, resolved_account_id: account.id }))
 					};
 				})
-		};
-		return act(
+		});
+		return act_one(
 			{ manifest, db, guest, bridge: bridge_on(db, manifest) },
 			{
 				model: existing === undefined ? 'sources' : 'accounts',
 				verb: existing === undefined ? 'create' : 'update',
-				mode: { _tag: 'Direct' },
 				input:
 					existing === undefined
 						? [

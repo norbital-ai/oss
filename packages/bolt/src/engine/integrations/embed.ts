@@ -2,13 +2,13 @@
 // the row's platform embedding and queues the platform run `bolt.embed` in its own statement; the run embeds every row
 // whose vector is missing through the host's `embeddings` port, after commit, never inside a write.
 import { Clock, Effect, Schema } from 'effect';
-import { LIMITS, type EmbedInput, type QueuedRun } from '../contracts.ts';
+import { type EmbedInput, Port } from '@norbital-ai/host-api';
+import { LIMITS, type QueuedRun } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { Ai } from '../ports.ts';
 import { Manifest, Live, Wake, type RunHandler } from '../services.ts';
-import { Port } from '../port.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue } from '../runs/queue.ts';
 import { iso } from '../runs/time.ts';

@@ -3,11 +3,12 @@
 import { expect, layer } from '@effect/vitest';
 import { randomUUID } from 'node:crypto';
 import { Effect } from 'effect';
-import { Writes } from '../src/engine/services.ts';
+import { Callables } from '../src/engine/services.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { split_model } from '../src/decl/model-data.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { admin, manifest as base } from './write-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const movements = split_model('movements', {
 	description: 'Movements',
@@ -19,7 +20,7 @@ const movements = split_model('movements', {
 		bounded: { check: { days: { lte: 1000 } } }
 	},
 	outputs: { default: { fields: 'all' } },
-	create: { columns: { fields: ['ref', 'days'] } }
+	create: { fields: ['ref', 'days'] }
 });
 const manifest: EngineManifest = {
 	...base,
@@ -38,12 +39,12 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })('constra
 	it.effect('refuses a check and a unique with their catalogue messages, and the default text without one', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace,
-				writes = yield* Writes;
+				writes = yield* Callables;
 			const write = (ref: string, days: number) => {
 				const key = randomUUID(),
 					now = t.clock.now();
 				return writes
-					.act({
+					.acts(one_act({
 						model: 'movements',
 						verb: 'create',
 						input: [{ ref, days }],
@@ -51,9 +52,8 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })('constra
 						key,
 						issuedAt: now,
 						invocationId: key,
-						mode: { _tag: 'Direct' },
 						bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-					})
+					}))
 					.pipe(Effect.map((result) => result.outcome));
 			};
 			expect(yield* write('a', 1)).toMatchObject({ kind: 'committed' });

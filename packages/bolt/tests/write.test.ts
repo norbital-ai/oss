@@ -228,7 +228,6 @@ describe('engine/write statement', () => {
 				today: TODAY,
 				actor: member,
 				writer: { starter: null, actor: 'test', depth: 0 },
-				owned: [],
 				output: null,
 				rate: [{ rule: 'act', bucket: 'a', limit: 5, windowStart: NOW }],
 				writes: [

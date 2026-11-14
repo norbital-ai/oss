@@ -1,11 +1,14 @@
 // Native PGlite batches commit or roll back before their answers are decoded; independent scopes start from pristine.
 import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Exit, Fiber, Layer, Schema } from 'effect';
-import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
+import { PgliteDb, Pristine, type PgliteClient } from '@norbital-ai/host-api/node';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 
 const sql = (text: string) => ({ text, params: [] });
-const Pglite = PgliteDb.layer().pipe(Layer.provide(Pristine.layer));
+const Pglite = Layer.effect(
+	TenantDb,
+	Effect.map(PgliteDb.open(), (pg) => TenantDb.typed(PgliteDb.make(pg)))
+).pipe(Layer.provide(Pristine.layer));
 const prepared = Effect.gen(function* () {
 	const db = yield* TenantDb;
 	yield* db.write(sql('create table t (n int)'));
@@ -123,7 +126,7 @@ describe('PgliteDb', () => {
 							})
 						)
 				};
-				const db = PgliteDb.make(client);
+				const db = TenantDb.typed(PgliteDb.make(client));
 				yield* db.write(sql('create table t (n int)'));
 				yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
 				const call = yield* db

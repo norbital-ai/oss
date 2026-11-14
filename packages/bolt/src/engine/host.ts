@@ -25,8 +25,7 @@ import {
 	Runs,
 	Telemetry,
 	Turns,
-	Wake,
-	Writes
+	Wake
 } from './services.ts';
 import {
 	Ai,
@@ -52,7 +51,6 @@ import { Audit, auditChanges } from './audit.ts';
 import { recoverAudit } from './audit-operation.ts';
 import { Secrets } from './secrets.ts';
 import { ReadsLive } from './query/engine.ts';
-import { WritesLive } from './write/act.ts';
 import { CallablesLive } from './callables/index.ts';
 import { ApprovalsLive } from './approvals/approvals.ts';
 import { DecisionsLive } from './decision.ts';
@@ -79,7 +77,6 @@ export type EngineServices =
 	| Manifest
 	| Secrets
 	| Reads
-	| Writes
 	| Automations
 	| Callables
 	| Approvals
@@ -196,8 +193,7 @@ export function EngineLive(
 	const live = LiveHubLive.pipe(Layer.provideMerge(reads));
 	const identity = IdentityLive.pipe(Layer.provideMerge(live));
 	const links = LinksLive.pipe(Layer.provideMerge(identity));
-	const writes = WritesLive.pipe(Layer.provideMerge(links));
-	const callables = CallablesLive.pipe(Layer.provideMerge(writes));
+	const callables = CallablesLive.pipe(Layer.provideMerge(links));
 	const approvals = ApprovalsLive.pipe(Layer.provideMerge(callables));
 	const facilities = Layer.mergeAll(FacilitiesLive, SyncsLive, OutboundLive).pipe(
 		Layer.provideMerge(approvals)

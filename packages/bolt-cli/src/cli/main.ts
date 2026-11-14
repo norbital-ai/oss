@@ -7,9 +7,9 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { realpathSync, statSync, watch } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
+import type { CheckDiagnostic } from '@norbital-ai/host-api';
 import { dev, tethered } from './dev.ts';
-import { host_file_of } from '@norbital-ai/bolt/tooling';
+import { host_file_of } from '@norbital-ai/host-api/node';
 import { platformCommand } from './platform.ts';
 import { templatesCommand } from './templates.ts';
 import {
@@ -206,7 +206,7 @@ const overlaid = (root: string) =>
  * good build; a host serving that `artifact` routes the base there. A page-only `.svelte` edit hot-updates and keeps
  * the artifact hash; any other edit is a new artifact the host cuts over to, reloading open pages.
  *
- * Untethered: the host file default-exports a `Facilities` record; guest code runs on bolt-cli's `node_guests`. Each build
+ * Untethered: the host file default-exports a `Facilities` record; guest code runs on host-api's `node_guests`. Each build
  * is migrated on its `database` and activated through the needs check, so a bundle needing a member left `off`
  * refuses to start, naming it. Served at `http://127.0.0.1:<port>`; the optional `serving` export adds integration
  * links, a converter, geocoder and web reader.

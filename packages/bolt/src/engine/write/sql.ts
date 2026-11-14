@@ -4,18 +4,13 @@ import type { Json } from '../../decl/values.ts';
 import type { TeamEntries } from '../../decl/access/team.ts';
 import { teamEntries } from '../manifest.ts';
 import { Effect, Result, Schema } from 'effect';
-import { LIMITS, type Outcome, type RowData, type Sql } from '../contracts.ts';
+import { copiedSql, db_error, DbError, type RawDb, type Sql } from '@norbital-ai/host-api';
+import { LIMITS, type Outcome, type RowData } from '../contracts.ts';
 import { canonical, sha256, type ConstraintMeta } from '@norbital-ai/store';
 import { literal } from '@norbital-ai/store';
-import {
-	TenantDb,
-	type RawDb,
-	type SqlReadCaptureService,
-	type TenantDbShape
-} from '../db/tenant-db.ts';
-import { DbError } from '../errors.ts';
+import { TenantDb, type SqlReadCaptureService, type TenantDbShape } from '../db/tenant-db.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
-import { copiedSql, db_error, rebased } from '../db/wire.ts';
+import { rebased } from '../db/wire.ts';
 import { composable } from '../query/reader.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { refusalOf, type RuleMeta } from '../schema/refusal.ts';
@@ -137,25 +132,30 @@ export class Chain {
 /**
  * The gate piece. `context` (a write statement's) is set before any gated row is written: `store.write`
  * stamps the row trigger reads, and `bolt.write`, this statement's own marker, so the raw-SQL audit trigger leaves its
- * rows to the statement's history.
+ * rows to the statement's history. A commit split into statements (`part`) opens its first statement's gate and marks
+ * the transaction; each later statement opens only on that mark.
  */
 export function gate(
 	c: Chain,
 	key: string,
 	digest: string,
 	issuedAt: string,
-	context?: { store: string; anonymise?: string }
+	context?: { store: string; anonymise?: string; part?: 'first' | 'later' }
 ): void {
-	const from =
+	const set =
 		context === undefined
 			? ''
-			: ` FROM (SELECT set_config('store.write', ${context.store}::text, true), set_config('bolt.write', statement_timestamp()::text, true)${context.anonymise === undefined ? '' : `, set_config('bolt.anonymise', ${context.anonymise}::text, true)`}) context`;
+			: `set_config('store.write', ${context.store}::text, true), set_config('bolt.write', statement_timestamp()::text, true)${context.anonymise === undefined ? '' : `, set_config('bolt.anonymise', ${context.anonymise}::text, true)`}`;
+	if (context?.part === 'later') {
+		c.cte('idem', `SELECT g.key FROM (SELECT current_setting('bolt.gate', true) AS key, ${set}) g WHERE g.key = ${c.shared('key', key)}`);
+		return;
+	}
 	c.cte(
 		'idem',
-		`INSERT INTO bolt_idem (key, digest, issued_at) SELECT ${c.shared('key', key)}, ${c.shared('digest', digest)}, ${c.p(issuedAt)}::timestamptz${from}
+		`INSERT INTO bolt_idem (key, digest, issued_at) SELECT ${c.shared('key', key)}, ${c.shared('digest', digest)}, ${c.p(issuedAt)}::timestamptz${context === undefined ? '' : ` FROM (SELECT ${set}) context`}
 	ON CONFLICT (key) DO UPDATE SET digest = excluded.digest, issued_at = excluded.issued_at
 	WHERE bolt_idem.issued_at < excluded.issued_at - interval '24 hours'
-	AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL) RETURNING key`
+	AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL) RETURNING key${context?.part === 'first' ? ", set_config('bolt.gate', key, true) AS part" : ''}`
 	);
 }
 /** The statement's answer: the new outcome, or the stored one when the digest matches, else `key_reuse`. */
@@ -209,15 +209,16 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, RuleMeta>):
 		const space = e.message.indexOf(' ');
 		const [code, detail] =
 			space < 0 ? [e.message, ''] : [e.message.slice(0, space), e.message.slice(space + 1)];
+		// a conflict is never recorded: a retry under the same key (a run's next attempt) reads the rows afresh
 		if (code === 'conflict')
 			return {
 				outcome: { kind: 'conflict', records: conflictRecords(detail) },
-				record: true,
+				record: false,
 				replay: false
 			};
 		// a transform read moved between the read and the commit: replayed once, then `conflict`
 		if (code === 'fingerprint')
-			return { outcome: { kind: 'conflict', records: [] }, record: true, replay: true };
+			return { outcome: { kind: 'conflict', records: [] }, record: false, replay: true };
 		// a recorded `rate_limited` would answer the client's resend after `retryAfter` for 24 h
 		if (code === 'rate_limited')
 			return {
@@ -249,20 +250,14 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, RuleMeta>):
 				record: true,
 				replay: false
 			};
-		return {
-			outcome: {
-				kind: 'refused',
-				code: 'locked',
-				message: 'The parent record is locked in its current state.'
-			},
-			record: true,
-			replay: false
-		};
+		// a write whose effects would run past the chain depth (runs/queue.ts `refuseDeep`)
+		if (code === 'depth') return { outcome: { kind: 'refused', code: 'refused', message: detail }, record: true, replay: false };
+		throw BoltError.make('bug', 'commit', `unexpected statement assert ${code}: ${detail}`, e);
 	}
 	const r = refusalOf(e, constraints);
 	if (r instanceof BoltError) throw r;
 	return r === 'conflict'
-		? { outcome: { kind: 'conflict', records: [] }, record: true, replay: true }
+		? { outcome: { kind: 'conflict', records: [] }, record: false, replay: true }
 		: { outcome: r, record: true, replay: false };
 }
 /** The native Effect boundary for SQL decisions, retaining typed Bolt failures and the original bug context. */

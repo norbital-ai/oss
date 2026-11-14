@@ -79,14 +79,17 @@ const fixture = Effect.gen(function* () {
 	};
 	const reads = Context.get(context, Reads),
 		authorities = new Authorities(manifest, 'test');
+	const authority = Effect.gen(function* () {
+		const resolved = yield* authorities.member(t.db, 'bootstrap', as);
+		if (resolved === null) throw new Error(`no member ${as}`);
+		return resolved;
+	});
 	/** The member's conversation list: the `conversations` read the panel observes, as the hub answers it. */
-	const list = Effect.gen(function* () {
-		const authority = yield* authorities.member(t.db, 'bootstrap', as);
-		if (authority === null) throw new Error(`no member ${as}`);
+	const listOf = (archived: boolean) => Effect.gen(function* () {
 		const now = t.clock.now();
 		const [answer] = yield* reads.run(
-			[{ kind: 'conversations', model: 'sys_conversation', member: as }],
-			{ as: 'caller', authority },
+			[{ kind: 'conversations', model: 'sys_conversation', member: as, ...(archived ? { archived: true } : {}) }],
+			{ as: 'caller', authority: yield* authority },
 			{ now, today: now.slice(0, 10), tz: 'UTC' }
 		);
 		return (yield* Schema.decodeUnknownEffect(
@@ -96,7 +99,9 @@ const fixture = Effect.gen(function* () {
 	return {
 		t,
 		agent,
-		list,
+		list: listOf(false),
+		archived: listOf(true),
+		authority,
 		api: shell_api(fetch, { base: ORIGIN }),
 		as: (who: string) => {
 			as = who;
@@ -109,11 +114,43 @@ class Fixture extends Context.Service<Fixture, Effect.Success<typeof fixture>>()
 ) {}
 
 layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
+	it.effect('an owner archives a conversation off the list, finds it in the archived list, and restores it', () =>
+		Effect.gen(function* () {
+			const s = yield* Fixture;
+			s.as('ann');
+			const c = yield* s.agent.start({ owner: 'ann', title: 'To archive' });
+			const ann = yield* s.authority;
+			s.as('bob');
+			expect(yield* Effect.flip(s.agent.archive(c, true, yield* s.authority))).toMatchObject({ _tag: 'AgentRefusal' });
+			s.as('ann');
+			yield* s.agent.archive(c, true, ann);
+			expect((yield* s.list).map((r) => r.id)).not.toContain(c);
+			expect(yield* s.archived).toEqual([expect.objectContaining({ id: c, archived: true })]);
+			yield* s.agent.archive(c, false, ann);
+			expect((yield* s.list).map((r) => r.id)).toContain(c);
+			expect(yield* s.archived).toEqual([]);
+		})
+	);
+	it.effect('posting into an archived conversation unarchives it', () =>
+		Effect.gen(function* () {
+			const s = yield* Fixture;
+			s.as('ann');
+			const c = yield* s.agent.start({ owner: 'ann', title: 'Archived, then posted' });
+			yield* s.agent.archive(c, true, yield* s.authority);
+			yield* s.agent.post({ conversation: c, as: { member: 'ann' }, text: 'back to this' });
+			expect((yield* s.list).map((r) => r.id)).toContain(c);
+			expect((yield* s.archived).map((r) => r.id)).not.toContain(c);
+		})
+	);
 	it.effect(
 		"lists only the member's own root conversations, newest first, titled by the engine or the first message",
 		() =>
 			Effect.gen(function* () {
 				const s = yield* Fixture;
+				s.as('ann');
+				// the file's earlier tests left ann's conversations: these come after them, newer
+				const earlier = (yield* s.list).map((c) => c.id);
+				s.t.clock.advance('1s');
 				const first = yield* s.agent.start({ owner: 'ann' });
 				yield* s.agent.post({
 					conversation: first,
@@ -130,8 +167,8 @@ layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
 				yield* s.agent.start({ owner: 'ann', parent: first, title: 'a sub-agent' }); // a child is never a root
 				const other = yield* s.agent.start({ owner: 'bob', title: 'Bob only' });
 				const rows = yield* s.list;
-				expect(rows.map((c) => c.id)).toEqual([second, first]);
-				expect(rows.map((c) => c.title)).toEqual([
+				expect(rows.map((c) => c.id)).toEqual([second, first, ...earlier]);
+				expect(rows.slice(0, 2).map((c) => c.title)).toEqual([
 					'Budget review',
 					'Draft the Bismis quote\nwith two lines'
 				]);

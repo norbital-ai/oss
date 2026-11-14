@@ -4,8 +4,8 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 
 ## Source homes
 
-- A policy's filename supplies its name: `policy({ description, grants, capabilities?, limits? })`.
-- `team(...)` maps exact handles to `{ policies, name?, parent? }`. Without `name`, the handle supplies its label. The parent graph scopes `requestor.team_tree` without inheriting policies or approval rights.
+- A policy's filename supplies its name: `policy({ description, grants, capabilities? })`.
+- `team(...)` maps exact handles to `{ policies, name?, parent? }`. Without `name`, the handle supplies its label. The parent graph scopes `actor.team_tree` without inheriting policies or approval rights.
 - Member identities select source handles. Never substitute a database ID or display label for a handle.
 - Changing teams, links or routes needs a release.
 
@@ -14,7 +14,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 - A policy can grant only what the model declares: its outputs, paths and verbs. `bolt check` refuses the rest.
 - `outputs: { default: …, <name>: … }` grants declared outputs. Each is a nested scope tree with `where` on its root or relation nodes; `{}` grants every row. A root `where` scopes roots and may hop relations; a nested `where` filters that layer, or nulls a ref, never the root. An unnamed layer is unfiltered.
 - A policy never changes an output's fields. A narrower audience gets a narrower output.
-- An output grant with `history: true` admits history under that root's `where`; losing access to the row also loses its history. `create` and `update` are `{ columns?, verdict? }` (`{}` admits every declared column); `delete` is `{ verdict? }`. There is no `true` shorthand. Update `moves` grants state transitions.
+- An output grant with `history: true` admits history under that root's `where`; losing access to the row also loses its history. `create` and `update` are `{ fields?, <relation>?, verdict? }`, the model's write tree (`{}` admits every declared field); `delete` is `{ verdict? }`. There is no `true` shorthand. Update `moves` grants state transitions.
 - `capabilities.automations` grants manual starts by a person or the agent; code needs none.
 - `capabilities.syncs` grants remote refreshes as `'<model>.<sync>'`; the model must also be readable. File controls use the native caller grants. Syncs are not automation starts.
 - `capabilities` expose apps, including kiosk apps, tools and MCP. Declaring a server does not grant it.
@@ -25,7 +25,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 
 ## Admission
 
-1. `columns` trees with `fields` at each node are checked before guest code; outside them is `forbidden`.
+1. Write trees (`fields` at each node) are checked before guest code; outside them is `forbidden`.
 2. Each admitting policy's `verdict` judges changes with `before`, `set`, `after` and `changed(...)`; create has null `before`, delete has null `after`. It uses workspace `ctx.query`, prefetches before mapping and does no writes or I/O.
 3. Any `ctx.allow()` executes. Else the first `ctx.approve(...)` in team policy order commits provisionally under a request. Refuse through `yield* ctx.refuse('<message key>', { row?, field?, values? })`: a catalogue key, the batch row's index, a root column and the message's `{placeholder}` values.
 
@@ -33,7 +33,7 @@ A provisional commit is an ordinary write: validation, ownership, locks, revisio
 
 ## Limits
 
-- `limits` throttle per holder: `act`, `read`, `upload`, `convert`, `agent`, visitor `register`, envoy traffic. A bare rate counts per member, per IP for visitors; `{ rate, per: 'ip' }` only on a public audience's policy.
+- `+workspace.ts` `limits: { <policy>: { … } }` throttle each policy's holders: `act`, `read`, `upload`, `convert`, `agent`, visitor `register`, envoy traffic. A bare rate counts per member, per IP for visitors; `{ rate, per: 'ip' }` only on a public audience's policy.
 - Members default to `act 600/min`, `read 3000/min`, `upload 120/min`, `convert 30/min`, `agent 100/h`. Visitors per IP: `act 120/h`, `read 600/min`, `upload 20/h`, `register 20/h`.
 - A refusal is `429 rate_limited` with `Retry-After`. Limits never apply to automation bodies.
 
@@ -76,4 +76,4 @@ A routed write commits at once, held by its request; `pending_approval` carries 
 ## Preview and evidence
 
 - Member and team preview keeps selected source grants and clears administrator bypass; each decision rechecks the real administrator and selected identity. Never assign real membership to make a preview work.
-- Verify the three verdicts, member affiliation and hierarchy, granted outputs, layer scope, `columns` refusal before `verdict`, the lock on every path, rollback, resubmit and releases during pending requests. Assert persisted state.
+- Verify the three verdicts, member affiliation and hierarchy, granted outputs, layer scope, `fields` refusal before `verdict`, the lock on every path, rollback, resubmit and releases during pending requests. Assert persisted state.

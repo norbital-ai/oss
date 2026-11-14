@@ -1,6 +1,6 @@
-import { model } from '../../../../.norbital/models/customers.ts';
+import { model } from '@norbital-ai/bolt';
 
-export default model({
+export default model('customers', {
 	description: 'Buyers',
 	record_label: 'record.name',
 	fields: {
@@ -9,5 +9,5 @@ export default model({
 		order_count: { kind: 'count', of: 'orders' }
 	},
 	outputs: { default: { fields: 'all' } },
-	create: { columns: { fields: ['name', 'rating'] } }
+	create: { fields: ['name', 'rating'] }
 });

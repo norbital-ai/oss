@@ -7,7 +7,7 @@ import type { Json } from '../src/decl/values.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { Callables, Runs } from '../src/engine/services.ts';
 import { WebRead } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { Port } from '@norbital-ai/host-api';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { act_reply, route_fixture } from './support/route-fixture.ts';

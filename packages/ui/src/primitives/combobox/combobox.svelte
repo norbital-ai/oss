@@ -65,6 +65,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		trigger?: Snippet<[ComboboxOption<V> | null]>;
 		/** A row's leading content, in place of `icon` (an avatar); its label, suffix and check still follow. */
 		lead?: Snippet<[ComboboxOption<V>]>;
+		/** A row's trailing controls beside its choice (a conversation's Archive and Delete); they never choose the row. */
+		actions?: Snippet<[ComboboxOption<V>]>;
 		/** A caller's empty state; loading and failed states keep the standard messages. */
 		empty?: Snippet;
 		/** Handle scope shortcuts before list navigation; preventing default resets the active option. */
@@ -133,6 +135,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		badge,
 		trigger,
 		lead,
+		actions,
 		empty
 	} = $derived(props);
 	// svelte-ignore state_referenced_locally -- the id is fixed at mount
@@ -364,13 +367,14 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 							aria-selected={selected}
 							data-index={i}
 							data-value={row?.value ?? ''}
+							class={actions && row !== null ? 'flex items-center gap-1' : undefined}
 							{@attach win.measure(entryKey(win.start + j))}
 						>
 							<button
 								type="button"
 								tabindex="-1"
 								class={cn(
-									'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm',
+									'flex w-full min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm',
 									i === active && 'bg-accent text-accent-foreground'
 								)}
 								onmousemove={() => (active = i)}
@@ -407,6 +411,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 										>{/if}
 								{/if}
 							</button>
+							{#if actions && row !== null}<span class="shrink-0">{@render actions(row)}</span>{/if}
 						</li>
 					{/if}
 				{:else}

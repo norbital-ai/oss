@@ -26,7 +26,7 @@ expectTypeOf<Relation['spec']>().toEqualTypeOf<RelationshipSpec>();
 const relationship: RelationshipSpec = {
 	to: ['customers', 'suppliers'],
 	optional: true,
-	default: { var: 'requestor.party' },
+	default: { var: 'actor.party' },
 	where: { and: [{ active: { eq: true } }, { name: { in: ['A', 'B'] } }] }
 };
 // @ts-expect-error decoded relationship metadata is readonly

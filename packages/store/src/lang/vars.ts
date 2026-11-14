@@ -1,5 +1,5 @@
-// vars: a filter value's `{ var: '<CEL>' }`, a typed expression over the requestor (`requestor.id`,
-// `requestor.teams`, `requestor.scopes.<policy>` …) and the clock (`today`, a date; `now`, an instant), evaluated once
+// vars: a filter value's `{ var: '<CEL>' }`, a typed expression over the actor (`actor.id`,
+// `actor.teams`, `actor.scopes.<policy>` …) and the clock (`today`, a date; `now`, an instant), evaluated once
 // per read and never per row: `today - days(7)`, `start_of_month(today)`, `now - hours(1)`. Helpers: minutes, hours,
 // days, weeks, months and years spans (`±` on a date or an instant), and start_of_week/start_of_month/start_of_quarter/start_of_year of a date.
 import { Environment, type ASTNode, type ParseResult } from '@marcbachmann/cel-js';
@@ -42,8 +42,8 @@ class Span {
 		this.ms = ms;
 	}
 }
-/** What the requestor variables read; a missing one is null. */
-export type Requestor = {
+/** What the actor variables read; a missing one is null. */
+export type ActorVars = {
 	readonly id: string | null;
 	readonly email: string | null;
 	readonly phone: string | null;
@@ -54,15 +54,15 @@ export type Requestor = {
 	readonly team_tree: readonly string[];
 	readonly scopes: { readonly [policy: string]: readonly string[] };
 };
-/** The values an expression reads: the clock, and the requestor where it is known. */
+/** The values an expression reads: the clock, and the actor where it is known. */
 type VarValues = {
 	readonly today?: string;
 	readonly now?: string;
-	readonly requestor?: Requestor;
+	readonly actor?: ActorVars;
 };
 /** The kind of value a filter position takes. */
 export type VarResult = 'text' | 'date' | 'instant' | 'list';
-/** What a filter position's field is, as the admission of requestor members reads it. */
+/** What a filter position's field is, as the admission of actor members reads it. */
 type VarField = {
 	readonly kind: string;
 	readonly of?: string | undefined;
@@ -70,7 +70,7 @@ type VarField = {
 	readonly phone?: boolean | undefined;
 	readonly team?: boolean | undefined;
 };
-/** Whether `f` may compare with requestor member `m` (`scopes.<policy>` in a list position). */
+/** Whether `f` may compare with actor member `m` (`scopes.<policy>` in a list position). */
 export function member_admits(f: VarField, m: string): boolean {
 	if (m.startsWith('scopes.')) return f.kind === 'id';
 	switch (m) {
@@ -81,7 +81,7 @@ export function member_admits(f: VarField, m: string): boolean {
 			return f.email === true;
 		case 'phone':
 			return f.phone === true;
-		// a requestor id is text too: ported grants compare `{ var: 'requestor.id' }` with a text column
+		// a actor id is text too: ported grants compare `{ var: 'actor.id' }` with a text column
 		case 'id':
 			return f.of === 'sys_user' || f.kind === 'text';
 		case 'party':
@@ -110,7 +110,7 @@ const env = new Environment({ homogeneousAggregateLiterals: false })
 	.registerType('Date', Day)
 	.registerType('Span', Span)
 	.registerVariable({
-		name: 'requestor',
+		name: 'actor',
 		schema: {
 			id: 'string',
 			email: 'string',
@@ -163,28 +163,28 @@ type CompiledVar = {
 	readonly program: ParseResult;
 	/** It reads `today` or `now`: the edge evaluates it before a read. */
 	readonly time: boolean;
-	/** The requestor members it reads (`scopes.<policy>` names its policy). */
-	readonly requestor: readonly string[];
-	/** The one member it is (`requestor.email`), read directly so a missing value is null. */
+	/** The actor members it reads (`scopes.<policy>` names its policy). */
+	readonly actor: readonly string[];
+	/** The one member it is (`actor.email`), read directly so a missing value is null. */
 	readonly member: string | undefined;
 };
-/** The identifiers and requestor member paths an AST reads. */
-function reads(node: ASTNode, out: { ids: Set<string>; requestor: Set<string> }): void {
+/** The identifiers and actor member paths an AST reads. */
+function reads(node: ASTNode, out: { ids: Set<string>; actor: Set<string> }): void {
 	if (node.op === 'id') return void out.ids.add(node.args);
 	if (node.op === '.') {
 		const [obj, prop] = node.args;
-		if (obj.op === 'id' && obj.args === 'requestor') {
-			out.ids.add('requestor');
-			return void out.requestor.add(prop);
+		if (obj.op === 'id' && obj.args === 'actor') {
+			out.ids.add('actor');
+			return void out.actor.add(prop);
 		}
 		if (
 			obj.op === '.' &&
 			obj.args[0].op === 'id' &&
-			obj.args[0].args === 'requestor' &&
+			obj.args[0].args === 'actor' &&
 			obj.args[1] === 'scopes'
 		) {
-			out.ids.add('requestor');
-			return void out.requestor.add(`scopes.${prop}`);
+			out.ids.add('actor');
+			return void out.actor.add(`scopes.${prop}`);
 		}
 	}
 	for (const x of children(node)) reads(x, out);
@@ -212,16 +212,16 @@ export function compile_var(
 				error: `'${text}' is a ${type}, not a ${result === 'list' ? 'list of text' : result}`
 			};
 		else {
-			const seen = { ids: new Set<string>(), requestor: new Set<string>() };
+			const seen = { ids: new Set<string>(), actor: new Set<string>() };
 			reads(parsed.success.ast, seen);
-			const only = [...seen.requestor][0];
+			const only = [...seen.actor][0];
 			out = {
 				member:
-					only !== undefined && text.replaceAll(' ', '') === `requestor.${only}` ? only : undefined,
+					only !== undefined && text.replaceAll(' ', '') === `actor.${only}` ? only : undefined,
 				text,
 				program: parsed.success,
 				time: seen.ids.has('today') || seen.ids.has('now'),
-				requestor: [...seen.requestor]
+				actor: [...seen.actor]
 			};
 		}
 	}
@@ -233,9 +233,9 @@ export function compile_var(
 export function evaluate_var(compiled: CompiledVar, values: VarValues): Json {
 	if (compiled.time && (values.today === undefined || values.now === undefined))
 		throw new RangeError(`'${compiled.text}' reads the clock`);
-	if (compiled.requestor.length > 0 && values.requestor === undefined)
-		throw new RangeError(`'${compiled.text}' reads the requestor`);
-	const r = values.requestor;
+	if (compiled.actor.length > 0 && values.actor === undefined)
+		throw new RangeError(`'${compiled.text}' reads the actor`);
+	const r = values.actor;
 	if (compiled.member !== undefined && r !== undefined) {
 		const [head = '', policy = ''] = compiled.member.split('.');
 		switch (head) {
@@ -259,12 +259,12 @@ export function evaluate_var(compiled: CompiledVar, values: VarValues): Json {
 		...(r === undefined
 			? {}
 			: {
-					requestor: {
+					actor: {
 						...r,
 						teams: [...r.teams],
 						team_tree: [...r.team_tree],
 						scopes: new Map(
-							compiled.requestor
+							compiled.actor
 								.filter((m) => m.startsWith('scopes.'))
 								.map((m) => m.slice('scopes.'.length))
 								.map((k) => [k, [...(r.scopes[k] ?? [])]])

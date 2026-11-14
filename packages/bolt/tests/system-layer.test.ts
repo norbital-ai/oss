@@ -20,6 +20,7 @@ import { catalog } from '../src/protocol/catalog.ts';
 import { decode_identity } from '../src/engine/write/pack.ts';
 import { SYSTEM } from '../src/system/index.ts';
 import { install } from '../src/decl/runtime/guest.ts';
+import { driver_name } from '../src/decl/runtime/integration.ts';
 
 // the fixtures' generator bodies attach through the guest edge, as `bolt check` installs it
 install();
@@ -264,10 +265,10 @@ const EXPECTED: { [table: string]: Shape } = {
 			lease_until: 'timestamptz',
 			model: 'text not null default default',
 			plan: 'jsonb',
-			goals: 'jsonb',
 			read: 'jsonb not null default {}',
 			revision: 'int not null default 1',
 			updated_at: 'timestamptz not null default now()',
+			archived_at: 'timestamptz',
 			integration: 'text',
 			bolt_record_label:
 				'text generated always as (bolt_record_label_sys_conversation_HASH(title)) stored',
@@ -277,12 +278,12 @@ const EXPECTED: { [table: string]: Shape } = {
 		indexes: ['(integration)', 'using gin (bolt_search)'],
 		fks: ['(integration) references sys_integration (id) on delete cascade on update restrict'],
 		checks: [
-			"((goals is null or store_json_valid(goals, '{kind:json,optional:true}'::jsonb) is true))",
 			"((inputs is null or store_json_valid(inputs, '{default:[],kind:json}'::jsonb) is true))",
 			"((outputs is null or store_json_valid(outputs, '{default:[],kind:json}'::jsonb) is true))",
 			"((participants is null or store_json_valid(participants, '{kind:json,optional:true}'::jsonb) is true))",
 			"((plan is null or store_json_valid(plan, '{kind:json,optional:true}'::jsonb) is true))",
 			"((read is null or store_json_valid(read, '{default:{},kind:json}'::jsonb) is true))",
+			'(isfinite(archived_at))',
 			'(isfinite(created_at))',
 			'(isfinite(lease_until))',
 			'(isfinite(updated_at))'
@@ -614,6 +615,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			actor: 'text',
 			starter: 'jsonb',
 			trigger: 'jsonb',
+			wait: 'jsonb',
 			bolt_record_label:
 				'text generated always as (bolt_record_label_sys_run_HASH(automation)) stored',
 			bolt_search:
@@ -623,6 +625,7 @@ const EXPECTED: { [table: string]: Shape } = {
 		indexes: [
 			'(automation, state)',
 			"(due_at) where (state = 'queued'::text)",
+			"(due_at) where (state = 'waiting'::text)",
 			'using gin (bolt_search)'
 		],
 		checks: [
@@ -633,6 +636,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			"((results is null or store_json_valid(results, '{default:[],kind:json}'::jsonb) is true))",
 			"((starter is null or store_json_valid(starter, '{kind:json,optional:true}'::jsonb) is true))",
 			"((trigger is null or store_json_valid(trigger, '{kind:json,optional:true}'::jsonb) is true))",
+			"((wait is null or store_json_valid(wait, '{kind:json,optional:true}'::jsonb) is true))",
 			'(isfinite(due_at))',
 			'(isfinite(finished_at))',
 			'(isfinite(started_at))'
@@ -828,7 +832,7 @@ describe('the built-in layer is compiled as a workspace is', () => {
 				).toEqual(JSON.parse(JSON.stringify(SYSTEM)));
 				// bolt's conversation definitions: one per conversation driver, each its driver's name
 				expect(
-					Object.entries(SYSTEM.integrations).map(([name, d]) => `${name}:${d.driver}`)
+					Object.entries(SYSTEM.integrations).map(([name, d]) => `${name}:${driver_name(d)}`)
 				).toEqual([
 					'chat:chat',
 					'discord:discord',

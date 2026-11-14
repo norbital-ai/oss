@@ -11,8 +11,7 @@
 	import { Button, confirm_action, Input } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
-	import type { ImportStartInput } from '../../protocol/instance-status.ts';
-	import { DRIVERS } from '../../decl/runtime/integration.ts';
+	import type { ImportStartInput } from '@norbital-ai/host-api';
 	import Facts from './Facts.svelte';
 	import ImportStart from './ImportStart.svelte';
 	import { importStartDraft, importStartLabel, validImportStart } from './import-start.ts';
@@ -45,7 +44,7 @@
 	);
 	// a conversation provider tests only when it says it can; any other driver runs its definition's own test
 	const testable = $derived(
-		c !== null && (c.test !== undefined || !('conversation' in DRIVERS[c.driver]))
+		c !== null && (c.test !== undefined || c.conversation !== true)
 	);
 	// a provider with nothing to pair (setup `none`) has nothing to reconnect or disconnect
 	const paired = $derived(active?.setup.kind !== 'none');

@@ -10,6 +10,7 @@ import { capturePiece } from '../db/captured.ts';
 import { GATED, type Chain } from '../write/sql.ts';
 import { send_input_schema, deliverRun, EPOCH, QUEUED } from '../integrations/outbound.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
+import { driver_name } from '../../decl/runtime/integration.ts';
 import { conversationId, preview, threadOf, msg as messagePiece } from './store.ts';
 import type { RowData } from '../contracts.ts';
 /** A message already built: one queued row in its conversation on `instance`. */
@@ -69,7 +70,7 @@ export const prepareSend = Effect.fn('Agents.prepareSend')(function* (
 	if (def === undefined) return { error: `no integration instance '${to}'` };
 	const conv = conversationOf(def);
 	if (conv === undefined)
-		return { error: `'${to}' is a ${def.driver} instance; it sends no messages` };
+		return { error: `'${to}' is a ${driver_name(def)} instance; it sends no messages` };
 	if (inst.owner !== null)
 		return { error: `'${to}' imports personal activity and cannot send` };
 	const checked = yield* Schema.decodeUnknownEffect(send_input_schema(conv.kind))(message).pipe(

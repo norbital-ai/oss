@@ -7,13 +7,13 @@
 import { createHash } from 'node:crypto';
 import { Clock, Effect, FileSystem, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { sign_op } from '@norbital-ai/bolt/node';
+import { sign_op } from '@norbital-ai/host-api/node';
 import { Files, TenantDb, type EngineManifest } from '@norbital-ai/bolt/engine';
 import { drain, memory_source, pack_asset_loader } from '@norbital-ai/bolt/tooling';
 import { TestDb } from '../test/database.ts';
 import { compile } from '../compiler/check/index.ts';
 import { seedRows, type Seeding } from '../compiler/artifact/seed.ts';
-import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
+import type { CheckDiagnostic } from '@norbital-ai/host-api';
 import { authorErrors, ToolFailure, type Log } from './build.ts';
 
 /** The host and the signing key its operations verify: `scope` is the host's deployment environment. */

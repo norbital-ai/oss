@@ -10,14 +10,24 @@
 	import { msg } from '../text/messages.js';
 	import { type ReadState } from './state.js';
 
-	/** `skeleton` replaces the default one (rows of a table) with the view's own shape (a board's cards). */
 	let {
 		ctx,
 		state,
 		what,
 		children,
 		skeleton
-	}: { ctx: UiContext; state: ReadState<T>; what: string; children: Snippet<[T]>; skeleton?: Snippet } = $props();
+	}: {
+		/** The page context. */
+		ctx: UiContext;
+		/** The read's state. */
+		state: ReadState<T>;
+		/** What the view reads, named in its no-access and error states. */
+		what: string;
+		/** The ready content, given the read's value. */
+		children: Snippet<[T]>;
+		/** Replaces the default loading skeleton (rows of a table) with the view's own shape (a board's cards). */
+		skeleton?: Snippet;
+	} = $props();
 	const bolt = $derived(bolt_of(ctx));
 </script>
 

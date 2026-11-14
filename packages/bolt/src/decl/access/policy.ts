@@ -1,6 +1,8 @@
-// `policy()`: per model, the read outputs holders may read and the rows of each (a model's policy
-// alone guards its access points and every layer under them), one typed `verdict` per write verb returning a `Verdict` (an
-// approval flow among them), capabilities, manual starts and limits. A grant never changes an output's shape.
+// `policy()`: per model, the read outputs holders may read and the rows of each (a model's policy guards the caller's
+// requests at its access points and every layer under them; rows a write callback carries are the model's own code,
+// admitted by the root write's grant), the fields each write grant admits, one typed `verdict` per write verb returning a
+// `Verdict` (an approval flow among them), capabilities and manual starts. A read grant never changes an output's shape:
+// a narrower audience gets a narrower named output. Rate limits are the workspace's (`workspace({ limits })`).
 // Everything a grant says is typed from the model's own declaration; nothing else type-checks.
 import { Schema } from 'effect';
 import type { CreateVerdict, DeleteVerdict, UpdateVerdict } from '../ctx.ts';
@@ -22,7 +24,7 @@ import type {
 	TeamName,
 	WritePath
 } from '../names.ts';
-import type { NonEmpty, Rate } from '../values.ts';
+import type { NonEmpty } from '../values.ts';
 import type { GroupName } from '../runtime/names.ts'; // hook:access
 import type { ModelWhere } from '../where.ts';
 
@@ -45,7 +47,7 @@ export type Edge<C, F> = Columns<C>[F & keyof Columns<C>] extends { states: infe
 type EdgeStates<S, Keys extends keyof S & string = keyof S & string> = {
 	[X in Keys]: S[X] extends { to: readonly (infer T extends string)[] } ? `${X}->${T}` : never;
 }[Keys];
-/** The columns a write grant's layer `P` may admit: the columns the model's `create` or `update` declares there. */
+/** The fields a write grant's layer `P` may admit: those the model's `create` or `update` declares there. */
 export type WriteField<C, O extends 'create' | 'update', P = C> = LayerColumn<C, O, P>;
 
 // ── approval flows ──
@@ -80,7 +82,7 @@ export type ApprovalSnapshot = {
 	readonly superseded_by: readonly string[];
 };
 
-// ── verdicts: what a write `check` returns ──
+// ── verdicts: what a write `verdict` returns ──
 /**
  * A verdict as it crosses the guest edge (JSON): execute, refuse the batch (`at`: its row and root column), or hold it
  * for the approval flow snapshot.
@@ -88,20 +90,20 @@ export type ApprovalSnapshot = {
 export type VerdictData =
 	| { readonly kind: 'allow' }
 	| {
-			readonly kind: 'deny';
+			readonly kind: 'refuse';
 			readonly message: string;
 			readonly values?: { readonly [name: string]: string | number };
 			readonly at?: { readonly row?: number; readonly field?: string };
 	  }
 	| { readonly kind: 'approve'; readonly flow: ApprovalSnapshot };
-/** A check's answer: only `ctx.allow()` and `ctx.approve(…)` make one; a plain object is never one. */
+/** A verdict's answer: only `ctx.allow()` and `ctx.approve(…)` make one; a plain object is never one. */
 export class Verdict {
 	readonly #verdict = true;
 	readonly data: VerdictData;
 	private constructor(data: VerdictData) {
 		this.data = data;
 	}
-	/** The verdict members of a check's ctx (the guest edge installs them on `PolicyCtx`). */
+	/** The verdict members of a verdict's ctx (the guest edge installs them on `PolicyCtx`). */
 	static readonly allow = (): Verdict => new Verdict({ kind: 'allow' });
 	static readonly approve = (flow: ApprovalFlow): Verdict => {
 		const decoded = decodeFlow(flow);
@@ -114,7 +116,7 @@ export class Verdict {
 			}
 		});
 	};
-	/** The data of what a check returned; anything no verdict member made is an authoring error. */
+	/** The data of what a verdict returned; anything no verdict member made is an authoring error. */
 	static dataOf(v: unknown): VerdictData {
 		if (!(v instanceof Verdict) || !v.#verdict)
 			throw new Error(
@@ -152,13 +154,13 @@ type WriteColumns<C, O extends 'create' | 'update', P extends string = C & strin
 	readonly [Child in ChildPath<P, WritePath<C, O>> as Child extends `${P}.${infer Relation}` ? Relation : never]?: WriteColumns<C, O, Child>;
 };
 /**
- * A create or update grant: the `columns` per write layer it admits (every declared one when omitted, checked before
- * the `verdict` runs, without guest code) and the `verdict` that judges the whole batch (allow when omitted), so `{}`
- * admits every declared column. Among the holder's policies any `allow` executes; otherwise the first `approve` in the
+ * A create or update grant: the `fields` it admits and one nested tree per child relation, as the model's write tree
+ * (every declared field when `fields` is omitted; checked before the `verdict` runs, without guest code), and the
+ * `verdict` that judges the whole batch (allow when omitted), so `{}` admits every declared field. A relation cannot be
+ * named `verdict` or `moves`. Among the holder's policies any `allow` executes; otherwise the first `approve` in the
  * team's policy order holds the write for its flow; otherwise it is refused with the first refusal.
  */
-export type WriteGrant<C extends ModelName, O extends 'create' | 'update'> = {
-	columns?: WriteColumns<C, O>;
+export type WriteGrant<C extends ModelName, O extends 'create' | 'update'> = (WriteColumns<C, O> | { fields?: never }) & {
 	verdict?: O extends 'create' ? CreateVerdict<C> : UpdateVerdict<C>;
 } & (O extends 'update'
 	? { moves?: 'all' | { [F in StateField<C>]?: readonly Edge<C, F>[] } }
@@ -192,28 +194,6 @@ type VerdictSlots = {
 	} & { readonly [key: string]: unknown };
 };
 
-// ── limits ──
-/** A rate limit: `'<n>/<unit>'`, optionally `per` actor or IP; a list applies every rule. */
-export type Limit =
-	Rate | { rate: Rate; per: 'actor' | 'ip' } | readonly { rate: Rate; per: 'actor' | 'ip' }[];
-/** A rate limit on an envoy's inbound traffic, counted `per` sender or per subject. */
-type EnvoyLimit =
-	| Rate
-	| { rate: Rate; per: 'sender' | 'subject' }
-	| readonly { rate: Rate; per: 'sender' | 'subject' }[];
-type EnvoyKey = 'envoys.receive' | 'envoys.unrecognised';
-/**
- * What a `limits` entry throttles: acts, reads, agent turns, registration, uploads, page PDF previews
- * (`convert`, `ctx.preview_pdf`; default `30/min`) or envoy traffic. Requests only: automation bodies are never limited,
- * and manual starts have a separate fixed quota per automation and starter (30 a minute).
- *
- * Undeclared keys take defaults: members `act 600/min`, `read 3000/min`, `upload 120/min`, `convert 30/min`,
- * `agent 100/h`, `envoys.unrecognised 1/15min` per sender; visitors, per IP: `act 120/h`, `read 600/min`, `upload 20/h`, `register 20/h`. Windows are fixed and
- * counted in the serving cell's memory (acts also persist theirs). A refusal is `429` with `Retry-After` and
- * `{ code: 'rate_limited' }`.
- */
-export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'convert' | EnvoyKey;
-
 // ── the policy ──
 type Grants<P> = P extends { grants: infer G } ? G : {};
 interface PolicyFor<C extends Grantable> {
@@ -227,7 +207,6 @@ interface PolicyFor<C extends Grantable> {
 		tools?: readonly HostToolName[];
 		mcp?: readonly McpName[];
 	};
-	limits?: { [K in LimitKey]?: K extends EnvoyKey ? EnvoyLimit : Limit };
 }
 type PolicyBase = {
 	/** What holding the policy is for, for people and the agent. */
@@ -236,16 +215,17 @@ type PolicyBase = {
 	grants: { readonly [model: string]: object } & VerdictSlots;
 	/** The apps, manual starts, host tools and MCP servers holders may use; every agent skill is open to all. */
 	capabilities?: { readonly [k: string]: readonly string[] };
-	/** Rate limits per limit key. */
-	limits?: { readonly [key: string]: unknown };
 };
 
 /**
  * `src/access_control/policy/+<name>.policy.ts`: what holders may do: per-model `grants` (the read outputs they read —
  * the default and named `outputs` and a row filter per layer of each, and `create`, `update` and `delete`
- * with their `columns` per layer and a `verdict` returning `allow` or `approve`, or refusing), the
- * automations they may start, remote syncs they may refresh, capabilities (apps, host tools, MCP servers) and rate `limits`.
- * A model's policy alone guards its access points and every layer under them. Teams and automations hold policies.
+ * with the `fields` they admit per layer and a `verdict` returning `allow` or `approve`, or refusing), the
+ * automations they may start, remote syncs they may refresh and capabilities (apps, host tools, MCP servers).
+ * A model's policy guards every caller request at its access points and every layer under them; rows a write callback
+ * carries (`with`, `on_approved`, owned children) are admitted by the root write's grant, while native constraints,
+ * locks and state rules still apply. Teams, envoys and automations hold policies; rate limits per policy are declared in
+ * `+workspace.ts` (`limits`).
  * `approve(flow)` is the whole approval mechanism: the write is held as a native approval request, the named step
  * approvers decide it in the record's approval panel, and a rejection restores the checkpoint. A page needs no
  * separate approval control. The model's verb effects receive the write and approval events.
@@ -255,9 +235,9 @@ type PolicyBase = {
  * 	description: 'Contractors raise variations on their own jobs.',
  * 	grants: {
  * 		variation_requests: {
- * 			outputs: { default: { where: { raised_by: { eq: { var: 'requestor.id' } } } } },
+ * 			outputs: { default: { where: { raised_by: { eq: { var: 'actor.id' } } } } },
  * 			create: {
- * 				columns: { fields: ['job_assignment_id', 'title', 'amount'] },
+ * 				fields: ['job_assignment_id', 'title', 'amount'],
  * 				verdict: function* (rows, ctx) {
  * 					const { job_assignments } = yield* ctx.query({
  * 						job_assignments: { where: { id: { in: rows.map((r) => r.after.job_assignment_id) } }, fields: ['assignee_user_id'] }

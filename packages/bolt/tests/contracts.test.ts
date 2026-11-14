@@ -7,8 +7,7 @@ import { describe, expect } from 'vitest';
 import { discover } from '../../bolt-cli/src/compiler/discover.ts';
 import { load } from '../../bolt-cli/src/compiler/load.ts';
 import { engine_manifest } from '../src/engine/manifest.ts';
-import { Port } from '../src/engine/port.ts';
-import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
+import { FacilityFailure, Port, Unavailable } from '@norbital-ai/host-api';
 import { install } from '../src/decl/runtime/guest.ts';
 
 install();

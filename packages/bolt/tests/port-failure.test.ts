@@ -1,7 +1,7 @@
 // A host tool's rejection keeps its message: Studio rejects with an encoded `HostFailure` object, not an `Error`.
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { Port } from '../src/engine/port.ts';
+import { Port } from '@norbital-ai/host-api';
 
 it.effect('a rejected HostFailure object keeps its message', () =>
 	Effect.gen(function* () {

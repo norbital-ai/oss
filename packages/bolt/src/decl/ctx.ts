@@ -1,10 +1,9 @@
-// What server bodies see and the write shapes they call with (X-24): rows, the one read API `query`, `act`,
-// outcomes, and each body's ctx. Every ctx member answers an Effect with typed failures (D8): bodies are generators that
+// What server bodies see and the write shapes they call with (X-24): rows, `query` (the one read of records; `history`
+// reads one record's revisions), `act`, write results, and each body's ctx. Every ctx member answers an Effect with typed failures (D8): bodies are generators that
 // `yield*` them. Pages read through the same `query` (`page/page-bolt.ts`).
 import type { Effect } from 'effect';
 import type { Cursor } from '@norbital-ai/store';
 import type { Value } from '@norbital-ai/store/kind';
-import type { REFUSAL_CODES } from '../protocol/schema.ts';
 import type { Actor } from './access/actor.ts';
 import type { ApprovalFlow, Verdict } from './access/policy.ts';
 import type { ActConflict, ActRefused, ReadFailed, Refusal } from './errors.ts';
@@ -46,7 +45,7 @@ import type {
 	WritePath
 } from './names.ts';
 import type { StartInput } from './runtime/facilities.ts';
-import type { LayerWhere, ModelWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
+import type { LayerWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
 import type { DynamicRead } from '../protocol/read-request.ts';
 import type {
 	Decimal,
@@ -193,7 +192,10 @@ type RootRequest<C, O = 'default'> = {
 	after?: Cursor;
 	search?: string | IndexSearch<C>;
 	aggregate?: Omit<Measures<C, O>, 'where'> & { by?: Bucket<C, O> | readonly Bucket<C, O>[] };
-	/** An ISO instant: the root and its layers as they stood then (folded from history). */
+	/**
+	 * An ISO instant: the root and its layers as they stood then (folded from history). In a write callback, `'act'`:
+	 * the stored rows overlaid with this act's own rows.
+	 */
 	as_of?: string;
 };
 /** A deeper layer `P` of `C`'s output `O`: `where` filters that layer's rows (a list) or nulls it (a ref), never removing the root. */
@@ -327,14 +329,14 @@ export type ReadAnswer<R> = {
 };
 
 /**
- * The one read API as the caller (queries, automations under their policies, page loaders): each root reads one named
+ * Reading records as the caller (automations under their policies, effects as the writer, pages): each root reads one named
  * output, the rows its granting policies admit. Pages call the same `query` on `bolt` (`PageBolt`); every read is one
  * read request (a layer map). An automation reads as its `policies`, a model effect as its writer; a recoverable read
  * failure is `ReadFailed` (a page's read may also fail `TransportFailed`).
  */
 export interface CallerQuery {
 	/**
-	 * A read request: a layer map of roots (models with `read`) and the layers of the output each names, in one crossing
+	 * A read request: a layer map of roots (models with `outputs`) and the layers of the output each names, in one crossing
 	 * and ONE statement, under the caller's authority: each root's policies granting that output alone filter it and
 	 * its layers.
 	 * @param request Roots and declared relationship layers, with output, fields, filters, ordering and pagination per layer.
@@ -350,7 +352,7 @@ export interface CallerQuery {
 	 */
 	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R>, ReadFailed>;
 	/**
-	 * The same layer map built at runtime (a rule engine's reads), made by `dynamic_read` from `@norbital-ai/bolt/protocol`:
+	 * The same layer map built at runtime (a rule engine's reads), made by `dynamic_read` (root export):
 	 * checked host-side against the declarations exactly as the literal form is, answered untyped.
 	 */
 	query(request: DynamicRead): Eff<DynamicAnswer, ReadFailed>;
@@ -367,7 +369,7 @@ export interface CallerQuery {
 	): Eff<readonly Revision[], ReadFailed>;
 }
 /**
- * The one read API as the workspace (policy verdicts, write callbacks and remote sync bodies): the same shapes as
+ * Reading records as the workspace (policy verdicts, write callbacks and remote sync bodies): the same shapes as
  * `CallerQuery`, answered with every stored row under no grant. A file sync's body reads as the member importing or
  * exporting instead (`FileSyncCtx`).
  */
@@ -407,7 +409,7 @@ type CreateLayer<
 	)[];
 };
 /**
- * One created row of `M` as a writer sends it and the policy's `verdict` judges it: the root's `create.columns` (required ones
+ * One created row of `M` as a writer sends it and the policy's `verdict` judges it: the root's `create.fields` (required ones
  * required, `filled` ones optional) and each declared child layer as a list of child rows (or, for a non-owned relation,
  * existing rows to link).
  */
@@ -433,7 +435,7 @@ type UpdateLayer<C, P extends string, T = PathModel<C, P>> = {
 	readonly [S in SubLayer<WritePath<C, 'update'>, P>]?: ChildChanges<C, `${P}.${S}`, T, S>;
 };
 /**
- * The `set` of one updated row of `M`: the root's `update.columns`, all optional, and per declared child layer the child
+ * The `set` of one updated row of `M`: the root's `update.fields`, all optional, and per declared child layer the child
  * rows it creates, updates (`{ target, set }`) and deletes (and, for a non-owned relation, links or unlinks), each with
  * that layer's update columns.
  */
@@ -478,7 +480,8 @@ export type Callable = {
 }[ModelName];
 /**
  * The input of a generated model write. Always a batch: create takes insert trees, update takes
- * `{ target, set }` entries and delete takes `{ target }`.
+ * `{ target, set }` entries and delete takes `{ target }`. A created root may carry an `id` its writer minted
+ * (`new_id(model)`), so a later act in the same map can name the row in a ref.
  * Import takes `{ rows, on_conflict, on_missing?, prune?, dry_run? }`: one atomic act matching rows by the model's key;
  * `dry_run` runs every callback and writes nothing.
  * Fields and child layers come from the model's write exposure, not its read output or complete storage schema.
@@ -492,7 +495,7 @@ export type Callable = {
  */
 export type ActInput<N> = N extends `${infer C}.${infer V}`
 	? V extends 'create'
-		? readonly CreateInput<C>[]
+		? readonly (CreateInput<C> & { readonly id?: Id<C> })[]
 		: V extends 'import'
 			? ImportInput<C>
 			: V extends 'update'
@@ -534,7 +537,7 @@ export type ImportReport<C> = {
  * @see PendingApproval
  */
 export type ActOutput<N> = N extends `${infer C}.${infer V}`
-	? V extends 'import' ? ImportReport<C> : V extends 'create' | 'update' | 'delete' | 'erase' ? null : never
+	? V extends 'import' ? ImportReport<C> : V extends 'create' | 'update' | 'delete' ? null : never
 	: never;
 /** A selected row carries the revision checked by its write. Versionless system records carry their id. */
 export type WriteTarget<C extends string> = { readonly id: Id<C> } & (C extends SystemModelName
@@ -542,7 +545,10 @@ export type WriteTarget<C extends string> = { readonly id: Id<C> } & (C extends 
 	: { readonly revision: number });
 /** Explicit idempotency for one atomic write. Import conflict policy belongs to its input. */
 export type ActOptions = {
-	/** The same key commits once; without one, a retried run may repeat its earlier writes. */
+	/**
+	 * The same key commits once and answers from that commit. A retried run's act answers from its earlier commit
+	 * under its own key (keys do not include the attempt); give one to make a write idempotent across separate runs.
+	 */
 	readonly key?: string;
 };
 export type ActMap = Readonly<Record<string, unknown>>;
@@ -552,16 +558,12 @@ export type ActMapInput<A extends ActMap> = A & {
 export type ActMapOutput<A extends ActMap> = {
 	readonly [N in keyof A]: ActOutput<N>;
 };
-// ── outcomes ──
+// ── write results: what a write answers; refusal, conflict and an unconfirmed outcome are typed failures ──
 type Stored = AuthoredModelName | SystemModelName;
 /** Nested and erased rows retain their actual stored model, whose discriminator determines the id's brand. */
 type Written = readonly {
 	[C in Stored]: { readonly model: C; readonly id: Id<C>; readonly revision: number };
 }[Stored][];
-/**
- * The engine's own refusal codes, beside an authored `refused`: grants, constraints, budgets, rate limits and stale requests.
- */
-export type PlatformRefusal = Exclude<(typeof REFUSAL_CODES)[number], 'refused'>;
 /**
  * The write is in the database: `output` is the generated write's result, `records` every row the act wrote itself (its
  * nested rows and erasures included, cascades and derived rollups not) with its new revision.
@@ -574,47 +576,18 @@ export type PendingApproval = {
 	records: Written;
 };
 /**
- * The write was refused: `code` is `refused` for an authored refusal or a platform code, with the message and the field or rows it names.
- */
-export type Refused = {
-	kind: 'refused';
-	code: 'refused' | PlatformRefusal;
-	/** The text a person reads: an authored refusal's catalogue message with its values filled. */
-	message: string;
-	/** An authored refusal's catalogue key and placeholder values. */
-	key?: string;
-	values?: { readonly [name: string]: string | number };
-	field?: string;
-	row?: number;
-	rows?: readonly number[];
-	/** The write callback that refused (`'<model>.create'`, `'<model>.update'`, `'<model>.delete'`). */
-	rule?: string;
-	data?: { readonly request_id: RequestId };
-};
-/** The write lost a race: another write changed these records since they were read. */
-export type Conflict = {
-	kind: 'conflict';
-	records: readonly { [C in Stored]: { readonly model: C; readonly id: Id<C> } }[Stored][];
-};
-/** The outcome could not be confirmed (a lost connection); `invocation` is the id to look the write up by. */
-export type Unknown = { kind: 'unknown'; invocation: string };
-/**
  * Pages only. The act outlived the 60 s a person waits: the write continues in the background as run `run`; its
  * row reports the outcome. A page follows it with ui's `<RunStatus {ctx} automation="<callable>" {run} />`.
  */
 export type Running = { kind: 'running'; run: Id<'sys_run'> };
 /**
- * Every result of a write: `committed`, `pending_approval`, `refused`, `conflict`, `unknown` or `running`, told
- * apart by `kind`.
- */
-export type Outcome<O> =
-	Committed<O> | PendingApproval | Refused | Conflict | Unknown | Running;
-/**
- * One map of generated writes, planned together and committed as one SQL statement whatever the row count: the rows,
- * the cascades and `set_null` unlinks their deletes imply, roll-ups, history, the approval hold, queued effects and
- * notices, the sync outbox and the idempotency outcome. Separate acts are separate commits: put writes that must commit
- * together in one map; nest dependent children in the parent's write layers. A row written directly that a delete also
- * cascades to is a conflict. Its output is keyed by the same callable names; update and delete targets carry the
+ * One map of generated writes, planned together and committed as one SQL statement whatever the row count, all or
+ * nothing: the rows, the cascades and `set_null` unlinks their deletes imply, roll-ups, history, the approval hold,
+ * queued effects and notices, the sync outbox and the idempotency outcome. Separate acts are separate commits: put writes
+ * that must commit together in one map, in the order they depend on each other; nest dependent children in the parent's
+ * write layers. A later entry may name a row an earlier one creates when the create carries an id its writer minted
+ * (`new_id(model)`): the map is then planned in order. One map writes a row once. A row written directly that a delete
+ * also cascades to is a conflict. Its output is keyed by the same callable names; update and delete targets carry the
  * observed revision, checked before commit (`ActConflict` when it moved).
  *
  * Pages, automations (as their policies), model effects (as the writer) and the test kit call it; write callbacks
@@ -622,6 +595,8 @@ export type Outcome<O> =
  * `{ callable, input }` down the same decoder and commit path.
  * @example
  * yield* ctx.act({ 'orders.update': [{ target: order, set: { notes } }] }, { key: `notes:${order.id}` });
+ * const loan = new_id('loans');
+ * yield* ctx.act({ 'loans.create': [{ id: loan, amount }], 'loan_repayments.create': schedule.map((due) => ({ loan, ...due })) });
  */
 export interface Act {
 	<const A extends ActMap>(
@@ -639,8 +614,8 @@ export interface Act {
 // Contexts are interfaces with declared variance: measuring the variance of a generic alias over a large names index
 // cost seconds per body (G1 scale fixture).
 // ── policy verdicts (decision 3): one per write verb, the root's policy only ──
-/** Where a refusal points: the offending row's index in the batch and, on create and update, a root column. */
-type DenyAt<M, V> = V extends 'create' | 'update'
+/** Where a refusal points: the offending row's index in the batch and, on create and update, a root field. */
+type RefuseWhere<M, V> = V extends 'create' | 'update'
 	? { readonly row?: number; readonly field?: LayerColumn<M, V, M> }
 	: { readonly row?: number };
 /**
@@ -657,11 +632,8 @@ export interface PolicyCtx<
 	readonly query: WorkspaceQuery['query'];
 	/** The write executes directly. */
 	allow(): Verdict;
-	/**
-	 * The whole batch is refused with a catalogue key; `at` names the row and a root column of it, and the
-	 * message's `{placeholder}` `values`.
-	 */
-	refuse<K extends MessageKey>(message: K, ...at: RefuseAt<K, DenyAt<M, V>>): Eff<never, Refusal>;
+	/** Refuses the whole batch; `at` names the row and a root field of it. */
+	refuse: Refuse<RefuseWhere<M, V>>;
 	/** The batch is held for the declared approval steps and optional superseding teams. */
 	approve(flow: ApprovalFlow): Verdict;
 }
@@ -721,8 +693,11 @@ export type Change<Before, Set, After> = {
 };
 /**
  * Rows of other models a write callback carries into its own commit: creates, and updates naming the revision they read
- * (a newer one is a conflict). They run their own model's callbacks (`ctx.carried_by` names the carrier), the root write's
- * grant admits them, and they commit with it or not at all.
+ * (a newer one is a conflict). They are the carrier's own complete logic, written straight to storage: the carrier's
+ * grant admits them, and the carried model's policies, verdicts, callbacks and effects never run for them, nor do write
+ * triggers or waits fire. Storage still holds: native constraints, foreign keys, uniqueness, locks and state rules,
+ * history and audit, all in the root write's one transaction (rolled back with it). Models never call each other
+ * implicitly: rows a person writes through a parent's layer are input, and run their own model's callbacks and effects.
  */
 export type CarriedWrites = {
 	readonly [N in AuthoredModelName]?: {
@@ -747,40 +722,19 @@ export type TransformAnswer<R> = readonly R[] | ({ readonly sets: readonly R[] }
 export type DeleteAnswer =
 	| void
 	| (Carried & { readonly length?: never } & ({ readonly with: CarriedWrites } | { readonly on_approved: CarriedWrites }));
-/** The workspace reads of a write callback, and the act's own rows (`after`). */
-interface ProspectiveQuery {
-	/** Stored rows matching `where` overlaid with this act's rows: what the model will hold once the act commits. */
-	after<C extends string>(
-		model: Is<C, ReadableName>,
-		where: NoInfer<ModelWhere<C>>
-	): Eff<readonly StoredRow<C>[], ReadFailed>;
-	after<C extends string, const S extends { readonly [P in keyof StoredRow<C>]?: true } = {}>(
-		model: Is<C, ReadableName>,
-		where: NoInfer<ModelWhere<C>>,
-		query: { select?: S; order_by?: NoInfer<OrderBy<C>> } & Paged
-	): Eff<
-		Page<
-			[keyof S] extends [never]
-				? StoredRow<C>
-				: Pick<StoredRow<C>, (keyof S | 'id') & keyof StoredRow<C>>
-		>,
-		ReadFailed
-	>;
-}
 /**
- * What a write callback sees: the clock, the writer's policies, the workspace reads (unmasked; `query.after` sees
- * this act's rows) and `refuse`. A callback reads at most 10 times per call, whatever the batch size: read for the whole
- * batch at once (`yield* ctx.query({ customers: …, prices: … })` is one read), never inside a loop over the rows.
- * Checks, effects and approval callbacks read the same way: once per dependency wave, each request counting toward
- * the limit of 10.
- * It writes nothing itself: what it returns is written in the writer's one transaction.
+ * What a write callback sees: the clock, the writer's policies, the workspace reads (unmasked; `as_of: 'act'` sees
+ * this act's rows) and `refuse`. A callback crosses into the host at most 10 times per call (`LIMITS.crossings.write`),
+ * whatever the batch size: read for the whole batch at once (`yield* ctx.query({ customers: …, prices: … })` is one
+ * read), never inside a loop over the rows (`bolt check` refuses a read in a loop). Verdicts, effects and approval
+ * callbacks read the same way: once per dependency wave, each request counting toward the limit.
+ * It performs no writes itself: the sets it returns, and any rows it carries (`with`, `on_approved`), are written in
+ * the writer's one transaction.
  */
 export interface WriteCtx<in out M> extends Clock, WorkspaceQuery {
 	readonly invocation_id: string;
 	readonly policies: readonly string[];
 	readonly admin: boolean;
-	/** The model whose write carries these rows (its `with` or `on_approved`), or `null` for rows written directly. */
-	readonly carried_by: AuthoredModelName | null;
 	/**
 	 * `true` when the decision that approves a held write asks again: the rows are the records as they now stand (an
 	 * update's `{ before: row, set: {}, after: row }`), and only the answer's `on_approved` is written, in the
@@ -788,15 +742,13 @@ export interface WriteCtx<in out M> extends Clock, WorkspaceQuery {
 	 * `on_approved`. A refusal refuses the approval.
 	 */
 	readonly approving: boolean;
+	/** Refuses the whole write; `field` names the field, `row` the offending row's index in the batch received. */
+	refuse: Refuse<{ field?: WritableField<M>; row?: number }>;
 	/**
-	 * Refuses the whole write, `return yield* ctx.refuse(…)`, with a catalogue key: `field` names the field,
-	 * `row` the index of the offending row in the batch the callback received, `values` the message's placeholders.
+	 * Workspace reads. A root with `as_of: 'act'` reads the stored rows overlaid with this act's own rows: what the
+	 * model will hold once the act commits.
 	 */
-	refuse<K extends MessageKey>(
-		message: K,
-		...at: RefuseAt<K, { field?: WritableField<M>; row?: number }>
-	): Eff<never, Refusal>;
-	query: WorkspaceQuery['query'] & ProspectiveQuery;
+	query: WorkspaceQuery['query'];
 }
 
 // ── the names the page client (`page/page-bolt.ts`) shares with the `ctx` above ──
@@ -814,6 +766,14 @@ export type MessageValues<K extends MessageKey> = {
 export type RefuseAt<K extends MessageKey, At> = [Placeholders<NamesPart<'messages'>[K]>] extends [never]
 	? [at?: At]
 	: [at: At & { readonly values: MessageValues<K> }];
+/**
+ * The one refusal every body has: stops it with a catalogue key, `return yield* ctx.refuse(key, at?)`; `At` names
+ * where (a row, a field), plus the message's `{placeholder}` `values`.
+ */
+export type Refuse<At> = {
+	// a method's parameters compare both ways: a write's `refuse` (its own fields) passes for a helper taking any body's
+	refuse<K extends MessageKey>(message: K, ...at: RefuseAt<K, At>): Eff<never, Refusal>;
+}['refuse'];
 /** The names ui's views are typed by (`@norbital-ai/ui`'s `Workspace`); none until the workspace exposes a model. */
 export type ViewNames = [keyof NamesPart<'exposures'>] extends [never]
 	? never

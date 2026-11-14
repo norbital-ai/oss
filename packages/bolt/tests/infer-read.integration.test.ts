@@ -3,15 +3,14 @@ import { required } from './support/required.ts';
 // policies over several turns (the agent's `read` tool: granted outputs, row scopes, bounded pages), then edits and
 // submits; a model outside the policies and an ungranted output are refused, a field outside the granted output never
 // reaches the model, `steps` still caps the tool turns, and a run whose policies grant no read cannot offer `read`.
-import { FacilityFailure } from '../src/decl/errors.ts';
+import { type AiRequest, FacilityFailure, Port } from '@norbital-ai/host-api';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from 'effect';
 import { afterAll } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
-import type { AiRequest, ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { Port } from '../src/engine/port.ts';
-import { uuidv7 } from '../src/protocol/wire.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 import { Ai } from '../src/engine/ports.ts';
 import { TestWorkspace, respond_system_1, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';

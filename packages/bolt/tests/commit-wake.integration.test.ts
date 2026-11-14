@@ -2,7 +2,8 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Layer } from 'effect';
 import { Live, Links, Wake } from '../src/engine/services.ts';
 import { committed, executeCommit, type Commit } from '../src/engine/write/commit.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { catalog_of } from '../src/engine/access/pred.ts';
 import { manifest as base, NOW, TODAY } from './write-fixture.ts';
@@ -57,7 +58,7 @@ it.effect(
 				exposures: { ...base.exposures, orders: { ...orders, update: { ...orders.update, effect: true } } }
 			};
 			const pg = yield* TestDb.open(manifest),
-				db = PgliteDb.make(pg);
+				db = TenantDb.typed(PgliteDb.make(pg));
 			const first = '0199a000-0000-4000-8000-000000000071',
 				second = '0199a000-0000-4000-8000-000000000072';
 			const common: Omit<Commit, 'writes'> = {
@@ -77,7 +78,6 @@ it.effect(
 					actor: 'system:test',
 					depth: 0
 				},
-				owned: [],
 				rate: [],
 				runs: [],
 				notices: [],

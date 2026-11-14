@@ -19,7 +19,11 @@ begin
 		(context is not null and jsonb_typeof(context) <> 'object') then
 		raise exception 'invalid native write context' using errcode = '22023';
 	end if;
-	trusted := mode in ('seed', 'restore');
+	-- a restore trusts only the rows it restores (\`rows\`: '<table>/<id>'); the statement's other rows keep their rules
+	trusted := mode = 'seed';
+	if mode = 'restore' then
+		trusted := coalesce(context->'rows' ? (tg_table_name || '/' || (coalesce(to_jsonb(new), to_jsonb(old))->>'id')), false);
+	end if;
 	-- whole-row JSON only where a key or state is compared: a plain insert or delete reads none
 	if tg_op = 'UPDATE' or (tg_op = 'INSERT' and rules->'states' <> '{}'::jsonb) then
 		if tg_op = 'UPDATE' then before_row := to_jsonb(old); end if;
@@ -96,7 +100,8 @@ $store_rules$`;
 /**
  * The statement triggers: a row's own predicate locks (update, delete) and its owned parents' locks (every write), one
  * query per lock rule over the statement's transition tables instead of dynamic queries per row and parent. Only a row
- * a lock holds is then compared field by field. Trusted writes (seed, restore) skip them, as the row trigger does.
+ * a lock holds is then compared field by field. A seed skips them; a restore skips only its restored rows, as the row
+ * trigger does.
  */
 export const STATEMENT_RULES = `create or replace function store_statement_rules() returns trigger language plpgsql as $store_rules$
 declare
@@ -117,16 +122,17 @@ declare
 	parent jsonb;
 	ids text;
 	locked boolean;
+	trusted jsonb := case when context->>'mode' = 'restore' then coalesce(context->'rows', '[]'::jsonb) else '[]'::jsonb end;
 begin
-	if coalesce(context->>'mode', 'write') in ('seed', 'restore') then return null; end if;
+	if coalesce(context->>'mode', 'write') = 'seed' then return null; end if;
 	if tg_op <> 'INSERT' then
 		select string_agg(format('o.%I = n.%I', k, k), ' and ') into pairs from jsonb_array_elements_text(rules->'key') k;
 		for locked_rule in select value from jsonb_array_elements(rules->'locks') loop
 			for before_row, after_row in execute format(
-				'select to_jsonb(o), %s from store_old o %s cross join lateral jsonb_populate_record(null::%I.%I, to_jsonb(o)) t where coalesce((%s), false)',
+				'select to_jsonb(o), %s from store_old o %s cross join lateral jsonb_populate_record(null::%I.%I, to_jsonb(o)) t where coalesce((%s), false) and not $1 ? (%L || ''/'' || (to_jsonb(o)->>''id''))',
 				case when tg_op = 'UPDATE' then 'to_jsonb(n)' else 'null::jsonb' end,
 				case when tg_op = 'UPDATE' then 'join store_new n on ' || pairs else '' end,
-				tg_table_schema, tg_table_name, locked_rule->>'sql')
+				tg_table_schema, tg_table_name, locked_rule->>'sql', tg_table_name) using trusted
 			loop
 				if tg_op = 'DELETE' then
 					raise exception 'record is locked by %', locked_rule->>'name' using errcode = '23514', column = 'id', constraint = locked_rule->>'constraint';
@@ -161,14 +167,14 @@ begin
 	end if;
 	for parent in select value from jsonb_array_elements(rules->'parents') loop
 		ids := format('select v::%s from (%s) s where v is not null', parent->>'type', concat_ws(' union ',
-			case when tg_op <> 'INSERT' then format('select %I::text v from store_old', parent->>'column') end,
-			case when tg_op <> 'DELETE' then format('select %I::text v from store_new', parent->>'column') end));
+			case when tg_op <> 'INSERT' then format('select %I::text v from store_old r where not $1 ? (%L || ''/'' || (to_jsonb(r)->>''id''))', parent->>'column', tg_table_name) end,
+			case when tg_op <> 'DELETE' then format('select %I::text v from store_new r where not $1 ? (%L || ''/'' || (to_jsonb(r)->>''id''))', parent->>'column', tg_table_name) end));
 		execute format('select 1 from %I.%I p where p.%I in (%s) order by p.%I for share',
-			tg_table_schema, parent->>'table', parent->>'key', ids, parent->>'key');
+			tg_table_schema, parent->>'table', parent->>'key', ids, parent->>'key') using trusted;
 		for locked_rule in select value from jsonb_array_elements(parent->'locks') loop
 			execute format('select exists(select 1 from %I.%I p cross join lateral jsonb_populate_record(null::%I.%I, to_jsonb(p)) t where p.%I in (%s) and coalesce((%s), false))',
 				tg_table_schema, parent->>'table', tg_table_schema, parent->>'table', parent->>'key', ids, locked_rule->>'sql')
-				into locked;
+				into locked using trusted;
 			if locked then
 				raise exception 'relation % is locked by %', parent->>'relation', locked_rule->>'name'
 					using errcode = '23514', column = parent->>'column', constraint = locked_rule->>'constraint';

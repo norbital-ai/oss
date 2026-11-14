@@ -7,7 +7,7 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
-import { uuidv7 } from '../src/protocol/wire.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const manifest = {

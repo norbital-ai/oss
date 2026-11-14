@@ -5,10 +5,9 @@ import { memory_audit } from '../../bolt-cli/src/test/index.ts';
 import { Audit, audit_shape } from '../src/engine/audit.ts';
 import { AuditMutation } from '../src/engine/audit-context.ts';
 import { audited } from '../src/engine/audit-operation.ts';
-import type { Rows, Sql } from '../src/engine/contracts.ts';
-import { SqlReadCapture, TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
-import { db_error } from '../src/engine/db/wire.ts';
-import { DbError, is_transient } from '../src/engine/errors.ts';
+import { DbError, type RawDb, type Rows, type Sql, db_error } from '@norbital-ai/host-api';
+import { SqlReadCapture, TenantDb } from '../src/engine/db/tenant-db.ts';
+import { is_transient } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 
 const empty: Rows = { rows: [], affected: 0 };

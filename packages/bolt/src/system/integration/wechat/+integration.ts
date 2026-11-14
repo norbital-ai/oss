@@ -1,6 +1,6 @@
-import { bind_integration } from '../../../declarations.ts';
+import { integration } from '../../../decl/runtime/integration.ts';
 
-export default bind_integration('wechat')({
+export default integration('wechat', {
 	description: 'WeChat: an official account and the chats of its followers.',
-	driver: 'wechat'
+	driver: { name: 'wechat', read: 'deliveries', conversation: { kind: 'chat', handle: null } }
 });

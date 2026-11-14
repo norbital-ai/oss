@@ -26,6 +26,8 @@ approval control and repeat no declared default.
 	import type { FormState, SemanticIssue } from './form-state.svelte.js';
 	import type { RecordSection } from './section.svelte';
 	import type { ConfirmOptions } from '../primitives/dialog/confirm.js';
+	import type { LayoutSize } from '../layout/layout.shared.js';
+	import type { FieldEditor, FieldView } from './field.svelte';
 
 	/** What a form edits: a model's row, or a declared automation's input. */
 	export type FormSource = ModelKey | { [A in AutomationKey]: { automation: A } }[AutomationKey];
@@ -77,10 +79,14 @@ approval control and repeat no declared default.
 		validate?: (values: Readonly<Record<string, Value>>) => readonly SemanticIssue[];
 		/** The page's own layout of `Field`s, given the `FormState`; without it every permitted field renders in order. */
 		children?: Snippet<[FormState]>;
+		/** The generated fields' own editors by field name, in place of their kinds' (`Field editor`). */
+		editors?: { readonly [field: string]: Snippet<[FieldEditor]> };
+		/** The generated fields' own readonly views by field name, in place of their kinds' (`Field view`). */
+		viewers?: { readonly [field: string]: Snippet<[FieldView]> };
 		/** Extra buttons beside submit. */
 		actions?: Snippet<[FormState]>;
-		/** Classes on the form element. */
-		class?: string;
+		/** `fill` (default): the height left in its parent, its fields scrolling inside; `content`: its own height. */
+		size?: LayoutSize;
 	};
 </script>
 
@@ -111,8 +117,10 @@ approval control and repeat no declared default.
 		confirm,
 		validate,
 		children,
+		editors,
+		viewers,
 		actions,
-		class: className
+		size
 	}: FormProps<S> = $props();
 	const bolt = $derived(bolt_of(ctx));
 	const host = $derived(ctx.ui.kinds);
@@ -260,8 +268,10 @@ approval control and repeat no declared default.
 								{confirm}
 								{validate}
 								{children}
+								{editors}
+								{viewers}
 								{actions}
-								class={className}
+								{size}
 							/>
 						{/key}
 					{/snippet}

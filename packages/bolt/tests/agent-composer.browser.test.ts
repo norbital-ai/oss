@@ -28,7 +28,6 @@ const conversation = (status: AgentConversation['status'], id = ID): AgentConver
 	status,
 	model: 'default',
 	plan: null,
-	goals: [],
 	envoy: null,
 	integration: null,
 	kind: null,

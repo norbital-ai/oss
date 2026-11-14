@@ -40,7 +40,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 <script lang="ts" generics="R extends Values = Row">
 	import Cover from '../layout/cover.svelte';
 	import { Button } from '../primitives/button/index.js';
-	import { bolt_of } from '../client/context.js';
+	import { words_of } from '../client/context.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import { localExposure, matches, sortRows } from '../filter/local.js';
 	import { sortable } from '../filter/order.js';
@@ -50,7 +50,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	import ViewToolbar from './ViewToolbar.svelte';
 
 	let { ctx, of, fields, key, toolbar = {}, children, empty, model = '' }: CustomViewProps<R> = $props();
-	const bolt = $derived(bolt_of(ctx));
+	const bolt = $derived(words_of(ctx));
 	const LOCAL = '$local';
 	const names = $derived(fields.map((f) => (typeof f === 'string' ? f : f.field)));
 	const labelOf = (f: string) =>
@@ -67,9 +67,12 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	let q = $state('');
 	const shown = $derived(
 		sortRows(
-			searchRows(rows, q, names).filter((r) =>
-				matches(r, { t: 'group', join: 'and', of: view.rows }, view.clock)
-			),
+			// the clock is read only for a filter: a view with none needs no shell clock
+			view.rows.length === 0
+				? searchRows(rows, q, names)
+				: searchRows(rows, q, names).filter((r) =>
+						matches(r, { t: 'group', join: 'and', of: view.rows }, view.clock)
+					),
 			view.order
 		)
 	);

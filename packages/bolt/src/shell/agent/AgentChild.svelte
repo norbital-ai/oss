@@ -1,7 +1,7 @@
 <!--
 	A delegated sub-agent, read-only: `compact`, one line in the session panel's list
 	(its mark, task and state) that opens it; otherwise its whole view in the session panel — its task,
-	checklist, steps as they land (the panel's own `Steps`), what it changed and made, its exchange with the delegating agent
+	steps as they land (the panel's own `Steps`), what it changed and made, its exchange with the delegating agent
 	(a question it stopped on, the answer it got) and its answer. Sub-agents run detached and several at once; one spawns
 	none of its own, so nothing nests. It reads the child as the panel reads its own conversation: a live transcript whose
 	streaming and running rows say it works.
@@ -9,15 +9,13 @@
 <script lang="ts">
 	import { everySecond } from '../seconds.ts';
 	import { observe } from '@norbital-ai/ui/effect';
-	import { Option, Schema } from 'effect';
 	import { watch } from 'runed';
-	import { Button, Icon, ReadonlyMarkdown, Spinner, type UiContext } from '@norbital-ai/ui';
+	import { Button, elapsed_text, Icon, ReadonlyMarkdown, type UiContext } from '@norbital-ai/ui';
 	import { TranscriptReadAnswer } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import Steps from './Steps.svelte';
 	import Attachments from './Attachments.svelte';
 	import AgentAvatar from './AgentAvatar.svelte';
-	import { elapsed_text } from '../studio/model.ts';
 	import { callableWords, childStatus } from './view.ts';
 
 	let {
@@ -80,26 +78,6 @@
 			now = Date.now();
 			return everySecond((at) => (now = at));
 		}
-	);
-	/** Its checklist as its latest `goals` call set it (the child's own conversation holds the same list). */
-	const Goals = Schema.fromJsonString(
-		Schema.Struct({
-			items: Schema.Array(
-				Schema.Struct({
-					id: Schema.String,
-					text: Schema.String,
-					status: Schema.Literals(['pending', 'doing', 'done'])
-				})
-			)
-		})
-	);
-	const goals = $derived(
-		Option.match(
-			Schema.decodeUnknownOption(Goals)(
-				rows.findLast((r) => r.tool?.name === 'goals' && !r.tool.failed)?.tool?.args ?? ''
-			),
-			{ onNone: () => [], onSome: (g) => g.items }
-		)
 	);
 	const changes = $derived(rows.flatMap((r) => r.receipts ?? []));
 	const made = $derived(rows.flatMap((r) => (r.role === 'tool' ? (r.files ?? []) : [])));
@@ -217,25 +195,6 @@
 					</summary>
 					<p class="pt-2 whitespace-pre-wrap text-muted-foreground">{task}</p>
 				</details>{/if}
-			{#if goals.length > 0}
-				<ol class="grid gap-1" aria-label={t('Goal steps')} data-subagent-goals>
-					{#each goals as g (g.id)}
-						<li class="flex min-w-0 items-start gap-2" data-goal={g.status}>
-							{#if g.status === 'doing' && status === 'running'}<Spinner
-									class="mt-0.5 size-3.5 shrink-0"
-									label={t('In progress')}
-								/>
-							{:else}<Icon
-									name={g.status === 'done' ? 'lucide:circle-check' : 'lucide:circle-dashed'}
-									class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-								/>{/if}
-							<span class="min-w-0 {g.status === 'pending' ? 'text-muted-foreground' : ''}"
-								>{g.text}</span
-							>
-						</li>
-					{/each}
-				</ol>
-			{/if}
 			{#if steps.length > 0}<Steps {ctx} {steps} {t} activity />{/if}
 			{#if changes.length > 0}
 				<!-- what it changed in the workspace -->

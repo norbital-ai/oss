@@ -7,7 +7,7 @@ import { page, userEvent } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import StudioApproval from '../src/shell/agent/StudioApproval.svelte';
 import { shell_api } from '../src/shell/runtime.ts';
-import type { StudioChangeSet, StudioView } from '../src/shell/studio/model.ts';
+import type { StudioChangeSet, StudioView } from '@norbital-ai/host-api';
 import type { AgentRow } from '../src/protocol/schema.ts';
 import './support/shell.css';
 

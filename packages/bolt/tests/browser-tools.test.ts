@@ -1,11 +1,16 @@
 // The built-in browser tools drive the host's browsing facility; without one, every call says what is missing.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer } from 'effect';
-import type { BrowserPort, Downloaded, EngineActor } from '../src/engine/contracts.ts';
+import {
+	BROWSER_RUN_PROFILE,
+	type BrowserPort,
+	type Downloaded,
+	type HostTool,
+	off
+} from '@norbital-ai/host-api';
+import type { EngineActor } from '../src/engine/contracts.ts';
 import { Browser } from '../src/engine/ports.ts';
-import { off } from '../src/facilities/index.ts';
-import { BROWSER_RUN_PROFILE, browser_profile, browserTools } from '../src/engine/agent/browser.ts';
-import type { HostTool } from '../src/engine/agent/tools.ts';
+import { browser_profile, browserTools } from '../src/engine/agent/browser.ts';
 
 const page = (url = 'about:blank') => ({ url, title: null, text: '' });
 const browser_fixture: Browser['Service'] = {

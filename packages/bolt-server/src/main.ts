@@ -3,10 +3,9 @@ import { Console, Effect, Layer, Option } from 'effect';
 import { Argument, Command, Flag } from 'effect/cli';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { BoltError } from '@norbital-ai/bolt/engine';
 import { isIP } from 'node:net';
 import { join, resolve } from 'node:path';
-import { ServerLive } from './server.ts';
+import { ServerError, ServerLive } from './server.ts';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -23,14 +22,14 @@ const cidrs = (list: string) =>
 			return v === 0 ||
 				(bits !== undefined && !(/^\d+$/.test(bits) && Number(bits) <= (v === 6 ? 128 : 32)))
 				? Effect.fail(
-						BoltError.make('invalid_spec', 'admission', `--trust-proxy: '${c}' is not a CIDR`)
+						new ServerError({ code: 'invalid_spec', message: `--trust-proxy: '${c}' is not a CIDR` })
 					)
 				: Effect.succeed(c);
 		}
 	);
 /**
- * `bolt-server [workspace]`: serves the workspace's built release (`.norbital/bundle`, or `--artifact`) with its
- * `norbital.host.ts` (or `--host=<file>`). A workspace without a host file is Colony's to serve (tethered).
+ * `bolt-server [workspace]`: serves the workspace's built release (`.norbital/bundle`, or `--artifact`) on the Bolt it
+ * installed, with its `norbital.host.ts` (or `--host=<file>`). A workspace without a host file is Colony's to serve.
  */
 const command = Command.make(
 	'bolt-server',
@@ -64,7 +63,7 @@ const command = Command.make(
 export const main = (argv: readonly string[]) =>
 	Command.runWith(command, { version: '1.0.0' })(argv).pipe(
 		Effect.as(0),
-		Effect.catchTag('BoltError', (error) => Console.error(error.message).pipe(Effect.as(1))),
+		Effect.catchTag('ServerError', (error) => Console.error(error.message).pipe(Effect.as(1))),
 		Effect.catch((error) => Console.error(error).pipe(Effect.as(2)))
 	);
 // a `bolt-server` bin is a symlink: compare the real path

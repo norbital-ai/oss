@@ -6,11 +6,12 @@ import { Audit, audit_from_abi } from '../src/engine/audit.ts';
 import { recoverAudit } from '../src/engine/audit-operation.ts';
 import { prune_history, read_history } from '../src/engine/query/history.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { Writes } from '../src/engine/services.ts';
+import { Callables } from '../src/engine/services.ts';
 import { TestWorkspace, memory_audit } from '../../bolt-cli/src/test/index.ts';
-import type { AuditPort } from '../src/protocol/audit.ts';
+import type { AuditPort } from '@norbital-ai/host-api';
 import { layered, type EngineManifest } from '../src/engine/manifest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { one_act } from './support/act-one.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -39,7 +40,7 @@ const fixture = (port: AuditPort) =>
 			})
 		);
 		const t = Context.get(context, TestWorkspace),
-			writes = Context.get(context, Writes);
+			writes = Context.get(context, Callables);
 		const admin = (yield* t.as(t.admin)).authority;
 		const act = (
 			verb: 'create' | 'update' | 'erase',
@@ -47,7 +48,7 @@ const fixture = (port: AuditPort) =>
 		) => {
 			const now = t.clock.now(),
 				key = randomUUID();
-			return writes.act({
+			return writes.acts(one_act({
 				model: 'items',
 				verb,
 				input,
@@ -55,9 +56,8 @@ const fixture = (port: AuditPort) =>
 				issuedAt: now,
 				invocationId: key,
 				authority: admin,
-				mode: { _tag: 'Direct' },
 				bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
-			});
+			}));
 		};
 		return { t, context, act };
 	});

@@ -26,15 +26,15 @@ export type Operand =
 	| { field: string }
 	| {
 			var:
-				| 'requestor.id'
-				| 'requestor.email'
-				| 'requestor.phone'
-				| 'requestor.teams'
-				| 'requestor.team_tree'
-				| 'requestor.party'
-				| 'requestor.visitor'
-				| 'requestor.instance'
-				| `requestor.scopes.${PolicyName}`;
+				| 'actor.id'
+				| 'actor.email'
+				| 'actor.phone'
+				| 'actor.teams'
+				| 'actor.team_tree'
+				| 'actor.party'
+				| 'actor.visitor'
+				| 'actor.instance'
+				| `actor.scopes.${PolicyName}`;
 	  };
 /** Rule 11a caps: `and`/`or`/`not` and relation nesting together, and each list's items. */
 export const WHERE_MAX_DEPTH = 16,
@@ -73,19 +73,19 @@ type Ordered = { kind: NumKind | 'date' | 'instant' | 'time' | 'text' | 'seq' };
 // Operands a value position admits, by kind; S = static (check, unique, ref `where`): values and fields only.
 type Dyn<K, S> = S extends true
 	? never
-	: | (K extends { kind: 'text'; format: 'email' } ? { var: 'requestor.email' } : never)
-		| (K extends { kind: 'text'; format: 'phone' } ? { var: 'requestor.phone' } : never)
+	: | (K extends { kind: 'text'; format: 'email' } ? { var: 'actor.email' } : never)
+		| (K extends { kind: 'text'; format: 'phone' } ? { var: 'actor.phone' } : never)
 		/** The anonymous identity (`__Secure-bolt-visitor`): guest-owned rows on a text field, scoped per browser. */
-		| (K extends { kind: 'text' } ? { var: 'requestor.visitor' } : never)
-		| (K extends { kind: 'ref'; to: 'sys_user' } ? { var: 'requestor.id' } : never)
-		/** The instance an envoy turn arrived on, or a sync body runs for; null for every other requestor. */
-		| (K extends { kind: 'ref'; to: 'sys_integration' } ? { var: 'requestor.instance' } : never)
-		| (K extends { kind: 'ref' } ? { var: 'requestor.party' } : never);
+		| (K extends { kind: 'text' } ? { var: 'actor.visitor' } : never)
+		| (K extends { kind: 'ref'; to: 'sys_user' } ? { var: 'actor.id' } : never)
+		/** The instance an envoy turn arrived on, or a sync body runs for; null for every other actor. */
+		| (K extends { kind: 'ref'; to: 'sys_integration' } ? { var: 'actor.instance' } : never)
+		| (K extends { kind: 'ref' } ? { var: 'actor.party' } : never);
 type DynList<K, S> = S extends true
 	? never
-	: | (K extends { kind: 'ref' } ? { var: `requestor.scopes.${PolicyName}` } : never)
+	: | (K extends { kind: 'ref' } ? { var: `actor.scopes.${PolicyName}` } : never)
 		| (K extends { kind: 'text'; format: 'team' }
-				? { var: 'requestor.teams' | 'requestor.team_tree' }
+				? { var: 'actor.teams' | 'actor.team_tree' }
 				: never);
 interface ValOf<M, K, S> {
 	readonly value:

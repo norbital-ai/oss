@@ -2,12 +2,11 @@
 // `sys_message` rows. Each system model lives under `src/system/data/model/<name>/+model.ts`.
 import { Effect, Option, Predicate, Schema, type Types } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
-import { STUDIO_ROLES } from '../../protocol/schema.ts';
-import { AgentQuestion, PageAction, PageResult, ToolBehavior, Usage as UsageSchema } from '../../protocol/schema.ts';
+import { STUDIO_ROLES, storedInstant, ToolBehavior } from '@norbital-ai/host-api';
+import { AgentQuestion, PageAction, PageResult, Usage as UsageSchema } from '../../protocol/schema.ts';
 import type { Json } from '../../decl/values.ts';
 import type { AgentRow } from '../../protocol/wire.ts';
 import type { Authority, RowData } from '../contracts.ts';
-import { storedInstant } from '../db/wire.ts';
 
 /** Plain words from a message or provider reply. */
 export const textOf = (content: Json): string => {
@@ -24,21 +23,14 @@ export const textOf = (content: Json): string => {
  */
 export type As = typeof AsSchema.Type;
 
-/** `verdicts` counts incomplete verdicts; the verifier runs again after each, with no stall (today's behaviour). */
+/** `verdicts` counts verifier passes: an executed plan is verified once. */
 export type Plan = Types.Mutable<typeof PlanSchema.Type>;
-/** The conversation's checklist (today's `todo`): unique ids, at most one `doing`, `done` is terminal with its text unchanged. */
-export type Goal = Types.Mutable<typeof GoalSchema.Type>;
 const PlanSchema = Schema.Struct({
 	revision: Schema.Number,
 	body: Schema.String,
 	status: Schema.Literals(['draft', 'active', 'verified']),
 	checkpoint: Schema.Number,
 	verdicts: Schema.Number
-});
-const GoalSchema = Schema.Struct({
-	id: Schema.String,
-	text: Schema.String,
-	status: Schema.Literals(['pending', 'doing', 'done'])
 });
 export const Conversation = Schema.Struct({
 	id: Schema.String,
@@ -52,7 +44,6 @@ export const Conversation = Schema.Struct({
 	status: Schema.Literals(['idle', 'running', 'stopped']),
 	model: Schema.String,
 	plan: Schema.NullOr(PlanSchema),
-	goals: Schema.NullOr(Schema.Array(GoalSchema)),
 	/** The automation run whose inference this is (its transcript, read-only). */
 	run: Schema.optionalKey(Schema.NullOr(Schema.String))
 }).annotate({ identifier: 'sys_conversation' });
@@ -132,7 +123,21 @@ const MetaSchema = Schema.Union([
 		usage: Schema.optionalKey(UsageSchema)
 	}),
 	Schema.Struct({ tag: Schema.Literal('output'), full: Schema.Json }),
-	Schema.Struct({ tag: Schema.Literal('note') }),
+	Schema.Struct({
+		tag: Schema.Literal('note'),
+		/**
+		 * A catalogue note's state (`catalogueNote`): the index it brought the conversation to, and on the first after a
+		 * checkpoint the MCP tools the conversation's tool list then froze.
+		 */
+		catalogue: Schema.optionalKey(
+			Schema.Struct({
+				index: Schema.Record(Schema.String, Schema.String),
+				native: Schema.optionalKey(
+					Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String, input: Schema.Json }))
+				)
+			})
+		)
+	}),
 	Schema.Struct({ tag: Schema.Literal('answer'), question: Schema.String }),
 	Schema.Struct({ tag: Schema.Literal('aside'), message: Schema.String }),
 	Schema.Struct({ tag: Schema.Literal('event'), at: Schema.String }),
@@ -286,13 +291,13 @@ export const ConversationListRow = Schema.Struct({
 	model: Schema.String,
 	title: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	plan: Schema.optionalKey(Schema.Json),
-	goals: Schema.optionalKey(Schema.Json),
 	envoy: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	integration: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	run: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	kind: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	thread: Schema.optionalKey(Schema.NullOr(Schema.String)),
-	peer: Schema.optionalKey(Schema.NullOr(Schema.String))
+	peer: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	archived_at: Schema.optionalKey(Schema.NullOr(Schema.String))
 });
 /** Reads and capture projection decode the same native list row. */
 export const conversationRow = (r: typeof ConversationListRow.Type): { [k: string]: Json } => ({
@@ -302,7 +307,6 @@ export const conversationRow = (r: typeof ConversationListRow.Type): { [k: strin
 	status: r['status'],
 	model: r['model'],
 	plan: r['plan'] ?? null,
-	goals: r['goals'] ?? null,
 	// which conversation this is, for the panel's segmented selector: an envoy's thread beside the member's own in-app
 	// ones. `integration` (the instance) is null exactly when the conversation is the member's own.
 	envoy: r['envoy'] ?? null,
@@ -313,9 +317,11 @@ export const conversationRow = (r: typeof ConversationListRow.Type): { [k: strin
 	kind: r['integration'] == null ? null : (r['kind'] ?? null),
 	thread: r['thread'] ?? null,
 	// a DM's member, by name, when the sender is one: the selector reads "Dion (+65 9238 8112)"
-	peer: r['peer'] ?? null
+	peer: r['peer'] ?? null,
+	// archived by its owner: a live list drops it, the archived list shows it
+	archived: r['archived_at'] != null
 });
-/** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_file { call }`). */
+/** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_output`). */
 export const clip = (v: Json | undefined, max = 600): string => {
 	const s = typeof v === 'string' ? v : JSON.stringify(v ?? null);
 	return s.length <= max ? s : `${s.slice(0, max - 1)}…`;

@@ -12,10 +12,9 @@ import { expect } from '@effect/vitest';
 import { Effect, Exit, Layer, Predicate, Schema, Scope, Stream } from 'effect';
 import { afterAll } from 'vitest';
 import { Ai } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { type AiRequest, type AiResponse, Port } from '@norbital-ai/host-api';
 import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiResponse, AiRequest } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { NOTICES } from '../src/engine/envoys/index.ts';
 import { simulatedProviders, startSimulator } from '../../providers/src/simulator/index.ts';
@@ -35,7 +34,15 @@ const runtime_accounts = [
 ] as const;
 
 const manifest = {
-	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test
+	workspace: {
+		tz: 'UTC',
+		locale: 'en',
+		agent: { triage: false },
+		limits: {
+			desk: { 'envoys.receive': [{ rate: '2/min', per: 'sender' }] },
+			desk_turns: { agent: [{ rate: '2/h', per: 'actor' }] }
+		}
+	}, // hook:decisions — not a triage test
 	models: {
 		jobs: {
 			description: 'A job',
@@ -55,8 +62,7 @@ const manifest = {
 	policies: {
 		desk: {
 			description: 'What the envoys may do',
-			grants: { jobs: { outputs: { default: {} }, create: {} } },
-			limits: { 'envoys.receive': [{ rate: '2/min', per: 'sender' }] }
+			grants: { jobs: { outputs: { default: {} }, create: {} } }
 		},
 		contractor: {
 			description: 'Contractors',
@@ -64,8 +70,7 @@ const manifest = {
 		},
 		desk_turns: {
 			description: 'The public desk turn budget',
-			grants: {},
-			limits: { agent: [{ rate: '2/h', per: 'actor' }] }
+			grants: {}
 		}
 	},
 	teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },

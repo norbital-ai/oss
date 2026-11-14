@@ -6,8 +6,7 @@
 		"noEmit": true,
 		"target": "ES2024",
 		"paths": {
-			"@norbital-ai/bolt": ["../../../src/index.ts"],
-			"@norbital-ai/bolt/declarations": ["../../../src/declarations.ts"]
+			"@norbital-ai/bolt": ["../../../src/index.ts"]
 		}
 	},
 	"include": ["src/**/*.ts", "src/**/*.svelte", ".norbital/names.ts"]

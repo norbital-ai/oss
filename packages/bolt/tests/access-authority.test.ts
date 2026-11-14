@@ -13,7 +13,6 @@ import {
 import {
 	addressBucket,
 	charges_for,
-	client_address,
 	parse_rate,
 	RateWindows
 } from '../src/engine/access/rate.ts';
@@ -37,7 +36,19 @@ const state = {
 } as const;
 const m: EngineManifest = {
 	needs: [],
-	workspace: { tz: 'UTC', locale: 'en' },
+	workspace: {
+		tz: 'UTC',
+		locale: 'en',
+		limits: {
+			rep: { act: '10/min' },
+			desk: {
+				'envoys.receive': [
+					{ rate: '30/min', per: 'sender' },
+					{ rate: '300/min', per: 'subject' }
+				]
+			}
+		}
+	},
 	models: {
 		orders: {
 			description: '',
@@ -85,7 +96,6 @@ const m: EngineManifest = {
 		},
 		rep: {
 			description: '',
-			limits: { act: '10/min' },
 			grants: {
 				orders: {
 					outputs: {
@@ -120,13 +130,7 @@ const m: EngineManifest = {
 		},
 		desk: {
 			description: '',
-			grants: {},
-			limits: {
-				'envoys.receive': [
-					{ rate: '30/min', per: 'sender' },
-					{ rate: '300/min', per: 'subject' }
-				]
-			}
+			grants: {}
 		}
 	},
 	teams: { Finance: { policies: [] } },
@@ -479,12 +483,7 @@ describe('engine/access: rate windows', () => {
 		expect(fresh.charge(c('b'), 0).ok).toBe(false);
 	});
 
-	it('peers behind a declared two-hop proxy chain count apart; behind an undeclared one, together; one IPv6 /64 is one bucket', () => {
-		const trusted = ['10.0.0.0/8'];
-		expect(client_address('10.0.0.1', '1.1.1.1, 10.0.0.2', trusted)).toBe('1.1.1.1');
-		expect(client_address('10.0.0.1', '2.2.2.2, 10.0.0.2', trusted)).toBe('2.2.2.2');
-		expect(client_address('10.0.0.1', '1.1.1.1, 10.0.0.2', [])).toBe('10.0.0.1');
-		expect(client_address('10.0.0.1', '6.6.6.6, 1.1.1.1', trusted)).toBe('1.1.1.1'); // a forged left hop is never reached
+	it('one IPv6 /64 is one bucket', () => {
 		expect(addressBucket('2001:db8:1:2:aaaa::1')).toBe(
 			addressBucket('2001:db8:1:2:bbbb:cccc:dddd:eeee')
 		);

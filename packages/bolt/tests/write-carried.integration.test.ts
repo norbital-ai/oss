@@ -1,13 +1,15 @@
-// A write callback may carry rows of other models into its own commit, as owned children are: they run their own
-// callbacks, the root write's grant admits them, and they commit with the write or not at all.
+// A write callback may carry rows of other models into its own commit: they go straight to storage (no callbacks of
+// their own; native rules still hold), the root write's grant admits them, and they commit with the write or not at all.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
+import { type WriteEngine } from '../src/engine/write/act.ts';
 import { admin, authority, grants, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
+import { act_one, type OneAct } from './support/act-one.ts';
+import { with_each } from './support/guest-each.ts';
 
 const orders = base.exposures.orders,
 	tags = base.exposures.tags;
@@ -45,15 +47,14 @@ const setup = Effect.gen(function* () {
 					return db.transaction(batch);
 				})
 		},
-		guest: {
+		guest: with_each({
 			invokeProgram: () => Effect.die('This fixture executes native write callbacks only.'),
 			invoke: (invocation) =>
 				Effect.gen(function* () {
                     const changes = yield* Schema.decodeUnknownEffect(Changes)(invocation.input).pipe(Effect.orDie);
                     const rows = changes.map(({ set }) => set);
+					// a tag's own callback upper-cases its name: a carried tag never runs it
 					if (invocation.target === 'tags') {
-						if (rows.some((row) => row['name'] === 'refuse'))
-							return { kind: 'refused' as const, message: 'This tag refuses.' };
 						return {
 							kind: 'ok' as const,
 							output: rows.map((row) => ({ ...row, name: String(row['name']).toUpperCase() }))
@@ -65,12 +66,11 @@ const setup = Effect.gen(function* () {
 						output: { sets: rows, ...(invocation.kind === 'create' ? carry(changes.map(({ after }) => after)) : {}) }
 					};
 				})
-		}
+		})
 	};
-	const run = (request: Pick<ActRequest, 'verb' | 'input'> & Partial<ActRequest>) =>
-		act(engine, {
+	const run = (request: Pick<OneAct, 'verb' | 'input'> & Partial<OneAct>) =>
+		act_one(engine, {
 			model: 'orders',
-			mode: { _tag: 'Direct' },
 			key: `carried-${serial}`,
 			invocationId: `carried-${serial++}`,
 			issuedAt: NOW,
@@ -100,13 +100,13 @@ const setup = Effect.gen(function* () {
 			.pipe(Effect.map((rows) => rows[0]));
 	return { run, names, order, commits: () => commits };
 });
-const committed = (result: Effect.Success<ReturnType<typeof act>>) => {
+const committed = (result: Effect.Success<ReturnType<typeof act_one>>) => {
 	if (result.outcome.kind !== 'committed') throw new Error(JSON.stringify(result.outcome));
 	return result.outcome.records;
 };
 
 describe('a write that carries other models', () => {
-	it.effect('commits what it carries in its own statement, after their own callbacks', () =>
+	it.effect('commits what it carries in its own statement, as carried, running none of their callbacks', () =>
 		Effect.gen(function* () {
 			const { run, names, commits } = yield* setup;
 			carry = (rows) => ({
@@ -114,7 +114,7 @@ describe('a write that carries other models', () => {
 			});
 			const records = committed(yield* run({ verb: 'create', input: [{ title: 'desk' }] }));
 			expect(commits()).toBe(1);
-			expect(yield* names).toEqual(['FOR DESK']);
+			expect(yield* names).toEqual(['for desk']);
 			expect(records.map((record) => record.model).toSorted()).toEqual(['orders', 'tags']);
 		})
 	);
@@ -127,16 +127,17 @@ describe('a write that carries other models', () => {
 			});
 			committed(yield* run({ verb: 'create', input: [{ title: 'crate' }] }));
 			const crate = yield* order('crate');
-			expect(yield* names).toEqual([crate?.id.toUpperCase()]);
+			expect(yield* names).toEqual([crate?.id]);
 		})
 	);
 
-	it.effect('commits nothing when a carried row is refused', () =>
+	it.effect('commits nothing when a native rule refuses a carried row', () =>
 		Effect.gen(function* () {
 			const { run, names, order } = yield* setup;
-			carry = () => ({ with: { tags: { create: [{ name: 'refuse' }] } } });
+			// a tag's name is required
+			carry = () => ({ with: { tags: { create: [{}] } } });
 			const result = yield* run({ verb: 'create', input: [{ title: 'chair' }] });
-			expect(result.outcome).toMatchObject({ kind: 'refused', message: 'This tag refuses.' });
+			expect(result.outcome).toMatchObject({ kind: 'refused' });
 			expect(yield* order('chair')).toBeUndefined();
 			expect(yield* names).toEqual([]);
 		})
@@ -196,7 +197,28 @@ describe('a write that carries other models', () => {
 					authority: authority({ orders: grants('orders') })
 				})
 			);
-			expect(yield* names).toEqual(['CARRIED']);
+			expect(yield* names).toEqual(['carried']);
+		})
+	);
+
+	it.effect('still meets the native rules: a carried update of a locked row is refused, and nothing commits', () =>
+		Effect.gen(function* () {
+			const { run, order } = yield* setup;
+			carry = () => ({});
+			committed(yield* run({ verb: 'create', input: [{ title: 'locker' }] }));
+			const locker = yield* order('locker');
+			if (locker === undefined) return yield* Effect.die('no locker');
+			committed(yield* run({ verb: 'update', input: [{ target: locker.id, set: { status: 'submitted' } }] }));
+			const submitted = yield* order('locker');
+			if (submitted === undefined) return yield* Effect.die('no locker');
+			// `submitted` locks every field but note and status: a carried title change is the native lock's to refuse
+			carry = () => ({
+				with: { orders: { update: [{ target: { id: submitted.id, revision: submitted.revision }, set: { title: 'moved' } }] } }
+			});
+			const refused = yield* run({ verb: 'create', input: [{ title: 'key' }] });
+			expect(refused.outcome).toMatchObject({ kind: 'refused', code: 'locked', field: 'title' });
+			expect(yield* order('key')).toBeUndefined();
+			expect(yield* order('locker')).toMatchObject({ revision: submitted.revision });
 		})
 	);
 

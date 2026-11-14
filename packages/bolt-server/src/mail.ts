@@ -1,8 +1,8 @@
 // This host's transactional facilities (sign-in codes, invitations): each one explicit in its settings.
 import { Effect } from 'effect';
 import type { HttpClient } from 'effect/http/HttpClient';
-import { logged_phone, type Json, type TransportPort } from '@norbital-ai/bolt/engine';
-import { off, type Facilities } from '@norbital-ai/bolt/facilities';
+import { type Facilities, logged_phone, off, type TransportPort } from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import type { ProviderRefused, ProviderUnavailable } from '@norbital-ai/providers';
 import type { HostSettings } from './host.ts';
 import { resendMail } from './resend.ts';

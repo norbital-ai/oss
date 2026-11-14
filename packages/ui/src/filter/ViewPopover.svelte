@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { UiContext } from '../client/contract.js';
-	import { bolt_of } from '../client/context.js';
+	import { words_of } from '../client/context.js';
 	import type { ModelExposure } from '../kinds/context.js';
 	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import { msg } from '../text/messages.js';
@@ -24,7 +24,7 @@
 		author?: Json;
 		sortable: readonly string[];
 	} = $props();
-	const bolt = $derived(bolt_of(ctx));
+	const bolt = $derived(words_of(ctx));
 	let open = $state(false);
 	const count = $derived(view.rows.filter(complete).length + view.order.length);
 </script>

@@ -31,8 +31,8 @@ export default bind_system_model('sys_user')({
 		created_at: { kind: 'instant', default: { var: 'now' } },
 		/** Their last visit of their own, to the hour; an impersonator or an agent is not them. */
 		last_seen: { kind: 'instant', optional: true },
-		party_id: { kind: 'text', computed: { json_text: [{ field: 'party' }, 'id'] } },
-		phone_key: { kind: 'text', computed: { regex_replace: [{ field: 'phone' }, '\\D', ''] } }
+		party_id: { kind: 'text', computed: "json_text(party, 'id')" },
+		phone_key: { kind: 'text', computed: "regex_replace(phone, r'\\D', '')" }
 	},
 
 	constraints: {

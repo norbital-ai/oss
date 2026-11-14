@@ -22,9 +22,15 @@ export const ROLES = [
 		note: 'record view'
 	},
 	{
+		role: 'sync',
+		dir: 'data/model/**',
+		file: '+*.sync.ts',
+		note: "the model's file or remote sync"
+	},
+	{
 		role: 'custom_field',
 		dir: 'data/custom_field/*',
-		file: '+definition.ts',
+		file: '+custom_field.ts',
 		note: 'custom field type'
 	},
 	{
@@ -141,5 +147,5 @@ const placeholders = (dir: string) =>
 export const LAYOUT_HELP = `A + file is a compiler role; files without + are ordinary modules and may sit anywhere.
 If the folder names the thing the file is +<role>.<ext>, otherwise +<name>.<role>.<ext>. Folder names are singular;
 names match ${NAME.source}. Model folders may nest under models or plain grouping folders; only the leaf folder names
-the model, uniquely across the workspace. A representation sits beside its model. The roles:
+the model, uniquely across the workspace. A representation and each sync sit beside their model. The roles:
 ${ROLES.map((r) => `  src/${placeholders(r.dir)}${r.dir ? '/' : ''}${r.file.replace('*', '<name>')}`).join('\n')}`;

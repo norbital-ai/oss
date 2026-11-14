@@ -108,7 +108,7 @@ export type OutcomeFeedback =
 	| { kind: Exclude<Outcome['kind'], 'refused'> }
 	| Pick<Extract<Outcome, { kind: 'refused' }>, 'kind' | 'message'>;
 /** A queued run's ids immediately and its admission outcome when awaited; `runs` follows execution. */
-export type RunHandle = Effect.Effect<Outcome, ProtocolFailure> & {
+export type RunHandle = Effect.Effect<ActSuccess, ActFailure> & {
 	readonly mode: 'job';
 	readonly id: string;
 	/** Every run a bulk start queued (`id` is the first). */
@@ -239,7 +239,7 @@ export type ViewBolt = {
 		parent?: RecordParentContext
 	): Effect.Effect<RecordCapabilities | null, Error>;
 	/** Whether deleting these records would commit, be held for approval or be refused: one read for them all. */
-	delete_verdict?(model: string, ids: readonly string[]): Effect.Effect<'allow' | 'approve' | 'deny', Error>;
+	delete_verdict?(model: string, ids: readonly string[]): Effect.Effect<'allow' | 'approve' | 'refuse', Error>;
 	act(
 		acts: Readonly<Record<string, Value>>,
 		options?: { key?: string }

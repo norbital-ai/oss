@@ -56,7 +56,7 @@ Business requirement to default construction. Use the default unless a requireme
 | --- | --- | --- |
 | Master data owned elsewhere | sync `read` with `$id`, `$version`, cursor | source fields protected; local annotations stay |
 | Local records command elsewhere | sync `write` with engine idempotency | define which system owns each field |
-| A provider writes in | automation `webhook` with `verify` | unsigned deliveries refused |
+| A provider writes in | integration `webhook` with `verify` and `handle` | unsigned deliveries refused |
 | Workspace writes out | connection plus `ctx.request`, or sync `write` | stable request identity; verify retry behaviour |
 | Browser SDK | page dependency | not an integration |
 | Remote agent tools | MCP role | granted by policy |

@@ -1,5 +1,5 @@
 // The typed operations on a page context use the same names, rows and inputs as server code. A read is `query` (and
-// `aggregate`, `history`), the same name and arguments as server code's `ctx.query`, answering a `Query<T>`: live where a
+// `history` for one record's revisions), the same name and arguments as server code's `ctx.query`, answering a `Query<T>`: live where a
 // component reads it, one read where it is awaited outside one, and an Effect to `yield*`. Acts, starts, uploads, record
 // capabilities, conversions, approval decisions and the session are Effects failing with typed tags; `clock`, `file_url`,
 // `t` and `actor` stay plain. Pages run Effects on the ui edge (`run`, `fork`, `attach` from `@norbital-ai/ui/effect`).
@@ -15,15 +15,9 @@ import type {
 	ActMapInput,
 	ActMapOutput,
 	ActOptions,
-	AggRow,
-	Bucket,
 	Committed,
 	HistoryOptions,
-	Measures,
 	MessageKey,
-	Outcome,
-	Page,
-	Paged,
 	PendingApproval,
 	ReadAnswer,
 	ReadRequest,
@@ -31,25 +25,19 @@ import type {
 	Revision,
 	Running
 } from '../decl/ctx.ts';
-import type {
-	ActConflict,
-	ActRefused,
-	ProtocolFailed,
-	ReadFailed,
-	Refusal,
-	Unavailable
-} from '../decl/errors.ts';
+import type { ConvertSource, PreviewPdfOptions, Unavailable } from '@norbital-ai/host-api';
+import type { ActConflict, ActRefused, ProtocolFailed, ReadFailed, Refusal } from '../decl/errors.ts';
 import type { ActUnknown } from '../decl/errors/act.ts';
 import type { TransportFailed } from '../decl/errors/browser.ts';
 import type { ModelName, FileField, FileSyncName, ReadSyncName, Is, ReadableName } from '../decl/names.ts';
-import type { ConvertSource, PreviewPdfOptions, StartInput } from '../decl/runtime/facilities.ts';
+import type { StartInput } from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Instant, Json, PlainDate, RequestId } from '../decl/values.ts';
 import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import type { RecordCapabilities, RecordParentContext } from '../protocol/record-contracts.ts';
 import type { WireRead } from '../protocol/wire.ts';
 
 /**
- * A page's read (`ctx.query`, `ctx.aggregate`, `ctx.history`). Read in a component (`.current`, `.loading`, `.error`,
+ * A page's read (`ctx.query`, `ctx.history`). Read in a component (`.current`, `.loading`, `.error`,
  * or `await` inside `$derived` or markup), it is live: it subscribes on the first reactive read and unsubscribes 30 s after
  * its last reader is destroyed, and identical calls share one subscription. Awaited outside a reactive context (a click
  * handler), it reads once. It is also an Effect, so it `yield*`s in a page's Effect code. `read` is its wire form.
@@ -73,14 +61,18 @@ type PageAct<O> = Effect.Effect<
 	Committed<O> | PendingApproval | Running,
 	ActRefused | ActConflict | ActUnknown | ProtocolFailed
 >;
-/** Admission of queued runs; a committed output is the queue receipt. `runs` follows execution and its declared result. */
+/**
+ * Admission of queued runs: succeeds with the committed queue receipt; a refusal (a missing start grant, the start
+ * quota), a conflict and an unconfirmed admission are typed failures, as every page write's (ui's `ActFailure`). ui's
+ * `RunStatus` follows execution and its declared result.
+ */
 type PageRun<A extends string = string> = Effect.Effect<
-	Outcome<{
+	Committed<{
 		readonly id: Id<'sys_run'>;
 		readonly ids: readonly Id<'sys_run'>[];
 		readonly automation: A;
 	}>,
-	ProtocolFailed
+	ActRefused | ActConflict | ActUnknown | ProtocolFailed
 > & {
 	readonly mode: 'job';
 	/** The first run's id; `ids` holds every run's, one per input. */
@@ -96,6 +88,12 @@ type PageClock = { readonly today: PlainDate; readonly now: Instant };
 type UploadField = {
 	[C in ModelName]: `${C}.${FileField<C>}` | `${C}.$import.${FileSyncName<C>}`;
 }[ModelName];
+/** An automation's `file` inputs, uploaded before the start that names them (`<automation>.$input.<input>`). */
+type InputUploadField = {
+	[A in AutomationName]: AutomationSpecOf<A> extends { input: infer I }
+		? `${A}.$input.${{ [K in keyof I]: I[K] extends { kind: 'file' } ? K & string : never }[keyof I]}`
+		: never;
+}[AutomationName];
 /** The approval requests a page lists: open ones unless `all`, by model, records or request ids. */
 type ApprovalFilter = {
 	model?: ModelName;
@@ -109,7 +107,7 @@ export interface PageBolt {
 	/** Re-reads mounted queries, surfaces read failures, and waits for their subscribers to receive the answers. */
 	refresh(): Effect.Effect<void, ReadFailed | TransportFailed>;
 	/**
-	 * A read request, as server code's `ctx.query`: roots (models with `read`) and their declared layers in one read, the
+	 * A read request, as server code's `ctx.query`: roots (models with `outputs`) and their declared layers in one read, the
 	 * answer typed from the named layers; live by every row it read, layers included.
 	 * Read `.current`, `.loading` and `.error` reactively to render all states. Awaiting in an event handler reads once.
 	 * @param request Declared roots and layers with caller-scoped filters and pagination; it never bypasses policies.
@@ -122,16 +120,6 @@ export interface PageBolt {
 	 * });
 	 */
 	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Query<ReadAnswer<R>>;
-	/** Without `by`, one row over the whole scope. */
-	aggregate<C extends string>(
-		model: Is<C, ReadableName>,
-		args: Measures<C> & { by?: never }
-	): Query<AggRow<C>>;
-	/** With `by`, a page of buckets, each keyed by its bucket values. */
-	aggregate<C extends string, const B extends Bucket<C> | readonly Bucket<C>[]>(
-		model: Is<C, ReadableName>,
-		args: Measures<C> & { by: B } & Paged
-	): Query<Page<AggRow<C, B>>>;
 	/** A record's revisions, oldest first, up to an instant, a revision or just before an approval request. */
 	history<C extends string>(
 		model: Is<C, ReadableName>,
@@ -149,11 +137,11 @@ export interface PageBolt {
 		id: NoInfer<Id<C>>,
 		parent?: RecordParentContext
 	): PageCall<RecordCapabilities | null, TransportFailed | ProtocolFailed>;
-	/** Whether deleting these records would commit (`allow`), be held for approval (`approve`) or be refused (`deny`), in one read. */
+	/** Whether deleting these records would commit (`allow`), be held for approval (`approve`) or be refused (`refuse`), in one read. */
 	delete_verdict<C extends string>(
 		model: Is<C, ReadableName>,
 		ids: readonly NoInfer<Id<C>>[]
-	): PageCall<'allow' | 'approve' | 'deny', TransportFailed | ProtocolFailed>;
+	): PageCall<'allow' | 'approve' | 'refuse', TransportFailed | ProtocolFailed>;
 	/** Plans every named generated write together and commits them as one statement. */
 	act<const A extends ActMap>(acts: ActMapInput<A>, options?: ActOptions): PageAct<ActMapOutput<A>>;
 	act<const A extends Readonly<Record<string, Json>>>(
@@ -161,9 +149,11 @@ export interface PageBolt {
 		options?: ActOptions
 	): PageAct<Readonly<Record<string, Json>>>;
 	/**
-	 * Calls return their declared output in this request. Jobs queue one run per input, with `id`/`ids` available
-	 * before admission settles so native controls can follow them. Yielding a job confirms queue admission, not completed
-	 * execution. A job batch needs at least one input.
+	 * Starts an automation as the viewer (their policy's `capabilities.automations`). A `call` is the page RPC, the one
+	 * request/response path to server code: it runs in this request and answers its declared output. A job queues one
+	 * run per input, with `id`/`ids` available before admission settles so native controls can follow them; yielding it
+	 * confirms queue admission, not completed execution. A job batch needs at least one input. Every failure is typed:
+	 * recover a refusal with `Effect.catchTag('ActRefused', …)`.
 	 */
 	run<const A extends string>(
 		automation: Is<A, AutomationName>,
@@ -179,10 +169,14 @@ export interface PageBolt {
 	sync_control<const M extends string, const S extends string>(
 		model: Is<M, ModelName>, sync: Is<S, FileSyncName<M> | ReadSyncName<M>>, input: NoInfer<SyncControlInput<M, S>>
 	): PageRun<`${M}.sync.${S}`>;
-	/** `accept` and `max` are checked before bytes are stored; a refusal is `ActRefused`. */
+	/**
+	 * Stores a file for a model's file field, a file sync's import (`<model>.$import.<sync>`) or an automation's `file`
+	 * input (`<automation>.$input.<input>`, then pass the answered `FileRef` in the start); `accept` and `max` are checked
+	 * before bytes are stored; a refusal is `ActRefused`.
+	 */
 	upload(
 		file: Blob & { name?: string },
-		field: UploadField
+		field: UploadField | InputUploadField
 	): PageCall<FileRef, ActRefused | TransportFailed>;
 	/**
 	 * Renders a PDF for this page and returns its bytes without storing a file or a conversion job, for content the

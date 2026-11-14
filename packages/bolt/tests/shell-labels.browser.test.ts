@@ -6,7 +6,7 @@ import { mount_edge } from '@norbital-ai/ui/effect';
 import { mount, unmount } from 'svelte';
 import { page } from 'vitest/browser';
 import ShellView from './support/shell-view.svelte';
-import type { AuditSummary } from '../src/protocol/audit.ts';
+import type { AuditSummary } from '@norbital-ai/host-api';
 import type { Json } from '../src/decl/values.ts';
 import { shell_api, shell_bolt } from '../src/shell/runtime.ts';
 import './support/shell.css';

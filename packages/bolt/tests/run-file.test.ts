@@ -2,10 +2,10 @@
 // bundler process — one tenant per process, a cache hit bundles nothing, every error at the author's file and line.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { resolver } from '../src/node/bundler/resolver.ts';
-import { bundler } from '../src/node/bundler/index.ts';
-import type { Bundled } from '../src/engine/contracts.ts';
-import { tree_digest } from '../src/engine/artifact/read.ts';
+import { resolver } from '../../host-api/src/node/bundler/resolver.ts';
+import { bundler } from '@norbital-ai/host-api/node';
+import type { Bundled } from '@norbital-ai/host-api';
+import { tree_digest } from '@norbital-ai/host-api';
 import { BROKEN, files_of, RENDER, REPORT, type Tree } from './support/run-file-trees.ts';
 
 const mounted = (tree: Tree) =>

@@ -18,7 +18,7 @@ export type DatePeriod = { readonly from: PlainDate; readonly to: PlainDate | nu
 /** A `period` of instants: `start` inclusive, `end` exclusive; `end: null` is open-ended. */
 export type InstantPeriod = { readonly start: Instant; readonly end: Instant | null }; // closed-open
 /** A `point` field's value: latitude and longitude in degrees. */
-export type Point = { readonly lat: number; readonly lng: number };
+export type { Point } from '@norbital-ai/host-api';
 /** A `vector` field's value: its numbers. */
 export type Vector = readonly number[];
 /** A `file` field's value: a handle to a stored file (id, name, MIME type), never its bytes. */

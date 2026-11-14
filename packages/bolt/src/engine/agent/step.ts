@@ -1,8 +1,7 @@
 // Shared model-response assembly and ordered call execution; each workflow owns its persistence and stopping rules.
 import { Effect, Option } from 'effect';
-import { FacilityFailure } from '../../decl/errors.ts';
+import { type AiResponse, FacilityFailure } from '@norbital-ai/host-api';
 import type { Json } from '../../decl/values.ts';
-import type { AiResponse } from '../contracts.ts';
 import { textOf, type AssistantSegment, type ToolCall } from './schema.ts';
 
 export type ModelCarry = {

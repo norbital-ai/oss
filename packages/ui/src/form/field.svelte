@@ -23,6 +23,8 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		/** The enclosing form: a custom editor reads sibling fields (a schema version, a currency) through it. */
 		form: FormState;
 	};
+	/** What a `Field view` snippet receives. */
+	export type FieldView = Pick<FieldEditor, 'value' | 'kind' | 'name' | 'id'>;
 	/**
 	 * One field of the enclosing `Form`, by its exposed name. Without an `editor` it renders the kind's editor;
 	 * `address` names the text field a `point` field's geocoded address is written to.
@@ -39,11 +41,11 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		/** A custom editor in place of the kind's, given the value, an `on_change` and the label's `id`; unused while readonly. */
 		editor?: Snippet<[FieldEditor]>;
 		/** Renders the value when the field is readonly, in place of the kind's display (a value shaped by another record's schema, say). */
-		view?: Snippet<[Pick<FieldEditor, 'value' | 'kind' | 'name' | 'id'>]>;
+		view?: Snippet<[FieldView]>;
 		/** A `point` field only: the text field its geocoded address is written to. */
 		address?: string;
-		/** Extra classes on the field's wrapper. */
-		class?: string;
+		/** Spans its grid's whole row. Default: a structured, long or custom-datatype field does. */
+		wide?: boolean;
 		/**
 		 * `true` keeps this field read-only while its `Form` edits (shown as its value, never saved from here):
 		 * `<Field name="reference" readonly />`. It only adds: `false` never lifts an enclosing readonly form, and a field
@@ -58,7 +60,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 </script>
 
 <script lang="ts">
-	import { cn, provideControls, provideFieldControl, ui_text } from '../primitives/utils.js';
+	import { provideControls, provideFieldControl, ui_text } from '../primitives/utils.js';
 	import Editor from '../kinds/editor.svelte';
 	import FieldControl from './field-control.svelte';
 	import Show from '../kinds/show.svelte';
@@ -75,7 +77,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		editor,
 		view,
 		address,
-		class: className,
+		wide: askedWide,
 		readonly,
 		disabled,
 		dense
@@ -99,7 +101,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	const id = $props.id();
 	// a structure, a map, code, long text or a custom datatype's editor takes its grid's whole row (short fields flow
 	// beside each other), and is a large control: it may hold a section alone
-	const wide = $derived(field !== undefined && wideKind(field.kind));
+	const wide = $derived(askedWide ?? (field !== undefined && wideKind(field.kind)));
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
 	if (editor) provideFieldControl(() => `${id}-${name}`);
 	// what the engine knows the viewer cannot write is a floor no prop lifts (nor does it lift an enclosing readonly); a
@@ -129,7 +131,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		{dense}
 		readonly
 		dirty={false}
-		class={cn(wide && 'col-span-full', className)}
+		class={wide ? 'col-span-full' : undefined}
 		data-field={name}
 		data-field-large={wide || undefined}
 	>
@@ -165,7 +167,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		{dense}
 		required={mandatory}
 		dirty={form.field_dirty(name)}
-		class={cn(wide && 'col-span-full', className)}
+		class={wide ? 'col-span-full' : undefined}
 		data-field={name}
 		data-field-large={wide || undefined}
 	>

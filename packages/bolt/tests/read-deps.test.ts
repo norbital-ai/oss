@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { catalog_of, read } from '@norbital-ai/store';
-import { readTargets, selectTargets } from '../src/engine/query/engine.ts';
+import { readTargets } from '../src/engine/query/engine.ts';
 
 it.effect('tracks a live label reference so target edits refresh approval results', () =>
 	Effect.gen(function* () {
@@ -53,6 +53,5 @@ it.effect('tracks every polymorphic projection arm and its nested relations', ()
 		});
 		if (query.kind !== 'read') throw new Error('Expected a list read');
 		expect([...readTargets(cat, query)].sort()).toEqual(['account', 'line', 'note', 'order']);
-		expect([...selectTargets(cat, query.select)].sort()).toEqual(['account', 'line', 'order']);
 	})
 );

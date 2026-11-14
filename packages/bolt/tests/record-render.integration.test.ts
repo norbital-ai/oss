@@ -7,7 +7,7 @@ import { Render } from '../src/engine/ports.ts';
 import { RenderGrants } from '../src/engine/render.ts';
 import type { Authority } from '../src/engine/contracts.ts';
 import { Outbound } from '../src/engine/services.ts';
-import { uuidv7 } from '../src/protocol/wire.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 import { SHELL } from '../src/shell/nav.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';

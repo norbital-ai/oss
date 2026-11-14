@@ -92,7 +92,7 @@ export const manifest = {
 				customers: { outputs: { default: {} } },
 				orders: {
 					outputs: {
-						default: { scopes: { orders: { created_by: { eq: { var: 'requestor.id' } } } } }
+						default: { scopes: { orders: { created_by: { eq: { var: 'actor.id' } } } } }
 					},
 					create: { verdict: true },
 					update: { verdict: true, moves: { status: ['draft->submitted'] } },
@@ -101,7 +101,7 @@ export const manifest = {
 				lines: {
 					outputs: {
 						default: {
-							scopes: { lines: { order: { is: { created_by: { eq: { var: 'requestor.id' } } } } } }
+							scopes: { lines: { order: { is: { created_by: { eq: { var: 'actor.id' } } } } } }
 						}
 					},
 					update: { verdict: true }

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from '@effect/vitest';
-import type { AiRequest } from '../src/engine/contracts.ts';
+import type { AiRequest } from '@norbital-ai/host-api';
 import { requestEvidence, sequenceRanges } from '../src/engine/agent/request.ts';
 
 const sha256 = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');

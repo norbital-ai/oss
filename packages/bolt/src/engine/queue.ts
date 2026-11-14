@@ -4,12 +4,10 @@ import type { Chain } from './write/sql.ts';
 
 export const LEASE_MS = { turn: 180_000, sync: 300_000, outbound: 600_000 } as const;
 const QUEUES = {
-	runs: { table: 'sys_run', state: 'state', running: 'running', due: 'due_at', stamp: 'started_at' },
 	sync: { table: 'sys_outbox', state: 'status', running: 'sending', due: 'next_attempt_at', stamp: 'claimed_at' },
 	outbound: { table: 'sys_message', state: 'status', running: 'sending', due: 'next_attempt_at', stamp: 'claimed_at' }
 } as const;
 type Queue = keyof typeof QUEUES;
-type LeasedQueue = Exclude<Queue, 'runs'>;
 
 export const ClaimToken = Schema.Struct({
 	id: Schema.String,
@@ -20,8 +18,8 @@ export type ClaimToken = typeof ClaimToken.Type;
 
 export const leaseUntil = (now: string, millis: number): string =>
 	new Date(Date.parse(now) + millis).toISOString();
-export const leaseInterval = (queue: LeasedQueue): string => `interval '${LEASE_MS[queue]} milliseconds'`;
-export const leaseExpiry = (queue: LeasedQueue, alias: string): string =>
+export const leaseInterval = (queue: Queue): string => `interval '${LEASE_MS[queue]} milliseconds'`;
+export const leaseExpiry = (queue: Queue, alias: string): string =>
 	`${alias ? `${alias}.` : ''}claimed_at + ${leaseInterval(queue)}`;
 /** The attempt identity survives an early provider report that already advanced its status. */
 export const claim_matches = (c: Pick<Chain, 'p'>, token: ClaimToken, alias = ''): string => {
@@ -32,7 +30,7 @@ export const claim_matches = (c: Pick<Chain, 'p'>, token: ClaimToken, alias = ''
 export const claimedBy = (c: Pick<Chain, 'p'>, token: ClaimToken, alias = ''): string =>
 	`${alias === '' ? '' : `${alias}.`}status = 'sending' AND ${claim_matches(c, token, alias)}`;
 /** Renew owned claims before I/O or while a paced batch drains; a replaced claim returns no row. */
-export const renewClaims = (queue: LeasedQueue, c: Pick<Chain, 'p'>, tokens: readonly ClaimToken[], now: string): string =>
+export const renewClaims = (queue: Queue, c: Pick<Chain, 'p'>, tokens: readonly ClaimToken[], now: string): string =>
 	`WITH claims AS (SELECT * FROM jsonb_to_recordset(${c.p(tokens)}::jsonb)
 		AS t(id ${queue === 'sync' ? 'uuid' : 'text'}, attempts int, claimed_at timestamptz))
 	UPDATE ${QUEUES[queue].table} q SET claimed_at = ${c.p(now)}::timestamptz FROM claims t
@@ -64,7 +62,7 @@ export function claimSql(
 ): string {
 	const spec = QUEUES[queue];
 	const queued = `q.${spec.state} = 'queued' AND q.${spec.due} <= ${options.at}::timestamptz`;
-	const ready = queue === 'runs' ? queued : `(${queued}) OR (q.${spec.state} = '${spec.running}' AND q.${spec.stamp} ${queue === 'sync' ? '<' : '<='} ${options.at}::timestamptz - ${leaseInterval(queue)})`;
+	const ready = `(${queued}) OR (q.${spec.state} = '${spec.running}' AND q.${spec.stamp} ${queue === 'sync' ? '<' : '<='} ${options.at}::timestamptz - ${leaseInterval(queue)})`;
 	return `WITH queue_head AS MATERIALIZED (${lockedHead({
 		from: `${spec.table} q ${options.join ?? ''}`,
 		where: `(${ready}) AND (${options.where})`,
@@ -73,7 +71,7 @@ export function claimSql(
 	})})
 	UPDATE ${spec.table} q SET ${spec.state} = '${spec.running}', attempts = q.attempts + 1,
 		${spec.stamp} = ${options.at}::timestamptz${options.set === undefined ? '' : `, ${options.set}`}
-	WHERE q.id IN (SELECT id FROM queue_head)${queue === 'runs' ? ` AND q.${spec.state} = 'queued'` : ''}`;
+	WHERE q.id IN (SELECT id FROM queue_head)`;
 }
 
 /** Persisted retries use an exponential base or a bounded delay table, capped before applying the queue's jitter. */

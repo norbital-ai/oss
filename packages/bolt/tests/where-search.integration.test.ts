@@ -6,7 +6,7 @@ import { Context, Effect, Layer, Result, Schema, Stream } from 'effect';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { Json } from '../src/decl/values.ts';
 import { Ai } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { Port } from '@norbital-ai/host-api';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';

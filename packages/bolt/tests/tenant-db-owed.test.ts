@@ -1,8 +1,8 @@
 // What a generation owes its database: a cold start makes no trip, and the work runs once before the first statement.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
+import { DbError, type RawDb } from '@norbital-ai/host-api';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
 
 const world = () => {
 	const trips: string[] = [];

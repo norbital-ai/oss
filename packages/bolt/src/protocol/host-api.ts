@@ -1,4 +1,5 @@
-// HOST_API (D10a), `@norbital-ai/bolt/host-api`: the one surface between a host on another module graph and this release.
+// HOST_API (D10a), `@norbital-ai/bolt/host-api`: this release's implementation of `@norbital-ai/host-api`'s `HostApi`,
+// the one surface between a host on another module graph and this release.
 // A host loads each workspace's pinned Bolt from that release's own install graph, whose `effect` is another copy: an Effect,
 // Layer or service key of one copy is not one of the other. So the contract is plain: Promise + AbortSignal +
 // Schema-encoded JSON, failures included. `Request`, `Response`, `AbortSignal` and `Uint8Array` are the realm's own and
@@ -31,18 +32,9 @@ import {
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import type { Json } from '../decl/values.ts';
-import type { Holder } from '../engine/access/authority.ts';
-import { Authorities } from '../engine/identity/actor.ts';
 import { RateWindows } from '../engine/access/rate.ts';
 import { triggers_of } from '../engine/runs/queue.ts';
-import {
-	captureIdentity,
-	member_directory,
-	restoreIdentity,
-	type DirectoryPerson,
-	type DirectoryMember,
-	type AdministeredMember
-} from '../engine/identity/maintenance.ts';
+import { captureIdentity, restoreIdentity } from '../engine/identity/maintenance.ts';
 import {
 	founder_bootstrap,
 	lazyKeys,
@@ -52,41 +44,42 @@ import {
 	signup_of,
 	type IdentityHost
 } from '../engine/identity/session.ts';
-import { Conflict, DbError, Fenced, Interrupted, type EngineError } from '../engine/errors.ts';
+import { Conflict, Interrupted, type EngineError } from '../engine/errors.ts';
 import { BoltError, CODES, PHASES } from './errors.ts';
-import type {
-	ArtifactPort,
+import type { Authority as EngineAuthority } from '../engine/contracts.ts';
+import {
+	type ActiveWorkspace,
 	Authority,
-	BrowserPort,
-	BundlerPort,
-	ConvertPort,
-	CronEntry,
-	CronFired,
-	DeadlinesPort,
-	FilesPort,
-	GeocoderPort,
-	GuestIsolatesPort,
-	ImagesPort,
-	IngestPort,
-	KeysPort,
-	LinksPort,
-	Lock,
-	McpPort,
-	DocsPort,
-	RenderPort,
-	Rows,
-	Sql,
-	TcpPort,
-	WebReadPort
-} from '../engine/contracts.ts';
-import type { Facilities } from '../facilities/index.ts';
-import { is_off, off, type Off } from '../facilities/off.ts';
+	type BranchPorts,
+	copiedBatch,
+	db_error,
+	DbError,
+	Fenced,
+	type FilesPort,
+	type FounderAnswer,
+	HOST_API_VERSION,
+	type HostApi,
+	type HostApiFailure,
+	type HostCredentials,
+	HostFailure,
+	type HostPorts,
+	type HostTenantDb,
+	is_off,
+	type LinkHost,
+	MigrationCarry,
+	OAUTH_CALLBACK,
+	type PackLoad,
+	Port,
+	type Release,
+	type ReleaseFacts,
+	SchemaSlice,
+	type WorkspaceBranch,
+	type WorkspaceLinks
+} from '@norbital-ai/host-api';
 import { unmet } from '../facilities/needs.ts';
-import { TenantDb, type DbBatch, type TenantDbShape } from '../engine/db/tenant-db.ts';
+import { TenantDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { audit_from_abi } from '../engine/audit.ts';
 import { cryptoLayer, facility_layers } from './facility-layers.ts';
-import type { AuditPort } from './audit.ts';
-import { copiedBatch, db_error } from '../engine/db/wire.ts';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
 import { Activation, Agents, Automations, HostIdentity, Live, Manifest, Runs } from '../engine/services.ts';
 import {
@@ -109,43 +102,33 @@ import {
 } from '../engine/ports.ts';
 import { declared_secrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
-import { AgentHost, type AgentConfig } from '../engine/agent/index.ts';
+import { AgentHost } from '../engine/agent/index.ts';
 import { with_browser } from '../engine/agent/browser.ts';
 import {
 	HOOKS,
-	OAUTH_CALLBACK,
 	integration_links,
 	type LinkAdmission
 } from '../engine/integrations/links.ts';
 import { credentials, type Credentials } from '../engine/integrations/credentials.ts';
-import type { OAuthClient, OAuthVendor, Provider } from '../engine/integrations/driver.ts';
-import type { SchemaSlice } from '../engine/schema/plan.ts';
-import { destructiveSteps, fingerprint, read_applied, schema_slice } from '../engine/schema/plan.ts';
+import { destructiveSteps, fingerprint, read_applied, schema_slice, SchemaSliceSchema } from '../engine/schema/plan.ts';
 import { apply_migrations } from '../engine/schema/migrations.ts';
-import type { MigrationImpact } from './migration-impact.ts';
+import { carry_migrations } from '../engine/schema/carry.ts';
 import {
 	decode_identity,
 	IDENTITY,
 	memory_source,
 	packLoader,
 	read_pack_source,
-	type PackSource,
-	type PackStep,
-	type SeedAsset
+	type PackSource
 } from '../engine/write/pack.ts';
 import { decode_seed } from '../engine/write/seed.ts';
-import { Port } from '../engine/port.ts';
 import { announce } from '../engine/notifications/notify.ts';
-import {
-	authority_of,
-	ShellConfig,
-	ShellRoutes,
-	type ShellHostConfig
-} from '../shell/host.ts';
-import { COOKIES, cookie_site, frame_policy } from '../shell/nav.ts';
+import { authority_of, ShellConfig, ShellRoutes } from '../shell/host.ts';
+import { COOKIES, cookie_site, frame_policy, href } from '../shell/nav.ts';
 import {
 	pack_asset_loader,
 	read_artifact,
+	activation_requirements,
 	skill_files,
 	workspace_files,
 	CONTRACT,
@@ -154,311 +137,10 @@ import {
 import { needs_guest, RateLimits, SessionAuthority } from './http.ts';
 import { BoltHost, BoltHostLive } from './host.ts';
 import { PublicPages, public_pages } from './pages.ts';
-export { render_mode } from './pages.ts';
-export { MigrationImpact } from './migration-impact.ts';
 import { IntegrationManager, integration_routes } from './integrations.ts';
 
-/** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
-export const HOST_API_VERSION = 19;
-export type { CellEnd, Kernel } from './cell.ts';
-
 // ── failures (D10a) ──
-/** A `BoltError` this release raised: an engine answer. `code` stays a string on the wire (the copies' code sets may differ). */
-export const HostFailure = Schema.TaggedStruct('HostFailure', {
-	code: Schema.String,
-	phase: Schema.Literals(PHASES),
-	message: Schema.String
-});
-export type HostFailure = typeof HostFailure.Type;
-/** Anything else: the database went away, a host port threw. The host may retry it elsewhere; an engine answer stands. */
-const HostDefect = Schema.TaggedStruct('HostDefect', { message: Schema.String });
-type HostDefect = typeof HostDefect.Type;
-/** What a Host API call rejects with: an engine answer (`HostFailure`) or a retryable host defect (`HostDefect`). */
-export const HostApiFailure = Schema.Union([HostFailure, HostDefect]);
-export type HostApiFailure = typeof HostApiFailure.Type;
-
-// ── answers the host interprets ──
-/** `session.mint` (the apex handoff): the host sets `cookies.session` to `token` until `expires_at`. */
-export const MintedSession = Schema.Struct({
-	token: Schema.String,
-	user: Schema.String,
-	expires_at: Schema.String
-});
-export type MintedSession = typeof MintedSession.Type;
-/** `founder.bootstrap`: the first administrator, or the identity refusal (`forbidden`: one exists already). */
-export const FounderAnswer = Schema.Union([
-	Schema.TaggedStruct('Founded', { user: Schema.String }),
-	Schema.TaggedStruct('FounderRefused', { code: Schema.String, message: Schema.String })
-]);
-export type FounderAnswer = typeof FounderAnswer.Type;
-
-// ── what the host hands over ──
-export type Signal = { readonly signal: AbortSignal };
-/** A built workspace: `bolt build`'s release, with source, format and digests verified by this release. */
-export type Release = {
-	/** The host's release id (the artifact digest it records): authorities are compiled per release. */
-	readonly id: string;
-	/** The release's files (`artifact.json`, `client/…`) and its seed packs (`../seed/<pack>/…`), read-only. */
-	readonly artifact: ArtifactPort;
-};
-export type HostTenantDb = {
-	read(statements: readonly Sql[], signal?: AbortSignal): Promise<readonly Rows[]>;
-	write(statement: Sql, lock?: Lock, signal?: AbortSignal): Promise<Rows>;
-	transaction(batch: DbBatch, signal?: AbortSignal): Promise<readonly Rows[]>;
-};
-export type HostCredentials = {
-	readonly [K in keyof Credentials]: (...args: Parameters<Credentials[K]>) =>
-		Promise<Effect.Success<ReturnType<Credentials[K]>>>;
-};
-/** The shell's host parts; `studio` and `organization.write` may reject with an encoded `HostFailure`. */
-export type ShellPorts = Pick<
-	ShellHostConfig,
-	| 'workspace'
-	| 'studio'
-	| 'push'
-	| 'notice'
-	| 'environment'
-	| 'apex'
-	| 'live'
-	| 'workspaces'
-	| 'organization'
-	| 'ai'
->;
-/**
- * The agent's host parts; the release's source (`workspace_search`) and attachments are this release's own. `ingest`
- * (Norbital Convert's `document_ingester`) serves the agent's `read_file` and `ctx.convert.ingest`; absent, neither ingests.
- */
-export type AgentPorts = Pick<
-	AgentConfig,
-	'draft' | 'search' | 'host_tools' | 'skills' | 'on_turn_start' | 'events'
-> & {
-	readonly ingest?: IngestPort['ingest'];
-};
-/**
- * One serving generation of an environment: the host's `facilities` (`@norbital-ai/bolt/facilities`) and what it serves
- * around them. Every member is required; one the host may leave out takes `off`.
- */
-export type HostPorts = {
-	readonly facilities: Facilities;
-	/** Rule 61: this environment's epoch (a fork's rows are never sent). */
-	readonly epoch?: string;
-	/** `<tenant>/<environment>`: the deadlines scope and the log key. */
-	readonly scope: string;
-	readonly release: Release;
-	/** The workspace's public URL with its path prefix (`https://host/acme`), no trailing slash. */
-	readonly public_url: string;
-	/** The host's own guest runner: isolates it makes, meters and ends for guest code (bodies, page loaders, `run_js`). */
-	readonly guests: GuestIsolatesPort;
-	readonly deadlines: DeadlinesPort;
-	readonly images: ImagesPort;
-	/** This release's API reference files for the agent's `docs` tool. */
-	readonly docs: DocsPort;
-	/** The confined bundler for the agent's file runs; `off`, `run_js` runs inline code only. */
-	readonly bundler: BundlerPort | Off;
-	readonly convert: ConvertPort | Off;
-	/** The host's headless browser printing a record's print route (`ctx.convert.record`); `off`, that call is unavailable. */
-	readonly render: RenderPort | Off;
-	readonly geocoder: GeocoderPort | Off;
-	readonly web: WebReadPort | Off;
-	readonly browser: BrowserPort | Off;
-	readonly mcp: McpPort | Off;
-	/** The environment's live integration links. */
-	readonly links: LinksPort | Off;
-	readonly shell: ShellPorts;
-	readonly agent: AgentPorts;
-	/** The kernel's meter: as each run of a wake starts, the run begins the next unit, with a CPU budget of its own. */
-	readonly units?: { next(): Promise<void> };
-	/**
-	 * Why the previous generation ended, when the kernel stopped it past a unit's CPU budget: the runs it left `running`
-	 * fail `cpu_budget` with this message instead of rerunning (they would only overrun again).
-	 */
-	readonly overran?: string;
-};
-/** A branch the lifecycle prepares outside any serving generation (provision, reset, probe, restore). */
-export type BranchPorts = {
-	readonly release: Release;
-	readonly database: HostTenantDb;
-	/** The environment's durable host store; founder bootstrap, which mutates identity, refuses without it. */
-	readonly audit?: AuditPort;
-};
-/** An environment's integration links: they outlive idle generations and re-enter the current one. */
-export type LinkHost = {
-	readonly release: Release;
-	readonly database: HostTenantDb;
-	/** As `Facilities.keys`: the sealed credentials open through it. */
-	readonly keys: KeysPort;
-	/** As `HostPorts.public_url`: every webhook URL and the OAuth callback are under it. */
-	readonly public_url: string;
-	readonly providers: readonly Provider[];
-	/** The host's OAuth clients (Google), signing in every definition that names none of its own. */
-	readonly oauth?: Partial<Record<OAuthVendor, OAuthClient>>;
-	/** Runs `work` on the scope's current generation, outside compute admission (a link's ingest). */
-	enter<T>(work: (workspace: ActiveWorkspace) => Promise<T>): Promise<T>;
-	/** As `enter`, admitted under the compute envelope (a guest body: a custom conversation's webhook, a test send). */
-	admit<T>(work: (workspace: ActiveWorkspace) => Promise<T>): Promise<T>;
-	/** wraps the sealed credentials the links write through, so credential I/O can survive a retirement. */
-	credentials?(sealed: HostCredentials): HostCredentials;
-	/** The providers' network: a cell has no `fetch` of its own. */
-	readonly fetch: typeof fetch;
-	/** The providers' TCP/TLS (IMAP, SMTP), as `Facilities.ports.outbound.tcp`. */
-	readonly tcp: TcpPort;
-	log?(line: string): void;
-};
-
-// ── what the host gets ──
-export type ActiveWorkspace = {
-	/**
-	 * Bolt's routes for this generation, the request as the workspace sees it (no host prefix): the shell host
-	 * (`/__bolt/session/*`, `/__bolt/shell*`, the PWA manifest), files, the data protocol and `/hooks/<path>` automation
-	 * webhooks; `null` when none is Bolt's. Event streams end when the generation closes.
-	 */
-	handle(request: Request, options: { readonly address: string }): Promise<Response | null>;
-	/**
-	 * Protected public-page loading and HTML rendering share one read-only guest invocation. A host routes public
-	 * documents here before static client serving, passing the original request and keeping the returned cookies,
-	 * status, cache and content-security headers; serving `index.html` for a public route bypasses rendering.
-	 */
-	render(
-		request: Request,
-		options: Signal & { readonly address: string }
-	): Promise<Response | null>;
-	/** One deadline wake: every due run of the environment, then `deadlines.settle`. */
-	wake(options: Signal): Promise<void>;
-	/** Signal work due during an existing wake without entering another compute envelope. */
-	pulse(options: Signal): Promise<boolean>;
-	/** Every cron the manifest declares; the host's clock computes their slots. */
-	crons(): Promise<readonly CronEntry[]>;
-	/** Runs cron `id` for `slot` (an ISO minute), once per `(id, slot)`; `ran: false` for a repeat or a run that wrote nothing. */
-	fire(id: string, slot: string, options: Signal): Promise<CronFired>;
-	/**
-	 * A planned close: ordinary pages and requests go on; no new job or automation call starts. Active automations get `automations_ms` to end, while
-	 * turns work on; then every turn holds at its next step. Answers once no step is running; the host then closes the
-	 * generation and the next one takes the turns over. A host bounds the wait.
-	 */
-	park(options: Signal & { readonly automations_ms: number }): Promise<void>;
-	/** Rule 71a: interrupts every guest invocation and in-flight crossing of this generation; the host then ends its pool. */
-	close(): Promise<void>;
-	readonly identity: {
-		/** The caller's compiled authority from the request's session, or `null`. */
-		authority(request: Request, options: Signal): Promise<Authority | null>;
-		/** `session.mint` for an active member; `null` for none. `agent`: minted for the agent's browser (`Authority.agent`). */
-		mint(
-			user: string,
-			options: Signal & { readonly agent?: NonNullable<Authority['agent']> }
-		): Promise<MintedSession | null>;
-	};
-};
-export type WorkspaceBranch = {
-	readonly schema: {
-		/**
-		 * Engine tables, then the release's schema plan (destructive steps only when accepted). Answers what it
-		 * did (v13): each pending step's rows and the whole duration, measured on this branch.
-		 */
-		migrate(
-			options: Signal & { readonly accept?: true | readonly string[] }
-		): Promise<MigrationImpact>;
-	};
-	readonly packs: {
-		/** Rule 70: the release's seed pack by name (`base`), its assets into `files` when given, ready to load in steps. */
-		load(
-			pack: string,
-			options: Signal & { readonly at: string; readonly files?: FilesPort }
-		): Promise<PackLoad>;
-		/**
-		 * Rule 70: rows `bolt seed` sent, held only in memory, decoded here and loaded in steps like a pack; each of
-		 * `assets` is read through `asset` into `files`.
-		 */
-		restore(
-			rows: { readonly [model: string]: readonly { readonly [field: string]: Json }[] },
-			options: Signal & {
-				readonly at: string;
-				readonly start: readonly string[];
-				readonly assets: readonly SeedAsset[];
-				readonly asset: (path: string, options: Signal) => Promise<Uint8Array>;
-				readonly files: FilesPort;
-			}
-		): Promise<PackLoad>;
-	};
-	readonly identity: {
-		founder(address: string, options: Signal & { readonly at: string }): Promise<FounderAnswer>;
-		capture(options: Signal): Promise<string>;
-		restore(snapshot: string, options: Signal): Promise<void>;
-	};
-	readonly directory: {
-		member_of(person: DirectoryPerson, options: Signal): Promise<string | null>;
-		person_of(user: string, options: Signal): Promise<DirectoryPerson | null>;
-		members(options: Signal): Promise<readonly DirectoryMember[]>;
-		administered(email: string, options: Signal): Promise<readonly AdministeredMember[] | null>;
-	};
-	readonly integrations: {
-		/** a restored branch's session instances lose their credentials and read `unpaired`. */
-		unpair_sessions(options: Signal): Promise<void>;
-	};
-};
-/**
- * A pack load in bounded steps ("Limits and liveness"): the host enters `step` once per unit of work
- * until it answers other than `more`; `hadRows` when the branch had rows and nothing changed. Each step commits on its
- * own, so a failed load leaves the steps before it: load into a branch the host drops on failure.
- */
-export type PackLoad = {
-	step(options: Signal): Promise<PackStep>;
-};
-export type WorkspaceLinks = {
-	/** Relayed, not interpreted: hand it to `activate` as `links`; its failures are this release's own. */
-	readonly port: LinksPort;
-	/** The sealed credentials the links write through, failures encoded (another owner's `LinkHost.credentials` may retry here). */
-	readonly credentials: HostCredentials;
-	/** Reopens every active, paired instance this host's providers serve. */
-	resume(options: Signal): Promise<void>;
-	/** Closes every link; status streams end. The host then ends its pool. */
-	close(): Promise<void>;
-	/** `/hooks/integration/<instance>…` and `/hooks/oauth/callback`, the request as the workspace sees it; `null` otherwise. */
-	hook(request: Request): Promise<Response | null>;
-	/** `/__bolt/integrations/*` for an authorized caller; `null` otherwise. */
-	admin(request: Request, authority: Authority): Promise<Response | null>;
-};
-/**
- * The versioned boundary a host drives one Bolt release through: Promise + AbortSignal calls with Schema JSON answers,
- * so hosts and releases on different module graphs interoperate.
- */
-export type HostApi = {
-	/** Hosts admit only runtimes that evaluate tenant source without restoring native snapshots. */
-	readonly guest_execution: 'source';
-	/** `HOST_API_VERSION` of the release that answers. */
-	readonly version: number;
-	/** The artifact contract this release implements. */
-	readonly contract: string;
-	readonly cookies: { readonly session: string; readonly preview: string };
-	/** The session cookie's site attributes. */
-	cookie_site(secure: boolean): string;
-	/** Rule 71: whether a request may run a guest body, so the host admits only these under its compute envelope. */
-	needs_guest(request: Request): Promise<boolean>;
-	/** Refuses an artifact this release did not build or whose files do not match their digests. */
-	verify(release: Release, options: Signal): Promise<void>;
-	/** The client page's `frame-ancestors` policy for `path`. */
-	frame_policy(release: Release, path: string, options: Signal): Promise<string>;
-	/** The host's own authority over a workspace (signed operations, Studio as the host). */
-	authority(release: Release, holder: Holder, key: string, options: Signal): Promise<Authority>;
-	readonly schema: {
-		/** The schema state the release plans from (what a successor's plan is diffed against). */
-		slice(release: Release, options: Signal): Promise<SchemaSlice>;
-		/** The destructive steps planning `release` over `applied` (another release's `slice`) would take. */
-		destructive(
-			applied: SchemaSlice,
-			release: Release,
-			options: Signal
-		): Promise<readonly string[]>;
-	};
-	/**
-	 * Applies the artifact's verified migration files (checksummed, one transaction each under the `bolt:schema`
-	 * advisory lock, ledger and receipt committed with the file) and activates the release. Refuses a bundle whose
-	 * recorded needs name a facility left `off`, live schema drift from the verified lock (even when every applied
-	 * checksum matches), and a database with no migration ledger: an existing schema is never adopted.
-	 */
-	activate(ports: HostPorts, options: Signal): Promise<ActiveWorkspace>;
-	branch(ports: BranchPorts, options: Signal): Promise<WorkspaceBranch>;
-	links(host: LinkHost, options: Signal): Promise<WorkspaceLinks>;
-};
+const isPhase = Schema.is(Schema.Literals(PHASES));
 
 // ── the implementation: the only cross-module-graph edge ──
 const encode = (error: unknown): HostApiFailure => {
@@ -534,7 +216,11 @@ const hosted = <A>(work: () => Promise<A>) =>
 			error instanceof Interrupted
 				? error
 				: isFailure(error)
-					? BoltError.make(isCode(error.code) ? error.code : 'internal', error.phase, error.message)
+					? BoltError.make(
+							isCode(error.code) ? error.code : 'internal',
+							isPhase(error.phase) ? error.phase : 'facility',
+							error.message
+						)
 					: BoltError.make('upstream', 'facility', String(error))
 	});
 /** The host executes SQL requests; application callbacks remain inside the engine's bounded guest controller. */
@@ -607,8 +293,15 @@ const artifactOf = (release: Release) =>
 
 const activeRuns = new WeakMap<
 	ActiveWorkspace,
-	<A, E>(effect: Effect.Effect<A, E, EngineServices | EngineHost>) => Promise<A>
+	<A, E>(effect: Effect.Effect<A, E, EngineServices | EngineHost | SessionAuthority>) => Promise<A>
 >();
+/** A caller's compiled authority as a host reads it: the engine's own stays in the release. */
+const hostAuthority = (authority: EngineAuthority | null) =>
+	authority === null
+		? Effect.succeed(null)
+		: Schema.decodeUnknownEffect(Authority)(authority).pipe(
+				Effect.mapError((cause) => BoltError.make('internal', 'decode', cause.message))
+			);
 const activation = (ports: HostPorts, artifact: Artifact) =>
 	Layer.succeed(Activation, {
 		scope: ports.scope,
@@ -623,7 +316,7 @@ const portLayers = ({ units, ...ports }: HostPorts) =>
 	Layer.mergeAll(
 		facility_layers(ports.facilities),
 		GuestIsolates.fromAbi(ports.guests),
-		Convert.fromAbi(ports.convert, ports.agent.ingest),
+		Convert.fromAbi(ports.convert),
 		Render.fromAbi(ports.render),
 		WebRead.fromAbi(ports.web),
 		Browser.fromAbi(ports.browser),
@@ -631,7 +324,7 @@ const portLayers = ({ units, ...ports }: HostPorts) =>
 		DeadlinePort.fromAbi(ports.deadlines),
 		Drivers.fromAbi(ports.links),
 		Images.fromAbi(ports.images),
-		Docs.fromAbi(ports.docs),
+		Docs.fromAbi(ports.release.artifact),
 		Mcp.fromAbi(ports.mcp),
 		...(is_off(ports.bundler) ? [] : [Bundler.fromAbi(ports.bundler)]),
 		units === undefined
@@ -824,7 +517,7 @@ const activate = Effect.fn('bolt.hostApi.activate')(function* (ports: HostPorts)
 		},
 		identity: {
 			authority: (request, { signal }) =>
-				run(authority_of(HttpServerRequest.fromWeb(request)), signal),
+				run(authority_of(HttpServerRequest.fromWeb(request)).pipe(Effect.flatMap(hostAuthority)), signal),
 			mint: (user, { signal, agent }) =>
 				run(
 					Effect.flatMap(HostIdentity, (identity) => mint(identity, user, agent)).pipe(
@@ -847,7 +540,6 @@ const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
 		effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Crypto.Crypto>,
 		signal: AbortSignal
 	) => hostRun(inRelease(ports.release, effect), signal);
-	const people = member_directory(db);
 	// the loader's state stays in this cell between the host's entries
 	const loader = (at: string, files: FilesPort | undefined) => (pack: PackSource) =>
 		(files === undefined
@@ -925,12 +617,6 @@ const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
 				);
 			}
 		},
-		directory: {
-			member_of: (person, { signal }) => run(people.memberOf(person), signal),
-			person_of: (user, { signal }) => run(people.personOf(user), signal),
-			members: ({ signal }) => run(people.members, signal),
-			administered: (email, { signal }) => run(people.administered(email), signal)
-		},
 		integrations: {
 			unpair_sessions: ({ signal }) =>
 				run(
@@ -956,6 +642,24 @@ const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
 const links = Effect.fn('bolt.hostApi.links')(function* (host: LinkHost) {
 	const artifact = yield* artifactOf(host.release),
 		db = database(host.database);
+	/** `effect` on the scope's current generation, reached through `via`. */
+	const on =
+		(via: LinkHost['enter']) =>
+		<A, E>(effect: Effect.Effect<A, E, LinkAdmission | SessionAuthority>) =>
+			hosted(() =>
+				via((workspace) => {
+					const run = activeRuns.get(workspace);
+					return run === undefined
+						? Promise.reject(
+								BoltError.make(
+									'unavailable',
+									'admission',
+									'The workspace belongs to another Bolt release.'
+								)
+							)
+						: run(effect);
+				})
+			);
 	const secretsLayer = Secrets.layer(declared_secrets(artifact.manifest)).pipe(
 		Layer.provideMerge(Layer.merge(Layer.succeed(TenantDb, db), Keys.fromAbi(host.keys)))
 	);
@@ -994,24 +698,6 @@ const links = Effect.fn('bolt.hostApi.links')(function* (host: LinkHost) {
 									)
 								)
 						};
-			/** `effect` on the scope's current generation, reached through `via`. */
-			const on =
-				(via: LinkHost['enter']) =>
-				<A, E>(effect: Effect.Effect<A, E, LinkAdmission>) =>
-					hosted(() =>
-						via((workspace) => {
-							const run = activeRuns.get(workspace);
-							return run === undefined
-								? Promise.reject(
-										BoltError.make(
-											'unavailable',
-											'admission',
-											'The workspace belongs to another Bolt release.'
-										)
-									)
-								: run(effect);
-						})
-					);
 			return yield* integration_links({
 				providers: host.providers,
 				credentials: through,
@@ -1057,6 +743,7 @@ const links = Effect.fn('bolt.hostApi.links')(function* (host: LinkHost) {
 			}
 		},
 		resume: ({ signal }) => run(manager.resume, signal),
+		open: () => run(manager.open),
 		close: () => guard(() => runtime.dispose()),
 		hook: (request) =>
 			run(
@@ -1077,13 +764,17 @@ const links = Effect.fn('bolt.hostApi.links')(function* (host: LinkHost) {
 				}),
 				request.signal
 			),
-		admin: (request, authority) =>
+		admin: (request) =>
 			run(
-				integration_routes(HttpServerRequest.fromWeb(request)).pipe(
-					Effect.provideService(IntegrationManager, Option.some(manager)),
-					Effect.provideService(SessionAuthority, {
-						of: () => Effect.succeed(Option.some(authority))
-					}),
+				on(host.enter)(authority_of(HttpServerRequest.fromWeb(request))).pipe(
+					Effect.flatMap((authority) =>
+						integration_routes(HttpServerRequest.fromWeb(request)).pipe(
+							Effect.provideService(IntegrationManager, Option.some(manager)),
+							Effect.provideService(SessionAuthority, {
+								of: () => Effect.succeed(Option.fromNullishOr(authority))
+							})
+						)
+					),
 					Effect.map((answer) =>
 						Option.isNone(answer) ? null : HttpServerResponse.toWeb(answer.value)
 					)
@@ -1108,29 +799,57 @@ export const HOST_API: HostApi = {
 	needs_guest: (request) =>
 		hostRun(needs_guest(HttpServerRequest.fromWeb(request.clone())), request.signal),
 	verify: (release, options) => hostRun(Effect.asVoid(artifactOf(release)), options.signal),
+	describe: (release, options) =>
+		hostRun(
+			Effect.map(artifactOf(release), ({ manifest }): ReleaseFacts => {
+				const { secrets, issues } = activation_requirements(manifest);
+				return {
+					zone: manifest.workspace.tz,
+					skills: Object.keys(manifest.agent.skills),
+					pages: Object.entries(manifest.apps).flatMap(([app, spec]) =>
+						Object.keys(spec.pages).map((page) => href(app, page))
+					),
+					secrets,
+					issues,
+					studio: {
+						workspace: { secrets: manifest.workspace.secrets ?? {} },
+						models: manifest.models,
+						apps: Object.fromEntries(
+							Object.entries(manifest.apps).map(([app, { shell, pages }]) => [
+								app,
+								{ ...(shell === undefined ? {} : { shell }), pages }
+							])
+						),
+						policies: manifest.policies,
+						automations: manifest.automations
+					}
+				};
+			}),
+			options.signal
+		),
 	frame_policy: (release, path, options) =>
 		hostRun(
 			Effect.map(artifactOf(release), (artifact) => frame_policy(artifact.manifest, path)),
 			options.signal
 		),
-	authority: (release, holder, key, options) =>
-		hostRun(
-			Effect.flatMap(artifactOf(release), (artifact) =>
-				new Authorities(artifact.manifest, release.id).compile(holder, key)
-			),
-			options.signal
-		),
 	schema: {
 		slice: (release, options) =>
 			hostRun(
-				Effect.map(artifactOf(release), (artifact) => schema_slice(artifact.manifest)),
+				Effect.flatMap(artifactOf(release), (artifact) =>
+					Schema.decodeEffect(Schema.fromJsonString(SchemaSlice))(JSON.stringify(schema_slice(artifact.manifest)))
+				),
 				options.signal
 			),
 		destructive: (applied, release, options) =>
 			hostRun(
-				Effect.flatMap(artifactOf(release), (artifact) =>
-					destructiveSteps(applied, artifact.manifest)
+				Effect.all([Schema.decodeUnknownEffect(SchemaSliceSchema)(applied), artifactOf(release)]).pipe(
+					Effect.flatMap(([slice, artifact]) => destructiveSteps(slice, artifact.manifest))
 				),
+				options.signal
+			),
+		carry: (input, options) =>
+			hostRun(
+				Schema.decodeUnknownEffect(MigrationCarry)(input).pipe(Effect.flatMap(carry_migrations)),
 				options.signal
 			)
 	},

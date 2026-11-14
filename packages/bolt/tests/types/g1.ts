@@ -1,8 +1,7 @@
 import { Effect } from 'effect';
 // G1: the families the per-area corpora (data.ts, access.ts, runtime.ts) leave open, one clean case and at least
 // one planted mistake each. Each `@ts-expect-error` line is a planted mistake.
-import { automation, policy } from '../../src/index.ts';
-import { bind_model } from '../../src/declarations.ts';
+import { automation, model, policy } from '../../src/index.ts';
 import type { Decimal, Id, InputOf, InstanceId, Row, Where } from '../../src/index.ts';
 import type { RowState, StoredRow } from '../../src/decl/names.ts';
 import * as rt from './fixture/runtime.ts';
@@ -73,13 +72,13 @@ automation({
 		return 0;
 	}
 });
-bind_model('probe')({
+model('probe', {
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error U5 `record` is an input-only kind
 	fields: { a: { kind: 'record', of: { kind: 'int' } } }
 });
-bind_model('probe')({
+model('probe', {
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error U6 model fields use their closed stored descriptor kinds
@@ -95,7 +94,7 @@ automation({
 });
 
 // ── write callbacks and workspace reads ──
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -110,7 +109,7 @@ bind_model('orders')({
 		}
 	}
 });
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -120,7 +119,7 @@ bind_model('orders')({
 		}
 	}
 });
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -130,7 +129,7 @@ bind_model('orders')({
 		}
 	}
 });
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -140,7 +139,7 @@ bind_model('orders')({
 		}
 	}
 });
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	update: {
 		...m.orders.spec.update,
@@ -153,7 +152,7 @@ bind_model('orders')({
 		}
 	}
 });
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -164,7 +163,7 @@ bind_model('orders')({
 	}
 });
 // T6 the transform's workspace reads pick the fields they need (read only the needed columns)
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -176,7 +175,7 @@ bind_model('orders')({
 		}
 	}
 });
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -189,7 +188,7 @@ bind_model('orders')({
 	}
 });
 // Workspace selections retain the generated sequence and id, including read requests.
-bind_model('orders')({
+model('orders', {
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -323,82 +322,82 @@ automation({
 });
 
 // ── state transitions and owned relationships ──
-bind_model('probe')({
+model('probe', {
 	description: 'x',
 	record_label: 'record.s',
 	// @ts-expect-error S1 state edit lists are retired; locks are named constraints
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { edit: 'some' } } } }
 });
-bind_model('probe')({
+model('probe', {
 	description: 'x',
 	record_label: 'record.s',
 	// @ts-expect-error S2 `to` is a list of states
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { to: 'a' } } } }
 });
-bind_model('probe')({
+model('probe', {
 	description: 'x',
 	record_label: 'record.s',
 	// @ts-expect-error S3 a state takes no default (a create lands in `initial`)
 	fields: { s: { kind: 'state', initial: 'a', default: 'a', states: { a: {} } } }
 });
-bind_model('order_lines')({
+model('order_lines', {
 	...m.order_lines.spec,
 	outputs: { default: { fields: 'all' } },
-	create: { columns: { fields: ['order', 'item', 'qty', 'price'] } },
-	update: { columns: { fields: ['qty'] } }
+	create: { fields: ['order', 'item', 'qty', 'price'] },
+	update: { fields: ['qty'] }
 });
-bind_model('order_lines')({
+model('order_lines', {
 	...m.order_lines.spec,
 	outputs: { default: { fields: 'all' } },
 	// @ts-expect-error O1 an owned child's parent key never changes after create
-	update: { columns: { fields: ['order', 'qty'] } }
+	update: { fields: ['order', 'qty'] }
 });
 // (a write layer naming the FK that ties it to its parent, `'orders.lines': ['order']`, is `bolt check`'s `model/layer`)
 
-// ── the `{ var: 'requestor.email' }` operand ──
-const mine: Where<'customers'> = { email: { eq: { var: 'requestor.email' } } };
+// ── the `{ var: 'actor.email' }` operand ──
+const mine: Where<'customers'> = { email: { eq: { var: 'actor.email' } } };
 void mine;
 policy({
 	description: 'Customers read themselves',
 	grants: {
-		customers: { outputs: { default: { where: { email: { eq: { var: 'requestor.email' } } } } } }
+		customers: { outputs: { default: { where: { email: { eq: { var: 'actor.email' } } } } } }
 	}
 });
 // @ts-expect-error E1 on text that is not an email
 // prettier-ignore
-policy({ description: 'x', grants: { customers: { outputs: { default: { where: { name: { eq: { var: 'requestor.email' } } } } } } } });
+policy({ description: 'x', grants: { customers: { outputs: { default: { where: { name: { eq: { var: 'actor.email' } } } } } } } });
 policy({
 	description: 'x',
 	grants: {
 		// @ts-expect-error E2 on a number
-		order_lines: { outputs: { default: { where: { qty: { eq: { var: 'requestor.email' } } } } } }
+		order_lines: { outputs: { default: { where: { qty: { eq: { var: 'actor.email' } } } } } }
 	}
 });
 // @ts-expect-error E3 an unknown actor operand
 // prettier-ignore
 policy({ description: 'x', grants: { customers: { outputs: { default: { where: { email: { eq: { actor: 'mail' } } } } } } } });
-bind_model('probe')({
+model('probe', {
 	description: 'x',
 	record_label: 'record.e',
 	fields: { e: { kind: 'text', format: 'email' } },
 	// @ts-expect-error E4 not in a static position (`check`)
-	constraints: { mine: { check: { e: { eq: { var: 'requestor.email' } } } } }
+	constraints: { mine: { check: { e: { eq: { var: 'actor.email' } } } } }
 });
 
-// ── the `{ var: 'requestor.visitor' }` operand (anonymous identity) ──
-const guest: Where<'customers'> = { name: { eq: { var: 'requestor.visitor' } } };
+// ── the `{ var: 'actor.visitor' }` operand (anonymous identity) ──
+const guest: Where<'customers'> = { name: { eq: { var: 'actor.visitor' } } };
 void guest;
 policy({
 	description: 'Guests read their own rows',
 	grants: {
-		customers: { outputs: { default: { where: { name: { eq: { var: 'requestor.visitor' } } } } } }
+		customers: { outputs: { default: { where: { name: { eq: { var: 'actor.visitor' } } } } } }
 	}
 });
 policy({
 	description: 'x',
 	grants: {
 		// @ts-expect-error V1 on a number
-		order_lines: { outputs: { default: { where: { qty: { eq: { var: 'requestor.visitor' } } } } } }
+		order_lines: { outputs: { default: { where: { qty: { eq: { var: 'actor.visitor' } } } } } }
 	}
 });
 

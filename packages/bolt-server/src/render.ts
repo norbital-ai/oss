@@ -2,7 +2,7 @@
 // launched on first use (or the one at a CDP endpoint), and a fresh context per print, so no print keeps cookies or
 // storage. The render grant goes only to the workspace's own origin.
 import { chromium, type Browser } from 'playwright';
-import type { RenderPort } from '@norbital-ai/bolt/engine';
+import type { RenderPort } from '@norbital-ai/host-api';
 
 export const chromium_render = (
 	public_url: string,

@@ -6,12 +6,17 @@ import type { Json } from '../../decl/values.ts';
 import type { EngineActor } from '../contracts.ts';
 import { Browser } from '../ports.ts';
 import type { AgentHostConfig } from './index.ts';
-import { CLOSED, type HostTool, type HostToolContext, type StudioRole } from './tools.ts';
-import { model_schema } from './json-schema.ts';
-import { BrowserStepSchema, type BrowserSnapshot } from '../../decl/runtime/browser.ts';
-
-/** An automation run's browser profile: this prefix and the run id. The host discards it when the run's session ends. */
-export const BROWSER_RUN_PROFILE = '\u0001run:';
+import {
+	BROWSER_RUN_PROFILE,
+	type BrowserSnapshot,
+	BrowserStepSchema,
+	type HostTool,
+	type HostToolContext,
+	model_schema,
+	person_browser_profile,
+	type StudioRole
+} from '@norbital-ai/host-api';
+import { CLOSED } from './tools.ts';
 
 const OptionalString = Schema.optionalKey(Schema.String),
 	OptionalNumber = Schema.optionalKey(Schema.Finite);
@@ -64,14 +69,19 @@ export const automationBrowserProfile = (automation: string, run: string): strin
 /** One browser identity per person; each conversation gets its own session (tab) inside it. */
 export const browser_profile = (actor: EngineActor, conversation: string): string | undefined =>
 	actor.kind === 'member'
-		? `person:${actor.id}\u0000${conversation}`
+		? person_browser_profile(actor.id, conversation)
 		: actor.kind === 'system'
 			? `${BROWSER_RUN_PROFILE}${conversation}`
 			: actor.kind === 'envoy'
 				? `envoy:${sha256_hex(JSON.stringify([actor.envoy, actor.instance, actor.sender]))}\u0000${conversation}`
 				: undefined;
-const profileOf = (context: HostToolContext): string | undefined =>
-	browser_profile(context.actor, context.conversation);
+/** Host tools serve staff members and the system identity's runs; an envoy turn holds none. */
+const profileOf = ({ actor, conversation }: HostToolContext): string | undefined =>
+	actor.kind === 'member'
+		? person_browser_profile(actor.id, conversation)
+		: actor.kind === 'system'
+			? `${BROWSER_RUN_PROFILE}${conversation}`
+			: undefined;
 
 /** Input refusals and facility failures are answers the model can act on, never thrown. */
 const tool = <A, I>(

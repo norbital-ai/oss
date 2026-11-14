@@ -6,11 +6,7 @@
 	import { ProtocolFailed } from '../decl/errors.ts';
 	import type { Snippet } from 'svelte';
 	import type { Json } from '../decl/values.ts';
-	import type {
-		ImportStartInput,
-		InstanceState,
-		InstanceStatus
-	} from '../protocol/instance-status.ts';
+	import type { ImportStartInput, InstanceState, InstanceStatus } from '@norbital-ai/host-api';
 	import Setup from '../shell/integration/Setup.svelte';
 	import type { IntegrationSetupEntry, IntegrationSetupProps } from '../shell/integration/setup.ts';
 	import type { IntegrationClient } from './integrations.ts';

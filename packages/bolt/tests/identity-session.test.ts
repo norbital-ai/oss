@@ -4,14 +4,15 @@ import { Effect, Result } from 'effect';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import type { RowData } from '../src/engine/contracts.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
-import { authenticate, defaultName, make_identity_host } from '../src/engine/identity/session.ts';
+import { DbError } from '@norbital-ai/host-api';
+import { authenticate, defaultName, make_identity_host, SESSION_MEMO_MS } from '../src/engine/identity/session.ts';
 
-/** An identity host whose native database answers one session row (or fails), counting reads. */
+/** An identity host whose native database answers one session row (or fails), counting reads; `later` moves its clock past the session memo. */
 const host = Effect.fnUntraced(function* (
 	answer: () => Effect.Effect<readonly RowData[], DbError>
 ) {
-	let reads = 0;
+	let reads = 0,
+		at = Date.parse('2026-09-26T00:00:00Z');
 	const db = TenantDb.typed({
 		read: () =>
 			Effect.gen(function* () {
@@ -23,12 +24,12 @@ const host = Effect.fnUntraced(function* (
 	});
 	const h = yield* make_identity_host({
 		db,
-		now: Effect.sync(() => new Date('2026-09-26T00:00:00Z')),
+		now: Effect.sync(() => new Date(at)),
 		windows: new RateWindows(),
 		keys: { session: Buffer.alloc(32), ipMac: Buffer.alloc(32) },
 		public_url: 'https://w.test'
 	}).pipe(Effect.provide(NodeCrypto.layer));
-	return { h, reads: () => reads };
+	return { h, reads: () => reads, later: () => void (at += SESSION_MEMO_MS) };
 });
 const row = {
 	id: 's1',
@@ -56,6 +57,10 @@ describe('session authentication', () => {
 			expect(t.reads()).toBe(1);
 			rows = [];
 			expect(t.h.db.identityWrites()).toBe(0);
+			// within the memo the accepted session answers from memory; past it, the removed row refuses
+			expect(yield* authenticate(t.h, 'tok')).toMatchObject({ user: 'u1' });
+			expect(t.reads()).toBe(1);
+			t.later();
 			expect(yield* Effect.flip(authenticate(t.h, 'tok'))).toMatchObject({ code: 'not_member' });
 			expect(t.reads()).toBe(2);
 		})
@@ -72,6 +77,7 @@ describe('session authentication', () => {
 			});
 			const failure = DbError.make('08006', 'db down');
 			answer = () => Effect.fail(failure);
+			t.later();
 			const unavailable = yield* Effect.result(authenticate(t.h, 'tok'));
 			expect(Result.isFailure(unavailable) && unavailable.failure).toBe(failure);
 			answer = () => Effect.succeed([row]);

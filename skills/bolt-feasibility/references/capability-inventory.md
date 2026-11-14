@@ -24,7 +24,7 @@ Everything here is native unless stated. A facility a host left `off` fails `Una
 | Per-verb callbacks and refusals | `+model.ts` |
 | Lifecycles and edit locks | `state` field and named `locked` constraints |
 | Computed reads, named business operations | a read plus helper; an automation |
-| File import and export with context, findings and documents | `syncs.<name>` with `with: 'file'` |
+| File import and export with context, findings and documents | `+<sync>.sync.ts` with `with: 'file'` |
 | Scheduled and manual durable work, immediate typed calls | automations; model effects handle row writes; integrations verify webhooks |
 | Source teams, policies, inline approvals, decision audit | `access_control/` |
 | Formula evaluation; exact decimal and money; calendars and business days | std modules |
@@ -55,6 +55,8 @@ Everything here is native unless stated. A facility a host left `off` fails `Una
 | Source mirrors, local annotations, outbound commands | model syncs with engine-managed cursors, outbox, idempotency |
 | Outbound HTTP with bearer, basic, header or OAuth2 credentials | `http` definition, connection, `ctx.request` |
 | Verified webhooks triggering sync reads | integration `webhook.verify`; sync `read` gets `deliveries` |
+| Verified webhooks answered by a body | integration `webhook.handle` with `webhook.policies`: reads, acts, replies |
+| Durable multi-step processes | `ctx.wait` in a job: until a time, a matching write or an approval's decision |
 | Signed inbound webhooks | integration `webhook.verify`, retained deliveries for model syncs |
 | Web page reads | `ctx.web.read` |
 | Browser SDKs and WASM | page dependencies |

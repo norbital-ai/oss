@@ -1,19 +1,18 @@
-// LogView's model (owner rule: logs read like Railway/Vercel): one fixed-height line per event, filtered by level and
-// text, following the tail, virtualized by the shared window math, older pages by cursor.
+// LogView's model (owner rule: logs read like Railway/Vercel): one fixed-height line per event, searched and filtered by
+// CustomView's toolbar, following the tail, virtualized by the shared window math, older pages by cursor.
 import { jsonLanguage } from '@codemirror/lang-json';
 import { highlightCode, tagHighlighter, tags as t } from '@lezer/highlight';
 import { Result } from 'effect';
-/** The log levels, least severe first. */
-export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 /** One log level. */
-export type LogLevel = (typeof LOG_LEVELS)[number];
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 /** One event; `rows` are oldest first. */
 export type LogLine = {
 	readonly id: string;
 	readonly at: string | number;
 	readonly level: LogLevel;
 	readonly message: string;
-	readonly source?: string;
+	/** What emitted it (a run), shown before the message; `null` for none. */
+	readonly source: string | null;
 };
 
 /** A row's height in px: one line of `text-xs leading-5` plus padding; a longer message truncates. */
@@ -59,23 +58,6 @@ export function logPreview(message: string): readonly LogToken[] {
 		() => tokens.push({ text: ' ', cls: '' })
 	);
 	return tokens;
-}
-
-/** The lines whose level is not hidden and whose message or source contains `q` (case-insensitive). */
-export function filter_logs(
-	rows: readonly LogLine[],
-	hidden: Partial<Record<LogLevel, boolean>>,
-	q: string
-): readonly LogLine[] {
-	const needle = q.trim().toLowerCase();
-	if (!needle && !LOG_LEVELS.some((l) => hidden[l])) return rows;
-	return rows.filter(
-		(r) =>
-			!hidden[r.level] &&
-			(!needle ||
-				r.message.toLowerCase().includes(needle) ||
-				!!r.source?.toLowerCase().includes(needle))
-	);
 }
 
 /** Within `slack` px of the bottom: the view follows the tail. */

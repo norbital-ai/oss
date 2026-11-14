@@ -4,12 +4,20 @@
 // their pieces and usage comes from the last chunk. A refusal rejects with the HTTP `status` (the engine spots context
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
 import { Clock, Effect, Option, Queue, Schema, Stream } from 'effect';
-import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/http';
-import { FacilityFailure } from '../../decl/errors.ts';
-import { Port, type PortFailure } from '../port.ts';
-import type { AiEvent } from '../ports.ts';
+import { HttpClient, HttpClientRequest } from 'effect/http';
+import {
+	type AiEvent,
+	type AiRequest,
+	type AiResponse,
+	FacilityFailure,
+	type OpenAiChat,
+	Port,
+	type PortFailure,
+	provide_http,
+	type HttpOptions
+} from '@norbital-ai/host-api';
 import type { Json } from '../../decl/values.ts';
-import { LIMITS, type AiRequest, type AiResponse } from '../contracts.ts';
+import { LIMITS } from '../contracts.ts';
 import { fileParts } from './ingest.ts';
 import { SaidContent, StepContent, textOf } from './schema.ts';
 
@@ -175,21 +183,6 @@ const Chunk = Schema.Struct({
 const decodeChunk = Schema.decodeUnknownEffect(Schema.fromJsonString(Chunk));
 const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 
-/** The caller's HTTP client, else fetch (the caller's `fetch` when given). */
-export type HttpOptions = { http_client?: HttpClient.HttpClient; fetch?: typeof fetch };
-export const provide_http =
-	(options: HttpOptions) =>
-	<A, E, R>(effect: Effect.Effect<A, E, R>) => {
-		const provided =
-			options.http_client === undefined
-				? effect.pipe(Effect.provide(FetchHttpClient.layer))
-				: effect.pipe(Effect.provideService(HttpClient.HttpClient, options.http_client));
-		return options.http_client === undefined && options.fetch !== undefined
-			? provided.pipe(Effect.provideService(FetchHttpClient.Fetch, options.fetch))
-			: provided;
-	};
-/** One call is a cancellable stream; its final event carries the assembled response. */
-export type OpenAiChat = (request: AiRequest) => Stream.Stream<AiEvent, PortFailure>;
 /**
  * Model inference over an OpenAI-compatible endpoint: each request is one streamed completion whose text deltas arrive
  * as events and whose last event carries the assembled response. A refusal fails with the HTTP status.

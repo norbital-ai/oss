@@ -1,5 +1,5 @@
 import { sha256_hex } from '@norbital-ai/store';
-import type { AiRequest } from '../contracts.ts';
+import type { AiRequest } from '@norbital-ai/host-api';
 
 const encoder = new TextEncoder();
 const part = (text: string) => ({

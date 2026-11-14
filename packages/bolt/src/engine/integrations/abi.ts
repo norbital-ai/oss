@@ -4,14 +4,22 @@
 // a facility failure (a send's refusal its `SendRefused`), and a missing operation fails `Unavailable`.
 // Unpair's optional provider cleanup ends locally when the provider has no remote sign-out operation.
 import { Effect, FiberSet, Option, Schema, type Scope } from 'effect';
-import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
+import {
+	type DriverOpen,
+	FacilityFailure,
+	Fenced,
+	type Link,
+	Port,
+	type PortFailure,
+	type Provider,
+	SendReceipt,
+	SendRefused,
+	Unavailable
+} from '@norbital-ai/host-api';
 import type { Json } from '../../decl/values.ts';
 import type { OutboundFile } from '../services.ts';
-import { SendReceipt, SendRefused, sendRefusal } from '../conversations/status.ts';
-import { Port, type PortFailure } from '../port.ts';
-import { Fenced } from '../errors.ts';
+import { sendRefusal } from '../conversations/status.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import type { DriverOpen, Link, Provider } from './driver.ts';
 
 /** A pushing driver's feed page (`DriverPage`). */
 const DriverPageSchema = Schema.Struct({

@@ -24,8 +24,8 @@ it('mounts MapLibre on a WebGL canvas, places the marks on it and opens a record
 		answer: () => ({
 			sites: {
 				rows: [
-					{ id: 'a', name: 'Alpha yard', location: { lat: 1.29, lng: 103.85 }, crew: 4 },
-					{ id: 'b', name: 'Bravo depot', location: { lat: 1.35, lng: 103.99 }, crew: 2 }
+					{ id: 'a', revision: 1, name: 'Alpha yard', location: { lat: 1.29, lng: 103.85 }, crew: 4 },
+					{ id: 'b', revision: 1, name: 'Bravo depot', location: { lat: 1.35, lng: 103.99 }, crew: 2 }
 				],
 				next: null,
 				total: 2

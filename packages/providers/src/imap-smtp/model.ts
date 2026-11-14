@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from 'effect';
-import type { DriverOpen, TcpSocket } from '@norbital-ai/bolt/engine';
+import type { DriverOpen, TcpSocket } from '@norbital-ai/host-api';
 import { OAuthRefused, ProviderRefused, ProviderUnavailable } from '../errors.ts';
 import { codeOf } from './reports.ts';
 

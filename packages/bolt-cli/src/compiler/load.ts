@@ -3,11 +3,10 @@
 import { Array, Effect, FileSystem, Path, Predicate, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
 import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
-import { writeDeclarations } from './declarations.ts';
-import { ROLES, type LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
+import { ROLES, with_syncs, type LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
 import { SYSTEM_COLUMNS } from '@norbital-ai/store'; // hook:write
-import { tree_digest } from '@norbital-ai/bolt/artifact';
-import { SKILL_BYTES, SKILL_FILE } from '@norbital-ai/bolt/engine';
+import { tree_digest } from '@norbital-ai/host-api';
+import { SKILL_BYTES, SKILL_FILE } from '@norbital-ai/host-api';
 
 export type { LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
 
@@ -60,8 +59,6 @@ const skillTree = Effect.fnUntraced(function* (
 export const load = Effect.fn('bolt.load')(function* (root: string, files: readonly Discovered[]) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
-	if (files.some((file) => file.role === 'model' || file.role === 'integration_definition'))
-		yield* writeDeclarations(root, files);
 	const manifest: Manifest = yield* Schema.decodeUnknownEffect(
 		Schema.Record(
 			Schema.Literals(ROLES.map((r) => r.role)),
@@ -107,8 +104,20 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
 			else manifest[f.role][f.name] = declaration;
 		}
 	}
+	for (const [name, model] of Object.entries(manifest.model))
+		manifest.model[name] = merged(model, manifest.sync, name);
 	return { manifest, errors };
 });
+
+const declared = (d: unknown): d is { readonly spec: object; readonly bodies: object } =>
+	Predicate.isReadonlyObject(d) && Predicate.isReadonlyObject(d['spec']) && Predicate.isReadonlyObject(d['bodies']);
+/** A model declaration with the sync files beside it (`<model>.<sync>`) merged in, as the guest bundles merge them. */
+function merged(model: unknown, syncs: { readonly [name: string]: unknown }, name: string): unknown {
+	const own = Object.entries(syncs).flatMap(([key, d]) =>
+		key.startsWith(`${name}.`) && declared(d) ? [[key.slice(name.length + 1), d] as const] : []
+	);
+	return own.length === 0 || !declared(model) ? model : with_syncs(model, Object.fromEntries(own));
+}
 
 /**
  * The manifest-level checks of a loaded manifest (names against paths, integration definitions, listed pages). A workspace
@@ -122,7 +131,7 @@ export function manifestErrors(
 	const errors: Diagnostic[] = [];
 	const fail = (code: Diagnostic['code'], path: string, message: string) =>
 		errors.push({ code, path, message: `${path}: ${message}` });
-	// A generated declaration binding carries its path-derived name, checked against the file being loaded.
+	// A model or integration declares its name; the path must name it the same.
 	for (const role of NAMED) {
 		for (const [name, d] of Object.entries(manifest[role] ?? {})) {
 			const declared = Predicate.isObject(d) ? d['name'] : undefined;
@@ -130,9 +139,19 @@ export function manifestErrors(
 				fail(
 					'load/name-path',
 					sourcePath(role, name, files),
-					`uses the ${CALLS[role]} binding for '${String(declared)}'; its path names it '${name}'`
+					`declares \`${CALLS[role]}('${String(declared)}')\`; its path names it '${name}'`
 				);
 		}
+	}
+	// A sync names its model and itself as its folder and file do.
+	for (const [name, d] of Object.entries(manifest.sync)) {
+		const declared = Predicate.isReadonlyObject(d) ? `${String(d['model'])}.${String(d['name'])}` : undefined;
+		if (declared !== name)
+			fail(
+				'load/name-path',
+				sourcePath('sync', name, files),
+				`declares sync '${String(declared)}' (sync('<model>', '<sync>', …)); its path names it '${name}'`
+			);
 	}
 	// Source access declarations own both hierarchy and policy composition.
 	const teams = manifest.team[''];
@@ -275,7 +294,7 @@ export function spec(d: unknown): { readonly [key: string]: unknown } {
 	return Predicate.isReadonlyObject(d['spec']) ? d['spec'] : d;
 }
 
-/** Roles whose generated declaration binding carries a path identity. */
+/** Roles whose declaration names itself: the name must match its path. */
 const NAMED = ['model', 'integration_definition'] as const;
 const CALLS: { readonly [R in (typeof NAMED)[number]]: string } = {
 	model: 'model',

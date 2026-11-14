@@ -5,7 +5,7 @@ import {
 	HttpClientResponse,
 	type Headers
 } from 'effect/http';
-import type { Json } from '@norbital-ai/bolt/engine';
+import type { Json } from 'effect/Schema';
 import { answerFailure, ProviderRefused, ProviderUnavailable, retry_after_ms } from './errors.ts';
 
 const Address = Schema.Union([Schema.String, Schema.Array(Schema.String)]);

@@ -6,7 +6,7 @@ import { basename, join, resolve } from 'node:path';
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { Effect, Option, Schema } from 'effect';
-import type { GuestProgram } from '@norbital-ai/bolt/engine';
+import type { GuestProgram } from '@norbital-ai/host-api';
 import { CHECKPOINTS, inputs, keep, prune } from './checkpoint.ts';
 import { BOLT_PACKAGE } from '../compiler/bolt.ts';
 
@@ -37,7 +37,7 @@ for (const p of Object.values(value.policy ?? {})) for (const grant of Object.va
 	for (const op of ['create','update','delete']) if (grant?.[op]?.verdict) grant[op].verdict = gen(grant[op].verdict, 1, attached_verdict);
 for (const a of Object.values(value.automation ?? {})) a.body = gen(a.body,1);
 for (const page of Object.values(value.page ?? {})) page.body = gen(page.body,1);
-for (const i of Object.values(value.integration_definition ?? {})) if(i?.bodies) i.bodies.test = gen(i.bodies.test,0);
+for (const i of Object.values(value.integration_definition ?? {})) if(i?.bodies) { i.bodies.test = gen(i.bodies.test,0); i.bodies.webhook = gen(i.bodies.webhook,1); }
 export default value;`;
 const fixtureFailure = (error: unknown) =>
 	new GuestFixtureFailed({ message: error instanceof Error ? error.message : String(error) });

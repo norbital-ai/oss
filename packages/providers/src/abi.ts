@@ -4,24 +4,19 @@
 // engine's `SendRefused` and any other failure as itself; a link's resources live in its own scope, closed by `close`.
 import { Context, Effect, Exit, FiberSet, Layer, Scope, Semaphore } from 'effect';
 import {
-	SendRefused,
 	type DriverOpen,
 	type DriverPage,
-	type Json,
 	type Link,
 	type LocalText,
 	type OutboundAttachment,
 	type Provider,
 	type ReconcilePage,
-	type SendReceipt
-} from '@norbital-ai/bolt/engine';
+	type Run,
+	type SendReceipt,
+	SendRefused
+} from '@norbital-ai/host-api';
+import type { Json } from 'effect/Schema';
 import type { ProviderFailure } from './errors.ts';
-
-/** The host's runner (`FiberSet.makeRuntimePromise`): runs an Effect to a Promise, interrupted when `signal` aborts. */
-export type Run = <A, E>(
-	effect: Effect.Effect<A, E>,
-	options?: { readonly signal?: AbortSignal | undefined }
-) => Promise<A>;
 
 /** The ABI runner for SDK callbacks; its fibers belong to the opened link's scope. */
 export class ProviderRuntime extends Context.Service<ProviderRuntime, Run>()('providers/Runtime') {}

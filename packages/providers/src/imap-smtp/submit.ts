@@ -2,7 +2,7 @@ import { createTransport } from 'nodemailer';
 import type { SocketOptions } from 'nodemailer/lib/mailer';
 import { createStreamsTransport } from 'imapflow';
 import { Effect } from 'effect';
-import type { OutboundAttachment, TcpSocket } from '@norbital-ai/bolt/engine';
+import type { OutboundAttachment, TcpSocket } from '@norbital-ai/host-api';
 import { ProviderRefused } from '../errors.ts';
 import {
 	mailCall,

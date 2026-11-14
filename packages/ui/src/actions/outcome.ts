@@ -55,4 +55,4 @@ export function notify<O extends OutcomeFeedback>(
 
 /** Native forms present call results as a completed action and job receipts as their queue admission. */
 export const automation_outcome = (handle: AutomationHandle): Effect.Effect<Outcome, ProtocolFailure> =>
-	handle.mode === 'job' ? handle : actOutcome(handle.pipe(Effect.map((output) => ({ kind: 'committed' as const, output, records: [] }))));
+	actOutcome(handle.mode === 'job' ? handle : handle.pipe(Effect.map((output) => ({ kind: 'committed' as const, output, records: [] }))));

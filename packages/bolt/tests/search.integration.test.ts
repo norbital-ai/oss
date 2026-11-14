@@ -1,14 +1,14 @@
 // The multilingual search tokenizer (L-BOLT-121/122), ported case for case: the SQL the schema plan installs folds and
 // tokenizes both the stored document and the typed query, so these pin what a row and a term turn into.
 import { Effect, Schema } from 'effect';
-import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
-import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
+import { PgliteDb, Pristine } from '@norbital-ai/host-api/node';
+import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { describe, expect, it } from '@effect/vitest';
 import { search_functions } from '@norbital-ai/store';
 describe('lexical tokenizer', () => {
 	let database: TenantDbShape;
 	const setup = Effect.fnUntraced(function* () {
-		database = PgliteDb.make(yield* PgliteDb.open());
+		database = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 		for (const step of search_functions()) yield* database.write({ text: step.sql, params: [] });
 	});
 	const value = (statement: string, parameter: string) =>

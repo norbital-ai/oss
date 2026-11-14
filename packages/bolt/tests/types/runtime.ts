@@ -1,7 +1,6 @@
 // Type corpus for the runtime roles. Each `@ts-expect-error` line
 // is a planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
-import { app, automation, id_of, group, mcp, secrets, workspace } from '../../src/index.ts';
-import { bind_model } from '../../src/declarations.ts';
+import { app, automation, group, id_of, mcp, secrets, sync, workspace } from '../../src/index.ts';
 import type { Actor, CurrencyCode, FileRef, Id, InstanceId, Instant, Row } from '../../src/index.ts';
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
 import type { SkillFrontmatter } from '../../src/decl/runtime/agent.ts';
@@ -296,11 +295,15 @@ automation({
 		yield* ctx.ai.sys_2.infer({ prompt: 'x', tools: ['browser', 'read'] });
 		is<Eq<typeof ctx.actor.kind, 'system'>>();
 		// B2a who started it is the run's trigger, a person or the system
-		const trigger = ctx.run.trigger;
+		const trigger = ctx.trigger;
 		if (trigger.kind === 'person')
 			void (trigger.actor satisfies Exclude<Actor, { kind: 'system' }>);
 		else void (trigger.cause satisfies 'cron' | 'webhook' | 'effect' | 'event' | 'schedule');
-		void (ctx.run.id satisfies Id<'sys_run'>);
+		void (ctx.trigger.id satisfies Id<'sys_run'>);
+		// @ts-expect-error B2b an approval role resolves only in a model effect's approval event
+		yield* ctx.notify({ title: 'x', to: ['requester'] });
+		// @ts-expect-error B2c server code starts runs only with schedule
+		void ctx.run;
 		// @ts-expect-error B3 scheduling an unknown automation
 		yield* ctx.schedule('nigthly', {});
 		// @ts-expect-error B4 the scheduled input does not match the automation's
@@ -369,142 +372,107 @@ void skill;
 void skill2;
 
 // ── file syncs: parsed records, context, findings, related rows and document exports ──
-bind_model('notice_notes')({
-	...m.notice_notes.spec,
-	syncs: {
-		sheet: {
-			with: 'file',
-			parser: ['csv'],
-			schema: { code: { kind: 'text' }, note: { kind: 'text' } },
-			context: { notice: { kind: 'ref', to: 'notices' } },
-			read: function* ({ records, context }, ctx) {
-				is<Eq<typeof context.notice, Id<'notices'>>>();
-				const notices = yield* ctx.query({
-					notices: {
-						where: { id: { eq: context.notice } },
-						limit: 1
-					}
-				});
-				return {
-					rows:
-						notices.notices.rows.length === 0
-							? []
-							: records.map((r) => ({ notice: context.notice, note: r.note })),
-					scope: { by: ['notice'] },
-					findings: records.map((r) => ({
-						at: r.$at,
-						field: 'note',
-						message: r.code,
-						severity: 'warn' as const
-					})),
-					related: { notice_notes: records.map((r) => ({ notice: context.notice, note: r.code })) }
-				};
-			},
-			write: function* ({ context }, ctx) {
-				const bytes = yield* ctx.files.get(ref0);
-				is<Eq<typeof bytes, Uint8Array>>();
-				const image = yield* ctx.files.image(ref0, { jpeg: { max_edge: 512 } });
-				is<Eq<typeof image, FileRef>>();
-				void ctx.files.image(ref0);
-				// @ts-expect-error file exports cannot store arbitrary files
-				void ctx.files.put;
-				// @ts-expect-error file exports expose bytes and images only
-				void ctx.files.text;
-				// @ts-expect-error file exports have no AI facility
-				void ctx.ai;
-				return [{ code: String(context.notice), note: 'x' }];
+sync('notice_notes', 'sheet', {
+	with: 'file',
+	parser: ['csv'],
+	schema: { code: { kind: 'text' }, note: { kind: 'text' } },
+	context: { notice: { kind: 'ref', to: 'notices' } },
+	read: function* ({ records, context }, ctx) {
+		is<Eq<typeof context.notice, Id<'notices'>>>();
+		const notices = yield* ctx.query({
+			notices: {
+				where: { id: { eq: context.notice } },
+				limit: 1
 			}
-		}
+		});
+		return {
+			rows:
+				notices.notices.rows.length === 0
+					? []
+					: records.map((r) => ({ notice: context.notice, note: r.note })),
+			scope: { by: ['notice'] },
+			findings: records.map((r) => ({
+				at: r.$at,
+				field: 'note',
+				message: r.code,
+				severity: 'warn' as const
+			})),
+			related: { notice_notes: records.map((r) => ({ notice: context.notice, note: r.code })) }
+		};
+	},
+	write: function* ({ context }, ctx) {
+		const bytes = yield* ctx.files.get(ref0);
+		is<Eq<typeof bytes, Uint8Array>>();
+		const image = yield* ctx.files.image(ref0, { jpeg: { max_edge: 512 } });
+		is<Eq<typeof image, FileRef>>();
+		void ctx.files.image(ref0);
+		// @ts-expect-error file exports cannot store arbitrary files
+		void ctx.files.put;
+		// @ts-expect-error file exports expose bytes and images only
+		void ctx.files.text;
+		// @ts-expect-error file exports have no AI facility
+		void ctx.ai;
+		return [{ code: String(context.notice), note: 'x' }];
 	}
 });
 declare const remoteSync: SyncCtx<'kingdee'>;
 // @ts-expect-error a remote sync writer has no file facilities
 void remoteSync.files;
-bind_model('notice_notes')({
-	...m.notice_notes.spec,
-	syncs: {
-		sheet: {
-			with: 'file',
-			parser: [
-				{
-					type: 'text/plain',
-					extensions: ['.note'],
-					parse: function* (file, ctx) {
-						return [
-							{
-								$at: 1,
-								code: file.name,
-								note: new TextDecoder('utf-8', { fatal: true }).decode(yield* ctx.files.get(file))
-							}
-						];
+sync('notice_notes', 'sheet', {
+	with: 'file',
+	parser: [
+		{
+			type: 'text/plain',
+			extensions: ['.note'],
+			parse: function* (file, ctx) {
+				return [
+					{
+						$at: 1,
+						code: file.name,
+						note: new TextDecoder('utf-8', { fatal: true }).decode(yield* ctx.files.get(file))
 					}
-				}
-			],
-			schema: { code: { kind: 'text' }, note: { kind: 'text' } },
-			context: { notice: { kind: 'ref', to: 'notices' } },
-			write: function* () {
-				return { document: { markdown: '# Notes' }, name: 'notes' };
+				];
 			}
 		}
+	],
+	schema: { code: { kind: 'text' }, note: { kind: 'text' } },
+	context: { notice: { kind: 'ref', to: 'notices' } },
+	write: function* () {
+		return { document: { markdown: '# Notes' }, name: 'notes' };
 	}
 });
-bind_model('notice_notes')({
-	...m.notice_notes.spec,
-	syncs: {
-		sheet: {
-			with: 'file',
-			// @ts-expect-error P1 unknown built-in parser
-			parser: ['csvv']
-		}
+sync('notice_notes', 'sheet', {
+	with: 'file',
+	// @ts-expect-error P1 unknown built-in parser
+	parser: ['csvv']
+});
+sync('notice_notes', 'sheet', {
+	with: 'file',
+	// @ts-expect-error P2 unknown schema kind
+	schema: { note: { kind: 'blob' } }
+});
+sync('notice_notes', 'sheet', {
+	with: 'file',
+	// @ts-expect-error P3 a read returns the model's field types
+	read: function* () {
+		return { rows: [{ note: 5 }] };
 	}
 });
-bind_model('notice_notes')({
-	...m.notice_notes.spec,
-	syncs: {
-		sheet: {
-			with: 'file',
-			// @ts-expect-error P2 unknown schema kind
-			schema: { note: { kind: 'blob' } }
-		}
+sync('notice_notes', 'sheet', {
+	with: 'file',
+	// @ts-expect-error P4 an exported record follows the declared schema
+	write: function* () {
+		return [{ code: 5, note: 'x' }];
 	}
 });
-bind_model('notice_notes')({
-	...m.notice_notes.spec,
-	syncs: {
-		sheet: {
-			with: 'file',
-			// @ts-expect-error P3 a read returns the model's field types
-			read: function* () {
-				return { rows: [{ note: 5 }] };
-			}
-		}
-	}
-});
-bind_model('notice_notes')({
-	...m.notice_notes.spec,
-	syncs: {
-		sheet: {
-			with: 'file',
-			// @ts-expect-error P4 an exported record follows the declared schema
-			write: function* () {
-				return [{ code: 5, note: 'x' }];
-			}
-		}
-	}
-});
-bind_model('notice_notes')({
-	...m.notice_notes.spec,
-	syncs: {
-		sheet: {
-			with: 'file',
-			// @ts-expect-error P5 scope names writable model fields
-			read: function* () {
-				return {
-					rows: [],
-					scope: { by: ['nope'] }
-				};
-			}
-		}
+sync('notice_notes', 'sheet', {
+	with: 'file',
+	// @ts-expect-error P5 scope names writable model fields
+	read: function* () {
+		return {
+			rows: [],
+			scope: { by: ['nope'] }
+		};
 	}
 });
 
@@ -534,7 +502,7 @@ app({
 	title: 'Portal',
 	description: 'x',
 	icon: 'lucide:life-buoy',
-	audience: { public: ['sales_rep'], challenge: 'turnstile' },
+	audience: { public: ['sales_rep'], challenge: true },
 	pages: { tickets: { title: 'Tickets', portal: true } }
 });
 // @ts-expect-error AP1 a page with no page file in the app's folder

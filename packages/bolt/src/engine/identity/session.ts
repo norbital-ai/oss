@@ -8,7 +8,17 @@ import { fromHex, hmacSha256, timingSafeEqual, toBase64url } from '../crypto.ts'
 import { canonical, sha256 as sha256Bytes, to_hex } from '@norbital-ai/store';
 import { addressBucket, macKey, ratePiece, type Charge, type RateWindows } from '../access/rate.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
-import { LIMITS, type Authority, type Lock, type TransportPort } from '../contracts.ts';
+import {
+	DbError,
+	type Lock,
+	type PhoneVerifier,
+	Port,
+	type PortFailure,
+	SIGN_IN_CODE_MS,
+	six_digits,
+	type TransportPort
+} from '@norbital-ai/host-api';
+import { LIMITS, type Authority } from '../contracts.ts';
 import { Clock, Crypto, Effect, Layer, Option, Result, Schema } from 'effect';
 import { relations, type EngineManifest } from '../manifest.ts';
 import { TenantDb as TenantDbService, type TenantDbShape as TenantDb } from '../db/tenant-db.ts';
@@ -18,8 +28,7 @@ import { Activation, HostIdentity, Identity, Live, Manifest, type Authenticated 
 import { catalog_of, toOwnSql } from '../access/pred.ts';
 import { Authorities } from './actor.ts';
 import { RateWindows as Windows } from '../access/rate.ts';
-import { Port, type PortFailure } from '../port.ts';
-import { DbError, IdentityRefusal } from '../errors.ts';
+import { IdentityRefusal } from '../errors.ts';
 import { answer, Chain, GATED, gate } from '../write/sql.ts';
 import { history_piece } from '../write/commit.ts';
 import { enqueue, queue_events, triggers_of, type WriteTrigger } from '../runs/queue.ts';
@@ -51,36 +60,6 @@ export const signup_of = (m: Pick<EngineManifest, 'workspace'>): Signup | undefi
 	m.workspace.signup;
 /** The `sys_config` key an administrator closes self sign-up with (`'closed'`); absent, a declared sign-up is open. */
 export const SIGNUP_KEY = 'signup';
-/**
- * Sends and checks its own six-digit codes to a mobile number, by each of `via`. `check` is `false` for a wrong,
- * expired or used code; a throw is a failure to ask.
- */
-export type PhoneVerifier = {
-	via: readonly ('sms' | 'whatsapp')[];
-	start(to: string, via: 'sms' | 'whatsapp', signal: AbortSignal): Promise<void>;
-	check(to: string, code: string, signal: AbortSignal): Promise<boolean>;
-};
-/**
- * A local host's phone verifier: its own code, printed by `log` as `(sign-in code 123456)` (bolt dev, a local host,
- * tests). `fixed` is 38a(f)'s `123456`.
- */
-export function logged_phone(log: (line: string) => void, fixed = false): PhoneVerifier {
-	const codes = new Map<string, { code: string; until: number }>();
-	return {
-		via: ['sms', 'whatsapp'],
-		async start(to, via) {
-			const code = fixed ? '123456' : sixDigits();
-			codes.set(to, { code, until: Date.now() + CODE_MS });
-			log(`${via} → ${to}: Your sign-in code is ${code}. (sign-in code ${code})`);
-		},
-		async check(to, code) {
-			const held = codes.get(to);
-			if (held === undefined || held.until <= Date.now() || held.code !== code) return false;
-			codes.delete(to);
-			return true;
-		}
-	};
-}
 /**
  * What identity needs from its host (the host's transactional messaging): `mail` sends emailed codes and
  * invitations, `sms` texted invitations, `phone` sends and checks a mobile number's code — without it, numbers
@@ -143,8 +122,7 @@ const SESSION_MS = 7 * DAY;
 /** An anonymous user's session (its `via`) and how long it lives unused: the visitor cookie's lifetime, the prune's horizon. */
 const ANONYMOUS = 'anonymous',
 	ANONYMOUS_MS = 30 * DAY;
-const CODE_MS = 10 * 60000,
-	ATTEMPTS = 3;
+const ATTEMPTS = 3;
 /** Texts to numbers that are not yet members, per workspace per hour: what open sign-up can cost at most. */
 export const SIGNUP_TEXTS = 50;
 /** What one address may spend of them, so no single caller can close sign-up for the hour. */
@@ -243,12 +221,6 @@ const retryAfter = (now: Date) => Math.ceil((HOUR - (now.getTime() % HOUR)) / 10
 const codeMac = (keys: Keys, a: Address, code: string) =>
 	to_hex(hmacSha256(keys.session, `${addressKey(a)}\u0000${code}`));
 /** Six digits from the host's CSPRNG (38a(d)), unbiased by rejection. */
-function sixDigits(): string {
-	for (;;) {
-		for (const n of crypto.getRandomValues(new Uint32Array(1)))
-			if (n < 4294000000) return String(n % 1000000).padStart(6, '0');
-	}
-}
 /** The sign-in mail's HTML body: tables and inline styles only, so every client renders it. `code` is our own six digits. */
 const codeEmail = (code: string) => `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -351,11 +323,11 @@ export const send_code = Effect.fn('Bolt.send_code')(function* (
 			charges.push(...signup);
 		}
 	}
-	const code = h.dev_sink === true ? '123456' : sixDigits();
+	const code = h.dev_sink === true ? '123456' : six_digits();
 	const s = new IdentityStatement();
 	const rate = ratePiece(s, charges, now.getTime());
 	s.cte('ch', `INSERT INTO sys_challenge (address_mac, code_mac, attempts, expires_at)
-	SELECT ${s.p(macKey(keys.ipMac, addressKey(a)))}, ${s.p(codeMac(keys, a, code))}, 0, ${s.p(new Date(now.getTime() + CODE_MS).toISOString())}::timestamptz
+	SELECT ${s.p(macKey(keys.ipMac, addressKey(a)))}, ${s.p(codeMac(keys, a, code))}, 0, ${s.p(new Date(now.getTime() + SIGN_IN_CODE_MS).toISOString())}::timestamptz
 	WHERE ${rate}
 	ON CONFLICT (address_mac) DO UPDATE SET code_mac = excluded.code_mac, attempts = 0, expires_at = excluded.expires_at RETURNING 1`);
 	const saved = yield* nativeCommit(h.db.write, h.publication, s,
@@ -431,7 +403,11 @@ export function identityHistory(
 	// identity writes run in the audited batch, which names its operation for the transaction
 	history_piece(s, source, { operation: "nullif(current_setting('bolt.audit',true),'')" });
 	const listening = (writes ?? []).filter((w) => w.model === table);
-	if (listening.length > 0) queue_events(s, listening, `${s.p(at.toISOString())}::timestamptz`, source, depth);
+	// an update that moves only bookkeeping (`last_seen`, the revision and its stamps) is no event
+	const bookkeeping = "ARRAY['last_seen','revision','updated_at','updated_by']";
+	if (listening.length > 0)
+		queue_events(s, listening, `${s.p(at.toISOString())}::timestamptz`,
+			`(SELECT * FROM ${source} x WHERE x.op <> 'update' OR (x.o - ${bookkeeping}) IS DISTINCT FROM (x.n - ${bookkeeping}))`, depth);
 }
 /** The actor a history row names: `member:<id>` (as the write area's `actor_ref`), or the host. */
 export const by = (auth: Authority | null): string =>
@@ -809,12 +785,40 @@ export const make_identity_host = Effect.fn('Bolt.identityHost')(function* (
 	const host: IdentityHost = { ...config, crypto, audit, publication: 'bootstrap' };
 	return host;
 });
-/** Read the current session so a revocation from another activation applies to the next request. */
+/**
+ * How long a session read answers again from memory: a revocation from another activation applies within it; one on
+ * this activation (any statement on people or sessions) applies at once.
+ */
+export const SESSION_MEMO_MS = 5_000;
+/** Tokens a session memo keeps; the oldest goes first. */
+export const SESSION_MEMO_ENTRIES = 1_024;
+type Remembered = { readonly at: number; readonly stamp: number; readonly session: Effect.Success<ReturnType<typeof lookup>> };
+const remembered = new WeakMap<TenantDb, Map<string, Remembered>>();
+/** The current session, read again once `SESSION_MEMO_MS` passes or a statement on people or sessions finishes. */
 export const authenticate = Effect.fn('Bolt.authenticate')(function* (
 	h: IdentityHost,
 	token: string
 ) {
-	const session = yield* lookup(h, sha256(token));
+	const hash = sha256(token),
+		now = (yield* h.now).getTime(),
+		memo = remembered.get(h.db) ?? new Map<string, Remembered>();
+	remembered.set(h.db, memo);
+	const held = memo.get(hash);
+	const session =
+		held !== undefined && held.stamp === h.db.identityWrites() && now - held.at < SESSION_MEMO_MS &&
+		(held.session === null || held.session.expiresAt > now)
+			? held.session
+			: yield* Effect.gen(function* () {
+					memo.delete(hash);
+					const stamp = h.db.identityWrites();
+					const fresh = yield* lookup(h, hash);
+					if (memo.size >= SESSION_MEMO_ENTRIES) {
+						const oldest = memo.keys().next();
+						if (!oldest.done) memo.delete(oldest.value);
+					}
+					memo.set(hash, { at: now, stamp, session: fresh });
+					return fresh;
+				});
 	if (session === null)
 		return yield* Effect.fail(refuse('not_member', 'No active session.'));
 	return session;

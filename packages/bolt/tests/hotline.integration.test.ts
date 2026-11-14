@@ -1,7 +1,7 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
 // A payroll hotline on PGlite: one envoy deployed on two WhatsApp connections, one per legal
-// entity (`entities.hotline` names the instance), under `dm: 'envoy'`. A turn's `{ var: 'requestor.instance' }` is the instance
+// entity (`entities.hotline` names the instance), under `dm: 'envoy'`. A turn's `{ var: 'actor.instance' }` is the instance
 // the message arrived on, so the same member reads only the entity whose hotline they wrote to, and only their own rows;
 // an administrator's DM holds the envoy's policies alone (no bypass); `history`'s 'mine' stays on the instance. Admission
 // is a run the ingest statement queued, so a crash between the two still turns once runs re-arm.
@@ -9,11 +9,10 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Exit, Layer, Predicate, Schema, Scope, Stream } from 'effect';
 import { afterAll } from 'vitest';
 import { Ai } from '../src/engine/ports.ts';
-import { Port } from '../src/engine/port.ts';
+import { type AiRequest, type AiResponse, Port } from '@norbital-ai/host-api';
 import { Agents, Conversations } from '../src/engine/services.ts';
 import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiResponse, AiRequest } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
@@ -76,8 +75,8 @@ const manifest = {
 						default: {
 							scopes: {
 								payslips: {
-									employee: { eq: { var: 'requestor.id' } },
-									entity: { is: { hotline: { eq: { var: 'requestor.instance' } } } }
+									employee: { eq: { var: 'actor.id' } },
+									entity: { is: { hotline: { eq: { var: 'actor.instance' } } } }
 								}
 							}
 						}
@@ -261,7 +260,7 @@ const nets = (result: Json) =>
 		.payslips.rows.map((row) => row.net)
 		.sort();
 
-describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () => {
+describe("an entity hotline ({ var: 'actor.instance' }, dm: 'envoy')", () => {
 	it.live(
 		"a member reads only their own rows of the instance's entity; an admin's DM holds the envoy's policies alone; history stays on the instance",
 		() =>

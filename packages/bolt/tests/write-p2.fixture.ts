@@ -1,9 +1,9 @@
 // The second write workspace shares the native tenant-db and transform bridge.
 import { Effect, Result } from 'effect';
 import type { Invocation } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { PgliteDb } from '@norbital-ai/host-api/node';
+import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { decode_manifest, type EngineManifest } from '../src/engine/manifest.ts';
 import { transformBridge } from '../src/engine/write/act.ts';
 import { manifest as base } from './write-fixture.ts';
@@ -90,7 +90,7 @@ export const manifest = Result.getOrThrow(
 export const open = (m: EngineManifest = manifest) =>
 	Effect.gen(function* () {
 		const pg = yield* TestDb.open(m),
-			db = PgliteDb.make(pg);
+			db = TenantDb.typed(PgliteDb.make(pg));
 		return { pg, db };
 	});
 

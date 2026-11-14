@@ -2,13 +2,13 @@ import { Crypto, Effect, Schema } from 'effect';
 import { TenantDb } from '../db/tenant-db.ts';
 import { LIMITS } from '../contracts.ts';
 import { Transport } from '../ports.ts';
-import { Port, uuid } from '../port.ts';
+import { type FacilityFailure, Port } from '@norbital-ai/host-api';
+import { uuid } from '../port.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { PushBody } from '../../protocol/schema.ts';
 import { notice_path } from '../../protocol/wire.ts';
 import { prepareNoticeFiles } from '../notifications/notify.ts';
 import type { RunHandler } from '../services.ts';
-import type { FacilityFailure } from '../../decl/errors.ts';
 
 /** Stores (or, with `remove`, forgets) one device of `user`'s; an endpoint belongs to one member at a time. */
 export const subscribe = (user: string, body: PushBody) =>

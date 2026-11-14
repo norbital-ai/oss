@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect, Schema } from 'effect';
 import type { ShellBoot } from '../src/shell/nav.ts';
-import type { InstanceStatus } from '../src/protocol/instance-status.ts';
+import type { InstanceStatus } from '@norbital-ai/host-api';
 import { shell_bolt } from '../src/shell/runtime.ts';
 import type { IntegrationSetupLoader } from '../src/shell/integration/setup.ts';
 

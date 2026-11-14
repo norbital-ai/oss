@@ -82,7 +82,7 @@ void r6;
 void r7;
 // Context operands: the requestor is a typed actor operand (types/data.ts W1–W7); `{ clock }` is only an edge form (agent
 // read, UI filter state, a described filter), materialized before lowering, so authored reads take `bolt.clock` values.
-const v1: Where<'orders'> = { owner: { eq: { var: 'requestor.id' } } };
+const v1: Where<'orders'> = { owner: { eq: { var: 'actor.id' } } };
 // @ts-expect-error V1 `{ clock }` is no authored operand: materialize the day first
 const v2: Where<'orders'> = { due: { eq: { var: 'today' } } };
 // @ts-expect-error V2 nor on an instant
