@@ -149,7 +149,8 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 				? selected.current
 				: selected.error === undefined || value === null
 					? null
-					: { id: value, text: t('not_found') }
+					: // a failed read is no answer: it never claims the row is gone or hidden
+						{ id: value, text: t('recordUnavailable') }
 	);
 	const type = (q: string) => {
 		query = q;

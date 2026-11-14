@@ -63,7 +63,7 @@ import {
 	ApprovalStateSchema,
 	type ApprovalView
 } from '../../protocol/approval-view.ts';
-import { affectedTables, compileCommit, committed, runCommit, type Commit, type CommitAnswer, type Write } from '../write/commit.ts';
+import { affectedTables, checked, compileCommit, committed, runCommit, type Commit, type CommitAnswer, type Write } from '../write/commit.ts';
 import { Chain, GATED, minter, decided } from '../write/sql.ts';
 import { EFFECT_DEPTH_MESSAGE, effectRun, enqueue, settleApprovalEffects, writerOf } from '../runs/queue.ts';
 import { syncOutboxPiece } from '../sync/write.ts';
@@ -688,7 +688,8 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 					...(decisionLock === undefined ? {} : { lock: decisionLock })
 				}),
 				auth.actor,
-				false
+				false,
+				() => Effect.succeed(checked(commit))
 			)
 		);
 		if (Result.isFailure(result)) {

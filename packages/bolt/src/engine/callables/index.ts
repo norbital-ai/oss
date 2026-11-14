@@ -58,7 +58,7 @@ import * as ir from '../../protocol/reads.ts';
 import { constraintIndex } from '../schema/plan.ts';
 import { coalescing } from '../query/engine.ts';
 import { act, dry_run, transformBridge, type Verb, type WriteEngine } from '../write/act.ts';
-import { compileCommit, executeCommit, compile_outcome_record, CommitAnswer, committed, type Commit, type RateCharge } from '../write/commit.ts';
+import { checked, compileCommit, executeCommit, compile_outcome_record, CommitAnswer, committed, type Commit, type RateCharge } from '../write/commit.ts';
 import { settleCommit } from '../write/result.ts';
 import { canonical, sha256_hex } from '@norbital-ai/store';
 import { Chain, decided, KEY_REUSE, storedOutcome } from '../write/sql.ts';
@@ -361,7 +361,7 @@ export const commitActs = (
 				};
 				const lock = tables.length > 0 ? { tables, mode: 'SHARE ROW EXCLUSIVE' as const } : undefined;
 				if (p.preview === true)
-					return none(yield* dry_run(e.db, [yield* compileCommit(m, cat, commit)], lock, yield* constraintIndex(m)));
+					return none(yield* dry_run(e.db, [...checked(commit), yield* compileCommit(m, cat, commit)], lock, yield* constraintIndex(m)));
 				if (log !== undefined) yield* log.emit('info', 'act.settled', { callable, writes: writes.length });
 				const result = yield* Effect.result(
 					executeCommit(

@@ -78,3 +78,39 @@ test('a failed picker read does not claim there are no options', async () => {
 		target.remove();
 	}
 });
+
+test('a failed read of the selected record is not shown as not found', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const app = mount(Harness, {
+		target,
+		props: {
+			query: () =>
+				Effect.fail(
+					Object.assign(new Error('out of memory'), {
+						_tag: 'ReadFailed' as const,
+						code: 'internal'
+					})
+				),
+			catalog: {
+				companies: {
+					record_label: 'record.name',
+					label: ['name'],
+					fields: { name: { kind: 'text' } }
+				}
+			},
+			part: 'picker',
+			view: Picker,
+			props: { of: 'companies', value: 'c1', readonly: true, on_change: () => {} }
+		}
+	});
+	try {
+		await vi.waitFor(() => {
+			flushSync();
+			assert.match(target.textContent ?? '', /Could not load/);
+		});
+		assert.doesNotMatch(target.textContent ?? '', /Not found/);
+	} finally {
+		await unmount(app);
+		target.remove();
+	}
+});

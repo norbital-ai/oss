@@ -151,11 +151,11 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 		history AS (SELECT h.collection AS model,h.record::text AS id,h.revision,h.at::text AS at,h.actor,h.op,h.cause,
 		CASE WHEN h.op='create' THEN NULL ELSE (SELECT coalesce(jsonb_object_agg(e.key,e.value),'{}'::jsonb) - ARRAY['revision','updated_at','updated_by'] FROM
 		(SELECT DISTINCT ON(x.key) x.key,x.value FROM bolt_history p CROSS JOIN LATERAL jsonb_each(p.changes) x WHERE p.collection=h.collection AND p.record=h.record AND p.revision<h.revision ORDER BY x.key,p.revision DESC) e)
-		|| coalesce((SELECT p.meta FROM bolt_history p WHERE p.collection=h.collection AND p.record=h.record AND p.revision<h.revision ORDER BY p.revision DESC LIMIT 1),'{}'::jsonb) END AS old,
+		|| coalesce((SELECT p.meta - ARRAY['schema','full'] FROM bolt_history p WHERE p.collection=h.collection AND p.record=h.record AND p.revision<h.revision ORDER BY p.revision DESC LIMIT 1),'{}'::jsonb) END AS old,
 		CASE WHEN h.op='delete' THEN NULL ELSE (SELECT coalesce(jsonb_object_agg(e.key,e.value),'{}'::jsonb) - ARRAY['revision','updated_at','updated_by'] FROM
-		(SELECT DISTINCT ON(x.key) x.key,x.value FROM bolt_history p CROSS JOIN LATERAL jsonb_each(p.changes) x WHERE p.collection=h.collection AND p.record=h.record AND p.revision<=h.revision ORDER BY x.key,p.revision DESC) e) || h.meta END AS new
+		(SELECT DISTINCT ON(x.key) x.key,x.value FROM bolt_history p CROSS JOIN LATERAL jsonb_each(p.changes) x WHERE p.collection=h.collection AND p.record=h.record AND p.revision<=h.revision ORDER BY x.key,p.revision DESC) e) || (h.meta - ARRAY['schema','full']) END AS new
 		FROM bolt_history h WHERE h.operation=$1 AND NOT (SELECT acknowledged OR expired FROM receipt))
-		SELECT receipt.*,coalesce((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.model,h.id,h.revision) FROM history h),'[]'::jsonb) AS records FROM receipt`,
+		SELECT receipt.*,coalesce((SELECT json_agg(to_jsonb(h) ORDER BY h.model,h.id,h.revision) FROM history h),'[]'::json) AS records FROM receipt`,
 		params: [event.operation_id]
 	});
 	if (receipt._tag === 'None') return false;
@@ -167,22 +167,36 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 		if (yield* expireAudit(db, event.operation_id)) yield* drainAuditErases(db);
 		return true;
 	}
-	const status = yield* appendTerminal(event, {
+	const settled = {
 		outcome: receipt.value.key_reuse
 			? { kind: 'refused', code: 'key_reuse', message: 'This key was used for a different request.' }
 			: receipt.value.outcome,
 		records: receipt.value.records,
 		committedAt: receipt.value.at
-	});
+	};
+	// an append cut off midway left row events the history may not rebuild byte for byte (a column added since): those
+	// go under recovery's own ids, rebuilt the same each time, so recovery settles once instead of conflicting forever
+	const status = yield* appendTerminal(event, settled).pipe(
+		Effect.catchIf(
+			(error) => error.code === 'invalid',
+			() => appendTerminal(event, settled, 'recovered')
+		)
+	);
 	// an unknown commit stays pending for recovery to settle later
 	if (status === 'unknown') yield* requestAuditRecovery(yield* Audit);
 	else if (yield* acknowledgeAudit(db, event.operation_id)) yield* drainAuditErases(db);
 	return true;
 });
-/** The row events and the terminal event of a committed operation, appended together; answers its status. */
+/** Events per append: a host stores them one by one under a deadline, so a bulk write's thousands go in slices. */
+const APPEND_SLICE = 256;
+/**
+ * The row events, then the terminal event, of a committed operation; answers its status. Each slice is idempotent (same
+ * ids, same content), so a slice cut off midway is appended again whole.
+ */
 const appendTerminal = Effect.fn('Audit.appendTerminal')(function* (
 	event: AuditEvent,
-	settled: { readonly outcome: Json; readonly records: readonly (typeof History.Type)[]; readonly committedAt: string }
+	settled: { readonly outcome: Json; readonly records: readonly (typeof History.Type)[]; readonly committedAt: string },
+	rowIds: 'row' | 'recovered' = 'row'
 ) {
 	const { outcome, committedAt } = settled;
 	const written = settled.records;
@@ -202,7 +216,7 @@ const appendTerminal = Effect.fn('Audit.appendTerminal')(function* (
 	// alone, as copying it into each of its N row events is N² bytes (a 1,700-row import overran its 2 s of CPU)
 	const rows: AuditEvent[] = written.map((row) => ({
 		...event,
-		id: `${event.operation_id}:row:${row.model}:${row.id}:${row.revision}`,
+		id: `${event.operation_id}:${rowIds}:${row.model}:${row.id}:${row.revision}`,
 		action: `${row.model}.${row.op}`,
 		status,
 		subject: { model: row.model, id: row.id, revision: row.revision },
@@ -210,7 +224,9 @@ const appendTerminal = Effect.fn('Audit.appendTerminal')(function* (
 			written.length === 1 ? { request: event.payload, change: row } : { change: row }
 		
 	}));
-	yield* (yield* Audit).append([...rows, terminal]);
+	const audit = yield* Audit,
+		events = [...rows, terminal];
+	for (let at = 0; at < events.length; at += APPEND_SLICE) yield* audit.append(events.slice(at, at + APPEND_SLICE));
 	return status;
 });
 /**

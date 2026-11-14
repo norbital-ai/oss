@@ -154,9 +154,30 @@ export function gate(
 		'idem',
 		`INSERT INTO bolt_idem (key, digest, issued_at) SELECT ${c.shared('key', key)}, ${c.shared('digest', digest)}, ${c.p(issuedAt)}::timestamptz${context === undefined ? '' : ` FROM (SELECT ${set}) context`}
 	ON CONFLICT (key) DO UPDATE SET digest = excluded.digest, issued_at = excluded.issued_at
-	WHERE bolt_idem.issued_at < excluded.issued_at - interval '24 hours'
-	AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL) RETURNING key${context?.part === 'first' ? ", set_config('bolt.gate', key, true) AS part" : ''}`
+	WHERE ${reopens('bolt_idem', 'excluded.issued_at')} RETURNING key${context?.part === 'first' ? ", set_config('bolt.gate', key, true) AS part" : ''}`
 	);
+}
+/** A used key opens its gate again: a day past its issue, with no audit receipt still unacknowledged. */
+const reopens = (idem: string, issuedAt: string) => `${idem}.issued_at < ${issuedAt} - interval '24 hours'
+	AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=${idem}.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL)`;
+/**
+ * Rule 26's re-digests as statements of their own, ahead of the act's statements in its locked transaction: a read's
+ * rows are held only while its own digest is taken, never beside the other reads and the writes. Each answers no row,
+ * and asserts only where the act's gate will open: a committed key answers its stored outcome.
+ */
+export function fingerprintChecks(
+	x: { readonly key: string; readonly issuedAt: string },
+	fps: readonly Fingerprint[]
+): Sql[] {
+	return fps.map((f) => {
+		const c = new Chain();
+		const ok = `${digestOf(c.embed(f.sql))} = ${c.p(f.digest)}`;
+		return {
+			text: `SELECT bolt_assert(false, 'fingerprint', NULL) WHERE NOT EXISTS (SELECT 1 FROM bolt_idem i WHERE i.key = ${c.p(x.key)}
+	AND NOT (${reopens('i', `${c.p(x.issuedAt)}::timestamptz`)})) AND NOT coalesce((${ok}), false)`,
+			params: c.params
+		};
+	});
 }
 /** The statement's answer: the new outcome, or the stored one when the digest matches, else `key_reuse`. */
 export function answer(c: Chain, key: string, digest: string, expr: string): string {

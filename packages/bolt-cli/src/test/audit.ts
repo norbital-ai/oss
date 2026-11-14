@@ -70,7 +70,10 @@ export const memory_audit = () => {
 				if (previous !== undefined) {
 					const { recorded_at: _at, payload_bytes: _bytes, ...old } = previous;
 					if (canonical(old) !== canonical(event))
-						throw new Error('Audit event id reused for changed content.');
+						throw new FacilityFailure({
+							kind: 'invalid',
+							message: 'An audit event id already has different content.'
+						});
 				}
 			}
 			for (const event of prepared)

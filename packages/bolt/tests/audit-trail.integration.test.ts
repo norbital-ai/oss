@@ -478,3 +478,88 @@ it.live("a bulk write's request rides on its terminal event, not on each row eve
 		})
 	)
 );
+
+it.live('a committed append cut off midway recovers under the same ids with the same content', () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const store = memory_audit();
+			let cut = false;
+			const f = yield* fixture({
+				...store.port,
+				// a host deadline that lands mid-append: the first half is stored, the call fails
+				append: async (events, signal) => {
+					if (cut && events.some((event) => event.status !== 'prepared')) {
+						cut = false;
+						await store.port.append(events.slice(0, Math.ceil(events.length / 2)), signal);
+						throw new Error('observability writer deadline expired');
+					}
+					await store.port.append(events, signal);
+				}
+			});
+			const created = yield* f.act('create', [{ title: 'A' }, { title: 'B' }, { title: 'C' }]);
+			if (created.outcome.kind !== 'committed') throw new Error('Expected committed fixture');
+			const ids = created.outcome.records.map((record) => record.id);
+			cut = true;
+			expect(
+				yield* f.act('update', ids.map((target) => ({ target, set: { title: `${target} updated` } })))
+			).toMatchObject({ outcome: { kind: 'committed' } });
+			const recover = recoverAudit(f.t.db).pipe(
+				Effect.provideService(Audit, Context.get(f.context, Audit))
+			);
+			expect(yield* recover).toBe(false);
+			const updates = [...store.records.values()].filter(
+				(event) => event.id.includes(':row:') && event.subject?.revision === 2
+			);
+			expect(updates).toHaveLength(3);
+			expect(
+				[...store.records.values()].filter((event) => event.id.endsWith(':terminal')).map((event) => event.status)
+			).toEqual(['committed', 'committed']);
+			const before = [...store.records.values()];
+			expect(yield* recover).toBe(false);
+			expect([...store.records.values()]).toEqual(before);
+		})
+	)
+);
+
+it.live('recovery settles once when an earlier append left different row content under its ids', () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const store = memory_audit();
+			let cut = false,
+				appends = 0;
+			const f = yield* fixture({
+				...store.port,
+				// the cut-off attempt stored row events the history does not rebuild byte for byte
+				append: async (events, signal) => {
+					appends++;
+					if (cut && events.some((event) => event.status !== 'prepared')) {
+						cut = false;
+						await store.port.append(
+							events
+								.filter((event) => event.id.includes(':row:'))
+								.map((event) => ({ ...event, payload: { change: 'as an older schema wrote it' } })),
+							signal
+						);
+						throw new Error('observability writer deadline expired');
+					}
+					await store.port.append(events, signal);
+				}
+			});
+			cut = true;
+			expect(yield* f.act('create', [{ title: 'A' }, { title: 'B' }])).toMatchObject({
+				outcome: { kind: 'committed' }
+			});
+			const recover = recoverAudit(f.t.db).pipe(
+				Effect.provideService(Audit, Context.get(f.context, Audit))
+			);
+			expect(yield* recover).toBe(false);
+			const ids = [...store.records.keys()];
+			expect(ids.filter((id) => id.includes(':recovered:'))).toHaveLength(2);
+			expect(ids.filter((id) => id.endsWith(':terminal'))).toHaveLength(1);
+			// settled: a later scan appends nothing
+			const settled = appends;
+			expect(yield* recover).toBe(false);
+			expect(appends).toBe(settled);
+		})
+	)
+);

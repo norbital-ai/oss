@@ -415,7 +415,10 @@ type Kit = {
 	 * the runs that failed in this call, each with its own error.
 	 */
 	run_due(): Effect.Effect<{ readonly failed: readonly FailedRun[] }, EngineError>;
-	/** The host dies as `runId` ends, before its end is recorded; the next boot requeues it to rerun from the start. */
+	/**
+	 * The host dies as `runId` ends, before its end is recorded: nothing more reaches the database, no retry runs, and the
+	 * run stays `running` for its lease to reclaim (`run_due` past the lease) to rerun from the start.
+	 */
 	crash(runId: string): Effect.Effect<void, KitFailure>;
 	/** Waits for background work to go quiet. It runs nothing queued: `run_due` runs model effects and started automations. */
 	settled(): Effect.Effect<void>;
@@ -891,26 +894,24 @@ export const test_engine = <P extends TestPorts = never>(
 				pending: Sql[] = [];
 			let crashing: string | null = null,
 				crashed = false;
+			// a crash is the process dying, not a failed statement: no retry or recovery runs, and nothing more reaches
+			// the database until the next boot
 			const crashBoundary = (statements: readonly Sql[]) =>
 				Effect.suspend(() => {
 					const target = crashing;
 					if (
-						target === null ||
-						!statements.some(
-							(statement) =>
-								/UPDATE sys_run s SET state = \$/.test(statement.text) &&
-								JSON.stringify(statement.params).includes(target)
-						)
+						!crashed &&
+						(target === null ||
+							!statements.some(
+								(statement) =>
+									/UPDATE sys_run s SET state = \$/.test(statement.text) &&
+									JSON.stringify(statement.params).includes(target)
+							))
 					)
 						return Effect.void;
 					crashing = null;
 					crashed = true;
-					return Effect.fail(
-						new DbError({
-							message: 'crash: the host died before the run recorded its end',
-							sqlstate: '08006'
-						})
-					);
+					return Effect.die(new KitInvalid({ message: 'crash: the host died before the run recorded its end' }));
 				});
 			const flush = Semaphore.withPermit(members)(
 				Effect.gen(function* () {
@@ -1766,13 +1767,13 @@ export const test_engine = <P extends TestPorts = never>(
 					Effect.gen(function* () {
 						crashing = runId;
 						crashed = false;
-						yield* runs.tick.pipe(Effect.catch((e) => (crashed ? Effect.void : Effect.fail(e))));
+						yield* runs.tick.pipe(Effect.catchCause((cause) => (crashed ? Effect.void : Effect.failCause(cause))));
 						crashing = null;
 						if (!crashed)
 							return yield* Effect.fail(
 								new KitInvalid({ message: `run ${runId} did not run in this wake` })
 							);
-						yield* runs.boot();
+						crashed = false;
 					}).pipe(Effect.provide(hostContext)),
 				settled: () =>
 					Effect.andThen(

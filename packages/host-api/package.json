@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/host-api",
-	"version": "0.0.41",
+	"version": "0.0.42",
 	"description": "The Host API: the versioned contract between a host and a Bolt release — HOST_API version and range, port types, boundary Schemas, a conformance kit and the Node port implementations every host shares (`./node`).",
 	"type": "module",
 	"sideEffects": false,

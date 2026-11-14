@@ -25,7 +25,7 @@ import { purgeProposals } from '../approvals/erase.ts';
 import {
 	answer,
 	Chain,
-	fingerprintAsserts,
+	fingerprintChecks,
 	GATED,
 	gate,
 	noticeInsert,
@@ -94,7 +94,7 @@ export type Commit = {
 	rollback?: true;
 	/** hook:syncs — pieces after `allp` (a sync read page's cursor, id map and version stamps). */
 	pieces?: (c: Chain) => void;
-	/** Rule 26: the write callbacks' reads, re-digested under the table lock and asserted before the statement commits. */
+	/** Rule 26: the write callbacks' reads, re-digested under the table lock ahead of the writes (`checked`). */
 	fingerprints?: readonly Fingerprint[];
 	/** Native prior automation query intent, fixed across retries and persisted for held approvals. */
 	readGuards?: ReadGuards;
@@ -319,7 +319,6 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 	if (first) {
 		rate(c, x.rate);
 		x.before?.(c);
-		fingerprintAsserts(c, [...(x.fingerprints ?? []), ...(x.readGuards?.fingerprints ?? [])]);
 		if (x.readGuards?.inconsistent === true) c.assert('false', 'fingerprint');
 	}
 	if (audit !== undefined && first) {
@@ -590,15 +589,18 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 	const result = last ? answer(c, x.key, x.digest, outcome()) : 'NULL::jsonb AS outcome';
 	const tables = affectedTables(m, cat, x.writes);
 	return c.sql(
-		`${result}, (SELECT coalesce(jsonb_agg(jsonb_build_object('model', c, 'id', id, 'op', op, 'revision', revision, 'transaction', pg_current_xact_id()::text,
-	'old', ${storedImageSql(cat, tables, 'o')}, 'new', ${storedImageSql(cat, tables, 'n')}, 'cause', cause)), '[]'::jsonb) FROM allp) || ${captureRows(c)} AS captured, ${next_due(c)} AS next_due,
+		// the row images aggregate as json text, a copy of their bytes: a jsonb aggregate holds every row as a tree
+		`${result}, (SELECT coalesce(json_agg(x.v ORDER BY x.k, x.ord), '[]'::json) FROM (SELECT 0 AS k, 0::bigint AS ord,
+	jsonb_build_object('model', c, 'id', id, 'op', op, 'revision', revision, 'transaction', pg_current_xact_id()::text,
+	'old', ${storedImageSql(cat, tables, 'o')}, 'new', ${storedImageSql(cat, tables, 'n')}, 'cause', cause) AS v FROM allp
+	UNION ALL SELECT 1, e.ord, e.v FROM jsonb_array_elements(${captureRows(c)}) WITH ORDINALITY AS e(v, ord)) x) AS captured, ${next_due(c)} AS next_due,
 	(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM allp WHERE c = 'sys_integration'
 	AND (o IS NULL OR n IS NULL OR (o->'configuration', o->'active', o->'integration', o->'envoy', o->'import_start')
 	IS DISTINCT FROM (n->'configuration', n->'active', n->'integration', n->'envoy', n->'import_start'))) AS changed_instances, ${x.readGuards === undefined ? 'false' : GATED} AS read_guards_applied${x.approvalDecision !== undefined ? ', (SELECT count(*) FROM up)::int AS approval_decided' : ''}${
 			audit === undefined
 				? ''
-				: `, jsonb_build_object('at', ${now}::text, 'committed_at', ${c.shared('audit_at', audit.event.at)}::timestamptz::text, 'records', ${historied.length === 0 ? "'[]'::jsonb" : `(SELECT coalesce(jsonb_agg(jsonb_build_object('model', x.c, 'id', x.id, 'revision', x.revision, 'op', x.op, 'cause', x.cause,
-	'old', x.o - ${UNHISTORIED}, 'new', x.n - ${UNHISTORIED}) ORDER BY x.c, x.id, x.revision), '[]'::jsonb) FROM history_source x)`}) AS audited`
+				: `, json_build_object('at', ${now}::text, 'committed_at', ${c.shared('audit_at', audit.event.at)}::timestamptz::text, 'records', ${historied.length === 0 ? "'[]'::json" : `(SELECT coalesce(json_agg(jsonb_build_object('model', x.c, 'id', x.id, 'revision', x.revision, 'op', x.op, 'cause', x.cause,
+	'old', x.o - ${UNHISTORIED}, 'new', x.n - ${UNHISTORIED}) ORDER BY x.c, x.id, x.revision), '[]'::json) FROM history_source x)`}) AS audited`
 		}`
 	);
 });
@@ -922,6 +924,9 @@ export const runCommit = Effect.fn('Bolt.runCommit')(function* (
 		};
 	return answers;
 });
+/** The act's rule 26 re-digests (its callbacks' reads and its read guards'), each a statement ahead of its writes. */
+export const checked = (x: Commit): Sql[] =>
+	fingerprintChecks(x, [...(x.fingerprints ?? []), ...(x.readGuards?.fingerprints ?? [])]);
 /** A guarded provisional write and its post-image approval baseline settle in the same locked native batch. */
 export const executeCommit = Effect.fn('Bolt.executeCommit')(function* (
 	db: TenantDbShape,
@@ -963,13 +968,13 @@ export const executeCommit = Effect.fn('Bolt.executeCommit')(function* (
 		}),
 		commit.actor,
 		(commit.erasures?.length ?? 0) > 0 || commit.erase !== undefined,
-		// a split act parks its earlier statements' rows for the last one's effects and events
+		// the re-digests first; a split act parks its earlier statements' rows for the last one's effects and events
 		(audit) =>
 			split.length === 1
-				? Effect.succeed([])
+				? Effect.succeed(checked(commit))
 				: Effect.map(
 						Effect.forEach(split.slice(0, -1), (x, index) => compileCommit(manifest, catalog, x, audit, part(index))),
-						(parts) => [{ text: PARTS_TABLE, params: [] }, ...parts]
+						(parts) => [...checked(commit), { text: PARTS_TABLE, params: [] }, ...parts]
 					)
 	);
 	return answers.map((answer) => ({ ...answer, captured: storedCaptures(catalog, answer.captured) }));
