@@ -14,6 +14,7 @@ import { conversational } from '../../engine/integrations/instances.ts';
 import * as members from '../../engine/identity/members.ts';
 import { requireAdmin, SIGNUP_KEY, type IdentityHost } from '../../engine/identity/session.ts';
 import { AgentSettings, saveAgentSettings } from '../../engine/agent/settings.ts';
+import { Retention, RETENTION_DEFAULTS, RETENTION_KEY, saveRetention } from '../../engine/runs/retention.ts';
 import { AuditRow, InvitationRow, KeyRow, Member } from '../api-types.ts';
 
 const nullableText = Schema.NullOr(Schema.String);
@@ -110,6 +111,8 @@ export type Settings = {
 	}[];
 	/** The workspace's self sign-up: the means it declares and whether an administrator left it open; `null` when it declares none. */
 	signup: { via: readonly ('email' | 'phone')[]; open: boolean } | null;
+	/** The built-in retention pass's settings: how often it runs, from which hour, and how long read notices and finished runs stay. */
+	retention: Retention;
 };
 
 /**
@@ -142,7 +145,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 ) {
 	const now = yield* h.now;
 	yield* requireAdmin(auth);
-	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read(
+	const [users, invitations, keys, audit, deliveries, signup, instances, envoys, retention] = yield* h.db.read(
 		[
 			// administrators first, then staff, then external members; by name, else address. Anonymous visitors are no members.
 			sql(`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
@@ -171,7 +174,8 @@ export const settings = Effect.fn('shell.settings')(function* (
 			),
 			sql(
 				'SELECT id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
-			)
+			),
+			sql(`SELECT coalesce((SELECT value FROM sys_config WHERE key = '${RETENTION_KEY}'), '{}') AS value`)
 		]
 	);
 	const idle: Delivery = {
@@ -274,7 +278,9 @@ export const settings = Effect.fn('shell.settings')(function* (
 		signup:
 			h.signup === undefined
 				? null
-				: { via: h.signup.via, open: signup?.rows[0]?.value !== 'closed' }
+				: { via: h.signup.via, open: signup?.rows[0]?.value !== 'closed' },
+		retention: (yield* decode(Schema.Struct({ value: Schema.fromJsonString(Retention) }), retention?.rows ?? []))[0]?.value
+			?? RETENTION_DEFAULTS
 	};
 });
 
@@ -338,7 +344,8 @@ export const SettingsOp = Schema.Union([
 		op: Schema.Literal('clearSecret'),
 		input: Schema.Struct({ name: Schema.NonEmptyString })
 	}),
-	Schema.Struct({ op: Schema.Literal('set_agent'), input: AgentSettings })
+	Schema.Struct({ op: Schema.Literal('set_agent'), input: AgentSettings }),
+	Schema.Struct({ op: Schema.Literal('set_retention'), input: Retention })
 ]);
 export type SettingsOp = typeof SettingsOp.Type;
 /** Settings dispatch uses the decoded union; identity owns authorization and database errors. */
@@ -402,5 +409,7 @@ export const applySettings = Effect.fn('shell.settings_op')(function* (
 				);
 			return yield* saveAgentSettings(h.db, op.input).pipe(Effect.as(null));
 		}
+		case 'set_retention':
+			return yield* saveRetention(h.db, op.input).pipe(Effect.as(null));
 	}
 });

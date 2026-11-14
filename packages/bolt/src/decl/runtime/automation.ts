@@ -116,7 +116,7 @@ export type AutomationSpec = AutomationMode & {
 	 * once as the sum of its automations' `max`.
 	 */
 	concurrency?: { max: Max };
-	/** How the agent may start it (`direct`, `confirm`, `never`). */
+	/** Whether the agent may start it: `confirm` (default; the person confirms each start) or `never`. */
 	agent?: AgentUse;
 };
 type AutomationFor<S, Body> = AutomationMode & {

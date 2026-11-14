@@ -4,6 +4,7 @@ export {
 	type CodeEditorLanguage,
 	type CodeEditorProps
 } from './code-editor.svelte';
+export { default as CodeDiff, type CodeDiffProps } from './code-diff.svelte';
 export { default as CommandMenu, type CommandMenuProps } from './command-menu.svelte';
 export type { CommandItem, CommandTrigger } from './command-menu.js';
 export { default as MarkdownEditor, type MarkdownEditorProps } from './markdown-editor.svelte';

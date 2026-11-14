@@ -24,6 +24,10 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `i
 - Server `ctx.schedule(name, input, { at?, key? })` queues a job and returns its `id` and `automation`. A page's `ctx.run` job handle exposes `.id`, `.ids` and `.automation`; yielding it confirms queue admission, not completion, and a refusal fails `ActRefused`. A page call yields its declared output.
 - Every startable automation appears in the Command Center with its typed form; a page form is optional.
 
+## Built-in retention
+
+Every workspace carries Bolt's retention pass (`bolt.prune`); never author a cleanup automation for system records. It is no startable automation and appears in no app or list. The first time the database is awake for other work on a workspace-zone day (from 03:00), it deletes in batches of 10,000: inbox notifications read more than 30 days ago (unread ones stay), finished runs and settled outbox entries older than 90 days with their receipts, and expired sessions, challenges, invitations and rate windows. Running, waiting and referenced rows, open approvals and audit history stay. Administrators change the interval, hour and both retentions in Settings, Organization (`sys_config` `retention`).
+
 ## Reruns
 
 A dropped run reruns from the start, up to 3 times; a retry also starts over. Nothing is replayed, and `ctx.ai.*`, `ctx.request` and `ctx.web.*` are asked and paid again. Every body must be safe twice:

@@ -6,7 +6,6 @@ import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { seq_counter_objects } from '../src/engine/schema/engine.ts';
 import { migration_schema } from '../src/engine/schema/migrations.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
 
@@ -66,7 +65,7 @@ layer(workspace, { excludeTestServices: true })('a seq per series', (it) => {
 			const t = yield* TestWorkspace;
 			const admin = yield* t.as(t.admin);
 			const read = Effect.gen(function* () {
-				const answer = yield* admin.query(dynamic_read({ colours: { order_by: 'name' } }));
+				const answer = yield* admin.wire_query({ colours: { order_by: 'name' } });
 				return new Map((yield* Schema.decodeUnknownEffect(Colours)(answer)).colours.rows.map((row) => [row.name, row]));
 			});
 			// the floor holds over a lower stored number; a series without a floor counts on from its highest
@@ -116,7 +115,7 @@ layer(workspace, { excludeTestServices: true })('a seq per series', (it) => {
 			yield* t.db.write({ text: 'delete from bolt_seq', params: [] });
 			for (const text of objects.flatMap((object) => object.create)) yield* t.db.write({ text, params: [] });
 			yield* admin.act(untyped({ 'colours.create': [{ name: 'm-next', series: 'M' }] }));
-			const answer = yield* admin.query(dynamic_read({ colours: { where: { name: { eq: 'm-next' } } } }));
+			const answer = yield* admin.wire_query({ colours: { where: { name: { eq: 'm-next' } } } });
 			expect((yield* Schema.decodeUnknownEffect(Colours)(answer)).colours.rows[0]?.colour_number).toBe(42);
 		})
 	);

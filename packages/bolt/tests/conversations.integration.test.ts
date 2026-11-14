@@ -652,6 +652,30 @@ describe('inbound', () => {
 		...over
 	});
 	it.live(
+		'a served mailbox keys its conversations by thread and vouched sender: a stranger or a forged sender opens their own',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t;
+					const root = '<keyed-root@acme.com>';
+					yield* t.receive('customer_mail', mail({ id: root, text: 'hello', authenticated: true }));
+					yield* t.receive('customer_mail', mail({ id: '<keyed-carol@acme.com>', headers: { references: root }, authenticated: true }));
+					yield* t.receive('customer_mail', mail({ id: '<keyed-stranger@evil.example>', from: { address: 'mallory@evil.example', name: null }, headers: { references: root }, authenticated: true }));
+					yield* t.receive('customer_mail', mail({ id: '<keyed-forged@acme.com>', headers: { references: root } }));
+					const of = (id: string) =>
+						f.rows(`SELECT conversation FROM sys_message WHERE provider_id = '${id}'`).pipe(Effect.map((rows) => rows[0]?.['conversation']));
+					const carol = yield* of(root);
+					expect(yield* of('<keyed-carol@acme.com>')).toBe(carol);
+					expect(yield* of('<keyed-stranger@evil.example>')).not.toBe(carol);
+					expect(yield* of('<keyed-forged@acme.com>')).not.toBe(carol);
+					// one reconcile of the provider thread covers every sender's conversation in it
+					expect((yield* f.conversations.recent('customer_mail')).threads.filter((thread) => thread === root)).toHaveLength(1);
+				})
+			)
+	);
+
+	it.live(
 		'a redelivery is the same row; a newer version converges it, an older one changes nothing; a revoke tombstones it for good',
 		() =>
 			Effect.scoped(

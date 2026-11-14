@@ -24,6 +24,7 @@ export {
 	impact_text,
 	step_name
 } from './migration-impact.ts';
+export { code_mail } from './code-mail.ts';
 export { is_off, off, type Off } from './off.ts';
 export { uuidv7, uuidv7_within } from './uuid.ts';
 export { Answer, CELL_ABI_VERSION, membrane, Message, type Membrane } from './membrane.ts';

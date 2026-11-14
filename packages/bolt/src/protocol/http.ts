@@ -186,6 +186,22 @@ export const header = (request: HttpServerRequest.HttpServerRequest, name: strin
 	request.headers[name.toLowerCase()];
 export const invalid = (message: string) => BoltError.make('invalid', 'decode', message);
 const forbidden = (message: string) => BoltError.make('forbidden', 'admission', message);
+/**
+ * A browser push service's endpoint: HTTPS on 443 without credentials, at a named public host. The engine resolves
+ * nothing; the host's sender checks the resolved addresses again at every send.
+ */
+const webPushEndpoint = (endpoint: string) => {
+	const url = URL.parse(endpoint);
+	if (url === null || url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '')
+		return false;
+	const host = url.hostname.toLowerCase();
+	return (
+		host.includes('.') &&
+		!host.startsWith('[') &&
+		!/^[\d.]+$/.test(host) &&
+		!/(^|\.)(localhost|local|internal|home\.arpa)$/.test(host)
+	);
+};
 export const response_error = (error: unknown) => {
 	if (error instanceof IdentityRefusal)
 		return errorJson(error.code, error.message, CODE[error.code].status,
@@ -959,7 +975,7 @@ export const BoltRoutes = {
 				body.endpoint.length > 2048 ||
 				('kind' in body && body.kind === 'apns'
 					? !/^[0-9a-f]{64,512}$/i.test(body.endpoint)
-					: !('remove' in body) && !/^https:\/\//.test(body.endpoint))
+					: !('remove' in body) && !webPushEndpoint(body.endpoint))
 			)
 				return yield* Effect.fail(invalid('Invalid push subscription.'));
 			if (authority.actor.kind !== 'member')

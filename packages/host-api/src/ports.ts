@@ -44,6 +44,6 @@ export type HostApiCore = {
 	verify(release: Release, options: Signal): Promise<void>;
 	/** What the release says about itself, decoded by its own Bolt (`ReleaseFacts`). */
 	describe(release: Release, options: Signal): Promise<ReleaseFacts>;
-	/** The client page's `frame-ancestors` policy for `path`. */
+	/** The client page's content security policy for `path`: `frame-ancestors` and `img-src`. */
 	frame_policy(release: Release, path: string, options: Signal): Promise<string>;
 };

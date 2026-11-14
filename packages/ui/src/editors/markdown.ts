@@ -21,7 +21,13 @@ const marked = new Marked({
 			const json = lang?.toLowerCase() === 'json' ? prettyJson(text) : undefined;
 			const body = escape(json ?? text);
 			return `<pre><code${lang === undefined || lang === '' ? '' : ` class="language-${escape(lang)}"`}>${body}</code></pre>`;
-		}
+		},
+		// Only a same-origin image loads: a remote one would fetch on render, so text an agent wrote could leak data in its
+		// URL with no click. It shows as a link the person may follow.
+		image: ({ href, text }) =>
+			/^(\.{1,2}\/|\/(?![/\\]))/.test(href)
+				? false
+				: `<a href="${escape(href)}" rel="noopener noreferrer nofollow" target="_blank">${escape(text || href)}</a>`
 	},
 	walkTokens(token) {
 		if (
@@ -31,8 +37,10 @@ const marked = new Marked({
 			token.href = '#';
 	}
 });
-/** Markdown to HTML with `ReadonlyMarkdown`'s settings: raw HTML shown as text, links only to http(s), mailto or relative. */
-export const markdown_html = (text: string): string => marked.parse(text, { async: false });
+/** Markdown to HTML with `ReadonlyMarkdown`'s settings: raw HTML shown as text, links only to http(s), mailto or relative,
+ * images only same-origin (a remote image becomes a link). `breaks` keeps each typed newline a line break. */
+export const markdown_html = (text: string, breaks = false): string =>
+	marked.parse(text, { async: false, breaks });
 
 /** The default `/` blocks of `MarkdownEditor`, each the Markdown that starts it (typed at a line's start). */
 export const BLOCKS: readonly CommandItem[] = [

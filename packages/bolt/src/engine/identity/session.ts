@@ -11,6 +11,7 @@ import { RATE_LIMITED } from '../../protocol/wire.ts';
 import {
 	DbError,
 	type Lock,
+	code_mail,
 	type PhoneVerifier,
 	Port,
 	type PortFailure,
@@ -20,7 +21,7 @@ import {
 } from '@norbital-ai/host-api';
 import { LIMITS, type Authority } from '../contracts.ts';
 import { Clock, Crypto, Effect, Layer, Option, Result, Schema } from 'effect';
-import { relations, type EngineManifest } from '../manifest.ts';
+import { relations, teams, type EngineManifest } from '../manifest.ts';
 import { TenantDb as TenantDbService, type TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit, type CommitPublication } from '../db/captured.ts';
 import { storedRowSql } from '../db/stored.ts';
@@ -29,6 +30,7 @@ import { catalog_of, toOwnSql } from '../access/pred.ts';
 import { Authorities } from './actor.ts';
 import { RateWindows as Windows } from '../access/rate.ts';
 import { IdentityRefusal } from '../errors.ts';
+import { BoltError } from '../../protocol/errors.ts';
 import { answer, Chain, GATED, gate } from '../write/sql.ts';
 import { history_piece } from '../write/commit.ts';
 import { enqueue, queue_events, triggers_of, type WriteTrigger } from '../runs/queue.ts';
@@ -221,18 +223,6 @@ const retryAfter = (now: Date) => Math.ceil((HOUR - (now.getTime() % HOUR)) / 10
 const codeMac = (keys: Keys, a: Address, code: string) =>
 	to_hex(hmacSha256(keys.session, `${addressKey(a)}\u0000${code}`));
 /** Six digits from the host's CSPRNG (38a(d)), unbiased by rejection. */
-/** The sign-in mail's HTML body: tables and inline styles only, so every client renders it. `code` is our own six digits. */
-const codeEmail = (code: string) => `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><title>Your sign-in code</title></head>
-<body style="margin:0;padding:0;background:#f4f4f5;color:#18181b">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f5"><tr><td align="center" style="padding:32px 16px">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background:#ffffff;border:1px solid #e4e4e7;border-radius:8px">
-<tr><td style="padding:32px 32px 0;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:18px;font-weight:700;color:#18181b">Norbital</td></tr>
-<tr><td style="padding:24px 32px 8px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:22px;color:#3f3f46">Your sign-in code is:</td></tr>
-<tr><td style="padding:8px 32px;font-family:'SFMono-Regular',Menlo,Consolas,'Courier New',monospace;font-size:36px;font-weight:700;letter-spacing:8px;color:#18181b">${code}</td></tr>
-<tr><td style="padding:8px 32px 32px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:#52525b">It expires in 10 minutes. If you did not ask for this code, you can ignore this email.</td></tr>
-</table></td></tr></table></body></html>`;
 /** A newcomer may join by proving `a`: the workspace declares sign-up by that means and no administrator has closed it. */
 const signupOpen = (
 	h: IdentityHost,
@@ -341,9 +331,7 @@ export const send_code = Effect.fn('Bolt.send_code')(function* (
 						'email',
 						{
 							to: a.value,
-							subject: 'Your sign-in code',
-							text: `Your sign-in code is ${code}. It expires in 10 minutes.`,
-							html: codeEmail(code)
+							...code_mail(code)
 						},
 						signal
 					)
@@ -574,7 +562,7 @@ export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 		),
 		challenges.rows[0]
 	);
-	if (ch === undefined || Date.parse(ch.expires_at) <= now.getTime())
+	if (ch === undefined || ch.attempts >= ATTEMPTS || Date.parse(ch.expires_at) <= now.getTime())
 		return yield* Effect.fail(refuse('invalid_code', 'The code is wrong or has expired.'));
 	const s = new IdentityStatement();
 	const rate = ratePiece(s, charges, now.getTime());
@@ -592,10 +580,9 @@ export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 	if (typeof checked !== 'boolean' && Result.isFailure(checked))
 		return yield* Effect.fail(portRefusal(checked.failure, 'The code could not be checked. Try again.'));
 	if (checked === false || (typeof checked !== 'boolean' && checked.success === false)) {
-		const at = s.p(address),
-			n = s.p(ch.attempts);
-		s.cte('bump', `UPDATE sys_challenge SET attempts = attempts + 1 WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 < ${ATTEMPTS} RETURNING 1`);
-		s.cte('gone', `DELETE FROM sys_challenge WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 >= ${ATTEMPTS} RETURNING 1`);
+		// every wrong guess counts, parallel ones too: the increment is the row's own, never the value read above; a spent
+		// code stays until a new one replaces it, refused by its count
+		s.cte('bump', `UPDATE sys_challenge SET attempts = attempts + 1 WHERE address_mac = ${s.p(address)} RETURNING 1`);
 		yield* nativeCommit(h.db.write, h.publication, s, CapturedResult);
 		return yield* Effect.fail(refuse('invalid_code', 'The code is wrong or has expired.'));
 	}
@@ -1102,7 +1089,31 @@ export const IdentityLive = Layer.effect(
 			authority: (
 				holder: import('../access/authority.ts').Holder,
 				key = JSON.stringify([holder.actor, holder.policies, holder.admin])
-			) => authorities.compile(holder, key)
+			) =>
+				// A saved member holder (a queued run's starter) is judged against the membership now: a member no longer active
+				// is refused; once their team, administrator flag, kind or party changed, the run holds their current grants.
+				// A holder saved without the administrator flag never gains it back.
+				holder.actor.kind === 'member'
+					? Effect.flatMap(authorities.member(db, live.publish, holder.actor.id, !holder.admin), (now) => {
+							const was = holder.actor;
+							if (now === null || now.actor.kind !== 'member' || was.kind !== 'member')
+								return Effect.fail(
+									BoltError.make('forbidden', 'admission', 'The member who started this is no longer active.')
+								);
+							const graph = teams(manifest);
+							const same =
+								(now.actor.teams[0] ?? null) === (was.teams.find((t) => Object.hasOwn(graph, t)) ?? null) &&
+								now.admin === holder.admin &&
+								now.actor.external === was.external &&
+								now.actor.party?.model === was.party?.model &&
+								now.actor.party?.id === was.party?.id;
+							return same ? authorities.compile(holder, key) : Effect.succeed(now);
+						}).pipe(
+							Effect.mapError((error) =>
+								error instanceof BoltError ? error : BoltError.make('upstream', 'admission', error.message, error)
+							)
+						)
+					: authorities.compile(holder, key)
 		};
 	})
 );

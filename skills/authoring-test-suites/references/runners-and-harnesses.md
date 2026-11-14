@@ -22,6 +22,11 @@ Add no browser launcher or `.svelte` mounts to templates. Never give a suite its
 ## The kit
 
 - `TestWorkspace.layer({ root })` compiles real source and supplies the engine, fake facilities, clock and a `node:vm` guest runner; it owns database cleanup.
+- `const t = yield* TestWorkspace` inside the layer's scope. Holders: `t.admin`, `t.member(policies, { teams?, email? })`; `yield* t.as(holder)` is a `Caller` through the real host routes. `t.visitor(app)` is an anonymous caller; `t.sign_in(address)` a newcomer's authority.
+- A `Caller` reads with `query({ <model>: { where?, fields?, <relation>?, aggregate?, limit? } })`, answered per root as `{ rows, next, total }`, and `history(model, id)`.
+- It writes one batch with `act({ '<model>.create': [row], '<model>.update': [{ target: { id, revision }, set }], '<model>.delete': [{ target }] })`: `committed` or `pending_approval`; a refusal fails `ActRefused`.
+- Files: `upload('<model>.<field>', { name, mime, bytes })` answers a `FileRef` to write. Approvals: `approvals.decide(request_id, { decision, reason? })`. Starts: `run(name, input, decoder)`.
+- Kit controls: `t.clock.set` / `advance`, `t.run_due()`, `t.settled()`, `t.db.rows`, `t.fakes` (`sent` mail, `files.blobs`, `ai`, `links`), `t.count`.
 - One file's tests share one workspace, in order: rows stay from test to test, so filter to the rows a test made. A cron slot that wrote runs once per file: start each test's clock past the last one's.
 - A model `effect`, a job automation and a schedule queue a run: `t.run_due()` runs it and answers the failed ones; `t.settled()` only waits. Use `caller.run(name, input, JobResult)` for a job receipt, then inspect that run's completion separately. Import the real `JobResult` schema from `@norbital-ai/bolt-cli/test`.
 - A call automation returns its native output immediately, without a run row. `caller.run(name, input, outputSchema)` requires its actual result decoder; the decoder determines the result type and a mismatch fails with `SchemaError`. Pass job options after the decoder. There is no arbitrary result type argument or omitted-decoder fallback.

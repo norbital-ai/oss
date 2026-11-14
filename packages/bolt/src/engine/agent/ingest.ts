@@ -3,7 +3,7 @@
 // transcript, and a spreadsheet, CSV or JSON is `data` (typed cells, no HTML). An image is its own `<img>` and plain text
 // its own lines. This module routes a file, renders those two, derives a document's index and an audio transcript from
 // its HTML, keeps the shared cache (`ingest/<sha256>/…` in the file store) and windows a stored ingest by line.
-import { Effect, Option, Schema } from 'effect';
+import { Deferred, Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import {
 	IngestIndexSchema,
@@ -58,10 +58,33 @@ export function fileParts(f: { mime: string; bytes: Uint8Array }, name: string):
 		return [{ type: 'text', text: `${name} (${f.mime}):\n${new TextDecoder().decode(f.bytes)}` }];
 	return [{ type: 'text', text: `${name} (${f.mime}): read_file reads it` }];
 }
-/** What a file with no parser answers: the agent builds one, never guesses. */
-export const unparsed = (name: string, mime: string) =>
-	`${name} (${mime || 'unknown type'}): no parser. A call-mode automation can use a workspace package in its isolated VM; run_js with files: [{ id }] reads its bytes. Never guess what it contains.`;
+/** What a file with no parser answers: its name, type and size, and that it is binary. */
+export const unparsed = (name: string, mime: string, size: number) =>
+	`${name} (${mime || 'unknown type'}, ${size.toLocaleString('en-US')} bytes): binary; no parser for this format.`;
 
+/** An unknown type at most this large is looked at: UTF-8 text without a NUL is read as text. */
+export const TEXT_SNIFF_BYTES = 16 * 1024 * 1024;
+export const isUtf8Text = (bytes: Uint8Array) => {
+	// a control character other than tab, line feed, form feed, carriage return or escape is binary
+	if (bytes.some((b) => b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0c && b !== 0x0d && b !== 0x1b)) return false;
+	try {
+		new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+		return true;
+	} catch {
+		return false;
+	}
+};
+const ARCHIVES: ReadonlySet<string> = new Set([
+	'application/zip',
+	'application/x-zip-compressed',
+	'application/x-tar',
+	'application/gzip',
+	'application/x-gzip',
+	'application/x-gtar',
+	'application/x-compressed-tar'
+]);
+/** A zip, tar or tar.gz, by its type or name: Convert lists it and reads a file inside it by path. */
+export const isArchive = (mime: string, name: string) => ARCHIVES.has(mime) || /\.(zip|tar|tgz|gz)$/i.test(name);
 const OOXML = 'application/vnd.openxmlformats-officedocument.';
 const CONVERTS: ReadonlySet<string> = new Set([
 	'application/pdf',
@@ -79,7 +102,8 @@ const CONVERTS: ReadonlySet<string> = new Set([
 	`${OOXML}presentationml.presentation`,
 	'application/vnd.oasis.opendocument.text',
 	'application/vnd.oasis.opendocument.spreadsheet',
-	'application/vnd.oasis.opendocument.presentation'
+	'application/vnd.oasis.opendocument.presentation',
+	...ARCHIVES
 ]);
 const BY_EXTENSION: { readonly [ext: string]: Route } = {
 	pdf: 'convert',
@@ -98,6 +122,10 @@ const BY_EXTENSION: { readonly [ext: string]: Route } = {
 	odt: 'convert',
 	ods: 'convert',
 	odp: 'convert',
+	zip: 'convert',
+	tar: 'convert',
+	tgz: 'convert',
+	gz: 'convert',
 	txt: 'text',
 	md: 'text',
 	mp3: 'audio',
@@ -271,6 +299,27 @@ const clock = (seconds: number) =>
 export const StoredFile = row('sys_file', ['id', 'name', 'mime', 'size', 'key']);
 export type StoredFile = typeof StoredFile.Type;
 const IndexJson = Schema.fromJsonString(IngestIndexSchema);
+const flights = new WeakMap<object, Map<string, Deferred.Deferred<void>>>();
+/**
+ * One conversion per cache key at a time in an engine (`owner`, its live service): the first reader leads and the others
+ * `wait` for it, then find its stored ingest; `done` ends the lead.
+ * ponytail: in-process per tenant (the cell owns the tenant); a second cell reading the same bytes converts them again
+ */
+export const flight = (owner: object, key: string) => {
+	const all = flights.get(owner) ?? new Map<string, Deferred.Deferred<void>>();
+	flights.set(owner, all);
+	const wait = all.get(key);
+	if (wait !== undefined) return { wait, done: Effect.void };
+	const mine = Deferred.makeUnsafe<void>();
+	all.set(key, mine);
+	return {
+		wait: undefined,
+		done: Effect.sync(() => {
+			all.delete(key);
+			Deferred.doneUnsafe(mine, Effect.void);
+		})
+	};
+};
 /** A stored ingest's files may be large; one read answers at most this many bytes. */
 export const INGEST_BYTES = 256 * 1024 * 1024;
 const prefix = (sha256: string) => `ingest/${sha256}/`;
@@ -367,11 +416,12 @@ export const stash = Effect.fn('Agents.ingestStash')(function* (
 		const data = yield* json('data.json', ingested.json);
 		return { kind: 'data', main: data, files: [...images, data] } satisfies Stash;
 	}
-	const html = yield* put(`${o.base}.html`, 'text/html', new TextEncoder().encode(ingested.html));
+	const text = prose(ingested.html);
+	const html = yield* put(`${o.base}.html`, 'text/html', new TextEncoder().encode(text));
 	const images = yield* putAll(ingested.images.map(picture));
-	const heard = transcriptOf(ingested.html);
+	const heard = transcriptOf(text);
 	const transcript = heard === undefined ? [] : [yield* json('transcript.json', heard)];
-	const index = indexOf(ingested.html);
+	const index = indexOf(text);
 	const indexFile = yield* json('index.json', index);
 	return {
 		kind: 'document',
@@ -412,6 +462,30 @@ export function blocks(lines: readonly string[]): ([number, number] | undefined)
 	if (depth > 0) for (let k = start; k <= lines.length; k++) out[k - 1] = [start, lines.length];
 	return out;
 }
+const unescaped = (line: string) =>
+	line.replace(/&(amp|lt|gt|quot);/g, (_, e: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"' })[e] ?? '');
+const PLAIN = /^<p>([^<]*)<\/p>$/;
+/** Each line as it reads: a paragraph of plain text, or a line inside a `<pre>`, is its text as written. */
+const readable = (lines: readonly string[]) => {
+	let pre = false;
+	return lines.map((line) => {
+		if (line === '<pre>') pre = true;
+		else if (line === '</pre>') pre = false;
+		else if (pre) return unescaped(line);
+		const plain = PLAIN.exec(line)?.[1];
+		return plain === undefined ? line : unescaped(plain);
+	});
+};
+/** A document that is one `<pre>` (plain text, an archive's listing) as one paragraph per line: line n is the text's line n. */
+export const prose = (html: string) => {
+	const inner = /^<pre>\n([\s\S]*)\n<\/pre>$/.exec(html)?.[1];
+	return inner === undefined || inner.includes('</pre>')
+		? html
+		: inner
+				.split('\n')
+				.map((line) => `<p>${line}</p>`)
+				.join('\n');
+};
 /**
  * Lines `from`–`to` within `bytes`, never cutting a table or section: a window starting inside one starts at its open,
  * one ending inside it runs to its close, and one that has no room for it stops before it. Only a lone block larger
@@ -424,7 +498,7 @@ export function window(
 	bytes?: number,
 	format: 'html' | 'text' = 'html'
 ) {
-	const all = html.split('\n'),
+	const all = format === 'html' ? readable(html.split('\n')) : html.split('\n'),
 		spans = format === 'html' ? blocks(all) : [],
 		bound = bytes ?? (format === 'html' ? WINDOW_BYTES : 40_000),
 		requested = Math.trunc(to) || all.length,
@@ -463,9 +537,9 @@ export function window(
 		...(end < (format === 'html' ? all.length : last) ? { next: end + 1 } : {})
 	};
 }
-/** The lines holding `text` (case-insensitive), in `workspace_search`'s line shape: a line inside a table or section names it whole. */
+/** The lines holding `text` (case-insensitive), in `workspace_grep`'s line shape: a line inside a table or section names it whole. */
 export function grep(html: string, text: string, limit: number, format: 'html' | 'text' = 'html') {
-	const all = html.split('\n'),
+	const all = format === 'html' ? readable(html.split('\n')) : html.split('\n'),
 		spans = format === 'html' ? blocks(all) : [],
 		// a|b finds either: plain words, so no pattern can run away on a long document
 		wants = format === 'text'

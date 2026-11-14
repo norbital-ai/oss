@@ -138,6 +138,40 @@ describe('a created effect that schedules a delayed follow-up', () => {
 	);
 });
 
+describe('an effect queued by a member who is then deactivated', () => {
+	it.live('does not run with the authority saved at queue time', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const context = yield* Layer.build(
+					TestWorkspace.layer({
+						manifest,
+						guest: yield* program(guestSource),
+						now: '2026-09-25T10:00:00.000Z'
+					})
+				);
+				const t = Context.get(context, TestWorkspace),
+					route = yield* route_fixture(context);
+				const ops = yield* t.as(t.member(['ops']));
+				const created = (yield* act_reply(route, ops.authority, {
+					acts: { 'quotes.create': [{ title: 'q1' }] },
+					issued_at: t.clock.now()
+				})).outcome;
+				expect(created.kind).toBe('committed');
+				if (ops.authority.actor.kind !== 'member') throw new Error('Missing member');
+				yield* t.db.write({
+					text: 'UPDATE sys_user SET active = false, revision = revision + 1 WHERE id = $1',
+					params: [ops.authority.actor.id]
+				});
+				yield* t.run_due();
+				const runs = present(
+					(yield* t.db.read([{ text: `SELECT automation FROM sys_run WHERE automation = 'remind'`, params: [] }]))[0]
+				).rows;
+				expect(runs).toEqual([]);
+			})
+		)
+	);
+});
+
 describe('a started automation whose body fails', () => {
 	it.live(
 		'queues before execution, then records the body error rather than an unknown outcome',

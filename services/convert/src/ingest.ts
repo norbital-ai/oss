@@ -7,13 +7,15 @@
 //   html                         parse5 (readers/html.ts), then only the allowed elements survive
 //   txt → <pre> · png jpeg gif webp → one <img> · audio → the transcription model, one <section> per segment
 //   csv tsv → typed sheets · json → itself, parsed
-//   video, CAD, anything else → 415 (no parser)
-import { readFile, writeFile } from 'node:fs/promises';
+//   zip tar tgz                  from the disk (readers/archive.ts): the files listed, or one by `entry` streamed out and read as its own type
+//   video, CAD, anything else → 415 (no parser); inside an archive, UTF-8 text is read as text
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Effect, Schema } from 'effect';
 import officeCrypto from 'officecrypto-tool';
 import { escape, Images, write, type Block, type Image } from './blocks.ts';
-import { route, type Kind } from './route.ts';
+import { fromDisk, route, type Kind } from './route.ts';
+import { find } from './readers/archive.ts';
 import { html } from './readers/html.ts';
 import { converted, office } from './readers/office.ts';
 import { readPdf } from './readers/pdf.ts';
@@ -27,13 +29,16 @@ export type Parsed = { kind: 'document'; html: string; images: Image[] } | { kin
 /** The job's own facts, beside the parse: what it cost, and the transcription model's usage. */
 export type Meta = { usage?: Usage; stats: { pages: number | null; bytes: number; cpuMs: number; wallMs: number } };
 export type Ingested = Parsed & { meta: Meta };
-/** `path` is the file on the volume, for the readers that take it from there. `password` opens a locked PDF or Office file. */
+/**
+ * `path` is the file on the volume, for the readers that take it from there. `password` opens a locked PDF or Office
+ * file; `entry` is a path inside an archive (on into an archive inside it), read as its own type.
+ */
 export type IngestRequest = {
 	name: string;
 	mime: string;
 	bytes: Uint8Array;
 	path?: string;
-	options?: TranscribeOptions & { password?: string };
+	options?: TranscribeOptions & { password?: string; entry?: string };
 };
 export class IngestFailed extends Schema.TaggedError<IngestFailed>()('IngestFailed', {
 	message: Schema.String
@@ -99,12 +104,48 @@ const pageImage = (path: string, n: number, images: Images) =>
 		])
 	);
 
+const isText = (bytes: Uint8Array) => {
+	if (bytes.includes(0)) return false;
+	try {
+		new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+		return true;
+	} catch {
+		return false;
+	}
+};
+const count = (n: number) => n.toLocaleString('en-US');
+/** An archive's entry read as bytes (text, an image, a CSV) is at most this large; a document is read from its file. */
+export const ENTRY_TEXT_BYTES = 16 * 1024 * 1024;
+const entryBytes = (path: string, name: string) =>
+	Effect.tryPromise({
+		try: async () => {
+			const size = (await stat(path)).size;
+			if (size > ENTRY_TEXT_BYTES) throw new Error(`${name}: ${count(size)} bytes, over ${ENTRY_TEXT_BYTES / 1024 / 1024} MiB to read`);
+			return new Uint8Array(await readFile(path));
+		},
+		catch: (cause) => new IngestFailed({ message: cause instanceof Error ? cause.message : String(cause) })
+	});
+
 export function ingester(o: IngestOptions = {}): Ingester {
 	const failed = (cause: unknown) =>
 		new IngestFailed({ message: cause instanceof Error ? cause.message : String(cause) });
-	return Effect.fn('Convert.ingest')(function* (request: IngestRequest) {
-		const r = route(request.name, request.mime);
-		if (!r.ok) return yield* new IngestFailed({ message: r.message });
+	const ingest = Effect.fn('Convert.ingest')(function* (given: IngestRequest, entry = false): Effect.fn.Return<Ingested, IngestFailed> {
+		const routed = route(given.name, given.mime);
+		// an archive's entry lies in a file: a reader that takes bytes reads them, at most `ENTRY_TEXT_BYTES`
+		const request =
+			entry && given.path !== undefined && (!routed.ok || !fromDisk(routed.reader))
+				? { ...given, bytes: yield* entryBytes(given.path, given.name) }
+				: given;
+		// an archive's entry has no type of its own: UTF-8 text is text, anything else is named by its size
+		const r: typeof routed = routed.ok
+			? routed
+			: entry && isText(request.bytes)
+				? { ok: true, ext: 'txt', kind: 'text', reader: 'pre', mime: 'text/plain' }
+				: routed;
+		if (!r.ok)
+			return yield* new IngestFailed({
+				message: entry ? `${request.name}: ${count(request.bytes.byteLength)} bytes, binary; ${r.message}` : r.message
+			});
 		const cpu = process.cpuUsage();
 		const t0 = performance.now();
 		const images = new Images();
@@ -175,6 +216,26 @@ export function ingester(o: IngestOptions = {}): Ingester {
 			case 'json':
 				json = yield* sync((): unknown => JSON.parse(text()));
 				break;
+			case 'archive': {
+				const { entry, ...rest } = request.options ?? {};
+				// the archive stays on the disk: a listing reads its directory, an entry streams into a file of its own
+				const found = yield* Effect.scoped(
+					Effect.gen(function* () {
+						const archive = yield* named(request, `input.${r.ext}`),
+							dir = yield* scratch;
+						let n = 0;
+						const got = yield* Effect.tryPromise({
+							try: () => find(archive, r.ext, entry ?? '', async (name) => join(dir, `${++n}-${name}`)),
+							catch: failed
+						});
+						if ('folder' in got) return got;
+						return yield* ingest({ name: got.file.name, mime: '', path: got.file.path, bytes: new Uint8Array(), options: rest }, true);
+					})
+				).pipe(Effect.mapError((error) => (error instanceof IngestFailed ? error : failed(error))));
+				if (!('folder' in found)) return found;
+				blocks = [{ t: 'pre', text: found.folder.map((file) => `${file.path}  ${count(file.size)} bytes`).join('\n') }];
+				break;
+			}
 		}
 		const used = process.cpuUsage(cpu);
 		const sections = blocks.filter((b) => b.t === 'section').length;
@@ -193,4 +254,5 @@ export function ingester(o: IngestOptions = {}): Ingester {
 			}
 		};
 	});
+	return (request) => ingest(request);
 }

@@ -24,7 +24,7 @@ import {
 	stepView
 } from '../src/shell/agent/view.ts';
 import type { StudioChangeSet } from '@norbital-ai/host-api';
-import { checkFailing } from '../src/engine/agent/index.ts';
+import { checkFailing, NUDGE } from '../src/engine/agent/index.ts';
 
 const row = (seq: number, o: Partial<AgentRow> = {}): AgentRow => ({
 	id: `m${seq}`,
@@ -117,16 +117,48 @@ describe('source edits on the panel', () => {
 		Effect.gen(function* () {
 			const edit = yield* edited(
 				'workspace_edit',
-				{ path: 'src/a.ts', old_string: 'one\ntwo', new_string: 'three' },
-				{ path: 'src/a.ts', diagnostics: [] }
+				{ path: 'src/a.ts', oldString: 'one\ntwo', newString: 'three' },
+				'Edited src/a.ts (1 replacement)'
 			);
 			expect(edit?.tool?.changes).toEqual([{ path: 'src/a.ts', diff: '-one\n-two\n+three' }]);
 			const write = yield* edited(
 				'workspace_write',
 				{ path: 'src/b.ts', content: 'a\nb' },
-				{ path: 'src/b.ts' }
+				'Created file successfully: src/b.ts'
 			);
 			expect(write?.tool?.changes).toEqual([{ path: 'src/b.ts', diff: '+a\n+b' }]);
+		})
+	);
+	it.effect("a patch's files and hunks come off its call; its answer names the files only", () =>
+		Effect.gen(function* () {
+			const patch = yield* edited(
+				'workspace_patch',
+				{
+					patchText: [
+						'*** Begin Patch',
+						'*** Add File: src/data/model/po/+model.ts',
+						'+export {};',
+						'*** Update File: src/a.ts',
+						'*** Move to: src/b.ts',
+						'@@ const a = 1;',
+						' const a = 1;',
+						'-const b = 2;',
+						'+const b = 3;',
+						'*** Delete File: src/c.ts',
+						'*** End Patch'
+					].join('\n')
+				},
+				'Success. Updated the following files:\nA src/data/model/po/+model.ts\nM src/b.ts\nD src/c.ts'
+			);
+			expect(patch?.tool?.changes).toEqual([
+				{ path: 'src/data/model/po/+model.ts', diff: '+export {};', change: 'added' },
+				{
+					path: 'src/a.ts → src/b.ts',
+					diff: '@@ const a = 1;\n const a = 1;\n-const b = 2;\n+const b = 3;',
+					change: 'modified'
+				},
+				{ path: 'src/c.ts', diff: '', change: 'deleted' }
+			]);
 		})
 	);
 	it.effect('historical source calls retain raw evidence without reviving the retired multi-file edit contract', () =>
@@ -147,11 +179,22 @@ describe('source edits on the panel', () => {
 	it("names each source tool in the person's words", () => {
 		expect(stepView('workspace_write', { path: 'a.ts', content: 'x' })).toMatchObject({
 			verb: 'Edited the source',
-			target: 'a.ts',
-			code: { text: 'x' }
+			target: 'a.ts'
+		});
+		expect(stepView('workspace_read', { path: 'a.ts', offset: 10, limit: 50 })).toMatchObject({
+			verb: 'Read source',
+			target: 'a.ts:10-59'
+		});
+		expect(stepView('workspace_grep', { pattern: 'bolt', path: 'src' })).toMatchObject({
+			verb: 'Searched the source',
+			target: 'bolt in src'
+		});
+		expect(stepView('workspace_glob', { pattern: '**/*.ts' })).toMatchObject({
+			verb: 'Found source files',
+			target: '**/*.ts'
 		});
 		expect(
-			stepView('workspace_edit', { path: 'a.ts', old_string: 'x', new_string: 'y' })
+			stepView('workspace_edit', { path: 'a.ts', oldString: 'x', newString: 'y' })
 		).toMatchObject({
 			verb: 'Edited the source',
 			target: 'a.ts'
@@ -180,12 +223,15 @@ describe('source edits on the panel', () => {
 			target: '1 regions'
 		});
 		expect(stepView('read_output', { call: 'c1' }).verb).toBe('Read the full result');
-		expect(stepView('subagent', { task: 'Review\nall' })).toMatchObject({ verb: 'Started a subagent', target: 'Review' });
-		expect(stepView('subagent_message', { conversation: 'c', text: 'Go on' })).toMatchObject({
+		expect(stepView('task', { description: 'Review all', prompt: 'Review\nall' })).toMatchObject({
+			verb: 'Started a subagent',
+			target: 'Review all'
+		});
+		expect(stepView('task', { description: 'Go on', prompt: 'Go on', task_id: 'c' })).toMatchObject({
 			verb: 'Sent a message to a subagent',
 			target: 'Go on'
 		});
-		expect(stepView('subagent_stop', { conversation: 'c' }).verb).toBe('Stopped a subagent');
+		expect(stepView('task_stop', { task_id: 'c' }).verb).toBe('Stopped a subagent');
 		expect(stepView('read', { $runs: { limit: 5 }, sys_audit_log: {} }).target).toBe('runs, sys audit log');
 	});
 });
@@ -265,53 +311,45 @@ describe('the model-change divider (L-BOLT-547)', () => {
 
 describe('subagent messages', () => {
 	const conversation = '620df511-790d-4570-9d1e-1fddf492ba86';
+	const report = (state: string, summary: string, body: string, id = conversation) =>
+		`<task id="${id}" state="${state}">\n<summary>${summary}: Review "invoices"\nCheck totals</summary>\n<task_${state === 'error' ? 'error' : 'result'}>\n${body}\n</task_${state === 'error' ? 'error' : 'result'}>\n</task>`;
 	it('requires report metadata even when the text resembles a report', () => {
-		expect(
-			reportView(
-				row(1, {
-					text: `Sub-agent "Review invoices" (conversation ${conversation}) finished: Done`
-				})
-			)
-		).toBeNull();
+		expect(reportView(row(1, { text: report('completed', 'Background task completed', 'Done') }))).toBeNull();
 	});
-	it('reads the task title and keeps the entire message, including quotes and newlines', () => {
-		const task = 'Review "invoices"\nCheck totals';
+	it('reads the task description and keeps the entire body, including quotes and newlines', () => {
 		const message = 'Checked "October" invoices.\nTotals match.\n\nReady for review.';
-		for (const state of ['finished', 'failed', 'was stopped'])
-			expect(
-				reportView(
-					row(1, {
-						report: { conversation },
-						text: `Sub-agent "${task}" (conversation ${conversation}) ${state}: ${message}`
-					})
-				)
-			).toEqual({
+		for (const [state, summary] of [
+			['completed', 'Background task completed'],
+			['error', 'Background task failed'],
+			['cancelled', 'Background task cancelled']
+		] as const)
+			expect(reportView(row(1, { report: { conversation }, text: report(state, summary, message) }))).toEqual({
 				icon: 'lucide:inbox',
 				verb: 'Received a message',
 				target: 'Review "invoices"',
 				message
 			});
 	});
-	it('identifies a question from its metadata and removes only the engine instruction', () => {
+	it('identifies a question from its metadata', () => {
 		const message = 'Which month should I use?\nThe draft has September and October.';
 		expect(
 			reportView(
 				row(1, {
 					report: { conversation, asked: true },
-					text: `Sub-agent "Review invoices" (conversation ${conversation}) asks you: ${message}\nAnswer it with subagent_message.`
+					text: report('question', 'Background task asks you', message)
 				})
 			)
 		).toEqual({
 			icon: 'lucide:message-circle-question',
 			verb: 'Received a question',
-			target: 'Review invoices',
+			target: 'Review "invoices"',
 			message
 		});
 	});
 	it('preserves unexpected text or a mismatched conversation without inventing a task title', () => {
 		for (const text of [
 			'A report in another format.\nKeep every line.',
-			'Sub-agent "Review invoices" (conversation another-conversation) finished: Done',
+			report('completed', 'Background task completed', 'Done', 'another-conversation'),
 			null
 		])
 			expect(reportView(row(1, { report: { conversation }, text }))).toEqual({
@@ -345,10 +383,10 @@ describe('background work in the session rail', () => {
 		expect(
 			background([
 				row(1),
-				tool(2, { name: 'subagent', child: 'c1' }),
+				tool(2, { name: 'task', child: 'c1' }),
 				tool(3, { runs: ['r1', 'r2'] }),
 				tool(4, { runs: ['r2'] }),
-				tool(5, { name: 'subagent', child: 'c1' })
+				tool(5, { name: 'task', child: 'c1' })
 			])
 		).toEqual([
 			{ kind: 'agent', id: 'c1' },
@@ -418,6 +456,11 @@ describe('Studio outcomes outside the folded steps', () => {
 		expect(checkFailing({ error: '65 failing, unchanged for 3 runs.' })).toBe(65);
 		expect(checkFailing({ types: { total: 0 } })).toBe(0);
 		expect(checkFailing({ error: 'The build did not start.' })).toBeUndefined();
+	});
+	it('a resumed turn quotes its open request, and names one without words instead of quoting ""', () => {
+		expect(NUDGE.resumed(' Fix the roster \n')).toContain('still open: "Fix the roster".');
+		expect(NUDGE.resumed('')).not.toContain('""');
+		expect(NUDGE.resumed('  ')).toContain('their last message above');
 	});
 	it('the previewer shows built previews and the ones the agent chose among them, never another page', () => {
 		const step = (seq: number, name: string, o: Partial<NonNullable<AgentRow['tool']>>) =>

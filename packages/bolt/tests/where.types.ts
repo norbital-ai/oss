@@ -87,6 +87,9 @@ const v1: Where<'orders'> = { owner: { eq: { var: 'actor.id' } } };
 const v2: Where<'orders'> = { due: { eq: { var: 'today' } } };
 // @ts-expect-error V2 nor on an instant
 const v3: Where<'orders'> = { placed_at: { lt: { var: 'now - hours(1)' } } };
+// @ts-expect-error V3 actor.email on plain text: the error names what the var matches
+const v4: Where<'orders'> = { note: { eq: { var: 'actor.email' } } };
 void v1;
 void v2;
 void v3;
+void v4;

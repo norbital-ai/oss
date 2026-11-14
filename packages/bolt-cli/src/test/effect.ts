@@ -43,7 +43,8 @@ export interface Kit extends EngineKit {}
 type EngineKit = TestEngine['Service'];
 /**
  * Reads, writes, approval decisions, uploads and automation starts through the real host routes under one authority, with
- * native decoded values and typed failures.
+ * native decoded values and typed failures. `query` takes a typed read request; `wire_query` is Bolt's own
+ * host-conformance hook over ad hoc manifests, not for workspace tests.
  */
 export type Caller = Effect.Success<ReturnType<Kit['as']>>;
 /** A manifest-dependent query's decoded pages or aggregates; dynamic field values retain their native values. */

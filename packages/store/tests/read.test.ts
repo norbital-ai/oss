@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
 import { Effect } from 'effect';
-import { build, read, schema, store, table, type Statement } from '../src/index.ts';
+import { aggregate, build, read, schema, store, table, type Statement } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import { database, exec, run, script } from './support.ts';
 
@@ -520,6 +520,14 @@ describe('typed read projections', () => {
 				})
 			);
 			expect(empty).toEqual({ count: 0, sum: { total: null } });
+			// a malformed grouped aggregate names the shape it takes
+			for (const [q, cause] of [
+				[{ by: 'status', count: true }, 'an aggregate with `by` states { limit } or { all: true }'],
+				[{ by: 'status', measures: { total: 'sum' }, all: true }, "aggregate takes no 'measures'"]
+			] as const)
+				expect((yield* Effect.flip(aggregate(db.catalog, 'order', q))).message).toContain(
+					`${cause}: { by?, count?: true, sum?|avg?|min?|max?: [field], where?, limit | all: true }`
+				);
 			const filtered = yield* execute(
 				yield* db.read('order', { where: { total: { eq: '1.20' } }, all: true })
 			);

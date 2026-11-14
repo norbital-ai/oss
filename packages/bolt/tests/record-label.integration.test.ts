@@ -3,7 +3,6 @@ import { expect, layer } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { Callables } from '../src/engine/services.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import { manifest as base } from './write-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -110,8 +109,8 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 					const id = outcome.records[0]?.id;
 					if (id === undefined) throw new Error('Missing entry');
 					const search = (text: string) =>
-						admin.query(
-							dynamic_read({ entries: { search: text, fields: ['code', 'display_name'] } })
+						admin.wire_query(
+							{ entries: { search: text, fields: ['code', 'display_name'] } }
 						).pipe(Effect.flatMap(Schema.decodeUnknownEffect(EntryPage)));
 					const stored = yield* t.db.rows(
 						Schema.Struct({ code: Schema.String, bolt_record_label: Schema.String }),
@@ -132,7 +131,7 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 					});
 					const approvalSearch = (text: string, caller = admin) =>
 						caller.query(
-							dynamic_read({ approval_request: { search: text, fields: ['collection_name'] } })
+							{ approval_request: { search: text, fields: ['collection_name'] } }
 						).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ApprovalPage)));
 					expect((yield* approvalSearch('Lovelace')).approval_request.rows).toEqual([
 						{ id: request, collection_name: 'entries', $label: 'PERSON P-0001 · Ada Lovelace' }
@@ -168,8 +167,8 @@ layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })(
 					]);
 					expect((yield* exposure(manifest, publicReader.authority)).entries?.record_label).toBeUndefined();
 					expect((yield* exposure(manifest, publicReader.authority)).entries?.label).toEqual([]);
-					const restricted = yield* publicReader.query(
-						dynamic_read({ entries: { output: 'public', search: 'Byron', fields: ['first_name'] } })
+					const restricted = yield* publicReader.wire_query(
+						{ entries: { output: 'public', search: 'Byron', fields: ['first_name'] } }
 					).pipe(Effect.flatMap(Schema.decodeUnknownEffect(PublicPage)));
 					expect(restricted.entries.rows).toEqual([]);
 				})

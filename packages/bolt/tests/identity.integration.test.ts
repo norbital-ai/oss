@@ -181,6 +181,23 @@ it.effect('founder bootstrap does not promote an inactive or external seeded ide
 	}).pipe(Effect.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer)))
 );
 
+it.effect('parallel wrong sign-in codes each spend an attempt', () =>
+	Effect.gen(function* () {
+		const { h, lastCode } = yield* fixture;
+		yield* founder_bootstrap(h, 'race@acme.example');
+		yield* send_code(h, 'race@acme.example', '3.3.3.3');
+		const code = lastCode(),
+			wrong = code === '000000' ? '000001' : '000000';
+		yield* Effect.all(
+			[1, 2, 3].map(() => Effect.flip(verify_code(h, 'race@acme.example', wrong, '3.3.3.3'))),
+			{ concurrency: 'unbounded' }
+		);
+		expect(yield* Effect.flip(verify_code(h, 'race@acme.example', code, '3.3.3.3'))).toMatchObject({
+			code: 'invalid_code'
+		});
+	}).pipe(Effect.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer)))
+);
+
 it.effect(
 	'email sign-up admits newcomers only while open and never admits deactivated members',
 	() =>

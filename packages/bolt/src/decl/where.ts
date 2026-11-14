@@ -70,17 +70,32 @@ type NumericKind<K> = K extends { kind: 'decimal' | 'money' | 'sum' }
 		: K;
 type Ordered = { kind: NumKind | 'date' | 'instant' | 'time' | 'text' | 'seq' };
 
+type ScalarVar = 'actor.id' | 'actor.email' | 'actor.phone' | 'actor.visitor' | 'actor.instance' | 'actor.party';
+type VarRule = {
+	'actor.id': 'a ref to sys_user (created_by, updated_by)';
+	'actor.email': "a text field with format 'email'";
+	'actor.phone': "a text field with format 'phone'";
+	'actor.visitor': 'a text field';
+	'actor.instance': 'a ref to sys_integration';
+	'actor.party': 'a ref field';
+};
+// A var a position refuses matches an arm whose required `error` no literal carries: the type error names the rule.
+type WrongVar<V extends ScalarVar, Rule = never> = V extends ScalarVar
+	? { var: V; error: [Rule] extends [never] ? `${V} matches only ${VarRule[V]}` : Rule }
+	: never;
 // Operands a value position admits, by kind; S = static (check, unique, ref `where`): values and fields only.
 type Dyn<K, S> = S extends true
-	? never
-	: | (K extends { kind: 'text'; format: 'email' } ? { var: 'actor.email' } : never)
-		| (K extends { kind: 'text'; format: 'phone' } ? { var: 'actor.phone' } : never)
-		/** The anonymous identity (`__Secure-bolt-visitor`): guest-owned rows on a text field, scoped per browser. */
-		| (K extends { kind: 'text' } ? { var: 'actor.visitor' } : never)
-		| (K extends { kind: 'ref'; to: 'sys_user' } ? { var: 'actor.id' } : never)
-		/** The instance an envoy turn arrived on, or a sync body runs for; null for every other actor. */
-		| (K extends { kind: 'ref'; to: 'sys_integration' } ? { var: 'actor.instance' } : never)
-		| (K extends { kind: 'ref' } ? { var: 'actor.party' } : never);
+	? WrongVar<ScalarVar, 'a check, unique or ref where takes no actor variable; filter by actor in a policy output or a read'>
+	: DynOk<K> | WrongVar<Exclude<ScalarVar, DynOk<K>['var']>>;
+type DynOk<K> =
+	| (K extends { kind: 'text'; format: 'email' } ? { var: 'actor.email' } : never)
+	| (K extends { kind: 'text'; format: 'phone' } ? { var: 'actor.phone' } : never)
+	/** The anonymous identity (`__Secure-bolt-visitor`): guest-owned rows on a text field, scoped per browser. */
+	| (K extends { kind: 'text' } ? { var: 'actor.visitor' } : never)
+	| (K extends { kind: 'ref'; to: 'sys_user' } ? { var: 'actor.id' } : never)
+	/** The instance an envoy turn arrived on, or a sync body runs for; null for every other actor. */
+	| (K extends { kind: 'ref'; to: 'sys_integration' } ? { var: 'actor.instance' } : never)
+	| (K extends { kind: 'ref' } ? { var: 'actor.party' } : never);
 type DynList<K, S> = S extends true
 	? never
 	: | (K extends { kind: 'ref' } ? { var: `actor.scopes.${PolicyName}` } : never)

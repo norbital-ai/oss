@@ -1,8 +1,10 @@
 import { connect } from 'node:http2';
+import { Agent } from 'node:https';
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 import webpush from 'web-push';
 import { Clock, Effect, Option, Schema } from 'effect';
 import { Port, type PortFailure, type Rows, type Sql } from '@norbital-ai/host-api';
+import { pinned_lookup, public_addresses } from '@norbital-ai/host-api/node';
 import type { Json } from 'effect/Schema';
 import type { HostSettings } from './host.ts';
 
@@ -48,7 +50,8 @@ export function push<E>(
 	db: Db<E>,
 	vapid: { public_key: string; private_key: string },
 	subject: string,
-	send: typeof webpush.sendNotification = webpush.sendNotification.bind(webpush)
+	send: typeof webpush.sendNotification = webpush.sendNotification.bind(webpush),
+	resolve?: Parameters<typeof public_addresses>[1]
 ): PushSender {
 	const vapidDetails = { subject, publicKey: vapid.public_key, privateKey: vapid.private_key };
 	return {
@@ -56,12 +59,17 @@ export function push<E>(
 			const subscription = yield* Schema.decodeUnknownEffect(Subscription)(
 				message.subscription
 			).pipe(Effect.mapError(() => refused('The web push subscription is invalid.', 400)));
+			// a stored endpoint is checked again at every send, and the connection goes only to the checked addresses
+			const url = URL.parse(subscription.endpoint);
+			if (url === null) return yield* Effect.fail(refused('The web push subscription is invalid.', 400));
+			const addresses = yield* public_addresses(url, resolve);
+			const agent = new Agent({ lookup: pinned_lookup(addresses) });
 			const result = yield* Effect.tryPromise({
 				try: () =>
 					send(
 						subscription,
 						JSON.stringify({ id: message.id, title: message.title, body: message.body, path: message.path }),
-						{ vapidDetails, TTL: 86_400 }
+						{ vapidDetails, TTL: 86_400, agent }
 					),
 				catch: (cause) => {
 					const status = Schema.decodeUnknownOption(Status)(cause);
@@ -84,10 +92,11 @@ export function push<E>(
 	};
 }
 
+// A stored device is checked again at every send: the token is the request path, the topic an app bundle id.
 const ApnsSubscription = Schema.Struct({
-	endpoint: Schema.String,
+	endpoint: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64,200}$/i)),
 	keys: Schema.Struct({
-		topic: Schema.String,
+		topic: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/)),
 		environment: Schema.Literals(['development', 'production']),
 		team_id: Schema.String
 	})

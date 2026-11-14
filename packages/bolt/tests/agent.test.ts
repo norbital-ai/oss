@@ -269,7 +269,7 @@ describe('the context projection', () => {
 		// the author's source note follows the shared parts
 		const layout = system({ brief: 'Brief.', authors: true });
 		expect(layout.indexOf('# Brief')).toBeLessThan(layout.indexOf('# Source'));
-		expect(layout).not.toMatch(/workspace_list|workspace_search|workspace_lang/);
+		expect(layout).not.toMatch(/workspace_list|workspace_grep|workspace_glob|workspace_lang/);
 	});
 });
 

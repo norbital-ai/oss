@@ -12,7 +12,6 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Callables } from '../src/engine/services.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { admin, manifest as base } from './write-fixture.ts';
 import { one_act } from './support/act-one.ts';
 
@@ -204,7 +203,7 @@ it.live('a label reads each related field once, however often it names it', () =
 				Schema.Struct({
 					entry: Schema.Struct({ rows: Schema.Array(Schema.Struct({ $label: Schema.String })) })
 				})
-			)(yield* (yield* t.as(t.admin)).query(dynamic_read({ entry: {} })));
+			)(yield* (yield* t.as(t.admin)).wire_query({ entry: {} }));
 			expect(entry.rows.map((row) => row.$label)).toEqual(['Ada · C-1 · E-1 · Ada']);
 			const read = reads.find((statement) => statement.text.includes('"entry"'));
 			if (read === undefined) throw new Error('no entry read');

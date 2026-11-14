@@ -10,6 +10,7 @@ import { checkRules } from '../src/compiler/check/rules.ts';
 import { sourceRules } from '../src/compiler/check/source.ts';
 import { parse_cron } from '@norbital-ai/bolt/tooling';
 import { evaluationCpuMs } from '../src/compiler/check/index.ts';
+import { workspaceEntry } from '../src/compiler/artifact/client-boundary.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { decode_projected_manifest } from '../../bolt/src/engine/manifest.ts';
 const emptyManifest: EngineManifest = {
@@ -538,17 +539,11 @@ describe('bolt check', () => {
 				)
 			).toEqual(['check/wait-job src/automation/+call.automation.ts:2', 'check/wait-job src/data/model/x/+model.ts:2']);
 		});
-		it('an import past the author contract, in modules and components (check/author-import)', () => {
-			expect(
-				codes({
-					'src/lib/bad.ts': "import type { Json } from '@norbital-ai/bolt/engine';",
-					'src/app/a/+home.page.svelte':
-						'<div></div>\n<script lang="ts">\n\timport { dynamic_read } from \'@norbital-ai/bolt/protocol\';\n</script>',
-					'src/lib/good.ts':
-						"import { model } from '@norbital-ai/bolt';\nimport { Refusal } from '@norbital-ai/bolt/errors';\nimport { PageBolt } from '@norbital-ai/bolt/page';",
-					'src/app/a/+good.page.svelte': "<script lang=\"ts\">\n\timport { model } from '@norbital-ai/bolt';\n</script>"
-				})
-			).toEqual(['check/author-import src/lib/bad.ts:1', 'check/author-import src/app/a/+home.page.svelte:3']);
+		it('a host-only @norbital-ai/bolt entry does not resolve for workspace code', () => {
+			expect(() => workspaceEntry('@norbital-ai/bolt/engine')).toThrow(/no workspace entry/);
+			expect(() => workspaceEntry('@norbital-ai/bolt/protocol')).toThrow(/no workspace entry/);
+			for (const id of ['@norbital-ai/bolt', '@norbital-ai/bolt/errors', '@norbital-ai/bolt/page'])
+				expect(() => workspaceEntry(id)).not.toThrow();
 		});
 	});
 	it('grades evaluation CPU at reference speed: a thread slowed by load is not over budget', () => {

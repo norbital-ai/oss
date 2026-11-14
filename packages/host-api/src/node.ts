@@ -12,17 +12,20 @@ export {
 } from './op.ts';
 export {
 	asset_hook,
+	console_hook,
 	digest,
+	GUEST_CONSOLE,
 	module_script,
 	random_stream,
 	type GuestHooks,
+	type GuestSaid,
 	type ImportDeclaration
 } from './node/guest-hooks.ts';
 export { bundler } from './node/bundler/index.ts';
 export { artifact_port } from './node/artifact.ts';
 export { images_port } from './node/images.ts';
 export { keys_port } from './node/keys.ts';
-export { mcp_port } from './node/mcp.ts';
+export { loopback_mcp_port, mcp_port } from './node/mcp.ts';
 export {
 	download_media,
 	store_media,
@@ -41,6 +44,7 @@ export {
 	public_addresses,
 	public_destination,
 	public_fetch,
+	refuse_platform_addresses,
 	read_public_page,
 	type Address,
 	type PageWrite

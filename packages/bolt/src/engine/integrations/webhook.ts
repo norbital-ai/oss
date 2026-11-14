@@ -28,6 +28,56 @@ const cat = (prefix: string, body: Uint8Array) => {
 	return out;
 };
 
+/** The most of a delivery's body buffered before its signature is checked; past it, nothing more is read. */
+export const WEBHOOK_BYTES = 4 * 1024 * 1024;
+/** The body, read up to `max` bytes; `null` once it is longer (by its declared length or as it streams). */
+export async function cappedBody(request: Request, max = WEBHOOK_BYTES): Promise<Uint8Array | null> {
+	if (Number(request.headers.get('content-length') ?? 0) > max) return null;
+	const reader = request.body?.getReader();
+	if (reader === undefined) return new Uint8Array();
+	const parts: Uint8Array[] = [];
+	let size = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > max) {
+			await reader.cancel();
+			return null;
+		}
+		parts.push(value);
+	}
+	const out = new Uint8Array(size);
+	let at = 0;
+	for (const part of parts) {
+		out.set(part, at);
+		at += part.byteLength;
+	}
+	return out;
+}
+/** Schemes whose signature covers no timestamp: a captured delivery verifies again, so a repeat is refused by its id. */
+export const UNSTAMPED: readonly string[] = ['bearer', 'hmac-sha256', 'meta'];
+/**
+ * Deliveries answered within the tolerance window, by `<instance>:<delivery id>`: a repeat inside it is a replay.
+ * ponytail: memory per activation; a replay after the window or on another activation reaches the handler, whose
+ * keyed acts answer from their commit.
+ */
+export class Replays {
+	private readonly seen = new Map<string, number>();
+	/** Whether `key` was answered within the window; forgets what aged out (insertion order is age order). */
+	has(key: string, now: number): boolean {
+		for (const [k, at] of this.seen) {
+			if (now - at < TOLERANCE_S * 1000) break;
+			this.seen.delete(k);
+		}
+		return this.seen.has(key);
+	}
+	add(key: string, now: number) {
+		this.seen.delete(key);
+		this.seen.set(key, now);
+	}
+}
+
 /** Whether `request` carries a valid signature under `scheme` with `secret`. */
 export function verifySignature(
 	scheme: string,

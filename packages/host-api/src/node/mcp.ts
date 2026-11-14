@@ -1,7 +1,8 @@
 /// <reference types="node" />
 // The MCP client for same-graph hosts (`McpPort`): the SDK's streamable HTTP client on the current protocol
 // revision, one per session. The engine resolves each server's URL and credentials from the workspace's secrets; the
-// sessions close with the scope that made the port.
+// sessions close with the scope that made the port. Every request, the OAuth token exchange included (the SDK sends it
+// through the transport's fetch), goes through the public-address policy (`public_fetch`).
 import { randomUUID } from 'node:crypto';
 import {
 	Client,
@@ -10,6 +11,7 @@ import {
 } from '@modelcontextprotocol/client';
 import { Effect, Exit, FiberSet, Predicate, Schema, type Scope } from 'effect';
 import { FacilityFailure, type McpPort, type McpServer, Port } from '../index.ts';
+import { public_fetch } from './net.ts';
 import type { Json } from '@norbital-ai/store';
 
 const close = (client: Client) =>
@@ -18,14 +20,15 @@ const close = (client: Client) =>
 		Effect.ignore
 	);
 
-/** The `McpPort` over the MCP SDK's streamable HTTP client, one client per session; every session closes with the scope. */
-export const mcp_port: Effect.Effect<McpPort, never, Scope.Scope> = Effect.gen(function* () {
+const make = (loopback: boolean): Effect.Effect<McpPort, never, Scope.Scope> => Effect.gen(function* () {
 	const sessions = new Map<string, Client>();
 	yield* Effect.addFinalizer(() =>
 		Effect.forEach(sessions.values(), close, { discard: true }).pipe(
 			Effect.ensuring(Effect.sync(() => sessions.clear()))
 		)
 	);
+	const run = yield* FiberSet.makeRuntimePromise();
+	const fetch = public_fetch(run, loopback ? { allowLoopback: true, loopbackOnly: true } : {});
 	const session = (id: string) => {
 		const client = sessions.get(id);
 		return client === undefined
@@ -37,6 +40,7 @@ export const mcp_port: Effect.Effect<McpPort, never, Scope.Scope> = Effect.gen(f
 		const transport = yield* Effect.try({
 			try: () =>
 				new StreamableHTTPClientTransport(new URL(server.url), {
+					fetch,
 					requestInit: {
 						headers: {
 							...server.headers,
@@ -96,7 +100,6 @@ export const mcp_port: Effect.Effect<McpPort, never, Scope.Scope> = Effect.gen(f
 			...(result.isError ? { isError: true } : {})
 		}).pipe(Effect.mapError(Port.failure('mcp')));
 	});
-	const run = yield* FiberSet.makeRuntimePromise();
 	return {
 		connect: (server, signal) => run(connect(server), { signal }),
 		tools: (id, signal) => run(tools(id), { signal }),
@@ -111,3 +114,7 @@ export const mcp_port: Effect.Effect<McpPort, never, Scope.Scope> = Effect.gen(f
 			)
 	};
 });
+/** The `McpPort` over the MCP SDK's streamable HTTP client, one client per session; every session closes with the scope. */
+export const mcp_port = make(false);
+/** MCP to this machine only (the test kit): every request to another host is refused. */
+export const loopback_mcp_port = make(true);

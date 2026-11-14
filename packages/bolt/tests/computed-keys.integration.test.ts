@@ -5,7 +5,6 @@ import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { split_model } from '../src/decl/model-data.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
 
@@ -43,9 +42,9 @@ layer(TestWorkspace.layer({ manifest, now: '2026-11-14T08:00:00.000Z' }), { excl
 			const t = yield* TestWorkspace;
 			const admin = yield* t.as(t.admin);
 			yield* admin.act(untyped({ 'colours.create': [{ name: 'a', series: 'F' }, { name: 'b', series: 'F' }, { name: 'c', series: 'K' }] }));
-			const read = yield* admin.query(dynamic_read({ colours: { fields: ['name', 'code'], order_by: 'name' } }));
+			const read = yield* admin.wire_query({ colours: { fields: ['name', 'code'], order_by: 'name' } });
 			expect((yield* Schema.decodeUnknownEffect(Codes)(read)).colours.rows.map((row) => row.code)).toEqual(['F001', 'F002', 'K001']);
-			const found = yield* admin.query(dynamic_read({ colours: { search: 'F002', fields: ['name', 'code'] } }));
+			const found = yield* admin.wire_query({ colours: { search: 'F002', fields: ['name', 'code'] } });
 			expect((yield* Schema.decodeUnknownEffect(Codes)(found)).colours.rows.map((row) => row.name)).toEqual(['b']);
 			// ('F1', 1) and ('F', 1001) are distinct series numbers with one code: the unique code refuses the second
 			yield* t.db.write({ text: `insert into colours (id, name, series, colour_number) values (gen_random_uuid(), 'd', 'F1', 1)`, params: [] });

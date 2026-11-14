@@ -1376,8 +1376,12 @@ export default automation({ description, on: [{ cron: '0 0 * * *' }], policies: 
 						return result;
 					});
 					try {
+						// Files share a worker's module graph (`isolate: false`): the compiler another file loaded first holds the
+						// real `vite`. A fresh copy binds this file's mock.
+						vi.resetModules();
+						const { check } = yield* Effect.promise(() => import('../src/compiler/check/index.ts'));
 						// the release limit judges the bundler's own bytes
-						const large = yield* compilerCheck(root, { timing: false }).pipe(
+						const large = yield* check(root, { timing: false }).pipe(
 							Effect.provide(NodeServices.layer)
 						);
 						expect(large.errors.map((error) => error.code)).toEqual(['guest/size']);

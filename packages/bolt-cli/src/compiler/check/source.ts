@@ -1,14 +1,12 @@
 // The source checks: foot-guns whose types pass and whose runtime is wrong, read from each `src/**` module's syntax
 // (a component's `<script>` blocks included) with the parser the bundle stage uses. A `try` around a `yield*`, a
 // read in a write callback's loop, `set ?? before`, a retried run's unkeyed `act`, two acts one after another (separate
-// commits), a `ctx.wait` outside a job, and an import past the author contract.
+// commits) and a `ctx.wait` outside a job.
 import { parseSync, Visitor, type ESTree } from 'vite';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
 import type { Discovered } from '../discover.ts';
 import type { Finding } from './rules.ts';
 
-/** The `@norbital-ai/bolt` entry points a workspace may import. */
-const AUTHOR = new Set(['@norbital-ai/bolt', '@norbital-ai/bolt/errors', '@norbital-ai/bolt/page']);
 const ITERATORS = new Set(['map', 'flatMap', 'forEach', 'filter', 'reduce', 'some', 'every']);
 /** Files whose bodies read under the per-call cap: models (write callbacks, effects, syncs) and policies (verdicts). */
 const CAPPED = /(^|\/)\+model\.ts$|\.policy\.ts$|(^|\/)\+?[^/]*sync\.ts$/;
@@ -78,15 +76,6 @@ export function sourceRules(
 				branches: (readonly [Span, Span])[] = [],
 				exited: Span[] = [],
 				reads: Span[] = [];
-			const wall = (n: ESTree.Expression) => {
-				const specifier = n.type === 'Literal' ? String(n.value) : '';
-				if (specifier.startsWith('@norbital-ai/bolt/') && !AUTHOR.has(specifier))
-					at(
-						'author-import',
-						n,
-						`imports '${specifier}': only the root, /errors and /page are the author contract`
-					);
-			};
 			const fn = (n: Span) => void functions.push(n);
 			const loop = (n: { readonly body: Span }) => void loops.push(n.body);
 			new Visitor({
@@ -139,14 +128,6 @@ export function sourceRules(
 						(body?.type === 'FunctionExpression' || body?.type === 'ArrowFunctionExpression')
 					)
 						loops.push(body);
-				},
-				ImportDeclaration: (n) => wall(n.source),
-				ExportNamedDeclaration: (n) => {
-					if (n.source !== null) wall(n.source);
-				},
-				ExportAllDeclaration: (n) => wall(n.source),
-				ImportExpression: (n) => {
-					wall(n.source);
 				}
 			}).visit(program);
 			// two acts with nothing yielded between them (not the two arms of one if or ?:, nor after a branch that exits) commit apart: one act map commits together

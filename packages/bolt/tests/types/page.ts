@@ -3,9 +3,9 @@
 import { Effect } from 'effect';
 import { Form, Table, type UiContext } from '@norbital-ai/ui';
 import type { PageContext } from '../../src/page/index.ts';
-import { dynamic_read, type ActOutput, type Id, type PlainDate, type Row } from '../../src/index.ts';
+import type { ActOutput, Id, PlainDate, Row } from '../../src/index.ts';
 import type { Decimal } from '@norbital-ai/store';
-import type { Committed, DynamicAnswer, PendingApproval } from '../../src/decl/ctx.ts';
+import type { Committed, PendingApproval } from '../../src/decl/ctx.ts';
 import './registry.ts';
 import type { RowApproval, RowState } from '../../src/decl/names.ts';
 import type { Running } from '../../src/decl/ctx.ts';
@@ -18,9 +18,6 @@ const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 declare const order: Row<'orders'>, customer: Id<'customers'>, since: PlainDate;
 
 // ── reads: one read request (a layer map) per read ──
-// a runtime-built request reads as server code's does, answered untyped
-const dynamic = ctx.query(dynamic_read({ orders: { limit: 10 } }));
-is<Eq<NonNullable<typeof dynamic.current>, DynamicAnswer>>();
 ctx.query({ orders: { where: { status: { eq: 'draft' } }, order_by: { due: 'asc' }, limit: 10 } });
 // @ts-expect-error P1 an unknown field in where
 ctx.query({ orders: { where: { nope: { eq: 'draft' } }, limit: 10 } });

@@ -1010,6 +1010,8 @@ describe('routes and hrefs', () => {
 		expect(at('/invite/abc')).toEqual({ kind: 'invite', id: 'abc' });
 		expect(at('/sign-in?next=/app/sales')).toEqual({ kind: 'sign_in', next: '/app/sales' });
 		expect(at('/sign-in?next=//evil.example')).toEqual({ kind: 'sign_in' });
+		expect(at('/sign-in?next=/\\evil.example')).toEqual({ kind: 'sign_in' });
+		expect(at('/sign-in?next=/%09/evil.example')).toEqual({ kind: 'sign_in' });
 	});
 	it('only public pages, sign-in and invitation open signed out; there is no registration page', () => {
 		expect(at('/register/t')).toEqual({ kind: 'not_found' });
@@ -1234,7 +1236,7 @@ describe('sidebar model', () => {
 			page: 'clock'
 		});
 		expect(route(m, new URL('http://x/kiosk/nope/clock'))).toEqual({ kind: 'not_found' });
-		expect(frame_policy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'");
+		expect(frame_policy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'; img-src 'self' data: blob:");
 		expect(is_open_route(m, { kind: 'kiosk', kiosk: 'lobby', page: 'welcome' })).toBe(true);
 		expect(is_open_route(m, { kind: 'kiosk', kiosk: 'clock', page: 'clock' })).toBe(false);
 		expect(
@@ -1586,18 +1588,21 @@ describe('embedding', () => {
 	};
 	it('an app or kiosk page is framed by the workspace and the origins its `embed` names; without `embed`, by the workspace alone', () => {
 		expect(frame_policy(embedded, '/app/hr/kiosk/clock')).toBe(
-			`frame-ancestors 'self' ${partner} https://b.example:8443`
+			`frame-ancestors 'self' ${partner} https://b.example:8443; img-src 'self' data: blob:`
 		);
 		expect(frame_policy(embedded, '/kiosk/lobby/welcome')).toBe(
-			`frame-ancestors 'self' ${partner}`
+			`frame-ancestors 'self' ${partner}; img-src 'self' data: blob:`
 		);
-		expect(frame_policy(m, '/app/hr/kiosk/clock')).toBe("frame-ancestors 'self'");
-		expect(frame_policy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'");
+		expect(frame_policy(m, '/app/hr/kiosk/clock')).toBe("frame-ancestors 'self'; img-src 'self' data: blob:");
+		expect(frame_policy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'; img-src 'self' data: blob:");
+	});
+	it('a workspace document loads no remote image: a fetch on render would leak what text put in its URL', () => {
+		expect(frame_policy(embedded, '/app/sales/deals')).toMatch(/; img-src 'self' data: blob:$/);
 	});
 	it('every other page, and a route that is none, is framed by the workspace alone', () => {
-		expect(frame_policy(embedded, '/app/sales/deals')).toBe("frame-ancestors 'self'");
-		expect(frame_policy(m, '/sign-in')).toBe("frame-ancestors 'self'");
-		expect(frame_policy(m, '/nowhere')).toBe("frame-ancestors 'self'");
+		expect(frame_policy(embedded, '/app/sales/deals')).toBe("frame-ancestors 'self'; img-src 'self' data: blob:");
+		expect(frame_policy(m, '/sign-in')).toBe("frame-ancestors 'self'; img-src 'self' data: blob:");
+		expect(frame_policy(m, '/nowhere')).toBe("frame-ancestors 'self'; img-src 'self' data: blob:");
 	});
 	const post = (headers: Record<string, string>) =>
 		new Request('https://acme.example/__bolt/q', { method: 'POST', headers });

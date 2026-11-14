@@ -385,6 +385,26 @@ describe('project_manifest', () => {
 		});
 		expect(m.integrations.crm).toEqual({ description: 'CRM', driver: 'http', test: true });
 	});
+	it("names an output grant's keys when a nested key is no relation", () => {
+		const grant = (output: unknown) =>
+			project_manifest(
+				loaded({
+					model: {
+						orders: {
+							description: 'Orders',
+							record_label: 'record.number',
+							fields: { number: { kind: 'text' }, customer: { kind: 'ref', to: 'customers' } },
+							outputs: { default: { fields: 'all' } }
+						}
+					},
+					policy: { mine: { description: '', grants: { orders: { outputs: { default: output } } } } }
+				})
+			);
+		expect(() => grant({ scope: { created_by: { eq: { var: 'actor.id' } } } })).toThrow(
+			"'orders.scope': an output grant's keys are 'where', 'history' and the relations of orders ('customer'); row filters go under 'where'"
+		);
+		expect(() => grant({ customer: { where: {} } })).not.toThrow();
+	});
 });
 
 describe('manifest accessors', () => {

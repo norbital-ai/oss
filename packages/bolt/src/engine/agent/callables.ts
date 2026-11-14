@@ -190,15 +190,6 @@ export const agentCallables = Effect.gen(function* () {
 				return committed({ id: row.id });
 			})
 		),
-		// the host's report back to a conversation it left waiting: a system note, never words from the person
-		'sys_conversation.notify': entry(
-			Schema.Struct({ conversation: Schema.String, text: Schema.String }),
-			Effect.fn('Agents.notifyCallable')(function* (input, authority) {
-				yield* own(authority, input.conversation);
-				yield* agents.notify(input);
-				return committed({ id: input.conversation });
-			})
-		),
 		'sys_conversation.respond_now': control((id) =>
 			turns.release(id).pipe(Effect.andThen(background(agents.kick(id))))
 		),

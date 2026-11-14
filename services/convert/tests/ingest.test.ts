@@ -3,18 +3,24 @@
 // odt, ods, odp, doc and xls copies of the same tables.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { crc32, deflateRawSync, gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { afterAll, test } from '@effect/vitest';
+import { afterAll, onTestFinished, test } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { ingester, type Ingested } from '../src/ingest.ts';
 import { readTo } from '../src/job.ts';
+import { ARCHIVE } from '../src/readers/archive.ts';
 import { route } from '../src/route.ts';
 import { service } from '../src/server.ts';
 import { type Converter } from '../src/convert.ts';
 
+setFlagsFromString('--expose-gc');
 const ingest = ingester();
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
 /** A document's result (a dataset fails the test). */
@@ -84,12 +90,13 @@ test('routes by mime type, then by extension; audio, video containers, CAD and u
 	assert.equal(ext('meeting.m4a', 'application/octet-stream'), 'm4a:audio');
 	assert.equal(ext('note.webm', 'audio/webm'), 'webm:audio');
 	assert.equal(ext('a.mp4', 'video/mp4'), 'mp4:audio'); // its audio track is transcribed
-	const none = 'no parser: build a tool for it with your workspace tools';
+	const none = 'no parser for this format';
 	assert.equal(ext('a.mov', 'video/quicktime'), none);
 	assert.equal(ext('a.mkv', 'video/x-matroska'), none);
 	assert.equal(ext('site.dwg', 'image/vnd.dwg'), none);
 	assert.equal(ext('site.dxf', 'application/octet-stream'), none);
-	assert.equal(ext('a.zip', 'application/zip'), none);
+	assert.equal(ext('a.zip', 'application/zip'), 'zip:archive');
+	assert.equal(ext('src.tar.gz', 'application/octet-stream'), 'tgz:archive');
 	assert.equal(ext('a.pdf', 'application/x-unknown'), none);
 });
 
@@ -224,6 +231,137 @@ const opensLike = async (name: string, open: string, mime: string) => {
 	const parse = (out: Ingested) => (out.kind === 'data' ? out.json : out.html);
 	assert.deepEqual(parse(await Effect.runPromise(read(name, 'convert'))), parse(await Effect.runPromise(read(open))), name);
 };
+/** A zip of `files`, deflated, as any zip tool writes one. */
+const zip = (files: Record<string, Uint8Array>) => {
+	const u16 = (n: number) => Buffer.from([n & 255, (n >> 8) & 255]);
+	const u32 = (n: number) => { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b; };
+	const locals: Buffer[] = [], central: Buffer[] = [];
+	let at = 0;
+	for (const [path, bytes] of Object.entries(files)) {
+		const name = Buffer.from(path), packed = deflateRawSync(bytes), crc = crc32(bytes);
+		const common = [u16(8), u16(0), u16(0), u32(crc), u32(packed.length), u32(bytes.length), u16(name.length), u16(0)];
+		const local = Buffer.concat([u32(0x04034b50), u16(20), u16(0x800), ...common, name, packed]);
+		central.push(Buffer.concat([u32(0x02014b50), u16(20), u16(20), u16(0x800), ...common, u16(0), u16(0), u16(0), u32(0), u32(at), name]));
+		locals.push(local);
+		at += local.length;
+	}
+	const directory = Buffer.concat(central);
+	const n = Object.keys(files).length;
+	return new Uint8Array(Buffer.concat([...locals, directory, u32(0x06054b50), u16(0), u16(0), u16(n), u16(n), u32(directory.length), u32(at), u16(0)]));
+};
+/** A gzipped tar of one file. */
+const tgz = (path: string, bytes: Uint8Array) => {
+	const header = Buffer.alloc(512);
+	header.write(path, 0);
+	header.write('0000644\0', 100);
+	header.write(`${bytes.length.toString(8).padStart(11, '0')}\0`, 124);
+	header.write('0', 156);
+	header.write('ustar\0', 257);
+	return new Uint8Array(gzipSync(Buffer.concat([header, Buffer.from(bytes), Buffer.alloc(512 - (bytes.length % 512)), Buffer.alloc(1024)])));
+};
+
+test('an archive lists its files; an entry, on into an inner archive, reads as its own type; text without a known type is text', async () => {
+	const archive = zip({
+		'repo/README.md': text('# Ops portal'),
+		'repo/src/app.ts': text('export const a = 1;'),
+		'repo/bin.dat': new Uint8Array([0, 1, 2, 3]),
+		'repo/inner.tgz': tgz('notes/todo.txt', text('ship it'))
+	});
+	const read = (entry?: string) =>
+		Effect.runPromise(Effect.result(ingest({ name: 'repo.zip', mime: 'application/zip', bytes: archive, ...(entry === undefined ? {} : { options: { entry } }) })));
+	const html = async (entry?: string) => {
+		const got = await read(entry);
+		if (got._tag !== 'Success' || got.success.kind !== 'document') throw new Error(`no document at ${entry}`);
+		return got.success.html;
+	};
+	const listing = (...lines: string[]) => ['<pre>', ...lines, '</pre>'].join('\n');
+	assert.equal(await html(), listing('repo/README.md  12 bytes', 'repo/src/app.ts  19 bytes', 'repo/bin.dat  4 bytes', `repo/inner.tgz  ${tgz('notes/todo.txt', text('ship it')).length} bytes`));
+	assert.equal(await html('repo/src'), listing('repo/src/app.ts  19 bytes'));
+	assert.equal(await html('repo/src/app.ts'), '<pre>\nexport const a = 1;\n</pre>');
+	assert.equal(await html('repo/inner.tgz/notes/todo.txt'), '<pre>\nship it\n</pre>');
+	assert.equal(await html('repo/inner.tgz'), listing('notes/todo.txt  7 bytes'));
+	const binary = await read('repo/bin.dat');
+	assert.ok(binary._tag === 'Failure' && binary.failure.message === 'bin.dat: 4 bytes, binary; no parser for this format');
+	const missing = await read('repo/nope.ts');
+	assert.ok(missing._tag === 'Failure' && missing.failure.message === "the archive has no 'repo/nope.ts'");
+});
+
+test('an archive is bounded: a bomb is refused by its ratio, a lying size stops at what it stated', async () => {
+	const fail = async (bytes: Uint8Array, entry: string) => {
+		const got = await Effect.runPromise(Effect.result(ingest({ name: 'b.zip', mime: 'application/zip', bytes, options: { entry } })));
+		return got._tag === 'Failure' ? got.failure.message : 'read';
+	};
+	assert.equal(await fail(zip({ 'zeros.txt': new Uint8Array(64 * 1024 * 1024) }), 'zeros.txt'), `zeros.txt inflates over ${ARCHIVE.ratio} times: refused as a zip bomb`);
+	// the directory says 10 bytes: the inflate stops there, whatever the data holds
+	const lying = zip({ 'a.txt': text('x'.repeat(5000)) });
+	const view = Buffer.from(lying.buffer, lying.byteOffset, lying.byteLength);
+	view.writeUInt32LE(10, view.lastIndexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02])) + 24);
+	assert.equal(await fail(new Uint8Array(view), 'a.txt'), 'a.txt unpacks past 10 bytes');
+});
+
+test('a listing reads only the directory: an entry whose data is damaged still lists, and fails only when read', async () => {
+	const archive = zip({ 'ok.txt': text('fine'), 'bad.txt': text('y'.repeat(300)) });
+	const view = Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength);
+	// garble bad.txt's deflate stream (its local header is the second one)
+	const local = view.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]), 4);
+	view.fill(0xff, local + 30 + 'bad.txt'.length, local + 30 + 'bad.txt'.length + 4);
+	const read = (entry?: string) =>
+		Effect.runPromise(Effect.result(ingest({ name: 'a.zip', mime: 'application/zip', bytes: new Uint8Array(view), ...(entry === undefined ? {} : { options: { entry } }) })));
+	const listed = await read();
+	assert.ok(listed._tag === 'Success' && listed.success.kind === 'document' && listed.success.html.includes('bad.txt  300 bytes'));
+	const bad = await read('bad.txt');
+	assert.ok(bad._tag === 'Failure' && bad.failure.message === 'bad.txt is damaged');
+});
+
+test('a large archive is read from the disk: memory stays flat whatever its size', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'convert-big-')),
+		path = join(dir, 'big.zip');
+	onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+	// a 200 MiB stored entry, then a small one, written a chunk at a time
+	const fd = openSync(path, 'w'),
+		chunk = randomBytes(1024 * 1024),
+		entries: { name: Buffer; crc: number; size: number; at: number }[] = [];
+	let at = 0;
+	const u16 = (n: number) => Buffer.from([n & 255, (n >> 8) & 255]);
+	const u32 = (n: number) => { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b; };
+	const put = (b: Buffer) => { writeSync(fd, b); at += b.length; };
+	for (const [file, parts] of [['big.bin', 200], ['small.txt', 0]] as const) {
+		const name = Buffer.from(file), body = parts === 0 ? Buffer.from('small but read') : undefined;
+		let crc = 0, size = 0;
+		for (let i = 0; i < parts; i++) (crc = crc32(chunk, crc)), (size += chunk.length);
+		if (body) (crc = crc32(body)), (size = body.length);
+		entries.push({ name, crc, size, at });
+		put(Buffer.concat([u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(size), u32(size), u16(name.length), u16(0), name]));
+		if (body) put(body);
+		else for (let i = 0; i < parts; i++) put(chunk);
+	}
+	const directory = Buffer.concat(entries.map((e) => Buffer.concat([u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(e.crc), u32(e.size), u32(e.size), u16(e.name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(e.at), e.name])));
+	put(Buffer.concat([directory, u32(0x06054b50), u16(0), u16(0), u16(2), u16(2), u32(directory.length), u32(at), u16(0)]));
+	closeSync(fd);
+	const gc = runInNewContext('gc', {}, { contextName: 'gc' }) as () => void;
+	const read = (entry?: string) =>
+		Effect.runPromise(Effect.result(ingest({ name: 'big.zip', mime: 'application/zip', path, bytes: new Uint8Array(), ...(entry === undefined ? {} : { options: { entry } }) })));
+	await read('small.txt'); // the readers' modules load once, before the baseline
+	gc();
+	const before = process.memoryUsage();
+	const listed = await read();
+	const small = await read('small.txt');
+	const big = await read('big.bin'); // 200 MiB streamed to a scratch file, then named binary
+	gc();
+	const after = process.memoryUsage();
+	const mib = (key: 'rss' | 'heapUsed' | 'external' | 'arrayBuffers') => (after[key] - before[key]) / 1024 / 1024;
+	const grown = mib('rss');
+	console.log(`200 MiB archive: RSS +${grown.toFixed(1)} MiB, heap +${mib('heapUsed').toFixed(1)}, external +${mib('external').toFixed(1)}, buffers +${mib('arrayBuffers').toFixed(1)}`);
+	assert.ok(listed._tag === 'Success' && listed.success.kind === 'document' && listed.success.html.includes('big.bin  209,715,200 bytes'));
+	assert.ok(small._tag === 'Success' && small.success.kind === 'document' && small.success.html.includes('small but read'));
+	assert.ok(big._tag === 'Failure' && /over 16 MiB to read/.test(big.failure.message), big._tag === 'Failure' ? big.failure.message : '');
+	// nothing is kept: the heap and buffers end where they began. RSS keeps the allocator's high-water mark of the chunks
+	// in flight (a plain 200 MiB stream copy alone adds ~45 MiB on macOS), never the archive or the entry
+	assert.ok(mib('heapUsed') + mib('external') < 10, `retained ${mib('heapUsed') + mib('external')} MiB`);
+	assert.ok(grown < 100, `RSS grew ${grown} MiB`);
+}, 60_000);
+
+
 test('a locked xlsx or docx opens with its password', async () => {
 	await opensLike('locked.xlsx', 'tables.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 	await opensLike('locked.docx', 'tables.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -232,7 +370,10 @@ test('a locked xlsx or docx opens with its password', async () => {
 // ---------- over HTTP ----------
 const dir = mkdtempSync(join(tmpdir(), 'convert-ingest-'));
 const running: { stop: () => Promise<void> }[] = [];
-afterAll(() => Promise.all(running.map((s) => s.stop())));
+afterAll(async () => {
+	await Promise.all(running.map((s) => s.stop()));
+	rmSync(dir, { recursive: true, force: true });
+});
 const never: Converter = () => Effect.die('not a conversion');
 async function start() {
 	const svc = service({ keys: ['k1'], database: join(dir, `db-${running.length}.db`), pollMs: 20, convert: never, ingest: readTo(ingest), maxIngestBytes: 4096 });
@@ -260,8 +401,8 @@ test('POST /v1/ingest streams the job, then the ingest; unsupported files are re
 	assert.equal(result.meta.stats.bytes, 5);
 
 	for (const [name, mime, status, message] of [
-		['clip.mov', 'video/quicktime', 415, 'no parser: build a tool for it with your workspace tools'],
-		['site.dwg', 'image/vnd.dwg', 415, 'no parser: build a tool for it with your workspace tools'],
+		['clip.mov', 'video/quicktime', 415, 'no parser for this format'],
+		['site.dwg', 'image/vnd.dwg', 415, 'no parser for this format'],
 		['call.mp3', 'audio/mpeg', 503, 'this converter has no transcription model']
 	] as const) {
 		const refused = await call('/v1/ingest', { name, mime, bytes: 'AAAA' });

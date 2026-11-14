@@ -125,6 +125,10 @@ const MetaSchema = Schema.Union([
 	Schema.Struct({ tag: Schema.Literal('output'), full: Schema.Json }),
 	Schema.Struct({
 		tag: Schema.Literal('note'),
+		/** The run whose end this note reports (a run an agent started), so each end is told once. */
+		run: Schema.optionalKey(Schema.String),
+		/** The host's id for its note (`ActiveWorkspace.notify`), so each is told once. */
+		notice: Schema.optionalKey(Schema.String),
 		/**
 		 * A catalogue note's state (`catalogueNote`): the index it brought the conversation to, and on the first after a
 		 * checkpoint the MCP tools the conversation's tool list then froze.
@@ -358,10 +362,30 @@ const SourceEdit = Schema.fromJsonString(
 	Schema.Struct({
 		path: Schema.String,
 		content: Schema.optionalKey(Schema.String),
-		old_string: Schema.optionalKey(Schema.String),
-		new_string: Schema.optionalKey(Schema.String)
+		oldString: Schema.optionalKey(Schema.String),
+		newString: Schema.optionalKey(Schema.String)
 	})
 );
+const SourcePatch = Schema.fromJsonString(Schema.Struct({ patchText: Schema.String }));
+/** A patch's files as unified hunks: `@@` lines, then lines marked ` `, `-` or `+`; an added file is all `+`. */
+function patchChanges(patch: string): Array<{ path: string; diff: string; change: string }> {
+	const files: Array<{ path: string; diff: string; change: string }> = [];
+	for (const line of patch.split('\n')) {
+		const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line.trimEnd());
+		const file = files.at(-1);
+		if (header !== null)
+			files.push({
+				path: header[2] ?? '',
+				diff: '',
+				change: header[1] === 'Add' ? 'added' : header[1] === 'Delete' ? 'deleted' : 'modified'
+			});
+		else if (file !== undefined && line.startsWith('*** Move to: '))
+			file.path = `${file.path} → ${line.slice('*** Move to: '.length).trim()}`;
+		else if (file !== undefined && !line.startsWith('***') && /^[-+ @]/.test(line))
+			file.diff = file.diff === '' ? line : `${file.diff}\n${line}`;
+	}
+	return files.map((file) => ({ ...file, diff: file.diff.slice(0, 8000) }));
+}
 const marked = (mark: string, text: string) =>
 	text
 		.split('\n')
@@ -375,17 +399,21 @@ function changesOf(
 	step: { readonly name: string; readonly args?: string } | null
 ): ReadonlyArray<{ path: string; diff: string; change?: string }> | undefined {
 	if (step === null) return undefined;
+	if (step.name === 'workspace_patch') {
+		const patch = Option.getOrUndefined(Schema.decodeUnknownOption(SourcePatch)(step.args));
+		return patch === undefined ? undefined : patchChanges(patch.patchText);
+	}
 	const edit =
 		step.name === 'workspace_edit' || step.name === 'workspace_write'
 			? Option.getOrUndefined(Schema.decodeUnknownOption(SourceEdit)(step.args))
 			: undefined;
 	if (edit?.content !== undefined)
 		return [{ path: edit.path, diff: marked('+', edit.content).slice(0, 8000) }];
-	if (edit?.old_string !== undefined && edit.new_string !== undefined)
+	if (edit?.oldString !== undefined && edit.newString !== undefined)
 		return [
 			{
 				path: edit.path,
-				diff: `${marked('-', edit.old_string)}\n${marked('+', edit.new_string)}`.slice(0, 8000)
+				diff: `${marked('-', edit.oldString)}\n${marked('+', edit.newString)}`.slice(0, 8000)
 			}
 		];
 	return undefined;
@@ -404,7 +432,7 @@ const ranOf = Schema.decodeUnknownOption(
 );
 /**
  * What the panel reads of a step's result: its `error`, the `files` it stored or collected, the run a `wait` `settled`
- * (whose answer may be a file), a sub-agent's `conversation`, an `act`'s write (`results` only in transcripts from the retired write list), a
+ * (whose answer may be a file), an `act`'s write (`results` only in transcripts from the retired write list), a
  * `preview` URL and a held `approval`. A result of any other shape shows none of them.
  */
 const Outcome = Schema.Struct({
@@ -419,7 +447,6 @@ const Outcome = Schema.Struct({
 			})
 		)
 	),
-	conversation: Schema.optionalKey(Schema.String),
 	preview: Schema.optionalKey(Schema.String),
 	navigation: Schema.optionalKey(Schema.String),
 	page: Schema.optionalKey(PageAction),
@@ -473,8 +500,11 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 			(f): f is FileRef => isFileRef(f) && f.id !== undefined && f.mime !== undefined
 		),
 		files = r.files !== undefined && r.files.length > 0 ? r.files : made;
-	// a `spawn` answers its conversation; an `act` the runs it started, one write or `results` of them
-	const child = step?.name === 'subagent' ? outcome.conversation : undefined;
+	// a `task` answers its sub-agent's id; an `act` the runs it started, one write or `results` of them
+	const child =
+		step?.name === 'task' && typeof step.result === 'string'
+			? /^<task id="([^"]+)"/.exec(step.result)?.[1]
+			: undefined;
 	const runs =
 		step?.name === 'act'
 			? [

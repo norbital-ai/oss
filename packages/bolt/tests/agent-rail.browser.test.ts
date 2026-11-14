@@ -95,16 +95,16 @@ const fixture = (preview = false) => {
 			role: 'tool',
 			at,
 			tool: { behavior: {},
-				name: 'subagent',
+				name: 'task',
 				failed: false,
 				child: child.id,
 				ms: 20,
-				args: JSON.stringify({ task: taskNames[index] })
+				args: JSON.stringify({ description: taskNames[index], prompt: taskNames[index], subagent_type: 'general' })
 			}
 		});
 	for (const [index, [name, args]] of ([
-		['subagent_message', { conversation: 'rail-child-0', text: 'Please include permissions.' }],
-		['subagent_stop', { conversation: 'rail-child-5' }]
+		['task', { description: 'Please include permissions.', prompt: 'Please include permissions.', subagent_type: 'general', task_id: 'rail-child-0' }],
+		['task_stop', { task_id: 'rail-child-5' }]
 	] as const).entries())
 		rows.push({
 			...row(`subagent-action-${index}`, index + 10, ''),
@@ -116,7 +116,7 @@ const fixture = (preview = false) => {
 		...row(
 			'rail-report',
 			12,
-			`Sub-agent "Public templates" (conversation rail-child-3) finished: ${reportBody}`
+			`<task id="rail-child-3" state="completed">\n<summary>Background task completed: Public templates</summary>\n<task_result>\n${reportBody}\n</task_result>\n</task>`
 		),
 		at,
 		state: 'queued',
@@ -267,7 +267,7 @@ const withComposer = async (
 								.element(page.getByRole('textbox', { name: 'Message', exact: true }))
 								.toBeVisible();
 							await expect
-								.poll(() => target.querySelectorAll('[data-step][data-tool^="subagent"]').length)
+								.poll(() => target.querySelectorAll('[data-step][data-tool^="task"]').length)
 								.toBe(10);
 							await document.fonts.ready;
 							await settleMotion(target);
@@ -464,8 +464,9 @@ it('shows compact attachment cards with independent preview and download control
 		const card = element(target, '[data-role="user"] [data-attachment="workspace-reference.png"]');
 		const image = element<HTMLImageElement>(card, 'img');
 		await expect.poll(() => image.complete && image.naturalWidth > 0).toBe(true);
-		expect(image.getBoundingClientRect().height).toBeLessThanOrEqual(100);
-		expect(image.getBoundingClientRect().width).toBeLessThanOrEqual(150);
+		// a 16:9 card at most 18rem wide
+		expect(image.getBoundingClientRect().height).toBeLessThanOrEqual(162);
+		expect(image.getBoundingClientRect().width).toBeLessThanOrEqual(288);
 		expect(card.textContent).not.toContain('Attached:');
 		const download = page.getByRole('link', { name: 'Download workspace-reference.png', exact: true });
 		await expect.element(download).toHaveAttribute('download', 'workspace-reference.png');

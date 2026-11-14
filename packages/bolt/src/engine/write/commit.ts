@@ -79,11 +79,6 @@ export type Commit = {
 		route: Extract<ApprovalSnapshot, { kind: 'steps' }>;
 		pieces: (c: Chain, held: string | null) => void;
 	};
-	/**
-	 * A write its flow requires that joined the open request holding its records (no request opens): asserted at commit,
-	 * so a request decided since the plan read it replays the act instead of committing the write unreviewed.
-	 */
-	joined?: true;
 	/** A `keep` upsert creates rows: a unique clash means another writer created one first, and the act replays to keep it. */
 	kept?: true;
 	/** A requester's save on their own ChangesRequested request (`ApprovalHook.resubmit`): pieces after `allp` and the lock. */
@@ -153,13 +148,13 @@ export function chunked<T>(items: readonly T[]): T[][] {
  * find their row); deletes last, children before parents; each in input order. A delete splits only when its cascades,
  * unlinks and roll-ups reach no other table the act writes: a later statement would find that row already changed.
  * Erasures and restores travel with their rows; a sync page's pieces run in the last statement over every statement's
- * rows. An approval, resubmit, joined write, decision or sync rollback stays one statement: its request's records,
+ * rows. An approval, resubmit, decision or sync rollback stays one statement: its request's records,
  * checkpoint and lock outcome are one row and one answer over every row of the act.
  */
 export function parts(m: EngineManifest, cat: Catalog, x: Commit): readonly Commit[] | undefined {
 	if (x.writes.length <= PART.rows && utf8Bytes(JSON.stringify(x.writes)) <= PART.bytes) return undefined;
 	if (
-		x.approval !== undefined || x.resubmit !== undefined || x.joined === true || x.before !== undefined ||
+		x.approval !== undefined || x.resubmit !== undefined || x.before !== undefined ||
 		x.approvalDecision !== undefined || x.rollback === true || (x.notices?.length ?? 0) > 0
 	)
 		return undefined;
@@ -552,7 +547,6 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		x.rollback !== true && hasWrites
 			? lockPieces(m, cat, c, x.actor, 'allp', x.approvalDecision?.request, x.resubmit?.request)
 			: null;
-	if (x.joined === true && hit !== null) c.assert('EXISTS (SELECT 1 FROM ap_hit)', 'fingerprint');
 	if (x.approvalDecision !== undefined && hit !== null)
 		c.assertWith(
 			`NOT EXISTS (SELECT 1 FROM ${hit})`,
@@ -598,7 +592,7 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 	}
 	// a sync write is irreversible: a record an approval request holds queues only once it is approved (approvals.ts),
 	// generic rollback skips this hook; the sync rollback owner explicitly queues its peers' recovery images
-	// (a routed write that joined an open request queues what that request does not hold; one that opened its own, nothing)
+	// (a write on a held record queues what that request does not hold; a routed write that opened its own, nothing)
 	if (x.approvalDecision === undefined && x.rollback !== true && (x.approval === undefined || hit !== null))
 		syncOutboxPiece(
 			m,

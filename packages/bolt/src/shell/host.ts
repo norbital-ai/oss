@@ -1263,6 +1263,7 @@ const makeShell = Effect.gen(function* () {
 						.notify({
 							conversation: decided.conversation,
 							text,
+							id: `approval:${decided.id}`,
 							as: { member: auth.actor.id }
 						})
 						.pipe(

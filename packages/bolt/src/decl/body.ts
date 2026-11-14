@@ -5,9 +5,10 @@ import type { BodyReturn } from './ctx.ts';
 import type { Verdict, VerdictData } from './access/policy.ts';
 
 /**
- * How the in-app agent may call a query or action: `direct` (default), `confirm` (an in-app confirmation card first) or `never`.
+ * Whether the in-app agent may start an automation: `confirm` (the default; the person confirms on an in-app card before
+ * every start) or `never`. The agent never starts one unconfirmed.
  */
-export type AgentUse = 'direct' | 'confirm' | 'never';
+export type AgentUse = 'confirm' | 'never';
 /** The value a query, action or automation literal declares as its `output` (`undefined` when it declares none). */
 export type OutputOf<X> = X extends { output: infer O } ? ValueOf<O> : undefined;
 /** A body as a declaration stores it and the guest calls it by path. */

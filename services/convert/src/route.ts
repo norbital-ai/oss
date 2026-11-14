@@ -1,6 +1,6 @@
 // Which reader a file goes to: by its mime type, then its name's extension, never a guess at its contents.
-export type Kind = 'pdf' | 'document' | 'slides' | 'sheets' | 'text' | 'image' | 'audio';
-type Reader = 'html' | 'office' | 'libreoffice' | 'workbook' | 'pdf' | 'pre' | 'csv' | 'json' | 'image' | 'audio';
+export type Kind = 'pdf' | 'document' | 'slides' | 'sheets' | 'text' | 'image' | 'audio' | 'archive';
+type Reader = 'html' | 'office' | 'libreoffice' | 'workbook' | 'pdf' | 'pre' | 'csv' | 'json' | 'image' | 'audio' | 'archive';
 const FORMATS: Record<string, { mime: string; kind: Kind; reader: Reader }> = {
 	pdf: { mime: 'application/pdf', kind: 'pdf', reader: 'pdf' },
 	doc: { mime: 'application/msword', kind: 'document', reader: 'office' },
@@ -33,7 +33,10 @@ const FORMATS: Record<string, { mime: string; kind: Kind; reader: Reader }> = {
 	png: { mime: 'image/png', kind: 'image', reader: 'image' },
 	jpg: { mime: 'image/jpeg', kind: 'image', reader: 'image' },
 	gif: { mime: 'image/gif', kind: 'image', reader: 'image' },
-	webp: { mime: 'image/webp', kind: 'image', reader: 'image' }
+	webp: { mime: 'image/webp', kind: 'image', reader: 'image' },
+	zip: { mime: 'application/zip', kind: 'archive', reader: 'archive' },
+	tar: { mime: 'application/x-tar', kind: 'archive', reader: 'archive' },
+	tgz: { mime: 'application/gzip', kind: 'archive', reader: 'archive' }
 };
 const ALIAS: Record<string, string> = {
 	htm: 'html',
@@ -43,13 +46,18 @@ const ALIAS: Record<string, string> = {
 	'text/rtf': 'rtf',
 	'application/xhtml+xml': 'html',
 	'text/markdown': 'txt',
-	'image/jpg': 'jpg'
+	'image/jpg': 'jpg',
+	gz: 'tgz',
+	'application/x-zip-compressed': 'zip',
+	'application/x-gzip': 'tgz',
+	'application/x-gtar': 'tgz',
+	'application/x-compressed-tar': 'tgz'
 };
 const BY_MIME = new Map(Object.entries(FORMATS).map(([ext, f]) => [f.mime, ext]));
 const AUDIO = /^(mp3|m4a|wav|ogg|oga|opus|flac|aac|weba|webm|mp4)$/;
 /** Containers whose audio track the transcriber can read (mp4, m4a, webm, ogg); other video containers are refused. */
 const CONTAINER = /^(mp4|m4a|webm|ogg)$/;
-const NO_PARSER = 'no parser: build a tool for it with your workspace tools';
+export const NO_PARSER = 'no parser for this format';
 
 export type Route =
 	| { ok: true; ext: string; kind: Kind; reader: Reader; mime: string }
@@ -76,4 +84,4 @@ export function route(name: string, mime: string): Route {
 
 /** A file these readers take goes to an engine from the disk: its bytes are never read here. */
 export const fromDisk = (reader: Reader) =>
-	reader === 'office' || reader === 'libreoffice' || reader === 'workbook' || reader === 'pdf';
+	reader === 'office' || reader === 'libreoffice' || reader === 'workbook' || reader === 'pdf' || reader === 'archive';

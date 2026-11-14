@@ -118,6 +118,10 @@ export type PlannedCommit = {
 	readonly commit: Omit<Commit, 'key' | 'digest' | 'issuedAt' | 'rate'>;
 	readonly lock?:
 		{ readonly tables: readonly string[]; readonly mode: 'SHARE ROW EXCLUSIVE' } | undefined;
+	/** Records the caller observed at an older revision, and the fields updates have moved since (`moved`). */
+	readonly moved?: readonly { readonly model: string; readonly id: string; readonly fields: readonly string[] }[];
+	/** The tables the act's callbacks read (`ctx.query`): a moved record of one is read, whichever fields. */
+	readonly reads?: readonly string[];
 };
 /**
  * A remote sync's read page (B6): one act on the sync's own model, judged by no grant. The input is `verb: 'upsert'`,
@@ -558,12 +562,14 @@ export type AgentsShape = {
 	readonly kick: (id: string) => Effect.Effect<void>;
 	/** Each conversation whose turn no run will finish says so: `Runs.boot` released them. */
 	readonly gaveUp: (conversations: readonly string[]) => Effect.Effect<void, EngineError>;
-	/** Append a system note (an approved or rejected request) and wake the conversation's turn. */
+	/** The host's word (`ActiveWorkspace.notify`): a queued system note that wakes the conversation, once per `id`; `false` for a repeat. */
 	readonly notify: (o: {
 		readonly conversation: string;
 		readonly text: string;
-		readonly as?: As | null | undefined;
-	}) => Effect.Effect<void, EngineError>;
+		readonly id: string;
+		/** Whose turn it wakes (a decision's maker); none: the conversation's last sender. */
+		readonly as?: As | undefined;
+	}) => Effect.Effect<boolean, EngineError>;
 	readonly drain: (conversation: string) => Effect.Effect<TurnResult, EngineError>;
 	readonly conversation: (id: string) => Effect.Effect<ConversationRow, EngineError>;
 	readonly transcript: (

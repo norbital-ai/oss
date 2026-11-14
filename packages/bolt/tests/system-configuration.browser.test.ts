@@ -58,7 +58,8 @@ const settings: Settings = {
 			configuration: {}
 		}
 	],
-	signup: null
+	signup: null,
+	retention: { every_days: 1, hour: 3, notifications_days: 30, runs_days: 90 }
 };
 const nativeApi = shell_api(async () => Response.json({ value: [] }));
 

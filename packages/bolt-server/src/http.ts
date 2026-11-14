@@ -5,40 +5,23 @@
 // refused grant deletes it, and only while no concurrent refresh stored a newer one), and the call goes through
 // the host's HTTP port under its public-network policy (HTTPS, pinned DNS, private ranges refused). A `429` or `503`
 // answers its `Retry-After` beside `{ status, body }`.
-// Credentials never reach the guest; a path that leaves the base is refused before any credential is read.
-import { Clock, Effect, Option, Predicate, Result, Schema } from 'effect';
+// Credentials never reach the guest; a path that leaves the base, or a request outside the definition's `allow`, is
+// refused before any credential is read.
+import { Clock, Effect, Option, Predicate, Schema } from 'effect';
 import type { Json } from 'effect/Schema';
 import {
 	FacilityFailure,
 	type Fenced,
 	HOST_LIMITS,
+	http_allows,
+	http_auth,
+	http_target,
 	type HttpPort,
 	type IntegrationDefinition,
 	Port,
 	type PortFailure,
 	Unavailable
 } from '@norbital-ai/host-api';
-
-/**
- * `path` under `base`, never outside it: one leading `/` is the base itself; an absolute or `//host` path, `..`/`.`
- * segments (encoded too), a `\\`, a query or fragment, or an encoded `/`, `\\` or `%` in a segment is refused. The
- * query (a page cursor included) goes through `searchParams`, so pagination stays inside the prefix.
- */
-export function target(base: string, path: string): URL {
-	const root = new URL(base.endsWith('/') ? base : `${base}/`);
-	const rel = path.startsWith('/') ? path.slice(1) : path;
-	const refuse = () => FacilityFailure.invalid(`the path '${path}' leaves the integration's base URL`);
-	if (rel.startsWith('/') || /[\\?#\s\x00-\x1f]/.test(rel)) throw refuse();
-	for (const part of rel === '' ? [] : rel.split('/')) {
-		const decoded = Result.try({ try: () => decodeURIComponent(part), catch: refuse });
-		if (Result.isFailure(decoded)) throw decoded.failure;
-		const d = decoded.success;
-		if (d === '.' || d === '..' || /[\\/%\x00-\x1f]/.test(d)) throw refuse();
-	}
-	const url = new URL(rel, root);
-	if (url.origin !== root.origin || !url.pathname.startsWith(root.pathname)) throw refuse();
-	return url;
-}
 
 const Token = Schema.Struct({
 	access: Schema.String,
@@ -77,7 +60,8 @@ const send = (
 		return {
 			status: response.status,
 			text: new TextDecoder().decode(response.body),
-			retryAfter: response.headers.find(([name]) => name === 'retry-after')?.[1]
+			retryAfter: response.headers.find(([name]) => name === 'retry-after')?.[1],
+			scopes: response.headers.find(([name]) => name === 'x-oauth-scopes')?.[1]
 		};
 	}).pipe(Port.call('request', HOST_LIMITS.callMs.http));
 export type HttpInstance = {
@@ -102,6 +86,73 @@ export const http_oauth = (
 		: { ...oauth, authorize: oauth.authorize, token: oauth.token };
 };
 const invalid = (message: string) => FacilityFailure.invalid(message);
+const GITHUB = 'https://api.github.com/';
+/**
+ * A read-only GitHub connection's bearer credential field: its base is GitHub's API and its `allow` admits only `GET`
+ * and `HEAD`. `undefined` for any other definition.
+ */
+export const github_read_only = (def: IntegrationDefinition): string | undefined => {
+	const spec = def.http,
+		auth = spec?.auth;
+	return spec?.base_url === GITHUB &&
+		spec.allow !== undefined &&
+		spec.allow.methods.every((method) => method === 'GET' || method === 'HEAD') &&
+		auth !== undefined &&
+		'bearer' in auth
+		? auth.bearer
+		: undefined;
+};
+/** What a read-only GitHub connection's token field asks for. */
+export const GITHUB_TOKEN_HINT = {
+	en: 'A fine-grained token with Contents: Read-only on the repositories you choose.',
+	zh: '一个细粒度令牌，仅对你选择的仓库授予 Contents: Read-only 权限。'
+};
+const READ_ONLY = 'use a fine-grained token with Contents: Read-only';
+/**
+ * Checks a read-only GitHub connection's token before it is stored: only a fine-grained one (`github_pat_…`; a classic
+ * `ghp_…` token's private-repository scope `repo` writes), and `GET /user` must accept it with no write scope in its
+ * `X-OAuth-Scopes`. Refusals never carry the token or the request's error.
+ */
+export const github_token = (token: string, http: HttpPort) =>
+	Effect.gen(function* () {
+		if (!token.startsWith('github_pat_'))
+			return yield* Effect.fail(
+				invalid(
+					token.startsWith('ghp_')
+						? `a classic token can write to every repository it reaches; ${READ_ONLY}`
+						: `this is not a fine-grained GitHub token (github_pat_…); ${READ_ONLY}`
+				)
+			);
+		const response = yield* send(http, `${GITHUB}user`, 'GET', {
+			accept: 'application/vnd.github+json',
+			authorization: `Bearer ${token}`,
+			'user-agent': 'norbital'
+		}).pipe(
+			Effect.mapError(
+				() =>
+					new FacilityFailure({
+						kind: 'upstream',
+						message: 'GitHub could not be reached to check the token'
+					})
+			)
+		);
+		if (response.status === 401) return yield* Effect.fail(invalid('GitHub refused the token'));
+		if (response.status < 200 || response.status >= 300)
+			return yield* Effect.fail(
+				new FacilityFailure({
+					kind: 'upstream',
+					message: `GitHub answered ${response.status} checking the token`
+				})
+			);
+		const writes = (response.scopes ?? '')
+			.split(',')
+			.map((scope) => scope.trim())
+			.filter((scope) => scope !== '' && !scope.startsWith('read:'));
+		if (writes.length > 0)
+			return yield* Effect.fail(
+				invalid(`the token carries write scopes (${writes.join(', ')}); ${READ_ONLY}`)
+			);
+	});
 const unavailable = (reason: string) => new Unavailable({ facility: 'http', reason });
 /**
  * Sends one `{ method, path, query?, headers?, body? }` request for an `http` integration instance against its base URL,
@@ -137,10 +188,17 @@ export const http_request = (
 		const path = op['path'],
 			method = op['method'];
 		const url = yield* Effect.try({
-			try: () => target(base, path),
+			try: () => http_target(base, path),
 			catch: (error) =>
 				error instanceof FacilityFailure ? error : invalid('the request URL is invalid')
 		});
+		if (!http_allows(spec.allow, base, method, url))
+			return yield* Effect.fail(
+				new FacilityFailure({
+					kind: 'unsupported',
+					message: `this connection does not allow ${method.toUpperCase()} ${url.pathname}`
+				})
+			);
 		for (const [key, value] of Object.entries(Predicate.isObject(op['query']) ? op['query'] : {}))
 			url.searchParams.set(key, String(value));
 		const headers: Record<string, string> = {
@@ -152,25 +210,15 @@ export const http_request = (
 				)
 			)
 		};
-		const credential = instance.credentials.get('credential');
-		const field = (name: string) =>
-			Effect.suspend(() => {
-				const value = Predicate.isObject(credential) ? credential[name] : undefined;
-				return typeof value !== 'string' || value === ''
-					? Effect.fail(unavailable('the instance is not paired: its credential is missing'))
-					: Effect.succeed(value);
-			});
-		const auth = spec.auth,
-			oauth = http_oauth(def);
+		const oauth = http_oauth(def);
 		if (oauth !== undefined)
 			headers['authorization'] = `Bearer ${yield* token(oauth, instance, http, options)}`;
-		else if (auth !== undefined && 'bearer' in auth)
-			headers['authorization'] = `Bearer ${yield* field(auth.bearer)}`;
-		else if (auth !== undefined && 'basic' in auth)
-			headers['authorization'] =
-				`Basic ${Buffer.from(`${yield* field(auth.basic.user)}:${yield* field(auth.basic.password)}`).toString('base64')}`;
-		else if (auth !== undefined && 'header' in auth)
-			headers[auth.header.name.toLowerCase()] = yield* field(auth.header.value);
+		else {
+			const signed = http_auth(spec.auth, instance.credentials.get('credential'));
+			if (signed === undefined)
+				return yield* Effect.fail(unavailable('the instance is not paired: its credential is missing'));
+			Object.assign(headers, signed);
+		}
 		const response = yield* send(
 			http,
 			url.href,

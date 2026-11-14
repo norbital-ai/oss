@@ -14,6 +14,7 @@ import {
 	textIngest,
 	transcriptOf,
 	unparsed,
+	prose,
 	window
 } from '../src/engine/agent/ingest.ts';
 
@@ -43,13 +44,15 @@ describe('route', () => {
 			expect(route(mime, 'a')).toBe('audio');
 		expect(route('video/mp4', 'site.mp4')).toBe('unsupported');
 		expect(route('application/acad', 'plan.dwg')).toBe('unsupported');
-		expect(route('application/zip', 'a.zip')).toBe('unsupported');
+		expect(route('application/zip', 'a.zip')).toBe('convert');
+		expect(route('application/octet-stream', 'src.tar.gz')).toBe('convert');
 		// an unnamed type goes by its extension
 		expect(route('application/octet-stream', 'rates.xls')).toBe('convert');
 		expect(route('', 'meeting.m4a')).toBe('audio');
 		expect(route('application/octet-stream', 'plan.dwg')).toBe('unsupported');
-		expect(unparsed('plan.dwg', 'application/acad')).toContain(
-			'no parser. A call-mode automation'
+		// what happened, never which tool to reach for
+		expect(unparsed('plan.dwg', 'application/acad', 2048)).toBe(
+			'plan.dwg (application/acad, 2,048 bytes): binary; no parser for this format.'
 		);
 	});
 });
@@ -114,8 +117,15 @@ describe('windows', () => {
 			total: 1,
 			hits: [{ from: 3, to: 7, text: '<tr><td>7</td><td>12.50</td></tr>' }]
 		});
-		expect(grep(html, 'end', 30).hits).toEqual([{ from: 12, to: 12, text: '<p>End</p>' }]);
-		expect(grep(html, 'p>', 2)).toMatchObject({ total: 4, hits: [{ from: 2 }, { from: 8 }] });
+		// a paragraph of plain text is its text: what it says is found, not its markup
+		expect(grep(html, 'end', 30).hits).toEqual([{ from: 12, to: 12, text: 'End' }]);
+		expect(grep(html, 'p>', 2)).toMatchObject({ total: 1, hits: [{ from: 8 }] });
+	});
+	it('plain text reads as written: a paragraph or a <pre> line unescaped, a one-<pre> document one line per line', () => {
+		const code = prose('<pre>\nif (a &lt; b) {\n\treturn &quot;x&quot;;\n}\n</pre>');
+		expect(window(code).lines).toEqual(['1: if (a < b) {', '2: \treturn "x";', '3: }']);
+		expect(grep(code, 'a < b', 5).hits).toEqual([{ from: 1, to: 1, text: 'if (a < b) {' }]);
+		expect(window(html, 1, 2).lines).toEqual(['1: <h1>Cover</h1>', '2: Intro']);
 	});
 	it('a window shows only the images its own lines reference', () => {
 		expect(imagesIn(window(html, 1, 7).lines, ['image-1.png', 'image-2.png'])).toEqual([]);

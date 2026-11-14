@@ -12,6 +12,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 - A named ref layer replaces its FK with the row or null; a many-layer is its rows.
 - The answer maps each root to `{ rows, next, total }`. `total` counts every match in the same statement, linear in the match. An index search root and a nested many-layer carry none: use `aggregate` on that layer.
 - A user filter composes with the policy per key (`where` AND, `limit` capped); nothing widens it.
+- A policy filters an output's rows with `where`, and a layer's with `<relation>: { where }`. Own rows: `outputs: { default: { where: { created_by: { eq: { var: 'actor.id' } } } } }`. An output grant's keys are `where`, root `history` and the model's relations; nothing else (no `scope`).
 - Every list defaults to limit 10,000 and the root's order; page on with `after`. A complete read past the cap fails `TooLarge`, never truncates.
 - Filter and project in the request, never in memory.
 
@@ -37,8 +38,8 @@ A remote sync's pages write as its `policies`; a file's rows as the member impor
 ## Time and operands
 
 - Pass `ctx.clock('day').today` or a minute or hour clock's `now` as literal inputs. See [dates-and-time.md](dates-and-time.md).
-- A value position may hold `{ field: '<column>' }` or `{ var: '<CEL>' }` over `actor` (`id`, `email`, `phone`, `party`, `visitor`, `instance`, `teams`, `team_tree`, `scopes.<policy>`) and the clock, evaluated once per read and checked against the field's kind.
-- Time expressions are edge-only: view filters, the agent's read and described filters evaluate them; the store refuses them.
+- A value position may hold `{ field: '<column>' }` or an actor variable `{ var: 'actor.<name>' }`, resolved per caller in policies and reads alike (an automation's actor matches nothing). Each fits one kind: `id` a `sys_user` ref (`created_by`, `updated_by`), `email`/`phone` text of that format, `visitor` text, `instance` a `sys_integration` ref, `party` any ref; `teams`/`team_tree` (team-format text) and `scopes.<policy>` (refs) only under `in`. `check`, `unique` and a ref's `where` take none.
+- Clock variables (`today`, `now`) are edge-only: view filters, the agent's read and described filters materialize them; the store refuses them, so pass clock values. Actor variables are not edge-only.
 - A prior state of a record is `ctx.history` on a page, or a root `as_of` instant in server code.
 
 ## SSR pages
@@ -73,6 +74,7 @@ An update or delete names its selected row as `target`; its revision guards the 
 
 - Counts, sums and groups use a root or layer `aggregate`, or roll-up fields, never loops. Pages and server bodies use the same read request.
 - Ungrouped answers one object (`count` only when asked); grouped pages buckets, each with `key` and `count`.
+- Shape: `{ by?, count?: true, sum?|avg?|min?|max?: [field], where? }`; `by` is a field, a list, or `{ <day|week|month|quarter|year>: field }`, and a grouped aggregate states `limit` or `all: true`. A bucket is `{ key: { <by> }, count, sum: { <field> } }`.
 - View counts describe the full authorized scope: reuse them. A figure reused across screens is a roll-up or a shared helper.
 
 ## Search

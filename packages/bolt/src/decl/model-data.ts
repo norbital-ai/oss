@@ -160,7 +160,7 @@ const SourceModelData = Schema.Struct({
 		read: Schema.optionalKey(Schema.Unknown), write: Schema.optionalKey(Schema.Unknown)
 	})))
 });
-const decodeSourceModel = Schema.decodeUnknownSync(SourceModelData, { onExcessProperty: 'error' });
+const decodeSourceModel = Schema.decodeUnknownResult(SourceModelData, { onExcessProperty: 'error' });
 const decodeSystemModel = Schema.decodeUnknownSync(Schema.Struct({
 	...SourceModelData.fields,
 	table: SystemTableData
@@ -174,7 +174,9 @@ const OutputFields = Schema.Union([Schema.Literal('all'), ModelStrings]);
  * a body (a function or the check serializer's `true`) becomes its marker.
  */
 export function split_model(name: string, source: unknown): ModelParts {
-	return model_parts(name, decodeSourceModel(source));
+	const decoded = decodeSourceModel(source);
+	if (Result.isFailure(decoded)) throw new Error(`model '${name}': ${decoded.failure.message}`);
+	return model_parts(name, decoded.success);
 }
 /** Built-in tables share ordinary lowering after their separate physical metadata has been decoded. */
 export function split_system_model(name: string, source: unknown): ModelParts {
@@ -310,7 +312,9 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 		const add = (path: string, layer: unknown, depth: number) => {
 			if (depth > LAYER_MAX_DEPTH || !Predicate.isReadonlyObject(layer) || Array.isArray(layer))
 				throw new Error(`${path}: expected a nested output at most ${LAYER_MAX_DEPTH} levels deep`);
-			layers[path] = { fields: Schema.decodeUnknownSync(OutputFields)(layer['fields']) };
+			const fields = Schema.decodeUnknownResult(OutputFields)(layer['fields']);
+			if (Result.isFailure(fields)) throw new Error(`${path}: an output's fields: ${fields.failure.message}`);
+			layers[path] = { fields: fields.success };
 			for (const [relation, child] of Object.entries(layer)) {
 				if (relation === 'fields') continue;
 				if (relation.includes('.')) throw new Error(`${path}.${relation}: use a nested output`);
@@ -326,8 +330,8 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 			? {}
 			: {
 					create: {
-						columns: column_layers(name, create, ['filled', 'transform', 'effect']),
-						...(create.filled === undefined ? {} : { filled: column_layers(name, create.filled) }),
+						columns: column_layers(name, create, ['filled', 'transform', 'effect'], 'create'),
+						...(create.filled === undefined ? {} : { filled: column_layers(name, create.filled, [], 'create.filled') }),
 						...(create.transform === undefined ? {} : { transform: true }),
 						...(create.effect === undefined ? {} : { effect: true }),
 					}
@@ -336,7 +340,7 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 			? {}
 			: {
 					update: {
-						columns: column_layers(name, update, ['transform', 'effect']),
+						columns: column_layers(name, update, ['transform', 'effect'], 'update'),
 						...(update.transform === undefined ? {} : { transform: true }),
 						...(update.effect === undefined ? {} : { effect: true })
 					}

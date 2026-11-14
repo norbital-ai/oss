@@ -8,7 +8,7 @@
 import type { CatalogExposure, ComputedKind, Expr, KindSpec } from '@norbital-ai/store';
 export type { ComputedKind } from '@norbital-ai/store';
 import type { ConstraintData, ModelData, SyncData } from './model-data.ts';
-import { Predicate, Schema } from 'effect';
+import { Predicate, Result, Schema } from 'effect';
 import { attached, type Body, type GeneratorBody } from './body.ts';
 import type {
 	BodyReturn,
@@ -586,17 +586,29 @@ type WriteVerb = {
  * Lower a proved author tree once; engine admission and storage continue to address resolved paths. `reserved` names the
  * root's keys that are no relation (a verb's bodies, a grant's `verdict`).
  */
-export function column_layers(root: string, tree: unknown, reserved: readonly string[] = []): LayerColumns {
+export function column_layers(
+	root: string,
+	tree: unknown,
+	reserved: readonly string[] = [],
+	label = 'write tree'
+): LayerColumns {
 	const layers = new Map<string, readonly string[]>();
 	// built per call, not at module scope, where it keeps this module and Effect in a guest bundle without bodies
-	const columns = Schema.decodeUnknownSync(Schema.Array(Schema.String));
+	const columns = Schema.decodeUnknownResult(Schema.Array(Schema.String));
 	const visit = (path: string, node: unknown, depth: number) => {
 		if (depth > LAYER_MAX_DEPTH || !Predicate.isObject(node) || Array.isArray(node))
-			throw new Error(`${path}: expected a column tree at most ${LAYER_MAX_DEPTH} levels deep`);
-		layers.set(path, columns(node['fields']));
+			throw new Error(
+				`${label} '${path}': expected a layer { fields: [column, …], <relation>?: { … } } at most ${LAYER_MAX_DEPTH} levels deep${reserved.length === 0 ? '' : `; the root also takes ${reserved.join(', ')}`}`
+			);
+		const fields = columns(node['fields']);
+		if (Result.isFailure(fields))
+			throw new Error(
+				`${label} '${path}.fields': lists column names ['a', 'b'] ('all' is an output's): ${fields.failure.message}`
+			);
+		layers.set(path, fields.success);
 		for (const [relation, child] of Object.entries(node)) {
 			if (relation === 'fields' || (depth === 1 && reserved.includes(relation))) continue;
-			if (relation.includes('.')) throw new Error(`${path}.${relation}: use a nested column tree`);
+			if (relation.includes('.')) throw new Error(`${label} '${path}.${relation}': use a nested column tree`);
 			visit(`${path}.${relation}`, child, depth + 1);
 		}
 	};

@@ -13,7 +13,7 @@ export function keys_port(key: Uint8Array): KeysPort {
 	if (key.byteLength !== 32) throw new Error('the secrets key must be 32 bytes (AES-256)');
 	const seal = (plain: Uint8Array, aad: Uint8Array) => {
 		const iv = randomBytes(12),
-			cipher = createCipheriv('aes-256-gcm', key, iv).setAAD(aad);
+			cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 }).setAAD(aad);
 		const content = Buffer.concat([cipher.update(plain), cipher.final()]);
 		return new Uint8Array(Buffer.concat([iv, cipher.getAuthTag(), content]));
 	};
@@ -21,7 +21,8 @@ export function keys_port(key: Uint8Array): KeysPort {
 	const open = (sealed: Uint8Array, aad: Uint8Array) =>
 		Result.getOrElse(
 			Result.try(() => {
-				const decipher = createDecipheriv('aes-256-gcm', key, sealed.subarray(0, 12)).setAAD(aad);
+				// a fixed tag length: a truncated envelope's short tag is refused, never checked as a shorter tag
+				const decipher = createDecipheriv('aes-256-gcm', key, sealed.subarray(0, 12), { authTagLength: 16 }).setAAD(aad);
 				decipher.setAuthTag(sealed.subarray(12, 28));
 				return new Uint8Array(
 					Buffer.concat([decipher.update(sealed.subarray(28)), decipher.final()])

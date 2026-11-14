@@ -986,7 +986,7 @@ const names = (v: unknown): Effect.Effect<readonly string[] | undefined, StoreEr
 		? Effect.succeed(undefined)
 		: EffectArray.isArray(v) && v.every((x) => typeof x === 'string')
 			? Effect.succeed(v)
-			: invalid('sum, avg, min, max take field lists');
+			: invalid("sum, avg, min, max take field lists, e.g. sum: ['amount']");
 /** `aggregate(model, { by?, count?, sum?, avg?, min?, max?, where? } & Paged?)`; `by` needs a page. */
 export const aggregate = Effect.fn('Store.decode.aggregate')(function* (
 	cat: Catalog,
@@ -1002,13 +1002,16 @@ export const aggregate = Effect.fn('Store.decode.aggregate')(function* (
 			const [unit, field] = Predicate.isObject(b) ? (Object.entries(b)[0] ?? []) : [];
 			return isUnit(unit) && typeof field === 'string'
 				? Effect.succeed({ field, unit })
-				: invalid('a bucket is a field or { <unit>: field }');
+				: invalid(`a bucket is a field or { <${UNITS.join('|')}>: field }`);
 		}
 	);
 	if (by !== undefined && buckets.length === 0)
 		return yield* invalid('by names at least one bucket');
-	if (buckets.length > 0 && Object.keys(paged).length === 0)
-		return yield* invalid('an aggregate with `by` states { limit } or { all: true }');
+	const stray = Object.keys(paged).find((k) => !['limit', 'after', 'all'].includes(k));
+	if (stray !== undefined || (buckets.length > 0 && Object.keys(paged).length === 0))
+		return yield* invalid(
+			`${stray === undefined ? 'an aggregate with `by` states { limit } or { all: true }' : `aggregate takes no '${stray}'`}: { by?, count?: true, sum?|avg?|min?|max?: [field], where?, limit | all: true }, e.g. { by: ['status'], count: true, sum: ['amount'], all: true }; each bucket is { key: { <by> }, count, sum: { <field> } }`
+		);
 	const [s, a, lo, hi] = [
 		yield* names(sum),
 		yield* names(avg),

@@ -103,6 +103,8 @@ export type IngestOptions = {
 	pictures?: boolean;
 	page?: number;
 	password?: string;
+	/** A path inside an archive (zip, tar, tar.gz; on into one inside it): that file read as its own type; a folder lists its files. */
+	entry?: string;
 	diarize?: boolean;
 	language?: string;
 	speakers?: number;
@@ -220,7 +222,7 @@ export function logged_phone(log: (line: string) => void, fixed = false): PhoneV
 		async start(to, via) {
 			const code = fixed ? '123456' : six_digits();
 			codes.set(to, { code, until: Date.now() + SIGN_IN_CODE_MS });
-			log(`${via} → ${to}: Your sign-in code is ${code}. (sign-in code ${code})`);
+			log(`${via} → ${to}: Your Norbital code is ${code}. (sign-in code ${code})`);
 		},
 		async check(to, code) {
 			const held = codes.get(to);

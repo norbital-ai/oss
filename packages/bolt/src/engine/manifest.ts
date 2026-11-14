@@ -12,6 +12,7 @@ import type { FieldKind } from '../decl/fields.ts';
 import { layer_models, column_layers } from '../decl/model.ts';
 import { ModelData, RelationshipData, SyncData, split_model } from '../decl/model-data.ts';
 import type { Role } from '../decl/layout.ts';
+import type { RelationshipSpec } from '../decl/names.ts';
 import { AppData, GroupSpec } from '../decl/runtime/app.ts';
 import { DeclaredDuration, TriggerSpec } from '../decl/runtime/automation.ts';
 import { AutomationInputSchema } from '../decl/runtime/automation-input.ts';
@@ -180,7 +181,7 @@ const AutomationBase = {
 	input: Schema.optionalKey(AutomationInputSchema),
 	output: Schema.optionalKey(OutputData),
 	policies: Schema.NonEmptyArray(Schema.String),
-	agent: Schema.optionalKey(Schema.Literals(['direct', 'confirm', 'never']))
+	agent: Schema.optionalKey(Schema.Literals(['confirm', 'never']))
 };
 const Absent = Schema.optionalKey(Schema.Never);
 /** A job may trigger, retry and queue; a call (the page RPC) does none of those. */
@@ -277,39 +278,57 @@ const handled = (d: { readonly [key: string]: unknown }) => {
 		? { ...d, webhook: { ...webhook, handle: true } }
 		: d;
 };
+type Relationships = { readonly [key: string]: RelationshipSpec };
+/** The layers a model's output grant may nest, each with the model it lands in: its refs (no arcs) and inverses. */
+const layersOf = (relationships: Relationships, model: string): ReadonlyMap<string, string> => {
+	const layers = new Map<string, string>();
+	for (const [key, r] of Object.entries(relationships)) {
+		const from = key.slice(0, key.indexOf('.'));
+		if (from === model && typeof r.to === 'string') layers.set(key.slice(from.length + 1), r.to);
+		if (r.inverse !== undefined && (typeof r.to === 'string' ? r.to === model : r.to.includes(model)))
+			layers.set(r.inverse, from);
+	}
+	return layers;
+};
 /** Lower an output's nested scopes to the same paths as the model output. */
-function outputGrant(model: string, output: unknown): unknown {
+function outputGrant(model: string, output: unknown, relationships: Relationships): unknown {
 	if (!Predicate.isObject(output)) return output;
 	const scopes: Record<string, unknown> = {};
-	const visit = (path: string, value: Readonly<Record<string, unknown>>) => {
+	const visit = (path: string, at: string, value: Readonly<Record<string, unknown>>) => {
 		const { where, history, ...children } = value;
 		if (history !== undefined && path !== model)
 			throw new Error(`'${path}': history belongs on the root output grant`);
 		if (where !== undefined || path !== model) scopes[path] = where === undefined ? {} : where;
+		const layers = layersOf(relationships, at);
 		for (const [relation, child] of Object.entries(children)) {
-			if (relation.includes('.') || !Predicate.isObject(child))
-				throw new Error(`'${path}.${relation}': expected a nested output grant`);
-			visit(`${path}.${relation}`, child);
+			const target = layers.get(relation);
+			if (target === undefined)
+				throw new Error(
+					`'${path}.${relation}': an output grant's keys are 'where'${path === model ? ", 'history'" : ''} and the relations of ${at} (${[...layers.keys()].map((r) => `'${r}'`).join(', ') || 'none'}); row filters go under 'where', e.g. { where: { created_by: { eq: { var: 'actor.id' } } } }`
+				);
+			if (!Predicate.isObject(child))
+				throw new Error(`'${path}.${relation}': expected a nested output grant ({ where?, <relation>? })`);
+			visit(`${path}.${relation}`, target, child);
 		}
 	};
-	visit(model, output);
+	visit(model, model, output);
 	return defined({
 		scopes: Object.keys(scopes).length === 0 ? undefined : scopes,
 		history: output['history']
 	});
 }
 /** A write grant's flat tree (`{ fields, <relation>: {…}, verdict, moves }`) as its admitted column layers. */
-const writeGrant = (model: string, arm: unknown): unknown => {
+const writeGrant = (model: string, op: string, arm: unknown): unknown => {
 	if (!Predicate.isObject(arm)) return arm;
 	const { verdict, moves, ...tree } = arm;
 	return {
-		...(Object.keys(tree).length === 0 ? {} : { columns: column_layers(model, tree) }),
+		...(Object.keys(tree).length === 0 ? {} : { columns: column_layers(model, tree, [], `${op} grant`) }),
 		...(moves === undefined ? {} : { moves }),
 		...(typeof verdict === 'function' || verdict === true ? { verdict: true } : {})
 	};
 };
 /** Lower the read scopes and mark each write grant's guest verdict callback as present. */
-const policyData = (p: unknown): unknown =>
+const policyData = (p: unknown, relationships: Relationships): unknown =>
 	Predicate.isObject(p) && 'grants' in p && Predicate.isObject(p.grants)
 		? {
 				...p,
@@ -324,11 +343,11 @@ const policyData = (p: unknown): unknown =>
 											? Object.fromEntries(
 													Object.entries(arm).map(([name, output]) => [
 														name,
-														outputGrant(model, output)
+														outputGrant(model, output, relationships)
 													])
 												)
 											: op === 'create' || op === 'update' || op === 'delete'
-												? writeGrant(model, arm) : arm
+												? writeGrant(model, op, arm) : arm
 									])
 								)
 							: grant
@@ -339,7 +358,7 @@ const policyData = (p: unknown): unknown =>
 /** Split each model into its storage, its refs and the exposure defined by its outputs. */
 function modelParts(role: Record<string, unknown>) {
 	const models: { [name: string]: unknown } = {},
-		relationships: { [key: string]: unknown } = {},
+		relationships: { [key: string]: RelationshipSpec } = {},
 		exposures: { [name: string]: unknown } = {};
 	for (const [name, v] of Object.entries(role)) {
 		const parts = split_model(name, literal(v));
@@ -383,15 +402,17 @@ export function project_manifest(m: LoadedManifest): unknown {
 	const workspace = object(m.workspace['']);
 	const secrets = m.secrets[''];
 	const messages = resolvedMessages(m, workspace);
+	const models = modelParts(m.model);
+	const relationships = { ...SYSTEM.relationships, ...models.relationships };
 	return {
 		workspace: secrets === undefined ? workspace : { ...workspace, secrets },
 		...(messages === undefined ? {} : { messages }),
-		...modelParts(m.model),
+		...models,
 		integrations: Object.fromEntries(
 			Object.entries(marked(m.integration_definition, 'test', 'test')).map(([name, d]) => [name, handled(d)])
 		),
 		policies: Object.fromEntries(
-			Object.entries(m.policy).map(([name, v]) => [name, policyData(literal(v))])
+			Object.entries(m.policy).map(([name, v]) => [name, policyData(literal(v), relationships)])
 		),
 		teams: m.team[''] ?? {},
 		automations: marked(m.automation, 'run'),

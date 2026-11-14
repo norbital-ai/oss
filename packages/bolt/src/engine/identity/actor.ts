@@ -16,7 +16,8 @@ import {
 	jsonb,
 	partyRow,
 	signup_of,
-	IdentityStatement
+	IdentityStatement,
+	SESSION_MEMO_MS
 } from './session.ts';
 import { envoySpec } from '../envoys/spec.ts';
 const UserSchema = Schema.Struct({
@@ -42,8 +43,6 @@ type UserRow = typeof UserSchema.Type;
 type TeamGraph = {
 	readonly [handle: string]: SourceTeam;
 };
-/** How long a caller's row or session is trusted unread; a statement on either ends it at once. */
-export const MEMO_MS = 900_000;
 export class Authorities {
 	private readonly cache = new Map<string, Authority>();
 	/** With `remember`: each active member's row, and the identity writes when it was read. */
@@ -144,7 +143,7 @@ export class Authorities {
 				const now = yield* Clock.currentTimeMillis,
 					stamp = db.identityWrites(),
 					held = this.rows.get(userId);
-				if (held !== undefined && held.stamp === stamp && now - held.at < MEMO_MS) return held.row;
+				if (held !== undefined && held.stamp === stamp && now - held.at < SESSION_MEMO_MS) return held.row;
 				this.rows.delete(userId);
 				const [users] = yield* db.read([
 					sql(
@@ -159,6 +158,8 @@ export class Authorities {
 				const found = yield* Schema.decodeUnknownEffect(UserSchema)(value).pipe(
 					Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
 				);
+				// a membership change seen here may be another activation's: every row read before it is read again
+				if (held !== undefined && (held.row.revision !== found.revision || !found.active)) this.rows.clear();
 				// an anonymous user is a visitor's identity (a cookie, never a session): it is no member
 				if (!found.active || found.kind === 'anonymous') return null;
 				const u = yield* this.bind(db, publication, found);
@@ -275,9 +276,9 @@ export class Authorities {
 	/**
 	 * hook:envoys — an envoy's turn on `instance`: the envoy's declared `policies`, never admin by itself, no
 	 * party; `{ var: 'actor.instance' }` is the instance. On a DM from a linked sender, `dm: 'union'` (the default) joins the
-	 * member's own authority (their policies, team tree, or the admin bypass): the least constraining grant admits;
-	 * `dm: 'envoy'` holds the envoy's policies alone with every operand bound to the member — never admin, no member route,
-	 * tool or automation. Limits stay the envoy's. Re-resolved from the instance and the spec as they are now: `null` when the
+	 * member's own policies and team tree: the least constraining grant admits; `dm: 'envoy'`, and every administrator's DM
+	 * (an envoy never holds admin), holds the envoy's policies alone with every operand bound to the member — no member
+	 * route, tool or automation. Limits stay the envoy's. Re-resolved from the instance and the spec as they are now: `null` when the
 	 * instance no longer serves this envoy (paused, redeployed) or the linked member is no longer active.
 	 */
 	envoy(
@@ -329,7 +330,8 @@ export class Authorities {
 				if (mine === null || mine.actor.kind !== 'member') return null;
 				// ponytail: every arm's `actor` operands resolve against the linked member, the envoy's too; the member directory arms do not join
 				const linked = { ...actor, linked: mine.actor };
-				if (spec.dm === 'envoy')
+				// an envoy never holds admin: an administrator's DM gets the envoy's declared policies, never the bypass
+				if (spec.dm === 'envoy' || mine.admin)
 					return yield* this.compile(
 						{
 							actor: linked,
@@ -343,7 +345,7 @@ export class Authorities {
 				const both = yield* this.compile(
 					{
 						actor: linked,
-						admin: mine.admin,
+						admin: false,
 						policies: [...new Set([...spec.policies, ...mine.policies])],
 						teamTree: mine.teamTree,
 						scopes: mine.scopes

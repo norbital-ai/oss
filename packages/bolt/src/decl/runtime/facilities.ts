@@ -385,7 +385,8 @@ export type Convert = {
 	record: Call<[model: ModelName, id: string, options: RecordRenderOptions], TransientFile>;
 	/**
 	 * Reads a stored file (optional host capability: Norbital Convert): a document as sanitised HTML, one block element per
-	 * line, and its index (audio also its diarised `transcript`); a spreadsheet, CSV or JSON as `data`. A format with no
+	 * line, and its index (audio also its diarised `transcript`); a spreadsheet, CSV or JSON as `data`; an archive as the
+	 * list of its files, one by `entry`. A format with no
 	 * parser fails `unsupported`; a host without the ingest port, `Unavailable`. It reads through the same host port as the
 	 * agent's `read_file`, never OCR, and shares its cache: the same bytes are parsed once.
 	 */
@@ -407,6 +408,8 @@ export type IngestOptions = {
 	 * Without it a locked file fails `<name> is password-protected`; a wrong one, `the password does not open <name>`.
 	 */
 	password?: string;
+	/** A path inside an archive (zip, tar, tar.gz; on into one inside it): that file read as its own type; a folder lists its files. */
+	entry?: string;
 	diarize?: boolean;
 	language?: string;
 	speakers?: number;

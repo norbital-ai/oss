@@ -301,6 +301,18 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 					expect(
 						(yield* call(eve, 'POST', '/__bolt/push', { endpoint: 'http://insecure' })).status
 					).toBe(400);
+					for (const endpoint of [
+						'http://push.example/eve',
+						'https://169.254.169.254/latest/meta-data',
+						'https://[::1]/eve',
+						'https://localhost/eve',
+						'https://push.example:8443/eve',
+						'https://user:pass@push.example/eve'
+					])
+						expect(
+							(yield* call(eve, 'POST', '/__bolt/push', { endpoint, keys: { p256dh: 'k', auth: 'a' } }))
+								.status
+						).toBe(400);
 					expect(
 						(yield* call(eve, 'POST', '/__bolt/push', { kind: 'apns', endpoint: 'not-hex', keys }))
 							.status

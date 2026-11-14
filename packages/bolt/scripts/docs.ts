@@ -44,7 +44,7 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 	},
 	access: { bolt: ['team', 'policy', 'StoredTree', 'ApprovalFlow', 'Verdict'] },
 	automation: {
-		bolt: ['automation', 'AutomationCtx', 'dynamic_read'],
+		bolt: ['automation', 'AutomationCtx'],
 		'bolt/errors': ['Refusal']
 	},
 	sync: { bolt: ['sync', 'SyncCtx', 'SyncRow', 'Finding'] },
@@ -82,7 +82,7 @@ export default automation({
 });
 \`\`\`
 
-The default mode is a durable job. \`mode: 'call'\` returns its typed \`output\` in the request; a positive \`cache\` duration shares read-only answers. \`agent: 'direct'\`, \`'confirm'\` or \`'never'\` controls its use as an agent tool. Jobs alone accept cron triggers and retries.
+The default mode is a durable job. \`mode: 'call'\` returns its typed \`output\` in the request; a positive \`cache\` duration shares read-only answers. The agent starts it only after the person confirms each start; \`agent: 'never'\` keeps it from the agent. Jobs alone accept cron triggers and retries.
 
 A model answers \`yield* ctx.ai.sys_2.infer({ system: '<role>', prompt: '<task>', output: { kind: 'object', fields: { <field>: { kind: 'text' } } } })\` with the \`output\`'s value (text when absent).
 

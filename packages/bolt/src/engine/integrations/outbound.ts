@@ -34,7 +34,7 @@ import { LIMITS } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Chain } from '../write/sql.ts';
-import { msg } from '../conversations/store.ts';
+import { msg, providerThread } from '../conversations/store.ts';
 import { RANK, sendRefusal, TERMINAL, type DeliveryEntry } from '../conversations/status.ts';
 import { conversationOf, definitionOf } from './instances.ts';
 import { reportRowsPiece } from '../sync/hint.ts';
@@ -56,6 +56,12 @@ export const deliverRun = (c: Chain, rows: string, now: string) =>
 type Obj = {
 	readonly [key: string]: Json;
 };
+/**
+ * A message's text with each remote Markdown image reduced to its alt text: a platform that renders one fetches its URL
+ * with no click, so text an agent wrote could leak data in it. Link previews are each provider's to turn off.
+ */
+export const without_remote_images = (text: string): string =>
+	text.replace(/!\[([^\]]*)\]\(\s*<?(?:[a-z][a-z0-9+.-]*:|\/[/\\])[^)]*\)/gi, '$1');
 const AttachmentRef = Schema.Record(Schema.String, Schema.Json)
 	.check(
 		Schema.makeFilter((value) =>
@@ -288,6 +294,8 @@ function makeOutbound(cfg: OutboundConfig) {
 		const reply_to = body['reply_to'] ?? (email ? references.at(-1) : undefined);
 		const wire: Obj = {
 			...body,
+			...(typeof body['text'] === 'string' ? { text: without_remote_images(body['text']) } : {}),
+			...(email && typeof body['thread'] === 'string' ? { thread: providerThread(body['thread']) } : {}),
 			id: String(r['id']),
 			...to,
 			...(reply_to === undefined ? {} : { reply_to }),

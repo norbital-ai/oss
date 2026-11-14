@@ -1,6 +1,7 @@
 import { Result, Schema } from 'effect';
 import { input_schema, KindSchema, type Value } from '@norbital-ai/store/kind';
 import type { Json } from '@norbital-ai/store';
+import type { ReadAnswer, ReadRequestBase } from '../decl/ctx.ts';
 import { ReadFailed } from '../decl/errors.ts';
 import { decode_read_request, type LayerRequestJson } from './read-request.ts';
 import { RowLabelField, RowStateFields } from './record-contracts.ts';
@@ -157,6 +158,13 @@ export function read_answer(catalog: ReadCatalog, request: unknown): Codec {
 		}
 	}
 	return Schema.Struct(Object.fromEntries(answers));
+}
+
+/** The refinement is tied to this exact request and its granted output schemas, after rich field decoding. */
+export function typed_read_answer<const R extends ReadRequestBase>(catalog: ReadCatalog, request: R) {
+	const answer = read_answer(catalog, request);
+	const valid = Schema.is(Schema.toType(answer));
+	return answer.pipe(Schema.decodeTo(Schema.declare((value: unknown): value is ReadAnswer<R> => valid(value))));
 }
 
 const AggregateArguments = Schema.Struct({

@@ -4,7 +4,8 @@ import {
 	public_addresses,
 	public_destination,
 	connect_public,
-	pinned_lookup
+	pinned_lookup,
+	refuse_platform_addresses
 } from '../src/node/net.ts';
 
 it.effect(
@@ -102,4 +103,19 @@ it.effect(
 				yield* Effect.flip(public_addresses(new URL('http://mail.example/'), resolve))
 			).toMatchObject({ kind: 'invalid' });
 		})
+);
+
+it.effect("refuses the platform's own public address on every port, published or not", () =>
+	Effect.gen(function* () {
+		expect((yield* public_destination('9.9.9.9', 3000)).address.address).toBe('9.9.9.9');
+		refuse_platform_addresses(['9.9.9.9', '2620:fe::fe']);
+		for (const [address, port] of [
+			['9.9.9.9', 443],
+			['9.9.9.9', 3000],
+			['9.9.9.9', 5432],
+			['2620:fe::fe', 22]
+		] as const)
+			expect(yield* Effect.flip(public_destination(address, port))).toMatchObject({ kind: 'invalid' });
+		expect((yield* public_destination('9.9.9.10', 3000)).address.address).toBe('9.9.9.10');
+	})
 );

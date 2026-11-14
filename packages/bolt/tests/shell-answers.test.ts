@@ -248,7 +248,8 @@ const settings = {
 			configuration: { from: { kind: 'text', format: 'email' } }
 		}
 	],
-	signup: { via: ['email'], open: true }
+	signup: { via: ['email'], open: true },
+	retention: { every_days: 1, hour: 3, notifications_days: 30, runs_days: 90 }
 } satisfies Settings;
 
 const line = { at: '2026-01-01T00:00:00Z', level: 'warn', message: 'slow' } as const;

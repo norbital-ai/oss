@@ -52,12 +52,7 @@ A one-time code in separate digit cells (bits-ui PinInput): the sign-in code ste
 	const invalid = $derived(ariaInvalid === true || ariaInvalid === 'true');
 </script>
 
-<!--
-	Cells share the row rather than sitting at a fixed width. `flex-1` over a `min-w-0` basis lets
-	six of them span exactly the container, so the group lines up with the full-width button beneath
-	it instead of stopping short of it — `w-10` with `justify-start` was a fixed width the container
-	could never fill, whatever it was given.
--->
+<!-- Fixed-size cells: a code is six digits wide wherever it sits, never stretched to its container. -->
 <PinInputPrimitive.Root
 	bind:value
 	{maxlength}
@@ -67,7 +62,7 @@ A one-time code in separate digit cells (bits-ui PinInput): the sign-in code ste
 	inputmode="numeric"
 	autocomplete="one-time-code"
 	aria-invalid={ariaInvalid}
-	class={cn('w-full', className)}
+	class={cn('w-fit', className)}
 	{...restProps}
 	onValueChange={on_value_change}
 	pasteTransformer={paste_transformer}
@@ -77,12 +72,12 @@ A one-time code in separate digit cells (bits-ui PinInput): the sign-in code ste
 	onComplete={on_complete}
 >
 	{#snippet children({ cells })}
-		<Inline justify="between" class="w-full">
+		<Inline gap="sm">
 			{#each cells as cell, index (index)}
 				<PinInputPrimitive.Cell
 					{cell}
 					class={cn(
-						'h-11 rounded-sm border border-input bg-background text-base font-medium tabular-nums shadow-xs transition-[border-color,box-shadow,background-color] outline-none dark:bg-input/30',
+						'size-11 rounded-sm border border-input bg-background text-base font-medium tabular-nums shadow-xs transition-[border-color,box-shadow,background-color] outline-none dark:bg-input/30',
 						cell.isActive && 'border-ring ring-[3px] ring-ring/50 ring-inset dark:bg-input/40',
 						invalid && 'border-destructive ring-destructive/20 ring-inset dark:ring-destructive/40',
 						disabled && 'cursor-not-allowed bg-muted opacity-50 shadow-none',

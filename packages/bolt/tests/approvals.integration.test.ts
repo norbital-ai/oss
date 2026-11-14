@@ -12,7 +12,6 @@ import { storeFile } from '../src/engine/facilities.ts';
 import { NativeReadRow, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { label, label_expression } from '@norbital-ai/store/label';
 import { inboxRequests, inboxSql } from '../src/engine/approvals/inbox.ts';
 import { one_act } from './support/act-one.ts';
@@ -227,9 +226,9 @@ const fixture = Effect.gen(function* () {
 		t.as(authority).pipe(
 				Effect.flatMap((caller) =>
 					caller.query(
-						dynamic_read({
+						{
 							approval_request: { search: query, fields: ['collection_name'], limit: 20 }
-						})
+						}
 					)
 				),
 				Effect.flatMap(Schema.decodeUnknownEffect(ApprovalSearch)),

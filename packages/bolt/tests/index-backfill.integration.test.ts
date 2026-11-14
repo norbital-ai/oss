@@ -2,7 +2,6 @@
 import { expect, layer } from '@effect/vitest';
 import { Effect, Layer, Result, Schema } from 'effect';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
@@ -76,7 +75,7 @@ layer(workspace, { excludeTestServices: true })('bolt.index', (it) => {
 			const found = (r: number) =>
 				t.as(t.admin).pipe(
 						Effect.flatMap((admin) =>
-							admin.query(dynamic_read({ swatches: { search: { hue: { r } }, limit: 1, fields: ['title'] } }))
+							admin.wire_query({ swatches: { search: { hue: { r } }, limit: 1, fields: ['title'] } })
 						),
 						Effect.flatMap(
 							Schema.decodeUnknownEffect(

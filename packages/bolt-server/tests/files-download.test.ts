@@ -74,13 +74,18 @@ const origin = Effect.acquireRelease(
 		})
 );
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+/** A store directory for the test's scope, removed with it. */
+const scratch = Effect.acquireRelease(
+	Effect.sync(() => mkdtempSync(join(tmpdir(), 'bolt-download-'))),
+	(dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true }))
+);
 
 describe('local_files download', () => {
 	it.live('streams media into the store by its bytes, through a redirect and in parts', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { base } = yield* origin,
-					dir = mkdtempSync(join(tmpdir(), 'bolt-download-'));
+					dir = yield* scratch;
 				const files = local_files(dir, { allow_loopback: true });
 				const photo = yield* files.download(`${base}/photo`);
 				expect(photo).toEqual({
@@ -107,7 +112,7 @@ describe('local_files download', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { base } = yield* origin,
-						dir = mkdtempSync(join(tmpdir(), 'bolt-download-'));
+						dir = yield* scratch;
 					const files = local_files(dir, { allow_loopback: true });
 					const refused = (url: string, f = files) => Effect.flip(f.download(url));
 					expect(yield* refused(`${base}/elf-as-png`)).toMatchObject({

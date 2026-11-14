@@ -240,7 +240,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 	};
 });
 
-/** `confirm`: an in-app call the person must approve first; it executes later under key `(turn, callId)`. */
+/** `confirm`: an in-app call the person must approve first; it executes later under key `(turn, callId)`, with `input` in place of the call's own when given. */
 /** `bounded`: the tool already bounded its result, so the loop does not clip it again; `full` is what it cut it from. */
 export const ToolAnswer = Schema.Union([
 	Schema.Struct({
@@ -248,7 +248,7 @@ export const ToolAnswer = Schema.Union([
 		bounded: Schema.optionalKey(Schema.Literal(true)),
 		full: Schema.optionalKey(Schema.Json)
 	}),
-	Schema.Struct({ confirm: Schema.Literal(true) })
+	Schema.Struct({ confirm: Schema.Literal(true), input: Schema.optionalKey(Schema.Json) })
 ]);
 export type ToolAnswer = typeof ToolAnswer.Type;
 /** A tool `ctx.ai.sys_2.infer` offers the model (a host tool its automation's policies name); a throw is a failed result. */

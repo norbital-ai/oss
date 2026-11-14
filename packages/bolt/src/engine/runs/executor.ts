@@ -1,5 +1,5 @@
 // Durable attempt execution and settlement share one generation's stop and parking controls.
-import { Clock, Deferred, Effect, Option, Predicate, PubSub, Random, Schedule, Schema } from 'effect';
+import { Clock, Deferred, Effect, Option, Predicate, PubSub, Random, Result, Schedule, Schema } from 'effect';
 
 import type { EffectEvent } from '../../protocol/effect-events.ts';
 import type { AutomationSpec } from '../../decl/runtime/automation.ts';
@@ -293,6 +293,11 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 						? (head.starter ?? undefined)
 						: policyHolder(head, automation.policies);
 				const images = effect === undefined ? undefined : effectImages(input);
+				// an effect's writer is judged as they are now: one no longer active fails the run, never the wake
+				const writer =
+					holder !== undefined && images !== undefined && Option.isSome(images)
+						? yield* Effect.result(identity.authority(holder))
+						: undefined;
 				if (holder === undefined)
 					outcome = {
 						kind: 'failed',
@@ -307,16 +312,12 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 							'The effect run input did not decode.'
 						)
 					};
+				else if (writer !== undefined && Result.isFailure(writer)) outcome = { kind: 'failed', error: writer.failure };
 				else {
 					let event: EffectEvent | undefined;
 					// an effect's images as its writer reads them, handed over as the body's first argument
-					if (effect !== undefined && images !== undefined && Option.isSome(images)) {
-						const shown = writerInput(
-							m,
-							yield* identity.authority(holder),
-							effect.model,
-							images.value
-						);
+					if (effect !== undefined && images !== undefined && Option.isSome(images) && writer !== undefined && Result.isSuccess(writer)) {
+						const shown = writerInput(m, writer.success, effect.model, images.value);
 						input = shown.changes;
 						event = shown.event;
 					}

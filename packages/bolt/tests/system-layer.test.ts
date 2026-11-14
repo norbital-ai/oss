@@ -837,6 +837,7 @@ describe('the built-in layer is compiled as a workspace is', () => {
 					'chat:chat',
 					'discord:discord',
 					'email:email',
+					'github:http',
 					'slack:slack',
 					'telegram:telegram',
 					'wechat:wechat',

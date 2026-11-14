@@ -48,6 +48,9 @@ import {
 	conversationId,
 	messageId,
 	preview,
+	providerThread,
+	SENDER,
+	senderThread,
 	stableId,
 	msg as messagePiece
 } from './store.ts';
@@ -257,6 +260,7 @@ export function conversations(cfg: ConversationsConfig) {
 			});
 			return null;
 		}
+		let linkedOpen = false;
 		if (inst.kind === 'email' && !normalized.deleted && normalized.references.length > 0) {
 			// Provider ids are registered before sending; a fast reply may precede its acknowledgement.
 			const linked = yield* db.one(Schema.Struct({ thread: Schema.String }), {
@@ -270,8 +274,27 @@ export function conversations(cfg: ConversationsConfig) {
 				ORDER BY ref.position, sent.seq DESC LIMIT 1`,
 				params: [inst.id, JSON.stringify(normalized.references), normalized.sender]
 			});
-			if (Option.isSome(linked)) normalized = { ...normalized, thread: linked.value.thread };
+			if (Option.isSome(linked)) {
+				normalized = { ...normalized, thread: linked.value.thread };
+				linkedOpen = !linked.value.thread.includes(SENDER);
+			}
 		}
+		// a served mailbox: a conversation the workspace opened to its recipients is joined as linked; any other is the
+		// (thread, sender) pair's own, so a stranger in a thread never joins another sender's conversation
+		if (
+			inst.kind === 'email' &&
+			inst.owner === null &&
+			normalized.thread !== '' &&
+			!linkedOpen
+		)
+			normalized = {
+				...normalized,
+				thread: senderThread(
+					normalized.thread,
+					normalized.sender,
+					normalized.email?.['authenticated'] === true
+				)
+			};
 		const inbound = normalized;
 		if (!permitsImport(inst.import_start, inbound.source_at ?? undefined)) {
 			if (!inbound.deleted || inbound.source_at !== null) return null;
@@ -395,7 +418,7 @@ export function conversations(cfg: ConversationsConfig) {
 				const live = origin === 'live' && !inbound.deleted && direction === 'inbound';
 				const mail = inbound.email;
 				if (!personal && !inbound.deleted && (mail !== null ? inbound.references.length > 0 : inbound.reply_to !== null)) {
-					const refs = mail !== null ? [...inbound.references, inbound.thread] : [inbound.reply_to];
+					const refs = mail !== null ? [...inbound.references, providerThread(inbound.thread)] : [inbound.reply_to];
 					const headers = mail !== null && Predicate.isObject(mail['headers'])
 						? Object.fromEntries(Object.entries(mail['headers']).map(([key, value]) => [key, String(value)])) : {};
 					const automatic = mail !== null && is_auto_reply(headers, typeof mail['subject'] === 'string' ? mail['subject'] : '');
@@ -558,7 +581,8 @@ export function conversations(cfg: ConversationsConfig) {
 			ORDER BY newest.created_at DESC LIMIT ${RECENT_THREADS}`,
 			params: [instance, since]
 		});
-		return { since, threads: rows.map((row) => row.thread) };
+		// a provider thread once, however many senders' conversations it holds
+		return { since, threads: [...new Set(rows.map((row) => providerThread(row.thread)))] };
 	});
 	const repair = Effect.fn('Conversations.repair')(function* (
 		instance: string,
@@ -573,14 +597,16 @@ export function conversations(cfg: ConversationsConfig) {
 		const stored = yield* db.rows(StoredMessage, {
 			text: `SELECT provider_id, version, origin, deleted_at IS NOT NULL AS deleted,
 			sent_at >= $4::timestamptz AND sent_at < $5::timestamptz AS settled FROM sys_message
-			WHERE conversation = $1 AND integration = $2 AND provider_id IS NOT NULL AND sent_at >= $3::timestamptz
+			WHERE conversation IN (SELECT id FROM sys_conversation WHERE integration = $2 AND (id = $1 OR starts_with(thread, $6)))
+			AND integration = $2 AND provider_id IS NOT NULL AND sent_at >= $3::timestamptz
 			ORDER BY seq DESC LIMIT ${REPAIR_ROWS}`,
 			params: [
 				conversationId(instance, thread),
 				instance,
 				since,
 				page.since !== undefined && Date.parse(page.since) > Date.parse(since) ? page.since : since,
-				new Date(at - SETTLE_MS).toISOString()
+				new Date(at - SETTLE_MS).toISOString(),
+				`${thread}${SENDER}`
 			]
 		});
 		const rows = new Map(stored.map((row) => [row.provider_id, row])),

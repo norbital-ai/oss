@@ -54,6 +54,18 @@ describe('the membrane', () => {
 		expect(toKernel(value)).toEqual(value);
 	});
 
+	live('a wire key `__proto__` stays an own field, never a prototype', async () => {
+		const { kernel } = pair();
+		const wire: unknown = JSON.parse('{"a":{"__proto__":{"admin":true}},"e":{"$error":{"message":"m","__proto__":{"admin":true}}}}');
+		const value = kernel.decode(wire);
+		const a: unknown = Reflect.get(Object(value), 'a'),
+			e: unknown = Reflect.get(Object(value), 'e');
+		expect(Reflect.get(Object(a), 'admin')).toBeUndefined();
+		expect(Object.hasOwn(Object(a), '__proto__')).toBe(true);
+		expect(e).toBeInstanceOf(Error);
+		expect(Reflect.get(Object(e), 'admin')).toBeUndefined();
+	});
+
 	live('calls a function on the other side, answering at once when it does', async () => {
 		const { toCell, toKernel } = pair();
 		const add = toCell((a: number, b: number) => a + b);

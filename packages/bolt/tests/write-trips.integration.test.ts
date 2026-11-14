@@ -10,7 +10,6 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 
 /** An ad hoc manifest's acts: no generated callable names type them. */
 const acts = (input: Readonly<Record<string, Json>>) => input;
@@ -98,7 +97,7 @@ const fixture = Effect.gen(function* () {
 	const requester = yield* t.as(
 		t.member(['requester'], { teams: ['Requesters'], team_path: ['Requesters'] })
 	);
-	yield* admin.query(dynamic_read({ items: {} }));
+	yield* admin.wire_query({ items: {} });
 	/** Trips (calls) and statements one act costs, after background work goes quiet. */
 	const measure = <A, E>(act: Effect.Effect<A, E>) =>
 		Effect.gen(function* () {
@@ -132,7 +131,7 @@ type Measured = { trips: number; reads: number; writeStatements: number; ms: num
 const Target = Schema.Struct({ id: Schema.String, revision: Schema.Number });
 type Admin = Effect.Success<typeof fixture>['admin'];
 const ids = (admin: Admin, names: readonly string[]) =>
-	admin.query(dynamic_read({ items: { where: { name: { in: [...names] } }, limit: 200 } })).pipe(
+	admin.wire_query({ items: { where: { name: { in: [...names] } }, limit: 200 } }).pipe(
 		Effect.map((answer) => {
 			const page = answer.items;
 			if (page === undefined || !('rows' in page)) throw new Error('No items page');

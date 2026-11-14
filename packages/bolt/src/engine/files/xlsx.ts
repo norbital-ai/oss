@@ -110,6 +110,8 @@ export function xlsxSheets(zip: Uint8Array): string[] {
 	return worksheetRefs((name) => entries.get(name)?.() ?? '').map((sheet) => sheet.name);
 }
 
+/** Excel's own grid, and the cells (gap fillers included) one read may hold: a few hundred crafted bytes claim more. */
+export const XLSX_LIMITS = { rows: 1_048_576, columns: 16_384, cells: 2_000_000 } as const;
 export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 	const entries = xlsxEntries(zip);
 	const read = (name: string) => entries.get(name)?.() ?? '';
@@ -124,6 +126,13 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 		)
 	].map((m) => texts(m[0]));
 	const out: Cell[][] = [];
+	const gap: Cell[] = [];
+	let held = 0;
+	/** Counts `n` more cells before any is allocated. */
+	const hold = (n: number) => {
+		held += n;
+		if (held > XLSX_LIMITS.cells) throw new Error(`the worksheet holds over ${XLSX_LIMITS.cells} cells`);
+	};
 	for (const row of read(path).matchAll(
 		/<(?:[\w.-]+:)?row\b[^>]*?\br="(\d+)"[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?row>)/g
 	)) {
@@ -153,11 +162,15 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 								: t === 'str' || t === 'e' || t === 'd'
 									? unxml(raw)
 									: Number(raw);
+			if (col >= XLSX_LIMITS.columns) throw new Error(`the worksheet is over ${XLSX_LIMITS.columns} columns wide`);
+			hold(Math.max(col + 1 - cells.length, 0));
 			while (cells.length < col) cells.push(null);
 			cells[col] = value;
 		}
 		const at = Number(row[1]) - 1;
-		while (out.length < at) out.push([]);
+		if (at >= XLSX_LIMITS.rows) throw new Error(`the worksheet is over ${XLSX_LIMITS.rows} rows long`);
+		hold(Math.max(at + 1 - out.length, 0));
+		while (out.length < at) out.push(gap); // missing rows share one empty row
 		out[at] = cells;
 	}
 	return out;

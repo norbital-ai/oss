@@ -2,7 +2,6 @@ import { expect, layer } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 
 const manifest: EngineManifest = {
 	needs: [],
@@ -106,8 +105,8 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 					const seen: string[] = [];
 					let after: string | undefined;
 					for (let page = 0; page < 4; page++) {
-						const answer = yield* actor.query(
-							dynamic_read({
+						const answer = yield* actor.wire_query(
+							{
 								documents: {
 									where: {
 										or: [
@@ -120,7 +119,7 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 									limit: 1,
 									...(after === undefined ? {} : { after })
 								}
-							})
+							}
 						);
 						const { documents } = yield* Schema.decodeUnknownEffect(Answer)(answer);
 						expect(documents.total).toBe(expected.length);
@@ -141,26 +140,26 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 				Effect.gen(function* () {
 					const t = yield* TestWorkspace;
 					const actor = yield* t.as(t.member(['north']));
-					const query = dynamic_read({
+					const query = {
 						documents: {
 							where: { not: { profile: { flags: { some: { eq: 'blocked' } } } } },
 							fields: ['name'],
 							order_by: 'name',
 							limit: 10
 						}
-					});
+					};
 					const { documents } = yield* Schema.decodeUnknownEffect(Answer)(
-						yield* actor.query(query)
+						yield* actor.wire_query(query)
 					);
 					expect(documents.rows.map((row) => row.name)).toEqual(['N1', 'N3']);
 					expect(documents.total).toBe(2);
-					const outside = dynamic_read({
+					const outside = {
 						documents: { where: { profile: { region: { eq: 'south' } } }, fields: ['name'] }
-					});
+					};
 					expect(
-						(yield* Schema.decodeUnknownEffect(Answer)(yield* actor.query(outside))).documents.rows
+						(yield* Schema.decodeUnknownEffect(Answer)(yield* actor.wire_query(outside))).documents.rows
 					).toEqual([]);
-					expect(yield* Effect.flip((yield* t.as(t.member([]))).query(query))).toMatchObject({
+					expect(yield* Effect.flip((yield* t.as(t.member([]))).wire_query(query))).toMatchObject({
 						code: 'forbidden'
 					});
 				})

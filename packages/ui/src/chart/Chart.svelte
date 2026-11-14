@@ -35,14 +35,14 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 		/** A caption above the chart; also names the data in loading and error states. */
 		title?: string;
 	};
-	/** A model chart's one aggregate: bucketed by `x`, a `count` and each `sum.f`/`avg.f`/`min.f`/`max.f` the series name. */
+	/** A model chart's one aggregate: every bucket of `x`, a `count` and each `sum.f`/`avg.f`/`min.f`/`max.f` the series name. */
 	const measures = (x: string, ys: readonly string[], where: Json | undefined) => {
 		const by: Record<string, string[]> = {};
 		for (const y of ys) {
 			const dot = y.indexOf('.');
 			if (dot > 0) (by[y.slice(0, dot)] ??= []).push(y.slice(dot + 1));
 		}
-		return { by: [x], count: true, ...by, ...(where === undefined ? {} : { where }) };
+		return { by: [x], count: true, ...by, all: true, ...(where === undefined ? {} : { where }) };
 	};
 </script>
 
@@ -52,7 +52,8 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 	import { humanize, msg } from '../text/messages.js';
 	import { series } from './series.js';
 	import ReadGate from '../read/ReadGate.svelte';
-	import { sourceState } from '../read/source.js';
+	import { sourceState, type SourceRows } from '../read/source.js';
+	import type { ReadState } from '../read/state.js';
 
 	let {
 		ctx,
@@ -73,8 +74,18 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 	const xAxis = { tickSpacing: 80 };
 	let plotWidth = $state(Infinity);
 	const ys = $derived(typeof y === 'string' ? [y] : [...y]);
-	const read = $derived(
-		sourceState(typeof of === 'string' ? bolt.aggregate(of, measures(x, ys, where)) : of)
+	// a model chart's `y` names a measure the aggregate answers, never a bare field
+	const unmeasured = $derived(
+		typeof of === 'string' ? ys.find((k) => k !== 'count' && !/^(sum|avg|min|max)\.\w+$/.test(k)) : undefined
+	);
+	const read: ReadState<SourceRows> = $derived(
+		unmeasured !== undefined
+			? {
+					kind: 'error',
+					code: 'invalid',
+					message: `Chart of a model: y '${unmeasured}' names a measure, 'count' or '<sum|avg|min|max>.<field>' (e.g. 'sum.amount')`
+				}
+			: sourceState(typeof of === 'string' ? bolt.aggregate(of, measures(x, ys, where)) : of)
 	);
 	const loadPlots = () => import('./plots.js');
 	const COLORS = [

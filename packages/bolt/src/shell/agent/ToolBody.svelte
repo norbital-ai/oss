@@ -5,11 +5,17 @@
 -->
 <script lang="ts">
 	import { Option, Schema } from 'effect';
-	import { Badge, CodeEditor, Icon, StructuredData, type UiContext } from '@norbital-ai/ui';
+	import {
+		Badge,
+		CodeDiff,
+		CodeEditor,
+		Icon,
+		StructuredData,
+		type UiContext
+	} from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
-	import DiffView from './DiffView.svelte';
 	import ReadTable from './ReadTable.svelte';
-	import { readChips, readsOf, stepArgs, type StepView } from './view.ts';
+	import { languageOf, readChips, readsOf, stepArgs, type StepView } from './view.ts';
 
 	let {
 		ctx,
@@ -34,7 +40,19 @@
 	const raw = $derived((tool.result ?? '').replaceAll('\\n', '\n').replaceAll('\\"', '"'));
 	const verdict = (ok: boolean) => (ok ? 'lucide:circle-check' : 'lucide:circle-alert');
 	const issues = (types: unknown) => list(object(types) ? types['diagnostics'] : []);
-	const SOURCE = new Set(['workspace_read', 'workspace_lang', 'describe_workspace', 'skill']);
+	const SOURCE = new Set(['workspace_lang', 'describe_workspace', 'skill']);
+	/** A compact diff's two sides: kept and `-` lines before, kept and `+` lines after; an `@@` line stands in both. */
+	const sides = (diff: string) => {
+		const before: string[] = [],
+			after: string[] = [];
+		for (const line of diff.split('\n')) {
+			const mark = line[0],
+				body = mark === '@' ? line : line.slice(1);
+			if (mark !== '+') before.push(body);
+			if (mark !== '-') after.push(body);
+		}
+		return { before: before.join('\n'), after: after.join('\n') };
+	};
 </script>
 
 {#snippet code(value: string, language: 'javascript' | 'json' | 'plaintext' = 'plaintext')}
@@ -67,8 +85,11 @@
 {/snippet}
 
 {#if tool.changes !== undefined && tool.changes.length > 0}
-	<div class="max-h-72 overflow-auto rounded-md" data-step-pane="diff">
-		<DiffView files={tool.changes} {t} />
+	<div class="grid max-h-72 gap-1 overflow-auto" data-step-pane="diff">
+		{#each tool.changes as file, index (index)}
+			{@const { before, after } = sides(file.diff)}
+			<CodeDiff path={file.path} {before} {after} language={languageOf(file.path)} />
+		{/each}
 	</div>
 {:else if tool.name === 'read'}
 	{@const rows = object(data) && 'result' in data ? data['result'] : data}
@@ -212,7 +233,14 @@
 			(typeof data === 'string' ? data : raw),
 		text(input['path']).match(/\.(m?[jt]sx?|svelte)$/) === null ? 'plaintext' : 'javascript'
 	)}
-{:else if tool.name === 'workspace_list_dir' || tool.name === 'workspace_search'}
+{:else if tool.name === 'workspace_read' && typeof data === 'string'}
+	<!-- OpenCode's read: what it read and which lines, then the lines -->
+	{@const [range = '', ...lines] = data.split('\n')}
+	<div class="grid gap-1" data-tool-view="workspace_read">
+		<p class="truncate font-mono text-micro text-muted-foreground">{range}</p>
+		{#if lines.length > 0}{@render code(lines.join('\n'), languageOf(text(input['path'])))}{/if}
+	</div>
+{:else if ['workspace_list_dir', 'workspace_grep', 'workspace_glob'].includes(tool.name)}
 	<pre class="max-h-96 overflow-auto font-mono text-micro" data-step-pane="tree">{tool.result}</pre>
 {:else if tool.name === 'workspace_logs'}
 	{@const lines = list(out['records'])}

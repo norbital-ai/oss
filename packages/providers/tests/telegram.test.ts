@@ -366,6 +366,7 @@ describe('the Telegram link', () => {
 			expect(JSON.parse(required(f.calls.at(-1)).body)).toEqual({
 				chat_id: '-9',
 				text: 'hi',
+				link_preview_options: { is_disabled: true },
 				message_thread_id: 3
 			});
 		})

@@ -4,7 +4,6 @@ import { expect, layer } from '@effect/vitest';
 import { Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
@@ -70,20 +69,20 @@ layer(workspace, { excludeTestServices: true })('a patterned seq', (it) => {
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
 			const admin = yield* t.as(t.admin);
-			const seeded = yield* admin.query(dynamic_read({ people: { fields: ['number'] } }));
+			const seeded = yield* admin.wire_query({ people: { fields: ['number'] } });
 			expect(
 				(yield* Schema.decodeUnknownEffect(People)(seeded)).people.rows.map((row) => row.number)
 			).toEqual(['HR-0007']);
 			yield* admin.act(untyped({ 'people.create': [{ name: 'Ada' }, { name: 'Grace' }] }));
-			const read = yield* admin.query(dynamic_read({ people: { order_by: 'name' } }));
+			const read = yield* admin.wire_query({ people: { order_by: 'name' } });
 			const people = yield* Schema.decodeUnknownEffect(People)(read);
 			expect(people.people.rows.map((row) => row.number)).toEqual([
 				'HR-0008',
 				'HR-0009',
 				'HR-0007'
 			]);
-			const stored = yield* t.stored_query(
-				dynamic_read({ people: { fields: ['name', 'number'], order_by: 'name' } })
+			const stored = yield* admin.wire_query(
+				{ people: { fields: ['name', 'number'], order_by: 'name' } }
 			);
 			expect(
 				(yield* Schema.decodeUnknownEffect(People)(stored)).people.rows.map((row) => row.number)
@@ -91,8 +90,8 @@ layer(workspace, { excludeTestServices: true })('a patterned seq', (it) => {
 			yield* admin.act(
 				untyped({ 'stints.create': people.people.rows.map((row) => ({ person: row.id })) })
 			);
-			const stints = yield* admin.query(
-				dynamic_read({ stints: { fields: ['number'], order_by: 'number' } })
+			const stints = yield* admin.wire_query(
+				{ stints: { fields: ['number'], order_by: 'number' } }
 			);
 			expect(
 				(yield* Schema.decodeUnknownEffect(Stints)(stints)).stints.rows.map((row) => row.number)

@@ -67,6 +67,10 @@ const manifest: EngineManifest = {
 				leaves: { outputs: { default: {} }, update: {} },
 				approval_request: { outputs: { default: {} } }
 			}
+		},
+		checked: {
+			description: 'Reviews; its own edits need approval',
+			grants: { leaves: { outputs: { default: {} }, update: { verdict: true } } }
 		}
 	},
 	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] } },
@@ -101,7 +105,10 @@ const source = `export default { model: {
 	} }
 }, policy: { requester: { grants: { leaves: { create: { verdict: function* (_rows, ctx) {
 	return ctx.approve({ steps: [{ name: 'Manager', teams: ['managers'] }] });
-} } } } } } };`;
+} } } } },
+	checked: { grants: { leaves: { update: { verdict: function* (_rows, ctx) {
+		return ctx.approve({ steps: [{ name: 'Manager', teams: ['managers'] }] });
+	} } } } } } };`;
 const member = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',
 	id,
@@ -135,6 +142,11 @@ const fixture = Effect.gen(function* () {
 			manifest,
 			{ actor: member(managerId, 'managers'), policies: ['reviewer'], admin: false },
 			managerId
+		),
+		checker: Authority = yield* compile_authority(
+			manifest,
+			{ actor: member(managerId, 'managers'), policies: ['checked'], admin: false },
+			`${managerId}:checked`
 		);
 	const act = (verb: 'create' | 'update', input: Json, authority = requester) => {
 		const key = randomUUID(),
@@ -193,7 +205,7 @@ const fixture = Effect.gen(function* () {
 			FROM sys_run WHERE automation = 'heard' AND trigger->'records' ? $1 ORDER BY due_at, id`,
 			params: [id]
 		});
-	return { requester, manager, act, decide, names, postings, state, idOf, heard };
+	return { requester, manager, checker, act, decide, names, postings, state, idOf, heard };
 });
 const held = (outcome: Outcome) => {
 	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
@@ -283,6 +295,21 @@ layer(workspace, { excludeTestServices: true })('on_approved', (it) => {
 				// the held create and the approver's edit to it commit as one create
 				expect(yield* f.heard(target)).toEqual([{ verb: 'create', records: [target] }]);
 			})
+	);
+
+	it.effect('refuses a current-step approver an edit their own verdict would route, so they never approve it', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const request = held(yield* f.act('create', [{ name: 'self-approved' }]));
+			const target = yield* f.idOf('self-approved');
+			expect(
+				yield* f.act('update', [{ target, set: { note: 'mine' } }], f.checker)
+			).toMatchObject({ kind: 'refused', code: 'locked' });
+			expect(yield* f.state(request)).toBe('Pending');
+			expect(
+				yield* f.decide(request, 'reject', 'No')
+			).toMatchObject({ status: 'Rejected' });
+		})
 	);
 
 	it.effect('waits too when an update of the held record changes nothing', () =>

@@ -3,8 +3,10 @@
 // Twilio for `whatsapp`, a mailbox for `email`). The release's links manager opens one `Link` per instance from the
 // provider the operator chose, hands it the instance's credentials under its epoch, and turns what the link reports
 // into the one `InstanceStatus` the shell draws. A provider's setup is data (`SetupDescription`).
-import { DateTime, Effect, Option, Schema, SchemaTransformation } from 'effect';
+import { DateTime, Effect, Option, Predicate, Result, Schema, SchemaTransformation } from 'effect';
 import { SqlServerRequest } from '@norbital-ai/store/sqlserver';
+import { Base64 } from 'effect/encoding';
+import { FacilityFailure } from './errors.ts';
 import { HOST_LIMITS, type TcpPort } from './facilities.ts';
 import type { Json } from '@norbital-ai/store';
 
@@ -371,7 +373,7 @@ export const IntegrationDefinition = Schema.Struct({
 			scopes: Schema.optionalKey(Schema.Array(Schema.String))
 		})
 	),
-	/** `http` only: the base URL (a literal or a text configuration field) and how requests authenticate. */
+	/** `http` only: the base URL (a literal or a text configuration field), how requests authenticate, and what it allows. */
 	http: Schema.optionalKey(
 		Schema.Struct({
 			base_url: Schema.String,
@@ -381,12 +383,80 @@ export const IntegrationDefinition = Schema.Struct({
 					Schema.Struct({ header: Schema.Struct({ name: Schema.String, value: Schema.String }) }),
 					Schema.Struct({ basic: Schema.Struct({ user: Schema.String, password: Schema.String }) })
 				])
+			),
+			/** The only requests an instance sends: these methods on these paths under the base. */
+			allow: Schema.optionalKey(
+				Schema.Struct({ methods: Schema.Array(Schema.String), paths: Schema.Array(Schema.String) })
 			)
 		})
 	),
 	webhook: Schema.optionalKey(Schema.Unknown)
 });
 export type IntegrationDefinition = typeof IntegrationDefinition.Type;
+type HttpSpec = NonNullable<IntegrationDefinition['http']>;
+/**
+ * `path` under `base`, never outside it: one leading `/` is the base itself; an absolute or `//host` path, `..`/`.`
+ * segments (encoded too), a `\\`, a query or fragment, or an encoded `/`, `\\` or `%` in a segment is refused. The
+ * query (a page cursor included) goes through `searchParams`, so pagination stays inside the prefix.
+ */
+export function http_target(base: string, path: string): URL {
+	const root = new URL(base.endsWith('/') ? base : `${base}/`);
+	const rel = path.startsWith('/') ? path.slice(1) : path;
+	const refuse = () => FacilityFailure.invalid(`the path '${path}' leaves the integration's base URL`);
+	if (rel.startsWith('/') || /[\\?#\s\x00-\x1f]/.test(rel)) throw refuse();
+	for (const part of rel === '' ? [] : rel.split('/')) {
+		const decoded = Result.try({ try: () => decodeURIComponent(part), catch: refuse });
+		if (Result.isFailure(decoded)) throw decoded.failure;
+		const d = decoded.success;
+		if (d === '.' || d === '..' || /[\\/%\x00-\x1f]/.test(d)) throw refuse();
+	}
+	const url = new URL(rel, root);
+	if (url.origin !== root.origin || !url.pathname.startsWith(root.pathname)) throw refuse();
+	return url;
+}
+/**
+ * Whether a definition's `allow` admits `method` on `url` under `base`: a listed method and a path pattern matching it
+ * segment by segment (`{name}` one non-empty segment, a final `**` any rest). No `allow` admits everything.
+ */
+export function http_allows(allow: HttpSpec['allow'], base: string, method: string, url: URL): boolean {
+	if (allow === undefined) return true;
+	const root = new URL(base.endsWith('/') ? base : `${base}/`).pathname,
+		got = `/${url.pathname.slice(root.length)}`.split('/');
+	const matches = (pattern: string) => {
+		const want = pattern.split('/');
+		for (const [i, w] of want.entries()) {
+			if (w === '**' && i === want.length - 1) return true;
+			const g = got[i];
+			if (g === undefined || (/^\{\w+\}$/.test(w) ? g === '' : g !== w)) return false;
+		}
+		return got.length === want.length;
+	};
+	return allow.methods.includes(method.toUpperCase()) && allow.paths.some(matches);
+}
+/**
+ * The headers a definition's credential `auth` (bearer, basic or a named header) adds from an instance's sealed
+ * `credential` fields; `undefined` when one it names is missing. No `auth` adds none.
+ */
+export function http_auth(auth: HttpSpec['auth'], credential: unknown): Record<string, string> | undefined {
+	const field = (name: string) => {
+		const value = Predicate.isObject(credential) ? credential[name] : undefined;
+		return typeof value === 'string' && value !== '' ? value : undefined;
+	};
+	if (auth === undefined) return {};
+	if ('bearer' in auth) {
+		const token = field(auth.bearer);
+		return token === undefined ? undefined : { authorization: `Bearer ${token}` };
+	}
+	if ('basic' in auth) {
+		const user = field(auth.basic.user),
+			password = field(auth.basic.password);
+		return user === undefined || password === undefined
+			? undefined
+			: { authorization: `Basic ${Base64.encode(`${user}:${password}`)}` };
+	}
+	const value = field(auth.header.value);
+	return value === undefined ? undefined : { [auth.header.name.toLowerCase()]: value };
+}
 /** What the links manager hands a provider to open one instance's link. Credentials stay host-side, under the opener's epoch. */
 export type DriverOpen = {
 	instance: string;

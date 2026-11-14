@@ -46,15 +46,19 @@ import {
 	type ToolContext,
 	catalogueNote,
 	describeWorkspace,
+	fixedTools,
 	readPaths,
 	messageCatalogue,
-	OVERVIEW_BYTES
+	OVERVIEW_BYTES,
+	sweeping
 } from '../src/engine/agent/tools.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { credentials } from '../src/engine/integrations/credentials.ts';
+import { Secrets } from '../src/engine/secrets.ts';
 import { layered, type EngineManifest } from '../src/engine/manifest.ts';
 import { Browser, Bundler, Files, GuestIsolates, Http, Images, Logs } from '../src/engine/ports.ts';
-import { browserTools } from '../src/engine/agent/browser.ts';
+import { browserTools, submits } from '../src/engine/agent/browser.ts';
 import { files_of, skill_of } from './support/run-file-trees.ts';
 import { BOUNDS } from '../src/engine/agent/context.ts';
 import { tree_digest } from '@norbital-ai/host-api';
@@ -65,6 +69,7 @@ import { audit_shape } from '../src/engine/audit.ts';
 import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
 import { storable } from '../src/engine/agent/schema.ts';
 import { file_attachments } from '../src/engine/agent/attachments.ts';
+import { seed_accounts } from './support/accounts.ts';
 import type { ToolAnswer } from '../src/engine/agent/ai.ts';
 import { randomUUID } from 'node:crypto';
 import { actor_ref } from '../src/engine/access/actor.ts';
@@ -193,7 +198,8 @@ const ctx = (
 				guest: engine.guest ?? Context.get(native, GuestIsolates),
 				...(engine.http === undefined ? {} : { http: engine.http }),
 				...(engine.bundler === undefined ? {} : { bundler: engine.bundler }),
-				...(engine.audit === undefined ? {} : { audit: engine.audit })
+				...(engine.audit === undefined ? {} : { audit: engine.audit }),
+				...(engine.credentials === undefined ? {} : { credentials: engine.credentials })
 			},
 			authority: member({ admin: true }),
 			bindings: { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'UTC' },
@@ -212,6 +218,7 @@ const ctx = (
 			},
 			mode: 'agent',
 			inApp: true,
+			approved: () => false,
 			delegation: false,
 			child: false,
 			skills: {},
@@ -235,9 +242,8 @@ const ctx = (
 			history: () => Effect.succeed([]),
 			heard: Effect.never,
 			subagent: {
-				spawn: () => Effect.succeed(null),
+				task: () => Effect.succeed({ id: 'child', running: false }),
 				read: () => Effect.succeed(null),
-				message: () => Effect.succeed(null),
 				stop: () => Effect.succeed(null),
 				running: () => Effect.succeed(0),
 				report: () => Effect.succeed(false)
@@ -463,6 +469,31 @@ describe('job steering lines', () => {
 		}).pipe(Effect.scoped)
 	);
 });
+describe('jobs cut short', () => {
+	it.effect('a turn job its turn ends early still ends in one line; a run job leaves its end to the run', () =>
+		Effect.gen(function* () {
+			const late: string[] = [];
+			const watched = new Set<string>();
+			const detached = yield* FiberSet.make<unknown, never>();
+			let id = '';
+			yield* Effect.scoped(
+				Effect.gen(function* () {
+					const list = yield* jobs({ detached, watched, late: (lines) => Effect.sync(() => late.push(...lines)) });
+					id = yield* list.add('workspace_test', Effect.never);
+					yield* list.add('automation quotes_mark', Effect.never, { detach: true, alias: 'run-1' });
+					// the host carries this one on and reports its end itself
+					expect(yield* list.add('studio_build', Effect.never, { id: 'host-job', reported: true })).toBe('host-job');
+					expect([...watched]).toEqual(['run-1']);
+				})
+			);
+			expect(late).toEqual([`[job ${id} stopped] workspace_test: cut short before it finished`]);
+			yield* FiberSet.clear(detached);
+			// the run's watcher stopped: its end now reaches the conversation by itself, and no line repeats it
+			expect(late).toHaveLength(1);
+			expect(watched.size).toBe(0);
+		}).pipe(Effect.scoped)
+	);
+});
 describe('spending caps', () => {
 	it('a member gets the most generous cap among their policies, else the default', () => {
 		const s = { monthly: null, member: 5, policies: { rep: 2, lead: 20 }, models: [] };
@@ -504,7 +535,7 @@ describe('tool schemas', () => {
 					...(yield* catalogue(yield* ctx({ workspace, authority: member() }))).available
 				];
 				expect(tools.map((t) => t.name)).toEqual(
-					expect.arrayContaining(['read', 'act', 'workspace_search'])
+					expect.arrayContaining(['read', 'act', 'workspace_grep', 'workspace_glob'])
 				);
 				// the JSON Schema each tool is offered with, its definitions included
 				for (const t of tools) {
@@ -1196,15 +1227,15 @@ describe('working-source tools', () => {
 		() =>
 			Effect.gen(function* () {
 				const x = yield* ctx({ workspace, authority: member() });
-				const search = yield* requiredTool(x, 'workspace_search');
+				const search = yield* requiredTool(x, 'workspace_grep');
 				expect(search.input).toMatchObject({ required: ['pattern'] });
-				expect(yield* result(x, 'workspace_search', {})).toMatchObject({
+				expect(yield* result(x, 'workspace_grep', {})).toMatchObject({
 					result: {
-						error: expect.stringContaining("Invalid parameters for tool 'workspace_search'")
+						error: expect.stringContaining("Invalid parameters for tool 'workspace_grep'")
 					}
 				});
 				const grep = (input: Json) =>
-					Effect.map(result(x, 'workspace_search', input), (answer) =>
+					Effect.map(result(x, 'workspace_grep', input), (answer) =>
 						String(Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }))(answer).result)
 					);
 				expect(yield* grep({ pattern: 'bolt\\.(read|READ)' })).toMatch(
@@ -1217,7 +1248,7 @@ describe('working-source tools', () => {
 					yield* grep({
 						pattern: 'BOLT.READ',
 						literal: true,
-						case_sensitive: false,
+						caseSensitive: false,
 						path: 'src/app'
 					})
 				).toContain('src/app/b.svelte:');
@@ -1230,13 +1261,16 @@ describe('working-source tools', () => {
 				expect(yield* grep({ pattern: 'bolt.read', literal: true, path: '.' })).toContain(
 					'src/a.ts:'
 				);
-				expect(yield* result(x, 'workspace_search', { pattern: '[' })).toMatchObject({
-					result: { error: expect.stringContaining('Invalid regular expression') }
+				expect(yield* result(x, 'workspace_grep', { pattern: '[' })).toMatchObject({
+					result: { error: expect.stringContaining('Invalid regex pattern: ') }
+				});
+				expect(yield* result(x, 'workspace_grep', { pattern: 'x', path: 'nowhere' })).toMatchObject({
+					result: { error: 'Search path does not exist: nowhere' }
 				});
 			})
 	);
 	it.effect(
-		'list_dir shows the tree with its roles, search with files names the files holding a match, read refuses a directory',
+		"list_dir shows the tree with its roles; read lists a directory and glob finds files, OpenCode's way",
 		() =>
 			Effect.gen(function* () {
 				const files = [
@@ -1254,7 +1288,6 @@ describe('working-source tools', () => {
 					Effect.map(result(x, tool, input), (answer) =>
 						String(Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }))(answer).result)
 					);
-				expect(yield* names(x)).not.toContain('workspace_glob');
 				const whole = yield* text('workspace_list_dir', {});
 				expect(whole.split('\n')[0]).toBe('/  <- cwd');
 				expect(whole).toContain('+board.page.svelte');
@@ -1264,12 +1297,24 @@ describe('working-source tools', () => {
 				expect(yield* result(x, 'workspace_list_dir', { path: 'nowhere' })).toMatchObject({
 					result: { error: expect.stringContaining('no such directory') }
 				});
-				expect(yield* result(x, 'workspace_read', { path: 'src/agent/tool/plans' })).toMatchObject({
-					result: { error: 'src/agent/tool/plans is a directory: workspace_list_dir lists it.' }
+				expect(yield* text('workspace_read', { path: 'src/agent/tool/plans' })).toBe(
+					'Read directory src/agent/tool/plans, entries 1-2\n+tool.ts\nrun.ts'
+				);
+				expect(yield* text('workspace_read', { path: '.', limit: 2 })).toBe(
+					'Read directory ., entries 1-2\nsrc/\n.prettierrc\n[Output truncated. Continue reading with offset: 3]'
+				);
+				expect(yield* text('workspace_glob', { pattern: '*.svelte' })).toBe(
+					'src/app/board/+board.page.svelte'
+				);
+				expect(yield* text('workspace_glob', { pattern: '**/+*.ts', path: 'src/agent' })).toBe(
+					'src/agent/tool/plans/+tool.ts'
+				);
+				expect(yield* text('workspace_glob', { pattern: '*' })).not.toContain('.prettierrc');
+				expect(yield* text('workspace_glob', { pattern: '*', hidden: true })).toContain('.prettierrc');
+				expect(yield* text('workspace_glob', { pattern: '*.py' })).toBe('No files found');
+				expect(yield* result(x, 'workspace_glob', { pattern: '*', path: 'README.md' })).toMatchObject({
+					result: { error: 'Search path is not a directory: README.md' }
 				});
-				expect(
-					yield* text('workspace_search', { pattern: 'x', files: true, include: '*.svelte' })
-				).toBe('Found 1 files\nsrc/app/board/+board.page.svelte');
 			})
 	);
 	it.effect(
@@ -1285,7 +1330,7 @@ describe('working-source tools', () => {
 				expect(
 					yield* result(x, 'workspace_read', { path: 'migrations/physical.json' })
 				).toMatchObject({
-					result: expect.stringContaining('migrations/physical.json:')
+					result: 'Read file migrations/physical.json, lines 1-1\n1: {}'
 				});
 				expect(yield* result(x, 'workspace_list_dir', {})).toMatchObject({
 					result: expect.stringContaining('current.ts')
@@ -1293,7 +1338,7 @@ describe('working-source tools', () => {
 				expect(yield* result(x, 'workspace_read', { path: 'src/current.ts' })).toMatchObject({
 					result: 'Read file src/current.ts, lines 1-1\n1: first'
 				});
-				// the same path spelling workspace_search accepts
+				// the same path spelling workspace_grep accepts
 				expect(yield* result(x, 'workspace_read', { path: './src/current.ts' })).toMatchObject({
 					result: 'Read file src/current.ts, lines 1-1\n1: first'
 				});
@@ -1310,7 +1355,7 @@ describe('working-source tools', () => {
 					result: 'Read file src/current.ts, lines 1-1\n1: saved replacement'
 				});
 				expect(
-					yield* result(x, 'workspace_search', { pattern: 'saved replacement', literal: true })
+					yield* result(x, 'workspace_grep', { pattern: 'saved replacement', literal: true })
 				).toMatchObject({ result: expect.stringContaining('src/current.ts:\n  Line 1: saved') });
 				expect(
 					yield* result(yield* ctx({ workspace, authority: member() }), 'workspace_read', {
@@ -1320,24 +1365,27 @@ describe('working-source tools', () => {
 					})
 				).toMatchObject({ result: expect.stringContaining('\n2: bolt.read(tasks)') });
 				expect(yield* result(x, 'workspace_read', { path: '../elsewhere' })).toMatchObject({
-					result: { error: expect.stringContaining('no such file') }
+					result: { error: 'File not found: ../elsewhere' }
+				});
+				// installed packages and what the build writes are no source: not found, with no advice
+				for (const path of ['node_modules/@norbital-ai/bolt/build/decl/runtime/agent.d.ts', '.norbital/names.ts'])
+					expect(yield* result(x, 'workspace_read', { path })).toMatchObject({
+						result: { error: `File not found: ${path}` }
+					});
+				// OpenCode's pages: past the end is the tail, a negative offset counts from the end
+				revision = 'a\nb\nc\n';
+				expect(yield* result(x, 'workspace_read', { path: 'src/current.ts', offset: 9 })).toMatchObject({
+					result:
+						'Read file src/current.ts, lines 1-3 (offset 9 is past the end; the file has 3 lines)\n1: a\n2: b\n3: c'
+				});
+				expect(yield* result(x, 'workspace_read', { path: 'src/current.ts', offset: -1 })).toMatchObject({
+					result: 'Read file src/current.ts, lines 3-3\n3: c'
 				});
 				expect(
-					yield* result(x, 'workspace_read', {
-						path: 'node_modules/@norbital-ai/bolt/build/decl/runtime/agent.d.ts'
-					})
+					yield* result(x, 'workspace_read', { path: 'src/current.ts', offset: 1, limit: 2 })
 				).toMatchObject({
-					result: { error: expect.stringContaining('installed packages are outside the workspace') }
+					result: 'Read file src/current.ts, lines 1-2\n1: a\n2: b\n[Output truncated. Continue reading with offset: 3]'
 				});
-				// what the build writes is not source: each source tool says so instead of "no such file"
-				for (const [name, input] of [
-					['workspace_read', { path: '.norbital/names.ts' }],
-					['workspace_list_dir', { path: '.norbital' }],
-					['workspace_search', { pattern: 'x', path: '.norbital' }]
-				] as const)
-					expect(yield* result(x, name, input)).toMatchObject({
-						result: { error: expect.stringContaining('the build writes .norbital') }
-					});
 				expect(
 					yield* tool(
 						yield* ctx({ workspace, authority: member({ external: true }) }),
@@ -1411,7 +1459,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 				const x = yield* ctx({ workspace, host_tools, authority: reader });
 				const offered = yield* names(x);
 				expect(offered).toEqual(
-					expect.arrayContaining(['workspace_search', 'workspace_list_dir', 'workspace_lang'])
+					expect.arrayContaining(['workspace_grep', 'workspace_glob', 'workspace_list_dir', 'workspace_lang'])
 				);
 				for (const mutating of [
 					'workspace_write',
@@ -1430,9 +1478,9 @@ describe('reading the source is every staff member’s; changing it is an admini
 				expect(listed).not.toContain('payroll/');
 				expect(
 					yield* result(x, 'workspace_read', { path: 'src/data/model/payroll/+model.ts' })
-				).toMatchObject({ result: { error: expect.stringContaining('no such file') } });
+				).toMatchObject({ result: { error: 'File not found: src/data/model/payroll/+model.ts' } });
 				expect(
-					yield* result(x, 'workspace_search', { pattern: 'model(', literal: true })
+					yield* result(x, 'workspace_grep', { pattern: 'model(', literal: true })
 				).toMatchObject({
 					result: expect.stringContaining('src/data/model/tasks/+model.ts:')
 				});
@@ -1442,7 +1490,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 					expect.arrayContaining(['workspace_lang', 'workspace_write', 'workspace_review'])
 				);
 				expect(
-					yield* result(admin, 'workspace_search', { pattern: 'model(', literal: true })
+					yield* result(admin, 'workspace_grep', { pattern: 'model(', literal: true })
 				).toMatchObject({
 					result: expect.stringContaining('src/data/model/payroll/+model.ts:')
 				});
@@ -1925,12 +1973,12 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			Effect.gen(function* () {
 				const { x, id } = yield* scan();
 				const count = {
-					code: `const r = await tool('read_file', { id: '${id}', from: 1, to: 4 }); return r.lines?.length ?? r.note;`
+					code: `const r = await tool('read_file', { id: '${id}', offset: 1, limit: 4 }); return r.split('\\n').filter((l) => /^\\d+: /.test(l)).length;`
 				};
 				expect(yield* result(x, 'run_js', count)).toEqual({ result: { answer: 4 } });
 				for (let again = 0; again < 2; again++)
-					expect(yield* result(x, 'read_file', { id: 'o1', from: 1, to: 4 })).toMatchObject({
-						result: { lines: expect.arrayContaining(['3: <p>Plates: 15</p>']) }
+					expect(yield* result(x, 'read_file', { id: 'o1', offset: 1, limit: 4 })).toMatchObject({
+						result: expect.stringContaining('\n3: Plates: 15\n')
 					});
 				expect(yield* result(x, 'run_js', count)).toEqual({ result: { answer: 4 } });
 			})
@@ -1955,7 +2003,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 						})
 				}
 			);
-			yield* result(x, 'read_file', { id, from: 1, to: 1 });
+			yield* result(x, 'read_file', { id, offset: 1, limit: 1 });
 			expect(yield* result(x, 'view_image', { id: 'o1', crops: [[0, 0, 1, 1]] })).toEqual({
 				result: { error: 'o1 has 2 images: give image, the 1-based one to crop.' }
 			});
@@ -1973,19 +2021,17 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					{ ingest: () => Effect.sync(() => (calls++, tender)) }
 				);
 				// a window inside the table reads the table whole, and none of its images
-				expect(yield* result(x, 'read_file', { id, from: 5, to: 5 })).toEqual({
-					result: {
-						id: 'o1',
-						file: 'tender.pdf (ingested)',
-						lines: [
-							'4: <table>',
-							'5: <tr><td>Lot</td><td>Rate</td></tr>',
-							'6: <tr><td>7</td><td>12.50</td></tr>',
-							'7: </table>'
-						],
-						at: 'lines 4–7 of 9 · read_file { id: o1, from: 8 }',
-						about: ['  9 lines · 1 images · 1 tables', '  Map: L1–9 Cover (Pricing L3–9)']
-					},
+				expect(yield* result(x, 'read_file', { id, offset: 5, limit: 1 })).toEqual({
+					result: [
+						'9 lines · 1 images · 1 tables',
+						'Map: L1–9 Cover (Pricing L3–9)',
+						'Read tender.pdf (ingested) (o1), lines 4-7 of 9',
+						'4: <table>',
+						'5: <tr><td>Lot</td><td>Rate</td></tr>',
+						'6: <tr><td>7</td><td>12.50</td></tr>',
+						'7: </table>',
+						'[Output truncated. Continue reading with offset: 8]'
+					].join('\n'),
 					bounded: true
 				});
 				expect(x.jobs.take()).toEqual([]);
@@ -2029,15 +2075,17 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					})
 				]);
 				expect(x.files).toEqual([]);
-				expect(yield* result(x, 'read_file', { id: 'o1', from: 4, to: 7 })).toMatchObject({
-					result: { lines: expect.arrayContaining(['4: <table>']) }
+				expect(yield* result(x, 'read_file', { id: 'o1', offset: 4, limit: 4 })).toMatchObject({
+					result: expect.stringContaining('\n4: <table>\n')
 				});
-				expect(yield* result(x, 'read_file', { id, from: 8 })).toMatchObject({
-					result: {
-						lines: ['8: <p><img src="image-1.png" alt="site plan"></p>', '9: <p>End</p>'],
-						images: ['image-1.png'],
-						at: 'lines 8–9 of 9'
-					}
+				expect(yield* result(x, 'read_file', { id, offset: 8 })).toEqual({
+					result: [
+						'Read tender.pdf (ingested) (o1), lines 8-9 of 9',
+						'8: <p><img src="image-1.png" alt="site plan"></p>',
+						'9: End',
+						'Shown on your next step only: image-1.png'
+					].join('\n'),
+					bounded: true
 				});
 				expect(x.files.map((f) => f.mime)).toEqual([
 					'image/png',
@@ -2056,7 +2104,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					result: { image: 'image-1.png' }
 				});
 				// the same file again is the same output
-				expect(yield* result(x, 'read_file', { id })).toMatchObject({ result: { id: 'o1' } });
+				expect(yield* result(x, 'read_file', { id })).toMatchObject({ result: expect.stringContaining('(o1), lines 1-9 of 9') });
 				expect(calls).toBe(1);
 			})
 	);
@@ -2114,7 +2162,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					{ name: 'b.pdf', mime: 'application/pdf', bytes },
 					port
 				);
-				const answer = yield* result(other.x, 'read_file', { id: other.id, from: 1, to: 2 });
+				const answer = yield* result(other.x, 'read_file', { id: other.id, offset: 1, limit: 2 });
 				expect(calls).toBe(1);
 				expect(
 					kitLogs
@@ -2123,11 +2171,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 						.map((r) => r.attributes)
 				).toEqual([expect.objectContaining({ cached: true })]);
 				expect(answer).toMatchObject({
-					result: {
-						id: 'o1',
-						lines: ['1: <h1>Cover</h1>', '2: <p>Tender for site works</p>'],
-						about: expect.arrayContaining([expect.stringContaining('no text on pages 2')])
-					}
+					result: expect.stringMatching(/no text on pages 2[\s\S]*\(o1\), lines 1-2 of 12\n1: <h1>Cover<\/h1>\n2: Tender for site works\n/)
 				});
 			})
 	);
@@ -2153,7 +2197,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 							...(password === undefined ? {} : { password })
 						});
 					});
-				expect(yield* read('pw')).toMatchObject({ result: { id: 'o1' } });
+				expect(yield* read('pw')).toMatchObject({ result: expect.stringContaining('(o1)') });
 				yield* read();
 				yield* read('pw');
 				expect(asked).toEqual(['pw', undefined]);
@@ -2225,7 +2269,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				]
 			});
 			expect(yield* result(x, 'read_file', { id })).toMatchObject({
-				result: { lines: expect.arrayContaining([expect.stringContaining('Back again')]) }
+				result: expect.stringContaining('\n1: Back again')
 			});
 		})
 	);
@@ -2281,17 +2325,17 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 							})
 					}
 				);
-				expect(yield* result(x, 'read_file', { id })).toMatchObject({
-					result: {
-						file: 'site-meeting.m4a (transcript)',
-						lines: html.split('\n').map((l, i) => `${i + 1}: ${l}`),
-						about: [
-							'  00:01:05 · 2 speakers · 2 lines',
-							'  Map: L1–1 S1 00:00:01 · L2–2 S2 00:00:04',
-							expect.stringMatching(/^ {2}Typed JSON for run_js .*: transcript\.json \S+ — run_js/)
-						]
-					}
-				});
+				const answer = yield* result(x, 'read_file', { id });
+				const said = 'result' in answer && typeof answer.result === 'string' ? answer.result.split('\n') : [];
+				expect(said.slice(0, 2)).toEqual([
+					'00:01:05 · 2 speakers · 2 lines',
+					'Map: L1–1 S1 00:00:01 · L2–2 S2 00:00:04'
+				]);
+				expect(said[2]).toMatch(/^Typed JSON for run_js .*: transcript\.json \S+ — run_js/);
+				expect(said.slice(3)).toEqual([
+					'Read site-meeting.m4a (transcript) (o1), lines 1-2 of 2',
+					...html.split('\n').map((l, i) => `${i + 1}: ${l}`)
+				]);
 				const listed = yield* outputs(x);
 				const entry = Array.isArray(listed) ? listed[0] : undefined;
 				const stored =
@@ -2339,10 +2383,9 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				mime: 'video/mp4',
 				bytes: new Uint8Array([1])
 			});
-			expect(yield* result(video.x, 'read_file', { id: video.id, from: 1 })).toEqual({
-				result: {
-					error: expect.stringContaining('no parser. A call-mode automation can use a workspace package')
-				}
+			// what happened, and nothing about which other tool to reach for
+			expect(yield* result(video.x, 'read_file', { id: video.id, offset: 1 })).toEqual({
+				result: { error: 'site.mp4 (video/mp4, 1 bytes): binary; no parser for this format.' }
 			});
 			const pdf = yield* holding(`c-${randomUUID()}`, {
 				name: 'a.pdf',
@@ -2352,8 +2395,89 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			expect(yield* result(pdf.x, 'read_file', { id: pdf.id })).toEqual({
 				result: { error: 'This host cannot parse files.' }
 			});
-			expect(yield* result(pdf.x, 'read_file', { id: pdf.id, from: 1 })).toEqual({
+			expect(yield* result(pdf.x, 'read_file', { id: pdf.id, offset: 1 })).toEqual({
 				result: { error: 'This host cannot parse files.' }
+			});
+		})
+	);
+	it.effect('an archive lists its files; path reads one through the same ingest, under its own cache entry', () =>
+		Effect.gen(function* () {
+			const asked: (string | undefined)[] = [];
+			const doc = (html: string): Ingested => ({ kind: 'document', html, images: [], meta: { stats: { pages: null, bytes: 1, cpuMs: 1, wallMs: 1 } } });
+			const { x, id } = yield* holding(
+				`c-${randomUUID()}`,
+				{ name: 'repo.zip', mime: 'application/zip', bytes: new TextEncoder().encode(`PK ${randomUUID()}`) },
+				{
+					ingest: (_, read) =>
+						Effect.sync(() => {
+							asked.push(read?.entry);
+							return read?.entry === undefined
+								? doc('<pre>\nrepo/src/app.ts  19 bytes\nrepo/README.md  12 bytes\n</pre>')
+								: doc('<pre>\nif (a &lt; b) {}\n</pre>');
+						})
+				}
+			);
+			expect(yield* result(x, 'read_file', { id })).toMatchObject({
+				result: expect.stringContaining('\n1: repo/src/app.ts  19 bytes\n2: repo/README.md  12 bytes')
+			});
+			const entry = 'Read repo.zip/repo/src/app.ts (ingested) (o2), lines 1-1 of 1\n1: if (a < b) {}';
+			expect(yield* result(x, 'read_file', { id, path: 'repo/src/app.ts' })).toMatchObject({
+				result: expect.stringContaining(entry)
+			});
+			// the listing's output names the same archive; a read already made is read again, not converted
+			expect(yield* result(x, 'read_file', { id: 'o1', path: '/repo/src/app.ts' })).toEqual({ result: entry, bounded: true });
+			expect(asked).toEqual([undefined, 'repo/src/app.ts']);
+			const text = yield* holding(`c-${randomUUID()}`, {
+				name: 'main.rs',
+				mime: 'application/octet-stream',
+				bytes: new TextEncoder().encode('fn main() {}')
+			});
+			// a type no reader knows is read as the text it is
+			expect(yield* result(text.x, 'read_file', { id: text.id })).toMatchObject({ result: expect.stringContaining('\n1: fn main() {}') });
+			expect(yield* result(text.x, 'read_file', { id: text.id, path: 'a' })).toEqual({
+				result: { error: 'main.rs is not an archive: path names a file inside a zip, tar or tar.gz.' }
+			});
+		})
+	);
+	it.live('ten first reads of one entry at once convert it once, across conversations; the listing once', () =>
+		Effect.gen(function* () {
+			const asked: (string | undefined)[] = [];
+			const bytes = new TextEncoder().encode(`PK ${randomUUID()}`);
+			const doc = (html: string): Ingested => ({ kind: 'document', html, images: [], meta: { stats: { pages: null, bytes: 1, cpuMs: 1, wallMs: 1 } } });
+			const port = {
+				ingest: (_: unknown, read?: { readonly entry?: string }) =>
+					Effect.sleep(20).pipe(
+						Effect.as(read?.entry === undefined ? doc('<pre>\nsrc/a.ts  5 bytes\n</pre>') : doc('<pre>\nlet a\n</pre>')),
+						Effect.tap(() => Effect.sync(() => asked.push(read?.entry)))
+					)
+			};
+			const readers = yield* Effect.forEach(Array.from({ length: 10 }), () =>
+				holding(`c-${randomUUID()}`, { name: 'repo.zip', mime: 'application/zip', bytes }, port)
+			);
+			const answers = yield* Effect.forEach(readers, ({ x, id }) => result(x, 'read_file', { id, path: 'src/a.ts' }), {
+				concurrency: 'unbounded'
+			});
+			expect(answers.every((answer) => 'result' in answer && typeof answer.result === 'string' && answer.result.includes('1: let a'))).toBe(true);
+			yield* Effect.forEach(readers, ({ x, id }) => result(x, 'read_file', { id }), { concurrency: 'unbounded' });
+			expect(asked).toEqual(['src/a.ts', undefined]);
+		})
+	);
+	it.live("run_js hands the named files over as input.files, one typed shape; a wrong read throws naming it", () =>
+		Effect.gen(function* () {
+			const { x, id } = yield* holding(`c-${randomUUID()}`, {
+				name: 'notes.txt',
+				mime: 'text/plain',
+				bytes: new TextEncoder().encode('hello')
+			});
+			const run = (code: string) => result(x, 'run_js', { files: [{ id }], code });
+			expect(
+				yield* run('const [f] = input.files; return [f.id, f.name, f.type, f.size, new TextDecoder().decode(f.bytes), f.bytes instanceof Uint8Array];')
+			).toEqual({ result: { answer: [id, 'notes.txt', 'text/plain', 5, 'hello', true] } });
+			expect(yield* run('return input.files[0].data;')).toEqual({
+				result: { error: expect.stringContaining("TypeError: input.files[0] has no 'data': each file is { id, name, type, size, bytes: Uint8Array }") }
+			});
+			expect(yield* run("return input.files['notes.txt'].bytes;")).toEqual({
+				result: { error: expect.stringContaining("TypeError: input.files has no 'notes.txt': it is an array of 1 { id, name, type, size, bytes: Uint8Array }") }
 			});
 		})
 	);
@@ -2368,9 +2492,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			if (files === undefined || images === undefined) throw new Error('the kit stores files');
 			video.x.attachments = file_attachments(db, files, images);
 			expect(yield* result(video.x, 'read_file', { id: video.id })).toEqual({
-				result: {
-					error: expect.stringContaining('no parser. A call-mode automation can use a workspace package')
-				}
+				result: { error: 'site.mp4 (video/mp4, 1 bytes): binary; no parser for this format.' }
 			});
 		})
 	);
@@ -2661,7 +2783,7 @@ describe('download', () => {
 	const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 	it.effect("keeps a media URL as the person's output file, with the host's key and sha256", () =>
 		Effect.gen(function* () {
-			const x = yield* ctx();
+			const x = yield* ctx({ approved: () => true });
 			kitOrigins.get(x)?.set('https://law.example/seal.png?v=2', png);
 			const answer = yield* result(x, 'download', { url: 'https://law.example/seal.png?v=2' });
 			expect(answer).toMatchObject({
@@ -2693,7 +2815,7 @@ describe('download', () => {
 	);
 	it.effect("answers the host's refusal as the tool's error, and stores nothing", () =>
 		Effect.gen(function* () {
-			const x = yield* ctx(),
+			const x = yield* ctx({ approved: () => true }),
 				stored = () =>
 					x.engine.db.rows(Schema.Struct({ id: Schema.String }), {
 						text: 'SELECT id FROM sys_file',
@@ -2789,6 +2911,25 @@ describe('run_js', () => {
 					{ redirects: 0, max_bytes: 4 * 1024 * 1024 }
 				]
 			]);
+		})
+	);
+	it.live("a script's source read is the raw file, so read-modify-write keeps every byte", () =>
+		Effect.gen(function* () {
+			const text = '1: not a line number\r\n\tindented  \n\nlast line without newline';
+			const draft: WorkspacePort = {
+				files: async () => ['tests/a.test.ts'],
+				read: async (path) => (path === 'tests/a.test.ts' ? text : null)
+			};
+			const x = yield* ctx({ draft, authority: member({ admin: true }) });
+			expect(
+				yield* run(x, {
+					code: "const r = await tool('workspace_read', { path: 'tests/a.test.ts' }); return { ...r, same: r.content.replace(/x^/, '') };"
+				})
+			).toEqual({
+				result: {
+					answer: { path: 'tests/a.test.ts', content: text, lines: 4, same: text }
+				}
+			});
 		})
 	);
 	it.live('transforms its input rows, its console lines beside the answer', () =>
@@ -2891,6 +3032,22 @@ describe('run_js', () => {
 			});
 		})
 	);
+	it.live("http: true only reads; a script that sends waits for the person's confirmation", () =>
+		Effect.gen(function* () {
+			const { asked, http } = origin();
+			const x = yield* ctx({}, { http });
+			const post = "const r = await http({ method: 'POST', url: 'https://api.test/stock', body: 'x' }); return r.status;";
+			expect(yield* run(x, { http: true, code: post })).toEqual({
+				result: { error: expect.stringContaining("needs http: 'send'") }
+			});
+			expect(asked).toEqual([]);
+			expect(yield* run(x, { http: 'send', code: post })).toEqual({ confirm: true });
+			expect(asked).toEqual([]);
+			const approved = yield* ctx({ approved: () => true }, { http });
+			expect(yield* run(approved, { http: 'send', code: post })).toEqual({ result: { answer: 200 } });
+			expect(asked.map(([request]) => request.method)).toEqual(['POST']);
+		})
+	);
 	it.live('has http only when asked for and granted', () =>
 		Effect.gen(function* () {
 			const { asked, http } = origin();
@@ -2914,6 +3071,71 @@ describe('run_js', () => {
 			expect(yield* run(granted, { http: true, code: 'return typeof http;' })).toEqual({
 				result: { answer: 'function' }
 			});
+		})
+	);
+});
+describe('confirmation coverage', () => {
+	const envoy: Authority = {
+		...member(),
+		actor: { kind: 'envoy', envoy: 'desk', instance: 'wa', sender: '6591234567', member: null }
+	};
+	it('a delete, a batch, a pruning import and a nested delete hold; one plain create or update does not', () => {
+		expect(sweeping('jobs.delete', [{ target: { id: 'j1', revision: 1 } }])).toBe(true);
+		expect(sweeping('jobs.update', [{ target: { id: 'j1' }, set: {} }, { target: { id: 'j2' }, set: {} }])).toBe(true);
+		expect(sweeping('jobs.update', [{ target: { id: 'j1' }, set: { lines: { delete: [{ id: 'l1' }] } } }])).toBe(true);
+		expect(sweeping('jobs.import', { rows: [{}], on_conflict: 'update', prune: true })).toBe(true);
+		expect(sweeping('jobs.import', { rows: [{}, {}], on_conflict: 'update', dry_run: true })).toBe(false);
+		expect(sweeping('jobs.create', [{ title: 'one' }])).toBe(false);
+		expect(sweeping('jobs.update', [{ target: { id: 'j1' }, set: { status: 'done' } }])).toBe(false);
+	});
+	it('a browser visit that clicks, presses, submits, evaluates or downloads holds; reading does not', () => {
+		expect(submits({ url: 'https://a.test', steps: [{ click: 'r1' }] })).toBe(true);
+		expect(submits({ steps: [{ type: { ref: 'r2', text: 'x', submit: true } }] })).toBe(true);
+		expect(submits({ evaluate: 'document.title' })).toBe(true);
+		expect(submits({ download: 'https://a.test/f.pdf' })).toBe(true);
+		expect(submits({ url: 'https://a.test', steps: [{ type: { ref: 'r2', text: 'x' } }], screenshot: true })).toBe(false);
+	});
+	const mcp = (calls: Json[]): ToolContext['mcp'] => ({
+		tools: () => Effect.succeed([]),
+		call: (_server: string, _tool: string, input: Json) =>
+			Effect.sync(() => {
+				calls.push(input);
+				return { ok: true };
+			})
+	});
+	const mcpTools = [{ server: 'kagi', name: 'web_search', description: 'Kagi', input: { type: 'object' } }];
+	it.effect("an MCP call holds for the person's card, runs once approved and is refused to an envoy", () =>
+		Effect.gen(function* () {
+			const calls: Json[] = [];
+			expect(yield* result(yield* ctx({ mcpTools, mcp: mcp(calls) }), 'kagi__web_search', { q: 'x' })).toEqual({ confirm: true });
+			expect(calls).toEqual([]);
+			expect(
+				yield* result(yield* ctx({ mcpTools, mcp: mcp(calls), approved: () => true }), 'kagi__web_search', { q: 'x' })
+			).toEqual({ result: { ok: true } });
+			expect(calls).toEqual([{ q: 'x' }]);
+			expect(
+				yield* result(yield* ctx({ mcpTools, mcp: mcp(calls), authority: envoy, inApp: false }), 'kagi__web_search', { q: 'y' })
+			).toEqual({ result: { error: expect.stringContaining('An envoy cannot') } });
+			expect(calls).toEqual([{ q: 'x' }]);
+		})
+	);
+	it.effect('a host tool that declares confirm holds; download holds too', () =>
+		Effect.gen(function* () {
+			let ran = 0;
+			const commit: HostTool = {
+				name: 'workspace_commit',
+				description: 'commit',
+				behavior: {},
+				input: { type: 'object', properties: {} },
+				confirm: () => true,
+				call: async () => {
+					ran++;
+					return { ok: true };
+				}
+			};
+			expect(yield* result(yield* ctx({ host_tools: [commit] }), 'workspace_commit', {})).toEqual({ confirm: true });
+			expect(ran).toBe(0);
+			expect(yield* result(yield* ctx(), 'download', { url: 'https://law.example/seal.png' })).toEqual({ confirm: true });
 		})
 	);
 });
@@ -3031,21 +3253,33 @@ describe('a sub-agent', () => {
 	it.effect('has no plan or sub-agents of its own: one level deep, and its question goes to its delegating agent', () =>
 		Effect.gen(function* () {
 			expect(yield* names(yield* ctx({ mode: 'plan' }))).toContain('update_plan');
-			expect(yield* names(yield* ctx({ delegation: true, agents: ['workspace'] }))).toEqual(
-				expect.arrayContaining(['subagent', 'subagent_read', 'subagent_message', 'subagent_stop'])
-			);
+			const parent = yield* ctx({ delegation: true, agents: ['general', 'envoy-1'] });
+			expect(yield* names(parent)).toEqual(expect.arrayContaining(['task', 'task_read', 'task_stop']));
+			// a guessed type is refused with the real list; a task answers at once with its id
+			expect(
+				yield* result(parent, 'task', { description: 'Check', prompt: 'Check it', subagent_type: 'explore' })
+			).toMatchObject({
+				result: {
+					error: expect.stringContaining('Unknown agent type: explore is not a valid agent type. Agent types: general, envoy-1')
+				}
+			});
+			expect(
+				yield* result(parent, 'task', { description: 'Check', prompt: 'Check it', subagent_type: 'general' })
+			).toMatchObject({
+				result: expect.stringMatching(/^<task id="child" state="running">\n<summary>Background task started<\/summary>/)
+			});
 			const child = [
 				...(yield* names(yield* ctx({ mode: 'plan', child: true }))),
 				...(yield* names(yield* ctx({ child: true })))
 			];
-			for (const n of ['update_plan', 'subagent']) expect(child).not.toContain(n);
+			for (const n of ['update_plan', 'task']) expect(child).not.toContain(n);
 			expect(child).toEqual(expect.arrayContaining(['read', 'act', 'wait', 'ask']));
 			expect(yield* result(yield* ctx({ child: true }), 'ask', { question: 'Which one?' })).toEqual({
 				result: { asked: true, to: 'the delegating agent' }
 			});
 			// a child's fixed list leaves the delegation and planning tools out
 			const fixed = (yield* catalogue(yield* ctx({ child: true }))).fixed.map((t) => t.name);
-			for (const n of ['subagent', 'subagent_read', 'update_plan']) expect(fixed).not.toContain(n);
+			for (const n of ['task', 'task_read', 'task_stop', 'update_plan']) expect(fixed).not.toContain(n);
 		})
 	);
 });
@@ -3342,6 +3576,82 @@ describe('host web search', () => {
 			expect(seen.map((c) => c.question)).toEqual(['who won?']);
 		})
 	);
+	it.effect(
+		"a host tool requests through the actor's connection, signed host-side: it never reads the token, and the connection's allow binds it",
+		() =>
+			Effect.gen(function* () {
+				const native = yield* workspace;
+				const db = Context.get(native, TenantDb);
+				const sealed = yield* credentials(db, Context.get(native, Secrets)).pipe(Effect.provide(NodeCrypto.layer));
+				const instance = randomUUID(),
+					TOKEN = 'github_pat_TEST_0000000000000000000000';
+				yield* db.write({
+					text: `INSERT INTO sys_integration (id, integration, name, active) VALUES ($1, 'github', 'GitHub', true)`,
+					params: [instance]
+				});
+				yield* sealed.write(instance, null, new Map([['credential', { token: TOKEN }]]));
+				const sent: HttpRequest[] = [];
+				const http: Http['Service'] = {
+					fetch: (request) =>
+						Effect.sync(() => {
+							sent.push(request);
+							return { status: 200, headers: [], body: new Uint8Array([0x1f, 0x8b]) };
+						})
+				};
+				const attempt = (
+					context: HostToolContext,
+					integration: string,
+					method: string,
+					path: string
+				) =>
+					context.request === undefined
+						? Promise.resolve('no request')
+						: context
+								.request(integration, { method, path, max_bytes: 1024 }, new AbortController().signal)
+								.then(
+									(response) => (response === undefined ? 'not connected' : response.status),
+									(error: unknown) => (error instanceof Error ? error.message : 'refused')
+								);
+				const probe: HostTool = {
+					...host('probe'),
+					call: async (_, context) => ({
+						keys: Object.keys(context).toSorted(),
+						tarball: await attempt(context, 'github', 'GET', '/repos/acme/calc/tarball/main'),
+						post: await attempt(context, 'github', 'POST', '/repos/acme/calc/issues'),
+						issues: await attempt(context, 'github', 'GET', '/repos/acme/calc/issues'),
+						escape: await attempt(context, 'github', 'GET', '../user/repos'),
+						gitlab: await attempt(context, 'gitlab', 'GET', '/')
+					})
+				};
+				const x = yield* ctx({ host_tools: [probe] }, { credentials: sealed, http });
+				const answer = yield* result(x, 'probe', {});
+				expect(answer).toMatchObject({
+					result: {
+						tarball: 200,
+						post: expect.stringContaining('does not allow POST /repos/acme/calc/issues'),
+						issues: expect.stringContaining('does not allow GET /repos/acme/calc/issues'),
+						escape: expect.stringContaining("leaves the integration's base URL"),
+						gitlab: 'not connected'
+					}
+				});
+				// the tool's context holds no credential, and nothing it answered names the token
+				expect(JSON.stringify(answer)).not.toContain('"credential"');
+				expect(JSON.stringify(answer)).not.toContain(TOKEN);
+				// only the allowed request reached the network, signed there
+				expect(sent.map((r) => [r.method, r.url, Object.fromEntries(r.headers)['authorization']])).toEqual([
+					['GET', 'https://api.github.com/repos/acme/calc/tarball/main', `Bearer ${TOKEN}`]
+				]);
+				// a paused connection holds nothing
+				yield* db.write({ text: 'UPDATE sys_integration SET active = false WHERE id = $1', params: [instance] });
+				expect(yield* result(x, 'probe', {})).toMatchObject({ result: { tarball: 'not connected' } });
+				// a workspace connection lends its token to an administrator's host tools alone, unless its definition lends it
+				yield* db.write({ text: 'UPDATE sys_integration SET active = true WHERE id = $1', params: [instance] });
+				const plain = yield* ctx({ host_tools: [probe], authority: member({ tools: ['probe'] }) }, { credentials: sealed, http });
+				expect(yield* result(plain, 'probe', {})).toMatchObject({ result: { tarball: 'not connected' } });
+				expect(sent).toHaveLength(1);
+				yield* db.write({ text: 'DELETE FROM sys_integration WHERE id = $1', params: [instance] });
+			})
+	);
 });
 
 describe('approvals, record history and the audit trail', () => {
@@ -3453,6 +3763,8 @@ describe('the catalogue', () => {
 				const x = yield* ctx({
 					host_tools: [operation],
 					mcpTools: [external],
+					// each MCP call holds for the person's card; these run as approved
+					approved: () => true,
 					mcp: {
 						tools: () => Effect.succeed([external]),
 						call: (server, tool, input) =>
@@ -3498,7 +3810,7 @@ describe('the catalogue', () => {
 			const channel = yield* listOf('channel'),
 				staff = yield* listOf('staff'),
 				external = yield* listOf('member');
-			for (const hidden of ['workspace_read', 'workspace_search', 'workspace_list_dir', 'page', 'download'])
+			for (const hidden of ['workspace_read', 'workspace_grep', 'workspace_glob', 'workspace_list_dir', 'page', 'download'])
 				expect(channel).not.toContain(hidden);
 			expect(channel).toContain('read_messages');
 			expect(staff).toEqual(expect.arrayContaining(['page', 'workspace_read', 'update_plan']));
@@ -3534,7 +3846,7 @@ describe('the catalogue', () => {
 		);
 	});
 	it.effect(
-		'for an administrator with no MCP stays under 16,000 characters and names no model of the workspace',
+		'for an administrator with no MCP stays under 18,000 characters and names no model of the workspace',
 		() =>
 			Effect.gen(function* () {
 				const x = yield* ctx(
@@ -3551,10 +3863,117 @@ describe('the catalogue', () => {
 				const texts = (yield* catalogue(x)).fixed
 					.filter((t) => !x.host_tools.some((host) => host.name === t.name))
 					.map((t) => `${t.description ?? ''}${JSON.stringify(t.input)}`);
-				expect(texts.join('').length).toBeLessThan(16_000);
+				expect(texts.join('').length).toBeLessThan(18_000);
 				for (const model of Object.keys(manifest.models))
 					for (const text of texts) expect(text).not.toContain(model);
 			}).pipe(Effect.provide(Browser.fromAbi(off)))
 	);
 });
 
+
+describe('connect: the agent makes the connection, the person pairs it on a card', () => {
+	const Held = Schema.Struct({
+		confirm: Schema.Literal(true),
+		input: Schema.Struct({ instance: Schema.String, integration: Schema.String })
+	});
+	const row = (x: ToolContext, id: string) =>
+		x.engine.db.rows(
+			Schema.Struct({ integration: Schema.String, owner: Schema.NullOr(Schema.String), envoy: Schema.NullOr(Schema.String) }),
+			{ text: 'SELECT integration, owner, envoy FROM sys_integration WHERE id = $1', params: [id] }
+		);
+	const user = (x: ToolContext, id: string, email: string, admin = false) =>
+		x.engine.db.write({
+			text: "INSERT INTO sys_user (id, email, name, kind, admin) VALUES ($1, $2, $2, 'staff', $3) ON CONFLICT DO NOTHING",
+			params: [id, email, admin]
+		});
+	it.effect('creates a workspace GitHub connection through the guarded write and holds a card; no credential in the answer', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({ turn: 'connect-github' }, { manifest: layered(manifest) });
+			const answer = yield* result(x, 'connect', { integration: 'github', owner: 'workspace', name: 'Org GitHub' });
+			const held = Schema.decodeUnknownSync(Held)(answer);
+			expect(held.input.integration).toBe('github');
+			expect(yield* row(x, held.input.instance)).toEqual([{ integration: 'github', owner: null, envoy: null }]);
+			expect(JSON.stringify(answer)).not.toMatch(/credential|token|secret/i);
+			// a channel sender never gets the tool; nor does a turn with no card to show
+			expect(fixedTools('channel', false).map((t) => t.name)).not.toContain('connect');
+			expect(yield* names(yield* ctx({ inApp: false }, { manifest: layered(manifest) }))).not.toContain('connect');
+		})
+	);
+	it.effect('a workspace-declared integration connects the same way, and describe_workspace lists it', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const declared: EngineManifest = {
+					...manifest,
+					integrations: {
+						crm: {
+							description: 'The CRM account.',
+							driver: 'http',
+							http: { base_url: 'https://api.crm.example', auth: { bearer: 'api_key' } },
+							credential: { api_key: { kind: 'text' } }
+						}
+					}
+				};
+				const native = yield* Layer.build(TestWorkspace.layer({ manifest: declared }));
+				const x = yield* ctx(
+					{ turn: 'connect-crm' },
+					{ manifest: layered(declared), db: Context.get(native, TenantDb), calls: Context.get(native, Callables) }
+				);
+				const held = Schema.decodeUnknownSync(Held)(
+					yield* result(x, 'connect', { integration: 'crm', owner: 'workspace', configuration: {} })
+				);
+				expect(yield* row(x, held.input.instance)).toEqual([{ integration: 'crm', owner: null, envoy: null }]);
+				expect(yield* result(x, 'describe_workspace', {})).toEqual({
+					result: expect.stringContaining('crm "The CRM account."')
+				});
+				expect(yield* result(x, 'connect', { integration: 'nope', owner: 'workspace' })).toEqual({
+					result: { error: expect.stringContaining('crm') }
+				});
+			})
+		)
+	);
+	it.effect('a personal connection is the caller own: owner me, never a colleague', () =>
+		Effect.gen(function* () {
+			const una = '0199a000-0000-4000-8000-0000000c0a01';
+			const x = yield* ctx({ turn: 'connect-mine', authority: member({ admin: true, id: una }) }, { manifest: layered(manifest) });
+			yield* user(x, una, 'una@example.test', true);
+			const held = Schema.decodeUnknownSync(Held)(yield* result(x, 'connect', { integration: 'email', owner: 'me' }));
+			expect(yield* row(x, held.input.instance)).toEqual([{ integration: 'email', owner: una, envoy: null }]);
+			// there is no way to name someone else as the owner
+			expect(yield* result(x, 'connect', { integration: 'email', owner: '0199a000-0000-4000-8000-0000000c0a02' })).toEqual({
+				result: { error: expect.stringContaining('Invalid parameters') }
+			});
+			// a colleague's personal connection is theirs to pair
+			const colleague = '0199a000-0000-4000-8000-0000000c0a03';
+			const other = yield* ctx({ turn: 'connect-theirs', authority: member({ admin: true, id: colleague }) }, { manifest: layered(manifest) });
+			expect(yield* result(other, 'connect', { instance: held.input.instance })).toEqual({
+				result: { error: 'Only its owner pairs a personal connection.' }
+			});
+		})
+	);
+	it.effect('a caller without the write grant is refused and nothing is created', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({ turn: 'connect-refused', authority: member() }, { manifest: layered(manifest) });
+			const before = yield* x.engine.db.rows(Schema.Struct({ n: Schema.Number }), { text: 'SELECT count(*)::int AS n FROM sys_integration', params: [] });
+			const answer = yield* result(x, 'connect', { integration: 'github', owner: 'workspace' });
+			expect(Schema.is(Held)(answer)).toBe(false);
+			expect(yield* x.engine.db.rows(Schema.Struct({ n: Schema.Number }), { text: 'SELECT count(*)::int AS n FROM sys_integration', params: [] })).toEqual(before);
+		})
+	);
+	it.effect("an envoy's unpaired channel is paired in place: a card, no second row", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({ turn: 'connect-envoy' }, { manifest: layered(manifest) });
+			const envoy = '0199a000-0000-7000-8000-0000000c0e01';
+			yield* x.engine.db.write({ text: "INSERT INTO sys_envoy (id, name) VALUES ($1, 'Desk') ON CONFLICT DO NOTHING", params: [envoy] });
+			yield* seed_accounts(x.engine.db, [{ id: 'connect-desk', integration: 'whatsapp', envoy }]);
+			expect(yield* result(x, 'connect', { integration: 'whatsapp', envoy })).toEqual({
+				confirm: true,
+				input: { instance: 'connect-desk', integration: 'whatsapp' }
+			});
+			// once the host reports it connected, the call answers the fact, without a card
+			yield* x.engine.db.write({ text: `UPDATE sys_integration SET status = '{"state":"connected"}'::jsonb WHERE id = 'connect-desk'`, params: [] });
+			expect(yield* result(x, 'connect', { instance: 'connect-desk' })).toEqual({
+				result: { instance: 'connect-desk', integration: 'whatsapp', owner: 'workspace', state: 'connected' }
+			});
+		})
+	);
+});

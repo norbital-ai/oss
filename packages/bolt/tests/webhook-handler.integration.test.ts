@@ -9,6 +9,7 @@ import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
 import { integration_links } from '../src/engine/integrations/links.ts';
+import { WEBHOOK_BYTES } from '../src/engine/integrations/webhook.ts';
 import { Secrets } from '../src/engine/secrets.ts';
 import { loopback_tcp_port } from '@norbital-ai/host-api/node';
 import { seed_accounts } from './support/accounts.ts';
@@ -78,8 +79,16 @@ describe('a webhook handler', () => {
 				const answer = yield* links.webhook('hook1', delivery('s3cret', 'Ada'));
 				expect(answer.status).toBe(202);
 				expect(yield* Effect.promise(() => answer.json())).toEqual({ received: 'Ada' });
-				// the provider redelivers: the keyed act commits once
-				expect((yield* links.webhook('hook1', delivery('s3cret', 'Ada'))).status).toBe(202);
+				// the same delivery again within the window is a replay: answered, the handler not run again
+				expect((yield* links.webhook('hook1', delivery('s3cret', 'Ada'))).status).toBe(200);
+				expect(yield* leads).toEqual([{ name: 'Ada' }]);
+				// a body past the cap is refused before it is buffered or verified
+				const huge = new Request(`${PUBLIC}/hooks/integration/hook1`, {
+					method: 'POST',
+					headers: { authorization: 'Bearer s3cret', 'content-type': 'application/json' },
+					body: JSON.stringify({ name: 'x'.repeat(WEBHOOK_BYTES) })
+				});
+				expect((yield* links.webhook('hook1', huge)).status).toBe(413);
 				expect(yield* leads).toEqual([{ name: 'Ada' }]);
 				expect((yield* links.webhook('hook1', delivery('s3cret', ''))).status).toBe(422);
 				yield* links.close;

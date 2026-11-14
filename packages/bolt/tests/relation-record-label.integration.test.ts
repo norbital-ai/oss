@@ -6,7 +6,6 @@ import { exposure } from '../src/engine/access/exposure.ts';
 import { lower_read } from '../src/engine/query/engine.ts';
 import { Live } from '../src/engine/services.ts';
 import { patched } from '../src/page/bolt.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Frame } from '../src/protocol/wire.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -114,14 +113,14 @@ layer(TestWorkspace.layer({ manifest, seed: {
 			const t = yield* TestWorkspace, viewer = yield* t.as(t.member(['visible']));
 			expect(checkRules(manifest, { automations: [] }, (role, name) => `${role}/${name}`)
 				.filter((finding) => finding.code === 'model/label')).toEqual([]);
-			expect((yield* Effect.result(viewer.query(dynamic_read({ helpers: { fields: ['name'] } }))))._tag).toBe('Failure');
-			expect((yield* viewer.query(dynamic_read({ visits: { fields: ['number'], search: 'Ada' } }))
+			expect((yield* Effect.result(viewer.wire_query({ helpers: { fields: ['name'] } })))._tag).toBe('Failure');
+			expect((yield* viewer.wire_query({ visits: { fields: ['number'], search: 'Ada' } })
 				.pipe(Effect.flatMap(decode_visits))).visits.rows)
 				.toEqual([{ id: VISIT, number: 'V1', $label: 'V1 · Ada' }]);
-			expect((yield* viewer.query(dynamic_read({ notes: { fields: ['title'], visit: { fields: ['number'] } } }))
+			expect((yield* viewer.wire_query({ notes: { fields: ['title'], visit: { fields: ['number'] } } })
 				.pipe(Effect.flatMap(decode_notes))).notes.rows)
 				.toEqual([{ id: NOTE, title: 'Follow up', visit: { id: VISIT, number: 'V1', $label: 'V1 · Ada' } }]);
-			expect((yield* (yield* t.as(t.admin)).query(dynamic_read({ inline: { fields: ['profile'], search: 'Nested' } }))
+			expect((yield* (yield* t.as(t.admin)).wire_query({ inline: { fields: ['profile'], search: 'Nested' } })
 				.pipe(Effect.flatMap(decode_inline))).inline.rows)
 				.toEqual([{ id: INLINE, profile: { name: 'Nested' } }]);
 			const columns = yield* t.db.read([{
@@ -130,10 +129,10 @@ layer(TestWorkspace.layer({ manifest, seed: {
 			expect(columns[0]?.rows).toEqual([{ table_name: 'inline' }]);
 			for (const [policy, output] of [['hidden', 'hidden'], ['plain', 'plain'], ['blocked', 'default']] as const) {
 				const reader = yield* t.as(t.member([policy]));
-				expect((yield* reader.query(dynamic_read({ visits: { output, fields: ['number'] } }))
+				expect((yield* reader.wire_query({ visits: { output, fields: ['number'] } })
 					.pipe(Effect.flatMap(decode_visits))).visits.rows)
 					.toEqual([{ id: VISIT, number: 'V1', $label: VISIT }]);
-				expect((yield* reader.query(dynamic_read({ visits: { output, fields: ['number'], search: 'Ada' } }))
+				expect((yield* reader.wire_query({ visits: { output, fields: ['number'], search: 'Ada' } })
 					.pipe(Effect.flatMap(decode_visits))).visits.rows).toEqual([]);
 				if (policy !== 'blocked') expect((yield* exposure(manifest, reader.authority)).visits?.record_label).toBeUndefined();
 			}
@@ -145,17 +144,17 @@ layer(TestWorkspace.layer({ manifest, seed: {
 			const named = yield* t.as(t.member(['named_only'])), hidden = yield* t.as(t.member(['default_only']));
 			expect(checkRules(manifest, { automations: [] }, (role, name) => `${role}/${name}`)
 				.filter((finding) => finding.code === 'model/label')).toEqual([]);
-			expect((yield* Effect.result(named.query(dynamic_read({ helpers: { fields: ['name'] } }))))._tag).toBe('Failure');
-			expect((yield* named.query(dynamic_read({ named_visits: { output: 'directory', fields: ['number'] } }))
+			expect((yield* Effect.result(named.wire_query({ helpers: { fields: ['name'] } })))._tag).toBe('Failure');
+			expect((yield* named.wire_query({ named_visits: { output: 'directory', fields: ['number'] } })
 				.pipe(Effect.flatMap(decode_named_visits))).named_visits.rows)
 				.toEqual([{ id: NAMED_VISIT, number: 'N1', $label: 'N1 · Ada' }]);
-			expect((yield* named.query(dynamic_read({ named_visits: { output: 'directory', fields: ['number'], search: 'Ada' } }))
+			expect((yield* named.wire_query({ named_visits: { output: 'directory', fields: ['number'], search: 'Ada' } })
 				.pipe(Effect.flatMap(decode_named_visits))).named_visits.rows)
 				.toEqual([{ id: NAMED_VISIT, number: 'N1', $label: 'N1 · Ada' }]);
-			expect((yield* hidden.query(dynamic_read({ named_visits: { fields: ['number'] } }))
+			expect((yield* hidden.wire_query({ named_visits: { fields: ['number'] } })
 				.pipe(Effect.flatMap(decode_named_visits))).named_visits.rows)
 				.toEqual([{ id: NAMED_VISIT, number: 'N1', $label: NAMED_VISIT }]);
-			expect((yield* hidden.query(dynamic_read({ named_visits: { fields: ['number'], search: 'Ada' } }))
+			expect((yield* hidden.wire_query({ named_visits: { fields: ['number'], search: 'Ada' } })
 				.pipe(Effect.flatMap(decode_named_visits))).named_visits.rows).toEqual([]);
 			expect((yield* exposure(manifest, named.authority)).named_visits?.record_label)
 				.toBe("record.number + ' · ' + record.helper.name");
@@ -168,12 +167,12 @@ layer(TestWorkspace.layer({ manifest, seed: {
 			yield* approval(t);
 			for (const policy of ['visible', 'named', 'hidden', 'plain', 'blocked']) {
 				const reader = yield* t.as(t.member([policy]));
-				const rows = (yield* reader.query(dynamic_read({ approval_request: { fields: ['collection_name'], search: 'Ada' } }))
+				const rows = (yield* reader.query({ approval_request: { fields: ['collection_name'], search: 'Ada' } })
 					.pipe(Effect.flatMap(decode_approvals))).approval_request.rows;
 				expect(rows).toEqual(policy === 'visible' || policy === 'named'
 					? [{ id: APPROVAL, collection_name: 'visits', $label: 'V1 · Ada' }] : []);
 				if (policy !== 'visible' && policy !== 'named')
-					expect((yield* reader.query(dynamic_read({ approval_request: { fields: ['collection_name'] } }))
+					expect((yield* reader.query({ approval_request: { fields: ['collection_name'] } })
 						.pipe(Effect.flatMap(decode_approvals))).approval_request.rows)
 						.toEqual([{ id: APPROVAL, collection_name: 'visits', $label: VISIT }]);
 			}
@@ -206,12 +205,12 @@ layer(TestWorkspace.layer({ manifest, seed: {
 			yield* (yield* t.as(t.admin)).act(rename);
 			yield* live.settled;
 			expect(yield* next.pipe(Effect.flatMap(decode_visits))).toMatchObject({ visits: { rows: [{ id: VISIT, $label: 'V1 · Grace' }] } });
-			expect((yield* viewer.query(dynamic_read({ visits: { fields: ['number'], search: 'Ada' } }))
+			expect((yield* viewer.wire_query({ visits: { fields: ['number'], search: 'Ada' } })
 				.pipe(Effect.flatMap(decode_visits))).visits.rows).toEqual([]);
-			expect((yield* viewer.query(dynamic_read({ visits: { fields: ['number'], search: 'Grace' } }))
+			expect((yield* viewer.wire_query({ visits: { fields: ['number'], search: 'Grace' } })
 				.pipe(Effect.flatMap(decode_visits))).visits.rows)
 				.toEqual([{ id: VISIT, number: 'V1', $label: 'V1 · Grace' }]);
-			expect((yield* viewer.query(dynamic_read({ approval_request: { fields: ['collection_name'], search: 'Grace' } }))
+			expect((yield* viewer.query({ approval_request: { fields: ['collection_name'], search: 'Grace' } })
 				.pipe(Effect.flatMap(decode_approvals))).approval_request.rows)
 				.toEqual([{ id: APPROVAL, collection_name: 'visits', $label: 'V1 · Grace' }]);
 		}))

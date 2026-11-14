@@ -511,6 +511,8 @@ const activate = Effect.fn('bolt.hostApi.activate')(function* (ports: HostPorts)
 				Effect.flatMap(Runs, (runs) => runs.fire(id, slot)),
 				signal
 			),
+		notify: (note, { signal }) =>
+			run(Effect.flatMap(Agents, (agents) => agents.notify(note)), signal),
 		close: () => {
 			open = false;
 			return guard(() => runtime.dispose());

@@ -384,14 +384,27 @@ export const IntegrationSpec = Schema.Struct({
 		authorize: Schema.optionalKey(Schema.String), token: Schema.optionalKey(Schema.String),
 		scopes: Schema.optionalKey(Schema.Array(Schema.String))
 	})),
-	/** `http` only: the base URL (a literal or a text configuration field) and how requests authenticate. */
+	/**
+	 * `http` only: the base URL (a literal or a text configuration field), how requests authenticate and, with `allow`,
+	 * the only requests an instance sends: these methods on these paths under the base (`{name}` one segment, a final
+	 * `**` any rest). Anything else is refused before its credential is read.
+	 */
 	http: Schema.optionalKey(Schema.Struct({
 		base_url: Schema.String,
 		auth: Schema.optionalKey(Schema.Union([
 			Schema.Struct({ bearer: Schema.String }),
 			Schema.Struct({ header: Schema.Struct({ name: Schema.String, value: Schema.String }) }),
 			Schema.Struct({ basic: Schema.Struct({ user: Schema.String, password: Schema.String }) })
-		]))
+		])),
+		allow: Schema.optionalKey(Schema.Struct({
+			methods: Schema.NonEmptyArray(Schema.Literals(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])),
+			paths: Schema.NonEmptyArray(Schema.String)
+		})),
+		/**
+		 * A workspace connection's requests serve every member's host tools (`HostToolContext.request`, a repository
+		 * reference's read); without it only an administrator's. A personal connection serves its owner alone.
+		 */
+		lend: Schema.optionalKey(Schema.Literal(true))
 	})),
 	/**
 	 * `http` only: how the provider signs its webhooks, verified with a credential field. The instance page shows the
@@ -437,6 +450,8 @@ type HttpFor<S> =
 				auth?: S extends { oauth: unknown }
 					? 'error: an oauth integration authenticates with its token; drop auth'
 					: HttpAuth<keyof Part<S, 'credential'> & string>;
+				allow?: NonNullable<NonNullable<IntegrationSpec['http']>['allow']>;
+				lend?: true;
 			}
 		: 'error: only an http integration declares http';
 /** An http definition names the endpoints of its grant; another oauth driver's provider knows them. */

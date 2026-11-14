@@ -330,6 +330,29 @@ export function readPredicates(
 		: grants[output]?.[path] ?? [];
 	return arms.map((arm) => arm.where);
 }
+/**
+ * The rows an `update` or `delete` may target: the `default` output root scope of each policy granting that verb, never
+ * another output's (a public card output does not widen what its holder's write grant reaches). A granting policy that
+ * reads no `default` output of the model (a device reading only its own named output) reaches its own outputs' root
+ * scopes, never another policy's. `undefined` for an admin.
+ */
+export function writePredicates(
+	authority: Authority,
+	model: string,
+	verb: 'update' | 'delete'
+): readonly Pred[] | undefined {
+	if (authority.admin) return undefined;
+	const grants = authority.models[model];
+	const policies = new Set((grants?.[verb] ?? []).map((arm) => arm.policy));
+	const own = (output: string) =>
+		(grants?.read[output]?.[model] ?? []).filter((arm) => policies.has(arm.policy));
+	const scoped = new Set(own(DEFAULT_OUTPUT).map((arm) => arm.policy));
+	return Object.keys(grants?.read ?? {})
+		.flatMap((output) =>
+			own(output).filter((arm) => output === DEFAULT_OUTPUT || !scoped.has(arm.policy))
+		)
+		.map((arm) => arm.where);
+}
 /** Whether the caller reads any output of `model`. */
 export const readsAny = (auth: Authority, model: string): boolean => {
 	const predicates = readPredicates(auth, model);

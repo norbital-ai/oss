@@ -255,8 +255,9 @@ export function can_open(m: ShellManifest, auth: Authority, app: string): boolea
 }
 
 /**
- * A document may be framed by the workspace itself and the origins in the app or kiosk’s `embed` list.
- * `path` is the workspace path without a base.
+ * A document may be framed by the workspace itself and the origins in the app or kiosk’s `embed` list, and loads images
+ * only from itself (tenant files are same-origin), `data:` and `blob:`: a remote image fetches on render, so text an
+ * agent or a record wrote could leak data in its URL with no click. `path` is the workspace path without a base.
  */
 export function frame_policy(m: ShellManifest, path: string): string {
 	const r = route(m, new URL(path, 'http://x'));
@@ -266,7 +267,7 @@ export function frame_policy(m: ShellManifest, path: string): string {
 			: r.kind === 'page'
 				? appOf(m, r.app)?.embed
 				: undefined;
-	return ["frame-ancestors 'self'", ...(embed ?? [])].join(' ');
+	return `${["frame-ancestors 'self'", ...(embed ?? [])].join(' ')}; img-src 'self' data: blob:`;
 }
 
 /** A member whose policy names a public app by name (never `*` or a group) opens it as themselves, not as its visitor. */
@@ -577,10 +578,12 @@ export function route(m: ShellManifest, url: URL): Route {
 		}
 		case 'sign-in': {
 			if (seg.length > 1) return { kind: 'not_found' };
-			const next = url.searchParams.get('next');
+			// only a path on this origin: the URL parser reads `/\host`, `/<tab>/host` and `//host` as another host, so resolve and compare
+			const next = url.searchParams.get('next'),
+				target = next?.startsWith('/') ? new URL(next, url) : undefined;
 			return {
 				kind: 'sign_in',
-				...(next?.startsWith('/') && !next.startsWith('//') ? { next } : {})
+				...(target?.origin === url.origin ? { next: `${target.pathname}${target.search}${target.hash}` } : {})
 			};
 		}
 		case 'invite':

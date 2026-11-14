@@ -225,6 +225,8 @@ export function telegram(o: { readonly api?: string } = {}): ProviderDef {
 					const sent = yield* call(Sent, value, 'sendMessage', {
 						chat_id: chat,
 						text: m.text,
+						// no preview: Telegram fetches a linked page with no click, so a link could carry data out
+						link_preview_options: { is_disabled: true },
 						...(thread === undefined ? {} : { message_thread_id: Number(thread) })
 					});
 					for (const file of files) {

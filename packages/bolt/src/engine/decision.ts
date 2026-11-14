@@ -350,6 +350,36 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 	return yield* held([[model, field]]);
 });
 
+/**
+ * Whether `authority` may write stored file `id` into `owner` (`<model>.<field>`, or an automation's input): its own
+ * upload for that owner that no row holds yet, or a file it already reads. A bound upload is judged as any other file,
+ * so a ref whose holding row the writer no longer reads is not re-bound elsewhere. A visitor's or API key's upload has
+ * no `created_by`: theirs is any unbound one for the owner, named by its unguessable upload id.
+ */
+export const writableFile = Effect.fn('Decisions.writableFile')(function* (
+	o: Parameters<typeof readableFile>[0],
+	id: string,
+	owner: string
+) {
+	const actor = o.authority.actor;
+	const by = actor.kind === 'member' ? actor.id : actor.kind === 'visitor' || actor.kind === 'api_key' ? null : undefined;
+	const [model, field] = owner.split('.');
+	const filed = model !== undefined && field !== undefined && o.manifest.models[model]?.fields[field]?.kind === 'file'
+		? { model, field }
+		: undefined;
+	const found = yield* o.db.one(Schema.Struct({ field: Schema.String, mine: Schema.Boolean, bound: Schema.Boolean }), {
+		text: `SELECT coalesce(f.field, '') AS field, ($3::boolean AND f.created_by IS NOT DISTINCT FROM $2) AS mine, ${
+			filed === undefined
+				? 'false'
+				: `EXISTS (SELECT 1 FROM ${q(filed.model)} b WHERE b.${q(filed.field)} @> $4::jsonb OR b.${q(filed.field)} @> $5::jsonb)`
+		} AS bound FROM sys_file f WHERE f.id = $1`,
+		params: [id, by ?? null, by !== undefined, ...(filed === undefined ? [] : [JSON.stringify({ id }), JSON.stringify([{ id }])])]
+	});
+	if (Option.isNone(found)) return false;
+	if (found.value.mine && found.value.field === owner && !found.value.bound) return true;
+	return found.value.field !== '' && (yield* readableFile(o, id, found.value.field));
+});
+
 const wireFailure = (error: FacilityFailure | Unavailable): FacilityError =>
 	error._tag === 'Unavailable'
 		? { kind: 'unavailable', facility: error.facility, reason: error.reason }

@@ -15,6 +15,31 @@ export const asset_hook =
 			? assets[sha]
 			: undefined;
 
+/** What one guest turn keeps of its console: lines, characters per line and in all; past them, lines are counted. */
+export const GUEST_CONSOLE = { lines: 200, lineChars: 8000, chars: 256 * 1024 } as const;
+/** A session's console lines since its last turn; the runner resets `chars` and `dropped` with each turn it reads. */
+export type GuestSaid = { readonly lines: [level: string, line: string][]; chars: number; dropped: number };
+/**
+ * The prelude's `$0`, host side. The guest's own clip is guest code it can replace, so the bound is here: only strings
+ * are kept (never a guest object's `toString`), each clipped to its share before the host keeps it.
+ */
+export const console_hook =
+	(said: GuestSaid) =>
+	(level: unknown, line: unknown): void => {
+		if (
+			typeof level !== 'string' ||
+			typeof line !== 'string' ||
+			said.lines.length >= GUEST_CONSOLE.lines ||
+			said.chars >= GUEST_CONSOLE.chars
+		) {
+			said.dropped++;
+			return;
+		}
+		const kept = line.slice(0, Math.min(GUEST_CONSOLE.lineChars, GUEST_CONSOLE.chars - said.chars));
+		said.lines.push([level.slice(0, 16), kept]);
+		said.chars += kept.length;
+	};
+
 const DIGESTS: { readonly [name: string]: string } = {
 	'SHA-1': 'sha1',
 	'SHA-256': 'sha256',

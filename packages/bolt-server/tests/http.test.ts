@@ -6,9 +6,9 @@ import { afterAll, describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import type { Json } from 'effect/Schema';
 import { TestClock } from 'effect/testing';
-import { Fenced, Port, type IntegrationDefinition } from '@norbital-ai/host-api';
+import { Fenced, Port, type HttpPort, type IntegrationDefinition } from '@norbital-ai/host-api';
 import { http_port } from '@norbital-ai/host-api/node';
-import { http_request, type HttpInstance } from '../src/http.ts';
+import { github_token, http_request, type HttpInstance } from '../src/http.ts';
 const servers: HttpServer[] = [];
 afterAll(() => {
 	for (const s of servers) s.close();
@@ -397,5 +397,144 @@ describe('a token endpoint that fails, or a refresh that loses a race', () => {
 				).toEqual({ status: 200, body: { ok: true } });
 				expect(calls.map((c) => c.headers.get('authorization'))).toEqual(['Bearer a2']);
 			})
+	);
+});
+describe('a read-only GitHub connection', () => {
+	// Bolt's built-in `github` definition (`src/system/integration/github`)
+	const github: IntegrationDefinition = {
+		description: 'GitHub',
+		driver: 'http',
+		credential: { token: {} },
+		http: {
+			base_url: 'https://api.github.com/',
+			auth: { bearer: 'token' },
+			allow: {
+				methods: ['GET', 'HEAD'],
+				paths: [
+					'/user',
+					'/repos/{owner}/{repo}',
+					'/repos/{owner}/{repo}/tarball/{ref}',
+					'/repos/{owner}/{repo}/zipball/{ref}',
+					'/repos/{owner}/{repo}/contents/**',
+					'/repos/{owner}/{repo}/git/trees/**',
+					'/repos/{owner}/{repo}/git/blobs/**'
+				]
+			}
+		}
+	};
+	const TOKEN = 'github_pat_TEST_0000000000000000000000';
+	let reads = 0;
+	class CountingCredentials extends Map<string, Json> {
+		override get(name: string) {
+			if (name === 'credential') reads++;
+			return super.get(name);
+		}
+	}
+	const instance = {
+		configuration: {},
+		credentials: new CountingCredentials([['credential', { token: TOKEN }]])
+	};
+	const refused = (op: Json, calls: { url: string; headers: Headers }[]) =>
+		Effect.flip(request(github, instance, op, seen(calls))).pipe(
+			Effect.tap((error) =>
+				Effect.sync(() => {
+					expect(error).toMatchObject({ _tag: 'FacilityFailure', kind: 'unsupported' });
+					expect(error.message).not.toContain(TOKEN);
+				})
+			)
+		);
+	it.effect('refuses a POST, PUT or DELETE before its credential is read or a request made', () =>
+		Effect.gen(function* () {
+			const calls: { url: string; headers: Headers }[] = [];
+			reads = 0;
+			yield* refused({ method: 'POST', path: '/repos/o/r/issues', body: { title: 'x' } }, calls);
+			yield* refused({ method: 'PUT', path: '/repos/o/r/contents/README.md', body: {} }, calls);
+			yield* refused({ method: 'DELETE', path: '/repos/o/r' }, calls);
+			expect([reads, calls.length]).toEqual([0, 0]);
+		})
+	);
+	it.effect('refuses a GET outside its paths', () =>
+		Effect.gen(function* () {
+			const calls: { url: string; headers: Headers }[] = [];
+			reads = 0;
+			for (const path of [
+				'/repos/o/r/issues',
+				'/user/repos',
+				'/repos/o',
+				'/repos/o/r/tarball',
+				'/repos/o/r/tarball/a/b',
+				'/orgs/o'
+			])
+				yield* refused({ method: 'GET', path }, calls);
+			expect([reads, calls.length]).toEqual([0, 0]);
+		})
+	);
+	it.effect('sends the tarball GET and the reads it allows, the bearer host-side', () =>
+		Effect.gen(function* () {
+			const calls: { url: string; headers: Headers }[] = [];
+			for (const path of [
+				'/repos/o/r/tarball/main',
+				'/repos/o/r',
+				'/user',
+				'/repos/o/r/contents',
+				'/repos/o/r/git/trees/abc'
+			])
+				yield* request(github, instance, { method: 'GET', path }, seen(calls));
+			expect(calls.map((c) => c.url)).toEqual([
+				'https://api.github.com/repos/o/r/tarball/main',
+				'https://api.github.com/repos/o/r',
+				'https://api.github.com/user',
+				'https://api.github.com/repos/o/r/contents',
+				'https://api.github.com/repos/o/r/git/trees/abc'
+			]);
+			expect(calls[0]?.headers.get('authorization')).toBe(`Bearer ${TOKEN}`);
+		})
+	);
+	/** GitHub's `GET /user` answering `status` with `scopes`, or failing with an error naming the token. */
+	const user = (
+		answer: { status: number; scopes?: string } | 'throws',
+		calls: string[]
+	): HttpPort => ({
+		fetch: async (r) => {
+			calls.push(`${r.method} ${r.url}`);
+			if (answer === 'throws') throw new Error(`connect failed with Bearer ${TOKEN}`);
+			return {
+				status: answer.status,
+				headers: answer.scopes === undefined ? [] : [['x-oauth-scopes', answer.scopes]],
+				body: new TextEncoder().encode('{}')
+			};
+		}
+	});
+	it.effect('pairs a fine-grained token that GET /user accepts with no write scope', () =>
+		Effect.gen(function* () {
+			const calls: string[] = [];
+			yield* github_token(TOKEN, user({ status: 200 }, calls));
+			expect(calls).toEqual(['GET https://api.github.com/user']);
+		})
+	);
+	it.effect('refuses a classic token on connect, before any request', () =>
+		Effect.gen(function* () {
+			const calls: string[] = [];
+			const classic = 'ghp_TEST000000000000000000000000000000';
+			const error = yield* Effect.flip(github_token(classic, user({ status: 200 }, calls)));
+			expect(error.message).toMatch(/classic token/);
+			expect(error.message).not.toContain(classic);
+			expect(calls).toEqual([]);
+		})
+	);
+	it.effect('never names the token in a refusal: write scopes, a refused token, an unreachable GitHub', () =>
+		Effect.gen(function* () {
+			const calls: string[] = [];
+			const messages: string[] = [];
+			for (const answer of [
+				{ status: 200, scopes: 'read:user, repo' },
+				{ status: 401 },
+				{ status: 500 },
+				'throws'
+			] as const)
+				messages.push((yield* Effect.flip(github_token(TOKEN, user(answer, calls)))).message);
+			expect(messages[0]).toMatch(/write scopes \(repo\)/);
+			for (const message of messages) expect(message).not.toContain(TOKEN);
+		})
 	);
 });

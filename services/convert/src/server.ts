@@ -12,7 +12,7 @@
 //                               parse ({ kind: 'document', html, images } or { kind: 'data', json, images })
 //                               with the job's own meta: { usage?, stats }; also
 //                               POST /v1/jobs { op: 'ingest', … } → 202 job
-//   POST /v1/ingest/raw         ?name&mime&options&sha256&lane, the file as the body → 202 job; with sha256 a PDF stays an
+//   POST /v1/ingest/raw         ?name&mime&options&sha256&lane, the file as the body → 202 job; with sha256 a PDF or an archive stays an
 //                               hour past its last read and a kept one's body is not needed; `lane` (a tenant) is
 //                               what claims stay fair across; `x-ingest-password` (base64 of its UTF-8) opens a locked
 //                               PDF or Office file. The job row holds it until the job is pruned
@@ -126,7 +126,9 @@ const AudioOptions = Schema.Struct({
 	pictures: Schema.optionalKey(Schema.Boolean),
 	page: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
 	/** A locked PDF's or Office file's password: on the raw route its header, never the URL a log keeps. */
-	password: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(255)))
+	password: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(255))),
+	/** A path inside an archive: that file read as its own type. */
+	entry: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1024)))
 });
 const StoredIngest = Schema.fromJsonString(
 	Schema.Struct({
@@ -518,7 +520,7 @@ export function service(o: Options) {
 					if (where.kind === 'audio' && !o.transcribes)
 						return send(res, 503, { error: 'unavailable', message: 'this converter has no transcription model' });
 					const sha256 = url.searchParams.get('sha256'),
-						keep = sha256 !== null && /^[0-9a-f]{64}$/.test(sha256) && where.reader === 'pdf';
+						keep = sha256 !== null && /^[0-9a-f]{64}$/.test(sha256) && (where.reader === 'pdf' || where.reader === 'archive');
 					const kept = keep ? keptPath(who, sha256) : undefined;
 					let path = kept ?? '';
 					if (kept === undefined || !existsSync(kept)) {

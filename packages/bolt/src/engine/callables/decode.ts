@@ -21,6 +21,8 @@ export type Decoded = {
 	problems: { path: string; message: string }[];
 	refs: { model: string; id: string; field: string; where?: Where }[];
 	custom?: readonly { name: string; value: Json; path: string }[];
+	/** Every stored file the input names, by its path. */
+	files?: readonly { id: string; field: string }[];
 };
 const format = SchemaIssue.makeFormatterStandardSchemaV1({
 	leafHook: (issue) => {
@@ -141,6 +143,7 @@ export function decodeInput(
 
 	const refs: Decoded['refs'] = [];
 	const custom: NonNullable<Decoded['custom']>[number][] = [];
+	const files: { id: string; field: string }[] = [];
 	const traversal = {
 		...(custom_fields === undefined ? {} : { custom_fields }),
 		union: (arms: readonly Kind[], value: unknown, path: string): Kind | undefined =>
@@ -155,6 +158,8 @@ export function decodeInput(
 			if (custom_fields[kind.of]?.check === true)
 				custom.push({ name: kind.of, value, path: at });
 		}
+		if (kind.many !== true && kind.kind === 'file' && Predicate.isObject(value) && typeof value.id === 'string')
+			files.push({ id: value.id, field: at });
 		if (kind.many !== true && kind.kind === 'ref') {
 			const model = typeof kind.to === 'string' ? kind.to : Predicate.isObject(value) &&
 				typeof value.model === 'string' && kind.to.includes(value.model) ? value.model : undefined;
@@ -200,7 +205,13 @@ export function decodeInput(
 	}
 	if (keyed.length > 0) return { value: undefined, refs, problems: keyed };
 	visit({ kind: 'object', fields: original }, result.success, '');
-	return { value: result.success, problems: [], refs, ...(custom.length === 0 ? {} : { custom }) };
+	return {
+		value: result.success,
+		problems: [],
+		refs,
+		...(custom.length === 0 ? {} : { custom }),
+		...(files.length === 0 ? {} : { files })
+	};
 }
 
 

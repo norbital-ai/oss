@@ -85,3 +85,29 @@ it('opens a PDF viewer only on request and closes it with Escape', async () => {
 		target.remove();
 	}
 });
+
+it('frames a made screenshot that opens large, its download in the corner', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(Attachments, {
+		target,
+		props: {
+			files: [{ id: 'shot', name: 'screenshot.png', mime: 'image/png' }],
+			file_href: () => 'about:blank',
+			t: (key: string) => key
+		}
+	});
+	try {
+		flushSync();
+		const frame = target.querySelector<HTMLButtonElement>('[data-attachment="screenshot.png"] button[data-media]');
+		if (frame === null) throw new Error('The screenshot frame did not render');
+		expect(frame.querySelector('img')?.getAttribute('alt')).toBe('screenshot.png');
+		const download = target.querySelector('[data-attachment="screenshot.png"] a[download="screenshot.png"]');
+		expect(download?.parentElement).toBe(frame.parentElement);
+		expect(frame.contains(download)).toBe(false);
+		frame.click();
+		await vi.waitFor(() => expect(document.querySelector('[role="dialog"] img[alt="screenshot.png"]')).not.toBeNull());
+	} finally {
+		await unmount(view);
+		target.remove();
+	}
+});

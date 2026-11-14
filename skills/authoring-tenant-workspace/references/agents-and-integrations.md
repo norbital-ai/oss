@@ -13,7 +13,7 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 
 ## Agent automations
 
-- An agent tool is an ordinary `src/automation/+<name>.automation.ts` declaration. Set `agent: 'direct'`, `'confirm'` or `'never'`; the automation's required `policies` provide its authority.
+- An agent tool is an ordinary `src/automation/+<name>.automation.ts` declaration. The agent may start it only after the person confirms each start (`agent: 'confirm'`, the default); `agent: 'never'` keeps it from the agent. The automation's required `policies` provide its authority.
 - Use `mode: 'call'` for an immediate typed answer and the default job mode for durable work. Declare file inputs and use `ctx.files` for stored files. Helpers stay beside their owner.
 - `workspace_install` adds exact dependencies to the working tree. Import pure JavaScript or WebAssembly packages into the automation; the compiler bundles them into the workspace's guest. Native addons, processes and dynamically downloaded code are unavailable.
 - Start it through `ctx.run` or the agent's native automation control. There is no separate tool declaration, `run.ts` entry or `run_tool` call.
@@ -26,7 +26,8 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 - `private` admits a sender whose handle matches a member (phone, email, telegram, Slack or Discord id); others get one fixed notice per 15 minutes. Drivers with no member handle (wechat, custom chat) admit nobody. A notice `via` a Slack or Discord connection reaches each recipient with that id by direct message; `ctx.send` addresses one as `to: '@<id>'`. `public` admits anyone. Email is always addressed; group chat follows `group_messages`.
 - An email sender links only when the receiving server vouches for the `From` domain (DMARC, or aligned DKIM); otherwise it is unknown. Say so before promising a private email envoy on a mail server outside Google and Microsoft: it needs the connection's Authentication server.
 - A group turn or unlinked DM holds the envoy's `policies` alone, every actor variable null except `{ var: 'actor.instance' }`.
-- A linked member's DM: `dm: 'union'` adds the member's own authority, admin included; `dm: 'envoy'` holds the envoy's policies with operands bound to the member, admin false, no member routes, tools or automations.
+- A linked member's DM: `dm: 'union'` adds the member's own policies and team tree, never admin; `dm: 'envoy'`, and every administrator's DM, holds the envoy's policies with operands bound to the member, no member routes, tools or automations.
+- An envoy has no confirmation card: it refuses what the in-app agent confirms (automation starts, deletes and batches, MCP calls, sending scripts, browser submits).
 - Limits are always the envoy's. Envoys never decide approvals.
 - `actor.instance` is the arriving instance, or the instance of a remote sync run, null otherwise, so it fails closed. It types only against an FK to `sys_integration`.
 
@@ -37,6 +38,7 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 - `webhook.handle` answers each verified delivery itself: it reads and acts as `webhook.policies` and returns `{ status, body }`. Key its acts by the delivery id.
 - Built-in conversation definitions reserve whatsapp, email, telegram, slack, discord, wechat and chat.
 - `rate` paces every request. HTTP paths stay under the declared HTTPS base URL.
+- A workspace connection serves members' host tools (a repository reference's read) only with `http.lend: true`; without it, administrators' alone. A personal connection serves its owner alone.
 - SQL Server takes structured operations (`DatabaseRequest` from `@norbital-ai/bolt/engine`); inspect that contract before constructing a request. The host bounds execution.
 - Keep template-specific SQL, retention, assembly and business meaning in template source. Provider and platform code hold no domain rules.
 

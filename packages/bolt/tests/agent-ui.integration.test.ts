@@ -415,4 +415,18 @@ describe('read_file on an xlsx', () => {
 		if (typeof clock !== 'string') throw new Error('ISO clock cell missing');
 		expect(DateTime.formatIso(DateTime.makeUnsafe(clock))).toBe('2026-06-03T00:15:30.125Z');
 	});
+	it('refuses a few bytes that claim a vast grid before allocating it', () => {
+		const sheet = (rows: string) =>
+			xlsx({
+				'xl/workbook.xml': '<workbook><sheets><sheet name="Bomb" sheetId="1"/></sheets></workbook>',
+				'xl/worksheets/sheet1.xml': `<worksheet><sheetData>${rows}</sheetData></worksheet>`
+			});
+		expect(() => xlsxCells(sheet('<row r="50000000"/>'))).toThrow('rows long');
+		expect(() => xlsxCells(sheet('<row r="1"><c r="ZZZZZZ1"><v>1</v></c></row>'))).toThrow('columns wide');
+		const wide = Array.from({ length: 200 }, (_, y) => `<row r="${y + 1}"><c r="XFD${y + 1}"><v>1</v></c></row>`);
+		expect(() => xlsxCells(sheet(wide.join('')))).toThrow('cells');
+		const sparse = xlsxCells(sheet('<row r="1"><c r="A1"><v>1</v></c></row><row r="1000000"><c r="A1000000"><v>2</v></c></row>'));
+		expect(sparse.length).toBe(1_000_000);
+		expect(new Set(sparse.slice(1, -1)).size).toBe(1);
+	});
 });

@@ -502,6 +502,18 @@ layer(
 			})
 	);
 
+	it.effect("an administrator's DM holds the envoy's policies alone, never the admin bypass", () =>
+		Effect.gen(function* () {
+			const { job, status, say, rows } = yield* setup;
+			const id = yield* job();
+			yield* say('field_wa', '6591234567@s.whatsapp.net', `close ${id}`);
+			// the desk grants no update; Ada's admin authority does not join an envoy's turn
+			expect(yield* status(id)).toBe('open');
+			expect(present((yield* rows(`close ${id}`))[0])['as']).toMatchObject({
+				envoy: { member: ADA, dm: true }
+			});
+		})
+	);
 	it.effect('a tenant-created envoy queues its answer until its new channel is paired', () =>
 		Effect.gen(function* () {
 			const { t, rows, paused, steps } = yield* setup;

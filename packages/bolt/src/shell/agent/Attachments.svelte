@@ -83,10 +83,10 @@
 	{#each files as file (file)}
 		{@const url = href(file)}
 		{@const image = mime(file).startsWith('image/')}
-		<div class={rail ? 'flex min-w-0 items-center gap-2' : 'relative max-w-full shrink-0'} data-attachment={file.name}>
+		<div class={rail ? 'flex min-w-0 items-center gap-2' : 'group/media relative max-w-full shrink-0'} data-attachment={file.name}>
 			{#if !rail && image && previewable(file) && !failed_images.has(file)}
-				<button type="button" class="block overflow-hidden rounded-lg border border-border bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" aria-label={`${t('Preview')} ${file.name}`} title={file.name} onclick={() => open(file)}>
-					<img {@attach media_source(file)} alt={file.name} loading="lazy" decoding="async" class={is_draft(file) ? 'h-16 w-20 object-cover' : 'h-24 w-36 object-cover'} onerror={() => failed_images.add(file)} />
+				<button type="button" class="block max-w-full cursor-zoom-in overflow-hidden rounded-lg border border-border bg-card shadow-xs transition-colors hover:border-ring/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" aria-label={`${t('Preview')} ${file.name}`} title={file.name} onclick={() => open(file)} data-media>
+					<img {@attach media_source(file)} alt={file.name} loading="lazy" decoding="async" class={is_draft(file) ? 'h-16 w-20 object-cover' : 'aspect-video w-72 max-w-full object-cover object-top'} onerror={() => failed_images.add(file)} />
 				</button>
 			{:else if previewable(file)}
 				<button type="button" class="flex min-w-0 items-center gap-2 rounded-lg text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {rail ? 'flex-1 py-1.5' : 'w-48 max-w-full border border-border p-2 pr-7'}" aria-label={`${t('Preview')} ${file.name}`} onclick={() => open(file)}>
@@ -102,7 +102,7 @@
 			{#if on_remove !== undefined}
 				<button type="button" class="absolute top-0.5 right-0.5 grid size-6 pointer-coarse:size-11 place-items-center rounded-md bg-background/90 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" aria-label={`${t('Remove')} ${file.name}`} title={`${t('Remove')} ${file.name}`} onclick={() => on_remove?.(file)}><Icon name="lucide:x" class="size-3.5" /></button>
 			{:else if url !== undefined && (rail || previewable(file))}
-				<a href={url} target="_blank" rel="noreferrer" download={file.name} class="grid shrink-0 place-items-center rounded-md text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {rail ? 'size-8 pointer-coarse:size-11 hover:bg-muted' : 'absolute right-1 bottom-1 size-6 pointer-coarse:size-11 bg-background/90'}" aria-label={`${t('Download')} ${file.name}`} title={t('Download')}><Icon name="lucide:download" class="size-3.5" /></a>
+				<a href={url} target="_blank" rel="noreferrer" download={file.name} class="grid shrink-0 place-items-center rounded-md text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {rail ? 'size-8 pointer-coarse:size-11 hover:bg-muted' : 'absolute top-1.5 right-1.5 size-7 pointer-coarse:size-11 border border-border bg-background/90 shadow-xs opacity-0 transition-opacity group-hover/media:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100 motion-reduce:transition-none'}" aria-label={`${t('Download')} ${file.name}`} title={t('Download')}><Icon name="lucide:download" class="size-3.5" /></a>
 			{/if}
 		</div>
 	{/each}

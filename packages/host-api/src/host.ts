@@ -75,11 +75,11 @@ export type ShellPorts = {
 	readonly live?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
 };
-/** The agent's host parts; the release's own source (`workspace_search`) and attachments are the release's. */
+/** The agent's host parts; the release's own source (`workspace_grep`) and attachments are the release's. */
 export type AgentPorts = {
 	/** The person's current working source (the default for source tools); none where they author nothing. */
 	readonly draft?: (a: Authority) => Promise<WorkspacePort | undefined>;
-	/** ripgrep over this author's working tree (`workspace_search`). */
+	/** ripgrep over this author's working tree (`workspace_grep`). */
 	readonly search?: (a: Authority, request: SearchRequest) => Promise<SearchAnswer | undefined>;
 	/** Host tools (Workspace Studio authoring, browser, personal skills): a fixed list, or the person's catalogue per turn. */
 	readonly host_tools?:
@@ -232,6 +232,12 @@ export type ActiveWorkspace = {
 	park(options: Signal & { readonly automations_ms: number }): Promise<void>;
 	/** Rule 71a: interrupts every guest invocation and in-flight crossing of this generation; the host then ends its pool. */
 	close(): Promise<void>;
+	/**
+	 * The host's word to an agent conversation (the end of work it carried on for a turn, such as a host tool's job):
+	 * one queued system note that wakes the conversation. `id` makes it once: a repeat of `(conversation, id)` adds
+	 * nothing, across restarts, and answers `false`. A conversation that does not exist is refused.
+	 */
+	notify(note: { readonly conversation: string; readonly text: string; readonly id: string }, options: Signal): Promise<boolean>;
 	readonly identity: {
 		/** The caller's authority from the request's session, or `null`. */
 		authority(request: Request, options: Signal): Promise<Authority | null>;

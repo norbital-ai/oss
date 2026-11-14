@@ -55,6 +55,18 @@ export const is_public_web_address = (address: string): boolean => {
 		: family === 6 && globalV6.check(address, 'ipv6') && !excluded.check(address, 'ipv6');
 };
 
+/**
+ * The host's own public addresses: once refused, no outbound request, redirect hop, tunnel or TCP connection reaches
+ * the platform itself on any port, published or not. A host calls it once at start.
+ */
+export const refuse_platform_addresses = (addresses: Iterable<string>): void => {
+	for (const address of addresses) {
+		const family = isIP(address);
+		if (family === 0) throw new Error(`A platform address must be an IP address: ${address}`);
+		excluded.addAddress(address, family === 4 ? 'ipv4' : 'ipv6');
+	}
+};
+
 /** A resolved IP address and its family (4 or 6). */
 export type Address = { address: string; family: number };
 export type Resolve = (hostname: string) => Promise<readonly Address[]>;

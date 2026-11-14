@@ -139,6 +139,7 @@ import {
 	artifact_port,
 	keys_port,
 	loopback_http_port,
+	loopback_mcp_port,
 	loopback_tcp_port,
 	tenant_db_port
 } from '@norbital-ai/host-api/node';
@@ -151,7 +152,7 @@ import { facility_layers } from '../protocol/facility-layers.ts';
 import { BoltHost, BoltHostLive } from '../protocol/host.ts';
 import { RateLimits, SessionAuthority, bindings } from '../protocol/http.ts';
 import { PublicPages, public_pages } from '../protocol/pages.ts';
-import { decode_read_request, plan_read_request, type DynamicRead, type ReadPlan } from '../protocol/read-request.ts';
+import { decode_read_request, plan_read_request, type ReadPlan } from '../protocol/read-request.ts';
 import { RowStateFields } from '../protocol/record-contracts.ts';
 import { ActReply, QReply, WireError } from '../protocol/schema.ts';
 import { HEADERS, PATHS, refusal_of_status } from '../protocol/wire.ts';
@@ -188,7 +189,7 @@ type NativeActAnswer = Effect.Success<ReturnType<NativeAnswers['map']>>;
 /** A native queued-job receipt, including the actual written records or held approval. */
 type NativeJobAnswer = Effect.Success<ReturnType<NativeAnswers['queued']>>;
 interface KitQuery {
-	<const R extends ReadRequestBase>(request: ReadRequest<R> | DynamicRead): Effect.Effect<NativeReadAnswer, ReadFailed>;
+	<const R extends ReadRequestBase>(request: ReadRequest<R>): Effect.Effect<NativeReadAnswer, ReadFailed>;
 }
 type KitActInput<A extends ActMap> = A & (string extends keyof A
 	? Readonly<Record<string, Json>>
@@ -199,6 +200,11 @@ interface KitAct {
 interface Caller {
 	readonly authority: Authority;
 	readonly query: KitQuery;
+	/**
+	 * Bolt's own host-conformance suites only, over ad hoc manifests no generated names describe: a read request as the
+	 * wire carries it, decoded by the host's one decoder. `@norbital-ai/bolt-cli`'s kit leaves it out.
+	 */
+	wire_query(request: object): Effect.Effect<NativeReadAnswer, ReadFailed>;
 	/**
 	 * A record's revisions as the page's `bolt.history` reads them, oldest first; `at` starts from an instant, a revision
 	 * or just before an approval request. A record as of a revision: take its `at`, then read the root with `as_of`.
@@ -711,7 +717,7 @@ const nativeAnswers = (manifest: EngineManifest) => {
 			return yield* Schema.decodeUnknownEffect(schema)(value);
 		});
 	return {
-		/** A read request's answer, per root, as native values (a runtime-built `ReadRequestJson`'s too). */
+		/** A read request's answer, per root, as native values. */
 		read: (request: unknown, value: unknown) =>
 			native(() => requestAnswer(request), value),
 		history: (model: string, value: unknown) => native(() => revisions(model), value),
@@ -1193,7 +1199,8 @@ export const test_engine = <P extends TestPorts = never>(
 				Images.fromAbi(native.images),
 				// without a release, the docs directory stands in for one: only its `../docs/` reads are made
 				Docs.fromAbi(native.artifact ?? artifact_port(fileURLToPath(DOCS_DIR), fileURLToPath(DOCS_DIR))),
-				Mcp.fromAbi(native.mcp),
+				// the kit's MCP servers are this machine's
+				Mcp.fromAbi(yield* loopback_mcp_port),
 				Convert.fromAbi(off),
 				Render.fromAbi(off),
 				WebRead.fromAbi(off),
@@ -1496,13 +1503,11 @@ export const test_engine = <P extends TestPorts = never>(
 				const readError = (error: { readonly message: string }) =>
 					new ReadFailed({ code: 'protocol', message: error.message });
 				// a read request crosses as `{ m: 'query', a: [request] }`, as the page's and a body's do
-				const callerQuery: KitQuery = (request) => {
-					return read('query', [request]).pipe(
-						Effect.flatMap((value) =>
-							answer.read(request, value).pipe(Effect.mapError(readError))
-						)
+				const wire_query = (request: object) =>
+					read('query', [request]).pipe(
+						Effect.flatMap((value) => answer.read(request, value).pipe(Effect.mapError(readError)))
 					);
-				};
+				const callerQuery: KitQuery = wire_query;
 				// History crosses with its full options object, including the selected output.
 				const history = <C extends string>(
 					model: Is<C, ReadableName>,
@@ -1518,6 +1523,7 @@ export const test_engine = <P extends TestPorts = never>(
 				return {
 					authority,
 					query: callerQuery,
+					wire_query,
 					history,
 					act: <const A extends ActMap>(acts: KitActInput<A>, opts?: ActOptions) =>
 						sendAct({ acts }, opts).pipe(Effect.flatMap((value) =>

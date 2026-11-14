@@ -341,8 +341,9 @@ export const membrane = (send: (message: Message) => unknown): Membrane => {
 					? new Uint8Array(wire.buffer, wire.byteOffset, wire.byteLength)
 					: new Uint8Array(wire)
 				: mirrorStream(wire.$stream);
+	// null-prototype: a wire key `__proto__` is an own field, never the object's prototype
 	const literal = (value: object) => {
-		const out: Record<string, unknown> = {};
+		const out: Record<string, unknown> = Object.create(null);
 		for (const key of Object.keys(value)) out[key] = decode(Reflect.get(value, key));
 		return out;
 	};
@@ -411,7 +412,8 @@ export const membrane = (send: (message: Message) => unknown): Membrane => {
 			const { name, message, ...own } = decodeError(value).$error;
 			const error = new Error(typeof message === 'string' ? message : '');
 			if (typeof name === 'string') error.name = name;
-			for (const [key, field] of Object.entries(own)) Reflect.set(error, key, decode(field));
+			for (const [key, field] of Object.entries(own))
+				Object.defineProperty(error, key, { value: decode(field), writable: true, enumerable: true, configurable: true });
 			return error;
 		}
 		return literal(value);

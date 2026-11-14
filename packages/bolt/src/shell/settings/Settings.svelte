@@ -550,6 +550,37 @@
 				assistantForm
 			)}
 		{/if}
+		{#snippet retentionForm()}
+			<form
+				class="grid gap-3 sm:grid-cols-2"
+				data-retention-settings
+				onsubmit={(e) => {
+					e.preventDefault();
+					const f = new FormData(e.currentTarget);
+					fork(
+						op('set_retention', {
+							every_days: Number(f.get('every_days')),
+							hour: Number(f.get('hour')),
+							notifications_days: Number(f.get('notifications_days')),
+							runs_days: Number(f.get('runs_days'))
+						})
+					);
+				}}
+			>
+				{#each [['every_days', 'Run every (days)', 1, undefined], ['hour', 'From hour (workspace time)', 0, 23], ['notifications_days', 'Keep read notifications (days)', 1, undefined], ['runs_days', 'Keep finished runs (days)', 1, undefined]] as const as [name, label, min, max] (name)}
+					<label class="flex flex-col gap-1 text-sm"
+						><span class="text-muted-foreground">{t(label)}</span>
+						<Input class="h-8" type="number" step="1" {name} {min} {max} value={s.retention[name]} /></label
+					>
+				{/each}
+				<Cluster gap="sm"><Button type="submit">{t('Save')}</Button></Cluster>
+			</form>
+		{/snippet}
+		{@render card(
+			t('Data retention'),
+			t('A built-in daily cleanup, run while the workspace is in use: it removes read notifications and finished runs past these ages. Unread notifications are kept.'),
+			retentionForm
+		)}
 	{:else if tab === 'integrations'}
 		{#snippet connectionsTab()}
 			<Integrations {ctx}

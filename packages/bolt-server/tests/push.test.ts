@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync } from 'node:crypto';
+import { Agent } from 'node:https';
 import { describe, expect, it, vi } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { Sql } from '@norbital-ai/host-api';
@@ -16,15 +17,19 @@ const database = () => {
 	return { statements, db: { write: (statement: Sql) => Effect.sync(() => { statements.push(statement); return { rows: [], affected: 1 }; }) } };
 };
 const vapid = { public_key: 'public', private_key: 'private' };
+/** An APNs device token: 32 bytes, hex. */
+const token = 'ab'.repeat(32);
+/** push.example resolves to one public address. */
+const resolve = async () => [{ address: '93.184.216.34', family: 4 }];
 
 describe('durable inbox push transports', () => {
 	it.effect('sends the stable notice id and an offline delivery TTL without a page connection', () =>
 		Effect.gen(function* () {
 			const send = vi.fn<typeof webpush.sendNotification>(async () => ({ statusCode: 201, body: '', headers: { location: 'accepted' } }));
 			const { db, statements } = database();
-			expect(yield* push(db, vapid, 'https://workspace.example', send).send(message)).toEqual({ provider_id: 'accepted' });
+			expect(yield* push(db, vapid, 'https://workspace.example', send, resolve).send(message)).toEqual({ provider_id: 'accepted' });
 			expect(send).toHaveBeenCalledWith({ endpoint: message.subscription.endpoint, keys: message.subscription.keys }, JSON.stringify({ id: message.id, title: message.title, body: null, path: '/inbox' }),
-				{ vapidDetails: { subject: 'https://workspace.example', publicKey: 'public', privateKey: 'private' }, TTL: 86_400 });
+				{ vapidDetails: { subject: 'https://workspace.example', publicKey: 'public', privateKey: 'private' }, TTL: 86_400, agent: expect.any(Agent) });
 			expect(statements).toEqual([]);
 		})
 	);
@@ -33,7 +38,7 @@ describe('durable inbox push transports', () => {
 			Effect.gen(function* () {
 				const send = vi.fn<typeof webpush.sendNotification>(async () => { throw Object.assign(new Error('push refused'), { statusCode: status }); });
 				const { db, statements } = database();
-				expect(yield* Effect.flip(push(db, vapid, 'https://workspace.example', send).send(message))).toMatchObject({ kind, status, message: 'push refused' });
+				expect(yield* Effect.flip(push(db, vapid, 'https://workspace.example', send, resolve).send(message))).toMatchObject({ kind, status, message: 'push refused' });
 				expect(statements).toHaveLength(status === 404 || status === 410 ? 1 : 0);
 				if (statements.length > 0) expect(statements[0]).toEqual({ text: 'DELETE FROM bolt_push_subscriptions WHERE endpoint = $1', params: [message.subscription.endpoint] });
 			})
@@ -41,10 +46,31 @@ describe('durable inbox push transports', () => {
 	it.effect('keeps a network failure transient and an invalid subscription permanent without attempting it', () =>
 		Effect.gen(function* () {
 			const send = vi.fn<typeof webpush.sendNotification>(async () => { throw new Error('network down'); });
-			const { db } = database(), transport = push(db, vapid, 'https://workspace.example', send);
+			const { db } = database(), transport = push(db, vapid, 'https://workspace.example', send, resolve);
 			expect(yield* Effect.flip(transport.send(message))).toMatchObject({ kind: 'upstream', message: 'network down' });
 			expect(yield* Effect.flip(transport.send({ ...message, subscription: { ...message.subscription, keys: {} } }))).toMatchObject({ kind: 'invalid' });
 			expect(send).toHaveBeenCalledOnce();
+		})
+	);
+	it.effect('refuses a web push endpoint on a private or loopback address, at every send', () =>
+		Effect.gen(function* () {
+			const send = vi.fn<typeof webpush.sendNotification>(async () => ({ statusCode: 201, body: '', headers: {} }));
+			const { db } = database();
+			for (const [endpoint, answer] of [
+				['https://169.254.169.254/latest/meta-data', '169.254.169.254'],
+				['http://push.example/device', '93.184.216.34'],
+				['https://push.example:8443/device', '93.184.216.34'],
+				['https://push.example/device', '10.0.0.7']
+			] as const)
+				expect(
+					yield* Effect.flip(
+						push(db, vapid, 'https://workspace.example', send, async () => [{ address: answer, family: 4 }]).send({
+							...message,
+							subscription: { ...message.subscription, endpoint }
+						})
+					)
+				).toMatchObject({ kind: 'invalid' });
+			expect(send).not.toHaveBeenCalled();
 		})
 	);
 	it.effect('uses a bounded stable APNs collapse id across retries and keeps provider status', () =>
@@ -54,7 +80,7 @@ describe('durable inbox push transports', () => {
 			let status = 200;
 			const request: ApnsRequest = (_origin, headers, body) => Effect.sync(() => { requests.push({ headers, body }); return { status, body: '{"reason":"ProviderRefusal"}' }; });
 			const { db, statements } = database(), transport = apns(db, { TEAM: { key_id: 'KEY', key } }, request);
-			const notice: PushMessage = { ...message, subscription: { kind: 'apns', endpoint: 'device-token', keys: { topic: 'ai.norbital.app', environment: 'production', team_id: 'TEAM' } } };
+			const notice: PushMessage = { ...message, subscription: { kind: 'apns', endpoint: token, keys: { topic: 'ai.norbital.app', environment: 'production', team_id: 'TEAM' } } };
 			yield* transport.send(notice);
 			for (const [code, kind] of [[408, 'timeout'], [429, 'rate_limited'], [503, 'upstream'], [400, 'invalid'], [410, 'invalid']] as const) {
 				status = code;
@@ -66,9 +92,25 @@ describe('durable inbox push transports', () => {
 				expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(sent.body)).toMatchObject({ id: message.id, path: '/inbox' });
 			}
 			expect(collapse).toHaveLength(64);
-			expect(statements).toEqual([{ text: 'DELETE FROM bolt_push_subscriptions WHERE endpoint = $1', params: ['device-token'] }]);
+			expect(statements).toEqual([{ text: 'DELETE FROM bolt_push_subscriptions WHERE endpoint = $1', params: [token] }]);
 			expect(yield* Effect.flip(apns(db, {}, request).send(notice))).toMatchObject({ _tag: 'Unavailable', facility: 'push' });
 			expect(requests).toHaveLength(6);
+		})
+	);
+	it.effect('refuses an APNs device token or topic that is not one, without sending', () =>
+		Effect.gen(function* () {
+			const key = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+			let sent = 0;
+			const request: ApnsRequest = () => Effect.sync(() => { sent++; return { status: 200, body: '' }; });
+			const transport = apns(database().db, { TEAM: { key_id: 'KEY', key } }, request);
+			const device = (endpoint: string, topic: string): PushMessage => ({ ...message, subscription: { kind: 'apns', endpoint, keys: { topic, environment: 'production', team_id: 'TEAM' } } });
+			for (const notice of [
+				device('../../3/device/other?x=', 'ai.norbital.app'),
+				device(token, 'ai.norbital.app\r\nx-injected: 1'),
+				device(token, 'not a topic')
+			])
+				expect(yield* Effect.flip(transport.send(notice))).toMatchObject({ kind: 'invalid', status: 400 });
+			expect(sent).toBe(0);
 		})
 	);
 });

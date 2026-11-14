@@ -14,6 +14,7 @@ import {
 	page,
 	where,
 	type Catalog,
+	type ExposureInfo,
 	type ListRead,
 	type StoreError,
 	type Pred,
@@ -188,6 +189,37 @@ export function compose(
 const store = <A>(effect: Effect.Effect<A, StoreError>): Effect.Effect<A, BoltError> =>
 	Effect.mapError(effect, from_store);
 /**
+ * A `where` at level `c` filters on its own fields and crosses only the layers its output declares, for every reader:
+ * the workspace's reads too, though they compile unscoped.
+ */
+const declared_hops = (cat: Catalog, c: ExposureInfo, p: Pred): Effect.Effect<void, BoltError> =>
+	Effect.gen(function* () {
+		switch (p.t) {
+			case 'and':
+			case 'or':
+				for (const of of p.of) yield* declared_hops(cat, c, of);
+				return;
+			case 'not':
+				return yield* declared_hops(cat, c, p.of);
+			case 'each':
+				return yield* declared_hops(cat, c, p.pred);
+			case 'one':
+			case 'many':
+			case 'count':
+			case 'agg': {
+				const next = cat.layers.get(`${c.path}.${p.rel}`) ?? cat.exposures.get(p.target);
+				if ((c.relations !== 'all' && !c.relations.has(p.rel)) || next === undefined)
+					return yield* invalid(
+						`'${c.path}' declares no read layer '${p.rel}': a where filters on its own fields and crosses only the layers its output declares`
+					);
+				if (p.t === 'one' || p.t === 'many') yield* declared_hops(cat, next, p.pred);
+				return;
+			}
+			default:
+				return;
+		}
+	});
+/**
  * A read request (`query({ ... })`) as one IR: decoded exactly, its paths checked against the declarations, each root
  * lowered with its named layers nested (a ref layer replaces its FK with the row or `null`, a many-layer lists or
  * measures its rows per parent row). Every list defaults to `READ_LIMIT`; authority is the reader's scope, per path.
@@ -214,11 +246,21 @@ export const request = Effect.fn('Bolt.read.request')(function* (
 							`'${root}': ${what} names no layers (${below.join(', ')}); remove those keys from this read, or read the layers in a separate read without aggregate/as_of`
 						))
 					: Effect.void;
+			/** A level's `where`, its hops checked against the layers `path` declares. */
+			const checked = Effect.fnUntraced(function* (path: string, model: string, json: Json) {
+				const w = yield* store(where(cat, model, json));
+				const c = cat.layers.get(path) ?? cat.exposures.get(path);
+				if (c === undefined) return yield* invalid(`'${path}' has no read layer`);
+				yield* declared_hops(cat, c, w);
+				return w;
+			});
+			const rootWhere = top.where === undefined ? undefined : yield* checked(root, root, top.where);
 			const layerWhere = Effect.fnUntraced(function* (
+				path: string,
 				model: string,
 				layer: LayerRequestJson
 			): Effect.fn.Return<Pred | undefined, BoltError> {
-				const w = layer.where === undefined ? undefined : yield* store(where(cat, model, layer.where));
+				const w = layer.where === undefined ? undefined : yield* checked(path, model, layer.where);
 				const text: Pred | undefined =
 					typeof layer.search === 'string' && layer.search !== ''
 						? { t: 'search', text: layer.search }
@@ -237,7 +279,7 @@ export const request = Effect.fn('Bolt.read.request')(function* (
 							many = info?.many.get(rel);
 						const target = one?.targets[0] ?? many?.child;
 						if (target === undefined) return yield* invalid(`'${child}' is no relation of ${model}`);
-						const filter = yield* layerWhere(target, layer);
+						const filter = yield* layerWhere(child, target, layer);
 						if (one !== undefined) {
 							if (layer.aggregate !== undefined)
 								return yield* invalid(`'${child}' is a ref layer: it takes no aggregate`);
@@ -354,7 +396,7 @@ export const request = Effect.fn('Bolt.read.request')(function* (
 				page: yield* store(page({ limit, ...(top.after === undefined ? {} : { after: top.after }) })),
 				// a root page counts every row it matches (`total`) in the same statement
 				total: true,
-				...(top.where === undefined ? {} : { where: yield* store(where(cat, root, top.where)) }),
+				...(rootWhere === undefined ? {} : { where: rootWhere }),
 				...(top.order_by === undefined ? {} : { order: yield* store(order(top.order_by, cat, root)) }),
 				...(typeof top.search === 'string' && top.search !== '' ? { search: top.search } : {})
 			};

@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { BRIEF_TIMESTAMP, date_time, handle_words, humanise, humanise_word, usd } from '../src/shell/i18n.ts';
-import { stepView } from '../src/shell/agent/view.ts';
+import { languageOf, stepView } from '../src/shell/agent/view.ts';
 
 describe('native shell presentation conventions', () => {
 	it('keeps agent Unicode capitals distinct from native ASCII-word label fallback without trimming or collapsing', () => {
@@ -36,13 +36,13 @@ describe('native shell presentation conventions', () => {
 
 	it('retains the agent-preview extension dialect', () => {
 		for (const path of ['file.jsx', 'file.tsx', 'file.mjsx', 'file.mtsx']) {
-			expect(stepView('workspace_write', { path, content: '' }).code?.language).toBe('javascript');
+			expect(languageOf(path)).toBe('javascript');
 		}
 		for (const path of ['file.cjs', 'file.cts']) {
-			expect(stepView('workspace_write', { path, content: '' }).code?.language).toBe('plaintext');
+			expect(languageOf(path)).toBe('plaintext');
 		}
 		for (const path of ['file.ts', 'file.js', 'file.mjs', 'file.svelte']) {
-			expect(stepView('workspace_write', { path, content: '' }).code?.language).toBe('javascript');
+			expect(languageOf(path)).toBe('javascript');
 		}
 	});
 });

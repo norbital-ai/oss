@@ -135,6 +135,8 @@ export {
 export {
 	/** Collapsible sections: `Accordion.Root` holds `Accordion.Item`s, each a `Trigger` and its `Content`. */
 	Accordion,
+	/** A message box in a tone (`variant`) and `size`: `Alert.Root` with `Alert.Title` and `Alert.Description`. */
+	Alert,
 	/** A modal dialog: `Dialog.Root`, its `Trigger`, and `Content` with a header, title, description and footer. */
 	Dialog,
 	/** Where the portals beneath it land: a mount with its own stylesheet keeps its floating content under it. */
@@ -172,6 +174,7 @@ export {
 	type UiTextKey
 } from './primitives/index.js';
 export {
+	CodeDiff,
 	CodeEditor,
 	type CommandItem,
 	MarkdownEditor,

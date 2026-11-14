@@ -89,6 +89,28 @@ describe('declarations', () => {
 		})).toThrow();
 	});
 
+	it('names the layer whose fields are no list', () => {
+		const order = {
+			description: 'Orders',
+			fields: { code: { kind: 'text' } },
+			outputs: { default: { fields: 'all' } }
+		};
+		// an output's 'all' copied into a write tree, or a child write layer without fields, once refused as a bare "Expected array"
+		expect(() => split_model('purchase_order', { ...order, create: { fields: 'all' } })).toThrow(
+			/^create 'purchase_order\.fields': lists column names/
+		);
+		expect(() =>
+			split_model('purchase_order', { ...order, update: { fields: ['code'], lines: {} } })
+		).toThrow(/^update 'purchase_order\.lines\.fields': lists column names/);
+		expect(() =>
+			split_model('purchase_order', { ...order, outputs: { default: { fields: 'all', lines: {} } } })
+		).toThrow(/^purchase_order\.lines: an output's fields/);
+		// a malformed key names its path and the model
+		expect(() => split_model('purchase_order', { ...order, indexes: { by: { on: 'code' } } })).toThrow(
+			/^model 'purchase_order': Expected array\n\s+at \["indexes"\]\["by"\]\["on"\]/
+		);
+	});
+
 	it('keeps physical key metadata private to native models and rejects it at the workspace boundary', () => {
 		expect(bolt).not.toHaveProperty('bind_system_model');
 		for (const table of [{ primary: 'text' }, { primary: 'uuid', identity: 'sequence' }])

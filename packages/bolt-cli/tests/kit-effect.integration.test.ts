@@ -4,7 +4,6 @@ import { it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
 import { input_schema } from '@norbital-ai/store/kind';
 import { id_of } from '@norbital-ai/bolt';
-import { dynamic_read } from '@norbital-ai/bolt';
 import { uuidv7 } from '@norbital-ai/host-api';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { expect, JobResult, KitInvalid, TestWorkspace, type Kit } from '../src/test/index.ts';
@@ -348,10 +347,10 @@ it.live('computed JSON array lengths retain NULL propagation and the native oper
 			safe_length: Schema.Int,
 			chosen_length: Schema.Int
 		})) });
-		const answer = yield* (yield* t.as(t.admin)).query(dynamic_read({ customers: {
+		const answer = yield* (yield* t.as(t.admin)).wire_query({ customers: {
 			fields: ['name', 'required_length', 'optional_length', 'plus_one', 'safe_length', 'chosen_length'],
 			order_by: 'name'
-		} })).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Answer)));
+		} }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Answer)));
 		expect(answer.customers.rows).toEqual([
 			{ name: 'Missing', required_length: 3, optional_length: null, plus_one: null, safe_length: 0, chosen_length: 3 },
 			{ name: 'Present', required_length: 0, optional_length: 2, plus_one: 3, safe_length: 2, chosen_length: 0 }

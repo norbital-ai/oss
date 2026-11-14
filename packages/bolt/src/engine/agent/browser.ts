@@ -62,6 +62,20 @@ const Input = Schema.Struct({
 	close: Schema.optionalKey(Schema.Boolean)
 });
 
+/**
+ * A visit the person confirms first: a click, a key press or a typed submit may send a form, a script may do anything,
+ * and a download's URL reaches an outside host. Opening, reading, typing, selecting, scrolling and screenshots run.
+ */
+export const submits = (input: Json): boolean => {
+	const visit = Schema.decodeUnknownOption(Input, CLOSED)(input);
+	if (visit._tag === 'None') return false;
+	const { steps = [], evaluate, download } = visit.value;
+	return (
+		evaluate !== undefined ||
+		download !== undefined ||
+		steps.some((step) => step.click !== undefined || step.press !== undefined || step.type?.submit === true)
+	);
+};
 /** An automation's browser identity: stable per automation (its sealed sign-ins), one tab per run. */
 export const automationBrowserProfile = (automation: string, run: string): string =>
 	`${BROWSER_RUN_PROFILE}${automation}\u0000${run}`;
@@ -93,6 +107,7 @@ const tool = <A, I>(
 		read_only?: boolean;
 		studio?: StudioRole;
 		behavior: HostTool['behavior'];
+		confirm?: HostTool['confirm'];
 		call: (
 			input: A,
 			profile: string,
@@ -106,6 +121,7 @@ const tool = <A, I>(
 	behavior: options.behavior,
 	...(options.read_only === undefined ? {} : { read_only: options.read_only }),
 	...(options.studio === undefined ? {} : { studio: options.studio }),
+	...(options.confirm === undefined ? {} : { confirm: options.confirm }),
 	call: (input, context, signal) =>
 		Effect.runPromise(
 			Effect.gen(function* () {
@@ -135,6 +151,7 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 			"Your own separate browser, which the person does not see; it keeps your sign-ins. One call runs in order: open a url or workspace page (or go), steps, download a file url as the person's file, evaluate a script, screenshot. Answers the page as text with [ref]s, narrowed by find (words) or from (line), or evaluate's value as JSON. close ends the tab.",
 		input: Input,
 		parseOptions: CLOSED,
+		confirm: submits,
 		call: (i, profile, context) =>
 			Effect.gen(function* () {
 				if (i.close === true) {

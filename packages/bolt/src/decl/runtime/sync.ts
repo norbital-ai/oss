@@ -5,7 +5,7 @@
 // the inbox, id map, version guard, outbox, retries, rate, rollback and health. Bodies are typed from the generated
 // names, so `S` (the sync's name) finds the sync's own data (`with`, `schema`, `context`) in them.
 import { attached, type Body, type GeneratorBody } from '../body.ts';
-import type { BodyReturn, CallerQuery, Clock, Eff, Refuse, WorkspaceQuery } from '../ctx.ts';
+import type { BodyReturn, Clock, Eff, Refuse, WorkspaceQuery } from '../ctx.ts';
 import type { ConvertSource, FacilityFailure, Unavailable } from '@norbital-ai/host-api';
 import type { Checked, Exact, InputFields, InputOf, ValidInputs } from '../fields.ts';
 import type { MediaType } from '../media-types.ts';
@@ -115,7 +115,7 @@ export type SyncCtx<D = never> = Clock &
  * What a file sync body sees: the clock and `query` reads as the member who started the import or export — each root's
  * granting policies filter its output and layers, so a document shows only what that member may read.
  */
-export type FileSyncCtx = Clock & Pick<CallerQuery, 'query'> & SyncRefusal;
+export type FileSyncCtx = Clock & WorkspaceQuery & SyncRefusal;
 
 // ── files ──
 /** A built-in parser, run on the host: `xlsx` (row 1 headers match a field's name or caption, any case; Excel date and

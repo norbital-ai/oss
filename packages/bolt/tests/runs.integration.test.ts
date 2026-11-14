@@ -441,7 +441,22 @@ const world = Effect.fn('TestRuns.world')(function* (
 	const r = Context.get(runContext, Runs),
 		writes = Context.get(context, Callables),
 		identity = Context.get(context, Identity);
-	const e = { acts: writes.acts, authority: identity.authority };
+	// a run's writer is judged against `sys_user` as it is when the run starts: each holder is a member on file
+	const e: World['e'] = {
+		acts: writes.acts,
+		authority: (holder, key) =>
+			Effect.andThen(
+				holder.actor.kind === 'member'
+					? Effect.orDie(
+							db.write({
+								text: 'INSERT INTO sys_user (id, name, kind, admin, team) VALUES ($1, $1, $2, $3, $4) ON CONFLICT DO NOTHING',
+								params: [holder.actor.id, holder.actor.external ? 'external' : 'staff', holder.admin, holder.actor.teams[0] ?? null]
+							})
+						)
+					: Effect.void,
+				identity.authority(holder, key)
+			)
+	};
 	if (extra.platform !== undefined)
 		yield* Context.get(context, RunHandlers).register(extra.platform);
 	const admin: Holder = {
@@ -613,6 +628,52 @@ describe('run browser scope', () => {
 					[conversation]
 				)
 			).toEqual([{ role: 'assistant', code: 'gaveUp' }]);
+		})
+	);
+	// a host died: no watcher of this process is left, yet each end reaches the conversation that started it, once
+	const until = (check: Effect.Effect<boolean, EngineError>) =>
+		Effect.gen(function* () {
+			for (let spin = 0; spin < 10_000 && !(yield* check); spin++) yield* Effect.yieldNow;
+		});
+	it.effect('a run an agent started that died with its host tells its conversation once', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base);
+			const agents = Context.get(w.context, Agents),
+				runs = Context.get(w.context, Runs),
+				conversation = yield* agents.start({ owner: randomUUID() });
+			yield* w.db.write({
+				text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, leases, started_at, trigger)
+				VALUES ('orphan', 'classify', '{}'::jsonb, $1::timestamptz, 'manual', 0, 'running', 3, $1::timestamptz, $2::jsonb)`,
+				params: [iso(T0), JSON.stringify({ kind: 'person', agent: { conversation } })]
+			});
+			const notes = w.sql(`SELECT text, state FROM sys_message WHERE conversation = $1 AND meta->>'run' = 'orphan'`, [
+				conversation
+			]);
+			yield* runs.boot();
+			yield* until(Effect.map(notes, (rows) => rows.length > 0));
+			yield* runs.boot();
+			yield* Effect.yieldNow;
+			expect(yield* notes).toEqual([
+				{ text: '[run orphan failed] automation classify: The run lost its lease 3 times.', state: expect.any(String) }
+			]);
+		})
+	);
+	it.effect('a sub-agent whose turn died with its host reports to its parent', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base);
+			const agents = Context.get(w.context, Agents),
+				owner = randomUUID(),
+				parent = yield* agents.start({ owner }),
+				child = yield* agents.start({ owner, parent, title: 'Count quotes' });
+			yield* agents.gaveUp([child]);
+			const reports = yield* w.sql(
+				`SELECT text FROM sys_message WHERE conversation = $1 AND meta->>'tag' = 'report' AND meta->>'conversation' = $2`,
+				[parent, child]
+			);
+			expect(reports).toHaveLength(1);
+			expect(String(reports[0]?.['text'])).toMatch(
+				new RegExp(`^<task id="${child}" state="error">\n<summary>Background task failed: Count quotes</summary>\n<task_error>\n`)
+			);
 		})
 	);
 	it.effect('stores the active tab’s answer on the page_act step', () =>
@@ -1177,7 +1238,7 @@ describe('run visibility and removed automation webhooks', () => {
 					actor: { ...holder.actor, id: randomUUID() }
 				});
 				expect(Option.getOrNull(yield* w.r.view(other, runId))).toBeNull();
-				const admin = yield* w.e.authority({ ...holder, admin: true });
+				const admin = yield* w.e.authority({ ...holder, actor: { ...holder.actor, id: randomUUID(), admin: true }, admin: true });
 				expect(Option.getOrNull(yield* w.r.view(admin, runId))).toMatchObject({
 					error: { code: 'guest_error', message: 'secret detail' },
 					input: { ids: [id] }

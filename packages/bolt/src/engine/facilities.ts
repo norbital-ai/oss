@@ -527,13 +527,14 @@ function facility_dispatch(ports: FacilityPorts): Facilities['Service']['dispatc
 						Schema.Struct({
 							for: Schema.optionalKey(Schema.String),
 							password: Schema.optionalKey(Schema.String),
+							entry: Schema.optionalKey(Schema.String),
 							diarize: Schema.optionalKey(Schema.Boolean),
 							language: Schema.optionalKey(Schema.String),
 							speakers: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
 							prompt: Schema.optionalKey(Schema.String)
 						}),
 						given ?? {},
-						'convert.ingest takes { for?, password?, diarize?, language?, speakers?, prompt? }'
+						'convert.ingest takes { for?, password?, entry?, diarize?, language?, speakers?, prompt? }'
 					);
 					if (ports.convert.ingest === undefined)
 						return yield* Port.unavailable('convert.ingest', 'the host provides no ingest');

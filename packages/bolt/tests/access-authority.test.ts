@@ -1,4 +1,7 @@
 import { Effect } from 'effect';
+import { TestClock } from 'effect/testing';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { SESSION_MEMO_MS } from '../src/engine/identity/session.ts';
 import { describe, expect, it } from '@effect/vitest';
 import {
 	admitMove,
@@ -8,6 +11,7 @@ import {
 	historyArms,
 	readPredicates,
 	viewOutput,
+	writePredicates,
 	type Holder
 } from '../src/engine/access/authority.ts';
 import {
@@ -108,6 +112,16 @@ const m: EngineManifest = {
 						verdict: true,
 						moves: { status: ['draft->submitted'] }
 					}
+				}
+			}
+		},
+		// a device reading only a named output, writing through it
+		counter: {
+			description: '',
+			grants: {
+				orders: {
+					outputs: { summary: { scopes: { orders: { region: { eq: 'south' } } } } },
+					update: { columns: { orders: ['note'] } }
 				}
 			}
 		},
@@ -297,6 +311,17 @@ describe('engine/access: Authority', () => {
 		expect(required(admin.models.sys_user).update).toHaveLength(0); // identity is written by admin verbs only (38c)
 	});
 
+	it("update reaches its own policy's default scope, else that policy's named outputs; never another policy's", () => {
+		const scope = (policies: string[]) =>
+			(writePredicates(auth(policies), 'orders', 'update') ?? []).map((p) => JSON.stringify(p));
+		const south = JSON.stringify(required(combined_scope(auth(['clerk']), 'orders', 'summary')));
+		const north = JSON.stringify(required(combined_scope(auth(['rep']), 'orders')));
+		expect(scope(['rep', 'clerk'])).toEqual([north]);
+		expect(scope(['counter'])).toEqual([south]);
+		expect(scope(['counter', 'auditor'])).toEqual([south]);
+		expect(scope(['auditor'])).toEqual([]);
+	});
+
 	it('moves: only listed edges; `all` and admins every declared one', () => {
 		expect(admitMove(auth(['rep']), 'orders', 'status', 'draft', 'submitted')).toBe(true);
 		expect(admitMove(auth(['rep']), 'orders', 'status', 'submitted', 'ordered')).toBe(false);
@@ -456,6 +481,32 @@ describe('engine/access: Authority', () => {
 			expect(yield* as.compile(h, 'x')).toBe(x);
 			expect(yield* as.compile(h, 'y')).not.toBe(x);
 			expect((yield* as.visitor('careers', 'v1')).policies).toEqual(['auditor']);
+		})
+	);
+});
+
+describe('engine/identity: remembered member rows', () => {
+	it.effect('a remembered row is read again once the session memo passes', () =>
+		Effect.gen(function* () {
+			let reads = 0;
+			const db = TenantDb.typed({
+				read: () =>
+					Effect.sync(() => {
+						reads++;
+						const user = { id: 'u1', email: null, phone: null, kind: 'staff', active: true, admin: false,
+							team: null, party: null, signup: false, revision: 1 };
+						return [{ rows: [user], affected: 0 }];
+					}),
+				write: () => Effect.succeed({ rows: [], affected: 0 }),
+				transaction: () => Effect.die(new Error('unused'))
+			});
+			const as = new Authorities(m, 'r1', { remember: true });
+			yield* as.member(db, 'bootstrap', 'u1');
+			yield* as.member(db, 'bootstrap', 'u1');
+			expect(reads).toBe(1);
+			yield* TestClock.adjust(SESSION_MEMO_MS);
+			yield* as.member(db, 'bootstrap', 'u1');
+			expect(reads).toBe(2);
 		})
 	);
 });

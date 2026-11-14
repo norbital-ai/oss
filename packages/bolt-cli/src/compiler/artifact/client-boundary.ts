@@ -16,6 +16,14 @@ const CLIENT_ROLES: ReadonlySet<Discovered['role']> = new Set([
 	'locale'
 ]);
 
+/** The `@norbital-ai/bolt` entries workspace code resolves: the root, /errors and /page; the host entries do not resolve. */
+const WORKSPACE_ENTRIES = new Set(['@norbital-ai/bolt', '@norbital-ai/bolt/errors', '@norbital-ai/bolt/page']);
+/** Throws on a host-only `@norbital-ai/bolt/*` entry, so a workspace import of it fails to resolve in every bundle. */
+export const workspaceEntry = (id: string): void => {
+	if (id.startsWith('@norbital-ai/bolt/') && !WORKSPACE_ENTRIES.has(id))
+		throw new Error(`'${id}' is no workspace entry: workspace code imports @norbital-ai/bolt, /errors and /page`);
+};
+
 /** Vite queries describe how to load a file; they never grant access to the file's source. */
 const modulePath = (id: string, importer?: string): string | undefined => {
 	if (id.includes('\0')) return undefined;
@@ -105,6 +113,7 @@ export const clientImportBoundary = (
 		enforce: 'pre',
 		// repository-health:allow EFF3 -- Vite resolves and loads through its Promise plugin ABI.
 		async resolveId(id, importer, options) {
+			workspaceEntry(id);
 			await guard(id, importer);
 			const entry = platform.get(id);
 			if (entry !== undefined) return { id: entry, external: true };

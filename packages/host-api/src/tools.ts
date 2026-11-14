@@ -2,7 +2,7 @@
 // author's working source and the workspace events it hears.
 import { Schema } from 'effect';
 import type { Actor, AgentMark } from './authority.ts';
-import type { Downloaded } from './facilities.ts';
+import type { Downloaded, HttpResponse } from './facilities.ts';
 import type { Json } from '@norbital-ai/store';
 
 /**
@@ -39,6 +39,8 @@ export type HostToolContext = {
 	agent?: AgentMark;
 	turn: string;
 	call_id: string;
+	/** The agent's job id for this call (its `[job <id> …]` lines); absent outside a turn (an automation's inference). */
+	job?: string;
 	/** The person's latest message, when the turn has one (a search host ranks by it). */
 	question?: string;
 	/** An image the model sees on its next step (a screenshot). */
@@ -47,6 +49,18 @@ export type HostToolContext = {
 	keep?(file: Downloaded): void;
 	/** The conversation files the call named in `files`, by name, for a `files` tool. */
 	files?: readonly (readonly [name: string, bytes: Uint8Array])[];
+	/**
+	 * One request through the actor's active connection of `integration` (their own, else the workspace's when its
+	 * definition lends it (`http.lend`) or the actor is an administrator): `path` under
+	 * its definition's base URL, refused outside its `allow`, signed host-side and fetched under the public-network policy
+	 * (redirects followed, a cross-origin hop unsigned; the body at most `max_bytes`). `undefined` when nothing is
+	 * connected. The tool never holds the credential.
+	 */
+	request?(
+		integration: string,
+		request: { readonly method: string; readonly path: string; readonly max_bytes: number },
+		signal: AbortSignal
+	): Promise<HttpResponse | undefined>;
 };
 /**
  * A host capability (`capabilities.tools`): offered to staff members in the app only; `read_only` ones also while planning.
@@ -64,8 +78,15 @@ export type HostTool = {
 	studio?: StudioRole;
 	/** A call's wall when it is past the usual host call's. */
 	wall_ms?: number;
+	/**
+	 * The host carries the call on past its generation and reports its end itself (`ActiveWorkspace.notify` with the
+	 * call's `job` as `id`): a generation closing under it writes no line for it, and holds no record of it.
+	 */
+	reports_end?: true;
 	/** The call's `files: [{ id }]` are read for it, as `run_js`'s are. */
 	files?: true;
+	/** Whether this call waits for the person's confirmation card (it sends, submits or saves); an envoy is refused it. */
+	confirm?(input: Json): boolean;
 
 	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
 };
@@ -76,7 +97,7 @@ export type HostSkill = {
 	readonly files: readonly string[];
 	read(path: string): Promise<Uint8Array>;
 };
-/** A `workspace_search` as the host's ripgrep answers it, its hits in path order. */
+/** A `workspace_grep` as the host's ripgrep answers it, its hits in path order. */
 export type SearchRequest = {
 	readonly pattern: string;
 	readonly path?: string;
@@ -87,7 +108,7 @@ export type SearchRequest = {
 	readonly case_sensitive?: boolean;
 	readonly limit?: number;
 };
-/** A `workspace_search` answer: its hits in path order and whether the limit cut them, or why it failed. */
+/** A `workspace_grep` answer: its hits in path order and whether the limit cut them, or why it failed. */
 export type SearchAnswer =
 	| {
 			readonly hits: readonly {

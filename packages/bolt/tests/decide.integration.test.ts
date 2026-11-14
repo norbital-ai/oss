@@ -165,7 +165,13 @@ const ok = (outcome: ActOutcome) => {
 	if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
 	return outcome;
 };
-const desk = (t: Kit) => t.as(t.member(['desk'])).pipe(Effect.map((desk) => desk.authority));
+// one desk member per kit: a file they upload is theirs to file
+const desks = new WeakMap<Kit, ReturnType<Kit['member']>>();
+const desk = (t: Kit) => {
+	const holder = desks.get(t) ?? t.member(['desk']);
+	desks.set(t, holder);
+	return t.as(holder).pipe(Effect.map((desk) => desk.authority));
+};
 const ticket = (t: Kit, route: FixtureRoute, set: Record<string, Json>) =>
 	desk(t).pipe(
 		Effect.flatMap((authority) =>

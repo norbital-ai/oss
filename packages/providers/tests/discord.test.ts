@@ -629,7 +629,7 @@ describe('Discord', () => {
 					'POST',
 					'https://discord.com/api/v10/channels/55/messages',
 					'Bot good',
-					'{"content":"on it"}'
+					'{"content":"on it","flags":4}'
 				],
 				['POST', 'https://discord.com/api/v10/channels/55/typing', 'Bot good', '']
 			]);
@@ -647,7 +647,7 @@ describe('Discord', () => {
 			yield* required(h.link.typing)('@123456789012345678', true); // a person has no channel to type in yet
 			expect(f.calls.map((c) => [c.method, c.url, c.body])).toEqual([
 				['POST', 'https://discord.com/api/v10/users/@me/channels', '{"recipient_id":"123456789012345678"}'],
-				['POST', 'https://discord.com/api/v10/channels/77/messages', '{"content":"Your report"}']
+				['POST', 'https://discord.com/api/v10/channels/77/messages', '{"content":"Your report","flags":4}']
 			]);
 			yield* h.link.close ?? Effect.void;
 		})
@@ -701,6 +701,7 @@ describe('Discord', () => {
 			if (typeof payload !== 'string') throw new Error('The multipart JSON payload is missing.');
 			expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(payload)).toEqual({
 				content: 'the report',
+				flags: 4,
 				attachments: [{ id: 0, filename: 'report.pdf' }]
 			});
 			const part = form.get('files[0]');

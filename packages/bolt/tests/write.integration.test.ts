@@ -18,7 +18,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { type ApprovalHook, type WriteEngine } from '../src/engine/write/act.ts';
 import { executeCommit, type Commit } from '../src/engine/write/commit.ts';
 import { restorer, restore_source, seed } from '../src/engine/write/seed.ts';
-import { aggregate } from '@norbital-ai/store';
+import { aggregate, read } from '@norbital-ai/store';
 import type { GuestShape } from '../src/engine/services.ts';
 import { BoltError, from_store } from '../src/protocol/errors.ts';
 import { bridge_on, open } from './write-p2.fixture.ts';
@@ -33,7 +33,7 @@ import {
 	TODAY,
 	write_arm
 } from './write-fixture.ts';
-import { act_one, type OneAct } from './support/act-one.ts';
+import { act_one, acts_on, type OneAct } from './support/act-one.ts';
 import { with_each } from './support/guest-each.ts';
 
 const required = <A>(value: A | undefined): A => {
@@ -1142,29 +1142,98 @@ it.live(
 );
 
 describe('engine/write: release audit reproductions', () => {
-	it.effect('A1.1: a write that joined a held request asserts the request still holds it at commit', () =>
+	it.effect('F: two acts on disjoint fields of one row both commit; overlapping fields still conflict', () =>
 		Effect.gen(function* () {
-			const id = yield* order('joined');
-			const revision = Number((yield* one(`select revision from orders where id = '${id}'`))['revision']);
-			// planned as a join, but no request holds the row any more (decided between the read and the commit)
-			const failure = yield* Effect.flip(
-				executeCommit(db, manifest, catalog_of(manifest), {
-					key: 'joined',
-					digest: 'd',
-					issuedAt: NOW,
-					now: NOW,
-					today: TODAY,
-					actor: admin.actor,
-					writer: { starter: null, actor: 'test', depth: 0 },
-					writes: [{ model: 'orders', id, op: 'update', set: { note: 'unreviewed' }, revision }],
-					rate: [],
-					runs: [],
-					output: null,
-					joined: true
-				})
+			const id = yield* order('disjoint');
+			const seen = Number((yield* one(`select revision from orders where id = '${id}'`))['revision']);
+			const edit = (set: { note?: string; title?: string }) =>
+				run({ verb: 'update', input: [{ target: id, set }], observed: { [id]: seen } });
+			const [note, title] = yield* Effect.all([edit({ note: 'mine' }), edit({ title: 'theirs' })], {
+				concurrency: 'unbounded'
+			});
+			committed(note.outcome);
+			committed(title.outcome);
+			expect(yield* one(`select note, title, revision from orders where id = '${id}'`)).toEqual({
+				note: 'mine',
+				title: 'theirs',
+				revision: seen + 2
+			});
+			// both observed `seen`: the second to set `note` meets the first's change to it
+			const now = seen + 2;
+			const outcomes = yield* Effect.all(
+				[
+					run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }], observed: { [id]: now } }),
+					run({ verb: 'update', input: [{ target: id, set: { note: 'b', title: 'c' } }], observed: { [id]: now } })
+				],
+				{ concurrency: 'unbounded' }
 			);
-			expect(String(failure)).toMatch(/fingerprint/);
-			expect((yield* one(`select note from orders where id = '${id}'`))['note']).toBeNull();
+			expect(outcomes.map((r) => r.outcome.kind).sort()).toEqual(['committed', 'conflict']);
+		}).pipe(Effect.provide(fixture))
+	);
+
+	it.effect('F: a write whose callback read a field another write has since moved fails as a conflict', () =>
+		Effect.gen(function* () {
+			const orders = required(manifest.exposures['orders']?.update);
+			const reading: EngineManifest = {
+				...manifest,
+				exposures: {
+					...manifest.exposures,
+					orders: { ...required(manifest.exposures['orders']), update: { ...orders, transform: true } }
+				}
+			};
+			// the update's transform reads the orders' notes (a balance), then writes what it was given
+			const guest: GuestShape = with_each({
+				invokeProgram: () =>
+					Effect.die(new Error('This fixture does not execute supplied guest programs.')),
+				invoke: (inv, bridge) =>
+					Effect.gen(function* () {
+						const query = yield* read(catalog_of(reading), 'orders', { all: true, select: { note: true } }).pipe(
+							Effect.mapError(from_store)
+						);
+						const [answer] = yield* bridge.cross([{ _tag: 'read', read: query }]);
+						if (answer?.ok !== true) return yield* BoltError.make('bad_answer', 'guest', 'The read failed.');
+						const outcome: GuestOutcome = { kind: 'ok', output: callbackRows(inv) };
+						return outcome;
+					}).pipe(Effect.orDie)
+			});
+			const engine = { manifest: reading, guest, bridge: bridge_on(db, reading) };
+			const id = yield* order('read');
+			const seen = Number((yield* one(`select revision from orders where id = '${id}'`))['revision']);
+			committed((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'moved' } }] })).outcome);
+			const late = yield* run(
+				{ verb: 'update', input: [{ target: id, set: { title: 'late' } }], observed: { [id]: seen } },
+				engine
+			);
+			expect(late.outcome).toEqual({ kind: 'conflict', records: [{ model: 'orders', id }] });
+			// a sibling act's callback reading the table counts too: here only the create reads, the stale update does not
+			const create = required(manifest.exposures['orders']?.create);
+			const sibling: EngineManifest = {
+				...manifest,
+				exposures: {
+					...manifest.exposures,
+					orders: { ...required(manifest.exposures['orders']), create: { ...create, transform: true } }
+				}
+			};
+			const batch = yield* acts_on({ manifest: sibling, db, guest, bridge: bridge_on(db, sibling) })({
+				from: 'Client',
+				name: 'orders.batch',
+				key: 'sibling-read',
+				issuedAt: NOW,
+				authority: admin,
+				bindings: { now: NOW, today: TODAY, tz: 'UTC' },
+				invocationId: 'inv-sibling-read',
+				acts: [
+					{ model: 'orders', verb: 'create', input: [{ title: 'receipt' }] },
+					{ model: 'orders', verb: 'update', input: [{ target: id, set: { title: 'late' } }], observed: { [id]: seen } }
+				]
+			});
+			expect(batch.outcome).toEqual({ kind: 'conflict', records: [{ model: 'orders', id }] });
+			expect((yield* one(`select title from orders where id = '${id}'`))['title']).toBe('read');
+			// neither reading nor setting the moved field, the same update commits
+			committed(
+				(yield* run({ verb: 'update', input: [{ target: id, set: { title: 'late' } }], observed: { [id]: seen } }))
+					.outcome
+			);
 		}).pipe(Effect.provide(fixture))
 	);
 

@@ -22,6 +22,7 @@ import {
 } from '@norbital-ai/host-api';
 import type { ActOutcome } from '../engine/contracts.ts';
 import { AgentSettings } from '../engine/agent/settings.ts';
+import { Retention } from '../engine/runs/retention.ts';
 import { FileRef as ConversationFile } from '../engine/agent/schema.ts';
 import type { InboxRequest } from '../engine/approvals/inbox.ts';
 import { Snapshot as ApprovalSnapshot } from '../engine/approvals/snapshot.ts';
@@ -371,7 +372,8 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 	),
 	signup: Schema.NullOr(
 		Schema.Struct({ via: Schema.Array(Schema.Literals(['email', 'phone'])), open: Schema.Boolean })
-	)
+	),
+	retention: Retention
 });
 export const SignInMethodsAnswer: Schema.Decoder<SignInMethods> = Schema.Struct({
 	email: Schema.Boolean,

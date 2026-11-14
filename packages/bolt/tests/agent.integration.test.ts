@@ -45,7 +45,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Ai, Convert, Files, Mcp, RunUnits } from '../src/engine/ports.ts';
 import type { AiEvent } from '@norbital-ai/host-api';
 import { open_ai_chat } from '../src/engine/agent/openai-chat.ts';
-import { mcp_port } from '@norbital-ai/host-api/node';
+import { loopback_mcp_port } from '@norbital-ai/host-api/node';
 import { Agents, Live, RunHandlers } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { announce } from '../src/engine/notifications/notify.ts';
@@ -336,7 +336,7 @@ it.live('SDK close aborts an already-running MCP request without a second drain 
 			const { hq } = yield* shared;
 			const scope = yield* Scope.make();
 			yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
-			const mcp = Mcp.fromAbi(yield* mcp_port);
+			const mcp = Mcp.fromAbi(yield* loopback_mcp_port);
 			const sessions = yield* mcpSessions(manifest, {
 				secret: (name) => Effect.succeed(name === 'HQ_URL' ? hq.url : 's3cret')
 			}).pipe(Scope.provide(scope), Effect.provide(mcp));
@@ -553,6 +553,37 @@ describe('in-app turns', () => {
 					expect(yield* invitations).toHaveLength(1);
 				})
 			)
+	);
+	it.live('connect holds a pairing card and resumes the turn once the connection is connected', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { agent, user, authority, t } = yield* setup([
+					use('connect', { integration: 'github', owner: 'workspace', name: 'Org GitHub' }),
+					say('GitHub is connected.')
+				]);
+				const ann = yield* user('connect-admin', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Read our private repository' });
+				yield* agent.drain(c);
+				const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+				if (held === undefined || held.meta?.tag !== 'confirm') throw new Error('Expected a connect card');
+				const input = Schema.decodeUnknownSync(Schema.Struct({ instance: Schema.String, integration: Schema.Literal('github') }))(
+					held.meta.call.input
+				);
+				// the host pairs it (the person's credential goes to the sealed store, never here)
+				yield* t.db.write({
+					text: `UPDATE sys_integration SET status = '{"state":"connected"}'::jsonb WHERE id = $1`,
+					params: [input.instance]
+				});
+				yield* agent.confirm(held.id, true, yield* authority(ann));
+				const rows = yield* agent.transcript(c);
+				expect(rows.find((row) => row.id === held.id)?.content).toMatchObject({
+					result: { instance: input.instance, integration: 'github', owner: 'workspace', state: 'connected' }
+				});
+				expect(rows.at(-1)).toMatchObject({ role: 'assistant', text: 'GitHub is connected.' });
+				expect(JSON.stringify(rows)).not.toMatch(/"(credential|token)"/);
+			})
+		)
 	);
 	it.live(
 		'host approvals expire once at the next turn and disappear from the live transcript',
@@ -969,12 +1000,80 @@ describe('in-app turns', () => {
 			)
 	);
 
+	it.live('task runs a sub-agent in the background; its report wakes the idle parent, which reads what it wrote', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const gate = yield* Deferred.make<void>();
+				const texts = (request: AiRequest) =>
+					request.messages.flatMap((message) => (typeof message.content === 'string' ? [message.content] : []));
+				// one script for both: the sub-agent has no `task`, and waits on the gate until the parent's turn ended
+				const route: Step = (request) => {
+					const seen = JSON.stringify(request.messages);
+					if (!toolNames(request).includes('task'))
+						return seen.includes('Task lamp')
+							? request.messages.some((message) => message.role === 'tool')
+								? say('Created the Task lamp quote.')(request)
+								: Stream.unwrap(
+										Deferred.await(gate).pipe(
+											Effect.as(use('act', { callable: 'quotes.create', input: [{ title: 'Task lamp' }] })(request))
+										)
+									)
+							: say('Unexpected.')(request);
+					const report = texts(request).map((text) => /<task id="([^"]+)" state="completed">/.exec(text)).find((m) => m !== null);
+					if (report === undefined)
+						return seen.includes('Background task started')
+							? say('Launched.')(request)
+							: use('task', {
+									description: 'Make a lamp quote',
+									prompt: 'Create a quote titled Task lamp.',
+									subagent_type: 'general'
+								})(request);
+					return seen.includes('"writes"')
+						? say('The lamp quote exists.')(request)
+						: use('task_read', { task_id: required(report[1]) })(request);
+				};
+				const fixture = yield* setup(Array.from({ length: 8 }, () => route));
+				const { t, ai, agent, user } = fixture;
+				const { ann, c, task } = yield* Effect.gen(function* () {
+					const ann = yield* user('ann', { team: 'rep' });
+					const c = yield* agent.start({ owner: ann });
+					yield* agent.post({ conversation: c, as: { member: ann }, text: 'Have a sub-agent make a lamp quote' });
+					// the parent's turn ends while its task still works
+					expect((yield* agent.drain(c)).reply?.text).toBe('Launched.');
+					const started = (yield* agent.transcript(c)).find((r) => r.role === 'tool');
+					const result = started?.content.result;
+					const task = typeof result === 'string' ? /^<task id="([^"]+)" state="running">/.exec(result)?.[1] : undefined;
+					expect(task).toBeDefined();
+					expect((yield* agent.conversation(required(task))).status).toBe('running');
+					return { ann, c, task: required(task) };
+				}).pipe(Effect.provide(fixture.context));
+				yield* Deferred.succeed(gate, undefined);
+				// its report wakes the idle parent, which reads the task and answers
+				while (!(yield* agent.transcript(c)).some((r) => r.text === 'The lamp quote exists.')) yield* Effect.sleep('10 millis');
+				yield* Effect.gen(function* () {
+					expect(yield* quotes(t, 'Task lamp')).toEqual([{ title: 'Task lamp', created_by: ann }]);
+					expect((yield* agent.transcript(c)).find((r) => r.meta?.tag === 'report')).toMatchObject({
+						role: 'user',
+						text: `<task id="${task}" state="completed">\n<summary>Background task completed: Make a lamp quote</summary>\n<task_result>\nCreated the Task lamp quote.\n</task_result>\n</task>`
+					});
+					expect(toolResults(required(ai.requests.at(-1))).at(-1)).toMatchObject({
+						status: 'idle',
+						records: [{ outcome: 'committed', callable: 'quotes.create' }],
+						writes: [{ model: 'quotes', verb: 'create', fields: '{"title":"Task lamp"}' }],
+						source: []
+					});
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+
 	it.live(
-		"lists only the MCP servers the actor's capabilities name, every skill to everyone, and calls the MCP tool",
+		"lists only the MCP servers the actor's capabilities name, every skill to everyone, and calls the MCP tool once the person approves it",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
+						use('hq__echo', { text: 'hi' }),
 						use('hq__echo', { text: 'hi' }),
 						say('HQ said hi.'),
 						say('Nothing to add.')
@@ -987,24 +1086,31 @@ describe('in-app turns', () => {
 						yield* agent.post({ conversation: c, as: { member: ann }, text: 'ask hq' });
 						yield* agent.drain(c);
 						expect(toolNames(ai.requests[0])).toEqual(
-							expect.arrayContaining(['read', 'act', 'skill', 'run_tool', 'subagent', 'hq__echo'])
+							expect.arrayContaining(['read', 'act', 'skill', 'run_tool', 'task', 'task_read', 'task_stop', 'hq__echo'])
 						);
 						const listed = toolNames;
 						// an unreachable server is unavailable, never a failed turn
 						expect(listed(ai.requests[0]).some((name) => name.startsWith('down__'))).toBe(false);
-						expect(toolResults(required(ai.requests[1]))[0]).toMatchObject({
+						// an MCP call holds for the person's card; nothing reaches the server before they approve
+						const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+						if (held === undefined) throw new Error('Expected an MCP confirmation card');
+						expect(hq.calls).not.toContainEqual({ name: 'echo', arguments: { text: 'hi' } });
+						yield* agent.confirm(held.id, true, yield* authority(ann));
+						// the approval runs the agent's same call once
+						expect(toolResults(required(ai.requests[2])).at(-1)).toMatchObject({
 							content: [{ type: 'text', text: 'echo: hi' }]
 						});
-						expect(hq.calls).toContainEqual({ name: 'echo', arguments: { text: 'hi' } });
+						const echo = JSON.stringify({ name: 'echo', arguments: { text: 'hi' } });
+						expect(hq.calls.filter((call) => JSON.stringify(call) === echo)).toHaveLength(1);
 						const d = yield* agent.start({ owner: bob });
 						yield* agent.post({ conversation: d, as: { member: bob }, text: 'anything?' });
 						yield* agent.drain(d);
-						const names = toolNames(ai.requests[2]);
+						const names = toolNames(ai.requests[3]);
 						// a skill is procedure, not authority: every actor may load every workspace skill
 						expect(names).toContain('skill');
-						expect(catalogueNotes(ai.requests[2]).join('\n')).toContain('- pricing — ');
-						expect(ai.requests[2]?.system).not.toContain('pricing');
-						expect(listed(ai.requests[2]).some((name) => name.startsWith('hq__'))).toBe(false);
+						expect(catalogueNotes(ai.requests[3]).join('\n')).toContain('- pricing — ');
+						expect(ai.requests[3]?.system).not.toContain('pricing');
+						expect(listed(ai.requests[3]).some((name) => name.startsWith('hq__'))).toBe(false);
 						expect(listed(ai.requests[0])).toContain('hq__echo');
 						expect({ mcp: mcpServers(manifest, yield* authority(ann)) }).toMatchObject({
 							mcp: [{ name: 'hq' }]
@@ -1626,11 +1732,15 @@ describe('an agent-started automation run is a job', () => {
 				use('act', { callable: 'automation.quotes_tally', input: { title: 'Desk', fail } }),
 				say('Started the tally.')
 			]);
-			const { agent, user, ai } = fixture;
+			const { agent, user, ai, authority } = fixture;
 			const root = yield* user('root', { admin: true });
 			const c = yield* agent.start({ owner: root });
 			yield* agent.post({ conversation: c, as: { member: root }, text: 'Tally the desk quotes.' });
-			const { reply } = yield* agent.drain(c);
+			// the agent never starts an automation unconfirmed: the turn stops at the person's card
+			yield* agent.drain(c);
+			const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+			if (held === undefined) throw new KitInvalid({ message: 'Expected the start to wait for confirmation' });
+			const { reply } = yield* agent.confirm(held.id, true, yield* authority(root));
 			expect(reply?.text).toBe('Started the tally.');
 			const answer = toolResults(required(ai.requests[1]))[0];
 			expect(answer).toMatchObject({
@@ -1689,128 +1799,6 @@ describe('an agent-started automation run is a job', () => {
 			})
 		)
 	);
-	it.live('its end during the turn steers the next step with one line', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				let open = () => {};
-				const gate = new Promise<void>((resolve) => (open = resolve));
-				// the second step answers once the run has ended, so the third step's input carries its line
-				const held: Step = (request) =>
-					Stream.unwrap(
-						Effect.promise(() => gate).pipe(
-							Effect.as(
-								use('read', { request: { quotes: { where: { title: { eq: 'Lamp' } } } } })(request)
-							)
-						)
-					);
-				const fixture = yield* setup([
-					use('act', { callable: 'automation.quotes_tally', input: { title: 'Lamp' } }),
-					held,
-					say('Lamp tallied.')
-				]);
-				return yield* Effect.gen(function* () {
-					const { t, ai, agent, user } = fixture;
-					const root = yield* user('root', { admin: true });
-					const c = yield* agent.start({ owner: root });
-					yield* agent.post({ conversation: c, as: { member: root }, text: 'Tally the lamps.' });
-					const turn = yield* Effect.forkChild(agent.drain(c));
-					const queued = t.db.rows(Schema.Struct({ id: Schema.String }), {
-						text: `SELECT id FROM sys_run WHERE automation = 'quotes_tally' AND input->>'title' = 'Lamp'`,
-						params: []
-					});
-					let rows = yield* queued;
-					for (let i = 0; rows.length === 0 && i < 20_000; i++) {
-						yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)));
-						rows = yield* queued;
-					}
-					t.clock.set(new Date().toISOString());
-					yield* t.run_due();
-					open();
-					expect((yield* Fiber.join(turn)).reply?.text).toBe('Lamp tallied.');
-					const { job } = Schema.decodeUnknownSync(Schema.Struct({ job: Schema.String }))(
-						toolResults(required(ai.requests[1]))[0]
-					);
-					expect(ai.requests.map(notes)).toEqual([
-						[],
-						[],
-						[
-							`[note]\n[job ${job} done] automation quotes_tally run ${required(rows[0]).id} → succeeded: "Lamp"`
-						]
-					]);
-					// the line is the step's transcript note, never also queued to wake the conversation
-					const [line] = required((yield* t.db.read([
-						{
-							text: `SELECT count(*)::int AS n, count(*) FILTER (WHERE state = 'queued')::int AS queued FROM sys_message WHERE conversation = $1 AND text LIKE '[job %'`,
-							params: [c]
-						}
-					]))[0]).rows;
-					expect(line).toEqual({ n: 1, queued: 0 });
-				}).pipe(Effect.provide(fixture.context));
-			})
-		)
-	);
-	it.live('wait collects the job: no line follows', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const waitOnJob: Step = (request) =>
-					answer({
-						content: '',
-						tool_calls: [
-							{
-								id: randomUUID(),
-								name: 'wait',
-								input: {
-									jobs: [
-										Schema.decodeUnknownSync(Schema.Struct({ job: Schema.String }))(
-											toolResults(request).at(-1)
-										).job
-									]
-								}
-							}
-						],
-						finish: 'tool',
-						usage: { input: 10, output: 5 }
-					});
-				const fixture = yield* setup([
-					use('act', { callable: 'automation.quotes_tally', input: { title: 'Chair' } }),
-					waitOnJob,
-					say('Chair tallied.')
-				]);
-				return yield* Effect.gen(function* () {
-					const { t, ai, agent, user } = fixture;
-					const root = yield* user('root', { admin: true });
-					const c = yield* agent.start({ owner: root });
-					yield* agent.post({ conversation: c, as: { member: root }, text: 'Tally the chairs.' });
-					const turn = yield* Effect.forkChild(agent.drain(c));
-					// the run is queued once act answered: run it while the turn waits on its job
-					const queued = t.db.rows(Schema.Struct({ id: Schema.String }), {
-						text: `SELECT id FROM sys_run WHERE automation = 'quotes_tally' AND input->>'title' = 'Chair'`,
-						params: []
-					});
-					let rows = yield* queued;
-					for (let i = 0; rows.length === 0 && i < 20_000; i++) {
-						yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)));
-						rows = yield* queued;
-					}
-					// the act stamped its run at the wall clock; the shared kit's clock started with the file
-					t.clock.set(new Date().toISOString());
-					yield* t.run_due();
-					expect((yield* Fiber.join(turn)).reply?.text).toBe('Chair tallied.');
-					expect(toolResults(required(ai.requests[2])).at(-1)).toMatchObject({
-						settled: { result: { status: 'succeeded', result: 'Chair' } }
-					});
-					expect(ai.requests.flatMap(notes)).toEqual([]);
-					const [queuedNotes] = required((yield* t.db.read([
-						{
-							text: `SELECT count(*)::int AS n FROM sys_message WHERE conversation = $1 AND text LIKE '[job %'`,
-							params: [c]
-						}
-					]))[0]).rows;
-					expect(queuedNotes).toEqual({ n: 0 });
-				}).pipe(Effect.provide(fixture.context));
-			})
-		)
-	);
 });
 // Plan 12's replay of the tender ingest: read_file parses past its inline wall as a job, the turn ends, the job's end wakes
 // the conversation with its steering message once, and the agent reads a window, files the line and reads it back.
@@ -1839,7 +1827,7 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 							use('read_file', { id: file.id }),
 							say('Reading the tender; I file its lines when it is read.'),
 							// the wake-up turn, opened by the job's message
-							use('read_file', { id: 'o1', from: 5, to: 6 }),
+							use('read_file', { id: 'o1', offset: 5, limit: 2 }),
 							use('act', { callable: 'quotes.create', input: [{ title: 'Lot 7 at 12.50' }] }),
 							use('read', {
 								request: { quotes: { where: { title: { eq: 'Lot 7 at 12.50' } } } }
@@ -1896,14 +1884,17 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 						]);
 						// sent exactly once: later steps carry it as history, never a second copy
 						expect(steering(required(ai.requests[5]))).toHaveLength(1);
-						expect(toolResults(required(ai.requests[3])).at(-1)).toMatchObject({
-							lines: [
+						// a window inside the table widens to the whole table
+						expect(toolResults(required(ai.requests[3])).at(-1)).toEqual(
+							[
+								'Read tender.pdf (ingested) (o1), lines 4-7 of 9',
 								'4: <table>',
 								'5: <tr><td>Lot</td><td>Rate</td></tr>',
 								'6: <tr><td>7</td><td>12.50</td></tr>',
-								'7: </table>'
-							]
-						});
+								'7: </table>',
+								'[Output truncated. Continue reading with offset: 8]'
+							].join('\n')
+						);
 						expect(yield* quotes(t, 'Lot 7 at 12.50')).toEqual([
 							{ title: 'Lot 7 at 12.50', created_by: root }
 						]);
@@ -1992,11 +1983,15 @@ describe('a tool answer that stops short says so in itself', () => {
 					say('Three.')
 				]);
 				return yield* Effect.gen(function* () {
-					const { ai, agent, user } = fixture;
+					const { ai, agent, user, authority } = fixture;
 					const root = yield* user('root', { admin: true });
 					const c = yield* agent.start({ owner: root });
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'Paged quotes?' });
 					yield* agent.drain(c);
+					// a multi-row write waits for the person's card
+					const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+					if (held === undefined) throw new Error('Expected the write to wait for confirmation');
+					yield* agent.confirm(held.id, true, yield* authority(root));
 					expect(toolResults(required(ai.requests[2])).at(-1)).toMatchObject({
 						quotes: { total: 3, next: expect.any(String) }
 					});
@@ -2382,6 +2377,138 @@ describe('a conversation keeps its prefix, its steps and its verifier bounded', 
 				});
 				expect(left).toEqual([{ n: 0 }]);
 			}).pipe(Effect.provide(context));
+		}))
+	);
+});
+describe('nothing started in the background ends silently', () => {
+	const jobLines = (agent: Agents['Service'], c: string) =>
+		Effect.map(agent.transcript(c), (rows) => rows.flatMap((r) => (r.role === 'system' && r.text?.startsWith('[job ') ? [r.text] : [])));
+	it.live('a job its host died with is reported once, as died, when the next generation starts', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm([use('slow_check', {}), say('Checking.')]);
+			const { t, agent, user, context } = yield* build(ai, {
+				host_inline_ms: 10,
+				host_tools: [{
+					name: 'slow_check',
+					description: 'Never ends',
+					behavior: {},
+					input: { type: 'object', properties: {}, additionalProperties: false },
+					read_only: true,
+					call: () => new Promise<Json>(() => {})
+				}]
+			});
+			const { c, turn } = yield* Effect.gen(function* () {
+				const ann = yield* user('job-host', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Check it' });
+				return { c, turn: yield* Effect.forkChild(agent.drain(c)) };
+			}).pipe(Effect.provide(context));
+			const open = t.db.value(Schema.Number, {
+				text: `SELECT count(*)::int FROM sys_message WHERE conversation IS NULL AND state = 'job' AND content->>'conversation' = $1`,
+				params: [c]
+			});
+			while ((yield* open) === 0) yield* Effect.sleep('5 millis');
+			// the next generation over the same database starts as if this host had died: its first statement reports the job
+			const next = yield* Layer.build(TestWorkspace.layer({
+				manifest,
+				guest: yield* guest,
+				ports: cassette().layer,
+				now: new Date().toISOString(),
+				db: Layer.succeed(TenantDb, Context.get(context, TenantDb))
+			}));
+			yield* Context.get(next, Agents).conversation(c);
+			while ((yield* jobLines(agent, c)).length === 0) yield* Effect.sleep('5 millis');
+			expect(yield* open).toBe(0);
+			// the old host's own end of the job (its turn cut short) finds it reported and says nothing more
+			yield* Fiber.interrupt(turn);
+			const lines = yield* jobLines(agent, c);
+			expect(lines).toHaveLength(1);
+			expect(lines[0]).toMatch(/^\[job \w+ died\] slow_check: its host stopped before it finished$/);
+		}))
+	);
+	it.live("the host's note reaches the conversation once per id, across repeats", () =>
+		Effect.scoped(Effect.gen(function* () {
+			const fixture = yield* setup([say('Seen.')]);
+			return yield* Effect.gen(function* () {
+				const { agent, user } = fixture;
+				const root = yield* user('notice-root', { admin: true });
+				const c = yield* agent.start({ owner: root });
+				const note = { conversation: c, text: '[job h1 done] studio_build: built', id: 'h1' };
+				expect(yield* agent.notify(note)).toBe(true);
+				expect(yield* agent.notify(note)).toBe(false);
+				expect((yield* agent.transcript(c)).filter((r) => r.text === note.text)).toHaveLength(1);
+				expect(yield* Effect.flip(agent.notify({ ...note, conversation: randomUUID() }))).toMatchObject({ _tag: 'AgentRefusal' });
+			}).pipe(Effect.provide(fixture.context));
+		}))
+	);
+	it.live('a turn whose run loses its third lease while the host runs is released and reported at once', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const fixture = yield* setup([]);
+			return yield* Effect.gen(function* () {
+				const { t, agent, user } = fixture;
+				const root = yield* user('lease-root', { admin: true });
+				const c = yield* agent.start({ owner: root });
+				// the host that claimed the turn died; its run has lost three leases and its lease runs out again
+				yield* t.db.write({
+					text: `WITH c AS (UPDATE sys_conversation SET status = 'running', lease_until = $2::timestamptz - interval '1 minute' WHERE id = $1 RETURNING id)
+						INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, leases, attempts, started_at)
+						VALUES (gen_random_uuid()::text, 'agent.turn', jsonb_build_object('conversation', $1::text), $2::timestamptz, 'schedule', 0, 'running', 3, 3, $2::timestamptz - interval '31 minutes')`,
+					params: [c, t.clock.now()]
+				});
+				const failed = Effect.map(agent.transcript(c), (rows) => rows.filter((r) => r.meta?.tag === 'failed'));
+				yield* t.run_due();
+				// the kit's clock stands still: yield the event loop until the run-end subscriber has written
+				const tick = Effect.promise(() => new Promise<void>((done) => setTimeout(done, 0)));
+				while ((yield* failed).length === 0) yield* tick;
+				yield* t.run_due();
+				for (let i = 0; i < 20; i++) yield* tick;
+				expect(yield* failed).toMatchObject([{ role: 'assistant', text: FIXED.broke, meta: { code: 'gaveUp' } }]);
+				expect((yield* agent.conversation(c)).status).toBe('idle');
+			}).pipe(Effect.provide(fixture.context));
+		}))
+	);
+	it.live('task_stop reaches a sub-agent turn another generation runs: one cancelled report, and it ends at its next step', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const started = yield* Deferred.make<void>(),
+				gate = yield* Deferred.make<void>();
+			const fixture = yield* setup([say('Noted.')]);
+			return yield* Effect.gen(function* () {
+				const { agent, user } = fixture;
+				const root = yield* user('stop-root', { admin: true });
+				const parent = yield* agent.start({ owner: root });
+				const child = yield* agent.start({ owner: root, parent, title: 'Slow work' });
+				yield* agent.post({ conversation: child, as: { member: root }, text: 'Do the slow work' });
+				// another generation over the same database runs the child's turn; its model answers only after the stop
+				const other = cassette([
+					(request) => Stream.unwrap(Deferred.succeed(started, undefined).pipe(
+						Effect.andThen(Deferred.await(gate)),
+						Effect.as(use('read', { request: { quotes: { fields: ['title'] } } })(request))
+					)),
+					say('Should not be asked.')
+				]);
+				const engine = yield* Scope.make();
+				const old = yield* Layer.build(TestWorkspace.layer({
+					manifest,
+					guest: yield* guest,
+					ports: other.layer,
+					now: new Date().toISOString(),
+					db: Layer.succeed(TenantDb, Context.get(fixture.context, TenantDb))
+				})).pipe(Scope.provide(engine));
+				const turn = yield* Effect.forkChild(Context.get(old, Agents).drain(child));
+				yield* Deferred.await(started);
+				yield* agent.stop(child);
+				const reports = Effect.map(agent.transcript(parent), (rows) => rows.filter((r) => r.meta?.tag === 'report'));
+				expect((yield* reports).map((r) => r.text)).toEqual([
+					`<task id="${child}" state="cancelled">\n<summary>Background task cancelled: Slow work</summary>\n<task_result>\n\n</task_result>\n</task>`
+				]);
+				yield* Deferred.succeed(gate, undefined);
+				yield* Fiber.join(turn);
+				expect(other.requests).toHaveLength(1);
+				expect((yield* agent.conversation(child)).status).toBe('stopped');
+				expect(yield* reports).toHaveLength(1);
+				yield* Scope.close(engine, Exit.void);
+			}).pipe(Effect.provide(fixture.context));
 		}))
 	);
 });

@@ -162,7 +162,7 @@ describe('bolt templates', () => {
 				root,
 				'older',
 				{ schemaVersion: 1, key: 'norbital_older', counts: { models: 0 } },
-				'0.0.1'
+				'0.0.0'
 			);
 			const delegated: Array<readonly [string, readonly string[]]> = [];
 			const delegate = (sibling: { slug: string }, args: readonly string[]) =>
@@ -172,7 +172,7 @@ describe('bolt templates', () => {
 				});
 			expect((yield* discoverTemplates(root)).map(({ handle, bolt }) => [handle, bolt])).toEqual([
 				['norbital_fixture', expect.any(String)],
-				['norbital_older', '0.0.1']
+				['norbital_older', '0.0.0']
 			]);
 			yield* checkTemplates(root, 'fixture', delegate);
 			expect(delegated).toEqual([]);
@@ -191,7 +191,7 @@ describe('bolt templates', () => {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
 			const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-template-bunfig-' });
-			yield* template(root, 'older', { key: 'norbital_older' }, '0.0.1');
+			yield* template(root, 'older', { key: 'norbital_older' }, '0.0.0');
 			const delegate = () => Effect.succeed('');
 			const file = path.join(root, 'bunfig.toml');
 			yield* fs.writeFileString(

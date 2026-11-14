@@ -165,24 +165,20 @@ export type StepView = {
 	target: string;
 	code?: { text: string; language: 'javascript' | 'json' | 'plaintext' };
 };
-/** A received sub-agent message, without the engine's routing prefix; unfamiliar text stays intact. */
+/** A received sub-agent message: the report's body, without the engine's `<task>` envelope; unfamiliar text stays intact. */
 export function reportView(row: AgentRow): (StepView & { message: string }) | null {
 	if (row.report === undefined) return null;
 	const text = row.text ?? '';
 	const match =
-		/^Sub-agent "([\s\S]*?)" \(conversation ([^)]*)\) (?:asks you|was stopped|failed|finished): ([\s\S]*)$/.exec(
+		/^<task id="([^"]*)" state="[a-z]+">\n<summary>Background task [^:]*: ([\s\S]*?)<\/summary>\n<task_(?:result|error)>\n([\s\S]*)\n<\/task_(?:result|error)>\n<\/task>$/.exec(
 			text
 		);
-	const parsed = match !== null && match[2] === row.report.conversation;
-	const message = parsed ? (match[3] ?? '') : text;
+	const parsed = match !== null && match[1] === row.report.conversation;
 	return {
 		icon: row.report.asked === true ? 'lucide:message-circle-question' : 'lucide:inbox',
 		verb: row.report.asked === true ? 'Received a question' : 'Received a message',
-		target: parsed ? (match[1]?.split('\n')[0] ?? '') : '',
-		message:
-			parsed && row.report.asked === true
-				? message.replace(/\nAnswer it with subagent_message\.$/, '')
-				: message
+		target: parsed ? (match[2]?.split('\n')[0] ?? '') : '',
+		message: parsed ? (match[3] ?? '') : text
 	};
 }
 type Args = { readonly [k: PropertyKey]: unknown };
@@ -190,8 +186,13 @@ const obj = (v: unknown): Args => (Predicate.isObject(v) && !Arr.isArray(v) ? v 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const toolTarget = (a: Args) =>
 	['query', 'url', 'name', 'id', 'text'].map((key) => str(a[key])).find((value) => value !== '') ?? '';
+/** A read's lines as OpenCode names them: `:10-59` for offset 10 and limit 50, `:10-` from 10 on. */
+const lineRange = (offset: unknown, limit: unknown) =>
+	typeof offset !== 'number' && typeof limit !== 'number'
+		? ''
+		: `:${typeof offset === 'number' ? offset : 1}-${typeof limit === 'number' ? (typeof offset === 'number' ? offset : 1) + limit - 1 : ''}`;
 /** A file's language by its extension: TypeScript, Svelte and JavaScript highlight as JavaScript. */
-const languageOf = (path: string): 'javascript' | 'json' | 'plaintext' =>
+export const languageOf = (path: string): 'javascript' | 'json' | 'plaintext' =>
 	/\.(m?[jt]sx?|svelte)$/.test(path) ? 'javascript' : /\.json$/.test(path) ? 'json' : 'plaintext';
 /** `model.verb` as a person says it: `invoice.update` → "Update invoice", `automation.close` → "Run close". */
 export const callableWords = (callable: string) => {
@@ -278,15 +279,15 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		verb: 'Read workspace types',
 		target: str(a['path']) || str(a['type'])
 	}),
-	workspace_search: (a) => ({
+	workspace_grep: (a) => ({
 		icon: 'lucide:folder-search',
-		verb:
-			a['pattern'] !== undefined || a['path'] === undefined ? 'Searched the source' : 'Read source',
-		target:
-			str(a['pattern']) ||
-			str(a['path']) ||
-			str(a['text']) ||
-			(typeof a['rule'] === 'string' ? a['rule'] : '')
+		verb: 'Searched the source',
+		target: [str(a['pattern']), str(a['path'])].filter((part) => part !== '').join(' in ')
+	}),
+	workspace_glob: (a) => ({
+		icon: 'lucide:folder-search',
+		verb: 'Found source files',
+		target: [str(a['pattern']), str(a['path'])].filter((part) => part !== '').join(' in ')
 	}),
 	workspace_list_dir: (a) => ({
 		icon: 'lucide:folder-tree',
@@ -296,20 +297,15 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	workspace_read: (a) => ({
 		icon: 'lucide:file-code',
 		verb: 'Read source',
-		target: Arr.isArray(a['paths']) ? `${a['paths'].length} files` : str(a['path'])
+		target: `${str(a['path'])}${lineRange(a['offset'], a['limit'])}`
 	}),
-	subagent: (a) => ({
-		icon: 'lucide:bot',
-		verb: 'Started a subagent',
-		target: str(a['task']).split('\n')[0] ?? ''
+	task: (a) => ({
+		icon: a['task_id'] === undefined ? 'lucide:bot' : 'lucide:send',
+		verb: a['task_id'] === undefined ? 'Started a subagent' : 'Sent a message to a subagent',
+		target: str(a['description'])
 	}),
-	subagent_read: () => ({ icon: 'lucide:bot', verb: 'Checked a subagent', target: '' }),
-	subagent_message: (a) => ({
-		icon: 'lucide:send',
-		verb: 'Sent a message to a subagent',
-		target: str(a['text']).split('\n')[0] ?? ''
-	}),
-	subagent_stop: () => ({ icon: 'lucide:circle-stop', verb: 'Stopped a subagent', target: '' }),
+	task_read: () => ({ icon: 'lucide:bot', verb: 'Checked a subagent', target: '' }),
+	task_stop: () => ({ icon: 'lucide:circle-stop', verb: 'Stopped a subagent', target: '' }),
 	wait: () => ({ icon: 'lucide:hourglass', verb: 'Waited for background work', target: '' }),
 	document: (a) => ({
 		icon: 'lucide:file-plus',
@@ -320,24 +316,19 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	workspace_write: (a) => ({
 		icon: 'lucide:file-pen-line',
 		verb: 'Edited the source',
-		target: str(a['path']),
-		code: { text: str(a['content']), language: languageOf(str(a['path'])) }
+		target: str(a['path'])
 	}),
 	workspace_patch: (a) => ({
 		icon: 'lucide:file-pen-line',
 		verb: 'Edited the source',
-		target: [...str(a['patch_text']).matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
+		target: [...str(a['patchText']).matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
 			.map((file) => file[1])
 			.join(', ')
 	}),
 	workspace_edit: (a) => ({
 		icon: 'lucide:file-pen-line',
 		verb: 'Edited the source',
-		target: str(a['path']),
-		code: {
-			text: `// before\n${str(a['old_string'])}\n// after\n${str(a['new_string'])}`,
-			language: languageOf(str(a['path']))
-		}
+		target: str(a['path'])
 	}),
 	workspace_move: (a) =>
 		a['to'] === undefined

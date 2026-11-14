@@ -1,7 +1,7 @@
 // `ctx.convert.document` (optional host capability): Markdown or HTML to a target the workspace declares, over the host's
 // ConvertPort, stored like `files.put`; then the converter client against a local Norbital Convert service.
 import { document_converter, uuidv7 } from '@norbital-ai/host-api';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll } from 'vitest';
@@ -216,12 +216,13 @@ describe('ctx.convert.document', () => {
 // are the service's own.
 describe('document_converter (Norbital Convert)', () => {
 	const seen: unknown[] = [];
+	const dir = mkdtempSync(join(tmpdir(), 'bolt-convert-'));
 	let url = '',
 		stop = async () => {};
 	beforeAll(async () => {
 		const svc = service({
 			keys: ['k'],
-			database: join(mkdtempSync(join(tmpdir(), 'bolt-convert-')), 'jobs.db'),
+			database: join(dir, 'jobs.db'),
 			pollMs: 20,
 			convert: (request, reference) =>
 				Effect.suspend(() => {
@@ -237,7 +238,10 @@ describe('document_converter (Norbital Convert)', () => {
 		url = `http://localhost:${address.port}`;
 		stop = svc.stop;
 	});
-	afterAll(() => stop());
+	afterAll(async () => {
+		await stop();
+		rmSync(dir, { recursive: true, force: true });
+	});
 
 	it.live('serves every target, submitting the job and fetching its bytes once it settles', () =>
 		Effect.scoped(

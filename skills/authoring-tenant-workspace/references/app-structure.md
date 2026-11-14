@@ -104,3 +104,5 @@ Rows are one line; a click opens the record; headers do not sort; each header's 
 ## Charts
 
 Name the decision, scope, units and range first. Use a table, status or total if it answers. Aggregate scoped data; never label a capped page as a total. No decorative or duplicate charts.
+
+`<Chart {ctx} of="<model>" x="<field>" y="…" where={…} />` aggregates every bucket of `x` itself; `y` names measures (`count`, `sum.amount`, `avg.<field>`), never a bare field. Over `bolt.aggregate(...)` or rows, `y` names the flattened bucket keys the same way.

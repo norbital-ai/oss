@@ -182,7 +182,7 @@ layer(PhoneFixtureLive)((it) => {
 					expect(yield* send_code(h, '+6581234567', ip)).toBeNull();
 					expect(texts.at(-1)).toMatchObject({
 						to: '+6581234567',
-						text: expect.stringMatching(/sign-in code is \d{6}/)
+						text: expect.stringMatching(/Norbital code is \d{6}/)
 					});
 					const s = yield* verify_code(h, '+65 8123 4567', lastCode(), ip);
 					expect(s).toMatchObject({ user: expect.any(String) });

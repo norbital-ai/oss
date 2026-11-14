@@ -7,7 +7,7 @@ import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { vector } from '@electric-sql/pglite-pgvector';
 import { Context, Duration, Effect, Layer, Option, Schema, type Scope } from 'effect';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -177,11 +177,18 @@ const pristineFile = async () => {
 	hash.update(JSON.stringify([INITDB, TEMPLATES]));
 	return join(tmpdir(), 'norbital-pglite', `${hash.digest('hex')}.tar`);
 };
-// The machine's dump, else initdb once and keep it (written whole, then renamed, so no process reads half of one).
+/** A dump no process has read for this long belongs to a PGlite build no checkout uses any more. */
+const DUMP_IDLE_MILLIS = 7 * 86_400_000;
+// The machine's dump, else initdb once and keep it (written whole, then renamed, so no process reads half of one). A
+// read marks the dump used; a new one removes the dumps idle past `DUMP_IDLE_MILLIS`, so builds that come and go
+// (every relink is another key) do not pile up.
 const dump = Effect.gen(function* () {
 	const file = yield* Effect.tryPromise({ try: pristineFile, catch: db_error });
 	const kept = yield* Effect.tryPromise(() => readFile(file)).pipe(Effect.option);
-	if (Option.isSome(kept)) return new Blob([new Uint8Array(kept.value)]);
+	if (Option.isSome(kept)) {
+		yield* Effect.tryPromise(() => utimes(file, new Date(), new Date())).pipe(Effect.ignore);
+		return new Blob([new Uint8Array(kept.value)]);
+	}
 	const blob = yield* initdb;
 	yield* Effect.tryPromise({
 		try: async () => {
@@ -189,6 +196,13 @@ const dump = Effect.gen(function* () {
 			await mkdir(dirname(file), { recursive: true });
 			await writeFile(temporary, new Uint8Array(await blob.arrayBuffer()));
 			await rename(temporary, file);
+			for (const name of await readdir(dirname(file))) {
+				const other = join(dirname(file), name),
+					// another process may remove it first
+					info = await stat(other).catch(() => undefined);
+				if (other !== file && info !== undefined && Date.now() - info.mtimeMs > DUMP_IDLE_MILLIS)
+					await rm(other, { force: true });
+			}
 		},
 		catch: db_error
 	});

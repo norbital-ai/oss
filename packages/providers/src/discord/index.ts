@@ -416,13 +416,16 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 										nonce: createHash('sha256').update(m.id).digest('hex').slice(0, 25),
 										enforce_nonce: true
 									};
-						let body: Json | FormData = { content: m.text, ...once };
+						// SUPPRESS_EMBEDS: Discord fetches a linked page with no click, so a link could carry data out
+						const flags = 1 << 2;
+						let body: Json | FormData = { content: m.text, flags, ...once };
 						if (files.length > 0) {
 							const form = new FormData();
 							form.set(
 								'payload_json',
 								JSON.stringify({
 									content: m.text,
+									flags,
 									...once,
 									attachments: files.map((file, id) => ({ id, filename: file.name }))
 								})

@@ -70,7 +70,7 @@ import { LINK_DOWN, linkCalls, linkFailure, type LinkCalls } from './abi.ts';
 import { conversational, definitionOf, writeStatus } from './instances.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { Syncs, syncs_of } from '../sync/index.ts';
-import { verifiedWebhook } from './webhook.ts';
+import { cappedBody, Replays, UNSTAMPED, verifiedWebhook } from './webhook.ts';
 
 export const HOOKS = '/hooks/integration/';
 export const webhook_url = (public_url: string, instance: string): string =>
@@ -955,6 +955,7 @@ export const integration_links = (
 					})
 				).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 		};
+		const replays = new Replays();
 		const custom = (instance: string, request: Request) =>
 			Effect.gen(function* () {
 				const found = yield* h.credentials
@@ -972,7 +973,8 @@ export const integration_links = (
 					secret = Predicate.isObject(credential) ? credential[d.webhook.verify.secret] : undefined;
 				if (typeof secret !== 'string' || secret === '') return new Response(null, { status: 401 });
 				const headers = Object.fromEntries(request.headers),
-					body = new Uint8Array(yield* Port.attempt('webhook', () => request.arrayBuffer()));
+					body = yield* Port.attempt('webhook', () => cappedBody(request));
+				if (body === null) return new Response(null, { status: 413 });
 				const now = yield* Clock.currentTimeMillis;
 				const verified = verifiedWebhook(
 					d.webhook.verify.scheme,
@@ -987,10 +989,17 @@ export const integration_links = (
 				);
 				if ('answer' in verified)
 					return new Response(verified.answer.body ?? null, { status: verified.answer.status });
+				// a delivery already answered within the window is a replay: answered, nothing run again
+				const replay = UNSTAMPED.includes(d.webhook.verify.scheme) ? `${instance}:${verified.delivery}` : undefined;
+				if (replay !== undefined && replays.has(replay, now)) return new Response(null, { status: 200 });
+				const answered = (response: Response) => {
+					if (replay !== undefined && response.ok) replays.add(replay, now);
+					return response;
+				};
 				const { authorization: _, ...shown } = headers;
 				// a handler answers each delivery itself; without one, a delivery is a sync's hint
 				if (d.webhook.handle === true)
-					return yield* h.admit(
+					return answered(yield* h.admit(
 						inbound(yield* newId, found.row.integration, { id: instance, configuration: found.row.configuration },
 							d.webhook.policies ?? [], {
 								method: request.method,
@@ -999,7 +1008,7 @@ export const integration_links = (
 								body: verified.body ?? null,
 								text: new TextDecoder().decode(body)
 							})
-					);
+					));
 				if (verified.body === undefined) return new Response(null, { status: 400 });
 				yield* h.admit(
 					Effect.flatMap(Syncs, (syncs) =>
@@ -1012,7 +1021,7 @@ export const integration_links = (
 						})
 					)
 				);
-				return new Response(null, { status: 200 });
+				return answered(new Response(null, { status: 200 }));
 			});
 		const webhook = (instance: string, request: Request) => {
 			const held = live.get(instance);

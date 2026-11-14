@@ -553,6 +553,8 @@ describe('Slack', () => {
 			expect(JSON.parse(call.body)).toEqual({
 				channel: 'C1',
 				text: 'on it',
+				unfurl_links: false,
+				unfurl_media: false,
 				thread_ts: '1790000000.000100'
 			});
 			yield* required(h.link.unpair)();
@@ -570,7 +572,12 @@ describe('Slack', () => {
 			expect(required(opened).url).toBe('https://slack.com/api/conversations.open');
 			expect(JSON.parse(required(opened).body)).toEqual({ users: 'U7' });
 			expect(required(posted).url).toBe('https://slack.com/api/chat.postMessage');
-			expect(JSON.parse(required(posted).body)).toEqual({ channel: 'D9', text: 'Your report' });
+			expect(JSON.parse(required(posted).body)).toEqual({
+				channel: 'D9',
+				text: 'Your report',
+				unfurl_links: false,
+				unfurl_media: false
+			});
 		})
 	);
 });

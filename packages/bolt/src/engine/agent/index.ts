@@ -37,6 +37,7 @@ import {
 	FiberSet,
 	Layer,
 	Option,
+	Predicate,
 	PubSub,
 	Queue,
 	Redacted,
@@ -46,6 +47,7 @@ import {
 	Stream
 } from 'effect';
 import { Secrets } from '../secrets.ts';
+import { credentials, type Credentials } from '../integrations/credentials.ts';
 import {
 	Ai,
 	Bundler,
@@ -148,6 +150,7 @@ import {
 import {
 	catalogue,
 	catalogueNote,
+	connectionFact,
 	JOBS,
 	TEXT_FIRST_BYTES,
 	jobs,
@@ -192,6 +195,8 @@ export type AgentEngine = {
 	http?: Http['Service'] | undefined;
 	/** The host's confined bundler: `run_js` runs a skill's file only where there is one. */
 	bundler?: Bundler['Service'] | undefined;
+	/** The integration instances' sealed credentials: a host tool's request through the actor's connection. */
+	credentials?: Credentials | undefined;
 };
 type DrainOptions = {
 	force?: boolean | undefined;
@@ -242,6 +247,37 @@ export type AgentConfig = AgentPorts & {
 class Unusable extends Schema.TaggedError<Unusable>()('Unusable', { message: Schema.String }) {}
 /** flag costly calls on their observation; the gauge does not stop the turn or change the billed charge. */
 const AI_GAUGE_USD = 5;
+/** An `act` call's writes to records, one per row: the model, the verb, the target's id and the fields it set (clipped). */
+const ActCall = Schema.fromJsonString(Schema.Struct({ callable: Schema.String, input: Schema.optionalKey(Schema.Json) }));
+const ActRow = Schema.Struct({
+	target: Schema.optionalKey(Schema.Struct({ id: Schema.String })),
+	set: Schema.optionalKey(Schema.Json)
+});
+const writesOf = (args: string | undefined) => {
+	const call = Option.getOrUndefined(Schema.decodeUnknownOption(ActCall)(args));
+	const at = call?.callable.lastIndexOf('.') ?? -1;
+	if (call === undefined || at < 0) return [];
+	const model = call.callable.slice(0, at),
+		verb = call.callable.slice(at + 1),
+		input = call.input;
+	if (!['create', 'update', 'delete', 'import'].includes(verb)) return [];
+	const rows =
+		verb === 'import' && Predicate.isObject(input) && !Array.isArray(input) && Array.isArray(input['rows'])
+			? input['rows']
+			: Array.isArray(input)
+				? input
+				: [];
+	return rows.map((row) => {
+		const target = Option.getOrUndefined(Schema.decodeUnknownOption(ActRow)(row));
+		const fields = verb === 'delete' ? undefined : verb === 'update' ? target?.set : row;
+		return {
+			model,
+			verb,
+			...(target?.target === undefined ? {} : { id: target.target.id }),
+			...(fields === undefined ? {} : { fields: clip(fields, 300) })
+		};
+	});
+};
 export const AGENT_LIMITS = {
 	/** Checkpoints in a row with no model step between them: compaction that frees nothing stops here. */
 	compactions: 3,
@@ -339,8 +375,13 @@ export const checkFailing = (answer: Json): number | undefined => {
 };
 /** What a resumed turn is told: its open request, and that a call made before the restart is not run again. */
 export const NUDGE = {
-	resumed: (request: string) =>
-		`Your turn was interrupted and has resumed. The person's request is still open: "${request.length > 2000 ? `${request.slice(0, 2000)}…` : request}".`,
+	/** A request with no words (files only) is named, not quoted as `""`. */
+	resumed: (request: string) => {
+		const said = request.trim();
+		return said === ''
+			? "Your turn was interrupted and has resumed. The person's request is still open: their last message above."
+			: `Your turn was interrupted and has resumed. The person's request is still open: "${said.length > 2000 ? `${said.slice(0, 2000)}…` : said}".`;
+	},
 	replayed: 'Not run: this call was made before the turn resumed and may have taken effect; its outcome is above.',
 	cutTool:
 		'Your last reply was cut off while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.'
@@ -369,6 +410,30 @@ export const FIXED = {
 const PAGE_ANSWER_MS = 5000;
 /** A confirmation card's second answer (a repeat press, another tab): refused, so its call never runs twice. */
 export const ANSWERED = 'This was already answered.';
+/** An approved card of a tool other than `act`: its exact call runs once, when the agent makes it again. */
+const APPROVED = 'The person approved this call: make it again exactly as it was; it runs once.';
+/**
+ * The calls the person approved on a card and the agent has not made since, by `callKey`: each runs once without a
+ * second card, until the person's next message. A `run_tool` card approves the tool it names.
+ */
+export const approvedCalls = (rows: readonly MessageRow[]): Set<string> =>
+	new Set(
+		rows.flatMap((card, at) => {
+			if (card.role !== 'tool' || card.meta?.tag !== 'confirm' || card.state !== null) return [];
+			const result = card.content.result;
+			if (!isObj(result) || result['approved'] !== true) return [];
+			const { name, input } = card.meta.call,
+				args = clip(input, 8000);
+			// spent by the same call made since, or lapsed once the person writes again
+			if (rows.slice(at + 1).some((later) => later.role === 'user' || (later.role === 'tool' && later.content.name === name && later.content.args === args)))
+				return [];
+			return [
+				name === 'run_tool' && isObj(input) && typeof input['name'] === 'string'
+					? callKey(input['name'], input['input'] ?? {})
+					: callKey(name, input)
+			];
+		})
+	);
 /** `modelCall`'s reason when the host binds no AI port. */
 const NO_AI = 'the host provides no ai';
 /** A catalogue note: its meta holds the index it reached and, on the first after a checkpoint, the native MCP tools. */
@@ -491,6 +556,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	const running = yield* FiberMap.make<string, { ran: boolean; reply: MessageRow | null }, EngineError>();
 	/** Sub-agent runs and the parent turns their reports start: detached from any one turn, ended with the service. */
 	const detached = yield* FiberSet.make<unknown, never>();
+	/** Runs a live turn job watches here (`runJob`): their ends reach the agent through it, the rest through `runsEnded`. */
+	const watched = new Set<string>();
 	/** The conversations inside a step: a planned close waits for none, and holds each turn at its next step. */
 	const stepping = makeParking();
 	/** A shared message piece: the rows reach live transcripts as written, with no re-read. */
@@ -714,6 +781,36 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			for (const line of lines) yield* queuedNote(conversation, as, line);
 			yield* FiberSet.run(detached, kick(conversation));
 		}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+	/**
+	 * A running job's durable record (`jobs`' `record`): a `sys_message` in no transcript (its conversation is in its
+	 * content) holding the note a host that dies with it leaves. Its end deletes it, or after its turn makes it that note.
+	 */
+	const JOB_RECORD = `m.conversation IS NULL AND m.state = 'job'`;
+	const openJob = (conversation: string, as: As | null, job: string, label: string) =>
+		db.returning(Schema.Struct({ id: Schema.String }), sql(
+			`INSERT INTO sys_message AS m (id, role, content, text, preview, state, mode, "as", meta)
+			VALUES (gen_random_uuid()::text, 'system', $1::jsonb, $2, $2, 'job', 'agent', $3::jsonb, '{"tag":"note"}'::jsonb) RETURNING id`,
+			j({ conversation }), `[job ${job} died] ${label}: its host stopped before it finished`, j(as)
+		)).pipe(Effect.map(([row]) => row?.id), Effect.tapCause(Effect.logWarning), Effect.orElseSucceed(() => undefined));
+	const closeJob = (conversation: string, record: string, late: string | undefined) =>
+		(late === undefined
+			? db.returning(Schema.Struct({ id: Schema.String }), sql(`DELETE FROM sys_message m WHERE id = $1 AND ${JOB_RECORD} RETURNING id`, record)).pipe(
+					Effect.map((rows) => rows.length > 0)
+				)
+			: changed(sql(
+					`UPDATE sys_message m SET conversation = content->>'conversation', content = jsonb_build_object('text', $2::text), text = $2, preview = $2, state = 'queued'
+					WHERE id = $1 AND ${JOB_RECORD}`, record, late
+				)).pipe(Effect.tap((rows) => rows.length === 0 ? Effect.void : FiberSet.run(detached, kick(conversation))), Effect.as(false))
+		).pipe(Effect.tapCause(Effect.logWarning), Effect.orElseSucceed(() => true));
+	/** A generation's start: each job a dead host left running says so once in its conversation, and wakes it. */
+	const jobsDied = Effect.gen(function* () {
+		const rows = yield* changed(sql(
+			`UPDATE sys_message m SET conversation = content->>'conversation', content = jsonb_build_object('text', text), state = 'queued'
+			WHERE ${JOB_RECORD} AND EXISTS (SELECT 1 FROM sys_conversation c WHERE c.id = m.content->>'conversation')`
+		));
+		yield* db.write(sql(`DELETE FROM sys_message m WHERE ${JOB_RECORD} AND NOT EXISTS (SELECT 1 FROM sys_conversation c WHERE c.id = m.content->>'conversation')`));
+		for (const id of new Set(rows.map((r) => r.conversation))) yield* FiberSet.run(detached, kick(id));
+	}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 	/** The workspace events a conversation has not heard: after its newest event row, else after its first row. */
 	const unheard = (conversation: string) =>
 		Effect.gen(function* () {
@@ -873,7 +970,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		// Jobs that finish after the turn closes queue their report and wake it.
 		const work = yield* jobs({
 			detached,
+			watched,
 			late: (lines) => steer(id, current.as, lines),
+			record: {
+				open: (job, label) => openJob(id, current.as, job, label),
+				close: (record, late) => closeJob(id, record, late)
+			},
 			ended: (answer, behavior) => {
 				if (behavior.progress_check !== true) return;
 				// A red check counts only when it reaches no new low of failures.
@@ -1308,7 +1410,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					yield* finish({ error: "This needs the person's confirmation; hand it back to the delegating agent." });
 				else if ('confirm' in answer) {
 					waiting = true;
-					yield* finish(undefined, { tag: 'confirm', call }, { state: 'confirm', as: sender });
+					yield* finish(undefined, { tag: 'confirm', call: answer.input === undefined ? call : { ...call, input: answer.input } }, { state: 'confirm', as: sender });
 				} else {
 					const result = answer.result;
 					if (failedResult(result)) {
@@ -1405,7 +1507,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			const said = who === undefined || who.role === 'tool' ? null : who.content,
 				tz = typeof said === 'object' ? said?.tz : undefined;
 			const b = yield* config.bindings,
-				ingester = e.convert?.ingest;
+				ingester = e.convert?.ingest,
+				approved = approvedCalls(rows);
 			const ctx: ToolContext = {
 				engine: e,
 				conv,
@@ -1414,6 +1517,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				turn,
 				mode,
 				inApp: inApp(conv),
+				approved: (name, input) => approved.delete(callKey(name, input)),
 				tz,
 				question: who?.text ?? undefined,
 				child: conv.parent !== null,
@@ -1430,7 +1534,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					: {
 							ingest: (
 								file: { sha256: string; name: string; mime: string; key: string; size: number },
-								read: { readonly page?: number; readonly password?: string } = {}
+								read: { readonly page?: number; readonly password?: string; readonly entry?: string } = {}
 							) =>
 								ingester(
 									{ sha256: file.sha256, name: file.name, mime: file.mime, key: file.key },
@@ -1440,7 +1544,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 											: file.size > TEXT_FIRST_BYTES
 												? { pictures: false }
 												: {}),
-										...(read.password === undefined ? {} : { password: read.password })
+										...(read.password === undefined ? {} : { password: read.password }),
+										...(read.entry === undefined ? {} : { entry: read.entry })
 									}
 								).pipe(Port.call('ingest', JOBS.ingestMs))
 						}),
@@ -1452,7 +1557,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				draft: authoring,
 				geocoder: config.geocoder,
 				skills,
-				agents: ['workspace', ...(yield* activeEnvoys(db)).map(({ id }) => id)],
+				agents: ['general', ...(yield* activeEnvoys(db)).map(({ id }) => id)],
 				receipts: current.receipts,
 				audience,
 				zooms: current.zooms,
@@ -1520,70 +1625,73 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				}),
 				heard: queue.heard(id),
 				subagent: {
-					// a sub-agent runs detached: this turn goes on (or ends), and its report arrives as a message here
-					spawn: Effect.fn('Agents.spawnChild')(function* (task, agent, done, format) {
+					// a sub-agent runs detached: this turn goes on (or ends), and its report arrives as a message here;
+					// `task` names one of this conversation's to send it `prompt`, which a running turn takes at its next step
+					task: Effect.fn('Agents.task')(function* ({ description, prompt, agent, task }) {
+						if (task !== undefined) {
+							if (!(yield* ownChild(id, task)))
+								return { error: `Task ${task} is not a child of the current session` };
+							const working = (yield* conversation(task)).status === 'running';
+							yield* post({ conversation: task, as: sender, text: prompt, author: 'delegating agent' });
+							yield* FiberSet.run(detached, kick(task));
+							return { id: task, running: working };
+						}
 						// each child is a full agent loop in this host: cap the fan-out, not only the token spend
 						if ((yield* runningChildren(id)) >= AGENT_LIMITS.subagents)
 							return {
-								error: `At most ${AGENT_LIMITS.subagents} sub-agents work at once; wait for one or stop one first.`
+								error: `At most ${AGENT_LIMITS.subagents} tasks run at once; wait for one to finish first.`
 							};
-						const brief = [
-							task,
-							...(done === undefined ? [] : [`Done when: ${done}`]),
-							...(format === undefined ? [] : [`Return: ${format}`])
-						].join('\n\n');
 						const child = yield* start({
 							parent: id,
 							owner: conv.owner,
-							envoy: agent === null ? conv.envoy : agent === 'workspace' ? null : agent,
+							// general: one like this agent, so an envoy's sub-agent is that envoy
+							envoy: agent === 'general' ? conv.envoy : agent,
 							model: conv.model,
-							title: task.slice(0, 80)
+							title: description.slice(0, 80)
 						}); // no instance: nothing it says is sent
-						yield* post({ conversation: child, as: sender, text: brief, author: 'delegating agent' });
+						yield* post({ conversation: child, as: sender, text: prompt, author: 'delegating agent' });
 						yield* FiberSet.run(detached, drain(child).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore));
-						return {
-							conversation: child,
-							note: 'It works in the background. Its report arrives as a message in this conversation when it finishes or asks you something: carry on, or end your reply, and you are prompted again then.'
-						};
+						return { id: child, running: false };
 					}),
-					// what it did so far: its status, its last messages, the tool calls it made, what it changed
-					read: Effect.fn('Agents.readChild')(function* (child) {
-						if (!(yield* ownChild(id, child))) return { error: 'Not one of your sub-agents.' };
+					// what it did so far: its status, last messages, tool calls, the records it wrote (with the fields) and its source diffs
+					read: Effect.fn('Agents.readTask')(function* (child) {
+						if (!(yield* ownChild(id, child))) return { error: `Task ${child} is not a child of the current session` };
 						const kid = yield* conversation(child);
 						const rows = (yield* transcript(child)).flatMap((r) => {
 							const row = transcriptRow(r, true, false);
 							return row === null ? [] : [row];
 						});
-						const brief = (v: string) => (v.length <= 200 ? v : `${v.slice(0, 199)}…`);
+						const tools = rows.flatMap(({ tool }) => (tool === undefined ? [] : [tool]));
 						return {
 							status: kid.status,
 							messages: rows
 								.filter((r) => (r.role === 'user' || r.role === 'assistant') && !!r.text)
 								.slice(-10)
 								.map((r) => ({ role: r.role, text: r.text, ...(r.asked ? { asked: true } : {}) })),
-							steps: rows
-								.flatMap(({ tool }) => tool === undefined ? [] : [{
+							steps: tools
+								.map((tool) => ({
 									tool: tool.name,
 									...(tool.running ? { running: true } : {}),
 									...(tool.failed ? { failed: true } : {}),
-									...(tool.args === undefined ? {} : { input: brief(tool.args) }),
-									...(tool.result === undefined ? {} : { result: brief(tool.result) })
-								}])
+									...(tool.args === undefined ? {} : { input: clip(tool.args, 200) }),
+									...(tool.result === undefined ? {} : { result: clip(tool.result, 200) })
+								}))
 								.slice(-30),
-							changes: rows.flatMap((r) => r.receipts ?? []),
+							records: rows.flatMap((r) => r.receipts ?? []),
+							writes: tools
+								.flatMap((tool) => (tool.name === 'act' && !tool.failed ? writesOf(tool.args) : []))
+								.slice(-50),
+							source: tools
+								.flatMap((tool) => (tool.failed ? [] : (tool.changes ?? [])))
+								.slice(-20)
+								.map((c) => ({ path: c.path, diff: clip(c.diff, 2000) })),
 							files: rows.flatMap((r) => (r.role === 'tool' ? (r.files ?? []) : []))
 						};
 					}),
-					message: Effect.fn('Agents.messageChild')(function* (child, text) {
-						if (!(yield* ownChild(id, child))) return { error: 'Not one of your sub-agents.' };
-						yield* post({ conversation: child, as: sender, text, author: 'delegating agent' });
-						yield* FiberSet.run(detached, kick(child));
-						return { sent: true, note: 'It carries on; its next report arrives as a message here.' };
-					}),
-					stop: Effect.fn('Agents.stopChild')(function* (child) {
+					stop: Effect.fn('Agents.stopTask')(function* (child) {
 						return (yield* ownChild(id, child))
 							? (yield* api.stop(child), { stopped: true })
-							: { error: 'Not one of your sub-agents.' };
+							: { error: `Task ${child} is not a child of the current session` };
 					}),
 					running: () => runningChildren(id),
 					// a report waiting in this conversation (it is claimed at the next step), or none at the bound
@@ -1995,7 +2103,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				onlyIfMissing: true
 			}
 		);
-		// a stopped sub-agent's turn is interrupted (stop removes it from `running`), yet its parent is still told
+		// a stopped sub-agent's turn is interrupted (stop removes it from `running`); its stopper tells the parent
 		const exit = yield* Fiber.await(fiber);
 		if (Exit.isFailure(exit) || exit.value.ran)
 			yield* reportUp(id, Exit.isSuccess(exit) ? exit.value.reply : null).pipe(
@@ -2038,26 +2146,35 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	/**
 	 * A sub-agent's turn ended (its answer, a question for its parent, a failure or a stop): its report lands in the parent
 	 * conversation as a queued input from the same sender, which a running parent turn claims at its next step and an idle
-	 * parent runs a turn on. The sub-agent runs detached, so the parent can answer the person and finish meanwhile.
+	 * parent runs a turn on. The sub-agent runs detached, so the parent can answer the person and finish meanwhile. A stop
+	 * is reported by whoever stopped the turn (`stopped`), wherever the turn ran; the stopped turn's own end says nothing.
 	 */
 	const reportUp = Effect.fn('Agents.reportUp')(function* (
 		child: string,
-		reply: MessageRow | null
+		reply: MessageRow | null,
+		stopped = false
 	) {
 		const conv = yield* conversation(child);
-		if (conv.parent === null || conv.status === 'running') return;
+		if (conv.parent === null || conv.status === 'running' || (conv.status === 'stopped') !== stopped) return;
 		const task = (yield* transcript(child)).find((r) => r.role === 'user');
 		const asked = reply?.meta?.tag === 'reply' && reply.meta.asked === true;
-		const how = asked
-			? 'asks you'
-			: conv.status === 'stopped'
-				? 'was stopped'
+		// OpenCode's background `task` result; a question and a stop are ours
+		const [state, summary] = stopped
+			? ['cancelled', 'Background task cancelled']
+			: asked
+				? ['question', 'Background task asks you']
 				: reply?.meta?.tag === 'failed'
-					? 'failed'
-					: 'finished';
-		const text =
-			`Sub-agent "${conv.title ?? 'sub-agent'}" (conversation ${child}) ${how}: ${reply?.text ?? '(no reply)'}` +
-			(asked ? '\nAnswer it with subagent_message.' : '');
+					? ['error', 'Background task failed']
+					: ['completed', 'Background task completed'];
+		const tag = state === 'error' ? 'task_error' : 'task_result';
+		const text = [
+			`<task id="${child}" state="${state}">`,
+			`<summary>${summary}: ${conv.title ?? ''}</summary>`,
+			`<${tag}>`,
+			reply?.text ?? '',
+			`</${tag}>`,
+			'</task>'
+		].join('\n');
 		yield* insert({
 			conversation: conv.parent,
 			role: 'user',
@@ -2072,6 +2189,73 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		yield* PubSub.publish(reports, conv.parent);
 		yield* FiberSet.run(detached, kick(conv.parent));
 	});
+	/** Turns that died with their host: each says so, and a sub-agent's parent hears it. */
+	const gaveUp = (conversations: readonly string[]) =>
+		Effect.forEach(
+			conversations,
+			(conversation) =>
+				Effect.gen(function* () {
+					const row = yield* insert({
+						conversation,
+						role: 'assistant',
+						content: { text: FIXED.broke, toolCalls: [] },
+						text: FIXED.broke,
+						meta: { tag: 'failed', code: 'gaveUp' }
+					});
+					yield* reportUp(conversation, row).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+				}),
+			{ discard: true }
+		);
+	/**
+	 * A run an in-app agent started ended where no turn of this process watches it (its watcher died with its host, or
+	 * another generation ran it): one queued note in its conversation, once per run, which wakes it. A failed turn run
+	 * (its third lost lease) whose turn's lease lapsed releases that turn and reports it now, not at the next boot.
+	 */
+	const runsEnded = Effect.fn('Agents.runsEnded')(function* (ids: readonly string[]) {
+		const unwatched = ids.filter((id) => !watched.delete(id));
+		if (unwatched.length === 0) return;
+		const ended = yield* db.rows(
+			Schema.Struct({
+				id: Schema.String,
+				automation: Schema.String,
+				state: Schema.String,
+				error: Schema.NullOr(Schema.String),
+				conversation: Schema.String
+			}),
+			sql(
+				`SELECT r.id::text AS id, r.automation, r.state, r.error->>'message' AS error,
+				coalesce(r.trigger->'agent'->>'conversation', r.input->>'conversation') AS conversation
+				FROM sys_run r WHERE r.id::text IN (SELECT jsonb_array_elements_text($1::jsonb)) AND r.state NOT IN ('queued', 'running', 'waiting')
+				AND ((r.trigger->'agent'->>'conversation' IS NOT NULL
+				AND NOT EXISTS (SELECT 1 FROM sys_message m WHERE m.conversation = r.trigger->'agent'->>'conversation' AND m.meta->>'run' = r.id::text))
+				OR (r.automation = '${TURN_RUN}' AND r.state = 'failed'))`,
+				JSON.stringify(unwatched)
+			)
+		);
+		const turns = ended.filter((run) => run.automation === TURN_RUN);
+		if (turns.length > 0) {
+			const released = yield* convChanged(sql(
+				`UPDATE sys_conversation AS c SET status = 'idle', lease_until = NULL, revision = revision + 1, updated_at = now()
+				WHERE c.status = 'running' AND (c.lease_until IS NULL OR c.lease_until < $2::timestamptz) AND c.id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+				JSON.stringify(turns.map((run) => run.conversation)), (yield* config.bindings).now
+			));
+			yield* gaveUp(released.flatMap((row) => (typeof row['id'] === 'string' ? [row['id']] : [])));
+		}
+		for (const run of ended) {
+			if (run.automation === TURN_RUN) continue;
+			const text = `[run ${run.id} ${run.state}] automation ${run.automation}${run.error === null ? '' : `: ${run.error}`}`;
+			yield* insert({
+				conversation: run.conversation,
+				role: 'system',
+				content: { text },
+				text,
+				state: 'queued',
+				mode: 'agent',
+				meta: { tag: 'note', run: run.id }
+			});
+			yield* FiberSet.run(detached, kick(run.conversation));
+		}
+	});
 	const ownChild = Effect.fn('Agents.ownChild')(function* (parent: string, child: string) {
 		return (yield* maybeConversation(child))?.parent === parent;
 	});
@@ -2082,30 +2266,32 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		kick,
 		queue,
 		ambient,
-		notify: (o: { conversation: string; text: string; as?: As | null | undefined }) =>
-			steer(o.conversation, o.as ?? null, [o.text]),
-		gaveUp: (conversations: readonly string[]) =>
-			Effect.forEach(
-				conversations,
-				(conversation) =>
-					insert({
-						conversation,
-						role: 'assistant',
-						content: { text: FIXED.broke, toolCalls: [] },
-						text: FIXED.broke,
-						meta: { tag: 'failed', code: 'gaveUp' }
-					}),
-				{ discard: true }
-			),
+		notify: Effect.fn('Agents.notify')(function* (o: { conversation: string; text: string; id: string; as?: As | undefined }) {
+			yield* conversation(o.conversation);
+			const chain = new Chain();
+			const [row] = yield* messageStatement(chain, postMessage(chain,
+				{ conversation: o.conversation, role: 'system', content: { text: o.text }, text: o.text, state: 'queued', mode: 'agent', as: o.as ?? null, meta: { tag: 'note', notice: o.id } },
+				`NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = ${chain.p(o.conversation)} AND meta->>'notice' = ${chain.p(o.id)})`));
+			if (row === undefined) return false;
+			yield* FiberSet.run(detached, kick(o.conversation));
+			return true;
+		}),
+		gaveUp,
 		park: stepping.park,
 		drain,
 		conversation,
 		transcript,
 		attachments,
+		// a turn running in any generation reads the stop at its next step; stopping it here tells its parent, once
 		stop: Effect.fn('Agents.stop')(function* (id: string) {
-			yield* setConv(id, `status = 'stopped', lease_until = NULL`);
+			const was = yield* convChanged(sql(
+				`UPDATE sys_conversation AS c SET status = 'stopped', lease_until = NULL, revision = revision + 1, updated_at = now() WHERE id = $1 AND status = 'running'`,
+				id
+			));
+			if (was.length === 0) yield* setConv(id, `status = 'stopped', lease_until = NULL`);
 			yield* cancelQueued(id);
 			yield* FiberMap.remove(running, id);
+			if (was.length > 0) yield* reportUp(id, null, true).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 		}),
 		resume: Effect.fn('Agents.resume')(function* (id: string) {
 			yield* conversation(id);
@@ -2320,12 +2506,17 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				);
 			};
 			const answer = Effect.gen(function* () {
+				// a held `connect` answers the connection's state as it stands, whatever the card claimed
+				if (call.name === 'connect') {
+					const fact = yield* connectionFact(e, call.input);
+					return approve ? fact : { declined: true, ...fact };
+				}
 				let result: Json = { declined: true };
 				if (approve) {
 					const authority = yield* resolve(as);
 					if (authority === null) result = { error: FIXED.stale };
-					else if (call.name !== 'act')
-						return yield* new AgentRefusal({ message: 'only a write awaits confirmation' });
+					// a held tool call (MCP, browser submit, run_js send, a host tool) runs when the agent makes it again
+					else if (call.name !== 'act') result = { approved: true, note: APPROVED };
 					else {
 						const write = yield* Schema.decodeUnknownEffect(WriteInput, CLOSED)(call.input).pipe(
 							Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
@@ -2347,7 +2538,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						// a confirmed start is a job too: no turn holds it, so its end is queued and wakes the conversation
 						result = yield* Effect.scoped(
 							Effect.flatMap(
-								jobs({ detached, late: (lines) => steer(r.conversation, as, lines) }),
+								jobs({ detached, watched, late: (lines) => steer(r.conversation, as, lines) }),
 								(once) => runJob(once, e, authority, write.callable, started)
 							)
 						);
@@ -2416,6 +2607,18 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		})
 	};
 	e.db.owe(resumeSettled);
+	e.db.owe(jobsDied);
+	if (e.runEnds !== undefined) {
+		const ends = yield* PubSub.subscribe(e.runEnds);
+		yield* FiberSet.run(
+			detached,
+			Effect.forever(
+				PubSub.take(ends).pipe(
+					Effect.flatMap((ids) => runsEnded(ids).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore))
+				)
+			)
+		);
+	}
 	return api;
 });
 export type Agents = Effect.Success<ReturnType<typeof agents>>;
@@ -2464,6 +2667,7 @@ export const AgentsLive = Layer.effectContext(
 							.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 				: undefined);
 		const secrets = yield* Secrets;
+		const sealed = yield* credentials(db, secrets);
 		// The MCP server's secret names resolve through the workspace's sealed secrets, not the host process environment.
 		const mcp = host.mcp ?? {
 			secret: (name: string) =>
@@ -2493,6 +2697,7 @@ export const AgentsLive = Layer.effectContext(
 				runEnds,
 				guest,
 				http,
+				credentials: sealed,
 				...Option.match(bundler, { onNone: () => ({}), onSome: (b) => ({ bundler: b }) })
 			},
 			ai,

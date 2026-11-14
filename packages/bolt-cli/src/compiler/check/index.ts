@@ -32,6 +32,7 @@ import { namesIndex, writeNames, writeTypeSetup } from '../names.ts';
 import { seedPack } from '../seed.ts';
 import { prepare_migrations } from '../migrations.ts';
 import { sourceRules } from './source.ts';
+import { workspaceEntry } from '../artifact/client-boundary.ts';
 
 export type Stage =
 	'discover' | 'bundle' | 'evaluate' | 'manifest' | 'names' | 'seed' | 'schema' | 'rules';
@@ -377,6 +378,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 						// repository-health:allow EFF3 -- Vite resolves through its Promise plugin ABI.
 						async resolveId(id, importer) {
 							if (id === ENTRY) return `\0${ENTRY}`;
+							workspaceEntry(id);
 							// `import bytes from './x.wasm?bytes'` is the file's bytes, a server-only asset of the artifact
 							if (id.endsWith(BYTES)) {
 								// repository-health:allow EFF3 -- Vite's resolver returns a Promise.

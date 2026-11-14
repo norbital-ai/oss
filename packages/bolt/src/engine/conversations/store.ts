@@ -38,6 +38,15 @@ export const stableId = (...parts: readonly string[]): string => {
 };
 export const conversationId = (instance: string, thread: string): string =>
 	stableId('conversation', instance, thread);
+/**
+ * A served mailbox keeps one conversation per (mail thread, sender): `<thread>\x1f<sender>`, `?` before a sender its
+ * receiving server did not vouch for, so a stranger replying in a thread, or forging its sender, opens their own.
+ */
+export const SENDER = '\u001f';
+export const senderThread = (thread: string, sender: string, authenticated: boolean): string =>
+	`${providerThread(thread)}${SENDER}${authenticated ? '' : '?'}${sender}`;
+/** The provider's thread of a conversation's, without its sender. */
+export const providerThread = (thread: string): string => thread.split(SENDER)[0] ?? thread;
 export const messageId = (instance: string, provider_id: string): string =>
 	stableId('message', instance, provider_id);
 

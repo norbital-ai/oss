@@ -17,10 +17,12 @@ import {
 } from '../index.ts';
 import {
 	asset_hook,
+	console_hook,
 	digest,
 	module_script,
 	random_stream,
 	type GuestHooks,
+	type GuestSaid,
 	type ImportDeclaration
 } from './guest-hooks.ts';
 
@@ -101,8 +103,6 @@ const cpuSince = (from: NodeJS.CpuUsage) => {
 	return BigInt(used.user + used.system) * 1000n;
 };
 
-/** Console lines one turn carries; the rest are counted. */
-const LINES = 200;
 const failure = (code: 'cpu_budget' | 'interrupted', message: string): HostFailure => ({
 	_tag: 'HostFailure',
 	code,
@@ -125,7 +125,7 @@ type Session = {
 	readonly copy: (value: unknown) => unknown;
 	api: Prelude | undefined;
 	used: bigint;
-	readonly said: { readonly lines: [string, string][]; dropped: number };
+	readonly said: GuestSaid;
 };
 
 /**
@@ -188,7 +188,10 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 			const session = sessions.get(id);
 			const lines = session?.said.lines.splice(0) ?? [],
 				dropped = session?.said.dropped ?? 0;
-			if (session !== undefined) session.said.dropped = 0;
+			if (session !== undefined) {
+				session.said.dropped = 0;
+				session.said.chars = 0;
+			}
 			return { taken, lines, dropped };
 		} catch (error) {
 			// A malformed guest answer ends its session just as a failed native slice does.
@@ -199,12 +202,9 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 	return {
 		open: async (program: GuestProgram, session: GuestSessionOptions, signal: AbortSignal) => {
 			const id = randomUUID(),
-				said: Session['said'] = { lines: [], dropped: 0 };
+				said: GuestSaid = { lines: [], chars: 0, dropped: 0 };
 			const { context, copy, api } = guestContext(session.prelude, [
-				(level, line) => {
-					if (said.lines.length < LINES) said.lines.push([String(level), String(line)]);
-					else said.dropped++;
-				},
+				console_hook(said),
 				random_stream(session.seed),
 				digest,
 				asset_hook(program.assets)

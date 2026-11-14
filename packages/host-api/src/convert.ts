@@ -235,9 +235,11 @@ const ingestJob = (
 				Effect.flatMap(Schema.decodeUnknownEffect(Job)),
 				Effect.mapError(failure)
 			);
-		// a file read from Convert's disk stays there a while: a page of it does not send it all again
+		// a file read from Convert's disk stays there a while: a page, or an archive's listing and entries, does not send it
+		// all again
 		const sha256 =
-			file.sha256 !== undefined && ('page' in options || 'pictures' in options)
+			file.sha256 !== undefined &&
+			('page' in options || 'pictures' in options || 'entry' in options || /\.(zip|tar|tgz|gz)$/i.test(file.name))
 				? file.sha256
 				: undefined;
 		const kept =

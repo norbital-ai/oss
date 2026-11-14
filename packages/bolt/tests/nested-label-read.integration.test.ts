@@ -6,7 +6,6 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { read_catalog } from '../src/engine/access/exposure.ts';
 import { readValue } from '../src/page/read-value.ts';
 import { read_answer } from '../src/protocol/read-answer.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { q_reply, route_fixture } from './support/route-fixture.ts';
 
@@ -56,9 +55,9 @@ layer(TestWorkspace.layer({ manifest, seed }))('nested labels on the page client
 			const t = yield* TestWorkspace;
 			const route = yield* route_fixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
 			const admin = yield* t.as(t.admin);
-			const request = dynamic_read({
+			const request = {
 				loan: { where: { contract: { eq: E } }, fields: ['purpose', 'contract'], contract: { fields: ['title'] } }
-			});
+			};
 			const reply = yield* q_reply(route, admin.authority, { reads: [{ m: 'query', a: [request] }] });
 			const catalog = yield* read_catalog(manifest, admin.authority);
 			const decoded = readValue(() => read_answer(catalog, request), reply.answers[0]);

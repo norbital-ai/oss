@@ -308,7 +308,8 @@ interface SpecSlot<S, K> {
 	readonly value: K extends keyof S ? S[K] : never;
 }
 /** `T` checked against spec `S`: keys `S` lacks become `never`, recursively; a union spec is matched arm by arm. Plain
- * values and arrays of them are left to their spec as is: there is nothing to be exact about. Members recurse through Exact. */
+ * values and arrays of them are left to their spec as is: there is nothing to be exact about. Members recurse through Exact.
+ * A spec arm's required `error` key survives, so a refused shape's type error names its rule. */
 export type Exact<T, S> = ExactResult<T, S>['value'];
 interface ExactResult<T, S> {
 	readonly value: T extends readonly unknown[]
@@ -324,7 +325,8 @@ interface ExactResult<T, S> {
 			: S extends object
 				? S extends readonly unknown[]
 					? S
-					: { [K in keyof T]: Exact<T[K], SpecSlot<S, K>['value']> }
+					: { [K in keyof T]: Exact<T[K], SpecSlot<S, K>['value']> } &
+							(S extends { readonly error: infer E extends string } ? { error: E } : unknown)
 				: S;
 }
 

@@ -12,7 +12,7 @@ import {
 } from '@norbital-ai/host-api';
 import type { Json } from 'effect/Schema';
 import { http_port, public_fetch } from '@norbital-ai/host-api/node';
-import { http_oauth, http_request } from './http.ts';
+import { GITHUB_TOKEN_HINT, github_read_only, github_token, http_oauth, http_request } from './http.ts';
 import {
 	attempt,
 	authorizeUrl,
@@ -115,7 +115,9 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 				: {
 						kind: 'form',
 						steps: [],
-						fields: credentialFields(d),
+						fields: credentialFields(d).map((field) =>
+							field.name === github_read_only(d) ? { ...field, hint: GITHUB_TOKEN_HINT } : field
+						),
 						...(d.webhook === undefined ? {} : { webhook: true })
 					};
 	return {
@@ -176,7 +178,13 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 					}),
 				pair: Effect.fn('HTTP.pair')(function* (input: Json) {
 					if (oauth === undefined) {
-						const value = yield* credentials(definition, input);
+						const value = yield* credentials(definition, input),
+							github = github_read_only(definition);
+						// a read-only GitHub connection pairs only a token that reads
+						if (github !== undefined)
+							yield* github_token(value[github] ?? '', http).pipe(
+								Effect.mapError((error) => new PairingInvalid({ message: error.message }))
+							);
 						yield* hostCall('write HTTP credential', () =>
 							ctx.credentials.write(new Map([['credential', value]]))
 						);

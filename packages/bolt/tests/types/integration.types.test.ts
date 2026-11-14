@@ -32,6 +32,7 @@ expectTypeOf<IntegrationName>().toEqualTypeOf<
 	| 'telegram'
 	| 'slack'
 	| 'discord'
+	| 'github'
 	| 'wechat'
 >();
 // a definition name is no instance

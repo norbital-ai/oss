@@ -8,7 +8,6 @@ import type { Json } from '../src/decl/values.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { dynamic_read } from '../src/protocol/read-request.ts';
 import { ActReply, type Frame } from '../src/protocol/schema.ts';
 import {
 	NativeReadRow,
@@ -355,9 +354,9 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 						expect.objectContaining({ title: 'listed', $approval })
 					]);
 					// the same layer map built at runtime: checked host-side, answered as JSON rows
-					const dynamic = dynamic_read({ orders: { fields: ['title'] } });
+					const dynamic = { orders: { fields: ['title'] } };
 					expect(
-						yield* reader.query(dynamic).pipe(
+						yield* reader.wire_query(dynamic).pipe(
 							Effect.flatMap(Schema.decodeUnknownEffect(OrderPage)),
 							Effect.map(listedRows)
 						)

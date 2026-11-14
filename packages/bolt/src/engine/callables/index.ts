@@ -52,7 +52,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { parse_rate, RateWindows, type Charge } from '../access/rate.ts';
 import { catalog_of } from '../access/pred.ts';
-import { readsAny, viewOutput } from '../access/authority.ts';
+import { grantedArms, readsAny } from '../access/authority.ts';
 
 import * as ir from '../../protocol/reads.ts';
 import { constraintIndex } from '../schema/plan.ts';
@@ -60,9 +60,10 @@ import { coalescing } from '../query/engine.ts';
 import { act, dry_run, transformBridge, type Verb, type WriteEngine } from '../write/act.ts';
 import { checked, compileCommit, executeCommit, compile_outcome_record, CommitAnswer, committed, type Commit, type RateCharge } from '../write/commit.ts';
 import { settleCommit } from '../write/result.ts';
-import { canonical, sha256_hex } from '@norbital-ai/store';
+import { canonical, DEFAULT_OUTPUT, sha256_hex } from '@norbital-ai/store';
 import { Chain, decided, KEY_REUSE, storedOutcome } from '../write/sql.ts';
 import { decodeInput, decodeAutomationInput, type Decoded } from './decode.ts';
+import { writableFile } from '../decision.ts';
 export { parse_callable, decode_acts, VERBS } from './parse.ts';
 
 type Caller = CallerContext & {};
@@ -285,6 +286,20 @@ export const commitActs = (
 					return none({ kind: 'unknown', invocation: r.invocationId }, p.error);
 				}
 				if ('outcome' in p) return p.guest ? yield* record(p.outcome) : none(p.outcome);
+				// a record moved since its writer observed it conflicts when any act here sets a moved field or its
+				// callbacks read the record's table (whichever fields: a read names no field for certain)
+				const stale = rec.commits.flatMap((x) => x.moved ?? []).find(({ model, id, fields }) =>
+					rec.commits.some((x) =>
+						x.reads?.includes(model) === true ||
+						x.commit.writes.some((w) =>
+							w.model === model && w.id === id && (w.op !== 'update' || fields.some((field) => field in w.set))
+						)
+					)
+				);
+				if (stale !== undefined) {
+					const conflict: Outcome = { kind: 'conflict', records: [{ model: stale.model, id: stale.id }] };
+					return rec.guest ? yield* record(conflict) : none(conflict);
+				}
 				const writes = rec.commits.flatMap((plan) =>
 					plan.commit.writes.map((write) => ({
 						...write,
@@ -355,7 +370,6 @@ export const commitActs = (
 					...(writes.length === 0 && unchanged.length > 0 ? { unchanged } : {}),
 					...(restored.length === 0 ? {} : { restored }),
 					...(pieces.length === 0 ? {} : { pieces: (c, rows) => pieces.forEach((piece) => piece(c, rows)) }),
-					...(rec.commits.some((x) => x.commit.joined === true) ? { joined: true as const } : {}),
 					...(approval === undefined ? {} : { approval }),
 					...(resubmits[0] === undefined ? {} : { resubmit: resubmits[0] })
 				};
@@ -502,8 +516,12 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			if (decoded !== undefined && decoded.problems.length > 0)
 				return refused('invalid_input', problems(decoded), decoded.problems[0]?.path);
 			const refs = decoded?.refs ?? [];
+			// a starter granted no `default` output of the model reads no record there to aim at
+			const unread = refs.find((ref) => !r.authority.admin && grantedArms(r.authority, ref.model) === undefined);
+			if (unread !== undefined) return refused('not_found', `No readable ${unread.model} has this id.`, unread.field);
 			if (refs.length > 0) {
-				// an id input names a record the starter reads, in any output it holds (its view output)
+				// an id input names a record in the starter's `default` output scope, the scope its write grants reach;
+				// a wider named output (a public card) never lets a starter aim a run at a record
 				const found = yield* e.read(
 					yield* Effect.forEach(refs, (ref) =>
 						Effect.map(
@@ -515,10 +533,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 								select: { id: true },
 								limit: 1
 							}),
-							(read) => {
-								const output = viewOutput(m, r.authority, ref.model);
-								return read.kind === 'read' && output !== undefined ? { ...read, output } : read;
-							}
+							(read) => (read.kind === 'read' ? { ...read, output: DEFAULT_OUTPUT } : read)
 						)
 					),
 					{ as: 'caller', authority: r.authority },
@@ -532,6 +547,11 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				if (missing !== undefined)
 					return refused('not_found', `No readable ${missing.model} has this id.`, missing.field);
 			}
+			// a file input is the person's own upload for this automation or a file they already read
+			if (r.authority.actor.kind === 'member' || r.authority.actor.kind === 'api_key')
+				for (const file of decoded?.files ?? [])
+					if (!(yield* writableFile({ manifest: m, db: e.db, read: e.read, authority: r.authority, bindings: r.bindings }, file.id, r.automation)))
+						return refused('not_found', 'No file of yours, or that you can read, has this id.', file.field);
 			inputs.push(decoded?.value === undefined ? input : decoded.value);
 		}
 		return inputs;

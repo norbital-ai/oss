@@ -11,11 +11,14 @@ Renders Markdown text for reading.
 	// other attributes (`id`, `data-*`, `aria-*`) reach the rendered block
 	let {
 		value,
+		breaks = false,
 		class: className,
 		...rest
 	}: {
 		/** The Markdown text; raw HTML is escaped and script-capable links neutered. */
 		value: string;
+		/** Each newline is a line break, as a person typed it (a chat message), not a soft wrap. */
+		breaks?: boolean;
 		/** Classes for the rendered block. */
 		class?: string;
 	} & Omit<HTMLAttributes<HTMLDivElement>, 'class'> = $props();
@@ -31,5 +34,5 @@ Renders Markdown text for reading.
 	)}
 	data-markdown
 >
-	{@html markdown_html(value)}
+	{@html markdown_html(value, breaks)}
 </div>

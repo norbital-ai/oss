@@ -225,6 +225,9 @@ export function slack(): ProviderDef {
 					const sent = yield* call(Sent, value.botToken, 'chat.postMessage', {
 						channel,
 						text: m.text,
+						// no unfurl: Slack fetches a linked page or image with no click, so a link could carry data out
+						unfurl_links: false,
+						unfurl_media: false,
 						...(thread === undefined ? {} : { thread_ts: thread })
 					});
 					const uploaded: { id: string; title: string }[] = [];

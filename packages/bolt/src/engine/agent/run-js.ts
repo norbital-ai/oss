@@ -59,8 +59,12 @@ const HTTP =
 	"const http = (request) => globalThis[Symbol.for('norbital.bolt.call')]('http', [request]).catch((e) => { throw Object.assign(new Error(e.message), { kind: e.kind }); }); ";
 const TOOL =
 	"const tool = (name, input) => globalThis[Symbol.for('norbital.bolt.call')]('tool', [name, input]).catch((e) => { throw Object.assign(new Error(e.message), { kind: e.kind }); }); ";
-const headOf = (http: boolean, tool: boolean) =>
-	`${http ? HTTP : ''}${tool ? TOOL : ''}export default { run: async (input) => { `;
+/** The shape `input.files` has: the conversation files a call names, in its order. */
+export const FILE_SHAPE = '{ id, name, type, size, bytes: Uint8Array }';
+// the files cross as bytes, never text: a property a file or the list lacks throws, naming the shape
+const FILES = `const fileShape = '${FILE_SHAPE}'; const strict = (target, what) => new Proxy(target, { get(t, k) { if (typeof k === 'string' && !(k in t) && k !== 'toJSON' && k !== 'then') throw new TypeError(\`\${what} has no '\${k}': \${Array.isArray(t) ? \`it is an array of \${t.length} \${fileShape}\` : \`each file is \${fileShape}\`}\`); return t[k]; } }); input.files = strict((await globalThis[Symbol.for('norbital.bolt.call')]('files', [])).map((f, i) => strict(f, \`input.files[\${i}]\`)), 'input.files'); `;
+const headOf = (http: boolean, tool: boolean, files = false) =>
+	`${http ? HTTP : ''}${tool ? TOOL : ''}export default { run: async (input) => { ${files ? FILES : ''}`;
 
 /** `line:column` in the script, from a `guest.mjs` position; `undefined` inside the head (the `http` wrapper). */
 const at = (head: number, line: number, column: number): string | undefined =>
@@ -385,6 +389,8 @@ export type RunJs = {
 	/** Only for a run granted HTTP: the script then has `http`. */
 	readonly http: Http['Service'] | undefined;
 	readonly tool?: Tool | undefined;
+	/** The conversation files the call names: the script reads them as `input.files`, `FILE_SHAPE`, their bytes crossing as bytes. */
+	readonly files?: readonly { readonly id: string; readonly name: string; readonly type: string; readonly bytes: Uint8Array }[];
 	/** The call id: the guest invocation's. */
 	readonly invocation: string;
 	readonly keep: Keep;
@@ -434,14 +440,24 @@ const keepAll = Effect.fn('Agents.runJsKeep')(function* (
  */
 export const runJs = Effect.fn('Agents.runJs')(function* (run: RunJs) {
 	const { said, printed } = printer();
-	const head = headOf(run.http !== undefined, run.tool !== undefined);
+	const files = run.files ?? [];
+	const head = headOf(run.http !== undefined, run.tool !== undefined, files.length > 0);
 	const outcome = yield* execute(
 		run.guest,
 		`${head}${run.code}\n} };`,
 		run.input,
 		run.invocation,
 		said,
-		(member, args) => inlineAnswer(run.http, run.tool, member, args),
+		(member, args) =>
+			member === 'files' && files.length > 0
+				? Effect.succeed({
+						text: JSON.stringify({
+							ok: true,
+							value: files.map((file, i) => ({ id: file.id, name: file.name, type: file.type, size: file.bytes.byteLength, bytes: { $bin: i } }))
+						}),
+						bins: files.map((file) => file.bytes)
+					})
+				: inlineAnswer(run.http, run.tool, member, args),
 		{
 			thrown: (name, message, stack) =>
 				located(`${name}: ${message}`, positionIn(head.length, stack)),

@@ -3,7 +3,6 @@
 // `yield*` them. Pages read through the same `query` (`page/page-bolt.ts`).
 import type { Effect } from 'effect';
 import type { Cursor } from '@norbital-ai/store';
-import type { Value } from '@norbital-ai/store/kind';
 import type { Actor } from './access/actor.ts';
 import type { ApprovalFlow, Verdict } from './access/policy.ts';
 import type { ActConflict, ActRefused, ReadFailed, Refusal } from './errors.ts';
@@ -45,8 +44,7 @@ import type {
 	WritePath
 } from './names.ts';
 import type { StartInput } from './runtime/facilities.ts';
-import type { LayerWhere, ModelWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
-import type { DynamicRead } from '../protocol/read-request.ts';
+import type { LayerWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
 import type {
 	Decimal,
 	IanaZone,
@@ -179,13 +177,12 @@ type LayerAggregate<C, P, O = 'default'> = {
 };
 /**
  * A root layer of `C`: the read `output` it answers (`default` when absent), its filter, fields, order and page, a text
- * or index search, an aggregate, and `as_of`. A workspace read (`Raw`) is unscoped: its `where` names any field and
- * crosses any relation (`ModelWhere`), not only the output's layers.
+ * or index search, an aggregate, and `as_of`. Its `where` names the output's fields and crosses only the layers it declares.
  */
-type RootRequest<C, O = 'default', Raw = false> = {
+type RootRequest<C, O = 'default'> = {
 	/** The model's named read output: its fixed fields and layers. The caller's policies grant it and filter its rows. */
 	output?: OutputName<C>;
-	where?: Raw extends true ? ModelWhere<C> : Where<C, O>;
+	where?: Where<C, O>;
 	fields?: readonly ReadField<C, O>[];
 	order_by?: OrderBy<C, O>;
 	/** 1 to 10,000 (the default). */
@@ -239,9 +236,9 @@ type RequestChildren<C, P extends string, Node, O> = {
 		: never;
 };
 /** Each root and nested relation is checked against its selected output. */
-type RequestSpec<R, Raw> = {
+type RequestSpec<R> = {
 	[C in keyof R]: C extends ReadableName
-		? RootRequest<C, OutputOf<R, C>, Raw> & RequestChildren<C, C, R[C], OutputOf<R, C>>
+		? RootRequest<C, OutputOf<R, C>> & RequestChildren<C, C, R[C], OutputOf<R, C>>
 		: `error: '${C & string}' is no read root`;
 };
 /**
@@ -252,7 +249,7 @@ type RequestSpec<R, Raw> = {
  * at most 4 MiB. Derive several views of one root from one read on the client. A past state is `as_of` on the root; a
  * revision is `history(…, { at: { revision } })`.
  */
-export type ReadRequest<R, Raw = false> = R & NoInfer<Checked<ReadRequestBase, R, Exact<R, RequestSpec<R, Raw>>>>;
+export type ReadRequest<R> = R & NoInfer<Checked<ReadRequestBase, R, Exact<R, RequestSpec<R>>>>;
 type At<R, P> = P extends `${infer Head}.${infer Tail}`
 	? Head extends keyof R ? At<R[Head], Tail> : {}
 	: P extends keyof R ? R[P] : {};
@@ -300,30 +297,6 @@ type RootAnswer<C extends string, R> =
 		: At<R, C> extends { search: object }
 			? Page<RootRow<C, R> & { readonly $distance: number }>
 			: Page<RootRow<C, R>> & { readonly total: number };
-type DynamicReadRow = { readonly id: string; readonly [field: string]: Value };
-type DynamicMeasures = {
-	readonly count?: number;
-	readonly sum?: { readonly [field: string]: Decimal | null };
-	readonly avg?: { readonly [field: string]: Decimal | null };
-	readonly min?: { readonly [field: string]: Value };
-	readonly max?: { readonly [field: string]: Value };
-};
-type DynamicBucketRow = DynamicMeasures & {
-	readonly key: { readonly [field: string]: Value };
-	readonly count: number;
-};
-/**
- * A runtime-built read request's answer (`dynamic_read`): per root, ordinary rows with their total, nearest rows with
- * their distance, an aggregate's measures, or a page of aggregate buckets. Fields keep their decoded rich values;
- * a dynamic request carries no literal field names or result-shape guarantee, so inspect its root before using it.
- */
-export type DynamicAnswer = {
-	readonly [root: string]:
-		| (Page<DynamicReadRow> & { readonly total: number })
-		| Page<DynamicReadRow & { readonly $distance: number }>
-		| DynamicMeasures
-		| Page<DynamicBucketRow>;
-};
 /** A read request's answer: per root, a page of layer rows (or its aggregate), typed from its output's named layers. */
 export type ReadAnswer<R> = {
 	readonly [C in keyof R & string]: RootAnswer<C, R>;
@@ -353,11 +326,6 @@ export interface CallerQuery {
 	 */
 	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R>, ReadFailed>;
 	/**
-	 * The same layer map built at runtime (a rule engine's reads), made by `dynamic_read` (root export):
-	 * checked host-side against the declarations exactly as the literal form is, answered untyped.
-	 */
-	query(request: DynamicRead): Eff<DynamicAnswer, ReadFailed>;
-	/**
 	 * A record's revisions, oldest first, up to an instant, a revision or just before an approval request. Every
 	 * committed write appends one (who, when, cause, changed fields); pruning keeps the newest 256 per record and folds
 	 * the rest into a full-row anchor. Each revision keeps the schema version it was written under and is marked
@@ -370,17 +338,11 @@ export interface CallerQuery {
 	): Eff<readonly Revision[], ReadFailed>;
 }
 /**
- * Reading records as the workspace (policy verdicts, write callbacks and remote sync bodies): the same shapes as
- * `CallerQuery`, answered with every stored row under no grant, so a root's `where` names any field and crosses any
- * relation (`{ balance_id: { is: { employee_id: { in: ids } } } }`), declared as a layer or not. A file sync's body
- * reads as the member importing or exporting instead (`FileSyncCtx`).
+ * Reading records as the workspace (policy verdicts, write callbacks and remote sync bodies): the same typed request as
+ * `CallerQuery`, answered with every stored row under no grant; its `where` still crosses only the layers the output
+ * declares. A file sync's body reads as the member importing or exporting instead (`FileSyncCtx`).
  */
-export interface WorkspaceQuery {
-	/** A read request, as `CallerQuery.query`, its root `where` unscoped. */
-	query<const R extends ReadRequestBase>(request: ReadRequest<R, true>): Eff<ReadAnswer<R>, ReadFailed>;
-	/** The same layer map built at runtime by `dynamic_read`, answered untyped. */
-	query(request: DynamicRead): Eff<DynamicAnswer, ReadFailed>;
-}
+export type WorkspaceQuery = Pick<CallerQuery, 'query'>;
 /**
  * What every server body knows of its moment: who it runs as, the instant, today and the zone (`today_in` another zone).
  * `now` and `today` are fixed for the invocation (a page uses `clock(unit)` instead). Read predicates, grant scopes

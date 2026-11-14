@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/ui",
-	"version": "0.0.44",
+	"version": "0.0.1",
 	"description": "Svelte views, inputs, primitives, layout and design tokens for Bolt workspaces.",
 	"type": "module",
 	"sideEffects": false,
@@ -74,6 +74,7 @@
 		"@codemirror/lang-javascript": "^6.2.5",
 		"@codemirror/lang-json": "^6.0.2",
 		"@codemirror/language": "^6.13.1",
+		"@codemirror/merge": "^6.12.3",
 		"@codemirror/state": "^6.7.6",
 		"@codemirror/view": "^6.43.15",
 		"@fontsource-variable/geist": "^5.3.0",

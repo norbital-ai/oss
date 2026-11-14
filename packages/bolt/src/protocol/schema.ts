@@ -551,7 +551,6 @@ const Conversation = { conversation: Schema.String };
 const Message = { message: Schema.String };
 const ConversationIn = Schema.Struct(Conversation),
 	MessageIn = Schema.Struct(Message);
-const Notify = Schema.Struct({ ...Conversation, text: Schema.String });
 const StartRun = Schema.Struct({ input: Schema.optionalKey(Schema.Json), id: Schema.String });
 /** One run (`id`, `input`) or many (`runs`, a bulk start in one request: one run per record). */
 const Run = Schema.Union([
@@ -644,7 +643,6 @@ export const OwnCall = Schema.Union([
 		)
 	),
 	own('sys_message.post', Post),
-	own('sys_conversation.notify', Notify),
 	own('sys_conversation.respond_now', ConversationIn),
 	own('sys_conversation.stop', ConversationIn),
 	own('sys_conversation.resume', ConversationIn),
@@ -691,10 +689,6 @@ const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = 
 	],
 	'sys_message.post': [
 		[Post, 'sys_message.post takes { conversation, text, attachments?, mode? }']
-	],
-	'sys_conversation.notify': [
-		conversationFirst,
-		[Notify, 'sys_conversation.notify takes { conversation, text }']
 	],
 	'sys_conversation.respond_now': [
 		[ConversationIn, 'sys_conversation.respond_now takes { conversation }']

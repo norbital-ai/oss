@@ -3,8 +3,7 @@
 // then one key per nested relation. Native resolved paths stay within `LAYER_MAX_DEPTH` segments. `decode_read_request` refuses anything but that JSON (an unknown option, a sixth level,
 // `output`/`as_of`/`after` below a root, a function); `plan_read_request` checks the paths against the declarations and
 // groups them by root, implied parents filled in.
-import { Effect, Predicate, Result, Schema } from 'effect';
-import type { Page, ReadAnswer, ReadRequest, ReadRequestBase } from '../decl/ctx.ts';
+import { Predicate, Result, Schema } from 'effect';
 import type { Json } from '../decl/values.ts';
 import { LAYER_MAX_DEPTH, type ExposureSpec } from '../decl/model.ts';
 
@@ -71,7 +70,7 @@ function layersOf(request: Readonly<Record<string, Json>>): Result.Result<ReadLa
 	}
 	return Result.succeed(Object.fromEntries(layers));
 }
-/** Schema of a read request as JSON: an object of model roots and nested relations that lowers to valid read layers. */
+/** Schema of a read request as JSON (the agent's `read` tool builds one): model roots and nested relations that lower to valid read layers. Host-internal; authors write typed literals. */
 export const ReadRequestJson = Schema.JsonObject.check(Schema.makeFilter((request) => {
 	const decoded = layersOf(request);
 	return Result.isFailure(decoded) ? decoded.failure : undefined;
@@ -82,53 +81,6 @@ const decode = Schema.decodeUnknownResult(ReadRequestJson);
 export const decode_read_request = (u: unknown): Result.Result<ReadLayersJson, string> =>
 	Result.flatMap(Result.mapError(decode(u), (error) => error.message), layersOf);
 
-const DynamicReadSchema = ReadRequestJson.pipe(Schema.brand('DynamicRead'));
-/** A read request built at runtime (a rule engine's reads): only `dynamic_read` makes one, so a literal never falls to it. */
-export type DynamicRead = typeof DynamicReadSchema.Type;
-/**
- * A runtime-built read request for `ctx.query`: decoded here exactly as the wire is (throws on a request
- * that is not one), checked against the declarations by the host like any other, answered untyped (`DynamicAnswer`).
- */
-export const dynamic_read: (request: ReadRequestJson) => DynamicRead = Schema.decodeUnknownSync(
-	DynamicReadSchema,
-	{ onExcessProperty: 'error' }
-);
-/** Each root's rows across all its pages (`query_all`); an aggregate root without `by` has no rows. */
-export type AllRows<R> = {
-	readonly [C in keyof ReadAnswer<R>]: ReadAnswer<R>[C] extends Page<infer T> ? readonly T[] : never;
-};
-/**
- * Every page of a read request, typed as `query` answers it: reads the request with `query` (`ctx.query`, a page's
- * `bolt.query`), then each root whose page has a `next` cursor again from that cursor, until none has. Each round is
- * one read and a root's `limit` is its page size; the rows of every page are held at once, so bound the `where`.
- * @example
- * const { ledger_entry } = yield* query_all(ctx.query, {
- *   ledger_entry: { where: { account: { eq: 'leave' } }, fields: ['code', 'amount'] }
- * });
- */
-export function query_all<const R extends ReadRequestBase, E>(
-	query: (request: NoInfer<ReadRequest<R>>) => Effect.Effect<NoInfer<ReadAnswer<R>>, E>,
-	request: ReadRequest<R>
-): Effect.Effect<AllRows<R>, E>;
-export function query_all<E>(
-	query: (request: { readonly [root: string]: object }) => Effect.Effect<{ readonly [root: string]: object }, E>,
-	request: ReadRequestBase
-): Effect.Effect<{ readonly [root: string]: readonly unknown[] }, E> {
-	return Effect.gen(function* () {
-		const rows: Record<string, unknown[]> = {};
-		for (let pending: { readonly [root: string]: object } = request; Object.keys(pending).length > 0; ) {
-			const next: Record<string, object> = {};
-			for (const [root, page] of Object.entries(yield* query(pending))) {
-				if (!('rows' in page) || !Array.isArray(page.rows)) continue;
-				(rows[root] ??= []).push(...page.rows);
-				const node = request[root];
-				if ('next' in page && typeof page.next === 'string' && node !== undefined) next[root] = { ...node, after: page.next };
-			}
-			pending = next;
-		}
-		return rows;
-	});
-}
 /** A decoded request grouped by root: each root's layers by path, every implied parent present (`{}`). */
 export type ReadPlan = {
 	readonly [root: string]: { readonly [path: string]: LayerRequestJson };

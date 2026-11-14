@@ -2,7 +2,7 @@
 // could misread, and on nothing else, so equal numbers interoperate whatever Bolt release answers.
 
 /** The HOST_API this package describes. */
-export const HOST_API_VERSION = 22;
+export const HOST_API_VERSION = 23;
 
 /** The HOST_API versions a host serves, both ends included. */
 export type HostApiRange = { readonly from: number; readonly to: number };

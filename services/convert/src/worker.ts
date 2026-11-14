@@ -18,7 +18,8 @@ const Job = Schema.fromJsonString(
 				prompt: Schema.optionalKey(Schema.String),
 				pictures: Schema.optionalKey(Schema.Boolean),
 				page: Schema.optionalKey(Schema.Number),
-				password: Schema.optionalKey(Schema.String)
+				password: Schema.optionalKey(Schema.String),
+				entry: Schema.optionalKey(Schema.String)
 			})
 		)
 	})

@@ -146,8 +146,8 @@ const Holder = Schema.Struct({
 });
 export type Holder = typeof Holder.Type;
 /**
- * The open requests holding any of `refs`, and whether `actor` may change them: a routed write on a held record joins
- * its request instead of opening one, a requester's save resubmits theirs, and record capabilities refuse the others'
+ * The open requests holding any of `refs`, and whether `actor` may change them: a routed write on a held record is
+ * refused (`locked`), a requester's save resubmits theirs, and record capabilities refuse the others'
  * edits up front.
  */
 export const holders = Effect.fn('Approvals.holders')(function* (
