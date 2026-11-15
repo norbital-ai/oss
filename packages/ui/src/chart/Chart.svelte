@@ -99,7 +99,8 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 		ys.map((key, i) => {
 			const color = COLORS[i % COLORS.length];
 			if (color === undefined) throw new Error('The chart series has no palette color.');
-			return { key, label: humanize(key), value: key, color };
+			// a measure is named `sum.amount`: read that exact key, never a dotted path (layerchart walks a string accessor)
+			return { key, label: humanize(key), value: (d: Record<string, unknown>) => d[key], color };
 		})
 	);
 </script>
