@@ -52,7 +52,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { parse_rate, RateWindows, type Charge } from '../access/rate.ts';
 import { catalog_of } from '../access/pred.ts';
-import { grantedArms, readsAny } from '../access/authority.ts';
+import { readsAny, viewOutput } from '../access/authority.ts';
 
 import * as ir from '../../protocol/reads.ts';
 import { constraintIndex } from '../schema/plan.ts';
@@ -516,12 +516,13 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			if (decoded !== undefined && decoded.problems.length > 0)
 				return refused('invalid_input', problems(decoded), decoded.problems[0]?.path);
 			const refs = decoded?.refs ?? [];
-			// a starter granted no `default` output of the model reads no record there to aim at
-			const unread = refs.find((ref) => !r.authority.admin && grantedArms(r.authority, ref.model) === undefined);
+			// the scope a run may aim at, as a write grant's: the `default` output when the starter holds it, else its own
+			// named output (a narrower audience's); a wider output never widens a starter that holds `default`
+			const aim = (model: string) => viewOutput(m, r.authority, model);
+			const unread = refs.find((ref) => aim(ref.model) === undefined);
 			if (unread !== undefined) return refused('not_found', `No readable ${unread.model} has this id.`, unread.field);
 			if (refs.length > 0) {
-				// an id input names a record in the starter's `default` output scope, the scope its write grants reach;
-				// a wider named output (a public card) never lets a starter aim a run at a record
+				// an id input names a record in that scope, the one its write grants reach
 				const found = yield* e.read(
 					yield* Effect.forEach(refs, (ref) =>
 						Effect.map(
@@ -533,7 +534,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 								select: { id: true },
 								limit: 1
 							}),
-							(read) => (read.kind === 'read' ? { ...read, output: DEFAULT_OUTPUT } : read)
+							(read) => (read.kind === 'read' ? { ...read, output: aim(ref.model) ?? DEFAULT_OUTPUT } : read)
 						)
 					),
 					{ as: 'caller', authority: r.authority },

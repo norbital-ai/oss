@@ -95,9 +95,10 @@ describe('a write grant’s scope', () => {
 					yield* t.db.value(Schema.String, { text: 'SELECT phone FROM people WHERE id = $1', params: [anns.id] })
 				).toBe('1');
 				expect((yield* bob.act({ [update]: [{ target: bobs, set: { phone: '3' } }] })).kind).toBe('committed');
-				// an automation aimed at a record: only one in the starter's default scope, never one only a card shows
+				// an automation aimed at a record: a starter holding `default` aims only within it, never at one only a card shows
 				expect(yield* Effect.flip(bob.run(call, { person: anns.id }, JobResult))).toMatchObject({ code: 'not_found' });
-				expect(yield* Effect.flip(carol.run(call, { person: anns.id }, JobResult))).toMatchObject({ code: 'not_found' });
+				// a starter with no `default` aims within its own named output, as its policy declares
+				expect((yield* carol.run(call, { person: anns.id }, JobResult)).kind).toBe('committed');
 				expect((yield* bob.run(call, { person: bobs.id }, JobResult)).kind).toBe('committed');
 			})
 		)
