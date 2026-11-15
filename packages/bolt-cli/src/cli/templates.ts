@@ -291,7 +291,11 @@ export const delegateTemplate = Effect.fn('bolt.templatesDelegate')(function* (
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
-	yield* installFrozen(template.directory, execute);
+	yield* installFrozen(template.directory, execute).pipe(
+		Effect.catchTag('TemplateError', (error) => fail(args[0] === 'lock'
+			? `${template.slug}: delegating to Bolt ${template.bolt} needs the existing lock to install unchanged. For a Bolt version move, update the repository's @norbital-ai/bolt-cli to ${template.bolt} first, then rerun lock.\n${error.message}`
+			: error.message))
+	);
 	const root = yield* fs.makeTempDirectoryScoped({ prefix: `norbital-delegate-${template.slug}-` });
 	yield* fs.symlink(template.directory, path.join(root, template.slug));
 	for (const file of ['.npmrc', 'bunfig.toml']) {

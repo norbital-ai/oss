@@ -40,6 +40,44 @@ const manifest = {
 	needs: []
 } satisfies EngineManifest;
 
+it.live('a parent write admits its child file upload, without admitting read-only or excluded child fields', () =>
+	Effect.scoped(Effect.gen(function* () {
+		const nested = {
+			...manifest,
+			models: {
+				forms: { description: 'Form', record_label: 'record.title', fields: { title: { kind: 'text' } } },
+				attachments: { description: 'Attachment', record_label: 'record.title', fields: { title: { kind: 'text' }, file: { kind: 'file', accept: ['image/png'], max: '1MiB' }, restricted: { kind: 'file', accept: ['image/png'], max: '1MiB', optional: true } } }
+			},
+			relationships: { 'attachments.form': { to: 'forms', inverse: 'attachments', owned: true } },
+			exposures: { forms: {
+				outputs: { default: { forms: { fields: 'all' }, 'forms.attachments': { fields: 'all' } } },
+				create: { columns: { forms: ['title'], 'forms.attachments': ['title', 'file', 'restricted'] } },
+				update: { columns: { forms: ['title'], 'forms.attachments': ['file'] } }
+			} },
+			policies: {
+				writer: { description: 'Creates attachments through forms', grants: { forms: { create: { columns: { forms: ['title'], 'forms.attachments': ['title', 'file'] } } } } },
+				editor: { description: 'Updates attachment files through forms', grants: { forms: { update: {} } } },
+				reader: { description: 'Reads forms', grants: { forms: { outputs: { default: {} } } } }
+			}
+		} satisfies EngineManifest;
+		const context = yield* Layer.build(TestWorkspace.layer({ manifest: nested }));
+		const t = Context.get(context, TestWorkspace);
+		const writer = yield* t.as(t.member(['writer']));
+		const editor = yield* t.as(t.member(['editor']));
+		const reader = yield* t.as(t.member(['reader']));
+		const bytes = new Uint8Array([1, 2, 3]);
+		const input = { name: 'page.png', mime: 'image/png', bytes };
+		expect((yield* writer.upload('attachments.file', input)).kind).toBe('committed');
+		expect((yield* editor.upload('attachments.file', input)).kind).toBe('committed');
+		expect(yield* Effect.flip(reader.upload('attachments.file', input))).toMatchObject({ code: 'forbidden' });
+		expect(yield* Effect.flip(writer.upload('attachments.restricted', input))).toMatchObject({ code: 'forbidden' });
+		const direct = yield* Effect.flip(act_reply(yield* route_fixture(context), writer.authority, {
+			acts: { 'attachments.create': [{ title: 'direct' }] }, issued_at: t.clock.now()
+		}));
+		expect(direct).toMatchObject({ code: 'unknown_callable' });
+	}))
+);
+
 it.live('message attachments download for the conversation, not for every member', () =>
 	Effect.scoped(
 		Effect.gen(function* () {

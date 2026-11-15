@@ -125,7 +125,7 @@ function rendered(): { [table: string]: Shape } {
 			// native row guards are their own contract (the trigger test below); this shape covers tables, columns and constraints
 			if (/^(?:create|drop) trigger /.test(sql)) continue;
 			// The label function's body is exercised by native label/search integration tests.
-			if (/^create function "bolt_record_label_/.test(sql)) continue;
+			if (/^create(?: or replace)? function "bolt_record_label_/.test(sql)) continue;
 			m = /^create (unique )?index "\w+" on "\w+" (.*)$/.exec(sql);
 			if (m) {
 				(m[1] === undefined ? t.indexes : t.unique).push(bare(capture(m, 2)));

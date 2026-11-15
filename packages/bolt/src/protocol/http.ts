@@ -175,8 +175,17 @@ export class RateLimits extends Context.Service<
 	);
 }
 
-const errorJson = (code: string, message: string, status = 500, headers?: Readonly<Record<string, string>>) =>
-	HttpServerResponse.jsonUnsafe({ error: { code, message } }, { status, ...(headers === undefined ? {} : { headers }) });
+const errorJson = (
+	code: string,
+	message: string,
+	status = 500,
+	headers?: Readonly<Record<string, string>>,
+	extra: Readonly<Record<string, unknown>> = {}
+) =>
+	HttpServerResponse.jsonUnsafe(
+		{ error: { ...extra, code, message } },
+		{ status, ...(headers === undefined ? {} : { headers }) }
+	);
 /** Every `rate_limited` refusal on the wire: one message and `Retry-After`. */
 export const rateLimitedResponse = (retryAfter: number) =>
 	errorJson('rate_limited', RATE_LIMITED, 429, { 'retry-after': String(retryAfter) });
@@ -202,18 +211,19 @@ const webPushEndpoint = (endpoint: string) => {
 		!/(^|\.)(localhost|local|internal|home\.arpa)$/.test(host)
 	);
 };
-export const response_error = (error: unknown) => {
+/** `extra` rides in the error envelope beside its code and message (a failed shell boot's workspace). */
+export const response_error = (error: unknown, extra: Readonly<Record<string, unknown>> = {}) => {
 	if (error instanceof IdentityRefusal)
 		return errorJson(error.code, error.message, CODE[error.code].status,
-			error.retryAfter === undefined ? undefined : { 'retry-after': String(error.retryAfter) });
+			error.retryAfter === undefined ? undefined : { 'retry-after': String(error.retryAfter) }, extra);
 	if (error instanceof Conflict)
-		return errorJson('conflict', 'Another write changed these records.', 409);
+		return errorJson('conflict', 'Another write changed these records.', 409, undefined, extra);
 	if (error instanceof Fenced)
-		return errorJson('fenced', error.message);
+		return errorJson('fenced', error.message, 500, undefined, extra);
 	if (error instanceof Interrupted)
-		return errorJson('interrupted', 'The workspace generation is closed.');
+		return errorJson('interrupted', 'The workspace generation is closed.', 500, undefined, extra);
 	const { body, status } = wire_error(error);
-	return errorJson(body.error.code, body.error.message, status);
+	return errorJson(body.error.code, body.error.message, status, undefined, extra);
 };
 type EffectMemo<K, A, E, R> = {
 	get(key: K): Effect.Effect<A, E, R> | undefined;

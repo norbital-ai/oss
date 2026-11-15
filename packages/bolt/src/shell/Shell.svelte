@@ -73,6 +73,7 @@
 		type ShellPageContext
 	} from './runtime.ts';
 	import Access from './auth/Access.svelte';
+	import { AccessCard } from '@norbital-ai/ui/brand';
 	import SignIn from './auth/SignIn.svelte';
 	import Invite from './auth/Invite.svelte';
 	import Attention from './agent/Attention.svelte';
@@ -442,8 +443,9 @@
 		Effect.gen(function* () {
 			const result = yield* Effect.result(api.boot(app, kiosk ?? undefined));
 			if (result._tag === 'Failure') {
+				// a failure that names no workspace keeps the one the last boot named
+				guest = result.failure.workspace ?? boot?.workspace ?? guest;
 				boot = null;
-				guest = result.failure.workspace ?? null;
 				if (result.failure.status === 401 && !printing && !is_open_route(config.manifest, current))
 					navigate(`/sign-in?next=${encodeURIComponent(url.pathname + url.search)}`, true);
 				else if (
@@ -974,19 +976,20 @@
 			{locale}
 			on_locale={(locale) => fork(setLocale(locale))}
 			apex={device.pinned ? undefined : workspace?.apex}
+			recovery={workspace?.recovery}
 			{dark}
 			on_theme={() => chooseTheme(dark ? 'light' : 'dark')}
 		>
-			<Stack gap="lg" role="alert">
-				<Stack gap="sm">
-					<p class="text-xs text-muted-foreground">
-						{failure.status === 0 ? t('Connection error') : `HTTP ${failure.status}`} · {failure.code}
-					</p>
-					<h1 class="text-title">{t('Unable to open the workspace')}</h1>
-					<p class="text-sm leading-relaxed text-muted-foreground">{t(failure.message)}</p>
-				</Stack>
-				<Button onclick={() => location.reload()}>{t('Try again')}</Button>
-			</Stack>
+			<AccessCard
+				eyebrow={t('Opening')}
+				name={workspace?.name ?? config.workspace_name}
+				title={t('Unable to open the workspace')}
+				description={t(failure.message)}
+				hint={`${failure.status === 0 ? t('Connection error') : `HTTP ${failure.status}`} · ${failure.code}`}
+			>
+				<span class="sr-only" role="alert">{t(failure.message)}</span>
+				<Button class="access-action w-full" onclick={() => location.reload()}>{t('Try again')}</Button>
+			</AccessCard>
 		</Access>
 	{:else if current.kind === 'sign_in' || current.kind === 'invite'}
 		<Access

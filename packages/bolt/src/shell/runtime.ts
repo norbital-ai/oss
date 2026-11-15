@@ -47,8 +47,9 @@ import { ActReply, WireError, type PageResult } from '../protocol/schema.ts';
 import { AuditPage, AuditRecord, StudioFile, StudioView, uuidv7 } from '@norbital-ai/host-api';
 import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
-const requestFailure = (status: number): ShellError =>
+const requestFailure = (status: number, workspace?: typeof ShellWorkspace.Type): ShellError =>
 	new ShellError({
+		...(workspace === undefined ? {} : { workspace }),
 		status,
 		code: status === 429 ? 'busy' : status >= 500 ? 'unavailable' : 'refused',
 		message:
@@ -103,7 +104,7 @@ export function shell_api(
 	const wireError = (body: Json, status: number): ShellError => {
 		const refused = Schema.decodeUnknownOption(failureSchema)(body);
 		return Option.isNone(refused) || (status >= 500 && refused.value.error.code === 'internal')
-			? requestFailure(status)
+			? requestFailure(status, Option.getOrUndefined(refused)?.error.workspace)
 			: refused.value.error.code === 'rate_limited'
 				? new ShellError({ code: 'rate_limited', message: RATE_LIMITED, status })
 				: new ShellError({ ...refused.value.error, status });

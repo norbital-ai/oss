@@ -5,7 +5,7 @@
 import { Effect, Schema } from 'effect';
 import { UUID_PATTERN } from '@norbital-ai/store/kind';
 import { LIMITS, type Authority, type Outcome } from '../contracts.ts';
-import type { EngineManifest } from '../manifest.ts';
+import { layered, layers, type EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { Manifest } from '../services.ts';
 import { Files } from '../ports.ts';
@@ -56,20 +56,17 @@ const accepts = (patterns: readonly string[], mime: string) =>
 		(p) => p === '*/*' || p === mime || (p.endsWith('/*') && mime.startsWith(p.slice(0, -1)))
 	);
 
-/** Rule 38d (a): a visitor uploads only to `file` fields its `create` grant writes; a member to any field its create or update grant admits. */
+/** Uploads follow the declared write path, including a child file written through its parent; visitors hold create paths only. */
 function admits(m: EngineManifest, auth: Authority, c: string, field: string): boolean {
-	const spec = m.exposures[c];
-	const inputs = [
-		...(spec?.create?.columns[c] ?? []),
-		...(auth.actor.kind === 'visitor' ? [] : (spec?.update?.columns[c] ?? []))
-	];
-	if (!inputs.includes(field)) return false;
-	if (auth.admin) return true;
-	const arms = [
-		...(auth.models[c]?.create ?? []),
-		...(auth.actor.kind === 'visitor' ? [] : (auth.models[c]?.update ?? []))
-	];
-	return arms.some((a) => a.columns[c]?.includes(field) ?? false);
+	const models = layers(m);
+	for (const [root, spec] of Object.entries(layered(m).exposures))
+		for (const verb of auth.actor.kind === 'visitor' ? ['create'] as const : ['create', 'update'] as const)
+			for (const [path, fields] of Object.entries(spec[verb]?.columns ?? {})) {
+				if (models[root]?.[path] !== c || !fields.includes(field)) continue;
+				if (auth.admin || auth.models[root]?.[verb].some((arm) => arm.columns[path]?.includes(field)))
+					return true;
+			}
+	return false;
 }
 
 export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {

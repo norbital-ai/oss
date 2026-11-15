@@ -284,7 +284,7 @@ const signIn = (email: string) =>
 		expect((yield* call(j, 'POST', '/__bolt/session/code', { address: email })).status).toBe(200);
 		const v = yield* call(j, 'POST', '/__bolt/session/verify', { address: email, code: '123456' });
 		expect(v.status).toBe(200);
-		expect(j.has('__Secure-bolt-session')).toBe(true);
+		expect(j.has('__Host-bolt-session')).toBe(true);
 		return j;
 	});
 const api = (j: Jar) =>
@@ -348,6 +348,7 @@ const workspace = Layer.effectContext(
 					studio,
 					ai: false,
 					apex: 'https://example.test/pick',
+					recovery: 'https://example.test/acme/recovery',
 					workspaces: async () => [
 						{ handle: 'globex', name: 'Globex', href: 'https://example.test/acme/switch?to=globex' }
 					],
@@ -412,11 +413,17 @@ layer(workspace)('shell routes', (it) => {
 						relations: { opening: { targets: ['openings'], inverse: 'applications' } },
 						create: { columns: ['opening', 'name'] }
 					});
-					expect((yield* boot(jar())).status).toBe(401);
+					const refused = yield* call(jar(), 'GET', '/__bolt/shell');
+					expect(refused).toMatchObject({
+						status: 401,
+						// a refused boot still names its workspace and recovery: the access pages and the failure card show them
+						body: { error: { workspace: { handle: 'acme', recovery: 'https://example.test/acme/recovery' } } }
+					});
 					expect(b.workspace).toMatchObject({
 						name: 'Acme',
 						handle: 'acme',
 						apex: 'https://example.test/pick',
+						recovery: 'https://example.test/acme/recovery',
 						organization: true
 					});
 					expect(b.workspaces).toEqual([
@@ -685,7 +692,7 @@ layer(workspace)('shell routes', (it) => {
 				Effect.gen(function* () {
 					const j = jar();
 					const b = yield* bootValue(j, 'careers');
-					expect(j.has('__Secure-bolt-visitor')).toBe(true);
+					expect(j.has('__Host-bolt-visitor')).toBe(true);
 					expect(b).toMatchObject({
 						actor: { kind: 'visitor', app: 'careers' },
 						visitor: { app: 'careers', site_key: 'dev' },
@@ -854,7 +861,7 @@ layer(workspace)('shell routes', (it) => {
 					const { status, boot: b } = yield* boot(j, undefined, 'lobby');
 					if (b === null) throw new Error('lobby boot refused');
 					expect(status).toBe(200);
-					expect(j.has('__Secure-bolt-visitor')).toBe(true);
+					expect(j.has('__Host-bolt-visitor')).toBe(true);
 					expect(b).toMatchObject({
 						actor: { kind: 'visitor', app: 'lobby' },
 						admin: false,
@@ -957,7 +964,7 @@ layer(workspace)('shell routes', (it) => {
 		it.effect('signs out: the session row goes and the cookie is cleared', () =>
 			Effect.gen(function* () {
 				expect((yield* call(rep, 'POST', '/__bolt/session/signout')).status).toBe(204);
-				expect(rep.has('__Secure-bolt-session')).toBe(false);
+				expect(rep.has('__Host-bolt-session')).toBe(false);
 				expect((yield* boot(rep)).status).toBe(401);
 			})
 		);

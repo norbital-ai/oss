@@ -5,6 +5,7 @@ import { FIRST_PARTY_BUNFIG } from '@norbital-ai/host-api';
 import { describe, expect } from 'vitest';
 import {
 	actualCounts,
+	TemplateError,
 	checkTemplates,
 	delegateTemplate,
 	discoverTemplates,
@@ -64,6 +65,18 @@ const fixture = Effect.gen(function* () {
 	return { root, directory: yield* template(root, 'fixture', metadata) };
 });
 describe('bolt templates', () => {
+	it.live('a delegated lock failure explains the version move and keeps the install diagnosis', () =>
+		Effect.gen(function* () {
+			const { root } = yield* fixture;
+			const sibling = (yield* discoverTemplates(root))[0];
+			if (sibling === undefined) throw new Error('fixture template missing');
+			const error = yield* delegateTemplate(sibling, ['lock'], () =>
+				Effect.fail(new TemplateError({ message: 'lockfile had changes, but lockfile is frozen' }))
+			).pipe(Effect.flip);
+			expect(error.message).toContain(`update the repository's @norbital-ai/bolt-cli to ${sibling.bolt} first`);
+			expect(error.message).toContain('lockfile had changes, but lockfile is frozen');
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
 	it.live('discovers metadata and resolves both a directory slug and a handle', () =>
 		Effect.gen(function* () {
 			const { root } = yield* fixture;

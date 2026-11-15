@@ -1813,7 +1813,7 @@ export const test_engine = <P extends TestPorts = never>(
 				handle,
 				session: (id) =>
 					mint(identityHost, id).pipe(
-						Effect.map((session) => `${cookie_names(secure).session}=${session.token}`),
+						Effect.map((session) => `${cookie_names(secure, new URL(public_url).pathname).session}=${session.token}`),
 						Effect.mapError(invalid)
 					)
 			};

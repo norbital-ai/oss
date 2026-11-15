@@ -189,6 +189,9 @@ layer(
 				expect(owned.output['images']).toEqual([
 					expect.objectContaining({ name: 'image-1.png', mime: 'image/png', bytes: PNG.byteLength })
 				]);
+				seen.length = 0;
+				yield* run((file) => ({ file, options: { for: 'listen', pictures: false, page: 2 } }), { ingest: port });
+				expect(seen[0]?.[1]).toEqual({ pictures: false, page: 2 });
 				expect(
 					(yield* run((file) => ({ file, options: {} }), {
 						ingest: () => Effect.succeed({ unsupported: 'no parser for CAD drawings' })

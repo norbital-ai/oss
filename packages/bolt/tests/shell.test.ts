@@ -14,6 +14,7 @@ import type { Authority, ModelAuthority, EngineActor } from '../src/engine/contr
 import { exposure } from '../src/engine/access/exposure.ts';
 import {
 	can_open,
+	cookie_names,
 	command_center_tabs,
 	cross_site,
 	frame_policy,
@@ -1777,4 +1778,11 @@ describe('native shell mutations on a snapshot client', () => {
 				}
 			})
 	);
+});
+
+it('uses host-only credentials at a secure root and keeps explicit path isolation for mounted workspaces', () => {
+	expect(cookie_names(true).session).toBe('__Host-bolt-session');
+	expect(cookie_names(true, '/').session).toBe('__Host-bolt-session');
+	expect(cookie_names(true, '/mounted').session).toBe('__Secure-bolt-session');
+	expect(cookie_names(false).session).toBe('bolt-session');
 });

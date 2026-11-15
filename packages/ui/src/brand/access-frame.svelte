@@ -45,7 +45,7 @@
 		/** The card's content. */
 		children: Snippet;
 		/** Navigation below the card, such as changing workspace. */
-		footer?: Snippet;
+		footer?: Snippet | undefined;
 	} = $props();
 
 	const badge = $derived.by(() => {

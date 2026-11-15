@@ -54,8 +54,21 @@
 	.bolt-print :global([data-record-foot]) {
 		display: none;
 	}
+	/* Paper uses narrower field tracks; screen-sized cards waste a page and split the attachment table. */
+	.bolt-print :global([data-layout='grid']:has(> [data-field])) {
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)) !important;
+	}
 	@media print {
-		.bolt-print :global(*) {
+		.bolt-print :global([data-field]),
+		.bolt-print :global(tr) {
+			break-inside: avoid;
+		}
+		.bolt-print :global(thead),
+		.bolt-print :global(th),
+		.bolt-print :global(td) {
+			position: static !important;
+		}
+		.bolt-print :global(*:not(.sr-only)) {
 			overflow: visible !important;
 			max-height: none !important;
 		}

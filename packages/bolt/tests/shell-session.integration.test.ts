@@ -10,7 +10,7 @@ import { mint, sha256 } from '../src/engine/identity/session.ts';
 import { authority_of } from '../src/shell/host.ts';
 import { HostIdentity } from '../src/engine/services.ts';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
-import { COOKIES, SHELL } from '../src/shell/nav.ts';
+import { COOKIES, cookie_names, SHELL } from '../src/shell/nav.ts';
 import { RateLimits } from '../src/protocol/http.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { stored_file_url } from '../src/page/file-ref.ts';
@@ -305,7 +305,7 @@ describe('the session cookie', () => {
 					authority_of(
 						HttpServerRequest.fromWeb(
 							new Request(`https://acme.example${SHELL}`, {
-								headers: { cookie: `${COOKIES.session}=${encodeURIComponent(token)}` }
+								headers: { cookie: `${cookie_names(true, '/acme').session}=${encodeURIComponent(token)}` }
 							})
 						)
 					).pipe(Effect.provide(RateLimits.layer), Effect.provide(context));
@@ -346,7 +346,7 @@ describe('the session cookie', () => {
 						params: [id]
 					});
 					const s = yield* mint(identity, id).pipe(Effect.provide(context));
-					const session = `${COOKIES.session}=${encodeURIComponent(s.token)}`;
+					const session = `${cookie_names(true, '/acme').session}=${encodeURIComponent(s.token)}`;
 					const boot = (cookie: string) =>
 						t.handle(new Request(`https://acme.example${SHELL}`, { headers: { cookie } }));
 
@@ -364,8 +364,8 @@ describe('the session cookie', () => {
 					expect(renewed).not.toMatch(/;\s*Domain=/i);
 
 					for (const duplicated of [
-						`${session}; ${COOKIES.session}=stray`,
-						`${COOKIES.session}=stray; ${session}`
+						`${session}; ${cookie_names(true, '/acme').session}=stray`,
+						`${cookie_names(true, '/acme').session}=stray; ${session}`
 					]) {
 						const refused = yield* boot(duplicated);
 						expect(refused.status).toBe(400);
@@ -373,7 +373,7 @@ describe('the session cookie', () => {
 							error: { code: 'invalid', message: 'Duplicate credentials are refused.' }
 						});
 					}
-					expect((yield* boot(`${COOKIES.session}=stray`)).status).toBe(401);
+					expect((yield* boot(`${cookie_names(true, '/acme').session}=stray`)).status).toBe(401);
 				})
 			)
 	);

@@ -8,7 +8,7 @@
 	import { type ViewBolt } from '../src/client/contract.js';
 	import RecordShell from '../src/record/RecordShell.svelte';
 	import Form from '../src/form/form.svelte';
-	let { bolt, catalog }: { bolt: ViewBolt; catalog: Record<string, ModelExposure> } = $props();
+	let { bolt, catalog, on_reset }: { bolt: ViewBolt; catalog: Record<string, ModelExposure>; on_reset?: () => void } = $props();
 	// svelte-ignore state_referenced_locally
 	const ctx: UiContext = { ui: { bolt: bolt, kinds: {
 		get catalog() {
@@ -20,7 +20,7 @@
 <RecordShell {ctx} of="jobs" id="j1">
 	{#snippet children(view)}
 		<div data-record-mode={view.mode}>
-			<div data-custom-title><Form {ctx} of="jobs" id="j1" fields={['title']} /></div>
+			<div data-custom-title><Form {ctx} of="jobs" id="j1" fields={['title']} {on_reset} /></div>
 			<div data-custom-crew><Form {ctx} of="jobs" id="j1" fields={['crew']} /></div>
 		</div>
 	{/snippet}

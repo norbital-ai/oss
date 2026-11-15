@@ -73,6 +73,11 @@ export type ShellPorts = {
 	readonly apex?: string;
 	/** Set when this shell serves a preview environment: the live workspace's address (the preview banner's link). */
 	readonly live?: string;
+	/**
+	 * Where an administrator repairs this workspace when it will not open (the host's recovery Studio). A host with no
+	 * recovery of its own (a self-hosted server) sets none; the failure card then offers only a retry.
+	 */
+	readonly recovery?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
 };
 /** The agent's host parts; the release's own source (`workspace_grep`) and attachments are the release's. */

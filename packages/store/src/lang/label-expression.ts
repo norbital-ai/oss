@@ -38,8 +38,8 @@ export type LabelProgram = {
 	readonly paths: readonly string[];
 	readonly evaluate: (row: { readonly [field: string]: Value }) => unknown;
 	/**
-	 * `fenced`: each operand is evaluated once (`OFFSET 0`), so the planner never copies a related lookup into every
-	 * place an operator names it. Stored-label functions keep the unfenced text their versioned names hash.
+	 * `fenced`: each operand is evaluated once (`OFFSET 0`), so the planner never copies an operand into every place
+	 * an operator names it; unfenced, a chain of n `+` costs 5^n copies of its first term.
 	 */
 	readonly sql: (read: (path: string) => string, fenced?: boolean) => string;
 };

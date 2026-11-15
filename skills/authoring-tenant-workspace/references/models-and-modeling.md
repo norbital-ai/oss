@@ -27,7 +27,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 ## Record identifier
 
-- `record_label` is optional pure CEL over own stored, computed or nested inline values and one-hop to-one relations exposed by the default output. No clocks. Use conditionals for optional values and `string(value)` for numbers.
+- `record_label` is optional pure CEL over own stored, computed or nested inline values and one-hop to-one relations exposed by the default output. Labels are available only when the caller's selected output exposes every dependency; otherwise the record uses its UUID. No clocks. Use conditionals for optional values and `string(value)` for numbers.
 - The engine materializes and indexes it and rebuilds it on change. Sheets, table titles, pickers, references, search and approvals reuse it. Outputs must expose its dependencies.
 - Without it consumers show the record UUID, and search needs a text entry under `indexes`. Never add a duplicate title field.
 

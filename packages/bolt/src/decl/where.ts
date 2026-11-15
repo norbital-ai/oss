@@ -90,7 +90,7 @@ type Dyn<K, S> = S extends true
 type DynOk<K> =
 	| (K extends { kind: 'text'; format: 'email' } ? { var: 'actor.email' } : never)
 	| (K extends { kind: 'text'; format: 'phone' } ? { var: 'actor.phone' } : never)
-	/** The anonymous identity (`__Secure-bolt-visitor`): guest-owned rows on a text field, scoped per browser. */
+	/** The anonymous identity (`__Host-bolt-visitor`): guest-owned rows on a text field, scoped per browser. */
 	| (K extends { kind: 'text' } ? { var: 'actor.visitor' } : never)
 	| (K extends { kind: 'ref'; to: 'sys_user' } ? { var: 'actor.id' } : never)
 	/** The instance an envoy turn arrived on, or a sync body runs for; null for every other actor. */

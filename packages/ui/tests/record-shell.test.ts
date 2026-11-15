@@ -787,7 +787,8 @@ it.live('custom representation forms share the shell view/edit mode, draft and o
 		const { default: Custom } = yield* browser(() => import('./record-custom-harness.svelte'));
 		const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(LIVE));
 		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Custom, { target, props: { bolt, catalog } });
+		let resets = 0;
+		const app = mount(Custom, { target, props: { bolt, catalog, on_reset: () => { resets++; } } });
 		mounted.push(async () => {
 			await unmount(app);
 			target.remove();
@@ -833,6 +834,14 @@ it.live('custom representation forms share the shell view/edit mode, draft and o
 		assert.deepEqual(jsonRecord(required(jsonArray(required(calls.acts[0]).input)[0])).target, { id: 'j1', revision: 3 });
 		assert.equal(target.querySelector('input'), null, 'committed save returns every form to view');
 		assert.equal(element<HTMLElement>(target, '[data-record-mode]').dataset.recordMode, 'view');
+		assert.equal(resets, 1, 'Save resets external drafts through the authored form');
+		required(edit(target)).click();
+		yield* browser(() => settle());
+		const cancel = [...target.querySelectorAll<HTMLButtonElement>('[data-record-foot] button')].find((button) => textOf(button).trim() === 'Cancel');
+		assert.ok(cancel);
+		cancel.click();
+		yield* browser(() => settle());
+		assert.equal(resets, 2, 'Cancel resets external drafts through the authored form');
 	})
 );
 

@@ -96,6 +96,18 @@ test('the host trusts its origin and its subdomains on the same scheme and port 
 	strictEqual(trusts('https://t-abc.norbital.ai:8443/x'), false);
 });
 
+test('an unpinned app opens the platform picker while admitting separate workspace origins', () => {
+	const config = { ...unpinned({ host: 'https://norbital.ai' }), start: 'https://core.norbital.ai/__colony/workspace-select' };
+	strictEqual(Result.isSuccess(decode(config)), true);
+	strictEqual(capacitorConfig(config).server?.url, config.start);
+	ok(capacitorConfig(config).server?.allowNavigation?.includes('*.norbital.ai'));
+	strictEqual(androidCapacitorConfig(config).server?.url, 'https://core.norbital.ai');
+	strictEqual(androidCapacitorConfig(config).server?.appStartPath, '/__colony/workspace-select');
+	strictEqual(capacitorConfig(config).plugins?.NorbitalShell?.pinned, false);
+	strictEqual(Result.isFailure(decode({ ...config, start: 'https://untrusted.test/' })), true);
+	strictEqual(Result.isFailure(decode({ ...config, workspace: 'https://acme.norbital.ai/' })), true);
+});
+
 test('config refuses malformed identities, versions and hosts', () => {
 	refused({ id: 'cleaner' });
 	refused({ id: 'com.mericlean.cleaner-app' });

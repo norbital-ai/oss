@@ -73,6 +73,8 @@ approval control and repeat no declared default.
 		disabled?: boolean;
 		/** An automation reports queue admission here; its retained run is followed separately by RunStatus. */
 		on_outcome?(outcome: Outcome): void;
+		/** Clears the view's external drafts when Cancel or Clear resets this form. */
+		on_reset?(): void;
 		/** Asks before a valid draft saves: the dialog to show for this change, or `null` to save without asking. */
 		confirm?: FormConfirm;
 		/** Pure semantic checks over the draft. Reuse this validator in the server's guarded write. */
@@ -119,6 +121,7 @@ approval control and repeat no declared default.
 		readonly,
 		disabled,
 		on_outcome,
+		on_reset,
 		confirm,
 		validate,
 		children,
@@ -271,6 +274,7 @@ approval control and repeat no declared default.
 								readonly={readOnly}
 								{disabled}
 								{on_outcome}
+								{on_reset}
 								{confirm}
 								{validate}
 								{children}

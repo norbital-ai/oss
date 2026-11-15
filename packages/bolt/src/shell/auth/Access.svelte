@@ -8,7 +8,10 @@
 	import { AccessFrame } from '@norbital-ai/ui/brand';
 	import { LANGUAGE, LOCALES } from '../i18n.ts';
 
-	/** `apex`: the host's workspace picker, linked below the card as "Change workspace". */
+	/**
+	 * `apex`: the host's workspace picker, linked below the card as "Change workspace". `recovery`: on a failure, the
+	 * host's recovery, linked there instead as "Open workspace recovery".
+	 */
 	let {
 		t,
 		environment,
@@ -17,6 +20,7 @@
 		dark,
 		on_theme,
 		apex,
+		recovery,
 		children
 	}: {
 		t: (key: string) => string;
@@ -26,6 +30,7 @@
 		dark: boolean;
 		on_theme: () => void;
 		apex?: string | undefined;
+		recovery?: string | undefined;
 		children: Snippet;
 	} = $props();
 
@@ -49,7 +54,11 @@
 	{@render children()}
 	{#snippet footer()}
 		<p class="access-switch text-muted-foreground">
-			{#if apex}
+			{#if recovery}
+				<a href={recovery} class="underline underline-offset-4 hover:text-foreground"
+					>{t('Open workspace recovery')}</a
+				>
+			{:else if apex}
 				<a href={apex} class="underline underline-offset-4 hover:text-foreground"
 					>{t('Change workspace')}</a
 				>

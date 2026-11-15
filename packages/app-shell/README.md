@@ -33,13 +33,14 @@ export default define_app({
 | Key               | Meaning                                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------------------------- |
 | `host`            | Required. The server the app belongs to, as an origin (scheme, host, optional port; no path or slash).      |
+| `start`           | Optional. Initial page on the app's host or a subdomain, without pinning it; e.g. a platform's workspace picker. |
 | `workspace`       | Optional. One workspace page, path included, on `host`'s origin or a subdomain of its hostname.             |
 | `allow_navigation` | Optional. Extra HTTPS hosts (`*.` for subdomains) that stay in the WebView; they never receive the runtime. |
 
 **Pinned** (`workspace` set): the app opens `workspace` and is home on that workspace's origin only. The runtime sets
 `bolt_device.pinned: true`, so the Bolt shell hides its workspace switcher and the platform link.
 
-**Unpinned** (`workspace` unset): the app opens `host` and is home on the host origin and every subdomain of the
+**Unpinned** (`workspace` unset): the app opens `start`, else `host`, and is home on the host origin and every subdomain of the
 host's hostname, on the same scheme and port. On a Norbital platform the host's root answers with workspace selection
 and every workspace (`t-<hash>.<tenant base>`) is a subdomain, so the Bolt shell's own switcher moves between them
 inside the app; `bolt_device.pinned` is absent. A self-hosted `bolt-server` serves its one workspace at its root.

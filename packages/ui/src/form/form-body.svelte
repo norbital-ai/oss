@@ -35,6 +35,7 @@
 		readonly: asked,
 		disabled: askedDisabled,
 		on_outcome,
+		on_reset,
 		confirm,
 		validate,
 		children,
@@ -43,7 +44,7 @@
 		actions,
 		acts,
 		size = 'fill'
-	}: Pick<FormProps, 'ctx' | 'sections' | 'submit' | 'readonly' | 'disabled' | 'on_outcome' |
+	}: Pick<FormProps, 'ctx' | 'sections' | 'submit' | 'readonly' | 'disabled' | 'on_outcome' | 'on_reset' |
 		'confirm' | 'validate' | 'children' | 'editors' | 'viewers' | 'actions' | 'acts' | 'size'> & {
 		spec: FormSpec;
 		record: Row | null;
@@ -150,6 +151,7 @@
 		}
 	);
 	onDestroy(form.on_outcome((outcome) => on_outcome?.(outcome)));
+	onDestroy(form.on_reset(() => on_reset?.()));
 	onDestroy(
 		form.confirm_submit(() => {
 			const asked = confirm?.({ values: form.values, before: form.base });

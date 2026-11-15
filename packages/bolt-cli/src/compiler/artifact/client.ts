@@ -351,8 +351,12 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		const r = renderers.findIndex((f) => f.name === name);
 		return `${key(name)}: { shape: ${key(spec.shape)}${typeof spec.label === 'string' ? `, label: ${key(spec.label)}` : ''}${r < 0 ? '' : `, renderer: F${r}`} }`;
 	});
+	// the workspace's locale catalog alone: the shell merges no other over the base
+	const workspaceLocale = shell.workspace.locale.toLowerCase();
 	const base = files.find((f) => f.role === 'messages'),
-		locales = files.filter((f) => f.role === 'locale');
+		locale = [workspaceLocale, workspaceLocale.split('-')[0]]
+			.map((tag) => files.find((f) => f.role === 'locale' && f.name.toLowerCase() === tag))
+			.find((f) => f !== undefined);
 	// hook:shell — the account menu's versions: the workspace's, this Bolt's and the building Node's. The
 	// entry sets them: the shared platform layer (Nav's module) carries nothing of one workspace or build host
 	const versions = {
@@ -363,17 +367,14 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	const entry = `import ${key(styles)};
 import { initialize_shell_assets, mount_shell } from ${key(join(SHELL, `mount${EXT}`))};
 ${base === undefined ? 'const base = {};' : `import base from ${key(join(root, base.path))};`}
-${locales.map((l, i) => `import L${i} from ${key(join(root, l.path))};`).join('\n')}
+${locale === undefined ? '' : `import locale from ${key(join(root, locale.path))};`}
 ${sessions.map((s, i) => `import S${i} from ${key(join(root, s.path))};`).join('\n')}
 ${renderers.map((r, i) => `import F${i} from ${key(join(root, r.path))};`).join('\n')}
-const locales = { ${locales.map((l, i) => `${key(l.name.toLowerCase())}: L${i}`).join(', ')} };
-const workspaceLocale = ${key(shell.workspace.locale)}.toLowerCase();
-const tag = [workspaceLocale, workspaceLocale.split('-')[0]].find((l) => l in locales);
 globalThis.__BOLT_BUILD__ = ${key(versions)};
 const ready = initialize_shell_assets(import.meta.url);
 ready.then(() => mount_shell(document.getElementById('bolt'), { ready, workspace_name: ${key(title)}, public_routes: ${key([...public_routes])}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
 	sessions: { ${sessions.map((s, i) => `${key(s.name)}: S${i}`).join(', ')} },
-	messages: { ...base, ...(tag === undefined ? {} : locales[tag]) },
+	messages: { ...base${locale === undefined ? '' : ', ...locale'} },
 	integration_setups: { ${integration_setups.join(', ')} }, representations: { ${reps.join(', ')} }, custom_fields: { ${custom_fields.join(', ')} } })).catch((cause) => {
 	const status = document.querySelector('#bolt-loading p');
 	if (status !== null) { status.textContent = 'The workspace could not finish loading. Reload to try again.'; status.setAttribute('role', 'alert'); }

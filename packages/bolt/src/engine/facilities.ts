@@ -526,6 +526,8 @@ function facility_dispatch(ports: FacilityPorts): Facilities['Service']['dispatc
 					const { for: owner, ...options } = yield* decode(
 						Schema.Struct({
 							for: Schema.optionalKey(Schema.String),
+							pictures: Schema.optionalKey(Schema.Boolean),
+							page: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
 							password: Schema.optionalKey(Schema.String),
 							entry: Schema.optionalKey(Schema.String),
 							diarize: Schema.optionalKey(Schema.Boolean),
@@ -534,7 +536,7 @@ function facility_dispatch(ports: FacilityPorts): Facilities['Service']['dispatc
 							prompt: Schema.optionalKey(Schema.String)
 						}),
 						given ?? {},
-						'convert.ingest takes { for?, password?, entry?, diarize?, language?, speakers?, prompt? }'
+						'convert.ingest takes { for?, pictures?, page?, password?, entry?, diarize?, language?, speakers?, prompt? }'
 					);
 					if (ports.convert.ingest === undefined)
 						return yield* Port.unavailable('convert.ingest', 'the host provides no ingest');

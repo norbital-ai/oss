@@ -350,7 +350,7 @@ layer(
 			})
 	);
 
-	const VISITOR = '__Secure-bolt-visitor';
+	const VISITOR = '__Host-bolt-visitor';
 	const anonymous = (j: Jar, kiosk = 'shop', address?: string) =>
 		call(j, 'GET', `/__bolt/shell?kiosk=${kiosk}`, undefined, undefined, address).pipe(
 			Effect.flatMap((r) => Schema.decodeUnknownEffect(ShellBootAnswer)(r.body?.value)),

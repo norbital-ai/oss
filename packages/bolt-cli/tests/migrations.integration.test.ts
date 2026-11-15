@@ -94,6 +94,29 @@ const prior_versioned_audit: Parameters<typeof generate>[3] = (schema) =>
 	]);
 
 describe('committed workspace migrations', () => {
+	it.live('a new label function is generated once, so an author can rebase its migration', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const directory = yield* root;
+				yield* prepare_migrations(directory, initial, 'generate');
+				yield* prepare_migrations(directory, {
+					...initial,
+					models: {
+						...initial.models,
+						extra: {
+							description: 'Another entry',
+							record_label: 'record.name',
+							fields: { name: { kind: 'text' } }
+						}
+					}
+				}, 'generate');
+				const bundle = yield* read_migrations(join(directory, 'migrations'));
+				const added = bundle.files.at(-1)?.sql ?? '';
+				expect(added.match(/create or replace function "bolt_record_label_extra_/g)).toHaveLength(1);
+				expect(added).not.toContain('-- step runtime:functions');
+			})
+		).pipe(Effect.provide(NodeServices.layer))
+	);
 	it.live('test checkpoints retain committed backfills through transitions and resets', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

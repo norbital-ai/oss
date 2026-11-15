@@ -1581,7 +1581,10 @@ const rollupBackfill = Effect.fnUntraced(function* (
 	return o;
 });
 
-/** A pure SQL wrapper keeps CEL subqueries legal inside a generated column; its versioned name rebuilds stored values on edits. */
+/**
+ * A pure SQL wrapper keeps CEL subqueries legal inside a generated column; its versioned name rebuilds stored values on
+ * edits, and `create or replace` lets a Bolt release's runtime-functions migration re-plan an unchanged label.
+ */
 const record_labelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
 	if (t.spec.record_label === undefined) return undefined;
 	const program = label_expression(t.spec.record_label);
@@ -1628,11 +1631,11 @@ const record_labelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
 		})
 	);
 	const input = `SELECT jsonb_build_object(${values.join(', ')}) AS j FROM (SELECT ${args.length === 0 ? '1 AS unused' : args.join(', ')}) label_inputs`;
-	const expression = program.sql(
-		(path) => `(label_row.j #> ARRAY[${path.split('.').map(lit).join(', ')}])`
-	);
-	const body = label_text_sql(expression, `(${input}) label_row`);
-	const name = `bolt_record_label_${t.model.slice(0, 22)}_${hash8(canonical([body, types]))}`;
+	const read = (path: string) => `(label_row.j #> ARRAY[${path.split('.').map(lit).join(', ')}])`;
+	const text = (fenced: boolean) => label_text_sql(program.sql(read, fenced), `(${input}) label_row`, fenced);
+	// The name versions what the label means (its unfenced text, as before fencing); the fenced body only plans it.
+	const name = `bolt_record_label_${t.model.slice(0, 22)}_${hash8(canonical([text(false), types]))}`;
+	const body = text(true);
 	let delimiter = '$record_label$';
 	while (body.includes(delimiter)) delimiter = `${delimiter.slice(0, -1)}_$`;
 	const definition: SchemaObject = {
@@ -1641,7 +1644,7 @@ const record_labelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
 		table: t.model,
 		deps,
 		create: [
-			`create function ${q(name)}(${types.join(', ')}) returns text language sql immutable parallel safe set timezone = 'UTC' as ${delimiter}${body}${delimiter}`
+			`create or replace function ${q(name)}(${types.join(', ')}) returns text language sql immutable parallel safe set timezone = 'UTC' as ${delimiter}${body}${delimiter}`
 		],
 		drop: `drop function if exists ${q(name)}(${types.join(', ')}) cascade`
 	};

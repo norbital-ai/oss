@@ -154,3 +154,22 @@ it('invitation loading disables admission and presents a read failure', async ()
 		target.remove();
 	}
 });
+
+it('links the host recovery below the card in place of changing workspace', async () => {
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(AccessCard, { target, props: { api, recovery: '/acme/recovery' } });
+	try {
+		await expect
+			.element(page.getByRole('link', { name: 'Open workspace recovery' }))
+			.toHaveAttribute('href', '/acme/recovery');
+		await expect
+			.element(page.getByRole('link', { name: 'Change workspace' }))
+			.not.toBeInTheDocument();
+	} finally {
+		await unmount(view);
+		await dispose();
+		target.remove();
+	}
+});

@@ -76,18 +76,26 @@ const APP_PREFIX = '/app/';
 const KIOSK_PREFIX = '/kiosk/';
 /** The session cookie, the admin's preview-as target and the visitor's idempotency id. */
 export const COOKIES = {
-	session: '__Secure-bolt-session',
-	preview: '__Secure-bolt-preview',
-	visitor: '__Secure-bolt-visitor'
+	session: '__Host-bolt-session',
+	preview: '__Host-bolt-preview',
+	visitor: '__Host-bolt-visitor'
 } as const;
 /** Plain HTTP must not depend on browser exceptions for Secure cookies. */
-export const cookie_names = (secure: boolean) =>
-	secure ? COOKIES : { session: 'bolt-session', preview: 'bolt-preview', visitor: 'bolt-visitor' };
+export const cookie_names = (secure: boolean, path = '') =>
+	!secure
+		? { session: 'bolt-session', preview: 'bolt-preview', visitor: 'bolt-visitor' }
+		: path === '' || path === '/'
+			? COOKIES
+			: {
+					session: '__Secure-bolt-session',
+					preview: '__Secure-bolt-preview',
+					visitor: '__Secure-bolt-visitor'
+				};
 /**
  * The cookies' site attributes: over https, partitioned and sent in frames, so a portal page embedded in another site keeps
  * its own sign-in (kept apart from the top-level one: a framing site never borrows a member's session); over plain http
  * (`bolt dev`), `Lax` without Secure. Every cookie has no Domain and the workspace's `base_path` as its Path: workspaces
- * served under paths of one host keep their sign-ins apart (`__Host-` would force `Path=/`).
+ * served under paths of one host use `__Secure-` to keep their sign-ins apart; root workspaces use `__Host-`.
  * Cross-site writes are refused by `cross_site`, not by `SameSite`.
  */
 export const cookie_site = (secure: boolean): string =>
@@ -131,7 +139,8 @@ export type ShellBoot = {
 	 * `logo`: the host's first brand icon, the page's organization mark (`bolt.org`). `environment`: the non-production
 	 * badge's label (`environment_label`), absent in production. `handle`: the tenant handle the sign-in card names; `apex`:
 	 * where "Change workspace" leads (the host's workspace picker). `organization`: the host lets an administrator edit the
-	 * name and logo (`ShellHostConfig.organization`). `live`: this is a preview environment; the live workspace's address.
+	 * name and logo (`ShellHostConfig.organization`). `live`: this is a preview environment; the live workspace's address. `recovery`:
+	 * where an administrator repairs the workspace when it will not open (the failure card links it).
 	 */
 	workspace: {
 		name: string;
@@ -142,6 +151,7 @@ export type ShellBoot = {
 		handle?: string;
 		apex?: string;
 		live?: string;
+		recovery?: string;
 		organization?: true;
 	};
 	actor: EngineActor | null;

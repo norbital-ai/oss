@@ -364,7 +364,7 @@ const makeShell = Effect.gen(function* () {
 	);
 
 	const secure = c.secure ?? true;
-	const names = cookie_names(secure);
+	const names = cookie_names(secure, base_path(c.public_url));
 	const credentialNames: ReadonlySet<string> = new Set(Object.values(names));
 	const crypto = yield* Crypto.Crypto;
 	const newId = uuid(crypto);
@@ -626,8 +626,14 @@ const makeShell = Effect.gen(function* () {
 			if (!('acts' in body)) return forbidden;
 			return Object.keys(body.acts).every((callable) => {
 				const dot = callable.lastIndexOf('.');
-				return dot > 0 && admit_visitor(auth, { act: callable.slice(0, dot), verb: callable.slice(dot + 1) }) === null;
-			}) ? null : forbidden;
+				return (
+					dot > 0 &&
+					admit_visitor(auth, { act: callable.slice(0, dot), verb: callable.slice(dot + 1) }) ===
+						null
+				);
+			})
+				? null
+				: forbidden;
 		}
 		if (path.startsWith(PATHS.files) && request.method === 'PUT') {
 			const limited = yield* charge('upload');
@@ -645,16 +651,12 @@ const makeShell = Effect.gen(function* () {
 	const rejected = (
 		response: HttpServerResponse.HttpServerResponse
 	): Extract<BootState, { readonly _tag: 'Refused' }> => ({ _tag: 'Refused', response });
-	const bootState = Effect.fn('shell.bootState')(function* (
-		request: HttpServerRequest.HttpServerRequest,
-		x: Caller
-	): Effect.fn.Return<BootState, EngineError> {
-		const url = requestUrl(request);
-		const app = publicApp(url.searchParams.get('app'));
+	/** The workspace as the access pages show it: every boot answer carries it, a refused or failed one included. */
+	const shellWorkspace = (): ShellBoot['workspace'] => {
 		const workspace = c.workspace(),
 			logo = workspace.icons?.[0]?.src;
 		const env = environment_label(c.environment);
-		const ws: ShellBoot['workspace'] = {
+		return {
 			name: workspace.name,
 			handle: workspace.handle,
 			locale: m.workspace.locale,
@@ -663,8 +665,17 @@ const makeShell = Effect.gen(function* () {
 			...(env === null ? {} : { environment: env }),
 			...(c.apex === undefined ? {} : { apex: c.apex }),
 			...(c.live === undefined ? {} : { live: c.live }),
+			...(c.recovery === undefined ? {} : { recovery: c.recovery }),
 			...(c.organization === undefined ? {} : { organization: true as const })
 		};
+	};
+	const bootState = Effect.fn('shell.bootState')(function* (
+		request: HttpServerRequest.HttpServerRequest,
+		x: Caller
+	): Effect.fn.Return<BootState, EngineError> {
+		const url = requestUrl(request);
+		const app = publicApp(url.searchParams.get('app'));
+		const ws = shellWorkspace();
 		// a kiosk boot names its kiosk: signed-out callers boot only public kiosks (no sign-in, the
 		// requests run as the assigned policies); members boot any kiosk they may open, with the boot catalog
 		// cut to what the kiosk may read. Anything else is unauthenticated (signed-out) or forbidden.
@@ -1452,11 +1463,18 @@ const makeShell = Effect.gen(function* () {
 				return Option.fromNullishOr(yield* shell(request, path, yield* x));
 			return Option.none();
 		}).pipe(
-			Effect.catch((e) => Effect.succeed(Option.some(response_error(e)))),
+			// a failed boot still names its workspace, so the failure card can offer its recovery
+			Effect.catch((e) => Effect.succeed(Option.some(response_error(e, bootFailure(request))))),
 			Effect.catchCause((cause) =>
-				Effect.logWarning(cause).pipe(Effect.as(Option.some(response_error(cause))))
+				Effect.logWarning(cause).pipe(
+					Effect.as(Option.some(response_error(cause, bootFailure(request))))
+				)
 			)
 		);
+	const bootFailure = (request: HttpServerRequest.HttpServerRequest) =>
+		request.method === 'GET' && requestUrl(request).pathname === SHELL
+			? { workspace: shellWorkspace() }
+			: {};
 	return { authority, handle, publicPage };
 });
 /** The one shell's way to resolve a caller: what it remembers of them lives as long as the shell does. */

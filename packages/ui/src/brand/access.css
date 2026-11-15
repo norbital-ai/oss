@@ -93,6 +93,33 @@
 	gap: 0.25rem;
 	min-block-size: 3rem;
 }
+/* The card (`AccessCard`): a non-wide card keeps the narrow measure inside a wide frame. */
+.access-panel:has(.access-card[data-access-wide='false']) {
+	max-width: 32rem;
+	margin-inline: auto;
+}
+.access-card-description,
+.access-card .access-error {
+	min-block-size: 1.5em;
+	overflow-wrap: anywhere;
+}
+.access-card-hint {
+	min-block-size: 3em;
+	margin: 0;
+}
+.access-card input,
+.access-card .access-action {
+	min-block-size: 2.75rem;
+}
+.access-card .access-action {
+	position: relative;
+}
+.access-progress {
+	position: absolute;
+	inset-inline-start: 0.75rem;
+	top: 50%;
+	transform: translateY(-50%);
+}
 .access-switch {
 	box-sizing: border-box;
 	min-block-size: 2.5rem;
@@ -244,6 +271,30 @@
 	}
 	.access-frame .access-header .text-overline {
 		display: none;
+	}
+}
+@media (orientation: landscape) and (max-height: 500px) and (min-width: 640px) and (pointer: coarse) {
+	.access-card-content {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		gap: 0.75rem 1.5rem;
+		align-items: start;
+	}
+	.access-card-content > header {
+		grid-column: 1;
+	}
+	.access-card-content > header h1 {
+		font-size: 1.5rem;
+		line-height: 1.2;
+	}
+	.access-card-content > [data-layout='stack'] {
+		grid-column: 2;
+		grid-row: 1 / span 2;
+	}
+	.access-card-content > p {
+		grid-column: 1;
+		grid-row: 2;
+		padding-top: 0.5rem;
 	}
 }
 @media (orientation: landscape) and (max-height: 300px) and (min-width: 640px) and (pointer: coarse) {

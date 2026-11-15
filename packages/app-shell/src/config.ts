@@ -65,6 +65,10 @@ const Fields = Schema.Struct({
 	theme_color: Schema.optionalKey(Hex),
 	/** The server the app belongs to, as an origin: a Norbital platform origin or a self-hosted Bolt server. */
 	host: Schema.String.check(Schema.makeFilter(hostProblem)),
+	/** The initial page, without pinning the app to its origin. Defaults to `workspace`, else `host`. */
+	start: Schema.optionalKey(
+		Schema.String.check(Schema.makeFilter((value: string) => addressProblem('start', value)))
+	),
 	/**
 	 * Pins the app to one workspace page, path included, e.g. `https://t-abc.workspaces.norbital.ai/apps/cleaner`.
 	 * Unset, the app starts at `host` and moves between every workspace on it.
@@ -90,11 +94,15 @@ const Fields = Schema.Struct({
 });
 
 export const AppConfig = Fields.check(
-	Schema.makeFilter((config: typeof Fields.Type) =>
-		config.workspace === undefined || onHost(new URL(config.host), new URL(config.workspace))
-			? undefined
-			: `workspace ${config.workspace} is not on host ${config.host} or one of its subdomains`
-	)
+	Schema.makeFilter((config: typeof Fields.Type) => {
+		const host = new URL(config.host);
+		if (config.workspace !== undefined && !onHost(host, new URL(config.workspace)))
+			return `workspace ${config.workspace} is not on host ${config.host} or one of its subdomains`;
+		if (config.start !== undefined && (!onHost(host, new URL(config.start)) ||
+			(config.workspace !== undefined && new URL(config.start).origin !== new URL(config.workspace).origin)))
+			return 'start must be on the app host, or the pinned workspace origin';
+		return undefined;
+	})
 );
 export type AppConfig = typeof AppConfig.Type;
 

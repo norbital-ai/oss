@@ -235,11 +235,12 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 					.map((sql) => `${sql.trim().replace(/;$/, '')};`)
 					.join('\n')
 			).pipe(Effect.provide(Pristine.layer));
+			// The schema plan creates new functions before their columns; only runtime upgrades need a prologue.
 			prologue.push(
 				...runtimeFunctions(heldLines ?? [], heldLines ?? [], expected, [
 					...declared,
 					...native.flatMap((object) => object.create)
-				])
+				]).filter((sql) => !generated.file.sql.includes(sql))
 			);
 		}
 		const upgraded = {

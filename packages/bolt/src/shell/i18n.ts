@@ -674,6 +674,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Switch to light mode': '切换到浅色模式',
 	'Switch to dark mode': '切换到深色模式',
 	'Signing in to': '正在登录',
+	Opening: '正在打开',
+	'Open workspace recovery': '打开工作区恢复',
 	'Email address': '邮箱地址',
 	'Send sign-in code': '发送登录验证码',
 	"We'll email you a six-digit code. No password required.": '我们会寄出六位数验证码。无需密码。',

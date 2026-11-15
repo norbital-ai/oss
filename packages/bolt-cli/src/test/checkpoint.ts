@@ -4,6 +4,7 @@ import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import { Effect, FileSystem, Option } from 'effect';
 import type { PlatformError } from 'effect/PlatformError';
 import { createHash, randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,19 +45,23 @@ export const tree_hash = (dir: string): Effect.Effect<string, PlatformError> =>
 
 /** This kit's own tree (its source here, its build in an install). */
 const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
-/** Modules by path without extension: this kit's own (`kit:`) or Bolt's. */
+/** Modules by path without extension: this kit's own (`kit:`) or Bolt's, plus Store behind their bare imports. */
 const hashed = (...modules: ReadonlyArray<string>) =>
 	module_hash(
 		...modules.map((module) =>
 			module.startsWith('kit:')
 				? join(KIT, `${module.slice('kit:'.length)}${EXT}`)
 				: join(BOLT, `${module}${EXT}`)
-		)
+		),
+		createRequire(import.meta.url).resolve('@norbital-ai/store')
 	);
 /** The modules each kind of checkpoint is built through: the kit's and Bolt's, without extension. */
 export const inputs = {
-	/** A schema's planned DDL in PGlite, and the shape the kit reads of it. */
-	image: hashed('kit:test/database'),
+	/**
+	 * A schema's planned DDL in PGlite, and the shape the kit reads of it: planned by Bolt's engine through the store, whose
+	 * builds a bare import hides from the kit's own closure, so a changed DDL compiler never reuses an older image.
+	 */
+	image: hashed('kit:test/database', 'engine/index'),
 	/** A guest bundled through the attachment edge, with whatever of Bolt it imports. */
 	guest: hashed('kit:test/guest', 'index', 'decl/runtime/guest', 'decl/body', 'decl/errors'),
 	/** A workspace's check: its manifest and guest. */

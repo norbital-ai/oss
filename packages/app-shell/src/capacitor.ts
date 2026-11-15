@@ -39,7 +39,7 @@ const OFFLINE_PAGE = 'offline.html';
 export const cleartext = (config: AppConfig) => new URL(config.host).protocol === 'http:';
 
 /** The address the app opens: the pinned workspace page, or the host. */
-const start = (config: AppConfig) => new URL(config.workspace ?? config.host);
+const start = (config: AppConfig) => new URL(config.start ?? config.workspace ?? config.host);
 
 /** True when the WebView also trusts the host's subdomains: an unpinned app on a named host (an IP has none). */
 const subdomains = (config: AppConfig) =>
@@ -60,7 +60,7 @@ const shellPluginConfig = (config: AppConfig): ShellPluginConfig => ({
  * or plain HTTP also needs its explicit origin rule for Android's bridge. An unpinned app adds the host's subdomains.
  */
 export const capacitorConfig = (config: AppConfig): CapacitorConfig => {
-	const origin = start(config);
+	const origin = new URL(config.workspace ?? config.host);
 	const port = origin.port === '' ? '' : `:${origin.port}`;
 	const wildcard = subdomains(config);
 	const background = config.splash?.color ?? config.theme_color;
@@ -73,7 +73,7 @@ export const capacitorConfig = (config: AppConfig): CapacitorConfig => {
 		android: { path: 'android', useLegacyBridge: false },
 		ios: { path: 'ios' },
 		server: {
-			url: config.workspace ?? config.host,
+			url: config.start ?? config.workspace ?? config.host,
 			allowNavigation: [
 				origin.hostname,
 				...(wildcard ? [`*.${origin.hostname}`] : []),
