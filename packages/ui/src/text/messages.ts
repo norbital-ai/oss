@@ -1,6 +1,9 @@
 import type { ViewBolt } from '../client/contract.js';
 export const humanize = (name: string) =>
-	name.replace(/[_.]+/g, ' ').trim().replace(/^\w/, (c) => c.toUpperCase());
+	name
+		.replace(/[_.]+/g, ' ')
+		.trim()
+		.replace(/^\w/, (c) => c.toUpperCase());
 export const fill = (s: string, vars: { readonly [n: string]: string | number }) =>
 	s.replace(/\{(\w+)\}/g, (m, n: string) => (vars[n] === undefined ? m : String(vars[n])));
 const NATIVE_FIELDS: Readonly<Record<string, string>> = {
@@ -42,14 +45,16 @@ const MESSAGES = {
 	'child.actions': 'Actions',
 	'child.add': 'Add row',
 	'child.alreadyLinked': 'This record already has a parent.',
-	'child.currentRows': 'Related rows show their current values. Return to the current revision to edit.',
+	'child.currentRows':
+		'Related rows show their current values. Return to the current revision to edit.',
 	'child.delete': 'Delete row',
 	'child.link': 'Link existing',
 	'child.linkPending': 'Will link {record}.',
 	'child.loadingPermissions': 'Loading permissions',
 	'child.next': 'Next page',
 	'child.record': 'Record',
-	'child.retainedDrafts': 'Related row drafts are preserved. Return to the current revision to continue editing.',
+	'child.retainedDrafts':
+		'Related row drafts are preserved. Return to the current revision to continue editing.',
 	'child.reviewDraft': 'Review the related rows before saving.',
 	'child.saveFailed': 'The row could not be saved. Try again.',
 	'child.unavailable': 'This relationship is not exposed.',
@@ -63,12 +68,21 @@ const MESSAGES = {
 	'map.empty': 'No places to show',
 	'map.limit': 'Showing the first {n}',
 	'map.open': 'Open',
+	'map.plan': 'Plan route',
+	'map.fit': 'Show all places',
+	'map.planHelp': 'Choose up to {n} stops in travel order. Road directions open in Google Maps.',
+	'map.addStop': 'Add a stop',
+	'map.moveUp': 'Move {name} earlier',
+	'map.moveDown': 'Move {name} later',
+	'map.removeStop': 'Remove {name}',
+	'map.directions': 'Directions',
+	'map.clear': 'Clear route',
 	'map.tiles': 'The map could not load; the places are listed below.',
 	'outcome.conflict': 'Someone else changed this; reload and try again',
 	'outcome.pending': 'Submitted for review',
 	'outcome.running': 'Still working: it continues in the background',
 	'outcome.saved': 'Saved',
-	'outcome.unknown': 'Couldn\'t confirm; check again',
+	'outcome.unknown': "Couldn't confirm; check again",
 	'record.actor.unknown': 'Unknown',
 	'record.backToCurrent': 'Back to current',
 	'record.cancel': 'Cancel',
@@ -83,7 +97,8 @@ const MESSAGES = {
 	'record.history': 'History',
 	'record.historyFailed': 'This historical revision could not be loaded.',
 	'record.historyInvalid': 'Not valid',
-	'record.historyInvalidRaw': 'This revision no longer matches the current schema. Its captured data is shown; it cannot be applied to the record view.',
+	'record.historyInvalidRaw':
+		'This revision no longer matches the current schema. Its captured data is shown; it cannot be applied to the record view.',
 	'record.historyLoading': 'Loading history…',
 	'record.historyPartial': 'Some related history is unavailable.',
 	'record.historyUncompatible': 'incompatible',
@@ -91,7 +106,8 @@ const MESSAGES = {
 	'record.new': 'New {what}',
 	'record.noAccess': 'No access',
 	'record.no_approval': 'No approval on this record',
-	'record.noApprovalHint': 'When a change to this record needs approval, the request, its approvers and their decisions show here.',
+	'record.noApprovalHint':
+		'When a change to this record needs approval, the request, its approvers and their decisions show here.',
 	'record.noHistory': 'No access to this record’s history',
 	'record.moved': 'Moved',
 	'record.noVisibleChanges': 'No visible changes',
@@ -101,8 +117,10 @@ const MESSAGES = {
 	'record.requestApproval': 'Request approval',
 	'record.restore': 'Restore this version',
 	'record.restoreApproval': 'Needs approval',
-	'record.restoreHint': 'These fields take this version’s values as a new revision. Every later revision stays in history.',
-	'record.restoreNothing': 'Nothing to restore: this version’s own fields match the record, or none can be written.',
+	'record.restoreHint':
+		'These fields take this version’s values as a new revision. Every later revision stays in history.',
+	'record.restoreNothing':
+		'Nothing to restore: this version’s own fields match the record, or none can be written.',
 	'record.restoreSkip.deleted_target': 'The linked record was deleted',
 	'record.restoreSkip.incompatible': 'incompatible',
 	'record.restoreSkip.no_grant': 'You may not change this field',
@@ -282,7 +300,7 @@ const MESSAGES = {
 	'view.syncButton': 'Sync',
 	'view.syncFrom': 'Pull the latest records from {source}',
 	'view.template': 'Download template',
-	'view.templateHint': 'The import\'s columns as a spreadsheet',
+	'view.templateHint': "The import's columns as a spreadsheet",
 	'view.text': 'Text',
 	'view.theseConditions': 'these conditions',
 	'view.title': 'Filters & sort',
@@ -299,7 +317,8 @@ const MESSAGES = {
 	'view.type.time': 'Time field',
 	'view.unnamed': 'an unnamed {what}',
 	'view.unseen': 'a record you cannot see',
-	'view.unsupportedSaved': 'This filter references a field or condition unavailable in the current model. It is kept unchanged below.',
+	'view.unsupportedSaved':
+		'This filter references a field or condition unavailable in the current model. It is kept unchanged below.',
 	'view.up': 'Move up',
 	'view.upload': 'Upload',
 	'view.value': 'Value',
@@ -333,10 +352,11 @@ export function label(
 	field?: string,
 	declared?: string
 ): string {
-	const key =
-		field === undefined ? `models.${model}.label` : `models.${model}.fields.${field}`;
+	const key = field === undefined ? `models.${model}.label` : `models.${model}.fields.${field}`;
 	const s = bolt.t(key);
-	return s !== key ? s : (declared ?? NATIVE_FIELDS[key] ?? humanize((field ?? model).replace(/_id$/, '')));
+	return s !== key
+		? s
+		: (declared ?? NATIVE_FIELDS[key] ?? humanize((field ?? model).replace(/_id$/, '')));
 }
 /** A label inside a sentence: its first letter lowered unless it leads an acronym (`Jobs` → `jobs`, `SOW documents` stays). */
 export const lowerLead = (s: string) =>

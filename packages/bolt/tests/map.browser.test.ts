@@ -11,7 +11,7 @@ import './support/shell.css';
 
 // MapLibre (loaded from its CDN) draws in a real WebGL context; the marks, card and list over it are ours. Tiles come from the network and are
 // not waited for: a missing tile leaves the marks working.
-it('mounts MapLibre on a WebGL canvas, places the marks on it and opens a record from the card', async () => {
+it('mounts MapLibre on a WebGL canvas, places the marks on it and opens a record from its pin', async () => {
 	const catalog = {
 		sites: {
 			record_label: 'record.name',
@@ -60,7 +60,8 @@ it('mounts MapLibre on a WebGL canvas, places the marks on it and opens a record
 		const card = required(target.querySelector('[data-map-card="a"]'));
 		expect(card.textContent).toContain('Alpha yard');
 		expect(target.querySelector('[data-map-row="a"]')?.hasAttribute('data-selected')).toBe(true);
-		await page.getByRole('button', { name: 'Open' }).click();
+		expect(card.querySelector('button')).toBeNull();
+		await page.getByRole('button', { name: 'Alpha yard' }).first().click();
 		expect(new URL(location.href).searchParams.getAll('record')).toEqual(['sites/a']);
 	} finally {
 		await unmount(view);

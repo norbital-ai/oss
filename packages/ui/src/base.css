@@ -1162,7 +1162,12 @@ html {
 	background: var(--popover);
 	color: var(--muted-foreground);
 	border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
-	box-shadow: var(--shadow-deep);
+	border-radius: var(--radius-md);
+	box-shadow: none;
+}
+.maplibregl-ctrl-group button {
+	width: 32px;
+	height: 32px;
 }
 .maplibregl-ctrl-group button + button {
 	border-top-color: color-mix(in oklab, var(--foreground) 14%, transparent);

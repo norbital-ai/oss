@@ -7,8 +7,9 @@ Each record is a round mark with its initial; `badge` (or the label, with `label
 Marks that crowd one spot draw as one accent-ringed count that splits as the map zooms in (a click zooms to it).
 Hovering or focusing a mark, or a row of the optional side `list`, selects it: a floating card shows its title,
 `status`, `fields` as chips and `description` (or the `card` snippet); the selected row (or the `item` snippet) is
-outlined in the accent. A click on a mark, a row or the card's button opens the record (or calls `on_open`).
-`overlays` add computed marks and glowing accent routes. The map fills its parent, down to 18rem.
+outlined in the accent. A click on a mark or a row opens the record (or calls `on_open`).
+`overlays` add computed marks and straight connections. Plan route orders up to five stops and opens road directions
+in Google Maps; it does not invent road paths or travel times. The map fills its parent, down to 18rem.
 @example
 ```svelte
 <Map {ctx} of="sites" at="location" label="name" status="state" fields={['crew', 'due']} badge="open_jobs" list />
@@ -50,7 +51,7 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 		description?: RecordFieldOf<C>;
 		/** A list of the places beside the map, synced with its selection. */
 		list?: boolean;
-		/** The selected place's floating card body, in place of its title, status, chips and description; Open stays. */
+		/** The selected place's floating card body, in place of its title, status, chips and description. */
 		card?: Snippet<[{ row: RowOf<C> }]>;
 		/** A side `list` row's content, in place of its mark, title, status and badge. */
 		item?: Snippet<[{ row: RowOf<C> }]>;
@@ -91,6 +92,9 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 	import ViewToolbar from '../model/ViewToolbar.svelte';
 	import Value from '../cell/Value.svelte';
 	import { Button } from '../primitives/button/index.js';
+	import Combobox from '../primitives/combobox/combobox.svelte';
+	import Icon from '@iconify/svelte';
+	import { directions_url, MAX_ROUTE_STOPS } from './directions.js';
 	import Split from '../layout/split.svelte';
 	import type { Values } from '../model/types.js';
 
@@ -154,7 +158,14 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 			)
 		)
 	);
-	type Place = { id: string; lat: number; lng: number; text: string; row: Values; source: RowOf<C> };
+	type Place = {
+		id: string;
+		lat: number;
+		lng: number;
+		text: string;
+		row: Values;
+		source: RowOf<C>;
+	};
 	const points: Place[] = $derived(
 		page.kind === 'ready'
 			? page.value.rows.flatMap((source) => {
@@ -162,12 +173,25 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 					const p = row[at];
 					const text = label ? (refOf(row, label)?.text ?? show(row[label] ?? null)) : '';
 					return isPoint(p)
-						? [{ id: source.id, lat: p.lat, lng: p.lng, row, source, text: text || recordText(catalog[of], row) }]
+						? [
+								{
+									id: source.id,
+									lat: p.lat,
+									lng: p.lng,
+									row,
+									source,
+									text: text || recordText(catalog[of], row)
+								}
+							]
 						: [];
 				})
 			: []
 	);
-	const open = (id: string) => (on_open ? on_open(id) : open_record(of, id));
+	const open = (id: string) => {
+		if (planning) addStop(id);
+		else if (on_open) on_open(id);
+		else open_record(of, id);
+	};
 	const initial = (text: string) => text.trim().charAt(0).toUpperCase() || '•';
 
 	let failed = $state(false),
@@ -178,6 +202,32 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 	/** The whole zoom the clusters are cut at: they change only when it does. */
 	let zoom = $state(0);
 	let selected = $state<string | null>(null);
+	let planning = $state(false);
+	let stopIds = $state<string[]>([]);
+	const stops = $derived(stopIds.flatMap((id) => points.find((p) => p.id === id) ?? []));
+	const directions = $derived(directions_url(stops));
+	const stopOptions = $derived(
+		points.filter((p) => !stopIds.includes(p.id)).map((p) => ({ value: p.id, label: p.text }))
+	);
+	function addStop(id: string) {
+		if (stops.length < MAX_ROUTE_STOPS && !stopIds.includes(id)) stopIds = [...stopIds, id];
+	}
+	function moveStop(index: number, delta: number) {
+		const to = index + delta;
+		if (to < 0 || to >= stopIds.length) return;
+		const next = [...stopIds];
+		const current = next[index];
+		const target = next[to];
+		if (current === undefined || target === undefined) return;
+		[next[index], next[to]] = [target, current];
+		stopIds = next;
+	}
+	watch(
+		() => page,
+		() => {
+			if (page.kind === 'ready') stopIds = stopIds.filter((id) => points.some((p) => p.id === id));
+		}
+	);
 	const card = $derived(selected === null ? undefined : points.find((p) => p.id === selected));
 	let rows: HTMLElement | undefined = $state();
 
@@ -207,7 +257,9 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 		lat: group.reduce((s, p) => s + p.lat, 0) / group.length,
 		lng: group.reduce((s, p) => s + p.lng, 0) / group.length
 	});
-	const bounds = (all: readonly { lat: number; lng: number }[]): [[number, number], [number, number]] => [
+	const bounds = (
+		all: readonly { lat: number; lng: number }[]
+	): [[number, number], [number, number]] => [
 		[Math.min(...all.map((p) => p.lng)), Math.min(...all.map((p) => p.lat))],
 		[Math.max(...all.map((p) => p.lng)), Math.max(...all.map((p) => p.lat))]
 	];
@@ -226,9 +278,16 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 	function select(id: string, from: 'map' | 'list') {
 		selected = id;
 		if (from === 'map')
-			rows?.querySelector(`[data-map-row=${JSON.stringify(id)}]`)?.scrollIntoView?.({ block: 'nearest' });
+			rows
+				?.querySelector(`[data-map-row=${JSON.stringify(id)}]`)
+				?.scrollIntoView?.({ block: 'nearest' });
 		const p = points.find((p) => p.id === id);
-		if (from === 'list' && map !== undefined && p !== undefined && !map.getBounds().contains([p.lng, p.lat]))
+		if (
+			from === 'list' &&
+			map !== undefined &&
+			p !== undefined &&
+			!map.getBounds().contains([p.lng, p.lat])
+		)
 			map.easeTo({ center: [p.lng, p.lat] });
 	}
 	const mount = attach((node: HTMLElement) =>
@@ -271,181 +330,300 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 </script>
 
 <section class="@container flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2">
-<ViewToolbar {ctx}
-	config={toolbar}
-	model={of}
-	{view}
-	{catalog}
-	author={where}
-	bind:q
-	searchable={(catalog[of]?.search?.length ?? 0) > 0}
-/>
-{#snippet value(row: Values, f: string)}
-	<Value {ctx} value={row[f]} kind={catalog[of]?.fields[f]} {row} ref={refOf(row, f)} name={f} dense link={false} />
-{/snippet}
-{#snippet pill(p: Place)}
-	{#if badge !== undefined && p.row[badge] !== null && p.row[badge] !== undefined}
-		<span class="map-pill">{@render value(p.row, badge)}</span>
-	{:else if badge === undefined && labels === 'always' && p.text}
-		<span class="map-pill">{p.text}</span>
-	{/if}
-{/snippet}
-{#snippet canvas()}
-	<div class="relative isolate z-0 h-full min-h-72 w-full flex-1 overflow-clip rounded-lg border bg-background">
-		<div class="size-full" {@attach mount}></div>
-		<!-- marks, routes and the card over the canvas: only they take the pointer; the rest pans the map -->
+	<ViewToolbar
+		{ctx}
+		config={toolbar}
+		model={of}
+		{view}
+		{catalog}
+		author={where}
+		bind:q
+		searchable={(catalog[of]?.search?.length ?? 0) > 0}
+	/>
+	{#snippet value(row: Values, f: string)}
+		<Value
+			{ctx}
+			value={row[f]}
+			kind={catalog[of]?.fields[f]}
+			{row}
+			ref={refOf(row, f)}
+			name={f}
+			dense
+			link={false}
+		/>
+	{/snippet}
+	{#snippet pill(p: Place)}
+		{#if badge !== undefined && p.row[badge] !== null && p.row[badge] !== undefined}
+			<span class="map-pill">{@render value(p.row, badge)}</span>
+		{:else if badge === undefined && labels === 'always' && p.text}
+			<span class="map-pill">{p.text}</span>
+		{/if}
+	{/snippet}
+	{#snippet canvas()}
 		<div
-			class="pointer-events-none absolute inset-0 overflow-hidden"
-			data-map-overlay
-			role="presentation"
-			onkeydown={(e) => {
-				if (e.key === 'Escape') selected = null;
-			}}
+			class="relative isolate z-0 h-full min-h-72 w-full flex-1 overflow-clip rounded-lg border bg-background"
 		>
-			{#if ready}
-				<svg class="absolute inset-0 size-full" aria-hidden="true">
-					{#each overlays as o, i (i)}
-						{#if o.from}
-							{@const a = xy(o.from.lat, o.from.lng)}
-							{@const b = xy(o.lat, o.lng)}
-							<line class="map-route-glow" x1={a.x} y1={a.y} x2={b.x} y2={b.y} data-map-route />
-							<line class="map-route" x1={a.x} y1={a.y} x2={b.x} y2={b.y} />
-						{/if}
-					{/each}
-				</svg>
-				{#each overlays as o, i (i)}
-					{@const at = xy(o.lat, o.lng)}
-					<span class="map-at" style:left="{at.x}px" style:top="{at.y}px" data-map-mark>
-						<span class="map-ring"></span>
-						{#if o.text}<span class="map-pill">{o.text}</span>{/if}
-					</span>
-				{/each}
-				{#each groups as group (group.map((p) => p.id).join())}
-					{@const c = centre(group)}
-					{@const at = xy(c.lat, c.lng)}
-					{#if group.length > 1}
-						<button
-							type="button"
-							disabled={!interactive}
-							class="map-at map-cluster"
-							style:left="{at.x}px"
-							style:top="{at.y}px"
-							data-map-cluster={group.length}
-							aria-label={group.map((p) => p.text).join(', ')}
-							onclick={() =>
-								map?.fitBounds(bounds(group), { padding: 64, maxZoom: 17, duration: 300 })}
+			<div class="size-full" {@attach mount}></div>
+			{#if interactive}
+				<div
+					class="absolute top-3 left-3 z-10 flex max-w-[calc(100%-5rem)] flex-col items-start gap-2"
+				>
+					<div class="flex gap-1">
+						<Button
+							variant="outline"
+							size="default"
+							onclick={() => (planning = !planning)}
+							aria-pressed={planning}
+							data-map-plan-toggle
 						>
-							{group.length}
-						</button>
-					{:else}
-						{@const p = group[0]!}
-						<button
-							type="button"
-							disabled={!interactive}
-							class="map-at map-point"
-							style:left="{at.x}px"
-							style:top="{at.y}px"
-							data-map-point={p.id}
-							data-selected={selected === p.id || undefined}
-							aria-label={p.text}
-							onpointerenter={() => select(p.id, 'map')}
-							onfocus={() => select(p.id, 'map')}
-							onclick={() => open(p.id)}
-						>
-							<span class="map-mark">{initial(p.text)}</span>
-							{@render pill(p)}
-						</button>
-					{/if}
-				{/each}
-				{#if interactive && card !== undefined}
-					{@const at = xy(card.lat, card.lng)}
-					<div
-						class="bg-popover text-popover-foreground pointer-events-auto absolute flex w-64 flex-col gap-2 rounded-lg border p-3 shadow-deep"
-						class:map-card-below={at.y < 200}
-						class:map-card-above={at.y >= 200}
-						style:left="clamp(8.5rem, {at.x}px, calc(100% - 8.5rem))"
-						style:top="{at.y}px"
-						data-map-card={card.id}
-					>
-						{#if cardBody}{@render cardBody({ row: card.source })}{:else}
-						<div class="flex min-w-0 items-center gap-2">
-							<span class="map-mark shrink-0">{initial(card.text)}</span>
-							<span class="min-w-0 flex-1 truncate font-medium" data-map-title>{card.text}</span>
-							{#if status !== undefined}{@render value(card.row, status)}{/if}
-						</div>
-						{#if fields.length > 0}
-							<div class="flex flex-wrap gap-1">
-								{#each fields as f (f)}
-									<span class="rounded-badge inline-flex border items-center gap-1 px-1.5 py-0.5 text-xs" data-map-chip={f}
-										><span class="text-muted-foreground">{labelOf(bolt, of, f)}</span>{@render value(card.row, f)}</span
-									>
-								{/each}
-							</div>
-						{/if}
-						{#if description !== undefined && card.row[description]}
-							<p class="text-muted-foreground line-clamp-2 text-xs">{@render value(card.row, description)}</p>
-						{/if}
-						{/if}
-						<Button variant="outline" class="w-full" onclick={() => open(card.id)}
-							>{msg(bolt, 'map.open')}</Button
+							<Icon icon="lucide:route" class="size-4" />{msg(bolt, 'map.plan')}
+						</Button>
+						<Button
+							variant="outline"
+							size="icon"
+							hint={msg(bolt, 'map.fit')}
+							aria-label={msg(bolt, 'map.fit')}
+							onclick={fit}><Icon icon="lucide:scan" class="size-4" /></Button
 						>
 					</div>
-				{/if}
+					{#if planning}
+						<section
+							class="w-72 max-w-full rounded-lg border bg-popover p-3 text-popover-foreground shadow-deep"
+							aria-label={msg(bolt, 'map.plan')}
+							data-map-plan
+						>
+							<p class="mb-3 text-xs leading-relaxed text-muted-foreground">
+								{msg(bolt, 'map.planHelp', { n: MAX_ROUTE_STOPS })}
+							</p>
+							<ol class="mb-3 flex max-h-48 flex-col gap-1 overflow-y-auto">
+								{#each stops as stop, i (stop.id)}
+									<li class="flex min-w-0 items-center gap-2 text-xs" data-map-stop={stop.id}>
+										<span class="w-4 shrink-0 text-brand tabular-nums">{i + 1}</span><span
+											class="min-w-0 flex-1 truncate">{stop.text}</span
+										>
+										<Button
+											variant="ghost"
+											size="icon"
+											disabled={i === 0}
+											aria-label={msg(bolt, 'map.moveUp', { name: stop.text })}
+											onclick={() => moveStop(i, -1)}
+											><Icon icon="lucide:arrow-up" class="size-3.5" /></Button
+										>
+										<Button
+											variant="ghost"
+											size="icon"
+											disabled={i === stops.length - 1}
+											aria-label={msg(bolt, 'map.moveDown', { name: stop.text })}
+											onclick={() => moveStop(i, 1)}
+											><Icon icon="lucide:arrow-down" class="size-3.5" /></Button
+										>
+										<Button
+											variant="ghost"
+											size="icon"
+											aria-label={msg(bolt, 'map.removeStop', { name: stop.text })}
+											onclick={() => (stopIds = stopIds.filter((id) => id !== stop.id))}
+											><Icon icon="lucide:x" class="size-3.5" /></Button
+										>
+									</li>
+								{/each}
+							</ol>
+							<Combobox
+								value={null}
+								options={stopOptions}
+								placeholder={msg(bolt, 'map.addStop')}
+								aria-label={msg(bolt, 'map.addStop')}
+								disabled={stops.length >= MAX_ROUTE_STOPS}
+								on_change={(id) => {
+									if (id !== null) addStop(id);
+								}}
+							/>
+							<div class="mt-3 flex flex-wrap items-center gap-2">
+								{#if directions}<Button
+										variant="default"
+										size="default"
+										href={directions}
+										target="_blank"
+										rel="noopener noreferrer"
+										data-map-directions
+										>{msg(bolt, 'map.directions')}<Icon
+											icon="lucide:arrow-up-right"
+											class="size-3.5"
+										/></Button
+									>{/if}
+								{#if stops.length > 0}<Button
+										variant="ghost"
+										size="default"
+										onclick={() => (stopIds = [])}>{msg(bolt, 'map.clear')}</Button
+									>{/if}
+							</div>
+						</section>
+					{/if}
+				</div>
 			{/if}
-		</div>
-	</div>
-{/snippet}
-<ReadGate {ctx} state={page} what={labelOf(bolt, of)}>
-	{#snippet children(result)}
-		<div class="flex min-h-0 flex-1 flex-col gap-1" data-view="map">
-			{#if list}
-				<Split ratio="wide" gap="sm" size="fill">
-					{#snippet start()}{@render canvas()}{/snippet}
-					{#snippet end()}
-						<ul class="flex h-full min-h-0 flex-col gap-1 overflow-y-auto" bind:this={rows} data-map-list>
-							{#each points as p (p.id)}
-								<li>
-									<button
-										type="button"
-										class="hover:bg-accent flex w-full min-w-0 items-center gap-2 rounded-md border border-transparent p-2 text-left text-sm data-[selected]:border-brand data-[selected]:ring-1 data-[selected]:ring-brand"
-										data-map-row={p.id}
-										data-selected={selected === p.id || undefined}
-										onpointerenter={() => select(p.id, 'list')}
-										onfocus={() => select(p.id, 'list')}
-										onclick={() => open(p.id)}
+			<!-- Marks take the pointer; hover previews leave the pin clickable. -->
+			<div
+				class="pointer-events-none absolute inset-0 overflow-hidden"
+				data-map-overlay
+				role="presentation"
+				onkeydown={(e) => {
+					if (e.key === 'Escape') selected = null;
+				}}
+			>
+				{#if ready}
+					<svg class="absolute inset-0 size-full" aria-hidden="true">
+						{#each overlays as o, i (i)}
+							{#if o.from}
+								{@const a = xy(o.from.lat, o.from.lng)}
+								{@const b = xy(o.lat, o.lng)}
+								<line class="map-route-glow" x1={a.x} y1={a.y} x2={b.x} y2={b.y} data-map-route />
+								<line class="map-route" x1={a.x} y1={a.y} x2={b.x} y2={b.y} />
+							{/if}
+						{/each}
+					</svg>
+					{#each overlays as o, i (i)}
+						{@const at = xy(o.lat, o.lng)}
+						<span class="map-at" style:left="{at.x}px" style:top="{at.y}px" data-map-mark>
+							<span class="map-ring"></span>
+							{#if o.text}<span class="map-pill">{o.text}</span>{/if}
+						</span>
+					{/each}
+					{#each groups as group (group.map((p) => p.id).join())}
+						{@const c = centre(group)}
+						{@const at = xy(c.lat, c.lng)}
+						{#if group.length > 1}
+							<button
+								type="button"
+								disabled={!interactive}
+								class="map-at map-cluster"
+								style:left="{at.x}px"
+								style:top="{at.y}px"
+								data-map-cluster={group.length}
+								aria-label={group.map((p) => p.text).join(', ')}
+								onclick={() =>
+									map?.fitBounds(bounds(group), { padding: 64, maxZoom: 17, duration: 300 })}
+							>
+								{group.length}
+							</button>
+						{:else}
+							{@const p = group[0]!}
+							<button
+								type="button"
+								disabled={!interactive}
+								class="map-at map-point"
+								style:left="{at.x}px"
+								style:top="{at.y}px"
+								data-map-point={p.id}
+								data-selected={selected === p.id || undefined}
+								aria-label={p.text}
+								onpointerenter={() => select(p.id, 'map')}
+								onfocus={() => select(p.id, 'map')}
+								onclick={() => open(p.id)}
+							>
+								<span class="map-mark"
+									>{planning && stopIds.includes(p.id)
+										? stopIds.indexOf(p.id) + 1
+										: initial(p.text)}</span
+								>
+								{@render pill(p)}
+							</button>
+						{/if}
+					{/each}
+					{#if interactive && !planning && card !== undefined}
+						{@const at = xy(card.lat, card.lng)}
+						<div
+							class="bg-popover text-popover-foreground pointer-events-none absolute flex w-64 flex-col gap-2 rounded-lg border p-3 shadow-deep"
+							class:map-card-below={at.y < 200}
+							class:map-card-above={at.y >= 200}
+							style:left="clamp(8.5rem, {at.x}px, calc(100% - 8.5rem))"
+							style:top="{at.y}px"
+							data-map-card={card.id}
+						>
+							{#if cardBody}{@render cardBody({ row: card.source })}{:else}
+								<div class="flex min-w-0 items-center gap-2">
+									<span class="map-mark shrink-0">{initial(card.text)}</span>
+									<span class="min-w-0 flex-1 truncate font-medium" data-map-title>{card.text}</span
 									>
-										{#if item}{@render item({ row: p.source })}{:else}
-										<span class="map-mark shrink-0">{initial(p.text)}</span>
-										<span class="min-w-0 flex-1 truncate">{p.text}</span>
-										{#if status !== undefined}{@render value(p.row, status)}{/if}
-										{#if badge !== undefined && p.row[badge] !== null && p.row[badge] !== undefined}
-											<span class="map-pill">{@render value(p.row, badge)}</span>
-										{/if}
-										{/if}
-									</button>
-								</li>
-							{/each}
-						</ul>
-					{/snippet}
-				</Split>
-			{:else}
-				{@render canvas()}
-			{/if}
-			{#if failed}<p class="text-muted-foreground text-xs">
-					{msg(bolt, 'map.tiles')}
-				</p>{/if}
-			{#if points.length === 0}<p class="text-muted-foreground text-sm" data-read="empty">
-					{msg(bolt, 'map.empty')}
-				</p>{/if}
-			{#if failed && !list}<ul class="text-sm">
-					{#each points as p (p.id)}<li>{p.text || p.id}: {p.lat}, {p.lng}</li>{/each}
-				</ul>{/if}
-			{#if result.next !== null}<p class="text-muted-foreground text-xs">
-					{msg(bolt, 'map.limit', { n: limit })}
-				</p>{/if}
+									{#if status !== undefined}{@render value(card.row, status)}{/if}
+								</div>
+								{#if fields.length > 0}
+									<div class="flex flex-wrap gap-1">
+										{#each fields as f (f)}
+											<span
+												class="rounded-badge inline-flex border items-center gap-1 px-1.5 py-0.5 text-xs"
+												data-map-chip={f}
+												><span class="text-muted-foreground">{labelOf(bolt, of, f)}</span
+												>{@render value(card.row, f)}</span
+											>
+										{/each}
+									</div>
+								{/if}
+								{#if description !== undefined && card.row[description]}
+									<p class="text-muted-foreground line-clamp-2 text-xs">
+										{@render value(card.row, description)}
+									</p>
+								{/if}
+							{/if}
+						</div>
+					{/if}
+				{/if}
+			</div>
 		</div>
 	{/snippet}
-</ReadGate>
+	<ReadGate {ctx} state={page} what={labelOf(bolt, of)}>
+		{#snippet children(result)}
+			<div class="flex min-h-0 flex-1 flex-col gap-1" data-view="map">
+				{#if list}
+					<Split ratio="wide" gap="sm" size="fill">
+						{#snippet start()}{@render canvas()}{/snippet}
+						{#snippet end()}
+							<ul
+								class="flex h-full min-h-0 flex-col gap-1 overflow-y-auto"
+								bind:this={rows}
+								data-map-list
+							>
+								{#each points as p (p.id)}
+									<li>
+										<button
+											type="button"
+											class="hover:bg-accent flex w-full min-w-0 items-center gap-2 rounded-md border border-transparent p-2 text-left text-sm data-[selected]:border-brand data-[selected]:ring-1 data-[selected]:ring-brand"
+											data-map-row={p.id}
+											data-selected={selected === p.id || undefined}
+											onpointerenter={() => select(p.id, 'list')}
+											onfocus={() => select(p.id, 'list')}
+											onclick={() => open(p.id)}
+										>
+											{#if item}{@render item({ row: p.source })}{:else}
+												<span class="map-mark shrink-0">{initial(p.text)}</span>
+												<span class="min-w-0 flex-1 truncate">{p.text}</span>
+												{#if status !== undefined}{@render value(p.row, status)}{/if}
+												{#if badge !== undefined && p.row[badge] !== null && p.row[badge] !== undefined}
+													<span class="map-pill">{@render value(p.row, badge)}</span>
+												{/if}
+											{/if}
+										</button>
+									</li>
+								{/each}
+							</ul>
+						{/snippet}
+					</Split>
+				{:else}
+					{@render canvas()}
+				{/if}
+				{#if failed}<p class="text-muted-foreground text-xs">
+						{msg(bolt, 'map.tiles')}
+					</p>{/if}
+				{#if points.length === 0}<p class="text-muted-foreground text-sm" data-read="empty">
+						{msg(bolt, 'map.empty')}
+					</p>{/if}
+				{#if failed && !list}<ul class="text-sm">
+						{#each points as p (p.id)}<li>{p.text || p.id}: {p.lat}, {p.lng}</li>{/each}
+					</ul>{/if}
+				{#if result.next !== null}<p class="text-muted-foreground text-xs">
+						{msg(bolt, 'map.limit', { n: limit })}
+					</p>{/if}
+			</div>
+		{/snippet}
+	</ReadGate>
 </section>
 
 <style>
@@ -525,7 +703,7 @@ outlined in the accent. A click on a mark, a row or the card's button opens the 
 		color: var(--brand-text);
 		border: 2px solid var(--brand);
 		box-shadow:
-			0 0 0 6px color-mix(in oklab, var(--brand) 14%, transparent),
+			0 0 0 3px color-mix(in oklab, var(--brand) 14%, transparent),
 			var(--shadow-deep);
 		font-size: 12px;
 		font-weight: 590;

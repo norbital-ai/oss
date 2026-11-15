@@ -10,12 +10,14 @@ test('Chinese framework catalog covers native view messages and retains their pl
 	const catalog = framework_text('zh');
 	const placeholders = (value: string) => [...new Set(value.match(/\{\w+\}/g) ?? [])].sort();
 	let count = 0;
-	for (const match of required(table).matchAll(/^\t'([^']+)': '((?:\\.|[^'\\])*)',?$/gm)) {
+	for (const match of required(table).matchAll(
+		/^\t'([^']+)':\s*('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"),?$/gm
+	)) {
 		const key = `ui.${match[1]}`;
 		expect(catalog[key], key).toBeTruthy();
 		expect(placeholders(required(catalog[key])), key).toEqual(placeholders(required(match[2])));
 		count++;
 	}
-	expect(count).toBe(required(table).split('\n').length);
+	expect(count).toBe([...required(table).matchAll(/^\t'[^']+':/gm)].length);
 	expect(framework_text('en')).toEqual({});
 });

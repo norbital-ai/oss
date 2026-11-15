@@ -5,11 +5,15 @@ import Harness from './map-harness.svelte';
 import { viewFixture } from './view-fixture.ts';
 import { basemap_style } from '../src/map/basemap.ts';
 
-type Style = { layers: readonly { id: string; paint?: { readonly [property: string]: unknown } }[] };
+type Style = {
+	layers: readonly { id: string; paint?: { readonly [property: string]: unknown } }[];
+};
 type Bounds = readonly [readonly [number, number], readonly [number, number]];
 // MapLibre at its boundary (its CDN load): happy-dom has no WebGL. Projection is linear (10px a degree) so marks land predictably.
 const gl = vi.hoisted(() => {
-	const lands: unknown[] = [], fits: unknown[] = [], eased: unknown[] = [];
+	const lands: unknown[] = [],
+		fits: unknown[] = [],
+		eased: unknown[] = [];
 	const live: { zoom: number; fire: (event: string) => void }[] = [];
 	return { maps: 0, removed: 0, zoom: 3, lands, fits, eased, live, inView: false };
 });
@@ -38,11 +42,19 @@ vi.mock('https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/dist/maplibre-gl.mjs', 
 		getCenter = () => ({ lng: 0, lat: 0 });
 		getBounds = () => ({ contains: () => gl.inView });
 		project = ([lng, lat]: [number, number]) => ({ x: lng * 10, y: lat * 10 });
-		fitBounds = (bounds: Bounds) => { gl.fits.push(bounds); };
-		easeTo = (options: unknown) => { gl.eased.push(options); };
-		setStyle = (style: Style) => { gl.lands.push(land(style)); };
+		fitBounds = (bounds: Bounds) => {
+			gl.fits.push(bounds);
+		};
+		easeTo = (options: unknown) => {
+			gl.eased.push(options);
+		};
+		setStyle = (style: Style) => {
+			gl.lands.push(land(style));
+		};
 		addControl = () => {};
-		remove = () => { gl.removed++; };
+		remove = () => {
+			gl.removed++;
+		};
 	}
 	class NavigationControl {}
 	return { Map, NavigationControl, setWorkerUrl: () => {} };
@@ -59,21 +71,54 @@ afterEach(() => {
 	history.replaceState(null, '', '/');
 });
 
-const catalog = { places: { record_label: 'record.name', label: ['name'], fields: {
-	name: { kind: 'text' }, position: { kind: 'point' }, stage: { kind: 'text' }, crew: { kind: 'number' }, note: { kind: 'text' }
-} } } as const;
-async function mounted(rows: readonly { readonly [field: string]: import('@norbital-ai/store/kind').Value }[], card = false) {
-	const { bolt } = await viewFixture({ catalog, read: () => ({ rows: rows.map((row) => ({ stage: '', crew: 0, note: '', revision: 1, ...row })), next: null }) });
+const catalog = {
+	places: {
+		record_label: 'record.name',
+		label: ['name'],
+		fields: {
+			name: { kind: 'text' },
+			position: { kind: 'point' },
+			stage: { kind: 'text' },
+			crew: { kind: 'number' },
+			note: { kind: 'text' }
+		}
+	}
+} as const;
+async function mounted(
+	rows: readonly { readonly [field: string]: import('@norbital-ai/store/kind').Value }[],
+	card = false
+) {
+	const { bolt } = await viewFixture({
+		catalog,
+		read: () => ({
+			rows: rows.map((row) => ({ stage: '', crew: 0, note: '', revision: 1, ...row })),
+			next: null
+		})
+	});
 	const target = document.body.appendChild(document.createElement('div'));
 	const app = mount(Harness, { target, props: { bolt, card } });
-	await vi.waitFor(async () => { flushSync(); await tick(); expect(target.querySelector('[data-map-point], [data-map-cluster]')).not.toBeNull(); });
-	return { target, app, close: async () => { await unmount(app); target.remove(); } };
+	await vi.waitFor(async () => {
+		flushSync();
+		await tick();
+		expect(target.querySelector('[data-map-point], [data-map-cluster]')).not.toBeNull();
+	});
+	return {
+		target,
+		app,
+		close: async () => {
+			await unmount(app);
+			target.remove();
+		}
+	};
 }
-const at = (el: Element | null) => el instanceof HTMLElement ? [el.style.left, el.style.top] : null;
+const at = (el: Element | null) =>
+	el instanceof HTMLElement ? [el.style.left, el.style.top] : null;
 const opened = () => new URL(location.href).searchParams.getAll('record');
 
 it('draws marks, routes and overlays over one scoped map and redraws without replacing it', async () => {
-	const { target, app, close } = await mounted([{ id: 'place', name: 'Office', position: { lat: 7, lng: 8 } }]);
+	const { target, app, close } = await mounted([
+		{ id: 'place', name: 'Office', position: { lat: 7, lng: 8 } }
+	]);
 	try {
 		const office = target.querySelector('[data-map-point="place"]');
 		expect(at(office)).toEqual(['80px', '70px']);
@@ -87,8 +132,16 @@ it('draws marks, routes and overlays over one scoped map and redraws without rep
 		expect(target.querySelector('[data-map-mark]')?.textContent).toContain('Updated destination');
 		expect(at(target.querySelector('[data-map-mark]'))).toEqual(['40px', '30px']);
 		const route = target.querySelector('[data-map-route]');
-		expect([route?.getAttribute('x1'), route?.getAttribute('y1'), route?.getAttribute('x2'), route?.getAttribute('y2')]).toEqual(['60', '50', '40', '30']);
-		expect(gl.fits.at(-1)).toEqual([[4, 3], [8, 7]]);
+		expect([
+			route?.getAttribute('x1'),
+			route?.getAttribute('y1'),
+			route?.getAttribute('x2'),
+			route?.getAttribute('y2')
+		]).toEqual(['60', '50', '40', '30']);
+		expect(gl.fits.at(-1)).toEqual([
+			[4, 3],
+			[8, 7]
+		]);
 		expect(office?.querySelector('.map-pill')).toBeNull();
 		app.always_label();
 		flushSync();
@@ -98,7 +151,9 @@ it('draws marks, routes and overlays over one scoped map and redraws without rep
 		app.disable_clicks();
 		flushSync();
 		// a static picture: a new map without handlers, its marks inert
-		expect(target.querySelector<HTMLButtonElement>('[data-map-point="place"]')?.disabled).toBe(true);
+		expect(target.querySelector<HTMLButtonElement>('[data-map-point="place"]')?.disabled).toBe(
+			true
+		);
 	} finally {
 		await close();
 	}
@@ -118,7 +173,12 @@ it('clusters crowded marks into a count that zooms to them and splits as the map
 		expect(target.querySelectorAll('[data-map-point]')).toHaveLength(1);
 		const fits = gl.fits.length;
 		cluster?.click();
-		expect(gl.fits.slice(fits)).toEqual([[[103.8, 1.3], [103.82, 1.32]]]);
+		expect(gl.fits.slice(fits)).toEqual([
+			[
+				[103.8, 1.3],
+				[103.82, 1.32]
+			]
+		]);
 		const map = gl.live[0];
 		if (map === undefined) throw new Error('No map.');
 		map.zoom = 16;
@@ -132,10 +192,20 @@ it('clusters crowded marks into a count that zooms to them and splits as the map
 });
 
 it('selecting a mark or a list row shows its card and outlines the row; a row opens its record', async () => {
-	const { target, close } = await mounted([
-		{ id: 'a', name: 'Alpha', position: { lat: 30, lng: 10 }, stage: 'Open', crew: 4, note: 'North gate' },
-		{ id: 'b', name: 'Bravo', position: { lat: 40, lng: 50 }, stage: 'Done', crew: 2, note: '' }
-	], true);
+	const { target, close } = await mounted(
+		[
+			{
+				id: 'a',
+				name: 'Alpha',
+				position: { lat: 30, lng: 10 },
+				stage: 'Open',
+				crew: 4,
+				note: 'North gate'
+			},
+			{ id: 'b', name: 'Bravo', position: { lat: 40, lng: 50 }, stage: 'Done', crew: 2, note: '' }
+		],
+		true
+	);
 	try {
 		expect(target.querySelector('[data-map-card]')).toBeNull();
 		expect(target.querySelector('[data-map-point="a"] .map-pill')?.textContent?.trim()).toBe('4');
@@ -144,7 +214,9 @@ it('selecting a mark or a list row shows its card and outlines the row; a row op
 		const card = target.querySelector('[data-map-card="a"]');
 		expect(card?.querySelector('[data-map-title]')?.textContent).toBe('Alpha');
 		expect(card?.textContent).toContain('Open');
-		expect(card?.querySelector('[data-map-chip="crew"]')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Crew4');
+		expect(
+			card?.querySelector('[data-map-chip="crew"]')?.textContent?.replace(/\s+/g, ' ').trim()
+		).toBe('Crew4');
 		expect(card?.textContent).toContain('North gate');
 		expect(target.querySelector('[data-map-row="a"]')?.hasAttribute('data-selected')).toBe(true);
 		// from the list: the mark is selected and the map eases to a place out of view
@@ -155,7 +227,8 @@ it('selecting a mark or a list row shows its card and outlines the row; a row op
 		expect(target.querySelector('[data-map-point="b"]')?.hasAttribute('data-selected')).toBe(true);
 		expect(target.querySelector('[data-map-row="a"]')?.hasAttribute('data-selected')).toBe(false);
 		expect(gl.eased).toEqual([{ center: [50, 40] }]);
-		target.querySelector<HTMLButtonElement>('[data-map-card="b"] button')?.click();
+		expect(target.querySelector('[data-map-card="b"] button')).toBeNull();
+		target.querySelector<HTMLButtonElement>('[data-map-point="b"]')?.click();
 		expect(opened()).toEqual(['places/b']);
 		target.querySelector<HTMLButtonElement>('[data-map-row="a"]')?.click();
 		expect(opened()).toEqual(['places/b', 'places/a']);
@@ -169,9 +242,14 @@ it('selecting a mark or a list row shows its card and outlines the row; a row op
 });
 
 it('draws our own style for each theme and swaps it when the theme changes', async () => {
-	const light = basemap_style(false), dark = basemap_style(true);
+	const light = basemap_style(false),
+		dark = basemap_style(true);
 	expect(dark.layers.map((l) => l.id)).toEqual(light.layers.map((l) => l.id));
-	expect(light['font-faces']?.['Noto Sans Regular']).toEqual(expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining('@fontsource-variable/geist@5.3.0') })]));
+	expect(light['font-faces']?.['Noto Sans Regular']).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ url: expect.stringContaining('@fontsource-variable/geist@5.3.0') })
+		])
+	);
 	const { close } = await mounted([{ id: 'place', name: 'Office', position: { lat: 7, lng: 8 } }]);
 	try {
 		expect(gl.lands).toEqual(['#f2f1ed']);
@@ -179,6 +257,44 @@ it('draws our own style for each theme and swaps it when the theme changes', asy
 		await vi.waitFor(() => expect(gl.lands).toEqual(['#f2f1ed', '#0f1011']));
 		document.documentElement.classList.remove('dark');
 		await vi.waitFor(() => expect(gl.lands).toEqual(['#f2f1ed', '#0f1011', '#f2f1ed']));
+	} finally {
+		await close();
+	}
+});
+
+it('plans ordered stops without opening records and hands road directions to the navigation app', async () => {
+	const { target, close } = await mounted([
+		{ id: 'a', name: 'Alpha', position: { lat: 30, lng: 10 } },
+		{ id: 'b', name: 'Bravo', position: { lat: 40, lng: 50 } }
+	]);
+	try {
+		target.querySelector<HTMLButtonElement>('[data-map-plan-toggle]')?.click();
+		flushSync();
+		for (const id of ['a', 'b']) {
+			target.querySelector<HTMLButtonElement>(`[data-map-point="${id}"]`)?.click();
+			flushSync();
+		}
+		expect(opened()).toEqual([]);
+		expect(
+			[...target.querySelectorAll('[data-map-stop]')].map((row) =>
+				row.getAttribute('data-map-stop')
+			)
+		).toEqual(['a', 'b']);
+		target.querySelector<HTMLButtonElement>('[aria-label="Move Bravo earlier"]')?.click();
+		flushSync();
+		const href = target.querySelector<HTMLAnchorElement>('[data-map-directions]')?.href;
+		expect(href).toBeTruthy();
+		if (href === undefined) throw new Error('Expected the route to be ready');
+		const query = new URL(href).searchParams;
+		expect(query.get('origin')).toBe('40,50');
+		expect(query.get('destination')).toBe('30,10');
+		target.querySelector<HTMLButtonElement>('[aria-label="Remove Alpha"]')?.click();
+		flushSync();
+		expect(target.querySelector('[data-map-directions]')).toBeNull();
+		target.querySelector<HTMLButtonElement>('[data-map-plan-toggle]')?.click();
+		flushSync();
+		target.querySelector<HTMLButtonElement>('[data-map-point="a"]')?.click();
+		expect(opened()).toEqual(['places/a']);
 	} finally {
 		await close();
 	}

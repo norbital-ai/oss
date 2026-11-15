@@ -4,6 +4,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem } from 'effect';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { CONTRACT } from '@norbital-ai/bolt/artifact';
 import { CHECKPOINTS, inputs, prune, tree_hash } from './checkpoint.ts';
 import { KitInvalid } from './effect.ts';
 
@@ -28,7 +29,8 @@ export const release = (root: string) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
 		const key = createHash('sha256')
-			.update([yield* inputs.release, yield* tree_hash(root)].join('\0'))
+			// Module hashes do not include the package JSON that sets the release contract.
+			.update([CONTRACT, yield* inputs.release, yield* tree_hash(root)].join('\0'))
 			.digest('hex');
 		const kept = join(CHECKPOINTS, 'releases', key);
 		if (yield* fs.exists(join(kept, 'release.json'))) return kept;

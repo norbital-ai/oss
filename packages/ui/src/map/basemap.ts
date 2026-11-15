@@ -33,8 +33,8 @@ const PALETTE = {
 		road: '#d8d6cf',
 		major: '#cdcac2',
 		boundary: '#c4c0b8',
-		label: '#a39e98',
-		place: '#6f6a63'
+		label: '#6f6a63',
+		place: '#504b44'
 	},
 	// DESIGN.md midnight: carbon land on void water, graphite to smoke roads, ash and fog labels
 	dark: {
@@ -46,8 +46,8 @@ const PALETTE = {
 		road: '#23252a',
 		major: '#2e3136',
 		boundary: '#383b3f',
-		label: '#62666d',
-		place: '#8a8f98'
+		label: '#8a8f98',
+		place: '#a5a9b0'
 	}
 } as const;
 
@@ -65,8 +65,18 @@ const width = (z0: number, w0: number, w1: number): Width => [
 /** The style for a theme: same layers, the theme's palette. */
 export function basemap_style(dark: boolean): Style {
 	const c = dark ? PALETTE.dark : PALETTE.light;
-	const label = (color: string) => ({ 'text-color': color, 'text-halo-color': c.land, 'text-halo-width': 1.2 });
-	const road = (id: string, classes: string[], color: string, z0: number, w1: number): LineLayer => ({
+	const label = (color: string) => ({
+		'text-color': color,
+		'text-halo-color': c.land,
+		'text-halo-width': 1.2
+	});
+	const road = (
+		id: string,
+		classes: string[],
+		color: string,
+		z0: number,
+		w1: number
+	): LineLayer => ({
 		id,
 		type: 'line',
 		source: 'base',
@@ -81,7 +91,10 @@ export function basemap_style(dark: boolean): Style {
 		glyphs: GLYPHS,
 		'font-faces': {
 			[FONT]: [
-				{ url: `${GEIST}/geist-latin-wght-normal.woff2`, 'unicode-range': ['U+0000-00FF', 'U+2000-206F'] },
+				{
+					url: `${GEIST}/geist-latin-wght-normal.woff2`,
+					'unicode-range': ['U+0000-00FF', 'U+2000-206F']
+				},
 				{ url: `${GEIST}/geist-latin-ext-wght-normal.woff2`, 'unicode-range': ['U+0100-024F'] }
 			]
 		},
@@ -103,7 +116,13 @@ export function basemap_style(dark: boolean): Style {
 				filter: ['in', ['get', 'class'], ['literal', ['wood', 'grass']]],
 				paint: { 'fill-color': c.park, 'fill-opacity': 0.6 }
 			},
-			{ id: 'water', type: 'fill', source: 'base', 'source-layer': 'water', paint: { 'fill-color': c.water } },
+			{
+				id: 'water',
+				type: 'fill',
+				source: 'base',
+				'source-layer': 'water',
+				paint: { 'fill-color': c.water }
+			},
 			{
 				id: 'waterway',
 				type: 'line',
@@ -149,7 +168,12 @@ export function basemap_style(dark: boolean): Style {
 				type: 'symbol',
 				source: 'base',
 				'source-layer': 'water_name',
-				layout: { 'text-field': NAME, 'text-font': [FONT], 'text-size': 10, 'text-letter-spacing': 0.1 },
+				layout: {
+					'text-field': NAME,
+					'text-font': [FONT],
+					'text-size': 10,
+					'text-letter-spacing': 0.1
+				},
 				paint: label(c.label)
 			},
 			{
@@ -158,7 +182,11 @@ export function basemap_style(dark: boolean): Style {
 				source: 'base',
 				'source-layer': 'place',
 				minzoom: 11,
-				filter: ['in', ['get', 'class'], ['literal', ['suburb', 'neighbourhood', 'quarter', 'village']]],
+				filter: [
+					'in',
+					['get', 'class'],
+					['literal', ['suburb', 'neighbourhood', 'quarter', 'village']]
+				],
 				layout: { 'text-field': NAME, 'text-font': [FONT], 'text-size': 10 },
 				paint: label(c.label)
 			},
@@ -205,7 +233,11 @@ export type BasemapFailed = { readonly _tag: 'BasemapFailed'; readonly cause: un
 export const basemap = (
 	node: HTMLElement,
 	options: { interactive: boolean; center?: [number, number]; zoom?: number }
-): Effect.Effect<{ map: MapLibre; maplibre: typeof import('maplibre-gl') }, BasemapFailed, Scope.Scope> =>
+): Effect.Effect<
+	{ map: MapLibre; maplibre: typeof import('maplibre-gl') },
+	BasemapFailed,
+	Scope.Scope
+> =>
 	Effect.gen(function* () {
 		const maplibre = yield* Effect.tryPromise({
 			try: load_maplibre,
@@ -231,6 +263,12 @@ export const basemap = (
 			}),
 			(map) => Effect.sync(() => map.remove())
 		);
+		// MapLibre initially expands compact credits; keep the narrow canvas clear until its information button is used.
+		map.once('load', () => {
+			const credits = node.querySelector('.maplibregl-ctrl-attrib');
+			credits?.classList.remove('maplibregl-compact-show');
+			credits?.removeAttribute('open');
+		});
 		map.touchZoomRotate.disableRotation();
 		if (options.interactive) map.addControl(new maplibre.NavigationControl({ showCompass: false }));
 		yield* Effect.acquireRelease(

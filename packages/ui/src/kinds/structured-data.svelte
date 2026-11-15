@@ -111,11 +111,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			);
 		return kind;
 	};
-	const visible = (
-		value: Value | undefined,
-		kind: Kind | undefined,
-		host: KindsHost
-	): Value => {
+	const visible = (value: Value | undefined, kind: Kind | undefined, host: KindsHost): Value => {
 		if (value === undefined) return null;
 		const native = kind ? field_entry(kind, host) : undefined;
 		if (native?.entry.renderer) return native.entry.label ?? kind?.label ?? 'Details';
@@ -400,7 +396,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 						spec.properties?.[key] ??
 							(kind
 								? kind_json_schema(kind)
-									: infer_json_schema(object[key] === undefined ? previousObject[key] : object[key])),
+								: infer_json_schema(object[key] === undefined ? previousObject[key] : object[key])),
 						document
 					),
 					kind
@@ -533,7 +529,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					? title(field, spec, itemObjectKind?.fields[field]) +
 						(!locked && itemSpec.required?.includes(field) ? '*' : '')
 					: t('schemaValue'),
-				width: (itemObjectKind?.fields[field] ?? json_schema_kind(spec)).kind === 'bool' ? 104 : 200,
+				width:
+					(itemObjectKind?.fields[field] ?? json_schema_kind(spec)).kind === 'bool' ? 104 : 200,
 				cell: dataCell
 			};
 		})
@@ -708,7 +705,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	row: Values,
 	before_row: Values | undefined
 )}
-	<Self {ctx}
+	<Self
+		{ctx}
 		schema={child}
 		kind={nativeKind}
 		value={next}
@@ -835,9 +833,12 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				onclick={() => {
 					const index = visiblePairs[entry.at]?.index;
 					if (index === undefined || index <= 0) return;
-					const previous = list[index - 1], current = list[index];
+					const previous = list[index - 1],
+						current = list[index];
 					if (previous === undefined || current === undefined) return;
-					on_change?.(list.map((item, at) => at === index ? previous : at === index - 1 ? current : item));
+					on_change?.(
+						list.map((item, at) => (at === index ? previous : at === index - 1 ? current : item))
+					);
 				}}><Icon icon="lucide:arrow-up" class="size-3.5" /></Button
 			>{/if}
 		<Button
@@ -857,7 +858,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 {/snippet}
 
 {#snippet fieldSelf(field: (typeof fields)[number], heading: string | undefined)}
-	<Self {ctx}
+	<Self
+		{ctx}
 		schema={field.schema}
 		kind={field.kind}
 		value={object[field.key]}
@@ -883,7 +885,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 {/snippet}
 
 {#snippet fieldRows(members: typeof fields)}
-	<div class="structured-fields" class:structured-fields-compact={currentMode === 'view'}>
+	<div class="structured-fields" class:structured-fields-compact={currentMode !== 'diff'}>
 		{#each members as field (field.key)}
 			{@const child = node(field.schema)}
 			{@const nested = structure(
@@ -893,7 +895,12 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				currentMode === 'diff' ? previousObject[field.key] : undefined
 			)}
 			{#if nested && !(locked && currentMode === 'view' && scalarList(object[field.key]))}
-				{@render fieldSelf(field, repeatsSection(title(field.key, field.schema, field.kind)) ? undefined : title(field.key, field.schema, field.kind))}
+				{@render fieldSelf(
+					field,
+					repeatsSection(title(field.key, field.schema, field.kind))
+						? undefined
+						: title(field.key, field.schema, field.kind)
+				)}
 			{:else}
 				<div
 					class="structured-field"
@@ -997,7 +1004,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 {/snippet}
 
 {#snippet listBody()}
-	{#if tableRows.length}<Table {ctx}
+	{#if tableRows.length}<Table
+			{ctx}
 			of={tableRows}
 			columns={tableColumns}
 			controlled
@@ -1062,7 +1070,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				value={JSON.stringify(visible(held, shape(declaredKind, held), host), null, 2)}
 				aria-label={name || 'Nested value'}
 			/>
-		{:else}<Self {ctx}
+		{:else}<Self
+				{ctx}
 				schema={rawSchema}
 				kind={declaredKind}
 				value={held}
@@ -1074,7 +1083,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				depth={depth + 1}
 				{frame}
 			/>{/if}
-	{:else}<Show {ctx}
+	{:else}<Show
+			{ctx}
 			kind={nativeKind.many === true ||
 			['json', 'custom', 'object', 'record', 'union'].includes(nativeKind.kind)
 				? inferKind(held)
@@ -1093,7 +1103,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	data-structured-data={currentMode}
 >
 	{#if currentMode === 'schema' && on_change && !controls.readonly}
-		<Self {ctx}
+		<Self
+			{ctx}
 			schema={authorSchema}
 			value={json_schema_rows(schema ?? true)}
 			mode="edit"
@@ -1106,7 +1117,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			{frame}
 		/>
 	{:else if currentMode === 'schema'}
-		<Table {ctx}
+		<Table
+			{ctx}
 			of={schemaFields}
 			columns={schemaColumns}
 			controlled
@@ -1130,7 +1142,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		<span class="flex min-w-0 flex-wrap gap-1" data-structured-chips>
 			{#each list as item, index (index)}
 				<span class="bg-muted inline-flex max-w-full min-w-0 items-center rounded-sm px-1.5 text-sm"
-					><Self {ctx}
+					><Self
+						{ctx}
 						schema={schemaAt(index)}
 						kind={itemKind}
 						value={item}
@@ -1211,7 +1224,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			/></span
 		>
 	{:else}
-		<Editor {ctx}
+		<Editor
+			{ctx}
 			kind={leafKind}
 			value={value ?? null}
 			{name}
@@ -1293,7 +1307,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
 	}
-	/* Pair columns follow the pane's width; editors keep their full-width rows. */
+	/* Scalar fields share rows as the pane widens; nested structures and wide kinds keep the full width. */
 	.structured-fields-compact {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(min(100%, clamp(9rem, 50% - 8px, 16rem)), 1fr));
