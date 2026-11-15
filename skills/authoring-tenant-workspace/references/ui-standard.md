@@ -13,7 +13,7 @@ Checks every template page passes. Rule homes: [app-structure.md](app-structure.
 9. The kit formats: date medium; instant medium with short time; money `CODE 1,234.00`; decimals trimmed; empty `—`.
 10. A state is a coloured badge; an enum or tag is a neutral chip.
 11. Empty and loading are the kit's `EmptyState` and the view's skeleton.
-12. Submit reads "Save" or the action's verb; required comes from the model and help from the catalog.
+12. Submit reads "Save" or the action's verb; required comes from the model and help from the catalog. One view, one Save: its edits commit through one footer action; sections, collapsibles and tabs carry none. Other writes ride the `Form`'s `acts`; a separate action opens its own sheet.
 13. Layout only through primitives and typography roles; one view per scroll.
 14. A regional `locale` and `tz`; base and `zh` catalogs cover every visible string; check phone width with a finger: every widget reflows, and the kit's own do (table rows, forms two fields to a row, calendar days over an agenda). A hand-built widget states its own small-screen layout.
 15. Disclosure supports the task: primary inputs visible, consistent field order across create, edit and read.

@@ -41,9 +41,10 @@
 		editors,
 		viewers,
 		actions,
+		acts,
 		size = 'fill'
 	}: Pick<FormProps, 'ctx' | 'sections' | 'submit' | 'readonly' | 'disabled' | 'on_outcome' |
-		'confirm' | 'validate' | 'children' | 'editors' | 'viewers' | 'actions' | 'size'> & {
+		'confirm' | 'validate' | 'children' | 'editors' | 'viewers' | 'actions' | 'acts' | 'size'> & {
 		spec: FormSpec;
 		record: Row | null;
 		values: Row;
@@ -103,6 +104,8 @@
 					storageKey
 				);
 	if (matching) untrack(() => form.prefill(values));
+	// a shared (RecordShell-owned) form takes this view's acts too: its one footer Save commits them
+	if (acts !== undefined || !matching) form.extra = () => acts?.() ?? {};
 	if (scope?.historical) form.mode = 'view';
 	provideForm(form);
 	onDestroy(form.add_validation(() => (readonly ? [] : (validate?.(form.row) ?? []))));

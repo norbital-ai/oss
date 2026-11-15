@@ -102,9 +102,15 @@ export class FormState {
 	#capabilitiesRequired = false;
 	/** Fields the row's state lock leaves read-only (advice; the host enforces). */
 	locked: (field: string) => boolean;
+	/** Other writes the view's edits leave (`{ 'model.verb': rows }`), sent in this form's act: one Save commits the view. */
+	extra = $state.raw<() => Readonly<Record<string, readonly Value[]>>>(() => ({}));
+	readonly #extraActs = $derived(
+		Object.fromEntries(Object.entries(this.extra()).filter(([, rows]) => rows.length > 0))
+	);
 	readonly dirty = $derived(
 		Object.keys(changed(this.base, this.values)).length > 0 ||
-			Object.values(this.children).some((operations) => operations.length > 0)
+			Object.values(this.children).some((operations) => operations.length > 0) ||
+			Object.keys(this.#extraActs).length > 0
 	);
 	/** The draft over the row it starts from (the record, else the prefill): a money field reads its currency sibling here even when that is no input. */
 	#around = $state.raw<Row>({});
@@ -545,12 +551,11 @@ export class FormState {
 								...nested.set
 							}
 						};
-			if (input === null) return null;
+			const acts = { ...(input === null ? {} : { [this.spec.callable]: [input] }), ...this.#extraActs };
+			if (Object.keys(acts).length === 0) return null;
 			this.notice = null;
 			const sent = { ...this.values };
-			const result = yield* Effect.result(
-				actOutcome(this.#act({ [this.spec.callable]: [input] }, { key: this.#key }))
-			);
+			const result = yield* Effect.result(actOutcome(this.#act(acts, { key: this.#key })));
 			// A confirmed action's unreadable output is not a retryable unknown outcome.
 			if (result._tag === 'Failure') {
 				this.notice = { tone: 'danger', text: result.failure.message };

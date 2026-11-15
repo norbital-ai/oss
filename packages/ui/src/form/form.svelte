@@ -85,6 +85,11 @@ approval control and repeat no declared default.
 		viewers?: { readonly [field: string]: Snippet<[FieldView]> };
 		/** Extra buttons beside submit. */
 		actions?: Snippet<[FormState]>;
+		/**
+		 * Other writes the view's own editors leave (`{ 'jurisdiction_change.create': rows }`), committed in this form's act
+		 * by its one Save, which they enable while any is pending. A view has one Save: never give a section its own.
+		 */
+		acts?: () => Readonly<Record<string, readonly Value[]>>;
 		/** `fill` (default): the height left in its parent, its fields scrolling inside; `content`: its own height. */
 		size?: LayoutSize;
 	};
@@ -120,6 +125,7 @@ approval control and repeat no declared default.
 		editors,
 		viewers,
 		actions,
+		acts,
 		size
 	}: FormProps<S> = $props();
 	const bolt = $derived(bolt_of(ctx));
@@ -154,9 +160,9 @@ approval control and repeat no declared default.
 	});
 	const updating = $derived(typeof of === 'string' && resolved === 'update');
 	const act = (
-		acts: Readonly<Record<string, Value>>,
+		batch: Readonly<Record<string, Value>>,
 		options?: { key?: string }
-	) => bolt.act(acts, options);
+	) => bolt.act(batch, options);
 
 	// an update needs its row: the page's, else the record shell's shown one (the scrubbed revision while one is picked),
 	// else one read; a stale link shows "Not found or no access"
@@ -271,6 +277,7 @@ approval control and repeat no declared default.
 								{editors}
 								{viewers}
 								{actions}
+								{acts}
 								{size}
 							/>
 						{/key}

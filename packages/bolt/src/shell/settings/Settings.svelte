@@ -335,6 +335,33 @@
 		}
 	);
 	const limit = (v: string) => (v.trim() === '' ? null : Math.max(0, Number(v)));
+	/** The Organization view's one Save: the assistant, retention, then a changed logo (which reloads the shell). */
+	const saveOrganization = Effect.fn('Settings.saveOrganization')(function* (f: FormData) {
+		const a = assistant;
+		if (a !== null) {
+			yield* op('set_agent', {
+				monthly: limit(a.monthly),
+				member: limit(a.member),
+				policies: Object.fromEntries(
+					Object.entries(a.policies).flatMap(([p, v]) => {
+						const cap = limit(v);
+						return cap === null ? [] : [[p, cap]];
+					})
+				),
+				models: a.models
+			});
+			if (mutationError !== null) return;
+			yield* loadAssistant();
+		}
+		yield* op('set_retention', {
+			every_days: Number(f.get('every_days')),
+			hour: Number(f.get('hour')),
+			notifications_days: Number(f.get('notifications_days')),
+			runs_days: Number(f.get('runs_days'))
+		});
+		if (mutationError === null && workspace.organization && brand.logo !== (workspace.logo ?? null))
+			yield* saveBrand();
+	});
 </script>
 
 {#snippet card(title: string, description: string, body: Snippet)}
@@ -368,6 +395,15 @@
 	{#if s === null}
 		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
 	{:else if tab === 'organization'}
+		<!-- the view's one form: its one footer Save commits every card -->
+		<form
+			class="flex flex-col gap-4"
+			data-organization-settings
+			onsubmit={(e) => {
+				e.preventDefault();
+				fork(saveOrganization(new FormData(e.currentTarget)));
+			}}
+		>
 		{#snippet workspaceInfo()}
 			<dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
 				<dt class="text-muted-foreground">{t('Workspace handle')}</dt>
@@ -385,13 +421,7 @@
 		)}
 		{#if workspace.organization}
 			{#snippet branding()}
-				<form
-					class="flex flex-col gap-3"
-					onsubmit={(e) => {
-						e.preventDefault();
-						fork(saveBrand());
-					}}
-				>
+				<div class="flex flex-col gap-3">
 					<div class="flex flex-wrap items-center gap-3 text-sm">
 						<span class="text-muted-foreground">{t('Logo')}</span>
 						{#if brand.logo !== null}<img
@@ -410,34 +440,14 @@
 								>{t('Remove logo')}</Button
 							>{/if}
 					</div>
-					<Cluster gap="sm"><Button type="submit">{t('Save')}</Button></Cluster>
-				</form>
+				</div>
 			{/snippet}
 			{@render card(t('Branding'), t('The logo every member sees.'), branding)}
 		{/if}
 		{#if assistant !== null}
 			{@const a = assistant}
 			{#snippet assistantForm()}
-				<form
-					class="flex flex-col gap-3"
-					data-assistant-settings
-					onsubmit={(e) => {
-						e.preventDefault();
-						fork(
-							op('set_agent', {
-								monthly: limit(a.monthly),
-								member: limit(a.member),
-								policies: Object.fromEntries(
-									Object.entries(a.policies).flatMap(([p, v]) => {
-										const cap = limit(v);
-										return cap === null ? [] : [[p, cap]];
-									})
-								),
-								models: a.models
-							}).pipe(Effect.andThen(loadAssistant()))
-						);
-					}}
-				>
+				<div class="flex flex-col gap-3" data-assistant-settings>
 					<p class="text-sm">
 						<span class="text-muted-foreground">{t('Spent this month')}:</span>
 						<span class="tabular-nums" data-assistant-spent>{usd(spentNow)}</span>
@@ -541,8 +551,7 @@
 							/>
 						</fieldset>
 					{/if}
-					<Cluster gap="sm"><Button type="submit">{t('Save')}</Button></Cluster>
-				</form>
+				</div>
 			{/snippet}
 			{@render card(
 				t('Assistant'),
@@ -551,36 +560,22 @@
 			)}
 		{/if}
 		{#snippet retentionForm()}
-			<form
-				class="grid gap-3 sm:grid-cols-2"
-				data-retention-settings
-				onsubmit={(e) => {
-					e.preventDefault();
-					const f = new FormData(e.currentTarget);
-					fork(
-						op('set_retention', {
-							every_days: Number(f.get('every_days')),
-							hour: Number(f.get('hour')),
-							notifications_days: Number(f.get('notifications_days')),
-							runs_days: Number(f.get('runs_days'))
-						})
-					);
-				}}
-			>
+			<div class="grid gap-3 sm:grid-cols-2" data-retention-settings>
 				{#each [['every_days', 'Run every (days)', 1, undefined], ['hour', 'From hour (workspace time)', 0, 23], ['notifications_days', 'Keep read notifications (days)', 1, undefined], ['runs_days', 'Keep finished runs (days)', 1, undefined]] as const as [name, label, min, max] (name)}
 					<label class="flex flex-col gap-1 text-sm"
 						><span class="text-muted-foreground">{t(label)}</span>
 						<Input class="h-8" type="number" step="1" {name} {min} {max} value={s.retention[name]} /></label
 					>
 				{/each}
-				<Cluster gap="sm"><Button type="submit">{t('Save')}</Button></Cluster>
-			</form>
+			</div>
 		{/snippet}
 		{@render card(
 			t('Data retention'),
 			t('A built-in daily cleanup, run while the workspace is in use: it removes read notifications and finished runs past these ages. Unread notifications are kept.'),
 			retentionForm
 		)}
+		<Cluster gap="sm" justify="end" class="border-t pt-3"><Button type="submit">{t('Save')}</Button></Cluster>
+		</form>
 	{:else if tab === 'integrations'}
 		{#snippet connectionsTab()}
 			<Integrations {ctx}

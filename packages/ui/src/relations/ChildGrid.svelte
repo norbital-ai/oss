@@ -656,15 +656,6 @@ A related-record grid with explicit child operations, original revisions and par
 	{#if entry !== undefined}
 		<div class="flex flex-wrap gap-1">
 			{#if editing}
-				{#if entry.created || entry.form.dirty}<Button
-						disabled={!entry.form.can_save}
-						onclick={() => fork(entry.form.submit())}
-						>{entry.form.resubmitting
-							? msg(bolt, 'record.resubmit')
-							: entry.form.requesting_approval
-								? msg(bolt, 'record.requestApproval')
-								: msg(bolt, 'record.save')}</Button
-					>{/if}
 				{#if entry.created || (strategy.delete && permits(entry.form.capabilities?.delete))}<Button
 						variant="ghost"
 						disabled={entry.form.pending || owner?.pending === true}
@@ -811,6 +802,17 @@ A related-record grid with explicit child operations, original revisions and par
 					onclick={linkRow}>{msg(bolt, 'child.link')}</Button
 				>
 			</div>{/if}
+	{/if}
+	{#if save === 'independent' && editing}
+		<!-- the grid's one Save, below it: every edited or added row, never a Save per row -->
+		{@const edited = [...drafts.values()].filter((entry) => !entry.removed && (entry.created || entry.form.dirty))}
+		<div class="flex justify-end border-t pt-3" data-child-save>
+			<Button
+				disabled={edited.length === 0 || edited.some((entry) => !entry.form.can_save)}
+				onclick={() => fork(Effect.forEach(edited, (entry) => entry.form.submit(), { discard: true }))}
+				>{msg(bolt, 'record.save')}</Button
+			>
+		</div>
 	{/if}
 	{#if save === 'parent'}
 		{#each links as operation}{#if operation.action !== 'create'}<p class="text-meta" role="status">

@@ -1,4 +1,4 @@
-import { single_act } from './act-envelope.ts';
+import { committed, single_act } from './act-envelope.ts';
 import './dom.ts';
 import { viewFixture, browser } from './view-fixture.ts';
 import { Deferred, Effect, Fiber, Schema } from 'effect';
@@ -160,6 +160,40 @@ it.effect('a create form is the create allowlist, relations as pickers', () =>
 			null
 		);
 		assert.equal(d.formSpec('quotes', undefined, 'create'), null);
+	})
+);
+
+it.live("a view's other writes ride the form's one act and alone enable its save", () =>
+	Effect.gen(function* () {
+		const sent: Json[] = [];
+		const { bolt } = yield* browser(() =>
+			viewFixture({
+				act: (body) => {
+					sent.push('acts' in body ? body.acts : null);
+					return committed(body);
+				}
+			})
+		);
+		const form = new FormState(
+			specOf('quotes', exposure, 'update', 'q1'),
+			{ id: 'q1', title: 'A', total: '10.00', note: null, revision: 1 },
+			{},
+			bolt.act,
+			text
+		);
+		assert.equal(form.dirty, false);
+		form.extra = () => ({ 'notes.create': [{ text: 'x' }], 'notes.update': [] });
+		assert.equal(form.dirty, true);
+		assert.equal((yield* form.submit())?.kind, 'committed');
+		form.set('title', 'B');
+		assert.equal((yield* form.submit())?.kind, 'committed');
+		assert.deepEqual(sent, [
+			{ 'notes.create': [{ text: 'x' }] },
+			{
+				'quotes.update': [{ target: { id: 'q1', revision: 1 }, set: { title: 'B' } }],
+				'notes.create': [{ text: 'x' }]
+			}
+		]);
 	})
 );
 
