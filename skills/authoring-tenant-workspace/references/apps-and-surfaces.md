@@ -14,16 +14,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Pa
 
 Set `theme.light` and `theme.dark` in `src/+workspace.ts` to customize the shared shell, applications, record sheets and public pages. Omitted tokens keep Bolt's defaults. Overrides compile into the workspace CSS and follow its normal preview and release; no per-page theme script is needed.
 
-```ts
-export default workspace({
-	tz: 'Asia/Singapore',
-	locale: 'en-SG',
-	theme: {
-		light: { primary: '#1467a6', 'primary-foreground': '#ffffff', ring: '#1467a6' },
-		dark: { primary: '#3b8fd4', 'primary-foreground': '#0b0e13', ring: '#3b8fd4' }
-	}
-});
-```
+The workspace API reference includes a complete declaration example. Set each mode's primary colour, its readable foreground and matching focus ring together; override other semantic roles only as needed.
 
 `primary` styles primary actions; `accent` styles hover and selection. `brand`, `brand-foreground`, `brand-text` and `brand-muted` control the chromatic action and brand treatments. Background, card, popover, secondary, muted, sidebar, chart and status tokens have their semantic roles; pair each surface with its foreground. Colour, sidebar and chart token names match tweakcn's CSS variables, without `--`. Copy the desired values into the light/dark maps rather than importing an entire stylesheet.
 

@@ -3,6 +3,8 @@ import { mount, tick, unmount } from 'svelte';
 import Harness from './pin-input-harness.svelte';
 
 it('does not complete the same code again when a failed request enables the input', async () => {
+	// Bits schedules selection/autofill events; keep them inside this fixture's DOM realm.
+	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 	const complete = vi.fn();
 	const target = document.createElement('div');
 	document.body.append(target);
@@ -32,6 +34,8 @@ it('does not complete the same code again when a failed request enables the inpu
 		expect(complete).toHaveBeenLastCalledWith('010101');
 	} finally {
 		await unmount(view);
+		vi.clearAllTimers();
+		vi.useRealTimers();
 		target.remove();
 	}
 });
