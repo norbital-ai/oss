@@ -187,11 +187,9 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 	else if (yield* acknowledgeAudit(db, event.operation_id)) yield* drainAuditErases(db);
 	return true;
 });
-/** Events per append: a host stores them one by one under a deadline, so a bulk write's thousands go in slices. */
-const APPEND_SLICE = 256;
 /**
- * The row events, then the terminal event, of a committed operation; answers its status. Each slice is idempotent (same
- * ids, same content), so a slice cut off midway is appended again whole.
+ * The complete operation in one append: row events and its terminal payload travel together. Stable event ids let
+ * recovery resend the whole operation after an interrupted append.
  */
 const appendTerminal = Effect.fn('Audit.appendTerminal')(function* (
 	event: AuditEvent,
@@ -224,9 +222,8 @@ const appendTerminal = Effect.fn('Audit.appendTerminal')(function* (
 			written.length === 1 ? { request: event.payload, change: row } : { change: row }
 		
 	}));
-	const audit = yield* Audit,
-		events = [...rows, terminal];
-	for (let at = 0; at < events.length; at += APPEND_SLICE) yield* audit.append(events.slice(at, at + APPEND_SLICE));
+	const audit = yield* Audit;
+	yield* audit.append([...rows, terminal]);
 	return status;
 });
 /**

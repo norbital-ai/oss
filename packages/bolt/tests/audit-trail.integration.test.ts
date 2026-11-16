@@ -455,11 +455,18 @@ it.live('committed writes recover complete external payloads after terminal appe
 	)
 );
 
-it.live("a bulk write's request rides on its terminal event, not on each row event", () =>
+it.live('a bulk write sends every row and its complete request in one audit append', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const store = memory_audit();
-			const f = yield* fixture(store.port);
+			const appends: number[] = [];
+			const f = yield* fixture({
+				...store.port,
+				append: async (events, signal) => {
+					appends.push(events.length);
+					await store.port.append(events, signal);
+				}
+			});
 			const has = (payload: unknown) =>
 				typeof payload === 'object' && payload !== null && 'request' in payload;
 			const rowEvents = () =>
@@ -469,12 +476,23 @@ it.live("a bulk write's request rides on its terminal event, not on each row eve
 			});
 			expect(rowEvents().map((event) => has(event.payload))).toEqual([true]);
 			store.records.clear();
-			expect(
-				yield* f.act('create', [{ title: 'A' }, { title: 'B' }, { title: 'C' }])
-			).toMatchObject({ outcome: { kind: 'committed' } });
-			expect(rowEvents().map((event) => has(event.payload))).toEqual([false, false, false]);
+			appends.length = 0;
+			const rows = Array.from({ length: 513 }, (_, i) => ({ title: `Bulk ${i}` }));
+			expect(yield* f.act('create', rows)).toMatchObject({ outcome: { kind: 'committed' } });
+			expect(appends).toEqual([1, rows.length + 1]);
+			expect(rowEvents()).toHaveLength(rows.length);
+			expect(rowEvents().every((event) => !has(event.payload))).toBe(true);
 			const terminal = [...store.records.values()].find((event) => event.id.endsWith(':terminal'));
-			expect(has(terminal?.payload)).toBe(true);
+			const payload = Schema.decodeUnknownSync(
+				Schema.Struct({
+					request: Schema.Json,
+					records: Schema.Array(Schema.Struct({ new: Schema.Struct({ title: Schema.String }) }))
+				})
+			)(terminal?.payload);
+			expect(payload.records.map((row) => row.new.title).sort()).toEqual(
+				rows.map((row) => row.title).sort()
+			);
+			expect(JSON.stringify(payload.request)).toContain('Bulk 512');
 		})
 	)
 );
