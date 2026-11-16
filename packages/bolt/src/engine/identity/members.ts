@@ -1,7 +1,7 @@
 // Member administration: invitations, the admin flag with its `last_admin` guard, (de)activation,
 // member team selection and API keys. Definitions and policy grants remain source declarations.
 import type { Json } from '../../decl/values.ts';
-import { audited, auditActor } from '../audit-operation.ts';
+import { audited, auditActor, auditContext } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import { type AuditActor, DbError, type Lock, Port } from '@norbital-ai/host-api';
 import { fromHex, timingSafeEqual, toBase64url } from '../crypto.ts';
@@ -436,10 +436,8 @@ export const reactivate = (h: IdentityHost, auth: Authority, user: string) =>
 	setFlag(h, auth, user, 'active', true);
 /** Personal display name and the administrator's workspace display name; never a change of sign-in or authority. */
 export const AccountSettingsInput = Schema.Struct({
-	name: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
-	workspace_name: Schema.optionalKey(
-		Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))
-	)
+	name: Schema.optionalKey(Schema.String),
+	workspace_name: Schema.optionalKey(Schema.String)
 });
 export const accountSettings = Effect.fn('Bolt.accountSettings')(function* (
 	h: IdentityHost,
@@ -453,8 +451,8 @@ export const accountSettings = Effect.fn('Bolt.accountSettings')(function* (
 	if (input.workspace_name !== undefined) yield* requireAdmin(auth);
 	const name = input.name?.trim(),
 		workspace = input.workspace_name?.trim();
-	if (name === '' || workspace === '')
-		return yield* Effect.fail(refuse('check', 'A display name cannot be empty.'));
+	if (name === '' || workspace === '' || (name?.length ?? 0) > 120 || (workspace?.length ?? 0) > 120)
+		return yield* Effect.fail(refuse('check', 'A display name must have 1–120 characters.'));
 	if (name !== undefined || workspace !== undefined) {
 		const s = new IdentityStatement(auth.actor);
 		if (name !== undefined) {
@@ -473,7 +471,9 @@ export const accountSettings = Effect.fn('Bolt.accountSettings')(function* (
 				'workspace_identity',
 				`INSERT INTO sys_config (key, value) VALUES ('workspace.identity', ${s.p(JSON.stringify({ name: workspace }))}) ON CONFLICT (key) DO UPDATE SET value = excluded.value RETURNING key`
 			);
-		yield* write(h, s, CapturedResult);
+		yield* audited(h.db, { category: 'identity', action: 'settings.update', ...auditContext(auth, input) },
+			write(h, s, CapturedResult)
+		).pipe(Effect.provideService(Audit, h.audit ?? (yield* Audit)));
 	}
 	return yield* h.db
 		.one(Schema.Struct({ name: Schema.String, workspace_name: Schema.NullOr(Schema.String) }), {

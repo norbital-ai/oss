@@ -4289,7 +4289,7 @@ Ledger roots, each answering { rows, next } newest first: "$runs": { id, automat
 });
 const describeTool = defineTool('describe_workspace', {
 	behavior: { data: true },
-	description: "The workspace as you may use it: apps, pages, models with their fields and row counts, automations. names answers each in full; 'system' names the native setup capabilities, connections, envoys, secret names and MCP servers.",
+	description: "Apps, models, automations and row counts. names gives details; 'system' lists native setup, connections and secret names.",
 	parameters: Schema.Struct({ names: Schema.optionalKey(Schema.Array(Schema.String)) })
 });
 const pageTool = defineTool('page', {
@@ -4336,7 +4336,7 @@ const decideTool = defineTool('decide', {
 const settingsTool = defineTool('settings', {
 	behavior: { data: true },
 	description:
-		"Read your display name and the workspace display name (empty input), or change your own name with name; only an administrator may set workspace_name. Names never change sign-in addresses, workspace handles or permissions. Appearance and language are browser choices: use page to operate the account menu's native Appearance or Language controls. Navigate the current page again after renaming to show the new name.",
+		'Read/change your own name; workspace_name is admin-only. Empty input reads both.',
 	parameters: AccountSettingsInput
 });
 const inviteTool = defineTool('invite', {
