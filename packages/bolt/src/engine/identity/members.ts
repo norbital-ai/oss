@@ -7,7 +7,7 @@ import { type AuditActor, DbError, type Lock, Port } from '@norbital-ai/host-api
 import { fromHex, timingSafeEqual, toBase64url } from '../crypto.ts';
 import { to_hex } from '@norbital-ai/store';
 import { under } from '../../protocol/wire.ts';
-import { Effect, Result, Schema } from 'effect';
+import { Effect, Option, Result, Schema } from 'effect';
 import { LIMITS, type Authority, type MembershipPort } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { IdentityRefusal, type EngineError } from '../errors.ts';
@@ -434,6 +434,54 @@ export const deactivate = (h: IdentityHost, auth: Authority, user: string) =>
 	setFlag(h, auth, user, 'active', false);
 export const reactivate = (h: IdentityHost, auth: Authority, user: string) =>
 	setFlag(h, auth, user, 'active', true);
+/** Personal display name and the administrator's workspace display name; never a change of sign-in or authority. */
+export const AccountSettingsInput = Schema.Struct({
+	name: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
+	workspace_name: Schema.optionalKey(
+		Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))
+	)
+});
+export const accountSettings = Effect.fn('Bolt.accountSettings')(function* (
+	h: IdentityHost,
+	auth: Authority,
+	input: typeof AccountSettingsInput.Type
+) {
+	if (auth.actor.kind !== 'member')
+		return yield* Effect.fail(
+			refuse('forbidden', 'Only a signed-in member changes personal settings.')
+		);
+	if (input.workspace_name !== undefined) yield* requireAdmin(auth);
+	const name = input.name?.trim(),
+		workspace = input.workspace_name?.trim();
+	if (name === '' || workspace === '')
+		return yield* Effect.fail(refuse('check', 'A display name cannot be empty.'));
+	if (name !== undefined || workspace !== undefined) {
+		const s = new IdentityStatement(auth.actor);
+		if (name !== undefined) {
+			identityPiece(
+				s,
+				'u',
+				'sys_user',
+				`UPDATE sys_user SET name = ${s.p(name)}, revision = revision + 1 WHERE id = ${s.p(auth.actor.id)} AND active`
+			);
+			const now = yield* h.now;
+			identityHistory(s, 'sys_user', 'u', now, by(auth), h.writes, writerOf(auth).depth);
+			projection(h, s, 'u', now);
+		}
+		if (workspace !== undefined)
+			s.cte(
+				'workspace_identity',
+				`INSERT INTO sys_config (key, value) VALUES ('workspace.identity', ${s.p(JSON.stringify({ name: workspace }))}) ON CONFLICT (key) DO UPDATE SET value = excluded.value RETURNING key`
+			);
+		yield* write(h, s, CapturedResult);
+	}
+	return yield* h.db
+		.one(Schema.Struct({ name: Schema.String, workspace_name: Schema.NullOr(Schema.String) }), {
+			text: "SELECT name, (SELECT value::jsonb->>'name' FROM sys_config WHERE key = 'workspace.identity') AS workspace_name FROM sys_user WHERE id = $1 AND active",
+			params: [auth.actor.id]
+		})
+		.pipe(Effect.map(Option.getOrNull));
+});
 export const assign_team = Effect.fn('Bolt.assign_team')(function* (
 	h: IdentityHost,
 	m: EngineManifest,

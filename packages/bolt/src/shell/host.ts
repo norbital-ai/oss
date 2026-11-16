@@ -679,7 +679,7 @@ const makeShell = Effect.gen(function* () {
 	): Effect.fn.Return<BootState, EngineError> {
 		const url = requestUrl(request);
 		const app = publicApp(url.searchParams.get('app'));
-		const ws = shellWorkspace();
+		let ws = shellWorkspace();
 		// a kiosk boot names its kiosk: signed-out callers boot only public kiosks (no sign-in, the
 		// requests run as the assigned policies); members boot any kiosk they may open, with the boot catalog
 		// cut to what the kiosk may read. Anything else is unauthenticated (signed-out) or forbidden.
@@ -767,10 +767,17 @@ const makeShell = Effect.gen(function* () {
 			return rejected(
 				json({ error: { code: 'unauthenticated', message: 'Sign in first.', workspace: ws } }, 401)
 			);
-		const user = yield* db.one(Schema.Struct({ name: Schema.NullOr(Schema.String) }), {
-			text: 'SELECT name FROM sys_user WHERE id = $1',
-			params: [auth.actor.id]
-		});
+		const user = yield* db.one(
+			Schema.Struct({
+				name: Schema.NullOr(Schema.String),
+				workspace_name: Schema.NullOr(Schema.String)
+			}),
+			{
+				text: "SELECT name, (SELECT value::jsonb->>'name' FROM sys_config WHERE key = 'workspace.identity') AS workspace_name FROM sys_user WHERE id = $1",
+				params: [auth.actor.id]
+			}
+		);
+		ws = { ...ws, name: Option.getOrNull(user)?.workspace_name ?? ws.name };
 		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined, c.live !== undefined);
 		const box = s.inbox ? yield* inbox(h.db, auth) : null;
 		const noticePort = c.notice;

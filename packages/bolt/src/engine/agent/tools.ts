@@ -112,7 +112,7 @@ import {
 	StoredFile
 } from './ingest.ts';
 import { can_open, nav, navigation_paths } from '../../shell/nav.ts';
-import { InvitationInput, inviteMany } from '../identity/members.ts';
+import { AccountSettingsInput, accountSettings, InvitationInput, inviteMany } from '../identity/members.ts';
 export { ToolAnswer } from './ai.ts';
 import { FILE_SHAPE, RUN_JS, runFile, runJs } from './run-js.ts';
 import { layered, layers, type EngineManifest, type SkillSpec } from '../manifest.ts';
@@ -2419,6 +2419,12 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			}
 		);
 	}
+	if (agent && x.inApp && !x.child && a.actor.kind === 'member' && e.identity !== undefined) {
+		const identity = e.identity;
+		add(settingsTool, function* (input) {
+			return ok(yield* accountSettings(identity, a, input));
+		});
+	}
 	// Manual sync is its own native operation, with file grants or an explicit remote refresh capability.
 	const sync_controls =
 		a.actor.kind !== 'member'
@@ -4327,6 +4333,12 @@ const decideTool = defineTool('decide', {
 		'Decide an approval request as its authorized approver: request_id, decision and optional reason. The person confirms the decision in the app.',
 	parameters: Decide
 });
+const settingsTool = defineTool('settings', {
+	behavior: { data: true },
+	description:
+		"Read your display name and the workspace display name (empty input), or change your own name with name; only an administrator may set workspace_name. Names never change sign-in addresses, workspace handles or permissions. Appearance and language are browser choices: use page to operate the account menu's native Appearance or Language controls. Navigate the current page again after renaming to show the new name.",
+	parameters: AccountSettingsInput
+});
 const inviteTool = defineTool('invite', {
 	behavior: { data: true },
 	description:
@@ -4590,6 +4602,7 @@ const ALL_TOOLS = [
 	runAutomationTool,
 	decideTool,
 	inviteTool,
+	settingsTool,
 	connectTool,
 	syncTool,
 	updatePlanTool,
@@ -4634,6 +4647,7 @@ const AUDIENCE: { readonly [A in Audience]: ReadonlySet<string> } = {
 			(name) =>
 				![
 					'page',
+					'settings',
 					'connect',
 					'update_plan',
 					'download',
@@ -4646,6 +4660,7 @@ const AUDIENCE: { readonly [A in Audience]: ReadonlySet<string> } = {
 	)
 };
 const SUBAGENT_TOOLS: ReadonlySet<string> = new Set([
+	'settings',
 	'task',
 	'task_read',
 	'task_stop',
