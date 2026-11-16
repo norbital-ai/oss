@@ -7,9 +7,14 @@
 	let {
 		api,
 		invitation,
-		recovery
-	}: { api: ShellApi; invitation?: { id: string; signedIn: boolean }; recovery?: string } =
-		$props();
+		recovery,
+		next = '/'
+	}: {
+		api: ShellApi;
+		invitation?: { id: string; signedIn: boolean };
+		recovery?: string;
+		next?: string;
+	} = $props();
 	const t = (key: string) => key;
 </script>
 
@@ -17,6 +22,6 @@
 	{#if invitation}
 		<Invite {api} {t} id={invitation.id} signedIn={invitation.signedIn} workspace="Acme" />
 	{:else}
-		<SignIn {api} {t} next="/" workspace="Acme" />
+		<SignIn {api} {t} {next} workspace="Acme" />
 	{/if}
 </Access>

@@ -181,6 +181,50 @@ it.effect('founder bootstrap does not promote an inactive or external seeded ide
 	}).pipe(Effect.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer)))
 );
 
+for (const valid of [true, false])
+	it.effect(
+		`a late ${valid ? 'correct' : 'wrong'} verification cannot consume or spend a resent code`,
+		() =>
+			Effect.gen(function* () {
+				const { db, h, one } = yield* fixture;
+				const host = { ...h, dev_sink: true },
+					address = 'resend-race@acme.example',
+					ip = '3.3.3.4';
+				yield* founder_bootstrap(host, address);
+				yield* send_code(host, address, ip);
+				let rotated = false;
+				const stale = {
+					...host,
+					db: {
+						...db,
+						read: (statements: Parameters<typeof db.read>[0]) =>
+							db.read(statements).pipe(
+								Effect.tap(() => {
+									if (
+										rotated ||
+										!statements.some((statement) =>
+											statement.text.includes('SELECT code_mac, attempts, expires_at')
+										)
+									)
+										return Effect.void;
+									rotated = true;
+									return TestClock.adjust('1 second').pipe(
+										Effect.andThen(send_code(host, address, ip).pipe(Effect.orDie))
+									);
+								})
+							)
+					}
+				};
+				expect(
+					yield* Effect.flip(verify_code(stale, address, valid ? '123456' : '000000', ip))
+				).toMatchObject({ code: 'invalid_code' });
+				expect(rotated).toBe(true);
+				expect(yield* one('SELECT attempts FROM sys_challenge')).toEqual([{ attempts: 0 }]);
+				const winner = yield* verify_code(host, address, '123456', ip);
+				expect(yield* authenticate(host, winner.token)).toMatchObject({ user: winner.user });
+			}).pipe(Effect.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer)))
+	);
+
 it.effect('parallel wrong sign-in codes each spend an attempt', () =>
 	Effect.gen(function* () {
 		const { h, lastCode } = yield* fixture;

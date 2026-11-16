@@ -61,7 +61,7 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 		})
 	);
 	const start = (work: Said, success: () => void, rejected: () => void = () => {}) => {
-		if (request === undefined) return;
+		if (request === undefined || busy) return;
 		busy = true;
 		error = null;
 		fork(
@@ -95,7 +95,10 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 		if (phone !== null && code.length === 6 && !busy)
 			start(
 				session.verify(phone, code),
-				() => {},
+				() => {
+					sent = open = false;
+					code = '';
+				},
 				() => {
 					code = '';
 				}
@@ -109,7 +112,8 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 	<div bind:this={row} {@attach lifetime}>
 		<Cluster gap="sm" align="center">
 			<div class="min-w-64 flex-1">
-				<PhoneInput {ctx}
+				<PhoneInput
+					{ctx}
 					{id}
 					value={phone}
 					disabled={busy}
@@ -139,6 +143,7 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 			<PinInput
 				aria-label={t('code')}
 				bind:value={code}
+				disabled={busy}
 				aria-invalid={error !== null}
 				on_complete={verify}
 			/>
@@ -149,14 +154,15 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 			<Cluster gap="md" justify="between">
 				<button
 					type="button"
-					class="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
 					disabled={busy}
+					class="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
 					onclick={send}
 				>
 					{t('resendCode')}
 				</button>
 				<button
 					type="button"
+					disabled={busy}
 					class="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
 					onclick={() => {
 						sent = open = false;

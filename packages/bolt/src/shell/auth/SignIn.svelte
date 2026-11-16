@@ -58,18 +58,25 @@
 		if (methods.loading || busy) return;
 		busy = true;
 		error = null;
+		const verifying = sent,
+			target = address,
+			digits = code,
+			channel = via;
+		let navigating = false;
 		fork(
 			Effect.gen(function* () {
-				const r = sent
-					? yield* Effect.result(api.verify(address, code))
-					: yield* Effect.result(api.send_code(address, via));
+				const r = verifying
+					? yield* Effect.result(api.verify(target, digits))
+					: yield* Effect.result(api.send_code(target, channel));
 				if (r._tag === 'Failure') return void (error = r.failure.message);
-				if (sent) location.assign(based(next));
-				else sent = true;
+				if (verifying) {
+					navigating = true;
+					location.assign(based(next));
+				} else sent = true;
 			}).pipe(
 				Effect.ensuring(
 					Effect.sync(() => {
-						busy = false;
+						busy = navigating;
 					})
 				)
 			)
@@ -173,6 +180,7 @@
 				{#if !sent && byEmail && byPhone}
 					<button
 						type="button"
+						disabled={busy}
 						class="text-sm underline underline-offset-4 text-muted-foreground hover:text-foreground"
 						onclick={() => {
 							mode = current === 'phone' ? 'email' : 'phone';
@@ -190,6 +198,7 @@
 			{t('The code expires in ten minutes.')}
 			<button
 				type="button"
+				disabled={busy}
 				class="underline underline-offset-4 hover:text-foreground"
 				onclick={() => {
 					sent = false;

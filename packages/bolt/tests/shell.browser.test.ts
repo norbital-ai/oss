@@ -2,7 +2,8 @@ import { expect, it } from '@effect/vitest';
 import { Deferred, Effect, Layer, ManagedRuntime } from 'effect';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { page } from 'vitest/browser';
-import { mount, unmount } from 'svelte';
+import { mount, tick, unmount } from 'svelte';
+import { required } from './support/required.ts';
 import { shell_api } from '../src/shell/runtime.ts';
 import { ShellError, type Invitation } from '../src/shell/api-types.ts';
 import type { SignInMethods } from '../src/shell/host.ts';
@@ -173,3 +174,75 @@ it('links the host recovery below the card in place of changing workspace', asyn
 		target.remove();
 	}
 });
+
+it.each(['failure', 'success'] as const)(
+	'OTP auto-submit and manual submit share one request through %s',
+	async (result) => {
+		const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
+		const pending = Deferred.makeUnsafe<void, ShellError>();
+		let calls = 0;
+		let digits = '';
+		const target = document.createElement('div');
+		document.body.replaceChildren(target);
+		const view = mount(AccessCard, {
+			target,
+			props: {
+				api: {
+					...api,
+					send_code: () => Effect.void,
+					verify: (_address: string, code: string) => {
+						calls++;
+						digits = code;
+						return Deferred.await(pending);
+					}
+				},
+				next: `${location.pathname}${location.search}#verified`
+			}
+		});
+		try {
+			await page.getByLabelText('Email address').fill('ada@x.test');
+			await page.getByRole('button', { name: 'Send sign-in code' }).click();
+			await expect
+				.element(page.getByRole('heading', { name: 'Enter your code' }))
+				.toBeInTheDocument();
+			const form = required(target.querySelector('form'));
+			const input = required(
+				target.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]')
+			);
+			input.value = '123456';
+			input.dispatchEvent(
+				new InputEvent('input', { bubbles: true, data: '123456', inputType: 'insertText' })
+			);
+			form.requestSubmit();
+			form.requestSubmit();
+			await expect.poll(() => calls).toBe(1);
+			expect(digits).toBe('123456');
+			await expect
+				.element(page.getByRole('button', { name: 'Verify and continue' }))
+				.toBeDisabled();
+			if (result === 'failure') {
+				await Effect.runPromise(
+					Deferred.fail(
+						pending,
+						new ShellError({ code: 'invalidCode', message: 'Retry code', status: 400 })
+					)
+				);
+				await expect.element(page.getByRole('alert')).toHaveTextContent('Retry code');
+				form.requestSubmit();
+				await expect.poll(() => calls).toBe(2);
+			} else {
+				await Effect.runPromise(Deferred.succeed(pending, undefined));
+				await expect.poll(() => location.hash).toBe('#verified');
+				await tick();
+				form.requestSubmit();
+				await tick();
+				expect(calls).toBe(1);
+			}
+		} finally {
+			history.replaceState(null, '', `${location.pathname}${location.search}`);
+			await unmount(view);
+			await dispose();
+			target.remove();
+		}
+	}
+);

@@ -331,7 +331,7 @@ export const send_code = Effect.fn('Bolt.send_code')(function* (
 						'email',
 						{
 							to: a.value,
-							...code_mail(code)
+							...code_mail(code, new URL(h.public_url).host)
 						},
 						signal
 					)
@@ -566,6 +566,8 @@ export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 		return yield* Effect.fail(refuse('invalid_code', 'The code is wrong or has expired.'));
 	const s = new IdentityStatement();
 	const rate = ratePiece(s, charges, now.getTime());
+	// A resend replaces the challenge: an older check may neither consume it nor spend its attempts.
+	const challenge = `address_mac = ${s.p(address)} AND code_mac = ${s.p(ch.code_mac)} AND expires_at = ${s.p(ch.expires_at)}::timestamptz`;
 	// a number's code is the verifier's, checked there; an email's is ours, compared in constant time
 	const checked =
 		a.kind === 'email'
@@ -582,7 +584,7 @@ export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 	if (checked === false || (typeof checked !== 'boolean' && checked.success === false)) {
 		// every wrong guess counts, parallel ones too: the increment is the row's own, never the value read above; a spent
 		// code stays until a new one replaces it, refused by its count
-		s.cte('bump', `UPDATE sys_challenge SET attempts = attempts + 1 WHERE address_mac = ${s.p(address)} RETURNING 1`);
+		s.cte('bump', `UPDATE sys_challenge SET attempts = attempts + 1 WHERE ${challenge} RETURNING 1`);
 		yield* nativeCommit(h.db.write, h.publication, s, CapturedResult);
 		return yield* Effect.fail(refuse('invalid_code', 'The code is wrong or has expired.'));
 	}
@@ -650,7 +652,7 @@ export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 	const outcomeKey = sha256(`identity:session.verify:${sessionId}`),
 		digest = sha256(canonical(payload));
 	gate(s, outcomeKey, digest, now.toISOString());
-	s.cte('used', `DELETE FROM sys_challenge WHERE address_mac = ${s.p(address)} AND attempts = ${s.p(ch.attempts)} AND ${rate} AND ${GATED} RETURNING 1`);
+	s.cte('used', `DELETE FROM sys_challenge WHERE ${challenge} AND attempts = ${s.p(ch.attempts)} AND ${rate} AND ${GATED} RETURNING 1`);
 	const email = a.kind === 'email' ? a.value : (inv?.email ?? null),
 		phone = a.kind === 'phone' ? a.value : (inv?.phone ?? null);
 	const name = defaultName(a);
