@@ -23,7 +23,7 @@
 	import { decision_of, type Decided } from './decisions.ts';
 	import { AgentPanelFailed, refused } from './actions.ts';
 	import { checkpointSections, contextView, doingOf, failedVerbs, modelDividers, revisable, waiting_question } from './view.ts';
-	let { ctx, api, t, zone, admin, conversation, rows, status, sent, thread, automation, plan, before,
+	let { ctx, api, t, zone, admin, conversation, rows, status, sent, thread, automation, read_only = false, plan, before,
 		loading_older, load_older, port = $bindable(null), pinned = $bindable(true), latest,
 		load_failed, on_retry, decision_frame, dispatch, on_error, file_href, model_label,
 		on_revise, revision_pending, on_restart, restart }: {
@@ -38,6 +38,7 @@
 		sent: string | null;
 		thread: boolean;
 		automation: boolean;
+		read_only?: boolean;
 		plan: AgentConversation['plan'] | undefined;
 		before: number | null;
 		loading_older: boolean;
@@ -57,6 +58,7 @@
 		on_restart: (row: AgentRow) => void;
 		restart: { from: string | null; pending: boolean; error: string | null };
 	} = $props();
+	const writable = $derived(!thread && !automation && !read_only);
 	const atTail = (el: HTMLElement) => el.scrollTop >= -1;
 	const clientNavigation = getContext<ClientNavigation | undefined>(CLIENT_NAVIGATION);
 	const pending_question = $derived(waiting_question(rows));
@@ -64,7 +66,7 @@
 	const answering = new SvelteSet<string>();
 	const confirmFailed = new SvelteMap<string, string>();
 	function confirm(row: AgentRow, approve: boolean): void {
-		if (answering.has(row.id)) return;
+		if (!writable || answering.has(row.id)) return;
 		answering.add(row.id);
 		confirmFailed.delete(row.id);
 		dispatch(
@@ -539,14 +541,14 @@
 										</summary>
 										<Steps {ctx} steps={item.steps} {t} opened={expanded} />
 									</details>
-									{#each item.steps.filter((step) => approval_cards.has(step.id)) as st (st.id)}
+									{#each item.steps.filter((step) => !read_only && approval_cards.has(step.id)) as st (st.id)}
 										<!-- a live change the host holds for the person: at the call that asked for it -->
 										<div class="my-2">
 											{#key st.tool?.approval}<StudioApproval {api} step={st} {t} {zone} />{/key}
 										</div>
 									{/each}
 									{#each item.steps as st (st.id)}
-										{#if !thread && st.tool?.navigation !== undefined && clientNavigation !== undefined && conversation !== null}
+										{#if writable && st.tool?.navigation !== undefined && clientNavigation !== undefined && conversation !== null}
 											{@const path = st.tool.navigation}
 											{@const id = conversation}
 											<div class="group/nav relative my-2">
@@ -697,7 +699,7 @@
 															class="size-3.5"
 														/></Button
 													>{/if}
-												{#if revisable(row)}<Button
+												{#if writable && revisable(row)}<Button
 														variant="ghost"
 														size="icon"
 														class="size-6"
@@ -706,7 +708,7 @@
 														onclick={() => on_revise(row)}
 														><Icon name="lucide:pencil" class="size-3.5" /></Button
 													>{/if}
-												{#if revisable(row) && !automation}<Button
+												{#if writable && revisable(row)}<Button
 													variant="ghost" size="icon" class="size-7 pointer-coarse:size-11"
 													aria-label={t('Restart in a new chat from this message')} title={t('Restart in a new chat from this message')}
 													disabled={restart.pending || revision_pending}
@@ -722,14 +724,19 @@
 												data-role={row.id === lastPending ? 'waiting' : undefined}
 											>
 												<span>{label}</span>
-												{#if !thread && row.id === lastPending}<Button
+												{#if writable && row.id === lastPending}<Button
 														variant="ghost"
 														onclick={respond_now}>{t('Respond now')}</Button
 													>{/if}
 											</span>
 										{/if}
 									</li>
-								{:else if !thread && (row.state === 'confirm' || row.state === 'approved') && row.call?.name === 'connect'}
+								{:else if !writable && row.call}
+									<li class="rounded-xl border border-border/70 bg-background p-3" {@attach turns.measure(itemKey(at))}>
+										<p class="text-sm font-medium">{row.call.name}</p>
+										<StructuredData {ctx} value={row.call.input} name={t('Input')} />
+									</li>
+								{:else if writable && (row.state === 'confirm' || row.state === 'approved') && row.call?.name === 'connect'}
 									<li
 										{@attach turns.measure(itemKey(at))}
 										class="rounded-xl border border-border/70 bg-background p-3"
@@ -744,7 +751,7 @@
 											{t}
 										/>
 									</li>
-								{:else if !thread && (row.state === 'confirm' || row.state === 'approved') && row.call}
+								{:else if writable && (row.state === 'confirm' || row.state === 'approved') && row.call}
 									{@const call = row.call}
 									{@const busy = answering.has(row.id) || row.state === 'approved'}
 									<li
@@ -784,7 +791,7 @@
 									</li>
 								{:else if row.role === 'assistant' && row.question !== undefined && conversation !== null}
 									<li {@attach turns.measure(itemKey(at))} data-role="question">
-										<Question {api} {conversation} id={row.id} question={row.question} answered={row.answered === true || rows.some((answer) => answer.answer_to === row.id && answer.state !== 'cancelled')} pending={pending_question?.id === row.id} active={!thread && status !== 'running' && pending_question?.id === row.id} {t} />
+										<Question {api} {conversation} id={row.id} question={row.question} answered={row.answered === true || rows.some((answer) => answer.answer_to === row.id && answer.state !== 'cancelled')} pending={pending_question?.id === row.id} active={writable && status !== 'running' && pending_question?.id === row.id} {t} />
 									</li>
 								{:else if row.role === 'assistant' && row.text}
 									{@const model = dividers.get(row.id)}

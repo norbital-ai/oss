@@ -28,3 +28,5 @@ export { response_error } from '../protocol/http.ts';
 export { type ShellManifest } from '../shell/nav.ts';
 export { SYSTEM } from '../system/index.ts';
 export { KitInvalid, TestEngine, test_engine } from './test-engine.ts';
+
+export { theme_css } from '../decl/theme.ts';

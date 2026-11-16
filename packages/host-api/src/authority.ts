@@ -28,6 +28,12 @@ export const Authority = Schema.Struct({
 	actor: Actor,
 	/** Administers the workspace: Studio, the integrations admin and every host tool. */
 	admin: Schema.Boolean,
+	/** Attribution for an admin viewing or acting as another identity; it grants no host authority. */
+	preview: Schema.optionalKey(Schema.Struct({
+		by: Schema.String,
+		team: Schema.NullOr(Schema.String),
+		impersonate: Schema.optionalKey(Schema.Literal(true))
+	})),
 	/** Set when the caller is the agent acting for its member; a host holds live-changing work from it. */
 	agent: Schema.optionalKey(AgentMark),
 	/** Set on a render grant's requests (a record printed by the host's browser): the run's reads, no visit of its own. */

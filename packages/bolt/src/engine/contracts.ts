@@ -165,7 +165,7 @@ export type Authority = {
 	admin: boolean;
 	policies: readonly string[];
 	/** Trusted admin preview context, rechecked before an approval decision or proposal replay. */
-	preview?: { by: string; team: string | null };
+	preview?: { by: string; team: string | null; impersonate?: true };
 	/** Set when compiled for a kiosk's requests: the kiosk whose assigned policies this reads and writes as. */
 	kiosk?: string;
 	/**

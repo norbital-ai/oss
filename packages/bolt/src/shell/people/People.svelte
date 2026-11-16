@@ -69,8 +69,8 @@
 			return result.success;
 		});
 	/** Rule 39: a member id, or `{ team }`. */
-	const preview = Effect.fn('People.preview')(function* (target: string) {
-		const r = yield* Effect.result(api.preview(target));
+	const preview = Effect.fn('People.preview')(function* (target: string, impersonate = false) {
+		const r = yield* Effect.result(api.preview(impersonate ? { user: target, impersonate: true } : target));
 		if (r._tag === 'Success') location.assign(based('/'));
 		else mutationError = r.failure.message;
 	});
@@ -414,6 +414,7 @@
 		{#if u !== undefined}
 			{#snippet memberFoot()}
 				{#if draft === null}
+					{#if u.active}<Button variant="outline" onclick={() => fork(preview(u.id, true))}>{t('Act as member')}</Button>{/if}
 					{#if u.active && !u.admin}<Button variant="outline" onclick={() => fork(preview(u.id))}
 							>{t('Preview as')}</Button
 						>{/if}

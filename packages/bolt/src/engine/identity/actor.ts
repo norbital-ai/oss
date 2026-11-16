@@ -240,10 +240,11 @@ export class Authorities {
 					admin: false,
 					party: null
 				};
-				return yield* this.compile(
+				const authority = yield* this.compile(
 					{ actor, admin: false, policies: definition.policies, teamTree: closure(graph, team) },
 					`preview:team:${team}:${previewer.id}`
 				);
+				return { ...authority, preview: { by: previewer.id, team } };
 			}.bind(this)
 		);
 	}
@@ -383,7 +384,7 @@ export class Authorities {
 		);
 	}
 }
-/** Rule 39: admin-only; the Authority becomes the previewed member's (or team's, `{ team }`), administrator flag cleared. */
+/** Admin-only: a permissions preview clears admin; explicit impersonation retains the member's actual grants. */
 export const preview_as = Effect.fn('Bolt.preview_as')(function* (
 	real: Authority,
 	authorities: Authorities,
@@ -391,6 +392,7 @@ export const preview_as = Effect.fn('Bolt.preview_as')(function* (
 	publication: CommitPublication,
 	target:
 		| string
+		| { member: string }
 		| {
 				team: string;
 		  }
@@ -403,22 +405,30 @@ export const preview_as = Effect.fn('Bolt.preview_as')(function* (
 				'Only an administrator can preview as a member or team.'
 			)
 		);
+	const impersonate = typeof target !== 'string' && 'member' in target;
 	const authority =
 		typeof target === 'string'
 			? yield* authorities.member(db, publication, target, true)
-			: yield* authorities.team(db, real.actor, target.team);
+			: 'member' in target
+				? yield* authorities.member(db, publication, target.member)
+				: yield* authorities.team(db, real.actor, target.team);
 	if (authority === null)
 		return yield* Effect.fail(
 			BoltError.make(
 				'not_found',
 				'admission',
-				typeof target === 'string' ? 'No active member to preview.' : 'No such team to preview.'
+				typeof target === 'string' || impersonate ? 'No active member to preview.' : 'No such team to preview.'
 			)
 		);
 	return {
 		authority: {
 			...authority,
-			preview: { by: real.actor.id, team: typeof target === 'string' ? null : target.team }
+			key: `${authority.key}:preview:${real.actor.id}:${impersonate ? 'impersonate' : 'permissions'}`,
+			preview: {
+				by: real.actor.id,
+				team: typeof target !== 'string' && 'team' in target ? target.team : null,
+				...(impersonate ? { impersonate: true as const } : {})
+			}
 		},
 		impersonatedBy: real.actor.id
 	};

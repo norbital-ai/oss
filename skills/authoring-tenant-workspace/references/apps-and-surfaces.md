@@ -4,11 +4,32 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Pa
 
 ## Workspace and secrets
 
-- `+workspace.ts` declares zone, locale, currency, launcher order (`apps`), `ai` classes and embeddings (the host maps them to providers), `agent`, `csp`, `convert`, `signup` and rate `limits` per policy. Accounts and envoys are runtime records; administrators choose chat models and spending limits in Settings.
+- `+workspace.ts` declares zone, locale, currency, launcher order (`apps`), `theme`, `ai` classes and embeddings (the host maps them to providers), `agent`, `csp`, `convert`, `signup` and rate `limits` per policy. Accounts and envoys are runtime records; administrators choose chat models and spending limits in Settings.
 - `+secrets.ts` is the one place secrets are declared: `UPPER_SNAKE` name, `label`, optional `description`; no defaults or non-secret values. Values are set in Settings and sealed in the tenant database.
 - Secret names hold OAuth clients, MCP URLs and credentials, and webhook secrets. An integration's own secret is its `credential`, sealed per instance at pairing.
 - Server Effect bodies read declared values through `Config.Redacted(name)` from `effect`, in automations, callbacks and syncs; `Config.option` for optional ones. A required unset value fails. Use `Redacted.value` only where plaintext is needed.
 - Keep values out of page data, logs, chat and source. Clients and declaration evaluation get none.
+
+## Workspace theme
+
+Set `theme.light` and `theme.dark` in `src/+workspace.ts` to customize the shared shell, applications, record sheets and public pages. Omitted tokens keep Bolt's defaults. Overrides compile into the workspace CSS and follow its normal preview and release; no per-page theme script is needed.
+
+```ts
+export default workspace({
+	tz: 'Asia/Singapore',
+	locale: 'en-SG',
+	theme: {
+		light: { primary: '#1467a6', 'primary-foreground': '#ffffff', ring: '#1467a6' },
+		dark: { primary: '#3b8fd4', 'primary-foreground': '#0b0e13', ring: '#3b8fd4' }
+	}
+});
+```
+
+`primary` styles primary actions; `accent` styles hover and selection. `brand`, `brand-foreground`, `brand-text` and `brand-muted` control the chromatic action and brand treatments. Background, card, popover, secondary, muted, sidebar, chart and status tokens have their semantic roles; pair each surface with its foreground. Colour, sidebar and chart token names match tweakcn's CSS variables, without `--`. Copy the desired values into the light/dark maps rather than importing an entire stylesheet.
+
+`font-sans` and `font-mono` accept installed or bundled font stacks; they do not download fonts. `radius` controls the kit's shared radius scale. Use semantic component variants throughout the app so the theme applies consistently. Preview both modes, including controls, charts, focus rings and readable foreground contrast. Keep tenant names, customer data and credentials out of theme source and documentation.
+
+For a reference-image request, inspect every attachment using its complete file ID. Distinguish the requested layout from its palette: layout uses the existing page/record primitives; shared colours belong in `workspace.theme`. Preserve calculations, data reads, authority and approvals when restyling. Explain the changes and open the current change's preview for review. Theme customization is supported by the workspace declaration; do not tell the user it requires a platform-wide UI change.
 
 ## Apps, groups and pages
 

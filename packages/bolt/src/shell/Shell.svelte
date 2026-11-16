@@ -322,7 +322,7 @@
 	// svelte-ignore state_referenced_locally
 	provide_representations(config.representations ?? {});
 
-	// a preview environment drops the meta tools: Norbius and Studio (`surfaces`), People, Integrations and preview-as
+	// A preview contains application modules only, without workspace or account controls.
 	const previewEnv = $derived(boot?.workspace.live !== undefined);
 	const current = $derived(preview_route(route(config.manifest, url), previewEnv));
 	const commandTabs = $derived(
@@ -1047,7 +1047,8 @@
 		{#snippet navigation(open: boolean)}
 			{#if model !== null}
 			<Nav
-				pinned={device.pinned === true}
+				pinned={device.pinned === true || previewEnv}
+				app_only={previewEnv}
 				{model}
 				expanded={open}
 				mobile={narrow.current}
@@ -1081,7 +1082,7 @@
 				notice={(refreshed ?? boot)?.notice}
 				{...narrow.current ? {} : { on_toggle: () => (expanded.current = !expanded.current) }}
 			>
-				{#snippet bell(wide)}{#if bolt !== null && !narrow.current}<Bell
+				{#snippet bell(wide)}{#if bolt !== null && !narrow.current && boot?.surfaces.inbox}<Bell
 							{api}
 							{bolt}
 							{t}
@@ -1145,7 +1146,7 @@
 								</Button>
 							{/snippet}
 							{#snippet trailing()}
-								{#if bolt !== null}<Bell
+								{#if bolt !== null && boot?.surfaces.inbox}<Bell
 										{api}
 										{bolt}
 										{t}
@@ -1188,12 +1189,14 @@
 											'{team}',
 											boot.preview.name
 										)
-									: t(
+									: boot.preview.impersonate
+										? t('Acting as {member}. Your admin identity is recorded.').replace('{member}', boot.name ?? '')
+										: t(
 											'Previewing as another member. Their grants apply; you are recorded as the previewer.'
 										)}</span
 							>
 							<Button variant="outline" onclick={() => fork(endPreview())}
-								>{t('End preview')}</Button
+								>{t('user' in boot.preview && boot.preview.impersonate ? 'Return to my account' : 'End preview')}</Button
 							>
 						</Inline>
 					{/if}
@@ -1206,7 +1209,7 @@
 				>
 			{/if}
 		</div>
-		{#if bolt !== null}
+		{#if bolt !== null && !previewEnv}
 			<Finder
 				bind:open={finding}
 				entries={boot.search}

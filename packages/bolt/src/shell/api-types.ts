@@ -236,7 +236,7 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 	admin: Schema.Boolean,
 	preview: Schema.NullOr(
 		Schema.Union([
-			Schema.Struct({ user: Schema.String, by: Schema.String }),
+			Schema.Struct({ user: Schema.String, by: Schema.String, impersonate: Schema.optionalKey(Schema.Literal(true)) }),
 			Schema.Struct({ team: Schema.String, name: Schema.String, by: Schema.String })
 		])
 	),
@@ -465,6 +465,7 @@ export const TranscriptReadAnswer = Schema.Struct({
 	from: Schema.optionalKey(Schema.Number),
 	thread: Schema.optionalKey(Schema.Literal(true)),
 	automation: Schema.optionalKey(Schema.Literal(true)),
+	read_only: Schema.optionalKey(Schema.Literal(true)),
 	inputs: Schema.optionalKey(Schema.Array(ConversationFile)),
 	outputs: Schema.optionalKey(Schema.Array(ConversationFile))
 });
@@ -533,7 +534,7 @@ export type ShellApi = {
 	studio_file(commit: string, path: string): Call<StudioFile | null>;
 	studio_inspect(input: StudioInspectInput): Call<StudioInspection>;
 	/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
-	preview(target: string | { team: string } | null): Call<void>;
+	preview(target: string | { team: string } | { user: string; impersonate: true } | null): Call<void>;
 	/** `access.explain`: the caller's own Authority, or (administrators) a member's or team's. */
 	explain(target?: { user: string } | { team: string }): Call<Json>;
 	push(body: PushBody): Call<void>;

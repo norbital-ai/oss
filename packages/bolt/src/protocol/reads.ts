@@ -63,6 +63,8 @@ export type ReadIR =
 			readonly thread: boolean;
 			/** An automation run's inference transcript: read-only. */
 			readonly automation?: true | undefined;
+			/** Another member's in-app conversation opened for administrator inspection. */
+			readonly read_only?: true | undefined;
 			readonly from?: number | undefined;
 	  }
 	/** The shell inbox: own notices, with an optional caller-filtered open request list. */
@@ -79,6 +81,8 @@ export type ReadIR =
 			readonly member: string;
 			/** Native row fetch uses the same visibility and projection as the list. */
 			readonly id?: string;
+			/** Administrator inspection of all members' in-app sessions and other readable AI sessions. */
+			readonly workspace?: true;
 			/** The archived conversations instead of the rest. */
 			readonly archived?: boolean;
 	  }

@@ -729,6 +729,10 @@ const lower = Effect.fn('protocol.lower_read')(function* (
 			conversation: id,
 			thread: conversation.integration !== null,
 			...(conversation.run == null ? {} : { automation: true }),
+			...(conversation.owner !== null &&
+			(authority.actor.kind !== 'member' || conversation.owner !== authority.actor.id)
+				? { read_only: true as const }
+				: {}),
 			...(Option.isSome(start) ? { from: start.value.seq } : {})
 		};
 	}
@@ -736,15 +740,25 @@ const lower = Effect.fn('protocol.lower_read')(function* (
 		if (authority.actor.kind !== 'member' || (read.m === 'inbox' && authority.actor.external))
 			return yield* Effect.fail(forbidden('Not available to this member.'));
 		const options = read.a[0];
-		if (read.m === 'conversations')
+		if (read.m === 'conversations') {
+			const workspace = Schema.is(JsonObject)(options) && options['scope'] === 'workspace';
+			if (workspace && !authority.admin)
+				return yield* Effect.fail(
+					forbidden('Only administrators may inspect workspace AI sessions.')
+				);
 			return {
 				kind: 'conversations',
 				model: 'sys_conversation',
 				member: authority.actor.id,
-				...(Schema.is(JsonObject)(options) && options['archived'] === true
-					? { archived: true }
+				...(workspace ? { workspace: true as const } : {}),
+				...(Schema.is(JsonObject)(options) && typeof options['id'] === 'string'
+					? { id: options['id'] }
+					: {}),
+				...(Schema.is(JsonObject)(options) && typeof options['archived'] === 'boolean'
+					? { archived: options['archived'] }
 					: {})
 			};
+		}
 		return {
 			kind: 'inbox',
 			model: 'sys_notification',

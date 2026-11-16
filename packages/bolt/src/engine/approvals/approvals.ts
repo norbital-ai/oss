@@ -6,7 +6,7 @@ import { actor_id, actor_ref } from '../access/actor.ts';
 // record to its checkpoint. The requester's save in ChangesRequested resubmits inside that write (`resubmit`).
 import { constraintIndex } from '../schema/plan.ts';
 import { Clock, Effect, Layer, Option, Result, Schema } from 'effect';
-import { audited, auditActor } from '../audit-operation.ts';
+import { audited, auditContext } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 
 import { bindingsAt } from '../query/reader.ts';
@@ -480,7 +480,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		if (preview.team !== null && actor.id !== preview.by) return null;
 		const current =
 			preview.team === null
-				? yield* sourceAuthorities.member(db, options.publication, actor.id, true)
+				? yield* sourceAuthorities.member(db, options.publication, actor.id, !preview.impersonate)
 				: yield* sourceAuthorities.team(db, real.actor, preview.team);
 		return current === null ? null : { ...current, preview };
 	});
@@ -978,13 +978,12 @@ export const ApprovalsLive = Layer.effect(
 					{
 						category: 'approval',
 						action: input.decision,
-						actor: auditActor(input.authority.actor),
 						approval: input.request_id,
-						payload: {
+						...auditContext(input.authority, {
 							request_id: input.request_id,
 							decision: input.decision,
 							...(input.reason === undefined ? {} : { reason: input.reason })
-						}
+						})
 					},
 					area.decide(input)
 				).pipe(Effect.provideService(Audit, audit)),

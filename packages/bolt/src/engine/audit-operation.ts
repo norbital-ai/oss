@@ -2,7 +2,7 @@
 import { Array as EffectArray, Clock, Effect, Predicate, Result, Schema } from 'effect';
 
 import type { AuditActor, AuditEvent, DbError } from '@norbital-ai/host-api';
-import type { EngineActor } from './contracts.ts';
+import type { Authority, EngineActor } from './contracts.ts';
 import type { Json } from '../decl/values.ts';
 import type { TenantDbShape } from './db/tenant-db.ts';
 import { Audit, AuditRecoveryActive, requestAuditRecovery } from './audit.ts';
@@ -37,6 +37,14 @@ export const auditActor = (actor: EngineActor): AuditActor => ({
 						? actor.visitor
 						: actor.sender
 });
+/** Keep the real admin as author and the effective identity beside the complete request. */
+export const auditContext = (authority: Authority, payload: Json): Pick<AuditIntent, 'actor' | 'payload'> =>
+	authority.preview === undefined
+		? { actor: auditActor(authority.actor), payload }
+		: {
+			actor: { kind: 'member', id: authority.preview.by, label: null },
+			payload: { request: payload, acting_as: auditActor(authority.actor), preview: authority.preview }
+		};
 export type AuditIntent = {
 	readonly category: AuditEvent['category'];
 	readonly action: string;

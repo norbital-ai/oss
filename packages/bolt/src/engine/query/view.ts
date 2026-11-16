@@ -175,18 +175,53 @@ export class ViewCompiler {
 			}, INBOX_LIMIT, 'at'), counters: [{ key: 'unread', includes: (row) => row['member'] === read.member && row['read_at'] == null }],
 				arrivals: (row) => row['member'] === read.member ? Option.getOrUndefined(project(row)) : undefined };
 			}
-			case 'conversations': return { ...page({ model: read.model,
-				matches: (row) => read.id !== undefined && row['id'] !== read.id ? false : listed(row, read.member, authority.admin) ? true :
-					(row['parent'] ?? null) === null && (row['integration'] ?? null) !== null ? undefined : false,
-				project: (row) => {
-					if (row['integration'] != null && row['kind'] === 'dm' && row['peer'] === undefined) return undefined;
-					return Option.getOrUndefined(Option.map(Schema.decodeUnknownOption(ConversationListRow)(row), conversationRow));
-				},
-				fetch: (id) => ({ read: { ...read, id }, row: first })
-			}, CONVERSATIONS, 'at'), related: (capture) => {
-				if (capture.model !== 'sys_message') return 'all';
-				return [...new Set([capture.old?.['conversation'], capture.new?.['conversation']].filter((id): id is string => typeof id === 'string'))];
-			} };
+			case 'conversations':
+						return {
+							...page(
+								{
+									model: read.model,
+									matches: (row) =>
+										(read.id !== undefined && row['id'] !== read.id) ||
+										(!(read.workspace && read.archived === undefined) &&
+											(row['archived_at'] != null) !== (read.archived === true))
+											? false
+											: listed(row, read.member, authority.admin, read.workspace)
+												? true
+												: (row['parent'] ?? null) === null && (row['integration'] ?? null) !== null
+													? undefined
+													: false,
+									project: (row) => {
+										if (
+											row['integration'] != null &&
+											row['kind'] === 'dm' &&
+											row['peer'] === undefined
+										)
+											return undefined;
+										if (read.workspace && row['owner'] != null && row['peer'] === undefined)
+											return undefined;
+										return Option.getOrUndefined(
+											Option.map(
+												Schema.decodeUnknownOption(ConversationListRow)(row),
+												conversationRow
+											)
+										);
+									},
+									fetch: (id) => ({ read: { ...read, id }, row: first })
+								},
+								CONVERSATIONS,
+								'at'
+							),
+							related: (capture) => {
+								if (capture.model !== 'sys_message') return 'all';
+								return [
+									...new Set(
+										[capture.old?.['conversation'], capture.new?.['conversation']].filter(
+											(id): id is string => typeof id === 'string'
+										)
+									)
+								];
+							}
+						};
 			case 'runs': return { ...page({ model: read.model,
 				matches: (row) => authority.actor.kind === 'member' &&
 					(read.id === undefined || row['id'] === read.id) && (read.automation === undefined || row['automation'] === read.automation),

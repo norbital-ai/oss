@@ -311,8 +311,8 @@ export function shell_api(
 				'GET',
 				`${SHELL}/studio/inspect?${new URLSearchParams(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))}`
 			),
-		/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
-		preview: (target: string | { team: string } | null) =>
+		/** A permissions preview (member id or `{ team }`), explicit impersonation, or `null` to return. */
+		preview: (target: string | { team: string } | { user: string; impersonate: true } | null) =>
 			done(
 				'POST',
 				`${SHELL}/preview`,

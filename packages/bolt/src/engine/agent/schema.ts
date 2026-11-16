@@ -56,7 +56,13 @@ export type ToolCall = Types.Mutable<typeof AiToolCallSchema.Type>;
 /** Rule 59: one per write outcome of a turn. */
 export type Receipt = typeof ReceiptSchema.Type;
 const AsSchema = Schema.Union([
-	Schema.Struct({ member: Schema.String, team: Schema.optionalKey(Schema.String) }),
+	Schema.Struct({
+		member: Schema.String,
+		team: Schema.optionalKey(Schema.String),
+		preview: Schema.optionalKey(Schema.Struct({
+			by: Schema.String, team: Schema.NullOr(Schema.String), impersonate: Schema.optionalKey(Schema.Literal(true))
+		}))
+	}),
 	Schema.Struct({
 		envoy: Schema.Struct({
 			name: Schema.String,
@@ -68,6 +74,12 @@ const AsSchema = Schema.Union([
 	}),
 	Schema.Struct({ policies: Schema.Array(Schema.String), run: Schema.String })
 ]);
+/** Trusted request context travels with queued and scheduled messages and is revalidated on every turn. */
+export const memberAs = (member: string, authority: Authority): As => ({
+	member,
+	...(authority.preview?.team != null ? { team: authority.preview.team } : {}),
+	...(authority.preview === undefined ? {} : { preview: authority.preview })
+});
 const AssistantSegment = Schema.Struct({
 	text: Schema.String,
 	reasoning: Schema.optionalKey(Schema.String),
@@ -256,12 +268,18 @@ export const CONVERSATIONS = 100;
  * returns, so a live patch never carries a row a re-read would not. An instance's thread has no owner (`conversations/index.ts`
  * inserts it without one), so channel visibility requires the read's runtime envoy or participant check.
  */
-export const listed = (r: RowData | null, member: string, admin = false): boolean =>
+export const listed = (
+	r: RowData | null,
+	member: string,
+	admin = false,
+	workspace = false
+): boolean =>
 	r !== null &&
 	(r['parent'] ?? null) === null &&
 	((r['run'] ?? null) !== null
 		? admin
-		: (r['integration'] ?? null) === null && r['owner'] === member);
+		: (r['integration'] ?? null) === null &&
+			(r['owner'] === member || (workspace && admin && r['owner'] != null)));
 /** SQL visibility of a public envoy's conversation, using the reader's `c` alias. */
 export const PUBLIC_ENVOY = `EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = c.envoy AND e.active AND e.audience = 'public')`;
 /**
@@ -278,6 +296,7 @@ export const sharedConversations = (p: {
     EXISTS (SELECT 1 FROM sys_message m WHERE m.conversation = c.id AND ${p.member} IN (m.author, m."as"->>'member', m."as"->'envoy'->>'member'))))`;
 export const ConversationListRow = Schema.Struct({
 	id: Schema.String,
+	owner: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	updated_at: Schema.String,
 	status: Schema.String,
 	model: Schema.String,
@@ -294,6 +313,7 @@ export const ConversationListRow = Schema.Struct({
 /** Reads and capture projection decode the same native list row. */
 export const conversationRow = (r: typeof ConversationListRow.Type): { [k: string]: Json } => ({
 	id: r['id'],
+	owner: r['owner'] ?? null,
 	title: r['title'] ?? null,
 	at: storedInstant(r['updated_at']),
 	status: r['status'],

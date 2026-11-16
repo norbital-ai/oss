@@ -17,7 +17,8 @@ import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
-import { Authorities } from '../src/engine/identity/actor.ts';
+import { Authorities, preview_as } from '../src/engine/identity/actor.ts';
+import { memberAs } from '../src/engine/agent/schema.ts';
 import { instance_messages } from '../src/shell/integration/messages.ts';
 import { saveAgentSettings } from '../src/engine/agent/settings.ts';
 import { xlsxCells, xlsxSheets } from '../src/engine/files/xlsx.ts';
@@ -70,6 +71,8 @@ const runtimeEnvoys = [
 	}
 ] as const;
 
+type Preview = boolean | string | { by: string; impersonate: true };
+
 const setup = () =>
 	Effect.gen(function* () {
 		// The host maps only `default`; allowing `fast` in durable settings exposes an unmapped class.
@@ -106,12 +109,14 @@ const setup = () =>
 			method: string,
 			path: string,
 			body?: unknown,
-			preview: boolean | string = false
+			preview: Preview = false
 		) =>
 			Effect.gen(function* () {
 				const own = yield* authorities.member(t.db, 'bootstrap', as, preview === true);
-				const authority =
-					typeof preview !== 'string' || own === null || own.actor.kind !== 'member'
+				const real = typeof preview === 'object' ? yield* authorities.member(t.db, 'bootstrap', preview.by) : null;
+				const authority = typeof preview === 'object' && real !== null
+					? (yield* preview_as(real, authorities, t.db, 'bootstrap', { member: as })).authority
+					: typeof preview !== 'string' || own === null || own.actor.kind !== 'member'
 						? own
 						: yield* authorities.team(t.db, own.actor, preview);
 				return yield* route.handle(
@@ -123,7 +128,7 @@ const setup = () =>
 					})
 				);
 			});
-		const act = (as: string, callable: string, input: Json, preview: boolean | string = false) =>
+		const act = (as: string, callable: string, input: Json, preview: Preview = false) =>
 			Effect.gen(function* () {
 				const raw = yield* json(
 					yield* call(
@@ -211,7 +216,7 @@ describe('the agent UI actions', () => {
 					expect(yield* t.db.value(Schema.Json, {
 						text: `SELECT "as" FROM sys_message WHERE conversation = $1 AND role = 'user'`,
 						params: [c]
-					})).toEqual({ member: 'ann', team: 't-ops' });
+					})).toEqual({ member: 'ann', team: 't-ops', preview: { by: 'ann', team: 't-ops' } });
 					const ann = yield* authorities.member(t.db, 'bootstrap', 'ann');
 					if (ann === null) throw new Error('ann is not a member');
 					expect(ann.admin).toBe(true);
@@ -221,6 +226,27 @@ describe('the agent UI actions', () => {
 					expect(preview.admin).toBe(false);
 				})
 			)
+	);
+
+	it.live('impersonated chat retains both identities and refuses a turn after admin revocation', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const { t, act, authorities, agent, transcript } = yield* setup();
+			yield* t.db.write({ text: "UPDATE sys_user SET admin=true WHERE id='ann'", params: [] });
+			const original = yield* authorities.member(t.db, 'bootstrap', 'ann');
+			if (original === null) throw new Error('Missing admin');
+			const authority = (yield* preview_as(original, authorities, t.db, 'bootstrap', { member: 'bob' })).authority;
+			const c = started(yield* act('bob', 'sys_conversation.start', {}, { by: 'ann', impersonate: true }));
+			yield* act('bob', 'sys_message.post', {
+				conversation: c, text: 'Later message', schedule: '2099-01-01T00:00:00.000Z'
+			}, { by: 'ann', impersonate: true });
+			expect(yield* t.db.value(Schema.Json, {
+				text: `SELECT "as" FROM sys_message WHERE conversation=$1 AND role='user'`, params: [c]
+			})).toEqual({ member: 'bob', preview: { by: 'ann', team: null, impersonate: true } });
+			yield* t.db.write({ text: "UPDATE sys_user SET admin=false WHERE id='ann'", params: [] });
+			yield* agent.post({ conversation: c, as: memberAs('bob', authority), text: 'Act now', author: 'ann acting as bob' });
+			yield* agent.drain(c);
+			expect(yield* transcript('bob', c)).toContainEqual(expect.objectContaining({ tag: 'failed', text: 'I could not act for this message: its sender no longer has access.' }));
+		}))
 	);
 
 	it.live("set_agent, file and mark_read; an administrator reads an instance's raw messages", () =>

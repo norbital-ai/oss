@@ -85,6 +85,22 @@ describe('guidance follows the tools actually available', () => {
 });
 
 describe('programmatic messages in follow-up context', () => {
+	it('keeps distinct full attachment ids when uploads share a time-based UUID prefix', () => {
+		const first = '01a1e483-0000-7000-8000-000000000001';
+		const second = '01a1e483-0000-7000-8000-000000000002';
+		const text = JSON.stringify(
+			messages([
+				row(1, {
+					files: [
+						{ id: first, name: 'image.png', mime: 'image/png' },
+						{ id: second, name: 'image.png', mime: 'image/png' }
+					]
+				})
+			])
+		);
+		expect(text).toContain(`id ${first}`);
+		expect(text).toContain(`id ${second}`);
+	});
 	it('keeps confirmed sends as assistant context and excludes unsent, uncertain and deleted messages', () => {
 		const statuses = ['queued', 'sending', 'uncertain', 'failed', 'sent', 'delivered', 'read', 'opened', 'replied'];
 		const outbound = statuses.map((status, index) => row(index + 1, {
@@ -1720,6 +1736,9 @@ describe('the panel conversation list', () => {
 		expect(listed(own, 'ann')).toBe(true);
 		expect(listed(child, 'ann')).toBe(false); // a sub-agent is never a root
 		expect(listed(other, 'ann')).toBe(false);
+		expect(listed(other, 'ann', true)).toBe(false);
+		expect(listed(other, 'ann', false, true)).toBe(false);
+		expect(listed(other, 'ann', true, true)).toBe(true);
 		expect(listed(publicThread, 'ann')).toBe(false);
 		expect(listed(privateThread, 'ann')).toBe(false); // never a row the read would not return
 		expect(listed(null, 'ann')).toBe(false);

@@ -131,6 +131,10 @@
 	let thread = $state(false);
 	/** The open conversation is an automation's inference transcript: read-only, like a thread. */
 	let automation = $state(false);
+	/** Administrator inspection of somebody else's in-app session. */
+	let inspecting = $state(false);
+	let transcriptStatus = $state<AgentConversation['status']>('idle');
+	const read_only = $derived(thread || automation || inspecting);
 	/** The conversation's files (`sys_conversation.inputs` / `outputs`): what came in, and what its work made. */
 	type ConversationFiles = NonNullable<AgentRow['files']>;
 	let inputs = $state<ConversationFiles>([]);
@@ -237,6 +241,14 @@
 
 	/** The member's own conversations and the envoy conversation threads they may read (the selector, and the open one's status, plan and model): a live read. */
 	let list = $state<AgentConversation[]>([]);
+	const inspected = liveEdge(() =>
+		admin && conversation !== null && !list.some((one) => one.id === conversation)
+			? bolt.observe(
+					{ read: { m: 'conversations', a: [{ scope: 'workspace', id: conversation }] } },
+					ConversationsReadAnswer
+				)
+			: null
+	);
 	let models = $state<AiModel[]>([]);
 	/** The model a new conversation runs when none is picked (the host's default). */
 	let modelDefault = $state<string | null>(null);
@@ -314,8 +326,8 @@
 	}
 	/** The sub-agent open in the session rail. */
 	let focus = $state<string | null>(null);
-	const current = $derived(list.find((c) => c.id === conversation));
-	const status = $derived(current?.status ?? 'idle');
+	const current = $derived(list.find((c) => c.id === conversation) ?? $inspected?.rows[0]);
+	const status = $derived(current?.status ?? transcriptStatus);
 	const chime = getContext<Sounds | undefined>(SOUNDS);
 	const attentionOf = attention();
 	const clientNavigation = getContext<ClientNavigation | undefined>(CLIENT_NAVIGATION);
@@ -329,12 +341,12 @@
 		const kind = attentionOf(ready, rows);
 		if (kind !== null) chime?.play(kind);
 		for (const item of navigationsOf(ready, rows)) {
-			if (id === null) continue;
+			if (id === null || read_only) continue;
 			clientNavigation?.open(item.path, id);
 			clientPageAction?.arrived(item.id);
 		}
 		for (const item of pageActionsOf(id, rows)) {
-			if (id !== null && !thread) clientPageAction?.run(item.action, id, item.id);
+			if (id !== null && !read_only) clientPageAction?.run(item.action, id, item.id);
 		}
 	});
 	/** The selector tab a conversation sits in: archived, the member's own (Web UI) or its envoy's. */
@@ -417,6 +429,8 @@
 			on_conversation?.(id);
 			thread = false;
 			automation = false;
+			inspecting = false;
+			transcriptStatus = 'idle';
 			// the last opened one outlives the tab; a new session (or one no longer found) forgets it
 			writePreference(storage_key, id);
 		}
@@ -430,8 +444,18 @@
 			from = value.from ?? null;
 			thread = value.thread === true;
 			automation = value.automation === true;
-			inputs = (value.inputs ?? []).map((file) => ({ ...file, name: file.name ?? 'file', mime: file.mime ?? '' }));
-			outputs = (value.outputs ?? []).map((file) => ({ ...file, name: file.name ?? 'file', mime: file.mime ?? '' }));
+			inspecting = value.read_only === true;
+			transcriptStatus = value.status ?? 'idle';
+			inputs = (value.inputs ?? []).map((file) => ({
+				...file,
+				name: file.name ?? 'file',
+				mime: file.mime ?? ''
+			}));
+			outputs = (value.outputs ?? []).map((file) => ({
+				...file,
+				name: file.name ?? 'file',
+				mime: file.mime ?? ''
+			}));
 			outbox.arrived(value.rows);
 		}
 	);
@@ -1253,27 +1277,70 @@
 		>
 			<div class="relative flex min-h-0 w-full flex-1 flex-col">
 				<div class="flex h-full min-h-0 w-full flex-col">
-					{#if current?.plan && current.plan.status !== 'draft'}<PlanCards plan={current.plan} place="current" {starting} {empty} running={status === 'running'} on_revise={() => (mode = 'plan')} on_execute={() => plan(true)} on_discard={() => status === 'running' ? (confirming = 'plan') : plan(false)} {t} />{/if}
-					<Transcript {ctx} {api} {t} {zone} {admin} {conversation} {rows} {status} {sent} {thread} {automation}
-						plan={current?.plan} {before} loading_older={loadingOlder} load_older={loadOlder}
-						bind:port bind:pinned {latest} load_failed={transcript.error !== undefined} on_retry={() => fork(transcript.refetch())}
-						decision_frame={$transcript === undefined ? undefined : `${$transcript.rows.length}:${$transcript.rows.at(-1)?.id}`}
-						{dispatch} on_error={(problem) => (error = problem)} file_href={fileHref} model_label={modelLabel}
-						on_revise={revise} {revision_pending} on_restart={restart_chat}
-						restart={{ from: restart_from?.id ?? null, pending: restart_pending, error: restart_error }} />
+					{#if !read_only && current?.plan && current.plan.status !== 'draft'}<PlanCards
+							plan={current.plan}
+							place="current"
+							{starting}
+							{empty}
+							running={status === 'running'}
+							on_revise={() => (mode = 'plan')}
+							on_execute={() => plan(true)}
+							on_discard={() => (status === 'running' ? (confirming = 'plan') : plan(false))}
+							{t}
+						/>{/if}
+					<Transcript
+						{ctx}
+						{api}
+						{t}
+						{zone}
+						{admin}
+						{conversation}
+						{rows}
+						{status}
+						{sent}
+						{thread}
+						{automation}
+						{read_only}
+						plan={current?.plan}
+						{before}
+						loading_older={loadingOlder}
+						load_older={loadOlder}
+						bind:port
+						bind:pinned
+						{latest}
+						load_failed={transcript.error !== undefined}
+						on_retry={() => fork(transcript.refetch())}
+						decision_frame={$transcript === undefined
+							? undefined
+							: `${$transcript.rows.length}:${$transcript.rows.at(-1)?.id}`}
+						{dispatch}
+						on_error={(problem) => (error = problem)}
+						file_href={fileHref}
+						model_label={modelLabel}
+						on_revise={revise}
+						{revision_pending}
+						on_restart={restart_chat}
+						restart={{
+							from: restart_from?.id ?? null,
+							pending: restart_pending,
+							error: restart_error
+						}}
+					/>
 				</div>
 			</div>
-			{#if thread || automation}
+			{#if read_only}
 				<p
 					class="shrink-0 border-t border-border px-4 py-3 text-center text-xs text-muted-foreground"
 					data-agent-read-only
 				>
 					{automation
 						? t("Read-only — an automation run's transcript, recorded as it ran.")
-						: t('Read-only — {envoy} answers this channel conversation.').replace(
-								'{envoy}',
-								current === undefined ? t('its envoy') : envoyName(current)
-							)}
+						: inspecting
+							? t("Read-only — another member's conversation.")
+							: t('Read-only — {envoy} answers this channel conversation.').replace(
+									'{envoy}',
+									current === undefined ? t('its envoy') : envoyName(current)
+								)}
 				</p>
 			{:else}
 				{#if drafting && current?.plan}<PlanCards plan={current.plan} place="draft" {starting} {empty} running={status === 'running'} on_revise={() => (mode = 'plan')} on_execute={() => plan(true)} on_discard={() => plan(false)} {t} />{/if}

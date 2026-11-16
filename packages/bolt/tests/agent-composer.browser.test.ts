@@ -19,6 +19,7 @@ type Host = {
 	acts: Act[];
 	forks: { conversation: AgentConversation; rows: AgentRow[] }[];
 	post_gate?: Promise<void>;
+	read_only?: true;
 };
 const ID = 'composer';
 const conversation = (status: AgentConversation['status'], id = ID): AgentConversation => ({
@@ -95,7 +96,7 @@ const fake = (host: Host): typeof globalThis.fetch => {
 			return Response.json({ answers: [{ rows: [conversation(host.status), ...host.forks.map((fork) => fork.conversation)] }] });
 		const fork = host.forks.find((fork) => fork.conversation.id === read?.a[0]);
 		return Response.json({
-			answers: [{ rows: fork?.rows ?? host.rows, status: fork === undefined ? host.status : 'idle', inputs: [], outputs: [] }]
+			answers: [{ rows: fork?.rows ?? host.rows, status: fork === undefined ? host.status : 'idle', inputs: [], outputs: [], ...(host.read_only ? { read_only: true } : {}) }]
 		});
 	};
 };
@@ -135,7 +136,8 @@ const withPanel = async (
 						};
 						let view = mount(Agent, { target, props });
 						try {
-							await expect
+							if (host.read_only) await expect.element(page.getByText("Read-only — another member's conversation.")).toBeVisible();
+							else await expect
 								.element(page.getByRole('textbox', { name: 'Message', exact: true }))
 								.toBeVisible();
 							await check(host, { target, refresh: () => runtime.runPromise(bolt.refresh()), remount: async () => {
@@ -163,6 +165,18 @@ const type = async (text: string) => {
 const openSchedule = () => page.getByRole('button', { name: 'Schedule message' }).click();
 const list = (name: 'queue' | 'scheduled') =>
 	document.querySelector<HTMLElement>(`[data-agent-${name}]`);
+
+it('administrator inspection shows the transcript without composing or editing as its owner', async () => {
+	await withPanel({
+		read_only: true,
+		rows: [{ id: 'other-member-message', seq: 1, role: 'user', text: 'Another member’s work', state: 'consumed', tag: null }]
+	}, async (host) => {
+		await expect.element(page.getByText('Another member’s work')).toBeVisible();
+		await expect.element(message()).not.toBeInTheDocument();
+		await expect.element(page.getByRole('button', { name: 'Edit message', exact: true })).not.toBeInTheDocument();
+		expect(host.acts).toEqual([]);
+	});
+});
 
 it('a button asking on the person’s behalf sends its words once', async () => {
 	await withPanel(

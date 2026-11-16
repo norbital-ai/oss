@@ -461,4 +461,8 @@
 	.preview-frame::backdrop {
 		background: color-mix(in oklab, var(--color-background) 80%, transparent);
 	}
+	.preview-frame[data-preview-expanded] {
+		width: auto;
+		height: auto;
+	}
 </style>

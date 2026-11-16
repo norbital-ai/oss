@@ -56,17 +56,24 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 				rows: rows.flatMap((row) => transcriptRow(row, staff, read.thread) ?? []),
 				...(read.from === undefined ? {} : { from: read.from }),
 				...(read.thread ? { thread: true } : {}),
-				...(read.automation ? { automation: true } : {})
+				...(read.automation ? { automation: true } : {}),
+				...(read.read_only ? { read_only: true } : {})
 			};
 		}
 		case 'conversations': {
+			if (read.workspace && reader.as !== 'workspace' && !reader.authority.admin)
+				return yield* BoltError.make(
+					'forbidden',
+					'admission',
+					'Only administrators may inspect workspace AI sessions.'
+				);
 			const [result] = yield* db.read([
 				{
 					text: `SELECT to_jsonb(c) || jsonb_build_object('peer', CASE WHEN c.kind = 'dm' THEN (SELECT u.name FROM sys_message p
     JOIN sys_user u ON u.id = COALESCE(p."as"->'envoy'->>'member', p."as"->>'member', p.author) WHERE p.conversation = c.id
-    ORDER BY p.seq LIMIT 1) END) AS r FROM sys_conversation c WHERE c.parent IS NULL AND
-    (c.owner = $1 OR ${sharedConversations({ member: '$1', admin: '$2', staff: '$3' })})${read.id === undefined ? '' : ' AND c.id = $4'}
-    AND c.archived_at IS ${read.archived === true ? 'NOT NULL' : 'NULL'}
+    ORDER BY p.seq LIMIT 1) ${read.workspace ? 'ELSE (SELECT u.name FROM sys_user u WHERE u.id = c.owner)' : ''} END) AS r FROM sys_conversation c WHERE c.parent IS NULL AND
+    (${read.workspace ? '(c.integration IS NULL AND c.owner IS NOT NULL AND $2)' : 'c.owner = $1'} OR ${sharedConversations({ member: '$1::text', admin: '$2', staff: '$3' })})${read.id === undefined ? '' : ' AND c.id = $4'}
+    ${read.workspace && read.archived === undefined ? '' : `AND c.archived_at IS ${read.archived === true ? 'NOT NULL' : 'NULL'}`}
     ORDER BY updated_at DESC, id COLLATE "C" DESC LIMIT ${CONVERSATIONS}`,
 					// an automation's inference transcripts are an administrator's to read
 					params: [

@@ -19,6 +19,7 @@ import { Chain } from '../write/sql.ts';
 import {
 	AgentRefusal,
 	Message,
+	memberAs,
 	type As,
 	type MessageRow
 } from './schema.ts';
@@ -281,6 +282,10 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 			if (Option.isSome(newer))
 				return yield* new AgentRefusal({ message: 'only the newest revision can be revised' });
 			const files = attachments ?? r.files ?? [];
+			const as = by?.actor.kind === 'member' ? memberAs(by.actor.id, by) : r.as;
+			const author = by?.actor.kind === 'member'
+				? by.preview === undefined ? (by.actor.email ?? by.actor.id) : `${by.preview.by} (acting as ${by.actor.id})`
+				: r.author;
 			if (text.trim() === '' && files.length === 0)
 				return yield* new AgentRefusal({ message: 'A message needs text or an attachment.' });
 			if (r.state === 'queued' || r.state === 'scheduled') {
@@ -289,7 +294,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 				const refs = `${chain.p(files)}::jsonb`;
 				const source = messagePiece(
 					chain,
-					`UPDATE sys_message m SET text = $2, preview = $3, content = content || jsonb_build_object('text', $2::text)
+					`UPDATE sys_message m SET text = $2, preview = $3, content = content || jsonb_build_object('text', $2::text), "as" = ${chain.p(as)}::jsonb, author = ${chain.p(author)}
 					WHERE id = $1 AND state IN ('queued', 'scheduled')`,
 					undefined,
 					refs
@@ -306,9 +311,9 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 			}
 			return (yield* post({
 				conversation: r.conversation,
-				as: r.as,
+				as,
 				text,
-				author: r.author,
+				author,
 				mode: r.mode ?? 'agent',
 				supersedes: r.id,
 				files

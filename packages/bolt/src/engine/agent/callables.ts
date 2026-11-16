@@ -7,7 +7,7 @@ import { TenantDb } from '../db/tenant-db.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Agents, Manifest, Reads, Turns } from '../services.ts';
-import { Conversation, isStaff, sharedConversations, transcriptRow } from './schema.ts';
+import { Conversation, isStaff, memberAs, sharedConversations, transcriptRow } from './schema.ts';
 import { MessageQueue } from './queue.ts';
 import { SmartThrottle } from './throttle.ts';
 import { lower_read } from '../query/engine.ts';
@@ -141,15 +141,14 @@ export const agentCallables = Effect.gen(function* () {
 				if (input.question !== undefined && input.schedule !== undefined)
 					return yield* BoltError.make('invalid', 'decode', 'An answer cannot be scheduled.');
 				const files = yield* agents.attachments(who, input.attachments ?? []);
-				const team = authority.key.startsWith('preview:team:')
-					? authority.key.split(':')[2]
-					: undefined;
 				const post = {
 					conversation: input.conversation,
-					as: { member: who, ...(team === undefined ? {} : { team }) },
+					as: memberAs(who, authority),
 					text: input.text,
 					...(input.question === undefined ? {} : { question: input.question }),
-					author: authority.actor.kind === 'member' ? (authority.actor.email ?? who) : who,
+					author: authority.preview === undefined
+						? authority.actor.kind === 'member' ? (authority.actor.email ?? who) : who
+						: `${authority.preview.by} (acting as ${who})`,
 					files,
 					...(input.tz === undefined ? {} : { tz: input.tz })
 				};
@@ -285,7 +284,7 @@ export const agentCallables = Effect.gen(function* () {
 					who = member(authority);
 				if (who === null || conv.owner !== who)
 					return yield* hidden();
-				yield* background(agents.execute_plan(input.conversation, { member: who }));
+				yield* background(agents.execute_plan(input.conversation, memberAs(who, authority)));
 				return committed({ id: input.conversation });
 			})
 		),

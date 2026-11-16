@@ -477,6 +477,11 @@ sync('notice_notes', 'sheet', {
 });
 
 // ── workspace(), app(), group() ──
+workspace({ tz: 'UTC', locale: 'en', theme: { light: { primary: '#124c8c', 'primary-foreground': '#fff' }, dark: { radius: '0rem' } } });
+// @ts-expect-error Themes expose known semantic tokens, not arbitrary CSS declarations.
+workspace({ tz: 'UTC', locale: 'en', theme: { light: { display: 'none' } } });
+// @ts-expect-error Theme modes are light and dark.
+workspace({ tz: 'UTC', locale: 'en', theme: { blue: { primary: '#124c8c' } } });
 // @ts-expect-error WS1 secret names are UPPER_SNAKE
 secrets({ erpUrl: { label: 'x' } });
 // @ts-expect-error WS2 a secret takes no default

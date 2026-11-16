@@ -14,6 +14,7 @@ import { ModelData, RelationshipData, SyncData, split_model } from '../decl/mode
 import type { Role } from '../decl/layout.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
 import { AppData, GroupSpec } from '../decl/runtime/app.ts';
+import { WorkspaceThemeData } from '../decl/theme.ts';
 import { DeclaredDuration, TriggerSpec } from '../decl/runtime/automation.ts';
 import { AutomationInputSchema } from '../decl/runtime/automation-input.ts';
 import { IntegrationSpec } from '../decl/runtime/integration.ts';
@@ -140,6 +141,7 @@ const Signup = Schema.Struct({
 });
 /** Workspace capabilities with the separately declared secrets joined into the workspace. */
 const Workspace = Schema.Struct({
+	theme: Schema.optionalKey(WorkspaceThemeData),
 	tz: Schema.String,
 	locale: Schema.String,
 	currency: Schema.optionalKey(Schema.String),

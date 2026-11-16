@@ -547,6 +547,20 @@ layer(workspace)('shell routes', (it) => {
 			})
 		);
 
+		it.effect('direct impersonation retains the target grants and can only start from a real admin', () =>
+			Effect.gen(function* () {
+				const own = yield* bootValue(admin);
+				if (own.actor?.kind !== 'member') throw new Error('Missing admin member');
+				expect((yield* call(rep, 'POST', '/__bolt/shell/preview', { user: own.actor.id, impersonate: true })).status).toBe(403);
+				expect((yield* call(admin, 'POST', '/__bolt/shell/preview', { user: own.actor.id, impersonate: true })).status).toBe(204);
+				expect(yield* bootValue(admin)).toMatchObject({ admin: true, preview: { user: own.actor.id, by: own.actor.id, impersonate: true } });
+				expect((yield* call(admin, 'POST', '/__bolt/shell/preview', { user: repId, impersonate: true })).status).toBe(204);
+				expect(yield* bootValue(admin)).toMatchObject({ admin: false, preview: { user: repId, by: own.actor.id, impersonate: true } });
+				expect((yield* call(admin, 'POST', '/__bolt/shell/preview', { user: null })).status).toBe(204);
+				expect(yield* bootValue(admin)).toMatchObject({ admin: true, preview: null });
+			})
+		);
+
 		it.effect('a team preview names the team by its declared name for the banner', () =>
 			Effect.gen(function* () {
 				expect((yield* call(admin, 'POST', '/__bolt/shell/preview', { team: 'Finance' })).status).toBe(

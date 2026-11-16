@@ -151,8 +151,9 @@ const READ_METHODS = [
  * One read as the guest names it (`ctx.query('c', q)` → `{ m: 'query', a: ['c', q] }`; a read request
  * `ctx.query({ … })` → `{ m: 'query', a: [request] }`); `lower_read` decodes `a`.
  * `transcript` (`a: [conversation]`) and `conversations` (`a: []`, the member's own; `a: [{ archived: true }]` the archived
- * ones) are the agent panel's, live only:
- * `/live` checks the caller may read them, `/q` refuses them. `runs` (`a: [{ automation?, id?, limit?, brief? }]`) is the runs
+ * ones) are the agent panel's. `{ scope: 'workspace', id?, archived? }` is administrator inspection of all members'
+ * in-app sessions and other readable AI transcripts; without `archived` it includes both lists. Reads are authorized
+ * for both `/live` and `/q`. `runs` (`a: [{ automation?, id?, limit?, brief? }]`) is the runs
  * the caller may see, live through `sys_run` changes.
  */
 export const WireRead = Schema.Struct({
@@ -523,7 +524,9 @@ export type AgentRow = typeof AgentRow.Type;
 export const AgentConversation = Schema.Struct({
 	id: Schema.String,
 	title: Schema.NullOr(Schema.String),
-	/** Archived by its owner: listed only by the archived read. */
+	/** The member owning an in-app conversation; workspace administrators may inspect it. */
+	owner: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	/** Archived by its owner: off their active list, retained in workspace inspection. */
 	archived: Schema.optionalKey(Schema.Boolean),
 	at: Schema.String,
 	status: Schema.Literals(['idle', 'running', 'stopped']),
@@ -543,7 +546,7 @@ export const AgentConversation = Schema.Struct({
 	/** An instance thread's kind and its provider thread; null on an in-app conversation. */
 	kind: Schema.NullOr(Schema.Literals(['dm', 'group'])),
 	thread: Schema.NullOr(Schema.String),
-	/** A DM's member by name when the sender is one; null otherwise. */
+	/** A linked DM sender's name, or the in-app owner during workspace inspection; null otherwise. */
 	peer: Schema.NullOr(Schema.String),
 	/** The automation run whose inference this transcript records: read-only, an administrator's to read. */
 	run: Schema.optionalKey(Schema.NullOr(Schema.String))

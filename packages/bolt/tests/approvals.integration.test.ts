@@ -418,7 +418,8 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				// the requester's own identity is offered withdraw alone; a previewer nothing
 				for (const [auth, moves] of [
 					[admin, [WITHDRAW]],
-					[preview, []]
+					[preview, []],
+					[{ ...preview, preview: { ...preview.preview, impersonate: true } }, []]
 				] as const) {
 					expect(yield* f.decide(request_id, 'approve', auth, 'Override')).toMatchObject({
 						kind: 'refused',

@@ -853,34 +853,23 @@ describe('nav tree', () => {
 
 describe('preview environments drop the meta tools', () => {
 	const at = (path: string) => preview_route(route(m, new URL(path, 'https://w.example')), true);
-	it('an administrator on a Studio host keeps the inbox, runs and Settings but not Norbius or Studio', () => {
+	it('an administrator in a preview has no workspace surfaces', () => {
 		expect(surfaces(m, member([], {}, true).actor, true, true, true)).toEqual({
-			inbox: true,
-			runs: true,
-			settings: true,
+			inbox: false,
+			runs: false,
+			settings: false,
 			agent: false,
 			studio: false
 		});
 	});
-	it('Studio, People and Integrations open the apps launcher; apps, approvals and other Settings stay', () => {
+	it('every workspace route returns to the apps launcher while application routes stay', () => {
 		expect(
-			['/studio', '/studio/changes', '/command-center/people', '/settings/integrations'].map(at)
-		).toEqual(Array.from({ length: 4 }, () => ({ kind: 'home' })));
+			['/studio', '/studio/changes', '/command-center/people', '/settings/integrations', '/inbox', '/settings/organization', '/command-center/automations', '/settings/secrets'].map(at)
+		).toEqual(Array.from({ length: 8 }, () => ({ kind: 'home' })));
 		expect(at('/app/sales/quotes')).toEqual({ kind: 'page', app: 'sales', page: 'quotes' });
-		expect([
-			at('/inbox'),
-			at('/settings/organization'),
-			at('/command-center/automations'),
-			at('/settings/secrets')
-		]).toEqual([
-			{ kind: 'inbox' },
-			{ kind: 'settings', tab: 'organization' },
-			{ kind: 'command_center', tab: 'automations' },
-			{ kind: 'settings', tab: 'secrets' }
-		]);
 		expect(preview_route({ kind: 'studio' }, false)).toEqual({ kind: 'studio' });
 	});
-	it('the sidebar drops Norbius, People and Studio and keeps Approvals and the rest of Settings', () => {
+	it('the sidebar contains only application modules and no utility groups', () => {
 		const auth = member(['sales'], {}, true);
 		const model = navigation_model(
 			{
@@ -910,15 +899,10 @@ describe('preview environments drop the meta tools', () => {
 		const keys = [...model.sections, ...model.utilities].flatMap((x) =>
 			'items' in x ? x.items.map((i) => i.key) : [x.key, ...(x.children ?? []).map((c) => c.key)]
 		);
-		expect(keys).toEqual(
-			expect.arrayContaining(['approvals', 'command-center', 'organization', 'secrets'])
-		);
-		expect(keys.filter((k) => ['norbius', 'integrations', 'studio'].includes(k))).toEqual([]);
-		// no People and no Studio inspection in a preview: the audit trail, runs and inference stay
-		expect(command_center_tabs(surfaces(m, auth.actor, true, true, true), true, true)).toEqual([
-			'audit',
-			'automations'
-		]);
+		expect(keys).not.toEqual(expect.arrayContaining(['approvals', 'command-center', 'settings']));
+		expect(model.sections.map(section => section.key)).toEqual(['applications']);
+		expect(model.utilities).toEqual([]);
+		expect(command_center_tabs(surfaces(m, auth.actor, true, true, true), true, true)).toEqual([]);
 	});
 	it('the command center: inspection needs a Studio host, the rest follows the viewer', () => {
 		const admin = member([], {}, true).actor,
@@ -1203,6 +1187,11 @@ describe('sidebar model', () => {
 	const tree = (
 		items: readonly { key: string; children?: readonly { key: string }[] }[] | undefined
 	) => (items ?? []).map((i) => [i.key, (i.children ?? []).map((c) => c.key)]);
+	it('non-admin navigation has no Settings group even with a stale surface flag', () => {
+		const boot = bootOf(member(['sales']));
+		const model = navigation_model({ ...boot, surfaces: { ...boot.surfaces, settings: true } }, '/', key => key);
+		expect(model.utilities.map(item => item.key)).not.toContain('settings');
+	});
 	it("an app's page at its folder's own address is not open beside the sibling below it", () => {
 		const pages = [
 			{ name: 'payroll', title: 'Runs', href: '/app/payroll' },

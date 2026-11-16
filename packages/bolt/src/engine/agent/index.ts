@@ -110,7 +110,7 @@ import type { EngineManifest } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
 
 import type { Authority, Bindings } from '../contracts.ts';
-import { Authorities } from '../identity/actor.ts';
+import { Authorities, preview_as } from '../identity/actor.ts';
 import { model_step, run_calls, type ModelCarry } from './step.ts';
 import { isFacilityError, modelCall, overflow, servesModel, type ToolAnswer } from './ai.ts';
 import {
@@ -537,6 +537,18 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		config.resolve ??
 		Effect.fn('Agents.authority')(function* (as: As) {
 			if ('member' in as) {
+				if (as.preview !== undefined) {
+					if (as.preview.team !== null && as.member !== as.preview.by) return null;
+					const real = yield* authorities.member(db, e.live.publish, as.preview.by);
+					if (real === null || !real.admin) return null;
+					return (yield* preview_as(real, authorities, db, e.live.publish,
+						as.preview.team !== null ? { team: as.preview.team }
+							: as.preview.impersonate ? { member: as.member } : as.member
+					).pipe(Effect.catchTag('BoltError', (error) =>
+						error.code === 'forbidden' || error.code === 'not_found'
+							? Effect.succeed(null) : Effect.fail(error)
+					)))?.authority ?? null;
+				}
 				const own = yield* authorities.member(db, e.live.publish, as.member);
 				return as.team === undefined || own === null || own.actor.kind !== 'member'
 					? own

@@ -65,7 +65,9 @@ const fixture = Effect.gen(function* () {
 			params: [id, `${id}@x.test`]
 		});
 	const cookies = new Map<string, string>();
-	for (const id of ['ann', 'bob']) cookies.set(id, yield* t.session(id));
+	if (t.admin.actor.kind !== 'member') throw new Error('Fixture administrator must be a member');
+	const adminId = t.admin.actor.id;
+	for (const id of ['ann', 'bob', adminId]) cookies.set(id, yield* t.session(id));
 	let as = 'ann';
 	const run = yield* FiberSet.makeRuntimePromise();
 	const fetch: typeof globalThis.fetch = (input, init) => {
@@ -85,22 +87,33 @@ const fixture = Effect.gen(function* () {
 		return resolved;
 	});
 	/** The member's conversation list: the `conversations` read the panel observes, as the hub answers it. */
-	const listOf = (archived: boolean) => Effect.gen(function* () {
-		const now = t.clock.now();
-		const [answer] = yield* reads.run(
-			[{ kind: 'conversations', model: 'sys_conversation', member: as, ...(archived ? { archived: true } : {}) }],
-			{ as: 'caller', authority: yield* authority },
-			{ now, today: now.slice(0, 10), tz: 'UTC' }
-		);
-		return (yield* Schema.decodeUnknownEffect(
-			Schema.Struct({ rows: Schema.Array(AgentConversation) })
-		)(answer)).rows;
-	});
+	const listOf = (archived: boolean | undefined, workspace = false) =>
+		Effect.gen(function* () {
+			const now = t.clock.now();
+			const [answer] = yield* reads.run(
+				[
+					{
+						kind: 'conversations',
+						model: 'sys_conversation',
+						member: as,
+						...(workspace ? { workspace: true as const } : {}),
+						...(archived === undefined ? {} : { archived })
+					}
+				],
+				{ as: 'caller', authority: yield* authority },
+				{ now, today: now.slice(0, 10), tz: 'UTC' }
+			);
+			return (yield* Schema.decodeUnknownEffect(
+				Schema.Struct({ rows: Schema.Array(AgentConversation) })
+			)(answer)).rows;
+		});
 	return {
 		t,
+		adminId,
 		agent,
 		list: listOf(false),
 		archived: listOf(true),
+		workspace: listOf(undefined, true),
 		authority,
 		api: shell_api(fetch, { base: ORIGIN }),
 		as: (who: string) => {
@@ -114,22 +127,49 @@ class Fixture extends Context.Service<Fixture, Effect.Success<typeof fixture>>()
 ) {}
 
 layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
-	it.effect('an owner archives a conversation off the list, finds it in the archived list, and restores it', () =>
-		Effect.gen(function* () {
-			const s = yield* Fixture;
-			s.as('ann');
-			const c = yield* s.agent.start({ owner: 'ann', title: 'To archive' });
-			const ann = yield* s.authority;
-			s.as('bob');
-			expect(yield* Effect.flip(s.agent.archive(c, true, yield* s.authority))).toMatchObject({ _tag: 'AgentRefusal' });
-			s.as('ann');
-			yield* s.agent.archive(c, true, ann);
-			expect((yield* s.list).map((r) => r.id)).not.toContain(c);
-			expect(yield* s.archived).toEqual([expect.objectContaining({ id: c, archived: true })]);
-			yield* s.agent.archive(c, false, ann);
-			expect((yield* s.list).map((r) => r.id)).toContain(c);
-			expect(yield* s.archived).toEqual([]);
-		})
+	it.effect(
+		'workspace administrators inspect all members and archived sessions without changing their own list or posting as another member',
+		() =>
+			Effect.gen(function* () {
+				const s = yield* Fixture;
+				s.as('bob');
+				const c = yield* s.agent.start({ owner: 'bob', title: 'Member work' });
+				yield* s.agent.archive(c, true, yield* s.authority);
+				expect(yield* Effect.flip(s.workspace)).toMatchObject({ code: 'forbidden' });
+				s.as(s.adminId);
+				expect((yield* s.list).map((row) => row.id)).not.toContain(c);
+				expect(yield* s.workspace).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ id: c, owner: 'bob', peer: 'bob', archived: true })
+					])
+				);
+				expect(yield* s.api.agent.transcript(c)).toMatchObject({ rows: [] });
+				const posted = yield* Effect.result(s.api.agent.post(c, 'Never post during inspection'));
+				expect(Result.isFailure(posted) || posted.success.kind === 'refused').toBe(true);
+				s.as('ann');
+				expect((yield* s.list).map((row) => row.id)).not.toContain(c);
+			})
+	);
+	it.effect(
+		'an owner archives a conversation off the list, finds it in the archived list, and restores it',
+		() =>
+			Effect.gen(function* () {
+				const s = yield* Fixture;
+				s.as('ann');
+				const c = yield* s.agent.start({ owner: 'ann', title: 'To archive' });
+				const ann = yield* s.authority;
+				s.as('bob');
+				expect(yield* Effect.flip(s.agent.archive(c, true, yield* s.authority))).toMatchObject({
+					_tag: 'AgentRefusal'
+				});
+				s.as('ann');
+				yield* s.agent.archive(c, true, ann);
+				expect((yield* s.list).map((r) => r.id)).not.toContain(c);
+				expect(yield* s.archived).toEqual([expect.objectContaining({ id: c, archived: true })]);
+				yield* s.agent.archive(c, false, ann);
+				expect((yield* s.list).map((r) => r.id)).toContain(c);
+				expect(yield* s.archived).toEqual([]);
+			})
 	);
 	it.effect('posting into an archived conversation unarchives it', () =>
 		Effect.gen(function* () {

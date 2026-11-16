@@ -174,20 +174,13 @@ const text = (r: MessageRow): string =>
 			: (r.content?.text ?? r.text ?? '');
 export const filesOf = (r: MessageRow): readonly FileRef[] => r.files ?? [];
 
-/**
- * A file's id as a model types it: long ids are what a model misremembers many steps on. The head of the id itself, so it
- * holds no state, and a conversation's tools take it for the whole.
- */
-export const shortId = (id: string) => id.slice(0, 8);
 /** One line per attached file (a FileRef `{ id, name, mime, bytes }`; no `id` when its bytes never arrived): the id `read_file` reads and a file field takes. */
 function fileLines(r: MessageRow): string[] {
 	return filesOf(r).map((f) => {
 		const name = f.name ?? 'file',
 			mime = f.mime ?? '';
 		return `[attachment: ${name}${mime === '' ? '' : ` · ${mime}`}${f.bytes === undefined ? '' : ` · ${f.bytes} bytes`}] ${
-			f.id === undefined
-				? 'not received; ask the sender to send it again'
-				: `id ${shortId(f.id)}`
+			f.id === undefined ? 'not received; ask the sender to send it again' : `id ${f.id}`
 		}`;
 	});
 }
@@ -372,7 +365,7 @@ export function system(parts: {
 
 /** A received file at its message's position: what read_file takes, once, never rewritten. */
 const fileLine = (f: FileRef, r: MessageRow) =>
-	`[file: ${f.name ?? 'file'} ${f.mime ?? ''} ${f.id === undefined ? 'not received' : `id:${shortId(f.id)}`} from ${authorOf(r) ?? 'someone'}${ambient(r) ? ' (not addressed to you)' : ''}]`;
+	`[file: ${f.name ?? 'file'} ${f.mime ?? ''} ${f.id === undefined ? 'not received' : `id:${f.id}`} from ${authorOf(r) ?? 'someone'}${ambient(r) ? ' (not addressed to you)' : ''}]`;
 /** The last seq behind a compaction checkpoint or an executed plan's checkpoint. */
 const floorOf = (shown: readonly MessageRow[], conv: Pick<ConversationRow, 'plan'>) => {
 	const checkpoint = shown.findLast((row) => row.meta?.tag === 'compact');

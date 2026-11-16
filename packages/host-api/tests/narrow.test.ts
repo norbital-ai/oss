@@ -38,6 +38,12 @@ const engineAuthority = {
 };
 
 describe('a host decodes the narrow contract from a release’s full answer', () => {
+	it('retains admin impersonation attribution without granting additional authority', () => {
+		const preview = { by: 'admin-original', team: null, impersonate: true };
+		const decoded = Schema.decodeUnknownSync(Authority)({ ...engineAuthority, admin: false, preview });
+		expect(decoded.preview).toEqual(preview);
+		expect(decoded.admin).toBe(false);
+	});
 	it('keeps the authority a host reads and drops the engine’s grants', () => {
 		expect(Schema.decodeUnknownSync(Authority)(engineAuthority)).toEqual({
 			actor: {

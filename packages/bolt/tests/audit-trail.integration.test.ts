@@ -9,6 +9,7 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { Callables } from '../src/engine/services.ts';
 import { TestWorkspace, memory_audit } from '../../bolt-cli/src/test/index.ts';
 import type { AuditPort } from '@norbital-ai/host-api';
+import type { Authority } from '../src/engine/contracts.ts';
 import { layered, type EngineManifest } from '../src/engine/manifest.ts';
 import { manifest as base } from './write-fixture.ts';
 import { one_act } from './support/act-one.ts';
@@ -44,7 +45,8 @@ const fixture = (port: AuditPort) =>
 		const admin = (yield* t.as(t.admin)).authority;
 		const act = (
 			verb: 'create' | 'update' | 'erase',
-			input: import('../src/decl/values.ts').Json
+			input: import('../src/decl/values.ts').Json,
+			authority: Authority = admin
 		) => {
 			const now = t.clock.now(),
 				key = randomUUID();
@@ -55,12 +57,27 @@ const fixture = (port: AuditPort) =>
 				key,
 				issuedAt: now,
 				invocationId: key,
-				authority: admin,
+				authority,
 				bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
 			}));
 		};
-		return { t, context, act };
+		return { t, context, act, admin };
 	});
+
+it.live('an impersonated write keeps the original admin, effective identity and complete payload', () =>
+	Effect.scoped(Effect.gen(function* () {
+		const store = memory_audit();
+		const f = yield* fixture(store.port);
+		const authority = { ...f.admin, preview: { by: 'original-admin', team: null, impersonate: true as const } };
+		expect(yield* f.act('create', [{ title: 'Attributed write' }], authority)).toMatchObject({ outcome: { kind: 'committed' } });
+		const prepared = [...store.records.values()].find(record => record.status === 'prepared');
+		expect(prepared).toMatchObject({ actor: { id: 'original-admin' }, payload: {
+			request: [{ model: 'items', verb: 'create', input: [{ title: 'Attributed write' }] }],
+			acting_as: { kind: 'member', id: f.admin.actor.kind === 'member' ? f.admin.actor.id : '' },
+			preview: { by: 'original-admin', impersonate: true }
+		} });
+	}))
+);
 
 it.live('durable preparation fails before a governed mutation can write', () =>
 	Effect.scoped(

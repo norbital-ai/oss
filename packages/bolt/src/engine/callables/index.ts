@@ -4,7 +4,7 @@ import { UUID_PATTERN } from '@norbital-ai/store/kind';
 // commits their writes in one statement under its idempotency key. A start queues runs without executing them.
 import { Array as EffectArray, Effect, Layer, Predicate, Result, Schema } from 'effect';
 
-import { audited, auditActor } from '../audit-operation.ts';
+import { audited, auditContext } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { CapturedResult, nativeCommit } from '../db/captured.ts';
@@ -665,7 +665,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			e.db,
 			{
 				category: 'automation', action: `${request.model}.${request.sync}.sync_control`,
-				actor: auditActor(request.authority.actor), payload: { model: request.model, sync: request.sync, id: request.id, input: request.input }
+				...auditContext(request.authority, { model: request.model, sync: request.sync, id: request.id, input: request.input })
 			},
 			sync_control(request)
 		),
@@ -692,9 +692,8 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					category: 'write',
 					// named after its writes (`orders.update`), each distinct model and verb once
 					action: [...new Set(request.acts.map((a) => `${a.model}.${a.verb}`))].join(', '),
-					actor: auditActor(request.authority.actor),
 					invocation: request.invocationId,
-					payload: acts_json(request.acts),
+					...auditContext(request.authority, acts_json(request.acts)),
 					outcomeKey: sha256_hex(
 						`${canonical({ actor: request.authority.actor.kind === 'member' ? request.authority.actor.id : request.authority.actor, callable: request.name })}\u0000${request.key}`
 					),
@@ -710,8 +709,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				{
 					category: 'automation',
 					action: `${request.automation}.start`,
-					actor: auditActor(request.authority.actor),
-					payload: { automation: request.automation, runs: request.runs }
+					...auditContext(request.authority, { automation: request.automation, runs: request.runs })
 				},
 				start(request)
 			)

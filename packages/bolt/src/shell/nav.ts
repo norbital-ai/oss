@@ -158,7 +158,7 @@ export type ShellBoot = {
 	name: string | null;
 	admin: boolean;
 	/** Rule 39: the member or team being previewed and the administrator previewing. */
-	preview: { user: string; by: string } | { team: string; name: string; by: string } | null;
+	preview: { user: string; by: string; impersonate?: true } | { team: string; name: string; by: string } | null;
 	/** The host's banner for this member (`ShellHost.notice`: a billing notice). */
 	notice?: ShellNotice;
 	/** The release's client hash: a live link that comes back under another reloads the page. */
@@ -443,7 +443,7 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
  * Settings and logs are an administrator's; Studio is every staff member's (their own draft; the host decides what a
  * non-administrator may do) on a host that serves it (`studio`: Colony; an untethered workspace has none). The command
  * center is every staff member's (`runs`); its tabs follow the rest. A preview environment (`preview`) drops the meta
- * tools, Norbius and Studio; everything else stays (Settings loses Integrations and the command center People, `preview_route`).
+ * tools entirely: only application modules remain.
  */
 export type Surfaces = {
 	inbox: boolean;
@@ -463,9 +463,9 @@ export function surfaces(
 		return { inbox: false, runs: false, settings: false, agent: false, studio: false };
 	const staff = !actor.external;
 	return {
-		inbox: staff,
-		runs: staff,
-		settings: staff && admin,
+		inbox: staff && !preview,
+		runs: staff && !preview,
+		settings: staff && admin && !preview,
 		agent: !preview && (staff ? m.agent.internal : m.agent.external) !== undefined,
 		studio: staff && studio && !preview
 	};
@@ -506,14 +506,11 @@ export type CommandCenterTab = (typeof COMMAND_CENTER_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
 	tabs.find((t) => t === value);
 /**
- * A preview environment drops the meta tools: Studio and who-has-access management (the command center's People) open
- * the apps launcher, and so does Settings → Integrations, whose integration endpoints only the live workspace serves.
+ * A preview environment opens only application modules; workspace administration URLs return to the apps launcher.
  */
 export function preview_route(r: Route, preview: boolean): Route {
 	return preview &&
-		(r.kind === 'studio' ||
-			(r.kind === 'command_center' && r.tab === 'people') ||
-			(r.kind === 'settings' && r.tab === 'integrations'))
+		(r.kind === 'studio' || r.kind === 'command_center' || r.kind === 'settings' || r.kind === 'inbox')
 		? { kind: 'home' }
 		: r;
 }
@@ -528,7 +525,7 @@ export function command_center_tabs(
 	admin: boolean,
 	preview: boolean
 ): readonly CommandCenterTab[] {
-	if (!s.runs) return [];
+	if (preview || !s.runs) return [];
 	const lead = admin && s.settings;
 	return COMMAND_CENTER_TABS.filter((tab) =>
 		tab === 'automations'

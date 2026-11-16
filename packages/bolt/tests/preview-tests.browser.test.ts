@@ -29,6 +29,7 @@ const failed: StudioTestRun = {
 it('expands into a modal and returns without reloading the interactive iframe', async () => {
 	const target = document.body.appendChild(document.createElement('div'));
 	target.style.height = '500px';
+	target.style.width = '420px';
 	const view = mount(PreviewFrame, { target, props: { src: 'about:blank' } });
 	try {
 		await tick();
@@ -46,6 +47,7 @@ it('expands into a modal and returns without reloading the interactive iframe', 
 		if (modal === null) throw new Error('Missing expanded preview');
 		expect(modal.matches(':popover-open')).toBe(true);
 		expect(modal.getBoundingClientRect().width).toBeGreaterThan(innerWidth * 0.9);
+		expect(modal.getBoundingClientRect().height).toBeGreaterThan(innerHeight * 0.9);
 		expect(frame.contentWindow).toBe(window);
 		expect(input.isConnected).toBe(true);
 		await userEvent.keyboard('{Escape}');

@@ -15,7 +15,7 @@ import type { Server } from 'node:http';
 import { build, createServer, type Connect, type InlineConfig, type Rolldown } from 'vite';
 import { page_route_key, public_page_keys } from '@norbital-ai/bolt/artifact';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
-import type { ShellManifest } from '@norbital-ai/bolt/tooling';
+import { theme_css, type ShellManifest } from '@norbital-ai/bolt/tooling';
 import type { Discovered } from '../discover.ts';
 import { EDITOR_SINGLETONS } from '../editor-dependencies.ts';
 import { clientImportBoundary } from './client-boundary.ts';
@@ -322,8 +322,10 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		return `${key(name)}: () => import(${key(join(root, file.path))})`;
 	});
 	const sessions = files.filter((f) => f.role === 'session');
+	const { theme: workspaceTheme, ...workspaceSettings } = m.workspace;
+	const themeStyles = theme_css(workspaceTheme);
 	const shell: ShellManifest = {
-		workspace: m.workspace,
+		workspace: workspaceSettings,
 		apps: m.apps,
 		groups: m.groups ?? {}
 	};
@@ -336,7 +338,7 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		styles,
 		// `.norbital/` (caches, generated names, the release's parts) and the output (the platform layer is built into it
 		// first) hold generated or copied code, never a class source (.gitignore or not)
-		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital'))};\n@source not ${key(out)};\n`
+		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital'))};\n@source not ${key(out)};\n${themeStyles}`
 	);
 	// hook:server-cli — the messages: the base (`+messages.ts`) under the workspace's matching `+<locale>.messages.ts`
 	const reps = files
@@ -625,6 +627,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			yield* fs.readFileString(require.resolve('@norbital-ai/ui/brand/access.css'))
 		)
 	);
+	const themeStyles = theme_css(m.workspace.theme);
 	const publicPages: Record<string, { entry: string; css: string[] }> = {};
 	let discoveredSources: Readonly<Record<string, readonly string[]>> = {};
 	const publicEntries: Record<string, string> = {};
@@ -634,7 +637,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 		const publicStyles = join(gen, `${encodeURIComponent(route)}.css`);
 		yield* fs.writeFileString(
 			publicStyles,
-			`@import ${key(require.resolve('@norbital-ai/ui/base.css'))};\n@source ${key(join(root, file.path))};\n@source ${key(join(SHELL, 'public', 'PublicPage.svelte'))};\n`
+			`@import ${key(require.resolve('@norbital-ai/ui/base.css'))};\n@source ${key(join(root, file.path))};\n@source ${key(join(SHELL, 'public', 'PublicPage.svelte'))};\n${themeStyles}`
 		);
 
 		const wrapper = yield* publicWrapper(root, file, route);
@@ -668,7 +671,7 @@ Effect.runPromise(hydrate_public_page(Page, ${key(route)})).catch((cause) => {
 				styles,
 				`@import ${key(require.resolve('@norbital-ai/ui/base.css'))};\n${sources
 					.map((path) => `@source ${key(path)};`)
-					.join('\n')}\n`
+					.join('\n')}\n${themeStyles}`
 			);
 		});
 		for (const [route, sources] of Object.entries(publicSources ?? {}))

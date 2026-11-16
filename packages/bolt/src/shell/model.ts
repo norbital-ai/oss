@@ -167,17 +167,14 @@ export function navigation_model(boot: ShellBoot, path: string, t: Translate): N
 		}];
 	};
 	const preview = boot.workspace.live !== undefined;
-	const utilities = [
+	const utilities = preview ? [] : [
 		...group(
 			'settings',
 			'Settings',
-			s.settings
+			boot.admin && s.settings
 				? [
 						leaf('organization', 'Organization', 'concept:workspace', '/settings/organization'),
-						// a preview serves no integration endpoints: they are the live workspace's (`preview_route`)
-						...(preview
-							? []
-							: [leaf('integrations', 'Integrations', 'concept:integrations', '/settings/integrations')]),
+						leaf('integrations', 'Integrations', 'concept:integrations', '/settings/integrations'),
 						leaf('secrets', 'Secrets', 'lucide:key-round', '/settings/secrets')
 					]
 				: []

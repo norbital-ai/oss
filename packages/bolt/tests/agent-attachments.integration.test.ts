@@ -143,9 +143,8 @@ const setup = Effect.gen(function* () {
 					);
 					// a posted attachment is read by its id; else the record's file
 					const id =
-						/\[attachment: [^\]]*\] id ([0-9a-f]{8})/.exec(
-							JSON.stringify(r.messages)
-						)?.[1] ?? recordFile;
+						/\[attachment: [^\]]*\] id ([0-9a-f-]+)/.exec(JSON.stringify(r.messages))?.[1] ??
+						recordFile;
 					const response: AiResponse =
 						last?.role !== 'tool' && id !== ''
 							? {
@@ -260,8 +259,9 @@ describe('in-app attachments', () => {
 				if (first === undefined || second === undefined) throw new Error('attachment did not produce two model steps');
 				const firstMessage = first.messages[0],
 					attachment = second.files?.[0];
-				if (firstMessage === undefined || attachment === undefined) throw new Error('attachment was not passed to the model');
-				expect(String(firstMessage.content)).toContain(`] id ${id.slice(0, 8)}`);
+				if (firstMessage === undefined || attachment === undefined)
+					throw new Error('attachment was not passed to the model');
+				expect(String(firstMessage.content)).toContain(`] id ${id}`);
 				expect([...attachment.bytes]).toEqual([...PNG]);
 				expect(attachment.mime).toBe('image/png');
 				// the posted file is one of the conversation's inputs

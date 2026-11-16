@@ -36,6 +36,7 @@
 	let {
 		model,
 		pinned = false,
+		app_only = false,
 		expanded = true,
 		mobile = false,
 		t,
@@ -62,6 +63,8 @@
 		model: NavModel;
 		/** A shell bound to this workspace (an app): its identity shows without a way to another workspace. */
 		pinned?: boolean;
+		/** A workspace preview contains application navigation only, without account controls. */
+		app_only?: boolean;
 		expanded?: boolean;
 		mobile?: boolean;
 		t: Translate;
@@ -316,7 +319,7 @@
 {/snippet}
 
 {#snippet searchButton(extra: string)}
-	{#if on_search !== undefined}
+	{#if on_search !== undefined && !app_only}
 		{#snippet trigger({ props }: { props: Record<string, unknown> })}
 			<Button
 				{...props}
@@ -363,7 +366,7 @@
 
 {#snippet switcher()}
 	<!-- one workspace has nowhere to switch to -->
-	{#if pinned || model.workspace.others.length === 0}
+	{#if pinned || app_only || model.workspace.others.length === 0}
 		<div
 			data-testid="workspace-identity"
 			class={cn(
@@ -447,7 +450,7 @@
 	<div
 		class={cn('flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto', !expanded && 'overflow-hidden')}
 	>
-		{#each model.sections as section (section.key)}
+		{#each model.sections.filter((section) => !app_only || section.key === 'applications') as section (section.key)}
 			{#if section.items.some((i) => !(mobile && i.href === NORBIUS))}
 				<Stack gap="none" class="relative w-full p-2">
 					<p
@@ -467,7 +470,7 @@
 		{/each}
 	</div>
 
-	<Stack
+	{#if !app_only}<Stack
 		gap="sm"
 		class="shrink-0 border-t border-border bg-muted/30 px-2 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
 	>
@@ -535,7 +538,7 @@
 		{/if}
 		{@render account()}
 		{#if !expanded}<div class="mx-auto">{@render searchButton('')}</div>{/if}
-	</Stack>
+	</Stack>{/if}
 </nav>
 
 {#snippet more()}

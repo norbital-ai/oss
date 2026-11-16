@@ -5,7 +5,8 @@
 	runtime log. Logs reads the log itself
 	(`logs`), scoped to one release's serving window (the serving release by default) and optionally a run; its opt-in
 	Auto-refresh re-reads only that. Audit is the audit trail,
-	Automations every run, Inference the automations' inference transcripts (opened read-only in Norbius), People the
+	Automations every run, AI the members' chats, readable envoy threads and automation transcripts (inspection is
+	read-only in Norbius), People the
 	members and invitations. `tabs` is what this viewer gets (`command_center_tabs`); rollbacks are Studio's, not here.
 -->
 <script lang="ts">
@@ -140,10 +141,13 @@
 		if (next.run !== undefined) runFilter = next.run;
 	}
 
-	// every AI transcript the viewer may read: their own in-app conversations, envoy threads and automation inference
+	// Workspace administration is separate from the member's own Norbius selector.
 	const conversations = observe(() =>
 		active === 'inference'
-			? bolt.observe({ read: { m: 'conversations', a: [] } }, ConversationsReadAnswer)
+			? bolt.observe(
+					{ read: { m: 'conversations', a: [{ scope: 'workspace' }] } },
+					ConversationsReadAnswer
+				)
 			: null
 	);
 	const AI_ICONS = {
@@ -159,8 +163,19 @@
 			category: categoryOf(c),
 			title: c.title ?? t('Conversation'),
 			// an envoy thread: its envoy, instance and kind; an automation's: its run
-			source: c.run ?? [c.envoy, c.integration, c.kind].filter((part) => part !== null).join(' · '),
-			status: t(c.status === 'running' ? 'Running' : c.status === 'stopped' ? 'Stopped' : 'Idle'),
+			source:
+				c.run ??
+				c.peer ??
+				[c.envoy, c.integration, c.kind].filter((part) => part !== null).join(' · '),
+			status: t(
+				c.archived
+					? 'Archived'
+					: c.status === 'running'
+						? 'Running'
+						: c.status === 'stopped'
+							? 'Stopped'
+							: 'Idle'
+			),
 			at: date_time(c.at, bolt.locale)
 		}))
 	);

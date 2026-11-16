@@ -6,6 +6,7 @@ import type { AppName, ModelName, PolicyName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, NonEmpty, Rate } from '../values.ts';
 import type { ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
+import type { WorkspaceTheme } from '../theme.ts';
 
 /** One secret: the label and help Settings shows; its value is supplied at runtime and sealed in the tenant store. */
 type SecretDecl = { label: string; description?: string };
@@ -34,6 +35,8 @@ export function secrets<const E extends Record<string, SecretDecl>>(
 	return spec;
 }
 type WorkspaceBase = {
+	/** Shared light/dark token overrides; omitted tokens keep Bolt’s defaults. See `WorkspaceTheme`. */
+	theme?: WorkspaceTheme;
 	/** The workspace's IANA zone: `today`, date defaults and document numbers are read in it. */
 	tz: IanaZone;
 	/** The default locale tag. */
@@ -96,6 +99,7 @@ type SignupFor = {
 	challenge?: true;
 };
 type WorkspaceFor = {
+	theme?: WorkspaceTheme;
 	tz: IanaZone;
 	locale: string;
 	currency?: CurrencyCode;
@@ -156,10 +160,24 @@ export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'conve
  * seed/ (public/ ships in the release, test/ serves bolt test, +seeder.ts)
  * migrations/ (generated, editable SQL and its proofs), tests/
  * ```
+ * `theme` remaps shared CSS variables for every application, the shell and public pages. Provide separate `light` and
+ * `dark` maps; omitted tokens retain Bolt's theme. `primary`/`primary-foreground` style primary actions;
+ * `accent`/`accent-foreground` style hover/selection; `brand`, `brand-foreground`, `brand-text`, `ring` and the sidebar
+ * tokens control their respective roles. Pair foregrounds with their backgrounds and verify contrast in the preview.
+ * Colour, sidebar and chart token names follow tweakcn, without the `--` prefix. Fonts use installed/bundled font stacks; this
+ * declaration never downloads a font or stylesheet. Changes go through the workspace's normal preview and release.
  * @param spec Workspace settings; integration accounts and credentials are created at runtime.
  * @returns The typed declaration unchanged. Compilation validates its references against this workspace's names.
  * @example
  * export default workspace({ tz: 'Asia/Singapore', locale: 'en-SG', apps: ['crm'] });
+ * @example
+ * export default workspace({
+ *   tz: 'Asia/Singapore', locale: 'en-SG',
+ *   theme: {
+ *     light: { primary: '#1467a6', 'primary-foreground': '#ffffff', ring: '#1467a6' },
+ *     dark: { primary: '#3b8fd4', 'primary-foreground': '#0b0e13', ring: '#3b8fd4' }
+ *   }
+ * });
  */
 export function workspace<const S extends WorkspaceBase>(
 	spec: S & Checked<WorkspaceBase, S, Exact<S, WorkspaceFor>>
@@ -286,8 +304,10 @@ export function app<const S extends AppSpec>(
 
 /** A group literal: its title, description, icon and the child it opens. */
 export const GroupSpec = Schema.Struct({
-	title: Schema.String, description: Schema.optionalKey(Schema.String),
-	icon: Schema.String, default_child: Schema.String
+	title: Schema.String,
+	description: Schema.optionalKey(Schema.String),
+	icon: Schema.String,
+	default_child: Schema.String
 });
 export type GroupSpec = typeof GroupSpec.Type;
 /**

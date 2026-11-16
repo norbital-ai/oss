@@ -123,7 +123,7 @@ import {
 } from './nav.ts';
 import { readLog, runLog } from '../engine/guest/telemetry.ts';
 import { Audit } from '../engine/audit.ts';
-import { audited, auditActor } from '../engine/audit-operation.ts';
+import { audited, auditContext } from '../engine/audit-operation.ts';
 
 import { canonical } from '@norbital-ai/store';
 import { fromBase64, timingSafeEqual } from '../engine/crypto.ts';
@@ -253,15 +253,14 @@ type Caller = {
 	preview: ShellBoot['preview'];
 	expiresAt?: number;
 };
-/** The preview cookie names a member id, or `team:<id>`. */
+/** Permissions preview: a member id or `team:<id>`; full impersonation: `member:<id>`. */
 const TEAM = 'team:';
+const IMPERSONATE = 'member:';
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
 	HttpServerResponse.jsonUnsafe(body, { status, headers });
-/** A preview environment drops the meta tools (Norbius, Studio, who-has-access management); they refuse there. */
+/** A preview environment contains application modules, without workspace administration. */
 export const NOT_IN_PREVIEW = 'Not available in a preview.';
-/** The Settings operations a preview keeps: everything else manages people, keys or Norbius. */
-const PREVIEW_SETTINGS = new Set<SettingsOp['op']>(['setSecret', 'clearSecret']);
 const refused = (code: string, message: string, status: number, retryAfter?: number) =>
 	json(
 		{ error: { code, message } },
@@ -540,26 +539,30 @@ const makeShell = Effect.gen(function* () {
 		if (real !== null && target !== undefined && real.admin) {
 			{
 				const team = target.startsWith(TEAM) ? target.slice(TEAM.length) : null;
-				const p = yield* preview_as(real, authorities, h.db, h.publication, team === null ? target : { team }).pipe(
+				const impersonate = target.startsWith(IMPERSONATE);
+				const user = impersonate ? target.slice(IMPERSONATE.length) : target;
+				const p = yield* preview_as(real, authorities, h.db, h.publication, team !== null ? { team } : impersonate ? { member: user } : user).pipe(
 					Effect.catchTag('BoltError', (error) =>
 						error.code === 'forbidden' || error.code === 'not_found'
 							? Effect.succeed(null)
 							: Effect.fail(error)
 					)
 				);
-				if (p === null) return { authority: real, real, token, preview: null, ...expiresAt };
+				if (p === null) return { authority: real.agent === undefined ? real : null, real, token, preview: null, ...expiresAt };
 				return {
 					authority: s === null ? p.authority : marked(s, p.authority),
 					real,
 					token,
 					preview:
 						team === null
-							? { user: target, by: p.impersonatedBy }
+							? { user, by: p.impersonatedBy, ...(impersonate ? { impersonate: true as const } : {}) }
 							: { team, name: teamName(m, team), by: p.impersonatedBy },
 					...expiresAt
 				};
 			}
 		}
+		if (target !== undefined && real?.agent !== undefined)
+			return { authority: null, real, token, preview: null, ...expiresAt };
 		return { authority: real, real, token, preview: null, ...expiresAt };
 	});
 	const callers = new WeakMap<
@@ -1054,6 +1057,8 @@ const makeShell = Effect.gen(function* () {
 		const auth = x.authority;
 		if (auth === null || auth.actor.kind !== 'member')
 			return refused('unauthenticated', 'Sign in first.', 401);
+		if (c.live !== undefined && (path === `${SHELL}/settings` || path === `${SHELL}/organization`))
+			return refused('forbidden', NOT_IN_PREVIEW, 403);
 		const url = requestUrl(request);
 		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined, c.live !== undefined);
 		switch (`${request.method} ${path.slice(SHELL.length)}`) {
@@ -1175,20 +1180,17 @@ const makeShell = Effect.gen(function* () {
 						BoltError.make('forbidden', 'admission', 'Only administrators manage settings.')
 					);
 				const op = yield* requestBody(request, SettingsOp);
-				if (c.live !== undefined && !PREVIEW_SETTINGS.has(op.op))
-					return refused('forbidden', NOT_IN_PREVIEW, 403);
 				return json({
 					value: yield* audited(
 						h.db,
 						{
 							category: 'identity',
 							action: op.op,
-							actor: auditActor(auth.actor),
-							payload: 
+							...auditContext(auth,
 								op.op === 'setSecret'
 									? { op: op.op, input: { name: op.input.name, value: '[credential redacted]' } }
 									: op
-							
+							)
 						},
 						applySettings(h, m, auth, op, secrets)
 					).pipe(Effect.provideService(Audit, audit))
@@ -1337,7 +1339,7 @@ const makeShell = Effect.gen(function* () {
 				const b = yield* requestBody(request, Body),
 					user = b['user'],
 					team = b['team'];
-				if (x.real === null || !x.real.admin)
+				if (x.real === null || !x.real.admin || x.real.agent !== undefined)
 					return refused(
 						'forbidden',
 						'Only an administrator can preview as a member or team.',
@@ -1359,10 +1361,11 @@ const makeShell = Effect.gen(function* () {
 					return yield* Effect.fail(
 						BoltError.make('invalid', 'decode', 'the body is { user } or { team }')
 					);
-				yield* preview_as(x.real, authorities, h.db, h.publication, user);
+				const impersonate = b['impersonate'] === true;
+				yield* preview_as(x.real, authorities, h.db, h.publication, impersonate ? { member: user } : user);
 				return HttpServerResponse.empty({
 					status: 204,
-					headers: { 'set-cookie': cookie(names.preview, user, null) }
+					headers: { 'set-cookie': cookie(names.preview, impersonate ? `${IMPERSONATE}${user}` : user, null) }
 				});
 			}
 			case 'GET /explain': {

@@ -337,6 +337,7 @@ describe('native question and browser boundaries', () => {
 				};
 				const base = yield* ctx({ browser_tools: [fleet] });
 				expect(yield* names(base)).toEqual(expect.arrayContaining(['page', 'browser']));
+				expect(yield* names({ ...base, authority: { ...base.authority, preview: { by: 'admin', team: null, impersonate: true } } })).not.toContain('browser');
 				for (const over of [
 					{ inApp: false },
 					{ child: true },
@@ -1856,7 +1857,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			]),
 			([r]) => r?.rows[0]?.['outputs']
 		);
-	it.effect('repeated attachments keep one short file identity for reads and scripts', () =>
+	it.effect('repeated attachments keep their exact file identity for reads and scripts', () =>
 		Effect.gen(function* () {
 			const text = `observation ${randomUUID()}`;
 			const { x, id } = yield* holding(`c-${randomUUID()}`, {
@@ -1868,12 +1869,12 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				text: 'UPDATE sys_conversation SET inputs = inputs || inputs WHERE id = $1',
 				params: [x.conv.id]
 			});
-			expect(yield* result(x, 'read_file', { id: id.slice(0, 8), offset: 1 })).toMatchObject({
+			expect(yield* result(x, 'read_file', { id, offset: 1 })).toMatchObject({
 				result: expect.stringContaining(text)
 			});
 			expect(
 				yield* result(x, 'run_js', {
-					files: [{ id: id.slice(0, 8) }],
+					files: [{ id }],
 					code: 'return new TextDecoder().decode(input.files[0].bytes);'
 				})
 			).toMatchObject({ result: { answer: text } });
@@ -1886,8 +1887,11 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				text: 'UPDATE sys_conversation SET inputs = inputs || $2::jsonb WHERE id = $1',
 				params: [x.conv.id, JSON.stringify([other])]
 			});
+			expect(yield* result(x, 'read_file', { id, offset: 1 })).toMatchObject({
+				result: expect.stringContaining(text)
+			});
 			expect(yield* result(x, 'read_file', { id: id.slice(0, 8), offset: 1 })).toMatchObject({
-				result: { error: expect.stringContaining('No file you can read') }
+				result: { error: expect.stringContaining(other.id) }
 			});
 		})
 	);

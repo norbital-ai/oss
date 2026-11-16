@@ -20,5 +20,5 @@ Checks every template page passes. Rule homes: [app-structure.md](app-structure.
 16. Every chart answers a stated decision.
 17. Reuse the record controller, capability reasons, approvals and structured renderers; related edits are explicit operations preserving unloaded children.
 18. A table's New inside a parent record uses `toolbar.new` with a native `Sheet` and `RecordShell mode="create"` carrying the parent in `values`. `where` scopes the read only. Close on committed or `pending_approval`. Verify the foreign key through the real UI.
-19. One chromatic action per view: `Button variant="brand"` at most once; brand orange is never decoration.
+19. One chromatic action per view: `Button variant="brand"` at most once; the workspace brand colour is never decoration. Shared theme overrides belong in `+workspace.ts`, not page-specific CSS.
 20. Surfaces separate with hairlines: `border border-border` on `bg-card`. Cards 12px maximum, controls 6px, badges 4px, pills round. No `shadow-card`, glow or 16px+ radius.

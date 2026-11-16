@@ -84,16 +84,7 @@ import type { AgentEngine as Engine } from './index.ts';
 import { lower_read, readableBy } from '../query/engine.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
 import { materializeEach } from '../runs/time.ts';
-import {
-	BOUNDS,
-	bound,
-	bounded,
-	filesOf,
-	localTime,
-	outputText,
-	size,
-	shortId
-} from './context.ts';
+import { BOUNDS, bound, bounded, filesOf, localTime, outputText, size } from './context.ts';
 import { MODEL_FILES, ToolAnswer, type InferTool } from './ai.ts';
 import {
 	cached,
@@ -2476,7 +2467,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			Effect.catch((error) => Effect.succeed({ error: `That file is not JSON: ${error.message}` }))
 		);
 	});
-	/** A file field's value given as a file id (whole or short): the stored file's reference, when the actor may read it. */
+	/** A file field's value given as a file id: the stored file's reference, when the actor may read it. */
 	const withFileRefs = Effect.fn('AgentTool.fileRefs')(function* (callable: string, input: Json) {
 		const dot = callable.lastIndexOf('.'),
 			model = callable.slice(0, dot),
@@ -2488,8 +2479,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			// a whole ref is judged as its id: naming a file is no way past reading it
 			const named = isObj(given) && typeof given['id'] === 'string' ? given['id'] : given;
 			if (typeof named !== 'string') return given;
-			const id = yield* wholeId(x, named);
-			const [file] = yield* sourceFile(id);
+			const [file] = yield* sourceFile(named);
 			if (file === undefined || !(yield* canRead(file.id))) return `No file ${named} you can read.`;
 			return { id: file.id, name: file.name, mime: file.mime, size: file.size };
 		});
@@ -3283,7 +3273,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		readonly path?: string | undefined;
 	}) {
 		if (i.id.includes('@')) return yield* readReference(x, i.id, i);
-		const given = yield* wholeId(x, i.id),
+		const given = i.id,
 			all = yield* ingests(),
 			path = i.path?.replace(/^\/+|\/+$/g, '') || undefined;
 		// a path is inside the archive the id names: its upload, or its listing's output
@@ -3334,7 +3324,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			]);
 			const files = (held?.rows ?? [])
 				.slice(-20)
-				.map((row) => `${String(row['name'])} ${shortId(String(row['id']))}`);
+				.map((row) => `${String(row['name'])} ${String(row['id'])}`);
 			return err(
 				`No file you can read has this id; a clipped result is read_output's.${files.length === 0 ? '' : ` This conversation's files: ${files.join(', ')}`}`
 			);
@@ -3929,7 +3919,8 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	});
 	// Host tools are fixed per host and role, so they sit in the tool list by their own names; each keeps its raw JSON
 	// Schema, checked by its validator. A planning turn binds only the read-only ones
-	for (const host of [...x.browser_tools, ...(x.inApp && staff ? hosted : [])]) {
+	// A member's sealed browser sign-ins are never available through admin impersonation.
+	for (const host of [...(a.preview === undefined ? x.browser_tools : []), ...(x.inApp && staff ? hosted : [])]) {
 		const { name, description, input: schema, behavior } = host;
 		if (
 			!Predicate.isObject(schema) ||
@@ -4099,20 +4090,6 @@ const IngestEntry = Schema.Struct({
 		entry: Schema.optionalKey(Schema.String)
 	})
 });
-const SHORT_ID = /^[0-9a-f]{8}$/;
-/** A file's short id in full, when one file of this conversation has it; anything else stays as given. */
-const wholeId = Effect.fn('Agents.wholeId')(function* (x: ToolContext, id: string) {
-	if (!SHORT_ID.test(id)) return id;
-	const [read] = yield* x.engine.db.read([
-		{
-			text: `SELECT DISTINCT i->>'id' AS id FROM sys_conversation c, jsonb_array_elements(c.inputs || c.outputs) i
-				WHERE c.id = $1 AND i->>'id' LIKE $2`,
-			params: [x.conv.id, `${id}%`]
-		}
-	]);
-	const [only, other] = read?.rows ?? [];
-	return only !== undefined && other === undefined ? String(only['id']) : id;
-});
 /**
  * The conversation files a file run names, as `/in/<name>`: the member's own uploads and outputs here, at most
  * `RUN_JS.inBytes` in all, one name each. A string is why not.
@@ -4131,7 +4108,7 @@ const conversationFiles = Effect.fn('Agents.runFileInputs')(function* (
 	if (refs.length === 0) return [];
 	const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null,
 		files = x.engine.files,
-		ids = yield* Effect.forEach(refs, (ref) => wholeId(x, ref.id));
+		ids = refs.map((ref) => ref.id);
 	if (member === null || files === undefined) return 'This run can be handed no files.';
 	const rows = yield* x.engine.db.rows(InputFile, {
 		// the member's own, or an ingest filed in this conversation's outputs (a cached ingest may be another member's)
