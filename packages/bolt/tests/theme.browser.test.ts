@@ -1,6 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import { createRawSnippet, mount, unmount } from 'svelte';
 import { Button } from '@norbital-ai/ui';
+import { page } from 'vitest/browser';
 import { theme_css } from '../src/decl/theme.ts';
 import './support/shell.css';
 
@@ -8,6 +9,9 @@ it('applies workspace colour, font and radius overrides to native controls in bo
 	const root = document.documentElement;
 	const wasDark = root.classList.contains('dark');
 	const target = document.body.appendChild(document.createElement('div'));
+	const pointer = document.body.appendChild(document.createElement('div'));
+	pointer.dataset.testid = 'theme-pointer-boundary';
+	pointer.style.cssText = 'position:fixed;right:0;bottom:0;width:16px;height:16px';
 	const style = document.head.appendChild(document.createElement('style'));
 	style.textContent = theme_css({
 		light: {
@@ -23,6 +27,8 @@ it('applies workspace colour, font and radius overrides to native controls in bo
 		props: { children: createRawSnippet(() => ({ render: () => '<span>Action</span>' })) }
 	});
 	try {
+		// A previous browser test can leave the pointer over this newly mounted button.
+		await page.getByTestId('theme-pointer-boundary').hover();
 		root.classList.remove('dark');
 		const button = target.querySelector('button');
 		if (button === null) throw new Error('Missing native button');
@@ -37,6 +43,7 @@ it('applies workspace colour, font and radius overrides to native controls in bo
 	} finally {
 		await unmount(view);
 		target.remove();
+		pointer.remove();
 		style.remove();
 		root.classList.toggle('dark', wasDark);
 	}
