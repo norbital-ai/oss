@@ -12,6 +12,13 @@ import {
 	HOST_LIMITS
 } from '@norbital-ai/host-api';
 import { connect_public } from '@norbital-ai/host-api/node';
+import type { Socket } from 'node:net';
+
+/** A trusted host's scoped TCP connector. The SQL transport still verifies TLS against the original hostname. */
+export type SqlServerConnector = (
+	hostname: string,
+	port: number
+) => Effect.Effect<Socket, FacilityFailure, Scope.Scope>;
 
 const QUERY_MS = 8_000;
 const retryableSql = new Set([1205, 1222]); // Deadlock victim and lock timeout.
@@ -39,7 +46,9 @@ function scalar(value: unknown): Json {
 		message: 'Database returned an unsupported value; cast it explicitly.'
 	});
 }
-export function sqlServerDatabase() {
+/** Public-address policy by default; an operator may supply a more narrowly authorized host route. */
+export function sqlServerDatabase(options: { readonly connect?: SqlServerConnector } = {}) {
+	const connect = options.connect ?? connect_public;
 	return {
 		query: (credential: string, given: DatabaseRequest) =>
 			Effect.scoped(
@@ -112,9 +121,7 @@ export function sqlServerDatabase() {
 									trustServerCertificate: false,
 									serverName: hostname,
 									connector: () =>
-										run(
-											connect_public(hostname, port).pipe(Effect.provideService(Scope.Scope, scope))
-										)
+										run(connect(hostname, port).pipe(Effect.provideService(Scope.Scope, scope)))
 								},
 								beforeConnect: (connection) => {
 									connection.config.options.connector = () =>
@@ -126,9 +133,7 @@ export function sqlServerDatabase() {
 													})
 												)
 											: run(
-													connect_public(hostname, port).pipe(
-														Effect.provideService(Scope.Scope, scope)
-													)
+													connect(hostname, port).pipe(Effect.provideService(Scope.Scope, scope))
 												);
 								}
 							}),
