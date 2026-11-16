@@ -3,6 +3,7 @@
 A one-time code in separate digit cells (bits-ui PinInput): the sign-in code step. Digits only, `one-time-code` autofill; focused on mount, since the code step appears only once a code is sent.
 -->
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { Inline } from '../layout/index.js';
 	import { cn } from '../primitives/utils.js';
 	import {
@@ -12,18 +13,21 @@ A one-time code in separate digit cells (bits-ui PinInput): the sign-in code ste
 	} from 'bits-ui';
 	import type { SnakeProps } from '../primitives/bits.js';
 
-	type Props = SnakeProps<Omit<WithoutChildrenOrChild<PinInputPrimitive.RootProps>, 'maxlength' | 'onComplete'>, {
-		/** Called with the code on every keystroke or paste. */
-		on_value_change: 'onValueChange';
-		/** Rewrites pasted text before it fills the cells (strip spaces or dashes). */
-		paste_transformer: 'pasteTransformer';
-		/** How the hidden input makes room for a password manager's badge (bits-ui `pushPasswordManagerStrategy`). */
-		push_password_manager_strategy: 'pushPasswordManagerStrategy';
-		/** The `id` of the hidden input, for a `Label for`. */
-		input_id: 'inputId';
-		/** The hidden input element (bindable). */
-		input_ref: 'inputRef';
-	}> & {
+	type Props = SnakeProps<
+		Omit<WithoutChildrenOrChild<PinInputPrimitive.RootProps>, 'maxlength' | 'onComplete'>,
+		{
+			/** Called with the code on every keystroke or paste. */
+			on_value_change: 'onValueChange';
+			/** Rewrites pasted text before it fills the cells (strip spaces or dashes). */
+			paste_transformer: 'pasteTransformer';
+			/** How the hidden input makes room for a password manager's badge (bits-ui `pushPasswordManagerStrategy`). */
+			push_password_manager_strategy: 'pushPasswordManagerStrategy';
+			/** The `id` of the hidden input, for a `Label for`. */
+			input_id: 'inputId';
+			/** The hidden input element (bindable). */
+			input_ref: 'inputRef';
+		}
+	> & {
 		/** Number of digit cells (default 6). */
 		maxlength?: number;
 		/** Classes added to every cell. */
@@ -52,7 +56,7 @@ A one-time code in separate digit cells (bits-ui PinInput): the sign-in code ste
 	const invalid = $derived(ariaInvalid === true || ariaInvalid === 'true');
 </script>
 
-<!-- Fixed-size cells: a code is six digits wide wherever it sits, never stretched to its container. -->
+<!-- Fixed-size cells. Completion runs in the primitive's effect; caller state must not retrigger it. -->
 <PinInputPrimitive.Root
 	bind:value
 	{maxlength}
@@ -69,7 +73,7 @@ A one-time code in separate digit cells (bits-ui PinInput): the sign-in code ste
 	pushPasswordManagerStrategy={push_password_manager_strategy}
 	inputId={input_id}
 	bind:inputRef={input_ref}
-	onComplete={on_complete}
+	onComplete={(code) => untrack(() => on_complete?.(code))}
 >
 	{#snippet children({ cells })}
 		<Inline gap="sm">

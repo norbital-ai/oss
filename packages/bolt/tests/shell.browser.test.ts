@@ -228,6 +228,9 @@ it.each(['failure', 'success'] as const)(
 					)
 				);
 				await expect.element(page.getByRole('alert')).toHaveTextContent('Retry code');
+				await expect.element(input).toBeEnabled();
+				await tick();
+				expect(calls).toBe(1);
 				form.requestSubmit();
 				await expect.poll(() => calls).toBe(2);
 			} else {
