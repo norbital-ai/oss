@@ -2,11 +2,16 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Option, Schema } from 'effect';
 import { DbError, type RawDb, type Rows, type Sql } from '@norbital-ai/host-api';
 import { LIMITS } from '../src/engine/contracts.ts';
-import { SqlReadCapture, TenantDb, type SqlReadCaptureService } from '../src/engine/db/tenant-db.ts';
+import {
+	SqlReadCapture,
+	TenantDb,
+	type SqlReadCaptureService
+} from '../src/engine/db/tenant-db.ts';
 import { Snapshot, StoredSnapshot } from '../src/engine/approvals/snapshot.ts';
 import { isComposable } from '../src/engine/query/reader.ts';
 import { digestOf, makeReadGuards } from '../src/engine/write/sql.ts';
 import { BoltError } from '../src/protocol/errors.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 
 const statement = (value: number): Sql => ({ text: 'SELECT $1::int AS value', params: [value] });
 const answer =
@@ -29,6 +34,54 @@ const finish = (crossing: { readonly finish: () => void }) =>
 	});
 
 describe('native read guards', () => {
+	it.live('evaluates each protected source once and fingerprints those same ordered rows', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const db = yield* TenantDb;
+				yield* db.write({ text: 'CREATE SEQUENCE read_guard_evaluations', params: [] });
+				const recorder = makeReadGuards('single-read');
+				const crossing = recorder.begin(new Set());
+				const counted = yield* crossing.capture.read(
+					[
+						{
+							text: "SELECT nextval('read_guard_evaluations')::int AS value FROM generate_series(1, 3)",
+							params: []
+						}
+					],
+					(statements) => Effect.forEach(statements, (sql) => db.write(sql))
+				);
+				expect(counted[0]?.rows).toEqual([{ value: 1 }, { value: 2 }, { value: 3 }]);
+				expect(
+					yield* db.value(Schema.Number, {
+						text: 'SELECT last_value::int FROM read_guard_evaluations',
+						params: []
+					})
+				).toBe(3);
+				for (const count of [3, 0]) {
+					const sql = {
+						text: 'SELECT n, NULL::text AS blank FROM generate_series(1, $1::int) n ORDER BY n DESC',
+						params: [count]
+					};
+					const read = recorder.begin(new Set());
+					const rows = yield* read.capture.read([sql], db.read);
+					expect(rows[0]?.rows).toEqual(
+						Array.from({ length: count }, (_, i) => ({ n: count - i, blank: null }))
+					);
+					yield* finish(read);
+					const fingerprint = recorder
+						.snapshot()
+						.guards.fingerprints.find((f) => f.sql.params[0] === count);
+					expect(fingerprint?.digest).toBe(
+						yield* db.value(Schema.String, {
+							text: `SELECT ${digestOf(sql.text)}`,
+							params: sql.params
+						})
+					);
+				}
+			})
+		).pipe(Effect.provide(TestDb.layer()))
+	);
+
 	it.effect(
 		'retains the first canonical SQL and parameters only after the whole crossing succeeds',
 		() =>
@@ -40,7 +93,7 @@ describe('native read guards', () => {
 					expect(statements).toHaveLength(1);
 					expect(statements.every(isComposable)).toBe(true);
 					expect(statements[0]?.text).toContain(`FROM (${sql.text}) x`);
-					expect(statements[0]?.text).toContain(digestOf(sql.text));
+					expect(statements[0]?.text.split(sql.text)).toHaveLength(2);
 					expect(statements[0]?.params).toEqual(sql.params);
 					return answer('first')(statements);
 				};
@@ -210,7 +263,9 @@ describe('native read guards', () => {
 					Array.from({ length: LIMITS.readGuards.count }, (_, i) => statement(i + 1)),
 					answer('overflow')
 				);
-				expect(yield* Effect.flip(finish(overflow))).toMatchObject({ code: 'read_budget_exceeded' });
+				expect(yield* Effect.flip(finish(overflow))).toMatchObject({
+					code: 'read_budget_exceeded'
+				});
 				expect(recorder.snapshot()).toEqual(before);
 			})
 	);
@@ -234,7 +289,9 @@ describe('native read guards', () => {
 					[{ text: sql.text, params: ['界'.repeat(Math.floor(LIMITS.readGuards.bytes / 3))] }],
 					answer('overflow')
 				);
-				expect(yield* Effect.flip(finish(overflow))).toMatchObject({ code: 'read_budget_exceeded' });
+				expect(yield* Effect.flip(finish(overflow))).toMatchObject({
+					code: 'read_budget_exceeded'
+				});
 				expect(recorder.snapshot()).toEqual(before);
 			})
 	);

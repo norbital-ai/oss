@@ -637,15 +637,15 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 	return c.sql(
 		// the row images aggregate as json text, a copy of their bytes: a jsonb aggregate holds every row as a tree
 		`${result}, (SELECT coalesce(json_agg(x.v ORDER BY x.k, x.ord), '[]'::json) FROM (SELECT 0 AS k, 0::bigint AS ord,
-	jsonb_build_object('model', c, 'id', id, 'op', op, 'revision', revision, 'transaction', pg_current_xact_id()::text,
+	json_build_object('model', c, 'id', id, 'op', op, 'revision', revision, 'transaction', pg_current_xact_id()::text,
 	'old', ${storedImageSql(cat, tables, 'o')}, 'new', ${storedImageSql(cat, tables, 'n')}, 'cause', cause) AS v FROM allp
-	UNION ALL SELECT 1, e.ord, e.v FROM jsonb_array_elements(${captureRows(c)}) WITH ORDINALITY AS e(v, ord)) x) AS captured, ${next_due(c)} AS next_due,
+	UNION ALL SELECT 1, e.ord, e.v::json FROM jsonb_array_elements(${captureRows(c)}) WITH ORDINALITY AS e(v, ord)) x) AS captured, ${next_due(c)} AS next_due,
 	(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM allp WHERE c = 'sys_integration'
 	AND (o IS NULL OR n IS NULL OR (o->'configuration', o->'active', o->'integration', o->'envoy', o->'import_start')
 	IS DISTINCT FROM (n->'configuration', n->'active', n->'integration', n->'envoy', n->'import_start'))) AS changed_instances, ${x.readGuards === undefined ? 'false' : GATED} AS read_guards_applied${x.approvalDecision !== undefined ? ', (SELECT count(*) FROM up)::int AS approval_decided' : ''}${
 			audit === undefined
 				? ''
-				: `, json_build_object('at', ${now}::text, 'committed_at', ${c.shared('audit_at', audit.event.at)}::timestamptz::text, 'records', ${historied.length === 0 ? "'[]'::json" : `(SELECT coalesce(json_agg(jsonb_build_object('model', x.c, 'id', x.id, 'revision', x.revision, 'op', x.op, 'cause', x.cause,
+				: `, json_build_object('at', ${now}::text, 'committed_at', ${c.shared('audit_at', audit.event.at)}::timestamptz::text, 'records', ${historied.length === 0 ? "'[]'::json" : `(SELECT coalesce(json_agg(json_build_object('model', x.c, 'id', x.id, 'revision', x.revision, 'op', x.op, 'cause', x.cause,
 	'old', x.o - ${UNHISTORIED}, 'new', x.n - ${UNHISTORIED}) ORDER BY x.c, x.id, x.revision), '[]'::json) FROM history_source x)`}) AS audited`
 		}`
 	);

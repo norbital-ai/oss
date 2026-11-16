@@ -341,7 +341,7 @@ const FingerprintRow = Schema.Union([
 	Schema.Struct({ fp: Schema.Literal(false), r: Schema.Record(Schema.String, Schema.Json) }),
 	Schema.Struct({ fp: Schema.Literal(true), r: Schema.String })
 ]);
-/** Rows and membership are fingerprinted in their native statement's snapshot, before any decoding crossing. */
+/** Evaluate and encode the rows once for both the response and its fingerprint, in one native snapshot. */
 const readFingerprints = Effect.fn('Bolt.readFingerprints')(function* (
 	statements: readonly Sql[],
 	execute: RawDb['read']
@@ -353,8 +353,9 @@ const readFingerprints = Effect.fn('Bolt.readFingerprints')(function* (
 	const answers = yield* execute(
 		originals.map((s) =>
 			composable({
-				text: `SELECT false AS fp, to_jsonb(x) AS r FROM (${s.text}) x
-UNION ALL SELECT true, to_jsonb(${digestOf(s.text)})`,
+				text: `WITH __bolt_read AS MATERIALIZED (SELECT to_jsonb(x) AS r FROM (${s.text}) x)
+SELECT false AS fp, r FROM __bolt_read
+UNION ALL SELECT true, to_jsonb(md5(coalesce(string_agg(r::text, E'\\n'), ''))) FROM __bolt_read`,
 				params: s.params
 			})
 		)
