@@ -24,6 +24,8 @@ export interface NavItem {
 	readonly pages?: readonly NavItem[];
 	/** The icon tile's hue (ui's `FEATURE_COLORS`): an application wears `customApps`, for applications. */
 	readonly feature_color?: FeatureColorKey;
+	/** A page’s declared navigation section, translated for display. */
+	readonly section?: string;
 }
 export interface NavModel {
 	/** The switcher's workspace: its handle, name and logo (the host's brand icon), else initials; `others` are its options. */
@@ -66,6 +68,7 @@ function item(n: NavNode, path: string, t: Translate): NavItem {
 					key: `${n.name}/${p.name}`,
 					label: t(p.title),
 					icon: p.icon ?? null,
+					...(p.section === undefined ? {} : { section: t(p.section) }),
 					href: p.href,
 					active: p.href === open
 				}))

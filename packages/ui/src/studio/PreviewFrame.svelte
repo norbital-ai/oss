@@ -10,7 +10,7 @@
 	buttons, and under a coarse pointer the header wraps. Studio's preview pane and the agent panel both use it.
 -->
 <script lang="ts">
-	import { Button, Icon, Popover, Spinner, TabStrip } from '../primitives/index.js';
+	import { Button, Dialog, Icon, Popover, Spinner, TabStrip } from '../primitives/index.js';
 	import { Cluster, Inline, Stack } from '../layout/index.js';
 	import { Option, Schema } from 'effect';
 	import { watch } from 'runed';
@@ -29,6 +29,7 @@
 		status,
 		details,
 		menu,
+		expanded = $bindable(false),
 		on_close,
 		t = (key: string) => key
 	}: {
@@ -48,6 +49,8 @@
 		details?: Snippet;
 		/** The caller's actions (rebuild, live data, exit): behind …; each receives a closer for the menu. */
 		menu?: Snippet<[() => void]>;
+		/** Expand the same interactive frame into a modal, preserving its page state. */
+		expanded?: boolean;
 		/** Shows a Close button that calls it. */
 		on_close?: () => void;
 		/** Translates the frame's English strings (keys are the English text). Default: identity. */
@@ -142,6 +145,15 @@
 	);
 	const waiting = $derived(loaded !== loading);
 	let menuOpen = $state(false);
+	let previewShell = $state<HTMLDivElement | null>(null);
+	let expandButton = $state<HTMLButtonElement | HTMLAnchorElement | null>(null);
+	// The top layer keeps this same iframe alive while the native dialog owns focus and dismissal.
+	$effect(() => {
+		if (expanded && previewShell !== null && !previewShell.matches(':popover-open')) {
+			previewShell.showPopover();
+			previewShell.focus();
+		}
+	});
 	// the room the frame has; the page keeps its size and is drawn at `zoom` to fit it
 	let roomWidth = $state(0),
 		roomHeight = $state(0);
@@ -204,6 +216,20 @@
 	const HANDLE = 'absolute touch-none bg-border/0 transition-colors hover:bg-primary/30';
 </script>
 
+<Dialog.Root bind:open={expanded}>
+	<Dialog.ContentPrimitive force_mount prevent_scroll={expanded} on_close_auto_focus={(event) => {
+		event.preventDefault();
+		expandButton?.focus();
+	}}>
+		{#snippet child({ props })}
+		<div {...props} bind:this={previewShell} popover={expanded ? 'manual' : undefined}
+			role={expanded ? 'dialog' : undefined} aria-modal={expanded ? true : undefined}
+			data-preview-expanded={expanded || undefined}
+			class={expanded
+				? 'preview-frame fixed inset-4 z-50 m-0 flex min-h-0 min-w-0 max-w-none flex-col overflow-hidden rounded-xl border border-border bg-popover p-0 shadow-deep'
+				: 'preview-frame flex min-h-0 min-w-0 flex-1 flex-col'}>
+		<Dialog.Title class="sr-only">{title}</Dialog.Title>
+		<Dialog.Description class="sr-only">{t('Interactive preview. Close the expanded view to return to your work.')}</Dialog.Description>
 <Stack gap="none" size="fill">
 	<TabStrip
 		class="px-4"
@@ -298,6 +324,12 @@
 				<Icon name="lucide:rotate-cw" class="size-3.5" />
 			</Button>
 		{:else}<span class="flex-1"></span>{/if}
+		<Button bind:ref={expandButton} variant="ghost" class="size-7 shrink-0 p-0"
+			aria-label={t(expanded ? 'Collapse preview' : 'Expand preview')}
+			title={t(expanded ? 'Collapse preview' : 'Expand preview')}
+			onclick={() => (expanded = !expanded)}>
+			<Icon name={expanded ? 'lucide:minimize-2' : 'lucide:maximize-2'} class="size-3.5" />
+		</Button>
 		{#if on_close !== undefined}
 			<Button
 				variant="ghost"
@@ -420,3 +452,13 @@
 		{/if}
 	</div>
 </Stack>
+		</div>
+		{/snippet}
+	</Dialog.ContentPrimitive>
+</Dialog.Root>
+
+<style>
+	.preview-frame::backdrop {
+		background: color-mix(in oklab, var(--color-background) 80%, transparent);
+	}
+</style>

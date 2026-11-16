@@ -5,7 +5,7 @@
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
 	import { fork, observe_once } from '@norbital-ai/ui/effect';
-	import { Alert, Button, Icon } from '@norbital-ai/ui';
+	import { Alert, Button, Icon, PreviewFrame } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { impact_lines, step_name } from '@norbital-ai/host-api';
 	import type { AgentRow } from '../../protocol/wire.ts';
@@ -34,6 +34,31 @@
 	);
 	const studio = observe_once(() => api.studio());
 	const held = $derived(studio.current?.approvals?.find((one) => one.id === id));
+	const change = $derived.by(() => {
+		const op = held?.op;
+		return op?.op === 'change.merge' ? studio.current?.change_sets?.find((change) => change.id === op.id) : undefined;
+	});
+	const preview = $derived(change?.preview);
+	let previewing = $state(false);
+	const showPreview = Effect.fn('StudioApproval.preview')(function* () {
+		const request = held;
+		if (request?.op.op !== 'change.merge' || busy) return;
+		const changeId = request.op.id;
+		busy = true;
+		failed = null;
+		yield* Effect.gen(function* () {
+			if (preview?.url == null || preview.stale || preview.shelved) {
+				yield* api.studio_run({ op: 'preview', id: changeId });
+				yield* studio.refetch();
+			}
+			if (change?.preview?.url == null || change.preview.stale || change.preview.commit !== request.head) {
+				failed = t('This request has no current preview. Ask for a new merge request.');
+				return;
+			}
+			previewing = true;
+		}).pipe(Effect.catch((cause) => Effect.sync(() => { failed = cause.message; })),
+			Effect.ensuring(Effect.sync(() => { busy = false; })));
+	});
 	// the checkpoint's time from Studio's own record, in the workspace's zone: never the agent's wording of it
 	const when = (at: string) =>
 		date_time(at, undefined, zone === undefined ? {} : { timeZone: zone });
@@ -176,11 +201,17 @@
 				<p class="flex min-h-8 items-center text-sm text-muted-foreground" role="status">{t('Changes rejected.')}</p>
 			{:else if held !== undefined}
 				<Inline gap="xs" align="center">
-					<Button disabled={busy} onclick={() => fork(decide('approved'))}>{t(busy ? 'Working…' : step.tool?.studio === 'rollback' ? 'Restore version' : 'Apply changes')}</Button>
-					<Button variant="outline" disabled={busy} onclick={() => fork(decide('rejected'))}>{t('Cancel')}</Button>
+					{#if held.op.op === 'change.merge'}<Button variant="outline" disabled={busy} onclick={() => fork(showPreview())}>{t('Preview')}</Button>{/if}
+					<Button disabled={busy} onclick={() => fork(decide('approved'))}>{t(busy ? 'Working…' : step.tool?.studio === 'rollback' ? 'Restore version' : 'Merge')}</Button>
+					<Button variant="ghost" disabled={busy} onclick={() => fork(decide('rejected'))}>{t(held.op.op === 'change.merge' ? 'Deny' : 'Cancel')}</Button>
 				</Inline>
 			{/if}
 			{#if failed !== null}<p class="mt-2 text-sm text-destructive" role="alert">{failed}</p>{/if}
 		</div>
 	</section>
+{/if}
+
+{#if previewing && preview?.url != null}
+	<PreviewFrame src={preview.url} version={preview.artifact} label={change?.title}
+		{t} bind:expanded={previewing} on_close={() => (previewing = false)} />
 {/if}

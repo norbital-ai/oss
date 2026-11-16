@@ -1225,6 +1225,32 @@ describe('sidebar model', () => {
 			['payroll/compliance', false]
 		]);
 	});
+	it('keeps translated page sections and direct links in the navigation model', () => {
+		const boot = {
+			...bootOf(member(['sales'])),
+			nav: [
+				{
+					kind: 'app' as const,
+					name: 'desk',
+					title: 'Desk',
+					description: '',
+					icon: 'lucide:inbox',
+					href: '/app/desk/inbox',
+					pages: [
+						{ name: 'inbox', title: 'Inbox', section: 'work', href: '/app/desk/inbox' },
+						{ name: 'terms', title: 'Terms', section: 'setup', href: '/app/desk/terms' },
+						{ name: 'help', title: 'Help', href: '/app/desk/help' }
+					]
+				}
+			]
+		};
+		const app = active_app(navigation_model(boot, '/app/desk/terms', (key) => `translated:${key}`));
+		expect(app?.pages?.map(({ section, href, active }) => ({ section, href, active }))).toEqual([
+			{ section: 'translated:work', href: '/app/desk/inbox', active: false },
+			{ section: 'translated:setup', href: '/app/desk/terms', active: true },
+			{ section: undefined, href: '/app/desk/help', active: false }
+		]);
+	});
 	it("kiosks sit in the ellipsis menu's Kiosks group: members ones by capability, public ones for everyone", () => {
 		expect(kiosk_nav(m, member([])).map((k) => k.name)).toEqual(['lobby']);
 		expect(kiosk_nav(m, member([], {}, true)).map((k) => k.name)).toEqual(['clock', 'lobby']);

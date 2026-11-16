@@ -7,7 +7,7 @@ import { equal_json } from '@norbital-ai/store/kind';
 import type { Json } from '../decl/values.ts';
 import type { InputKind, ValueOf } from '../decl/fields.ts';
 import type { ModelName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
-import { create_bolt, page_live_mode, type BoltConfig } from '../page/bolt.ts';
+import { create_bolt, page_live_mode, type BoltConfig, type SyncStatus } from '../page/bolt.ts';
 import { file_ref } from '../page/file-ref.ts';
 import { toast, type UiContext } from '@norbital-ai/ui';
 import { run } from '@norbital-ai/ui/effect';
@@ -46,6 +46,26 @@ import { ProtocolFailed, TransportFailed } from '../decl/errors/browser.ts';
 import { ActReply, WireError, type PageResult } from '../protocol/schema.ts';
 import { AuditPage, AuditRecord, StudioFile, StudioView, uuidv7 } from '@norbital-ai/host-api';
 import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
+
+/** Recheck the served client after any reconnect, including a browser that missed the cutover's close frame. */
+export const follow_client = Effect.fn('shell.follow_client')(function* (
+	states: Stream.Stream<SyncStatus>,
+	read: Effect.Effect<Pick<ShellBoot, 'client'>, ShellError>,
+	current: () => ShellBoot['client'],
+	changed: Effect.Effect<void>
+) {
+	let connected = false, lapsed = false;
+	yield* Stream.runForEach(states, (state) => Effect.gen(function* () {
+		if (state === 'closed' || (connected && state !== 'live')) lapsed = true;
+		if (state !== 'live') return;
+		connected = true;
+		if (!lapsed) return;
+		lapsed = false;
+		const next = yield* Effect.option(read);
+		if (Option.isSome(next) && next.value.client !== undefined && next.value.client === current()) return;
+		yield* changed;
+	}));
+});
 
 const requestFailure = (status: number, workspace?: typeof ShellWorkspace.Type): ShellError =>
 	new ShellError({

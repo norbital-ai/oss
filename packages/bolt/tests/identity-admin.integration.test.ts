@@ -3,7 +3,7 @@
 // when the host binds the port, and handed to the port by its platform run).
 import { describe, expect, layer } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import { Clock, Context, Effect, Layer, Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Logger, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
@@ -466,6 +466,8 @@ layer(AdministrationFixtureLive)((it) => {
 					const { h, founder, as, one } = yield* AdministrationFixture;
 					const auth = yield* as(founder);
 					const delivered: string[] = [];
+					const diagnostics: string[] = [];
+					const logger = Logger.layer([Logger.make(({ message }) => diagnostics.push(JSON.stringify(message)))]);
 					const mail: TransportPort = {
 						async send(_kind, message) {
 							const { to } = Schema.decodeUnknownSync(Mail)(message);
@@ -478,8 +480,13 @@ layer(AdministrationFixtureLive)((it) => {
 					const sent = yield* inviteMany(host, m, auth, [
 						{ email: 'failed@example.com' },
 						{ email: 'delivered@example.com' }
-					]);
+					]).pipe(Effect.provide(logger));
 					expect(sent).toMatchObject({ ids: expect.any(Array) });
+					expect(diagnostics).toHaveLength(1);
+					expect(diagnostics[0]).toContain('Provider failed');
+					expect(diagnostics[0]).toContain('email');
+					expect(diagnostics[0]).not.toContain('failed@example.com');
+					expect(diagnostics[0]).not.toContain('/invite/');
 					expect(sent.failed).toEqual([sent.ids[0]]);
 					expect(
 						yield* one(

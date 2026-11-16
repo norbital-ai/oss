@@ -1,6 +1,6 @@
 /// <reference types="@vitest/browser-playwright" />
 import { expect, it } from '@effect/vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { mount, tick, unmount } from 'svelte';
 import { PreviewFrame, TestResults } from '@norbital-ai/ui';
 import type { StudioTestRun } from '@norbital-ai/host-api';
@@ -26,6 +26,39 @@ const failed: StudioTestRun = {
 		}
 	]
 };
+it('expands into a modal and returns without reloading the interactive iframe', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	target.style.height = '500px';
+	const view = mount(PreviewFrame, { target, props: { src: 'about:blank' } });
+	try {
+		await tick();
+		const frame = target.querySelector('iframe');
+		await expect.poll(() => target.querySelector('[data-preview-loading]')).toBeNull();
+		const previewDocument = frame?.contentDocument;
+		if (previewDocument == null || frame === null) throw new Error('Missing preview document');
+		const input = previewDocument.createElement('input');
+		input.value = 'Unsaved preview work';
+		previewDocument.body.append(input);
+		const window = frame.contentWindow;
+		await page.getByRole('button', { name: 'Expand preview', exact: true }).click();
+		await expect.element(page.getByRole('dialog', { name: 'Preview', exact: true })).toBeVisible();
+		const modal = target.querySelector<HTMLElement>('[data-preview-expanded]');
+		if (modal === null) throw new Error('Missing expanded preview');
+		expect(modal.matches(':popover-open')).toBe(true);
+		expect(modal.getBoundingClientRect().width).toBeGreaterThan(innerWidth * 0.9);
+		expect(frame.contentWindow).toBe(window);
+		expect(input.isConnected).toBe(true);
+		await userEvent.keyboard('{Escape}');
+		await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+		expect(target.querySelector('iframe')).toBe(frame);
+		expect(frame.contentWindow).toBe(window);
+		expect(input.value).toBe('Unsaved preview work');
+		expect(input.isConnected).toBe(true);
+	} finally {
+		await unmount(view);
+		target.remove();
+	}
+});
 it('the preview Tests tab shows parsed failures and preserves the preview iframe', async () => {
 	const target = document.body.appendChild(document.createElement('div'));
 	target.style.height = '700px';

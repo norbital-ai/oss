@@ -819,6 +819,12 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Reconnecting: '重新连接中',
 	'Connection closed': '连接已关闭',
 	Pages: '页面',
+	Sections: '分组',
+	Deny: '拒绝',
+	'Expand preview': '展开预览',
+	'Collapse preview': '收起预览',
+	'Interactive preview. Close the expanded view to return to your work.': '可交互预览。关闭展开视图即可返回工作。',
+	'This request has no current preview. Ask for a new merge request.': '此请求没有当前版本的预览，请提交新的合并请求。',
 	'Page scope': '页面范围',
 	// system models in ui's Table (runs, approvals, notices, people, teams, keys, integrations, secrets)
 	Action: '操作',

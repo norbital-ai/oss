@@ -153,10 +153,12 @@ const deliver = Effect.fn('Bolt.deliver')(function* (
 							signal
 						)
 					);
-		if (Result.isFailure(sent))
+		if (Result.isFailure(sent)) {
+			yield* Effect.logWarning('Invitation delivery failed', { channel: a.kind, reason: sent.failure });
 			return yield* Effect.fail(
 				refuse('upstream', 'The invitation could not be delivered. Resend it from Invitations.')
 			);
+		}
 	}
 });
 /** The addresses an invitation names, parsed; `null` when one is malformed or there is none. */

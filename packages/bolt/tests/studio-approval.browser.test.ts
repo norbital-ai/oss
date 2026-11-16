@@ -7,7 +7,7 @@ import { page, userEvent } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import StudioApproval from '../src/shell/agent/StudioApproval.svelte';
 import { shell_api } from '../src/shell/runtime.ts';
-import type { StudioChangeSet, StudioView } from '@norbital-ai/host-api';
+import type { StudioChangeSet, StudioOp, StudioView } from '@norbital-ai/host-api';
 import type { AgentRow } from '../src/protocol/schema.ts';
 import './support/shell.css';
 
@@ -77,7 +77,7 @@ const decided = async (after: StudioChangeSet, words: string) => {
 		}
 	});
 	try {
-		await page.getByRole('button', { name: 'Apply changes', exact: true }).click();
+		await page.getByRole('button', { name: 'Merge', exact: true }).click();
 		await expect.element(page.getByText('Applying changes… You can keep using the app.')).toBeVisible();
 		await runtime.runPromise(TestClock.adjust('2 seconds'));
 		await expect.poll(() => target.textContent).toContain(words);
@@ -100,6 +100,35 @@ it('a merge that fails says why on the card', () =>
 		'The update failed: Tests failed'
 	));
 
+it('offers Preview, Merge and Deny, and previewing does not decide the request', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const dispose = mount_edge(ManagedRuntime.make(TestClock.layer()));
+	const requests: unknown[] = [];
+	const change = { ...open, preview: { url: 'about:blank', commit: 'head', artifact: 'bundle', stale: false } };
+	const shown = mount(StudioApproval, { target, props: {
+		t: (key: string) => key, step,
+		api: { ...shell_api(async () => Response.json({ value: null })),
+			studio: () => Effect.succeed(view(change, held)),
+			studio_run: (op: StudioOp) => Effect.sync(() => { requests.push(op); return view(change, held); })
+		}
+	} });
+	try {
+		await expect.element(page.getByRole('button', { name: 'Merge', exact: true })).toBeVisible();
+		await expect.element(page.getByRole('button', { name: 'Deny', exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'Preview', exact: true }).click();
+		await expect.element(page.getByRole('dialog', { name: 'Preview', exact: true })).toBeVisible();
+		expect(target.querySelector('iframe')?.getAttribute('src')).toBe('about:blank');
+		expect(requests).toEqual([]);
+		await page.getByRole('button', { name: 'Close preview', exact: true }).click();
+		await page.getByRole('button', { name: 'Deny', exact: true }).click();
+		await expect.poll(() => requests).toEqual([{ op: 'approval.decide', id: 'ask', kind: 'rejected' }]);
+	} finally {
+		await unmount(shown);
+		await dispose();
+		target.remove();
+	}
+});
+
 
 it('discloses long data changes inside a bounded card while keeping its decision reachable', async () => {
 	const previous = { width: innerWidth, height: innerHeight };
@@ -121,7 +150,7 @@ it('discloses long data changes inside a bounded card while keeping its decision
 		}
 	} });
 	try {
-		await expect.element(page.getByRole('button', { name: 'Apply changes', exact: true })).toBeVisible();
+		await expect.element(page.getByRole('button', { name: 'Merge', exact: true })).toBeVisible();
 		const card = target.querySelector<HTMLElement>('[data-approval="ask"]');
 		const details = target.querySelector<HTMLElement>('[aria-label="Change details"]');
 		if (card === null || details === null) throw new Error('Missing approval card');
@@ -136,7 +165,7 @@ it('discloses long data changes inside a bounded card while keeping its decision
 		await userEvent.keyboard('{PageDown}');
 		await expect.poll(() => details.scrollTop).toBeGreaterThan(scroll_top);
 		expect(target.querySelectorAll('[data-role="impact"] li')).toHaveLength(45);
-		const cancel = page.getByRole('button', { name: 'Cancel', exact: true });
+		const cancel = page.getByRole('button', { name: 'Deny', exact: true });
 		await expect.element(cancel).toBeVisible();
 		expect(cancel.element().getBoundingClientRect().bottom).toBeLessThanOrEqual(card.getBoundingClientRect().bottom);
 		await cancel.click();

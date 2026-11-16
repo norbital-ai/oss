@@ -67,6 +67,7 @@
 		challenge_queue,
 		shell_api,
 		shell_bolt,
+		follow_client,
 		type AgentRequest,
 		type ShellBolt,
 		page_context,
@@ -494,29 +495,16 @@
 						store: (body) => api.push(body)
 					}).pipe(Effect.provideService(Scope.Scope, scope))
 				: null;
-			let lapsed = false;
-			yield* client.sync.pipe(
-				Stream.runForEach((state) =>
-					Effect.gen(function* () {
-						sync = state;
-						if (state === 'closed') lapsed = true;
-						if (state !== 'live' || !lapsed) return;
-						lapsed = false;
-						// a release closed the link and it is back: only another client needs a reload
-						const next = yield* api.boot(publicApp, kioskRoute ?? undefined).pipe(Effect.option);
-						if (
-							Option.isSome(next) &&
-							next.value.client !== undefined &&
-							next.value.client === boot?.client
-						)
-							return;
-						const leaving = new Event('beforeunload', { cancelable: true });
-						window.dispatchEvent(leaving);
-						if (!leaving.defaultPrevented) location.reload();
-					})
-				),
-				Effect.forkIn(scope)
-			);
+			yield* follow_client(
+				client.sync.pipe(Stream.tap((state) => Effect.sync(() => { sync = state; }))),
+				api.boot(publicApp, kioskRoute ?? undefined),
+				() => boot?.client,
+				Effect.sync(() => {
+					const leaving = new Event('beforeunload', { cancelable: true });
+					window.dispatchEvent(leaving);
+					if (!leaving.defaultPrevented) location.reload();
+				})
+			).pipe(Effect.forkIn(scope));
 		}).pipe(
 			// a malformed host answer while booting is the same unexpected-response failure the shell API reports
 			Effect.catchTag('ProtocolFailed', () =>
@@ -674,12 +662,28 @@
 	const strip = $derived(
 		current.kind === 'page' && !portal && boot?.visitor === null ? (app?.pages ?? null) : null
 	);
+	const pageSections = $derived.by(() => {
+		if (!strip?.some((page) => page.section !== undefined)) return [];
+		const sections = new Map<string, { name: string; title: string; href: string }>();
+		for (const page of strip) {
+			const name = page.section ?? '';
+			if (!sections.has(name))
+				sections.set(name, { name, title: page.section ?? t('Pages'), href: based(page.href) });
+		}
+		return [...sections.values()];
+	});
+	const pageSection = $derived(strip?.find((page) => page.active)?.section ?? '');
+	const pageStrip = $derived(
+		pageSections.length === 0
+			? strip
+			: strip?.filter((page) => (page.section ?? '') === pageSection)
+	);
 	setContext(TAB_LEVEL, {
 		get level() {
-			return strip === null ? undefined : 1;
+			return strip === null ? undefined : pageSections.length === 0 ? 1 : 2;
 		},
 		get shown() {
-			return strip?.map((p) => p.label) ?? [];
+			return pageStrip?.map((p) => p.label) ?? [];
 		}
 	});
 	const mobileTitle = $derived(
@@ -808,12 +812,15 @@
 			<AppHeader {...hero} compact={narrow.current} actions_label={t('Page scope')} />
 		{/if}
 		{#if strip !== null}
-			<div class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
+			<div class={cn(INSET_X_CLASS, 'flex shrink-0 flex-col gap-1 pt-3')}>
+				{#if pageSections.length > 0}
+					<TabStrip label={t('Sections')} level={1} value={pageSection} items={pageSections} />
+				{/if}
 				<TabStrip
 					label={t('Pages')}
-					level={1}
+					level={pageSections.length === 0 ? 1 : 2}
 					value={strip.find((p) => p.active)?.key}
-					items={strip.map((p) => ({
+					items={(pageStrip ?? []).map((p) => ({
 						name: p.key,
 						title: p.label,
 						href: based(p.href),
