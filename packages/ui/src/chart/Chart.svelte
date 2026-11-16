@@ -71,12 +71,19 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 	// Bottom holds the x tick labels (32) and the legend beneath them (32).
 	const numericPadding = { top: 12, right: 16, bottom: 64, left: 64 };
 	// Band/point x scales show every category by default; thin them to one label per 80px like layerchart's continuous axes.
-	const xAxis = { tickSpacing: 80 };
+	const axis = {
+		stroke: 'var(--border)',
+		fill: 'var(--muted-foreground)',
+		tickLabelProps: { stroke: 'none', strokeWidth: 0 }
+	};
+	const xAxis = { ...axis, tickSpacing: 80 };
 	let plotWidth = $state(Infinity);
 	const ys = $derived(typeof y === 'string' ? [y] : [...y]);
 	// a model chart's `y` names a measure the aggregate answers, never a bare field
 	const unmeasured = $derived(
-		typeof of === 'string' ? ys.find((k) => k !== 'count' && !/^(sum|avg|min|max)\.\w+$/.test(k)) : undefined
+		typeof of === 'string'
+			? ys.find((k) => k !== 'count' && !/^(sum|avg|min|max)\.\w+$/.test(k))
+			: undefined
 	);
 	const read: ReadState<SourceRows> = $derived(
 		unmeasured !== undefined
@@ -125,7 +132,10 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 					{#if kind === 'donut'}
 						<div class="min-h-0 flex-1">
 							<PieChart
-								data={data.map((d) => ({ key: String(d[x]), value: first_y === undefined ? 0 : Number(d[first_y] ?? 0) }))}
+								data={data.map((d) => ({
+									key: String(d[x]),
+									value: first_y === undefined ? 0 : Number(d[first_y] ?? 0)
+								}))}
 								key="key"
 								value="value"
 								label="key"
@@ -139,7 +149,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 									{x}
 									padding={numericPadding}
 									series={lines}
-									props={{ xAxis }}
+									props={{ xAxis, yAxis: axis }}
 									legend
 								/>
 							{:else if kind === 'bar'}<BarChart
@@ -161,7 +171,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 										: numericPadding}
 									series={lines}
 									seriesLayout={stack ? 'stack' : 'group'}
-									props={{ xAxis }}
+									props={{ xAxis, yAxis: axis, bars: { strokeWidth: 0 } }}
 									legend
 								/>
 							{:else if kind === 'line'}<LineChart
@@ -171,6 +181,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 									series={lines}
 									props={{
 										xAxis,
+										yAxis: axis,
 										spline: { curve: interpolation === 'step' ? curveStepAfter : undefined }
 									}}
 									legend
@@ -181,7 +192,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 									padding={numericPadding}
 									series={lines}
 									seriesLayout={stack ? 'stack' : 'overlap'}
-									props={{ xAxis }}
+									props={{ xAxis, yAxis: axis }}
 									legend
 								/>{/if}
 						</div>

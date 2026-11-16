@@ -32,6 +32,7 @@ Classify the value before choosing a kind. Value types come from the Bolt value 
 ## Formatting
 
 - Use Effect DateTime and Duration with authored calendar rules. No local regexes or permissive parsing: reject unzoned instants and daylight-saving-gap wall times at the boundary.
+- Use the shared `TimeInput` for single days/instants/times and `of="month"` for a reporting month. Use `TimeRangeInput` for a period; month precision selects whole inclusive months. Do not replace these controls with raw HTML date/month inputs or a second calendar library. Associate custom header controls with a visible label and stable id.
 - Prefer native field controls. A `date` never shifts; an `instant` is edited in the configured zone and sent as UTC.
 - A custom timestamp display receives the zone through `ctx.tz` or a narrower prop and passes it to the formatter. Locale alone does not choose a zone.
 - Use one zone for grouping, defaults, labels and messages. Label an explicitly selected event zone.

@@ -79,6 +79,7 @@ row contract so existing authored handlers can still read fields outside the dis
 - A field never appears in two sections. Repeated values have one add/edit path. Show derived results as readonly.
 - Tabs are for distinct tasks, not length. Never nest accordions.
 - `Section`: give a stable `name` (titles change with locale); `default_open={false}` marks secondary, with a useful `summary`. A collapsed body stays mounted, validates and saves; a section with an error opens itself.
+- Author meaningful native `RecordShell sections` for long create/edit/read forms; do not leave a large field list ungrouped. Reuse the same section paths across modes, keep related short fields on one row, and collapse optional notes/evidence without hiding required choices. Review the open create form as well as a saved record in both themes.
 - Generated record views take `sections`; fields no section lists follow in one group, so nothing disappears. `fields` on create offers fields beyond `values`; on update it restricts and orders.
 
 ## Prefill and disclosure
