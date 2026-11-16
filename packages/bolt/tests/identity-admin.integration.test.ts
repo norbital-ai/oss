@@ -133,10 +133,11 @@ const AdministrationFixtureLive = Layer.effect(AdministrationFixture, fixture).p
 	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer))
 );
 
-layer(AdministrationFixtureLive)((it) => {
+layer(AdministrationFixtureLive)('identity administration', (it) => {
 	it.effect('personal names stay self-scoped and only admins can rename the workspace', () =>
 		Effect.gen(function* () {
-			const { db, h, founder, as, staff } = yield* AdministrationFixture;
+			const { db, h, founder, as } = yield* AdministrationFixture;
+			const staff = randomUUID();
 			yield* db.write({
 				text: "INSERT INTO sys_user (id, name, kind) VALUES ($1, 'Member', 'staff')",
 				params: [staff]
