@@ -577,11 +577,10 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 	if (erasures.length > 0 && hasWrites) erasePieces(c, erasures, audit === undefined ? null : operation());
 	c.cte('effectp', 'SELECT * FROM allp WHERE NOT erased');
 	// carried rows are storage only: no model effect, write event or wake (they still reach live readers and syncs)
-	const carried = [...groups.values()].filter((group) => group.carried);
+	const carried = x.writes.filter((write) => write.carried === true);
 	const own = carried.length === 0
 		? 'effectp'
-		: c.cte('ownp', `SELECT * FROM effectp x WHERE NOT EXISTS (SELECT 1 FROM input i WHERE i.j->>'id' = x.id AND (${carried
-			.map((group) => `(i.g = ${group.g} AND x.c = ${literal(group.table)})`).join(' OR ')}))`);
+		: c.cte('ownp', `SELECT * FROM effectp x WHERE NOT (${c.p(Object.fromEntries(carried.map((write) => [`${write.model}/${write.id}`, true])))}::jsonb ? (x.c || '/' || x.id))`);
 	if (x.rollback !== true && x.approvalDecision?.stands !== false) {
 		const requests = [
 			...(hit === null ? [] : [`SELECT id,records FROM ${hit}`]),

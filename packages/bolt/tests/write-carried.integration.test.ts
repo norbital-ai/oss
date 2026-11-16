@@ -119,6 +119,18 @@ describe('a write that carries other models', () => {
 		})
 	);
 
+	it.live('a split bulk write stores every carried row without running its callback', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const { run, names, commits } = yield* setup;
+			const rows = Array.from({ length: 1_100 }, (_, i) => ({ title: `entry ${String(i).padStart(4, '0')}` }));
+			carry = (inputs) => ({ with: { tags: { create: inputs.map((row) => ({ name: `for ${String(row['title'])}` })) } } });
+			const records = committed(yield* run({ verb: 'create', input: rows }));
+			expect(commits()).toBe(1);
+			expect(records).toHaveLength(rows.length * 2);
+			expect(yield* names).toEqual(rows.map((row) => `for ${row.title}`));
+		}))
+	);
+
 	it.effect('reads the id each created row will have', () =>
 		Effect.gen(function* () {
 			const { run, names, order } = yield* setup;
