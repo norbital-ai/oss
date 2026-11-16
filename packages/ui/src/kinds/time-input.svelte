@@ -1,10 +1,10 @@
 <!--
 @component
-Edits dates, instants or clocks, singly or as an array.
+Edits dates, instants, clocks or reporting months, singly or as an array.
 
 @example
 ```svelte
-<TimeInput {ctx} of="date" precision="month" value={from} on_change={(next) => (from = next)} />
+<TimeInput {ctx} of="date" precision="month" value={from} on_change={(next: string | null) => (from = next)} />
 ```
 -->
 <script lang="ts" module>
@@ -12,10 +12,7 @@ Edits dates, instants or clocks, singly or as an array.
 	import type { DateInputProps } from './date-input.svelte';
 	/** A date, instant or clock value as text, an empty value, or an ordered array of those values. */
 	export type TimeValue = string | null | readonly (string | null)[];
-	type Common = Omit<DateInputProps, 'value' | 'on_change' | 'of'> & {
-		/** `date` → `YYYY-MM-DD`; `instant` → ISO UTC; `time` → `HH:MM`. */
-		of?: 'date' | 'instant' | 'time';
-	};
+	type Common = Omit<DateInputProps, 'value' | 'on_change'>;
 	/** Date/instant/time editor options with a value and change callback of matching scalar or array shape; array mode offers adding and removing entries. */
 	export type TimeInputProps<V extends TimeValue = TimeValue> = Common &
 		(V extends readonly (string | null)[]
