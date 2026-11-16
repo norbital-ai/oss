@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext } from 'svelte';
+	import { getContext, onDestroy } from 'svelte';
 	import type { UiContext } from '../src/client/contract.js';
 	import type { FormState } from '../src/form/form-state.svelte.js';
 	import type { RecordView } from '../src/record/types.js';
@@ -11,6 +11,8 @@
 	let { view, ctx }: { view: RecordView; ctx: UiContext } = $props();
 	const fixture = getContext<FooterFixtureOptions>('test.record.footer');
 	const id = $derived(view.mode === 'create' ? undefined : view.record.id);
+	// Authored cleanup can still inspect the view being removed.
+	onDestroy(() => { void view.mode; });
 </script>
 
 {#snippet formActions(form: FormState)}

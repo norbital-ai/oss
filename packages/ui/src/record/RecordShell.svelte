@@ -1040,7 +1040,11 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		class="-mx-1 flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-1 [overflow-wrap:anywhere]"
 		data-record-body
 	>
-		{#if children && view}{#key shownPast}{@render children(view)}{/key}
+		<!-- Keep a non-null view available to authored cleanup during teardown. -->
+		{#if children && view}
+			{#each view === null ? [] : [view] as readyView}
+				{#key shownPast}{@render children(readyView)}{/key}
+			{/each}
 		{:else}{@render generated()}{/if}
 	</div>
 {/snippet}
@@ -1310,10 +1314,11 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		{@render skeleton()}
 	{:else if Representation && view}
 		<!-- a representation chunk that fails to load says which model's view and why -->
-		{#await Representation}{@render skeleton()}{:then R}{#key shownPast}<R
-					{view}
-					{ctx}
-				/>{/key}{:catch e}{@render failure(
+		{#await Representation}{@render skeleton()}{:then R}
+			{#each view === null ? [] : [view] as readyView}
+				{#key shownPast}<R view={readyView} {ctx} />{/key}
+			{/each}
+		{:catch e}{@render failure(
 				msg(bolt, 'record.viewFailed', {
 					model: of,
 					cause: e instanceof Error ? e.message : String(e)

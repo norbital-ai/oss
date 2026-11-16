@@ -219,3 +219,53 @@ it.each(['native', 'form'] as const)('custom create through %s retains one nativ
 		expect(target.querySelectorAll('[data-record-foot]')).toHaveLength(1);
 	});
 });
+
+it('a registered record view stays valid while a live row disappears and returns', async () => {
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
+	let current: typeof ROW | null = ROW;
+	const readers = new Set<() => void>();
+	const fixture = await scriptedBolt({
+		catalog,
+		answer: (read) =>
+			read.m === 'history'
+				? []
+				: Object.fromEntries(
+						Object.keys(readObject(read.a[0])).map((root) => [
+							root,
+							{
+								rows: root === 'jobs' && current !== null ? [current] : [],
+								next: null,
+								total: root === 'jobs' && current !== null ? 1 : 0
+							}
+						])
+					),
+		changes: (_read, emit) => {
+			readers.add(emit);
+			return () => {
+				readers.delete(emit);
+			};
+		}
+	});
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(Harness, {
+		target,
+		props: { bolt: fixture.bolt, catalog, representation: 'decorated' }
+	});
+	try {
+		await expect.poll(() => target.querySelector('[data-long-detail]') !== null).toBe(true);
+		current = null;
+		for (const read of readers) read();
+		await expect.poll(() => target.querySelector('[data-long-detail]') === null).toBe(true);
+		current = { ...ROW, revision: 4, title: 'Restored view' };
+		for (const read of readers) read();
+		await expect
+			.poll(() => target.querySelector('[data-field=title]')?.textContent)
+			.toContain('Restored view');
+	} finally {
+		await unmount(view);
+		await fixture.dispose();
+		await dispose();
+		target.remove();
+	}
+});
