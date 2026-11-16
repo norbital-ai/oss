@@ -79,7 +79,7 @@ const BROWSER_DEPS = [
 	'qrcode',
 	'tailwind-merge',
 	'tailwind-variants'
-];
+].map((name) => (['runed', '@iconify/svelte'].includes(name) ? name : `@norbital-ai/ui > ${name}`));
 
 // One Node project (unit and PGlite files alike, a minute's hang guard) and the browser project
 // (https://vitest.dev/guide/browser/): one headless Chromium browser shared by its files.
@@ -133,7 +133,7 @@ export default defineConfig({
 				// this project inherits nothing (`extends: false`): without the list a dependency found mid-run is
 				// optimized late, Vite reloads, and every file after it fails to import
 				optimizeDeps: {
-					include: [...BROWSER_DEPS, '@norbital-ai/ui > codemirror']
+					include: BROWSER_DEPS
 				},
 				test: {
 					name: 'browser',

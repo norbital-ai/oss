@@ -8,6 +8,7 @@
 import { bind_system_model } from '../../../../decl/model.ts';
 
 export default bind_system_model('sys_envoy')({
+	icon: 'lucide:bot',
 	description: 'An envoy: the agent that answers outside senders on its connected channels.',
 	record_label: 'record.name',
 	fields: {

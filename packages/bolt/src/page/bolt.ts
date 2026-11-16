@@ -19,7 +19,12 @@ import { tick } from 'svelte';
 import type { FileRef, Json } from '../decl/values.ts';
 import { reactive_clock, reactive_query, run } from '@norbital-ai/ui/effect';
 import type { FileUrlOptions } from '@norbital-ai/store/kind';
-import { type ConvertSource, type PreviewPdfOptions, Unavailable, uuidv7 } from '@norbital-ai/host-api';
+import {
+	type ConvertSource,
+	type PreviewPdfOptions,
+	Unavailable,
+	uuidv7
+} from '@norbital-ai/host-api';
 import { ActConflict, ActRefused, ProtocolFailed, ReadFailed } from '../decl/errors.ts';
 import { DescribeTimeout, TransportFailed } from '../decl/errors/browser.ts';
 import { ActUnknown } from '../decl/errors/act.ts';
@@ -40,7 +45,14 @@ import {
 	type PatchOp,
 	type WireRead
 } from '../protocol/wire.ts';
-import { ActReply, EngineActorSchema, LiveReply, QReply, WireError, type LocalFilterField } from '../protocol/schema.ts';
+import {
+	ActReply,
+	EngineActorSchema,
+	LiveReply,
+	QReply,
+	WireError,
+	type LocalFilterField
+} from '../protocol/schema.ts';
 import {
 	liveStream,
 	pageSignals,
@@ -50,14 +62,18 @@ import {
 	type Signals
 } from './stream.ts';
 import { browser_catalog, type BrowserCatalog } from '../protocol/catalog.ts';
-import { decode_view, type Catalog } from '@norbital-ai/store';
+import { decode_view, sha256_hex, type Catalog } from '@norbital-ai/store';
 import type { Query } from './page-bolt.ts';
 import { page_reads, readValue } from './read-value.ts';
 import { read_wire, type ReadCatalog } from '../protocol/read-answer.ts';
-import { act_output, call_output, job_receipt, type OperationOutputs } from '../protocol/output-contract.ts';
+import {
+	act_output,
+	call_output,
+	job_receipt,
+	type OperationOutputs
+} from '../protocol/output-contract.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { FileRefSchema, stored_file_url } from './file-ref.ts';
-
 
 /**
  * The optional document bridge a fleet host uses to inspect mounted snapshot clients without a live stream.
@@ -108,7 +124,11 @@ export type BoltConfig = {
 type Row = { readonly [field: string]: Json };
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 type Paint = { model: string; apply(page: Json): Json };
-type ViewState = { value: Json | undefined; error: ReadFailed | TransportFailed | undefined; sequence: number };
+type ViewState = {
+	value: Json | undefined;
+	error: ReadFailed | TransportFailed | undefined;
+	sequence: number;
+};
 type ViewConsumer = {
 	readonly fiberId: number;
 	readonly delivered: SubscriptionRef.SubscriptionRef<number>;
@@ -126,15 +146,18 @@ type View = {
 };
 /** The fleet marks a document before it boots; ordinary workspace tabs retain streaming. */
 export const page_live_mode = (): NonNullable<PageSnapshotHost['bolt_live_mode']> =>
-	typeof window !== 'undefined' && Object.getOwnPropertyDescriptor(window, 'bolt_live_mode')?.value === 'snapshot'
-		? 'snapshot' : 'stream';
+	typeof window !== 'undefined' &&
+	Object.getOwnPropertyDescriptor(window, 'bolt_live_mode')?.value === 'snapshot'
+		? 'snapshot'
+		: 'stream';
 const snapshot_refreshers = new Set<() => Effect.Effect<void, ReadFailed | TransportFailed>>();
 /** The host awaits this before inspecting a fleet document, including its next Svelte render. */
-const refresh_page: NonNullable<PageSnapshotHost['bolt_refresh']> = () => run(
-	Effect.forEach([...snapshot_refreshers], (refresh) => refresh(), { discard: true }).pipe(
-		Effect.andThen(Effect.promise(tick))
-	)
-);
+const refresh_page: NonNullable<PageSnapshotHost['bolt_refresh']> = () =>
+	run(
+		Effect.forEach([...snapshot_refreshers], (refresh) => refresh(), { discard: true }).pipe(
+			Effect.andThen(Effect.promise(tick))
+		)
+	);
 const CapabilitiesAnswer = Schema.Struct({ value: RecordCapabilitiesSchema });
 const FileAnswer = FileRefSchema;
 const FilterStep = Schema.Union([
@@ -205,13 +228,17 @@ function settled(
 const declared = <A>(schema: () => Schema.Decoder<A>, output: Json) =>
 	Effect.try({
 		try: () => Schema.decodeUnknownSync(schema())(output),
-		catch: (error) => new ProtocolFailed({
-			message: `The operation committed, but its answer does not match its declared result: ${error instanceof Error ? error.message : String(error)}`
-		})
+		catch: (error) =>
+			new ProtocolFailed({
+				message: `The operation committed, but its answer does not match its declared result: ${error instanceof Error ? error.message : String(error)}`
+			})
 	});
-const committedAs = <A>(read: (output: Json) => Effect.Effect<A, ProtocolFailed>, message: string) =>
+const committedAs =
+	<A>(read: (output: Json) => Effect.Effect<A, ProtocolFailed>, message: string) =>
 	(outcome: Effect.Success<ReturnType<typeof settled>>): Effect.Effect<A, ProtocolFailed> =>
-		outcome.kind === 'committed' ? read(outcome.output) : Effect.fail(new ProtocolFailed({ message }));
+		outcome.kind === 'committed'
+			? read(outcome.output)
+			: Effect.fail(new ProtocolFailed({ message }));
 const isRow = (v: Json | undefined): v is Row => Predicate.isObject(v);
 const list = (value: Json): readonly Json[] => (jsonArray(value) ? value : [value]);
 const RELATION_OPS = ['create', 'update', 'delete', 'upsert', 'link', 'unlink'];
@@ -229,7 +256,10 @@ export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json 
 		if (o.op === 'meta' || o.op === 'unset') {
 			if (record === null) return undefined;
 			if (o.op === 'meta') record = { ...record, [o.key]: o.value };
-			else { const { [o.key]: _removed, ...rest } = record; record = rest; }
+			else {
+				const { [o.key]: _removed, ...rest } = record;
+				record = rest;
+			}
 			continue;
 		}
 		changedRows = true;
@@ -271,7 +301,11 @@ function paintOf(model: string, verb: string, input: Json, key: string): Paint {
 		return { model, apply: (v) => rows(v, (rs) => [...created, ...rs]) };
 	}
 	if (verb === 'delete') {
-		const gone = new Set(list(input).flatMap((row) => isRow(row) && isRow(row['target']) ? [String(row['target']['id'])] : []));
+		const gone = new Set(
+			list(input).flatMap((row) =>
+				isRow(row) && isRow(row['target']) ? [String(row['target']['id'])] : []
+			)
+		);
 		return {
 			model,
 			apply: (v) => rows(v, (rs) => rs.filter((r) => !gone.has(String(r['id']))))
@@ -305,6 +339,25 @@ export const create_bolt = (config: BoltConfig) =>
 		const transport = browserTransport(config);
 		const uuid = config.uuid ?? uuidv7;
 		const views = new Map<string, View>();
+		// Inactive images are private to this client; re-entry waits for an authorized server answer before painting.
+		const retained = new Map<string, { value: Json; bytes: number }>();
+		let retainedBytes = 0;
+		const forget = (key: string) => {
+			retainedBytes -= retained.get(key)?.bytes ?? 0;
+			retained.delete(key);
+		};
+		const remember = (view: View) => {
+			forget(view.key);
+			if (view.server === undefined || closed !== null) return;
+			const bytes = new TextEncoder().encode(JSON.stringify(view.server)).byteLength;
+			if (bytes > 4 * 1024 * 1024) return;
+			retained.set(view.key, { value: view.server, bytes });
+			retainedBytes += bytes;
+			for (const key of retained.keys()) {
+				if (retainedBytes <= 4 * 1024 * 1024 && retained.size <= 64) break;
+				forget(key);
+			}
+		};
 		const paints = new Set<Paint>();
 		const waiters = new Map<Deferred.Deferred<void>, number>();
 		const grace = yield* FiberMap.make<string, void, never>();
@@ -361,10 +414,11 @@ export const create_bolt = (config: BoltConfig) =>
 			Effect.gen(function* () {
 				const changed = yield* Effect.forEach(
 					[...views.values()].filter((view) => rootsOf(view.read).includes(model)),
-					(view) => SubscriptionRef.get(view.state).pipe(
-						Effect.flatMap((state) => notify(view, state.error)),
-						Effect.map((sequence) => ({ view, sequence }))
-					)
+					(view) =>
+						SubscriptionRef.get(view.state).pipe(
+							Effect.flatMap((state) => notify(view, state.error)),
+							Effect.map((sequence) => ({ view, sequence }))
+						)
 				);
 				yield* Effect.forEach(
 					changed,
@@ -404,7 +458,8 @@ export const create_bolt = (config: BoltConfig) =>
 					drop,
 					add: add.map((view) => ({
 						view: view.id,
-						read: view.read
+						read: view.read,
+						...(view.server === undefined ? {} : { known: sha256_hex(JSON.stringify(view.server)) })
 					}))
 				};
 				const answer = yield* transport.request('POST', PATHS.live, body).pipe(
@@ -444,7 +499,10 @@ export const create_bolt = (config: BoltConfig) =>
 						yield* notify(view, new ReadFailed({ code: error.code, message: error.message }));
 				}
 			}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
-		const receiveNotices = (frame: Extract<Frame, { t: 'answer' | 'patch' }>, view: View | undefined) => {
+		const receiveNotices = (
+			frame: Extract<Frame, { t: 'answer' | 'patch' }>,
+			view: View | undefined
+		) => {
 			if (
 				view !== undefined &&
 				view.read.m === 'inbox' &&
@@ -456,11 +514,7 @@ export const create_bolt = (config: BoltConfig) =>
 					noticeIds.clear();
 				}
 				for (const notice of frame.arrivals ?? [])
-					if (
-						isRow(notice) &&
-						typeof notice['id'] === 'string' &&
-						!noticeIds.has(notice['id'])
-					) {
+					if (isRow(notice) && typeof notice['id'] === 'string' && !noticeIds.has(notice['id'])) {
 						noticeIds.add(notice['id']);
 						config.on_notice?.(notice);
 					}
@@ -500,13 +554,33 @@ export const create_bolt = (config: BoltConfig) =>
 							yield* notify(view);
 						}
 						return yield* advance(frame.v);
+					case 'same':
+						if (view !== undefined) {
+							if (frame.v < view.v) return yield* advance(frame.v);
+							if (
+								view.server === undefined ||
+								sha256_hex(JSON.stringify(view.server)) !== frame.known
+							) {
+								view.server = undefined;
+								view.registered = false;
+								return yield* register([view]);
+							}
+							const failure = validate(view, view.server);
+							if (failure !== undefined) {
+								view.server = undefined;
+								view.registered = false;
+								yield* notify(view, failure);
+							} else {
+								view.v = frame.v;
+								yield* notify(view);
+							}
+						}
+						return yield* advance(frame.v);
 					case 'patch': {
 						if (view === undefined || frame.v <= view.v) return yield* advance(frame.v);
-						const next = patched(
-							view.server,
-							frame.ops
-						);
+						const next = patched(view.server, frame.ops);
 						if (next === undefined) {
+							view.server = undefined;
 							view.registered = false;
 							return yield* register([view]);
 						}
@@ -525,6 +599,8 @@ export const create_bolt = (config: BoltConfig) =>
 					}
 					case 'error':
 						if (view !== undefined) {
+							view.server = undefined;
+							forget(view.key);
 							view.registered = false;
 							yield* notify(view, new ReadFailed({ code: frame.code, message: frame.message }));
 						}
@@ -533,6 +609,9 @@ export const create_bolt = (config: BoltConfig) =>
 						return yield* advance(frame.v);
 					case 'close':
 						closed = frame.release;
+						retained.clear();
+						retainedBytes = 0;
+						for (const current of views.values()) current.server = undefined;
 						yield* SubscriptionRef.set(status, 'closed');
 						return;
 				}
@@ -557,25 +636,28 @@ export const create_bolt = (config: BoltConfig) =>
 				Effect.sync(() => window.removeEventListener('pagehide', leave))
 			);
 		}
-		const frames = live_mode === 'snapshot' ? Stream.empty : yield* liveStream(
-			() => config.open_stream?.(live) ?? (shared ? sharedSource(live, open) : open()),
-			Effect.gen(function* () {
-				leave();
-				conn = null;
-				generation++;
-				for (const view of views.values()) view.registered = false;
-				for (const waiter of waiters.keys()) yield* Deferred.succeed(waiter, undefined);
-				yield* SubscriptionRef.set(
-					status,
-					closed !== null ? 'closed' : views.size === 0 ? 'idle' : 'connecting'
-				);
-			}),
-			config.signals ?? pageSignals(),
-			Queue.take(reconnects)
-		).pipe(
-			Stream.tap(onFrame),
-			Stream.share({ capacity: 'unbounded', idleTimeToLive: '30 seconds' })
-		);
+		const frames =
+			live_mode === 'snapshot'
+				? Stream.empty
+				: yield* liveStream(
+						() => config.open_stream?.(live) ?? (shared ? sharedSource(live, open) : open()),
+						Effect.gen(function* () {
+							leave();
+							conn = null;
+							generation++;
+							for (const view of views.values()) view.registered = false;
+							for (const waiter of waiters.keys()) yield* Deferred.succeed(waiter, undefined);
+							yield* SubscriptionRef.set(
+								status,
+								closed !== null ? 'closed' : views.size === 0 ? 'idle' : 'connecting'
+							);
+						}),
+						config.signals ?? pageSignals(),
+						Queue.take(reconnects)
+					).pipe(
+						Stream.tap(onFrame),
+						Stream.share({ capacity: 'unbounded', idleTimeToLive: '30 seconds' })
+					);
 		yield* Effect.addFinalizer(() =>
 			Effect.gen(function* () {
 				for (const view of views.values())
@@ -636,50 +718,82 @@ export const create_bolt = (config: BoltConfig) =>
 					return yield* Effect.fail(failure);
 				}
 				// an unchanged answer over a settled image is not repeated
-				const unchanged = current.error === undefined && view.server !== undefined &&
+				const unchanged =
+					current.error === undefined &&
+					view.server !== undefined &&
 					JSON.stringify(view.server) === JSON.stringify(result.success);
 				view.server = result.success;
 				if (!unchanged) yield* notify(view);
 			});
-		const refresh = (initiating_fiber?: number) => Effect.gen(function* () {
-			const active = [...views.values()].filter((view) => view.consumers.size > 0);
-			if (live_mode === 'snapshot') {
-				const results = yield* refresh_lock.withPermit(Effect.forEach(
-					active, (view) => Effect.result(read_view(view))
-				));
+		const refresh = (initiating_fiber?: number) =>
+			Effect.gen(function* () {
+				const active = [...views.values()].filter((view) => view.consumers.size > 0);
+				if (live_mode === 'snapshot') {
+					const results = yield* refresh_lock.withPermit(
+						Effect.forEach(active, (view) => Effect.result(read_view(view)))
+					);
+					yield* visible(initiating_fiber);
+					for (const result of results)
+						if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
+					return;
+				}
+				if (active.length === 0) return;
+				if (closed !== null)
+					return yield* Effect.fail(
+						new ReadFailed({
+							code: 'closed',
+							message: 'The workspace release has changed. Reopen the page.'
+						})
+					);
+				const before = yield* Effect.forEach(active, (view) =>
+					SubscriptionRef.get(view.state).pipe(
+						Effect.map((state) => ({ view, sequence: state.sequence }))
+					)
+				);
+				if (conn === null) yield* Queue.offer(reconnects, undefined);
+				else yield* register(active);
+				const updated = yield* Effect.forEach(
+					before,
+					({ view, sequence }) =>
+						SubscriptionRef.changes(view.state).pipe(
+							Stream.filter((state) => state.sequence > sequence),
+							Stream.take(1),
+							Stream.runHead
+						),
+					{ concurrency: 'unbounded' }
+				).pipe(Effect.timeoutOption('5 seconds'));
+				if (Option.isNone(updated))
+					return yield* Effect.fail(
+						new ReadFailed({
+							code: 'transport',
+							message: 'The workspace did not finish refreshing. Try again.'
+						})
+					);
 				yield* visible(initiating_fiber);
-				for (const result of results)
-					if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
-				return;
-			}
-			if (active.length === 0) return;
-			if (closed !== null) return yield* Effect.fail(new ReadFailed({ code: 'closed', message: 'The workspace release has changed. Reopen the page.' }));
-			const before = yield* Effect.forEach(active, (view) => SubscriptionRef.get(view.state).pipe(
-				Effect.map((state) => ({ view, sequence: state.sequence }))
-			));
-			if (conn === null) yield* Queue.offer(reconnects, undefined);
-			else yield* register(active);
-			const updated = yield* Effect.forEach(before, ({ view, sequence }) => SubscriptionRef.changes(view.state).pipe(
-				Stream.filter((state) => state.sequence > sequence),
-				Stream.take(1),
-				Stream.runHead
-			), { concurrency: 'unbounded' }).pipe(Effect.timeoutOption('5 seconds'));
-			if (Option.isNone(updated)) return yield* Effect.fail(new ReadFailed({ code: 'transport', message: 'The workspace did not finish refreshing. Try again.' }));
-			yield* visible(initiating_fiber);
-			for (const state of updated.value)
-				if (Option.isSome(state) && state.value.error !== undefined) return yield* Effect.fail(state.value.error);
-		});
+				for (const state of updated.value)
+					if (Option.isSome(state) && state.value.error !== undefined)
+						return yield* Effect.fail(state.value.error);
+			});
 		if (live_mode === 'snapshot' && typeof window !== 'undefined') {
 			const owned_refresh = () => Effect.fiberId.pipe(Effect.flatMap(refresh));
 			snapshot_refreshers.add(owned_refresh);
 			Object.defineProperty(window, 'bolt_refresh', { configurable: true, value: refresh_page });
-			yield* Effect.addFinalizer(() => Effect.sync(() => {
-				snapshot_refreshers.delete(owned_refresh);
-				if (snapshot_refreshers.size === 0 && Object.getOwnPropertyDescriptor(window, 'bolt_refresh')?.value === refresh_page)
-					Reflect.deleteProperty(window, 'bolt_refresh');
-			}));
+			yield* Effect.addFinalizer(() =>
+				Effect.sync(() => {
+					snapshot_refreshers.delete(owned_refresh);
+					if (
+						snapshot_refreshers.size === 0 &&
+						Object.getOwnPropertyDescriptor(window, 'bolt_refresh')?.value === refresh_page
+					)
+						Reflect.deleteProperty(window, 'bolt_refresh');
+				})
+			);
 		}
-		const q = <A>(method: WireRead['m'], args: readonly Json[], schema: () => Schema.Decoder<A>): Query<A> => {
+		const q = <A>(
+			method: WireRead['m'],
+			args: readonly Json[],
+			schema: () => Schema.Decoder<A>
+		): Query<A> => {
 			const read: WireRead = { m: method, a: args.map(read_wire) };
 			let prepared: Schema.Decoder<A> | undefined;
 			const decoder = () => prepared ?? (prepared = schema());
@@ -689,14 +803,25 @@ export const create_bolt = (config: BoltConfig) =>
 			const seeded = config.initial_read?.(read);
 			const initial = seeded === undefined ? undefined : readValue(decoder, seeded);
 			const updates = observe_results({ read }, decoder);
-			return Object.assign(reactive_query(once,
-				initial !== undefined && Result.isFailure(initial) ? Stream.concat(Stream.succeed(initial), updates) : updates,
-				initial !== undefined && Result.isSuccess(initial) ? Option.some(initial.success) : Option.none<A>()
-			), { read });
+			return Object.assign(
+				reactive_query(
+					once,
+					initial !== undefined && Result.isFailure(initial)
+						? Stream.concat(Stream.succeed(initial), updates)
+						: updates,
+					initial !== undefined && Result.isSuccess(initial)
+						? Option.some(initial.success)
+						: Option.none<A>()
+				),
+				{ read }
+			);
 		};
-		function observe_results<A>(query: {
-			readonly read: WireRead;
-		}, schema: () => Schema.Decoder<A>): Stream.Stream<Result.Result<A, ReadFailed | TransportFailed>> {
+		function observe_results<A>(
+			query: {
+				readonly read: WireRead;
+			},
+			schema: () => Schema.Decoder<A>
+		): Stream.Stream<Result.Result<A, ReadFailed | TransportFailed>> {
 			const key = JSON.stringify(query.read);
 			return Stream.unwrap(
 				Effect.gen(function* () {
@@ -706,7 +831,7 @@ export const create_bolt = (config: BoltConfig) =>
 							id: `${tab}v${++n}`,
 							key,
 							read: query.read,
-							server: undefined,
+							server: retained.get(key)?.value,
 							v: 0,
 							consumers: new Set(),
 							registered: false,
@@ -716,6 +841,7 @@ export const create_bolt = (config: BoltConfig) =>
 								sequence: 0
 							})
 						};
+						forget(key);
 						views.set(view.id, view);
 					}
 					const current = view;
@@ -741,6 +867,7 @@ export const create_bolt = (config: BoltConfig) =>
 									Effect.flatMap(() =>
 										Effect.gen(function* () {
 											views.delete(current.id);
+											remember(current);
 											if (current.registered) yield* register([], [current.id]);
 											if (views.size === 0 && closed === null)
 												yield* SubscriptionRef.set(status, 'idle');
@@ -764,9 +891,12 @@ export const create_bolt = (config: BoltConfig) =>
 								SubscriptionRef.set(consumer.delivered, state.sequence)
 							).pipe(Stream.drain);
 							// This continuation runs after the downstream pull has consumed the value.
-							const result = state.error !== undefined
-								? Result.fail(state.error)
-								: state.value === undefined ? undefined : readValue(schema, state.value);
+							const result =
+								state.error !== undefined
+									? Result.fail(state.error)
+									: state.value === undefined
+										? undefined
+										: readValue(schema, state.value);
 							return result === undefined
 								? acknowledge
 								: Stream.succeed(result).pipe(Stream.concat(acknowledge));
@@ -775,22 +905,27 @@ export const create_bolt = (config: BoltConfig) =>
 				})
 			);
 		}
-		const observe = <A>(query: { readonly read: WireRead }, schema: Schema.Decoder<A>) => observe_results(query, () => schema).pipe(
-			Stream.flatMap((result) => Result.isSuccess(result) ? Stream.succeed(result.success) : Stream.fail(result.failure))
-		);
+		const observe = <A>(query: { readonly read: WireRead }, schema: Schema.Decoder<A>) =>
+			observe_results(query, () => schema).pipe(
+				Stream.flatMap((result) =>
+					Result.isSuccess(result) ? Stream.succeed(result.success) : Stream.fail(result.failure)
+				)
+			);
 		const post = <A, E, R>(
 			prepare: (issued_at: string) => { readonly body: Json; readonly key: string },
 			request: (body: Json, headers: Readonly<Record<string, string>>) => Effect.Effect<A, E, R>
-		) => Effect.gen(function* () {
-			const issued_at = config.now === undefined
-				? yield* Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis).toISOString())
-				: config.now();
-			const { body, key } = prepare(issued_at);
-			return yield* request(body, {
-				[HEADERS.key]: key,
-				...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract })
+		) =>
+			Effect.gen(function* () {
+				const issued_at =
+					config.now === undefined
+						? yield* Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis).toISOString())
+						: config.now();
+				const { body, key } = prepare(issued_at);
+				return yield* request(body, {
+					[HEADERS.key]: key,
+					...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract })
+				});
 			});
-		});
 		const send = (
 			body: Readonly<Record<string, Json>>,
 			key: string,
@@ -799,14 +934,20 @@ export const create_bolt = (config: BoltConfig) =>
 			path: string = PATHS.act
 		) =>
 			Effect.gen(function* () {
-				const response = yield* post((issued_at) => ({
-					body: { ...body, issued_at, ...(observed === undefined ? {} : { observed }) }, key
-				}), (body, headers) => transport.request('POST', path, body, headers));
+				const response = yield* post(
+					(issued_at) => ({
+						body: { ...body, issued_at, ...(observed === undefined ? {} : { observed }) },
+						key
+					}),
+					(body, headers) => transport.request('POST', path, body, headers)
+				);
 				const refusal = errorOf(response.body);
 				if (Option.isSome(refusal)) {
 					// `busy` is the host's admission refusal: nothing ran, so the person may simply try again
 					const code =
-						refusal.value.error.code === 'busy' ? 'rate_limited' : refusal_of_status(response.status);
+						refusal.value.error.code === 'busy'
+							? 'rate_limited'
+							: refusal_of_status(response.status);
 					return code === null
 						? { kind: 'unknown' as const, invocation: key }
 						: { kind: 'refused' as const, code, message: refusal.value.error.message };
@@ -817,38 +958,67 @@ export const create_bolt = (config: BoltConfig) =>
 				return reply.outcome;
 			}).pipe(Effect.catch(() => Effect.succeed({ kind: 'unknown' as const, invocation: key })));
 		/** A queue admission commits exactly the receipt of the runs this client allocated; anything else is a failure. */
-		const admit = (body: Readonly<Record<string, Json>>, key: string, automation: string, ids: readonly string[], path?: string) =>
-			send(body, key, undefined, undefined, path).pipe(Effect.flatMap(settled), Effect.flatMap((outcome) =>
-				outcome.kind === 'committed'
-					? Effect.map(declared(() => job_receipt(automation, ids), outcome.output), (output) => ({ ...outcome, output }))
-					: Effect.fail(new ProtocolFailed({ message: 'A run admission answered without committing its receipt.' }))));
-		const command = (callable: string, input: Json, options: { observed?: Readonly<Record<string, number>> } = {}) =>
-			send({ callable, input }, uuid(), options.observed).pipe(Effect.flatMap(settled));
-		const act = (
-			inputs: Readonly<Record<string, Json>>,
-			options: { key?: string } = {}
-		) => Effect.gen(function* () {
-			const initiatingFiber = yield* Effect.fiberId;
-			const key = options.key ?? uuid();
-			const acts = inputs;
-			const pending = Object.entries(acts).flatMap(([name, input]) => {
-				const dot = name.lastIndexOf('.');
-				const model = name.slice(0, dot), verb = name.slice(dot + 1);
-				return PAINTED.has(verb) ? [paintOf(model, verb, input, key)] : [];
+		const admit = (
+			body: Readonly<Record<string, Json>>,
+			key: string,
+			automation: string,
+			ids: readonly string[],
+			path?: string
+		) =>
+			send(body, key, undefined, undefined, path).pipe(
+				Effect.flatMap(settled),
+				Effect.flatMap((outcome) =>
+					outcome.kind === 'committed'
+						? Effect.map(
+								declared(() => job_receipt(automation, ids), outcome.output),
+								(output) => ({ ...outcome, output })
+							)
+						: Effect.fail(
+								new ProtocolFailed({
+									message: 'A run admission answered without committing its receipt.'
+								})
+							)
+				)
+			);
+		const command = (
+			callable: string,
+			input: Json,
+			options: { observed?: Readonly<Record<string, number>> } = {}
+		) => send({ callable, input }, uuid(), options.observed).pipe(Effect.flatMap(settled));
+		const act = (inputs: Readonly<Record<string, Json>>, options: { key?: string } = {}) =>
+			Effect.gen(function* () {
+				const initiatingFiber = yield* Effect.fiberId;
+				const key = options.key ?? uuid();
+				const acts = inputs;
+				const pending = Object.entries(acts).flatMap(([name, input]) => {
+					const dot = name.lastIndexOf('.');
+					const model = name.slice(0, dot),
+						verb = name.slice(dot + 1);
+					return PAINTED.has(verb) ? [paintOf(model, verb, input, key)] : [];
+				});
+				for (const paint of pending) paints.add(paint);
+				const repaintAll = Effect.forEach(
+					[...new Set(pending.map((paint) => paint.model))],
+					(model) => repaint(model, initiatingFiber),
+					{ discard: true }
+				);
+				return yield* Effect.gen(function* () {
+					yield* repaintAll;
+					const outcome = yield* send({ acts }, key, undefined, initiatingFiber).pipe(
+						Effect.flatMap(settled)
+					);
+					return outcome.kind === 'committed'
+						? { ...outcome, output: yield* declared(() => act_output(acts), outcome.output) }
+						: outcome;
+				}).pipe(
+					Effect.ensuring(
+						Effect.gen(function* () {
+							for (const paint of pending) paints.delete(paint);
+							yield* repaintAll;
+						})
+					)
+				);
 			});
-			for (const paint of pending) paints.add(paint);
-			const repaintAll = Effect.forEach([...new Set(pending.map((paint) => paint.model))], (model) => repaint(model, initiatingFiber), { discard: true });
-			return yield* Effect.gen(function* () {
-				yield* repaintAll;
-				const outcome = yield* send({ acts }, key, undefined, initiatingFiber).pipe(Effect.flatMap(settled));
-				return outcome.kind === 'committed'
-					? { ...outcome, output: yield* declared(() => act_output(acts), outcome.output) }
-					: outcome;
-			}).pipe(Effect.ensuring(Effect.gen(function* () {
-				for (const paint of pending) paints.delete(paint);
-				yield* repaintAll;
-			})));
-		});
 		const getValue = <A>(
 			path: string,
 			schema: Schema.Codec<A, unknown>,
@@ -885,14 +1055,17 @@ export const create_bolt = (config: BoltConfig) =>
 			refresh: () => Effect.fiberId.pipe(Effect.flatMap(refresh)),
 			...page_reads(config.read_catalog, q),
 			/** Native controls bind runtime-built requests to their actual answer codec. */
-			native_query: <A>(read: WireRead, schema: Schema.Decoder<A>) => q(read.m, read.a, () => schema),
+			native_query: <A>(read: WireRead, schema: Schema.Decoder<A>) =>
+				q(read.m, read.a, () => schema),
 			/** Internal stream edge for shell surfaces. Pages read Query properties directly. */
 			observe,
 			clock: (unit?: 'minute' | 'hour' | 'day') =>
 				reactive_clock(
 					(at) => ({
 						now: at.toISOString(),
-						today: DateTime.formatIsoDate(DateTime.makeZonedUnsafe(at, { timeZone: config.tz ?? 'UTC' }))
+						today: DateTime.formatIsoDate(
+							DateTime.makeZonedUnsafe(at, { timeZone: config.tz ?? 'UTC' })
+						)
 					}),
 					unit,
 					config.tz,
@@ -938,11 +1111,7 @@ export const create_bolt = (config: BoltConfig) =>
 			},
 			...(config.describe === true
 				? {
-						describe: (
-							model: string,
-							text: string,
-							fields?: readonly LocalFilterField[]
-						) =>
+						describe: (model: string, text: string, fields?: readonly LocalFilterField[]) =>
 							command('filter.describe', {
 								model,
 								text,
@@ -952,33 +1121,60 @@ export const create_bolt = (config: BoltConfig) =>
 									duration: '15 seconds',
 									orElse: () => Effect.fail(new DescribeTimeout())
 								}),
-								Effect.flatMap(committedAs((output) => decode(Schema.Struct({
-									where: Schema.optionalKey(Schema.Json), order_by: Schema.optionalKey(Schema.Json)
-								}), output), 'Could not build a filter from that description.'))
+								Effect.flatMap(
+									committedAs(
+										(output) =>
+											decode(
+												Schema.Struct({
+													where: Schema.optionalKey(Schema.Json),
+													order_by: Schema.optionalKey(Schema.Json)
+												}),
+												output
+											),
+										'Could not build a filter from that description.'
+									)
+								)
 							)
 					}
 				: {}),
-			options: (
-				model: string,
-				fields?: readonly LocalFilterField[]
-			) =>
+			options: (model: string, fields?: readonly LocalFilterField[]) =>
 				command('filter.options', { model, ...(fields === undefined ? {} : { fields }) }).pipe(
-					Effect.flatMap(committedAs((output) => decode(FilterOptionsAnswer, output), 'Could not load filter options.'))
+					Effect.flatMap(
+						committedAs(
+							(output) => decode(FilterOptionsAnswer, output),
+							'Could not load filter options.'
+						)
+					)
 				),
 			/** Native controls retain durable execution tracking without exposing syncs as automation starts. */
 			sync_control(model: string, sync: string, input: Json) {
-				const id = uuid(), automation = `${model}.sync.${sync}`;
-				return Object.assign(admit({ model, sync, id, input }, id, automation, [id], PATHS.sync_control),
-					{ mode: 'job' as const, id, ids: [id], automation });
+				const id = uuid(),
+					automation = `${model}.sync.${sync}`;
+				return Object.assign(
+					admit({ model, sync, id, input }, id, automation, [id], PATHS.sync_control),
+					{ mode: 'job' as const, id, ids: [id], automation }
+				);
 			},
 			// many inputs are one request queueing one run each (a bulk action), not one request per record
 			run(automation: string, input: Json | readonly Json[]) {
 				const declared_call = Object.hasOwn(config.operation_outputs.automations, automation)
-					? config.operation_outputs.automations[automation] : undefined;
+					? config.operation_outputs.automations[automation]
+					: undefined;
 				if (declared_call?.mode === 'call')
-					return Object.assign(command('run', { automation, input }).pipe(Effect.flatMap((answer) => answer.kind === 'committed'
-						? declared(() => call_output(config.operation_outputs, automation), answer.output)
-						: Effect.fail(new ProtocolFailed({ message: 'A call answered with a durable run outcome instead of its result.' })))), { mode: 'call' as const, automation });
+					return Object.assign(
+						command('run', { automation, input }).pipe(
+							Effect.flatMap((answer) =>
+								answer.kind === 'committed'
+									? declared(() => call_output(config.operation_outputs, automation), answer.output)
+									: Effect.fail(
+											new ProtocolFailed({
+												message: 'A call answered with a durable run outcome instead of its result.'
+											})
+										)
+							)
+						),
+						{ mode: 'call' as const, automation }
+					);
 				const inputs: readonly Json[] = Array.isArray(input) ? input : [input];
 				const runs = inputs.map((one) => ({
 					input: one,
@@ -987,7 +1183,10 @@ export const create_bolt = (config: BoltConfig) =>
 				const ids = runs.map((run) => run.id);
 				const id = ids[0];
 				if (id === undefined) throw new RangeError('An automation batch needs at least one input.');
-				return Object.assign(admit({ callable: 'run', input: { automation, runs } }, id, automation, ids), { mode: 'job' as const, id, ids, automation });
+				return Object.assign(
+					admit({ callable: 'run', input: { automation, runs } }, id, automation, ids),
+					{ mode: 'job' as const, id, ids, automation }
+				);
 			},
 			upload: (
 				file: Blob & { name?: string },
@@ -1013,9 +1212,13 @@ export const create_bolt = (config: BoltConfig) =>
 				stored_file_url(base, ref.id, options),
 			preview_pdf: (source: ConvertSource, options: PreviewPdfOptions = {}) =>
 				Effect.gen(function* () {
-					const response = yield* post((issued_at) => ({
-						body: { callable: 'convert.previewPdf', input: { source, options }, issued_at }, key: uuid()
-					}), (body, headers) => transport.requestPdf(PATHS.act, body, headers));
+					const response = yield* post(
+						(issued_at) => ({
+							body: { callable: 'convert.previewPdf', input: { source, options }, issued_at },
+							key: uuid()
+						}),
+						(body, headers) => transport.requestPdf(PATHS.act, body, headers)
+					);
 					if (response.body instanceof Uint8Array) return response.body;
 					const refusal = errorOf(response.body);
 					if (Option.isSome(refusal) && refusal.value.error.code === 'unavailable')
@@ -1035,7 +1238,12 @@ export const create_bolt = (config: BoltConfig) =>
 			restore: {
 				preview: (model: string, record: string, revision: number) =>
 					command('history.preview', { model, record, revision }).pipe(
-						Effect.flatMap(committedAs((output) => decode(RestorePreviewSchema, output), 'The restore preview could not be loaded.')),
+						Effect.flatMap(
+							committedAs(
+								(output) => decode(RestorePreviewSchema, output),
+								'The restore preview could not be loaded.'
+							)
+						)
 					),
 				run: (model: string, record: string, revision: number, live: number) =>
 					command('history.restore', { model, record, revision }, { observed: { [record]: live } })

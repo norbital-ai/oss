@@ -21,6 +21,7 @@ import { actor_ref } from '../access/actor.ts';
 import { bindingsAt } from '../query/reader.ts';
 import { Live, Manifest, Reads, type LiveView } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
+import { sha256_hex } from '@norbital-ai/store';
 import type { Frame, LiveErrorCode, PatchOp } from '../../protocol/wire.ts';
 import type { Authority, Bindings, Captured } from '../contracts.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
@@ -75,7 +76,8 @@ export const LiveHubLive = Layer.effect(
 		const bindings = Clock.currentTimeMillis.pipe(
 			Effect.map((at) => bindingsAt(at, manifest.workspace.tz))
 		);
-		const catalog = catalog_of(manifest), compiler = new ViewCompiler(catalog, manifest);
+		const catalog = catalog_of(manifest),
+			compiler = new ViewCompiler(catalog, manifest);
 		const lane = yield* Queue.unbounded<
 			| { readonly _tag: 'Flush' }
 			| { readonly _tag: 'Barrier'; readonly done: Deferred.Deferred<void> }
@@ -125,14 +127,23 @@ export const LiveHubLive = Layer.effect(
 		) {
 			if (conn.views.get(view.id) !== view || view.readVersion !== answer.expected) return;
 			const { value, ops, arrivals } = answer;
-			const snapshots = ops === undefined ? answer.snapshots ?? new Map<string, ReadSnapshot>() : view.snapshots;
+			const snapshots =
+				ops === undefined ? (answer.snapshots ?? new Map<string, ReadSnapshot>()) : view.snapshots;
 			const text = JSON.stringify(value);
+			const reusable =
+				view.value === undefined &&
+				ops === undefined &&
+				!arrivals?.length &&
+				view.known !== undefined &&
+				view.known === sha256_hex(text);
 			const unchanged =
 				ops === undefined &&
 				!arrivals?.length &&
 				view.value !== undefined &&
 				same(view.value, value);
-			const bytes = bytesOf(text) + patch.keys(view.plan).reduce((sum, key) => sum + bytesOf(key), 0) +
+			const bytes =
+				bytesOf(text) +
+				patch.keys(view.plan).reduce((sum, key) => sum + bytesOf(key), 0) +
 				[...snapshots].reduce((sum, [key, snapshot]) => sum + bytesOf(key) + snapshot.bytes, 0);
 			const over: [LiveErrorCode, string] | null =
 				bytes > LIVE.subscriptionBytes
@@ -154,6 +165,10 @@ export const LiveHubLive = Layer.effect(
 			view.snapshots = snapshots;
 			view.readVersion++;
 			if (unchanged) return;
+			if (reusable && view.known !== undefined) {
+				yield* conn.send({ t: 'same', view: view.id, v: routed, known: view.known });
+				return;
+			}
 			yield* conn.send(
 				ops === undefined
 					? {
@@ -167,15 +182,21 @@ export const LiveHubLive = Layer.effect(
 			);
 		});
 		/** A view whose read failed is dropped (the client registers it again), so no later flush asks it again. */
-		const failed = (conn: Conn, view: View, err: unknown, expected: number) => Effect.suspend(() =>
-			conn.views.get(view.id) !== view || view.readVersion !== expected ? Effect.void : drop(conn, view.id).pipe(
-				Effect.andThen(conn.send({
-					t: 'error',
-					view: view.id,
-					code: err instanceof BoltError ? err.code : 'internal',
-					message: err instanceof Error ? err.message : String(err)
-				}))
-			));
+		const failed = (conn: Conn, view: View, err: unknown, expected: number) =>
+			Effect.suspend(() =>
+				conn.views.get(view.id) !== view || view.readVersion !== expected
+					? Effect.void
+					: drop(conn, view.id).pipe(
+							Effect.andThen(
+								conn.send({
+									t: 'error',
+									view: view.id,
+									code: err instanceof BoltError ? err.code : 'internal',
+									message: err instanceof Error ? err.message : String(err)
+								})
+							)
+						)
+			);
 
 		/** One pipelined read; a failing batch is re-asked per read so one bad view errors alone. */
 		const readAll = Effect.fn('Live.readAll')(function* (
@@ -187,25 +208,50 @@ export const LiveHubLive = Layer.effect(
 			reads += batch.length;
 			const read = Effect.fn('Live.read')(function* (items: readonly ReadIR[]) {
 				const snapshots = new Map<string, ReadSnapshot>();
-				const values = yield* reader.run(items, { as: 'caller', authority: conn.authority }, b).pipe(
-					Effect.provideService(ReadSnapshots, snapshots)
-				);
-				if (values.length !== items.length) return yield* Effect.fail(BoltError.make('internal', 'decode', 'The live read returned the wrong number of answers.'));
+				const values = yield* reader
+					.run(items, { as: 'caller', authority: conn.authority }, b)
+					.pipe(Effect.provideService(ReadSnapshots, snapshots));
+				if (values.length !== items.length)
+					return yield* Effect.fail(
+						BoltError.make(
+							'internal',
+							'decode',
+							'The live read returned the wrong number of answers.'
+						)
+					);
 				const answers: ReadAnswer[] = [];
 				for (const [index, item] of items.entries()) {
 					const ok = values[index];
-					if (ok === undefined) return yield* Effect.fail(BoltError.make('internal', 'decode', 'The live read returned no answer.'));
+					if (ok === undefined)
+						return yield* Effect.fail(
+							BoltError.make('internal', 'decode', 'The live read returned no answer.')
+						);
 					const requested = new Set(sourceKeys(item));
-					answers.push({ ok, snapshots: new Map([...snapshots].filter(([key]) => requested.has(key))) });
+					answers.push({
+						ok,
+						snapshots: new Map([...snapshots].filter(([key]) => requested.has(key)))
+					});
 				}
 				return answers;
 			});
-			return yield* read(batch).pipe(Effect.catch(() => Effect.forEach(batch, (item) =>
-				read([item]).pipe(Effect.match({
-					onSuccess: (values): Answer => values[0] ?? { err: BoltError.make('internal', 'decode', 'The live read returned no answer.') },
-					onFailure: (err): Answer => ({ err })
-				})), { concurrency: 'unbounded' })));
-
+			return yield* read(batch).pipe(
+				Effect.catch(() =>
+					Effect.forEach(
+						batch,
+						(item) =>
+							read([item]).pipe(
+								Effect.match({
+									onSuccess: (values): Answer =>
+										values[0] ?? {
+											err: BoltError.make('internal', 'decode', 'The live read returned no answer.')
+										},
+									onFailure: (err): Answer => ({ err })
+								})
+							),
+						{ concurrency: 'unbounded' }
+					)
+				)
+			);
 		});
 		const answer = Effect.fn('Live.answer')(function* (
 			conn: Conn,
@@ -225,9 +271,13 @@ export const LiveHubLive = Layer.effect(
 				if (expected === undefined || view.readVersion !== expected) continue;
 				const result = values[i];
 				if (result === undefined) continue;
-				if ('ok' in result) yield* put(conn, view, { value: result.ok, expected,
-					snapshots: result.snapshots,
-					...(arrivals === undefined ? {} : { arrivals: arrivals(view) }) });
+				if ('ok' in result)
+					yield* put(conn, view, {
+						value: result.ok,
+						expected,
+						snapshots: result.snapshots,
+						...(arrivals === undefined ? {} : { arrivals: arrivals(view) })
+					});
 				else yield* failed(conn, view, result.err, expected);
 			}
 		});
@@ -259,10 +309,16 @@ export const LiveHubLive = Layer.effect(
 			pending = [];
 			// a connection whose principal changed (revoked, deactivated, moved team, signed out) ends before this commit
 			// reaches it: the client reconnects, and its session is judged again
-			const changed = new Set(batch.flatMap(({ captured: c }) =>
-				c.model === 'sys_session' && c.op === 'delete' && typeof c.old?.['user'] === 'string' ? [`member:${c.old['user']}`]
-				: (c.model === 'sys_user' || c.model === 'sys_api_key') && c.old?.['revision'] !== c.new?.['revision']
-					? [`${c.model === 'sys_user' ? 'member' : 'api_key'}:${c.id}`] : []));
+			const changed = new Set(
+				batch.flatMap(({ captured: c }) =>
+					c.model === 'sys_session' && c.op === 'delete' && typeof c.old?.['user'] === 'string'
+						? [`member:${c.old['user']}`]
+						: (c.model === 'sys_user' || c.model === 'sys_api_key') &&
+							  c.old?.['revision'] !== c.new?.['revision']
+							? [`${c.model === 'sys_user' ? 'member' : 'api_key'}:${c.id}`]
+							: []
+				)
+			);
 			if (changed.size > 0)
 				for (const conn of [...conns.values()])
 					if (changed.has(actor_ref(conn.authority.actor))) yield* disconnect(conn.id);
@@ -280,79 +336,137 @@ export const LiveHubLive = Layer.effect(
 					work(conn, view).captured.push(entry);
 			const arrivals = (view: View): readonly Json[] | undefined => {
 				const after = view.arrivalsAfter;
-				return after === undefined ? undefined : batch.flatMap(({ captured, version }) =>
-					version > after ? patch.arrivals(view.plan, captured) : []);
+				return after === undefined
+					? undefined
+					: batch.flatMap(({ captured, version }) =>
+							version > after ? patch.arrivals(view.plan, captured) : []
+						);
 			};
 			const b = yield* bindings;
-			let hit = 0, patched = 0;
+			let hit = 0,
+				patched = 0;
 			const fallback = new Set<View>();
 			reads = 0;
-			yield* Effect.forEach([...interested], ([conn, views]) => Effect.gen(function* () {
-				const full: View[] = [], deltas: { view: View; rows: patch.Resolved[] }[] = [];
-				for (const { view, captured } of views.values()) {
-					if (conn.views.get(view.id) !== view) continue;
-					const rows: patch.Resolved[] = [], value = view.value;
-					let unsure = value === undefined;
-					if (!unsure && value !== undefined)
-						for (const { captured: c } of captured) {
-							const result = Result.try(() => patch.resolve(view.plan, value, c, b, view.snapshots));
-							if (Result.isFailure(result) || result.success === undefined) { unsure = true; break; }
-							rows.push(...result.success);
+			yield* Effect.forEach(
+				[...interested],
+				([conn, views]) =>
+					Effect.gen(function* () {
+						const full: View[] = [],
+							deltas: { view: View; rows: patch.Resolved[] }[] = [];
+						for (const { view, captured } of views.values()) {
+							if (conn.views.get(view.id) !== view) continue;
+							const rows: patch.Resolved[] = [],
+								value = view.value;
+							let unsure = value === undefined;
+							if (!unsure && value !== undefined)
+								for (const { captured: c } of captured) {
+									const result = Result.try(() =>
+										patch.resolve(view.plan, value, c, b, view.snapshots)
+									);
+									if (Result.isFailure(result) || result.success === undefined) {
+										unsure = true;
+										break;
+									}
+									rows.push(...result.success);
+								}
+							if (!unsure && rows.length === 0) continue;
+							hit++;
+							if (unsure) full.push(view);
+							else deltas.push({ view, rows });
 						}
-					if (!unsure && rows.length === 0) continue;
-					hit++;
-					if (unsure) full.push(view);
-					else deltas.push({ view, rows });
-				}
-				// Whole answers and scoped single-row fetches still share one pipelined crossing.
-				// one fetch per distinct row read: repeated captures of one row (coalesced commits) share it
-				const gets = new Map<string, number>(), fetches: ReadIR[] = [];
-				const slots = deltas.map(({ rows }) => rows.map((change) => {
-					if (!('get' in change)) return null;
-					const key = JSON.stringify(change.get.read);
-					let slot = gets.get(key);
-					if (slot === undefined) gets.set(key, slot = full.length + fetches.push(change.get.read) - 1);
-					return slot;
-				}));
-				const tickets = new Map(full.map((view) => [view, ++view.readVersion]));
-				const values = yield* readAll(conn, [...full.map((view) => view.read), ...fetches], b);
-				for (const [i, view] of full.entries()) {
-					const result = values[i], expected = tickets.get(view);
-					if (result === undefined || expected === undefined || conn.views.get(view.id) !== view || view.readVersion !== expected) continue;
-					if ('ok' in result) yield* put(conn, view, { value: result.ok, expected, snapshots: result.snapshots, arrivals: arrivals(view) });
-					else yield* failed(conn, view, result.err, expected);
-				}
-				const again: View[] = [];
-				for (const [d, { view, rows }] of deltas.entries()) {
-					const got = (slots[d] ?? []).map((slot) => slot === null ? null : values[slot]);
-					if (conn.views.get(view.id) !== view) continue;
-					if (got.some((answer) => answer !== null)) fallback.add(view);
-					if (view.value === undefined) { again.push(view); continue; }
-					const work: patch.PatchWork = { value: view.value, ops: [], roots: new Set<string>() };
-					const expected = view.readVersion;
-					let exact = true;
-					for (const [i, change] of rows.entries()) {
-						const answer = got[i];
-						if ('get' in change && (answer === undefined || answer === null || 'err' in answer)) { exact = false; break; }
-						const result = Result.try(() => {
-							const row = 'row' in change ? change.row : 'get' in change && answer !== null && answer !== undefined && 'ok' in answer
-								? change.get.row(answer.ok) : undefined;
-							return patch.apply(work, change, row, b, view.snapshots);
-						});
-						if (Result.isFailure(result) || !result.success) { exact = false; break; }
-					}
-					if (!exact) { again.push(view); continue; }
-					const ops = patch.patches(work), incoming = arrivals(view);
-					if (ops.length === 0 && !incoming?.length) continue;
-					patched++;
-					yield* put(conn, view, { value: work.value, expected, ops, arrivals: incoming });
-				}
-				for (const view of [...full, ...again]) fallback.add(view);
-				yield* answer(conn, again, arrivals);
-			}), { concurrency: 'unbounded', discard: true });
+						// Whole answers and scoped single-row fetches still share one pipelined crossing.
+						// one fetch per distinct row read: repeated captures of one row (coalesced commits) share it
+						const gets = new Map<string, number>(),
+							fetches: ReadIR[] = [];
+						const slots = deltas.map(({ rows }) =>
+							rows.map((change) => {
+								if (!('get' in change)) return null;
+								const key = JSON.stringify(change.get.read);
+								let slot = gets.get(key);
+								if (slot === undefined)
+									gets.set(key, (slot = full.length + fetches.push(change.get.read) - 1));
+								return slot;
+							})
+						);
+						const tickets = new Map(full.map((view) => [view, ++view.readVersion]));
+						const values = yield* readAll(conn, [...full.map((view) => view.read), ...fetches], b);
+						for (const [i, view] of full.entries()) {
+							const result = values[i],
+								expected = tickets.get(view);
+							if (
+								result === undefined ||
+								expected === undefined ||
+								conn.views.get(view.id) !== view ||
+								view.readVersion !== expected
+							)
+								continue;
+							if ('ok' in result)
+								yield* put(conn, view, {
+									value: result.ok,
+									expected,
+									snapshots: result.snapshots,
+									arrivals: arrivals(view)
+								});
+							else yield* failed(conn, view, result.err, expected);
+						}
+						const again: View[] = [];
+						for (const [d, { view, rows }] of deltas.entries()) {
+							const got = (slots[d] ?? []).map((slot) => (slot === null ? null : values[slot]));
+							if (conn.views.get(view.id) !== view) continue;
+							if (got.some((answer) => answer !== null)) fallback.add(view);
+							if (view.value === undefined) {
+								again.push(view);
+								continue;
+							}
+							const work: patch.PatchWork = {
+								value: view.value,
+								ops: [],
+								roots: new Set<string>()
+							};
+							const expected = view.readVersion;
+							let exact = true;
+							for (const [i, change] of rows.entries()) {
+								const answer = got[i];
+								if (
+									'get' in change &&
+									(answer === undefined || answer === null || 'err' in answer)
+								) {
+									exact = false;
+									break;
+								}
+								const result = Result.try(() => {
+									const row =
+										'row' in change
+											? change.row
+											: 'get' in change && answer !== null && answer !== undefined && 'ok' in answer
+												? change.get.row(answer.ok)
+												: undefined;
+									return patch.apply(work, change, row, b, view.snapshots);
+								});
+								if (Result.isFailure(result) || !result.success) {
+									exact = false;
+									break;
+								}
+							}
+							if (!exact) {
+								again.push(view);
+								continue;
+							}
+							const ops = patch.patches(work),
+								incoming = arrivals(view);
+							if (ops.length === 0 && !incoming?.length) continue;
+							patched++;
+							yield* put(conn, view, { value: work.value, expected, ops, arrivals: incoming });
+						}
+						for (const view of [...full, ...again]) fallback.add(view);
+						yield* answer(conn, again, arrivals);
+					}),
+				{ concurrency: 'unbounded', discard: true }
+			);
 			// Every connection still sees the commit watermark, even when none of its views depends on it.
 			yield* Effect.forEach([...conns.values()], (conn) => conn.send({ t: 'v', v: routed }), {
-				concurrency: 'unbounded', discard: true
+				concurrency: 'unbounded',
+				discard: true
 			});
 			for (const view of fallback) view.conservative = true;
 			conservative += fallback.size;
@@ -465,7 +579,9 @@ export const LiveHubLive = Layer.effect(
 			publish(captured: readonly Captured[]): number {
 				if (captured.length === 0) return v;
 				v++;
-				pending.push(...storedCaptures(catalog, captured).map((row) => ({ captured: row, version: v })));
+				pending.push(
+					...storedCaptures(catalog, captured).map((row) => ({ captured: row, version: v }))
+				);
 				queue();
 				return v;
 			},
@@ -492,7 +608,12 @@ export const LiveHubLive = Layer.effect(
 				for (const previous of [...conn.views.values()]) {
 					const plan = yield* compiler.compile(previous.read, authority);
 					unindex(previous);
-					const view: View = { ...previous, value: undefined, snapshots: new Map<string, ReadSnapshot>(), plan };
+					const view: View = {
+						...previous,
+						value: undefined,
+						snapshots: new Map<string, ReadSnapshot>(),
+						plan
+					};
 					conn.views.set(view.id, view);
 					index(conn, view);
 					views.push(view);

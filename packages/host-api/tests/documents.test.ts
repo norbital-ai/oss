@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { extractDocumentText } from '../src/documents.ts';
+import { extractDocumentText } from '../src/node/documents.ts';
 
 /** A one-page PDF whose content stream is `content`; offsets are computed so the xref is exact. */
 const pdf = (content: string) => {

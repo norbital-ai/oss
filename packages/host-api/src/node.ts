@@ -55,3 +55,6 @@ export { cell_api, vm_cell, type VmCell } from './node/cell.ts';
 export { cron_clock } from './node/cron-clock.ts';
 export { node_guests, type NodeGuestsOptions } from './node/guests.ts';
 export { HOST_FILE, host_file_of, host_module, load_host } from './node/host-file.ts';
+
+export { publicWeb } from './node/web.ts';
+export { extractDocumentText } from './node/documents.ts';

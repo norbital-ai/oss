@@ -1,20 +1,22 @@
 # `@norbital-ai/providers`
 
 Bolt's built-in integration drivers. Workspaces name drivers; a host registers these providers at the
-host boundary. Facility adapters (mail, sms, phone, speech) belong to the host that writes them; bolt-server's
-are an example.
+host boundary. Shared delivery drivers live here too; generic Node execution ports live in
+`@norbital-ai/host-api/node`. Each host composes these into its facilities.
 
 ```ts
-import { drivers } from '@norbital-ai/bolt-server';
+import { drivers } from '@norbital-ai/providers';
 ```
 
 Entries:
 
 - `@norbital-ai/providers` — `default_providers()` (WhatsApp Web/Twilio, Telegram, Slack, Discord,
   WeChat, IMAP/SMTP mailbox, Google Calendar, and every platform under `src/chat/`), OAuth helpers and
-  the shared HTTP answer decoding
+  the shared HTTP answer decoding; `drivers()` also includes guarded HTTP and SQL Server adapters.
+  `push()` and `apns()` deliver notices through Web Push and Apple Push Notification service
 - `@norbital-ai/providers/abi` — the provider ABI and `to_drivers()`
 - `@norbital-ai/providers/openrouter` — OpenRouter chat and embeddings
+- `@norbital-ai/providers/openai` — OpenAI-compatible streamed chat, independent of the workspace engine
 - `@norbital-ai/providers/errors` — shared provider failures
 
 Each integration instance pairs with its own account and seals its credentials on the host; the

@@ -80,7 +80,7 @@
 		request,
 		unconfigured = false,
 		admin = false,
-		envoys = {},
+		envoys,
 		catalog = {},
 		zone,
 		nav = [],
@@ -102,7 +102,7 @@
 		entries?: readonly ManifestItem[];
 		catalog?: Readonly<Record<string, ModelExposure>>;
 		zone?: string;
-		/** Each envoy's display name (`ShellBoot.envoys`), for the picker's groups. */ envoys?: {
+		/** Each envoy's display name (`ShellBoot.envoys`), for the picker's groups. */ envoys: {
 			readonly [envoy: string]: string;
 		};
 		/** The open conversation changed (`null`: a new one), for the shell's `?agent=`. */ on_conversation?: (
@@ -221,7 +221,7 @@
 				uploads.delete(file);
 				return yield* Effect.fail(new AgentPanelFailed({ message: `${file.name}: ${uploaded.failure.message}`, cause: uploaded.failure }));
 			}
-			refs.push(uploaded.success);
+			if (!refs.some((ref) => ref.id === uploaded.success.id)) refs.push(uploaded.success);
 		}
 		return refs;
 	});

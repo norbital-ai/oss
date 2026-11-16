@@ -31,7 +31,12 @@ export const ArtifactJson = Schema.Struct({
 	name: Schema.String,
 	/** The schema fingerprint `plan`/`apply_migrations` record. */
 	schema: Schema.String,
-	client: Schema.Struct({ entry: Schema.String, css: Schema.Array(Schema.String) }),
+	client: Schema.Struct({
+		entry: Schema.String,
+		css: Schema.Array(Schema.String),
+		/** Compiler-fingerprinted files that may retain the same URL across releases. */
+		immutable: Schema.optionalKey(Schema.Array(Schema.String))
+	}),
 	/**
 	 * Public routes (`app/<app>/<page>`, `kiosk/<kiosk>/<page>`) carry their own browser entry and CSS and a private,
 	 * bounded server program under `server/`, outside the statically served `client/`.
@@ -51,8 +56,6 @@ export const ArtifactJson = Schema.Struct({
 		client: Schema.String,
 		server: Schema.String
 	}),
-	/** Historical descriptor data covered by `hash`; native snapshot files are never read or executed. */
-	snapshot: Schema.optionalKey(Schema.Struct({ key: Schema.String, sha: Schema.String })),
 	hash: Schema.String
 });
 export type ArtifactJson = typeof ArtifactJson.Type;
@@ -90,8 +93,7 @@ export function public_page_keys(m: EngineManifest): readonly string[] {
 // ponytail: the digest is of the package release, not yet of the C1 JSON Schema + C2 ABI descriptor;
 // switch when those descriptors exist as files.
 /**
- * This engine's contract digest, recorded in each `artifact.json` it builds. A host implements a set of these and
- * refuses an artifact built for any other.
+ * This engine's contract digest, recorded in each `artifact.json` it builds. The engine refuses any other contract.
  */
 export const CONTRACT = sha256_hex(`${release.name}@${release.version}`);
 
@@ -139,11 +141,9 @@ const text = (path: string) => Effect.map(file(path), (b) => new TextDecoder().d
  * `manifest.json` that does not decode (`ManifestInvalid`), a manifest whose schema is not the one recorded, and
  * any file whose digest is not the recorded one — the manifest, the guest, the client tree, and through
  * `hash` the assets, skills and workspace source.
- * Historical snapshot metadata remains in the descriptor digest; its native blob is never read or trusted.
  */
 export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 	dir: string,
-	contracts: readonly string[] = [CONTRACT],
 	/** `executed`: a host that admitted the release already checked its trees; only what runs here is checked again. */
 	digests: 'all' | 'executed' = 'all'
 ) {
@@ -157,11 +157,11 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 			`${dir} holds no artifact.json; run bolt build`
 		);
 	const artifact = yield* Effect.fromResult(
-		decodeArtifactJson(yield* text(at)).pipe(
+		decodeArtifactJson(yield* text(at), { onExcessProperty: 'error' }).pipe(
 			Result.mapError((e) => new ManifestInvalid({ issues: e.message.split('\n') }))
 		)
 	);
-	if (!contracts.includes(artifact.contract))
+	if (artifact.contract !== CONTRACT)
 		return yield* BoltError.make(
 			'contract',
 			'admission',
@@ -181,17 +181,13 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 		)
 	);
 	const migrations = yield* read_migrations(join(dir, 'migrations'));
-	// The fingerprint folds in this engine's system layer: only an artifact of this contract can be re-derived here.
-	// A pinned older release's schema is verified by its own graph's HOST_API; its digest still binds the manifest.
-	if (artifact.contract === CONTRACT) {
-		yield* current(migrations.snapshot, migration_schema(manifest)).pipe(Effect.mapError(from_store));
-		if (fingerprint(schema_slice(manifest)) !== artifact.schema)
-			return yield* BoltError.make(
-				'schema_mismatch',
-				'admission',
-				'manifest.json does not match the artifact schema hash'
-			);
-	}
+	yield* current(migrations.snapshot, migration_schema(manifest)).pipe(Effect.mapError(from_store));
+	if (fingerprint(schema_slice(manifest)) !== artifact.schema)
+		return yield* BoltError.make(
+			'schema_mismatch',
+			'admission',
+			'manifest.json does not match the artifact schema hash'
+		);
 	const map = join(dir, 'guest.mjs.map');
 	const guest: GuestProgram = {
 		source: yield* text(join(dir, 'guest.mjs')),
@@ -212,7 +208,7 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 		}
 		guest.assets = held;
 	}
-	const { format, contract, handle, name, schema, client, pages, hashes, snapshot } = artifact;
+	const { format, contract, handle, name, schema, client, pages, hashes } = artifact;
 	const actual = {
 		manifest: sha256_hex(manifestText),
 		guest: sha256_hex(guest.source),
@@ -234,8 +230,7 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 			schema,
 			client,
 			pages,
-			hashes,
-			...(snapshot === undefined ? {} : { snapshot })
+			hashes
 		})) === artifact.hash
 			? undefined
 			: 'hash');

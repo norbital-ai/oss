@@ -1,3 +1,5 @@
+import type { Attachment as HostAttachment, CalendarEvent } from '@norbital-ai/host-api';
+export type { CalendarEvent } from '@norbital-ai/host-api';
 // One path-bound integration per `src/integration/<name>/+integration.ts`.
 // A definition is the connection only: one driver (a Bolt kind or one it declares), its typed configuration and
 // credential, OAuth, the HTTP base and auth, webhook verification and handler, a request rate and an inline `test` body.
@@ -27,16 +29,17 @@ import type {
 import type { InstanceId, IntegrationName, IntegrationSpecOf, Is, PolicyName } from '../names.ts';
 import type {
 	FileRef,
-	IanaZone,
 	Id,
 	Instant,
 	Json,
 	NonEmpty,
-	PlainDate,
 	Rate,
 	RecordRef
 } from '../values.ts';
 import type { SecretName } from './names.ts';
+
+/** The transport attachment with a workspace's typed file handle. */
+export type Attachment = Omit<HostAttachment, 'id'> & { readonly id?: Id<'sys_file'> };
 
 /**
  * How an integration signs incoming webhooks: `standard` (Standard Webhooks, Svix headers too), `hmac-sha256`,
@@ -123,13 +126,6 @@ export const driver_of = (def: Pick<IntegrationSpec, 'driver'>): DriverContract 
 type Contract<D> = D extends DriverName ? (typeof DRIVERS)[D] : D;
 
 // ── messages ──
-/** A file a message carries: `id` names the stored file; none when the row could not store its bytes (too large, never received). */
-export type Attachment = {
-	readonly id?: Id<'sys_file'>;
-	readonly name: string;
-	readonly mime: string;
-	readonly bytes: number;
-};
 type Address = { readonly address: string; readonly name: string | null };
 /** An inbound email: the full text and headers. */
 type InboundMail = {
@@ -261,27 +257,6 @@ type MessageDelivery<K> = { readonly kind: 'message'; readonly message: MessageI
 export type DeliveryOf<D, K = ConversationOf<D>> = [K] extends [never]
 	? WebhookDelivery
 	: MessageDelivery<K> | { [E in DeliveryKind]: DeliveryEvent<E, K> }[DeliveryKind];
-/** When a calendar event starts or ends: a whole day, or an instant with the zone it was set in. */
-type CalendarTime =
-	{ readonly date: PlainDate } | { readonly at: Instant; readonly zone: IanaZone | null };
-/**
- * One event a `calendar` driver pushes to a sync's `read` (`items`); the read's `partition` is its calendar (a sync's
- * `partitions` names the text-many configuration field listing them, one cursor each). A changed calendar wakes its
- * partition; lost history (`retained: false`) starts a fresh snapshot. All-day events keep their dates, timed events
- * their instants and source zones.
- */
-export type CalendarEvent = {
-	readonly id: string;
-	readonly summary: string | null;
-	readonly description: string | null;
-	readonly location: string | null;
-	readonly url: string | null;
-	readonly status: 'confirmed' | 'tentative' | 'cancelled';
-	readonly start: CalendarTime;
-	readonly end: CalendarTime;
-	/** Original provider event, including attendees, recurrence and identifiers needed by authored business rules. */
-	readonly source: Json;
-};
 /** What definition `D`'s driver pushes to a sync's `read` as `items`; `never` for a driver that pushes nothing. */
 export type DriverItemOf<D> = Contract<DriverOf<D>> extends { items: 'calendar' } ? CalendarEvent : never;
 

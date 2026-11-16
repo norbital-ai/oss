@@ -44,7 +44,7 @@ export const WaitState = Schema.Struct({
 /** A wait as the running row registers it before it checks anything: a wake from then on is kept for it. */
 export const Registered = Schema.Struct({ on: WaitOn, woke: Schema.optionalKey(Woke) });
 export type WaitState = typeof WaitState.Type;
-type Journal = typeof WaitState.Type['journal'][number];
+type Journal = (typeof WaitState.Type)['journal'][number];
 
 const Failure = Schema.Union([
 	Schema.Struct({ kind: Schema.Literal('unavailable'), facility: Schema.String, reason: Schema.String }),
@@ -71,9 +71,9 @@ const Answer = Schema.fromJsonString(
 const encodeAnswer = Schema.encodeSync(Answer),
 	decodeAnswer = Schema.decodeUnknownOption(Answer);
 
-/** A crossing's identity in the journal: its member and arguments, its bytes by length. */
+/** A crossing's identity includes the content of every binary argument. */
 const digest = (call: CrossCall): string =>
-	sha256_hex(JSON.stringify(call, (_, v: unknown) => (v instanceof Uint8Array ? v.byteLength : v)));
+	sha256_hex(JSON.stringify(call, (_, v: unknown) => (v instanceof Uint8Array ? sha256_hex(v) : v)));
 export const journalEntry = (call: CrossCall, answer: CrossAnswer): Journal => {
 	const bins = answer.ok ? answer.bins : undefined;
 	return {

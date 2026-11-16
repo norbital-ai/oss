@@ -190,81 +190,112 @@ it.live('file captions round trip through exports and imports, with schema capti
 		}, policies: [], admin: true };
 		const exported = Effect.fnUntraced(function* (sync: string) {
 			const handler = yield* registry.handler(`documents.sync.${sync}`);
-			if (Option.isNone(handler)) throw new Error('Missing file sync');
-			const out = yield* Schema.decodeUnknownEffect(Schema.Struct({
+					if (Option.isNone(handler)) throw new Error('Missing file sync');
+					const out = yield* Schema.decodeUnknownEffect(Schema.Struct({
 				file: Schema.Struct({ id: Schema.String })
-			}))(yield* handler.value({ mode: 'export', format: 'csv' }, { id: randomUUID(), starter }));
-			const key = yield* t.db.value(Schema.String, {
-				text: 'SELECT key FROM sys_file WHERE id = $1', params: [out.file.id]
-			});
-			const bytes = yield* files.get(key, 1_000_000);
-			return new TextDecoder().decode(bytes);
-		});
-		const sheet = yield* exported('sheet');
-		expect(sheet.split(/\r?\n/)[0]).toBe('Référence,Nom,internal_note');
-		const handler = yield* registry.handler('documents.sync.sheet');
-		if (Option.isNone(handler)) throw new Error('Missing file sync');
-		for (const { csv, expected } of [
+			}))(yield* handler.value({ mode: 'export', to: 'csv' }, { id: randomUUID(), starter }));
+					const key = yield* t.db.value(Schema.String, {
+							text: 'SELECT key FROM sys_file WHERE id = $1',
+							params: [out.file.id]
+						});
+					const bytes = yield* files.get(key, 1_000_000);
+					return new TextDecoder().decode(bytes);
+				});
+				const sheet = yield* exported('sheet');
+				expect(sheet.split(/\r?\n/)[0]).toBe('Référence,Nom,internal_note');
+				const handler = yield* registry.handler('documents.sync.sheet');
+				if (Option.isNone(handler)) throw new Error('Missing file sync');
+				for (const { csv, expected } of [
 			{ csv: sheet.replace('Original', 'From caption'), expected: 'From caption' },
 			{ csv: 'code,display_name\nA,From name\n', expected: 'From name' }
 		]) {
-			const bytes = new TextEncoder().encode(csv), id = randomUUID();
-			const blob = yield* files.put(bytes, { name: 'rows.csv', mime: 'text/csv' });
-			yield* t.db.write({
+					const bytes = new TextEncoder().encode(csv), id = randomUUID();
+					const blob = yield* files.put(bytes, { name: 'rows.csv', mime: 'text/csv' });
+					yield* t.db.write({
 				text: `INSERT INTO sys_file(id,name,mime,size,key,sha256,field,created_by,created_at)
 					VALUES ($1,'rows.csv','text/csv',$2,$3,$4,'documents.$import.sheet',$5,now())`,
 				params: [id, bytes.byteLength, blob.key, blob.sha256, alice]
 			});
-			expect(yield* handler.value({ mode: 'import', file: id }, { id: randomUUID(), starter }))
-				.toMatchObject({ applied: true, findings: [] });
-			expect(yield* t.db.value(Schema.String, {
-				text: 'SELECT display_name FROM documents WHERE code = $1', params: ['A']
-			})).toBe(expected);
-		}
-		expect((yield* exported('plain')).split(/\r?\n/)[0]).toBe('Code du modèle,Nom,internal_note');
-	}))
+					expect(yield* handler.value({ mode: 'import', file: id }, { id: randomUUID(), starter })).toMatchObject({ applied: true, findings: [] });
+					expect(
+						yield* t.db.value(Schema.String, {
+							text: 'SELECT display_name FROM documents WHERE code = $1',
+							params: ['A']
+						})
+					).toBe(expected);
+				}
+				expect((yield* exported('plain')).split(/\r?\n/)[0]).toBe('Code du modèle,Nom,internal_note');
+			})
+		)
 );
 
 it.live('a member exports, downloads a template and imports through the sync_control route', () =>
-	Effect.scoped(Effect.gen(function* () {
-		const sheets: EngineManifest = {
-			...base,
-			models: { orders: {
-				description: 'Orders', record_label: 'record.customer',
-				unique: [{ fields: ['customer'], import_key: true }],
-				fields: { customer: { kind: 'text' }, note: { kind: 'text', optional: true } }
-			} },
-			relationships: {},
-			exposures: { orders: {
-				outputs: { default: { orders: { fields: 'all' } } },
-				create: { columns: { orders: ['customer', 'note'] } },
-				update: { columns: { orders: ['customer', 'note'] } },
-				syncs: { sheet: { with: 'file', parser: ['csv'], schema: {
-					customer: { kind: 'text' }, note: { kind: 'text', optional: true }
-				} } }
-			} }
-		};
-		const t = Context.get(yield* Layer.build(TestWorkspace.layer({ manifest: sheets })), TestWorkspace);
-		const member = yield* t.as(t.admin);
-		const ran = Effect.fnUntraced(function* (input: Parameters<typeof member.sync_control<'orders', 'sheet'>>[2]) {
-			const started = yield* member.sync_control('orders', 'sheet', input);
-			if (started.kind !== 'committed') throw new Error('start held');
-			yield* t.run_due();
-			return yield* t.db.value(Schema.Unknown, {
-				text: 'SELECT output FROM sys_run WHERE id = $1', params: [started.output.id]
+	Effect.scoped(
+		Effect.gen(function* () {
+			const sheets: EngineManifest = {
+				...base,
+				models: {
+					orders: {
+						description: 'Orders',
+						record_label: 'record.customer',
+						unique: [{ fields: ['customer'], import_key: true }],
+						fields: { customer: { kind: 'text' }, note: { kind: 'text', optional: true } }
+					}
+				},
+				relationships: {},
+				exposures: {
+					orders: {
+						outputs: { default: { orders: { fields: 'all' } } },
+						create: { columns: { orders: ['customer', 'note'] } },
+						update: { columns: { orders: ['customer', 'note'] } },
+						syncs: {
+							sheet: {
+								with: 'file',
+								parser: ['csv'],
+								schema: {
+									customer: { kind: 'text' },
+									note: { kind: 'text', optional: true }
+								}
+							}
+						}
+					}
+				}
+			};
+			const t = Context.get(yield* Layer.build(TestWorkspace.layer({ manifest: sheets })), TestWorkspace);
+			const member = yield* t.as(t.admin);
+			const ran = Effect.fnUntraced(function* (
+				input: Parameters<typeof member.sync_control<'orders', 'sheet'>>[2]
+			) {
+				const started = yield* member.sync_control('orders', 'sheet', input);
+				if (started.kind !== 'committed') throw new Error('start held');
+				yield* t.run_due();
+				return yield* t.db.value(Schema.Unknown, {
+					text: 'SELECT output FROM sys_run WHERE id = $1',
+					params: [started.output.id]
+				});
 			});
-		});
-		const csv = Effect.fnUntraced(function* (output: unknown) {
-			const { file } = yield* Schema.decodeUnknownEffect(Schema.Struct({ file: Schema.Struct({ id: Schema.String }) }))(output);
-			const key = yield* t.db.value(Schema.String, { text: 'SELECT key FROM sys_file WHERE id = $1', params: [file.id] });
-			return new TextDecoder().decode(t.fakes.files.blobs.get(key));
-		});
-		expect((yield* csv(yield* ran({ mode: 'template', format: 'csv' }))).split(/\r?\n/)[0]).toBe('customer,note');
-		const uploaded = yield* member.upload('orders.$import.sheet', {
-			name: 'rows.csv', mime: 'text/csv', bytes: new TextEncoder().encode('customer,note\nAcme,Imported\n')
-		});
-		if (uploaded.kind !== 'committed') throw new Error('upload held');
-		expect(yield* ran({ mode: 'import', file: uploaded.output.id })).toMatchObject({ applied: true, findings: [] });
-		expect(yield* csv(yield* ran({ mode: 'export', format: 'csv' }))).toContain('Acme,Imported');
-	}))
+			const csv = Effect.fnUntraced(function* (output: unknown) {
+				const { file } = yield* Schema.decodeUnknownEffect(Schema.Struct({ file: Schema.Struct({ id: Schema.String }) }))(output);
+				const key = yield* t.db.value(Schema.String, {
+					text: 'SELECT key FROM sys_file WHERE id = $1',
+					params: [file.id]
+				});
+				return new TextDecoder().decode(t.fakes.files.blobs.get(key));
+			});
+			expect((yield* csv(yield* ran({ mode: 'template', to: 'csv' }))).split(/\r?\n/)[0]).toBe(
+				'customer,note'
+			);
+			const uploaded = yield* member.upload('orders.$import.sheet', {
+				name: 'rows.csv',
+				mime: 'text/csv',
+				bytes: new TextEncoder().encode('customer,note\nAcme,Imported\n')
+			});
+			if (uploaded.kind !== 'committed') throw new Error('upload held');
+			expect(yield* ran({ mode: 'import', file: uploaded.output.id })).toMatchObject({
+				applied: true,
+				findings: []
+			});
+			expect(yield* csv(yield* ran({ mode: 'export', to: 'csv' }))).toContain('Acme,Imported');
+		})
+	)
 );

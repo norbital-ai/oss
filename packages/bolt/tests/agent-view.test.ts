@@ -286,10 +286,15 @@ describe('the context view (L-BOLT-546)', () => {
 
 describe('the model-change divider (L-BOLT-547)', () => {
 	it('uses decoded reply usage and ignores usage carried by a user row', () => {
-		expect([...modelDividers([
-			reply(1, 'fast'), row(2, { usage: { input: 1, output: 1, calls: 1, model: 'strong' } }),
-			reply(3), reply(4, 'fast'), reply(5, 'strong')
-		])]).toEqual([['m5', 'strong']]);
+		expect([
+			...modelDividers([
+				reply(1, 'fast'),
+				row(2, { usage: { input: 1, output: 1, calls: 1, model: 'strong' } }),
+				reply(3),
+				reply(4, 'fast'),
+				reply(5, 'strong')
+			])
+		]).toEqual([['m5', 'strong']]);
 	});
 	it('marks every change, a switch back too, and nothing between replies of one model; a reply with no model is skipped', () => {
 		const rows = [
@@ -442,7 +447,10 @@ describe('Studio outcomes outside the folded steps', () => {
 		const found = '{"failing":2,"types":{"total":2,"diagnostics":[]}}',
 			older = '{"error":"2 failing","types":{"total":2,"diagnostics":[]}}';
 		for (const result of [found, older]) {
-			const check = tool('workspace_diagnose', result, { behavior: { diagnostics: true }, failed: result === older });
+			const check = tool('workspace_diagnose', result, {
+				behavior: { diagnostics: true },
+				failed: result === older
+			});
 			expect(checkOf(check)).toEqual({ typeErrors: 2, testsFailed: false });
 			expect(failureOf(check)).toBe('');
 			expect(failedVerbs([row(1, { role: 'tool', tool: check })])).toEqual([]);
@@ -538,7 +546,13 @@ describe('Studio outcomes outside the folded steps', () => {
 					conversation: 'c',
 					seq,
 					role: 'tool',
-					content: { id: `k${seq}`, assistant: 'a1', name: 'workspace_merge', studio: 'merge', result },
+					content: {
+						id: `k${seq}`,
+						assistant: 'a1',
+						name: 'workspace_merge',
+						studio: 'merge',
+						result
+					},
 					text: null,
 					state: null,
 					mode: null,
@@ -566,11 +580,8 @@ describe('Studio outcomes outside the folded steps', () => {
 	);
 });
 
-it('a clipped act still names its callable', () => {
-	const clipped =
-		'{"callable":"trials.create","input":[{"project_id":"p1","sample_label":"8A","compo';
+it('a clipped atomic act still names its first write', () => {
+	const clipped = '{"acts":{"trials.create":[{"project_id":"p1","sample_label":"8A","compo';
 	expect(stepView('act', stepArgs(clipped)).verb).toBe('Create trials');
-	expect(stepView('act', stepArgs('{"callable":"projects.update","input":[]}')).verb).toBe(
-		'Update projects'
-	);
+	expect(stepView('act', stepArgs('{"acts":{"projects.update":[]}}')).verb).toBe('Update projects');
 });

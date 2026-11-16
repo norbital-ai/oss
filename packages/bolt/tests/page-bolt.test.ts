@@ -11,8 +11,11 @@ import {
 	Schema,
 	Stream
 } from 'effect';
+import { TestClock } from 'effect/testing';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { describe, expect, it } from '@effect/vitest';
+import { sha256_hex } from '@norbital-ai/store';
+import { LiveBody } from '../src/protocol/schema.ts';
 import { input_schema } from '@norbital-ai/store/kind';
 import { create_bolt, patched } from '../src/page/bolt.ts';
 import type { EventSourceLike } from '../src/page/stream.ts';
@@ -72,9 +75,7 @@ describe('reads', () => {
 		Effect.gen(function* () {
 			const { bolt, sent } = yield* client(() =>
 				Response.json({
-					answers: [
-						{ jobs: { rows: [{ id: 'a', amount: '1.50' }], next: null, total: 1 } }
-					]
+					answers: [{ jobs: { rows: [{ id: 'a', amount: '1.50' }], next: null, total: 1 } }]
 				})
 			);
 			const read = bolt.native_query({ m: 'query', a: [{ jobs: { limit: 1 } }] }, Amounts);
@@ -294,7 +295,10 @@ describe('reads', () => {
 			expect(Number(decimal(painted.jobs.rows[0]?.amount))).toBe(0);
 			yield* Deferred.succeed(
 				reply,
-				Response.json({ outcome: { kind: 'committed', output: { 'jobs.update': null }, records: [] }, v: 1 })
+				Response.json({
+					outcome: { kind: 'committed', output: { 'jobs.update': null }, records: [] },
+					v: 1
+				})
 			);
 			yield* Fiber.join(act);
 		})
@@ -596,8 +600,89 @@ describe('live patches on a page value', () => {
 			status: 'stopped',
 			rows: [{ id: 'a' }]
 		});
-		expect(patched({ id: 'a', status: 'running' }, [{ op: 'meta', key: 'status', value: 'stopped' }])).toEqual({ id: 'a', status: 'stopped' });
-		expect(patched({ id: 'a', status: 'running' }, [{ op: 'unset', key: 'status' }])).toEqual({ id: 'a' });
+		expect(
+			patched({ id: 'a', status: 'running' }, [{ op: 'meta', key: 'status', value: 'stopped' }])
+		).toEqual({ id: 'a', status: 'stopped' });
+		expect(patched({ id: 'a', status: 'running' }, [{ op: 'unset', key: 'status' }])).toEqual({
+			id: 'a'
+		});
 		expect(patched(null, [{ op: 'meta', key: 'status', value: 'stopped' }])).toBe(undefined);
 	});
 });
+
+it.effect(
+	'an inactive read retains its image without painting it until the server validates it',
+	() =>
+		Effect.gen(function* () {
+			const opened = yield* Queue.unbounded<EventSourceLike>();
+			const registrations = yield* Queue.unbounded<typeof LiveBody.Type>();
+			const values = yield* Queue.unbounded<typeof Ids.Type>();
+			const bolt = yield* create_bolt({
+				operation_outputs: { automations: {} },
+				actor: null,
+				locale: 'en',
+				base: 'https://workspace.test',
+				fetch: async (_url, init) => {
+					const request = new Request('https://workspace.test/__bolt/live', init);
+					Queue.offerUnsafe(
+						registrations,
+						Schema.decodeUnknownSync(LiveBody)(await request.json())
+					);
+					return Response.json({ errors: [] });
+				},
+				open_stream: () => {
+					let handler: EventSourceLike['onmessage'] = null;
+					const source: EventSourceLike = {
+						get onmessage() {
+							return handler;
+						},
+						set onmessage(next) {
+							handler = next;
+							if (next !== null) Queue.offerUnsafe(opened, source);
+						},
+						onerror: null,
+						close() {}
+					};
+					return source;
+				}
+			});
+			const observe = () =>
+				Stream.runForEach(bolt.observe(all_jobs, Ids), (value) => Queue.offer(values, value)).pipe(
+					Effect.scoped,
+					Effect.forkScoped
+				);
+			const first = yield* observe();
+			const source = yield* Queue.take(opened);
+			const push = (frame: Frame) =>
+				source.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
+			push({ t: 'hello', conn: 'c1', v: 0 });
+			const one = (yield* Queue.take(registrations)).add?.[0];
+			if (one === undefined) throw new Error('No initial registration');
+			const value = { jobs: { rows: [{ id: 'one' }], next: null, total: 1 } };
+			push({ t: 'answer', view: one.view, v: 0, value });
+			expect(yield* Queue.take(values)).toEqual(value);
+			// Another mounted read keeps the shared stream alive while this page's grace expires.
+			yield* Stream.runDrain(bolt.observe({ read: { m: 'query', a: [{ jobs: { limit: 1 } }] } }, Ids)).pipe(Effect.scoped, Effect.forkScoped);
+			yield* Queue.take(registrations);
+			yield* Fiber.interrupt(first);
+			yield* TestClock.adjust('31 seconds');
+			expect((yield* Queue.take(registrations)).drop).toEqual([one.view]);
+			const second = yield* observe();
+			const two = (yield* Queue.take(registrations)).add?.[0];
+			if (two?.known === undefined) throw new Error('No retained registration');
+			expect(two.known).toBe(sha256_hex(JSON.stringify(value)));
+			expect(yield* Queue.size(values)).toBe(0);
+			push({ t: 'same', view: two.view, v: 1, known: two.known });
+			expect(yield* Queue.take(values)).toEqual(value);
+			yield* Fiber.interrupt(second);
+			yield* TestClock.adjust('31 seconds');
+			yield* Queue.take(registrations);
+			yield* observe();
+			const three = (yield* Queue.take(registrations)).add?.[0];
+			if (three === undefined) throw new Error('No changed registration');
+			expect(yield* Queue.size(values)).toBe(0);
+			const changed = { jobs: { rows: [{ id: 'two' }], next: null, total: 1 } };
+			push({ t: 'answer', view: three.view, v: 2, value: changed });
+			expect(yield* Queue.take(values)).toEqual(changed);
+		})
+);

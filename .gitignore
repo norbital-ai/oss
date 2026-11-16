@@ -52,3 +52,5 @@ vite.config.*.timestamp-*
 
 # a package build in progress (scripts/build-package.ts)
 .building
+
+/packages/bolt/src/engine/agent/skills.generated.ts

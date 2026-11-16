@@ -185,7 +185,8 @@ type Args = { readonly [k: PropertyKey]: unknown };
 const obj = (v: unknown): Args => (Predicate.isObject(v) && !Arr.isArray(v) ? v : {});
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const toolTarget = (a: Args) =>
-	['query', 'url', 'name', 'id', 'text'].map((key) => str(a[key])).find((value) => value !== '') ?? '';
+	['query', 'url', 'name', 'id', 'text'].map((key) => str(a[key])).find((value) => value !== '') ??
+	'';
 /** A read's lines as OpenCode names them: `:10-59` for offset 10 and limit 50, `:10-` from 10 on. */
 const lineRange = (offset: unknown, limit: unknown) =>
 	typeof offset !== 'number' && typeof limit !== 'number'
@@ -247,16 +248,23 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	// a write reads as what it did: "Update holiday", "Run the roster entry pipeline"
 	act: (a) => ({
 		icon: 'lucide:square-pen',
-		verb: callableWords(str(a['callable'])),
+		verb: Object.keys(obj(a['acts'])).map(callableWords).join(', ') || 'Write records',
 		target: ''
 	}),
+	run: (a) => ({ icon: 'lucide:play', verb: 'Run', target: handle_words(str(a['automation'])) }),
+	decide: (a) => ({ icon: 'lucide:check', verb: humanise(str(a['decision'])), target: 'approval' }),
+	invite: () => ({ icon: 'lucide:user-plus', verb: 'Invite members', target: '' }),
 	update_plan: () => ({ icon: 'lucide:notebook-pen', verb: 'Wrote the plan', target: '' }),
 	compact: (a) => ({
 		icon: 'lucide:shrink',
 		verb: 'Compacted the context',
 		target: str(a['reason'])
 	}),
-	skill: (a) => ({ icon: 'lucide:book-open', verb: 'Read skill', target: humanise(str(a['name'])) }),
+	skill: (a) => ({
+		icon: 'lucide:book-open',
+		verb: 'Read skill',
+		target: humanise(str(a['name']))
+	}),
 	history: (a) => ({
 		icon: 'lucide:history',
 		verb: 'Searched past messages',
@@ -266,7 +274,11 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	read_file: (a) => ({ icon: 'lucide:file-text', verb: 'Read file', target: str(a['text']) }),
 	view_image: (a) =>
 		Arr.isArray(a['crops'])
-			? { icon: 'lucide:zoom-in', verb: 'Zoomed into a page', target: `${a['crops'].length} regions` }
+			? {
+					icon: 'lucide:zoom-in',
+					verb: 'Zoomed into a page',
+					target: `${a['crops'].length} regions`
+				}
 			: { icon: 'lucide:image', verb: 'Viewed an image', target: '' },
 	read_output: () => ({ icon: 'lucide:file-output', verb: 'Read the full result', target: '' }),
 	geocode: (a) => ({
@@ -429,7 +441,10 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	web_search: (a) => ({ icon: 'lucide:search', verb: 'Searched the web', target: str(a['query']) }),
 	mcp: (a) => ({
 		icon: 'lucide:plug',
-		verb: a['op'] === 'list' ? 'Listed external tools' : `${humanise(str(a['server']))}: ${humanise(str(a['tool']))}`,
+		verb:
+			a['op'] === 'list'
+				? 'Listed external tools'
+				: `${humanise(str(a['server']))}: ${humanise(str(a['tool']))}`,
 		target: a['op'] === 'list' ? str(a['server']) : toolTarget(obj(a['input']))
 	}),
 	personal_skill_save: (a) => ({
@@ -513,15 +528,19 @@ export function stepView(name: string, args: unknown): StepView {
 
 const parsed = (text: string | undefined): unknown =>
 	Option.getOrNull(Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(text ?? ''));
-/**
- * A step's arguments for its line: the parsed JSON, else (a long call's input is stored clipped and does not parse) its
- * plain string fields recovered from the text, so `act`'s line still names its callable.
- */
-export const stepArgs = (text: string | undefined): unknown =>
-	parsed(text) ??
-	Object.fromEntries(
+/** A clipped input retains its first act's name for the activity line. */
+export const stepArgs = (text: string | undefined): unknown => {
+	const complete = parsed(text);
+	if (complete !== null) return complete;
+	const first = /"acts"\s*:\s*\{\s*("(?:[^"\\]|\\.)*")\s*:/.exec(text ?? '')?.[1];
+	const callable = parsed(first);
+	return {
+		...Object.fromEntries(
 		[...(text ?? '').matchAll(/"(\w+)":"((?:[^"\\]|\\.)*)"/g)].reverse().map((m) => [m[1], m[2]])
-	);
+	),
+		...(typeof callable === 'string' ? { acts: { [callable]: null } } : {})
+	};
+};
 /**
  * What a check that ran found: its type errors and whether its tests failed. A check's findings are its answer, never a
  * failed step; null for any other step, and for a check that could not run (no `types` or `tests` in its answer).

@@ -1,15 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { supports } from '../src/version.ts';
+import { HOST_API_VERSION, supports } from '../src/version.ts';
 
-describe('a host serves a HOST_API range', () => {
-	it('admits both ends and refuses outside them or a fraction', () => {
-		const range = { from: 19, to: 20 };
-		expect([18, 19, 20, 21, 19.5].map((version) => supports(range, version))).toEqual([
-			false,
-			true,
-			true,
-			false,
-			false
-		]);
+describe('a host serves the current HOST_API', () => {
+	it('refuses other versions and invalid numbers', () => {
+		expect(supports(HOST_API_VERSION)).toBe(true);
+		for (const version of [HOST_API_VERSION - 1, HOST_API_VERSION + 1, 0, 19.5, NaN, Infinity])
+			expect(supports(version)).toBe(false);
 	});
 });

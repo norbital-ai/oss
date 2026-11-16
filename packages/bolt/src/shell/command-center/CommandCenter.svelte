@@ -64,7 +64,7 @@
 		tab: CommandCenterTab | undefined;
 		on_tab: (tab: CommandCenterTab) => void;
 		admin: boolean;
-		startable: NonNullable<ShellBoot['startable']>;
+		startable: ShellBoot['startable'];
 		run?: string | null;
 		on_run: (id: string | null) => void;
 		/** Opens an inference transcript in Norbius; `null` without Norbius. */

@@ -45,8 +45,6 @@ export {
 	type MigrationBundle
 } from './schema/migrations.ts';
 // ── exports: links ──
-export { open_ai_chat, type OpenAiChatConfig } from './agent/openai-chat.ts';
 export { output_type, RUN_JS } from './agent/run-js.ts';
 // ── exports: protocol ──
 export { wire_error } from '../protocol/wire.ts';
-

@@ -1,10 +1,10 @@
+import { actualCounts, templateMetadata } from '../src/compiler/template.ts';
 import { it } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path, Schema } from 'effect';
 import { FIRST_PARTY_BUNFIG } from '@norbital-ai/host-api';
 import { describe, expect } from 'vitest';
 import {
-	actualCounts,
 	TemplateError,
 	checkTemplates,
 	delegateTemplate,
@@ -97,7 +97,7 @@ describe('bolt templates', () => {
 			).toBe('No template matched no-such-template.');
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live('counts named source files without helpers and refuses picker count drift', () =>
+	it.live('derives catalogue counts from source roles while preserving authored copy', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
@@ -115,13 +115,12 @@ describe('bolt templates', () => {
 				yield* fs.writeFileString(path.join(directory, file), '');
 			}
 			expect(yield* actualCounts(directory)).toEqual({ models: 2, apps: 1, automations: 1 });
-			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain(
-				'declares 0 models'
+			yield* templateMetadata(directory);
+			const updated = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
+				yield* fs.readFileString(
+				path.join(directory, 'norbital.template.json'))
 			);
-			yield* fs.writeFileString(
-				path.join(directory, 'norbital.template.json'),
-				JSON.stringify({ ...metadata, counts: { models: 2, apps: 1, automations: 1 } })
-			);
+			expect(updated).toEqual({ ...metadata, counts: { models: 2, apps: 1, automations: 1 } });
 			yield* checkTemplates(root);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);

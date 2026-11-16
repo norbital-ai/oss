@@ -76,9 +76,6 @@ export type BodyReturn<O> = Effect.fn.Return<O, BodyError>;
 // ── reads ──
 /** An opaque page cursor: pass a page's `next` back as `after` to read on (the store's). */
 export type { Cursor };
-/** Rule 9: every read states a limit or asks for everything. */
-export type Paged =
-	{ limit: number; after?: Cursor; all?: never } | { all: true; limit?: never; after?: never };
 /** One page of a read: its `rows`, and the `next` cursor, `null` on the last page. */
 export type Page<T> = { readonly rows: readonly T[]; readonly next: Cursor | null };
 /** The relations a view nests: the root's declared one-level read layers (`'<C>.<rel>'`). */
@@ -561,7 +558,7 @@ export type Running = { kind: 'running'; run: Id<'sys_run'> };
  *
  * Pages, automations (as their policies), model effects (as the writer) and the test kit call it; write callbacks
  * return sets and carried rows instead, verdicts return a verdict, syncs return rows. The agent's `act` tool sends one
- * `{ callable, input }` down the same decoder and commit path.
+ * `{ acts: { '<model>.<verb>': inputs } }` down the same decoder and commit path.
  * @example
  * yield* ctx.act({ 'orders.update': [{ target: order, set: { notes } }] }, { key: `notes:${order.id}` });
  * const loan = new_id('loans');

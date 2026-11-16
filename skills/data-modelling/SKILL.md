@@ -1,4 +1,6 @@
 ---
+agent: true
+authoring: true
 name: data-modelling
 description: Route data modelling decisions - models, fields, layers, state, invariants, search, migrations.
 ---
@@ -16,10 +18,10 @@ description: Route data modelling decisions - models, fields, layers, state, inv
 
 ## Routing (`authoring-tenant-workspace` skill)
 
-| Need | Reference |
-| --- | --- |
-| Model or inline value, runtime configuration | `references/model-boundaries.md` |
+| Need                                                        | Reference                           |
+| ----------------------------------------------------------- | ----------------------------------- |
+| Model or inline value, runtime configuration                | `references/model-boundaries.md`    |
 | Field kinds, links, layers, locks, callbacks, search, syncs | `references/models-and-modeling.md` |
-| Dates, periods | `references/dates-and-time.md` |
-| Reads, batches, transactions | `references/data-access.md` |
-| Seeds, migrations | `references/generated-and-build.md` |
+| Dates, periods                                              | `references/dates-and-time.md`      |
+| Reads, batches, transactions                                | `references/data-access.md`         |
+| Seeds, migrations                                           | `references/generated-and-build.md` |

@@ -72,6 +72,7 @@ type Step = Ai['Service']['infer'];
 describe('guidance follows the tools actually available', () => {
 	it('adds what source is only to an author, and names no tool or step', () => {
 		expect(system({ authors: false })).not.toContain('# Source');
+		expect(system({ authors: false })).toContain('Source editing is unavailable');
 		const prompt = system({ authors: true });
 		expect(prompt).toContain('# Source');
 		expect(prompt).not.toMatch(/workspace_|run_tool|bolt-primer|\bhost\b/);
@@ -113,7 +114,13 @@ describe('a page step', () => {
 		expect(pageNote([row(1), shown])).toBe(
 			'Your last page step ran. Their page shows: Orders · New'
 		);
-		expect(pageNote([row(1), step({ page: { click: 'x' }, requested: true })])).toBeUndefined();
+		expect(pageNote([row(1), step({ page: { click: 'x' }, requested: true })])).toBe(
+			'Your last page step is awaiting the tab or the person. It has not reported completion; do not say it ran.'
+		);
+		expect(pageNote([row(1), step({ page: { click: 'x' }, requested: true, pageClaim: true })])).toContain('awaiting');
+		expect(pageNote([row(1), step({ page_result: { ok: false, note: 'The person declined.' } })])).toBe(
+			'Your last page step failed: The person declined.'
+		);
 	});
 	it('stays the message it was sent, whatever the tab answers', () => {
 		const sent = { requested: true, navigation: '/app/ops' };

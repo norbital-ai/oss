@@ -172,7 +172,8 @@ export interface PageBolt {
 	/**
 	 * Stores a file for a model's file field, a file sync's import (`<model>.$import.<sync>`) or an automation's `file`
 	 * input (`<automation>.$input.<input>`, then pass the answered `FileRef` in the start); `accept` and `max` are checked
-	 * before bytes are stored; a refusal is `ActRefused`.
+	 * before bytes are stored; a refusal is `ActRefused`. Identical content, name and media type uploaded by the same
+	 * actor to the same destination reuse one `FileRef`; changed content remains a distinct file.
 	 */
 	upload(
 		file: Blob & { name?: string },

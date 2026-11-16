@@ -6,7 +6,10 @@ import { input_schema } from '@norbital-ai/store/kind';
 import { id_of } from '@norbital-ai/bolt';
 import { uuidv7 } from '@norbital-ai/host-api';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
-import { expect, JobResult, KitInvalid, TestWorkspace, type Kit } from '../src/test/index.ts';
+import { expect, JobResult, KitInvalid, TestWorkspace,
+	runAutomation,
+	settledRun,
+	type Kit } from '../src/test/index.ts';
 import { program } from '../src/test/guest.ts';
 
 const pageOf = <A>(row: Schema.Decoder<A>) => Schema.Struct({
@@ -517,5 +520,58 @@ it.live(
 					params: []
 				})
 			).toEqual([{ name: 'Beta' }]);
+		}).pipe(Effect.scoped)
+);
+
+it.live(
+	'the run helper distinguishes settlement, failure and a durable wait from queue admission',
+	() =>
+		Effect.gen(function* () {
+			const guest = yield* program(`export default { automation: {
+			finish: { body: function* () { return 'done'; } },
+			fail: { body: function* () { throw new Error('expected failure'); } },
+			wait: { body: function* (input, ctx) { yield* ctx.wait({ until: input.until }); return 'resumed'; } }
+		} };`);
+			const automation = {
+				description: 'Fixture',
+				input: {},
+				policies: ['reader'],
+				output: { kind: 'text' }
+			} as const;
+			const fixture = {
+				...manifest,
+				automations: {
+					finish: automation,
+					fail: automation,
+					wait: { ...automation, input: { until: { kind: 'instant' } } }
+				}
+			} satisfies EngineManifest;
+			const t = Context.get(
+				yield* Layer.build(
+					TestWorkspace.layer({ manifest: fixture, guest, now: '2026-11-01T00:00:00.000Z' })
+				),
+				TestWorkspace
+			);
+			const caller = yield* t.as(t.admin);
+			expect(yield* runAutomation(t, caller.run('finish', {}, JobResult))).toMatchObject({
+				state: 'succeeded',
+				output: 'done'
+			});
+			expect(yield* runAutomation(t, caller.run('fail', {}, JobResult))).toMatchObject({
+				state: 'failed',
+				error: { message: expect.stringContaining('expected failure') }
+			});
+			const queued = yield* caller.run('wait', { until: '2026-11-02T00:00:00.000Z' }, JobResult);
+			if (queued.kind !== 'committed')
+				return yield* Effect.fail(new KitInvalid({ message: 'Wait fixture was not admitted.' }));
+			expect(yield* settledRun(t, queued.output.id).pipe(Effect.flip)).toMatchObject({
+				_tag: 'KitInvalid',
+				message: expect.stringContaining('waiting')
+			});
+			t.clock.advance('1d');
+			expect(yield* settledRun(t, queued.output.id)).toMatchObject({
+				state: 'succeeded',
+				output: 'resumed'
+			});
 		}).pipe(Effect.scoped)
 );

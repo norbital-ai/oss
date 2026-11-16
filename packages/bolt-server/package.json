@@ -1,14 +1,14 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.8",
+	"version": "0.0.9",
 	"description": "An example untethered Bolt host: one workspace artifact served on its own facility adapters.",
 	"type": "module",
 	"sideEffects": false,
 	"license": "AGPL-3.0-only",
 	"exports": {
-		".": {
-			"types": "./build/index.d.ts",
-			"default": "./build/index.js"
+		"./host": {
+			"types": "./build/host.d.ts",
+			"default": "./build/host.js"
 		}
 	},
 	"bin": {
@@ -16,6 +16,7 @@
 	},
 	"files": [
 		"build",
+		"example",
 		"package.json"
 	],
 	"scripts": {
@@ -31,19 +32,12 @@
 		"@norbital-ai/providers": "workspace:*",
 		"@norbital-ai/store": "workspace:*",
 		"effect": "catalog:",
-		"exceljs": "4.4.0",
-		"mammoth": "1.13.0",
-		"mssql": "12.7.13",
-		"pdfjs-dist": "6.4.299",
 		"pg": "^8.23.1",
-		"playwright": "1.64.1",
-		"web-push": "^3.6.7"
+		"playwright": "1.64.1"
 	},
 	"devDependencies": {
-		"@types/mssql": "12.3.0",
 		"@types/node": "^26.6.5",
 		"@types/pg": "^8.23.1",
-		"@types/web-push": "^3.6.4",
 		"typescript": "catalog:"
 	},
 	"repository": {

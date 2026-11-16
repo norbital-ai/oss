@@ -1,7 +1,5 @@
-// `/files` uploads are persisted: the bytes go to the files port, then one statement
-// inserts the `sys_file` row keyed by the client-minted upload id and adds the `upload` rate increment gated on that
-// insert, so a resent upload adds no row and no count and answers the first `FileRef`. Refused before its bytes are
-// stored (grant, `accept`, `max`) it costs no statement.
+// Uploads reuse content and metadata within one actor and destination. Request keys use the native
+// idempotency gate; bytes remain content-addressed by the host's files port.
 import { Effect, Schema } from 'effect';
 import { UUID_PATTERN } from '@norbital-ai/store/kind';
 import { LIMITS, type Authority, type Outcome } from '../contracts.ts';
@@ -9,11 +7,14 @@ import { layered, layers, type EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { Manifest } from '../services.ts';
 import { Files } from '../ports.ts';
-import { sha256 as sha256Of, to_hex } from '@norbital-ai/store';
+import { sha256 as sha256Of, sha256_hex, to_hex } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
 import type { RateCharge } from '../write/commit.ts';
-import { Chain, KEY_REUSE, rate } from '../write/sql.ts';
+import { Chain, GATED, gate, answer, storedOutcome, rate } from '../write/sql.ts';
+import { actor_ref } from '../access/actor.ts';
+import { stableId } from '../conversations/store.ts';
+import { WriteOutcome } from '../../protocol/schema.ts';
 import { ATTACHMENT_MIME } from '../agent/ai.ts'; // hook:attachments
 import { acceptOf, parserFor, parsersOf } from '../files/parse.ts';
 
@@ -109,7 +110,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	if (kind?.kind !== 'file' || !allowed)
 		return refuse('forbidden', `You may not upload to ${u.model}.${u.field}.`);
 	if (!UUID_PATTERN.test(u.id))
-		return refuse('invalid_input', 'An upload id is a client-minted uuid.');
+		return refuse('invalid_input', 'An upload request key is a client-minted uuid.');
 	if (
 		panel
 			? !ATTACHMENT_MIME.test(u.mime) || size === 0
@@ -132,48 +133,33 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 			.put(u.bytes, { name: u.name, mime: u.mime })
 			.pipe(Effect.mapError((error) => BoltError.make('upload', 'facility', error.message, error))));
 	const sha256 = u.stored?.sha256 ?? to_hex(sha256Of(u.bytes));
+	const field = input === undefined ? `${u.model}.${u.field}` : u.model;
+	const actor = actor_ref(u.authority.actor);
+	const identity = [actor, field, u.name, u.mime, sha256];
+	const id = stableId('file', ...identity);
+	const key = stableId('upload', actor, u.id);
+	const digest = sha256_hex(JSON.stringify([...identity, size]));
 	const c = new Chain();
+	gate(c, key, digest, u.now);
 	c.cte(
-		'idem',
+		'uploaded',
 		`INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-	VALUES (${c.p(u.id)}, ${c.p(u.name)}, ${c.p(u.mime)}, ${c.p(size)}, ${c.p(blob.key)}, ${c.p(sha256)}, ${c.p(input === undefined ? `${u.model}.${u.field}` : u.model)},
-		${c.p(u.now)}::timestamptz, ${c.p(u.authority.actor.kind === 'member' ? u.authority.actor.id : null)})
-	ON CONFLICT (id) DO NOTHING RETURNING id, name, mime, size, sha256`
+	SELECT ${c.p(id)}, ${c.p(u.name)}, ${c.p(u.mime)}, ${c.p(size)}, ${c.p(blob.key)}, ${c.p(sha256)}, ${c.p(field)},
+		${c.p(u.now)}::timestamptz, ${c.p(u.authority.actor.kind === 'member' ? u.authority.actor.id : null)} WHERE ${GATED}
+	ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id, name, mime, size, sha256`
 	);
 	rate(c, u.rate ?? []);
-	const first = c.p(u.id);
-	const Ref = Schema.Struct({
-		id: Schema.String,
-		name: Schema.String,
-		mime: Schema.String,
-		size: Schema.Number,
-		sha256: Schema.String
-	});
-	const answer = yield* db
-		.returning(
-			Schema.Struct({ ref: Schema.NullOr(Ref) }),
-			c.sql(`coalesce((SELECT to_jsonb(idem) FROM idem), (SELECT CASE WHEN f.field = ${c.p(`${u.model}.${u.field}`)} AND f.sha256 = ${c.p(sha256)}
-		THEN jsonb_build_object('id', f.id, 'name', f.name, 'mime', f.mime, 'size', f.size, 'sha256', f.sha256) END FROM sys_file f WHERE f.id = ${first})) AS ref`)
-		)
-		.pipe(
-			Effect.catchTag('DbError', (error) =>
+	const result = yield* db.returning(
+		Schema.Struct({ outcome: Schema.NullOr(WriteOutcome) }),
+		c.sql(answer(c, key, digest, `(SELECT jsonb_build_object('kind', 'committed', 'records', '[]'::jsonb,
+			'output', jsonb_build_object('id', id, 'name', name, 'mime', mime, 'bytes', size, 'sha256', sha256)) FROM uploaded)`))
+	).pipe(Effect.catchTag('DbError', (error) =>
 				error.sqlstate === 'BA001' ? Effect.succeed([]) : Effect.fail(error)
-			)
-		);
-	const row = answer[0];
+			));
+	const row = result[0];
 	if (row === undefined) return refuse('rate_limited', RATE_LIMITED);
-	const ref = row.ref;
-	return ref === null
-		? KEY_REUSE
-		: {
-				kind: 'committed' as const,
-				output: {
-					id: ref.id,
-					name: ref.name,
-					mime: ref.mime,
-					bytes: Number(ref.size),
-					sha256: ref.sha256
-				},
-				records: []
-			};
+	// A concurrent retry may have waited for the gate after this statement's snapshot was taken.
+	return row.outcome ?? (yield* db.value(WriteOutcome, {
+		text: `SELECT ${storedOutcome('$1', '$2')} AS outcome`, params: [key, digest]
+	}));
 });

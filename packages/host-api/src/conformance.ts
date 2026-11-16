@@ -4,7 +4,7 @@ import { Schema } from 'effect';
 import { ReleaseFacts } from './answers.ts';
 import { HostApiFailure } from './failure.ts';
 import type { HostApiCore, Release } from './ports.ts';
-import { supports, type HostApiRange } from './version.ts';
+import { HOST_API_VERSION, supports } from './version.ts';
 
 /** One conformance check: its name, and the Promise that rejects with why the release fails it. */
 export type Check = { readonly name: string; readonly run: () => Promise<void> };
@@ -20,19 +20,15 @@ const signal = () => ({ signal: AbortSignal.timeout(30_000) });
  */
 export const conformance = (input: {
 	readonly api: HostApiCore;
-	readonly range: HostApiRange;
 	readonly release: Release;
 	readonly tampered: Release;
 }): readonly Check[] => {
-	const { api, range, release, tampered } = input;
+	const { api, release, tampered } = input;
 	return [
 		{
-			name: 'speaks a HOST_API in the host range',
+			name: 'speaks the current HOST_API',
 			run: async () =>
-				expect(
-					supports(range, api.version),
-					`HOST_API ${api.version} is outside ${range.from}–${range.to}`
-				)
+				expect(supports(api.version), `HOST_API ${api.version} does not match ${HOST_API_VERSION}`)
 		},
 		{
 			name: 'evaluates tenant source',

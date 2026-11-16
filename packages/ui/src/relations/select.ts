@@ -35,7 +35,7 @@ export function refLabel(cat: Catalog, of: string, rel: string): readonly string
 /** A many-relation cell's labels read with the row: the first `MANY_SHOWN`, one more to know there are more. */
 export const MANY_SHOWN = 20;
 /**
- * A list read of `of` as one read request: the root's `root` options and its fields (visible light ones and the FKs,
+ * A list read of `of` as one read request: the root's `root` options and its fields (`root.fields`, else visible light ones and the FKs,
  * plus any hidden, json, custom or file field `named`), and each relation
  * in `refs` its root declares as a read layer read with its target's label in the same statement (no read per row): a one-relation as a nested row, a named many-relation as its first `MANY_SHOWN + 1` rows, or every row when
  * `all` (an export).
@@ -79,19 +79,20 @@ export function listRequest(
 	]);
 	const own = named.filter((f) => !f.includes('.') && !many(f));
 	const x = cat?.[of];
-	// Hidden captures can be large even when stored as text; read one only when a column names it.
+	// A caller with no custom row consumer can project its fields; callbacks retain the full light row.
 	const fields =
 		x === undefined
 			? undefined
 			: [
 					...new Set([
-						...Object.keys(x.fields).filter(
-							(field) =>
-								!field.includes('.') &&
-								x.fields[field]?.hidden !== true &&
-								!HEAVY.has(x.fields[field]?.kind ?? '')
-						),
-						...Object.keys(x.relations ?? {}),
+						...(root.fields ??
+							Object.keys(x.fields).filter(
+								(field) =>
+									!field.includes('.') &&
+									x.fields[field]?.hidden !== true &&
+									!HEAVY.has(x.fields[field]?.kind ?? '')
+							)),
+						...(root.fields === undefined ? Object.keys(x.relations ?? {}) : []),
 						...own
 					])
 				];
@@ -199,7 +200,12 @@ const unlayered = (cat: Catalog, of: string, refs: readonly string[]) =>
 			: [];
 	});
 /** Those relations' labels for `rows`, every target's ids in one read after the rows' (null: nothing to label). */
-export function label_wave(cat: Catalog, of: string, refs: readonly string[], rows: readonly Values[]) {
+export function label_wave(
+	cat: Catalog,
+	of: string,
+	refs: readonly string[],
+	rows: readonly Values[]
+) {
 	const ids = new Map<string, Set<string>>();
 	for (const { rel, target } of unlayered(cat, of, refs)) {
 		const held = ids.get(target) ?? new Set<string>();
@@ -212,7 +218,9 @@ export function label_wave(cat: Catalog, of: string, refs: readonly string[], ro
 	if (ids.size === 0) return null;
 	return Object.fromEntries(
 		[...ids].flatMap(([target, held]) =>
-			Object.entries(label_read(cat, target, { where: { id: { in: [...held] } }, limit: held.size }))
+			Object.entries(
+				label_read(cat, target, { where: { id: { in: [...held] } }, limit: held.size })
+			)
 		)
 	);
 }

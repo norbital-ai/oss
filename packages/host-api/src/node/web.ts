@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
-import { FacilityFailure, type PortFailure, type WebPage } from '@norbital-ai/host-api';
-import { read_public_page } from '@norbital-ai/host-api/node';
+import { FacilityFailure, type PortFailure, type WebPage } from '../index.ts';
+import { read_public_page } from './net.ts';
 import { extractDocumentText } from './documents.ts';
 export type PublicPage = {
 	url: string;
@@ -57,6 +57,7 @@ export type WebReader = {
 		options?: { readonly raw?: boolean }
 	) => Effect.Effect<WebPage, PortFailure>;
 };
+/** Public web reads with document extraction and the host network policy. */
 export const publicWeb = (
 	read: (url: string) => Effect.Effect<PublicPage, PortFailure> = readPublicPage
 ): WebReader => ({

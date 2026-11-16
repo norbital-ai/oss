@@ -100,7 +100,7 @@ const workspace = Layer.unwrap(
 				ai: {
 					cassette: {
 						default: [
-							use('act', { callable: 'automation.quotes_mark', input: { title: 'Chair' } }, 'k1'),
+							use('run', { automation: 'quotes_mark', input: { title: 'Chair' } }, 'k1'),
 							say('Marked.')
 						].map((step) => step())
 					}
@@ -226,7 +226,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 				);
 				expect(held).toMatchObject({
 					tag: 'confirm',
-					call: { name: 'act', input: { callable: 'automation.quotes_mark' } }
+					call: { name: 'run', input: { automation: 'quotes_mark' } }
 				});
 				expect(yield* quotes(t)).toEqual([]);
 				// another member sees neither the transcript nor the card
@@ -310,8 +310,10 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 						'https://user:pass@push.example/eve'
 					])
 						expect(
-							(yield* call(eve, 'POST', '/__bolt/push', { endpoint, keys: { p256dh: 'k', auth: 'a' } }))
-								.status
+							(yield* call(eve, 'POST', '/__bolt/push', {
+								endpoint,
+								keys: { p256dh: 'k', auth: 'a' }
+							})).status
 						).toBe(400);
 					expect(
 						(yield* call(eve, 'POST', '/__bolt/push', { kind: 'apns', endpoint: 'not-hex', keys }))

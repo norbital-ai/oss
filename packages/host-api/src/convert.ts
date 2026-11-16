@@ -184,7 +184,9 @@ export function document_converter(config: DocumentConverterConfig): DocumentCon
 					to,
 					...(options.page === undefined ? {} : { page: options.page }),
 					...(options.landscape === undefined ? {} : { landscape: options.landscape }),
-					...(options.reference === undefined ? {} : { reference: Base64.encode(options.reference) })
+					...(options.reference === undefined
+						? {}
+						: { reference: Base64.encode(options.reference) })
 				},
 				Schema.Struct({ bytes: Schema.Uint8ArrayFromBase64 })
 			).pipe(
@@ -239,7 +241,10 @@ const ingestJob = (
 		// all again
 		const sha256 =
 			file.sha256 !== undefined &&
-			('page' in options || 'pictures' in options || 'entry' in options || /\.(zip|tar|tgz|gz)$/i.test(file.name))
+			('page' in options ||
+				'pictures' in options ||
+				'entry' in options ||
+				/\.(zip|tar|tgz|gz)$/i.test(file.name))
 				? file.sha256
 				: undefined;
 		const kept =
@@ -265,9 +270,7 @@ const ingestJob = (
 					...headers,
 					'content-type': 'application/octet-stream',
 					// a header, never the URL a log keeps
-					...(password === undefined
-						? {}
-						: { 'x-ingest-password': Base64.encode(password) })
+					...(password === undefined ? {} : { 'x-ingest-password': Base64.encode(password) })
 				},
 				...(body instanceof Uint8Array
 					? { body: new Uint8Array(body) }
@@ -314,13 +317,20 @@ const ingestJob = (
  * `ConvertPort.ingest` over Norbital Convert's job routes (plan 12): a host constructs it from Convert's URL and key. A 415
  * answers `{ unsupported }`, and a converter with no transcription model rejects audio as `unavailable`. A password travels as
  * the `x-ingest-password` header, never the URL. The answer's `meta.stats` is the conversion's compute and audio's
- * `meta.usage` its model calls, which the host meters once per call id.
+ * `meta.usage` its model calls, which the host meters once per call id. The host must resolve a stored key to bytes first.
  */
-export function document_ingester(config: DocumentConverterConfig): Required<Pick<ConvertPort, 'ingest'>> {
+export function document_ingester(
+	config: DocumentConverterConfig
+): Required<Pick<ConvertPort, 'ingest'>> {
 	return {
 		ingest: (file, options, signal) =>
 			Effect.runPromise(
-				ingestJob(config, file, file.bytes ?? new Uint8Array(), options).pipe(
+				(file.bytes === undefined
+					? Effect.fail(
+							FacilityFailure.invalid('Resolve the stored file to bytes before ingestion.')
+						)
+					: ingestJob(config, file, file.bytes, options)
+				).pipe(
 					Effect.flatMap(
 						(
 							answer

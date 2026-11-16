@@ -122,6 +122,8 @@ it.effect(
 				inbox: 0,
 				kiosks: [],
 				envoys: { private: 'private-envoy-name' },
+				startable: [],
+				search: [],
 				push: null,
 				visitor: { app: 'portal' },
 				catalog: {},

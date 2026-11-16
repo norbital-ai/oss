@@ -1,16 +1,16 @@
 # Dates and time
 
-Classify the value before choosing a kind. Value types come from the std date module.
+Classify the value before choosing a kind. Value types come from the Bolt value types.
 
-| Meaning | Kind | Value | Behaviour |
-| --- | --- | --- | --- |
-| Calendar day | `date` | `PlainDate` | same day for every viewer; never converted |
-| Absolute moment | `instant` | `Instant`, UTC ISO ending `Z` | shown in the configured zone, compared globally |
-| Local wall time | `time` | `PlainTime`, `HH:mm` | never attached to a date or offset |
-| Length of time | `duration` | seconds | |
-| Span of days | `period` of `date` | `{ from, to \| null }` inclusive | `to: null` is open |
-| Span of moments | `period` of `instant` | `{ start, end \| null }` half-open | `end: null` is open |
-| IANA zone of a place | `text` format `zone` | zone name | never a fixed offset |
+| Meaning              | Kind                  | Value                              | Behaviour                                       |
+| -------------------- | --------------------- | ---------------------------------- | ----------------------------------------------- |
+| Calendar day         | `date`                | `PlainDate`                        | same day for every viewer; never converted      |
+| Absolute moment      | `instant`             | `Instant`, UTC ISO ending `Z`      | shown in the configured zone, compared globally |
+| Local wall time      | `time`                | `PlainTime`, `HH:mm`               | never attached to a date or offset              |
+| Length of time       | `duration`            | seconds                            |                                                 |
+| Span of days         | `period` of `date`    | `{ from, to \| null }` inclusive   | `to: null` is open                              |
+| Span of moments      | `period` of `instant` | `{ start, end \| null }` half-open | `end: null` is open                             |
+| IANA zone of a place | `text` format `zone`  | zone name                          | never a fixed offset                            |
 
 - Open ends are null, never a sentinel date.
 
@@ -31,7 +31,7 @@ Classify the value before choosing a kind. Value types come from the std date mo
 
 ## Formatting
 
-- Use the std date and calendar modules. No local regexes or permissive parsing: reject unzoned instants and daylight-saving-gap wall times at the boundary.
+- Use Effect DateTime and Duration with authored calendar rules. No local regexes or permissive parsing: reject unzoned instants and daylight-saving-gap wall times at the boundary.
 - Prefer native field controls. A `date` never shifts; an `instant` is edited in the configured zone and sent as UTC.
 - A custom timestamp display receives the zone through `ctx.tz` or a narrower prop and passes it to the formatter. Locale alone does not choose a zone.
 - Use one zone for grouping, defaults, labels and messages. Label an explicitly selected event zone.

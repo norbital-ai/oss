@@ -34,7 +34,6 @@ import {
 	type DeadlinesPort,
 	type Facilities,
 	type FilesPort,
-	HOST_API_VERSION,
 	HostFailure,
 	type HostPorts,
 	off,
@@ -423,7 +422,6 @@ describe('HOST_API conformance (D10a)', () => {
 					writeFileSync(join(tampered, 'guest.mjs'), '// changed after the build\n', { flag: 'a' });
 					for (const check of conformance({
 						api: HOST_API,
-						range: { from: HOST_API_VERSION, to: HOST_API_VERSION },
 						release: { id: 'kit', artifact: artifact_port(at, fileURLToPath(DOCS_DIR)) },
 						tampered: { id: 'kit-tampered', artifact: artifact_port(tampered, fileURLToPath(DOCS_DIR)) }
 					}))

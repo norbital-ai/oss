@@ -615,3 +615,33 @@ export const DATABASE_MAX_BYTES = HOST_LIMITS.crossingBytes;
 export interface DatabaseDriver {
 	query(credential: Json, request: DatabaseRequest, signal: AbortSignal): Promise<DatabaseResult>;
 }
+
+/** A file a message carries: `id` names the stored file; none when the row could not store its bytes (too large, never received). */
+export type Attachment = {
+	readonly id?: string;
+	readonly name: string;
+	readonly mime: string;
+	readonly bytes: number;
+};
+
+/** When a calendar event starts or ends: a whole day, or an instant with the zone it was set in. */
+type CalendarTime =
+	{ readonly date: string } | { readonly at: string; readonly zone: string | null };
+/**
+ * One event a `calendar` driver pushes to a sync's `read` (`items`); the read's `partition` is its calendar (a sync's
+ * `partitions` names the text-many configuration field listing them, one cursor each). A changed calendar wakes its
+ * partition; lost history (`retained: false`) starts a fresh snapshot. All-day events keep their dates, timed events
+ * their instants and source zones.
+ */
+export type CalendarEvent = {
+	readonly id: string;
+	readonly summary: string | null;
+	readonly description: string | null;
+	readonly location: string | null;
+	readonly url: string | null;
+	readonly status: 'confirmed' | 'tentative' | 'cancelled';
+	readonly start: CalendarTime;
+	readonly end: CalendarTime;
+	/** Original provider event, including attendees, recurrence and identifiers needed by authored business rules. */
+	readonly source: Json;
+};

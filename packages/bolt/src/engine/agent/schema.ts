@@ -2,18 +2,16 @@
 // `sys_message` rows. Each system model lives under `src/system/data/model/<name>/+model.ts`.
 import { Effect, Option, Predicate, Schema, type Types } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
-import { STUDIO_ROLES, storedInstant, ToolBehavior } from '@norbital-ai/host-api';
+import {
+	AiAssistantContent,
+	AiToolCallSchema,
+	AiToolResult,
+	textOf,
+	STUDIO_ROLES, storedInstant, ToolBehavior } from '@norbital-ai/host-api';
 import { AgentQuestion, PageAction, PageResult, Usage as UsageSchema } from '../../protocol/schema.ts';
 import type { Json } from '../../decl/values.ts';
 import type { AgentRow } from '../../protocol/wire.ts';
 import type { Authority, RowData } from '../contracts.ts';
-
-/** Plain words from a message or provider reply. */
-export const textOf = (content: Json): string => {
-	if (typeof content === 'string') return content;
-	const t = Predicate.isObject(content) ? content['text'] : undefined;
-	return typeof t === 'string' ? t : JSON.stringify(content);
-};
 
 /**
  * Whose authority a message carries: resolved per message, so each steer acts as its own sender.
@@ -54,7 +52,7 @@ export type Meta = typeof MetaSchema.Type;
 export type Usage = {
 	-readonly [K in keyof typeof UsageSchema.Type]: (typeof UsageSchema.Type)[K];
 };
-export type ToolCall = Types.Mutable<typeof ToolCallSchema.Type>;
+export type ToolCall = Types.Mutable<typeof AiToolCallSchema.Type>;
 /** Rule 59: one per write outcome of a turn. */
 export type Receipt = typeof ReceiptSchema.Type;
 const AsSchema = Schema.Union([
@@ -70,16 +68,10 @@ const AsSchema = Schema.Union([
 	}),
 	Schema.Struct({ policies: Schema.Array(Schema.String), run: Schema.String })
 ]);
-const ToolCallSchema = Schema.Struct({
-	id: Schema.String,
-	name: Schema.String,
-	input: Schema.Json,
-	invalid: Schema.optionalKey(Schema.String)
-});
 const AssistantSegment = Schema.Struct({
 	text: Schema.String,
 	reasoning: Schema.optionalKey(Schema.String),
-	toolCalls: Schema.optionalKey(Schema.Array(ToolCallSchema))
+	toolCalls: Schema.optionalKey(Schema.Array(AiToolCallSchema))
 });
 export type AssistantSegment = typeof AssistantSegment.Type;
 const ReceiptSchema = Schema.Struct({
@@ -106,7 +98,7 @@ const MetaSchema = Schema.Union([
 		complete: Schema.Boolean,
 		gaps: Schema.Array(Schema.String)
 	}),
-	Schema.Struct({ tag: Schema.Literal('confirm'), call: ToolCallSchema, full: Schema.optionalKey(Schema.Json) }),
+	Schema.Struct({ tag: Schema.Literal('confirm'), call: AiToolCallSchema, full: Schema.optionalKey(Schema.Json) }),
 	Schema.Struct({
 		tag: Schema.Literal('reply'),
 		receipts: Schema.Array(ReceiptSchema),
@@ -168,13 +160,11 @@ export type FileRef = typeof FileRef.Type;
  * panel; its result, declared Studio role and elapsed time stay on the same row.
  */
 const ToolResultFields = {
-		id: Schema.String,
-		name: Schema.String,
+	...AiToolResult.fields,
 		behavior: Schema.optionalKey(ToolBehavior),
 		args: Schema.optionalKey(Schema.String),
 		display: Schema.optionalKey(Schema.Struct({ name: Schema.String, args: Schema.String })),
-		result: Schema.optionalKey(Schema.Json),
-		studio: Schema.optionalKey(Schema.String),
+	studio: Schema.optionalKey(Schema.String),
 		ms: Schema.optionalKey(Schema.Number)
 };
 export const StepContent = Schema.StructWithRest(Schema.Struct(ToolResultFields), Rest);
@@ -188,10 +178,8 @@ export const SaidContent = Schema.Union([
 	Schema.String,
 	Schema.StructWithRest(
 		Schema.Struct({
-			text: Schema.optionalKey(Schema.String),
+			...AiAssistantContent.fields,
 			tz: Schema.optionalKey(Schema.String),
-			reasoning: Schema.optionalKey(Schema.String),
-			toolCalls: Schema.optionalKey(Schema.Array(ToolCallSchema)),
 			segments: Schema.optionalKey(Schema.Array(AssistantSegment).check(Schema.isMinLength(1)))
 		}),
 		Rest
@@ -487,7 +475,14 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 	const aside = r.role === null && r.direction === 'inbound';
 	if (aside && !thread) return null;
 	const meta = r.meta,
-		step = r.role === 'tool' ? { ...r.content, ...r.content.display, result: r.content['approval_result'] ?? r.content.result } : null,
+		step =
+			r.role === 'tool'
+				? {
+						...r.content,
+						...r.content.display,
+						result: r.content['approval_result'] ?? r.content.result
+					}
+				: null,
 		said = r.role !== 'tool' && typeof r.content === 'object' ? r.content : null,
 		outcome =
 			step === null ? NO_OUTCOME : Option.getOrElse(outcomeOf(step.result), () => NO_OUTCOME);
@@ -506,7 +501,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 			? /^<task id="([^"]+)"/.exec(step.result)?.[1]
 			: undefined;
 	const runs =
-		step?.name === 'act'
+		step?.name === 'act' || step?.name === 'run' || step?.name === 'sync'
 			? [
 					...new Set(
 						[step.result, ...(outcome.results ?? [])]
@@ -580,11 +575,17 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 								}),
 						...(completed.preview === undefined ? {} : { preview: completed.preview }),
 						...(r.copied_from != null || approval === undefined ? {} : { approval }),
-						...(r.copied_from == null && step.behavior?.page === true && outcome.navigation !== undefined
+						...(r.copied_from == null &&
+						step.behavior?.page === true &&
+						outcome.navigation !== undefined
 							? { navigation: outcome.navigation }
 							: {}),
-						...(r.copied_from == null && step.behavior?.page === true && outcome.page !== undefined ? { page: outcome.page } : {}),
-						...(r.copied_from == null && step.behavior?.page === true && outcome.page_result !== undefined
+						...(r.copied_from == null && step.behavior?.page === true && outcome.page !== undefined
+							? { page: outcome.page }
+							: {}),
+						...(r.copied_from == null &&
+						step.behavior?.page === true &&
+						outcome.page_result !== undefined
 							? { page_result: outcome.page_result }
 							: {}),
 						...(about === undefined ? {} : { about }),
@@ -595,9 +596,15 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 				}
 			: {}),
 		...(meta?.tag === 'reply' ? { receipts: meta.receipts } : {}),
-		...(r.copied_from == null && meta?.tag === 'reply' && meta.asked === true ? { asked: true as const } : {}),
-		...(r.copied_from == null && meta?.tag === 'reply' && meta.question !== undefined ? { question: meta.question } : {}),
-		...(r.copied_from == null && meta?.tag === 'reply' && meta.answered !== undefined ? { answered: meta.answered } : {}),
+		...(r.copied_from == null && meta?.tag === 'reply' && meta.asked === true
+			? { asked: true as const }
+			: {}),
+		...(r.copied_from == null && meta?.tag === 'reply' && meta.question !== undefined
+			? { question: meta.question }
+			: {}),
+		...(r.copied_from == null && meta?.tag === 'reply' && meta.answered !== undefined
+			? { answered: meta.answered }
+			: {}),
 		...(meta?.tag === 'answer' ? { answer_to: meta.question } : {}),
 		...(r.copied_from == null && meta?.tag === 'report'
 			? {
@@ -615,7 +622,9 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 					compact: { cutoff: meta.cutoff, keep: [...meta.keep], origin: meta.origin ?? 'automatic' }
 				}
 			: {}), // L-BOLT-546
-		...(r.copied_from == null && (meta?.tag === 'reply' || meta?.tag === 'failed') && meta.usage !== undefined
+		...(r.copied_from == null &&
+		(meta?.tag === 'reply' || meta?.tag === 'failed') &&
+		meta.usage !== undefined
 			? { usage: meta.usage }
 			: {})
 	}; // hook:agent — cost and context display

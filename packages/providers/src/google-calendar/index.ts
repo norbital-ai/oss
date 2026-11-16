@@ -3,7 +3,7 @@
 // outbound run to read (a 412 its conflict). A sign-in sealed before it could write keeps importing and says to reconnect.
 import { Clock, DateTime, Effect, Option, Schema, Predicate, Semaphore } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
-import type { CalendarEvent } from '@norbital-ai/bolt';
+import type { CalendarEvent } from '@norbital-ai/host-api';
 import { type DriverOpen, type DriverPage, type LinkStatus, OAUTH_CALLBACK } from '@norbital-ai/host-api';
 import type { Json } from 'effect/Schema';
 import type { ProviderDef } from '../abi.ts';
@@ -701,7 +701,10 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 
 /** An all-day event's actual Gregorian day; anything else refuses the page. */
 const calendarDay = (day: string): string => {
-	if (/^\d{4}-\d{2}-\d{2}$/.test(day) && Option.exists(DateTime.make(day), (at) => DateTime.formatIsoDateUtc(at) === day))
+	if (
+		/^\d{4}-\d{2}-\d{2}$/.test(day) &&
+		Option.exists(DateTime.make(day), (at) => DateTime.formatIsoDateUtc(at) === day)
+	)
 		return day;
 	throw new RangeError(`'${day}' is not a calendar date (YYYY-MM-DD)`);
 };

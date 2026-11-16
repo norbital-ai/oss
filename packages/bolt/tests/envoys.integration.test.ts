@@ -30,7 +30,7 @@ const present = <A>(value: A | null | undefined): A => {
 const runtime_accounts = [
 	{ id: 'field_wa', integration: 'whatsapp', status: { state: 'connected' } },
 	{ id: 'sales_tg', integration: 'telegram', status: { state: 'connected' } },
-	{ id: 'ops_mail', integration: 'email', status: { state: 'connected' } },
+	{ id: 'ops_mail', integration: 'email', status: { state: 'connected' } }
 ] as const;
 
 const manifest = {
@@ -163,8 +163,11 @@ function scriptedAi(sent: (instance: string) => string[]) {
 									id: `c${++n}`,
 									name: 'act',
 									input: {
-										callable: 'jobs.update',
-input: [{ target: { id: present(close[1]), revision: 1 }, set: { status: 'done' } }]
+										acts: {
+											'jobs.update': [
+												{ target: { id: present(close[1]), revision: 1 }, set: { status: 'done' } }
+											]
+										}
 									}
 								}
 							],
@@ -517,7 +520,8 @@ layer(
 	it.effect('a tenant-created envoy queues its answer until its new channel is paired', () =>
 		Effect.gen(function* () {
 			const { t, rows, paused, steps } = yield* setup;
-			const created = yield* (yield* t.as(t.admin)).act({ 'sys_envoy.create': [
+			const created = yield* (yield* t.as(t.admin)).act({
+				'sys_envoy.create': [
 				{
 					name: 'Runtime desk',
 					audience: 'private',
@@ -527,10 +531,13 @@ layer(
 					delegation: 'disabled',
 					dm: 'union'
 				}
-			] });
+			]
+			});
 			if (created.kind !== 'committed') throw new Error(created.kind);
 			const envoy = present(created.records[0]).id;
-			const line = yield* (yield* t.as(t.admin)).act({ 'sys_integration.create': [{ integration: 'whatsapp', name: 'Runtime line', envoy }] });
+			const line = yield* (yield* t.as(t.admin)).act({
+				'sys_integration.create': [{ integration: 'whatsapp', name: 'Runtime line', envoy }]
+			});
 			expect(line.kind).toBe('committed');
 			const instance = present(
 				(yield* t.db.read([
@@ -554,13 +561,20 @@ layer(
 			expect((yield* rows('hello runtime'))[0]).toMatchObject({
 				as: { envoy: { name: envoy, member: ADA, dm: true } }
 			});
-			expect(yield* t.db.rows(
-				Schema.Struct({ status: Schema.String, attempts: Schema.Number, sent_at: Schema.Null, claimed_at: Schema.Null }),
-				{
+			expect(
+				yield* t.db.rows(
+					Schema.Struct({
+						status: Schema.String,
+						attempts: Schema.Number,
+						sent_at: Schema.Null,
+						claimed_at: Schema.Null
+					}),
+					{
 					text: "SELECT status,attempts,sent_at,claimed_at FROM sys_message WHERE integration=$1 AND direction='outbound'",
 					params: [instance]
 				}
-			)).toEqual([{ status: 'queued', attempts: 0, sent_at: null, claimed_at: null }]);
+				)
+			).toEqual([{ status: 'queued', attempts: 0, sent_at: null, claimed_at: null }]);
 			expect(t.fakes.links.sent.filter((item) => item.instance === instance)).toEqual([]);
 		})
 	);

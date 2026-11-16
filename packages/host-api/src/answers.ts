@@ -12,6 +12,10 @@ export const ArtifactHeader = Schema.Struct({
 	name: Schema.String,
 	/** The schema fingerprint the release's migrations record. */
 	schema: Schema.String,
+	/** An optional compiler proof: only these files may use stable immutable URLs across releases. */
+	client: Schema.optionalKey(
+		Schema.Struct({ immutable: Schema.optionalKey(Schema.Array(Schema.String)) })
+	),
 	/** The release digest: its descriptor and every tree it carries. */
 	hash: Schema.String
 });

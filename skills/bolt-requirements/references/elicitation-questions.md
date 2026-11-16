@@ -1,6 +1,6 @@
 # Elicitation questions
 
-Ask in order, in business language. Do not move on while a group has an unanswered trap word.
+Use only the questions needed to resolve consequential gaps. Read the supplied context and workspace first; skip known answers. These are prompts for discovery, not a mandatory interview.
 
 ## Who
 

@@ -778,7 +778,7 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
  * 	create: {
  * 		fields: ['customer', 'notes'],
  * 		transform: function* (changes, ctx) {
- * 			const { customers } = yield* ctx.query({ customers: { where: { id: { in: changes.map((c) => c.after.customer) } }, fields: ['id', 'blocked'], all: true } });
+ * 			const { customers } = yield* ctx.query({ customers: { where: { id: { in: changes.map((c) => c.after.customer) } }, fields: ['id', 'blocked'], limit: changes.length } });
  * 			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
  * 			const row = changes.findIndex((c) => blocked.has(c.after.customer));
  * 			if (row >= 0) return yield* ctx.refuse('errors.customer_blocked', { row, field: 'customer' });

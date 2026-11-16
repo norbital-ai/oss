@@ -615,7 +615,7 @@ export function shell_bolt(
 				: { messages: options.messages }),
 			...(f === undefined ? {} : { fetch: f }),
 			...(open_stream === undefined ? {} : { open_stream }),
-			...(boot.contract === undefined ? {} : { contract: boot.contract })
+			contract: boot.contract
 		});
 		const agent = options.agent ?? agent_panel();
 		const api = shell_api(options.fetch, {

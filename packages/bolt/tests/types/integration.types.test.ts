@@ -4,7 +4,7 @@ import { expectTypeOf } from '@effect/vitest';
 import { instance_id, integration, is_instance, model, policy, sync, workspace } from '../../src/index.ts';
 import type { IntegrationName } from '../../src/decl/names.ts';
 import type { AutomationCtx, Id, InputOf, InstanceId, StartInput, SyncRow, Where } from '../../src/index.ts';
-import type { CalendarEvent } from '../../src/decl/runtime/integration.ts';
+import type { Attachment, CalendarEvent } from '../../src/decl/runtime/integration.ts';
 import type { SyncKey } from '../../src/decl/names.ts';
 import type { IntegrationSpecOf, StoredRow } from '../../src/decl/names.ts';
 import type { DatabaseResult } from '@norbital-ai/host-api';
@@ -20,6 +20,9 @@ import type {
 	SendInput
 } from '../../src/decl/runtime/integration.ts';
 import type { IntegrationOf } from '../../src/decl/runtime/names.ts';
+
+// Workspace file handles retain their model brand across the transport boundary.
+expectTypeOf<Attachment['id']>().toEqualTypeOf<Id<'sys_file'> | undefined>();
 
 expectTypeOf<IntegrationName>().toEqualTypeOf<
 	| 'erp'

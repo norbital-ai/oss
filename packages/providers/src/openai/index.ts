@@ -16,10 +16,9 @@ import {
 	provide_http,
 	type HttpOptions
 } from '@norbital-ai/host-api';
-import type { Json } from '../../decl/values.ts';
-import { LIMITS } from '../contracts.ts';
-import { fileParts } from './ingest.ts';
-import { SaidContent, StepContent, textOf } from './schema.ts';
+import type { Json } from 'effect/Schema';
+import { AiAssistantContent, AiToolResult, HOST_LIMITS, textOf } from '@norbital-ai/host-api';
+import { fileParts } from './files.ts';
 
 /** An OpenAI-compatible `/chat/completions` endpoint for `open_ai_chat`: base URL, key, model map and metering. */
 export type OpenAiChatConfig = {
@@ -51,8 +50,8 @@ const inFlightBudget = Schema.decodeUnknownOption(
 );
 
 /** The engine's messages decoded as its transcript rows hold them, by role. */
-const stepOf = Schema.decodeUnknownOption(StepContent),
-	saidOf = Schema.decodeUnknownOption(SaidContent);
+const stepOf = Schema.decodeUnknownOption(AiToolResult),
+	saidOf = Schema.decodeUnknownOption(AiAssistantContent);
 /**
  * Engine messages (`{ text, toolCalls }` assistant rows, `{ id, name, result }` tool rows) as chat messages. A file a call
  * opened follows that call's results as a user message, on the one request after it: at the end, where no later prefix
@@ -124,7 +123,9 @@ function messagesOf(r: AiRequest): Wire[] {
 		} else out.push({ role: 'user', content: textOf(m.content) });
 	}
 	opened();
-	const loose = files.filter((f) => f.call === undefined || !calls.has(f.call)).flatMap((f) => f.parts);
+	const loose = files
+		.filter((f) => f.call === undefined || !calls.has(f.call))
+		.flatMap((f) => f.parts);
 	if (loose.length > 0) {
 		const last = out.findLast((m) => m['role'] === 'user' && typeof m['content'] === 'string');
 		if (last === undefined) out.push({ role: 'user', content: loose });
@@ -255,7 +256,7 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 				if (res.status < 200 || res.status >= 300) {
 					const detail = yield* res.text.pipe(
 						Effect.mapError(Port.failure('ai')),
-						Port.call('ai.body', LIMITS.callMs.ai)
+						Port.call('ai.body', HOST_LIMITS.callMs.ai)
 					);
 					const too_large =
 						res.status === 413 ||
@@ -332,14 +333,14 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 				});
 				if ((res.headers['content-type'] ?? '').includes('application/json')) {
 					yield* accept(
-						yield* decodeChunk(yield* res.text.pipe(Port.call('ai.body', LIMITS.callMs.ai))).pipe(
-							Effect.mapError(Port.failure('ai'))
-						),
+						yield* decodeChunk(
+							yield* res.text.pipe(Port.call('ai.body', HOST_LIMITS.callMs.ai))
+						).pipe(Effect.mapError(Port.failure('ai'))),
 						true
 					);
 				} else {
 					yield* Stream.transformPull(res.stream, (pull) =>
-						Effect.succeed(pull.pipe(Port.call('ai.stream', LIMITS.callMs.ai)))
+						Effect.succeed(pull.pipe(Port.call('ai.stream', HOST_LIMITS.callMs.ai)))
 					).pipe(
 						Stream.decodeText(),
 						Stream.splitLines,
@@ -363,7 +364,7 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 				if (usage.cost !== undefined && id !== '' && config.meter !== undefined)
 					yield* Port.attempt('ai.meter', () =>
 						Promise.resolve(config.meter?.(usage.cost ?? 0, id))
-					).pipe(Port.call('ai.meter', LIMITS.callMs.ai));
+					).pipe(Port.call('ai.meter', HOST_LIMITS.callMs.ai));
 				const toolCalls = calls.map((c) =>
 					Option.match(parseJson(c.args === '' ? '{}' : c.args), {
 						onSome: (input) => ({

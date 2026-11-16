@@ -5,7 +5,7 @@ Read before adding a model, splitting a catalogue or designing configurable beha
 ## Design order
 
 1. Learn the domain: its jobs, actors, inputs and the variations its users need.
-2. Design so a new variation is a new configuration record at runtime, never new source: one generic engine model plus the records that configure it.
+2. Represent supported variation as validated runtime configuration. Source defines its types, operations and invariants; extend source when the requested behavior exceeds that language. Do not build a universal interpreter to avoid an ordinary source change.
 3. Use the fewest models that hold the data. Prefer, in order: a field; a custom datatype or shaped `json` on the owner; an owned child model; a separate model.
 4. Take a model over a custom datatype only when the data needs a foreign-key constraint, its own view, its own lifecycle, permissions or approval, history, or relational queries.
 5. Nest each model's folder under the model that owns it: `data/model/<root>/<child>/+model.ts`. Group catalogues and settings under one settings root. The tree reads as the domain.
@@ -14,14 +14,14 @@ Read before adding a model, splitting a catalogue or designing configurable beha
 
 Name the records people find, the actions they take and the changes to prove. A screen, tab, schema property or noun does not justify a model.
 
-| Need | Use |
-| --- | --- |
-| A scalar with a built-in meaning | its built-in field kind |
-| A structured value meaningful only within one parent | shaped `json` or a custom datatype on the parent |
-| A reusable value shape with its own validation or editor | a custom field and companion renderer |
-| Independent identity, lifecycle, permissions, history or relational queries | a model |
-| Reused, effective-dated configuration other records reference | a runtime catalogue model |
-| A result derivable from existing facts | a computed field, roll-up, or a read plus a pure helper |
+| Need                                                                        | Use                                                     |
+| --------------------------------------------------------------------------- | ------------------------------------------------------- |
+| A scalar with a built-in meaning                                            | its built-in field kind                                 |
+| A structured value meaningful only within one parent                        | shaped `json` or a custom datatype on the parent        |
+| A reusable value shape with its own validation or editor                    | a custom field and companion renderer                   |
+| Independent identity, lifecycle, permissions, history or relational queries | a model                                                 |
+| Reused, effective-dated configuration other records reference               | a runtime catalogue model                               |
+| A result derivable from existing facts                                      | a computed field, roll-up, or a read plus a pure helper |
 
 - Inline a value when its entries are born, edited, sealed and discarded with the parent.
 - Keep stable item keys when operations or references need them; an array position is not identity.
@@ -62,7 +62,7 @@ Inspect its readers, writers, policies, automations, seeds and syncs. Preserve:
 - `StructuredData` renders schema-driven values, edits, schema documents and inline diffs. Rendering is not validation: keep server schema and rule checks authoritative. Remote references are not fetched.
 - A schema property picks a Bolt datatype explicitly with `format: '<datatype>'` (a custom datatype: `"x-norbital": { "datatype": "<name>" }`), or implicitly when an object's shape is exactly a period or point, all keys required. Explicit wins. JSON Schema's own string formats keep their meaning.
 - `bolt check` and `bolt build` hold every seed value declaring `$schema` to this: a `format` naming no datatype, or the wrong shape, fails with its path.
-- A `text` field with `format: 'cel'` supplies the formula editor only. Source compiles and evaluates the scope with the std formula module, including result type and failure handling.
+- A `text` field with `format: 'cel'` supplies the formula editor only. Source compiles and evaluates the scope with the Bolt formula exports, including result type and failure handling.
 
 ## Review
 

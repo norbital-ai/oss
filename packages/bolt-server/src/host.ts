@@ -31,12 +31,12 @@ import {
 import { http_port, keys_port, tcp_port } from '@norbital-ai/host-api/node';
 import { local_audit } from './audit/index.ts';
 import { local_files } from './files.ts';
-import { drivers } from './drivers.ts';
+import { drivers } from '@norbital-ai/providers';
 import { messaging } from './mail.ts';
 import { nominatim, openAi, s3Files } from './ports.ts';
-import { apns, push } from './push.ts';
+import { apns, push } from '@norbital-ai/providers';
 import { webSearch } from './search.ts';
-import { publicWeb } from './web.ts';
+import { publicWeb } from '@norbital-ai/host-api/node';
 import { chromium_render } from './render.ts';
 
 /** One optional facility's selection: the provider name, its endpoint and credential. */
@@ -77,7 +77,7 @@ export type HostSettings = {
 	};
 	vapid: { public_key: string; private_key: string } | null;
 	/** Each Apple team's provider-token key (its id and `.p8` PEM), by team id; `{}` sends no APNs. */
-	apns: { readonly [teamId: string]: { readonly key_id: string; readonly key: string } };
+	apns: import('@norbital-ai/providers').ApnsKeys;
 	turnstile: { site_key: string; secret: string } | null;
 	/** `production`, `staging`, `development`, …: every other than production shows the shell's badge. */
 	environment: string | null;

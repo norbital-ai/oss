@@ -1,7 +1,7 @@
 // A model's file syncs: the view toolbar's Import, Download template and Export. Each is a platform
 // run `<model>.sync.<sync>` started by a member (its `starter`), so RunStatus shows it and a template's or export's
-// FileRef is the run's output: `{ mode: 'import', file, context? }` | `{ mode: 'template' | 'export', format?,
-// to?, context?, where? }`.
+// FileRef is the run's output: `{ mode: 'import', file, context? }` | `{ mode: 'template' | 'export', to?,
+// context?, where? }`.
 //
 // Import: the member's own upload (`<model>.$import.<sync>`) is read by the parser its name or media type picks (a
 // built-in on the host, a custom `parse` in the guest), every record with its `$at`; with a `schema` the records decode
@@ -89,7 +89,6 @@ export const FileSyncInput = Schema.Union([
 	}),
 	Schema.Struct({
 		mode: Schema.Literals(['template', 'export']),
-		format: Schema.optionalKey(Schema.Literals(FORMATS)),
 		to: Schema.optionalKey(Schema.Literals([...CONVERT_TARGETS, ...FORMATS])),
 		context: Schema.optionalKey(Schema.Json),
 		where: Schema.optionalKey(Schema.Json)
@@ -122,11 +121,11 @@ function columnsOf(
 	const schema = s.entry.schema;
 	const captionsOf = (columns: Fields): ColumnCaptions => Object.fromEntries(
 		Object.keys(columns).flatMap((field) => {
-			const caption = (schema === undefined ? undefined : m.messages?.[`models.${s.model}.syncs.${s.sync}.schema.fields.${field}`])
-				?? m.messages?.[`models.${s.model}.fields.${field}`];
-			return caption === undefined ? [] : [[field, caption]];
-		})
-	);
+			const caption = (schema === undefined ? undefined : m.messages?.[`models.${s.model}.syncs.${s.sync}.schema.fields.${field}`]) ??
+					m.messages?.[`models.${s.model}.fields.${field}`];
+				return caption === undefined ? [] : [[field, caption]];
+			})
+		);
 	if (schema !== undefined)
 		return {
 			columns: schema,
@@ -151,7 +150,11 @@ function columnsOf(
 					: [];
 		})
 	);
-	return { columns, captions: captionsOf(columns), required: modelKey(m, s.model).filter((f) => f in columns) };
+	return {
+		columns,
+		captions: captionsOf(columns),
+		required: modelKey(m, s.model).filter((f) => f in columns)
+	};
 }
 
 /** A default import's record as its row: `$at` dropped, a ref's text that is no id names its target by its one key field. */
@@ -505,7 +508,9 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 			findings: [
 				{
 					at: own && outcome.row !== undefined ? (at[outcome.row] ?? 0) : 0,
-					...(field === undefined ? {} : { field: k === undefined ? field : headerOf(field, captions) }),
+					...(field === undefined
+						? {}
+						: { field: k === undefined ? field : headerOf(field, captions) }),
 					message:
 						outcome.kind === 'refused'
 							? outcome.message
@@ -634,7 +639,7 @@ const exportFile = Effect.fn('FileSyncs.export')(function* (
 				? []
 				: written;
 	const writable = parsersOf(s.entry).flatMap((p) => FORMATS.filter((x) => x === p));
-	const requested = input.format ?? input.to;
+	const requested = input.to;
 	const format =
 		requested === undefined ? (writable[0] ?? 'xlsx') : writable.find((f) => f === requested);
 	if (format === undefined)

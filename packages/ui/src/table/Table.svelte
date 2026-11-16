@@ -267,6 +267,35 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 			? columns.filter((c) => colOf(c).cell === undefined).map((c) => colOf(c).field)
 			: []
 	);
+	// Authored row consumers keep their full row contract; ordinary cells need only their visible data.
+	const projection = $derived.by(() => {
+		if (
+			!kinds.catalog?.[model] ||
+			row_class ||
+			row_trailing ||
+			actions.length ||
+			on_open ||
+			columns.some((column) => colOf(column).cell !== undefined) ||
+			fields.some(
+				(field) => field.includes('.') || kinds.catalog?.[model]?.fields[field]?.kind === 'custom'
+			)
+		)
+			return undefined;
+		return [
+			...new Set([
+				...(kinds.catalog[model]?.fields['revision'] === undefined ? [] : ['revision']),
+				...fields,
+				...fields.flatMap((field) => {
+					const kind = kinds.catalog?.[model]?.fields[field];
+					return kind?.kind === 'money' &&
+						typeof kind.currency === 'string' &&
+						kinds.catalog?.[model]?.fields[kind.currency]
+						? [kind.currency]
+						: [];
+				})
+			])
+		];
+	});
 	const tb = $derived(toolbar === false ? {} : toolbar);
 	// search where the model declares search fields, else `like` over its label's text fields, or over a
 	// local array's columns, or through `search.semantic` or a search index (the toolbar's `/<name>`)
@@ -377,7 +406,9 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	let hidden = $state<string[]>(initialLayout.hidden ?? []);
 	// the viewer's page size (the footer's select), kept with the layout; the author's `page_size` is the default
 	const SIZES = [10, 25, 50, 100, 200] as const;
-	let size = $state<number>(untrack(() => SIZES.find((n) => n === initialLayout.size) ?? page_size));
+	let size = $state<number>(
+		untrack(() => SIZES.find((n) => n === initialLayout.size) ?? page_size)
+	);
 	const keep = () => {
 		Result.getOrElse(
 			Result.try(() =>
@@ -391,16 +422,21 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	};
 	// ── view state in the URL ──
 	let st = $state<TableState>(
-		untrack(() => (controlled ? { after: null, q: '' } : readTableState(currentSearchParams(), urlKey)))
+		untrack(() =>
+			controlled ? { after: null, q: '' } : readTableState(currentSearchParams(), urlKey)
+		)
 	);
 	let back = $state<(string | null)[]>([]);
 	let qText = $state(untrack(() => st.q));
 	// a search index the toolbar runs (`/<index>` and its input): its nearest rows, in its order, in place of the page
 	let probe = $state<{ index: string; input: Json } | null>(null);
 	let notice = $state<string | null>(null);
-	onChange_(() => controlled ? null : writeTableState(currentSearchParams(), urlKey, st), (next) => {
-		if (next !== null) replaceSearchParams(next);
-	});
+	onChange_(
+		() => (controlled ? null : writeTableState(currentSearchParams(), urlKey, st)),
+		(next) => {
+			if (next !== null) replaceSearchParams(next);
+		}
+	);
 	const debouncedSearch = new Debounced(() => qText, 300);
 	onDestroy(debouncedSearch.cancel);
 	onChange_(
@@ -440,7 +476,12 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 						listRequest(
 							kinds.catalog,
 							name,
-							{ search: { [probe.index]: probe.input }, where: scope, limit: size },
+							{
+								search: { [probe.index]: probe.input },
+								where: scope,
+								limit: size,
+								fields: projection
+							},
 							fields,
 							refs
 						)
@@ -459,7 +500,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 							listRequest(
 								kinds.catalog,
 								name,
-								{ ...searched, order_by: order, limit, after: at },
+								{ ...searched, order_by: order, limit, after: at, fields: projection },
 								fields,
 								refs
 							)
@@ -474,13 +515,15 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		return null;
 	});
 	const pageState = $derived(queryState(page));
-	onChange_(() => pageState, (s) => {
-		if (s.kind === 'error' && s.code === 'bad_cursor') {
-			notice = msg(text, 'table.bad_cursor'
-			);
-			restart({});
+	onChange_(
+		() => pageState,
+		(s) => {
+			if (s.kind === 'error' && s.code === 'bad_cursor') {
+				notice = msg(text, 'table.bad_cursor');
+				restart({});
+			}
 		}
-	});
+	);
 	const local = $derived(
 		kind === 'local'
 			? controlled
@@ -511,14 +554,22 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	// a long page (page_size 100/200, a local grid) renders a window of rows, one per layout, measured and keyed by id
 	const shownRows = $derived(view.kind === 'ready' ? view.value : []);
 	// a relation its output reads as no layer (a `sys_user` owner) labels its targets in one read after the page
-	const labelRequest = $derived(kind === 'model' ? label_wave(kinds.catalog, model, refs, shownRows) : null);
+	const labelRequest = $derived(
+		kind === 'model' ? label_wave(kinds.catalog, model, refs, shownRows) : null
+	);
 	const labels = $derived(labelRequest === null ? null : host().query(labelRequest));
 	const presented = $derived(
 		new Map(
 			shownRows.map<[ReadRow, Values]>((row) => [
 				row,
 				typeof row['id'] === 'string'
-					? (labelled(kinds.catalog, model, refs, unref(kinds.catalog, model, refs, [row]), labels?.current)[0] ?? row)
+					? (labelled(
+							kinds.catalog,
+							model,
+							refs,
+							unref(kinds.catalog, model, refs, [row]),
+							labels?.current
+						)[0] ?? row)
 					: row
 			])
 		)
@@ -681,7 +732,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 									listRequest(
 										kinds.catalog,
 										name,
-										{ ...searched, order_by: order, limit: READ_LIMIT },
+										{ ...searched, order_by: order, limit: READ_LIMIT, fields: projection },
 										fields,
 										refs,
 										true
@@ -917,18 +968,20 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 
 {#snippet cell(
 	row: ReadRow,
-	col: AutomaticColumn | {
-		field: keyof ColumnsIn<S> & string;
-		cell?: Snippet<
-			[
-				{
-					row: RowIn<S>;
-					value: ColumnsIn<S>[keyof ColumnsIn<S> & string] | undefined;
-					field: keyof ColumnsIn<S> & string;
-				}
-			]
-		>;
-	}
+	col:
+		| AutomaticColumn
+		| {
+				field: keyof ColumnsIn<S> & string;
+				cell?: Snippet<
+					[
+						{
+							row: RowIn<S>;
+							value: ColumnsIn<S>[keyof ColumnsIn<S> & string] | undefined;
+							field: keyof ColumnsIn<S> & string;
+						}
+					]
+				>;
+		  }
 )}
 	{@const displayed = presentRow(row)}
 	{#if col.cell}{@render col.cell({
@@ -939,10 +992,9 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 			text={recordText(exposed, row)}
 			expand="never"><span data-record-label>{recordText(exposed, row)}</span></Overflow
 		>
-	{:else if plainText(row, col.field)}<Overflow
-			text={fullText(row, col.field)}
-			expand="never"
-			><Value {ctx}
+	{:else if plainText(row, col.field)}<Overflow text={fullText(row, col.field)} expand="never"
+			><Value
+				{ctx}
 				value={valueAt(displayed, col.field)}
 				kind={kindOf(col.field)}
 				row={displayed}
@@ -951,7 +1003,8 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 				dense
 				link={false}
 			/></Overflow
-		>{:else}<Value {ctx}
+		>{:else}<Value
+			{ctx}
 			value={valueAt(displayed, col.field)}
 			kind={kindOf(col.field)}
 			row={displayed}
@@ -1015,7 +1068,8 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	data-source={kind}
 	data-embedded={embedded || undefined}
 >
-	{#if !embedded}<ViewToolbar {ctx}
+	{#if !embedded}<ViewToolbar
+			{ctx}
 			config={toolbar}
 			{model}
 			view={canFilter ? vs : undefined}
@@ -1049,8 +1103,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 				</div>
 			{:else}
 				<!-- an empty view says what is missing and offers the way forward, inside the table's own card -->
-				{@const what =
-					model === '' ? msg(text, 'table.rows') : lowerLead(label(text, model))}
+				{@const what = model === '' ? msg(text, 'table.rows') : lowerLead(label(text, model))}
 				<div class={embedded ? 'min-w-0' : 'bg-card min-w-0 rounded-md border'} data-table-card>
 					{#if filtered}
 						<EmptyState
@@ -1073,9 +1126,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 						<EmptyState
 							variant="inset"
 							title={msg(text, 'table.empty', { what })}
-							hint={canNew
-								? msg(text, 'table.noneHint')
-								: msg(text, 'table.emptyHint')}
+							hint={canNew ? msg(text, 'table.noneHint') : msg(text, 'table.emptyHint')}
 						>
 							{#if canNew}<Button
 									onclick={() =>
@@ -1173,7 +1224,10 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 													last={ci === ordered.length - 1}
 													only={ordered.length === 1}
 													resized={widths[f] !== undefined}
-													hidden={hiddenCols.map((h) => ({ field: colOf(h).field, label: colLabel(h) }))}
+													hidden={hiddenCols.map((h) => ({
+														field: colOf(h).field,
+														label: colLabel(h)
+													}))}
 													on_pin={() => togglePin(f)}
 													on_hide={() => toggleHidden(f)}
 													on_move={(by) => moveColumn(f, by)}
@@ -1227,7 +1281,8 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 												(held.state === 'Pending'
 													? '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-warning)]'
 													: '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-primary)]'),
-											held?.pending_delete === true && '[&>td]:text-muted-foreground [&>td]:line-through'
+											held?.pending_delete === true &&
+												'[&>td]:text-muted-foreground [&>td]:line-through'
 										]}
 										data-approval={held?.state}
 										data-pending-delete={held?.pending_delete}
@@ -1396,9 +1451,11 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 									on_open={() => open(row)}
 								>
 									{#snippet title()}{#if (exposed?.record_label !== undefined || typeof row['$label'] === 'string' || exposed?.label.length === 0) && lead?.cell === undefined && recordText(exposed, row)}<span
-											data-record-label>{recordText(exposed, row)}</span
-										>{:else if lead !== undefined}{@render cell(row, lead)}{/if}{/snippet}
-									{#snippet value(field)}{@const c = fields.find((x) => x.field === field)}{#if c}{@render cell(row, c)}{/if}{/snippet}
+												data-record-label>{recordText(exposed, row)}</span
+											>{:else if lead !== undefined}{@render cell(row, lead)}{/if}{/snippet}
+									{#snippet value(field)}{@const c = fields.find(
+											(x) => x.field === field
+										)}{#if c}{@render cell(row, c)}{/if}{/snippet}
 								</RowCard>
 								{#if row_trailing}
 									<div
@@ -1414,7 +1471,9 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										{@render row_trailing(row)}
 									</div>
 								{/if}
-								{#if actions.length > 0}<div class="shrink-0"><RowMenu {ctx} actions={rowMenu(row)} /></div>{/if}
+								{#if actions.length > 0}<div class="shrink-0">
+										<RowMenu {ctx} actions={rowMenu(row)} />
+									</div>{/if}
 							</li>
 						{/each}
 						{#if narrow.after > 0}<li aria-hidden="true" style="height:{narrow.after}px"></li>{/if}
@@ -1427,7 +1486,8 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	{#if embedded}
 		{@render content(shownRows)}
 	{:else}
-		<ReadGate {ctx}
+		<ReadGate
+			{ctx}
 			state={view}
 			what={model === '' ? catalogText(text, 'table.rows', 'these rows') : label(text, model)}
 		>

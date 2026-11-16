@@ -42,7 +42,6 @@ export type FileSyncInput<M, S> = (
 	| { readonly mode: 'import'; readonly file: Id<'sys_file'> }
 	| {
 		readonly mode: 'template' | 'export';
-		readonly format?: 'xlsx' | 'csv' | 'tsv' | 'json' | 'txt';
 		readonly to?: DeclaredConvertTarget | 'xlsx' | 'csv' | 'tsv' | 'json' | 'txt';
 		readonly where?: Where<M>;
 	}
@@ -390,7 +389,8 @@ export type Sync<M extends string, S extends string, X> = {
 	readonly spec: X;
 	readonly bodies: SyncBodies;
 };
-const guest = (body: GeneratorBody | undefined) => (body === undefined ? undefined : attached(body, 1));
+const guest = (body: GeneratorBody | undefined) =>
+	body === undefined ? undefined : attached(body, 1);
 /**
  * `src/data/model/<…>/<model>/+<sync>.sync.ts`, beside its model's `+model.ts`: how that model's rows are exchanged with a file
  * (`with: 'file'`: the native Import, Download template and Export toolbar actions from its `parser`/`read`/`write`) or
@@ -433,8 +433,15 @@ type Declared = { readonly spec: object; readonly bodies: object };
  * A model declaration with its sync files merged in, as the compiler hands it on before anything reads the model:
  * each sync's literal at `spec.syncs.<sync>`, its bodies at `bodies.syncs.<sync>`.
  */
-export function with_syncs<D extends Declared>(model: D, syncs: { readonly [sync: string]: Declared }) {
+export function with_syncs<D extends Declared>(
+	model: D,
+	syncs: { readonly [sync: string]: Declared }
+) {
 	const each = (part: 'spec' | 'bodies') =>
 		Object.fromEntries(Object.entries(syncs).map(([name, s]) => [name, s[part]]));
-	return { ...model, spec: { ...model.spec, syncs: each('spec') }, bodies: { ...model.bodies, syncs: each('bodies') } };
+	return {
+		...model,
+		spec: { ...model.spec, syncs: each('spec') },
+		bodies: { ...model.bodies, syncs: each('bodies') }
+	};
 }

@@ -129,9 +129,9 @@ ctx.act({ 'orders.update': [{ target: order, set: { note: 'x' } }] });
 // @ts-expect-error P10 a field the update allowlist leaves out
 ctx.act({ 'orders.update': [{ target: order, set: { number: 'x' } }] });
 ctx.run('nightly', {});
-// a file sync's export input, one or a batch (`format` is part of the export arm)
-ctx.sync_control('orders', 'sheet', { mode: 'export', format: 'json' });
-ctx.sync_control('orders', 'sheet', { mode: 'export', format: 'csv' });
+// a file sync's export input, one or a batch (`to` selects the export format)
+ctx.sync_control('orders', 'sheet', { mode: 'export', to: 'json' });
+ctx.sync_control('orders', 'sheet', { mode: 'export', to: 'csv' });
 ctx.run('orders_renote', { ids: [order.id], note: 'x' }).pipe(
 	Effect.map((outcome) => {
 		is<

@@ -18,46 +18,10 @@ import { Chain } from '../write/sql.ts';
 import type { Files } from '../ports.ts';
 import { row } from '../system/rows.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { toBase64 } from '../crypto.ts';
 import { size } from './context.ts';
 
 const TEXT = /^(text\/|application\/(json|csv|xml|[\w.-]+\+(json|xml))$)/;
-const dataUrl = (f: { mime: string; bytes: Uint8Array }) =>
-	`data:${f.mime};base64,${toBase64(f.bytes)}`;
 
-/**
- * An image's stored pixel size from its header: PNG, JPEG or GIF; `undefined` for another format.
- * ponytail: header only, so a JPEG's EXIF rotation is not applied; the host's own tiles and crops are already oriented.
- */
-export function pixelSize(b: Uint8Array): { width: number; height: number } | undefined {
-	const at = (i: number) => (b[i] ?? 0) * 256 + (b[i + 1] ?? 0);
-	if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47)
-		return { width: at(16) * 65536 + at(18), height: at(20) * 65536 + at(22) };
-	if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46)
-		return { width: (b[6] ?? 0) + (b[7] ?? 0) * 256, height: (b[8] ?? 0) + (b[9] ?? 0) * 256 };
-	if (b[0] !== 0xff || b[1] !== 0xd8) return undefined;
-	// a JPEG's segments up to its frame header (SOF0–SOF15 bar DHT, JPG and DAC)
-	for (let i = 2; i + 9 < b.length; i += 2 + at(i + 2)) {
-		if (b[i] !== 0xff) return undefined;
-		const marker = b[i + 1] ?? 0;
-		if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc)
-			return { width: at(i + 7), height: at(i + 5) };
-	}
-	return undefined;
-}
-/** The words that introduce an image to the model: its pixel size, so a crop's fractions can be worked out. */
-export const imageLabel = (name: string, bytes: Uint8Array): string => {
-	const px = pixelSize(bytes);
-	return px === undefined ? name : `${name}: ${px.width}×${px.height} px`;
-};
-/** One file a tool opened as chat parts: an image as its size and the image, text as text; anything else is parsed by `read_file`. */
-export function fileParts(f: { mime: string; bytes: Uint8Array }, name: string): Json[] {
-	if (f.mime.startsWith('image/'))
-		return [{ type: 'text', text: imageLabel(name, f.bytes) }, { type: 'image_url', image_url: { url: dataUrl(f) } }];
-	if (TEXT.test(f.mime))
-		return [{ type: 'text', text: `${name} (${f.mime}):\n${new TextDecoder().decode(f.bytes)}` }];
-	return [{ type: 'text', text: `${name} (${f.mime}): read_file reads it` }];
-}
 /** What a file with no parser answers: its name, type and size, and that it is binary. */
 export const unparsed = (name: string, mime: string, size: number) =>
 	`${name} (${mime || 'unknown type'}, ${size.toLocaleString('en-US')} bytes): binary; no parser for this format.`;
@@ -542,9 +506,13 @@ export function grep(html: string, text: string, limit: number, format: 'html' |
 	const all = format === 'html' ? readable(html.split('\n')) : html.split('\n'),
 		spans = format === 'html' ? blocks(all) : [],
 		// a|b finds either: plain words, so no pattern can run away on a long document
-		wants = format === 'text'
-			? [text.toLowerCase()]
-			: text.toLowerCase().split('|').filter((want) => want !== ''),
+		wants =
+			format === 'text'
+				? [text.toLowerCase()]
+				: text
+						.toLowerCase()
+						.split('|')
+						.filter((want) => want !== ''),
 		hits: { page?: number; from: number; to: number; text: string }[] = [];
 	let total = 0,
 		page: number | undefined;
@@ -563,16 +531,14 @@ export function grep(html: string, text: string, limit: number, format: 'html' |
 	});
 	return { total, hits };
 }
-const imageNames = (html: string) => [...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)]
-	.flatMap((match) => match[1] === undefined ? [] : [match[1]]);
+const imageNames = (html: string) =>
+	[...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].flatMap((match) =>
+		match[1] === undefined ? [] : [match[1]]
+	);
 /** The images a window's lines reference (`<img src="name">`), in order, each once. */
 export const imagesIn = (lines: readonly string[], names: readonly string[]) => {
 	const known = new Set(names);
-	return [
-		...new Set(
-			lines.flatMap(imageNames)
-		)
-	].filter((name) => known.has(name));
+	return [...new Set(lines.flatMap(imageNames))].filter((name) => known.has(name));
 };
 
 // ── the steering message ──

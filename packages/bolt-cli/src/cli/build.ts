@@ -12,7 +12,7 @@ import {
 } from '../compiler/artifact/index.ts';
 import { buildPacks } from '../compiler/artifact/seed.ts';
 import { layerLines, preparedLayer } from '../compiler/artifact/platform.ts';
-import { CONTRACT, read_artifact, type Artifact } from '@norbital-ai/bolt/artifact';
+import { read_artifact, type Artifact } from '@norbital-ai/bolt/artifact';
 import { read_pack_source, type PackJson } from '@norbital-ai/bolt/engine';
 import { type CheckDiagnostic, Diagnostic, type GuestProgram } from '@norbital-ai/host-api';
 import type { BoltError, EngineManifest, ManifestInvalid } from '@norbital-ai/bolt/engine';
@@ -250,7 +250,7 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 			);
 	return {
 		// its trees were hashed as they were written
-		artifact: yield* read_artifact(bundle, [CONTRACT], 'executed'),
+		artifact: yield* read_artifact(bundle, 'executed'),
 		files,
 		packs: seeded.packs,
 		release,
@@ -305,9 +305,7 @@ const seedWorkspace = Effect.fn('bolt.seedWorkspace')(function* (
 	const packErrors: CheckDiagnostic[] = [];
 	const packs = yield* buildPacks(root, manifest, seedOut, packErrors);
 	if (packErrors.length > 0)
-		return yield* Effect.fail(
-			authorErrors(packErrors, `${packErrors.length} seed errors`)
-		);
+		return yield* Effect.fail(authorErrors(packErrors, `${packErrors.length} seed errors`));
 	yield* fs.makeDirectory(seedOut, { recursive: true });
 	yield* fs.writeFileString(stampFile, stamp);
 	return { packs };

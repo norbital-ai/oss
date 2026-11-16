@@ -183,7 +183,9 @@ it.live('a page that needs sign-in sends a signed-out document request to sign i
 		const res = yield* Effect.flatMap(TestWorkspace, (t) =>
 			t.handle(new Request('https://acme.example/app/site/home?x=1', { redirect: 'manual' }))
 		).pipe(
-			Effect.provide(TestWorkspace.layer({ artifact, host: { public_url: 'https://acme.example' } }))
+			Effect.provide(
+				TestWorkspace.layer({ artifact, host: { public_url: 'https://acme.example' } })
+			)
 		);
 		expect(res.status).toBe(303);
 		expect(res.headers.get('location')).toBe(
@@ -204,13 +206,13 @@ it.live('a release its host admitted is checked again only for what runs in the 
 		expect(yield* read_artifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
 			code: 'artifact_digest'
 		});
-		expect(
-			(yield* read_artifact(fixture.dir, undefined, 'executed')).pages['app/site/home']?.entry
-		).toBe('assets/site.js');
-		yield* fs.writeFileString(path.join(fixture.dir, 'guest.mjs'), '// changed');
-		expect(yield* read_artifact(fixture.dir, undefined, 'executed').pipe(Effect.flip)).toMatchObject(
-			{ code: 'artifact_digest' }
+		expect((yield* read_artifact(fixture.dir, 'executed')).pages['app/site/home']?.entry).toBe(
+			'assets/site.js'
 		);
+		yield* fs.writeFileString(path.join(fixture.dir, 'guest.mjs'), '// changed');
+		expect(yield* read_artifact(fixture.dir, 'executed').pipe(Effect.flip)).toMatchObject({
+			code: 'artifact_digest'
+		});
 	}).pipe(Effect.provide(NodeServices.layer))
 );
 
@@ -358,125 +360,114 @@ it.live('reads lazily, decodes artifact files once and refuses a changed digest'
 	}).pipe(Effect.provide(NodeServices.layer))
 );
 
-it.live(
-	"re-derives only its own contract's schema: a pinned older release keeps its recorded schema",
-	() =>
-		Effect.gen(function* () {
-			const fs = yield* FileSystem.FileSystem,
-				path = yield* Path.Path;
-			const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-artifact-pinned-' });
-			const text = `${JSON.stringify(manifest)}\n`,
-				source = 'export default {};';
-			yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
-			yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
-			cpSync(prepared.plain, path.join(dir, 'migrations'), { recursive: true });
-			const write = (contract: string) =>
-				Effect.gen(function* () {
-					const body: Omit<ArtifactJson, 'hash'> = {
-						format: 1,
-						contract,
-						handle: 'pinned',
-						name: 'Pinned',
-						// an older engine's system layer fingerprints the same manifest differently
-						schema: sha256_hex('an older system layer'),
-						client: { entry: '', css: [] },
-						pages: {},
-						hashes: {
-							manifest: sha256_hex(text),
-							guest: sha256_hex(source),
-							client: yield* tree_hash(path.join(dir, 'client')),
-							server: yield* tree_hash(path.join(dir, 'server'))
-						}
-					};
-					yield* fs.writeFileString(
-						path.join(dir, 'artifact.json'),
-						JSON.stringify({ ...body, hash: yield* artifact_hash(dir, body) })
-					);
-				});
-			const older = sha256_hex('@norbital-ai/bolt@0.0.0-older');
-			yield* write(older);
-			expect((yield* read_artifact(dir, [older])).manifest).toEqual(manifest);
-			yield* write(CONTRACT);
-			expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schema_mismatch' });
-			const snapshotPath = path.join(dir, 'migrations', 'snapshot.json');
-			const lockPath = path.join(dir, 'migrations', 'migrations.lock.json');
-			const { schema: snapshot } = yield* read_snapshot(yield* fs.readFileString(snapshotPath));
-			const user = snapshot.tables['sys_user'];
-			if (user === undefined) throw new Error('fixture has no sys_user');
-			// The older system layer did not declare the user search index.
-			const olderUser = { ...user };
-			delete olderUser.search;
-			const olderSnapshot = snapshot_of({
-				...snapshot,
-				tables: { ...snapshot.tables, sys_user: olderUser }
+it.live('refuses a different contract and validates the current contract schema', () =>
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem,
+			path = yield* Path.Path;
+		const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-artifact-pinned-' });
+		const text = `${JSON.stringify(manifest)}\n`,
+			source = 'export default {};';
+		yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
+		yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
+		cpSync(prepared.plain, path.join(dir, 'migrations'), { recursive: true });
+		const write = (contract: string) =>
+			Effect.gen(function* () {
+				const body: Omit<ArtifactJson, 'hash'> = {
+					format: 1,
+					contract,
+					handle: 'pinned',
+					name: 'Pinned',
+					// an older engine's system layer fingerprints the same manifest differently
+					schema: sha256_hex('an older system layer'),
+					client: { entry: '', css: [] },
+					pages: {},
+					hashes: {
+						manifest: sha256_hex(text),
+						guest: sha256_hex(source),
+						client: yield* tree_hash(path.join(dir, 'client')),
+						server: yield* tree_hash(path.join(dir, 'server'))
+					}
+				};
+				yield* fs.writeFileString(
+					path.join(dir, 'artifact.json'),
+					JSON.stringify({ ...body, hash: yield* artifact_hash(dir, body) })
+				);
 			});
-			const lock = yield* read_lock(yield* fs.readFileString(lockPath));
-			yield* fs.writeFileString(snapshotPath, olderSnapshot);
-			yield* fs.writeFileString(
-				lockPath,
-				JSON.stringify({ ...lock, snapshot: sha256_hex(olderSnapshot) })
-			);
-			yield* write(older);
-			expect((yield* read_artifact(dir, [older])).manifest).toEqual(manifest);
-			yield* write(CONTRACT);
-			expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schema_moved' });
-		}).pipe(Effect.provide(NodeServices.layer))
+		const older = sha256_hex('@norbital-ai/bolt@0.0.0-older');
+		yield* write(older);
+		expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'contract' });
+		yield* write(CONTRACT);
+		expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schema_mismatch' });
+		const snapshotPath = path.join(dir, 'migrations', 'snapshot.json');
+		const lockPath = path.join(dir, 'migrations', 'migrations.lock.json');
+		const { schema: snapshot } = yield* read_snapshot(yield* fs.readFileString(snapshotPath));
+		const user = snapshot.tables['sys_user'];
+		if (user === undefined) throw new Error('fixture has no sys_user');
+		// The older system layer did not declare the user search index.
+		const olderUser = { ...user };
+		delete olderUser.search;
+		const olderSnapshot = snapshot_of({
+			...snapshot,
+			tables: { ...snapshot.tables, sys_user: olderUser }
+		});
+		const lock = yield* read_lock(yield* fs.readFileString(lockPath));
+		yield* fs.writeFileString(snapshotPath, olderSnapshot);
+		yield* fs.writeFileString(
+			lockPath,
+			JSON.stringify({ ...lock, snapshot: sha256_hex(olderSnapshot) })
+		);
+		yield* write(older);
+		expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'contract' });
+		yield* write(CONTRACT);
+		expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schema_moved' });
+	}).pipe(Effect.provide(NodeServices.layer))
 );
 
-it.live(
-	'authenticates historical snapshot metadata without reading or trusting its native bytes',
-	() =>
-		Effect.gen(function* () {
-			const fs = yield* FileSystem.FileSystem,
-				path = yield* Path.Path;
-			const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-untrusted-snapshot-' });
-			const text = `${JSON.stringify(manifest)}\n`,
-				source = 'export default {};',
-				bytes = new Uint8Array([0, 1, 2, 3]);
-			yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
-			yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
-			cpSync(prepared.plain, path.join(dir, 'migrations'), { recursive: true });
-			yield* fs.writeFile(path.join(dir, 'guest.snapshot'), bytes);
-			const body: Omit<ArtifactJson, 'hash'> = {
-				format: 1,
-				contract: CONTRACT,
-				handle: 'untrusted',
-				name: 'Untrusted snapshot',
-				schema: fingerprint(schema_slice(manifest)),
-				client: { entry: '', css: [] },
-				pages: {},
-				hashes: {
-					manifest: sha256_hex(text),
-					guest: sha256_hex(source),
-					client: yield* tree_hash(path.join(dir, 'client')),
-					server: yield* tree_hash(path.join(dir, 'server'))
-				},
-				snapshot: { key: 'tenant-authored native bytes', sha: sha256_hex(bytes) }
-			};
-			const artifact: ArtifactJson = { ...body, hash: yield* artifact_hash(dir, body) };
-			yield* fs.writeFileString(path.join(dir, 'artifact.json'), JSON.stringify(artifact));
-			const controlled: FileSystem.FileSystem = {
-				...fs,
-				readFile: (file) =>
-					file.endsWith('guest.snapshot')
-						? Effect.die(new Error('native snapshot bytes must never be read'))
-						: fs.readFile(file)
-			};
-			const loaded = yield* read_artifact(dir).pipe(
-				Effect.provideService(FileSystem.FileSystem, controlled)
-			);
-			expect(loaded.artifact.snapshot).toEqual(body.snapshot);
-			expect(loaded.guest.source).toBe(source);
-			expect('snapshot' in loaded.guest).toBe(false);
-			yield* fs.remove(path.join(dir, 'guest.snapshot'));
-			expect((yield* read_artifact(dir)).guest.source).toBe(source);
-			yield* fs.writeFileString(
-				path.join(dir, 'artifact.json'),
-				JSON.stringify({
-					...artifact,
-					snapshot: { ...body.snapshot, sha: sha256_hex('rewritten metadata') }
-				})
-			);
-			expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'artifact_digest' });
-		}).pipe(Effect.provide(NodeServices.layer))
+it.live('refuses obsolete native snapshot metadata without reading its bytes', () =>
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem,
+			path = yield* Path.Path;
+		const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-untrusted-snapshot-' });
+		const text = `${JSON.stringify(manifest)}\n`,
+			source = 'export default {};',
+			bytes = new Uint8Array([0, 1, 2, 3]);
+		yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
+		yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
+		cpSync(prepared.plain, path.join(dir, 'migrations'), { recursive: true });
+		yield* fs.writeFile(path.join(dir, 'guest.snapshot'), bytes);
+		const body: Omit<ArtifactJson, 'hash'> = {
+			format: 1,
+			contract: CONTRACT,
+			handle: 'untrusted',
+			name: 'Untrusted snapshot',
+			schema: fingerprint(schema_slice(manifest)),
+			client: { entry: '', css: [] },
+			pages: {},
+			hashes: {
+				manifest: sha256_hex(text),
+				guest: sha256_hex(source),
+				client: yield* tree_hash(path.join(dir, 'client')),
+				server: yield* tree_hash(path.join(dir, 'server'))
+			}
+		};
+		const artifact = {
+			...body,
+			hash: yield* artifact_hash(dir, body),
+			snapshot: { key: 'obsolete', sha: sha256_hex(bytes) }
+		};
+		yield* fs.writeFileString(path.join(dir, 'artifact.json'), JSON.stringify(artifact));
+		const controlled: FileSystem.FileSystem = {
+			...fs,
+			readFile: (file) =>
+				file.endsWith('guest.snapshot')
+					? Effect.die(new Error('native snapshot bytes must never be read'))
+					: fs.readFile(file)
+		};
+		expect(
+			yield* read_artifact(dir).pipe(
+				Effect.provideService(FileSystem.FileSystem, controlled),
+				Effect.flip
+			)
+		).toMatchObject({ _tag: 'ManifestInvalid' });
+	}).pipe(Effect.provide(NodeServices.layer))
 );

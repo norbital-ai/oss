@@ -1,6 +1,6 @@
-// An example untethered host file (plan 01): copy it beside a workspace's `src/` as `norbital.host.ts`, and `bolt dev`
+// An example untethered host file: copy it beside a workspace's `src/` as `norbital.host.ts`, and `bolt dev`
 // and `bolt-server` serve that workspace with it. This one reads its settings from `BOLT_*` variables and composes
-// bolt-server's own adapters (`@norbital-ai/bolt-server`; imported from source here so the example type-checks in place).
+// bolt-server's own adapters through `@norbital-ai/bolt-server/host`.
 // The host file is host code: Bolt reads none of these variables.
 //
 // - `BOLT_PUBLIC_URL` (required): the origin, `https://` unless its host is loopback.
@@ -25,7 +25,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import pg from 'pg';
 import type { Facilities, Serving } from '@norbital-ai/host-api';
 import { PgliteDb, PostgresDb, Pristine, tenant_db_port } from '@norbital-ai/host-api/node';
-import { host, type Facility, type HostSettings, type Provider } from '../src/host.ts';
+import { host, type Facility, type HostSettings, type Provider } from '@norbital-ai/bolt-server/host';
 
 const env = (name: string): string | undefined => {
 	const value = process.env[name]?.trim();

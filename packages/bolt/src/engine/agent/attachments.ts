@@ -8,7 +8,8 @@ import { row } from '../system/rows.ts';
 import { MODEL_FILES } from './ai.ts';
 import type { AttachmentPort } from './tools.ts';
 import type { FileRef as MessageFile } from './schema.ts';
-import { imageLabel, route } from './ingest.ts';
+import { imageLabel } from '@norbital-ai/host-api';
+import { route } from './ingest.ts';
 import { toBase64 } from '../crypto.ts';
 
 const Ref = Schema.Struct({ id: Schema.String, name: Schema.optionalKey(Schema.String) });
@@ -32,7 +33,7 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
 	);
 	if (decoded.length > MODEL_FILES.count)
 		return yield* refused(`Attach at most ${MODEL_FILES.count} files.`);
-	const ids = decoded.map((ref) => ref.id);
+	const ids = [...new Set(decoded.map((ref) => ref.id))];
 	const rows = yield* db.rows(Stored, {
 		text: `SELECT id, name, mime, size, sha256 FROM sys_file WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)) AND field IN ('sys_conversation.inputs', 'sys_conversation.outputs') AND created_by = $2`,
 		params: [JSON.stringify(ids), member]

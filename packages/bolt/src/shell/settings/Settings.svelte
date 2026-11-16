@@ -673,7 +673,7 @@
 							}
 						]
 					: []),
-				{ name: 'envoys', title: t('Envoys'), icon: 'concept:agents', body: envoysTab },
+				{ name: 'envoys', title: t('Envoys'), icon: 'lucide:bot', body: envoysTab },
 				{ name: 'keys', title: t('API keys'), icon: 'lucide:key-round', body: keysTab },
 				{ name: 'mcp', title: t('MCP servers'), icon: 'lucide:server', body: mcpTab }
 			]}

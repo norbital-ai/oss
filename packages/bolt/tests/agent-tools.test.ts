@@ -1,4 +1,4 @@
-// The agent catalogue over typed native ports: one-write act, approvals, workspace search and run waits.
+// The agent catalogue over typed native ports: atomic writes, approvals, workspace search and run waits.
 import { memberCap } from '../src/engine/agent/settings.ts';
 import { createHash } from 'node:crypto';
 import { encode as encodePng } from 'fast-png';
@@ -16,6 +16,7 @@ import {
 	Layer,
 	Option,
 	Predicate,
+	PubSub,
 	Schema,
 	Scope
 } from 'effect';
@@ -50,6 +51,7 @@ import {
 	readPaths,
 	messageCatalogue,
 	OVERVIEW_BYTES,
+	runJob,
 	sweeping
 } from '../src/engine/agent/tools.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
@@ -199,7 +201,8 @@ const ctx = (
 				...(engine.http === undefined ? {} : { http: engine.http }),
 				...(engine.bundler === undefined ? {} : { bundler: engine.bundler }),
 				...(engine.audit === undefined ? {} : { audit: engine.audit }),
-				...(engine.credentials === undefined ? {} : { credentials: engine.credentials })
+				...(engine.credentials === undefined ? {} : { credentials: engine.credentials }),
+				...(engine.runEnds === undefined ? {} : { runEnds: engine.runEnds })
 			},
 			authority: member({ admin: true }),
 			bindings: { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'UTC' },
@@ -413,6 +416,14 @@ describe('job waits', () => {
 		})
 	);
 });
+it.effect('a host without source or delegation never advertises those tools', () => Effect.gen(function* () {
+	const plain = yield* ctx({ workspace: undefined, delegation: false });
+	const authority = yield* compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 'writer');
+	expect((yield* catalogue(yield* ctx({ authority }))).index['model:tasks']).toContain('reads none');
+	const offered = (yield* catalogue(plain)).fixed.map(tool => tool.name);
+	for (const name of ['workspace_read', 'workspace_grep', 'workspace_glob', 'workspace_list_dir', 'task', 'task_read', 'task_stop']) expect(offered).not.toContain(name);
+}));
+
 describe('job steering lines', () => {
 	it.effect('a finished job leaves one line for the next step; wait collects it instead', () =>
 		Effect.scoped(
@@ -470,28 +481,37 @@ describe('job steering lines', () => {
 	);
 });
 describe('jobs cut short', () => {
-	it.effect('a turn job its turn ends early still ends in one line; a run job leaves its end to the run', () =>
-		Effect.gen(function* () {
-			const late: string[] = [];
-			const watched = new Set<string>();
-			const detached = yield* FiberSet.make<unknown, never>();
-			let id = '';
-			yield* Effect.scoped(
-				Effect.gen(function* () {
-					const list = yield* jobs({ detached, watched, late: (lines) => Effect.sync(() => late.push(...lines)) });
-					id = yield* list.add('workspace_test', Effect.never);
-					yield* list.add('automation quotes_mark', Effect.never, { detach: true, alias: 'run-1' });
-					// the host carries this one on and reports its end itself
-					expect(yield* list.add('studio_build', Effect.never, { id: 'host-job', reported: true })).toBe('host-job');
-					expect([...watched]).toEqual(['run-1']);
-				})
-			);
-			expect(late).toEqual([`[job ${id} stopped] workspace_test: cut short before it finished`]);
-			yield* FiberSet.clear(detached);
-			// the run's watcher stopped: its end now reaches the conversation by itself, and no line repeats it
-			expect(late).toHaveLength(1);
-			expect(watched.size).toBe(0);
-		}).pipe(Effect.scoped)
+	it.effect(
+		'a turn job its turn ends early still ends in one line; a run job leaves its end to the run',
+		() =>
+			Effect.gen(function* () {
+				const late: string[] = [];
+				const watched = new Set<string>();
+				const detached = yield* FiberSet.make<unknown, never>();
+				let id = '';
+				yield* Effect.scoped(
+					Effect.gen(function* () {
+						const list = yield* jobs({
+							detached,
+							watched,
+							late: (lines) => Effect.sync(() => late.push(...lines))
+						});
+						id = yield* list.add('workspace_test', Effect.never);
+						yield* list.add('automation quotes_mark', Effect.never, {
+							detach: true,
+							alias: 'run-1'
+						});
+						// the host carries this one on and reports its end itself
+						expect(yield* list.add('studio_build', Effect.never, { id: 'host-job', reported: true })).toBe('host-job');
+						expect([...watched]).toEqual(['run-1']);
+					})
+				);
+				expect(late).toEqual([`[job ${id} stopped] workspace_test: cut short before it finished`]);
+				yield* FiberSet.clear(detached);
+				// the run's watcher stopped: its end now reaches the conversation by itself, and no line repeats it
+				expect(late).toHaveLength(1);
+				expect(watched.size).toBe(0);
+			}).pipe(Effect.scoped)
 	);
 });
 describe('spending caps', () => {
@@ -631,8 +651,11 @@ describe('fewer calls for the common paths', () => {
 				);
 				expect(
 					yield* result(x, 'act', {
-						callable: 'tasks.create',
-						input: [{ title: 'Source', lines: [{ value: 'Known source', member: 'ann' }] }]
+						acts: {
+							'tasks.create': [
+								{ title: 'Source', lines: [{ value: 'Known source', member: 'ann' }] }
+							]
+						}
 					})
 				).toMatchObject({
 					result: {
@@ -830,6 +853,7 @@ describe('fewer calls for the common paths', () => {
 				// the catalogue note gives each model's fields in the output the caller holds, never another's
 				const line = (yield* catalogue(x)).index['model:tasks'] ?? '';
 				expect(line).toContain('title: text');
+				expect(line).toContain('reads brief');
 				expect(line).not.toContain('cost');
 				// the read names its output; the engine reads it
 				yield* result(x, 'read', { request: { tasks: { output: 'brief' } } });
@@ -1027,7 +1051,7 @@ describe('fewer calls for the common paths', () => {
 			})
 	);
 	it.effect(
-		'act takes one { callable, input } write: an { actions } list is refused and the error names callable',
+		'act submits the complete map through one native request and reuses only an explicit operation key',
 		() =>
 			Effect.gen(function* () {
 				const writes: { key: string; input: Json }[] = [];
@@ -1041,17 +1065,17 @@ describe('fewer calls for the common paths', () => {
 						};
 					});
 				const x = yield* ctx({ inApp: false }, { acts: act }),
-					create = { callable: 'tasks.create', input: [{ title: 'a' }, { title: 'b' }] };
-				const listed = yield* result(x, 'act', { actions: [create] });
-				expect(JSON.stringify(listed)).toContain('Invalid parameters for tool');
-				expect(JSON.stringify(listed)).toContain('callable');
-				expect(JSON.stringify(listed)).not.toContain('anyOf');
-				expect(writes).toEqual([]);
-				const bare = yield* result(x, 'act', { input: [{ title: 'a' }] });
-				expect(JSON.stringify(bare)).toContain('callable');
-				// the rows reach the engine as one act under the call's key
-				yield* result(x, 'act', create);
-				expect(writes).toEqual([{ key: 'agent:t1:call', input: create.input }]);
+					create = { acts: { 'tasks.create': [{ title: 'a' }, { title: 'b' }] } };
+				yield* result(x, 'act', { ...create, key: 'operation-one' });
+				yield* result({ ...x, turn: 'retry' }, 'act', { ...create, key: 'operation-one' });
+				yield* result(x, 'act', { ...create, key: 'operation-two' });
+				expect(writes.map(({ input }) => input)).toEqual([
+					create.acts['tasks.create'],
+					create.acts['tasks.create'],
+					create.acts['tasks.create']
+				]);
+				expect(writes[0]?.key).toBe(writes[1]?.key);
+				expect(writes[0]?.key).not.toBe(writes[2]?.key);
 			})
 	);
 	it.effect(
@@ -1075,10 +1099,7 @@ describe('fewer calls for the common paths', () => {
 						db: { read: () => Effect.fail(DbError.make('XX000', 'queue unavailable')) }
 					}
 				);
-				const answer = yield* result(x, 'act', {
-					callable: 'tasks.create',
-					input: [{ title: 'A' }]
-				});
+				const answer = yield* result(x, 'act', { acts: { 'tasks.create': [{ title: 'A' }] } });
 				expect(answer).toMatchObject({
 					result: {
 						kind: 'committed',
@@ -1105,24 +1126,24 @@ describe('fewer calls for the common paths', () => {
 					}
 				});
 			const x = yield* ctx({ inApp: false }, { acts: act });
-			expect(
-				yield* result(x, 'act', { callable: 'tasks.create', input: [{ title: 'a' }] })
-			).toMatchObject({
+			expect(yield* result(x, 'act', { acts: { 'tasks.create': [{ title: 'a' }] } })).toMatchObject(
+				{
 				result: {
 					kind: 'committed',
 					note: 'no change: tasks t1 already holds these values (a write callback may derive them)'
 				}
-			});
+			}
+			);
 		})
 	);
 });
-describe('approval decisions through act', () => {
+describe('approval decisions', () => {
 	it.effect(
 		'offered to staff when writes need approval; they decide as themselves, confirming first in the app',
 		() =>
 			Effect.gen(function* () {
 				expect(
-					yield* tool(yield* ctx({ authority: member({ external: true }) }), 'act')
+					yield* tool(yield* ctx({ authority: member({ external: true }) }), 'decide')
 				).toBeUndefined();
 				const decided: Parameters<AgentEngine['approvals']['decide']>[0][] = [];
 				const approvals: Partial<AgentEngine['approvals']> = {
@@ -1132,21 +1153,18 @@ describe('approval decisions through act', () => {
 							return { kind: 'decided', request_id: d.request_id, status: 'Approved' };
 						})
 				};
-				const input = {
-					callable: 'approvals.decide',
-					input: { request_id: 'r1', decision: 'approve', reason: 'ok' }
-				};
+				const input = { request_id: 'r1', decision: 'approve', reason: 'ok' };
 				expect(
 					yield* result(
 						yield* ctx({ authority: member({ team: 'Leads' }) }, { approvals }),
-						'act',
+						'decide',
 						input
 					)
 				).toEqual({ confirm: true });
 				expect(
 					yield* result(
 						yield* ctx({ authority: member({ team: 'Leads' }), inApp: false }, { approvals }),
-						'act',
+						'decide',
 						input
 					)
 				).toEqual({ result: { kind: 'decided', request_id: 'r1', status: 'Approved' } });
@@ -1368,7 +1386,10 @@ describe('working-source tools', () => {
 					result: { error: 'File not found: ../elsewhere' }
 				});
 				// installed packages and what the build writes are no source: not found, with no advice
-				for (const path of ['node_modules/@norbital-ai/bolt/build/decl/runtime/agent.d.ts', '.norbital/names.ts'])
+				for (const path of [
+					'node_modules/@norbital-ai/bolt/build/decl/runtime/agent.d.ts',
+					'.norbital/names.ts'
+				])
 					expect(yield* result(x, 'workspace_read', { path })).toMatchObject({
 						result: { error: `File not found: ${path}` }
 					});
@@ -1459,7 +1480,12 @@ describe('reading the source is every staff member’s; changing it is an admini
 				const x = yield* ctx({ workspace, host_tools, authority: reader });
 				const offered = yield* names(x);
 				expect(offered).toEqual(
-					expect.arrayContaining(['workspace_grep', 'workspace_glob', 'workspace_list_dir', 'workspace_lang'])
+					expect.arrayContaining([
+						'workspace_grep',
+						'workspace_glob',
+						'workspace_list_dir',
+						'workspace_lang'
+					])
 				);
 				for (const mutating of [
 					'workspace_write',
@@ -1741,6 +1767,9 @@ it.effect(
 			const x = yield* ctx();
 			// the setup answers as text, like every describe answer
 			expect(yield* result(x, 'describe_workspace', { names: ['system'] })).toEqual({
+				result: expect.stringContaining('envoys: []')
+			});
+			expect(yield* result(x, 'describe_workspace', { names: ['system'] })).toEqual({
 				result: expect.stringContaining('api_key.create {"path":"/settings/integrations","tab":"keys"')
 			});
 			expect(
@@ -1827,6 +1856,41 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			]),
 			([r]) => r?.rows[0]?.['outputs']
 		);
+	it.effect('repeated attachments keep one short file identity for reads and scripts', () =>
+		Effect.gen(function* () {
+			const text = `observation ${randomUUID()}`;
+			const { x, id } = yield* holding(`c-${randomUUID()}`, {
+				name: 'observation.txt',
+				mime: 'text/plain',
+				bytes: new TextEncoder().encode(text)
+			});
+			yield* x.engine.db.write({
+				text: 'UPDATE sys_conversation SET inputs = inputs || inputs WHERE id = $1',
+				params: [x.conv.id]
+			});
+			expect(yield* result(x, 'read_file', { id: id.slice(0, 8), offset: 1 })).toMatchObject({
+				result: expect.stringContaining(text)
+			});
+			expect(
+				yield* result(x, 'run_js', {
+					files: [{ id: id.slice(0, 8) }],
+					code: 'return new TextDecoder().decode(input.files[0].bytes);'
+				})
+			).toMatchObject({ result: { answer: text } });
+			const other = {
+				id: id.slice(0, 8) + randomUUID().slice(8),
+				name: 'other.txt',
+				mime: 'text/plain'
+			};
+			yield* x.engine.db.write({
+				text: 'UPDATE sys_conversation SET inputs = inputs || $2::jsonb WHERE id = $1',
+				params: [x.conv.id, JSON.stringify([other])]
+			});
+			expect(yield* result(x, 'read_file', { id: id.slice(0, 8), offset: 1 })).toMatchObject({
+				result: { error: expect.stringContaining('No file you can read') }
+			});
+		})
+	);
 	it.effect(
 		'a data ingest stores data.json and its images, no HTML; read_file answers its summary',
 		() =>
@@ -2104,7 +2168,9 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					result: { image: 'image-1.png' }
 				});
 				// the same file again is the same output
-				expect(yield* result(x, 'read_file', { id })).toMatchObject({ result: expect.stringContaining('(o1), lines 1-9 of 9') });
+				expect(yield* result(x, 'read_file', { id })).toMatchObject({
+					result: expect.stringContaining('(o1), lines 1-9 of 9')
+				});
 				expect(calls).toBe(1);
 			})
 	);
@@ -2230,9 +2296,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			});
 			yield* Deferred.succeed(gate, undefined);
 			yield* x.jobs.settled(10_000);
-			expect(x.jobs.take()).toEqual([
-				`[job ${j} failed] reading bad.pdf: the PDF is encrypted`
-			]);
+			expect(x.jobs.take()).toEqual([`[job ${j} failed] reading bad.pdf: the PDF is encrypted`]);
 		})
 	);
 	it.effect('a read a restart cut short starts over, and never stays reading', () =>
@@ -2400,14 +2464,25 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			});
 		})
 	);
-	it.effect('an archive lists its files; path reads one through the same ingest, under its own cache entry', () =>
-		Effect.gen(function* () {
-			const asked: (string | undefined)[] = [];
-			const doc = (html: string): Ingested => ({ kind: 'document', html, images: [], meta: { stats: { pages: null, bytes: 1, cpuMs: 1, wallMs: 1 } } });
-			const { x, id } = yield* holding(
-				`c-${randomUUID()}`,
-				{ name: 'repo.zip', mime: 'application/zip', bytes: new TextEncoder().encode(`PK ${randomUUID()}`) },
-				{
+	it.effect(
+		'an archive lists its files; path reads one through the same ingest, under its own cache entry',
+		() =>
+			Effect.gen(function* () {
+				const asked: (string | undefined)[] = [];
+				const doc = (html: string): Ingested => ({
+					kind: 'document',
+					html,
+					images: [],
+					meta: { stats: { pages: null, bytes: 1, cpuMs: 1, wallMs: 1 } }
+				});
+				const { x, id } = yield* holding(
+					`c-${randomUUID()}`,
+					{
+						name: 'repo.zip',
+						mime: 'application/zip',
+						bytes: new TextEncoder().encode(`PK ${randomUUID()}`)
+					},
+					{
 					ingest: (_, read) =>
 						Effect.sync(() => {
 							asked.push(read?.entry);
@@ -2416,70 +2491,103 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 								: doc('<pre>\nif (a &lt; b) {}\n</pre>');
 						})
 				}
-			);
-			expect(yield* result(x, 'read_file', { id })).toMatchObject({
+				);
+				expect(yield* result(x, 'read_file', { id })).toMatchObject({
 				result: expect.stringContaining('\n1: repo/src/app.ts  19 bytes\n2: repo/README.md  12 bytes')
 			});
-			const entry = 'Read repo.zip/repo/src/app.ts (ingested) (o2), lines 1-1 of 1\n1: if (a < b) {}';
-			expect(yield* result(x, 'read_file', { id, path: 'repo/src/app.ts' })).toMatchObject({
+				const entry = 'Read repo.zip/repo/src/app.ts (ingested) (o2), lines 1-1 of 1\n1: if (a < b) {}';
+				expect(yield* result(x, 'read_file', { id, path: 'repo/src/app.ts' })).toMatchObject({
 				result: expect.stringContaining(entry)
 			});
-			// the listing's output names the same archive; a read already made is read again, not converted
-			expect(yield* result(x, 'read_file', { id: 'o1', path: '/repo/src/app.ts' })).toEqual({ result: entry, bounded: true });
-			expect(asked).toEqual([undefined, 'repo/src/app.ts']);
-			const text = yield* holding(`c-${randomUUID()}`, {
+				// the listing's output names the same archive; a read already made is read again, not converted
+				expect(yield* result(x, 'read_file', { id: 'o1', path: '/repo/src/app.ts' })).toEqual({
+					result: entry,
+					bounded: true
+				});
+				expect(asked).toEqual([undefined, 'repo/src/app.ts']);
+				const text = yield* holding(`c-${randomUUID()}`, {
 				name: 'main.rs',
 				mime: 'application/octet-stream',
 				bytes: new TextEncoder().encode('fn main() {}')
 			});
-			// a type no reader knows is read as the text it is
-			expect(yield* result(text.x, 'read_file', { id: text.id })).toMatchObject({ result: expect.stringContaining('\n1: fn main() {}') });
-			expect(yield* result(text.x, 'read_file', { id: text.id, path: 'a' })).toEqual({
-				result: { error: 'main.rs is not an archive: path names a file inside a zip, tar or tar.gz.' }
-			});
-		})
+				// a type no reader knows is read as the text it is
+				expect(yield* result(text.x, 'read_file', { id: text.id })).toMatchObject({
+					result: expect.stringContaining('\n1: fn main() {}')
+				});
+				expect(yield* result(text.x, 'read_file', { id: text.id, path: 'a' })).toEqual({
+					result: {
+						error: 'main.rs is not an archive: path names a file inside a zip, tar or tar.gz.'
+					}
+				});
+			})
 	);
-	it.live('ten first reads of one entry at once convert it once, across conversations; the listing once', () =>
-		Effect.gen(function* () {
-			const asked: (string | undefined)[] = [];
-			const bytes = new TextEncoder().encode(`PK ${randomUUID()}`);
-			const doc = (html: string): Ingested => ({ kind: 'document', html, images: [], meta: { stats: { pages: null, bytes: 1, cpuMs: 1, wallMs: 1 } } });
-			const port = {
-				ingest: (_: unknown, read?: { readonly entry?: string }) =>
-					Effect.sleep(20).pipe(
-						Effect.as(read?.entry === undefined ? doc('<pre>\nsrc/a.ts  5 bytes\n</pre>') : doc('<pre>\nlet a\n</pre>')),
-						Effect.tap(() => Effect.sync(() => asked.push(read?.entry)))
-					)
-			};
-			const readers = yield* Effect.forEach(Array.from({ length: 10 }), () =>
+	it.live(
+		'ten first reads of one entry at once convert it once, across conversations; the listing once',
+		() =>
+			Effect.gen(function* () {
+				const asked: (string | undefined)[] = [];
+				const bytes = new TextEncoder().encode(`PK ${randomUUID()}`);
+				const doc = (html: string): Ingested => ({
+					kind: 'document',
+					html,
+					images: [],
+					meta: { stats: { pages: null, bytes: 1, cpuMs: 1, wallMs: 1 } }
+				});
+				const port = {
+					ingest: (_: unknown, read?: { readonly entry?: string }) =>
+						Effect.sleep(20).pipe(
+							Effect.as(
+								read?.entry === undefined
+									? doc('<pre>\nsrc/a.ts  5 bytes\n</pre>')
+									: doc('<pre>\nlet a\n</pre>')
+							),
+							Effect.tap(() => Effect.sync(() => asked.push(read?.entry)))
+						)
+				};
+				const readers = yield* Effect.forEach(Array.from({ length: 10 }), () =>
 				holding(`c-${randomUUID()}`, { name: 'repo.zip', mime: 'application/zip', bytes }, port)
 			);
-			const answers = yield* Effect.forEach(readers, ({ x, id }) => result(x, 'read_file', { id, path: 'src/a.ts' }), {
+				const answers = yield* Effect.forEach(readers, ({ x, id }) => result(x, 'read_file', { id, path: 'src/a.ts' }), {
 				concurrency: 'unbounded'
 			});
-			expect(answers.every((answer) => 'result' in answer && typeof answer.result === 'string' && answer.result.includes('1: let a'))).toBe(true);
-			yield* Effect.forEach(readers, ({ x, id }) => result(x, 'read_file', { id }), { concurrency: 'unbounded' });
-			expect(asked).toEqual(['src/a.ts', undefined]);
-		})
+				expect(
+					answers.every(
+						(answer) =>
+							'result' in answer &&
+							typeof answer.result === 'string' &&
+							answer.result.includes('1: let a')
+					)
+				).toBe(true);
+				yield* Effect.forEach(readers, ({ x, id }) => result(x, 'read_file', { id }), {
+					concurrency: 'unbounded'
+				});
+				expect(asked).toEqual(['src/a.ts', undefined]);
+			})
 	);
-	it.live("run_js hands the named files over as input.files, one typed shape; a wrong read throws naming it", () =>
-		Effect.gen(function* () {
-			const { x, id } = yield* holding(`c-${randomUUID()}`, {
+	it.live(
+		'run_js hands the named files over as input.files, one typed shape; a wrong read throws naming it',
+		() =>
+			Effect.gen(function* () {
+				const { x, id } = yield* holding(`c-${randomUUID()}`, {
 				name: 'notes.txt',
 				mime: 'text/plain',
 				bytes: new TextEncoder().encode('hello')
 			});
-			const run = (code: string) => result(x, 'run_js', { files: [{ id }], code });
-			expect(
+				const run = (code: string) => result(x, 'run_js', { files: [{ id }], code });
+				expect(
 				yield* run('const [f] = input.files; return [f.id, f.name, f.type, f.size, new TextDecoder().decode(f.bytes), f.bytes instanceof Uint8Array];')
 			).toEqual({ result: { answer: [id, 'notes.txt', 'text/plain', 5, 'hello', true] } });
-			expect(yield* run('return input.files[0].data;')).toEqual({
-				result: { error: expect.stringContaining("TypeError: input.files[0] has no 'data': each file is { id, name, type, size, bytes: Uint8Array }") }
-			});
-			expect(yield* run("return input.files['notes.txt'].bytes;")).toEqual({
-				result: { error: expect.stringContaining("TypeError: input.files has no 'notes.txt': it is an array of 1 { id, name, type, size, bytes: Uint8Array }") }
-			});
-		})
+				expect(yield* run('return input.files[0].data;')).toEqual({
+					result: {
+						error: expect.stringContaining("TypeError: input.files[0] has no 'data': each file is { id, name, type, size, bytes: Uint8Array }")
+					}
+				});
+				expect(yield* run("return input.files['notes.txt'].bytes;")).toEqual({
+					result: {
+						error: expect.stringContaining("TypeError: input.files has no 'notes.txt': it is an array of 1 { id, name, type, size, bytes: Uint8Array }")
+					}
+				});
+			})
 	);
 	it.effect('a file with no parser says so when read whole, never that read_file parses it', () =>
 		Effect.gen(function* () {
@@ -2498,7 +2606,61 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 	);
 });
 describe('native automation and sync controls', () => {
-	it.effect('starts authored automations through act and file or remote refresh through sync', () =>
+	it.effect(
+		'identifies an automation request by actor, conversation, turn and call, never by equal inputs',
+		() =>
+			Effect.gen(function* () {
+				const started: Parameters<AgentEngine['calls']['start']>[0][] = [];
+				const engine: EngineOverrides = {
+					manifest: {
+						...manifest,
+						automations: { tidy: { description: '', policies: ['staff'] } }
+					},
+					db: {
+						read: () =>
+							Effect.succeed([{ rows: [{ id: 'another-members-active-run' }], affected: 0 }])
+					},
+					calls: {
+						start: (request) =>
+							Effect.sync(() => {
+								started.push(request);
+								return { kind: 'committed', output: null, records: [] };
+							})
+					}
+				};
+				const x = yield* ctx(
+					{
+						inApp: false,
+						authority: { ...member({ id: 'ann', admin: true }), automations: ['tidy'] }
+					},
+					engine
+				);
+				const c = yield* catalogue(x);
+				const input = { automation: 'tidy', input: {} };
+				yield* c.run('run', input, 'request-one');
+				yield* c.run('run', input, 'request-one');
+				yield* c.run('run', input, 'request-two');
+				const other = yield* ctx(
+					{
+						inApp: false,
+						authority: { ...member({ id: 'bea', admin: true }), automations: ['tidy'] }
+					},
+					engine
+				);
+				yield* (yield* catalogue(other)).run('run', input, 'request-one');
+				yield* (yield* catalogue({ ...x, turn: 'next-turn' })).run('run', input, 'request-one');
+				yield* (yield* catalogue({ ...x, conv: { ...x.conv, id: 'another-conversation' } })).run(
+					'run',
+					input,
+					'request-one'
+				);
+				expect(started).toHaveLength(6);
+				const ids = started.map((request) => first(request.runs).id);
+				expect(ids[0]).toBe(ids[1]);
+				expect(new Set(ids).size).toBe(5);
+			})
+	);
+	it.effect('starts authored automations through run and file or remote refresh through sync', () =>
 		Effect.gen(function* () {
 			const started: Parameters<AgentEngine['calls']['start']>[0][] = [];
 			const synced: Parameters<AgentEngine['calls']['sync_control']>[0][] = [];
@@ -2544,17 +2706,17 @@ describe('native automation and sync controls', () => {
 			};
 			const authority = { ...member({ admin: true }), automations: ['tidy'] };
 			const x = yield* ctx({ authority, inApp: false }, { manifest: m, calls, db });
-			expect((yield* requiredTool(x, 'act')).description).not.toContain('tidy');
+			expect((yield* requiredTool(x, 'run')).description).not.toContain('tidy');
 			expect(describeWorkspace(m, authority, new Map())).toContain('tidy(day?: date)');
 			expect(
-				yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
+				yield* result(x, 'run', { automation: 'tidy', input: { day: '2026-09-01' } })
 			).toMatchObject({ result: { outcome: { output: { kind: 'queued' } } } });
 			expect(started).toMatchObject([
 				{ automation: 'tidy', runs: [{ input: { day: '2026-09-01' } }] }
 			]);
-			for (const callable of ['automation.purge', 'tasks.sync.sheet', 'automation.tasks.sync.erp'])
-				expect(yield* result(x, 'act', { callable, input: {} })).toEqual({
-					result: { error: `You may not run '${callable}'. Yours: automation.tidy` }
+			for (const automation of ['purge', 'tasks.sync.sheet', 'tasks.sync.erp'])
+				expect(yield* result(x, 'run', { automation, input: {} })).toEqual({
+					result: { error: `You may not run '${automation}'. Yours: tidy` }
 				});
 			for (const input of [
 				{ mode: 'import', file: 'f1' },
@@ -2571,13 +2733,15 @@ describe('native automation and sync controls', () => {
 			]);
 			active = 'run-1';
 			expect(
-				yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
-			).toMatchObject({ result: { run: 'run-1', already_active: true } });
+				yield* result(x, 'run', { automation: 'tidy', input: { day: '2026-09-01' } })
+			).toMatchObject({ result: { outcome: { kind: 'committed' } } });
 			expect(yield* result(x, 'sync', { model: 'tasks', sync: 'erp', input: {} })).toMatchObject({
-				result: { run: 'run-1', already_active: true }
+				result: { outcome: { kind: 'committed' } }
 			});
-			expect(started).toHaveLength(1);
-			expect(synced).toHaveLength(4);
+			expect(started).toHaveLength(2);
+			expect(started[0]?.runs).toEqual(started[1]?.runs);
+			expect(synced).toHaveLength(5);
+			expect(synced[3]?.id).toBe(synced[4]?.id);
 			const restricted: Authority = {
 				...member(),
 				models: authority.models,
@@ -2601,7 +2765,7 @@ describe('native automation and sync controls', () => {
 				{ manifest: m, calls, db }
 			);
 			expect(yield* result(granted, 'sync', { model: 'tasks', sync: 'erp' })).toMatchObject({
-				result: { run: 'run-1', already_active: true }
+				result: { outcome: { kind: 'committed' } }
 			});
 		})
 	);
@@ -2641,10 +2805,10 @@ describe('native automation and sync controls', () => {
 					files: { get: () => Effect.succeed(new TextEncoder().encode(JSON.stringify(input))) }
 				}
 			);
-			yield* result(x, 'act', { callable: 'automation.tidy', input_file: 'f-json' });
+			yield* result(x, 'run', { automation: 'tidy', input_file: 'f-json' });
 			expect(started).toMatchObject([{ automation: 'tidy', runs: [{ input }] }]);
 			expect(
-				yield* result(x, 'act', { callable: 'automation.tidy', input_file: 'someone-else' })
+				yield* result(x, 'run', { automation: 'tidy', input_file: 'someone-else' })
 			).toMatchObject({
 				result: { error: expect.stringContaining('No file someone-else of yours') }
 			});
@@ -2653,6 +2817,59 @@ describe('native automation and sync controls', () => {
 	);
 });
 describe('wait', () => {
+	it.effect('keeps a suspended run pending and follows its eventual result', () =>
+		Effect.gen(function* () {
+			let state = 'waiting';
+			const read = yield* Deferred.make<void>();
+			const runEnds = yield* PubSub.unbounded<readonly string[]>();
+			const x = yield* ctx(
+				{},
+				{
+					runEnds,
+					db: {
+						read: () =>
+							Effect.gen(function* () {
+								yield* Deferred.succeed(read, undefined);
+								return [
+									{
+										affected: 0,
+										rows: [
+											{
+												id: 'suspended-run',
+												automation: 'tidy',
+												cause: 'start',
+												state,
+												due_at: '2026-11-16T00:00:00Z',
+												started: null,
+												progress: null,
+												output: state === 'succeeded' ? { completed: true } : null,
+												error: null,
+												attempts: 1,
+												results: [],
+												input: {},
+												actor: 'member:ann',
+												starter: null,
+												trigger: null,
+												trigger_name: null
+											}
+										]
+									}
+								];
+							})
+					}
+				}
+			);
+			yield* runJob(x.jobs, x.engine, x.authority, 'automation.tidy', { run: 'suspended-run' });
+			yield* Deferred.await(read);
+			yield* TestClock.adjust(1);
+			expect(x.jobs.pending()).toEqual([expect.objectContaining({ done: false })]);
+			state = 'succeeded';
+			yield* PubSub.publish(runEnds, ['suspended-run']);
+			expect(yield* x.jobs.wait(['suspended-run'], 1000)).toMatchObject({
+				result: { status: 'succeeded', result: { completed: true } }
+			});
+		})
+	);
 	it.effect(
 		'follows an automation run act started until it ends, and says when there is no such run',
 		() =>
@@ -3044,7 +3261,9 @@ describe('run_js', () => {
 			expect(yield* run(x, { http: 'send', code: post })).toEqual({ confirm: true });
 			expect(asked).toEqual([]);
 			const approved = yield* ctx({ approved: () => true }, { http });
-			expect(yield* run(approved, { http: 'send', code: post })).toEqual({ result: { answer: 200 } });
+			expect(yield* run(approved, { http: 'send', code: post })).toEqual({
+				result: { answer: 200 }
+			});
 			expect(asked.map(([request]) => request.method)).toEqual(['POST']);
 		})
 	);
@@ -3081,9 +3300,22 @@ describe('confirmation coverage', () => {
 	};
 	it('a delete, a batch, a pruning import and a nested delete hold; one plain create or update does not', () => {
 		expect(sweeping('jobs.delete', [{ target: { id: 'j1', revision: 1 } }])).toBe(true);
-		expect(sweeping('jobs.update', [{ target: { id: 'j1' }, set: {} }, { target: { id: 'j2' }, set: {} }])).toBe(true);
-		expect(sweeping('jobs.update', [{ target: { id: 'j1' }, set: { lines: { delete: [{ id: 'l1' }] } } }])).toBe(true);
-		expect(sweeping('jobs.import', { rows: [{}], on_conflict: 'update', prune: true })).toBe(true);
+		expect(
+			sweeping('jobs.update', [
+				{ target: { id: 'j1' }, set: {} },
+				{ target: { id: 'j2' }, set: {} }
+			])
+		).toBe(true);
+		expect(
+			sweeping('jobs.update', [
+				{ target: { id: 'j1' }, set: { lines: { delete: [{ id: 'l1' }] } } }
+			])
+		).toBe(true);
+		for (const rows of [[], [{}]]) {
+			const input = { rows, on_conflict: 'update', prune: { title: { like: '%' } } };
+			expect(sweeping('jobs.import', input)).toBe(true);
+			expect(sweeping('jobs.import', { ...input, dry_run: true })).toBe(false);
+		}
 		expect(sweeping('jobs.import', { rows: [{}, {}], on_conflict: 'update', dry_run: true })).toBe(false);
 		expect(sweeping('jobs.create', [{ title: 'one' }])).toBe(false);
 		expect(sweeping('jobs.update', [{ target: { id: 'j1' }, set: { status: 'done' } }])).toBe(false);
@@ -3093,7 +3325,13 @@ describe('confirmation coverage', () => {
 		expect(submits({ steps: [{ type: { ref: 'r2', text: 'x', submit: true } }] })).toBe(true);
 		expect(submits({ evaluate: 'document.title' })).toBe(true);
 		expect(submits({ download: 'https://a.test/f.pdf' })).toBe(true);
-		expect(submits({ url: 'https://a.test', steps: [{ type: { ref: 'r2', text: 'x' } }], screenshot: true })).toBe(false);
+		expect(
+			submits({
+				url: 'https://a.test',
+				steps: [{ type: { ref: 'r2', text: 'x' } }],
+				screenshot: true
+			})
+		).toBe(false);
 	});
 	const mcp = (calls: Json[]): ToolContext['mcp'] => ({
 		tools: () => Effect.succeed([]),
@@ -3103,7 +3341,9 @@ describe('confirmation coverage', () => {
 				return { ok: true };
 			})
 	});
-	const mcpTools = [{ server: 'kagi', name: 'web_search', description: 'Kagi', input: { type: 'object' } }];
+	const mcpTools = [
+		{ server: 'kagi', name: 'web_search', description: 'Kagi', input: { type: 'object' } }
+	];
 	it.effect("an MCP call holds for the person's card, runs once approved and is refused to an envoy", () =>
 		Effect.gen(function* () {
 			const calls: Json[] = [];
@@ -3133,7 +3373,9 @@ describe('confirmation coverage', () => {
 					return { ok: true };
 				}
 			};
-			expect(yield* result(yield* ctx({ host_tools: [commit] }), 'workspace_commit', {})).toEqual({ confirm: true });
+			expect(yield* result(yield* ctx({ host_tools: [commit] }), 'workspace_commit', {})).toEqual({
+				confirm: true
+			});
 			expect(ran).toBe(0);
 			expect(yield* result(yield* ctx(), 'download', { url: 'https://law.example/seal.png' })).toEqual({ confirm: true });
 		})
@@ -3214,7 +3456,13 @@ describe('run_js over a repository reference', () => {
 			const listing = (input: Json) => result(x, 'read_file', input);
 			// the index's own file id reads as its name: the tree
 			const kept = Schema.decodeUnknownSync(
-				Schema.Struct({ result: Schema.Struct({ settled: Schema.Struct({ result: Schema.Struct({ files: Schema.Array(Schema.Struct({ id: Schema.String })) }) }) }) })
+				Schema.Struct({
+					result: Schema.Struct({
+						settled: Schema.Struct({
+							result: Schema.Struct({ files: Schema.Array(Schema.Struct({ id: Schema.String })) })
+						})
+					})
+				})
 			)(waited);
 			expect(yield* listing({ id: first(kept.result.settled.result.files).id })).toMatchObject({
 				result: expect.stringContaining('src/lib/add.js')
@@ -3250,37 +3498,47 @@ describe('run_js over a repository reference', () => {
 	);
 });
 describe('a sub-agent', () => {
-	it.effect('has no plan or sub-agents of its own: one level deep, and its question goes to its delegating agent', () =>
-		Effect.gen(function* () {
-			expect(yield* names(yield* ctx({ mode: 'plan' }))).toContain('update_plan');
-			const parent = yield* ctx({ delegation: true, agents: ['general', 'envoy-1'] });
-			expect(yield* names(parent)).toEqual(expect.arrayContaining(['task', 'task_read', 'task_stop']));
-			// a guessed type is refused with the real list; a task answers at once with its id
-			expect(
-				yield* result(parent, 'task', { description: 'Check', prompt: 'Check it', subagent_type: 'explore' })
-			).toMatchObject({
+	it.effect(
+		'has no plan or sub-agents of its own: one level deep, and its question goes to its delegating agent',
+		() =>
+			Effect.gen(function* () {
+				expect(yield* names(yield* ctx({ mode: 'plan' }))).toContain('update_plan');
+				const parent = yield* ctx({ delegation: true, agents: ['general', 'envoy-1'] });
+				expect(yield* names(parent)).toEqual(expect.arrayContaining(['task', 'task_read', 'task_stop']));
+				// a guessed type is refused with the real list; a task answers at once with its id
+				expect(
+					yield* result(parent, 'task', {
+						description: 'Check',
+						prompt: 'Check it',
+						subagent_type: 'explore'
+					})
+				).toMatchObject({
 				result: {
 					error: expect.stringContaining('Unknown agent type: explore is not a valid agent type. Agent types: general, envoy-1')
 				}
 			});
-			expect(
-				yield* result(parent, 'task', { description: 'Check', prompt: 'Check it', subagent_type: 'general' })
-			).toMatchObject({
+				expect(
+					yield* result(parent, 'task', {
+						description: 'Check',
+						prompt: 'Check it',
+						subagent_type: 'general'
+					})
+				).toMatchObject({
 				result: expect.stringMatching(/^<task id="child" state="running">\n<summary>Background task started<\/summary>/)
 			});
-			const child = [
+				const child = [
 				...(yield* names(yield* ctx({ mode: 'plan', child: true }))),
 				...(yield* names(yield* ctx({ child: true })))
 			];
-			for (const n of ['update_plan', 'task']) expect(child).not.toContain(n);
-			expect(child).toEqual(expect.arrayContaining(['read', 'act', 'wait', 'ask']));
-			expect(yield* result(yield* ctx({ child: true }), 'ask', { question: 'Which one?' })).toEqual({
+				for (const n of ['update_plan', 'task']) expect(child).not.toContain(n);
+				expect(child).toEqual(expect.arrayContaining(['read', 'act', 'wait', 'ask']));
+				expect(yield* result(yield* ctx({ child: true }), 'ask', { question: 'Which one?' })).toEqual({
 				result: { asked: true, to: 'the delegating agent' }
 			});
-			// a child's fixed list leaves the delegation and planning tools out
-			const fixed = (yield* catalogue(yield* ctx({ child: true }))).fixed.map((t) => t.name);
-			for (const n of ['task', 'task_read', 'task_stop', 'update_plan']) expect(fixed).not.toContain(n);
-		})
+				// a child's fixed list leaves the delegation and planning tools out
+				const fixed = (yield* catalogue(yield* ctx({ child: true }))).fixed.map((t) => t.name);
+				for (const n of ['task', 'task_read', 'task_stop', 'update_plan']) expect(fixed).not.toContain(n);
+			})
 	);
 });
 describe('runs and logs', () => {
@@ -3316,11 +3574,13 @@ describe('runs and logs', () => {
 				expect(all.rows.map((r) => r.id)).toEqual(['r5', 'r4', 'r3', 'r2', 'r1']);
 				expect(
 					ids(yield* $runs(x, { automation: 'billing.*' })).rows.map((r) => r.id)
-				).toEqual(['r3', 'r2', 'r1']);
-				expect(ids(yield* $runs(x, { automation: 'billing' })).rows).toEqual([]);
-				expect(ids(yield* $runs(x, { status: 'failed' })).rows.map((r) => r.id)).toEqual([
-					'r2'
+				).toEqual([
+					'r3',
+					'r2',
+					'r1'
 				]);
+				expect(ids(yield* $runs(x, { automation: 'billing' })).rows).toEqual([]);
+				expect(ids(yield* $runs(x, { status: 'failed' })).rows.map((r) => r.id)).toEqual(['r2']);
 				expect(
 					ids(yield* $runs(x, { status: 'cancelled' })).rows.map((r) => r.id)
 				).toEqual(['r4']);
@@ -3375,12 +3635,14 @@ describe('runs and logs', () => {
 				]);
 				expect(yield* $runs(x, { id: 'r2' })).toMatchObject({
 					result: {
-						rows: [{
+						rows: [
+							{
 							id: 'r2',
 							input: { month: '10' },
 							attempts: [{ error: { code: 'timeout' } }, { error: { code: 'guest' } }],
 							logs: [{ event: 'console', severity: 'error', attributes: { line: 'boom' } }]
-						}],
+						}
+						],
 						next: null
 					}
 				});
@@ -3394,43 +3656,47 @@ describe('runs and logs', () => {
 				// a member holding billing.invoice: its runs in full, a run they started with its result, nobody else's
 				const holder = yield* ctx({ authority: { ...member(), automations: ['billing.invoice'] } });
 				yield* runs(holder);
-				expect(ids(yield* $runs(holder, {})).rows.map((r) => r.id)).toEqual([
-					'r4',
-					'r2',
-					'r1'
-				]);
+				expect(ids(yield* $runs(holder, {})).rows.map((r) => r.id)).toEqual(['r4', 'r2', 'r1']);
 				expect(yield* $runs(holder, { id: 'r1' })).toMatchObject({
 					result: { rows: [{ input: { month: '09' } }] }
 				});
 				expect(yield* $runs(holder, { id: 'r4' })).toMatchObject({
-					result: { rows: [{ status: 'cancelled', error: { code: 'stopped' }, input: { secret: 1 } }] }
+					result: {
+						rows: [{ status: 'cancelled', error: { code: 'stopped' }, input: { secret: 1 } }]
+					}
 				});
 				expect(yield* $runs(holder, { id: 'r5' })).toEqual({
 					result: { error: '$runs: no automation run r5 you may read.' }
 				});
 			})
 	);
-	it.effect("a run's clipped values name read_output's call id, and the whole run stays for it", () =>
-		Effect.gen(function* () {
-			const x = yield* ctx();
-			const big = { text: 'x'.repeat(6_000) };
-			yield* x.engine.db.write({
+	it.effect(
+		"a run's clipped values name read_output's call id, and the whole run stays for it",
+		() =>
+			Effect.gen(function* () {
+				const x = yield* ctx();
+				const big = { text: 'x'.repeat(6_000) };
+				yield* x.engine.db.write({
 				text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts, results, error, actor, finished_at)
 				VALUES ('rb', 'billing.invoice', $1::jsonb, '2026-09-25T01:00:00Z', 'start', 0, 'succeeded', 1, '[]', NULL, NULL, NULL)`,
 				params: [JSON.stringify(big)]
 			});
-			const answer = Schema.decodeUnknownSync(
-				Schema.Struct({
-					result: Schema.Struct({ rows: Schema.Tuple([Schema.Struct({ input: Schema.String })]) }),
-					full: Schema.Struct({ rows: Schema.Tuple([Schema.Struct({ input: Schema.Struct({ text: Schema.String }) })]) }),
-					bounded: Schema.Literal(true)
-				})
-			)(yield* $runs(x, { id: 'rb' }));
-			expect(answer.result.rows[0].input).toMatch(
+				const answer = Schema.decodeUnknownSync(
+					Schema.Struct({
+						result: Schema.Struct({
+							rows: Schema.Tuple([Schema.Struct({ input: Schema.String })])
+						}),
+						full: Schema.Struct({
+							rows: Schema.Tuple([Schema.Struct({ input: Schema.Struct({ text: Schema.String }) })])
+						}),
+						bounded: Schema.Literal(true)
+					})
+				)(yield* $runs(x, { id: 'rb' }));
+				expect(answer.result.rows[0].input).toMatch(
 				/\.\.\. \[clipped, \d+ bytes; read_output \{ call: 'call' \} reads it whole\]$/
 			);
-			expect(answer.full.rows[0].input.text).toBe(big.text);
-		})
+				expect(answer.full.rows[0].input.text).toBe(big.text);
+			})
 	);
 	it.effect(
 		'reads the runtime log by level, text, run and time, newest first, for administrators only',
@@ -3495,9 +3761,7 @@ describe('runs and logs', () => {
 					'error',
 					'warn'
 				]);
-				expect((yield* events({ text: 'STARTING' })).rows.map((l) => l.event)).toEqual([
-					'console'
-				]);
+				expect((yield* events({ text: 'STARTING' })).rows.map((l) => l.event)).toEqual(['console']);
 				expect((yield* events({ run: 'r2' })).rows).toHaveLength(3);
 				expect((yield* events({ automation: 'billing.invoice' })).rows).toHaveLength(3);
 				expect(
@@ -3538,7 +3802,9 @@ describe('host web search', () => {
 			const own = yield* names(
 				yield* ctx({
 					host_tools,
-					mcpTools: [{ server: 'kagi', name: 'web_search', description: 'Kagi', input: { type: 'object' } }]
+					mcpTools: [
+						{ server: 'kagi', name: 'web_search', description: 'Kagi', input: { type: 'object' } }
+					]
 				})
 			);
 			expect(own).toEqual(expect.arrayContaining(['kagi__web_search', 'web_search', 'browser']));
@@ -3565,7 +3831,12 @@ describe('host web search', () => {
 					code: "const found = await tool('web_search', {}); let asked; try { await tool('ask', { question: 'x' }) } catch (e) { asked = e.message } return { found, asked };"
 				})
 			).toMatchObject({
-				result: { answer: { found: { ok: 'web_search' }, asked: expect.stringContaining("cannot call 'ask'") } }
+				result: {
+					answer: {
+						found: { ok: 'web_search' },
+						asked: expect.stringContaining("cannot call 'ask'")
+					}
+				}
 			});
 		})
 	);
@@ -3642,12 +3913,22 @@ describe('host web search', () => {
 					['GET', 'https://api.github.com/repos/acme/calc/tarball/main', `Bearer ${TOKEN}`]
 				]);
 				// a paused connection holds nothing
-				yield* db.write({ text: 'UPDATE sys_integration SET active = false WHERE id = $1', params: [instance] });
-				expect(yield* result(x, 'probe', {})).toMatchObject({ result: { tarball: 'not connected' } });
+				yield* db.write({
+					text: 'UPDATE sys_integration SET active = false WHERE id = $1',
+					params: [instance]
+				});
+				expect(yield* result(x, 'probe', {})).toMatchObject({
+					result: { tarball: 'not connected' }
+				});
 				// a workspace connection lends its token to an administrator's host tools alone, unless its definition lends it
-				yield* db.write({ text: 'UPDATE sys_integration SET active = true WHERE id = $1', params: [instance] });
+				yield* db.write({
+					text: 'UPDATE sys_integration SET active = true WHERE id = $1',
+					params: [instance]
+				});
 				const plain = yield* ctx({ host_tools: [probe], authority: member({ tools: ['probe'] }) }, { credentials: sealed, http });
-				expect(yield* result(plain, 'probe', {})).toMatchObject({ result: { tarball: 'not connected' } });
+				expect(yield* result(plain, 'probe', {})).toMatchObject({
+					result: { tarball: 'not connected' }
+				});
 				expect(sent).toHaveLength(1);
 				yield* db.write({ text: 'DELETE FROM sys_integration WHERE id = $1', params: [instance] });
 			})
@@ -3657,37 +3938,54 @@ describe('host web search', () => {
 describe('approvals, record history and the audit trail', () => {
 	const created = Effect.fnUntraced(function* (x: ToolContext) {
 		const answer = Schema.decodeUnknownSync(
-			Schema.Struct({ result: Schema.Struct({ stored: Schema.Struct({ tasks: Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) }) }) }) })
-		)(yield* result(x, 'act', { callable: 'tasks.create', input: [{ title: 'audited' }] }));
+			Schema.Struct({
+				result: Schema.Struct({
+					stored: Schema.Struct({
+						tasks: Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
+					})
+				})
+			})
+		)(yield* result(x, 'act', { acts: { 'tasks.create': [{ title: 'audited' }] } }));
 		return first(answer.result.stored.tasks.rows).id;
 	});
-	it.effect('record history names who changed a record by their label to a reader, and refuses one who cannot read it', () =>
-		Effect.gen(function* () {
-			const ada = '0199a000-0000-4000-8000-00000000ada1';
-			// its own turn: an invocation's ids derive from it, so this create is not a replay of another test's
-			const admin = yield* ctx({ turn: 'ada', authority: member({ admin: true, id: ada }) });
-			yield* admin.engine.db.write({
+	it.effect(
+		'record history names who changed a record by their label to a reader, and refuses one who cannot read it',
+		() =>
+			Effect.gen(function* () {
+				const ada = '0199a000-0000-4000-8000-00000000ada1';
+				// its own turn: an invocation's ids derive from it, so this create is not a replay of another test's
+				const admin = yield* ctx({ turn: 'ada', authority: member({ admin: true, id: ada }) });
+				yield* admin.engine.db.write({
 				text: "INSERT INTO sys_user (id, email, name, kind, admin) VALUES ($1, 'ada@example.test', 'Ada Lovelace', 'staff', true) ON CONFLICT DO NOTHING",
 				params: [ada]
 			});
-			const id = yield* created(admin);
-			const history = yield* result(admin, 'read', { request: { tasks: { where: { id: { eq: id } }, history: true } } });
-			// the writer reads as the person, never as an account id
-			expect(history).toMatchObject({ result: { tasks: { rows: [{ id, $history: [{ revision: 1, by: 'Ada Lovelace' }] }] } } });
-			expect(history).not.toMatchObject({ result: { tasks: { rows: [{ $history: [{ actor: expect.anything() }] }] } } });
-			// staff may create tasks but read none: no history either
-			const staff = yield* ctx({ authority: Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's')) });
-			expect(yield* result(staff, 'read', { request: { tasks: { history: true } } })).toEqual({
+				const id = yield* created(admin);
+				const history = yield* result(admin, 'read', {
+					request: { tasks: { where: { id: { eq: id } }, history: true } }
+				});
+				// the writer reads as the person, never as an account id
+				expect(history).toMatchObject({
+					result: { tasks: { rows: [{ id, $history: [{ revision: 1, by: 'Ada Lovelace' }] }] } }
+				});
+				expect(history).not.toMatchObject({
+					result: { tasks: { rows: [{ $history: [{ actor: expect.anything() }] }] } }
+				});
+				// staff may create tasks but read none: no history either
+				const staff = yield* ctx({
+					authority: Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's'))
+				});
+				expect(yield* result(staff, 'read', { request: { tasks: { history: true } } })).toEqual({
 				result: { error: expect.stringContaining("You read no 'tasks'") }
 			});
-
-		})
+			})
 	);
-	it.effect('approvals are judged by whether the person reads the record, as their own screens are', () =>
-		Effect.gen(function* () {
-			const id = yield* created(yield* ctx());
-			const seen: boolean[] = [];
-			const approvals: Partial<AgentEngine['approvals']> = {
+	it.effect(
+		'approvals are judged by whether the person reads the record, as their own screens are',
+		() =>
+			Effect.gen(function* () {
+				const id = yield* created(yield* ctx());
+				const seen: boolean[] = [];
+				const approvals: Partial<AgentEngine['approvals']> = {
 				list: (_filter, _authority, readable) =>
 					Effect.map(readable('tasks', id), (can) => {
 						seen.push(can);
@@ -3695,17 +3993,23 @@ describe('approvals, record history and the audit trail', () => {
 					}),
 				view: () => Effect.succeed(Option.none())
 			};
-			const staff = Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's'));
-			for (const authority of [member({ admin: true }), staff])
-				expect(yield* result(yield* ctx({ authority }, { approvals }), 'read', { request: { $approvals: {} } })).toEqual({
-					result: { rows: [], next: null }
-				});
-			expect(seen).toEqual([true, false]);
-			// a row's own requests ride on it
-			expect(
-				yield* result(yield* ctx({}, { approvals }), 'read', { request: { tasks: { where: { id: { eq: id } }, approvals: true } } })
-			).toMatchObject({ result: { tasks: { rows: [{ id, $approvals: [] }] } } });
-		})
+				const staff = Effect.runSync(compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 's'));
+				for (const authority of [member({ admin: true }), staff])
+					expect(
+						yield* result(yield* ctx({ authority }, { approvals }), 'read', {
+							request: { $approvals: {} }
+						})
+					).toEqual({
+						result: { rows: [], next: null }
+					});
+				expect(seen).toEqual([true, false]);
+				// a row's own requests ride on it
+				expect(
+					yield* result(yield* ctx({}, { approvals }), 'read', {
+						request: { tasks: { where: { id: { eq: id } }, approvals: true } }
+					})
+				).toMatchObject({ result: { tasks: { rows: [{ id, $approvals: [] }] } } });
+			})
 	);
 	it.effect('only an administrator reads the audit trail', () =>
 		Effect.gen(function* () {
@@ -3718,7 +4022,9 @@ describe('approvals, record history and the audit trail', () => {
 				yield* ctx({ authority: member({ admin: true, external: true }) }, { audit }),
 				yield* ctx()
 			])
-				expect(yield* trail(x)).toEqual({ result: { error: expect.stringContaining("No '$audit' you may read.") } });
+				expect(yield* trail(x)).toEqual({
+					result: { error: expect.stringContaining("No '$audit' you may read.") }
+				});
 		})
 	);
 });
@@ -3790,10 +4096,14 @@ describe('the catalogue', () => {
 					result: { error: expect.stringContaining('call it by its own name') }
 				});
 				expect(host_calls).toEqual([]);
-				expect(yield* offered.run('workspace_lang', {}, 'host-call')).toEqual({ result: { ok: true } });
+				expect(yield* offered.run('workspace_lang', {}, 'host-call')).toEqual({
+					result: { ok: true }
+				});
 				expect(host_calls).toMatchObject([{ call_id: 'host-call', conversation: x.conv.id }]);
 				// by its own name when native, through run_tool when a merge added it later
-				expect(yield* offered.run('search__web_search', { q: 'news' }, 'mcp-call')).toEqual({ result: { ok: true } });
+				expect(yield* offered.run('search__web_search', { q: 'news' }, 'mcp-call')).toEqual({
+					result: { ok: true }
+				});
 				expect(
 					yield* offered.run('run_tool', { name: 'search__web_search', input: { q: 'more' } }, 'mcp-later')
 				).toEqual({ result: { ok: true } });
@@ -3803,23 +4113,32 @@ describe('the catalogue', () => {
 				]);
 			})
 	);
-	it.effect('fixes each audience its own tool list: a channel never sees the source, the tab or download', () =>
-		Effect.gen(function* () {
-			const listOf = (audience: 'staff' | 'member' | 'channel') =>
-				Effect.flatMap(ctx({ audience }), (x) => Effect.map(catalogue(x), (c) => c.fixed.map((t) => t.name)));
-			const channel = yield* listOf('channel'),
+	it.effect(
+		'fixes each audience its own tool list: a channel never sees the source, the tab or download',
+		() =>
+			Effect.gen(function* () {
+				const listOf = (audience: 'staff' | 'member' | 'channel') =>
+				Effect.flatMap(ctx({ audience, workspace: { files: async () => [], read: async () => null } }), (x) => Effect.map(catalogue(x), (c) => c.fixed.map((t) => t.name)));
+				const channel = yield* listOf('channel'),
 				staff = yield* listOf('staff'),
 				external = yield* listOf('member');
-			for (const hidden of ['workspace_read', 'workspace_grep', 'workspace_glob', 'workspace_list_dir', 'page', 'download'])
-				expect(channel).not.toContain(hidden);
-			expect(channel).toContain('read_messages');
-			expect(staff).toEqual(expect.arrayContaining(['page', 'workspace_read', 'update_plan']));
-			expect(staff).not.toContain('read_messages');
-			expect(external).not.toContain('workspace_read');
-			// the list is the audience's, whatever the step's mode or authority
-			expect((yield* catalogue(yield* ctx({ mode: 'plan' }))).fixed).toEqual((yield* catalogue(yield* ctx())).fixed);
-			expect((yield* catalogue(yield* ctx({ authority: member() }))).fixed).toEqual((yield* catalogue(yield* ctx())).fixed);
-		})
+				for (const hidden of [
+					'workspace_read',
+					'workspace_grep',
+					'workspace_glob',
+					'workspace_list_dir',
+					'page',
+					'download'
+				])
+					expect(channel).not.toContain(hidden);
+				expect(channel).toContain('read_messages');
+				expect(staff).toEqual(expect.arrayContaining(['page', 'workspace_read', 'update_plan']));
+				expect(staff).not.toContain('read_messages');
+				expect(external).not.toContain('workspace_read');
+				// the list is the audience's, whatever the step's mode or authority
+				expect((yield* catalogue(yield* ctx({ mode: 'plan' }))).fixed).toEqual((yield* catalogue(yield* ctx())).fixed);
+				expect((yield* catalogue(yield* ctx({ authority: member() }))).fixed).toEqual((yield* catalogue(yield* ctx())).fixed);
+			})
 	);
 	it('a merge appends only what changed: added or changed lines and removed names, counts past ten', () => {
 		const base = {
@@ -3870,7 +4189,6 @@ describe('the catalogue', () => {
 	);
 });
 
-
 describe('connect: the agent makes the connection, the person pairs it on a card', () => {
 	const Held = Schema.Struct({
 		confirm: Schema.Literal(true),
@@ -3878,7 +4196,11 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 	});
 	const row = (x: ToolContext, id: string) =>
 		x.engine.db.rows(
-			Schema.Struct({ integration: Schema.String, owner: Schema.NullOr(Schema.String), envoy: Schema.NullOr(Schema.String) }),
+			Schema.Struct({
+				integration: Schema.String,
+				owner: Schema.NullOr(Schema.String),
+				envoy: Schema.NullOr(Schema.String)
+			}),
 			{ text: 'SELECT integration, owner, envoy FROM sys_integration WHERE id = $1', params: [id] }
 		);
 	const user = (x: ToolContext, id: string, email: string, admin = false) =>
@@ -3886,23 +4208,33 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 			text: "INSERT INTO sys_user (id, email, name, kind, admin) VALUES ($1, $2, $2, 'staff', $3) ON CONFLICT DO NOTHING",
 			params: [id, email, admin]
 		});
-	it.effect('creates a workspace GitHub connection through the guarded write and holds a card; no credential in the answer', () =>
-		Effect.gen(function* () {
-			const x = yield* ctx({ turn: 'connect-github' }, { manifest: layered(manifest) });
-			const answer = yield* result(x, 'connect', { integration: 'github', owner: 'workspace', name: 'Org GitHub' });
-			const held = Schema.decodeUnknownSync(Held)(answer);
-			expect(held.input.integration).toBe('github');
-			expect(yield* row(x, held.input.instance)).toEqual([{ integration: 'github', owner: null, envoy: null }]);
-			expect(JSON.stringify(answer)).not.toMatch(/credential|token|secret/i);
-			// a channel sender never gets the tool; nor does a turn with no card to show
-			expect(fixedTools('channel', false).map((t) => t.name)).not.toContain('connect');
-			expect(yield* names(yield* ctx({ inApp: false }, { manifest: layered(manifest) }))).not.toContain('connect');
-		})
-	);
-	it.effect('a workspace-declared integration connects the same way, and describe_workspace lists it', () =>
-		Effect.scoped(
+	it.effect(
+		'creates a workspace GitHub connection through the guarded write and holds a card; no credential in the answer',
+		() =>
 			Effect.gen(function* () {
-				const declared: EngineManifest = {
+				const x = yield* ctx({ turn: 'connect-github' }, { manifest: layered(manifest) });
+				const answer = yield* result(x, 'connect', {
+					integration: 'github',
+					owner: 'workspace',
+					name: 'Org GitHub'
+				});
+				const held = Schema.decodeUnknownSync(Held)(answer);
+				expect(held.input.integration).toBe('github');
+				expect(yield* row(x, held.input.instance)).toEqual([
+					{ integration: 'github', owner: null, envoy: null }
+				]);
+				expect(JSON.stringify(answer)).not.toMatch(/credential|token|secret/i);
+				// a channel sender never gets the tool; nor does a turn with no card to show
+				expect(fixedTools('channel', false).map((t) => t.name)).not.toContain('connect');
+				expect(yield* names(yield* ctx({ inApp: false }, { manifest: layered(manifest) }))).not.toContain('connect');
+			})
+	);
+	it.effect(
+		'a workspace-declared integration connects the same way, and describe_workspace lists it',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const declared: EngineManifest = {
 					...manifest,
 					integrations: {
 						crm: {
@@ -3913,23 +4245,33 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 						}
 					}
 				};
-				const native = yield* Layer.build(TestWorkspace.layer({ manifest: declared }));
-				const x = yield* ctx(
-					{ turn: 'connect-crm' },
-					{ manifest: layered(declared), db: Context.get(native, TenantDb), calls: Context.get(native, Callables) }
-				);
-				const held = Schema.decodeUnknownSync(Held)(
-					yield* result(x, 'connect', { integration: 'crm', owner: 'workspace', configuration: {} })
-				);
-				expect(yield* row(x, held.input.instance)).toEqual([{ integration: 'crm', owner: null, envoy: null }]);
-				expect(yield* result(x, 'describe_workspace', {})).toEqual({
+					const native = yield* Layer.build(TestWorkspace.layer({ manifest: declared }));
+					const x = yield* ctx(
+						{ turn: 'connect-crm' },
+						{
+							manifest: layered(declared),
+							db: Context.get(native, TenantDb),
+							calls: Context.get(native, Callables)
+						}
+					);
+					const held = Schema.decodeUnknownSync(Held)(
+						yield* result(x, 'connect', {
+							integration: 'crm',
+							owner: 'workspace',
+							configuration: {}
+						})
+					);
+					expect(yield* row(x, held.input.instance)).toEqual([
+						{ integration: 'crm', owner: null, envoy: null }
+					]);
+					expect(yield* result(x, 'describe_workspace', {})).toEqual({
 					result: expect.stringContaining('crm "The CRM account."')
 				});
-				expect(yield* result(x, 'connect', { integration: 'nope', owner: 'workspace' })).toEqual({
+					expect(yield* result(x, 'connect', { integration: 'nope', owner: 'workspace' })).toEqual({
 					result: { error: expect.stringContaining('crm') }
 				});
-			})
-		)
+				})
+			)
 	);
 	it.effect('a personal connection is the caller own: owner me, never a colleague', () =>
 		Effect.gen(function* () {
@@ -3937,9 +4279,16 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 			const x = yield* ctx({ turn: 'connect-mine', authority: member({ admin: true, id: una }) }, { manifest: layered(manifest) });
 			yield* user(x, una, 'una@example.test', true);
 			const held = Schema.decodeUnknownSync(Held)(yield* result(x, 'connect', { integration: 'email', owner: 'me' }));
-			expect(yield* row(x, held.input.instance)).toEqual([{ integration: 'email', owner: una, envoy: null }]);
+			expect(yield* row(x, held.input.instance)).toEqual([
+				{ integration: 'email', owner: una, envoy: null }
+			]);
 			// there is no way to name someone else as the owner
-			expect(yield* result(x, 'connect', { integration: 'email', owner: '0199a000-0000-4000-8000-0000000c0a02' })).toEqual({
+			expect(
+				yield* result(x, 'connect', {
+					integration: 'email',
+					owner: '0199a000-0000-4000-8000-0000000c0a02'
+				})
+			).toEqual({
 				result: { error: expect.stringContaining('Invalid parameters') }
 			});
 			// a colleague's personal connection is theirs to pair
@@ -3953,26 +4302,45 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 	it.effect('a caller without the write grant is refused and nothing is created', () =>
 		Effect.gen(function* () {
 			const x = yield* ctx({ turn: 'connect-refused', authority: member() }, { manifest: layered(manifest) });
-			const before = yield* x.engine.db.rows(Schema.Struct({ n: Schema.Number }), { text: 'SELECT count(*)::int AS n FROM sys_integration', params: [] });
+			const before = yield* x.engine.db.rows(Schema.Struct({ n: Schema.Number }), {
+				text: 'SELECT count(*)::int AS n FROM sys_integration',
+				params: []
+			});
 			const answer = yield* result(x, 'connect', { integration: 'github', owner: 'workspace' });
 			expect(Schema.is(Held)(answer)).toBe(false);
-			expect(yield* x.engine.db.rows(Schema.Struct({ n: Schema.Number }), { text: 'SELECT count(*)::int AS n FROM sys_integration', params: [] })).toEqual(before);
+			expect(
+				yield* x.engine.db.rows(Schema.Struct({ n: Schema.Number }), {
+					text: 'SELECT count(*)::int AS n FROM sys_integration',
+					params: []
+				})
+			).toEqual(before);
 		})
 	);
 	it.effect("an envoy's unpaired channel is paired in place: a card, no second row", () =>
 		Effect.gen(function* () {
 			const x = yield* ctx({ turn: 'connect-envoy' }, { manifest: layered(manifest) });
 			const envoy = '0199a000-0000-7000-8000-0000000c0e01';
-			yield* x.engine.db.write({ text: "INSERT INTO sys_envoy (id, name) VALUES ($1, 'Desk') ON CONFLICT DO NOTHING", params: [envoy] });
+			yield* x.engine.db.write({
+				text: "INSERT INTO sys_envoy (id, name) VALUES ($1, 'Desk') ON CONFLICT DO NOTHING",
+				params: [envoy]
+			});
 			yield* seed_accounts(x.engine.db, [{ id: 'connect-desk', integration: 'whatsapp', envoy }]);
 			expect(yield* result(x, 'connect', { integration: 'whatsapp', envoy })).toEqual({
 				confirm: true,
 				input: { instance: 'connect-desk', integration: 'whatsapp' }
 			});
 			// once the host reports it connected, the call answers the fact, without a card
-			yield* x.engine.db.write({ text: `UPDATE sys_integration SET status = '{"state":"connected"}'::jsonb WHERE id = 'connect-desk'`, params: [] });
+			yield* x.engine.db.write({
+				text: `UPDATE sys_integration SET status = '{"state":"connected"}'::jsonb WHERE id = 'connect-desk'`,
+				params: []
+			});
 			expect(yield* result(x, 'connect', { instance: 'connect-desk' })).toEqual({
-				result: { instance: 'connect-desk', integration: 'whatsapp', owner: 'workspace', state: 'connected' }
+				result: {
+					instance: 'connect-desk',
+					integration: 'whatsapp',
+					owner: 'workspace',
+					state: 'connected'
+				}
 			});
 		})
 	);

@@ -8,6 +8,30 @@ declare module '../../src/index.ts' {
 			portal: {};
 		};
 		automations: {
+			finish: {
+				spec: {
+					description: 'Fixture';
+					input: {};
+					output: { kind: 'text' };
+					policies: readonly ['reader'];
+				};
+			};
+			fail: {
+				spec: {
+					description: 'Fixture';
+					input: {};
+					output: { kind: 'text' };
+					policies: readonly ['reader'];
+				};
+			};
+			wait: {
+				spec: {
+					description: 'Fixture';
+					input: { until: { kind: 'instant' } };
+					output: { kind: 'text' };
+					policies: readonly ['reader'];
+				};
+			};
 			orders_submit: {
 				spec: {
 					description: 'Submit this order';

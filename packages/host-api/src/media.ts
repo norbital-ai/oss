@@ -162,3 +162,29 @@ export function media_type(head: Uint8Array): string | undefined {
 	if (page.startsWith('<!doctype html') || page.startsWith('<html')) return 'text/html';
 	return undefined;
 }
+
+/**
+ * An image's stored pixel size from its header: PNG, JPEG or GIF; `undefined` for another format.
+ * ponytail: header only, so a JPEG's EXIF rotation is not applied; the host's own tiles and crops are already oriented.
+ */
+export function pixelSize(b: Uint8Array): { width: number; height: number } | undefined {
+	const at = (i: number) => (b[i] ?? 0) * 256 + (b[i + 1] ?? 0);
+	if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47)
+		return { width: at(16) * 65536 + at(18), height: at(20) * 65536 + at(22) };
+	if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46)
+		return { width: (b[6] ?? 0) + (b[7] ?? 0) * 256, height: (b[8] ?? 0) + (b[9] ?? 0) * 256 };
+	if (b[0] !== 0xff || b[1] !== 0xd8) return undefined;
+	// a JPEG's segments up to its frame header (SOF0–SOF15 bar DHT, JPG and DAC)
+	for (let i = 2; i + 9 < b.length; i += 2 + at(i + 2)) {
+		if (b[i] !== 0xff) return undefined;
+		const marker = b[i + 1] ?? 0;
+		if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc)
+			return { width: at(i + 7), height: at(i + 5) };
+	}
+	return undefined;
+}
+/** The words that introduce an image to the model: its pixel size, so a crop's fractions can be worked out. */
+export const imageLabel = (name: string, bytes: Uint8Array): string => {
+	const px = pixelSize(bytes);
+	return px === undefined ? name : `${name}: ${px.width}×${px.height} px`;
+};

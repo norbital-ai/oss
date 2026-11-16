@@ -178,13 +178,13 @@ export type ShellBoot = {
 		readonly href: string;
 	}[];
 	/** The automations this member may start by hand from the command center's Automations (`startable_automations`). */
-	startable?: readonly {
+	startable: readonly {
 		readonly name: string;
 		readonly description: string;
 		readonly needs_input?: boolean;
 	}[];
-	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
-	envoys?: { readonly [envoy: string]: string };
+	/** Each runtime envoy's display name by ID, for the agent panel's conversation groups. */
+	envoys: { readonly [envoy: string]: string };
 	/** The VAPID public key to subscribe this device to notices with, or `null` when the host sends no push. */
 	push: string | null;
 	/** A visitor page's app and, when it declares one, the Turnstile site key. */
@@ -198,11 +198,11 @@ export type ShellBoot = {
 	/** Result shapes of the automations this caller may start, for decoding their answers. */
 	operation_outputs: OperationOutputs;
 	/** Authorized manifest metadata for the shared search picker. */
-	search?: readonly ManifestItem[];
+	search: readonly ManifestItem[];
 	/** The agent surface is on but the host binds no AI provider: the panel says so instead of failing each turn. */
 	ai_unconfigured?: true;
 	/** The schema fingerprint the page boots against: the page context sends it as `Bolt-Contract`. */
-	contract?: string;
+	contract: string;
 };
 /**
  * The environment badge's label: nothing in production (or when unset), `local` for development, and any other name

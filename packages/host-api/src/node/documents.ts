@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { Worker } from 'node:worker_threads';
+import { Worker as NodeWorker } from 'node:worker_threads';
 import { Effect, Schema } from 'effect';
-import { FacilityFailure } from '@norbital-ai/host-api';
+import { FacilityFailure } from '../index.ts';
 const failure = (error: unknown) =>
 	new FacilityFailure({
 		kind: 'upstream',
@@ -22,7 +22,7 @@ const inWorker = (kind: 'office' | 'pdf', workerData: unknown) =>
 		const worker = yield* Effect.acquireRelease(
 			Effect.try({
 				try: () =>
-					new Worker(
+					new NodeWorker(
 						new URL(
 							`./${kind}-worker.${import.meta.url.endsWith('.ts') ? 'ts' : 'js'}`,
 							import.meta.url

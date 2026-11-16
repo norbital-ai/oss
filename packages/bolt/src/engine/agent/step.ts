@@ -1,8 +1,9 @@
+import { textOf } from '@norbital-ai/host-api';
 // Shared model-response assembly and ordered call execution; each workflow owns its persistence and stopping rules.
 import { Effect, Option } from 'effect';
 import { type AiResponse, FacilityFailure } from '@norbital-ai/host-api';
 import type { Json } from '../../decl/values.ts';
-import { textOf, type AssistantSegment, type ToolCall } from './schema.ts';
+import { type AssistantSegment, type ToolCall } from './schema.ts';
 
 export type ModelCarry = {
 	readonly text: string;

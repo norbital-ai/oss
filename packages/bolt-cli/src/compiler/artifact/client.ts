@@ -506,7 +506,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			visit(entry);
 			return reached;
 		};
-		const native_modules = reach(chunk.fileName);
+		// Mobile readiness must not download every lazy page, editor and optional feature before first paint.
+		const native_modules = reach(chunk.fileName, false);
 		native_modules.delete(chunk.fileName);
 		const preloads = reach(chunk.fileName, false);
 		preloads.delete(chunk.fileName);
@@ -539,6 +540,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 		return {
 			entry: chunk.fileName,
 			css,
+			immutable: [...chunks.keys(), ...css],
 			preloads: [...preloads],
 			native_modules: [...native_modules].sort(),
 			chunks,
@@ -602,6 +604,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	platform = { out, layer };
 	const internal = yield* compile(entry, out, false, layer);
 	const css = [...layer.css, ...internal.css];
+	const immutable = [...layer.chunks.keys(), ...layer.css, ...internal.immutable];
 	const require = createRequire(import.meta.url);
 	for (const [name, source] of Object.entries(ICONS))
 		yield* fs.copyFile(
@@ -679,6 +682,7 @@ Effect.runPromise(hydrate_public_page(Page, ${key(route)})).catch((cause) => {
 			built = yield* compile(publicEntries, destination, true);
 		}
 		discoveredSources = found;
+		immutable.push(...built.immutable.map((file) => `public/${file}`));
 		for (const route of Object.keys(publicEntries)) {
 			const { name, page } = yield* publicEntry(built, route);
 			const seen = new Set<string>(),
@@ -714,5 +718,11 @@ ${assets.css.map((css) => `<link rel="stylesheet" href="/${css}">`).join('\n')}
 			);
 		}
 	}
-	return { entry: internal.entry, css, pages: publicPages, publicSources: discoveredSources };
+	return {
+		entry: internal.entry,
+		css,
+		immutable: [...new Set(immutable)].sort(),
+		pages: publicPages,
+		publicSources: discoveredSources
+	};
 });

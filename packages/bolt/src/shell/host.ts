@@ -322,6 +322,7 @@ const bootFor = (
 			nav: nav(manifest, authority),
 			kiosks: kiosk_nav(manifest, authority),
 			startable: startable_automations(manifest, authority),
+			envoys: {},
 			surfaces: surfaces(
 				manifest,
 				authority.actor,

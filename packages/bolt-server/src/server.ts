@@ -189,7 +189,7 @@ export const ServerLive = (options: ServeOptions) =>
 				(cell) => Effect.sync(() => cell.close())
 			);
 			const api = cell.api;
-			if (!supports({ from: HOST_API_VERSION, to: HOST_API_VERSION }, api.version))
+			if (!supports(api.version))
 				return yield* refuse(
 					`The release speaks HOST_API ${api.version}; this server serves HOST_API ${HOST_API_VERSION}`
 				);

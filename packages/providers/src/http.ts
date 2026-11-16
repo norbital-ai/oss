@@ -170,7 +170,10 @@ export const http_request = (
 		const spec = def.http;
 		if (def.driver !== 'http' || spec === undefined)
 			return yield* Effect.fail(
-				new FacilityFailure({ kind: 'unsupported', message: 'this definition makes no http request' })
+				new FacilityFailure({
+					kind: 'unsupported',
+					message: 'this definition makes no http request'
+				})
 			);
 		if (
 			!Predicate.isObject(op) ||
@@ -216,7 +219,9 @@ export const http_request = (
 		else {
 			const signed = http_auth(spec.auth, instance.credentials.get('credential'));
 			if (signed === undefined)
-				return yield* Effect.fail(unavailable('the instance is not paired: its credential is missing'));
+				return yield* Effect.fail(
+					unavailable('the instance is not paired: its credential is missing')
+				);
 			Object.assign(headers, signed);
 		}
 		const response = yield* send(
@@ -292,20 +297,18 @@ const token = (
 					})
 				);
 			if (instance.write !== undefined)
-				yield* instance
-					.write(new Map([['token', null]]))
-					.pipe(
-						Effect.catch((error) =>
-							error._tag === 'Fenced'
-								? Effect.fail(
-										new FacilityFailure({
-											kind: 'upstream',
-											message: 'the token was refreshed by another request meanwhile; try again'
-										})
-									)
-								: Effect.fail(error)
-						)
-					);
+				yield* instance.write(new Map([['token', null]])).pipe(
+					Effect.catch((error) =>
+						error._tag === 'Fenced'
+							? Effect.fail(
+									new FacilityFailure({
+										kind: 'upstream',
+										message: 'the token was refreshed by another request meanwhile; try again'
+									})
+								)
+							: Effect.fail(error)
+					)
+				);
 			return yield* Effect.fail(
 				unavailable(
 					`the token endpoint refused the grant (${answer.error}); pair the instance again`
@@ -320,6 +323,8 @@ const token = (
 		if (instance.write !== undefined)
 			yield* instance
 				.write(new Map([['token', next]]))
-				.pipe(Effect.catch((error) => (error._tag === 'Fenced' ? Effect.void : Effect.fail(error))));
+				.pipe(
+					Effect.catch((error) => (error._tag === 'Fenced' ? Effect.void : Effect.fail(error)))
+				);
 		return next.access;
 	});

@@ -6,18 +6,18 @@ Where things go on a page. Each kind of thing has one home. Exact props: query t
 
 A page whose subject is a model is that view: no heading card, paragraph or button row above it.
 
-| Thing | Home |
-| --- | --- |
-| App identity | `AppShell` props; the hero renders them once |
+| Thing                              | Home                                                                                                                                                                                                                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App identity                       | `AppShell` props; the hero renders them once                                                                                                                                                                                                                                                 |
 | Page scope (company, site, period) | `AppShell` `actions` snippet: one set of pickers every view reads. A status the chosen scope carries goes inside its picker (`Combobox` `badge`), not beside it. On a phone the hero is one line: the title, its description behind an info button, `actions` behind one button in a popover |
-| View-local presentation control | `toolbar.controls`, never scope |
-| Page-level operation | `toolbar.actions`, the ⚡ menu |
-| One-row operation | the view's row `actions`: an automation or guarded verb |
-| One-record operation | `RecordShell` `actions` |
-| A run's progress | an item whose `run` returns `ctx.run(…)`; `RunStatus` or `RunsFor` elsewhere |
-| Create | `toolbar.new`, which opens `RecordShell mode="create"` |
-| Filter and sort | the toolbar popover; fixed scope is `where`, a starting filter `initial_filter` |
-| Row range and paging | the table's footer |
+| View-local presentation control    | `toolbar.controls`, never scope                                                                                                                                                                                                                                                              |
+| Page-level operation               | `toolbar.actions`, the ⚡ menu                                                                                                                                                                                                                                                               |
+| One-row operation                  | the view's row `actions`: an automation or guarded verb                                                                                                                                                                                                                                      |
+| One-record operation               | `RecordShell` `actions`                                                                                                                                                                                                                                                                      |
+| A run's progress                   | an item whose `run` returns `ctx.run(…)`; `RunStatus` or `RunsFor` elsewhere                                                                                                                                                                                                                 |
+| Create                             | `toolbar.new`, which opens `RecordShell mode="create"`                                                                                                                                                                                                                                       |
+| Filter and sort                    | the toolbar popover; fixed scope is `where`, a starting filter `initial_filter`                                                                                                                                                                                                              |
+| Row range and paging               | the table's footer                                                                                                                                                                                                                                                                           |
 
 - The toolbar is one row: title (1 to 3 words), ⓘ `description`, then widgets flush left; New alone flush right and last when wrapped. A slot never moves.
 - No button sits in the header, above or beside a view. A hand-made run button, search box, `<select>` or action bar is a second spelling of a slot.
@@ -30,12 +30,12 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 - It lists Sync now, each file sync's Import, Export and Download template, and Delete selected, with no page wiring. The native `bolt.sync_control(model, sync, input)` operation owns refresh and file transfer; syncs are never automation callables or schedule targets. Remote refresh requires `capabilities.syncs: ['model.sync_name']`; file transfer uses the caller's model grants.
 - A `toolbar.actions` item is `icon`, `name`, optional `description` and `run(selected)`. The menu derives the row's state from what `run` returns:
 
-| `run` returns | Row |
-| --- | --- |
-| nothing | closes the menu |
-| an Effect | spinner, then Done; a typed failure shows in place and as a toast |
+| `run` returns             | Row                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------- |
+| nothing                   | closes the menu                                                                       |
+| an Effect                 | spinner, then Done; a typed failure shows in place and as a toast                     |
 | an Effect from `bolt.act` | its committed or pending-approval result is toasted; refusals use the failure channel |
-| an Effect from `ctx.run` | the run's live status under the toolbar |
+| an Effect from `ctx.run`  | the run's live status under the toolbar                                               |
 
 - `requires_selection: true` lists it under Bulk and turns selection on. `disabled: (selected) => string | null` says why not.
 - Never toast or track a spinner for a menu item yourself.
@@ -59,6 +59,10 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 ## Table behaviour
 
 Rows are one line; a click opens the record; headers do not sort; each header's menu pins, hides and moves; the viewer's layout and page size persist. Pages load from the server; `Board` lanes load infinitely.
+
+Ordinary model tables read their displayed fields, record labels and currency dependencies. Opening a record reads its
+full view separately. Custom cells, row styling, trailing controls, row actions and `on_open` callbacks retain the light
+row contract so existing authored handlers can still read fields outside the displayed columns.
 
 ## Representations
 
@@ -85,10 +89,10 @@ Rows are one line; a click opens the record; headers do not sort; each header's 
 
 ## Readonly is not disabled
 
-| Mode | Looks like | Use |
-| --- | --- | --- |
+| Mode       | Looks like                                            | Use                                     |
+| ---------- | ----------------------------------------------------- | --------------------------------------- |
 | `readonly` | no field chrome, value as text by kind, copy on hover | a record the viewer may see, not change |
-| `disabled` | editor stays, muted, submit disabled | editable in principle, not right now |
+| `disabled` | editor stays, muted, submit disabled                  | editable in principle, not right now    |
 
 - Set the mode once; it reaches every control. A `Field` may override. A `Form` never inherits an outer mode.
 - Use the shared record controller for view, edit and create. Never `readonly={!admin}` or a parallel policy matcher. An update contract is not permission.

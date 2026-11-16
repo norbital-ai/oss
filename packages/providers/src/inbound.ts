@@ -1,6 +1,6 @@
 // One inbound chat message as a chat provider hands it to the engine (a `messages` event, `decodeInbound` on the other
 // side): what the provider read, with the `invocation` the engine routes it by derived here, once, for every provider.
-import type { Attachment } from '@norbital-ai/bolt';
+import type { Attachment } from '@norbital-ai/host-api';
 
 /** What a chat provider knows of one message. */
 export type ChatMessage = {

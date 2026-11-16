@@ -1,3 +1,4 @@
+import { textOf } from '@norbital-ai/host-api';
 // The AI port's `sys_2` (the LLM) under the 20 s idle wall: each model request is one facility call. The wall is
 // idle time: every token received (answer or reasoning) restarts it, so a model streaming its reasoning is never cut. A
 // stream silent for the wall is closed and its partial output kept as a cut step the next request continues; a request
@@ -19,7 +20,6 @@ import {
 } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { model_step, run_calls, type ModelCarry } from './step.ts';
-import { textOf } from './schema.ts';
 import {
 	type AiMessage,
 	type AiRequest,
@@ -126,7 +126,8 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 	if (options.onRequest !== undefined) yield* options.onRequest(request);
 	if (ai === undefined) return yield* new Unavailable({ facility: 'ai', reason: 'the host provides no ai' });
 	if (!(yield* servesModel(ai, request.model)))
-		return yield* new Unavailable({ facility: 'ai', reason: `no model is mapped to the class '${request.model}'` });
+		return yield* new Unavailable({ facility: 'ai', reason: `no model is mapped to the class '${request.model}'`
+		});
 	const files = request.files ?? [];
 	if (files.length > MODEL_FILES.count || files.reduce((n, f) => n + f.bytes.length, 0) > MODEL_FILES.bytes)
 		return yield* new FacilityFailure({
@@ -162,7 +163,8 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 						return Effect.fail(
 							progressed
 								? new ModelIdle(`the model was still writing a tool call at ${wallMs} ms`, true)
-								: (cause ?? new ModelIdle(`the model yielded nothing within ${begun ? wallMs : firstMs} ms`))
+								: (cause ??
+										new ModelIdle(`the model yielded nothing within ${begun ? wallMs : firstMs} ms`))
 						);
 					const cut: AiResponse = {
 						content: partial,
@@ -178,7 +180,9 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 					finished
 						? Cause.done()
 						: pull.pipe(
-								Effect.catchTag('FacilityFailure', (cause) => (cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause))),
+								Effect.catchTag('FacilityFailure', (cause) =>
+									cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause)
+								),
 								Effect.timeoutOrElse({ duration: begun ? wallMs : firstMs, orElse: () => idle() })
 							)
 				)
@@ -226,7 +230,10 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 		})
 	);
 	if (response === undefined)
-		return yield* new FacilityFailure({ kind: 'upstream', message: 'the model stream ended without a response' });
+		return yield* new FacilityFailure({
+			kind: 'upstream',
+			message: 'the model stream ended without a response'
+		});
 	return {
 		...response,
 		usage: {
@@ -234,7 +241,10 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 			prompt: {
 				system: request.system?.length ?? 0,
 				messages: JSON.stringify(request.messages).length,
-				tools: request.tools === undefined || request.tools.length === 0 ? 0 : JSON.stringify(request.tools).length
+				tools:
+					request.tools === undefined || request.tools.length === 0
+						? 0
+						: JSON.stringify(request.tools).length
 			}
 		}
 	};
@@ -445,7 +455,15 @@ export const InferArgs = Schema.Struct({
 });
 export const inferArgsOf = Schema.decodeUnknownOption(InferArgs);
 /** Keywords whose error repeats its children's. */
-const CONTAINERS = new Set(['properties', 'items', 'prefixItems', 'additionalProperties', 'allOf', '$ref', 'dependentSchemas']);
+const CONTAINERS = new Set([
+	'properties',
+	'items',
+	'prefixItems',
+	'additionalProperties',
+	'allOf',
+	'$ref',
+	'dependentSchemas'
+]);
 /** A checker for a schema output: the schema's own violations as JSON Pointers into the answer. */
 function schemaChecker(
 	output: SchemaOutput
@@ -585,11 +603,17 @@ export function infer_facility(
 	): Effect.fn.Return<CrossAnswer, PortFailure, Scope.Scope> {
 		const signal = yield* Effect.abortSignal;
 		if (call._tag !== 'ai.sys_2.infer')
-			return { ok: false, error: { kind: 'unavailable', facility: call._tag, reason: 'not an agent facility' } };
+			return {
+				ok: false,
+				error: { kind: 'unavailable', facility: call._tag, reason: 'not an agent facility' }
+			};
 		const a = yield* Schema.decodeUnknownEffect(InferArgs)(call.args[0] ?? {}).pipe(
 			Effect.mapError((error) => new FacilityFailure({ kind: 'invalid', message: error.message }))
 		);
-		const invalid = (message: string): CrossAnswer => ({ ok: false, error: { kind: 'invalid', message } });
+		const invalid = (message: string): CrossAnswer => ({
+			ok: false,
+			error: { kind: 'invalid', message }
+		});
 		const refs = a.files ?? [];
 		if (refs.length > 0 && options.load === undefined)
 			return {
@@ -597,7 +621,10 @@ export function infer_facility(
 				error: { kind: 'unavailable', facility: 'files', reason: 'the host provides no file reads' }
 			};
 		const schemaOut = a.output !== undefined && 'json_schema' in a.output ? a.output : undefined;
-		const out = a.output !== undefined && 'kind' in a.output && a.output.kind !== 'text' ? a.output : undefined;
+		const out =
+			a.output !== undefined && 'kind' in a.output && a.output.kind !== 'text'
+				? a.output
+				: undefined;
 		const structured = schemaOut !== undefined || out !== undefined;
 		if (a.initial !== undefined && !structured)
 			return invalid('initial requires a structured output');
@@ -609,7 +636,13 @@ export function infer_facility(
 		const root = Predicate.isObject(schemaOut?.json_schema) ? schemaOut.json_schema : {};
 		const rules = [...(schemaOut?.rules ?? []), ...(a.rules ?? [])];
 		const ruled = ruleChecker(
-			Object.keys(out?.kind === 'object' ? out.fields : Predicate.isObject(root['properties']) ? root['properties'] : {}),
+			Object.keys(
+				out?.kind === 'object'
+					? out.fields
+					: Predicate.isObject(root['properties'])
+						? root['properties']
+						: {}
+			),
 			rules
 		);
 		if (typeof ruled === 'string') return invalid(ruled);
@@ -733,11 +766,22 @@ export function infer_facility(
 				recorded.set(messages, messages.length);
 				return onMessage === undefined
 					? Effect.void
-					: Effect.forEach(messages.slice(from), (message) => onMessage(message, messageIndex++,
-						message.role === 'tool' && isObj(message.content) && typeof message.content['name'] === 'string'
-							? behaviorOf.get(message.content['name']) ?? {} : {}), {
-							discard: true
-						});
+					: Effect.forEach(
+							messages.slice(from),
+							(message) =>
+								onMessage(
+									message,
+									messageIndex++,
+									message.role === 'tool' &&
+										isObj(message.content) &&
+										typeof message.content['name'] === 'string'
+										? (behaviorOf.get(message.content['name']) ?? {})
+										: {}
+								),
+							{
+								discard: true
+							}
+						);
 			});
 		const read = (files: { mime: string; bytes: Uint8Array }[], prompt: string, final: boolean) => {
 			const messages: AiMessage[] = [{ role: 'user', content: prompt }];
@@ -840,19 +884,30 @@ export function infer_facility(
 							toolCalls: calls
 						}
 					});
-					const completed = yield* run_calls<CrossAnswer, PortFailure, never>(calls, Effect.fn('Ai.inferCall')(function* (c, invalid, stopped) {
-						let result: Json, submitted: CrossAnswer | undefined;
-						if (!stopped && invalid === undefined && (c.name === EDIT || c.name === SUBMIT) && structured && options.onDraft !== undefined)
-							yield* options.onDraft(c.name, c.input);
-						if (stopped) result = { skipped: 'An earlier call submitted this step; no later operation ran.' };
-						else if (invalid !== undefined) result = invalid;
-						else if (c.name === EDIT && structured) {
-							const ops = Option.getOrUndefined(Schema.decodeUnknownOption(EditInput)(c.input))?.ops;
-							if (ops === undefined)
-								result = { error: `${EDIT} takes { ops: [{ path, set | remove | append }] }` };
-							else {
-								const errors: Json[] = [];
-								for (const [i, op] of ops.entries()) {
+					const completed = yield* run_calls<CrossAnswer, PortFailure, never>(
+						calls,
+						Effect.fn('Ai.inferCall')(function* (c, invalid, stopped) {
+							let result: Json, submitted: CrossAnswer | undefined;
+							if (
+								!stopped &&
+								invalid === undefined &&
+								(c.name === EDIT || c.name === SUBMIT) &&
+								structured &&
+								options.onDraft !== undefined
+							)
+								yield* options.onDraft(c.name, c.input);
+							if (stopped)
+								result = {
+									skipped: 'An earlier call submitted this step; no later operation ran.'
+								};
+							else if (invalid !== undefined) result = invalid;
+							else if (c.name === EDIT && structured) {
+								const ops = Option.getOrUndefined(Schema.decodeUnknownOption(EditInput)(c.input))?.ops;
+								if (ops === undefined)
+									result = { error: `${EDIT} takes { ops: [{ path, set | remove | append }] }` };
+								else {
+									const errors: Json[] = [];
+									for (const [i, op] of ops.entries()) {
 									const edited = yield* Schema.decodeUnknownEffect(EditOp)(op).pipe(
 										Effect.flatMap((decoded) => Effect.fromResult(applyEdit(draft, decoded, kind))),
 										Effect.result
@@ -860,90 +915,123 @@ export function infer_facility(
 									if (Result.isSuccess(edited)) draft = edited.success;
 									else errors.push({ op: i, error: edited.failure.message });
 								}
-								result = { applied: ops.length - errors.length, ...(errors.length === 0 ? {} : { errors }) };
-							}
-						} else if (c.name === draftRead && structured) {
-							const input = Option.getOrUndefined(Schema.decodeUnknownOption(ReadInput)(c.input));
-							const at = input === undefined ? `${draftRead} takes { path, fields? }` : resolve(draft, input.path, kind);
-							if (typeof at === 'string') result = { error: at };
-							else {
-								const value = input?.fields === undefined ? at.value : project(at.value, at.kind, input.fields);
-								const key = keyOf(at.kind);
-								// too large to return: its outline, so the model reads a narrower path
-								result =
-									size(value) <= BOUNDS.resultBytes - 200
-										? { value }
-										: {
-												clipped: `the value is ${size(value)} bytes, too large to return: read a child path, or pass fields`,
-												...(isList(value)
-													? {
-															items: value.length,
-															...(key === undefined
-																? {}
-																: { keys: value.slice(0, 200).map((x) => keyText(x, key) ?? null) })
-														}
-													: isObj(value)
+									result = {
+										applied: ops.length - errors.length,
+										...(errors.length === 0 ? {} : { errors })
+									};
+								}
+							} else if (c.name === draftRead && structured) {
+								const input = Option.getOrUndefined(Schema.decodeUnknownOption(ReadInput)(c.input));
+								const at =
+									input === undefined
+										? `${draftRead} takes { path, fields? }`
+										: resolve(draft, input.path, kind);
+								if (typeof at === 'string') result = { error: at };
+								else {
+									const value =
+										input?.fields === undefined
+											? at.value
+											: project(at.value, at.kind, input.fields);
+									const key = keyOf(at.kind);
+									// too large to return: its outline, so the model reads a narrower path
+									result =
+										size(value) <= BOUNDS.resultBytes - 200
+											? { value }
+											: {
+													clipped: `the value is ${size(value)} bytes, too large to return: read a child path, or pass fields`,
+													...(isList(value)
+														? {
+																items: value.length,
+																...(key === undefined
+																	? {}
+																	: {
+																			keys: value.slice(0, 200).map((x) => keyText(x, key) ?? null)
+																		})
+															}
+														: isObj(value)
 														? { fields: Object.keys(value) }
 														: {})
-											};
-							}
-						} else if (c.name === FIND && structured) {
-							const input = Option.getOrUndefined(Schema.decodeUnknownOption(FindInput)(c.input));
-							if (input === undefined) result = { error: `${FIND} takes { text, path? }` };
-							else {
-								const at = resolve(draft, input.path ?? '', kind);
-								const hits = typeof at === 'string' ? [] : find(at.value, at.kind, input.path ?? '', input.text);
-								result =
-									typeof at === 'string'
-										? { error: at }
-										: {
-												matches: hits.slice(0, HITS),
-												...(hits.length > HITS ? { more: `${hits.length - HITS} more: narrow with path or a longer text` } : {})
-											};
-							}
-						} else if (c.name === DIFF && structured) {
-							const path = Option.getOrUndefined(Schema.decodeUnknownOption(DiffInput)(c.input))?.path ?? '';
-							const now = resolve(draft, path, kind),
+												};
+								}
+							} else if (c.name === FIND && structured) {
+								const input = Option.getOrUndefined(Schema.decodeUnknownOption(FindInput)(c.input));
+								if (input === undefined) result = { error: `${FIND} takes { text, path? }` };
+								else {
+									const at = resolve(draft, input.path ?? '', kind);
+									const hits =
+										typeof at === 'string'
+											? []
+											: find(at.value, at.kind, input.path ?? '', input.text);
+									result =
+										typeof at === 'string'
+											? { error: at }
+											: {
+													matches: hits.slice(0, HITS),
+													...(hits.length > HITS
+														? {
+																more: `${hits.length - HITS} more: narrow with path or a longer text`
+															}
+														: {})
+												};
+								}
+							} else if (c.name === DIFF && structured) {
+								const path = Option.getOrUndefined(Schema.decodeUnknownOption(DiffInput)(c.input))?.path ?? '';
+								const now = resolve(draft, path, kind),
 								then = resolve(original, path, kind);
-							if (typeof now === 'string' && typeof then === 'string') result = { error: now };
-							else {
-								const changes: JsonChange[] = [];
-								diffAt(
+								if (typeof now === 'string' && typeof then === 'string') result = { error: now };
+								else {
+									const changes: JsonChange[] = [];
+									diffAt(
 									typeof then === 'string' ? undefined : then.value,
 									typeof now === 'string' ? undefined : now.value,
 									typeof now !== 'string' ? now.kind : typeof then !== 'string' ? then.kind : ANY,
 									path,
 									changes
 								);
-								const shown = (v: Json): Json => {
-									const t = JSON.stringify(v);
-									return t.length <= SHOWN ? v : `${t.slice(0, SHOWN)}… (shortened: read the path)`;
-								};
-								result = {
-									changes: changes.slice(0, CHANGES).map((change) => ({
+									const shown = (v: Json): Json => {
+										const t = JSON.stringify(v);
+										return t.length <= SHOWN
+											? v
+											: `${t.slice(0, SHOWN)}… (shortened: read the path)`;
+									};
+									result = {
+										changes: changes.slice(0, CHANGES).map((change) => ({
 										path: change.path,
 										kind: change.kind,
 										...(change.before === undefined ? {} : { before: shown(change.before) }),
 										...(change.after === undefined ? {} : { after: shown(change.after) })
 									})),
-									...(changes.length > CHANGES ? { more: `${changes.length - CHANGES} more: narrow with path` } : {})
-								};
+										...(changes.length > CHANGES
+											? { more: `${changes.length - CHANGES} more: narrow with path` }
+											: {})
+									};
+								}
+							} else if (c.name === SUBMIT && structured) {
+								last = settle(draft);
+								if (last.ok) {
+									submitted = last;
+									result = { submitted: true };
+								} else
+									result = {
+										error: last.error.kind === 'invalid' ? last.error.message : 'invalid'
+									};
+							} else {
+								const tool = spent ? undefined : tools.find((t) => t.name === c.name);
+								result =
+									tool === undefined
+										? { error: `there is no tool '${c.name}'` }
+										: yield* tool
+												.call(c.input)
+												.pipe(Effect.catch((e) => Effect.succeed({ error: e.message })));
 							}
-						} else if (c.name === SUBMIT && structured) {
-							last = settle(draft);
-							if (last.ok) { submitted = last; result = { submitted: true }; }
-							else result = { error: last.error.kind === 'invalid' ? last.error.message : 'invalid' };
-						} else {
-							const tool = spent ? undefined : tools.find((t) => t.name === c.name);
-							result =
-								tool === undefined
-									? { error: `there is no tool '${c.name}'` }
-									: yield* tool.call(c.input).pipe(Effect.catch((e) => Effect.succeed({ error: e.message })));
-						}
-						messages.push({ role: 'tool', content: { id: c.id, name: c.name, result: bound(result) } });
-						beat();
-						return submitted === undefined ? Option.none() : Option.some(submitted);
-					}));
+							messages.push({
+								role: 'tool',
+								content: { id: c.id, name: c.name, result: bound(result) }
+							});
+							beat();
+							return submitted === undefined ? Option.none() : Option.some(submitted);
+						})
+					);
 					if (Option.isSome(completed)) return completed.value;
 					// a turn of only draft tools that leaves the draft as it was is no progress: 3 running end the call. Under a
 					// `steps` budget a read-only turn is exploration the budget already bounds, not a stall.
@@ -956,7 +1044,10 @@ export function infer_facility(
 						// a model that re-edits instead of submitting: a draft that already holds is the answer
 						const held = r.tool_calls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
 						if (held?.ok === true) return held;
-						if (++stalls > FAILURES) return last ?? invalid(`the model's last ${FAILURES + 1} turns left its answer unchanged`);
+						if (++stalls > FAILURES)
+							return (
+								last ?? invalid(`the model's last ${FAILURES + 1} turns left its answer unchanged`)
+							);
 					} else stalls = 0;
 					// the step budget ends the tools: one final turn answers
 					if (!spent && a.steps !== undefined && ++turns >= a.steps) {
@@ -981,12 +1072,17 @@ export function infer_facility(
 				if (!structured) { messages.push({ role: 'assistant', content: textOf(r.content) }); return { ok: true, value: textOf(whole) }; }
 				// a structured answer written out as text instead: a well-formed one is taken as a submission of it
 				const parsed =
-					typeof whole === 'string' ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(whole)) : whole;
+					typeof whole === 'string'
+						? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(whole))
+						: whole;
 				let feedback: string | undefined;
 				if (parsed !== undefined) {
 					last = settle(parsed);
 					if (last.ok) { messages.push({ role: 'assistant', content: textOf(r.content) }); return last; }
-					feedback = last.error.kind === 'invalid' ? last.error.message : 'That answer does not match the output';
+					feedback =
+						last.error.kind === 'invalid'
+							? last.error.message
+							: 'That answer does not match the output';
 					draft = parsed;
 				}
 				if (++failures > FAILURES)
@@ -1048,7 +1144,9 @@ export function infer_facility(
 			const held = structured ? decoded(draft) : undefined;
 			return held?.ok === true
 				? held
-				: { ok: false, error: { kind: 'timeout', message: `the inference made no progress for ${STALL_MS / 60_000} minutes` } };
+				: { ok: false, error: { kind: 'timeout', message: `the inference made no progress for ${STALL_MS / 60_000} minutes`
+						}
+					};
 		});
 		return yield* Effect.raceFirst(answering, stalled);
 	}, Effect.scoped);

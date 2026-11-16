@@ -21,3 +21,4 @@ export { release } from './release.ts';
 export { prune } from './checkpoint.ts';
 // a host's tests generate a fixture's migration history as `bolt build` does
 export { prepare_migrations } from '../compiler/migrations.ts';
+export { runAutomation, settledRun } from './runs.ts';

@@ -15,6 +15,7 @@
 	<Agent
 		ctx={{ ui: { kinds: {} } }}
 		{api}
+		envoys={{}}
 		{bolt}
 		{read}
 		t={(key: string) => key}

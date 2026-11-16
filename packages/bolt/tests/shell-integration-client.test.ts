@@ -69,12 +69,16 @@ it.live(
 				surfaces: { inbox: false, runs: false, settings: false, agent: false, studio: false },
 				inbox: 0,
 				kiosks: [],
+				startable: [],
+				envoys: {},
+				search: [],
 				push: null,
 				visitor: null,
 				catalog: {},
 				automations: {},
 				read_catalog: {},
-				operation_outputs: { automations: {} }
+				operation_outputs: { automations: {} },
+				contract: 'fixture'
 			};
 			const load: IntegrationSetupLoader = async () =>
 				import('../src/page/IntegrationSetup.svelte');

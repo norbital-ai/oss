@@ -128,6 +128,7 @@ const withPanel = async (
 					});
 					yield* Effect.promise(async () => {
 						const props = {
+							envoys: {},
 							ctx: { ui: { kinds: {} } },
 							api: shell_api(fetch, { base: location.origin, after_mutation: () => bolt.refresh() }), bolt,
 							t: (key: string) => key, request: { conversation: ID, ...request }

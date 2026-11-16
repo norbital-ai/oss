@@ -4,9 +4,5 @@
 /** The HOST_API this package describes. */
 export const HOST_API_VERSION = 23;
 
-/** The HOST_API versions a host serves, both ends included. */
-export type HostApiRange = { readonly from: number; readonly to: number };
-
-/** Whether a release speaking HOST_API `version` may be served by a host serving `range`. */
-export const supports = (range: HostApiRange, version: number): boolean =>
-	Number.isInteger(version) && version >= range.from && version <= range.to;
+/** Hosts and releases must speak this exact protocol. */
+export const supports = (version: number): boolean => version === HOST_API_VERSION;

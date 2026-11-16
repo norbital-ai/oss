@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
-import { document_ingester } from '@norbital-ai/host-api';
+import { document_ingester } from '../src/convert.ts';
 
 const result = {
 	kind: 'document',
@@ -44,7 +44,12 @@ const seen: {
 	password: string | undefined;
 	body: Buffer;
 }[] = [];
-const answers: { readonly [job: string]: unknown } = { j1: result, j2: audio, j3: sheet, j9: result };
+const answers: { readonly [job: string]: unknown } = {
+	j1: result,
+	j2: audio,
+	j3: sheet,
+	j9: result
+};
 const jobs: { readonly [file: string]: string } = {
 	'rates.xlsx': 'j3',
 	'meeting.m4a': 'j2',
@@ -71,11 +76,15 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 		else if (at.pathname === '/v1/ingest/raw' && name === 'plan.dwg')
 			json(res, 415, { error: 'unsupported', message: 'no parser for CAD drawings' });
 		else if (at.pathname === '/v1/ingest/raw' && name === 'mute.m4a')
-			json(res, 503, { error: 'unavailable', message: 'this converter has no transcription model' });
+			json(res, 503, {
+				error: 'unavailable',
+				message: 'this converter has no transcription model'
+			});
 		else if (at.pathname === '/v1/ingest/raw') {
 			const id = jobs[name ?? ''] ?? 'j1';
 			json(res, 202, { id, state: id === 'j9' ? 'running' : 'succeeded', error: null });
-		} else if (at.pathname.endsWith('/result')) json(res, 200, answers[at.pathname.split('/')[3] ?? '']);
+		} else if (at.pathname.endsWith('/result'))
+			json(res, 200, answers[at.pathname.split('/')[3] ?? '']);
 		else json(res, 200, { id: at.pathname.split('/')[3], state: 'succeeded', error: null });
 	});
 });
@@ -94,6 +103,20 @@ describe('document_ingester', () => {
 		name,
 		mime: 'application/pdf',
 		bytes: new Uint8Array([1, 2, 3])
+	});
+	it('refuses an unresolved file instead of ingesting empty bytes', async () => {
+		seen.length = 0;
+		await expect(
+			document_ingester({ url, key: 'k' }).ingest(
+				{ sha256: 'abc', name: 'source.csv', mime: 'text/csv', key: 'stored/source' },
+				{},
+				new AbortController().signal
+			)
+		).rejects.toMatchObject({
+			kind: 'invalid',
+			message: 'Resolve the stored file to bytes before ingestion.'
+		});
+		expect(seen).toEqual([]);
 	});
 	it('posts the file as its body and decodes the result, images to bytes', async () => {
 		const got = await document_ingester({ url, key: 'k' }).ingest(
@@ -122,7 +145,11 @@ describe('document_ingester', () => {
 	it('sends a file read from disk until Convert keeps it, then only its hash', async () => {
 		const page = { page: 3 };
 		seen.length = 0;
-		await document_ingester({ url, key: 'k' }).ingest(file('tender.pdf'), page, new AbortController().signal);
+		await document_ingester({ url, key: 'k' }).ingest(
+			file('tender.pdf'),
+			page,
+			new AbortController().signal
+		);
 		expect(seen[0]?.path).toBe('/v1/kept/abc');
 		expect([...(seen[1]?.body ?? [])]).toEqual([1, 2, 3]);
 		expect(seen[1]?.path).toContain('sha256=abc');
@@ -178,7 +205,10 @@ describe('document_ingester', () => {
 			new AbortController().signal
 		);
 		expect(got).toEqual(audio);
-		const posted = new URL(seen.find((one) => one.path.startsWith('/v1/ingest/raw'))?.path ?? '', url);
+		const posted = new URL(
+			seen.find((one) => one.path.startsWith('/v1/ingest/raw'))?.path ?? '',
+			url
+		);
 		expect(JSON.parse(posted.searchParams.get('options') ?? '')).toEqual({
 			diarize: true,
 			language: 'en',
@@ -201,7 +231,11 @@ describe('document_ingester', () => {
 	});
 	it('rejects a 503 as the unavailable facility error', async () => {
 		await expect(
-			document_ingester({ url, key: 'k' }).ingest(file('mute.m4a'), {}, new AbortController().signal)
+			document_ingester({ url, key: 'k' }).ingest(
+				file('mute.m4a'),
+				{},
+				new AbortController().signal
+			)
 		).rejects.toEqual({
 			kind: 'unavailable',
 			facility: 'convert.ingest',

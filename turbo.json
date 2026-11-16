@@ -35,6 +35,10 @@
 		"@norbital-ai/ui#lint": {
 			"dependsOn": ["^build", "^lint", "@norbital-ai/bolt#build"]
 		},
+		// The server's conformance fixture compiles against the built Bolt package.
+		"@norbital-ai/bolt-server#lint": {
+			"dependsOn": ["^build", "^lint", "@norbital-ai/bolt#build"]
+		},
 		"types:compat": {
 			"dependsOn": ["^build"]
 		}

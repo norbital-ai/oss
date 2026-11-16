@@ -109,7 +109,7 @@
 		<div class="max-h-72 overflow-auto rounded-md"><ReadTable {ctx} value={rows} {t} /></div>
 	</div>
 {:else if tool.name === 'act'}
-	{@const rows = list(input['input'])}
+	{@const acts = object(input['acts']) ? input['acts'] : {}}
 	{@const outcome = text(out['kind']) || (out['run'] !== undefined ? 'started' : '')}
 	<div class="grid gap-1" data-tool-view="act">
 		{#if outcome !== ''}
@@ -117,16 +117,20 @@
 				<Badge variant={outcome === 'committed' || outcome === 'started' ? 'default' : 'outline'}
 					>{t(outcome === 'pending_approval' ? 'Waiting for approval' : outcome)}</Badge
 				>
-				<span class="font-mono text-micro text-muted-foreground">{text(input['callable'])}</span>
+				<span class="font-mono text-micro text-muted-foreground"
+					>{Object.keys(acts).join(', ')}</span
+				>
 			</div>
 		{/if}
-		{#if rows.length > 0}
-			<div class="max-h-56 overflow-auto rounded-md">
-				<ReadTable {ctx} value={{ [text(input['callable'])]: rows }} {t} />
-			</div>
-		{:else if input['input'] !== undefined}
-			{@render data_(input['input'], t('Input'))}
-		{/if}
+		{#each Object.entries(acts) as [callable, value] (callable)}
+			{#if Array.isArray(value)}
+				<div class="max-h-56 overflow-auto rounded-md">
+					<ReadTable {ctx} value={{ [callable]: value }} {t} />
+				</div>
+			{:else}
+				{@render data_(value, callable)}
+			{/if}
+		{/each}
 	</div>
 {:else if tool.name === 'browser'}
 	{@const url = text(out['url']) || text(input['url'])}

@@ -50,3 +50,9 @@ Contract: `seeder` and the `bolt seed` verb in the Bolt API reference.
 ## Forbidden
 
 `schema.ts`, `workspace.ts` outside `src/+workspace.ts`, barrels, `vite.config.ts`, `svelte.config.*`, SvelteKit routes and bare `+page` files, `$lib`, `$app/*`, custom build scripts.
+
+## Client updates and transfer
+
+The compiler records fingerprinted JavaScript and CSS separately from mutable workspace assets. Hosts can give those compiled files stable, immutable URLs across releases; unchanged bytes then use the browser's HTTP cache, while changed code gets a new fingerprint. Mutable assets keep release-specific URLs, and the document revalidates. The browser may evict HTTP cache entries; reuse never assumes that a file remains available.
+
+A live release cutover closes the old generation. The shell checks the served client on reconnect (also covering missed cutover events) and reloads when its client changed, subject to the existing unsaved-form guard. The mobile shell uses the same protocol and workspace origin boundaries. Data images from the old generation are discarded; caching must never keep a user on obsolete code or turn stale data into a current answer.

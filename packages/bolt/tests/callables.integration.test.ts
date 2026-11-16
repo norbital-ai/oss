@@ -686,7 +686,7 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 				})
 		);
 
-		it.effect('uploads persist one sys_file row per client-minted id; a resend adds none', () =>
+		it.effect('uploads answer a stored file identity; request retries and repeated content add no rows', () =>
 			Effect.gen(function* () {
 				const f = yield* Fx,
 					me = yield* f.t.visitor('careers');
@@ -699,12 +699,13 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 				const first = yield* me.upload('applications.cv', file);
 				if (first.kind !== 'committed') throw new Error(JSON.stringify(first));
 				expect(first.output).toMatchObject({
-					id: file.id,
+					id: expect.any(String),
 					name: 'cv.pdf',
 					mime: 'application/pdf',
 					bytes: 3
 				});
 				expect(yield* me.upload('applications.cv', file)).toEqual(first);
+				expect(yield* me.upload('applications.cv', { ...file, id: crypto.randomUUID() })).toEqual(first);
 				expect(yield* count(f, 'sys_file')).toBe(1);
 				const { id: _id, ...otherFile } = file;
 				expect(

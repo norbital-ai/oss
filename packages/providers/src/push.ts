@@ -6,7 +6,10 @@ import { Clock, Effect, Option, Schema } from 'effect';
 import { Port, type PortFailure, type Rows, type Sql } from '@norbital-ai/host-api';
 import { pinned_lookup, public_addresses } from '@norbital-ai/host-api/node';
 import type { Json } from 'effect/Schema';
-import type { HostSettings } from './host.ts';
+/** APNs signing keys indexed by Apple developer team id. */
+export type ApnsKeys = {
+	readonly [teamId: string]: { readonly key_id: string; readonly key: string };
+};
 
 /** An inbox notice for one device subscription; `id` is the notice's, kept when an uncertain delivery is retried. */
 export type PushMessage = {
@@ -24,7 +27,9 @@ export type PushMessage = {
 };
 /** One push transport: a notice sent, or the facility's failure. */
 export type PushSender = {
-	readonly send: (message: PushMessage) => Effect.Effect<{ readonly provider_id: string }, PortFailure>;
+	readonly send: (
+		message: PushMessage
+	) => Effect.Effect<{ readonly provider_id: string }, PortFailure>;
 };
 type Db<E> = { readonly write: (statement: Sql) => Effect.Effect<Rows, E> };
 const Subscription = Schema.Struct({
@@ -34,7 +39,14 @@ const Subscription = Schema.Struct({
 const Status = Schema.Struct({ statusCode: Schema.Number });
 const refused = (message: string, status?: number) =>
 	Port.failure('push')({
-		kind: status === 408 ? 'timeout' : status === 429 ? 'rate_limited' : status === undefined || status >= 500 ? 'upstream' : 'invalid',
+		kind:
+			status === 408
+				? 'timeout'
+				: status === 429
+					? 'rate_limited'
+					: status === undefined || status >= 500
+						? 'upstream'
+						: 'invalid',
 		message,
 		...(status === undefined ? {} : { status })
 	});
@@ -46,6 +58,7 @@ const forget = <E>(db: Db<E>, endpoint: string) =>
 	db
 		.write({ text: 'DELETE FROM bolt_push_subscriptions WHERE endpoint = $1', params: [endpoint] })
 		.pipe(Effect.mapError(Port.failure('push')));
+/** Web Push delivery through a guarded transport, removing expired subscriptions. */
 export function push<E>(
 	db: Db<E>,
 	vapid: { public_key: string; private_key: string },
@@ -61,14 +74,20 @@ export function push<E>(
 			).pipe(Effect.mapError(() => refused('The web push subscription is invalid.', 400)));
 			// a stored endpoint is checked again at every send, and the connection goes only to the checked addresses
 			const url = URL.parse(subscription.endpoint);
-			if (url === null) return yield* Effect.fail(refused('The web push subscription is invalid.', 400));
+			if (url === null)
+				return yield* Effect.fail(refused('The web push subscription is invalid.', 400));
 			const addresses = yield* public_addresses(url, resolve);
 			const agent = new Agent({ lookup: pinned_lookup(addresses) });
 			const result = yield* Effect.tryPromise({
 				try: () =>
 					send(
 						subscription,
-						JSON.stringify({ id: message.id, title: message.title, body: message.body, path: message.path }),
+						JSON.stringify({
+							id: message.id,
+							title: message.title,
+							body: message.body,
+							path: message.path
+						}),
 						{ vapidDetails, TTL: 86_400, agent }
 					),
 				catch: (cause) => {
@@ -83,7 +102,9 @@ export function push<E>(
 					Effect.gen(function* () {
 						if (failure.status === 404 || failure.status === 410)
 							yield* forget(db, subscription.endpoint);
-						return yield* Effect.fail(refused(Port.failure('push')(failure.cause).message, failure.status));
+						return yield* Effect.fail(
+							refused(Port.failure('push')(failure.cause).message, failure.status)
+						);
 					})
 				)
 			);
@@ -147,7 +168,7 @@ const TOKEN_MS = 50 * 60_000;
  */
 export function apns<E>(
 	db: Db<E>,
-	keys: HostSettings['apns'],
+	keys: ApnsKeys,
 	request: ApnsRequest = http2Request
 ): PushSender {
 	const tokens = new Map<string, { readonly token: string; readonly at: number }>();
@@ -167,7 +188,8 @@ export function apns<E>(
 					key: createPrivateKey(team.key),
 					dsaEncoding: 'ieee-p1363'
 				}),
-			catch: (cause) => refused(`The APNs signing key is invalid: ${Port.failure('push')(cause).message}`, 400)
+			catch: (cause) =>
+				refused(`The APNs signing key is invalid: ${Port.failure('push')(cause).message}`, 400)
 		});
 		const signed = `${unsigned}.${base64url(signature)}`;
 		tokens.set(teamId, { token: signed, at: now });
@@ -200,9 +222,7 @@ export function apns<E>(
 			);
 			if (answer.status === 410 || reason === 'BadDeviceToken' || reason === 'Unregistered')
 				yield* forget(db, device.endpoint);
-			return yield* Effect.fail(
-				refused(`APNs refused the notice: ${reason}`, answer.status)
-			);
+			return yield* Effect.fail(refused(`APNs refused the notice: ${reason}`, answer.status));
 		})
 	};
 }

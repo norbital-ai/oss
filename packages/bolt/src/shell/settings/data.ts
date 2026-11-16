@@ -62,7 +62,7 @@ export type Settings = {
 	keys: readonly KeyRow[];
 	policies: string[];
 	secrets: { name: string; label: string; set: boolean | null }[];
-	/** The envoys: source-declared roles and tenant-created rows, each deployable on conversation instances. */
+	/** Runtime envoys, each deployable on conversation instances. */
 	envoys: {
 		id: string;
 		name: string;

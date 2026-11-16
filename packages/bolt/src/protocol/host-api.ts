@@ -265,7 +265,7 @@ const inRelease = <A, E>(
 		Effect.provide(Layer.mergeAll(ArtifactFiles.fileSystem(release.artifact), cryptoLayer, logging))
 	);
 const readRelease = (release: Release) =>
-	inRelease(release, read_artifact(ROOT, [CONTRACT], 'executed'));
+	inRelease(release, read_artifact(ROOT, 'executed'));
 type ArtifactRead = Result.Result<Artifact, Effect.Error<ReturnType<typeof readRelease>>>;
 /**
  * The kernel admitted the release (every digest) before handing it over: here only what runs is checked again, once per

@@ -1,7 +1,7 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.8",
-	"description": "Bolt: the business OS framework — declarations, page SDK, protocol and the engine hosts run.",
+	"version": "0.0.9",
+	"description": "Bolt: the business OS framework \u2014 declarations, page SDK, protocol and the engine hosts run.",
 	"type": "module",
 	"sideEffects": [
 		"**/*.css"
@@ -52,9 +52,9 @@
 		"package.json"
 	],
 	"scripts": {
-		"build": "node scripts/system-names.ts && node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json --then node scripts/docs.ts --then node scripts/cell-bundle.ts",
-		"lint": "node scripts/system-names.ts && svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
-		"types:compat": "node scripts/system-names.ts && tsc -p tests/tsconfig.json --noEmit",
+		"build": "node scripts/agent-skills.ts && node scripts/system-names.ts && node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json --then node scripts/docs.ts --then node scripts/cell-bundle.ts",
+		"lint": "node scripts/agent-skills.ts && node scripts/system-names.ts && svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
+		"types:compat": "node scripts/agent-skills.ts && node scripts/system-names.ts && tsc -p tests/tsconfig.json --noEmit",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
 	},
 	"dependencies": {

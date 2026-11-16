@@ -9,11 +9,11 @@
 //
 // Versioning: the protocol version is `HOST_API_VERSION`, one integer bumped on any change either side could misread.
 // The package version follows the oss release line for publication; what a host checks is the HOST_API number a
-// release reports (`HostApiCore.version`), against the range it serves (`supports`).
+// release reports (`HostApiCore.version`), which must equal its own (`supports`). Bolt package versions are independent.
 //
 // Node-only parts (signed host operations and the Node port implementations) are
 // `@norbital-ai/host-api/node`; everything here also runs inside a cell.
-export { HOST_API_VERSION, supports, type HostApiRange } from './version.ts';
+export { HOST_API_VERSION, supports } from './version.ts';
 export { FIRST_PARTY_BUNFIG, FIRST_PARTY_PACKAGES } from './first-party.ts';
 export { HostApiFailure, HostDefect, HostFailure } from './failure.ts';
 export { ArtifactHeader, FounderAnswer, MintedSession, ReleaseFacts } from './answers.ts';

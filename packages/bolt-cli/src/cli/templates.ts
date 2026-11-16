@@ -16,7 +16,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { FIRST_PARTY_BUNFIG } from '@norbital-ai/host-api';
-import { TemplateManifest } from '@norbital-ai/bolt/protocol';
+import { TemplateSource } from '../compiler/template.ts';
 import { read_artifact } from '@norbital-ai/bolt/artifact';
 import { ReleaseJson, schemaSql } from '../compiler/artifact/index.ts';
 import { workers } from './test.ts';
@@ -125,31 +125,6 @@ export const registryConfiguration = Effect.gen(function* () {
 	const lines = [`@norbital-ai:registry=${registry}`];
 	if (token !== undefined) lines.push(`//${new URL(registry).host}/:_authToken=${token}`);
 	return `${lines.join('\n')}\n`;
-});
-export const actualCounts = Effect.fn('bolt.templateCounts')(function* (directory: string) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
-	const count = Effect.fnUntraced(function* (folder: string, pattern: RegExp) {
-		const dir = path.join(directory, folder);
-		if (!(yield* fs.exists(dir))) return 0;
-		let total = 0;
-		for (const name of yield* fs.readDirectory(dir, { recursive: true }))
-			if (
-				pattern.test(name.split(path.sep).join('/')) &&
-				(yield* fs.stat(path.join(dir, name))).type === 'File'
-			)
-				total += 1;
-		return total;
-	});
-	const [models, apps, automations] = yield* Effect.all(
-		[
-			count('src/data/model', /^(?:[^/]+\/)+\+model\.ts$/),
-			count('src/app', /(?:^|\/)\+app\.ts$/),
-			count('src/automation', /^\+[^/]+\.automation\.ts$/)
-		],
-		{ concurrency: 3 }
-	);
-	return { models, apps, automations };
 });
 export const discoverTemplates = Effect.fn('bolt.discoverTemplates')(function* (
 	root: string = process.cwd(),
@@ -336,7 +311,7 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 	const { own, foreign } = yield* byRelease(selected);
 	for (const template of foreign) yield* delegate(template, ['check']);
 	for (const template of own) {
-		const metadata = yield* json(TemplateManifest, path.join(template.directory, templateMetadataFile));
+		yield* json(TemplateSource, path.join(template.directory, templateMetadataFile));
 		const manifest = yield* json(Package, path.join(template.directory, 'package.json'));
 		if (manifest.private !== true)
 			return yield* fail(`Template ${template.slug} must remain a private application package.`);
@@ -374,12 +349,6 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 			return yield* fail(
 				`Template ${template.slug} does not satisfy first-party peer pins:\n  ${problems.join('\n  ')}`
 			);
-		const counts = yield* actualCounts(template.directory);
-		for (const key of ['models', 'apps', 'automations'] as const)
-			if (metadata.counts[key] !== counts[key])
-				return yield* fail(
-					`Template ${template.slug} declares ${metadata.counts[key]} ${key} in ${templateMetadataFile}; found ${counts[key]}.`
-				);
 		const forbidden = [
 			'seed_bank',
 			...all
@@ -914,7 +883,7 @@ const boolean = (name: string) => Flag.Boolean(name).pipe(Flag.withDefault(false
 /**
  * `bolt templates check`: each template's repository contract: a private package with `build` and `test` scripts, an
  * exact `@norbital-ai/bolt` pin, no local-protocol dependencies or foreign package-manager files, a `bun.lock`
- * satisfying first-party peer pins, `norbital.template.json` counts matching its source, and committed migrations under
+ * satisfying first-party peer pins, valid catalogue metadata, and committed migrations under
  * `migrations/`. A template pinning another Bolt release is checked by that release's CLI. Run in CI from the
  * repository root. Exit 0 ok, 2 on a failed check.
  */

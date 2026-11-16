@@ -406,7 +406,7 @@ export const request = Effect.fn('Bolt.read.request')(function* (
 	return { kind: 'request', roots };
 });
 
-/** `read(model, { where?, select?, order_by?, search? } & Paged)`: the engine's own page read (never off the wire). */
+/** The engine's own paged read (never off the wire), with `limit`/`after` or `all`. */
 export const read = (cat: Catalog, model: string, q: Obj): Effect.Effect<ReadIR, BoltError> =>
 	store(storeRead(cat, model, q));
 /** `get(model, id, { select?, revision? })`; L-BOLT-181: a revision get is the history fold, not a table read. */

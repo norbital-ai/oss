@@ -5,7 +5,8 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 ## Briefs and skills
 
 - `+agent.md` briefs staff; `+agent.external.md` briefs external members. A brief describes work and evidence, never authority. The agent acts as its identity through the same access points as a person.
-- A workspace skill is `src/agent/skill/<name>/`: `+skill.md` (`description:` frontmatter, `##` sections), scripts and vendored pure-JavaScript packages, at most 10 MiB, no links.
+- A workspace skill is `src/agent/skill/<name>/`: names match `^[a-z][a-z0-9_]*$`; `+skill.md` has `description:` frontmatter. It may include scripts and vendored pure-JavaScript packages, at most 10 MiB, no links.
+- Keep a reusable skill short and numbered. Its procedure is general; validity rules and exclusions come from the task, declared constraints or supplied evidence. Do not turn an example into a rule for every domain.
 - A script runs as written through `run_js { file }`: its tree is read-only at `/app`, files at `/in/<name>`, `/out` reaches the person. Only `fs`, `path`, `buffer`, `process`, `util` built-ins exist; `fetch` needs the `http` grant.
 - Policies grant MCP servers and host tools through `capabilities`; every skill is open to every actor.
 - A brief or skill handling documents says which part to read, never the whole file. A format with no parser is the workspace's to parse with a tool or integration. Record imports stay on syncs.
@@ -33,7 +34,7 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 
 ## Integration definitions
 
-- `integration(spec)` declares description, driver, typed configuration, credentials or OAuth, webhook verification and handler, optional `rate`, inline `test`. Models own their syncs; definitions own no business projection.
+- `integration('<name>', spec)` declares description, driver, typed configuration, credentials or OAuth, webhook verification and handler, optional `rate`, inline `test`. Models own their syncs; definitions own no business projection.
 - `driver` names a Bolt kind (http, sqlserver, email, chat, calendar) or declares one: `{ name, read, conversation?, … }`. A declared driver runs only where the host registers a provider under its name.
 - `webhook.handle` answers each verified delivery itself: it reads and acts as `webhook.policies` and returns `{ status, body }`. Key its acts by the delivery id.
 - Built-in conversation definitions reserve whatsapp, email, telegram, slack, discord, wechat and chat.

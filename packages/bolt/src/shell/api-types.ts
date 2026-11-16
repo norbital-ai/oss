@@ -272,25 +272,23 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 			})
 		)
 	),
-	startable: Schema.optionalKey(
-		Schema.Array(
-			Schema.Struct({
-				name: Schema.String,
-				description: Schema.String,
-				needs_input: Schema.optionalKey(Schema.Boolean)
-			})
-		)
+	startable: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			description: Schema.String,
+			needs_input: Schema.optionalKey(Schema.Boolean)
+		})
 	),
-	envoys: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+	envoys: Schema.Record(Schema.String, Schema.String),
 	push: NullableString,
 	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, site_key: Optional })),
 	catalog: Schema.Record(Schema.String, ModelExposureSchema),
 	read_catalog: ReadCatalog,
 	automations: Schema.Record(Schema.String, AutomationExposureSchema),
 	operation_outputs: OperationOutputs,
-	search: Schema.optionalKey(Schema.Array(ManifestItemSchema)),
+	search: Schema.Array(ManifestItemSchema),
 	ai_unconfigured: True,
-	contract: Optional
+	contract: Schema.String
 });
 export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 	members: Schema.Array(Member),

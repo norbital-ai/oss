@@ -147,15 +147,18 @@ describe('the Decisions API sys_1 client', () => {
 				{ url: 'https://decisions.test', model: 'jev', api_key: 'k' },
 				{ fetch: transport }
 			);
-			for (const url of [
-				'https://private.invalid/picture.png',
-				'data:image/png;base64,' + 'A'.repeat(29 * 1024 * 1024)
-			])
+			for (const [url, kind] of [
+				['https://private.invalid/picture.png', 'invalid'],
+				['data:image/png;base64,' + 'A'.repeat(29 * 1024 * 1024), 'too_large'],
+				['data:image/png;base64,A===', 'invalid'],
+				['data:image/png;base64,', 'invalid'],
+				['data:image/png;base64,AA!A', 'invalid']
+			] as const)
 				expect(
 					yield* Effect.flip(
 						adapter.ask({ ...request, state: [{ type: 'image_url', image_url: { url } }] })
 					)
-				).toBeInstanceOf(Error);
+				).toMatchObject({ _tag: 'FacilityFailure', kind });
 			expect(seen).toHaveLength(0);
 		})
 	);

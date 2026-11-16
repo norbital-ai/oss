@@ -6,7 +6,7 @@
 // its own digest in `release.json`. Every host activates the bundle through `read_artifact`.
 import { Effect, FileSystem, Option, Path, Schema } from 'effect';
 import { type EngineManifest, plan } from '@norbital-ai/bolt/engine';
-import { TemplateManifest } from '@norbital-ai/bolt/protocol';
+import { templateMetadata } from '../template.ts';
 import { fingerprint, schema_slice } from '@norbital-ai/bolt/tooling';
 import { HOST_FILE } from '@norbital-ai/host-api/node';
 import { constants, cpSync } from 'node:fs';
@@ -18,12 +18,7 @@ import type { Discovered } from '../discover.ts';
 import { buildClient, BuildError, type Graphs } from './client.ts';
 import { buildServerPages } from './server.ts';
 import { layerLines, PLATFORM, type PreparedLayer } from './platform.ts';
-import {
-	artifact_hash,
-	ArtifactJson,
-	CONTRACT,
-	tree
-} from '@norbital-ai/bolt/artifact';
+import { artifact_hash, ArtifactJson, CONTRACT, tree } from '@norbital-ai/bolt/artifact';
 import { sha256_hex } from '@norbital-ai/store';
 
 const TEST = /\.(test|spec)\.ts$/;
@@ -81,23 +76,14 @@ export const memoTreeHash = Effect.fn('bolt.memoTreeHash')(function* (
 	return sha256_hex(lines.sort().join('\n'));
 });
 
-/** The template's catalogue metadata when present (`key` and `name`). */
-const templateMeta = Effect.fn('bolt.templateMeta')(function* (root: string) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
-	const file = path.join(root, 'norbital.template.json');
-	if (!(yield* fs.exists(file))) return { handle: path.basename(root), name: path.basename(root) };
-	const t = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(TemplateManifest))(
-		yield* fs.readFileString(file)
-	);
-	return { handle: t.key, name: t.name };
-});
-
 /** `schema.sql`: the plan from an empty database, in apply order (review aid; hosts apply `plan`). */
 export const schemaSql = (m: EngineManifest) =>
 	Effect.map(
 		plan(null, m),
-		(p) => `${statements(p).map((s) => `${s.sql.trim().replace(/;?$/, ';')}`).join('\n\n')}\n`
+		(p) =>
+			`${statements(p)
+				.map((s) => `${s.sql.trim().replace(/;?$/, ';')}`)
+				.join('\n\n')}\n`
 	);
 
 /** The workspace's type setup, copied into the artifact's `workspace/` beside its source. */
@@ -122,6 +108,7 @@ const HeldPages = Schema.fromJsonString(
 		key: Schema.String,
 		sources: Schema.Array(Schema.String),
 		pages: Schema.Record(Schema.String, PageEntry),
+		immutable: Schema.Array(Schema.String),
 		/** Each route's stylesheet sources: the next build's first public pass starts from them. */
 		styles: Schema.Record(Schema.String, Schema.Array(Schema.String))
 	})
@@ -162,7 +149,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	} = {}
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	const meta = yield* templateMeta(root);
+	const meta = yield* templateMetadata(root);
 	const cache = join(root, '.norbital', 'cache'),
 		keyFile = join(cache, 'client.key'),
 		graphFile = join(cache, 'client-graph.json'),
@@ -252,11 +239,13 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	} else {
 		const sources: Graphs = { spa: new Set(), pages: new Set() };
 		// most edits reach no public page: the last build of these exact inputs is the build
-		const held = yield* fs.readFileString(join(heldDir, 'pages.json')).pipe(
-			Effect.flatMap(Schema.decodeUnknownEffect(HeldPages)),
-			Effect.option,
-			Effect.map(Option.getOrUndefined)
-		);
+		const held = yield* fs
+			.readFileString(join(heldDir, 'pages.json'))
+			.pipe(
+				Effect.flatMap(Schema.decodeUnknownEffect(HeldPages)),
+				Effect.option,
+				Effect.map(Option.getOrUndefined)
+			);
 		const kept =
 			held !== undefined && held.key === (yield* pagesKey(root, clientKey, held.sources))
 				? held
@@ -294,6 +283,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 					key: yield* pagesKey(root, clientKey, graphed),
 					sources: graphed,
 					pages,
+					immutable: builtClient.immutable.filter((file) => file.startsWith('public/')),
 					styles: builtClient.publicSources
 				})
 			);
@@ -304,7 +294,11 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 				if (yield* fs.exists(join(heldDir, from)))
 					yield* Effect.sync(() => cpSync(join(heldDir, from), to, { recursive: true }));
 		}
-		client = { entry: builtClient.entry, css: builtClient.css };
+		client = {
+			entry: builtClient.entry,
+			css: builtClient.css,
+			immutable: [...new Set([...builtClient.immutable, ...(kept?.immutable ?? [])])].sort()
+		};
 		yield* fs.makeDirectory(dirname(keyFile), { recursive: true });
 		yield* fs.writeFileString(
 			graphFile,

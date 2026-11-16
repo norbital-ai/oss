@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { readPublicPage } from '../src/web.ts';
+import { readPublicPage } from '../src/node/web.ts';
 import { createHash } from 'node:crypto';
 
 /** One read as a tagged result, so a refusal and a page assert alike. */

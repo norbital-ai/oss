@@ -24,7 +24,7 @@ const present = <A>(value: A | null | undefined): A => {
 const runtime_accounts = [
 	{ id: 'field_wa', integration: 'whatsapp', status: { state: 'connected' } },
 	{ id: 'sales_tg', integration: 'telegram', status: { state: 'connected' } },
-	{ id: 'customer_mail', integration: 'customer_notices', status: { state: 'connected' } },
+	{ id: 'customer_mail', integration: 'customer_notices', status: { state: 'connected' } }
 ] as const;
 
 const manifest = {
@@ -214,8 +214,9 @@ const scriptedAi = () => {
 									id: `c${ai.requests}`,
 									name: 'act',
 									input: {
-										callable: 'jobs.update',
-input: [{ target: present(close[1]), set: { status: 'done' } }]
+										acts: {
+											'jobs.update': [{ target: present(close[1]), set: { status: 'done' } }]
+										}
 									}
 								}
 							],
@@ -326,7 +327,9 @@ describe('connections through the engine entry', () => {
 							params: []
 						}
 					]);
-					expect(present(admitted).rows).toEqual([{ state: 'succeeded', output: { queued: 3, skipped: 0 } }]);
+					expect(present(admitted).rows).toEqual([
+						{ state: 'succeeded', output: { queued: 3, skipped: 0 } }
+					]);
 					expect(
 						sent('customer_mail')
 							.map((s) => s.message)

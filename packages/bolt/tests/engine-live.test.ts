@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { sha256_hex } from '@norbital-ai/store';
 import { expect, it } from '@effect/vitest';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from 'effect';
 import { Live, Manifest, Reads, type LiveShape, type ReadsShape } from '../src/engine/services.ts';
@@ -50,66 +51,161 @@ it.effect('builds the native graph and ends connection streams when its generati
 );
 
 const hub = (run: ReadsShape['run']) =>
-	Layer.build(LiveHubLive.pipe(Layer.provide(Layer.mergeAll(Layer.succeed(Manifest, manifest), Layer.succeed(Reads, { run }))))).pipe(
-		Effect.map((context) => Context.get(context, Live))
-	);
+	Layer.build(
+		LiveHubLive.pipe(
+			Layer.provide(
+				Layer.mergeAll(Layer.succeed(Manifest, manifest), Layer.succeed(Reads, { run }))
+			)
+		)
+	).pipe(Effect.map((context) => Context.get(context, Live)));
 const memberOf = (id: string, admin: boolean) =>
-	compile_authority(manifest, {
-		actor: { kind: 'member', id, email: null, phone: null, external: false, teams: [], team_path: [], admin, party: null },
-		policies: [],
-		admin
-	}, `member:${id}:1`);
+	compile_authority(
+		manifest,
+		{
+			actor: {
+				kind: 'member',
+				id,
+				email: null,
+				phone: null,
+				external: false,
+				teams: [],
+				team_path: [],
+				admin,
+				party: null
+			},
+			policies: [],
+			admin
+		},
+		`member:${id}:1`
+	);
 /** A connection's frames as they arrive, and its stream's end. */
 const watch = (live: LiveShape, authority: Authority) =>
 	Effect.gen(function* () {
-		const frames: Frame[] = [], hello = yield* Deferred.make<string>();
+		const frames: Frame[] = [],
+			hello = yield* Deferred.make<string>();
 		const ended = yield* live.connect(authority).pipe(
-			Stream.runForEach((frame) => Effect.sync(() => frames.push(frame)).pipe(
-				Effect.andThen(frame.t === 'hello' ? Deferred.succeed(hello, frame.conn) : Effect.void))),
+			Stream.runForEach((frame) =>
+				Effect.sync(() => frames.push(frame)).pipe(
+					Effect.andThen(frame.t === 'hello' ? Deferred.succeed(hello, frame.conn) : Effect.void)
+				)
+			),
 			Effect.forkScoped
 		);
 		return { frames, conn: yield* Deferred.await(hello), ended };
 	});
 const userChange = (id: string, before: number, after: number): Captured => ({
-	model: 'sys_user', id, op: 'update', revision: after, transaction: '1', cause: 'direct',
-	old: { id, revision: before }, new: { id, revision: after }
+	model: 'sys_user',
+	id,
+	op: 'update',
+	revision: after,
+	transaction: '1',
+	cause: 'direct',
+	old: { id, revision: before },
+	new: { id, revision: after }
 });
 
-it.effect('a connection ends when its principal changes; a change that moves no revision keeps it', () =>
-	Effect.gen(function* () {
-		const live = yield* hub(() => Effect.succeed([]));
-		const id = randomUUID();
-		const mine = yield* watch(live, yield* memberOf(id, false));
-		// a sign-in stamp (`last_seen`) moves no revision: the stream stays
-		live.publish([userChange(id, 1, 1)]);
-		yield* live.settled;
-		// deactivated, moved team or demoted: the revision moves, and the stream ends before the commit reaches it
-		live.publish([userChange(id, 1, 2)]);
-		yield* live.settled;
-		yield* Fiber.join(mine.ended);
-		expect(mine.frames.map((frame) => frame.t)).toEqual(['hello', 'v']);
-		// a signed-out session ends its member's streams too
-		const again = yield* watch(live, yield* memberOf(id, false));
-		live.publish([{ model: 'sys_session', id: randomUUID(), op: 'delete', revision: 0, transaction: '2', cause: 'direct', old: { user: id }, new: null }]);
-		yield* live.settled;
-		yield* Fiber.join(again.ended);
-	}).pipe(Effect.scoped)
+it.effect(
+	'a connection ends when its principal changes; a change that moves no revision keeps it',
+	() =>
+		Effect.gen(function* () {
+			const live = yield* hub(() => Effect.succeed([]));
+			const id = randomUUID();
+			const mine = yield* watch(live, yield* memberOf(id, false));
+			// a sign-in stamp (`last_seen`) moves no revision: the stream stays
+			live.publish([userChange(id, 1, 1)]);
+			yield* live.settled;
+			// deactivated, moved team or demoted: the revision moves, and the stream ends before the commit reaches it
+			live.publish([userChange(id, 1, 2)]);
+			yield* live.settled;
+			yield* Fiber.join(mine.ended);
+			expect(mine.frames.map((frame) => frame.t)).toEqual(['hello', 'v']);
+			// a signed-out session ends its member's streams too
+			const again = yield* watch(live, yield* memberOf(id, false));
+			live.publish([
+				{
+					model: 'sys_session',
+					id: randomUUID(),
+					op: 'delete',
+					revision: 0,
+					transaction: '2',
+					cause: 'direct',
+					old: { user: id },
+					new: null
+				}
+			]);
+			yield* live.settled;
+			yield* Fiber.join(again.ended);
+		}).pipe(Effect.scoped)
 );
 
 it.effect('a view whose read failed is dropped: a later commit asks it nothing', () =>
 	Effect.gen(function* () {
 		let reads = 0;
-		const live = yield* hub(() => Effect.suspend(() => {
-			reads++;
-			return Effect.fail(BoltError.make('internal', 'decode', 'the read failed'));
-		}));
+		const live = yield* hub(() =>
+			Effect.suspend(() => {
+				reads++;
+				return Effect.fail(BoltError.make('internal', 'decode', 'the read failed'));
+			})
+		);
 		const watched = yield* watch(live, yield* memberOf(randomUUID(), true));
-		yield* live.register(watched.conn, 'orders', { read: yield* lower_read(manifest, 'read', ['orders', { all: true }]) });
+		yield* live.register(watched.conn, 'orders', {
+			read: yield* lower_read(manifest, 'read', ['orders', { all: true }])
+		});
 		const asked = reads;
 		expect(asked).toBeGreaterThan(0);
-		live.publish([{ model: 'orders', id: randomUUID(), op: 'create', revision: 1, transaction: '1', cause: 'direct', old: null, new: { title: 'new' } }]);
+		live.publish([
+			{
+				model: 'orders',
+				id: randomUUID(),
+				op: 'create',
+				revision: 1,
+				transaction: '1',
+				cause: 'direct',
+				old: null,
+				new: { title: 'new' }
+			}
+		]);
 		yield* live.settled;
 		expect(reads).toBe(asked);
 		expect(yield* live.retained).toBe(0);
 	}).pipe(Effect.scoped)
+);
+
+it.effect(
+	'retained images save only the payload: every registration still reads with current authority',
+	() =>
+		Effect.gen(function* () {
+			let count = 0,
+				denied = false;
+			let value = { orders: { rows: [{ id: 'one', title: 'First' }], next: null } };
+			const live = yield* hub(() =>
+				Effect.suspend(() => {
+					count++;
+					return denied
+						? Effect.fail(BoltError.make('forbidden', 'admission', 'No access'))
+						: Effect.succeed([value]);
+				})
+			);
+			const watched = yield* watch(live, yield* memberOf(randomUUID(), true));
+			const read = yield* lower_read(manifest, 'query', [{ orders: {} }]);
+			const known = sha256_hex(JSON.stringify(value));
+			yield* live.register(watched.conn, 'cached', { read, known });
+			yield* Effect.yieldNow;
+			expect(watched.frames.at(-1)).toEqual({ t: 'same', view: 'cached', v: 0, known });
+			expect(count).toBe(1);
+			expect(yield* live.retained).toBeGreaterThan(0);
+			value = { orders: { rows: [{ id: 'one', title: 'Changed' }], next: null } };
+			yield* live.register(watched.conn, 'changed', { read, known });
+			yield* Effect.yieldNow;
+			expect(watched.frames.at(-1)).toMatchObject({ t: 'answer', view: 'changed', value });
+			denied = true;
+			yield* live.register(watched.conn, 'denied', { read, known });
+			yield* Effect.yieldNow;
+			expect(watched.frames.at(-1)).toMatchObject({
+				t: 'error',
+				view: 'denied',
+				code: 'forbidden'
+			});
+			expect(count).toBeGreaterThan(2);
+		}).pipe(Effect.scoped)
 );

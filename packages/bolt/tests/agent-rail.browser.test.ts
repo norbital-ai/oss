@@ -247,6 +247,7 @@ const withComposer = async (
 					};
 					yield* Effect.promise(async () => {
 						const props = {
+							envoys: {},
 							api,
 							bolt,
 							read: (request: Parameters<FinderRead>[0]) => view.query(request)

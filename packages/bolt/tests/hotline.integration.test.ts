@@ -23,7 +23,7 @@ const present = <A>(value: A | null | undefined): A => {
 
 const runtime_accounts = [
 	{ id: 'hotline_a', integration: 'whatsapp', status: { state: 'connected' } },
-	{ id: 'hotline_b', integration: 'whatsapp', status: { state: 'connected' } },
+	{ id: 'hotline_b', integration: 'whatsapp', status: { state: 'connected' } }
 ] as const;
 
 const manifest = {
@@ -144,7 +144,11 @@ function scriptedAi() {
 					const last = present(
 						request.messages.findLast(
 							// the step's notes (available actions) and conversation state are context, not what was said
-							(m) => !(typeof m.content === 'string' && /^\[(?:note\]|conversation state)/.test(m.content))
+							(m) =>
+								!(
+									typeof m.content === 'string' &&
+									/^\[(?:note\]|conversation state)/.test(m.content)
+								)
 						)
 					);
 					if (last.role === 'tool')
@@ -155,8 +159,7 @@ function scriptedAi() {
 					const pay = /^(?:\[[^\]\n]*\] )?pay (\S+)$/m.exec(said);
 					if (pay !== null)
 						return call('act', {
-							callable: 'payslips.update',
-input: [{ target: present(pay[1]), set: { status: 'paid' } }]
+							acts: { 'payslips.update': [{ target: present(pay[1]), set: { status: 'paid' } }] }
 						});
 					const find = /^(?:\[[^\]\n]*\] )?find (\S+)$/m.exec(said);
 					if (find !== null) return call('history', { query: present(find[1]), scope: 'mine' });
@@ -365,7 +368,9 @@ describe('durable admission', () => {
 
 					const all = yield* admissions('%');
 					const o = (yield* act_reply(route, (yield* t.as(t.admin)).authority, {
-						acts: { 'sys_integration.update': [{ target: { id: 'hotline_a' }, set: { active: false } }] },
+						acts: {
+							'sys_integration.update': [{ target: { id: 'hotline_a' }, set: { active: false } }]
+						},
 						issued_at: t.clock.now()
 					})).outcome;
 					expect(o.kind).toBe('committed');

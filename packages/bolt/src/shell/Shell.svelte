@@ -914,7 +914,7 @@
 				tab={current.tab}
 				on_tab={(x) => navigate(`/command-center/${x}`)}
 				admin={boot.admin}
-				startable={boot.startable ?? []}
+				startable={boot.startable}
 				run={url.searchParams.get('run')}
 				on_run={openRun}
 				on_conversation={boot.surfaces.agent ? (conversation) => agent.open({ conversation }) : null}
@@ -1209,7 +1209,7 @@
 		{#if bolt !== null}
 			<Finder
 				bind:open={finding}
-				entries={boot.search ?? []}
+				entries={boot.search}
 				initial_scope={url.searchParams.get('find')}
 				on_close={() => {
 					if (url.searchParams.has('find')) {
@@ -1257,11 +1257,11 @@
 							catalog={bolt.catalog}
 							zone={bolt.tz}
 							nav={boot.nav}
-							entries={boot.search ?? []}
+							entries={boot.search}
 							request={agentRequest}
 							unconfigured={boot.ai_unconfigured === true}
 							admin={boot.admin}
-							envoys={boot.envoys ?? {}}
+							envoys={boot.envoys}
 							on_conversation={agentConversation}
 							storage_key={agentMemory}
 						/>

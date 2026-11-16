@@ -291,6 +291,9 @@ it.effect('a list read names its light fields and FKs, plus any heavy column', (
 		assert.deepEqual(listRequest({ docs: ex }, 'docs', {}, ['name', 'fingerprint']), {
 			docs: { fields: ['name', 'owner', 'fingerprint'] }
 		});
+		assert.deepEqual(listRequest({ docs: ex }, 'docs', { fields: ['revision'] }, ['name']), {
+			docs: { fields: ['revision', 'name'] }
+		});
 	})
 );
 

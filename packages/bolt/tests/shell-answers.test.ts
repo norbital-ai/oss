@@ -135,7 +135,12 @@ const boot = {
 	read_catalog: {
 		customer: {
 			brief: {
-				customer: { model: 'customer', many: false, list_fields: ['name'], fields: { name: { kind: 'text' } } }
+				customer: {
+					model: 'customer',
+					many: false,
+					list_fields: ['name'],
+					fields: { name: { kind: 'text' } }
+				}
 			}
 		}
 	},
@@ -381,6 +386,10 @@ describe('shell answers', () => {
 			const protocol = { status: 200, code: 'protocol' };
 			expect(yield* Effect.flip(answering({ ...boot, nav: {} }).boot())).toMatchObject(protocol);
 			expect(yield* Effect.flip(answering({ contract: 'x' }).boot())).toMatchObject(protocol);
+			for (const field of ['envoys', 'startable', 'search', 'contract'])
+				expect(yield* Effect.flip(answering({ ...boot, [field]: undefined }).boot())).toMatchObject(
+					protocol
+				);
 			expect(
 				yield* Effect.flip(answering({ ...settings, members: null }).settings())
 			).toMatchObject(protocol);

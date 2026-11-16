@@ -1,17 +1,38 @@
 // The intelligence facility: System 1's structured decisions, System 2's model calls and embeddings.
-import { Schema, type Stream } from 'effect';
+import { Predicate, Schema, type Stream } from 'effect';
 import type { PortFailure } from './errors.ts';
 import type { Json } from '@norbital-ai/store';
 
-/** The host's system-2 answer; transcript storage keeps its native toolCalls projection behind the adapter. */
-export const AiPortResponseSchema = Schema.Struct({
-	content: Schema.Json,
-	tool_calls: Schema.Array(Schema.Struct({
+/** Fields every AI provider receives; engine transcript metadata is not part of this contract. */
+export const AiToolCallSchema = Schema.Struct({
 		id: Schema.String,
 		name: Schema.String,
 		input: Schema.Json,
 		invalid: Schema.optionalKey(Schema.String)
-	})),
+	});
+/** Assistant text, preserved reasoning and tool calls passed to the provider. */
+export const AiAssistantContent = Schema.Struct({
+	text: Schema.optionalKey(Schema.String),
+	reasoning: Schema.optionalKey(Schema.String),
+	toolCalls: Schema.optionalKey(Schema.Array(AiToolCallSchema))
+});
+/** A tool call result passed back to the provider. */
+export const AiToolResult = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	result: Schema.optionalKey(Schema.Json)
+	});
+/** Text projection shared by the producer and provider. */
+export const textOf = (content: Json): string => {
+	if (typeof content === 'string') return content;
+	const text = Predicate.isObject(content) ? content['text'] : undefined;
+	return typeof text === 'string' ? text : JSON.stringify(content);
+};
+
+/** The host's system-2 answer; transcript storage keeps its native toolCalls projection behind the adapter. */
+export const AiPortResponseSchema = Schema.Struct({
+	content: Schema.Json,
+	tool_calls: Schema.Array(AiToolCallSchema),
 	finish: Schema.Literals(['stop', 'tool', 'cut']),
 	continuation: Schema.optionalKey(Schema.String),
 	reasoning: Schema.optionalKey(Schema.String),

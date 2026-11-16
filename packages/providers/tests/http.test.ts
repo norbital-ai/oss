@@ -14,7 +14,9 @@ afterAll(() => {
 	for (const s of servers) s.close();
 });
 /** A local endpoint answering each request with `handle`'s status and JSON body. */
-async function serve(handle: (url: URL, body: Buffer) => { status: number; json?: unknown }): Promise<string> {
+async function serve(
+	handle: (url: URL, body: Buffer) => { status: number; json?: unknown }
+): Promise<string> {
 	const s = createServer((req, res) => {
 		const chunks: Buffer[] = [];
 		req
@@ -522,19 +524,21 @@ describe('a read-only GitHub connection', () => {
 			expect(calls).toEqual([]);
 		})
 	);
-	it.effect('never names the token in a refusal: write scopes, a refused token, an unreachable GitHub', () =>
-		Effect.gen(function* () {
-			const calls: string[] = [];
-			const messages: string[] = [];
-			for (const answer of [
-				{ status: 200, scopes: 'read:user, repo' },
-				{ status: 401 },
-				{ status: 500 },
-				'throws'
-			] as const)
-				messages.push((yield* Effect.flip(github_token(TOKEN, user(answer, calls)))).message);
-			expect(messages[0]).toMatch(/write scopes \(repo\)/);
-			for (const message of messages) expect(message).not.toContain(TOKEN);
-		})
+	it.effect(
+		'never names the token in a refusal: write scopes, a refused token, an unreachable GitHub',
+		() =>
+			Effect.gen(function* () {
+				const calls: string[] = [];
+				const messages: string[] = [];
+				for (const answer of [
+					{ status: 200, scopes: 'read:user, repo' },
+					{ status: 401 },
+					{ status: 500 },
+					'throws'
+				] as const)
+					messages.push((yield* Effect.flip(github_token(TOKEN, user(answer, calls)))).message);
+				expect(messages[0]).toMatch(/write scopes \(repo\)/);
+				for (const message of messages) expect(message).not.toContain(TOKEN);
+			})
 	);
 });

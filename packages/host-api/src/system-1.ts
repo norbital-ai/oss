@@ -24,9 +24,7 @@ const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 
 const DecisionImage = Schema.Struct({
 	type: Schema.Literal('image_url'),
 	image_url: Schema.Struct({
-		url: Schema.String.check(
-			Schema.isPattern(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/)
-		)
+		url: Schema.String
 	})
 });
 /** Inline images only: stored references are resolved by their owner, never by a provider fetching an arbitrary URL. */
@@ -62,6 +60,15 @@ export const decision_images = (state: DecisionRequest['state']) =>
 					message: 'System 1 images exceed the 16-image / 20 MiB budget'
 				})
 			);
+		// Check the budget before scanning payloads. A whole-image backtracking regex can exhaust the JS stack.
+		for (const image of images) {
+			const url = image.image_url.url, data = imageData(image);
+			const body = data.slice(0, data.length - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0));
+			if (
+				!['data:image/png;base64', 'data:image/jpeg;base64'].includes(url.slice(0, url.indexOf(','))) ||
+				body.length === 0 || /[^A-Za-z0-9+/]/.test(body)
+			) return yield* FacilityFailure.invalid('System 1 images must be inline PNG or JPEG base64 data');
+		}
 		return { text, images };
 	});
 /** System 1 as an Effect: one bounded decision call, failing as a facility failure or `unavailable`; a host adapts it to its `System1Port`. */

@@ -1,5 +1,5 @@
 import type { AiRequest, OpenAiChat } from '@norbital-ai/host-api';
-import { open_ai_chat, type OpenAiChatConfig } from '@norbital-ai/bolt/engine';
+import { open_ai_chat, type OpenAiChatConfig } from '../openai/index.ts';
 import { Array as EffectArray, Hash } from 'effect';
 
 type DeepSeekRouting = {
@@ -52,7 +52,10 @@ export const open_router_chat =
 					...config.body,
 					...(routing.provider === undefined
 						? {}
-						: { provider: { ...routing.provider, ...preferences }, session_id: session_of(request) })
+						: {
+								provider: { ...routing.provider, ...preferences },
+								session_id: session_of(request)
+							})
 				}
 			},
 			options

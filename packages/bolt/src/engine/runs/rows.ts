@@ -12,12 +12,17 @@ import { storedInstant } from '@norbital-ai/host-api';
 import type { Chain } from '../write/sql.ts';
 import { RunAttempt, RunError } from './attempt.ts';
 
+/** A suspended run still owns work; only its eventual settlement completes a watcher. */
+export const runPending = (state: string): boolean =>
+	state === 'queued' || state === 'running' || state === 'waiting';
+
 /** Native run captures include the same timestamp and trigger-name projection as an authorized read. */
 export const runPiece = (c: Chain, name: string, statement: string, options: { readonly returning?: string } = {}): string =>
 	capturePiece(c, name, 'sys_run', statement, { ...options, image: (alias) =>
 		`to_jsonb(${alias}) || jsonb_build_object('due_at', ${alias}.due_at::text, 'started', ${alias}.started_at::text,
 		'trigger_name', (SELECT coalesce(u.name, u.email) FROM sys_user u
-		WHERE u.id::text = coalesce(${alias}.trigger->'actor'->>'id', ${alias}.trigger->'actor'->>'member')))` });
+		WHERE u.id::text = coalesce(${alias}.trigger->'actor'->>'id', ${alias}.trigger->'actor'->>'member')))`
+	});
 
 const HolderSchema = Schema.Struct({
 	actor: EngineActorSchema,
@@ -74,7 +79,9 @@ export const visible_run_names = (authority: Authority): readonly string[] => [
 	...authority.automations,
 	...authority.capabilities.syncs.flatMap((key) => {
 		const dot = key.lastIndexOf('.');
-		return dot > 0 && dot < key.length - 1 ? [`${key.slice(0, dot)}.sync.${key.slice(dot + 1)}`] : [];
+		return dot > 0 && dot < key.length - 1
+			? [`${key.slice(0, dot)}.sync.${key.slice(dot + 1)}`]
+			: [];
 	})
 ];
 export function readsRunResult(
@@ -150,7 +157,12 @@ export function run_view(authority: Authority, row: RunViewRow, brief = false): 
 }
 /** The list's admission matches its SQL head before applying per-row result visibility. */
 export function listedRun(authority: Authority, row: RunViewRow, brief = false): RunView | null {
-	if (authority.actor.kind !== 'member' || (!authority.admin && row.actor !== actor_ref(authority.actor) && !visible_run_names(authority).includes(row.automation)))
+	if (
+		authority.actor.kind !== 'member' ||
+		(!authority.admin &&
+			row.actor !== actor_ref(authority.actor) &&
+			!visible_run_names(authority).includes(row.automation))
+	)
 		return null;
 	return run_view(authority, row, brief);
 }

@@ -13,7 +13,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 - The answer maps each root to `{ rows, next, total }`. `total` counts every match in the same statement, linear in the match. An index search root and a nested many-layer carry none: use `aggregate` on that layer.
 - A user filter composes with the policy per key (`where` AND, `limit` capped); nothing widens it.
 - A policy filters an output's rows with `where`, and a layer's with `<relation>: { where }`. Own rows: `outputs: { default: { where: { created_by: { eq: { var: 'actor.id' } } } } }`. An output grant's keys are `where`, root `history` and the model's relations; nothing else (no `scope`).
-- Every list defaults to limit 10,000 and the root's order; page on with `after`. A complete read past the cap fails `TooLarge`, never truncates.
+- Every list defaults to limit 10,000 and the root's order. A root returns `next` when more rows remain; pass it as `after` until it is `null` before treating the rows as a complete set. Do not calculate full-book totals from a partial page.
 - Filter and project in the request, never in memory.
 
 | Caller | Reads as |
@@ -74,9 +74,15 @@ An update or delete names its selected row as `target`; its revision guards the 
 
 - Counts, sums and groups use a root or layer `aggregate`, or roll-up fields, never loops. Pages and server bodies use the same read request.
 - Ungrouped answers one object (`count` only when asked); grouped pages buckets, each with `key` and `count`.
-- Shape: `{ by?, count?: true, sum?|avg?|min?|max?: [field], where? }`; `by` is a field, a list, or `{ <day|week|month|quarter|year>: field }`, and a grouped aggregate states `limit` or `all: true`. A bucket is `{ key: { <by> }, count, sum: { <field> } }`.
+- Shape: `{ by?, count?: true, sum?|avg?|min?|max?: [field], where? }`; `by` is a field, a list, or `{ <day|week|month|quarter|year>: field }`. Set the root's `limit` and follow `next` with `after` when a grouped aggregate has more buckets. A bucket is `{ key: { <by> }, count, sum: { <field> } }`.
 - View counts describe the full authorized scope: reuse them. A figure reused across screens is a roll-up or a shared helper.
 
 ## Search
 
 `{ search: { index: input }, limit }` on the same API. The probe's `where` narrows inside the scan; output and grants apply; rerank orders candidates.
+
+## Browser reuse and freshness
+
+Identical live reads in one mounted client share one subscription. A read remains live for 30 seconds after its last consumer leaves, so a quick return uses its current image without another request. After that, its subscription ends; up to 64 inactive authoritative images (4 MiB total) stay in that client's memory. Re-entry sends the read and the image's SHA-256. The server authorizes and executes the read again: an equal answer sends a small `same` frame, a changed answer sends the current value, and a refusal exposes no retained value. An inactive image is never presented as freshly validated before this response. Active views receive selected row patches; uncertain changes fall back to an authoritative read.
+
+The cache belongs to one client, workspace, environment and principal. It is not persisted to browser storage or shared across workspace origins. Release changes clear retained images; signing out or replacing the client ends its cache. A missing, evicted or invalid image takes the normal full-answer path. Reuse saves transfer, never permission checks or freshness checks.

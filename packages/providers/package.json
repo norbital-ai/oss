@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/providers",
-	"version": "0.0.8",
+	"version": "0.0.9",
 	"description": "Bolt's built-in integration drivers (WhatsApp via Web or Twilio, Telegram, Slack, Discord, WeChat, IMAP + SMTP mailboxes, Google Calendar), registered by a host.",
 	"type": "module",
 	"sideEffects": false,
@@ -25,6 +25,10 @@
 		"./openrouter": {
 			"types": "./build/openrouter/index.d.ts",
 			"default": "./build/openrouter/index.js"
+		},
+		"./openai": {
+			"types": "./build/openai/index.d.ts",
+			"default": "./build/openai/index.js"
 		}
 	},
 	"files": [
@@ -37,18 +41,21 @@
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/providers"
 	},
 	"dependencies": {
-		"@norbital-ai/bolt": "workspace:*",
 		"@norbital-ai/host-api": "workspace:*",
+		"@norbital-ai/store": "workspace:*",
 		"effect": "catalog:",
 		"imapflow": "2.9.1",
+		"mssql": "12.7.13",
 		"nodemailer": "10.2.1",
-		"postal-mime": "4.1.4"
+		"postal-mime": "4.1.4",
+		"web-push": "^3.6.7"
 	},
 	"optionalDependencies": {
 		"@whiskeysockets/baileys": "7.0.0-rc14"
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
+		"@effect/vitest": "catalog:",
 		"@getdial/sdk": "0.19.1",
 		"@googleapis/chat": "44.7.0",
 		"@larksuiteoapi/node-sdk": "1.76.0",
@@ -61,14 +68,17 @@
 		"@octokit/rest": "22.0.1",
 		"@spectrum-ts/core": "10.0.0",
 		"@spectrum-ts/imessage": "10.0.0",
+		"@types/mssql": "12.3.0",
 		"@types/node": "^26.6.5",
+		"@types/web-push": "^3.6.4",
 		"@xdevplatform/chat-xdk": "0.4.3",
 		"@xdevplatform/xdk": "0.6.6",
 		"google-auth-library": "10.5.0",
 		"juicebox-sdk": "0.3.7",
 		"resend": "6.37.0",
 		"sendblue": "3.21.2",
-		"typescript": "catalog:"
+		"typescript": "catalog:",
+		"vitest": "5.0.5"
 	},
 	"repository": {
 		"type": "git",

@@ -4,12 +4,12 @@ Read the owning package's scripts and config. A filename outside its include pat
 
 ## Runners
 
-| Area | Entry |
-| --- | --- |
-| Everything | `bun run test [paths…]` from the realm root, one worker pool |
-| Inside a template | `bolt test` |
-| Shared controls | the ui package's mounted tests in happy-dom |
-| Real Chromium platform tests | `oss/packages/bolt` Vitest browser mode |
+| Area                         | Entry                                                        |
+| ---------------------------- | ------------------------------------------------------------ |
+| Everything                   | `bun run test [paths…]` from the realm root, one worker pool |
+| Inside a template            | `bolt test`                                                  |
+| Shared controls              | the ui package's mounted tests in happy-dom                  |
+| Real Chromium platform tests | `oss/packages/bolt` Vitest browser mode                      |
 
 Add no browser launcher or `.svelte` mounts to templates. Never give a suite its own pool. Suites that hold native memory
 (PGlite, browsers) run with Vitest `pool: 'forks'`: the threads pool keeps native memory in the main process.
@@ -29,6 +29,7 @@ Add no browser launcher or `.svelte` mounts to templates. Never give a suite its
 - Kit controls: `t.clock.set` / `advance`, `t.run_due()`, `t.settled()`, `t.db.rows`, `t.fakes` (`sent` mail, `files.blobs`, `ai`, `links`), `t.count`.
 - One file's tests share one workspace, in order: rows stay from test to test, so filter to the rows a test made. A cron slot that wrote runs once per file: start each test's clock past the last one's.
 - A model `effect`, a job automation and a schedule queue a run: `t.run_due()` runs it and answers the failed ones; `t.settled()` only waits. Use `caller.run(name, input, JobResult)` for a job receipt, then inspect that run's completion separately. Import the real `JobResult` schema from `@norbital-ai/bolt-cli/test`.
+- `runAutomation(t, caller.run(name, input, JobResult))` executes a queued job and returns its native ledger result; assert `state` and output or error. `settledRun(t, id)` inspects an existing run after draining due work. Both refuse to call a queued, running or waiting run settled; advance the clock or deliver its event first.
 - A call automation returns its native output immediately, without a run row. `caller.run(name, input, outputSchema)` requires its actual result decoder; the decoder determines the result type and a mismatch fails with `SchemaError`. Pass job options after the decoder. There is no arbitrary result type argument or omitted-decoder fallback.
 - `query`, `history` and `act` return schemas derived from the running manifest. `t.stored_query` supplies the native whole-row reader; `yield* t.body_acts(holder)` the native atomic act-map writer. Their dynamic fields are not an unrelated authored type. Decode the page or fields a test uses with `Schema.decodeUnknownEffect`; for already-revived decimal/date values, use the native type schema (`Schema.toType(input_schema(...))`). Preserve native values rather than serializing them through JSON. Never cast a fake `ctx` or fabricate a generic schema predicate.
 - Native engine tests use PGlite and maintained migration fixtures. Dispose resources.

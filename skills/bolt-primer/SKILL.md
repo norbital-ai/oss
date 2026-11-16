@@ -11,12 +11,12 @@ A `+` file is a compiler role, default-exporting its declaration; its path is it
 
 - `+workspace.ts` `workspace(spec)`: zone, locale, currency, apps, capabilities
 - `+secrets.ts` `secrets(spec)`: secret names
-- `data/model/<name>/+model.ts` `model(spec)`: fields, reads, writes, state, search, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view; `+<sync>.sync.ts` `sync('<model>', '<sync>', spec)`: a file or remote sync
+- `data/model/<name>/+model.ts` `model('<name>', spec)`: fields, reads, writes, state, search, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view; `+<sync>.sync.ts` `sync('<model>', '<sync>', spec)`: a file or remote sync
 - `data/custom_field/<name>/+custom_field.ts` `custom_field(spec)`, `+renderer.svelte`: value type
 - `access_control/policy/+<name>.policy.ts` `policy(spec)`: what holders may do
 - `access_control/team/+team.ts` `team(spec)`: team handles to policies
 - `automation/+<name>.automation.ts` `automation(spec)`: job or call with its own policies; `agent` controls its use as a tool
-- `integration/<name>/+integration.ts` `integration(spec)`, `+integration.svelte`: connection, setup
+- `integration/<name>/+integration.ts` `integration('<name>', spec)`, `+integration.svelte`: connection, setup
 - `app/<app>/+app.ts` `app(spec)`: label and `pages`; `+group.ts` `group(spec)`
 - `app/<app>/+<page>.page.svelte`: page with a `ctx` prop
 - `app/<k>/+app.ts` with `shell: 'kiosk'`: shared-device surface with fixed policies
@@ -34,8 +34,8 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 
 `workspace_lang` answers only what a card leaves out:
 
-- A type: `{ op:'type', type:["import('@norbital-ai/ui').TableProps"] }`, several at once. `import('pkg').X` works only for exported types; a value is `typeof import('pkg').x`. Packages: bolt, ui, std, bolt-cli.
-- A declaration's spec: `Parameters<typeof import('pkg').fn>[0]`; its file supplies the name. Narrow with `X['field']`. Models and integrations use their generated per-file binding, not a root declaration imported back from their source.
+- A type: `{ op:'type', type:["import('@norbital-ai/ui').TableProps"] }`, several at once. `import('pkg').X` works only for exported types; a value is `typeof import('pkg').x`. Packages: bolt, ui, bolt-cli; shared numeric and date utilities come from Effect.
+- A declaration's spec: `Parameters<typeof import('pkg').fn>[0]` for single-argument declarations; model and integration take name then spec (`[1]`), sync takes model, name then spec (`[2]`). The declared name must match the source role. Narrow with `X['field']`. Models and integrations use their generated per-file binding, not a root declaration imported back from their source.
 - `type` answers any shape with no file. `completions`, `hover`, `signature` need path, line, column of a file you are writing: a file written only to ask is a wasted edit.
 - Live names: `describe_workspace`, `workspace_list_dir`.
 
@@ -54,7 +54,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - A policy can only grant a verb the model declares; it filters rows, never shape.
 - An automation runs with its declared `policies`, never its starter's; `actor.*` there matches nothing.
 - Effectful bodies are `function*` and `yield*` their `ctx` Effects.
-- Decimals in policy and model code use `dec` values from the decimal module, never plain numbers.
+- Exact decimal calculations use Effect `BigDecimal`; stored decimal values are strings, never binary floating-point approximations.
 - Named constraints take arrays for `unique` and `per`. Mark one unique constraint `import_key: true` for matching imports. Computed expressions live on fields; physical and search indexes live under `indexes`.
 - Each create/update transform and per-verb effect receives `{ before, set, after, changed }` changes. Return sets or `{ sets, with, on_approved }` from create/update transforms; a delete transform returns nothing or `{ with, on_approved }`. Effects receive approval lifecycle details in `ctx.event`.
 - Commit related writes through one `ctx.act({ '<model>.<verb>': inputs })` map. Update/delete targets carry selected rows and their revisions. There are no `many`, `checked`, upsert or transaction alternatives.
@@ -64,6 +64,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - Never rebuild search, filters, paging, import/export, approvals, history or label maps: the views render them.
 
 Detail: the `authoring-tenant-workspace` skill indexes every reference.
+
 - A test sets no `timeout` option and never waits on the wall clock: the test lint refuses the run even when every case passes.
 - Porting a system: `reference` its repository first, then read its schema, routes, jobs and permissions with `read_file` (a script over `tool('read_file', …)` reads many at once). Inventory every capability, map each to a Bolt mechanism, build from that, never from memory of the product. Import and export carry over as a file sync per model that had them.
 

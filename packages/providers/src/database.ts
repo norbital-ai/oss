@@ -34,7 +34,10 @@ function scalar(value: unknown): Json {
 	if (typeof value === 'bigint') return value.toString();
 	if (Buffer.isBuffer(value)) return `0x${value.toString('hex')}`;
 	if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString();
-	throw new FacilityFailure({ kind: 'upstream', message: 'Database returned an unsupported value; cast it explicitly.' });
+	throw new FacilityFailure({
+		kind: 'upstream',
+		message: 'Database returned an unsupported value; cast it explicitly.'
+	});
 }
 export function sqlServerDatabase() {
 	return {
@@ -42,7 +45,9 @@ export function sqlServerDatabase() {
 			Effect.scoped(
 				Effect.gen(function* () {
 					if (new TextEncoder().encode(JSON.stringify(given)).byteLength > HOST_LIMITS.argsBytes)
-						return yield* Effect.fail(FacilityFailure.invalid('Database request exceeds its bounds.'));
+						return yield* Effect.fail(
+							FacilityFailure.invalid('Database request exceeds its bounds.')
+						);
 					const request = yield* Effect.try({
 						try: () => compile_sql_server(given),
 						catch: () => FacilityFailure.invalid('Database request is invalid.')
@@ -53,7 +58,10 @@ export function sqlServerDatabase() {
 						);
 					if (Object.keys(request.parameters).length > 2_100)
 						return yield* Effect.fail(
-							new FacilityFailure({ kind: 'invalid', message: 'Database transport parameter limit exceeded.' })
+							new FacilityFailure({
+								kind: 'invalid',
+								message: 'Database transport parameter limit exceeded.'
+							})
 						);
 					const parsed = yield* Effect.try({
 						try: () => mssql.ConnectionPool.parseConnectionString(credential),
@@ -62,7 +70,11 @@ export function sqlServerDatabase() {
 					});
 					if (parsed.options?.instanceName !== undefined)
 						return yield* Effect.fail(
-							new FacilityFailure({ kind: 'unsupported', message: 'Named-instance discovery is unavailable; configure an explicit SQL Server TCP port.' })
+							new FacilityFailure({
+								kind: 'unsupported',
+								message:
+									'Named-instance discovery is unavailable; configure an explicit SQL Server TCP port.'
+							})
 						);
 					if (typeof parsed.server !== 'string' || parsed.server.trim() === '')
 						return yield* Effect.fail(
@@ -79,7 +91,10 @@ export function sqlServerDatabase() {
 						].includes(parsed.authentication.type)
 					)
 						return yield* Effect.fail(
-							new FacilityFailure({ kind: 'unsupported', message: 'Automatic database credential discovery is unavailable.' })
+							new FacilityFailure({
+								kind: 'unsupported',
+								message: 'Automatic database credential discovery is unavailable.'
+							})
 						);
 					const hostname = parsed.server;
 					const port = parsed.options?.port ?? parsed.port ?? 1433;
@@ -105,7 +120,10 @@ export function sqlServerDatabase() {
 									connection.config.options.connector = () =>
 										connection.routingData !== undefined
 											? Promise.reject(
-													new FacilityFailure({ kind: 'unsupported', message: 'SQL Server rerouting is unavailable.' })
+													new FacilityFailure({
+														kind: 'unsupported',
+														message: 'SQL Server rerouting is unavailable.'
+													})
 												)
 											: run(
 													connect_public(hostname, port).pipe(
@@ -204,7 +222,10 @@ export function sqlServerDatabase() {
 						const accepted = Result.try({
 							try: () => {
 								if (rows.length >= (request.max_rows ?? DATABASE_MAX_ROWS))
-									throw new FacilityFailure({ kind: 'too_large', message: 'Database result exceeds its row limit.' });
+									throw new FacilityFailure({
+										kind: 'too_large',
+										message: 'Database result exceeds its row limit.'
+									});
 								const value = Object.fromEntries(
 									Object.entries(row).map(([name, value]) => [name, scalar(value)])
 								);
@@ -212,7 +233,10 @@ export function sqlServerDatabase() {
 									new TextEncoder().encode(JSON.stringify(value)).byteLength +
 									(rows.length === 0 ? 0 : 1);
 								if (size > DATABASE_MAX_BYTES)
-									throw new FacilityFailure({ kind: 'too_large', message: 'Database result exceeds its byte limit.' });
+									throw new FacilityFailure({
+										kind: 'too_large',
+										message: 'Database result exceeds its byte limit.'
+									});
 								rows.push(value);
 							},
 							catch: failure('Database request failed.')
@@ -248,7 +272,10 @@ export function sqlServerDatabase() {
 					duration: QUERY_MS,
 					orElse: () =>
 						Effect.fail(
-							new FacilityFailure({ kind: 'timeout', message: 'Database request exceeded its wall.' })
+							new FacilityFailure({
+								kind: 'timeout',
+								message: 'Database request exceeded its wall.'
+							})
 						)
 				})
 			)

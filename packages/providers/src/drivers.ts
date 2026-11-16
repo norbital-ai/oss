@@ -12,7 +12,13 @@ import {
 } from '@norbital-ai/host-api';
 import type { Json } from 'effect/Schema';
 import { http_port, public_fetch } from '@norbital-ai/host-api/node';
-import { GITHUB_TOKEN_HINT, github_read_only, github_token, http_oauth, http_request } from './http.ts';
+import {
+	GITHUB_TOKEN_HINT,
+	github_read_only,
+	github_token,
+	http_oauth,
+	http_request
+} from './http.ts';
 import {
 	attempt,
 	authorizeUrl,
@@ -24,14 +30,10 @@ import {
 	hostCall,
 	withFetch,
 	type OAuthApp
-} from '@norbital-ai/providers';
-import { simulatedProviders } from '@norbital-ai/providers/simulator';
-import { ProviderRuntime, type ProviderDef } from '@norbital-ai/providers/abi';
-import {
-	PairingInvalid,
-	ProviderRefused,
-	ProviderUnavailable
-} from '@norbital-ai/providers/errors';
+} from './catalogue.ts';
+import { simulatedProviders } from './simulator/index.ts';
+import { ProviderRuntime, type ProviderDef } from './abi.ts';
+import { PairingInvalid, ProviderRefused, ProviderUnavailable } from './errors.ts';
 import { sqlServerDatabase } from './database.ts';
 
 type DriversOptions = {
@@ -286,7 +288,9 @@ export function sqlServerProvider(database: ReturnType<typeof sqlServerDatabase>
 								message: 'the instance is not paired: its connection string is missing'
 							})
 						);
-					const request = yield* Schema.decodeUnknownEffect(DatabaseRequest, { onExcessProperty: 'error' })(operation).pipe(
+					const request = yield* Schema.decodeUnknownEffect(DatabaseRequest, {
+						onExcessProperty: 'error'
+					})(operation).pipe(
 						Effect.mapError(
 							() => new ProviderRefused({ message: 'Invalid database request.', permanent: true })
 						)

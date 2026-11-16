@@ -119,7 +119,11 @@ export type PlannedCommit = {
 	readonly lock?:
 		{ readonly tables: readonly string[]; readonly mode: 'SHARE ROW EXCLUSIVE' } | undefined;
 	/** Records the caller observed at an older revision, and the fields updates have moved since (`moved`). */
-	readonly moved?: readonly { readonly model: string; readonly id: string; readonly fields: readonly string[] }[];
+	readonly moved?: readonly {
+		readonly model: string;
+		readonly id: string;
+		readonly fields: readonly string[];
+	}[];
 	/** The tables the act's callbacks read (`ctx.query`): a moved record of one is read, whichever fields. */
 	readonly reads?: readonly string[];
 };
@@ -257,9 +261,11 @@ export type CallablesShape = {
 	readonly acts: (request: ActsRequest) => Effect.Effect<CallResult, EngineError>;
 	readonly start: (request: StartRequest) => Effect.Effect<Outcome, EngineError>;
 	readonly sync_control: (request: SyncControlRequest) => Effect.Effect<Outcome, EngineError>;
-	readonly admitAutomation: (request: Omit<AutomationRequest, 'input'> & {
-		readonly inputs: readonly Json[];
-	}) => Effect.Effect<readonly Json[] | Extract<Outcome, { kind: 'refused' }>, EngineError>;
+	readonly admitAutomation: (
+		request: Omit<AutomationRequest, 'input'> & {
+			readonly inputs: readonly Json[];
+		}
+	) => Effect.Effect<readonly Json[] | Extract<Outcome, { kind: 'refused' }>, EngineError>;
 };
 export class Callables extends Context.Service<Callables, CallablesShape>()('bolt/Callables') {}
 
@@ -292,9 +298,16 @@ export type AutomationJob = {
 export type AutomationsShape = {
 	readonly park: Effect.Effect<void>;
 	readonly call: (request: AutomationRequest) => Effect.Effect<Outcome, EngineError>;
-	readonly invoke: (execution: AutomationExecution, holder: Holder, input: Json, job?: AutomationJob) => Effect.Effect<GuestOutcome, EngineError>;
+	readonly invoke: (
+		execution: AutomationExecution,
+		holder: Holder,
+		input: Json,
+		job?: AutomationJob
+	) => Effect.Effect<GuestOutcome, EngineError>;
 };
-export class Automations extends Context.Service<Automations, AutomationsShape>()('bolt/Automations') {}
+export class Automations extends Context.Service<Automations, AutomationsShape>()(
+	'bolt/Automations'
+) {}
 
 // ── approvals (E6) ──
 export type ApprovalFilter = {
@@ -350,7 +363,10 @@ export type IdentityShape = {
 	/** A session token (cached, `Cache.make`); no live session fails `IdentityRefusal`. */
 	readonly authenticate: (token: string) => Effect.Effect<Authenticated, IdentityRefusal>;
 	/** Rule 37: compiled once per `key` = (actor, affiliation revision, source release). */
-	readonly authority: (holder: Holder, key?: string | undefined) => Effect.Effect<Authority, BoltError>;
+	readonly authority: (
+		holder: Holder,
+		key?: string | undefined
+	) => Effect.Effect<Authority, BoltError>;
 };
 export class Identity extends Context.Service<Identity, IdentityShape>()('bolt/Identity') {}
 /** The host's transactional identity operations, shared by shell forms and confirmed agent actions. */
@@ -363,6 +379,7 @@ export class HostIdentity extends Context.Service<
 /** One registered view: its read (re-answered when a commit touches what it read). */
 export type LiveView = {
 	readonly read: ReadIR;
+	readonly known?: string;
 };
 export type LiveShape = {
 	/** Rule 66: routes one commit's RETURNING set through the commit lane; synchronous (`Queue.offerUnsafe`); answers the lane `v`. */
@@ -596,10 +613,16 @@ export type AgentsShape = {
 		attachments?: readonly Json[] | undefined
 	) => Effect.Effect<Option.Option<string>, EngineError>;
 	/** An independent snapshot before the chosen input, plus that input for the new composer. */
-	readonly restart: (message: string, by: Authority) => Effect.Effect<{
-		readonly conversation: string;
-		readonly message: MessageRow;
-	}, EngineError>;
+	readonly restart: (
+		message: string,
+		by: Authority
+	) => Effect.Effect<
+		{
+			readonly conversation: string;
+			readonly message: MessageRow;
+		},
+		EngineError
+	>;
 	readonly dequeue: (
 		messageId: string,
 		by?: Authority | undefined
@@ -612,7 +635,11 @@ export type AgentsShape = {
 	readonly execute_plan: (id: string, as: As) => Effect.Effect<TurnResult, EngineError>;
 	readonly discard_plan: (id: string) => Effect.Effect<void, EngineError>;
 	/** Archives (or restores) an in-app conversation, by its owner: off the list, nothing else changes. */
-	readonly archive: (id: string, archived: boolean, by: Authority) => Effect.Effect<void, EngineError>;
+	readonly archive: (
+		id: string,
+		archived: boolean,
+		by: Authority
+	) => Effect.Effect<void, EngineError>;
 	/** Deletes an in-app conversation for good, by its owner, with its messages and sub-agents. */
 	readonly remove: (id: string, by: Authority) => Effect.Effect<void, EngineError>;
 	readonly file: (
@@ -667,10 +694,7 @@ export type LinksShape = {
 		instance: string,
 		message: Json,
 		attachments: readonly OutboundFile[]
-	) => Effect.Effect<
-		SendReceipt,
-		FacilityFailure | Unavailable | SendRefused | Fenced
-	>;
+	) => Effect.Effect<SendReceipt, FacilityFailure | Unavailable | SendRefused | Fenced>;
 	readonly request: (
 		instance: string,
 		operation: Json
@@ -685,7 +709,10 @@ export type OutboundShape = {
 	/** The instance's link connected: what waits for it is due now. */
 	readonly resume: (instance: string) => Effect.Effect<void, EngineError>;
 	/** Durably correlate an in-flight send before the provider contacts its recipient. */
-	readonly reference: (instance: string, reference: OutboundReference) => Effect.Effect<void, EngineError>;
+	readonly reference: (
+		instance: string,
+		reference: OutboundReference
+	) => Effect.Effect<void, EngineError>;
 	readonly delivered: (
 		instance: string,
 		provider_id: string,
@@ -795,4 +822,3 @@ export type FacilitiesShape = {
 	) => ShapeOf<typeof Transport>;
 };
 export class Facilities extends Context.Service<Facilities, FacilitiesShape>()('bolt/Facilities') {}
-

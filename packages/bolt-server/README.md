@@ -1,10 +1,10 @@
 # @norbital-ai/bolt-server
 
-An example untethered host (plan 01): one Bolt workspace's built release served from one process with the
+An example untethered host: one Bolt workspace's built release served from one process with the
 workspace's host file. `bolt-server [workspace]` serves `<workspace>/.norbital/bundle` (or `--artifact=<dir>`) with
 `<workspace>/norbital.host.ts` (or `--host=<file>`); a workspace without a host file is Colony's to serve. Flags:
 `--listen` (default `127.0.0.1`), `--port` (default `3100`), `--trust-proxy=<cidrs>`, `--founder=<address>`,
-`--seed=<pack>`. It depends on `@norbital-ai/host-api` alone, never on Bolt: like Colony, it evaluates the release's own
+`--seed=<pack>`. It consumes shared Host API ports and providers, never Bolt: like Colony, it evaluates the release's own
 Bolt — the workspace's installed `@norbital-ai/bolt` `build/cell.js` — in a cell (`vm_cell`, a `node:vm` context) and
 drives it only through HOST_API: verify, branch and migrate, integration links, activation, then deadline wakes and the
 cron clock. `bolt dev` loads the same host file the same way and makes the same calls on its in-process Bolt. The
@@ -13,8 +13,11 @@ package's own.
 
 A host file default-exports its `Facilities` (`@norbital-ai/host-api`, `satisfies Facilities`) and may export
 `serving` (`Serving`: integration providers, OAuth app, converter, geocoder, web reader, shell badge and push key, and
-`close`). [`example/norbital.host.ts`](example/norbital.host.ts) composes this package's own adapters (`host(settings,
-database, options)`) from `BOLT_*` variables; its header lists them. The variables are the example host file's, not
+`close`). Install `@norbital-ai/bolt-server`, `@norbital-ai/host-api`, `@effect/platform-node`, `effect` and `pg`
+beside the workspace, then copy the packaged [`example/norbital.host.ts`](example/norbital.host.ts).
+It composes this host's adapters with `host(settings, database, options)` from `@norbital-ai/bolt-server/host`,
+the package's only library entry. Shared ports and providers belong to their own packages.
+The example reads `BOLT_*` variables; its header lists them. The variables are the example host file's, not
 Bolt's or bolt-server's: Bolt reads no environment.
 
 Bolt carries no guest runner, and the runner is no facility: this host owns its own, `node_guests()`
@@ -44,9 +47,8 @@ migration checks; runtime flags do not override them.
   with an ES256 provider token per Apple team. A device the service reports gone is deleted; a team without a key
   answers Unavailable. Host messaging is this package's own Resend (`src/resend.ts`) and Twilio (`src/twilio.ts`)
   adapters.
-- `drivers()` is every host's provider list, by driver kind: the conversation and calendar providers
-  `@norbital-ai/providers` ships, then this host's own `http` (`src/http.ts`, under the definition's base URL,
-  through the public guard) and `sqlserver` providers. It returns native `ProviderDef` values;
+- `drivers()` from `@norbital-ai/providers` is every host's provider list, by driver kind: conversation,
+  calendar, guarded `http` (under the definition's base URL) and `sqlserver` providers. It returns native `ProviderDef` values;
   `to_drivers` from `@norbital-ai/providers/abi` adapts them once to the Promise + AbortSignal + JSON
   driver contract at the host boundary. Every host (bolt-server, a platform's own) links instances from it.
 - Integration instances read no host env: an administrator (or whoever may update the instance's row) picks its
@@ -62,6 +64,6 @@ migration checks; runtime flags do not override them.
 - The audit store's migrations (`src/audit/standalone`, `src/audit/scoped`) are verified by
   `pnpm migrations:audit` (`--write` records new native proofs).
 
-The public page reader (`src/web.ts`) reads HTTPS only, pins every checked DNS answer, refuses private
+The shared public page reader (`@norbital-ai/host-api/node`) reads HTTPS only, pins every checked DNS answer, refuses private
 and reserved networks before a socket opens and follows at most five checked redirects.
 `readPublicPage` returns an Effect with typed facility failures, including its thirty-second timeout.
