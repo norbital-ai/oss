@@ -148,9 +148,9 @@ export function background(
 	return [...out.values()];
 }
 
-/** An automation run's state in the session rail: queued counts as running, a skipped run as done. */
+/** An automation run's state in the session rail: queued and waiting (suspended, still owning work) count as running, a skipped run as done. */
 export const runState = (status: string): 'running' | 'done' | 'failed' | 'stopped' =>
-	status === 'queued' || status === 'running'
+	status === 'queued' || status === 'running' || status === 'waiting'
 		? 'running'
 		: status === 'failed'
 			? 'failed'

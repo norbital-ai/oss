@@ -441,10 +441,10 @@ describe('background work in the session rail', () => {
 			{ kind: 'run', id: 'r2' }
 		]);
 	});
-	it('reads a queued run as running and a skipped one as done', () => {
+	it('reads a queued or waiting run as running and a skipped one as done', () => {
 		expect(
-			['queued', 'running', 'succeeded', 'skipped', 'failed', 'stopped'].map(runState)
-		).toEqual(['running', 'running', 'done', 'done', 'failed', 'stopped']);
+			['queued', 'running', 'waiting', 'succeeded', 'skipped', 'failed', 'stopped'].map(runState)
+		).toEqual(['running', 'running', 'running', 'done', 'done', 'failed', 'stopped']);
 	});
 });
 

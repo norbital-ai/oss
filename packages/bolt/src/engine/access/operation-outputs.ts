@@ -22,8 +22,19 @@ export const operation_output_catalog = (manifest: EngineManifest, authority: Au
 	outputs(manifest, authority.actor.kind === 'visitor' ? []
 		: authority.admin ? Object.keys(manifest.automations) : authority.automations);
 
-/** The existing client contract fence covers database shape AND the source identity/shape of operation results. */
-export const client_contract = (manifest: EngineManifest): string => sha256_hex(canonical({
-	schema: schema_slice(manifest),
-	operation_outputs: outputs(manifest, Object.keys(manifest.automations))
-}));
+const contracts = new WeakMap<EngineManifest, string>();
+/**
+ * The existing client contract fence covers database shape AND the source identity/shape of operation results. Hashed
+ * once per manifest: every write that states a contract is compared with it.
+ */
+export const client_contract = (manifest: EngineManifest): string => {
+	let held = contracts.get(manifest);
+	if (held === undefined) {
+		held = sha256_hex(canonical({
+			schema: schema_slice(manifest),
+			operation_outputs: outputs(manifest, Object.keys(manifest.automations))
+		}));
+		contracts.set(manifest, held);
+	}
+	return held;
+};
