@@ -1,10 +1,12 @@
 // A member: the session principal. `party_id` is what the kernel directory grant compares for externals
 //; only a staff member can be an admin. A member signs in with their email or their mobile number:
 // each is unique among members (`phone_key` is the number's digits, as a WhatsApp handle compares it). Read as its
-// `directory` output through the kernel directory or a read grant; written by the admin verbs. An `anonymous` user is a visitor's identity on
+// `directory` output through the kernel directory or a read grant; own `personal` settings use a guarded generated update,
+// while sign-in and access fields keep their native identity verbs. An `anonymous` user is a visitor's identity on
 // a public app or a no-sign-in kiosk: no address, no member; signing in links it (session.ts `verify_code`), and the daily
 // prune removes it 30 days after its last visit unless a record still references it.
 import { bind_system_model } from '../../../../decl/model.ts';
+import { PERSONAL_PREFERENCES_FIELD } from '../../../../decl/preferences.ts';
 
 export default bind_system_model('sys_user')({
 	description: 'A member of the workspace: staff or an external party contact.',
@@ -12,6 +14,8 @@ export default bind_system_model('sys_user')({
 	fields: {
 		email: { kind: 'text', format: 'email', optional: true },
 		name: { kind: 'text' },
+		/** Personal preferences follow the member across devices; only exposed editable fields may be changed. */
+		preferences: PERSONAL_PREFERENCES_FIELD,
 		kind: { kind: 'enum', values: ['staff', 'external', 'anonymous'], default: 'staff' },
 		active: { kind: 'bool', default: true },
 		admin: { kind: 'bool', default: false },
@@ -42,7 +46,12 @@ export default bind_system_model('sys_user')({
 		primary: 'text'
 	},
 
-	outputs: { default: { fields: 'all' }, directory: { fields: ['name'] } },
+	outputs: {
+		default: { fields: 'all' },
+		directory: { fields: ['name'] },
+		personal: { fields: ['name', 'preferences', 'revision'] }
+	},
+	update: { fields: ['name', 'preferences'] },
 	indexes: {
 		by_expression: { on: [{ lower: 'email' }], unique: true },
 		by_phone_key: { on: ['phone_key'], unique: true },

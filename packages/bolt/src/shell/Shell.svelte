@@ -5,6 +5,8 @@
 -->
 <script lang="ts">
 	import { page_live_mode } from '../page/bolt.ts';
+	import { PersonalPreferences } from '../decl/preferences.ts';
+	import { ReadFailed } from '../decl/errors.ts';
 	import { view_client } from '../page/view-client.ts';
 	import { attach, fork, run } from '@norbital-ai/ui/effect';
 	import { Effect, Exit, FiberHandle, Option, Schema, Scope, Stream, SubscriptionRef } from 'effect';
@@ -34,6 +36,7 @@
 		TabStrip,
 		TableSkeleton,
 		Toaster,
+		toast,
 		cn,
 		open_record,
 		provide_representations,
@@ -165,8 +168,18 @@
 	watch([() => theme, () => systemDark.current], ([x, dark]) => applyTheme(x, dark));
 	const dark = $derived(theme === 'dark' || (theme === 'system' && systemDark.current));
 	const chooseTheme = (x: Theme) => {
-		fork(storeTheme(x));
-		theme = x;
+		if (boot?.actor?.kind !== 'member' || bolt === null) {
+			fork(storeTheme(x));
+			theme = x;
+			return;
+		}
+		fork(savePreferences({ appearance: x }), (error) => toast.error(t(error.message)));
+	};
+	const chooseLocale = (value: string) => {
+		if (boot?.actor?.kind !== 'member' || bolt === null) return fork(setLocale(value));
+		const picked = Schema.decodeUnknownOption(PersonalPreferences)({ locale: value });
+		if (Option.isSome(picked))
+			fork(savePreferences(picked.value), (error) => toast.error(t(error.message)));
 	};
 
 	/** The page's URL as the workspace names it: without the base path the host serves it under. */
@@ -178,7 +191,41 @@
 	const configuration = $derived(boot?.admin === true ? systemUiIntent(url) : null);
 	// a signed-out caller's boot is refused, but names the workspace the access pages show
 	let guest = $state<ShellBoot['workspace'] | null>(null);
-	const workspace = $derived(boot?.workspace ?? guest);
+	let bolt = $state.raw<ShellBolt | null>(null);
+	const personalRead = $derived(bolt === null || boot?.actor?.kind !== 'member' ? null : bolt.native_query({
+		m: 'query', a: [{
+			sys_user: { output: 'personal', where: { id: { eq: boot.actor.id } }, fields: ['name', 'preferences', 'revision'], limit: 1 },
+			sys_workspace: { fields: ['name'], limit: 1 }
+		}]
+	}, Schema.Struct({ sys_user: Schema.Struct({
+		rows: Schema.Array(Schema.Struct({ id: Schema.String, revision: Schema.Number, name: Schema.String, preferences: PersonalPreferences })),
+		next: Schema.NullOr(Schema.String), total: Schema.Number
+	}), sys_workspace: Schema.Struct({
+		rows: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.NullOr(Schema.String) })),
+		next: Schema.NullOr(Schema.String), total: Schema.Number
+	}) })));
+	const personal = $derived(personalRead?.current?.sys_user.rows[0]);
+	const workspace = $derived(boot === null ? guest : {
+		...boot.workspace,
+		name: personalRead?.current?.sys_workspace.rows[0]?.name ?? boot.workspace.name
+	});
+	const viewerBoot = $derived(boot === null ? null : { ...boot, name: personal?.name ?? boot.name, workspace: workspace ?? boot.workspace });
+	const savePreferences = Effect.fn('Shell.savePreferences')(function* (change: typeof PersonalPreferences.Type) {
+		const client = bolt, query = personalRead;
+		if (client === null || query === null) return;
+		const row = query.current?.sys_user.rows[0] ?? (yield* query).sys_user.rows[0];
+		if (row === undefined) return yield* new ReadFailed({ code: 'not_found', message: 'Your personal settings could not be loaded.' });
+		yield* client.act({ 'sys_user.update': [{ target: { id: row.id, revision: row.revision }, set: { preferences: { ...row.preferences, ...change } } }] });
+	});
+	watch(() => personal?.preferences, (preferences) => {
+		if (preferences === undefined) return;
+		theme = preferences.appearance ?? 'system';
+		fork(storeTheme(theme));
+		const language = preferences.locale ?? config.manifest.workspace.locale;
+		if (language !== locale) fork(setLocale(language));
+		chimes = preferences.sounds ?? true;
+		writePreference(chimeKey, chimes ? 'on' : 'off');
+	});
 	/** Norbius's last opened conversation, kept per workspace and member so a shared browser never crosses accounts. */
 	const agentMemory = $derived(
 		boot?.actor?.kind === 'member'
@@ -205,6 +252,11 @@
 	);
 	setContext(SOUNDS, sounds);
 	const chooseChimes = (enabled: boolean) => {
+		if (boot?.actor?.kind === 'member' && bolt !== null) {
+			fork(savePreferences({ sounds: enabled }), (error) => toast.error(t(error.message)));
+			if (enabled) void sounds.test();
+			return;
+		}
 		chimes = enabled;
 		writePreference(chimeKey, enabled ? 'on' : 'off');
 		if (enabled) void sounds.test();
@@ -221,7 +273,6 @@
 			sounds.close();
 		};
 	});
-	let bolt = $state.raw<ShellBolt | null>(null);
 	const pageContext = (): ShellPageContext => {
 		if (bolt === null) throw new Error('The workspace shell has not booted.');
 		return page_context(bolt, ui);
@@ -646,9 +697,9 @@
 	/** What waits on the viewer, as the inbox last counted it (boot's count until then). */
 	let waiting = $state<number | null>(null);
 	const model = $derived(
-		boot === null
+		viewerBoot === null
 			? null
-			: navigation_model(waiting === null ? boot : { ...boot, inbox: waiting }, url.pathname, t)
+			: navigation_model(waiting === null ? viewerBoot : { ...viewerBoot, inbox: waiting }, url.pathname, t)
 	);
 	const sessions = $derived(
 		boot?.visitor === null
@@ -760,10 +811,6 @@
 		navigate,
 		open_external: (href) => fork(open_external(device, href)),
 		closePanel: () => agent.close(),
-		preferences: (input) => {
-			if (input.appearance !== undefined) chooseTheme(input.appearance);
-			return { appearance: theme, effective: theme === 'dark' || (theme === 'system' && systemDark.current) ? 'dark' : 'light' };
-		},
 		t
 	}));
 </script>
@@ -985,7 +1032,7 @@
 			{t}
 			environment={workspace?.environment}
 			{locale}
-			on_locale={(locale) => fork(setLocale(locale))}
+			on_locale={chooseLocale}
 			apex={device.pinned ? undefined : workspace?.apex}
 			recovery={workspace?.recovery}
 			{dark}
@@ -1007,7 +1054,7 @@
 			{t}
 			environment={workspace?.environment}
 			{locale}
-			on_locale={(locale) => fork(setLocale(locale))}
+			on_locale={chooseLocale}
 			apex={device.pinned ? undefined : workspace?.apex}
 			{dark}
 			on_theme={() => chooseTheme(dark ? 'light' : 'dark')}
@@ -1059,7 +1106,7 @@
 				{t}
 				environment={boot?.workspace.environment ?? null}
 				{locale}
-				on_locale={(locale) => fork(setLocale(locale))}
+				on_locale={chooseLocale}
 				{theme}
 				on_theme={chooseTheme}
 				{chimes}

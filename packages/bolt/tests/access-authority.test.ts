@@ -308,7 +308,7 @@ describe('engine/access: Authority', () => {
 				check: false
 			}
 		]);
-		expect(required(admin.models.sys_user).update).toHaveLength(0); // identity is written by admin verbs only (38c)
+		expect(required(admin.models.sys_user).update).toEqual([{ policy: '$personal', columns: { sys_user: ['name', 'preferences'] }, check: false }]); // protected identity fields keep their native admin verbs
 	});
 
 	it("update reaches its own policy's default scope, else that policy's named outputs; never another policy's", () => {
@@ -406,15 +406,13 @@ describe('engine/access: Authority', () => {
 		'the kernel directory: staff read staff (id, name); externals themselves and their party',
 		() =>
 			Effect.gen(function* () {
-				expect(required(auth([]).models.sys_user).read).toEqual({
-					directory: {
-						sys_user: [
+				expect(required(auth([]).models.sys_user).read.directory).toEqual({
+					sys_user: [
 							{
 								policy: '$directory',
 								where: { t: 'cmp', field: 'kind', op: 'eq', arg: { _tag: 'Lit', value: 'staff' } }
 							}
 						]
-					}
 				});
 				expect(exposed(m, 'sys_user', 'sys_user', 'sys_user', 'directory')).toEqual(['name']); // id is a system column
 				const ext = yield* compile_authority(
@@ -425,7 +423,7 @@ describe('engine/access: Authority', () => {
 				expect(required(ext.models.sys_user).read.directory?.sys_user?.[0]?.where).toMatchObject({
 					t: 'or'
 				});
-				expect(Object.keys(ext.models)).toEqual(['sys_user']);
+				expect(Object.keys(ext.models)).toEqual(['sys_user', 'sys_workspace']);
 				const visitor = yield* compile_authority(
 					m,
 					{ actor: { kind: 'visitor', app: 'careers', visitor: 'v' }, admin: false, policies: [] },

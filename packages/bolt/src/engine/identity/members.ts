@@ -434,54 +434,6 @@ export const deactivate = (h: IdentityHost, auth: Authority, user: string) =>
 	setFlag(h, auth, user, 'active', false);
 export const reactivate = (h: IdentityHost, auth: Authority, user: string) =>
 	setFlag(h, auth, user, 'active', true);
-/** Personal display name and the administrator's workspace display name; never a change of sign-in or authority. */
-export const AccountSettingsInput = Schema.Struct({
-	name: Schema.optionalKey(Schema.String),
-	workspace_name: Schema.optionalKey(Schema.String)
-});
-export const accountSettings = Effect.fn('Bolt.accountSettings')(function* (
-	h: IdentityHost,
-	auth: Authority,
-	input: typeof AccountSettingsInput.Type
-) {
-	if (auth.actor.kind !== 'member')
-		return yield* Effect.fail(
-			refuse('forbidden', 'Only a signed-in member changes personal settings.')
-		);
-	if (input.workspace_name !== undefined) yield* requireAdmin(auth);
-	const name = input.name?.trim(),
-		workspace = input.workspace_name?.trim();
-	if (name === '' || workspace === '' || (name?.length ?? 0) > 120 || (workspace?.length ?? 0) > 120)
-		return yield* Effect.fail(refuse('check', 'A display name must have 1–120 characters.'));
-	if (name !== undefined || workspace !== undefined) {
-		const s = new IdentityStatement(auth.actor);
-		if (name !== undefined) {
-			identityPiece(
-				s,
-				'u',
-				'sys_user',
-				`UPDATE sys_user SET name = ${s.p(name)}, revision = revision + 1 WHERE id = ${s.p(auth.actor.id)} AND active`
-			);
-			const now = yield* h.now;
-			identityHistory(s, 'sys_user', 'u', now, by(auth), h.writes, writerOf(auth).depth);
-			projection(h, s, 'u', now);
-		}
-		if (workspace !== undefined)
-			s.cte(
-				'workspace_identity',
-				`INSERT INTO sys_config (key, value) VALUES ('workspace.identity', ${s.p(JSON.stringify({ name: workspace }))}) ON CONFLICT (key) DO UPDATE SET value = excluded.value RETURNING key`
-			);
-		yield* audited(h.db, { category: 'identity', action: 'settings.update', ...auditContext(auth, input) },
-			write(h, s, CapturedResult)
-		).pipe(Effect.provideService(Audit, h.audit ?? (yield* Audit)));
-	}
-	return yield* h.db
-		.one(Schema.Struct({ name: Schema.String, workspace_name: Schema.NullOr(Schema.String) }), {
-			text: "SELECT name, (SELECT value::jsonb->>'name' FROM sys_config WHERE key = 'workspace.identity') AS workspace_name FROM sys_user WHERE id = $1 AND active",
-			params: [auth.actor.id]
-		})
-		.pipe(Effect.map(Option.getOrNull));
-});
 export const assign_team = Effect.fn('Bolt.assign_team')(function* (
 	h: IdentityHost,
 	m: EngineManifest,

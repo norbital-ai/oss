@@ -727,11 +727,22 @@ const EXPECTED: { [table: string]: Shape } = {
 		indexes: ['(instance)', '(sync, instance, partition, cycle)', 'using gin (bolt_search)'],
 		fks: ['(instance) references sys_integration (id) on delete cascade on update restrict']
 	},
+ sys_workspace: {
+  key: 'id text primary key',
+  columns: {
+   name: 'text', revision: 'int not null default 1',
+   bolt_record_label: 'text generated always as (bolt_record_label_sys_workspace_HASH(name)) stored',
+   bolt_search: "tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_workspace_HASH(name), ''))) stored"
+  },
+  indexes: ['using gin (bolt_search)'],
+  checks: ["(char_length(name) <= 120)", "((coalesce(id = '00000000-0000-0000-0000-000000000001'::text, false)))"]
+ },
 	sys_user: {
 		key: 'id text primary key',
 		columns: {
 			email: 'text',
 			name: 'text not null',
+			preferences: "jsonb not null default {}",
 			kind: 'text not null default staff',
 			active: 'boolean not null default true',
 			admin: 'boolean not null default false',
@@ -754,6 +765,7 @@ const EXPECTED: { [table: string]: Shape } = {
 		unique: ['(lower(email))', '(phone_key)'],
 		indexes: ['using gin (bolt_search)'],
 		checks: [
+			"((preferences is null or store_json_valid(preferences, '{default:{},kind:json,shape:{fields:{appearance:{kind:enum,optional:true,values:[light,dark,system]},locale:{kind:enum,optional:true,values:[en,zh]},sounds:{kind:bool,optional:true}},kind:object}}'::jsonb) is true))",
 			"((coalesce(admin = false, false) or coalesce(kind = 'staff'::text, false)))",
 			"((party is null or store_json_valid(party, '{kind:json,optional:true}'::jsonb) is true))",
 			"(email ~ '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')",

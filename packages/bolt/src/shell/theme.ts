@@ -1,8 +1,6 @@
-// The viewer's appearance (light, dark, or the system's), a per-browser choice under `bolt.theme` — the key the access
-// pages' switch writes. The page document applies it before paint (bolt-cli's `compiler/artifact/client.ts`); the shell re-applies
-// it on a change of choice or of the system preference. Absent means `system`, the theme default.
+// The member record is authoritative. bolt.theme is the before-paint cache and the signed-out choice.
 import { Effect, Schema } from 'effect';
-import { APPEARANCES, Appearance } from '../protocol/schema.ts';
+import { APPEARANCES } from '../decl/preferences.ts';
 
 class ThemeStorageFailed extends Schema.TaggedError<ThemeStorageFailed>()(
 	'ThemeStorageFailed',
@@ -18,7 +16,7 @@ export const storedTheme: Effect.Effect<Theme> = Effect.try({
 	try: () => localStorage.getItem(KEY),
 	catch: () => new ThemeStorageFailed()
 }).pipe(
-	Effect.flatMap((value) => Schema.decodeUnknownEffect(Appearance)(value)),
+	Effect.flatMap((value) => Schema.decodeUnknownEffect(Schema.Literals(THEMES))(value)),
 	Effect.catch(() => Effect.succeed('system' as const))
 );
 /** Remembers the choice; a denied storage write does not prevent this load switching. */

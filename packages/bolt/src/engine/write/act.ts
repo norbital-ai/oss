@@ -1938,6 +1938,22 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		...(guestTables.size === 0 ? {} : { reads: [...guestTables] })
 	};
 });
+const displayNameTransform = (model: string) =>
+	(_db: TenantDb, _m: EngineManifest, items: readonly Item[]): Effect.Effect<readonly Item[] | Outcome> => {
+		const changed: Item[] = [];
+		for (const item of items) {
+			const c = item.change;
+			if (c.model !== model || c.op !== 'update' || typeof c.set['name'] !== 'string') {
+				changed.push(item);
+				continue;
+			}
+			const name = c.set['name'].trim();
+			if (name.length === 0 || name.length > 120)
+				return Effect.succeed(refused('check', 'A display name must have 1–120 characters.', [...c.path, 'set', 'name']));
+			changed.push({ ...item, change: { ...c, set: { ...c.set, name } } });
+		}
+		return Effect.succeed(changed);
+	};
 /**
  * The engine's own transforms, by system model: rules no guest transform can see. `sys_integration` keeps an instance true
  * of the manifest's definition and names only an active envoy (read only when a row names one).
@@ -1950,6 +1966,8 @@ const ENGINE_TRANSFORMS: {
 		pre: ReadonlyMap<string, RowData>
 	) => Effect.Effect<readonly Item[] | Outcome, EngineError>;
 } = {
+	sys_user: displayNameTransform('sys_user'),
+	sys_workspace: displayNameTransform('sys_workspace'),
 	sys_integration: Effect.fnUntraced(function* (
 		db: TenantDb,
 		m: EngineManifest,

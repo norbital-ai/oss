@@ -13,13 +13,8 @@ export const AgentQuestion = Schema.Struct({
 });
 export type AgentQuestion = typeof AgentQuestion.Type;
 
-/** The viewer's per-browser appearance choice, shared by the account menu and agent page action. */
-export const APPEARANCES = ['light', 'dark', 'system'] as const;
-export const Appearance = Schema.Literals(APPEARANCES);
-export type Appearance = typeof Appearance.Type;
-/** A closed action in the person's active tab: native appearance, visible text, scrolling or navigation. */
+/** A closed action in the person's active tab: click visible text, scroll CSS pixels, or go back/forward. */
 export const PageAction = Schema.Struct({
-	preferences: Schema.optionalKey(Schema.Struct({ appearance: Schema.optionalKey(Appearance) })),
 	click: Schema.optionalKey(Schema.String),
 	scroll: Schema.optionalKey(Schema.Finite),
 	go: Schema.optionalKey(Schema.Literals(['back', 'forward'])),
@@ -36,7 +31,6 @@ export type PageAction = typeof PageAction.Type;
 /** The active tab's answer to a page action: whether the client found and performed it. */
 export const PageResult = Schema.Struct({
 	ok: Schema.Boolean,
-	preferences: Schema.optionalKey(Schema.Struct({ appearance: Appearance, effective: Schema.Literals(['light', 'dark']) })),
 	note: Schema.optionalKey(Schema.String),
 	url: Schema.optionalKey(Schema.String),
 	/** What the page shows once it settled: its headings and controls as they read. */

@@ -75,7 +75,6 @@ import { type Authority, type Bindings, type Outcome } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { SYSTEM_UI, SystemUiRequest, systemUiPath } from '../../protocol/system-ui.ts';
 import type { AgentQuestion } from '../../protocol/schema.ts';
-import { PageAction } from '../../protocol/schema.ts';
 import { exposed, outputsOf, readsAny, actorVarsOf, writable_columns } from '../access/authority.ts';
 import {
 	LayerRequestSchema,
@@ -113,7 +112,7 @@ import {
 	StoredFile
 } from './ingest.ts';
 import { can_open, nav, navigation_paths } from '../../shell/nav.ts';
-import { AccountSettingsInput, accountSettings, InvitationInput, inviteMany } from '../identity/members.ts';
+import { InvitationInput, inviteMany } from '../identity/members.ts';
 export { ToolAnswer } from './ai.ts';
 import { FILE_SHAPE, RUN_JS, runFile, runJs } from './run-js.ts';
 import { layered, layers, type EngineManifest, type SkillSpec } from '../manifest.ts';
@@ -812,7 +811,7 @@ export function readOutputs(m: EngineManifest, a: Authority, root: string): read
 			? // a built-in model only through a policy that names it, never the administrator's blanket arm; the member
 				// directory is an exception (an administrator resolves the people a document names, a sales owner, by it), and
 				// so are the connections (their state, never a credential: those stay sealed off the row)
-				arms.some((arm) => arm.policy !== '$admin' || root === 'sys_user' || root === 'sys_integration')
+				arms.some((arm) => arm.policy !== '$admin' || root === 'sys_user' || root === 'sys_integration' || root === 'sys_workspace')
 			: arms.length > 0;
 	});
 }
@@ -847,7 +846,7 @@ function callablesFor(m: EngineManifest, a: Authority, identity = false): Map<st
 					? spec.create !== undefined && (m.models[c]?.key?.length ?? 0) > 0
 					: spec[v] !== undefined;
 			if (declared && (a.admin || arms > 0))
-				acts.set(`${c}.${v}`, Object.hasOwn(SYSTEM.models, c) ? { confirm: true } : {});
+				acts.set(`${c}.${v}`, Object.hasOwn(SYSTEM.models, c) && c !== 'sys_user' ? { confirm: true } : {});
 		}
 	}
 	if (identity && a.admin && a.actor.kind === 'member' && !a.actor.external)
@@ -2154,6 +2153,9 @@ function catalogueIndex(
 	for (const sync of syncs)
 		index[`sync:${sync.model}.${sync.sync}`] =
 			`${sync.model}.${sync.sync} (${sync.kind}: ${sync.modes.join(', ')})`;
+	if (a.admin) index['native:workspace'] = 'Workspace display settings: read sys_workspace, then act sys_workspace.update with its id and revision to change name. Administrator only; no source change. Private sys_config is not an editable model.';
+	if (a.actor.kind === 'member' && readOutputs(m, a, 'sys_user').includes('personal'))
+		index['native:personal'] = 'Personal settings: read sys_user output personal (your id is actor.id), then act sys_user.update with its id and revision. preferences.appearance is light, dark or system; preferences.locale is en or zh; preferences.sounds is a boolean. Merge the existing preferences when changing a key. No source edit or browser tool is needed.';
 	for (const tool of mcp) index[`tool:${tool.name}`] = toolLine(tool);
 	return index;
 }
@@ -2380,12 +2382,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		const allowed = navigation_paths(nav(e.manifest, a), a.admin);
 		add(
 			pageTool,
-			function* ({ path, configure: asked, click, type, scroll, go, highlight, preview, preferences }) {
-				if (preferences !== undefined) {
-					if ([path, asked, click, type, scroll, go, highlight, preview].some((v) => v !== undefined))
-						return err('Use preferences by itself; it reads or changes only this person’s browser preference.');
-					return ok({ page: { preferences }, requested: true });
-				}
+			function* ({ path, configure: asked, click, type, scroll, go, highlight, preview }) {
 				if (preview !== undefined)
 				return /^https?:\/\//.test(preview) && URL.canParse(preview)
 					? ok({ preview })
@@ -2425,12 +2422,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			});
 			}
 		);
-	}
-	if (agent && x.inApp && !x.child && a.actor.kind === 'member' && e.identity !== undefined) {
-		const identity = e.identity;
-		add(settingsTool, function* (input) {
-			return ok(yield* accountSettings(identity, a, input));
-		});
 	}
 	// Manual sync is its own native operation, with file grants or an explicit remote refresh capability.
 	const sync_controls =
@@ -4310,9 +4301,8 @@ const describeTool = defineTool('describe_workspace', {
 const pageTool = defineTool('page', {
 	behavior: { page: true },
 	description:
-		"Read this person's browser preferences with preferences: {}; set appearance with preferences: { appearance: light|dark|system }, by itself. This needs no source edit, preview or browser tool. Navigate using an exact path from the workspace catalogue's Pages, including /app/; never shorten routes. configure opens native setup. Click/highlight text, type by label, scroll, go back/forward or preview a URL. Approvals, passwords and files are the person's. A request is pending until the tab reports what ran.",
+		"Navigate using an exact path from the workspace catalogue's Pages, including /app/; never shorten routes. configure opens native setup. Click/highlight text, type by label, scroll, go back/forward or preview a URL. Approvals, passwords and files are the person's. A request is pending until the tab reports what ran.",
 	parameters: Schema.Struct({
-		preferences: PageAction.fields.preferences,
 		path: Schema.optionalKey(Schema.String),
 		configure: Schema.optionalKey(
 			Schema.Struct({ capability: Schema.String, record: Schema.optionalKey(Schema.String) })
@@ -4348,12 +4338,6 @@ const decideTool = defineTool('decide', {
 	description:
 		'Decide an approval request as its authorized approver: request_id, decision and optional reason. The person confirms the decision in the app.',
 	parameters: Decide
-});
-const settingsTool = defineTool('settings', {
-	behavior: { data: true },
-	description:
-		'Read/change your own name; workspace_name is admin-only. Empty input reads both. For browser preferences use page { preferences: {} } to read, or page { preferences: { appearance: "dark" } } to change. Do not edit workspace theme source for a personal preference. Native setup capabilities: describe_workspace { names: ["system"] }.',
-	parameters: AccountSettingsInput
 });
 const inviteTool = defineTool('invite', {
 	behavior: { data: true },
@@ -4618,7 +4602,6 @@ const ALL_TOOLS = [
 	runAutomationTool,
 	decideTool,
 	inviteTool,
-	settingsTool,
 	connectTool,
 	syncTool,
 	updatePlanTool,
@@ -4663,7 +4646,6 @@ const AUDIENCE: { readonly [A in Audience]: ReadonlySet<string> } = {
 			(name) =>
 				![
 					'page',
-					'settings',
 					'connect',
 					'update_plan',
 					'download',
@@ -4676,7 +4658,6 @@ const AUDIENCE: { readonly [A in Audience]: ReadonlySet<string> } = {
 	)
 };
 const SUBAGENT_TOOLS: ReadonlySet<string> = new Set([
-	'settings',
 	'task',
 	'task_read',
 	'task_stop',

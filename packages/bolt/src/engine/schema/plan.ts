@@ -1,3 +1,4 @@
+import { workspace_settings_objects } from '../../system/settings.ts';
 // Schema projection and planning. Hosts and tests execute verified SQL files through apply_migrations.
 import { Effect, Schema } from 'effect';
 import {
@@ -52,7 +53,8 @@ export const engineBeside = (s: SchemaSlice): Effect.Effect<readonly SchemaObjec
 		...engineObjects(),
 		...history,
 		...audit_triggers(s.tables),
-		...seq_counter_objects(s.tables)
+		...seq_counter_objects(s.tables),
+		...workspace_settings_objects(s.tables)
 	]);
 
 const AppliedEnvelope = Schema.Struct({

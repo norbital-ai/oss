@@ -773,7 +773,7 @@ const makeShell = Effect.gen(function* () {
 				workspace_name: Schema.NullOr(Schema.String)
 			}),
 			{
-				text: "SELECT name, (SELECT value::jsonb->>'name' FROM sys_config WHERE key = 'workspace.identity') AS workspace_name FROM sys_user WHERE id = $1",
+				text: "SELECT name, (SELECT name FROM sys_workspace) AS workspace_name FROM sys_user WHERE id = $1",
 				params: [auth.actor.id]
 			}
 		);

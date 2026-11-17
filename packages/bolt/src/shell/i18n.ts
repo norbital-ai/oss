@@ -1,9 +1,10 @@
 // The shell's copy in each framework locale. English is the key itself and Chinese is written out here.
-// The viewer's language choice is a per-browser preference over the workspace's locale.
+// The member record owns the language choice; bolt.locale caches it before boot and serves signed-out pages.
 import { Effect, Result } from 'effect';
 import { ui_messages_for } from '@norbital-ai/ui/i18n';
+import { PERSONAL_LOCALES } from '../decl/preferences.ts';
 
-export const LOCALES = ['en', 'zh'] as const;
+export const LOCALES = PERSONAL_LOCALES;
 type FrameworkLocale = (typeof LOCALES)[number];
 /** Each locale's name in its own language: the switch's label. */
 export const LANGUAGE: { readonly [l in FrameworkLocale]: string } = { en: 'English', zh: '中文' };
@@ -20,7 +21,7 @@ export function chosenLocale(workspace: string): string {
 		() => workspace
 	);
 }
-/** Remembers a browser preference then reloads every localized component. */
+/** Refreshes the browser cache then reloads every localized component. */
 export const setLocale = (locale: string): Effect.Effect<void> =>
 	Effect.try({
 		try: () => localStorage.setItem(CHOICE, locale),

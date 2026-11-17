@@ -1,3 +1,4 @@
+import { workspace_settings_objects } from '../../system/settings.ts';
 // Hosts execute committed SQL. Store owns immutable histories, alternatives and their physical replay proofs.
 import { Clock, Effect, FileSystem, Path, Schema } from 'effect';
 import { literal } from '@norbital-ai/store';
@@ -80,7 +81,8 @@ export const migration_objects = (schema: SchemaSpec): Effect.Effect<readonly Sc
 				...source_objects(),
 				...history,
 				...audit_triggers(schema.tables),
-				...seq_counter_objects(schema.tables)
+				...seq_counter_objects(schema.tables),
+				...workspace_settings_objects(schema.tables)
 			])
 		: Effect.succeed(seq_counter_objects(schema.tables));
 

@@ -32,7 +32,7 @@ export type Holder = {
 };
 
 const WRITES = ['create', 'update'] as const;
-/** Identity models: read by grant or the kernel directory, written only by their admin verbs. */
+/** Protected identity lifecycle writes use native verbs; sys_user separately exposes own name and preferences. */
 const IDENTITY = ['sys_user', 'sys_invitation', 'sys_api_key'] as const;
 const isIdentity = (c: string) => IDENTITY.some((i) => i === c);
 const KERNEL = '$directory';
@@ -206,7 +206,7 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 		const all = layered(m).exposures;
 		for (const c of [
 			...Object.keys(m.exposures),
-			...(holder.admin ? [...IDENTITY, 'sys_integration'] : [])
+			...(holder.admin ? [...IDENTITY, 'sys_integration', 'sys_workspace'] : [])
 		]) {
 			const a = col(c),
 				open: Arm = { policy: '$admin', where: TRUE };
@@ -255,6 +255,23 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 					])
 				)
 			);
+	}
+	// The same generated update as any record: the matching personal read arm scopes a
+	// member's write to their own row, without lending directory or access-control fields.
+	if (holder.actor.kind === 'member') {
+		const personal = '$personal';
+		addRead('sys_user', 'personal', {
+			sys_user: {
+				policy: personal,
+				where: { t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Var', text: 'actor.id' } }
+			}
+		});
+		col('sys_user').update.push({
+			policy: personal,
+			columns: SYSTEM.exposures['sys_user']?.update?.columns ?? {},
+			check: false
+		});
+		addRead('sys_workspace', 'default', { sys_workspace: { policy: KERNEL, where: TRUE } });
 	}
 	const caps = {
 		apps: new Set<string>(),

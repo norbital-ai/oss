@@ -13,4 +13,9 @@ description: Protocol for reading and writing a workspace's records.
 
 ## Personal and workspace settings
 
-Use `settings` with no input to read your display name and the workspace display name. `name` changes only the speaking member’s own name; `workspace_name` needs their current administrator authority. Neither changes email, workspace handle, teams or permissions. Impersonation uses the member’s authority and keeps the original administrator in the audit. Navigate the current page again to show the new name. For browser-local appearance and language, use `page` on the account menu’s native controls; do not edit workspace source for a personal theme choice. Workspace theme tokens belong to the authoring skill and the normal preview/merge flow.
+Use the ordinary record tools, not source edits or a browser:
+
+- Personal: `read` `sys_user` with output `personal`, filtered to `actor.id`. `act` `sys_user.update` with that row's `id` and `revision` to change `name` or `preferences`. Merge the current preferences when changing a key. Appearance is `light`, `dark` or `system`; locale is `en` or `zh`; sounds is a boolean. Preferences persist across devices and the account menu follows native data updates.
+- Workspace display name: administrators `read` `sys_workspace`, then `act` `sys_workspace.update` with its `id`, `revision` and `set: { name }`. This changes the display name, not the workspace handle.
+
+Other members' personal rows and protected identity fields are not lent by the personal grant. Email, teams and permissions keep their guarded identity operations. Private `sys_config` and credentials are never editable record surfaces. Impersonation uses the member's authority and keeps the original administrator in the audit. Workspace theme tokens belong to the authoring skill and the normal preview/merge flow.

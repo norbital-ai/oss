@@ -14,7 +14,6 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Authorities, preview_as } from '../src/engine/identity/actor.ts';
 import {
-	accountSettings,
 	assign_team,
 	deactivate,
 	invite,
@@ -134,40 +133,6 @@ const AdministrationFixtureLive = Layer.effect(AdministrationFixture, fixture).p
 );
 
 layer(AdministrationFixtureLive)('identity administration', (it) => {
-	it.effect('personal names stay self-scoped and only admins can rename the workspace', () =>
-		Effect.gen(function* () {
-			const { db, h, founder, as } = yield* AdministrationFixture;
-			const staff = randomUUID();
-			yield* db.write({
-				text: "INSERT INTO sys_user (id, name, kind) VALUES ($1, 'Member', 'staff')",
-				params: [staff]
-			});
-			const member = yield* as(staff);
-			expect(yield* accountSettings(h, member, { name: '  New name  ' })).toMatchObject({
-				name: 'New name',
-				workspace_name: null
-			});
-			expect(
-				yield* Effect.flip(
-					accountSettings(h, member, { name: 'Must not save', workspace_name: 'Forbidden' })
-				)
-			).toMatchObject({ code: 'forbidden' });
-			expect(yield* accountSettings(h, member, {})).toMatchObject({
-				name: 'New name',
-				workspace_name: null
-			});
-			expect(
-				yield* accountSettings(h, yield* as(founder), { workspace_name: 'Treasury desk' })
-			).toMatchObject({ workspace_name: 'Treasury desk' });
-			expect(yield* Effect.flip(accountSettings(h, member, { name: '   ' }))).toMatchObject({
-				code: 'check'
-			});
-			expect(yield* accountSettings(h, member, {})).toMatchObject({
-				name: 'New name',
-				workspace_name: 'Treasury desk'
-			});
-		})
-	);
 	describe('source team choices', () => {
 		it.effect('accepts source handles and refuses forged handles and non-administrators', () =>
 			Effect.gen(function* () {

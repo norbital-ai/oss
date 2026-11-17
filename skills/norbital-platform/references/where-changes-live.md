@@ -32,9 +32,11 @@ A setting's name does not say which side it belongs on: inspect the declaration 
 | Allowed chat models and monthly AI budgets | administrator Settings → Organization (`sys_config`) |
 | Supported formulas, rates, catalogue variants, extraction schema, report templates | business configuration models; source defines language and guards |
 | Secret values | Settings, sealed per tenant |
-| Personal light/dark/system appearance | `page { preferences }`, the active browser's native account preference; no source change |
-| Personal display name; workspace display name | `settings { name }`; `settings { workspace_name }` for administrators |
+| Personal display name, appearance and language | `read` the member's `sys_user` output `personal`, then `act` `sys_user.update` with its `id` and `revision`; no source change |
+| Workspace display name | Administrators read `sys_workspace`, then `act` `sys_workspace.update`; private engine configuration stays inaccessible |
 | Personal skills | Colony personal-skill tools, private per tenant and person, never release input |
+
+Personal preferences persist on the user across devices. `preferences.appearance` is `light`, `dark` or `system`; `preferences.locale` is `en` or `zh`; `preferences.sounds` is a boolean. Merge existing preferences when changing one key. A member may edit their own name and preferences; sign-in addresses, administrator flags and team assignments use their guarded identity operations. Do not edit source or open a browser to change personal settings.
 
 ## Never
 
