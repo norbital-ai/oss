@@ -196,7 +196,7 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			expect((yield* a.get(id))?.['seen']).toEqual({ before: shape, query: shape });
 		})
 	);
-	it.live('a live patch carries the shapes a read gives', () =>
+	it.live('a live delta carries the shapes a read gives', () =>
 		Effect.gen(function* () {
 			const a = yield* shared;
 			const live = Context.get(a.context, Live);
@@ -220,10 +220,10 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			});
 			committed(yield* a.act({ 'items.create': [input] }));
 			yield* live.settled;
-			let last = frames.filter((frame) => frame.t === 'patch').at(-1);
+			let last = frames.filter((frame) => frame.t === 'delta').at(-1);
 			while (last === undefined) {
 				yield* Queue.take(received);
-				last = frames.filter((frame) => frame.t === 'patch').at(-1);
+				last = frames.filter((frame) => frame.t === 'delta').at(-1);
 			}
 			expect(last.ops).toMatchObject([{ op: 'upsert', row: input }]);
 		})

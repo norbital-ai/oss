@@ -1,4 +1,4 @@
-import { Option, Predicate, Schema } from 'effect';
+import { Predicate } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { PatchOp } from '../../protocol/wire.ts';
 import type { Bindings, Captured, RowData } from '../contracts.ts';
@@ -12,10 +12,23 @@ export type Resolved =
 	| (Change & { readonly get: RowFetch })
 	| { readonly plan: ReadView; readonly path: readonly string[]; readonly c: Captured; readonly metadata: Metadata };
 export type Snapshots = ReadonlyMap<string, ReadSnapshot>;
-export type PatchWork = { value: Json; readonly ops: PatchOp[]; readonly roots: Set<string> };
-const Page = Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)), next: Schema.optionalKey(Schema.NullOr(Schema.String)) });
-const pageOf = Schema.decodeUnknownOption(Page);
+/**
+ * One lane batch's work on a view: its value so far, the ops (each at its container's path) that made it, and how many
+ * bytes they add to the value's JSON (negative: fewer). Only the rows and values the ops add or take away are measured.
+ */
+export type PatchWork = { value: Json; readonly ops: PatchOp[]; bytes: number };
+type Patched = { value: Json; ops: PatchOp[]; bytes: number };
+const utf8 = new TextEncoder();
+const size = (value: Json): number => utf8.encode(JSON.stringify(value)).byteLength;
+type Page = { readonly [key: string]: Json; readonly rows: readonly ViewRow[] };
 const object = (value: Json | undefined): value is { readonly [key: string]: Json } => Predicate.isObject(value) && !Array.isArray(value);
+const list = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
+/** A retained page, as it is (no copy: its rows stay shared): records in `rows`, and `next` a cursor or none. */
+const isPage = (value: Json | undefined): value is Page => {
+	if (!object(value)) return false;
+	const rows = value['rows'], next = value['next'];
+	return list(rows) && rows.every(object) && (next === undefined || next === null || typeof next === 'string');
+};
 const at = (value: Json, path: readonly string[]): Json | undefined => {
 	let current: Json | undefined = value;
 	for (const key of path) {
@@ -80,9 +93,8 @@ export function resolve(
 	if (plan.kind === 'read' && plan.counters.some((counter) =>
 		(c.old !== null && counter.includes(c.old, bindings) === undefined) ||
 		(c.new !== null && counter.includes(c.new, bindings) === undefined))) return undefined;
-	const page = plan.kind === 'read' ? pageOf(value) : undefined;
 	const retained = plan.kind === 'get' ? object(value) ? value : undefined :
-		page !== undefined && Option.isSome(page) ? page.value.rows.find((row) => row['id'] === c.id) : undefined;
+		isPage(value) ? value.rows.find((row) => row['id'] === c.id) : undefined;
 	const project = (image: RowData | null): ViewRow | null | undefined => {
 		if (image === null) return null;
 		const matches = plan.matches(image, bindings);
@@ -97,51 +109,71 @@ export function resolve(
 	return [{ plan, path, c, id: c.id, row, before }];
 }
 
-function metadata(value: Json, c: Captured, field: Metadata): { value: Json; ops: PatchOp[] } | undefined {
+function metadata(value: Json, path: readonly string[], c: Captured, field: Metadata): Patched | undefined {
 	if (!object(value) || c.new === null) return undefined;
 	const before = c.old === null ? {} : field.project(c.old), after = field.project(c.new);
-	let answer = value;
+	let answer = value,
+		bytes = 0;
 	const ops: PatchOp[] = [];
 	for (const key of field.keys) {
 		const previous = answer[key], next = after[key];
 		if (same(previous, next)) continue;
 		if (!same(previous, before[key])) return undefined;
-		if (next === undefined) {
-			const { [key]: _removed, ...rest } = answer;
-			answer = rest;
-			ops.push({ op: 'unset', key });
-		} else {
+		// an object member is `"key":value`, with a comma between two
+		if (next !== undefined) {
+			bytes += previous === undefined
+				? size(key) + 1 + size(next) + (Object.keys(answer).length > 0 ? 1 : 0)
+				: size(next) - size(previous);
 			answer = { ...answer, [key]: next };
-			ops.push({ op: 'meta', key, value: next });
+			ops.push({ op: 'meta', path, key, value: next });
+		} else if (previous !== undefined) {
+			const { [key]: _removed, ...rest } = answer;
+			bytes -= size(key) + 1 + size(previous) + (Object.keys(rest).length > 0 ? 1 : 0);
+			answer = rest;
+			ops.push({ op: 'unset', path, key });
 		}
 	}
-	return { value: answer, ops };
+	return { value: answer, ops, bytes };
 }
 
 function rows(
 	plan: Leaf,
 	value: Json,
+	path: readonly string[],
 	id: string,
 	c: Captured,
 	row: ViewRow | null,
 	before: ViewRow | null | undefined,
 	bindings: Bindings
-): { value: Json; ops: PatchOp[] } | undefined {
+): Patched | undefined {
 	if (plan.kind === 'get') {
-		if (same(value, row)) return { value, ops: [] };
+		if (same(value, row)) return { value, ops: [], bytes: 0 };
 		if (before !== undefined && !same(value, before)) return undefined;
-		return { value: row, ops: row === null ? [{ op: 'remove', id }] : [{ op: 'upsert', index: 0, row }] };
+		return {
+			value: row,
+			ops: row === null ? [{ op: 'remove', path, id }] : [{ op: 'upsert', path, index: 0, row }],
+			bytes: size(row) - size(value)
+		};
 	}
-	const decoded = pageOf(value);
-	if (Option.isNone(decoded) || !object(value)) return undefined;
-	const items = [...decoded.value.rows], i = items.findIndex((item) => item['id'] === id), previous = items[i];
+	if (!isPage(value)) return undefined;
+	const items = [...value.rows], i = items.findIndex((item) => item['id'] === id), previous = items[i];
 	// an unchanged projection stays put while its own order keys hold (a moved relation it does not carry may reorder it);
 	// a related model's commit that could reorder it invalidates the view in `resolve`
 	if (previous !== undefined && row !== null && same(previous, row) && (c.model !== plan.model || plan.kept(previous, row, c)))
-		return { value, ops: [] };
+		return { value, ops: [], bytes: 0 };
 	if (previous !== undefined && before !== undefined && !same(previous, row) && (before === null || !same(previous, before))) return undefined;
-	let answer = value;
+	let answer = value,
+		bytes = 0;
 	const ops: PatchOp[] = [];
+	// `rows` holds each row's JSON, with a comma between two
+	const insert = (at: number, added: ViewRow) => {
+		bytes += size(added) + (items.length > 0 ? 1 : 0);
+		items.splice(at, 0, added);
+	};
+	const remove = (gone: ViewRow, at: number) => {
+		items.splice(at, 1);
+		bytes -= size(gone) + (items.length > 0 ? 1 : 0);
+	};
 	if (c.model === plan.model)
 		for (const counter of plan.counters) {
 			const current = answer[counter.key];
@@ -150,71 +182,72 @@ function rows(
 			if (old === undefined || next === undefined) return undefined;
 			const count = current + Number(next) - Number(old);
 			if (count < 0) return undefined;
-			if (count !== current) { answer = { ...answer, [counter.key]: count }; ops.push({ op: 'meta', key: counter.key, value: count }); }
+			if (count !== current) {
+				bytes += size(count) - size(current);
+				answer = { ...answer, [counter.key]: count };
+				ops.push({ op: 'meta', path, key: counter.key, value: count });
+			}
 		}
-	const more = decoded.value.next != null || (plan.bounded && items.length >= plan.limit);
+	const more = value['next'] != null || (plan.bounded && items.length >= plan.limit);
 	answer = { ...answer, rows: items };
 	if (row === null) {
-		if (i < 0) return { value: answer, ops };
+		if (previous === undefined) return { value: answer, ops, bytes };
 		if (more) return undefined;
-		items.splice(i, 1);
-		return { value: answer, ops: [...ops, { op: 'remove', id }] };
+		remove(previous, i);
+		return { value: answer, ops: [...ops, { op: 'remove', path, id }], bytes };
 	}
 	if (previous !== undefined && plan.kept(previous, row, c)) {
-		if (!same(previous, row)) { items[i] = row; ops.push({ op: 'upsert', index: i, row }); }
-		return { value: answer, ops };
+		if (!same(previous, row)) {
+			items[i] = row;
+			bytes += size(row) - size(previous);
+			ops.push({ op: 'upsert', path, index: i, row });
+		}
+		return { value: answer, ops, bytes };
 	}
 	if (plan.bounded && more && i >= 0) return undefined;
 	const last = items.at(-1)?.['id'];
-	if (i >= 0) items.splice(i, 1);
+	if (previous !== undefined) remove(previous, i);
 	const index = plan.place(items, row);
 	if (index === undefined) return undefined;
 	if (plan.bounded) {
-		if (index >= plan.limit) return { value: answer, ops };
-		items.splice(index, 0, row);
-		ops.push({ op: 'upsert', index, row });
-		if (items.length > plan.limit) {
-			const removed = items.pop()?.['id'];
+		if (index >= plan.limit) return { value: answer, ops, bytes };
+		insert(index, row);
+		ops.push({ op: 'upsert', path, index, row });
+		const overflow = items.length > plan.limit ? items.at(-1) : undefined;
+		if (overflow !== undefined) {
+			const removed = overflow['id'];
 			if (typeof removed !== 'string') return undefined;
-			ops.push({ op: 'remove', id: removed });
+			remove(overflow, items.length - 1);
+			ops.push({ op: 'remove', path, id: removed });
 		}
-		return { value: answer, ops };
+		return { value: answer, ops, bytes };
 	}
 	if (more) {
-		if (index === items.length) return i < 0 ? { value: answer, ops } : undefined;
+		if (index === items.length) return i < 0 ? { value: answer, ops, bytes } : undefined;
 		if (i < 0) return undefined;
-		items.splice(index, 0, row);
-		return items.at(-1)?.['id'] === last ? { value: answer, ops: [...ops, { op: 'upsert', index, row }] } : undefined;
+		insert(index, row);
+		return items.at(-1)?.['id'] === last ? { value: answer, ops: [...ops, { op: 'upsert', path, index, row }], bytes } : undefined;
 	}
 	if (items.length + 1 > plan.limit) return undefined;
-	items.splice(index, 0, row);
-	return { value: answer, ops: [...ops, { op: 'upsert', index, row }] };
+	insert(index, row);
+	return { value: answer, ops: [...ops, { op: 'upsert', path, index, row }], bytes };
 }
 
-/** Apply resolved leaf changes immutably; named request roots are emitted once after the whole lane batch. */
+/** Apply one resolved leaf change immutably at its container's path, sharing every container it leaves alone. */
 export function apply(work: PatchWork, change: Resolved, row: ViewRow | null | undefined, bindings: Bindings, snapshots: Snapshots): boolean {
 	if (baselineContains(change.plan, change.c, snapshots)) return true;
 	const value = at(work.value, change.path);
 	if (value === undefined) return false;
-	const patched = 'metadata' in change ? metadata(value, change.c, change.metadata) : row === undefined ? undefined :
-		rows(change.plan, value, change.id, change.c, row, 'before' in change ? change.before : undefined, bindings);
+	const patched = 'metadata' in change ? metadata(value, change.path, change.c, change.metadata) : row === undefined ? undefined :
+		rows(change.plan, value, change.path, change.id, change.c, row, 'before' in change ? change.before : undefined, bindings);
 	if (patched === undefined) return false;
 	if (patched.ops.length === 0) return true;
 	const next = replace(work.value, change.path, 0, patched.value);
 	if (next === undefined) return false;
 	work.value = next;
-	const root = change.path[0];
-	if (root === undefined) work.ops.push(...patched.ops);
-	else work.roots.add(root);
+	work.ops.push(...patched.ops);
+	work.bytes += patched.bytes;
 	return true;
-}
-export function patches(work: PatchWork): readonly PatchOp[] {
-	const roots: PatchOp[] = [];
-	for (const key of work.roots) {
-		const value = object(work.value) ? work.value[key] : undefined;
-		if (value !== undefined) roots.push({ op: 'meta', key, value });
-	}
-	return [...work.ops, ...roots];
 }
 export function arrivals(plan: ViewPlan, c: Captured): readonly Json[] {
 	if (!plan.models.has(c.model) || c.op !== 'create' || c.new === null) return [];

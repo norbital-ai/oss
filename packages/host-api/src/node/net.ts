@@ -69,6 +69,7 @@ export const refuse_platform_addresses = (addresses: Iterable<string>): void => 
 
 /** A resolved IP address and its family (4 or 6). */
 export type Address = { address: string; family: number };
+/** A hostname's addresses: DNS `lookup` by default; a caller with its own resolver passes it. */
 export type Resolve = (hostname: string) => Promise<readonly Address[]>;
 const unbracket = (hostname: string) => hostname.replace(/^\[|\]$/g, '');
 

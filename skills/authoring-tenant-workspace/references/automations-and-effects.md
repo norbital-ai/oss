@@ -52,7 +52,7 @@ A dropped run reruns from the start, up to 3 times; a retry also starts over. No
 - Business I/O runs in automations: `ctx.request`, `ctx.send`, `ctx.web.read`, `ctx.files.*`, `ctx.geo.*`, `ctx.convert.*`, `ctx.ai.*`. Integration bodies call `ctx.request(op)` on their own instance.
 - `ctx.convert.record(model, id, { to: 'pdf' })` prints a record's own view as the run's identity and answers its bytes, unstored; attach them to `ctx.send` or `ctx.notify` (which answers `{ messages }`). A PDF of a record is this, never a hand-built document.
 - `ctx.convert.document`, `ctx.convert.record` and `ctx.convert.ingest` are optional. Recover `Unavailable` only when absence is allowed; other failures propagate unless the workflow recovers them.
-- Discover each member's input on `AutomationCtx` and `Ai`.
+- Discover each member's input on `AutomationCtx`.
 
 ## Browser work
 
@@ -69,4 +69,4 @@ A dropped run reruns from the start, up to 3 times; a retry also starts over. No
 - `tools: ['read', ...host_tools]` reads records as the run's policies across turns; bound it with `steps`. The draft reader is then `read_answer`.
 - Transient provider failures retry inside the invocation, keeping the transcript and edited answer.
 - Infer results are proposals. Store them for native form review before a separate confirmed apply; a write still runs through grants, checks and approvals. A person confirms anything changing money or access.
-- Use the public `Ai` signature; test with scripted output, never a live model.
+- Use the `AutomationCtx['ai']` signature; test with scripted output, never a live model.

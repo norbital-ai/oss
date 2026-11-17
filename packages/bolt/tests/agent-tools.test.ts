@@ -52,7 +52,8 @@ import {
 	messageCatalogue,
 	OVERVIEW_BYTES,
 	runJob,
-	sweeping
+	sweeping,
+	TOOLS_PER_REQUEST
 } from '../src/engine/agent/tools.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
@@ -4017,6 +4018,28 @@ describe('approvals, record history and the audit trail', () => {
 				).toMatchObject({ result: { tasks: { rows: [{ id, $approvals: [] }] } } });
 			})
 	);
+	it.effect('read takes the shapes its description states: order_by keyed by the field, $approvals without a page size', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			const described = (yield* requiredTool(x, 'read')).description;
+			expect(described).toContain('{ "<field>": "asc" | "desc" } whose one key is the field\'s name');
+			expect(described).toContain('"$approvals": { model, ids, all }');
+			expect(described).toContain('(no limit or after)');
+			expect(
+				yield* result(x, 'read', { request: { tasks: { order_by: [{ title: 'desc' }] } } })
+			).toMatchObject({ result: { tasks: { rows: expect.any(Array) } } });
+			// `field` is no field's name: the field names the key
+			expect(
+				yield* result(x, 'read', { request: { tasks: { order_by: [{ field: 'title' }] } } })
+			).toMatchObject({ result: { error: expect.stringContaining("'field' is asc or desc") } });
+			expect(yield* result(x, 'read', { request: { $approvals: { model: 'tasks', all: true } } })).toEqual({
+				result: { rows: expect.any(Array), next: null }
+			});
+			expect(yield* result(x, 'read', { request: { $approvals: { limit: 5 } } })).toMatchObject({
+				result: { error: expect.stringContaining('limit') }
+			});
+		})
+	);
 	it.effect('only an administrator reads the audit trail', () =>
 		Effect.gen(function* () {
 			const audit = yield* audit_shape(memory_audit().port).pipe(Effect.provide(NodeCrypto.layer));
@@ -4231,7 +4254,7 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 				]);
 				expect(JSON.stringify(answer)).not.toMatch(/credential|token|secret/i);
 				// a channel sender never gets the tool; nor does a turn with no card to show
-				expect(fixedTools('channel', false).map((t) => t.name)).not.toContain('connect');
+				expect(fixedTools('channel', false, { source: true, delegation: true }).map((t) => t.name)).not.toContain('connect');
 				expect(yield* names(yield* ctx({ inApp: false }, { manifest: layered(manifest) }))).not.toContain('connect');
 			})
 	);
@@ -4348,6 +4371,225 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 					state: 'connected'
 				}
 			});
+		})
+	);
+});
+
+describe('capability identity: one advertised name, one operation', () => {
+	const hostTool = (name: string, calls: string[]): HostTool => ({
+		name,
+		description: name,
+		behavior: {},
+		input: { type: 'object', properties: {} },
+		call: async () => {
+			calls.push(name);
+			return { host: name };
+		}
+	});
+	const mcpTool = (server: string, name: string) => ({
+		server,
+		name,
+		description: name,
+		input: { type: 'object' }
+	});
+	type McpCall = { server: string; tool: string };
+	const recording = (calls: McpCall[]): ToolContext['mcp'] => ({
+		tools: () => Effect.succeed([]),
+		call: (server: string, tool: string) =>
+			Effect.sync(() => {
+				calls.push({ server, tool });
+				return { server, tool };
+			})
+	});
+	const unavailable = (name: string) => ({
+		result: { error: expect.stringContaining(`Tool '${name}' is not available`) }
+	});
+	const HAS = { source: true, delegation: true };
+	it('each audience lists every native tool once, and the tab only to staff', () => {
+		for (const audience of ['staff', 'member', 'channel'] as const) {
+			const listed = fixedTools(audience, false, HAS).map((t) => t.name);
+			expect(new Set(listed).size).toBe(listed.length);
+		}
+		expect(fixedTools('member', false, HAS).map((t) => t.name)).not.toContain('page');
+	});
+	it.effect('a host tool named like a native, or a name providers refuse, is offered nowhere and never runs', () =>
+		Effect.gen(function* () {
+			const calls: string[] = [];
+			const offered = yield* catalogue(
+				yield* ctx({
+					host_tools: [
+						hostTool('act', calls),
+						hostTool('read', calls),
+						hostTool('web.search', calls),
+						hostTool('x'.repeat(65), calls)
+					],
+					browser_tools: [hostTool('page', calls)]
+				})
+			);
+			expect(offered.host).toEqual([]);
+			expect([...offered.fixed, ...offered.host].filter((t) => t.name === 'act')).toHaveLength(1);
+			// `act` stays the native atomic write and `page` the person's tab: their own answers, never a host call
+			expect(yield* offered.run('act', { acts: {} }, 'c1')).toEqual({
+				result: { error: 'An act needs a non-empty map of generated writes.' }
+			});
+			expect(yield* offered.run('page', { path: '/nowhere' }, 'c2')).toMatchObject({
+				result: { error: expect.stringContaining('No page /nowhere') }
+			});
+			expect(yield* offered.run('web.search', {}, 'c3')).toMatchObject(unavailable('web.search'));
+			expect(calls).toEqual([]);
+		})
+	);
+	it.effect('contributions sharing a name are all refused, whatever order or source they come from', () =>
+		Effect.gen(function* () {
+			const calls: string[] = [],
+				mcpCalls: McpCall[] = [];
+			const fleet = hostTool('lookup', calls),
+				studio = hostTool('lookup', calls),
+				notes = hostTool('notes', calls);
+			for (const over of [
+				{ browser_tools: [fleet], host_tools: [studio, notes] },
+				{ browser_tools: [], host_tools: [notes, studio, fleet] },
+				{ browser_tools: [], host_tools: [fleet, notes, studio] }
+			]) {
+				const offered = yield* catalogue(yield* ctx(over));
+				expect(offered.host.map((t) => t.name)).toEqual(['notes']);
+				expect(yield* offered.run('lookup', {}, 'c')).toMatchObject(unavailable('lookup'));
+			}
+			// an MCP tool and a host tool that would share a provider-visible name
+			const clash = yield* catalogue(
+				yield* ctx({
+					host_tools: [hostTool('kagi__web_search', calls)],
+					mcpTools: [mcpTool('kagi', 'web_search')],
+					mcp: recording(mcpCalls),
+					approved: () => true
+				})
+			);
+			expect([...clash.host, ...clash.mcp]).toEqual([]);
+			expect(yield* clash.run('kagi__web_search', {}, 'c1')).toMatchObject(unavailable('kagi__web_search'));
+			expect(
+				yield* clash.run('run_tool', { name: 'kagi__web_search', input: {} }, 'c2')
+			).toMatchObject(unavailable('kagi__web_search'));
+			expect(calls).toEqual([]);
+			expect(mcpCalls).toEqual([]);
+		})
+	);
+	it.effect('MCP names never merge two tools: punctuation, separators, Unicode and length', () =>
+		Effect.gen(function* () {
+			const pairs = [
+				['s', 'a.b'],
+				['s', 'a_b'],
+				['s', 'a-b'],
+				['a_', 'b'],
+				['a', '_b'],
+				['a__b', 'c'],
+				['a', 'b__c'],
+				['s', '検索'],
+				['s', '検索する'],
+				['s', ''],
+				['s', 'x'.repeat(100)],
+				['s', `${'x'.repeat(99)}y`]
+			] as const;
+			const calls: McpCall[] = [];
+			const offered = yield* catalogue(
+				yield* ctx({
+					mcpTools: pairs.map(([server, name]) => mcpTool(server, name)),
+					mcp: recording(calls),
+					approved: () => true
+				})
+			);
+			const listed = offered.mcp.map((t) => t.name);
+			expect(new Set(listed).size).toBe(pairs.length);
+			for (const name of listed) expect(name).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+			// readable where it reads back to one pair; otherwise its readable start and a digest of the pair
+			expect(listed.slice(0, 7)).toEqual([
+				expect.stringMatching(/^s_a_b_[0-9a-f]{12}$/),
+				's__a_b',
+				's__a-b',
+				expect.stringMatching(/^a_b_[0-9a-f]{12}$/),
+				'a___b',
+				expect.stringMatching(/^a_b_c_[0-9a-f]{12}$/),
+				'a__b__c'
+			]);
+			// each advertised name reaches its exact pair
+			for (const [at, name] of listed.entries()) yield* offered.run(name, {}, `c${at}`);
+			expect(calls).toEqual(pairs.map(([server, tool]) => ({ server, tool })));
+			// the same discovery is named alike on the next step, in any order
+			const again = yield* catalogue(
+				yield* ctx({ mcpTools: [...pairs].reverse().map(([server, name]) => mcpTool(server, name)) })
+			);
+			expect(again.mcp.map((t) => t.name)).toEqual([...listed].reverse());
+		})
+	);
+	it.effect("an approval, the advertised name and the server's call identify the same tool", () =>
+		Effect.gen(function* () {
+			const calls: McpCall[] = [];
+			const tools = [mcpTool('s', 'a.b'), mcpTool('s', 'a_b')];
+			const [dotted, plain] = (yield* catalogue(yield* ctx({ mcpTools: tools }))).mcp.map((t) => t.name);
+			const offered = yield* catalogue(
+				yield* ctx({ mcpTools: tools, mcp: recording(calls), approved: (name) => name === dotted })
+			);
+			expect(yield* offered.run(required(plain), { q: 1 }, 'c1')).toEqual({ confirm: true });
+			expect(yield* offered.run(required(dotted), { q: 1 }, 'c2')).toEqual({
+				result: { server: 's', tool: 'a.b' }
+			});
+			expect(calls).toEqual([{ server: 's', tool: 'a.b' }]);
+			expect(offered.presentation('run_tool', { name: required(dotted), input: { q: 1 } }).name).toBe(dotted);
+		})
+	);
+	it.effect('a request carries at most TOOLS_PER_REQUEST tools: the MCP tools past the room are left out by name, in any order', () =>
+		Effect.gen(function* () {
+			const calls: McpCall[] = [];
+			const listed = Array.from({ length: TOOLS_PER_REQUEST }, (_, i) =>
+				mcpTool('s', `t${String(i).padStart(3, '0')}`)
+			);
+			const advertised = listed.map((tool) => `s__${tool.name}`);
+			const offered = yield* catalogue(
+				yield* ctx({ mcpTools: [...listed].reverse(), mcp: recording(calls), approved: () => true })
+			);
+			const room = TOOLS_PER_REQUEST - offered.fixed.length - offered.host.length;
+			expect(room).toBeGreaterThan(0);
+			expect(room).toBeLessThan(TOOLS_PER_REQUEST);
+			// the first by name stay, whatever order discovery answered in
+			expect(offered.mcp.map((tool) => tool.name).sort()).toEqual(advertised.slice(0, room));
+			const again = yield* catalogue(yield* ctx({ mcpTools: listed }));
+			expect(again.mcp.map((tool) => tool.name)).toEqual(advertised.slice(0, room));
+			// one left out is in no list and runs nothing, by its name or through run_tool
+			const left = required(advertised.at(-1));
+			expect(offered.available.map((tool) => tool.name)).not.toContain(left);
+			expect(yield* offered.run(left, {}, 'c1')).toMatchObject(unavailable(left));
+			expect(yield* offered.run('run_tool', { name: left, input: {} }, 'c2')).toMatchObject(unavailable(left));
+			expect(calls).toEqual([]);
+		})
+	);
+	it.effect('an unknown capability is unavailable, by its name and through run_tool', () =>
+		Effect.gen(function* () {
+			const offered = yield* catalogue(yield* ctx());
+			expect(yield* offered.run('nope', {}, 'c1')).toMatchObject(unavailable('nope'));
+			expect(yield* offered.run('run_tool', { name: 'nope', input: {} }, 'c2')).toMatchObject(
+				unavailable('nope')
+			);
+		})
+	);
+	it.effect('a tool the actor is not granted, or one holding for a card, performs nothing', () =>
+		Effect.gen(function* () {
+			const calls: string[] = [],
+				mcpCalls: McpCall[] = [];
+			const denied = yield* catalogue(
+				yield* ctx({ authority: member(), host_tools: [hostTool('lookup', calls)] })
+			);
+			expect(denied.host).toEqual([]);
+			expect(yield* denied.run('lookup', {}, 'c1')).toMatchObject(unavailable('lookup'));
+			const held = yield* catalogue(
+				yield* ctx({
+					host_tools: [{ ...hostTool('lookup', calls), confirm: () => true }],
+					mcpTools: [mcpTool('s', 'send')],
+					mcp: recording(mcpCalls)
+				})
+			);
+			expect(yield* held.run('lookup', {}, 'c2')).toEqual({ confirm: true });
+			expect(yield* held.run('s__send', {}, 'c3')).toEqual({ confirm: true });
+			expect(calls).toEqual([]);
+			expect(mcpCalls).toEqual([]);
 		})
 	);
 });

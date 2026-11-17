@@ -41,6 +41,6 @@ Personal preferences persist on the user across devices. `preferences.appearance
 ## Never
 
 - A runtime editor for teams, policies or approval routes.
-- `sys_team` is a read-only source projection; never author `sys_assignment`.
+- A team or assignment table: teams exist only as source declarations (`src/access_control/team/+team.ts`).
 - `.norbital/` is compiled output, never edited or committed.
 - An administrator is a native flag on an admitted staff identity, not a role name.

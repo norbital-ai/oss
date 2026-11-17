@@ -14,7 +14,7 @@ A workspace author writes `src/`, `seed/`, `tests/`, `assets/`. The compiler wri
 | `bolt dev` | `--tethered` rebuild on save; `--host=<file>` untethered |
 
 - Exit 0 ok, 1 author error, 2 tool failure. `bolt build` is the only gate a host runs.
-- `bolt check` stages: discover, names, bundle, evaluate, manifest, seed decode, schema, type check. Inspect type and Svelte warnings separately from the exit code.
+- `bolt check` stages: discover, names, bundle, evaluate, manifest, seed decode, schema, type check (with the type-assertion lint: no `as` cast but `as const`, no `x!`). Inspect type and Svelte warnings separately from the exit code.
 - Declarations evaluate twice on a stripped worker with a frozen clock and seeded `Math.random`. A manifest differing between runs is refused.
 
 ## Generated files

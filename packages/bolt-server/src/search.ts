@@ -43,7 +43,12 @@ export const webSearch = (config: { endpoint: string; credential: string }): Hos
 		Schema.toJsonSchemaDocument(SearchInput, { onExcessProperty: 'error' }).schema
 	),
 	read_only: true,
-	behavior: { data: true },
+	behavior: { data: true, web_results: true },
+	view: (raw) => ({
+		icon: 'lucide:search',
+		verb: 'Searched the web',
+		target: Option.getOrUndefined(Schema.decodeUnknownOption(SearchInput)(raw))?.query ?? ''
+	}),
 	call: async (raw, context, signal): Promise<Json> => {
 		const input = Schema.decodeUnknownOption(SearchInput)(raw);
 		if (Option.isNone(input)) return { error: 'web_search: query is 1 to 128 characters.' };

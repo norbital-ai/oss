@@ -15,6 +15,7 @@ import type { Authority } from '../src/engine/contracts.ts';
 import type { Json } from '../src/decl/values.ts';
 import { Mcp } from '../src/engine/ports.ts';
 import { mcpSessions, type McpHost } from '../src/engine/agent/mcp.ts';
+import { TOOLS_PER_REQUEST } from '../src/engine/agent/tools.ts';
 
 const manifest = {
 	mcp: {
@@ -231,6 +232,34 @@ it.effect('keeps declaration order and allowlists when server lists finish out o
 			['first', 'allowed'],
 			['second', 'second']
 		]);
+	})
+);
+it.effect('keeps at most what one request carries: servers in declaration order, each one\'s tools by name', () =>
+	Effect.gen(function* () {
+		const f = yield* fixture({
+			m: {
+				mcp: {
+					second: { description: '', url: 'SECOND' },
+					first: { description: '', url: 'FIRST' }
+				}
+			},
+			host: { secret: (name) => Effect.succeed(name) },
+			fake: {
+				// listed in reverse: what is kept never follows a server's arrival order
+				tools: (server) =>
+					Effect.succeed(
+						Array.from({ length: TOOLS_PER_REQUEST }, (_, i) =>
+							info(`${server.url.toLowerCase()}-${String(i).padStart(3, '0')}`)
+						).reverse()
+					)
+			}
+		});
+		const kept = yield* f.sessions.tools(discoveryAuthority);
+		expect(kept).toHaveLength(TOOLS_PER_REQUEST);
+		expect(kept.every((tool) => tool.server === 'second')).toBe(true);
+		expect(kept.map((tool) => tool.name)).toEqual(
+			Array.from({ length: TOOLS_PER_REQUEST }, (_, i) => `second-${String(i).padStart(3, '0')}`)
+		);
 	})
 );
 it.effect('fails discovery on a secret provider failure, ending a sibling list', () =>

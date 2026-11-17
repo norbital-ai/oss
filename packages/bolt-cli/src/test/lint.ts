@@ -1,6 +1,7 @@
 // The test lint: what a committed test never does. It runs in oss's and Colony's lint step and before `bolt test` in a
 // template. A test proves one mechanism, in memory, cheaply: it sets no timeout, never waits on the wall
 // clock, spawns or builds nothing, snapshots nothing, reads no source of its own, and connects to no host but loopback.
+// The lint step's entry also runs the type-assertion lint (`assertions.ts`) over every module.
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import { Effect, FileSystem } from 'effect';
 import type { PlatformError } from 'effect/PlatformError';
@@ -54,16 +55,14 @@ const RULES: readonly Rule[] = [
 ];
 const TEST = /(^|\/)tests\/|\.(test|spec)\.[cm]?[jt]s$/;
 const SOURCE = /\.[cm]?[jt]s$/;
-const SKIP = new Set([
-	'node_modules',
-	'build',
-	'dist',
-	'fixtures',
-	'.norbital',
-	'.svelte-kit',
-	'.tenant_substrate',
-	'.git'
-]);
+/** The folders no lint reads: dependencies, builds, fixtures, and every dot folder (generated output, data, `.git`). */
+const SKIP: ReadonlySet<string> = new Set(['node_modules', 'build', 'dist', 'fixtures']);
+const skipped = (name: string) => SKIP.has(name) || /^\.[^.]/.test(name);
+const TYPED = /\.([cm]?ts|svelte)$/;
+const DECLARATION = /\.d\.[cm]?ts$/;
+/** Whether the type-assertion lint reads `path` (relative): a TypeScript module or Svelte component no lint skips, never a declaration. */
+export const asserted = (path: string) =>
+	TYPED.test(path) && !DECLARATION.test(path) && !path.split(/[\\/]/).some(skipped);
 /** A committed snapshot or screenshot directory: what a snapshot assertion compares against. */
 const SNAPSHOTS = new Set(['__snapshots__', '__screenshots__']);
 
@@ -83,33 +82,59 @@ export const lintTest = (
 		).map((rule) => `${path}:${index + 1} ${rule.message}`);
 	});
 
-/** Every test file's violations under `root` (`tests/` folders and `*.test.*` files), paths relative to `root`. */
-export const lintTests = (root: string, options: { readonly template?: boolean } = {}) =>
+/** Every file under `root` no lint skips, by path relative to `root`, and each committed snapshot directory. */
+const tree = (root: string) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
-		const found: string[] = [];
+		const files: string[] = [],
+			snapshots: string[] = [];
 		const walk = (at: string): Effect.Effect<void, PlatformError> =>
 			Effect.gen(function* () {
 				for (const name of (yield* fs.readDirectory(at)).toSorted()) {
-					if (SKIP.has(name)) continue;
+					if (skipped(name)) continue;
 					const path = join(at, name),
-						info = yield* fs.stat(path),
-						shown = relative(root, path);
-					if (info.type === 'Directory' && SNAPSHOTS.has(name))
-						found.push(`${shown} a committed snapshot or screenshot directory`);
+						info = yield* fs.stat(path);
+					if (info.type === 'Directory' && SNAPSHOTS.has(name)) snapshots.push(relative(root, path));
 					else if (info.type === 'Directory') yield* walk(path);
-					else if (info.type === 'File' && SOURCE.test(name) && TEST.test(shown))
-						found.push(...lintTest(shown, yield* fs.readFileString(path), options));
+					else if (info.type === 'File') files.push(relative(root, path));
 				}
 			});
 		yield* walk(root);
+		return { files, snapshots };
+	});
+
+/**
+ * Every violation under `root`, paths relative to `root`: the test lint's over its `tests/` folders and `*.test.*`
+ * files and, with `assertions`, the type-assertion lint's over every TypeScript module and Svelte component.
+ */
+export const lintTree = (
+	root: string,
+	options: { readonly template?: boolean; readonly assertions?: boolean } = {}
+) =>
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem;
+		// the assertion rule loads TypeScript's parser: only a run that asks for it pays for it
+		const typed = options.assertions === true ? yield* Effect.promise(() => import('./assertions.ts')) : undefined;
+		const { files, snapshots } = yield* tree(root);
+		const found = snapshots.map((shown) => `${shown} a committed snapshot or screenshot directory`);
+		for (const shown of files) {
+			const test = SOURCE.test(shown) && TEST.test(shown),
+				assert = typed !== undefined && asserted(shown);
+			if (!test && !assert) continue;
+			const text = yield* fs.readFileString(join(root, shown));
+			if (test) found.push(...lintTest(shown, text, options));
+			if (assert)
+				found.push(
+					...typed.lintAssertions(shown, text).map(({ line, message }) => `${shown}:${line} ${message}`)
+				);
+		}
 		return found;
 	});
 
-// `node lint.(ts|js) <dir>...`: the lint step's entry
+// `node lint.(ts|js) <dir>...`: the lint step's entry, both lints
 if (import.meta.main) {
 	const found = await Effect.runPromise(
-		Effect.forEach(process.argv.slice(2), (dir) => lintTests(dir)).pipe(
+		Effect.forEach(process.argv.slice(2), (dir) => lintTree(dir, { assertions: true })).pipe(
 			Effect.map((all) => all.flat()),
 			Effect.provide(NodeFileSystem.layer)
 		)

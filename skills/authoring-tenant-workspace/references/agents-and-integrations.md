@@ -40,7 +40,7 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 - Built-in conversation definitions reserve whatsapp, email, telegram, slack, discord, wechat and chat.
 - `rate` paces every request. HTTP paths stay under the declared HTTPS base URL.
 - A workspace connection serves members' host tools (a repository reference's read) only with `http.lend: true`; without it, administrators' alone. A personal connection serves its owner alone.
-- SQL Server takes structured operations (`DatabaseRequest` from `@norbital-ai/bolt/engine`); inspect that contract before constructing a request. The host bounds execution.
+- SQL Server takes structured operations (`DatabaseRequest` from `@norbital-ai/bolt`); inspect that contract before constructing a request. The host bounds execution.
 - Keep template-specific SQL, retention, assembly and business meaning in template source. Provider and platform code hold no domain rules.
 
 ## Instances

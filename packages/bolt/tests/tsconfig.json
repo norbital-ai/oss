@@ -9,7 +9,6 @@
 			"@norbital-ai/bolt/artifact": ["../src/engine/artifact/index.ts"],
 			"@norbital-ai/bolt/engine": ["../src/engine/index.ts"],
 			"@norbital-ai/bolt/errors": ["../src/decl/errors.ts"],
-			"@norbital-ai/bolt/facilities": ["../src/facilities/index.ts"],
 			"@norbital-ai/bolt/host-api": ["../src/host-api.ts"],
 			"@norbital-ai/bolt/protocol": ["../src/protocol/index.ts"],
 			"@norbital-ai/bolt/tooling": ["../src/tooling/index.ts"]

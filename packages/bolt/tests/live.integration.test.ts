@@ -187,7 +187,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 						Effect.gen(function* () {
 							frames.push(frame);
 							if (frame.t === 'answer') held.set(frame.view, frame.value);
-							if (frame.t === 'patch')
+							if (frame.t === 'delta')
 								held.set(frame.view, patched(held.get(frame.view), frame.ops));
 							yield* Queue.offer(received, frame);
 							if (frame.t === 'hello') yield* Deferred.succeed(hello, frame.conn);
@@ -410,7 +410,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 		);
 
 		it.effect(
-			"a committed act reaches a view as a patch stamped with the act's sequence",
+			"a committed act reaches a view as a delta stamped with the act's sequence",
 			() =>
 				Effect.scoped(
 					Effect.gen(function* () {
@@ -431,8 +431,8 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						}));
 						expect(r.outcome.kind).toBe('committed');
 						yield* settled;
-						const last = w.frames.findLast((frame) => frame.t === 'patch');
-						if (last?.t !== 'patch') throw new Error('Missing committed patch');
+						const last = w.frames.findLast((frame) => frame.t === 'delta');
+						if (last?.t !== 'delta') throw new Error('Missing committed delta');
 						expect(last.v).toBe(r.v);
 						expect(last.ops).toEqual([
 							expect.objectContaining({
@@ -512,7 +512,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 					live.publish(r.captured);
 					yield* settled;
 					expect(count.reads).toBe(0);
-					expect(w.frames.at(-2)).toMatchObject({ t: 'patch', view: 'simple' });
+					expect(w.frames.at(-2)).toMatchObject({ t: 'delta', view: 'simple' });
 					expect(w.held.get('simple')).toEqual(
 						(yield* queries.run([simple], { as: 'caller', authority: rep }, b()))[0]
 					);
@@ -642,6 +642,90 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 		);
 
 		it.effect(
+			'a named root takes a one-row edit as that row alone, an insert and a delete with its total, each a fresh read',
+			() =>
+				Effect.scoped(
+					Effect.gen(function* () {
+						const { rep, live, queries, count, watcher, register, settled, write, other } = yield* cell;
+						const note = randomUUID();
+						const ids = yield* write(
+							rep,
+							'create',
+							Array.from({ length: 7 }, (_, i) => ({ title: `row ${i}`, region: 'north', customer: ACME, note }))
+						);
+						const w = yield* watcher(rep);
+						const roots = yield* lower_read(manifest, 'query', [
+							{ orders: { fields: ['title'], where: { note: { eq: note } } }, customers: { fields: ['name'] } }
+						]);
+						yield* register(w, 'roots', { read: roots });
+						expect(w.held.get('roots')).toMatchObject({ orders: { total: 7 } });
+						const another = yield* other();
+						/** Another cell's writer commits; its RETURNING set is routed through this hub alone, with no read. */
+						const commit = (verb: 'create' | 'update' | 'delete', input: readonly Json[]) =>
+							Effect.gen(function* () {
+								const r = yield* another.acts(one_act({
+									model: 'orders',
+									verb,
+									input,
+									key: randomUUID(),
+									issuedAt: NOW,
+									authority: rep,
+									bindings: b(),
+									invocationId: randomUUID()
+								}));
+								if (r.outcome.kind !== 'committed') throw new Error(JSON.stringify(r.outcome));
+								count.reset();
+								live.publish(r.captured);
+								yield* settled;
+								expect(count.reads).toBe(0);
+								const frame = w.frames.at(-2);
+								if (frame?.t !== 'delta' || frame.view !== 'roots') throw new Error('Missing named-root delta');
+								// the client's image, the old one with the delta applied, is a fresh read at the same state
+								expect(w.held.get('roots')).toEqual(
+									(yield* queries.run([roots], { as: 'caller', authority: rep }, b()))[0]
+								);
+								return { frame, ids: r.outcome.records.map((record) => record.id) };
+							});
+
+						const target = present(ids[3]);
+						const edit = yield* commit('update', [{ target, set: { title: 'edited' } }]);
+						expect(edit.frame.ops).toEqual([
+							{
+								op: 'upsert',
+								path: ['orders'],
+								index: expect.any(Number),
+								row: expect.objectContaining({ id: target, title: 'edited' })
+							}
+						]);
+						// the changed row and bounded framing: no unchanged row, no other root
+						const text = JSON.stringify(edit.frame);
+						const edited = present(edit.frame.ops[0]);
+						const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+						expect(bytes(edit.frame)).toBeLessThanOrEqual(bytes(edited.op === 'upsert' ? edited.row : null) + 160);
+						for (const id of ids) if (id !== target) expect(text).not.toContain(id);
+						expect(text).not.toContain('Acme');
+
+						const added = yield* commit('create', [{ title: 'eighth', region: 'north', customer: ACME, note }]);
+						expect(added.frame.ops).toEqual([
+							{ op: 'meta', path: ['orders'], key: 'total', value: 8 },
+							{
+								op: 'upsert',
+								path: ['orders'],
+								index: expect.any(Number),
+								row: expect.objectContaining({ id: added.ids[0], title: 'eighth' })
+							}
+						]);
+
+						const removed = yield* commit('delete', [{ target: present(ids[0]) }]);
+						expect(removed.frame.ops).toEqual([
+							{ op: 'meta', path: ['orders'], key: 'total', value: 7 },
+							{ op: 'remove', path: ['orders'], id: ids[0] }
+						]);
+					})
+				)
+		);
+
+		it.effect(
 			'the inbox refreshes its complete unread count and marks only committed arrivals',
 			() =>
 				Effect.scoped(
@@ -686,7 +770,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						// the image patches the page and its unread counter: no re-read
 						expect(count.reads).toBe(0);
 						expect(w.frames.at(-2)).toMatchObject({
-							t: 'patch',
+							t: 'delta',
 							view: 'inbox',
 							arrivals: [{ id: `n1:${me}` }]
 						});
@@ -771,10 +855,11 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 					yield* agents.stop(id); // cancels the queued input: it leaves the transcript
 					yield* settled;
 					expect(count.reads).toBe(0);
-					expect(w.frames.flatMap((frame) => (frame.t === 'patch' ? [frame.ops] : []))).toEqual([
+					expect(w.frames.flatMap((frame) => (frame.t === 'delta' ? [frame.ops] : []))).toEqual([
 						[
 							{
 								op: 'upsert',
+								path: [],
 								index: 0,
 								row: expect.objectContaining({
 									id: row.id,
@@ -787,8 +872,8 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						],
 						// the stop sets the conversation's status beside the rows: a patch, not a re-read
 						[
-							{ op: 'meta', key: 'status', value: 'stopped' },
-							{ op: 'remove', id: row.id }
+							{ op: 'meta', path: [], key: 'status', value: 'stopped' },
+							{ op: 'remove', path: [], id: row.id }
 						]
 					]);
 					expect(w.held.get('t')).toEqual({ status: 'stopped', rows: [] });

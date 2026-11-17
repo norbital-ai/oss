@@ -13,7 +13,7 @@ it.live('native EventSource delivers live frames in Chromium (L-BOLT-1012)', () 
 			Effect.timeout('5 seconds')
 		);
 		expect(frames[0]).toEqual({ t: 'hello', conn: 'browser', v: 0 });
-		expect(frames[1]).toEqual({ t: 'patch', view: 'orders', v: 1, ops: [] });
+		expect(frames[1]).toEqual({ t: 'delta', view: 'orders', v: 1, ops: [] });
 		document.body.replaceChildren();
 		document.body.append(
 			Object.assign(document.createElement('p'), { textContent: frames[0]?.t ?? '' })
@@ -33,7 +33,7 @@ it.live('liveStream parses EventSource frames', () =>
 			Effect.timeout('5 seconds')
 		);
 		expect(frames[0]).toEqual({ t: 'hello', conn: 'browser', v: 0 });
-		expect(frames[1]).toEqual({ t: 'patch', view: 'orders', v: 1, ops: [] });
+		expect(frames[1]).toEqual({ t: 'delta', view: 'orders', v: 1, ops: [] });
 	})
 );
 

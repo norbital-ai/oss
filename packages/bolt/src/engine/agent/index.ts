@@ -155,6 +155,7 @@ import {
 	TEXT_FIRST_BYTES,
 	jobs,
 	perform,
+	performed,
 	runJob,
 	turnFacts,
 	WriteInput,
@@ -362,16 +363,13 @@ export const callKey = (name: string, input: Json): string =>
 /** A call as the transcript records it: its name and clipped arguments, for matching what a resumed step repeats. */
 const stepKey = (name: string, args: string | undefined): string => `${name}\u0000${args ?? ''}`;
 /**
- * How many failures a check (`workspace_diagnose`, `workspace_test`) reported: its `failing` count, or the count its
- * `error` names (`"7 failing"`, the older answer); 0 when it came back clean; undefined when it could not run at all.
+ * How many failures a check (`ToolBehavior.progress_check`) reported: its `failing` count; 0 when it came back clean;
+ * undefined when it could not run at all (an `error`).
  */
 export const checkFailing = (answer: Json): number | undefined => {
 	if (!isObj(answer)) return undefined;
 	if (typeof answer['failing'] === 'number') return answer['failing'];
-	const error = answer['error'];
-	if (error === undefined || error === null) return 0;
-	const counted = typeof error === 'string' ? /^(\d+) failing/.exec(error) : null;
-	return counted === null ? undefined : Number(counted[1]);
+	return answer['error'] === undefined || answer['error'] === null ? 0 : undefined;
 };
 /** What a resumed turn is told: its open request, and that a call made before the restart is not run again. */
 export const NUDGE = {
@@ -1511,6 +1509,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					const role = {
 						behavior: operation.behavior,
 						...(operation.studio === undefined ? {} : { studio: operation.studio }),
+						...(operation.view === undefined ? {} : { view: operation.view }),
 						...(operation.name === call.name
 							? {}
 							: {
@@ -2724,6 +2723,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							...(r.role === 'tool' && r.content.studio !== undefined
 								? { studio: r.content.studio }
 								: {}),
+							...(r.role === 'tool' && r.content.view !== undefined ? { view: r.content.view } : {}),
 							result: stored.result
 						}),
 						j(stored.full)
@@ -2741,13 +2741,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							const authority = yield* resolve(as);
 							if (authority === null) result = { error: FIXED.stale };
 							// a held tool call (MCP, browser submit, run_js send, a host tool) runs when the agent makes it again
-							else if (
-								call.name !== 'act' &&
-								call.name !== 'run' &&
-								call.name !== 'decide' &&
-								call.name !== 'invite'
-							)
-								result = { approved: true, note: APPROVED };
+							else if (!performed(call.name)) result = { approved: true, note: APPROVED };
 							else {
 								const started = yield* perform(
 									{

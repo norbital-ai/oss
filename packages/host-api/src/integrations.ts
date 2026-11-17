@@ -217,6 +217,19 @@ export const InstanceStatus = Schema.Struct({
 	test: tolerant(TestSend)
 });
 export type InstanceStatus = typeof InstanceStatus.Type;
+/** One instance as a host's operator observes it (`WorkspaceBranch.integrations`): never its account, pairing or values. */
+export const InstanceAdmin = Schema.Struct({
+	instance: Schema.String,
+	active: Schema.Boolean,
+	envoy: Schema.NullOr(Schema.String),
+	/** Its link's last durable state; `null` before any. */
+	state: Schema.NullOr(InstanceState),
+	/** A credential is stored. */
+	stored: Schema.Boolean,
+	/** What `configure` is fenced by. */
+	revision: Schema.Int
+});
+export type InstanceAdmin = typeof InstanceAdmin.Type;
 
 // ── delivery ──
 /**

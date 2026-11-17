@@ -3,7 +3,13 @@
 // decoded once where it enters (the host's request, the client's answer); every wire type is its Schema's own.
 import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { isArray } from 'effect/Array';
-import { PAPER_SIZES, ProviderChoice, STUDIO_ROLES, ToolBehavior } from '@norbital-ai/host-api';
+import {
+	PAPER_SIZES,
+	ProviderChoice,
+	STUDIO_ROLES,
+	ToolBehavior,
+	ToolView
+} from '@norbital-ai/host-api';
 import { MessageValues } from '../decl/errors/refusal.ts';
 
 /** A question keeps its choices through storage, channel delivery and the shell. */
@@ -303,18 +309,52 @@ export const LiveReply = Schema.Struct({
 	)
 });
 export type LiveReply = typeof LiveReply.Type;
+/** A delta's bounds: its ops, and the depth of an op's path. A change past them is sent as a whole `answer`. */
+export const DELTA = { ops: 1_000, depth: 8 } as const;
+const PROTOTYPE = new Set(['__proto__', 'constructor', 'prototype']);
+/** A key an op names: an own property of a JSON object, never one that reaches its prototype. */
+const DeltaKey = Schema.String.check(
+	Schema.makeFilter(
+		(key: string) => !PROTOTYPE.has(key) || `'${key}' reaches an object's prototype`
+	)
+);
+const DeltaPath = Schema.Array(DeltaKey).check(Schema.isMaxLength(DELTA.depth));
 /**
- * A change to a view's rows: `upsert` drops the row with that id, if any, then inserts `row` at `index` of what
- * remains; `remove` drops it. On a `get` view the value is the row or `null`. A page's `next` is never patched.
+ * One change to a container of a view's value. `path` names the keys from the value to that container, as the view's
+ * compiled read nests it: `[]` the value itself, `['orders']` a read request's `orders` root.
+ *
+ * A page's `rows`: `upsert` drops the row with `row.id`, if any, then inserts `row` at `index` of what remains;
+ * `remove` drops the row with `id`. Beside them: `meta` sets one key (a count, a transcript's conversation `status`),
+ * `unset` deletes it; neither names `rows`, and a page's `next` is never patched. A `get` view's value is its row or
+ * `null`: `upsert` (at 0) sets it, `remove` empties it.
  */
 export const PatchOp = Schema.Union([
-	Schema.Struct({ op: Schema.Literal('upsert'), index: Schema.Number, row: Schema.Json }),
-	Schema.Struct({ op: Schema.Literal('remove'), id: Schema.String }),
-	/** One top-level value of a page beside its rows (a transcript's conversation `status`), set without a re-read. */
-	Schema.Struct({ op: Schema.Literal('meta'), key: Schema.String, value: Schema.Json }),
-	Schema.Struct({ op: Schema.Literal('unset'), key: Schema.String })
+	Schema.Struct({
+		op: Schema.Literal('upsert'),
+		path: DeltaPath,
+		index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+		row: Schema.Json
+	}),
+	Schema.Struct({
+		op: Schema.Literal('remove'),
+		path: DeltaPath,
+		id: Schema.String
+	}),
+	Schema.Struct({
+		op: Schema.Literal('meta'),
+		path: DeltaPath,
+		key: DeltaKey,
+		value: Schema.Json
+	}),
+	Schema.Struct({
+		op: Schema.Literal('unset'),
+		path: DeltaPath,
+		key: DeltaKey
+	})
 ]);
 export type PatchOp = typeof PatchOp.Type;
+/** A delta's ops, applied in order, all or none. */
+export const PatchOps = Schema.Array(PatchOp).check(Schema.isMaxLength(DELTA.ops));
 export const Frame = Schema.Union([
 	Schema.Struct({ t: Schema.Literal('hello'), conn: Schema.String, v: Schema.Number }),
 	/** The whole value: a view's first answer, and every fallback that re-read it. */
@@ -332,12 +372,17 @@ export const Frame = Schema.Union([
 		v: Schema.Number,
 		known: Schema.String
 	}),
-	/** The ops that turn the view's value at its last frame into its value at `v`. */
+	/**
+	 * The ops of one lane batch that turn the view's value at its previous frame on this connection into its value at
+	 * `v`. That previous frame is the base: a connection carries a view's frames in order and skips none (one that
+	 * overflows is closed), and a registration's first frame is a whole `answer` or `same`. A client applies every op or
+	 * none; a delta that does not fit its image is a mismatch, and the view registers again for a whole answer.
+	 */
 	Schema.Struct({
-		t: Schema.Literal('patch'),
+		t: Schema.Literal('delta'),
 		view: Schema.String,
 		v: Schema.Number,
-		ops: Schema.Array(PatchOp),
+		ops: PatchOps,
 		arrivals: Schema.optionalKey(Schema.Array(Schema.Json))
 	}),
 	Schema.Struct({
@@ -348,7 +393,11 @@ export const Frame = Schema.Union([
 	}),
 	/** The lane advanced to `v`; everything before it is applied. */
 	Schema.Struct({ t: Schema.Literal('v'), v: Schema.Number }),
-	/** A generation change (reset, restore, fork admit, release flip): reload, do not reconnect. */
+	/**
+	 * A generation change (reset, restore, fork admit, release flip) ends the connection. The client forgets every image
+	 * and reports `closed` (a refresh fails until it reconnects), then reconnects to the next generation and registers
+	 * its views again; the shell reloads the page when that generation serves another client (`follow_client`).
+	 */
 	Schema.Struct({ t: Schema.Literal('close'), release: Schema.String })
 ]);
 export type Frame = typeof Frame.Type;
@@ -505,6 +554,8 @@ export const AgentRow = Schema.Struct({
 			),
 			/** The tool's declared Studio role (`HostTool.studio`). */
 			studio: Schema.optionalKey(Schema.Literals(STUDIO_ROLES)),
+			/** How the host's call reads in the panel (`HostTool.view`). */
+			view: Schema.optionalKey(ToolView),
 			ms: Schema.optionalKey(Schema.Number)
 		})
 	),

@@ -8,7 +8,7 @@ import { defineConfig } from 'vitest/config';
 /** Same-origin SSE for browser `EventSource` tests — not a second live server. */
 function liveFixture(): Plugin {
 	const hello = JSON.stringify({ t: 'hello', conn: 'browser', v: 0 });
-	const patch = JSON.stringify({ t: 'patch', view: 'orders', v: 1, ops: [] });
+	const patch = JSON.stringify({ t: 'delta', view: 'orders', v: 1, ops: [] });
 	return {
 		name: 'bolt:live-fixture',
 		configureServer(server) {
@@ -51,9 +51,7 @@ const SOURCE = Object.entries({
 	'/artifact': 'engine/artifact/index',
 	'/engine': 'engine/index',
 	'/errors': 'decl/errors',
-	'/facilities': 'facilities/index',
 	'/host-api': 'host-api',
-	'/node': 'node/index',
 	'/protocol': 'protocol/index',
 	'/tooling': 'tooling/index'
 }).map(([subpath, file]) => ({

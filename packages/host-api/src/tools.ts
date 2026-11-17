@@ -18,7 +18,12 @@ import type { Json } from '@norbital-ai/store';
 export const STUDIO_ROLES = ['preview', 'view', 'logs', 'merge', 'rollback'] as const;
 /** One of `STUDIO_ROLES`. */
 export type StudioRole = (typeof STUDIO_ROLES)[number];
-/** Native tool behavior, declared by its owner and carried with its stored step. */
+/**
+ * Native tool behavior, declared by its owner and carried with its stored step:
+ * - `source_edit`: its input is a source edit, `{ path, content }`, `{ path, oldString, newString }` or `{ patchText }`;
+ *   the panel shows its diff, which never enters the model's context.
+ * - `web_results`: its result's `results` are web pages, `{ url, title?, site?, date?, excerpt? }`, listed as links.
+ */
 export const ToolBehavior = Schema.Struct({
 	pure: Schema.optionalKey(Schema.Literal(true)),
 	progress_check: Schema.optionalKey(Schema.Literal(true)),
@@ -26,11 +31,24 @@ export const ToolBehavior = Schema.Struct({
 	data: Schema.optionalKey(Schema.Literal(true)),
 	page: Schema.optionalKey(Schema.Literal(true)),
 	downloads: Schema.optionalKey(Schema.Literal(true)),
+	source_edit: Schema.optionalKey(Schema.Literal(true)),
+	web_results: Schema.optionalKey(Schema.Literal(true)),
 	resume: Schema.optionalKey(
 		Schema.Struct({ argument: Schema.String, roots: Schema.optionalKey(Schema.Literal(true)) })
 	)
 });
 export type ToolBehavior = typeof ToolBehavior.Type;
+/**
+ * How one call reads in the panel, in the person's words: its `icon` (`lucide:<name>`), what it did (`verb`) and to what
+ * (`target`, possibly empty), and what it is `doing` while it runs. The shell translates the words it knows.
+ */
+export const ToolView = Schema.Struct({
+	icon: Schema.String,
+	verb: Schema.String,
+	target: Schema.String,
+	doing: Schema.optionalKey(Schema.String)
+});
+export type ToolView = typeof ToolView.Type;
 /** What a host tool learns of its call: the person (a Studio draft is theirs), the conversation (its attachments), the key. */
 export type HostToolContext = {
 	actor: Actor;
@@ -68,11 +86,17 @@ export type HostToolContext = {
  * `source` tool (it reads the workspace's own source, never a secret or a host file).
  */
 export type HostTool = {
+	/**
+	 * Its provider-visible name and identity: 1 to 64 of `A-Z a-z 0-9 _ -`, held by no native tool and no other host,
+	 * browser or MCP tool. A name that is not is offered by no list (the release logs why); it never replaces another.
+	 */
 	name: string;
 	description: string;
 	input: Json;
 	/** Declared once here; the release does not infer behavior from the operation's name. */
 	readonly behavior: ToolBehavior;
+	/** How a call reads in the panel; without it the panel names the tool and its `query`, `url`, `name`, `id` or `text`. */
+	view?(input: Json): ToolView;
 	read_only?: boolean;
 	source?: true;
 	studio?: StudioRole;

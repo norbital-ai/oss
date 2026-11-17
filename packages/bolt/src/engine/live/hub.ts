@@ -1,9 +1,10 @@
 // The live engine: one lane per cell. A commit's RETURNING set is routed host-side: each view is
-// judged in memory against the pre- and post-images, and a hit is sent as a patch built from the post-image (projected
-// through the view's select and output, placed by its order), with no read. A delta that cannot be exact
+// judged in memory against the pre- and post-images, and a hit is sent as a delta built from the post-image (projected
+// through the view's select and output, placed by its order), with no read: each op changes one container at its path
+// in the view's compiled read (a read request's named root, or the value itself). A delta that cannot be exact
 // falls back as narrowly as it can — a PK `get` of the one row, else a re-read of the view — and is counted
-// (`conservative=`, listed by `sweep()`). Commits coalesce per lane batch; each connection's fallbacks are one pipelined
-// read. Budgets are typed errors on the view; the stream is untouched.
+// (`conservative=`, listed by `sweep()`). Commits coalesce per lane batch, one delta per view; each connection's
+// fallbacks are one pipelined read. Budgets are typed errors on the view; the stream is untouched.
 import {
 	Cause,
 	Clock,
@@ -14,6 +15,7 @@ import {
 	Option,
 	Queue,
 	Result,
+	Schema,
 	Scope,
 	Stream
 } from 'effect';
@@ -23,6 +25,7 @@ import { Live, Manifest, Reads, type LiveView } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
 import { sha256_hex } from '@norbital-ai/store';
 import type { Frame, LiveErrorCode, PatchOp } from '../../protocol/wire.ts';
+import { PatchOps } from '../../protocol/schema.ts';
 import type { Authority, Bindings, Captured } from '../contracts.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -67,6 +70,8 @@ type Answer = ReadAnswer | { err: unknown };
 
 const utf8 = new TextEncoder();
 const bytesOf = (text: string) => utf8.encode(text).byteLength;
+/** A delta the wire can carry; past its bounds (op count, path depth, prototype keys) the exact image goes whole. */
+const carried = Schema.is(PatchOps);
 export const LiveHubLive = Layer.effect(
 	Live,
 	Effect.gen(function* () {
@@ -113,38 +118,43 @@ export const LiveHubLive = Layer.effect(
 			Queue.offerUnsafe(lane, { _tag: 'Flush' });
 		};
 
-		/** Sends a view's new value: its ops as a patch, or the whole answer; over a budget, the view errors alone. */
+		/**
+		 * Sends a view's new value: a delta's ops, or the whole answer; over a budget, the view errors alone. A whole
+		 * answer is measured whole; a delta moves the retained size by the bytes its ops add and take away.
+		 */
 		const put = Effect.fn('Live.put')(function* (
 			conn: Conn,
 			view: View,
 			answer: {
 				value: Json;
 				expected: number;
-				ops?: readonly PatchOp[] | undefined;
+				delta?: { readonly ops: readonly PatchOp[]; readonly bytes: number } | undefined;
 				arrivals?: readonly Json[] | undefined;
 				snapshots?: patch.Snapshots;
 			}
 		) {
 			if (conn.views.get(view.id) !== view || view.readVersion !== answer.expected) return;
-			const { value, ops, arrivals } = answer;
+			const { value, delta, arrivals } = answer;
 			const snapshots =
-				ops === undefined ? (answer.snapshots ?? new Map<string, ReadSnapshot>()) : view.snapshots;
-			const text = JSON.stringify(value);
+				delta === undefined ? (answer.snapshots ?? new Map<string, ReadSnapshot>()) : view.snapshots;
+			const text = delta === undefined ? JSON.stringify(value) : null;
 			const reusable =
+				text !== null &&
 				view.value === undefined &&
-				ops === undefined &&
 				!arrivals?.length &&
 				view.known !== undefined &&
 				view.known === sha256_hex(text);
 			const unchanged =
-				ops === undefined &&
+				delta === undefined &&
 				!arrivals?.length &&
 				view.value !== undefined &&
 				same(view.value, value);
 			const bytes =
-				bytesOf(text) +
-				patch.keys(view.plan).reduce((sum, key) => sum + bytesOf(key), 0) +
-				[...snapshots].reduce((sum, [key, snapshot]) => sum + bytesOf(key) + snapshot.bytes, 0);
+				text === null
+					? view.bytes + (delta?.bytes ?? 0)
+					: bytesOf(text) +
+						patch.keys(view.plan).reduce((sum, key) => sum + bytesOf(key), 0) +
+						[...snapshots].reduce((sum, [key, snapshot]) => sum + bytesOf(key) + snapshot.bytes, 0);
 			const over: [LiveErrorCode, string] | null =
 				bytes > LIVE.subscriptionBytes
 					? [
@@ -170,7 +180,7 @@ export const LiveHubLive = Layer.effect(
 				return;
 			}
 			yield* conn.send(
-				ops === undefined
+				delta === undefined
 					? {
 							t: 'answer',
 							view: view.id,
@@ -178,7 +188,7 @@ export const LiveHubLive = Layer.effect(
 							value,
 							...(arrivals?.length ? { arrivals } : {})
 						}
-					: { t: 'patch', view: view.id, v: routed, ops, ...(arrivals?.length ? { arrivals } : {}) }
+					: { t: 'delta', view: view.id, v: routed, ops: delta.ops, ...(arrivals?.length ? { arrivals } : {}) }
 			);
 		});
 		/** A view whose read failed is dropped (the client registers it again), so no later flush asks it again. */
@@ -418,11 +428,7 @@ export const LiveHubLive = Layer.effect(
 								again.push(view);
 								continue;
 							}
-							const work: patch.PatchWork = {
-								value: view.value,
-								ops: [],
-								roots: new Set<string>()
-							};
+							const work: patch.PatchWork = { value: view.value, ops: [], bytes: 0 };
 							const expected = view.readVersion;
 							let exact = true;
 							for (const [i, change] of rows.entries()) {
@@ -452,11 +458,17 @@ export const LiveHubLive = Layer.effect(
 								again.push(view);
 								continue;
 							}
-							const ops = patch.patches(work),
+							const { value, ops, bytes } = work,
 								incoming = arrivals(view);
 							if (ops.length === 0 && !incoming?.length) continue;
 							patched++;
-							yield* put(conn, view, { value: work.value, expected, ops, arrivals: incoming });
+							yield* put(
+								conn,
+								view,
+								carried(ops)
+									? { value, expected, delta: { ops, bytes }, arrivals: incoming }
+									: { value, expected, snapshots: view.snapshots, arrivals: incoming }
+							);
 						}
 						for (const view of [...full, ...again]) fallback.add(view);
 						yield* answer(conn, again, arrivals);
@@ -517,7 +529,7 @@ export const LiveHubLive = Layer.effect(
 										queuedBytes + bytes > LIVE.connectionQueueBytes ||
 										!Queue.offerUnsafe(frames, { frame, bytes })
 									)
-										// A skipped patch would invalidate every later frame. Reconnect for a new snapshot.
+										// A skipped delta would invalidate every later one. Reconnect for a new snapshot.
 										return disconnect(id, true);
 									queuedBytes += bytes;
 									return Effect.void;

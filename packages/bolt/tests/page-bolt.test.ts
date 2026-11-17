@@ -594,20 +594,105 @@ describe('acts, starts, uploads and the session', () => {
 	);
 });
 
-describe('live patches on a page value', () => {
-	it('set a top-level value beside the rows (meta) without touching them, on a single record too, and refuse it on no record', () => {
-		const page = { status: 'running', rows: [{ id: 'a' }] };
-		expect(patched(page, [{ op: 'meta', key: 'status', value: 'stopped' }])).toEqual({
-			status: 'stopped',
+describe('a live delta on a view value', () => {
+	it("sets and deletes a key beside a page's rows, never `rows` itself and never on a row", () => {
+		const transcript = { status: 'running', rows: [{ id: 'a' }] };
+		const stopped = patched(transcript, [{ op: 'meta', path: [], key: 'status', value: 'stopped' }]);
+		expect(stopped).toEqual({ status: 'stopped', rows: [{ id: 'a' }] });
+		expect(Schema.decodeUnknownSync(Schema.Struct({ rows: Schema.Unknown }))(stopped).rows).toBe(
+			transcript.rows
+		);
+		expect(patched(transcript, [{ op: 'unset', path: [], key: 'status' }])).toEqual({
 			rows: [{ id: 'a' }]
 		});
+		for (const ops of [
+			[{ op: 'meta', path: [], key: 'rows', value: [] }],
+			[{ op: 'unset', path: [], key: 'rows' }],
+			[{ op: 'unset', path: [], key: 'absent' }]
+		] as const)
+			expect(patched(transcript, ops)).toBe(undefined);
 		expect(
-			patched({ id: 'a', status: 'running' }, [{ op: 'meta', key: 'status', value: 'stopped' }])
-		).toEqual({ id: 'a', status: 'stopped' });
-		expect(patched({ id: 'a', status: 'running' }, [{ op: 'unset', key: 'status' }])).toEqual({
-			id: 'a'
+			patched({ id: 'a', status: 'running' }, [{ op: 'meta', path: [], key: 'status', value: 'stopped' }])
+		).toBe(undefined);
+		expect(patched(null, [{ op: 'meta', path: [], key: 'status', value: 'stopped' }])).toBe(undefined);
+	});
+
+	it('changes only the named root it targets, sharing every other row and root', () => {
+		const rows = Array.from({ length: 7 }, (_, i) => ({ id: `o${i}`, title: `t${i}` }));
+		const value = {
+			orders: { rows, next: null, total: 7 },
+			customers: { rows: [{ id: 'c1', name: 'Acme' }], next: null, total: 1 }
+		};
+		const edited = { id: 'o3', title: 'edited' };
+		const next = patched(value, [{ op: 'upsert', path: ['orders'], index: 3, row: edited }]);
+		expect(next).toEqual({
+			...value,
+			orders: { ...value.orders, rows: rows.map((row) => (row.id === 'o3' ? edited : row)) }
 		});
-		expect(patched(null, [{ op: 'meta', key: 'status', value: 'stopped' }])).toBe(undefined);
+		const decoded = Schema.decodeUnknownSync(
+			Schema.Struct({
+				orders: Schema.Struct({ rows: Schema.Array(Schema.Unknown) }),
+				customers: Schema.Unknown
+			})
+		)(next);
+		// structural sharing: the untouched root and rows are the image's own objects
+		expect(decoded.customers).toBe(value.customers);
+		for (const i of [0, 1, 2, 4, 5, 6]) expect(decoded.orders.rows[i]).toBe(rows[i]);
+		expect(value.orders.rows[3]).toEqual({ id: 'o3', title: 't3' });
+
+		const added = { id: 'o7', title: 't7' };
+		expect(
+			patched(value, [
+				{ op: 'meta', path: ['orders'], key: 'total', value: 8 },
+				{ op: 'upsert', path: ['orders'], index: 7, row: added }
+			])
+		).toEqual({ ...value, orders: { rows: [...rows, added], next: null, total: 8 } });
+		expect(
+			patched(value, [
+				{ op: 'meta', path: ['orders'], key: 'total', value: 6 },
+				{ op: 'remove', path: ['orders'], id: 'o0' },
+				{ op: 'upsert', path: ['customers'], index: 0, row: { id: 'c0', name: 'Zeta' } }
+			])
+		).toEqual({
+			orders: { rows: rows.slice(1), next: null, total: 6 },
+			customers: { rows: [{ id: 'c0', name: 'Zeta' }, { id: 'c1', name: 'Acme' }], next: null, total: 1 }
+		});
+		// an upsert of a row the page holds moves it: dropped, then placed at `index` of what remains
+		expect(
+			patched(value, [{ op: 'upsert', path: ['orders'], index: 0, row: { id: 'o6', title: 'first' } }])
+		).toMatchObject({ orders: { rows: [{ id: 'o6', title: 'first' }, ...rows.slice(0, 6)] } });
+	});
+
+	it('refuses the whole delta when one op does not fit the image', () => {
+		const value = { orders: { rows: [{ id: 'o1' }], next: null } };
+		const fits = { op: 'upsert', path: ['orders'], index: 1, row: { id: 'o2' } } as const;
+		for (const misfit of [
+			{ op: 'upsert', path: ['lines'], index: 0, row: { id: 'o3' } },
+			{ op: 'upsert', path: ['orders', 'rows'], index: 0, row: { id: 'o3' } },
+			{ op: 'upsert', path: ['toString'], index: 0, row: { id: 'o3' } },
+			{ op: 'upsert', path: ['orders'], index: 3, row: { id: 'o3' } },
+			{ op: 'upsert', path: ['orders'], index: 0, row: { title: 'no id' } },
+			{ op: 'upsert', path: [], index: 0, row: { id: 'o3' } },
+			{ op: 'remove', path: ['orders'], id: 'absent' },
+			{ op: 'remove', path: [], id: 'o1' },
+			{ op: 'meta', path: [], key: 'orders', value: { rows: [], next: null } }
+		] as const)
+			expect(patched(value, [fits, misfit])).toBe(undefined);
+		expect(value).toEqual({ orders: { rows: [{ id: 'o1' }], next: null } });
+		expect(patched(undefined, [fits])).toBe(undefined);
+	});
+
+	it("sets and empties a `get` view's row", () => {
+		const row = { id: 'o1', title: 'desk' };
+		expect(patched(null, [{ op: 'upsert', path: [], index: 0, row }])).toBe(row);
+		expect(patched(row, [{ op: 'upsert', path: [], index: 0, row: { id: 'o1', title: 'lamp' } }])).toEqual({
+			id: 'o1',
+			title: 'lamp'
+		});
+		expect(patched(row, [{ op: 'remove', path: [], id: 'o1' }])).toBe(null);
+		expect(patched(row, [{ op: 'remove', path: [], id: 'o2' }])).toBe(undefined);
+		expect(patched(row, [{ op: 'upsert', path: [], index: 0, row: { id: 'o2' } }])).toBe(undefined);
+		expect(patched(null, [{ op: 'upsert', path: [], index: 1, row }])).toBe(undefined);
 	});
 });
 

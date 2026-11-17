@@ -1,5 +1,5 @@
 // engine/live, protocol/wire and the $bolt client without a database: one guarantee per test.
-import { describe, expect, it } from '@effect/vitest';
+import { describe, expect, it, vi } from '@effect/vitest';
 import {
 	Context,
 	Deferred,
@@ -23,10 +23,10 @@ import { compile_authority } from '../src/engine/access/authority.ts';
 import { catalog_of } from '../src/engine/access/pred.ts';
 import type { Authority, Captured, EngineActor } from '../src/engine/contracts.ts';
 import { LIVE, LiveHubLive } from '../src/engine/live/hub.ts';
-import { create_bolt, type BoltConfig, type SyncStatus } from '../src/page/bolt.ts';
+import { create_bolt, patched, type BoltConfig, type SyncStatus } from '../src/page/bolt.ts';
 import { liveStream, type EventSourceLike } from '../src/page/stream.ts';
 import { redact, status_of, type Frame } from '../src/protocol/wire.ts';
-import { ActBody, LiveBody, type WireRead } from '../src/protocol/schema.ts';
+import { ActBody, DELTA, LiveBody, type WireRead } from '../src/protocol/schema.ts';
 import { manifest as fixture } from './engine-fixture.ts';
 import type { EngineManifest, GrantData } from '../src/engine/manifest.ts';
 
@@ -158,7 +158,7 @@ const setup = Effect.fn('Test.liveSetup')(function* (answer: (read: ReadIR) => J
 const answers = (frames: readonly Frame[]) =>
 	frames.flatMap((f) => (f.t === 'answer' ? [f.view] : []));
 const patches = (frames: readonly Frame[]) =>
-	frames.flatMap((f) => (f.t === 'patch' ? [[f.view, f.ops] as const] : []));
+	frames.flatMap((f) => (f.t === 'delta' ? [[f.view, f.ops] as const] : []));
 const page = (...rows: Json[]) => ({ rows, next: null });
 /** A view's narrow fallback: its one row, read by id as the view reads it. */
 const byId = (id: string) => expect.objectContaining({
@@ -283,7 +283,7 @@ describe('engine/live: routing on pre- and post-images', () => {
 				]);
 				expect(answers(frames)).toEqual(['record']);
 				expect(patches(frames)).toEqual([
-					['table', [{ op: 'upsert', index: 0, row: { id: 'o1', $sync: { mail: { status: 'failed' } } } }]]
+					['table', [{ op: 'upsert', path: [], index: 0, row: { id: 'o1', $sync: { mail: { status: 'failed' } } } }]]
 				]);
 				expect(frames.filter((frame) => frame.t === 'answer')).toEqual(
 					expect.arrayContaining([
@@ -377,7 +377,7 @@ describe('engine/live: routing on pre- and post-images', () => {
 				yield* hub.settled;
 				yield* TestClock.adjust(0);
 				expect(patches(frames)).toEqual([
-					['all', [{ op: 'upsert', index: 0, row: { id: 'o1', title: 'desk' } }]]
+					['all', [{ op: 'upsert', path: [], index: 0, row: { id: 'o1', title: 'desk' } }]]
 				]);
 				// its one row, read under the view's undecidable where; its answer did not change
 				expect(asked).toEqual([byId('o1')]);
@@ -403,7 +403,7 @@ describe('engine/live: routing on pre- and post-images', () => {
 			hub.publish([cap(order(), order({ status: 'submitted' }))]);
 			yield* hub.settled;
 			yield* TestClock.adjust(0);
-			expect(patches(frames)).toEqual([['drafts', [{ op: 'remove', id: 'o1' }]]]);
+			expect(patches(frames)).toEqual([['drafts', [{ op: 'remove', path: [], id: 'o1' }]]]);
 			expect(asked).toEqual([]);
 		})
 	);
@@ -449,12 +449,12 @@ describe('engine/live: routing on pre- and post-images', () => {
 				expect(asked).toHaveLength(0);
 				expect(frames).toEqual([
 					{
-						t: 'patch',
+						t: 'delta',
 						view: 'all',
 						v: 2,
 						ops: [
-							{ op: 'upsert', index: 0, row: { id: 'o1', title: 'desk' } },
-							{ op: 'upsert', index: 1, row: { id: 'o2', title: 'desk' } }
+							{ op: 'upsert', path: [], index: 0, row: { id: 'o1', title: 'desk' } },
+							{ op: 'upsert', path: [], index: 1, row: { id: 'o2', title: 'desk' } }
 						]
 					},
 					{ t: 'v', v: 2 }
@@ -503,10 +503,10 @@ describe('engine/live: deltas from the RETURNING image', () => {
 			]);
 			expect(x.frames).toEqual([
 				{
-					t: 'patch',
+					t: 'delta',
 					view: 'v',
 					v: 1,
-					ops: [{ op: 'upsert', index: 1, row: { id: O(2), title: 't2' } }]
+					ops: [{ op: 'upsert', path: [], index: 1, row: { id: O(2), title: 't2' } }]
 				}
 			]);
 			expect(x.asked).toEqual([]);
@@ -533,10 +533,10 @@ describe('engine/live: deltas from the RETURNING image', () => {
 			);
 			expect(x.frames).toEqual([
 				{
-					t: 'patch',
+					t: 'delta',
 					view: 'v',
 					v: 1,
-					ops: [{ op: 'upsert', index: 1, row: { id: O(2), title: 'new', created_at: $t(1) } }]
+					ops: [{ op: 'upsert', path: [], index: 1, row: { id: O(2), title: 'new', created_at: $t(1) } }]
 				}
 			]);
 			expect(x.asked).toEqual([]);
@@ -555,10 +555,10 @@ describe('engine/live: deltas from the RETURNING image', () => {
 			);
 			expect(x.frames).toEqual([
 				{
-					t: 'patch',
+					t: 'delta',
 					view: 'v',
 					v: 1,
-					ops: [{ op: 'upsert', index: 0, row: { id: O(2), title: 't2', created_at: $t(3) } }]
+					ops: [{ op: 'upsert', path: [], index: 0, row: { id: O(2), title: 't2', created_at: $t(3) } }]
 				}
 			]);
 			expect(x.asked).toEqual([]);
@@ -574,12 +574,12 @@ describe('engine/live: deltas from the RETURNING image', () => {
 			]);
 			expect(x.frames).toEqual([
 				{
-					t: 'patch',
+					t: 'delta',
 					view: 'v',
 					v: 1,
 					ops: [
-						{ op: 'remove', id: O(1) },
-						{ op: 'remove', id: O(2) }
+						{ op: 'remove', path: [], id: O(1) },
+						{ op: 'remove', path: [], id: O(2) }
 					]
 				}
 			]);
@@ -608,10 +608,10 @@ describe('engine/live: deltas from the RETURNING image', () => {
 				);
 				expect(own.frames).toEqual([
 					{
-						t: 'patch',
+						t: 'delta',
 						view: 'v',
 						v: 1,
-						ops: [{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', note: 'mine' } }]
+						ops: [{ op: 'upsert', path: [], index: 0, row: { id: O(1), title: 't1', note: 'mine' } }]
 					}
 				]);
 				const audit = yield* after(
@@ -624,12 +624,12 @@ describe('engine/live: deltas from the RETURNING image', () => {
 				);
 				expect(audit.frames).toEqual([
 					{
-						t: 'patch',
+						t: 'delta',
 						view: 'v',
 						v: 1,
 						ops: [
-							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1' } },
-							{ op: 'upsert', index: 1, row: { id: O(2), title: 't2' } }
+							{ op: 'upsert', path: [], index: 0, row: { id: O(1), title: 't1' } },
+							{ op: 'upsert', path: [], index: 1, row: { id: O(2), title: 't2' } }
 						]
 					}
 				]);
@@ -649,7 +649,7 @@ describe('engine/live: deltas from the RETURNING image', () => {
 			expect(x.asked).toEqual([byId(O(1))]);
 			expect(x.asked[0]).toMatchObject({ model: 'orders', select: { fields: ['title'], relations: { customer: expect.anything() } } });
 			expect(x.frames).toEqual([
-				{ t: 'patch', view: 'v', v: 1, ops: [{ op: 'upsert', index: 0, row: got }] }
+				{ t: 'delta', view: 'v', v: 1, ops: [{ op: 'upsert', path: [], index: 0, row: got }] }
 			]);
 			expect(x.sweep.conservative).toBe(1);
 		})
@@ -723,11 +723,11 @@ describe('engine/live: deltas from the RETURNING image', () => {
 				expect(x.asked).toEqual([]);
 				expect(x.frames).toEqual([
 					{
-						t: 'patch',
+						t: 'delta',
 						view: 'v',
 						v: 1,
 						ops: [
-							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', total: '1.20' } }
+							{ op: 'upsert', path: [], index: 0, row: { id: O(1), title: 't1', total: '1.20' } }
 						]
 					}
 				]);
@@ -749,11 +749,11 @@ describe('engine/live: deltas from the RETURNING image', () => {
 				expect(x.asked).toEqual([byId(O(1))]);
 				expect(x.frames).toEqual([
 					{
-						t: 'patch',
+						t: 'delta',
 						view: 'v',
 						v: 1,
 						ops: [
-							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', total: '1.20' } }
+							{ op: 'upsert', path: [], index: 0, row: { id: O(1), title: 't1', total: '1.20' } }
 						]
 					}
 				]);
@@ -821,10 +821,10 @@ describe('engine/live: a view sorted by a related field', () => {
 			expect(x.asked).toEqual([]);
 			expect(x.frames).toEqual([
 				{
-					t: 'patch',
+					t: 'delta',
 					view: 'v',
 					v: 1,
-					ops: [{ op: 'upsert', index: 1, row: { id: O(2), title: 'new' } }]
+					ops: [{ op: 'upsert', path: [], index: 1, row: { id: O(2), title: 'new' } }]
 				}
 			]);
 		})
@@ -1383,7 +1383,7 @@ describe('$bolt client without a server', () => {
 			})
 	);
 	it.effect(
-		'applies patches in lane order, ignores a stale one and re-registers a view a patch does not fit',
+		'applies each delta to the image its previous frame left, whatever its `v`, and re-registers a view one does not fit',
 		() =>
 			Effect.gen(function* () {
 				const c = yield* client();
@@ -1399,28 +1399,33 @@ describe('$bolt client without a server', () => {
 				yield* c.push({ t: 'answer', view: 'v1', v: 1, value: { rows: [order()], next: null } });
 				yield* view.next;
 				yield* c.push({
-					t: 'patch',
+					t: 'delta',
 					view: 'v1',
 					v: 2,
 					ops: [
-						{ op: 'upsert', index: 0, row: order({ id: 'o0', title: 'chair' }) },
-						{ op: 'upsert', index: 1, row: order({ title: 'lamp' }) }
+						{ op: 'upsert', path: [], index: 0, row: order({ id: 'o0', title: 'chair' }) },
+						{ op: 'upsert', path: [], index: 1, row: order({ title: 'lamp' }) }
 					]
 				});
 				yield* view.next;
 				expect(titles()).toEqual(['chair', 'lamp']);
-				yield* c.push({ t: 'patch', view: 'v1', v: 2, ops: [{ op: 'remove', id: 'o0' }] });
-				yield* c.settle;
-				expect(titles()).toEqual(['chair', 'lamp']);
+				// `v` is the lane's watermark, not a delta's base: one batch may stamp a view's answer and its delta alike
+				yield* c.push({ t: 'delta', view: 'v1', v: 2, ops: [{ op: 'remove', path: [], id: 'o0' }] });
+				yield* view.next;
+				expect(titles()).toEqual(['lamp']);
 				c.registered.length = 0;
 				yield* c.push({
-					t: 'patch',
+					t: 'delta',
 					view: 'v1',
 					v: 3,
-					ops: [{ op: 'upsert', index: 5, row: order({ id: 'o9' }) }]
+					ops: [
+						{ op: 'remove', path: [], id: 'o1' },
+						{ op: 'upsert', path: [], index: 5, row: order({ id: 'o9' }) }
+					]
 				});
 				yield* c.registration;
-				expect(titles()).toEqual(['chair', 'lamp']);
+				// no op of a delta that does not fit is applied
+				expect(titles()).toEqual(['lamp']);
 				expect(c.registered).toEqual([
 					{
 						conn: 'c1',
@@ -1428,8 +1433,48 @@ describe('$bolt client without a server', () => {
 						add: [{ view: 'v1', read: inbox }]
 					}
 				]);
+				// until its whole answer, a re-registering view has no image for a delta to change
+				yield* c.push({ t: 'delta', view: 'v1', v: 4, ops: [{ op: 'remove', path: [], id: 'o1' }] });
+				yield* c.settle;
+				expect(titles()).toEqual(['lamp']);
+				expect(c.registered).toHaveLength(1);
+				yield* c.push({ t: 'answer', view: 'v1', v: 4, value: { rows: [order({ title: 'desk' })], next: null } });
+				yield* view.next;
+				expect(titles()).toEqual(['desk']);
 				yield* view.stop;
 			})
+	);
+	it.effect('a delta changes the named root its path names and leaves the others as they are', () =>
+		Effect.gen(function* () {
+			const c = yield* client();
+			const both = { read: { m: 'query', a: [{ orders: {}, customers: {} }] } } as const;
+			const view = yield* observe(
+				c.bolt.observe(both, Schema.Struct({ orders: Page, customers: Page }))
+			);
+			yield* c.opened;
+			yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
+			yield* c.registration;
+			const customers = { rows: [{ id: 'c1', name: 'Acme' }], next: null };
+			yield* c.push({
+				t: 'answer',
+				view: 'v1',
+				v: 1,
+				value: { orders: { rows: [order(), order({ id: 'o2', title: 'lamp' })], next: null }, customers }
+			});
+			yield* view.next;
+			yield* c.push({
+				t: 'delta',
+				view: 'v1',
+				v: 2,
+				ops: [{ op: 'upsert', path: ['orders'], index: 1, row: order({ id: 'o2', title: 'chair' }) }]
+			});
+			yield* view.next;
+			expect(view.current()).toEqual({
+				orders: { rows: [order(), order({ id: 'o2', title: 'chair' })], next: null },
+				customers
+			});
+			yield* view.stop;
+		})
 	);
 	it.effect(
 		'a dropped link reports down, retries on a doubling backoff, and the next hello re-answers every view; scope closure retires it',
@@ -1732,14 +1777,165 @@ describe('$bolt client without a server', () => {
 			yield* hub.settled;
 			yield* TestClock.adjust(0);
 			for (const frames of tabs)
-				expect(frames).toContainEqual(expect.objectContaining({ t: 'patch', view: 'v1' }));
+				expect(frames).toContainEqual(expect.objectContaining({ t: 'delta', view: 'v1' }));
 		})
 	);
 });
 
-it.effect(
-	'a read request patches the root a commit touches, keyed by root, and skips a model it never read',
-	() =>
+describe("engine/live: a read request's named roots", () => {
+	const O = (n: number) => `0199a000-0000-7000-8000-${String(n).padStart(12, '0')}`;
+	const row = (n: number, over: { [k: string]: Json } = {}) => order({ id: O(n), title: `t${n}`, ...over });
+	const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+	/** The view's image as a client holds it: its last answer with every later delta applied. */
+	const held = (frames: readonly Frame[], view: string) =>
+		frames.reduce<Json | undefined>(
+			(image, f) =>
+				f.t === 'answer' && f.view === view ? f.value : f.t === 'delta' && f.view === view ? patched(image, f.ops) : image,
+			undefined
+		);
+	/** Orders and customers as a store holds them; the fake reader answers the request from it, as a fresh read would. */
+	const group = Effect.fn('Test.liveGroup')(function* (seed: number) {
+		const orders = new Map(Array.from({ length: seed }, (_, i) => [O(i + 1), row(i + 1)] as const));
+		const customers = new Map([['c1', { id: 'c1', name: 'Acme', blocked: false }]]);
+		const sorted = <R extends { readonly id: string }>(rows: ReadonlyMap<string, R>) =>
+			[...rows.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+		const fresh = (): Json => ({
+			orders: page(...sorted(orders).map(({ id, title }) => ({ id, title }))),
+			customers: page(...sorted(customers).map(({ id, name }) => ({ id, name })))
+		});
+		const request: ReadIR = {
+			kind: 'request',
+			roots: [
+				{ root: 'orders', read: yield* read(cat, 'orders', { select: { title: true }, all: true }) },
+				{ root: 'customers', read: yield* read(cat, 'customers', { select: { name: true }, all: true }) }
+			]
+		};
+		const live = yield* setup((r) => (r.kind === 'request' ? fresh() : null));
+		const conn = yield* live.connect();
+		yield* live.hub.register(conn, 'group', { read: request });
+		yield* TestClock.adjust(0);
+		live.asked.length = 0;
+		/** Publishes each commit in one lane batch; the frames it caused, after the client's image matches a fresh read. */
+		const commit = Effect.fn('Test.liveCommit')(function* (...captures: readonly Captured[]) {
+			const from = live.frames.length;
+			for (const c of captures) {
+				const image = c.new ?? c.old;
+				const id = String(image?.['id']);
+				if (c.model === 'orders') {
+					if (c.new === null) orders.delete(id);
+					else orders.set(id, row(0, { id, title: String(c.new['title']) }));
+				} else if (c.new === null) customers.delete(id);
+				else customers.set(id, { id, name: String(c.new['name']), blocked: false });
+				live.hub.publish([c]);
+			}
+			yield* live.hub.settled;
+			yield* TestClock.adjust(0);
+			// apply(old image, ops) is the fresh authorized read at the same state
+			expect(held(live.frames, 'group')).toEqual(fresh());
+			return live.frames.slice(from).filter((f) => f.t !== 'v');
+		});
+		return { ...live, conn, request, commit, fresh };
+	});
+
+	it.effect('a one-row edit under a named root sends that row alone, at its root, with no read', () =>
+		Effect.gen(function* () {
+			const g = yield* group(7);
+			const before = held(g.frames, 'group');
+			const frames = yield* g.commit(cap(row(3), row(3, { title: 'edited' })));
+			const edited = { id: O(3), title: 'edited' };
+			expect(frames).toEqual([
+				{ t: 'delta', view: 'group', v: 1, ops: [{ op: 'upsert', path: ['orders'], index: 2, row: edited }] }
+			]);
+			expect(g.asked).toEqual([]);
+			// the changed row and bounded framing: no unchanged row, no other root, never the whole `orders` root
+			const text = JSON.stringify(frames[0]);
+			expect(bytes(frames[0])).toBeLessThanOrEqual(bytes(edited) + 128);
+			for (const n of [1, 2, 4, 5, 6, 7]) expect(text).not.toContain(O(n));
+			expect(text).not.toContain('Acme');
+			const orders = Schema.decodeUnknownSync(Schema.Struct({ orders: Schema.Unknown }))(before).orders;
+			expect(bytes(frames[0])).toBeLessThan(bytes(orders));
+		})
+	);
+
+	it.effect('a delta moves the retained size by what its ops add and take away, never serializing the whole image', () =>
+		Effect.gen(function* () {
+			const g = yield* group(7);
+			const stringify = yield* Effect.acquireRelease(
+				Effect.sync(() => vi.spyOn(JSON, 'stringify')),
+				(spy) => Effect.sync(() => spy.mockRestore())
+			);
+			yield* g.commit(cap(row(3), row(3, { title: 'edited' })));
+			yield* g.commit(cap(null, row(8)), cap(row(2), null), cap(null, { id: 'c0', name: 'Zeta', blocked: false }, 'customers'));
+			const serialized = stringify.mock.results.flatMap((result) =>
+				result.type === 'return' && typeof result.value === 'string' ? [result.value] : []
+			);
+			stringify.mockRestore();
+			// routing serialized the rows its ops carried or took away, never a row they left alone
+			expect(serialized.some((text) => text.includes(O(3)))).toBe(true);
+			for (const n of [1, 4, 5, 6, 7]) expect(serialized.some((text) => text.includes(O(n)))).toBe(false);
+			// the size moved op by op equals the same image measured whole, as a fresh registration of the read measures it
+			const tracked = yield* g.hub.retained;
+			yield* g.hub.register(g.conn, 'measured', { read: g.request });
+			yield* TestClock.adjust(0);
+			expect(held(g.frames, 'measured')).toEqual(held(g.frames, 'group'));
+			expect(yield* g.hub.retained).toBe(2 * tracked);
+		})
+	);
+
+	it.effect('an insertion into a seven-row root and a delete each send their one op', () =>
+		Effect.gen(function* () {
+			const g = yield* group(7);
+			expect(yield* g.commit(cap(null, row(8)))).toEqual([
+				{
+					t: 'delta',
+					view: 'group',
+					v: 1,
+					ops: [{ op: 'upsert', path: ['orders'], index: 7, row: { id: O(8), title: 't8' } }]
+				}
+			]);
+			expect(yield* g.commit(cap(row(2), null))).toEqual([
+				{ t: 'delta', view: 'group', v: 2, ops: [{ op: 'remove', path: ['orders'], id: O(2) }] }
+			]);
+			expect(g.asked).toEqual([]);
+		})
+	);
+
+	it.effect('one lane batch over two roots is one delta: each op at its own root', () =>
+		Effect.gen(function* () {
+			const g = yield* group(2);
+			expect(
+				yield* g.commit(
+					cap(null, row(3)),
+					cap(null, { id: 'c0', name: 'Zeta', blocked: false }, 'customers'),
+					cap(row(1), null)
+				)
+			).toEqual([
+				{
+					t: 'delta',
+					view: 'group',
+					v: 3,
+					ops: [
+						{ op: 'upsert', path: ['orders'], index: 2, row: { id: O(3), title: 't3' } },
+						{ op: 'upsert', path: ['customers'], index: 0, row: { id: 'c0', name: 'Zeta' } },
+						{ op: 'remove', path: ['orders'], id: O(1) }
+					]
+				}
+			]);
+			expect(g.asked).toEqual([]);
+		})
+	);
+
+	it.effect('a batch past what one delta may carry is sent as the exact image, whole, with no read', () =>
+		Effect.gen(function* () {
+			const g = yield* group(0);
+			const frames = yield* g.commit(...Array.from({ length: DELTA.ops + 1 }, (_, i) => cap(null, row(i + 1))));
+			expect(frames.map((f) => f.t)).toEqual(['answer']);
+			expect(frames[0]).toMatchObject({ view: 'group', value: g.fresh() });
+			expect(g.asked).toEqual([]);
+		})
+	);
+
+	it.effect('the root a commit touches is changed at its path; a model the request never read is skipped', () =>
 		Effect.gen(function* () {
 			const roots = {
 				orders: yield* read(cat, 'orders', { all: true }),
@@ -1765,10 +1961,11 @@ it.effect(
 			hub.publish([cap(null, changed, 'customers')]);
 			yield* hub.settled;
 			yield* TestClock.adjust(0);
-			// the customers root alone: its one row read by id, set under its root key
+			// the customers root alone: its one row read by id, placed in that root
 			expect(asked).toEqual([byId('c1')]);
 			expect(patches(frames)).toEqual([
-				['group', [{ op: 'meta', key: 'customers', value: page(changed, { id: 'customers-row', name: 'kept' }) }]]
+				['group', [{ op: 'upsert', path: ['customers'], index: 0, row: changed }]]
 			]);
 		})
-);
+	);
+});

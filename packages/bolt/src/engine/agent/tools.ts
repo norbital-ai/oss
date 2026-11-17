@@ -8,8 +8,9 @@ import { decode_acts } from '../callables/parse.ts';
 // clipped results), `run_js`, the plan tool, skills, `history`, `geocode`, `read_messages` on channel turns, the
 // workspace source tools for staff, `document`, `download`, `task`, `task_read`, `task_stop` and `wait` under delegation, MCP tools a
 // held policy names, and host tools (Studio, browser, personal skills) on in-app staff turns. A conversation's tool list is
-// fixed by its audience (`fixedTools`); each definition owns its schema and decoder, and the step binds its handler under
-// the current actor.
+// fixed by its audience (`fixedTools`); each definition owns its schema, decoder and policy (`ToolPolicy`), and the step
+// binds its handler under the current actor. A host or MCP tool never takes a native's name or another's (`mcpName`), and a
+// request carries at most `TOOLS_PER_REQUEST` tools.
 // A tool's text is static across workspaces and turns so providers cache the shared prefix: it says what the tool does, in a
 // line or two, and names no model, path or sample; what an actor holds is `describe_workspace`'s, and a wrong name's error
 // lists the right ones. The agent has no authority of its own: every call runs as the actor, so a refusal is
@@ -56,6 +57,7 @@ import {
 	type SearchRequest,
 	type StudioRole,
 	type ToolBehavior,
+	ToolView,
 	Unavailable,
 	type WorkspacePort
 } from '@norbital-ai/host-api';
@@ -415,9 +417,17 @@ export type AgentTool = {
 	readonly studio?: StudioRole;
 	readonly behavior: ToolBehavior;
 };
-type ToolPresentation = Pick<AgentTool, 'name' | 'studio' | 'behavior'> & { readonly input: Json };
+type ToolPresentation = Pick<AgentTool, 'name' | 'studio' | 'behavior'> & {
+	readonly input: Json;
+	/** How a host tool's call reads in the panel (`HostTool.view`), decoded; none for a native tool. */
+	readonly view?: ToolView;
+};
 type BoundTool = {
 	readonly tool: AgentTool;
+	/** A host tool's `view` (`HostTool.view`): its own code, so its answer is decoded. */
+	readonly view?: (input: Json) => unknown;
+	/** Whether a script's `tool()` reaches it (`ToolPolicy.scripts`). */
+	readonly scripts: boolean;
 	readonly run: (input: unknown, callId: string) => Effect.Effect<ToolAnswer, Error>;
 };
 /** This step's offered tools and their decoded calls, run as the current actor. */
@@ -434,6 +444,7 @@ export type Catalogue = {
 	/** A refused input (closed: an unknown key is a wrong call) or a failure is the model's answer, never the turn's. */
 	readonly run: (name: string, input: unknown, callId: string) => Effect.Effect<ToolAnswer>;
 };
+const decodeView = Schema.decodeUnknownResult(ToolView);
 /** JSON tool parameters spell every value kind so model routers retain arrays and records. */
 export const ToolJson: Schema.Codec<Json> = Schema.suspend(() =>
 	Schema.Union([
@@ -447,17 +458,40 @@ export const ToolJson: Schema.Codec<Json> = Schema.suspend(() =>
 ).annotate({ identifier: 'ToolJson' });
 /** Decoding that refuses an unknown key anywhere in the input: a misplaced key is a wrong call, not one to drop. */
 export const CLOSED: SchemaAST.ParseOptions = { onExcessProperty: 'error' };
-type ToolDefinition<A> = Pick<AgentTool, 'name' | 'description' | 'input' | 'behavior'> & {
+/** Whom a tool is for, declared once on it: the conversation's list and the step's bindings both follow it. */
+type ToolPolicy = {
+	/** The audiences offered it; every one when absent. */
+	readonly audiences?: readonly Audience[];
+	/** Left out of a sub-agent's list: delegating and planning are the delegating agent's. */
+	readonly child?: false;
+	/** A script's `tool()` never reaches it: it steers the turn or the person's tab. */
+	readonly scripts?: false;
+	/** Offered only on a host with a source tree to read, or with delegation. */
+	readonly needs?: 'source' | 'delegation';
+};
+type ToolDefinition<A> = Pick<AgentTool, 'name' | 'description' | 'input' | 'behavior'> & ToolPolicy & {
 	readonly decode: (input: unknown, options?: SchemaAST.ParseOptions) => Effect.Effect<A, Schema.SchemaError>;
 };
+/** What a conversation's host gives the tools that need it (`ToolPolicy.needs`). */
+type HostGives = { readonly source: boolean; readonly delegation: boolean };
+const offers = (tool: ToolPolicy, audience: Audience, child: boolean, has: HostGives) =>
+	(tool.audiences?.includes(audience) ?? true) &&
+	!(child && tool.child === false) &&
+	(tool.needs === undefined || has[tool.needs]);
 /** Static definitions compile once; registering a step only binds the actor's handler. */
 const defineTool = <S extends Schema.Top & { readonly DecodingServices: never; readonly EncodingServices: never }>(
 	name: string,
-	spec: { readonly description: string; readonly parameters: S; readonly behavior?: ToolBehavior }
+	spec: {
+		readonly description: string;
+		readonly parameters: S;
+		readonly behavior?: ToolBehavior;
+		readonly policy?: ToolPolicy;
+	}
 ): ToolDefinition<S['Type']> => ({
 	name,
 	description: spec.description,
 	behavior: spec.behavior ?? {},
+	...spec.policy,
 	input: model_schema(spec.parameters),
 	decode: Schema.decodeUnknownEffect(spec.parameters, CLOSED)
 });
@@ -1019,6 +1053,9 @@ export const connectionFact = Effect.fnUntraced(function* (e: Pick<Engine, 'db'>
 	const row = yield* connectionRow(e, id);
 	return row === undefined ? { error: `No connection '${id}'.` } : connectionOf(row);
 });
+/** The native operations a confirmation card performs itself; any other held call runs when the agent makes it again. */
+const PERFORMED = ['act', 'run', 'decide', 'invite'] as const;
+export const performed = (name: string): name is (typeof PERFORMED)[number] => PERFORMED.some((operation) => operation === name);
 /** Native operations use the same execution path before and after a confirmation card. */
 export const perform = Effect.fn('AgentTool.perform')(function* (
 	x: Pick<ToolContext, 'engine' | 'authority' | 'bindings' | 'turn' | 'receipts'> & {
@@ -1026,7 +1063,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		/** The in-app agent's conversation: a start it makes for its member records it on the run's trigger. */
 		readonly agent?: { readonly conversation: string };
 	},
-	operation: 'act' | 'run' | 'decide' | 'invite',
+	operation: (typeof PERFORMED)[number],
 	payload: Json,
 	callId: string
 ) {
@@ -1650,7 +1687,6 @@ export function describeWorkspace(
 	}
 	return out.join('\n');
 }
-/** An order as models write it: `-field`, `{ field, direction }` or a list of them, as the read takes it. */
 /** `read`'s input: the one read request a page's `bolt.query` and `/__bolt/q` send, one key per root and layer. */
 const ReadOptions = (() => {
 	// the contract's free JSON options as the same any-JSON, spelled out: an untyped parameter reaches a routed model
@@ -2220,20 +2256,28 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		a = x.authority,
 		acts = callablesFor(e.manifest, a, x.inApp && !x.child && e.identity !== undefined),
 		agent = x.mode === 'agent',
-		hosted = x.host_tools;
+		hosted = x.host_tools,
+		has: HostGives = { source: (x.draft ?? x.workspace) !== undefined, delegation: x.delegation };
 	const entries = new Map<string, BoundTool>(), mcpEntries = new Map<string, BoundTool>();
 	/** The host tools this role holds, offered in the tool list whatever the mode: a role's list never changes mid-conversation. */
 	const hostOffered: AgentTool[] = [];
-	/** Binds a definition's handler under this step's actor: a refused input or a failure is the model's answer. */
+	/**
+	 * Binds a definition's handler under this step's actor: a refused input or a failure is the model's answer. A tool its
+	 * policy keeps from this conversation's list is never bound, so no script reaches it either.
+	 */
 	const add = <A>(
 		definition: ToolDefinition<A>,
 		handler: (input: A, callId: string) => Effect.gen.Return<ToolAnswer, EngineError | PortFailure>,
-		meta: Pick<AgentTool, 'studio'> = {},
+		meta: Pick<AgentTool, 'studio'> & Pick<BoundTool, 'view'> = {},
 		destination = entries
 	) => {
+		if (!offers(definition, x.audience, x.child, has)) return;
 		const { name, description, input, behavior } = definition;
+		const { view, ...shown } = meta;
 		destination.set(name, {
-			tool: { name, description, input, behavior, ...meta },
+			tool: { name, description, input, behavior, ...shown },
+			...(view === undefined ? {} : { view }),
+			scripts: definition.scripts !== false,
 			run: (input, callId) => definition.decode(input, { ...CLOSED, errors: 'all' }).pipe(
 				Effect.mapError((error) => new Error(`Invalid parameters for tool '${name}': ${error.message}`)),
 				Effect.tap((decoded) => Effect.annotateCurrentSpan({ tool: name, parameters: decoded })),
@@ -2667,7 +2711,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			return ok(yield* runJob(x.jobs, e, a, automation, { run, outcome }));
 		});
 
-	if (x.mode === 'plan' && !x.child) {
+	if (x.mode === 'plan') {
 		add(updatePlanTool, function* (i) {
 			const plan = x.conv.plan,
 				rev = plan?.revision ?? 0;
@@ -3552,7 +3596,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				: textAnswer(sourceTree(shown));
 		});
 	}
-	if (agent && x.delegation) {
+	if (agent) {
 		add(taskTool, function* (i) {
 			if (!x.agents.includes(i.subagent_type))
 				return err(
@@ -3642,7 +3686,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	const inner = (call: string) => {
 		let used = 0;
 		return (name: string, input: unknown): Effect.Effect<ToolAnswer> =>
-			self === undefined || UNSCRIPTED.has(name) || (!entries.has(name) && !mcpEntries.has(name))
+			self === undefined || (entries.get(name) ?? mcpEntries.get(name))?.scripts !== true
 				? Effect.succeed(err(`A script cannot call '${name}': it calls your other tools by name.`))
 				: ++used > RUN_JS.toolCalls
 					? Effect.succeed(err(`A run makes at most ${RUN_JS.toolCalls} tool calls.`))
@@ -3837,13 +3881,35 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			})
 		);
 	});
+	// Contributed tools (the browser's, the host's and MCP servers') are admitted together before any is offered: one whose
+	// name providers refuse, a native tool holds or another contribution shares too is offered by no list, whatever order
+	// they came in, and logged. The rest keep their names for the same server and tool on every step.
+	const discovered = x.mcpTools.map((tool) => ({ tool, name: mcpName(tool.server, tool.name) }));
+	const taken = new Map<string, number>();
+	for (const name of [...x.browser_tools, ...hosted, ...discovered].map((tool) => tool.name))
+		taken.set(name, (taken.get(name) ?? 0) + 1);
+	const rejected = (name: string, what: string) => {
+		const reason = !TOOL_NAME.test(name)
+			? 'unsupported'
+			: FIXED_NAMES.has(name)
+				? 'native'
+				: (taken.get(name) ?? 0) > 1
+					? 'shared'
+					: undefined;
+		return reason === undefined
+			? Effect.succeed(false)
+			: Effect.as(
+					Effect.logWarning(new ToolRejected({ tool: name, reason, message: `${what} is not offered as '${name}': ${REJECTED[reason]}` })),
+					true
+				);
+	};
 	// an MCP tool changes with the workspace: native in the list a conversation froze at its start, through run_tool when a
 	// merge added it later; callable only while acting
 	const mcpTools: AgentTool[] = [];
-	for (const tool of x.mcpTools) {
-		if (!Predicate.isObject(tool.input)) continue;
+	for (const { tool, name } of discovered) {
+		if ((yield* rejected(name, `MCP tool '${tool.name}' of ${tool.server}`)) || !Predicate.isObject(tool.input)) continue;
 		const definition = {
-			name: mcpName(tool.server, tool.name),
+			name,
 			description: tool.description,
 			input: tool.input,
 			behavior: {}
@@ -3931,6 +3997,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	for (const host of [...(a.preview === undefined ? x.browser_tools : []), ...(x.inApp && staff ? hosted : [])]) {
 		const { name, description, input: schema, behavior } = host;
 		if (
+			(yield* rejected(name, `host tool '${name}'`)) ||
 			!Predicate.isObject(schema) ||
 			!(
 				a.admin ||
@@ -4010,7 +4077,10 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					}
 				);
 			},
-			host.studio === undefined ? {} : { studio: host.studio }
+			{
+				...(host.studio === undefined ? {} : { studio: host.studio }),
+				...(host.view === undefined ? {} : { view: (input: Json) => host.view?.(input) })
+			}
 		);
 	}
 	const encodeAnswer = Schema.encodeUnknownEffect(ToolAnswer);
@@ -4027,6 +4097,22 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			Effect.catch((error) => Effect.succeed(err(error.message)))
 		);
 	};
+	// one request carries the fixed, host and native MCP tools together: the MCP tools past the room the others leave are
+	// offered by no list, the first by name kept, whatever order the servers listed them in
+	const fixed = fixedTools(x.audience, x.child, has);
+	const over = new Set(
+		mcpTools
+			.map((tool) => tool.name)
+			.sort()
+			.slice(Math.max(0, TOOLS_PER_REQUEST - fixed.length - hostOffered.length))
+	);
+	for (const name of over) {
+		mcpEntries.delete(name);
+		yield* Effect.logWarning(
+			new ToolRejected({ tool: name, reason: 'limit', message: `MCP tool '${name}' is not offered: ${REJECTED.limit}` })
+		);
+	}
+	const advertised = mcpTools.filter((tool) => !over.has(tool.name));
 	const runMcp: Catalogue['run'] = (name, input, callId) => execute(mcpEntries, name, input, callId);
 	// a native MCP tool is called by its own name, a later one through run_tool; a script reaches both by name
 	const run: Catalogue['run'] = (name, input, callId) =>
@@ -4035,17 +4121,14 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			: runMcp(name, input, callId);
 	self = run;
 	const index: CatalogueIndex = {
-		...catalogueIndex(e.manifest, a, x.skills, mcpTools, acts, automations, sync_controls),
+		...catalogueIndex(e.manifest, a, x.skills, advertised, acts, automations, sync_controls),
 		...(entries.has('page') ? { 'page:paths': navigation_paths(nav(e.manifest, a), a.admin).join(', ') } : {})
 	};
 	return {
 		// Host capabilities stay fixed across modes; never advertise a source tree or delegation the host lacks.
-		fixed: fixedTools(x.audience, x.child).filter(tool =>
-			(source !== undefined || ![readSource.name, grepSource.name, globSource.name, listSource.name].includes(tool.name)) &&
-			(x.delegation || ![taskTool.name, taskReadTool.name, taskStopTool.name].includes(tool.name))
-		),
+		fixed,
 		host: hostOffered,
-		mcp: mcpTools,
+		mcp: advertised,
 		available: [...entries.values(), ...mcpEntries.values()].map((entry) => entry.tool),
 		index,
 		presentation: (name, input) => {
@@ -4053,12 +4136,21 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				name === runToolTool.name && isObj(input) && typeof input['name'] === 'string'
 					? mcpEntries.get(input['name'])
 					: undefined;
-			const definition = host?.tool ?? entries.get(name)?.tool;
+			const bound = host ?? entries.get(name);
+			const definition = bound?.tool;
 			const given = host !== undefined && isObj(input) ? input['input'] : input;
+			// a host's view is its own code: a throw or a wrong shape leaves the panel's generic line
+			const view =
+				bound?.view === undefined
+					? undefined
+					: Result.getOrUndefined(
+							Result.try(() => bound.view?.(given ?? {})).pipe(Result.flatMap(decodeView))
+						);
 			return {
 				name: host?.tool.name ?? name,
 				input: given === undefined ? {} : given,
 				...(definition?.studio === undefined ? {} : { studio: definition.studio }),
+				...(view === undefined ? {} : { view }),
 				behavior: definition?.behavior ?? {}
 			};
 		},
@@ -4261,22 +4353,41 @@ const validatorFor = (validators: Validators, input: { readonly [key: string]: J
 	validators.set(input, valid);
 	return valid;
 };
-/** An MCP tool's name in a tool list: providers take [A-Za-z0-9_-], and no fixed tool holds a double underscore. */
-const mcpName = (server: string, tool: string) => `${server}__${tool}`.replace(/[^A-Za-z0-9_-]/g, '_');
-/** The tools a script's `tool()` never reaches: they steer the turn or the person's tab. */
-const UNSCRIPTED: ReadonlySet<string> = new Set([
-	'ask',
-	'wait',
-	'connect',
-	'run_js',
-	'task',
-	'task_stop',
-	'update_plan',
-	'page'
-]);
+/** The tool names providers take: OpenAI-compatible APIs (DeepSeek's among them) allow 64 of these characters. */
+const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+/** The tools one request may carry: OpenAI-compatible APIs (DeepSeek's among them) take at most 128 functions. */
+export const TOOLS_PER_REQUEST = 128;
+/**
+ * An MCP tool's provider-visible name for its exact server and tool: `<server>__<tool>` when that reads back to one pair
+ * (the tool within [A-Za-z0-9_-], the server holding no double underscore and ending in none, 64 characters in all);
+ * otherwise its readable start and 12 hex of the pair's SHA-256, holding no double underscore, so it never reads as the
+ * first form. Admission rejects a name another tool takes too.
+ */
+const mcpName = (server: string, tool: string) => {
+	const plain = `${server}__${tool}`;
+	return /^[A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*$/.test(server) && /^[A-Za-z0-9_-]+$/.test(tool) && plain.length <= 64
+		? plain
+		: `${`${server}_${tool}`.replace(/[^A-Za-z0-9-]+/g, '_').slice(0, 51).replace(/_+$/, '')}_${sha256_hex(`${server}\0${tool}`).slice(0, 12)}`;
+};
+const REJECTED = {
+	unsupported: 'providers take 1 to 64 of A-Z, a-z, 0-9, _ and -',
+	native: 'a native tool holds that name',
+	shared: 'another contributed tool takes that name too',
+	limit: `a request carries at most ${TOOLS_PER_REQUEST} tools; MCP tools fill what is left in name order`
+} as const;
+/**
+ * A contributed tool no list offers: its name is one providers refuse, a native tool's, or another contribution's too;
+ * or an MCP tool past the room the request's other tools leave.
+ */
+class ToolRejected extends Schema.TaggedError<ToolRejected>()('ToolRejected', {
+	/** The provider-visible name it would have had. */
+	tool: Schema.String,
+	reason: Schema.Literals(['unsupported', 'native', 'shared', 'limit']),
+	message: Schema.String
+}) {}
 
 // Tool text and model schemas are shared; handlers bind only when a step is admitted.
-const READ_TEXT = `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each root once. output defaults to "default". order_by: "<field>", { <field>: "desc" } or a list of those.
+const READ_TEXT = `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each root once. output defaults to "default". order_by: "<field>" (ascending), { "<field>": "asc" | "desc" } whose one key is the field's name, or a list of those.
 where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null: value, like: "%text%" (ignores case), contains: value (a period or a JSON field) } }, { "$search": "<words>" } (each word required), and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words (ranked, not required), { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } or a list of those }; a field there may be "<link>.<field>" through links to one record.
 Normal reads return { rows, next, total } (total counts every match before limit, so omit aggregate when reading rows). aggregate takes no fields or search, with optional grouping by. Long values are clipped.`;
@@ -4290,7 +4401,7 @@ const agentReadTool = defineTool('read', {
 	behavior: recordsTool.behavior,
 	description: `${READ_TEXT}
 On a root, history: true adds $history (up to 20 revisions), approvals: true adds $approvals (steps, deciders, moves).
-Ledger roots, each answering { rows, next } newest first: "$runs": { id, automation (a name or prefix*), status, cause, since, until, limit, after } automation runs, id one in full with input, result, attempts and log; "$approvals": { model, ids, all } approval requests you may see, open ones unless all; "$logs": { level, text, run, automation, conversation, since, until, limit, after } live's runtime log; "$audit": { id, text, actor_id, category, action, status, model, record, run, since, until, limit, after } the audit trail.`,
+Ledger roots, each answering { rows, next } newest first: "$runs": { id, automation (a name or prefix*), status, cause, since, until, limit, after } automation runs, id one in full with input, result, attempts and log; "$approvals": { model, ids, all } approval requests you may see, open ones unless all, at most the newest 200 in one page (no limit or after); "$logs": { level, text, run, automation, conversation, since, until, limit, after } live's runtime log; "$audit": { id, text, actor_id, category, action, status, model, record, run, since, until, limit, after } the audit trail.`,
 	parameters: ReadInput
 });
 const describeTool = defineTool('describe_workspace', {
@@ -4299,9 +4410,10 @@ const describeTool = defineTool('describe_workspace', {
 	parameters: Schema.Struct({ names: Schema.optionalKey(Schema.Array(Schema.String)) })
 });
 const pageTool = defineTool('page', {
+	policy: { audiences: ['staff'], scripts: false },
 	behavior: { page: true },
 	description:
-		"Navigate by exact Pages path from the catalogue (including /app/). configure opens native setup. Click/highlight text, type by label, scroll, go back/forward or preview a URL. Approvals, passwords and files are the person's; pending until the tab reports.",
+		"Navigate by exact Pages path from the catalogue (including /app/); the person's tab follows it when called. configure opens native setup. Click/highlight text, type by label, scroll, go back/forward or preview a URL; these are pending until the tab reports. Approvals, passwords and files are the person's.",
 	parameters: Schema.Struct({
 		path: Schema.optionalKey(Schema.String),
 		configure: Schema.optionalKey(
@@ -4346,6 +4458,7 @@ const inviteTool = defineTool('invite', {
 	parameters: InviteInput
 });
 const connectTool = defineTool('connect', {
+	policy: { audiences: ['staff', 'member'], scripts: false },
 	behavior: { data: true },
 	description:
 		'Create a connection with non-secret configuration, or pair one by instance or envoy + integration. owner is me or workspace; envoy deploys it. The person supplies credentials privately on a card. Returns instance, integration, owner and state after pairing.',
@@ -4367,6 +4480,7 @@ const syncTool = defineTool('sync', {
 	})
 });
 const updatePlanTool = defineTool('update_plan', {
+	policy: { audiences: ['staff', 'member'], child: false, scripts: false },
 	description: 'Plan mode only; unavailable during execution. Write the draft plan: body replaces it, patch { old, new } changes one exact passage.',
 	parameters: Schema.Struct({
 		body: Schema.optionalKey(Schema.String),
@@ -4392,6 +4506,7 @@ const historyTool = defineTool('history', {
 	})
 });
 const readMessagesTool = defineTool('read_messages', {
+	policy: { audiences: ['channel'] },
 	description: "This chat's messages, newest first, before a message seq (default: the newest), at most limit (≤ 50).",
 	parameters: Schema.Struct({
 		before: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
@@ -4447,6 +4562,7 @@ const geocodeTool = defineTool('geocode', {
 	})
 });
 const readSource = defineTool('workspace_read', {
+	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
 		'Read the contents of a file or directory. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use workspace_grep to find specific content in large files.',
@@ -4462,6 +4578,7 @@ const readSource = defineTool('workspace_read', {
 	})
 });
 const grepSource = defineTool('workspace_grep', {
+	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
 		"Search file contents using ripgrep's regular expression syntax or literal text matching. Use it to locate specific code, symbols, or text patterns, and narrow searches with `path` or `include`. Returns matching file paths, line numbers, and line previews.",
@@ -4487,6 +4604,7 @@ const grepSource = defineTool('workspace_grep', {
 	})
 });
 const globSource = defineTool('workspace_glob', {
+	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description: 'Search file paths using a glob pattern (examples: "**/*.ts", "src/**/*.tsx").',
 	parameters: Schema.Struct({
@@ -4503,12 +4621,14 @@ const globSource = defineTool('workspace_glob', {
 	})
 });
 const listSource = defineTool('workspace_list_dir', {
+	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description: 'The source tree under path (default: all of it), with what each folder and role is for.',
 	parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) })
 });
 // OpenCode's `task`; its sub-agents always run in the background, as OpenCode's `background: true`
 const taskTool = defineTool('task', {
+	policy: { child: false, scripts: false, needs: 'delegation' },
 	description: `Delegate independent work to general (your authority) or an active envoy's id; at most 4 at once. Returns task_id immediately; a later message wakes you with the result. Supply context and the desired result in prompt. Continue other work while it runs; summarize its result for the person. task_id resumes that session, delivering a follow-up at its next step if running; otherwise each invocation starts fresh.`,
 	parameters: Schema.Struct({
 		description: Schema.String.annotate({
@@ -4525,20 +4645,24 @@ const taskTool = defineTool('task', {
 	})
 });
 const taskReadTool = defineTool('task_read', {
+	policy: { child: false, needs: 'delegation' },
 	behavior: { data: true },
 	description:
 		"A task's status, last messages and tool calls, the records it wrote with their fields, and its source diffs.",
 	parameters: Schema.Struct({ task_id: Schema.String })
 });
 const taskStopTool = defineTool('task_stop', {
+	policy: { child: false, scripts: false, needs: 'delegation' },
 	description: 'Stop a running task.',
 	parameters: Schema.Struct({ task_id: Schema.String })
 });
 const downloadTool = defineTool('download', {
+	policy: { audiences: ['staff'] },
 	description: "Save a public http(s) file as the person's: media, a PDF, HTML or CAD, at most 100 MiB.",
 	parameters: Schema.Struct({ url: Schema.String })
 });
 const runJsTool = defineTool('run_js', {
+	policy: { scripts: false },
 	behavior: { data: true },
 	description: `Execute an async JS body of input in a fresh billed isolate; no require, process, fetch or timers. await tool(name, input) calls your tools as you (≤200); errors throw. files arrive in input.files. http: true enables await http({method?,url,headers?,body?}) → {status,headers,text}, public HTTPS GET/HEAD; 'send' permits writes after confirmation. Return {files:[{name,text|base64}]} for downloads. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out. Limits: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.`,
 	parameters: Schema.Struct({
@@ -4553,6 +4677,7 @@ const runJsTool = defineTool('run_js', {
 	})
 });
 const askTool = defineTool('ask', {
+	policy: { scripts: false },
 	description: 'Sends one question with optional answer choices to the person, or in a sub-agent to the agent that delegated the task, then ends the turn.',
 	parameters: Schema.Struct({
 		question: Schema.String,
@@ -4560,6 +4685,7 @@ const askTool = defineTool('ask', {
 	})
 });
 const waitTool = defineTool('wait', {
+	policy: { scripts: false },
 	description: `Wait up to ${JOBS.waitMs / 1000} s for the first of jobs (default: any of this turn) to end. A finished job also arrives at your next step.`,
 	parameters: Schema.Struct({
 		jobs: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -4626,44 +4752,7 @@ const ALL_TOOLS = [
 	waitTool,
 	runToolTool
 ];
-const AUDIENCE: { readonly [A in Audience]: ReadonlySet<string> } = {
-	staff: new Set(ALL_TOOLS.map((tool) => tool.name).filter((name) => name !== 'read_messages')),
-	member: new Set(
-		ALL_TOOLS.map((tool) => tool.name).filter(
-			(name) =>
-				![
-					'read_messages',
-					'download',
-					'workspace_read',
-					'workspace_grep',
-					'workspace_glob',
-					'workspace_list_dir'
-				].includes(name)
-		)
-	),
-	channel: new Set(
-		ALL_TOOLS.map((tool) => tool.name).filter(
-			(name) =>
-				![
-					'page',
-					'connect',
-					'update_plan',
-					'download',
-					'workspace_read',
-					'workspace_grep',
-					'workspace_glob',
-					'workspace_list_dir'
-				].includes(name)
-		)
-	)
-};
-const SUBAGENT_TOOLS: ReadonlySet<string> = new Set([
-	'task',
-	'task_read',
-	'task_stop',
-	'update_plan'
-]);
-/** The fixed tool list of an audience; a sub-agent's leaves out delegation and planning. */
-export const fixedTools = (audience: Audience, child: boolean): readonly AgentTool[] =>
-	ALL_TOOLS.filter((tool) => AUDIENCE[audience].has(tool.name) && !(child && SUBAGENT_TOOLS.has(tool.name))).map(({ name, description, input, behavior }) => ({ name, description, input, behavior }));
+/** The fixed tool list of an audience (a sub-agent's when `child`) on a host that gives what `has` says. */
+export const fixedTools = (audience: Audience, child: boolean, has: HostGives): readonly AgentTool[] =>
+	ALL_TOOLS.filter((tool) => offers(tool, audience, child, has)).map(({ name, description, input, behavior }) => ({ name, description, input, behavior }));
 const FIXED_NAMES: ReadonlySet<string> = new Set(ALL_TOOLS.map((tool) => tool.name));

@@ -7,7 +7,7 @@ import {
 	AiToolCallSchema,
 	AiToolResult,
 	textOf,
-	STUDIO_ROLES, storedInstant, ToolBehavior } from '@norbital-ai/host-api';
+	STUDIO_ROLES, storedInstant, ToolBehavior, ToolView } from '@norbital-ai/host-api';
 import { AgentQuestion, PageAction, PageResult, Usage as UsageSchema } from '../../protocol/schema.ts';
 import type { Json } from '../../decl/values.ts';
 import type { AgentRow } from '../../protocol/wire.ts';
@@ -177,6 +177,7 @@ const ToolResultFields = {
 		args: Schema.optionalKey(Schema.String),
 		display: Schema.optionalKey(Schema.Struct({ name: Schema.String, args: Schema.String })),
 	studio: Schema.optionalKey(Schema.String),
+		view: Schema.optionalKey(ToolView),
 		ms: Schema.optionalKey(Schema.Number)
 };
 export const StepContent = Schema.StructWithRest(Schema.Struct(ToolResultFields), Rest);
@@ -400,21 +401,17 @@ const marked = (mark: string, text: string) =>
 		.map((line) => `${mark}${line}`)
 		.join('\n');
 /**
- * A source edit's files and compact diffs for the panel's Changes tab. An edit reads them off its call, whose answer
- * stays `{ path, diagnostics }` so a diff never enters the model's context.
+ * A source edit's files and compact diffs for the panel's Changes tab: a step its tool declares a source edit
+ * (`ToolBehavior.source_edit`) reads them off its call, whose answer stays `{ path, diagnostics }` so a diff never
+ * enters the model's context.
  */
 function changesOf(
-	step: { readonly name: string; readonly args?: string } | null
+	step: { readonly behavior?: ToolBehavior; readonly args?: string } | null
 ): ReadonlyArray<{ path: string; diff: string; change?: string }> | undefined {
-	if (step === null) return undefined;
-	if (step.name === 'workspace_patch') {
-		const patch = Option.getOrUndefined(Schema.decodeUnknownOption(SourcePatch)(step.args));
-		return patch === undefined ? undefined : patchChanges(patch.patchText);
-	}
-	const edit =
-		step.name === 'workspace_edit' || step.name === 'workspace_write'
-			? Option.getOrUndefined(Schema.decodeUnknownOption(SourceEdit)(step.args))
-			: undefined;
+	if (step?.behavior?.source_edit !== true) return undefined;
+	const patch = Option.getOrUndefined(Schema.decodeUnknownOption(SourcePatch)(step.args));
+	if (patch !== undefined) return patchChanges(patch.patchText);
+	const edit = Option.getOrUndefined(Schema.decodeUnknownOption(SourceEdit)(step.args));
 	if (edit?.content !== undefined)
 		return [{ path: edit.path, diff: marked('+', edit.content).slice(0, 8000) }];
 	if (edit?.oldString !== undefined && edit.newString !== undefined)
@@ -611,6 +608,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 						...(about === undefined ? {} : { about }),
 						...(changes === undefined ? {} : { changes }),
 						...(studio === undefined ? {} : { studio }),
+						...(step.view === undefined ? {} : { view: step.view }),
 						...(step.ms === undefined ? {} : { ms: step.ms })
 					}
 				}

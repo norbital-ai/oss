@@ -1,6 +1,6 @@
 # Models and modeling
 
-Every field is required unless `optional: true`. Exact shape: `import('@norbital-ai/bolt').ModelLiteral`, `FieldKind`.
+Every field is required unless `optional: true`. Exact shape: `import('@norbital-ai/bolt').ModelLiteral`, `Kind`.
 
 ## Field kinds
 
@@ -75,7 +75,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 ## Syncs
 
-Each sync is its own `+<sync>.sync.ts` beside the model's `+model.ts`: `sync('<model>', '<sync>', { … })`. Discover: `import('@norbital-ai/bolt').RemoteSync`, `FileSyncCtx`.
+Each sync is its own `+<sync>.sync.ts` beside the model's `+model.ts`: `sync('<model>', '<sync>', { … })`. Discover: `import('@norbital-ai/bolt').sync` (its `spec`), `SyncCtx`.
 
 - A remote sync declares `policies`: each page it writes is admitted, planned and its effects run as the reserved system identity holding exactly those, never as admin; a refused change rolls back the same way. Choose the narrowest policy granting what it writes; none may scope by `actor.*` other than `actor.instance`. A read-only synced model declares the synced fields in `create` (and `update`); its `update` fields outside `create` are the local ones others may edit.
 

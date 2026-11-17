@@ -81,7 +81,16 @@ import { TenantDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { audit_from_abi } from '../engine/audit.ts';
 import { cryptoLayer, facility_layers } from './facility-layers.ts';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
-import { Activation, Agents, Automations, HostIdentity, Live, Manifest, Runs } from '../engine/services.ts';
+import {
+	Activation,
+	Agents,
+	Automations,
+	HostIdentity,
+	Live,
+	type LiveShape,
+	Manifest,
+	Runs
+} from '../engine/services.ts';
 import {
 	ArtifactFiles,
 	Bundler,
@@ -110,6 +119,12 @@ import {
 	type LinkAdmission
 } from '../engine/integrations/links.ts';
 import { credentials, type Credentials } from '../engine/integrations/credentials.ts';
+import {
+	type BranchPublication,
+	configure_instance,
+	instance_admin,
+	restore_instance
+} from '../engine/integrations/instances.ts';
 import { destructiveSteps, fingerprint, read_applied, schema_slice, SchemaSliceSchema } from '../engine/schema/plan.ts';
 import { apply_migrations } from '../engine/schema/migrations.ts';
 import { carry_migrations } from '../engine/schema/carry.ts';
@@ -295,6 +310,13 @@ const activeRuns = new WeakMap<
 	ActiveWorkspace,
 	<A, E>(effect: Effect.Effect<A, E, EngineServices | EngineHost | SessionAuthority>) => Promise<A>
 >();
+/**
+ * This module graph's serving generations' live lanes by release and environment epoch (Rule 61: what a generation
+ * stores at its first trip). A branch change publishes on the epoch its own statement read, so the open pages of that
+ * environment hear it as an ordinary commit; another environment the cell serves never does.
+ */
+const lanes = new Map<string, Set<LiveShape['publish']>>();
+const laneKey = (release: string, epoch: string) => JSON.stringify([release, epoch]);
 /** A caller's compiled authority as a host reads it: the engine's own stays in the release. */
 const hostAuthority = (authority: EngineAuthority | null) =>
 	authority === null
@@ -442,6 +464,23 @@ const activate = Effect.fn('bolt.hostApi.activate')(function* (ports: HostPorts)
 			// "release changed": a closing generation tells its open pages; they reload onto the serving release
 			Layer.effectDiscard(
 				Effect.addFinalizer(() => Effect.flatMap(Live, (live) => live.close(ports.release.id)))
+			),
+			// an operator's branch change on this environment reaches its open pages (`WorkspaceBranch.integrations`)
+			Layer.effectDiscard(
+				Effect.flatMap(Live, ({ publish }) => {
+					const key = laneKey(ports.release.id, ports.epoch ?? '');
+					return Effect.acquireRelease(
+						Effect.sync(() => {
+							lanes.set(key, (lanes.get(key) ?? new Set()).add(publish));
+						}),
+						() =>
+							Effect.sync(() => {
+								const held = lanes.get(key);
+								held?.delete(publish);
+								if (held?.size === 0) lanes.delete(key);
+							})
+					);
+				})
 			)
 		).pipe(
 			Layer.provideMerge(shell),
@@ -534,6 +573,16 @@ const activate = Effect.fn('bolt.hostApi.activate')(function* (ports: HostPorts)
 	return served;
 });
 
+/** What a host's operator sends `WorkspaceBranch.integrations`, decoded once here. */
+const ConfigureChange = Schema.Struct({
+	active: Schema.Boolean,
+	envoy: Schema.NullOr(Schema.String),
+	revision: Schema.Int
+});
+const RestoreInput = Schema.Struct({
+	values: Schema.Record(Schema.String, Schema.Json),
+	active: Schema.Boolean
+});
 const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
 	const artifact = yield* artifactOf(ports.release),
 		m = artifact.manifest,
@@ -542,6 +591,9 @@ const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
 		effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Crypto.Crypto>,
 		signal: AbortSignal
 	) => hostRun(inRelease(ports.release, effect), signal);
+	const publish: BranchPublication = (epoch, captured) => {
+		for (const lane of lanes.get(laneKey(ports.release.id, epoch)) ?? []) lane(captured);
+	};
 	// the loader's state stays in this cell between the host's entries
 	const loader = (at: string, files: FilesPort | undefined) => (pack: PackSource) =>
 		(files === undefined
@@ -635,7 +687,44 @@ const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
 						});
 					}),
 					signal
-				)
+				),
+			status: (instance, { signal }) => run(instance_admin(db, instance), signal),
+			configure: (instance, change, { signal }) =>
+				run(
+					Schema.decodeUnknownEffect(ConfigureChange)(change).pipe(
+						Effect.mapError((issue) => BoltError.make('invalid_input', 'decode', issue.message)),
+						Effect.flatMap((decoded) => configure_instance(db, m, instance, decoded, publish))
+					),
+					signal
+				),
+			restore: (instance, values, { signal, active }) => {
+				const keys = ports.keys;
+				if (keys === undefined)
+					return guard(() =>
+						Promise.reject(
+							BoltError.make('unavailable', 'admission', 'credential restore needs the secrets key')
+						)
+					);
+				return run(
+					Effect.gen(function* () {
+						// the issue would quote the values: the refusal names none
+						const input = yield* Schema.decodeUnknownEffect(RestoreInput)({ values, active }).pipe(
+							Effect.mapError(() =>
+								BoltError.make('invalid_input', 'decode', 'the credentials are not a JSON object')
+							)
+						);
+						const sealed = yield* credentials(db, yield* Secrets);
+						yield* restore_instance(db, sealed, instance, input.values, input.active, publish);
+					}).pipe(
+						Effect.provide(
+							Secrets.layer([]).pipe(
+								Layer.provide(Layer.merge(Layer.succeed(TenantDb, db), Keys.fromAbi(keys)))
+							)
+						)
+					),
+					signal
+				);
+			}
 		}
 	};
 	return branched;

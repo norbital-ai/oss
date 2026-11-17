@@ -40,16 +40,7 @@ export const RUN_JS = {
 	inBytes: 64 * MiB,
 	/** A bundle, a cold bundler included. */
 	bundleMs: 60_000,
-	/** What `tool(name, input)` reaches, and how many calls one run makes. */
-	tools: [
-		'read',
-		'act',
-		'browser',
-		'web_search',
-		'describe_workspace',
-		'read_file',
-		'workspace_read'
-	],
+	/** How many calls one run's `tool(name, input)` makes; which tools it reaches is each tool's `ToolPolicy.scripts`. */
 	toolCalls: 200
 } as const;
 

@@ -28,7 +28,7 @@ Every automation not marked `agent: 'never'` is an agent tool and runs under its
 - Parsing is never OCR: a scanned page stays its image, read by eye through `read_file`. A value is verified only after reading it back against its source. Video, CAD and other unparsed types need a script or integration.
 - Declaring a skill or MCP server grants nothing. Personal skills never enter releases.
 - MCP is `2026-07-28` only. The runtime uses the server's discovery result; never hard-code a label, cache a schema or negotiate a fallback. Relay a server's input request or failure.
-- A granted server's `web_search` replaces the host's; every other host name stays the host's.
+- An MCP tool is named `<server>__<tool>`, or its readable start and a digest of the pair when that is ambiguous, over 64 characters or outside `[A-Za-z0-9_-]`; it never replaces a native or host tool. A name two tools would share is offered for neither.
 
 ## Authority
 

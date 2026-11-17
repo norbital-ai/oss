@@ -324,10 +324,10 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 				expect(r.outcome.kind).toBe('committed');
 				yield* live.settled.pipe(Effect.provide(context));
 				expect(yield* Queue.take(queue)).toEqual({
-					t: 'patch',
+					t: 'delta',
 					view: 'v',
 					v: r.v,
-					ops: [{ op: 'remove', id }]
+					ops: [{ op: 'remove', path: [], id }]
 				});
 			})
 		);

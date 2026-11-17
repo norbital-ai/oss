@@ -1,6 +1,6 @@
 /// <reference types="node" />
 /**
- * `bolt check`, the one diagnosis entry point: the compiler's checks, then the type check. A repository's CI runs it
+ * `bolt check`, the one diagnosis entry point: the compiler's checks, then the type check and the type-assertion lint. A repository's CI runs it
  * on each template, and the sandbox's check job runs it once per tree. The type check is one `tsc --api`
  * whole-program diagnose ("Check: one type service for every tenant") over the workspace on disk:
  * every package, `svelte` and svelte2tsx's shims included, resolves from the workspace's own `node_modules`, so a
@@ -13,6 +13,7 @@ import { pathToFileURL } from 'node:url';
 import { check } from '../compiler/check/index.ts';
 import { Diagnostic } from '@norbital-ai/host-api';
 import { writeTypeSetup } from '../compiler/names.ts';
+import { asserted } from '../test/lint.ts';
 import { ToolFailure } from './build.ts';
 
 const SKIPPED = new Set(['node_modules', '.norbital', '.git', '.svelte-kit', 'dist']);
@@ -121,6 +122,25 @@ const svelteWarnings = Effect.fn('bolt.svelteWarnings')(function* (
 	);
 	return warned.flat();
 });
+/** The type-assertion lint (`test/assertions.ts`) over the authored modules: each cast or non-null assertion an error. */
+const assertionDiagnostics = Effect.fn('bolt.assertionDiagnostics')(function* (
+	files: ReadonlyMap<string, string>
+) {
+	const { lintAssertions } = yield* Effect.tryPromise({
+		try: () => import('../test/assertions.ts'),
+		catch: (cause) => new ToolFailure({ message: `the assertion lint: ${String(cause)}` })
+	});
+	return [...files]
+		.filter(([rel]) => asserted(rel))
+		.flatMap(([rel, text]) =>
+			lintAssertions(rel, text).map(({ line, message }) => ({
+				code: 'types/assertion',
+				path: rel,
+				line,
+				message: `${rel}:${line}: ${message}`
+			}))
+		);
+});
 const TypeCache = Schema.Struct({ key: Schema.String, diagnostics: Schema.Array(Diagnostic) });
 /** The files of a package that decide what the checker sees: its manifest, declarations and components. */
 const JUDGED = /(^|\/)package\.json$|\.d\.ts$|\.svelte$/;
@@ -182,7 +202,8 @@ export const types = Effect.fn('bolt.types')(function* (
 	if (Option.isSome(hit)) return [...hit.value.diagnostics];
 	const diagnostics = [
 		...(yield* Effect.scoped(typeDiagnostics(root, files))),
-		...(yield* svelteWarnings(root, files))
+		...(yield* svelteWarnings(root, files)),
+		...(yield* assertionDiagnostics(files))
 	];
 	yield* fs.makeDirectory(dir, { recursive: true });
 	yield* fs.writeFileString(file, JSON.stringify({ key, diagnostics }));

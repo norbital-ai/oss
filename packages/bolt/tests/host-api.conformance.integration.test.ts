@@ -59,6 +59,7 @@ import { guests } from './support/guests.ts';
 import { callbacks, guest } from './engine-fixture.ts';
 import { CHECKPOINTS } from '../../bolt-cli/src/test/checkpoint.ts';
 import { client_contract } from '../src/engine/access/operation-outputs.ts';
+import { seed_accounts } from './support/accounts.ts';
 
 const ORIGIN = 'https://acme.example',
 	PUBLIC_URL = `${ORIGIN}/acme`,
@@ -109,7 +110,7 @@ const freshClient = async (): Promise<PgliteClient> => {
 	databases.push(runtime);
 	return runtime.runPromise(NativeDatabase);
 };
-/** The slice's workspace: the engine fixture's callbacks plus two crons. */
+/** The slice's workspace: the engine fixture's callbacks plus three crons; `stray` sends an act its decoder refuses. */
 const sliceManifest = {
 	...callbacks,
 	policies: {
@@ -118,16 +119,33 @@ const sliceManifest = {
 	},
 	automations: {
 		stamp: { description: 'Files a customer', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },
+		stray: { description: 'Files a customer without a batch', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },
 		peek: { description: 'Counts customers', on: [{ cron: '0 6 * * *' }], output: { kind: 'int' }, policies: ['ops'] }
 	}
 } satisfies EngineManifest;
 const sliceSource = guest.source.replace(
 	'export default {',
 	`export default { automation: {
-	stamp: { body: function* (input, ctx) { yield* ctx.act('customers.create', [{ name: 'stamp' }]); } },
+	stamp: { body: function* (input, ctx) { yield* ctx.act({ 'customers.create': [{ name: 'stamp' }] }); } },
+	stray: { body: function* (input, ctx) { yield* ctx.act({ 'customers.create': { name: 'stray' } }); } },
 	peek: { body: function* (input, ctx) { return (yield* ctx.query({ customers: {} })).customers.rows.length; } }
 },`
 );
+/** The kit's release: the slice plus an integration whose unowned instance the kit seeds and administers. */
+const kitManifest = {
+	...sliceManifest,
+	integrations: {
+		erp: {
+			description: 'The ERP',
+			driver: 'http',
+			credential: { secret: { kind: 'text' } },
+			http: {
+				base_url: 'https://erp.example/api',
+				auth: { header: { name: 'x-api-key', value: 'secret' } }
+			}
+		}
+	}
+} satisfies EngineManifest;
 const compiledSlice = native.runPromise(program(sliceSource));
 /** The schema's generated history, a checkpoint like the kit's: generated (and replay-proven) once per machine and migration generator. */
 const history = async (m: EngineManifest): Promise<string> => {
@@ -253,11 +271,11 @@ const portsOf = (
 });
 
 /** A branch of the release migrated and founded, then activated through HOST_API. */
-const viaHostApi = async (client: PgliteClient, at: string): Promise<Side> => {
+const viaHostApi = async (client: PgliteClient, at: string, id = RELEASE_ID): Promise<Side> => {
 	const calls: string[] = [],
 		sent: string[] = [];
 	const host = await hostPorts();
-	const release = { id: RELEASE_ID, artifact: artifact_port(at, fileURLToPath(DOCS_DIR)) };
+	const release = { id, artifact: artifact_port(at, fileURLToPath(DOCS_DIR)) };
 	const database = tenant_db_port(TenantDb.typed(PgliteDb.make(client)));
 	const facilities = facilitiesOf(database, sent);
 	const branch = await HOST_API.branch(
@@ -411,19 +429,27 @@ describe('HOST_API conformance (D10a)', () => {
 			).pipe(Effect.provide(Pristine.layer), Effect.provide(NodeServices.layer))
 	);
 
-	it.live('passes the host-api conformance kit, and refuses a release whose guest changed after its build', () =>
+	it.live('passes the host-api conformance kit, its branch operator and recovery storage checks included, and refuses a release whose guest changed after its build', () =>
 		Effect.tryPromise({
 			try: async () => {
 				const at = mkdtempSync(join(tmpdir(), 'bolt-host-api-kit-')),
 					tampered = mkdtempSync(join(tmpdir(), 'bolt-host-api-kit-tampered-'));
 				try {
-					await built(at, sliceManifest);
+					await built(at, kitManifest);
 					cpSync(at, tampered, { recursive: true });
 					writeFileSync(join(tampered, 'guest.mjs'), '// changed after the build\n', { flag: 'a' });
 					for (const check of conformance({
 						api: HOST_API,
 						release: { id: 'kit', artifact: artifact_port(at, fileURLToPath(DOCS_DIR)) },
-						tampered: { id: 'kit-tampered', artifact: artifact_port(tampered, fileURLToPath(DOCS_DIR)) }
+						tampered: { id: 'kit-tampered', artifact: artifact_port(tampered, fileURLToPath(DOCS_DIR)) },
+						branches: {
+							database: async () => {
+								const raw = PgliteDb.make(await freshClient());
+								return { raw, port: tenant_db_port(TenantDb.typed(raw)) };
+							},
+							keys: keys_port(randomBytes(32)),
+							instance: { integration: 'erp', configuration: {} }
+						}
 					}))
 						await check.run().catch((error: unknown) => {
 							throw new Error(`${check.name}: ${String(error)}`);
@@ -431,6 +457,74 @@ describe('HOST_API conformance (D10a)', () => {
 				} finally {
 					rmSync(at, { recursive: true, force: true });
 					rmSync(tampered, { recursive: true, force: true });
+				}
+			},
+			catch: (error) => error
+		})
+	);
+	it.live("an operator's integration configure on a branch reaches the serving generation's open pages", () =>
+		Effect.tryPromise({
+			try: async () => {
+				const at = mkdtempSync(join(tmpdir(), 'bolt-host-api-operator-'));
+				try {
+					await built(at, kitManifest);
+					const client = await freshClient();
+					const id = `${RELEASE_ID}-operator`;
+					const side = await viaHostApi(client, at, id);
+					const tenant = TenantDb.typed(PgliteDb.make(client));
+					await Effect.runPromise(seed_accounts(tenant, [{ id: 'erp1', integration: 'erp' }]));
+					expect((await call(side, '', 'POST', '/__bolt/session/code', { address: EMAIL })).status).toBe(200);
+					const code = /\b\d{6}\b/.exec(side.sent.at(-1) ?? '')?.[0] ?? '';
+					const { cookie } = await call(side, '', 'POST', '/__bolt/session/verify', { address: EMAIL, code });
+					// a page watching the instances, as the settings page does
+					const r = await side.handle(new Request(`${ORIGIN}/__bolt/live`, { headers: { cookie } }));
+					const reader = (r.body ?? new ReadableStream<Uint8Array>()).getReader();
+					const hello = Schema.decodeUnknownSync(Schema.fromJsonString(Frame))(
+						(await frames(reader, (f) => f.some((x) => x.includes('"hello"')))).find((x) =>
+							x.includes('"hello"')
+						) ?? '{}'
+					);
+					if (hello.t !== 'hello') throw new Error('The live stream did not greet its connection');
+					const read = { m: 'query', a: [{ sys_integration: { fields: ['active', 'revision'] } }] };
+					expect(
+						(
+							await call(side, cookie, 'POST', '/__bolt/live', {
+								conn: hello.conn,
+								add: [{ view: 'instances', read }]
+							})
+						).status
+					).toBe(200);
+					expect(
+						(await frames(reader, (f) => f.some((x) => x.includes('"answer"')))).find((x) =>
+							x.includes('"answer"')
+						)
+					).toContain('"revision":1');
+					// the host's operator pauses the instance on a branch of its own, outside the generation
+					const branch = await HOST_API.branch(
+						{
+							release: { id, artifact: artifact_port(at, fileURLToPath(DOCS_DIR)) },
+							database: tenant_db_port(tenant)
+						},
+						{ signal }
+					);
+					const status = await branch.integrations.status('erp1', { signal });
+					expect(
+						await branch.integrations.configure(
+							'erp1',
+							{ active: false, envoy: null, revision: status.revision },
+							{ signal }
+						)
+					).toMatchObject({ active: false, revision: status.revision + 1 });
+					const heard = await frames(reader, (f) =>
+						f.some((x) => x.includes('"view":"instances"') && x.includes(`"revision":${status.revision + 1}`))
+					);
+					await reader.cancel();
+					expect(
+						heard.find((x) => x.includes('"view":"instances"') && x.includes(`"revision":${status.revision + 1}`))
+					).toContain('"active":false');
+					await side.close();
+				} finally {
+					rmSync(at, { recursive: true, force: true });
 				}
 			},
 			catch: (error) => error
@@ -512,17 +606,40 @@ describe('HOST_API conformance (D10a)', () => {
 				await side.wake();
 				expect(side.calls.some((c) => c.startsWith(`settle ${SCOPE}`))).toBe(true);
 
-				// the host clock's crons: a slot runs once; a run that only reads writes nothing and answers ran: false
+				// the host clock's crons: a slot runs once; a run that only reads writes nothing and answers ran: false.
+				// `ran` says the slot ran, not that its work succeeded: the run row and the rows it wrote say that.
 				expect(await side.crons()).toEqual([
 					{ id: 'stamp', cron: '*/15 * * * *', zone: 'UTC' },
+					{ id: 'stray', cron: '*/15 * * * *', zone: 'UTC' },
 					{ id: 'peek', cron: '0 6 * * *', zone: 'UTC' }
 				]);
 				const slot = '2026-09-25T10:15:00.000Z';
 				expect([
 					await side.fire('stamp', slot),
 					await side.fire('stamp', slot),
+					await side.fire('stray', slot),
 					await side.fire('peek', slot)
-				]).toEqual([{ ran: true }, { ran: false }, { ran: false }]);
+				]).toEqual([{ ran: true }, { ran: false }, { ran: true }, { ran: false }]);
+				const tenant = TenantDb.typed(PgliteDb.make(client));
+				expect(
+					await Effect.runPromise(
+						tenant.rows(Schema.Struct({ automation: Schema.String, state: Schema.String }), {
+							text: "SELECT automation, state FROM sys_run WHERE automation IN ('stamp', 'stray') ORDER BY automation",
+							params: []
+						})
+					)
+				).toEqual([
+					{ automation: 'stamp', state: 'succeeded' },
+					{ automation: 'stray', state: 'failed' }
+				]);
+				expect(
+					await Effect.runPromise(
+						tenant.rows(Schema.Struct({ name: Schema.String }), {
+							text: "SELECT name FROM customers WHERE name IN ('stamp', 'stray')",
+							params: []
+						})
+					)
+				).toEqual([{ name: 'stamp' }]);
 
 				// a planned close: nothing runs, so it answers at once, and a wake only asks again for the next generation
 				await side.park(0);

@@ -467,7 +467,7 @@ const build = (
 				});
 				const rows = <A>(schema: Schema.Decoder<A>, view: string) =>
 					frames.flatMap((frame) =>
-						frame.t === 'patch' && frame.view === view
+						frame.t === 'delta' && frame.view === view
 							? frame.ops.flatMap((op) =>
 									op.op === 'upsert' ? [Schema.decodeUnknownSync(schema)(op.row)] : []
 								)
@@ -2123,6 +2123,37 @@ describe('the host tool catalogue', () => {
 				expect(catalogueNotes(request).join('\n')).not.toContain('plans');
 				expect(toolResults(called)).toContainEqual({ plan: 'Current plan' });
 				expect(ai.requests).toHaveLength(2);
+			}).pipe(Effect.provide(context));
+		}))
+	);
+	it.live('a confirmed host call keeps the view its tool declared once the card settles', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm([use('stamp', { message: 'Add notes' }), say('Done.')]);
+			const stamp: HostTool = {
+				name: 'stamp',
+				description: 'Stamps a message.',
+				input: { type: 'object' },
+				behavior: {},
+				confirm: () => true,
+				view: () => ({ icon: 'lucide:stamp', verb: 'Stamped', target: 'Add notes', doing: 'Stamping…' }),
+				call: async () => ({ ok: true })
+			};
+			const { agent, user, authority, context } = yield* build(ai, { host_tools: [stamp] });
+			return yield* Effect.gen(function* () {
+				const root = yield* user('root', { admin: true });
+				const c = yield* agent.start({ owner: root });
+				yield* agent.post({ conversation: c, as: { member: root }, text: 'Stamp it.' });
+				yield* agent.drain(c);
+				const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+				if (held === undefined) throw new Error('Expected the stamp to wait for confirmation');
+				yield* agent.confirm(held.id, true, yield* authority(root));
+				const settled = (yield* agent.transcript(c)).find((row) => row.id === held.id);
+				expect(settled?.state).toBeNull();
+				// the panel reads the settled card's step line from its stored view, as it reads a call's that needed no card
+				expect(settled?.content).toMatchObject({
+					view: { icon: 'lucide:stamp', verb: 'Stamped', target: 'Add notes', doing: 'Stamping…' }
+				});
 			}).pipe(Effect.provide(context));
 		}))
 	);

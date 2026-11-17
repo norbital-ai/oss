@@ -25,6 +25,7 @@ import {
 	ActReply,
 	AgentConversation,
 	AgentRow,
+	DELTA,
 	Frame,
 	HostOperation,
 	HostOperationResult,
@@ -108,12 +109,14 @@ describe('the wire Schemas', () => {
 			{ t: 'hello', conn: 'c', v: 0 },
 			{ t: 'answer', view: 'v', v: 1, value: [], arrivals: [{ id: 'o1' }] },
 			{
-				t: 'patch',
+				t: 'delta',
 				view: 'v',
 				v: 2,
 				ops: [
-					{ op: 'upsert', index: 0, row: { id: 'o1' } },
-					{ op: 'remove', id: 'o2' }
+					{ op: 'upsert', path: ['orders'], index: 0, row: { id: 'o1' } },
+					{ op: 'remove', path: ['orders'], id: 'o2' },
+					{ op: 'meta', path: ['orders'], key: 'total', value: 1 },
+					{ op: 'unset', path: [], key: 'status' }
 				]
 			},
 			{ t: 'error', view: 'v', code: 'subscription_too_large', message: 'too many rows' },
@@ -193,6 +196,32 @@ describe('the wire Schemas', () => {
 		refuses(ActReply, { outcome: { kind: 'refused', code: 'nope', message: 'x' }, v: 1 });
 		refuses(Frame, { t: 'hello', conn: 'c' });
 		refuses(SessionRequest, { path: 'code', body: { address: 'a', via: 'pigeon' } });
+	});
+
+	it('refuses a delta op past its bounds or one that reaches a prototype', () => {
+		const delta = (...ops: readonly unknown[]) => ({ t: 'delta', view: 'v', v: 1, ops });
+		const upsert = { op: 'upsert', path: ['orders'], index: 0, row: { id: 'o1' } };
+		trip(Frame, delta(upsert));
+		trip(Frame, delta(...Array.from({ length: DELTA.ops }, () => upsert)));
+		trip(Frame, delta({ ...upsert, path: Array.from({ length: DELTA.depth }, (_, i) => `r${i}`) }));
+		for (const op of [
+			{ op: 'upsert', index: 0, row: { id: 'o1' } },
+			{ ...upsert, path: Array.from({ length: DELTA.depth + 1 }, (_, i) => `r${i}`) },
+			{ ...upsert, path: ['__proto__'] },
+			{ ...upsert, path: ['orders', 'constructor'] },
+			{ ...upsert, path: ['prototype'] },
+			{ ...upsert, path: 'orders' },
+			{ ...upsert, path: [0] },
+			{ ...upsert, index: -1 },
+			{ ...upsert, index: 1.5 },
+			{ op: 'meta', path: [], key: '__proto__', value: {} },
+			{ op: 'unset', path: [], key: 'constructor' },
+			{ op: 'remove', path: [] }
+		])
+			refuses(Frame, delta(op));
+		refuses(Frame, delta(...Array.from({ length: DELTA.ops + 1 }, () => upsert)));
+		// one current grammar: the frame before paths is no frame
+		refuses(Frame, { t: 'patch', view: 'v', v: 1, ops: [{ op: 'remove', id: 'o1' }] });
 	});
 
 	it('refuses retired write options at the same strict boundary used by HTTP requests', () => {

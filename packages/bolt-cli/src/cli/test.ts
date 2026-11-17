@@ -9,7 +9,7 @@ import type { Plugin, PluginOption, UserConfig } from 'vite';
 import type {} from 'vitest/config';
 import { EDITOR_SINGLETONS } from '../compiler/editor-dependencies.ts';
 import { EXT } from '../compiler/bolt.ts';
-import { lintTests } from '../test/lint.ts';
+import { lintTree } from '../test/lint.ts';
 import { writeTypeSetup } from '../compiler/names.ts';
 import { AuthorErrors, ToolFailure } from './build.ts';
 
@@ -149,7 +149,7 @@ export const testWorkspace = Effect.fn('bolt.test')(function* (
 	process.chdir(root);
 	const { filter, options } = runner.parseCLI(['vitest', 'run', ...args]);
 	// the test lint first, but the suite still runs: every failure is reported
-	const lint = yield* lintTests(root, { template: true }).pipe(
+	const lint = yield* lintTree(root, { template: true }).pipe(
 		Effect.mapError(
 			(cause) => new ToolFailure({ message: 'bolt test: the test lint failed.', cause })
 		)

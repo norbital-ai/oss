@@ -1,6 +1,6 @@
 import type { Json } from '@norbital-ai/store';
-// What a host hands a release and gets back: the ports of one serving generation (`HostPorts`), a branch the lifecycle
-// prepares (`BranchPorts`), an environment's integration links (`LinkHost`), and the full `HostApi` a release answers.
+// What a host hands a release and gets back: the ports of one serving generation (`HostPorts`), a branch it prepares
+// or administers (`BranchPorts`), an environment's integration links (`LinkHost`), and the full `HostApi` a release answers.
 // Promise + AbortSignal throughout; an answer the host interprets rejects with an encoded `HostApiFailure`.
 import { Schema } from 'effect';
 import type { MintedSession, FounderAnswer } from './answers.ts';
@@ -23,7 +23,13 @@ import type {
 } from './facilities.ts';
 import type { GuestIsolatesPort } from './guest.ts';
 import type { ImagesPort } from './media.ts';
-import type { LinksPort, OAuthClient, OAuthVendor, Provider } from './integrations.ts';
+import type {
+	InstanceAdmin,
+	LinksPort,
+	OAuthClient,
+	OAuthVendor,
+	Provider
+} from './integrations.ts';
 import type { MigrationImpact } from './migration-impact.ts';
 import type { Off } from './off.ts';
 import type { HostApiCore, Release, Signal } from './ports.ts';
@@ -138,12 +144,17 @@ export type HostPorts = {
 	 */
 	readonly overran?: string;
 };
-/** A branch the lifecycle prepares outside any serving generation (provision, reset, probe, restore). */
+/**
+ * A branch the host works on outside any serving generation: the lifecycle prepares one (provision, reset, probe,
+ * restore), and an operator changes a live one's integration instances. No guest code runs.
+ */
 export type BranchPorts = {
 	readonly release: Release;
 	readonly database: HostTenantDb;
 	/** The environment's durable host store; founder bootstrap, which mutates identity, refuses without it. */
 	readonly audit?: AuditPort;
+	/** As `LinkHost.keys`: credential restore seals through it, and refuses without it. */
+	readonly keys?: KeysPort;
 };
 /** An integration instance's row, as its sealed credentials open with it. */
 export type InstanceRow = {
@@ -253,16 +264,6 @@ export type ActiveWorkspace = {
 		): Promise<MintedSession | null>;
 	};
 };
-/** A `sys_user` row as a host reads it from a branch database, without entering the release. */
-export const HostUser = Schema.Struct({
-	id: Schema.String,
-	name: Schema.String,
-	email: Schema.NullOr(Schema.String),
-	phone: Schema.NullOr(Schema.String),
-	team: Schema.NullOr(Schema.String),
-	active: Schema.Boolean
-});
-export type HostUser = typeof HostUser.Type;
 /** A seed asset a restore reads: its path in the pack, digest, size and media type. */
 export type SeedAsset = {
 	readonly path: string;
@@ -318,9 +319,34 @@ export type WorkspaceBranch = {
 		capture(options: Signal): Promise<string>;
 		restore(snapshot: string, options: Signal): Promise<void>;
 	};
+	/**
+	 * Integration instances as the host's operator changes them, for a host whose links on this branch are stopped (it
+	 * reopens them after). Each change bumps the row's `revision` and commits on its own; values never leave the release.
+	 */
 	readonly integrations: {
 		/** A restored branch's session instances lose their credentials and read `unpaired`. */
 		unpair_sessions(options: Signal): Promise<void>;
+		/** One instance as an operator observes it; `not_found` for no such instance. */
+		status(instance: string, options: Signal): Promise<InstanceAdmin>;
+		/**
+		 * Pauses or resumes an instance and deploys or detaches its envoy (an active one, on a workspace conversation
+		 * instance, else `invalid`), fenced by the `revision` its status read: `conflict` when it moved. Credentials stay.
+		 */
+		configure(
+			instance: string,
+			change: { readonly active: boolean; readonly envoy: string | null; readonly revision: number },
+			options: Signal
+		): Promise<InstanceAdmin>;
+		/**
+		 * Replaces every sealed credential of an instance with `values` under a rotated epoch, fencing any earlier link.
+		 * The instance is paused first, so a failed or interrupted restore leaves it paused; then it takes `active` and
+		 * reads `unpaired` until its own link opens. `conflict` when another link moved its epoch meanwhile.
+		 */
+		restore(
+			instance: string,
+			values: { readonly [name: string]: Json },
+			options: Signal & { readonly active: boolean }
+		): Promise<void>;
 	};
 };
 /** A workspace's integration links: their port, sealed credentials, hooks and the open count the host reads to idle them. */

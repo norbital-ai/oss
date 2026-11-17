@@ -8,6 +8,7 @@ import {
 	Option,
 	Predicate,
 	Queue,
+	RcRef,
 	Result,
 	Schema,
 	Semaphore,
@@ -244,36 +245,57 @@ const list = (value: Json): readonly Json[] => (jsonArray(value) ? value : [valu
 const RELATION_OPS = ['create', 'update', 'delete', 'upsert', 'link', 'unlink'];
 const PAINTED = new Set(['create', 'update', 'delete']);
 
-/** Rule 65: a patch applied to a view's value (a page's `rows`, or a `get`'s row); `undefined` when it does not fit it. */
-export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json | undefined {
-	if (value === undefined) return undefined;
-	const pageRows = isRow(value) ? value['rows'] : undefined;
-	let record = isRow(value) ? value : null;
-	const page = jsonArray(pageRows);
-	let changedRows = false;
-	let rows: Json[] = jsonArray(pageRows) ? [...pageRows] : value === null ? [] : [value];
-	for (const o of ops) {
-		if (o.op === 'meta' || o.op === 'unset') {
-			if (record === null) return undefined;
-			if (o.op === 'meta') record = { ...record, [o.key]: o.value };
-			else {
-				const { [o.key]: _removed, ...rest } = record;
-				record = rest;
-			}
-			continue;
+const isRecord = (v: Json | undefined): v is Row => isRow(v) && !jsonArray(v);
+/** One op on its container: a page (records in `rows` beside its other keys), or a `get` view's row or `null`. */
+function changed(target: Json, o: PatchOp): Json | undefined {
+	const rows = isRecord(target) ? target['rows'] : undefined;
+	if (!isRecord(target) || !jsonArray(rows)) {
+		if (o.op === 'remove') return isRecord(target) && target['id'] === o.id ? null : undefined;
+		const row = o.op === 'upsert' && o.index === 0 ? o.row : undefined;
+		return isRecord(row) && (target === null || (isRecord(target) && target['id'] === row['id'])) ? row : undefined;
+	}
+	switch (o.op) {
+		case 'upsert': {
+			const row = o.row,
+				id = isRecord(row) ? row['id'] : undefined;
+			if (typeof id !== 'string') return undefined;
+			const next = rows.filter((other) => !isRecord(other) || other['id'] !== id);
+			if (o.index > next.length) return undefined;
+			next.splice(o.index, 0, row);
+			return { ...target, rows: next };
 		}
-		changedRows = true;
-		rows = rows.filter(
-			(r) => !isRow(r) || r['id'] !== (o.op === 'remove' ? o.id : isRow(o.row) ? o.row['id'] : null)
-		);
-		if (o.op === 'upsert') {
-			if (o.index > rows.length) return undefined;
-			rows.splice(o.index, 0, o.row);
+		case 'remove': {
+			const i = rows.findIndex((other) => isRecord(other) && other['id'] === o.id);
+			return i < 0 ? undefined : { ...target, rows: rows.toSpliced(i, 1) };
+		}
+		case 'meta':
+			return o.key === 'rows' ? undefined : { ...target, [o.key]: o.value };
+		case 'unset': {
+			if (o.key === 'rows' || !Object.hasOwn(target, o.key)) return undefined;
+			const { [o.key]: _removed, ...rest } = target;
+			return rest;
 		}
 	}
-	if (page && record !== null) return { ...record, rows };
-	if (!changedRows && record !== null) return record;
-	return rows.length > 1 ? undefined : (rows[0] ?? null);
+}
+/** The value with the container at `path` (own keys only) changed; every container off that path is shared. */
+function within(value: Json, path: readonly string[], depth: number, o: PatchOp): Json | undefined {
+	const key = path[depth];
+	if (key === undefined) return changed(value, o);
+	const child = isRecord(value) && Object.hasOwn(value, key) ? value[key] : undefined;
+	const next = child === undefined ? undefined : within(child, path, depth + 1, o);
+	return next === undefined || !isRecord(value) ? undefined : { ...value, [key]: next };
+}
+/**
+ * Rule 65: a delta applied to a view's value, every op in order at its path or none: unchanged rows and roots are
+ * shared, never copied. `undefined` when an op does not fit the image: the view then registers again for a whole answer.
+ */
+export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json | undefined {
+	let next = value;
+	for (const o of ops) {
+		if (next === undefined) return undefined;
+		next = within(next, o.path, 0, o);
+	}
+	return next;
 }
 
 /** The roots a read request names (`query({ … })`), whose pages a write's paint reaches. */
@@ -500,7 +522,7 @@ export const create_bolt = (config: BoltConfig) =>
 				}
 			}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 		const receiveNotices = (
-			frame: Extract<Frame, { t: 'answer' | 'patch' }>,
+			frame: Extract<Frame, { t: 'answer' | 'delta' }>,
 			view: View | undefined
 		) => {
 			if (
@@ -536,7 +558,7 @@ export const create_bolt = (config: BoltConfig) =>
 							item.registered = false;
 							item.v = -1;
 						}
-						yield* register([...views.values()]).pipe(Effect.forkScoped);
+						yield* register([...views.values()]).pipe(Effect.forkScoped({ startImmediately: true }));
 						return;
 					case 'answer':
 						receiveNotices(frame, view);
@@ -563,7 +585,9 @@ export const create_bolt = (config: BoltConfig) =>
 							) {
 								view.server = undefined;
 								view.registered = false;
-								return yield* register([view]);
+								// never waited on: the other views' frames go on while this one registers again
+								yield* register([view]).pipe(Effect.forkScoped({ startImmediately: true }));
+								return;
 							}
 							const failure = validate(view, view.server);
 							if (failure !== undefined) {
@@ -576,20 +600,24 @@ export const create_bolt = (config: BoltConfig) =>
 							}
 						}
 						return yield* advance(frame.v);
-					case 'patch': {
-						if (view === undefined || frame.v <= view.v) return yield* advance(frame.v);
+					case 'delta': {
+						// its base is the image the view's previous frame left, whatever its `v`; a view with no image
+						// waits for the whole answer of its next registration
+						if (view === undefined || view.server === undefined) return yield* advance(frame.v);
 						const next = patched(view.server, frame.ops);
 						if (next === undefined) {
 							view.server = undefined;
 							view.registered = false;
-							return yield* register([view]);
+							yield* register([view]).pipe(Effect.forkScoped({ startImmediately: true }));
+							return;
 						}
 						const failure = validate(view, next);
 						if (failure !== undefined) {
 							yield* notify(view, failure);
 							view.server = undefined;
 							view.registered = false;
-							return yield* register([view]);
+							yield* register([view]).pipe(Effect.forkScoped({ startImmediately: true }));
+							return;
 						}
 						receiveNotices(frame, view);
 						view.server = next;
@@ -636,28 +664,28 @@ export const create_bolt = (config: BoltConfig) =>
 				Effect.sync(() => window.removeEventListener('pagehide', leave))
 			);
 		}
-		const frames =
-			live_mode === 'snapshot'
-				? Stream.empty
-				: yield* liveStream(
-						() => config.open_stream?.(live) ?? (shared ? sharedSource(live, open) : open()),
-						Effect.gen(function* () {
-							leave();
-							conn = null;
-							generation++;
-							for (const view of views.values()) view.registered = false;
-							for (const waiter of waiters.keys()) yield* Deferred.succeed(waiter, undefined);
-							yield* SubscriptionRef.set(
-								status,
-								closed !== null ? 'closed' : views.size === 0 ? 'idle' : 'connecting'
-							);
-						}),
-						config.signals ?? pageSignals(),
-						Queue.take(reconnects)
-					).pipe(
-						Stream.tap(onFrame),
-						Stream.share({ capacity: 'unbounded', idleTimeToLive: '30 seconds' })
+		// The one connection: every streaming consumer holds it, and it outlives the last one by 30 s. Its frames are
+		// applied in order as they arrive, by one fiber, with no buffer per consumer to fall behind in; a link that fails
+		// or sends an invalid frame reconnects, and the next `hello` registers every view again.
+		const connection = yield* RcRef.make({
+			acquire: liveStream(
+				() => config.open_stream?.(live) ?? (shared ? sharedSource(live, open) : open()),
+				Effect.gen(function* () {
+					leave();
+					conn = null;
+					generation++;
+					for (const view of views.values()) view.registered = false;
+					for (const waiter of waiters.keys()) yield* Deferred.succeed(waiter, undefined);
+					yield* SubscriptionRef.set(
+						status,
+						closed !== null ? 'closed' : views.size === 0 ? 'idle' : 'connecting'
 					);
+				}),
+				config.signals ?? pageSignals(),
+				Queue.take(reconnects)
+			).pipe(Stream.runForEach(onFrame), Effect.forkScoped),
+			idleTimeToLive: '30 seconds'
+		});
 		yield* Effect.addFinalizer(() =>
 			Effect.gen(function* () {
 				for (const view of views.values())
@@ -882,8 +910,11 @@ export const create_bolt = (config: BoltConfig) =>
 					} else {
 						if (closed === null)
 							yield* SubscriptionRef.set(status, conn === null ? 'connecting' : 'live');
-						yield* Stream.runDrain(frames).pipe(Effect.forkScoped);
-						if (!current.registered) yield* register([current]).pipe(Effect.forkScoped);
+						yield* RcRef.get(connection);
+						// started at once: `register` marks the view before its request, so a second consumer in the same
+						// tick joins it instead of registering it again
+						if (!current.registered)
+							yield* register([current]).pipe(Effect.forkScoped({ startImmediately: true }));
 					}
 					return SubscriptionRef.changes(current.state).pipe(
 						Stream.flatMap((state) => {

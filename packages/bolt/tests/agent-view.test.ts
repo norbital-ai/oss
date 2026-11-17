@@ -11,6 +11,7 @@ import {
 	childStatus,
 	contextView,
 	currentPreview,
+	doingOf,
 	failedVerbs,
 	failureOf,
 	modelDividers,
@@ -23,7 +24,7 @@ import {
 	stepArgs,
 	stepView
 } from '../src/shell/agent/view.ts';
-import type { StudioChangeSet } from '@norbital-ai/host-api';
+import type { StudioChangeSet, ToolBehavior } from '@norbital-ai/host-api';
 import { checkFailing, NUDGE } from '../src/engine/agent/index.ts';
 
 const row = (seq: number, o: Partial<AgentRow> = {}): AgentRow => ({
@@ -59,7 +60,7 @@ it.effect(
 				studio: 'preview',
 				result: { preview: 'https://preview.test/', commit: 'c1' }
 			};
-			const messages = ['wait', 'mcp__remote__read'].map((name, seq) => ({
+			const messages = ['wait', 'remote__read'].map((name, seq) => ({
 				r: {
 					id: `job-${seq}`,
 					conversation: 'c',
@@ -89,7 +90,12 @@ it.effect(
 );
 
 describe('source edits on the panel', () => {
-	const edited = (name: string, args: Json, result: Json) =>
+	const edited = (
+		name: string,
+		args: Json,
+		result: Json,
+		behavior: ToolBehavior = { source_edit: true }
+	) =>
 		Effect.gen(function* () {
 			const rows = yield* rowsOf([
 				{
@@ -98,7 +104,14 @@ describe('source edits on the panel', () => {
 						conversation: 'c',
 						seq: 1,
 						role: 'tool',
-						content: { id: 'call', assistant: 'a1', name, args: JSON.stringify(args), result },
+						content: {
+							id: 'call',
+							assistant: 'a1',
+							name,
+							args: JSON.stringify(args),
+							result,
+							behavior
+						},
 						text: null,
 						state: null,
 						mode: null,
@@ -161,26 +174,39 @@ describe('source edits on the panel', () => {
 			]);
 		})
 	);
-	it.effect('historical source calls retain raw evidence without reviving the retired multi-file edit contract', () =>
-		Effect.gen(function* () {
-			const args = {
-					changes: [
-						{ path: 'src/a.ts', find: 'x', replace: 'y' },
-						{ path: 'b.txt', text: 'z' }
-					]
-				},
-				old = yield* edited('workspace_write', args, {
-					changes: [{ path: 'src/a.ts', diff: '-x\n+y', change: 'modified' }]
-				});
-			expect(old?.tool?.changes).toBeUndefined();
-			expect(old?.tool?.args).toBe(JSON.stringify(args));
-		})
+	it.effect(
+		'a step whose tool declares no source edit shows no diff, whatever its name or input',
+		() =>
+			Effect.gen(function* () {
+				const undeclared = yield* edited(
+					'workspace_write',
+					{ path: 'src/b.ts', content: 'a\nb' },
+					'Created file successfully: src/b.ts',
+					{}
+				);
+				expect(undeclared?.tool?.changes).toBeUndefined();
+				const declared = yield* edited('anything', { path: 'src/b.ts', content: 'a' }, 'ok');
+				expect(declared?.tool?.changes).toEqual([{ path: 'src/b.ts', diff: '+a' }]);
+			})
+	);
+	it.effect(
+		'historical source calls retain raw evidence without reviving the retired multi-file edit contract',
+		() =>
+			Effect.gen(function* () {
+				const args = {
+						changes: [
+							{ path: 'src/a.ts', find: 'x', replace: 'y' },
+							{ path: 'b.txt', text: 'z' }
+						]
+					},
+					old = yield* edited('workspace_write', args, {
+						changes: [{ path: 'src/a.ts', diff: '-x\n+y', change: 'modified' }]
+					});
+				expect(old?.tool?.changes).toBeUndefined();
+				expect(old?.tool?.args).toBe(JSON.stringify(args));
+			})
 	);
 	it("names each source tool in the person's words", () => {
-		expect(stepView('workspace_write', { path: 'a.ts', content: 'x' })).toMatchObject({
-			verb: 'Edited the source',
-			target: 'a.ts'
-		});
 		expect(stepView('workspace_read', { path: 'a.ts', offset: 10, limit: 50 })).toMatchObject({
 			verb: 'Read source',
 			target: 'a.ts:10-59'
@@ -193,29 +219,36 @@ describe('source edits on the panel', () => {
 			verb: 'Found source files',
 			target: '**/*.ts'
 		});
-		expect(
-			stepView('workspace_edit', { path: 'a.ts', oldString: 'x', newString: 'y' })
-		).toMatchObject({
-			verb: 'Edited the source',
-			target: 'a.ts'
-		});
-		expect(stepView('workspace_move', { path: 'a.ts', to: 'b.ts' })).toMatchObject({
-			verb: 'Moved source',
-			target: 'a.ts → b.ts'
-		});
-		expect(stepView('workspace_move', { path: 'a.ts' })).toMatchObject({
-			verb: 'Deleted source',
-			target: 'a.ts'
-		});
-		expect(stepView('workspace_commit', { message: 'Add notes' })).toMatchObject({
+	});
+	it("reads a host tool's step by the view it declared, never by its name", () => {
+		const view = {
+			icon: 'lucide:git-commit-horizontal',
+			verb: 'Committed',
+			target: 'Add notes',
+			doing: 'Committing…'
+		};
+		expect(stepView('workspace_commit', { message: 'Add notes' }, view)).toEqual({
+			icon: 'lucide:git-commit-horizontal',
 			verb: 'Committed',
 			target: 'Add notes'
 		});
-		expect(stepView('workspace_install', { name: 'zod', version: '3.0.0' })).toMatchObject({
-			verb: 'Installed a package',
-			target: 'zod@3.0.0'
+		// undeclared, a host tool reads as its own name, whatever it is called
+		expect(stepView('workspace_commit', { message: 'Add notes' })).toMatchObject({
+			icon: 'lucide:wrench',
+			target: ''
 		});
-		expect(stepView('workspace_preview', {}).verb).toBe('Built the preview');
+		expect(stepView('workspace_commit', { message: 'Add notes' }).verb).not.toBe('Committed');
+		// a host cannot restyle a native tool
+		expect(stepView('workspace_read', { path: 'a.ts' }, view).verb).toBe('Read source');
+		const running = (tool: NonNullable<AgentRow['tool']>) => row(1, { role: 'tool', tool });
+		expect(
+			doingOf([
+				running({ name: 'workspace_commit', behavior: {}, failed: false, running: true, view })
+			])
+		).toBe('Committing…');
+		expect(
+			doingOf([running({ name: 'workspace_commit', behavior: {}, failed: false, running: true })])
+		).toBe('Working…');
 	});
 	it('names each agent tool by its own name and input', () => {
 		expect(stepView('view_image', { id: 'f1', crops: [[0, 0, 1, 1]] })).toMatchObject({
@@ -227,12 +260,16 @@ describe('source edits on the panel', () => {
 			verb: 'Started a subagent',
 			target: 'Review all'
 		});
-		expect(stepView('task', { description: 'Go on', prompt: 'Go on', task_id: 'c' })).toMatchObject({
-			verb: 'Sent a message to a subagent',
-			target: 'Go on'
-		});
+		expect(stepView('task', { description: 'Go on', prompt: 'Go on', task_id: 'c' })).toMatchObject(
+			{
+				verb: 'Sent a message to a subagent',
+				target: 'Go on'
+			}
+		);
 		expect(stepView('task_stop', { task_id: 'c' }).verb).toBe('Stopped a subagent');
-		expect(stepView('read', { $runs: { limit: 5 }, sys_audit_log: {} }).target).toBe('runs, sys audit log');
+		expect(stepView('read', { $runs: { limit: 5 }, sys_audit_log: {} }).target).toBe(
+			'runs, sys audit log'
+		);
 	});
 });
 
@@ -272,7 +309,8 @@ describe('the context view (L-BOLT-546)', () => {
 		expect(checkpointSections('plain text')).toBe('plain text');
 	});
 	it('keeps escaped checkpoint cells and leaves a lone table row in its original form', () => {
-		const table = '| Row | Summary |\n|---|---|\n| Goal | One \\| two |\n| Invalid | Three | Cells |';
+		const table =
+			'| Row | Summary |\n|---|---|\n| Goal | One \\| two |\n| Invalid | Three | Cells |';
 		expect(checkpointSections(table)).toBe('#### Goal\n\nOne | two');
 		const lone = '| Goal | One \\| two |';
 		expect(checkpointSections(lone)).toBe(lone);
@@ -319,7 +357,9 @@ describe('subagent messages', () => {
 	const report = (state: string, summary: string, body: string, id = conversation) =>
 		`<task id="${id}" state="${state}">\n<summary>${summary}: Review "invoices"\nCheck totals</summary>\n<task_${state === 'error' ? 'error' : 'result'}>\n${body}\n</task_${state === 'error' ? 'error' : 'result'}>\n</task>`;
 	it('requires report metadata even when the text resembles a report', () => {
-		expect(reportView(row(1, { text: report('completed', 'Background task completed', 'Done') }))).toBeNull();
+		expect(
+			reportView(row(1, { text: report('completed', 'Background task completed', 'Done') }))
+		).toBeNull();
 	});
 	it('reads the task description and keeps the entire body, including quotes and newlines', () => {
 		const message = 'Checked "October" invoices.\nTotals match.\n\nReady for review.';
@@ -328,7 +368,9 @@ describe('subagent messages', () => {
 			['error', 'Background task failed'],
 			['cancelled', 'Background task cancelled']
 		] as const)
-			expect(reportView(row(1, { report: { conversation }, text: report(state, summary, message) }))).toEqual({
+			expect(
+				reportView(row(1, { report: { conversation }, text: report(state, summary, message) }))
+			).toEqual({
 				icon: 'lucide:inbox',
 				verb: 'Received a message',
 				target: 'Review "invoices"',
@@ -461,7 +503,6 @@ describe('Studio outcomes outside the folded steps', () => {
 		expect(checkOf(broke)).toBeNull();
 		expect(failureOf(broke)).toBe('no graph in the package store');
 		expect(checkFailing({ failing: 7, types: {} })).toBe(7);
-		expect(checkFailing({ error: '65 failing, unchanged for 3 runs.' })).toBe(65);
 		expect(checkFailing({ types: { total: 0 } })).toBe(0);
 		expect(checkFailing({ error: 'The build did not start.' })).toBeUndefined();
 	});

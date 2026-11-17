@@ -47,7 +47,8 @@ export {
 	refuse_platform_addresses,
 	read_public_page,
 	type Address,
-	type PageWrite
+	type PageWrite,
+	type Resolve
 } from './node/net.ts';
 export { loopback_tcp_port, tcp_port } from './node/tcp.ts';
 export { type_service } from './node/typing/workspace.ts';

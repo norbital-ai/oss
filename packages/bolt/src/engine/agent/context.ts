@@ -482,8 +482,11 @@ export const pageWaiting = (rows: readonly MessageRow[]) => {
 export function pageNote(rows: readonly MessageRow[]): string | undefined {
 	const result = pageResultOf(rows.findLast((r) => pageResultOf(r) !== null));
 	const answer = result?.['page_result'];
+	// a path is accepted when called: the person's tab follows it, so the step is done, only its screen is still to come
 	if (result?.['requested'] === true && answer === undefined)
-		return 'Your last page step is awaiting the tab or the person. It has not reported completion; do not say it ran.';
+		return typeof result['navigation'] === 'string'
+			? `Your last page step sent the person's tab to ${result['navigation']}; it has not reported what that page shows yet. Do not send it there again.`
+			: 'Your last page step is awaiting the tab or the person. It has not reported completion; do not say it ran.';
 	if (!isObj(answer)) return undefined;
 	const { ok, note, screen } = answer;
 	return [

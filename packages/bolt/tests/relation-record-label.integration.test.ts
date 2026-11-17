@@ -196,7 +196,7 @@ layer(TestWorkspace.layer({ manifest, seed: {
 				for (;;) {
 					const frame = yield* Queue.take(frames);
 					if (frame.t === 'answer' && frame.view === 'label') return current = frame.value;
-					if (frame.t === 'patch' && frame.view === 'label') return current = patched(current, frame.ops);
+					if (frame.t === 'delta' && frame.view === 'label') return current = patched(current, frame.ops);
 				}
 			});
 			expect(yield* next.pipe(Effect.flatMap(decode_visits))).toMatchObject({ visits: { rows: [{ id: VISIT, $label: 'V1 · Ada' }] } });

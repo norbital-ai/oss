@@ -41,7 +41,7 @@
 	const raw = $derived((tool.result ?? '').replaceAll('\\n', '\n').replaceAll('\\"', '"'));
 	const verdict = (ok: boolean) => (ok ? 'lucide:circle-check' : 'lucide:circle-alert');
 	const issues = (types: unknown) => list(object(types) ? types['diagnostics'] : []);
-	const SOURCE = new Set(['workspace_lang', 'describe_workspace', 'skill']);
+	const SOURCE = new Set(['describe_workspace', 'skill']);
 	/** A compact diff's two sides: kept and `-` lines before, kept and `+` lines after; an `@@` line stands in both. */
 	const sides = (diff: string) => {
 		const before: string[] = [],
@@ -151,8 +151,8 @@
 			<p class="text-micro">{text(out['saved'])}</p>
 		{/if}
 	</div>
-{:else if tool.name === 'web_search'}
-	<ul class="grid max-h-72 gap-2 overflow-auto" data-tool-view="web_search">
+{:else if tool.behavior.web_results === true}
+	<ul class="grid max-h-72 gap-2 overflow-auto" data-tool-view="web_results">
 		{#each list(out['results']) as hit (text(hit['url']))}
 			<li class="min-w-0">
 				<a
@@ -183,7 +183,7 @@
 			)}
 		{/if}
 	</div>
-{:else if tool.name === 'workspace_diagnose' || tool.name === 'workspace_preview'}
+{:else if tool.behavior.diagnostics === true}
 	{@const types = out['types']}
 	{@const tests = object(out['tests']) ? out['tests'] : null}
 	<!-- the step's line already says what the check found: the body shows only where, one compact line each -->
@@ -239,7 +239,7 @@
 	</div>
 {:else if ['workspace_list_dir', 'workspace_grep', 'workspace_glob'].includes(tool.name)}
 	<pre class="max-h-96 overflow-auto font-mono text-micro" data-step-pane="tree">{tool.result}</pre>
-{:else if tool.name === 'workspace_logs'}
+{:else if tool.studio === 'logs'}
 	{@const lines = list(out['records'])}
 	<ul class="grid max-h-56 gap-0.5 overflow-auto font-mono text-micro" data-tool-view="logs">
 		{#each lines as line, index (index)}

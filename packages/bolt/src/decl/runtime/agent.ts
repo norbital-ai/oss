@@ -28,8 +28,12 @@ type McpSpec = {
 /**
  * `src/agent/mcp/+<n>.mcp.ts`: an MCP server the agent may call, its `url` and credentials named from `+secrets.ts`, and an
  * optional tool allowlist. Reachable only through a policy's `capabilities.mcp`. Declare the names, merge the change
- * to live, then `navigate { configure: { capability: 'mcp.configure', record: '<n>' } }` opens the native pairing
- * sheet; each secret opens the write-only form. Its tools appear on the next turn as `mcp__<n>__<tool>`.
+ * to live, then an administrator's agent calls `page { path, configure: { capability: 'mcp.configure', record: '<n>' } }`
+ * (its path from `describe_workspace { names: ['system'] }`) to open the native MCP settings; each secret opens the
+ * write-only form. Its tools are offered as `<n>__<tool>` (in a conversation begun earlier, through `run_tool`); a tool
+ * name outside `[A-Za-z0-9_-]`, a server name with a double or trailing underscore, or a pair past 64 characters is
+ * offered as its readable start and a 12-hex digest of the pair. A tool whose name a native, host or other MCP tool also
+ * takes is not offered.
  * @example
  * export default mcp({ description: 'HQ tools', url: 'HQ_URL', auth: { bearer: 'HQ_TOKEN' } });
  */

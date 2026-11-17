@@ -2,7 +2,7 @@
 // and the model-change dividers (L-BOLT-547). Each is a function of the rows alone, so a reload shows the same thing.
 import { Array as Arr, Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
-import type { StudioView } from '@norbital-ai/host-api';
+import type { StudioView, ToolView } from '@norbital-ai/host-api';
 import { humanise, handle_words } from '../i18n.ts';
 
 /** One mark per state: waiting on a person is not failing, and a finished or stopped turn is not idle. */
@@ -286,11 +286,6 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		verb: 'Looked up a place',
 		target: str(a['query']) || str(a['address'])
 	}),
-	workspace_lang: (a) => ({
-		icon: 'lucide:braces',
-		verb: 'Read workspace types',
-		target: str(a['path']) || str(a['type'])
-	}),
 	workspace_grep: (a) => ({
 		icon: 'lucide:folder-search',
 		verb: 'Searched the source',
@@ -325,71 +320,6 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target: str(a['name']),
 		code: { text: str(a['markdown']), language: 'plaintext' }
 	}),
-	workspace_write: (a) => ({
-		icon: 'lucide:file-pen-line',
-		verb: 'Edited the source',
-		target: str(a['path'])
-	}),
-	workspace_patch: (a) => ({
-		icon: 'lucide:file-pen-line',
-		verb: 'Edited the source',
-		target: [...str(a['patchText']).matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
-			.map((file) => file[1])
-			.join(', ')
-	}),
-	workspace_edit: (a) => ({
-		icon: 'lucide:file-pen-line',
-		verb: 'Edited the source',
-		target: str(a['path'])
-	}),
-	workspace_move: (a) =>
-		a['to'] === undefined
-			? { icon: 'lucide:file-x', verb: 'Deleted source', target: str(a['path']) }
-			: {
-					icon: 'lucide:file-symlink',
-					verb: 'Moved source',
-					target: `${str(a['path'])} → ${str(a['to'])}`
-				},
-	workspace_commit: (a) => ({
-		icon: 'lucide:git-commit-horizontal',
-		verb: 'Committed',
-		target: str(a['message'])
-	}),
-	workspace_rebase: () => ({
-		icon: 'lucide:git-pull-request-arrow',
-		verb: 'Rebased on live',
-		target: ''
-	}),
-	workspace_revert: () => ({ icon: 'lucide:undo-2', verb: 'Reverted commits', target: '' }),
-	workspace_install: (a) => ({
-		icon: 'lucide:package-plus',
-		verb: 'Installed a package',
-		target: `${str(a['name'])}@${str(a['version'])}`
-	}),
-	workspace_preview: () => ({
-		icon: 'lucide:eye',
-		verb: 'Built the preview',
-		target: ''
-	}),
-	workspace_diagnose: () => ({
-		icon: 'lucide:shield-check',
-		verb: 'Ran the diagnosis',
-		target: ''
-	}),
-	// an older row keeps its words
-	workspace_validate: (a) => ({
-		icon: 'lucide:shield-check',
-		verb: a['only'] === 'tests' ? 'Ran the tests' : 'Ran the diagnosis',
-		target: ''
-	}),
-	workspace_test: () => ({ icon: 'lucide:flask-conical', verb: 'Started the tests', target: '' }),
-	workspace_generate: () => ({
-		icon: 'lucide:wand-sparkles',
-		verb: 'Generated the migration',
-		target: ''
-	}),
-	workspace_try: () => ({ icon: 'lucide:play', verb: 'Tried it on the preview', target: '' }),
-	channel_check: () => ({ icon: 'lucide:radio-tower', verb: 'Checked the connection', target: '' }),
 	page: (a) => ({
 		icon: typeof a['path'] === 'string' ? 'lucide:arrow-up-right' : 'lucide:mouse-pointer-click',
 		verb:
@@ -409,11 +339,6 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		icon: 'lucide:map',
 		verb: 'Looked up the workspace',
 		target: Arr.isArray(a['names']) ? a['names'].map(str).join(', ') : ''
-	}),
-	workspace_review: () => ({
-		icon: 'lucide:git-compare',
-		verb: 'Reviewed the changes',
-		target: ''
 	}),
 	browser: (a) => ({
 		icon: 'lucide:globe',
@@ -438,7 +363,6 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 					target: '',
 					code: { text: str(a['code']), language: 'javascript' }
 				},
-	web_search: (a) => ({ icon: 'lucide:search', verb: 'Searched the web', target: str(a['query']) }),
 	mcp: (a) => ({
 		icon: 'lucide:plug',
 		verb:
@@ -446,16 +370,6 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 				? 'Listed external tools'
 				: `${humanise(str(a['server']))}: ${humanise(str(a['tool']))}`,
 		target: a['op'] === 'list' ? str(a['server']) : toolTarget(obj(a['input']))
-	}),
-	personal_skill_save: (a) => ({
-		icon: 'lucide:bookmark-plus',
-		verb: 'Saved a skill',
-		target: humanise(str(a['name']))
-	}),
-	personal_skill_delete: (a) => ({
-		icon: 'lucide:bookmark-minus',
-		verb: 'Removed a skill',
-		target: humanise(str(a['name']))
 	})
 };
 const WHERE_OPS: { readonly [op: string]: string } = {
@@ -518,11 +432,12 @@ export function readChips(layer: unknown): string[] {
 	].filter((chip) => chip !== '');
 }
 
-/** A tool step's view, with its arguments decoded once. */
-export function stepView(name: string, args: unknown): StepView {
+/** A tool step's view, with its arguments decoded once: a native tool's own, else the host's declared one (`HostTool.view`). */
+export function stepView(name: string, args: unknown, view?: ToolView): StepView {
 	const a = obj(args);
 	const known = VIEWS[name];
 	if (known !== undefined) return known(a);
+	if (view !== undefined) return { icon: view.icon, verb: view.verb, target: view.target };
 	return { icon: 'lucide:wrench', verb: humanise(name), target: toolTarget(a) };
 }
 
@@ -567,29 +482,13 @@ export function failureOf(tool: AgentRow['tool']): string {
 export const failedVerbs = (steps: readonly AgentRow[]): string[] =>
 	steps.flatMap((s) =>
 		s.tool?.failed === true && checkOf(s.tool) === null
-			? [stepView(s.tool.name, stepArgs(s.tool.args)).verb]
+			? [stepView(s.tool.name, stepArgs(s.tool.args), s.tool.view).verb]
 			: []
 	);
 
-/** What a running Studio step is doing, in the person's words: the group's line while it runs. */
-const DOING: { readonly [tool: string]: string } = {
-	workspace_write: 'Editing the source…',
-	workspace_edit: 'Editing the source…',
-	workspace_patch: 'Editing the source…',
-	workspace_move: 'Editing the source…',
-	workspace_commit: 'Committing…',
-	workspace_merge_message: 'Setting the merge message…',
-	workspace_rebase: 'Rebasing on live…',
-	workspace_revert: 'Reverting commits…',
-	workspace_preview: 'Building the preview…',
-	workspace_diagnose: 'Running the diagnosis…',
-	workspace_test: 'Starting the tests…',
-	workspace_generate: 'Generating the migration…',
-	workspace_try: 'Trying it on the preview…',
-	workspace_review: 'Reviewing the changes…'
-};
+/** What a running step is doing, in the person's words (`HostTool.view`'s `doing`): the group's line while it runs. */
 export const doingOf = (steps: readonly AgentRow[]): string =>
-	DOING[steps.findLast((s) => s.tool?.running === true)?.tool?.name ?? ''] ?? 'Working…';
+	steps.findLast((s) => s.tool?.running === true)?.tool?.view?.doing ?? 'Working…';
 
 /** What a Studio result shows in one line, in a person's words: "Draft · Rename title · 390×844 · 23:05" (never an id). */
 export function captionOf(

@@ -971,13 +971,7 @@
 	let previewing = $state(false),
 		seenPreview = $state<string | null>(null);
 	const recordedPreview = $derived(previewsOf(rows).at(-1) ?? null);
-	const hasTestStep = $derived(
-		rows.some(
-			(row) =>
-				row.tool?.name === 'workspace_test' ||
-				(row.tool?.name === 'workspace_diagnose' && row.tool.args?.includes('"preview"') !== true)
-		)
-	);
+	const hasTestStep = $derived(rows.some((row) => row.tool?.behavior.progress_check === true));
 	let previewStudio = $state<StudioView | null>(null);
 	const shownPreview = $derived(
 		recordedPreview === null

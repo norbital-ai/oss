@@ -5,7 +5,8 @@
 // the authority a host reads (`authority.ts`), what a host adds to the agent (`tools.ts`) and Studio's port
 // (`studio.ts`), with the failures they share (`errors.ts`), the `Port` helpers that call them and the SQL wire both
 // database adapters and the engine share (`wire.ts`). It also holds the adapters every host binds the same way: System 1
-// (`system-1.ts`), Norbital Convert (`convert.ts`) and the deadline timer (`deadline-timer.ts`).
+// (`system-1.ts`), Norbital Convert (`convert.ts`), the deadline timer (`deadline-timer.ts`) and the recovery storage
+// contract's reads of a branch without its release (`storage.ts`).
 //
 // Versioning: the protocol version is `HOST_API_VERSION`, one integer bumped on any change either side could misread.
 // The package version follows the oss release line for publication; what a host checks is the HOST_API number a
@@ -49,6 +50,7 @@ export * from './tools.ts';
 export * from './diagnostic.ts';
 export * from './studio.ts';
 export * from './host.ts';
+export * from './storage.ts';
 export {
 	DeadlineTimer,
 	scope_deadlines,

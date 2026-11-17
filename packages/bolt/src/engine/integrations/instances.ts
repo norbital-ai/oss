@@ -3,17 +3,20 @@
 // `Retry-After`) and the body runner sync bodies and the `test` body share. The transform reads the manifest's definitions and envoys, which no guest transform sees: the model's
 // allowlists fix `integration` and `owner` at create; this keeps the rest true of the definition — a known definition,
 // an owner only where its driver syncs personal accounts, an envoy only on a workspace instance of a conversation
-// definition and a configuration that decodes with its defaults filled. Accounts remain runtime records.
+// definition and a configuration that decodes with its defaults filled. Accounts remain runtime records. A host's operator
+// observes, configures and restores an instance on its branch, outside any generation (`instance_admin` and after); the
+// serving generations on the branch's epoch hear each change as they hear their own commits.
 import { Clock, Crypto, DateTime, Effect, Option, Predicate, Result, Schema } from 'effect';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
-import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
+import { type Captured, CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
+import { EPOCH } from './outbound.ts';
 import { Drivers } from '../ports.ts';
 import { Manifest, Reads, Live, Wake, type Bridge } from '../services.ts';
 import type { GuestShape } from '../services.ts';
 import { prepareSend, sendPiece } from '../conversations/outbound.ts';
 import { stableId } from '../conversations/store.ts';
 import { parse_rate } from '../access/rate.ts';
-import { type DatabaseRequest, ImportStart, Port } from '@norbital-ai/host-api';
+import { type DatabaseRequest, ImportStart, InstanceState, Port } from '@norbital-ai/host-api';
 import { KindSchema } from '@norbital-ai/store/kind';
 import type { EngineManifest } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
@@ -43,6 +46,7 @@ import { enqueue, next_due } from '../runs/queue.ts';
 import type { Item } from '../write/flatten.ts';
 import { Chain } from '../write/sql.ts';
 import { validate_database_request, validate_database_result } from './database.ts';
+import type { Credentials } from './credentials.ts';
 
 /** A definition by name: the workspace's, else one of bolt's conversation definitions. */
 export const definitionOf = (m: EngineManifest, name: string): IntegrationSpec | undefined =>
@@ -199,6 +203,163 @@ export const instancesOf = (
 				})
 			)
 		);
+
+const missing = (instance: string) =>
+	BoltError.make('not_found', 'facility', `no integration instance '${instance}'`);
+/** An instance as an operator observes it: never its account, pairing or credential values. */
+const ADMIN = `active, envoy, status ->> 'state' AS state, EXISTS (SELECT 1 FROM bolt_credential c WHERE c.instance = sys_integration.id) AS stored, revision`;
+const Admin = Schema.Struct({
+	active: Schema.Boolean,
+	envoy: Schema.NullOr(Schema.String),
+	state: Schema.NullOr(InstanceState).pipe(Schema.catchDecoding(() => Effect.succeedSome(null))),
+	stored: Schema.Boolean,
+	revision: Schema.Number
+});
+/**
+ * Where a branch change's captured images go: the serving generations on the environment epoch (Rule 61) its statement
+ * read, whose live lanes route them as their own commits.
+ */
+export type BranchPublication = (epoch: string, captured: readonly Captured[]) => void;
+const branchCommit = <A extends typeof CapturedResult.Type & { readonly epoch: string }>(
+	db: TenantDbShape,
+	publish: BranchPublication,
+	c: Chain,
+	schema: Schema.Decoder<A>,
+	select = ''
+) =>
+	// the branch serves no page of its own ('bootstrap'): its images go to the generations on its epoch
+	nativeCommit(db.write, 'bootstrap', c, schema, `${EPOCH} AS epoch${select === '' ? '' : `, ${select}`}`).pipe(
+		Effect.tap((answer) => Effect.sync(() => publish(answer.epoch, answer.captured)))
+	);
+/** `WorkspaceBranch.integrations.status`. */
+export const instance_admin = Effect.fn('Integrations.instance_admin')(function* (
+	db: TenantDbShape,
+	instance: string
+) {
+	const found = yield* db.one(Admin, {
+		text: `SELECT ${ADMIN} FROM sys_integration WHERE id = $1`,
+		params: [instance]
+	});
+	if (Option.isNone(found)) return yield* missing(instance);
+	return { instance, ...found.value };
+});
+/**
+ * `WorkspaceBranch.integrations.configure`: one statement fenced by `revision` that keeps the transform's envoy rules
+ * (an active envoy, on a workspace instance of a conversation definition); a miss is read again only to say why.
+ */
+export const configure_instance = Effect.fn('Integrations.configure_instance')(function* (
+	db: TenantDbShape,
+	m: EngineManifest,
+	instance: string,
+	change: { readonly active: boolean; readonly envoy: string | null; readonly revision: number },
+	publish: BranchPublication
+) {
+	const conversations = [...new Set([...Object.keys(SYSTEM.integrations), ...Object.keys(m.integrations)])].filter(
+		(name) => {
+			const definition = definitionOf(m, name);
+			return definition !== undefined && conversational(definition);
+		}
+	);
+	const c = new Chain(),
+		deployed = c.p(change.envoy);
+	const moved = capturePiece(
+		c,
+		'moved',
+		'sys_integration',
+		`UPDATE sys_integration SET active = ${c.p(change.active)}, envoy = ${deployed}, revision = revision + 1
+			WHERE id = ${c.p(instance)} AND revision = ${c.p(change.revision)}
+			AND (${deployed}::text IS NULL OR (owner IS NULL AND integration IN (SELECT jsonb_array_elements_text(${c.p(conversations)}::jsonb))
+			AND EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = ${deployed} AND e.active)))`,
+		{ returning: ADMIN }
+	);
+	const { admin } = yield* branchCommit(
+		db,
+		publish,
+		c,
+		Schema.Struct({ ...CapturedResult.fields, epoch: Schema.String, admin: Schema.NullOr(Admin) }),
+		`(SELECT to_jsonb(x) - '__bolt_capture' FROM ${moved} x) AS admin`
+	);
+	if (admin !== null) return { instance, ...admin };
+	const held = yield* db.one(
+		Schema.Struct({
+			revision: Schema.Number,
+			owner: Schema.NullOr(Schema.String),
+			integration: Schema.String,
+			envoy: Schema.Boolean
+		}),
+		{
+			text: 'SELECT revision, owner, integration, EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = $2 AND e.active) AS envoy FROM sys_integration WHERE id = $1',
+			params: [instance, change.envoy]
+		}
+	);
+	if (Option.isNone(held)) return yield* missing(instance);
+	const { revision, owner, integration, envoy } = held.value;
+	const conversation = conversations.includes(integration);
+	// a valid change that still missed raced another write
+	if (revision !== change.revision || change.envoy === null || (owner === null && conversation && envoy))
+		return yield* BoltError.make(
+			'conflict',
+			'commit',
+			`'${instance}' changed since revision ${change.revision}: read its status again`
+		);
+	return yield* BoltError.make(
+		'invalid',
+		'admission',
+		owner !== null
+			? 'A personal instance takes no envoy.'
+			: !conversation
+				? `An envoy answers only on a conversation integration; '${integration}' is not one.`
+				: `No active envoy '${change.envoy}' exists.`
+	);
+});
+/**
+ * `WorkspaceBranch.integrations.restore`: paused first, so a failed or interrupted restore never activates a copied
+ * identity; every sealed value replaced under a rotated epoch, which fences any earlier link; then `active`, `unpaired`
+ * until its own link opens. Key work runs before each statement. A failure names no value.
+ */
+export const restore_instance = Effect.fn('Integrations.restore_instance')(
+	function* (
+		db: TenantDbShape,
+		sealed: Credentials,
+		instance: string,
+		values: { readonly [name: string]: Json },
+		active: boolean,
+		publish: BranchPublication
+	) {
+		const pause = new Chain();
+		const paused = capturePiece(
+			pause,
+			'paused',
+			'sys_integration',
+			`UPDATE sys_integration SET active = false, revision = revision + 1 WHERE id = ${pause.p(instance)}`
+		);
+		const { n } = yield* branchCommit(
+			db,
+			publish,
+			pause,
+			Schema.Struct({ ...CapturedResult.fields, epoch: Schema.String, n: Schema.Number }),
+			`(SELECT count(*) FROM ${paused})::int AS n`
+		);
+		if (n === 0) return yield* missing(instance);
+		const saved = yield* sealed.open(instance);
+		const changes = new Map<string, Json | null>(
+			Array.from(saved.values.keys(), (name): [string, null] => [name, null])
+		);
+		for (const [name, value] of Object.entries(values)) changes.set(name, value);
+		yield* sealed.write(instance, saved.epoch, changes, true);
+		const done = new Chain();
+		capturePiece(
+			done,
+			'restored',
+			'sys_integration',
+			`UPDATE sys_integration SET active = ${done.p(active)}, status = '{"state":"unpaired","account":null}'::jsonb, revision = revision + 1 WHERE id = ${done.p(instance)}`
+		);
+		yield* branchCommit(db, publish, done, Schema.Struct({ ...CapturedResult.fields, epoch: Schema.String }));
+	},
+	Effect.catchTag('Fenced', () =>
+		Effect.fail(BoltError.make('conflict', 'facility', 'the integration changed during credential restore'))
+	)
+);
 
 export const writeStatus = (instance: string, patch: { readonly [key: string]: Json }) =>
 	Effect.gen(function* () {

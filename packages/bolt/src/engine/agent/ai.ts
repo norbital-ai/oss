@@ -734,6 +734,9 @@ export function infer_facility(
 		const drafting = new Set(finishing.map((t) => t.name));
 		const inspecting = new Set([draftRead, FIND, DIFF]);
 		const definitions = [...tools, ...finishing];
+		// each offered name is one tool: a caller's tool never shadows another or a draft tool
+		const twice = definitions.find((tool, index) => definitions.findIndex((other) => other.name === tool.name) !== index);
+		if (twice !== undefined) return invalid(`two tools are named '${twice.name}': each offered name is one tool`);
 		const offered = definitions.map(({ name, description, input }) => ({ name, description, input }));
 		const finishingOffers = finishing.map(({ name, description, input }) => ({ name, description, input }));
 		const behaviorOf = new Map(definitions.map((tool): [string, ToolBehavior] => [tool.name, tool.behavior]));

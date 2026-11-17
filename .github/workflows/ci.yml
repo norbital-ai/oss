@@ -47,8 +47,10 @@ jobs:
       - name: Build packages
         run: pnpm exec turbo run build --concurrency=1
 
+      # The complete lint: every package's own lint, then the test lint and the type-assertion lint (bolt-cli's
+      # `test/lint.ts`) over packages and scripts. Turbo's lint alone skips the last two.
       - name: Lint
-        run: pnpm exec turbo run lint --concurrency=1
+        run: pnpm lint
 
       - name: Types compatibility
         run: pnpm types:compat

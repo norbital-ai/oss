@@ -8,9 +8,7 @@ const BOLT = Object.entries({
 	'/artifact': 'engine/artifact/index',
 	'/engine': 'engine/index',
 	'/errors': 'decl/errors',
-	'/facilities': 'facilities/index',
 	'/host-api': 'host-api',
-	'/node': 'node/index',
 	'/protocol': 'protocol/index',
 	'/tooling': 'tooling/index'
 }).map(([subpath, file]) => ({

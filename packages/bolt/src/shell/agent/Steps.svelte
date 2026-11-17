@@ -28,7 +28,7 @@
 	const viewOf = (s: AgentRow): StepView =>
 		s.tool === undefined
 			? { icon: 'lucide:brain', verb: 'Thought', target: '' }
-			: stepView(s.tool.name, stepArgs(s.tool.args));
+			: stepView(s.tool.name, stepArgs(s.tool.args), s.tool.view);
 	const active = (s: AgentRow) => s.tool?.running === true || s.state === 'streaming';
 	const seconds = (ms: number) =>
 		ms < 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`;

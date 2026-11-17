@@ -999,7 +999,7 @@ export const BoltRoutes = {
 			let first = true;
 			const none: readonly NoticeEvent[] = [];
 			const notices = (frame: Frame): readonly NoticeEvent[] => {
-				if (frame.t !== 'answer' && frame.t !== 'patch') return none;
+				if (frame.t !== 'answer' && frame.t !== 'delta') return none;
 				let rows: readonly NoticeRow[];
 				if (first && frame.t === 'answer') {
 					rows = Number.isNaN(since)

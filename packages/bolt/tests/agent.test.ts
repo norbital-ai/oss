@@ -130,6 +130,10 @@ describe('a page step', () => {
 		expect(pageNote([row(1), shown])).toBe(
 			'Your last page step ran. Their page shows: Orders · New'
 		);
+		// a path is accepted when called: the note says where the tab went, so the step is not sent again
+		expect(pageNote([row(1), step(asked)])).toBe(
+			"Your last page step sent the person's tab to /app/ops; it has not reported what that page shows yet. Do not send it there again."
+		);
 		expect(pageNote([row(1), step({ page: { click: 'x' }, requested: true })])).toBe(
 			'Your last page step is awaiting the tab or the person. It has not reported completion; do not say it ran.'
 		);
@@ -1382,6 +1386,20 @@ describe('the AI port under the 20 s idle wall', () => {
 			finish: 'tool',
 			usage: { input: 1, output: 1 }
 		});
+
+	it.effect('sys_2.infer refuses a tool named like another or like a draft tool, before asking the model', () =>
+		Effect.gen(function* () {
+			const { seen, browse } = browsing();
+			const { p, requests } = port([]);
+			for (const tools of [[{ ...browse, name: 'edit' }], [browse, browse]])
+				expect(yield* infer_facility(p)(at({ prompt: 'q', output, tools: ['browse'] }), tools)).toEqual({
+					ok: false,
+					error: { kind: 'invalid', message: expect.stringContaining('two tools are named') }
+				});
+			expect(requests).toEqual([]);
+			expect(seen).toEqual([]);
+		})
+	);
 
 	it.effect(
 		'sys_2.infer steps: after N tool turns one final turn offers only the draft tools, and its submission is the answer',

@@ -14,7 +14,7 @@ changes merge only after `pnpm publication:check` and the release workflow repub
 fixed-version set together.
 
 Bolt lint uses the installed native compiler for its TypeScript test corpus. `pnpm types:compat`
-checks that same corpus with TypeScript 6. `pnpm check`, `pnpm check:ci`, and
+checks that same corpus with TypeScript 6. `pnpm check` and
 `pnpm check:packages:ci` include this gate, cached through the existing Turbo dependency graph.
 Svelte checks and declaration builds continue using TypeScript 6.
 

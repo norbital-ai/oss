@@ -1,14 +1,15 @@
 // The MCP servers: declared at `src/agent/mcp/+<n>.mcp.ts`, reached through the host's `Mcp` port,
 // authorized by a bearer token or OAuth client credentials the engine resolves from the workspace's secrets (the host
 // holds the client). One session per server per turn; every call is a facility call under the 20 s tool wall. Discovery
-// omits missing or unreachable servers with their typed failure logged; secret-provider failures still fail discovery
-//.
+// omits missing or unreachable servers with their typed failure logged and keeps at most what one request carries;
+// secret-provider failures still fail discovery.
 import { Cache, Config, Effect, Option, Predicate, Redacted, Ref, Result, Scope } from 'effect';
 import { type McpServer, Port, type PortFailure, Unavailable } from '@norbital-ai/host-api';
 import { Mcp, type McpSession } from '../ports.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
 import { LIMITS, type Authority } from '../contracts.ts';
+import { TOOLS_PER_REQUEST } from './tools.ts';
 
 /** The workspace's secrets (URL, client ids, tokens, client secrets) by `SecretName`. */
 export type McpHost = {
@@ -127,6 +128,7 @@ export const mcpSessions = Effect.fn('Mcp.sessions')(function* (
 					if (Option.isNone(listed)) return [];
 					return listed.value
 						.filter((tool) => allowed(name, tool.name))
+						.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 						.map((tool): McpTool => ({
 							server: name,
 							name: tool.name,
@@ -136,7 +138,13 @@ export const mcpSessions = Effect.fn('Mcp.sessions')(function* (
 				}),
 			{ concurrency: 'unbounded' }
 		);
-		return lists.flat();
+		// discovery keeps what one request could carry: the servers in declaration order, each one's tools by name
+		const found = lists.flat();
+		if (found.length > TOOLS_PER_REQUEST)
+			yield* Effect.logWarning(
+				`MCP discovery keeps the first ${TOOLS_PER_REQUEST} of ${found.length} tools, by server declaration and tool name: a request carries no more`
+			);
+		return found.slice(0, TOOLS_PER_REQUEST);
 	});
 	return { tools, call };
 });

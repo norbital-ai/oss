@@ -56,7 +56,7 @@ There is no `grow`, `shrink` or `h-full`. A view never takes `min-h-[…]`. Noth
 
 - Never nest two scrollports on one axis: the inner one traps scroll. Remove a `Scroll` around `Form`, `Table`, `Board`, `Tabs` or another `Scroll`.
 - A tab panel never owns scroll. Each tab snippet is one body owner: a self-scrolling view, or a named `Scroll size="fill" inset`, or a `fill` `Split` whose panes are `fill` boxes.
-- Use `Scroll` for the hidden thumb and edge fade; a primitive that cannot render it attaches `scroll_affordance()`. No local scrollbar CSS or scroll listeners.
+- Use `Scroll` for the hidden thumb and edge fade. No local scrollbar CSS or scroll listeners.
 - No generic `overflow` wrappers or flex chains. Clip only for truncation, `Frame` media or an audited sheet boundary.
 - A compound component keeps its chrome outside its scrollport: month controls, headers, filters, pagination stay mounted.
 - `RecordShell` always owns a visible native footer and a fixed header. Its main content overflows inside that frame,
