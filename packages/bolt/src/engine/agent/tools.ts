@@ -4387,7 +4387,7 @@ class ToolRejected extends Schema.TaggedError<ToolRejected>()('ToolRejected', {
 }) {}
 
 // Tool text and model schemas are shared; handlers bind only when a step is admitted.
-const READ_TEXT = `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each root once. output defaults to "default". order_by: "<field>" (ascending), { "<field>": "asc" | "desc" } whose one key is the field's name, or a list of those.
+const READ_TEXT = `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each root once. output defaults to "default". order_by: "<field>" or { "<field>": "asc"|"desc" } (one key, the field's name), or a list.
 where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null: value, like: "%text%" (ignores case), contains: value (a period or a JSON field) } }, { "$search": "<words>" } (each word required), and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words (ranked, not required), { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } or a list of those }; a field there may be "<link>.<field>" through links to one record.
 Normal reads return { rows, next, total } (total counts every match before limit, so omit aggregate when reading rows). aggregate takes no fields or search, with optional grouping by. Long values are clipped.`;

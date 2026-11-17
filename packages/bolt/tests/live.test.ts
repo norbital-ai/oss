@@ -1196,7 +1196,7 @@ describe('$bolt client without a server', () => {
 						return source;
 					};
 					const fiber = yield* liveStream(open).pipe(
-						Stream.runForEach((frame) =>
+						Stream.runForEach(({ message: frame }) =>
 							Effect.sync(() => {
 								frames.push(frame);
 								Queue.offerUnsafe(received, frame);
@@ -1646,6 +1646,30 @@ describe('$bolt client without a server', () => {
 				})
 			)
 	);
+	it.effect('an inactive image is kept 5 minutes at most', () =>
+		Effect.gen(function* () {
+			const c = yield* client();
+			// another consumer holds the connection while this one's grace passes
+			yield* observe(c.bolt.observe(north_orders, Schema.Unknown));
+			const first = yield* observe(c.bolt.observe(all_orders, OrdersAnswer));
+			yield* c.opened;
+			yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
+			yield* c.registration;
+			yield* c.push({
+				t: 'answer',
+				view: 'v2',
+				v: 0,
+				value: { orders: { rows: [order()], next: null } }
+			});
+			yield* first.next;
+			yield* first.stop;
+			yield* TestClock.adjust('30 seconds');
+			expect((yield* c.registration).drop).toEqual(['v2']);
+			yield* TestClock.adjust('5 minutes');
+			yield* observe(c.bolt.observe(all_orders, OrdersAnswer));
+			expect((yield* c.registration).add).toEqual([{ view: 'v3', read: all_orders.read }]);
+		})
+	);
 	it.effect('all queries share one connection that remains live in a visible tab', () =>
 		Effect.gen(function* () {
 			const signals = { hidden: false, addEventListener: () => {} };
@@ -1790,7 +1814,11 @@ describe("engine/live: a read request's named roots", () => {
 	const held = (frames: readonly Frame[], view: string) =>
 		frames.reduce<Json | undefined>(
 			(image, f) =>
-				f.t === 'answer' && f.view === view ? f.value : f.t === 'delta' && f.view === view ? patched(image, f.ops) : image,
+				f.t === 'answer' && f.view === view
+					? f.value
+					: f.t === 'delta' && f.view === view
+						? patched(image, f.ops, 'page')
+						: image,
 			undefined
 		);
 	/** Orders and customers as a store holds them; the fake reader answers the request from it, as a fresh read would. */

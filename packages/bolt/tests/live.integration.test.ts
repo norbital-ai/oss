@@ -188,7 +188,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 							frames.push(frame);
 							if (frame.t === 'answer') held.set(frame.view, frame.value);
 							if (frame.t === 'delta')
-								held.set(frame.view, patched(held.get(frame.view), frame.ops));
+								held.set(frame.view, patched(held.get(frame.view), frame.ops, 'page'));
 							yield* Queue.offer(received, frame);
 							if (frame.t === 'hello') yield* Deferred.succeed(hello, frame.conn);
 						})
@@ -637,6 +637,63 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						expect(w.held.get('tree')).toEqual(
 							(yield* queries.run([tree], { as: 'caller', authority: rep }, b()))[0]
 						);
+					})
+				)
+		);
+
+		it.effect(
+			'connections holding one authority read a changed row once, however many hold its view',
+			() =>
+				Effect.scoped(
+					Effect.gen(function* () {
+						const { rep, live, queries, count, watcher, register, settled, other } = yield* cell;
+						const tree = yield* lower_read(manifest, 'query', [
+							{ orders: { fields: ['title'], lines: { fields: ['label', 'amount'] } } }
+						]);
+						const another = yield* other();
+						const write = (model: string, verb: 'create' | 'update', input: readonly Json[]) =>
+							another.acts(
+								one_act({
+									model,
+									verb,
+									input,
+									key: randomUUID(),
+									issuedAt: NOW,
+									authority: rep,
+									bindings: b(),
+									invocationId: randomUUID()
+								})
+							);
+						const made = yield* write('orders', 'create', [
+							{
+								title: 'shared',
+								region: 'north',
+								customer: ACME,
+								lines: [{ label: 'a', amount: '1.00' }]
+							}
+						]);
+						live.publish(made.captured);
+						yield* settled;
+						const line = present(made.captured.find((x) => x.model === 'lines'));
+						const edit = (amount: string) =>
+							Effect.gen(function* () {
+								const changed = yield* write('lines', 'update', [
+									{ target: line.id, set: { amount } }
+								]);
+								count.reset();
+								live.publish(changed.captured);
+								yield* settled;
+								return count.reads;
+							});
+						const first = yield* watcher(rep);
+						yield* register(first, 'tree', { read: tree });
+						const alone = yield* edit('2.00');
+						const more = [yield* watcher(rep), yield* watcher(rep)];
+						for (const w of more) yield* register(w, 'tree', { read: tree });
+						const together = yield* edit('3.00');
+						expect(together).toBe(alone);
+						const answer = (yield* queries.run([tree], { as: 'caller', authority: rep }, b()))[0];
+						for (const w of [first, ...more]) expect(w.held.get('tree')).toEqual(answer);
 					})
 				)
 		);

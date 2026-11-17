@@ -53,6 +53,7 @@
 	],
 	"scripts": {
 		"build": "node scripts/agent-skills.ts && node scripts/system-names.ts && node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json --then node scripts/docs.ts --then node scripts/cell-bundle.ts",
+		"bench:resources": "node --expose-gc bench/run.ts --budget=bench/budget.json",
 		"lint": "node scripts/agent-skills.ts && node scripts/system-names.ts && svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
 		"types:compat": "node scripts/agent-skills.ts && node scripts/system-names.ts && tsc -p tests/tsconfig.json --noEmit",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"

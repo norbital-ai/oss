@@ -208,14 +208,32 @@ export const LiveHubLive = Layer.effect(
 						)
 			);
 
-		/** One pipelined read; a failing batch is re-asked per read so one bad view errors alone. */
+		/**
+		 * One pipelined read; a failing batch is re-asked per read so one bad view errors alone. With `shared` (one flush's
+		 * answers), connections holding the same compiled authority read each distinct read once and share its answer.
+		 */
 		const readAll = Effect.fn('Live.readAll')(function* (
 			conn: Conn,
 			batch: readonly ReadIR[],
-			b: Bindings
+			b: Bindings,
+			shared?: Map<string, Deferred.Deferred<Answer>>
 		) {
 			if (batch.length === 0) return [];
-			reads += batch.length;
+			const own: ReadIR[] = [],
+				mine: Deferred.Deferred<Answer>[] = [];
+			const slots = batch.map((item) => {
+				if (shared === undefined) return undefined;
+				const key = `${conn.authority.key}\u0000${JSON.stringify(item)}`;
+				const held = shared.get(key);
+				if (held !== undefined) return held;
+				const made = Deferred.makeUnsafe<Answer>();
+				shared.set(key, made);
+				own.push(item);
+				mine.push(made);
+				return made;
+			});
+			if (shared === undefined) own.push(...batch);
+			reads += own.length;
 			const read = Effect.fn('Live.read')(function* (items: readonly ReadIR[]) {
 				const snapshots = new Map<string, ReadSnapshot>();
 				const values = yield* reader
@@ -244,10 +262,10 @@ export const LiveHubLive = Layer.effect(
 				}
 				return answers;
 			});
-			return yield* read(batch).pipe(
+			const answers = read(own).pipe(
 				Effect.catch(() =>
 					Effect.forEach(
-						batch,
+						own,
 						(item) =>
 							read([item]).pipe(
 								Effect.match({
@@ -261,6 +279,30 @@ export const LiveHubLive = Layer.effect(
 						{ concurrency: 'unbounded' }
 					)
 				)
+			);
+			if (shared === undefined) return yield* answers;
+			// every connection waiting on a read this one owns hears its answer, or that it was cut short
+			yield* (own.length === 0 ? Effect.succeed([]) : answers).pipe(
+				Effect.onExit((exit) =>
+					Effect.forEach(
+						mine,
+						(made, index) =>
+							Deferred.succeed(
+								made,
+								(Exit.isSuccess(exit) ? exit.value[index] : undefined) ?? {
+									err: BoltError.make('internal', 'decode', 'The live read returned no answer.')
+								}
+							),
+						{ discard: true }
+					)
+				)
+			);
+			return yield* Effect.forEach(slots, (slot) =>
+				slot === undefined
+					? Effect.succeed<Answer>({
+							err: BoltError.make('internal', 'decode', 'The live read returned no answer.')
+						})
+					: Deferred.await(slot)
 			);
 		});
 		const answer = Effect.fn('Live.answer')(function* (
@@ -357,6 +399,7 @@ export const LiveHubLive = Layer.effect(
 				patched = 0;
 			const fallback = new Set<View>();
 			reads = 0;
+			const shared = new Map<string, Deferred.Deferred<Answer>>();
 			yield* Effect.forEach(
 				[...interested],
 				([conn, views]) =>
@@ -399,7 +442,12 @@ export const LiveHubLive = Layer.effect(
 							})
 						);
 						const tickets = new Map(full.map((view) => [view, ++view.readVersion]));
-						const values = yield* readAll(conn, [...full.map((view) => view.read), ...fetches], b);
+						const values = yield* readAll(
+							conn,
+							[...full.map((view) => view.read), ...fetches],
+							b,
+							shared
+						);
 						for (const [i, view] of full.entries()) {
 							const result = values[i],
 								expected = tickets.get(view);

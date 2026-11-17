@@ -12,11 +12,11 @@ it.live('native EventSource delivers live frames in Chromium (L-BOLT-1012)', () 
 			Stream.runCollect,
 			Effect.timeout('5 seconds')
 		);
-		expect(frames[0]).toEqual({ t: 'hello', conn: 'browser', v: 0 });
-		expect(frames[1]).toEqual({ t: 'delta', view: 'orders', v: 1, ops: [] });
+		expect(frames[0]?.message).toEqual({ t: 'hello', conn: 'browser', v: 0 });
+		expect(frames[1]?.message).toEqual({ t: 'delta', view: 'orders', v: 1, ops: [] });
 		document.body.replaceChildren();
 		document.body.append(
-			Object.assign(document.createElement('p'), { textContent: frames[0]?.t ?? '' })
+			Object.assign(document.createElement('p'), { textContent: frames[0]?.message.t ?? '' })
 		);
 		yield* Effect.tryPromise({
 			try: () => expect.element(page.getByText('hello')).toBeInTheDocument(),
@@ -25,15 +25,19 @@ it.live('native EventSource delivers live frames in Chromium (L-BOLT-1012)', () 
 	})
 );
 
-it.live('liveStream parses EventSource frames', () =>
+it.live('liveStream parses EventSource frames beside the text they came as', () =>
 	Effect.gen(function* () {
 		const frames = yield* liveStream(() => new EventSource(PATHS.live)).pipe(
 			Stream.take(2),
 			Stream.runCollect,
 			Effect.timeout('5 seconds')
 		);
-		expect(frames[0]).toEqual({ t: 'hello', conn: 'browser', v: 0 });
-		expect(frames[1]).toEqual({ t: 'delta', view: 'orders', v: 1, ops: [] });
+		expect(frames[0]?.message).toEqual({ t: 'hello', conn: 'browser', v: 0 });
+		expect(frames[1]?.message).toEqual({ t: 'delta', view: 'orders', v: 1, ops: [] });
+		expect(frames.map((frame) => frame.data)).toEqual([
+			JSON.stringify({ t: 'hello', conn: 'browser', v: 0 }),
+			JSON.stringify({ t: 'delta', view: 'orders', v: 1, ops: [] })
+		]);
 	})
 );
 
@@ -57,7 +61,7 @@ it.live('a page hands the live stream its own visibility and connectivity', () =
 	})
 );
 
-it.live('two shared sources on one page hold one EventSource and both hear its frames', () =>
+it.live('two shared sources hold one EventSource and both hear the frames its leader relays', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			expect(shareable()).toBe(true);
@@ -76,6 +80,8 @@ it.live('two shared sources on one page hold one EventSource and both hear its f
 						const frames: string[] = [];
 						source.onmessage = (event) => {
 							frames.push(event.data);
+							// the leader passes on each frame it applied; its first is the connection's hello
+							if (source.leads) source.relay(event.data, frames.length === 1);
 							if (frames.length === 2) resume(Effect.succeed(frames));
 						};
 					})

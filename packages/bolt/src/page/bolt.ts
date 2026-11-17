@@ -60,10 +60,13 @@ import {
 	shareable,
 	sharedSource,
 	type EventSourceLike,
+	type Hold,
+	type Received,
+	type SharedSource,
 	type Signals
 } from './stream.ts';
 import { browser_catalog, type BrowserCatalog } from '../protocol/catalog.ts';
-import { decode_view, sha256_hex, type Catalog } from '@norbital-ai/store';
+import { canonical, decode_view, sha256_hex, type Catalog } from '@norbital-ai/store';
 import type { Query } from './page-bolt.ts';
 import { page_reads, readValue } from './read-value.ts';
 import { read_wire, type ReadCatalog } from '../protocol/read-answer.ts';
@@ -123,6 +126,7 @@ export type BoltConfig = {
 	on_notice?: (notice: Row) => void;
 };
 type Row = { readonly [field: string]: Json };
+type ErrorFrame = Extract<Frame, { t: 'error' }>;
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 type Paint = { model: string; apply(page: Json): Json };
 type ViewState = {
@@ -140,11 +144,20 @@ type View = {
 	key: string;
 	read: WireRead;
 	server: Json | undefined;
+	/** `-1` waits for a whole answer: until it lands, a delta is ignored. */
 	v: number;
 	consumers: Set<ViewConsumer>;
+	/** The other tabs holding it, on the tab that leads the shared connection. */
+	holders: Set<string>;
+	/** Its image's length, at most: measured on each whole answer, grown by each delta. */
+	size: number;
 	registered: boolean;
 	state: SubscriptionRef.SubscriptionRef<ViewState>;
 };
+/** The live views one connection holds, as the server allows. */
+const VIEWS = 500;
+/** The images the leading tab keeps for views only other tabs hold; past it the newest goes. */
+const HELD = 16 * 1024 * 1024;
 /** The fleet marks a document before it boots; ordinary workspace tabs retain streaming. */
 export const page_live_mode = (): NonNullable<PageSnapshotHost['bolt_live_mode']> =>
 	typeof window !== 'undefined' &&
@@ -246,14 +259,17 @@ const RELATION_OPS = ['create', 'update', 'delete', 'upsert', 'link', 'unlink'];
 const PAINTED = new Set(['create', 'update', 'delete']);
 
 const isRecord = (v: Json | undefined): v is Row => isRow(v) && !jsonArray(v);
-/** One op on its container: a page (records in `rows` beside its other keys), or a `get` view's row or `null`. */
-function changed(target: Json, o: PatchOp): Json | undefined {
-	const rows = isRecord(target) ? target['rows'] : undefined;
-	if (!isRecord(target) || !jsonArray(rows)) {
+/** A delta's container: a page (records in `rows` beside its other keys), or a `get` view's row or `null`. */
+type Container = 'page' | 'get';
+/** One op on its container. */
+function changed(target: Json, o: PatchOp, kind: Container): Json | undefined {
+	if (kind === 'get') {
 		if (o.op === 'remove') return isRecord(target) && target['id'] === o.id ? null : undefined;
 		const row = o.op === 'upsert' && o.index === 0 ? o.row : undefined;
 		return isRecord(row) && (target === null || (isRecord(target) && target['id'] === row['id'])) ? row : undefined;
 	}
+	const rows = isRecord(target) ? target['rows'] : undefined;
+	if (!isRecord(target) || !jsonArray(rows)) return undefined;
 	switch (o.op) {
 		case 'upsert': {
 			const row = o.row,
@@ -278,22 +294,32 @@ function changed(target: Json, o: PatchOp): Json | undefined {
 	}
 }
 /** The value with the container at `path` (own keys only) changed; every container off that path is shared. */
-function within(value: Json, path: readonly string[], depth: number, o: PatchOp): Json | undefined {
+function within(
+	value: Json,
+	path: readonly string[],
+	depth: number,
+	o: PatchOp,
+	kind: Container
+): Json | undefined {
 	const key = path[depth];
-	if (key === undefined) return changed(value, o);
+	if (key === undefined) return changed(value, o, kind);
 	const child = isRecord(value) && Object.hasOwn(value, key) ? value[key] : undefined;
-	const next = child === undefined ? undefined : within(child, path, depth + 1, o);
+	const next = child === undefined ? undefined : within(child, path, depth + 1, o, kind);
 	return next === undefined || !isRecord(value) ? undefined : { ...value, [key]: next };
 }
 /**
  * Rule 65: a delta applied to a view's value, every op in order at its path or none: unchanged rows and roots are
  * shared, never copied. `undefined` when an op does not fit the image: the view then registers again for a whole answer.
  */
-export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json | undefined {
+export function patched(
+	value: Json | undefined,
+	ops: readonly PatchOp[],
+	kind: Container
+): Json | undefined {
 	let next = value;
 	for (const o of ops) {
 		if (next === undefined) return undefined;
-		next = within(next, o.path, 0, o);
+		next = within(next, o.path, 0, o, kind);
 	}
 	return next;
 }
@@ -361,41 +387,67 @@ export const create_bolt = (config: BoltConfig) =>
 		const transport = browserTransport(config);
 		const uuid = config.uuid ?? uuidv7;
 		const views = new Map<string, View>();
-		// Inactive images are private to this client; re-entry waits for an authorized server answer before painting.
+		// Inactive images are private to this client, for 5 minutes at most; re-entry waits for an authorized server
+		// answer before painting.
 		const retained = new Map<string, { value: Json; bytes: number }>();
+		const expiry = yield* FiberMap.make<string, void, never>();
 		let retainedBytes = 0;
 		const forget = (key: string) => {
 			retainedBytes -= retained.get(key)?.bytes ?? 0;
 			retained.delete(key);
 		};
-		const remember = (view: View) => {
-			forget(view.key);
-			if (view.server === undefined || closed !== null) return;
-			const bytes = new TextEncoder().encode(JSON.stringify(view.server)).byteLength;
-			if (bytes > 4 * 1024 * 1024) return;
-			retained.set(view.key, { value: view.server, bytes });
-			retainedBytes += bytes;
-			for (const key of retained.keys()) {
-				if (retainedBytes <= 4 * 1024 * 1024 && retained.size <= 64) break;
-				forget(key);
-			}
-		};
+		const remember = (view: View) =>
+			Effect.suspend(() => {
+				forget(view.key);
+				if (view.server === undefined || closed !== null) return Effect.void;
+				const bytes = new TextEncoder().encode(JSON.stringify(view.server)).byteLength;
+				if (bytes > 4 * 1024 * 1024) return Effect.void;
+				retained.set(view.key, { value: view.server, bytes });
+				retainedBytes += bytes;
+				for (const key of retained.keys()) {
+					if (retainedBytes <= 4 * 1024 * 1024 && retained.size <= 64) break;
+					forget(key);
+				}
+				return FiberMap.run(
+					expiry,
+					view.key,
+					Effect.sleep('5 minutes').pipe(Effect.andThen(Effect.sync(() => forget(view.key))))
+				).pipe(Effect.asVoid);
+			});
 		const paints = new Set<Paint>();
 		const waiters = new Map<Deferred.Deferred<void>, number>();
 		const grace = yield* FiberMap.make<string, void, never>();
 		const reconnects = yield* Queue.sliding<void>(1);
+		const holds = yield* Queue.unbounded<Hold>();
 		const status = yield* SubscriptionRef.make<SyncStatus>('idle');
 		const refresh_lock = yield* Semaphore.make(1);
 		const live = `${base}${PATHS.live}`;
 		// a page's own stream is shared with the browser's other tabs (`sharedSource`); a given `open_stream` is not
 		const shared = live_mode !== 'snapshot' && config.open_stream === undefined && shareable();
-		const tab = shared ? `${uuid()}:` : '';
+		// Tabs share a view only within one release contract, actor, catalog and operations: equivalent reads there are
+		// one id, and so one registration on the leading tab's connection.
+		const group = shared
+			? sha256_hex(
+					canonical({
+						contract: config.contract,
+						actor: config.actor,
+						catalog: config.catalog,
+						read_catalog: config.read_catalog,
+						operation_outputs: config.operation_outputs
+					})
+				)
+			: '';
+		const keyOf = (read: WireRead) =>
+			shared ? `s${sha256_hex(`${group}${canonical(read)}`)}` : canonical(read);
 		let conn: string | null = null,
 			applied = 0,
 			n = 0,
 			generation = 0;
 		let closed: string | null = null,
 			decoder: Catalog | undefined;
+		// this tab's part in the shared connection, and whether `conn` is its own (it leads) rather than one it heard
+		let link: SharedSource | undefined,
+			led = false;
 		let noticeVersion = -1;
 		const noticeIds = new Set<string>();
 		const validate = (view: View, value: Json): ReadFailed | undefined => {
@@ -470,11 +522,47 @@ export const create_bolt = (config: BoltConfig) =>
 				for (const [waiter, target] of waiters)
 					if (applied >= target) yield* Deferred.succeed(waiter, undefined);
 			});
+		/** On the leading tab, a view only other tabs hold: no consumer here reads it. */
+		const others = (view: View) => view.consumers.size === 0 && view.holders.size > 0;
+		/** Past `HELD` of images kept for other tabs alone, this one goes; a tab attaching it registers it again. */
+		const fits = (view: View) => {
+			if (view.server === undefined || !others(view)) return;
+			let held = 0;
+			for (const other of views.values())
+				if (other.server !== undefined && others(other)) held += other.size;
+			if (held > HELD) view.server = undefined;
+		};
+		/** The view is no longer registered: its consumers hear why, and a later one registers it again. */
+		const failed = (frame: ErrorFrame) =>
+			Effect.gen(function* () {
+				const view = views.get(frame.view);
+				if (view === undefined) return;
+				view.server = undefined;
+				forget(view.key);
+				view.registered = false;
+				yield* notify(view, new ReadFailed({ code: frame.code, message: frame.message }));
+			});
+		/** The leading tab passes each frame on once applied: a tab attaching meanwhile has its image before any later one. */
+		const relay = (frame: Frame, data: string) =>
+			Effect.sync(() => {
+				if (led) link?.relay(data, frame.t === 'hello');
+			});
 		const register = (add: readonly View[], drop: readonly string[] = []) =>
 			Effect.gen(function* () {
 				if (conn === null || (add.length === 0 && drop.length === 0)) return;
+				// a tab that has just taken the shared connection over registers every view on its own hello
+				if (link?.leads === true && !led) return;
 				const registeredGeneration = generation;
-				for (const view of add) view.registered = true;
+				for (const view of add) {
+					view.registered = true;
+					view.v = -1;
+				}
+				// a following tab's views are the leading tab's to register
+				if (link !== undefined && !led)
+					return link.hold(
+						add.map((view) => ({ view: view.id, read: view.read })),
+						drop
+					);
 				const body: LiveBody = {
 					conn,
 					drop,
@@ -494,16 +582,14 @@ export const create_bolt = (config: BoltConfig) =>
 					Effect.result
 				);
 				if (generation !== registeredGeneration) return;
-				if (answer._tag === 'Failure') {
-					// a view whose registration failed hears it, instead of waiting for frames that never come
-					const failed = new ReadFailed({ code: 'transport', message: answer.failure.message });
-					for (const view of add) {
-						view.registered = false;
-						yield* notify(view, failed);
-					}
-					return;
-				}
-				const errors = answer.success;
+				const errors =
+					answer._tag === 'Failure'
+						? add.map((view) => ({
+								view: view.id,
+								code: 'transport',
+								message: answer.failure.message
+							}))
+						: answer.success;
 				if (
 					errors.some(
 						(error) => error.code === 'not_found' && error.message === 'the live connection is gone'
@@ -515,18 +601,120 @@ export const create_bolt = (config: BoltConfig) =>
 					yield* Queue.offer(reconnects, undefined);
 					return;
 				}
+				// a view whose registration failed hears it, on every tab holding it, instead of waiting for frames that
+				// never come
 				for (const error of errors) {
-					const view = views.get(error.view);
-					if (view !== undefined)
-						yield* notify(view, new ReadFailed({ code: error.code, message: error.message }));
+					const frame: ErrorFrame = { t: 'error', ...error };
+					yield* failed(frame);
+					yield* relay(frame, JSON.stringify(frame));
 				}
 			}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+		const make = (id: string, key: string, read: WireRead) =>
+			Effect.gen(function* () {
+				const state = yield* SubscriptionRef.make<ViewState>({
+					value: undefined,
+					error: undefined,
+					sequence: 0
+				});
+				const view: View = {
+					id,
+					key,
+					read,
+					server: retained.get(key)?.value,
+					v: -1,
+					consumers: new Set(),
+					holders: new Set(),
+					size: 0,
+					registered: false,
+					state
+				};
+				forget(key);
+				views.set(id, view);
+				return view;
+			});
+		const release = (view: View) =>
+			Effect.gen(function* () {
+				views.delete(view.id);
+				yield* remember(view);
+				if (view.registered) yield* register([], [view.id]);
+				if (views.size === 0 && closed === null) yield* SubscriptionRef.set(status, 'idle');
+			});
+		const settle = (view: View) =>
+			Effect.suspend(() =>
+				views.get(view.id) !== view || view.consumers.size > 0
+					? Effect.void
+					: view.holders.size > 0
+						? Effect.sync(() => fits(view))
+						: release(view)
+			);
+		/** A view with no consumer here goes 30 s later, unless one, or (on the leading tab) another tab, holds it again. */
+		const linger = (view: View) =>
+			FiberMap.run(
+				grace,
+				view.id,
+				Effect.sleep('30 seconds').pipe(Effect.andThen(settle(view)))
+			).pipe(Effect.asVoid);
+		/** A tab lets views go: one it detached (after its own grace) goes now; one a gone tab held waits out the grace. */
+		const unhold = (tab: string, ids: readonly string[], wait: boolean) =>
+			Effect.forEach(
+				ids,
+				(id) => {
+					const view = views.get(id);
+					return view === undefined ||
+						!view.holders.delete(tab) ||
+						view.holders.size > 0 ||
+						view.consumers.size > 0 ||
+						FiberMap.hasUnsafe(grace, id)
+						? Effect.void
+						: wait
+							? linger(view)
+							: release(view);
+				},
+				{ discard: true }
+			);
+		/**
+		 * On the leading tab, between frames: a tab attaching a view is sent its current image, or the view is registered
+		 * once on this connection (its answer reaches every tab); a view already waiting for its answer only gains the tab.
+		 */
+		const hold = (item: Hold) =>
+			Effect.gen(function* () {
+				const leader = link;
+				if (!led || leader === undefined) return;
+				if ('gone' in item) return yield* unhold(item.gone, [...views.keys()], true);
+				if ('detach' in item) return yield* unhold(item.tab, item.detach, false);
+				const fresh: View[] = [];
+				for (const attached of item.attach) {
+					let view = views.get(attached.view);
+					if (view === undefined && views.size < VIEWS)
+						view = yield* make(attached.view, attached.view, attached.read);
+					if (view === undefined) {
+						const refusal: ErrorFrame = {
+							t: 'error',
+							view: attached.view,
+							code: 'too_many_subscriptions',
+							message: `a connection holds at most ${VIEWS} live views`
+						};
+						leader.send(item.tab, JSON.stringify(refusal));
+						continue;
+					}
+					view.holders.add(item.tab);
+					if (view.registered && view.v >= 0 && view.server !== undefined) {
+						const image: Frame = { t: 'answer', view: view.id, v: view.v, value: view.server };
+						const data = JSON.stringify(image);
+						view.size = data.length;
+						leader.send(item.tab, data);
+					} else if (!view.registered || view.v >= 0) fresh.push(view);
+				}
+				yield* register(fresh).pipe(Effect.forkScoped({ startImmediately: true }));
+			});
 		const receiveNotices = (
 			frame: Extract<Frame, { t: 'answer' | 'delta' }>,
 			view: View | undefined
 		) => {
 			if (
 				view !== undefined &&
+				// a view held for other tabs alone notifies there
+				!others(view) &&
 				view.read.m === 'inbox' &&
 				frame.v > view.v &&
 				frame.v >= noticeVersion
@@ -542,7 +730,7 @@ export const create_bolt = (config: BoltConfig) =>
 					}
 			}
 		};
-		const onFrame = (frame: Frame) =>
+		const apply = (frame: Frame, data: string) =>
 			Effect.gen(function* () {
 				const view = 'view' in frame ? views.get(frame.view) : undefined;
 				switch (frame.t) {
@@ -551,6 +739,8 @@ export const create_bolt = (config: BoltConfig) =>
 						noticeVersion = frame.v;
 						noticeIds.clear();
 						conn = frame.conn;
+						// the leading tab's own stream, not one it heard while it followed
+						led = link === undefined || link.own === data;
 						applied = frame.v;
 						closed = null;
 						yield* SubscriptionRef.set(status, 'live');
@@ -573,38 +763,42 @@ export const create_bolt = (config: BoltConfig) =>
 							}
 							view.server = frame.value;
 							view.v = frame.v;
+							view.size = data.length;
+							fits(view);
 							yield* notify(view);
 						}
 						return yield* advance(frame.v);
 					case 'same':
 						if (view !== undefined) {
 							if (frame.v < view.v) return yield* advance(frame.v);
-							if (
-								view.server === undefined ||
-								sha256_hex(JSON.stringify(view.server)) !== frame.known
-							) {
+							const image = view.server;
+							const text = image === undefined ? '' : JSON.stringify(image);
+							if (image === undefined || sha256_hex(text) !== frame.known) {
 								view.server = undefined;
 								view.registered = false;
 								// never waited on: the other views' frames go on while this one registers again
 								yield* register([view]).pipe(Effect.forkScoped({ startImmediately: true }));
 								return;
 							}
-							const failure = validate(view, view.server);
+							const failure = validate(view, image);
 							if (failure !== undefined) {
 								view.server = undefined;
 								view.registered = false;
 								yield* notify(view, failure);
 							} else {
 								view.v = frame.v;
+								view.size = text.length;
+								fits(view);
 								yield* notify(view);
 							}
 						}
 						return yield* advance(frame.v);
 					case 'delta': {
-						// its base is the image the view's previous frame left, whatever its `v`; a view with no image
-						// waits for the whole answer of its next registration
-						if (view === undefined || view.server === undefined) return yield* advance(frame.v);
-						const next = patched(view.server, frame.ops);
+						// its base is the image the view's previous frame left, whatever its `v`; a view with no image, or one
+						// waiting for the whole answer of its registration, ignores it
+						if (view === undefined || view.server === undefined || view.v === -1)
+							return yield* advance(frame.v);
+						const next = patched(view.server, frame.ops, 'page');
 						if (next === undefined) {
 							view.server = undefined;
 							view.registered = false;
@@ -622,17 +816,13 @@ export const create_bolt = (config: BoltConfig) =>
 						receiveNotices(frame, view);
 						view.server = next;
 						view.v = frame.v;
+						view.size += data.length;
+						fits(view);
 						yield* notify(view);
 						return yield* advance(frame.v);
 					}
 					case 'error':
-						if (view !== undefined) {
-							view.server = undefined;
-							forget(view.key);
-							view.registered = false;
-							yield* notify(view, new ReadFailed({ code: frame.code, message: frame.message }));
-						}
-						return;
+						return yield* failed(frame);
 					case 'v':
 						return yield* advance(frame.v);
 					case 'close':
@@ -644,37 +834,36 @@ export const create_bolt = (config: BoltConfig) =>
 						return;
 				}
 			});
+		const onFrame = ({ message, data }: Received) =>
+			apply(message, data).pipe(Effect.andThen(relay(message, data)));
 		const open = () => new EventSource(live, { withCredentials: true });
-		// a shared connection outlives this tab's part in it: the tab's views are dropped from it, not left running
-		const leave = () => {
-			const drop = [...views.values()].filter((view) => view.registered).map((view) => view.id);
-			if (!shared || conn === null || drop.length === 0) return;
-			const body: LiveBody = { conn, drop };
-			void (config.fetch ?? fetch)(live, {
-				method: 'POST',
-				keepalive: true,
-				credentials: 'same-origin',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(body)
-			}).catch(() => undefined);
-		};
-		if (shared) {
-			window.addEventListener('pagehide', leave);
-			yield* Effect.addFinalizer(() =>
-				Effect.sync(() => window.removeEventListener('pagehide', leave))
-			);
-		}
 		// The one connection: every streaming consumer holds it, and it outlives the last one by 30 s. Its frames are
 		// applied in order as they arrive, by one fiber, with no buffer per consumer to fall behind in; a link that fails
-		// or sends an invalid frame reconnects, and the next `hello` registers every view again.
+		// or sends an invalid frame reconnects, and the next `hello` registers every view again. On the leading tab that
+		// fiber takes the other tabs' holds between frames.
 		const connection = yield* RcRef.make({
 			acquire: liveStream(
-				() => config.open_stream?.(live) ?? (shared ? sharedSource(live, open) : open()),
+				() => {
+					if (config.open_stream !== undefined) return config.open_stream(live);
+					if (!shared) return open();
+					const source = sharedSource(live, open);
+					source.onhold = (item) => Queue.offerUnsafe(holds, item);
+					link = source;
+					return source;
+				},
 				Effect.gen(function* () {
-					leave();
 					conn = null;
+					led = false;
 					generation++;
-					for (const view of views.values()) view.registered = false;
+					for (const view of views.values()) {
+						view.registered = false;
+						view.v = -1;
+						view.holders.clear();
+					}
+					// what was held for other tabs alone waits out the grace: they attach again on the next leader's hello
+					for (const view of views.values())
+						if (view.consumers.size === 0 && !FiberMap.hasUnsafe(grace, view.id))
+							yield* linger(view);
 					for (const waiter of waiters.keys()) yield* Deferred.succeed(waiter, undefined);
 					yield* SubscriptionRef.set(
 						status,
@@ -683,7 +872,11 @@ export const create_bolt = (config: BoltConfig) =>
 				}),
 				config.signals ?? pageSignals(),
 				Queue.take(reconnects)
-			).pipe(Stream.runForEach(onFrame), Effect.forkScoped),
+			).pipe(
+				Stream.merge(Stream.fromQueue(holds)),
+				Stream.runForEach((item) => ('message' in item ? onFrame(item) : hold(item))),
+				Effect.forkScoped
+			),
 			idleTimeToLive: '30 seconds'
 		});
 		yield* Effect.addFinalizer(() =>
@@ -850,29 +1043,12 @@ export const create_bolt = (config: BoltConfig) =>
 			},
 			schema: () => Schema.Decoder<A>
 		): Stream.Stream<Result.Result<A, ReadFailed | TransportFailed>> {
-			const key = JSON.stringify(query.read);
+			const key = keyOf(query.read);
 			return Stream.unwrap(
 				Effect.gen(function* () {
-					let view = [...views.values()].find((item) => item.key === key);
-					if (view === undefined) {
-						view = {
-							id: `${tab}v${++n}`,
-							key,
-							read: query.read,
-							server: retained.get(key)?.value,
-							v: 0,
-							consumers: new Set(),
-							registered: false,
-							state: yield* SubscriptionRef.make<ViewState>({
-								value: undefined,
-								error: undefined,
-								sequence: 0
-							})
-						};
-						forget(key);
-						views.set(view.id, view);
-					}
-					const current = view;
+					const current =
+						[...views.values()].find((item) => item.key === key) ??
+						(yield* make(shared ? key : `v${++n}`, key, query.read));
 					yield* FiberMap.remove(grace, current.id);
 					const consumer: ViewConsumer = {
 						fiberId: yield* Effect.fiberId,
@@ -887,22 +1063,7 @@ export const create_bolt = (config: BoltConfig) =>
 						Effect.gen(function* () {
 							current.consumers.delete(consumer);
 							yield* SubscriptionRef.set(consumer.delivered, Infinity);
-							if (current.consumers.size !== 0) return;
-							yield* FiberMap.run(
-								grace,
-								current.id,
-								Effect.sleep('30 seconds').pipe(
-									Effect.flatMap(() =>
-										Effect.gen(function* () {
-											views.delete(current.id);
-											remember(current);
-											if (current.registered) yield* register([], [current.id]);
-											if (views.size === 0 && closed === null)
-												yield* SubscriptionRef.set(status, 'idle');
-										})
-									)
-								)
-							);
+							if (current.consumers.size === 0) yield* linger(current);
 						})
 					);
 					if (live_mode === 'snapshot') {

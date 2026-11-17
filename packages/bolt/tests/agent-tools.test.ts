@@ -4022,7 +4022,7 @@ describe('approvals, record history and the audit trail', () => {
 		Effect.gen(function* () {
 			const x = yield* ctx();
 			const described = (yield* requiredTool(x, 'read')).description;
-			expect(described).toContain('{ "<field>": "asc" | "desc" } whose one key is the field\'s name');
+			expect(described).toContain('{ "<field>": "asc"|"desc" } (one key, the field\'s name)');
 			expect(described).toContain('"$approvals": { model, ids, all }');
 			expect(described).toContain('(no limit or after)');
 			expect(

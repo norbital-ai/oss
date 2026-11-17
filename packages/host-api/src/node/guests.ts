@@ -113,12 +113,14 @@ const refuseImport = (node: ImportDeclaration): string => {
 	throw new Error(`guest.mjs is one module; it imports '${node.source.value}'`);
 };
 
-/** `node_guests`'s options: each session's CPU budget and a CPU meter. */
+/** `node_guests`'s options: each session's CPU budget, a CPU meter and a crossing meter. */
 export type NodeGuestsOptions = {
 	/** Each session's CPU budget, its module evaluation included (default `HOST_LIMITS.guestCpuMs`); past it, `cpu_budget`. */
 	readonly cpu_ms?: number | undefined;
 	/** Every run's CPU, by session. */
 	readonly meter?: ((session: string, nanos: bigint) => void) | undefined;
+	/** Every wave of `ctx` calls a session sends the host (one round trip), by session: how many calls it carries. */
+	readonly crossed?: ((session: string, calls: number) => void) | undefined;
 };
 type Session = {
 	readonly context: vm.Context;
@@ -185,6 +187,7 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 			const taken = await Schema.decodeUnknownPromise(GuestTaken)(
 				structuredClone(run(id, signal, (session) => api(session).take()))
 			);
+			if (taken[1].length > 0) options.crossed?.(id, taken[1].length);
 			const session = sessions.get(id);
 			const lines = session?.said.lines.splice(0) ?? [],
 				dropped = session?.said.dropped ?? 0;

@@ -76,6 +76,8 @@ export type TestOptions<P extends TestPorts = never> = Pick<
 	guest_cpu_ms?: number;
 	/** Optional meter for each guest run's CPU, for profiling a workspace. */
 	guest_meter?: (session: string, nanos: bigint) => void;
+	/** Optional meter for each round trip a guest run makes to the host: how many `ctx` calls cross together. */
+	guest_crossed?: (session: string, calls: number) => void;
 	db?: Layer.Layer<TenantDb, KitFailure>;
 } & (
 		| {
@@ -294,7 +296,15 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 	): Layer.Layer<TestWorkspace | WorkspaceServices, KitFailure> =>
 		Layer.effectContext(
 			Effect.gen(function* () {
-				const { root, db: injected, pack, guest_cpu_ms, guest_meter, ...engine } = options;
+				const {
+					root,
+					db: injected,
+					pack,
+					guest_cpu_ms,
+					guest_meter,
+					guest_crossed,
+					...engine
+				} = options;
 				let { manifest, guest, transforms } = options;
 				const artifact = options.artifact;
 				let migrations = artifact?.migrations;
@@ -353,7 +363,8 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						// the kit's own runner: guest code runs in this process's `node:vm` contexts
 						guests: node_guests({
 							...(guest_cpu_ms == null ? {} : { cpu_ms: guest_cpu_ms }),
-							...(guest_meter == null ? {} : { meter: guest_meter })
+							...(guest_meter == null ? {} : { meter: guest_meter }),
+							...(guest_crossed == null ? {} : { crossed: guest_crossed })
 						}),
 						audit: memory_audit(),
 						pack:

@@ -2,7 +2,7 @@
 // its connection go (the server's `every` timers and the stream's hold on the cell end with it) until it is visible.
 import { Cause, Duration, Effect, Queue, Random, Schedule, Schema, Stream } from 'effect';
 import { ProtocolFailed } from '../decl/errors.ts';
-import { Frame } from '../protocol/schema.ts';
+import { Frame, WireRead } from '../protocol/schema.ts';
 
 export type EventSourceLike = {
 	onmessage: ((event: MessageEvent<string>) => void) | null;
@@ -31,79 +31,163 @@ export const pageSignals = (): Signals | undefined =>
 					else document.removeEventListener(type, listener);
 				}
 			};
-/**
- * One live connection per browser for `url`, however many tabs show it: HTTP/1.1 allows six connections a host, so a
- * stream per tab starves every other request of the sixth tab. The tab holding the Web Lock opens the stream and relays
- * its frames over a BroadcastChannel; the others follow, and one that joins later asks the leader for its `hello` (a
- * stream's first frame). When the leader goes its lock passes to the next tab, whose `hello` re-registers every tab's
- * views. Frames name their views, so each tab applies only its own (view ids are unique a tab).
- */
 /** A browser page with BroadcastChannel and Web Locks. */
 export const shareable = (): boolean =>
 	typeof window !== 'undefined' &&
 	typeof BroadcastChannel !== 'undefined' &&
 	navigator.locks !== undefined;
-/** On a tab's channel: a frame the leader relays, a joining tab's question, or the leader's `hello` answering it. */
-const Relayed = Schema.Union([
+/** A view a tab holds through the leader: its id (equal for equivalent reads, `create_bolt`) and its read. */
+type Attached = { readonly view: string; readonly read: WireRead };
+/** What the leader hears of the other tabs: views attached, views detached, and a tab that has gone. */
+export type Hold =
+	| { readonly tab: string; readonly attach: readonly Attached[] }
+	| { readonly tab: string; readonly detach: readonly string[] }
+	| { readonly gone: string };
+/** A tab's part in the browser's one live connection. */
+export type SharedSource = EventSourceLike & {
+	/** This tab holds the connection's lock and stream. */
+	readonly leads: boolean;
+	/** The first frame of the stream this tab opened (its connection's `hello`), once it arrives. */
+	readonly own: string | undefined;
+	/** The leader passes on a frame once it has applied it; a `hello` makes every tab attach its views again. */
+	relay(data: string, hello: boolean): void;
+	/** The leader sends one tab a frame: the image of a view it attached, or a refusal. */
+	send(tab: string, frame: string): void;
+	/** A follower attaches views to the leader's, or detaches them. */
+	hold(attach: readonly Attached[], detach: readonly string[]): void;
+	/** The leader hears every other tab's holds. */
+	onhold: ((hold: Hold) => void) | null;
+};
+const Attach = Schema.Struct({ view: Schema.String, read: WireRead });
+/**
+ * On a tab's channel: a frame the leader applied, a joining tab's question, the leader's `hello` (to every tab for a new
+ * connection, or to the tab that asked), a frame to one tab, and a follower's attach or detach.
+ */
+const TabMessage = Schema.Union([
 	Schema.String,
 	Schema.Struct({ ask: Schema.String }),
-	Schema.Struct({ to: Schema.String, hello: Schema.String })
+	Schema.Struct({ hello: Schema.String, to: Schema.optionalKey(Schema.String) }),
+	Schema.Struct({ to: Schema.String, frame: Schema.String }),
+	Schema.Struct({ tab: Schema.String, attach: Schema.Array(Attach) }),
+	Schema.Struct({ tab: Schema.String, detach: Schema.Array(Schema.String) })
 ]);
-const decodeRelayed = Schema.decodeUnknownOption(Relayed);
-export function sharedSource(url: string, open: () => EventSourceLike): EventSourceLike {
+const decodeMessage = Schema.decodeUnknownOption(TabMessage);
+/**
+ * One live connection per browser for `url`, however many tabs show it: HTTP/1.1 allows six connections a host, so a
+ * stream per tab starves every other request of the sixth tab. The tab holding the Web Lock opens the stream and owns
+ * every tab's views: equivalent ones are one registration on its connection, and it relays each frame over a
+ * BroadcastChannel once applied. A follower attaches its views (`hold`) and is sent each one's current image before any
+ * later frame; one that joins asks for the leader's `hello`. Each tab holds a lock of its own for its life: the leader
+ * waits on it, so a tab that closes or dies lets its views go without a poll. When the leader goes its lock passes to
+ * the next tab, whose `hello` makes every tab attach its views again.
+ */
+export function sharedSource(url: string, open: () => EventSourceLike): SharedSource {
 	const name = `bolt-live:${url}`,
 		me = crypto.randomUUID(),
 		channel = new BroadcastChannel(name),
-		waiting = new AbortController();
+		waiting = new AbortController(),
+		watched = new Set<string>();
 	let source: EventSourceLike | undefined,
+		own: string | undefined,
 		hello: string | undefined,
-		heard = false,
-		release: (() => void) | undefined;
-	const self: EventSourceLike = {
+		release: (() => void) | undefined,
+		alive: (() => void) | undefined;
+	const post = (message: typeof TabMessage.Type) => channel.postMessage(message);
+	const deliver = (data: string) => self.onmessage?.(new MessageEvent('message', { data }));
+	const self: SharedSource = {
 		onmessage: null,
 		onerror: null,
+		onhold: null,
+		get leads() {
+			return source !== undefined;
+		},
+		get own() {
+			return own;
+		},
+		relay: (data, greet) => {
+			if (greet) hello = data;
+			post(greet ? { hello: data } : data);
+		},
+		send: (to, frame) => post({ to, frame }),
+		hold: (attach, detach) => {
+			if (attach.length > 0) post({ tab: me, attach });
+			if (detach.length > 0) post({ tab: me, detach });
+		},
 		close: () => {
 			waiting.abort();
 			channel.close();
 			source?.close();
+			source = undefined;
 			release?.();
+			alive?.();
 		}
 	};
-	const deliver = (data: string) => {
-		heard = true;
-		self.onmessage?.(new MessageEvent('message', { data }));
+	// a holding tab's lock passes to the leader only when that tab closes or dies
+	const watch = (tab: string) => {
+		if (watched.has(tab)) return;
+		watched.add(tab);
+		navigator.locks
+			.request(`${name}#${tab}`, { signal: waiting.signal }, () => {
+				watched.delete(tab);
+				if (source !== undefined) self.onhold?.({ gone: tab });
+			})
+			.catch(() => undefined);
 	};
 	channel.onmessage = (event: MessageEvent<unknown>) => {
-		const message = decodeRelayed(event.data);
+		const message = decodeMessage(event.data);
 		if (message._tag === 'None') return;
 		const m = message.value;
-		if (typeof m === 'string') {
-			if (source === undefined) deliver(m);
-		} else if ('ask' in m) {
-			if (hello !== undefined) channel.postMessage({ to: m.ask, hello });
-		} else if (m.to === me && !heard) deliver(m.hello);
+		if (source !== undefined) {
+			if (typeof m === 'string') return;
+			if ('ask' in m) {
+				if (hello !== undefined) post({ to: m.ask, hello });
+			} else if ('attach' in m) {
+				watch(m.tab);
+				self.onhold?.(m);
+			} else if ('detach' in m) self.onhold?.(m);
+		} else if (typeof m === 'string') deliver(m);
+		// every tab attaches again on a new connection's hello; the answer to its question only while it has none
+		else if ('hello' in m) {
+			if (m.to === undefined || (m.to === me && hello === undefined)) {
+				hello = m.hello;
+				deliver(m.hello);
+			}
+		} else if ('to' in m && m.to === me) deliver(m.frame);
 	};
 	navigator.locks
-		.request(name, { signal: waiting.signal }, () =>
-			new Promise<void>((resolve) => {
-				release = resolve;
-				try {
-					source = open();
-				} catch {
-					self.onerror?.(new Event('error'));
-					return resolve();
-				}
-				source.onmessage = (event) => {
-					hello ??= event.data;
-					channel.postMessage(event.data);
-					deliver(event.data);
-				};
-				source.onerror = (event) => self.onerror?.(event);
-			})
+		.request(
+			`${name}#${me}`,
+			{ signal: waiting.signal },
+			() =>
+				new Promise<void>((resolve) => {
+					alive = resolve;
+				})
 		)
 		.catch(() => undefined);
-	// only the asker takes the answer: every other tab already registered on that connection
-	channel.postMessage({ ask: me });
+	navigator.locks
+		.request(
+			name,
+			{ signal: waiting.signal },
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+					// a question is answered only with this connection's own hello
+					hello = undefined;
+					try {
+						source = open();
+					} catch {
+						self.onerror?.(new Event('error'));
+						return resolve();
+					}
+					source.onmessage = (event) => {
+						own ??= event.data;
+						deliver(event.data);
+					};
+					source.onerror = (event) => self.onerror?.(event);
+				})
+		)
+		.catch(() => undefined);
+	post({ ask: me });
 	return self;
 }
 const decodeFrame = Schema.decodeUnknownResult(Schema.fromJsonString(Frame));
@@ -135,12 +219,14 @@ export const visible: Effect.Effect<void> = Effect.suspend(() => {
 /** How long a hidden page keeps its live connection. */
 const HIDDEN = Duration.seconds(30);
 
+/** A frame as the stream decoded it, beside the text it came as (what a leading tab relays). */
+export type Received = { readonly message: Frame; readonly data: string };
 export function liveStream(
 	open: () => EventSourceLike,
 	onDown: Effect.Effect<void> = Effect.void,
 	signals?: Signals,
 	restart?: Effect.Effect<void>
-): Stream.Stream<Frame, ProtocolFailed> {
+): Stream.Stream<Received, ProtocolFailed> {
 	const missing = new ProtocolFailed({ message: 'The live connection is gone.' }),
 		asleep = new ProtocolFailed({ message: 'The page is hidden.' });
 	const retry = reconnect.pipe(
@@ -168,7 +254,7 @@ export function liveStream(
 							).pipe(Effect.as('0 millis'))
 		)
 	);
-	const connection = Stream.callback<Frame, ProtocolFailed>((queue) =>
+	const connection = Stream.callback<Received, ProtocolFailed>((queue) =>
 		Effect.acquireRelease(
 			Effect.try({
 				try: open,
@@ -180,7 +266,8 @@ export function liveStream(
 				Effect.sync(() => {
 					source.onmessage = (event) => {
 						const frame = decodeFrame(event.data);
-						if (frame._tag === 'Success') Queue.offerUnsafe(queue, frame.success);
+						if (frame._tag === 'Success')
+							Queue.offerUnsafe(queue, { message: frame.success, data: event.data });
 						else
 							Queue.failCauseUnsafe(
 								queue,

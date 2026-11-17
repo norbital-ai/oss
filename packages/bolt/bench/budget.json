@@ -1,0 +1,173 @@
+{
+	"query/25": {
+		"statements": 1,
+		"frames": 0,
+		"live_bytes": 64,
+		"cpu": 0.794,
+		"p95": 0.358
+	},
+	"edit/25/c1": {
+		"statements": 7,
+		"frames": 2,
+		"live_bytes": 862,
+		"cpu": 0.911,
+		"p95": 0.947
+	},
+	"edit/25/c2": {
+		"statements": 7,
+		"frames": 4,
+		"live_bytes": 1660,
+		"cpu": 0.753,
+		"p95": 0.754
+	},
+	"edit/25/c5": {
+		"statements": 7,
+		"frames": 10,
+		"live_bytes": 4065,
+		"cpu": 0.629,
+		"p95": 0.758
+	},
+	"batch/25": {
+		"statements": 7,
+		"frames": 2,
+		"live_bytes": 18833,
+		"cpu": 2.46,
+		"p95": 2.488
+	},
+	"config/25": {
+		"statements": 5,
+		"frames": 2,
+		"live_bytes": 2555,
+		"cpu": 0.557,
+		"p95": 0.684
+	},
+	"churn/25": {
+		"statements": 2,
+		"frames": 2,
+		"live_bytes": 17572,
+		"cpu": 0.248,
+		"p95": 0.24,
+		"retained_after": 0,
+		"fibers_after": 0,
+		"handles_after": 0
+	},
+	"idle/25": {
+		"statements": 5,
+		"frames": 0,
+		"live_bytes": 64
+	},
+	"query/250": {
+		"statements": 1,
+		"frames": 0,
+		"live_bytes": 64,
+		"cpu": 1.498,
+		"p95": 1.381
+	},
+	"edit/250/c1": {
+		"statements": 7,
+		"frames": 2,
+		"live_bytes": 864,
+		"cpu": 0.589,
+		"p95": 0.808
+	},
+	"edit/250/c2": {
+		"statements": 7,
+		"frames": 4,
+		"live_bytes": 1663,
+		"cpu": 0.604,
+		"p95": 0.808
+	},
+	"edit/250/c5": {
+		"statements": 7,
+		"frames": 10,
+		"live_bytes": 4070,
+		"cpu": 0.589,
+		"p95": 0.792
+	},
+	"batch/250": {
+		"statements": 7,
+		"frames": 2,
+		"live_bytes": 18833,
+		"cpu": 2.025,
+		"p95": 2.009
+	},
+	"config/250": {
+		"statements": 5,
+		"frames": 2,
+		"live_bytes": 2555,
+		"cpu": 0.524,
+		"p95": 0.742
+	},
+	"churn/250": {
+		"statements": 2,
+		"frames": 2,
+		"live_bytes": 173708,
+		"cpu": 0.897,
+		"p95": 0.903,
+		"retained_after": 0,
+		"fibers_after": 0,
+		"handles_after": 0
+	},
+	"idle/250": {
+		"statements": 5,
+		"frames": 0,
+		"live_bytes": 64
+	},
+	"query/2500": {
+		"statements": 1,
+		"frames": 0,
+		"live_bytes": 64,
+		"cpu": 9.664,
+		"p95": 9.092
+	},
+	"edit/2500/c1": {
+		"statements": 7,
+		"frames": 2,
+		"live_bytes": 865,
+		"cpu": 0.675,
+		"p95": 0.881
+	},
+	"edit/2500/c2": {
+		"statements": 7,
+		"frames": 4,
+		"live_bytes": 1665,
+		"cpu": 0.668,
+		"p95": 0.88
+	},
+	"edit/2500/c5": {
+		"statements": 7,
+		"frames": 10,
+		"live_bytes": 4075,
+		"cpu": 1.04,
+		"p95": 0.955
+	},
+	"batch/2500": {
+		"statements": 7,
+		"frames": 2,
+		"live_bytes": 18859,
+		"cpu": 2.217,
+		"p95": 2.439
+	},
+	"config/2500": {
+		"statements": 5,
+		"frames": 2,
+		"live_bytes": 2555,
+		"cpu": 0.56,
+		"p95": 0.751
+	},
+	"churn/2500": {
+		"statements": 2,
+		"frames": 2,
+		"live_bytes": 1718259,
+		"cpu": 7.821,
+		"p95": 7.253,
+		"retained_after": 0,
+		"fibers_after": 0,
+		"handles_after": 0
+	},
+	"idle/2500": {
+		"statements": 5,
+		"frames": 0,
+		"live_bytes": 64
+	}
+}

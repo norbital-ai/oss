@@ -9,7 +9,19 @@ import os from 'node:os';
 import { parseArgs } from 'node:util';
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
-import { Context, Deferred, Effect, Exit, FileSystem, Layer, Metric, Schema, Scope, Stream } from 'effect';
+import {
+	Context,
+	Deferred,
+	Effect,
+	Exit,
+	FileSystem,
+	Layer,
+	Metric,
+	Runtime,
+	Schema,
+	Scope,
+	Stream
+} from 'effect';
 import type { Sql } from '@norbital-ai/host-api';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
@@ -502,7 +514,11 @@ const suite = (sizes: readonly number[], unit: number) =>
 					for (const n of CONSUMERS)
 						yield* scenario(
 							`edit/${rows}/c${n}`,
-							Effect.map(holding(f, n, page, (cs) => sampled(f, cs, f.edit, COUNTS)), (m) => summary(unit, m))
+							Effect.map(
+								// each consumer count edits its own titles: an edit that changes nothing sends nothing
+								holding(f, n, page, (cs) => sampled(f, cs, (i) => f.edit(i + n * 1000), COUNTS)),
+								(m) => summary(unit, m)
+							)
 						);
 					yield* scenario(
 						`batch/${rows}`,
@@ -629,5 +645,8 @@ export const main = (argv: readonly string[]) => {
 		if (failures.length > 0) return yield* new BudgetExceeded({ failures });
 		yield* Effect.logInfo(`every scenario is within ${values.budget}`);
 	});
-	NodeRuntime.runMain(program.pipe(Effect.provide(NodeFileSystem.layer)));
+	// the kit pools its PGlite databases for reuse, and their timers would hold the process open past the result
+	NodeRuntime.runMain(program.pipe(Effect.provide(NodeFileSystem.layer)), {
+		teardown: (exit) => Runtime.defaultTeardown(exit, (code) => process.exit(code))
+	});
 };
