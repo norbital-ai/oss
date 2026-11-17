@@ -45,6 +45,7 @@
 	import { Button, Combobox, Dialog, format_handle, Icon, PreviewFrame, RowMenu, type ModelExposure, type UiContext } from '@norbital-ai/ui';
 	import { studio_events, type AiModel, type StudioView } from '@norbital-ai/host-api';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
+	import { messageFrame } from './decisions.ts';
 	import type { AgentRequest, ShellBolt } from '../runtime.ts';
 	import { ConversationsReadAnswer, RestartChat, TranscriptReadAnswer, type ShellError } from '../api-types.ts';
 	import { agent_drafts } from './drafts.ts';
@@ -1304,9 +1305,7 @@
 						{latest}
 						load_failed={transcript.error !== undefined}
 						on_retry={() => fork(transcript.refetch())}
-						decision_frame={$transcript === undefined
-							? undefined
-							: `${$transcript.rows.length}:${$transcript.rows.at(-1)?.id}`}
+						decision_frame={$transcript === undefined ? undefined : messageFrame($transcript.rows)}
 						{dispatch}
 						on_error={(problem) => (error = problem)}
 						file_href={fileHref}

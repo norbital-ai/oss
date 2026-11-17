@@ -1,6 +1,7 @@
 import { Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { LogRow } from '@norbital-ai/host-api';
+import type { AgentRow } from '../../protocol/wire.ts';
 
 /** One `decision.made` event's attributes as the decision matrix reads them (`decisionEvent`); a missing answer is a dash. */
 const DecisionAnswer = Schema.Struct({
@@ -49,3 +50,13 @@ export const answer_of = (a: DecisionAnswer | undefined) =>
 					? String(a.noul ?? 0)
 					: '—';
 export type Decided = { event: LogRow; d: DecisionAttributes };
+
+/**
+ * The transcript's messages as a decision sees them: a decision is logged when messages arrive, before they are consumed,
+ * so a step, a reply or a streamed token leaves it as it was and rereads no log.
+ */
+export const messageFrame = (rows: readonly Pick<AgentRow, 'id' | 'role' | 'state'>[]): string => {
+	const messages = rows.filter((row) => row.role === 'user'),
+		last = messages.at(-1);
+	return `${messages.length}:${last?.id}:${last?.state}`;
+};

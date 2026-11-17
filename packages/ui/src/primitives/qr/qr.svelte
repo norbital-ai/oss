@@ -5,7 +5,6 @@ and nothing leaves the browser. Colours are fixed rather than themed: a code is 
 low-contrast code in dark mode is one that simply does not scan.
 -->
 <script lang="ts">
-	import { toDataURL } from 'qrcode';
 
 	let {
 		value,
@@ -25,10 +24,13 @@ low-contrast code in dark mode is one that simply does not scan.
 
 	// a rotated code is a new promise, so the previous one never paints over the current payload
 	// ponytail: `toDataURL` returns a promise but works synchronously; a synchronous encoder when one is worth it
+	// the encoder loads with the first code drawn, never with a page's startup
 	const src = $derived(
 		value === ''
 			? null
-			: toDataURL(value, { margin: 2, width: size, color: { dark: '#000000', light: '#ffffff' } })
+			: import('qrcode').then(({ toDataURL }) =>
+					toDataURL(value, { margin: 2, width: size, color: { dark: '#000000', light: '#ffffff' } })
+				)
 	);
 </script>
 

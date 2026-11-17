@@ -4,7 +4,7 @@ import { json } from '@codemirror/lang-json';
 import { syntaxHighlighting } from '@codemirror/language';
 import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { codeHighlighter } from './highlight.js';
+import { codeHighlighter } from './highlight-tokens.js';
 
 /** Code in CodeMirror: `javascript` (also CEL and TypeScript expressions), `json`, or `plaintext`. */
 export type CodeEditorLanguage = 'javascript' | 'json' | 'plaintext';

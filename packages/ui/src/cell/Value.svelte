@@ -20,7 +20,7 @@
 	import { filesOf } from './value.js';
 	import Overflow from './Overflow.svelte';
 	import CodeEditor from '../editors/code-editor.svelte';
-	import { highlighted_line } from '../editors/highlight.js';
+	import { highlighted_line } from '../editors/highlight.svelte.js';
 	import { catalogText } from '../text/messages.js';
 	import { type Ref } from '../relations/select.js';
 

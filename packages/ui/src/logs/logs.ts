@@ -1,8 +1,7 @@
 // LogView's model (owner rule: logs read like Railway/Vercel): one fixed-height line per event, searched and filtered by
 // CustomView's toolbar, following the tail, virtualized by the shared window math, older pages by cursor.
-import { jsonLanguage } from '@codemirror/lang-json';
-import { highlightCode, tagHighlighter, tags as t } from '@lezer/highlight';
 import { Result } from 'effect';
+import { lazy } from '../utilities/lazy.svelte.js';
 /** One log level. */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 /** One event; `rows` are oldest first. */
@@ -20,14 +19,10 @@ export const ROW_HEIGHT = 22;
 
 /** A preview never highlights more than this many characters: the line truncates long before. */
 const PREVIEW = 400;
-const TOKENS = tagHighlighter([
-	{ tag: t.propertyName, class: 'text-info' },
-	{ tag: t.string, class: 'text-success' },
-	{ tag: [t.number, t.bool, t.null], class: 'text-brand' },
-	{ tag: [t.punctuation, t.separator, t.brace, t.squareBracket], class: 'text-muted-foreground' }
-]);
 /** One highlighted run of a preview; `cls` is empty for unstyled text. */
 export type LogToken = { readonly text: string; readonly cls: string };
+// the JSON parser loads with the first payload shown: until then a payload is one plain run
+const payload = lazy(() => import('./log-tokens.js'));
 
 /**
  * A message's one-line preview: its lead text, then its trailing JSON payload (also one JSON-encoded as a string)
@@ -49,15 +44,10 @@ export function logPreview(message: string): readonly LogToken[] {
 	if (value === null || typeof value !== 'object')
 		return [{ text: message.slice(0, PREVIEW), cls: '' }];
 	const json = JSON.stringify(value).slice(0, PREVIEW);
-	const tokens: LogToken[] = [{ text: message.slice(0, at), cls: '' }];
-	highlightCode(
-		json,
-		jsonLanguage.parser.parse(json),
-		TOKENS,
-		(text, cls) => tokens.push({ text, cls }),
-		() => tokens.push({ text: ' ', cls: '' })
-	);
-	return tokens;
+	return [
+		{ text: message.slice(0, at), cls: '' },
+		...(payload()?.json_tokens(json) ?? [{ text: json, cls: '' }])
+	];
 }
 
 /** Within `slack` px of the bottom: the view follows the tail. */

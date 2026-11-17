@@ -1,6 +1,7 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it } from '@effect/vitest';
+import { vi } from 'vitest';
 import type { ComponentProps } from 'svelte';
 import type { Kind, Value } from '../src/kinds/kind.ts';
 import type { JsonSchema } from '../src/kinds/json-schema.ts';
@@ -98,7 +99,8 @@ it.live(
 it.live('the depth cap terminates structured viewing and preserves the remaining value', () =>
 	browser(async () => {
 		const { target } = await show({ initial: { deep: { text: 'kept at the limit' } }, depth: 24 });
-		assert.ok(textOf(target).includes('kept at the limit'));
+		// past the cap the value shows in a code editor, which loads with the first one shown
+		await vi.waitFor(() => assert.ok(textOf(target).includes('kept at the limit')));
 		assert.ok(target.querySelectorAll('[data-structured-data]').length < 4);
 	})
 );

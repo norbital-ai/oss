@@ -5,6 +5,7 @@ import { Effect, Schema } from 'effect';
 import { Logs } from '../src/engine/ports.ts';
 import type { DecisionRequest, DecisionResult, LogEvent } from '@norbital-ai/host-api';
 import { decisionEvent, decisionUsage } from '../src/engine/decision.ts';
+import { messageFrame } from '../src/shell/agent/decisions.ts';
 
 const request: DecisionRequest = {
 	state: {
@@ -90,5 +91,21 @@ describe('the decision.made attributes', () => {
 		const e = Schema.decodeUnknownSync(Schema.Struct({ error: Schema.String, state: Schema.Json }))(decisionEvent('filter', request, { kind: 'upstream', message: 'down' }));
 		expect(e.error).toBe('upstream');
 		expect(e.state).toBeDefined();
+	});
+});
+
+describe('the panel rereads decisions', () => {
+	it('when a message arrives or is consumed, never for a step or a reply', () => {
+		const message = { id: 'm1', role: 'user' as const, state: 'pending' as const };
+		const before = messageFrame([message]);
+		expect(
+			messageFrame([
+				message,
+				{ id: 's1', role: 'tool', state: 'running' },
+				{ id: 'r1', role: 'assistant', state: 'streaming' }
+			])
+		).toBe(before);
+		expect(messageFrame([{ ...message, state: 'consumed' }])).not.toBe(before);
+		expect(messageFrame([message, { id: 'm2', role: 'user', state: 'pending' }])).not.toBe(before);
 	});
 });

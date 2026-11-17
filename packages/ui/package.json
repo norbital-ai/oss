@@ -48,6 +48,10 @@
 			"types": "./build/i18n.d.ts",
 			"default": "./build/i18n.js"
 		},
+		"./code": {
+			"types": "./build/editors/code-setup.d.ts",
+			"default": "./build/editors/code-setup.js"
+		},
 		"./read": {
 			"types": "./build/read/index.d.ts",
 			"default": "./build/read/index.js"

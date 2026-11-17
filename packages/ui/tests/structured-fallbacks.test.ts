@@ -1,6 +1,7 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it } from '@effect/vitest';
+import { vi } from 'vitest';
 import type { ComponentProps } from 'svelte';
 import type { Value } from '../src/kinds/kind.ts';
 import { browser, required } from './view-fixture.ts';
@@ -197,6 +198,7 @@ it.live('a dense expression is one highlighted line', () =>
 		});
 		const code = target.querySelector('[data-cel]');
 		assert.equal(code?.textContent?.includes('\n'), false);
-		assert.ok(code?.querySelector('.text-success'));
+		// plain until the JavaScript parser loads with the first highlighted line
+		await vi.waitFor(() => assert.ok(target.querySelector('[data-cel] .text-success')));
 	})
 );

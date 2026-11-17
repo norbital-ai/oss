@@ -1,9 +1,9 @@
 import './dom.ts';
 import { flushSync, mount, unmount } from 'svelte';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import CodeDiff from '../src/editors/code-diff.svelte';
 
-it('a diff counts its added and removed lines, mounts only when opened, and marks both', () => {
+it('a diff counts its added and removed lines, mounts only when opened, and marks both', async () => {
 	const target = document.body.appendChild(document.createElement('div'));
 	const props = {
 		path: 'src/a.ts',
@@ -11,6 +11,8 @@ it('a diff counts its added and removed lines, mounts only when opened, and mark
 		after: 'const a = 1;\nconst x = 9;\nconst y = 8;\nconst c = 3;'
 	};
 	const closed = mount(CodeDiff, { target, props });
+	// CodeMirror loads with the first diff shown
+	await vi.waitFor(() => expect(target.querySelector('summary')).not.toBeNull());
 	flushSync();
 	expect(target.querySelector('summary')?.textContent).toContain('src/a.ts');
 	expect(target.querySelector('[data-added]')?.textContent).toBe('+2');
@@ -18,6 +20,7 @@ it('a diff counts its added and removed lines, mounts only when opened, and mark
 	expect(target.querySelector('.cm-editor')).toBeNull();
 	unmount(closed);
 	const view = mount(CodeDiff, { target, props: { ...props, open: true } });
+	await vi.waitFor(() => expect(target.querySelector('.cm-editor')).not.toBeNull());
 	flushSync();
 	const editor = target.querySelector('.cm-editor');
 	expect(editor?.classList.contains('cm-merge-b')).toBe(true);

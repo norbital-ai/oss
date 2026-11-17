@@ -3,6 +3,7 @@ import './setup-happy-dom.js';
 import { flushSync, mount, unmount } from 'svelte';
 import { writable } from 'svelte/store';
 import { expect, it } from '@effect/vitest';
+import { vi } from 'vitest';
 import Controlled from './fixtures/editor/controlled.svelte';
 
 it.each(['Amount expression', '金额表达式'])(
@@ -12,10 +13,12 @@ it.each(['Amount expression', '金额表达式'])(
 		const source = writable('net');
 		const component = mount(Controlled, { target, props: { source, label } });
 		try {
-			flushSync();
-			const editor = target.querySelector<HTMLElement>('.cm-content');
-			expect(editor).not.toBeNull();
-			if (editor === null) throw new Error('Code editor did not render its editing node');
+			// CodeMirror loads with the first editor shown
+			const editor = await vi.waitFor(() => {
+				const found = target.querySelector<HTMLElement>('.cm-content');
+				if (found === null) throw new Error('Code editor did not render its editing node');
+				return found;
+			});
 			editor.focus();
 			source.set('net * decimal("0.05")');
 			flushSync();

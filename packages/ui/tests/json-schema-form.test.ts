@@ -1,6 +1,7 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { it, afterEach } from '@effect/vitest';
+import { vi } from 'vitest';
 import { browser, required, textOf } from './view-fixture.ts';
 import { element } from './elements.ts';
 import type { ComponentProps } from 'svelte';
@@ -194,8 +195,8 @@ it.live(
 				},
 				initial: { label: 'A', when: 'a > 1' }
 			});
-			const code = target.querySelector('[data-code-editor=javascript]');
-			assert.ok(code, 'the CEL leaf is a code editor');
+			// CodeMirror loads with the first editor shown
+			const code = await vi.waitFor(() => element(target, '[data-code-editor=javascript]'));
 			assert.ok(code.querySelector('.cm-lineWrapping'), 'its lines wrap');
 			assert.equal(textOf(code).includes('a > 1'), true);
 			assert.equal(
@@ -205,7 +206,7 @@ it.live(
 			);
 			assert.deepEqual(changes, []);
 			const shown = await show({ kind: cel, initial: 'size(rows) > 0', view: true });
-			const ro = element(shown.target, '[data-code-editor=javascript]');
+			const ro = await vi.waitFor(() => element(shown.target, '[data-code-editor=javascript]'));
 			assert.ok(ro.querySelector('.cm-lineWrapping'));
 			assert.equal(element(ro, '.cm-content').getAttribute('contenteditable'), 'false');
 		})

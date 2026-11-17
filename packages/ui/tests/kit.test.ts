@@ -220,14 +220,18 @@ it.live('logs: a virtual window; older pages near the top', () =>
 	})
 );
 
-it('logs: a JSON payload previews compact and highlighted, also when JSON-encoded as a string', () => {
+it('logs: a JSON payload previews compact and highlighted, also when JSON-encoded as a string', async () => {
 	const text = (message: string) =>
 		logPreview(message)
 			.map((token) => token.text)
 			.join('');
 	const nested = `decision.made ${JSON.stringify(JSON.stringify({ use: 'filter', n: [1, true] }))}`;
+	// plain until the JSON parser loads with the first payload, then highlighted
 	assert.equal(text(nested), 'decision.made {"use":"filter","n":[1,true]}');
-	assert.ok(logPreview(nested).some((token) => token.text === '"filter"' && token.cls !== ''));
+	await vi.waitFor(() =>
+		assert.ok(logPreview(nested).some((token) => token.text === '"filter"' && token.cls !== ''))
+	);
+	assert.equal(text(nested), 'decision.made {"use":"filter","n":[1,true]}');
 	assert.deepEqual(logPreview('boot "unterminated'), [{ text: 'boot "unterminated', cls: '' }]);
 	assert.equal(text(`big ${JSON.stringify({ a: 'x'.repeat(1000) })}`).length, 404);
 });

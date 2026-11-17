@@ -180,10 +180,7 @@ export {
 	type CommandItem,
 	MarkdownEditor,
 	ReadonlyMarkdown,
-	highlighted_line,
-	code_highlight,
-	code_language,
-	code_theme
+	highlighted_line
 } from './editors/index.js';
 export { default as EventCalendar } from './event-calendar/event-calendar.svelte';
 export type { CalendarEvent, CalendarView } from './event-calendar/calendar.js';

@@ -108,15 +108,14 @@
 		);
 	}
 	/**
-	 * The open conversation's `decision.made` events, newest first (the log is an administrator's): its tail is read whenever
-	 * the transcript gains a row; streaming tokens do not reread the log.
+	 * The open conversation's `decision.made` events, newest first (the log is an administrator's): its tail is read when a
+	 * message arrives or is consumed (`decision_frame`); steps and streaming tokens do not reread the log.
 	 */
 	let log = $state<LogRow[]>([]);
 	/** The decisions (by event) and steps (by row) a reader opened. */
 	const expanded = new SvelteSet<string>();
 	/** Step groups (by item key) the reader opened or closed: their choice outlasts the next step's re-render. */
 	const folded = new SvelteMap<string, boolean>();
-	/** The transcript's rows, not their streaming text: a decision lands with a new row, so a streamed token reads no log. */
 	const decisions = liveEdge(() => {
 		const frame = decision_frame;
 		return !admin || conversation === null || frame === undefined

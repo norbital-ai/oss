@@ -1,6 +1,7 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
+import { vi } from 'vitest';
 import { Effect } from 'effect';
 import { browser } from './view-fixture.ts';
 import { EditorView } from '@codemirror/view';
@@ -23,8 +24,12 @@ async function editor(changed: (value: Value) => void) {
 		props: { kind: { kind: 'json' }, initial: { a: 1 }, rawJson: true, changed }
 	});
 	await settle();
-	const element = target.querySelector('.cm-editor');
-	assert.ok(element instanceof HTMLElement);
+	// CodeMirror loads with the first editor shown
+	const element = await vi.waitFor(() => {
+		const found = target.querySelector('.cm-editor');
+		assert.ok(found instanceof HTMLElement);
+		return found;
+	});
 	const view = EditorView.findFromDOM(element);
 	assert.ok(view);
 	return {

@@ -1,5 +1,6 @@
 /// <reference types="@vitest/browser-playwright" />
 import { expect, it } from '@effect/vitest';
+import { vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import CodeEditor from '../../ui/src/editors/code-editor.svelte';
 import './support/shell.css';
@@ -52,9 +53,13 @@ it.each([
 			props: { value: source, language: 'javascript', readonly, on_change: () => changes++ }
 		});
 		try {
+			// CodeMirror loads with the first editor shown
+			const editor = await vi.waitFor(() => {
+				const mounted = target.querySelector<HTMLElement>('.cm-editor');
+				if (mounted === null) throw new Error('Code editor did not mount');
+				return mounted;
+			});
 			await tick();
-			const editor = target.querySelector<HTMLElement>('.cm-editor');
-			if (editor === null) throw new Error('Code editor did not mount');
 			const content = editor.querySelector<HTMLElement>('.cm-content');
 			if (content === null) throw new Error('Code editing surface did not mount');
 			const token = content.querySelector('span');
