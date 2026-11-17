@@ -160,6 +160,11 @@ the readonly form shows it there read-only, and a table cell shows it as wrapped
 `shape` as well, so a structured value's expressions need no editor of their own. `CodeEditor` takes `wrap` for the same
 line wrapping anywhere else.
 
+`CodeEditor` and `CodeDiff` load CodeMirror with the first editor shown, never with a page's startup; until it
+arrives they render nothing, so a test waits for `.cm-editor`. `highlighted_line` and a log line's JSON payload are
+plain text until their parser loads, then highlighted. A CodeMirror surface of your own takes the shared theme,
+colours and languages from `@norbital-ai/ui/code` (`code_theme`, `code_highlight`, `code_language`).
+
 ## Custom views
 
 `CustomView` takes an optional `model`: the model its rows stand for (a roster grid of `roster_entry`). With

@@ -8,10 +8,16 @@ pnpm check
 ```
 
 `pnpm check` builds the package graph, runs lint, tests, script tests, and
-`publication:check` — the archive inspection every package change must pass. All seven public
-package manifests stay pinned to the one workspace release version (`0.0.1` during beta); package
-changes merge only after `pnpm publication:check` and the release workflow republishes the
-fixed-version set together.
+`publication:check` — the archive inspection every package change must pass, which also installs
+the packed archives in a clean graph and imports every export. All eight public package manifests
+stay pinned to the one workspace release version; package changes merge only after
+`pnpm publication:check` and the release workflow republishes the fixed-version set together.
+
+`pnpm --dir packages/bolt bench:resources` runs the live resource benchmark (`packages/bolt/bench`)
+and judges it against `bench/budget.json`: database statements, live bytes and frames exactly, CPU
+and p95 in reference units. The `Resources` workflow runs it on a runner of its own. A change that
+moves a count moves the budget in the same commit, with the reason; `tests/resources.integration.test.ts`
+asserts the counts without timing.
 
 Bolt lint uses the installed native compiler for its TypeScript test corpus. `pnpm types:compat`
 checks that same corpus with TypeScript 6. `pnpm check` and
