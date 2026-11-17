@@ -1,6 +1,6 @@
 // One live connection per browser: the tab holding the Web Lock owns every tab's views (BroadcastChannel + Web Locks,
 // both Node's own here), and equivalent views are one registration on its connection.
-import { describe, expect, it, vi } from '@effect/vitest';
+import { afterEach, describe, expect, it, vi } from '@effect/vitest';
 import { Cause, Effect, Exit, Fiber, Schema, Scope, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
 import { canonical, sha256_hex } from '@norbital-ai/store';
@@ -38,6 +38,12 @@ const tab = (url: string) => {
 		opened.at(-1)?.onmessage?.(new MessageEvent('message', { data }));
 	return { source, heard, opened, send };
 };
+
+// `unstubGlobals` restores before each test only: a stubbed `window` would outlive this file's last test and reach the
+// next file's suite setup in this worker (PGlite then reads `window.location` and fails to open)
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 describe('shared live connection', () => {
 	it.live('one tab connects; the others hear what it relays; the next tab leads when it goes', () =>
