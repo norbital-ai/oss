@@ -4,8 +4,8 @@ import type { Checkpoint } from '../record/history.js';
 
 /** What a revision did to the record. */
 export type RevisionAction = 'create' | 'update' | 'move' | 'delete' | 'restore' | 'rollback';
-/** What a timeline entry records: an approval move, or what a revision did to the record. */
-export type TimelineAction = ApprovalView['log'][number]['move'] | RevisionAction;
+/** What a timeline entry records: an approval move, an upcoming step, or what a revision did to the record. */
+export type TimelineAction = ApprovalView['log'][number]['move'] | RevisionAction | 'step';
 /** Each action's Lucide icon. */
 export const TIMELINE_ICON: Readonly<Record<TimelineAction, GlyphName>> = {
 	request: 'send',
@@ -20,12 +20,15 @@ export const TIMELINE_ICON: Readonly<Record<TimelineAction, GlyphName>> = {
 	move: 'arrowRight',
 	delete: 'trash',
 	restore: 'rotateCcw',
-	rollback: 'rotateCcw'
+	rollback: 'rotateCcw',
+	step: 'fieldTime'
 };
 /** One entry: an icon, a subtle label line, then its payload quietly below. */
 export type TimelineEntry = {
 	readonly key: string;
 	readonly action: TimelineAction;
+	/** Visual progression for upcoming/active approval steps; absent for past entries. */
+	readonly status?: 'active' | 'changes' | 'future';
 	/** The label line's parts, read as one line: what, who, when. */
 	readonly line: readonly string[];
 	/** The payload that matters, quoted: a decision's reason. */

@@ -8,7 +8,7 @@
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
-	import { Icon } from '@norbital-ai/ui';
+	import { Icon, Spinner } from '@norbital-ai/ui';
 	import { AccretionDisc } from '@norbital-ai/ui/brand';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
@@ -65,7 +65,9 @@
 
 {#if chunk !== null}
 	{#await chunk}
-		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
+		<div role="status" aria-busy="true" class="flex items-center gap-2 text-sm text-muted-foreground">
+			<Spinner class="size-4" /><span>{t('Loading…')}</span>
+		</div>
 	{:then module}
 		{#if module.configuration_tab !== undefined}
 			{@render standard()}

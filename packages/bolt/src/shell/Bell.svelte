@@ -10,7 +10,7 @@
 	import { getContext } from 'svelte';
 	import { watch } from 'runed';
 	import { SOUNDS, noticeArrivals, type Sounds } from './sounds.ts';
-	import { Button, Icon, Popover, cn } from '@norbital-ai/ui';
+	import { Button, Icon, Popover, Spinner, cn } from '@norbital-ai/ui';
 	import { Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { notice_path } from '../protocol/wire.ts';
 	import { noticeAge, sortNotices, type NoticeGroup } from './notices.ts';
@@ -275,7 +275,9 @@
 			</p>{/if}
 		<Scroll name={t('Notifications')} class="max-h-[min(24rem,calc(100dvh-8rem))]" fade={false}>
 			{#if $notices === undefined && notices.error === undefined}
-				<p role="status" class="grid min-h-40 place-items-center px-3 py-8 text-center text-tiny text-muted-foreground">{t('Loading…')}</p>
+				<div role="status" aria-busy="true" class="grid min-h-40 place-items-center px-3 py-8 text-tiny text-muted-foreground">
+					<span class="inline-flex items-center gap-2"><Spinner class="size-3.5" />{t('Loading…')}</span>
+				</div>
 			{:else if $notices !== undefined}
 				<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 				<div bind:this={list} role="group" aria-keyshortcuts="j k u" onkeydown={onListKey}>

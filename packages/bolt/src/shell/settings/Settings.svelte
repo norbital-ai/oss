@@ -14,6 +14,7 @@
 		format,
 		Input,
 		Table,
+		TableSkeleton,
 		Tabs,
 		type UiContext
 	} from '@norbital-ai/ui';
@@ -393,7 +394,9 @@
 	{error}
 >
 	{#if s === null}
-		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
+		<div role="status" aria-busy="true" aria-label={t('Loading…')}>
+			<TableSkeleton />
+		</div>
 	{:else if tab === 'organization'}
 		<!-- the view's one form: its one footer Save commits every card -->
 		<form

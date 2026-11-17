@@ -1176,16 +1176,12 @@ it.live('registered historical content and footer actions are readonly while app
 		const action = element<HTMLButtonElement>(target, '[data-native-action]');
 		assert.equal(disabled(action), true);
 
-		element<HTMLButtonElement>(target, '[data-record-pane=approval]').click();
-		await settle();
-		nativeFooter(target);
-		const approve = element<HTMLButtonElement>(target, 'button[data-decision=approve]');
+		assert.equal(target.querySelector('[data-record-toggle]'), null);
+		const approve = element<HTMLButtonElement>(nativeFooter(target), 'button[data-decision=approve]');
 		assert.equal(disabled(approve), false);
 		approve.click();
 		await settle();
 		assert.ok(target.querySelector('form[data-decision=approve]'), 'approval decision can advance while viewing history');
-		element<HTMLButtonElement>(target, '[data-record-pane=record]').click();
-		await settle();
 		element<HTMLButtonElement>(target, '[data-record-back]').click();
 		await settle();
 		await represented(target);
@@ -1278,7 +1274,7 @@ it.live('blank text reads as the one empty "—"', () =>
 	})
 );
 
-it.live('a failed decision keeps the approval pane, its error and its form while the requests reload', () =>
+it.live('a failed decision keeps the footer approval controls, its error and its form while the requests reload', () =>
 	browser(async () => {
 		const busy = 'This workspace is busy. Please try again shortly.';
 		const fixture = await fake(LIVE, [{ id: 'busy', moves: [{ decision: 'reject', reason: 'required' }] }]);
@@ -1288,9 +1284,7 @@ it.live('a failed decision keeps the approval pane, its error and its form while
 		fixture.script.approval = (params) => (hang ? new Promise(() => {}) : (answered?.(params) ?? []));
 		fixture.script.act = () => ({ kind: 'refused', code: 'rate_limited', message: busy });
 		const target = await showFooter(fixture, { representation: 'generated' });
-		element<HTMLButtonElement>(target, '[data-record-pane=approval]').click();
-		await settle();
-		element<HTMLButtonElement>(target, 'button[data-decision=reject]').click();
+		element<HTMLButtonElement>(nativeFooter(target), 'button[data-decision=reject]').click();
 		await settle();
 		const reason = element<HTMLTextAreaElement>(target, '[data-view=approval-controls] textarea');
 		reason.value = 'Too costly';
@@ -1322,10 +1316,7 @@ it.live('Withdraw clears the header badge at once, in a represented record too, 
 		const target = await showFooter(fixture);
 		await represented(target);
 		assert.ok(target.querySelector('[data-view=approval-badge]'));
-		element<HTMLButtonElement>(target, '[data-record-pane=approval]').click();
-		await settle();
-		assert.ok(target.querySelector('[data-view=approval-badge]'), 'the badge stays while the pane is open');
-		element<HTMLButtonElement>(target, 'button[data-decision=withdraw]').click();
+		element<HTMLButtonElement>(nativeFooter(target), 'button[data-decision=withdraw]').click();
 		await settle();
 		element<HTMLButtonElement>(target, '[data-confirm]').click();
 		// a boolean: a failing assert would format the whole DOM node on every poll
@@ -1363,5 +1354,199 @@ it.live('record history lists a request for changes and says where a request sta
 		assert.doesNotMatch(textOf(events), /approval Pending/);
 		const asked = element<HTMLElement>(events, '[data-history-decision]');
 		assert.match(textOf(asked), /Requested changes · Sam.*“Add the quote”/s);
+	})
+);
+
+it.live('record history weaves current and future approval steps above the current revision', () =>
+	Effect.gen(function* () {
+		const v = yield* browser(() =>
+			show(
+				LIVE,
+				catalog,
+				undefined,
+				undefined,
+				[
+					{
+						id: 'multi',
+						status: 'Pending',
+						step: 0,
+						steps: [
+							{ name: 'Treasury review', teams: ['treasury'], users: [] },
+							{ name: 'CFO sign-off', teams: [], users: ['u2'] }
+						],
+						team_names: { treasury: 'Treasury' },
+						user_names: { u2: 'Lee' },
+						log: [
+							{ move: 'request', by: { ref: 'member:ada', name: 'Ada' }, at: '2026-09-03T00:00:00Z', from: null, to: 'Pending', step: 0, reason: null }
+						]
+					}
+				]
+			)
+		);
+		yield* browser(() => v.openHistory());
+		const events = required(v.history());
+		const steps = [...events.querySelectorAll<HTMLElement>('[data-history-step]')];
+		assert.deepEqual(
+			steps.map((el) => [el.dataset['historyStep'], el.dataset['look']]),
+			[['1', 'later'], ['0', 'active']]
+		);
+		assert.match(textOf(steps[0]), /CFO sign-off · Later.*Lee/s);
+		assert.match(textOf(steps[1]), /Treasury review · Waiting.*Treasury/s);
+		const items = [...events.querySelectorAll<HTMLElement>('[data-timeline] > li')];
+		assert.equal(items[0]?.dataset['historyStep'], '1');
+		assert.equal(items[1]?.dataset['historyStep'], '0');
+		assert.equal(items[2]?.dataset['historyRevision'], '3');
+	})
+);
+
+it.live('under approval: viewer without approval access sees only the footer seal; approver sees readonly body and footer controls; ungranted record shows no access', () =>
+	browser(async () => {
+		const lockedCaps = async (): Promise<RecordCapabilities> => ({
+			...nativeCapabilities,
+			update: { allowed: false, proposal: false, reasons: ['under_approval'] }
+		});
+		const sealed = await show(
+			{
+				...LIVE,
+				$approval: { request_id: 'r1', state: 'Pending', step: 0, steps: [{ name: 'Review', teams: ['reviewers'], users: [] }], requested_by: 'Ada' }
+			},
+			catalog,
+			undefined,
+			lockedCaps,
+			[{ id: 'r1', status: 'Pending', moves: [] }]
+		);
+		assert.ok(sealed.target.querySelector('[data-record-lock]'), 'seal shown when locked');
+		assert.equal(sealed.target.querySelector('[data-view=approval-controls]'), null, 'no approval controls');
+		assert.equal(sealed.target.querySelector('[data-record-toggle]'), null, 'no approval tab');
+		assert.equal(sealed.target.querySelector('input'), null, 'readonly representation');
+
+		const readonlyCat = { jobs: { ...catalog.jobs, update: undefined } };
+		const readonlyViewer = await show(
+			{
+				...LIVE,
+				$approval: { request_id: 'r1', state: 'Pending', step: 0, steps: [{ name: 'Review', teams: ['reviewers'], users: [] }], requested_by: 'Ada' }
+			},
+			readonlyCat,
+			undefined,
+			async () => ({
+				...nativeCapabilities,
+				update: { allowed: false, proposal: false, reasons: ['no_grant'] }
+			}),
+			[{ id: 'r1', status: 'Pending', moves: [] }]
+		);
+		assert.ok(readonlyViewer.target.querySelector('[data-record-lock]'), 'readonly viewer still sees seal under approval');
+		assert.equal(readonlyViewer.target.querySelector('[data-view=approval-controls]'), null);
+
+		const approver = await show(
+			{
+				...LIVE,
+				$approval: { request_id: 'r1', state: 'Pending', step: 0, steps: [{ name: 'Review', teams: ['reviewers'], users: [] }], requested_by: 'Ada' }
+			},
+			catalog,
+			undefined,
+			lockedCaps,
+			[{
+				id: 'r1',
+				status: 'Pending',
+				moves: [
+					{ decision: 'approve', reason: 'optional' },
+					{ decision: 'reject', reason: 'required' },
+					{ decision: 'request_changes', reason: 'required' }
+				]
+			}]
+		);
+		const foot = nativeFooter(approver.target);
+		assert.ok(foot.querySelector('[data-record-lock]'), 'seal stays in footer beside approval actions');
+		assert.deepEqual(
+			[...foot.querySelectorAll<HTMLButtonElement>('[data-view=approval-controls] button')].map((b) => b.dataset['decision']),
+			['approve', 'reject', 'request_changes']
+		);
+		assert.equal(approver.target.querySelector('input'), null, 'representation stays readonly by default');
+
+		const forbiddenFixture = await viewFixture({
+			catalog: {},
+			get: () =>
+				Response.json(
+					{ error: { code: 'forbidden', message: 'You may not read this record.' } },
+					{ status: 403 }
+				)
+		});
+		const container = document.body.appendChild(document.createElement('div'));
+		const noAccess = mount(Harness, {
+			target: container,
+			props: {
+				bolt: forbiddenFixture.bolt,
+				catalog: {},
+				part: 'record',
+				view: RecordShell,
+				props: { of: 'drawdown', id: '7ea50000-0008-4000-8000-000000035565' }
+			}
+		});
+		await settle();
+		assert.match(textOf(element<HTMLElement>(container, '[data-read=not_found]')), /Not found or no access/);
+		await unmount(noAccess);
+		container.remove();
+	})
+);
+
+it.live('a live push on the open record updates fields, the Under approval badge and footer controls without navigating', () =>
+	browser(async () => {
+		let current: Record<string, Value> = { ...LIVE, revision: 3, title: 'Paint v3' };
+		let approvals: ApprovalView[] = [];
+		let emitLive: (() => void) | undefined;
+		let locked = false;
+		const fixture = await viewFixture({
+			catalog,
+			get: () => current,
+			approval: () => approvals.map(approvalView),
+			capabilities: () => ({
+				...nativeCapabilities,
+				update: locked
+					? { allowed: false, proposal: false, reasons: ['under_approval'] }
+					: { allowed: true, proposal: false, reasons: [] }
+			}),
+			changes: (_read, emit) => {
+				emitLive = emit;
+				return () => {};
+			}
+		});
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt: fixture.bolt,
+				catalog,
+				part: 'record',
+				view: RecordShell,
+				props: { of: 'jobs', id: 'j1' }
+			}
+		});
+		mounted.push(async () => {
+			await unmount(app);
+			target.remove();
+		});
+		await settle();
+		assert.match(textOf(element<HTMLElement>(target, '[data-field=title]')), /Paint v3/);
+		assert.equal(target.querySelector('[data-view=approval-badge]'), null);
+
+		// Simulate background automation extracting fields and holding for approval
+		locked = true;
+		current = {
+			...LIVE,
+			revision: 4,
+			title: 'Extracted & held',
+			$approval: { request_id: 'r2', state: 'Pending', step: 0, steps: [{ name: 'Finance', teams: ['finance'], users: [] }], requested_by: 'System' }
+		};
+		approvals = [approvalView({
+			id: 'r2',
+			status: 'Pending',
+			moves: [{ decision: 'approve', reason: 'optional' }]
+		})];
+		emitLive?.();
+		await vi.waitFor(() => {
+			assert.match(textOf(element<HTMLElement>(target, '[data-field=title]')), /Extracted & held/);
+			assert.ok(target.querySelector('[data-view=approval-badge]'));
+			assert.ok(nativeFooter(target).querySelector('button[data-decision=approve]'));
+		});
 	})
 );

@@ -114,11 +114,11 @@ describe('reads', () => {
 					throw new TypeError('offline');
 				}
 			});
-			expect(
-				yield* Effect.flip(
-					offline.native_query({ m: 'query', a: [{ jobs: { where: { id: { eq: 'j1' } } } }] }, Ids)
-				)
-			).toBeInstanceOf(TransportFailed);
+			const failedRead = yield* Effect.flip(
+				offline.native_query({ m: 'query', a: [{ jobs: { where: { id: { eq: 'j1' } } } }] }, Ids)
+			).pipe(Effect.forkScoped);
+			yield* TestClock.adjust('2 seconds');
+			expect(yield* Fiber.join(failedRead)).toBeInstanceOf(TransportFailed);
 		})
 	);
 	it.effect('live revives answers and a refusal ends the Stream', () =>
@@ -342,6 +342,7 @@ describe('reads', () => {
 				throw new TypeError('offline');
 			});
 			push({ t: 'hello', conn: 'c1', v: 0 });
+			yield* TestClock.adjust('2 seconds');
 			const exit = yield* Fiber.await(fiber);
 			expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
 				_tag: 'ReadFailed',

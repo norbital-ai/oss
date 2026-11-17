@@ -3,7 +3,8 @@ import { required } from './support/required.ts';
 import { readFileSync } from 'node:fs';
 import { beforeEach, afterEach, describe, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
-import { Context, Effect, Layer, ManagedRuntime, Option, Result, Schema } from 'effect';
+import { Context, Effect, Fiber, Layer, ManagedRuntime, Option, Result, Schema } from 'effect';
+import { TestClock } from 'effect/testing';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError, StudioOp, studio_view, suggest_message, type StudioState } from '@norbital-ai/host-api';
@@ -1693,13 +1694,13 @@ describe('shell HTTP failures', () => {
 	);
 	it.effect('distinguishes a connection failure from an invalid successful response', () =>
 		Effect.gen(function* () {
-			expect(
-				yield* Effect.flip(
-					shell_api(async () => {
-						throw new TypeError('fetch failed');
-					}).boot()
-				)
-			).toMatchObject({ status: 0, code: 'offline' });
+			const offline = yield* Effect.flip(
+				shell_api(async () => {
+					throw new TypeError('fetch failed');
+				}).boot()
+			).pipe(Effect.forkScoped);
+			yield* TestClock.adjust('2 seconds');
+			expect(yield* Fiber.join(offline)).toMatchObject({ status: 0, code: 'offline' });
 			expect(
 				yield* Effect.flip(shell_api(async () => new Response('not JSON')).boot())
 			).toMatchObject({ status: 200, code: 'protocol' });

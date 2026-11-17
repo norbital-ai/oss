@@ -22,6 +22,7 @@
 		Icon,
 		Show,
 		Table,
+		TableSkeleton,
 		type UiContext
 	} from '@norbital-ai/ui';
 	import { Cluster } from '@norbital-ai/ui/layout';
@@ -281,7 +282,9 @@
 			{error}
 		</p>{/if}
 	{#if rows === null}
-		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
+		<div role="status" aria-busy="true" aria-label={t('Loading…')}>
+			<TableSkeleton />
+		</div>
 	{:else}
 		<Table {ctx}
 			of={rows}

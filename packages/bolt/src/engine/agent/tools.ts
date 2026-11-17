@@ -4276,10 +4276,10 @@ const UNSCRIPTED: ReadonlySet<string> = new Set([
 ]);
 
 // Tool text and model schemas are shared; handlers bind only when a step is admitted.
-const READ_TEXT = `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. output: omit it for "default", else one of the model's reads. order_by: "<field>", { <field>: "desc" } or a list of those.
+const READ_TEXT = `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each root once. output defaults to "default". order_by: "<field>", { <field>: "desc" } or a list of those.
 where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null: value, like: "%text%" (ignores case), contains: value (a period or a JSON field) } }, { "$search": "<words>" } (each word required), and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words (ranked, not required), { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } or a list of those }; a field there may be "<link>.<field>" through links to one record.
-Choose rows or measures. A normal read returns { rows, next, total }; total counts every match before limit, so do not add aggregate just to count a list. An aggregate returns measures, takes no fields or search, and its by names grouping fields. For rows plus their count: { "<model>": { fields: ["id"], limit: 20 } }; for only a count: { "<model>": { aggregate: { count: true } } }. Long values are clipped.`;
+Normal reads return { rows, next, total } (total counts every match before limit, so omit aggregate when reading rows). aggregate takes no fields or search, with optional grouping by. Long values are clipped.`;
 const recordsTool = defineTool('read', {
 	behavior: { data: true, resume: { argument: 'after', roots: true } },
 	description: READ_TEXT,
@@ -4289,7 +4289,7 @@ const recordsTool = defineTool('read', {
 const agentReadTool = defineTool('read', {
 	behavior: recordsTool.behavior,
 	description: `${READ_TEXT}
-On a root, history: true adds each row's revisions as $history (who, when, cause, changed fields; at most 20 rows), approvals: true each row's approval requests as $approvals (steps, deciders, log, moves you may make).
+On a root, history: true adds $history (up to 20 revisions), approvals: true adds $approvals (steps, deciders, moves).
 Ledger roots, each answering { rows, next } newest first: "$runs": { id, automation (a name or prefix*), status, cause, since, until, limit, after } automation runs, id one in full with input, result, attempts and log; "$approvals": { model, ids, all } approval requests you may see, open ones unless all; "$logs": { level, text, run, automation, conversation, since, until, limit, after } live's runtime log; "$audit": { id, text, actor_id, category, action, status, model, record, run, since, until, limit, after } the audit trail.`,
 	parameters: ReadInput
 });
@@ -4301,7 +4301,7 @@ const describeTool = defineTool('describe_workspace', {
 const pageTool = defineTool('page', {
 	behavior: { page: true },
 	description:
-		"Navigate using an exact path from the workspace catalogue's Pages, including /app/; never shorten routes. configure opens native setup. Click/highlight text, type by label, scroll, go back/forward or preview a URL. Approvals, passwords and files are the person's. A request is pending until the tab reports what ran.",
+		"Navigate by exact Pages path from the catalogue (including /app/). configure opens native setup. Click/highlight text, type by label, scroll, go back/forward or preview a URL. Approvals, passwords and files are the person's; pending until the tab reports.",
 	parameters: Schema.Struct({
 		path: Schema.optionalKey(Schema.String),
 		configure: Schema.optionalKey(
@@ -4324,7 +4324,7 @@ const pageTool = defineTool('page', {
 const actTool = defineTool('act', {
 	behavior: { data: true },
 	description: `Commit { acts: { "<model>.<verb>": input }, key? } atomically. input_file can hold the map. Reuse key only for the same operation. Mint UUIDs to link new rows across entries.
-create: [{ column: value, relation: [new row | { id, revision }] }]; update: [{ target, set: { column, relation: { create, update, delete, link, unlink } } }]; delete: [{ target }]; import: { rows, on_conflict: "update"|"keep"|"refuse", on_missing?: "create"|"skip", prune?, dry_run? }. Targets and existing relation links need { id, revision }. A ref field takes the referenced row's scalar id string, never its label or { id }; file fields take file ids. Read current ids, revisions and the requested subset before a batch. Returns stored rows or holds for approval.`,
+create: [{ column: value, relation: [new row | { id, revision }] }]; update: [{ target, set: { column, relation: { create, update, delete, link, unlink } } }]; delete: [{ target }]; import: { rows, on_conflict: "update"|"keep"|"refuse", on_missing?: "create"|"skip", prune?, dry_run? }. Targets and existing relation links need { id, revision }. Ref fields take a scalar id string, never a label or { id }; file fields take file ids. Read current ids, revisions and needed rows before a batch. Returns stored rows or holds for approval.`,
 	parameters: WriteInput
 });
 const runAutomationTool = defineTool('run', {
@@ -4376,7 +4376,7 @@ const updatePlanTool = defineTool('update_plan', {
 });
 const skillTool = defineTool('skill', {
 	behavior: { data: true },
-	description: 'Read one of your skills whole, one ## section, or one of its files. Read the skill without section first; only use an exact section heading it actually contains. For component APIs use workspace_lang instead of guessing a skill section.',
+	description: 'Read a skill whole, an exact ## section seen in it, or one of its files. Use workspace_lang for component APIs.',
 	parameters: Schema.Struct({
 		name: Schema.String,
 		section: Schema.optionalKey(Schema.String),

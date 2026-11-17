@@ -129,6 +129,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	import type { ApprovalView, HistorySnapshot } from '../client/contract.js';
 	import { humanize } from '../text/messages.js';
 	import { actOutcome, notify } from '../actions/outcome.js';
+	import ApprovalControls from '../approval/ApprovalControls.svelte';
 	import ApprovalPanel from '../approval/ApprovalPanel.svelte';
 	import { approvalOf, lockText } from '../approval/row.js';
 	import { matchesLock } from './lock.js';
@@ -521,9 +522,6 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 				) ?? null)
 			: null
 	);
-	/** The header switches between the stored record and its native proposal. */
-	let pane = $state<'record' | 'approval'>('record');
-	const onApproval = $derived(pane === 'approval');
 	// A history scrub shows its selected record throughout nested forms.
 	provideRecordView({
 		get current() {
@@ -726,7 +724,6 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		const mine = o.records.find((r) => r.model === of);
 		if (o.kind === 'pending_approval') {
 			submitted = { model: of, record: id ?? mine?.id, request_id: o.request_id };
-			pane = 'approval';
 		}
 		controller?.view();
 		if (on_done) on_done(o);
@@ -902,18 +899,27 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	{@const current =
 		shownPast === null && viewing === null && live !== null &&
 		exposure?.update !== undefined && matches && target?.mode === 'update'}
-	{@const lockedHere =
-		current && draft?.mode === 'view' && (lock !== undefined || modelLocked || under_approval)}
-	{@const canEdit = current && draft?.mode === 'view' && !lockedHere && draft.can_submit}
+	{@const blocked = lock !== undefined || modelLocked || under_approval}
+	{@const canEdit = current && draft?.mode === 'view' && !blocked && draft.can_submit}
 	{@const inEdit = current && draft?.mode === 'edit'}
 	{@const formEntries = nativeSubmit?.entries ?? []}
 	{@const formDisabled = formEntries.some((entry) => entry.writable && entry.disabled)}
 	{@const creating =
 		mode === 'create' && matches && target?.mode === 'create' && draft?.mode === 'create' &&
 		!draft.spec.readonly && (formEntries.length === 0 || formEntries.some((entry) => entry.writable))}
+	{@const lockedHere =
+		shownPast === null &&
+		viewing === null &&
+		live !== null &&
+		!inEdit &&
+		!canEdit &&
+		!creating &&
+		(blocked || openState !== null)}
 	<span class="text-meta mr-auto min-w-0 truncate" role="status">
 		{#if inEdit && draft?.dirty && !draft.pending}{formText('unsaved')}
-		{:else if typeof footer === 'string'}{footer}{:else}{@render footer?.()}{/if}
+		{:else if typeof footer === 'string'}{footer}
+		{:else if footer}{@render footer()}
+		{:else if openRequest?.status === 'ChangesRequested' && openRequest.mine}{msg(bolt, 'approval.resubmitOnSave')}{/if}
 	</span>
 	{@render footer_actions?.()}
 	{#if lockedHere}
@@ -1069,41 +1075,20 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 {/snippet}
 
 {#snippet tools()}
-	<!-- record / approval: which body the record shows; icon toggles beside full screen, not content tabs -->
-	{#if live !== null}
-		<div
-			class="flex items-center gap-0.5"
-			role="group"
-			aria-label={msg(bolt, 'record.show')}
-			data-record-toggle
-		>
-			{#each [{ key: 'record', glyph: 'file', text: msg(bolt, 'record.tab.record') }, { key: 'approval', glyph: 'shield', text: msg(bolt, 'record.tab.approval') }] as const as t (t.key)}
-				<button
-					type="button"
-					aria-pressed={pane === t.key}
-					aria-label={t.text}
-					title={t.text}
-					data-record-pane={t.key}
-					onclick={() => (pane = t.key)}
-					class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 aria-pressed:bg-muted aria-pressed:text-foreground relative grid size-8 max-sm:size-11 shrink-0 place-items-center rounded-md focus-visible:ring-2 focus-visible:outline-none"
-				>
-					<Glyph name={t.glyph} class="size-4" />
-					{#if t.key === 'approval' && pending_approval}<span
-							class="bg-brand ring-popover absolute top-1.5 right-1.5 size-1.5 rounded-full ring-2"
-							aria-hidden="true"
-						></span>{/if}
-				</button>
-			{/each}
-			{#if latest >= 1}<RecordTimeline {ctx}
-					{of}
-					{latest}
-					{viewing}
-					{history}
-					config={historyConfig}
-					approvals={requests.current ?? []}
-					onload={() => (wanted = true)}
-					onpick={pick}
-				/>{/if}
+	<!-- history scrubber beside full screen and close; pending approval shows its indicator on the trigger -->
+	{#if live !== null && latest >= 1}
+		<div class="flex items-center gap-0.5">
+			<RecordTimeline {ctx}
+				{of}
+				{latest}
+				{viewing}
+				{history}
+				config={historyConfig}
+				approvals={requests.current ?? []}
+				{pending_approval}
+				onload={() => (wanted = true)}
+				onpick={pick}
+			/>
 		</div>
 	{/if}
 {/snippet}
@@ -1336,7 +1321,13 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		{@render failure(loaded.message)}
 	{:else}
 		{#if mode === 'create' || tabItems.length === 1}{@render body()}
-		{:else if nested && !sameRecord}{@render body()}{#if approvalId !== null}{@render approval()}{/if}
+		{:else if nested && !sameRecord}{@render body()}{#if openRequest !== null}<ApprovalControls
+					{ctx}
+					request={openRequest}
+					on_outcome={() => {
+						fork(requests.refetch());
+					}}
+				/>{/if}
 		{:else}<Tabs
 				tabs={tabItems}
 				value={lastTab.get(`${of}/${id}`)}
@@ -1365,17 +1356,11 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		{:else if toSheet === undefined}<header class="shrink-0">{@render frameHead()}</header>{/if}
 		{#if owner && viewing !== null}<div class="shrink-0">{@render pastPill(viewing)}</div>{/if}
 		{#if owner && historyError !== null}<Alert variant="destructive" class="shrink-0" role="alert">{historyError}</Alert>{/if}
-		{#if onApproval}
-			<!-- Approval decisions remain independent of a selected historical record. -->
-			<div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto" data-record-main>
-				{@render approval()}
-			</div>
-		{/if}
-		<!-- Keep record forms mounted across the approval toggle, and disable every historical record action. -->
+		<!-- Disable historical record actions while keeping approval decisions in the footer independent. -->
 		<fieldset
 			disabled={viewing !== null || shownPast !== null}
-			class={onApproval ? 'hidden' : 'm-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto border-0 p-0'}
-			data-record-main={onApproval ? undefined : ''}
+			class="m-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto border-0 p-0"
+			data-record-main
 		>
 			{#if permissionError}<Alert variant="destructive" role="alert">{permissionError}</Alert>{/if}
 			{#if owner && historical !== null && (historical.incompatible.length > 0 || past === null)}{@render historicalRecord(historical)}
@@ -1383,14 +1368,24 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		</fieldset>
 		<footer class="flex min-h-12 shrink-0 flex-wrap items-center justify-end gap-2 border-t pt-3" data-record-foot>
 			<fieldset disabled={viewing !== null || shownPast !== null} class="contents">
-				{#if !onApproval && goneRequest === null && (mode === 'create' || live !== null)}{@render (decoration?.foot ?? foot)()}{/if}
+				{#if goneRequest === null && (mode === 'create' || live !== null)}{@render (decoration?.foot ?? foot)()}{/if}
 			</fieldset>
+			{#if goneRequest === null && live !== null && openRequest !== null}
+				<ApprovalControls
+					{ctx}
+					request={openRequest}
+					inline
+					on_outcome={() => {
+						fork(requests.refetch());
+					}}
+				/>
+			{/if}
 		</footer>
 	</article>
 {:else}
 	<!-- A nested shell supplies body/tabs and contributes chrome, without another native frame or footer. -->
 	<div class="flex h-full min-h-0 min-w-0 flex-col gap-3">
 		{#if permissionError}<Alert variant="destructive" role="alert">{permissionError}</Alert>{/if}
-		{#if onApproval}{@render approval()}{:else}{@render content()}{/if}
+		{@render content()}
 	</div>
 {/if}

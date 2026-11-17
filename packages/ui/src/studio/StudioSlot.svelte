@@ -6,6 +6,7 @@
 -->
 <script lang="ts">
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
+	import Spinner from '../primitives/spinner/spinner.svelte';
 	import { attach } from '../effect/index.js';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
@@ -21,6 +22,7 @@
 		/** What the shell hands Studio; a change updates the mounted Studio in place. */
 		props: StudioProps;
 	} = $props();
+	let loading = $state(true);
 	let failed = $state(false);
 	let mounted: StudioMount | undefined;
 	const open = (path: string, target: HTMLElement) =>
@@ -28,14 +30,20 @@
 			const module = yield* Effect.tryPromise(
 				(): Promise<unknown> => import(/* @vite-ignore */ path)
 			);
-			return (mounted = yield* Effect.try(() => mount_studio(module, target, props)));
+			const view = yield* Effect.try(() => mount_studio(module, target, props));
+			mounted = view;
+			loading = false;
+			return view;
 		});
 	const slot = attach((target: HTMLDivElement) => {
 		// read once: a later boot naming a newer bundle must not remount Studio over unsaved edits
 		const path = untrack(() => bundle);
-		return path === undefined
-			? Effect.void
-			: Effect.acquireRelease(open(path, target), (view) =>
+		if (path === undefined) {
+			loading = false;
+			return Effect.void;
+		}
+		loading = true;
+		return Effect.acquireRelease(open(path, target), (view) =>
 					Effect.promise(() => view.unmount()).pipe(
 						Effect.ensuring(
 							Effect.sync(() => {
@@ -49,6 +57,7 @@
 						Effect.logWarning(cause).pipe(
 							Effect.andThen(
 								Effect.sync(() => {
+									loading = false;
 									failed = true;
 								})
 							)
@@ -70,5 +79,17 @@
 		hint={props.t('Reload the page. If it keeps happening, the host is not serving Studio.')}
 	/>
 {:else}
-	<div class="flex min-h-0 min-w-0 flex-1 flex-col" {@attach slot}></div>
+	<div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
+		<div class="flex min-h-0 min-w-0 flex-1 flex-col" {@attach slot}></div>
+		{#if loading}
+			<div
+				class="pointer-events-none absolute inset-0 grid place-items-center bg-background"
+				role="status"
+				aria-busy="true"
+				aria-label={props.t('Loading…')}
+			>
+				<Spinner class="size-5 text-muted-foreground" />
+			</div>
+		{/if}
+	</div>
 {/if}

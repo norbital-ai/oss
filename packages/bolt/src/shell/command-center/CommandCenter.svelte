@@ -15,6 +15,7 @@
 		Badge,
 		Icon,
 		Table,
+		TableSkeleton,
 		Tabs,
 		WorkspaceOperations,
 		EmptyState,
@@ -217,7 +218,9 @@
 			{#snippet actions()}<AutoRefresh {t} on_refresh={() => fork(logs.refetch())} />{/snippet}
 		</WorkspaceOperations>
 	{:else if inspection.error === undefined}
-		<p class="text-meta" role="status">{t('Loading…')}</p>
+		<div role="status" aria-busy="true" aria-label={t('Loading…')} class="p-4 sm:p-6">
+			<TableSkeleton />
+		</div>
 	{/if}
 {/snippet}
 {#snippet aiCategory({ row }: { row: (typeof transcripts)[number]; value: unknown })}

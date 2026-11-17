@@ -20,19 +20,40 @@ reason, changed fields) quietly below. The approval panel's history and the reco
 
 <ol class="flex flex-col" aria-label={label} data-timeline>
 	{#each entries as e, i (e.key)}
-		<li class="relative flex gap-2.5 pb-3 last:pb-0" data-action={e.action} {...e.data}>
+		{@const future = e.status === 'future' || entries[i + 1]?.status === 'future' || entries[i + 1]?.status === 'active'}
+		<li
+			class={['relative flex gap-2.5 pb-3 last:pb-0', e.status === 'future' && 'opacity-65']}
+			data-action={e.action}
+			data-status={e.status}
+			{...e.data}
+		>
 			{#if i < entries.length - 1}<span
 					aria-hidden="true"
-					class="bg-border absolute top-6 bottom-0 left-2.5 w-px"
+					class={[
+						'absolute top-6 bottom-0 left-2.5 w-px',
+						future ? 'border-border border-l border-dashed' : 'bg-border'
+					]}
 				></span>{/if}
 			<span
 				class={[
 					'bg-background relative grid size-5 shrink-0 place-items-center rounded-full border',
-					e.current ? 'border-brand text-brand' : 'text-muted-foreground'
+					e.status === 'active'
+						? 'border-brand text-brand'
+						: e.status === 'changes'
+							? 'border-warning text-warning-foreground dark:text-warning'
+							: e.status === 'future'
+								? 'border-dashed text-muted-foreground'
+								: e.current
+									? 'border-brand text-brand'
+									: 'text-muted-foreground'
 				]}
 				data-icon-action={e.action}
 			>
-				<Glyph name={TIMELINE_ICON[e.action]} class="size-3" />
+				{#if e.status === 'active'}<span
+						class="bg-brand/30 absolute inset-0 animate-ping rounded-full motion-reduce:animate-none"
+						aria-hidden="true"
+					></span><span class="bg-brand size-2 rounded-full" aria-hidden="true"></span>
+				{:else}<Glyph name={TIMELINE_ICON[e.action]} class="size-3" />{/if}
 			</span>
 			{#if e.onpick}<button
 					type="button"

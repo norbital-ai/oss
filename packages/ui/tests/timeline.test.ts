@@ -32,7 +32,8 @@ it('every action has its own icon, and a revision names what it did', () => {
 		move: 'arrowRight',
 		delete: 'trash',
 		restore: 'rotateCcw',
-		rollback: 'rotateCcw'
+		rollback: 'rotateCcw',
+		step: 'fieldTime'
 	};
 	assert.deepEqual(TIMELINE_ICON, icons);
 	const states = new Set(['status']);

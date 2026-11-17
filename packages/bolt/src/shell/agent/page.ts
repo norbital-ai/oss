@@ -11,9 +11,9 @@ import { logical } from '../nav.ts';
 
 const normalized = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
 
-/** An approval panel or a held approval card: its controls decide a request, so the page bridge never reaches them. */
+/** An approval panel, footer approval controls, or a held approval card: its controls decide a request, so the page bridge never reaches them. */
 const approvalOf = (el: Element): boolean =>
-	el.closest('[data-view="approval"], [data-approval]') !== null;
+	el.closest('[data-view="approval"], [data-view="approval-controls"], [data-approval]') !== null;
 
 /** The page content and its sheets; the agent panel itself is never a target. */
 function pageRoots(): HTMLElement[] {

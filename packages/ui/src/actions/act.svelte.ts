@@ -31,12 +31,17 @@ export function use_act(ctx: UiContext) {
 		): void {
 			if (pending) return;
 			const bolt = bolt_of(ctx);
+			const queued = Predicate.hasProperty(effect, 'mode') && effect.mode === 'job';
 			pending = true;
 			fork(
 				effect.pipe(
 					Effect.tap((success) =>
 						Effect.sync(() => {
-							notify(bolt, held(success) ? success : { kind: 'committed' }, options.saved);
+							notify(
+								bolt,
+								held(success) ? success : queued ? { kind: 'running' } : { kind: 'committed' },
+								options.saved
+							);
 							options.then?.(success);
 						})
 					),

@@ -842,7 +842,21 @@
 <svelte:window onpopstate={() => (url = here())} onkeydown={shortcut} />
 
 {#snippet openingFeature()}
-	<Center><p role="status">{t('Loading…')}</p></Center>
+	<div
+		class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-6"
+		role="status"
+		aria-busy="true"
+		aria-label={t('Loading…')}
+	>
+		<div class="flex items-center gap-3">
+			<div class="bg-muted size-9 shrink-0 animate-pulse rounded-md motion-reduce:animate-none"></div>
+			<div class="flex flex-1 flex-col gap-1.5">
+				<div class="bg-muted h-4 w-40 animate-pulse rounded motion-reduce:animate-none"></div>
+				<div class="bg-muted h-3 w-72 max-w-full animate-pulse rounded motion-reduce:animate-none"></div>
+			</div>
+		</div>
+		<TableSkeleton />
+	</div>
 {/snippet}
 
 {#snippet failedFeature()}
@@ -1078,7 +1092,16 @@
 			{/if}
 		</Access>
 	{:else if boot === null}
-		<Center><p>{t('Loading…')}</p></Center>
+		<div
+			class="grid min-h-dvh place-items-center bg-background p-6"
+			role="status"
+			aria-busy="true"
+			aria-label={t('Loading…')}
+		>
+			<Inline gap="sm" class="text-sm text-muted-foreground">
+				<Spinner class="size-4" /><span>{t('Loading…')}</span>
+			</Inline>
+		</div>
 	{:else if boot.visitor !== null}
 		<!-- a visitor page: only its own app, no switcher, inbox, agent, settings or runs -->
 		<Cover as="main" class="min-h-dvh pb-[env(safe-area-inset-bottom)]">

@@ -15,6 +15,7 @@
 		Input,
 		PhoneInput,
 		Table,
+		TableSkeleton,
 		Tabs,
 		type UiContext
 	} from '@norbital-ai/ui';
@@ -385,7 +386,9 @@
 			{error}
 		</p>{/if}
 	{#if s === null}
-		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
+		<div role="status" aria-busy="true" aria-label={t('Loading…')}>
+			<TableSkeleton />
+		</div>
 	{:else}
 		<Tabs
 			level={2}

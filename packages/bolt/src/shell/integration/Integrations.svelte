@@ -16,8 +16,10 @@
 		format,
 		format_handle,
 		open_record,
+		Spinner,
 		StateBadge,
 		Table,
+		TableSkeleton,
 		Tabs,
 		value_object,
 		type FieldEditor,
@@ -538,7 +540,7 @@
 										{dead_letters.error.message}
 									</p>{/if}
 							</div>{/if}
-					{:else if syncHealth.loading}<p class="text-meta">{t('Loading…')}</p>{/if}
+					{:else if syncHealth.loading}<p role="status" aria-busy="true" class="text-meta inline-flex items-center gap-1.5"><Spinner class="size-3.5" />{t('Loading…')}</p>{/if}
 				</div>
 			{/snippet}
 			{#snippet settingsTab()}
@@ -597,7 +599,7 @@
 							{messages.error.message}
 						</p>{/if}
 					{#if log === undefined}
-						{#if messages.loading}<p class="text-xs text-muted-foreground">{t('Loading…')}</p>{/if}
+						{#if messages.loading}<p role="status" aria-busy="true" class="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Spinner class="size-3" />{t('Loading…')}</p>{/if}
 					{:else if log.rows.length === 0}
 						<p class="text-xs text-muted-foreground">{t('No messages on this instance yet.')}</p>
 					{:else}
@@ -719,7 +721,9 @@
 				/>
 			{/snippet}
 			{#await setup_module}
-				<p role="status" class="text-sm text-muted-foreground">{t('Loading…')}</p>
+				<div role="status" aria-busy="true" aria-label={t('Loading…')}>
+					<TableSkeleton />
+				</div>
 			{:then module}
 				{#if module?.configuration_tab !== undefined}
 					{#snippet extraTab()}<module.default ctx={page_context(bolt, ctx.ui)} />{/snippet}

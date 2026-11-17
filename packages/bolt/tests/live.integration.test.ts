@@ -849,3 +849,107 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 		);
 	}
 );
+
+const autoManifest: EngineManifest = {
+	...manifest,
+	teams: { finance: { name: 'Finance', policies: [] } },
+	policies: {
+		...manifest.policies,
+		rep: {
+			...rep,
+			capabilities: { automations: ['extract'] },
+			grants: {
+				...rep.grants,
+				orders: { ...repOrders, create: {}, update: { verdict: true }, delete: {} }
+			}
+		},
+		worker: {
+			description: 'Automation worker',
+			grants: {
+				orders: { outputs: { default: {} }, update: { verdict: true } }
+			}
+		}
+	},
+	automations: {
+		extract: {
+			description: 'Background update to an order',
+			input: { target: { kind: 'rows', of: 'orders' } },
+			policies: ['worker']
+		}
+	}
+};
+const autoGuest = `const updateVerdict = function* (changes, ctx) {
+	return changes.some(({ after }) => after.title === 'held-by-run')
+		? ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] })
+		: ctx.allow();
+};
+export default {
+	policy: {
+		rep: { grants: { orders: { update: { verdict: updateVerdict } } } },
+		worker: { grants: { orders: { update: { verdict: updateVerdict } } } }
+	},
+	automation: {
+		extract: {
+			body: function* ({ target }, ctx) {
+				for (const row of target) {
+					yield* ctx.act({ 'orders.update': [{ target: row, set: { title: 'held-by-run' } }] });
+				}
+			}
+		}
+	}
+};`;
+
+layer(Layer.effect(Cell, cellOf(autoManifest, autoGuest)), { excludeTestServices: true })(
+	'background automation live patches on PGlite',
+	(it) => {
+		it.effect('a by_id live query receives an automation update held for approval without re-reading', () =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, rep, client } = yield* cell;
+					const { bolt } = yield* client;
+					const created = yield* bolt.act({
+						'orders.create': [{ title: 'uploaded', region: 'north', customer: ACME }]
+					});
+					expect(created.kind).toBe('committed');
+					if (created.kind !== 'committed') return;
+					const id = present(created.records[0]).id;
+					const q = yield* Queue.unbounded<Record<string, unknown>>();
+					yield* bolt
+						.observe(
+							{ read: { m: 'query', a: [{ orders: { where: { id: { eq: id } }, limit: 1 } }] } },
+							Schema.Unknown
+						)
+						.pipe(
+							Stream.runForEach((answer) =>
+								Effect.gen(function* () {
+									const row = Predicate.hasProperty(answer, 'orders') &&
+										Predicate.isObject(answer.orders) &&
+										Array.isArray(answer.orders.rows)
+										? answer.orders.rows[0]
+										: undefined;
+									if (Predicate.isObject(row)) yield* Queue.offer(q, row);
+								})
+							),
+							Effect.forkScoped
+						);
+					expect(yield* Queue.take(q)).toMatchObject({ id, title: 'uploaded' });
+					const caller = yield* t.as(rep);
+					const runName: string = 'extract';
+					yield* caller.run(runName, { target: [id] }, Schema.Unknown);
+					expect((yield* t.run_due()).failed).toEqual([]);
+					let latest = yield* Queue.take(q);
+					while (latest['title'] !== 'held-by-run') latest = yield* Queue.take(q);
+					expect(latest).toMatchObject({
+						id,
+						title: 'held-by-run',
+						$approval: {
+							state: 'Pending',
+							step: 0,
+							steps: [{ name: 'Finance', teams: ['finance'], users: [] }]
+						}
+					});
+				})
+			)
+		);
+	}
+);

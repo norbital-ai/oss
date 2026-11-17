@@ -31,12 +31,15 @@ revision returns to the live record.
 		history,
 		config = {},
 		approvals = [],
+		pending_approval = false,
 		onload,
 		onpick
 	}: {
 		ctx: UiContext;
 		/** The record's approval requests: their decisions join the timeline (a request for changes writes no revision). */
 		approvals?: readonly ApprovalView[];
+		/** Whether an open approval request is awaiting action on this record. */
+		pending_approval?: boolean;
 		of: string;
 		config?: RecordHistoryConfig;
 		/** The live record's revision. */
@@ -78,6 +81,16 @@ revision returns to the live record.
 	const actorKey = (actor: NonNullable<Checkpoint['actor']>) => `${actor.kind}:${actor.id}`;
 	// who wrote a revision: a member by name when this caller may read them, else what kind of actor it was
 	const names = new Map<string, string>();
+	const approvalNames = $derived.by(() => {
+		const out = new Map<string, string>();
+		for (const request of approvals) {
+			if (request.requestor.name) out.set(request.requestor.ref, request.requestor.name);
+			for (const entry of request.log) {
+				if (entry.by.name) out.set(entry.by.ref, entry.by.name);
+			}
+		}
+		return out;
+	});
 	function who(actor: Checkpoint['actor']): Effect.Effect<string> {
 		if (actor === null) return Effect.succeed(msg(bolt, 'record.actor.unknown'));
 		if (actor.kind !== 'member')
@@ -94,7 +107,7 @@ revision returns to the live record.
 								: 'Visitor'
 				)
 			);
-		const known = names.get(actor.id);
+		const known = names.get(actor.id) ?? approvalNames.get(actorKey(actor));
 		return known !== undefined
 			? Effect.succeed(known)
 			: bolt.query(by_id('sys_user', actor.id)).pipe(
@@ -248,23 +261,70 @@ revision returns to the live record.
 	const decisions = $derived(
 		approvals
 			.flatMap((request) =>
-				request.log.flatMap((e, i): Decision[] =>
-					DECIDED.has(e.move)
-						? [
-								{
-									key: `${request.id}:${i}`,
-									at: e.at,
-									action: e.move,
-									line: [moveText(bolt, e.move), e.by.name ?? e.by.ref.replace(/^[a-z]+:/i, ''), stamp(e.at)],
-									quote: e.reason,
-									data: { 'data-history-decision': `${request.id}:${i}` }
-								}
-							]
-						: []
-				)
+				request.log.flatMap((e, i): Decision[] => {
+					if (!DECIDED.has(e.move)) return [];
+					const stepName = request.steps[e.step]?.name;
+					return [
+						{
+							key: `${request.id}:${i}`,
+							at: e.at,
+							action: e.move,
+							line: [
+								moveText(bolt, e.move),
+								e.by.name ?? e.by.ref.replace(/^[a-z]+:/i, ''),
+								stamp(e.at),
+								...(stepName === undefined ? [] : [stepName])
+							],
+							quote: e.reason,
+							data: { 'data-history-decision': `${request.id}:${i}` }
+						}
+					];
+				})
 			)
 			.sort((a, b) => b.at.localeCompare(a.at))
 	);
+	/** Open approval steps from furthest future down to the active step, woven above the current revision. */
+	const futureSteps = $derived.by((): readonly TimelineEntry[] => {
+		const openRequest = approvals.find(
+			(r) => r.status === 'Pending' || r.status === 'ChangesRequested'
+		);
+		if (openRequest === undefined) return [];
+		const out: TimelineEntry[] = [];
+		for (let i = openRequest.steps.length - 1; i >= openRequest.step; i--) {
+			const step = openRequest.steps[i];
+			if (step === undefined) continue;
+			const current = i === openRequest.step;
+			const status = current
+				? openRequest.status === 'ChangesRequested'
+					? 'changes'
+					: 'active'
+				: 'future';
+			const look =
+				status === 'changes'
+					? catalogText(bolt, 'approval.look.changes', 'Changes requested')
+					: status === 'active'
+						? catalogText(bolt, 'approval.look.active', 'Waiting')
+						: catalogText(bolt, 'approval.look.later', 'Later');
+			const assignees = [
+				...step.teams.map((id) => openRequest.team_names[id] ?? id),
+				...step.users.map((id) => openRequest.user_names[id] ?? id)
+			];
+			out.push({
+				key: `step:${openRequest.id}:${i}`,
+				action: status === 'changes' ? 'request_changes' : 'step',
+				status,
+				line: [step.name, look],
+				...(assignees.length > 0
+					? { notes: [{ kind: 'assignees', text: assignees.join(', ') }] }
+					: {}),
+				data: {
+					'data-history-step': i,
+					'data-look': status === 'changes' ? 'changes' : status === 'active' ? 'active' : 'later'
+				}
+			});
+		}
+		return out;
+	});
 	/** One revision as a timeline entry: what it did · who · when, its fields and request state quietly below. */
 	function revisionEntry(event: Event, names: ReadonlyMap<string, string>): TimelineEntry {
 		const c = event.checkpoint;
@@ -314,7 +374,7 @@ revision returns to the live record.
 			}
 			out.push(revisionEntry(event, result.names));
 		}
-		return [...out, ...decisions.slice(next)];
+		return [...futureSteps, ...out, ...decisions.slice(next)];
 	};
 	const pick = (event: Event) =>
 		onpick(
@@ -333,7 +393,7 @@ revision returns to the live record.
 	}}
 >
 	<Popover.Trigger
-		class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 grid size-8 max-sm:size-11 shrink-0 place-items-center rounded-md outline-none focus-visible:ring-2"
+		class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 relative grid size-8 max-sm:size-11 shrink-0 place-items-center rounded-md outline-none focus-visible:ring-2"
 		aria-label={msg(bolt, 'record.history')}
 		title={msg(bolt, 'record.revisionOf', {
 			n: viewing ?? latest,
@@ -342,6 +402,10 @@ revision returns to the live record.
 		data-timeline-trigger
 	>
 		<Glyph name="history" class="size-4" />
+		{#if pending_approval}<span
+				class="bg-brand ring-popover absolute top-1.5 right-1.5 size-1.5 rounded-full ring-2"
+				aria-hidden="true"
+			></span>{/if}
 	</Popover.Trigger>
 	<Popover.Content
 		align="end"

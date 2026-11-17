@@ -21,11 +21,7 @@ reason and confirm.
 </script>
 
 <script lang="ts">
-	import { Effect } from 'effect';
-	import { fork } from '../effect/index.js';
-	import { actOutcome, outcomeText } from '../actions/outcome.js';
-	import { Button } from '../primitives/button/index.js';
-	import Textarea from '../primitives/textarea/textarea.svelte';
+	import ApprovalControls from './ApprovalControls.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
 	import { format } from '../kinds/kind.js';
@@ -41,7 +37,6 @@ reason and confirm.
 	const kinds = $derived(ctx.ui.kinds);
 	const ids = $props.id();
 	type Entry = ApprovalView['log'][number];
-	type Move = ApprovalView['moves'][number];
 	type Look = 'done' | 'active' | 'changes' | 'rejected' | 'withdrawn' | 'later';
 	type Node = {
 		key: string;
@@ -79,12 +74,6 @@ reason and confirm.
 			null
 	);
 
-	const DECISION_TEXT: Readonly<Record<Move['decision'], string>> = {
-		approve: 'Approve',
-		reject: 'Reject',
-		request_changes: 'Request changes',
-		withdraw: 'Withdraw'
-	};
 	const LOOK_TEXT: Readonly<Record<Look, string>> = {
 		done: 'Done',
 		active: 'Waiting',
@@ -94,8 +83,6 @@ reason and confirm.
 		later: 'Later'
 	};
 	const lookText = (look: Look) => catalogText(bolt, `approval.look.${look}`, LOOK_TEXT[look]);
-	const decisionText = (d: Move['decision']) =>
-		catalogText(bolt, `approval.decision.${d}`, DECISION_TEXT[d]);
 
 	function nodes(v: ApprovalView): Node[] {
 		const request = v.log.find((e) => e.move === 'request');
@@ -150,10 +137,6 @@ reason and confirm.
 	};
 	const glyph = (look: Look): GlyphName | null =>
 		look === 'done' ? 'check' : look === 'changes' ? 'alert' : look === 'rejected' ? 'x' : null;
-	const DECISIONS = ['approve', 'reject', 'request_changes', 'withdraw'] as const;
-	/** The viewer's decisions in the form's order: Approve, Reject, Request changes, Withdraw. */
-	const decisions = (v: ApprovalView) =>
-		DECISIONS.flatMap((d) => v.moves.filter((m) => m.decision === d));
 	const changedText = (v: ApprovalView, e: Entry) =>
 		(e.changed ?? []).map((f) => label(bolt, v.model, f)).join(', ');
 	/** One move as a timeline entry: what · who · when, its reason quoted, what it changed or rolled back below. */
@@ -189,54 +172,11 @@ reason and confirm.
 	// the node whose popover is open: hover, keyboard focus or a tap opens it, Escape or leaving it closes it
 	let shown = $state<string | null>(null);
 	let pointing = false;
-
-	// the form: step 1 picks the decision, step 2 takes the reason and repeats the decision on its confirm
-	let chosen = $state<{ request: string; move: Move } | null>(null);
-	let reason = $state('');
-	let busy = $state(false);
-	// a decision's answer; a failed one is an alert and leaves the form as it was, to try again
-	let notice = $state<{ text: string; failed: boolean } | null>(null);
-	function decide(v: ApprovalView, move: Move) {
-		if (busy || (move.reason === 'required' && reason.trim() === '')) return;
-		busy = true;
-		const note = reason.trim();
-		fork(
-			actOutcome(
-				bolt.approvals.decide(v.id, {
-					decision: move.decision,
-					...(note === '' ? {} : { reason: note })
-				})
-			).pipe(
-				Effect.tap((outcome) =>
-					Effect.sync(() => {
-						notice = {
-							text: outcomeText(bolt, outcome),
-							failed: outcome.kind !== 'committed' && outcome.kind !== 'pending_approval' && outcome.kind !== 'running'
-						};
-						if (outcome.kind === 'committed') {
-							reason = '';
-							chosen = null;
-						}
-						on_outcome?.(outcome);
-					})
-				),
-				Effect.ensuring(
-					Effect.sync(() => {
-						busy = false;
-					})
-				)
-			),
-			(error) => {
-				notice = { text: bolt.t(error.message), failed: true };
-			}
-		);
-	}
 </script>
 
 
 {#if current !== null}
 	{@const v = current}
-	{@const decision = chosen !== null && chosen.request === v.id ? chosen.move : null}
 	{@const steps = nodes(v)}
 	<div class="flex flex-col gap-4 text-sm" data-view="approval" data-status={v.status}>
 		{#if requests.length > 1}
@@ -250,7 +190,6 @@ reason and confirm.
 					value={v.id}
 					onchange={(e) => {
 						picked = e.currentTarget.value;
-						notice = null;
 					}}
 					data-view="approval-scope"
 				>
@@ -364,73 +303,6 @@ reason and confirm.
 				{msg(bolt, 'approval.resubmitOnSave')}
 			</p>{/if}
 
-		{#if v.moves.length > 0}
-			<div class="flex flex-col gap-2" data-view="approval-controls">
-				{#if decision === null}
-					<div class="flex flex-wrap gap-2">
-						{#each decisions(v) as move (move.decision)}
-							<Button
-								variant={move.decision === 'approve' ? 'default' : 'outline'}
-								class={move.decision === 'reject' ? 'text-destructive' : undefined}
-								disabled={busy}
-								data-decision={move.decision}
-								onclick={() => {
-									chosen = { request: v.id, move };
-									reason = '';
-									notice = null;
-								}}>{decisionText(move.decision)}</Button
-							>
-						{/each}
-					</div>
-				{:else}
-					<form
-						class="flex flex-col gap-2"
-						data-decision={decision.decision}
-						onsubmit={(e) => {
-							e.preventDefault();
-							decide(v, decision);
-						}}
-					>
-						<label for={`${ids}-reason`} class="text-label"
-							>{decisionText(decision.decision)} · {decision.reason === 'required'
-								? msg(bolt, 'approval.reasonRequired')
-								: msg(bolt, 'approval.reasonOptional')}</label
-						>
-						<Textarea
-							id={`${ids}-reason`}
-							rows={3}
-							required={decision.reason === 'required'}
-							disabled={busy}
-							bind:value={reason}
-						/>
-						<div class="flex flex-wrap justify-between gap-2">
-							<Button
-								type="button"
-								variant="ghost"
-								disabled={busy}
-								data-back
-								onclick={() => {
-									chosen = null;
-								}}>{msg(bolt, 'approval.back')}</Button
-							>
-							<Button
-								type="submit"
-								variant={decision.decision === 'reject' ? 'destructive' : 'default'}
-								disabled={busy || (decision.reason === 'required' && reason.trim() === '')}
-								data-confirm>{decisionText(decision.decision)}</Button
-							>
-						</div>
-					</form>
-				{/if}
-			</div>
-		{/if}
-
-		{#if notice}<p
-				role={notice.failed ? 'alert' : 'status'}
-				class={notice.failed ? 'text-destructive' : 'text-muted-foreground'}
-				data-view="approval-notice"
-			>
-				{notice.text}
-			</p>{/if}
+		<ApprovalControls {ctx} request={v} {on_outcome} />
 	</div>
 {/if}
