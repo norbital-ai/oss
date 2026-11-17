@@ -83,3 +83,7 @@ The outline names things, not bodies or live rows, and names the whole workspace
 - An envoy and its channel instance are distinct records: configure the envoy, select its instance, then open pairing.
 - A new MCP or integration definition is a source change through Studio.
 - Never collect a secret or API key through tool arguments, chat or source. Native forms send values to the sealed store. Bodies read `Config.Redacted(name)`; clients and discovery see names and status only.
+
+## Personal appearance and settings
+
+For “I want dark mode”, use `page { preferences: { appearance: "dark" } }` (also `light` or `system`). Read the current choice with `page { preferences: {} }`. This is the active person's browser preference, applied through the same native control as the account menu. Wait for the page result before claiming success. Do not inspect source, open an automated browser, or change the workspace palette for a personal preference. The `settings` tool reads/changes the person's name and lets an administrator rename the workspace. Administrator configuration forms come from the native system catalogue above; credentials remain private inputs.

@@ -374,8 +374,8 @@ it.effect('Chart reads aggregate rows', () =>
 
 it.effect('run progress and returned files', () =>
 	Effect.sync(() => {
-		assert.equal(progressOf({ progress: { done: 1, total: 4 } }), 0.25);
-		assert.equal(progressOf({ progress: 50 }), 0.5);
+		assert.equal(progressOf({ progress: { ratio: 0.25, text: 'Reading evidence' } }), 0.25);
+		assert.equal(progressOf({ progress: { ratio: 2 } }), null);
 		assert.equal(progressOf({}), null);
 		const f = { id: 'f1', name: 'bank.csv', mime: 'text/csv' };
 		assert.deepEqual(runFiles({ result: { files: [f], count: 1 } }), [f]);

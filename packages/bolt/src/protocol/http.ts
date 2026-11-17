@@ -940,7 +940,7 @@ export const BoltRoutes = {
 			}
 			if ('callable' in body) {
 				const generated = parse_callable(body.callable, yield* Manifest);
-				if (Result.isSuccess(generated) && generated.success._tag === 'Verb')
+				if ((yield* AgentCallTable)[body.callable] === undefined && Result.isSuccess(generated) && generated.success._tag === 'Verb')
 					return yield* Effect.fail(invalid('Generated writes take a map of callable to inputs.'));
 			}
 			const retry = header(request, HEADERS.retry) === '1';

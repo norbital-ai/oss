@@ -15,6 +15,7 @@
 	} from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import ReadTable from './ReadTable.svelte';
+	import ActInput from './ActInput.svelte';
 	import { languageOf, readChips, readsOf, stepArgs, type StepView } from './view.ts';
 
 	let {
@@ -122,15 +123,7 @@
 				>
 			</div>
 		{/if}
-		{#each Object.entries(acts) as [callable, value] (callable)}
-			{#if Array.isArray(value)}
-				<div class="max-h-56 overflow-auto rounded-md">
-					<ReadTable {ctx} value={{ [callable]: value }} {t} />
-				</div>
-			{:else}
-				{@render data_(value, callable)}
-			{/if}
-		{/each}
+		<ActInput {ctx} input={json(input)} {t} />
 	</div>
 {:else if tool.name === 'browser'}
 	{@const url = text(out['url']) || text(input['url'])}

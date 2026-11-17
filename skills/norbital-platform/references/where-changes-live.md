@@ -32,6 +32,8 @@ A setting's name does not say which side it belongs on: inspect the declaration 
 | Allowed chat models and monthly AI budgets | administrator Settings → Organization (`sys_config`) |
 | Supported formulas, rates, catalogue variants, extraction schema, report templates | business configuration models; source defines language and guards |
 | Secret values | Settings, sealed per tenant |
+| Personal light/dark/system appearance | `page { preferences }`, the active browser's native account preference; no source change |
+| Personal display name; workspace display name | `settings { name }`; `settings { workspace_name }` for administrators |
 | Personal skills | Colony personal-skill tools, private per tenant and person, never release input |
 
 ## Never

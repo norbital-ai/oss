@@ -4,7 +4,7 @@
 import { fork, run } from '@norbital-ai/ui/effect';
 import { confirm_action } from '@norbital-ai/ui';
 import { Effect } from 'effect';
-import type { PageResult } from '../../protocol/schema.ts';
+import type { PageAction, PageResult } from '../../protocol/schema.ts';
 import type { ShellApi } from '../api-types.ts';
 import type { ClientPageAction } from './navigation.ts';
 import { logical } from '../nav.ts';
@@ -166,12 +166,13 @@ export function fillField(field: HTMLElement, value: string, submit: boolean): v
 }
 
 /** The active tab's page-action dispatcher; the shell supplies current eligibility and navigation. */
-export function clientPageAction({ api, eligible, navigate, open_external, closePanel, t }: {
+export function clientPageAction({ api, eligible, navigate, open_external, closePanel, preferences, t }: {
 	api: Pick<ShellApi['agent'], 'page_result' | 'claim_page_action'>;
 	eligible(): boolean;
 	navigate(href: string): void;
 	open_external(href: string): void;
 	closePanel(): void;
+	preferences(input: NonNullable<PageAction['preferences']>): NonNullable<PageResult['preferences']>;
 	t(key: string): string;
 }): ClientPageAction {
 	/** The active tab's claim on a page action: the server lets exactly one tab own it, across windows and devices. */
@@ -192,6 +193,10 @@ export function clientPageAction({ api, eligible, navigate, open_external, close
 			// a hidden or ineligible tab stays silent: a second tab must never overwrite the acting tab's result
 			if (!eligible()) return;
 			const act = () => {
+				if (action.preferences !== undefined) {
+					ack({ ok: true, preferences: preferences(action.preferences) });
+					return;
+				}
 				if (action.highlight !== undefined) {
 					const target = pageMark(action.highlight);
 					if (target === null) {

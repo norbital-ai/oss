@@ -25,7 +25,7 @@ The live status of one automation run: queued, running with its progress, waitin
 	import { bolt_of } from '../client/context.js';
 	import { watch } from '../read/live.svelte.js';
 	import { humanize, msg, catalogText } from '../text/messages.js';
-	import { progressOf, runFiles } from './facts.js';
+	import { progressOf, progressText, runFiles } from './facts.js';
 	import { format } from '../kinds/kind.js';
 	import ReadGate from '../read/ReadGate.svelte';
 
@@ -70,6 +70,7 @@ The live status of one automation run: queued, running with its progress, waitin
 				</p>
 			{:else}
 				{@const p = progressOf(r)}
+				{@const stage = progressText(r)}
 				<div class="flex flex-col gap-1 text-sm" data-run={r.id} data-status={r.status}>
 					<div class="flex items-center gap-2">
 						<span class="font-medium"
@@ -97,6 +98,7 @@ The live status of one automation run: queued, running with its progress, waitin
 						</p>{/if}
 					{#if p !== null && r.status === 'running'}<progress class="h-1 w-full" max="1" value={p}
 						></progress>{/if}
+					{#if stage}<p class="text-muted-foreground text-xs" role="status">{stage}</p>{/if}
 					{#if r.error}<p role="alert" class="text-destructive text-xs">
 							{r.error.message ?? r.error.code}
 						</p>{/if}

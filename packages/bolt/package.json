@@ -1,7 +1,7 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.14",
-	"description": "Bolt: the business OS framework \u2014 declarations, page SDK, protocol and the engine hosts run.",
+	"version": "0.0.15",
+	"description": "Bolt: the business OS framework — declarations, page SDK, protocol and the engine hosts run.",
 	"type": "module",
 	"sideEffects": [
 		"**/*.css"

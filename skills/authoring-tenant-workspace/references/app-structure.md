@@ -113,3 +113,5 @@ Name the decision, scope, units and range first. Use a table, status or total if
 `<Chart {ctx} of="<model>" x="<field>" y="…" where={…} />` aggregates every bucket of `x` itself; `y` names measures (`count`, `sum.amount`, `avg.<field>`), never a bare field. Over `bolt.aggregate(...)` or rows, `y` names the flattened bucket keys the same way.
 
 Give each titled form section a meaningful `icon` (an existing Iconify id such as `lucide:calendar-days` for dates). Use the same icon for the same concern throughout the workspace. Untitled field flow does not need a decorative section.
+
+Automation feedback uses the native run handle: show admission immediately, follow it with `RunStatus`, and keep a record's `RunsFor` history accessible after reopening. Long automations report their actual stages through `ctx.progress({ text, ratio? })`; `ratio` is a 0–1 fraction only when measurable. Put progress in the record body or footer, not beside its heading controls.

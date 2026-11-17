@@ -2,13 +2,14 @@
 // pages' switch writes. The page document applies it before paint (bolt-cli's `compiler/artifact/client.ts`); the shell re-applies
 // it on a change of choice or of the system preference. Absent means `system`, the theme default.
 import { Effect, Schema } from 'effect';
+import { APPEARANCES, Appearance } from '../protocol/schema.ts';
 
 class ThemeStorageFailed extends Schema.TaggedError<ThemeStorageFailed>()(
 	'ThemeStorageFailed',
 	{}
 ) {}
 
-export const THEMES = ['light', 'dark', 'system'] as const;
+export const THEMES = APPEARANCES;
 export type Theme = (typeof THEMES)[number];
 const KEY = 'bolt.theme';
 
@@ -17,7 +18,7 @@ export const storedTheme: Effect.Effect<Theme> = Effect.try({
 	try: () => localStorage.getItem(KEY),
 	catch: () => new ThemeStorageFailed()
 }).pipe(
-	Effect.flatMap((value) => Schema.decodeUnknownEffect(Schema.Literals(THEMES))(value)),
+	Effect.flatMap((value) => Schema.decodeUnknownEffect(Appearance)(value)),
 	Effect.catch(() => Effect.succeed('system' as const))
 );
 /** Remembers the choice; a denied storage write does not prevent this load switching. */

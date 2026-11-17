@@ -760,6 +760,10 @@
 		navigate,
 		open_external: (href) => fork(open_external(device, href)),
 		closePanel: () => agent.close(),
+		preferences: (input) => {
+			if (input.appearance !== undefined) chooseTheme(input.appearance);
+			return { appearance: theme, effective: theme === 'dark' || (theme === 'system' && systemDark.current) ? 'dark' : 'light' };
+		},
 		t
 	}));
 </script>

@@ -391,14 +391,15 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	workspace_try: () => ({ icon: 'lucide:play', verb: 'Tried it on the preview', target: '' }),
 	channel_check: () => ({ icon: 'lucide:radio-tower', verb: 'Checked the connection', target: '' }),
 	page: (a) => ({
-		icon: typeof a['path'] === 'string' ? 'lucide:arrow-up-right' : 'lucide:mouse-pointer-click',
+		icon: a['preferences'] !== undefined ? 'lucide:palette' : typeof a['path'] === 'string' ? 'lucide:arrow-up-right' : 'lucide:mouse-pointer-click',
 		verb:
-			typeof a['path'] === 'string'
+			a['preferences'] !== undefined ? 'Changed appearance' : typeof a['path'] === 'string'
 				? 'Opened a page'
 				: typeof a['highlight'] === 'string'
 					? 'Pointed at'
 					: 'Used your page',
 		target:
+			str(obj(a['preferences'])['appearance']) ||
 			str(a['path']) ||
 			str(a['click']) ||
 			str(a['highlight']) ||

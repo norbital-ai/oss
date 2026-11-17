@@ -16,6 +16,7 @@
 	import Steps from './Steps.svelte';
 	import StudioApproval from './StudioApproval.svelte';
 	import ConnectCard from './ConnectCard.svelte';
+	import ActInput from './ActInput.svelte';
 	import Question from './Question.svelte';
 	import Attachments from './Attachments.svelte';
 	import Decisions from './Decisions.svelte';
@@ -762,12 +763,14 @@
 										<p class="text-sm font-medium text-foreground">
 											{t('Allow Norbius to do this?')}
 										</p>
-										<details open class="mt-1 text-xs text-muted-foreground">
+										{#if call.name === 'act'}
+											<div class="mt-2"><ActInput {ctx} input={call.input} {t} /></div>
+										{:else}<details class="mt-1 text-xs text-muted-foreground">
 											<summary class="cursor-pointer">{t('Details')}</summary>
 											<div class="mt-1 max-h-48 min-w-0 overflow-auto">
 												<StructuredData {ctx} value={call.input} name={t('Input')} />
 											</div>
-										</details>
+										</details>{/if}
 										<Inline gap="xs" class="mt-2" align="center">
 											{#if row.state === 'confirm'}<Button
 													disabled={busy}

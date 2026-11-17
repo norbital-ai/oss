@@ -21,7 +21,7 @@ The agent edits source as a line of commits on top of live, reviewed on a copy o
 
 - Live changes only through `workspace_merge` and `workspace_rollback`. Each becomes an approval the person grants. Give `summary` in the person's words.
 - A merge joins the queue: on its turn it replays on live, runs any diagnosis or tests its head lacks and switches live over; a failure leaves live untouched. Its `ledger` has a line per capability: what implements it, or `skip: reason`.
-- `workspace_revert` drops a commit and those after it, source only: the preview's database branch keeps its data. Reverted commits cannot be brought back. Commit ids are in `workspace_review`.
+- `workspace_revert` drops a commit and those after it. A partial revert keeps the preview database; reverting the whole change line removes its preview and data, leaving live untouched. Reverted commits cannot be brought back. Commit ids are in `workspace_review`.
 - `workspace_rollback` rolls live back to a Version, source and data together; only live rolls data back. List Versions with `workspace_review` and offer them by label. A schema change discards newer data and needs the exact `discard_data_since` instant named by the native preview.
 - Never copy live by hand. Source tools expose no shell or Git.
 - Inspect tasks at normal and narrow widths through the browser when offered. Say what ran; building is not visual proof.

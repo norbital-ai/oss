@@ -2,18 +2,15 @@ import type { FileRef } from '@norbital-ai/store/kind';
 import type { RunRow } from '../client/contract.js';
 import { Predicate } from 'effect';
 import { filesOf } from '../cell/value.js';
-/** Progress as a 0–1 fraction when the run reports `{ done, total }` or a number. */
+/** The native `ctx.progress({ ratio, text })` payload's fraction. */
 export function progressOf(run: Pick<RunRow, 'progress'>): number | null {
 	const p = run.progress;
-	if (typeof p === 'number') return p > 1 ? p / 100 : p;
-	if (
-		Predicate.isObject(p) &&
-		typeof p['done'] === 'number' &&
-		typeof p['total'] === 'number' &&
-		p['total'] > 0
-	)
-		return p['done'] / p['total'];
-	return null;
+	return Predicate.isObject(p) && typeof p['ratio'] === 'number' && Number.isFinite(p['ratio']) && p['ratio'] >= 0 && p['ratio'] <= 1 ? p['ratio'] : null;
+}
+/** The native run's current stage, without inventing a percentage for work that reports only text. */
+export function progressText(run: Pick<RunRow, 'progress'>): string | null {
+	const p = run.progress;
+	return Predicate.isObject(p) && typeof p['text'] === 'string' ? p['text'] : null;
 }
 /** The files a run returned: its output's `FileRef`s, at the top or one level in. */
 export const runFiles = (run: Pick<RunRow, 'result'>): readonly FileRef[] =>

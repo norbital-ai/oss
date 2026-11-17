@@ -12,6 +12,28 @@ import type { WireRead } from '../src/protocol/schema.ts';
 const count_read: WireRead = { m: 'query', a: [{ jobs: { aggregate: { count: true } } }] };
 const Count = Schema.Struct({ jobs: Schema.Struct({ count: Schema.Number }) });
 
+it.effect('a dropped read connection retries; a lost mutation response never replays the action', () =>
+	Effect.gen(function* () {
+		const attempts = new Map<string, number>();
+		const transport = browserTransport({
+			base: 'https://workspace.test',
+			fetch: async (input) => {
+				const url = input instanceof Request ? input.url : String(input);
+				const count = (attempts.get(url) ?? 0) + 1;
+				attempts.set(url, count);
+				if (count < 3) throw new TypeError('connection lost');
+				return Response.json({ answers: [] });
+			}
+		});
+		const read = yield* transport.request('POST', '/__bolt/q', { reads: [] }).pipe(Effect.forkScoped);
+		yield* TestClock.adjust('2 seconds');
+		expect((yield* Fiber.join(read)).status).toBe(200);
+		expect(attempts.get('https://workspace.test/__bolt/q')).toBe(3);
+		expect((yield* Effect.result(transport.request('POST', '/__bolt/act', {})))._tag).toBe('Failure');
+		expect(attempts.get('https://workspace.test/__bolt/act')).toBe(1);
+	})
+);
+
 it.effect('a fake HttpClient sees the act contract/key headers and reads revive decimals', () =>
 	Effect.gen(function* () {
 		const requests: Parameters<HttpClient.HttpClient['execute']>[0][] = [];

@@ -23,6 +23,7 @@ export type { SourceColumns, SourceRow, ViewSource } from './model/types.js';
 /** An approval request: its timeline of steps and the decisions the host allows the viewer. */
 export { default as ApprovalPanel } from './approval/ApprovalPanel.svelte';
 export { default as RunStatus } from './runs/RunStatus.svelte';
+export { progressOf, progressText } from './runs/facts.js';
 export type { Col, ColumnsIn, RowIn, TableProps } from './table/Table.svelte';
 // The parts the built-in views are assembled from, for a page composing its own.
 /** A paged view's page size, previous and next, and "Page X of Y". */

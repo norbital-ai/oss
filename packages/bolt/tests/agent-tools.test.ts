@@ -1767,6 +1767,7 @@ it.effect(
 		Effect.gen(function* () {
 			const x = yield* ctx();
 			// the setup answers as text, like every describe answer
+			expect((yield* catalogue(x)).index['page:paths']).toContain('/settings/integrations');
 			expect(yield* result(x, 'describe_workspace', { names: ['system'] })).toEqual({
 				result: expect.stringContaining('envoys: []')
 			});
@@ -1788,6 +1789,13 @@ it.effect(
 				})
 			).toMatchObject({ result: { error: expect.any(String) } });
 			const ordinary = yield* ctx({ authority: member() });
+			expect((yield* catalogue(ordinary)).index['page:paths']).not.toContain('/settings');
+			expect(yield* result(ordinary, 'page', { preferences: { appearance: 'dark' } })).toEqual({
+				result: { page: { preferences: { appearance: 'dark' } }, requested: true }
+			});
+			expect(yield* result(ordinary, 'page', { preferences: { appearance: 'dark' }, path: '/' })).toMatchObject({
+				result: { error: expect.any(String) }
+			});
 			expect(yield* result(ordinary, 'describe_workspace', { names: ['system'] })).toEqual({
 				result: 'system: nothing you may set up.'
 			});

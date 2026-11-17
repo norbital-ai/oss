@@ -11,6 +11,8 @@
 	import { Effect, Stream } from 'effect';
 	import {
 		automation_outcome,
+		progressOf,
+		progressText,
 		Badge,
 		Button,
 		Combobox,
@@ -214,6 +216,8 @@
 </script>
 
 {#snippet status({ row }: { row: RunRow; value: unknown })}
+	{@const ratio = progressOf(row)}
+	{@const stage = progressText(row)}
 	<span class="flex min-w-0 items-center gap-2" data-status={row.status}>
 		<span
 			class={row.status === 'failed'
@@ -222,11 +226,12 @@
 					? 'text-foreground'
 					: 'text-muted-foreground'}>{words(row.status)}</span
 		>
-		{#if row.status === 'running' && typeof row.progress === 'number'}<progress
+		{#if row.status === 'running' && ratio !== null}<progress
 				class="h-1 w-16"
 				max="1"
-				value={row.progress}
+				value={ratio}
 			></progress>{/if}
+		{#if stage}<span class="truncate text-xs text-muted-foreground" title={stage}>{stage}</span>{/if}
 		{#if row.status === 'waiting'}<span class="truncate text-xs text-muted-foreground"
 				>{Number.isNaN(Date.parse(row.due_at)) ? t('until an event') : t('until {at}').replace('{at}', when(row.due_at))}</span
 			>{/if}

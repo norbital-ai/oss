@@ -75,6 +75,7 @@ import { type Authority, type Bindings, type Outcome } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { SYSTEM_UI, SystemUiRequest, systemUiPath } from '../../protocol/system-ui.ts';
 import type { AgentQuestion } from '../../protocol/schema.ts';
+import { PageAction } from '../../protocol/schema.ts';
 import { exposed, outputsOf, readsAny, actorVarsOf, writable_columns } from '../access/authority.ts';
 import {
 	LayerRequestSchema,
@@ -511,7 +512,7 @@ const LINE_CHARS = 2000,
 const PACKAGES = ': installed packages are outside the workspace: workspace_lang reads their types.';
 /** What a source tool answers for a path outside the source: installed packages, or what the build writes from it. */
 const outsideSource = (asked: string, path: string): string | undefined =>
-	path === 'node_modules' || path.startsWith('node_modules/')
+	path.split('/').includes('node_modules')
 		? `${asked}${PACKAGES}`
 		: path === '.norbital' || path.startsWith('.norbital/')
 			? `${asked}: the build writes .norbital from your source (a model's binding from its +model.ts) and it is never read: workspace_lang reads its types.`
@@ -2170,6 +2171,7 @@ const SECTIONS = [
 	['skill:', 'Skills (skill reads one)'],
 	['model:', 'Models (fields; reads and writes beyond the default)'],
 	['native:', 'Native operations'],
+	['page:', 'Pages (page { path }, exact paths)'],
 	['automation:', 'Automations (run { automation, input })'],
 	['sync:', 'Syncs (sync)'],
 	['tool:', 'Tools (run_tool { name, input })']
@@ -2378,7 +2380,12 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		const allowed = navigation_paths(nav(e.manifest, a), a.admin);
 		add(
 			pageTool,
-			function* ({ path, configure: asked, click, type, scroll, go, highlight, preview }) {
+			function* ({ path, configure: asked, click, type, scroll, go, highlight, preview, preferences }) {
+				if (preferences !== undefined) {
+					if ([path, asked, click, type, scroll, go, highlight, preview].some((v) => v !== undefined))
+						return err('Use preferences by itself; it reads or changes only this person’s browser preference.');
+					return ok({ page: { preferences }, requested: true });
+				}
 				if (preview !== undefined)
 				return /^https?:\/\//.test(preview) && URL.canParse(preview)
 					? ok({ preview })
@@ -3458,6 +3465,8 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			);
 		add(grepSource, function* (i) {
 			const within = sourcePath(i.path ?? '');
+			const outside = outsideSource(i.path ?? '', within);
+			if (outside !== undefined) return err(outside);
 			// ripgrep over an administrator's checkout; a member reads only what `visible` lets through
 			const search = x.search?.bind(x);
 			const found =
@@ -3518,8 +3527,10 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			return textAnswer(grepAnswer(hits, false));
 		});
 		add(globSource, function* (i) {
-			const within = sourcePath(i.path ?? ''),
-				files = yield* sourceUnder(within);
+			const within = sourcePath(i.path ?? '');
+			const outside = outsideSource(i.path ?? '', within) ?? outsideSource(i.pattern, i.pattern);
+			if (outside !== undefined) return err(outside);
+			const files = yield* sourceUnder(within);
 			if (within !== '' && files.length === 0) return err(`Search path does not exist: ${i.path}`);
 			if (files.includes(within)) return err(`Search path is not a directory: ${i.path}`);
 			const pattern = globRegExp(i.pattern),
@@ -4032,6 +4043,10 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			? execute(entries, name, input, callId)
 			: runMcp(name, input, callId);
 	self = run;
+	const index: CatalogueIndex = {
+		...catalogueIndex(e.manifest, a, x.skills, mcpTools, acts, automations, sync_controls),
+		...(entries.has('page') ? { 'page:paths': navigation_paths(nav(e.manifest, a), a.admin).join(', ') } : {})
+	};
 	return {
 		// Host capabilities stay fixed across modes; never advertise a source tree or delegation the host lacks.
 		fixed: fixedTools(x.audience, x.child).filter(tool =>
@@ -4041,7 +4056,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		host: hostOffered,
 		mcp: mcpTools,
 		available: [...entries.values(), ...mcpEntries.values()].map((entry) => entry.tool),
-		index: catalogueIndex(e.manifest, a, x.skills, mcpTools, acts, automations, sync_controls),
+		index,
 		presentation: (name, input) => {
 			const host =
 				name === runToolTool.name && isObj(input) && typeof input['name'] === 'string'
@@ -4273,7 +4288,7 @@ const UNSCRIPTED: ReadonlySet<string> = new Set([
 const READ_TEXT = `Read records. request: { "<model>": { where, fields, order_by, limit, after, search, aggregate, as_of, output, "<relation>": { where, fields, order_by, limit, search, aggregate, "<relation>": { ... } } } }, each model and relation once. output: omit it for "default", else one of the model's reads. order_by: "<field>", { <field>: "desc" } or a list of those.
 where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null: value, like: "%text%" (ignores case), contains: value (a period or a JSON field) } }, { "$search": "<words>" } (each word required), and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words (ranked, not required), { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } or a list of those }; a field there may be "<link>.<field>" through links to one record.
-Answers each model's { rows, next, total } (total counts every match), or with aggregate its measures. Long values are clipped.`;
+Choose rows or measures. A normal read returns { rows, next, total }; total counts every match before limit, so do not add aggregate just to count a list. An aggregate returns measures, takes no fields or search, and its by names grouping fields. For rows plus their count: { "<model>": { fields: ["id"], limit: 20 } }; for only a count: { "<model>": { aggregate: { count: true } } }. Long values are clipped.`;
 const recordsTool = defineTool('read', {
 	behavior: { data: true, resume: { argument: 'after', roots: true } },
 	description: READ_TEXT,
@@ -4295,8 +4310,9 @@ const describeTool = defineTool('describe_workspace', {
 const pageTool = defineTool('page', {
 	behavior: { page: true },
 	description:
-		"Navigate the visible tab; configure opens a native setup form. Click/highlight visible text, type by label, scroll, go back/forward or preview a URL. Actions await confirmation; approvals, passwords and files are the person's. A request is pending until the tab reports what ran.",
+		"Read this person's browser preferences with preferences: {}; set appearance with preferences: { appearance: light|dark|system }, by itself. This needs no source edit, preview or browser tool. Navigate using an exact path from the workspace catalogue's Pages, including /app/; never shorten routes. configure opens native setup. Click/highlight text, type by label, scroll, go back/forward or preview a URL. Approvals, passwords and files are the person's. A request is pending until the tab reports what ran.",
 	parameters: Schema.Struct({
+		preferences: PageAction.fields.preferences,
 		path: Schema.optionalKey(Schema.String),
 		configure: Schema.optionalKey(
 			Schema.Struct({ capability: Schema.String, record: Schema.optionalKey(Schema.String) })
@@ -4318,7 +4334,7 @@ const pageTool = defineTool('page', {
 const actTool = defineTool('act', {
 	behavior: { data: true },
 	description: `Commit { acts: { "<model>.<verb>": input }, key? } atomically. input_file can hold the map. Reuse key only for the same operation. Mint UUIDs to link new rows across entries.
-create: [{ column: value, relation: [new row | { id, revision }] }]; update: [{ target, set: { column, relation: { create, update, delete, link, unlink } } }]; delete: [{ target }]; import: { rows, on_conflict: "update"|"keep"|"refuse", on_missing?: "create"|"skip", prune?, dry_run? }. Targets and existing links need { id, revision }; file fields take file ids. Returns stored rows or holds for approval.`,
+create: [{ column: value, relation: [new row | { id, revision }] }]; update: [{ target, set: { column, relation: { create, update, delete, link, unlink } } }]; delete: [{ target }]; import: { rows, on_conflict: "update"|"keep"|"refuse", on_missing?: "create"|"skip", prune?, dry_run? }. Targets and existing relation links need { id, revision }. A ref field takes the referenced row's scalar id string, never its label or { id }; file fields take file ids. Read current ids, revisions and the requested subset before a batch. Returns stored rows or holds for approval.`,
 	parameters: WriteInput
 });
 const runAutomationTool = defineTool('run', {
@@ -4336,7 +4352,7 @@ const decideTool = defineTool('decide', {
 const settingsTool = defineTool('settings', {
 	behavior: { data: true },
 	description:
-		'Read/change your own name; workspace_name is admin-only. Empty input reads both.',
+		'Read/change your own name; workspace_name is admin-only. Empty input reads both. For browser preferences use page { preferences: {} } to read, or page { preferences: { appearance: "dark" } } to change. Do not edit workspace theme source for a personal preference. Native setup capabilities: describe_workspace { names: ["system"] }.',
 	parameters: AccountSettingsInput
 });
 const inviteTool = defineTool('invite', {
@@ -4376,7 +4392,7 @@ const updatePlanTool = defineTool('update_plan', {
 });
 const skillTool = defineTool('skill', {
 	behavior: { data: true },
-	description: 'Read one of your skills whole, one ## section, or one of its files.',
+	description: 'Read one of your skills whole, one ## section, or one of its files. Read the skill without section first; only use an exact section heading it actually contains. For component APIs use workspace_lang instead of guessing a skill section.',
 	parameters: Schema.Struct({
 		name: Schema.String,
 		section: Schema.optionalKey(Schema.String),

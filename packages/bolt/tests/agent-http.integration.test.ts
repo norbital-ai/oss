@@ -190,6 +190,15 @@ afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
 const setup = Effect.runSync(Effect.cached(build.pipe(Scope.provide(fileScope))));
 
 describe('conversation controls over /__bolt/act', () => {
+	it.live('native conversation deletion is not mistaken for a generated model write', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const { agent, act } = yield* setup;
+			const c = yield* agent.start({ owner: 'ann' });
+			expect(yield* act('ann', 'sys_conversation.delete', { conversation: c })).toMatchObject({
+				kind: 'committed', output: { id: c }
+			});
+		}))
+	);
 	it.live(
 		'only the author revises, reorders and removes queued input; stop, resume, the model class, and a plan executed or discarded',
 		() =>

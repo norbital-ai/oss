@@ -1,5 +1,5 @@
 // Browser transport: one HttpClient path, decoding and reviving at the HTTP boundary.
-import { Duration, Effect, Schema, SubscriptionRef } from 'effect';
+import { Duration, Effect, Schedule, Schema, SubscriptionRef } from 'effect';
 import {
 	FetchHttpClient,
 	HttpClient,
@@ -8,6 +8,7 @@ import {
 } from 'effect/http';
 import { TransportFailed } from '../decl/errors/browser.ts';
 import type { Json } from '../decl/values.ts';
+import { PATHS } from './wire.ts';
 
 /** A release cutover holds the host's admission closed for seconds; requests wait it out up to this budget. */
 const BUSY_BUDGET_MILLIS = 60_000;
@@ -68,9 +69,16 @@ export function browserTransport(options: {
 			: null;
 	const execute = <A, E>(
 		request: HttpClientRequest.HttpClientRequest,
-		read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>
+		read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>,
+		readOnly = false
 	) => {
-		const send = once(request, read);
+		// Socket drops during reconnects or a rolling deployment can interrupt reads. Never
+		// replay a mutation whose response was lost: only reads and idempotent view registration retry.
+		const send = readOnly ? once(request, read).pipe(Effect.retry({
+			while: (error) => error instanceof TransportFailed && error.status === 0,
+			times: 3,
+			schedule: Schedule.exponential('250 millis')
+		})) : once(request, read);
 		const retried = (reply: Reply<A>, left: number): Effect.Effect<Reply<A>, Failure> => {
 			const wait = waitAfter(reply);
 			return wait === null || wait > left
@@ -100,7 +108,8 @@ export function browserTransport(options: {
 		headers: Readonly<Record<string, string>> = {}
 	) => {
 		const req = HttpClientRequest.make(method)(`${options.base ?? ''}${path}`, { headers });
-		return execute(body === undefined ? req : HttpClientRequest.bodyJsonUnsafe(req, body), json);
+		return execute(body === undefined ? req : HttpClientRequest.bodyJsonUnsafe(req, body), json,
+			method === 'GET' || (method === 'POST' && (path === PATHS.q || path === PATHS.live)));
 	};
 	const requestPdf = (path: string, body: Json, headers: Readonly<Record<string, string>>) =>
 		execute(
