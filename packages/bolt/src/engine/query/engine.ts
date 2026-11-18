@@ -299,12 +299,13 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		model: string,
 		ids: readonly string[],
 		select: SelectIR,
+		output: string,
 		reader: Reader,
 		bindings: Bindings
 	) =>
-		compileSourceGets(cat, model, ids, select, options(reader, bindings)).pipe(
+		compileSourceGets(cat, model, ids, select, options(reader, bindings), output).pipe(
 			Effect.mapError(from_store),
-			Effect.catch(unheld(model, DEFAULT_OUTPUT, reader))
+			Effect.catch(unheld(model, output, reader))
 		);
 	const cat = catalog_of(config.manifest);
 	// a request opens only on a model today's grants route, or one an earlier release's request still holds
@@ -628,7 +629,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		const gets = irs.flatMap((ir, i) =>
 			ir.kind === 'get' && ir.cte === undefined ? [[ir, i] as const] : []
 		);
-		for (const g of Map.groupBy(gets, ([ir]) => JSON.stringify([ir.model, ir.select])).values()) {
+		for (const g of Map.groupBy(gets, ([ir]) => JSON.stringify([ir.model, ir.select, ir.output])).values()) {
 			const first = g[0];
 			if (g.length < 2 || first === undefined) continue;
 			mergedSql.push(
@@ -638,6 +639,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 						first[0].model,
 						g.map(([ir]) => ir.id),
 						first[0].select,
+						first[0].output ?? DEFAULT_OUTPUT,
 						reader,
 						bindings
 					)

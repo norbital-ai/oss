@@ -1395,6 +1395,17 @@ describe('next query engine (PGlite)', () => {
 			]);
 		})
 	);
+	it.effect('concurrent gets keep the output they name: a caller holding only that output is answered', () =>
+		Effect.gen(function* () {
+			const brief = (id: string) =>
+				get(cat, 'orders', id).pipe(
+					Effect.map((ir): ReadIR => (ir.kind === 'get' ? { ...ir, output: 'brief' } : ir))
+				);
+			const gets = [yield* brief(present(ORDERS[0]).id), yield* brief(present(ORDERS[1]).id)];
+			const answers = yield* run({ as: 'caller', authority: clerk }, ...gets);
+			expect(answers).toHaveLength(2);
+		})
+	);
 	it.live(
 		'a workspace row is its stored and computed fields; a caller default row omits json; an explicit select returns it',
 		() =>
