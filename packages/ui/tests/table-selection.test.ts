@@ -1,7 +1,7 @@
 import { required, textOf } from './view-fixture.ts';
 import { element } from './elements.ts';
 import { Effect } from 'effect';
-import './dom.ts';
+import { phoneWidth } from './dom.ts';
 import assert from 'node:assert/strict';
 import { it, afterEach } from '@effect/vitest';
 import { vi } from 'vitest';
@@ -256,6 +256,7 @@ it.live('a read request source shows its root and reads exactly the request it w
 
 it.live('a phone card is its title and three fields; the row opens the rest', () =>
 	Effect.gen(function* () {
+		phoneWidth();
 		const opened: Value[] = [];
 		const { target } = yield* browser(() =>
 			show(

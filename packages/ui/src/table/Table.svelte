@@ -153,6 +153,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	import { confirm_action } from '../primitives/dialog/confirm.js';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
+	import { narrowViewport } from '../primitives/utils.js';
 	import { likeWhere } from '../kinds/kind.js';
 	import { KINDS } from '../kinds/registry.js';
 	import { open_record } from '../record/navigation.js';
@@ -551,7 +552,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	const next = $derived(
 		pageState.kind === 'ready' && 'next' in pageState.value ? pageState.value.next : null
 	);
-	// a long page (page_size 100/200, a local grid) renders a window of rows, one per layout, measured and keyed by id
+	// a long page (page_size 100/200, a local grid) renders a window of rows, measured and keyed by id
 	const shownRows = $derived(view.kind === 'ready' ? view.value : []);
 	// a relation its output reads as no layer (a `sys_user` owner) labels its targets in one read after the page
 	const labelRequest = $derived(
@@ -578,8 +579,19 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		const id = shownRows[index]?.['id'];
 		return typeof id === 'string' ? id : String(index);
 	};
-	const wide = virtual_list({ count: () => shownRows.length, key: rowKey, estimate: 37 });
-	const narrow = virtual_list({ count: () => shownRows.length, key: rowKey, estimate: 64 });
+	// one layout renders: the grid from md up (or always, for a grid, an editable array or an embedded matrix), else cards
+	const grid = $derived(
+		embedded || layout === 'grid' || (kind === 'local' && !!on_change) || !narrowViewport.current
+	);
+	// a card's height is not a row's: each layout keeps its own measurements
+	const winKey = (i: number) => (grid ? '' : 'card:') + rowKey(i);
+	const win = virtual_list({
+		count: () => shownRows.length,
+		key: winKey,
+		get estimate() {
+			return grid ? 37 : 64;
+		}
+	});
 
 	// A phone has no hover: a leftward row swipe reveals the trailing control; the next tap elsewhere hides it.
 	let touchStart: { key: string; x: number; y: number } | null = null;
@@ -844,42 +856,6 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		addEventListener('pointerup', up);
 		addEventListener('pointercancel', up);
 	}
-	/** A native scroll bar mirroring the port on one axis. The port's own bars are hidden, so the vertical one starts
-	 * under the sticky header in every engine (a scrollbar-track margin is Chrome's alone). */
-	const rail = (axis: 'x' | 'y') => (bar: HTMLElement) => {
-		const port = bar.parentElement?.querySelector<HTMLElement>('[data-table-wide]');
-		const fill = bar.firstElementChild;
-		if (!port || !(fill instanceof HTMLElement)) return;
-		const at = axis === 'y' ? 'scrollTop' : 'scrollLeft';
-		const fit = () => {
-			if (axis === 'y') {
-				const head = port.querySelector('thead')?.offsetHeight ?? 0;
-				bar.style.top = `${head}px`;
-				fill.style.height = `${port.scrollHeight - head}px`;
-				bar.hidden = port.scrollHeight <= port.clientHeight;
-			} else {
-				fill.style.width = `${port.scrollWidth}px`;
-				bar.hidden = port.scrollWidth <= port.clientWidth;
-			}
-			bar[at] = port[at];
-		};
-		const follow = () => {
-			if (bar[at] !== port[at]) bar[at] = port[at];
-		};
-		const lead = () => {
-			if (port[at] !== bar[at]) port[at] = bar[at];
-		};
-		const ro = new ResizeObserver(fit);
-		ro.observe(port);
-		if (port.firstElementChild) ro.observe(port.firstElementChild);
-		port.addEventListener('scroll', follow, { passive: true });
-		bar.addEventListener('scroll', lead, { passive: true });
-		return () => {
-			ro.disconnect();
-			port.removeEventListener('scroll', follow);
-			bar.removeEventListener('scroll', lead);
-		};
-	};
 	const PIN_EDGE = 'shadow-[inset_-1px_0_0_0_var(--color-border)]';
 	// the row actions stay at the right edge while wide rows scroll sideways (else a many-column table hides them past it)
 	const ACTS_EDGE = 'sticky right-0 shadow-[inset_1px_0_0_0_var(--color-border)]';
@@ -1153,16 +1129,9 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 				<!-- its own scroll port : the grey header sticks, pinned columns stay while the rest scrolls sideways.
 					     Every column keeps its natural width (a long value stops at max-w-80): a table wider than the card scrolls, so
 					     the nowrap row actions never squeeze a truncating column down to its first letters -->
-				<div
-					class={[
-						embedded ? 'min-w-0' : 'relative flex min-h-0 flex-1 flex-col',
-						!embedded && layout !== 'grid' && !(kind === 'local' && on_change) && 'max-md:hidden'
-					]}
-				>
+				{#if grid}
 					<div
-						class={embedded
-							? 'min-w-0 overflow-x-auto'
-							: 'min-h-0 flex-1 overflow-auto rounded-t-md [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'}
+						class={embedded ? 'min-w-0 overflow-x-auto' : 'min-h-0 flex-1 overflow-auto rounded-t-md'}
 						data-table-wide
 					>
 						<table
@@ -1269,11 +1238,11 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 								</tr>
 							</thead>
 							<tbody>
-								{#if wide.on}<tr aria-hidden="true" {@attach wide.anchor}
-										><td colspan={span} style="height:{wide.before}px;padding:0;border:0"></td></tr
+								{#if win.on}<tr aria-hidden="true" {@attach win.anchor}
+										><td colspan={span} style="height:{win.before}px;padding:0;border:0"></td></tr
 									>{/if}
-								{#each wide.slice(rows) as row, j (row['id'] ?? wide.start + j)}
-									{@const i = wide.start + j}
+								{#each win.slice(rows) as row, j (row['id'] ?? win.start + j)}
+									{@const i = win.start + j}
 									{@const key = rowKey(i)}
 									<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 									{@const held = approvalOf(row)}
@@ -1292,7 +1261,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										data-approval={held?.state}
 										data-pending-delete={held?.pending_delete}
 										title={held === null ? undefined : approvalText(text, held)}
-										{@attach wide.measure(rowKey(i))}
+										{@attach win.measure(winKey(i))}
 										tabindex={opens ? 0 : undefined}
 										ontouchstart={(e) => swipeStart(e, key)}
 										ontouchend={(e) => swipeEnd(e, key)}
@@ -1385,40 +1354,21 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										{/if}
 									</tr>
 								{/each}
-								{#if wide.after > 0}<tr aria-hidden="true"
-										><td colspan={span} style="height:{wide.after}px;padding:0;border:0"></td></tr
+								{#if win.after > 0}<tr aria-hidden="true"
+										><td colspan={span} style="height:{win.after}px;padding:0;border:0"></td></tr
 									>{/if}
 							</tbody>
 						</table>
 					</div>
-					{#if !embedded}
-						<div
-							class="absolute right-0 bottom-0 z-30 w-3 overflow-x-hidden overflow-y-auto"
-							aria-hidden="true"
-							hidden
-							{@attach rail('y')}
-						>
-							<div class="w-px"></div>
-						</div>
-						<div
-							class="absolute inset-x-0 bottom-0 z-30 h-3 overflow-x-auto overflow-y-hidden"
-							aria-hidden="true"
-							hidden
-							{@attach rail('x')}
-						>
-							<div class="h-px"></div>
-						</div>
-					{/if}
-				</div>
-				{#if !embedded && layout !== 'grid' && !(kind === 'local' && on_change)}
-					<ul class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md md:hidden" data-table-list>
-						{#if narrow.on}<li
+				{:else}
+					<ul class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md" data-table-list>
+						{#if win.on}<li
 								aria-hidden="true"
-								style="height:{narrow.before}px"
-								{@attach narrow.anchor}
+								style="height:{win.before}px"
+								{@attach win.anchor}
 							></li>{/if}
-						{#each narrow.slice(rows) as row, j (row['id'] ?? narrow.start + j)}
-							{@const i = narrow.start + j}
+						{#each win.slice(rows) as row, j (row['id'] ?? win.start + j)}
+							{@const i = win.start + j}
 							{@const key = rowKey(i)}
 							{@const [lead, ...rest] = ordered.map(colOf).filter((c) => c.hide !== 'narrow')}
 							<!-- the card's title and three fields: a field repeating the title, or past the third, is the record's to show
@@ -1432,7 +1382,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 								]}
 								ontouchstart={(e) => swipeStart(e, key)}
 								ontouchend={(e) => swipeEnd(e, key)}
-								{@attach narrow.measure(rowKey(i))}
+								{@attach win.measure(winKey(i))}
 							>
 								<ApprovalAccent {ctx} {row} />
 								{#if selectable && recordRow(row)}
@@ -1481,7 +1431,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 									</div>{/if}
 							</li>
 						{/each}
-						{#if narrow.after > 0}<li aria-hidden="true" style="height:{narrow.after}px"></li>{/if}
+						{#if win.after > 0}<li aria-hidden="true" style="height:{win.after}px"></li>{/if}
 					</ul>
 				{/if}
 				{#if !embedded}{@render footer(rows)}{/if}

@@ -1,6 +1,6 @@
 // The kit's default display (template UI audit, 2026-09-30): labels from the catalog, never a key or an id; dates,
 // money and enums formatted by kind; row clicks open; empty states; the record sheet titled by its record.
-import './dom.ts';
+import { phoneWidth } from './dom.ts';
 import assert from 'node:assert/strict';
 import { Schema } from 'effect';
 import { it as test, afterEach, vi } from '@effect/vitest';
@@ -351,7 +351,14 @@ test('Table inside a sheet: the row and the phone card still open their record (
 	element(t, '[data-table-wide] tbody tr:not([aria-hidden]) td').click();
 	assert.deepEqual(records(), ['jobs/j1']);
 	history.replaceState(null, '', '/');
-	element(t, '[data-row-card]').click();
+	phoneWidth();
+	const phone = await show(
+		{ part: 'table', props: { of: 'jobs', columns: ['title', 'kind'] } },
+		bolt,
+		jobs
+	);
+	phone.setAttribute('role', 'dialog');
+	element(phone, '[data-row-card]').click();
 	assert.deepEqual(records(), ['jobs/j1']);
 });
 
@@ -415,7 +422,9 @@ test('a record in a final state: its state is read-only and there is no Save', a
 	assert.equal(t.querySelectorAll('button[type=submit]').length, 0);
 });
 
-test("select-all: the card list selects its page, then every matching row, beside the grid's header checkbox", async () => {
+test('select-all: the card list selects its page, then every matching row', async () => {
+	// a phone renders the card list alone
+	phoneWidth();
 	const all = Array.from({ length: 30 }, (_, i) => ({ ...ROW, id: `j${i}`, title: `Job ${i}` }));
 	const reads: ReadOptions[] = [];
 	const { bolt } = await fake(all.slice(0, 25), {
@@ -443,11 +452,7 @@ test("select-all: the card list selects its page, then every matching row, besid
 	assert.equal(t.querySelector('[data-table-footer] [data-range]'), null);
 	assert.deepEqual([...card.children], before);
 	assert.equal(t.querySelectorAll('[data-table-list] input[type=checkbox]:checked').length, 25);
-	assert.equal(
-		element<HTMLInputElement>(t, 'thead input[type=checkbox]').checked,
-		true,
-		'the grid header agrees'
-	);
+	assert.equal(t.querySelector('[data-table-wide]'), null, 'one layout renders');
 	const more = element(t, '[data-select-matching]');
 	assert.match(more.textContent ?? '', /Select all 30 matching/);
 	more.click();

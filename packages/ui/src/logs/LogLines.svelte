@@ -8,7 +8,6 @@
 	import Overflow from '../cell/Overflow.svelte';
 	import { words_of } from '../client/context.js';
 	import { cn, narrowViewport } from '../primitives/utils.js';
-	import { offsets, windowOf } from '../primitives/virtual/virtual.js';
 	import { ROW_HEIGHT, atBottom, logPreview, wantsOlder, type LogLevel } from './logs.js';
 
 	let {
@@ -42,9 +41,10 @@
 	const loading = $derived(olderPage.loading);
 	const notice = $derived(olderPage.error?.message ?? null);
 
-	const offs = $derived(offsets(shown.map(() => ROW_HEIGHT)));
-	const total = $derived(offs[offs.length - 1]);
-	const win = $derived(windowOf(offs, scrollTop, viewport));
+	// every row is ROW_HEIGHT: the window is arithmetic, ten rows either side
+	const total = $derived(shown.length * ROW_HEIGHT);
+	const start = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 10));
+	const end = $derived(Math.min(shown.length, Math.ceil((scrollTop + viewport) / ROW_HEIGHT) + 10));
 	const time = $derived(
 		new Intl.DateTimeFormat(words_of(ctx).locale, {
 			month: 'short',
@@ -92,8 +92,8 @@
 	data-log-view
 >
 	<div class="relative" style:height="{total}px">
-		<div class="absolute inset-x-0 top-0" style:transform="translateY({offs[win.start]}px)">
-			{#each shown.slice(win.start, win.end) as row (row.id)}
+		<div class="absolute inset-x-0 top-0" style:transform="translateY({start * ROW_HEIGHT}px)">
+			{#each shown.slice(start, end) as row (row.id)}
 				<!-- a row is 22px: a 44px floor on its expand button would cover the rows beside it -->
 				<div
 					class="hover:bg-muted/50 grid h-[22px] grid-cols-[auto_3.5rem_minmax(0,1fr)] items-start gap-x-3 px-3 py-px [--hit-target:0px] @max-md:grid-cols-[3.5rem_minmax(0,1fr)]"

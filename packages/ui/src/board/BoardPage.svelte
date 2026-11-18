@@ -209,7 +209,7 @@
 					role="listitem"
 					tabindex="0"
 					draggable={grid || touch.current ? undefined : 'true'}
-					{@attach lane.measure(row.id)}
+					{@attach !grid && lane.measure(row.id)}
 					class={[
 						'group bg-popover text-popover-foreground hover:border-input data-[dragging]:opacity-40 relative flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-sm border text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-card dark:text-card-foreground',
 						grid ? 'min-h-24 p-3' : 'mb-2 p-2.5',

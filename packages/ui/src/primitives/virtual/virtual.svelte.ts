@@ -42,8 +42,6 @@ export function virtual_list(o: VirtualOptions) {
 	// the visible band in list coordinates; before the first sync, a screen from the top
 	let top = $state(0),
 		band = $state(typeof innerHeight === 'number' && innerHeight > 0 ? innerHeight : 800);
-	let seenTop = 0,
-		seenBand = 0;
 	let anchorEl: HTMLElement | null = null,
 		clips: Element[] = [];
 
@@ -80,10 +78,9 @@ export function virtual_list(o: VirtualOptions) {
 			lo = Math.max(lo, b.top);
 			hi = Math.min(hi, b.bottom);
 		}
-		const t = lo - anchorEl.getBoundingClientRect().top,
-			h = Math.max(0, hi - lo);
-		if (t !== seenTop) top = seenTop = t;
-		if (h !== seenBand) band = seenBand = h;
+		// an unchanged number is no state change: nothing re-renders
+		top = lo - anchorEl.getBoundingClientRect().top;
+		band = Math.max(0, hi - lo);
 	}
 	const observer =
 		typeof ResizeObserver === 'undefined'
