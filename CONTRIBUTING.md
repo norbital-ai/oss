@@ -15,7 +15,8 @@ stay pinned to the one workspace release version; package changes merge only aft
 
 `pnpm --dir packages/bolt bench:resources` runs the live resource benchmark (`packages/bolt/bench`)
 and judges it against `bench/budget.json`: database statements, live bytes and frames exactly, CPU
-and p95 in reference units. The `Resources` workflow runs it on a runner of its own. A change that
+and p95 in reference units. The `Resources` workflow runs it on a runner of its own, and the CPU and
+p95 ceilings are set from that runner's medians: a laptop's ratios run lower. A change that
 moves a count moves the budget in the same commit, with the reason; `tests/resources.integration.test.ts`
 asserts the counts without timing.
 
