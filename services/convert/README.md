@@ -139,12 +139,14 @@ fails if one arrives with a package.
 headers and footers the output takes (pandoc's `--reference-doc`); a docx without one is A4 portrait with the PDF's
 margins. Standard HTML is read for its structure.
 
-Submit `from: "layout-html"` with `to: "pdf"` to preserve the layout's print CSS. Provide a
-Playwright-compatible Chromium executable on every replica serving the queue and set
-`CONVERT_CHROMIUM_EXECUTABLE` to its absolute path. The base image contains Pandoc and Typst.
-A browser-enabled installation supplies Chromium and its OS libraries and runs the service
-as an unprivileged user with Chromium's sandbox enabled. Use the version matching the approved
-layout when comparing PDF geometry. Embed fonts and images as data URIs. The renderer blocks
+Submit `from: "layout-html"` with `to: "pdf"` to preserve the layout's print CSS. The image ships
+playwright-core's headless Chromium at `CONVERT_CHROMIUM_EXECUTABLE` (`/opt/chromium/headless_shell`)
+and runs it as the unprivileged `convert` user with Chromium's own sandbox. That sandbox creates
+user, PID and network namespaces, which Docker's default seccomp profile refuses: run the container
+with `--security-opt seccomp=seccomp.json` (Docker's default profile plus `clone` and `unshare`).
+Under the default profile the layout job fails. Name `'Noto Sans CJK SC'` in the layout's CSS: an
+unnamed family falls back to DejaVu Sans and the Japanese CJK face. Use the version matching the approved layout when
+comparing PDF geometry. Embed fonts and images as data URIs. The renderer blocks
 scripts, local files and network requests. An unconfigured renderer fails the layout job.
 
 `src/convert.lua` runs on every conversion: Chinese falls back to Noto Sans CJK SC (the image's one CJK family) in a PDF,

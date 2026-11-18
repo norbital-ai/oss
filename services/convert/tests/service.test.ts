@@ -116,6 +116,27 @@ test('layout HTML is accepted only for PDF and stays distinct in the queue', asy
 	assert.equal(await (await s.call(`/v1/jobs/${id}/result`)).text(), 'layout-html');
 });
 
+// The shipped image carries Chromium; run it under `seccomp.json` so Chromium keeps its own sandbox.
+test.skipIf(!process.env['CONVERT_CHROMIUM_EXECUTABLE'])(
+	'prints layout HTML with its print CSS and the image CJK font',
+	async () => {
+		const { layoutPdf } = await import('../src/layout-pdf.ts');
+		const executable = process.env['CONVERT_CHROMIUM_EXECUTABLE'] ?? '';
+		const s = await start({ convert: layoutPdf({ executable, timeoutMs: 60_000 }) });
+		const source =
+			"<html lang='zh-CN'><style>@page{size:A4;margin:12mm} body{font-family:'Noto Sans CJK SC'} h1{letter-spacing:.5em}</style>" +
+			'<h1>报价单</h1><p>¥1,234.00 Φ25×80</p></html>';
+		const response = await s.submit({ from: 'layout-html', to: 'pdf', source });
+		const { id } = job(await response.json());
+		assert.equal((await s.watch(id)).at(-1)?.state, 'succeeded');
+		const pdf = join(dir, 'layout.pdf');
+		writeFileSync(pdf, new Uint8Array(await (await s.call(`/v1/jobs/${id}/result`)).arrayBuffer()));
+		assert.match(execFileSync('pdffonts', [pdf]).toString(), /NotoSansCJKsc-Bold/);
+		assert.match(execFileSync('pdftotext', [pdf, '-']).toString(), /¥1,234\.00 Φ25×80/);
+	},
+	60_000
+);
+
 test('returns preview bytes without inserting a job or spooling the document', async () => {
 	const storage = mkdtempSync(join(dir, 'preview-'));
 	const database = join(storage, 'preview.db');

@@ -28,18 +28,29 @@ RUN set -e; case "$(uname -m)" in \
 		"https://github.com/yfedoseev/office_oxide/releases/download/v$OFFICE_OXIDE/office_oxide-linux-$arch-$OFFICE_OXIDE.tar.gz"; \
 	echo "$sum  o.tgz" | sha256sum -c -; tar xzf o.tgz ./office-oxide
 
+# The headless Chromium shell matching the pinned playwright-core, at one path on either architecture; the arm64
+# build ships its symbol table, which strip drops.
+FROM dependencies AS chromium
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends binutils \
+	&& PLAYWRIGHT_BROWSERS_PATH=/ms-playwright node node_modules/playwright-core/cli.js install chromium-headless-shell \
+	&& mv /ms-playwright/chromium_headless_shell-*/chrome-* /opt/chromium \
+	&& { [ -e /opt/chromium/headless_shell ] || ln -s chrome-headless-shell /opt/chromium/headless_shell; } \
+	&& strip "$(readlink -f /opt/chromium/headless_shell)"
+
 FROM ubuntu:26.04 AS runtime
 # One CJK family (Noto Sans CJK, regular and bold) so Chinese in a PDF is not empty boxes; the Serif files go.
 # ffmpeg normalises audio for transcription, and ffprobe finds a video track. MuPDF and Poppler read PDFs.
+# Chromium's headless shell links ATK and its AT-SPI bridge, AT-SPI and two X extensions the rest does not bring.
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends tini fonts-noto-cjk fonts-dejavu-core ffmpeg \
 		poppler-utils poppler-data mupdf-tools libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui \
-		ca-certificates liblua5.4-0 libgmp10 \
+		ca-certificates liblua5.4-0 libgmp10 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libxcomposite1 libxdamage1 \
 	&& rm -rf /var/lib/apt/lists/* /usr/share/fonts/opentype/noto/NotoSerifCJK-* \
 	&& groupadd -r -g 10001 convert && useradd -r -u 10001 -g convert convert \
 	&& mkdir -p /var/lib/convert && chown convert:convert /var/lib/convert
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=a4 /usr/local/bin/pandoc /usr/local/bin/typst /usr/local/bin/
 COPY --from=office-oxide office-oxide /usr/local/bin/
+COPY --from=chromium /opt/chromium /opt/chromium
 WORKDIR /app
 COPY package.json ./
 COPY --from=dependencies /app/node_modules ./node_modules
@@ -52,7 +63,8 @@ RUN ! dpkg-query -W -f '${Package}\n' | grep -Ei 'tesseract|leptonica|liblept|pa
 		-o -iname '*easyocr*' -o -iname '*.traineddata' -o -iname '*.onnx' \) -print | grep .
 USER convert
 # Every job is a process, so each starts from the compile cache rather than parsing the source again.
-ENV CONVERT_DATA=/var/lib/convert PORT=8080 NODE_ENV=production NODE_COMPILE_CACHE=/tmp/convert-compile
+ENV CONVERT_DATA=/var/lib/convert PORT=8080 NODE_ENV=production NODE_COMPILE_CACHE=/tmp/convert-compile \
+	CONVERT_CHROMIUM_EXECUTABLE=/opt/chromium/headless_shell
 VOLUME /var/lib/convert
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s CMD node -e "fetch('http://localhost:8080/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"

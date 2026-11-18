@@ -29,7 +29,7 @@ jobs:
 
       # the `test` stage is the runtime image plus the suite, so it tests the shipped binaries
       - name: Test inside the image
-        run: docker build --target test -t convert:test services/convert && docker run --rm convert:test
+        run: docker build --target test -t convert:test services/convert && docker run --rm --security-opt seccomp=services/convert/seccomp.json convert:test
 
       # one tag for both architectures: an Apple-silicon Mac runs arm64 natively (emulated amd64 pandoc took ~4 s and ~7 GB)
       - uses: docker/setup-qemu-action@v4
