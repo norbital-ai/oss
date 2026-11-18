@@ -1041,9 +1041,10 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 {/snippet}
 
 {#snippet body()}
-	<!-- the body fits the record: a section or table inside scrolls itself; past their floors, the body scrolls -->
+	<!-- the body fits the record: a section or table inside scrolls itself; past their floors, the body scrolls. It is
+	     exactly as wide as the frame around it: a wider body gives that frame a width to be scrolled sideways by -->
 	<div
-		class="-mx-1 flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-1 [overflow-wrap:anywhere]"
+		class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto [overflow-wrap:anywhere]"
 		data-record-body
 	>
 		<!-- Keep a non-null view available to authored cleanup during teardown. -->

@@ -180,6 +180,23 @@ it.each([
 	});
 });
 
+it.each([
+	{ layout: 'sheet', representation: 'generated' },
+	{ layout: 'sheet', representation: 'decorated' },
+	{ layout: 'page', representation: 'raw' }
+] as const)('the $layout $representation record cannot be scrolled sideways', async (options) => {
+	await withRecord({ ...options, catalog: readonlyCatalog }, async (target) => {
+		await expect.poll(() => target.querySelector('[data-field=title]')).not.toBeNull();
+		const { frame, main } = chrome(target);
+		// a hidden overflow still scrolls when asked (a scroll into view, a focus): nothing may be wider than its box
+		for (const box of [frame, main]) {
+			box.scrollLeft = 8;
+			expect(box.scrollLeft).toBe(0);
+			expect(box.scrollWidth).toBeLessThanOrEqual(box.clientWidth);
+		}
+	});
+});
+
 it('a registered custom edit keeps Save visible and submits one current revision', async () => {
 	await withRecord({}, async (target, acts) => {
 		await page.getByRole('button', { name: 'Edit', exact: true }).click();
