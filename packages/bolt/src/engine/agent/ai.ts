@@ -313,8 +313,8 @@ const emptyOf = (k: Kind): Json =>
 /**
  * One `edit` operation on `draft` (never changed in place) against the output `kind` (ANY for a JSON Schema output),
  * returning the new draft. `set` replaces or creates the value at a keyed pointer, creating missing parent objects and
- * lists; `set` at `/list/KEY` of a keyed list adds or replaces that item and fills its key field. `append` adds to an
- * unkeyed list; `remove: true` deletes. A set or appended value is checked against its kind (quoted scalars read as the
+ * lists; `set` at `/list/KEY` of a keyed list adds or replaces that item and fills its key field, and at the next index
+ * of an unkeyed list adds one. `append` adds to an unkeyed list; `remove: true` deletes. A set or appended value is checked against its kind (quoted scalars read as the
  * kind) and a keyed item keeps a distinct key. Fails with the operation's problem, led by its path.
  */
 export class EditRefused extends Schema.TaggedError<EditRefused>()('EditRefused', {
@@ -377,8 +377,12 @@ export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Resu
 		if (isList(holder)) {
 			const key = keyOf(k);
 			const index = indexOf(holder, seg, key);
-			if (index < 0 && !(key !== undefined && i === segs.length - 1 && op.set !== undefined))
-				return fail(`${here} has no item "${seg}"`);
+			// a new key of a keyed list, or the next index of a plain one, adds the item
+			const adds =
+				i === segs.length - 1 &&
+				op.set !== undefined &&
+				(key !== undefined || seg === String(holder.length));
+			if (index < 0 && !adds) return fail(`${here} has no item "${seg}"`);
 			const updated = update(index < 0 ? undefined : holder[index], child, i + 1, key);
 			if (Result.isFailure(updated)) return updated;
 			const next = updated.success;
@@ -689,7 +693,7 @@ export function infer_facility(
 					{
 						name: EDIT,
 						behavior: {},
-						description: `Change the answer you are building. Each op names a path and exactly one of: set (replace or create the value there; missing parent objects and lists are created), remove: true, or append (add an item to the end of a list that has no key). A path is a JSON Pointer ("/a/b"), except that an item of a keyed list is addressed by its key, never its index ("/items/ANNUAL/days"; set "/items/NEW" adds the item NEW); a list without a key uses indices. Ops apply in order and each is checked on its own: the result counts those applied and names each failed op with its path, and later ops still apply. Send only what changes. Take as many turns as the answer needs (tools to check facts, more reading); when it is complete, call ${SUBMIT} in the same reply as your last ${EDIT}.`,
+						description: `Change the answer you are building. Each op names a path and exactly one of: set (replace or create the value there; missing parent objects and lists are created), remove: true, or append (add an item to the end of a list that has no key). A path is a JSON Pointer ("/a/b"), except that an item of a keyed list is addressed by its key, never its index ("/items/ANNUAL/days"; set "/items/NEW" adds the item NEW); a list without a key uses indices, and its next index adds an item. Ops apply in order and each is checked on its own: the result counts those applied and names each failed op with its path, and later ops still apply. Send only what changes. Take as many turns as the answer needs (tools to check facts, more reading); when it is complete, call ${SUBMIT} in the same reply as your last ${EDIT}.`,
 						input: object(
 							{
 								ops: {
@@ -806,11 +810,14 @@ export function infer_facility(
 				spent = false,
 				finals = 0,
 				finished = false,
+				refused = false,
 				last: CrossAnswer | undefined;
 			for (;;) {
 				// `steps` spent and the final, tool-less turn answered without a valid answer: a draft that holds one still stands
 				if (finished) {
-					const held = structured ? settle(draft) : undefined;
+					// the value the call started from, with the last edit to it refused, is nobody's answer
+					const untouched = refused && draft === original;
+					const held = structured && !untouched ? settle(draft) : undefined;
 					if (held?.ok === true) return held;
 					// what the draft still breaks (an unmet rule among it), else the last failed answer
 					const why = held ?? last;
@@ -880,6 +887,7 @@ export function infer_facility(
 				carry = undefined;
 				if (r.tool_calls.length > 0) {
 					const before = JSON.stringify(draft);
+					refused = false;
 					messages.push({
 						role: 'assistant',
 						content: {
@@ -906,9 +914,10 @@ export function infer_facility(
 							else if (invalid !== undefined) result = invalid;
 							else if (c.name === EDIT && structured) {
 								const ops = Option.getOrUndefined(Schema.decodeUnknownOption(EditInput)(c.input))?.ops;
-								if (ops === undefined)
+								if (ops === undefined) {
+									refused = true;
 									result = { error: `${EDIT} takes { ops: [{ path, set | remove | append }] }` };
-								else {
+								} else {
 									const errors: Json[] = [];
 									for (const [i, op] of ops.entries()) {
 									const edited = yield* Schema.decodeUnknownEffect(EditOp)(op).pipe(
@@ -918,6 +927,7 @@ export function infer_facility(
 									if (Result.isSuccess(edited)) draft = edited.success;
 									else errors.push({ op: i, error: edited.failure.message });
 								}
+									refused ||= errors.length > 0;
 									result = {
 										applied: ops.length - errors.length,
 										...(errors.length === 0 ? {} : { errors })
@@ -1044,8 +1054,10 @@ export function infer_facility(
 						(a.steps === undefined || r.tool_calls.some((c) => !inspecting.has(c.name))) &&
 						JSON.stringify(draft) === before
 					) {
-						// a model that re-edits instead of submitting: a draft that already holds is the answer
-						const held = r.tool_calls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
+						// a model that re-edits instead of submitting: a draft that already holds is the answer. An edit the draft
+						// refused is none: the model reads why and goes on, and the value it started from is not its answer
+						const held =
+							!refused && r.tool_calls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
 						if (held?.ok === true) return held;
 						if (++stalls > FAILURES)
 							return (

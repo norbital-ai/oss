@@ -1144,6 +1144,51 @@ describe('the AI port under the 20 s idle wall', () => {
 	);
 
 	it.effect(
+		'sys_2.infer: an edit the draft refused is no re-edit: the starting value is not the answer, and the model reads why',
+		() =>
+			Effect.gen(function* () {
+				// a research audit's one edit was refused, and the call answered the empty list it started from
+				const listed = {
+					kind: 'object',
+					fields: {
+						findings: { kind: 'object', many: true, fields: { title: { kind: 'text' } } }
+					}
+				};
+				const { p, requests } = port([
+					tool('edit', { ops: [{ path: '/findings/2', set: { title: 'EPF' } }] }, 'e1'),
+					tool('edit', { ops: [{ path: '/findings', append: { title: 'EPF' } }] }, 'e2'),
+					tool('submit', {}, 's')
+				]);
+				expect(
+					yield* infer_facility(p)(at({ prompt: 'q', initial: { findings: [] }, output: listed }))
+				).toEqual({ ok: true, value: { findings: [{ title: 'EPF' }] } });
+				expect(requests).toHaveLength(3);
+				expect(required(requests[1]).messages.at(-1)).toMatchObject({
+					role: 'tool',
+					content: { id: 'e1', result: { applied: 0, errors: [{ op: 0 }] } }
+				});
+				// the next index of a plain list adds the item, as a new key does in a keyed one
+				const next = port([
+					tool('edit', { ops: [{ path: '/findings/0', set: { title: 'EPF' } }] }, 'e1'),
+					tool('submit', {}, 's')
+				]);
+				expect(
+					yield* infer_facility(next.p)(
+						at({ prompt: 'q', initial: { findings: [] }, output: listed })
+					)
+				).toEqual({ ok: true, value: { findings: [{ title: 'EPF' }] } });
+				// every edit refused, the step budget spent: a failure, never the empty start as an answer
+				const lost = () =>
+					tool('edit', { ops: [{ path: '/findings/2', set: { title: 'EPF' } }] }, 'e');
+				expect(
+					yield* infer_facility(port([lost(), lost(), lost(), lost()]).p)(
+						at({ prompt: 'q', initial: { findings: [] }, output: listed, steps: 1 })
+					)
+				).toMatchObject({ ok: false, error: { kind: 'invalid' } });
+			})
+	);
+
+	it.effect(
 		'sys_2.infer: a reasoning-only reply is continued, at most 3 times running',
 		() =>
 			Effect.gen(function* () {
