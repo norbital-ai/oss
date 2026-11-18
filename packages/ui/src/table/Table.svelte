@@ -1339,13 +1339,13 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 														onchange={(e) => edit(row, col.field, e.currentTarget.value)}
 													/>
 												{:else}
-													<!-- one line: every row keeps its height, a long value truncates, its full text is the tooltip -->
+													<!-- one line: every row keeps its height, a long value truncates, its full text is the tooltip; a column that draws its own cell has none, since the raw value is not what it shows -->
 													<div
 														class={[
 															'truncate [&_[data-enum-list]]:flex-nowrap',
 															!embedded && w === undefined && 'max-w-80'
 														]}
-														title={fullText(row, col.field) || undefined}
+														title={col.cell ? undefined : fullText(row, col.field) || undefined}
 													>
 														{#if ci === 0 && held?.pending_delete === true}<Badge
 																variant="destructive"

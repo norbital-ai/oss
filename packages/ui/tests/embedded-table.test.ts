@@ -19,6 +19,11 @@ it.live('embedded controlled rows reuse the model grid without a shell or runtim
 			assert.equal(target.querySelectorAll('th[draggable="true"]').length, 2);
 			assert.equal(target.querySelectorAll('[data-table-footer],[data-row-actions]').length, 0);
 			assert.equal(target.querySelectorAll('tbody tr.paid-row').length, 1);
+			// a truncating cell's tooltip is its full text; a column drawing its own cell has none of the raw value
+			assert.deepEqual(
+				[...target.querySelectorAll('tbody [title]')].map((cell) => cell.getAttribute('title')),
+				['Annual leave', 'Care leave']
+			);
 			const name = target.querySelector<HTMLElement>('th[data-column="name"]');
 			const paid = target.querySelector<HTMLElement>('th[data-column="paid"]');
 			assert.ok(name && paid);
