@@ -35,8 +35,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # the benchmark runs Bolt and its test kit from source: their builds generate the source files they import
       - name: Build packages
-        run: pnpm exec turbo run build --filter='@norbital-ai/bolt^...' --concurrency=1
+        run: pnpm exec turbo run build --filter='@norbital-ai/bolt-cli...' --concurrency=1
 
       - name: Benchmark
         run: pnpm --dir packages/bolt bench:resources
