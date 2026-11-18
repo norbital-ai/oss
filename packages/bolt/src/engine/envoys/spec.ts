@@ -1,6 +1,8 @@
 import { Effect, Option, Schema } from 'effect';
+import type { Rows } from '@norbital-ai/host-api';
 import { IdValue } from '@norbital-ai/store/kind';
 import type { NonEmpty } from '../../decl/values.ts';
+import { decodeRows } from '../db/rows.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { row } from '../system/rows.ts';
 
@@ -25,11 +27,14 @@ export type EnvoySpec = Omit<
 	readonly triage: false | { readonly scope: typeof Configuration.Type.triage_scope };
 };
 
-export const activeEnvoys = (db: TenantDbShape) =>
-	db.rows(Identity, {
-		text: 'SELECT id, name FROM sys_envoy WHERE active ORDER BY name, id',
-		params: []
-	});
+/** The active envoys' read: a caller with reads of its own sends it in the same trip, and answers with `activeEnvoysOf`. */
+export const activeEnvoysRead = {
+	text: 'SELECT id, name FROM sys_envoy WHERE active ORDER BY name, id',
+	params: []
+};
+/** The active envoys from what `activeEnvoysRead` answered. */
+export const activeEnvoysOf = (rows: Rows) => decodeRows(Identity, rows);
+export const activeEnvoys = (db: TenantDbShape) => db.rows(Identity, activeEnvoysRead);
 
 /** An envoy answers only while its runtime row is active and has authority. */
 export const envoySpec = Effect.fn('Envoys.spec')(function* (db: TenantDbShape, id: string) {

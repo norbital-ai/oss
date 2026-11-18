@@ -432,6 +432,17 @@ layer(workspace)('shell routes', (it) => {
 				})
 		);
 
+		it.effect('a member boot reads its name, workspace, envoys and inbox in one database trip', () =>
+			Effect.gen(function* () {
+				const t = yield* TestWorkspace;
+				// the session and the member row are remembered from here on
+				yield* call(admin, 'GET', '/__bolt/shell');
+				t.count.reset();
+				expect((yield* call(admin, 'GET', '/__bolt/shell')).status).toBe(200);
+				expect(t.count).toMatchObject({ reads: 1, writes: 0 });
+			})
+		);
+
 		it.effect(
 			'serves GET /__bolt/openapi.json: OpenAPI 3.1 of the callables the caller may invoke',
 			() =>

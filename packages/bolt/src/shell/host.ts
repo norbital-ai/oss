@@ -1,5 +1,5 @@
 import { uuid } from '../engine/port.ts';
-import { activeEnvoys } from '../engine/envoys/spec.ts';
+import { activeEnvoysOf, activeEnvoysRead } from '../engine/envoys/spec.ts';
 // The shell's host half: the session routes (`/__bolt/session/*`), the
 // caller's Authority for every data route (session cookie, API key, visitor, preview-as), the visitor gates in front
 // of `/q`, `/act`, `/files` and `/live`, the shell's boot, inbox, runs and settings reads, and the PWA manifest.
@@ -48,6 +48,7 @@ import {
 import { Syncs } from '../engine/sync/index.ts';
 import { mayUpdate } from '../engine/write/act.ts';
 import { TenantDb } from '../engine/db/tenant-db.ts';
+import { decodeOne } from '../engine/db/rows.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { Logs } from '../engine/ports.ts';
 import { RenderGrants } from '../engine/render.ts';
@@ -93,7 +94,7 @@ import {
 	keysOf
 } from '../engine/identity/session.ts';
 import { BOLT, HEADERS, PATHS, SW, base_path, canonical_path, under } from '../protocol/wire.ts';
-import { inbox } from './inbox/data.ts';
+import { inbox, inboxOf, inboxReads } from './inbox/data.ts';
 import { instance_messages } from './integration/messages.ts';
 import { runList, visible_run_names } from '../engine/runs/rows.ts';
 import { outputFiles } from '../engine/runs/output-files.ts';
@@ -767,31 +768,44 @@ const makeShell = Effect.gen(function* () {
 			return rejected(
 				json({ error: { code: 'unauthenticated', message: 'Sign in first.', workspace: ws } }, 401)
 			);
-		const user = yield* db.one(
-			Schema.Struct({
-				name: Schema.NullOr(Schema.String),
-				workspace_name: Schema.NullOr(Schema.String)
-			}),
-			{
-				text: "SELECT name, (SELECT name FROM sys_workspace) AS workspace_name FROM sys_user WHERE id = $1",
-				params: [auth.actor.id]
-			}
-		);
-		ws = { ...ws, name: Option.getOrNull(user)?.workspace_name ?? ws.name };
 		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined, c.live !== undefined);
-		const box = s.inbox ? yield* inbox(h.db, auth) : null;
 		const noticePort = c.notice;
-		const notice = noticePort === undefined ? null : yield* hostCall(() => noticePort(auth));
-		// never while previewing: the switcher would carry the previewed member's workspaces
 		const workspacePort = c.workspaces;
-		const workspaces =
-			x.preview === null && workspacePort !== undefined
-				? yield* hostCall(() => workspacePort(auth))
-				: [];
-		const runtimeEnvoys = yield* activeEnvoys(h.db);
 		const bundlePort = c.studio?.bundle?.bind(c.studio);
-		const studio_bundle =
-			s.studio && bundlePort !== undefined ? yield* hostCall(() => bundlePort()) : null;
+		// none waits on another: the member's name, the workspace's, the active envoys and the inbox are one trip
+		const [[users, envoys, ...inboxRows], notice, workspaces, studio_bundle] =
+			yield* Effect.all(
+				[
+					db.read([
+						{
+							text: "SELECT name, (SELECT name FROM sys_workspace) AS workspace_name FROM sys_user WHERE id = $1",
+							params: [auth.actor.id]
+						},
+						activeEnvoysRead,
+						...(s.inbox ? inboxReads(auth, auth.actor.id) : [])
+					]),
+					noticePort === undefined ? Effect.succeed(null) : hostCall(() => noticePort(auth)),
+					// never while previewing: the switcher would carry the previewed member's workspaces
+					x.preview === null && workspacePort !== undefined
+						? hostCall(() => workspacePort(auth))
+						: Effect.succeed([]),
+					s.studio && bundlePort !== undefined ? hostCall(() => bundlePort()) : Effect.succeed(null)
+				],
+				{ concurrency: 'unbounded' }
+			);
+		const user =
+			users === undefined
+				? Option.none()
+				: yield* decodeOne(
+						Schema.Struct({
+							name: Schema.NullOr(Schema.String),
+							workspace_name: Schema.NullOr(Schema.String)
+						}),
+						users
+					);
+		ws = { ...ws, name: Option.getOrNull(user)?.workspace_name ?? ws.name };
+		const box = s.inbox ? yield* inboxOf(auth, inboxRows) : null;
+		const runtimeEnvoys = envoys === undefined ? [] : yield* activeEnvoysOf(envoys);
 		const b: ShellBoot = {
 			...(yield* bootFor(m, ws, auth, c.studio !== undefined)),
 			name: Option.getOrNull(user)?.name ?? null,
