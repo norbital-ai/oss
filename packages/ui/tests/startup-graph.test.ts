@@ -1,12 +1,13 @@
 // A page's startup loads the kit's whole static import graph (the shell imports its barrel). The code editor, its
-// language packs and the QR encoder load on first use instead: none of them may be reachable by a static import.
+// language packs, the QR encoder and the Markdown parser load on first use instead, and the kit zips nothing: none of
+// them may be reachable by a static import.
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 
 const SOURCE = resolve(dirname(fileURLToPath(import.meta.url)), '../src');
-const LAZY = [/^@codemirror\//, /^@lezer\//, /^qrcode$/];
+const LAZY = [/^@codemirror\//, /^@lezer\//, /^qrcode$/, /^marked$/, /^fflate$/];
 // a static `import … from` or `export … from`, not `import type`, `export type` or a dynamic `import(…)`
 const STATIC = /(?:^|\n)\s*(?:import|export)\s+(?!type\b)(?:[^'";]*?\sfrom\s+)?['"]([^'"]+)['"]/g;
 
@@ -16,7 +17,7 @@ const file = (specifier: string, from: string): string | undefined => {
 	return path.endsWith('.js') ? path.replace(/\.js$/, '.ts') : path;
 };
 
-it('the kit barrel reaches no code editor, language pack or QR encoder by a static import', () => {
+it('the kit barrel reaches no code editor, language pack, QR encoder, Markdown parser or zip by a static import', () => {
 	const seen = new Set<string>(),
 		reached: string[] = [];
 	const pending = [resolve(SOURCE, 'index.ts')];

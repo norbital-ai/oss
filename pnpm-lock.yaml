@@ -564,9 +564,6 @@ importers:
       d3-shape:
         specifier: ^3.2.0
         version: 3.2.0
-      fflate:
-        specifier: 0.8.3
-        version: 0.8.3
       layerchart:
         specifier: 2.9.1
         version: 2.9.1(svelte@5.57.3)(zod@4.6.7)

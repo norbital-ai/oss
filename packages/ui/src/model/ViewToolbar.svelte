@@ -170,7 +170,7 @@
 	import ViewPopover from '../filter/ViewPopover.svelte';
 	import FilterSummary from '../filter/FilterSummary.svelte';
 	import ToolbarSearch from './toolbar/ToolbarSearch.svelte';
-	import { download_text_files } from '../utilities/download.js';
+	import { download_text_file } from '../utilities/download.js';
 	import { toast } from '../toast/toast.svelte.js';
 	import Spinner from '../primitives/spinner/spinner.svelte';
 	import { record_labels } from '../record/labels.svelte.js';
@@ -1006,7 +1006,7 @@
 				]
 					.map((line) => line.map(cell).join(','))
 					.join('\r\n');
-			download_text_files([{ name: `${model || 'rows'}.csv`, content: text }]);
+			download_text_file({ name: `${model || 'rows'}.csv`, content: text });
 		});
 	}
 	const named = record_labels(() => bolt, () => kinds.catalog ?? catalog);

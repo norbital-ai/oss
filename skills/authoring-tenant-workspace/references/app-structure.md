@@ -41,7 +41,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 - Never toast or track a spinner for a menu item yourself.
 - `toolbar.context` is what the view is scoped to; file syncs receive it.
 - A `CustomView` over one model names its model source: its menu offers that model's file syncs, title and New; search runs over its own rows.
-- Client-generated text documents go through `download_text_files`: one downloads, several zip. Never loop download clicks. Build documents with a pure helper; an export too heavy for the page is a file sync.
+- Never loop download clicks. Build documents with a pure helper; an export too heavy for the page is a file sync.
 - A custom record-header action passes its typed outcome to `notify_outcome`.
 
 ## AppShell and tabs

@@ -162,8 +162,9 @@ line wrapping anywhere else.
 
 `CodeEditor` and `CodeDiff` load CodeMirror with the first editor shown, never with a page's startup; until it
 arrives they render nothing, so a test waits for `.cm-editor`. `highlighted_line` and a log line's JSON payload are
-plain text until their parser loads, then highlighted. A CodeMirror surface of your own takes the shared theme,
-colours and languages from `@norbital-ai/ui/code` (`code_theme`, `code_highlight`, `code_language`).
+plain text until their parser loads, then highlighted. `ReadonlyMarkdown` is plain text and `aria-busy` until its
+parser loads, then Markdown, so a print waits for it. A CodeMirror surface of your own takes the shared theme, colours
+and languages from `@norbital-ai/ui/code` (`code_theme`, `code_highlight`, `code_language`).
 
 ## Custom views
 
@@ -189,10 +190,6 @@ without a count. Authored board lanes also constrain that read, so it cannot sel
 Selection survives paging and clears when its model, scope, filter, sort or search changes, or a successful action
 settles. Changing a table's page size also clears it. Clearing or changing a board's selection scope discards an earlier
 select-all response that arrives later.
-
-`download_text_files([{ name, content }], 'export.zip')` downloads a text document directly, or
-packages a batch into one ZIP. It preserves UTF-8 bytes and disambiguates duplicate names. Reuse
-it for generated bulk exports; repeated download clicks can silently lose files to browser limits.
 
 See [native record history](./record-history.md) for the shared revision scrubber and related-record timeline.
 
