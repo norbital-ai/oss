@@ -28,7 +28,7 @@ For a reference-image request, inspect every attachment using its complete file 
 - A folder holds `+app.ts` or `+group.ts`, never both; only a group holds apps and groups. An app's name is its folder path. `capabilities.apps` admits a name or everything under `<name>/`.
 - Every app and group has a `description`.
 - A page sits in `AppShell`. Slots: [app-structure.md](app-structure.md). Across pages, nav is `+app.ts` `pages`, never tabs.
-- `banner` art is a workspace asset: one wide image (about 1600×800), subject in the centred crop. It is not the template's marketing thumbnail.
+- `banner` art is a workspace asset: one wide image (about 1600×800), subject in the centred crop. It is not the template's image (`docs/screenshots/application.webp`).
 - `assets/` holds small workspace files only. Weights and wasm runtimes load in the browser from a public CDN at a pinned version. LLMs go through an integration; never raise a host limit.
 
 ## Audiences

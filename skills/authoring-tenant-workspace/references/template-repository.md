@@ -2,11 +2,11 @@
 
 One directory per template at the repository root. Identity and marketing facts live in the template.
 
-| Path                     | Supplies                                                   |
-| ------------------------ | ---------------------------------------------------------- |
-| `norbital.template.json` | handle, catalogue copy, tags, visibility, counts           |
-| `README.md`              | the detail page body                                       |
-| `assets/thumbnail.svg`   | website card and `og:image`, by convention, about 1600×900 |
+| Path                                | Supplies                                                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `norbital.template.json`            | handle, catalogue copy, tags, visibility, counts                                                              |
+| `README.md`                         | the detail page body                                                                                          |
+| `docs/screenshots/application.webp` | the template's one image: the README's first figure, website card, `og:image` and picker thumbnail, 1920×1080 |
 
 An app's `banner` is separate: workspace assets shipped in the artifact.
 
