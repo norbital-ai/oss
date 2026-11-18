@@ -1942,6 +1942,8 @@ describe('an agent-started automation run is a job', () => {
 			const { job, run } = Schema.decodeUnknownSync(
 				Schema.Struct({ job: Schema.String, run: Schema.String })
 			)(answer);
+			// the start was confirmed outside any turn: its job is the run, which `wait` finds from every later turn
+			expect(job).toBe(run);
 			return { fixture, c, job, run };
 		});
 	it.live(

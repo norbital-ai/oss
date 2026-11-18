@@ -1001,6 +1001,8 @@ export const runJob = Effect.fn('AgentTool.runJob')(function* (
 		{
 			detach: true,
 			alias: run,
+			// the job is its run: a later turn, which holds none of this one's jobs, still waits on it by this id
+			...(jobs.has(run) ? {} : { id: run }),
 			done: (id, result) => {
 				const r = isObj(result) ? result : {};
 				const said =
