@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 // G1: the families the per-area corpora (data.ts, access.ts, runtime.ts) leave open, one clean case and at least
 // one planted mistake each. Each `@ts-expect-error` line is a planted mistake.
 import { automation, model, policy } from '../../src/index.ts';
-import type { Decimal, Id, InputOf, InstanceId, Row, Where } from '../../src/index.ts';
+import type { Decimal, Id, InputOf, InstanceId, ListRow, Row, Where } from '../../src/index.ts';
 import type { RowState, StoredRow } from '../../src/decl/names.ts';
 import * as rt from './fixture/runtime.ts';
 import * as m from './fixture/models.ts';
@@ -293,6 +293,9 @@ automation({
 // ── a caller row is its output's fields, plain values; policies filter rows, never mask a field ──
 is<Eq<Row<'customers'>['email'], string | null>>();
 is<Eq<Row<'customers', 'directory'>['name'], string>>();
+// a view's row holds what every output reads; a field `directory` leaves out may be absent for its viewers
+is<Eq<ListRow<'customers'>['name'], string>>();
+is<Eq<ListRow<'customers'>['email'], string | null | undefined>>();
 // @ts-expect-error K0 a field outside the named output is not on its row
 type DirectoryEmail = Row<'customers', 'directory'>['email'];
 is<Eq<StoredRow<'customers'>['email'], string | null>>();

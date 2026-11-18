@@ -87,8 +87,19 @@ export type KeyValues<C> =
 		: never;
 /** Historical evidence retains its schema version and archived wire values. */
 export type Revision = typeof import('../protocol/record-contracts.ts').HistoryRevisionSchema.Type;
-/** A view's list row: the caller row less its heavy fields. */
-export type ListRow<C> = Omit<Row<C>, HeavyField<C>>;
+/** The fields every output `C` declares reads. */
+type SharedField<C> = keyof {
+	[O in OutputName<C>]: { readonly [F in ReadField<C, O> & string]: true };
+}[OutputName<C>];
+type LightRow<C> = Omit<Row<C>, HeavyField<C>>;
+/**
+ * A view's list row: the caller row less its heavy fields. A native view given a model name (`Table`, `Board`, `Map`)
+ * reads its viewer's output, `default` when held, else the first named output held, so a field some declared output
+ * leaves out is optional.
+ */
+export type ListRow<C> = Simplify<
+	Pick<LightRow<C>, SharedField<C> & keyof LightRow<C>> & Partial<Omit<LightRow<C>, SharedField<C>>>
+>;
 
 /**
  * A search over one of `C`'s `search.indexes`, keyed by the index with its probe input (`{ colour: { lab, … } }`), or over

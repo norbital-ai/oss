@@ -27,7 +27,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 	export type BoardProps<C = ModelKey, F = FieldOf<C>, K = RecordFieldOf<C>> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
-		/** The model whose records are the cards. */
+		/** The model whose records are the cards, read in the viewer's output (`default` when held, else the first named output they hold): a card holds only that output's fields. */
 		of: C;
 		/** The lane field: a `state`, an `enum` or a relation. */
 		by: F;

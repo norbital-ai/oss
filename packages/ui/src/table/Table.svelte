@@ -71,7 +71,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	 * Without a custom cell, the kind renderer shows scalar values and relations show their target labels.
 	 */
 	export type Col<R = Row, K = R> = {
-		[F in keyof K & string]: F | ColumnDefinition<R, K, F>;
+		[F in keyof K & string]-?: F | ColumnDefinition<R, K, F>;
 	}[keyof K & string];
 	/** A row's labelled native handler, optionally confirmed before it runs. */
 	export type RowAction<R = Row> = {
@@ -86,7 +86,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	export type TableProps<S = TableSource, R extends Values = RowIn<S>, K = ColumnsIn<S>> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
-		/** The rows: a model name (paged, filtered and sorted by the host), a `bolt.query` read, or a local array. */
+		/** The rows: a model name (paged, filtered and sorted by the host, read in the viewer's output: `default` when held, else the first named output they hold), a `bolt.query` read, or a local array. */
 		of: S & TableSource<R & Partial<K>>;
 		/** The columns in order. Default: every field the model exposes to the viewer. */
 		columns?: readonly Col<R, K>[];

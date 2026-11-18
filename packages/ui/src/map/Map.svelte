@@ -33,7 +33,7 @@ in Google Maps; it does not invent road paths or travel times. The map fills its
 	type MapProps<C = ModelKey> = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;
-		/** The model whose records are placed. */
+		/** The model whose records are placed, read in the viewer's output (`default` when held, else the first named output they hold): a mark holds only that output's fields. */
 		of: C;
 		/** The `point` field that places each record; rows without one are left out. */
 		at: FieldOf<C>;
