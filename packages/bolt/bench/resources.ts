@@ -561,8 +561,9 @@ const suite = (sizes: readonly number[], unit: number) =>
 		return out;
 	});
 
+/** Each scenario metric outside the budget, one a line: the message is what the workflow's log shows. */
 class BudgetExceeded extends Schema.TaggedError<BudgetExceeded>()('BudgetExceeded', {
-	failures: Schema.Array(Schema.String)
+	message: Schema.String
 }) {}
 const Version = Schema.Struct({ version: Schema.String });
 
@@ -642,7 +643,7 @@ export const main = (argv: readonly string[]) => {
 			yield* fs.readFileString(values.budget)
 		);
 		const failures = judge(scenarios, budget);
-		if (failures.length > 0) return yield* new BudgetExceeded({ failures });
+		if (failures.length > 0) return yield* new BudgetExceeded({ message: failures.join('\n') });
 		yield* Effect.logInfo(`every scenario is within ${values.budget}`);
 	});
 	// the kit pools its PGlite databases for reuse, and their timers would hold the process open past the result
