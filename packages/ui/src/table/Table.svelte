@@ -920,10 +920,15 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 			(kind?.kind === 'text' || kind?.kind === 'seq')
 		);
 	};
-	const fullText = (row: ReadRow, f: string) =>
-		identifierColumn(f, row)
-			? recordText(exposed, row) || show(valueAt(presentRow(row), f), client?.locale)
-			: (refOf(presentRow(row), f)?.text ?? show(valueAt(presentRow(row), f), client?.locale));
+	/** An object, or a list holding one: what a cell previews instead of printing. */
+	const structured = (value: unknown): boolean =>
+		Array.isArray(value) ? value.some(structured) : typeof value === 'object' && value !== null;
+	/** A cell's whole text for its tooltip; none for a structured value, whose cell is a preview of it and not its JSON. */
+	const fullText = (row: ReadRow, f: string) => {
+		const value = valueAt(presentRow(row), f);
+		if (identifierColumn(f, row)) return recordText(exposed, row) || show(value, client?.locale);
+		return refOf(presentRow(row), f)?.text ?? (structured(value) ? '' : show(value, client?.locale));
+	};
 	/** Plain cell text: its overflow can open a popover without swallowing a link or a control. */
 	const plainText = (row: ReadRow, f: string) => {
 		const displayed = presentRow(row),
