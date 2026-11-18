@@ -25,6 +25,8 @@ Always on. One revision per committed change with changed fields, actor, time, c
 
 Operational events are the workspace's runtime log, in the host's log store, not a model; administrators read them. History says what a row was; events say what the platform did.
 
+- `read.refused` (warn): a read named an output its caller holds no grant of; attributes `caller`, `model`, `output` (asked) and `holds` (the outputs it holds).
+
 ## Live data
 
 - An ordinary workspace tab streams its open reads. A fleet-browser snapshot page uses explicit `ctx.refresh()` after external changes; it has no polling bridge. The host owns the live-mode binding.

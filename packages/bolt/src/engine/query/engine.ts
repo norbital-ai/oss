@@ -3,6 +3,7 @@
 import { uuid } from '../port.ts';
 import {
 	Cache,
+	Clock,
 	Context,
 	Crypto,
 	Effect,
@@ -27,7 +28,7 @@ import { type EngineError } from '../errors.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
 import { Reads, Manifest, Guest } from '../services.ts';
 import { SqlReadCapture, TenantDb as TenantDbService } from '../db/tenant-db.ts';
-import { Ai } from '../ports.ts';
+import { Ai, Logs, type LogsShape } from '../ports.ts';
 
 import { decodeInput, type Decoded } from '../callables/decode.ts';
 
@@ -46,6 +47,7 @@ import {
 	OVER,
 	total_of,
 	q,
+	DEFAULT_OUTPUT,
 	SEMANTIC,
 	stored_fields,
 	where,
@@ -54,7 +56,8 @@ import {
 	type Probe
 } from '@norbital-ai/store';
 import { catalog_of } from '../access/pred.ts';
-import { viewOutput } from '../access/authority.ts';
+import { grantedArms, outputsOf, viewOutput } from '../access/authority.ts';
+import { actor_ref } from '../access/actor.ts';
 import { composable, isComposable, readOptions } from './reader.ts';
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 /** A `search.indexes` entry's bodies, run in the guest: `probe` picks the vector, `rerank` re-measures a page. */
@@ -94,6 +97,8 @@ type ReadEngineConfig = {
 	allBytes?: number;
 	/** `search.semantic`'s probe: one text embedded on the model's model class; absent → `/semantic` and `similar({ to: text })` are `unavailable`. */
 	embed?: (model: string, text: string) => Effect.Effect<readonly number[], EngineError>;
+	/** Where a caller's read of an output it does not hold leaves its `read.refused` line. */
+	logs?: LogsShape;
 };
 const checkedRead = <A>(read: () => A) =>
 	Effect.try({
@@ -231,6 +236,30 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 	// `actor.*`) is the same text and parameters at any time, so a repeated read compiles once
 	const compiled = new WeakMap<object, Map<string, Compiled>>(),
 		workspace = {};
+	// the store refuses a root output its caller holds no arm of: the refusal names what the caller holds, logged once
+	const unheld = (model: string, output: string, reader: Reader) => (error: BoltError) => {
+		if (error.code !== 'forbidden' || reader.as !== 'caller' || reader.authority.admin ||
+			grantedArms(reader.authority, model, output) !== undefined) return Effect.fail(error);
+		const actor = reader.authority.actor, logs = config.logs;
+		const holds = outputsOf(config.manifest, model).filter((o) => grantedArms(reader.authority, model, o) !== undefined);
+		const refused = BoltError.make('forbidden', error.phase,
+			`${error.message}; the caller holds ${holds.length === 0 ? 'none' : holds.map((o) => `'${o}'`).join(', ')}`, error);
+		if (logs === undefined) return Effect.fail(refused);
+		return Clock.currentTimeMillis.pipe(
+			Effect.flatMap((now) => logs.write({
+				at: new Date(now).toISOString(),
+				severity: 'warn',
+				event: 'read.refused',
+				invocation: globalThis.crypto.randomUUID(),
+				run: actor.kind === 'system' ? actor.run : null,
+				conversation: null,
+				turn: null,
+				// an envoy by its row, never its sender's address
+				attributes: { caller: actor.kind === 'envoy' ? `envoy:${actor.envoy}` : actor_ref(actor), model, output, holds }
+			})),
+			Effect.andThen(Effect.fail(refused))
+		);
+	};
 	const compile = (cat: Catalog, ir: ReadIR, reader: Reader, bindings: Bindings, probe?: Probe) => {
 		if (ir.kind !== 'read' && ir.kind !== 'get' && ir.kind !== 'aggregate' && ir.kind !== 'similar')
 			return Effect.fail(BoltError.make('invalid', 'decode', `'${ir.kind}' is not a statement read`));
@@ -250,6 +279,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		};
 		return compileSource(cat, ir, tracked, probe).pipe(
 			Effect.mapError(from_store),
+			Effect.catch(unheld(ir.model, ir.output ?? DEFAULT_OUTPUT, reader)),
 			Effect.tap((statement) =>
 				Effect.sync(() => {
 					if (bound || probe !== undefined) return;
@@ -273,7 +303,8 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		bindings: Bindings
 	) =>
 		compileSourceGets(cat, model, ids, select, options(reader, bindings)).pipe(
-			Effect.mapError(from_store)
+			Effect.mapError(from_store),
+			Effect.catch(unheld(model, DEFAULT_OUTPUT, reader))
 		);
 	const cat = catalog_of(config.manifest);
 	// a request opens only on a model today's grants route, or one an earlier release's request still holds
@@ -1014,6 +1045,7 @@ export const ReadsLive = Layer.effect(
 		const db = yield* TenantDbService;
 		const guest = yield* Guest;
 		const ai = yield* Ai;
+		const logs = yield* Logs;
 		const crypto = yield* Crypto.Crypto;
 		const newId = uuid(crypto);
 		const held = new Set<string>();
@@ -1073,6 +1105,7 @@ export const ReadsLive = Layer.effect(
 			return read_engine({
 				db: over,
 				manifest,
+				logs,
 				held,
 				ready: db.ready,
 				delegate: {

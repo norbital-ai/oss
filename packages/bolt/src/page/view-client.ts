@@ -64,11 +64,13 @@ export function view_client(
 	read_catalog: ReadCatalog,
 	catalog: Readonly<Record<string, ModelExposure>>
 ): ViewBolt {
-	/** A model view's row: the wire codec of its default output's promised fields, the same codecs every read answer uses. */
-	const model_wire = (model: ModelKey, mode: 'list' | 'record') => {
-		const level = read_catalog[model]?.['default']?.[model];
+	/** A model view's row: the wire codec of `output`'s promised fields, the same codecs every read answer uses. */
+	const model_wire = (model: ModelKey, mode: 'list' | 'record', output = 'default') => {
+		const level = read_catalog[model]?.[output]?.[model];
 		if (level === undefined)
-			return refused(`The default read output of '${model}' is not granted for this model view.`);
+			return refused(
+				`The read output '${output}' of '${model}' is not granted for this model view.`
+			);
 		const required = mode === 'record' ? Object.keys(level.fields) : level.list_fields;
 		const fields = Object.fromEntries(
 			required.map((field) => {
@@ -81,8 +83,12 @@ export function view_client(
 		return Schema.StructWithRest(Schema.Struct(fields), [Values]);
 	};
 	/** Rows already decoded by their read answer validate on the codecs' type side. */
-	const model_row = <C extends ModelKey, M extends 'list' | 'record'>(model: C, mode: M) => {
-		const shape = Schema.toType(model_wire(model, mode)),
+	const model_row = <C extends ModelKey, M extends 'list' | 'record'>(
+		model: C,
+		mode: M,
+		output = 'default'
+	) => {
+		const shape = Schema.toType(model_wire(model, mode, output)),
 			complete = Schema.is(shape);
 		// Both the declared fields and the generated row type come from this supplied model, never an independent T.
 		return shape.pipe(
@@ -108,8 +114,10 @@ export function view_client(
 		request: Readonly<Record<string, Json>>,
 		mode: M
 	) {
+		// a model view reads the caller's view output, as `query` and `aggregate` do: `default` when held, else a named one
 		const original = request[model],
-			defaults = read_catalog[model]?.['default']?.[model];
+			view = catalog[model]?.output ?? 'default',
+			defaults = read_catalog[model]?.[view]?.[model];
 		const required =
 			defaults === undefined
 				? undefined
@@ -123,7 +131,7 @@ export function view_client(
 						...request,
 						[model]: {
 							...original,
-							output: original['output'] ?? 'default',
+							output: original['output'] ?? view,
 							...(isList(original['fields'])
 								? {
 										fields: [...new Set<Json>([...original['fields'], ...required])]
@@ -133,10 +141,12 @@ export function view_client(
 					};
 		const schema = Schema.suspend(() => {
 			if (defaults === undefined || required === undefined)
-				return refused(`The default read output of '${model}' is not granted for this model view.`);
+				return refused(
+					`The read output '${view}' of '${model}' is not granted for this model view.`
+				);
 			if (Object.keys(prepared).length !== 1 || !isObject(original))
 				return refused('A model view must read exactly its own model root.');
-			const output = original['output'] ?? 'default';
+			const output = original['output'] ?? view;
 			if (typeof output !== 'string') return refused('The model view output is not named.');
 			const selected = read_catalog[model]?.[output]?.[model];
 			const picked = Arr.isArray(original['fields'])
@@ -169,7 +179,7 @@ export function view_client(
 				})
 			);
 			return normalized.pipe(
-				Schema.decodeTo(Schema.Struct({ [model]: Page(model_row(model, mode)) }))
+				Schema.decodeTo(Schema.Struct({ [model]: Page(model_row(model, mode, view)) }))
 			);
 		});
 		return { prepared, schema };

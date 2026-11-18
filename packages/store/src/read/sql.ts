@@ -1040,9 +1040,7 @@ const start = Effect.fnUntraced(function* (
 	const scoped = options.scope !== undefined;
 	const lv: Level = { scoped, exposed: scoped };
 	if (options.scope?.rows(model, output)?.length === 0)
-		return yield* forbidden(
-			`no held policy grants reading '${model}'${output === DEFAULT_OUTPUT ? '' : ` as its '${output}' output`}`
-		);
+		return yield* forbidden(`no held policy grants reading '${model}' as its '${output}' output`);
 	return { c, b: new Build(cat, options, { root: model, output }), lv };
 });
 const pageLimit = (p: PageIR): number | 'all' => (p._tag === 'All' ? 'all' : p.limit);

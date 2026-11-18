@@ -8,6 +8,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 
 - A read is one JSON tree: each model names a root and each relation is a nested key. For example, `{ orders: { fields: ['number'], customer: { fields: ['name'] } } }`. Dotted path keys are not a request shape.
 - A root reads one output (`output`, `default` when absent) that a held policy must grant.
+- A native view given a model name (`Table`, `Board`, `Map`, `RecordShell`, their counts and pickers) reads the caller's view output: `default` when held, else the first named output they hold. A page's own `ctx.query` names its output.
 - A layer takes `where`, `fields`, `order_by`, `limit`, `search`, `aggregate`. Only a root takes `output`, `after`, `as_of`.
 - A named ref layer replaces its FK with the row or null; a many-layer is its rows.
 - The answer maps each root to `{ rows, next, total }`. `total` counts every match in the same statement, linear in the match. An index search root and a nested many-layer carry none: use `aggregate` on that layer.

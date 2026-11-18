@@ -3,7 +3,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Predicate, Schema } from 'effect';
 import { PgliteDb } from '@norbital-ai/host-api/node';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { db_error } from '@norbital-ai/host-api';
+import { db_error, type LogEvent } from '@norbital-ai/host-api';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, Reader, RowData } from '../src/engine/contracts.ts';
@@ -1369,6 +1369,31 @@ describe('next query engine (PGlite)', () => {
 					yield* Effect.flip(run(clerkReads, yield* read(cat, 'orders', { all: true })))
 				).toMatchObject({ code: 'forbidden' });
 			})
+	);
+	it.effect('a read of an output its caller does not hold logs one warn line naming the asked and held outputs', () =>
+		Effect.gen(function* () {
+			const lines: LogEvent[] = [];
+			const logged = read_engine({
+				db,
+				manifest,
+				logs: { write: (event) => Effect.sync(() => void lines.push(event)), query: () => Effect.succeed([]) }
+			});
+			const clerkReads: Reader = { as: 'caller', authority: clerk };
+			expect(
+				yield* Effect.flip(logged.run([yield* read(cat, 'orders', { all: true })], clerkReads, bindings))
+			).toMatchObject({
+				code: 'forbidden',
+				message: "no held policy grants reading 'orders' as its 'default' output; the caller holds 'brief'"
+			});
+			expect(lines).toMatchObject([
+				{
+					severity: 'warn',
+					event: 'read.refused',
+					run: null,
+					attributes: { caller: 'member:u1', model: 'orders', output: 'default', holds: ['brief'] }
+				}
+			]);
+		})
 	);
 	it.live(
 		'a workspace row is its stored and computed fields; a caller default row omits json; an explicit select returns it',
