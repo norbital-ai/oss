@@ -246,7 +246,9 @@ export const SyncsLive = Layer.effect(
 			},
 			Object.fromEntries(
 				syncs.filter((s) => s.read).map((s) => [s.name, (now: number) => reading.rests(s, now)])
-			)
+			),
+			// a read's pages commit by compare-and-set on its cursor: entering a slot twice reads twice, never applies twice
+			syncs.filter((s) => s.read).map((s) => s.name)
 		);
 		return {
 			health: Effect.fn('Syncs.health')(function* (instance: string) {

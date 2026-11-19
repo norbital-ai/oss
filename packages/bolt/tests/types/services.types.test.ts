@@ -214,7 +214,8 @@ is<
 		[
 			handlers: { readonly [name: string]: RunHandler },
 			retries?: { readonly [name: string]: RetrySpec } | undefined,
-			rests?: { readonly [name: string]: RunRest } | undefined
+			rests?: { readonly [name: string]: RunRest } | undefined,
+			idempotent?: readonly string[] | undefined
 		]
 	>
 >();

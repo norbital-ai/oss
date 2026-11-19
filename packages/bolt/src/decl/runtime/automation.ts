@@ -90,7 +90,7 @@ export type AutomationSpec = AutomationMode & {
 	 * What starts it besides an explicit start; absent means started only. `{ cron }` fires on a schedule.
 	 * `{ model, verbs }` fires after a committed write of one of `verbs` to `model`, a template model or a system one
 	 * alike (`sys_user`: a sign-up, an accepted invitation, a team or handle change; `sys_invitation`: sent, resent,
-	 * accepted, revoked). The run executes as the reserved system identity with `policies`, never the writer's
+	 * accepted, revoked; `sys_integration`: a connection's status or health changed, so a notice needs no sweep). The run executes as the reserved system identity with `policies`, never the writer's
 	 * authority, so the follow-up needs nothing from the person who wrote. One committed statement queues one run per
 	 * automation and verb, in that statement (durable, never per row); `ctx.trigger` is
 	 * `{ kind: 'system', cause: 'event', model, verb, records }` with the written ids, and the body reads the rows it needs.

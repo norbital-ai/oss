@@ -2,7 +2,7 @@
 // A fired run writes its `sys_run` row only with its first effect, so a run that only reads leaves nothing behind.
 import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';
-import { Cause, Effect, Exit, Layer, Schema } from 'effect';
+import { Cause, Effect, Exit, Layer, Option, Schema } from 'effect';
 import { FacilityFailure } from '@norbital-ai/host-api';
 import { id_of } from '../src/decl/id.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -95,6 +95,11 @@ const manifest = {
 			on: [{ cron: '@daily', tz: 'Asia/Singapore' }],
 			output: { kind: 'int' },
 			policies: ['ops']
+		},
+		heard: {
+			description: 'Hears connection health',
+			on: [{ model: 'sys_integration', verbs: ['update'] }],
+			policies: ['ops']
 		}
 	},
 	teams: {},
@@ -115,11 +120,12 @@ const guestSource = `export default {
 			const n = (yield* ctx.query({ quotes: {} })).quotes.rows.length;
 			if (n > 1) throw new Error('too many quotes');
 			return n;
-		} }
+		} },
+		heard: { body: function* () {} }
 	},
 	model: {
-		products: { bodies: { syncs: { erp: { read: function* ({cursor}, ctx) {
-			return (yield* ctx.request({ op: 'values', values: {cursor} })).rows[0].page; } } } } },
+		products: { bodies: { syncs: { erp: { read: function* ({cursor, local_unchanged}, ctx) {
+			return (yield* ctx.request({ op: 'values', values: {cursor, local_unchanged} })).rows[0].page; } } } } },
 		chats: { bodies: { syncs: { desk: { read: function* () { return { rows: [] }; } } } } },
 		entries: { bodies: { syncs: { cal: { read: function* () { return { rows: [] }; } } } } }
 	}
@@ -223,7 +229,7 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 	);
 
 	it.effect(
-		'a sync cron claims its lease before I/O, retries a failed attempt without refiring its slot, and persists its cursor',
+		'a sync cron claims its slot once it fails or writes, retries a failed attempt without refiring its slot, and persists its cursor',
 		() =>
 			Effect.gen(function* () {
 				const { t, fire, sql } = yield* setup;
@@ -231,11 +237,12 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 				t.fakes.links.answer = () =>
 					Effect.gen(function* () {
 						requests++;
+						// a read claims nothing before it asks: a quiet slot leaves the database asleep
 						expect(
 							yield* sql(
 								"SELECT state, attempts FROM sys_run WHERE automation = 'products.sync.erp'"
 							).pipe(Effect.orDie)
-						).toEqual([{ state: 'running', attempts: requests }]);
+						).toEqual(requests === 1 ? [] : [{ state: 'running', attempts: requests }]);
 						if (requests === 1)
 							return yield* Effect.fail(
 								new FacilityFailure({ kind: 'upstream', message: 'ERP unavailable' })
@@ -289,12 +296,25 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 						new FacilityFailure({ kind: 'invalid', message: 'ERP request refused' })
 					);
 				});
+			const heard = sql(
+				`SELECT trigger FROM sys_run WHERE automation = 'heard' AND cause = 'event'`
+			);
+			const earlier = (yield* heard).length;
 			expect(yield* fire('products.sync.erp', atMinutes(100))).toEqual({ ran: true });
 			expect(requests).toBe(1);
 			expect(yield* restOf(sql)).toMatchObject([{ state: 'attention', failures: '1' }]);
+			// the health change is a `sys_integration` update: its listener is queued, nothing sweeps for it
+			const runs = yield* heard;
+			expect(runs).toHaveLength(earlier + 1);
+			expect(runs).toContainEqual({
+				trigger: { kind: 'system', cause: 'event', model: 'sys_integration', verb: 'update', records: ['erp1'] }
+			});
 			const [integration] = yield* sql(
 				`SELECT revision, status FROM sys_integration WHERE id = 'erp1'`
 			);
+			// the connection names the failing sync and since when: what it last read is at most that old
+			const failedAt = t.clock.now();
+			expect(integration?.['status']).toMatchObject({ failing: { 'products.sync.erp': failedAt } });
 			t.clock.advance('2min');
 			expect(yield* fire('products.sync.erp', atMinutes(110))).toEqual({ ran: true });
 			expect(requests).toBe(2);
@@ -305,6 +325,7 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 				integration
 			]);
 			expect(JSON.stringify(integration)).not.toContain('retry_at');
+			expect(yield* heard).toHaveLength(earlier + 1);
 			const before = yield* sql(
 				`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'products.sync.erp'`
 			);
@@ -346,7 +367,12 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 			yield* t.run_due();
 			expect(requests).toBe(1);
 			expect(yield* restOf(sql)).toEqual([{ state: 'ready', failures: null, retry: null }]);
-			expect(yield* fire('products.sync.erp', atMinutes(140))).toEqual({ ran: true });
+			// a read that succeeds leaves the connection's failing syncs
+			expect(
+				yield* sql(`SELECT status -> 'failing' AS failing FROM sys_integration WHERE id = 'erp1'`)
+			).toEqual([{ failing: {} }]);
+			// the next slot reads again; it found nothing, so it records no run
+			expect(yield* fire('products.sync.erp', atMinutes(140))).toEqual({ ran: false });
 			expect(requests).toBe(2);
 		})
 	);
@@ -456,7 +482,8 @@ const Sleeping = Layer.unwrap(
 			seed: {
 				sys_integration: [
 					{ id: 'desk1', integration: 'desk', name: 'Desk one' },
-					{ id: 'cal1', integration: 'cal', name: 'Cal one' }
+					{ id: 'cal1', integration: 'cal', name: 'Cal one' },
+					{ id: 'erp1', integration: 'erp', name: 'ERP one' }
 				]
 			}
 		})
@@ -557,6 +584,65 @@ layer(Sleeping, { excludeTestServices: true })('a sleeping database', (it) => {
 				yield* asleep;
 				yield* fire(SYNC, slotAt());
 				expect(pages).toBe(4);
+			})
+	);
+
+	it.effect(
+		'a polled sync whose source is quiet asks its database nothing and records no run; a write here or a change there reads as before',
+		() =>
+			Effect.gen(function* () {
+				const { t, fire, sql } = yield* setup;
+				const SYNC = 'products.sync.erp';
+				const told: boolean[] = [];
+				const asked = Schema.decodeUnknownOption(
+					Schema.Struct({ values: Schema.Struct({ local_unchanged: Schema.Boolean }) })
+				);
+				let rows: Json[] = [];
+				t.fakes.links.answer = (_instance, op) =>
+					Effect.sync(() => {
+						const question = asked(op);
+						if (Option.isSome(question)) told.push(question.value.values.local_unchanged);
+						return { rows: [{ page: { rows, cursor: 'c1', more: false } }] };
+					});
+				const asleep = Effect.gen(function* () {
+					t.clock.advance('30min');
+					yield* t.settled();
+					t.count.reset();
+				});
+				const runs = () =>
+					sql(`SELECT state FROM sys_run WHERE automation = '${SYNC}'`).pipe(Effect.orDie);
+				// the first read moves the cursor: that slot writes, and records its run
+				expect(yield* fire(SYNC, t.clock.now())).toEqual({ ran: true });
+				expect(yield* runs()).toEqual([{ state: 'succeeded' }]);
+				// the next slot finds the source quiet: it reads the states that write left, and writes nothing
+				yield* asleep;
+				expect(yield* fire(SYNC, t.clock.now())).toEqual({ ran: false });
+				expect(t.count.writes).toBe(0);
+				// from then on a quiet slot makes no trip at all, and its read is told nothing changed here
+				yield* asleep;
+				expect(yield* fire(SYNC, t.clock.now())).toEqual({ ran: false });
+				expect(t.count).toMatchObject({ reads: 0, writes: 0 });
+				expect(told).toEqual([false, false, true]);
+				expect(yield* runs()).toEqual([{ state: 'succeeded' }]);
+				// someone used the workspace: the next read is told so
+				yield* t.db.write({
+					text: `INSERT INTO sys_config (key, value) VALUES ('another person', 'was here')`,
+					params: []
+				});
+				t.clock.advance('30min');
+				yield* fire(SYNC, t.clock.now());
+				expect(told.at(-1)).toBe(false);
+				// a slot the host delivers twice is entered once, without asking the database
+				t.count.reset();
+				expect(yield* fire(SYNC, t.clock.now())).toEqual({ ran: false });
+				expect(told).toHaveLength(4);
+				expect(t.count).toMatchObject({ reads: 0, writes: 0 });
+				// the source moved: its page commits and the slot records its run, as before
+				rows = [{ $id: 'B', code: 'B', name: 'Beta' }];
+				t.clock.advance('30min');
+				expect(yield* fire(SYNC, t.clock.now())).toEqual({ ran: true });
+				expect(yield* sql('SELECT code FROM products')).toEqual([{ code: 'B' }]);
+				expect(yield* runs()).toHaveLength(2);
 			})
 	);
 });

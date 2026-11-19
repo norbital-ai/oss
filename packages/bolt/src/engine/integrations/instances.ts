@@ -42,7 +42,7 @@ import {
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { decodeInput } from '../callables/decode.ts';
-import { enqueue, next_due } from '../runs/queue.ts';
+import { enqueue, next_due, queue_events, triggers_of } from '../runs/queue.ts';
 import type { Item } from '../write/flatten.ts';
 import { Chain } from '../write/sql.ts';
 import { validate_database_request, validate_database_result } from './database.ts';
@@ -377,6 +377,10 @@ export const writeStatus = (instance: string, patch: { readonly [key: string]: J
 			'sys_integration',
 			`UPDATE sys_integration i SET status = ${merged} || ${since}, revision = i.revision + 1 WHERE i.id = ${c.p(instance)} AND ${merged} IS DISTINCT FROM coalesce(i.status, '{}'::jsonb)`
 		);
+		// a status that changed is a `sys_integration` update to its listeners, so a notice needs no sweep
+		const listening = triggers_of(manifest).writes.filter((w) => w.model === 'sys_integration');
+		if (listening.length > 0)
+			queue_events(c, listening, `${c.p(at)}::timestamptz`, `(SELECT 'sys_integration'::text AS c, id, 'update'::text AS op FROM status)`, 0);
 		if (patch.state === 'connected')
 			enqueue(
 				c,
@@ -618,13 +622,18 @@ export const integrationBody = (
 		configuration: Json;
 		/** Recheck a sync delivery's claim after pacing and before every external operation. */
 		fence?: Effect.Effect<void, EngineError>;
+		/** The instance as the caller just read it: its requests check it instead of reading it again. */
+		held?: Instance;
 	}
 ) =>
 	Effect.gen(function* () {
 		const bindings = yield* cfg.bindings();
-		const known = instancesOf(cfg.manifest, cfg.db, { ids: [options.instance] }).pipe(
-			Effect.map(([first]) => first)
-		);
+		const known =
+			options.held !== undefined
+				? Effect.succeed<Instance | undefined>(options.held)
+				: instancesOf(cfg.manifest, cfg.db, { ids: [options.instance] }).pipe(
+						Effect.map(([first]) => first)
+					);
 		let sends = 0;
 		const send = (message: Json) =>
 			Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {

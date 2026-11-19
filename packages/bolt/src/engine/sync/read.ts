@@ -47,7 +47,9 @@ const HealthSchema = Schema.Struct({
 	message: Schema.optionalKey(Schema.String),
 	/** On `sys_sync` alone: the slots this read has failed in a row, and when the next one may read again. */
 	failures: Schema.optionalKey(Schema.Number),
-	retry_at: Schema.optionalKey(Schema.String)
+	retry_at: Schema.optionalKey(Schema.String),
+	/** When this read began failing: what it last read is at most this old (`sys_integration.status.failing`). */
+	since: Schema.optionalKey(Schema.String)
 });
 type Health = typeof HealthSchema.Type;
 const READY: Health = { state: 'ready' };
@@ -124,7 +126,7 @@ type Effects = {
 };
 const NONE: Effects = { marks: [], gone: [], consumed: [], changed: false };
 const worst = (all: Iterable<Health | null>): Health => {
-	for (const h of all) if (h?.state === 'attention') return Struct.omit(h, ['failures', 'retry_at']);
+	for (const h of all) if (h?.state === 'attention') return Struct.omit(h, ['failures', 'retry_at', 'since']);
 	return READY;
 };
 const text = (v: Json) => {
@@ -513,8 +515,25 @@ export function makeRead(e: SyncEngine) {
 			return { id: String(r['id']), item };
 		});
 	});
+	/**
+	 * Whether rows can wait in `sys_inbox` for a sync of `inst`: a webhook, a conversation's messages or the reports on
+	 * them. A database or HTTP feed without these never asks for them, so its quiet read makes no trip.
+	 */
+	const receives = (inst: Instance) => {
+		const driver = driver_of(inst.definition);
+		return (
+			m.integrations[inst.integration]?.webhook !== undefined ||
+			driver.conversation !== undefined ||
+			driver.read === 'deliveries'
+		);
+	};
 	/** One page: the driver's pushed items from `cursor` (a pushing driver), the inbox's deliveries, then the guest `read`. */
-	const read = Effect.fn('Syncs.read')(function* (x: Session, partition: string, cursor: Json) {
+	const read = Effect.fn('Syncs.read')(function* (
+		x: Session,
+		partition: string,
+		cursor: Json,
+		unchanged: boolean
+	) {
 		const s = x.s,
 			inst = x.inst;
 		const pushed: DriverPage | undefined =
@@ -530,7 +549,7 @@ export function makeRead(e: SyncEngine) {
 						)
 					)
 				: undefined;
-		const inbox = yield* deliveries(x);
+		const inbox = receives(inst) ? yield* deliveries(x) : { ids: [], deliveries: [] };
 		const answer = yield* integrationBody(e, {
 			id: x.id(),
 			actor: x.actor,
@@ -544,12 +563,13 @@ export function makeRead(e: SyncEngine) {
 						? { items: pushed?.items ?? [] }
 						: driver_of(inst.definition).read === 'deliveries'
 							? { deliveries: inbox.deliveries }
-							: { cursor })
+							: { cursor, local_unchanged: unchanged })
 				},
 				{ $ctx: true }
 			],
 			instance: inst.id,
-			configuration: inst.configuration
+			configuration: inst.configuration,
+			held: inst
 		});
 		const result = yield* Schema.decodeUnknownEffect(ResultSchema)(answer, {
 			errors: 'all',
@@ -576,6 +596,11 @@ export function makeRead(e: SyncEngine) {
 		digest: string
 	) {
 		const s = x.s;
+		const key = readKey(s, x.inst.id, partition);
+		// counted before the read, so a write that lands while it runs makes the next read look again
+		const writes = db.writes();
+		let unchanged = localWrites.get(key) === writes && stored?.digest === digest;
+		localWrites.delete(key);
 		let state: State =
 			stored !== undefined && stored.digest === digest
 				? stored
@@ -588,22 +613,30 @@ export function makeRead(e: SyncEngine) {
 						digest
 					};
 		let pages = 0,
+			wrote = 0,
 			done = false;
+		const finished = () => {
+			localWrites.set(key, writes);
+			return { state, pages: wrote };
+		};
 		for (;;) {
-			if (state.phase !== 'reconcile' && done) return { state, pages };
+			if (state.phase !== 'reconcile' && done) return finished();
 			if (pages >= PAGES) {
 				// a continuation run resumes this instance and partition, never an in-process loop past the cap
 				yield* enqueue_read(s.name, { instance: x.inst.id, partition }, {
 					cause: 'continue', key: JSON.stringify(['sync:continue', s.name, x.inst.id, partition, state.version])
 				});
-				return { state, pages };
+				return { state, pages: wrote };
 			}
 			pages++;
 			if (state.phase === 'reconcile') {
 				state = yield* reconcile(x, partition, state);
+				wrote++;
 				continue;
 			}
-			const { page, consumed } = yield* read(x, partition, state.cursor);
+			const { page, consumed } = yield* read(x, partition, state.cursor, unchanged);
+			// only the first page learns it: the next one follows this page's own commit
+			unchanged = false;
 			// nothing arrived and nothing moved: no write, so a quiet source leaves the database asleep
 			if (
 				stored?.digest === digest &&
@@ -615,7 +648,7 @@ export function makeRead(e: SyncEngine) {
 				canonical(page.cursor) === canonical(state.cursor) &&
 				canonical(page.health ?? READY) === canonical(state.health)
 			)
-				return { state, pages };
+				return finished();
 			if (page.retained === false) {
 				if (state.cursor === null)
 					return yield* Effect.fail(
@@ -632,6 +665,7 @@ export function makeRead(e: SyncEngine) {
 					{ ...state, cursor: null, phase: 'read', health: page.health ?? READY },
 					{ ...NONE, consumed }
 				);
+				wrote++;
 				continue;
 			}
 			if (page.more && canonical(page.cursor) === canonical(state.cursor))
@@ -643,6 +677,7 @@ export function makeRead(e: SyncEngine) {
 					)
 				);
 			state = yield* commit(x, partition, state, page, consumed);
+			wrote++;
 			// a full inbox reads on: the next page takes the deliveries this one could not
 			done = !page.more && consumed.length < PAGE_ROWS;
 		}
@@ -651,14 +686,23 @@ export function makeRead(e: SyncEngine) {
 		inst: Instance,
 		healths: ReadonlyMap<string, Health | null>
 	) {
-		const next = worst([...healths].sort(([a], [b]) => a.localeCompare(b)).map(([, h]) => h));
+		const sorted = [...healths].sort(([a], [b]) => a.localeCompare(b));
+		const next = worst(sorted.map(([, h]) => h));
+		// each failing sync and when it began failing (its earliest partition): a page judges what it read by this,
+		// so a quiet read that confirms its rows needs to write nothing
+		const failing: { [sync: string]: string } = {};
+		for (const [key, h] of sorted) {
+			const sync = key.slice(0, key.indexOf('\u0000'));
+			if (h?.since !== undefined && !(failing[sync] !== undefined && failing[sync] <= h.since)) failing[sync] = h.since;
+		}
 		const prev =
 			Predicate.isObject(inst.status) && Predicate.isObject(inst.status['health'])
 				? inst.status['health']
 				: READY;
-		if (canonical(prev) === canonical(next)) return;
+		const before = Predicate.isObject(inst.status) ? (inst.status['failing'] ?? {}) : {};
+		if (canonical(prev) === canonical(next) && canonical(before) === canonical(failing)) return;
 		// a notice on a health change is an ordinary automation on `sys_integration` updates
-		yield* e.status(inst.id, { health: next });
+		yield* e.status(inst.id, { health: next, failing });
 	});
 	/** The partitions a sync reads of an instance: its configured ones, else the instance whole. */
 	const partitionsOf = (s: RemoteSync, inst: Instance): readonly string[] => {
@@ -671,6 +715,11 @@ export function makeRead(e: SyncEngine) {
 	};
 	/** What this generation last learned: each resting sync's end, so a slot in its rest asks no database. */
 	const known = new Map<string, number>();
+	/**
+	 * The write count each partition's last finished read began at: equal now, nothing was written here since, and the
+	 * next read is told so (`local_unchanged`), so a feed whose source is quiet can answer without asking the workspace.
+	 */
+	const localWrites = new Map<string, number>();
 	/** When this generation last read each partition: a quiet read commits nothing, so `last_read_at` stands still. */
 	const lastRead = new Map<string, { readonly instance: string; readonly at: number }>();
 	const readKey = (s: RemoteSync, instance: string, partition: string) =>
@@ -704,22 +753,45 @@ export function makeRead(e: SyncEngine) {
 			(Predicate.isObject(i.status) &&
 				i.status['state'] === 'connected' &&
 				i.status['databaseVerified'] === true));
+	/** Each definition's instances and their sync states as last read, with the write count read before them. */
+	const seen = new Map<
+		string,
+		{
+			readonly writes: number;
+			readonly instances: readonly Instance[];
+			readonly rows: readonly StoredRow[];
+		}
+	>();
+	/**
+	 * A definition's instances and sync states: read again only once this generation wrote anything, so a slot of a
+	 * quiet workspace asks its database nothing (a commit, a status change or a person's edit is a write).
+	 */
+	const observe = Effect.fn('Syncs.observe')(function* (definition: string) {
+		const writes = db.writes();
+		const held = seen.get(definition);
+		if (held !== undefined && held.writes === writes) return held;
+		const instances = yield* instancesOf(m, db, { integration: definition });
+		const rows =
+			instances.length === 0
+				? []
+				: yield* db.rows(StoredState, {
+						text: `SELECT ${STORED_STATE} FROM sys_sync
+						WHERE instance IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+						params: [JSON.stringify(instances.map((i) => i.id))]
+					});
+		const next = { writes, instances, rows };
+		seen.set(definition, next);
+		return next;
+	});
 	const rests = Effect.fn('Syncs.rests')(function* (s: RemoteSync, now: number) {
 		if (!e.links.available) return undefined;
 		const held = known.get(s.name);
 		if (held !== undefined && held > now && !(yield* db.awake)) return held;
-		const stored = yield* db.quietly(
-			Effect.gen(function* () {
-				const instances = (yield* instancesOf(m, db, { integration: s.definition })).filter((i) =>
-					eligible(i, s)
-				);
-				const rows = yield* db.rows(StoredState, {
-					text: `SELECT ${STORED_STATE} FROM sys_sync WHERE sync = $1`,
-					params: [s.name]
-				});
-				return { instances, rows };
-			})
-		);
+		const observed = yield* db.quietly(observe(s.definition));
+		const stored = {
+			instances: observed.instances.filter((i) => eligible(i, s)),
+			rows: observed.rows.filter((row) => row.sync === s.name)
+		};
 		const ends = stored.instances.flatMap((inst) =>
 			partitionsOf(s, inst).map((partition) =>
 				readableAt(
@@ -748,17 +820,12 @@ export function makeRead(e: SyncEngine) {
 			slot = start.cause === 'cron' && start.attempts === 1;
 		const args = Predicate.isObject(input) ? input : {};
 		const only = typeof args['instance'] === 'string' ? args['instance'] : undefined;
-		const instances = (yield* instancesOf(
-			m,
-			db,
-			only === undefined ? { integration: s.definition } : { ids: [only] }
-		)).filter((i) => eligible(i, s));
+		const observed = yield* observe(s.definition);
+		const instances = observed.instances.filter(
+			(i) => eligible(i, s) && (only === undefined || i.id === only)
+		);
 		if (instances.length === 0) return { pages: 0, unconnected: true };
-		const stored = yield* db.rows(StoredState, {
-			text: `SELECT ${STORED_STATE} FROM sys_sync
-			WHERE instance IN (SELECT jsonb_array_elements_text($1::jsonb))`,
-			params: [JSON.stringify(instances.map((i) => i.id))]
-		});
+		const stored = observed.rows;
 		// a changed declaration of what is read (its integration, its partitions) starts again from no cursor
 		const digest = sha256_hex(canonical({ with: s.definition, partitions: s.partitions ?? null }));
 		const failures: EngineError[] = [];
@@ -822,6 +889,7 @@ export function makeRead(e: SyncEngine) {
 							code: error instanceof BoltError ? error.code : 'processingFailure',
 							message: error instanceof Error ? error.message.slice(0, 500) : String(error),
 							failures: slots,
+							since: prior?.health?.since ?? iso(now),
 							retry_at: iso(
 								inst.definition.driver === 'sqlserver' && is_transient(error)
 									? now

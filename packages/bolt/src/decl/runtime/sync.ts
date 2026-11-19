@@ -217,7 +217,15 @@ export type FileSync<M, S extends string = string, X = SyncData<M, S>> = {
 // ── remote ──
 type DefOf<X> = X extends { with: infer D extends IntegrationName } ? D : IntegrationName;
 type ReadPayload<D, Mode = DriverReadOf<D>> = Mode extends 'cursor'
-	? { readonly cursor: Json | null }
+	? {
+			readonly cursor: Json | null;
+			/**
+			 * Nothing was written in the workspace since this partition's last read on this host. A read that then finds its
+			 * source quiet can answer its cursor without querying the workspace, and the slot leaves the database asleep:
+			 * ask the source first, and the workspace only when this is false or the source moved.
+			 */
+			readonly local_unchanged: boolean;
+		}
 	: Mode extends 'items'
 		? { readonly items: readonly DriverItemOf<D>[] }
 		: Mode extends 'deliveries'
@@ -235,7 +243,11 @@ export type RemoteReadInput<D = IntegrationName> = D extends unknown ? {
  * One page a remote `read` returns. Its rows and its cursor commit in one statement. `more` reads on in the same run;
  * `snapshot: 'begin'` … `'end'` brackets a full listing, after which the rows it did not see are deleted; `retained:
  * false` (the source lost its history) starts a fresh snapshot; `health` sets the sync's health (lag, retention risk).
- * A page with no rows and an unchanged cursor commits nothing, so a quiet source leaves the database asleep. Rows apply
+ * A page with no rows and an unchanged cursor commits nothing, and its slot records no run, so a quiet source leaves
+ * the database asleep (see `local_unchanged`). A read that confirms its rows unchanged writes nothing to say so: while
+ * its instance is active and the sync is absent from `sys_integration.status.failing` (`{ '<model>.sync.<sync>':
+ * since }`, written only when a sync starts or stops failing), what it last committed is current as of its latest
+ * slot; once listed there, it is at most `since` old. Judge a snapshot's freshness by that, not a stamp on each row. Rows apply
  * through the ordinary write path: a locked row refuses an incoming delete or an unexempted change, failing the page,
  * which retries like any failed read.
  */

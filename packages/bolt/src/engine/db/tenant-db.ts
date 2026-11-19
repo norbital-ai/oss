@@ -39,6 +39,11 @@ export type TenantDbShape = RawDb & {
 	 * before the read, so a write that lands at any point after makes the answer stale at once.
 	 */
 	readonly identityWrites: () => number;
+	/**
+	 * How many writing statements have finished, as `identityWrites` counts them: read before a read, it tells whether
+	 * anything this generation wrote could have changed what that read saw.
+	 */
+	readonly writes: () => number;
 	/** Work that only checks for work: unless it writes, it does not count as the database being in use. */
 	readonly quietly: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 	/** One read's rows, each decoded by `schema`. */
@@ -176,6 +181,7 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 			ready: pay,
 			awake: Effect.map(Clock.currentTimeMillis, (now) => now - touched < AWAKE_MILLIS),
 			identityWrites: () => identity,
+			writes: () => writes,
 			quietly: (work) =>
 				Effect.suspend(() => {
 					const before = touched,

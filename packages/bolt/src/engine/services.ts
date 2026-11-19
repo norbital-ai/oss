@@ -430,9 +430,16 @@ export type RunHandlersShape = {
 	readonly register: (
 		handlers: { readonly [name: string]: RunHandler },
 		retries?: { readonly [name: string]: RetrySpec } | undefined,
-		rests?: { readonly [name: string]: RunRest } | undefined
+		rests?: { readonly [name: string]: RunRest } | undefined,
+		/**
+		 * Handlers safe to enter twice for one slot (a sync read: its pages commit by compare-and-set). Their fired slot
+		 * writes its `sys_run` row only once the handler wrote or failed, so a quiet slot leaves the database asleep.
+		 */
+		idempotent?: readonly string[] | undefined
 	) => Effect.Effect<void>;
 	readonly handler: (name: string) => Effect.Effect<Option.Option<RunHandler>>;
+	/** Whether `name` registered as idempotent: its fired slot is claimed by its first write, not before. */
+	readonly idempotent: (name: string) => boolean;
 	readonly resting: RunRestOf;
 	readonly retry: (name: string) => Effect.Effect<Option.Option<RetrySpec>>;
 };

@@ -256,8 +256,10 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 					: yield* registry.handler(head.automation);
 			if (spec === undefined && Option.isSome(handler)) {
 				// Platform handlers own their I/O and page statements, so claim a fired slot before handing them control.
-				// A queued attempt already has its lease; a repeated cron slot must never enter the handler again.
-				if (!ledger.written() && !(yield* ledger.record)) return dues;
+				// A queued attempt already has its lease; a repeated cron slot must never enter the handler again, unless
+				// it is idempotent (a sync read): then the slot is claimed once it wrote or failed, and a quiet one is not.
+				if (!ledger.written() && !registry.idempotent(head.automation) && !(yield* ledger.record))
+					return dues;
 				outcome = yield* handler.value(input, head).pipe(
 					Effect.map((output): GuestOutcome => ({ kind: 'ok', output })),
 					Effect.catch((error) =>
@@ -348,7 +350,7 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 				return dues;
 			}
 			if (!ledger.written()) {
-				// An authored cron that only read writes nothing; platform handlers claimed their slot before I/O.
+				// An authored cron that only read writes nothing, nor an idempotent handler's slot that wrote nothing.
 				const idle =
 					outcome.kind === 'ok' &&
 					(spec !== undefined ||

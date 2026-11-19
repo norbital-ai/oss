@@ -60,6 +60,7 @@ export const RunHandlersLive = Layer.sync(RunHandlers, () => {
 	const handlers = new Map<string, RunHandler>(),
 		retries = new Map<string, RetrySpec>();
 	const rests = new Map<string, RunRest>();
+	const idempotent = new Set<string>();
 	return {
 		register: (
 			next: {
@@ -70,13 +71,16 @@ export const RunHandlersLive = Layer.sync(RunHandlers, () => {
 			} = {},
 			resting: {
 				readonly [name: string]: RunRest;
-			} = {}
+			} = {},
+			safe: readonly string[] = []
 		) =>
 			Effect.sync(() => {
 				for (const [name, handler] of Object.entries(next)) handlers.set(name, handler);
 				for (const [name, retry] of Object.entries(policy)) retries.set(name, retry);
 				for (const [name, rest] of Object.entries(resting)) rests.set(name, rest);
+				for (const name of safe) idempotent.add(name);
 			}),
+		idempotent: (name: string) => idempotent.has(name),
 		handler: (name: string) => Effect.sync(() => Option.fromNullishOr(handlers.get(name))),
 		resting: (name: string, now: number) => rests.get(name)?.(now) ?? Effect.succeed(undefined),
 		retry: (name: string) => Effect.sync(() => Option.fromNullishOr(retries.get(name)))
@@ -106,6 +110,11 @@ export const RunsLive = Layer.effect(
 		const locks = new Map<string, Semaphore.Semaphore>();
 		/** Each resting cron's end, as this generation learned it. */
 		const restEnds = new Map<string, number>();
+		/**
+		 * The slots this generation fired of idempotent handlers, which claim no row before they run: a repeat of one is
+		 * still never entered again, without asking the database. Recent ones are enough: a repeat follows its slot.
+		 */
+		const fired = new Set<string>();
 		const lock = (automation: string) => {
 			let held = locks.get(automation);
 			if (held === undefined)
@@ -240,8 +249,14 @@ export const RunsLive = Layer.effect(
 				rested = restEnds.get(id);
 			if (rested !== undefined && rested > now && !(yield* db.awake))
 				return { ran: false, until: iso(rested) };
+			const runId = sha256_hex(canonical(['cron', id, iso(at)])).slice(0, 32);
+			if (registry.idempotent(id)) {
+				if (fired.has(runId)) return { ran: false };
+				fired.add(runId);
+				if (fired.size > 1_000) fired.delete(fired.values().next().value ?? runId);
+			}
 			const run: Row = {
-				id: sha256_hex(canonical(['cron', id, iso(at)])).slice(0, 32),
+				id: runId,
 				automation: id,
 				input: {},
 				due_at: iso(at),

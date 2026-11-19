@@ -1,5 +1,5 @@
 // Optional trusted TDS transport: no source polling, CDC or business submission behavior.
-import { Effect, FiberSet, Result, Scope } from 'effect';
+import { Effect, Exit, FiberSet, RcMap, Result, Scope } from 'effect';
 import mssql from 'mssql';
 import { compile_sql_server } from '@norbital-ai/store/sqlserver';
 import type { Json } from 'effect/Schema';
@@ -21,6 +21,8 @@ export type SqlServerConnector = (
 ) => Effect.Effect<Socket, FacilityFailure, Scope.Scope>;
 
 const QUERY_MS = 8_000;
+/** Feeds poll every minute: a pooled connection outlives the gap, and an unused pool closes this long after its last request. */
+const IDLE_MS = 150_000;
 const retryableSql = new Set([1205, 1222]); // Deadlock victim and lock timeout.
 const failure = (message: string) => (cause: unknown) => {
 	if (cause instanceof FacilityFailure) return cause;
@@ -49,29 +51,23 @@ function scalar(value: unknown): Json {
 /** Public-address policy by default; an operator may supply a more narrowly authorized host route. */
 export function sqlServerDatabase(options: { readonly connect?: SqlServerConnector } = {}) {
 	const connect = options.connect ?? connect_public;
-	return {
-		query: (credential: string, given: DatabaseRequest) =>
-			Effect.scoped(
+	/** One TCP connection in its own scope, closed with the socket: a pooled connection outlives the request that opened it. */
+	const socket = (hostname: string, port: number) =>
+		Effect.gen(function* () {
+			const owned = Scope.makeUnsafe();
+			const opened = yield* connect(hostname, port).pipe(
+				Effect.provideService(Scope.Scope, owned),
+				Effect.onError(() => Scope.close(owned, Exit.void))
+			);
+			opened.once('close', () => Effect.runFork(Scope.close(owned, Exit.void)));
+			return opened;
+		});
+	// One logged-in pool per connection string while it is used, and IDLE_MS after: a request reuses its TLS session
+	// instead of paying two logins. A paused, unpaired or re-credentialed instance stops using its key, which then closes.
+	const pools = Effect.runSync(
+		RcMap.make({
+			lookup: (credential: string) =>
 				Effect.gen(function* () {
-					if (new TextEncoder().encode(JSON.stringify(given)).byteLength > HOST_LIMITS.argsBytes)
-						return yield* Effect.fail(
-							FacilityFailure.invalid('Database request exceeds its bounds.')
-						);
-					const request = yield* Effect.try({
-						try: () => compile_sql_server(given),
-						catch: () => FacilityFailure.invalid('Database request is invalid.')
-					});
-					if (!credential.trim())
-						return yield* Effect.fail(
-							new FacilityFailure({ kind: 'invalid', message: 'Database credential is invalid.' })
-						);
-					if (Object.keys(request.parameters).length > 2_100)
-						return yield* Effect.fail(
-							new FacilityFailure({
-								kind: 'invalid',
-								message: 'Database transport parameter limit exceeded.'
-							})
-						);
 					const parsed = yield* Effect.try({
 						try: () => mssql.ConnectionPool.parseConnectionString(credential),
 						catch: () =>
@@ -107,7 +103,6 @@ export function sqlServerDatabase(options: { readonly connect?: SqlServerConnect
 						);
 					const hostname = parsed.server;
 					const port = parsed.options?.port ?? parsed.port ?? 1433;
-					const scope = yield* Scope.Scope;
 					const run = yield* FiberSet.makeRuntimePromise();
 					const pool = yield* Effect.try({
 						try: () =>
@@ -115,13 +110,15 @@ export function sqlServerDatabase(options: { readonly connect?: SqlServerConnect
 								...parsed,
 								connectionTimeout: QUERY_MS,
 								requestTimeout: QUERY_MS,
+								// a socket check, not a SELECT 1 round trip, before each reuse
+								validateConnection: 'socket',
+								pool: { max: 4, min: 0, idleTimeoutMillis: IDLE_MS },
 								options: {
 									...parsed.options,
 									encrypt: true,
 									trustServerCertificate: false,
 									serverName: hostname,
-									connector: () =>
-										run(connect(hostname, port).pipe(Effect.provideService(Scope.Scope, scope)))
+									connector: () => run(socket(hostname, port))
 								},
 								beforeConnect: (connection) => {
 									connection.config.options.connector = () =>
@@ -132,35 +129,58 @@ export function sqlServerDatabase(options: { readonly connect?: SqlServerConnect
 														message: 'SQL Server rerouting is unavailable.'
 													})
 												)
-											: run(
-													connect(hostname, port).pipe(Effect.provideService(Scope.Scope, scope))
-												);
+											: run(socket(hostname, port));
 								}
 							}),
 						catch: () =>
 							new FacilityFailure({ kind: 'invalid', message: 'Database credential is invalid.' })
 					});
-					let closed = false;
-					const close = Effect.tryPromise({
-						try: () => pool.close(),
-						catch: failure('Database connection cleanup failed.')
-					}).pipe(
-						Effect.tap(() =>
-							Effect.sync(() => {
-								closed = true;
-							})
-						)
-					);
-					yield* Effect.addFinalizer(() =>
-						closed ? Effect.void : close.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
-					);
 					pool.on('error', () => {
 						/* The active request reports its failure; idle SDK events never escape. */
 					});
-					yield* Effect.tryPromise({
-						try: () => pool.connect(),
-						catch: failure('Database connection failed.')
+					yield* Effect.acquireRelease(
+						Effect.tryPromise({
+							try: () => pool.connect(),
+							catch: failure('Database connection failed.')
+						}),
+						() =>
+							Effect.tryPromise({
+								try: () => pool.close(),
+								catch: failure('Database connection cleanup failed.')
+							}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
+					);
+					return pool;
+				}),
+			idleTimeToLive: IDLE_MS
+		}).pipe(Effect.provideService(Scope.Scope, Scope.makeUnsafe()))
+	);
+	return {
+		query: (credential: string, given: DatabaseRequest) =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					if (new TextEncoder().encode(JSON.stringify(given)).byteLength > HOST_LIMITS.argsBytes)
+						return yield* Effect.fail(
+							FacilityFailure.invalid('Database request exceeds its bounds.')
+						);
+					const request = yield* Effect.try({
+						try: () => compile_sql_server(given),
+						catch: () => FacilityFailure.invalid('Database request is invalid.')
 					});
+					if (!credential.trim())
+						return yield* Effect.fail(
+							new FacilityFailure({ kind: 'invalid', message: 'Database credential is invalid.' })
+						);
+					if (Object.keys(request.parameters).length > 2_100)
+						return yield* Effect.fail(
+							new FacilityFailure({
+								kind: 'invalid',
+								message: 'Database transport parameter limit exceeded.'
+							})
+						);
+					// a refused or failed login is not kept: the next request tries again
+					const pool = yield* RcMap.get(pools, credential).pipe(
+						Effect.tapError(() => RcMap.invalidate(pools, credential))
+					);
 					const transaction =
 						request.transaction === undefined
 							? undefined
@@ -169,13 +189,18 @@ export function sqlServerDatabase(options: { readonly connect?: SqlServerConnect
 									catch: failure('Database transaction failed.')
 								});
 					let active = false;
+					// a pooled session would keep SERIALIZABLE after a failed transaction: its pool is not reused
 					yield* Effect.addFinalizer(() =>
 						!active || transaction === undefined
 							? Effect.void
 							: Effect.tryPromise({
 									try: () => transaction.rollback(),
 									catch: failure('Database rollback failed.')
-								}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
+								}).pipe(
+									Effect.tapCause(Effect.logWarning),
+									Effect.ignore,
+									Effect.andThen(RcMap.invalidate(pools, credential))
+								)
 					);
 					if (transaction !== undefined) {
 						yield* Effect.tryPromise({
@@ -263,13 +288,18 @@ export function sqlServerDatabase(options: { readonly connect?: SqlServerConnect
 					if (streamFailure !== undefined)
 						return yield* Effect.fail(failure('Database request failed.')(streamFailure));
 					if (transaction !== undefined) {
+						// the session returns to the pool: later requests read at the default level, not SERIALIZABLE
+						yield* Effect.tryPromise({
+							try: () =>
+								transaction.request().batch('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'),
+							catch: failure('Database commit failed.')
+						});
 						yield* Effect.tryPromise({
 							try: () => transaction.commit(),
 							catch: failure('Database commit failed.')
 						});
 						active = false;
 					}
-					yield* close;
 					return { rows };
 				})
 			).pipe(

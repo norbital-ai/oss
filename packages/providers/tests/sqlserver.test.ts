@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { FacilityFailure } from '@norbital-ai/host-api';
-import { refuse_platform_addresses } from '@norbital-ai/host-api/node';
+import { connect_public, refuse_platform_addresses } from '@norbital-ai/host-api/node';
 import { sqlServerDatabase } from '../src/database.ts';
 
 describe('host SQL routes', () => {
@@ -57,5 +57,67 @@ describe('host SQL routes', () => {
 			expect(error.kind).toBe('unsupported');
 			expect(calls).toBe(0);
 		})
+	);
+});
+
+// A real SQL Server 2017 login: `SQLSERVER_TEST_CONNECTION` is a connection string whose host passes the public-address guard.
+const live = process.env.SQLSERVER_TEST_CONNECTION;
+describe.skipIf(!live)('pooled SQL Server connections', () => {
+	const level = (transaction?: 'serializable') => ({
+		op: 'call' as const,
+		procedure: { schema: 'sys', name: 'sp_executesql' },
+		arguments: {
+			stmt: 'SELECT transaction_isolation_level AS level FROM sys.dm_exec_sessions WHERE session_id=@@SPID',
+			params: ''
+		},
+		...(transaction ? { transaction } : {})
+	});
+	it.live(
+		'reuses one login, returns a session at the default level after a transaction, and keeps no failed login',
+		() =>
+			Effect.gen(function* () {
+				const credential = live ?? '';
+				let connects = 0;
+				const database = sqlServerDatabase({
+					connect: (host, port) => {
+						connects++;
+						return connect_public(host, port).pipe(
+							Effect.mapError((error) =>
+								error._tag === 'FacilityFailure'
+									? error
+									: new FacilityFailure({ kind: 'upstream', message: error.message })
+							)
+						);
+					}
+				});
+				// mssql proves the login once with a throwaway connection, then pools one
+				expect((yield* database.query(credential, level())).rows).toEqual([{ level: 2 }]);
+				expect(connects).toBe(2);
+				yield* database.query(credential, level());
+				expect(connects).toBe(2);
+				expect((yield* database.query(credential, level('serializable'))).rows).toEqual([
+					{ level: 4 }
+				]);
+				expect((yield* database.query(credential, level())).rows).toEqual([{ level: 2 }]);
+				expect(connects).toBe(2);
+				// a failed transaction's session might keep SERIALIZABLE: its pool is not reused
+				yield* database
+					.query(credential, {
+						...level('serializable'),
+						arguments: { stmt: "RAISERROR('refused',16,1)", params: '' }
+					})
+					.pipe(Effect.flip);
+				expect((yield* database.query(credential, level())).rows).toEqual([{ level: 2 }]);
+				expect(connects).toBe(4);
+				// a refused login is not cached: each request tries again
+				const wrong = credential.replace(/Password=[^;]*/i, 'Password=wrong-password-0000');
+				for (const attempt of [1, 2])
+					expect(
+						(yield* database.query(wrong, level()).pipe(Effect.flip)).message,
+						`attempt ${attempt}`
+					).toBe('Database connection failed.');
+				expect(connects).toBe(6);
+			}),
+		60_000
 	);
 });

@@ -1,6 +1,6 @@
 // An integration instance: one external account of one definition (a number, a mailbox, a bot, a database, a calendar
 // account). Every account is a durable runtime row; `owner` makes it personal (sync only).
-// `status` is the host's (durable transitions only); `epoch` is the host's link fence and never readable. A member owns
+// `status` is the host's (durable transitions only; `status.failing` names each sync failing and since when); `epoch` is the host's link fence and never readable. A member owns
 // at most one instance of each definition. An envoy may be deployed on several instances (one hotline per entity).
 // Managed through ordinary grants (admins bypass them): a create names the definition, and an owner for a personal
 // instance or the envoy a workspace instance carries; an update deploys an envoy, pauses the instance or edits its
