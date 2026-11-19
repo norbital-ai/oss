@@ -218,11 +218,32 @@
 			{#snippet actions()}<AutoRefresh {t} on_refresh={() => fork(logs.refetch())} />{/snippet}
 		</WorkspaceOperations>
 	{:else if inspection.error === undefined}
-		<div role="status" aria-busy="true" aria-label={t('Loading…')} class="p-4 sm:p-6">
-			<TableSkeleton />
+		<!-- the view's own shape while the inspection reads: Bundle's figures and its two lists, Telemetry's charts, the log's lines -->
+		<div role="status" aria-busy="true" aria-label={t('Loading…')} class="@container flex flex-col gap-3">
+			{#if view === 'bundle'}
+				{@render bar('h-5 w-16')}
+				{@render bar('h-4 w-56')}
+				<div class="grid gap-4 border-b border-border pb-3 @xl:grid-cols-2">
+					{#each ['w-40', 'w-20', 'w-24', 'w-20'] as width, i (i)}
+						<div class="flex flex-col gap-1">{@render bar('h-4 w-28')}{@render bar(`h-4 ${width}`)}</div>
+					{/each}
+				</div>
+				{@render bar('h-4 w-72')}
+				{#each ['w-56', 'w-40'] as width (width)}
+					<div class="rounded-md border border-border p-3">{@render bar(`h-4 ${width}`)}</div>
+				{/each}
+			{:else if view === 'telemetry'}
+				<div class="flex items-center justify-between gap-3">{@render bar('h-5 w-20')}{@render bar('h-8 w-32')}</div>
+				<div class="grid gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
+					{#each [0, 1, 2, 3] as i (i)}<div class="h-56 rounded-md border border-border"></div>{/each}
+				</div>
+			{:else}
+				<TableSkeleton />
+			{/if}
 		</div>
 	{/if}
 {/snippet}
+{#snippet bar(size: string)}<div class={['bg-muted animate-pulse rounded motion-reduce:animate-none', size]}></div>{/snippet}
 {#snippet aiCategory({ row }: { row: (typeof transcripts)[number]; value: unknown })}
 	<Badge
 		variant={row.category === 'web' ? 'brand' : 'outline'}

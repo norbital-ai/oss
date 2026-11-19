@@ -393,6 +393,15 @@ it('a message the throttle is reading says so and can be answered now', async ()
 });
 
 
+it('every open puts the caret in the message box', async () => {
+	await withPanel({}, async (_host, { remount }) => {
+		await expect.element(message()).toHaveFocus();
+		message().element().blur();
+		await remount();
+		await expect.element(message()).toHaveFocus();
+	});
+});
+
 it('keeps an unsent draft when the chat is closed and reopened', async () => {
 	await withPanel({}, async (host, { remount }) => {
 		await message().fill('Keep this while I inspect the workspace');

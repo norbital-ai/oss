@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { MediaQuery } from 'svelte/reactivity';
+	import { watch } from 'runed';
 	import { Button, Combobox, Icon, Input, MarkdownEditor, Popover, type CommandItem, type ModelExposure } from '@norbital-ai/ui';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
@@ -56,6 +57,15 @@
 	const planning = $derived(mode === 'plan' || drafting);
 	const scheduled = $derived(rows.filter((row) => row.role === 'user' && row.state === 'scheduled'));
 	let dragFrom = $state<number | null>(null);
+	// the panel mounts on every open (⌘K, the sidebar): the caret lands in the message box, except on a touch screen,
+	// where focus would raise the keyboard over the transcript
+	let editor = $state<HTMLTextAreaElement | null>(null);
+	watch(
+		() => editor,
+		(el) => {
+			if (!touch.current) el?.focus({ preventScroll: true });
+		}
+	);
 	function paste(event: ClipboardEvent): void {
 		const files = [...(event.clipboardData?.files ?? [])];
 		if (files.length === 0) return;
@@ -347,6 +357,7 @@
 								<Attachments files={[...stored_files, ...attached]} file_href={file_href} {t} on_remove={(file) => { attached = attached.filter((f) => f !== file); stored_files = stored_files.filter((f) => f !== file); }} />
 							{/if}
 							<MarkdownEditor
+								bind:textarea={editor}
 								value={draft}
 								on_change={(v) => (draft = v)}
 								rows={2}
