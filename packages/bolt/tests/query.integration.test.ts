@@ -1395,8 +1395,10 @@ describe('next query engine (PGlite)', () => {
 			]);
 		})
 	);
-	it.effect('concurrent gets keep the output they name: a caller holding only that output is answered', () =>
+	it.live('concurrent gets keep the output they name: a caller holding only that output is answered', () =>
 		Effect.gen(function* () {
+			// its own database: one a finished test released may be closed or handed on by the pool
+			yield* setup();
 			const brief = (id: string) =>
 				get(cat, 'orders', id).pipe(
 					Effect.map((ir): ReadIR => (ir.kind === 'get' ? { ...ir, output: 'brief' } : ir))
