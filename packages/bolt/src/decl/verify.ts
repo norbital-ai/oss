@@ -61,7 +61,9 @@ type RollUp<M, P extends string, K> = K extends { kind: 'sum' | 'count' | 'state
 				? Unknown<
 						M,
 						{ [X in keyof S]: S[X] extends { stamp: infer F } ? F : never }[keyof S],
-						{ [F in keyof Columns<M>]: Columns<M>[F] extends { kind: 'instant' } ? F : never }[keyof Columns<M>],
+						{
+							[F in keyof Columns<M>]: Columns<M>[F] extends { kind: 'instant' } ? F : never;
+						}[keyof Columns<M>],
 						`${P}.stamp`
 					>
 				: K extends { kind: 'seq'; per: infer L }
@@ -82,7 +84,12 @@ type ModelErrors<M, D = Models[M & keyof Models]> =
 			FieldName<M>,
 			'indexes'
 	  >
-	| Unknown<M, Each<D extends { no_overlap: infer L } ? L : never, 'key'>, FieldName<M>, 'no_overlap'>
+	| Unknown<
+			M,
+			Each<D extends { no_overlap: infer L } ? L : never, 'key'>,
+			FieldName<M>,
+			'no_overlap'
+	  >
 	| Unknown<
 			M,
 			D extends { locks: infer L }
@@ -118,9 +125,16 @@ type ModelErrors<M, D = Models[M & keyof Models]> =
 			? { [P in keyof F & string]: RollUp<M, P, F[P]> }[keyof F & string]
 			: never);
 
-/** Locale keys the base catalogue lacks, as messages. */
+/** Native model captions a locale may carry alone: the base humanizes the declared name. */
+type NativeLocaleKey =
+	`models.${string}.label` | `models.${string}.singular` | `models.${string}.fields.${string}`;
+
+/** Locale keys the base catalogue lacks, as messages (native model captions excepted). */
 export type LocaleErrors<Locales = NamesPart<'locales'>, Base = NamesPart<'messages'>> = {
-	[L in keyof Locales & string]: Exclude<keyof Locales[L], keyof Base> extends infer K
+	[L in keyof Locales & string]: Exclude<
+		keyof Locales[L],
+		keyof Base | NativeLocaleKey
+	> extends infer K
 		? K extends string
 			? `i18n: +${L}.messages.ts key '${K}' is not in +messages.ts`
 			: never

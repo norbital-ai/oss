@@ -8,6 +8,8 @@ import { describe, expect } from 'vitest';
 import { it } from '@effect/vitest';
 import { checkRules } from '../src/compiler/check/rules.ts';
 import { sourceRules } from '../src/compiler/check/source.ts';
+import { messageRules } from '../src/compiler/check/messages.ts';
+import type { Discovered } from '../src/compiler/discover.ts';
 import { parse_cron } from '@norbital-ai/bolt/tooling';
 import { evaluationCpuMs } from '../src/compiler/check/index.ts';
 import { workspaceEntry } from '../src/compiler/artifact/client-boundary.ts';
@@ -29,6 +31,50 @@ const emptyManifest: EngineManifest = {
 	agent: { skills: {} }
 };
 describe('bolt check', () => {
+	it('every locale carries every base message and nothing else', () => {
+		const basePath = 'src/i18n/+messages.ts',
+			zhPath = 'src/i18n/+zh.messages.ts';
+		const files: Discovered[] = [
+			{ role: 'messages', name: '', path: basePath },
+			{ role: 'locale', name: 'zh', path: zhPath }
+		];
+		const base = `export default messages({ 'a': 'A', 'b': 'B' });`;
+		const withOrders: EngineManifest = {
+			...emptyManifest,
+			models: { orders: { description: '', fields: { title: { kind: 'text' } } } }
+		};
+		const findings = (zh: string, m: EngineManifest = emptyManifest) =>
+			messageRules(
+				files,
+				new Map([
+					[basePath, base],
+					[zhPath, zh]
+				]),
+				m
+			);
+		expect(findings(`export default messages({ 'a': '甲', 'b': '乙' });`)).toEqual([]);
+		expect(findings(`export default messages({ 'a': '甲' });`).map((f) => f.code)).toEqual([
+			'check/messages-missing'
+		]);
+		expect(
+			findings(`export default messages({ 'a': '甲', 'b': '乙', 'c': '丙' });`).map((f) => f.code)
+		).toEqual(['check/messages-extra']);
+		// a native model caption may live only in the locale: the base humanizes it
+		expect(
+			findings(
+				`export default messages({ 'a': '甲', 'b': '乙', 'models.orders.fields.title': '标题' });`,
+				withOrders
+			)
+		).toEqual([]);
+		// a locale-only native key must still name a declared model field
+		expect(
+			findings(
+				`export default messages({ 'a': '甲', 'b': '乙', 'models.orders.fields.missing': '缺失' });`,
+				withOrders
+			).map((f) => f.code)
+		).toEqual(['check/messages-extra']);
+	});
+
 	it('checks CEL label syntax and record field references', () => {
 		const inspect = (record_label?: string) =>
 			checkRules(
@@ -69,11 +115,15 @@ describe('bolt check', () => {
 		// the manifest decoder itself refuses the malformed input, so no artifact carrying it reaches a shell
 		const invalid = decode({ document: { kind: 'ref' } });
 		if (Result.isSuccess(invalid)) throw new Error('A ref input without its target decoded.');
-		expect(invalid.failure.issues.join('\n')).toContain('["automations"]["read_advice"]["input"]["document"]["to"]');
+		expect(invalid.failure.issues.join('\n')).toContain(
+			'["automations"]["read_advice"]["input"]["document"]["to"]'
+		);
 		expect(
-			checkRules(Result.getOrThrow(decode(valid.input)), { automations: ['read_advice'] }, (_role, name) => name).filter(
-				(finding) => finding.code === 'automation/input'
-			)
+			checkRules(
+				Result.getOrThrow(decode(valid.input)),
+				{ automations: ['read_advice'] },
+				(_role, name) => name
+			).filter((finding) => finding.code === 'automation/input')
 		).toEqual([]);
 	});
 	it('a write listener names a template or system model (automation/write)', () => {
@@ -84,9 +134,16 @@ describe('bolt check', () => {
 				greet: {
 					description: 'Greets members',
 					policies: ['staff'],
-					on: [{ model: 'sys_user', verbs: ['create', 'update'] }, { model: 'sys_invitation', verbs: ['create'] }]
+					on: [
+						{ model: 'sys_user', verbs: ['create', 'update'] },
+						{ model: 'sys_invitation', verbs: ['create'] }
+					]
 				},
-				lost: { description: 'Listens to nothing', policies: ['staff'], on: [{ model: 'nowhere', verbs: ['create'] }] }
+				lost: {
+					description: 'Listens to nothing',
+					policies: ['staff'],
+					on: [{ model: 'nowhere', verbs: ['create'] }]
+				}
 			}
 		};
 		expect(
@@ -197,7 +254,9 @@ describe('bolt check', () => {
 	it("checks a sync: its definition, a file's parsers, a remote's cadence, partitions and policies, and runtime account fanout (sync/*)", () => {
 		const scoped = (v: string) => ({
 			description: 'Scoped customers',
-			grants: { customers: { outputs: { default: { scopes: { customers: { name: { eq: { var: v } } } } } } } }
+			grants: {
+				customers: { outputs: { default: { scopes: { customers: { name: { eq: { var: v } } } } } } }
+			}
 		});
 		const m: EngineManifest = {
 			...emptyManifest,
@@ -254,7 +313,13 @@ describe('bolt check', () => {
 				events: {
 					outputs: { default: { events: { fields: 'all' } } },
 					syncs: {
-						calendar: { with: 'calendar', policies: ['sync'], partitions: 'calendars', read: true, write: true },
+						calendar: {
+							with: 'calendar',
+							policies: ['sync'],
+							partitions: 'calendars',
+							read: true,
+							write: true
+						},
 						typo: { with: 'calendar', policies: ['sync'], partitions: 'calendar', read: true }
 					}
 				}
@@ -282,23 +347,49 @@ describe('bolt check', () => {
 			integrations: {
 				line: {
 					description: 'LINE',
-					driver: { name: 'line', read: 'deliveries', conversation: { kind: 'chat', handle: null, address: '{}' } }
+					driver: {
+						name: 'line',
+						read: 'deliveries',
+						conversation: { kind: 'chat', handle: null, address: '{}' }
+					}
 				},
 				shadow: { description: 's', driver: { name: 'http', read: 'cursor', request: 'http' } },
-				twice: { description: 't', driver: { name: 'whatsapp', read: 'deliveries', conversation: { kind: 'chat', handle: null } } },
+				twice: {
+					description: 't',
+					driver: {
+						name: 'whatsapp',
+						read: 'deliveries',
+						conversation: { kind: 'chat', handle: null }
+					}
+				},
 				loose: {
 					description: 'l',
-					driver: { name: 'loose', read: 'cursor', credential: true, conversation: { kind: 'chat', handle: null, address: '@' } }
+					driver: {
+						name: 'loose',
+						read: 'cursor',
+						credential: true,
+						conversation: { kind: 'chat', handle: null, address: '@' }
+					}
 				},
 				hook: {
 					description: 'h',
 					driver: 'http',
-					webhook: { verify: { scheme: 'standard', secret: 's' }, policies: ['inbound', 'missing'], handle: true }
+					webhook: {
+						verify: { scheme: 'standard', secret: 's' },
+						policies: ['inbound', 'missing'],
+						handle: true
+					}
 				},
-				bare: { description: 'b', driver: 'http', webhook: { verify: { scheme: 'standard', secret: 's' }, handle: true } }
+				bare: {
+					description: 'b',
+					driver: 'http',
+					webhook: { verify: { scheme: 'standard', secret: 's' }, handle: true }
+				}
 			}
 		};
-		expect(checkRules(m, { automations: [] }, (_r, n) => n).map((f) => `${f.code} ${f.message}`)).toEqual([
+		expect(
+			checkRules(m, { automations: [] }, (_r, n) => n).map((f) => `${f.code} ${f.message}`)
+		).toEqual([
 			"integration/driver shadow: driver: 'http' is one of Bolt's kinds; name it as a string or declare another name",
 			"integration/driver twice: driver: 'whatsapp' is declared with another contract elsewhere; one name, one contract",
 			"integration/driver loose: driver: a conversation is read as 'deliveries', and only a conversation is",
@@ -427,7 +518,9 @@ describe('bolt check', () => {
 	it('refuses an automation holding a policy scoped by actor.* (check/actor-scoped-automation)', () => {
 		const scoped = (v: string) => ({
 			description: 'Own notes',
-			grants: { notes: { outputs: { default: { scopes: { notes: { owner: { eq: { var: v } } } } } } } }
+			grants: {
+				notes: { outputs: { default: { scopes: { notes: { owner: { eq: { var: v } } } } } } }
+			}
 		});
 		const m: EngineManifest = {
 			...emptyManifest,
@@ -450,11 +543,15 @@ describe('bolt check', () => {
 			sources: Record<string, string>,
 			m: EngineManifest = emptyManifest,
 			files: Parameters<typeof sourceRules>[2] = []
-		) => sourceRules(m, new Map(Object.entries(sources)), files).map((f) => `${f.code} ${f.path}:${f.line}`);
+		) =>
+			sourceRules(m, new Map(Object.entries(sources)), files).map(
+				(f) => `${f.code} ${f.path}:${f.line}`
+			);
 		it('a try around a yield* (check/try-yield)', () => {
 			expect(
 				codes({
-					'src/lib/bad.ts': 'export const f = function* (ctx) {\n\ttry {\n\t\tyield* ctx.query({});\n\t} catch {}\n};',
+					'src/lib/bad.ts':
+						'export const f = function* (ctx) {\n\ttry {\n\t\tyield* ctx.query({});\n\t} catch {}\n};',
 					'src/lib/good.ts':
 						'export const f = function* (ctx) {\n\tyield* ctx.query({}).pipe(Effect.catch(() => Effect.void));\n\ttry { JSON.parse(s); } catch {}\n\ttry { run(function* () { yield* x; }); } catch {}\n};'
 				})
@@ -471,18 +568,23 @@ describe('bolt check', () => {
 					'src/data/model/p/+model.ts': once,
 					'src/lib/helper.ts': loop
 				})
-			).toEqual(['check/read-in-loop src/data/model/o/+model.ts:2', 'check/read-in-loop src/data/model/o/+model.ts:3']);
+			).toEqual([
+				'check/read-in-loop src/data/model/o/+model.ts:2',
+				'check/read-in-loop src/data/model/o/+model.ts:3'
+			]);
 		});
 		it('set ?? before (check/set-before)', () => {
 			expect(
 				codes({
 					'src/lib/bad.ts': 'const x = c.set.total ?? c.before.total;',
-					'src/lib/good.ts': 'const x = c.after.total; const y = c.set.total ?? d.before.total; const z = c.set.a ?? c.before.b;'
+					'src/lib/good.ts':
+						'const x = c.after.total; const y = c.set.total ?? d.before.total; const z = c.set.a ?? c.before.b;'
 				})
 			).toEqual(['check/set-before src/lib/bad.ts:1']);
 		});
 		it("a retried run's act without a key (check/act-retry-key)", () => {
-			const body = 'export default automation({ run: function* (_, ctx) {\n\tyield* ctx.act({});\n\tyield* ctx.progress({});\n\tyield* ctx.act({}, { key: "k" });\n} });';
+			const body =
+				'export default automation({ run: function* (_, ctx) {\n\tyield* ctx.act({});\n\tyield* ctx.progress({});\n\tyield* ctx.act({}, { key: "k" });\n} });';
 			const m: EngineManifest = {
 				...emptyManifest,
 				automations: {
@@ -492,7 +594,10 @@ describe('bolt check', () => {
 			};
 			expect(
 				codes(
-					{ 'src/automation/+retried.automation.ts': body, 'src/automation/+once.automation.ts': body },
+					{
+						'src/automation/+retried.automation.ts': body,
+						'src/automation/+once.automation.ts': body
+					},
 					m,
 					[
 						{ role: 'automation', name: 'retried', path: 'src/automation/+retried.automation.ts' },
@@ -516,7 +621,8 @@ describe('bolt check', () => {
 			).toEqual(['check/act-split src/lib/bad.ts:3']);
 		});
 		it('ctx.wait outside a job automation (check/wait-job)', () => {
-			const body = 'export default automation({ run: function* (_, ctx) {\n\tyield* ctx.wait({ until: "2026-01-01T00:00:00Z" });\n} });';
+			const body =
+				'export default automation({ run: function* (_, ctx) {\n\tyield* ctx.wait({ until: "2026-01-01T00:00:00Z" });\n} });';
 			const m: EngineManifest = {
 				...emptyManifest,
 				automations: {
@@ -529,7 +635,8 @@ describe('bolt check', () => {
 					{
 						'src/automation/+job.automation.ts': body,
 						'src/automation/+call.automation.ts': body,
-						'src/data/model/x/+model.ts': 'const e = function* (_, ctx) {\n\tyield* ctx.wait({ until: u });\n};'
+						'src/data/model/x/+model.ts':
+							'const e = function* (_, ctx) {\n\tyield* ctx.wait({ until: u });\n};'
 					},
 					m,
 					[
@@ -537,7 +644,10 @@ describe('bolt check', () => {
 						{ role: 'automation', name: 'call', path: 'src/automation/+call.automation.ts' }
 					]
 				)
-			).toEqual(['check/wait-job src/automation/+call.automation.ts:2', 'check/wait-job src/data/model/x/+model.ts:2']);
+			).toEqual([
+				'check/wait-job src/automation/+call.automation.ts:2',
+				'check/wait-job src/data/model/x/+model.ts:2'
+			]);
 		});
 		it('a host-only @norbital-ai/bolt entry does not resolve for workspace code', () => {
 			expect(() => workspaceEntry('@norbital-ai/bolt/engine')).toThrow(/no workspace entry/);

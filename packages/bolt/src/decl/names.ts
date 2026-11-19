@@ -35,7 +35,7 @@ type NamesShape = {
 	teams: { [team: string]: unknown };
 	/** The base catalogue `src/i18n/+messages.ts`: its keys are the message keys. */
 	messages: { [key: string]: string };
-	/** Each `src/i18n/+<locale>.messages.ts`: its keys must be the base's (checked by `Verify`). */
+	/** Each `src/i18n/+<locale>.messages.ts`: the base's keys, plus native model captions it may translate alone (`Verify`). */
 	locales: { [locale: string]: { [key: string]: string } };
 	policies: { [policy: string]: unknown };
 	apps: { [app: string]: unknown };
@@ -451,17 +451,18 @@ export type ColumnValue<M, P> = P extends keyof OneRels<M>
 		? ValueOf<Columns<M>[P]>
 		: never;
 /** A column an insert may omit: optional, defaulted, or an FK filled from the writer. */
-export type OmittableOnInsert<M, P> = P extends InitialStampFields<FieldsOf<M>>
-	? true
-	: P extends keyof OneRels<M>
-	? OneRels<M>[P] extends { optional: true } | { default: unknown }
+export type OmittableOnInsert<M, P> =
+	P extends InitialStampFields<FieldsOf<M>>
 		? true
-		: false
-	: P extends keyof Columns<M>
-		? Columns<M>[P] extends { optional: true } | { default: unknown }
-			? true
-			: false
-		: false;
+		: P extends keyof OneRels<M>
+			? OneRels<M>[P] extends { optional: true } | { default: unknown }
+				? true
+				: false
+			: P extends keyof Columns<M>
+				? Columns<M>[P] extends { optional: true } | { default: unknown }
+					? true
+					: false
+				: false;
 type ColumnValues<M, P extends PropertyKey, Rels = OneRels<M>> = {
 	readonly [K in P & keyof Columns<M>]: ValueOf<Columns<M>[K]>;
 } & { readonly [K in P & keyof Rels]: FkValue<Rels[K]> };

@@ -42,6 +42,16 @@ messages({ hello: 'Hello' });
 // prettier-ignore
 messages({ hello: 1 });
 is<Eq<LocaleErrors<{ ms: { hello: string } }, { hello: string }>, never>>();
+// a native model caption may live only in the locale: the base humanizes it
+is<
+	Eq<
+		LocaleErrors<
+			{ ms: { hello: string; 'models.orders.fields.title': string } },
+			{ hello: string }
+		>,
+		never
+	>
+>();
 is<
 	Eq<
 		LocaleErrors<{ ms: { helo: string } }, { hello: string }>,

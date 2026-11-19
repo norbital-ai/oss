@@ -54,17 +54,21 @@ export const follow_client = Effect.fn('shell.follow_client')(function* (
 	current: () => ShellBoot['client'],
 	changed: Effect.Effect<void>
 ) {
-	let connected = false, lapsed = false;
-	yield* Stream.runForEach(states, (state) => Effect.gen(function* () {
-		if (state === 'closed' || (connected && state !== 'live')) lapsed = true;
-		if (state !== 'live') return;
-		connected = true;
-		if (!lapsed) return;
+	let connected = false,
 		lapsed = false;
-		const next = yield* Effect.option(read);
-		if (Option.isSome(next) && next.value.client !== undefined && next.value.client === current()) return;
-		yield* changed;
-	}));
+	yield* Stream.runForEach(states, (state) =>
+		Effect.gen(function* () {
+			if (state === 'closed' || (connected && state !== 'live')) lapsed = true;
+			if (state !== 'live') return;
+			connected = true;
+			if (!lapsed) return;
+			lapsed = false;
+			const next = yield* Effect.option(read);
+			if (Option.isSome(next) && next.value.client !== undefined && next.value.client === current())
+				return;
+			yield* changed;
+		})
+	);
 });
 
 const requestFailure = (status: number, workspace?: typeof ShellWorkspace.Type): ShellError =>
@@ -191,7 +195,12 @@ export function shell_api(
 				)
 			);
 			// A failed refresh is already delivered to readers; the acknowledged mutation must remain successful.
-			if ((reply.outcome.kind === 'committed' || reply.outcome.kind === 'pending_approval' || reply.outcome.kind === 'running') && options.after_mutation !== undefined)
+			if (
+				(reply.outcome.kind === 'committed' ||
+					reply.outcome.kind === 'pending_approval' ||
+					reply.outcome.kind === 'running') &&
+				options.after_mutation !== undefined
+			)
 				yield* options.after_mutation().pipe(Effect.ignore);
 			return reply.outcome;
 		});
@@ -237,14 +246,20 @@ export function shell_api(
 				}`
 			),
 		run: (id: string) => call(RunDetailAnswer, 'GET', `${SHELL}/runs${q('id', id)}`),
-		run_log: (id: string, access: string, after?: string) => call(RunLogAnswer, 'GET', `${SHELL}/runs/log?${new URLSearchParams({ id, access, ...(after === undefined ? {} : { after }) })}`),
+		run_log: (id: string, access: string, after?: string) =>
+			call(
+				RunLogAnswer,
+				'GET',
+				`${SHELL}/runs/log?${new URLSearchParams({ id, access, ...(after === undefined ? {} : { after }) })}`
+			),
 		stop_run: (id: string) => call(RunViewAnswer, 'POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
 		settings: () => call(SettingsAnswer, 'GET', `${SHELL}/settings`),
 		settings_op: (op: string, input: Json) =>
 			call(Schema.Json, 'POST', `${SHELL}/settings`, { op, input }),
 		/** An integration instance's host verbs (`/__bolt/integrations/<instance>/…`); the host authorizes "may update this row". */
 		integration: instances,
-		integration_offers: () => integration_offers({ base: based(`${BOLT}/integrations/`), fetch: f }),
+		integration_offers: () =>
+			integration_offers({ base: based(`${BOLT}/integrations/`), fetch: f }),
 		/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (logo: string | null) => done('POST', `${SHELL}/organization`, { logo }),
 		/** An instance's raw messages, both directions, newest first (an administrator's; the instance's Messages tab). */
@@ -400,7 +415,12 @@ export function shell_api(
 			stop: (conversation: string) => act('sys_conversation.stop', { conversation }),
 			set_model: (conversation: string, model: string) =>
 				act('sys_conversation.set_model', { conversation, model }),
-			revise: (message: string, text: string, attachments?: readonly Json[]) => act('sys_message.revise', { message, text, ...(attachments === undefined ? {} : { attachments }) }),
+			revise: (message: string, text: string, attachments?: readonly Json[]) =>
+				act('sys_message.revise', {
+					message,
+					text,
+					...(attachments === undefined ? {} : { attachments })
+				}),
 			restart: (message: string) => act('sys_message.restart', { message }),
 			dequeue: (message: string) => act('sys_message.dequeue', { message }),
 			reorder: (conversation: string, messages: readonly string[]) =>
@@ -557,6 +577,8 @@ export type CustomFieldView<F extends string = string> =
 export function shell_bolt(
 	boot: ShellBoot,
 	options: {
+		/** The viewer's locale; the boot's workspace locale when none is chosen. */
+		locale?: string;
 		messages?: BoltConfig['messages'];
 		integration_setups?: { readonly [integration: string]: IntegrationSetupEntry };
 		challenge?: ChallengeQueue;
@@ -603,7 +625,7 @@ export function shell_bolt(
 			},
 			base: base(),
 			actor: boot.actor,
-			locale: boot.workspace.locale,
+			locale: options.locale ?? boot.workspace.locale,
 			tz: boot.workspace.tz,
 			catalog: boot.catalog,
 			read_catalog: boot.read_catalog,
@@ -619,7 +641,7 @@ export function shell_bolt(
 		});
 		const agent = options.agent ?? agent_panel();
 		const api = shell_api(options.fetch, {
-			after_mutation: () => page_live_mode() === 'snapshot' ? client.refresh() : Effect.void
+			after_mutation: () => (page_live_mode() === 'snapshot' ? client.refresh() : Effect.void)
 		});
 		const instances = integration_clients({
 			base: based(`${BOLT}/integrations/`),
@@ -634,7 +656,11 @@ export function shell_bolt(
 			/** An integration instance's host verbs: its status, pairing, test and status stream (`IntegrationSetup` draws them). */
 			integration: instances,
 			/** Provider choices for the shared IntegrationCard, using this workspace's authenticated transport. */
-			integration_offers: () => integration_offers({ base: based(`${BOLT}/integrations/`), ...(f === undefined ? {} : { fetch: f }) }),
+			integration_offers: () =>
+				integration_offers({
+					base: based(`${BOLT}/integrations/`),
+					...(f === undefined ? {} : { fetch: f })
+				}),
 			/** A definition's own setup component (`integration/<name>/+integration.svelte`), loaded only when its UI opens. */
 			integration_setup: (name: string) => options.integration_setups?.[name]?.load,
 			/** The path of an app page, optionally opening a record: `bolt.href(app, page?, record?)`. */
@@ -663,16 +689,19 @@ export function shell_bolt(
 						const one = conditions['id']?.eq;
 						// the live `runs` read: a `sys_run` change re-answers it, as the caller may see it
 						return client
-							.observe({
-								read: {
-									m: 'runs',
-									a: [
-										typeof one === 'string'
-											? { automation, id: one, limit: 1 }
-											: { automation, limit: options.limit }
-									]
-								}
-							}, RunsReadAnswer)
+							.observe(
+								{
+									read: {
+										m: 'runs',
+										a: [
+											typeof one === 'string'
+												? { automation, id: one, limit: 1 }
+												: { automation, limit: options.limit }
+										]
+									}
+								},
+								RunsReadAnswer
+							)
 							.pipe(
 								Stream.map((answer) => ({
 									rows: answer.rows.filter((row) => {
@@ -699,9 +728,16 @@ export function shell_bolt(
 }
 export type ShellBolt = Effect.Success<ReturnType<typeof shell_bolt>>;
 /** What a mounted page receives: the shell client without its native transport members, and the `ui` its views take. */
-export type ShellPageContext = Omit<ShellBolt, 'native_query' | 'observe' | 'closed' | 'sync'> & UiContext;
+export type ShellPageContext = Omit<ShellBolt, 'native_query' | 'observe' | 'closed' | 'sync'> &
+	UiContext;
 export const page_context = (
-	{ native_query: _native, observe: _observe, closed: _closed, sync: _sync, ...authored }: ShellBolt,
+	{
+		native_query: _native,
+		observe: _observe,
+		closed: _closed,
+		sync: _sync,
+		...authored
+	}: ShellBolt,
 	ui: UiContext['ui']
 ): ShellPageContext => ({ ...authored, ui });
 

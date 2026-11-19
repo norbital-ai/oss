@@ -329,7 +329,9 @@ export function group<const S extends GroupSpec>(
 
 /**
  * `src/i18n/+messages.ts` (the base catalogue) and `src/i18n/+<locale>.messages.ts`: message keys to text with `{name}`
- * placeholders. A locale's keys must be the base's (checked by `Verify`). Pages read them with `bolt.t`.
+ * placeholders. A locale mirrors the base's keys (checked by `Verify`), except native model captions
+ * (`models.<model>.label|singular|fields.<field>…`), which it may translate alone: the base humanizes the declared
+ * name. Every locale ships, and the viewer's choice selects one at boot; pages read it with `bolt.t`.
  * @example
  * export default messages({ 'app.crm.title': 'CRM', 'jobs.assigned': 'Assigned to {name}' });
  */

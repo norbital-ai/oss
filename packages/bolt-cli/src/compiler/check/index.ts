@@ -257,9 +257,20 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 		const src = join(root, 'src'),
 			sources = new Map<string, string>();
 		for (const entry of yield* fs.readDirectory(src, { recursive: true }))
-			if (/\.(ts|svelte)$/.test(entry) && !entry.split(sep).some((s) => s.startsWith('.') || s === 'node_modules'))
-				sources.set(`src/${entry.split(sep).join('/')}`, yield* fs.readFileString(join(src, entry)));
+			if (
+				/\.(ts|svelte)$/.test(entry) &&
+				!entry.split(sep).some((s) => s.startsWith('.') || s === 'node_modules')
+			)
+				sources.set(
+					`src/${entry.split(sep).join('/')}`,
+					yield* fs.readFileString(join(src, entry))
+				);
 		errors.push(...sourceRules(m, sources, files));
+		const { messageRules } = yield* Effect.tryPromise({
+			try: () => import('./messages.ts'),
+			catch: (cause) => new EvalError({ cause })
+		});
+		errors.push(...messageRules(files, sources, m));
 	}
 	if (errors.length === 0) {
 		const runtime = yield* bundle(root, code, errors, true, bodies.models);

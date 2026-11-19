@@ -1,7 +1,16 @@
 import { required } from './support/required.ts';
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@effect/vitest';
-import { framework_text } from '../src/shell/i18n.ts';
+import { framework_text, workspace_text } from '../src/shell/i18n.ts';
+
+test('the workspace catalog selects the viewer locale over the base', () => {
+	expect(workspace_text({ a: 'A', b: 'B' }, { zh: { b: '乙' } }, 'zh')).toEqual({
+		a: 'A',
+		b: '乙'
+	});
+	expect(workspace_text({ a: 'A' }, { zh: { a: '甲' } }, 'zh-SG')).toEqual({ a: '甲' });
+	expect(workspace_text({ a: 'A' }, { zh: { a: '甲' } }, 'en')).toEqual({ a: 'A' });
+});
 
 test('Chinese framework catalog covers native view messages and retains their placeholders', () => {
 	// `msg(bolt, key)` reads its English fallback from the ui's one MESSAGES table

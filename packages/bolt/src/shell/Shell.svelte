@@ -9,7 +9,16 @@
 	import { ReadFailed } from '../decl/errors.ts';
 	import { view_client } from '../page/view-client.ts';
 	import { attach, fork, run } from '@norbital-ai/ui/effect';
-	import { Effect, Exit, FiberHandle, Option, Schema, Scope, Stream, SubscriptionRef } from 'effect';
+	import {
+		Effect,
+		Exit,
+		FiberHandle,
+		Option,
+		Schema,
+		Scope,
+		Stream,
+		SubscriptionRef
+	} from 'effect';
 	import { updating } from '../protocol/client.ts';
 	import { onMount, setContext, tick, type Component } from 'svelte';
 	import { watch } from 'runed';
@@ -61,7 +70,7 @@
 		with_records,
 		type ShellBoot
 	} from './nav.ts';
-	import { chosenLocale, framework_text, setLocale } from './i18n.ts';
+	import { chosenLocale, framework_text, setLocale, workspace_text } from './i18n.ts';
 	import type { SyncStatus } from '../page/bolt.ts';
 	import { active_app, media, navigation_model, NORBIUS } from './model.ts';
 	import { applyTheme, storedTheme, storeTheme, type Theme } from './theme.ts';
@@ -110,14 +119,17 @@
 
 	// svelte-ignore state_referenced_locally
 	const api = shell_api(config.fetch, {
-		after_mutation: () => page_live_mode() === 'snapshot' && bolt !== null ? bolt.refresh() : Effect.void
+		after_mutation: () =>
+			page_live_mode() === 'snapshot' && bolt !== null ? bolt.refresh() : Effect.void
 	});
 	const agent = agent_panel();
 	// Studio's Take control: the person hands the preview back by steering this conversation, as themselves
-	const previewRelease = Schema.decodeUnknownOption(Schema.Struct({
-		type: Schema.Literal('norbital:preview-release'),
-		id: Schema.optionalKey(Schema.Unknown)
-	}));
+	const previewRelease = Schema.decodeUnknownOption(
+		Schema.Struct({
+			type: Schema.Literal('norbital:preview-release'),
+			id: Schema.optionalKey(Schema.Unknown)
+		})
+	);
 	onMount(() => {
 		const onMessage = (event: MessageEvent) => {
 			if (event.origin !== location.origin) return;
@@ -148,9 +160,13 @@
 	const printing = new URL(location.href).searchParams.has('print');
 	// the framework's own copy in the viewer's locale (their choice, else the workspace's); the workspace's messages win
 	// svelte-ignore state_referenced_locally
-	const locale = printing ? config.manifest.workspace.locale : chosenLocale(config.manifest.workspace.locale);
+	const locale = printing
+		? config.manifest.workspace.locale
+		: chosenLocale(config.manifest.workspace.locale);
 	const framework = framework_text(locale);
-	const t = (key: string) => config.messages?.[key] ?? framework[key] ?? key;
+	// svelte-ignore state_referenced_locally
+	const workspace_messages = workspace_text(config.messages, config.locales, locale);
+	const t = (key: string) => workspace_messages[key] ?? framework[key] ?? key;
 	const ui_text = ui_text_for(locale);
 	set_ui_text(ui_text);
 	// the appearance: the document applied the stored choice before paint; a change of choice or of the system's follows
@@ -192,40 +208,94 @@
 	// a signed-out caller's boot is refused, but names the workspace the access pages show
 	let guest = $state<ShellBoot['workspace'] | null>(null);
 	let bolt = $state.raw<ShellBolt | null>(null);
-	const personalRead = $derived(bolt === null || boot?.actor?.kind !== 'member' ? null : bolt.native_query({
-		m: 'query', a: [{
-			sys_user: { output: 'personal', where: { id: { eq: boot.actor.id } }, fields: ['name', 'preferences', 'revision'], limit: 1 },
-			sys_workspace: { fields: ['name'], limit: 1 }
-		}]
-	}, Schema.Struct({ sys_user: Schema.Struct({
-		rows: Schema.Array(Schema.Struct({ id: Schema.String, revision: Schema.Number, name: Schema.String, preferences: PersonalPreferences })),
-		next: Schema.NullOr(Schema.String), total: Schema.Number
-	}), sys_workspace: Schema.Struct({
-		rows: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.NullOr(Schema.String) })),
-		next: Schema.NullOr(Schema.String), total: Schema.Number
-	}) })));
+	const personalRead = $derived(
+		bolt === null || boot?.actor?.kind !== 'member'
+			? null
+			: bolt.native_query(
+					{
+						m: 'query',
+						a: [
+							{
+								sys_user: {
+									output: 'personal',
+									where: { id: { eq: boot.actor.id } },
+									fields: ['name', 'preferences', 'revision'],
+									limit: 1
+								},
+								sys_workspace: { fields: ['name'], limit: 1 }
+							}
+						]
+					},
+					Schema.Struct({
+						sys_user: Schema.Struct({
+							rows: Schema.Array(
+								Schema.Struct({
+									id: Schema.String,
+									revision: Schema.Number,
+									name: Schema.String,
+									preferences: PersonalPreferences
+								})
+							),
+							next: Schema.NullOr(Schema.String),
+							total: Schema.Number
+						}),
+						sys_workspace: Schema.Struct({
+							rows: Schema.Array(
+								Schema.Struct({ id: Schema.String, name: Schema.NullOr(Schema.String) })
+							),
+							next: Schema.NullOr(Schema.String),
+							total: Schema.Number
+						})
+					})
+				)
+	);
 	const personal = $derived(personalRead?.current?.sys_user.rows[0]);
-	const workspace = $derived(boot === null ? guest : {
-		...boot.workspace,
-		name: personalRead?.current?.sys_workspace.rows[0]?.name ?? boot.workspace.name
-	});
-	const viewerBoot = $derived(boot === null ? null : { ...boot, name: personal?.name ?? boot.name, workspace: workspace ?? boot.workspace });
-	const savePreferences = Effect.fn('Shell.savePreferences')(function* (change: typeof PersonalPreferences.Type) {
-		const client = bolt, query = personalRead;
+	const workspace = $derived(
+		boot === null
+			? guest
+			: {
+					...boot.workspace,
+					name: personalRead?.current?.sys_workspace.rows[0]?.name ?? boot.workspace.name
+				}
+	);
+	const viewerBoot = $derived(
+		boot === null
+			? null
+			: { ...boot, name: personal?.name ?? boot.name, workspace: workspace ?? boot.workspace }
+	);
+	const savePreferences = Effect.fn('Shell.savePreferences')(function* (
+		change: typeof PersonalPreferences.Type
+	) {
+		const client = bolt,
+			query = personalRead;
 		if (client === null || query === null) return;
 		const row = query.current?.sys_user.rows[0] ?? (yield* query).sys_user.rows[0];
-		if (row === undefined) return yield* new ReadFailed({ code: 'not_found', message: 'Your personal settings could not be loaded.' });
-		yield* client.act({ 'sys_user.update': [{ target: { id: row.id, revision: row.revision }, set: { preferences: { ...row.preferences, ...change } } }] });
+		if (row === undefined)
+			return yield* new ReadFailed({
+				code: 'not_found',
+				message: 'Your personal settings could not be loaded.'
+			});
+		yield* client.act({
+			'sys_user.update': [
+				{
+					target: { id: row.id, revision: row.revision },
+					set: { preferences: { ...row.preferences, ...change } }
+				}
+			]
+		});
 	});
-	watch(() => personal?.preferences, (preferences) => {
-		if (preferences === undefined) return;
-		theme = preferences.appearance ?? 'system';
-		fork(storeTheme(theme));
-		const language = preferences.locale ?? config.manifest.workspace.locale;
-		if (language !== locale) fork(setLocale(language));
-		chimes = preferences.sounds ?? true;
-		writePreference(chimeKey, chimes ? 'on' : 'off');
-	});
+	watch(
+		() => personal?.preferences,
+		(preferences) => {
+			if (preferences === undefined) return;
+			theme = preferences.appearance ?? 'system';
+			fork(storeTheme(theme));
+			const language = preferences.locale ?? config.manifest.workspace.locale;
+			if (language !== locale) fork(setLocale(language));
+			chimes = preferences.sounds ?? true;
+			writePreference(chimeKey, chimes ? 'on' : 'off');
+		}
+	);
 	/** Norbius's last opened conversation, kept per workspace and member so a shared browser never crosses accounts. */
 	const agentMemory = $derived(
 		boot?.actor?.kind === 'member'
@@ -336,36 +406,39 @@
 	// the `ui` every page context carries (`pageContext()`, the one ctx the shell hands any view or authored component): the
 	// view client, and the generated forms' and record views' kinds: the caller's exposure from the boot, pickers paging
 	// through `bolt.read`
-	const ui: UiContext['ui'] = { get bolt() {
-		return bolt === null || boot === null ? undefined : viewContext();
-	}, kinds: {
-		get catalog() {
-			return boot?.catalog;
+	const ui: UiContext['ui'] = {
+		get bolt() {
+			return bolt === null || boot === null ? undefined : viewContext();
 		},
-		get automations() {
-			return boot?.automations;
-		},
-		get locale() {
-			return locale;
-		},
-		get zone() {
-			return boot?.workspace.tz;
-		},
-		// a money field without its own currency reads in the workspace's (X-8)
-		get currency() {
-			return config.manifest.workspace.currency;
-		},
-		query: (request) => viewContext().query(request),
-		// a generated form's file field: bytes to `<model>.<field>`, links to the stored file
-		upload: (file, target) =>
-			pageContext()
-				.upload(file, target)
-				.pipe(Effect.map((ref) => ({ id: ref.id, name: ref.name, mime: ref.mime }))),
-		file_url: (ref, options) => pageContext().file_url(ref, options),
-		get custom_fields() {
-			return config.custom_fields;
+		kinds: {
+			get catalog() {
+				return boot?.catalog;
+			},
+			get automations() {
+				return boot?.automations;
+			},
+			get locale() {
+				return locale;
+			},
+			get zone() {
+				return boot?.workspace.tz;
+			},
+			// a money field without its own currency reads in the workspace's (X-8)
+			get currency() {
+				return config.manifest.workspace.currency;
+			},
+			query: (request) => viewContext().query(request),
+			// a generated form's file field: bytes to `<model>.<field>`, links to the stored file
+			upload: (file, target) =>
+				pageContext()
+					.upload(file, target)
+					.pipe(Effect.map((ref) => ({ id: ref.id, name: ref.name, mime: ref.mime }))),
+			file_url: (ref, options) => pageContext().file_url(ref, options),
+			get custom_fields() {
+				return config.custom_fields;
+			}
 		}
-	} };
+	};
 	// the record views of every `RecordShell` under the shell, the `?record=` sheet's and a page's alike
 	// a page's AppShell publishes its identity and actions here; the hero above the page renders them
 	const identity = $state<AppIdentitySlot>({ current: null });
@@ -515,7 +588,8 @@
 			const scope = yield* Scope.make();
 			pageScope = scope;
 			const client = yield* shell_bolt(result.success, {
-				messages: { ...framework, ...config.messages },
+				locale,
+				messages: { ...framework, ...workspace_messages },
 				...(config.integration_setups === undefined
 					? {}
 					: { integration_setups: config.integration_setups }),
@@ -547,7 +621,13 @@
 					}).pipe(Effect.provideService(Scope.Scope, scope))
 				: null;
 			yield* follow_client(
-				client.sync.pipe(Stream.tap((state) => Effect.sync(() => { sync = state; }))),
+				client.sync.pipe(
+					Stream.tap((state) =>
+						Effect.sync(() => {
+							sync = state;
+						})
+					)
+				),
 				api.boot(publicApp, kioskRoute ?? undefined),
 				() => boot?.client,
 				Effect.sync(() => {
@@ -620,8 +700,12 @@
 	// keyed by a string: a query change (`?record=`) re-derives `current` but must not remount the page
 	// a member's page outside their nav (another audience's app, or one no policy names) is no access, not rendered
 	const pageKey = $derived(
-		bolt === null || (current.kind === 'page' && boot?.visitor === null && !nav_apps(boot.nav).includes(current.app))
-			? null : page_chunk_key(current)
+		bolt === null ||
+			(current.kind === 'page' &&
+				boot?.visitor === null &&
+				!nav_apps(boot.nav).includes(current.app))
+			? null
+			: page_chunk_key(current)
 	);
 	// a page chunk loads once: switching between an app's pages keeps its banner and tabs mounted, shows the page at once
 	// when it has loaded before, and keeps the previous page of the same app on screen until a new chunk arrives
@@ -699,7 +783,11 @@
 	const model = $derived(
 		viewerBoot === null
 			? null
-			: navigation_model(waiting === null ? viewerBoot : { ...viewerBoot, inbox: waiting }, url.pathname, t)
+			: navigation_model(
+					waiting === null ? viewerBoot : { ...viewerBoot, inbox: waiting },
+					url.pathname,
+					t
+				)
 	);
 	const sessions = $derived(
 		boot?.visitor === null
@@ -783,7 +871,9 @@
 		agent.open();
 	};
 	const navigationBoot = () =>
-		boot !== null && boot.actor?.kind === 'member' && !boot.actor.external && !previewEnv ? boot : null;
+		boot !== null && boot.actor?.kind === 'member' && !boot.actor.external && !previewEnv
+			? boot
+			: null;
 	setContext<ClientNavigation>(CLIENT_NAVIGATION, {
 		open(path, conversation) {
 			const allowed = navigationBoot();
@@ -805,14 +895,17 @@
 	// closing a sheet closes every sheet stacked on it
 	const closeRecord = (depth: number) => navigate(with_records(url, depth).href);
 
-	setContext(CLIENT_PAGE_ACTION, clientPageAction({
-		api: api.agent,
-		eligible: () => navigationBoot() !== null && document.visibilityState === 'visible',
-		navigate,
-		open_external: (href) => fork(open_external(device, href)),
-		closePanel: () => agent.close(),
-		t
-	}));
+	setContext(
+		CLIENT_PAGE_ACTION,
+		clientPageAction({
+			api: api.agent,
+			eligible: () => navigationBoot() !== null && document.visibilityState === 'visible',
+			navigate,
+			open_external: (href) => fork(open_external(device, href)),
+			closePanel: () => agent.close(),
+			t
+		})
+	);
 </script>
 
 <svelte:head
@@ -849,10 +942,14 @@
 		aria-label={t('Loading…')}
 	>
 		<div class="flex items-center gap-3">
-			<div class="bg-muted size-9 shrink-0 animate-pulse rounded-md motion-reduce:animate-none"></div>
+			<div
+				class="bg-muted size-9 shrink-0 animate-pulse rounded-md motion-reduce:animate-none"
+			></div>
 			<div class="flex flex-1 flex-col gap-1.5">
 				<div class="bg-muted h-4 w-40 animate-pulse rounded motion-reduce:animate-none"></div>
-				<div class="bg-muted h-3 w-72 max-w-full animate-pulse rounded motion-reduce:animate-none"></div>
+				<div
+					class="bg-muted h-3 w-72 max-w-full animate-pulse rounded motion-reduce:animate-none"
+				></div>
 			</div>
 		</div>
 		<TableSkeleton />
@@ -982,7 +1079,9 @@
 				startable={boot.startable}
 				run={url.searchParams.get('run')}
 				on_run={openRun}
-				on_conversation={boot.surfaces.agent ? (conversation) => agent.open({ conversation }) : null}
+				on_conversation={boot.surfaces.agent
+					? (conversation) => agent.open({ conversation })
+					: null}
 			/>
 		{:catch}
 			{@render failedFeature()}
@@ -1037,7 +1136,8 @@
 	{#if printing}
 		{@const printed = records.at(-1)}
 		{#if failure !== null || printed === undefined}
-			<span hidden {@attach () => void (document.documentElement.dataset['boltPrint'] = 'failed')}></span>
+			<span hidden {@attach () => void (document.documentElement.dataset['boltPrint'] = 'failed')}
+			></span>
 		{:else if boot !== null && bolt !== null}
 			<RecordPrint ctx={pageContext()} model={printed.model} id={printed.id} />
 		{/if}
@@ -1060,7 +1160,9 @@
 				hint={`${failure.status === 0 ? t('Connection error') : `HTTP ${failure.status}`} · ${failure.code}`}
 			>
 				<span class="sr-only" role="alert">{t(failure.message)}</span>
-				<Button class="access-action w-full" onclick={() => location.reload()}>{t('Try again')}</Button>
+				<Button class="access-action w-full" onclick={() => location.reload()}
+					>{t('Try again')}</Button
+				>
 			</AccessCard>
 		</Access>
 	{:else if current.kind === 'sign_in' || current.kind === 'invite'}
@@ -1107,7 +1209,10 @@
 		<Cover as="main" class="min-h-dvh pb-[env(safe-area-inset-bottom)]">
 			{@render content()}
 			{#if boot.visitor.site_key !== undefined}
-				{#if challenge !== null}<Turnstile site_key={boot.visitor.site_key} queue={challenge} />{/if}
+				{#if challenge !== null}<Turnstile
+						site_key={boot.visitor.site_key}
+						queue={challenge}
+					/>{/if}
 			{/if}
 		</Cover>
 	{:else if portal}
@@ -1120,54 +1225,54 @@
 	{:else}
 		{#snippet navigation(open: boolean)}
 			{#if model !== null}
-			<Nav
-				pinned={device.pinned === true || previewEnv}
-				app_only={previewEnv}
-				{model}
-				expanded={open}
-				mobile={narrow.current}
-				{t}
-				environment={boot?.workspace.environment ?? null}
-				{locale}
-				on_locale={chooseLocale}
-				{theme}
-				on_theme={chooseTheme}
-				{chimes}
-				{awaiting}
-				on_sounds={() => {
-					navOpen = false;
-					soundsOpen = true;
-				}}
-				{sync}
-				previewing={boot?.preview !== null}
-				on_end_preview={() => fork(endPreview())}
-				{...boot?.admin && boot.surfaces.settings && boot.preview === null && !previewEnv
-					? {
-							load_teams: () => run(teams()),
-							on_preview_team: (team: string) => fork(previewTeam(team))
-						}
-					: {}}
-				on_search={() => {
-					navOpen = false;
-					finding = true;
-				}}
-				on_navigate={go}
-				on_sign_out={sign_out}
-				notice={(refreshed ?? boot)?.notice}
-				{...narrow.current ? {} : { on_toggle: () => (expanded.current = !expanded.current) }}
-			>
-				{#snippet bell(wide)}{#if bolt !== null && !narrow.current && boot?.surfaces.inbox}<Bell
-							{api}
-							{bolt}
-							{t}
-							expanded={wide}
-							on_arrival={refreshNotice}
-							on_navigate={(href) => {
-								navOpen = false;
-								navigate(href);
-							}}
-						/>{/if}{/snippet}
-			</Nav>
+				<Nav
+					pinned={device.pinned === true || previewEnv}
+					app_only={previewEnv}
+					{model}
+					expanded={open}
+					mobile={narrow.current}
+					{t}
+					environment={boot?.workspace.environment ?? null}
+					{locale}
+					on_locale={chooseLocale}
+					{theme}
+					on_theme={chooseTheme}
+					{chimes}
+					{awaiting}
+					on_sounds={() => {
+						navOpen = false;
+						soundsOpen = true;
+					}}
+					{sync}
+					previewing={boot?.preview !== null}
+					on_end_preview={() => fork(endPreview())}
+					{...boot?.admin && boot.surfaces.settings && boot.preview === null && !previewEnv
+						? {
+								load_teams: () => run(teams()),
+								on_preview_team: (team: string) => fork(previewTeam(team))
+							}
+						: {}}
+					on_search={() => {
+						navOpen = false;
+						finding = true;
+					}}
+					on_navigate={go}
+					on_sign_out={sign_out}
+					notice={(refreshed ?? boot)?.notice}
+					{...narrow.current ? {} : { on_toggle: () => (expanded.current = !expanded.current) }}
+				>
+					{#snippet bell(wide)}{#if bolt !== null && !narrow.current && boot?.surfaces.inbox}<Bell
+								{api}
+								{bolt}
+								{t}
+								expanded={wide}
+								on_arrival={refreshNotice}
+								on_navigate={(href) => {
+									navOpen = false;
+									navigate(href);
+								}}
+							/>{/if}{/snippet}
+				</Nav>
 			{/if}
 		{/snippet}
 		<Toaster />
@@ -1259,18 +1364,24 @@
 						<Inline role="status" justify="between" class="bg-warning/15 px-4 py-2 text-xs">
 							<span
 								>{'team' in boot.preview
-									? t('Previewing as the {team} team. Its grants apply; you are recorded as the previewer.').replace(
-											'{team}',
-											boot.preview.name
-										)
+									? t(
+											'Previewing as the {team} team. Its grants apply; you are recorded as the previewer.'
+										).replace('{team}', boot.preview.name)
 									: boot.preview.impersonate
-										? t('Acting as {member}. Your admin identity is recorded.').replace('{member}', boot.name ?? '')
+										? t('Acting as {member}. Your admin identity is recorded.').replace(
+												'{member}',
+												boot.name ?? ''
+											)
 										: t(
-											'Previewing as another member. Their grants apply; you are recorded as the previewer.'
-										)}</span
+												'Previewing as another member. Their grants apply; you are recorded as the previewer.'
+											)}</span
 							>
 							<Button variant="outline" onclick={() => fork(endPreview())}
-								>{t('user' in boot.preview && boot.preview.impersonate ? 'Return to my account' : 'End preview')}</Button
+								>{t(
+									'user' in boot.preview && boot.preview.impersonate
+										? 'Return to my account'
+										: 'End preview'
+								)}</Button
 							>
 						</Inline>
 					{/if}

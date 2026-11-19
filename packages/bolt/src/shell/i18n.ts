@@ -42,13 +42,19 @@ export const humanise_word = (value: string): string =>
 
 export const BRIEF_TIMESTAMP = { dateStyle: 'medium', timeStyle: 'short' } as const;
 /** Native display semantics: the runtime locale remains the default, and invalid text reads as Invalid Date. */
-export const date_time = (value: string, locale?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string =>
-	new Date(value).toLocaleString(locale, options);
+export const date_time = (
+	value: string,
+	locale?: Intl.LocalesArgument,
+	options?: Intl.DateTimeFormatOptions
+): string => new Date(value).toLocaleString(locale, options);
 /** Both shell USD views retain Intl's runtime locale and currency defaults; session costs show up to four decimals. */
 export const usd = (value: number, maximum_fraction_digits?: number): string =>
 	new Intl.NumberFormat(undefined, {
-		style: 'currency', currency: 'USD',
-		...(maximum_fraction_digits === undefined ? {} : { maximumFractionDigits: maximum_fraction_digits })
+		style: 'currency',
+		currency: 'USD',
+		...(maximum_fraction_digits === undefined
+			? {}
+			: { maximumFractionDigits: maximum_fraction_digits })
 	}).format(value);
 
 export const SHELL_ZH: { readonly [key: string]: string } = {
@@ -576,7 +582,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Preview: '预览',
 	'Preview as': '预览身份',
 	'Act as member': '以成员身份操作',
-	'Acting as {member}. Your admin identity is recorded.': '正在以 {member} 的身份操作。系统会记录您的管理员身份。',
+	'Acting as {member}. Your admin identity is recorded.':
+		'正在以 {member} 的身份操作。系统会记录您的管理员身份。',
 	'Return to my account': '返回我的账户',
 	Output: '输出',
 	'from cache': '其中来自缓存',
@@ -829,8 +836,10 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Deny: '拒绝',
 	'Expand preview': '展开预览',
 	'Collapse preview': '收起预览',
-	'Interactive preview. Close the expanded view to return to your work.': '可交互预览。关闭展开视图即可返回工作。',
-	'This request has no current preview. Ask for a new merge request.': '此请求没有当前版本的预览，请提交新的合并请求。',
+	'Interactive preview. Close the expanded view to return to your work.':
+		'可交互预览。关闭展开视图即可返回工作。',
+	'This request has no current preview. Ask for a new merge request.':
+		'此请求没有当前版本的预览，请提交新的合并请求。',
 	'Page scope': '页面范围',
 	// system models in ui's Table (runs, approvals, notices, people, teams, keys, integrations, secrets)
 	Action: '操作',
@@ -942,7 +951,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Restore this version?': '恢复到此版本？',
 	'Apply these changes?': '应用这些更改？',
 	'Restore to': '恢复到',
-	'Some stored data will be removed or changed. Review the data changes before applying.': '部分现有数据将被删除或更改。应用前请查看数据变更。',
+	'Some stored data will be removed or changed. Review the data changes before applying.':
+		'部分现有数据将被删除或更改。应用前请查看数据变更。',
 	'will be discarded.': '之后写入的数据将被丢弃。',
 	'Your current data will be kept.': '将保留当前数据。',
 	'Review data changes and version': '查看数据变更和版本',
@@ -968,7 +978,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Attachments: '附件',
 	'New connection': '新建连接',
 	'Choose integration': '选择集成',
-	'Instructions': '工作指示',
+	Instructions: '工作指示',
 	'Smart message handling': '智能消息处理',
 	'Back to envoys': '返回使者列表',
 	'Back to connections': '返回连接列表',
@@ -977,7 +987,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Creating channel…': '正在创建渠道……',
 	'Choose who it helps and the channel it will answer on.': '选择服务对象及回复消息的渠道。',
 	'Create connection': '创建连接',
-	'Choose an integration, name the account, then pair its provider.': '选择集成并为账户命名，然后配对服务提供商。',
+	'Choose an integration, name the account, then pair its provider.':
+		'选择集成并为账户命名，然后配对服务提供商。',
 	'Just now': '刚刚',
 	'Summarize this conversation and keep its transcript available.':
 		'总结此对话，并保留其完整记录。',
@@ -1048,7 +1059,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Archived: '已归档',
 	'Delete conversation': '删除对话',
 	'Delete this conversation?': '删除此对话？',
-	'Removes the conversation and its messages for good. This cannot be undone.': '永久删除此对话及其消息，且无法撤销。',
+	'Removes the conversation and its messages for good. This cannot be undone.':
+		'永久删除此对话及其消息，且无法撤销。',
 	'Keep conversation': '保留对话',
 	'Stop response': '停止回复',
 	'you asked for it': '由你发起',
@@ -1061,3 +1073,14 @@ export const framework_text = (locale: string): { readonly [key: string]: string
 	...(locale.toLowerCase().startsWith('zh') ? SHELL_ZH : {}),
 	...ui_messages_for(locale)
 });
+
+/** The workspace's base copy with the viewer's locale over it (`zh-SG` falls back to `zh`). */
+export function workspace_text(
+	base: { readonly [key: string]: string } | undefined,
+	locales: { readonly [locale: string]: { readonly [key: string]: string } } | undefined,
+	locale: string
+): { readonly [key: string]: string } {
+	const tag = locale.toLowerCase(),
+		overlay = locales?.[tag] ?? locales?.[tag.split('-')[0] ?? tag];
+	return { ...base, ...overlay };
+}
