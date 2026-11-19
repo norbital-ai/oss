@@ -5,6 +5,8 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { attachmentsFor } from '../src/engine/agent/attachments.ts';
+import { ATTACHMENT_BYTES, HEADERS, PATHS } from '../src/protocol/wire.ts';
+import { json, route_fixture } from './support/route-fixture.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' }, needs: [], models: {}, relationships: {}, exposures: {}, policies: {},
@@ -32,4 +34,21 @@ it.live('uploads reuse identical files concurrently, keep changed contents, and 
 	expect(theirs.output.id).not.toBe(first.output.id);
 	expect(yield* attachmentsFor(t.db, owner.id, [first.output, first.output])).toHaveLength(1);
 	expect(yield* Effect.flip(attachmentsFor(t.db, otherMember.id, [first.output]))).toMatchObject({ code: 'invalid_input' });
+})));
+
+it.live('a panel attachment the host stored over the limit is refused, never recorded', () => Effect.scoped(Effect.gen(function* () {
+	const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
+	const t = Context.get(context, TestWorkspace), caller = yield* t.as(t.member([])), route = yield* route_fixture(context);
+	const put = (bytes: number) => route.handle(caller.authority, new Request(`http://cell${PATHS.files}sys_conversation.inputs`, {
+		method: 'PUT',
+		headers: {
+			'content-type': 'audio/mp4',
+			'content-disposition': "attachment; filename*=UTF-8''call.m4a",
+			[HEADERS.key]: randomUUID(),
+			[HEADERS.stored]: JSON.stringify({ key: `stored/${bytes}`, bytes, sha256: String(bytes).padStart(64, '0') })
+		}
+	})).pipe(Effect.flatMap(json));
+	expect(yield* put(ATTACHMENT_BYTES)).toMatchObject({ bytes: ATTACHMENT_BYTES });
+	expect(yield* put(ATTACHMENT_BYTES + 1)).toMatchObject({ error: { code: 'invalid_input' } });
+	expect(yield* t.db.rows(Schema.Struct({ size: Schema.Int }), { text: 'SELECT size FROM sys_file', params: [] })).toEqual([{ size: ATTACHMENT_BYTES }]);
 })));

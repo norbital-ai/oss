@@ -284,6 +284,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Attach a nonempty image, document, spreadsheet, slides, recording or text file.':
 		'请附加非空的图片、文档、电子表格、演示文稿、录音或文本文件。',
 	'Attach at most 8 files.': '最多附加 8 个文件。',
+	'A file is at most {size} MiB.': '单个文件最大 {size} MiB。',
 	Attached: '已附加',
 	'Attached message': '附加的消息',
 	Attempts: '尝试次数',

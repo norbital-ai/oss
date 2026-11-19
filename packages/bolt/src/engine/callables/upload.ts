@@ -9,7 +9,7 @@ import { Manifest } from '../services.ts';
 import { Files } from '../ports.ts';
 import { sha256 as sha256Of, sha256_hex, to_hex } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
-import { RATE_LIMITED } from '../../protocol/wire.ts';
+import { ATTACHMENT_BYTES, RATE_LIMITED } from '../../protocol/wire.ts';
 import type { RateCharge } from '../write/commit.ts';
 import { Chain, GATED, gate, answer, storedOutcome, rate } from '../write/sql.ts';
 import { actor_ref } from '../access/actor.ts';
@@ -74,7 +74,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	const manifest = yield* Manifest;
 	const db = yield* TenantDb;
 	const files = yield* Files;
-	// hook:attachments — the agent panel's own field: any member stores a conversation input; `sys_message.post` checks the message's 8 files / 20 MiB
+	// hook:attachments — the agent panel's own field: any member stores a conversation input of at most ATTACHMENT_BYTES
 	const panel = u.model === 'sys_conversation' && u.field === 'inputs';
 	// a file sync's upload (`<m>.$import.<sync>`, read back by its `<m>.sync.<sync>` run): a member who may create or update
 	// in `m`, sending a file one of the sync's parsers reads (by extension or media type); any other is refused unread
@@ -87,8 +87,9 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	const input = u.field.startsWith('$input.')
 		? manifest.automations[u.model]?.input?.[u.field.slice('$input.'.length)]
 		: undefined;
-	const kind =
-		panel || parsers !== null
+	const kind = panel
+		? { kind: 'file' as const, accept: [], max: `${ATTACHMENT_BYTES / SIZE.MiB}MiB` }
+		: parsers !== null
 			? { kind: 'file' as const, accept: [], max: UNBOUNDED }
 			: input !== undefined
 				? input.kind === 'file'
@@ -125,8 +126,12 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 				: `${u.field} accepts ${parsers !== null ? acceptOf(parsers) : kind.accept.join(', ')}.`
 		);
 	// bytes the host stored never entered this cell, so only the field's own cap applies to them
-	if (size > (u.stored === undefined ? Math.min(size_bytes(kind.max), LIMITS.storedFileBytes) : size_bytes(kind.max)))
-		return refuse('invalid_input', `${u.field} holds at most ${kind.max}.`);
+	const max = u.stored === undefined ? Math.min(size_bytes(kind.max), LIMITS.storedFileBytes) : size_bytes(kind.max);
+	if (size > max)
+		return refuse(
+			'invalid_input',
+			panel ? `A file is at most ${max / SIZE.MiB} MiB.` : `${u.field} holds at most ${kind.max}.`
+		);
 	const blob =
 		u.stored ??
 		(yield* files

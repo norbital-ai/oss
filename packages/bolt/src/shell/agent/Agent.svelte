@@ -44,7 +44,7 @@
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
 	import { Button, Combobox, Dialog, format_handle, Icon, PreviewFrame, RowMenu, type ModelExposure, type UiContext } from '@norbital-ai/ui';
 	import { studio_events, type AiModel, type StudioView } from '@norbital-ai/host-api';
-	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
+	import { ATTACHMENT_BYTES, type AgentConversation, type AgentRow } from '../../protocol/wire.ts';
 	import { messageFrame } from './decisions.ts';
 	import type { AgentRequest, ShellBolt } from '../runtime.ts';
 	import { ConversationsReadAnswer, RestartChat, TranscriptReadAnswer, type ShellError } from '../api-types.ts';
@@ -200,6 +200,11 @@
 				'Attach a nonempty image, document, spreadsheet, slides, recording or text file.'
 			));
 		if (all.length + stored_files.length > 8) return void (error = t('Attach at most 8 files.'));
+		if (typed.some((f) => f.size > ATTACHMENT_BYTES))
+			return void (error = t('A file is at most {size} MiB.').replace(
+				'{size}',
+				String(ATTACHMENT_BYTES / 1024 / 1024)
+			));
 		error = null;
 		attached = all;
 		for (const file of typed) uploadAhead(file);

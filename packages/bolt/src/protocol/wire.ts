@@ -67,6 +67,8 @@ export const notice_path = (link: { readonly model: string; readonly id: string 
 	link === null
 		? '/inbox'
 		: `/inbox?record=${encodeURIComponent(link.model)}/${encodeURIComponent(link.id)}`;
+/** The most one agent-panel attachment holds; a larger file is refused whole, before and at upload. */
+export const ATTACHMENT_BYTES = 25 * 1024 * 1024;
 /** The service worker web push needs, served by the shell host with `Service-Worker-Allowed: /`. */
 export const SW = `${BOLT}/sw.js`;
 export const HEADERS = {

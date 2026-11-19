@@ -1,6 +1,6 @@
 // In-app Norbius attachments: a panel upload to `sys_conversation.inputs` rides `sys_message.post` as a
 // stored FileRef on the row; the agent reads it with `read_file`; triage's state carries it; only the
-// member's own uploads attach, 8 files / 20 MiB, the envoy's media types.
+// member's own uploads attach, the envoy's media types.
 import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
