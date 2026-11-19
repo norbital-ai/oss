@@ -58,6 +58,8 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		title?: string;
 		/** Hide the model noun when the authored heading already identifies the record. */
 		eyebrow?: boolean;
+		/** A page-level shell: false drops its heading row and history scrubber when the page header already names the record. */
+		header?: boolean;
 		/** A line under the heading: text, or field names shown by kind (`['customer', 'due_on']` → `Acme · Jan 2, 2026`). */
 		subtitle?: string | readonly string[];
 		/** Iconify id inside the state pill. */
@@ -166,6 +168,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		viewers,
 		title,
 		eyebrow = true,
+		header = true,
 		subtitle,
 		icon,
 		badge,
@@ -1347,13 +1350,13 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	>
 		{#if page}
 			<!-- Page and sheet headers use the same authored contribution; neither belongs to the scrollable body. -->
-			<header class="flex shrink-0 flex-col" data-record-chrome>
+			{#if header}<header class="flex shrink-0 flex-col" data-record-chrome>
 				{#if pageEyebrow}<span class="text-micro text-muted-foreground truncate leading-4">{pageEyebrow}</span>{/if}
 				<div class="flex flex-wrap items-center gap-x-2">
 					<div class="min-w-0 flex-1">{@render pageHead?.()}</div>
 					{#if owner}{@render tools()}{/if}
 				</div>
-			</header>
+			</header>{/if}
 		{:else if toSheet === undefined}<header class="shrink-0">{@render frameHead()}</header>{/if}
 		{#if owner && viewing !== null}<div class="shrink-0">{@render pastPill(viewing)}</div>{/if}
 		{#if owner && historyError !== null}<Alert variant="destructive" class="shrink-0" role="alert">{historyError}</Alert>{/if}
