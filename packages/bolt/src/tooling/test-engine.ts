@@ -784,6 +784,8 @@ const respond_system_1: Ai['Service']['ask'] = (request) =>
 			])
 		)
 	}));
+/** The kit's providers list no models: a test names a cassette's class. */
+const unlisted = async () => ({ models: [], default: 'default' });
 /** Schema-decoded cassettes as the intelligence group's `system1` and `system2`. */
 const cassette_ai = (options: CassetteOptions) =>
 	Effect.gen(function* () {
@@ -813,10 +815,15 @@ const cassette_ai = (options: CassetteOptions) =>
 		const requests: AiRequest[] = [];
 		const ask = options.sys_1 ?? respond_system_1;
 		const system1: AiPort['sys_1'] = {
-			ask: (request, signal) => Effect.runPromise(ask(request), { signal })
+			ask: (request, signal, model) => Effect.runPromise(ask(request, model), { signal }),
+			catalog: unlisted
 		};
 		const system2: AiPort['sys_2'] = {
 			models: [...turns.keys()],
+			catalog: async () => ({
+				models: [...turns.keys()].map((id) => ({ id, label: id })),
+				default: 'default'
+			}),
 			infer: async (request, _signal, onDelta) => {
 				requests.push(request);
 				const next = turns.get(request.model)?.shift();
@@ -1143,10 +1150,12 @@ export const test_engine = <P extends TestPorts = never>(
 				intelligence: {
 					// the deterministic decision a cassette also starts from: a workspace with an `ai` block needs system1
 					system1: cassette?.system1 ?? {
-						ask: (request, signal) => Effect.runPromise(respond_system_1(request), { signal })
+						ask: (request, signal) => Effect.runPromise(respond_system_1(request), { signal }),
+						catalog: unlisted
 					},
 					system2: cassette?.system2 ?? {
 						models: [],
+						catalog: unlisted,
 						infer: () => scripted('ai')
 					},
 					embed: { embed: () => scripted('ai.embed') }

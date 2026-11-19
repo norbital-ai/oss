@@ -295,6 +295,7 @@ describe('the real read boundary strictly validates the query shape the planner 
 	);
 });
 
+const unlisted = async () => ({ models: [], default: '' });
 /** A scripted System 1: `pick` names the chosen option per question; others take their first option (or false). */
 function system1(pick: (r: DecisionRequest) => { readonly [id: string]: string | boolean }) {
 	const answer = (q: DecisionQuestion, v: string | boolean | undefined): DecisionAnswer => {
@@ -307,6 +308,7 @@ function system1(pick: (r: DecisionRequest) => { readonly [id: string]: string |
 	};
 	const port: System1Port & { requests: DecisionRequest[] } = {
 		requests: [],
+		catalog: unlisted,
 		async ask(r) {
 			port.requests.push(r);
 			const chosen = pick(r);
@@ -341,6 +343,7 @@ const nativeDescriber = (
 			system1: port,
 			system2: {
 				models: ['x'],
+				catalog: unlisted,
 				infer: async () => {
 					throw new Error('System 2 is never asked');
 				}
@@ -1179,7 +1182,8 @@ describe('a description fails closed', () => {
 	it.effect('a failed System 1 call applies nothing', () =>
 		Effect.gen(function* () {
 			const down: System1Port = {
-				ask: () => Promise.reject(new Error('provider down'))
+				ask: () => Promise.reject(new Error('provider down')),
+				catalog: unlisted
 			};
 			expect(
 				yield* describer(down).describe({

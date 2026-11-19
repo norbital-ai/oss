@@ -2047,10 +2047,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							Effect.tapCause(Effect.logWarning),
 							Effect.catch(() => Effect.succeed(undefined))
 						);
-			// a conversation on a class (`default`) runs the catalogue's default model: its window is that model's
+			// a conversation on a class (`default`) runs the administrator's System 2, else the catalogue's default: its window is that model's
 			const concrete = catalog?.models.some((x) => x.id === conv.model)
 				? conv.model
-				: catalog?.default;
+				: catalog?.models.some((x) => x.id === settings.system2)
+					? settings.system2
+					: catalog?.default;
 			// the model's own window, never a smaller host budget: compaction starts at 80% of what the model provides
 			const window =
 				configuredWindow ??
@@ -2796,16 +2798,18 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		/** The agent's live surface: the model classes and the MCP servers this actor may use. */
 		surface: (a: Authority) => ({ models: config.ai?.models ?? [], mcp: mcpServers(m, a) }),
 		models: Effect.fn('Agents.models')(function* () {
-			const cat =
-				config.ai === undefined
-					? undefined
-					: yield* config.ai.catalog.pipe(Effect.catch(() => Effect.succeed(undefined)));
-			return (
-				cat ?? {
+			const listed = (listing: Ai['Service']['catalog'] | undefined) =>
+				listing === undefined
+					? Effect.succeed(undefined)
+					: listing.pipe(Effect.catch(() => Effect.succeed(undefined)));
+			const cat = yield* listed(config.ai?.catalog);
+			return {
+				...(cat ?? {
 					models: (config.ai?.models ?? []).map((id) => ({ id, label: id })),
 					default: defaultModel
-				}
-			);
+				}),
+				deciders: (yield* listed(config.ai?.deciders)) ?? { models: [], default: '' }
+			};
 		}),
 		exportTranscript: Effect.fn('Agents.exportTranscript')(function* (id: string) {
 			const conv = yield* conversation(id),

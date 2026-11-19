@@ -13,7 +13,12 @@ import {
 	structured_system_1
 } from '@norbital-ai/host-api';
 import { download_media } from '@norbital-ai/host-api/node';
-import { open_ai_embeddings, open_router_chat } from '@norbital-ai/providers/openrouter';
+import {
+	ai_models,
+	open_ai_embeddings,
+	open_router_chat,
+	type ModelCatalogue
+} from '@norbital-ai/providers/openrouter';
 import type { FilesStore } from './files.ts';
 import type { HostSettings } from './host.ts';
 
@@ -246,14 +251,22 @@ type Run = <A, E>(
 ) => Promise<A>;
 /** What `openAi` provides of the intelligence group. */
 export type OpenAiMembers = Pick<Facilities['intelligence'], 'system1' | 'system2' | 'embed'>;
-/** The intelligence group over OpenAI-compatible endpoints: `sys_1`, `sys_2` and, when mapped, `embed`. */
+/**
+ * The intelligence group over OpenAI-compatible endpoints: `sys_1`, `sys_2` and, when mapped, `embed`. `listing` is the
+ * `sys_2` endpoint's: the models members may pick and their prices, which charge a call its endpoint reports no cost for.
+ */
 export const openAi = Effect.fn('server.openAi')(function* (
 	endpoints: { sys1: Endpoint & { provider?: string }; sys2: Endpoint; embed?: Endpoint },
 	config: HostSettings['ai'],
 	declared: readonly string[],
 	files: FilesStore['get'],
-	run: Run
+	run: Run,
+	listing: ModelCatalogue
 ) {
+	const listed = ai_models(listing),
+		price = (id: string) => [...listed.sys_2, ...listed.sys_1].find((model) => model.id === id)?.price,
+		named = (ids: readonly string[], models: readonly { readonly id: string }[]) =>
+			ids.filter((id) => id !== '' && !models.some((model) => model.id === id)).map((id) => ({ id, label: id }));
 	const context = yield* Effect.context<HttpClient.HttpClient | Crypto.Crypto>();
 	const client = yield* HttpClient.HttpClient;
 	const system1 =
@@ -271,13 +284,24 @@ export const openAi = Effect.fn('server.openAi')(function* (
 				)
 			: structured_system_1(
 					open_router_chat(
-						{ ...endpoints.sys1, models: { sys_1: config.sys1 ?? '' } },
+						{ ...endpoints.sys1, models: { sys_1: config.sys1 ?? '' }, price },
 						{ http_client: client }
 					),
 					'sys_1'
 				);
-	const chat = open_router_chat({ ...endpoints.sys2, models: config.sys2 }, { http_client: client });
+	const chat = open_router_chat(
+		{ ...endpoints.sys2, models: config.sys2, price },
+		{ http_client: client }
+	);
 	const mapped = declared.filter((name) => config.sys2[name] !== undefined);
+	// a structured sys_1 on the sys_2 endpoint may decide with any listed model; the Decisions API only with its own
+	const deciders =
+		endpoints.sys1.provider !== 'decisions' &&
+		endpoints.sys1.provider !== 'openai-decisions' &&
+		endpoints.sys1.endpoint === endpoints.sys2.endpoint
+			? listed.sys_1
+			: [];
+	const sys2Default = config.sys2['default'] ?? Object.values(config.sys2)[0] ?? '';
 	const embed = endpoints.embed;
 	const embeddings =
 		embed === undefined
@@ -299,14 +323,18 @@ export const openAi = Effect.fn('server.openAi')(function* (
 				});
 	const members: OpenAiMembers = {
 		system1: {
-			ask: (request, signal) => run(system1.ask(request), { signal }),
+			ask: (request, signal, model) => run(system1.ask(request, model), { signal }),
+			catalog: async () => ({
+				models: [...named([config.sys1 ?? ''], deciders), ...deciders],
+				default: config.sys1 ?? ''
+			}),
 			...(system1.maxChoices === undefined ? {} : { max_choices: system1.maxChoices })
 		},
 		system2: {
 			models: mapped,
 			catalog: async () => ({
-				models: mapped.map((name) => ({ id: name, label: name })),
-				default: mapped[0] ?? ''
+				models: [...named(Object.values(config.sys2), listed.sys_2), ...listed.sys_2],
+				default: sys2Default
 			}),
 			infer: (request, signal, onDelta, onProgress) =>
 				run(

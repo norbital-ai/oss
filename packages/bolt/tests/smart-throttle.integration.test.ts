@@ -249,6 +249,7 @@ const shared = Effect.runSync(
 							...ai,
 							ask: (request) => port.ask(request),
 							maxChoices: undefined,
+							deciders: Effect.succeed({ models: [], default: '' }),
 							catalog: Port.unavailable('ai.catalog'),
 							embed: () => Port.unavailable('ai.embed')
 						})

@@ -7,6 +7,7 @@ import { type AiRequest, type OpenAiChat, Port } from '@norbital-ai/host-api';
 import { pixelSize } from '@norbital-ai/host-api';
 import { fileParts } from '../src/openai/files.ts';
 import { open_ai_chat } from '../src/openai/index.ts';
+import { ai_models } from '../src/openrouter/models.ts';
 
 const Sent = Schema.Struct({
 	model: Schema.String,
@@ -767,4 +768,60 @@ describe('open_ai_chat', () => {
 			expect(Exit.hasInterrupts(yield* Fiber.await(done))).toBe(true);
 		})
 	);
+});
+
+describe('what a provider lists and charges', () => {
+	it.effect('an endpoint that reports no charge is charged its tokens at the listed price; its own charge wins', () =>
+		Effect.gen(function* () {
+			const usage = (cost?: number) =>
+				capture(() =>
+					stream([
+						`data: ${JSON.stringify({
+							id: 'gen-1',
+							choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+							usage: {
+								prompt_tokens: 1_000_000,
+								completion_tokens: 100_000,
+								prompt_tokens_details: { cached_tokens: 400_000 },
+								...(cost === undefined ? {} : { cost })
+							}
+						})}\n\n`,
+						'data: [DONE]\n\n'
+					])
+				);
+			const priced = { ...config, price: () => ({ input: 2, output: 10, cached: 0.5 }) };
+			// 600k fresh at $2/M, 400k cached at $0.50/M, 100k out at $10/M
+			expect((yield* collect(open_ai_chat(priced, { fetch: usage().f }))).response.usage).toMatchObject({
+				cost: 1.2 + 0.2 + 1,
+				call: 'gen-1'
+			});
+			expect((yield* collect(open_ai_chat(priced, { fetch: usage(0.5).f }))).response.usage.cost).toBe(0.5);
+			expect('cost' in (yield* collect(open_ai_chat(config, { fetch: usage().f }))).response.usage).toBe(false);
+		})
+	);
+	it('lists what each system can run, priced per million tokens, never a free or batch variant', () => {
+		const model = (id: string, parameters: string[], input = ['text', 'image']) => ({
+			id,
+			name: `Acme: ${id}`,
+			context_length: 1000,
+			architecture: { input_modalities: input, output_modalities: ['text'] },
+			supported_parameters: parameters,
+			pricing: { prompt: '0.000002', completion: '0.00001', input_cache_read: '-1' }
+		});
+		const listed = ai_models({
+			chat: [
+				model('a/agent', ['tools', 'tool_choice', 'structured_outputs']),
+				model('a/decider', ['structured_outputs']),
+				model('a/agent:free', ['tools', 'tool_choice']),
+				model('a/agent:batch', ['tools', 'tool_choice']),
+				model('a/text', ['tools', 'tool_choice'], ['text'])
+			],
+			embeddings: [],
+			unread: false
+		});
+		expect(listed.sys_2).toEqual([
+			{ id: 'a/agent', label: 'a/agent', provider: 'Acme', context: 1000, price: { input: 2, output: 10 } }
+		]);
+		expect(listed.sys_1.map((m) => m.id)).toEqual(['a/agent', 'a/decider']);
+	});
 });

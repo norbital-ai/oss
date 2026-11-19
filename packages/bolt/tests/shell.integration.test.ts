@@ -349,6 +349,7 @@ const workspace = Layer.effectContext(
 					ai: false,
 					apex: 'https://example.test/pick',
 					recovery: 'https://example.test/acme/recovery',
+					billing: '/billing',
 					workspaces: async () => [
 						{ handle: 'globex', name: 'Globex', href: 'https://example.test/acme/switch?to=globex' }
 					],
@@ -424,6 +425,7 @@ layer(workspace)('shell routes', (it) => {
 						handle: 'acme',
 						apex: 'https://example.test/pick',
 						recovery: 'https://example.test/acme/recovery',
+						billing: '/billing',
 						organization: true
 					});
 					expect(b.workspaces).toEqual([

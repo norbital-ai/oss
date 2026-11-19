@@ -116,6 +116,7 @@ const panel = () =>
 			infer,
 			models: ['default'],
 			maxChoices: undefined,
+			deciders: Effect.succeed({ models: [], default: '' }),
 			catalog: Port.unavailable('ai.catalog'),
 			embed: () => Port.unavailable('ai.embed')
 		});

@@ -89,6 +89,7 @@ const ports = Layer.succeed(Ai, {
 	ask: respond_system_1,
 	maxChoices: undefined,
 	models: ['default'],
+	deciders: Effect.succeed({ models: [], default: '' }),
 	catalog: Port.unavailable('ai.catalog'),
 	infer: () => Stream.fail(Port.failure('ai')(new Error('unused'))),
 	embed

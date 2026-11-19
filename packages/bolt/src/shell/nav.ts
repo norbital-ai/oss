@@ -140,7 +140,8 @@ export type ShellBoot = {
 	 * badge's label (`environment_label`), absent in production. `handle`: the tenant handle the sign-in card names; `apex`:
 	 * where "Change workspace" leads (the host's workspace picker). `organization`: the host lets an administrator edit the
 	 * name and logo (`ShellHostConfig.organization`). `live`: this is a preview environment; the live workspace's address. `recovery`:
-	 * where an administrator repairs the workspace when it will not open (the failure card links it).
+	 * where an administrator repairs the workspace when it will not open (the failure card links it). `billing`: the
+	 * host's billing page (Settings links it).
 	 */
 	workspace: {
 		name: string;
@@ -152,6 +153,7 @@ export type ShellBoot = {
 		apex?: string;
 		live?: string;
 		recovery?: string;
+		billing?: string;
 		organization?: true;
 	};
 	actor: EngineActor | null;

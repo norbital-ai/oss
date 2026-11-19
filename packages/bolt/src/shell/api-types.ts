@@ -8,7 +8,8 @@ import type { Attachment } from '../decl/runtime/integration.ts';
 import { SyncDeadLetter, SyncHealth } from '../engine/sync/health-schema.ts';
 import type { Json } from '../decl/values.ts';
 import {
-	type AiModel,
+	AiCatalogSchema,
+	AiModelSchema,
 	type AuditPage,
 	type AuditQuery,
 	type AuditRecord,
@@ -69,6 +70,7 @@ export const ShellWorkspace = Schema.Struct({
 	apex: Optional,
 	live: Optional,
 	recovery: Optional,
+	billing: Optional,
 	organization: Schema.optionalKey(Schema.Literal(true))
 });
 /** A shell route refused the call: its code and message, the HTTP status (`0`: unreachable), and the workspace when signed out. */
@@ -426,21 +428,19 @@ export const RunDetailAnswer: Schema.Decoder<RunDetail> = Schema.Struct({
 	)
 });
 export const StudioInspectionAnswer = StudioInspection;
-const Model: Schema.Decoder<AiModel> = Schema.Struct({
-	id: Schema.String,
-	label: Schema.String,
-	provider: Schema.optionalKey(Schema.String),
-	context: Schema.optionalKey(Schema.Number)
-});
 /** The models the member may pick and the one a new conversation runs; the MCP servers its policies name. */
 export const AgentModels = Schema.Struct({
-	models: Schema.Array(Model),
+	models: Schema.Array(AiModelSchema),
 	default: Schema.String,
 	mcp: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String })),
-	/** An administrator's: every model, the runtime settings, this month's spend (USD) and the policy names. */
+	/**
+	 * An administrator's: every model the System 2 provider lists, System 1's (`deciders`), the runtime settings, this
+	 * month's spend (USD) and the policy names.
+	 */
 	admin: Schema.optionalKey(
 		Schema.Struct({
-			catalog: Schema.Array(Model),
+			catalog: Schema.Array(AiModelSchema),
+			deciders: AiCatalogSchema,
 			settings: AgentSettings,
 			spent: Schema.Number,
 			policies: Schema.Array(Schema.String)

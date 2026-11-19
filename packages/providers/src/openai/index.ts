@@ -7,6 +7,7 @@ import { Clock, Effect, Option, Queue, Schema, Stream } from 'effect';
 import { HttpClient, HttpClientRequest } from 'effect/http';
 import {
 	type AiEvent,
+	type AiPrice,
 	type AiRequest,
 	type AiResponse,
 	FacilityFailure,
@@ -33,6 +34,8 @@ export type OpenAiChatConfig = {
 	strict?: boolean;
 	/** The provider's charge for one call (`usage.cost`, USD) under its generation id, awaited before `infer` resolves. */
 	meter?: (cost_usd: number, generationId: string) => Promise<void> | void;
+	/** A model's listed price, for an endpoint that reports no charge of its own: the call costs its tokens at that price. */
+	price?: (model: string) => AiPrice | undefined;
 };
 
 type Wire = { [k: string]: unknown };
@@ -361,10 +364,22 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 						Effect.mapError(Port.failure('ai'))
 					);
 				}
-				if (usage.cost !== undefined && id !== '' && config.meter !== undefined)
-					yield* Port.attempt('ai.meter', () =>
-						Promise.resolve(config.meter?.(usage.cost ?? 0, id))
-					).pipe(Port.call('ai.meter', HOST_LIMITS.callMs.ai));
+				const input = usage.prompt_tokens ?? 0,
+					output = usage.completion_tokens ?? 0,
+					cached = usage.prompt_tokens_details?.cached_tokens ?? 0,
+					price = usage.cost === undefined ? config.price?.(model) : undefined,
+					cost =
+						usage.cost ??
+						(price === undefined
+							? undefined
+							: ((input - cached) * price.input +
+									cached * (price.cached ?? price.input) +
+									output * price.output) /
+								1_000_000);
+				if (cost !== undefined && id !== '' && config.meter !== undefined)
+					yield* Port.attempt('ai.meter', () => Promise.resolve(config.meter?.(cost, id))).pipe(
+						Port.call('ai.meter', HOST_LIMITS.callMs.ai)
+					);
 				const toolCalls = calls.map((c) =>
 					Option.match(parseJson(c.args === '' ? '{}' : c.args), {
 						onSome: (input) => ({
@@ -390,9 +405,9 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 					finish: finishReason === 'length' ? 'cut' : toolCalls.length > 0 ? 'tool' : 'stop',
 					...(reasoning === '' ? {} : { reasoning }),
 					usage: {
-						input: usage.prompt_tokens ?? 0,
-						output: usage.completion_tokens ?? 0,
-						...(usage.cost === undefined ? {} : { cost: usage.cost }),
+						input,
+						output,
+						...(cost === undefined ? {} : { cost }),
 						...(id === '' ? {} : { call: id }),
 						...(provider === '' ? {} : { provider }),
 						...(usage.prompt_tokens_details?.cached_tokens == null

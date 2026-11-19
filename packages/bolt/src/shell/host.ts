@@ -671,6 +671,7 @@ const makeShell = Effect.gen(function* () {
 			...(c.apex === undefined ? {} : { apex: c.apex }),
 			...(c.live === undefined ? {} : { live: c.live }),
 			...(c.recovery === undefined ? {} : { recovery: c.recovery }),
+			...(c.billing === undefined ? {} : { billing: c.billing }),
 			...(c.organization === undefined ? {} : { organization: true as const })
 		};
 	};

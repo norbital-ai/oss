@@ -15,7 +15,7 @@
 		t,
 		tab,
 		workspace,
-		configuration,
+		configuration = null,
 		people = false,
 		integration_setups,
 		read_catalog = {}
@@ -25,7 +25,7 @@
 		t: (key: string) => string;
 		tab: SettingsTab;
 		workspace: ShellBoot['workspace'];
-		configuration: SystemUiIntent;
+		configuration?: SystemUiIntent | null;
 		people?: boolean;
 		integration_setups?: { readonly [integration: string]: IntegrationSetupEntry };
 		read_catalog?: ReadCatalog;

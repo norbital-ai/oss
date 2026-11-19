@@ -84,6 +84,11 @@ export type ShellPorts = {
 	 * recovery of its own (a self-hosted server) sets none; the failure card then offers only a retry.
 	 */
 	readonly recovery?: string;
+	/**
+	 * Where an administrator sees this workspace's usage, cost, payment card and invoices (the host's billing page);
+	 * Settings links it. A host that bills nothing sets none.
+	 */
+	readonly billing?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
 };
 /** The agent's host parts; the release's own source (`workspace_grep`) and attachments are the release's. */

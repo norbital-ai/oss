@@ -80,6 +80,7 @@ const setup = () =>
 			ask: respond_system_1,
 			maxChoices: undefined,
 			models: ['default'],
+			deciders: Effect.succeed({ models: [], default: '' }),
 			catalog: Port.unavailable('ai.catalog'),
 			embed: () => Port.unavailable('ai.embed'),
 			infer: () => Stream.fail(Port.failure('ai')(new Error('not called')))
@@ -174,7 +175,7 @@ describe('the agent UI actions', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { t, route, agent, act, transcript } = yield* setup();
-					yield* saveAgentSettings(t.db, { monthly: null, member: null, policies: {}, models: ['fast'] });
+					yield* saveAgentSettings(t.db, { monthly: null, member: null, policies: {}, models: ['fast'], system1: null, system2: null });
 					const start = yield* act('ann', 'sys_conversation.start', {});
 					const c = started(start);
 					expect((yield* agent.conversation(c)).model).toBe('default');

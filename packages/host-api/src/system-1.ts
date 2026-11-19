@@ -71,10 +71,14 @@ export const decision_images = (state: DecisionRequest['state']) =>
 		}
 		return { text, images };
 	});
-/** System 1 as an Effect: one bounded decision call, failing as a facility failure or `unavailable`; a host adapts it to its `System1Port`. */
+/**
+ * System 1 as an Effect: one bounded decision call, failing as a facility failure or `unavailable`; a host adapts it to
+ * its `System1Port`. `model` is a catalogue id the workspace chose; absent, the adapter's own.
+ */
 export type System1 = {
 	readonly ask: (
-		request: DecisionRequest
+		request: DecisionRequest,
+		model?: string
 	) => Effect.Effect<DecisionResult, FacilityFailure | Unavailable>;
 	readonly maxChoices?: number | undefined;
 };
@@ -377,7 +381,8 @@ export function decisions_system_1(config: DecisionsApiConfig, options: HttpOpti
 	return {
 		maxChoices: 255,
 		ask: Effect.fn('Decisions.httpAsk')(
-			function* (request) {
+			function* (request, chosen?: string) {
+				const model = chosen ?? config.model;
 				const media = yield* decision_images(request.state);
 				if (
 					config.format === 'openai' &&
@@ -398,7 +403,7 @@ export function decisions_system_1(config: DecisionsApiConfig, options: HttpOpti
 				const payload = yield* Effect.try({
 					try: (): Json => {
 						if (config.format === 'openai')
-							return openAiDecisionRequest(request, config.model, media);
+							return openAiDecisionRequest(request, model, media);
 						const assets = Object.fromEntries(media.images.map((image, n) => [
 							`bolt-image-${n + 1}-${globalThis.crypto.randomUUID()}`,
 							{
@@ -411,7 +416,7 @@ export function decisions_system_1(config: DecisionsApiConfig, options: HttpOpti
 						let imageIndex = 0;
 						const state = walkJson(request.state, (value) => isObj(value) && value['type'] === 'image_url'
 							? names[imageIndex++] : undefined);
-						return { model: config.model, state, questions: request.questions,
+						return { model, state, questions: request.questions,
 							...(media.images.length === 0 ? {} : { assets }) };
 					},
 					catch: Port.failure('sys_1')
@@ -455,8 +460,8 @@ export function decisions_system_1(config: DecisionsApiConfig, options: HttpOpti
 				).pipe(Effect.mapError(Port.failure('sys_1')));
 				return yield* decodeProviderAnswers(request, wire.answers, 'declared', {
 					cost_usd: wire.usage?.cost ?? 0,
-					provider: wire.provider ?? config.model,
-					model: wire.model ?? config.model,
+					provider: wire.provider ?? model,
+					model: wire.model ?? model,
 					...(wire.id === undefined ? {} : { call: wire.id }),
 					tokens: { input: wire.usage?.input_tokens ?? 0, output: wire.usage?.output_tokens ?? 0 }
 				});
@@ -470,9 +475,10 @@ export function decisions_system_1(config: DecisionsApiConfig, options: HttpOpti
 	};
 }
 /** System 1 over a chat model's structured output: each question becomes a probability object in one JSON-schema answer. */
-export function structured_system_1(infer: OpenAiChat, model: string): System1 {
+export function structured_system_1(infer: OpenAiChat, configured: string): System1 {
 	return {
-		ask: Effect.fn('Decisions.structuredAsk')(function* (request) {
+		ask: Effect.fn('Decisions.structuredAsk')(function* (request, chosen?: string) {
+			const model = chosen ?? configured;
 			const media = yield* decision_images(request.state);
 			const entries = Object.entries(request.questions);
 			const fields = Object.fromEntries(
@@ -539,7 +545,9 @@ export function structured_system_1(infer: OpenAiChat, model: string): System1 {
 			);
 			return yield* decodeProviderAnswers(request, decoded, 'distribution', {
 				cost_usd: response.usage.cost ?? 0,
-				provider: model,
+				provider: response.usage.provider ?? model,
+				model,
+				...(response.usage.call === undefined ? {} : { call: response.usage.call }),
 				tokens: { input: response.usage.input, output: response.usage.output }
 			});
 		})

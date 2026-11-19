@@ -1125,12 +1125,13 @@ export const BoltRoutes = {
 			return HttpServerResponse.jsonUnsafe({
 				value: {
 					models,
-					default: allowedModel(settings, catalog.default),
+					default: allowedModel(settings, settings.system2 ?? catalog.default),
 					mcp: mcpServers(m, authority),
 					...(authority.admin
 						? {
 								admin: {
 									catalog: catalog.models,
+									deciders: catalog.deciders,
 									settings,
 									spent: yield* spent(db, null),
 									// the policies a member can hold: those a source team names (automation and kiosk policies hold no member)

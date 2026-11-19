@@ -54,6 +54,7 @@ import { ReadsLive } from './query/engine.ts';
 import { CallablesLive } from './callables/index.ts';
 import { ApprovalsLive } from './approvals/approvals.ts';
 import { DecisionsLive } from './decision.ts';
+import { AdminAi } from './agent/settings.ts';
 import { IdentityLive } from './identity/session.ts';
 import { LiveHubLive } from './live/hub.ts';
 import { DeadlinesLive } from './runs/deadlines.ts';
@@ -186,7 +187,7 @@ export function EngineLive(
 		DeadlinesLive,
 		RunHandlersLive,
 		RenderGrants.layer
-	).pipe(Layer.provideMerge(values));
+	).pipe(Layer.provideMerge(Layer.merge(values, AdminAi)));
 	const wake = WakeLive.pipe(Layer.provideMerge(bottom));
 	const guest = GuestLive.pipe(Layer.provideMerge(wake));
 	const reads = ReadsLive.pipe(Layer.provideMerge(guest));

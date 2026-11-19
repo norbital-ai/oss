@@ -19,6 +19,7 @@ it.live('a daily cron sends once through a runtime envoy account and its later r
 		const requests: AiRequest[] = [];
 		const ports = Layer.succeed(Ai, {
 			ask: respond_system_1, maxChoices: undefined, models: ['default'],
+			deciders: Effect.succeed({ models: [], default: '' }),
 			catalog: Port.unavailable('ai.catalog'), embed: () => Port.unavailable('ai.embed'),
 			infer: (request) => {
 				requests.push(request);

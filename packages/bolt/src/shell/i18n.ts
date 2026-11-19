@@ -416,8 +416,14 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'No limit': '无上限',
 	'Models members may use. None chosen allows every model; with one, members see no model choice.':
 		'成员可使用的模型。不选择则允许所有模型；只选择一个时，成员不会看到模型选择。',
-	'Spending limits and the models members may use. Changes apply to the next message.':
-		'花费上限以及成员可使用的模型。更改从下一条消息起生效。',
+	'Spending limits, the models System 1 and System 2 run and the models members may use. Changes apply to the next message.':
+		'花费上限、系统 1 与系统 2 使用的模型，以及成员可使用的模型。更改从下一条消息起生效。',
+	'System 1: fast decisions (triage, AI filters)': '系统 1：快速决策（分诊、AI 筛选）',
+	"System 2: Norbius's default model": '系统 2：Norbius 的默认模型',
+	'System 1 model': '系统 1 模型',
+	'System 2 model': '系统 2 模型',
+	'Host default': '主机默认',
+	'per M tokens': '每百万词元',
 	'Data retention': '数据保留',
 	'A built-in daily cleanup, run while the workspace is in use: it removes read notifications and finished runs past these ages. Unread notifications are kept.':
 		'内置的每日清理，在工作区使用期间运行：删除超过这些期限的已读通知和已结束的运行。未读通知会保留。',
@@ -717,6 +723,10 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Newcomers may sign up': '允许新用户自行注册',
 	'Change workspace': '切换工作区',
 	Branding: '品牌',
+	Billing: '账单',
+	"This workspace's usage and cost, its estimate for the month, the payment card and past invoices.":
+		'本工作区的用量与费用、本月预估、付款卡及历史发票。',
+	'Open billing': '打开账单',
 	'Workspace handle': '工作区句柄',
 	'The workspace handle is its identity in every address and record.':
 		'工作区句柄是它在每个地址和记录中的身份。',

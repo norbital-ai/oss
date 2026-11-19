@@ -88,6 +88,7 @@ const workspace = TestWorkspace.layer({
 		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['small'],
+		deciders: Effect.succeed({ models: [], default: '' }),
 		catalog: Effect.succeed({ models: [{ id: 'small', label: 'Small' }], default: 'small' }),
 		infer: () => Stream.fail(Port.failure('ai')(new Error('unused'))),
 		embed: (inputs, model, dimensions) => answer(inputs, model, dimensions)

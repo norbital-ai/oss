@@ -36,6 +36,10 @@ export const AiPortResponseSchema = Schema.Struct({
 	finish: Schema.Literals(['stop', 'tool', 'cut']),
 	continuation: Schema.optionalKey(Schema.String),
 	reasoning: Schema.optionalKey(Schema.String),
+	/**
+	 * Tokens and the call's charge in USD under the provider's call id: a host's provider reports both `cost` and `call`
+	 * for every call (from the endpoint's own charge, else its listed price); only a recorded test answer omits them.
+	 */
 	usage: Schema.Struct({
 		input: Schema.Number,
 		output: Schema.Number,
@@ -124,8 +128,11 @@ export const DecisionResult = Schema.Struct({
 export type DecisionResult = typeof DecisionResult.Type;
 /** Fast structured decisions (`ctx.ai.sys_1.decide`, triage). */
 export interface System1Port {
-	ask(request: DecisionRequest, signal: AbortSignal): Promise<DecisionResult>;
+	/** `model`: a `catalog` id the workspace's administrator chose; absent, `catalog().default`. */
+	ask(request: DecisionRequest, signal: AbortSignal, model?: string): Promise<DecisionResult>;
 	readonly max_choices?: number;
+	/** The models the provider can decide with, as it lists them, and the one it uses unless told otherwise. */
+	catalog(): Promise<{ models: readonly AiModel[]; default: string }>;
 }
 
 /** One transcript message the AI port sends the model: who said it and its content. */
@@ -163,8 +170,29 @@ export type EmbedInput =
 				readonly bytes: number;
 			};
 	  };
-/** One model a person may pick (the panel lists `label`, grouped by `provider`); `context` is its window in tokens. */
-export type AiModel = { id: string; label: string; provider?: string; context?: number };
+/**
+ * One model a provider lists (the panel shows `label`, grouped by `provider`); `context` is its window in tokens,
+ * `price` USD per million tokens (input, output, cached input): what a call costs when the endpoint reports no charge.
+ */
+export const AiModelSchema = Schema.Struct({
+	id: Schema.String,
+	label: Schema.String,
+	provider: Schema.optionalKey(Schema.String),
+	context: Schema.optionalKey(Schema.Number),
+	price: Schema.optionalKey(
+		Schema.Struct({
+			input: Schema.Number,
+			output: Schema.Number,
+			cached: Schema.optionalKey(Schema.Number)
+		})
+	)
+});
+/** One model a provider lists (`AiModelSchema`): its id, label, vendor, window and price. */
+export type AiModel = typeof AiModelSchema.Type;
+/** A model's listed price in USD per million tokens: input, output and cached input. */
+export type AiPrice = NonNullable<AiModel['price']>;
+/** A provider's listing: its models and the one it uses unless told otherwise. */
+export const AiCatalogSchema = Schema.Struct({ models: Schema.Array(AiModelSchema), default: Schema.String });
 /** Embeds text and files into vectors, one per input, with the model the caller names. */
 export interface EmbeddingsPort {
 	/** `dimensions`: the vector length the caller stores (a model that truncates, Matryoshka-style, answers at it). */
@@ -186,10 +214,11 @@ export interface AiPort {
 		/** The model classes the host maps (`default fast strong`). */
 		models: readonly string[];
 		/**
-		 * The concrete models a person may pick for a conversation and the id a new one starts on (the host's own selection,
-		 * cached as it likes; it answers even offline). `infer` takes any of their ids as `model`, beside the classes.
+		 * Every model the provider can reach that the agent can run on (images in, tools), as the provider lists them, and
+		 * the id a new conversation starts on; cached as the host likes, answering even offline. `infer` takes any of their
+		 * ids as `model`, beside the classes.
 		 */
-		catalog?(): Promise<{ models: readonly AiModel[]; default: string }>;
+		catalog(): Promise<{ models: readonly AiModel[]; default: string }>;
 		/**
 		 * `onDelta` streams text as it arrives; on the wall the agent keeps it as a cut step. `onProgress`: the stream
 		 * produced something that is not text (a tool call's arguments, or `reasoning` as it arrives).

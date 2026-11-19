@@ -378,9 +378,14 @@ describe('fromAbi', () => {
 					usage: { input: 1, output: 1 }
 				};
 				const port: AiPort = {
-					sys_1: { max_choices: 8, ask: async () => ({ answers: {}, cost_usd: 0, provider: 'p' }) },
+					sys_1: {
+						max_choices: 8,
+						ask: async () => ({ answers: {}, cost_usd: 0, provider: 'p' }),
+						catalog: async () => ({ models: [], default: '' })
+					},
 					sys_2: {
 						models: ['default'],
+						catalog: async () => ({ models: [], default: 'default' }),
 						infer: async (_request, _signal, onDelta, onProgress) => {
 							onDelta?.('hel');
 							onProgress?.('thinking');
@@ -427,6 +432,7 @@ describe('fromAbi', () => {
 					system1: port.sys_1,
 					system2: {
 						models: [],
+						catalog: async () => ({ models: [], default: '' }),
 						infer: async () => {
 							throw new Error('the model stream failed');
 						}
@@ -447,6 +453,7 @@ describe('fromAbi', () => {
 		Effect.gen(function* () {
 			const port: AiPort['sys_2'] = {
 				models: ['default'],
+				catalog: async () => ({ models: [], default: 'default' }),
 				infer: async () => ({ content: 'hello', tool_calls: [], finish: 'stop', usage: { input: 1, output: 1 } })
 			};
 			Object.defineProperty(port, 'infer', {

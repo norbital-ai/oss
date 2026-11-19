@@ -3,7 +3,6 @@
 	import { observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect, Option, Queue, Schema, Stream } from 'effect';
 	import { Cluster } from '@norbital-ai/ui/layout';
-	import type { Snippet } from 'svelte';
 	import { watch } from 'runed';
 	import {
 		Button,
@@ -309,8 +308,14 @@
 			member: string;
 			policies: { [policy: string]: string };
 			models: string[];
+			system1: string | null;
+			system2: string | null;
 		} | null>(null),
 		catalog = $state<readonly AiModel[]>([]),
+		deciders = $state<{ readonly models: readonly AiModel[]; readonly default: string }>({
+			models: [],
+			default: ''
+		}),
 		policyNames = $state<readonly string[]>([]),
 		spentNow = $state(0);
 	const loadAssistant = Effect.fn('Settings.assistant')(function* () {
@@ -318,6 +323,7 @@
 		const admin = r._tag === 'Success' ? r.success.admin : undefined;
 		if (admin === undefined) return;
 		catalog = admin.catalog;
+		deciders = admin.deciders;
 		spentNow = admin.spent;
 		policyNames = admin.policies;
 		assistant = {
@@ -326,9 +332,24 @@
 			policies: Object.fromEntries(
 				admin.policies.map((p) => [p, admin.settings.policies[p]?.toString() ?? ''])
 			),
-			models: [...admin.settings.models]
+			models: [...admin.settings.models],
+			system1: admin.settings.system1,
+			system2: admin.settings.system2
 		};
 	});
+	/** A provider's models as picker rows, grouped by vendor, each with its listed price per million tokens. */
+	const modelOptions = (models: readonly AiModel[]) =>
+		models.map((model) => ({
+			value: model.id,
+			label: model.label,
+			keywords: model.id,
+			...(model.provider === undefined ? {} : { group: model.provider }),
+			...(model.price === undefined
+				? {}
+				: { suffix: `${usd(model.price.input, 4)} / ${usd(model.price.output, 4)} ${t('per M tokens')}` })
+		}));
+	const labelOf = (models: readonly AiModel[], id: string) =>
+		models.find((model) => model.id === id)?.label ?? id;
 	watch(
 		() => tab,
 		(current) => {
@@ -336,44 +357,24 @@
 		}
 	);
 	const limit = (v: string) => (v.trim() === '' ? null : Math.max(0, Number(v)));
-	/** The Organization view's one Save: the assistant, retention, then a changed logo (which reloads the shell). */
-	const saveOrganization = Effect.fn('Settings.saveOrganization')(function* (f: FormData) {
-		const a = assistant;
-		if (a !== null) {
-			yield* op('set_agent', {
-				monthly: limit(a.monthly),
-				member: limit(a.member),
-				policies: Object.fromEntries(
-					Object.entries(a.policies).flatMap(([p, v]) => {
-						const cap = limit(v);
-						return cap === null ? [] : [[p, cap]];
-					})
-				),
-				models: a.models
-			});
-			if (mutationError !== null) return;
-			yield* loadAssistant();
-		}
-		yield* op('set_retention', {
-			every_days: Number(f.get('every_days')),
-			hour: Number(f.get('hour')),
-			notifications_days: Number(f.get('notifications_days')),
-			runs_days: Number(f.get('runs_days'))
+	const saveAssistant = Effect.fn('Settings.saveAssistant')(function* (a: NonNullable<typeof assistant>) {
+		yield* op('set_agent', {
+			monthly: limit(a.monthly),
+			member: limit(a.member),
+			policies: Object.fromEntries(
+				Object.entries(a.policies).flatMap(([p, v]) => {
+					const cap = limit(v);
+					return cap === null ? [] : [[p, cap]];
+				})
+			),
+			models: a.models,
+			system1: a.system1,
+			system2: a.system2
 		});
-		if (mutationError === null && workspace.organization && brand.logo !== (workspace.logo ?? null))
-			yield* saveBrand();
+		if (mutationError === null) yield* loadAssistant();
 	});
 </script>
 
-{#snippet card(title: string, description: string, body: Snippet)}
-	<section class="flex min-w-0 flex-col gap-3 rounded-lg border bg-card p-4">
-		<div class="flex flex-col gap-0.5">
-			<h2 class="text-sm font-medium">{title}</h2>
-			<p class="text-meta">{description}</p>
-		</div>
-		{@render body()}
-	</section>
-{/snippet}
 {#snippet at({ value }: { row: object; value: unknown })}<time class="tabular-nums"
 		>{when(typeof value === 'string' ? value : null)}</time
 	>{/snippet}
@@ -398,187 +399,252 @@
 			<TableSkeleton />
 		</div>
 	{:else if tab === 'organization'}
-		<!-- the view's one form: its one footer Save commits every card -->
-		<form
-			class="flex flex-col gap-4"
-			data-organization-settings
-			onsubmit={(e) => {
-				e.preventDefault();
-				fork(saveOrganization(new FormData(e.currentTarget)));
-			}}
-		>
-		{#snippet workspaceInfo()}
-			<dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
-				<dt class="text-muted-foreground">{t('Workspace handle')}</dt>
-				<dd>{workspace.handle}</dd>
-				<dt class="text-muted-foreground">{t('Locale')}</dt>
-				<dd>{workspace.locale}</dd>
-				<dt class="text-muted-foreground">{t('Time zone')}</dt>
-				<dd>{workspace.tz}</dd>
-			</dl>
+		<!-- one concern per tab; a tab that edits is one form with its one footer Save -->
+		{#snippet save()}<Cluster gap="sm" justify="end" class="border-t pt-3"
+				><Button type="submit">{t('Save')}</Button></Cluster
+			>{/snippet}
+		{#snippet workspaceTab()}
+			<div class="flex flex-col gap-4">
+				<p class="text-meta">{t('The workspace handle is its identity in every address and record.')}</p>
+				<dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
+					<dt class="text-muted-foreground">{t('Workspace handle')}</dt>
+					<dd>{workspace.handle}</dd>
+					<dt class="text-muted-foreground">{t('Locale')}</dt>
+					<dd>{workspace.locale}</dd>
+					<dt class="text-muted-foreground">{t('Time zone')}</dt>
+					<dd>{workspace.tz}</dd>
+				</dl>
+			</div>
 		{/snippet}
-		{@render card(
-			t('Workspace'),
-			t('The workspace handle is its identity in every address and record.'),
-			workspaceInfo
-		)}
-		{#if workspace.organization}
-			{#snippet branding()}
-				<div class="flex flex-col gap-3">
-					<div class="flex flex-wrap items-center gap-3 text-sm">
-						<span class="text-muted-foreground">{t('Logo')}</span>
-						{#if brand.logo !== null}<img
-								src={brand.logo}
-								alt={t('Logo')}
-								class="size-10 rounded-sm border object-contain"
-							/>{/if}
-						<input
-							type="file"
-							accept="image/png,image/svg+xml,image/webp,image/jpeg"
-							aria-label={t('Logo')}
-							class="text-xs"
-							onchange={(e) => pickLogo(e.currentTarget.files?.[0])}
-						/>
-						{#if brand.logo !== null}<Button variant="ghost" onclick={() => (brand.logo = null)}
-								>{t('Remove logo')}</Button
-							>{/if}
-					</div>
+		{#snippet billingTab()}
+			<div class="flex flex-col items-start gap-4">
+				<p class="text-meta">
+					{t("This workspace's usage and cost, its estimate for the month, the payment card and past invoices.")}
+				</p>
+				<!-- the host's page, not a shell route: `target` keeps the shell from routing it in the app -->
+				<Button href={workspace.billing} target="_self">{t('Open billing')}</Button>
+			</div>
+		{/snippet}
+		{#snippet brandingTab()}
+			<form
+				class="flex flex-col gap-4"
+				onsubmit={(e) => {
+					e.preventDefault();
+					if (brand.logo !== (workspace.logo ?? null)) fork(saveBrand());
+				}}
+			>
+				<p class="text-meta">{t('The logo every member sees.')}</p>
+				<div class="flex flex-wrap items-center gap-3 text-sm">
+					<span class="text-muted-foreground">{t('Logo')}</span>
+					{#if brand.logo !== null}<img
+							src={brand.logo}
+							alt={t('Logo')}
+							class="size-10 rounded-sm border object-contain"
+						/>{/if}
+					<input
+						type="file"
+						accept="image/png,image/svg+xml,image/webp,image/jpeg"
+						aria-label={t('Logo')}
+						class="text-xs"
+						onchange={(e) => pickLogo(e.currentTarget.files?.[0])}
+					/>
+					{#if brand.logo !== null}<Button variant="ghost" onclick={() => (brand.logo = null)}
+							>{t('Remove logo')}</Button
+						>{/if}
 				</div>
-			{/snippet}
-			{@render card(t('Branding'), t('The logo every member sees.'), branding)}
-		{/if}
-		{#if assistant !== null}
-			{@const a = assistant}
-			{#snippet assistantForm()}
-				<div class="flex flex-col gap-3" data-assistant-settings>
-					<p class="text-sm">
-						<span class="text-muted-foreground">{t('Spent this month')}:</span>
-						<span class="tabular-nums" data-assistant-spent>{usd(spentNow)}</span>
+				{@render save()}
+			</form>
+		{/snippet}
+		{#snippet assistantTab()}
+			{#if assistant !== null}
+				{@const a = assistant}
+				<form
+					class="flex flex-col gap-4"
+					onsubmit={(e) => {
+						e.preventDefault();
+						fork(saveAssistant(a));
+					}}
+				>
+					<p class="text-meta">
+						{t(
+							'Spending limits, the models System 1 and System 2 run and the models members may use. Changes apply to the next message.'
+						)}
 					</p>
-					<div class="grid gap-3 sm:grid-cols-2">
-						<label class="flex flex-col gap-1 text-sm"
-							><span class="text-muted-foreground">{t('Monthly limit (USD)')}</span>
-							<Input
-								class="h-8"
-								type="number"
-								min="0"
-								step="0.01"
-								placeholder={t('No limit')}
-								value={a.monthly}
-								oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-									(a.monthly = e.currentTarget.value)}
-								data-assistant-monthly
-							/></label
-						>
-						<label class="flex flex-col gap-1 text-sm"
-							><span class="text-muted-foreground">{t('Monthly limit per member (USD)')}</span>
-							<Input
-								class="h-8"
-								type="number"
-								min="0"
-								step="0.01"
-								placeholder={t('No limit')}
-								value={a.member}
-								oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-									(a.member = e.currentTarget.value)}
-								data-assistant-member
-							/></label
-						>
-					</div>
-					{#if policyNames.length > 0}
-						<fieldset class="flex flex-col gap-1.5 text-sm" data-assistant-policies>
-							<legend class="mb-1 text-muted-foreground">
-								{t(
-									"Monthly limit per member by policy (USD). A member gets the most generous of their policies' limits; a blank one uses the default above."
-								)}
-							</legend>
-							<div class="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
-								{#each policyNames as policy (policy)}
-									<label class="flex items-center gap-2" data-assistant-policy={policy}
-										><span class="min-w-0 flex-1 truncate">{policy.replaceAll('_', ' ')}</span>
-										<Input
-											class="h-8 w-32"
-											type="number"
-											min="0"
-											step="0.01"
-											placeholder={t('Default')}
-											value={a.policies[policy] ?? ''}
-											oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-												(a.policies[policy] = e.currentTarget.value)}
-										/></label
-									>
-								{/each}
-							</div>
-						</fieldset>
-					{/if}
-					{#if catalog.length > 1}
-						<fieldset class="flex flex-col gap-1.5 text-sm" data-assistant-models>
-							<legend class="mb-1 text-muted-foreground">
-								{t(
-									'Models members may use. None chosen allows every model; with one, members see no model choice.'
-								)}
-							</legend>
-							{#if a.models.length > 0}
-								<div class="flex flex-wrap gap-1.5">
-									{#each a.models as id (id)}
-										<span
-											class="inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2.5 text-xs"
-											data-assistant-model={id}
-											>{catalog.find((model) => model.id === id)?.label ?? id}<button
-												type="button"
-												class="grid size-5 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-												aria-label={`${t('Remove')} ${id}`}
-												onclick={() => (a.models = a.models.filter((x) => x !== id))}>×</button
-											></span
+					<div class="flex flex-col gap-3" data-assistant-settings>
+						<p class="text-sm">
+							<span class="text-muted-foreground">{t('Spent this month')}:</span>
+							<span class="tabular-nums" data-assistant-spent>{usd(spentNow)}</span>
+						</p>
+						<div class="grid gap-3 sm:grid-cols-2">
+							<label class="flex flex-col gap-1 text-sm"
+								><span class="text-muted-foreground">{t('Monthly limit (USD)')}</span>
+								<Input
+									class="h-8"
+									type="number"
+									min="0"
+									step="0.01"
+									placeholder={t('No limit')}
+									value={a.monthly}
+									oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+										(a.monthly = e.currentTarget.value)}
+									data-assistant-monthly
+								/></label
+							>
+							<label class="flex flex-col gap-1 text-sm"
+								><span class="text-muted-foreground">{t('Monthly limit per member (USD)')}</span>
+								<Input
+									class="h-8"
+									type="number"
+									min="0"
+									step="0.01"
+									placeholder={t('No limit')}
+									value={a.member}
+									oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+										(a.member = e.currentTarget.value)}
+									data-assistant-member
+								/></label
+							>
+						</div>
+						{#if policyNames.length > 0}
+							<fieldset class="flex flex-col gap-1.5 text-sm" data-assistant-policies>
+								<legend class="mb-1 text-muted-foreground">
+									{t(
+										"Monthly limit per member by policy (USD). A member gets the most generous of their policies' limits; a blank one uses the default above."
+									)}
+								</legend>
+								<div class="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+									{#each policyNames as policy (policy)}
+										<label class="flex items-center gap-2" data-assistant-policy={policy}
+											><span class="min-w-0 flex-1 truncate">{policy.replaceAll('_', ' ')}</span>
+											<Input
+												class="h-8 w-32"
+												type="number"
+												min="0"
+												step="0.01"
+												placeholder={t('Default')}
+												value={a.policies[policy] ?? ''}
+												oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+													(a.policies[policy] = e.currentTarget.value)}
+											/></label
 										>
 									{/each}
 								</div>
-							{/if}
-							<Combobox
-								searchable
-								class="max-w-sm"
-								options={catalog
-									.filter((model) => !a.models.includes(model.id))
-									.map((model) => ({
-										value: model.id,
-										label: model.label,
-										keywords: model.id,
-										...(model.provider === undefined ? {} : { group: model.provider })
-									}))}
-								value={null}
-								placeholder={a.models.length === 0 ? t('Every model') : t('Add a model')}
-								aria-label={t('Models members may use')}
-								on_change={(id) => {
-									if (id !== null) a.models = [...a.models, id];
-								}}
-							/>
-						</fieldset>
-					{/if}
-				</div>
-			{/snippet}
-			{@render card(
-				t('Assistant'),
-				t('Spending limits and the models members may use. Changes apply to the next message.'),
-				assistantForm
-			)}
-		{/if}
-		{#snippet retentionForm()}
-			<div class="grid gap-3 sm:grid-cols-2" data-retention-settings>
-				{#each [['every_days', 'Run every (days)', 1, undefined], ['hour', 'From hour (workspace time)', 0, 23], ['notifications_days', 'Keep read notifications (days)', 1, undefined], ['runs_days', 'Keep finished runs (days)', 1, undefined]] as const as [name, label, min, max] (name)}
-					<label class="flex flex-col gap-1 text-sm"
-						><span class="text-muted-foreground">{t(label)}</span>
-						<Input class="h-8" type="number" step="1" {name} {min} {max} value={s.retention[name]} /></label
-					>
-				{/each}
-			</div>
+							</fieldset>
+						{/if}
+						<div class="grid gap-3 sm:grid-cols-2">
+							<label class="flex flex-col gap-1 text-sm" data-assistant-system1
+								><span class="text-muted-foreground"
+									>{t('System 1: fast decisions (triage, AI filters)')}</span
+								>
+								<Combobox
+									searchable
+									clearable
+									options={modelOptions(deciders.models)}
+									value={a.system1}
+									placeholder={`${t('Host default')}: ${labelOf(deciders.models, deciders.default)}`}
+									aria-label={t('System 1 model')}
+									on_change={(id) => (a.system1 = id)}
+								/></label
+							>
+							<label class="flex flex-col gap-1 text-sm" data-assistant-system2
+								><span class="text-muted-foreground">{t("System 2: Norbius's default model")}</span>
+								<Combobox
+									searchable
+									clearable
+									options={modelOptions(catalog)}
+									value={a.system2}
+									placeholder={t('Host default')}
+									aria-label={t('System 2 model')}
+									on_change={(id) => (a.system2 = id)}
+								/></label
+							>
+						</div>
+						{#if catalog.length > 1}
+							<fieldset class="flex flex-col gap-1.5 text-sm" data-assistant-models>
+								<legend class="mb-1 text-muted-foreground">
+									{t(
+										'Models members may use. None chosen allows every model; with one, members see no model choice.'
+									)}
+								</legend>
+								{#if a.models.length > 0}
+									<div class="flex flex-wrap gap-1.5">
+										{#each a.models as id (id)}
+											<span
+												class="inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2.5 text-xs"
+												data-assistant-model={id}
+												>{labelOf(catalog, id)}<button
+													type="button"
+													class="grid size-5 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+													aria-label={`${t('Remove')} ${id}`}
+													onclick={() => (a.models = a.models.filter((x) => x !== id))}>×</button
+												></span
+											>
+										{/each}
+									</div>
+								{/if}
+								<Combobox
+									searchable
+									class="max-w-sm"
+									options={modelOptions(catalog.filter((model) => !a.models.includes(model.id)))}
+									value={null}
+									placeholder={a.models.length === 0 ? t('Every model') : t('Add a model')}
+									aria-label={t('Models members may use')}
+									on_change={(id) => {
+										if (id !== null) a.models = [...a.models, id];
+									}}
+								/>
+							</fieldset>
+						{/if}
+					</div>
+					{@render save()}
+				</form>
+			{/if}
 		{/snippet}
-		{@render card(
-			t('Data retention'),
-			t('A built-in daily cleanup, run while the workspace is in use: it removes read notifications and finished runs past these ages. Unread notifications are kept.'),
-			retentionForm
-		)}
-		<Cluster gap="sm" justify="end" class="border-t pt-3"><Button type="submit">{t('Save')}</Button></Cluster>
-		</form>
+		{#snippet retentionTab()}
+			<form
+				class="flex flex-col gap-4"
+				onsubmit={(e) => {
+					e.preventDefault();
+					const f = new FormData(e.currentTarget);
+					fork(
+						op('set_retention', {
+							every_days: Number(f.get('every_days')),
+							hour: Number(f.get('hour')),
+							notifications_days: Number(f.get('notifications_days')),
+							runs_days: Number(f.get('runs_days'))
+						})
+					);
+				}}
+			>
+				<p class="text-meta">
+					{t('A built-in daily cleanup, run while the workspace is in use: it removes read notifications and finished runs past these ages. Unread notifications are kept.')}
+				</p>
+				<div class="grid gap-3 sm:grid-cols-2" data-retention-settings>
+					{#each [['every_days', 'Run every (days)', 1, undefined], ['hour', 'From hour (workspace time)', 0, 23], ['notifications_days', 'Keep read notifications (days)', 1, undefined], ['runs_days', 'Keep finished runs (days)', 1, undefined]] as const as [name, label, min, max] (name)}
+						<label class="flex flex-col gap-1 text-sm"
+							><span class="text-muted-foreground">{t(label)}</span>
+							<Input class="h-8" type="number" step="1" {name} {min} {max} value={s.retention[name]} /></label
+						>
+					{/each}
+				</div>
+				{@render save()}
+			</form>
+		{/snippet}
+		<Tabs
+			tabs={[
+				{ name: 'workspace', title: t('Workspace'), icon: 'concept:workspace', body: workspaceTab },
+				...(workspace.organization
+					? [{ name: 'branding', title: t('Branding'), icon: 'lucide:image', body: brandingTab, keep_alive: true as const }]
+					: []),
+				...(workspace.billing !== undefined
+					? [{ name: 'billing', title: t('Billing'), icon: 'lucide:receipt', body: billingTab }]
+					: []),
+				...(assistant !== null
+					? [{ name: 'assistant', title: t('Assistant'), icon: 'concept:agents', body: assistantTab, keep_alive: true as const }]
+					: []),
+				{ name: 'retention', title: t('Data retention'), icon: 'lucide:history', body: retentionTab, keep_alive: true }
+			]}
+		/>
 	{:else if tab === 'integrations'}
 		{#snippet connectionsTab()}
 			<Integrations {ctx}

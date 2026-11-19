@@ -612,15 +612,22 @@ export class Drivers extends Context.Service<
 
 // ── ai ──
 /**
- * The AI facility: `ask` is `sys_1` (structured decisions from text and resolved images), `infer` the `sys_2` LLM
- * (multimodal; the 20 s idle wall cuts a stream into a `cut` step), `embed` the embedding model. `models` are the
- * classes the host maps; `catalog` the concrete models a person may pick and the one a conversation starts on.
+ * The AI facility: `ask` is `sys_1` (structured decisions from text and resolved images, with a `deciders` id or the
+ * host's own), `infer` the `sys_2` LLM (multimodal; the 20 s idle wall cuts a stream into a `cut` step), `embed` the
+ * embedding model. `models` are the classes the host maps; `catalog` and `deciders` the models each provider lists.
  */
 export class Ai extends Context.Service<
 	Ai,
 	{
-		readonly ask: (request: DecisionRequest) => Effect.Effect<DecisionResult, PortFailure>;
+		readonly ask: (
+			request: DecisionRequest,
+			model?: string
+		) => Effect.Effect<DecisionResult, PortFailure>;
 		readonly maxChoices: number | undefined;
+		readonly deciders: Effect.Effect<
+			{ readonly models: readonly AiModel[]; readonly default: string },
+			PortFailure
+		>;
 		readonly models: readonly string[];
 		readonly catalog: Effect.Effect<
 			{ readonly models: readonly AiModel[]; readonly default: string },
@@ -648,12 +655,15 @@ export class Ai extends Context.Service<
 		const sys1 = is_off(ports.system1) ? undefined : ports.system1,
 			sys2 = is_off(ports.system2) ? undefined : ports.system2,
 			embed = is_off(ports.embed) ? undefined : ports.embed;
-		const catalog = sys2?.catalog?.bind(sys2);
 		return Layer.succeed(Ai, {
-			ask: sys1 === undefined ? Ai.noSystem1 : lift('sys_1', sys1.ask.bind(sys1)),
+			ask:
+				sys1 === undefined
+					? Ai.noSystem1
+					: (request, model) => Port.attempt('sys_1', (signal) => sys1.ask(request, signal, model)),
 			maxChoices: sys1?.max_choices,
+			deciders: sys1 === undefined ? turnedOff('sys_1') : Port.attempt('sys_1', () => sys1.catalog()),
 			models: sys2?.models ?? [],
-			catalog: catalog === undefined ? turnedOff('ai') : Port.attempt('ai', () => catalog()),
+			catalog: sys2 === undefined ? turnedOff('ai') : Port.attempt('ai', () => sys2.catalog()),
 			infer:
 				sys2 === undefined
 					? () =>

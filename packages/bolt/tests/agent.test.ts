@@ -157,6 +157,7 @@ const port = (answers: readonly Step[]) => {
 		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
+		deciders: Effect.succeed({ models: [], default: '' }),
 		catalog: Effect.succeed({ models: [{ id: 'default', label: 'Default' }], default: 'default' }),
 		embed: () => Port.unavailable('ai.embed'),
 		infer: (request) =>

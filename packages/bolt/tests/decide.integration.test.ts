@@ -133,6 +133,7 @@ const aiPort = (fake: Fake): Ai['Service'] => ({
 		}),
 	maxChoices: undefined,
 	models: ['default'],
+	deciders: Effect.succeed({ models: [], default: '' }),
 	catalog: Effect.die(new Error('System 2 is never asked')),
 	infer: () => Stream.die(new Error('System 2 is never asked')),
 	embed: () => Effect.die(new Error('Embeddings are never asked'))

@@ -477,6 +477,7 @@
 		{#if notice !== undefined}
 			<a
 				href={notice.href === undefined ? undefined : based(notice.href)}
+				target="_self"
 				title={expanded ? undefined : notice.text}
 				aria-label={expanded ? undefined : notice.text}
 				data-shell-notice

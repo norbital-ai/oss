@@ -663,8 +663,13 @@ export type AgentsShape = {
 		approve: boolean,
 		by: Authority
 	) => Effect.Effect<TurnResult, EngineError>;
+	/** System 2's listed models and default; `deciders` System 1's (empty when the host binds none). */
 	readonly models: Effect.Effect<
-		{ readonly models: readonly AiModel[]; readonly default: string },
+		{
+			readonly models: readonly AiModel[];
+			readonly default: string;
+			readonly deciders: { readonly models: readonly AiModel[]; readonly default: string };
+		},
 		EngineError
 	>;
 	readonly exportTranscript: (id: string) => Effect.Effect<string, EngineError>;

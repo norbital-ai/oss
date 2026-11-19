@@ -219,6 +219,90 @@ it.each(['secret', 'key', 'mcp', 'integration'] as const)(
 	}
 );
 
+it('organization settings are one tab per concern, each saving only its own', async () => {
+	const runtime = ManagedRuntime.make(Layer.empty),
+		dispose = mount_edge(runtime);
+	const scope = Effect.runSync(Scope.make());
+	const bolt = await runtime.runPromise(
+		shell_bolt(
+			{
+				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
+				actor: null,
+				name: null,
+				admin: true,
+				preview: null,
+				nav: [],
+				inbox: 0,
+				kiosks: [],
+				startable: [],
+				envoys: {},
+				search: [],
+				contract: 'fixture',
+				push: null,
+				visitor: null,
+				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} },
+				surfaces: { inbox: false, runs: false, settings: true, agent: false, studio: false },
+				catalog: {
+					sys_integration: {
+						record_label: 'record.id',
+						label: ['id'],
+						fields: { id: { kind: 'text' }, revision: { kind: 'int' } }
+					}
+				}
+			},
+			{
+				fetch: async () =>
+					Response.json({ answers: [{ sys_integration: { rows: [], next: null, total: 0 } }] }),
+				open_stream: () => ({ onmessage: null, onerror: null, close() {} })
+			}
+		).pipe(Effect.provideService(Scope.Scope, scope))
+	);
+	const writes: { name: string; input: Readonly<Record<string, Json>> }[] = [];
+	const api = {
+		...nativeApi,
+		settings: () => Effect.succeed(settings),
+		settings_op: (name: string, input: Readonly<Record<string, Json>>) =>
+			Effect.sync(() => {
+				writes.push({ name, input });
+				return null;
+			})
+	};
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(Configuration, {
+		target,
+		props: {
+			api,
+			bolt,
+			tab: 'organization',
+			workspace: { name: 'Fixture', locale: 'en', tz: 'UTC', billing: '/billing' },
+			t: (x: string) => x
+		}
+	});
+	try {
+		await expect.element(page.getByRole('tab', { name: 'Workspace' })).toHaveAttribute('aria-selected', 'true');
+		expect(page.getByRole('button', { name: 'Save', exact: true }).elements()).toHaveLength(0);
+		// the host's billing page is a full page load, never a shell route
+		await page.getByRole('tab', { name: 'Billing' }).click();
+		const billing = page.getByRole('link', { name: 'Open billing' });
+		await expect.element(billing).toHaveAttribute('href', '/billing');
+		await expect.element(billing).toHaveAttribute('target', '_self');
+		await page.getByRole('tab', { name: 'Data retention' }).click();
+		await page.getByLabelText('Keep finished runs (days)').fill('60');
+		await page.getByRole('button', { name: 'Save', exact: true }).click();
+		await expect.poll(() => writes).toEqual([
+			{ name: 'set_retention', input: { every_days: 1, hour: 3, notifications_days: 30, runs_days: 60 } }
+		]);
+	} finally {
+		await unmount(view);
+		await runtime.runPromise(Scope.close(scope, Exit.void));
+		await dispose();
+		target.remove();
+	}
+});
+
 it('an invitation request opens the native invitation dialog without sending an invitation', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty),
 		dispose = mount_edge(runtime);

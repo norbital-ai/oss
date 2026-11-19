@@ -85,6 +85,7 @@ const ai = (embed: Ai['Service']['embed']): Ai['Service'] => ({
 	ask: () => Port.unavailable('ai'),
 	maxChoices: undefined,
 	models: [],
+	deciders: Effect.succeed({ models: [], default: '' }),
 	catalog: Port.unavailable('ai'),
 	infer: () => Stream.fail(Port.failure('ai')(new Error('unused'))),
 	embed

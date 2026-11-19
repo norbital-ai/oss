@@ -14,7 +14,7 @@ import {
 	Scope
 } from 'effect';
 import { HttpClient } from 'effect/http';
-import { ai_modality_refusals } from '@norbital-ai/providers/openrouter';
+import { ai_modality_refusals, models, type ModelCatalogue } from '@norbital-ai/providers/openrouter';
 import { to_drivers } from '@norbital-ai/providers';
 import {
 	type Challenge,
@@ -174,7 +174,13 @@ export const host: (
 	const sys1 = config.providers.AI_SYS_1,
 		sys2 = config.providers.AI_SYS_2,
 		embed = config.providers.AI_EMBED;
+	// the sys_2 endpoint's listing: what members may pick, what each model costs and takes
+	let listing: ModelCatalogue = { chat: [], embeddings: [], unread: true };
 	if (sys2 !== undefined) {
+		listing = yield* models({ base_url: endpoint(sys2).endpoint, api_key: sys2.credential });
+		const priced = new Set(
+			listing.chat.flatMap((model) => (Number(model.pricing?.prompt) >= 0 ? [model.id] : []))
+		);
 		const refusals = yield* ai_modality_refusals(
 			[
 				{
@@ -194,8 +200,11 @@ export const host: (
 							}
 						])
 			],
-			{ tolerate_unread: false }
+			{ tolerate_unread: false, listings: new Map([[endpoint(sys2).endpoint, listing]]) }
 		);
+		for (const id of new Set(Object.values(config.ai.sys2)))
+			if (!priced.has(id))
+				refusals.push(`sys_2 model '${id}' has no listed price: its calls could not be charged to a budget`);
 		if (refusals.length > 0)
 			return yield* Effect.fail(FacilityFailure.invalid(refusals.join('\n')));
 	}
@@ -237,7 +246,8 @@ export const host: (
 					config.ai,
 					Object.keys(config.ai.sys2),
 					files.get,
-					run
+					run,
+					listing
 				);
 	const vapid = config.vapid;
 	const facilities: Facilities = {

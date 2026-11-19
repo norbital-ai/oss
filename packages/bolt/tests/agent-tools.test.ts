@@ -518,7 +518,7 @@ describe('jobs cut short', () => {
 });
 describe('spending caps', () => {
 	it('a member gets the most generous cap among their policies, else the default', () => {
-		const s = { monthly: null, member: 5, policies: { rep: 2, lead: 20 }, models: [] };
+		const s = { monthly: null, member: 5, policies: { rep: 2, lead: 20 }, models: [], system1: null, system2: null };
 		expect(memberCap(s, ['rep', 'lead'])).toBe(20);
 		expect(memberCap(s, ['rep'])).toBe(2);
 		expect(memberCap(s, ['other'])).toBe(5);

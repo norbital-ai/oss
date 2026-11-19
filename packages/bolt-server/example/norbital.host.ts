@@ -13,7 +13,8 @@
 // - `BOLT_<F>_PROVIDER` / `_ENDPOINT` / `_CREDENTIAL` for `AI_SYS_1` (`openai`, `decisions`), `AI_SYS_2`, `AI_EMBED`
 //   (`openai`), `GEO` (`nominatim`), `CONVERT` (`norbital`), `WEB` (`public`) and `SEARCH` (`deepseek`, the agent's
 //   and `ctx.ai.sys_2.infer`'s `web_search`), with `BOLT_AI_SYS_1_MODEL`,
-//   `BOLT_AI_SYS_2_MODELS` and `BOLT_AI_EMBED_MODELS` (JSON maps).
+//   `BOLT_AI_SYS_2_MODELS` and `BOLT_AI_EMBED_MODELS` (JSON maps). Members pick from what the `AI_SYS_2` endpoint lists;
+//   each `BOLT_AI_SYS_2_MODELS` model must be listed with a price, which charges a call the endpoint reports no cost for.
 //   Transcription is Norbital Convert's (`CONVERT`).
 // - Optional pairs: `BOLT_GOOGLE_OAUTH_CLIENT_ID`/`_SECRET`, `BOLT_VAPID_PUBLIC_KEY`/`_PRIVATE_KEY`,
 //   `BOLT_TURNSTILE_SITE_KEY`/`_SECRET`; `BOLT_APNS_KEYS` (JSON by team id); `BOLT_ENVIRONMENT` (the shell's badge).

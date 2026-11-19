@@ -4,6 +4,7 @@
 import { pathToFileURL } from 'node:url';
 import { Effect, FileSystem, Option, Path, Schema } from 'effect';
 import {
+	AiCatalogSchema,
 	AiPortResponseSchema,
 	AuditPage,
 	AuditPendingPage,
@@ -51,10 +52,6 @@ const LogRow = Schema.Struct({
 	id: Schema.String, at: Schema.String, severity: Schema.Literals(['info', 'warn', 'error']),
 	event: Schema.String, invocation: Schema.String, run: Schema.NullOr(Schema.String),
 	conversation: Schema.NullOr(Schema.String), turn: Schema.NullOr(Schema.String), attributes: Schema.Json
-});
-const AiCatalog = Schema.Struct({
-	models: Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String, provider: Schema.optionalKey(Schema.String), context: Schema.optionalKey(Schema.Number) })),
-	default: Schema.String
 });
 const DriverPage = Schema.Struct({
 	items: Schema.Array(Schema.Json), cursor: Schema.Json, more: Schema.Boolean,
@@ -124,12 +121,12 @@ const facilities = (input: unknown): Facilities => {
 		},
 		intelligence: {
 			system1: optional(groups.intelligence.system1, (value) => {
-				const port = decode(Schema.Struct({ ask: Callback, max_choices: Schema.optionalKey(Schema.Number) }))(value);
-				return { ask: call(value, port.ask, DecisionResult), ...(port.max_choices === undefined ? {} : { max_choices: port.max_choices }) };
+				const port = decode(Schema.Struct({ ask: Callback, catalog: Callback, max_choices: Schema.optionalKey(Schema.Number) }))(value);
+				return { ask: call(value, port.ask, DecisionResult), catalog: call(value, port.catalog, AiCatalogSchema), ...(port.max_choices === undefined ? {} : { max_choices: port.max_choices }) };
 			}),
 			system2: optional(groups.intelligence.system2, (value) => {
-				const port = decode(Schema.Struct({ models: Schema.Array(Schema.String), infer: Callback, catalog: Schema.optionalKey(Callback) }))(value);
-				return { models: port.models, infer: call(value, port.infer, AiPortResponseSchema), ...(port.catalog === undefined ? {} : { catalog: call(value, port.catalog, AiCatalog) }) };
+				const port = decode(Schema.Struct({ models: Schema.Array(Schema.String), infer: Callback, catalog: Callback }))(value);
+				return { models: port.models, infer: call(value, port.infer, AiPortResponseSchema), catalog: call(value, port.catalog, AiCatalogSchema) };
 			}),
 			embed: optional(groups.intelligence.embed, (value) => {
 				const port = decode(Schema.Struct({ embed: Callback }))(value);
