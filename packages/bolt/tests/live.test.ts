@@ -256,6 +256,95 @@ describe('engine/live connection recovery', () => {
 			);
 		})
 	);
+
+	it.effect('evicts the oldest connection when LIVE.maxConnections is reached', () =>
+		Effect.gen(function* () {
+			const hub = yield* makeHub(() => Effect.succeed([]));
+			const oldestFrames: Frame[] = [];
+			const oldest = yield* connection(hub, admin, oldestFrames);
+			const secondFrames: Frame[] = [];
+			const second = yield* connection(hub, admin, secondFrames);
+			for (let i = 2; i < LIVE.maxConnections; i++) yield* connection(hub, admin, []);
+			expect(yield* hub.authorityOf(oldest.id)).toMatchObject({ _tag: 'Some' });
+			expect(yield* hub.authorityOf(second.id)).toMatchObject({ _tag: 'Some' });
+
+			const newestFrames: Frame[] = [];
+			const newest = yield* connection(hub, admin, newestFrames);
+			yield* Fiber.join(oldest.fiber);
+			expect(yield* hub.authorityOf(oldest.id)).toMatchObject({ _tag: 'None' });
+			expect(yield* hub.authorityOf(second.id)).toMatchObject({ _tag: 'Some' });
+			expect(yield* hub.authorityOf(newest.id)).toMatchObject({ _tag: 'Some' });
+
+			hub.publish([cap(null, order({ id: 'o-cap' }))]);
+			yield* hub.settled;
+			yield* TestClock.adjust(0);
+			expect(secondFrames.some((frame) => frame.t === 'v')).toBe(true);
+			expect(newestFrames.some((frame) => frame.t === 'v')).toBe(true);
+		})
+	);
+
+	it.effect(
+		'skips emitting delta frames when coalesced or projection-neutral commits leave the view deeply identical',
+		() =>
+			Effect.gen(function* () {
+				const initial = { id: 'o1', title: 'desk', status: 'draft' };
+				const { hub, frames, asked, connect } = yield* setup(() => page(initial));
+				const conn = yield* connect(admin);
+				yield* hub.register(conn, 'orders', {
+					read: yield* read(cat, 'orders', {
+						select: { title: true, status: true },
+						order: [{ field: 'id', dir: 'asc' }],
+						all: true
+					})
+				});
+				yield* TestClock.adjust(0);
+				expect(answers(frames)).toEqual(['orders']);
+				asked.length = 0;
+				frames.length = 0;
+
+				// Coalesced A -> B -> A in one flush batch: net view is deeply identical.
+				const draft = order({ id: 'o1', title: 'desk', status: 'draft' });
+				const open = order({ id: 'o1', title: 'desk', status: 'open', revision: 2 });
+				const back = order({ id: 'o1', title: 'desk', status: 'draft', revision: 3 });
+				hub.publish([cap(draft, open)]);
+				hub.publish([cap(open, back)]);
+				yield* hub.settled;
+				yield* TestClock.adjust(0);
+				expect(asked).toHaveLength(0);
+				expect(patches(frames)).toEqual([]);
+				expect(answers(frames)).toEqual([]);
+
+				// Unselected field change only: projection is deeply identical.
+				const movedRegion = order({
+					id: 'o1',
+					title: 'desk',
+					status: 'draft',
+					region: 'south',
+					revision: 4
+				});
+				hub.publish([cap(back, movedRegion)]);
+				yield* hub.settled;
+				yield* TestClock.adjust(0);
+				expect(asked).toHaveLength(0);
+				expect(patches(frames)).toEqual([]);
+
+				// Real projected change still emits a delta without falling back to a read.
+				const opened = order({
+					id: 'o1',
+					title: 'desk',
+					status: 'open',
+					region: 'south',
+					revision: 5
+				});
+				hub.publish([cap(movedRegion, opened)]);
+				yield* hub.settled;
+				yield* TestClock.adjust(0);
+				expect(asked).toHaveLength(0);
+				expect(patches(frames)).toEqual([
+					['orders', [{ op: 'upsert', path: [], index: 0, row: { id: 'o1', title: 'desk', status: 'open' } }]]
+				]);
+			})
+	);
 });
 
 describe('engine/live: routing on pre- and post-images', () => {

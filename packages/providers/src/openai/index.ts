@@ -3,7 +3,7 @@
 // (`modelCall`) cuts a long generation into a continued step instead of a `timeout`; tool calls assemble from
 // their pieces and usage comes from the last chunk. A refusal rejects with the HTTP `status` (the engine spots context
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
-import { Clock, Effect, Option, Queue, Schema, Stream } from 'effect';
+import { Clock, Effect, Exit, Fiber, Option, Queue, Schema, Stream } from 'effect';
 import { HttpClient, HttpClientRequest } from 'effect/http';
 import {
 	type AiEvent,
@@ -186,6 +186,26 @@ const Chunk = Schema.Struct({
 });
 const decodeChunk = Schema.decodeUnknownEffect(Schema.fromJsonString(Chunk));
 const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+const OPENROUTER_RECONCILE_MS = 1_500;
+const OpenRouterGeneration = Schema.Struct({
+	data: Schema.optional(
+		Schema.Struct({
+			total_cost: Schema.optional(Schema.NullOr(Schema.Number))
+		})
+	),
+	total_cost: Schema.optional(Schema.NullOr(Schema.Number))
+});
+const decodeOpenRouterGeneration = Schema.decodeUnknownEffect(
+	Schema.fromJsonString(OpenRouterGeneration)
+);
+const isOpenRouterEndpoint = (baseUrl: string): boolean => {
+	try {
+		const host = new URL(baseUrl).hostname.toLowerCase();
+		return host === 'openrouter.ai' || host.endsWith('.openrouter.ai');
+	} catch {
+		return baseUrl.toLowerCase().includes('openrouter.ai');
+	}
+};
 
 /**
  * Model inference over an OpenAI-compatible endpoint: each request is one streamed completion whose text deltas arrive
@@ -234,8 +254,10 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 					}),
 					catch: Port.failure('ai')
 				});
+				const baseUrl = config.endpoint.replace(/\/$/, '');
+				const isOpenRouter = isOpenRouterEndpoint(baseUrl);
 				const req = yield* HttpClientRequest.bodyJson(
-					HttpClientRequest.post(`${config.endpoint.replace(/\/$/, '')}/chat/completions`, {
+					HttpClientRequest.post(`${baseUrl}/chat/completions`, {
 						headers: {
 							'content-type': 'application/json',
 							...(config.credential === undefined
@@ -245,6 +267,10 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 					}),
 					body
 				).pipe(Effect.mapError(Port.failure('ai')));
+				const promptChars = yield* Effect.try({
+					try: () => JSON.stringify(body).length,
+					catch: () => 0
+				}).pipe(Effect.orElseSucceed(() => 0));
 				const res = yield* HttpClient.execute(req).pipe(
 					Effect.mapError(Port.failure('ai')),
 					// a provider answers its headers with its first token: as late as an uncached long prompt takes. Nothing has
@@ -334,52 +360,114 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 						call.args += t.function?.arguments ?? '';
 					}
 				});
-				if ((res.headers['content-type'] ?? '').includes('application/json')) {
-					yield* accept(
-						yield* decodeChunk(
-							yield* res.text.pipe(Port.call('ai.body', HOST_LIMITS.callMs.ai))
-						).pipe(Effect.mapError(Port.failure('ai'))),
-						true
+				const fallbackId = `chat_${crypto.randomUUID()}`;
+				let metered = false;
+				const computeCost = (aborted: boolean) => {
+					const rawInput = usage.prompt_tokens ?? 0;
+					const rawOutput = usage.completion_tokens ?? 0;
+					const estimatedOutput = Math.ceil(
+						(text.length +
+							reasoning.length +
+							calls.reduce((sum, c) => sum + c.name.length + c.args.length, 0)) /
+							4
 					);
-				} else {
-					yield* Stream.transformPull(res.stream, (pull) =>
-						Effect.succeed(pull.pipe(Port.call('ai.stream', HOST_LIMITS.callMs.ai)))
-					).pipe(
-						Stream.decodeText(),
-						Stream.splitLines,
-						Stream.map((s) => s.trim()),
-						Stream.filter(
-							(s) => s.startsWith(':') || (s.startsWith('data:') && s.slice(5).trim() !== '[DONE]')
-						),
-						// A keep-alive comment is the provider still generating: OpenRouter holds a tool call's arguments
-						// back until they are whole and sends only these meanwhile.
-						Stream.runForEach((s) =>
-							s.startsWith(':')
-								? Queue.offer(queue, { _tag: 'Progress', reasoning: undefined })
-								: decodeChunk(s.slice(5).trim()).pipe(
-										Effect.mapError(Port.failure('ai')),
-										Effect.flatMap((chunk) => accept(chunk, false))
-									)
-						),
-						Effect.mapError(Port.failure('ai'))
-					);
-				}
-				const input = usage.prompt_tokens ?? 0,
-					output = usage.completion_tokens ?? 0,
-					cached = usage.prompt_tokens_details?.cached_tokens ?? 0,
-					price = usage.cost === undefined ? config.price?.(model) : undefined,
-					cost =
+					const input =
+						aborted && rawInput === 0 ? Math.max(1, Math.ceil(promptChars / 4)) : rawInput;
+					const output = aborted && rawOutput === 0 ? estimatedOutput : rawOutput;
+					const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
+					const price = usage.cost === undefined ? config.price?.(model) : undefined;
+					const cost =
 						usage.cost ??
 						(price === undefined
 							? undefined
-							: ((input - cached) * price.input +
+							: ((Math.max(0, input - cached)) * price.input +
 									cached * (price.cached ?? price.input) +
 									output * price.output) /
 								1_000_000);
-				if (cost !== undefined && id !== '' && config.meter !== undefined)
-					yield* Port.attempt('ai.meter', () => Promise.resolve(config.meter?.(cost, id))).pipe(
-						Port.call('ai.meter', HOST_LIMITS.callMs.ai)
-					);
+					return { input, output, cost };
+				};
+				const reconcileOpenRouterCost = (generationId: string) =>
+					Effect.gen(function* () {
+						const queryReq = HttpClientRequest.get(
+							`${baseUrl}/generation?id=${encodeURIComponent(generationId)}`,
+							{
+								headers:
+									config.credential === undefined
+										? {}
+										: { authorization: `Bearer ${config.credential}` }
+							}
+						);
+						const fetchCost = Effect.gen(function* () {
+							const genRes = yield* HttpClient.execute(queryReq);
+							if (genRes.status < 200 || genRes.status >= 300) return undefined;
+							const raw = yield* genRes.text;
+							const decoded = yield* decodeOpenRouterGeneration(raw);
+							const exact = decoded.data?.total_cost ?? decoded.total_cost;
+							return typeof exact === 'number' && Number.isFinite(exact) && exact >= 0
+								? exact
+								: undefined;
+						});
+						const child = yield* Effect.forkDetach(Effect.interruptible(fetchCost));
+						return yield* Fiber.join(child).pipe(
+							Port.call('ai.generation', OPENROUTER_RECONCILE_MS),
+							Effect.onError(() => Fiber.interrupt(child))
+						);
+					}).pipe(Effect.catch(() => Effect.succeed(undefined)));
+				const settleMeter = (aborted: boolean) =>
+					Effect.gen(function* () {
+						if (metered || config.meter === undefined) return;
+						let { cost } = computeCost(aborted);
+						const meterId = id !== '' ? id : aborted ? fallbackId : '';
+						if (aborted && usage.cost === undefined && isOpenRouter && id !== '') {
+							const exact = yield* reconcileOpenRouterCost(id);
+							if (exact !== undefined) cost = exact;
+						}
+						if (cost === undefined || meterId === '') return;
+						metered = true;
+						const report = Port.attempt('ai.meter', () =>
+							Promise.resolve(config.meter?.(cost, meterId))
+						).pipe(Port.call('ai.meter', HOST_LIMITS.callMs.ai));
+						yield* aborted ? report.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore) : report;
+					});
+				const consume: Effect.Effect<void, PortFailure> = (
+					res.headers['content-type'] ?? ''
+				).includes('application/json')
+					? res.text.pipe(
+							Effect.mapError(Port.failure('ai')),
+							Port.call('ai.body', HOST_LIMITS.callMs.ai),
+							Effect.flatMap((raw) => decodeChunk(raw).pipe(Effect.mapError(Port.failure('ai')))),
+							Effect.flatMap((chunk) => accept(chunk, true)),
+							Effect.asVoid
+						)
+					: Stream.transformPull(res.stream, (pull) =>
+							Effect.succeed(pull.pipe(Port.call('ai.stream', HOST_LIMITS.callMs.ai)))
+						).pipe(
+							Stream.decodeText(),
+							Stream.splitLines,
+							Stream.map((s) => s.trim()),
+							Stream.filter(
+								(s) =>
+									s.startsWith(':') || (s.startsWith('data:') && s.slice(5).trim() !== '[DONE]')
+							),
+							// A keep-alive comment is the provider still generating: OpenRouter holds a tool call's arguments
+							// back until they are whole and sends only these meanwhile.
+							Stream.runForEach((s) =>
+								s.startsWith(':')
+									? Queue.offer(queue, { _tag: 'Progress', reasoning: undefined })
+									: decodeChunk(s.slice(5).trim()).pipe(
+											Effect.mapError(Port.failure('ai')),
+											Effect.flatMap((chunk) => accept(chunk, false))
+										)
+							),
+							Effect.mapError(Port.failure('ai'))
+						);
+				yield* consume.pipe(
+					Effect.onExit((exit) =>
+						Exit.isSuccess(exit) ? Effect.void : Effect.uninterruptible(settleMeter(true))
+					)
+				);
+				const { input, output, cost } = computeCost(false);
+				yield* settleMeter(false);
 				const toolCalls = calls.map((c) =>
 					Option.match(parseJson(c.args === '' ? '{}' : c.args), {
 						onSome: (input) => ({

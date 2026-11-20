@@ -12,10 +12,6 @@ export type Resolved =
 	| (Change & { readonly get: RowFetch })
 	| { readonly plan: ReadView; readonly path: readonly string[]; readonly c: Captured; readonly metadata: Metadata };
 export type Snapshots = ReadonlyMap<string, ReadSnapshot>;
-/**
- * One lane batch's work on a view: its value so far, the ops (each at its container's path) that made it, and how many
- * bytes they add to the value's JSON (negative: fewer). Only the rows and values the ops add or take away are measured.
- */
 export type PatchWork = { value: Json; readonly ops: PatchOp[]; bytes: number };
 type Patched = { value: Json; ops: PatchOp[]; bytes: number };
 const utf8 = new TextEncoder();
@@ -23,7 +19,6 @@ const size = (value: Json): number => utf8.encode(JSON.stringify(value)).byteLen
 type Page = { readonly [key: string]: Json; readonly rows: readonly ViewRow[] };
 const object = (value: Json | undefined): value is { readonly [key: string]: Json } => Predicate.isObject(value) && !Array.isArray(value);
 const list = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
-/** A retained page, as it is (no copy: its rows stay shared): records in `rows`, and `next` a cursor or none. */
 const isPage = (value: Json | undefined): value is Page => {
 	if (!object(value)) return false;
 	const rows = value['rows'], next = value['next'];
@@ -52,7 +47,6 @@ const baselineContains = (plan: Leaf, c: Captured, snapshots: Snapshots): boolea
 		snapshot !== undefined && visibleIn(c.transaction, snapshot);
 };
 
-/** Resolve one real capture against a compiled get/read/request graph. Undefined means a real read is needed. */
 export function resolve(
 	plan: ViewPlan,
 	value: Json,
@@ -119,7 +113,6 @@ function metadata(value: Json, path: readonly string[], c: Captured, field: Meta
 		const previous = answer[key], next = after[key];
 		if (same(previous, next)) continue;
 		if (!same(previous, before[key])) return undefined;
-		// an object member is `"key":value`, with a comma between two
 		if (next !== undefined) {
 			bytes += previous === undefined
 				? size(key) + 1 + size(next) + (Object.keys(answer).length > 0 ? 1 : 0)
@@ -157,15 +150,12 @@ function rows(
 	}
 	if (!isPage(value)) return undefined;
 	const items = [...value.rows], i = items.findIndex((item) => item['id'] === id), previous = items[i];
-	// an unchanged projection stays put while its own order keys hold (a moved relation it does not carry may reorder it);
-	// a related model's commit that could reorder it invalidates the view in `resolve`
 	if (previous !== undefined && row !== null && same(previous, row) && (c.model !== plan.model || plan.kept(previous, row, c)))
 		return { value, ops: [], bytes: 0 };
 	if (previous !== undefined && before !== undefined && !same(previous, row) && (before === null || !same(previous, before))) return undefined;
 	let answer = value,
 		bytes = 0;
 	const ops: PatchOp[] = [];
-	// `rows` holds each row's JSON, with a comma between two
 	const insert = (at: number, added: ViewRow) => {
 		bytes += size(added) + (items.length > 0 ? 1 : 0);
 		items.splice(at, 0, added);
@@ -209,10 +199,11 @@ function rows(
 	if (previous !== undefined) remove(previous, i);
 	const index = plan.place(items, row);
 	if (index === undefined) return undefined;
+	const identicalAtSameIndex = previous !== undefined && index === i && same(previous, row);
 	if (plan.bounded) {
 		if (index >= plan.limit) return { value: answer, ops, bytes };
-		insert(index, row);
-		ops.push({ op: 'upsert', path, index, row });
+		insert(index, identicalAtSameIndex ? previous : row);
+		if (!identicalAtSameIndex) ops.push({ op: 'upsert', path, index, row });
 		const overflow = items.length > plan.limit ? items.at(-1) : undefined;
 		if (overflow !== undefined) {
 			const removed = overflow['id'];
@@ -225,15 +216,17 @@ function rows(
 	if (more) {
 		if (index === items.length) return i < 0 ? { value: answer, ops, bytes } : undefined;
 		if (i < 0) return undefined;
-		insert(index, row);
-		return items.at(-1)?.['id'] === last ? { value: answer, ops: [...ops, { op: 'upsert', path, index, row }], bytes } : undefined;
+		insert(index, identicalAtSameIndex ? previous : row);
+		if (items.at(-1)?.['id'] !== last) return undefined;
+		if (!identicalAtSameIndex) ops.push({ op: 'upsert', path, index, row });
+		return { value: answer, ops, bytes };
 	}
 	if (items.length + 1 > plan.limit) return undefined;
-	insert(index, row);
-	return { value: answer, ops: [...ops, { op: 'upsert', path, index, row }], bytes };
+	insert(index, identicalAtSameIndex ? previous : row);
+	if (!identicalAtSameIndex) ops.push({ op: 'upsert', path, index, row });
+	return { value: answer, ops, bytes };
 }
 
-/** Apply one resolved leaf change immutably at its container's path, sharing every container it leaves alone. */
 export function apply(work: PatchWork, change: Resolved, row: ViewRow | null | undefined, bindings: Bindings, snapshots: Snapshots): boolean {
 	if (baselineContains(change.plan, change.c, snapshots)) return true;
 	const value = at(work.value, change.path);

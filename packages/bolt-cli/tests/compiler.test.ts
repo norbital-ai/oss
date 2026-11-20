@@ -581,7 +581,7 @@ describe('next compiler: names index', () => {
 				expect(text).toContain('"sales": "board" | "list";');
 				expect(text).toContain('"hr": "kiosk";');
 				expect(text).toContain('"triage": true;');
-				expect(text).toContain('"browser_act": true;');
+				expect(text).toContain('"browser": true;');
 				expect(text).toContain('export const __verify: Check<Verify> = true;');
 				const parts = [...text.matchAll(/^\t\t(\w+):/gm)].map((m) => m[1]);
 				expect(parts).toEqual([...parts].sort());

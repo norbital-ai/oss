@@ -16,7 +16,8 @@ import { decodeValue } from './flatten.ts';
 import type { RestorePreview, RestoreSkip } from '../../protocol/record-contracts.ts';
 import { HistorySnapshotSchema } from '../../protocol/record-contracts.ts';
 import { storedRow } from '../db/stored.ts';
-import { k, readRows, stateField, type WriteEngine } from './act.ts';
+import { readRows } from './rows.ts';
+import { k, stateField, type WriteEngine } from './shared.ts';
 import { record_capabilities } from '../capabilities/record.ts';
 
 export type RestoreTarget = { model: string; record: string; revision: number };

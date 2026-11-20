@@ -107,9 +107,9 @@ export default model('<name>', {
 		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', on_delete: 'restrict' }
 	},
 	outputs: { default: { fields: 'all' } },
-	// columns use the same nested tree as outputs: fields, then child-relation keys
-	create: { columns: { fields: ['<field>', '<other>'] } },
-	update: { columns: { fields: ['<field>', '<other>'] } }
+	// fields use the same nested tree as outputs: fields, then child-relation keys
+	create: { fields: ['<field>', '<other>'] },
+	update: { fields: ['<field>', '<other>'] }
 });
 \`\`\`
 

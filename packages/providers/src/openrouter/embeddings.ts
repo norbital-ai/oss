@@ -127,13 +127,6 @@ export const open_ai_embeddings = <E>(config: EmbeddingsConfig<E>) => {
 					)
 				})
 			);
-			if (answer.data.length !== batch.length)
-				return yield* new ProviderUnavailable({
-					message: `the AI provider answered ${answer.data.length} embeddings for ${batch.length} inputs`
-				});
-			vectors.push(
-				...[...answer.data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((d) => d.embedding)
-			);
 			const cost = answer.usage?.cost ?? 0;
 			const meter = config.meter;
 			if (meter !== undefined && Number.isFinite(cost) && cost > 0)
@@ -141,6 +134,13 @@ export const open_ai_embeddings = <E>(config: EmbeddingsConfig<E>) => {
 					const id = answer.id ?? `embed:${yield* (yield* Crypto.Crypto).randomUUIDv4()}`;
 					yield* meter(cost, id);
 				}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+			if (answer.data.length !== batch.length)
+				return yield* new ProviderUnavailable({
+					message: `the AI provider answered ${answer.data.length} embeddings for ${batch.length} inputs`
+				});
+			vectors.push(
+				...[...answer.data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((d) => d.embedding)
+			);
 		}
 		return vectors;
 	});

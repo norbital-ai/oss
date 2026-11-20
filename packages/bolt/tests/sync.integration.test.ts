@@ -858,4 +858,152 @@ describe('durable model sync', () => {
 				})
 			)
 	);
+
+	it.live(
+		'applies chunked snapshot begin/end pages, deletes absent rows in reconcile phase, and recovers on reconnection resync',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* setupFor(manifest, source);
+					type SyncPage = {
+						readonly rows: readonly Json[];
+						readonly cursor: Json;
+						readonly more: boolean;
+						readonly snapshot?: 'begin' | 'end';
+						readonly retained?: boolean;
+					};
+					const seenCursors: Json[] = [];
+					const queue: SyncPage[] = [];
+					const ReadRequest = Schema.Struct({
+						method: Schema.Literal('GET'),
+						query: Schema.optionalKey(Schema.Struct({ cursor: Schema.optionalKey(Schema.String) }))
+					});
+					f.t.fakes.links.answer = (_instance, input) =>
+						Effect.gen(function* () {
+							const req = yield* Schema.decodeUnknownEffect(ReadRequest)(input).pipe(
+								Effect.mapError(
+									() => new FacilityFailure({ kind: 'invalid', message: 'Bad read request' })
+								)
+							);
+							const rawCursor = req.query?.cursor;
+							seenCursors.push(rawCursor === undefined ? null : JSON.parse(rawCursor));
+							const next = queue.shift();
+							if (next === undefined)
+								return yield* Effect.fail(
+									new FacilityFailure({ kind: 'invalid', message: 'Unexpected sync read call' })
+								);
+							return { status: 200, body: next };
+						});
+					const syncState = () =>
+						f.t.db.rows(
+							Schema.Struct({
+								cursor: Schema.Json,
+								cycle: Schema.Number,
+								phase: Schema.String
+							}),
+							{
+								text: "SELECT cursor, cycle, phase FROM sys_sync WHERE sync = 'contacts.sync.crm' AND instance = 'crm'",
+								params: []
+							}
+						);
+					const names = () =>
+						f.rows().pipe(Effect.map((list) => list.map((row) => row.name).sort()));
+
+					// 1. Chunked initial snapshot (begin -> end) populates cycle 1
+					queue.push(
+						{
+							rows: [
+								{ $id: 'remote-a', $version: '1', name: 'Alpha' },
+								{ $id: 'remote-b', $version: '1', name: 'Beta' }
+							],
+							cursor: 'snap-1-p1',
+							more: true,
+							snapshot: 'begin'
+						},
+						{
+							rows: [{ $id: 'remote-c', $version: '1', name: 'Gamma' }],
+							cursor: 'snap-1-p2',
+							more: false,
+							snapshot: 'end'
+						}
+					);
+					yield* f.handler('contacts.sync.crm');
+					expect(yield* names()).toEqual(['Alpha', 'Beta', 'Gamma']);
+					expect(yield* syncState()).toEqual([{ cursor: 'snap-1-p2', cycle: 1, phase: 'read' }]);
+
+					// 2. Multi-chunk full snapshot (begin -> middle -> end) reconciles & deletes omitted remote-b
+					queue.push(
+						{
+							rows: [{ $id: 'remote-a', $version: '2', name: 'Alpha v2' }],
+							cursor: 'snap-2-p1',
+							more: true,
+							snapshot: 'begin'
+						},
+						{
+							rows: [{ $id: 'remote-d', $version: '1', name: 'Delta' }],
+							cursor: 'snap-2-p2',
+							more: true
+						},
+						{
+							rows: [{ $id: 'remote-c', $version: '2', name: 'Gamma v2' }],
+							cursor: 'snap-2-p3',
+							more: false,
+							snapshot: 'end'
+						}
+					);
+					yield* f.handler('contacts.sync.crm');
+					expect(yield* names()).toEqual(['Alpha v2', 'Delta', 'Gamma v2']);
+					expect(yield* syncState()).toEqual([{ cursor: 'snap-2-p3', cycle: 2, phase: 'read' }]);
+
+					// 3. Reconnection resync: expired cursor (`retained: false`) resets cursor and replays chunked snapshot + reconcile
+					seenCursors.length = 0;
+					queue.push(
+						{
+							rows: [],
+							cursor: 'snap-2-p3',
+							more: false,
+							retained: false
+						},
+						{
+							rows: [{ $id: 'remote-a', $version: '3', name: 'Alpha v3' }],
+							cursor: 'snap-3-p1',
+							more: true,
+							snapshot: 'begin'
+						},
+						{
+							rows: [{ $id: 'remote-d', $version: '2', name: 'Delta v2' }],
+							cursor: 'snap-3-p2',
+							more: false,
+							snapshot: 'end'
+						}
+					);
+					yield* f.handler('contacts.sync.crm');
+					expect(seenCursors).toEqual(['snap-2-p3', null, 'snap-3-p1']);
+					expect(yield* names()).toEqual(['Alpha v3', 'Delta v2']);
+					expect(yield* syncState()).toEqual([{ cursor: 'snap-3-p2', cycle: 3, phase: 'read' }]);
+
+					// 4. Resuming directly from a persisted `phase = 'reconcile'` runs cleanup before polling the next read
+					seenCursors.length = 0;
+					const staleId = randomUUID();
+					yield* f.t.db.write({
+						text: "INSERT INTO contacts (id, name) VALUES ($1, 'Orphaned')",
+						params: [staleId]
+					});
+					yield* f.t.db.write({
+						text: `INSERT INTO sys_sync_row (id, sync, instance, partition, record, remote_id, cycle)
+						VALUES (gen_random_uuid(), 'contacts.sync.crm', 'crm', '', $1, 'remote-orphan', 1)`,
+						params: [staleId]
+					});
+					yield* f.t.db.write({
+						text: "UPDATE sys_sync SET phase = 'reconcile' WHERE sync = 'contacts.sync.crm' AND instance = 'crm'",
+						params: []
+					});
+					queue.push({ rows: [], cursor: 'snap-3-p2', more: false });
+					yield* f.handler('contacts.sync.crm');
+					expect(seenCursors).toEqual(['snap-3-p2']);
+					expect(yield* names()).toEqual(['Alpha v3', 'Delta v2']);
+					expect(yield* syncState()).toEqual([{ cursor: 'snap-3-p2', cycle: 3, phase: 'read' }]);
+				})
+			)
+	);
 });

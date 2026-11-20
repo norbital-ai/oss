@@ -6,6 +6,7 @@
 // not enforced, `memory` never fails) and the guest runs operator-trusted code only. A host serving untrusted tenants
 // supplies native isolates.
 import { randomUUID } from 'node:crypto';
+import { types } from 'node:util';
 import vm from 'node:vm';
 import { Predicate, Schema } from 'effect';
 import {
@@ -18,7 +19,8 @@ import {
 import {
 	asset_hook,
 	console_hook,
-	digest,
+	digest_hook,
+	GUEST_CRYPTO,
 	module_script,
 	random_stream,
 	type GuestHooks,
@@ -28,19 +30,150 @@ import {
 
 type GuestIsolatesPort = HostPorts['guests'];
 type GuestSessionOptions = Parameters<GuestIsolatesPort['open']>[1];
+type HostCallOutcome = readonly [ok: true, value: unknown] | readonly [ok: false, message: string];
 
 type Prelude = {
-	readonly start: (...args: readonly unknown[]) => void;
+	readonly start: (...args: readonly unknown[]) => unknown;
 	readonly take: () => unknown;
-	readonly give: (...args: readonly unknown[]) => void;
+	readonly give: (...args: readonly unknown[]) => unknown;
 };
-// The context's own copy of what crosses in: its arrays and Uint8Arrays, so the guest's `instanceof` holds.
-const COPY = new vm.Script(
-	'(function copy(v) { return Array.isArray(v) ? v.map(copy) : ArrayBuffer.isView(v) ? new Uint8Array(v) : v; })',
-	{ filename: 'bolt:copy' }
+
+const fnSchema = <F>() => Schema.declare((value: unknown): value is F => typeof value === 'function');
+const BootstrapSchema = Schema.Struct({
+	copy: fnSchema<(value: unknown) => unknown>(),
+	wrapBridge:
+		fnSchema<
+			(
+				hostCall: (...args: readonly unknown[]) => HostCallOutcome
+			) => (...args: readonly unknown[]) => unknown
+		>(),
+	arm: fnSchema<(target: (...args: readonly unknown[]) => unknown, args: readonly unknown[]) => void>(),
+	disarm: fnSchema<() => void>(),
+	takeResult: fnSchema<() => Readonly<{ ok: boolean; value: unknown }>>()
+});
+type GuestBootstrap = typeof BootstrapSchema.Type;
+const decodeBootstrap = Schema.decodeUnknownSync(BootstrapSchema);
+const callback = fnSchema<(...args: readonly unknown[]) => unknown>();
+const decodeCallback = Schema.decodeUnknownSync(callback);
+const decodePrelude = Schema.decodeUnknownSync(
+	Schema.Struct({ start: callback, take: callback, give: callback })
 );
-const TURN = Symbol.for('norbital.bolt.turn');
-const RUN = new vm.Script('globalThis[Symbol.for("norbital.bolt.turn")]()', {
+
+/**
+ * Guest-realm membrane bootstrap evaluated before any prelude or guest code runs:
+ * - Captures pristine guest intrinsics so prototype tampering cannot corrupt copies or errors.
+ * - Wraps every host bridge inside a guest-realm closure whose `.constructor` is the guest `Function`,
+ *   deep-copying return values into guest-realm objects/typed arrays and rethrowing host failures as
+ *   fresh guest-realm `Error` instances (never leaking host `Function`, `Object`, `Promise`, or `Error`).
+ * - Installs a non-configurable, guest-realm turn trampoline on `globalThis` so `within` never places
+ *   a host closure on `globalThis`.
+ */
+const BOOTSTRAP = new vm.Script(
+	`(function () {
+	'use strict';
+	const _Error = Error;
+	const _TypeError = TypeError;
+	const _Array = Array;
+	const _Uint8Array = Uint8Array;
+	const _isArray = Array.isArray;
+	const _isView = ArrayBuffer.isView;
+	const _set = Uint8Array.prototype.set;
+	const _apply = Reflect.apply;
+	const _defineProperty = Object.defineProperty;
+	const _create = Object.create;
+	const _keys = Object.keys;
+	const _symbolFor = Symbol.for;
+
+	function copy(v) {
+		if (v === null || (typeof v !== 'object' && typeof v !== 'function')) return v;
+		if (_isArray(v)) {
+			const len = v.length;
+			const out = new _Array(len);
+			for (let i = 0; i < len; i++) out[i] = copy(v[i]);
+			return out;
+		}
+		if (_isView(v)) {
+			const out = new _Uint8Array(v.byteLength);
+			_apply(_set, out, [new _Uint8Array(v.buffer, v.byteOffset, v.byteLength)]);
+			return out;
+		}
+		if (typeof v === 'function') return undefined;
+		const out = {};
+		const keys = _keys(v);
+		for (let i = 0; i < keys.length; i++) {
+			const k = keys[i];
+			_defineProperty(out, k, {
+				value: copy(v[k]),
+				enumerable: true,
+				writable: true,
+				configurable: true
+			});
+		}
+		return out;
+	}
+
+	function wrapBridge(hostCall) {
+		return function () {
+			const outcome = _apply(hostCall, undefined, arguments);
+			if (!outcome[0]) throw new _Error(outcome[1]);
+			const value = outcome[1];
+			if (
+				value !== null &&
+				(typeof value === 'object' || typeof value === 'function') &&
+				typeof value.then === 'function'
+			) {
+				throw new _TypeError('host bridge cannot return a Promise across the membrane');
+			}
+			return copy(value);
+		};
+	}
+
+	let pendingFn = null;
+	let pendingArgs = null;
+	let pendingResult = undefined;
+	let hasPendingResult = false;
+	function runTurn() {
+		const fn = pendingFn;
+		const args = pendingArgs;
+		pendingFn = null;
+		pendingArgs = null;
+		if (fn === null) return;
+		pendingResult = _apply(fn, undefined, args);
+		hasPendingResult = true;
+	}
+	_defineProperty(globalThis, _symbolFor('norbital.bolt.turn'), {
+		value: runTurn,
+		writable: false,
+		enumerable: false,
+		configurable: false
+	});
+
+	return {
+		copy,
+		wrapBridge,
+		arm(fn, args) {
+			pendingFn = fn;
+			pendingArgs = args;
+			pendingResult = undefined;
+			hasPendingResult = false;
+		},
+		disarm() {
+			pendingFn = null;
+			pendingArgs = null;
+		},
+		takeResult() {
+			const result = _create(null);
+			result.ok = hasPendingResult;
+			result.value = pendingResult;
+			pendingResult = undefined;
+			hasPendingResult = false;
+			return result;
+		}
+	};
+})()`,
+	{ filename: 'bolt:bootstrap' }
+);
+const RUN = new vm.Script("globalThis[Symbol.for('norbital.bolt.turn')]()", {
 	filename: 'bolt:turn'
 });
 /** One compiled script per text (programs and preludes), reused across contexts. */
@@ -56,38 +189,71 @@ const compiled = (key: string, filename: string, code: () => string) => {
 	return script;
 };
 
-/** A guest context: `prelude` evaluated as an `evalClosure` body over `hooks`, whose answers cross in copied. */
+/** Executes a host callback and converts any thrown host Error into a primitive message so no host Error crosses into the guest. */
+const safeHostCall =
+	(fn: (...args: readonly unknown[]) => unknown) =>
+	(...args: readonly unknown[]): HostCallOutcome => {
+		try {
+			return [true, fn(...args)];
+		} catch (error) {
+			const message =
+				error instanceof Error
+					? error.message
+					: Predicate.hasProperty(error, 'message')
+						? String(error.message)
+						: String(error);
+			return [false, message];
+		}
+	};
+
+/** A guest context: `prelude` evaluated as an `evalClosure` body over realm-isolated `hooks`, whose answers cross in copied. */
 const guestContext = (prelude: string, hooks: GuestHooks) => {
-	const context = vm.createContext({}, { microtaskMode: 'afterEvaluate' });
-	const callback = Schema.declare((value: unknown): value is (...args: readonly unknown[]) => unknown => typeof value === 'function');
-	const copy = Schema.decodeUnknownSync(callback)(COPY.runInContext(context));
+	const context = vm.createContext(Object.create(null), { microtaskMode: 'afterEvaluate' });
+	const bootstrap = decodeBootstrap(BOOTSTRAP.runInContext(context));
 	const [say, random, digestOf, asset] = hooks;
 	const make = compiled(
 		prelude,
 		'bolt:prelude',
 		() => `(function ($0, $1, $2, $3) {\n${prelude}\n})`
 	);
-	const factory = Schema.decodeUnknownSync(callback)(make.runInContext(context));
-	const api: Prelude = Schema.decodeUnknownSync(Schema.Struct({ start: callback, take: callback, give: callback }))(factory(
-		say,
-		(n: unknown) => copy(random(n)),
-		(name: unknown, bytes: unknown) => copy(digestOf(name, structuredClone(bytes))),
-		(sha: unknown) => copy(asset(sha))
-	));
-	return { context, copy, api };
+	const factory = decodeCallback(make.runInContext(context));
+	const api: Prelude = decodePrelude(
+		factory(
+			bootstrap.wrapBridge(safeHostCall((level: unknown, line: unknown) => say(level, line))),
+			bootstrap.wrapBridge(safeHostCall((n: unknown) => random(n))),
+			bootstrap.wrapBridge(
+				safeHostCall((name: unknown, bytes: unknown) => {
+					if (typeof name !== 'string' || !types.isUint8Array(bytes))
+						throw new Error('digest supports SHA-1, SHA-256, SHA-384, SHA-512');
+					if (bytes.byteLength > GUEST_CRYPTO.maxDigestBytes)
+						throw new Error(`digest takes at most ${GUEST_CRYPTO.maxDigestBytes} bytes per call`);
+					const hostBytes = new Uint8Array(bytes.byteLength);
+					hostBytes.set(bytes);
+					return digestOf(name, hostBytes);
+				})
+			),
+			bootstrap.wrapBridge(safeHostCall((sha: unknown) => asset(sha)))
+		)
+	);
+	return { context, bootstrap, api };
 };
 
-/** `work` as one run in `context`: its microtasks drain inside it, and past `timeout` ms it throws. */
-const within = <A>(context: vm.Context, timeout: number, work: () => A): A => {
-	const completed: { readonly value: A }[] = [];
-	Reflect.set(context, TURN, () => { completed.push({ value: work() }); });
+/** Invokes a guest-realm callback as one run in `context`: its microtasks drain inside it, and past `timeout` ms it throws. */
+const withinCall = (
+	context: vm.Context,
+	bootstrap: GuestBootstrap,
+	timeout: number,
+	target: (...args: readonly unknown[]) => unknown,
+	args: readonly unknown[]
+): unknown => {
+	bootstrap.arm(target, args);
 	try {
 		RUN.runInContext(context, { timeout: Math.max(1, Math.ceil(timeout)) });
-		const result = completed[0];
-		if (result === undefined) throw new Error('the guest slice did not complete');
-		return result.value;
+		const { ok, value } = bootstrap.takeResult();
+		if (!ok) throw new Error('the guest slice did not complete');
+		return value;
 	} finally {
-		Reflect.deleteProperty(context, TURN);
+		bootstrap.disarm();
 	}
 };
 const timedOut = (error: unknown) =>
@@ -124,7 +290,7 @@ export type NodeGuestsOptions = {
 };
 type Session = {
 	readonly context: vm.Context;
-	readonly copy: (value: unknown) => unknown;
+	readonly bootstrap: GuestBootstrap;
 	api: Prelude | undefined;
 	used: bigint;
 	readonly said: GuestSaid;
@@ -145,7 +311,7 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 	 * One run of the session; a failed run ends it. The vm watchdog counts wall time, so a run it stops is billed what
 	 * was left of the budget, its own CPU when that is more.
 	 */
-	const run = <A>(id: string, signal: AbortSignal, work: (session: Session) => A): A => {
+	const run = <A>(id: string, signal: AbortSignal, work: (session: Session, timeoutMs: number) => A): A => {
 		const session = sessions.get(id);
 		if (session === undefined) throw new Error('the guest session is closed');
 		const left = limit - session.used,
@@ -156,7 +322,7 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 		};
 		try {
 			if (signal.aborted) throw failure('interrupted', 'the guest call was aborted');
-			const answer = within(session.context, Number(left) / 1e6, () => work(session));
+			const answer = work(session, Number(left) / 1e6);
 			bill(cpuSince(from));
 			if (session.used >= limit) throw over;
 			return answer;
@@ -176,16 +342,27 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 	const turn = async (
 		id: string,
 		signal: AbortSignal,
-		work?: (api: Prelude, copy: Session['copy']) => void
+		invocation?: (
+			api: Prelude,
+			copy: GuestBootstrap['copy']
+		) => readonly [target: (...args: readonly unknown[]) => unknown, args: readonly unknown[]]
 	) => {
 		const api = (session: Session) => {
 			if (session.api === undefined) throw new Error('the guest session did not open');
 			return session.api;
 		};
-		if (work !== undefined) run(id, signal, (session) => work(api(session), session.copy));
+		if (invocation !== undefined)
+			run(id, signal, (session, timeoutMs) => {
+				const [target, args] = invocation(api(session), session.bootstrap.copy);
+				return withinCall(session.context, session.bootstrap, timeoutMs, target, args);
+			});
 		try {
 			const taken = await Schema.decodeUnknownPromise(GuestTaken)(
-				structuredClone(run(id, signal, (session) => api(session).take()))
+				structuredClone(
+					run(id, signal, (session, timeoutMs) =>
+						withinCall(session.context, session.bootstrap, timeoutMs, api(session).take, [])
+					)
+				)
 			);
 			if (taken[1].length > 0) options.crossed?.(id, taken[1].length);
 			const session = sessions.get(id);
@@ -206,35 +383,40 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 		open: async (program: GuestProgram, session: GuestSessionOptions, signal: AbortSignal) => {
 			const id = randomUUID(),
 				said: GuestSaid = { lines: [], chars: 0, dropped: 0 };
-			const { context, copy, api } = guestContext(session.prelude, [
+			const { context, bootstrap, api } = guestContext(session.prelude, [
 				console_hook(said),
 				random_stream(session.seed),
-				digest,
+				digest_hook(),
 				asset_hook(program.assets)
 			]);
 			const module = compiled(program.source, 'guest.mjs', () =>
 				module_script(program.source, refuseImport)
 			);
-			sessions.set(id, { context, copy, api: undefined, used: 0n, said });
-			run(id, signal, (opened) => {
-				Reflect.set(context, '__boltGuest', module.runInContext(context));
+			sessions.set(id, { context, bootstrap, api: undefined, used: 0n, said });
+			run(id, signal, (opened, timeoutMs) => {
+				const exported = module.runInContext(opened.context, {
+					timeout: Math.max(1, Math.ceil(timeoutMs))
+				});
+				Reflect.set(opened.context, '__boltGuest', exported);
 				opened.api = api;
 			});
 			return id;
 		},
 		start: (id, start, signal) =>
-			turn(id, signal, (api, copy) =>
-				api.start(start.kind, copy([...start.path]), start.input, start.ctx, start.invocation)
-			),
+			turn(id, signal, (api, copy) => [
+				api.start,
+				[start.kind, copy([...start.path]), start.input, start.ctx, start.invocation]
+			]),
 		take: (id, signal) => turn(id, signal),
 		give: (id, answers, signal) =>
-			turn(id, signal, (api, copy) =>
-				api.give(
+			turn(id, signal, (api, copy) => [
+				api.give,
+				[
 					copy([...answers.ids]),
 					copy([...answers.texts]),
 					copy(answers.bins.map((b) => [...b]))
-				)
-			),
+				]
+			]),
 		close: async (id) => {
 			sessions.delete(id);
 		}

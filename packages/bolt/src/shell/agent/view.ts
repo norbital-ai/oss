@@ -200,9 +200,7 @@ export const callableWords = (callable: string) => {
 	const [scope = '', act = ''] = callable.split('.');
 	return scope === 'automation'
 		? `Run ${handle_words(act)}`
-		: act === 'pipeline'
-			? `Run the ${handle_words(scope)} pipeline`
-			: `${humanise(act || scope)} ${act ? handle_words(scope) : ''}`.trim();
+		: `${humanise(act || scope)} ${act ? handle_words(scope) : ''}`.trim();
 };
 /** A read's keys with their options: `request`, or a transcript from before it, `reads` or its keys themselves. */
 export const readsOf = (a: Args): readonly (readonly [string, unknown])[] =>
@@ -211,8 +209,8 @@ export const readsOf = (a: Args): readonly (readonly [string, unknown])[] =>
 		: Arr.isArray(a['reads'])
 			? a['reads'].map((one: unknown) => [str(obj(one)['of']), one] as const)
 			: Object.entries(a);
-/** A draft path in words: `/snapshot/rule_set/EPF_MONTHLY` → `rule_set/EPF_MONTHLY`. */
-const draftPath = (path: string) => path.replace(/^\/snapshot\//, '').replace(/^\//, '');
+/** A draft JSON pointer path without its leading slash. */
+const draftPath = (path: string) => path.replace(/^\//, '');
 const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	// an inference's draft read names a path (`{ path, fields }`); the agent's record read is a layer map, keyed by its models
 	read: (a) =>
@@ -245,7 +243,6 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target: draftPath(str(a['path']))
 	}),
 	submit: () => ({ icon: 'lucide:send', verb: 'Submitted the answer', target: '' }),
-	// a write reads as what it did: "Update holiday", "Run the roster entry pipeline"
 	act: (a) => ({
 		icon: 'lucide:square-pen',
 		verb: Object.keys(obj(a['acts'])).map(callableWords).join(', ') || 'Write records',
@@ -255,11 +252,6 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	decide: (a) => ({ icon: 'lucide:check', verb: humanise(str(a['decision'])), target: 'approval' }),
 	invite: () => ({ icon: 'lucide:user-plus', verb: 'Invite members', target: '' }),
 	update_plan: () => ({ icon: 'lucide:notebook-pen', verb: 'Wrote the plan', target: '' }),
-	compact: (a) => ({
-		icon: 'lucide:shrink',
-		verb: 'Compacted the context',
-		target: str(a['reason'])
-	}),
 	skill: (a) => ({
 		icon: 'lucide:book-open',
 		verb: 'Read skill',
@@ -362,15 +354,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 					verb: 'Ran a script',
 					target: '',
 					code: { text: str(a['code']), language: 'javascript' }
-				},
-	mcp: (a) => ({
-		icon: 'lucide:plug',
-		verb:
-			a['op'] === 'list'
-				? 'Listed external tools'
-				: `${humanise(str(a['server']))}: ${humanise(str(a['tool']))}`,
-		target: a['op'] === 'list' ? str(a['server']) : toolTarget(obj(a['input']))
-	})
+				}
 };
 const WHERE_OPS: { readonly [op: string]: string } = {
 	eq: '=',

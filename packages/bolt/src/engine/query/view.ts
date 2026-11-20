@@ -257,7 +257,26 @@ export class ViewCompiler {
 				);
 				const fields = read.select.fields ?? default_fields(projected, read.kind === 'get');
 				const syncs = [...syncs_of(this.manifest).values()].filter((sync) => sync.model === model && sync.write);
-				const models = new Set([...common.models, 'bolt_approvals', 'sys_user', ...(syncs.length > 0 ? ['sys_outbox'] : [])]);
+				const isApprovable = approvable(this.manifest, cat).has(model);
+				const hasUserField =
+					common.models.has('sys_user') ||
+					isApprovable ||
+					Object.keys(read.select.relations).length > 0 ||
+					fields.some((name) => {
+						const field = projected.model.fields.get(name);
+						return (
+							projected.model.one.get(name)?.targets.includes('sys_user') === true ||
+							field?.arms?.includes('sys_user') === true ||
+							name === 'created_by' ||
+							name === 'updated_by'
+						);
+					});
+				const models = new Set([
+					...common.models,
+					'bolt_approvals',
+					...(hasUserField ? ['sys_user'] : []),
+					...(syncs.length > 0 ? ['sys_outbox'] : [])
+				]);
 				const dependencies: Rows['related'] = (capture) => {
 					if (capture.model === 'bolt_approvals') return approvalRows(capture, model);
 					if (capture.model === 'sys_outbox') {

@@ -3,7 +3,7 @@
 // and `bolt check`'s declaration evaluation reuse. Bolt runs no guest itself: each host owns its runner as
 // `HostPorts.guests` (bolt-cli's `node_guests`, which bolt-server and `bolt dev` use; Colony's isolated-vm).
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
+import { createCipheriv, createHash } from 'node:crypto';
 import { parseSync } from 'rolldown/utils';
 import type { GuestProgram } from '../index.ts';
 
@@ -40,6 +40,13 @@ export const console_hook =
 		said.chars += kept.length;
 	};
 
+/** Host-side caps on synchronous guest crypto hooks so an isolate cannot stall the host event loop. */
+export const GUEST_CRYPTO = {
+	maxDigestBytes: 4 * 1024 * 1024,
+	maxSessionDigestBytes: 16 * 1024 * 1024,
+	maxSessionRandomBytes: 1024 * 1024
+} as const;
+
 const DIGESTS: { readonly [name: string]: string } = {
 	'SHA-1': 'sha1',
 	'SHA-256': 'sha256',
@@ -47,29 +54,48 @@ const DIGESTS: { readonly [name: string]: string } = {
 	'SHA-512': 'sha512'
 };
 
-/** `crypto.subtle.digest`'s host half. */
+/** `crypto.subtle.digest`'s host half, capped per call so a guest cannot stall the host event loop. */
 export function digest(name: unknown, bytes: unknown): Uint8Array {
-	// hook:check — `bolt check` installs the same prelude
 	const algorithm = DIGESTS[String(name).toUpperCase()];
 	if (algorithm === undefined || !(bytes instanceof Uint8Array))
 		throw new Error(`digest supports ${Object.keys(DIGESTS).join(', ')}`);
+	if (bytes.byteLength > GUEST_CRYPTO.maxDigestBytes)
+		throw new Error(`digest takes at most ${GUEST_CRYPTO.maxDigestBytes} bytes per call`);
 	return new Uint8Array(createHash(algorithm).update(bytes).digest());
 }
 
-/** The invocation's entropy: SHA-256 blocks of its seed, so a replay with the same seed draws the same values. */
-export function random_stream(seed: string): (n: unknown) => Uint8Array {
-	let counter = 0;
-	let pool = Buffer.alloc(0);
+/** Stateful `crypto.subtle.digest` hook with a per-invocation cumulative byte ceiling. */
+export function digest_hook(maxBytes: number = GUEST_CRYPTO.maxSessionDigestBytes): (name: unknown, bytes: unknown) => Uint8Array {
+	let used = 0;
+	return (name, bytes) => {
+		const algorithm = DIGESTS[String(name).toUpperCase()];
+		if (algorithm === undefined || !(bytes instanceof Uint8Array))
+			throw new Error(`digest supports ${Object.keys(DIGESTS).join(', ')}`);
+		if (bytes.byteLength > GUEST_CRYPTO.maxDigestBytes)
+			throw new Error(`digest takes at most ${GUEST_CRYPTO.maxDigestBytes} bytes per call`);
+		used += bytes.byteLength;
+		if (used > maxBytes)
+			throw new Error(`digest exceeded the invocation limit of ${maxBytes} bytes`);
+		return new Uint8Array(createHash(algorithm).update(bytes).digest());
+	};
+}
+
+/** The invocation's deterministic entropy stream (AES-256-CTR keyed by `sha256(seed)`), capped per invocation. */
+export function random_stream(
+	seed: string,
+	maxBytes: number = GUEST_CRYPTO.maxSessionRandomBytes
+): (n: unknown) => Uint8Array {
+	const key = createHash('sha256').update(seed).digest();
+	const cipher = createCipheriv('aes-256-ctr', key, Buffer.alloc(16));
+	let used = 0;
 	return (n) => {
 		if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > 65_536)
 			throw new Error('random takes 0 to 65536 bytes');
-		const blocks = [pool];
-		for (let have = pool.length; have < n; have += 32)
-			blocks.push(createHash('sha256').update(seed).update(String(counter++)).digest());
-		pool = Buffer.concat(blocks);
-		const out = new Uint8Array(pool.subarray(0, n));
-		pool = pool.subarray(n);
-		return out;
+		used += n;
+		if (used > maxBytes)
+			throw new Error(`random exceeded the invocation limit of ${maxBytes} bytes`);
+		if (n === 0) return new Uint8Array(0);
+		return new Uint8Array(cipher.update(Buffer.alloc(n)));
 	};
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit, Schema } from 'effect';
-import { INTROSPECT, IntrospectRow, MIGRATIONS_TABLE, build, check_file, checksum_of, destructive_steps, destroy_namespace, executable, generate, lock_of, migration_guard, pending, plan, read_lock, read_snapshot, schema, schema_snapshot, snapshot_of, table, verify, type FieldSpec, type MigrationFile, type StoreError } from '../src/index.ts';
+import { INTROSPECT, IntrospectRow, MIGRATIONS_TABLE, MIGRATION_ROLE, MIGRATION_ROLE_ENTER, MIGRATION_ROLE_EXIT, MIGRATION_ROLE_PREPARE, build, check_file, checksum_of, destructive_steps, destroy_namespace, executable, generate, is_extension_statement, lock_of, migration_guard, pending, plan, read_lock, read_snapshot, schema, schema_snapshot, snapshot_of, table, verify, type FieldSpec, type MigrationFile, type StoreError } from '../src/index.ts';
 import { database, script } from './support.ts';
 import { unaccepted } from '../src/schema/plan.ts';
 
@@ -261,6 +261,156 @@ describe('editable migration files', () => {
 					rename.file.name
 				]);
 				expect((yield* plan(renamed, renamed)).steps).toEqual([]);
+			})
+		)
+	);
+
+	it.live('replays chained table, column and ref renames (A -> B -> C) preserving data and verifying every prefix', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const stageA = schema({
+					account: table({
+						fields: {
+							label: { kind: 'text', default: 'untitled' },
+							code: { kind: 'text' }
+						}
+					}),
+					ledger: table({
+						fields: {
+							acct: { kind: 'ref', to: 'account', optional: true }
+						}
+					})
+				});
+				const stageB = schema({
+					client: table({
+						was: 'account',
+						fields: {
+							title: { kind: 'text', was: 'label', default: 'untitled' },
+							code: { kind: 'text' }
+						}
+					}),
+					ledger: table({
+						fields: {
+							party: { kind: 'ref', to: 'client', was: 'acct', optional: true }
+						}
+					})
+				});
+				const stageC = schema({
+					customer: table({
+						was: 'client',
+						fields: {
+							display_name: { kind: 'text', was: 'title', default: 'unnamed' },
+							code: { kind: 'text' }
+						}
+					}),
+					ledger: table({
+						fields: {
+							subject: { kind: 'ref', to: 'customer', was: 'party', optional: true }
+						}
+					})
+				});
+
+				const m1 = yield* generate(null, stageA, { number: 1, name: 'initial' });
+				const m2 = yield* generate(yield* read_snapshot(m1.snapshot), stageB, {
+					number: 2,
+					name: 'rename_a_to_b'
+				});
+				const m3 = yield* generate(yield* read_snapshot(m2.snapshot), stageC, {
+					number: 3,
+					name: 'rename_b_to_c'
+				});
+				expect(unaccepted(m2.plan)).toEqual([]);
+				expect(unaccepted(m3.plan)).toEqual([]);
+				expect(yield* destructive_steps(stageA, stageB)).toEqual([]);
+				expect(yield* destructive_steps(stageB, stageC)).toEqual([]);
+
+				const pg = yield* database;
+				const freshA = yield* database;
+				const freshB = yield* database;
+				const freshC = yield* database;
+
+				// Prefix 1: stage A
+				yield* script(pg, m1.file.sql);
+				yield* script(freshA, `${(yield* build(stageA)).join(';\n')};`);
+				yield* script(
+					pg,
+					`insert into account (id, label, code) values ('11111111-1111-1111-1111-111111111111', 'Acme', 'A1');
+					insert into ledger (id, acct) values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '11111111-1111-1111-1111-111111111111');`
+				);
+				yield* verify([m1.file], m1.snapshot, stageA, yield* introspect(pg), yield* introspect(freshA));
+
+				// Prefix 2: stage A -> B
+				yield* script(pg, m2.file.sql);
+				yield* script(freshB, `${(yield* build(stageB)).join(';\n')};`);
+				expect(
+					(
+						yield* Effect.promise(() =>
+							pg.query<{ title: string; code: string; party: string }>(
+								'select c.title, c.code, l.party from client c join ledger l on l.party = c.id order by c.code'
+							)
+						)
+					).rows
+				).toEqual([{ title: 'Acme', code: 'A1', party: '11111111-1111-1111-1111-111111111111' }]);
+				yield* script(
+					pg,
+					`insert into client (id, title, code) values ('22222222-2222-2222-2222-222222222222', 'Beta', 'B1');
+					insert into ledger (id, party) values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '22222222-2222-2222-2222-222222222222');`
+				);
+				yield* verify(
+					[m1.file, m2.file],
+					m2.snapshot,
+					stageB,
+					yield* introspect(pg),
+					yield* introspect(freshB)
+				);
+
+				// Prefix 3: stage B -> C
+				yield* script(pg, m3.file.sql);
+				yield* script(freshC, `${(yield* build(stageC)).join(';\n')};`);
+				expect(
+					(
+						yield* Effect.promise(() =>
+							pg.query<{ display_name: string; code: string; subject: string }>(
+								'select c.display_name, c.code, l.subject from customer c join ledger l on l.subject = c.id order by c.code'
+							)
+						)
+					).rows
+				).toEqual([
+					{ display_name: 'Acme', code: 'A1', subject: '11111111-1111-1111-1111-111111111111' },
+					{ display_name: 'Beta', code: 'B1', subject: '22222222-2222-2222-2222-222222222222' }
+				]);
+				const defaulted = yield* Effect.promise(() =>
+					pg.query<{ display_name: string }>(
+						`insert into customer (id, code) values ('33333333-3333-3333-3333-333333333333', 'C1') returning display_name`
+					)
+				);
+				expect(defaulted.rows[0]?.display_name).toBe('unnamed');
+
+				const files = [m1.file, m2.file, m3.file];
+				const lockText = yield* verify(
+					files,
+					m3.snapshot,
+					stageC,
+					yield* introspect(pg),
+					yield* introspect(freshC)
+				);
+				const lock = yield* read_lock(lockText);
+				expect(Object.keys(lock.files)).toEqual([m1.file.name, m2.file.name, m3.file.name]);
+				expect(
+					yield* pending(files, lock, [{ name: m1.file.name, checksum: checksum_of(m1.file) }], m3.snapshot)
+				).toEqual([m2.file, m3.file]);
+				expect(
+					yield* pending(
+						files,
+						lock,
+						[
+							{ name: m1.file.name, checksum: checksum_of(m1.file) },
+							{ name: m2.file.name, checksum: checksum_of(m2.file) }
+						],
+						m3.snapshot
+					)
+				).toEqual([m3.file]);
+				expect((yield* plan(stageC, stageC)).steps).toEqual([]);
 			})
 		)
 	);
@@ -532,6 +682,92 @@ describe('editable migration files', () => {
 						)
 				);
 				expect(refused).toContain('duplicate key value');
+			})
+		)
+	);
+
+	it.effect('rejects hostile SQL migration constructs (set_config concat, EXECUTE, COPY PROGRAM, SECURITY DEFINER, unallowlisted extensions, protected ledger DML)', () =>
+		Effect.gen(function* () {
+			const cases: [string, RegExp][] = [
+				["DO $$ BEGIN PERFORM set_config('statement' || '_timeout', '0', true); END $$;", /bounded migration/],
+				["DO $$ BEGIN EXECUTE 'SET statement_timeout = 0'; END $$;", /bounded migration/],
+				["COPY notes FROM PROGRAM 'id';", /COPY PROGRAM/],
+				['CREATE FUNCTION pwn() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1; $$;', /SECURITY DEFINER/],
+				['CREATE EXTENSION IF NOT EXISTS plpython3u;', /migration allowlist/],
+				['DELETE FROM bolt_history;', /protected system ledger/],
+				['TRUNCATE TABLE bolt_audit_receipt;', /protected system ledger/],
+				['UPDATE bolt_approvals SET state = \'approved\';', /protected system ledger/]
+			];
+			for (const [sql, pattern] of cases) {
+				const err = yield* failure(check_file({ name: '0002_hostile.sql', sql }));
+				expect(err).toMatch(pattern);
+			}
+			// Allowlisted extensions remain permitted
+			const ok = yield* check_file({ name: '0002_ext.sql', sql: 'CREATE EXTENSION IF NOT EXISTS pg_trgm;' });
+			expect(ok.name).toBe('0002_ext.sql');
+			expect(is_extension_statement('CREATE EXTENSION IF NOT EXISTS vector;')).toBe(true);
+			expect(is_extension_statement('CREATE EXTENSION IF NOT EXISTS plpython3u;')).toBe(false);
+		})
+	);
+
+	it.live('runs workspace migration SQL under non-superuser bolt_migrator role while blocking ledger tampering and superuser ops at the Postgres layer', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const pg = yield* database;
+				yield* script(
+					pg,
+					[
+						MIGRATIONS_TABLE,
+						'create table bolt_history (id text primary key, body text not null)',
+						"insert into bolt_history (id, body) values ('h1', 'immutable')",
+						'create table user_item (id text primary key, title text not null)',
+						"insert into user_item (id, title) values ('u1', 'alpha')"
+					].join(';\n')
+				);
+				yield* script(pg, MIGRATION_ROLE_PREPARE);
+				// User DDL & DML succeed inside bolt_migrator transaction
+				yield* Effect.promise(() =>
+					pg.exec(`
+						begin;
+						${MIGRATION_ROLE_ENTER};
+						alter table user_item add column code text not null default 'v1';
+						update user_item set code = 'v2' where id = 'u1';
+						create table user_extra (id text primary key);
+						${MIGRATION_ROLE_EXIT};
+						commit;
+					`)
+				);
+				const updated = yield* Effect.promise(() =>
+					pg.query<{ code: string; who: string }>('select code, current_user as who from user_item')
+				);
+				expect(updated.rows[0]?.code).toBe('v2');
+				// Protected ledger DML and superuser operations are denied by Postgres itself under bolt_migrator
+				const tryAsMigrator = (sql: string) =>
+					Effect.promise(() =>
+						pg
+							.exec(`begin; ${MIGRATION_ROLE_ENTER}; ${sql}; commit;`)
+							.then(
+								() => 'ok',
+								async (error: unknown) => {
+									await pg.exec('rollback').catch(() => undefined);
+									return error instanceof Error ? error.message : String(error);
+								}
+							)
+					);
+				expect(yield* tryAsMigrator(`select current_user`)).toBe('ok');
+				const roleCheck = yield* Effect.promise(async () => {
+					await pg.exec(`begin; ${MIGRATION_ROLE_ENTER};`);
+					const res = await pg.query<{ role: string; superuser: string }>(
+						"select current_user as role, current_setting('is_superuser') as superuser"
+					);
+					await pg.exec('rollback');
+					return res.rows[0];
+				});
+				expect(roleCheck).toEqual({ role: MIGRATION_ROLE, superuser: 'off' });
+				expect(yield* tryAsMigrator('delete from store_migration')).toMatch(/permission denied/i);
+				expect(yield* tryAsMigrator('delete from bolt_history')).toMatch(/permission denied/i);
+				expect(yield* tryAsMigrator("select pg_read_file('/etc/passwd')")).toMatch(/permission denied|must be superuser/i);
+				expect(yield* tryAsMigrator("copy user_item from program 'id'")).toMatch(/permission denied|must be superuser/i);
 			})
 		)
 	);

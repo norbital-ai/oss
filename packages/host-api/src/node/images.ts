@@ -2,7 +2,7 @@
 // Image decoding for same-graph hosts (`ImagesPort`): one worker per call (image-worker.ts), never on the host's
 // event loop; the worker is bounded here too, since the host owns its CPU and heap whatever engine asks.
 import { Worker } from 'node:worker_threads';
-import { Effect, Predicate, Schema } from 'effect';
+import { Effect, Predicate, Schema, Semaphore } from 'effect';
 import {
 	FacilityFailure,
 	HOST_LIMITS,
@@ -37,6 +37,8 @@ const ImagePreviewSchema = Schema.Struct({
 	mime: Schema.String,
 	derived: Schema.Boolean
 });
+const IMAGE_WORKERS = Semaphore.makeUnsafe(4);
+
 const image = <A>(
 	bytes: Uint8Array,
 	options: {
@@ -46,7 +48,8 @@ const image = <A>(
 	},
 	decoder: Schema.Decoder<A>
 ) =>
-	Effect.scoped(
+	IMAGE_WORKERS.withPermit(
+		Effect.scoped(
 		Effect.gen(function* () {
 			if (bytes.byteLength > HOST_LIMITS.storedFileBytes)
 				return yield* Effect.fail(
@@ -95,6 +98,7 @@ const image = <A>(
 				Effect.mapError(() => failed(new Error('the image worker returned an invalid answer')))
 			);
 		})
+		)
 	);
 
 /** The `ImagesPort` for Node hosts: facts, JPEG, crop and preview, each in a memory-capped worker under the image wall. */

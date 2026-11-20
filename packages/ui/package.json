@@ -3,7 +3,9 @@
 	"version": "0.0.24",
 	"description": "Svelte views, inputs, primitives, layout and design tokens for Bolt workspaces.",
 	"type": "module",
-	"sideEffects": false,
+	"sideEffects": [
+		"**/*.css"
+	],
 	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",

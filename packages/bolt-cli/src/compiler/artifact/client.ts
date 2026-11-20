@@ -603,7 +603,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 					));
 	platform = { out, layer };
 	const internal = yield* compile(entry, out, false, layer);
-	const css = [...layer.css, ...internal.css];
+	const css = [...layer.startupCss, ...internal.css];
 	const immutable = [...layer.chunks.keys(), ...layer.css, ...internal.immutable];
 	const require = createRequire(import.meta.url);
 	for (const [name, source] of Object.entries(ICONS))

@@ -353,6 +353,18 @@ const call = (member, args, site = frame()) => {
 	return new Promise((resolve, reject) => queue.push({ id: ++ids, member, json, bins, site, resolve, reject }));
 };
 Object.defineProperty(G, Symbol.for('norbital.bolt.call'), { value: call });
+// Secrets cross via a non-configurable one-shot getter consumed synchronously by runBody before authored code runs.
+const SECRETS_SYM = Symbol.for('norbital.bolt.secrets');
+let activeSecrets;
+Object.defineProperty(G, SECRETS_SYM, {
+	configurable: false,
+	enumerable: false,
+	get() {
+		const current = activeSecrets;
+		activeSecrets = undefined;
+		return current;
+	}
+});
 const settle = (c, answer) => answer.ok ? c.resolve(answer.value) : c.reject(answer.error);
 
 // an error's 'kind' (a facility failure's) rides the tuple for the host's transient judgement
@@ -372,9 +384,10 @@ function start(kind, path, inputJson, ctxJson, invocation_id) {
 	};
 	const input = JSON.parse(inputJson);
 	let ctx;
+	let pendingSecrets;
 	if (['create', 'update', 'delete', 'policy', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'webhook', 'page'].includes(kind)) {
 		const raw = JSON.parse(ctxJson);
-		Object.defineProperty(G, Symbol.for('norbital.bolt.secrets'), { value: Object.freeze(raw.$secrets ?? {}), configurable: true });
+		pendingSecrets = Object.freeze(raw.$secrets ?? {});
 		delete raw.$secrets;
 		ctx = Object.defineProperty(kind === 'page'
 			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocation_id }
@@ -392,7 +405,14 @@ function start(kind, path, inputJson, ctxJson, invocation_id) {
 		const prepare = body[Symbol.for('norbital.bolt.prepare')];
 		const prepared = typeof prepare === 'function' ? prepare(args) : args;
 		if (!Array.isArray(prepared)) throw new TypeError('a declaration body returned invalid invocation arguments');
-		return body(...prepared);
+		const secretsForRun = pendingSecrets;
+		if (path.length > 0) pendingSecrets = undefined;
+		if (secretsForRun !== undefined && typeof prepare === 'function') activeSecrets = secretsForRun;
+		try {
+			return body(...prepared);
+		} finally {
+			activeSecrets = undefined;
+		}
 	};
 	const ended = (body, input) => Promise.resolve().then(() => run(body, input)).then(
 		(v) => ['ok', JSON.stringify(v === undefined ? null : v)],

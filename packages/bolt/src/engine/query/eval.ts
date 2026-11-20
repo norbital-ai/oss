@@ -63,16 +63,41 @@ export function operand(
 	}
 }
 
-/** ILIKE with `\` escapes. */
-export function likeRegex(pattern: string): RegExp {
-	let out = '';
-	for (let i = 0; i < pattern.length; i++) {
-		const ch = pattern.charAt(i);
-		if (ch === '\\' && i + 1 < pattern.length)
-			out += pattern.charAt(++i).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		else out += ch === '%' ? '.*' : ch === '_' ? '.' : ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Linear-time case-insensitive SQL ILIKE matcher with `\` escapes (no backtracking ReDoS). */
+export function matchLike(pattern: string, input: string): boolean {
+	const pat = pattern.toLowerCase();
+	const str = input.toLowerCase();
+	// Tokenize pattern into literal characters, single-char `_` (-1), and multi-char `%` (-2).
+	const tokens: number[] = [];
+	for (let i = 0; i < pat.length; i++) {
+		const ch = pat.charCodeAt(i);
+		if (ch === 92 /* \ */ && i + 1 < pat.length) tokens.push(pat.charCodeAt(++i));
+		else if (ch === 37 /* % */) {
+			if (tokens[tokens.length - 1] !== -2) tokens.push(-2);
+		} else if (ch === 95 /* _ */) tokens.push(-1);
+		else tokens.push(ch);
 	}
-	return new RegExp(`^${out}$`, 'is');
+	let si = 0;
+	let pi = 0;
+	let starPi = -1;
+	let starSi = 0;
+	while (si < str.length) {
+		const tok = pi < tokens.length ? tokens[pi] : undefined;
+		if (tok === -2) {
+			starPi = pi++;
+			starSi = si;
+		} else if (tok === -1 || tok === str.charCodeAt(si)) {
+			pi++;
+			si++;
+		} else if (starPi !== -1) {
+			pi = starPi + 1;
+			si = ++starSi;
+		} else {
+			return false;
+		}
+	}
+	while (pi < tokens.length && tokens[pi] === -2) pi++;
+	return pi === tokens.length;
 }
 const R = 6_371_008.8;
 function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
@@ -178,7 +203,7 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 		}
 		case 'like': {
 			const v = field(env, c, row, p.field);
-			return typeof v === 'string' && likeRegex(p.pattern).test(v);
+			return typeof v === 'string' && matchLike(p.pattern, v);
 		}
 		case 'text': {
 			const value = field(env, c, row, p.field);

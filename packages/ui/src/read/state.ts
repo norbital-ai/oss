@@ -43,10 +43,18 @@ export function mapped<Q extends Reading<unknown>, B>(
 	f: (answer: Exclude<Q['current'], undefined>) => B | undefined
 ): Reading<B>;
 export function mapped<A, B>(q: Reading<A>, f: (answer: A) => B | undefined): Reading<B> {
+	let hasLast = false;
+	let lastAnswer: A | undefined;
+	let lastMapped: B | undefined;
 	return {
 		get current() {
 			const answer = q.current;
-			return answer === undefined ? undefined : f(answer);
+			if (answer === undefined) return undefined;
+			if (hasLast && answer === lastAnswer) return lastMapped;
+			lastAnswer = answer;
+			lastMapped = f(answer);
+			hasLast = true;
+			return lastMapped;
 		},
 		get loading() {
 			return q.loading;

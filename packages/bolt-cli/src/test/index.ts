@@ -16,6 +16,19 @@ export {
 	respond_system_1,
 	TestWorkspace
 } from './effect.ts';
+/** Host port Effect services for supplying test layers in `TestWorkspace.layer({ ports })`. */
+export { Ai, Convert, Files, Render, WebRead } from '@norbital-ai/bolt/engine';
+/** Host port helpers, database request/result schemas, AI decision/request types, and database error class for fake test ports. */
+export {
+	DatabaseRequest,
+	DbError,
+	DecisionResult,
+	Port,
+	type AiRequest,
+	type AiResponse,
+	type DatabaseResult,
+	type PortFailure
+} from '@norbital-ai/host-api';
 export { memory_audit } from './audit.ts';
 export { release } from './release.ts';
 export { prune } from './checkpoint.ts';

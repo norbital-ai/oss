@@ -125,7 +125,9 @@ export const apply_audit_migrations = (db: RawDb, migrations: AuditMigrations) =
 	Effect.gen(function* () {
 		yield* log_current(migrations.snapshot, migrations.spec);
 		const lock = yield* read_lock(migrations.lock);
-		yield* pending(migrations.files, lock, [], migrations.snapshot);
+		yield* pending(migrations.files, lock, [], migrations.snapshot, [], {
+			allowSecurityDefiner: true
+		});
 		const physical = yield* read_physical_definitions(migrations.physical);
 		const names = ['', ...migrations.files.map(({ name }) => name)].sort();
 		if (
@@ -154,7 +156,8 @@ export const apply_audit_migrations = (db: RawDb, migrations: AuditMigrations) =
 			).pipe(Effect.mapError((cause) => invalid(cause.message)))).map(({ line }) => line);
 			const status = yield* migration_status(migrations.files, lock, applied, {
 				snapshot: migrations.snapshot,
-				physical: lines
+				physical: lines,
+				allowSecurityDefiner: true
 			});
 			if (status.physical !== 'current' && status.physical !== 'prefix')
 				return yield* invalid(

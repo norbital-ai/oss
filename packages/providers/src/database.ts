@@ -64,8 +64,10 @@ export function sqlServerDatabase(options: { readonly connect?: SqlServerConnect
 		});
 	// One logged-in pool per connection string while it is used, and IDLE_MS after: a request reuses its TLS session
 	// instead of paying two logins. A paused, unpaired or re-credentialed instance stops using its key, which then closes.
+	const poolScope = Scope.makeUnsafe();
 	const pools = Effect.runSync(
 		RcMap.make({
+			capacity: 32,
 			lookup: (credential: string) =>
 				Effect.gen(function* () {
 					const parsed = yield* Effect.try({
@@ -152,9 +154,10 @@ export function sqlServerDatabase(options: { readonly connect?: SqlServerConnect
 					return pool;
 				}),
 			idleTimeToLive: IDLE_MS
-		}).pipe(Effect.provideService(Scope.Scope, Scope.makeUnsafe()))
+		}).pipe(Effect.provideService(Scope.Scope, poolScope))
 	);
 	return {
+		close: () => Scope.close(poolScope, Exit.void),
 		query: (credential: string, given: DatabaseRequest) =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -179,6 +182,14 @@ export function sqlServerDatabase(options: { readonly connect?: SqlServerConnect
 						);
 					// a refused or failed login is not kept: the next request tries again
 					const pool = yield* RcMap.get(pools, credential).pipe(
+						Effect.catchTag('ExceededCapacityError', () =>
+							Effect.fail(
+								new FacilityFailure({
+									kind: 'upstream',
+									message: 'Database connection pool capacity reached; retry shortly.'
+								})
+							)
+						),
 						Effect.tapError(() => RcMap.invalidate(pools, credential))
 					);
 					const transaction =

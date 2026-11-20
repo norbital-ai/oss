@@ -638,6 +638,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 							} satisfies CrossAnswer)
 						)
 					);
+				let selfScheduled = 0;
 				const crossing = (
 					call: Exclude<
 						CrossCall,
@@ -730,9 +731,12 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 												);
 								if (!Number.isFinite(at))
 									return cross_failure('invalid_input', 'schedule: at is not an instant');
-								// a run that schedules itself a bucket or more ahead keeps its depth (a daily pass); any other schedule,
-								// itself at once whatever the input included, runs one deeper, so a loop ends at the chain depth
-								const depth = call.automation === run.automation && at - now >= BUCKET_MS ? run.depth : run.depth + 1;
+								// At most one self-continuation a bucket or more ahead keeps its depth (a periodic pass);
+								// any second self-schedule or immediate schedule increments depth so fan-out loops end at writeDepth.
+								const isSingleSelfContinuation =
+									selfScheduled === 0 && call.automation === run.automation && at - now >= BUCKET_MS;
+								if (call.automation === run.automation) selfScheduled++;
+								const depth = isSingleSelfContinuation ? run.depth : run.depth + 1;
 								if (depth > LIMITS.writeDepth)
 									return cross_failure('depth', `Runs chain at most ${LIMITS.writeDepth} deep.`);
 								const due = iso(due_at(now, at)),

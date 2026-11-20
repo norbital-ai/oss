@@ -321,7 +321,7 @@ const failedResult = (result: Json): result is { readonly [key: string]: Json } 
  * A reply being written reaches its row at most this often: one UPDATE of the whole text so far per flush (a write is
  * one statement), each published live like any other write, so the panel's transcript grows patch by patch.
  */
-export const STREAM_FLUSH_MS = 150;
+export const STREAM_FLUSH_MS = 400;
 /** A chat's typing presence lapses on its own (WhatsApp's after about 10 s): a working turn renews it this often. */
 export const TYPING_REFRESH_MS = 10_000;
 /** Keeps the newest messages that fit `budget` characters: a compaction never exceeds the window it summarises. */
@@ -1315,46 +1315,98 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		) {
 			let row = from?.row ?? null,
 				text = from?.text ?? '',
-				reasoning = from?.reasoning ?? '';
+				reasoning = from?.reasoning ?? '',
+				lastFlushedTextLen = text.length,
+				lastFlushedReasoningLen = reasoning.length,
+				dirty = false,
+				queued = false;
+			const textChunks: string[] = [];
+			const reasoningChunks: string[] = [];
 			// the text so far lives here; the queue only signals that it grew, so it holds one item however fast the model writes
 			const queue = yield* Queue.sliding<void, Cause.Done>(1);
+			const notify = () => {
+				dirty = true;
+				if (!queued) {
+					queued = true;
+					Queue.offerUnsafe(queue, undefined);
+				}
+			};
 			const flush = yield* Stream.fromQueue(queue).pipe(
 				Stream.groupedWithin(1024, STREAM_FLUSH_MS),
 				Stream.runForEach(() =>
 					Effect.gen(function* () {
-						const content = { text, toolCalls: [], ...(reasoning === '' ? {} : { reasoning }) };
+						queued = false;
+						if (!dirty && textChunks.length === 0 && reasoningChunks.length === 0) return;
+						if (textChunks.length > 0) {
+							text = text === '' ? textChunks.join('') : text + textChunks.join('');
+							textChunks.length = 0;
+						}
+						if (reasoningChunks.length > 0) {
+							reasoning =
+								reasoning === ''
+									? reasoningChunks.join('')
+									: reasoning + reasoningChunks.join('');
+							reasoningChunks.length = 0;
+						}
+						const snapshotText = text,
+							snapshotReasoning = reasoning;
+						if (
+							row !== null &&
+							snapshotText.length === lastFlushedTextLen &&
+							snapshotReasoning.length === lastFlushedReasoningLen
+						) {
+							dirty = false;
+							return;
+						}
+						dirty = false;
+						const content = {
+							text: snapshotText,
+							toolCalls: [],
+							...(snapshotReasoning === '' ? {} : { reasoning: snapshotReasoning })
+						};
 						if (row === null)
 							row = yield* insert({
 								conversation: id,
 								role: 'assistant',
 								content,
-								text,
+								text: snapshotText,
 								state: 'streaming',
 								turn
 							});
 						else {
 							const chain = new Chain(),
-								source = streamMessage(chain, row.id, text, content);
+								source = streamMessage(chain, row.id, snapshotText, content);
 							row = (yield* messageStatement(chain, source))[0] ?? row;
 						}
+						lastFlushedTextLen = snapshotText.length;
+						lastFlushedReasoningLen = snapshotReasoning.length;
 					}).pipe(
 						// a flush only shows progress: one the database refuses is skipped, and the next writes everything so far
-						Effect.catch((error) => Effect.logWarning('agent stream flush skipped', error))
+						Effect.catch((error) => {
+							dirty = true;
+							return Effect.logWarning('agent stream flush skipped', error);
+						})
 					)
 				),
 				Effect.forkScoped
 			);
 			return {
 				delta: (value: string) => {
-					text += value;
-					Queue.offerUnsafe(queue, undefined);
+					if (value.length === 0) return;
+					textChunks.push(value);
+					notify();
 				},
 				reasoning: (value: string) => {
-					reasoning += value;
-					Queue.offerUnsafe(queue, undefined);
+					if (value.length === 0) return;
+					reasoningChunks.push(value);
+					notify();
 				},
 				end: () =>
 					Effect.gen(function* () {
+						if (dirty && !queued) {
+							queued = true;
+							Queue.offerUnsafe(queue, undefined);
+						}
 						yield* Queue.end(queue);
 						yield* Fiber.join(flush);
 						return row;
@@ -1651,22 +1703,27 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			const envoy = conv.envoy === null ? undefined : yield* envoySpec(db, conv.envoy);
 			const staff = authority.actor.kind === 'member' && !authority.actor.external;
 			const hostSide = inApp(conv) && staff;
-			const host_tools = config.host_tools;
-			// once a turn for an actor: a tool's own call reads the state it depends on
-			if (current.hostFor !== authority.key) {
-				current.host_tools =
-					!hostSide || host_tools === undefined
-						? []
-						: typeof host_tools === 'function'
-							? yield* Port.attempt('agent.host_tools', () => host_tools(authority, id))
-							: host_tools;
-				current.hostFor = authority.key;
-			}
 			const hostSkills = config.skills, search = config.search, draft = config.draft;
 			const authoring =
 				hostSide && draft !== undefined
 					? yield* Port.attempt('agent.draft', () => draft(authority))
 					: undefined;
+			const host_tools = config.host_tools;
+			const hostKey = `${authority.key}:${authoring !== undefined ? '1' : '0'}`;
+			// once a turn for an actor: a tool's own call reads the state it depends on
+			if (current.hostFor !== hostKey) {
+				const loaded =
+					!hostSide || host_tools === undefined
+						? []
+						: typeof host_tools === 'function'
+							? yield* Port.attempt('agent.host_tools', () => host_tools(authority, id))
+							: host_tools;
+				current.host_tools =
+					draft !== undefined && authoring === undefined
+						? loaded.filter((tool) => tool.studio === undefined && tool.behavior.source_edit !== true)
+						: loaded;
+				current.hostFor = hostKey;
+			}
 			const audience: Audience = !inApp(conv) ? 'channel' : staff ? 'staff' : 'member';
 			// the platform's skills by who can use them: authoring ones to authors, research to in-app staff
 			const skills: ToolContext['skills'] = {

@@ -49,8 +49,8 @@ export const size_bytes = (s: string): number => {
 	const m = /^(\d+)(KiB|MiB|GiB)$/.exec(s);
 	return m === null ? NaN : Number(m[1]) * SIZE[m[2] === 'KiB' ? 'KiB' : m[2] === 'MiB' ? 'MiB' : 'GiB'];
 };
-/** A file no field declares a cap for: what the object store holds. */
-const UNBOUNDED = '1024GiB';
+/** A file sync import's upper bound when no field cap applies. */
+const UNBOUNDED = '512MiB';
 // `*/*` is any type, an empty or unknown one included (a browser sends '' for an extension it cannot name)
 const accepts = (patterns: readonly string[], mime: string) =>
 	patterns.some(

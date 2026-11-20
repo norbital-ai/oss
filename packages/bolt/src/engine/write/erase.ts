@@ -9,14 +9,9 @@ import type { Outcome, RowData } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalog_of } from '../access/pred.ts';
 import { exprFields, judgeErase } from '../identity/erase.ts';
-import {
-	type ActRequest,
-	k,
-	readRows,
-	refused,
-	type Taker,
-	type WriteEngine
-} from './act.ts';
+import type { ActRequest } from '../services.ts';
+import { readRows } from './rows.ts';
+import { k, refused, type Taker, type WriteEngine } from './shared.ts';
 import type { Commit, Write } from './commit.ts';
 import { writerOf } from '../runs/queue.ts';
 import { Flattener } from './flatten.ts';

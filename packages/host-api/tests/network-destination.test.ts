@@ -119,3 +119,19 @@ it.effect("refuses the platform's own public address on every port, published or
 		expect((yield* public_destination('9.9.9.10', 3000)).address.address).toBe('9.9.9.10');
 	})
 );
+
+it.effect('refuses high-abuse outbound TCP ports (25, 445) on tcp_port', () =>
+	Effect.gen(function* () {
+		const { tcp_port } = yield* Effect.promise(() => import('../src/node/tcp.ts'));
+		for (const port of [25, 139, 445]) {
+			const err = yield* Effect.flip(
+				Effect.tryPromise({
+					try: () =>
+						tcp_port.connect({ host: '9.9.9.10', port, tls: false }, new AbortController().signal),
+					catch: (cause) => cause
+				})
+			);
+			expect(String(err)).toContain(`port ${port} is not allowed`);
+		}
+	})
+);

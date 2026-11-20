@@ -7,12 +7,13 @@ import type { ApprovalSnapshot } from '../../decl/access/policy.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { DbBatch, Lock, Sql } from '@norbital-ai/host-api';
 import type { TenantDbShape } from '../db/tenant-db.ts';
-import { Captured, captureRows } from '../db/captured.ts';
+import { captureRows } from '../db/captured.ts';
 import { storedCaptures, storedImageSql } from '../db/stored.ts';
 import { readGuardBaseline } from '../approvals/read-guards.ts';
 import { Effect, Schema } from 'effect';
 import type { NoticeInsert } from '../notifications/notify.ts';
-import { WriteOutcome } from '../../protocol/schema.ts';
+import { CommitAnswer } from './result.ts';
+export { CommitAnswer } from './result.ts';
 import { utf8Bytes, type EngineActor, type QueuedRun, type RowData } from '../contracts.ts';
 import { relations, type EngineManifest } from '../manifest.ts';
 import { Live, Wake, Links } from '../services.ts';
@@ -894,25 +895,6 @@ export function history_piece(
 		WHERE h.collection=x.c AND h.record=x.id::uuid AND h.meta->>'schema'=v.schema) AS full) version`
 	);
 }
-const AuditedRow = Schema.Struct({
-	model: Schema.String,
-	id: Schema.String,
-	revision: Schema.Number,
-	op: Schema.String,
-	cause: Schema.String,
-	old: Schema.Json,
-	new: Schema.Json
-});
-export const CommitAnswer = Schema.Struct({
-	outcome: Schema.NullOr(WriteOutcome),
-	captured: Schema.Array(Captured),
-	next_due: Schema.NullOr(Schema.String),
-	changed_instances: Schema.Array(Schema.String),
-	approval_decided: Schema.optionalKey(Schema.Number),
-	read_guards_applied: Schema.optionalKey(Schema.Boolean),
-	audited: Schema.optionalKey(Schema.Struct({ at: Schema.String, committed_at: Schema.String, records: Schema.Array(AuditedRow) }))
-});
-export type CommitAnswer = typeof CommitAnswer.Type;
 /**
  * Runs a commit statement with its audit operation inside it: the receipt is a piece of the statement, so no
  * statement wraps it, and the answer carries what the terminal audit event records.

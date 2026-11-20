@@ -2,7 +2,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { Base64Url } from 'effect/encoding';
 import { catalog } from '../src/protocol/catalog.ts';
-import { evaluate, likeRegex } from '../src/engine/query/eval.ts';
+import { evaluate, matchLike } from '../src/engine/query/eval.ts';
 import {
 	aggregate,
 	catalog_for,
@@ -288,7 +288,15 @@ describe('next query: decode', () => {
 						})
 					)
 				).toBe(true);
-				expect(likeRegex('a\\%b%').test('A%bcd')).toBe(true);
+				expect(matchLike('a\\%b%', 'A%bcd')).toBe(true);
+				expect(matchLike('a\\%b%', 'Axbcd')).toBe(false);
+				expect(matchLike('a_c', 'ABC')).toBe(true);
+				expect(matchLike('a_c', 'ABBC')).toBe(false);
+				const evilPattern = '%a'.repeat(30) + 'b';
+				const evilInput = 'a'.repeat(10_000);
+				const t0 = performance.now();
+				expect(matchLike(evilPattern, evilInput)).toBe(false);
+				expect(performance.now() - t0).toBeLessThan(100);
 				// the anonymous identity: a visitor matches their own guest rows; a member matches none
 				const guest: typeof rep = {
 					...rep,

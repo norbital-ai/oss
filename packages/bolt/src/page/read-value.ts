@@ -14,11 +14,15 @@ export const page_reads = (catalog: ReadCatalog | undefined, source: ReadSource)
 		if (catalog === undefined) throw new ReadFailed({ code: 'protocol', message: 'This client has no read answer catalog.' });
 		return catalog;
 	};
+	const memo = <A>(build: () => Schema.Decoder<A>): (() => Schema.Decoder<A>) => {
+		let cached: Schema.Decoder<A> | undefined;
+		return () => (cached ??= build());
+	};
 	return {
 		query: <const R extends ReadRequestBase>(request: ReadRequest<R>) =>
-			source('query', [read_wire(request)], () => typed_read_answer(metadata(), request)),
+			source('query', [read_wire(request)], memo(() => typed_read_answer(metadata(), request))),
 		history: (model: string, id: string, options: { at?: Json; output?: string } = {}) =>
-			source('history', [model, id, options], () => Schema.Array(HistoryRevisionSchema))
+			source('history', [model, id, options], memo(() => Schema.Array(HistoryRevisionSchema)))
 	};
 };
 
@@ -32,4 +36,17 @@ export function readValue<A>(schema: () => Schema.Decoder<A>, value: unknown): R
 	} catch (error) {
 		return Result.fail(error instanceof ReadFailed ? error : new ReadFailed({ code: 'protocol', message: 'The read answer schema is invalid.' }));
 	}
+}
+
+/** Per-decoder WeakMap cache so multiple subscribers or validation + observation decode an immutable view image once. */
+export function memoReadValue<A>(schema: () => Schema.Decoder<A>): (value: unknown) => Result.Result<A, ReadFailed> {
+	const cache = new WeakMap<object, Result.Result<A, ReadFailed>>();
+	return (value) => {
+		if (typeof value !== 'object' || value === null) return readValue(schema, value);
+		const hit = cache.get(value);
+		if (hit !== undefined) return hit;
+		const decoded = readValue(schema, value);
+		cache.set(value, decoded);
+		return decoded;
+	};
 }

@@ -24,11 +24,12 @@ import { ImagePreviews } from './image-previews.ts';
 
 /** What a browser only displays: every other type could script this origin, which all workspaces share. */
 const INLINE = /^(?:image\/(?:png|jpeg|gif|webp|avif|heic|heif)|audio\/|video\/|application\/pdf$)/;
+const INLINE_MEDIA = /^(?:image\/(?:png|jpeg|gif|webp|avif|heic|heif)|audio\/|video\/)/;
 /** A stored file's name and how it opens; the rest of what it says about itself (a sender's MIME type) is not trusted. */
 export const fileHeaders = (mime: string, name: string) => ({
 	'content-disposition': `${INLINE.test(mime) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`,
 	'x-content-type-options': 'nosniff',
-	...(INLINE.test(mime) ? {} : { 'content-security-policy': "sandbox; default-src 'none'" })
+	...(INLINE_MEDIA.test(mime) ? {} : { 'content-security-policy': "sandbox; default-src 'none'" })
 });
 
 const FileRow = Schema.Struct({

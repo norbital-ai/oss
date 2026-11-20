@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { Worker as NodeWorker } from 'node:worker_threads';
-import { Effect, Schema } from 'effect';
+import { Effect, Schema, Semaphore } from 'effect';
 import { FacilityFailure } from '../index.ts';
+
+const DOCUMENT_WORKERS = Semaphore.makeUnsafe(4);
 const failure = (error: unknown) =>
 	new FacilityFailure({
 		kind: 'upstream',
@@ -91,23 +93,25 @@ export const extractDocumentText = Effect.fn('server.extractDocumentText')(funct
 			return yield* Effect.fail(failure(new Error('Document contains binary data.')));
 		return { body, sha256 };
 	}
-	return yield* Effect.scoped(
-		Effect.gen(function* () {
-			const result = yield* inWorker(office ? 'office' : 'pdf', office ? { bytes, mime } : bytes);
-			const decoded: typeof Extracted.Type = office
-				? yield* Effect.gen(function* () {
-						const packet = yield* Schema.decodeUnknownEffect(OfficeResult)(result).pipe(
-							Effect.mapError(failure)
-						);
-						if (packet._tag === 'Failed')
-							return yield* Effect.fail(
-								new FacilityFailure({ kind: 'upstream', message: packet.message })
+	return yield* DOCUMENT_WORKERS.withPermit(
+		Effect.scoped(
+			Effect.gen(function* () {
+				const result = yield* inWorker(office ? 'office' : 'pdf', office ? { bytes, mime } : bytes);
+				const decoded: typeof Extracted.Type = office
+					? yield* Effect.gen(function* () {
+							const packet = yield* Schema.decodeUnknownEffect(OfficeResult)(result).pipe(
+								Effect.mapError(failure)
 							);
-						return { body: packet.body };
-					})
-				: yield* Schema.decodeUnknownEffect(Extracted)(result).pipe(Effect.mapError(failure));
-			return { ...decoded, sha256 };
-		})
+							if (packet._tag === 'Failed')
+								return yield* Effect.fail(
+									new FacilityFailure({ kind: 'upstream', message: packet.message })
+								);
+							return { body: packet.body };
+						})
+					: yield* Schema.decodeUnknownEffect(Extracted)(result).pipe(Effect.mapError(failure));
+				return { ...decoded, sha256 };
+			})
+		)
 	).pipe(
 		Effect.timeoutOrElse({
 			duration: '10 seconds',

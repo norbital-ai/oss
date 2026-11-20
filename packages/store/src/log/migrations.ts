@@ -5,7 +5,7 @@ import { equal_json } from '../lang/kind.ts';
 import {
 	APPLIED,
 	MIGRATION_GUARD_CODES,
-	check_file,
+	check_file_with,
 	lock_of,
 	pending,
 	physical_hash,
@@ -75,7 +75,7 @@ export const verify_log = (
 ) =>
 	Effect.gen(function* () {
 		yield* log_current(snapshot, declaration);
-		yield* Effect.forEach(files, check_file);
+		yield* Effect.forEach(files, (file) => check_file_with(file, { allowSecurityDefiner: true }));
 		const names = ['', ...files.map((file) => file.name)].sort();
 		if (!equal_json(Object.keys(physical).sort(), names))
 			return yield* invalid('physical proof must cover every migration prefix exactly');
@@ -93,7 +93,9 @@ export const verify_log = (
 			)
 		});
 		// Validate numbering, checksums and file structure through the same immutable-history machinery as tables.
-		yield* pending(files, yield* read_lock(lock), [], snapshot);
+		yield* pending(files, yield* read_lock(lock), [], snapshot, [], {
+			allowSecurityDefiner: true
+		});
 		return lock;
 	});
 

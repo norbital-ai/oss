@@ -66,9 +66,11 @@ import {
 	type Signals
 } from './stream.ts';
 import { browser_catalog, type BrowserCatalog } from '../protocol/catalog.ts';
-import { canonical, decode_view, sha256_hex, type Catalog } from '@norbital-ai/store';
+import { canonical, sha256_hex } from '@norbital-ai/store/hash';
+import { decode_view } from '@norbital-ai/store/decode';
+import type { Catalog } from '@norbital-ai/store/catalog';
 import type { Query } from './page-bolt.ts';
-import { page_reads, readValue } from './read-value.ts';
+import { memoReadValue, page_reads } from './read-value.ts';
 import { read_wire, type ReadCatalog } from '../protocol/read-answer.ts';
 import {
 	act_output,
@@ -144,28 +146,21 @@ type View = {
 	key: string;
 	read: WireRead;
 	server: Json | undefined;
-	/** `-1` waits for a whole answer: until it lands, a delta is ignored. */
 	v: number;
 	consumers: Set<ViewConsumer>;
-	/** The other tabs holding it, on the tab that leads the shared connection. */
 	holders: Set<string>;
-	/** Its image's length, at most: measured on each whole answer, grown by each delta. */
 	size: number;
 	registered: boolean;
 	state: SubscriptionRef.SubscriptionRef<ViewState>;
 };
-/** The live views one connection holds, as the server allows. */
 const VIEWS = 500;
-/** The images the leading tab keeps for views only other tabs hold; past it the newest goes. */
 const HELD = 16 * 1024 * 1024;
-/** The fleet marks a document before it boots; ordinary workspace tabs retain streaming. */
 export const page_live_mode = (): NonNullable<PageSnapshotHost['bolt_live_mode']> =>
 	typeof window !== 'undefined' &&
 	Object.getOwnPropertyDescriptor(window, 'bolt_live_mode')?.value === 'snapshot'
 		? 'snapshot'
 		: 'stream';
 const snapshot_refreshers = new Set<() => Effect.Effect<void, ReadFailed | TransportFailed>>();
-/** The host awaits this before inspecting a fleet document, including its next Svelte render. */
 const refresh_page: NonNullable<PageSnapshotHost['bolt_refresh']> = () =>
 	run(
 		Effect.forEach([...snapshot_refreshers], (refresh) => refresh(), { discard: true }).pipe(
@@ -259,9 +254,17 @@ const RELATION_OPS = ['create', 'update', 'delete', 'upsert', 'link', 'unlink'];
 const PAINTED = new Set(['create', 'update', 'delete']);
 
 const isRecord = (v: Json | undefined): v is Row => isRow(v) && !jsonArray(v);
-/** A delta's container: a page (records in `rows` beside its other keys), or a `get` view's row or `null`. */
+const hasCursor = (read: WireRead): boolean => {
+	if (read.m !== 'query') return false;
+	const request = read.a[0];
+	return (
+		isRecord(request) &&
+		Object.values(request).some(
+			(root) => isRecord(root) && root['after'] !== undefined && root['after'] !== null
+		)
+	);
+};
 type Container = 'page' | 'get';
-/** One op on its container. */
 function changed(target: Json, o: PatchOp, kind: Container): Json | undefined {
 	if (kind === 'get') {
 		if (o.op === 'remove') return isRecord(target) && target['id'] === o.id ? null : undefined;
@@ -293,7 +296,6 @@ function changed(target: Json, o: PatchOp, kind: Container): Json | undefined {
 		}
 	}
 }
-/** The value with the container at `path` (own keys only) changed; every container off that path is shared. */
 function within(
 	value: Json,
 	path: readonly string[],
@@ -307,10 +309,6 @@ function within(
 	const next = child === undefined ? undefined : within(child, path, depth + 1, o, kind);
 	return next === undefined || !isRecord(value) ? undefined : { ...value, [key]: next };
 }
-/**
- * Rule 65: a delta applied to a view's value, every op in order at its path or none: unchanged rows and roots are
- * shared, never copied. `undefined` when an op does not fit the image: the view then registers again for a whole answer.
- */
 export function patched(
 	value: Json | undefined,
 	ops: readonly PatchOp[],
@@ -324,19 +322,16 @@ export function patched(
 	return next;
 }
 
-/** The roots a read request names (`query({ … })`), whose pages a write's paint reaches. */
 const rootsOf = (read: WireRead): readonly string[] => {
 	const request = read.m === 'query' ? read.a[0] : undefined;
 	return isRow(request) ? Object.keys(request).filter((path) => !path.includes('.')) : [];
 };
-/** The paint of one generated write over each live read request's page of its model. */
 function paintOf(model: string, verb: string, input: Json, key: string): Paint {
 	const rows = (v: Json, each: (rows: readonly Row[]) => readonly Row[]): Json => {
 		const values = isRow(v) ? v['rows'] : undefined;
 		if (!isRow(v) || !jsonArray(values) || !values.every(isRow)) return v;
 		const painted = each(values);
 		const total = v['total'];
-		// a painted row in or out of the page moves its `total` with it
 		return typeof total === 'number'
 			? { ...v, rows: painted, total: total + painted.length - values.length }
 			: { ...v, rows: painted };
@@ -745,10 +740,13 @@ export const create_bolt = (config: BoltConfig) =>
 						closed = null;
 						yield* SubscriptionRef.set(status, 'live');
 						for (const item of views.values()) {
+							if (hasCursor(item.read)) continue;
 							item.registered = false;
 							item.v = -1;
 						}
-						yield* register([...views.values()]).pipe(Effect.forkScoped({ startImmediately: true }));
+						yield* register([...views.values()].filter((item) => !hasCursor(item.read))).pipe(
+							Effect.forkScoped({ startImmediately: true })
+						);
 						return;
 					case 'answer':
 						receiveNotices(frame, view);
@@ -891,21 +889,27 @@ export const create_bolt = (config: BoltConfig) =>
 		);
 		const caughtUp = (version: number, initiatingFiber?: number) =>
 			Effect.gen(function* () {
-				// A read failure must not turn an acknowledged write into an uncertain write.
 				if (live_mode === 'snapshot') return yield* refresh(initiatingFiber).pipe(Effect.ignore);
-				if (conn === null) return;
-				if (applied >= version) return yield* visible(initiatingFiber);
-				const waiter = yield* Deferred.make<void>();
-				waiters.set(waiter, version);
-				yield* Deferred.await(waiter).pipe(
-					Effect.timeoutOption('5 seconds'),
-					Effect.ensuring(
-						Effect.sync(() => {
-							waiters.delete(waiter);
-						})
-					)
+				if (conn !== null && applied < version) {
+					const waiter = yield* Deferred.make<void>();
+					waiters.set(waiter, version);
+					yield* Deferred.await(waiter).pipe(
+						Effect.timeoutOption('5 seconds'),
+						Effect.ensuring(
+							Effect.sync(() => {
+								waiters.delete(waiter);
+							})
+						)
+					);
+				}
+				const activeCursors = [...views.values()].filter(
+					(view) => view.consumers.size > 0 && hasCursor(view.read) && view.v < version
 				);
-				yield* visible(initiatingFiber);
+				if (activeCursors.length > 0)
+					yield* refresh_lock
+						.withPermit(Effect.forEach(activeCursors, (view) => Effect.result(read_view(view))))
+						.pipe(Effect.ignore);
+				if (conn !== null || activeCursors.length > 0) yield* visible(initiatingFiber);
 			});
 		const answer = (read: WireRead) =>
 			Effect.gen(function* () {
@@ -927,7 +931,6 @@ export const create_bolt = (config: BoltConfig) =>
 				const before = yield* SubscriptionRef.get(view.state);
 				const result = yield* Effect.result(answer(view.read));
 				const current = yield* SubscriptionRef.get(view.state);
-				// A streamed frame that arrived during this request owns the newer image.
 				if (current.sequence !== before.sequence || views.get(view.id) !== view) return;
 				if (Result.isFailure(result)) {
 					yield* notify(view, result.failure);
@@ -938,12 +941,12 @@ export const create_bolt = (config: BoltConfig) =>
 					yield* notify(view, failure);
 					return yield* Effect.fail(failure);
 				}
-				// an unchanged answer over a settled image is not repeated
 				const unchanged =
 					current.error === undefined &&
 					view.server !== undefined &&
 					JSON.stringify(view.server) === JSON.stringify(result.success);
-				view.server = result.success;
+				if (!unchanged) view.server = result.success;
+				view.v = applied;
 				if (!unchanged) yield* notify(view);
 			});
 		const refresh = (initiating_fiber?: number) =>
@@ -966,34 +969,48 @@ export const create_bolt = (config: BoltConfig) =>
 							message: 'The workspace release has changed. Reopen the page.'
 						})
 					);
-				const before = yield* Effect.forEach(active, (view) =>
-					SubscriptionRef.get(view.state).pipe(
-						Effect.map((state) => ({ view, sequence: state.sequence }))
-					)
-				);
-				if (conn === null) yield* Queue.offer(reconnects, undefined);
-				else yield* register(active);
-				const updated = yield* Effect.forEach(
-					before,
-					({ view, sequence }) =>
-						SubscriptionRef.changes(view.state).pipe(
-							Stream.filter((state) => state.sequence > sequence),
-							Stream.take(1),
-							Stream.runHead
-						),
-					{ concurrency: 'unbounded' }
-				).pipe(Effect.timeoutOption('5 seconds'));
-				if (Option.isNone(updated))
-					return yield* Effect.fail(
-						new ReadFailed({
-							code: 'transport',
-							message: 'The workspace did not finish refreshing. Try again.'
-						})
+				const cursorViews = active.filter((view) => hasCursor(view.read));
+				const liveViews = active.filter((view) => !hasCursor(view.read));
+				const cursorResults =
+					cursorViews.length === 0
+						? []
+						: yield* refresh_lock.withPermit(
+								Effect.forEach(cursorViews, (view) => Effect.result(read_view(view)))
+							);
+				if (liveViews.length > 0) {
+					const before = yield* Effect.forEach(liveViews, (view) =>
+						SubscriptionRef.get(view.state).pipe(
+							Effect.map((state) => ({ view, sequence: state.sequence }))
+						)
 					);
-				yield* visible(initiating_fiber);
-				for (const state of updated.value)
-					if (Option.isSome(state) && state.value.error !== undefined)
-						return yield* Effect.fail(state.value.error);
+					if (conn === null) yield* Queue.offer(reconnects, undefined);
+					else yield* register(liveViews);
+					const updated = yield* Effect.forEach(
+						before,
+						({ view, sequence }) =>
+							SubscriptionRef.changes(view.state).pipe(
+								Stream.filter((state) => state.sequence > sequence),
+								Stream.take(1),
+								Stream.runHead
+							),
+						{ concurrency: 'unbounded' }
+					).pipe(Effect.timeoutOption('5 seconds'));
+					if (Option.isNone(updated))
+						return yield* Effect.fail(
+							new ReadFailed({
+								code: 'transport',
+								message: 'The workspace did not finish refreshing. Try again.'
+							})
+						);
+					yield* visible(initiating_fiber);
+					for (const state of updated.value)
+						if (Option.isSome(state) && state.value.error !== undefined)
+							return yield* Effect.fail(state.value.error);
+				} else {
+					yield* visible(initiating_fiber);
+				}
+				for (const result of cursorResults)
+					if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
 			});
 		if (live_mode === 'snapshot' && typeof window !== 'undefined') {
 			const owned_refresh = () => Effect.fiberId.pipe(Effect.flatMap(refresh));
@@ -1018,12 +1035,11 @@ export const create_bolt = (config: BoltConfig) =>
 			const read: WireRead = { m: method, a: args.map(read_wire) };
 			let prepared: Schema.Decoder<A> | undefined;
 			const decoder = () => prepared ?? (prepared = schema());
-			const once = answer(read).pipe(
-				Effect.flatMap((value) => Effect.fromResult(readValue(decoder, value)))
-			);
+			const decode = memoReadValue(decoder);
+			const once = answer(read).pipe(Effect.flatMap((value) => Effect.fromResult(decode(value))));
 			const seeded = config.initial_read?.(read);
-			const initial = seeded === undefined ? undefined : readValue(decoder, seeded);
-			const updates = observe_results({ read }, decoder);
+			const initial = seeded === undefined ? undefined : decode(seeded);
+			const updates = observe_results({ read }, decode);
 			return Object.assign(
 				reactive_query(
 					once,
@@ -1041,7 +1057,7 @@ export const create_bolt = (config: BoltConfig) =>
 			query: {
 				readonly read: WireRead;
 			},
-			schema: () => Schema.Decoder<A>
+			decode: (value: unknown) => Result.Result<A, ReadFailed>
 		): Stream.Stream<Result.Result<A, ReadFailed | TransportFailed>> {
 			const key = keyOf(query.read);
 			return Stream.unwrap(
@@ -1054,7 +1070,7 @@ export const create_bolt = (config: BoltConfig) =>
 						fiberId: yield* Effect.fiberId,
 						delivered: yield* SubscriptionRef.make(0),
 						validate: (value) => {
-							const decoded = readValue(schema, value);
+							const decoded = decode(value);
 							return Result.isFailure(decoded) ? decoded.failure : undefined;
 						}
 					};
@@ -1067,13 +1083,19 @@ export const create_bolt = (config: BoltConfig) =>
 						})
 					);
 					if (live_mode === 'snapshot') {
-						yield* refresh_lock.withPermit(Effect.result(read_view(current)));
+						if (current.consumers.size === 1)
+							yield* refresh_lock.withPermit(Effect.result(read_view(current)));
+					} else if (hasCursor(current.read)) {
+						if (current.consumers.size === 1) {
+							if (current.server === undefined || current.v < applied || current.v < 0)
+								yield* refresh_lock.withPermit(Effect.result(read_view(current)));
+							else if ((yield* SubscriptionRef.get(current.state)).value === undefined)
+								yield* notify(current);
+						}
 					} else {
 						if (closed === null)
 							yield* SubscriptionRef.set(status, conn === null ? 'connecting' : 'live');
 						yield* RcRef.get(connection);
-						// started at once: `register` marks the view before its request, so a second consumer in the same
-						// tick joins it instead of registering it again
 						if (!current.registered)
 							yield* register([current]).pipe(Effect.forkScoped({ startImmediately: true }));
 					}
@@ -1082,13 +1104,12 @@ export const create_bolt = (config: BoltConfig) =>
 							const acknowledge = Stream.fromEffect(
 								SubscriptionRef.set(consumer.delivered, state.sequence)
 							).pipe(Stream.drain);
-							// This continuation runs after the downstream pull has consumed the value.
 							const result =
 								state.error !== undefined
 									? Result.fail(state.error)
 									: state.value === undefined
 										? undefined
-										: readValue(schema, state.value);
+										: decode(state.value);
 							return result === undefined
 								? acknowledge
 								: Stream.succeed(result).pipe(Stream.concat(acknowledge));
@@ -1098,7 +1119,7 @@ export const create_bolt = (config: BoltConfig) =>
 			);
 		}
 		const observe = <A>(query: { readonly read: WireRead }, schema: Schema.Decoder<A>) =>
-			observe_results(query, () => schema).pipe(
+			observe_results(query, memoReadValue(() => schema)).pipe(
 				Stream.flatMap((result) =>
 					Result.isSuccess(result) ? Stream.succeed(result.success) : Stream.fail(result.failure)
 				)

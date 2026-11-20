@@ -24,7 +24,7 @@ import { read_engine } from '../query/engine.ts';
 import { compile } from '@norbital-ai/store';
 import { withDefaults, type Item } from './flatten.ts';
 import { database_value } from '@norbital-ai/store';
-import { k, type WriteEngine } from './act.ts';
+import { k, type WriteEngine } from './shared.ts';
 import { isObj } from '../agent/draft.ts';
 
 /** A write callback's bridge: an `as_of: 'act'` root overlays `staged` (the act's rows when the callback runs) on stored rows. */

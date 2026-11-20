@@ -46,6 +46,7 @@ import {
 	load_host,
 	mcp_port,
 	node_guests,
+	public_fetch,
 	vm_cell
 } from '@norbital-ai/host-api/node';
 import { envelope } from './envelope.ts';
@@ -249,7 +250,9 @@ export const ServerLive = (options: ServeOptions) =>
 								generation.promise.then((workspace) =>
 									run(admitted.admit(1, Effect.promise(() => work(workspace))))
 								),
-							fetch: globalThis.fetch,
+							fetch: is_off(outbound)
+								? globalThis.fetch
+								: public_fetch((effect, opts) => Effect.runPromise(effect, opts)),
 							tcp: is_off(outbound)
 								? {
 										connect: () =>
@@ -349,7 +352,13 @@ export const ServerLive = (options: ServeOptions) =>
 					options.trustProxy
 				);
 				const path = new URL(incoming.url, public_url).pathname;
-				const request = yield* HttpServerRequest.toWeb(incoming);
+				const rawRequest = yield* HttpServerRequest.toWeb(incoming);
+				let request = rawRequest;
+				if (rawRequest.headers.has('bolt-stored')) {
+					const stripped = new Headers(rawRequest.headers);
+					stripped.delete('bolt-stored');
+					request = new Request(rawRequest, { headers: stripped });
+				}
 				const response = yield* route(request, path, address);
 				if (response !== null) return HttpServerResponse.fromWeb(response);
 				if (path.startsWith('/__bolt/')) return json('not_found', 'No such route.', 404);

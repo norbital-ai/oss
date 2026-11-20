@@ -62,6 +62,113 @@ export const record_applied = (file: MigrationFile) => ({
 });
 export const APPLIED = 'select name, checksum from store_migration order by name';
 
+/** Restricted non-superuser Postgres role used to execute workspace migration SQL. */
+export const MIGRATION_ROLE = 'bolt_migrator';
+const LEDGER_LIST =
+	"'store_migration','bolt_schema','bolt_audit_receipt','bolt_history','bolt_approvals','bolt_rate'";
+
+/**
+ * Prepares the restricted `bolt_migrator` role idempotently: creates it (`NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`),
+ * transfers ownership of non-ledger workspace objects in `current_schema()` to it so `ALTER`/`DROP` on user tables
+ * works cleanly, and revokes all privileges on host-owned system ledgers from `bolt_migrator` and `PUBLIC`.
+ */
+export const MIGRATION_ROLE_PREPARE = `do $$
+declare
+	obj record;
+	schema_name text := current_schema();
+begin
+	if not (current_setting('is_superuser') = 'on' or exists (select 1 from pg_roles where rolname = current_user and rolcreaterole)) then
+		return;
+	end if;
+	if not exists (select 1 from pg_roles where rolname = '${MIGRATION_ROLE}') then
+		create role ${MIGRATION_ROLE} nologin nosuperuser nocreatedb nocreaterole noinherit;
+	end if;
+	if current_setting('is_superuser') <> 'on' then
+		execute format('grant ${MIGRATION_ROLE} to %I', current_user);
+	end if;
+	execute format('grant usage, create on schema %I to ${MIGRATION_ROLE}', schema_name);
+	for obj in
+		select c.relname, c.relkind
+		from pg_class c
+		join pg_namespace n on n.oid = c.relnamespace
+		join pg_roles r on r.oid = c.relowner
+		where n.nspname = schema_name
+			and c.relkind in ('r', 'p', 'v', 'm', 'S')
+			and c.relname not in (${LEDGER_LIST})
+			and r.rolname <> '${MIGRATION_ROLE}'
+			and not (c.relkind = 'S' and exists (select 1 from pg_depend d where d.classid = 'pg_class'::regclass and d.objid = c.oid and d.deptype in ('a', 'i')))
+			and not exists (select 1 from pg_depend d where d.classid = 'pg_class'::regclass and d.objid = c.oid and d.deptype = 'e')
+	loop
+		if obj.relkind = 'S' then
+			execute format('alter sequence %I.%I owner to ${MIGRATION_ROLE}', schema_name, obj.relname);
+		elsif obj.relkind = 'v' then
+			execute format('alter view %I.%I owner to ${MIGRATION_ROLE}', schema_name, obj.relname);
+		elsif obj.relkind = 'm' then
+			execute format('alter materialized view %I.%I owner to ${MIGRATION_ROLE}', schema_name, obj.relname);
+		else
+			execute format('alter table %I.%I owner to ${MIGRATION_ROLE}', schema_name, obj.relname);
+		end if;
+	end loop;
+	for obj in
+		select p.proname, pg_get_function_identity_arguments(p.oid) as args, p.prokind
+		from pg_proc p
+		join pg_namespace n on n.oid = p.pronamespace
+		join pg_roles r on r.oid = p.proowner
+		where n.nspname = schema_name
+			and p.prokind in ('f', 'p')
+			and r.rolname <> '${MIGRATION_ROLE}'
+			and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+	loop
+		if obj.prokind = 'p' then
+			execute format('alter procedure %I.%I(%s) owner to ${MIGRATION_ROLE}', schema_name, obj.proname, obj.args);
+		else
+			execute format('alter function %I.%I(%s) owner to ${MIGRATION_ROLE}', schema_name, obj.proname, obj.args);
+		end if;
+	end loop;
+	for obj in
+		select c.relname
+		from pg_class c
+		join pg_namespace n on n.oid = c.relnamespace
+		where n.nspname = schema_name
+			and c.relkind in ('r', 'p')
+			and c.relname in (${LEDGER_LIST})
+	loop
+		execute format('revoke all on table %I.%I from ${MIGRATION_ROLE}, public', schema_name, obj.relname);
+		if obj.relname = 'bolt_approvals' then
+			execute format('grant select, update on table %I.%I to ${MIGRATION_ROLE}', schema_name, obj.relname);
+		elsif obj.relname = 'bolt_history' then
+			execute format('grant select, insert on table %I.%I to ${MIGRATION_ROLE}', schema_name, obj.relname);
+		end if;
+	end loop;
+end $$`;
+
+/** Enters the restricted `bolt_migrator` role for the current transaction when the session has permission to set it. */
+export const MIGRATION_ROLE_ENTER = `do $$
+begin
+	if exists (select 1 from pg_roles where rolname = '${MIGRATION_ROLE}')
+		and (current_setting('is_superuser') = 'on' or pg_has_role(current_user, '${MIGRATION_ROLE}', 'SET')) then
+		execute 'set local role ${MIGRATION_ROLE}';
+	end if;
+end $$`;
+
+/** Exits the restricted migration role back to the session user for host ledger receipts and post-guards. */
+export const MIGRATION_ROLE_EXIT = 'reset role';
+
+/** Returns true when `text` is a single allowlisted `CREATE EXTENSION` statement requiring host role privileges. */
+export function is_extension_statement(text: string): boolean {
+	const statements = sqlStatements(text);
+	if (statements.length !== 1) return false;
+	const tokens = statements[0] ?? [];
+	const words = tokens
+		.filter((token) => token.kind === 'word' || token.kind === 'quoted')
+		.map((token) => token.text.toLowerCase());
+	if (words[0] !== 'create' || words[1] !== 'extension') return false;
+	let at = 2;
+	if (words[at] === 'if' && words[at + 1] === 'not' && words[at + 2] === 'exists') at += 3;
+	const ext = words[at] ?? '';
+	return ALLOWED_EXTENSIONS.has(ext);
+}
+
 /** SQLSTATEs let a host retry moved observations while refusing a failed migration endstate. */
 export const MIGRATION_GUARD_CODES = {
 	beforeLedger: 'BM001',
@@ -346,8 +453,39 @@ const HOST_BOUNDS = [
 	'lock_timeout',
 	'statement_timeout',
 	'idle_in_transaction_session_timeout',
-	'transaction_timeout'
+	'transaction_timeout',
+	'role',
+	'session_authorization'
 ];
+const ALLOWED_EXTENSIONS = new Set([
+	'vector',
+	'pg_trgm',
+	'citext',
+	'btree_gist',
+	'unaccent',
+	'uuid-ossp',
+	'pgcrypto'
+]);
+const DANGEROUS_SQL_FUNCTIONS = new Set([
+	'pg_read_file',
+	'pg_read_binary_file',
+	'pg_ls_dir',
+	'pg_stat_file',
+	'lo_import',
+	'lo_export',
+	'dblink',
+	'dblink_exec',
+	'dblink_connect',
+	'pg_execute_server_program'
+]);
+const PROTECTED_LEDGERS = new Set([
+	'bolt_audit_receipt',
+	'bolt_history',
+	'bolt_approvals',
+	'bolt_rate',
+	'store_migration',
+	'bolt_schema'
+]);
 function changesHostBounds(tokens: readonly SqlToken[]): boolean {
 	for (const [index, token] of tokens.entries()) {
 		if (token.kind !== 'word' && token.kind !== 'quoted') continue;
@@ -359,21 +497,29 @@ function changesHostBounds(tokens: readonly SqlToken[]): boolean {
 			if (HOST_BOUNDS.includes(setting ?? '') || (name === 'reset' && setting === 'all'))
 				return true;
 		}
-		if (
-			name === 'set_config' &&
-			tokens[index + 1]?.text === '(' &&
-			tokens[index + 2]?.kind === 'literal' &&
-			HOST_BOUNDS.includes(tokens[index + 2]?.text.toLowerCase() ?? '')
-		)
-			return true;
-		if (
-			name === 'execute' &&
-			tokens[index + 1]?.kind === 'literal' &&
-			changesHostBounds(sqlTokens(tokens[index + 1]?.text.replaceAll("''", "'") ?? ''))
-		)
-			return true;
+		if (name === 'set_config' && tokens[index + 1]?.text === '(') {
+			const arg = tokens[index + 2];
+			const sep = tokens[index + 3]?.text;
+			const allowedStoreSetting =
+				arg?.kind === 'literal' &&
+				sep === ',' &&
+				arg.text.toLowerCase().startsWith('store.');
+			if (!allowedStoreSetting) return true;
+		}
+		if (token.kind === 'word' && name === 'execute') {
+			const next = tokens[index + 1];
+			if (next?.kind === 'word' && ['function', 'procedure'].includes(next.text.toLowerCase()))
+				continue;
+			const after = tokens[index + 2]?.text.toLowerCase();
+			if (
+				next?.kind !== 'literal' ||
+				(after !== 'into' && after !== ';' && after !== undefined)
+			)
+				return true;
+			const inner = sqlTokens(next.text.replaceAll("''", "'"));
+			if (inner[0]?.text.toLowerCase() !== 'select' || changesHostBounds(inner)) return true;
+		}
 	}
-	// Stored function bodies are inert here; DO bodies execute as part of this file.
 	return (
 		tokens[0]?.text === 'do' &&
 		tokens.some(
@@ -385,9 +531,80 @@ function changesHostBounds(tokens: readonly SqlToken[]): boolean {
 		)
 	);
 }
-/** A file a database may run: named in order, and every destructive step accepted. */
-export const check_file = /*#__PURE__*/ (() =>
-	Effect.fn('Store.check_file')(function* (file: MigrationFile) {
+function unsafeMigrationReason(
+	tokens: readonly SqlToken[],
+	allowSecurityDefiner = false
+): string | undefined {
+	for (const [index, token] of tokens.entries()) {
+		if (token.kind !== 'word' && token.kind !== 'quoted') continue;
+		const name = token.text.toLowerCase();
+		if (DANGEROUS_SQL_FUNCTIONS.has(name) && tokens[index + 1]?.text === '(')
+			return `${name}() is not permitted in workspace migrations`;
+		if (token.kind === 'word' && name === 'copy') {
+			for (let j = index + 1; j < tokens.length; j++)
+				if (tokens[j]?.kind === 'word' && tokens[j]?.text.toLowerCase() === 'program')
+					return 'COPY PROGRAM is not permitted in workspace migrations';
+		}
+		if (
+			!allowSecurityDefiner &&
+			token.kind === 'word' &&
+			name === 'security' &&
+			tokens[index + 1]?.kind === 'word' &&
+			tokens[index + 1]?.text.toLowerCase() === 'definer'
+		)
+			return 'SECURITY DEFINER is not permitted in workspace migrations';
+		if (
+			token.kind === 'word' &&
+			name === 'create' &&
+			tokens[index + 1]?.kind === 'word' &&
+			tokens[index + 1]?.text.toLowerCase() === 'extension'
+		) {
+			let at = index + 2;
+			if (
+				tokens[at]?.text.toLowerCase() === 'if' &&
+				tokens[at + 1]?.text.toLowerCase() === 'not' &&
+				tokens[at + 2]?.text.toLowerCase() === 'exists'
+			)
+				at += 3;
+			const ext = tokens[at]?.text.toLowerCase() ?? '';
+			if (!ALLOWED_EXTENSIONS.has(ext))
+				return `extension '${ext}' is not on the migration allowlist`;
+		}
+		if (
+			token.kind === 'word' &&
+			(name === 'insert' || name === 'update' || name === 'delete' || name === 'truncate')
+		) {
+			let at = index + 1;
+			while (
+				at < tokens.length &&
+				tokens[at]?.kind === 'word' &&
+				['into', 'from', 'only', 'table'].includes(tokens[at]?.text.toLowerCase() ?? '')
+			)
+				at++;
+			let target = tokens[at]?.text.toLowerCase() ?? '';
+			if (tokens[at + 1]?.text === '.') target = tokens[at + 2]?.text.toLowerCase() ?? '';
+			if (PROTECTED_LEDGERS.has(target))
+				return `direct DML on protected system ledger '${target}' is not permitted in migrations`;
+		}
+	}
+	if (tokens[0]?.text === 'do') {
+		for (const token of tokens) {
+			if (token.kind !== 'body' && token.kind !== 'literal') continue;
+			const inner = unsafeMigrationReason(
+				sqlTokens(token.kind === 'literal' ? token.text.replaceAll("''", "'") : token.text),
+				allowSecurityDefiner
+			);
+			if (inner !== undefined) return inner;
+		}
+	}
+	return undefined;
+}
+/** Internal file check with optional host-log privilege allowance. */
+export const check_file_with = /*#__PURE__*/ (() =>
+	Effect.fn('Store.check_file')(function* (
+		file: MigrationFile,
+		options?: { readonly allowSecurityDefiner?: boolean }
+	) {
 		if (!NAME.test(file.name) || number(file.name) < 1)
 			return yield* refuse(
 				'migration_invalid',
@@ -429,6 +646,9 @@ export const check_file = /*#__PURE__*/ (() =>
 					'migration_invalid',
 					`${file.name}: lock_timeout, statement_timeout, idle_in_transaction_session_timeout and transaction_timeout belong to the host's bounded migration transaction`
 				);
+			const unsafe = unsafeMigrationReason(statement, options?.allowSecurityDefiner === true);
+			if (unsafe !== undefined)
+				return yield* refuse('migration_invalid', `${file.name}: ${unsafe}`);
 			if (
 				words.includes('concurrently') &&
 				(words[0] === 'reindex' ||
@@ -442,11 +662,17 @@ export const check_file = /*#__PURE__*/ (() =>
 		return file;
 	}))();
 
+/** A file a database may run: named in order, and every destructive step accepted. */
+export const check_file = (file: MigrationFile) => check_file_with(file);
+
 const orderedFiles = /*#__PURE__*/ (() =>
-	Effect.fn('Store.orderedMigrations')(function* (files: readonly MigrationFile[]) {
+	Effect.fn('Store.orderedMigrations')(function* (
+		files: readonly MigrationFile[],
+		options?: { readonly allowSecurityDefiner?: boolean }
+	) {
 		const ordered = [...files].sort((a, b) => number(a.name) - number(b.name));
 		for (const [i, file] of ordered.entries()) {
-			yield* check_file(file);
+			yield* check_file_with(file, options);
 			if (number(file.name) !== i + 1)
 				return yield* refuse(
 					'migration_invalid',
@@ -706,9 +932,10 @@ const migrationHistory = /*#__PURE__*/ (() =>
 		lock: MigrationLock,
 		applied: readonly Applied[],
 		snapshot: string | undefined,
-		squashes: readonly MigrationFile[]
+		squashes: readonly MigrationFile[],
+		options?: { readonly allowSecurityDefiner?: boolean }
 	) {
-		const ordered = yield* orderedFiles(files);
+		const ordered = yield* orderedFiles(files, options);
 		if (snapshot !== undefined && sha256_hex(snapshot) !== lock.snapshot)
 			return yield* refuse(
 				'migration_changed',
@@ -828,9 +1055,10 @@ export const pending = /*#__PURE__*/ (() =>
 		lock: MigrationLock,
 		applied: readonly Applied[],
 		snapshot?: string,
-		squashes: readonly MigrationFile[] = []
+		squashes: readonly MigrationFile[] = [],
+		options?: { readonly allowSecurityDefiner?: boolean }
 	) {
-		return (yield* migrationHistory(files, lock, applied, snapshot, squashes)).pending;
+		return (yield* migrationHistory(files, lock, applied, snapshot, squashes, options)).pending;
 	}))();
 
 /** Read-only source, ledger and physical planning state. A physical drift is reported, never adopted or repaired. */
@@ -843,6 +1071,7 @@ export const migration_status = /*#__PURE__*/ (() =>
 			readonly snapshot?: string;
 			readonly squashes?: readonly MigrationFile[];
 			readonly physical?: readonly string[];
+			readonly allowSecurityDefiner?: boolean;
 		} = {}
 	) {
 		const history = yield* migrationHistory(
@@ -850,7 +1079,8 @@ export const migration_status = /*#__PURE__*/ (() =>
 			lock,
 			applied,
 			options.snapshot,
-			options.squashes ?? []
+			options.squashes ?? [],
+			options.allowSecurityDefiner === true ? { allowSecurityDefiner: true } : undefined
 		);
 		const last = [...applied].sort((a, b) => number(a.name) - number(b.name)).at(-1)?.name ?? '';
 		const expectedPhysical =

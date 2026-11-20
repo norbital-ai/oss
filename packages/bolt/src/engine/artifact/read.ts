@@ -191,7 +191,7 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 	const map = join(dir, 'guest.mjs.map');
 	const guest: GuestProgram = {
 		source: yield* text(join(dir, 'guest.mjs')),
-		...((yield* fs.exists(map)) ? { source_map: yield* text(map) } : {})
+		...(digests !== 'executed' && (yield* fs.exists(map)) ? { source_map: yield* text(map) } : {})
 	};
 	const assets = join(dir, 'guest-assets');
 	if (yield* fs.exists(assets)) {
@@ -286,7 +286,7 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 			);
 		const map = `${absolute}.map`;
 		const program: GuestProgram = { source };
-		if (yield* fs.exists(map)) program.source_map = yield* text(map);
+		if (digests !== 'executed' && (yield* fs.exists(map))) program.source_map = yield* text(map);
 		const assets = join(dir, `server/${route}.assets`);
 		if (yield* fs.exists(assets)) {
 			const held: Record<string, Uint8Array> = {};

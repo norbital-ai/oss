@@ -92,13 +92,7 @@ const PARTS: { part: string; role: Discovered['role']; shape: 'each' | 'spec' | 
  * ponytail: one declared list for every host; read the host port's manifest when hosts advertise different tools.
  */
 const HOST_TOOLS = [
-	'browser_act',
-	'browser_close',
-	'browser_download',
-	'browser_evaluate',
-	'browser_navigate',
-	'browser_screenshot',
-	'browser_snapshot',
+	'browser',
 	'http',
 	'reference',
 	'web_search',

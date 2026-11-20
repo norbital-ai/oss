@@ -26,7 +26,12 @@ const source = program(`import { Config, Option, Redacted } from 'effect';
 function* helper(input, ctx) {
  const token = yield* Config.Redacted('TOKEN');
  const missing = yield* Config.option(Config.String('PATH'));
- return { matches: Redacted.value(token) === input, ambientAbsent: Option.isNone(missing), contextClean: !('$secrets' in ctx) };
+ return {
+  matches: Redacted.value(token) === input,
+  ambientAbsent: Option.isNone(missing),
+  contextClean: !('$secrets' in ctx),
+  globalClean: globalThis[Symbol.for('norbital.bolt.secrets')] === undefined
+ };
 }
 const body = function* (input, ctx) { return yield* helper(input, ctx); };
 // a write callback receives its changes: the checked value rides in the one change's \`set\`
@@ -62,7 +67,7 @@ it.effect(
 				for (const kind of ['automation', 'create', 'page'] as const)
 					expect(yield* guest.invoke(invocation(kind, 'synthetic-alpha'), noCalls)).toEqual({
 						kind: 'ok',
-						output: { matches: true, ambientAbsent: true, contextClean: true }
+						output: { matches: true, ambientAbsent: true, contextClean: true, globalClean: true }
 					});
 				const other = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* source }));
 				yield* Context.get(other, Secrets).set('workspace', 'TOKEN', 'synthetic-other-tenant');

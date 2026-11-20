@@ -200,7 +200,14 @@ export function bodyPath(kind: InvocationKind, target: string): string[] {
 	}
 }
 
-/** Stored console output per invocation (lines, characters) and per line (characters). */
+const NO_SECRETS_KINDS: ReadonlySet<InvocationKind> = new Set([
+	'policy',
+	'validation',
+	'parse',
+	'vector',
+	'probe',
+	'rerank'
+]);
 const CONSOLE = { lines: 200, bytes: 64 * 1024, lineChars: 2048 } as const;
 const stackLocation = (program: GuestProgram) => {
 	let map: TraceMap | undefined;
@@ -372,7 +379,9 @@ const run = (
 								? invocation.input
 								: parts.map((part) => [bodyPath(invocation.kind, part.target), part.input])
 						),
-						ctx: JSON.stringify({ ...ctx, $secrets: secrets }),
+						ctx: JSON.stringify(
+							NO_SECRETS_KINDS.has(invocation.kind) ? ctx : { ...ctx, $secrets: secrets }
+						),
 						invocation: invocation.id
 					})
 				);
@@ -694,26 +703,32 @@ export const GuestLive = Layer.effect(
 							invocation: invocation.id,
 							run: invocation.run
 						});
-						// Only tenant-declared values cross into server code; never an ambient environment dump.
-						const secrets = Object.fromEntries(
-							(yield* Effect.forEach(Object.keys(manifest.workspace.secrets ?? {}), (name) =>
-								Config.option(Config.String(name)).pipe(
-									Effect.provideService(ConfigProvider.ConfigProvider, configuration),
-									Effect.mapError(() =>
-										BoltError.make(
-											'unavailable',
-											'facility',
-											'Workspace secrets could not be loaded.'
+						// Only tenant-declared values cross into trusted server code; never public SSR, policies, or parsers.
+						const secrets = NO_SECRETS_KINDS.has(invocation.kind)
+							? {}
+							: Object.fromEntries(
+									(yield* Effect.forEach(Object.keys(manifest.workspace.secrets ?? {}), (name) =>
+										Config.option(Config.String(name)).pipe(
+											Effect.provideService(ConfigProvider.ConfigProvider, configuration),
+											Effect.mapError(() =>
+												BoltError.make(
+													'unavailable',
+													'facility',
+													'Workspace secrets could not be loaded.'
+												)
+											),
+											Effect.map((value) =>
+												Option.isSome(value) ? [[name, value.value] as const] : []
+											)
 										)
-									),
-									Effect.map((value) =>
-										Option.isSome(value) ? [[name, value.value] as const] : []
-									)
-								)
-							)).flat()
-						);
+									)).flat()
+								);
+						const runtimeProgram: GuestProgram = {
+							source: program.source,
+							...(program.assets === undefined ? {} : { assets: program.assets })
+						};
 						return yield* run(
-							isolates.open(program, {
+							isolates.open(runtimeProgram, {
 								prelude: PRELUDE,
 								seed: invocation.ctx.seed,
 								memory_mib: limits.memory_mib

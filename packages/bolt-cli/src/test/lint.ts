@@ -10,18 +10,18 @@ import { join, relative } from 'node:path';
 type Rule = { readonly pattern: RegExp; readonly message: string; readonly template?: true };
 const RULES: readonly Rule[] = [
 	{
-		pattern: /\btimeout\s*:/,
+		pattern: /\b(timeout|testTimeout|hookTimeout)\s*:/,
 		message: 'a timeout option: heavy is not allowed, never raise a limit'
 	},
 	{
 		// a zero-delay `setTimeout` yields one macrotask and waits on no clock
 		pattern:
-			/(?<![.\w$])(setInterval|sleep)\s*\(|(?<![.\w$])setTimeout\s*\((?!.*,\s*0\s*[),])(?=.*,)/,
+			/(?<![.\w$])(setInterval|sleep)\s*\(|\bBun\.sleep\s*\(|(?<![.\w$])setTimeout\s*\((?:(?!.*,\s*0\s*[),])(?=.*,)|\s*[1-9][\d_]*)/,
 		message: 'a wall-clock wait: use TestClock or wait on the event itself'
 	},
 	{
 		pattern:
-			/(from\s+|import\s*\(\s*|require\s*\(\s*)['"](node:)?child_process['"]|(?<![.\w$])(spawn|spawnSync|execSync|execFile|execFileSync)\s*\(/,
+			/(from\s+|import\s*\(\s*|require\s*\(\s*)['"](node:)?child_process['"]|(?<![.\w$])(spawn|spawnSync|execSync|execFile|execFileSync)\s*\(|\bBun\.(spawn|spawnSync)\s*\(/,
 		message: 'a spawned process'
 	},
 	{

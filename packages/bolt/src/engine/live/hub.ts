@@ -1,10 +1,3 @@
-// The live engine: one lane per cell. A commit's RETURNING set is routed host-side: each view is
-// judged in memory against the pre- and post-images, and a hit is sent as a delta built from the post-image (projected
-// through the view's select and output, placed by its order), with no read: each op changes one container at its path
-// in the view's compiled read (a read request's named root, or the value itself). A delta that cannot be exact
-// falls back as narrowly as it can — a PK `get` of the one row, else a re-read of the view — and is counted
-// (`conservative=`, listed by `sweep()`). Commits coalesce per lane batch, one delta per view; each connection's
-// fallbacks are one pipelined read. Budgets are typed errors on the view; the stream is untouched.
 import {
 	Cause,
 	Clock,
@@ -23,7 +16,7 @@ import { actor_ref } from '../access/actor.ts';
 import { bindingsAt } from '../query/reader.ts';
 import { Live, Manifest, Reads, type LiveView } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
-import { sha256_hex } from '@norbital-ai/store';
+import { canonical, sha256_hex } from '@norbital-ai/store/hash';
 import type { Frame, LiveErrorCode, PatchOp } from '../../protocol/wire.ts';
 import { PatchOps } from '../../protocol/schema.ts';
 import type { Authority, Bindings, Captured } from '../contracts.ts';
@@ -36,18 +29,16 @@ import { ViewCompiler, same, sourceKeys, type ViewPlan } from '../query/view.ts'
 import * as patch from './patch.ts';
 
 const MiB = 1024 * 1024;
-/** What a member's session is judged on (`identity/actor.ts`): a change to any of it ends their streams. */
 const PRINCIPAL = ['email', 'phone', 'kind', 'active', 'admin', 'team', 'party', 'signup'] as const;
-/** The live row: per subscription / per connection / retained per cell. */
 export const LIVE = {
 	subscriptionBytes: 2 * MiB,
 	perConnection: 500,
 	connectionFrames: 1_000,
 	connectionQueueBytes: 16 * MiB,
-	cellBytes: 128 * MiB
+	cellBytes: 128 * MiB,
+	maxConnections: 500
 } as const;
 
-/** `value`: the view's current answer as the connection holds it (after every frame sent), `undefined` before the first. */
 type View = LiveView & {
 	id: string;
 	plan: ViewPlan;
@@ -69,11 +60,13 @@ type Conn = {
 
 type ReadAnswer = { ok: Json; snapshots: patch.Snapshots };
 type Answer = ReadAnswer | { err: unknown };
+type SharedAnswer = Answer | { readonly retry: true };
+type SharedMap = Map<string, Deferred.Deferred<SharedAnswer>>;
 
 const utf8 = new TextEncoder();
 const bytesOf = (text: string) => utf8.encode(text).byteLength;
-/** A delta the wire can carry; past its bounds (op count, path depth, prototype keys) the exact image goes whole. */
 const carried = Schema.is(PatchOps);
+const readKey = (authority: Authority, item: ReadIR) => `${authority.key}\u0000${canonical(item)}`;
 export const LiveHubLive = Layer.effect(
 	Live,
 	Effect.gen(function* () {
@@ -105,7 +98,6 @@ export const LiveHubLive = Layer.effect(
 				if (views?.size === 0) byModel.delete(model);
 			}
 		};
-		// `v`: the last commit's sequence; `routed`: the last one whose views were answered (frames are stamped with it)
 		let v = 0,
 			routed = 0,
 			retained = 0,
@@ -114,16 +106,13 @@ export const LiveHubLive = Layer.effect(
 			reads = 0;
 		let pending: { captured: Captured; version: number }[] = [],
 			queued = false;
+		const inflight: SharedMap = new Map();
 		const queue = () => {
 			if (queued) return;
 			queued = true;
 			Queue.offerUnsafe(lane, { _tag: 'Flush' });
 		};
 
-		/**
-		 * Sends a view's new value: a delta's ops, or the whole answer; over a budget, the view errors alone. A whole
-		 * answer is measured whole; a delta moves the retained size by the bytes its ops add and take away.
-		 */
 		const put = Effect.fn('Live.put')(function* (
 			conn: Conn,
 			view: View,
@@ -201,7 +190,6 @@ export const LiveHubLive = Layer.effect(
 						}
 			);
 		});
-		/** A view whose read failed is dropped (the client registers it again), so no later flush asks it again. */
 		const failed = (conn: Conn, view: View, err: unknown, expected: number) =>
 			Effect.suspend(() =>
 				conn.views.get(view.id) !== view || view.readVersion !== expected
@@ -218,28 +206,25 @@ export const LiveHubLive = Layer.effect(
 						)
 			);
 
-		/**
-		 * One pipelined read; a failing batch is re-asked per read so one bad view errors alone. With `shared` (one flush's
-		 * answers), connections holding the same compiled authority read each distinct read once and share its answer.
-		 */
 		const readAll = Effect.fn('Live.readAll')(function* (
 			conn: Conn,
 			batch: readonly ReadIR[],
 			b: Bindings,
-			shared?: Map<string, Deferred.Deferred<Answer>>
-		) {
+			shared?: SharedMap,
+			prefix?: string
+		): Effect.fn.Return<readonly Answer[]> {
 			if (batch.length === 0) return [];
 			const own: ReadIR[] = [],
-				mine: Deferred.Deferred<Answer>[] = [];
+				mine: { readonly key: string; readonly made: Deferred.Deferred<SharedAnswer> }[] = [];
 			const slots = batch.map((item) => {
 				if (shared === undefined) return undefined;
-				const key = `${conn.authority.key}\u0000${JSON.stringify(item)}`;
+				const key = `${prefix ?? ''}${readKey(conn.authority, item)}`;
 				const held = shared.get(key);
 				if (held !== undefined) return held;
-				const made = Deferred.makeUnsafe<Answer>();
+				const made = Deferred.makeUnsafe<SharedAnswer>();
 				shared.set(key, made);
 				own.push(item);
-				mine.push(made);
+				mine.push({ key, made });
 				return made;
 			});
 			if (shared === undefined) own.push(...batch);
@@ -291,41 +276,74 @@ export const LiveHubLive = Layer.effect(
 				)
 			);
 			if (shared === undefined) return yield* answers;
-			// every connection waiting on a read this one owns hears its answer, or that it was cut short
 			yield* (own.length === 0 ? Effect.succeed([]) : answers).pipe(
-				Effect.onExit((exit) =>
-					Effect.forEach(
+				Effect.onExit((exit) => {
+					if (prefix !== undefined)
+						for (const { key, made } of mine) if (shared.get(key) === made) shared.delete(key);
+					const interrupted = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause);
+					const fallback: SharedAnswer = interrupted
+						? { retry: true }
+						: {
+								err: BoltError.make('internal', 'decode', 'The live read returned no answer.')
+							};
+					return Effect.forEach(
 						mine,
-						(made, index) =>
-							Deferred.succeed(
-								made,
-								(Exit.isSuccess(exit) ? exit.value[index] : undefined) ?? {
-									err: BoltError.make('internal', 'decode', 'The live read returned no answer.')
-								}
-							),
+						({ made }, index) =>
+							Deferred.succeed(made, (Exit.isSuccess(exit) ? exit.value[index] : undefined) ?? fallback),
 						{ discard: true }
-					)
-				)
+					);
+				})
 			);
-			return yield* Effect.forEach(slots, (slot) =>
+			const resolved = yield* Effect.forEach(slots, (slot) =>
 				slot === undefined
-					? Effect.succeed<Answer>({
+					? Effect.succeed<SharedAnswer>({
 							err: BoltError.make('internal', 'decode', 'The live read returned no answer.')
 						})
 					: Deferred.await(slot)
 			);
+			const retryAt: number[] = [];
+			const retryItems: ReadIR[] = [];
+			const out: Answer[] = [];
+			for (const [index, entry] of resolved.entries()) {
+				if ('retry' in entry) {
+					const item = batch[index];
+					if (item !== undefined) {
+						retryAt.push(index);
+						retryItems.push(item);
+					}
+					out.push({
+						err: BoltError.make('internal', 'decode', 'The live read returned no answer.')
+					});
+				} else {
+					out.push(entry);
+				}
+			}
+			if (retryItems.length > 0) {
+				const retried = yield* readAll(conn, retryItems, b);
+				for (const [i, target] of retryAt.entries()) {
+					const entry = retried[i];
+					if (entry !== undefined) out[target] = entry;
+				}
+			}
+			return out;
 		});
 		const answer = Effect.fn('Live.answer')(function* (
 			conn: Conn,
 			views: readonly View[],
-			arrivals?: (view: View) => readonly Json[] | undefined
+			arrivals?: (view: View) => readonly Json[] | undefined,
+			shared?: SharedMap,
+			b?: Bindings,
+			prefix?: string
 		) {
+			if (views.length === 0) return;
 			const tickets = new Map(views.map((view) => [view, ++view.readVersion]));
-			const b = yield* bindings;
+			const resolved = b ?? (yield* bindings);
 			const values = yield* readAll(
 				conn,
 				views.map((view) => view.read),
-				b
+				resolved,
+				shared,
+				prefix
 			);
 			for (const [i, view] of views.entries()) {
 				if (conn.views.get(view.id) !== view) continue;
@@ -369,12 +387,11 @@ export const LiveHubLive = Layer.effect(
 			routed = v;
 			const batch = pending;
 			pending = [];
-			// a connection whose principal changed (revoked, deactivated, moved team, signed out) ends before this commit
-			// reaches it: the client reconnects, and its session is judged again. A member's own name or preferences move
-			// the row's revision but not what their session is judged on, so their stream stays.
 			const b = yield* bindings;
 			const memberships = manifest.workspace.memberships;
-			const roleChange = memberships?.bundles !== undefined && batch.some(({ captured }) => captured.model === memberships.bundles?.levels);
+			const roleChange =
+				memberships?.bundles !== undefined &&
+				batch.some(({ captured }) => captured.model === memberships.bundles?.levels);
 			const changed = new Set(
 				batch.flatMap(({ captured: c }) =>
 					memberships !== undefined && (c.model === memberships.model || c.model === memberships.bundles?.assignments)
@@ -420,7 +437,7 @@ export const LiveHubLive = Layer.effect(
 				patched = 0;
 			const fallback = new Set<View>();
 			reads = 0;
-			const shared = new Map<string, Deferred.Deferred<Answer>>();
+			const shared: SharedMap = new Map();
 			yield* Effect.forEach(
 				[...interested],
 				([conn, views]) =>
@@ -448,14 +465,12 @@ export const LiveHubLive = Layer.effect(
 							if (unsure) full.push(view);
 							else deltas.push({ view, rows });
 						}
-						// Whole answers and scoped single-row fetches still share one pipelined crossing.
-						// one fetch per distinct row read: repeated captures of one row (coalesced commits) share it
 						const gets = new Map<string, number>(),
 							fetches: ReadIR[] = [];
 						const slots = deltas.map(({ rows }) =>
 							rows.map((change) => {
 								if (!('get' in change)) return null;
-								const key = JSON.stringify(change.get.read);
+								const key = canonical(change.get.read);
 								let slot = gets.get(key);
 								if (slot === undefined)
 									gets.set(key, (slot = full.length + fetches.push(change.get.read) - 1));
@@ -529,22 +544,27 @@ export const LiveHubLive = Layer.effect(
 							}
 							const { value, ops, bytes } = work,
 								incoming = arrivals(view);
-							if (ops.length === 0 && !incoming?.length) continue;
+							const effectiveOps = ops.length > 0 && same(view.value, value) ? [] : ops;
+							if (effectiveOps.length === 0 && !incoming?.length) continue;
 							patched++;
 							yield* put(
 								conn,
 								view,
-								carried(ops)
-									? { value, expected, delta: { ops, bytes }, arrivals: incoming }
+								carried(effectiveOps)
+									? {
+											value: effectiveOps.length === 0 ? view.value : value,
+											expected,
+											delta: { ops: effectiveOps, bytes: effectiveOps.length === 0 ? 0 : bytes },
+											arrivals: incoming
+										}
 									: { value, expected, snapshots: view.snapshots, arrivals: incoming }
 							);
 						}
 						for (const view of [...full, ...again]) fallback.add(view);
-						yield* answer(conn, again, arrivals);
+						yield* answer(conn, again, arrivals, shared, b);
 					}),
 				{ concurrency: 'unbounded', discard: true }
 			);
-			// Every connection still sees the commit watermark, even when none of its views depends on it.
 			yield* Effect.forEach([...conns.values()], (conn) => conn.send({ t: 'v', v: routed }), {
 				concurrency: 'unbounded',
 				discard: true
@@ -608,6 +628,10 @@ export const LiveHubLive = Layer.effect(
 								if (discard) Queue.shutdownUnsafe(frames);
 							}
 						};
+						if (conns.size >= LIVE.maxConnections) {
+							const oldest = conns.keys().next().value;
+							if (oldest !== undefined) yield* disconnect(oldest, true);
+						}
 						conns.set(id, conn);
 						yield* conn.send({ t: 'hello', conn: id, v: routed });
 						yield* Effect.addFinalizer(() => disconnect(id));
@@ -652,7 +676,9 @@ export const LiveHubLive = Layer.effect(
 				};
 				conn.views.set(id, state);
 				index(conn, state);
-				yield* answer(conn, [state]);
+				const at = v;
+				const b = yield* bindings;
+				yield* answer(conn, [state], undefined, inflight, b, `${at}\u0000${b.now}\u0000`);
 				state.arrivalsAfter = v;
 			}),
 			drop: (connId, id) => {
@@ -660,10 +686,10 @@ export const LiveHubLive = Layer.effect(
 				return conn === undefined ? Effect.void : drop(conn, id);
 			},
 
-			/** Rule 66: routes one commit's RETURNING set; returns the lane sequence the act replies with. */
 			publish(captured: readonly Captured[]): number {
 				if (captured.length === 0) return v;
 				v++;
+				inflight.clear();
 				pending.push(
 					...storedCaptures(catalog, captured).map((row) => ({ captured: row, version: v }))
 				);
@@ -703,7 +729,7 @@ export const LiveHubLive = Layer.effect(
 					index(conn, view);
 					views.push(view);
 				}
-				yield* answer(conn, views);
+				yield* answer(conn, views, undefined, new Map());
 			}),
 			close: Effect.fn('Live.close')(function* (release: string) {
 				for (const conn of [...conns.values()]) {

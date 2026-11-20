@@ -124,8 +124,19 @@ const tcpOver = (check: (host: string, port: number) => Destination): TcpPort =>
 			.then((socket) => (endpoint.tls ? secure(socket, endpoint, signal) : web(socket, endpoint)))
 });
 
-/** Outbound TCP/TLS under the public guard: DNS resolved once, every address public, the checked set pinned. */
-export const tcp_port: TcpPort = tcpOver((host, port) => public_destination(host, port));
+const BLOCKED_TCP_PORTS = new Set([25, 135, 136, 137, 138, 139, 445]);
+
+/** Outbound TCP/TLS under the public guard: DNS resolved once, every address public, high-abuse ports refused, the checked set pinned. */
+export const tcp_port: TcpPort = tcpOver((host, port) =>
+	BLOCKED_TCP_PORTS.has(port)
+		? Effect.fail(
+				new FacilityFailure({
+					kind: 'invalid',
+					message: `Outbound TCP port ${port} is not allowed.`
+				})
+			)
+		: public_destination(host, port)
+);
 
 const LOOPBACK: Readonly<Record<string, Address>> = {
 	localhost: { address: '127.0.0.1', family: 4 },

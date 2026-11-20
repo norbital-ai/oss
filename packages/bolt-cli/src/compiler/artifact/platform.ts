@@ -77,6 +77,8 @@ export type PlatformLayer = {
 	/** Every chunk of the layer by file name, for the workspace's initial module graph. */
 	readonly chunks: ReadonlyMap<string, PlatformChunk>;
 	readonly css: readonly string[];
+	/** Subset of `css` imported by the static startup graph; lazy chunks load the rest on demand. */
+	readonly startupCss: readonly string[];
 };
 
 const CachedPlatform = Schema.fromJsonString(
@@ -85,6 +87,7 @@ const CachedPlatform = Schema.fromJsonString(
 		modules: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
 		chunks: Schema.Array(PlatformChunk),
 		css: Schema.Array(Schema.String),
+		startupCss: Schema.optionalKey(Schema.Array(Schema.String)),
 		/** Each file by its digest (`*.map` left out, as a tree's hash leaves it): a build hashes the layer unread. */
 		digests: Schema.Array(Schema.Tuple([Schema.String, Schema.String]))
 	})
@@ -92,7 +95,8 @@ const CachedPlatform = Schema.fromJsonString(
 const heldLayer = (held: typeof CachedPlatform.Type): PlatformLayer => ({
 	modules: new Map(held.modules),
 	chunks: new Map(held.chunks.map((chunk) => [chunk.fileName, chunk])),
-	css: held.css
+	css: held.css,
+	startupCss: held.startupCss ?? held.css
 });
 export type PreparedLayer = Readonly<{
 	layer: PlatformLayer;
@@ -149,6 +153,7 @@ export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(functio
 			modules: [...layer.modules],
 			chunks: [...layer.chunks.values()],
 			css: [...layer.css],
+			startupCss: [...layer.startupCss],
 			digests
 		})
 	);
@@ -288,12 +293,35 @@ export const platformLayer = (
 		const shared = modules.get(resolved);
 		if (shared !== undefined) modules.set(specifier, shared);
 	}
+	const byFile = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
+	const allCss = built.output
+		.filter((o) => o.type === 'asset' && o.fileName.endsWith('.css'))
+		.map((o) => o.fileName)
+		.sort();
+	const mountChunk = chunks.find((c) => c.isEntry && c.facadeModuleId === MOUNT);
+	const startupCssSet = new Set<string>();
+	if (mountChunk !== undefined) {
+		const seen = new Set<string>();
+		const stack = [mountChunk.fileName];
+		while (stack.length > 0) {
+			const file = stack.pop();
+			if (file === undefined || seen.has(file)) continue;
+			seen.add(file);
+			const chunk = byFile.get(file);
+			if (chunk === undefined) continue;
+			const meta = 'viteMetadata' in chunk ? chunk.viteMetadata : undefined;
+			if (meta !== undefined && typeof meta === 'object' && meta !== null && 'importedCss' in meta) {
+				const imported = meta.importedCss;
+				if (imported instanceof Set) for (const cssFile of imported) if (typeof cssFile === 'string') startupCssSet.add(cssFile);
+			}
+			for (const dep of chunk.imports) stack.push(dep);
+		}
+	}
+	const startupCss = startupCssSet.size > 0 ? [...startupCssSet].sort() : allCss;
 	return {
 		modules,
-		chunks: new Map(chunks.map((chunk) => [chunk.fileName, chunk])),
-		css: built.output
-			.filter((o) => o.type === 'asset' && o.fileName.endsWith('.css'))
-			.map((o) => o.fileName)
-			.sort()
+		chunks: byFile,
+		css: allCss,
+		startupCss
 	};
 };

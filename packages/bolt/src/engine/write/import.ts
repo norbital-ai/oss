@@ -9,6 +9,7 @@ import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { LIMITS } from '../contracts.ts';
 import { type EngineError } from '../errors.ts';
 import { catalog_of } from '../access/pred.ts';
+import { readsAny } from '../access/authority.ts';
 import { null_row_sql, q, type Catalog } from '@norbital-ai/store';
 import { where as decodeWhere } from '@norbital-ai/store';
 import { BoltError, from_store } from '../../protocol/errors.ts';
@@ -160,7 +161,9 @@ export const importRefs = Effect.fn('Bolt.importRefs')(function* (
 	m: EngineManifest,
 	cat: Catalog,
 	model: string,
-	rows: readonly Json[]
+	rows: readonly Json[],
+	auth?: Authority,
+	b?: Bindings
 ): Effect.fn.Return<readonly Json[] | Outcome, EngineError> {
 	const wants = new Map<
 		string,
@@ -199,6 +202,14 @@ export const importRefs = Effect.fn('Bolt.importRefs')(function* (
 				field: fk,
 				row: first.row
 			};
+		if (auth !== undefined && !auth.admin && !readsAny(auth, target))
+			return {
+				kind: 'refused',
+				code: 'not_found',
+				message: `No readable ${target} has these key values.`,
+				field: fk,
+				row: first.row
+			};
 		wants.set(fk, { fk, target, key, at });
 	}
 	if (wants.size === 0) return [...rows];
@@ -220,20 +231,62 @@ export const importRefs = Effect.fn('Bolt.importRefs')(function* (
 			})
 		)
 	);
+	const visibleIds = new Map<number, Set<string>>();
+	if (auth !== undefined && !auth.admin && b !== undefined) {
+		const reader: Reader = { as: 'caller', authority: auth };
+		const checks: { index: number; sql: ReturnType<typeof composable> }[] = [];
+		for (const [i, w] of list.entries()) {
+			const candidateIds = (res[i]?.rows ?? []).map((row) => String(row['id']));
+			if (candidateIds.length === 0) {
+				visibleIds.set(i, new Set());
+				continue;
+			}
+			const compiled = yield* Effect.result(
+				where_sql(
+					cat,
+					w.target,
+					{ t: 'in', field: 'id', negated: false, args: candidateIds },
+					readOptions(reader, b)
+				).pipe(Effect.mapError(from_store))
+			);
+			if (compiled._tag === 'Failure') {
+				if (compiled.failure.code === 'forbidden') {
+					visibleIds.set(i, new Set());
+					continue;
+				}
+				return yield* Effect.fail(compiled.failure);
+			}
+			checks.push({ index: i, sql: composable(compiled.success) });
+		}
+		if (checks.length > 0) {
+			const checked = yield* read_composed(
+				db,
+				checks.map((item) => item.sql)
+			);
+			for (const [j, item] of checks.entries())
+				visibleIds.set(
+					item.index,
+					new Set((checked[j]?.rows ?? []).map((row) => String(row['id'])))
+				);
+		}
+	}
 	const out = rows.map((row) => Predicate.isObject(row) ? { ...row } : row);
 	for (const [i, w] of list.entries()) {
 		const result = res[i];
 		if (result === undefined)
 			return yield* BoltError.make('corrupt', 'decode', `The import reference query for '${w.target}' returned no result.`);
+		const allowed = visibleIds.get(i);
 		for (const { row, v } of w.at) {
-			const hit = result.rows.find((x) =>
-				w.key.every((f) => x[f] === String(database_value(v[f] ?? null)))
+			const hit = result.rows.find(
+				(x) =>
+					(allowed === undefined || allowed.has(String(x['id']))) &&
+					w.key.every((f) => x[f] === String(database_value(v[f] ?? null)))
 			);
 			if (hit === undefined)
 				return {
 					kind: 'refused',
 					code: 'not_found',
-					message: `No ${w.target} has these key values.`,
+					message: `No readable ${w.target} has these key values.`,
 					field: w.fk,
 					row
 				};

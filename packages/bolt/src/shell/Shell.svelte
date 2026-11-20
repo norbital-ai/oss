@@ -94,20 +94,13 @@
 	import Waiting from './inbox/Waiting.svelte';
 	import { awaitingAfter, type Awaiting as AwaitingKind } from './agent/chime.ts';
 	import { createSounds, SOUNDS, type SoundKind, type SoundStatus } from './sounds.ts';
-	import SoundSettings from './settings/Sounds.svelte';
 	import { CLIENT_NAVIGATION, type ClientNavigation } from './agent/navigation.ts';
 	import { CLIENT_PAGE_ACTION } from './agent/navigation.ts';
 	import { clientPageAction } from './agent/page.ts';
-	import Inbox from './inbox/Inbox.svelte';
 	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
-	import RecordSheet from './RecordSheet.svelte';
-	import RecordPrint from './RecordPrint.svelte';
-	import Turnstile from './auth/Turnstile.svelte';
 	import Nav from './Nav.svelte';
-	import Finder from './finder/Finder.svelte';
 	import Home from './Home.svelte';
 	import Bell from './Bell.svelte';
-	import DeviceWall from './DeviceWall.svelte';
 	import { deviceAccess } from './device-access.ts';
 	import { resolve_device } from '../page/device.ts';
 	import { deviceSession, open_external } from './device-session.ts';
@@ -696,7 +689,12 @@
 		{ lazy: true }
 	);
 
-	const refreshNotice = () =>
+	let lastNoticeRefreshAt = 0;
+	const NOTICE_REFRESH_COOLDOWN_MS = 30_000;
+	const refreshNotice = () => {
+		const now = Date.now();
+		if (now - lastNoticeRefreshAt < NOTICE_REFRESH_COOLDOWN_MS) return;
+		lastNoticeRefreshAt = now;
 		fork(
 			api.boot(publicApp, kioskRoute ?? undefined).pipe(
 				Effect.map((next) => {
@@ -705,6 +703,7 @@
 			),
 			() => {}
 		);
+	};
 
 	function pageOf(key: string): Promise<Component<{ ctx: ShellPageContext }>> | null {
 		const chunk = config.pages[key];
@@ -761,6 +760,13 @@
 	});
 	// ⌘K (Ctrl+K) opens Norbius, or closes it when open; ⌘/ (Ctrl+/) opens the finder; ⌘B (Ctrl+B) folds the sidebar
 	let finding = $state(false);
+	let finderOpened = $state(false);
+	watch(
+		() => finding,
+		(open) => {
+			if (open) finderOpened = true;
+		}
+	);
 	watch(
 		() => url.searchParams.get('find'),
 		(scope) => {
@@ -1038,9 +1044,15 @@
 				{#if requires.length === 0}
 					<Bound size="fill" inset><Page ctx={pageContext()} /></Bound>
 				{:else}
-					<DeviceWall {requires} {access} native={device.geolocation?.source === 'native'} {t}>
-						<Bound size="fill" inset><Page ctx={pageContext()} /></Bound>
-					</DeviceWall>
+					{#await import('./DeviceWall.svelte')}
+						{@render openingFeature()}
+					{:then { default: DeviceWall }}
+						<DeviceWall {requires} {access} native={device.geolocation?.source === 'native'} {t}>
+							<Bound size="fill" inset><Page ctx={pageContext()} /></Bound>
+						</DeviceWall>
+					{:catch}
+						{@render failedFeature()}
+					{/await}
 				{/if}
 				{#snippet failed(error)}
 					<span hidden {@attach initialPageMounted}></span>
@@ -1054,7 +1066,13 @@
 			</svelte:boundary>
 		{/if}
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
-		<Inbox ctx={pageContext()} {bolt} {t} on_count={(n) => (waiting = n)} />
+		{#await import('./inbox/Inbox.svelte')}
+			{@render openingFeature()}
+		{:then { default: Inbox }}
+			<Inbox ctx={pageContext()} {bolt} {t} on_count={(n) => (waiting = n)} />
+		{:catch}
+			{@render failedFeature()}
+		{/await}
 	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
 		{#await import('./settings/Settings.svelte')}
 			{@render openingFeature()}
@@ -1130,10 +1148,12 @@
 	{:else}
 		<Center><p>{t('Not found or no access')}</p></Center>
 	{/if}
-	{#if bolt !== null}
-		{#each records as r, i (`${i}:${r.model}/${r.id}`)}
-			<RecordSheet ctx={pageContext()} model={r.model} id={r.id} on_close={() => closeRecord(i)} />
-		{/each}
+	{#if bolt !== null && records.length > 0}
+		{#await import('./RecordSheet.svelte') then { default: RecordSheet }}
+			{#each records as r, i (`${i}:${r.model}/${r.id}`)}
+				<RecordSheet ctx={pageContext()} model={r.model} id={r.id} on_close={() => closeRecord(i)} />
+			{/each}
+		{/await}
 	{/if}
 {/snippet}
 
@@ -1158,7 +1178,9 @@
 			<span hidden {@attach () => void (document.documentElement.dataset['boltPrint'] = 'failed')}
 			></span>
 		{:else if boot !== null && bolt !== null}
-			<RecordPrint ctx={pageContext()} model={printed.model} id={printed.id} />
+			{#await import('./RecordPrint.svelte') then { default: RecordPrint }}
+				<RecordPrint ctx={pageContext()} model={printed.model} id={printed.id} />
+			{/await}
 		{/if}
 	{:else if failure !== null}
 		<Access
@@ -1227,11 +1249,11 @@
 		<!-- a visitor page: only its own app, no switcher, inbox, agent, settings or runs -->
 		<Cover as="main" class="min-h-dvh pb-[env(safe-area-inset-bottom)]">
 			{@render content()}
-			{#if boot.visitor.site_key !== undefined}
-				{#if challenge !== null}<Turnstile
-						site_key={boot.visitor.site_key}
-						queue={challenge}
-					/>{/if}
+			{#if boot.visitor.site_key !== undefined && challenge !== null}
+				{@const siteKey = boot.visitor.site_key}
+				{#await import('./auth/Turnstile.svelte') then { default: Turnstile }}
+					<Turnstile site_key={siteKey} queue={challenge} />
+				{/await}
 			{/if}
 		</Cover>
 	{:else if portal}
@@ -1413,26 +1435,28 @@
 				>
 			{/if}
 		</div>
-		{#if bolt !== null && !previewEnv}
-			<Finder
-				bind:open={finding}
-				entries={boot.search}
-				initial_scope={url.searchParams.get('find')}
-				on_close={() => {
-					if (url.searchParams.has('find')) {
-						const next = new URL(url);
-						next.searchParams.delete('find');
-						navigate(next.href);
-					}
-				}}
-				nav={boot.nav}
-				catalog={boot.catalog}
-				read={(request) => viewContext().query(request)}
-				{t}
-				on_navigate={navigate}
-				on_open_record={(c, id) => open_record(c, id)}
-				on_ask={boot.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
-			/>
+		{#if bolt !== null && !previewEnv && (finding || finderOpened)}
+			{#await import('./finder/Finder.svelte') then { default: Finder }}
+				<Finder
+					bind:open={finding}
+					entries={boot.search}
+					initial_scope={url.searchParams.get('find')}
+					on_close={() => {
+						if (url.searchParams.has('find')) {
+							const next = new URL(url);
+							next.searchParams.delete('find');
+							navigate(next.href);
+						}
+					}}
+					nav={boot.nav}
+					catalog={boot.catalog}
+					read={(request) => viewContext().query(request)}
+					{t}
+					on_navigate={navigate}
+					on_open_record={(c, id) => open_record(c, id)}
+					on_ask={boot.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
+				/>
+			{/await}
 		{/if}
 		{#if boot.surfaces.inbox && bolt !== null}
 			<Waiting {bolt} on_count={(n) => (waiting = n)} />
@@ -1479,15 +1503,19 @@
 			</Sheet>
 		{/if}
 		<Sheet open={soundsOpen} title={t('Sounds')} on_open_change={(open) => (soundsOpen = open)}>
-			<SoundSettings
-				enabled={chimes}
-				status={soundStatus}
-				on_change={chooseChimes}
-				on_test={() => {
-					void sounds.test();
-				}}
-				{t}
-			/>
+			{#if soundsOpen}
+				{#await import('./settings/Sounds.svelte') then { default: SoundSettings }}
+					<SoundSettings
+						enabled={chimes}
+						status={soundStatus}
+						on_change={chooseChimes}
+						on_test={() => {
+							void sounds.test();
+						}}
+						{t}
+					/>
+				{/await}
+			{/if}
 		</Sheet>
 	{/if}
 </div>

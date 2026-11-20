@@ -199,6 +199,167 @@ describe('open_ai_chat', () => {
 			})
 	);
 	it.effect(
+		'meters estimated prompt and streamed output cost when a caller aborts a stream before usage arrives',
+		() =>
+			Effect.gen(function* () {
+				let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+				const fetched = Promise.withResolvers<void>();
+				const arrived = yield* Deferred.make<void>();
+				const metered: { cost: number; id: string }[] = [];
+				const f: typeof fetch = async () => {
+					const body = new ReadableStream<Uint8Array>({
+						start(c) {
+							controller = c;
+						}
+					});
+					fetched.resolve();
+					return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+				};
+				const fiber = yield* open_ai_chat(
+					{
+						endpoint: 'https://llm.test/v1',
+						credential: 'k',
+						models: { default: 'frontier-x' },
+						price: () => ({ input: 10, output: 30 }),
+						meter: (cost, id) => {
+							metered.push({ cost, id });
+						}
+					},
+					{ fetch: f }
+				)({
+					model: 'default',
+					system: 'answer thoroughly',
+					messages: [{ role: 'user', content: { text: 'hello world' } }]
+				}).pipe(
+					Stream.tap((event) =>
+						event._tag === 'Delta' ? Deferred.succeed(arrived, undefined) : Effect.void
+					),
+					Stream.runDrain,
+					Effect.forkChild
+				);
+				yield* Port.attempt('fixture.fetch', () => fetched.promise);
+				if (controller === undefined) return yield* Effect.die(new Error('stream did not start'));
+				controller.enqueue(
+					new TextEncoder().encode(
+						'data: {"id":"gen-abort-1","choices":[{"delta":{"content":"Here is the expensive answer"}}]}\n\n'
+					)
+				);
+				yield* Deferred.await(arrived);
+				yield* Fiber.interrupt(fiber);
+				expect(metered.length).toBe(1);
+				expect(metered[0]?.id).toBe('gen-abort-1');
+				expect(metered[0]?.cost).toBeGreaterThan(0);
+			})
+	);
+	it.effect(
+		'reconciles exact OpenRouter generation cost on stream abort and falls back cleanly on error or timeout',
+		() =>
+			Effect.gen(function* () {
+				const runAbort = (
+					generationId: string,
+					reconcileAnswer: (url: string, auth: string | null, signal?: AbortSignal) => Promise<Response>
+				) =>
+					Effect.gen(function* () {
+						let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+						const fetched = Promise.withResolvers<void>();
+						const arrived = yield* Deferred.make<void>();
+						const metered: { cost: number; id: string }[] = [];
+						const queried: { url: string; auth: string | null }[] = [];
+						const f: typeof fetch = async (input, init) => {
+							const req = new Request(input, init);
+							if (req.method === 'GET') {
+								const auth = req.headers.get('authorization');
+								queried.push({ url: req.url, auth });
+								return reconcileAnswer(req.url, auth, init?.signal ?? undefined);
+							}
+							const body = new ReadableStream<Uint8Array>({
+								start(c) {
+									controller = c;
+								}
+							});
+							fetched.resolve();
+							return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+						};
+						const fiber = yield* open_ai_chat(
+							{
+								endpoint: 'https://openrouter.ai/api/v1/',
+								credential: 'or-secret',
+								models: { default: 'anthropic/claude-sonnet' },
+								price: () => ({ input: 10, output: 30 }),
+								meter: (cost, id) => {
+									metered.push({ cost, id });
+								}
+							},
+							{ fetch: f }
+						)({
+							model: 'default',
+							system: 'answer thoroughly',
+							messages: [{ role: 'user', content: { text: 'hello world' } }]
+						}).pipe(
+							Stream.tap((event) =>
+								event._tag === 'Delta' ? Deferred.succeed(arrived, undefined) : Effect.void
+							),
+							Stream.runDrain,
+							Effect.forkChild
+						);
+						yield* Port.attempt('fixture.fetch', () => fetched.promise);
+						if (controller === undefined) return yield* Effect.die(new Error('stream did not start'));
+						controller.enqueue(
+							new TextEncoder().encode(
+								`data: {"id":${JSON.stringify(generationId)},"choices":[{"delta":{"content":"Partial output"}}]}\n\n`
+							)
+						);
+						yield* Deferred.await(arrived);
+						return { fiber, metered, queried };
+					});
+
+				// 1. Exact OpenRouter total_cost overrides conservative estimate
+				const exact = yield* runAbort('gen-or/1', async () =>
+					Response.json({ data: { id: 'gen-or/1', total_cost: 0.00425 } })
+				);
+				yield* Fiber.interrupt(exact.fiber);
+				expect(exact.queried).toEqual([
+					{
+						url: 'https://openrouter.ai/api/v1/generation?id=gen-or%2F1',
+						auth: 'Bearer or-secret'
+					}
+				]);
+				expect(exact.metered).toEqual([{ id: 'gen-or/1', cost: 0.00425 }]);
+
+				// 2. HTTP error from /generation falls back to conservative estimate
+				const failed = yield* runAbort('gen-or-err', async () =>
+					new Response('unavailable', { status: 503 })
+				);
+				yield* Fiber.interrupt(failed.fiber);
+				expect(failed.queried[0]?.url).toBe(
+					'https://openrouter.ai/api/v1/generation?id=gen-or-err'
+				);
+				expect(failed.metered.length).toBe(1);
+				expect(failed.metered[0]?.id).toBe('gen-or-err');
+				expect(failed.metered[0]?.cost).toBeGreaterThan(0);
+				expect(failed.metered[0]?.cost).not.toBe(0.00425);
+
+				// 3. Stalled /generation times out at 1.5s, aborts fetch, and falls back to estimate
+				const started = yield* Deferred.make<void>();
+				const aborted = yield* Deferred.make<void>();
+				const run = yield* FiberSet.makeRuntimePromise();
+				const stalled = yield* runAbort('gen-or-slow', (_url, _auth, signal) => {
+					signal?.addEventListener('abort', () => Deferred.doneUnsafe(aborted, Effect.void));
+					return run(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)), {
+						...(signal === undefined ? {} : { signal })
+					});
+				});
+				const interrupting = yield* Fiber.interrupt(stalled.fiber).pipe(Effect.forkChild);
+				yield* Deferred.await(started);
+				yield* TestClock.adjust(1_500);
+				yield* Fiber.join(interrupting);
+				yield* Deferred.await(aborted);
+				expect(stalled.metered.length).toBe(1);
+				expect(stalled.metered[0]?.id).toBe('gen-or-slow');
+				expect(stalled.metered[0]?.cost).toBeGreaterThan(0);
+			})
+	);
+	it.effect(
 		'maps classes to models, the transcript to messages, and tool calls back from one JSON body',
 		() =>
 			Effect.gen(function* () {

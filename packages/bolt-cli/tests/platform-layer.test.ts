@@ -65,7 +65,8 @@ effectIt.live(
 									{ fileName: 'assets/platform/sdk.js', imports: [], dynamicImports: [] }
 								]
 							]),
-							css: []
+							css: [],
+							startupCss: []
 						} satisfies PlatformLayer;
 					});
 				const first = join(root, 'first'),

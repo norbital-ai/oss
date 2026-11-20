@@ -8,7 +8,11 @@ import {
 	INTROSPECT,
 	IntrospectRow,
 	MIGRATIONS_TABLE,
+	MIGRATION_ROLE_ENTER,
+	MIGRATION_ROLE_EXIT,
+	MIGRATION_ROLE_PREPARE,
 	MIGRATION_GUARD_CODES,
+	is_extension_statement,
 	checksum_of,
 	canonical,
 	current,
@@ -315,6 +319,24 @@ export const apply_migrations = /*#__PURE__*/ (() =>
 			const steps = new Map<string, Measured>();
 			const reads: { readonly at: number; readonly step: Measured; readonly count: boolean }[] = [];
 			if (file !== undefined) {
+				let rolePrepared = false;
+				let sandboxed = false;
+				const enterSandbox = () => {
+					if (!rolePrepared) {
+						statements.push({ text: MIGRATION_ROLE_PREPARE, params: [] });
+						rolePrepared = true;
+					}
+					if (!sandboxed) {
+						statements.push({ text: MIGRATION_ROLE_ENTER, params: [] });
+						sandboxed = true;
+					}
+				};
+				const exitSandbox = () => {
+					if (sandboxed) {
+						statements.push({ text: MIGRATION_ROLE_EXIT, params: [] });
+						sandboxed = false;
+					}
+				};
 				for (const statement of migration_statements(file)) {
 					let step = steps.get(statement.step);
 					if (step === undefined) {
@@ -322,13 +344,21 @@ export const apply_migrations = /*#__PURE__*/ (() =>
 						steps.set(statement.step, step);
 						const counted = countedBy(statement.step, statement.hazard);
 						if (counted !== undefined) {
+							enterSandbox();
 							for (const text of impact_count(...counted)) statements.push({ text, params: [] });
 							reads.push({ at: statements.length - 1, step, count: true });
 						}
 					}
-					statements.push({ text: statement.text, params: [] });
+					if (is_extension_statement(statement.text)) {
+						exitSandbox();
+						statements.push({ text: statement.text, params: [] });
+					} else {
+						enterSandbox();
+						statements.push({ text: statement.text, params: [] });
+					}
 					if (statement.writes) reads.push({ at: statements.length - 1, step, count: false });
 				}
+				exitSandbox();
 				statements.push(record_applied(file));
 				statements.push(
 					yield* guard(

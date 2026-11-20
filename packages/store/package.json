@@ -46,6 +46,22 @@
 		"./formula": {
 			"types": "./build/lang/formula.d.ts",
 			"default": "./build/lang/formula.js"
+		},
+		"./hash": {
+			"types": "./build/hash.d.ts",
+			"default": "./build/hash.js"
+		},
+		"./decode": {
+			"types": "./build/decode.d.ts",
+			"default": "./build/decode.js"
+		},
+		"./catalog": {
+			"types": "./build/catalog.d.ts",
+			"default": "./build/catalog.js"
+		},
+		"./cursor": {
+			"types": "./build/cursor.d.ts",
+			"default": "./build/cursor.js"
 		}
 	},
 	"scripts": {

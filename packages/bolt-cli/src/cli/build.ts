@@ -88,6 +88,67 @@ const alive = (pid: number) => {
 	}
 };
 /**
+ * Optional cross-process concurrency cap (`BOLT_BUILD_SLOTS_DIR` + `BOLT_BUILD_SLOTS`, set by `env start`'s watcher
+ * supervisor) so steady-state rebuilds across all running template watchers stay bounded (default 2).
+ */
+export const holdingBuildSlot = <A, E, R>(
+	build: Effect.Effect<A, E, R>,
+	config: { readonly dir: string | undefined; readonly slots?: number } = {
+		dir: process.env['BOLT_BUILD_SLOTS_DIR'],
+		slots: Number.parseInt(process.env['BOLT_BUILD_SLOTS'] ?? '2', 10)
+	}
+): Effect.Effect<A, E, R | FileSystem.FileSystem | Path.Path> => {
+	const slotsDir = config.dir?.trim();
+	if (slotsDir === undefined || slotsDir.length === 0) return build;
+	const count =
+		config.slots !== undefined && Number.isInteger(config.slots) && config.slots > 0
+			? config.slots
+			: 2;
+	return Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem,
+			path = yield* Path.Path;
+		yield* fs.makeDirectory(slotsDir, { recursive: true }).pipe(Effect.orDie);
+		const acquire: Effect.Effect<string> = Effect.gen(function* () {
+			for (let i = 0; i < count; i++) {
+				const slot = path.join(slotsDir, `slot-${i}.lock`);
+				const claimed = yield* fs
+					.writeFileString(slot, String(process.pid), { flag: 'wx' })
+					.pipe(
+						Effect.as(true),
+						Effect.catch(() =>
+							fs.readFileString(slot).pipe(
+								Effect.orElseSucceed(() => ''),
+								Effect.flatMap((holder) => {
+									const pid = Number(holder.trim());
+									return Number.isInteger(pid) && pid > 0 && alive(pid)
+										? Effect.succeed(false)
+										: fs
+												.remove(slot, { force: true })
+												.pipe(
+													Effect.ignore,
+													Effect.andThen(
+														fs
+															.writeFileString(slot, String(process.pid), { flag: 'wx' })
+															.pipe(Effect.as(true), Effect.catch(() => Effect.succeed(false)))
+													)
+												);
+								})
+							)
+						)
+					);
+				if (claimed) return slot;
+			}
+			yield* Effect.sleep('250 millis');
+			return yield* acquire;
+		});
+		return yield* Effect.acquireUseRelease(
+			acquire,
+			() => build,
+			(slot) => fs.remove(slot, { force: true }).pipe(Effect.ignore)
+		);
+	});
+};
+/**
  * One build of a workspace at a time: `.norbital/.building` holds the building process's pid, created exclusively. A
  * second build (another watcher, a manual `bolt build`) waits for it, so two never swap `.norbital/` over each other; a
  * dead holder's marker is taken over.
@@ -116,7 +177,7 @@ const holdingBuild = <A, E, R>(dir: string, build: Effect.Effect<A, E, R>) =>
 			);
 		return yield* Effect.acquireUseRelease(
 			hold,
-			() => build,
+			() => holdingBuildSlot(build),
 			() => fs.remove(marker, { force: true }).pipe(Effect.ignore)
 		);
 	});
@@ -130,6 +191,8 @@ export type BuildOptions = {
 	spaServed?: boolean;
 	/** A layer `bolt platform` wrote: read here, its files left for the host to add to the bundle. */
 	platform?: string;
+	/** Migration mode during compilation (default `'generate'`; watch mode uses `'verify'` so background saves never mutate `migrations/`). */
+	migrations?: 'generate' | 'verify';
 };
 export type BuildFailure =
 	| AuthorErrors
@@ -161,7 +224,7 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 		JSON.stringify(files) === JSON.stringify(previous.files)
 			? previous.compiled
 			: yield* compile(root, {
-					migrations: 'generate',
+					migrations: options.migrations ?? 'generate',
 					...(options.squash === undefined ? {} : { squash: options.squash })
 				}).pipe(
 					Effect.flatMap(({ errors, manifest, guest }) =>
@@ -317,6 +380,18 @@ export type Built = {
 	readonly release: ReleaseJson;
 	readonly compiled: { readonly manifest: EngineManifest; readonly guest: GuestProgram };
 };
+/** Build options `watchWorkspace` passes on every steady-state rebuild: `migrations: 'verify'` keeps saves from mutating `migrations/`. */
+export const watchRebuildOptions = (
+	options: { readonly log: Log; readonly spaServed?: boolean },
+	changed: readonly string[],
+	previous?: Built
+): BuildOptions => ({
+	log: options.log,
+	changed,
+	migrations: 'verify',
+	...(previous === undefined ? {} : { previous }),
+	...(options.spaServed === undefined ? {} : { spaServed: options.spaServed })
+});
 /**
  * `bolt dev` (tethered and untethered): one rebuild per settled burst of edits under `src/`, `seed/` and the editable
  * `migrations/*.sql`, handed to `built`. A rebuild skips the type check and an unchanged migration replay (`bolt check`,
@@ -378,12 +453,29 @@ export const watchWorkspace = Effect.fn('bolt.watchWorkspace')(function* (
 					)
 				);
 				if (changed.length === 0) return;
-				yield* buildWorkspace(root, {
-					log: options.log,
-					changed,
-					...(previous === undefined ? {} : { previous }),
-					...(options.spaServed === undefined ? {} : { spaServed: options.spaServed })
-				}).pipe(
+				// When `bolt dev` serves the internal SPA directly via Vite HMR, editing existing internal `.svelte`
+				// components (not public SSR pages) needs zero full artifact/source rebuild or release.json swap.
+				if (
+					options.spaServed === true &&
+					previous !== undefined &&
+					changed.every(
+						(file) => file.endsWith('.svelte') && !file.includes('/public/') && !file.endsWith('.public.svelte')
+					)
+				) {
+					const allExisted = yield* Effect.map(
+						Effect.all(
+							changed.map((file) =>
+								Effect.all([
+									fs.exists(path.join(root, file)),
+									fs.exists(path.join(root, '.norbital', 'source', file))
+								])
+							)
+						),
+						(pairs) => pairs.every(([now, before]) => now && before)
+					).pipe(Effect.orElseSucceed(() => false));
+					if (allExisted) return;
+				}
+				yield* buildWorkspace(root, watchRebuildOptions(options, changed, previous)).pipe(
 					Effect.tap((result) => Effect.sync(() => (previous = result))),
 					Effect.flatMap(built),
 					Effect.catch((error) =>
