@@ -117,7 +117,7 @@ export const workbook = (path: string, images: Images) =>
 					grid: Value[][] = Array.from({ length: row }, (): Value[] => []);
 				for (const cells of one.rows) grid.push([...Array.from({ length: column }, (): Value => null), ...cells.map(value)]);
 				while (grid.length > 0 && (grid.at(-1) ?? []).every((cell) => cell === null)) grid.pop();
-				return sheet(
+				const parsed = sheet(
 					one.name,
 					grid,
 					(one.mergedCells ?? []).map((m) => ({
@@ -128,6 +128,7 @@ export const workbook = (path: string, images: Images) =>
 					})),
 					anchored?.get(one.name) ?? []
 				);
+				return one.visibility === 'hidden' || one.visibility === 'very-hidden' ? { ...parsed, hidden: true as const } : parsed;
 			});
 		return { sheets } satisfies Sheets;
 	});

@@ -1104,7 +1104,7 @@ export const IdentityLive = Layer.effect(
 								);
 							const graph = teams(manifest);
 							const same =
-								(now.actor.teams[0] ?? null) === (was.teams.find((t) => Object.hasOwn(graph, t)) ?? null) &&
+								JSON.stringify(now.actor.teams) === JSON.stringify(manifest.workspace.memberships ? was.teams : was.teams.filter(t => Object.hasOwn(graph, t))) &&
 								now.admin === holder.admin &&
 								now.actor.external === was.external &&
 								now.actor.party?.model === was.party?.model &&

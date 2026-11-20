@@ -372,9 +372,14 @@ export const LiveHubLive = Layer.effect(
 			// a connection whose principal changed (revoked, deactivated, moved team, signed out) ends before this commit
 			// reaches it: the client reconnects, and its session is judged again. A member's own name or preferences move
 			// the row's revision but not what their session is judged on, so their stream stays.
+			const b = yield* bindings;
+			const memberships = manifest.workspace.memberships;
+			const roleChange = memberships?.bundles !== undefined && batch.some(({ captured }) => captured.model === memberships.bundles?.levels);
 			const changed = new Set(
 				batch.flatMap(({ captured: c }) =>
-					c.model === 'sys_session' && c.op === 'delete' && typeof c.old?.['user'] === 'string'
+					memberships !== undefined && (c.model === memberships.model || c.model === memberships.bundles?.assignments)
+						? [c.old?.['member'], c.new?.['member']].filter((id): id is string => typeof id === 'string').map(id => 'member:' + id)
+						: c.model === 'sys_session' && c.op === 'delete' && typeof c.old?.['user'] === 'string'
 						? [`member:${c.old['user']}`]
 						: c.model === 'sys_user' &&
 							  PRINCIPAL.some(
@@ -386,9 +391,11 @@ export const LiveHubLive = Layer.effect(
 								: []
 				)
 			);
-			if (changed.size > 0)
-				for (const conn of [...conns.values()])
-					if (changed.has(actor_ref(conn.authority.actor))) yield* disconnect(conn.id);
+			for (const conn of [...conns.values()]) {
+				const day = conn.authority.membershipDay;
+				if (changed.has(actor_ref(conn.authority.actor)) || (day !== undefined && (roleChange || day !== b.today)))
+					yield* disconnect(conn.id, true);
+			}
 			type Work = { view: View; captured: typeof batch };
 			const interested = new Map<Conn, Map<View, Work>>();
 			const work = (conn: Conn, view: View): Work => {
@@ -409,7 +416,6 @@ export const LiveHubLive = Layer.effect(
 							version > after ? patch.arrivals(view.plan, captured) : []
 						);
 			};
-			const b = yield* bindings;
 			let hit = 0,
 				patched = 0;
 			const fallback = new Set<View>();
@@ -620,6 +626,10 @@ export const LiveHubLive = Layer.effect(
 					return yield* Effect.fail(
 						BoltError.make('not_found', 'admission', 'the live connection is gone')
 					);
+				if (conn.authority.membershipDay !== undefined && conn.authority.membershipDay !== (yield* bindings).today) {
+					yield* disconnect(connId, true);
+					return yield* Effect.fail(BoltError.make('not_found', 'admission', 'the live connection is gone'));
+				}
 				const plan = yield* compiler.compile(view.read, conn.authority);
 				if (!conn.views.has(id) && conn.views.size >= LIVE.perConnection)
 					return yield* Effect.fail(

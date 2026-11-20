@@ -56,7 +56,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - Effectful bodies are `function*` and `yield*` their `ctx` Effects.
 - Exact decimal calculations use Effect `BigDecimal`; stored decimal values are strings, never binary floating-point approximations.
 - Named constraints take arrays for `unique` and `per`. Mark one unique constraint `import_key: true` for matching imports. Computed expressions live on fields; physical and search indexes live under `indexes`.
-- Each create/update transform and per-verb effect receives `{ before, set, after, changed }` changes. Return sets or `{ sets, with, on_approved }` from create/update transforms; a delete transform returns nothing or `{ with, on_approved }`. Effects receive approval lifecycle details in `ctx.event`.
+- Each create/update transform and per-verb effect receives `{ before, set, after, changed }` changes. Create/update transforms return sets or `{ sets, with, on_approved }` with one set per input in order, including approval replay. Preserve unchanged sets with `changes.map(({ set }) => set)`; a delete transform returns nothing or `{ with, on_approved }`. Effects receive approval lifecycle details in `ctx.event`.
 - Commit related writes through one `ctx.act({ '<model>.<verb>': inputs })` map. Update/delete targets carry selected rows and their revisions. There are no `many`, `checked`, upsert or transaction alternatives.
 - `seed/test/assets.json` and `seed/public/assets.json` are the reserved asset list: never name seed rows that, even for a model called assets.
 - Migrations are generated. Edit one only to move data: the schema must arrive at what the models declare. Never edit `.norbital/`.
@@ -66,7 +66,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 Detail: the `authoring-tenant-workspace` skill indexes every reference.
 
 - A test sets no `timeout` option and never waits on the wall clock: the test lint refuses the run even when every case passes.
-- Porting a system: `reference` its repository first, then read its schema, routes, jobs and permissions with `read_file` (a script over `tool('read_file', …)` reads many at once). Inventory every capability, map each to a Bolt mechanism, build from that, never from memory of the product. Import and export carry over as a file sync per model that had them.
+- Porting a system: use the supplied archive or `reference` its repository once, then trace its routes, forms, rules, jobs and tests. With `run_js`, filter batched `read_file` results inside the script. Return paths, domain keys and short excerpts for the current journey. Count distinct records or keys in code; a search excerpt counts matching lines. Apply related edits as one workspace_patch, using the current text for context. Record the wider inventory once and map each capability to Bolt. When a record names its approver, test another member of that team is denied. Import and export carry over as a file sync per model that had them.
 
 ## Messaging and envoys
 

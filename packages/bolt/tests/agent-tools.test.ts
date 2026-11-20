@@ -1283,7 +1283,8 @@ describe('working-source tools', () => {
 				expect(yield* grep({ pattern: 'bolt', include: '*.{ts,svelte}' })).toContain('src/a.ts');
 				expect(yield* grep({ pattern: 'nothing here at all' })).toBe('No matches found');
 				const cut = yield* grep({ pattern: '.', limit: 1 });
-				expect(cut).toContain('Found 1 matches');
+				expect(cut).toContain('Showing 1 matching lines (more exist)');
+				expect(yield* result(x, 'workspace_grep', { pattern: 'bolt', count: true, limit: 1 })).toMatchObject({ result: { matchingLines: 2, matchingFiles: 2 } });
 				expect(cut).toContain('(Results are truncated: showing first 1 results.');
 				expect(yield* grep({ pattern: 'bolt.read', literal: true, path: '.' })).toContain(
 					'src/a.ts:'
@@ -2963,6 +2964,15 @@ describe('wait', () => {
 			});
 		})
 	);
+	it.effect('surfaces a failed background operation and preserves its job identity', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			const job = yield* x.jobs.add('workspace_diagnose', Effect.succeed({ error: 'check timed out' }));
+			expect(yield* result(x, 'wait', { jobs: [job] })).toMatchObject({
+				result: { error: 'check timed out', settled: { job, result: { error: 'check timed out' } } }
+			});
+		})
+	);
 	it.effect('says there is nothing to wait for instead of answering as if the time passed', () =>
 		Effect.gen(function* () {
 			const x = yield* ctx(),
@@ -3160,6 +3170,25 @@ describe('run_js', () => {
 				result: {
 					answer: { path: 'tests/a.test.ts', content: text, lines: 4, same: text }
 				}
+			});
+		})
+	);
+	it.live('a scripted read honors an explicit page and can list a source directory', () =>
+		Effect.gen(function* () {
+			const draft: WorkspacePort = {
+				files: async () => ['src/example.ts'],
+				read: async (path) => (path === 'src/example.ts' ? 'first\r\nsecond\nthird\n' : null)
+			};
+			const x = yield* ctx({ draft, authority: member({ admin: true }) });
+			const code = "return await tool('workspace_read', input)";
+			expect(yield* run(x, { code, input: { path: 'src/example.ts' } })).toMatchObject({
+				result: { answer: { lines: 3, content: 'first\r\nsecond\nthird\n' } }
+			});
+			expect(yield* run(x, { code, input: { path: 'src/example.ts', offset: 2, limit: 1 } })).toEqual({
+				result: { answer: 'Read file src/example.ts, lines 2-2\n2: second\n[Output truncated. Continue reading with offset: 3]' }
+			});
+			expect(yield* run(x, { code, input: { path: 'src' } })).toEqual({
+				result: { answer: 'Read directory src, entries 1-1\nexample.ts' }
 			});
 		})
 	);
@@ -3486,6 +3515,35 @@ describe('run_js over a repository reference', () => {
 			});
 			expect(yield* listing({ id: `${NAME}/src/lib/`, text: 'a + b' })).toMatchObject({
 				result: 'src/lib/add.js:1: module.exports.add = (a, b) => a + b;'
+			});
+			// Searching a second page advances by matching lines, even when one line contains the term twice.
+			expect(yield* listing({ id: NAME, path: 'src/main.js', text: 'add', limit: 1 })).toMatchObject({
+				result: expect.stringContaining('Continue with offset: 2')
+			});
+			expect(yield* listing({ id: NAME, path: 'src/main.js', text: 'add', offset: 2 })).toMatchObject({
+				result: expect.stringMatching(/^src\/main\.js:2: console\.log/)
+			});
+			// Attachments and repository references share the id + path form.
+			for (const id of [NAME, first(kept.result.settled.result.files).id]) {
+				expect(yield* listing({ id, path: 'src/main.js', text: 'console.log' })).toMatchObject({
+					result: expect.stringMatching(/^src\/main\.js:2: console\.log/)
+				});
+				expect(yield* listing({ id, path: 'absent.txt' })).toEqual({
+					result: { error: `${NAME} has no file 'absent.txt'.` }
+				});
+			}
+			// The same paging and filtering controls apply to a repository's folders and individual files.
+			expect(yield* listing({ id: NAME, limit: 1 })).toMatchObject({
+				result: expect.stringContaining('Continue reading with offset: 2')
+			});
+			expect(yield* listing({ id: NAME, offset: 2, limit: 1 })).toMatchObject({
+				result: expect.not.stringContaining('src/main.js')
+			});
+			expect(yield* listing({ id: `${NAME}/src/main.js`, text: 'console.log' })).toMatchObject({
+				result: expect.stringMatching(/^src\/main\.js:2: console\.log/)
+			});
+			expect(yield* listing({ id: `${NAME}/src/main.js`, text: 'missing' })).toMatchObject({
+				result: `Nothing in ${NAME}/src/main.js holds 'missing'.`
 			});
 			expect(yield* listing({ id: `${NAME}/tests` })).toEqual({
 				result: { error: `${NAME} has no file 'tests'.` }

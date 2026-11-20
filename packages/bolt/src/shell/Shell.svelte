@@ -61,7 +61,7 @@
 		command_center_tabs,
 		is_open_route,
 		logical,
-		nav_apps,
+		has_nav_page, nav_apps,
 		navigation_paths,
 		page_chunk_key,
 		preview_route,
@@ -72,7 +72,7 @@
 	} from './nav.ts';
 	import { chosenLocale, framework_text, setLocale, workspace_text } from './i18n.ts';
 	import type { SyncStatus } from '../page/bolt.ts';
-	import { active_app, media, navigation_model, NORBIUS } from './model.ts';
+	import { active_app, media, navigation_model, workspace_landing, NORBIUS } from './model.ts';
 	import { applyTheme, storedTheme, storeTheme, type Theme } from './theme.ts';
 	import {
 		agent_panel,
@@ -716,7 +716,7 @@
 		bolt === null ||
 			(current.kind === 'page' &&
 				boot?.visitor === null &&
-				!nav_apps(boot.nav).includes(current.app))
+				!has_nav_page(viewerBoot?.nav ?? [], current.app, current.page))
 			? null
 			: page_chunk_key(current)
 	);
@@ -975,12 +975,18 @@
 
 {#snippet content()}
 	{#if current.kind === 'home' && model !== null}
-		<Home
-			{model}
-			{t}
-			on_navigate={navigate}
-			on_ask={boot?.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
-		/>
+		{@const landing = viewerBoot?.actor?.kind === 'member' && !viewerBoot.actor.external
+			? workspace_landing(model, config.manifest.workspace.landing, viewerBoot.admin) : null}
+		{#if landing !== null}
+			<span hidden {@attach () => navigate(landing + url.search + url.hash, true)}></span>
+		{:else}
+			<Home
+				{model}
+				{t}
+				on_navigate={navigate}
+				on_ask={boot?.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
+			/>
+		{/if}
 	{:else if current.kind === 'page' || current.kind === 'kiosk'}
 		<!-- the open app's banner and its pages as tabs; on a phone the shell's top bar carries the banner, except a visitor's -->
 		{#if hero !== null && (!narrow.current || boot?.visitor !== null)}

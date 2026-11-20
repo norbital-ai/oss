@@ -10,7 +10,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 - A root reads one output (`output`, `default` when absent) that a held policy must grant.
 - A native view given a model name (`Table`, `Board`, `Map`, `RecordShell`, their counts and pickers) reads the caller's view output: `default` when held, else the first named output they hold. A page's own `ctx.query` names its output.
 - A layer takes `where`, `fields`, `order_by`, `limit`, `search`, `aggregate`. Only a root takes `output`, `after`, `as_of`.
-- A named ref layer replaces its FK with the row or null; a many-layer is its rows.
+- Selecting a ref in `fields` returns its ID. Selecting `customer: { fields: ['name'] }` returns the customer row or null in its place. A named many-layer returns its rows. Automation `rows` inputs contain the default output’s root fields, including ref IDs. Read related records explicitly when the workflow needs them.
 - The answer maps each root to `{ rows, next, total }`. `total` counts every match in the same statement, linear in the match. An index search root and a nested many-layer carry none: use `aggregate` on that layer.
 - A user filter composes with the policy per key (`where` AND, `limit` capped); nothing widens it.
 - A policy filters an output's rows with `where`, and a layer's with `<relation>: { where }`. Own rows: `outputs: { default: { where: { created_by: { eq: { var: 'actor.id' } } } } }`. An output grant's keys are `where`, root `history` and the model's relations; nothing else (no `scope`).
@@ -69,7 +69,7 @@ A remote sync's pages write as its `policies`; a file's rows as the member impor
 
 ## Revisions
 
-An update or delete names its selected row as `target`; its revision guards the write even after external work. There is no separate observed-revision map. An act yields `committed` or `pending_approval`; refusals, conflicts and uncertain writes are typed failures. A pending create or update is written and held; a pending delete leaves its rows until approval deletes them.
+For an audited model, select `revision` in the read that supplies an update or delete target. For example, `fields: ['status', 'revision']` returns the ID, status and observed revision. An update takes `{target: row, set}`, and a root delete takes `{target: row}`. Bolt checks the revision again when writing. There is no separate observed-revision map. An act yields `committed` or `pending_approval`; refusals, conflicts and uncertain writes are typed failures. A pending create or update is written and held; a pending delete leaves its rows until approval deletes them.
 
 ## Aggregates
 

@@ -21,7 +21,7 @@ import type { Authority, RowData } from '../contracts.ts';
  */
 export type As = typeof AsSchema.Type;
 
-/** `verdicts` counts verifier passes: an executed plan is verified once. */
+/** `verdicts` counts verifier passes: the first incomplete pass may request one correction and one recheck. */
 export type Plan = Types.Mutable<typeof PlanSchema.Type>;
 const PlanSchema = Schema.Struct({
 	revision: Schema.Number,

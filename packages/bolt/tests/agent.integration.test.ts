@@ -2618,7 +2618,7 @@ describe('a conversation keeps its prefix, its steps and its verifier bounded', 
 		}))
 	);
 	it.live(
-		"an executed plan is verified once, on the step's own prefix; an incomplete verdict sends it back once",
+		"an executed plan receives one correction and a final verdict on the corrected work",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -2626,7 +2626,8 @@ describe('a conversation keeps its prefix, its steps and its verifier bounded', 
 					ai.arm([
 						say('Done.'),
 						say('{"complete":false,"gaps":["No test was added."]}'),
-						say('Added the test.')
+						say('Added the test.'),
+						say('{"complete":false,"gaps":["No test output was supplied."]}')
 					]);
 					const { t, agent, user, context } = yield* build(ai);
 					return yield* Effect.gen(function* () {
@@ -2638,15 +2639,15 @@ describe('a conversation keeps its prefix, its steps and its verifier bounded', 
 				});
 						yield* agent.post({ conversation: c, as: { member: ann }, text: 'Execute the plan.' });
 						yield* agent.drain(c);
-						// the turn, one verifier pass, the work it sent back: never a second verifier pass
-						expect(ai.requests).toHaveLength(3);
+						// A second failed verdict is retained without scheduling another correction.
+						expect(ai.requests).toHaveLength(4);
 						const [step, verifier] = [required(ai.requests[0]), required(ai.requests[1])];
 						expect(verifier.system).toBe(step.system);
 						expect(verifier.tools).toEqual(step.tools);
 						expect(String(verifier.messages.at(-1)?.content)).toMatch(/^Verify the plan below/);
 						expect((yield* agent.conversation(c)).plan).toMatchObject({
 							status: 'active',
-							verdicts: 1
+							verdicts: 2
 						});
 					}).pipe(Effect.provide(context));
 				})

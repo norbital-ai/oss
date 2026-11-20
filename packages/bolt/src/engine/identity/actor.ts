@@ -1,5 +1,7 @@
 // Actor resolution: membership chooses an authored team handle; its policies and hierarchy come from source.
 // Descendants scope teamTree without inheriting grants. Static actors hold their declared policies.
+import { bindingsAt } from '../query/reader.ts';
+import { memberTeams } from './teams.ts';
 import { sql } from '../db/sql.ts';
 import type { SourceTeam } from '../../decl/access/team.ts';
 import { compile_authority, type Holder } from '../access/authority.ts';
@@ -28,6 +30,8 @@ const UserSchema = Schema.Struct({
 	active: Schema.Boolean,
 	admin: Schema.Boolean,
 	team: Schema.NullOr(Schema.String),
+	granted_teams: Schema.optionalKey(Schema.Array(Schema.String)),
+	granted_on: Schema.optionalKey(Schema.String),
 	party: Schema.NullOr(
 		Schema.Struct({
 			model: Schema.String,
@@ -143,12 +147,14 @@ export class Authorities {
 				const now = yield* Clock.currentTimeMillis,
 					stamp = db.identityWrites(),
 					held = this.rows.get(userId);
-				if (held !== undefined && held.stamp === stamp && now - held.at < SESSION_MEMO_MS) return held.row;
+				if (this.m.workspace.memberships === undefined && held !== undefined && held.stamp === stamp && now - held.at < SESSION_MEMO_MS) return held.row;
 				this.rows.delete(userId);
 				const [users] = yield* db.read([
 					sql(
-						'SELECT id, email, phone, kind, active, admin, team, party, signup, revision FROM sys_user WHERE id = $1',
-						userId
+						`SELECT u.id, u.email, u.phone, u.kind, u.active, u.admin, u.team, u.party, u.signup, u.revision
+						 ${this.m.workspace.memberships === undefined ? '' : ', ' + memberTeams(this.m.workspace, '$2') + ' AS granted_teams'}
+						 FROM sys_user u WHERE u.id = $1`,
+						userId, ...(this.m.workspace.memberships === undefined ? [] : [new Date(now).toISOString()])
 					)
 				]);
 				if (users === undefined)
@@ -162,8 +168,8 @@ export class Authorities {
 				if (held !== undefined && (held.row.revision !== found.revision || !found.active)) this.rows.clear();
 				// an anonymous user is a visitor's identity (a cookie, never a session): it is no member
 				if (!found.active || found.kind === 'anonymous') return null;
-				const u = yield* this.bind(db, publication, found);
-				if (this.remember && !this.matched(u)) {
+				const u = yield* this.bind(db, publication, found.granted_teams === undefined ? found : { ...found, granted_on: bindingsAt(now, this.m.workspace.tz).today });
+				if (this.remember && this.m.workspace.memberships === undefined && !this.matched(u)) {
 					this.rows.set(userId, { row: u, stamp, at: now });
 					if (this.rows.size > this.max) {
 						const oldest = this.rows.keys().next();
@@ -184,34 +190,35 @@ export class Authorities {
 				const u = yield* this.row(db, publication, userId);
 				if (u === null) return null;
 				const graph = teams(this.m),
-					team = u.team !== null && Object.hasOwn(graph, u.team) ? u.team : null;
+					direct = (u.granted_teams ?? (u.team === null ? [] : [u.team])).filter(team => Object.hasOwn(graph, team));
 				const actor: EngineActor = {
 					kind: 'member',
 					id: u.id,
 					email: u.email,
 					phone: u.phone,
 					external: u.kind === 'external',
-					teams: team === null ? [] : [team],
-					team_path: team === null ? [] : path(graph, team),
+					teams: direct,
+					team_path: direct.flatMap(team => path(graph, team)),
 					// an administrator has the workspace's full authority; a preview clears it
 					admin: !preview && u.admin && u.kind === 'staff',
 					party: u.party === null ? null : { model: u.party.model, id: u.party.id }
 				};
 				const policies = [
 					...new Set([
-						...(team === null ? [] : (graph[team]?.policies ?? [])),
+						...direct.flatMap(team => graph[team]?.policies ?? []),
 						...(u.signup ? (signup_of(this.m)?.policies ?? []) : [])
 					])
 				];
-				return yield* this.compile(
+				const compiled = yield* this.compile(
 					{
 						actor,
 						admin: actor.admin,
 						policies,
-						teamTree: team === null ? [] : closure(graph, team)
+						teamTree: [...new Set(direct.flatMap(team => closure(graph, team)))]
 					},
-					`${preview ? 'preview' : 'member'}:${u.id}:${u.revision}`
+					`${preview ? 'preview' : 'member'}:${u.id}:${u.revision}${u.granted_teams === undefined ? '' : ':' + JSON.stringify(direct)}`
 				);
+				return u.granted_on === undefined ? compiled : { ...compiled, membershipDay: u.granted_on };
 			}.bind(this)
 		);
 	}

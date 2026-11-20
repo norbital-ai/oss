@@ -452,7 +452,7 @@ export type Transcript = {
 };
 /**
  * `ctx.convert.ingest`'s answer; `images` only when `for` stored them. A `document` is HTML with its index (audio adds
- * its `transcript`); `data` (a spreadsheet, CSV, JSON) is `{ sheets: [{ name, columns, rows, merges?, images? }] }`, or a
+ * its `transcript`); `data` (a spreadsheet, CSV, JSON) is `{ sheets: [{ name, columns, rows, hidden?, merges?, images? }] }`, or a
  * JSON file's own value.
  */
 export type Ingest =

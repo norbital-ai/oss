@@ -50,6 +50,27 @@ export type NavNode =
 export const nav_apps = (nodes: readonly NavNode[]): string[] =>
 	nodes.flatMap((node) => (node.kind === 'app' ? [node.name] : nav_apps(node.children)));
 
+type NavigationVisibility = NonNullable<EngineManifest['workspace']['navigation_visibility']>;
+/** Required switches accumulate from the containing app to its page. */
+export const route_keys = (rule: NavigationVisibility, app: string, page: string) =>
+	[...(rule.apps?.[app] ?? []), ...(rule.pages?.[`${app}/${page}`] ?? [])];
+
+export function visible_navigation(nodes: readonly NavNode[], rule: NavigationVisibility, visible: ReadonlySet<string>): NavNode[] {
+	return nodes.flatMap((node): NavNode[] => {
+		if (node.kind === 'group') {
+			const children = visible_navigation(node.children, rule, visible);
+			const first = children[0];
+			return first ? [{ ...node, children, href: children.some(c => c.href === node.href) ? node.href : first.href }] : [];
+		}
+		const pages = node.pages.filter(p => route_keys(rule, node.name, p.name).every(key => visible.has(key)));
+		const first = pages[0];
+		return first ? [{ ...node, pages, href: first.href }] : [];
+	});
+}
+export const has_nav_page = (nodes: readonly NavNode[], app: string, page: string): boolean =>
+	nodes.some(node => node.kind === 'group' ? has_nav_page(node.children, app, page) :
+		node.name === app && node.pages.some(p => p.name === page));
+
 /** Exact workspace pages the in-app assistant may request; never URLs, API routes or sign-in actions. */
 export function navigation_paths(nodes: readonly NavNode[], admin: boolean): string[] {
 	const pages = (items: readonly NavNode[]): string[] =>

@@ -168,6 +168,31 @@ const byId = (id: string) => expect.objectContaining({
 });
 
 describe('engine/live connection recovery', () => {
+	it.effect('drops live membership reads before routing revocations and after the local expiry day', () =>
+		Effect.gen(function* () {
+			const source = { ...manifest, workspace: { ...manifest.workspace, tz: 'Asia/Singapore', memberships: {
+				model: 'grants', teams: ['rep'], bundles: { assignments: 'role_members', levels: 'role_levels' }
+			} } };
+			yield* TestClock.setTime(Date.parse('2026-11-20T15:59:59Z'));
+			const hub = yield* makeHub(() => Effect.succeed([]), source);
+			const holder = { ...rep, membershipDay: '2026-11-20' };
+			for (const mutation of [
+				cap({ id: 'g1', member: 'u1' }, null, 'grants'),
+				cap({ id: 'g2', member: 'u1' }, null, 'role_members'),
+				cap({ id: 'l1' }, null, 'role_levels')
+			]) {
+				const c = yield* connection(hub, holder, []);
+				hub.publish([mutation, cap(null, order())]);
+				yield* hub.settled;
+				expect(yield* hub.authorityOf(c.id)).toMatchObject({ _tag: 'None' });
+			}
+			const midnight = yield* connection(hub, holder, []);
+			yield* TestClock.adjust('1 second');
+			hub.publish([cap(null, order())]);
+			yield* hub.settled;
+			expect(yield* hub.authorityOf(midnight.id)).toMatchObject({ _tag: 'None' });
+		})
+	);
 	it.effect('disconnects a slow consumer whose frame queue fills', () =>
 		Effect.gen(function* () {
 			const hub = yield* makeHub(() => Effect.succeed([]));

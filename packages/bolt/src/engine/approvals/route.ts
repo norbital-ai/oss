@@ -25,9 +25,9 @@ export type Request = {
 	route: Snapshot;
 };
 
-/** A member's own team (`teams[0]`): eligibility never walks the team tree; static identities have none. */
+/** A member's direct teams: eligibility never walks the team tree; static identities have none. */
 const member = (a: EngineActor) =>
-	a.kind === 'member' ? { id: a.id, team: a.teams[0] } : undefined;
+	a.kind === 'member' ? { id: a.id, teams: a.teams } : undefined;
 const requested_by = (r: Request, id: string): boolean =>
 	r.requestor === `member:${id}` || r.user === id;
 /** The requester cannot review their own request, including through a member preview or an override. */
@@ -46,7 +46,7 @@ export const canApprove = (r: Request, auth: Authority): boolean => {
 	return (
 		step !== undefined &&
 		m !== undefined &&
-		((m.team !== undefined && step.teams.includes(m.team)) || step.users.includes(m.id))
+		(m.teams.some(team => step.teams.includes(team)) || step.users.includes(m.id))
 	);
 };
 /** An administrator or a member of a `supersededBy` team decides in any step's place. */
@@ -54,7 +54,7 @@ export const canSupersede = (r: Request, auth: Authority): boolean => {
 	const m = reviewer(r, auth);
 	return (
 		m !== undefined &&
-		(auth.admin || (m.team !== undefined && r.route.superseded_by.includes(m.team)))
+		(auth.admin || m.teams.some(team => r.route.superseded_by.includes(team)))
 	);
 };
 /** The caller's roles on a request (machine.ts): the current step's approver, the requester, a superseder. */

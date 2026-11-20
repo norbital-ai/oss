@@ -3,7 +3,7 @@ export type Value = string | number | boolean | null;
 export type Merge = { row: number; col: number; rows: number; cols: number };
 /** A picture drawn on the sheet: its image file, anchored at its top-left cell (indexed like `rows`). */
 export type Anchor = { name: string; row: number; col: number };
-export type Sheet = { name: string; columns: string[]; rows: Value[][]; merges?: Merge[]; images?: Anchor[] };
+export type Sheet = { name: string; columns: string[]; rows: Value[][]; hidden?: true; merges?: Merge[]; images?: Anchor[] };
 export type Sheets = { sheets: Sheet[] };
 
 /** A, B, … Z, AA, AB, … */

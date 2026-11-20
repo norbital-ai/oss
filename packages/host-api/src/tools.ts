@@ -130,6 +130,8 @@ export type SearchRequest = {
 	readonly files?: boolean;
 	readonly literal?: boolean;
 	readonly case_sensitive?: boolean;
+	/** Count all matching lines and files without returning excerpts. */
+	readonly count?: boolean;
 	readonly limit?: number;
 };
 /** A `workspace_grep` answer: its hits in path order and whether the limit cut them, or why it failed. */
@@ -141,6 +143,7 @@ export type SearchAnswer =
 				readonly text: string;
 			}[];
 			readonly truncated: boolean;
+		readonly counts?: { readonly lines: number; readonly files: number };
 	  }
 	| { readonly error: string };
 /** A workspace's source files: the released tree, or an author's working tree. */

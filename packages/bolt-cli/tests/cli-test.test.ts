@@ -6,10 +6,15 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync
 } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { dirname, join } from 'node:path';
 import { expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -62,3 +67,41 @@ it.live('bolt test generates the fresh checkout config before loading Vitest', (
 		).toHaveProperty('compilerOptions');
 	}).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
 );
+
+it('parallel checkouts with shared dependencies use separate Vitest module caches', async () => {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), 'bolt-shared-deps-')));
+	try {
+		const shared = join(dir, 'deps');
+		mkdirSync(shared);
+		const vitest = dirname(createRequire(import.meta.url).resolve('vitest/package.json'));
+		symlinkSync(vitest, join(shared, 'vitest'), 'dir');
+		const cli = fileURLToPath(new URL('../src/cli/main.ts', import.meta.url));
+		const runs = ['one', 'two'].map(async (name) => {
+			const root = join(dir, name);
+			mkdirSync(root);
+			symlinkSync(shared, join(root, 'node_modules'), 'dir');
+			writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module' }));
+			// Record the effective cache path after the real runner applies the workspace plugins.
+			writeFileSync(
+				join(root, 'vitest.config.mjs'),
+				`
+				import { writeFileSync } from 'node:fs';
+				export default { plugins: [{
+					name: 'record-cache',
+					configResolved(config) { writeFileSync('cache-path', config.test.fsModuleCachePath); }
+				}] };
+			`
+			);
+			await promisify(execFile)(process.execPath, [cli, 'test', root, '--maxWorkers=1'], {
+				cwd: root
+			});
+			expect(readFileSync(join(root, 'cache-path'), 'utf8')).toBe(
+				join(root, '.norbital', 'cache', 'vitest')
+			);
+		});
+		const settled = await Promise.allSettled(runs);
+		for (const run of settled) if (run.status === 'rejected') throw run.reason;
+	} finally {
+		rmSync(dir, { force: true, recursive: true });
+	}
+});

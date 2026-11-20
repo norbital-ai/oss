@@ -1,6 +1,7 @@
 // Effects and automations send notices through ctx.notify. Recipient expansion and attachment preparation
 // belong here; the captured notice writer queues each inbox push and connection delivery with its inserted row.
-import { Effect, Predicate, Schema } from 'effect';
+import { memberTeams } from '../identity/teams.ts';
+import { Clock, Effect, Predicate, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { CONVERT_TARGETS, DbError, type WorkspaceNote } from '@norbital-ai/host-api';
 import { LIMITS, type RowData } from '../contracts.ts';
@@ -254,7 +255,8 @@ export const notice_sends = Effect.fn('Bolt.noticeSends')(function* (
 			JSON.stringify(ids)
 		),
 		sql(
-			`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, u.team, u.signup FROM sys_user u WHERE u.active AND u.kind = 'staff'`
+			`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, ${memberTeams(m.workspace, '$1')} AS teams, u.signup FROM sys_user u WHERE u.active AND u.kind = 'staff'`,
+			...(m.workspace.memberships === undefined ? [] : [new Date(yield* Clock.currentTimeMillis).toISOString()])
 		)
 	]);
 	if (notes === undefined || users === undefined)
@@ -267,7 +269,7 @@ export const notice_sends = Effect.fn('Bolt.noticeSends')(function* (
 	const recipients = yield* decodeRows(Schema.Struct({
 		id: Schema.String, email: Schema.NullOr(Schema.String), phone: Schema.NullOr(Schema.String),
 		telegram: Schema.NullOr(Schema.String), slack: Schema.NullOr(Schema.String), discord: Schema.NullOr(Schema.String),
-		team: Schema.NullOr(Schema.String), signup: Schema.Boolean
+		teams: Schema.Array(Schema.String), signup: Schema.Boolean
 	}), users);
 	const sends: { readonly slot: string; readonly message: RowData; readonly id: string }[] = [];
 	let skipped = 0;
@@ -288,12 +290,9 @@ export const notice_sends = Effect.fn('Bolt.noticeSends')(function* (
 				(r) =>
 					r['user'] === u['id'] ||
 					(typeof r['team'] === 'string' &&
-						typeof u['team'] === 'string' &&
-						r['team'] === u['team'] &&
-						Object.hasOwn(teamPolicies, u['team'])) ||
+						u.teams.includes(r['team']) && Object.hasOwn(teamPolicies, r['team'])) ||
 					(typeof r['policy'] === 'string' &&
-						((typeof u['team'] === 'string' &&
-							(teamPolicies[u['team']]?.policies ?? []).includes(r['policy'])) ||
+						(u.teams.some(team => (teamPolicies[team]?.policies ?? []).includes(String(r['policy']))) ||
 							(u['signup'] === true && signupPolicies.includes(r['policy']))))
 			)
 		);

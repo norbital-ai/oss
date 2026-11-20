@@ -313,9 +313,10 @@ describe('the message queue', () => {
 					schedule: 'finish'
 				});
 				yield* finish;
-				// an incomplete verdict sends the plan back to work once; it is never verified again
+				// Finish-scheduled input waits for verification of the requested correction.
 				expect(p.events.filter((e) => e.startsWith('verdict') || e === 'next task')).toEqual([
 					'verdict: false',
+					'verdict: true',
 					'next task'
 				]);
 			})

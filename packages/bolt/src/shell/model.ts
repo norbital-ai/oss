@@ -86,6 +86,20 @@ function item(n: NavNode, path: string, t: Translate): NavItem {
 		...(pages.length === 0 ? {} : { pages })
 	};
 }
+/** Pick the landing page only from the ordinary apps in the member's authorized navigation. */
+export function workspace_landing(
+	model: NavModel,
+	landing: { readonly app: string; readonly single_app?: true } | undefined,
+	admin: boolean
+): string | null {
+	if (landing === undefined) return null;
+	const leaves = (items: readonly NavItem[]): NavItem[] =>
+		items.flatMap((item) => item.children === undefined ? [item] : leaves(item.children));
+	const apps = leaves(model.sections.find((section) => section.key === 'applications')?.items ?? []);
+	return apps.find((app) => app.key === landing.app)?.href ??
+		(landing.single_app && !admin && apps.length === 1 ? apps[0]?.href ?? null : null);
+}
+
 /** The tree without its portal pages: an app left with none drops, and a group left with no child. */
 function ordinary(n: NavNode): NavNode | null {
 	if (n.kind === 'app') {

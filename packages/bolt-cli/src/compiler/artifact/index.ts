@@ -362,17 +362,17 @@ const NOT_SOURCE = new Set([
 	'.DS_Store',
 	HOST_FILE
 ]);
-/** The template's authored tree without tests and its host file, the source Studio edits, cloned into `out`. */
+/** Studio edits the authored tree and reruns its tests. Its host file stays with the host. */
 export const writeSource = Effect.fn('bolt.writeSource')(function* (root: string, out: string) {
 	const fs = yield* FileSystem.FileSystem;
 	yield* fs.remove(out, { recursive: true, force: true });
 	// entry by entry: `out` lies inside `root` (under `.norbital/`), and cp refuses to copy a tree into itself
 	for (const entry of yield* fs.readDirectory(root))
-		if (!NOT_SOURCE.has(entry) && !TEST.test(entry))
+		if (!NOT_SOURCE.has(entry))
 			yield* cloneTree(
 				join(root, entry),
 				join(out, entry),
-				(file) => !file.endsWith('.DS_Store') && !TEST.test(`${entry}/${file}`)
+				(file) => !file.endsWith('.DS_Store')
 			);
 	return yield* memoTreeHash(out);
 });

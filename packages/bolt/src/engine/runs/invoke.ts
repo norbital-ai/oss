@@ -1,3 +1,5 @@
+import { memberTeams } from '../identity/teams.ts';
+import { Authorities } from '../identity/actor.ts';
 import { actor_ref } from '../access/actor.ts';
 import { runPiece } from './rows.ts';
 // One body execution path for queued attempts and request calls. Only a durable attempt supplies ledger controls.
@@ -178,6 +180,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 	const crypto = yield* Crypto.Crypto;
 	const newId = uuid(crypto);
 	const parking = makeParking();
+	const members = new Authorities(m, activation.release);
 	/**
 	 * A message's or notice's attachments with the run's bytes (`TransientFile`: `{ name, mime, bytes: { $bin } }`) stored
 	 * for `owner`, the delivery: the outbox's own file, never a record's.
@@ -218,6 +221,16 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 		) =>
 			Effect.gen(function* () {
 				const modelEffect = effectOf(m, run.automation);
+				const starter = run.trigger?.kind === 'person' ? run.trigger.actor : undefined;
+				// A queued or resumed workflow may still carry its starter's previous role in the audit snapshot.
+				const checkStarter = Effect.fnUntraced(function* () {
+					if (!m.workspace.memberships || starter?.kind !== 'member') return;
+					const current = yield* members.member(db, live.publish, starter.id);
+					if (current === null || current.actor.kind !== 'member' || (starter.admin && !current.admin) ||
+						!starter.teams.every(team => current.actor.kind === 'member' && current.actor.teams.includes(team)))
+						return yield* BoltError.make('forbidden', 'admission', 'The member’s access changed after this automation was started.');
+				});
+				yield* checkStarter();
 				if (modelEffect !== undefined && job?.event === undefined)
 					return yield* BoltError.make('invalid_input', 'decode', 'The effect run has no decoded event.');
 				// A run's browser tab is its own: closed by this scope on success, failure or interruption.
@@ -676,6 +689,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								return { ok: true, value: null };
 							}
 							case 'act': {
+								yield* checkStarter();
 								const proposed = keyOf('act', 'act', { acts: acts_json(call.acts), outputs: call.outputs });
 								const key = call.options.key ?? proposed;
 								const observedRead = priorReads.snapshot();
@@ -757,10 +771,10 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								const approvers = approval === undefined ? [] : yield* db.rows(Schema.Struct({ id: Schema.String }), {
 									text: `SELECT u.id FROM bolt_approvals a JOIN sys_user u ON
 									(a.route -> 'steps' -> a.step -> 'users' ? u.id OR
-									(a.route -> 'steps' -> a.step -> 'teams' ? u.team AND u.team IN (SELECT jsonb_array_elements_text($2::jsonb))))
+									EXISTS (SELECT 1 FROM unnest(${memberTeams(m.workspace, "$3")}) AS holder(team) WHERE a.route -> 'steps' -> a.step -> 'teams' ? holder.team AND $2::jsonb ? holder.team))
 									WHERE a.id = $1::uuid AND a.state = 'Pending' AND u.active AND u.kind = 'staff'
 									AND a.requestor <> 'member:' || u.id AND a.requestor_user IS DISTINCT FROM u.id`,
-									params: [approval.request, JSON.stringify(Object.keys(m.teams))]
+									params: [approval.request, JSON.stringify(Object.keys(m.teams)), ...(m.workspace.memberships === undefined ? [] : [iso(yield* Clock.currentTimeMillis)])]
 								});
 								const first = approval?.records[0];
 								const bins = call.bins ?? [];
@@ -782,7 +796,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 									chunked(rows).map((chunk) => {
 										const c = new Chain();
 										c.cte('idem', 'SELECT 1 AS active');
-										noticeInsert(c, 'n', chunk, b.now, undefined, m.teams, m.workspace.signup?.policies);
+										noticeInsert(c, 'n', chunk, b.now, undefined, m.teams, m.workspace.signup?.policies, m.workspace);
 										return c;
 									}),
 									Schema.Struct({

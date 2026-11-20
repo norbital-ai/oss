@@ -275,7 +275,7 @@ it.live(
 		}).pipe(Effect.provide(NodeServices.layer))
 );
 it.live(
-	'a release source is copied from inside the workspace it copies, without its builds or tests',
+	'Studio release source retains authored tests and excludes generated builds',
 	() =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
@@ -283,7 +283,8 @@ it.live(
 			const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-release-source-' });
 			for (const [file, text] of Object.entries({
 				'src/+workspace.ts': 'workspace',
-				'src/notes.test.ts': 'test',
+				'src/notes.test.ts': 'colocated test',
+				'tests/flows.test.ts': 'workflow test',
 				'src/.DS_Store': 'finder',
 				'node_modules/x/index.js': 'installed',
 				'.norbital/bundle/manifest.json': 'built'
@@ -296,7 +297,10 @@ it.live(
 			const digest = yield* writeSource(root, out);
 			expect((yield* fs.readDirectory(out, { recursive: true })).toSorted()).toEqual([
 				'src',
-				'src/+workspace.ts'
+				'src/+workspace.ts',
+				'src/notes.test.ts',
+				'tests',
+				'tests/flows.test.ts'
 			]);
 			expect(digest).toBe(yield* tree_hash(out));
 		}).pipe(Effect.provide(NodeServices.layer))

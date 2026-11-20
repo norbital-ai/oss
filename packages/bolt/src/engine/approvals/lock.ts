@@ -50,14 +50,14 @@ const held = (records: string, c: string, id: string) =>
 /** The current step's approvers (`team` among its teams, member `id` among its users) in Pending, the requester in ChangesRequested (alias `a`). */
 const eligible = (team: string, id: string, ref: string) =>
 	`coalesce((a.state = 'Pending' AND a.requestor <> ${ref} AND a.requestor_user IS DISTINCT FROM ${id}::text
-			AND (a.route -> 'steps' -> a.step -> 'teams' ? ${team}::text
+			AND (a.route -> 'steps' -> a.step -> 'teams' ?| ARRAY(SELECT jsonb_array_elements_text(${team}::jsonb))
 			OR a.route -> 'steps' -> a.step -> 'users' ? ${id}::text))
 			OR (a.state = 'ChangesRequested' AND a.requestor = ${ref}), false)`;
 /** The actor's own team and member id, as `eligible` compares them (static identities have neither). */
 const own = (actor: EngineActor) =>
 	actor.kind === 'member'
-		? { team: actor.teams[0] ?? null, id: actor.id }
-		: { team: null, id: null };
+		? { team: actor.teams, id: actor.id }
+		: { team: [], id: null };
 
 /**
  * The lock over `source` (the statement's `allp`): refuse any touched held record the actor may not change, and add the
@@ -163,7 +163,7 @@ export const holders = Effect.fn('Approvals.holders')(function* (
 	CROSS JOIN LATERAL (SELECT jsonb_agg(DISTINCT jsonb_build_array(t.c, t.id)) AS refs FROM jsonb_array_elements(a.records) r
 		JOIN jsonb_to_recordset($1::jsonb) AS t(c text, id text) ON t.c = r ->> 'collection' AND t.id = r ->> 'id') hit
 	WHERE ${open_sql('a.state')} AND hit.refs IS NOT NULL`,
-		params: [JSON.stringify(refs.map(([c, id]) => ({ c, id }))), team, id, actor_ref(actor)]
+		params: [JSON.stringify(refs.map(([c, id]) => ({ c, id }))), JSON.stringify(team), id, actor_ref(actor)]
 	});
 });
 

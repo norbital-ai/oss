@@ -161,6 +161,8 @@ export type LimitRule = { key: string; rate: string; per: 'actor' | 'ip' | 'send
 /** Compiled once per `key` = (actor, affiliation revision, source release). */
 export type Authority = {
 	key: string;
+	/** Last checked workspace day for a member whose supplemental grants may expire at midnight. */
+	membershipDay?: string;
 	actor: EngineActor;
 	admin: boolean;
 	policies: readonly string[];

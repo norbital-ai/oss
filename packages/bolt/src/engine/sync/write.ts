@@ -244,7 +244,7 @@ export function makeDeliver(e: SyncEngine) {
 				body: result.status === 'acked' ? IDENTITY_CONFLICT : result.message, link: { model: r.model, id: r.record },
 				once: `sync:${r.id}`, attachments: []
 			}], now, `EXISTS (SELECT 1 FROM settled WHERE id = ${c.p(r.id)}::uuid
-				${result.status === 'acked' ? "AND status = 'dead'" : ''})`, m.teams, m.workspace.signup?.policies);
+				${result.status === 'acked' ? "AND status = 'dead'" : ''})`, m.teams, m.workspace.signup?.policies, m.workspace);
 		}
 		// Read/ack metadata merges share a snapshot taken after this lock, never the claim's stale map image.
 		const answer = yield* nativeCommit(
@@ -344,7 +344,7 @@ export function makeDeliver(e: SyncEngine) {
 						bindings.now,
 						GATED,
 						m.teams,
-						m.workspace.signup?.policies
+						m.workspace.signup?.policies, m.workspace
 					);
 			}
 		}, { tables: [r.model, 'sys_integration', 'sys_outbox', 'sys_sync_row'].sort(), mode: 'SHARE ROW EXCLUSIVE' });

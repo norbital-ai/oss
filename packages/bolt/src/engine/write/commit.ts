@@ -363,7 +363,7 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		if (x.readGuards?.inconsistent === true) c.assert('false', 'fingerprint');
 	}
 	if (audit !== undefined && first) {
-		c.cte('receipt', auditReceipt(audit, (role, value) => c.shared(role, value)));
+		c.cte('__bolt_audit_receipt', auditReceipt(audit, (role, value) => c.shared(role, value)));
 		if ((audit.acknowledge?.length ?? 0) > 0 && erasures.length === 0)
 			c.cte('acknowledged', `UPDATE bolt_audit_receipt SET acknowledged_at=clock_timestamp()
 	WHERE operation IN (SELECT jsonb_array_elements_text(${c.p(audit.acknowledge ?? [])}::jsonb)) AND acknowledged_at IS NULL AND expired_at IS NULL`);
@@ -608,7 +608,7 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 					)
 		);
 	if (first && x.runs.length > 0) enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
-	if ((x.notices?.length ?? 0) > 0) noticeInsert(c, 'notices', x.notices ?? [], x.now, GATED, m.teams, m.workspace.signup?.policies);
+	if ((x.notices?.length ?? 0) > 0) noticeInsert(c, 'notices', x.notices ?? [], x.now, GATED, m.teams, m.workspace.signup?.policies, m.workspace);
 	if (last) x.pieces?.(c, part === undefined ? 'allp' : c.cte('actp', `SELECT c, id, revision FROM allp UNION ALL SELECT c, id, revision FROM ${PARTS}`)); // hook:syncs
 
 	// in the act's own order (the input's; `records[0]` is what was written), anything else after by model and id; a

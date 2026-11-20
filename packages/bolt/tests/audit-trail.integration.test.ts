@@ -32,11 +32,11 @@ const manifest: EngineManifest = {
 		}
 	}
 };
-const fixture = (port: AuditPort) =>
+const fixture = (port: AuditPort, workspace: EngineManifest = manifest) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
-				manifest,
+				manifest: workspace,
 				ports: audit_from_abi(port).pipe(Layer.provide(NodeCrypto.layer))
 			})
 		);
@@ -77,6 +77,33 @@ it.live('an impersonated write keeps the original admin, effective identity and 
 			preview: { by: 'original-admin', impersonate: true }
 		} });
 	}))
+);
+
+it.live('audited writes can create and update a model named receipt', () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const f = yield* fixture(memory_audit().port, {
+				...manifest,
+				models: { receipt: { description: 'Proof', record_label: 'record.title', fields: { title: { kind: 'text' } } } },
+				relationships: { 'receipt.supports': { to: 'receipt', inverse: 'proofs', optional: true, on_delete: 'set_null' } },
+				exposures: {
+					receipt: {
+						outputs: { default: { receipt: { fields: 'all' } } },
+						create: { columns: { receipt: ['title', 'supports'] } },
+						update: { columns: { receipt: ['title'] } }
+					}
+				}
+			});
+			const member = yield* f.t.as(f.t.admin);
+			const acts = (value: Record<string, import('../src/decl/values.ts').Json>) => value;
+			const created = yield* member.act(acts({ 'receipt.create': [{ title: 'Proof' }] }));
+			const [row] = created.records;
+			if (row === undefined) throw new Error('Expected a committed receipt');
+			expect((yield* member.act(acts({ 'receipt.update': [{
+				target: { id: row.id, revision: row.revision }, set: { title: 'Verified proof' }
+			}] }))).kind).toBe('committed');
+		})
+	)
 );
 
 it.live('durable preparation fails before a governed mutation can write', () =>

@@ -2,7 +2,8 @@
 // outcome, notices and rate charges, the SQLSTATE map (G3), invocation-minted ids and the transform's fingerprints.
 import type { Json } from '../../decl/values.ts';
 import type { TeamEntries } from '../../decl/access/team.ts';
-import { teamEntries } from '../manifest.ts';
+import { memberTeams } from '../identity/teams.ts';
+import { teamEntries, type EngineManifest } from '../manifest.ts';
 import { Effect, Result, Schema } from 'effect';
 import { copiedSql, db_error, DbError, type RawDb, type Sql } from '@norbital-ai/host-api';
 import { LIMITS, type Outcome, type RowData } from '../contracts.ts';
@@ -30,13 +31,15 @@ export const noticeInsert = (
 	now: string,
 	when: string = GATED,
 	teams: TeamEntries = {},
-	signup: readonly string[] = []
+	signup: readonly string[] = [],
+	workspace?: EngineManifest['workspace']
 ): string => {
 	const policies = c.p(
 		Object.fromEntries(
 			Object.entries(teamEntries(teams)).map(([handle, team]) => [handle, team.policies])
 		)
 	);
+	const direct = workspace === undefined ? 'ARRAY[u.team]::text[]' : memberTeams(workspace, c.shared('now', now));
 	return (
 		c.cte(
 			`${name}_source`,
@@ -50,9 +53,9 @@ export const noticeInsert = (
 		v.title, v.body, v.link, v.once || ':' || mem.id AS once, v.attachments
 	FROM ${name}_source v LEFT JOIN LATERAL (SELECT u.id FROM sys_user u
 		WHERE u.active AND u.kind = 'staff' AND EXISTS (SELECT 1 FROM jsonb_array_elements(v."to") r
-			WHERE r->>'user' = u.id OR (r->>'team' = u.team AND ${policies}::jsonb ? u.team)
+			WHERE r->>'user' = u.id OR (r->>'team' = ANY(${direct}) AND ${policies}::jsonb ? (r->>'team'))
 				OR EXISTS (SELECT 1 FROM jsonb_each(${policies}::jsonb) s
-					WHERE s.key = u.team AND s.value ? (r->>'policy'))
+					WHERE s.key = ANY(${direct}) AND s.value ? (r->>'policy'))
 				OR (u.signup AND ${c.p(signup)}::jsonb ? (r->>'policy')))) mem ON true
 	UNION ALL SELECT v.id || ':' || ch, v.id, jsonb_build_object('channel', ch, 'recipients', v."to"), NULL::text,
 		v.title, v.body, v.link, v.once || ':' || ch, v.attachments

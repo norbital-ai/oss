@@ -99,6 +99,11 @@ import { instance_messages } from './integration/messages.ts';
 import { runList, visible_run_names } from '../engine/runs/rows.ts';
 import { outputFiles } from '../engine/runs/output-files.ts';
 import { settings, SettingsOp, applySettings, teamName } from './settings/data.ts';
+import { catalog_of } from '../engine/access/pred.ts';
+import { bindingsAt } from '../engine/query/reader.ts';
+import { request as read_request, type ReadIR } from '../protocol/reads.ts';
+import { Reads } from '../engine/services.ts';
+import { route_keys, visible_navigation } from './nav.ts';
 import { exposure, read_catalog } from '../engine/access/exposure.ts';
 import { client_contract, operation_output_catalog } from '../engine/access/operation-outputs.ts';
 import { manifestItems } from './finder/manifest.ts';
@@ -310,7 +315,8 @@ const bootFor = (
 	manifest: EngineManifest,
 	workspace: ShellBoot['workspace'],
 	authority: Authority,
-	studio = false
+	studio = false,
+	available?: ShellBoot['nav']
 ): Effect.Effect<ShellBoot, BoltError> =>
 	Effect.gen(function* () {
 		return {
@@ -319,7 +325,7 @@ const bootFor = (
 			name: null,
 			admin: authority.admin,
 			preview: null,
-			nav: nav(manifest, authority),
+			nav: available ?? nav(manifest, authority),
 			kiosks: kiosk_nav(manifest, authority),
 			startable: startable_automations(manifest, authority),
 			envoys: {},
@@ -357,6 +363,43 @@ const makeShell = Effect.gen(function* () {
 		logs = yield* Logs,
 		audit = yield* Audit,
 		grants = yield* RenderGrants;
+	const reads = yield* Reads;
+	const visibility = m.workspace.navigation_visibility;
+	const source = visibility ? catalog_of(m) : null;
+	const visibleKeys = Effect.fn('shell.visibleNavigationKeys')(function* (auth: Authority, keys: readonly string[]): Effect.fn.Return<Set<string>,EngineError> {
+		const result = new Set<string>();
+		if (!visibility || !source || !keys.length ||
+			(!auth.admin && !auth.models[visibility.model]?.read[visibility.output])) return result;
+		const {model, output, field} = visibility;
+		const wanted = [...new Set(keys)];
+		const bindings = bindingsAt(yield* Clock.currentTimeMillis, m.workspace.tz);
+		const reply = Schema.Record(Schema.String, Schema.Struct({
+			rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)), next: Schema.NullOr(Schema.String)
+		}));
+		let after: string | null = null;
+		do {
+			const ir: ReadIR = yield* read_request(source, {[model]: {output,fields:[field],
+				where:{[field]:{in:wanted}},limit:100,...(after ? {after} : {})}});
+			const [answer] = yield* reads.run([ir], {as:'caller',authority:auth}, bindings);
+			const decoded: typeof reply.Type = yield* Schema.decodeUnknownEffect(reply)(answer).pipe(
+				Effect.mapError(e=>BoltError.make('internal','decode',e.message))
+			);
+			const group = decoded[model];
+			for(const row of group?.rows ?? []) {
+				const value = row[field];
+				if (typeof value === 'string') result.add(value);
+			}
+			after = group?.next ?? null;
+		} while (after && result.size < wanted.length);
+		return result;
+	});
+	const memberNav = Effect.fn('shell.memberNavigation')(function* (auth: Authority) {
+		const nodes = nav(m, auth);
+		if (!visibility) return nodes;
+		const keys = [...Object.values(visibility.apps ?? {}), ...Object.values(visibility.pages ?? {})].flat();
+		return visible_navigation(nodes, visibility, yield* visibleKeys(auth, keys));
+	});
+
 	const release = (yield* Activation).release;
 	const authorities = new Authorities(m, release, { remember: true });
 	// Run reader columns are immutable. A grant is usable only under the same release and current authority.
@@ -713,7 +756,7 @@ const makeShell = Effect.gen(function* () {
 			if (me !== null) {
 				const kioskAuth = opened.authority;
 				const b = {
-					...(yield* bootFor(m, ws, me.auth, c.studio !== undefined)),
+					...(yield* bootFor(m, ws, me.auth, c.studio !== undefined, visibility ? yield* memberNav(me.auth) : undefined)),
 					name:
 						Option.getOrNull(
 							yield* db.one(Schema.Struct({ name: Schema.NullOr(Schema.String) }), {
@@ -808,7 +851,7 @@ const makeShell = Effect.gen(function* () {
 		const box = s.inbox ? yield* inboxOf(auth, inboxRows) : null;
 		const runtimeEnvoys = envoys === undefined ? [] : yield* activeEnvoysOf(envoys);
 		const b: ShellBoot = {
-			...(yield* bootFor(m, ws, auth, c.studio !== undefined)),
+			...(yield* bootFor(m, ws, auth, c.studio !== undefined, visibility ? yield* memberNav(auth) : undefined)),
 			name: Option.getOrNull(user)?.name ?? null,
 			preview: x.preview,
 			surfaces: s,
@@ -1475,7 +1518,23 @@ const makeShell = Effect.gen(function* () {
 			const x = yield* Effect.cached(caller(request));
 			if (path.startsWith(`${BOLT}/session/`))
 				return Option.fromNullishOr(yield* session(request, path, x));
-			if (!path.startsWith(`${BOLT}/`)) return Option.none();
+			if (!path.startsWith(`${BOLT}/`)) {
+				if (visibility && path.startsWith('/app/') && (request.method === 'GET' || request.method === 'HEAD')) {
+					const target = route(m, requestUrl(request));
+					if (target.kind === 'page') {
+						const keys = route_keys(visibility, target.app, target.page);
+						if (keys.length) {
+							const auth = (yield* x).authority;
+							if (auth?.actor.kind === 'member') {
+								const visible = can_open(m, auth, target.app) ? yield* visibleKeys(auth, keys) : new Set<string>();
+								if (!keys.every(key => visible.has(key)))
+									return Option.some(refused('not_found', 'No such page.', 404));
+							}
+						}
+					}
+				}
+				return Option.none();
+			}
 			const current = yield* Effect.serviceOption(SessionAuthority);
 			const selected = Option.isSome(current)
 				? yield* current.value.of(request)

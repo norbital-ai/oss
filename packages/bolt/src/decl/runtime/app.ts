@@ -2,7 +2,7 @@
 // The path supplies an app or group's name and the compiler checks its child declarations.
 import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
-import type { AppName, ModelName, PolicyName } from '../names.ts';
+import type { AppName, ModelName, PolicyName, TeamName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, NonEmpty, Rate } from '../values.ts';
 import type { ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
@@ -34,6 +34,23 @@ export function secrets<const E extends Record<string, SecretDecl>>(
 ): E {
 	return spec;
 }
+type Memberships<Model extends string, Team extends string> = {
+	model: Model;
+	teams: readonly Team[];
+	staff_team?: Team;
+	groups?: readonly (readonly Team[])[];
+	keep_direct?: readonly Team[];
+	bundles?: { assignments: Model; levels: Model };
+};
+/** Extra requirements for member navigation. A route is visible only when the caller can read
+ * a row for every required key through the named model output. Ordinary model policies govern data. */
+type NavigationVisibility<Model extends string, App extends string> = {
+	model: Model;
+	output: string;
+	field: string;
+	apps?: Partial<Record<App, readonly string[]>>;
+	pages?: Partial<Record<`${App}/${string}`, readonly string[]>>;
+};
 type WorkspaceBase = {
 	/** Shared light/dark token overrides; omitted tokens keep Bolt’s defaults. See `WorkspaceTheme`. */
 	theme?: WorkspaceTheme;
@@ -45,6 +62,9 @@ type WorkspaceBase = {
 	currency?: CurrencyCode;
 	/** App order in the launcher. */
 	apps?: readonly string[];
+	/** On the member home route, open the preferred granted app, or optionally the only granted app of a non-admin. */
+	landing?: { app: string; single_app?: true };
+	navigation_visibility?: NavigationVisibility<string, string>;
 	/**
 	 * Requires AI facilities and declares embedding models. Allowed chat models and monthly USD caps (workspace, default
 	 * member, per policy) are runtime settings in `sys_config` under `agent`, applied at the next step; an empty allowed
@@ -63,6 +83,16 @@ type WorkspaceBase = {
 	agent?: { triage?: false }; // hook:triage
 	/** Who may join without an invitation; absent, only invited members join. */
 	signup?: Signup;
+	/**
+	 * Optional supplementary teams for staff, on a protected workspace model with a member ref to sys_user,
+	 * a team handle and a nullable date until (the last inclusive day in the workspace zone). Only named teams
+	 * contribute policies. Direct member writes are disallowed; an Owner or a guarded automation issues or revokes
+	 * grants. For each ordered group only the highest listed unexpired supplemental team is effective. Levels listed
+	 * in keep_direct are ranked separately for direct and bundle grants. Existing sessions see changes on the next
+	 * request. staff_team gives every staff identity baseline access, including people with no primary team.
+	 * Bundles optionally join assignments (member, role, until) to levels (role, team). Native administrators remain identity-managed.
+	 */
+	memberships?: Memberships<string, string>;
 	/** Rate limits per policy, applied to every caller holding it. */
 	limits?: { readonly [policy: string]: { readonly [key: string]: unknown } };
 };
@@ -105,6 +135,8 @@ type WorkspaceFor = {
 	currency?: CurrencyCode;
 	/** App order in the launcher. */
 	apps?: readonly AppName[];
+	landing?: { app: AppName; single_app?: true };
+	navigation_visibility?: NavigationVisibility<ModelName, AppName>;
 	ai?: { embeddings?: readonly string[] };
 	/** The document formats the converter produces; each is a type-checked target with its own options. */
 	convert?: { to: readonly ConvertTarget[] };
@@ -114,6 +146,7 @@ type WorkspaceFor = {
 	agent?: { triage?: false };
 	/** Self sign-up by a proven email or mobile number; the build checks `party.match` names text fields. */
 	signup?: SignupFor;
+	memberships?: Memberships<ModelName, TeamName>;
 	/**
 	 * Rate limits per policy: what a caller holding that policy may send. Undeclared keys take the defaults (`LimitKey`).
 	 * @example limits: { field_ops_contractor: { act: '600/min', read: '600/min', agent: '100/h' } }

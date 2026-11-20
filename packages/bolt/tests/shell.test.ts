@@ -33,7 +33,7 @@ import {
 } from '../src/shell/nav.ts';
 import { challenge_queue, kiosk_fetch, visitor_fetch, shell_api } from '../src/shell/runtime.ts';
 import { BoltRoutes } from '../src/protocol/http.ts';
-import { active_app, media, navigation_model } from '../src/shell/model.ts';
+import { active_app, media, navigation_model, workspace_landing, type NavModel, type NavItem } from '../src/shell/model.ts';
 import { file_attachments } from '../src/engine/agent/attachments.ts';
 import { decode_manifest, type EngineManifest } from '../src/engine/manifest.ts';
 /** The Node host's image port, as the agent's attachments read through it. */
@@ -776,6 +776,32 @@ describe('exposure (the boot catalog ui reads)', () => {
 				});
 			})
 	);
+});
+
+describe('member workspace landing', () => {
+	const item = (key: string, children?: readonly NavItem[]): NavItem => ({
+		key, href: '/app/' + key, label: key, icon: null, active: false, ...(children ? { children } : {})
+	});
+	const model = (...apps: NavItem[]): NavModel => ({
+		workspace: { handle: null, name: 'Workspace', logo: null, others: [] },
+		user: { name: 'Staff', email: '', role: '' }, utilities: [],
+		sections: [{ key: 'applications', label: 'Applications', items: apps }]
+	});
+	const settings = { app: 'people', single_app: true } as const;
+	const sales = item('sales'), people = item('people');
+	it('uses the granted preferred app even in a group', () => {
+		expect(workspace_landing(model(sales, item('operations', [people])), settings, false)).toBe('/app/people');
+	});
+	it('opens a sole accessible module only for non-admins who have opted in', () => {
+		expect(workspace_landing(model(sales), settings, false)).toBe('/app/sales');
+		expect(workspace_landing(model(sales), settings, true)).toBeNull();
+		expect(workspace_landing(model(sales), { app: 'people' }, false)).toBeNull();
+	});
+	it('retains the launcher if no preference exists or more than one other app is visible', () => {
+		expect(workspace_landing(model(people), undefined, false)).toBeNull();
+		expect(workspace_landing(model(), settings, false)).toBeNull();
+		expect(workspace_landing(model(sales, item('budget')), settings, false)).toBeNull();
+	});
 });
 
 describe('nav tree', () => {

@@ -120,12 +120,13 @@ const local = (html: string, bytes: number, images: Ingested['images'] = []): In
 	images,
 	meta: { stats: { pages: null, bytes, cpuMs: 0, wallMs: 0 } }
 });
+export const sourceLines = (text: string): string[] =>
+	text === '' ? [] : text.replace(/\r?\n$/, '').split(/\r?\n/);
+
 /** Plain text as itself: each line one paragraph, so line n of the HTML is line n of the file. */
 export const textIngest = (bytes: Uint8Array): Ingested =>
 	local(
-		new TextDecoder()
-			.decode(bytes)
-			.split(/\r?\n/)
+		sourceLines(new TextDecoder().decode(bytes))
 			.map((line) => `<p>${esc(line)}</p>`)
 			.join('\n'),
 		bytes.length
@@ -462,7 +463,7 @@ export function window(
 	bytes?: number,
 	format: 'html' | 'text' = 'html'
 ) {
-	const all = format === 'html' ? readable(html.split('\n')) : html.split('\n'),
+	const all = format === 'html' ? readable(html.split('\n')) : sourceLines(html),
 		spans = format === 'html' ? blocks(all) : [],
 		bound = bytes ?? (format === 'html' ? WINDOW_BYTES : 40_000),
 		requested = Math.trunc(to) || all.length,
@@ -502,8 +503,8 @@ export function window(
 	};
 }
 /** The lines holding `text` (case-insensitive), in `workspace_grep`'s line shape: a line inside a table or section names it whole. */
-export function grep(html: string, text: string, limit: number, format: 'html' | 'text' = 'html') {
-	const all = format === 'html' ? readable(html.split('\n')) : html.split('\n'),
+export function grep(html: string, text: string, limit: number, format: 'html' | 'text' = 'html', skip = 0) {
+	const all = format === 'html' ? readable(html.split('\n')) : sourceLines(html),
 		spans = format === 'html' ? blocks(all) : [],
 		// a|b finds either: plain words, so no pattern can run away on a long document
 		wants =
@@ -520,7 +521,9 @@ export function grep(html: string, text: string, limit: number, format: 'html' |
 		const section = format === 'html' ? SECTION.exec(line) : null;
 		if (section?.[1] === 'page') page = Number(section[2]);
 		const lower = line.toLowerCase();
-		if (!wants.some((want) => lower.includes(want)) || ++total > limit) return;
+		if (!wants.some((want) => lower.includes(want))) return;
+		total++;
+		if (total <= skip || total - skip > limit) return;
 		const span = spans[i] ?? [i + 1, i + 1];
 		hits.push({
 			...(page === undefined ? {} : { page }),

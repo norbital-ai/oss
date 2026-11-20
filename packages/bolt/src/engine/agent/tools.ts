@@ -95,6 +95,7 @@ import {
 	entryFiles,
 	flight,
 	grep,
+	sourceLines,
 	imageIngest,
 	imagesIn,
 	INGEST_BYTES,
@@ -583,15 +584,18 @@ const textAnswer = (text: string): ToolAnswer => {
 		? { result: text, bounded: true }
 		: { result: text.slice(0, room), full: text, bounded: true };
 };
-/** A script's source read: the file's raw text, never the model's numbered page, so a read-modify-write keeps every byte. */
-const scriptRead = (source: WorkspacePort, input: unknown) =>
+/** A script gets raw text for an unpaged file edit. Explicit pages and directories use the ordinary reader. */
+const scriptRead = (source: WorkspacePort, input: unknown, page: Effect.Effect<ToolAnswer>) =>
 	Effect.gen(function* () {
-		const asked = Predicate.isObject(input) && typeof input['path'] === 'string' ? input['path'] : '';
-		const path = sourcePath(asked),
+		if (
+			!Predicate.isObject(input) ||
+			typeof input['path'] !== 'string' ||
+			input['offset'] !== undefined ||
+			input['limit'] !== undefined
+		) return yield* page;
+		const path = sourcePath(input['path']),
 			content = path === '' ? null : yield* Port.attempt('workspace.read', () => source.read(path));
-		return content === null
-			? err(`File not found: ${asked}`)
-			: ok({ path, content, lines: content.split('\n').length });
+		return content === null ? yield* page : ok({ path, content, lines: sourceLines(content).length });
 	}).pipe(Effect.catch((failure) => Effect.succeed(err(failure.message))));
 /** OpenCode's `read`, `grep` and `glob` over the workspace's source: the same pages, in the same words. */
 const READ_LINES = 2000;
@@ -620,7 +624,7 @@ const linePage = (
 };
 /** OpenCode's read of a file: numbered lines from `offset` (negative counts from the end; past the end is the tail). */
 const filePage = (path: string, text: string, offset?: number, limit?: number) => {
-	const all = text === '' ? [] : text.replace(/\r?\n$/, '').split(/\r?\n/),
+	const all = sourceLines(text),
 		total = all.length,
 		most = Math.min(limit ?? READ_LINES, READ_LINES),
 		tail = offset !== undefined && offset > total,
@@ -685,7 +689,7 @@ const grepAnswer = (
 	hits: readonly { readonly path: string; readonly line: number; readonly text: string }[],
 	truncated: boolean
 ) => {
-	const lines = [hits.length === 0 ? 'No matches found' : `Found ${hits.length} matches`];
+	const lines = [truncated ? `Showing ${hits.length} matching lines (more exist)` : hits.length === 0 ? 'No matches found' : `Found ${hits.length} matches`];
 	let current = '';
 	for (const hit of hits) {
 		if (current !== hit.path) {
@@ -3086,11 +3090,13 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			});
 		}
 		if (i.text !== undefined && i.text !== '') {
-			const found = grep(text, i.text, 50);
+			const skip = Math.max(0, (i.offset ?? 1) - 1);
+			const found = grep(text, i.text, Math.min(50, Math.max(1, i.limit ?? 50)), 'html', skip);
 			return {
 				result: {
 					output: o,
 					...found,
+					...(skip + found.hits.length < found.total ? { next: skip + found.hits.length + 1 } : {}),
 					...(found.total === 0
 						? { note: `No line of ${o} holds '${i.text}'.` }
 						: found.total > found.hits.length
@@ -3524,15 +3530,16 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 								...(i.path === undefined ? {} : { path: i.path }),
 								...(i.include === undefined ? {} : { include: i.include }),
 								...(i.literal === undefined ? {} : { literal: i.literal }),
+								...(i.count ? { count: true } : {}),
 								...(i.caseSensitive === undefined ? {} : { case_sensitive: i.caseSensitive }),
 								...(i.limit === undefined ? {} : { limit: i.limit })
 							})
 						)
 					: undefined;
-			if (found !== undefined)
-				return 'error' in found
-					? err(found.error)
-					: textAnswer(
+			if (found !== undefined && 'error' in found) return err(found.error);
+			if (i.count && found?.counts) return ok({ matchingLines: found.counts.lines, matchingFiles: found.counts.files });
+			if (found !== undefined && !i.count)
+				return textAnswer(
 							grepAnswer(
 								found.hits.filter((hit) => !GENERATED.test(hit.path)),
 								found.truncated
@@ -3552,26 +3559,35 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 						});
 			const wanted = i.caseSensitive === false ? i.pattern.toLowerCase() : i.pattern;
 			const included = i.include === undefined ? undefined : globRegExp(i.include);
-			const files = (yield* sourceUnder(within)).filter(
+			const eligible = yield* sourceUnder(within);
+			const files = eligible.filter(
 				(file) => included === undefined || included.test(file)
 			);
-			if (within !== '' && files.length === 0) return err(`Search path does not exist: ${i.path}`);
+			if (within !== '' && eligible.length === 0) return err(`Search path does not exist: ${i.path}`);
+			let matchingLines = 0, matchingFiles = 0;
 			const limit = i.limit ?? 100,
 				hits: { path: string; line: number; text: string }[] = [];
 			for (const path of files) {
 				const text = (yield* Port.attempt('workspace.read', () => source.read(path))) ?? '';
-				for (const [line, value] of text.split('\n').entries()) {
+				let matched = false;
+				for (const [line, value] of sourceLines(text).entries()) {
 					if (
 						regex === null
 							? (i.caseSensitive === false ? value.toLowerCase() : value).includes(wanted)
 							: regex.test(value)
 					) {
+						if (i.count) {
+							matchingLines++;
+							if (!matched) matchingFiles++;
+							matched = true;
+							continue;
+						}
 						if (hits.length === limit) return textAnswer(grepAnswer(hits, true));
 						hits.push({ path, line: line + 1, text: value.slice(0, HIT_CHARS) });
 					}
 				}
 			}
-			return textAnswer(grepAnswer(hits, false));
+			return i.count ? ok({ matchingLines, matchingFiles }) : textAnswer(grepAnswer(hits, false));
 		});
 		add(globSource, function* (i) {
 			const within = sourcePath(i.path ?? '');
@@ -3697,14 +3713,14 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	let self: Catalogue['run'] | undefined;
 	const inner = (call: string) => {
 		let used = 0;
-		return (name: string, input: unknown): Effect.Effect<ToolAnswer> =>
-			self === undefined || (entries.get(name) ?? mcpEntries.get(name))?.scripts !== true
-				? Effect.succeed(err(`A script cannot call '${name}': it calls your other tools by name.`))
-				: ++used > RUN_JS.toolCalls
-					? Effect.succeed(err(`A run makes at most ${RUN_JS.toolCalls} tool calls.`))
-					: name === readSource.name && source !== undefined
-						? scriptRead(source, input)
-						: self(name, input, `${call}:${used}`);
+		return (name: string, input: unknown): Effect.Effect<ToolAnswer> => {
+			if (self === undefined || (entries.get(name) ?? mcpEntries.get(name))?.scripts !== true)
+				return Effect.succeed(err(`A script cannot call '${name}': it calls your other tools by name.`));
+			if (++used > RUN_JS.toolCalls)
+				return Effect.succeed(err(`A run makes at most ${RUN_JS.toolCalls} tool calls.`));
+			const invoke = self(name, input, `${call}:${used}`);
+			return name === readSource.name && source !== undefined ? scriptRead(source, input, invoke) : invoke;
+		};
 	};
 	if (agent && guest !== undefined) {
 		add(runJsTool, function* (i, callId) {
@@ -3889,7 +3905,13 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					note: 'Nothing of this turn is running. To wait for an automation, pass its run id (a write answers the runs it started).'
 				});
 				const got = yield* x.jobs.wait(ids, ms);
-				return ok({ settled: got, pending: x.jobs.pending() });
+				return ok({
+					settled: got,
+					pending: x.jobs.pending(),
+					...(got && isObj(got.result) && typeof got.result['error'] === 'string'
+						? { error: got.result['error'] }
+						: {})
+				});
 			})
 		);
 	});
@@ -4275,10 +4297,12 @@ const referenceIndex = Effect.fn('Agents.referenceIndex')(function* (x: ToolCont
 /** `read_file` on a reference: `<name>` or a folder lists its files, with `text` greps them, `<name>/<path>` reads one. */
 const readReference = Effect.fn('Agents.readReference')(function* (
 	x: ToolContext,
-	id: string,
-	i: { readonly offset?: number | undefined; readonly limit?: number | undefined; readonly text?: string | undefined }
+	reference: string,
+	i: { readonly path?: string | undefined; readonly offset?: number | undefined; readonly limit?: number | undefined; readonly text?: string | undefined }
 ) {
-	const slash = id.indexOf('/'),
+	const entry = i.path?.replace(/^\/+|\/+$/g, ''),
+		id = entry ? `${reference.replace(/\/$/, '')}/${entry}` : reference,
+		slash = id.indexOf('/'),
 		name = slash < 0 ? id : id.slice(0, slash),
 		path = slash < 0 ? '' : id.slice(slash + 1),
 		index = yield* referenceIndex(x, name),
@@ -4288,31 +4312,49 @@ const readReference = Effect.fn('Agents.readReference')(function* (
 	const read = (file: (typeof index.files)[number]) =>
 		Effect.map(files.get(file.key, file.bytes), (bytes) => new TextDecoder().decode(bytes));
 	const file = index.files.find((one) => one.path === path);
-	if (file !== undefined) {
+	if (file !== undefined && !i.text) {
 		const page = linePage(yield* read(file), i.offset, i.limit, 'text');
-		if ('error' in page) return err(`${page.error} in ${id}`);
+		if ('error' in page) {
+			if (file.bytes === 0 && (i.offset ?? 1) === 1) return textAnswer(`Read ${id}, 0 lines`);
+			return err(`${page.error} in ${id}`);
+		}
 		const w = page.window;
 		return textAnswer(
 			[
 				`Read ${id}, lines ${w.from}-${w.to} of ${w.total}`,
 				...w.lines,
-				...(w.next === undefined
-					? []
-					: [`[Output truncated. Continue reading with offset: ${w.next}]`])
+				...(w.to === w.total ? [] : [`[Output truncated. Continue reading with offset: ${w.to + 1}]`])
 			].join('\n')
 		);
 	}
 	const folder = path === '' ? '' : `${path.replace(/\/$/, '')}/`,
-		under = index.files.filter((one) => one.path.startsWith(folder));
+		under = file === undefined ? index.files.filter((one) => one.path.startsWith(folder)) : [file];
 	if (under.length === 0) return err(`${name} has no file '${path}'.`);
-	if (i.text === undefined || i.text === '')
-		return textAnswer(under.map((one) => `${one.path}  ${one.bytes}`).join('\n'));
+	if (!i.text) {
+		const start = Math.max(0, (i.offset ?? 1) - 1);
+		if (start >= under.length) return err(`Offset ${start + 1} is out of range (${under.length} files) in ${id}`);
+		const page = under.slice(start, start + Math.min(READ_LINES, Math.max(1, i.limit ?? READ_LINES)));
+		const lines = page.map((one) => `${one.path}  ${one.bytes}`);
+		const next = start + page.length;
+		if (next < under.length) lines.push(`[Output truncated. Continue reading with offset: ${next + 1}]`);
+		return textAnswer(lines.join('\n'));
+	}
 	const hits: string[] = [];
-	const found = yield* Effect.forEach(under, (one) => read(one), { concurrency: 8 });
-	for (const [n, text] of found.entries())
-		for (const hit of grep(text, i.text, 200 - hits.length, 'text').hits)
-			hits.push(`${under[n]?.path}:${hit.from}: ${hit.text}`);
-	return textAnswer(hits.length === 0 ? `Nothing in ${name} holds '${i.text}'.` : hits.join('\n'));
+	const limit = Math.min(200, Math.max(1, i.limit ?? 200));
+	const offset = Math.max(1, i.offset ?? 1);
+	let skipped = offset - 1;
+	for (let n = 0; n < under.length; n += 8) {
+		const batch = under.slice(n, n + 8);
+		const texts = yield* Effect.forEach(batch, read, { concurrency: 8 });
+		for (const [j, text] of texts.entries()) {
+			const result = grep(text, i.text, limit + 1 - hits.length, 'text', skipped);
+			skipped = Math.max(0, skipped - result.total);
+			for (const hit of result.hits)
+				hits.push(`${batch[j]?.path}:${hit.from}: ${hit.text}`);
+			if (hits.length > limit) return textAnswer([...hits.slice(0, limit), `[More matching lines. Continue with offset: ${offset + limit}]`].join('\n'));
+		}
+	}
+	return textAnswer(hits.length > 0 ? hits.join('\n') : offset > 1 ? `No matching lines at offset ${offset} in ${id}.` : `Nothing in ${id} holds '${i.text}'.`);
 });
 /**
  * A repository reference's tree for a file run: the person's own latest reference by that name, its index decoded
@@ -4528,13 +4570,13 @@ const readMessagesTool = defineTool('read_messages', {
 const readFileTool = defineTool('read_file', {
 	behavior: { data: true },
 	description:
-		"Read a file by id or '<reference>/<path>': documents, scans, sheets, recordings and archives. Returns numbered lines and document images; sheets show columns and first rows; zip/tar/tar.gz and folders list paths and sizes. offset/limit page lines; text filters them (a|b for either). password opens locked PDF/Office files.",
+		"Read a file by id or '<reference>/<path>': documents, scans, sheets, recordings and archives. Returns numbered lines and document images; sheets show columns and first rows; zip/tar/tar.gz and folders list paths and sizes. offset/limit page lines, or matching lines with text. Reference searches are literal; document searches accept a|b. password unlocks a document.",
 	parameters: Schema.Struct({
 		id: Schema.String,
 		path: Schema.optionalKey(Schema.String).annotate({
-			description: "a file or folder inside the archive id names, read as its own type; on into an archive inside it ('a.zip/b.txt')"
+			description: "path inside a reference or archive; nested archives work ('a.zip/b.txt')"
 		}),
-		offset: Schema.optionalKey(Schema.Int).annotate({ description: '1-based start line' }),
+		offset: Schema.optionalKey(Schema.Int).annotate({ description: '1-based start line, or matching-line ordinal when text is supplied' }),
 		limit: Schema.optionalKey(Schema.Int).annotate({ description: `lines, at most ${READ_LINES}` }),
 		text: Schema.optionalKey(Schema.String),
 		password: Schema.optionalKey(Schema.String).annotate({
@@ -4577,7 +4619,7 @@ const readSource = defineTool('workspace_read', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		'Read the contents of a file or directory. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use workspace_grep to find specific content in large files.',
+		'Read a file or directory. Numbered lines and directory entries support offset/limit. In run_js, an unpaged file returns {path,content,lines} with its exact text for edits. Use workspace_grep to locate specific content.',
 	parameters: Schema.Struct({
 		path: Schema.String.annotate({ description: 'File or directory to read' }),
 		offset: Schema.optionalKey(Schema.Int).annotate({
@@ -4593,8 +4635,9 @@ const grepSource = defineTool('workspace_grep', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		"Search file contents using ripgrep's regular expression syntax or literal text matching. Use it to locate specific code, symbols, or text patterns, and narrow searches with `path` or `include`. Returns matching file paths, line numbers, and line previews.",
+		"Search source lines by regex or literal. count returns exact matching-line and file totals within the search scope; otherwise limit caps excerpts. A line with two hits counts once.",
 	parameters: Schema.Struct({
+		count: Schema.optionalKey(Schema.Boolean),
 		pattern: Schema.NonEmptyString.annotate({
 			description: 'Regular expression or literal text to match in file contents.'
 		}),
@@ -4676,7 +4719,7 @@ const downloadTool = defineTool('download', {
 const runJsTool = defineTool('run_js', {
 	policy: { scripts: false },
 	behavior: { data: true },
-	description: `Execute an async JS body of input in a fresh billed isolate; no require, process, fetch or timers. await tool(name, input) calls your tools as you (≤200); errors throw. files arrive in input.files. http: true enables await http({method?,url,headers?,body?}) → {status,headers,text}, public HTTPS GET/HEAD; 'send' permits writes after confirmation. Return {files:[{name,text|base64}]} for downloads. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out. Limits: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.`,
+	description: `Async JS in a fresh billed isolate; no require, process, fetch or timers. await tool(name,input) calls as you (≤200); errors throw. Filter results here; return only what you need. Files: input.files. http: true enables await http({method?,url,headers?,body?}) → {status,headers,text}, public HTTPS GET/HEAD; 'send' permits writes after confirmation. Return {files:[{name,text|base64}]} for downloads. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out. Limits: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.`,
 	parameters: Schema.Struct({
 		code: Schema.optionalKey(Schema.String),
 		input: Schema.optionalKey(ToolJson),

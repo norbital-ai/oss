@@ -212,6 +212,18 @@ test('a scanned page is only its image: no text, no OCR', async () => {
 	assert.equal(ruled.meta.stats.pages, 1);
 });
 
+test('workbook ingest distinguishes hidden and visible rate sheets in both Excel formats', async () => {
+	for (const [ext, mime] of [['xls', 'application/vnd.ms-excel'], ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']] as const) {
+		const name = `rates-visibility.${ext}`;
+		const result = await Effect.runPromise(ingest({ name, mime, bytes: fixture(name) }));
+		assert.equal(result.kind, 'data');
+		const { sheets } = Schema.decodeUnknownSync(Schema.Struct({ sheets: Schema.Array(Schema.Struct({
+			name: Schema.String, hidden: Schema.optionalKey(Schema.Boolean)
+		})) }))(result.json);
+		assert.deepEqual(sheets, [{ name: 'Superseded', hidden: true }, { name: 'Rates' }]);
+	}
+});
+
 test('legacy doc and xls read natively', async () => {
 	const doc = await run('tables.doc', 'application/msword', fixture('tables.doc'));
 	allowed(doc.html);

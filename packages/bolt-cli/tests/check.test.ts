@@ -31,6 +31,25 @@ const emptyManifest: EngineManifest = {
 	agent: { skills: {} }
 };
 describe('bolt check', () => {
+	it('validates staff membership sources, expiry fields, group ordering and protected roots', () => {
+		const base: EngineManifest = {
+			...emptyManifest,
+			models: { grants: { description: 'Entitlements', fields: {
+				team: { kind: 'text' }, until: { kind: 'date', optional: true }
+			} } },
+			relationships: { 'grants.member': { to: 'sys_user' } },
+			teams: { staff: { policies: [] } },
+			workspace: { ...emptyManifest.workspace, memberships: { model: 'grants', teams: ['staff'] } }
+		};
+		const findings = (m: EngineManifest) => checkRules(m, { automations: [] }, (_role, name) => name)
+			.filter(f => f.code === 'workspace/memberships');
+		expect(findings(base)).toEqual([]);
+		expect(findings({ ...base, relationships: {} })).toHaveLength(1);
+		expect(findings({ ...base, relationships: { 'grants.member': { to: 'sys_user', owned: true } } })).toHaveLength(1);
+		expect(findings({ ...base, workspace: { ...base.workspace, memberships: { model: 'grants',
+			teams: ['staff'], staff_team: 'missing', groups: [['staff'], ['staff']] } } })).toHaveLength(2);
+	});
+
 	it('every locale carries every base message and nothing else', () => {
 		const basePath = 'src/i18n/+messages.ts',
 			zhPath = 'src/i18n/+zh.messages.ts';

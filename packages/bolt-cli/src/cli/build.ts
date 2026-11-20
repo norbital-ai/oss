@@ -264,8 +264,8 @@ export const buildWorkspace = (
 ): Effect.Effect<Built, BuildFailure, FileSystem.FileSystem | Path.Path> =>
 	holdingBuild(dir, buildOnce(dir, options));
 /**
- * `bolt build --migrations`: the compile alone, which writes the next migration and proves the history. No page is
- * bundled; `bundle/migrations` holds the result where a build's would be.
+ * `bolt build --migrations` writes and verifies the workspace's editable migration history. In a fresh build job,
+ * mirror it under `bundle/migrations` for the sandbox collector. A published bundle owns the history it was built with.
  */
 export const generateMigrations = (
 	dir: string
@@ -280,8 +280,7 @@ export const generateMigrations = (
 			const { errors, manifest } = yield* compile(root, { migrations: 'generate' });
 			if (errors.length > 0 || manifest === undefined)
 				return yield* Effect.fail(authorErrors(errors));
-			yield* fs.remove(bundle, { recursive: true, force: true });
-			yield* fs.makeDirectory(bundle, { recursive: true });
+			if (yield* fs.exists(path.join(bundle, 'artifact.json'))) return;
 			yield* cloneTree(path.join(root, 'migrations'), path.join(bundle, 'migrations'));
 		})
 	);

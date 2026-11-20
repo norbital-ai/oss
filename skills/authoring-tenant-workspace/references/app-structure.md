@@ -28,6 +28,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 ## The ⚡ menu
 
 - It lists Sync now, each file sync's Import, Export and Download template, and Delete selected, with no page wiring. The native `bolt.sync_control(model, sync, input)` operation owns refresh and file transfer; syncs are never automation callables or schedule targets. Remote refresh requires `capabilities.syncs: ['model.sync_name']`; file transfer uses the caller's model grants.
+- A standalone Svelte button executes its mutation through a component-level `const save = use_act(ctx)` and `onclick={() => save.run(ctx.run('reconcile', input))}`. A page call yields its declared output to the `then` callback. A job yields its queue admission; follow its run in `RunStatus`. Creating the Effect in a handler and discarding it performs no write.
 - A `toolbar.actions` item is `icon`, `name`, optional `description` and `run(selected)`. The menu derives the row's state from what `run` returns:
 
 | `run` returns             | Row                                                                                   |

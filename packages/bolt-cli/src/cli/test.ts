@@ -54,7 +54,7 @@ const load = Effect.fnUntraced(function* (from: string) {
 	return { runner, svelte };
 });
 /** The kit's plugins for one Vite server: Svelte keeps per-server state, so each project gets its own. */
-const plugins = (svelte: Svelte): Plugin[] => {
+const plugins = (svelte: Svelte, root: string): Plugin[] => {
 	const theirs = (config: UserConfig) => {
 		const found = (plugin: PluginOption): boolean =>
 			Array.isArray(plugin)
@@ -91,8 +91,8 @@ const plugins = (svelte: Svelte): Plugin[] => {
 			// real-browser tests live only in Bolt's own suite
 			delete setup.browser;
 			setup.fileParallelism = true;
-			// the module cache is the workspace's own, never a parent directory's: suites run side by side
-			setup.fsModuleCachePath ??= join(process.cwd(), 'node_modules', '.vitest-cache');
+			// Separate checkouts may share one physical node_modules directory.
+			setup.fsModuleCachePath ??= join(root, '.norbital', 'cache', 'vitest');
 			// a template with no mechanisms of its own (blank) has nothing to prove
 			setup.passWithNoTests = true;
 			setup.maxWorkers ??= suiteWorkers(loadavg()[0] ?? 0);
@@ -160,9 +160,15 @@ export const testWorkspace = Effect.fn('bolt.test')(function* (
 				'test',
 				filter,
 				// a failure is read from its message alone: Chai's default clips each value to 40 characters
-				{ chaiConfig: { truncateThreshold: 1000 }, ...options, root },
 				{
-					plugins: plugins(svelte)
+					chaiConfig: { truncateThreshold: 1000 },
+					...options,
+					// Vitest appends cliExclude to the workspace's configured or default exclusions.
+					cliExclude: [...(options.cliExclude ?? []), '.norbital/**'],
+					root
+				},
+				{
+					plugins: plugins(svelte, root)
 				}
 			),
 		catch: (cause) => new ToolFailure({ message: 'The workspace test runner failed.', cause })

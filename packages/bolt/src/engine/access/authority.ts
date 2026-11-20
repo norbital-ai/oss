@@ -1,3 +1,4 @@
+import { membershipModels, membershipWriter } from '../identity/teams.ts';
 // Policies → Authority: held grants union into arms per read output and path, write arms carry the
 // columns they admit per write path and whether a `check` judges them, and an administrator (or a platform run) bypasses
 // authored policy. A grant names outputs and filters their rows; it never changes an output's fields. Plus what a write
@@ -190,6 +191,7 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 	key: string
 ): Effect.fn.Return<Authority, BoltError> {
 	const bypass = holder.admin || holder.platform === true;
+	const protectedMembership = membershipWriter(holder.actor, holder.admin) ? [] : membershipModels(m.workspace);
 	const policySpecs = holder.policies.flatMap((name) => {
 		const spec = Object.hasOwn(m.policies, name) ? m.policies[name] : undefined;
 		return spec === undefined ? [] : [{ name, spec }];
@@ -226,6 +228,8 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 				const a = col(c);
 				for (const [output, read] of Object.entries(g.outputs ?? {}))
 					addRead(c, output, yield* readArms(m, c, output, p, read));
+				// Supplementary identity grants are written by a guarded automation or a native administrator.
+				if (protectedMembership.includes(c)) continue;
 				for (const op of WRITES) {
 					const w = writeArm(m, c, op, p, g[op]);
 					if (w) a[op].push(w);

@@ -11,7 +11,8 @@ A setting's name does not say which side it belongs on: inspect the declaration 
 | A connection's driver, configuration shape, credentials shape, webhook verification and handler, rate, `test` | `src/integration/<name>/+integration.ts` |
 | A value the built-in kinds cannot express | `src/data/custom_field/<name>/` |
 | What a policy permits: outputs, apps, tools, MCP, limits | `src/access_control/policy/` |
-| Teams and policy links | `src/access_control/team/+team.ts` |
+| Team handles, policies and their hierarchy | `src/access_control/team/+team.ts` |
+| Additional staff entitlements and level ordering | `memberships` in `src/+workspace.ts` names protected assignment models and the issuable teams |
 | Approval routes and steps | `ctx.approve(...)` in a write grant's `verdict` |
 | Screens | `src/app/<app>/` |
 | Scheduled and manual business work | `src/automation/`; incoming webhooks belong to integrations |
@@ -26,7 +27,8 @@ A setting's name does not say which side it belongs on: inspect the declaration 
 
 | Change | Home |
 | --- | --- |
-| Member identities and affiliation | identity records |
+| Member identity, primary affiliation and administrator status | guarded identity operations |
+| Supplementary function grants and role bundles | protected rows on the declared membership models, issued by an Owner or a scoped automation |
 | Connected accounts: pairing, sealed credentials, configuration, pause, envoy | `sys_integration` rows |
 | Envoy name, audience, policies, DM authority, triage, task | `sys_envoy` rows |
 | Allowed chat models and monthly AI budgets | administrator Settings → Organization (`sys_config`) |
@@ -41,6 +43,11 @@ Personal preferences persist on the user across devices. `preferences.appearance
 ## Never
 
 - A runtime editor for teams, policies or approval routes.
-- A team or assignment table: teams exist only as source declarations (`src/access_control/team/+team.ts`).
+- A runtime table that creates team handles or assigns policies to them. Each team and its authority are declared in source.
 - `.norbital/` is compiled output, never edited or committed.
 - An administrator is a native flag on an admitted staff identity, not a role name.
+
+
+## Verify delegated access
+
+Sign in the member with `t.sign_in(address)` before checking the real read and write paths. For a supplemental grant, change the protected row through its normal workflow and obtain a fresh admission for the same identity. Check the denied state after removal and after the last inclusive day in the workspace timezone. `t.member(policies, overrides)` returns a test holder with the supplied policies; its first recognized team becomes the stored primary affiliation.

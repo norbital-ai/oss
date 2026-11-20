@@ -22,6 +22,7 @@ import type {
 import type { SelectIR } from '@norbital-ai/store';
 import type { Bridge, ReadsShape } from '../services.ts';
 import { writableFile } from '../decision.ts';
+import { membershipModels, membershipWriter } from '../identity/teams.ts';
 import { layered, type EngineManifest } from '../manifest.ts';
 import type { GuestShape as GuestPort } from '../services.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
@@ -356,6 +357,11 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				first.path
 			)
 		);
+	}
+	if (m.workspace.memberships && !membershipWriter(auth.actor, auth.admin)) {
+		const protectedModels = membershipModels(m.workspace);
+		const touched = f.items.find(item => protectedModels.includes(item.change.model));
+		if (touched) return none(refused('forbidden', 'Only an administrator or a membership automation can change grants.', touched.change.path));
 	}
 	const owned = syncOwnership(m, r, f.items); // hook:integrations
 	if (owned !== null) return none(owned);

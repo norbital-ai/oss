@@ -81,6 +81,63 @@ type RuleContext = {
 };
 
 function workspaceRules({ m, bodies, at }: RuleContext): void {
+	const landing = m.workspace.landing;
+	if (landing && !m.apps[landing.app])
+		at('workspace/landing', 'workspace', 'workspace', `landing names unknown app '${landing.app}'`);
+	const visibility = m.workspace.navigation_visibility;
+	if (visibility) {
+		const issue = (message: string) => at('workspace/navigation_visibility', 'workspace', 'workspace', message);
+		const {model,output,field} = visibility;
+		const kind = m.models[model]?.fields[field];
+		const fields = outputFields(m, model, output);
+		if (!outputLayers(m,model,output)?.[model] || !kind || !['text','enum'].includes(kind.kind) || (fields && !fields.includes(field)))
+			issue(`visibility source '${model}.${output}' must expose its text or enum field '${field}'`);
+		const checkKeys = (keys: readonly string[]) => {
+			if (!keys.length || keys.some(key=>!key || (kind?.kind==='enum' && !kind.values.includes(key))))
+				issue('each controlled route must list at least one valid visibility key');
+		};
+		for(const [app,keys] of Object.entries(visibility.apps ?? {})){
+			if (!m.apps[app] || (m.apps[app]?.audience !== undefined && m.apps[app]?.audience !== 'members') || m.apps[app]?.shell === 'kiosk')
+				issue(`visibility requires a member app, found '${app}'`);
+			checkKeys(keys);
+		}
+		for(const [path,keys] of Object.entries(visibility.pages ?? {})){
+			const slash = path.lastIndexOf('/'), app = m.apps[path.slice(0,slash)];
+			if (slash < 1 || !app?.pages[path.slice(slash + 1)] || (app.audience !== undefined && app.audience !== 'members') || app.shell==='kiosk')
+				issue(`visibility names unknown member page '${path}'`);
+			checkKeys(keys);
+		}
+	}
+	const binding = m.workspace.memberships;
+	if (binding !== undefined) {
+		const { model, teams } = binding, fields = m.models[model]?.fields;
+		const issue = (message: string) => at('workspace/memberships', 'workspace', 'workspace', message);
+		if (!fields || model.startsWith('sys_') || m.relationships[model + '.member']?.to !== 'sys_user' ||
+			fields.team?.kind !== 'text' || fields.until?.kind !== 'date' || !fields.until.optional)
+			issue('memberships needs a workspace model with a member ref to sys_user, a text team, and an optional until date');
+		for (const name of teams) if (!Object.hasOwn(m.teams, name)) issue(`memberships: unknown team '${name}'`);
+		if (binding.staff_team !== undefined && !Object.hasOwn(m.teams, binding.staff_team))
+			issue(`memberships: unknown staff baseline team '${binding.staff_team}'`);
+		const grouped = binding.groups?.flat() ?? [];
+		if (new Set(grouped).size !== grouped.length || grouped.some(handle => !teams.includes(handle)))
+			issue('membership groups must contain distinct allowlisted teams, ordered from lowest to highest');
+		if (binding.keep_direct?.some(handle => !grouped.includes(handle)))
+			issue('keep_direct must name a grouped, allowlisted team');
+		const protectedModels = [model];
+		if (binding.bundles) {
+			const { assignments, levels } = binding.bundles;
+			const left = m.relationships[assignments + '.role']?.to, right = m.relationships[levels + '.role']?.to;
+			const until = m.models[assignments]?.fields.until;
+			if (assignments.startsWith('sys_') || levels.startsWith('sys_') || typeof left !== 'string' || left !== right ||
+				m.relationships[assignments + '.member']?.to !== 'sys_user' || until?.kind !== 'date' || !until.optional ||
+				m.models[levels]?.fields.team?.kind !== 'text')
+				issue('membership bundles need member, role and optional until on assignments and a matching role and text team on levels');
+			protectedModels.push(assignments, levels);
+		}
+		if (new Set(protectedModels).size !== protectedModels.length ||
+			Object.entries(m.relationships).some(([key, rel]) => protectedModels.includes(key.split('.')[0] ?? '') && rel.owned))
+			issue('the membership model must be a separate root so a parent cannot create or remove grants');
+	}
 	// self sign-up: the policies a newcomer holds exist, and the record that is them is matched on text fields
 	const signup = m.workspace.signup;
 	for (const p of signup?.policies ?? [])

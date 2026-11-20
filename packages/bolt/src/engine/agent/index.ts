@@ -2,7 +2,7 @@ import { textOf } from '@norbital-ai/host-api';
 // The agent engine: a turn is a loop over a conversation's rows. Each step claims the queued inputs
 // (a steer joins at the next step and acts as its own sender), builds the context, makes one model request (60 s to its
 // first byte, then the 20 s idle wall) and runs the tool calls it asks for as the actor. A turn ends on a reply with no tool calls, a confirmation
-// card or a stop, or at the step cap; guards end it earlier when it makes no progress. An executed plan is checked once by a verifier pass on the
+// card or a stop, or at the step cap; guards end it earlier when it makes no progress. An executed plan is checked by a verifier on the
 // turn's own cached prefix; a sub-agent is a
 // child conversation run under the delegating turn's `as`, never wider. Hosts drive `drain`; nothing here names a host.
 // A claimed turn holds a three-minute lease its heartbeat renews and queues the platform run `agent.turn`, so a turn
@@ -1447,7 +1447,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			);
 		});
 		/**
-		 * The plan's one verification: the step's own prefix and transcript, then the plan and the instruction, so the provider's
+		 * Verify the plan using the step's own prefix and transcript, then the plan and the instruction, so the provider's
 		 * cache serves all but the tail. `null` when no verdict could be read.
 		 */
 		const verify = Effect.fn('Agents.verify')(function* (
@@ -1465,7 +1465,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					{
 						role: 'user',
 						content: [
-							'Verify the plan below against the work above as an independent reviewer: completion claims are not evidence. Mark complete only when every acceptance check has concrete evidence; otherwise list the gaps. Answer JSON only, with no tool call: {"complete": boolean, "gaps": string[], "summary": string}.',
+							'Verify the plan below against the work above as an independent reviewer: completion claims are not evidence. Mark complete only when evidence shows every required outcome in the user request and plan was satisfied. A failed or untested required release or acceptance gate is a gap, even when the plan anticipated failure and the result was correctly reported. Do not relax the original requirement. List each unmet outcome in gaps. Answer JSON only, with no tool call: {"complete": boolean, "gaps": string[], "summary": string}.',
 							`Plan revision ${plan.revision}:\n${plan.body}`
 						].join('\n\n')
 					}
@@ -2216,8 +2216,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			if (done) {
 				current.reply = row;
 				current.receipts.length = 0;
-				// an executed plan is verified once, on this step's prefix: an incomplete verdict sends it back to work once
-				if (current.mode === 'agent' && conv.plan?.status === 'active' && conv.plan.verdicts === 0) {
+				// The first gap report allows one correction. Verify that correction before settling.
+				if (current.mode === 'agent' && conv.plan?.status === 'active' && conv.plan.verdicts < 2) {
 					const proof = yield* transcript(id);
 					const verdict = yield* verify(conv, conv.plan, proof, prefix);
 					const gaps = verdict === null ? ['The verifier could not reach a verdict.'] : verdict.gaps;
@@ -2229,11 +2229,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						.filter((s) => s !== '')
 						.join('\n');
 					const status: Plan['status'] = verdict?.complete === true ? 'verified' : 'active';
-					yield* setConv(id, 'plan = $2::jsonb', j({ ...conv.plan, status, verdicts: 1 }));
+					yield* setConv(id, 'plan = $2::jsonb', j({ ...conv.plan, status, verdicts: conv.plan.verdicts + 1 }));
 					yield* systemRow(
 						note,
 						{ tag: 'verdict', complete: verdict?.complete === true, gaps },
-						verdict !== null && !verdict.complete
+						verdict !== null && !verdict.complete && conv.plan.verdicts === 0
 							? { state: 'queued', mode: 'agent', as: sender }
 							: {}
 					);

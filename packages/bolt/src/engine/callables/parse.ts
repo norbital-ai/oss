@@ -42,7 +42,7 @@ export function writeTarget(manifest: EngineManifest, model: string, row: Json |
 	const revision = row['revision'];
 	if ((catalog_of(manifest).models.get(model)?.audit === true || revision !== undefined) &&
 		(typeof revision !== 'number' || !Number.isInteger(revision) || revision < 0))
-		throw BoltError.make('invalid_input', 'decode', `${model} target must carry a valid revision.`);
+		throw BoltError.make('invalid_input', 'decode', `${model} target must carry a valid revision. Include revision in the fields of the query that supplies this target.`);
 	return { id: row['id'], ...(typeof revision === 'number' ? { revision } : {}) };
 }
 

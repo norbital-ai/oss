@@ -146,6 +146,12 @@ const Workspace = Schema.Struct({
 	locale: Schema.String,
 	currency: Schema.optionalKey(Schema.String),
 	apps: Schema.optionalKey(Schema.Array(Schema.String)),
+	landing: Schema.optionalKey(Schema.Struct({ app: Schema.String, single_app: Schema.optionalKey(Schema.Literal(true)) })),
+	navigation_visibility: Schema.optionalKey(Schema.Struct({
+		model: Schema.String, output: Schema.String, field: Schema.String,
+		apps: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
+		pages: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String)))
+	})),
 	secrets: Schema.optionalKey(Schema.Record(Schema.String, SecretDecl)),
 	ai: Schema.optionalKey(Ai),
 	convert: Schema.optionalKey(
@@ -158,6 +164,14 @@ const Workspace = Schema.Struct({
 	),
 	agent: Schema.optionalKey(Schema.Struct({ triage: Schema.optionalKey(Schema.Literal(false)) })), // hook:triage
 	signup: Schema.optionalKey(Signup),
+	memberships: Schema.optionalKey(Schema.Struct({
+		model: Schema.String,
+		teams: Schema.Array(Schema.String),
+		staff_team: Schema.optionalKey(Schema.String),
+		keep_direct: Schema.optionalKey(Schema.Array(Schema.String)),
+		groups: Schema.optionalKey(Schema.Array(Schema.Array(Schema.String))),
+		bundles: Schema.optionalKey(Schema.Struct({ assignments: Schema.String, levels: Schema.String }))
+	})),
 	/** Rate limits by policy: what a caller holding that policy may send. */
 	limits: Schema.optionalKey(Schema.Record(Schema.String, PolicyLimits))
 });

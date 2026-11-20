@@ -135,7 +135,7 @@ const watching = (dir: string) =>
  * `bolt build`: the release, built once in the template's CI and run unchanged in every environment.
  *
  * Writes `.norbital/bundle/` (manifest, guest, client and server pages, assets, migrations: what a host runs),
- * `.norbital/source/` (the authored tree without tests: a customer workspace's starting source), `.norbital/seed/<pack>/`
+ * `.norbital/source/` (the authored tree and its tests, which Studio uses to verify customer changes), `.norbital/seed/<pack>/`
  * (`base` from `seed/public/`, which a release carries; `test` from `seed/test/`, never published) and, last,
  * `.norbital/release.json` naming each part's SHA-256 digest (over its file tree, `*.map` excluded), so a reader that
  * finds it finds every part. Identical source gives an identical bundle digest. An unchanged seed input reuses its

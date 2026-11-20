@@ -55,7 +55,7 @@ one line, a container (`table`, `section`, a cell holding more than one paragrap
 one. A PDF page or a slide is a `<section data-page="n">` / `<section data-slide="n">`; outline and tables are the
 HTML's own headings and tables.
 
-**Data.** A spreadsheet is `json: { sheets: [{ name, columns, rows, merges?, images? }] }`. `rows` are the cells,
+**Data.** Hidden Excel sheets carry `hidden: true`; visible sheets omit the flag. A spreadsheet is `json: { sheets: [{ name, columns, rows, hidden?, merges?, images? }] }`. `rows` are the cells,
 row-major, each `string`, `number`, `boolean` or `null` (empty): numbers stay numbers, a date or time is ISO
 (`2026-10-30`, `2026-01-02T13:45:00`, `13:45:00`), a formula is its cached value (none cached: `null`). `columns` are
 the first row's names when that row is distinct text, no merge touches it and another row follows (it then leaves
