@@ -36,6 +36,8 @@ import { ViewCompiler, same, sourceKeys, type ViewPlan } from '../query/view.ts'
 import * as patch from './patch.ts';
 
 const MiB = 1024 * 1024;
+/** What a member's session is judged on (`identity/actor.ts`): a change to any of it ends their streams. */
+const PRINCIPAL = ['email', 'phone', 'kind', 'active', 'admin', 'team', 'party', 'signup'] as const;
 /** The live row: per subscription / per connection / retained per cell. */
 export const LIVE = {
 	subscriptionBytes: 2 * MiB,
@@ -136,7 +138,9 @@ export const LiveHubLive = Layer.effect(
 			if (conn.views.get(view.id) !== view || view.readVersion !== answer.expected) return;
 			const { value, delta, arrivals } = answer;
 			const snapshots =
-				delta === undefined ? (answer.snapshots ?? new Map<string, ReadSnapshot>()) : view.snapshots;
+				delta === undefined
+					? (answer.snapshots ?? new Map<string, ReadSnapshot>())
+					: view.snapshots;
 			const text = delta === undefined ? JSON.stringify(value) : null;
 			const reusable =
 				text !== null &&
@@ -188,7 +192,13 @@ export const LiveHubLive = Layer.effect(
 							value,
 							...(arrivals?.length ? { arrivals } : {})
 						}
-					: { t: 'delta', view: view.id, v: routed, ops: delta.ops, ...(arrivals?.length ? { arrivals } : {}) }
+					: {
+							t: 'delta',
+							view: view.id,
+							v: routed,
+							ops: delta.ops,
+							...(arrivals?.length ? { arrivals } : {})
+						}
 			);
 		});
 		/** A view whose read failed is dropped (the client registers it again), so no later flush asks it again. */
@@ -360,15 +370,20 @@ export const LiveHubLive = Layer.effect(
 			const batch = pending;
 			pending = [];
 			// a connection whose principal changed (revoked, deactivated, moved team, signed out) ends before this commit
-			// reaches it: the client reconnects, and its session is judged again
+			// reaches it: the client reconnects, and its session is judged again. A member's own name or preferences move
+			// the row's revision but not what their session is judged on, so their stream stays.
 			const changed = new Set(
 				batch.flatMap(({ captured: c }) =>
 					c.model === 'sys_session' && c.op === 'delete' && typeof c.old?.['user'] === 'string'
 						? [`member:${c.old['user']}`]
-						: (c.model === 'sys_user' || c.model === 'sys_api_key') &&
-							  c.old?.['revision'] !== c.new?.['revision']
-							? [`${c.model === 'sys_user' ? 'member' : 'api_key'}:${c.id}`]
-							: []
+						: c.model === 'sys_user' &&
+							  PRINCIPAL.some(
+									(field) => JSON.stringify(c.old?.[field]) !== JSON.stringify(c.new?.[field])
+							  )
+							? [`member:${c.id}`]
+							: c.model === 'sys_api_key' && c.old?.['revision'] !== c.new?.['revision']
+								? [`api_key:${c.id}`]
+								: []
 				)
 			);
 			if (changed.size > 0)

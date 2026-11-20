@@ -9,6 +9,7 @@ import { BoltError } from '../src/protocol/errors.ts';
 import type { Authority } from '../src/engine/contracts.ts';
 import type { Captured } from '../src/engine/db/captured.ts';
 import type { Frame } from '../src/protocol/wire.ts';
+import type { Json } from '../src/decl/values.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { bare_host } from './effect-engine.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
@@ -93,32 +94,47 @@ const watch = (live: LiveShape, authority: Authority) =>
 		);
 		return { frames, conn: yield* Deferred.await(hello), ended };
 	});
-const userChange = (id: string, before: number, after: number): Captured => ({
+const userChange = (
+	id: string,
+	before: { readonly revision: number; readonly [field: string]: Json },
+	after: { readonly revision: number; readonly [field: string]: Json }
+): Captured => ({
 	model: 'sys_user',
 	id,
 	op: 'update',
-	revision: after,
+	revision: after.revision,
 	transaction: '1',
 	cause: 'direct',
-	old: { id, revision: before },
-	new: { id, revision: after }
+	old: { id, team: 'sales', active: true, ...before },
+	new: { id, team: 'sales', active: true, ...after }
 });
 
 it.effect(
-	'a connection ends when its principal changes; a change that moves no revision keeps it',
+	'a connection ends when its principal changes; a sign-in stamp or its own preferences keep it',
 	() =>
 		Effect.gen(function* () {
 			const live = yield* hub(() => Effect.succeed([]));
 			const id = randomUUID();
 			const mine = yield* watch(live, yield* memberOf(id, false));
 			// a sign-in stamp (`last_seen`) moves no revision: the stream stays
-			live.publish([userChange(id, 1, 1)]);
+			live.publish([
+				userChange(id, { revision: 1 }, { revision: 1, last_seen: '2026-11-20T00:00:00Z' })
+			]);
 			yield* live.settled;
-			// deactivated, moved team or demoted: the revision moves, and the stream ends before the commit reaches it
-			live.publish([userChange(id, 1, 2)]);
+			// the member's own preferences move the revision, not what the session is judged on: the stream stays
+			live.publish([
+				userChange(
+					id,
+					{ revision: 1, preferences: {} },
+					{ revision: 2, preferences: { locale: 'zh' } }
+				)
+			]);
+			yield* live.settled;
+			// deactivated, moved team or demoted: the stream ends before the commit reaches it
+			live.publish([userChange(id, { revision: 2 }, { revision: 3, team: 'finance' })]);
 			yield* live.settled;
 			yield* Fiber.join(mine.ended);
-			expect(mine.frames.map((frame) => frame.t)).toEqual(['hello', 'v']);
+			expect(mine.frames.map((frame) => frame.t)).toEqual(['hello', 'v', 'v']);
 			// a signed-out session ends its member's streams too
 			const again = yield* watch(live, yield* memberOf(id, false));
 			live.publish([

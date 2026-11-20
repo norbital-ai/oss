@@ -191,11 +191,24 @@
 		}
 		fork(savePreferences({ appearance: x }), (error) => toast.error(t(error.message)));
 	};
+	// a language saving to the member's record reloads once it is saved: its painted row must not reload the page first
+	let savingLocale = false;
 	const chooseLocale = (value: string) => {
 		if (boot?.actor?.kind !== 'member' || bolt === null) return fork(setLocale(value));
 		const picked = Schema.decodeUnknownOption(PersonalPreferences)({ locale: value });
-		if (Option.isSome(picked))
-			fork(savePreferences(picked.value), (error) => toast.error(t(error.message)));
+		if (Option.isNone(picked)) return;
+		savingLocale = true;
+		fork(
+			savePreferences(picked.value).pipe(
+				Effect.andThen(setLocale(value)),
+				Effect.ensuring(
+					Effect.sync(() => {
+						savingLocale = false;
+					})
+				)
+			),
+			(error) => toast.error(t(error.message))
+		);
 	};
 
 	/** The page's URL as the workspace names it: without the base path the host serves it under. */
@@ -291,7 +304,7 @@
 			theme = preferences.appearance ?? 'system';
 			fork(storeTheme(theme));
 			const language = preferences.locale ?? config.manifest.workspace.locale;
-			if (language !== locale) fork(setLocale(language));
+			if (!savingLocale && language !== locale) fork(setLocale(language));
 			chimes = preferences.sounds ?? true;
 			writePreference(chimeKey, chimes ? 'on' : 'off');
 		}
