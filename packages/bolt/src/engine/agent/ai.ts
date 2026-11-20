@@ -30,7 +30,7 @@ import {
 	type ToolBehavior,
 	Unavailable
 } from '@norbital-ai/host-api';
-import type { Ai } from '../ports.ts';
+import { RunUnits, type Ai } from '../ports.ts';
 import type { AiEvent } from '@norbital-ai/host-api';
 import type { FacilityCall } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
@@ -826,6 +826,8 @@ export function infer_facility(
 					);
 				}
 				yield* record(messages);
+				// the CPU budget is a step's, not a run's: a long inference is many small steps, as an agent's turn is
+				yield* (yield* RunUnits).next();
 				const offeredTools = spent ? finishingOffers : offered;
 				const stepped = yield* model_step(modelCall(
 					ai,

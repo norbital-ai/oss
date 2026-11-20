@@ -1009,6 +1009,16 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		id: string,
 		options: DrainOptions = {}
 	): Effect.fn.Return<{ ran: boolean; reply: MessageRow | null }, EngineError, Scope.Scope> {
+		// a card waits for the person: only its last answer or their own message starts the next turn, never a sibling's
+		// answer or a job's note
+		const [held] = yield* db.read([
+			sql(
+				`SELECT 1 FROM sys_message WHERE conversation = $1 AND role = 'tool' AND state = 'confirm'
+				AND NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = $1 AND role = 'user' AND state = 'queued') LIMIT 1`,
+				id
+			)
+		]);
+		if ((held?.rows.length ?? 0) > 0) return { ran: false, reply: null };
 		const admitted = yield* claim(id);
 		if (admitted === null) return { ran: false, reply: null };
 		const turn = globalThis.crypto.randomUUID();

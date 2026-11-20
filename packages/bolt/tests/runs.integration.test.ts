@@ -149,7 +149,7 @@ const base: EngineManifest = {
 			policies: ['limited']
 		},
 		pair: { description: 'Two independent reviews', policies: ['ops'], concurrency: { max: 2 } },
-		wide: { description: 'A research batch', policies: ['ops'], concurrency: { max: 16 } },
+		wide: { description: 'A research batch', policies: ['ops'], concurrency: { max: 64 } },
 		classify: { description: 'Re-queues itself while work is left', policies: ['ops'], output: { kind: 'json' } },
 		flaky: {
 			description: 'Fails transiently twice',
@@ -1258,13 +1258,13 @@ describe('lanes', () => {
 				wide: () =>
 					Effect.gen(function* () {
 						most = Math.max(most, ++running);
-						if (running === 16) yield* Deferred.succeed(full, undefined);
+						if (running === 64) yield* Deferred.succeed(full, undefined);
 						yield* Deferred.await(release);
 						running -= 1;
 						return { done: true };
 					})
 			});
-			for (let at = 0; at < 18; at++) yield* queue(w, `run-${at}`, 'wide', T0 - 20_000 + at);
+			for (let at = 0; at < 66; at++) yield* queue(w, `run-${at}`, 'wide', T0 - 20_000 + at);
 			const ticking = yield* Effect.forkChild(w.r.tick);
 			yield* Deferred.await(full);
 			expect(
@@ -1273,13 +1273,13 @@ describe('lanes', () => {
 				)
 			).toEqual([
 				{ state: 'queued', n: 2 },
-				{ state: 'running', n: 16 }
+				{ state: 'running', n: 64 }
 			]);
-			// one claim took all sixteen: no claim per lane
+			// one claim took all sixty-four: no claim per lane
 			expect(w.statements.filter((x) => x.text.includes('row_number() OVER (PARTITION BY q.automation')).length).toBe(1);
 			yield* Deferred.succeed(release, undefined);
 			yield* Fiber.join(ticking);
-			expect(most).toBe(16);
+			expect(most).toBe(64);
 		})
 	);
 	it.effect(

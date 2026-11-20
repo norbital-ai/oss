@@ -44,6 +44,12 @@ export const makeRunStore = Effect.fn('Runs.store')(function* (
 				c = new Chain(),
 				at = c.p(iso(now));
 			lost(c, at, 'true', c.p(overran ?? null));
+			// no inference outlives its generation: its transcript (a conversation with a run, never a turn's) stops reading as running
+			capturePiece(c,
+				'inferred',
+				'sys_conversation',
+				`UPDATE sys_conversation c SET status = 'idle' WHERE c.status = 'running' AND c.run IS NOT NULL`
+			);
 			// a turn no run answers any more, or that lost its run some other way: its conversation takes input again, and
 			// never reads as running forever
 			capturePiece(c,

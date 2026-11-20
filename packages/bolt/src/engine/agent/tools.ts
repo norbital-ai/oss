@@ -1799,13 +1799,23 @@ export function readTool(x: ReadToolContext) {
 			enrich?: (full: Json) => Effect.Effect<Json, EngineError>
 		): Effect.Effect<ToolAnswer> => {
 			const unknown = Object.keys(request).find((path) => !paths.includes(path));
-			return unknown === undefined
-				? guard(run(request, enrich))
-				: Effect.succeed(
-						err(
-							`You read no '${unknown}'. ${unknown.includes('.') ? 'describe_workspace { names } lists its layers.' : `Models: ${paths.filter((p) => !p.includes('.')).join(', ')}`}`
-						)
-					);
+			if (unknown === undefined) return guard(run(request, enrich));
+			// a second root named after a model is a second look at it: say how to take one
+			const twice =
+				unknown in e.manifest.models
+					? undefined
+					: paths.find((path) => !path.includes('.') && unknown.startsWith(path));
+			return Effect.succeed(
+				err(
+					`You read no '${unknown}'. ${
+						unknown.includes('.')
+							? 'describe_workspace { names } lists its layers.'
+							: twice !== undefined
+								? `A request reads '${twice}' once: aggregate.by groups its counts, and another read call in the same step reads it again.`
+								: `Models: ${paths.filter((p) => !p.includes('.')).join(', ')}`
+					}`
+				)
+			);
 		}
 	};
 }

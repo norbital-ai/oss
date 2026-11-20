@@ -1042,6 +1042,42 @@ describe('in-app turns', () => {
 			})
 		)
 	);
+	it.live('cards of one step wait for every answer before the turn resumes', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const invite = (email: string) => ({
+					id: randomUUID(),
+					name: 'invite',
+					input: { members: [{ email, team: 'rep' }] }
+				});
+				const both: Step = () =>
+					answer({
+						content: '',
+						tool_calls: [invite('first-card@example.test'), invite('second-card@example.test')],
+						finish: 'tool',
+						usage: { input: 10, output: 5 }
+					});
+				const { agent, user, authority, t } = yield* setup([both, say('Both invited.')]);
+				const ann = yield* user('two-cards', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Invite both' });
+				yield* agent.drain(c);
+				const [first, second] = (yield* agent.transcript(c)).filter((row) => row.state === 'confirm');
+				if (first === undefined || second === undefined) throw new Error('Expected two confirmations');
+				yield* agent.confirm(first.id, true, yield* authority(ann));
+				// a wake that is not the person's own message leaves the waiting card alone
+				yield* agent.drain(c);
+				expect((yield* agent.transcript(c)).find((row) => row.id === second.id)?.state).toBe('confirm');
+				yield* agent.confirm(second.id, true, yield* authority(ann));
+				const invited = yield* t.db.rows(Schema.Struct({ email: Schema.String }), {
+					text: `SELECT email FROM sys_invitation WHERE email LIKE '%-card@example.test' ORDER BY email`,
+					params: []
+				});
+				expect(invited.map((row) => row.email)).toEqual(['first-card@example.test', 'second-card@example.test']);
+				expect((yield* agent.transcript(c)).at(-1)).toMatchObject({ role: 'assistant', text: 'Both invited.' });
+			})
+		)
+	);
 	it.live('acts as the member, records tool rows, and ends on a reply carrying its receipts', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

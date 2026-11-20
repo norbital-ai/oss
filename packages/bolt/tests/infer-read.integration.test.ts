@@ -11,7 +11,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { uuidv7 } from '@norbital-ai/host-api';
-import { Ai } from '../src/engine/ports.ts';
+import { Ai, RunUnits } from '../src/engine/ports.ts';
 import { TestWorkspace, respond_system_1, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
@@ -264,9 +264,14 @@ describe("sys_2.infer tools: ['read']", () => {
 							amount: 120
 						}
 					]);
-					yield* t.run_due();
+					let units = 0;
+					yield* t
+						.run_due()
+						.pipe(Effect.provideService(RunUnits, { next: () => Effect.sync(() => void units++) }));
 					expect(yield* note(t, route, id)).toBe(JSON.stringify({ matched: true, po: 'PO-1' }));
 					expect(ai.requests).toHaveLength(3);
+					// each model call is a step with a CPU budget of its own, beside the run's
+					expect(units).toBeGreaterThanOrEqual(1 + ai.requests.length);
 					const offered = required(required(ai.requests[0]).tools);
 					// the workspace `read` (a read request) first, then the draft tools
 					expect(offered.map((tool) => tool.name)).toEqual([

@@ -221,8 +221,8 @@ automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
-	// @ts-expect-error A11 concurrency above 16
-	concurrency: { max: 17 }
+	// @ts-expect-error A11 concurrency above 64
+	concurrency: { max: 65 }
 });
 automation({
 	...rt.nightly.spec,

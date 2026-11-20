@@ -70,7 +70,11 @@ type ValidTrigger<T> = T extends { cron: infer S }
 		: Trigger;
 
 type Attempts = 2 | 3 | 4 | 5 | 6 | 7 | 8;
-type Max = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+type Max =
+	| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16
+	| 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32
+	| 33 | 34 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 45 | 46 | 47 | 48
+	| 49 | 50 | 51 | 52 | 53 | 54 | 55 | 56 | 57 | 58 | 59 | 60 | 61 | 62 | 63 | 64;
 /**
  * `job` (the default) queues a durable run; `call` is the page RPC: a page's `run` executes it in the request and
  * answers its declared output (the one request/response path from a page to server code). Server code never starts a
@@ -112,8 +116,8 @@ export type AutomationSpec = AutomationMode & {
 	 */
 	retry?: { attempts: Attempts; backoff?: Duration };
 	/**
-	 * At most `max` runs of this automation at once; absent, one. The rest wait queued. A host runs as many runs at
-	 * once as the sum of its automations' `max`.
+	 * At most `max` runs of this automation at once (1 to 64); absent, one. The rest wait queued. A host runs as many
+	 * runs at once as the sum of its automations' `max`.
 	 */
 	concurrency?: { max: Max };
 	/** Whether the agent may start it: `confirm` (default; the person confirms each start) or `never`. */

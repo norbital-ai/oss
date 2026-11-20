@@ -722,6 +722,13 @@ describe('fewer calls for the common paths', () => {
 				expect(yield* result(x, 'read', { request: { tasks: {}, secrets: {} } })).toEqual({
 					result: { error: expect.stringMatching(/^You read no 'secrets'\. Models: .*tasks/) }
 				});
+				// a second look at a model under an invented root says how to take it
+				expect(yield* result(x, 'read', { request: { tasks: {}, tasks_done: {} } })).toEqual({
+					result: {
+						error:
+							"You read no 'tasks_done'. A request reads 'tasks' once: aggregate.by groups its counts, and another read call in the same step reads it again."
+					}
+				});
 				// options beside the request instead of inside it: a wrong call
 				expect(
 					yield* result(x, 'read', { request: { tasks: {} }, fields: ['title'], limit: 5 })

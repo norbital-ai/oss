@@ -340,6 +340,16 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 						params: []
 					});
 					expect(yield* runs.boot().pipe(Effect.provide(context))).toEqual([conversation]);
+					// an inference's transcript the dead generation left running reads as idle, and is no turn that gave up
+					const transcript = '00000000-0000-4000-8000-000000000002';
+					yield* t.db.write({
+						text: `INSERT INTO sys_conversation (id, status, run) VALUES ($1, 'running', $2)`,
+						params: [transcript, randomUUID()]
+					});
+					expect(yield* runs.boot().pipe(Effect.provide(context))).toEqual([]);
+					expect(
+						yield* sql(t, `SELECT status FROM sys_conversation WHERE id = '${transcript}'`)
+					).toEqual([{ status: 'idle' }]);
 				})
 			)
 	);
