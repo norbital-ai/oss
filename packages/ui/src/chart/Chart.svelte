@@ -143,7 +143,8 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 							/>
 						</div>
 					{:else}
-						<div class="min-h-0 min-w-0 flex-1 overflow-x-auto" bind:clientWidth={plotWidth}>
+						<!-- clip, never scroll: the plot fills this box, and a scrollbar for its sub-pixel overflow resizes the plot every frame -->
+						<div class="min-h-0 min-w-0 flex-1 overflow-clip" bind:clientWidth={plotWidth}>
 							{#if kind === 'scatter'}<ScatterChart
 									{data}
 									{x}
