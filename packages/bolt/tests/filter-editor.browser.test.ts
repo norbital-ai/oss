@@ -60,7 +60,7 @@ it('reads and edits each rule once, shows nesting, and keeps prefilters locked a
 			await expect
 				.poll(() => new URL(location.href).searchParams.get('filter-browser.where'))
 				.toContain('Acme');
-			await page.getByRole('textbox').fill('Nihon Pigment');
+			await page.getByRole('textbox').fill('Northwind');
 			const toggle = related?.querySelector<HTMLButtonElement>('[data-scope-toggle]');
 			toggle?.click();
 			await expect.poll(() => toggle?.getAttribute('aria-expanded')).toBe('false');

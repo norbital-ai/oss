@@ -48,7 +48,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 ## AppShell and tabs
 
 - Every page is an `AppShell`. `variant="page"` (default) pads for one view; `variant="full"` leaves the body to `Tabs` or a `Scroll inset`. A heading never repeats the hero.
-- One concern per tab, never stacked sections or two model views on one scroll. A tab body renders one view, one `Scroll inset`, or one `Split`.
+- One concern per view (an app page, an app tab, or a tab/panel inside a record representation): at most one `Table` or `Board` per view, never stacked tables or two model lists on one scroll. A tab body renders one view, one `Scroll inset`, or one `Split`.
 - A tab's title is its view's title, with an icon.
 - A model existing only under one parent lives in that record, never a standalone page.
 - Nested `Tabs` step down a level on their own and add no padding; a nested strip of more than two tabs goes vertical on its own.
@@ -67,7 +67,7 @@ row contract so existing authored handlers can still read fields outside the dis
 
 ## Representations
 
-- Keep identity and the primary operation in `RecordShell`. Default: a compact accessible form with meaningful groups; steps or widgets when they make the task clearer. The shared controller's admitted writes and draft lifecycle stay the contract.
+- Keep identity and the primary operation in `RecordShell`. Default: a compact multi-column `Grid` (2–3 short fields per row) grouped into meaningful `Section`s; timelines, boards, steps or charts when the data shape calls for them. The shared controller's admitted writes and draft lifecycle stay the contract.
 - Use the same spacing, typography and field order in create, edit and read.
 - Do not repeat a label in help or the summary in each tab. Do not expose configuration the person cannot act on.
 - Forms and views fill their pane. Short controls share a row through `Grid`; long text and complex editors span full width. Prose keeps a readable measure.

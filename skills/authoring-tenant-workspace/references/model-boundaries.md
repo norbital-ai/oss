@@ -4,24 +4,28 @@ Read before adding a model, splitting a catalogue or designing configurable beha
 
 ## Design order
 
-1. Learn the domain: its jobs, actors, inputs and the variations its users need.
-2. Represent supported variation as validated runtime configuration. Source defines its types, operations and invariants; extend source when the requested behavior exceeds that language. Do not build a universal interpreter to avoid an ordinary source change.
-3. Use the fewest models that hold the data. Prefer, in order: a field; a custom datatype or shaped `json` on the owner; an owned child model; a separate model.
-4. Take a model over a custom datatype only when the data needs a foreign-key constraint, its own view, its own lifecycle, permissions or approval, history, or relational queries.
-5. Nest each model's folder under the model that owns it: `data/model/<root>/<child>/+model.ts`. Group catalogues and settings under one settings root. The tree reads as the domain.
+1. Learn the domain: its jobs, actors, inputs and the variations its users need. Do not map every prompt noun to a model.
+2. Merge same-stream variants sharing parent, timeline/feed and actor into one polymorphic model (`kind` + discriminated-union custom datatype or shaped `json`). Split only when lifecycles, permissions or foreign-key targets diverge.
+3. Co-locate compound values into one typed attribute: prefer built-in kinds (`period`, `money`, `state`, `count`, `file`) first, then a reusable custom datatype. Never scatter one concept across loose scalar pairs or duplicate its sub-fields beside it. Drop speculative fields with no active consumer.
+4. Represent supported variation as validated runtime configuration. Source defines its types, operations and invariants; extend source when the requested behavior exceeds that language. Do not build a universal interpreter to avoid an ordinary source change.
+5. Use the fewest models that hold the data. Prefer, in order: a built-in kind; a custom datatype (including tagged unions) or shaped `json` on the owner; an owned child model; a separate model.
+6. Take a model over a custom datatype only when the data needs a foreign-key constraint, its own view, its own lifecycle, permissions or approval, history, or relational queries.
+7. Nest each model's folder under the model that owns it: `data/model/<root>/<child>/+model.ts`. Group catalogues and settings under one settings root. The tree reads as the domain.
 
 ## Choose storage
 
 Name the records people find, the actions they take and the changes to prove. A screen, tab, schema property or noun does not justify a model.
 
-| Need                                                                        | Use                                                     |
-| --------------------------------------------------------------------------- | ------------------------------------------------------- |
-| A scalar with a built-in meaning                                            | its built-in field kind                                 |
-| A structured value meaningful only within one parent                        | shaped `json` or a custom datatype on the parent        |
-| A reusable value shape with its own validation or editor                    | a custom field and companion renderer                   |
-| Independent identity, lifecycle, permissions, history or relational queries | a model                                                 |
-| Reused, effective-dated configuration other records reference               | a runtime catalogue model                               |
-| A result derivable from existing facts                                      | a computed field, roll-up, or a read plus a pure helper |
+| Need                                                                        | Use                                                                                                 |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| A scalar or pair with a built-in meaning (range, money, state, count, file) | its built-in field kind                                                                             |
+| A structured or polymorphic value meaningful within one parent              | shaped `json` or a custom datatype (including tagged unions) on the parent                          |
+| A reusable compound value with its own validation or editor                 | a custom field and companion renderer                                                               |
+| Child rows needing FKs, row queries or independent edits under a parent     | an owned child model (`inverse`); commit initial children atomically with parent via layers/`act`   |
+| Authoritative accounting, balance, inventory or entitlement facts           | an append-only transactional ledger model (`locked` once posted, offsetting entries, derived total) |
+| Independent identity, lifecycle, permissions, history or relational queries | a model                                                                                             |
+| Reused, effective-dated configuration other records reference               | a runtime catalogue model                                                                           |
+| A result derivable from existing facts                                      | a computed field, roll-up, or a read plus a pure helper                                             |
 
 - Inline a value when its entries are born, edited, sealed and discarded with the parent.
 - Keep stable item keys when operations or references need them; an array position is not identity.
@@ -66,6 +70,7 @@ Inspect its readers, writers, policies, automations, seeds and syncs. Preserve:
 
 ## Review
 
-- For each proposed model, state the identity or behaviour requiring it.
+- For each proposed model, state its archetype (entity, owned child, or transactional ledger) and the identity or behaviour preventing consolidation into a polymorphic model or custom datatype.
+- Confirm every compound value lives in one built-in datatype or reusable custom datatype—no loose scalar pairs, scattered parallel columns, duplicated sub-fields, or unused speculative fields.
 - For each removed model, state where its validation, authority, history and references now live.
 - Verify a normal change, an invalid configuration and a locked or unauthorized change through the real write path.

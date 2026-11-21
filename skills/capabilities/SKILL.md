@@ -14,4 +14,4 @@ description: What a workspace can do on its own, to compose a solution to a pers
 7. Policies and approvals: grants decide who may do what; a verdict can route a write for approval.
 8. Agent work: scripts compute over reads and files; the browser works the web; an automation marked for agents becomes your own tool; a workspace skill records a repeated procedure and the brief records standing rules.
 9. Onboarding and configuration: set up envoys, connections and runtime catalogues through native records and the integration page. Never collect a credential in chat.
-10. When a step repeats, build a tool for it; when a procedure repeats, write a skill. Prefer the least complex composition.
+10. When a step repeats, build a tool for it; when a procedure repeats, write a skill (follow `skill-authoring`). Prefer the least complex composition.

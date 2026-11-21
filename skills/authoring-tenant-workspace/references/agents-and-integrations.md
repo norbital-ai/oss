@@ -6,11 +6,12 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 
 - `+agent.md` briefs staff; `+agent.external.md` briefs external members. A brief describes work and evidence, never authority. The agent acts as its identity through the same access points as a person.
 - A workspace skill is `src/agent/skill/<name>/`: names match `^[a-z][a-z0-9_]*$`; `+skill.md` has `description:` frontmatter. It may include scripts and vendored pure-JavaScript packages, at most 10 MiB, no links.
-- Keep a reusable skill short and numbered. Its procedure is general; validity rules and exclusions come from the task, declared constraints or supplied evidence. Do not turn an example into a rule for every domain.
-- A script runs as written through `run_js { file }`: its tree is read-only at `/app`, files at `/in/<name>`, `/out` reaches the person. Only `fs`, `path`, `buffer`, `process`, `util` built-ins exist; `fetch` needs the `http` grant.
+- Skill design, scoping and structure: follow the `skill-authoring` skill.
+- A script runs as written through `run_js { file }` or inline `run_js { code }`: its tree is read-only at `/app`, files at `/in/<name>`, and `/out` (or returned `{ files }` from inline `run_js`) surfaces as downloadable attachments in chat. Only `fs`, `path`, `buffer`, `process`, `util` built-ins exist; `fetch` needs the `http` grant.
 - Policies grant MCP servers and host tools through `capabilities`; every skill is open to every actor.
 - A brief or skill handling documents says which part to read, never the whole file. A format with no parser is the workspace's to parse with a tool or integration. Record imports stay on syncs.
-- Ask questions through the structured input tool and let its native card collect the answer. The user's workspace `page` tool exists only in a root web conversation. Envoys, automation inference and delegated agents have no user tab; use the separate fleet browser when available for research.
+- Ask questions through the structured input tool and let its native card collect the answer. The user's workspace `page` tool exists only in a root web conversation and confirms once per conversation; the fleet `browser` needs no confirmation. Delegated subagents (`task`) exclude every approval-gated tool (`act`, `run`, `decide`, `invite`, `page`, `connect`, `download`, MCP, `run_js http: 'send'`, confirmed host tools). Envoys, automation inference and delegated agents have no user tab; use the separate fleet browser when available for research.
+- Within a step containing parallel tool calls, non-approval calls finish while every approval-gated call emits its card; the turn halts after the step settles and takes no next step until every approval is answered.
 
 ## Agent automations
 
@@ -28,7 +29,7 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 - An email sender links only when the receiving server vouches for the `From` domain (DMARC, or aligned DKIM); otherwise it is unknown. Say so before promising a private email envoy on a mail server outside Google and Microsoft: it needs the connection's Authentication server.
 - A group turn or unlinked DM holds the envoy's `policies` alone, every actor variable null except `{ var: 'actor.instance' }`.
 - A linked member's DM: `dm: 'union'` adds the member's own policies and team tree, never admin; `dm: 'envoy'`, and every administrator's DM, holds the envoy's policies with operands bound to the member, no member routes, tools or automations.
-- An envoy has no confirmation card: it refuses what the in-app agent confirms (automation starts, deletes and batches, MCP calls, sending scripts, browser submits).
+- An envoy has no confirmation card: it refuses what the in-app agent confirms (automation starts, deletes and batches, MCP calls, sending scripts, user-tab page actions).
 - Limits are always the envoy's. Envoys never decide approvals.
 - `actor.instance` is the arriving instance, or the instance of a remote sync run, null otherwise, so it fails closed. It types only against an FK to `sys_integration`.
 

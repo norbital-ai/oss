@@ -4,18 +4,20 @@ Business requirement to default construction. Use the default unless a requireme
 
 ## Data and lifecycles
 
-| Requirement                                    | Construction                                                             | Note                                         |
-| ---------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------- |
-| A record with a lifecycle                      | model with a `state` field                                               | history is built in                          |
-| Independent lifecycles                         | separate models when identity, authority or evidence differs             | screen sections do not require one           |
-| A fact that changes and must be provable       | `period` + `no_overlap` constraint, successors by callback or automation | in-force is a read                           |
-| A structured value, not a row                  | custom field                                                             | check built-in kinds first                   |
-| Values of one parent                           | shaped JSON or custom datatype                                           | child model only for row semantics           |
-| A child with row semantics under a parent lock | `owned` relationship                                                     | never delete by omission                     |
-| Supported business variation                   | validated runtime records                                                | source defines language and evaluator        |
-| Numbering                                      | `seq`                                                                    | never reused                                 |
-| Totals over children                           | `sum`, `count`                                                           | never a stored number kept in step           |
-| Deletion                                       | none by default                                                          | deletions are grants; prefer terminal states |
+| Requirement                                    | Construction                                                             | Note                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------- |
+| A record with a lifecycle                      | model with a `state` field                                               | history is built in                            |
+| Same-stream variants with variant fields       | one polymorphic model (`kind` + union custom datatype or shaped `json`)  | split only when lifecycle or authority differs |
+| Independent lifecycles                         | separate models when identity, authority or evidence differs             | screen sections do not require one             |
+| A fact that changes and must be provable       | `period` + `no_overlap` constraint, successors by callback or automation | in-force is a read                             |
+| Authoritative balance or accounting fact       | append-only `locked` ledger model with offsetting entries                | derive current balance; never mutate history   |
+| A structured value, not a row                  | built-in kind first, else reusable custom field                          | never scatter across loose scalar pairs        |
+| Values of one parent                           | shaped JSON or custom datatype                                           | child model only for row semantics             |
+| A child with row semantics under a parent lock | `owned` relationship                                                     | never delete by omission                       |
+| Supported business variation                   | validated runtime records                                                | source defines language and evaluator          |
+| Numbering                                      | `seq`                                                                    | never reused                                   |
+| Totals over children                           | `sum`, `count`                                                           | never a stored number kept in step             |
+| Deletion                                       | none by default                                                          | deletions are grants; prefer terminal states   |
 
 ## Rules and money
 

@@ -4,7 +4,7 @@ Checks every template page passes. Rule homes: [app-structure.md](app-structure.
 
 1. A page is an `AppShell` around one view: icon, 1 to 3 word title, one-sentence description up to 90 characters with a final period.
 2. An app's name never repeats the workspace name; the app icon is the header icon.
-3. One concern per tab; tab title equals view title; one tab size.
+3. One concern per view (app page, app tab, or representation tab): at most one `Table` or `Board` per view; tab title equals view title; one tab size.
 4. The toolbar is fixed; no button above, beside or in a view header.
 5. Two scaffolds only. Record (`RecordShell`: header, body, one footer) for any view that shows or edits one record, settings and singletons included; app (`AppShell`: app header and tabs, the table or `CustomView` toolbar, body) for lists, boards, dashboards, reports, dispatch and portals, with filters and report parameters in its toolbar or body. No third frame of its own header and footer. Record sheet: title `record_label` or UUID, overline the singular model label, subtitle fields; one primary action, the rest in overflow. `RecordShell` always owns the visible header/footer and scrolling body, including custom representations; authors decorate its footer rather than opt into one.
 6. A row click opens that row's record and nothing else: no link, relation link or inspect popover in a cell. A row that stands for another record (a report line, a snapshot item) opens it with `on_open`. Row operations are row `actions`, never loose buttons in cells.
