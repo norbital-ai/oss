@@ -1611,11 +1611,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					key = callKey(call.name, call.input);
 					// a call the dead generation made (its result never recorded) is not made again; nor one that already failed
 					// this often
-					const skipped = current.replayed.delete(stepKey(call.name, args))
-					? NUDGE.replayed
-					: (current.failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure
-						? 'Not run: this exact call already failed several times this turn.'
-						: undefined;
+					const skipped = waiting
+					? 'Not run: waiting for the person to approve an earlier call in this step.'
+					: current.replayed.delete(stepKey(call.name, args))
+						? NUDGE.replayed
+						: (current.failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure
+							? 'Not run: this exact call already failed several times this turn.'
+							: undefined;
 					const skip = tool === undefined || skipped !== undefined;
 					const answer: ToolAnswer =
 					tool === undefined
@@ -1660,6 +1662,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						shown = own ? result : bounded(result).value;
 					const stored = storedToolResult(call.id, shown, whole);
 					yield* finish(stored.result, stored.full === undefined ? null : { tag: 'output', full: stored.full });
+					// a live approval card (e.g. workspace_merge / workspace_rollback) pauses the main turn until the person decides
+					if (
+						conv.parent === null &&
+						isObj(result) &&
+						isObj(result['approval']) &&
+						typeof result['approval']['id'] === 'string'
+					)
+						waiting = true;
 				}
 					return Option.none();
 				})
@@ -1731,7 +1741,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				current.hostFor = hostKey;
 			}
 			const audience: Audience = !inApp(conv) ? 'channel' : staff ? 'staff' : 'member';
-			// the platform's skills by who can use them: authoring ones to authors, research to in-app staff
+			// the platform's skills by who can use them: authoring ones to authors, research and skill-authoring to in-app staff
 			const skills: ToolContext['skills'] = {
 				...Object.fromEntries(
 					Object.entries(workspaceSkills).filter(
@@ -1739,7 +1749,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							name in m.agent.skills ||
 							(AUTHORING_SKILLS.has(name)
 								? authoring !== undefined
-								: name !== 'research' || audience === 'staff')
+								: (name !== 'research' && name !== 'skill-authoring') || audience === 'staff')
 					)
 				),
 				...(hostSide && hostSkills !== undefined

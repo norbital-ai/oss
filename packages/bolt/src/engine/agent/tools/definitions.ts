@@ -74,7 +74,7 @@ export const describeTool = defineTool('describe_workspace', {
 });
 
 export const pageTool = defineTool('page', {
-	policy: { audiences: ['staff'], scripts: false },
+	policy: { audiences: ['staff'], child: false, scripts: false },
 	behavior: { page: true },
 	description:
 		"Control the person's live workspace tab (NOT the headless browser fleet): navigate to a /app/… Pages path, open native configure setup, click/highlight text, type by label, scroll, go back/forward, or open a preview URL. Pending until the tab reports. Approvals, passwords and files are the person's.",
@@ -99,6 +99,7 @@ export const pageTool = defineTool('page', {
 });
 
 export const actTool = defineTool('act', {
+	policy: { child: false },
 	behavior: { data: true },
 	description: `Commit { acts: { "<model>.<verb>": input }, key? } atomically. input_file can hold the map. Reuse key only for the same operation. Mint UUIDs to link new rows across entries.
 create: [{ column: value, relation: [new row | { id, revision }] }]; update: [{ target, set: { column, relation: { create, update, delete, link, unlink } } }]; delete: [{ target }]; import: { rows, on_conflict: "update"|"keep"|"refuse", on_missing?: "create"|"skip", prune?, dry_run? }. Targets and existing relation links need { id, revision }. Ref fields take a scalar id string, never a label or { id }; file fields take file ids. Read current ids, revisions and needed rows before a batch. Returns stored rows or holds for approval.`,
@@ -106,6 +107,7 @@ create: [{ column: value, relation: [new row | { id, revision }] }]; update: [{ 
 });
 
 export const runAutomationTool = defineTool('run', {
+	policy: { child: false },
 	behavior: { data: true },
 	description:
 		'Run an automation from describe_workspace. Calls return output; jobs return run ids and report completion. input_file replaces input. Reuse key only to retry the same job.',
@@ -113,6 +115,7 @@ export const runAutomationTool = defineTool('run', {
 });
 
 export const decideTool = defineTool('decide', {
+	policy: { child: false },
 	behavior: { data: true },
 	description:
 		'Decide an approval request as its authorized approver: request_id, decision and optional reason. The person confirms the decision in the app.',
@@ -120,6 +123,7 @@ export const decideTool = defineTool('decide', {
 });
 
 export const inviteTool = defineTool('invite', {
+	policy: { child: false },
 	behavior: { data: true },
 	description:
 		'Invite members as a workspace administrator: members is a list of email or phone and optional team. The person confirms the invitations in the app.',
@@ -127,7 +131,7 @@ export const inviteTool = defineTool('invite', {
 });
 
 export const connectTool = defineTool('connect', {
-	policy: { audiences: ['staff', 'member'], scripts: false },
+	policy: { audiences: ['staff', 'member'], child: false, scripts: false },
 	behavior: { data: true },
 	description:
 		'Create a connection with non-secret configuration, or pair one by instance or envoy + integration. owner is me or workspace; envoy deploys it. The person supplies credentials privately on a card. Returns instance, integration, owner and state after pairing.',
@@ -313,7 +317,7 @@ export const listSource = defineTool('workspace_list_dir', {
 
 export const taskTool = defineTool('task', {
 	policy: { child: false, scripts: false, needs: 'delegation' },
-	description: `Delegate independent work to general (your authority) or an active envoy's id; at most 4 at once. Returns task_id immediately; a later message wakes you with the result. Supply context and the desired result in prompt. Continue other work while it runs; summarize its result for the person. task_id resumes that session, delivering a follow-up at its next step if running; otherwise each invocation starts fresh.`,
+	description: `Delegate independent work to general (your authority) or an active envoy's id (≤4 at once). Returns task_id immediately; a later message wakes you with the result. Subagents have no approval-gated tools (DB writes, automations, merges, page control): run those yourself after they report back. task_id resumes a session.`,
 	parameters: Schema.Struct({
 		description: Schema.String.annotate({
 			description: 'A short (3-5 words) description of the task'
@@ -344,7 +348,7 @@ export const taskStopTool = defineTool('task_stop', {
 });
 
 export const downloadTool = defineTool('download', {
-	policy: { audiences: ['staff'] },
+	policy: { audiences: ['staff'], child: false },
 	description:
 		"Save a public http(s) file as the person's: media, a PDF, HTML or CAD, at most 100 MiB.",
 	parameters: Schema.Struct({ url: Schema.String })

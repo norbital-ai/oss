@@ -3680,14 +3680,64 @@ describe('a sub-agent', () => {
 				...(yield* names(yield* ctx({ mode: 'plan', child: true }))),
 				...(yield* names(yield* ctx({ child: true })))
 			];
-				for (const n of ['update_plan', 'task']) expect(child).not.toContain(n);
-				expect(child).toEqual(expect.arrayContaining(['read', 'act', 'wait', 'ask']));
+				for (const n of [
+					'update_plan',
+					'task',
+					'act',
+					'run',
+					'decide',
+					'invite',
+					'page',
+					'connect',
+					'download'
+				])
+					expect(child).not.toContain(n);
+				expect(child).toEqual(expect.arrayContaining(['read', 'wait', 'ask']));
+				const childHost = yield* names(
+					yield* ctx({
+						child: true,
+						mcpTools: [{ server: 'ext', name: 'send', description: 'send', input: { type: 'object' } }],
+						host_tools: [
+							{
+								name: 'workspace_merge',
+								description: 'merge',
+								studio: 'merge',
+								behavior: {},
+								input: { type: 'object', properties: {} },
+								call: async () => ({ ok: true })
+							},
+							{
+								name: 'confirmed_tool',
+								description: 'confirmed',
+								behavior: {},
+								input: { type: 'object', properties: {} },
+								confirm: () => true,
+								call: async () => ({ ok: true })
+							}
+						]
+					})
+				);
+				for (const n of ['ext__send', 'workspace_merge', 'confirmed_tool'])
+					expect(childHost).not.toContain(n);
 				expect(yield* result(yield* ctx({ child: true }), 'ask', { question: 'Which one?' })).toEqual({
 				result: { asked: true, to: 'the delegating agent' }
 			});
-				// a child's fixed list leaves the delegation and planning tools out
+				// a child's fixed list leaves the delegation, planning and approval-gated tools out
 				const fixed = (yield* catalogue(yield* ctx({ child: true }))).fixed.map((t) => t.name);
-				for (const n of ['task', 'task_read', 'task_stop', 'update_plan']) expect(fixed).not.toContain(n);
+				for (const n of [
+					'task',
+					'task_read',
+					'task_stop',
+					'update_plan',
+					'act',
+					'run',
+					'decide',
+					'invite',
+					'page',
+					'connect',
+					'download'
+				])
+					expect(fixed).not.toContain(n);
 			})
 	);
 });

@@ -50,12 +50,20 @@ export const bindContributedTools = Effect.fn('AgentTool.bindContributed')(funct
 	const activeBrowserTools = a.preview === undefined ? x.browser_tools : [];
 	const authoringSession =
 		x.inApp && staff && (x.draft !== undefined || (x.workspace !== undefined && a.admin));
+	const isApprovalHostTool = (host: HostTool): boolean =>
+		host.confirm !== undefined || host.studio === 'merge' || host.studio === 'rollback';
 	const activeHostTools =
 		x.inApp && staff
-			? x.host_tools.filter((host) => authoringSession || !isStudioAuthoringTool(host))
+			? x.host_tools.filter(
+					(host) =>
+						(authoringSession || !isStudioAuthoringTool(host)) &&
+						(!x.child || !isApprovalHostTool(host))
+				)
 			: [];
 
-	const discovered = x.mcpTools.map((tool) => ({ tool, name: mcpName(tool.server, tool.name) }));
+	const discovered = x.child
+		? []
+		: x.mcpTools.map((tool) => ({ tool, name: mcpName(tool.server, tool.name) }));
 	const taken = new Map<string, number>();
 	for (const name of [...activeBrowserTools, ...activeHostTools, ...discovered].map(
 		(tool) => tool.name

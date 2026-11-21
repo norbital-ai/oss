@@ -112,6 +112,10 @@ export function bindRuntimeTools(
 			if (i.http !== undefined && i.http !== false && http === undefined)
 				return err('Your policies do not grant scripts HTTP: run it without http.');
 			if (i.http === 'send') {
+				if (x.child)
+					return err(
+						'Subagents cannot run approval-gated HTTP sends; return what you found to the main agent.'
+					);
 				const held = hold(runJsTool.name, i, 'run a script that sends HTTP');
 				if (held !== undefined) return held;
 			}
