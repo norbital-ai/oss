@@ -104,8 +104,22 @@ export const formatPoint = (p: Point) => `${p.lat.toFixed(6)}, ${p.lng.toFixed(6
 
 // ── files: `accept` and `max` are checked before bytes leave the browser (the host checks again) ──
 export function sizeBytes(size: string): number {
-	const m = /^(\d+)(KiB|MiB)$/.exec(size);
-	return m === null ? Infinity : Number(m[1]) * (m[2] === 'KiB' ? 1024 : 1024 * 1024);
+	const m = /^(\d+)(KiB|MiB|GiB|KB|MB|GB)$/.exec(size);
+	if (m === null) return Infinity;
+	const unit = m[2];
+	const factor =
+		unit === 'KiB'
+			? 1024
+			: unit === 'MiB'
+				? 1024 ** 2
+				: unit === 'GiB'
+					? 1024 ** 3
+					: unit === 'KB'
+						? 1000
+						: unit === 'MB'
+							? 1000 ** 2
+							: 1000 ** 3;
+	return Number(m[1]) * factor;
 }
 export function fileProblem(
 	kind: KindOf<'file'>,

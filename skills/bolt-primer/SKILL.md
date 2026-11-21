@@ -63,6 +63,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - Migrations are generated. Edit one only to move data: the schema must arrive at what the models declare. Never edit `.norbital/`.
 - Credentials never enter source, seeds or model fields.
 - Never rebuild search, filters, paging, import/export, approvals, history or label maps: the views render them.
+- Keep evolving business rules, research prompts, scoring rubrics, and tunable thresholds in a runtime configuration model (seeded with defaults, editable directly as data) instead of hardcoding them in automation source and running repeated Studio build/migrate/merge cycles.
 - When launching a large background sweep (e.g. 50+ records), queue the runs and report status right away instead of blocking the conversation inside repeated `wait` loops.
 
 Detail: the `authoring-tenant-workspace` skill indexes every reference.

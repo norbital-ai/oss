@@ -557,11 +557,19 @@ const ledgerNode = <S extends Schema.Top & { readonly DecodingServices: never }>
 	root: string,
 	node: unknown
 ) =>
-	Schema.decodeUnknownEffect(schema, CLOSED)(node).pipe(
-		Effect.mapError((error) =>
-			BoltError.make('invalid_input', 'decode', `${root}: ${error.message}`, error)
-		)
-	);
+	root === '$runs' && Predicate.isObject(node) && 'aggregate' in node
+		? Effect.fail(
+				BoltError.make(
+					'invalid_input',
+					'decode',
+					'$runs does not support aggregate; pass { automation?, status?, cause?, since?, until?, limit?, after? } and summarize rows in memory or run_js.'
+				)
+			)
+		: Schema.decodeUnknownEffect(schema, CLOSED)(node).pipe(
+				Effect.mapError((error) =>
+					BoltError.make('invalid_input', 'decode', `${root}: ${error.message}`, error)
+				)
+			);
 
 export function ledgerRoots(
 	x: ToolContext

@@ -43,11 +43,32 @@ const refuse = (code: Refused['code'], message: string): Refused => ({
 	message,
 	field: 'file'
 });
-const SIZE = { KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3 } as const;
-/** `'5MiB'` → bytes. */
+const SIZE = {
+	KiB: 1024,
+	MiB: 1024 ** 2,
+	GiB: 1024 ** 3,
+	KB: 1000,
+	MB: 1000 ** 2,
+	GB: 1000 ** 3
+} as const;
+/** `'5MiB'` or `'5MB'` → bytes. */
 export const size_bytes = (s: string): number => {
-	const m = /^(\d+)(KiB|MiB|GiB)$/.exec(s);
-	return m === null ? NaN : Number(m[1]) * SIZE[m[2] === 'KiB' ? 'KiB' : m[2] === 'MiB' ? 'MiB' : 'GiB'];
+	const m = /^(\d+)(KiB|MiB|GiB|KB|MB|GB)$/.exec(s);
+	if (m === null) return NaN;
+	const unit = m[2];
+	const factor =
+		unit === 'KiB'
+			? SIZE.KiB
+			: unit === 'MiB'
+				? SIZE.MiB
+				: unit === 'GiB'
+					? SIZE.GiB
+					: unit === 'KB'
+						? SIZE.KB
+						: unit === 'MB'
+							? SIZE.MB
+							: SIZE.GB;
+	return Number(m[1]) * factor;
 };
 /** A file sync import's upper bound when no field cap applies. */
 const UNBOUNDED = '512MiB';

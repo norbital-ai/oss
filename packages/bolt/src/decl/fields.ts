@@ -32,7 +32,7 @@ import type {
  * cells, forms and history, so a page never maps labels or builds an editor by hand.
  */
 /** A `file` field's cap. */
-type FileSize = `${bigint}KiB` | `${bigint}MiB` | `${bigint}GiB`;
+type FileSize = `${bigint}KiB` | `${bigint}MiB` | `${bigint}GiB` | `${bigint}KB` | `${bigint}MB` | `${bigint}GB`;
 /** `markdown`: the text is Markdown, rendered as prose; the others are checked on write. */
 /**
  * How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor; `team` holds a team handle

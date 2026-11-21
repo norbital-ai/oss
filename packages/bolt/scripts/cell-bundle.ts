@@ -39,6 +39,8 @@ const GUEST_SOURCE = /\/build\/engine\/(?:guest\/prelude|agent\/run-js-node)\.js
 /** Pure SQL data modules: preserve every byte, including whitespace used by migration fingerprints. */
 const SQL_SOURCE =
 	/\/build\/(?:schema\/(?:json|rules)|migration-introspect|engine\/schema\/audit-sql)\.js$/;
+/** Pure JSON data modules packed once with DEFLATE to keep `build/cell.js` well under budget. */
+const JSON_SOURCE = /\/build\/engine\/agent\/skills\.generated\.js$/;
 const stripped = (source: string) => {
 	// a function body (the prelude returns its hooks), so a top-level `return` parses
 	const { code, errors } = minifySync('guest.js', `function __guest(){${source}\n}`, {
@@ -89,7 +91,8 @@ const guard = (): Plugin => {
 			if (id === `\0${ENTRY}`)
 				return `import ${JSON.stringify(join(BUILD, 'protocol', 'cell.js'))};`;
 			const guest = GUEST_SOURCE.test(id);
-			if (!guest && !SQL_SOURCE.test(id)) return null;
+			const json = JSON_SOURCE.test(id);
+			if (!guest && !json && !SQL_SOURCE.test(id)) return null;
 			const exported: Record<string, unknown> = await import(pathToFileURL(id).href);
 			return [
 				`import { Result } from 'effect';`,
@@ -98,7 +101,8 @@ const guard = (): Plugin => {
 				...Object.entries(exported).map(([name, value]) => {
 					let source: string;
 					let array = false;
-					if (typeof value === 'string') source = guest ? stripped(value) : value;
+					if (json) source = JSON.stringify(value);
+					else if (typeof value === 'string') source = guest ? stripped(value) : value;
 					else if (!guest && Schema.is(Schema.Array(Schema.String))(value)) {
 						if (value.length === 0 || value.some((part) => part.includes('\0')))
 							throw new Error(
@@ -113,7 +117,10 @@ const guard = (): Plugin => {
 					);
 					if (inflateRawSync(Buffer.from(packed, 'base64')).toString('utf8') !== source)
 						throw new Error(`${relative(ROOT, id)}: ${name} did not round-trip through DEFLATE`);
-					return `export const ${name} = new TextDecoder().decode(inflateSync(Result.getOrThrow(Base64.decode(${JSON.stringify(packed)}))))${array ? ".split('\\0')" : ''};`;
+					const expr = `new TextDecoder().decode(inflateSync(Result.getOrThrow(Base64.decode(${JSON.stringify(packed)}))))`;
+					return json
+						? `export const ${name} = JSON.parse(${expr});`
+						: `export const ${name} = ${expr}${array ? ".split('\\0')" : ''};`;
 				})
 			].join('\n');
 		}

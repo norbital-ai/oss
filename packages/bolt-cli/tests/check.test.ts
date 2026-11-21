@@ -668,6 +668,30 @@ describe('bolt check', () => {
 				'check/wait-job src/data/model/x/+model.ts:2'
 			]);
 		});
+		it('catches invalid <Chart of="model"> measures and bare-string order_by arrays', () => {
+			const m: EngineManifest = {
+				...emptyManifest,
+				models: {
+					invoices: {
+						description: 'Invoices',
+						fields: { amount: { kind: 'decimal', scale: 2 }, status: { kind: 'text' } }
+					}
+				}
+			};
+			expect(
+				codes(
+					{
+						'src/app/finance/+dash.page.svelte':
+							'<script lang="ts">\n\tconst q = { order_by: ["created_at"] };\n\tconst ok = { order_by: [{ created_at: "desc" }] };\n</script>\n<Chart {ctx} of="invoices" x="status" y="amount" />\n<Chart {ctx} of="invoices" x="status" y="sum.amount" />\n<Chart {ctx} of="invoices" x="status" y={["count", "bad"]} />'
+					},
+					m
+				)
+			).toEqual([
+				'check/order-by-shape src/app/finance/+dash.page.svelte:2',
+				'check/chart-measure src/app/finance/+dash.page.svelte:5',
+				'check/chart-measure src/app/finance/+dash.page.svelte:7'
+			]);
+		});
 		it('a host-only @norbital-ai/bolt entry does not resolve for workspace code', () => {
 			expect(() => workspaceEntry('@norbital-ai/bolt/engine')).toThrow(/no workspace entry/);
 			expect(() => workspaceEntry('@norbital-ai/bolt/protocol')).toThrow(/no workspace entry/);

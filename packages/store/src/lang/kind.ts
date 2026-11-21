@@ -128,7 +128,7 @@ export type Kind = Common &
 		| {
 				readonly kind: 'file';
 				readonly accept: readonly `${string}/${string}`[];
-				readonly max: `${bigint}KiB` | `${bigint}MiB` | `${bigint}GiB`;
+				readonly max: `${bigint}${'KiB' | 'MiB' | 'GiB' | 'KB' | 'MB' | 'GB'}`;
 		  }
 		| { readonly kind: 'vector'; readonly dim: number; readonly metric: 'l2' | 'cosine' | 'ip' }
 		| { readonly kind: 'custom'; readonly of: string; readonly many?: true }
@@ -248,8 +248,11 @@ export const KindSchema: Schema.Codec<Kind> = /* @__PURE__ */ (() => {
 			accept: Schema.Array(Schema.TemplateLiteral([Schema.String, '/', Schema.String])).annotate({
 				message: "Expected MIME patterns like ['application/pdf'] or ['image/*']"
 			}),
-			max: Schema.TemplateLiteral([Schema.BigInt, Schema.Literals(['KiB', 'MiB', 'GiB'])]).annotate({
-				message: "Expected a binary size like '10MiB', '512KiB', or '1GiB' (KiB/MiB/GiB, no space)"
+			max: Schema.TemplateLiteral([
+				Schema.BigInt,
+				Schema.Literals(['KiB', 'MiB', 'GiB', 'KB', 'MB', 'GB'])
+			]).annotate({
+				message: "Expected a file size like '10MiB', '512KiB', '1GiB', or '10MB' (no space)"
 			})
 		}),
 		descriptor_arm('vector', { dim: Schema.Number, metric: Schema.Literals(['l2', 'cosine', 'ip']) }),

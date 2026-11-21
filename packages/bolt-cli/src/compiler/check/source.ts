@@ -11,6 +11,8 @@ const ITERATORS = new Set(['map', 'flatMap', 'forEach', 'filter', 'reduce', 'som
 /** Files whose bodies read under the per-call cap: models (write callbacks, effects, syncs) and policies (verdicts). */
 const CAPPED = /(^|\/)\+model\.ts$|\.policy\.ts$|(^|\/)\+?[^/]*sync\.ts$/;
 const SCRIPT = /<script\b[^>]*>([\s\S]*?)<\/script>/g;
+const CHART_TAG = /<Chart\b([^>]*?)\/?>/g;
+const CHART_MEASURE = /^(?:count|(?:sum|avg|min|max)\.\w+)$/;
 
 type Span = { readonly start: number; readonly end: number };
 const within = (outer: Span, at: number) => outer.start <= at && at < outer.end;
@@ -113,6 +115,24 @@ export function sourceRules(
 					)
 						at('set-before', n, `${source(n)}: read ${source(set.object)}.after.${left?.name}`);
 				},
+				Property: (n) => {
+					const key =
+						!n.computed && n.key.type === 'Identifier'
+							? n.key.name
+							: n.key.type === 'Literal' && typeof n.key.value === 'string'
+								? n.key.value
+								: undefined;
+					if (key !== 'order_by' || n.value.type !== 'ArrayExpression') return;
+					const bare = n.value.elements.find(
+						(el) => el?.type === 'Literal' && typeof el.value === 'string'
+					);
+					if (bare !== undefined)
+						at(
+							'order-by-shape',
+							n.value,
+							"order_by takes { <field>: 'asc' | 'desc' } entries (e.g. [{ created_at: 'desc' }]), not bare field strings"
+						);
+				},
 				CallExpression: (n) => {
 					const callee = source(n.callee).replace(/\s+/g, '');
 					if (/^ctx\.query(\.\w+)?$/.test(callee)) reads.push(n);
@@ -157,6 +177,32 @@ export function sourceRules(
 							r,
 							'a write callback/verdict reads at most 10 times per call: read the whole batch once'
 						);
+		}
+		if (path.endsWith('.svelte')) {
+			for (const match of text.matchAll(CHART_TAG)) {
+				const attrs = match[1] ?? '';
+				const ofMatch = /\bof\s*=\s*(?:"([^"]+)"|'([^']+)')/.exec(attrs);
+				const modelName = ofMatch?.[1] ?? ofMatch?.[2];
+				if (modelName === undefined || !(modelName in m.models)) continue;
+				const ySingle = /\by\s*=\s*(?:"([^"]+)"|'([^']+)')/.exec(attrs);
+				const yList = /\by\s*=\s*\{\s*\[([^\]]+)\]\s*\}/.exec(attrs);
+				const measures =
+					ySingle !== null
+						? [ySingle[1] ?? ySingle[2] ?? '']
+						: yList !== null
+							? [...(yList[1] ?? '').matchAll(/["']([^"']+)["']/g)].map((k) => k[1] ?? '')
+							: [];
+				const bad = measures.find((measure) => measure !== '' && !CHART_MEASURE.test(measure));
+				if (bad !== undefined) {
+					const line = lineOf(match.index);
+					out.push({
+						code: 'check/chart-measure',
+						path,
+						line,
+						message: `${path}:${line}: <Chart of="${modelName}"> expects y to be 'count' or '<sum|avg|min|max>.<field>' (got '${bad}')`
+					});
+				}
+			}
 		}
 	}
 	return out;
