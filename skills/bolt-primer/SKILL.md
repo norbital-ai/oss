@@ -55,6 +55,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - An automation runs with its declared `policies`, never its starter's; `actor.*` there matches nothing.
 - Effectful bodies are `function*` and `yield*` their `ctx` Effects.
 - Exact decimal calculations use Effect `BigDecimal`; stored decimal values are strings, never binary floating-point approximations.
+- File fields require both `accept` MIME patterns and binary `max` in `KiB`/`MiB`/`GiB` with no space (e.g. `{ kind: 'file', accept: ['application/pdf'], max: '20MiB', optional: true }`). Model one-to-many children with a single `ref` on the child model; never declare a `many: true` `ref` back-list on the parent.
 - Named constraints take arrays for `unique` and `per`. Mark one unique constraint `import_key: true` for matching imports. Computed expressions live on fields; physical and search indexes live under `indexes`.
 - Each create/update transform and per-verb effect receives `{ before, set, after, changed }` changes. Create/update transforms return sets or `{ sets, with, on_approved }` with one set per input in order, including approval replay. Preserve unchanged sets with `changes.map(({ set }) => set)`; a delete transform returns nothing or `{ with, on_approved }`. Effects receive approval lifecycle details in `ctx.event`.
 - Commit related writes through one `ctx.act({ '<model>.<verb>': inputs })` map. Update/delete targets carry selected rows and their revisions. There are no `many`, `checked`, upsert or transaction alternatives.
@@ -62,6 +63,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - Migrations are generated. Edit one only to move data: the schema must arrive at what the models declare. Never edit `.norbital/`.
 - Credentials never enter source, seeds or model fields.
 - Never rebuild search, filters, paging, import/export, approvals, history or label maps: the views render them.
+- When launching a large background sweep (e.g. 50+ records), queue the runs and report status right away instead of blocking the conversation inside repeated `wait` loops.
 
 Detail: the `authoring-tenant-workspace` skill indexes every reference.
 

@@ -245,8 +245,12 @@ export const KindSchema: Schema.Codec<Kind> = /* @__PURE__ */ (() => {
 		descriptor_arm('count', { of: Schema.String, where: Schema.optionalKey(WhereLiteral) }),
 		descriptor_arm('json', { shape: Schema.optionalKey(Nested) }),
 		descriptor_arm('file', {
-			accept: Schema.Array(Schema.TemplateLiteral([Schema.String, '/', Schema.String])),
-			max: Schema.TemplateLiteral([Schema.BigInt, Schema.Literals(['KiB', 'MiB', 'GiB'])])
+			accept: Schema.Array(Schema.TemplateLiteral([Schema.String, '/', Schema.String])).annotate({
+				message: "Expected MIME patterns like ['application/pdf'] or ['image/*']"
+			}),
+			max: Schema.TemplateLiteral([Schema.BigInt, Schema.Literals(['KiB', 'MiB', 'GiB'])]).annotate({
+				message: "Expected a binary size like '10MiB', '512KiB', or '1GiB' (KiB/MiB/GiB, no space)"
+			})
 		}),
 		descriptor_arm('vector', { dim: Schema.Number, metric: Schema.Literals(['l2', 'cosine', 'ip']) }),
 		descriptor_arm('custom', { of: Schema.String, many: Bool }),

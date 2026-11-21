@@ -44,7 +44,7 @@ import { NOTICE_DELIVER } from '../notifications/queue.ts';
 import { DELIVER } from '../integrations/outbound.ts';
 import { RenderGrants, render_record } from '../render.ts';
 import { uuid } from '../port.ts';
-import { Ai, Browser, Drivers, Files, Logs, Render } from '../ports.ts';
+import { Ai, Browser, Drivers, Files, Logs, Render, RunUnits } from '../ports.ts';
 import { ReadDeps } from '../query/engine.ts';
 import { bindingsAt } from '../query/reader.ts';
 import { Activation, Automations, Callables, Facilities, Guest, Identity, Live, Manifest, Reads, Wake,
@@ -62,6 +62,21 @@ import * as ir from '../../protocol/reads.ts';
 import { BUCKET_MS, due_at, iso, materialize } from './time.ts';
 type Starter = Holder;
 const EFFECTS = new Set(['act', 'schedule', 'notify', 'send', 'request', 'progress', 'wait']);
+/** External host I/O facilities whose batch loops step their CPU unit per crossing (pure JS loops still hit 3 s). */
+const STEPPED_FACILITIES = new Set([
+	'ai.embed',
+	'ai.sys_1.ask',
+	'files.image',
+	'convert.document',
+	'convert.ingest',
+	'web.fetch',
+	'web.search',
+	'browser.open',
+	'browser.act',
+	'browser.read',
+	'browser.screenshot',
+	'browser.download'
+]);
 /**
  * What a facility call is to a run's gates, decoded once from its arguments with the shapes the dispatcher takes: the
  * stored files it reads (each must be the run's to read), whether it stores a new one (then the run's own),
@@ -687,6 +702,8 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 									job.stop();
 									return cross_failure('stopped', 'The run was stopped.');
 								}
+								// A progress checkpoint marks a completed work item in a long batch: give the next item its own CPU unit.
+								yield* (yield* RunUnits).next();
 								return { ok: true, value: null };
 							}
 							case 'act': {
@@ -855,6 +872,8 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 										ok: false,
 										error: { kind: 'invalid', message: 'this run cannot read file' }
 									};
+								// External host I/O steps (embeddings, image inspection, System 1, web/browser) each get a fresh CPU unit.
+								if (job !== undefined && STEPPED_FACILITIES.has(call._tag)) yield* (yield* RunUnits).next();
 								// an inference's session is per attempt: a rerun's transcript is its own
 								const got = yield* facility(call, facts, `${run.attempts}:${keyOf(call._tag, '', call.args)}`);
 								yield* rememberFile(facts, got);

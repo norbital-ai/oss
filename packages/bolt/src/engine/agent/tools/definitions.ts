@@ -271,7 +271,7 @@ export const grepSource = defineTool('workspace_grep', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		'Search source lines by regex or literal. count returns exact matching-line and file totals within the search scope; otherwise limit caps excerpts. A line with two hits counts once.',
+		'Search workspace source lines by regex or literal (workspace files only; use read_file with id and text to search attached files or archives). count returns exact matching-line and file totals within the search scope; otherwise limit caps excerpts. A line with two hits counts once.',
 	parameters: Schema.Struct({
 		count: Schema.optionalKey(Schema.Boolean),
 		pattern: Schema.NonEmptyString.annotate({

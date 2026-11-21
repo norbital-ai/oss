@@ -230,6 +230,7 @@ export type TurnState = {
 	failing: number;
 	red: number;
 	lowest: number;
+	lastFailing: number;
 	lastError: string;
 	cutTools: number;
 	compactions: number;
@@ -272,6 +273,32 @@ export const TURN_GUARDS: readonly TurnGuard[] = [
 export const turnGuard = (current: TurnState, calls: number, failed: number) => {
 	current.failing = calls > 0 && failed === calls ? current.failing + 1 : 0;
 	return TURN_GUARDS.find((guard) => guard.when(current));
+};
+
+/** Updates red-check progress: clean resets; a new low resets; strictly decreasing after a spike holds `red` steady. */
+export const recordCheckProgress = (
+	current: Pick<TurnState, 'red' | 'lowest' | 'lastFailing'>,
+	failing: number | undefined
+): void => {
+	if (failing === 0) {
+		current.red = 0;
+		current.lowest = Number.POSITIVE_INFINITY;
+		current.lastFailing = Number.POSITIVE_INFINITY;
+		return;
+	}
+	if (failing !== undefined) {
+		if (failing < current.lowest) {
+			current.lowest = failing;
+			current.red = 0;
+		} else if (failing < current.lastFailing) {
+			// Making downward progress after a parse unblock or batch write: do not penalize convergence.
+		} else {
+			current.red += 1;
+		}
+		current.lastFailing = failing;
+		return;
+	}
+	current.red += 1;
 };
 
 export const j = (v: unknown): Json =>

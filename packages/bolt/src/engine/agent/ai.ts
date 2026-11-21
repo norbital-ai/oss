@@ -144,6 +144,8 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 	let response: AiResponse | undefined;
 	let upstreamRetries = 0,
 		quietRetries = 0;
+	let lastStreamStep = yield* Clock.currentTimeMillis;
+	const units = yield* RunUnits;
 	// Each pull races a native sleep. Business time may be frozen or adjusted independently.
 	yield* Stream.transformPull(
 		Stream.suspend(() => {
@@ -190,7 +192,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 		}
 	).pipe(
 		Stream.runForEach((event) =>
-			Effect.sync(() => {
+			Effect.gen(function* () {
 				begun = true;
 				switch (event._tag) {
 					case 'Delta':
@@ -206,7 +208,13 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 						break;
 					case 'Response':
 						response = event.response;
-						break;
+						return;
+				}
+				// Long concurrent reasoning/tool streams rotate their CPU unit periodically so streamed tokens never overrun 3 s.
+				const now = yield* Clock.currentTimeMillis;
+				if (now - lastStreamStep >= 2_000) {
+					lastStreamStep = now;
+					yield* units.next();
 				}
 			})
 		),

@@ -88,6 +88,7 @@ import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { AgentQuestion, PageResult } from '../../protocol/schema.ts';
 import { enqueueTurn, TURN_RUN, TurnHandlers } from './turns.ts';
+import { recordCheckProgress } from './shared.ts';
 import { LEASE_MS, leaseUntil } from '../queue.ts';
 import { MessageQueue, messageQueue, SCHEDULED_RUN } from './queue.ts';
 import { attachmentsFor, file_attachments } from './attachments.ts';
@@ -451,6 +452,7 @@ type TurnState = {
 	failing: number;
 	red: number;
 	lowest: number;
+	lastFailing: number;
 	lastError: string;
 	cutTools: number;
 	compactions: number;
@@ -1078,6 +1080,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			failing: 0,
 			red: 0,
 			lowest: Number.POSITIVE_INFINITY,
+			lastFailing: Number.POSITIVE_INFINITY,
 			lastError: '',
 			cutTools: 0,
 			compactions: 0,
@@ -1116,15 +1119,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			},
 			ended: (answer, behavior) => {
 				if (behavior.progress_check !== true) return;
-				// A red check counts only when it reaches no new low of failures.
-				const failing = checkFailing(answer);
-				if (failing === 0) {
-					current.red = 0;
-					current.lowest = Number.POSITIVE_INFINITY;
-				} else if (failing !== undefined && failing < current.lowest) {
-					current.lowest = failing;
-					current.red = 0;
-				} else current.red += 1;
+				recordCheckProgress(current, checkFailing(answer));
 			}
 		});
 		const add = (u: Partial<Usage> & { provider?: string }, calls: number) => {

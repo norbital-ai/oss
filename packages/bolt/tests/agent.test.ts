@@ -34,6 +34,8 @@ import {
 } from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
 import { keyedSerial } from '../src/engine/agent/throttle.ts';
+import { AGENT_LIMITS, recordCheckProgress } from '../src/engine/agent/shared.ts';
+import { RunUnits } from '../src/engine/ports.ts';
 import { preview } from '../src/engine/conversations/store.ts';
 import { respond_system_1 } from '../../bolt-cli/src/test/effect.ts';
 import { clock_probe } from './support/clock-probe.ts';
@@ -1862,5 +1864,62 @@ describe('the throttle lock (bug 37)', () => {
 				expect([...(yield* keys)]).toEqual([]);
 			})
 		)
+	);
+});
+
+describe('progress-check red circuit breaker', () => {
+	it('allows convergence after a parse-unblock error spike while still stopping flat or oscillating loops', () => {
+		const converging = { red: 0, lowest: Number.POSITIVE_INFINITY, lastFailing: Number.POSITIVE_INFINITY };
+		for (const count of [2, 2, 2, 135, 61, 22, 5]) {
+			recordCheckProgress(converging, count);
+			expect(converging.red).toBeLessThanOrEqual(AGENT_LIMITS.failingSteps);
+		}
+		recordCheckProgress(converging, 0);
+		expect(converging).toEqual({
+			red: 0,
+			lowest: Number.POSITIVE_INFINITY,
+			lastFailing: Number.POSITIVE_INFINITY
+		});
+
+		const flat = { red: 0, lowest: Number.POSITIVE_INFINITY, lastFailing: Number.POSITIVE_INFINITY };
+		for (const count of [2, 2, 2, 2, 2, 2]) recordCheckProgress(flat, count);
+		expect(flat.red).toBeGreaterThan(AGENT_LIMITS.failingSteps);
+
+		const oscillating = { red: 0, lowest: Number.POSITIVE_INFINITY, lastFailing: Number.POSITIVE_INFINITY };
+		for (const count of [10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10]) recordCheckProgress(oscillating, count);
+		expect(oscillating.red).toBeGreaterThan(AGENT_LIMITS.failingSteps);
+	});
+});
+
+describe('long-running stream CPU unit rotation', () => {
+	it.effect('rotates RunUnits during multi-second AI streams so concurrent streams never overrun one 3 s unit', () =>
+		Effect.gen(function* () {
+			let steps = 0;
+			const p: Ai['Service'] = {
+				...port([]).p,
+				infer: () =>
+					Stream.fromIterable<AiEvent>([
+						{ _tag: 'Progress', reasoning: 'a' },
+						{ _tag: 'Progress', reasoning: 'b' },
+						{ _tag: 'Delta', text: 'ok' },
+						{
+							_tag: 'Response',
+							response: { content: 'ok', tool_calls: [], finish: 'stop', usage: { input: 1, output: 1 } }
+						}
+					]).pipe(
+						Stream.tap(() => TestClock.adjust('2500 millis'))
+					)
+			};
+			const answer = yield* modelCall(p, { model: 'default', messages: [{ role: 'user', content: 'hi' }] }).pipe(
+				Effect.provideService(RunUnits, {
+					next: () =>
+						Effect.sync(() => {
+							steps++;
+						})
+				})
+			);
+			expect(answer.content).toBe('ok');
+			expect(steps).toBeGreaterThanOrEqual(3);
+		})
 	);
 });

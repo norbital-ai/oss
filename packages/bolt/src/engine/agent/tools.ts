@@ -656,9 +656,19 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				);
 			}
 			const part = section(s.body, i.section);
-			return part === undefined
-				? ok({ error: `No section '${i.section}'.`, sections: s.sections })
-				: textAnswer(part);
+			if (part !== undefined) return textAnswer(part);
+			const needle = i.section.trim().toLowerCase();
+			const refFile = own.find(
+				(f) =>
+					f.toLowerCase() === needle ||
+					f.toLowerCase() === `references/${needle}.md` ||
+					f.toLowerCase() === `${needle}.md`
+			);
+			if (refFile !== undefined) {
+				const bytes = yield* t.read(refFile);
+				return documentAnswer({ file: refFile, text: new TextDecoder().decode(bytes) }, 'text');
+			}
+			return ok({ error: `No section '${i.section}'.`, sections: s.sections, ...files });
 		});
 	}
 
