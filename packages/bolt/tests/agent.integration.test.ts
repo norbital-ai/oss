@@ -1149,11 +1149,11 @@ describe('in-app turns', () => {
 						if (!toolNames(request).includes('task'))
 							return seen.includes('Task lamp')
 								? request.messages.some((message) => message.role === 'tool')
-									? say('Created the Task lamp quote.')(request)
+									? say('Checked the Task lamp quotes.')(request)
 									: Stream.unwrap(
 											Deferred.await(gate).pipe(
 												Effect.as(
-													use('act', { acts: { 'quotes.create': [{ title: 'Task lamp' }] } })(
+													use('read', { request: { quotes: { fields: ['title'], limit: 5 } } })(
 														request
 													)
 												)
@@ -1167,23 +1167,23 @@ describe('in-app turns', () => {
 						return seen.includes('Background task started')
 							? say('Launched.')(request)
 							: use('task', {
-									description: 'Make a lamp quote',
-									prompt: 'Create a quote titled Task lamp.',
+									description: 'Check lamp quotes',
+									prompt: 'Read quotes for Task lamp.',
 									subagent_type: 'general'
 								})(request);
 						return seen.includes('"writes"')
-						? say('The lamp quote exists.')(request)
+						? say('The lamp quote check finished.')(request)
 						: use('task_read', { task_id: required(report[1]) })(request);
 					};
 					const fixture = yield* setup(Array.from({ length: 8 }, () => route));
-					const { t, ai, agent, user } = fixture;
-					const { ann, c, task } = yield* Effect.gen(function* () {
+					const { ai, agent, user } = fixture;
+					const { c, task } = yield* Effect.gen(function* () {
 						const ann = yield* user('ann', { team: 'rep' });
 						const c = yield* agent.start({ owner: ann });
 						yield* agent.post({
 							conversation: c,
 							as: { member: ann },
-							text: 'Have a sub-agent make a lamp quote'
+							text: 'Have a sub-agent check lamp quotes'
 						});
 						// the parent's turn ends while its task still works
 						expect((yield* agent.drain(c)).reply?.text).toBe('Launched.');
@@ -1195,23 +1195,23 @@ describe('in-app turns', () => {
 								: undefined;
 						expect(task).toBeDefined();
 						expect((yield* agent.conversation(required(task))).status).toBe('running');
-						return { ann, c, task: required(task) };
+						return { c, task: required(task) };
 					}).pipe(Effect.provide(fixture.context));
 					yield* Deferred.succeed(gate, undefined);
 					// its report wakes the idle parent, which reads the task and answers
-					while (!(yield* agent.transcript(c)).some((r) => r.text === 'The lamp quote exists.')) yield* Effect.sleep('10 millis');
+					while (!(yield* agent.transcript(c)).some((r) => r.text === 'The lamp quote check finished.')) yield* Effect.sleep('10 millis');
 					yield* Effect.gen(function* () {
-						expect(yield* quotes(t, 'Task lamp')).toEqual([
-							{ title: 'Task lamp', created_by: ann }
-						]);
+						// subagent never receives approval-gated tools like `act`
+						const childReq = ai.requests.find((r) => texts(r).join('\n').includes('Task lamp'));
+						expect(toolNames(required(childReq))).not.toContain('act');
 						expect((yield* agent.transcript(c)).find((r) => r.meta?.tag === 'report')).toMatchObject({
 						role: 'user',
-						text: `<task id="${task}" state="completed">\n<summary>Background task completed: Make a lamp quote</summary>\n<task_result>\nCreated the Task lamp quote.\n</task_result>\n</task>`
+						text: `<task id="${task}" state="completed">\n<summary>Background task completed: Check lamp quotes</summary>\n<task_result>\nChecked the Task lamp quotes.\n</task_result>\n</task>`
 					});
 						expect(toolResults(required(ai.requests.at(-1))).at(-1)).toMatchObject({
 						status: 'idle',
-						records: [{ outcome: 'committed', callable: 'quotes.create' }],
-						writes: [{ model: 'quotes', verb: 'create', fields: '{"title":"Task lamp"}' }],
+						records: [],
+						writes: [],
 						source: []
 					});
 					}).pipe(Effect.provide(fixture.context));
