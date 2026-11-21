@@ -1611,13 +1611,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					key = callKey(call.name, call.input);
 					// a call the dead generation made (its result never recorded) is not made again; nor one that already failed
 					// this often
-					const skipped = waiting
-					? 'Not run: waiting for the person to approve an earlier call in this step.'
-					: current.replayed.delete(stepKey(call.name, args))
-						? NUDGE.replayed
-						: (current.failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure
-							? 'Not run: this exact call already failed several times this turn.'
-							: undefined;
+					const skipped = current.replayed.delete(stepKey(call.name, args))
+					? NUDGE.replayed
+					: (current.failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure
+						? 'Not run: this exact call already failed several times this turn.'
+						: undefined;
 					const skip = tool === undefined || skipped !== undefined;
 					const answer: ToolAnswer =
 					tool === undefined
