@@ -174,7 +174,7 @@ const insertPiece = (
 	const select = [
 		...names.map((k) =>
 			k === 'id' && minted
-				? `coalesce(v."id", gen_random_uuid())`
+				? `coalesce(v."id", uuidv7())`
 				: incomingValue(c.model.fields.get(k), k)
 		),
 		...actor.map(() => b.bind(options.actor ?? null, 'text'))

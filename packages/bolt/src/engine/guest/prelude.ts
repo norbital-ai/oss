@@ -243,6 +243,24 @@ define('structuredClone', function structuredClone(value) {
 // ── crypto: random from the host's per-invocation stream, digest host-side; neither is a crossing ──
 const INTEGER_ARRAYS = [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, BigInt64Array, BigUint64Array];
 const hex = (b) => Array.from(b, (x) => (x < 16 ? '0' : '') + x.toString(16)).join('');
+let invocationNowMs = 0;
+let uuidv7Seq = 0;
+Object.defineProperty(G, Symbol.for('norbital.bolt.uuidv7'), {
+	value: () => {
+		const b = new Uint8Array(16);
+		const rand = hostRandom(8);
+		const seq = uuidv7Seq++;
+		const ms = invocationNowMs + Math.floor(seq / 4096);
+		const sub = seq & 0x0fff;
+		for (let i = 0; i < 6; i++) b[i] = Math.floor(ms / 2 ** (8 * (5 - i))) & 0xff;
+		b[6] = 0x70 | ((sub >>> 8) & 0x0f);
+		b[7] = sub & 0xff;
+		b.set(rand, 8);
+		b[8] = (b[8] & 0x3f) | 0x80;
+		const h = hex(b);
+		return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+	}
+});
 define('crypto', {
 	getRandomValues(t) {
 		if (!INTEGER_ARRAYS.some((C) => t instanceof C)) throw named('TypeMismatchError', 'getRandomValues takes an integer typed array');
@@ -387,6 +405,9 @@ function start(kind, path, inputJson, ctxJson, invocation_id) {
 	let pendingSecrets;
 	if (['create', 'update', 'delete', 'policy', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'webhook', 'page'].includes(kind)) {
 		const raw = JSON.parse(ctxJson);
+		const parsedNow = typeof raw.now === 'string' ? Date.parse(raw.now) : NaN;
+		invocationNowMs = Number.isFinite(parsedNow) ? parsedNow : 0;
+		uuidv7Seq = 0;
 		pendingSecrets = Object.freeze(raw.$secrets ?? {});
 		delete raw.$secrets;
 		ctx = Object.defineProperty(kind === 'page'

@@ -512,7 +512,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								call: (input) =>
 									Effect.gen(function* () {
 										const callId = yield* crypto
-											.randomUUIDv4()
+											.randomUUIDv7()
 											.pipe(Effect.mapError(Port.failure(`tool ${tool.name}`)));
 										return yield* Port.attempt(`tool ${tool.name}`, (signal) =>
 											tool.call(

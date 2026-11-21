@@ -216,7 +216,7 @@ export function makeDeliver(e: SyncEngine) {
 			AND (r.acked_revision IS NULL OR r.acked_revision <= o.record_revision)`);
 		const sameIdentity = 'r.id::text IS NOT DISTINCT FROM s.replica_id AND r.remote_id IS NOT DISTINCT FROM s.observed_id';
 		capturePiece(c, 'mapped', 'sys_sync_row', `INSERT INTO sys_sync_row (id, sync, instance, partition, remote_id, record, remote_version, cycle, acked_revision)
-			SELECT gen_random_uuid(), o.sync, o.instance, '',
+			SELECT uuidv7(), o.sync, o.instance, '',
 			CASE WHEN ${sameIdentity}
 				THEN coalesce(s.remote_id, r.remote_id) ELSE r.remote_id END, o.record,
 			CASE WHEN ((${sameIdentity}) OR s.remote_id = r.remote_id)

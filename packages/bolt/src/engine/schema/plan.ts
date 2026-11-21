@@ -5,13 +5,11 @@ import {
 	canonical,
 	constraint_index as storeConstraintIndex,
 	destructive_steps as storeDestructiveSteps,
-	plan as storePlan,
 	sha256_hex,
 	schema_snapshot,
 	TableSpec,
 	type SchemaSnapshot,
 	type ConstraintMeta,
-	type Plan,
 	type SchemaObject
 } from '@norbital-ai/store';
 import type { TenantDbShape } from '../db/tenant-db.ts';
@@ -31,7 +29,7 @@ export const SchemaSliceSchema = Schema.Struct({
 	currency: Schema.NullOr(Schema.String)
 });
 export type SchemaSlice = typeof SchemaSliceSchema.Type;
-type AppliedSchemaSlice = SchemaSnapshot;
+export type AppliedSchemaSlice = SchemaSnapshot;
 
 /**
  * What the database holds for a workspace: its models and relationships beside the built-in layer's (`src/system`) as
@@ -98,26 +96,6 @@ export const read_applied = Effect.fn('Bolt.read_applied')(function* (db: Tenant
 		...projected, ...held
 	} satisfies AppliedSchemaSlice;
 });
-/** The store's plan from `applied` to the manifest's (or a given) slice, the engine's objects beside both. */
-export const plan = (
-	applied: AppliedSchemaSlice | null,
-	next: EngineManifest | SchemaSlice
-): Effect.Effect<Plan & { readonly slice: SchemaSlice }, BoltError> => {
-	const slice = 'workspace' in next ? schema_slice(next) : next;
-	return storePlan(
-		applied?.schema ?? null,
-		slice,
-		engineBeside
-	).pipe(
-		Effect.map((p) => ({
-			...p,
-			from: applied?.fingerprint ?? null,
-			to: fingerprint(slice),
-			slice
-		})),
-		Effect.catchTag('StoreError', (e) => Effect.fail(from_store(e)))
-	);
-};
 /** The same schema diff's destructive ids, without rendering fixed, never-dropped search function bodies. */
 export const destructiveSteps = (
 	applied: SchemaSlice | null,

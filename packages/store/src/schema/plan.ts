@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 import { q } from '../sql.ts';
 import { canonical, sha256_hex } from '../hash.ts';
 import { StoreError } from '../errors.ts';
-import { RANK, schema_objects, schemaObjectsForClassification, type SchemaObject } from './ddl.ts';
+import { RANK, schemaObjectsForClassification, type SchemaObject } from './ddl.ts';
 import type { SchemaSpec } from './spec.ts';
 
 export type StepClass = 'additive' | 'rename' | 'backfill' | 'validating' | 'destructive';
@@ -216,7 +216,7 @@ function renameSql(
  * The steps from `applied` (`null`: an empty database) to `next`. `extra` is what a host keeps beside its tables (its
  * own objects for that schema), diffed and re-asserted alike.
  */
-const plannerWithObjects = (objects: typeof schema_objects) =>
+export const plannerWithObjects = (objects: typeof schemaObjectsForClassification) =>
 	Effect.fn('Store.plan')(function* <E = never>(
 		applied: SchemaSpec | null,
 		next: SchemaSpec,
@@ -359,9 +359,7 @@ const plannerWithObjects = (objects: typeof schema_objects) =>
 		return p;
 	});
 
-/** A complete executable plan uses every original SQL definition. */
-export const plan = /*#__PURE__*/ plannerWithObjects(schema_objects);
-const classificationPlan = /*#__PURE__*/ plannerWithObjects(schemaObjectsForClassification);
+export const classificationPlan = /*#__PURE__*/ plannerWithObjects(schemaObjectsForClassification);
 /** Destructive ids share the complete diff, rename and dependency logic; no incomplete SQL plan escapes. */
 export const destructive_steps = <E = never>(
 	applied: SchemaSpec | null,

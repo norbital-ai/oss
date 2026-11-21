@@ -30,7 +30,7 @@ import { triageAttachments } from './attachments.ts';
 import { Manifest, Live, Turns, Links, Wake, RunHandlers, type LiveShape } from '../services.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { type DecisionRequest, Port } from '@norbital-ai/host-api';
+import { type DecisionRequest, Port, uuidv7 } from '@norbital-ai/host-api';
 import { enqueueTurn, TurnHandlers } from './turns.ts';
 import { LEASE_MS, leaseUntil } from '../queue.ts';
 import { ask, decisionEvent, decisionUsage, failed } from '../decision.ts';
@@ -480,7 +480,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 				)
 			)
 		);
-		const call = globalThis.crypto.randomUUID(),
+		const call = uuidv7(),
 			bad = failed(d);
 		yield* decisionUsage(logs, 'triage', req, d, {
 			invocation: call,

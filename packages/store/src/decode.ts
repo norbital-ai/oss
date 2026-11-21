@@ -722,7 +722,7 @@ export const page = (
 		p.after === undefined ? { _tag: 'Limit', limit } : { _tag: 'Limit', limit, after: p.after }
 	);
 };
-const SORTABLE_SYSTEM = new Set(['created_at', 'updated_at']);
+const SORTABLE_SYSTEM = new Set(['id', 'created_at', 'updated_at']);
 /** Kinds that cannot be used as a scalar sort key. */
 export const UNSORTABLE: ReadonlySet<string> = new Set([
 	...Object.entries(KIND).filter(([, entry]) => !entry.traits.sortable).map(([kind]) => kind),

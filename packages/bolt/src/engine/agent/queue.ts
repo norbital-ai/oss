@@ -6,6 +6,7 @@ import { runPiece } from '../runs/rows.ts';
 // the plan's verifier cleared, with no sub-agent running and no card awaiting the person. A stop cancels what waits for
 // the finish, never what waits for a time.
 import { sql } from '../db/sql.ts';
+import { uuidv7 } from '@norbital-ai/host-api';
 import { Context, Effect, Option, PubSub, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -139,7 +140,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 				AND m.addressed IS DISTINCT FROM false AND m.meta->>'tag' IS DISTINCT FROM 'aside'
 				AND c.owner = ${chain.p(by.actor.id)} AND c.integration IS NULL AND c.parent IS NULL AND c.run IS NULL`);
 			chain.assert(`EXISTS (SELECT 1 FROM ${target})`, 'not_found', { message: 'This message is not available to restart.' }, 'true');
-			const prefix = chain.cte('restart_prefix', `SELECT m.*, gen_random_uuid()::text AS copy_id
+			const prefix = chain.cte('restart_prefix', `SELECT m.*, uuidv7()::text AS copy_id
 				FROM sys_message m JOIN ${target} t ON t.conversation = m.conversation
 				WHERE m.seq < t.seq AND m.role IS NOT NULL
 				AND coalesce(m.state, '') NOT IN ('cancelled', 'queued', 'scheduled', 'pending')`);
@@ -148,7 +149,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 			chain.assert(`NOT EXISTS (SELECT 1 FROM ${prefix} p WHERE p.role = 'tool'
 				AND NOT EXISTS (SELECT 1 FROM ${prefix} a WHERE a.id = p.content->>'assistant' AND a.role = 'assistant'))`,
 				'conflict', { message: 'The earlier tool history is incomplete. Choose a different message.' }, 'true');
-			const id = globalThis.crypto.randomUUID();
+			const id = uuidv7();
 			const origin = chain.cte('restart_origin', `SELECT c.* FROM sys_conversation c JOIN ${target} t ON t.conversation = c.id`);
 			const created = capturePiece(chain, 'restart_chat', 'sys_conversation',
 				`INSERT INTO sys_conversation AS c (id, title, owner, envoy, model, inputs, outputs, restart_from, restart_at)

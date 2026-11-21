@@ -16,7 +16,6 @@ import { deflateSync, inflateSync } from 'fflate';
 import { StoreError } from './errors.ts';
 import { canonical, sha256_hex } from './hash.ts';
 import { equal_json } from './lang/kind.ts';
-import { plan, statements, type Plan } from './schema/plan.ts';
 import type { SchemaSpec } from './schema/spec.ts';
 import { schema_snapshot, type SchemaSnapshot } from './schema/snapshot.ts';
 import { INTROSPECT } from './migration-introspect.ts';
@@ -1181,6 +1180,3 @@ export const verify = /*#__PURE__*/ (() =>
 			);
 		return lock_of(snapshot, ordered, proofs);
 	}))();
-/** The statements that build `schema` from nothing: what `verify`'s second scratch database runs. */
-export const build = (schema: SchemaSpec): Effect.Effect<readonly string[], StoreError> =>
-	Effect.map(plan(null, schema), (p: Plan) => statements(p).map((s) => s.sql));

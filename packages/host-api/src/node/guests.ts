@@ -5,7 +5,7 @@
 // ponytail: a vm context shares this process's heap and is no security boundary: no per-guest memory cap (`memory_mib` is
 // not enforced, `memory` never fails) and the guest runs operator-trusted code only. A host serving untrusted tenants
 // supplies native isolates.
-import { randomUUID } from 'node:crypto';
+import { randomUUIDv7 } from 'node:crypto';
 import { types } from 'node:util';
 import vm from 'node:vm';
 import { Predicate, Schema } from 'effect';
@@ -381,7 +381,7 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 	};
 	return {
 		open: async (program: GuestProgram, session: GuestSessionOptions, signal: AbortSignal) => {
-			const id = randomUUID(),
+			const id = randomUUIDv7(),
 				said: GuestSaid = { lines: [], chars: 0, dropped: 0 };
 			const { context, bootstrap, api } = guestContext(session.prelude, [
 				console_hook(said),

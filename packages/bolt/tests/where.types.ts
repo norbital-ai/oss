@@ -36,8 +36,8 @@ void p4;
 void p5;
 
 // ── OrderBy<C> ──
-is<Eq<Sortable<'sites'>, 'name' | 'customer' | 'created_at' | 'updated_at'>>(true); // point, period and unexposed fields are not sortable
-const o: OrderBy<'orders'>[] = ['due', { placed_at: 'desc' }, ['status', { created_at: 'asc' }]];
+is<Eq<Sortable<'sites'>, 'id' | 'name' | 'customer' | 'created_at' | 'updated_at'>>(true); // point, period and unexposed fields are not sortable
+const o: OrderBy<'orders'>[] = ['id', { id: 'desc' }, 'due', { placed_at: 'desc' }, ['status', { created_at: 'asc' }]];
 void o;
 // @ts-expect-error O1 a vector field has no order
 const o1: OrderBy<'orders'> = { colour: 'asc' };
@@ -69,8 +69,9 @@ const r3: OrderBy<'sites'> = { customer: { name: 'asc' } };
 const r4: OrderBy<'orders'> = { customer: { name: 'up' } };
 // @ts-expect-error R5 a dotted key is not the grammar
 const r5: OrderBy<'orders'> = { 'customer.name': 'asc' };
-// @ts-expect-error R6 the target's id is not a sort key (order by the relation itself)
 const r6: OrderBy<'orders'> = { customer: { id: 'asc' } };
+// @ts-expect-error R6b revision is not a sort key
+const r6b: OrderBy<'orders'> = { customer: { revision: 'asc' } };
 // @ts-expect-error R7 a field is not a hop
 const r7: OrderBy<'order_lines'> = { order: { note: { name: 'asc' } } };
 void r1;
@@ -79,6 +80,7 @@ void r3;
 void r4;
 void r5;
 void r6;
+void r6b;
 void r7;
 // Context operands: the requestor is a typed actor operand (types/data.ts W1–W7); `{ clock }` is only an edge form (agent
 // read, UI filter state, a described filter), materialized before lowering, so authored reads take `bolt.clock` values.

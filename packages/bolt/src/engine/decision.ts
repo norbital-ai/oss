@@ -191,7 +191,7 @@ export const DecisionsLive = Layer.effect(
 				const event = Result.isSuccess(result) ? result.success : wireFailure(result.failure);
 				const now = new Date(yield* Clock.currentTimeMillis).toISOString();
 				const call = yield* crypto
-					.randomUUIDv4()
+					.randomUUIDv7()
 					.pipe(
 						Effect.mapError(
 							(error) => new FacilityFailure({ kind: 'upstream', message: error.message })

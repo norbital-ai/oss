@@ -7,7 +7,7 @@ import { Effect, Option, Predicate } from 'effect';
 import type { CarriedMigration, MigrationCarry } from '@norbital-ai/host-api';
 import {
 	canonical,
-	generate,
+	generate_incremental,
 	read_lock,
 	read_snapshot,
 	sha256_hex,
@@ -86,7 +86,9 @@ const accepted = (sql: string) =>
 	sql.replace(/^-- step (\S+) \(destructive\)\s*$/gm, '$&\n-- accept: $1');
 const generated = (before: SchemaSpec, after: SchemaSpec, number: number, name: string) =>
 	read_snapshot(snapshot_of(before)).pipe(
-		Effect.flatMap((previous) => generate(previous, after, { number, name }, migration_objects)),
+		Effect.flatMap((previous) =>
+			generate_incremental(previous, after, { number, name }, migration_objects)
+		),
 		Effect.map(({ file }) => accepted(file.sql))
 	);
 

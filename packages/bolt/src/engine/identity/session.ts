@@ -116,7 +116,7 @@ export const sha256 = (s: string) => to_hex(sha256Bytes(s));
 const randomToken = () => toBase64url(crypto.getRandomValues(new Uint8Array(32)));
 export const newId = (crypto: Crypto.Crypto) =>
 	crypto
-		.randomUUIDv4()
+		.randomUUIDv7()
 		.pipe(Effect.mapError(() => refuse('unavailable', 'Secure random UUID generation failed.')));
 const HOUR = 3600000,
 	DAY = 24 * HOUR;

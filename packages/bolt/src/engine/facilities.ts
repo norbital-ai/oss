@@ -10,7 +10,8 @@ import {
 	PAPER_SIZES,
 	Port,
 	type PortFailure,
-	type PreviewPdfOptions
+	type PreviewPdfOptions,
+	uuidv7
 } from '@norbital-ai/host-api';
 import type { Json } from '../decl/values.ts';
 import { LIMITS, facility_wall_ms, type CrossAnswer } from './contracts.ts';
@@ -127,8 +128,9 @@ const recordFile = (
 	}
 ) =>
 	Effect.gen(function* () {
-		const now = new Date(yield* Clock.currentTimeMillis).toISOString(),
-			id = globalThis.crypto.randomUUID();
+		const nowMs = yield* Clock.currentTimeMillis,
+			now = new Date(nowMs).toISOString(),
+			id = uuidv7(nowMs);
 		yield* ports.db
 			.write({
 				text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9)`,
@@ -273,7 +275,7 @@ const logged_transport = (
 ): Transport['Service'] => ({
 	send: (message) =>
 		Effect.sync(() => {
-			const provider_id = globalThis.crypto.randomUUID();
+			const provider_id = uuidv7();
 			log(`[${kind}] ${JSON.stringify(message)}`);
 			return { provider_id };
 		})

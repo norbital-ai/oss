@@ -1,6 +1,6 @@
 import { Clock, Crypto, Effect, Schema, Stream } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
-import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUIDv7 } from 'node:crypto';
 import {
 	type AiResponse,
 	decisions_system_1,
@@ -141,7 +141,7 @@ export const s3Files: (
 	const store: FilesStore = {
 		put: (bytes, meta) =>
 			Effect.gen(function* () {
-				const key = randomUUID();
+				const key = randomUUIDv7();
 				yield* call('PUT', key, bytes, meta.mime);
 				return {
 					key,
@@ -180,7 +180,7 @@ export const s3Files: (
 				{
 					begin: (mime) =>
 						Effect.gen(function* () {
-							const key = randomUUID();
+							const key = randomUUIDv7();
 							const answer = yield* (yield* call('POST', key, undefined, mime, {
 								uploads: ''
 							})).text.pipe(Effect.mapError(Port.failure('files')));

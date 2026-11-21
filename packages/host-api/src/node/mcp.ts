@@ -3,7 +3,7 @@
 // revision, one per session. The engine resolves each server's URL and credentials from the workspace's secrets; the
 // sessions close with the scope that made the port. Every request, the OAuth token exchange included (the SDK sends it
 // through the transport's fetch), goes through the public-address policy (`public_fetch`).
-import { randomUUID } from 'node:crypto';
+import { randomUUIDv7 } from 'node:crypto';
 import {
 	Client,
 	ClientCredentialsProvider,
@@ -67,7 +67,7 @@ const make = (loopback: boolean): Effect.Effect<McpPort, never, Scope.Scope> => 
 		yield* Port.attempt('mcp', (signal) => client.connect(transport, { signal })).pipe(
 			Effect.onExit((exit) => (Exit.isFailure(exit) ? close(client) : Effect.void))
 		);
-		const id = randomUUID();
+		const id = randomUUIDv7();
 		sessions.set(id, client);
 		return id;
 	});

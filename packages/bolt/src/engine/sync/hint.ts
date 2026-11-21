@@ -52,7 +52,7 @@ export function inboxPiece(
 			name,
 			'sys_inbox',
 			`INSERT INTO sys_inbox (id, sync, instance, delivery, received_at, body)
-			SELECT gen_random_uuid(), s.sync, ${c.p(instance)}, d.delivery, ${c.p(now)}::timestamptz, d.body
+			SELECT uuidv7(), s.sync, ${c.p(instance)}, d.delivery, ${c.p(now)}::timestamptz, d.body
 			FROM jsonb_array_elements_text(${c.p(syncs)}::jsonb) AS s(sync) CROSS JOIN (${rows}) d
 			ON CONFLICT (sync, instance, delivery) DO NOTHING`,
 			{ returning: 'sync' }
@@ -78,7 +78,7 @@ export function reportRowsPiece(
 		'report_inbox',
 		'sys_inbox',
 		`INSERT INTO sys_inbox (id, sync, instance, delivery, received_at, body)
-		SELECT gen_random_uuid(), r.sync, r.instance, d.delivery, ${c.p(now)}::timestamptz, d.body
+		SELECT uuidv7(), r.sync, r.instance, d.delivery, ${c.p(now)}::timestamptz, d.body
 		FROM (${rows}) d JOIN sys_sync_row r ON r.instance = d.instance AND r.remote_id = d.message
 		WHERE r.sync IN (SELECT jsonb_array_elements_text(${c.p(syncs)}::jsonb))
 		ON CONFLICT (sync, instance, delivery) DO NOTHING`,

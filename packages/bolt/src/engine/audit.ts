@@ -97,7 +97,7 @@ export const audit_shape = (port: AuditPort): Effect.Effect<AuditShape, never, C
 		const service: AuditShape = {
 			mode: port.mode,
 			uuid: crypto
-				.randomUUIDv4()
+				.randomUUIDv7()
 				.pipe(
 					Effect.mapError((error) =>
 						BoltError.make(

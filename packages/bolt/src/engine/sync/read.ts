@@ -180,7 +180,7 @@ export function makeRead(e: SyncEngine) {
 			'sync_cursor',
 			'sys_sync',
 			`INSERT INTO sys_sync (id, sync, instance, partition, cursor, cycle, phase, health, digest, version, last_read_at, last_change_at)
-			SELECT gen_random_uuid(), ${sync}, ${inst}, ${part}, ${c.p(next.cursor === null ? null : JSON.stringify(next.cursor))}::jsonb,
+			SELECT uuidv7(), ${sync}, ${inst}, ${part}, ${c.p(next.cursor === null ? null : JSON.stringify(next.cursor))}::jsonb,
 				${c.p(next.cycle)}, ${c.p(next.phase)}, ${c.p(JSON.stringify(next.health))}::jsonb, ${c.p(next.digest)}, ${c.p(state.version + 1)},
 				${c.p(now)}::timestamptz, ${c.p(fx.changed ? now : null)}::timestamptz WHERE ${gate}
 			ON CONFLICT (sync, instance, partition) DO UPDATE SET cursor = excluded.cursor, cycle = excluded.cycle, phase = excluded.phase,
@@ -194,7 +194,7 @@ export function makeRead(e: SyncEngine) {
 				'sync_marks',
 				'sys_sync_row',
 				`INSERT INTO sys_sync_row (id, sync, instance, partition, remote_id, record, remote_version, cycle, acked_revision)
-				SELECT gen_random_uuid(), ${sync}, ${inst}, ${part}, k.rid, k.record, k.version, ${c.p(next.cycle)}, ${revision('k.record')}
+				SELECT uuidv7(), ${sync}, ${inst}, ${part}, k.rid, k.record, k.version, ${c.p(next.cycle)}, ${revision('k.record')}
 				FROM jsonb_to_recordset(${c.p(fx.marks)}::jsonb) AS k(rid text, record text, version text) WHERE ${after}
 				ON CONFLICT (sync, instance, record) DO UPDATE SET remote_id = excluded.remote_id, partition = excluded.partition,
 					remote_version = coalesce(excluded.remote_version, sys_sync_row.remote_version), cycle = excluded.cycle,
@@ -902,7 +902,7 @@ export function makeRead(e: SyncEngine) {
 						const c = new Chain();
 						capturePiece(c, 'sync_failed', 'sys_sync',
 							`INSERT INTO sys_sync (id, sync, instance, partition, health, digest, cycle, version)
-							VALUES (gen_random_uuid(), ${c.p(s.name)}, ${c.p(inst.id)}, ${c.p(partition)},
+							VALUES (uuidv7(), ${c.p(s.name)}, ${c.p(inst.id)}, ${c.p(partition)},
 								${c.p(JSON.stringify(failed))}::jsonb, ${c.p(prior?.digest ?? digest)}, ${c.p(prior?.cycle ?? 0)}, 1)
 							ON CONFLICT (sync, instance, partition) DO UPDATE SET health = excluded.health`);
 						yield* nativeCommit(db.write, e.live.publish, c, CapturedResult)

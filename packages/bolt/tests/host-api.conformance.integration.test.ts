@@ -165,7 +165,12 @@ const history = async (m: EngineManifest): Promise<string> => {
 			])
 		)
 	);
-	if (existsSync(join(at, 'migrations'))) return at;
+	if (
+		existsSync(join(at, 'migrations', 'snapshot.json')) &&
+		existsSync(join(at, 'migrations', 'migrations.lock.json'))
+	)
+		return at;
+	if (existsSync(at)) rmSync(at, { recursive: true, force: true });
 	const scratch = mkdtempSync(join(tmpdir(), 'bolt-host-api-history-'));
 	await native.runPromise(
 		prepare_migrations(scratch, m, 'generate').pipe(Effect.provide(Pristine.layer))

@@ -106,7 +106,7 @@
 				);
 	if (matching) untrack(() => form.prefill(values));
 	// a shared (RecordShell-owned) form takes this view's acts too: its one footer Save commits them
-	if (acts !== undefined || !matching) form.extra = () => acts?.() ?? {};
+	if (!matching || untrack(() => acts) !== undefined) form.extra = () => acts?.() ?? {};
 	if (scope?.historical) form.mode = 'view';
 	provideForm(form);
 	onDestroy(form.add_validation(() => (readonly ? [] : (validate?.(form.row) ?? []))));

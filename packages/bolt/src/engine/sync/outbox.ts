@@ -14,7 +14,7 @@ export function enqueueReplicas(c: Chain, now: string, select: string): string {
 		`NOT EXISTS (SELECT 1 FROM ${source} prior WHERE prior.key = ${frozenKey})`).join(' AND ');
 	const queued = capturePiece(c, `sync_queued${prior.length}`, 'sys_outbox', `INSERT INTO sys_outbox
 		(id, sync, instance, model, record, op, record_revision, preserve_local, changed, image, writer, key, status, attempts, next_attempt_at, epoch, at)
-		SELECT gen_random_uuid(), s.sync, s.instance, s.model, s.record, s.op, s.record_revision, s.preserve_local, s.changed, s.image,
+		SELECT uuidv7(), s.sync, s.instance, s.model, s.record, s.op, s.record_revision, s.preserve_local, s.changed, s.image,
 		s.writer, ${frozenKey},
 		'queued', 0, ${c.p(now)}::timestamptz, ${SYNC_EPOCH}, ${c.p(now)}::timestamptz FROM (${select}) s
 		WHERE ${unseen}

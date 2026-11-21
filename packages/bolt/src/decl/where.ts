@@ -247,12 +247,12 @@ export type StaticWhere<M, Fk = true> = {
 
 type Unsortable =
 	{ kind: 'json' | 'file' | 'custom' | 'vector' | 'point' | 'period' } | { many: true };
-/** Fields a read may order by: exposed, ordered kinds, and `created_at`/`updated_at`; FKs order by id. */
+/** Fields a read may order by: exposed, ordered kinds, and `id`/`created_at`/`updated_at`; FKs order by id. */
 export type Sortable<C, O = 'default'> = C extends ModelName
 	? | {
 				[P in ReadField<C, O> & keyof Columns<C> & string]: Columns<C>[P] extends Unsortable
 					? never
-					: P extends 'id' | 'revision' | 'created_by' | 'updated_by'
+					: P extends 'revision' | 'created_by' | 'updated_by'
 						? never
 						: P;
 		  }[ReadField<C, O> & keyof Columns<C> & string]

@@ -53,6 +53,6 @@ it.effect('message pieces preserve completed assistant and tool nulls', () =>
 		const statement = chain.sql('true AS done');
 		expect(statement.params.filter((value) => value === 'queued' || value === 'agent')).toEqual([]);
 		expect(statement.params).not.toContainEqual({});
-		expect(statement.text).toContain('gen_random_uuid()::text');
+		expect(statement.text).toContain('uuidv7()::text');
 	})
 );

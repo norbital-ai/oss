@@ -14,7 +14,7 @@ import {
 	Predicate,
 	Schema
 } from 'effect';
-import { DbError, type Rows, type Sql } from '@norbital-ai/host-api';
+import { DbError, type Rows, type Sql, uuidv7 } from '@norbital-ai/host-api';
 import type { Authority, Bindings, CrossAnswer, Reader, RowData } from '../contracts.ts';
 import type { Order, Pred, SelectIR } from '@norbital-ai/store';
 import { decodeRead, type ReadIR } from '../../protocol/reads.ts';
@@ -250,7 +250,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 				at: new Date(now).toISOString(),
 				severity: 'warn',
 				event: 'read.refused',
-				invocation: globalThis.crypto.randomUUID(),
+				invocation: uuidv7(),
 				run: actor.kind === 'system' ? actor.run : null,
 				conversation: null,
 				turn: null,

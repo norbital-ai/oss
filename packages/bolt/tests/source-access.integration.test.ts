@@ -10,7 +10,8 @@ import { decode_identity, load_pack, source_of, type Pack } from '../src/engine/
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { manifest } from './catalogue-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { plan, read_applied } from '../src/engine/schema/plan.ts';
+import { read_applied } from '../src/engine/schema/plan.ts';
+import { plan } from '../src/engine/schema/plan-full.ts';
 import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const source = {

@@ -16,7 +16,6 @@ import { own_pred_sql } from '../write/predicate.ts';
 import { json_path } from '../read/values.ts';
 import { StoreError } from '../errors.ts';
 import { clock_default } from '../lang/vars.ts';
-import { search_functions } from './search.ts';
 import { ROW_RULES, STATEMENT_RULES } from './rules.ts';
 import { JSON_VALID } from './json.ts';
 import { SchemaSpec as SchemaSpecSchema, type SchemaSpec, type Expr, type FieldSpec, type RefSpec, type TableSpec } from './spec.ts';
@@ -565,7 +564,9 @@ const EMBEDDING = 'bolt_embedding';
  * Every object a schema holds, in a stable order with stable ids (each id names its definition), followed by `extra`:
  * objects a host keeps beside its tables (Bolt's engine tables), re-asserted with every plan.
  */
-const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
+export const objectsWithSearch = (
+	searchDefinitions: () => readonly { id: string; sql: string }[]
+) =>
 	Effect.fn('Store.schema_objects')(function* (
 		declared: SchemaSpec,
 		extra: readonly SchemaObject[] = []
@@ -1294,8 +1295,6 @@ const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
 		return out;
 	});
 
-/** Complete SQL definitions, including the database's multilingual search functions. */
-export const schema_objects = /*#__PURE__*/ objectsWithSearch(search_functions);
 /** Classification only: these fixed, never-dropped functions have no constraint metadata or destructive steps. */
 export const schemaObjectsForClassification = /*#__PURE__*/ objectsWithSearch(() => []);
 

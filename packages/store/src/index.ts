@@ -89,12 +89,13 @@ export {
 	check_of,
 	RANK,
 	MINOR_FN,
-	schema_objects,
 	constraint_index,
 	type ConstraintMeta,
 	type SchemaObject
 } from './schema/ddl.ts';
-export { statements, type Plan, plan, destructive_steps } from './schema/plan.ts';
+export { schema_objects } from './schema/objects.ts';
+export { statements, type Plan, destructive_steps } from './schema/plan.ts';
+export { plan, build } from './schema/build.ts';
 export { search_functions } from './schema/search.ts';
 export { answer, total_of } from './read/page.ts';
 export { null_row_sql } from './write/row.ts';
@@ -137,9 +138,9 @@ export {
 	current,
 	INTROSPECT,
 	IntrospectRow,
-	verify,
-	build
+	verify
 } from './migrate.ts';
+export { generate_incremental } from './migration-generate-core.ts';
 export { destroy_namespace, generate, generate_squash } from './migration-generate.ts';
 export { AppendOnlyLogSpec, log_snapshot } from './log/spec.ts';
 export { log_ddl } from './log/ddl.ts';

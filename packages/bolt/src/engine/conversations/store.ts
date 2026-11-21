@@ -92,7 +92,7 @@ export function post(
 	const row = msg(
 		c,
 		`INSERT INTO sys_message AS m (id, conversation, role, content, text, preview, state, mode, "as", author, meta, turn, supersedes, addressed)
-	SELECT gen_random_uuid()::text, ${c.p(message.conversation)}, ${c.p(message.role)}, ${c.p(message.content)}::jsonb, ${c.p(text)}, ${c.p(preview(text ?? ''))},
+	SELECT uuidv7()::text, ${c.p(message.conversation)}, ${c.p(message.role)}, ${c.p(message.content)}::jsonb, ${c.p(text)}, ${c.p(preview(text ?? ''))},
 		${c.p(message.state === undefined ? 'queued' : message.state)}, ${c.p(message.mode === undefined ? 'agent' : message.mode)}, ${c.p(message.as ?? null)}::jsonb, ${c.p(message.author ?? null)},
 		${c.p(message.meta === undefined ? null : message.meta)}::jsonb, ${c.p(message.turn ?? null)}, ${c.p(message.supersedes ?? null)}, ${c.p(message.addressed ?? true)} WHERE ${where}`,
 		// the row it returns carries its files already: a sibling statement's update is not visible to its RETURNING

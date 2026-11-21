@@ -21,7 +21,8 @@ import {
 	type ToolBehavior,
 	Unavailable,
 	type WorkspaceNote,
-	type WorkspacePort
+	type WorkspacePort,
+	uuidv7
 } from '@norbital-ai/host-api';
 import {
 	Cause,
@@ -723,7 +724,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			)
 		);
 	const start = Effect.fn('Agents.start')(function* (o: Parameters<AgentsShape['start']>[0]) {
-		const id = globalThis.crypto.randomUUID();
+		const id = uuidv7();
 		yield* convChanged(
 			sql(
 				`INSERT INTO sys_conversation AS c (id, title, owner, envoy, integration, parent, model) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -854,7 +855,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				Schema.Struct({ id: Schema.String }),
 				sql(
 			`INSERT INTO sys_message AS m (id, role, content, text, preview, state, mode, "as", meta)
-			VALUES (gen_random_uuid()::text, 'system', $1::jsonb, $2, $2, 'job', 'agent', $3::jsonb, '{"tag":"note"}'::jsonb) RETURNING id`,
+			VALUES (uuidv7()::text, 'system', $1::jsonb, $2, $2, 'job', 'agent', $3::jsonb, '{"tag":"note"}'::jsonb) RETURNING id`,
 			j({ conversation }), `[job ${job} died] ${label}: its host stopped before it finished`, j(as)
 		)
 			)
@@ -1034,7 +1035,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		if ((held?.rows.length ?? 0) > 0) return { ran: false, reply: null };
 		const admitted = yield* claim(id);
 		if (admitted === null) return { ran: false, reply: null };
-		const turn = globalThis.crypto.randomUUID();
+		const turn = uuidv7();
 		const log = (event: Pick<LogEvent, 'at' | 'severity' | 'event' | 'attributes'>) =>
 			logs.write({
 				at: event.at,
@@ -1187,7 +1188,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			) => Effect.Effect<AiResponse, FacilityFailure | Unavailable>,
 			sender?: string
 		) {
-			const request_id = globalThis.crypto.randomUUID();
+			const request_id = uuidv7();
 			const startedAt = yield* Clock.currentTimeMillis;
 			const result = yield* work((request) =>
 				log({

@@ -1,6 +1,6 @@
 // Conversation and message persistence, turn leasing, durable job records, and transcript settlement.
 import { Deferred, Effect, Option, Schema } from 'effect';
-import type { Sql } from '@norbital-ai/host-api';
+import { type Sql, uuidv7 } from '@norbital-ai/host-api';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { Bindings } from '../contracts.ts';
@@ -196,7 +196,7 @@ export const makeAgentStore = (deps: StoreDeps) => {
 		);
 
 	const start = Effect.fn('Agents.start')(function* (o: Parameters<AgentsShape['start']>[0]) {
-		const id = globalThis.crypto.randomUUID();
+		const id = uuidv7();
 		yield* convChanged(
 			sql(
 				`INSERT INTO sys_conversation AS c (id, title, owner, envoy, integration, parent, model) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -337,7 +337,7 @@ export const makeAgentStore = (deps: StoreDeps) => {
 				Schema.Struct({ id: Schema.String }),
 				sql(
 					`INSERT INTO sys_message AS m (id, role, content, text, preview, state, mode, "as", meta)
-			VALUES (gen_random_uuid()::text, 'system', $1::jsonb, $2, $2, 'job', 'agent', $3::jsonb, '{"tag":"note"}'::jsonb) RETURNING id`,
+			VALUES (uuidv7()::text, 'system', $1::jsonb, $2, $2, 'job', 'agent', $3::jsonb, '{"tag":"note"}'::jsonb) RETURNING id`,
 					j({ conversation: conversationId }),
 					`[job ${job} died] ${label}: its host stopped before it finished`,
 					j(as)

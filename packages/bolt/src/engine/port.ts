@@ -5,7 +5,7 @@ import { BoltError } from '../protocol/errors.ts';
 /** Secure native identifiers keep the host crypto service's failure as the cause. */
 export const uuid = (crypto: Crypto.Crypto) =>
 	crypto
-		.randomUUIDv4()
+		.randomUUIDv7()
 		.pipe(
 			Effect.mapError((error) =>
 				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)

@@ -152,7 +152,7 @@ export const public_pages = (artifact: Artifact) =>
 				});
 				const encodedBoot = yield* Schema.encodeEffect(Schema.toCodecJson(PublicBoot))(boot);
 				const bound = yield* bindings.pipe(Effect.provideService(Manifest, manifest));
-				const id = yield* crypto.randomUUIDv4();
+				const id = yield* crypto.randomUUIDv7();
 				const outcome = yield* guest.invokeProgram(
 					page.program,
 					{

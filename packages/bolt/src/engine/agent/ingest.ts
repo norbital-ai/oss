@@ -10,7 +10,7 @@ import {
 	type IngestIndex,
 	type Transcript
 } from '../../decl/runtime/facilities.ts';
-import type { Ingested } from '@norbital-ai/host-api';
+import { type Ingested, uuidv7 } from '@norbital-ai/host-api';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import type { LiveShape } from '../services.ts';
@@ -344,7 +344,7 @@ export const stash = Effect.fn('Agents.ingestStash')(function* (
 			({ path, mime, bytes }) =>
 				Effect.map(files.put(bytes, { name: path.split('/').pop() ?? path, mime }), (blob) => ({
 					file: {
-						id: globalThis.crypto.randomUUID(),
+						id: uuidv7(),
 						name: `${prefix(o.sha256)}${path}`,
 						mime,
 						size: bytes.length,

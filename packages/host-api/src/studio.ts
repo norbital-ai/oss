@@ -235,6 +235,8 @@ export type StudioState = {
 	builds?: readonly StudioBuild[];
 	/** The viewer's own held requests: what the agent asked to change on live, awaiting their `approval.decide`. */
 	approvals?: readonly StudioApproval[];
+	/** The workspace's pinned `@norbital-ai/bolt` version beside the host's latest known release. */
+	runtime?: { readonly current: string | null; readonly latest: string };
 };
 const nonempty = Schema.NonEmptyString;
 /** Room for a whole change set in a sentence or two. */
@@ -853,6 +855,12 @@ export const StudioView: Schema.Decoder<StudioView> = Schema.Struct({
 				destructive: Schema.optionalKey(strings)
 			})
 		)
+	),
+	runtime: Schema.optionalKey(
+		Schema.Struct({
+			current: nullableText,
+			latest: Schema.String
+		})
 	),
 	sections: Schema.NullOr(
 		Schema.Struct({

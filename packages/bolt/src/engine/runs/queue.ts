@@ -49,7 +49,7 @@ export function enqueue(
 	return runPiece(c,
 		name,
 		`INSERT INTO sys_run (id, automation, input, due_at, key, cause, depth, actor, starter, trigger, state, attempts, started_at, error, finished_at)
-	SELECT coalesce(r.j->>'id', gen_random_uuid()::text), r.j->>'automation', coalesce(r.j->'input', '{}'::jsonb),
+	SELECT coalesce(r.j->>'id', uuidv7()::text), r.j->>'automation', coalesce(r.j->'input', '{}'::jsonb),
 		coalesce(r.j->>'due_at', 'now')::timestamptz, r.j->>'key', r.j->>'cause', coalesce((r.j->>'depth')::int, 0),
 		r.j->>'actor', r.j->'starter', r.j->'trigger', coalesce(r.j->>'state', 'queued'), coalesce((r.j->>'attempts')::int, 0),
 		(r.j->>'started_at')::timestamptz, r.j->'error', (r.j->>'finished_at')::timestamptz

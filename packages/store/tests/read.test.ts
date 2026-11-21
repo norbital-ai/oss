@@ -176,6 +176,28 @@ describe('typed read projections', () => {
 		})
 	);
 
+	it.effect('mints RFC 9562 uuidv7 ids by default and orders by id asc/desc', () =>
+		Effect.gen(function* () {
+			const v7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+			const declarations = schema({
+				entry: table({ fields: { label: { kind: 'text' } } })
+			});
+			const pg = yield* database;
+			yield* script(pg, `${(yield* build(declarations)).join(';\n')};`);
+			const db = store(declarations),
+				execute = run(pg);
+			const created = yield* execute(
+				yield* db.create('entry', [{ label: 'first' }, { label: 'second' }, { label: 'third' }])
+			);
+			const ids = created.map((row) => String(row.id));
+			for (const id of ids) expect(id).toMatch(v7);
+			const asc = yield* execute(yield* db.read('entry', { order_by: 'id', all: true }));
+			const desc = yield* execute(yield* db.read('entry', { order_by: { id: 'desc' }, all: true }));
+			expect(asc.rows.map((r) => String(r.id))).toEqual([...ids].sort());
+			expect(desc.rows.map((r) => String(r.id))).toEqual([...ids].sort().reverse());
+		})
+	);
+
 	it.effect('patches null objects and preserves explicitly assigned empty nested objects', () =>
 		Effect.gen(function* () {
 			const declarations = schema({

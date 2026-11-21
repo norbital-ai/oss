@@ -137,7 +137,8 @@ export const reads = [
 		orders: { output: 'logistics', where: { status: { eq: 'submitted' } }, fields: ['number'],
 			lines: { where: { qty: { gt: 0 } } } }
 	}),
-	ctx.query({ orders: { output: 'default', customer: {} } }),
+	ctx.query({ orders: { output: 'default', order_by: 'id', customer: {} } }),
+	ctx.query({ orders: { output: 'default', order_by: [{ id: 'desc' }, { customer: { id: 'asc' } }], customer: {} } }),
 	ctx.query({ orders: { lines: { aggregate: {
 		by: ['item', 'order', 'created_by'], sum: ['qty', 'price'], avg: ['amount'], min: ['item', 'created_at'], max: ['qty']
 	} } } }),

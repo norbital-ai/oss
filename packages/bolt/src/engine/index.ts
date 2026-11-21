@@ -35,7 +35,8 @@ export { read_pack, read_pack_source, type PackJson } from './write/pack.ts';
 // ── exports: callables ──
 export { size_bytes } from './callables/upload.ts';
 // ── exports: identity ──
-export { plan, read_applied } from './schema/plan.ts'; // hook:hosting — Appendix D values
+export { read_applied } from './schema/plan.ts'; // hook:hosting — Appendix D values
+export { plan } from './schema/plan-full.ts'; // hook:hosting — Appendix D values
 export {
 	apply_migrations,
 	MigrationBundleSchema,

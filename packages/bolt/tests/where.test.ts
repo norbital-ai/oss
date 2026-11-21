@@ -297,12 +297,14 @@ describe('the widened language', () => {
 	it.effect('OrderBy: at most 4 keys, one field each, no field twice, sortable fields only', () =>
 		Effect.gen(function* () {
 			expect(
-				yield* order([{ total: 'desc' }, 'placed', { created_at: 'asc' }], cat, 'orders')
+				yield* order([{ total: 'desc' }, 'placed', { created_at: 'asc' }, { id: 'desc' }], cat, 'orders')
 			).toEqual([
 				{ field: 'total', dir: 'desc' },
 				{ field: 'placed', dir: 'asc' },
-				{ field: 'created_at', dir: 'asc' }
+				{ field: 'created_at', dir: 'asc' },
+				{ field: 'id', dir: 'desc' }
 			]);
+			expect(yield* order('id', cat, 'orders')).toEqual([{ field: 'id', dir: 'asc' }]);
 			for (const bad of [
 				['qty', 'placed', 'at', 'total', 'note'],
 				['qty', { qty: 'desc' }],
@@ -335,11 +337,13 @@ describe('the widened language', () => {
 				expect(yield* order({ order: { account: { name: 'desc' } } }, cat, 'lines')).toEqual([
 					{ field: 'order.account.name', dir: 'desc' }
 				]);
+				expect(yield* order({ account: { id: 'asc' } }, cat, 'orders')).toEqual([
+					{ field: 'account.id', dir: 'asc' }
+				]);
 				for (const bad of [
 					{ account: { name: 'asc', region: 'asc' } },
 					{ account: {} },
 					{ account: { name: 'up' } },
-					{ account: { id: 'asc' } },
 					{ account: { bogus: 'asc' } },
 					{ 'account.name': 'asc' },
 					'account.name',

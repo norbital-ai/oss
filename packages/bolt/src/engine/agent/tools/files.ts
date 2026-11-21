@@ -6,7 +6,8 @@ import {
 	type Ingested,
 	Port,
 	REFERENCE,
-	ReferenceIndex
+	ReferenceIndex,
+	uuidv7
 } from '@norbital-ai/host-api';
 import { sha256_hex } from '@norbital-ai/store';
 import type { Json } from '../../../decl/values.ts';
@@ -183,7 +184,7 @@ export const inputOfFile = Effect.fn('AgentTool.inputOfFile')(function* (
 
 export const recordFile = Effect.fn('Agents.recordFile')(function* (x: ToolContext, file: Downloaded) {
 	const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null;
-	const id = globalThis.crypto.randomUUID();
+	const id = uuidv7(Date.parse(x.bindings.now));
 	const ref = { id, name: file.name, mime: file.mime, size: file.bytes };
 	const chain = new Chain();
 	capturePiece(

@@ -1115,6 +1115,26 @@ describe('next guest globals', () => {
 		})
 	);
 
+	it.live('guest uuidv7 hook mints deterministic, strictly ordered uuidv7 ids in guest invocations', () =>
+		Effect.gen(function* () {
+			const v7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+			const code = `const mint = globalThis[Symbol.for('norbital.bolt.uuidv7')]; return [mint(), mint(), mint()];`;
+			const first = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.String))(
+				yield* guest(code)
+			);
+			const second = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.String))(
+				yield* guest(code)
+			);
+			expect(first).toEqual(second);
+			expect(first).toHaveLength(3);
+			for (const id of first) expect(id).toMatch(v7);
+			const [firstId, secondId, thirdId] = first;
+			expect(firstId !== undefined && secondId !== undefined && thirdId !== undefined).toBe(true);
+			expect((firstId ?? '') < (secondId ?? '')).toBe(true);
+			expect((secondId ?? '') < (thirdId ?? '')).toBe(true);
+		})
+	);
+
 	it.live('keeps a URL query written through searchParams in href', () =>
 		Effect.gen(function* () {
 			const host = new URL('/v1/events?a=1', 'https://api.test/base/');
