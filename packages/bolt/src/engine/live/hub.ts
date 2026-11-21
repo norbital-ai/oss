@@ -411,7 +411,7 @@ export const LiveHubLive = Layer.effect(
 			for (const conn of [...conns.values()]) {
 				const day = conn.authority.membershipDay;
 				if (changed.has(actor_ref(conn.authority.actor)) || (day !== undefined && (roleChange || day !== b.today)))
-					yield* disconnect(conn.id, true);
+					yield* disconnect(conn.id);
 			}
 			type Work = { view: View; captured: typeof batch };
 			const interested = new Map<Conn, Map<View, Work>>();
