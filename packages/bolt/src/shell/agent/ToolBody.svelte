@@ -250,6 +250,14 @@
 			</li>
 		{/each}
 	</ul>
+{:else if tool.name === 'read_file' && typeof out['attached'] === 'string' && Object.keys(out).every((k) => k === 'attached' || k === 'page' || k === 'image' || k === 'crops')}
+	<p class="px-1 text-micro text-muted-foreground" data-tool-view="image">
+		{typeof out['page'] === 'number'
+			? `${t('Page')} ${out['page']}`
+			: typeof out['image'] === 'number'
+				? `${t('Image')} ${out['image']}`
+				: t('Viewed image')}
+	</p>
 {:else if data !== null}
 	{@render data_(data, t('Output'))}
 {:else if tool.result !== undefined && tool.result !== ''}

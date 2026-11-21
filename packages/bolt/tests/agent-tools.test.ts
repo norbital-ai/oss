@@ -1977,7 +1977,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 							images: [{ name: 'image-1.png', row: 0, col: 1 }]
 						}
 					],
-					note: `its data: run_js { files: [{ id: '${dataId}' }] }; its images: view_image { id: o1, image: n }`
+					note: `its data: run_js { files: [{ id: '${dataId}' }] }; its images: read_file { id: o1, image: n }`
 				};
 				expect(answer).toEqual({
 					result: {
@@ -1994,7 +1994,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				expect(yield* result(x, 'read_file', { id: 'o1', text: 'Labour' })).toEqual({
 					result: { error: expect.stringContaining('o1 is data, not lines: find it with run_js') }
 				});
-				expect(yield* result(x, 'view_image', { id: 'o1', image: 1 })).toMatchObject({
+				expect(yield* result(x, 'read_file', { id: 'o1', image: 1 })).toMatchObject({
 					result: { image: 'image-1.png' }
 				});
 				// a page image comes with its four overlapping quarters
@@ -2006,17 +2006,17 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					'image/jpeg'
 				]);
 				const crops = [[0, 0, 0.5, 1]];
-				expect(yield* result(x, 'view_image', { id: 'o1', image: 1, crops })).toMatchObject({
+				expect(yield* result(x, 'read_file', { id: 'o1', image: 1, crops })).toMatchObject({
 					result: { image: 'image-1.png', crops: 1 }
 				});
 				expect(x.files).toHaveLength(6);
 				expect(x.files[5]?.id).toContain('#crop:');
 				// a lone image needs no number; a document takes three zoom calls a turn
-				expect(yield* result(x, 'view_image', { id: 'o1', crops })).toMatchObject({
+				expect(yield* result(x, 'read_file', { id: 'o1', crops })).toMatchObject({
 					result: { image: 'image-1.png', crops: 1 }
 				});
-				yield* result(x, 'view_image', { id: 'o1', crops });
-				expect(yield* result(x, 'view_image', { id: 'o1', crops })).toEqual({
+				yield* result(x, 'read_file', { id: 'o1', crops });
+				expect(yield* result(x, 'read_file', { id: 'o1', crops })).toEqual({
 					result: { error: 'o1 has had its 3 zooms this turn.' }
 				});
 				expect(
@@ -2028,6 +2028,19 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					expect.objectContaining({ kind: 'data', cached: false, bytes: 50, cpuMs: 2, wallMs: 3 })
 				]);
 			})
+	);
+	it.effect('read_file({ id }) opens a standalone image attachment directly', () =>
+		Effect.gen(function* () {
+			const { x: imgX, id: imgId } = yield* holding(
+				`c-${randomUUID()}`,
+				{ name: 'shot.png', mime: 'image/png', bytes: PNG },
+				{ attachments: { read: () => Effect.succeed({ mime: 'image/png', bytes: PNG }) } }
+			);
+			expect(yield* result(imgX, 'read_file', { id: imgId })).toEqual({
+				result: { attached: 'shown on your next step only' }
+			});
+			expect(imgX.files[0]?.mime).toBe('image/png');
+		})
 	);
 	const scan = () =>
 		holding(
@@ -2083,7 +2096,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				}
 			);
 			yield* result(x, 'read_file', { id, offset: 1, limit: 1 });
-			expect(yield* result(x, 'view_image', { id: 'o1', crops: [[0, 0, 1, 1]] })).toEqual({
+			expect(yield* result(x, 'read_file', { id: 'o1', crops: [[0, 0, 1, 1]] })).toEqual({
 				result: { error: 'o1 has 2 images: give image, the 1-based one to crop.' }
 			});
 		})
@@ -2179,7 +2192,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 						hits: [{ from: 4, to: 7, text: '<tr><td>7</td><td>12.50</td></tr>' }]
 					}
 				});
-				expect(yield* result(x, 'view_image', { id: 'o1', image: 1 })).toMatchObject({
+				expect(yield* result(x, 'read_file', { id: 'o1', image: 1 })).toMatchObject({
 					result: { image: 'image-1.png' }
 				});
 				// the same file again is the same output
@@ -3363,11 +3376,18 @@ describe('confirmation coverage', () => {
 		expect(sweeping('jobs.create', [{ title: 'one' }])).toBe(false);
 		expect(sweeping('jobs.update', [{ target: { id: 'j1' }, set: { status: 'done' } }])).toBe(false);
 	});
-	it('a browser visit that clicks, presses, submits, evaluates or downloads holds; reading does not', () => {
+	it('a browser visit that clicks, presses, submits, evaluates or downloads holds on external sites; reading and Studio workspace previews do not', () => {
 		expect(submits({ url: 'https://a.test', steps: [{ click: 'r1' }] })).toBe(true);
 		expect(submits({ steps: [{ type: { ref: 'r2', text: 'x', submit: true } }] })).toBe(true);
 		expect(submits({ evaluate: 'document.title' })).toBe(true);
 		expect(submits({ download: 'https://a.test/f.pdf' })).toBe(true);
+		expect(
+			submits({
+				workspace: { path: '/app/hedging/overview', preview: true },
+				evaluate: 'document.title',
+				steps: [{ click: 'r1' }]
+			})
+		).toBe(false);
 		expect(
 			submits({
 				url: 'https://a.test',

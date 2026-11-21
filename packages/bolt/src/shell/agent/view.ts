@@ -263,15 +263,16 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target: str(a['query'])
 	}),
 	read_messages: () => ({ icon: 'lucide:messages-square', verb: 'Read messages', target: '' }),
-	read_file: (a) => ({ icon: 'lucide:file-text', verb: 'Read file', target: str(a['text']) }),
-	view_image: (a) =>
+	read_file: (a) =>
 		Arr.isArray(a['crops'])
 			? {
 					icon: 'lucide:zoom-in',
 					verb: 'Zoomed into a page',
 					target: `${a['crops'].length} regions`
 				}
-			: { icon: 'lucide:image', verb: 'Viewed an image', target: '' },
+			: a['image'] !== undefined || a['page'] !== undefined
+				? { icon: 'lucide:image', verb: 'Viewed an image', target: '' }
+				: { icon: 'lucide:file-text', verb: 'Read file', target: str(a['text']) },
 	read_output: () => ({ icon: 'lucide:file-output', verb: 'Read the full result', target: '' }),
 	geocode: (a) => ({
 		icon: 'lucide:map-pin',

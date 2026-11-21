@@ -63,13 +63,15 @@ const Input = Schema.Struct({
 });
 
 /**
- * A visit the person confirms first: a click, a key press or a typed submit may send a form, a script may do anything,
- * and a download's URL reaches an outside host. Opening, reading, typing, selecting, scrolling and screenshots run.
+ * A visit the person confirms once per conversation: clicking, pressing, submitting, evaluating JS, or downloading on
+ * an external site. Opening, reading, typing, scrolling, screenshots, and inspecting the workspace's own Studio
+ * preview (`workspace` without an external `url` or `download`) run without prompting.
  */
 export const submits = (input: Json): boolean => {
 	const visit = Schema.decodeUnknownOption(Input, CLOSED)(input);
 	if (visit._tag === 'None') return false;
-	const { steps = [], evaluate, download } = visit.value;
+	const { workspace, url, steps = [], evaluate, download } = visit.value;
+	if (workspace !== undefined && url === undefined && download === undefined) return false;
 	return (
 		evaluate !== undefined ||
 		download !== undefined ||
@@ -148,7 +150,7 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 		behavior: { data: true, downloads: true, resume: { argument: 'from' } },
 		studio: 'view',
 		description:
-			"Your own separate browser, which the person does not see; it keeps your sign-ins. One call runs in order: open a url or workspace page (or go), steps, download a file url as the person's file, evaluate a script, screenshot. Answers the page as text with [ref]s, narrowed by find (words) or from (line), or evaluate's value as JSON. close ends the tab.",
+			"Headless browser fleet (separate from and invisible to the person's tab; keeps its own sign-ins; use page instead to control the person's live tab). Runs in order: open a url or workspace/preview page (or go), steps, download, evaluate JS, screenshot. Answers text with [ref]s (narrowed by find or from) or evaluate JSON. close ends the tab.",
 		input: Input,
 		parseOptions: CLOSED,
 		confirm: submits,

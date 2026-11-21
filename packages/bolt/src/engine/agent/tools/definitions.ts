@@ -77,7 +77,7 @@ export const pageTool = defineTool('page', {
 	policy: { audiences: ['staff'], scripts: false },
 	behavior: { page: true },
 	description:
-		"Navigate by exact Pages path from the catalogue (including /app/); the person's tab follows it when called. configure opens native setup. Click/highlight text, type by label, scroll, go back/forward or preview a URL; these are pending until the tab reports. Approvals, passwords and files are the person's.",
+		"Control the person's live workspace tab (NOT the headless browser fleet): navigate to a /app/… Pages path, open native configure setup, click/highlight text, type by label, scroll, go back/forward, or open a preview URL. Pending until the tab reports. Approvals, passwords and files are the person's.",
 	parameters: Schema.Struct({
 		path: Schema.optionalKey(Schema.String),
 		configure: Schema.optionalKey(
@@ -198,29 +198,17 @@ export const readMessagesTool = defineTool('read_messages', {
 export const readFileTool = defineTool('read_file', {
 	behavior: { data: true },
 	description:
-		"Read a file by id or '<reference>/<path>': documents, scans, sheets, recordings and archives. Returns numbered lines and document images; sheets show columns and first rows; zip/tar/tar.gz and folders list paths and sizes. offset/limit page lines, or matching lines with text. Reference searches are literal; document searches accept a|b. password unlocks a document.",
+		"Read or view a file by id or '<reference>/<path>': images ({ id }), documents, PDFs, sheets, recordings, archives and references. offset/limit/text page or search lines; image n, page n (PDF), or crops (≤8 [l,t,r,b] 0..1 regions, ≤3 zooms/doc/turn) show images; password unlocks a document.",
 	parameters: Schema.Struct({
 		id: Schema.String,
 		path: Schema.optionalKey(Schema.String).annotate({
-			description: "path inside a reference or archive; nested archives work ('a.zip/b.txt')"
+			description: "path inside a reference or archive ('a.zip/b.txt')"
 		}),
 		offset: Schema.optionalKey(Schema.Int).annotate({
-			description: '1-based start line, or matching-line ordinal when text is supplied'
+			description: '1-based start line, or hit ordinal with text'
 		}),
 		limit: Schema.optionalKey(Schema.Int).annotate({ description: `lines, at most ${READ_LINES}` }),
 		text: Schema.optionalKey(Schema.String),
-		password: Schema.optionalKey(Schema.String).annotate({
-			description: 'the password the person gave for this file'
-		})
-	})
-});
-
-export const viewImageTool = defineTool('view_image', {
-	behavior: { data: true },
-	description:
-		'Show an image of a read file on your next step: image n (1-based) of a document, or page n of a PDF as a picture; crops shows up to 8 regions of it instead, at most 3 zooms a document a turn.',
-	parameters: Schema.Struct({
-		id: Schema.String,
 		image: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 		page: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 		crops: Schema.optionalKey(
@@ -228,7 +216,9 @@ export const viewImageTool = defineTool('view_image', {
 				.check(Schema.isMaxLength(8))
 				.annotate({ description: '[left, top, right, bottom], fractions 0 to 1' })
 		),
-		password: Schema.optionalKey(Schema.String)
+		password: Schema.optionalKey(Schema.String).annotate({
+			description: 'password for an encrypted file'
+		})
 	})
 });
 
@@ -254,15 +244,14 @@ export const readSource = defineTool('workspace_read', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		'Read a file or directory. Numbered lines and directory entries support offset/limit. In run_js, an unpaged file returns {path,content,lines} with its exact text for edits. Use workspace_grep to locate specific content.',
+		'Read a workspace source file or directory (no node_modules/ or .norbital/; use workspace_lang for package types). Numbered lines and entries support offset/limit. In run_js, an unpaged file returns {path,content,lines}.',
 	parameters: Schema.Struct({
 		path: Schema.String.annotate({ description: 'File or directory to read' }),
 		offset: Schema.optionalKey(Schema.Int).annotate({
-			description: 'The line or directory entry to start reading from (1-based)'
+			description: '1-based start line or entry'
 		}),
 		limit: Schema.optionalKey(Schema.Int).annotate({
-			description:
-				'The maximum number of lines or directory entries to read (defaults to and capped at 2000)'
+			description: 'Max lines or entries (default and cap 2000)'
 		})
 	})
 });
@@ -271,26 +260,26 @@ export const grepSource = defineTool('workspace_grep', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		'Search workspace source lines by regex or literal (workspace files only; use read_file with id and text to search attached files or archives). count returns exact matching-line and file totals within the search scope; otherwise limit caps excerpts. A line with two hits counts once.',
+		'Search workspace source by regex or literal (no node_modules/ or .norbital/; use read_file for attachments). count returns matching-line and file totals; otherwise limit caps excerpts.',
 	parameters: Schema.Struct({
 		count: Schema.optionalKey(Schema.Boolean),
 		pattern: Schema.NonEmptyString.annotate({
-			description: 'Regular expression or literal text to match in file contents.'
+			description: 'Regex or literal text to match'
 		}),
 		path: Schema.optionalKey(Schema.String).annotate({
-			description: 'File or directory to search. Defaults to the current working directory.'
+			description: 'File or directory to search (default: root)'
 		}),
 		include: Schema.optionalKey(Schema.NonEmptyString).annotate({
-			description: 'Glob pattern to filter files (for example, "*.js" or "*.{ts,tsx}")'
+			description: 'Glob filter (e.g. "*.ts", "*.svelte")'
 		}),
 		literal: Schema.optionalKey(Schema.Boolean).annotate({
-			description: 'Treat `pattern` as exact text instead of a regular expression (default: false).'
+			description: 'Match pattern literally (default: false)'
 		}),
 		caseSensitive: Schema.optionalKey(Schema.Boolean).annotate({
-			description: 'Use case-sensitive matching (default: true).'
+			description: 'Case-sensitive match (default: true)'
 		}),
 		limit: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
-			description: 'Maximum number of matching lines to return (default: 100)'
+			description: 'Max matching lines (default: 100)'
 		})
 	})
 });
@@ -298,17 +287,18 @@ export const grepSource = defineTool('workspace_grep', {
 export const globSource = defineTool('workspace_glob', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
-	description: 'Search file paths using a glob pattern (examples: "**/*.ts", "src/**/*.tsx").',
+	description:
+		'Find workspace source paths by glob (e.g. "src/**/*.svelte"). No node_modules/ or .norbital/ exist here (shared host store — use workspace_lang for types, workspace_package to install).',
 	parameters: Schema.Struct({
-		pattern: Schema.NonEmptyString.annotate({ description: 'Glob pattern to match files against' }),
+		pattern: Schema.NonEmptyString.annotate({ description: 'Glob pattern' }),
 		path: Schema.optionalKey(Schema.String).annotate({
-			description: 'Directory to search. Defaults to the current working directory.'
+			description: 'Directory to search (default: root)'
 		}),
 		hidden: Schema.optionalKey(Schema.Boolean).annotate({
-			description: 'Include hidden files and directories (default: false).'
+			description: 'Include hidden files (default: false)'
 		}),
 		limit: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
-			description: 'Maximum number of matching files to return (default: 100)'
+			description: 'Max paths returned (default: 100)'
 		})
 	})
 });
@@ -317,7 +307,7 @@ export const listSource = defineTool('workspace_list_dir', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		'The source tree under path (default: all of it), with what each folder and role is for.',
+		'Workspace source tree under path (default: all) with folder roles. No node_modules/ or .norbital/.',
 	parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) })
 });
 
@@ -437,7 +427,6 @@ const ALL_TOOLS = [
 	historyTool,
 	readMessagesTool,
 	readFileTool,
-	viewImageTool,
 	readOutputTool,
 	geocodeTool,
 	readSource,

@@ -433,6 +433,32 @@ export const approvedCalls = (rows: readonly MessageRow[]): Set<string> =>
 			];
 		})
 	);
+/** Whether the person approved `browser` once in this conversation (grants all subsequent `browser` actions in the session). */
+export const approvedBrowserSession = (rows: readonly MessageRow[]): boolean =>
+	rows.some(
+		(card) =>
+			card.role === 'tool' &&
+			card.meta?.tag === 'confirm' &&
+			card.state === null &&
+			isObj(card.content.result) &&
+			card.content.result['approved'] === true &&
+			card.meta.call.name === 'browser'
+	);
+
+/** Whether the headless `browser` tab's most recent navigation in this conversation opened the tenant's own workspace/preview. */
+export const browserOnWorkspacePreview = (rows: readonly MessageRow[]): boolean => {
+	for (let i = rows.length - 1; i >= 0; i--) {
+		const r = rows[i];
+		if (r === undefined || r.role !== 'tool' || r.content.name !== 'browser') continue;
+		const parsed = Option.getOrNull(
+			Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(r.content.args)
+		);
+		if (!isObj(parsed)) continue;
+		if (parsed['close'] === true || parsed['url'] !== undefined) return false;
+		if (parsed['workspace'] !== undefined) return true;
+	}
+	return false;
+};
 /** `modelCall`'s reason when the host binds no AI port. */
 const NO_AI = 'the host provides no ai';
 /** A catalogue note: its meta holds the index it reached and, on the first after a checkpoint, the native MCP tools. */
@@ -1750,7 +1776,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				tz = typeof said === 'object' ? said?.tz : undefined;
 			const b = yield* config.bindings,
 				ingester = e.convert?.ingest,
-				approved = approvedCalls(rows);
+				approved = approvedCalls(rows),
+				browserSession = approvedBrowserSession(rows),
+				browserPreview = browserOnWorkspacePreview(rows);
 			const ctx: ToolContext = {
 				engine: e,
 				conv,
@@ -1759,7 +1787,19 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				turn,
 				mode,
 				inApp: inApp(conv),
-				approved: (name, input) => approved.delete(callKey(name, input)),
+				approved: (name, input) => {
+					if (name === 'browser') {
+						if (browserSession) return true;
+						if (
+							browserPreview &&
+							isObj(input) &&
+							input['url'] === undefined &&
+							input['download'] === undefined
+						)
+							return true;
+					}
+					return approved.delete(callKey(name, input));
+				},
 				tz,
 				question: who?.text ?? undefined,
 				child: conv.parent !== null,
@@ -2805,7 +2845,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							const authority = yield* resolve(as);
 							if (authority === null) result = { error: FIXED.stale };
 							// a held tool call (MCP, browser submit, run_js send, a host tool) runs when the agent makes it again
-							else if (!performed(call.name)) result = { approved: true, note: APPROVED };
+							else if (!performed(call.name))
+								result = {
+									approved: true,
+									note:
+										call.name === 'browser'
+											? 'The person approved browser control for this conversation: repeat your call, and subsequent browser actions run without prompting again.'
+											: APPROVED
+								};
 							else {
 								const started = yield* perform(
 									{

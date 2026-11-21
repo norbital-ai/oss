@@ -50,8 +50,7 @@ import {
 	documentTool,
 	downloadTool,
 	readFileTool,
-	readOutputTool,
-	viewImageTool
+	readOutputTool
 } from './definitions.ts';
 import {
 	attach,
@@ -418,18 +417,23 @@ export function bindFileTools(
 		};
 	});
 
+	const tileCache = new Map<string, readonly Uint8Array[]>();
 	const tiled = Effect.fn('AgentTool.tiled')(function* (bytes: Uint8Array, id: string) {
 		const images = x.engine.images;
 		if (images === undefined) return;
-		const tiles = yield* Effect.forEach(
-			TILES,
-			(tile) =>
-				imageCrop(bytes, tile).pipe(
-					Effect.flatMap((crop) => image_jpeg(crop, 2048)),
-					Effect.provideService(Images, images)
-				),
-			{ concurrency: TILES.length }
-		);
+		const cachedTiles = tileCache.get(id);
+		const tiles =
+			cachedTiles ??
+			(yield* Effect.forEach(
+				TILES,
+				(tile) =>
+					imageCrop(bytes, tile).pipe(
+						Effect.flatMap((crop) => image_jpeg(crop, 2048)),
+						Effect.provideService(Images, images)
+					),
+				{ concurrency: TILES.length }
+			));
+		if (cachedTiles === undefined) tileCache.set(id, tiles);
 		for (const [n, tile] of tiles.entries())
 			attach(x.files, { mime: 'image/jpeg', bytes: tile, id: `${id}#tile:${n}` });
 	});
@@ -606,7 +610,7 @@ export function bindFileTools(
 				output: o,
 				file: entry.name,
 				data: dataSummary(json.value),
-				note: `its data: ${run}${images.size === 0 ? '' : `; its images: view_image { id: ${o}, image: n }`}`
+				note: `its data: ${run}${images.size === 0 ? '' : `; its images: read_file { id: ${o}, image: n }`}`
 			});
 		}
 		if (i.text !== undefined && i.text !== '') {
@@ -642,10 +646,10 @@ export function bindFileTools(
 				...(shown.length === 0
 					? []
 					: [
-							`Shown on your next step only: ${shown.join(', ')}${shown.length > TILED_PAGES ? '; whole pages without their quarters: view_image { id, image: n } adds them' : ''}`
+							`Shown on your next step only: ${shown.join(', ')}${shown.length > TILED_PAGES ? '; whole pages without their quarters: read_file { id, image: n } adds them' : ''}`
 						]),
 				...(refs.length > shown.length
-					? [`${refs.length - shown.length} more images: view_image { id: ${o}, image: n }`]
+					? [`${refs.length - shown.length} more images: read_file { id: ${o}, image: n }`]
 					: [])
 			].join('\n')
 		);
@@ -975,11 +979,6 @@ export function bindFileTools(
 	});
 
 	add(readFileTool, function* (i) {
-		return yield* readFile(i);
-	});
-	add(viewImageTool, function* (i) {
-		if (i.image === undefined && i.page === undefined && i.crops === undefined)
-			return err('give image, page or crops');
 		return yield* readFile(i);
 	});
 	add(readOutputTool, function* (i) {

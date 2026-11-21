@@ -185,9 +185,20 @@
 		untrack(restore);
 	});
 	const keep_place = (list: HTMLElement) => {
-		const observer = new ResizeObserver(restore);
+		let frame = 0;
+		const schedule = () => {
+			if (frame === 0)
+				frame = requestAnimationFrame(() => {
+					frame = 0;
+					restore();
+				});
+		};
+		const observer = new ResizeObserver(schedule);
 		observer.observe(list);
-		return () => observer.disconnect();
+		return () => {
+			cancelAnimationFrame(frame);
+			observer.disconnect();
+		};
 	};
 
 	function scrolled(): void {
@@ -425,9 +436,20 @@
 			}
 		};
 		add();
-		const watcher = new MutationObserver(add);
+		let frame = 0;
+		const schedule = () => {
+			if (frame === 0)
+				frame = requestAnimationFrame(() => {
+					frame = 0;
+					add();
+				});
+		};
+		const watcher = new MutationObserver(schedule);
 		watcher.observe(el, { childList: true, subtree: true });
-		return () => watcher.disconnect();
+		return () => {
+			cancelAnimationFrame(frame);
+			watcher.disconnect();
+		};
 	}
 
 </script>
@@ -502,6 +524,11 @@
 								{@const calls = item.steps.filter((step) => step.tool !== undefined).length}
 								{@const key = itemKey(at)}
 								{@const open = folded.get(key) ?? working}
+								{@const deliverables = item.steps.flatMap((st) =>
+									st.tool?.name === 'browser' || st.tool?.studio === 'preview'
+										? []
+										: (st.files ?? [])
+								)}
 								<li
 									{@attach turns.measure(itemKey(at))}
 									data-role="steps"
@@ -539,7 +566,7 @@
 												class="ml-auto size-3.5 shrink-0 transition-transform group-open/work:rotate-90 motion-reduce:transition-none"
 											/>
 										</summary>
-										<Steps {ctx} steps={item.steps} {t} opened={expanded} />
+										<Steps {ctx} steps={item.steps} {t} {file_href} opened={expanded} />
 									</details>
 									{#each item.steps.filter((step) => !read_only && approval_cards.has(step.id)) as st (st.id)}
 										<!-- a live change the host holds for the person: at the call that asked for it -->
@@ -577,13 +604,9 @@
 											</div>
 										{/if}
 									{/each}
-									{#if item.steps.some((st) => (st.files?.length ?? 0) > 0)}
-										<!-- what the work made (a screenshot, a document): outside the fold -->
-										<Attachments
-											files={item.steps.flatMap((st) => st.files ?? [])}
-											file_href={file_href}
-											{t}
-										/>
+									{#if deliverables.length > 0}
+										<!-- deliverable documents/downloads stay outside the fold; browser/preview screenshots live inside their step -->
+										<Attachments files={deliverables} file_href={file_href} {t} />
 									{/if}
 								</li>
 							{:else if 'ignored' in item}

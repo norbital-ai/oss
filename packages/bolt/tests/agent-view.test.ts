@@ -251,9 +251,13 @@ describe('source edits on the panel', () => {
 		).toBe('Working…');
 	});
 	it('names each agent tool by its own name and input', () => {
-		expect(stepView('view_image', { id: 'f1', crops: [[0, 0, 1, 1]] })).toMatchObject({
+		expect(stepView('read_file', { id: 'f1', crops: [[0, 0, 1, 1]] })).toMatchObject({
 			verb: 'Zoomed into a page',
 			target: '1 regions'
+		});
+		expect(stepView('read_file', { id: 'f1', image: 1 })).toMatchObject({
+			verb: 'Viewed an image',
+			target: ''
 		});
 		expect(stepView('read_output', { call: 'c1' }).verb).toBe('Read the full result');
 		expect(stepView('task', { description: 'Review all', prompt: 'Review\nall' })).toMatchObject({

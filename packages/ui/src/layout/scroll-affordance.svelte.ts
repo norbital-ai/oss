@@ -14,10 +14,13 @@ type Edge = 'block-start' | 'block-end' | 'inline-start' | 'inline-end';
 
 function overflowEdges(node: HTMLElement): string {
 	const edges: Edge[] = [];
-	// `scrollLeft` is negative in a right-to-left scrollport, so the *distance* to each
-	// end is what decides the edge, never the sign of the offset.
-	const top = node.scrollTop;
-	const bottom = node.scrollHeight - node.clientHeight - top;
+	// `scrollLeft` is negative in RTL and `scrollTop` is negative in `flex-direction: column-reverse`
+	// (such as Firefox/Gecko chat scrollports), so measure distance from both ends regardless of sign.
+	const maxTop = Math.max(0, node.scrollHeight - node.clientHeight);
+	const rawTop = node.scrollTop;
+	const reversed = rawTop < 0 || getComputedStyle(node).flexDirection === 'column-reverse';
+	const top = reversed ? Math.max(0, maxTop + rawTop) : rawTop;
+	const bottom = reversed ? Math.max(0, -rawTop) : Math.max(0, maxTop - rawTop);
 	const left = Math.abs(node.scrollLeft);
 	const right = node.scrollWidth - node.clientWidth - left;
 
@@ -60,25 +63,37 @@ export function scrollAffordance(options?: { fade?: boolean }) {
 			}
 		};
 
+		let frame = 0;
+		const schedule = () => {
+			if (frame === 0)
+				frame = requestAnimationFrame(() => {
+					frame = 0;
+					syncOverflow();
+				});
+		};
+
 		// Content arriving or the pane resizing changes what overflows without any scroll
 		// event at all — a filtered list that drops below the fold is the common case.
-		const observer = new ResizeObserver(syncOverflow);
+		// Observe direct children via ResizeObserver (which catches nested height changes) and
+		// coalesce onto one animation frame instead of forcing synchronous reflow per character mutation.
+		const observer = new ResizeObserver(schedule);
 		observer.observe(node);
 		for (const child of node.children) observer.observe(child);
 
 		const mutations = new MutationObserver(() => {
 			for (const child of node.children) observer.observe(child);
-			syncOverflow();
+			schedule();
 		});
-		mutations.observe(node, { childList: true, subtree: true, characterData: true });
+		mutations.observe(node, { childList: true });
 
-		node.addEventListener('scroll', syncOverflow, { passive: true });
+		node.addEventListener('scroll', schedule, { passive: true });
 		syncOverflow();
 
 		return () => {
+			cancelAnimationFrame(frame);
 			observer.disconnect();
 			mutations.disconnect();
-			node.removeEventListener('scroll', syncOverflow);
+			node.removeEventListener('scroll', schedule);
 		};
 	};
 }

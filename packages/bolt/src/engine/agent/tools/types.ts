@@ -141,7 +141,7 @@ export type ToolContext = {
 	receipts: Receipt[];
 	/** Whom the conversation serves: its fixed tool list. */
 	audience: Audience;
-	/** `view_image` crops this turn, by document. */
+	/** `read_file` crops this turn, by document. */
 	zooms: Map<string, number>;
 	/** The ingests this engine is running: a restart leaves none, so one marked running elsewhere was cut short. */
 	reading: Set<string>;

@@ -8,6 +8,7 @@
 	import { CodeEditor, Icon, type UiContext } from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import ToolBody from './ToolBody.svelte';
+	import Attachments from './Attachments.svelte';
 	import { checkOf, failureOf, reportView, stepArgs, stepView, type StepView } from './view.ts';
 
 	let {
@@ -15,12 +16,14 @@
 		steps,
 		t,
 		activity = false,
+		file_href,
 		opened = new SvelteSet<string>()
 	}: {
 		ctx: UiContext;
 		steps: readonly AgentRow[];
 		t: (key: string) => string;
 		activity?: boolean;
+		file_href?: (id: string) => string;
 		/** The steps a reader opened: only those render their tabs. The panel's own, so a regrouped run keeps them open. */
 		opened?: SvelteSet<string>;
 	} = $props();
@@ -123,6 +126,9 @@
 							</p>
 						{:else}
 							<ToolBody {ctx} {tool} view={v} {t} />
+							{#if file_href !== undefined && (s.files?.length ?? 0) > 0}
+								<Attachments files={s.files ?? []} {file_href} {t} />
+							{/if}
 						{/if}
 					</div>
 				{/if}

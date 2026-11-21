@@ -38,6 +38,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - A declaration's spec: `Parameters<typeof import('pkg').fn>[0]` for single-argument declarations; model and integration take name then spec (`[1]`), sync takes model, name then spec (`[2]`). The declared name must match the source role. Narrow with `X['field']`. Models and integrations use their generated per-file binding, not a root declaration imported back from their source.
 - `type` answers any shape with no file. `completions`, `hover`, `signature` need path, line, column of a file you are writing: a file written only to ask is a wasted edit.
 - Live names: `describe_workspace`, `workspace_list_dir`.
+- **No `node_modules/` or `.norbital/` in the workspace:** packages live in a centralized host store shared across tenants and cannot be read with file tools. Never glob, grep, or read `node_modules/` or `.norbital/` — inspect package/component types with `workspace_lang` (or `bolt-contract` docs) and install packages with `workspace_package`.
 
 ## Protocol
 
@@ -55,7 +56,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - An automation runs with its declared `policies`, never its starter's; `actor.*` there matches nothing.
 - Effectful bodies are `function*` and `yield*` their `ctx` Effects.
 - Exact decimal calculations use Effect `BigDecimal`; stored decimal values are strings, never binary floating-point approximations.
-- File fields require both `accept` MIME patterns and binary `max` in `KiB`/`MiB`/`GiB` with no space (e.g. `{ kind: 'file', accept: ['application/pdf'], max: '20MiB', optional: true }`). Model one-to-many children with a single `ref` on the child model; never declare a `many: true` `ref` back-list on the parent.
+- File fields require both `accept` MIME patterns and `max` in `KiB`/`MiB`/`GiB` or `KB`/`MB`/`GB` with no space (e.g. `{ kind: 'file', accept: ['application/pdf'], max: '20MiB', optional: true }`). Model one-to-many children with a single `ref` on the child model; never declare a `many: true` `ref` back-list on the parent.
 - Named constraints take arrays for `unique` and `per`. Mark one unique constraint `import_key: true` for matching imports. Computed expressions live on fields; physical and search indexes live under `indexes`.
 - Each create/update transform and per-verb effect receives `{ before, set, after, changed }` changes. Create/update transforms return sets or `{ sets, with, on_approved }` with one set per input in order, including approval replay. Preserve unchanged sets with `changes.map(({ set }) => set)`; a delete transform returns nothing or `{ with, on_approved }`. Effects receive approval lifecycle details in `ctx.event`.
 - Commit related writes through one `ctx.act({ '<model>.<verb>': inputs })` map. Update/delete targets carry selected rows and their revisions. There are no `many`, `checked`, upsert or transaction alternatives.
