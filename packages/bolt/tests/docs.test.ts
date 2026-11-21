@@ -289,6 +289,7 @@ it.effect('bolt-contract holds a generated card per role, naming what a role is 
 		'sync.md',
 		'integration.md',
 		'page.md',
+		'representation.md',
 		'test.md'
 	]);
 	const card = (path: string) => contract?.files.find((file) => file.path === path)?.text ?? '';

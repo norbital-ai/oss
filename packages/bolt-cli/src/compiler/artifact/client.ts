@@ -463,11 +463,11 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			build: {
 				outDir: destination,
 				emptyOutDir: layer === undefined,
-				sourcemap: true,
+				sourcemap: false,
 				...(publicPage ? { manifest: true, cssCodeSplit: true } : {}),
 				rolldownOptions: {
 					input: typeof source === 'string' ? { shell: ENTRY } : source,
-					output: { entryFileNames: 'assets/[name]-[hash].js', sourcemapExcludeSources: true }
+					output: { entryFileNames: 'assets/[name]-[hash].js' }
 				}
 			}
 		});

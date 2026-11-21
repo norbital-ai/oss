@@ -130,7 +130,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 					<div class="min-h-0 flex-1" aria-busy="true"></div>
 				{:then { AreaChart, BarChart, LineChart, PieChart, ScatterChart }}
 					{#if kind === 'donut'}
-						<div class="min-h-0 flex-1">
+						<div class="min-h-60 flex-1">
 							<PieChart
 								data={data.map((d) => ({
 									key: String(d[x]),
@@ -144,7 +144,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 						</div>
 					{:else}
 						<!-- clip, never scroll: the plot fills this box, and a scrollbar for its sub-pixel overflow resizes the plot every frame -->
-						<div class="min-h-0 min-w-0 flex-1 overflow-clip" bind:clientWidth={plotWidth}>
+						<div class="min-h-60 min-w-0 flex-1 overflow-clip" bind:clientWidth={plotWidth}>
 							{#if kind === 'scatter'}<ScatterChart
 									{data}
 									{x}

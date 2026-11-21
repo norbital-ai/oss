@@ -57,6 +57,10 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 		'bolt/page': ['PageBolt', 'PageSnapshotHost'],
 		ui: ['Table', 'Col', 'Form', 'Field', 'Section', 'RecordShell', 'Board', 'Chart']
 	},
+	representation: {
+		'bolt/page': ['PageBolt'],
+		ui: ['RecordShell', 'Form', 'Field', 'Section', 'Table', 'Col']
+	},
 	test: {
 		'bolt-cli/test': [
 			'TestWorkspace', 'Kit', 'Caller', 'TestOptions', 'JobResult', 'NativeReadRow', 'NativeReadAnswer', 'NativeActAnswer'
@@ -156,6 +160,21 @@ export default app({
 </script>
 
 <Table of="<model>" />
+\`\`\``,
+	representation: `A model's custom record screen lives beside its model at \`src/data/model/<model>/+representation.svelte\`. Wrap it in \`RecordShell\` (which owns header, state moves, approvals, history and save/cancel) and arrange fields with \`Section\`, \`Field\` and embedded child \`Table\`s:
+
+\`\`\`svelte
+<!-- src/data/model/<model>/+representation.svelte -->
+<script lang="ts">
+	import { Field, RecordShell, Section } from '@norbital-ai/ui';
+	let { ctx, id } = $props();
+</script>
+
+<RecordShell {ctx} of="<model>" {id}>
+	<Section title="Details">
+		<Field name="<field>" />
+	</Section>
+</RecordShell>
 \`\`\``,
 	test: `Tests are \`tests/<name>.test.ts\`. Everything comes from the kit, and \`workspace_test\` runs them:
 
