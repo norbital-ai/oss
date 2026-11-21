@@ -304,11 +304,15 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		const allowed = navigation_paths(nav(e.manifest, a), a.admin);
 		add(
 			pageTool,
-			function* ({ path, configure: asked, click, type, scroll, go, highlight, preview }) {
-				if (preview !== undefined)
-					return /^https?:\/\//.test(preview) && URL.canParse(preview)
-						? ok({ preview })
-						: err('preview is a preview URL (https://…)');
+			function* (given) {
+				const { path, configure: asked, click, type, scroll, go, highlight, preview } = given;
+				if (preview !== undefined) {
+					if (!(/^https?:\/\//.test(preview) && URL.canParse(preview)))
+						return err('preview is a preview URL (https://…)');
+					const held = hold('page', given, 'control their open tab');
+					if (held !== undefined) return held;
+					return ok({ preview });
+				}
 				if (path !== undefined) {
 					if (!allowed.includes(path))
 						return err(`No page ${path}. Pages: ${allowed.join(', ')}`);
@@ -330,12 +334,16 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 						return err('That MCP server is not declared in this workspace.');
 					const target =
 						configure === undefined ? path : a.admin ? systemUiPath(path, configure) : null;
-					return target === null
-						? err('This configuration does not belong to that page or your authority.')
-						: ok({ navigation: target, requested: true });
+					if (target === null)
+						return err('This configuration does not belong to that page or your authority.');
+					const held = hold('page', given, 'control their open tab');
+					if (held !== undefined) return held;
+					return ok({ navigation: target, requested: true });
 				}
 				if ([click, scroll, go, type, highlight].every((v) => v === undefined))
 					return err('give path, click, type, scroll, go, highlight or preview');
+				const held = hold('page', given, 'control their open tab');
+				if (held !== undefined) return held;
 				return ok({
 					page: {
 						...(click === undefined ? {} : { click }),

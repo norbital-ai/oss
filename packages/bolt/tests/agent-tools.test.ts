@@ -61,7 +61,8 @@ import { credentials } from '../src/engine/integrations/credentials.ts';
 import { Secrets } from '../src/engine/secrets.ts';
 import { layered, type EngineManifest } from '../src/engine/manifest.ts';
 import { Browser, Bundler, Files, GuestIsolates, Http, Images, Logs } from '../src/engine/ports.ts';
-import { browserTools, submits } from '../src/engine/agent/browser.ts';
+import { browserTools } from '../src/engine/agent/browser.ts';
+import { approvedPageSession } from '../src/engine/agent/index.ts';
 import { files_of, skill_of } from './support/run-file-trees.ts';
 import { BOUNDS } from '../src/engine/agent/context.ts';
 import { tree_digest } from '@norbital-ai/host-api';
@@ -70,7 +71,7 @@ import { TestWorkspace } from '../../bolt-cli/src/test/effect.ts';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { audit_shape } from '../src/engine/audit.ts';
 import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
-import { storable } from '../src/engine/agent/schema.ts';
+import { storable, transcriptRow } from '../src/engine/agent/schema.ts';
 import { file_attachments } from '../src/engine/agent/attachments.ts';
 import { seed_accounts } from './support/accounts.ts';
 import type { ToolAnswer } from '../src/engine/agent/ai.ts';
@@ -1788,6 +1789,13 @@ it.effect(
 					path: '/settings/integrations',
 					configure: { capability: 'api_key.create' }
 				})
+			).toEqual({ confirm: true });
+			const approvedPage = yield* ctx({ approved: (name) => name === 'page' });
+			expect(
+				yield* result(approvedPage, 'page', {
+					path: '/settings/integrations',
+					configure: { capability: 'api_key.create' }
+				})
 			).toEqual({
 				result: { navigation: '/settings/integrations?setup=api_key.create', requested: true }
 			});
@@ -3376,25 +3384,75 @@ describe('confirmation coverage', () => {
 		expect(sweeping('jobs.create', [{ title: 'one' }])).toBe(false);
 		expect(sweeping('jobs.update', [{ target: { id: 'j1' }, set: { status: 'done' } }])).toBe(false);
 	});
-	it('a browser visit that clicks, presses, submits, evaluates or downloads holds on external sites; reading and Studio workspace previews do not', () => {
-		expect(submits({ url: 'https://a.test', steps: [{ click: 'r1' }] })).toBe(true);
-		expect(submits({ steps: [{ type: { ref: 'r2', text: 'x', submit: true } }] })).toBe(true);
-		expect(submits({ evaluate: 'document.title' })).toBe(true);
-		expect(submits({ download: 'https://a.test/f.pdf' })).toBe(true);
+	it('Moli browser tool runs without confirmation; page control confirms once per conversation and run_js files surface on transcript rows', () => {
+		const stubBrowser: Browser['Service'] = {
+			navigate: () => Effect.succeed({ url: 'https://a.test', title: 'A', text: 'ok', lines: 1 }),
+			snapshot: () => Effect.succeed({ url: 'https://a.test', title: 'A', text: 'ok', lines: 1 }),
+			act: () => Effect.succeed({ url: 'https://a.test', title: 'A', text: 'ok', lines: 1 }),
+			evaluate: () => Effect.succeed({ value: 'ok' }),
+			download: () => Effect.succeed({ id: 'f1', name: 'f.pdf', mime: 'application/pdf', bytes: 4, key: 'k', sha256: 's' }),
+			screenshot: () => Effect.succeed(new Uint8Array([1])),
+			close: () => Effect.void,
+			scoped: () => Effect.die('unused')
+		};
+		const [fleet] = browserTools(stubBrowser);
+		expect(fleet?.confirm).toBeUndefined();
+
+		expect(approvedPageSession([])).toBe(false);
 		expect(
-			submits({
-				workspace: { path: '/app/hedging/overview', preview: true },
-				evaluate: 'document.title',
-				steps: [{ click: 'r1' }]
-			})
-		).toBe(false);
-		expect(
-			submits({
-				url: 'https://a.test',
-				steps: [{ type: { ref: 'r2', text: 'x' } }],
-				screenshot: true
-			})
-		).toBe(false);
+			approvedPageSession([
+				{
+					id: 'm1',
+					conversation: 'c1',
+					seq: 1,
+					role: 'tool',
+					state: null,
+					text: null,
+					turn: 't1',
+					as: null,
+					mode: null,
+					author: null,
+					about: null,
+					supersedes: null,
+					copied_from: null,
+					content: { id: 'call-1', assistant: 'a1', name: 'page', result: { approved: true } },
+					meta: { tag: 'confirm', call: { id: 'call-1', name: 'page', input: { path: '/inbox' } } }
+				}
+			])
+		).toBe(true);
+
+		const row = transcriptRow(
+			{
+				id: 'm2',
+				conversation: 'c1',
+				seq: 2,
+				role: 'tool',
+				state: null,
+				text: null,
+				turn: 't1',
+				as: null,
+				mode: null,
+				author: null,
+				about: null,
+				supersedes: null,
+				copied_from: null,
+				content: {
+					id: 'call-2',
+					assistant: 'a2',
+					name: 'run_js',
+					result: {
+						answer: {
+							rows: 530,
+							files: [{ id: 'f-csv', name: 'leads.csv', mime: 'text/csv', size: 1024 }]
+						}
+					}
+				},
+				meta: null
+			},
+			true,
+			false
+		);
+		expect(row?.files).toEqual([{ id: 'f-csv', name: 'leads.csv', mime: 'text/csv' }]);
 	});
 	const mcp = (calls: Json[]): ToolContext['mcp'] => ({
 		tools: () => Effect.succeed([]),

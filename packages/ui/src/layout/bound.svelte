@@ -22,6 +22,8 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 		size?: BoundSize;
 		/** A `fill` bound's floor (a CSS length; default 0). */
 		min_height?: string;
+		/** An explicit height (a CSS length, e.g. `20rem`) for a bounded view inside a scroll; implies `flex-none`. */
+		height?: string;
 		/** Padding on every side (default `none`); ignored when `inset` pads. */
 		pad?: LayoutPad;
 		/** Pad with the app inset, unless an enclosing region already owns it. */
@@ -44,6 +46,7 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 		ref = $bindable(null),
 		size = 'content',
 		min_height,
+		height,
 		pad = 'none',
 		inset = false,
 		clip = false,
@@ -64,13 +67,14 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 	bind:this={ref}
 	class={cn(
 		'min-w-0 [container-type:inline-size]',
-		sizeClasses[size],
+		height !== undefined ? 'flex-none' : sizeClasses[size],
 		padsInset ? INSET_CLASS : PAD_CLASSES[pad],
 		clip && 'overflow-clip',
 		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
-	style:min-height={size === 'fill' ? min_height : undefined}
+	style:height={height}
+	style:min-height={size === 'fill' && height === undefined ? min_height : undefined}
 	data-layout="bound"
 	data-bound-clip={clip || undefined}
 	data-bound-inset={padsInset || undefined}

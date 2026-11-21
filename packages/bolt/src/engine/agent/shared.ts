@@ -443,8 +443,8 @@ export const approvedCalls = (rows: readonly MessageRow[]): Set<string> =>
 		})
 	);
 
-/** Whether the person approved `browser` once in this conversation (grants all subsequent `browser` actions in the session). */
-export const approvedBrowserSession = (rows: readonly MessageRow[]): boolean =>
+/** Whether the person approved `page` tab control once in this conversation (grants all subsequent `page` actions in the session). */
+export const approvedPageSession = (rows: readonly MessageRow[]): boolean =>
 	rows.some(
 		(card) =>
 			card.role === 'tool' &&
@@ -452,23 +452,8 @@ export const approvedBrowserSession = (rows: readonly MessageRow[]): boolean =>
 			card.state === null &&
 			isObj(card.content.result) &&
 			card.content.result['approved'] === true &&
-			card.meta.call.name === 'browser'
+			card.meta.call.name === 'page'
 	);
-
-/** Whether the headless `browser` tab's most recent navigation in this conversation opened the tenant's own workspace/preview. */
-export const browserOnWorkspacePreview = (rows: readonly MessageRow[]): boolean => {
-	for (let i = rows.length - 1; i >= 0; i--) {
-		const r = rows[i];
-		if (r === undefined || r.role !== 'tool' || r.content.name !== 'browser') continue;
-		const parsed = Option.getOrNull(
-			Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(r.content.args)
-		);
-		if (!isObj(parsed)) continue;
-		if (parsed['close'] === true || parsed['url'] !== undefined) return false;
-		if (parsed['workspace'] !== undefined) return true;
-	}
-	return false;
-};
 
 export const isCatalogueNote = (row: MessageRow) =>
 	row.role === 'system' && row.meta?.tag === 'note' && row.meta.catalogue !== undefined;

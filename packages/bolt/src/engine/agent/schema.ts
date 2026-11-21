@@ -444,6 +444,7 @@ const Outcome = Schema.Struct({
 	results: Schema.optionalKey(Schema.Array(Schema.Json)),
 	error: Schema.optionalKey(Schema.Json),
 	files: Schema.optionalKey(Schema.Array(Schema.Json)),
+	answer: Schema.optionalKey(Schema.Json),
 	settled: Schema.optionalKey(
 		Schema.NullOr(
 			Schema.Struct({
@@ -503,11 +504,16 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		said = r.role !== 'tool' && typeof r.content === 'object' ? r.content : null,
 		outcome =
 			step === null ? NO_OUTCOME : Option.getOrElse(outcomeOf(step.result), () => NO_OUTCOME);
-	// a tool step offers the files it stored or collected: a document's or sandbox output's `files`, and the file a
-	// finished run answered (an export collected with `wait`), itself or under a key (`{ file }`)
+	// a tool step offers the files it stored or collected: a document's or sandbox output's `files` (including inline
+	// `run_js` under `answer.files`), and the file a finished run answered (an export collected with `wait`), itself or
+	// under a key (`{ file }`)
 	const answer = outcome.settled?.result,
 		ran = Predicate.isObject(answer) ? [answer, ...Object.values(answer)] : [],
-		offered: readonly unknown[] = outcome.files ?? ran,
+		answerFiles =
+			Predicate.isObject(outcome.answer) && Array.isArray(outcome.answer['files'])
+				? outcome.answer['files']
+				: undefined,
+		offered: readonly unknown[] = outcome.files ?? answerFiles ?? ran,
 		made = offered.filter(
 			(f): f is FileRef => isFileRef(f) && f.id !== undefined && f.mime !== undefined
 		),

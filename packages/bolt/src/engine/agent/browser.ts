@@ -62,22 +62,6 @@ const Input = Schema.Struct({
 	close: Schema.optionalKey(Schema.Boolean)
 });
 
-/**
- * A visit the person confirms once per conversation: clicking, pressing, submitting, evaluating JS, or downloading on
- * an external site. Opening, reading, typing, scrolling, screenshots, and inspecting the workspace's own Studio
- * preview (`workspace` without an external `url` or `download`) run without prompting.
- */
-export const submits = (input: Json): boolean => {
-	const visit = Schema.decodeUnknownOption(Input, CLOSED)(input);
-	if (visit._tag === 'None') return false;
-	const { workspace, url, steps = [], evaluate, download } = visit.value;
-	if (workspace !== undefined && url === undefined && download === undefined) return false;
-	return (
-		evaluate !== undefined ||
-		download !== undefined ||
-		steps.some((step) => step.click !== undefined || step.press !== undefined || step.type?.submit === true)
-	);
-};
 /** An automation's browser identity: stable per automation (its sealed sign-ins), one tab per run. */
 export const automationBrowserProfile = (automation: string, run: string): string =>
 	`${BROWSER_RUN_PROFILE}${automation}\u0000${run}`;
@@ -153,7 +137,6 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 			"Headless browser fleet (separate from and invisible to the person's tab; keeps its own sign-ins; use page instead to control the person's live tab). Runs in order: open a url or workspace/preview page (or go), steps, download, evaluate JS, screenshot. Answers text with [ref]s (narrowed by find or from) or evaluate JSON. close ends the tab.",
 		input: Input,
 		parseOptions: CLOSED,
-		confirm: submits,
 		call: (i, profile, context) =>
 			Effect.gen(function* () {
 				if (i.close === true) {

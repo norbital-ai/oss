@@ -77,7 +77,32 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 		tickLabelProps: { stroke: 'none', strokeWidth: 0 }
 	};
 	const xAxis = { ...axis, tickSpacing: 80 };
-	let plotWidth = $state(Infinity);
+	let plotEl = $state<HTMLDivElement | null>(null);
+	let plotWidth = $state(0);
+	let plotHeight = $state(0);
+	$effect(() => {
+		const el = plotEl;
+		if (el === null) return;
+		const measure = () => {
+			const rect = el.getBoundingClientRect();
+			const w = Math.round(rect.width || el.clientWidth);
+			const h = Math.round(rect.height || el.clientHeight);
+			if (w > 0) plotWidth = w;
+			if (h > 0) plotHeight = h;
+		};
+		measure();
+		const frame = requestAnimationFrame(measure);
+		const observer =
+			typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure());
+		observer?.observe(el);
+		return () => {
+			cancelAnimationFrame(frame);
+			observer?.disconnect();
+		};
+	});
+	const chartSize = $derived(
+		plotWidth > 0 && plotHeight > 0 ? { width: plotWidth, height: plotHeight } : {}
+	);
 	const ys = $derived(typeof y === 'string' ? [y] : [...y]);
 	// a model chart's `y` names a measure the aggregate answers, never a bare field
 	const unmeasured = $derived(
@@ -130,8 +155,9 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 					<div class="min-h-0 flex-1" aria-busy="true"></div>
 				{:then { AreaChart, BarChart, LineChart, PieChart, ScatterChart }}
 					{#if kind === 'donut'}
-						<div class="min-h-60 flex-1">
+						<div class="relative min-h-60 min-w-0 flex-1 overflow-clip" bind:this={plotEl}>
 							<PieChart
+								{...chartSize}
 								data={data.map((d) => ({
 									key: String(d[x]),
 									value: first_y === undefined ? 0 : Number(d[first_y] ?? 0)
@@ -144,8 +170,9 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 						</div>
 					{:else}
 						<!-- clip, never scroll: the plot fills this box, and a scrollbar for its sub-pixel overflow resizes the plot every frame -->
-						<div class="min-h-60 min-w-0 flex-1 overflow-clip" bind:clientWidth={plotWidth}>
+						<div class="relative min-h-60 min-w-0 flex-1 overflow-clip" bind:this={plotEl}>
 							{#if kind === 'scatter'}<ScatterChart
+									{...chartSize}
 									{data}
 									{x}
 									padding={numericPadding}
@@ -154,6 +181,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 									legend
 								/>
 							{:else if kind === 'bar'}<BarChart
+									{...chartSize}
 									{data}
 									x={orientation === 'horizontal' ? undefined : x}
 									y={orientation === 'horizontal' ? x : undefined}
@@ -165,7 +193,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 												right: 12,
 												left: Math.min(
 													320,
-													plotWidth * 0.4,
+													(plotWidth > 0 ? plotWidth : Infinity) * 0.4,
 													Math.max(80, ...data.map((row) => String(row[x] ?? '').length * 7 + 16))
 												)
 											}
@@ -176,6 +204,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 									legend
 								/>
 							{:else if kind === 'line'}<LineChart
+									{...chartSize}
 									{data}
 									{x}
 									padding={numericPadding}
@@ -188,6 +217,7 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 									legend
 								/>
 							{:else}<AreaChart
+									{...chartSize}
 									{data}
 									{x}
 									padding={numericPadding}
