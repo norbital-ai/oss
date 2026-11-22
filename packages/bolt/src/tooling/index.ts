@@ -26,6 +26,7 @@ export { FieldsSchema } from '../protocol/public-page.ts';
 export { from_store } from '../protocol/errors.ts';
 export { response_error } from '../protocol/http.ts';
 export { type ShellManifest } from '../shell/nav.ts';
+export { framework_keys, framework_text, is_native_locale } from '../shell/i18n.ts';
 export { SYSTEM } from '../system/index.ts';
 export { KitInvalid, TestEngine, test_engine } from './test-engine.ts';
 

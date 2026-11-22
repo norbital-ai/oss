@@ -167,6 +167,7 @@ export type ShellBoot = {
 	workspace: {
 		name: string;
 		locale: string;
+		languages?: readonly string[];
 		tz: string;
 		logo?: string;
 		environment?: string;

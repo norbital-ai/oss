@@ -107,6 +107,7 @@ export const PublicBoot = Schema.Struct({
 	workspace: Schema.Struct({
 		name: Schema.String,
 		locale: Schema.String,
+		languages: Schema.optionalKey(Schema.Array(Schema.String)),
 		tz: Schema.String,
 		logo: optionalString,
 		handle: optionalString,
@@ -160,6 +161,7 @@ export const toPublicBoot = (
 		workspace: {
 			name: boot.workspace.name,
 			locale: boot.workspace.locale,
+			...(boot.workspace.languages === undefined ? {} : { languages: boot.workspace.languages }),
 			tz: boot.workspace.tz,
 			...(boot.workspace.logo === undefined ? {} : { logo: boot.workspace.logo }),
 			...(boot.workspace.handle === undefined ? {} : { handle: boot.workspace.handle }),

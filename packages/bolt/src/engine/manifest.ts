@@ -144,6 +144,7 @@ const Workspace = Schema.Struct({
 	theme: Schema.optionalKey(WorkspaceThemeData),
 	tz: Schema.String,
 	locale: Schema.String,
+	languages: Schema.optionalKey(Schema.Array(Schema.String)),
 	currency: Schema.optionalKey(Schema.String),
 	apps: Schema.optionalKey(Schema.Array(Schema.String)),
 	landing: Schema.optionalKey(Schema.Struct({ app: Schema.String, single_app: Schema.optionalKey(Schema.Literal(true)) })),
@@ -424,11 +425,17 @@ function resolvedMessages(m: LoadedManifest, workspace: Readonly<Record<string, 
 export function project_manifest(m: LoadedManifest): unknown {
 	const workspace = object(m.workspace['']);
 	const secrets = m.secrets[''];
+	const languages = workspace['languages'] === undefined ? ['en'] : workspace['languages'];
+	const projectedWorkspace = {
+		...workspace,
+		languages,
+		...(secrets === undefined ? {} : { secrets })
+	};
 	const messages = resolvedMessages(m, workspace);
 	const models = modelParts(m.model);
 	const relationships = { ...SYSTEM.relationships, ...models.relationships };
 	return {
-		workspace: secrets === undefined ? workspace : { ...workspace, secrets },
+		workspace: projectedWorkspace,
 		...(messages === undefined ? {} : { messages }),
 		...models,
 		integrations: Object.fromEntries(

@@ -58,6 +58,8 @@ type WorkspaceBase = {
 	tz: IanaZone;
 	/** The default locale tag. */
 	locale: string;
+	/** Languages the workspace is authored and translated into (BCP-47 tags; default `['en']`). English (`'en'`) is always the workspace basis. */
+	languages?: readonly string[];
 	/** The default currency of money fields that name none. */
 	currency?: CurrencyCode;
 	/** App order in the launcher. */
@@ -132,6 +134,8 @@ type WorkspaceFor = {
 	theme?: WorkspaceTheme;
 	tz: IanaZone;
 	locale: string;
+	/** Languages the workspace is authored and translated into (BCP-47 tags; default `['en']`). English (`'en'`) is always the workspace basis. */
+	languages?: readonly string[];
 	currency?: CurrencyCode;
 	/** App order in the launcher. */
 	apps?: readonly AppName[];

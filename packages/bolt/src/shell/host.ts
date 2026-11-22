@@ -708,6 +708,7 @@ const makeShell = Effect.gen(function* () {
 			name: workspace.name,
 			handle: workspace.handle,
 			locale: m.workspace.locale,
+			languages: m.workspace.languages ?? ['en'],
 			tz: m.workspace.tz,
 			...(logo === undefined ? {} : { logo }),
 			...(env === null ? {} : { environment: env }),

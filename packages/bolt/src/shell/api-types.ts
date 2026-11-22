@@ -63,6 +63,7 @@ export const RestartChat = Schema.Struct({
 export const ShellWorkspace = Schema.Struct({
 	name: Schema.String,
 	locale: Schema.String,
+	languages: Schema.optionalKey(Schema.Array(Schema.String)),
 	tz: Schema.String,
 	logo: Optional,
 	environment: Optional,

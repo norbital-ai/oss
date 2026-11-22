@@ -9,7 +9,7 @@ This page, its starters at the end and `workspace_lang` are enough for a normal 
 
 A `+` file is a compiler role, default-exporting its declaration; its path is its name (`^[a-z][a-z0-9_]*$`, folders singular). Other files are plain modules. Under `src/`:
 
-- `+workspace.ts` `workspace(spec)`: zone, locale, currency, apps, capabilities
+- `+workspace.ts` `workspace(spec)`: zone, locale, `languages` (default `['en']`; English is always basis; `>1` enables Globe switcher and `check/messages-locale-missing` + `check/untranslated-text`), currency, apps, capabilities
 - `+secrets.ts` `secrets(spec)`: secret names
 - `data/model/<name>/+model.ts` `model('<name>', spec)`: fields, reads, writes, state, search, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view; `+<sync>.sync.ts` `sync('<model>', '<sync>', spec)`: a file or remote sync
 - `data/custom_field/<name>/+custom_field.ts` `custom_field(spec)`, `+renderer.svelte`: value type

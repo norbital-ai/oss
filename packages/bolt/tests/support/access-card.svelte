@@ -18,9 +18,9 @@
 	const t = (key: string) => key;
 </script>
 
-<Access {t} locale="en" onLocale={() => {}} dark={false} onTheme={() => {}} apex="/" {recovery}>
+<Access {t} locale="en" on_locale={() => {}} dark={false} on_theme={() => {}} apex="/" {recovery}>
 	{#if invitation}
-		<Invite {api} {t} id={invitation.id} signedIn={invitation.signedIn} workspace="Acme" />
+		<Invite {api} {t} id={invitation.id} signed_in={invitation.signedIn} workspace="Acme" />
 	{:else}
 		<SignIn {api} {t} {next} workspace="Acme" />
 	{/if}

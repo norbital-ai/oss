@@ -1,13 +1,35 @@
 // The shell's copy in each framework locale. English is the key itself and Chinese is written out here.
 // The member record owns the language choice; bolt.locale caches it before boot and serves signed-out pages.
 import { Effect, Result } from 'effect';
-import { ui_messages_for } from '@norbital-ai/ui/i18n';
+import { UI_TEXT, ui_messages_for, ui_text_for, type UiTextKey } from '@norbital-ai/ui/i18n';
 import { PERSONAL_LOCALES } from '../decl/preferences.ts';
 
 export const LOCALES = PERSONAL_LOCALES;
 type FrameworkLocale = (typeof LOCALES)[number];
-/** Each locale's name in its own language: the switch's label. */
+/** Whether Bolt ships built-in framework translations for this locale (`en`, `zh`, and their subtags). */
+export const is_native_locale = (locale: string): boolean => {
+	const base = locale.trim().toLowerCase().split('-')[0] ?? '';
+	return base === 'en' || base === 'zh';
+};
+/** Each framework locale's name in its own language. */
 export const LANGUAGE: { readonly [l in FrameworkLocale]: string } = { en: 'English', zh: '中文' };
+const LANGUAGE_OVERRIDES: { readonly [code: string]: string } = { en: 'English', zh: '中文' };
+/** A BCP-47 language tag's native endonym (e.g. `'en'` → `'English'`, `'zh'` → `'中文'`, `'ja'` → `'日本語'`). */
+export function languageLabel(code: string): string {
+	const trimmed = code.trim();
+	if (trimmed === '') return code;
+	const override = LANGUAGE_OVERRIDES[trimmed.toLowerCase()];
+	if (override !== undefined) return override;
+	const resolved = Result.try({
+		try: () => {
+			const display = new Intl.DisplayNames([trimmed], { type: 'language' }).of(trimmed);
+			if (display === undefined || display.trim() === '') return trimmed;
+			return display.charAt(0).toLocaleUpperCase(trimmed) + display.slice(1);
+		},
+		catch: () => trimmed
+	});
+	return Result.isSuccess(resolved) ? resolved.success : trimmed;
+}
 const CHOICE = 'bolt.locale';
 
 /** The viewer's chosen locale, else the workspace's. Storage may be absent or refuse (a private window). */
@@ -1083,6 +1105,29 @@ export const framework_text = (locale: string): { readonly [key: string]: string
 	...(locale.toLowerCase().startsWith('zh') ? SHELL_ZH : {}),
 	...ui_messages_for(locale)
 });
+
+const isUiTextKey = (key: string): key is UiTextKey => Object.hasOwn(UI_TEXT, key);
+
+/** Every framework message key (Bolt shell, `@norbital-ai/ui` views, and `ui.<UiTextKey>` chrome). */
+export const framework_keys = (): readonly string[] => [
+	...Object.keys(SHELL_ZH),
+	...Object.keys(ui_messages_for('zh')),
+	...Object.keys(UI_TEXT).map((key) => `ui.${key}`)
+];
+
+/** `@norbital-ai/ui` chrome copy in a locale, with workspace `ui.<key>` overrides taking precedence. */
+export function ui_text_with_overrides(
+	locale: string,
+	workspace_messages: { readonly [key: string]: string }
+): Partial<Record<UiTextKey, string>> {
+	const merged: Partial<Record<UiTextKey, string>> = { ...ui_text_for(locale) };
+	for (const key of Object.keys(UI_TEXT)) {
+		if (!isUiTextKey(key)) continue;
+		const override = workspace_messages[`ui.${key}`];
+		if (override !== undefined) merged[key] = override;
+	}
+	return merged;
+}
 
 /** The workspace's base copy with the viewer's locale over it (`zh-SG` falls back to `zh`). */
 export function workspace_text(

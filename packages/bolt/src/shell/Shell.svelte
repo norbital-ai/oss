@@ -51,7 +51,6 @@
 		provide_representations,
 		set_ui_text,
 		StudioSlot,
-		ui_text_for,
 		type UiContext
 	} from '@norbital-ai/ui';
 	import { NorbiusStrip } from '@norbital-ai/ui/brand';
@@ -70,7 +69,13 @@
 		with_records,
 		type ShellBoot
 	} from './nav.ts';
-	import { chosenLocale, framework_text, setLocale, workspace_text } from './i18n.ts';
+	import {
+		chosenLocale,
+		framework_text,
+		setLocale,
+		ui_text_with_overrides,
+		workspace_text
+	} from './i18n.ts';
 	import type { SyncStatus } from '../page/bolt.ts';
 	import { active_app, media, navigation_model, workspace_landing, NORBIUS } from './model.ts';
 	import { applyTheme, storedTheme, storeTheme, type Theme } from './theme.ts';
@@ -160,7 +165,7 @@
 	// svelte-ignore state_referenced_locally
 	const workspace_messages = workspace_text(config.messages, config.locales, locale);
 	const t = (key: string) => workspace_messages[key] ?? framework[key] ?? key;
-	const ui_text = ui_text_for(locale);
+	const ui_text = ui_text_with_overrides(locale, workspace_messages);
 	set_ui_text(ui_text);
 	// the appearance: the document applied the stored choice before paint; a change of choice or of the system's follows
 	let theme = $state<Theme>('system');
@@ -264,6 +269,7 @@
 					name: personalRead?.current?.sys_workspace.rows[0]?.name ?? boot.workspace.name
 				}
 	);
+	const languages = $derived(workspace?.languages ?? config.manifest.workspace.languages);
 	const viewerBoot = $derived(
 		boot === null
 			? null
@@ -1186,6 +1192,7 @@
 		<Access
 			{t}
 			environment={workspace?.environment}
+			{languages}
 			{locale}
 			on_locale={chooseLocale}
 			apex={device.pinned ? undefined : workspace?.apex}
@@ -1210,6 +1217,7 @@
 		<Access
 			{t}
 			environment={workspace?.environment}
+			{languages}
 			{locale}
 			on_locale={chooseLocale}
 			apex={device.pinned ? undefined : workspace?.apex}
@@ -1274,6 +1282,7 @@
 					mobile={narrow.current}
 					{t}
 					environment={boot?.workspace.environment ?? null}
+					{languages}
 					{locale}
 					on_locale={chooseLocale}
 					{theme}

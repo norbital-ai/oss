@@ -2,6 +2,13 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber } from 'effect';
 import { environment_label, records_of, with_records, type NavNode } from '../src/shell/nav.ts';
 import {
+	SHELL_ZH,
+	framework_keys,
+	is_native_locale,
+	languageLabel,
+	ui_text_with_overrides
+} from '../src/shell/i18n.ts';
+import {
 	pageHits,
 	recordFinder,
 	recordScopes,
@@ -21,6 +28,39 @@ describe('environment badge', () => {
 		expect(
 			[undefined, '', ' production ', 'development', 'staging', 'preview-7'].map(environment_label)
 		).toEqual([null, null, null, 'local', 'staging', 'preview-7']);
+	});
+});
+
+describe('languageLabel', () => {
+	it('resolves native endonyms for en, zh and arbitrary BCP-47 language codes', () => {
+		expect(languageLabel('en')).toBe('English');
+		expect(languageLabel('zh')).toBe('中文');
+		expect(languageLabel('ja')).toBe('日本語');
+		expect(languageLabel('fr')).toBe('Français');
+	});
+
+	it('recognizes built-in native locales, exports framework keys and merges ui.<key> overrides', () => {
+		expect(is_native_locale('en')).toBe(true);
+		expect(is_native_locale('zh')).toBe(true);
+		expect(is_native_locale('zh-SG')).toBe(true);
+		expect(is_native_locale('ja')).toBe(false);
+		expect(is_native_locale('ms')).toBe(false);
+
+		const keys = framework_keys();
+		expect(keys).toContain('Save');
+		expect(keys).toContain('ui.table.new');
+		expect(keys).toContain('ui.save');
+
+		// Built-in Chinese shell copy contains no empty values
+		expect(Object.entries(SHELL_ZH).filter(([, v]) => v.trim() === '')).toEqual([]);
+
+		// Workspace ui.<key> overrides take precedence over framework defaults
+		const overridden = ui_text_with_overrides('ja', { 'ui.save': '保存する', 'ui.cancel': 'キャンセル' });
+		expect(overridden.save).toBe('保存する');
+		expect(overridden.cancel).toBe('キャンセル');
+		const zhOverridden = ui_text_with_overrides('zh', { 'ui.save': '存储' });
+		expect(zhOverridden.save).toBe('存储');
+		expect(zhOverridden.cancel).toBe('取消');
 	});
 });
 

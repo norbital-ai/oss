@@ -766,7 +766,7 @@ const EXPECTED: { [table: string]: Shape } = {
 		unique: ['(lower(email))', '(phone_key)'],
 		indexes: ['using gin (bolt_search)'],
 		checks: [
-			"((preferences is null or store_json_valid(preferences, '{default:{},kind:json,shape:{fields:{appearance:{kind:enum,optional:true,values:[light,dark,system]},locale:{kind:enum,optional:true,values:[en,zh]},sounds:{kind:bool,optional:true}},kind:object}}'::jsonb) is true))",
+			"((preferences is null or store_json_valid(preferences, '{default:{},kind:json,shape:{fields:{appearance:{kind:enum,optional:true,values:[light,dark,system]},locale:{kind:text,max:35,optional:true},sounds:{kind:bool,optional:true}},kind:object}}'::jsonb) is true))",
 			"((coalesce(admin = false, false) or coalesce(kind = 'staff'::text, false)))",
 			"((party is null or store_json_valid(party, '{kind:json,optional:true}'::jsonb) is true))",
 			"(email ~ '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')",

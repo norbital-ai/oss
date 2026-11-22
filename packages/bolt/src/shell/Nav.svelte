@@ -29,7 +29,7 @@
 	import type { Awaiting as AwaitingKind } from './agent/chime.ts';
 	import type { ShellNotice } from '@norbital-ai/host-api';
 	import { based } from './nav.ts';
-	import { LANGUAGE, LOCALES } from './i18n.ts';
+	import { LOCALES, languageLabel } from './i18n.ts';
 	import { THEMES, type Theme } from './theme.ts';
 	import { shortcutLabel } from './keyboard.ts';
 
@@ -41,6 +41,7 @@
 		mobile = false,
 		t,
 		environment = null,
+		languages,
 		locale = 'en',
 		on_locale,
 		theme = 'system',
@@ -69,6 +70,7 @@
 		mobile?: boolean;
 		t: Translate;
 		environment?: string | null;
+		languages?: readonly string[] | undefined;
 		locale?: string;
 		on_locale?: (locale: string) => void;
 		theme?: Theme;
@@ -93,8 +95,18 @@
 		notice?: ShellNotice | undefined;
 	} = $props();
 
-	const base = $derived(LOCALES.find((l) => locale.startsWith(l)) ?? 'en');
-	const nextLocale = $derived(LOCALES[(LOCALES.indexOf(base) + 1) % LOCALES.length] ?? LOCALES[0]);
+	const availableLanguages = $derived(languages ?? LOCALES);
+	const activeLanguage = $derived.by(() => {
+		const norm = locale.toLowerCase();
+		const exact = availableLanguages.find((l) => l.toLowerCase() === norm);
+		if (exact !== undefined) return exact;
+		const primary = norm.split('-')[0] ?? norm;
+		return (
+			availableLanguages.find((l) => l.toLowerCase() === primary) ??
+			availableLanguages[0] ??
+			'en'
+		);
+	});
 	// the versions `bolt build` bakes into the client (L-BOLT-073); absent when the shell is mounted unbuilt (tests)
 	const build = typeof __BOLT_BUILD__ === 'undefined' ? null : __BOLT_BUILD__;
 	const mod = shortcutLabel('');
@@ -163,7 +175,8 @@
 	);
 
 	let menuOpen = $state(false),
-		moreOpen = $state(false);
+		moreOpen = $state(false),
+		langOpen = $state(false);
 	let teams = $state<Promise<readonly { id: string; name: string }[]> | null>(null);
 	let signingOut = $state(false);
 	function sign_out(): void {
@@ -583,6 +596,7 @@
 	<Popover.Root
 		bind:open={menuOpen}
 		on_open_change={(o) => {
+			if (!o) langOpen = false;
 			if (o && load_teams !== undefined && teams === null) teams = load_teams();
 		}}
 	>
@@ -636,18 +650,57 @@
 					</p>{/if}
 			</div>
 			<div class="-mx-1 my-1 h-px bg-border"></div>
-			{#if on_locale !== undefined}
+			{#if on_locale !== undefined && availableLanguages.length > 1}
 				<Button
 					type="button"
 					variant="ghost"
 					class="h-9 w-full justify-start px-2 text-xs font-normal"
 					aria-label={t('Switch language')}
-					onclick={() => on_locale(nextLocale)}
+					aria-expanded={langOpen}
+					data-testid="workspace-language-toggle"
+					onclick={() => (langOpen = !langOpen)}
 				>
-					<Icon name="lucide:languages" class="size-3.5" /><span>{t('Language')}</span><span
-						class="ml-auto text-muted-foreground">{LANGUAGE[nextLocale]}</span
-					>
+					<Icon name="lucide:globe" class="size-3.5" /><span>{t('Language')}</span><span
+						class="ml-auto text-muted-foreground">{languageLabel(activeLanguage)}</span
+					><Icon
+						name="lucide:chevron-down"
+						class={cn(
+							'size-3 text-muted-foreground transition-transform duration-150',
+							langOpen && 'rotate-180'
+						)}
+					/>
 				</Button>
+				{#if langOpen}
+					<div
+						role="radiogroup"
+						aria-label={t('Language')}
+						class="mb-1 flex flex-col gap-0.5 rounded-md bg-muted/40 p-1"
+						data-testid="workspace-language-list"
+					>
+						{#each availableLanguages as code (code)}
+							{@const active = code === activeLanguage}
+							<button
+								type="button"
+								role="radio"
+								aria-checked={active}
+								onclick={() => {
+									langOpen = false;
+									menuOpen = false;
+									on_locale(code);
+								}}
+								class={cn(
+									'flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
+									active && 'font-medium text-foreground'
+								)}
+							>
+								<span class="min-w-0 flex-1 truncate">{languageLabel(code)}</span>
+								{#if active}
+									<Icon name="lucide:check" class="size-3.5 shrink-0" />
+								{/if}
+							</button>
+						{/each}
+					</div>
+				{/if}
 			{/if}
 			{#if on_theme !== undefined}
 				<Inline gap="sm" class="h-9 w-full px-2 text-xs font-normal">

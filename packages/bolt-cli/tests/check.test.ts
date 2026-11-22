@@ -94,6 +94,154 @@ describe('bolt check', () => {
 		).toEqual(['check/messages-extra']);
 	});
 
+	it('requires English as the workspace basis and catalogs for every declared language (check/messages-base-en, check/messages-locale-missing)', () => {
+		const basePath = 'src/i18n/+messages.ts',
+			zhPath = 'src/i18n/+zh.messages.ts';
+		const files: Discovered[] = [
+			{ role: 'workspace', name: '', path: 'src/+workspace.ts' },
+			{ role: 'messages', name: '', path: basePath },
+			{ role: 'locale', name: 'zh', path: zhPath }
+		];
+		const sources = new Map([
+			[basePath, `export default messages({ 'app.title': 'App' });`],
+			[zhPath, `export default messages({ 'app.title': '应用' });`]
+		]);
+
+		// Missing 'en' in declared languages -> check/messages-base-en
+		expect(
+			messageRules(files, sources, {
+				...emptyManifest,
+				workspace: { tz: 'UTC', locale: 'zh', languages: ['zh'] }
+			}).map((f) => f.code)
+		).toEqual(['check/messages-base-en']);
+
+		// Declaring ['en', 'zh', 'ja'] without +ja.messages.ts -> check/messages-locale-missing
+		expect(
+			messageRules(files, sources, {
+				...emptyManifest,
+				workspace: { tz: 'UTC', locale: 'en', languages: ['en', 'zh', 'ja'] }
+			})
+		).toEqual([
+			expect.objectContaining({
+				code: 'check/messages-locale-missing',
+				path: 'src/i18n/+ja.messages.ts'
+			})
+		]);
+
+		// Declaring ['en', 'zh'] with no +messages.ts and no +zh.messages.ts -> both reported
+		expect(
+			messageRules(
+				[{ role: 'workspace', name: '', path: 'src/+workspace.ts' }],
+				new Map(),
+				{
+					...emptyManifest,
+					workspace: { tz: 'UTC', locale: 'en', languages: ['en', 'zh'] }
+				}
+			).map((f) => `${f.code} ${f.path}`)
+		).toEqual([
+			'check/messages-locale-missing src/i18n/+messages.ts',
+			'check/messages-locale-missing src/i18n/+zh.messages.ts'
+		]);
+
+		// English-only workspace without any i18n catalogs is valid
+		expect(
+			messageRules(
+				[{ role: 'workspace', name: '', path: 'src/+workspace.ts' }],
+				new Map(),
+				{
+					...emptyManifest,
+					workspace: { tz: 'UTC', locale: 'en', languages: ['en'] }
+				}
+			)
+		).toEqual([]);
+	});
+
+	it('flags static t()/ctx.t() calls referencing undeclared message keys (check/messages-undeclared-key)', () => {
+		const basePath = 'src/i18n/+messages.ts';
+		const files: Discovered[] = [
+			{ role: 'messages', name: '', path: basePath },
+			{ role: 'page', name: 'sales/home', path: 'src/app/sales/+home.page.svelte' }
+		];
+		const m: EngineManifest = {
+			...emptyManifest,
+			models: {
+				orders: {
+					description: 'Orders',
+					fields: { status: { kind: 'enum', values: ['open', 'closed'] } }
+				}
+			}
+		};
+		const sources = new Map([
+			[basePath, `export default messages({ 'app.title': 'Sales', 'btn.go': 'Go' });`],
+			[
+				'src/app/sales/+home.page.svelte',
+				[
+					'<script lang="ts">',
+					"\tconst ok = ctx.t('app.title');",
+					"\tconst bad = ctx.t('missing.script_key');",
+					"\tconst nativeOk = ctx.t('models.orders.fields.status.open');",
+					"\tconst shellOk = ctx.t('Save');",
+					'</script>',
+					"<h1>{t('btn.go')}</h1>",
+					"<p>{t('missing.markup_key')}</p>",
+					'<!-- bolt-check:allow messages-undeclared-key -->',
+					"<p>{t('missing.suppressed')}</p>"
+				].join('\n')
+			],
+			[
+				'src/lib/helper.ts',
+				[
+					"export const label = (t: (k: string) => string) => t('missing.lib_key');",
+					"export const okLabel = (t: (k: string) => string) => t('app.title');",
+					"export const refuseBad = (ctx: { refuse: (k: string) => void }) => ctx.refuse('Raw English refusal');"
+				].join('\n')
+			]
+		]);
+		expect(messageRules(files, sources, m).map((f) => `${f.code} ${f.path}:${f.line}`)).toEqual([
+			'check/messages-undeclared-key src/app/sales/+home.page.svelte:3',
+			'check/messages-undeclared-key src/app/sales/+home.page.svelte:8',
+			'check/messages-undeclared-key src/lib/helper.ts:1',
+			'check/messages-undeclared-key src/lib/helper.ts:3'
+		]);
+	});
+
+	it('enforces placeholder parity, non-empty values, framework overrides and non-native locale completeness', () => {
+		const basePath = 'src/i18n/+messages.ts';
+		const zhPath = 'src/i18n/+zh.messages.ts';
+		const jaPath = 'src/i18n/+ja.messages.ts';
+		const files: Discovered[] = [
+			{ role: 'messages', name: '', path: basePath },
+			{ role: 'locale', name: 'zh', path: zhPath },
+			{ role: 'locale', name: 'ja', path: jaPath }
+		];
+		const m: EngineManifest = {
+			...emptyManifest,
+			workspace: { tz: 'UTC', locale: 'en', languages: ['en', 'zh', 'ja'] }
+		};
+		const sources = new Map([
+			[
+				basePath,
+				`export default messages({ 'a.greeting': 'Hello {name}', 'a.empty': '   ' });`
+			],
+			[
+				zhPath,
+				// Allows framework overrides ('Save', 'ui.save'), catches mismatched placeholder and empty value
+				`export default messages({ 'a.greeting': '你好 {user}', 'a.empty': '', 'Save': '存储', 'ui.save': '存储' });`
+			],
+			[
+				jaPath,
+				// Non-native locale missing Bolt/UI framework keys -> check/messages-framework-missing
+				`export default messages({ 'a.greeting': 'こんにちは {name}', 'a.empty': '空' });`
+			]
+		]);
+		expect(messageRules(files, sources, m).map((f) => `${f.code} ${f.path}`)).toEqual([
+			'check/messages-empty src/i18n/+messages.ts',
+			'check/messages-placeholders src/i18n/+zh.messages.ts',
+			'check/messages-empty src/i18n/+zh.messages.ts',
+			'check/messages-framework-missing src/i18n/+ja.messages.ts'
+		]);
+	});
+
 	it('checks CEL label syntax and record field references', () => {
 		const inspect = (record_label?: string) =>
 			checkRules(
@@ -691,6 +839,343 @@ describe('bolt check', () => {
 				'check/chart-measure src/app/finance/+dash.page.svelte:5',
 				'check/chart-measure src/app/finance/+dash.page.svelte:7'
 			]);
+		});
+		it('flags multiple simultaneous tables/boards in one region while allowing branches, snippets and overlays (check/single-data-view)', () => {
+			expect(
+				codes({
+					'src/app/a/+bad.page.svelte': [
+						'<Stack>',
+						'\t<Table of="a" />',
+						'\t<Table of="b" />',
+						'</Stack>'
+					].join('\n'),
+					'src/app/a/+split.page.svelte': [
+						'<Split>',
+						'\t<Table of="a" />',
+						'\t<Board of="b" />',
+						'</Split>'
+					].join('\n'),
+					'src/app/a/+seq-if.page.svelte': [
+						'{#if showA}<Table of="a" />{/if}',
+						'{#if showB}<Board of="b" />{/if}'
+					].join('\n'),
+					'src/app/a/+both-branches.page.svelte': [
+						'{#if locked}',
+						'\t<Table of="a" />',
+						'\t<Table of="b" />',
+						'{:else}',
+						'\t<Table of="c" />',
+						'\t<Board of="d" />',
+						'{/if}'
+					].join('\n'),
+					'src/app/a/+good-branches.page.svelte': [
+						'{#if locked}',
+						'\t<Table of="snapshot" />',
+						'{:else if boardMode}',
+						'\t<Board of="live" />',
+						'{:else}',
+						'\t<Table of="live" />',
+						'{/if}'
+					].join('\n'),
+					'src/app/a/+good-tabs.page.svelte': [
+						'{#snippet first()}<Table of="a" />{/snippet}',
+						'{#snippet second()}<Board of="b" />{/snippet}',
+						'<Tabs items={[{ id: "a", content: first }, { id: "b", content: second }]} />'
+					].join('\n'),
+					'src/app/a/+good-overlay.page.svelte': [
+						'<Table of="a">{#snippet row_detail()}<Table of="lines" />{/snippet}</Table>',
+						'<Sheet open><Table of="picker" /></Sheet>',
+						'<Dialog open><Board of="mini" /></Dialog>'
+					].join('\n'),
+					'src/app/a/+suppressed.page.svelte': [
+						'<Table of="a" />',
+						'<!-- repository-health:allow check/single-data-view -- intentional split comparison -->',
+						'<Table of="b" />'
+					].join('\n')
+				})
+			).toEqual([
+				'check/single-data-view src/app/a/+bad.page.svelte:3',
+				'check/single-data-view src/app/a/+split.page.svelte:3',
+				'check/single-data-view src/app/a/+seq-if.page.svelte:2',
+				'check/single-data-view src/app/a/+both-branches.page.svelte:3',
+				'check/single-data-view src/app/a/+both-branches.page.svelte:6'
+			]);
+		});
+		it('flags <Chart> inside <Bound size="viewport"> (check/chart-viewport)', () => {
+			expect(
+				codes({
+					'src/app/a/+bad.page.svelte': [
+						'<Bound size="viewport">',
+						'\t<Chart of="x" x="a" y="count" />',
+						'</Bound>',
+						'<Bound size="viewport">',
+						'\t<Stack><Chart of="y" x="a" y="count" /></Stack>',
+						'</Bound>'
+					].join('\n'),
+					'src/app/a/+good.page.svelte': [
+						'<Bound size="fill"><Chart of="x" x="a" y="count" /></Bound>',
+						'<Bound><Chart of="x" x="a" y="count" /></Bound>',
+						'<Chart of="x" x="a" y="count" />',
+						'<Bound size="viewport"><Sheet open><Chart of="x" x="a" y="count" /></Sheet></Bound>',
+						'<!-- repository-health:allow check/chart-viewport -- full-bleed chart view -->',
+						'<Bound size="viewport"><Chart of="x" x="a" y="count" /></Bound>'
+					].join('\n')
+				})
+			).toEqual([
+				'check/chart-viewport src/app/a/+bad.page.svelte:2',
+				'check/chart-viewport src/app/a/+bad.page.svelte:5'
+			]);
+		});
+		it('flags raw typography classes, bold tags outside prose, arbitrary sizes and role+leading pairs (check/typography-tokens)', () => {
+			expect(
+				codes({
+					'src/app/a/+bad.page.svelte': [
+						'<p class="font-semibold">A</p>',
+						'<p class="font-bold">B</p>',
+						'<p>Total: <b>$100</b></p>',
+						'<p>Note: <strong>Important</strong></p>',
+						'<h2 class="text-lg">C</h2>',
+						'<h2 class="text-2xl">D</h2>',
+						'<span class="text-[13px]">E</span>',
+						'<span class="text-meta leading-tight">F</span>',
+						'<span class="leading-none text-heading">G</span>',
+						'<span class:font-bold={active}>H</span>',
+						'<span class={cn("text-xl", active && "text-foreground")}>I</span>',
+						'<span class={{ "text-3xl": big }}>J</span>'
+					].join('\n'),
+					'src/app/a/+good.page.svelte': [
+						'<p class="text-sm font-medium">A</p>',
+						'<span class="text-meta text-muted-foreground">B</span>',
+						'<span class="text-sm leading-5">C</span>',
+						'<div class="prose"><p>Read <b>this</b> and <strong>that</strong>.</p></div>',
+						'<Markdown><strong>Bold in markdown</strong></Markdown>',
+						'<ReadonlyMarkdown><b>Bold in markdown</b></ReadonlyMarkdown>',
+						'<!-- repository-health:allow typography-tokens -- intentional emphasis -->',
+						'<p class="font-bold">Allowed</p>'
+					].join('\n')
+				})
+			).toEqual([
+				'check/typography-tokens src/app/a/+bad.page.svelte:1',
+				'check/typography-tokens src/app/a/+bad.page.svelte:2',
+				'check/typography-tokens src/app/a/+bad.page.svelte:3',
+				'check/typography-tokens src/app/a/+bad.page.svelte:4',
+				'check/typography-tokens src/app/a/+bad.page.svelte:5',
+				'check/typography-tokens src/app/a/+bad.page.svelte:6',
+				'check/typography-tokens src/app/a/+bad.page.svelte:7',
+				'check/typography-tokens src/app/a/+bad.page.svelte:8',
+				'check/typography-tokens src/app/a/+bad.page.svelte:9',
+				'check/typography-tokens src/app/a/+bad.page.svelte:10',
+				'check/typography-tokens src/app/a/+bad.page.svelte:11',
+				'check/typography-tokens src/app/a/+bad.page.svelte:12'
+			]);
+		});
+		it('flags raw indicator unicode glyphs in markup (check/raw-unicode-icons)', () => {
+			expect(
+				codes({
+					'src/app/a/+bad.page.svelte': [
+						'<span>▲ 4.2%</span>',
+						'<span>{up ? "▲" : "▼"}</span>',
+						'<Badge label="⚠ Overdue" />',
+						'<p>ℹ Info</p>'
+					].join('\n'),
+					'src/app/a/+good.page.svelte': [
+						'<script lang="ts">// ▲ ▼ ℹ ⚠ in script comment</script>',
+						'<!-- ▲ ▼ ℹ ⚠ in html comment -->',
+						'<Icon icon="lucide:triangle-alert" />',
+						'<!-- repository-health:allow check/raw-unicode-icons -- literal symbol legend -->',
+						'<span>▲</span>'
+					].join('\n')
+				})
+			).toEqual([
+				'check/raw-unicode-icons src/app/a/+bad.page.svelte:1',
+				'check/raw-unicode-icons src/app/a/+bad.page.svelte:2',
+				'check/raw-unicode-icons src/app/a/+bad.page.svelte:2',
+				'check/raw-unicode-icons src/app/a/+bad.page.svelte:3',
+				'check/raw-unicode-icons src/app/a/+bad.page.svelte:4'
+			]);
+		});
+		it('flags raw <select> elements in workspace markup (check/raw-select)', () => {
+			expect(
+				codes({
+					'src/app/a/+bad.page.svelte': '<select><option>A</option></select>',
+					'src/app/a/+good.page.svelte': [
+						'<!-- <select> -->',
+						'<Select options={[]} />',
+						'<Combobox options={[]} />',
+						'<!-- repository-health:allow check/raw-select -- native file picker fallback -->',
+						'<select><option>B</option></select>'
+					].join('\n')
+				})
+			).toEqual(['check/raw-select src/app/a/+bad.page.svelte:1']);
+		});
+		it('flags fixed self-sizing classes on Input, Combobox, TimeInput and Bound (check/self-sized-control)', () => {
+			expect(
+				codes({
+					'src/app/a/+bad.page.svelte': [
+						'<Input class="w-40" />',
+						'<Combobox class="min-w-48" />',
+						'<TimeInput class="h-10" />',
+						'<Bound class="h-[42rem]" />',
+						'<Bound class="min-h-96 max-h-[80dvh]" />',
+						'<Input class="w-[240px]" />',
+						'<Input class="sm:w-32" />'
+					].join('\n'),
+					'src/app/a/+good.page.svelte': [
+						'<Input class="min-w-0 w-full" />',
+						'<Combobox class="max-w-96" />',
+						'<Bound size="fill" clip class="relative rounded-md border" />',
+						'<div class="w-40 h-10"><Icon class="h-4 w-4" /></div>',
+						'<!-- repository-health:allow check/self-sized-control -- fixed pin box -->',
+						'<Input class="w-24" />'
+					].join('\n')
+				})
+			).toEqual([
+				'check/self-sized-control src/app/a/+bad.page.svelte:1',
+				'check/self-sized-control src/app/a/+bad.page.svelte:2',
+				'check/self-sized-control src/app/a/+bad.page.svelte:3',
+				'check/self-sized-control src/app/a/+bad.page.svelte:4',
+				'check/self-sized-control src/app/a/+bad.page.svelte:5',
+				'check/self-sized-control src/app/a/+bad.page.svelte:6',
+				'check/self-sized-control src/app/a/+bad.page.svelte:7'
+			]);
+		});
+		it('enforces scroll ownership and inset under AppShell variant="full" (check/scroll-ownership)', () => {
+			expect(
+				codes({
+					'src/app/a/+wrap-tabs.page.svelte': [
+						'<Scroll name="x" size="fill" inset>',
+						'\t<Tabs items={[]} />',
+						'</Scroll>'
+					].join('\n'),
+					'src/app/a/+wrap-form.page.svelte': [
+						'<Scroll name="x" size="fill" inset>',
+						'\t{#if ready}<Form of="a" />{/if}',
+						'</Scroll>'
+					].join('\n'),
+					'src/app/a/+wrap-table.page.svelte': [
+						'<Scroll name="x" size="fill" inset>',
+						'\t<Stack><Table of="a" /></Stack>',
+						'</Scroll>'
+					].join('\n'),
+					'src/app/a/+no-inset.page.svelte': [
+						'<AppShell variant="full">',
+						'\t{#snippet actions()}<Combobox />{/snippet}',
+						'\t<Scroll name="x" size="fill"><Stack /></Scroll>',
+						'</AppShell>'
+					].join('\n'),
+					'src/app/a/+good-embedded.page.svelte': [
+						'<AppShell variant="full">',
+						'\t<Scroll name="x" size="fill" inset>',
+						'\t\t<Stack>',
+						'\t\t\t<Table of={rows} embedded />',
+						'\t\t\t<Sheet open><Table of="b" /></Sheet>',
+						'\t\t</Stack>',
+						'\t</Scroll>',
+						'</AppShell>'
+					].join('\n'),
+					'src/app/a/+good-viewport.page.svelte': [
+						'<AppShell variant="full">',
+						'\t<Scroll name="x" size="fill" inset>',
+						'\t\t<Stack>',
+						'\t\t\t<Bound size="viewport"><Table of="a" /></Bound>',
+						'\t\t</Stack>',
+						'\t</Scroll>',
+						'</AppShell>'
+					].join('\n'),
+					'src/app/a/+good-axis-x.page.svelte': [
+						'<Scroll name="wide" axis="x"><table></table></Scroll>',
+						'<AppShell><Scroll name="y" size="fill"><Stack /></Scroll></AppShell>'
+					].join('\n'),
+					'src/app/a/+suppressed.page.svelte': [
+						'<AppShell variant="full">',
+						'\t<!-- repository-health:allow check/scroll-ownership -- edge-to-edge canvas -->',
+						'\t<Scroll name="x" size="fill"><Stack /></Scroll>',
+						'</AppShell>'
+					].join('\n')
+				})
+			).toEqual([
+				'check/scroll-ownership src/app/a/+wrap-tabs.page.svelte:2',
+				'check/scroll-ownership src/app/a/+wrap-form.page.svelte:2',
+				'check/scroll-ownership src/app/a/+wrap-table.page.svelte:2',
+				'check/scroll-ownership src/app/a/+no-inset.page.svelte:3'
+			]);
+		});
+		it('flags <AppShell variant="full"> wrapping a single <Table> body (check/app-shell-inset)', () => {
+			expect(
+				codes({
+					'src/app/a/+bad-direct.page.svelte': [
+						'<AppShell variant="full">',
+						'\t{#snippet actions()}<Combobox />{/snippet}',
+						'\t<Table of="orders" />',
+						'</AppShell>'
+					].join('\n'),
+					'src/app/a/+bad-if.page.svelte': [
+						'<AppShell variant="full">',
+						'\t{#if empty}<EmptyState />{:else}<Table of="orders" />{/if}',
+						'</AppShell>'
+					].join('\n'),
+					'src/app/a/+bad-key.page.svelte': [
+						'<AppShell variant="full">',
+						'\t{#key scope}<Table of="orders" />{/key}',
+						'</AppShell>'
+					].join('\n'),
+					'src/app/a/+good-default.page.svelte': '<AppShell><Table of="orders" /></AppShell>',
+					'src/app/a/+good-page.page.svelte': '<AppShell variant="page"><Table of="orders" /></AppShell>',
+					'src/app/a/+good-bound.page.svelte':
+						'<AppShell variant="full"><Bound size="fill" inset><Table of="orders" /></Bound></AppShell>',
+					'src/app/a/+good-tabs.page.svelte': [
+						'<AppShell variant="full">',
+						'\t{#snippet list()}<Table of="orders" />{/snippet}',
+						'\t<Tabs items={[{ id: "list", content: list }]} />',
+						'</AppShell>'
+					].join('\n'),
+					'src/app/a/+good-suppressed.page.svelte': [
+						'<!-- repository-health:allow check/app-shell-inset -- custom full-bleed matrix -->',
+						'<AppShell variant="full"><Table of="matrix" /></AppShell>'
+					].join('\n')
+				})
+			).toEqual([
+				'check/app-shell-inset src/app/a/+bad-direct.page.svelte:1',
+				'check/app-shell-inset src/app/a/+bad-if.page.svelte:1',
+				'check/app-shell-inset src/app/a/+bad-key.page.svelte:1'
+			]);
+		});
+		it('flags raw untranslated text nodes and visible string props in multi-language workspaces (check/untranslated-text)', () => {
+			const multi: EngineManifest = {
+				...emptyManifest,
+				workspace: { tz: 'UTC', locale: 'en', languages: ['en', 'zh'] }
+			};
+			const enOnly: EngineManifest = {
+				...emptyManifest,
+				workspace: { tz: 'UTC', locale: 'en', languages: ['en'] }
+			};
+			const page = {
+				'src/app/a/+bad.page.svelte': [
+					'<Section name="fx-overview" icon="lucide:globe" title="Raw English">',
+					'\t<p>Visible raw text</p>',
+					'\t<Input placeholder="Search orders" aria-label="Filter input" />',
+					'\t<p>{ctx.t("orders.title")}</p>',
+					'\t<p>USD / SGD · 100%</p>',
+					'\t<p>42.5 ha · 400 nm · 12 ms</p>',
+					'\t<Map label="name" rows={[]} />',
+					'\t<code>Raw code example</code>',
+					'\t<pre>Preformatted text</pre>',
+					'\t<svg><text>SVG Label</text></svg>',
+					'\t<span aria-hidden="true">Hidden label</span>',
+					'\t<!-- bolt-check:allow untranslated-text -->',
+					'\t<p>Allowed Brand Name</p>',
+					'\t<Button variant="full" size="fill" type="button" href="/app/sales" />',
+					'</Section>'
+				].join('\n')
+			};
+			expect(codes(page, multi)).toEqual([
+				'check/untranslated-text src/app/a/+bad.page.svelte:1',
+				'check/untranslated-text src/app/a/+bad.page.svelte:2',
+				'check/untranslated-text src/app/a/+bad.page.svelte:3',
+				'check/untranslated-text src/app/a/+bad.page.svelte:3'
+			]);
+			// English-only workspaces are not flagged
+			expect(codes(page, enOnly)).toEqual([]);
 		});
 		it('a host-only @norbital-ai/bolt entry does not resolve for workspace code', () => {
 			expect(() => workspaceEntry('@norbital-ai/bolt/engine')).toThrow(/no workspace entry/);

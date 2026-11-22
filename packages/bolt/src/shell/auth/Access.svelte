@@ -6,7 +6,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { AccessFrame } from '@norbital-ai/ui/brand';
-	import { LANGUAGE, LOCALES } from '../i18n.ts';
+	import { LOCALES, languageLabel } from '../i18n.ts';
 
 	/**
 	 * `apex`: the host's workspace picker, linked below the card as "Change workspace". `recovery`: on a failure, the
@@ -15,6 +15,7 @@
 	let {
 		t,
 		environment,
+		languages,
 		locale,
 		on_locale,
 		dark,
@@ -25,6 +26,7 @@
 	}: {
 		t: (key: string) => string;
 		environment?: string | undefined;
+		languages?: readonly string[] | undefined;
 		locale: string;
 		on_locale: (locale: string) => void;
 		dark: boolean;
@@ -34,14 +36,16 @@
 		children: Snippet;
 	} = $props();
 
-	const base = $derived(LOCALES.find((l) => locale.startsWith(l)) ?? 'en');
-	const nextLocale = $derived(LOCALES.at(LOCALES.indexOf(base) + 1) ?? LOCALES[0]);
+	const languageOptions = $derived(
+		(languages ?? LOCALES).map((code) => ({ code, label: languageLabel(code) }))
+	);
 </script>
 
 <AccessFrame
 	{environment}
-	language={LANGUAGE[nextLocale]}
-	on_language={() => on_locale(nextLocale)}
+	languages={languageOptions}
+	{locale}
+	{on_locale}
 	{dark}
 	{on_theme}
 	labels={{
