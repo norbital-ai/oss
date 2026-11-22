@@ -224,13 +224,17 @@ export type Streamer = {
 	end(): Effect.Effect<MessageRow | null, EngineError>;
 };
 
+export type CheckProgress = {
+	red: number;
+	lowest: number;
+	lastFailing: number;
+};
+
 export type TurnState = {
 	model: string;
 	steps: number;
 	failing: number;
-	red: number;
-	lowest: number;
-	lastFailing: number;
+	checks: Map<string, CheckProgress>;
 	lastError: string;
 	cutTools: number;
 	compactions: number;
@@ -267,7 +271,11 @@ export type TurnGuard = {
 
 export const TURN_GUARDS: readonly TurnGuard[] = [
 	{ when: (s) => s.failing > AGENT_LIMITS.failingSteps, text: FIXED.stuck, code: 'toolFailures' },
-	{ when: (s) => s.red > AGENT_LIMITS.failingSteps, text: FIXED.red, code: 'redChecks' }
+	{
+		when: (s) => [...s.checks.values()].some((c) => c.red > AGENT_LIMITS.failingSteps),
+		text: FIXED.red,
+		code: 'redChecks'
+	}
 ];
 
 export const turnGuard = (current: TurnState, calls: number, failed: number) => {
@@ -275,30 +283,43 @@ export const turnGuard = (current: TurnState, calls: number, failed: number) => 
 	return TURN_GUARDS.find((guard) => guard.when(current));
 };
 
-/** Updates red-check progress: clean resets; a new low resets; strictly decreasing after a spike holds `red` steady. */
+/** Clears repeated-failure counts for one tool when it succeeds, leaving other tools' failures intact. */
+export const clearToolFailures = (failures: Map<string, number>, name: string): void => {
+	const prefix = `${name}\u0000`;
+	for (const key of failures.keys())
+		if (key.startsWith(prefix)) failures.delete(key);
+};
+
+/** Updates per-tool red-check progress: clean resets that tool; a new low resets it; strictly decreasing holds `red` steady. */
 export const recordCheckProgress = (
-	current: Pick<TurnState, 'red' | 'lowest' | 'lastFailing'>,
+	checks: Map<string, CheckProgress>,
+	tool: string,
 	failing: number | undefined
 ): void => {
+	let progress = checks.get(tool);
+	if (progress === undefined) {
+		progress = { red: 0, lowest: Number.POSITIVE_INFINITY, lastFailing: Number.POSITIVE_INFINITY };
+		checks.set(tool, progress);
+	}
 	if (failing === 0) {
-		current.red = 0;
-		current.lowest = Number.POSITIVE_INFINITY;
-		current.lastFailing = Number.POSITIVE_INFINITY;
+		progress.red = 0;
+		progress.lowest = Number.POSITIVE_INFINITY;
+		progress.lastFailing = Number.POSITIVE_INFINITY;
 		return;
 	}
 	if (failing !== undefined) {
-		if (failing < current.lowest) {
-			current.lowest = failing;
-			current.red = 0;
-		} else if (failing < current.lastFailing) {
+		if (failing < progress.lowest) {
+			progress.lowest = failing;
+			progress.red = 0;
+		} else if (failing < progress.lastFailing) {
 			// Making downward progress after a parse unblock or batch write: do not penalize convergence.
 		} else {
-			current.red += 1;
+			progress.red += 1;
 		}
-		current.lastFailing = failing;
+		progress.lastFailing = failing;
 		return;
 	}
-	current.red += 1;
+	progress.red += 1;
 };
 
 export const j = (v: unknown): Json =>

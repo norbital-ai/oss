@@ -547,14 +547,16 @@
 		attached = [];
 		stored_files = [];
 		if (mode === 'compact') mode = null;
+		let target = conversation;
 		const failed = (message: string) => {
+			if (conversation !== target) return;
 			outbox.remove(local);
 			draft = text;
 			attached = files;
 			stored_files = originals;
 			error = message;
 		};
-		const existing = conversation,
+		const existing = target,
 			model = picked;
 		dispatch(
 			Effect.gen(function* () {
@@ -586,8 +588,11 @@
 					yield* Effect.sync(() => {
 						pageConversationStarted(startedId);
 						drafts.delete(null);
-						conversation = startedId;
-						picked = null;
+						if (conversation === target) {
+							conversation = startedId;
+							picked = null;
+						}
+						target = startedId;
 					});
 				}
 				const uploaded = yield* Effect.result(upload_files(files));
@@ -597,6 +602,7 @@
 					api.agent.post(id, about + text, now, [...originals, ...refs], sentMode, schedule)
 				);
 				yield* Effect.sync(() => {
+					if (conversation !== target) return;
 					sendFailed = answer._tag === 'Failure' || answer.success.kind === 'refused';
 					if (answer._tag === 'Failure') return failed(answer.failure.message);
 					if (answer.success.kind === 'refused') return failed(answer.success.message);
@@ -610,7 +616,7 @@
 							Effect.result(api.agent.dequeue(stored)).pipe(
 								Effect.tap((answer) =>
 									Effect.sync(() => {
-										error = refused(answer);
+										if (conversation === target) error = refused(answer);
 									})
 								),
 								Effect.asVoid

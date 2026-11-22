@@ -170,6 +170,7 @@
 	function hold(own: HTMLElement): void {
 		const edge = own.getBoundingClientRect().top;
 		const el = [...(own.querySelector('ol')?.children ?? [])].find((child) => {
+			if (child.hasAttribute('data-spacer')) return false;
 			const box = child.getBoundingClientRect();
 			return box.height > 0 && box.bottom > edge;
 		});
@@ -509,6 +510,7 @@
 						{/if}
 						{#if turns.on}<li
 								aria-hidden="true"
+								data-spacer
 								style="height:{turns.before}px"
 								{@attach turns.anchor}
 							></li>{/if}
@@ -895,7 +897,7 @@
 								{/if}
 							{/if}
 						{/each}
-						{#if turns.after > 0}<li aria-hidden="true" style="height:{turns.after}px"></li>{/if}
+						{#if turns.after > 0}<li aria-hidden="true" data-spacer style="height:{turns.after}px"></li>{/if}
 						{#if quiet}
 							<li class="text-xs text-muted-foreground" data-role="thinking" data-thinking>
 								<span class="agent-shimmer">{t('Working…')}</span>

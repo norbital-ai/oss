@@ -47,8 +47,8 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 - A row matching `locked` refuses update and delete on every path, administrators included. It reads own direct fields only; a child needs its own lock.
 - `enum.transitions`: a write outside them is refused and the editor offers only legal targets. Use `state` for a stamped lifecycle and constraints for editable fields.
-- Never duplicate these rules in a transform or form. Delete refusal belongs to the policy verdict or a named lock, not a delete transform.
-- Approval is a separate lock, never a business state named approved.
+- Never duplicate these rules in a transform, form, shadow status table or parallel transition state machine. Delete refusal belongs to the policy verdict or a named lock, not a delete transform.
+- Use `+team.ts`, `+<name>.policy.ts`, `ctx.approve` and `sys_approval` for access control and approvals — never build custom role, permission or approval models or hand-rolled authorization checks. Approval is a separate lock, never a business state named approved.
 
 ## Write callbacks
 

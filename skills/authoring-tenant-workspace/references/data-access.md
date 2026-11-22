@@ -14,7 +14,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 - The answer maps each root to `{ rows, next, total }`. `total` counts every match in the same statement, linear in the match. An index search root and a nested many-layer carry none: use `aggregate` on that layer.
 - A user filter composes with the policy per key (`where` AND, `limit` capped); nothing widens it.
 - A policy filters an output's rows with `where`, and a layer's with `<relation>: { where }`. Own rows: `outputs: { default: { where: { created_by: { eq: { var: 'actor.id' } } } } }`. An output grant's keys are `where`, root `history` and the model's relations; nothing else (no `scope`).
-- Every list defaults to limit 10,000 and the root's order. A root returns `next` when more rows remain; pass it as `after` until it is `null` before treating the rows as a complete set. Do not calculate full-book totals from a partial page.
+- Every list defaults to limit 10,000 and the root's order; pass an explicit `limit` and narrow named `outputs`. Record IDs are monotonic UUIDv7: use `order_by: { id: 'desc' }` (or `'asc'`) for stable chronological pagination without extra sort columns. A root returns `next` when more rows remain; pass it as `after` until it is `null` before treating the rows as a complete set. Do not calculate full-book totals from a partial page.
 - Filter and project in the request, never in memory.
 
 | Caller | Reads as |
@@ -30,9 +30,9 @@ A remote sync's pages write as its `policies`; a file's rows as the member impor
 
 ## Live and one-shot reads in a page
 
-- `ctx.query` subscribes on its first reactive read of `current`, `loading` or `error`. Identical calls share a subscription; it stops after its last reader, with 30 s grace.
+- `ctx.query` (`PageBolt.query(...)`) subscribes live over SSE on its first reactive read of `current`, `loading` or `error`. Identical calls share a subscription; it stops after its last reader, with 30 s grace.
 - Capture inputs in `$derived`; return null for no selected query.
-- Never mirror the answer into `$state`, create a subscription `$effect`, or own timers or generation counters.
+- Never mirror the answer into `$state`, write manual refresh loops, `setInterval`/timer polling, ad-hoc client refetch/cache state, subscription `$effect`s or generation counters.
 - Outside reactivity, `await` reads once; the same Query also yields as an Effect.
 - Mutations hold their own operation state through `fork` or `run` from `@norbital-ai/ui/effect`. Keep Effects out of Svelte state. Mounted element resources belong to `attach`.
 
@@ -50,7 +50,7 @@ A remote sync's pages write as its `policies`; a file's rows as the member impor
 ## One read, never N+1
 
 - A relation column renders its target's label natively. A custom page names related data as layers of its one read.
-- Never mount a lookup per row. Reads started in the same microtask batch into one round trip and one statement; identical reads deduplicate.
+- Never mount a lookup per row or run N+1 `ctx.query` loops: batch lookups with `in` filters (or nested relation layers). Reads started in the same microtask batch into one round trip and one statement; identical reads deduplicate.
 - A read depending on another row's field uses a nested relation in the output.
 
 ## Read, then transform
@@ -63,7 +63,7 @@ A remote sync's pages write as its `policies`; a file's rows as the member impor
 
 - Every generated write takes an array, so callbacks and the policy see the whole batch.
 - Parent and children belong in one act through write layers: a create row carries child arrays (an id links a non-owned row); an update `set` carries `{ create, update, delete, link, unlink }` per layer.
-- One act map commits all its writes together: `yield* ctx.act({ 'orders.update': [{ target: order, set: { note } }], 'entry.create': [entry] })`. A runtime-built map uses the same native boundary and keeps JSON outputs.
+- One act map commits all its writes together: `yield* ctx.act({ 'orders.update': [{ target: order, set: { note } }], 'entry.create': [entry] })`. Use `new_id(model)` to mint an ID upfront and link multi-model writes in that single atomic `ctx.act`. A runtime-built map uses the same native boundary and keeps JSON outputs.
 - A durable automation holds several transactions, so separate acts are not atomic.
 - A transform computes every id first, prefetches in at most two reads, then decides per row without crossings.
 

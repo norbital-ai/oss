@@ -64,16 +64,22 @@ export const memberCap = (s: AgentSettings, policies: readonly string[]) => {
 	return caps.length > 0 ? Math.max(...caps) : s.member;
 };
 
-/** The limit a new step would cross, or null: the workspace's first, then the member's (by their policies). */
+/**
+ * The limit a new step would cross, or null: the workspace's first, then the member's (by their policies).
+ * `inFlightUsd` includes uncommitted spend accumulated earlier in the current turn.
+ */
 export const overLimit = Effect.fn('Agents.overLimit')(function* (
 	db: TenantDbShape,
 	s: AgentSettings,
 	member: string | null,
-	policies: readonly string[]
+	policies: readonly string[],
+	inFlightUsd: number = 0
 ) {
-	if (s.monthly !== null && (yield* spent(db, null)) >= s.monthly) return 'workspace' as const;
+	const inFlight = Number.isFinite(inFlightUsd) && inFlightUsd > 0 ? inFlightUsd : 0;
+	if (s.monthly !== null && (inFlight >= s.monthly || (yield* spent(db, null)) + inFlight >= s.monthly))
+		return 'workspace' as const;
 	const cap = memberCap(s, policies);
-	if (cap !== null && member !== null && (yield* spent(db, member)) >= cap)
+	if (cap !== null && member !== null && (inFlight >= cap || (yield* spent(db, member)) + inFlight >= cap))
 		return 'member' as const;
 	return null;
 });

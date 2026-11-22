@@ -11,6 +11,7 @@ Starter workspaces live in their own repository:
 - [`@norbital-ai/bolt-cli`](./packages/bolt-cli) — the compiler, the `bolt` command and the test kit (a workspace
   devDependency)
 - [`@norbital-ai/bolt-server`](./packages/bolt-server) — an example untethered host: one workspace's release from one process
+- [`@norbital-ai/host-api`](./packages/host-api) — versioned host/release contract, port types, boundary Schemas, conformance kit and shared Node port implementations (`./node`)
 - [`@norbital-ai/store`](./packages/store) — typed schema, query, SQL and migration layer shared by workspaces and hosts
 - [`@norbital-ai/ui`](./packages/ui) — Svelte component library and design tokens
 - [`@norbital-ai/providers`](./packages/providers) — host-registered integration and inference providers

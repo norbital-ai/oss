@@ -288,6 +288,8 @@ const EDIT = 'edit',
 /** Consecutive empty (reasoning-only) replies, and prose replies that neither edit nor submit, tolerated before `invalid`. */
 const PAUSES = 3,
 	FAILURES = 3;
+/** Default tool-turn budget per batch when `steps` is omitted, preventing runaway automation inferences. */
+export const DEFAULT_STEPS = 40;
 /** The most tool turns an author's `steps` may grant one inference. */
 const MAX_STEPS = 1000;
 /** The most `find` matches and `diff` changes one call returns, and the longest value (JSON characters) a change shows whole. */
@@ -426,10 +428,10 @@ export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Resu
 
 /** A declared output kind as the JSON Schema the provider constrains its answer by. */
 /**
- * Without the author's `steps`, an inference has no step budget and no time limit: it goes on while it progresses, until
- * it answers (a structured one, until a submission matches). What ends a runaway is the stall window — no model token,
- * reply or tool result for STALL_MS (one liveness clock) — and the stall guards (an empty or prose
- * reply 3 times running, or a draft-only turn that leaves the answer unchanged 3 times running).
+ * Without the author's `steps`, an inference gets a default tool-turn budget (`DEFAULT_STEPS`) per batch and still
+ * enforces the stall window — no model token, reply or tool result for STALL_MS (one liveness clock) — and the stall
+ * guards (an empty or prose reply 3 times running, or a draft-only turn that leaves the answer unchanged 3 times
+ * running). Explicit `steps` overrides the default up to `MAX_STEPS`.
  */
 export const STALL_MS = 5 * 60_000;
 /** Turns that may finish the answer once tools end: a submission the output or rules refuse is repaired, not lost. */
@@ -809,6 +811,7 @@ export function infer_facility(
 			final: boolean
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
 			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
+			const stepLimit = a.steps ?? DEFAULT_STEPS;
 			let carry: ModelCarry | undefined,
 				pauses = 0,
 				failures = 0,
@@ -830,7 +833,7 @@ export function infer_facility(
 					// what the draft still breaks (an unmet rule among it), else the last failed answer
 					const why = held ?? last;
 					return invalid(
-						`the tool budget (${a.steps ?? 0} steps) was spent without a valid answer${why !== undefined && !why.ok && why.error.kind === 'invalid' ? `: ${why.error.message}` : ''}`
+						`the tool budget (${stepLimit} steps) was spent without a valid answer${why !== undefined && !why.ok && why.error.kind === 'invalid' ? `: ${why.error.message}` : ''}`
 					);
 				}
 				yield* record(messages);
@@ -1075,9 +1078,9 @@ export function infer_facility(
 							);
 					} else stalls = 0;
 					// the step budget ends the tools: one final turn answers
-					if (!spent && a.steps !== undefined && ++turns >= a.steps) {
+					if (!spent && ++turns >= stepLimit) {
 						spent = true;
-						const budget = `Your tool budget of ${a.steps} steps is spent`;
+						const budget = `Your tool budget of ${stepLimit} steps is spent`;
 						messages.push({
 							role: 'user',
 							content: structured

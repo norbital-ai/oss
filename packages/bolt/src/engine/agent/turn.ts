@@ -111,12 +111,45 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 		id: string,
 		options: DrainOptions = {}
 	): Effect.fn.Return<{ ran: boolean; reply: MessageRow | null }, EngineError, Scope.Scope> {
-		// a card waits for the person: only its last answer or their own message starts the next turn, never a sibling's
-		// answer or a job's note
+		// a card (native confirm or held Studio approval) waits for the person: only their own message — or, for Studio,
+		// the host's decision/merge notice — starts the next turn; never a sibling's answer, background job or sub-agent
 		const [held] = yield* db.read([
 			sql(
-				`SELECT 1 FROM sys_message WHERE conversation = $1 AND role = 'tool' AND state = 'confirm'
-				AND NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = $1 AND role = 'user' AND state = 'queued') LIMIT 1`,
+				`SELECT 1 FROM sys_message m
+				WHERE m.conversation = $1 AND m.role = 'tool' AND (
+					(
+						m.state = 'confirm'
+						AND NOT EXISTS (
+							SELECT 1 FROM sys_message u
+							WHERE u.conversation = $1 AND u.role = 'user' AND u.state = 'queued'
+							AND u.meta->>'tag' IS DISTINCT FROM 'report'
+						)
+					)
+					OR (
+						m.copied_from IS NULL
+						AND jsonb_typeof(m.content->'result'->'approval'->'id') = 'string'
+						AND NOT (m.content ? 'approval_result')
+						AND NOT EXISTS (SELECT 1 FROM sys_conversation c WHERE c.id = $1 AND c.parent IS NOT NULL)
+						AND NOT EXISTS (
+							SELECT 1 FROM sys_message after
+							WHERE after.conversation = $1 AND after.seq > m.seq
+							AND after.state IS DISTINCT FROM 'cancelled'
+							AND (
+								after.role = 'assistant'
+								OR (after.role = 'user' AND after.state = 'consumed' AND after.meta->>'tag' IS DISTINCT FROM 'report')
+								OR (after.role = 'system' AND after.state = 'consumed' AND after.meta->>'notice' IS NOT NULL)
+							)
+						)
+						AND NOT EXISTS (
+							SELECT 1 FROM sys_message w
+							WHERE w.conversation = $1 AND w.state = 'queued'
+							AND (
+								(w.role = 'user' AND w.meta->>'tag' IS DISTINCT FROM 'report')
+								OR (w.role = 'system' AND w.meta->>'notice' IS NOT NULL)
+							)
+						)
+					)
+				) LIMIT 1`,
 				id
 			)
 		]);
@@ -167,9 +200,7 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 			model: '',
 			steps: 0,
 			failing: 0,
-			red: 0,
-			lowest: Number.POSITIVE_INFINITY,
-			lastFailing: Number.POSITIVE_INFINITY,
+			checks: new Map(),
 			lastError: '',
 			cutTools: 0,
 			compactions: 0,
@@ -198,19 +229,37 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 			hostFor: ''
 		};
 		// Jobs that finish after the turn closes queue their report and wake it.
-		const work = yield* jobs({
+		const workBase = yield* jobs({
 			detached,
 			watched,
 			late: (lines) => steer(id, current.as, lines),
 			record: {
 				open: (job, label) => store.openJob(id, current.as, job, label),
 				close: (record, late) => store.closeJob(id, record, late)
-			},
-			ended: (answer, behavior) => {
-				if (behavior.progress_check !== true) return;
-				recordCheckProgress(current, checkFailing(answer));
 			}
 		});
+		const work: typeof workBase = {
+			...workBase,
+			add: (label, effect, o) =>
+				workBase.add(
+					label,
+					o?.behavior?.progress_check === true
+						? effect.pipe(
+								Effect.tap((value) =>
+									Effect.sync(() => {
+										recordCheckProgress(current.checks, label, checkFailing(value));
+									})
+								),
+								Effect.tapError(() =>
+									Effect.sync(() => {
+										recordCheckProgress(current.checks, label, undefined);
+									})
+								)
+							)
+						: effect,
+					o
+				)
+		};
 		const io = yield* makeTurnIo({
 			id,
 			turn,
@@ -312,7 +361,15 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 				'envoy' in sender ? sender.envoy.sender : undefined
 			))
 				rows = [...rows, yield* io.systemRow(aside.text, { tag: 'aside', message: aside.message })];
-			if ((yield* overLimit(db, settings, conv.owner, authority.policies)) !== null) {
+			if (
+				(yield* overLimit(
+					db,
+					settings,
+					conv.owner,
+					authority.policies,
+					current.usage.cost ?? 0
+				)) !== null
+			) {
 				yield* io.fail(conv, FIXED.limit, 'spendLimit');
 				yield* store.cancelQueued(id);
 				return true;

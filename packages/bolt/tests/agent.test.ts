@@ -15,11 +15,14 @@ import type { AiEvent } from '@norbital-ai/host-api';
 import type { FacilityCall } from '../src/engine/services.ts';
 import {
 	applyEdit,
+	DEFAULT_STEPS,
 	infer_facility,
 	MODEL_FILES,
 	modelCall,
 	STALL_MS
 } from '../src/engine/agent/ai.ts';
+import { overLimit, type AgentSettings } from '../src/engine/agent/settings.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { jsonDiff } from '../src/engine/agent/draft.ts';
 import {
 	bound,
@@ -34,7 +37,13 @@ import {
 } from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
 import { keyedSerial } from '../src/engine/agent/throttle.ts';
-import { AGENT_LIMITS, recordCheckProgress } from '../src/engine/agent/shared.ts';
+import {
+	AGENT_LIMITS,
+	callKey,
+	clearToolFailures,
+	recordCheckProgress,
+	type CheckProgress
+} from '../src/engine/agent/shared.ts';
 import { RunUnits } from '../src/engine/ports.ts';
 import { preview } from '../src/engine/conversations/store.ts';
 import { respond_system_1 } from '../../bolt-cli/src/test/effect.ts';
@@ -1605,6 +1614,48 @@ describe('the AI port under the 20 s idle wall', () => {
 	);
 
 	it.effect(
+		'sys_2.infer default step cap bounds inferences that omit steps, while explicit steps overrides it',
+		() =>
+			Effect.gen(function* () {
+				const runaway = browsing();
+				const loop = port(
+					Array.from({ length: DEFAULT_STEPS + 10 }, (_, i) =>
+						tool('browse', { url: `https://page/${i}` }, `b${i}`)
+					)
+				);
+				expect(
+					yield* infer_facility(loop.p)(at({ prompt: 'q', output, tools: ['browse'] }), [
+						runaway.browse
+					])
+				).toEqual({
+					ok: false,
+					error: {
+						kind: 'invalid',
+						message: expect.stringContaining(`tool budget (${DEFAULT_STEPS} steps)`)
+					}
+				});
+				expect(runaway.seen).toHaveLength(DEFAULT_STEPS);
+				expect(loop.requests).toHaveLength(DEFAULT_STEPS + 3);
+
+				// explicit steps above DEFAULT_STEPS is respected up to MAX_STEPS
+				const explicit = browsing();
+				const deep = port([
+					...Array.from({ length: DEFAULT_STEPS + 2 }, (_, i) =>
+						tool('browse', { url: `https://page/${i}` }, `d${i}`)
+					),
+					editAndSubmit
+				]);
+				expect(
+					yield* infer_facility(deep.p)(
+						at({ prompt: 'q', output, tools: ['browse'], steps: DEFAULT_STEPS + 5 }),
+						[explicit.browse]
+					)
+				).toEqual({ ok: true, value: { n: 3 } });
+				expect(explicit.seen).toHaveLength(DEFAULT_STEPS + 2);
+			})
+	);
+
+	it.effect(
 		'sys_2.infer: keyed edits apply op by op (a refused one reported, later ones applied), and read, diff and find speak keyed paths',
 		() =>
 			Effect.gen(function* () {
@@ -1869,25 +1920,48 @@ describe('the throttle lock (bug 37)', () => {
 
 describe('progress-check red circuit breaker', () => {
 	it('allows convergence after a parse-unblock error spike while still stopping flat or oscillating loops', () => {
-		const converging = { red: 0, lowest: Number.POSITIVE_INFINITY, lastFailing: Number.POSITIVE_INFINITY };
+		const converging = new Map<string, CheckProgress>();
 		for (const count of [2, 2, 2, 135, 61, 22, 5]) {
-			recordCheckProgress(converging, count);
-			expect(converging.red).toBeLessThanOrEqual(AGENT_LIMITS.failingSteps);
+			recordCheckProgress(converging, 'workspace_diagnose', count);
+			expect(converging.get('workspace_diagnose')?.red).toBeLessThanOrEqual(AGENT_LIMITS.failingSteps);
 		}
-		recordCheckProgress(converging, 0);
-		expect(converging).toEqual({
+		recordCheckProgress(converging, 'workspace_diagnose', 0);
+		expect(converging.get('workspace_diagnose')).toEqual({
 			red: 0,
 			lowest: Number.POSITIVE_INFINITY,
 			lastFailing: Number.POSITIVE_INFINITY
 		});
 
-		const flat = { red: 0, lowest: Number.POSITIVE_INFINITY, lastFailing: Number.POSITIVE_INFINITY };
-		for (const count of [2, 2, 2, 2, 2, 2]) recordCheckProgress(flat, count);
-		expect(flat.red).toBeGreaterThan(AGENT_LIMITS.failingSteps);
+		const flat = new Map<string, CheckProgress>();
+		for (const count of [2, 2, 2, 2, 2, 2]) recordCheckProgress(flat, 'workspace_diagnose', count);
+		expect(flat.get('workspace_diagnose')?.red).toBeGreaterThan(AGENT_LIMITS.failingSteps);
 
-		const oscillating = { red: 0, lowest: Number.POSITIVE_INFINITY, lastFailing: Number.POSITIVE_INFINITY };
-		for (const count of [10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10]) recordCheckProgress(oscillating, count);
-		expect(oscillating.red).toBeGreaterThan(AGENT_LIMITS.failingSteps);
+		const oscillating = new Map<string, CheckProgress>();
+		for (const count of [10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10])
+			recordCheckProgress(oscillating, 'workspace_diagnose', count);
+		expect(oscillating.get('workspace_diagnose')?.red).toBeGreaterThan(AGENT_LIMITS.failingSteps);
+	});
+
+	it('scopes progress per tool so a passing workspace_diagnose does not reset workspace_test', () => {
+		const checks = new Map<string, CheckProgress>();
+		for (let i = 0; i < 6; i++) {
+			recordCheckProgress(checks, 'workspace_test', 2);
+			recordCheckProgress(checks, 'workspace_diagnose', 0);
+		}
+		expect(checks.get('workspace_diagnose')?.red).toBe(0);
+		expect(checks.get('workspace_test')?.red).toBeGreaterThan(AGENT_LIMITS.failingSteps);
+	});
+
+	it('clearToolFailures clears only the succeeded tool, leaving other tools failures intact', () => {
+		const failures = new Map<string, number>([
+			[callKey('workspace_edit', { path: 'a.ts' }), 2],
+			[callKey('workspace_read', { path: 'b.ts' }), 1]
+		]);
+		clearToolFailures(failures, 'workspace_read');
+		expect(failures.get(callKey('workspace_edit', { path: 'a.ts' }))).toBe(2);
+		expect(failures.has(callKey('workspace_read', { path: 'b.ts' }))).toBe(false);
+		clearToolFailures(failures, 'workspace_edit');
+		expect(failures.size).toBe(0);
 	});
 });
 
@@ -1920,6 +1994,52 @@ describe('long-running stream CPU unit rotation', () => {
 			);
 			expect(answer.content).toBe('ok');
 			expect(steps).toBeGreaterThanOrEqual(3);
+		})
+	);
+});
+
+describe('spend cap overLimit with in-flight turn cost', () => {
+	const dbWithSpend = (workspaceSpent: number, memberSpent: number) => {
+		let reads = 0;
+		const db = TenantDb.typed({
+			read: (statements) =>
+				Effect.sync(() => {
+					reads++;
+					return statements.map((s) => ({
+						rows: [{ sum: s.params[0] === null ? workspaceSpent : memberSpent }],
+						affected: 1
+					}));
+				}),
+			write: () => Effect.sync(() => ({ rows: [], affected: 0 })),
+			transaction: (batch) => Effect.sync(() => batch.statements.map(() => ({ rows: [], affected: 0 })))
+		});
+		return { db, reads: () => reads };
+	};
+	const baseSettings: AgentSettings = {
+		monthly: 5,
+		member: 2,
+		policies: { vip: 10 },
+		models: [],
+		system1: null,
+		system2: null
+	};
+
+	it.effect('counts inFlightUsd against workspace and member caps and short-circuits when in-flight alone exceeds cap', () =>
+		Effect.gen(function* () {
+			const { db, reads } = dbWithSpend(3, 1.5);
+			// below both caps without in-flight spend
+			expect(yield* overLimit(db, baseSettings, 'alice', [])).toBeNull();
+			// below both caps with small in-flight spend (workspace 3.4 < 5, member 1.9 < 2)
+			expect(yield* overLimit(db, baseSettings, 'alice', [], 0.4)).toBeNull();
+			// crosses member cap (1.5 + 0.5 >= 2) while workspace (3.5 < 5) is under
+			expect(yield* overLimit(db, baseSettings, 'alice', [], 0.5)).toBe('member');
+			// generous policy cap keeps member under limit until workspace cap trips
+			expect(yield* overLimit(db, baseSettings, 'alice', ['vip'], 0.5)).toBeNull();
+			expect(yield* overLimit(db, baseSettings, 'alice', ['vip'], 2)).toBe('workspace');
+			// in-flight spend alone >= workspace cap trips immediately with zero DB reads
+			const before = reads();
+			expect(yield* overLimit(db, baseSettings, 'alice', ['vip'], 5)).toBe('workspace');
+			expect(reads()).toBe(before);
 		})
 	);
 });

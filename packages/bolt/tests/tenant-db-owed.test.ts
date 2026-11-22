@@ -81,4 +81,26 @@ describe('what a generation owes its database', () => {
 			expect(yield* db.awake).toBe(true);
 		})
 	);
+	it.effect('owed writes during pay() do not increment writes or poison db.quietly()', () =>
+		Effect.gen(function* () {
+			const { trips, db } = world();
+			db.owe(
+				Effect.gen(function* () {
+					yield* db.write({ text: 'UPDATE sys_run SET state = $1', params: ['queued'] });
+					yield* db.transaction({
+						statements: [{ text: 'UPDATE sys_conversation SET status = $1', params: ['idle'] }]
+					});
+				})
+			);
+			expect(yield* db.awake).toBe(false);
+			yield* db.quietly(db.read([{ text: 'SELECT 1', params: [] }]));
+			expect(trips).toEqual(['write', 'read']);
+			expect(db.writes()).toBe(0);
+			expect(yield* db.awake).toBe(false);
+			// a real write after owed init still counts and marks the database awake
+			yield* db.quietly(db.write({ text: 'INSERT INTO sys_config VALUES (1)', params: [] }));
+			expect(db.writes()).toBe(1);
+			expect(yield* db.awake).toBe(true);
+		})
+	);
 });

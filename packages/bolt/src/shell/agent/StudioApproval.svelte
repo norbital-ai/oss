@@ -24,20 +24,68 @@
 		t: (key: string) => string;
 	} = $props();
 
-	const id = $derived(step.tool?.approval);
-	const summary = $derived(
-		Option.getOrNull(
-			Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ summary: Schema.String })))(
-				step.tool?.args
+	const MergeArgs = Schema.fromJsonString(
+		Schema.Struct({
+			summary: Schema.optionalKey(Schema.String),
+			commit: Schema.optionalKey(Schema.String)
+		})
+	);
+	const MergeResult = Schema.fromJsonString(
+		Schema.Struct({
+			merge: Schema.optionalKey(Schema.NullOr(Schema.String)),
+			commit: Schema.optionalKey(Schema.String),
+			approval: Schema.optionalKey(
+				Schema.NullOr(
+					Schema.Struct({
+						head: Schema.optionalKey(Schema.String),
+						op: Schema.optionalKey(
+							Schema.Struct({
+								op: Schema.String,
+								id: Schema.optionalKey(Schema.String)
+							})
+						)
+					})
+				)
 			)
-		)?.summary
+		})
+	);
+	const id = $derived(step.tool?.approval);
+	const parsedArgs = $derived(
+		Option.getOrUndefined(Schema.decodeUnknownOption(MergeArgs)(step.tool?.args))
+	);
+	const summary = $derived(parsedArgs?.summary);
+	const parsedResult = $derived(
+		Option.getOrUndefined(Schema.decodeUnknownOption(MergeResult)(step.tool?.result))
+	);
+	const resultChangeId = $derived.by(() => {
+		const op = parsedResult?.approval?.op;
+		if (op?.op === 'change.merge' && op.id !== undefined) return op.id;
+		if (typeof parsedResult?.merge === 'string') return parsedResult.merge;
+		const raw = step.tool?.result;
+		if (typeof raw !== 'string') return undefined;
+		return (
+			/"op"\s*:\s*"change\.merge"[^}]*"id"\s*:\s*"([^"]+)"/.exec(raw)?.[1] ??
+			/"id"\s*:\s*"([^"]+)"[^}]*"op"\s*:\s*"change\.merge"/.exec(raw)?.[1] ??
+			/"merge"\s*:\s*"([^"]+)"/.exec(raw)?.[1]
+		);
+	});
+	const resultCommit = $derived(
+		parsedResult?.approval?.head ?? parsedResult?.commit ?? parsedArgs?.commit
 	);
 	const studio = observe_once(() => api.studio());
 	const held = $derived(studio.current?.approvals?.find((one) => one.id === id));
-	const change = $derived.by(() => {
+	const isMerge = $derived(held?.op.op === 'change.merge' || step.tool?.studio === 'merge');
+	const matchedChange = $derived.by(() => {
+		const sets = studio.current?.change_sets;
+		if (sets === undefined) return undefined;
 		const op = held?.op;
-		return op?.op === 'change.merge' ? studio.current?.change_sets?.find((change) => change.id === op.id) : undefined;
+		if (op?.op === 'change.merge') return sets.find((c) => c.id === op.id);
+		if (resultChangeId !== undefined) return sets.find((c) => c.id === resultChangeId);
+		if (resultCommit !== undefined && step.tool?.studio === 'merge')
+			return sets.find((c) => c.head.startsWith(resultCommit) || c.merge?.head.startsWith(resultCommit));
+		return undefined;
 	});
+	const change = $derived(held?.op.op === 'change.merge' ? matchedChange : undefined);
 	const preview = $derived(change?.preview);
 	let previewing = $state(false);
 	const showPreview = Effect.fn('StudioApproval.preview')(function* () {
@@ -87,14 +135,32 @@
 	let decided = $state<'approved' | 'rejected' | null>(null);
 	/** How the approved merge ended: the card follows it, at most ten minutes, through its switch-over. */
 	let ended = $state<{ readonly error?: string } | null>(null);
-	const follow = Effect.fn('StudioApproval.follow')(function* (change: string) {
+	let following = false;
+	const follow = Effect.fn('StudioApproval.follow')(function* (changeId: string) {
+		following = true;
 		for (let tries = 0; tries < 300 && ended === null; tries++) {
 			yield* Effect.sleep('2 seconds');
 			const view = yield* Effect.orElseSucceed(api.studio(), () => null),
-				found = view?.change_sets?.find((c) => c.id === change);
+				found = view?.change_sets?.find((c) => c.id === changeId);
 			if (found?.state === 'merged') ended = {};
 			else if (found?.merge?.state === 'failed')
 				ended = { error: found.merge.error ?? t('the merge did not reach live') };
+		}
+	});
+	// On reload after approval, keep showing live merge progress/outcome from studio.change_sets instead of vanishing.
+	$effect(() => {
+		if (studio.current === undefined || held !== undefined || decided !== null || !isMerge) return;
+		const found = matchedChange;
+		if (found === undefined) return;
+		if (found.state === 'merged') {
+			decided = 'approved';
+			ended = {};
+		} else if (found.merge?.state === 'failed') {
+			decided = 'approved';
+			ended = { error: found.merge.error ?? t('the merge did not reach live') };
+		} else if (found.merge !== undefined) {
+			decided = 'approved';
+			if (!following) fork(follow(found.id));
 		}
 	});
 	let busy = $state(false);
@@ -189,10 +255,10 @@
 		<div class="shrink-0 border-t border-border/60 px-3 py-2.5">
 			{#if decided === 'approved'}
 				<Inline gap="sm" align="center" class="min-h-8 text-sm" role="status" data-outcome>
-					<Icon name={ended?.error !== undefined ? 'lucide:circle-alert' : ended === null && held?.op.op === 'change.merge' ? 'lucide:loader-circle' : 'lucide:circle-check'} class="size-4 shrink-0 {ended === null && held?.op.op === 'change.merge' ? 'animate-spin motion-reduce:animate-none' : ''}" />
+					<Icon name={ended?.error !== undefined ? 'lucide:circle-alert' : ended === null && isMerge ? 'lucide:loader-circle' : 'lucide:circle-check'} class="size-4 shrink-0 {ended === null && isMerge ? 'animate-spin motion-reduce:animate-none' : ''}" />
 					{#if ended?.error !== undefined}
 						<span class="min-w-0 whitespace-normal text-destructive">{t('The update failed:')} {ended.error}</span>
-					{:else if ended !== null || held?.op.op !== 'change.merge'}
+					{:else if ended !== null || !isMerge}
 						<span class="min-w-0 whitespace-normal">{t('Changes applied.')}</span>
 						<Button variant="outline" class="shrink-0" onclick={() => location.reload()} data-view-live>{t('View workspace')}</Button>
 					{:else}<span class="min-w-0 whitespace-normal">{t('Applying changes… You can keep using the app.')}</span>{/if}

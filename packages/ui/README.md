@@ -56,7 +56,7 @@ hover or focus; a list cell's expand mark shows on its cell's hover or focus.
 **Datatypes in JSON Schema.** `StructuredData` (forms, tables and popover cells alike) picks a
 datatype's control at one dispatch, `json_schema_kind`: explicitly by `format: '<datatype>'`
 (`period`, `point`, `money`, `duration`, `currency`; `x-norbital.datatype` for a custom one), else
-implicitly when an object's shape is exactly a datatype's (std's `DATATYPE_SHAPES`: a date or
+implicitly when an object's shape is exactly a datatype's (`@norbital-ai/store`'s `DATATYPE_SHAPES`: a date or
 instant period, a point). A native kind in a list cell keeps its own editor and renderer; only a
 structure opens the cell popover. `bolt check`/`build` reject a seeded schema naming a datatype in
 another shape.

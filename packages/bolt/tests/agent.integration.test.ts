@@ -726,6 +726,199 @@ describe('in-app turns', () => {
 				})
 			)
 	);
+	it.live(
+		'a background job or sub-agent completion does not auto-reject a pending Studio approval; host notice wakes it',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const ai = cassette();
+					ai.arm([
+						use('workspace_slow', {}),
+						use('request_publish', {}),
+						say('Sub-agent and job noted.'),
+						say('Merge finished and job reported.')
+					]);
+					const pending = new Set<string>();
+					let starts = 0;
+					const { agent, user, t } = yield* build(ai, {
+						host_inline_ms: 200,
+						on_turn_start: async () => {
+							starts++;
+							const ids = [...pending];
+							pending.clear();
+							return ids;
+						},
+						host_tools: [
+							{
+								name: 'workspace_slow',
+								description: 'Slow background job',
+								behavior: {},
+								input: { type: 'object', properties: {}, additionalProperties: false },
+								read_only: true,
+								call: (_input, _ctx, signal) =>
+									new Promise((resolve) => {
+										if (signal.aborted) {
+											resolve({ aborted: true });
+											return;
+										}
+										signal.addEventListener(
+											'abort',
+											() => {
+												resolve({ aborted: true });
+											},
+											{ once: true }
+										);
+									})
+							},
+							{
+								name: 'request_publish',
+								description: 'Fixture Studio approval request',
+								behavior: {},
+								input: { type: 'object', properties: {}, additionalProperties: false },
+								read_only: true,
+								call: async () => {
+									pending.add('merge-ask');
+									return { approval: { id: 'merge-ask' } };
+								}
+							}
+						]
+					});
+					const ann = yield* user('studio-approval-hold', { admin: true });
+					const c = yield* agent.start({ owner: ann });
+					yield* agent.post({ conversation: c, as: { member: ann }, text: 'Run and publish' });
+					yield* agent.drain(c);
+					// When the turn paused on request_publish, workspace_slow's interruption queued a late system job note
+					// and kicked drain(c). That wake must hold without calling on_turn_start or rejecting merge-ask.
+					yield* Effect.sleep('40 millis');
+					expect(starts).toBe(1);
+					expect(pending.has('merge-ask')).toBe(true);
+					// A queued sub-agent report must also hold without rejecting the pending Studio approval.
+					yield* t.db.write({
+						text: `INSERT INTO sys_message (id, conversation, seq, role, content, text, preview, state, mode, "as", author, meta)
+							VALUES (uuidv7()::text, $1, (SELECT coalesce(max(seq), 0) + 1 FROM sys_message WHERE conversation = $1), 'user', '{"text":"sub-agent done"}'::jsonb, 'sub-agent done', 'sub-agent done', 'queued', 'agent', $2::jsonb, 'sub-agent', '{"tag":"report","conversation":"child-1"}'::jsonb)`,
+						params: [c, JSON.stringify({ member: ann })]
+					});
+					const heldDrain = yield* agent.drain(c);
+					expect(heldDrain.ran).toBe(false);
+					expect(starts).toBe(1);
+					expect(pending.has('merge-ask')).toBe(true);
+					const held = (yield* agent.transcript(c)).find(
+						(row) => transcriptRow(row, true, false)?.tool?.approval === 'merge-ask'
+					);
+					expect(held).toBeDefined();
+					// Once the host records the person's decision via notify, the conversation wakes cleanly.
+					pending.delete('merge-ask');
+					yield* agent.notify({
+						conversation: c,
+						id: 'approval-merge-ask',
+						text: 'The merge was approved and is live.'
+					});
+					while ((yield* agent.conversation(c)).status !== 'idle' || !(yield* agent.transcript(c)).some((r) => r.role === 'assistant' && r.text === 'Merge finished and job reported.'))
+						yield* Effect.sleep('10 millis');
+					expect((yield* agent.transcript(c)).at(-1)).toMatchObject({
+						role: 'assistant',
+						text: 'Merge finished and job reported.'
+					});
+				})
+			)
+	);
+	it.live(
+		'alternating an unrelated successful read with a failing tool call still trips the repeat-failure guard',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const ai = cassette();
+					ai.arm([
+						use('fixture_edit', { path: 'a.ts' }),
+						use('fixture_read', { path: 'a.ts' }),
+						use('fixture_edit', { path: 'a.ts' }),
+						use('fixture_read', { path: 'a.ts' }),
+						use('fixture_edit', { path: 'a.ts' }),
+						use('fixture_read', { path: 'a.ts' }),
+						use('fixture_edit', { path: 'a.ts' }),
+						say('Stopped retrying the same edit.')
+					]);
+					let editCalls = 0;
+					const { agent, user } = yield* build(ai, {
+						host_tools: [
+							{
+								name: 'fixture_read',
+								description: 'Fixture read',
+								behavior: { pure: true },
+								input: { type: 'object', additionalProperties: true },
+								read_only: true,
+								call: async () => ({ text: 'ok' })
+							},
+							{
+								name: 'fixture_edit',
+								description: 'Fixture edit',
+								behavior: {},
+								input: { type: 'object', additionalProperties: true },
+								read_only: true,
+								call: async () => {
+									editCalls++;
+									return { error: 'old_string not found' };
+								}
+							}
+						]
+					});
+					const ann = yield* user('repeat-failure-guard', { admin: true });
+					const c = yield* agent.start({ owner: ann });
+					yield* agent.post({ conversation: c, as: { member: ann }, text: 'Edit a.ts' });
+					yield* agent.drain(c);
+					expect(editCalls).toBe(3);
+					const skipped = (yield* agent.transcript(c)).find(
+						(row) =>
+							row.role === 'tool' &&
+							row.content.name === 'fixture_edit' &&
+							JSON.stringify(row.content.result).includes('already failed several times')
+					);
+					expect(skipped).toBeDefined();
+				})
+			)
+	);
+	it.live(
+		'a passing workspace_diagnose does not reset workspace_test red-check loop guard',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const ai = cassette();
+					ai.arm(
+						Array.from({ length: 7 }, () => [
+							use('workspace_test', {}),
+							use('workspace_diagnose', {})
+						]).flat()
+					);
+					let testRuns = 0;
+					const { agent, user } = yield* build(ai, {
+						host_tools: [
+							{
+								name: 'workspace_test',
+								description: 'Fixture test runner',
+								behavior: { progress_check: true },
+								input: { type: 'object', additionalProperties: true },
+								read_only: true,
+								call: async () => ({ failing: 2, tests: { failed: 2 }, round: ++testRuns })
+							},
+							{
+								name: 'workspace_diagnose',
+								description: 'Fixture diagnose',
+								behavior: { progress_check: true, diagnostics: true },
+								input: { type: 'object', additionalProperties: true },
+								read_only: true,
+								call: async () => ({ failing: 0, ok: true })
+							}
+						]
+					});
+					const ann = yield* user('scoped-red-checks', { admin: true });
+					const c = yield* agent.start({ owner: ann });
+					yield* agent.post({ conversation: c, as: { member: ann }, text: 'Fix failing tests' });
+					yield* agent.drain(c);
+					expect(testRuns).toBe(6);
+					expect((yield* agent.transcript(c)).at(-1)?.text).toContain('the checks kept failing');
+				})
+			)
+	);
 	it.live('a background tool answers at once and its result arrives as a system message', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

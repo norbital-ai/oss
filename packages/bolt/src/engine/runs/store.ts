@@ -12,7 +12,8 @@ import { DRAIN_KEY_PREFIX, next_due } from './queue.ts';
 import { RowSchema, RunViewRow, RUN_VIEW_COLUMNS, run_view, runPiece } from './rows.ts';
 import { iso } from './time.ts';
 import { RUN_LEASE_MS } from './executor.ts';
-import { enqueueBackfills, SYNC_BACKFILL } from '../sync/backfill.ts';
+import { enqueueBackfills, retainedBackfills, SYNC_BACKFILL } from '../sync/backfill.ts';
+import { syncs_of } from '../sync/index.ts';
 
 /** How many queued runs of one platform automation a claim takes at once; they run one after another. */
 const PLATFORM_BATCH = 1000;
@@ -41,8 +42,35 @@ export const makeRunStore = Effect.fn('Runs.store')(function* (
 	};
 	const boot = Effect.fn('Runs.boot')(function* (overran?: string) {
 			const now = yield* Clock.currentTimeMillis,
-				c = new Chain(),
-				at = c.p(iso(now));
+				nowIso = iso(now),
+				writeSyncs = [...syncs_of(m).values()].filter((s) => s.write),
+				check = new Chain(),
+				checkAt = check.p(nowIso);
+			let missingBackfill = 'false';
+			if (writeSyncs.length > 0) {
+				const retained = check.cte('retained_backfills', retainedBackfills(m, check));
+				const pairs = writeSyncs
+					.map(
+						(s) =>
+							`(i.integration = ${check.p(s.definition)} AND NOT EXISTS (SELECT 1 FROM ${retained} r WHERE r.input ->> 'instance' = i.id::text AND r.input ->> 'sync' = ${check.p(s.name)} AND r.input ->> 'after' IS NULL AND r.input ->> 'replay_of' IS NULL))`
+					)
+					.join(' OR ');
+				missingBackfill = `EXISTS (SELECT 1 FROM sys_integration i WHERE i.active AND (${pairs}))`;
+			}
+			const checkSelect = `(EXISTS (SELECT 1 FROM sys_run WHERE state = 'running')
+				OR EXISTS (SELECT 1 FROM sys_conversation c WHERE c.status = 'running' AND (c.run IS NOT NULL OR (c.lease_until < ${checkAt}::timestamptz AND NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.automation = '${TURN_RUN}' AND r.state IN ('queued', 'running') AND r.input->>'conversation' = c.id::text))))
+				OR ${missingBackfill}) AS dirty,
+				(SELECT min(due_at) FROM sys_run WHERE state = 'queued')::text AS next`;
+			const checked = yield* db.one(
+				Schema.Struct({ dirty: Schema.Boolean, next: Schema.NullOr(Schema.String) }),
+				writeSyncs.length === 0 ? { text: `SELECT ${checkSelect}`, params: check.params } : check.sql(checkSelect)
+			);
+			if (Option.isSome(checked) && !checked.value.dirty) {
+				yield* deadlines.settle(checked.value.next);
+				return [];
+			}
+			const c = new Chain(),
+				at = c.p(nowIso);
 			lost(c, at, 'true', c.p(overran ?? null));
 			// no inference outlives its generation: its transcript (a conversation with a run, never a turn's) stops reading as running
 			capturePiece(c,
@@ -57,7 +85,7 @@ export const makeRunStore = Effect.fn('Runs.store')(function* (
 				'sys_conversation',
 				`UPDATE sys_conversation c SET status = 'idle', lease_until = NULL WHERE c.status = 'running' AND (c.id::text IN (SELECT r.input->>'conversation' FROM sys_run r JOIN lost l ON l.id = r.id WHERE l.state = 'failed' AND r.automation = '${TURN_RUN}') OR (c.lease_until < ${at}::timestamptz AND NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.automation = '${TURN_RUN}' AND r.state IN ('queued', 'running') AND r.input->>'conversation' = c.id::text)))`
 			);
-			enqueueBackfills(m, c, iso(now));
+			enqueueBackfills(m, c, nowIso);
 			const result = yield* nativeCommit(db.write, live.publish, c,
 				Schema.Struct({
 					...CapturedResult.fields,

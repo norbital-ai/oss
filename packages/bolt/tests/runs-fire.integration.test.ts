@@ -645,4 +645,64 @@ layer(Sleeping, { excludeTestServices: true })('a sleeping database', (it) => {
 				expect(yield* runs()).toHaveLength(2);
 			})
 	);
+
+	it.effect(
+		'clean boot performs zero writes under quietly (db.awake stays false), and an unconnected remote sync rests a year until a workspace write wakes it',
+		() =>
+			Effect.gen(function* () {
+				const { t, fire } = yield* setup;
+				const runs = yield* Runs;
+				const SYNC = 'products.sync.erp';
+				let requests = 0;
+				t.fakes.links.answer = () =>
+					Effect.sync(() => {
+						requests++;
+						return { rows: [{ page: { rows: [], cursor: 'c2', more: false } }] };
+					});
+				// clean boot: no running runs or conversations -> read-only check, zero writes, db stays asleep
+				t.clock.advance('6min');
+				yield* t.settled();
+				t.count.reset();
+				expect(yield* t.db.awake).toBe(false);
+				expect(yield* t.db.quietly(runs.boot())).toEqual([]);
+				expect(t.count.writes).toBe(0);
+				expect(yield* t.db.awake).toBe(false);
+
+				// deactivate the ERP connection so the sync has zero active connections
+				yield* t.db.write({
+					text: `UPDATE sys_integration SET active = false WHERE id = 'erp1'`,
+					params: []
+				});
+				t.clock.advance('6min');
+				yield* t.settled();
+				t.count.reset();
+				expect(yield* t.db.awake).toBe(false);
+
+				const first = yield* fire(SYNC, t.clock.now());
+				expect(first.ran).toBe(false);
+				expect(first.until).toBeDefined();
+				const restMs = Date.parse(first.until ?? '') - Date.parse(t.clock.now());
+				expect(restMs).toBe(365 * 86_400_000);
+				expect(t.count.writes).toBe(0);
+				expect(yield* t.db.awake).toBe(false);
+				expect(requests).toBe(0);
+
+				// 30 days later while still idle: no database reads or writes at all
+				t.clock.set(new Date(Date.parse(t.clock.now()) + 30 * 86_400_000).toISOString());
+				yield* t.settled();
+				t.count.reset();
+				expect(yield* fire(SYNC, t.clock.now())).toEqual(first);
+				expect(t.count).toMatchObject({ reads: 0, writes: 0 });
+				expect(requests).toBe(0);
+
+				// activating the integration wakes the sync on the next slot
+				yield* t.db.write({
+					text: `UPDATE sys_integration SET active = true WHERE id = 'erp1'`,
+					params: []
+				});
+				t.clock.advance('30min');
+				yield* fire(SYNC, t.clock.now());
+				expect(requests).toBe(1);
+			})
+	);
 });

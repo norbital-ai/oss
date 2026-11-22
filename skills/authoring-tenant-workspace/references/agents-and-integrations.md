@@ -4,7 +4,7 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 
 ## Briefs and skills
 
-- `+agent.md` briefs staff; `+agent.external.md` briefs external members. A brief describes work and evidence, never authority. The agent acts as its identity through the same access points as a person.
+- `+agent.md` briefs staff; `+agent.external.md` briefs external members. Keep `+agent.md` minimal: end-user domain rules and evidence only — never authority, and never duplicate `[Catalogue]`, `KERNEL` or Studio/code instructions (put code invariants in `src/agent/AGENTS.md`). The agent acts as its identity through the same access points as a person.
 - A workspace skill is `src/agent/skill/<name>/`: names match `^[a-z][a-z0-9_]*$`; `+skill.md` has `description:` frontmatter. It may include scripts and vendored pure-JavaScript packages, at most 10 MiB, no links.
 - Skill design, scoping and structure: follow the `skill-authoring` skill.
 - A script runs as written through `run_js { file }` or inline `run_js { code }`: its tree is read-only at `/app`, files at `/in/<name>`, and `/out` (or returned `{ files }` from inline `run_js`) surfaces as downloadable attachments in chat. Only `fs`, `path`, `buffer`, `process`, `util` built-ins exist; `fetch` needs the `http` grant.

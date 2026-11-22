@@ -38,7 +38,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - A declaration's spec: `Parameters<typeof import('pkg').fn>[0]` for single-argument declarations; model and integration take name then spec (`[1]`), sync takes model, name then spec (`[2]`). The declared name must match the source role. Narrow with `X['field']`. Models and integrations use their generated per-file binding, not a root declaration imported back from their source.
 - `type` answers any shape with no file. `completions`, `hover`, `signature` need path, line, column of a file you are writing: a file written only to ask is a wasted edit.
 - Live names: `describe_workspace`, `workspace_list_dir`.
-- **No `node_modules/` or `.norbital/` in the workspace:** packages live in a centralized host store shared across tenants and cannot be read with file tools. Never glob, grep, or read `node_modules/` or `.norbital/` — inspect package/component types with `workspace_lang` (or `bolt-contract` docs) and install packages with `workspace_package`.
+- **No `node_modules/` or `.norbital/` in the workspace:** packages live in a centralized host store shared across tenants and cannot be read with file tools. Never glob, grep, or read `node_modules/` or `.norbital/` — inspect package/component types with `workspace_lang` (or `bolt-contract` docs) and install packages with `workspace_install`.
 
 ## Protocol
 
@@ -48,6 +48,17 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 4. `workspace_commit` with a message, in any state; new commits join your line on top of live. `workspace_rebase` replays them on top of live, migrations too, when you want to test against live as it is now; a merge never needs it. Reverting to redo work never helps.
 5. `workspace_preview` builds the last commit, serves it and opens every page. `workspace_try` runs each automation once on the preview and reads what it changed. A preview binds no integration links: a sync's decoding is proved in a test. After the merge, create its connection on live with `sys_integration.create { integration, name }`, start it, and read the rows.
 6. `workspace_merge` with the last commit, a summary and a ledger saying for each capability what implements it, or `skip: reason`. It needs no uncommitted edits and a preview of that commit, and is refused over a known failed diagnosis or failed tests. Merges land one at a time: the queue replays your commits on live as it stands, runs any diagnosis or tests that head lacks, and checks again if the replay changed anything.
+
+## Core principles
+
+- **Never duplicate built-in Bolt capabilities:**
+  - **Access control & approvals:** use `+team.ts`, `+<name>.policy.ts`, `ctx.approve` and `sys_approval` — never custom role, permission or approval models or hand-rolled authorization checks.
+  - **Statuses & lifecycles:** use `kind: 'state'` with declared transitions, locks and policy `update.moves` — never shadow status tables or parallel transition state machines.
+  - **Live queries & reactivity:** use `PageBolt.query(...)` (automatically live over SSE) — never manual refresh loops, `setInterval`/timer polling or ad-hoc client refetch/cache state.
+  - **Platform primitives:** reuse native audit/history, search indexes, filters, paging, import/export, label maps, file fields, auth/users/invitations, envoys/channels, write triggers (`on:`), durable waits (`ctx.wait`) and `@norbital-ai/ui` controls (`Table`, `Board`, `RecordShell`, `TimeInput`/`TimeRangeInput`).
+- **Scale-to-zero & Neon discipline:** every safety-net `cron` declares `rest` (e.g. `rest: '24h'`) so idle tenants suspend on Neon instead of billing 1 CU continuously. Prefer write triggers (`on: [{ model, verbs }]`) and durable waits (`ctx.wait({ until | model | approval })`) over polling crons; poll only external systems that cannot push webhooks (e.g. legacy ERPs).
+- **AI cost & context efficiency:** bound `ctx.ai.sys_2.infer` with explicit `steps` and batch/dedupe inputs instead of calling System 2 per row; use `ctx.ai.sys_1` for lightweight classification/triage. Keep `src/agent/+agent.md` minimal (end-user domain rules only — never duplicate `[Catalogue]`, `KERNEL` or Studio/code instructions; keep code invariants in `src/agent/AGENTS.md`).
+- **Data & query performance:** record IDs are monotonic UUIDv7 — paginate chronologically with `order_by: { id: 'desc' }` (or `'asc'`) without extra sort columns; pass explicit `limit` and narrow named `outputs`; batch lookups with `in` filters instead of N+1 `ctx.query` loops; link multi-model writes in one atomic `ctx.act` with `new_id(model)`.
 
 ## Rules
 
@@ -63,7 +74,6 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - `seed/test/assets.json` and `seed/public/assets.json` are the reserved asset list: never name seed rows that, even for a model called assets.
 - Migrations are generated. Edit one only to move data: the schema must arrive at what the models declare. Never edit `.norbital/`.
 - Credentials never enter source, seeds or model fields.
-- Never rebuild search, filters, paging, import/export, approvals, history or label maps: the views render them.
 - Keep evolving business rules, research prompts, scoring rubrics, and tunable thresholds in a runtime configuration model (seeded with defaults, editable directly as data) instead of hardcoding them in automation source and running repeated Studio build/migrate/merge cycles.
 - When launching a large background sweep (e.g. 50+ records), queue the runs and report status right away instead of blocking the conversation inside repeated `wait` loops.
 

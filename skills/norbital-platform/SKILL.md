@@ -10,7 +10,7 @@ metadata:
 
 This platform is in no model's training data: read the reference, then answer.
 
-A workspace is tenant source compiled by Bolt into a running app with a Postgres database. Source declares shapes and behaviour. Runtime records hold member identities, integration instances, envoy rows and business catalogues. On Colony each author works in a worktree of the tenant's repository.
+A workspace is tenant source compiled by Bolt into a running app with an isolated Postgres database (scale-to-zero on Neon, monotonic UUIDv7 record IDs). Source declares shapes and behaviour. Runtime records hold member identities, integration instances, envoy rows and business catalogues. On Colony each author works in a worktree of the tenant's repository.
 
 ## Routing
 

@@ -20,7 +20,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `i
 - Say no with `return yield* ctx.refuse('<message key>', { row?, field?, values? })`. The message is a catalogue key; `row` indexes the input list; a message with `{placeholders}` takes exactly those `values` (typed, required). `ctx.refuse` is the only refusal: never construct a `Refusal` or build text.
 - A row write runs its model's `effect`; a row carried by another model's callback (`with`, `on_approved`) runs no effect, emits no write event and wakes no `ctx.wait`. An automation may also listen to a model's committed writes, template or system (`sys_user`, `sys_invitation`): `on: [{ model: 'sys_user', verbs: ['create', 'update'] }]`. Each committed statement queues one run per automation and verb with `ctx.trigger = { kind: 'system', cause: 'event', model, verb, records }`; the run takes no input, holds its `policies` (the writer needs none) and reads the rows it needs. A write held for approval emits when its approval commits it; a rejected or withdrawn one emits nothing. Runs chain at most 8 deep, identity writes included.
 - Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rate_limited`. Cron, event and effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
-- A safety-net cron depending only on workspace data declares `rest`: when a run writes nothing, no slot fires until the workspace is used or the rest passes. Never on a cron that finds work by time or reads what a connected link writes.
+- Scale-to-zero discipline: prefer write triggers (`on: [{ model, verbs }]`) and durable waits (`ctx.wait({ until | model | approval })`) over polling crons; poll only external systems that cannot push webhooks (e.g. legacy ERPs). Every safety-net cron depending only on workspace data declares `rest` (e.g. `rest: '24h'`) so idle tenants suspend on Neon instead of billing 1 CU continuously: when a run writes nothing, no slot fires until the workspace is used or `rest` passes. Never put `rest` on a cron that finds work by wall time or polls an external link.
 - Server `ctx.schedule(name, input, { at?, key? })` queues a job and returns its `id` and `automation`. A page's `ctx.run` job handle exposes `.id`, `.ids` and `.automation`; yielding it confirms queue admission, not completion, and a refusal fails `ActRefused`. A page call yields its declared output.
 - Every startable automation appears in the Command Center with its typed form; a page form is optional.
 
@@ -64,10 +64,10 @@ A dropped run reruns from the start, up to 3 times; a retry also starts over. No
 
 ## AI
 
-- `ctx.ai.sys_1.decide({ state, questions })` asks keyed questions over text-only state and returns typed answers. `ctx.ai.sys_2.infer` is the LLM. Neither falls back to the other.
+- `ctx.ai.sys_1.decide({ state, questions })` asks keyed questions over text-only state and returns typed answers: use it for lightweight classification and triage. `ctx.ai.sys_2.infer` is the LLM; neither falls back to the other. Batch and dedupe inputs instead of calling System 2 per row.
 - `sys_2.infer({ initial, output, … })` holds a complete answer in memory and exposes draft tools `read`, `find`, `edit`, `diff`, `submit`. Paths are JSON Pointers; a keyed list item is addressed by key, never index. Large reads are bounded: read child paths.
 - Request `rules` (CEL over top-level properties) make an unfinished draft fail `invalid`.
-- `tools: ['read', ...host_tools]` reads records as the run's policies across turns; bound it with `steps`. The draft reader is then `read_answer`.
+- `tools: ['read', ...host_tools]` reads records as the run's policies across turns; always bound it with explicit `steps`. The draft reader is then `read_answer`.
 - Transient provider failures retry inside the invocation, keeping the transcript and edited answer.
 - Infer results are proposals. Store them for native form review before a separate confirmed apply; a write still runs through grants, checks and approvals. A person confirms anything changing money or access.
 - Use the `AutomationCtx['ai']` signature; test with scripted output, never a live model.

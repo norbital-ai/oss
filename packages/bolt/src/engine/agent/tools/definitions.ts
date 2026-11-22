@@ -292,7 +292,7 @@ export const globSource = defineTool('workspace_glob', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		'Find workspace source paths by glob (e.g. "src/**/*.svelte"). No node_modules/ or .norbital/ exist here (shared host store — use workspace_lang for types, workspace_package to install).',
+		'Find workspace source paths by glob (e.g. "src/**/*.svelte"). No node_modules/ or .norbital/ exist here (shared host store — use workspace_lang for types, workspace_install to install).',
 	parameters: Schema.Struct({
 		pattern: Schema.NonEmptyString.annotate({ description: 'Glob pattern' }),
 		path: Schema.optionalKey(Schema.String).annotate({

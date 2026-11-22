@@ -17,6 +17,7 @@ import {
 import {
 	AGENT_LIMITS,
 	callKey,
+	clearToolFailures,
 	failedResult,
 	NUDGE,
 	stepKey,
@@ -133,10 +134,12 @@ export const makeExecuteCalls = (deps: TurnCallsDeps) => {
 				} else {
 					const result = answer.result;
 					if (failedResult(result)) {
-						current.failures.set(key, (current.failures.get(key) ?? 0) + 1);
+						// Progress-check tools (diagnose/test) are governed by per-tool `recordCheckProgress` rather than `sameFailure`.
+						if (operation.behavior.progress_check !== true)
+							current.failures.set(key, (current.failures.get(key) ?? 0) + 1);
 						failed++;
 						if (!skip || current.lastError === '') current.lastError = String(result['error']); // staff see the real failure, not the cut-short
-					} else current.failures.clear(); // a call that worked is progress: an earlier failure is worth one fresh try
+					} else clearToolFailures(current.failures, call.name); // only this tool's progress clears its earlier failures
 					// the model sees a bounded result; a clipped one keeps the whole output for `read_output`
 					const own = 'bounded' in answer && answer.bounded === true,
 						whole = own && answer.full !== undefined ? answer.full : result,
@@ -160,7 +163,7 @@ export const makeExecuteCalls = (deps: TurnCallsDeps) => {
 		);
 		if (waiting) {
 			current.reply = null;
-			return yield* settle(id);
+			return true;
 		}
 		// Channels receive the same question in plain words; the shell retains its choices as controls.
 		if (current.question !== null) {

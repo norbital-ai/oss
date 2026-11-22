@@ -6,7 +6,8 @@ import { TestClock } from 'effect/testing';
 import { type AiRequest, type OpenAiChat, Port } from '@norbital-ai/host-api';
 import { pixelSize } from '@norbital-ai/host-api';
 import { fileParts } from '../src/openai/files.ts';
-import { open_ai_chat } from '../src/openai/index.ts';
+import { open_ai_chat, session_of } from '../src/openai/index.ts';
+import { open_router_chat } from '../src/openrouter/chat.ts';
 import { ai_models } from '../src/openrouter/models.ts';
 
 const Sent = Schema.Struct({
@@ -24,7 +25,10 @@ const Sent = Schema.Struct({
 	tools: Schema.optionalKey(Schema.Array(Schema.Json)),
 	reasoning_effort: Schema.optionalKey(Schema.String),
 	response_format: Schema.optionalKey(Schema.Json),
-	usage: Schema.optionalKey(Schema.Json)
+	usage: Schema.optionalKey(Schema.Json),
+	session_id: Schema.optionalKey(Schema.String),
+	prompt_cache_key: Schema.optionalKey(Schema.String),
+	provider: Schema.optionalKey(Schema.Json)
 });
 const capture = (answer: (sent: typeof Sent.Type) => Response) => {
 	const seen: { url: string; sent: typeof Sent.Type }[] = [];
@@ -585,7 +589,7 @@ describe('open_ai_chat', () => {
 			})
 	);
 	it.effect(
-		'sends files on the last user message, parses structured output, and rejects a refusal with its status',
+		'sends loose files on the first user message so later turns preserve the prefix, parses structured output, and rejects a refusal with its status',
 		() =>
 			Effect.gen(function* () {
 				const { f, seen } = capture((sent) =>
@@ -616,9 +620,8 @@ describe('open_ai_chat', () => {
 					type: 'json_schema',
 					json_schema: { name: 'output', strict: true, schema: { type: 'object' } }
 				});
-				expect(first(sent.messages).content).toBe('look');
-				expect(sent.messages[2]?.content).toEqual([
-					{ type: 'text', text: 'again' },
+				expect(first(sent.messages).content).toEqual([
+					{ type: 'text', text: 'look' },
 					{ type: 'text', text: 'attachment-1' },
 					{ type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } },
 					{
@@ -626,6 +629,7 @@ describe('open_ai_chat', () => {
 						text: 'attachment-2 (application/pdf): read_file reads it'
 					}
 				]);
+				expect(sent.messages[2]?.content).toBe('again');
 				expect(
 					yield* collect(infer, {
 						...request,
@@ -927,6 +931,220 @@ describe('open_ai_chat', () => {
 			controller.enqueue(new TextEncoder().encode(': keep-alive\n\n'));
 			yield* Fiber.interrupt(done);
 			expect(Exit.hasInterrupts(yield* Fiber.await(done))).toBe(true);
+		})
+	);
+
+	it.effect(
+		'multi-step infer nudges keep loose files anchored on the first user message byte-for-byte',
+		() =>
+			Effect.gen(function* () {
+				const { f, seen } = capture(() =>
+					Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
+				);
+				const infer = open_ai_chat(config, { fetch: f });
+				const files = [{ mime: 'image/png', bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) }];
+				const base = {
+					model: 'default',
+					system: 'Extract fields',
+					files
+				};
+				yield* collect(infer, {
+					...base,
+					messages: [{ role: 'user', content: 'Extract invoice' }]
+				});
+				yield* collect(infer, {
+					...base,
+					messages: [
+						{ role: 'user', content: 'Extract invoice' },
+						{ role: 'assistant', content: 'partial' },
+						{ role: 'user', content: 'Build the answer with edit and submit' }
+					]
+				});
+				expect(seen).toHaveLength(2);
+				expect(seen[1]?.sent.messages.slice(0, 2)).toEqual(seen[0]?.sent.messages);
+				expect(seen[1]?.sent.messages[3]?.content).toBe('Build the answer with edit and submit');
+			})
+	);
+
+	it.effect(
+		'Anthropic models emit ephemeral cache_control on system, last tool, and penultimate non-system message',
+		() =>
+			Effect.gen(function* () {
+				const { f, seen } = capture(() =>
+					Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
+				);
+				const tools = [
+					{ name: 'read', description: 'Read record', input: { type: 'object' } },
+					{ name: 'write', description: 'Write record', input: { type: 'object' } }
+				];
+				const anthropic = open_ai_chat(
+					{ endpoint: 'https://openrouter.ai/api/v1', models: { default: 'anthropic/claude-sonnet-4' } },
+					{ fetch: f }
+				);
+				// >=2 conversation messages: system + last tool + penultimate non-system message
+				yield* collect(anthropic, {
+					model: 'default',
+					system: 'You are Norbius.',
+					tools,
+					messages: [
+						{ role: 'user', content: 'first question' },
+						{ role: 'assistant', content: 'first answer' },
+						{ role: 'user', content: 'follow up' }
+					]
+				});
+				const multi = seen[0]?.sent;
+				expect(multi?.messages[0]).toEqual({
+					role: 'system',
+					content: [{ type: 'text', text: 'You are Norbius.', cache_control: { type: 'ephemeral' } }]
+				});
+				expect(multi?.tools?.[0]).not.toHaveProperty('cache_control');
+				expect(multi?.tools?.[1]).toMatchObject({
+					type: 'function',
+					cache_control: { type: 'ephemeral' }
+				});
+				expect(multi?.messages[2]).toEqual({
+					role: 'assistant',
+					content: [{ type: 'text', text: 'first answer', cache_control: { type: 'ephemeral' } }]
+				});
+				expect(multi?.messages[3]).toEqual({ role: 'user', content: 'follow up' });
+
+				// single conversation message: system + last tool cached, no message breakpoint
+				yield* collect(anthropic, {
+					model: 'default',
+					system: 'You are Norbius.',
+					tools,
+					messages: [{ role: 'user', content: 'only message' }]
+				});
+				expect(seen[1]?.sent.messages[1]).toEqual({ role: 'user', content: 'only message' });
+
+				// empty assistant tool-call penultimate message: walks back to non-empty prior message
+				yield* collect(anthropic, {
+					model: 'default',
+					system: 'You are Norbius.',
+					messages: [
+						{ role: 'user', content: 'check' },
+						{
+							role: 'assistant',
+							content: { text: '', toolCalls: [{ id: 'c1', name: 'read', input: {} }] }
+						},
+						{ role: 'tool', content: { id: 'c1', name: 'read', result: { ok: true } } }
+					]
+				});
+				expect(seen[2]?.sent.messages[1]).toEqual({
+					role: 'user',
+					content: [{ type: 'text', text: 'check', cache_control: { type: 'ephemeral' } }]
+				});
+				expect(seen[2]?.sent.messages[2]?.content).toBe('');
+
+				// direct claude model id also receives cache_control; non-Anthropic model does not
+				yield* collect(
+					open_ai_chat(
+						{ endpoint: 'https://llm.test/v1', models: { default: 'claude-3-5-sonnet' } },
+						{ fetch: f }
+					),
+					{ model: 'default', system: 'Sys', messages: [{ role: 'user', content: 'hi' }] }
+				);
+				expect(seen[3]?.sent.messages[0]).toEqual({
+					role: 'system',
+					content: [{ type: 'text', text: 'Sys', cache_control: { type: 'ephemeral' } }]
+				});
+				yield* collect(
+					open_ai_chat(
+						{ endpoint: 'https://openrouter.ai/api/v1', models: { default: 'deepseek/deepseek-v3' } },
+						{ fetch: f }
+					),
+					{
+						model: 'default',
+						system: 'Sys',
+						tools,
+						messages: [
+							{ role: 'user', content: 'a' },
+							{ role: 'assistant', content: 'b' },
+							{ role: 'user', content: 'c' }
+						]
+					}
+				);
+				expect(seen[4]?.sent.messages[0]).toEqual({ role: 'system', content: 'Sys' });
+				expect(seen[4]?.sent.tools?.[1]).not.toHaveProperty('cache_control');
+				expect(seen[4]?.sent.messages[2]).toEqual({ role: 'assistant', content: 'b' });
+			})
+	);
+
+	it.effect('OpenAI models emit prompt_cache_key derived from session_of, and OpenRouter sends session_id for all models', () =>
+		Effect.gen(function* () {
+			const { f, seen } = capture(() =>
+				Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
+			);
+			const req1: AiRequest = {
+				model: 'default',
+				system: 'You are Norbius.',
+				messages: [{ role: 'user', content: 'hello' }]
+			};
+			const req2: AiRequest = {
+				...req1,
+				messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'hi' },
+					{ role: 'user', content: 'next' }
+				]
+			};
+			const expectedSession = session_of(req1);
+
+			for (const model of ['openai/gpt-4.1', 'gpt-4o', 'o3-mini']) {
+				const chat = open_router_chat(
+					{ endpoint: 'https://openrouter.ai/api/v1', models: { default: model } },
+					{ fetch: f }
+				);
+				yield* collect(chat, req1);
+				yield* collect(chat, req2);
+			}
+			for (let i = 0; i < 6; i++) {
+				expect(seen[i]?.sent.prompt_cache_key).toBe(expectedSession);
+				expect(seen[i]?.sent.session_id).toBe(expectedSession);
+				expect(seen[i]?.sent.provider).toBeUndefined();
+			}
+
+			// Anthropic on OpenRouter gets session_id + cache_control, no prompt_cache_key and no DeepSeek provider pinning
+			yield* collect(
+				open_router_chat(
+					{
+						endpoint: 'https://openrouter.ai/api/v1',
+						models: { default: 'anthropic/claude-sonnet-4' }
+					},
+					{ fetch: f }
+				),
+				req1
+			);
+			expect(seen[6]?.sent.session_id).toBe(expectedSession);
+			expect(seen[6]?.sent.prompt_cache_key).toBeUndefined();
+			expect(seen[6]?.sent.provider).toBeUndefined();
+
+			// DeepSeek on OpenRouter keeps both session_id AND explicit provider pinning
+			yield* collect(
+				open_router_chat(
+					{ endpoint: 'https://openrouter.ai/api/v1', models: { default: 'deepseek/deepseek-v3' } },
+					{ fetch: f }
+				),
+				req1
+			);
+			expect(seen[7]?.sent.session_id).toBe(expectedSession);
+			expect(seen[7]?.sent.prompt_cache_key).toBeUndefined();
+			expect(seen[7]?.sent.provider).toMatchObject({
+				only: ['together', 'relace/fast', 'deepinfra/fp8', 'baseten'],
+				sort: 'latency',
+				require_parameters: true
+			});
+
+			// Non-OpenRouter endpoint does not get session_id, while OpenAI direct model still gets prompt_cache_key
+			yield* collect(
+				open_router_chat(
+					{ endpoint: 'https://api.openai.com/v1', models: { default: 'gpt-4.1' } },
+					{ fetch: f }
+				),
+				req1
+			);
+			expect(seen[8]?.sent.session_id).toBeUndefined();
+			expect(seen[8]?.sent.prompt_cache_key).toBe(expectedSession);
 		})
 	);
 });

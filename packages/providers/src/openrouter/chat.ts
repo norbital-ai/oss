@@ -1,6 +1,8 @@
-import type { AiRequest, OpenAiChat } from '@norbital-ai/host-api';
-import { open_ai_chat, type OpenAiChatConfig } from '../openai/index.ts';
-import { Array as EffectArray, Hash } from 'effect';
+import type { OpenAiChat } from '@norbital-ai/host-api';
+import { open_ai_chat, session_of, type OpenAiChatConfig } from '../openai/index.ts';
+import { Array as EffectArray } from 'effect';
+
+export { session_of };
 
 type DeepSeekRouting = {
 	readonly provider?: {
@@ -10,14 +12,23 @@ type DeepSeekRouting = {
 	};
 };
 
+const is_open_router = (endpoint: string): boolean => {
+	try {
+		const host = new URL(endpoint).hostname.toLowerCase();
+		return host === 'openrouter.ai' || host.endsWith('.openrouter.ai');
+	} catch {
+		return false;
+	}
+};
+
 /**
  * OpenRouter sorts once and the conversation stays, subject to the account's privacy policy. `only` holds the DeepSeek
  * providers whose prompt cache read 99 to 100% across a conversation (others read 25 to 80%, or serve a stale context, or drop
  * tool arguments), `sort` takes the fastest on the first step, and `session_id` keeps every later step there, where its
  * prefix and cached price are, moving only if that provider fails.
  */
-const deep_seek_routing = (endpoint: string, model: string): DeepSeekRouting =>
-	model.startsWith('deepseek/') && new URL(endpoint).hostname === 'openrouter.ai'
+const deep_seek_routing = (model: string): DeepSeekRouting =>
+	model.startsWith('deepseek/')
 		? {
 				provider: {
 					only: ['together', 'relace/fast', 'deepinfra/fp8', 'baseten'],
@@ -27,16 +38,13 @@ const deep_seek_routing = (endpoint: string, model: string): DeepSeekRouting =>
 			}
 		: {};
 
-/** What never changes in a conversation names it: a compaction starts a new prefix, nothing cached to lose, and sorts again. */
-export const session_of = (request: Pick<AiRequest, 'system' | 'messages'>) =>
-	String(Hash.string(`${request.system ?? ''}${JSON.stringify(request.messages[0])}`));
-
 /** Provider routing uses the resolved model, including a catalog id chosen instead of a configured class. */
 export const open_router_chat =
 	(config: OpenAiChatConfig, options: Parameters<typeof open_ai_chat>[1] = {}): OpenAiChat =>
 	(request) => {
 		const model = config.models[request.model] ?? request.model;
-		const routing = deep_seek_routing(config.endpoint, model);
+		const openRouter = is_open_router(config.endpoint);
+		const routing = openRouter ? deep_seek_routing(model) : {};
 		const configured = config.body?.['provider'];
 		const preferences =
 			typeof configured === 'object' &&
@@ -50,11 +58,13 @@ export const open_router_chat =
 				models: {},
 				body: {
 					...config.body,
+					...(openRouter && config.body?.['session_id'] === undefined
+						? { session_id: session_of(request) }
+						: {}),
 					...(routing.provider === undefined
 						? {}
 						: {
-								provider: { ...routing.provider, ...preferences },
-								session_id: session_of(request)
+								provider: { ...routing.provider, ...preferences }
 							})
 				}
 			},

@@ -54,7 +54,9 @@ const HealthSchema = Schema.Struct({
 type Health = typeof HealthSchema.Type;
 const READY: Health = { state: 'ready' };
 const MINUTE = 60_000,
-	DAY = 1_440 * MINUTE;
+	DAY = 1_440 * MINUTE,
+	/** An unconnected sync stays asleep until a workspace write (such as activating an integration) wakes it. */
+	UNCONNECTED_REST = 365 * DAY;
 /**
  * When a read rests to after `failures` failed slots: a minute, doubling, an hour at most, on a whole multiple of its
  * length, so a workspace's failing syncs wake its database together rather than one after another.
@@ -714,7 +716,7 @@ export function makeRead(e: SyncEngine) {
 		return field === undefined ? [''] : Array.isArray(value) ? [...new Set(value.map(String))] : [];
 	};
 	/** What this generation last learned: each resting sync's end, so a slot in its rest asks no database. */
-	const known = new Map<string, number>();
+	const known = new Map<string, { readonly until: number; readonly integrations: number }>();
 	/**
 	 * The write count each partition's last finished read began at: equal now, nothing was written here since, and the
 	 * next read is told so (`local_unchanged`), so a feed whose source is quiet can answer without asking the workspace.
@@ -742,8 +744,9 @@ export function makeRead(e: SyncEngine) {
 		return read === 0 ? 0 : dayAfter(read);
 	};
 	/**
-	 * When a sync with nothing to read next has something: the first of its connections' rests ending, or tomorrow with
-	 * no connection at all. `undefined` while one can read. Asks the database only when it is awake or the rest is over.
+	 * When a sync with nothing to read next has something: the first of its connections' rests ending, or a year ahead
+	 * with no active connection at all (any workspace write, including activating an integration, wakes it).
+	 * `undefined` while one can read. Asks the database only when it is awake or the rest is over.
 	 */
 	const eligible = (i: Instance, s: RemoteSync) =>
 		i.active &&
@@ -786,7 +789,14 @@ export function makeRead(e: SyncEngine) {
 	const rests = Effect.fn('Syncs.rests')(function* (s: RemoteSync, now: number) {
 		if (!e.links.available) return undefined;
 		const held = known.get(s.name);
-		if (held !== undefined && held > now && !(yield* db.awake)) return held;
+		if (
+			held !== undefined &&
+			held.until > now &&
+			held.integrations === db.integrationWrites() &&
+			!(yield* db.awake)
+		)
+			return held.until;
+		const integrations = db.integrationWrites();
 		const observed = yield* db.quietly(observe(s.definition));
 		const stored = {
 			instances: observed.instances.filter((i) => eligible(i, s)),
@@ -802,8 +812,8 @@ export function makeRead(e: SyncEngine) {
 				)
 			)
 		);
-		const until = ends.length === 0 ? now + DAY : Math.min(...ends);
-		if (until > now) known.set(s.name, until);
+		const until = ends.length === 0 ? now + UNCONNECTED_REST : Math.min(...ends);
+		if (until > now) known.set(s.name, { until, integrations });
 		else known.delete(s.name);
 		return until > now ? until : undefined;
 	});
@@ -921,7 +931,11 @@ export function makeRead(e: SyncEngine) {
 			);
 		}
 		// a quiet read leaves no row to learn this from, and the next slot must not wake a database to find out
-		if (slot && pushes(s)) known.set(s.name, dayAfter(yield* Clock.currentTimeMillis));
+		if (slot && pushes(s))
+			known.set(s.name, {
+				until: dayAfter(yield* Clock.currentTimeMillis),
+				integrations: db.integrationWrites()
+			});
 		return { pages };
 	});
 	/**

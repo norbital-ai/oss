@@ -3,7 +3,7 @@
 // (`modelCall`) cuts a long generation into a continued step instead of a `timeout`; tool calls assemble from
 // their pieces and usage comes from the last chunk. A refusal rejects with the HTTP `status` (the engine spots context
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
-import { Clock, Effect, Exit, Fiber, Option, Queue, Schema, Stream } from 'effect';
+import { Clock, Effect, Exit, Fiber, Hash, Option, Queue, Schema, Stream } from 'effect';
 import { HttpClient, HttpClientRequest } from 'effect/http';
 import {
 	type AiEvent,
@@ -55,10 +55,58 @@ const inFlightBudget = Schema.decodeUnknownOption(
 /** The engine's messages decoded as its transcript rows hold them, by role. */
 const stepOf = Schema.decodeUnknownOption(AiToolResult),
 	saidOf = Schema.decodeUnknownOption(AiAssistantContent);
+/** What never changes in a conversation names it: a compaction starts a new prefix, nothing cached to lose, and sorts again. */
+export const session_of = (request: Pick<AiRequest, 'system' | 'messages'>) =>
+	String(Hash.string(`${request.system ?? ''}${JSON.stringify(request.messages[0])}`));
+
+const CACHE_CONTROL = { type: 'ephemeral' } as const;
+const isAnthropicModel = (model: string): boolean => {
+	const lower = model.toLowerCase();
+	return lower.startsWith('anthropic/') || lower.includes('claude');
+};
+const isOpenAiModel = (model: string): boolean => {
+	const lower = model.toLowerCase();
+	return lower.startsWith('openai/') || lower.startsWith('gpt-') || /^o[1-9]/.test(lower);
+};
+const markMessageCache = (message: Wire): boolean => {
+	const content = message['content'];
+	if (typeof content === 'string') {
+		if (content.length === 0) return false;
+		message['content'] = [{ type: 'text', text: content, cache_control: CACHE_CONTROL }];
+		return true;
+	}
+	if (Array.isArray(content) && content.length > 0) {
+		const last = content[content.length - 1];
+		if (typeof last === 'object' && last !== null && !Array.isArray(last)) {
+			const updated = [...content];
+			updated[updated.length - 1] = { ...last, cache_control: CACHE_CONTROL };
+			message['content'] = updated;
+			return true;
+		}
+	}
+	return false;
+};
+const applyAnthropicCaching = (messages: Wire[], tools: Wire[] | undefined): void => {
+	const first = messages[0];
+	if (first !== undefined && first['role'] === 'system') markMessageCache(first);
+	if (tools !== undefined && tools.length > 0) {
+		const lastTool = tools[tools.length - 1];
+		if (lastTool !== undefined) tools[tools.length - 1] = { ...lastTool, cache_control: CACHE_CONTROL };
+	}
+	const start = first !== undefined && first['role'] === 'system' ? 1 : 0;
+	if (messages.length - start >= 2) {
+		for (let i = messages.length - 2; i >= start; i--) {
+			const msg = messages[i];
+			if (msg !== undefined && markMessageCache(msg)) break;
+		}
+	}
+};
+
 /**
  * Engine messages (`{ text, toolCalls }` assistant rows, `{ id, name, result }` tool rows) as chat messages. A file a call
  * opened follows that call's results as a user message, on the one request after it: at the end, where no later prefix
- * holds it. One whose call is no longer in the history rides the last user message.
+ * holds it. Loose request files (`call === undefined`) anchor on the first user message so later nudges/repairs preserve
+ * the cached prefix; one whose call is no longer in the history rides the last user message.
  */
 function messagesOf(r: AiRequest): Wire[] {
 	const out: Wire[] = r.system === undefined ? [] : [{ role: 'system', content: r.system }];
@@ -126,13 +174,19 @@ function messagesOf(r: AiRequest): Wire[] {
 		} else out.push({ role: 'user', content: textOf(m.content) });
 	}
 	opened();
-	const loose = files
-		.filter((f) => f.call === undefined || !calls.has(f.call))
-		.flatMap((f) => f.parts);
+	const loose = files.filter((f) => f.call === undefined).flatMap((f) => f.parts);
 	if (loose.length > 0) {
+		const first = out.find((m) => m['role'] === 'user' && typeof m['content'] === 'string');
+		if (first === undefined) out.push({ role: 'user', content: loose });
+		else first['content'] = [{ type: 'text', text: first['content'] }, ...loose];
+	}
+	const stranded = files
+		.filter((f) => f.call !== undefined && !calls.has(f.call))
+		.flatMap((f) => f.parts);
+	if (stranded.length > 0) {
 		const last = out.findLast((m) => m['role'] === 'user' && typeof m['content'] === 'string');
-		if (last === undefined) out.push({ role: 'user', content: loose });
-		else last['content'] = [{ type: 'text', text: last['content'] }, ...loose];
+		if (last === undefined) out.push({ role: 'user', content: stranded });
+		else last['content'] = [{ type: 'text', text: last['content'] }, ...stranded];
 	}
 	return out;
 }
@@ -225,33 +279,44 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 				const calls: Call[] = [];
 				const model = config.models[request.model] ?? request.model;
 				const body = yield* Effect.try({
-					try: () => ({
-						...config.body,
-						model,
-						messages: messagesOf(request),
-						stream: true,
-						stream_options: { include_usage: true },
-						...(request.tools === undefined || request.tools.length === 0
-							? {}
-							: {
-									tools: request.tools.map((t) => ({
+					try: () => {
+						const messages = messagesOf(request);
+						const tools: Wire[] | undefined =
+							request.tools === undefined || request.tools.length === 0
+								? undefined
+								: request.tools.map((t) => ({
 										type: 'function',
 										function: { name: t.name, description: t.description, parameters: t.input }
-									}))
-								}),
-						...(request.output === undefined
-							? {}
-							: {
-									response_format: {
-										type: 'json_schema',
-										json_schema: {
-											name: 'output',
-											...(config.strict === true ? { strict: true } : {}),
-											schema: request.output
+									}));
+						if (isAnthropicModel(model)) applyAnthropicCaching(messages, tools);
+						const cacheKey =
+							isOpenAiModel(model) && config.body?.['prompt_cache_key'] === undefined
+								? typeof config.body?.['session_id'] === 'string'
+									? config.body['session_id']
+									: session_of(request)
+								: undefined;
+						return {
+							...config.body,
+							model,
+							messages,
+							stream: true,
+							stream_options: { include_usage: true },
+							...(cacheKey === undefined ? {} : { prompt_cache_key: cacheKey }),
+							...(tools === undefined ? {} : { tools }),
+							...(request.output === undefined
+								? {}
+								: {
+										response_format: {
+											type: 'json_schema',
+											json_schema: {
+												name: 'output',
+												...(config.strict === true ? { strict: true } : {}),
+												schema: request.output
+											}
 										}
-									}
-								})
-					}),
+									})
+						};
+					},
 					catch: Port.failure('ai')
 				});
 				const baseUrl = config.endpoint.replace(/\/$/, '');
