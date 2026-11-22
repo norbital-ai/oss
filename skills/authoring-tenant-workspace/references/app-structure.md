@@ -1,118 +1,46 @@
 # App structure
 
-Where things go on a page. Each kind of thing has one home. Exact props: query the exported component's type. Layout mechanics: [layout-and-scrolling.md](layout-and-scrolling.md).
+Where things go on a page (one home per concern). Exact props: `workspace_lang`. Layout mechanics: [layout-and-scrolling.md](layout-and-scrolling.md).
 
-## Slots
+## Slots & toolbar
 
-A page whose subject is a model is that view: no heading card, paragraph or button row above it.
+A model page is its view — no heading card, paragraph or button row above it.
 
-| Thing                              | Home                                                                                                                                                                                                                                                                                         |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| App identity                       | `AppShell` props; the hero renders them once                                                                                                                                                                                                                                                 |
-| Page scope (company, site, period) | `AppShell` `actions` snippet: one set of pickers every view reads. A status the chosen scope carries goes inside its picker (`Combobox` `badge`), not beside it. On a phone the hero is one line: the title, its description behind an info button, `actions` behind one button in a popover |
-| View-local presentation control    | `toolbar.controls`, never scope                                                                                                                                                                                                                                                              |
-| Page-level operation               | `toolbar.actions`, the ⚡ menu                                                                                                                                                                                                                                                               |
-| One-row operation                  | the view's row `actions`: an automation or guarded verb                                                                                                                                                                                                                                      |
-| One-record operation               | `RecordShell` `actions`                                                                                                                                                                                                                                                                      |
-| A run's progress                   | an item whose `run` returns `ctx.run(…)`; `RunStatus` or `RunsFor` elsewhere                                                                                                                                                                                                                 |
-| Create                             | `toolbar.new`, which opens `RecordShell mode="create"`                                                                                                                                                                                                                                       |
-| Filter and sort                    | the toolbar popover; fixed scope is `where`, a starting filter `initial_filter`                                                                                                                                                                                                              |
-| Row range and paging               | the table's footer                                                                                                                                                                                                                                                                           |
+| Thing | Home |
+| --- | --- |
+| App identity | `AppShell` props (rendered once in hero) |
+| Page-wide scope (company, site, period) | `AppShell` `actions` snippet (one picker set every tab reads; carry scope status inside `Combobox` `badge`, not beside it) |
+| View-local display control | `toolbar.controls` (never scope; never view/sub-report switching) |
+| Page-level operation | `toolbar.actions` (⚡ menu) |
+| Row / record operation | view row `actions` / `RecordShell` `actions` (one primary `Button variant="brand"` directly visible, rest in overflow) |
+| Create / filter / paging | `toolbar.new` (`RecordShell mode="create"`) / toolbar popover (`where` fixed, `initial_filter` default) / table footer |
 
-- The toolbar is one row: title (1 to 3 words), ⓘ `description`, then widgets flush left; New alone flush right and last when wrapped. A slot never moves.
-- No button sits in the header, above or beside a view. A hand-made run button, search box, `<select>` or action bar is a second spelling of a slot.
-- The header's `actions` holds scope pickers only. Placing a picker does not authorize data.
-- A status the chosen scope carries goes inside its picker (`Combobox` `badge`), not beside it.
-- On a phone the hero is one line: title, description behind an info button, `actions` behind one button that opens them in a popover. They stay mounted while it is shut.
+- Toolbar is one row: 1–3 word title, ⓘ `description`, widgets flush left, New alone flush right. Never put buttons above/beside a view or hand-roll search, `<select>` or action bars.
+- Phone hero collapses to one line (title, info button, `actions` popover — stay mounted while closed).
 
-## The ⚡ menu
+## The ⚡ menu & mutations
 
-- It lists Sync now, each file sync's Import, Export and Download template, and Delete selected, with no page wiring. The native `bolt.sync_control(model, sync, input)` operation owns refresh and file transfer; syncs are never automation callables or schedule targets. Remote refresh requires `capabilities.syncs: ['model.sync_name']`; file transfer uses the caller's model grants.
-- A standalone Svelte button executes its mutation through a component-level `const save = use_act(ctx)` and `onclick={() => save.run(ctx.run('reconcile', input))}`. A page call yields its declared output to the `then` callback. A job yields its queue admission; follow its run in `RunStatus`. Creating the Effect in a handler and discarding it performs no write.
-- A `toolbar.actions` item is `icon`, `name`, optional `description` and `run(selected)`. The menu derives the row's state from what `run` returns:
+- Lists Sync now (`capabilities.syncs`), file sync Import/Export/Template, and Delete selected automatically via native `bolt.sync_control(model, sync, input)` (syncs are never automations).
+- Standalone buttons execute through component-level `const save = use_act(ctx)` and `onclick={() => save.run(ctx.run('name', input))}` (creating an Effect without running it writes nothing). Custom record-header actions pass outcomes to `notify_outcome`.
+- `toolbar.actions` items (`icon`, `name`, `description?`, `run(selected)`, `requires_selection?`, `disabled?`): return nothing (closes menu), an Effect (spinner → Done / inline+toast failure), `bolt.act` (toasts committed/`pending_approval`), or `ctx.run` (live `RunStatus` under toolbar). Never manage spinners/toasts manually. Pass `toolbar.context` for file sync scope.
+- `CustomView` over a model inherits its file syncs, title and New. Never loop download clicks; heavy exports belong in a file sync.
 
-| `run` returns             | Row                                                                                   |
-| ------------------------- | ------------------------------------------------------------------------------------- |
-| nothing                   | closes the menu                                                                       |
-| an Effect                 | spinner, then Done; a typed failure shows in place and as a toast                     |
-| an Effect from `bolt.act` | its committed or pending-approval result is toasted; refusals use the failure channel |
-| an Effect from `ctx.run`  | the run's live status under the toolbar                                               |
+## AppShell, tabs & tables
 
-- `requires_selection: true` lists it under Bulk and turns selection on. `disabled: (selected) => string | null` says why not.
-- Never toast or track a spinner for a menu item yourself.
-- `toolbar.context` is what the view is scoped to; file syncs receive it.
-- A `CustomView` over one model names its model source: its menu offers that model's file syncs, title and New; search runs over its own rows.
-- Never loop download clicks. Build documents with a pure helper; an export too heavy for the page is a file sync.
-- A custom record-header action passes its typed outcome to `notify_outcome`.
+- `AppShell`: `variant="page"` (default) pads one view; `variant="full"` leaves body to `Tabs` or `<Scroll inset>` (never wrap a single `<Table>` directly in `variant="full"`).
+- One concern per view (app page, app tab, or record tab): at most one `Table` or `Board` per view; tab title = view title + icon; one tab size (`Tabs` / `TabStrip`, never hand-rolled `role="tab"`). Nested `Tabs` step down automatically (level 1 default, 2 underline, 3 chips; >2 deep go vertical left). Use `keep_alive: true` on form tabs.
+- One compact control size (`Button`: `default`, `icon`, `lg` only for lone non-form CTA). Size controls from parent layout — never fixed `w-*`/`h-*` on inputs/controls.
+- Model tables read displayed fields, labels and currency deps (opening a record reads full view; custom `cell`/row actions keep light row contract). Rows are one line; click opens record (or `on_open`); headers pin/hide/move (no sort). `Board` lanes load infinitely.
 
-## AppShell and tabs
+## Representations, forms & disclosure
 
-- Every page is an `AppShell`. `variant="page"` (default) pads for one view; `variant="full"` leaves the body to `Tabs` or a `Scroll inset`. A heading never repeats the hero.
-- One concern per view (an app page, an app tab, or a tab/panel inside a record representation): at most one `Table` or `Board` per view, never stacked tables or two model lists on one scroll. A tab body renders one view, one `Scroll inset`, or one `Split`.
-- A tab's title is its view's title, with an icon.
-- A model existing only under one parent lives in that record, never a standalone page.
-- Nested `Tabs` step down a level on their own and add no padding; a nested strip of more than two tabs goes vertical on its own.
-- One tab size: use `Tabs`, or `TabStrip` without bodies. Never hand-roll `role="tab"` or restyle a tab.
-- One control size: inputs, pickers, date fields and form buttons are compact. `Button` has `default`, `icon`, and `lg` only for a lone call to action outside forms. Pass a width through `class`, never height, padding or font.
-- A record view has one tab row: `RecordShell` has no History tab; a shell nested in another shows its body only; a tab a page's strip already shows is dropped.
-- A tab holding a form is `keep_alive: true`.
+- Keep identity and primary action in `RecordShell` (always owns visible header/footer and scrolling body — decorate via `footer`/`footer_actions`, never add a second footer). One tab row per record; no duplicate History tab.
+- Group fields by task into compact multi-column `Grid`s (2–3 short fields/row) inside meaningful `Section`s with stable `name` and consistent Lucide `icon` (≥2 controls or 1 large control; never repeat a field across sections; collapse optional notes with `default_open={false}` + `summary` without hiding required choices). Never nest accordions. Keep field order consistent across create/edit/read.
+- One view, one Save (footer submits via shared controller; settings/singletons use `RecordShell` too, no bare page-level `Form`). Pass parent FK in `values` on create; hide parent picker only when non-null.
+- **Readonly vs disabled:** `readonly` (no chrome, copy-on-hover text) = viewer cannot edit; `disabled` (muted editor) = temporarily unavailable. Set once on the shared record controller — never `readonly={!admin}`. Readonly `Field` renders its kind, not `editor`.
+- Inline children use `ChildGrid`/structured renderers preserving unloaded children with IDs + revisions; owned children follow parent lock.
 
-## Table behaviour
+## Charts & run feedback
 
-Rows are one line; a click opens the record; headers do not sort; each header's menu pins, hides and moves; the viewer's layout and page size persist. Pages load from the server; `Board` lanes load infinitely.
-
-Ordinary model tables read their displayed fields, record labels and currency dependencies. Opening a record reads its
-full view separately. Custom cells, row styling, trailing controls, row actions and `on_open` callbacks retain the light
-row contract so existing authored handlers can still read fields outside the displayed columns.
-
-## Representations
-
-- Keep identity and the primary operation in `RecordShell`. Default: a compact multi-column `Grid` (2–3 short fields per row) grouped into meaningful `Section`s; timelines, boards, steps or charts when the data shape calls for them. The shared controller's admitted writes and draft lifecycle stay the contract.
-- Use the same spacing, typography and field order in create, edit and read.
-- Do not repeat a label in help or the summary in each tab. Do not expose configuration the person cannot act on.
-- Forms and views fill their pane. Short controls share a row through `Grid`; long text and complex editors span full width. Prose keeps a readable measure.
-
-## Form layout
-
-- `Form of mode` edits a model's allowlisted fields. Business buttons start automations with typed input.
-- Start with a compact `Grid`. Add a `Section` for a meaningful group, inline related management, or one complex attribute. Group by task, not field kind or database order.
-- A section groups at least two controls or one large control. A lone small field merges into its neighbour.
-- A field never appears in two sections. Repeated values have one add/edit path. Show derived results as readonly.
-- Tabs are for distinct tasks, not length. Never nest accordions.
-- `Section`: give a stable `name` (titles change with locale); `default_open={false}` marks secondary, with a useful `summary`. A collapsed body stays mounted, validates and saves; a section with an error opens itself.
-- Author meaningful native `RecordShell sections` for long create/edit/read forms; do not leave a large field list ungrouped. Reuse the same section paths across modes, keep related short fields on one row, and collapse optional notes/evidence without hiding required choices. Review the open create form as well as a saved record in both themes.
-- Generated record views take `sections`; fields no section lists follow in one group, so nothing disappears. `fields` on create offers fields beyond `values`; on update it restricts and orders.
-
-## Prefill and disclosure
-
-- A create opened from a parent carries the relation in `values`; hide the parent picker only when the value is present. A null prefill never hides a required input.
-- Prefer model defaults for initial values. Custom create flows honour supplied values.
-- Disclosure changes visibility only. Never hide an unresolved required choice or remove an operation.
-
-## Readonly is not disabled
-
-| Mode       | Looks like                                            | Use                                     |
-| ---------- | ----------------------------------------------------- | --------------------------------------- |
-| `readonly` | no field chrome, value as text by kind, copy on hover | a record the viewer may see, not change |
-| `disabled` | editor stays, muted, submit disabled                  | editable in principle, not right now    |
-
-- Set the mode once; it reaches every control. A `Field` may override. A `Form` never inherits an outer mode.
-- Use the shared record controller for view, edit and create. Never `readonly={!admin}` or a parallel policy matcher. An update contract is not permission.
-- A readonly `Field` renders its kind, not its `editor` snippet.
-
-## Inline related information
-
-- Use the shipped structured-value and matrix renderers. The parent's write layers decide accepted child operations.
-- A filtered list is not the whole relation: preserve unseen children and submit explicit operations with IDs and observed revisions.
-- An independently edited child uses its own save; an owned child follows the parent lock.
-- Open the full child representation when needed; never duplicate its fields or permission logic.
-
-## Charts
-
-Name the decision, scope, units and range first. Use a table, status or total if it answers. Aggregate scoped data; never label a capped page as a total. No decorative or duplicate charts.
-
-`<Chart {ctx} of="<model>" x="<field>" y="…" where={…} />` aggregates every bucket of `x` itself; `y` names measures (`count`, `sum.amount`, `avg.<field>`), never a bare field. Over `bolt.aggregate(...)` or rows, `y` names the flattened bucket keys the same way.
-
-Give each titled form section a meaningful `icon` (an existing Iconify id such as `lucide:calendar-days` for dates). Use the same icon for the same concern throughout the workspace. Untitled field flow does not need a decorative section.
-
-Automation feedback uses the native run handle: show admission immediately, follow it with `RunStatus`, and keep a record's `RunsFor` history accessible after reopening. Long automations report their actual stages through `ctx.progress({ text, ratio? })`; `ratio` is a 0–1 fraction only when measurable. Put progress in the record body or footer, not beside its heading controls.
+- `<Chart {ctx} of="<model>" x="<field>" y="count|sum.f|avg.f" where={…} />`: every chart answers a stated decision with scoped aggregates (never capped pages). Give charts a bounded panel height (`~16–20rem`), never `<Bound size="viewport">`.
+- Track jobs via native `RunStatus` and record `RunsFor`; long jobs report `ctx.progress({ text, ratio? })` in the record body/footer.

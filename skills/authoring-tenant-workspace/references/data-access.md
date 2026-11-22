@@ -1,89 +1,26 @@
 # Data access
 
-Use `query` for every read, in pages and server code. Keep ids, decimals and dates in their platform types. Exact shape: `import('@norbital-ai/bolt').ReadRequest`.
-
-- Decode a text id once with `id_of(model)`; never cast a string to `Id<…>`.
+Use `query` for every read. Exact shape: `import('@norbital-ai/bolt').ReadRequest`. Decode text IDs once with `id_of(model)` (never cast to `Id<…>`).
 
 ## Read requests
 
-- A read is one JSON tree: each model names a root and each relation is a nested key. For example, `{ orders: { fields: ['number'], customer: { fields: ['name'] } } }`. Dotted path keys are not a request shape.
-- A root reads one output (`output`, `default` when absent) that a held policy must grant.
-- A native view given a model name (`Table`, `Board`, `Map`, `RecordShell`, their counts and pickers) reads the caller's view output: `default` when held, else the first named output they hold. A page's own `ctx.query` names its output.
-- A layer takes `where`, `fields`, `order_by`, `limit`, `search`, `aggregate`. Only a root takes `output`, `after`, `as_of`.
-- Selecting a ref in `fields` returns its ID. Selecting `customer: { fields: ['name'] }` returns the customer row or null in its place. A named many-layer returns its rows. Automation `rows` inputs contain the default output’s root fields, including ref IDs. Read related records explicitly when the workflow needs them.
-- The answer maps each root to `{ rows, next, total }`. `total` counts every match in the same statement, linear in the match. An index search root and a nested many-layer carry none: use `aggregate` on that layer.
-- A user filter composes with the policy per key (`where` AND, `limit` capped); nothing widens it.
-- A policy filters an output's rows with `where`, and a layer's with `<relation>: { where }`. Own rows: `outputs: { default: { where: { created_by: { eq: { var: 'actor.id' } } } } }`. An output grant's keys are `where`, root `history` and the model's relations; nothing else (no `scope`).
-- Every list defaults to limit 10,000 and the root's order; pass an explicit `limit` and narrow named `outputs`. Record IDs are monotonic UUIDv7: use `order_by: { id: 'desc' }` (or `'asc'`) for stable chronological pagination without extra sort columns. A root returns `next` when more rows remain; pass it as `after` until it is `null` before treating the rows as a complete set. Do not calculate full-book totals from a partial page.
-- Filter and project in the request, never in memory.
+- JSON tree: roots map to models, relations are nested keys (`{ orders: { fields: ['number'], customer: { fields: ['name'] } } }`; no dotted path keys). Selecting a ref in `fields` returns its ID; naming the relation returns its row(s).
+- Root takes `output` (default `'default'`), `after`, `as_of`; layers take `where`, `fields`, `order_by`, `limit`, `search`, `aggregate`. Native views (`Table`, `Board`, `Map`, `RecordShell`, pickers) pick `default` if held else first granted named output; `ctx.query` names its output explicitly.
+- Answer per root: `{ rows, next, total }` (`total` counts all matches; index search & nested many-layers use `aggregate` instead).
+- Pass explicit `limit` (default cap 10,000) and narrow named `outputs`; paginate chronologically with monotonic UUIDv7 `order_by: { id: 'desc' }` (or `'asc'`), following `next` via `after` until `null` for complete sets. Filter and project in SQL, never in memory.
+- Caller read authority: Page = caller; Automation = its `policies`; Effect = its writer; Transform/verdict `ctx.query` = workspace whole rows; File sync = caller; Remote sync = trusted workspace.
 
-| Caller | Reads as |
-| --- | --- |
-| Page | the caller |
-| Automation | its `policies` |
-| Effect | its writer |
-| Write transform, policy verdict (`ctx.query`) | the workspace, whole rows |
-| File sync | the importing or exporting caller |
-| Remote sync | trusted workspace |
+## Reactivity, clocks & operands
 
-A remote sync's pages write as its `policies`; a file's rows as the member importing.
+- `ctx.query` (`PageBolt.query`) subscribes live over SSE on first reactive read (`current`/`loading`/`error`), shares identical queries, and keeps 30s grace + up to 64 inactive client-memory images revalidated by SHA-256 on re-entry (never persisted to browser storage; cleared on release cutover/sign-out).
+- Capture inputs in `$derived` (return `null` for no query). Never mirror into `$state`, poll with `setInterval`, or wire `$effect` refetches. Outside reactivity, `await` reads once or yield as Effect. Run mutations via `fork`/`run` from `@norbital-ai/ui/effect`; mounted DOM resources via `attach`.
+- Pass materialized clock values (`ctx.clock('day').today`, `ctx.clock('minute'|'hour').now`); store refuses relative clock variables in read predicates. Value positions accept `{ field: '<col>' }` or `{ var: 'actor.<name>' }` (`id`, `email`, `phone`, `visitor`, `instance`, `party`; `teams`/`team_tree`/`scopes.<policy>` under `in` only).
+- Past states: `ctx.history` on pages, root `as_of` in server code.
 
-## Live and one-shot reads in a page
+## No N+1, transforms, writes & aggregates
 
-- `ctx.query` (`PageBolt.query(...)`) subscribes live over SSE on its first reactive read of `current`, `loading` or `error`. Identical calls share a subscription; it stops after its last reader, with 30 s grace.
-- Capture inputs in `$derived`; return null for no selected query.
-- Never mirror the answer into `$state`, write manual refresh loops, `setInterval`/timer polling, ad-hoc client refetch/cache state, subscription `$effect`s or generation counters.
-- Outside reactivity, `await` reads once; the same Query also yields as an Effect.
-- Mutations hold their own operation state through `fork` or `run` from `@norbital-ai/ui/effect`. Keep Effects out of Svelte state. Mounted element resources belong to `attach`.
-
-## Time and operands
-
-- Pass `ctx.clock('day').today` or a minute or hour clock's `now` as literal inputs. See [dates-and-time.md](dates-and-time.md).
-- A value position may hold `{ field: '<column>' }` or an actor variable `{ var: 'actor.<name>' }`, resolved per caller in policies and reads alike (an automation's actor matches nothing). Each fits one kind: `id` a `sys_user` ref (`created_by`, `updated_by`), `email`/`phone` text of that format, `visitor` text, `instance` a `sys_integration` ref, `party` any ref; `teams`/`team_tree` (team-format text) and `scopes.<policy>` (refs) only under `in`. `check`, `unique` and a ref's `where` take none.
-- Clock variables (`today`, `now`) are edge-only: view filters, the agent's read and described filters materialize them; the store refuses them, so pass clock values. Actor variables are not edge-only.
-- A prior state of a record is `ctx.history` on a page, or a root `as_of` instant in server code.
-
-## SSR pages
-
-- A public or external page uses `ctx.query` during server rendering, hydration and live updates. See [apps-and-surfaces.md](apps-and-surfaces.md).
-
-## One read, never N+1
-
-- A relation column renders its target's label natively. A custom page names related data as layers of its one read.
-- Never mount a lookup per row or run N+1 `ctx.query` loops: batch lookups with `in` filters (or nested relation layers). Reads started in the same microtask batch into one round trip and one statement; identical reads deduplicate.
-- A read depending on another row's field uses a nested relation in the output.
-
-## Read, then transform
-
-- A computed answer is one read request plus a pure browser-safe `src/lib` helper typed over the rows, called from pages and server code alike. Helpers take time as an argument.
-- Add its layers to the root's output and scope them in the root's policy where needed.
-- Server checks stay in write callbacks, so a client preview is safe. An export too heavy for the page is a file sync.
-
-## Writes
-
-- Every generated write takes an array, so callbacks and the policy see the whole batch.
-- Parent and children belong in one act through write layers: a create row carries child arrays (an id links a non-owned row); an update `set` carries `{ create, update, delete, link, unlink }` per layer.
-- One act map commits all its writes together: `yield* ctx.act({ 'orders.update': [{ target: order, set: { note } }], 'entry.create': [entry] })`. Use `new_id(model)` to mint an ID upfront and link multi-model writes in that single atomic `ctx.act`. A runtime-built map uses the same native boundary and keeps JSON outputs.
-- A durable automation holds several transactions, so separate acts are not atomic.
-- A transform computes every id first, prefetches in at most two reads, then decides per row without crossings.
-
-## Revisions
-
-For an audited model, select `revision` in the read that supplies an update or delete target. For example, `fields: ['status', 'revision']` returns the ID, status and observed revision. An update takes `{target: row, set}`, and a root delete takes `{target: row}`. Bolt checks the revision again when writing. There is no separate observed-revision map. An act yields `committed` or `pending_approval`; refusals, conflicts and uncertain writes are typed failures. A pending create or update is written and held; a pending delete leaves its rows until approval deletes them.
-
-## Aggregates
-
-- Counts, sums and groups use a root or layer `aggregate`, or roll-up fields, never loops. Pages and server bodies use the same read request.
-- Ungrouped answers one object (`count` only when asked); grouped pages buckets, each with `key` and `count`.
-- Shape: `{ by?, count?: true, sum?|avg?|min?|max?: [field], where? }`; `by` is a field, a list, or `{ <day|week|month|quarter|year>: field }`. Set the root's `limit` and follow `next` with `after` when a grouped aggregate has more buckets. A bucket is `{ key: { <by> }, count, sum: { <field> } }`.
-- View counts describe the full authorized scope: reuse them. A figure reused across screens is a roll-up or a shared helper.
-
-## Search
-
-`{ search: { index: input }, limit }` on the same API. The probe's `where` narrows inside the scan; output and grants apply; rerank orders candidates.
-
-## Browser reuse and freshness
-
-Identical live reads in one mounted client share one subscription. A read remains live for 30 seconds after its last consumer leaves, so a quick return uses its current image without another request. After that, its subscription ends; up to 64 inactive authoritative images (4 MiB total) stay in that client's memory. Re-entry sends the read and the image's SHA-256. The server authorizes and executes the read again: an equal answer sends a small `same` frame, a changed answer sends the current value, and a refusal exposes no retained value. An inactive image is never presented as freshly validated before this response. Active views receive selected row patches; uncertain changes fall back to an authoritative read.
-
-The cache belongs to one client, workspace, environment and principal. It is not persisted to browser storage or shared across workspace origins. Release changes clear retained images; signing out or replacing the client ends its cache. A missing, evicted or invalid image takes the normal full-answer path. Reuse saves transfer, never permission checks or freshness checks.
+- Batch lookups with `in` filters or nested relation layers — never mount per-row lookups or N+1 `ctx.query` loops (same-microtask reads batch automatically). Compute derived views with one read + a pure `src/lib` helper taking time as an argument.
+- Every write verb takes an array. Commit parent+children via nested write layers, or multi-model writes in one atomic `ctx.act({ '<model>.<verb>': inputs })` map using `new_id(model)` to link upfront (separate acts in an automation are separate transactions).
+- Select `revision` for audited update/delete targets (`{ target: row, set }` / `{ target: row }`). Acts yield `committed` or `pending_approval`; refusals/conflicts are typed failures.
+- **Aggregates:** `{ by?, count?: true, sum?|avg?|min?|max?: [field], where? }` (`by` supports `{ day|week|month|quarter|year: field }`); page grouped buckets with `limit`/`after`.
+- **Search:** `{ search: { <index>: input }, limit }` or `/semantic <text>` (hybrid vector top-K + FTS RRF).

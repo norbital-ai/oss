@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
 import { afterAll } from 'vitest';
-import { DbError, FacilityFailure, type RawDb } from '@norbital-ai/host-api';
+import { DbError, FacilityFailure, type Lock, type RawDb } from '@norbital-ai/host-api';
 import type { Json } from '../src/decl/values.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -1003,6 +1003,49 @@ describe('durable model sync', () => {
 					expect(seenCursors).toEqual(['snap-3-p2']);
 					expect(yield* names()).toEqual(['Alpha v3', 'Delta v2']);
 					expect(yield* syncState()).toEqual([{ cursor: 'snap-3-p2', cycle: 3, phase: 'read' }]);
+				})
+			)
+	);
+
+	it.live(
+		'settles sync deliveries and refusal rollbacks with advisory locks and no SHARE ROW EXCLUSIVE table locks',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const locks: Lock[] = [];
+					const record = (lock: Lock | undefined) => {
+						if (lock !== undefined) locks.push(lock);
+					};
+					const f = yield* setupFor(manifest, source, (db) => ({
+						...db,
+						write: (statement, lock) => {
+							record(lock);
+							return db.write(statement, lock);
+						},
+						transaction: (batch) => {
+							record(batch.lock);
+							return db.transaction(batch);
+						}
+					}));
+					yield* f.act('create', [{ name: 'Advisory Ok' }]);
+					locks.length = 0;
+					f.mode('ok');
+					yield* f.handler('sync.deliver');
+					yield* f.act('create', [{ name: 'Advisory Refused' }]);
+					f.mode('refuse');
+					yield* f.handler('sync.deliver');
+					expect(locks.some((lock) => lock.mode === 'SHARE ROW EXCLUSIVE')).toBe(false);
+					expect(locks.some((lock) => (lock.tables?.length ?? 0) > 0)).toBe(false);
+					expect(
+						locks.some((lock) =>
+							lock.advisory?.some((key) => key.startsWith('bolt_sync_outbox:contacts.sync.crm:'))
+						)
+					).toBe(true);
+					expect(
+						locks.some((lock) =>
+							lock.advisory?.some((key) => key.startsWith('bolt_sync_record:contacts:'))
+						)
+					).toBe(true);
 				})
 			)
 	);

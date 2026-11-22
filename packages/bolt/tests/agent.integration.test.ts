@@ -1366,7 +1366,7 @@ describe('in-app turns', () => {
 								})(request);
 						return seen.includes('"writes"')
 						? say('The lamp quote check finished.')(request)
-						: use('task_read', { task_id: required(report[1]) })(request);
+						: use('task', { action: 'read', task_id: required(report[1]) })(request);
 					};
 					const fixture = yield* setup(Array.from({ length: 8 }, () => route));
 					const { ai, agent, user } = fixture;
@@ -1419,7 +1419,6 @@ describe('in-app turns', () => {
 				Effect.gen(function* () {
 					const fixture = yield* setup([
 						use('hq__echo', { text: 'hi' }),
-						use('hq__echo', { text: 'hi' }),
 						say('HQ said hi.'),
 						say('Nothing to add.')
 					]);
@@ -1437,11 +1436,11 @@ describe('in-app turns', () => {
 								'skill',
 								'run_tool',
 								'task',
-								'task_read',
-								'task_stop',
 								'hq__echo'
 							])
 						);
+						expect(toolNames(ai.requests[0])).not.toContain('task_read');
+						expect(toolNames(ai.requests[0])).not.toContain('task_stop');
 						const listed = toolNames;
 						// an unreachable server is unavailable, never a failed turn
 						expect(listed(ai.requests[0]).some((name) => name.startsWith('down__'))).toBe(false);
@@ -1450,8 +1449,8 @@ describe('in-app turns', () => {
 						if (held === undefined) throw new Error('Expected an MCP confirmation card');
 						expect(hq.calls).not.toContainEqual({ name: 'echo', arguments: { text: 'hi' } });
 						yield* agent.confirm(held.id, true, yield* authority(ann));
-						// the approval runs the agent's same call once
-						expect(toolResults(required(ai.requests[2])).at(-1)).toMatchObject({
+						// approval executes the stored MCP call directly without a second model echo round-trip
+						expect(toolResults(required(ai.requests[1])).at(-1)).toMatchObject({
 							content: [{ type: 'text', text: 'echo: hi' }]
 						});
 						const echo = JSON.stringify({ name: 'echo', arguments: { text: 'hi' } });
@@ -1459,12 +1458,12 @@ describe('in-app turns', () => {
 						const d = yield* agent.start({ owner: bob });
 						yield* agent.post({ conversation: d, as: { member: bob }, text: 'anything?' });
 						yield* agent.drain(d);
-						const names = toolNames(ai.requests[3]);
+						const names = toolNames(ai.requests[2]);
 						// a skill is procedure, not authority: every actor may load every workspace skill
 						expect(names).toContain('skill');
-						expect(catalogueNotes(ai.requests[3]).join('\n')).toContain('- pricing — ');
-						expect(ai.requests[3]?.system).not.toContain('pricing');
-						expect(listed(ai.requests[3]).some((name) => name.startsWith('hq__'))).toBe(false);
+						expect(catalogueNotes(ai.requests[2]).join('\n')).toContain('- pricing — ');
+						expect(ai.requests[2]?.system).not.toContain('pricing');
+						expect(listed(ai.requests[2]).some((name) => name.startsWith('hq__'))).toBe(false);
 						expect(listed(ai.requests[0])).toContain('hq__echo');
 						expect({ mcp: mcpServers(manifest, yield* authority(ann)) }).toMatchObject({
 							mcp: [{ name: 'hq' }]
@@ -2358,10 +2357,11 @@ describe('the host tool catalogue', () => {
 			}).pipe(Effect.provide(context));
 		}))
 	);
-	it.live('a confirmed host call keeps the view its tool declared once the card settles', () =>
+	it.live('a confirmed host call executes directly on approval without model echo and keeps its view', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const ai = cassette();
 			ai.arm([use('stamp', { message: 'Add notes' }), say('Done.')]);
+			const seenInputs: unknown[] = [];
 			const stamp: HostTool = {
 				name: 'stamp',
 				description: 'Stamps a message.',
@@ -2369,7 +2369,10 @@ describe('the host tool catalogue', () => {
 				behavior: {},
 				confirm: () => true,
 				view: () => ({ icon: 'lucide:stamp', verb: 'Stamped', target: 'Add notes', doing: 'Stamping…' }),
-				call: async () => ({ ok: true })
+				call: async (input) => {
+					seenInputs.push(input);
+					return { ok: true, stamped: true };
+				}
 			};
 			const { agent, user, authority, context } = yield* build(ai, { host_tools: [stamp] });
 			return yield* Effect.gen(function* () {
@@ -2379,12 +2382,82 @@ describe('the host tool catalogue', () => {
 				yield* agent.drain(c);
 				const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
 				if (held === undefined) throw new Error('Expected the stamp to wait for confirmation');
+				expect(seenInputs).toEqual([]);
 				yield* agent.confirm(held.id, true, yield* authority(root));
+				// direct execution: host tool ran once with stored args and model got real result on request #2
+				expect(seenInputs).toEqual([{ message: 'Add notes' }]);
+				expect(ai.requests).toHaveLength(2);
+				expect(toolResults(required(ai.requests[1])).at(-1)).toEqual({ ok: true, stamped: true });
 				const settled = (yield* agent.transcript(c)).find((row) => row.id === held.id);
 				expect(settled?.state).toBeNull();
 				// the panel reads the settled card's step line from its stored view, as it reads a call's that needed no card
 				expect(settled?.content).toMatchObject({
-					view: { icon: 'lucide:stamp', verb: 'Stamped', target: 'Add notes', doing: 'Stamping…' }
+					view: { icon: 'lucide:stamp', verb: 'Stamped', target: 'Add notes', doing: 'Stamping…' },
+					result: { ok: true, stamped: true }
+				});
+			}).pipe(Effect.provide(context));
+		}))
+	);
+	it.live('declining a held host call does not execute it and resumes with declined result', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm([use('stamp', { message: 'Skip me' }), say('Understood.')]);
+			let called = 0;
+			const stamp: HostTool = {
+				name: 'stamp',
+				description: 'Stamps a message.',
+				input: { type: 'object' },
+				behavior: {},
+				confirm: () => true,
+				call: async () => {
+					called++;
+					return { ok: true };
+				}
+			};
+			const { agent, user, authority, context } = yield* build(ai, { host_tools: [stamp] });
+			return yield* Effect.gen(function* () {
+				const root = yield* user('root-decline', { admin: true });
+				const c = yield* agent.start({ owner: root });
+				yield* agent.post({ conversation: c, as: { member: root }, text: 'Stamp it.' });
+				yield* agent.drain(c);
+				const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+				if (held === undefined) throw new Error('Expected confirmation');
+				yield* agent.confirm(held.id, false, yield* authority(root));
+				expect(called).toBe(0);
+				expect(ai.requests).toHaveLength(2);
+				expect(toolResults(required(ai.requests[1])).at(-1)).toEqual({ declined: true });
+			}).pipe(Effect.provide(context));
+		}))
+	);
+	it.live('approving page control executes the stored page action directly and grants subsequent page actions', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const ai = cassette();
+			ai.arm([
+				use('page', { preview: 'https://preview.example.test/v1' }),
+				use('page', { preview: 'https://preview.example.test/v2' }),
+				say('Opened both.')
+			]);
+			const { agent, user, authority, context } = yield* build(ai);
+			return yield* Effect.gen(function* () {
+				const root = yield* user('root-page', { admin: true });
+				const c = yield* agent.start({ owner: root });
+				yield* agent.post({ conversation: c, as: { member: root }, text: 'Open previews.' });
+				yield* agent.drain(c);
+				const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+				if (held === undefined) throw new Error('Expected page confirmation');
+				yield* agent.confirm(held.id, true, yield* authority(root));
+				// First page call executed directly on approval (no echo), and second ran immediately without a second card
+				expect(ai.requests).toHaveLength(3);
+				expect(toolResults(required(ai.requests[1])).at(-1)).toEqual({
+					preview: 'https://preview.example.test/v1'
+				});
+				expect(toolResults(required(ai.requests[2])).at(-1)).toEqual({
+					preview: 'https://preview.example.test/v2'
+				});
+				const settled = (yield* agent.transcript(c)).find((row) => row.id === held.id);
+				expect(settled?.content).toMatchObject({
+					behavior: { page: true },
+					result: { preview: 'https://preview.example.test/v1' }
 				});
 			}).pipe(Effect.provide(context));
 		}))
@@ -2974,7 +3047,7 @@ describe('nothing started in the background ends silently', () => {
 			)
 	);
 	it.live(
-		'task_stop reaches a sub-agent turn another generation runs: one cancelled report, and it ends at its next step',
+		'task stop reaches a sub-agent turn another generation runs: one cancelled report, and it ends at its next step',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {

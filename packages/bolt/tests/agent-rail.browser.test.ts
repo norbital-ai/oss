@@ -104,7 +104,7 @@ const fixture = (preview = false) => {
 		});
 	for (const [index, [name, args]] of ([
 		['task', { description: 'Please include permissions.', prompt: 'Please include permissions.', subagent_type: 'general', task_id: 'rail-child-0' }],
-		['task_stop', { task_id: 'rail-child-5' }]
+		['task', { action: 'stop', task_id: 'rail-child-5' }]
 	] as const).entries())
 		rows.push({
 			...row(`subagent-action-${index}`, index + 10, ''),

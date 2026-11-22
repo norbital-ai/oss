@@ -17,7 +17,7 @@ import { read_lock, read_snapshot, sha256_hex, snapshot_of } from '@norbital-ai/
 import { artifact_port, Pristine } from '@norbital-ai/host-api/node';
 import { DOCS_DIR } from '../../bolt/src/node/docs.ts';
 import { prepare_migrations } from '../src/compiler/migrations.ts';
-import { writeSource } from '../src/compiler/artifact/index.ts';
+import { clientKey, pagesKey, writeSource } from '../src/compiler/artifact/index.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { fingerprint, schema_slice } from '../../bolt/src/engine/schema/plan.ts';
 import { TestWorkspace } from '../src/test/index.ts';
@@ -473,5 +473,49 @@ it.live('refuses obsolete native snapshot metadata without reading its bytes', (
 				Effect.flip
 			)
 		).toMatchObject({ _tag: 'ManifestInvalid' });
+	}).pipe(Effect.provide(NodeServices.layer))
+);
+
+it.live('invalidates clientKey and pagesKey when Bolt/UI versions or bun.lock change', () =>
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem,
+			path = yield* Path.Path;
+		const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-cache-key-' });
+		const boltPkg = path.join(dir, 'node_modules', '@norbital-ai', 'bolt', 'package.json');
+		const uiPkg = path.join(dir, 'node_modules', '@norbital-ai', 'ui', 'package.json');
+		const lockFile = path.join(dir, 'bun.lock');
+		const pageFile = path.join(dir, 'src', 'app', 'site', 'home', '+page.svelte');
+		yield* fs.makeDirectory(path.dirname(boltPkg), { recursive: true });
+		yield* fs.makeDirectory(path.dirname(uiPkg), { recursive: true });
+		yield* fs.makeDirectory(path.dirname(pageFile), { recursive: true });
+		yield* fs.writeFileString(boltPkg, JSON.stringify({ name: '@norbital-ai/bolt', version: '0.0.35' }));
+		yield* fs.writeFileString(uiPkg, JSON.stringify({ name: '@norbital-ai/ui', version: '0.0.35' }));
+		yield* fs.writeFileString(lockFile, 'lock-v1');
+		yield* fs.writeFileString(pageFile, '<h1>Site</h1>');
+		const sources = ['src/app/site/home/+page.svelte'];
+
+		const k0 = yield* clientKey(dir, 'Cache test', publicManifest, []);
+		const p0 = yield* pagesKey(dir, k0, sources);
+
+		// Bump @norbital-ai/bolt version -> invalidates clientKey and pagesKey
+		yield* fs.writeFileString(boltPkg, JSON.stringify({ name: '@norbital-ai/bolt', version: '0.0.36' }));
+		const kBolt = yield* clientKey(dir, 'Cache test', publicManifest, []);
+		const pBolt = yield* pagesKey(dir, kBolt, sources);
+		expect(kBolt).not.toBe(k0);
+		expect(pBolt).not.toBe(p0);
+
+		// Bump @norbital-ai/ui version -> invalidates clientKey and pagesKey
+		yield* fs.writeFileString(uiPkg, JSON.stringify({ name: '@norbital-ai/ui', version: '0.0.36' }));
+		const kUi = yield* clientKey(dir, 'Cache test', publicManifest, []);
+		const pUi = yield* pagesKey(dir, kUi, sources);
+		expect(kUi).not.toBe(kBolt);
+		expect(pUi).not.toBe(pBolt);
+
+		// Change bun.lock -> invalidates clientKey and pagesKey
+		yield* fs.writeFileString(lockFile, 'lock-v2');
+		const kLock = yield* clientKey(dir, 'Cache test', publicManifest, []);
+		const pLock = yield* pagesKey(dir, kLock, sources);
+		expect(kLock).not.toBe(kUi);
+		expect(pLock).not.toBe(pUi);
 	}).pipe(Effect.provide(NodeServices.layer))
 );

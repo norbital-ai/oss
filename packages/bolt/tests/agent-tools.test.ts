@@ -424,7 +424,8 @@ it.effect('a host without source or delegation never advertises those tools', ()
 	const authority = yield* compile_authority(manifest, { actor: member().actor, admin: false, policies: ['staff'] }, 'writer');
 	expect((yield* catalogue(yield* ctx({ authority }))).index['model:tasks']).toContain('reads none');
 	const offered = (yield* catalogue(plain)).fixed.map(tool => tool.name);
-	for (const name of ['workspace_read', 'workspace_grep', 'workspace_glob', 'workspace_list_dir', 'task', 'task_read', 'task_stop']) expect(offered).not.toContain(name);
+	for (const name of ['workspace_read', 'workspace_grep', 'workspace_glob', 'workspace_list_dir', 'task']) expect(offered).not.toContain(name);
+	for (const retired of ['task_read', 'task_stop']) expect(offered).not.toContain(retired);
 }));
 
 describe('job steering lines', () => {
@@ -3654,7 +3655,9 @@ describe('a sub-agent', () => {
 			Effect.gen(function* () {
 				expect(yield* names(yield* ctx({ mode: 'plan' }))).toContain('update_plan');
 				const parent = yield* ctx({ delegation: true, agents: ['general', 'envoy-1'] });
-				expect(yield* names(parent)).toEqual(expect.arrayContaining(['task', 'task_read', 'task_stop']));
+				expect(yield* names(parent)).toContain('task');
+				expect(yield* names(parent)).not.toContain('task_read');
+				expect(yield* names(parent)).not.toContain('task_stop');
 				// a guessed type is refused with the real list; a task answers at once with its id
 				expect(
 					yield* result(parent, 'task', {
@@ -3676,6 +3679,18 @@ describe('a sub-agent', () => {
 				).toMatchObject({
 				result: expect.stringMatching(/^<task id="child" state="running">\n<summary>Background task started<\/summary>/)
 			});
+				expect(yield* result(parent, 'task', { action: 'read', task_id: 'child' })).toMatchObject({
+					result: expect.any(Object)
+				});
+				expect(yield* result(parent, 'task', { action: 'stop', task_id: 'child' })).toMatchObject({
+					result: expect.any(Object)
+				});
+				expect(yield* result(parent, 'task', { action: 'read' })).toMatchObject({
+					result: { error: expect.stringContaining('task_id') }
+				});
+				expect(yield* result(parent, 'task', { action: 'stop' })).toMatchObject({
+					result: { error: expect.stringContaining('task_id') }
+				});
 				const child = [
 				...(yield* names(yield* ctx({ mode: 'plan', child: true }))),
 				...(yield* names(yield* ctx({ child: true })))
@@ -3726,8 +3741,6 @@ describe('a sub-agent', () => {
 				const fixed = (yield* catalogue(yield* ctx({ child: true }))).fixed.map((t) => t.name);
 				for (const n of [
 					'task',
-					'task_read',
-					'task_stop',
 					'update_plan',
 					'act',
 					'run',

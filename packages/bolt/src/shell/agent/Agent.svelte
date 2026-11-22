@@ -54,7 +54,13 @@
 	import SessionRail from './SessionRail.svelte';
 	import { context_meter } from './usage.ts';
 	import Transcript from './Transcript.svelte';
-	import { AgentPanelFailed, refused } from './actions.ts';
+	import {
+		AgentPanelFailed,
+		collectFullTranscript,
+		downloadMarkdown,
+		exportTranscriptMarkdown,
+		refused
+	} from './actions.ts';
 	import PlanCards from './PlanCards.svelte';
 	import Composer from './Composer.svelte';
 	import { attention } from './chime.ts';
@@ -977,6 +983,23 @@
 		pinned = true;
 		port?.scrollTo({ top: 0, behavior: 'instant' });
 	}
+	/** Export the full conversation (paginating all older messages before the live window) as Markdown. */
+	function exportConversation(): void {
+		const id = conversation,
+			loaded = rows,
+			cursor = before,
+			title = current?.title;
+		dispatch(
+			collectFullTranscript(id, loaded, cursor, api.agent.older).pipe(
+				Effect.tap((allRows) =>
+					Effect.sync(() => {
+						downloadMarkdown(exportTranscriptMarkdown(allRows, title));
+					})
+				),
+				Effect.asVoid
+			)
+		);
+	}
 	/** A stored file's link (a made file's card, a workspace screenshot). */
 	const fileHref = (id: string) => bolt.file_url({ id });
 	// Preview and Session are independent panels, opened by their own header controls.
@@ -1352,7 +1375,7 @@
 					{revision_pending} {drafting} {empty} {error} {models} chosen_model={chosenModel} on_pick_model={pickModel}
 					{meter} {catalog} {read} {nav} {entries} file_href={fileHref}
 					on_attach={attach} on_send={send} on_revise={revise} on_dequeue={dequeue} on_cancel_local={cancelLocal} on_move={moveTo}
-					on_open_rail={openRail} on_stop={() => (confirming = 'stop')} on_resume={() => control(false)} />
+					on_open_rail={openRail} on_stop={() => (confirming = 'stop')} on_resume={() => control(false)} on_export={exportConversation} />
 			{/if}
 		</div>
 		<SessionRail {ctx} {rail} bind:rail_el={railEl} bind:focus bind:navigating {conversation} {rows} {inputs} {outputs} {thread} {automation}

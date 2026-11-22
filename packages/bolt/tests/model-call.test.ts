@@ -3,8 +3,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer, Result, Stream } from 'effect';
 import { type AiRequest, type DecisionRequest, Unavailable } from '@norbital-ai/host-api';
-import { modelCall } from '../src/engine/agent/ai.ts';
-import { AdminAi } from '../src/engine/agent/settings.ts';
+import { infer_facility, modelCall } from '../src/engine/agent/ai.ts';
+import { AdminAi, SpendActor, type AgentSettings } from '../src/engine/agent/settings.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Ai } from '../src/engine/ports.ts';
 import type { AiEvent } from '@norbital-ai/host-api';
@@ -121,6 +121,227 @@ describe("the administrator's System 1 and System 2", () => {
 				asked: [undefined, 'named'],
 				inferred: ['default']
 			});
+		})
+	);
+
+	it.effect('routes fast, default, and strong model classes distinctly without flattening to one model', () =>
+		Effect.gen(function* () {
+			const inferred: string[] = [];
+			const runWith = (
+				settings: Partial<AgentSettings>,
+				models: { readonly deciders: readonly string[]; readonly catalog: readonly string[] }
+			) => {
+				inferred.length = 0;
+				const host = Layer.succeed(Ai, {
+					ask: () => Effect.succeed({ answers: {}, cost_usd: 0, provider: 'p' }),
+					maxChoices: undefined,
+					deciders: listing(...models.deciders),
+					models: ['fast', 'default', 'strong'],
+					catalog: listing(...models.catalog),
+					embed: () => Effect.succeed([[1, 2]]),
+					infer: (req) => {
+						inferred.push(req.model);
+						return Stream.empty;
+					}
+				});
+				const db = Layer.succeed(
+					TenantDb,
+					TenantDb.typed({
+						read: (statements) =>
+							Effect.succeed(
+								statements.map(() => ({
+									rows: [
+										{
+											value: JSON.stringify({
+												monthly: null,
+												member: null,
+												policies: {},
+												models: [],
+												system1: null,
+												system2: null,
+												...settings
+											})
+										}
+									],
+									affected: 1
+								}))
+							),
+						write: () => Effect.succeed({ rows: [], affected: 0 }),
+						transaction: () => Effect.succeed([])
+					})
+				);
+				return Effect.gen(function* () {
+					const ai = yield* Ai;
+					yield* Stream.runDrain(ai.infer({ model: 'fast', messages: [] }));
+					yield* Stream.runDrain(ai.infer({ model: 'default', messages: [] }));
+					yield* Stream.runDrain(ai.infer({ model: 'strong', messages: [] }));
+					yield* Stream.runDrain(ai.infer({ model: 'custom/explicit', messages: [] }));
+					return [...inferred];
+				}).pipe(Effect.provide(AdminAi.pipe(Layer.provide(Layer.merge(host, db)))));
+			};
+
+			// Explicit system1 + system2 + strong override: each class routes to its own model
+			expect(
+				yield* runWith(
+					{ system1: 'fast-1', system2: 'mid-2', strong: 'opus-3' },
+					{ deciders: ['jev', 'fast-1'], catalog: ['fast-1', 'mid-2', 'opus-3'] }
+				)
+			).toEqual(['fast-1', 'mid-2', 'opus-3', 'custom/explicit']);
+
+			// Without strong override, strong falls back to system2; without system1 pick, fast uses host decider in catalog
+			expect(
+				yield* runWith(
+					{ system1: null, system2: 'mid-2' },
+					{ deciders: ['jev', 'fast-host'], catalog: ['fast-host', 'mid-2'] }
+				)
+			).toEqual(['fast-host', 'mid-2', 'mid-2', 'custom/explicit']);
+
+			// When no decider is in the chat catalog, fast stays 'fast' (never flattened to system2)
+			expect(
+				yield* runWith(
+					{ system1: null, system2: 'mid-2' },
+					{ deciders: ['jev'], catalog: ['mid-2'] }
+				)
+			).toEqual(['fast', 'mid-2', 'mid-2', 'custom/explicit']);
+		})
+	);
+});
+
+describe('monthly spend caps and accounting across infer_facility, sys_1, and embed', () => {
+	const makeSpendHarness = (settings: AgentSettings) => {
+		let workspaceSpend = 0;
+		const memberSpend = new Map<string, number>();
+		const calls = { ask: 0, infer: 0, embed: 0 };
+		const db = Layer.succeed(
+			TenantDb,
+			TenantDb.typed({
+				read: (statements) =>
+					Effect.sync(() =>
+						statements.map((stmt) => {
+							if (stmt.text.includes("WHERE key = 'agent'"))
+								return { rows: [{ value: JSON.stringify(settings) }], affected: 1 };
+							const member = stmt.params[0];
+							const total = typeof member === 'string' ? (memberSpend.get(member) ?? 0) : workspaceSpend;
+							return { rows: [{ sum: total }], affected: 1 };
+						})
+					),
+				write: (stmt) =>
+					Effect.sync(() => {
+						const cost = Number(stmt.params[0] ?? 0);
+						const member = stmt.params[1];
+						if (typeof member === 'string')
+							memberSpend.set(member, (memberSpend.get(member) ?? 0) + cost);
+						else workspaceSpend += cost;
+						return { rows: [], affected: 1 };
+					}),
+				transaction: () => Effect.succeed([])
+			})
+		);
+		const host = Layer.succeed(Ai, {
+			ask: () =>
+				Effect.sync(() => {
+					calls.ask++;
+					return { answers: {}, cost_usd: 0.6, provider: 'p' };
+				}),
+			maxChoices: undefined,
+			deciders: Effect.succeed({ models: [], default: '' }),
+			models: ['fast', 'default', 'strong'],
+			catalog: Effect.succeed({ models: [], default: 'default' }),
+			embed: () =>
+				Effect.sync(() => {
+					calls.embed++;
+					return [[0.1, 0.2]];
+				}),
+			infer: (req) => {
+				calls.infer++;
+				return Stream.succeed<AiEvent>({
+					_tag: 'Response',
+					response: {
+						content: req.purpose === 'chat' ? 'chat-ok' : 'infer-ok',
+						tool_calls: [],
+						finish: 'stop',
+						usage: { input: 10, output: 5, cost: 0.5 }
+					}
+				});
+			}
+		});
+		return {
+			layer: AdminAi.pipe(Layer.provide(Layer.merge(host, db))),
+			calls,
+			spent: () => ({ workspace: workspaceSpend, members: Object.fromEntries(memberSpend) })
+		};
+	};
+
+	it.effect('records sys_1 and infer_facility spend and blocks subsequent sys_1, infer_facility, and embed calls at workspace cap', () =>
+		Effect.gen(function* () {
+			const harness = makeSpendHarness({
+				monthly: 1.0,
+				member: null,
+				policies: {},
+				models: [],
+				system1: null,
+				system2: null
+			});
+			yield* Effect.gen(function* () {
+				const ai = yield* Ai;
+				const decision: DecisionRequest = { state: 's', questions: { q: { type: 'noul' } } };
+				// 1. sys_1 call succeeds and records $0.60
+				yield* ai.ask(decision);
+				expect(harness.spent().workspace).toBeCloseTo(0.6);
+				// 2. infer_facility call succeeds and records $0.50 -> total $1.10 >= $1.00 cap
+				const infer = infer_facility(ai);
+				expect(yield* infer({ _tag: 'ai.sys_2.infer', args: [{ prompt: 'hi' }] })).toEqual({
+					ok: true,
+					value: 'infer-ok'
+				});
+				expect(harness.spent().workspace).toBeCloseTo(1.1);
+				// 3. Subsequent sys_1, infer_facility, and embed calls are all blocked without reaching host
+				const askBlocked = yield* Effect.flip(ai.ask(decision));
+				expect(askBlocked).toMatchObject({ kind: 'invalid', message: expect.stringContaining('spending limit') });
+				const inferBlocked = yield* infer({ _tag: 'ai.sys_2.infer', args: [{ prompt: 'again' }] });
+				expect(inferBlocked).toMatchObject({ ok: false, error: { kind: 'invalid', message: expect.stringContaining('spending limit') } });
+				const embedBlocked = yield* Effect.flip(ai.embed(['hello'], 'default'));
+				expect(embedBlocked).toMatchObject({ kind: 'invalid', message: expect.stringContaining('spending limit') });
+				expect(harness.calls).toEqual({ ask: 1, infer: 1, embed: 0 });
+			}).pipe(Effect.provide(harness.layer));
+		})
+	);
+
+	it.effect('enforces member caps via SpendActor and does not double-count chat purpose calls', () =>
+		Effect.gen(function* () {
+			const harness = makeSpendHarness({
+				monthly: 10,
+				member: 0.5,
+				policies: {},
+				models: [],
+				system1: null,
+				system2: null
+			});
+			yield* Effect.gen(function* () {
+				const ai = yield* Ai;
+				// Chat purpose calls are accounted by sys_message, not double-recorded in facility spend
+				yield* Stream.runDrain(ai.infer({ model: 'default', purpose: 'chat', messages: [] }));
+				expect(harness.spent().workspace).toBe(0);
+				// Member-attributed facility infer records $0.50 for alice, tripping alice's $0.50 cap
+				const infer = infer_facility(ai);
+				expect(
+					yield* infer({ _tag: 'ai.sys_2.infer', args: [{ prompt: 'hi' }] }).pipe(
+						Effect.provideService(SpendActor, { member: 'alice', policies: [] })
+					)
+				).toEqual({ ok: true, value: 'infer-ok' });
+				expect(harness.spent().members['alice']).toBeCloseTo(0.5);
+				// Alice is now blocked on embed while Bob still succeeds
+				const aliceBlocked = yield* Effect.flip(
+					ai.embed(['hello'], 'default').pipe(
+						Effect.provideService(SpendActor, { member: 'alice', policies: [] })
+					)
+				);
+				expect(aliceBlocked).toMatchObject({ kind: 'invalid', message: expect.stringContaining('member') });
+				const bobOk = yield* ai.embed(['hello'], 'default').pipe(
+					Effect.provideService(SpendActor, { member: 'bob', policies: [] })
+				);
+				expect(bobOk).toEqual([[0.1, 0.2]]);
+			}).pipe(Effect.provide(harness.layer));
 		})
 	);
 });

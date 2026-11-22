@@ -82,6 +82,7 @@ export type AgentEngine = {
 export type DrainOptions = {
 	force?: boolean | undefined;
 	receipts?: readonly Receipt[] | undefined;
+	files?: ToolContext['files'] | undefined;
 	onWrite?: ((row: MessageRow) => Effect.Effect<unknown, EngineError>) | undefined;
 };
 
@@ -173,6 +174,10 @@ export const AGENT_LIMITS = {
  * one statement), each published live like any other write, so the panel's transcript grows patch by patch.
  */
 export const STREAM_FLUSH_MS = 400;
+/** Minimum relative growth of streamed content before another full-row UPDATE (keeps total DB bytes O(N)). */
+export const STREAM_GROWTH_RATIO = 0.15;
+/** Upper bound on silence between live streaming flushes when tokens arrive slowly below the growth threshold. */
+export const STREAM_MAX_SILENCE_MS = 2_000;
 /** A chat's typing presence lapses on its own (WhatsApp's after about 10 s): a working turn renews it this often. */
 export const TYPING_REFRESH_MS = 10_000;
 
@@ -221,7 +226,7 @@ export const APPROVED =
 export type Streamer = {
 	delta(x: string): void;
 	reasoning(x: string): void;
-	end(): Effect.Effect<MessageRow | null, EngineError>;
+	end(flushFinal?: boolean): Effect.Effect<MessageRow | null, EngineError>;
 };
 
 export type CheckProgress = {
@@ -245,7 +250,7 @@ export type TurnState = {
 	mode: 'agent' | 'plan' | 'compact';
 	force: boolean;
 	question: AgentQuestion | null;
-	cut: ({ readonly row: MessageRow } & ModelCarry) | null;
+	cut: ({ readonly row: MessageRow; readonly note: string | undefined } & ModelCarry) | null;
 	reply: MessageRow | null;
 	heard: boolean;
 	typingIn: { integration: string; thread: string } | null;
@@ -471,9 +476,9 @@ export const approvedPageSession = (rows: readonly MessageRow[]): boolean =>
 			card.role === 'tool' &&
 			card.meta?.tag === 'confirm' &&
 			card.state === null &&
-			isObj(card.content.result) &&
-			card.content.result['approved'] === true &&
-			card.meta.call.name === 'page'
+			card.meta.call.name === 'page' &&
+			(card.meta.approved === true ||
+				(isObj(card.content.result) && card.content.result['approved'] === true))
 	);
 
 export const isCatalogueNote = (row: MessageRow) =>

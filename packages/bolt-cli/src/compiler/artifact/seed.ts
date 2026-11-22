@@ -11,7 +11,7 @@ import { build, type Rolldown } from 'vite';
 import type { Json } from 'effect/Schema';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
 import { decode_seed, type PackJson } from '@norbital-ai/bolt/engine';
-import { decode_identity, IDENTITY } from '@norbital-ai/bolt/tooling';
+import { decode_identity, IDENTITY, SYNC_SEED } from '@norbital-ai/bolt/tooling';
 import type { CheckDiagnostic } from '@norbital-ai/host-api';
 import { asset_path } from '@norbital-ai/bolt/artifact';
 import { rowsIn, seedPack } from '../seed.ts';
@@ -265,12 +265,13 @@ function checkPack(
 		return false;
 	}
 
+	const seedableSystem = [...IDENTITY, ...SYNC_SEED] as const;
 	for (const c of Object.keys(rows))
-		if (c.startsWith('sys_') && !IDENTITY.some((model) => model === c))
+		if (c.startsWith('sys_') && !seedableSystem.some((model) => model === c))
 			errors.push({
 				code: 'seed/decode',
 				path,
-				message: `${path}: only ${IDENTITY.join(', ')} are seeded among system exposures, not '${c}'`
+				message: `${path}: only ${seedableSystem.join(', ')} are seeded among system exposures, not '${c}'`
 			});
 	// a JSON Schema a row carries (a value declaring `$schema`) names datatypes in `format` only by their exact shapes
 	for (const [c, list] of Object.entries(rows))

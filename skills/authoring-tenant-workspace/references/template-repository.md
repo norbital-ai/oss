@@ -1,37 +1,7 @@
 # Template repository metadata
 
-One directory per template at the repository root. Identity and marketing facts live in the template.
+One directory per template at repo root:
 
-| Path                                | Supplies                                                                                                      |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `norbital.template.json`            | handle, catalogue copy, tags, visibility, counts                                                              |
-| `README.md`                         | the detail page body                                                                                          |
-| `docs/screenshots/application.webp` | the template's one image: the README's first figure, website card, `og:image` and picker thumbnail, 1920×1080 |
-
-An app's `banner` is separate: workspace assets shipped in the artifact.
-
-## Two names
-
-- Directory: repository path and public URL slug. Kebab-case.
-- Handle: the manifest's `key`, the tenant id when hosted. `norbital_*`.
-- They may differ. Never assume one from the other or rename one to match. Both are unique across template repositories.
-
-## Manifest
-
-| Field                             | Required  | Meaning                                            |
-| --------------------------------- | --------- | -------------------------------------------------- |
-| `schema_version`                  | yes       | `1`                                                |
-| `key`                             | yes       | the handle                                         |
-| `name`, `description`, `industry` | yes       | nonempty English                                   |
-| `name_zh`, `description_zh`       | no        | maintained Chinese copy                            |
-| `tags`                            | yes       | card chips                                         |
-| `visibility`                      | yes       | `public` or `unlisted`                             |
-| `counts`                          | generated | model, app and automation counts from `bolt build` |
-
-- `bolt build` refreshes `counts` from source roles before packing the catalogue. Omit them in a new template; do not maintain them by hand.
-- The manifest has no `seed` block. Public or private is decided by the repository directory.
-
-## README
-
-- `README.md` is the page and GitHub's view: intro, operating model, pointers to `docs/`. Relative links and images resolve to the repository.
-- `README.zh.md` serves the Chinese page, else `README.md`. Translate whole, same structure, once English is stable. `name_zh` and `description_zh` follow the same rule.
+- `norbital.template.json`: `schema_version: 1`, `key` (`norbital_*` handle), `name`, `description`, `industry`, optional `name_zh`/`description_zh`, `tags`, `visibility` (`public` | `unlisted`), generated `counts` (updated by `bolt build`; omit in new templates; no `seed` block). Directory slug (kebab-case) and `key` (`norbital_*`) may differ — both must be unique across template repos.
+- `README.md` (and `README.zh.md` translated whole once English stabilizes): intro, operating model, `docs/` links.
+- `docs/screenshots/application.webp` (1920×1080): template card, README lead, `og:image` and picker thumbnail (separate from app `banner` assets).

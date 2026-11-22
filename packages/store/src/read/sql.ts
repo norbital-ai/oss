@@ -1151,48 +1151,64 @@ export const compile = Effect.fn('Store.compile')(function* (
 		// romanized spellings, pinyin joins, Latin skeletons); a row meeting any lexeme is found, and one holding every
 		// native word ranks first, then by how much of the query landed. A term of noise is no tsquery: no rows.
 		const hybrid = probe?.field === SEMANTIC;
-		const doc = yield* searchDoc(b, c, a, lv),
-			term = b.bind(hybrid ? ir.search.replace(/^\/semantic\s+/, '') : ir.search, 'text');
-		const any = `bolt_search_query(${term}, false)`;
-		const linked = yield* searchLinks(b, c, a, ir.search, [], lv);
-		const own = `coalesce(${doc} @@ ${any}, false)`;
-		const match = linked.length === 0 ? own : `(${own} OR ${linked.join(' OR ')})`;
-		const rank = `(coalesce(${doc} @@ bolt_search_query(${term}, true), false)::int * 2 + coalesce(ts_rank('{1,1,1,1}', ${doc}, ${any}), 0) + 0.1 / (1 + length(${doc})))`;
-		search = match;
 		if (hybrid && probe !== undefined) {
-			// `/semantic`: the lexical and the embedding rankings fused by reciprocal rank (k = 60), so an exact hit always
-			// outranks a row only the vector found; one page, no cursor (a window rank cannot be sought)
+			// `/semantic`: retrieve vector and lexical top-K candidates in bounded CTEs so PostgreSQL uses the
+			// pgvector HNSW/IVFFlat index (`ORDER BY <vec_col> <=> $param LIMIT <k>`) and GIN FTS index cleanly,
+			// then fuse both rankings by reciprocal rank (k = 60); one page, no cursor.
 			if (c.model.semantic === undefined)
 				return yield* invalid(`'${c.name}' declares no search.semantic`);
 			if (ir.page._tag === 'Limit' && ir.page.after !== undefined)
 				return yield* invalid('a /semantic search reads one page');
 			b.touch(c.model.name, EMBEDDING_COLUMN);
-			const x = `${a}.${q(EMBEDDING_COLUMN)}`,
-				dist = `(${x} <=> ${b.bind(`[${probe.vector.join(',')}]`, 'vector')})`;
-			search = `(${match} OR ${x} IS NOT NULL)`;
-			first = [
-				{
-					expr: `((CASE WHEN ${match} THEN 1.0 / (60 + rank() OVER (ORDER BY ${match} DESC, ${rank} DESC)) ELSE 0 END
-				+ CASE WHEN ${x} IS NOT NULL THEN 1.0 / (60 + rank() OVER (ORDER BY ${dist})) ELSE 0 END)::float8)`,
-					pg: 'float8',
-					dir: 'desc'
-				}
-			];
-			const keys = yield* order_by(b, c, a, [], lv, first);
+			const keyCols = c.model.key;
+			for (const field of keyCols) b.touch(c.model.name, field);
+			const keyList = (alias: string) => keyCols.map((k) => `${alias}.${q(k)}`).join(', ');
+			const keyJoin = (left: string, right: string) =>
+				keyCols.map((k) => `${left}.${q(k)} = ${right}.${q(k)}`).join(' AND ');
+			const keyCoalesce = (left: string, right: string) =>
+				keyCols.map((k) => `COALESCE(${left}.${q(k)}, ${right}.${q(k)}) AS ${q(k)}`).join(', ');
+			const keyOrder = (alias: string) => keyCols.map((k) => `${alias}.${q(k)} asc`).join(', ');
 			const limit = pageLimit(ir.page),
-				take = limit === 'all' ? STORE_LIMITS.page.all + 1 : limit;
-			const where = conj(
-				yield* scope(b, c, a, lv),
-				ir.where === undefined ? null : yield* pred(b, c, a, ir.where, lv),
-				search
-			);
+				take = limit === 'all' ? STORE_LIMITS.page.all + 1 : limit,
+				rerankPage = probe.take > 0 ? probe.take : 100,
+				candidateLimit = Math.min(STORE_LIMITS.page.all + 1, Math.max(rerankPage, take * 4));
+			const v = b.alias(),
+				vt = b.alias(),
+				l = b.alias(),
+				ft = b.alias(),
+				fr = b.alias(),
+				vr = b.alias(),
+				f = b.alias();
+			const vx = `${v}.${q(EMBEDDING_COLUMN)}`,
+				vecParam = b.bind(`[${probe.vector.join(',')}]`, 'vector'),
+				vWhere = conj(
+					yield* scope(b, c, v, lv),
+					ir.where === undefined ? null : yield* pred(b, c, v, ir.where, lv),
+					`${vx} IS NOT NULL`
+				);
+			const cleanText = ir.search.replace(/^\/semantic\s+/, ''),
+				lDoc = yield* searchDoc(b, c, l, lv),
+				lTerm = b.bind(cleanText, 'text'),
+				lAny = `bolt_search_query(${lTerm}, false)`,
+				lLinked = yield* searchLinks(b, c, l, cleanText, [], lv),
+				lOwn = `coalesce(${lDoc} @@ ${lAny}, false)`,
+				lMatch = lLinked.length === 0 ? lOwn : `(${lOwn} OR ${lLinked.join(' OR ')})`,
+				lRank = `(coalesce(${lDoc} @@ bolt_search_query(${lTerm}, true), false)::int * 2 + coalesce(ts_rank('{1,1,1,1}', ${lDoc}, ${lAny}), 0) + 0.1 / (1 + length(${lDoc})))`,
+				lWhere = conj(
+					yield* scope(b, c, l, lv),
+					ir.where === undefined ? null : yield* pred(b, c, l, ir.where, lv),
+					lMatch
+				);
+			const ctes = [
+				`"$vec" AS (SELECT ${keyList(v)}, (${vx} <=> ${vecParam}) AS d FROM ${b.from(c.model.name)} ${v} WHERE ${vWhere} ORDER BY ${vx} <=> ${vecParam} LIMIT ${candidateLimit})`,
+				`"$vec_rank" AS (SELECT ${keyList(vt)}, rank() OVER (ORDER BY ${vt}.d) AS r FROM "$vec" ${vt})`,
+				`"$fts" AS (SELECT ${keyList(l)}, ${lRank} AS s FROM ${b.from(c.model.name)} ${l} WHERE ${lWhere} ORDER BY ${lRank} DESC, ${keyOrder(l)} LIMIT ${candidateLimit})`,
+				`"$fts_rank" AS (SELECT ${keyList(ft)}, rank() OVER (ORDER BY ${ft}.s DESC) AS r FROM "$fts" ${ft})`,
+				`"$fused" AS (SELECT ${keyCoalesce(fr, vr)}, (COALESCE(1.0 / (60 + ${fr}.r), 0) + COALESCE(1.0 / (60 + ${vr}.r), 0))::float8 AS score FROM "$fts_rank" ${fr} FULL OUTER JOIN "$vec_rank" ${vr} ON ${keyJoin(fr, vr)})`
+			];
+			const body = `SELECT to_jsonb(r) AS j FROM (SELECT ${(yield* root(b, c, a, ir.select, lv)).join(', ')} FROM "$fused" ${f} JOIN ${table} ON ${keyJoin(a, f)} ORDER BY ${f}.score DESC, ${keyOrder(a)} LIMIT ${take}) r`;
 			const sql = yield* b.sql(
-				counted(
-					`SELECT to_jsonb(r) AS j FROM (SELECT ${(yield* root(b, c, a, ir.select, lv)).join(', ')} FROM ${table} WHERE ${where} ORDER BY ${keys.map((k) => `${k.expr} ${k.dir}`).join(', ')} LIMIT ${take}) r`,
-					ir.total === true,
-					table,
-					where
-				)
+				`WITH ${ctes.join(', ')} ${counted(body, ir.total === true, '"$fused"', 'true')}`
 			);
 			const compiled: Compiled = {
 				sql,
@@ -1204,6 +1220,14 @@ export const compile = Effect.fn('Store.compile')(function* (
 			};
 			return compiled;
 		}
+		const doc = yield* searchDoc(b, c, a, lv),
+			term = b.bind(ir.search, 'text');
+		const any = `bolt_search_query(${term}, false)`;
+		const linked = yield* searchLinks(b, c, a, ir.search, [], lv);
+		const own = `coalesce(${doc} @@ ${any}, false)`;
+		const match = linked.length === 0 ? own : `(${own} OR ${linked.join(' OR ')})`;
+		const rank = `(coalesce(${doc} @@ bolt_search_query(${term}, true), false)::int * 2 + coalesce(ts_rank('{1,1,1,1}', ${doc}, ${any}), 0) + 0.1 / (1 + length(${doc})))`;
+		search = match;
 		if (ir.order === undefined || ir.order.length === 0)
 			first = [{ expr: `(${rank}::float8)`, pg: 'float8', dir: 'desc' }];
 	}

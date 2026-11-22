@@ -1,85 +1,24 @@
 # Agents and integrations
 
-Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt').mcp>[0]` and `IntegrationLiteral` from `@norbital-ai/bolt`. Read the contract skill's actual file list; there is no envoy source declaration or assumed envoy card.
+Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt').mcp>[0]`, `IntegrationLiteral`. There is no envoy source role.
 
-## Briefs and skills
+## Briefs, skills & agent automations
 
-- `+agent.md` briefs staff; `+agent.external.md` briefs external members. Keep `+agent.md` minimal: end-user domain rules and evidence only — never authority, and never duplicate `[Catalogue]`, `KERNEL` or Studio/code instructions (put code invariants in `src/agent/AGENTS.md`). The agent acts as its identity through the same access points as a person.
-- A workspace skill is `src/agent/skill/<name>/`: names match `^[a-z][a-z0-9_]*$`; `+skill.md` has `description:` frontmatter. It may include scripts and vendored pure-JavaScript packages, at most 10 MiB, no links.
-- Skill design, scoping and structure: follow the `skill-authoring` skill.
-- A script runs as written through `run_js { file }` or inline `run_js { code }`: its tree is read-only at `/app`, files at `/in/<name>`, and `/out` (or returned `{ files }` from inline `run_js`) surfaces as downloadable attachments in chat. Only `fs`, `path`, `buffer`, `process`, `util` built-ins exist; `fetch` needs the `http` grant.
-- Policies grant MCP servers and host tools through `capabilities`; every skill is open to every actor.
-- A brief or skill handling documents says which part to read, never the whole file. A format with no parser is the workspace's to parse with a tool or integration. Record imports stay on syncs.
-- Ask questions through the structured input tool and let its native card collect the answer. The user's workspace `page` tool exists only in a root web conversation and confirms once per conversation; the fleet `browser` needs no confirmation. Delegated subagents (`task`) exclude every approval-gated tool (`act`, `run`, `decide`, `invite`, `page`, `connect`, `download`, MCP, `run_js http: 'send'`, confirmed host tools). Envoys, automation inference and delegated agents have no user tab; use the separate fleet browser when available for research.
-- Within a step containing parallel tool calls, non-approval calls finish while every approval-gated call emits its card; the turn halts after the step settles and takes no next step until every approval is answered.
-
-## Agent automations
-
-- An agent tool is an ordinary `src/automation/+<name>.automation.ts` declaration. The agent may start it only after the person confirms each start (`agent: 'confirm'`, the default); `agent: 'never'` keeps it from the agent. The automation's required `policies` provide its authority.
-- Use `mode: 'call'` for an immediate typed answer and the default job mode for durable work. Declare file inputs and use `ctx.files` for stored files. Helpers stay beside their owner.
-- `workspace_install` adds exact dependencies to the working tree. Import pure JavaScript or WebAssembly packages into the automation; the compiler bundles them into the workspace's guest. Native addons, processes and dynamically downloaded code are unavailable.
-- Start it through `ctx.run` or the agent's native automation control. There is no separate tool declaration, `run.ts` entry or `run_tool` call.
+- `+agent.md` (staff) and `+agent.external.md` (external): minimal end-user domain rules only — never authority, `[Catalogue]`, `KERNEL` or code rules (put code invariants in `src/agent/AGENTS.md`).
+- Workspace skills (`src/agent/skill/<name>/+skill.md`, snake_case, `description:` frontmatter, ≤10 MiB pure JS/scripts, no symlinks) follow `skill-authoring`. Scripts run via `run_js { file }` (`/app` read-only, `/in/<name>`, `/out` attachments; built-ins `fs`, `path`, `buffer`, `process`, `util`; `fetch` needs `http` grant). Policies grant MCP/host tools; skills are readable by all.
+- Agent tools are ordinary automations (`agent: 'confirm'` default; `'never'` hides from agent). Install pure JS/WASM deps via `workspace_install`.
+- Delegated subagents (`task`) exclude approval-gated tools (`act`, `run`, `decide`, `invite`, `page`, `connect`, `download`, MCP, `run_js http: 'send'`, confirmed host tools). Parallel tool calls complete non-approval calls while pausing the turn for any emitted approval cards.
 
 ## Envoys
 
-- An envoy is the workspace agent answering senders on a conversation instance. `sys_envoy` rows hold the tenant's name, audience, policies, task and group, delegation, triage and DM settings.
-- Deployment is `sys_integration.envoy` on a workspace account (owner null), at most one envoy per account; `active: false` pauses it. Create and configure accounts at runtime. No source connection slot or release owns their identity. Pair through the native integration setup, where the person supplies credentials.
-- Never seed envoys.
-- `private` admits a sender whose handle matches a member (phone, email, telegram, Slack or Discord id); others get one fixed notice per 15 minutes. Drivers with no member handle (wechat, custom chat) admit nobody. A notice `via` a Slack or Discord connection reaches each recipient with that id by direct message; `ctx.send` addresses one as `to: '@<id>'`. `public` admits anyone. Email is always addressed; group chat follows `group_messages`.
-- An email sender links only when the receiving server vouches for the `From` domain (DMARC, or aligned DKIM); otherwise it is unknown. Say so before promising a private email envoy on a mail server outside Google and Microsoft: it needs the connection's Authentication server.
-- A group turn or unlinked DM holds the envoy's `policies` alone, every actor variable null except `{ var: 'actor.instance' }`.
-- A linked member's DM: `dm: 'union'` adds the member's own policies and team tree, never admin; `dm: 'envoy'`, and every administrator's DM, holds the envoy's policies with operands bound to the member, no member routes, tools or automations.
-- An envoy has no confirmation card: it refuses what the in-app agent confirms (automation starts, deletes and batches, MCP calls, sending scripts, user-tab page actions).
-- Limits are always the envoy's. Envoys never decide approvals.
-- `actor.instance` is the arriving instance, or the instance of a remote sync run, null otherwise, so it fails closed. It types only against an FK to `sys_integration`.
+- Runtime `sys_envoy` rows (name, audience, policies, task, group/delegation/triage/DM settings) deployed via `sys_integration.envoy` on a workspace account (owner null; ≤1 envoy/account; `active: false` pauses; never seed envoys).
+- `private` matches member handles (phone, email with DMARC/aligned DKIM, telegram, Slack/Discord `@<id>`; others get 1 notice/15m; drivers without handles admit nobody); `public` admits anyone.
+- Authority: group turns and unlinked DMs hold envoy `policies` alone (`actor.*` null except `actor.instance`, typed to `sys_integration` FK). Linked member DM: `dm: 'union'` adds member policies/team tree (never admin); `dm: 'envoy'` (and every admin DM) holds envoy policies with member operands. Envoys have no confirmation cards (refuse confirmed actions) and never decide approvals; envoy limits apply.
 
-## Integration definitions
+## Integrations, instances & channels
 
-- `integration('<name>', spec)` declares description, driver, typed configuration, credentials or OAuth, webhook verification and handler, optional `rate`, inline `test`. Models own their syncs; definitions own no business projection.
-- `driver` names a Bolt kind (http, sqlserver, email, chat, calendar) or declares one: `{ name, read, conversation?, … }`. A declared driver runs only where the host registers a provider under its name.
-- `webhook.handle` answers each verified delivery itself: it reads and acts as `webhook.policies` and returns `{ status, body }`. Key its acts by the delivery id.
-- Built-in conversation definitions reserve whatsapp, email, telegram, slack, discord, wechat and chat.
-- `rate` paces every request. HTTP paths stay under the declared HTTPS base URL.
-- A workspace connection serves members' host tools (a repository reference's read) only with `http.lend: true`; without it, administrators' alone. A personal connection serves its owner alone.
-- SQL Server takes structured operations (`DatabaseRequest` from `@norbital-ai/bolt`); inspect that contract before constructing a request. The host bounds execution.
-- Keep template-specific SQL, retention, assembly and business meaning in template source. Provider and platform code hold no domain rules.
-
-## Instances
-
-- An instance is one `sys_integration` row: integration, name, owner, envoy, active, configuration, host-written status. Configuration is decoded on every write.
-- Create any number of accounts through native `sys_integration` grants. Pairing, pause, configuration and envoy deployment stay runtime; persisted account identities and sealed credentials let the host reopen their links after a restart.
-- Credentials stay sealed host-side, never in configuration, seeds, status, browser data or guest contexts.
-- A personal instance has an owner: it syncs, sends no conversation messages, deploys no envoy.
-- Manage through `sys_integration` grants; pair, unpair, test and status authorize as update on that row. Use native Settings and Connections, never a template account model.
-- `ctx.integration(instance)` gives Effect operations and a status Stream. Native `IntegrationSetup` owns the setup flow; `+integration.svelte` uses the supplied controller only when setup truly differs; its optional `create` export replaces the generic New connection form. Connections are made at runtime, never in source.
-- Automations call `ctx.request(instance, op)` and `ctx.send`. Resolve an active workspace account from runtime records and narrow its definition with `instance_id`; refuse missing or ambiguous routing. A send may queue before pairing, while a live request needs its connected account. Decode external answers once. A response editing a read row passes that selected row as `target`.
-- One OAuth redirect per workspace, `<public URL>/hooks/oauth/callback`; state routes it. Tokens refresh host-side. A Google sign-in needs no tenant client; declare `oauth` only to use the workspace's own.
-- A record's instance ref pins its definition with `where` and carries `InstanceId`.
-
-## Channels
-
-1. Native channels: whatsapp, email, telegram, slack, discord, wechat.
-2. Through the system `chat` integration: Teams, Google Chat, Lark, WeCom, Webex, Mattermost, Messenger, Instagram, X, XChat, LINE, Zalo, QQ, Weixin, Twitch, SMS, iMessage, Dial, AgentPhone, Zernio, Novu, GitHub, GitLab, Linear, Notion, Liveblocks, Velt, Gmail and Resend. WhatsApp Cloud and Kapso sit under whatsapp.
-3. `sys_integration.create { integration: 'chat', name, envoy }`, then the person pairs it, picking the platform and pasting its settings. Their senders match no member, so give these connections a public envoy.
-4. A platform on neither list has no native channel. An `http` definition cannot host an envoy and a workspace cannot supply a provider. An integration may verify webhooks and handle each delivery (`webhook.handle`) or retain them for a model sync; committed records may trigger an effect or business job. This does not supply native channel conversations, sender identity or typing. Never declare an automation webhook trigger.
-
-A platform's level decides what can be promised to a customer. Read it from the connection form or `integrations.md` before you say a channel stays in step:
-
-1. `changes` and `history` repair missed messages. `webhook` repairs nothing past the platform's own retries.
-2. A delete reaches Norbital only through a change log, a platform's delete event, or a complete `history` read.
-3. A repaired message keeps file names and sizes, not content, and starts no envoy turn unless it is new and recent.
-
-A daily programmatic message is a cron job calling `ctx.send` through the workspace account that deploys the envoy. It
-creates the account's durable conversation, so recipient follow-up can reach that envoy after pairing. A never-paired or
-disconnected account retains queued messages across host restart; its connected transition releases the queue without
-using up provider attempts while waiting. Keep the returned message id. With an explicit `sys_message` output grant,
-read native status, timeline and `sent_at` before projecting a report's external delivery state. Successful queue
-admission or an in-app notification cannot mark WhatsApp Sent. Provider-id registration is correlation only. Queue
-admission, provider acknowledgement and recipient reply are separate evidence; do not promise exactly-once sending
-across a retried job or automatically retry a non-idempotent uncertain send.
-
-## Proving a connection
-
-1. A preview binds no links: `workspace_try` on a sync answers `unlinked`. `unconnected` means no connection record exists.
-2. Prove decoding in a test with `t.fakes.links.answer`, then start the sync on live after the merge and read the rows.
-3. `channel_check` answers a connection's state on live, sends a real test message with `test`, and on a host with the channel simulator connects with `pair` and writes as a customer with `customer`, through the whole pipeline.
+- `integration('<name>', spec)`: `driver` (`http`, `sqlserver`, `email`, `chat`, `calendar` or host-registered custom), typed configuration/credentials/OAuth, `webhook` (`verify`, `handle` with `webhook.policies` keyed by delivery ID), `rate`, `test`. Built-in conversation names: `whatsapp`, `email`, `telegram`, `slack`, `discord`, `wechat`, `chat`. HTTP paths stay under declared HTTPS base URL; `http.lend: true` shares a workspace connection with members' host tools. SQL Server takes `DatabaseRequest`. Keep domain logic in template source.
+- Runtime instances are `sys_integration` rows (credentials stay sealed host-side; personal instances have an owner and deploy no envoy; manage via native Settings/Connections, never a template account model). `ctx.integration(instance)` provides Effect ops/status; override `+integration.svelte` only when setup differs. OAuth shares `<public URL>/hooks/oauth/callback`.
+- **Channels:** native (`whatsapp`, `email`, `telegram`, `slack`, `discord`, `wechat`) plus `chat` integration (Teams, Google Chat, Lark, WeCom, Webex, Mattermost, Messenger, Instagram, X, LINE, Zalo, QQ, Weixin, Twitch, SMS, iMessage, GitHub, GitLab, Linear, Notion, Gmail, Resend, etc. — use public envoy since senders don't match members). Other platforms have no native channel (use `http` webhooks + syncs, never automation webhook triggers). Only `changes`/`history` repair missed messages (`webhook` does not).
+- **Daily sends:** cron job calling `ctx.send` on active paired workspace account (narrowed with `instance_id`); queued messages survive restarts until paired; derive delivery status from `sys_message` status/`sent_at`, never queue admission or in-app notices.
+- **Proving:** preview has no live links (`workspace_try` returns `unlinked`); prove decoding with `t.fakes.links.answer`, then start sync on live after merge and use `channel_check` (`test`, `pair`, `customer`) on live/simulator.

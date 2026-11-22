@@ -29,7 +29,7 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 | Hosts, facilities, needs                                        | `hosts-and-facilities.md`               |
 | Message catalogs, raw-text rule                                 | `internationalization.md`               |
 | Template manifest, README, thumbnail                            | `template-repository.md`                |
-| Studio commits, rebases, reviews, merges, reverts, rollbacks    | `studio.md`                             |
+| Studio commits, migrations, history, merges, reverts, rollbacks | `studio.md`                             |
 | Rebuild an existing application                                 | `repository-rebuild.md`                 |
 
 Policies, teams, limits, approvals: `norbital-platform`, `references/approvals-and-policies.md`. Tests: `authoring-test-suites`.

@@ -33,6 +33,8 @@ export type Pack = {
 };
 /** The system models a pack may seed, in load order: members, then integration instances (a personal one names its member). */
 export const IDENTITY = ['sys_user', 'sys_integration'] as const;
+/** Sync checkpoint system models a cutover seed may carry through the bounded chunk restorer (never secrets or envoys). */
+export const SYNC_SEED = ['sys_sync', 'sys_sync_row'] as const;
 const IDENTITY_COLUMNS = {
 	sys_user: ['id', 'name', 'email', 'kind', 'active', 'admin', 'team', 'phone', 'telegram', 'slack', 'discord'],
 	sys_integration: ['id', 'integration', 'name', 'owner', 'active', 'configuration']
@@ -229,6 +231,7 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 		});
 		const tables = [
 			...IDENTITY,
+			...SYNC_SEED,
 			...Object.keys(m.models).filter((table) => !Object.hasOwn(SYSTEM.models, table))
 		];
 		const [probe] = yield* db.read([

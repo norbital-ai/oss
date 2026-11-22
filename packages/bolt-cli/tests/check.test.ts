@@ -1177,6 +1177,58 @@ describe('bolt check', () => {
 			// English-only workspaces are not flagged
 			expect(codes(page, enOnly)).toEqual([]);
 		});
+		it('flags unformatted numeric/date columns and adjacent currency+amount pairs on controlled <Table> (check/controlled-table-kinds)', () => {
+			expect(
+				codes({
+					'src/app/a/+bad-pair.page.svelte': [
+						'<Table',
+						'\tof={rows}',
+						'\tcolumns={[',
+						"\t\t{ field: 'currency', label: 'Currency' },",
+						"\t\t{ field: 'amount', label: 'Amount', align: 'end' }",
+						'\t]}',
+						'/>'
+					].join('\n'),
+					'src/app/a/+bad-bare.page.svelte': [
+						'<Table',
+						'\tof={rows}',
+						"\tcolumns={['name', 'amount', { field: 'due_date', label: 'Due' }, { field: 'rate', label: 'Rate' }]}",
+						'/>'
+					].join('\n'),
+					'src/app/a/+bad-script.page.svelte': [
+						'<script lang="ts">',
+						"\tconst cols = $derived([{ field: 'currency', label: 'Ccy' }, { field: 'balance', label: 'Balance' }, { field: 'created_at', label: 'Created' }]);",
+						'</script>',
+						'<Table of={rows} columns={cols} />'
+					].join('\n'),
+					'src/app/a/+good-model.page.svelte':
+						'<Table of="invoices" columns={[\'currency\', \'amount\', \'due_date\']} />',
+					'src/app/a/+good-typed.page.svelte': [
+						'<Table',
+						'\tof={rows}',
+						'\tcolumns={[',
+						"\t\t{ field: 'name', label: 'Name' },",
+						"\t\t{ field: 'amount', label: 'Amount', kind: { kind: 'money', currency: 'USD' } },",
+						"\t\t{ field: 'due_date', label: 'Due', kind: { kind: 'date' } },",
+						"\t\t{ field: 'rate', label: 'Rate', cell: rateCell },",
+						"\t\t{ field: 'total', label: 'Total', align: 'end' }",
+						'\t]}',
+						'/>'
+					].join('\n'),
+					'src/app/a/+good-suppressed.page.svelte': [
+						'<!-- bolt-check:allow controlled-table-kinds -->',
+						"<Table of={rows} columns={['currency', 'amount', 'date']} />"
+					].join('\n')
+				})
+			).toEqual([
+				'check/controlled-table-kinds src/app/a/+bad-pair.page.svelte:5',
+				'check/controlled-table-kinds src/app/a/+bad-bare.page.svelte:3',
+				'check/controlled-table-kinds src/app/a/+bad-bare.page.svelte:3',
+				'check/controlled-table-kinds src/app/a/+bad-bare.page.svelte:3',
+				'check/controlled-table-kinds src/app/a/+bad-script.page.svelte:2',
+				'check/controlled-table-kinds src/app/a/+bad-script.page.svelte:2'
+			]);
+		});
 		it('a host-only @norbital-ai/bolt entry does not resolve for workspace code', () => {
 			expect(() => workspaceEntry('@norbital-ai/bolt/engine')).toThrow(/no workspace entry/);
 			expect(() => workspaceEntry('@norbital-ai/bolt/protocol')).toThrow(/no workspace entry/);

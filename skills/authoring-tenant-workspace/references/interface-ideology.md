@@ -1,21 +1,11 @@
 # Interface ideology
 
-The axioms layout, scroll and spacing derive from.
+Five axioms driving layout, scroll and spacing:
 
-1. **An element never spaces or sizes itself.** Space is granted by a parent or claimed inside a boundary the element draws.
-2. **One primitive, one job.** Compose instead of configuring. A primitive with two responsibilities is two primitives nested.
-3. **Intrinsic over breakpoints.** Layouts respond to their container; the sidebar changes width without changing the viewport.
-4. **One owner per responsibility, per axis, per level.** Scroll, padding and height each have one owner in an ancestor chain. Two scroll owners trap; two padding owners misalign; zero leaves content flush.
-5. **Tokens, never values.** Every space, size, ratio and breakpoint is a named token. `p-[13px]` or `w-[420px]` in an app file is a bug.
+1. **An element never spaces or sizes itself** — space comes from parent `gap` or its own boundary `pad`.
+2. **One primitive, one job** — compose primitives instead of adding classes.
+3. **Intrinsic over breakpoints** — layouts respond to container width, not viewport.
+4. **One owner per responsibility, per axis, per level** — scroll, padding and height each have one ancestor owner.
+5. **Tokens, never arbitrary values** — no `p-[13px]` or `w-[420px]`.
 
-## Density
-
-- No overlap except through `Imposter` inside a `relative` parent. No raw positioning or z-index.
-- Never show one value twice in a region. Do not pair a label with a `Show` of the same field. Section headings are not duplication.
-- Readonly records do not repeat a write restriction under every field; `Field` explains it in Edit.
-- Check plotted chart labels in the real narrow panel. Keep axis layout in the shared `Chart`.
-- Kinds first: `Show` and `Field` before hand-rolled display; a custom field only for what kinds cannot express.
-
-## Records are summaries
-
-Narrow tables summarize records. Choose `columns` and card fields for supporting detail; the identifier is `record_label` or the UUID, never reconstructed per view.
+Density: no overlap except `Imposter` in a `relative` parent; never show one value twice in a region; keep chart axis layout in shared `Chart`; summarize narrow tables with `record_label` (or UUID) and supporting columns via `Show`/`Field`.

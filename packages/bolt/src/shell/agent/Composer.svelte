@@ -13,11 +13,12 @@
 	import { recordMentions, type FinderRead } from '../finder/model.ts';
 	import { commandKey } from '../keyboard.ts';
 	import { context_meter, token_count as k } from './usage.ts';
+	import { downloadMarkdown, exportTranscriptMarkdown } from './actions.ts';
 	import Attachments from './Attachments.svelte';
 	let { t, unconfigured, status, rows, queued, draft = $bindable(''), mode = $bindable(null),
 		attached = $bindable([]), stored_files = $bindable([]), revising = $bindable(null), picker = $bindable(null),
 		revision_pending, drafting, empty, error, models, chosen_model, on_pick_model, meter, catalog, read, nav, entries,
-		file_href, on_attach, on_send, on_revise, on_dequeue, on_cancel_local, on_move, on_open_rail, on_stop, on_resume }: {
+		file_href, on_attach, on_send, on_revise, on_dequeue, on_cancel_local, on_move, on_open_rail, on_stop, on_resume, on_export }: {
 		t: (key: string) => string;
 		unconfigured: boolean;
 		status: AgentConversation['status'];
@@ -52,6 +53,7 @@
 		on_open_rail: () => void;
 		on_stop: () => void;
 		on_resume: () => void;
+		on_export?: () => void;
 	} = $props();
 	const touch = new MediaQuery('pointer: coarse');
 	const planning = $derived(mode === 'plan' || drafting);
@@ -148,16 +150,8 @@
 		}
 	]);
 	function exportTranscript(): void {
-		const text = rows
-			.filter((r) => r.text)
-			.map((r) => `**${r.role}**: ${r.text}`)
-			.join('\n\n');
-		const a = Object.assign(document.createElement('a'), {
-			href: URL.createObjectURL(new Blob([text], { type: 'text/markdown' })),
-			download: 'conversation.md'
-		});
-		a.click();
-		URL.revokeObjectURL(a.href);
+		if (on_export !== undefined) return on_export();
+		downloadMarkdown(exportTranscriptMarkdown(rows));
 	}
 	function mentions(q: string) {
 		return recordMentions(catalog, read, q, t, {

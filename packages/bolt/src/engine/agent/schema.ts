@@ -110,7 +110,12 @@ const MetaSchema = Schema.Union([
 		complete: Schema.Boolean,
 		gaps: Schema.Array(Schema.String)
 	}),
-	Schema.Struct({ tag: Schema.Literal('confirm'), call: AiToolCallSchema, full: Schema.optionalKey(Schema.Json) }),
+	Schema.Struct({
+		tag: Schema.Literal('confirm'),
+		call: AiToolCallSchema,
+		full: Schema.optionalKey(Schema.Json),
+		approved: Schema.optionalKey(Schema.Literal(true))
+	}),
 	Schema.Struct({
 		tag: Schema.Literal('reply'),
 		receipts: Schema.Array(ReceiptSchema),

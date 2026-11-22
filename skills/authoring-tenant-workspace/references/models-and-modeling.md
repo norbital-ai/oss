@@ -6,93 +6,37 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 | Kind | Rule |
 | --- | --- |
-| `text` | `format`: email, phone, url, zone, markdown, cel; `many`. Email compares case-folded |
-| `int`, `number`, `decimal`, `money` | decimal and money are exact, never floats; money rounds to its currency's minor unit, `scale` keeps more |
-| `currency`, `bool` | |
-| `date`, `instant`, `time`, `duration`, `period` | see [dates-and-time.md](dates-and-time.md); an `instant` named `*_on` or `*_date` is refused |
-| `enum` | `values`, `many`, `transitions` |
-| `state` | `initial`, `states: { s: { to, stamp? } }`; declare editable exceptions in a named lock constraint |
-| `seq` | patterned number, never reused; `{yyyy}` in the workspace zone at commit; `per` scope (no draw while null, redrawn when it changes); `start` floors a series |
-| `sum`, `count` | roll-ups through a relationship's `inverse`, optional `where` |
-| `json` | typed by `shape`, the same literal language |
-| `file` | `accept`, `max` up to 20 MiB; `many: true` holds multiple files |
-| `point` | `{ lat, lng }`; keep an address in a text field |
-| `vector` | `dim` up to 2000, `metric` |
-| `custom` | `of`: a workspace custom field, or built-in money, file, point, phone |
+| `text` | `format`: `email` (case-folded), `phone`, `url`, `zone`, `markdown`, `cel`; `many` |
+| `int`, `number`, `decimal`, `money` | `decimal`/`money` are exact (Effect `BigDecimal`, never floats); `money` rounds to currency minor unit unless `scale` |
+| `currency`, `bool`, `point`, `vector` | `point` `{ lat, lng }`; `vector` `dim` ≤2000, `metric` |
+| `date`, `instant`, `time`, `duration`, `period` | see [dates-and-time.md](dates-and-time.md); `instant` named `*_on`/`*_date` is refused |
+| `enum`, `state` | `enum`: `values`, `many`, `transitions`; `state`: `initial`, `states: { s: { to, stamp? } }` (edit exceptions via `locked` constraint) |
+| `seq` | patterned number, never reused; `{yyyy}` in workspace zone; `per` scope; `start` floor |
+| `sum`, `count` | roll-ups over relationship `inverse`, optional `where` |
+| `json`, `file`, `custom` | `json` typed by `shape`; `file` requires `accept` + `max` (≤20 MiB); `custom` `of` workspace or built-in datatype |
 
-- Common keys: `optional default hidden`; `many: true` declares a list. `was` keeps data through a rename. Uniqueness belongs to named constraints. Captions and help come from the message catalog; declaration fields refuse inline `label` and `help`, including nested input and output kinds.
-- Date and instant defaults may be `{ var }` clock expressions, evaluated at write time. A ref default may be `{ var: 'actor.id' }` or `{ var: 'actor.party' }`. Read predicates hold no time variables.
-- Inputs (automations, integration records, json shapes, custom fields) also admit number, ref, union and record. One declaration types the stored row and every input.
-- System columns `id revision created_at created_by updated_at updated_by` are not field names.
+- Common keys: `optional`, `default`, `hidden`, `many`, `was` (rename-safe). System columns (`id`, `revision`, `created_at`, `created_by`, `updated_at`, `updated_by`) are reserved. No inline `label`/`help` (use message catalog).
+- Date/instant defaults accept `{ var }` clocks; ref defaults accept `{ var: 'actor.id' | 'actor.party' }`.
+- `record_label`: pure CEL over own fields and one-hop default-output `ref`s (no clocks; use conditionals for optionals and `string()` for numbers). Materialized and indexed automatically; outputs must expose its dependencies or UI falls back to UUID.
 
-## Record identifier
+## Relations, constraints & layers
 
-- `record_label` is optional pure CEL over own stored, computed or nested inline values and one-hop to-one relations exposed by the default output. Labels are available only when the caller's selected output exposes every dependency; otherwise the record uses its UUID. No clocks. Use conditionals for optional values and `string(value)` for numbers.
-- The engine materializes and indexes it and rebuilds it on change. Sheets, table titles, pickers, references, search and approvals reuse it. Outputs must expose its dependencies.
-- Without it consumers show the record UUID, and search needs a text entry under `indexes`. Never add a duplicate title field.
+- Foreign key: `{ kind: 'ref', to, inverse, optional?, owned?, on_delete?, where?, default? }` (`to` array = polymorphic; two refs on a join model = M:N). `on_delete`: `restrict` (default), `cascade`, or `set_null` (optional only); owned refs cascade.
+- Named `constraints`: `unique` (array; one `import_key: true` enables `import`), `check`, `no_overlap` (periods), `locked` (`except` lists editable fields; blocks all writers including admins; own direct fields only; children need own lock), optional `message: '<catalogue key>'`. `computed` lives on fields.
+- `outputs`: nested `{ fields, <rel>: { ... } }` trees (`outputs.default` exposes read root; narrower audiences get narrower named outputs). `create`/`update`: column trees (`fields` array + nested many-relation layers up to 5 levels + `transform` + `effect`; `create.filled` marks transform-filled fields). Updates name explicit child ops `{ create, update, delete, link, unlink }` (nothing deleted by omission). Root model's policies govern every layer.
 
-## Relations and layers
+## Write callbacks, operations & search
 
-- A foreign key is a field with `{ kind: 'ref', to, inverse }` and optional `optional`, `owned`, `on_delete`, `where` and `default` settings. A list in `to` declares a polymorphic ref. A model with two refs represents a many-to-many relation.
-- `on_delete` accepts `restrict` by default, `cascade`, or `set_null` for optional refs. Owned refs cascade.
-- Named `constraints` enforce uniqueness and checks, guard periods with `no_overlap` and declare locks with `locked`. One unique constraint may set `import_key: true` for import matching. A lock lists editable fields in `except`. Any named constraint may set `message: '<catalogue key>'` (no placeholders) for its refusal text. Computed fields carry their typed expression on `computed`. A value needing I/O or hashing is stored by a transform or automation.
-- Each output is a tree with `fields` and one nested key per relation. Declaring `outputs.default` exposes the model as a read root.
-- `create` and `update` hold a write tree like an output's: root `fields` (column names; `'all'` is only an output's) and one nested key per child relation, up to five levels, beside `transform` and `effect`; no relation is named `fields`, `filled`, `transform` or `effect`. Each write layer is a many-relation. The engine fills its parent FK. `create.filled` uses the same tree for fields the transform fills.
-- Nothing is deleted by omission: an update names child changes per layer as `{ create, update, delete, link, unlink }`.
-- Use named outputs for narrower audiences. Each layer of an output is visible to its readers under the root's policy.
-- A layer is read or written under the root model's policy alone.
-- A described filter reaches a related record by name through a layer of the caller's output. Declare `<ref>: { fields: ['name'] }` in an output when its holders can read the related name. A bare ref can be filtered by id or by `me`.
+- Create/update `transform(changes, ctx)` receives `{ before, set, after, changed }` (`after` has `set` applied; read `c.after.x`, never `c.set.x ?? c.before.x`). Return sets in order or `{ sets, with, on_approved }`; delete transforms receive `before` and return void or `{ with, on_approved }`.
+- `with`/`on_approved` carry storage writes `{ [model]: { create?, update?: [{ target, set }] } }` (no target transforms/verdicts/effects/triggers; native constraints/locks/history apply). `with` holds/rolls back with root; `on_approved` commits on final approval (`ctx.approving` re-runs transform — return only `on_approved`).
+- Prefetch batch lookups in ≤2 `ctx.query` reads (`as_of: 'act'` sees prospective writes), never per row. 1000-row chunk cap: 3s CPU, one transaction across chunks. Share pure validators in `src/lib`.
+- Business operations are automations (`+<model>_<op>.automation.ts`) taking `{ kind: 'rows', of: '<model>' }` inputs; no named model actions or public upserts.
+- `indexes`: `{ text: [...] }`, `{ semantic: { fields, model, dim } }`, `{ on: [...] }`, or custom vector (`description`, `dim`, `metric`, pure `vector`, `input`, `probe`, optional `rerank`, `candidates` 1–16).
 
-## Locks and moves
+## Syncs, notices & custom fields
 
-- A row matching `locked` refuses update and delete on every path, administrators included. It reads own direct fields only; a child needs its own lock.
-- `enum.transitions`: a write outside them is refused and the editor offers only legal targets. Use `state` for a stamped lifecycle and constraints for editable fields.
-- Never duplicate these rules in a transform, form, shadow status table or parallel transition state machine. Delete refusal belongs to the policy verdict or a named lock, not a delete transform.
-- Use `+team.ts`, `+<name>.policy.ts`, `ctx.approve` and `sys_approval` for access control and approvals — never build custom role, permission or approval models or hand-rolled authorization checks. Approval is a separate lock, never a business state named approved.
-
-## Write callbacks
-
-- Create and update transforms get changes with `before`, `set`, `after` and `changed(...fields)`. `after` is the stored row with `set` applied: read `c.after.x`, never `c.set.x ?? c.before.x`. A create's `after` carries its future id. Return sets in order, or `{ sets, with, on_approved }`. A delete transform gets `before` rows and returns nothing or `{ with, on_approved }`, never rows.
-- `with` and `on_approved` hold `{ [model]: { create?, update?: [{ target, set }] } }`. Each target carries the selected revision. Carried rows are storage writes owned by the carrier's code: their model's transforms, verdicts, effects and write triggers never run; native constraints, locks, state rules and history still apply. Models never call each other implicitly.
-- `with` rows are held and rolled back with the root write. `on_approved` rows commit immediately when no approval holds the write, or once in the final approving decision's statement, all or nothing.
-- The approving decision asks the transform again with `ctx.approving` on the stored rows; return only `on_approved` then and never count those rows twice.
-- Transforms run on every business write path: pages, agent, automations, native sync/import matching, bulk edits, resubmits, restore and nested owned children. Children run after the parent. Seed restores and roll-ups bypass them.
-- Keep semantic validators in browser-safe `src/lib` modules returning `{ field, message }`; forms and the server share them. Client validation never writes.
-- Prefetch the batch through `ctx.query` as the workspace, at most two reads, never per row. A root with `as_of: 'act'` reads the rows as this act will leave them, for checks across the batch.
-- Each 1000-row chunk has 3 s CPU and one callback per verb and model; all chunks share one transaction.
-
-## Operations
-
-- A model exposes `create`, `update` and `delete`; a unique constraint marked `import_key: true` provides native `import`, and file syncs provide file transfer. There is no public upsert or named model action. A computed read is one read request plus a pure helper.
-- A business operation is an automation, `+<model>_<operation>.automation.ts`, with typed input; a run has no implicit target. The records it acts on are a `{ kind: 'rows', of: '<model>' }` input: callers send ids, the body receives the rows read under its policies, and each row is its own write `target`. See [automations-and-effects.md](automations-and-effects.md).
-- Every generated write takes an array. Independent writes that must commit together share one `ctx.act({ '<model>.<verb>': inputs })` map; dependent parent and child use write layers. A transform can carry related rows into the same commit.
-
-## Search
-
-- Named `indexes` entries declare `{ text: ['field'] }`, `{ semantic: { fields, model, dim } }`, physical `{ on: ['field'] }` or a custom vector index. Text indexes and record labels power toolbar and finder search.
-- A custom vector entry holds `description`, `dim`, `metric`, `vector`, typed `input`, `probe`, optional `rerank` and `candidates` (multiplier 1 to 16).
-- A vector callback is pure and returns a vector or null. I/O-derived vectors are written by an automation and named by the index.
-
-## Syncs
-
-Each sync is its own `+<sync>.sync.ts` beside the model's `+model.ts`: `sync('<model>', '<sync>', { … })`. Discover: `import('@norbital-ai/bolt').sync` (its `spec`), `SyncCtx`.
-
-- A remote sync declares `policies`: each page it writes is admitted, planned and its effects run as the reserved system identity holding exactly those, never as admin; a refused change rolls back the same way. Choose the narrowest policy granting what it writes; none may scope by `actor.*` other than `actor.instance`. A read-only synced model declares the synced fields in `create` (and `update`); its `update` fields outside `create` are the local ones others may edit.
-
-- Remote: `with: '<integration>'`, optional `every` and partitions, inline `read` and `write`. A read returns rows (`$id`, `$version`, `$deleted`), cursor and more; only returned source fields sync; page progress commits atomically. A write returns the acknowledged id and version, or null for local changes.
-- The engine owns no-echo, ordering, idempotency, retries, approval timing, conflict rollback and dead letters. A failing read rests per connection, one minute doubling to one hour, until a manual start, connection change or good read.
-- Local changes fan out to every active account of that integration, including changes imported from another account. Do not invent a per-row connection selector.
-- File: `with: 'file'`, `parser`, optional schema and context. Reads and imports keep the caller's scope, outputs and grants; remote bodies read as trusted workspace. Context never elevates authority.
-- A file read gets records with `$at` positions and returns rows plus findings. A write returns records or `{ document: { html }, name }`. One refusal rolls back the file. A `txt` export concatenates columns with no separator.
-- Custom parsers declare an IANA `type`, extensions and an inline generator. Remote data never uses a parser.
-
-## Notices and documents
-
-- A per-verb effect calls `ctx.notify({ title, to, via?, attachments?, link?, once? })` as its writer. Approval lifecycle details are in `ctx.event`; built-in inbox notices need no duplicate callback. `via` names persisted conversation accounts.
-- Declare converter targets in `+workspace.ts`. Page conversion is limited by the policy `convert` limit.
-
-## Custom fields
-
-- `custom_field({ description, shape, validate? })`; the file supplies its name and validation is inline and pure.
-- The optional renderer gets `{ view }` (`CustomFieldView`) in show or edit mode; keep typed values through `on_change`.
-- Renderers apply everywhere the kind shows and bundle statically: keep them light. Without one the shape supplies display and editing.
+- `+<sync>.sync.ts` beside `+model.ts`: `sync('<model>', '<sync>', { ... })`.
+- **Remote sync:** `with: '<integration>'`, required `policies` (no `actor.*` except `actor.instance`), optional `every`/partitions, `read` (`rows` with `$id`/`$version`/`$deleted`, `cursor`, `more`), `write` (returns `$id`/`$version` or `null`). Engine owns no-echo, FIFO, idempotency, retries, backoff (1m→1h), approval wait, rollback, dead letters, and fan-out across active accounts.
+- **File sync:** `with: 'file'`, `parser` (or custom IANA `type`/extensions/generator), optional schema/context; runs under caller's grants/scope; one refusal rolls back the file.
+- Per-verb `effect` sends custom notices via `ctx.notify`; PDFs of records use `ctx.convert.record`.
+- `custom_field({ description, shape, validate? })` + optional light `+renderer.svelte` (`{ view }` with `on_change`).

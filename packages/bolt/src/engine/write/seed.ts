@@ -150,7 +150,8 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 			);
 		});
 		chain.cte('ins', inserts.map((name) => `SELECT * FROM ${name}`).join(' UNION ALL '));
-		seedHistory(chain, c, 'create', 'NULL::jsonb', 'to_jsonb(ins)', 'ins');
+		if (cat.models.get(c)?.fields.has('revision'))
+			seedHistory(chain, c, 'create', 'NULL::jsonb', 'to_jsonb(ins)', 'ins');
 		return [chain.sql('(SELECT count(*)::int FROM ins) AS n')];
 	};
 	/** A seed statement's write context: trusted stamps for the row trigger, and its own history (no raw-SQL trigger). */

@@ -257,12 +257,21 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 
 	const confirm = makeConfirm({
 		config,
+		mcpPort: mcp_port,
+		logs,
+		workspaceSkills,
 		store,
+		queue,
 		resolve,
 		detached,
 		watched,
+		reading,
+		validators,
+		reports,
 		steer: lifecycle.steer,
-		drain
+		kick,
+		drain,
+		stop
 	});
 
 	const attachments = (member: string, refs: readonly Json[]) => attachmentsFor(db, member, refs);

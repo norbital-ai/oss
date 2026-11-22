@@ -175,7 +175,9 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		runPiece(chain, 'flush', `DELETE FROM sys_run WHERE ${queued('$1')} AND NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'pending' AND ${covered})`);
 		messagePiece(
 			chain,
-			`UPDATE sys_message m SET state = NULL, addressed = false WHERE conversation = $1 AND state = 'pending' AND id IN (SELECT jsonb_array_elements_text($3::jsonb))`
+			`UPDATE sys_message m SET state = NULL, addressed = false, seq = settled.seq
+			FROM (SELECT id, nextval(pg_get_serial_sequence('sys_message', 'seq')) AS seq FROM (SELECT id FROM sys_message WHERE conversation = $1 AND state = 'pending' AND id IN (SELECT jsonb_array_elements_text($3::jsonb)) ORDER BY seq) ordered) settled
+			WHERE m.id = settled.id`
 		);
 		const admitted = messagePiece(
 			chain,

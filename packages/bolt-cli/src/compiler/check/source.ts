@@ -30,6 +30,20 @@ const REGION_BOUNDARIES = new Set([
 	'Tabs.Content'
 ]);
 const SELF_SIZED_CONTROLS = new Set(['Input', 'Combobox', 'TimeInput', 'Bound']);
+const CURRENCY_COLUMN_FIELD = 'currency';
+const MONEY_PAIR_COLUMN_FIELDS = new Set(['amount', 'value', 'total', 'balance', 'limit']);
+const TYPED_COLUMN_FIELDS = new Set([
+	'amount',
+	'total',
+	'balance',
+	'cost',
+	'price',
+	'rate',
+	'limit',
+	'date',
+	'due_date',
+	'created_at'
+]);
 const PROSE_COMPONENTS = new Set(['Markdown', 'Prose', 'RichText']);
 const PROSE_CLASS = /(?:^|[\s:'"`])prose(?:$|[\s-'"`])/;
 const FONT_WEIGHT_BAD = /(?:^|[\s:'"`])(font-(?:semibold|bold))(?=$|[\s'"`])/;
@@ -295,6 +309,165 @@ const ROOT_CTX: WalkCtx = {
 	inScrollViewportBound: false
 };
 
+type ControlledColumn = {
+	readonly field: string | undefined;
+	readonly hasKind: boolean;
+	readonly hasCell: boolean;
+	readonly hasAlign: boolean;
+	readonly hasSpread: boolean;
+	readonly start: number;
+};
+
+const unwrapExpr = (node: unknown): unknown => {
+	let cur = node;
+	while (isRecord(cur)) {
+		if (
+			(cur.type === 'TSAsExpression' ||
+				cur.type === 'TSSatisfiesExpression' ||
+				cur.type === 'TSNonNullExpression' ||
+				cur.type === 'TSTypeAssertion' ||
+				cur.type === 'ParenthesizedExpression') &&
+			'expression' in cur
+		) {
+			cur = cur.expression;
+			continue;
+		}
+		if (
+			cur.type === 'CallExpression' &&
+			isRecord(cur.callee) &&
+			cur.callee.type === 'Identifier' &&
+			cur.callee.name === '$derived' &&
+			Array.isArray(cur.arguments) &&
+			cur.arguments.length === 1
+		) {
+			cur = cur.arguments[0];
+			continue;
+		}
+		break;
+	}
+	return cur;
+};
+
+const propName = (key: unknown, computed: unknown): string | undefined => {
+	if (computed === true || !isRecord(key)) return undefined;
+	if (key.type === 'Identifier' && typeof key.name === 'string') return key.name;
+	if (key.type === 'Literal' && typeof key.value === 'string') return key.value;
+	return undefined;
+};
+
+const collectColumnArrays = (
+	expr: unknown,
+	bindings: ReadonlyMap<string, unknown>,
+	out: unknown[],
+	seen = new Set<string>()
+): void => {
+	const cur = unwrapExpr(expr);
+	if (!isRecord(cur)) return;
+	if (cur.type === 'ArrayExpression') {
+		out.push(cur);
+		return;
+	}
+	if (cur.type === 'ConditionalExpression') {
+		collectColumnArrays(cur.consequent, bindings, out, seen);
+		collectColumnArrays(cur.alternate, bindings, out, seen);
+		return;
+	}
+	if (cur.type === 'Identifier' && typeof cur.name === 'string' && !seen.has(cur.name)) {
+		const bound = bindings.get(cur.name);
+		if (bound !== undefined) {
+			seen.add(cur.name);
+			collectColumnArrays(bound, bindings, out, seen);
+		}
+	}
+};
+
+const readControlledColumns = (arrayNode: unknown, fallbackStart: number): ControlledColumn[] => {
+	if (!isRecord(arrayNode) || arrayNode.type !== 'ArrayExpression' || !Array.isArray(arrayNode.elements))
+		return [];
+	const cols: ControlledColumn[] = [];
+	for (const raw of arrayNode.elements) {
+		const el = unwrapExpr(raw);
+		if (!isRecord(el)) {
+			cols.push({
+				field: undefined,
+				hasKind: false,
+				hasCell: false,
+				hasAlign: false,
+				hasSpread: true,
+				start: fallbackStart
+			});
+			continue;
+		}
+		const start = typeof el.start === 'number' ? el.start : fallbackStart;
+		if (el.type === 'Literal' && typeof el.value === 'string') {
+			cols.push({
+				field: el.value,
+				hasKind: false,
+				hasCell: false,
+				hasAlign: false,
+				hasSpread: false,
+				start
+			});
+		} else if (el.type === 'ObjectExpression' && Array.isArray(el.properties)) {
+			let field: string | undefined;
+			let hasKind = false;
+			let hasCell = false;
+			let hasAlign = false;
+			let hasSpread = false;
+			for (const prop of el.properties) {
+				if (!isRecord(prop)) continue;
+				if (prop.type === 'SpreadElement') {
+					hasSpread = true;
+					continue;
+				}
+				if (prop.type !== 'Property') continue;
+				const key = propName(prop.key, prop.computed);
+				if (key === 'field') {
+					const val = unwrapExpr(prop.value);
+					if (isRecord(val) && val.type === 'Literal' && typeof val.value === 'string')
+						field = val.value;
+				} else if (key === 'kind') hasKind = true;
+				else if (key === 'cell') hasCell = true;
+				else if (key === 'align') hasAlign = true;
+			}
+			cols.push({ field, hasKind, hasCell, hasAlign, hasSpread, start });
+		} else {
+			cols.push({
+				field: undefined,
+				hasKind: false,
+				hasCell: false,
+				hasAlign: false,
+				hasSpread: true,
+				start
+			});
+		}
+	}
+	return cols;
+};
+
+const scriptVariableBindings = (script: AST.Script | null): Map<string, unknown> => {
+	const map = new Map<string, unknown>();
+	const content: unknown = script?.content;
+	if (!isRecord(content) || !Array.isArray(content.body)) return map;
+	for (const stmt of content.body) {
+		if (!isRecord(stmt) || stmt.type !== 'VariableDeclaration' || !Array.isArray(stmt.declarations))
+			continue;
+		for (const decl of stmt.declarations) {
+			if (
+				isRecord(decl) &&
+				isRecord(decl.id) &&
+				decl.id.type === 'Identifier' &&
+				typeof decl.id.name === 'string' &&
+				decl.init !== null &&
+				decl.init !== undefined
+			) {
+				map.set(decl.id.name, decl.init);
+			}
+		}
+	}
+	return map;
+};
+
 function checkSvelteMarkup(
 	path: string,
 	text: string,
@@ -305,6 +478,7 @@ function checkSvelteMarkup(
 ): void {
 	const parsed = Result.try(() => parseSvelte(text, { modern: true }));
 	if (Result.isFailure(parsed)) return;
+	const scriptBindings = scriptVariableBindings(parsed.success.instance);
 	const emit = (rule: string, at: number, message: string, extraLine?: number) => {
 		const line = lineOf(at);
 		if (isSuppressed(lines, rule, line, extraLine)) return;
@@ -521,6 +695,64 @@ function checkSvelteMarkup(
 							'non-embedded <Table> inside <Scroll> must be wrapped in <Bound size="viewport"> or moved outside <Scroll>',
 							ctx.scrollLine
 						);
+					if (node.name === 'Table') {
+						const ofAttr = findAttr(node, 'of');
+						const colsAttr = findAttr(node, 'columns');
+						if (
+							ofAttr !== undefined &&
+							ofAttr.value !== true &&
+							staticAttr(node, 'of') === undefined &&
+							colsAttr !== undefined &&
+							colsAttr.value !== true &&
+							!Array.isArray(colsAttr.value)
+						) {
+							const arrays: unknown[] = [];
+							collectColumnArrays(colsAttr.value.expression, scriptBindings, arrays);
+							for (const arrayNode of arrays) {
+								const cols = readControlledColumns(arrayNode, colsAttr.start);
+								const mergedFlagged = new Set<number>();
+								for (let i = 1; i < cols.length; i++) {
+									const prev = cols[i - 1];
+									const curr = cols[i];
+									if (prev?.field === undefined || curr?.field === undefined) continue;
+									const pair =
+										(prev.field === CURRENCY_COLUMN_FIELD &&
+											MONEY_PAIR_COLUMN_FIELDS.has(curr.field)) ||
+										(curr.field === CURRENCY_COLUMN_FIELD &&
+											MONEY_PAIR_COLUMN_FIELDS.has(prev.field));
+									if (pair) {
+										const moneyField =
+											prev.field === CURRENCY_COLUMN_FIELD ? curr.field : prev.field;
+										mergedFlagged.add(prev.field === CURRENCY_COLUMN_FIELD ? i : i - 1);
+										emit(
+											'controlled-table-kinds',
+											curr.start,
+											`controlled <Table> declares adjacent '${prev.field}' and '${curr.field}' columns; merge into one '${moneyField}' column with kind: { kind: 'money', currency: '...' }`,
+											elementLine
+										);
+									}
+								}
+								for (const [i, col] of cols.entries()) {
+									if (mergedFlagged.has(i)) continue;
+									if (
+										col.field !== undefined &&
+										TYPED_COLUMN_FIELDS.has(col.field) &&
+										!col.hasKind &&
+										!col.hasCell &&
+										!col.hasAlign &&
+										!col.hasSpread
+									) {
+										emit(
+											'controlled-table-kinds',
+											col.start,
+											`controlled <Table> column '${col.field}' omits kind, cell and align; declare kind (e.g. money, decimal, date), a cell snippet, or align`,
+											elementLine
+										);
+									}
+								}
+							}
+						}
+					}
 					if (node.name === 'AppShell' && staticAttr(node, 'variant') === 'full') {
 						const shellLine = lineOf(node.start);
 						const scrolls: AST.Component[] = [];

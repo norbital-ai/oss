@@ -246,9 +246,12 @@ export function makeDeliver(e: SyncEngine) {
 			}], now, `EXISTS (SELECT 1 FROM settled WHERE id = ${c.p(r.id)}::uuid
 				${result.status === 'acked' ? "AND status = 'dead'" : ''})`, m.teams, m.workspace.signup?.policies, m.workspace);
 		}
-		// Read/ack metadata merges share a snapshot taken after this lock, never the claim's stale map image.
+		const advisory = [
+			...new Set(results.map((r) => `bolt_sync_outbox:${r.row.sync}:${r.row.instance}`))
+		].sort();
+		// Serialize settlement per (sync, instance) with transaction-scoped advisory locks so concurrent tenant writes never block.
 		const answer = yield* nativeCommit(
-			(statement) => db.write(statement, { tables: ['sys_outbox', 'sys_sync_row'], mode: 'SHARE ROW EXCLUSIVE' }),
+			(statement) => db.write(statement, { advisory }),
 			e.live.publish, c, Schema.Struct({
 			...CapturedResult.fields,
 			next: Schema.NullOr(Schema.String)
@@ -347,7 +350,12 @@ export function makeDeliver(e: SyncEngine) {
 						m.workspace.signup?.policies, m.workspace
 					);
 			}
-		}, { tables: [r.model, 'sys_integration', 'sys_outbox', 'sys_sync_row'].sort(), mode: 'SHARE ROW EXCLUSIVE' });
+		}, {
+			advisory: [
+				`bolt_sync_outbox:${r.sync}:${r.instance}`,
+				`bolt_sync_record:${r.model}:${r.record}`
+			].sort()
+		});
 		if (answer === undefined)
 			return yield* Effect.fail(BoltError.make('bad_answer', 'commit', 'The sync rollback returned no answer.'));
 		if (answer.outcome?.kind === 'conflict') return false;

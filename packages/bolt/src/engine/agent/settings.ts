@@ -1,8 +1,9 @@
 // The assistant's runtime settings: an administrator's monthly spending limits (the workspace's, each member's by
-// default, and each member's by a policy they hold), the models members may pick and the models System 1 and System 2
-// run, kept in `sys_config` under `agent` so they change without a source release. A turn refuses once a limit is
-// reached; the model list narrows the picker (one model hides it) and the model a turn runs.
-import { Effect, Layer, Option, Schema, Stream } from 'effect';
+// default, and each member's by a policy they hold), the models members may pick and the models System 1, System 2 and
+// strong run, kept in `sys_config` under `agent` so they change without a source release. All AI calls (chat,
+// infer_facility, sys_1 decisions, embed) enforce and account against the monthly caps; model classes (`fast`, `default`,
+// `strong`) route distinctly instead of flattening to one model.
+import { Context, Effect, Layer, Option, Schema, Stream } from 'effect';
 import { FacilityFailure } from '@norbital-ai/host-api';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Ai } from '../ports.ts';
@@ -13,8 +14,8 @@ const ModelPick = Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKe
 /**
  * Monthly caps in USD: `monthly` the workspace's spend this calendar month, `member` each member's by default, `policies`
  * each member's by a policy they hold (the most generous of theirs wins over the default); `models` the allowed ids
- * (empty: every model the provider lists); `system1` the model decisions run on, `system2` the one every model class
- * and a new conversation run on (null: the host's own).
+ * (empty: every model the provider lists); `system1` the model decisions and `fast` run on, `system2` the one `default`
+ * runs on, `strong` an optional override for the `strong` class (null/absent: falls back to `system2`, then the host's own).
  */
 export const AgentSettings = Schema.Struct({
 	monthly: Schema.NullOr(Usd),
@@ -24,7 +25,8 @@ export const AgentSettings = Schema.Struct({
 	),
 	models: Schema.Array(Schema.String),
 	system1: ModelPick,
-	system2: ModelPick
+	system2: ModelPick,
+	strong: Schema.optionalKey(Schema.NullOr(Schema.String))
 });
 export type AgentSettings = typeof AgentSettings.Type;
 const NONE: AgentSettings = {
@@ -35,6 +37,13 @@ const NONE: AgentSettings = {
 	system1: null,
 	system2: null
 };
+
+/** Optional member/policy attribution for facility AI calls (`infer_facility`, `sys_1`, `embed`). */
+export const SpendActor = Context.Reference<
+	{ readonly member: string | null; readonly policies: readonly string[] } | undefined
+>('bolt/SpendActor', { defaultValue: () => undefined });
+
+const SPEND_MONTH_SQL = `to_char(date_trunc('month', now() AT TIME ZONE 'UTC'), 'YYYY-MM')`;
 
 export const agentSettings = (db: TenantDbShape) =>
 	db
@@ -50,11 +59,48 @@ export const saveAgentSettings = (db: TenantDbShape, s: AgentSettings) =>
 		params: [JSON.stringify(s)]
 	});
 
-/** What replies cost this calendar month (UTC): the workspace's, and `member`'s own conversations' (sub-agents included). */
+/** Atomically records non-chat AI facility spend (`infer_facility`, `sys_1`, `embed`) in the current UTC month bucket. */
+export const recordSpend = Effect.fn('Agents.recordSpend')(function* (
+	db: TenantDbShape,
+	costUsd: number,
+	member: string | null = null
+) {
+	if (!Number.isFinite(costUsd) || costUsd <= 0) return;
+	yield* db.write({
+		text: `INSERT INTO sys_config (key, value)
+			VALUES ('agent.spend.' || ${SPEND_MONTH_SQL}, ($1::float8)::text)
+			ON CONFLICT (key) DO UPDATE SET value = ((coalesce(nullif(sys_config.value, ''), '0')::float8) + $1::float8)::text`,
+		params: [costUsd]
+	});
+	if (member !== null)
+		yield* db.write({
+			text: `INSERT INTO sys_config (key, value)
+				VALUES ('agent.spend.' || ${SPEND_MONTH_SQL} || '.m.' || $2, ($1::float8)::text)
+				ON CONFLICT (key) DO UPDATE SET value = ((coalesce(nullif(sys_config.value, ''), '0')::float8) + $1::float8)::text`,
+			params: [costUsd, member]
+		});
+});
+
+/** What replies and AI facilities cost this calendar month (UTC): the workspace's, and `member`'s own (sub-agents included). */
 export const spent = (db: TenantDbShape, member: string | null) =>
 	db.value(Schema.Number, {
-		text: `SELECT coalesce(sum((m.meta->'usage'->>'cost')::float8), 0)::float8 FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation
-			WHERE m.copied_from IS NULL AND m.meta->>'tag' IN ('reply', 'failed') AND m.created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR c.owner = $1)`,
+		text: `SELECT (
+			coalesce((
+				SELECT sum((m.meta->'usage'->>'cost')::float8)
+				FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation
+				WHERE m.copied_from IS NULL AND m.meta->>'tag' IN ('reply', 'failed')
+				  AND m.created_at >= date_trunc('month', now())
+				  AND ($1::text IS NULL OR c.owner = $1)
+			), 0)
+			+ coalesce((
+				SELECT (nullif(value, ''))::float8
+				FROM sys_config
+				WHERE key = CASE
+					WHEN $1::text IS NULL THEN 'agent.spend.' || ${SPEND_MONTH_SQL}
+					ELSE 'agent.spend.' || ${SPEND_MONTH_SQL} || '.m.' || $1
+				END
+			), 0)
+		)::float8`,
 		params: [member]
 	});
 
@@ -90,42 +136,125 @@ export const allowedModel = (s: AgentSettings, model: string) => {
 	return first === undefined || s.models.includes(model) ? model : first;
 };
 
+const spendLimitError = (tripped: 'workspace' | 'member') =>
+	new FacilityFailure({
+		kind: 'invalid',
+		message:
+			tripped === 'member'
+				? 'Monthly member AI spending limit reached.'
+				: 'Monthly workspace AI spending limit reached.'
+	});
+
 /**
- * The host's AI under the administrator's picks: decisions run on `system1` and every model class (`default fast
- * strong`) on `system2`, each while its provider still lists it; otherwise the host's own. A named model goes as is.
+ * The host's AI under the administrator's picks and monthly spend caps:
+ * - decisions (`ask`) run on `system1` when listed;
+ * - model classes route distinctly: `'fast'` -> `system1` (or host decider model in catalog) -> `'fast'`,
+ *   `'default'` -> `system2` -> `'default'`, `'strong'` -> `strong` -> `system2` -> `'strong'`;
+ * - named models go as is;
+ * - all `ask`, `infer`, and `embed` calls enforce workspace/member monthly spend caps, and non-chat calls
+ *   (`sys_1`, `infer_facility`) record their USD cost in the monthly spend bucket.
  */
 export const AdminAi = Layer.effect(
 	Ai,
 	Effect.gen(function* () {
 		const ai = yield* Ai,
 			db = yield* TenantDb;
-		// ponytail: one sys_config read per call; cache per generation if decisions get hot
-		const picked = (pick: 'system1' | 'system2', listing: typeof ai.catalog) =>
-			agentSettings(db).pipe(
-				Effect.mapError((error) => new FacilityFailure({ kind: 'upstream', message: error.message })),
-				Effect.flatMap((s) => {
-					const id = s[pick];
-					return id === null
-						? Effect.succeed(undefined)
-						: listing.pipe(Effect.map((l) => (l.models.some((m) => m.id === id) ? id : undefined)));
-				})
-			);
+		const readSettings = agentSettings(db).pipe(
+			Effect.mapError((error) => new FacilityFailure({ kind: 'upstream', message: error.message }))
+		);
+		const gate = (s: AgentSettings) =>
+			Effect.gen(function* () {
+				const actor = yield* SpendActor;
+				const tripped = yield* overLimit(db, s, actor?.member ?? null, actor?.policies ?? []).pipe(
+					Effect.mapError(
+						(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
+					)
+				);
+				if (tripped !== null) return yield* Effect.fail(spendLimitError(tripped));
+				return actor;
+			});
+		const safeListing = (listing: typeof ai.catalog) =>
+			listing.pipe(Effect.catch(() => Effect.succeed({ models: [], default: '' })));
+		const resolveClass = Effect.fn('AdminAi.resolveClass')(function* (
+			model: string,
+			s: AgentSettings
+		) {
+			if (!ai.models.includes(model)) return model;
+			if (model === 'default' && s.system2 === null) return model;
+			if (model === 'strong' && s.strong == null && s.system2 === null) return model;
+			const cat = yield* safeListing(ai.catalog);
+			const has = (id: string | null | undefined): id is string =>
+				id != null && cat.models.some((m) => m.id === id);
+			if (model === 'fast') {
+				if (has(s.system1)) return s.system1;
+				if (Ai.hasSystem1(ai)) {
+					const dec = yield* safeListing(ai.deciders);
+					if (has(dec.default)) return dec.default;
+					const listedDecider = dec.models.find((m) => has(m.id));
+					if (listedDecider !== undefined) return listedDecider.id;
+				}
+				return model;
+			}
+			if (model === 'strong') {
+				if (has(s.strong)) return s.strong;
+				if (has(s.system2)) return s.system2;
+				return model;
+			}
+			return has(s.system2) ? s.system2 : model;
+		});
 		return {
 			...ai,
 			ask: Ai.hasSystem1(ai)
 				? (request, model) =>
-						model === undefined
-							? picked('system1', ai.deciders).pipe(Effect.flatMap((id) => ai.ask(request, id)))
-							: ai.ask(request, model)
+						Effect.gen(function* () {
+							const s = yield* readSettings;
+							const actor = yield* gate(s);
+							const chosen =
+								model !== undefined
+									? model
+									: s.system1 === null
+										? undefined
+										: (yield* ai.deciders).models.some((m) => m.id === s.system1)
+											? s.system1
+											: undefined;
+							const result = yield* ai.ask(request, chosen);
+							if (Number.isFinite(result.cost_usd) && result.cost_usd > 0)
+								yield* recordSpend(db, result.cost_usd, actor?.member ?? null).pipe(
+									Effect.tapCause(Effect.logWarning),
+									Effect.ignore
+								);
+							return result;
+						})
 				: ai.ask,
 			infer: (request) =>
-				ai.models.includes(request.model)
-					? Stream.unwrap(
-							picked('system2', ai.catalog).pipe(
-								Effect.map((id) => ai.infer(id === undefined ? request : { ...request, model: id }))
+				Stream.unwrap(
+					Effect.gen(function* () {
+						const s = yield* readSettings;
+						const actor = yield* gate(s);
+						const model = yield* resolveClass(request.model, s);
+						const stream = ai.infer(model === request.model ? request : { ...request, model });
+						if (request.purpose === 'chat') return stream;
+						return stream.pipe(
+							Stream.tap((event) =>
+								event._tag === 'Response' &&
+								typeof event.response.usage.cost === 'number' &&
+								Number.isFinite(event.response.usage.cost) &&
+								event.response.usage.cost > 0
+									? recordSpend(db, event.response.usage.cost, actor?.member ?? null).pipe(
+											Effect.tapCause(Effect.logWarning),
+											Effect.ignore
+										)
+									: Effect.void
 							)
-						)
-					: ai.infer(request)
+						);
+					})
+				),
+			embed: (inputs, model, dimensions) =>
+				Effect.gen(function* () {
+					const s = yield* readSettings;
+					yield* gate(s);
+					return yield* ai.embed(inputs, model, dimensions);
+				})
 		};
 	})
 );

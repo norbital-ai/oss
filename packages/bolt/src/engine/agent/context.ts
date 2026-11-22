@@ -398,17 +398,64 @@ export function senderAsides(
 	}));
 }
 
+/**
+ * Orders rows monotonically by emission order so a delayed/SmartThrottle user message whose `seq` predates
+ * an earlier turn's output appends after that earlier turn instead of retroactively splicing into its cached prefix.
+ */
+function monotonicRows(rows: readonly MessageRow[]): readonly MessageRow[] {
+	const turnOf = (row: MessageRow) => row.delivered_turn ?? row.turn;
+	const turnAnchor = new Map<string, number>();
+	for (const row of rows) {
+		const t = turnOf(row);
+		if (t !== null && row.role !== 'user' && row.role !== null) {
+			const prev = turnAnchor.get(t);
+			if (prev === undefined || row.seq < prev) turnAnchor.set(t, row.seq);
+		}
+	}
+	const floorByTurn = new Map<string, number>();
+	const floorFor = (t: string): number => {
+		const cached = floorByTurn.get(t);
+		if (cached !== undefined) return cached;
+		const anchor = turnAnchor.get(t) ?? Number.POSITIVE_INFINITY;
+		let maxBefore = -1;
+		for (const other of rows) {
+			if (turnOf(other) === t) continue;
+			if (other.seq < anchor && other.seq > maxBefore) maxBefore = other.seq;
+		}
+		floorByTurn.set(t, maxBefore);
+		return maxBefore;
+	};
+	let moved = false;
+	const keyed = rows.map((row) => {
+		const t = turnOf(row);
+		if (t !== null && (row.role === 'user' || row.role === null)) {
+			const floor = floorFor(t);
+			if (row.seq < floor) {
+				moved = true;
+				return { row, primary: floor, secondary: 1, seq: row.seq };
+			}
+		}
+		return { row, primary: row.seq, secondary: 0, seq: row.seq };
+	});
+	if (!moved) return rows;
+	keyed.sort((a, b) => a.primary - b.primary || a.secondary - b.secondary || a.seq - b.seq);
+	return keyed.map((entry) => entry.row);
+}
+
 /** Complete call/result groups and fixed per-message aside notes keep every emitted prefix stable. */
 export function modelTranscript(
 	rows: readonly MessageRow[],
 	conv: Pick<ConversationRow, 'plan'>,
 	reasoning = true
 ): AiMessage[] {
-	const shown = projection(rows, conv), ids = new Set(shown.map((row) => row.id)), floor = floorOf(shown, conv);
-	const tools = rows.flatMap((row) => (row.role === 'tool' ? [row] : []));
+	const ordered = monotonicRows(rows);
+	const shown = projection(ordered, conv),
+		ids = new Set(shown.map((row) => row.id)),
+		floor = floorOf(shown, conv);
+	const tools = ordered.flatMap((row) => (row.role === 'tool' ? [row] : []));
 	const emitted = new Set<string>(),
 		out: AiMessage[] = [];
-	for (const row of rows) {
+	for (const row of ordered) {
 		if (emitted.has(row.id)) continue;
 		if (ids.has(row.id)) {
 			if (row.role === 'assistant') {
@@ -429,15 +476,15 @@ export function modelTranscript(
 					return tool;
 				});
 				if (results.some((tool) => tool === undefined || tool.state !== null)) break;
-				out.push(...messages([row], rows, reasoning));
-				for (const tool of results) if (tool !== undefined) { out.push(...messages([tool], rows, reasoning)); emitted.add(tool.id); }
+				out.push(...messages([row], ordered, reasoning));
+				for (const tool of results) if (tool !== undefined) { out.push(...messages([tool], ordered, reasoning)); emitted.add(tool.id); }
 			} else if (row.role === 'tool') {
 				if (row.state !== null) break;
 				out.push({
 					role: 'user',
 					content: `[Earlier tool result]\n${outputText(asSent(row.content))}`
 				});
-			} else out.push(...messages([row], rows, reasoning));
+			} else out.push(...messages([row], ordered, reasoning));
 			continue;
 		}
 		if (
@@ -515,4 +562,31 @@ export function state(
 	return parts.length === 0
 		? undefined
 		: `${STATE_NOTE}: facts for this step, not a message from anyone]\n${parts.join('\n\n')}`;
+}
+
+/**
+ * Appends the per-step dynamic state note AFTER the stable cached transcript prefix.
+ * Only during a live cut continuation (`continuing`) does the frozen note stay before the
+ * partial assistant segments so the provider sees the assistant prefill at the tail without
+ * mutating any earlier cached prefix.
+ */
+export function withStateNote(
+	rows: readonly MessageRow[],
+	conv: Pick<ConversationRow, 'plan'>,
+	note: string | undefined,
+	options: { readonly continuing?: boolean; readonly reasoning?: boolean } = {}
+): AiMessage[] {
+	const history = modelTranscript(rows, conv, options.reasoning);
+	if (note === undefined) return history;
+	if (options.continuing === true && history.at(-1)?.role === 'assistant') {
+		const tail = projection(rows, conv).at(-1);
+		const segments =
+			tail?.role === 'assistant' && tail.content !== null && typeof tail.content === 'object'
+				? (tail.content.segments?.length ?? 1)
+				: 1;
+		history.splice(Math.max(0, history.length - segments), 0, { role: 'user', content: note });
+		return history;
+	}
+	history.push({ role: 'user', content: note });
+	return history;
 }

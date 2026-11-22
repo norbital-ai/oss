@@ -1,73 +1,25 @@
 # Automations and effects
 
-Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `import('@norbital-ai/bolt').AutomationCtx['ai']`, `EffectCtx`.
+Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `AutomationCtx['ai']`, `EffectCtx`.
 
-## Effects
+## Effects & automations
 
-- Put `effect(changes, ctx)` inside the model's `create`, `update` or `delete` block. It runs after commit as a durable `<model>.effect.<verb>` run, listed in runs and bounded by the effect retry policy.
-- Every change has `before`, `set`, `after` and `changed(...fields)`. Create has no before row; delete has no after row. Update effects run only when stored values change. Filter the batch in code.
-- It runs as the writer and holds no policy: rows are the root fields of the writer's output, and every read and write needs the writer's grants. Work needing other authority is an automation it schedules; `ctx.schedule` needs no start grant.
-- Its writes run effects one level deeper; past 8 levels the run fails `depth`.
-- Write effects held by an approval retain the frozen changes and writer; final approval releases them atomically and rejection discards them. The request, a resubmit and the standing decision reach the same verb's effect with an empty change list and `ctx.event.kind === 'approval'`; other decisions do not call it. Custom approval notifications use `ctx.notify` there; built-in inbox notices already exist.
+- **Model `effect(changes, ctx)`** inside `create`/`update`/`delete`: runs post-commit as durable `<model>.effect.<verb>` as the writer (no policies; schedule an automation via `ctx.schedule` when different authority is needed; max depth 8). Approval lifecycle (`request`, `resubmit`, final `approve`/`supersede`) calls the verb's effect with empty changes and `ctx.event.kind === 'approval'`. Carried `with`/`on_approved` rows run no effects or write triggers.
+- **Automations:** run as reserved system identity with required non-empty `policies` (`actor.*` matches nothing; check `ctx.trigger` explicitly for starter rules; set refs explicitly; 10,000 crossings; never decide approvals). `mode: 'job'` (default, durable) vs `mode: 'call'` (synchronous RPC returning typed output). Manual starts require `capabilities.automations` (30/min per starter → `429`); code uses `ctx.schedule(name, input, { at?, key? })`.
+- Record inputs use `{ kind: 'rows', of: '<model>' }` (callers pass IDs; body gets default root fields + `revision` under run's policies; query related rows explicitly and include `revision` for separate update/delete targets).
+- Refusals: `return yield* ctx.refuse('<catalogue key>', { row?, field?, values? })` only.
+- **Triggers & scale-to-zero:** `on` takes `{ cron, tz?, rest? }` and write listeners `{ model, verbs }` (template or system models like `sys_user`; webhooks belong on integrations). Prefer write triggers and `ctx.wait({ until | model | approval })` over polling crons; declare `rest` (e.g. `rest: '24h'`) on every workspace-data safety-net cron so idle Neon tenants suspend (never put `rest` on wall-time or external-poll crons).
+- **Built-in retention (`bolt.prune`):** runs daily ≥03:00 on wake to prune read notices (>30d), finished runs/settled outbox (>90d) and expired sessions/challenges/invitations (configurable in `sys_config` `retention`). Never author system cleanup automations.
 
-## Automations
+## Reruns & Effect body rules
 
-- An automation runs as the reserved system identity with its declared `policies` (required, non-empty). A `mode: 'job'` automation is durable and may start from cron, a person or `ctx.schedule`; `mode: 'call'` returns its output in the calling request. Every run holds exactly those policies and takes no approval decision, not even withdrawing a request it raised. A run has 10,000 crossings.
-- `ctx.trigger` records the run's starter and, for a job, its run `id`. It is never authority: `actor.*` names the system identity, so an actor-scoped grant matches nothing and a ref default does not apply. Server code starts runs only with `ctx.schedule`; a `mode: 'call'` automation is a page's request/response.
-- A rule about the starter is an explicit check of the trigger in the body. Refs the run writes are set explicitly.
-- `capabilities.automations` grants manual starts only; code needs none.
-- Records the body acts on are `input: { <name>: { kind: 'rows', of: '<model>' } }`. A caller sends IDs. The body receives the default root fields, including ref IDs, under the run's policies. An unreadable ID refuses the start. Query related rows explicitly when needed. Pass each input row as the write target. It carries its revision. When a separate query supplies an update or delete target, include `revision` in its selected fields alongside the business fields. A returned `id` alone is insufficient for an audited write.
-- Say no with `return yield* ctx.refuse('<message key>', { row?, field?, values? })`. The message is a catalogue key; `row` indexes the input list; a message with `{placeholders}` takes exactly those `values` (typed, required). `ctx.refuse` is the only refusal: never construct a `Refusal` or build text.
-- A row write runs its model's `effect`; a row carried by another model's callback (`with`, `on_approved`) runs no effect, emits no write event and wakes no `ctx.wait`. An automation may also listen to a model's committed writes, template or system (`sys_user`, `sys_invitation`): `on: [{ model: 'sys_user', verbs: ['create', 'update'] }]`. Each committed statement queues one run per automation and verb with `ctx.trigger = { kind: 'system', cause: 'event', model, verb, records }`; the run takes no input, holds its `policies` (the writer needs none) and reads the rows it needs. A write held for approval emits when its approval commits it; a rejected or withdrawn one emits nothing. Runs chain at most 8 deep, identity writes included.
-- Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rate_limited`. Cron, event and effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
-- Scale-to-zero discipline: prefer write triggers (`on: [{ model, verbs }]`) and durable waits (`ctx.wait({ until | model | approval })`) over polling crons; poll only external systems that cannot push webhooks (e.g. legacy ERPs). Every safety-net cron depending only on workspace data declares `rest` (e.g. `rest: '24h'`) so idle tenants suspend on Neon instead of billing 1 CU continuously: when a run writes nothing, no slot fires until the workspace is used or `rest` passes. Never put `rest` on a cron that finds work by wall time or polls an external link.
-- Server `ctx.schedule(name, input, { at?, key? })` queues a job and returns its `id` and `automation`. A page's `ctx.run` job handle exposes `.id`, `.ids` and `.automation`; yielding it confirms queue admission, not completion, and a refusal fails `ActRefused`. A page call yields its declared output.
-- Every startable automation appears in the Command Center with its typed form; a page form is optional.
+- Dropped/retried runs restart from line 1 (up to 3×; external/AI calls run again): key idempotent acts with `{ key }`, `ctx.schedule` with `key`, notices with `once`. `ctx.send` returns a durable message ID (queue admission ≠ delivery; derive Sent state from `sys_message` status/`sent_at`).
+- Bodies are `function*` yielding `ctx` Effects; recover failures with `Effect.catch`/`catchTag` (never `try/catch` around `yield*` or `tryPromise`). Guest helpers use `Effect.fnUntraced`/`fnUntracedEager`; batch reads with `RequestResolver`/`Cache`.
+- Code before `ctx.wait(...)` must make deterministic identical calls on resumption.
 
-## Built-in retention
+## Facilities, browser & AI
 
-Every workspace carries Bolt's retention pass (`bolt.prune`); never author a cleanup automation for system records. It is no startable automation and appears in no app or list. The first time the database is awake for other work on a workspace-zone day (from 03:00), it deletes in batches of 10,000: inbox notifications read more than 30 days ago (unread ones stay), finished runs and settled outbox entries older than 90 days with their receipts, and expired sessions, challenges, invitations and rate windows. Running, waiting and referenced rows, open approvals and audit history stay. Administrators change the interval, hour and both retentions in Settings, Organization (`sys_config` `retention`).
-
-## Reruns
-
-A dropped run reruns from the start, up to 3 times; a retry also starts over. Nothing is replayed, and `ctx.ai.*`, `ctx.request` and `ctx.web.*` are asked and paid again. Every body must be safe twice:
-
-- Supply a stable domain key through the act's `{ key }` option when that write must deduplicate. Separate acts already committed may repeat when the body starts over; there is no positional replay or `once` option on acts.
-- `ctx.send` durably queues a message and returns its id, even while its account awaits pairing. Save that id; waiting messages persist across host restart and spend no provider attempts until connected. Queue admission is not provider delivery: derive a business report's Sent state/timestamp from actual `sys_message` status/timeline and `sent_at` under an explicit output grant, never from the call's success or an in-app notification. A retry may queue a second send, and an interrupted provider call may have an uncertain outcome. Model the delivery state before promising exactly-once external work.
-- Give `ctx.schedule` a `key`; key notices with `once`.
-
-## Body rules
-
-- A body receiving `ctx` is a generator. Yield its Effects directly; recover a specific failure with `Effect.catchTag`.
-- A failed `yield*` ends the body; `try`/`catch` never sees it. One bad item in a loop ends the run unless that call has its own `Effect.catch`.
-- Never wrap in `tryPromise` or run an Effect inside a body. Pure helpers stay plain. Guest helpers use `Effect.fnUntraced` or `Effect.fnUntracedEager`. Avoid traced workflows at module scope. Use explicit concurrency for batched crossings.
-- Batch native read endpoints with `RequestResolver`; use `Cache` for shared lookups. A catalogue snapshot cache belongs to one operation; never refresh it halfway.
-- Prove initialization by exercising the built artifact through the native host.
-
-## Facilities
-
-- `on` lists cron literals `{ cron, tz?, rest? }` and write listeners `{ model, verbs }`. Incoming webhooks belong to integration definitions (`webhook.handle` or sync deliveries), never automation triggers.
-- A job waits with `ctx.wait({ until })`, `ctx.wait({ model, where?, verbs?, until? })` or `ctx.wait({ approval, until? })`: it holds no lane while waiting and resumes by rerunning from the start, earlier calls answered as before. Never hand-roll a state field and `schedule` chain for a multi-step process.
-- Code before a wait makes the same calls on every resumption; a changed body fails a waiting run.
-- A file uploaded to `<automation>.$input.<name>` belongs to that input. To attach it for later record downloads, store the validated bytes through the model field: `const saved = yield* ctx.files.put(yield* ctx.files.get(input), { for: 'orders.evidence', name: input.name, mime: input.mime })`, then write `saved` to the record. This copy accepts up to 4 MiB, the ceiling of `files.get`. For larger files, upload directly to the destination model field. Verify the file HTTP response as a member who can see that record and as one who cannot.
-- Business I/O runs in automations: `ctx.request`, `ctx.send`, `ctx.web.read`, `ctx.files.*`, `ctx.geo.*`, `ctx.convert.*`, `ctx.ai.*`. Integration bodies call `ctx.request(op)` on their own instance.
-- `ctx.convert.record(model, id, { to: 'pdf' })` prints a record's own view as the run's identity and answers its bytes, unstored; attach them to `ctx.send` or `ctx.notify` (which answers `{ messages }`). A PDF of a record is this, never a hand-built document.
-- `ctx.convert.document`, `ctx.convert.record` and `ctx.convert.ingest` are optional. Recover `Unavailable` only when absence is allowed; other failures propagate unless the workflow recovers them.
-- Discover each member's input on `AutomationCtx`.
-
-## Browser work
-
-- `ctx.browser` is the run's own tab, with no person's cookies. It closes when the run's scope ends, including failure or interruption.
-- `navigate` and `snapshot` return a typed snapshot with URL, title, text and host metadata. Use refs from the current snapshot in typed `act` steps; `evaluate` returns JSON, `download(url, { for })` stores supported media, and `close` closes the tab early.
-- Use `ctx.web.read(url)` when readable page text needs no interaction. This run browser is separate from the user's root-web `page` tool and the agent's fleet browser.
-- Host browser failures propagate through the typed facility failure channel. Source wiring or a fake does not prove a host can drive the target site.
-
-## AI
-
-- `ctx.ai.sys_1.decide({ state, questions })` asks keyed questions over text-only state and returns typed answers: use it for lightweight classification and triage. `ctx.ai.sys_2.infer` is the LLM; neither falls back to the other. Batch and dedupe inputs instead of calling System 2 per row.
-- `sys_2.infer({ initial, output, … })` holds a complete answer in memory and exposes draft tools `read`, `find`, `edit`, `diff`, `submit`. Paths are JSON Pointers; a keyed list item is addressed by key, never index. Large reads are bounded: read child paths.
-- Request `rules` (CEL over top-level properties) make an unfinished draft fail `invalid`.
-- `tools: ['read', ...host_tools]` reads records as the run's policies across turns; always bound it with explicit `steps`. The draft reader is then `read_answer`.
-- Transient provider failures retry inside the invocation, keeping the transcript and edited answer.
-- Infer results are proposals. Store them for native form review before a separate confirmed apply; a write still runs through grants, checks and approvals. A person confirms anything changing money or access.
-- Use the `AutomationCtx['ai']` signature; test with scripted output, never a live model.
+- File inputs (`<automation>.$input.<name>`) copy to a model field via `ctx.files.put(yield* ctx.files.get(input), { for: 'model.field', name, mime })` (4 MiB limit; larger files upload directly to the model field).
+- Record PDFs use `ctx.convert.record(model, id, { to: 'pdf' })` (attach to `ctx.send`/`ctx.notify`). `ctx.convert.*` are optional (recover `Unavailable` only when absence is permitted).
+- `ctx.browser` is an isolated run tab (closed on scope exit; use `ctx.web.read` for static text).
+- **AI:** `ctx.ai.sys_1.decide({ state, questions })` for lightweight classification/triage; `ctx.ai.sys_2.infer({ initial, output: { json_schema, rules? }, tools?, steps })` for structured LLM work (always bound `steps`, batch/dedupe instead of per-row calls; store infer results as proposals for human confirmation before changing money/access; test with scripted cassettes).

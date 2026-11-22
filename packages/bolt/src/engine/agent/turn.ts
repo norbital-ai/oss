@@ -13,13 +13,13 @@ import { Chain } from '../write/sql.ts';
 import { isFacilityError, modelCall, overflow } from './ai.ts';
 import {
 	envoyName,
-	modelTranscript,
 	pageNote,
 	pageWaiting,
 	projection,
 	senderAsides,
 	state,
-	system
+	system,
+	withStateNote
 } from './context.ts';
 import { mcpSessions } from './mcp.ts';
 import type { AgentStore } from './messages.ts';
@@ -220,7 +220,7 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 			usage: { input: 0, output: 0, calls: 0 },
 			receipts: [...(options.receipts ?? [])],
 			zooms: new Map(),
-			files: [],
+			files: [...(options.files ?? [])],
 			failures: new Map(),
 			replayed: new Set(),
 			mcpTools: null,
@@ -444,12 +444,20 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 							Effect.tapCause(Effect.logWarning),
 							Effect.catch(() => Effect.succeed(undefined))
 						);
-			// a conversation on a class (`default`) runs the administrator's System 2, else the catalogue's default: its window is that model's
+			// a conversation on a class (`fast`, `default`, `strong`) resolves its window from the routed model
 			const concrete = catalog?.models.some((x) => x.id === conv.model)
 				? conv.model
-				: catalog?.models.some((x) => x.id === settings.system2)
-					? settings.system2
-					: catalog?.default;
+				: conv.model === 'strong' &&
+					  settings.strong != null &&
+					  catalog?.models.some((x) => x.id === settings.strong)
+					? settings.strong
+					: conv.model === 'fast' &&
+						  settings.system1 !== null &&
+						  catalog?.models.some((x) => x.id === settings.system1)
+						? settings.system1
+						: catalog?.models.some((x) => x.id === settings.system2)
+							? settings.system2
+							: catalog?.default;
 			// the model's own window, never a smaller host budget: compaction starts at 80% of what the model provides
 			const window =
 				configuredWindow ??
@@ -464,30 +472,19 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 				yield* io.compact(conv, rows, current.inputs, 'automatic', prefix);
 				return false;
 			}
-			const note = state(
-				conv,
-				current.mode === 'plan' ? 'plan' : 'agent',
-				[turnFacts(e, authority, ctx.bindings, ctx.tz), pageNote(rows)]
-					.filter((p): p is string => p !== undefined)
-					.join('\n')
-			);
-			// the note closes the context, before a reply cut at the wall that this step continues
-			const history = modelTranscript(rows, conv);
-			if (note !== undefined) {
-				const tail = projection(rows, conv).at(-1);
-				const segments =
-					tail?.role === 'assistant' && tail.content !== null && typeof tail.content === 'object'
-						? (tail.content.segments?.length ?? 1)
-						: 1;
-				history.splice(
-					history.at(-1)?.role === 'assistant' ? history.length - segments : history.length,
-					0,
-					{
-						role: 'user',
-						content: note
-					}
-				);
-			}
+			// Reuse the frozen closing note during a multi-cut continuation so fresh timestamps or plan updates
+			// never mutate the cached prefix before partial assistant segments.
+			const note =
+				current.cut !== null
+					? current.cut.note
+					: state(
+							conv,
+							current.mode === 'plan' ? 'plan' : 'agent',
+							[turnFacts(e, authority, ctx.bindings, ctx.tz), pageNote(rows)]
+								.filter((p): p is string => p !== undefined)
+								.join('\n')
+						);
+			const history = withStateNote(rows, conv, note, { continuing: current.cut !== null });
 			const request: AiRequest = {
 				model: conv.model,
 				purpose: 'chat',
@@ -611,7 +608,7 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 						: null;
 			const row = yield* io.reply(partial, content, content.text, meta);
 			if (r.finish === 'cut') {
-				current.cut = { row, ...stepped.carry };
+				current.cut = { row, ...stepped.carry, note };
 				return false;
 			}
 			current.cut = null;
@@ -708,7 +705,7 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 					if (Exit.isFailure(exit) && (yield* store.maybeConversation(id))?.status !== 'stopped')
 						return;
 					// a reply or a call the turn left unfinished (a stop, a crash) is finished as interrupted before the turn reads idle
-					if (current.streaming !== null) yield* current.streaming.end();
+					if (current.streaming !== null) yield* current.streaming.end(true);
 					yield* store.unfinished(id, turn);
 					if (Exit.isFailure(exit)) return;
 					yield* store.idle(id, false);

@@ -1,27 +1,22 @@
 # Authoring in Studio
 
-The agent edits source as a line of commits on top of live, reviewed on a copy of live's data. Each person has one line: nothing creates or closes it, the first edit starts it and new commits join it. Each tool's description is its contract.
+Each person edits source on a linear line of commits on top of live, reviewed on a copy of live's data. Each tool's description is its contract.
 
 ## Loop
 
-1. Read: `workspace_list_dir`, `workspace_glob`, `workspace_grep`, `workspace_read`. They read your working tree.
-2. Edit: `workspace_write` one whole file, `workspace_edit` a replacement in one, `workspace_patch` any number of files in one call, `workspace_move` a move or a delete. Each answers what it changed and checks nothing. An edit stays in your working tree: it commits nothing, builds nothing and leaves the preview as it is. Finish the source, then diagnose.
-3. Add a package: `workspace_install`, one exact release, into the working tree.
-4. Generate: after a schema change `workspace_generate` writes the one pending migration into the working tree, rewriting it in place until you commit, and refreshes the generated types of new names. Read the generated migration, including any destructive step requiring acceptance. `generatedMigrations` lists the written paths. A type refresh failure returns `generatedTypes: false` with its error and leaves those files in the working tree. Resolve the error before relying on new names in language queries.
-5. Commit: `workspace_commit` with a message, in any state: a commit is a checkpoint and needs no diagnosis or test. History is linear. Your first commit sets the merge's message; `workspace_merge_message` changes it.
-6. Rebase is optional: `behind > 0` means another person's merge moved live. `workspace_merge` queues your commits, replays them on live as it stands and checks them again, so only a real conflict or a failed check comes back. `workspace_rebase` does the replay now, when you want to see it. Merged migrations stay as they are; yours are renumbered on top. `conflicts` lists what stopped and `why` says what happened: fix each marked file with `workspace_edit` and commit: that commit finishes the rebase and proves the migrations. The head changes, so diagnosis, test and review run again.
-7. Diagnose and test: `workspace_diagnose` runs the diagnosis on the working tree, the type check and the compiler checks. It groups errors by file and reports which were already listed and which are fixed. `workspace_test` runs the tests; a long run goes on in the background and its result arrives by itself. Both run by hand, never automatically. With nothing to merge they run on live, and neither builds.
-8. Preview: `workspace_preview` builds your last commit, serves it and opens every page. It refuses uncommitted edits. A migration the build generates lands in the working tree: commit, diagnose, test and preview again; that commit reuses the build. `force` rebuilds. `squash` collapses migration history.
-9. Inspect: `workspace_review` for merges, builds and Versions; `workspace_logs` for a preview's runtime log.
-10. Merge: `workspace_merge`. It needs no uncommitted edits and a preview of your last commit, and is refused over a known failed diagnosis or failed tests; the queue runs what that head lacks.
-
-`workspace_lang` answers what the checker says about your source.
+1. **Read:** `workspace_read` (reads files and lists directories), `workspace_glob`, `workspace_grep`, `workspace_lang`.
+2. **Edit:** `workspace_write` (whole file), `workspace_edit` (targeted replacement), `workspace_delete`, `workspace_move`. Edits stay in your working tree without building, checking or touching preview. Finish the source, then diagnose.
+3. **Dependencies:** `workspace_install` adds one exact release to the working tree.
+4. **Migrate:** after a schema change, `workspace_migrate` generates the pending migration into the working tree (rewriting in place until committed), refreshes generated types, and runs migrations on the preview database with optional before/after SQL checks. Review destructive steps requiring `-- accept:`. Resolve type-refresh errors before querying new names with `workspace_lang`.
+5. **Commit:** `workspace_commit` checkpoints the working tree in any state (no diagnosis or test required).
+6. **Diagnose & test:** `workspace_diagnose` runs compiler, type and Svelte checks on the working tree; `workspace_test` runs the workspace suite (long runs report back asynchronously). Both run by hand.
+7. **Preview:** `workspace_preview` builds the last commit (refuses uncommitted edits), serves it and opens every page. `force` rebuilds; `squash` collapses migration history. Use `workspace_try` to exercise writes/automations on preview and `workspace_logs` for runtime logs.
+8. **Inspect:** `workspace_history` shows commits, diffs, merges, builds and Versions.
+9. **Merge:** `workspace_merge` requires clean working tree, preview of the last commit, and no known failed diagnosis/tests. The queue replays commits onto live as it stands (renumbering migrations on top), runs any missing checks, and switches live over atomically. If replay hits conflicts, fix marked files with `workspace_edit` and `workspace_commit`, then re-diagnose, test and preview.
 
 ## Rules
 
-- Live changes only through `workspace_merge` and `workspace_rollback`. Each becomes an approval the person grants. Give `summary` in the person's words.
-- A merge joins the queue: on its turn it replays on live, runs any diagnosis or tests its head lacks and switches live over; a failure leaves live untouched. Its `ledger` has a line per capability: what implements it, or `skip: reason`.
-- `workspace_revert` drops a commit and those after it. A partial revert keeps the preview database; reverting the whole change line removes its preview and data, leaving live untouched. Reverted commits cannot be brought back. Commit ids are in `workspace_review`.
-- `workspace_rollback` rolls live back to a Version, source and data together; only live rolls data back. List Versions with `workspace_review` and offer them by label. A schema change discards newer data and needs the exact `discard_data_since` instant named by the native preview.
-- Never copy live by hand. Source tools expose no shell or Git.
-- Inspect tasks at normal and narrow widths through the browser when offered. Say what ran; building is not visual proof.
+- Live changes only via `workspace_merge` and `workspace_rollback` (both require person approval; write `summary` in user terms). Merge `ledger` lists every capability and what implements it (or `skip: reason`).
+- `workspace_revert` drops a commit and everything after it (irreversible; commit IDs are in `workspace_history`). Reverting the whole line removes preview and data, leaving live untouched.
+- `workspace_rollback` restores live source and data together to a Version from `workspace_history`. Schema rollbacks discard newer data and require the exact `discard_data_since` instant from the preview.
+- No shell or Git; never copy live by hand. Visually check normal and narrow widths in browser when available.

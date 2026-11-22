@@ -38,6 +38,8 @@ import {
 	memoryOf,
 	NO_AI,
 	STREAM_FLUSH_MS,
+	STREAM_GROWTH_RATIO,
+	STREAM_MAX_SILENCE_MS,
 	TYPING_REFRESH_MS,
 	Unusable,
 	type AgentConfig,
@@ -46,6 +48,147 @@ import {
 	type TurnState
 } from './shared.ts';
 import { storable } from './schema.ts';
+
+export type StreamerDeps = {
+	readonly id: string;
+	readonly turn: string;
+	readonly insert: AgentStore['insert'];
+	readonly messageStatement: AgentStore['messageStatement'];
+};
+
+/**
+ * The step's reply as the model writes it: one `streaming` row (the cut row a continuation extends), rewritten at most
+ * every STREAM_FLUSH_MS once content has grown meaningfully (geometric threshold with a bounded silence ceiling to
+ * avoid O(N^2) full-row DB rewrites), skipping no-op writes and redundant pre-settle flushes on normal completion.
+ */
+export const makeStreamer = (deps: StreamerDeps) =>
+	Effect.fn('Agents.streamer')(function* (
+		from: {
+			row: MessageRow;
+			text: string;
+			reasoning: string;
+		} | null
+	) {
+		const { id, turn, insert, messageStatement } = deps;
+		let row = from?.row ?? null,
+			text = from?.text ?? '',
+			reasoning = from?.reasoning ?? '',
+			lastFlushedTextLen = text.length,
+			lastFlushedReasoningLen = reasoning.length,
+			lastFlushAt = yield* Clock.currentTimeMillis,
+			dirty = false,
+			queued = false,
+			closing = false,
+			forceFlush = false;
+		const textChunks: string[] = [];
+		const reasoningChunks: string[] = [];
+		// the text so far lives here; the queue only signals that it grew, so it holds one item however fast the model writes
+		const queue = yield* Queue.sliding<void, Cause.Done>(1);
+		const notify = () => {
+			dirty = true;
+			if (!queued) {
+				queued = true;
+				Queue.offerUnsafe(queue, undefined);
+			}
+		};
+		const flush = yield* Stream.fromQueue(queue).pipe(
+			Stream.groupedWithin(1024, STREAM_FLUSH_MS),
+			Stream.runForEach(() =>
+				Effect.gen(function* () {
+					queued = false;
+					if (closing && !forceFlush) return;
+					if (!dirty && textChunks.length === 0 && reasoningChunks.length === 0) return;
+					if (textChunks.length > 0) {
+						text = text === '' ? textChunks.join('') : text + textChunks.join('');
+						textChunks.length = 0;
+					}
+					if (reasoningChunks.length > 0) {
+						reasoning =
+							reasoning === '' ? reasoningChunks.join('') : reasoning + reasoningChunks.join('');
+						reasoningChunks.length = 0;
+					}
+					const snapshotText = text,
+						snapshotReasoning = reasoning;
+					const deltaLen =
+						snapshotText.length -
+						lastFlushedTextLen +
+						(snapshotReasoning.length - lastFlushedReasoningLen);
+					if (deltaLen <= 0) {
+						dirty = false;
+						return;
+					}
+					const now = yield* Clock.currentTimeMillis;
+					if (!forceFlush && row !== null) {
+						const flushedLen = lastFlushedTextLen + lastFlushedReasoningLen;
+						const minDelta = Math.floor(flushedLen * STREAM_GROWTH_RATIO);
+						if (deltaLen < minDelta && now - lastFlushAt < STREAM_MAX_SILENCE_MS) {
+							dirty = true;
+							return;
+						}
+					}
+					dirty = false;
+					const content = {
+						text: snapshotText,
+						toolCalls: [],
+						...(snapshotReasoning === '' ? {} : { reasoning: snapshotReasoning })
+					};
+					if (row === null)
+						row = yield* insert({
+							conversation: id,
+							role: 'assistant',
+							content,
+							text: snapshotText,
+							state: 'streaming',
+							turn
+						});
+					else {
+						const chain = new Chain(),
+							source = streamMessage(chain, row.id, snapshotText, content);
+						row = (yield* messageStatement(chain, source))[0] ?? row;
+					}
+					lastFlushedTextLen = snapshotText.length;
+					lastFlushedReasoningLen = snapshotReasoning.length;
+					lastFlushAt = now;
+				}).pipe(
+					// a flush only shows progress: one the database refuses is skipped, and the next writes everything so far
+					Effect.catch((error) => {
+						dirty = true;
+						return Effect.logWarning('agent stream flush skipped', error);
+					})
+				)
+			),
+			Effect.forkScoped
+		);
+		const handle: Streamer = {
+			delta: (value: string) => {
+				if (value.length === 0) return;
+				textChunks.push(value);
+				notify();
+			},
+			reasoning: (value: string) => {
+				if (value.length === 0) return;
+				reasoningChunks.push(value);
+				notify();
+			},
+			end: (flushFinal = false) =>
+				Effect.gen(function* () {
+					closing = true;
+					forceFlush = flushFinal;
+					if (
+						flushFinal &&
+						(dirty || textChunks.length > 0 || reasoningChunks.length > 0) &&
+						!queued
+					) {
+						queued = true;
+						Queue.offerUnsafe(queue, undefined);
+					}
+					yield* Queue.end(queue);
+					yield* Fiber.join(flush);
+					return row;
+				})
+		};
+		return handle;
+	});
 
 export type TurnIoDeps = {
 	readonly id: string;
@@ -266,116 +409,7 @@ export const makeTurnIo = Effect.fn('Agents.makeTurnIo')(function* (deps: TurnIo
 			? Effect.flatMap(rewrite(partial, content, text, meta), wrote)
 			: write({ conversation: id, role: 'assistant', content, text, meta });
 
-	/**
-	 * The step's reply as the model writes it: one `streaming` row (the cut row a continuation extends), rewritten with
-	 * everything so far at most every STREAM_FLUSH_MS and never while the previous flush is still in flight.
-	 */
-	const streamer = Effect.fn('Agents.streamer')(function* (
-		from: {
-			row: MessageRow;
-			text: string;
-			reasoning: string;
-		} | null
-	) {
-		let row = from?.row ?? null,
-			text = from?.text ?? '',
-			reasoning = from?.reasoning ?? '',
-			lastFlushedTextLen = text.length,
-			lastFlushedReasoningLen = reasoning.length,
-			dirty = false,
-			queued = false;
-		const textChunks: string[] = [];
-		const reasoningChunks: string[] = [];
-		// the text so far lives here; the queue only signals that it grew, so it holds one item however fast the model writes
-		const queue = yield* Queue.sliding<void, Cause.Done>(1);
-		const notify = () => {
-			dirty = true;
-			if (!queued) {
-				queued = true;
-				Queue.offerUnsafe(queue, undefined);
-			}
-		};
-		const flush = yield* Stream.fromQueue(queue).pipe(
-			Stream.groupedWithin(1024, STREAM_FLUSH_MS),
-			Stream.runForEach(() =>
-				Effect.gen(function* () {
-					queued = false;
-					if (!dirty && textChunks.length === 0 && reasoningChunks.length === 0) return;
-					if (textChunks.length > 0) {
-						text = text === '' ? textChunks.join('') : text + textChunks.join('');
-						textChunks.length = 0;
-					}
-					if (reasoningChunks.length > 0) {
-						reasoning =
-							reasoning === '' ? reasoningChunks.join('') : reasoning + reasoningChunks.join('');
-						reasoningChunks.length = 0;
-					}
-					const snapshotText = text,
-						snapshotReasoning = reasoning;
-					if (
-						row !== null &&
-						snapshotText.length === lastFlushedTextLen &&
-						snapshotReasoning.length === lastFlushedReasoningLen
-					) {
-						dirty = false;
-						return;
-					}
-					dirty = false;
-					const content = {
-						text: snapshotText,
-						toolCalls: [],
-						...(snapshotReasoning === '' ? {} : { reasoning: snapshotReasoning })
-					};
-					if (row === null)
-						row = yield* insert({
-							conversation: id,
-							role: 'assistant',
-							content,
-							text: snapshotText,
-							state: 'streaming',
-							turn
-						});
-					else {
-						const chain = new Chain(),
-							source = streamMessage(chain, row.id, snapshotText, content);
-						row = (yield* messageStatement(chain, source))[0] ?? row;
-					}
-					lastFlushedTextLen = snapshotText.length;
-					lastFlushedReasoningLen = snapshotReasoning.length;
-				}).pipe(
-					// a flush only shows progress: one the database refuses is skipped, and the next writes everything so far
-					Effect.catch((error) => {
-						dirty = true;
-						return Effect.logWarning('agent stream flush skipped', error);
-					})
-				)
-			),
-			Effect.forkScoped
-		);
-		const handle: Streamer = {
-			delta: (value: string) => {
-				if (value.length === 0) return;
-				textChunks.push(value);
-				notify();
-			},
-			reasoning: (value: string) => {
-				if (value.length === 0) return;
-				reasoningChunks.push(value);
-				notify();
-			},
-			end: () =>
-				Effect.gen(function* () {
-					if (dirty && !queued) {
-						queued = true;
-						Queue.offerUnsafe(queue, undefined);
-					}
-					yield* Queue.end(queue);
-					yield* Fiber.join(flush);
-					return row;
-				})
-		};
-		return handle;
-	});
+	const streamer = makeStreamer({ id, turn, insert, messageStatement });
 
 	const fail = Effect.fn('Agents.fail')(function* (
 		conv: ConversationRow,

@@ -299,13 +299,16 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		verb: 'Read source',
 		target: `${str(a['path'])}${lineRange(a['offset'], a['limit'])}`
 	}),
-	task: (a) => ({
-		icon: a['task_id'] === undefined ? 'lucide:bot' : 'lucide:send',
-		verb: a['task_id'] === undefined ? 'Started a subagent' : 'Sent a message to a subagent',
-		target: str(a['description'])
-	}),
-	task_read: () => ({ icon: 'lucide:bot', verb: 'Checked a subagent', target: '' }),
-	task_stop: () => ({ icon: 'lucide:circle-stop', verb: 'Stopped a subagent', target: '' }),
+	task: (a) =>
+		a['action'] === 'read'
+			? { icon: 'lucide:bot', verb: 'Checked a subagent', target: '' }
+			: a['action'] === 'stop'
+				? { icon: 'lucide:circle-stop', verb: 'Stopped a subagent', target: '' }
+				: {
+						icon: a['task_id'] === undefined ? 'lucide:bot' : 'lucide:send',
+						verb: a['task_id'] === undefined ? 'Started a subagent' : 'Sent a message to a subagent',
+						target: str(a['description'])
+					},
 	wait: () => ({ icon: 'lucide:hourglass', verb: 'Waited for background work', target: '' }),
 	document: (a) => ({
 		icon: 'lucide:file-plus',

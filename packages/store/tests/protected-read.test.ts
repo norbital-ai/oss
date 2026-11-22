@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { catalog_of, compile, semantic, similar, where, type Scope } from '../src/index.ts';
+import { catalog_of, compile, read, semantic, similar, where, type Scope } from '../src/index.ts';
 import { is_operand } from '../src/decode.ts';
 
 const cat = catalog_of({
@@ -14,6 +14,7 @@ const cat = catalog_of({
 				vector: { kind: 'vector', dim: 2, metric: 'l2' }
 			},
 			search: {
+				text: ['title'],
 				semantic: { model: 'text', dim: 2, fields: ['title'] },
 				indexes: {
 					stored: { field: 'vector', dim: 2, metric: 'l2' },
@@ -110,6 +111,30 @@ describe('read contract', () => {
 			expect(
 				(yield* compile(cat, meaning, {}, { field: '$semantic', vector: [1, 2], take: 3 })).sql.text
 			).toContain('a0."bolt_embedding"');
+		})
+	);
+
+	it.effect('compiles hybrid /semantic reads with an index-friendly bounded top-K vector CTE', () =>
+		Effect.gen(function* () {
+			const ir = yield* read(cat, 'document', { search: '/semantic needle', limit: 10 });
+			const compiled = yield* compile(
+				cat,
+				{ ...ir, total: true },
+				{},
+				{ field: '$semantic', vector: [1, 2], take: 0 }
+			);
+			expect(compiled.sql.text).toMatch(
+				/^WITH "\$vec" AS \(SELECT \w+\."id", \(\w+\."bolt_embedding" <=> \$\d+::vector\) AS d FROM "document" \w+ WHERE \w+\."bolt_embedding" IS NOT NULL ORDER BY \w+\."bolt_embedding" <=> \$\d+::vector LIMIT 100\)/
+			);
+			expect(compiled.sql.text).toContain('UNION ALL SELECT jsonb_build_object(\'$total\', count(*)) AS j FROM "$fused"');
+			const wider = yield* read(cat, 'document', { search: '/semantic needle', limit: 50 });
+			const widerSql = yield* compile(
+				cat,
+				wider,
+				{},
+				{ field: '$semantic', vector: [1, 2], take: 0 }
+			);
+			expect(widerSql.sql.text).toMatch(/ORDER BY \w+\."bolt_embedding" <=> \$\d+::vector LIMIT 200\)/);
 		})
 	);
 });

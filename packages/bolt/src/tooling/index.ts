@@ -18,7 +18,7 @@ export {
 	schema_slice,
 	type SchemaSlice
 } from '../engine/schema/plan.ts';
-export { IDENTITY, decode_identity, drain, memory_source } from '../engine/write/pack.ts';
+export { IDENTITY, SYNC_SEED, decode_identity, drain, memory_source } from '../engine/write/pack.ts';
 export { pack_asset_loader } from '../engine/artifact/read.ts';
 export { call, serve_release } from '../node/host.ts';
 export { node_ports } from '../node/ports.ts';

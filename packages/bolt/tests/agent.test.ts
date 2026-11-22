@@ -29,11 +29,14 @@ import {
 	bounded,
 	BOUNDS,
 	messages,
+	modelTranscript,
 	pageNote,
 	pageWaiting,
 	projection,
+	state,
 	storedToolResult,
-	system
+	system,
+	withStateNote
 } from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
 import { keyedSerial } from '../src/engine/agent/throttle.ts';
@@ -42,8 +45,15 @@ import {
 	callKey,
 	clearToolFailures,
 	recordCheckProgress,
+	STREAM_FLUSH_MS,
 	type CheckProgress
 } from '../src/engine/agent/shared.ts';
+import { makeStreamer } from '../src/engine/agent/turn-io.ts';
+import {
+	collectFullTranscript,
+	exportTranscriptMarkdown
+} from '../src/shell/agent/actions.ts';
+import type { AgentRow } from '../src/protocol/wire.ts';
 import { RunUnits } from '../src/engine/ports.ts';
 import { preview } from '../src/engine/conversations/store.ts';
 import { respond_system_1 } from '../../bolt-cli/src/test/effect.ts';
@@ -2040,6 +2050,231 @@ describe('spend cap overLimit with in-flight turn cost', () => {
 			const before = reads();
 			expect(yield* overLimit(db, baseSettings, 'alice', ['vip'], 5)).toBe('workspace');
 			expect(reads()).toBe(before);
+		})
+	);
+});
+
+describe('secondary prompt cache-busters: prefix stability', () => {
+	const msgRow = (
+		seq: number,
+		role: 'user' | 'assistant' | 'system',
+		text: string,
+		extra: Partial<Extract<MessageRow, { role: 'user' | 'assistant' | 'system' | null }>> = {}
+	): MessageRow => ({
+		id: `m-${seq}`,
+		conversation: 'c1',
+		seq,
+		role,
+		content: role === 'assistant' ? { text, toolCalls: [] } : { text },
+		text,
+		state: role === 'user' ? 'consumed' : null,
+		mode: 'agent',
+		as: null,
+		author: null,
+		meta: null,
+		supersedes: null,
+		turn: null,
+		...extra
+	});
+
+	it('appends delayed/SmartThrottle messages monotonically instead of splicing into earlier cached prefix by seq', () => {
+		const conv = { plan: null };
+		const u1 = msgRow(1, 'user', 'First request', { turn: 'turn-1', delivered_turn: 'turn-1' });
+		const a1 = msgRow(3, 'assistant', 'First reply', { turn: 'turn-1' });
+		// While turn-1 ran, a delayed message arrived at seq=2 (pending -> later claimed by turn-2)
+		const delayedPending = msgRow(2, 'user', 'Delayed follow-up', { state: 'pending', turn: null });
+
+		// Step 1 (while delayed message is still pending): prefix is [u1, a1]
+		const beforeAdmit = modelTranscript([u1, delayedPending, a1], conv);
+		expect(beforeAdmit.map((m) => JSON.stringify(m))).toEqual([
+			JSON.stringify({ role: 'user', content: { text: 'First request' } }),
+			JSON.stringify({ role: 'assistant', content: { text: 'First reply', toolCalls: [] } })
+		]);
+
+		// Step 2 (delayed message admitted into turn-2, still holding seq=2): appends AFTER a1!
+		const delayedAdmitted = msgRow(2, 'user', 'Delayed follow-up', {
+			state: 'consumed',
+			turn: 'turn-2',
+			delivered_turn: 'turn-2'
+		});
+		const afterAdmit = modelTranscript([u1, delayedAdmitted, a1], conv);
+		expect(afterAdmit.slice(0, beforeAdmit.length)).toEqual(beforeAdmit);
+		expect(afterAdmit).toHaveLength(3);
+		expect(afterAdmit[2]).toEqual({ role: 'user', content: { text: 'Delayed follow-up' } });
+
+		// Step 3 (turn-2 finishes with a2 at seq=4): prefix [u1, a1, delayedAdmitted] stays identical!
+		const a2 = msgRow(4, 'assistant', 'Second reply', { turn: 'turn-2' });
+		const afterTurn2 = modelTranscript([u1, delayedAdmitted, a1, a2], conv);
+		expect(afterTurn2.slice(0, afterAdmit.length)).toEqual(afterAdmit);
+		expect(afterTurn2).toHaveLength(4);
+	});
+
+	it('keeps plan updates and fresh timestamps in the trailing dynamic suffix and freezes note on multi-cut continuations', () => {
+		const u1 = msgRow(1, 'user', 'Plan this work', { turn: 't1', delivered_turn: 't1' });
+		const a1 = msgRow(2, 'assistant', 'Drafted v1', { turn: 't1' });
+		const planV1 = { revision: 1, body: '1. Step A', status: 'draft' as const, checkpoint: 0, verdicts: 0 };
+		const planV2 = { revision: 2, body: '1. Step A\n2. Step B', status: 'draft' as const, checkpoint: 0, verdicts: 0 };
+
+		const step1 = withStateNote([u1, a1], { plan: planV1 }, state({ plan: planV1 }, 'plan', 'Now: 12:00:00Z'));
+		const step2 = withStateNote([u1, a1], { plan: planV2 }, state({ plan: planV2 }, 'plan', 'Now: 12:01:00Z'));
+		// Prefix before trailing dynamic state note is identical across plan edits and clock ticks
+		expect(step1.slice(0, -1)).toEqual(step2.slice(0, -1));
+		expect(step1.at(-1)?.content).toContain('1. Step A');
+		expect(step2.at(-1)?.content).toContain('2. Step B');
+		expect(step2.at(-1)?.content).toContain('Now: 12:01:00Z');
+
+		// Multi-cut continuation keeps frozen note before partial assistant segments so prefix stays identical
+		const frozenNote = state({ plan: null }, 'agent', 'Now: 12:00:00Z');
+		const cut1 = msgRow(2, 'assistant', 'Part 1', {
+			turn: 't1',
+			content: { text: 'Part 1', toolCalls: [], segments: [{ text: 'Part 1' }] },
+			meta: { tag: 'cut' }
+		});
+		const cut2 = msgRow(2, 'assistant', 'Part 1 Part 2', {
+			turn: 't1',
+			content: {
+				text: 'Part 1 Part 2',
+				toolCalls: [],
+				segments: [{ text: 'Part 1' }, { text: 'Part 2' }]
+			},
+			meta: { tag: 'cut' }
+		});
+		const firstAttempt = withStateNote([u1], { plan: null }, frozenNote, { continuing: false });
+		const cont1 = withStateNote([u1, cut1], { plan: null }, frozenNote, { continuing: true });
+		const cont2 = withStateNote([u1, cut2], { plan: null }, frozenNote, { continuing: true });
+		expect(cont1.slice(0, firstAttempt.length)).toEqual(firstAttempt);
+		expect(cont2.slice(0, cont1.length)).toEqual(cont1);
+		expect(cont2.at(-1)).toEqual({ role: 'assistant', content: { text: 'Part 2' } });
+	});
+});
+
+describe('streaming DB writes in turn-io (bounded sub-quadratic flushes)', () => {
+	const makeMockStreamer = () => {
+		const writes: { readonly kind: 'insert' | 'update'; readonly textLen: number }[] = [];
+		let rowCounter = 0;
+		const streamer = makeStreamer({
+			id: 'c1',
+			turn: 't1',
+			insert: (row) =>
+				Effect.sync(() => {
+					const text = row.text ?? '';
+					writes.push({ kind: 'insert', textLen: text.length });
+					return {
+						id: `s-${++rowCounter}`,
+						conversation: 'c1',
+						seq: rowCounter,
+						role: 'assistant',
+						content: { text, toolCalls: [] },
+						text,
+						state: 'streaming',
+						mode: null,
+						as: null,
+						author: null,
+						meta: null,
+						supersedes: null,
+						turn: 't1'
+					} satisfies MessageRow;
+				}),
+			messageStatement: (chain) =>
+				Effect.sync(() => {
+					const text = typeof chain.params[0] === 'string' ? chain.params[0] : '';
+					writes.push({ kind: 'update', textLen: text.length });
+					return [
+						{
+							id: `s-${rowCounter}`,
+							conversation: 'c1',
+							seq: rowCounter,
+							role: 'assistant',
+							content: { text, toolCalls: [] },
+							text,
+							state: 'streaming',
+							mode: null,
+							as: null,
+							author: null,
+							meta: null,
+							supersedes: null,
+							turn: 't1'
+						} satisfies MessageRow
+					];
+				})
+		});
+		return { writes, streamer };
+	};
+
+	it.effect('skips no-op writes and redundant pre-settle flush on fast completion, and bounds updates on large streams', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				// 1. Empty deltas and fast normal completion (end(false)) cause 0 streaming DB writes
+				const fast = makeMockStreamer();
+				const s1 = yield* fast.streamer(null);
+				s1.delta('');
+				s1.delta('quick answer');
+				const partial1 = yield* s1.end(false);
+				expect(partial1).toBeNull();
+				expect(fast.writes).toEqual([]);
+
+				// 2. Large streamed reply (60 ticks of 200-char chunks = 12 KB) performs far fewer writes than ticks
+				const long = makeMockStreamer();
+				const s2 = yield* long.streamer(null);
+				const chunk = 'x'.repeat(200);
+				for (let i = 0; i < 60; i++) {
+					s2.delta(chunk);
+					yield* TestClock.adjust(STREAM_FLUSH_MS);
+				}
+				const partial2 = yield* s2.end(false);
+				expect(partial2).not.toBeNull();
+				// First insert + geometric growth / max-silence updates << 60 full-row updates
+				expect(long.writes.length).toBeGreaterThan(1);
+				expect(long.writes.length).toBeLessThan(25);
+
+				// 3. Interrupt/stop (end(true)) flushes buffered tail so partial text is not lost
+				const cut = makeMockStreamer();
+				const s3 = yield* cut.streamer(null);
+				s3.delta('partial before stop');
+				const partial3 = yield* s3.end(true);
+				expect(partial3?.text).toBe('partial before stop');
+				expect(cut.writes).toHaveLength(1);
+			})
+		)
+	);
+});
+
+describe('full /export transcript pagination', () => {
+	const agentRow = (seq: number, role: 'user' | 'assistant', text: string): AgentRow => ({
+		id: `r-${seq}`,
+		seq,
+		role,
+		text,
+		state: role === 'user' ? 'consumed' : null,
+		tag: role === 'assistant' ? 'reply' : null
+	});
+
+	it.effect('paginates backwards through all older pages and exports the entire conversation in chronological order', () =>
+		Effect.gen(function* () {
+			const all = Array.from({ length: 150 }, (_, i) =>
+				agentRow(i + 1, i % 2 === 0 ? 'user' : 'assistant', `Message ${i + 1}`)
+			);
+			// Client only holds the trailing 60-row window (seq 91..150), with before = 91
+			const loadedWindow = all.slice(90);
+			const fetchedCursors: number[] = [];
+			const fetchOlder = (_conv: string, before: number, _limit: number) =>
+				Effect.sync(() => {
+					fetchedCursors.push(before);
+					// Simulate 50-row pages from the server
+					const slice = all.filter((r) => r.seq < before).slice(-50);
+					const first = slice[0]?.seq ?? before;
+					return { rows: slice, more: first > 1, first };
+				});
+
+			const collected = yield* collectFullTranscript('conv-1', loadedWindow, 91, fetchOlder);
+			expect(fetchedCursors).toEqual([91, 41]);
+			expect(collected).toHaveLength(150);
+			expect(collected.map((r) => r.seq)).toEqual(all.map((r) => r.seq));
+
+			const markdown = exportTranscriptMarkdown(collected, 'Long Chat');
+			expect(markdown).toContain('# Long Chat');
+			expect(markdown).toContain('**user**: Message 1');
+			expect(markdown).toContain('**assistant**: Message 150');
 		})
 	);
 });

@@ -8,8 +8,6 @@ import {
 	askTool,
 	readSource,
 	runJsTool,
-	taskReadTool,
-	taskStopTool,
 	taskTool,
 	waitTool
 } from './definitions.ts';
@@ -45,14 +43,29 @@ export function bindRuntimeTools(
 
 	if (agent) {
 		add(taskTool, function* (i) {
-			if (!x.agents.includes(i.subagent_type))
+			const action = i.action ?? 'start';
+			if (action === 'read') {
+				if (i.task_id === undefined || i.task_id.trim() === '')
+					return err("task action 'read' requires task_id.");
+				return ok(yield* x.subagent.read(i.task_id));
+			}
+			if (action === 'stop') {
+				if (i.task_id === undefined || i.task_id.trim() === '')
+					return err("task action 'stop' requires task_id.");
+				return ok(yield* x.subagent.stop(i.task_id));
+			}
+			if (i.prompt === undefined || i.prompt.trim() === '')
+				return err("task action 'start' requires prompt.");
+			const subagentType = i.subagent_type ?? 'general';
+			if (!x.agents.includes(subagentType))
 				return err(
-					`Unknown agent type: ${i.subagent_type} is not a valid agent type. Agent types: ${x.agents.join(', ')}`
+					`Unknown agent type: ${subagentType} is not a valid agent type. Agent types: ${x.agents.join(', ')}`
 				);
+			const description = i.description ?? i.prompt.slice(0, 60);
 			const started = yield* x.subagent.task({
-				description: i.description,
+				description,
 				prompt: i.prompt,
-				agent: i.subagent_type,
+				agent: subagentType,
 				task: i.task_id
 			});
 			if ('error' in started) return err(started.error);
@@ -75,12 +88,6 @@ export function bindRuntimeTools(
 					'</task>'
 				].join('\n')
 			);
-		});
-		add(taskReadTool, function* (i) {
-			return ok(yield* x.subagent.read(i.task_id));
-		});
-		add(taskStopTool, function* (i) {
-			return ok(yield* x.subagent.stop(i.task_id));
 		});
 	}
 

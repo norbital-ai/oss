@@ -248,7 +248,7 @@ export const readSource = defineTool('workspace_read', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		'Read a workspace source file or directory (no node_modules/ or .norbital/; use workspace_lang for package types). Numbered lines and entries support offset/limit. In run_js, an unpaged file returns {path,content,lines}.',
+		'Read a workspace source file or directory (numbered lines/entries with offset/limit; use workspace_lang for package types). In run_js, unpaged reads return {path,content,lines}.',
 	parameters: Schema.Struct({
 		path: Schema.String.annotate({ description: 'File or directory to read' }),
 		offset: Schema.optionalKey(Schema.Int).annotate({
@@ -264,7 +264,7 @@ export const grepSource = defineTool('workspace_grep', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
-		'Search workspace source by regex or literal (no node_modules/ or .norbital/; use read_file for attachments). count returns matching-line and file totals; otherwise limit caps excerpts.',
+		'Search workspace source by regex or literal. count returns match/file totals; otherwise limit caps excerpts.',
 	parameters: Schema.Struct({
 		count: Schema.optionalKey(Schema.Boolean),
 		pattern: Schema.NonEmptyString.annotate({
@@ -291,8 +291,7 @@ export const grepSource = defineTool('workspace_grep', {
 export const globSource = defineTool('workspace_glob', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
-	description:
-		'Find workspace source paths by glob (e.g. "src/**/*.svelte"). No node_modules/ or .norbital/ exist here (shared host store — use workspace_lang for types, workspace_install to install).',
+	description: 'Find workspace source paths matching a glob (e.g. "src/**/*.svelte").',
 	parameters: Schema.Struct({
 		pattern: Schema.NonEmptyString.annotate({ description: 'Glob pattern' }),
 		path: Schema.optionalKey(Schema.String).annotate({
@@ -310,41 +309,32 @@ export const globSource = defineTool('workspace_glob', {
 export const listSource = defineTool('workspace_list_dir', {
 	policy: { audiences: ['staff'], needs: 'source' },
 	behavior: { pure: true, data: true },
-	description:
-		'Workspace source tree under path (default: all) with folder roles. No node_modules/ or .norbital/.',
+	description: 'List workspace source tree under path (default: root) with folder roles.',
 	parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) })
 });
 
 export const taskTool = defineTool('task', {
 	policy: { child: false, scripts: false, needs: 'delegation' },
-	description: `Delegate independent work to general (your authority) or an active envoy's id (≤4 at once). Returns task_id immediately; a later message wakes you with the result. Subagents have no approval-gated tools (DB writes, automations, merges, page control): run those yourself after they report back. task_id resumes a session.`,
+	behavior: { data: true },
+	description: `Manage background subagents (≤4 running). action: 'start' (default) launches or resumes (with task_id) a 'general' or active envoy subagent and returns task_id immediately (result wakes you later; subagents cannot run approval-gated tools); 'read' inspects status, recent messages/steps, writes and source diffs; 'stop' stops a running task.`,
 	parameters: Schema.Struct({
-		description: Schema.String.annotate({
-			description: 'A short (3-5 words) description of the task'
-		}),
-		prompt: Schema.String.annotate({ description: 'The task for the agent to perform' }),
-		subagent_type: Schema.String.annotate({
-			description: "The type of specialized agent to use for this task: general, or an active envoy's id"
+		action: Schema.optionalKey(Schema.Literals(['start', 'read', 'stop'])).annotate({
+			description: "Operation: 'start' (default), 'read', or 'stop'"
 		}),
 		task_id: Schema.optionalKey(Schema.String).annotate({
 			description:
-				'Set only to resume a previous task: it continues the same subagent session instead of a fresh one'
+				"Task id: required for 'read'/'stop'; optional for 'start' to resume an existing session"
+		}),
+		description: Schema.optionalKey(Schema.String).annotate({
+			description: "Short (3-5 words) description (for 'start')"
+		}),
+		prompt: Schema.optionalKey(Schema.String).annotate({
+			description: "Task instructions for the subagent (required for 'start')"
+		}),
+		subagent_type: Schema.optionalKey(Schema.String).annotate({
+			description: "Agent type for 'start': 'general' or an active envoy id"
 		})
 	})
-});
-
-export const taskReadTool = defineTool('task_read', {
-	policy: { child: false, needs: 'delegation' },
-	behavior: { data: true },
-	description:
-		"A task's status, last messages and tool calls, the records it wrote with their fields, and its source diffs.",
-	parameters: Schema.Struct({ task_id: Schema.String })
-});
-
-export const taskStopTool = defineTool('task_stop', {
-	policy: { child: false, scripts: false, needs: 'delegation' },
-	description: 'Stop a running task.',
-	parameters: Schema.Struct({ task_id: Schema.String })
 });
 
 export const downloadTool = defineTool('download', {
@@ -438,8 +428,6 @@ const ALL_TOOLS = [
 	globSource,
 	listSource,
 	taskTool,
-	taskReadTool,
-	taskStopTool,
 	documentTool,
 	downloadTool,
 	runJsTool,

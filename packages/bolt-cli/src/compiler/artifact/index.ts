@@ -11,9 +11,11 @@ import { fingerprint, schema_slice } from '@norbital-ai/bolt/tooling';
 import { HOST_FILE } from '@norbital-ai/host-api/node';
 import { constants, cpSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, join, relative, sep } from 'node:path';
 import { type GuestProgram, SKILL_FILE } from '@norbital-ai/host-api';
 import { statements } from '@norbital-ai/store';
+import { BOLT_PACKAGE } from '../bolt.ts';
 import type { Discovered } from '../discover.ts';
 import { buildClient, BuildError, type Graphs } from './client.ts';
 import { buildServerPages } from './server.ts';
@@ -113,14 +115,65 @@ const HeldPages = Schema.fromJsonString(
 		styles: Schema.Record(Schema.String, Schema.Array(Schema.String))
 	})
 );
+const PackageVersion = Schema.fromJsonString(
+	Schema.Struct({ version: Schema.optionalKey(Schema.String) })
+);
+const readPackageVersion = Effect.fn('bolt.readPackageVersion')(function* (file: string) {
+	const fs = yield* FileSystem.FileSystem;
+	return yield* fs.readFileString(file).pipe(
+		Effect.flatMap(Schema.decodeUnknownEffect(PackageVersion)),
+		Effect.map((pkg) => pkg.version ?? ''),
+		Effect.orElseSucceed(() => '')
+	);
+});
+const dependencyVersion = Effect.fn('bolt.dependencyVersion')(function* (
+	root: string,
+	name: '@norbital-ai/bolt' | '@norbital-ai/ui'
+) {
+	const workspaceVersion = yield* readPackageVersion(join(root, 'node_modules', name, 'package.json'));
+	if (workspaceVersion !== '') return workspaceVersion;
+	if (name === '@norbital-ai/bolt')
+		return yield* readPackageVersion(join(BOLT_PACKAGE, 'package.json'));
+	const resolved = yield* Effect.try(() =>
+		createRequire(join(BOLT_PACKAGE, 'package.json')).resolve(`${name}/package.json`)
+	).pipe(Effect.orElseSucceed(() => ''));
+	return resolved === '' ? '' : yield* readPackageVersion(resolved);
+});
+/** What invalidates the client and public-page builds: manifest entries, discovered paths, contract, package versions, and `bun.lock`. */
+export const clientKey = Effect.fn('bolt.clientKey')(function* (
+	root: string,
+	name: string,
+	manifest: EngineManifest,
+	files: readonly Discovered[]
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const lockFile = join(root, 'bun.lock');
+	const lockHash = (yield* fs.exists(lockFile))
+		? sha256_hex(yield* fs.readFile(lockFile))
+		: '';
+	return sha256_hex(
+		JSON.stringify([
+			CONTRACT,
+			yield* dependencyVersion(root, '@norbital-ai/bolt'),
+			yield* dependencyVersion(root, '@norbital-ai/ui'),
+			lockHash,
+			name,
+			manifest.workspace,
+			manifest.apps,
+			manifest.groups ?? {},
+			manifest.custom_fields,
+			files.map((f) => f.path)
+		])
+	);
+});
 /** The public pages' browser and SSR builds are a function of the workspace files in their graphs and what `clientKey` covers. */
 export const pagesKey = Effect.fn('bolt.pagesKey')(function* (
 	root: string,
-	clientKey: string,
+	client: string,
 	sources: readonly string[]
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	const lines = [clientKey];
+	const lines = [client];
 	for (const source of sources) {
 		const at = join(root, source);
 		lines.push(`${source}\0${(yield* fs.exists(at)) ? sha256_hex(yield* fs.readFile(at)) : ''}`);
@@ -155,21 +208,12 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		graphFile = join(cache, 'client-graph.json'),
 		kept = join(cache, 'client-kept'),
 		heldDir = join(cache, 'pages');
-	// what the generated entries are made of: the manifest parts they read and every discovered file's path
-	const clientKey = sha256_hex(
-		JSON.stringify([
-			meta.name,
-			c.manifest.workspace,
-			c.manifest.apps,
-			c.manifest.groups ?? {},
-			c.manifest.custom_fields,
-			files.map((f) => f.path)
-		])
-	);
+	// what the generated entries are made of: the manifest parts they read, contract, package versions, lockfile, and discovered paths
+	const key = yield* clientKey(root, meta.name, c.manifest, files);
 	const changed = options.changed;
 	const graph =
 		changed === undefined ||
-		(yield* fs.readFileString(keyFile).pipe(Effect.orElseSucceed(() => ''))) !== clientKey
+		(yield* fs.readFileString(keyFile).pipe(Effect.orElseSucceed(() => ''))) !== key
 			? undefined
 			: yield* fs
 					.readFileString(graphFile)
@@ -247,7 +291,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 				Effect.map(Option.getOrUndefined)
 			);
 		const kept =
-			held !== undefined && held.key === (yield* pagesKey(root, clientKey, held.sources))
+			held !== undefined && held.key === (yield* pagesKey(root, key, held.sources))
 				? held
 				: undefined;
 		const builtClient = yield* buildClient(
@@ -280,7 +324,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 			yield* fs.writeFileString(
 				join(heldDir, 'pages.json'),
 				JSON.stringify({
-					key: yield* pagesKey(root, clientKey, graphed),
+					key: yield* pagesKey(root, key, graphed),
 					sources: graphed,
 					pages,
 					immutable: builtClient.immutable.filter((file) => file.startsWith('public/')),
@@ -304,7 +348,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 			graphFile,
 			JSON.stringify({ spa: [...sources.spa].sort(), pages: [...sources.pages].sort() })
 		);
-		yield* fs.writeFileString(keyFile, clientKey);
+		yield* fs.writeFileString(keyFile, key);
 	}
 	yield* cloneTree(join(root, 'assets'), join(out, 'assets'));
 	// each skill's folder as its tree: `+skill.md` is written as its `SKILL.md`
