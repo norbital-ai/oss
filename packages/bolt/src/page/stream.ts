@@ -1,6 +1,7 @@
 // One scoped EventSource connection; every reconnect wait belongs to the consuming runtime. A page hidden for 30 s lets
 // its connection go (the server's `every` timers and the stream's hold on the cell end with it) until it is visible.
 import { Cause, Duration, Effect, Queue, Random, Schedule, Schema, Stream } from 'effect';
+import { uuidv7 } from '@norbital-ai/host-api';
 import { ProtocolFailed } from '../decl/errors.ts';
 import { Frame, WireRead } from '../protocol/schema.ts';
 
@@ -83,7 +84,7 @@ const decodeMessage = Schema.decodeUnknownOption(TabMessage);
  */
 export function sharedSource(url: string, open: () => EventSourceLike): SharedSource {
 	const name = `bolt-live:${url}`,
-		me = crypto.randomUUID(),
+		me = uuidv7(),
 		channel = new BroadcastChannel(name),
 		waiting = new AbortController(),
 		watched = new Set<string>();
