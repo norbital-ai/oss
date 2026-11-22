@@ -1,5 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
-import { fromWhere, toWhere } from '../src/filter/where.ts';
+import { fromWhere, rowsWhere, toWhere } from '../src/filter/where.ts';
+import { nodeText } from '../src/filter/text.ts';
+import { humanize } from '../src/text/messages.ts';
 import { matches } from '../src/filter/local.ts';
 import { taggedArg, type Node } from '../src/filter/node.ts';
 import type { ModelExposure } from '../src/kinds/context.ts';
@@ -108,5 +110,114 @@ describe('complex filters in the editor and local arrays', () => {
 		expect(() =>
 			matches({}, { t: 'cond', path: '$search', op: 'search', arg: taggedArg({ lit: 'pump' }) })
 		).toThrow(/query engine/);
+	});
+
+	it('round trips inline JSON object and discriminated union predicates through fromWhere, toWhere and chip labels', () => {
+		const inlineCatalog: Record<string, ModelExposure> = {
+			employees: {
+				record_label: 'record.name',
+				label: ['name'],
+				fields: {
+					name: { kind: 'text' },
+					meta: {
+						kind: 'json',
+						optional: true,
+						shape: {
+							kind: 'object',
+							fields: {
+								country: { kind: 'text' },
+								location: {
+									kind: 'object',
+									fields: { city: { kind: 'text' }, floor: { kind: 'int' } }
+								}
+							}
+						}
+					}
+				},
+				many: ['terms']
+			},
+			terms: {
+				record_label: 'record.effective_from',
+				label: ['effective_from'],
+				fields: {
+					effective_from: { kind: 'date' },
+					rate: {
+						kind: 'json',
+						optional: true,
+						shape: {
+							kind: 'union',
+							by: 'unit',
+							arms: {
+								MONTHLY: { amount: { kind: 'number' } },
+								HOURLY: { amount: { kind: 'number' } }
+							}
+						}
+					}
+				},
+				relations: { employee_id: { targets: ['employees'], inverse: 'terms' } }
+			}
+		};
+		const cases: { where: Json; text: string }[] = [
+			{
+				where: { meta: { country: { eq: 'SG' } } },
+				text: 'Meta › Country is SG'
+			},
+			{
+				where: { meta: { location: { floor: { gte: 4 } } } },
+				text: 'Meta › Location › Floor at least 4'
+			},
+			{
+				where: { terms: { some: { rate: { unit: { eq: 'MONTHLY' } } } } },
+				text: 'Terms has any: Rate › Unit is Monthly'
+			},
+			{
+				where: { terms: { some: { rate: { MONTHLY: { amount: { gt: 5000 } } } } } },
+				text: 'Terms has any: Rate (MONTHLY) › Amount more than 5,000'
+			},
+			{
+				where: {
+					terms: {
+						some: {
+							rate: {
+								MONTHLY: {
+									and: [{ amount: { gte: 4000 } }, { amount: { lte: 8000 } }]
+								}
+							}
+						}
+					}
+				},
+				text: 'Terms has any: (Rate (MONTHLY) › Amount at least 4,000 and Rate (MONTHLY) › Amount at most 8,000)'
+			}
+		];
+		for (const { where, text } of cases) {
+			const parsed = fromWhere(inlineCatalog, 'employees', where);
+			expect(parsed).not.toBeNull();
+			if (parsed !== null) {
+				expect(rowsWhere(inlineCatalog, 'employees', parsed)).toEqual(
+					// `and` inside union arm normalizes to separate arm-scoped conjuncts which are semantically identical
+					where === cases[4]?.where
+						? {
+								terms: {
+									some: {
+										and: [
+											{ rate: { MONTHLY: { amount: { gte: 4000 } } } },
+											{ rate: { MONTHLY: { amount: { lte: 8000 } } } }
+										]
+									}
+								}
+							}
+						: where
+				);
+				expect(parsed.map((n) => nodeText(inlineCatalog, 'employees', n, humanize)).join(' and ')).toBe(
+					text
+				);
+			}
+		}
+		// bare `not` directly inside a union arm is rejected by fromWhere (would change null/other-arm semantics if lifted)
+		expect(
+			fromWhere(inlineCatalog, 'employees', {
+				terms: { some: { rate: { MONTHLY: { not: { amount: { eq: 3000 } } } } } }
+			})
+		).toBeNull();
 	});
 });

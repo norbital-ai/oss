@@ -40,8 +40,13 @@ export function pathLabel(
 ): string {
 	const out: string[] = [];
 	let c = model;
+	let inInline = false;
 	for (const step of path.split('.')) {
 		const [name = '', arm] = step.split(':');
+		if (inInline) {
+			out.push(human(name) + (arm === undefined ? '' : ` (${human(arm)})`));
+			continue;
+		}
 		const x = cat[c],
 			rel = x?.relations?.[name];
 		// a relation is named for its record ("Site"), never its key column ("Site id"): the describer's own words
@@ -52,7 +57,8 @@ export function pathLabel(
 				human(rel === undefined ? name : name.replace(/_id$/, ''))) +
 				(arm === undefined ? '' : ` (${human(arm)})`)
 		);
-		c = arm ?? rel?.targets[0] ?? c;
+		if (rel !== undefined) c = arm ?? rel.targets[0] ?? c;
+		else inInline = true;
 	}
 	return out.join(' › ');
 }

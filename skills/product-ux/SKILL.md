@@ -5,7 +5,7 @@ authoring: true
 description: How a workspace's apps, pages and record representations should be composed.
 ---
 
-1. Compose from shell, layout and view primitives — never raw root markup. Open layout/app references only for what `bolt-primer` leaves open.
+1. Compose from shell, layout and view primitives — never raw root markup. Open layout/app references only for what `bolt-primer` leaves open. This is an operational web application, never a landing or marketing page: the primary home screen must display live operational work (records, KPIs, queues, and actions) — never static step-by-step instructions or how-to-use cards.
 2. Organize apps by workflow (e.g. operations vs configuration), never one page per model. Every model has one primary home; owned children live inside their parent's record hub.
 3. One concern per view (app page, app tab, or record tab): at most one `Table` or `Board` per view. Separate distinct lists into tabs; never stack tables or repeat metrics owned by another page/tab.
 4. One scroll owner per region per axis: `AppShell` owns page chrome; never nest scrolling containers on one axis. `Table`/`Board` fills its parent and scrolls internally; `Tabs` panels never own scroll.

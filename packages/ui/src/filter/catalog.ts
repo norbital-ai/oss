@@ -171,6 +171,66 @@ const SYS: { readonly [f: string]: Kind } = {
 	updated_at: { kind: 'instant' }
 };
 
+/** Unwrap nested `json` shape wrappers (`{ kind: 'json', shape }`). */
+export const unwrapShape = (k: Kind): Kind =>
+	k.kind === 'json' && k.many !== true && k.shape !== undefined ? unwrapShape(k.shape) : k;
+
+/** Whether a model field carries a navigable inline structure (`object`, `record`, or discriminated `union`). */
+export const isInlineField = (k: Kind | undefined): boolean => {
+	if (k === undefined || k.many === true) return false;
+	const inner = unwrapShape(k);
+	return (
+		inner.kind === 'object' ||
+		inner.kind === 'record' ||
+		(inner.kind === 'union' && 'arms' in inner)
+	);
+};
+
+function resolveInline(
+	base: Kind,
+	rest: readonly string[],
+	startArm: string | undefined,
+	label: string
+): Resolved | null {
+	let k: Kind = unwrapShape(base);
+	let nullable = base.optional === true;
+	const enterArm = (arm: string): Kind | null => {
+		if (k.kind !== 'union' || !('arms' in k)) return null;
+		const fields = k.arms[arm];
+		return fields === undefined ? null : { kind: 'object', fields };
+	};
+	if (startArm !== undefined) {
+		const next = enterArm(startArm);
+		if (next === null) return null;
+		k = next;
+	}
+	for (const step of rest) {
+		const [name = '', arm] = step.split(':');
+		if (name === '') return null;
+		k = unwrapShape(k);
+		if (k.many === true) return null;
+		if (k.kind === 'object') {
+			const sub = k.fields[name] ?? k.rest;
+			if (sub === undefined) return null;
+			nullable ||= sub.optional === true;
+			k = unwrapShape(sub);
+		} else if (k.kind === 'record') {
+			nullable ||= k.of.optional === true;
+			k = unwrapShape(k.of);
+		} else if (k.kind === 'union' && 'arms' in k) {
+			if (arm === undefined && name === k.by)
+				k = { kind: 'enum', values: Object.keys(k.arms) };
+			else return null;
+		} else return null;
+		if (arm !== undefined) {
+			const next = enterArm(arm);
+			if (next === null) return null;
+			k = next;
+		}
+	}
+	return { leaf: 'field', kind: k, nullable, label };
+}
+
 export function resolve(cat: Catalog, model: string, path: string): Resolved | null {
 	const steps = path.split('.');
 	let c = model;
@@ -191,8 +251,8 @@ export function resolve(cat: Catalog, model: string, path: string): Resolved | n
 			c = target;
 			continue;
 		}
-		if (!last || arm !== undefined) return null;
-		if (INDEX[name] !== undefined)
+		if (INDEX[name] !== undefined) {
+			if (!last || arm !== undefined) return null;
 			return (name === '$search' ? (x.search?.length ?? 0) > 0 : x.semantic === true)
 				? {
 						leaf: 'field',
@@ -201,12 +261,15 @@ export function resolve(cat: Catalog, model: string, path: string): Resolved | n
 						label: INDEX[name]?.label ?? name
 					}
 				: null;
+		}
 		const kind =
 			(c.startsWith('$') ? undefined : SYS[name]) ??
 			(filterable(x, name) ? x.fields[name] : undefined); // `$local`: no system columns
-		return kind === undefined
-			? null
-			: { leaf: 'field', kind, nullable: kind.optional === true, label: kind.label ?? name };
+		if (kind === undefined) return null;
+		if (last && arm === undefined)
+			return { leaf: 'field', kind, nullable: kind.optional === true, label: kind.label ?? name };
+		if (!isInlineField(kind)) return null;
+		return resolveInline(kind, steps.slice(i + 1), arm, kind.label ?? name);
 	}
 	return null;
 }

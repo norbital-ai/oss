@@ -1331,7 +1331,7 @@ export const create_bolt = (config: BoltConfig) =>
 								...(fields === undefined ? {} : { fields })
 							}).pipe(
 								Effect.timeoutOrElse({
-									duration: '15 seconds',
+									duration: '35 seconds',
 									orElse: () => Effect.fail(new DescribeTimeout())
 								}),
 								Effect.flatMap(

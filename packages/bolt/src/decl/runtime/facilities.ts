@@ -472,7 +472,8 @@ export type Ingest =
  * at JSON Pointers whose segment for an item of a keyed list, `{ kind: 'object', many: true, key }`, is its key, not its index),
  * inspected with `read`, `find` and `diff` (changes since the start, keyed items matched by key), and handed in with
  * `submit`; a submission that does not match `output` or `rules` comes back with its problems and the model goes on until
- * one matches.
+ * one matches. When the request cannot be fulfilled as asked, the model may call `refuse({ message })` to fail the call
+ * `invalid` immediately with that message instead of guessing.
  */
 type InferRequest<O, Tools> = {
 	model?: AiModelClass;
@@ -600,18 +601,37 @@ type DecisionAnswers<Q extends { readonly [id: string]: DecisionQuestion }> = {
 			: { type: 'noul'; noul: number };
 };
 /**
- * `ctx.ai.sys_1.decide`: answers independent typed questions over one `state` in one call. A choice returns its option
- * key and probabilities, a score its expected score, level and probabilities, a noul the probability of true; code then
- * composes the selected entries (a choice's `where`, say) and validates the result. Inline PNG/JPEG evidence goes in
- * `state` as `{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,…' } }`; remote URLs are refused. Each
- * decision records an `ai.call` (`category: 'decisions'`) and is metered once.
+ * `ctx.ai.sys_1.decide`: answers independent fixed-set questions over one shared `state` in a single bounded call
+ * (3 s wall, fail-closed, no fallback). Use `sys_1` for lightweight classification, triage, routing, binary predicates,
+ * and 1–10 ordinal scoring; use `ctx.ai.sys_2.infer` for structured drafting, recursive queries/ASTs, multi-step tool
+ * use, or open-ended extraction.
+ *
+ * Each question is evaluated independently: a `choice` returns its winning option key and normalized probabilities, a
+ * `score` returns its expected score, winning `level` (the criterion entry itself, mapped from the port's 0-based
+ * index), probabilities and `legend`, and a `noul` returns the probability of true in `[0, 1]`. Inline PNG/JPEG
+ * evidence goes in `state` as `{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,…' } }` (at most 16
+ * images / 20 MiB); stored `FileRef`s and remote URLs are refused. Each call records one `ai.call`
+ * (`category: 'decisions'`) and one `decision.made` trace, metered once.
  * @example
  * const { answers } = yield* ctx.ai.sys_1.decide({
- * 	state: { description },
- * 	questions: { filter: { type: 'choice', instructions: 'Which filter does `description` ask for?',
- * 		criteria: { open: { where: { status: { eq: 'open' } } }, none: { where: null } } } }
+ * 	state: { subject: ticket.subject, body: ticket.body },
+ * 	questions: {
+ * 		queue: {
+ * 			type: 'choice',
+ * 			instructions: 'Which team should handle this ticket?',
+ * 			criteria: { billing: 'invoices, refunds, charges', support: 'product usage or bugs', sales: 'quotes or upgrades' }
+ * 		},
+ * 		urgent: {
+ * 			type: 'noul',
+ * 			instructions: 'Does this report a production outage or safety incident?',
+ * 			criteria: { true: 'active outage or safety issue', false: 'routine request' }
+ * 		},
+ * 		severity: { type: 'score', instructions: 'Impact level', criteria: ['low', 'medium', 'high'] }
+ * 	}
  * });
- * answers.filter.choice; // 'open' | 'none'
+ * answers.queue.choice; // 'billing' | 'support' | 'sales'
+ * answers.urgent.noul; // 0..1
+ * answers.severity.level; // 'low' | 'medium' | 'high'
  */
 interface Decide {
 	<const Q extends { readonly [id: string]: DecisionQuestion }>(request: {

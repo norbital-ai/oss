@@ -114,6 +114,14 @@ export type Pred =
 			readonly q: 'some' | 'none' | 'every';
 			readonly pred: Pred;
 	  }
+	/** A union-arm predicate inside an inline value: holds only when discriminator at `path` equals `arm` and `pred` holds. */
+	| {
+			readonly t: 'arm';
+			readonly field: string;
+			readonly path: readonly string[];
+			readonly arm: string;
+			readonly pred: Pred;
+	  }
 	| { readonly t: 'json'; readonly field: string; readonly contains: Json }
 	/**
 	 * `$search`: the model's `search.text` document holds every word of `text`, or a link it names reaches a row whose own

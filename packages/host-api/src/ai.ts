@@ -54,50 +54,92 @@ export const AiPortResponseSchema = Schema.Struct({
 /** The host's system-2 answer (`AiPortResponseSchema`): content, tool calls, how it finished and its usage. */
 export type AiResponse = typeof AiPortResponseSchema.Type;
 
+/**
+ * Authoritative bounds for one System 1 (`sys_1`) decision call: wall timeout, inline image budget,
+ * question/option cardinalities, and provider-specific caps.
+ */
+export const DECISION_LIMITS = {
+	/** Maximum wall time for one `sys_1` call in milliseconds (3 s). */
+	call_ms: 3_000,
+	/** Maximum number of inline PNG/JPEG images allowed inside `state`. */
+	max_images: 16,
+	/** Maximum combined decoded byte size of inline images inside `state` (20 MiB). */
+	max_image_bytes: 20 * 1024 * 1024,
+	/** Maximum choices per `choice` question on the native Jev Decisions API. */
+	max_choices: 255,
+	/** Minimum criterion levels for a `score` question. */
+	min_score_levels: 1,
+	/** Maximum criterion levels for a `score` question. */
+	max_score_levels: 10,
+	/** Maximum questions per call on the OpenAI `/v1/decisions` wire format. */
+	openai_max_questions: 400,
+	/** Minimum choices/levels per question on the OpenAI `/v1/decisions` wire format. */
+	openai_min_options: 2
+} as const;
+
 const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
-const Entry = Schema.Union([
+/** Structured entry in a System 1 question or criterion: string, null, JSON array, or JSON object. */
+export const DecisionEntrySchema = Schema.Union([
 	Schema.String,
 	Schema.Null,
 	Schema.Array(Schema.Json),
 	Schema.Record(Schema.String, Schema.Json)
 ]);
-const Question = Schema.Union([
+/** Non-null shared evidence state for one System 1 decision call (text, JSON, and resolved inline PNG/JPEG images). */
+export const DecisionStateSchema = Schema.Union([
+	Schema.String,
+	Schema.Array(Schema.Json),
+	Schema.Record(Schema.String, Schema.Json)
+]);
+/** One typed System 1 question: `noul` (binary probability), `choice` (categorical), or `score` (1–10 ordinal levels). */
+export const DecisionQuestionSchema = Schema.Union([
 	Schema.Struct({
 		type: Schema.Literal('noul'),
-		instructions: Schema.optionalKey(Entry),
+		instructions: Schema.optionalKey(DecisionEntrySchema),
 		criteria: Schema.optionalKey(
 			Schema.NullOr(
-				Schema.Struct({ true: Schema.optionalKey(Entry), false: Schema.optionalKey(Entry) })
+				Schema.Struct({
+					true: Schema.optionalKey(DecisionEntrySchema),
+					false: Schema.optionalKey(DecisionEntrySchema)
+				})
 			)
 		)
 	}),
 	Schema.Struct({
 		type: Schema.Literal('choice'),
-		instructions: Schema.optionalKey(Entry),
-		criteria: Schema.Record(Schema.String, Entry).check(
+		instructions: Schema.optionalKey(DecisionEntrySchema),
+		criteria: Schema.Record(Schema.String, DecisionEntrySchema).check(
 			Schema.makeFilter((value) => Object.keys(value).length > 0)
 		)
 	}),
 	Schema.Struct({
 		type: Schema.Literal('score'),
-		instructions: Schema.optionalKey(Entry),
-		criteria: Schema.Array(Entry).check(Schema.isMinLength(1), Schema.isMaxLength(10))
+		instructions: Schema.optionalKey(DecisionEntrySchema),
+		criteria: Schema.Array(DecisionEntrySchema).check(
+			Schema.isMinLength(DECISION_LIMITS.min_score_levels),
+			Schema.isMaxLength(DECISION_LIMITS.max_score_levels)
+		)
 	})
 ]);
-/** One System 1 call: the state it reads and its questions by key. */
+/**
+ * One System 1 decision request: shared `state` (JSON/text plus resolved inline PNG/JPEG images) and a non-empty map
+ * of independent `questions`. Intended for fixed-set classification, triage, routing, predicates, and ordinal scoring —
+ * never free-form or recursive AST generation (use `sys_2.infer` for that).
+ */
 export const DecisionRequestSchema = Schema.Struct({
-	state: Schema.Union([
-		Schema.String,
-		Schema.Array(Schema.Json),
-		Schema.Record(Schema.String, Schema.Json)
-	]),
-	questions: Schema.Record(Schema.String, Question).check(
+	state: DecisionStateSchema,
+	questions: Schema.Record(Schema.String, DecisionQuestionSchema).check(
 		Schema.makeFilter((value) => Object.keys(value).length > 0)
 	)
 });
 /** One System 1 call (`DecisionRequestSchema`): the state it reads and its questions by key. */
 export type DecisionRequest = typeof DecisionRequestSchema.Type;
-const DecisionAnswerSchema = Schema.Union([
+/**
+ * Schema of one System 1 answer: `noul` probability in `[0, 1]`, `choice` with winning key and normalized distribution,
+ * or `score` with expected value, 0-based winning `level` index (mapped to the criterion value at the guest boundary),
+ * distribution, and `legend`.
+ */
+export const DecisionAnswerSchema = Schema.Union([
 	Schema.Struct({ type: Schema.Literal('noul'), noul: Probability }),
 	Schema.Struct({
 		type: Schema.Literal('choice'),
@@ -111,7 +153,7 @@ const DecisionAnswerSchema = Schema.Union([
 		level: Schema.Int,
 		confidence: Schema.Finite,
 		probabilities: Schema.Record(Schema.String, Schema.Finite),
-		legend: Schema.Record(Schema.String, Entry)
+		legend: Schema.Record(Schema.String, DecisionEntrySchema)
 	})
 ]);
 /** One System 1 answer to a question: a `noul` probability, a `choice` or a `score`, each with its probabilities. */
@@ -126,7 +168,10 @@ export const DecisionResult = Schema.Struct({
 	tokens: Schema.optionalKey(Schema.Struct({ input: Schema.Number, output: Schema.Number }))
 });
 export type DecisionResult = typeof DecisionResult.Type;
-/** Fast structured decisions (`ctx.ai.sys_1.decide`, triage). */
+/**
+ * Host port for System 1 (`sys_1`): bounded, fail-closed, independent structured decisions over text, JSON, and
+ * resolved inline PNG/JPEG images (`ctx.ai.sys_1.decide` and conversation triage). Never falls back silently.
+ */
 export interface System1Port {
 	/** `model`: a `catalog` id the workspace's administrator chose; absent, `catalog().default`. */
 	ask(request: DecisionRequest, signal: AbortSignal, model?: string): Promise<DecisionResult>;
@@ -204,9 +249,10 @@ export interface EmbeddingsPort {
 	): Promise<readonly (readonly number[])[]>;
 }
 /**
- * The AI facility: `sys_1` (fast structured decisions, text only) and `sys_2` (the LLM, multimodal) are both
- * required when the port is bound; `embed` (multimodal) is present when the host maps an embedding model. The host
- * verifies at activation that every `sys_2` and `embed` model takes images; nothing here branches on modality.
+ * The AI facility: `sys_1` (fast structured decisions over text, JSON, and resolved inline PNG/JPEG images) and `sys_2`
+ * (the multimodal LLM) are both required when the port is bound; `embed` (multimodal) is present when the host maps an
+ * embedding model. The host verifies at activation that every `sys_2` and `embed` model takes images; nothing here
+ * branches on modality.
  */
 export interface AiPort {
 	sys_1: System1Port;

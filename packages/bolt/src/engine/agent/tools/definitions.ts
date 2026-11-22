@@ -171,11 +171,12 @@ export const updatePlanTool = defineTool('update_plan', {
 export const skillTool = defineTool('skill', {
 	behavior: { data: true },
 	description:
-		'Read a skill whole, an exact ## section seen in it, or one of its files. Use workspace_lang for component APIs.',
+		'Read a skill whole, an exact ## section seen in it, one file (file), or several files at once (files). Use workspace_lang for component APIs.',
 	parameters: Schema.Struct({
 		name: Schema.String,
 		section: Schema.optionalKey(Schema.String),
-		file: Schema.optionalKey(Schema.String)
+		file: Schema.optionalKey(Schema.String),
+		files: Schema.optionalKey(Schema.Array(Schema.NonEmptyString).check(Schema.isMaxLength(12)))
 	})
 });
 

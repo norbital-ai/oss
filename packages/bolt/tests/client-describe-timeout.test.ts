@@ -28,7 +28,7 @@ it.effect('a stalled describe fails visibly and aborts; a retry succeeds', () =>
 		const describe = yield* Effect.flip(
 			bolt.describe('template_documents', 'show latest version only')
 		).pipe(Effect.forkScoped);
-		yield* TestClock.adjust('15 seconds');
+		yield* TestClock.adjust('35 seconds');
 		expect(signal?.aborted).toBe(true);
 		const error = yield* Fiber.join(describe);
 		expect(error).toMatchObject({ _tag: 'DescribeTimeout' });
@@ -54,7 +54,7 @@ it.effect('describe bounds a stalled response body as well as fetch', () =>
 		});
 		if (bolt.describe === undefined) throw new Error('expected describe');
 		const describe = yield* Effect.flip(bolt.describe('jobs', 'open jobs')).pipe(Effect.forkScoped);
-		yield* TestClock.adjust('15 seconds');
+		yield* TestClock.adjust('35 seconds');
 		expect(yield* Fiber.join(describe)).toMatchObject({ _tag: 'DescribeTimeout' });
 	})
 );
@@ -76,7 +76,7 @@ it.effect('the describe deadline never aborts a mutating act', () =>
 		const act = yield* bolt
 			.act({ 'jobs.update': [{ target: { id: 'job1', revision: 1 }, set: { status: 'done' } }] })
 			.pipe(Effect.forkScoped);
-		yield* TestClock.adjust('15 seconds');
+		yield* TestClock.adjust('35 seconds');
 		expect(act.pollUnsafe() === undefined).toBe(true);
 		expect(signal?.aborted).toBe(false);
 	})

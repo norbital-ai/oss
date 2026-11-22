@@ -278,6 +278,7 @@ describe("sys_2.infer tools: ['read']", () => {
 						'read',
 						'edit',
 						'submit',
+						'refuse',
 						'read_answer',
 						'find',
 						'diff'
@@ -313,6 +314,7 @@ describe("sys_2.infer tools: ['read']", () => {
 					expect(required(required(ai.requests[2]).tools).map((tool) => tool.name)).toEqual([
 						'edit',
 						'submit',
+						'refuse',
 						'read_answer',
 						'find',
 						'diff'

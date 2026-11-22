@@ -244,7 +244,7 @@ it.effect(
 		return Effect.gen(function* () {
 			const decisions = yield* Decisions;
 			const facilities = yield* Facilities;
-			expect(yield* decisions.decide('filter', request)).toEqual(result);
+			expect(yield* decisions.decide('triage', request)).toEqual(result);
 			const dispatch = facilities.dispatch({ _tag: 'ai.sys_1.decide', args: [request] }).pipe(
 				Effect.provideService(DecisionTrace, {
 					invocation: 'run-1:1',
@@ -273,7 +273,7 @@ it.effect(
 				severity: 'info',
 				invocation: expect.any(String),
 				run: null,
-				attributes: { use: 'filter', answers: result.answers }
+				attributes: { use: 'triage', answers: result.answers }
 			});
 			for (const event of traces().slice(1))
 				expect(event).toMatchObject({

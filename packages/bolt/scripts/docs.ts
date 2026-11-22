@@ -97,7 +97,7 @@ For a daily channel message, read the intended active workspace account (\`owner
 Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string; do date and duration math with Effect's \`DateTime\` and \`Duration\` (\`DateTime.add(DateTime.makeUnsafe(ctx.today), { months: 1 })\`, \`DateTime.formatIsoDateUtc\`). A model's \`effect\` has the same two.
 
 In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.run_due()\` fires what is due at that instant. Assert \`expect(failed).toEqual([])\` first: a run that failed says why there, and nothing else will.`,
-	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares:
+	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares (\`delete: {}\` must be declared here before any policy can grant \`delete\`):
 
 \`\`\`ts
 import { model } from '@norbital-ai/bolt';
@@ -105,7 +105,7 @@ import { model } from '@norbital-ai/bolt';
 export default model('<name>', {
 	description: '<what one record is>',
 	icon: 'lucide:<icon>',
-	record_label: 'record.<field>',
+	record_label: 'record.<field>', // row's own text/computed field — never a ref FK
 	fields: {
 		<field>: { kind: 'text' },
 		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', on_delete: 'restrict' }
@@ -113,17 +113,18 @@ export default model('<name>', {
 	outputs: { default: { fields: 'all' } },
 	// fields use the same nested tree as outputs: fields, then child-relation keys
 	create: { fields: ['<field>', '<other>'] },
-	update: { fields: ['<field>', '<other>'] }
+	update: { fields: ['<field>', '<other>'] },
+	delete: {}
 });
 \`\`\`
 
-A required field added to a model with rows needs a data step in its generated migration, filling them.`,
+\`seq\` patterns take one \`{0…}\` counter and only \`{yyyy}\`, \`{yy}\`, \`{mm}\`. \`decimal\`/\`money\` fields write and read as exact decimal strings (\`'10.00'\`), never JS numbers. A required field added to a model with rows needs a data step in its generated migration, filling them.`,
 	integration: `A definition lives at \`src/integration/<name>/+integration.ts\` and declares \`integration('<name>', { … })\` (\`<name>\` is its folder). Read the definition's exported types before authoring it. Built-in conversation definitions already exist.
 
 Accounts and envoys are runtime records: \`sys_envoy\` holds the assistant's name, task and policies; \`sys_integration\` holds one account, its configuration, optional envoy and durable sealed pairing. Create any number of workspace accounts with no owner. Settings → Envoys creates an envoy then pairs its provider; Settings → Connections creates and configures other workspace accounts. Keep a supplied \`+integration.svelte\` companion.
 
 For native setup in a root web conversation, read \`describe_workspace { names: ['system'] }\`; use the returned capability and account id with \`page { path, configure }\`. The native form collects credentials directly from the person. Envoys and delegated agents have no user tab. Never ask for a secret in chat or invent an envoy source file. Cron jobs send through a concrete paired workspace account with \`ctx.send\`; see the automation card.`,
-	access: `A policy is one file; a grant names only verbs its model declares. Every team is in the one team file:
+	access: `A policy is one file; a grant names only verbs its model declares (never grant \`delete\` unless the model declares \`delete: {}\`). State transitions use \`update: { moves: 'all' }\` or \`moves: { <state_field>: ['<from>-><to>'] }\`. Every team is in the one team file:
 
 \`\`\`ts
 // src/access_control/policy/+<policy>.policy.ts
@@ -131,7 +132,7 @@ import { policy } from '@norbital-ai/bolt';
 
 export default policy({
 	description: '<what holders may do>',
-	grants: { <model>: { outputs: { default: {} }, create: {}, update: {} } }
+	grants: { <model>: { outputs: { default: {} }, create: {}, update: { moves: 'all' } } }
 });
 
 // src/access_control/team/+team.ts
@@ -139,17 +140,17 @@ import { team } from '@norbital-ai/bolt';
 
 export default team({ <team>: { name: '<Team name>', policies: ['<policy>'] } });
 \`\`\``,
-	page: `An app is its folder: \`+app.ts\` and one \`+<page>.page.svelte\` per page. A list of records needs nothing else:
+	page: `An app is its folder: \`+app.ts\` and one \`+<page>.page.svelte\` per page. Use message keys in \`+app.ts\` (\`title\`, \`description\`, \`pages.<page>.title\`) declared in \`src/i18n/+messages.ts\` (and \`+<lang>.messages.ts\` for extra languages). Always pass \`{ctx}\` to \`<Table>\`, \`<Board>\` and \`<RecordShell>\`:
 
 \`\`\`ts
 // src/app/<app>/+app.ts
 import { app } from '@norbital-ai/bolt';
 
 export default app({
-	title: '<Title>',
-	description: '<what it is for>',
+	title: 'app.<app>.title',
+	description: 'app.<app>.description',
 	icon: 'lucide:<icon>',
-	pages: { <page>: { title: '<Title>', icon: 'lucide:<icon>' } }
+	pages: { <page>: { title: 'app.<app>.tab_<page>', icon: 'lucide:<icon>' } }
 });
 \`\`\`
 
@@ -157,9 +158,10 @@ export default app({
 <!-- src/app/<app>/+<page>.page.svelte -->
 <script lang="ts">
 	import { Table } from '@norbital-ai/ui';
+	let { ctx } = $props();
 </script>
 
-<Table of="<model>" />
+<Table {ctx} of="<model>" />
 \`\`\``,
 	representation: `A model's custom record screen lives beside its model at \`src/data/model/<model>/+representation.svelte\`. Wrap it in \`RecordShell\` (which owns header, state moves, approvals, history and save/cancel) and arrange fields with \`Section\`, \`Field\` and embedded child \`Table\`s:
 
@@ -176,25 +178,37 @@ export default app({
 	</Section>
 </RecordShell>
 \`\`\``,
-	test: `Tests are \`tests/<name>.test.ts\`. Everything comes from the kit, and \`workspace_test\` runs them:
+	test: `Tests are \`tests/<name>.test.ts\`. Everything comes from the kit, and \`workspace_test\` runs them.
+- \`caller.act(...)\` returns \`{ kind: 'committed', records: [{ model, id, revision }] }\` (or \`'held'\`), NOT a per-verb map.
+- Brand a record id for \`ref\` fields or \`target\` with \`Schema.decodeUnknownSync(id_of('<model>'))(record.id)\` from \`@norbital-ai/bolt\`.
+- \`caller.query(...)\` returns \`Record<string, QueryPage | AggregateResult>\`; narrow each root with \`page !== undefined && 'rows' in page ? page.rows : []\`.
+- \`caller.run('<automation>', input, JobResult)\` starts an automation; call \`yield* t.run_due()\` to drain queued runs.
 
 \`\`\`ts
-import { Effect, Exit } from 'effect';
-import { TestWorkspace, expect, it } from '@norbital-ai/bolt-cli/test';
+import { Effect, Exit, Schema } from 'effect';
+import { id_of } from '@norbital-ai/bolt';
+import { JobResult, TestWorkspace, expect, it } from '@norbital-ai/bolt-cli/test';
 
 it.layer(TestWorkspace.layer({ root: new URL('..', import.meta.url).pathname }))('<model>', (it) => {
 	it.effect('<what it proves>', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
 			const caller = yield* t.as(t.member(['<policy>'])); // or yield* t.as(t.admin)
-			yield* caller.act({ '<model>.create': [{ <field>: <value> }] });
+			const res = yield* caller.act({ '<model>.create': [{ <field>: <value> }] });
+			if (res.kind !== 'committed') throw new Error(res.kind);
+			const created = res.records.find((r) => r.model === '<model>');
+			if (created === undefined) throw new Error('Expected created record.');
+			const id = Schema.decodeUnknownSync(id_of('<model>'))(created.id);
 			const refused = yield* Effect.exit(caller.act({ '<model>.create': [{ <field>: <bad value> }] }));
 			expect(Exit.isFailure(refused)).toBe(true);
-			const { rows } = (yield* caller.query({ <model>: { fields: ['<field>'] } })).<model>;
-			expect(rows).toHaveLength(1);
-			const [row] = rows;
-			if (row === undefined) throw new Error('Expected the created row.');
-			yield* caller.act({ '<model>.update': [{ target: row, set: { <field>: <value> } }] });
+			const page = (yield* caller.query({ <model>: { fields: ['<field>'] } }))['<model>'];
+			const rows = page !== undefined && 'rows' in page ? page.rows : [];
+			expect(rows.length).toBeGreaterThanOrEqual(1);
+			yield* caller.act({
+				'<model>.update': [{ target: { id, revision: created.revision }, set: { <field>: <value> } }]
+			});
+			yield* caller.run('<automation>', {}, JobResult);
+			yield* t.run_due();
 		})
 	);
 });

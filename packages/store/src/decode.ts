@@ -294,7 +294,7 @@ const fieldOp = Effect.fnUntraced(function* (
 			}
 			return yield* invalid(`${at}: takes { bbox: [point, point] } or { polygon: ≥ 3 points }`);
 		}
-	} else if (['json', 'object', 'record'].includes(f.kind)) {
+	} else if (['json', 'object', 'record', 'union'].includes(f.kind)) {
 		if (op === 'contains')
 			return { t: 'json', field: f.name, contains: yield* jsonOf(v, at) } satisfies Pred;
 		if ((op === 'eq' || op === 'ne') && EffectArray.isArray(v))
@@ -379,6 +379,30 @@ const shapeOp: (
 		const sub = k.kind === 'object' ? (k.fields?.[op] ?? k.rest) : nested_kind(k.of);
 		if (sub !== undefined) return yield* shapeWhere(field, sub, v, [...path, op], at, depth + 1);
 	}
+	// A discriminated union: filter on the discriminator (`k.by`) as an enum, or scope to an arm (`k.arms[op]`) guarded by `t: 'arm'`.
+	if (k.many !== true && k.kind === 'union' && k.by !== undefined && k.arms !== undefined) {
+		if (op === k.by)
+			return yield* shapeWhere(
+				field,
+				{ kind: 'enum', values: Object.keys(k.arms) },
+				v,
+				[...path, k.by],
+				at,
+				depth + 1
+			);
+		const armFields = k.arms[op];
+		if (armFields !== undefined) {
+			const pred = yield* shapeWhere(
+				field,
+				{ kind: 'object', fields: armFields },
+				v,
+				path,
+				at,
+				depth + 1
+			);
+			return { t: 'arm', field, path: [...path, k.by], arm: op, pred } satisfies Pred;
+		}
+	}
 	if (op === 'not') return { t: 'not', of: yield* shapeWhere(field, k, v, path, at, depth + 1) } satisfies Pred;
 	if (op === 'and' || op === 'or') return {
 		t: op,
@@ -393,7 +417,7 @@ const shapeOp: (
 		}
 		return undefined;
 	}
-	if (k.kind === 'object' || k.kind === 'record') {
+	if (k.kind === 'object' || k.kind === 'record' || k.kind === 'union') {
 		return undefined;
 	}
 	if (!SCALAR_OPS.includes(op)) return undefined;
@@ -429,7 +453,9 @@ export function inline_leaf(f: FieldInfo, path: readonly string[]): FieldInfo | 
 				? (at.fields?.[step] ?? at.rest)
 				: at?.kind === 'record'
 					? nested_kind(at.of)
-					: undefined;
+					: at?.kind === 'union' && at.by === step && at.arms !== undefined
+						? { kind: 'enum', values: Object.keys(at.arms) }
+						: undefined;
 	}
 	if (
 		k === undefined ||
@@ -449,7 +475,7 @@ const shapeWhere = Effect.fnUntraced(function* (
 	depth: number
 ) {
 	const k = shaped(shape);
-	const scalar = k.many !== true && !['object', 'record', 'json'].includes(k.kind);
+	const scalar = k.many !== true && !['object', 'record', 'json', 'union'].includes(k.kind);
 	const preds = yield* Effect.forEach(
 		yield* nonEmpty(
 			scalar && !Predicate.isObject(ops) ? { eq: ops } : ops,

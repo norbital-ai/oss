@@ -5,6 +5,7 @@ import { Effect, Predicate, Schema, Stream } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import {
 	type AiEvent,
+	DECISION_LIMITS,
 	type DecisionAnswer,
 	type DecisionRequest,
 	DecisionResult,
@@ -43,7 +44,7 @@ export const decision_images = (state: DecisionRequest['state']) =>
 			Effect.mapError((error) => FacilityFailure.invalid(error.message))
 		);
 		if (
-			images.length > 16 ||
+			images.length > DECISION_LIMITS.max_images ||
 			images.reduce((n, image) => {
 				const data = imageData(image);
 				return (
@@ -51,8 +52,7 @@ export const decision_images = (state: DecisionRequest['state']) =>
 					Math.floor((data.length * 3) / 4) -
 					(data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
 				);
-			}, 0) >
-				20 * 1024 * 1024
+			}, 0) > DECISION_LIMITS.max_image_bytes
 		)
 			return yield* Effect.fail(
 				new FacilityFailure({
@@ -82,8 +82,8 @@ export type System1 = {
 	) => Effect.Effect<DecisionResult, FacilityFailure | Unavailable>;
 	readonly maxChoices?: number | undefined;
 };
-/** System 1's wall: one decision call, at most 3 s. */
-export const DECISION_CALL_MS = 3_000;
+/** System 1's wall: one decision call, at most 3 s (`DECISION_LIMITS.call_ms`). */
+export const DECISION_CALL_MS = DECISION_LIMITS.call_ms;
 const walkJson = (v: Json, leaf: (x: Json) => Json | undefined): Json => {
 	const r = leaf(v);
 	if (r !== undefined) return r;
@@ -229,9 +229,12 @@ export const answer_criteria = (request: DecisionRequest) =>
 		)
 	);
 
-type DecisionsApiConfig = {
+/** Wire format spoken by an HTTP Decisions API endpoint (`jev` native wire or OpenAI `/v1/decisions`). */
+export type DecisionsApiFormat = 'jev' | 'openai';
+/** Configuration for `decisions_system_1`: endpoint URL, wire format, default model, bearer key, and optional timeout wall. */
+export type DecisionsApiConfig = {
 	/** Jev/OpenRouter by default; OpenAI native `/v1/decisions` uses its own wire format. */
-	format?: 'jev' | 'openai';
+	format?: DecisionsApiFormat;
 	url: string;
 	model: string;
 	api_key: string;
@@ -379,18 +382,18 @@ export function decisions_system_1(config: DecisionsApiConfig, options: HttpOpti
 		provider: Schema.optionalKey(Schema.String)
 	});
 	return {
-		maxChoices: 255,
+		maxChoices: DECISION_LIMITS.max_choices,
 		ask: Effect.fn('Decisions.httpAsk')(
 			function* (request, chosen?: string) {
 				const model = chosen ?? config.model;
 				const media = yield* decision_images(request.state);
 				if (
 					config.format === 'openai' &&
-					(Object.keys(request.questions).length > 400 ||
+					(Object.keys(request.questions).length > DECISION_LIMITS.openai_max_questions ||
 						Object.values(request.questions).some((question) =>
 							question.type === 'choice'
-								? Object.keys(question.criteria).length < 2
-								: question.type === 'score' && question.criteria.length < 2
+								? Object.keys(question.criteria).length < DECISION_LIMITS.openai_min_options
+								: question.type === 'score' && question.criteria.length < DECISION_LIMITS.openai_min_options
 						))
 				)
 					return yield* Effect.fail(

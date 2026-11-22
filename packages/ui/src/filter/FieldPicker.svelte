@@ -10,7 +10,7 @@
 	import { cn, stepActive } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import { words_of } from '../client/context.js';
-	import { filterable, INDEX, offeredPaths, resolve, childOf, type FilterStep, type Offer } from './catalog.js';
+	import { filterable, INDEX, isInlineField, offeredPaths, resolve, childOf, unwrapShape, type FilterStep, type Offer } from './catalog.js';
 	import { pathLabel } from './text.js';
 	import { humanize, msg } from '../text/messages.js';
 	import type { Kind } from '@norbital-ai/store/kind';
@@ -57,6 +57,33 @@
 				k.shape.kind === 'json' ||
 				(k.shape.kind === 'record' && k.shape.of.kind === 'json')));
 
+	function inlineEntries(basePath: string, shape: Kind, depth: number, all: boolean): Entry[] {
+		const k = unwrapShape(shape);
+		if (k.many === true || depth > 2) return [];
+		const sub: Entry[] = [];
+		if (k.kind === 'object') {
+			for (const [name, child] of Object.entries(k.fields)) {
+				const p = `${basePath}.${name}`;
+				if (offered.conditions.has(p) && resolve(catalog, model, p) !== null)
+					sub.push({ path: p, label: pathLabel(catalog, model, p, humanize), depth });
+				if (isInlineField(child)) sub.push(...inlineEntries(p, child, depth + 1, all));
+			}
+		} else if (k.kind === 'union' && 'arms' in k) {
+			const disc = `${basePath}.${k.by}`;
+			if (offered.conditions.has(disc) && resolve(catalog, model, disc) !== null)
+				sub.push({ path: disc, label: pathLabel(catalog, model, disc, humanize), depth });
+			for (const [arm, fields] of Object.entries(k.arms)) {
+				for (const [name, child] of Object.entries(fields)) {
+					const p = `${basePath}:${arm}.${name}`;
+					if (offered.conditions.has(p) && resolve(catalog, model, p) !== null)
+						sub.push({ path: p, label: pathLabel(catalog, model, p, humanize), depth });
+					if (isInlineField(child)) sub.push(...inlineEntries(p, child, depth + 1, all));
+				}
+			}
+		}
+		return sub;
+	}
+
 	function level(c: string, prefix: string, depth: number, all: boolean): Entry[] {
 		const x = catalog[c];
 		if (x === undefined) return [];
@@ -69,12 +96,24 @@
 			)
 				continue;
 			const path = prefix + f;
+			const fk = x.fields[f];
+			const inlineChildren =
+				fk !== undefined && isInlineField(fk) ? inlineEntries(path, fk, depth + 1, all) : [];
 			if (
 				resolve(catalog, model, path) !== null &&
-				offered.conditions.has(path) &&
+				(offered.conditions.has(path) || inlineChildren.length > 0) &&
 				!out.some((e) => e.path === path)
-			)
-				out.push({ path, label: pathLabel(catalog, c, f, humanize), depth });
+			) {
+				const canOpen = inlineChildren.length > 0;
+				const isOpen = all || expanded.has(path);
+				out.push({
+					path,
+					label: pathLabel(catalog, c, f, humanize),
+					depth,
+					...(canOpen ? { open: isOpen } : {})
+				});
+				if (canOpen && isOpen) out.push(...inlineChildren);
+			}
 		}
 		// a related record's search index and embedding, where the engine's catalogue offers them
 		if (depth > 0 || !root)

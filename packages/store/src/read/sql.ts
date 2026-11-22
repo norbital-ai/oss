@@ -665,11 +665,16 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 				return `(${a}."id" IN (SELECT ${n}."id" FROM (SELECT ${t}."id", ${d} AS d, min(${d}) OVER () AS best FROM ${b.from(c.model.name)} ${t} WHERE ${conj(yield* scope(b, c, t, lv), `${x} IS NOT NULL`)} ORDER BY ${d}, ${t}."id" LIMIT ${b.bind(p.top, 'int8')}) ${n} WHERE ${n}.d <= ${n}.best + ${SIMILAR_BAND}))`;
 			}
 			case 'path':
-			case 'each': {
+			case 'each':
+			case 'arm': {
 				const base = p.field === ELEMENT ? b.elements.at(-1) : yield* col(b, c, a, p.field, lv);
 				if (base === undefined)
 					return yield* invalid('an element predicate outside a list quantifier');
 				const at = json_path(p.path);
+				if (p.t === 'arm') {
+					const inner = yield* pred(b, c, a, p.pred, lv);
+					return `(CASE WHEN (${base} #>> ${at}) = ${b.bind(p.arm, 'text')} THEN COALESCE(${inner}, false) ELSE false END)`;
+				}
 				const value = p.path.length === 0 ? base : `(${base} #> ${at})`;
 				if (p.t === 'each') {
 					const e = b.alias();

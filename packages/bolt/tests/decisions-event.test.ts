@@ -1,5 +1,5 @@
 // The `decision.made` attributes: the state the decider received is recorded, every text leaf clipped, so the
-// panel's raw-context tab can show exactly what triage/filter/author was given without one event growing unbounded.
+// panel's raw-context tab can show exactly what triage/author was given without one event growing unbounded.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { Logs } from '../src/engine/ports.ts';
@@ -42,7 +42,7 @@ describe('the decision.made attributes', () => {
 			});
 			yield* decisionUsage(
 				logs,
-				'filter',
+				'author',
 				request,
 				{
 					...answered,
@@ -59,7 +59,7 @@ describe('the decision.made attributes', () => {
 				attributes: {
 					system: 1,
 					category: 'decisions',
-					use: 'filter',
+					use: 'author',
 					model: 'jev',
 					input: 120,
 					output: 2,
@@ -88,7 +88,7 @@ describe('the decision.made attributes', () => {
 	});
 
 	it('record the state on a failure too, beside the typed error', () => {
-		const e = Schema.decodeUnknownSync(Schema.Struct({ error: Schema.String, state: Schema.Json }))(decisionEvent('filter', request, { kind: 'upstream', message: 'down' }));
+		const e = Schema.decodeUnknownSync(Schema.Struct({ error: Schema.String, state: Schema.Json }))(decisionEvent('author', request, { kind: 'upstream', message: 'down' }));
 		expect(e.error).toBe('upstream');
 		expect(e.state).toBeDefined();
 	});

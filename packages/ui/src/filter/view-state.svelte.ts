@@ -130,6 +130,7 @@ export function viewState(
 	let order = $state<readonly SortKey[]>(first.order);
 	let touched = $state(first.touched);
 	let notice = $state<string | null>(first.notice);
+	let describeError = $state<string | null>(null);
 
 	// the engine's catalogue, once per model: the builder's fields, operators and values
 	let offers = $state<readonly Offer[]>([]);
@@ -231,10 +232,14 @@ export function viewState(
 		get notice() {
 			return notice ?? (lowered.dropped > 0 ? DROPPED() : null);
 		},
+		get describeError() {
+			return describeError;
+		},
 		setRows(next: readonly Node[]) {
 			rows = next;
 			touched = true;
 			notice = null;
+			describeError = null;
 		},
 		setOrder(next: readonly SortKey[]) {
 			order = next;
@@ -244,12 +249,13 @@ export function viewState(
 			order = [];
 			touched = true;
 			notice = null;
+			describeError = null;
 		},
 		/** Rule 16a: the description's `Where` and `OrderBy` replace the rows (and the sort, when it asks for one). */
 		describe(text: string): Effect.Effect<boolean> {
 			return Effect.suspend(() => {
 				const fail = (why?: Error) => {
-					notice =
+					describeError =
 						why !== undefined && why.message !== ''
 							? why.message
 							: msg(words, 'view.describeFailed');
@@ -274,6 +280,7 @@ export function viewState(
 						rows = parts.flatMap((part) => part ?? []);
 						touched = true;
 						notice = null;
+						describeError = null;
 						if (keys !== null) order = keys.keys;
 						return true;
 					}),

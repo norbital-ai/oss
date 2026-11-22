@@ -4,8 +4,8 @@ import { type Json, likePattern, isPoint } from '../kinds/kind.js';
 import { compile_var, evaluate_var } from '@norbital-ai/store/vars';
 import { DateTime, Match, Result, Schema } from 'effect';
 
-import { type Catalog, childOf, resolve, type Resolved, INDEX, filterable } from './catalog.js';
-import { type Where, input_schema } from '@norbital-ai/store/kind';
+import { type Catalog, childOf, resolve, type Resolved, INDEX, filterable, isInlineField, unwrapShape } from './catalog.js';
+import { type Kind, type Where, input_schema } from '@norbital-ai/store/kind';
 import { type FilterVariables, varError, operandsFor, valueKind, litKind, grammarOps } from './operators.js';
 
 // ── literals ──
@@ -130,18 +130,49 @@ function lowerWhere(cat: Catalog, model: string, n: Node, clock?: FilterClock): 
 	}
 	const r = resolve(cat, model, n.path);
 	if (r === null) return null;
-	const steps = n.path.split('.');
-	const [name = '', arm] = (steps.pop() ?? '').split(':');
+	const rawSteps = n.path.split('.');
+	const relSteps: string[] = [];
+	let cur = model;
+	let idx = 0;
+	while (idx < rawSteps.length - 1) {
+		const step = rawSteps[idx] ?? '';
+		const [stepName = '', stepArm] = step.split(':');
+		const rel = cat[cur]?.relations?.[stepName];
+		if (rel === undefined) break;
+		relSteps.push(step);
+		cur = stepArm ?? rel.targets[0] ?? cur;
+		idx++;
+	}
+	const [name = '', arm] = (rawSteps[idx] ?? '').split(':');
+	const inlineSteps = rawSteps.slice(idx + 1);
 	const instant =
 		r.leaf === 'field' &&
 		(r.kind.kind === 'instant' || (r.kind.kind === 'period' && r.kind.of !== 'date'));
-	if (n.op === 'is_empty' || n.op === 'not_empty') return wrap(steps, n.op === 'is_empty'
+	if (inlineSteps.length > 0 || (r.leaf === 'field' && arm !== undefined)) {
+		const body = leafOps(n, clock, instant);
+		if (body === null) return null;
+		let inner: Where;
+		if (inlineSteps.length > 0) {
+			const [leafName = '', leafArm] = (inlineSteps.at(-1) ?? '').split(':');
+			const leaf: Where = { [leafName]: leafArm === undefined ? body : { [leafArm]: body } };
+			inner = n.op === 'not_in' ? { not: leaf } : leaf;
+			for (let j = inlineSteps.length - 2; j >= 0; j--) {
+				const [sn = '', sa] = (inlineSteps[j] ?? '').split(':');
+				inner = { [sn]: sa === undefined ? inner : { [sa]: inner } };
+			}
+			inner = { [name]: arm === undefined ? inner : { [arm]: inner } };
+		} else {
+			inner = { [name]: arm === undefined ? body : { [arm]: body } };
+		}
+		return wrap(relSteps, inner);
+	}
+	if (n.op === 'is_empty' || n.op === 'not_empty') return wrap(relSteps, n.op === 'is_empty'
 		? { or: [{ [name]: { is_null: true } }, { [name]: { eq: [] } }] }
 		: { and: [{ [name]: { is_null: false } }, { [name]: { ne: [] } }] });
 	if (n.op === 'has_any' || n.op === 'has_all') {
 		if (n.arg?._tag !== 'list') return null;
 		const join = n.op === 'has_all' ? 'and' : 'or';
-		return wrap(steps, { [join]: n.arg.list.map((value) => ({ [name]: { has: value } })) });
+		return wrap(relSteps, { [join]: n.arg.list.map((value) => ({ [name]: { has: value } })) });
 	}
 	let body = leafOps(n, clock, instant);
 	if (body === null) return null;
@@ -150,7 +181,7 @@ function lowerWhere(cat: Catalog, model: string, n: Node, clock?: FilterClock): 
 	if (r.leaf === 'rel' && n.arg !== null && ('lit' in n.arg || 'list' in n.arg))
 		body = { is: { id: body } };
 	const field = { [name]: arm === undefined ? body : { [arm]: body } };
-	return wrap(steps, n.op === 'not_in' ? { not: field } : field);
+	return wrap(relSteps, n.op === 'not_in' ? { not: field } : field);
 }
 
 /** A `Where` the builder can read back is the only one a read may receive. */
@@ -425,10 +456,96 @@ export function fromWhere(
 				out.push(...nodes);
 			}
 		} else {
-			const nodes = fieldNodes(cat, root, prefix + key, v, variables);
+			const fieldKind = filterable(x, key) ? x.fields[key] : undefined;
+			const nodes =
+				fieldKind !== undefined && isInlineField(fieldKind) && jsonObject(v)
+					? inlineFromWhere(cat, root, prefix + key, fieldKind, v, false, variables)
+					: fieldNodes(cat, root, prefix + key, v, variables);
 			if (nodes === null) return null;
 			out.push(...nodes);
 		}
+	}
+	return out;
+}
+
+/** Parse a predicate inside a shaped inline JSON field (`object`, `record`, or discriminated `union`). */
+function inlineFromWhere(
+	cat: Catalog,
+	root: string,
+	basePath: string,
+	shape: Kind,
+	v: { readonly [key: string]: Json },
+	insideArm: boolean,
+	variables?: FilterVariables
+): Node[] | null {
+	const entries = Object.entries(v);
+	if (entries.length === 0) return null;
+	const k = unwrapShape(shape);
+	if (k.many === true) return null;
+	if (!['json', 'object', 'record', 'union'].includes(k.kind))
+		return fieldNodes(cat, root, basePath, v, variables);
+	const out: Node[] = [];
+	for (const [op, val] of entries) {
+		if (op === 'contains' || op === 'is_null') {
+			const nodes = fieldNodes(cat, root, basePath, { [op]: val }, variables);
+			if (nodes === null) return null;
+			out.push(...nodes);
+		} else if ((op === 'and' || op === 'or') && Array.isArray(val) && val.length > 0) {
+			const parts = val.map((item) =>
+				jsonObject(item)
+					? inlineFromWhere(cat, root, basePath, k, item, insideArm, variables)
+					: null
+			);
+			if (parts.some((p) => p === null || p.length === 0)) return null;
+			const flat: Node[] = parts.flatMap((part): Node[] =>
+				part === null ? [] : part.length === 1 ? part : [{ t: 'group', join: 'and', of: part }]
+			);
+			out.push({ t: 'group', join: op, of: flat });
+		} else if (op === 'not' && jsonObject(val)) {
+			const of = inlineFromWhere(cat, root, basePath, k, val, insideArm, variables);
+			if (of === null || of.length === 0) return null;
+			const sole = of.length === 1 ? of[0] : undefined;
+			if (sole?.t === 'cond' && sole.op === 'in') out.push({ ...sole, op: 'not_in' });
+			else if (!insideArm) out.push({ t: 'group', join: 'and', not: true, of });
+			else return null;
+		} else if (k.kind === 'object') {
+			const sub = k.fields[op] ?? k.rest;
+			if (sub === undefined || !jsonObject(val)) return null;
+			const nodes = inlineFromWhere(cat, root, `${basePath}.${op}`, sub, val, insideArm, variables);
+			if (nodes === null) return null;
+			out.push(...nodes);
+		} else if (k.kind === 'record') {
+			if (!jsonObject(val)) return null;
+			const nodes = inlineFromWhere(cat, root, `${basePath}.${op}`, k.of, val, insideArm, variables);
+			if (nodes === null) return null;
+			out.push(...nodes);
+		} else if (k.kind === 'union' && 'arms' in k) {
+			if (op === k.by && jsonObject(val)) {
+				const nodes = inlineFromWhere(
+					cat,
+					root,
+					`${basePath}.${k.by}`,
+					{ kind: 'enum', values: Object.keys(k.arms) },
+					val,
+					insideArm,
+					variables
+				);
+				if (nodes === null) return null;
+				out.push(...nodes);
+			} else if (k.arms[op] !== undefined && jsonObject(val)) {
+				const nodes = inlineFromWhere(
+					cat,
+					root,
+					`${basePath}:${op}`,
+					{ kind: 'object', fields: k.arms[op] },
+					val,
+					true,
+					variables
+				);
+				if (nodes === null) return null;
+				out.push(...nodes);
+			} else return null;
+		} else return null;
 	}
 	return out;
 }

@@ -417,13 +417,16 @@
 			</div>
 		{/snippet}
 		{#snippet billingTab()}
-			<div class="flex flex-col items-start gap-4">
-				<p class="text-meta">
-					{t("This workspace's usage and cost, its estimate for the month, the payment card and past invoices.")}
-				</p>
-				<!-- the host's page, not a shell route: `target` keeps the shell from routing it in the app -->
-				<Button href={workspace.billing} target="_self">{t('Open billing')}</Button>
-			</div>
+			{#if workspace.billing !== undefined}
+				{@const embedded = `${workspace.billing}${workspace.billing.includes('?') ? '&' : '?'}embed=1`}
+				<div class="flex min-h-0 flex-1 flex-col gap-2">
+					<iframe
+						src={embedded}
+						title={t('Billing')}
+						class="min-h-[42rem] w-full flex-1 border-0 bg-transparent"
+					></iframe>
+				</div>
+			{/if}
 		{/snippet}
 		{#snippet brandingTab()}
 			<form

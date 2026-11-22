@@ -299,6 +299,7 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 		// Inline paths use PostgreSQL's JSON casts: only a read decides them.
 		case 'path':
 		case 'each':
+		case 'arm':
 			throw invalid(`${p.t} is decided by a read, not in memory`);
 		// the search document and the embedding live in the database: only a read decides them
 		case 'search':

@@ -695,4 +695,58 @@ describe('typed read projections', () => {
 				).toBe('invalid');
 			})
 	);
+
+	it.effect('filters inline discriminated unions by discriminator and guarded arm predicates without cross-arm cast errors', () =>
+		Effect.gen(function* () {
+			const declaration = schema({
+				terms: table({
+					fields: {
+						label: { kind: 'text' },
+						rate: {
+							kind: 'json',
+							optional: true,
+							shape: {
+								kind: 'union',
+								by: 'unit',
+								arms: {
+									MONTHLY: { amount: { kind: 'number' } },
+									CUSTOM: { amount: { kind: 'text' }, note: { kind: 'text' } }
+								}
+							}
+						}
+					}
+				})
+			});
+			const pg = yield* database;
+			yield* script(pg, `${(yield* build(declaration)).join(';\n')};`);
+			const db = store(declaration),
+				execute = run(pg);
+			yield* execute(
+				yield* db.create('terms', [
+					{ label: 'low', rate: { unit: 'MONTHLY', amount: 3000 } },
+					{ label: 'high', rate: { unit: 'MONTHLY', amount: 6500 } },
+					{ label: 'custom', rate: { unit: 'CUSTOM', amount: 'TBD', note: 'plus bonus' } },
+					{ label: 'empty', rate: null }
+				])
+			);
+			const labels = (
+				where: NonNullable<NonNullable<Parameters<typeof db.read<'terms'>>[1]>['where']>
+			) =>
+				Effect.gen(function* () {
+					const page = yield* execute(
+						yield* db.read('terms', { where, order_by: 'label', all: true })
+					);
+					return page.rows.map((r) => String(r.label));
+				});
+			expect(yield* labels({ rate: { unit: { eq: 'MONTHLY' } } })).toEqual(['high', 'low']);
+			// CUSTOM row has string 'TBD' in `amount`: CASE WHEN arm guard prevents float8 cast error
+			expect(yield* labels({ rate: { MONTHLY: { amount: { gt: 5000 } } } })).toEqual(['high']);
+			// negation inside MONTHLY excludes CUSTOM and null rows
+			expect(yield* labels({ rate: { MONTHLY: { not: { amount: { eq: 3000 } } } } })).toEqual(['high']);
+			expect(yield* labels({ rate: { CUSTOM: { note: { like: '%bonus%' } } } })).toEqual(['custom']);
+			// unknown arm or discriminator value is refused at decode
+			expect((yield* Effect.flip(read(db.catalog, 'terms', { where: { rate: { WEEKLY: { amount: { gt: 100 } } } }, all: true }))).code).toBe('invalid');
+			expect((yield* Effect.flip(read(db.catalog, 'terms', { where: { rate: { unit: { eq: 'WEEKLY' } } }, all: true }))).code).toBe('invalid');
+		})
+	);
 });

@@ -279,12 +279,13 @@ export type InferTool = {
 };
 /**
  * The tools a structured inference builds its answer with: `edit` changes the draft, `read`, `find` and `diff` inspect it,
- * `submit` hands it in.
+ * `submit` hands it in, and `refuse` aborts with a caller-facing error when the request cannot be fulfilled.
  */
 const EDIT = 'edit',
 	FIND = 'find',
 	DIFF = 'diff',
-	SUBMIT = 'submit';
+	SUBMIT = 'submit',
+	REFUSE = 'refuse';
 /** Consecutive empty (reasoning-only) replies, and prose replies that neither edit nor submit, tolerated before `invalid`. */
 const PAUSES = 3,
 	FAILURES = 3;
@@ -307,6 +308,7 @@ const FindInput = Schema.Struct({
 	path: Schema.optionalKey(Schema.String)
 });
 const DiffInput = Schema.Struct({ path: Schema.optionalKey(Schema.String) });
+const RefuseInput = Schema.Struct({ message: Schema.NonEmptyString });
 const EditOp = Schema.Struct({
 	path: Schema.String,
 	set: Schema.optionalKey(Schema.Json),
@@ -605,6 +607,8 @@ export function infer_facility(
 	options: {
 		load?: (fileId: string) => Effect.Effect<{ mime: string; bytes: Uint8Array }, PortFailure>;
 		wallMs?: number;
+		/** Optional domain validation/normalization after schema and rules pass on `submit`; failures feed back to the model. */
+		validate?: (value: Json) => Effect.Effect<CrossAnswer, PortFailure>;
 		/** Each answer-changing call (`edit`, `submit`) as the model makes it: the host's record of the draft's progress. */
 		onDraft?: (name: string, input: Json) => Effect.Effect<void>;
 		/** Each message of the transcript as it is written: the host keeps the inference's whole conversation. */
@@ -697,8 +701,15 @@ export function infer_facility(
 			required: [...required],
 			properties
 		});
+		const refuseTool: Pick<InferTool, 'name' | 'description' | 'input' | 'behavior'> = {
+			name: REFUSE,
+			behavior: {},
+			description:
+				'Refuse the request and pass a clear error message back to the caller when the request cannot be fulfilled as asked (for example: missing or inaccessible field/data, unsupported operation, impossible constraints, or ambiguous request). Do not guess or fabricate an answer.',
+			input: object({ message: { type: 'string' } }, ['message'])
+		};
 		const finishing: readonly Pick<InferTool, 'name' | 'description' | 'input' | 'behavior'>[] = !structured
-			? []
+			? [refuseTool]
 			: [
 					{
 						name: EDIT,
@@ -723,6 +734,7 @@ export function infer_facility(
 						description: `Hand in the answer as edited so far, including any ${EDIT} earlier in this same reply (calls apply in order). It is checked against the required shape; anything wrong comes back by path, and you ${EDIT} and ${SUBMIT} again together in one reply.`,
 						input: object({})
 					},
+					refuseTool,
 					{
 						name: draftRead,
 						behavior: draftRead === 'read' ? { data: true } : {},
@@ -804,13 +816,20 @@ export function infer_facility(
 			const messages: AiMessage[] = [{ role: 'user', content: prompt }];
 			return batch(files, messages, final).pipe(Effect.ensuring(record(messages)));
 		};
+		const validated = (raw: Json): Effect.Effect<CrossAnswer, PortFailure> =>
+			Effect.gen(function* () {
+				const base = decoded(raw);
+				if (!base.ok || options.validate === undefined) return base;
+				return yield* options.validate(base.value);
+			});
 		/** One conversation over one batch of files; a batch before the last hands back its draft unchecked. */
 		const batch = Effect.fn('Ai.inferBatch')(function* (
 			files: { mime: string; bytes: Uint8Array }[],
 			messages: AiMessage[],
 			final: boolean
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
-			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
+			const settle = (value: Json): Effect.Effect<CrossAnswer, PortFailure> =>
+				final ? validated(value) : Effect.succeed({ ok: true, value });
 			const stepLimit = a.steps ?? DEFAULT_STEPS;
 			let carry: ModelCarry | undefined,
 				pauses = 0,
@@ -828,7 +847,7 @@ export function infer_facility(
 				if (finished) {
 					// the value the call started from, with the last edit to it refused, is nobody's answer
 					const untouched = refused && draft === original;
-					const held = structured && !untouched ? settle(draft) : undefined;
+					const held = structured && !untouched ? yield* settle(draft) : undefined;
 					if (held?.ok === true) return held;
 					// what the draft still breaks (an unmet rule among it), else the last failed answer
 					const why = held ?? last;
@@ -874,7 +893,7 @@ export function infer_facility(
 							});
 						continue;
 					}
-					const held = structured ? settle(draft) : undefined;
+					const held = structured ? yield* settle(draft) : undefined;
 					if (held?.ok === true) return held;
 				}
 				if (isFacilityError(stepped))
@@ -1033,7 +1052,7 @@ export function infer_facility(
 									};
 								}
 							} else if (c.name === SUBMIT && structured) {
-								last = settle(draft);
+								last = yield* settle(draft);
 								if (last.ok) {
 									submitted = last;
 									result = { submitted: true };
@@ -1041,6 +1060,17 @@ export function infer_facility(
 									result = {
 										error: last.error.kind === 'invalid' ? last.error.message : 'invalid'
 									};
+							} else if (c.name === REFUSE) {
+								const input = Option.getOrUndefined(Schema.decodeUnknownOption(RefuseInput)(c.input));
+								const message = input?.message.trim() ?? '';
+								if (message === '') {
+									refused = true;
+									result = { error: `${REFUSE} takes { message } with a non-empty explanation` };
+								} else {
+									submitted = { ok: false, error: { kind: 'invalid', message } };
+									last = submitted;
+									result = { refused: true, message };
+								}
 							} else {
 								const tool = spent ? undefined : tools.find((t) => t.name === c.name);
 								result =
@@ -1070,7 +1100,7 @@ export function infer_facility(
 						// a model that re-edits instead of submitting: a draft that already holds is the answer. An edit the draft
 						// refused is none: the model reads why and goes on, and the value it started from is not its answer
 						const held =
-							!refused && r.tool_calls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
+							!refused && r.tool_calls.some((c) => c.name === EDIT) ? yield* settle(draft) : undefined;
 						if (held?.ok === true) return held;
 						if (++stalls > FAILURES)
 							return (
@@ -1105,7 +1135,7 @@ export function infer_facility(
 						: whole;
 				let feedback: string | undefined;
 				if (parsed !== undefined) {
-					last = settle(parsed);
+					last = yield* settle(parsed);
 					if (last.ok) { messages.push({ role: 'assistant', content: textOf(r.content) }); return last; }
 					feedback =
 						last.error.kind === 'invalid'
@@ -1131,7 +1161,7 @@ export function infer_facility(
 		const ask = (lead: string) =>
 			!structured
 				? (a.prompt ?? '')
-				: `${a.prompt ?? ''}\n\n${lead}Use other tools and more turns whenever you need to check something; once the answer is complete, call ${SUBMIT} in the same reply as your last ${EDIT}. ${a.initial === undefined ? `Build your answer with ${EDIT}, starting from ${JSON.stringify(draft)}` : `Your answer is already initialized in memory. Use ${draftRead} and ${FIND} to inspect it and ${EDIT} to change only the paths that need it`}, into this JSON Schema, then call ${SUBMIT}:\n\n\`\`\`json\n${JSON.stringify(shape, null, 2)}\n\`\`\`${rulesText}`;
+				: `${a.prompt ?? ''}\n\n${lead}Use other tools and more turns whenever you need to check something; once the answer is complete, call ${SUBMIT} in the same reply as your last ${EDIT}. If the request cannot be fulfilled as asked, call ${REFUSE} with a clear explanation instead of guessing. ${a.initial === undefined ? `Build your answer with ${EDIT}, starting from ${JSON.stringify(draft)}` : `Your answer is already initialized in memory. Use ${draftRead} and ${FIND} to inspect it and ${EDIT} to change only the paths that need it`}, into this JSON Schema, then call ${SUBMIT}:\n\n\`\`\`json\n${JSON.stringify(shape, null, 2)}\n\`\`\`${rulesText}`;
 		const answering = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
 			if (refs.length === 0) return yield* read([], ask(''), true);
 			// files load a batch at a time, so a thousand scans are never all in memory at once
@@ -1163,13 +1193,13 @@ export function infer_facility(
 			return invalid('no files were read');
 		});
 		// the stall window: STALL_MS without progress ends the inference, with the answer its draft already holds if any
-		const stalled = Effect.gen(function* (): Effect.fn.Return<CrossAnswer> {
+		const stalled = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
 			for (;;) {
 				const quiet = clock.currentTimeMillisUnsafe() - progressed;
 				if (quiet >= STALL_MS) break;
 				yield* Effect.sleep(STALL_MS - quiet);
 			}
-			const held = structured ? decoded(draft) : undefined;
+			const held = structured ? yield* validated(draft) : undefined;
 			return held?.ok === true
 				? held
 				: { ok: false, error: { kind: 'timeout', message: `the inference made no progress for ${STALL_MS / 60_000} minutes`

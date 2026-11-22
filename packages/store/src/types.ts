@@ -544,6 +544,7 @@ type PeriodArg<K> = K extends { of: 'date' }
 export type ShapeWhere<K, X extends Operands = Plain> = K extends { kind: 'json'; shape: infer Sh }
 	? ShapeWhere<Sh, X>
 	: ShapeNode<K, X> & (K extends { kind: 'object'; fields: infer F } ? Omit<ShapeLogic<K, X>, keyof F>
+		: K extends { kind: 'union'; by: infer By extends string; arms: infer A } ? Omit<ShapeLogic<K, X>, By | keyof A>
 		: K extends { kind: 'record' } ? {} : ShapeLogic<K, X>);
 type ShapeLogic<K, X extends Operands> = {
 	readonly and?: readonly ShapeWhere<K, X>[];
@@ -565,6 +566,15 @@ type ShapeNode<K, X extends Operands> = K extends { many: true }
 					readonly contains?: Json;
 					readonly is_null?: boolean;
 				}
+			: K extends { kind: 'union'; by: infer By extends string; arms: infer A }
+				? {
+						readonly [P in By]?: ShapeWhere<{ kind: 'enum'; values: readonly (keyof A & string)[] }, X>;
+					} & {
+						readonly [Arm in keyof A]?: ShapeWhere<{ kind: 'object'; fields: A[Arm] }, X>;
+					} & {
+						readonly contains?: Json;
+						readonly is_null?: boolean;
+					}
 			: K extends { kind: 'record' | 'union' | 'json' | 'custom' }
 				? { readonly contains?: Json; readonly is_null?: boolean; readonly eq?: readonly Json[]; readonly ne?: readonly Json[] }
 				: ScalarKindOps<K, X>;

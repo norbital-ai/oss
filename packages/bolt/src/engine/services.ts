@@ -339,7 +339,8 @@ export type ApprovalsShape = {
 export class Approvals extends Context.Service<Approvals, ApprovalsShape>()('bolt/Approvals') {}
 
 // ── decisions (E6) ──
-export type DecisionUse = 'triage' | 'filter' | 'author';
+/** Who initiated a `sys_1` decision call: conversation `triage` or workspace `author` code (`ctx.ai.sys_1.decide`). */
+export type DecisionUse = 'triage' | 'author';
 export type DecisionsShape = {
 	/** One `sys_1` call: one `decision.made` event. */
 	readonly decide: (

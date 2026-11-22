@@ -65,7 +65,7 @@ const EFFECTS = new Set(['act', 'schedule', 'notify', 'send', 'request', 'progre
 /** External host I/O facilities whose batch loops step their CPU unit per crossing (pure JS loops still hit 3 s). */
 const STEPPED_FACILITIES = new Set([
 	'ai.embed',
-	'ai.sys_1.ask',
+	'ai.sys_1.decide',
 	'files.image',
 	'convert.document',
 	'convert.ingest',

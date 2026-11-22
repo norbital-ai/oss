@@ -107,7 +107,7 @@ function decidable(cat: Catalog, model: string, p: Pred): boolean {
 		case 'and': case 'or': return p.of.every((part) => decidable(cat, model, part));
 		case 'not': return decidable(cat, model, p.of);
 		case 'one': case 'many': case 'count': case 'agg': case 'geo': case 'period':
-		case 'path': case 'each': case 'search': case 'similar': return false;
+		case 'path': case 'each': case 'arm': case 'search': case 'similar': return false;
 		case 'const': return true;
 		case 'cmp':
 			if (p.op !== 'eq' && p.op !== 'ne' && cat.models.get(model)?.fields.get(p.field)?.pg === 'text') return false;

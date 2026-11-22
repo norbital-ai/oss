@@ -52,7 +52,7 @@
 			| 'setOrder'
 			| 'clear'
 			| 'describe'
-		>;
+		> & { readonly describeError?: string | null };
 		catalog: { readonly [c: string]: ModelExposure };
 		model: string;
 		/** The author's `where`: shown, never removable. */
@@ -179,12 +179,12 @@
 			{msg(bolt, 'view.applied')}
 		</p>{/if}
 	<!-- a description that built nothing is an error the person must act on, never a quiet note beside "applied" -->
-	{#if failed && view.notice}<p
+	{#if failed && (view.describeError ?? view.notice)}<p
 			role="alert"
-			class="text-destructive flex items-center gap-1 text-xs"
+			class="text-destructive flex items-start gap-1 text-xs"
 			data-view-error
 		>
-			<Icon icon="lucide:circle-alert" class="size-3.5 shrink-0" />{view.notice}
+			<Icon icon="lucide:circle-alert" class="mt-0.5 size-3.5 shrink-0" /><span>{view.describeError ?? view.notice}</span>
 		</p>
 	{:else if view.notice}<p role="status" class="text-muted-foreground text-xs" data-view-notice>
 			{view.notice}

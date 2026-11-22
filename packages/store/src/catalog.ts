@@ -154,10 +154,12 @@ export type KindSpec = {
 			readonly stamp?: string;
 		};
 	};
-	/** An object's fields, a json value's shape, an object's other keys: an inline value's structure. */
+	/** An object's fields, a json value's shape, an object's other keys, a union's discriminator and arms: an inline value's structure. */
 	readonly fields?: { readonly [name: string]: KindSpec };
 	readonly shape?: KindSpec;
 	readonly rest?: KindSpec;
+	readonly by?: string;
+	readonly arms?: { readonly [arm: string]: { readonly [name: string]: KindSpec } };
 };
 /** The exact projection the catalog consumes; other declaration metadata is intentionally not retained here. */
 export const KindSpec: Schema.Codec<KindSpec> = /* @__PURE__ */ (() => {
@@ -174,10 +176,12 @@ export const KindSpec: Schema.Codec<KindSpec> = /* @__PURE__ */ (() => {
 			to: Schema.optionalKey(Strings), stamp: Schema.optionalKey(Schema.String)
 		}))),
 		fields: Schema.optionalKey(Schema.Record(Schema.String, Nested)),
-		shape: Schema.optionalKey(Nested), rest: Schema.optionalKey(Nested)
+		shape: Schema.optionalKey(Nested), rest: Schema.optionalKey(Nested),
+		by: Schema.optionalKey(Schema.String),
+		arms: Schema.optionalKey(Schema.Record(Schema.String, Schema.Record(Schema.String, Nested)))
 	});
 })();
-const INLINE = new Set(['json', 'object', 'record']);
+const INLINE = new Set(['json', 'object', 'record', 'union']);
 /** What the catalog reads of a table: its fields and computed fields, its key and audit columns, and its search. */
 const CatalogStrings = Schema.Array(Schema.String);
 const CatalogIndex = Schema.Struct({

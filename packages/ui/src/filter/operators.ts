@@ -98,7 +98,7 @@ function kindOps(r: Resolved): readonly Op[] {
 			'starts_within',
 			'ends_within'
 		]),
-		Match.when('json', (): readonly Op[] => ['contains']),
+		Match.whenOr('json', 'object', 'record', 'union', (): readonly Op[] => ['contains']),
 		Match.orElse((): readonly Op[] => [])
 	);
 	return [...own, ...nulls];

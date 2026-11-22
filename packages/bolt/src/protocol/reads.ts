@@ -206,6 +206,7 @@ const declared_hops = (cat: Catalog, c: ExposureInfo, p: Pred): Effect.Effect<vo
 			case 'not':
 				return yield* declared_hops(cat, c, p.of);
 			case 'each':
+			case 'arm':
 				return yield* declared_hops(cat, c, p.pred);
 			case 'one':
 			case 'many':

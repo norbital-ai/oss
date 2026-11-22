@@ -291,17 +291,33 @@ export function messageRules(
 	}
 
 	const catalogPaths = new Set([base.path, ...localeFiles.map((f) => f.path)]);
+	const isDeclaredKey = (key: string): boolean =>
+		baseKeys.has(key) ||
+		FRAMEWORK_KEYS.has(key) ||
+		(native(key) && declared(m, key, true));
+	if (nonEn.length > 0) {
+		for (const [appName, appSpec] of Object.entries(m.apps)) {
+			const appFile = files.find((f) => f.role === 'app' && f.name === appName)?.path ?? `src/app/${appName}/+app.ts`;
+			const checkAppMsg = (label: string, value: string | undefined) => {
+				if (value === undefined || value.trim() === '' || isDeclaredKey(value)) return;
+				out.push({
+					code: 'check/messages-undeclared-key',
+					path: appFile,
+					message: `${appFile}: ${label} '${value}' must be a declared message key in ${base.path} (multi-language workspace)`
+				});
+			};
+			checkAppMsg('title', appSpec.title);
+			checkAppMsg('description', appSpec.description);
+			for (const [pageName, pageSpec] of Object.entries(appSpec.pages))
+				checkAppMsg(`pages.${pageName}.title`, pageSpec.title);
+		}
+	}
 	for (const [path, text] of sources) {
 		if (catalogPaths.has(path)) continue;
 		if (!path.endsWith('.ts') && !path.endsWith('.svelte')) continue;
 		const lines = text.split('\n');
 		for (const call of staticTranslateCalls(path, text)) {
-			if (
-				baseKeys.has(call.key) ||
-				FRAMEWORK_KEYS.has(call.key) ||
-				(native(call.key) && declared(m, call.key, true))
-			)
-				continue;
+			if (isDeclaredKey(call.key)) continue;
 			const line = text.slice(0, call.start).split('\n').length;
 			if (
 				ALLOW_UNDECLARED.test(lines[line - 1] ?? '') ||

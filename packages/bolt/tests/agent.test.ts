@@ -576,7 +576,7 @@ describe('the AI port under the 20 s idle wall', () => {
 		kind: 'object',
 		fields: { n: { kind: 'int' }, note: { kind: 'text', optional: true } }
 	};
-	const DRAFT_TOOLS = ['edit', 'submit', 'read', 'find', 'diff'];
+	const DRAFT_TOOLS = ['edit', 'submit', 'refuse', 'read', 'find', 'diff'];
 	const leave = {
 		kind: 'object',
 		fields: {
@@ -954,6 +954,7 @@ describe('the AI port under the 20 s idle wall', () => {
 				'read',
 				'edit',
 				'submit',
+				'refuse',
 				'read_answer',
 				'find',
 				'diff'
@@ -1228,6 +1229,59 @@ describe('the AI port under the 20 s idle wall', () => {
 						at({ prompt: 'q' })
 					)
 				).toMatchObject({ ok: false, error: { kind: 'invalid' } });
+			})
+	);
+
+	it.effect(
+		'sys_2.infer: refuse stops immediately and passes the message back; blank refusal asks to explain; validate errors feed back to the model',
+		() =>
+			Effect.gen(function* () {
+				// structured refusal passes message straight back
+				const { p: refusedStructured } = port([
+					tool('refuse', { message: 'Cannot sort by pay because pay is on child records.' }, 'r1')
+				]);
+				expect(yield* infer_facility(refusedStructured)(at({ prompt: 'q', output }))).toEqual({
+					ok: false,
+					error: { kind: 'invalid', message: 'Cannot sort by pay because pay is on child records.' }
+				});
+				// unstructured refusal also works
+				const { p: refusedText } = port([tool('refuse', { message: 'Missing invoice total.' }, 'r1')]);
+				expect(yield* infer_facility(refusedText)(at({ prompt: 'q' }))).toEqual({
+					ok: false,
+					error: { kind: 'invalid', message: 'Missing invoice total.' }
+				});
+				// blank refusal message is rejected and the model can retry with a real reason
+				const { p: retried, requests: retryRequests } = port([
+					tool('refuse', { message: '   ' }, 'r1'),
+					tool('refuse', { message: 'Field not exposed.' }, 'r2')
+				]);
+				expect(yield* infer_facility(retried)(at({ prompt: 'q', output }))).toEqual({
+					ok: false,
+					error: { kind: 'invalid', message: 'Field not exposed.' }
+				});
+				expect(required(retryRequests[1]).messages.at(-1)).toMatchObject({
+					content: { id: 'r1', result: { error: expect.stringContaining('non-empty explanation') } }
+				});
+				// custom validate failure feeds back to the model so it can repair and resubmit
+				const { p: validatedPort, requests: valRequests } = port([
+					tool('edit', { ops: [{ path: '/n', set: 5 }] }, 'e1'),
+					tool('submit', {}, 's1'),
+					tool('edit', { ops: [{ path: '/n', set: 10 }] }, 'e2'),
+					tool('submit', {}, 's2')
+				]);
+				expect(
+					yield* infer_facility(validatedPort, {
+						validate: (v) =>
+							Effect.succeed(
+								Schema.is(Schema.Struct({ n: Schema.Literal(10) }))(v)
+									? { ok: true, value: v }
+									: { ok: false, error: { kind: 'invalid', message: 'n must be 10' } }
+							)
+					})(at({ prompt: 'q', output }))
+				).toEqual({ ok: true, value: { n: 10 } });
+				expect(required(valRequests[2]).messages.at(-1)).toMatchObject({
+					content: { id: 's1', result: { error: 'n must be 10' } }
+				});
 			})
 	);
 

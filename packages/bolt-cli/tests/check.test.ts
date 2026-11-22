@@ -205,6 +205,38 @@ describe('bolt check', () => {
 		]);
 	});
 
+	it('flags literal app titles, descriptions and page titles in multi-language workspaces', () => {
+		const basePath = 'src/i18n/+messages.ts';
+		const zhPath = 'src/i18n/+zh.messages.ts';
+		const appPath = 'src/app/ops/+app.ts';
+		const files: Discovered[] = [
+			{ role: 'messages', name: '', path: basePath },
+			{ role: 'locale', name: 'zh', path: zhPath },
+			{ role: 'app', name: 'ops', path: appPath }
+		];
+		const sources = new Map<string, string>([
+			[basePath, "export default messages({ 'app.ops.title': 'Ops', 'app.ops.tab_home': 'Home' });"],
+			[zhPath, "export default messages({ 'app.ops.title': '运营', 'app.ops.tab_home': '首页' });"],
+			[appPath, "export default app({ title: 'app.ops.title', description: 'Raw English', icon: 'lucide:box', pages: { home: { title: 'app.ops.tab_home' }, bad: { title: 'Work Orders' } } });"]
+		]);
+		const multi: EngineManifest = {
+			...emptyManifest,
+			workspace: { tz: 'UTC', locale: 'en', languages: ['en', 'zh'] },
+			apps: {
+				ops: {
+					title: 'app.ops.title',
+					description: 'Raw English',
+					icon: 'lucide:box',
+					pages: { home: { title: 'app.ops.tab_home' }, bad: { title: 'Work Orders' } }
+				}
+			}
+		};
+		expect(messageRules(files, sources, multi).map((f) => f.message)).toEqual([
+			`${appPath}: description 'Raw English' must be a declared message key in ${basePath} (multi-language workspace)`,
+			`${appPath}: pages.bad.title 'Work Orders' must be a declared message key in ${basePath} (multi-language workspace)`
+		]);
+	});
+
 	it('enforces placeholder parity, non-empty values, framework overrides and non-native locale completeness', () => {
 		const basePath = 'src/i18n/+messages.ts';
 		const zhPath = 'src/i18n/+zh.messages.ts';

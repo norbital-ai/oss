@@ -621,23 +621,67 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			const t = skills.find(([n]) => n === i.name)?.[1];
 			if (t === undefined)
 				return err(`No skill '${i.name}'. Skills: ${skills.map(([n]) => n).join(', ')}`);
-			if (i.file !== undefined && i.section !== undefined)
-				return err('Read a section or a file, not both.');
+			const modes = [i.file !== undefined, i.files !== undefined, i.section !== undefined].filter(
+				Boolean
+			).length;
+			if (modes > 1) return err('Give only one of section, file, or files.');
 			const s = skillOf(t.text);
-			if (i.file !== undefined && i.file !== SKILL_FILE) {
-				if (!t.files.includes(i.file))
-					return err(
-						`No file '${i.file}' in ${i.name}. Files: ${t.files
-							.filter((f) => f !== SKILL_FILE)
-							.slice(0, 50)
-							.join(', ')}`
-					);
-				const bytes = yield* t.read(i.file);
-				return documentAnswer({ file: i.file, text: new TextDecoder().decode(bytes) }, 'text');
-			}
 			const own = t.files.filter(
 				(f) => f !== SKILL_FILE && !f.split('/').includes('node_modules')
 			);
+			const resolveSkillFile = (requested: string): string | undefined => {
+				if (t.files.includes(requested)) return requested;
+				const needle = requested.trim().toLowerCase();
+				return own.find(
+					(f) =>
+						f.toLowerCase() === needle ||
+						f.toLowerCase() === `references/${needle}` ||
+						f.toLowerCase() === `references/${needle}.md` ||
+						f.toLowerCase() === `${needle}.md`
+				);
+			};
+			if (i.files !== undefined) {
+				const unique = [...new Set(i.files)];
+				if (unique.length === 0)
+					return err(
+						`Give at least one file in ${i.name}. Files: ${own.slice(0, 50).join(', ')}`
+					);
+				const resolved: string[] = [];
+				const missing: string[] = [];
+				for (const requested of unique) {
+					const found = resolveSkillFile(requested);
+					if (found === undefined || found === SKILL_FILE) missing.push(requested);
+					else resolved.push(found);
+				}
+				if (missing.length > 0)
+					return err(
+						`No file(s) ${missing.map((f) => `'${f}'`).join(', ')} in ${i.name}. Files: ${own.slice(0, 50).join(', ')}`
+					);
+				const decoder = new TextDecoder();
+				const loaded = yield* Effect.forEach(
+					resolved,
+					(file) =>
+						t.read(file).pipe(Effect.map((bytes) => ({ file, text: decoder.decode(bytes) }))),
+					{ concurrency: 'unbounded' }
+				);
+				return documentAnswer(
+					{
+						skill: i.name,
+						files: loaded.map(({ file }) => file),
+						text: loaded.map(({ file, text }) => `<!-- ${file} -->\n${text}`).join('\n\n')
+					},
+					'text'
+				);
+			}
+			if (i.file !== undefined && i.file !== SKILL_FILE) {
+				const found = resolveSkillFile(i.file);
+				if (found === undefined || found === SKILL_FILE)
+					return err(
+						`No file '${i.file}' in ${i.name}. Files: ${own.slice(0, 50).join(', ')}`
+					);
+				const bytes = yield* t.read(found);
+				return documentAnswer({ file: found, text: new TextDecoder().decode(bytes) }, 'text');
+			}
 			const files = own.length === 0 ? {} : { files: own.slice(0, 50) };
 			if (i.section === undefined) {
 				const parts = s.body.split(/^(?=##\s)/m);

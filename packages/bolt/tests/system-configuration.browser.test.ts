@@ -284,11 +284,10 @@ it('organization settings are one tab per concern, each saving only its own', as
 	try {
 		await expect.element(page.getByRole('tab', { name: 'Workspace' })).toHaveAttribute('aria-selected', 'true');
 		expect(page.getByRole('button', { name: 'Save', exact: true }).elements()).toHaveLength(0);
-		// the host's billing page is a full page load, never a shell route
+		// the host's billing page renders inline inside the Billing tab
 		await page.getByRole('tab', { name: 'Billing' }).click();
-		const billing = page.getByRole('link', { name: 'Open billing' });
-		await expect.element(billing).toHaveAttribute('href', '/billing');
-		await expect.element(billing).toHaveAttribute('target', '_self');
+		const billing = target.querySelector('iframe[title="Billing"]');
+		expect(billing?.getAttribute('src')).toBe('/billing?embed=1');
 		await page.getByRole('tab', { name: 'Data retention' }).click();
 		await page.getByLabelText('Keep finished runs (days)').fill('60');
 		await page.getByRole('button', { name: 'Save', exact: true }).click();
