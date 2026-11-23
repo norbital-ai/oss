@@ -2184,7 +2184,7 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 						'Read tender.pdf (ingested) (o1), lines 8-9 of 9',
 						'8: <p><img src="image-1.png" alt="site plan"></p>',
 						'9: End',
-						'Shown on your next step only: image-1.png'
+						'Shown on your next step only (extract all visible fields/values now before unrelated lookups): image-1.png'
 					].join('\n'),
 					bounded: true
 				});

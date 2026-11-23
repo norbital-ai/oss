@@ -607,6 +607,7 @@ const VIEW_ZH = {
 	'ui.view.theseConditions': '以下条件',
 	'ui.view.sort': '排序',
 	'ui.view.sortField': '排序字段',
+	'ui.view.steps': '步骤',
 	'ui.view.direction': '方向',
 	'ui.view.asc': '升序',
 	'ui.view.desc': '降序',

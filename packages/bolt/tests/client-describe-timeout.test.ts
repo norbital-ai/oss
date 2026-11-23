@@ -11,10 +11,10 @@ it.effect('a stalled describe fails visibly and aborts; a retry succeeds', () =>
 			calls++;
 			signal = init?.signal;
 			if (calls === 1) return new Promise<Response>(() => {});
-			return Response.json({
-				outcome: { kind: 'committed', output: { where: { kind: { eq: 'nda' } } }, records: [] },
-				v: 0
-			});
+			return new Response(
+				`data: ${JSON.stringify({ t: 'done', where: { kind: { eq: 'nda' } } })}\n\n`,
+				{ headers: { 'content-type': 'text/event-stream' } }
+			);
 		};
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
