@@ -18,6 +18,7 @@ Do not map every prompt noun or UI tab to a model. Prefer in order:
 | Derivable figure | `computed` field, `sum`/`count` roll-up, or read + pure helper |
 
 - Drop speculative fields with no active consumer. Inline values when born, edited, sealed and discarded with the parent (use stable item keys, never array index, when items are referenced).
+- **Decide the aggregate boundary when designing inputs:** for every parent–child relationship, decide whether parent + children are **one logical entity** (edited together in place via a data matrix — `ChildGrid save="parent"`, `Rows`, or `Form` `acts` — committed in **one Save operation**, e.g. loan + repayments, order + lines) or **independent entities** (separate lifecycle, permissions or volume → own `Table`/`Board`). Never split a one-entity aggregate across separate child drawers or per-row immediate `ctx.act()` writes.
 - Before inlining a child model, verify no FK targets, independent approvals/history, or cross-parent reuse are lost. Never replace an enforced FK with an unvalidated string (`custom_field.validate` is pure and cannot query other models — use batched write callbacks). Use native `StructuredData`/matrix editors rather than creating an entity just for a table editor.
 
 ## Runtime configuration, schemas & formulas

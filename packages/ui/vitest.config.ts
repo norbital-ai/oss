@@ -4,7 +4,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
 	// run from the oss root's projects, Vite's root would be oss/: the Svelte plugin crawls this package's dependencies
-	// for the Svelte libraries to inline (bits-ui, runed), and finds none from there
+	// for Svelte libraries to inline, and finds none from there
 	root: fileURLToPath(new URL('.', import.meta.url)),
 	plugins: [svelte({ compilerOptions: { experimental: { async: true } } })],
 	resolve: {

@@ -63,7 +63,7 @@ writes `{ model, id }`. Cleared text writes `null`.
 
 <script lang="ts">
 	import { Schema } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import CodeEditor from '../editors/code-editor.svelte';
 	import MarkdownEditor from '../editors/markdown-editor.svelte';
 	import { use_enum_text } from '../model/context.js';

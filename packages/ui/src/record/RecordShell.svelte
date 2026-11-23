@@ -138,7 +138,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { ui_text } from '../primitives/utils.js';
-	import { watch as changes } from 'runed';
+	import { watch as changes } from '../behaviors/index.js';
 	import {
 		FormState,
 		provideRecordController,
@@ -871,7 +871,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 								<Badge
 									{...props}
 									variant="outline"
-									class="shrink-0 whitespace-nowrap border-warning/25 bg-warning/10 text-warning-foreground hover:bg-warning/15 dark:text-warning"
+									class="shrink-0 whitespace-nowrap border-tone-warning-border bg-tone-warning-bg text-tone-warning-text hover:bg-warning/15"
 									tabindex={0}
 									role="status"
 									aria-label={full}

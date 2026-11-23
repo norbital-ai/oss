@@ -3,7 +3,7 @@
 	// One lane expanded in the board's dialog: the same cards and pages as a responsive grid, with a search and filter of
 	// its own ANDed under the lane's condition (which already carries the board's scope), so it only ever narrows.
 	import { onDestroy, untrack } from 'svelte';
-	import { Debounced, watch } from 'runed';
+	import { Debounced, watch } from '../behaviors/index.js';
 	import type { ModelKey, RowOf } from '../model/types.js';
 	import type { Json } from '../client/contract.js';
 	import { bolt_of } from '../client/context.js';
@@ -82,7 +82,7 @@
 	const order = $derived(view.order.length > 0 ? orderOf(view.order) : order_by);
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col bg-muted/70 dark:bg-muted/40">
+<div class="flex min-h-0 flex-1 flex-col bg-surface-lane">
 	<Dialog.Header class="flex-row items-center gap-3 border-b px-4 py-2 pr-12">
 		<Dialog.Title class="flex min-w-0 items-center gap-1.5">
 			{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"></span>{/if}

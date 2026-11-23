@@ -9,7 +9,7 @@
 	import Spinner from '../primitives/spinner/spinner.svelte';
 	import { attach } from '../effect/index.js';
 	import { Effect } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import { untrack } from 'svelte';
 	import { mount_studio, type StudioMount, type StudioProps } from './slot.js';
 

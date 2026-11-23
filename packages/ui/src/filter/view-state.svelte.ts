@@ -5,7 +5,7 @@
 // offered; the builder renders it, never an operator table of its own.
 import { Effect, Schema } from 'effect';
 import { untrack } from 'svelte';
-import { watch } from 'runed';
+import { watch } from '../behaviors/index.js';
 import type { DescribeStep, Json, UiContext, ViewBolt } from '../client/contract.js';
 import { optional_bolt_of } from '../client/context.js';
 import { clauses, fromWhere, rowsWhere, toWhere } from './where.js';

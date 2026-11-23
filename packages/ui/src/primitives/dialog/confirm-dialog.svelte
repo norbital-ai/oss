@@ -4,9 +4,9 @@
 	by any dismissal — and asks to be removed once its close settles.
 -->
 <script lang="ts">
-	import { AlertDialog } from 'bits-ui';
 	import { Button } from '../button/index.js';
 	import { ui_text } from '../utils.js';
+	import Root from './dialog.svelte';
 	import Content from './dialog-content.svelte';
 	import Description from './dialog-description.svelte';
 	import Footer from './dialog-footer.svelte';
@@ -31,26 +31,24 @@
 		answered = true;
 		open = false;
 		on_answer(confirmed);
-		// the close animation's completion is not guaranteed (a throttled tab, no animation): remove after it at the latest,
-		// or the dismissed layer keeps the page under its overlay and focus lock
 		setTimeout(on_closed, 300);
 	};
 </script>
 
-<AlertDialog.Root
+<Root
+	alert
 	bind:open
-	onOpenChange={(next) => {
+	on_open_change={(next) => {
 		if (!next) answer(false);
 	}}
-	onOpenChangeComplete={(next) => {
+	on_open_change_complete={(next) => {
 		if (!next) on_closed();
 	}}
 >
-	<!-- the alert-dialog root makes the same content an `alertdialog` -->
 	<!-- no focus restore on close: over an open sheet the two traps would hand focus back and forth -->
 	<!-- a confirmation is a centred decision, never a page-edge sheet -->
 	<Content
-		class="max-w-md rounded-lg"
+		class="max-w-md rounded-overlay"
 		data-confirm-dialog
 		data-mobile-bottom-sheet="false"
 		on_close_auto_focus={(event: Event) => event.preventDefault()}
@@ -70,4 +68,4 @@
 			>
 		</Footer>
 	</Content>
-</AlertDialog.Root>
+</Root>

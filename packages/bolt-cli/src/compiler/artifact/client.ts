@@ -48,7 +48,7 @@ const ViteManifest = Schema.Record(
 	})
 );
 const key = JSON.stringify;
-const PLATFORM_CACHE_VERSION = 4;
+const PLATFORM_CACHE_VERSION = 5;
 const escape = (text: string) =>
 	text.replace(/[<&"]/g, (c) => (c === '<' ? '&lt;' : c === '&' ? '&amp;' : '&quot;'));
 export class BuildError extends Schema.TaggedError<BuildError>()('BuildError', {
@@ -265,7 +265,7 @@ export const clientDevServer = Effect.fn('bolt.clientDevServer')(function* (
 									groups: [
 										{
 											name: 'platform',
-											test: /node_modules\/(?:svelte|effect|@norbital-ai|runed|esm-env|clsx)\//
+											test: /node_modules\/(?:svelte|effect|@norbital-ai|esm-env|clsx)\//
 										}
 									]
 								}

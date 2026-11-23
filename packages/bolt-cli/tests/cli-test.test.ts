@@ -14,7 +14,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from '@effect/vitest';
 import { Deferred, Effect, Fiber, Schema } from 'effect';
-import { TestClock } from 'effect/testing';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { authorErrors, holdingBuildSlot, watchRebuildOptions } from '../src/cli/build.ts';
 import { suiteWorkers, testWorkspace, workers } from '../src/cli/test.ts';
@@ -132,7 +131,7 @@ it('re-exports host port Effect services and types from the public test entry', 
 		expect(exported).toBeDefined();
 });
 
-it.effect('holdingBuildSlot caps concurrent builds to the configured slot count', () =>
+it.live('holdingBuildSlot caps concurrent builds to the configured slot count', () =>
 	Effect.gen(function* () {
 		const slotsDir = yield* Effect.acquireRelease(
 			Effect.sync(() => realpathSync(mkdtempSync(join(tmpdir(), 'bolt-build-slots-')))),
@@ -167,7 +166,6 @@ it.effect('holdingBuildSlot caps concurrent builds to the configured slot count'
 		expect(entered.toSorted()).toEqual([1, 2]);
 		yield* Deferred.succeed(gate1, undefined);
 		yield* Fiber.join(f1);
-		yield* TestClock.adjust(250);
 		yield* Deferred.await(started3);
 		expect(entered.toSorted()).toEqual([1, 2, 3]);
 		yield* Deferred.succeed(gate2, undefined);

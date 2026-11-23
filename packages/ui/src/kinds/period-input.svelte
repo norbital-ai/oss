@@ -37,13 +37,12 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	import { Result } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { getLocalTimeZone, parseAbsolute, type DateValue } from '@internationalized/date';
-	import { DatePicker, DateRangePicker } from 'bits-ui';
+	import { create_calendar, create_date_field } from '../behaviors/index.js';
 	import { cn, narrowViewport, ui_text, use_controls } from '../primitives/utils.js';
 	import CalendarGrid from './calendar-grid.svelte';
-	import { SEGMENT, SEGMENTS } from './classes.js';
+	import { CONTROL, SEGMENT, SEGMENTS } from './classes.js';
 	import { dateText, dateValue, fromDay, localDay, snapHour } from './date-input.svelte';
 	import * as Popover from '../primitives/popover/index.js';
-	import { CONTROL } from './classes.js';
 	import { format, value_object } from './kind.js';
 	import { datePrecision, unitEnd, unitNext, unitStart, type DatePrecision } from './precision.js';
 	import Show from './show.svelte';
@@ -67,6 +66,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	const t = ui_text();
 	let fieldAnchor = $state<HTMLElement | null>(null);
 	let calendarContent = $state<HTMLElement | null>(null);
+	let calendarOpen = $state(false);
 	const calendarAlignment = fieldPopoverAlignment(
 		() => fieldAnchor,
 		() => calendarContent,
@@ -128,17 +128,50 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	let unitFrom = $state<string | null>(null);
 	let choosingEnd = $state(false);
 	let placeholder = $state<DateValue | undefined>();
+
 	function change(next: { start: DateValue | undefined; end: DateValue | undefined }) {
 		if (picker && next.start !== undefined && next.end === undefined) return;
-		if (days !== null)
-			return emit(
+		if (days !== null) {
+			emit(
 				next.start?.toString().slice(0, 10) ?? null,
 				next.end?.toString().slice(0, 10) ?? null
 			);
+			return;
+		}
 		const from = dateText(of, next.start && snapHour(next.start, precision)),
 			to = dateText(of, next.end && snapHour(next.end, precision));
 		on_change(from === null && to === null ? null : { [a]: from, [b]: to });
 	}
+
+	const startField = create_date_field({
+		value: () => range.start,
+		granularity: () => (days !== null ? 'day' : precision === 'hour' ? 'hour' : 'minute'),
+		locale: () => locale,
+		disabled: () => disabled,
+		on_change: (start) => change({ start, end: range.end })
+	});
+
+	const endField = create_date_field({
+		value: () => range.end,
+		granularity: () => (days !== null ? 'day' : precision === 'hour' ? 'hour' : 'minute'),
+		locale: () => locale,
+		disabled: () => disabled,
+		on_change: (end) => change({ start: range.start, end })
+	});
+
+	const calendar = create_calendar({
+		mode: 'range',
+		range: () => range,
+		placeholder: () => placeholder,
+		on_placeholder_change: (next) => (placeholder = next),
+		number_of_months: () => (picker && !narrowViewport.current ? 2 : 1),
+		locale: () => locale,
+		disabled: () => disabled,
+		on_range_change: (next) => {
+			change(next);
+			if (next.start !== undefined && next.end !== undefined) calendarOpen = false;
+		}
+	});
 </script>
 
 {#if readonly ?? controls.readonly}
@@ -165,7 +198,8 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 			></Popover.Trigger
 		>
 		<Popover.Content align="start" class="w-auto max-w-[calc(100vw-1rem)] p-3">
-			<UnitPicker {ctx}
+			<UnitPicker
+				{ctx}
 				{unit}
 				inline
 				picking_end={choosingEnd}
@@ -184,25 +218,20 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 				{disabled}
 				{invalid}
 			/>
-		</Popover.Content></Popover.Root
-	>
+		</Popover.Content>
+	</Popover.Root>
 {:else}
-	<DateRangePicker.Root
-		value={range}
-		onValueChange={change}
-		bind:placeholder
-		granularity={days !== null ? 'day' : precision === 'hour' ? 'hour' : 'minute'}
-		hideTimeZone
-		hourCycle={24}
-		{locale}
-		{disabled}
-		weekdayFormat="short"
-		numberOfMonths={picker && !narrowViewport.current ? 2 : 1}
+	<Popover.Root
+		bind:open={calendarOpen}
+		on_open_change={(open) => {
+			if (open) calendar.reset_pending();
+		}}
 	>
 		{#if picker}
-			<DateRangePicker.Trigger
+			<Popover.Trigger
 				bind:ref={fieldAnchor}
 				{id}
+				{disabled}
 				class={cn(CONTROL, 'flex w-full min-w-0 items-center gap-2 text-left text-sm font-normal')}
 				aria-invalid={invalid ? 'true' : undefined}
 				data-period-input={of}
@@ -211,7 +240,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 				<Icon icon="lucide:calendar-range" class="size-4 shrink-0 text-muted-foreground" /><span
 					class="truncate">{summary}</span
 				>
-			</DateRangePicker.Trigger>
+			</Popover.Trigger>
 		{:else}
 			<div
 				bind:this={fieldAnchor}
@@ -220,52 +249,45 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 				data-period-input={of}
 				data-precision={precision}
 			>
-				{#each ['start', 'end'] as const as type (type)}
-					<DateRangePicker.Input {type} id={type === 'start' ? id : undefined}>
-						{#snippet children({ segments })}
-							{#each segments as { part, value: text }, i (i)}<DateRangePicker.Segment
-									{part}
-									class={SEGMENT}>{text}</DateRangePicker.Segment
-								>{/each}
-						{/snippet}
-					</DateRangePicker.Input>
-					{#if type === 'start'}<span class="px-2 text-muted-foreground" aria-hidden="true">–</span
-						>{/if}
-				{/each}
-				<DateRangePicker.Trigger
-					class="ml-auto grid size-6 [--hit-target:1.5rem] place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+				<span {id} class="inline-flex items-center">
+					{#each startField.segments as seg, i (i)}
+						<span
+							{@attach startField.segment_ref(seg.part)}
+							{...startField.segment_attrs(seg)}
+							class={SEGMENT}>{seg.value}</span
+						>
+					{/each}
+				</span>
+				<span class="px-2 text-muted-foreground" aria-hidden="true">–</span>
+				<span class="inline-flex items-center">
+					{#each endField.segments as seg, i (i)}
+						<span
+							{@attach endField.segment_ref(seg.part)}
+							{...endField.segment_attrs(seg)}
+							class={SEGMENT}>{seg.value}</span
+						>
+					{/each}
+				</span>
+				<Popover.Trigger
+					{disabled}
+					class="ml-auto grid size-6 [--hit-target:1.5rem] place-items-center rounded-control text-muted-foreground hover:bg-accent hover:text-foreground"
 					aria-label={t('openCalendar')}
 				>
 					<Icon icon="lucide:calendar-range" class="size-4" />
-				</DateRangePicker.Trigger>
+				</Popover.Trigger>
 			</div>
 		{/if}
-		<DatePicker.Portal>
-			<DateRangePicker.Content
-				bind:ref={calendarContent}
-				customAnchor={fieldAnchor}
-				sideOffset={4}
-				collisionPadding={narrowViewport.current ? 0 : 8}
-				align={calendarAlignment.current}
-				class="z-50 max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-3 text-popover-foreground shadow-deep max-sm:max-w-[100vw] max-sm:p-0"
-			>
-				<DateRangePicker.Calendar>
-					{#snippet children({ months, weekdays })}
-						<!-- the range picker's calendar parts are bits' shared calendar parts; only Cell and Day differ, by attributes -->
-						<CalendarGrid
-							parts={DateRangePicker}
-							{months}
-							{weekdays}
-							{placeholder}
-							on_placeholder={(p) => (placeholder = p)}
-							{locale}
-							range
-						/>
-					{/snippet}
-				</DateRangePicker.Calendar>
-			</DateRangePicker.Content>
-		</DatePicker.Portal>
-	</DateRangePicker.Root>
+		<Popover.Content
+			bind:ref={calendarContent}
+			custom_anchor={fieldAnchor}
+			side_offset={4}
+			collision_padding={narrowViewport.current ? 0 : 8}
+			align={calendarAlignment.current}
+			class="w-auto max-w-[calc(100vw-1rem)] p-3 max-sm:max-w-[100vw] max-sm:p-0"
+		>
+			<CalendarGrid {calendar} {locale} range />
+		</Popover.Content>
+	</Popover.Root>
 {/if}
 {#if !(readonly ?? controls.readonly) && str(v[b]) === null && str(v[a]) !== null}<p
 		class="text-meta"

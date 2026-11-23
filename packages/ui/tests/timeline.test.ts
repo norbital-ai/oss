@@ -96,3 +96,51 @@ it.live('an entry is an icon, one quiet line, its reason quoted and its notes be
 		target.remove();
 	})
 );
+
+it.live('domain entries support icon, title, badge mark, disclosure toggle and body snippet', () =>
+	browser(async () => {
+		const target = document.body.appendChild(document.createElement('div'));
+		let toggled = 0;
+		const view = mount(Timeline, {
+			target,
+			props: {
+				label: 'Changes',
+				entries: [
+					{
+						key: 'c1',
+						icon: 'lucide:calendar',
+						tone: 'brand',
+						title: '1 Jan 2026',
+						line: ['Base salary · 3,300'],
+						mark: { text: 'In force', variant: 'brand' },
+						expanded: false,
+						ontoggle: () => {
+							toggled++;
+						}
+					},
+					{
+						key: 'c2',
+						icon: 'lucide:history',
+						title: '1 Jan 2025',
+						line: ['Joined'],
+						current: true
+					}
+				]
+			}
+		});
+		flushSync();
+		const items = [...target.querySelectorAll<HTMLElement>('[data-timeline] > li')];
+		assert.equal(items.length, 2);
+		assert.equal(required(items[0]).dataset['tone'], 'brand');
+		assert.equal(textOf(required(items[0]).querySelector('[data-title]')), '1 Jan 2026');
+		assert.equal(textOf(required(items[0]).querySelector('[data-line]')), 'Base salary · 3,300');
+		assert.equal(textOf(required(items[0]).querySelector('[data-mark]')), 'In force');
+		const toggle = required(required(items[0]).querySelector<HTMLButtonElement>('[data-toggle]'));
+		assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+		toggle.click();
+		assert.equal(toggled, 1);
+		assert.equal(textOf(required(items[1]).querySelector('[data-title]')), '1 Jan 2025');
+		await unmount(view);
+		target.remove();
+	})
+);

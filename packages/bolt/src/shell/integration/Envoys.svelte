@@ -4,7 +4,7 @@
 -->
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 	import type { Json } from '../../decl/values.ts';
 	import { fork, observe_once } from '@norbital-ai/ui/effect';

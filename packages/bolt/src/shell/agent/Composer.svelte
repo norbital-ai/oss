@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { MediaQuery } from 'svelte/reactivity';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { Button, Combobox, Icon, Input, MarkdownEditor, Popover, type CommandItem, type ModelExposure } from '@norbital-ai/ui';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
@@ -359,7 +359,7 @@
 								command_start="word"
 								{mentions}
 								aria-label={t('Message')}
-								class="[&_textarea]:max-h-40 [&_textarea]:min-h-14 [&_textarea]:resize-none [&_textarea]:border-0 [&_textarea]:bg-transparent [&_textarea]:px-0 [&_textarea]:py-3 [&_textarea]:text-sm [&_textarea]:leading-relaxed [&_textarea]:shadow-none [&_textarea]:focus-visible:ring-0 dark:[&_textarea]:bg-transparent"
+								class="[&_textarea]:max-h-40 [&_textarea]:min-h-14 [&_textarea]:resize-none [&_textarea]:border-0 [&_textarea]:bg-transparent [&_textarea]:px-0 [&_textarea]:py-3 [&_textarea]:text-sm [&_textarea]:leading-relaxed [&_textarea]:shadow-none [&_textarea]:focus-visible:ring-0"
 								placeholder={t('Ask anything · @ to reference anything')}
 								onkeydown={keydown}
 								onpaste={paste}

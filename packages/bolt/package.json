@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"description": "Bolt: the business OS framework — declarations, page SDK, protocol and the engine hosts run.",
 	"type": "module",
 	"sideEffects": [
@@ -68,7 +68,6 @@
 		"@norbital-ai/store": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
 		"fflate": "0.8.3",
-		"runed": "catalog:",
 		"tailwindcss": "4.3.3",
 		"typescript": "catalog:"
 	},

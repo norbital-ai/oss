@@ -21,7 +21,7 @@ sits under the table there. -->
 	import { Cluster, Scroll } from '@norbital-ai/ui/layout';
 	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect, Result, Schema } from 'effect';
-	import { Debounced, watch } from 'runed';
+	import { Debounced, watch } from '@norbital-ai/ui/behaviors';
 	import { onDestroy, untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import {

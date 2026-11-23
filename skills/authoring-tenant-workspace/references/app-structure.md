@@ -2,6 +2,18 @@
 
 Where things go on a page (one home per concern). Exact props: `workspace_lang`. Layout mechanics: [layout-and-scrolling.md](layout-and-scrolling.md).
 
+## Primitive taxonomy (one primitive, one role)
+
+Pick the simplest native primitive that fits the data shape; only add custom UI when a primitive's contract falls short.
+
+| Data / job | Primitive | Notes |
+| --- | --- | --- |
+| Collection / list of independent records | `Table` or `Board` (Kanban) | Houses the list, search, filter, sort, paging, and bulk selection. |
+| Collection actions & exports (reports, bulk runs, file syncs) | Toolbar `⚡` (`toolbar.actions` + native file syncs) | Single home for collection operations and exports. Never place export or batch-action buttons loose inside a record's `+representation.svelte`. When none are needed, fall back to the default primitive chrome. |
+| Single-record data collection / fixed structured view | `+representation.svelte` inside `RecordShell` | For creating/editing one record or showing it in a fixed structured layout that also doubles as data collection. Single-record lifecycle moves (e.g. Mark paid, Publish) go in `RecordShell` `footer_actions`/`actions`. |
+| Parent + owned children treated as **one entity** | In-place data matrix (`ChildGrid save="parent"`, `Rows`, or embedded editable matrix via `Form` `acts`) | **One entity = one atomic Save operation.** Never mount a nested standalone `<Table>` (opening separate child sheets) or fire immediate per-row `ctx.act()` calls when parent and children form one logical entity (e.g. loan + repayments, order + lines, trial + components). |
+| Time-series, effective-dated history & change logs | Shared `Timeline` from `@norbital-ai/ui` | For dated contract/terms history, change logs, revision/approval trails and chronological activity streams — never generic tables. Reuse the single `@norbital-ai/ui` `Timeline` primitive (also used by `RecordShell`'s History widget and `ApprovalPanel`) rather than inventing one-off per-template layouts. |
+
 ## Slots & toolbar
 
 A model page is its view — no heading card, paragraph or button row above it.
@@ -11,8 +23,8 @@ A model page is its view — no heading card, paragraph or button row above it.
 | App identity | `AppShell` props (rendered once in hero) |
 | Page-wide scope (company, site, period) | `AppShell` `actions` snippet (one picker set every tab reads; carry scope status inside `Combobox` `badge`, not beside it) |
 | View-local display control | `toolbar.controls` (never scope; never view/sub-report switching) |
-| Page-level operation | `toolbar.actions` (⚡ menu) |
-| Row / record operation | view row `actions` / `RecordShell` `actions` (one primary `Button variant="brand"` directly visible, rest in overflow) |
+| Collection action / export / report | `toolbar.actions` (`⚡` menu) or model file sync |
+| Single-record lifecycle move | view row `actions` / `RecordShell` `actions` or `footer_actions` (one primary `Button variant="brand"` directly visible, rest in overflow) |
 | Create / filter / paging | `toolbar.new` (`RecordShell mode="create"`) / toolbar popover (`where` fixed, `initial_filter` default) / table footer |
 
 - Toolbar is one row: 1–3 word title, ⓘ `description`, widgets flush left, New alone flush right. Never put buttons above/beside a view or hand-roll search, `<select>` or action bars.
@@ -20,7 +32,7 @@ A model page is its view — no heading card, paragraph or button row above it.
 
 ## The ⚡ menu & mutations
 
-- Lists Sync now (`capabilities.syncs`), file sync Import/Export/Template, and Delete selected automatically via native `bolt.sync_control(model, sync, input)` (syncs are never automations).
+- The `⚡` icon is the unified trigger for collection-level actions and exports: Sync now (`capabilities.syncs`), file sync Import/Export/Template, bulk Delete, and author `toolbar.actions` (custom exports, batch automations). Never duplicate those export buttons inside `+representation.svelte`.
 - Standalone buttons execute through component-level `const save = use_act(ctx)` and `onclick={() => save.run(ctx.run('name', input))}` (creating an Effect without running it writes nothing). Custom record-header actions pass outcomes to `notify_outcome`.
 - `toolbar.actions` items (`icon`, `name`, `description?`, `run(selected)`, `requires_selection?`, `disabled?`): return nothing (closes menu), an Effect (spinner → Done / inline+toast failure), `bolt.act` (toasts committed/`pending_approval`), or `ctx.run` (live `RunStatus` under toolbar). Never manage spinners/toasts manually. Pass `toolbar.context` for file sync scope.
 - `CustomView` over a model inherits its file syncs, title and New. Never loop download clicks; heavy exports belong in a file sync.
@@ -38,7 +50,7 @@ A model page is its view — no heading card, paragraph or button row above it.
 - Group fields by task into compact multi-column `Grid`s (2–3 short fields/row) inside meaningful `Section`s with stable `name` and consistent Lucide `icon` (≥2 controls or 1 large control; never repeat a field across sections; collapse optional notes with `default_open={false}` + `summary` without hiding required choices). Never nest accordions. Keep field order consistent across create/edit/read.
 - One view, one Save (footer submits via shared controller; settings/singletons use `RecordShell` too, no bare page-level `Form`). Pass parent FK in `values` on create; hide parent picker only when non-null.
 - **Readonly vs disabled:** `readonly` (no chrome, copy-on-hover text) = viewer cannot edit; `disabled` (muted editor) = temporarily unavailable. Set once on the shared record controller — never `readonly={!admin}`. Readonly `Field` renders its kind, not `editor`.
-- Inline children use `ChildGrid`/structured renderers preserving unloaded children with IDs + revisions; owned children follow parent lock.
+- **One entity vs independent children:** whenever designing inputs for a relationship, first decide whether parent + children are **one logical entity** (aggregate). If yes (e.g. loan + repayment schedule, order + lines, trial + components), edit children **in place** via a data matrix (`ChildGrid save="parent"` — auto-rendered by `RecordShell` when the parent declares nested child layers — or `Rows` / embedded matrix wired to `Form` `acts`) so parent and children commit together in **one Save operation** (preserving unloaded children with IDs + revisions, owned children following parent lock). Reserve nested `<Table>` tabs strictly for independent child collections with their own lifecycle or high volume (e.g. a payroll run's payslips, a company's orders).
 
 ## Charts & run feedback
 

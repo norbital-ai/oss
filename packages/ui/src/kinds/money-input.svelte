@@ -36,7 +36,7 @@ the currency's minor digits once the box loses focus. Kept as its exact decimal 
 </script>
 
 <script lang="ts">
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import { COUNTRY_CODES, flagOf } from '../primitives/country-picker/country-picker.svelte';
 	import { cn, use_controls } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';

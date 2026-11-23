@@ -25,7 +25,7 @@ A phone number: a country calling-code picker (flag and code) joined to the numb
 
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { COUNTRY_CODES, flagOf } from '../primitives/country-picker/country-picker.svelte';
 	import Input from '../primitives/input/input.svelte';

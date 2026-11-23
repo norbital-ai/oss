@@ -6,7 +6,7 @@ import { it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { browser } from './view-fixture.ts';
 import { Effect, Layer, ManagedRuntime, Result, Schema, Stream, SubscriptionRef } from 'effect';
-// after `./dom.ts`: the edge's `runed` and the harness share svelte's client runtime
+// after `./dom.ts`: the edge's reactive watchers and the harness share svelte's client runtime
 const { attach, fork, mount_edge, reactive_query, run, running_fibers } =
 	await import('../src/effect/index.ts');
 const { flushSync, mount, unmount } = await import('svelte');

@@ -2,7 +2,7 @@
 <script lang="ts">
 	import { Effect, Stream } from 'effect';
 	import { observe } from '@norbital-ai/ui/effect';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { ProtocolFailed } from '../decl/errors.ts';
 	import type { Snippet } from 'svelte';
 	import type { Json } from '../decl/values.ts';

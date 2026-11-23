@@ -39,7 +39,7 @@
 	import { MediaQuery } from 'svelte/reactivity';
 	import { cubicOut } from 'svelte/easing';
 	import { fly } from 'svelte/transition';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
 	import { Button, Combobox, Dialog, format_handle, Icon, PreviewFrame, RowMenu, type ModelExposure, type UiContext } from '@norbital-ai/ui';

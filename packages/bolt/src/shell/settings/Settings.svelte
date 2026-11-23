@@ -3,7 +3,7 @@
 	import { observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect, Option, Queue, Schema, Stream } from 'effect';
 	import { Cluster } from '@norbital-ai/ui/layout';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import {
 		Button,
 		Combobox,

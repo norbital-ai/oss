@@ -14,7 +14,7 @@ the route changes. It has no header: the navigation, flush to its edges in the s
 </script>
 
 <script lang="ts">
-	import { watch } from 'runed';
+	import { watch } from '../../behaviors/index.js';
 	import { cn } from '../utils.js';
 	import { navigates } from './dismiss.js';
 	import Sheet from './sheet.svelte';

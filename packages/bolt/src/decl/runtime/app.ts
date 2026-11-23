@@ -197,12 +197,13 @@ export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'conve
  * seed/ (public/ ships in the release, test/ serves bolt test, +seeder.ts)
  * migrations/ (generated, editable SQL and its proofs), tests/
  * ```
- * `theme` remaps shared CSS variables for every application, the shell and public pages. Provide separate `light` and
- * `dark` maps; omitted tokens retain Bolt's theme. `primary`/`primary-foreground` style primary actions;
- * `accent`/`accent-foreground` style hover/selection; `brand`, `brand-foreground`, `brand-text`, `ring` and the sidebar
- * tokens control their respective roles. Pair foregrounds with their backgrounds and verify contrast in the preview.
- * Colour, sidebar and chart token names follow tweakcn, without the `--` prefix. Fonts use installed/bundled font stacks; this
- * declaration never downloads a font or stylesheet. Changes go through the workspace's normal preview and release.
+ * `theme` configures the look and feel of every application, the shell and public pages. Start with the high-level
+ * presets — `palette` (`'warm' | 'neutral' | 'crisp'`), `accent` (preset name or `'#rrggbb'` hex with automatic
+ * light/dark contrast foregrounds) and `radius` (`'sharp' | 'default' | 'soft'`) — and layer optional `light` and
+ * `dark` token overrides on top; omitted tokens retain Bolt's defaults. Semantic tokens (`surface-*`, `content-*`,
+ * `border-*`, `tone-*`), `primary`/`accent`/`brand`, sidebar and chart tokens use CSS variable names without `--`.
+ * Fonts use installed/bundled font stacks; this declaration never downloads a font or stylesheet. Changes go through
+ * the workspace's normal preview and release.
  * @param spec Workspace settings; integration accounts and credentials are created at runtime.
  * @returns The typed declaration unchanged. Compilation validates its references against this workspace's names.
  * @example
@@ -211,8 +212,10 @@ export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'conve
  * export default workspace({
  *   tz: 'Asia/Singapore', locale: 'en-SG',
  *   theme: {
- *     light: { primary: '#1467a6', 'primary-foreground': '#ffffff', ring: '#1467a6' },
- *     dark: { primary: '#3b8fd4', 'primary-foreground': '#0b0e13', ring: '#3b8fd4' }
+ *     palette: 'crisp',
+ *     accent: '#1467a6',
+ *     radius: 'default',
+ *     light: { 'font-sans': 'Inter, system-ui, sans-serif' }
  *   }
  * });
  */

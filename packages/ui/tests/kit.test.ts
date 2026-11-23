@@ -323,7 +323,7 @@ it.live('an instant at hour precision snaps to :00:00 in the viewer zone', () =>
 			),
 			'2026-09-24T06:37:12.345Z'
 		);
-		// bits-ui's default placeholder is an unzoned CalendarDateTime: read in the viewer zone, never null
+		// an unzoned CalendarDateTime placeholder is read in the viewer zone, never null
 		const { CalendarDateTime } = await import('@internationalized/date');
 		const typed = new Date(
 			required(dateText('instant', snapHour(new CalendarDateTime(2026, 9, 24, 14, 5), 'hour')))

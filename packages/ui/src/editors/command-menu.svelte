@@ -21,9 +21,8 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	import { attach, fork } from '../effect/index.js';
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
-	import { Popover as P } from 'bits-ui';
+	import { create_dismiss, portal, virtual_list } from '../behaviors/index.js';
 	import { cn, ui_text } from '../primitives/utils.js';
-	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
 	import {
 		applyItem,
 		caretRect,
@@ -194,42 +193,43 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 			for (const name of events) ta.removeEventListener(name, later);
 		};
 	});
+	const dismiss = create_dismiss({
+		open: () => open,
+		ignore: () => [textarea],
+		on_dismiss: (reason) => {
+			if (reason === 'escape') {
+				const back = items.find((item) => item.back);
+				if (back) {
+					pick(back);
+					return;
+				}
+			}
+			if (found !== null) {
+				dismissed = found.start;
+				found = null;
+			}
+		}
+	});
+	const menuStyle = $derived.by(() => {
+		const rect = anchor;
+		if (rect === null) return '';
+		const vw = typeof window === 'undefined' ? 1024 : window.innerWidth;
+		const vh = typeof window === 'undefined' ? 768 : window.innerHeight;
+		const x = Math.round(Math.max(8, Math.min(rect.left, vw - 328)));
+		const y = Math.round(Math.max(8, Math.min(rect.bottom + 4, vh - 80)));
+		return `position:fixed;top:0;left:0;transform:translate3d(${x}px,${y}px,0);`;
+	});
 </script>
 
 <div class="contents" {@attach lifetime}>
 	{#if open}
-		<P.Root
-			open
-			onOpenChange={(o) => {
-				if (!o && found !== null) {
-					dismissed = found.start;
-					found = null;
-				}
-			}}
-		>
-			<P.Portal>
-				<P.Content
-					customAnchor={{ getBoundingClientRect: () => anchor ?? new DOMRect() }}
-					side="bottom"
-					align="start"
-					sideOffset={4}
-					trapFocus={false}
-					onOpenAutoFocus={(e) => e.preventDefault()}
-					onCloseAutoFocus={(e) => e.preventDefault()}
-					onEscapeKeydown={(e) => {
-						const back = items.find((item) => item.back);
-						if (back) {
-							e.preventDefault();
-							e.stopPropagation();
-							pick(back);
-						}
-					}}
-					onInteractOutside={(e) => {
-						if (e.target === textarea) e.preventDefault();
-					}}
-					class="z-50 w-80 max-w-[calc(100vw-2rem)] rounded-md border bg-popover p-1 text-popover-foreground shadow-deep"
-					data-command-menu={found?.trigger.char}
-				>
+		<div {@attach portal()} class="contents">
+			<div
+				{@attach dismiss.surface}
+				style={menuStyle}
+				class="z-50 w-80 max-w-[calc(100vw-2rem)] rounded-control border bg-popover p-1 text-popover-foreground shadow-deep"
+				data-command-menu={found?.trigger.char}
+			>
 					<ul bind:this={list} role="listbox" class="max-h-72 overflow-auto">
 						{#if pending}<li role="status" class="px-2 py-2 text-sm text-muted-foreground">
 								{t('searching')}
@@ -323,8 +323,7 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 									><kbd>Esc</kbd> {t('back')}</span
 								>{/if}
 						</div>{/if}
-				</P.Content>
-			</P.Portal>
-		</P.Root>
+			</div>
+		</div>
 	{/if}
 </div>

@@ -147,7 +147,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	import { fork } from '../effect/index.js';
 	import { getAllContexts, onDestroy, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { Debounced, watch as onChange_ } from 'runed';
+	import { Debounced, watch as onChange_ } from '../behaviors/index.js';
 	import { currentSearchParams, replaceSearchParams } from '../utilities/url.js';
 	import { Button } from '../primitives/button/index.js';
 	import { confirm_action } from '../primitives/dialog/confirm.js';
@@ -1137,10 +1137,10 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 						<table
 							class="w-max min-w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_tbody>tr:last-child>td]:border-b-0 dark:[&_tbody>tr:last-child>td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap dark:[&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-xs [&_th]:text-muted-foreground dark:[&_th]:text-[13px] dark:[&_th]:text-foreground [&_th]:font-medium dark:[&_th:not(:last-child)]:border-r"
 						>
-							<thead class="bg-card sticky top-0 z-20 dark:bg-muted">
+							<thead class="bg-surface-table-header sticky top-0 z-20">
 								<tr>
 									{#if selectable}
-										<th class="bg-card sticky left-0 z-10 w-8 dark:bg-muted px-2!"
+										<th class="bg-surface-table-header sticky left-0 z-10 w-8 px-2!"
 											><input
 												type="checkbox"
 												aria-label={msg(text, 'table.selectAll')}
@@ -1155,7 +1155,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										<!-- drag a header onto another to move it (the column menu moves it by keyboard); sorting is the toolbar's -->
 										<th
 											class={[
-												'group bg-card relative dark:bg-muted',
+												'group bg-surface-table-header relative',
 												isPinned && 'sticky z-10',
 												isPinned && ci === pinCount - 1 && PIN_EDGE,
 												numeric(f) && 'text-right'
@@ -1233,7 +1233,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 									{/each}
 									{#if row_trailing}<th class="w-0 p-0!"></th>{/if}
 									{#if actions.length > 0 || (kind === 'local' && on_change && remove)}<th
-											class={['bg-card z-10 dark:bg-muted', ACTS_EDGE]}
+											class={['bg-surface-table-header z-10', ACTS_EDGE]}
 										></th>{/if}
 								</tr>
 							</thead>

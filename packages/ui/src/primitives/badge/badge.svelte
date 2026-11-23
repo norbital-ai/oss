@@ -30,8 +30,7 @@ A small label tag in a colour variant.
 </script>
 
 <script lang="ts">
-	import { cn } from '../utils.js';
-	import type { WithElementRef } from 'bits-ui';
+	import { cn, type WithElementRef } from '../utils.js';
 	import type { HTMLAnchorAttributes } from 'svelte/elements';
 
 	let {

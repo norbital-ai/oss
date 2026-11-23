@@ -8,7 +8,7 @@
 	import { attach, observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect, Queue, Schema } from 'effect';
 	import { getContext } from 'svelte';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { SOUNDS, noticeArrivals, type Sounds } from './sounds.ts';
 	import { Button, Icon, Popover, Spinner, cn } from '@norbital-ai/ui';
 	import { Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';

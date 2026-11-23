@@ -12,15 +12,16 @@
 			variant: {
 				default: 'bg-background text-foreground',
 				destructive:
-					'border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive',
+					'border-tone-destructive-border bg-tone-destructive-bg text-tone-destructive-text [&>svg]:text-tone-destructive-text',
 				success:
-					'border-success/50 text-success bg-success/10 dark:bg-success/30 [&>svg]:text-success',
+					'border-tone-success-border bg-tone-success-bg text-tone-success-text [&>svg]:text-tone-success-text',
 				warning:
-					'border-warning/50 bg-warning/10 text-warning-foreground dark:bg-warning/30 dark:text-warning [&>svg]:text-warning',
-				info: 'border-info/50 text-info bg-info/10 dark:bg-info/30 [&>svg]:text-info',
-				secondary: 'border-border bg-muted text-foreground [&>svg]:text-muted-foreground',
+					'border-tone-warning-border bg-tone-warning-bg text-tone-warning-text [&>svg]:text-tone-warning-text',
+				info: 'border-tone-info-border bg-tone-info-bg text-tone-info-text [&>svg]:text-tone-info-text',
+				secondary:
+					'border-tone-neutral-border bg-tone-neutral-bg text-foreground [&>svg]:text-tone-neutral-text',
 				loading:
-					'border-info/50 text-info bg-info/10 dark:bg-info/30 [&>svg]:animate-spin [&>svg]:text-info'
+					'border-tone-info-border bg-tone-info-bg text-tone-info-text [&>svg]:animate-spin [&>svg]:text-tone-info-text'
 			}
 		},
 		defaultVariants: {
@@ -34,8 +35,7 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '../utils.js';
-	import type { WithElementRef } from 'bits-ui';
+	import { cn, type WithElementRef } from '../utils.js';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {

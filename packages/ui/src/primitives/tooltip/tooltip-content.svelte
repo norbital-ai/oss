@@ -1,79 +1,86 @@
 <script lang="ts">
-	import type { SnakeProps } from '../bits.js';
-	import { Tooltip as TooltipPrimitive } from 'bits-ui';
-	import { cn } from '../utils.js';
+	import type { Snippet } from 'svelte';
+	import type { HTMLAttributes } from 'svelte/elements';
+	import {
+		create_floating,
+		portal,
+		type FloatingAlign,
+		type FloatingSide
+	} from '../../behaviors/index.js';
+	import { cn, type WithElementRef } from '../utils.js';
 
 	let {
 		ref = $bindable(null),
+		open = false,
+		anchor = null,
 		class: className,
-		side_offset = 0,
+		side_offset = 4,
 		side = 'top',
+		align = 'center',
+		avoid_collisions = true,
+		collision_padding = 8,
+		on_pointer_enter,
+		on_pointer_leave,
 		children,
-		arrow_classes,
-		align_offset,
-		arrow_padding,
-		avoid_collisions,
-		collision_boundary,
-		collision_padding,
-		hide_when_detached,
-		update_position_strategy,
-		custom_anchor,
-		on_interact_outside,
-		interact_outside_behavior,
-		on_focus_outside,
-		on_escape_keydown,
-		escape_keydown_behavior,
-		force_mount,
 		...restProps
-	}: SnakeProps<TooltipPrimitive.ContentProps, {
-		side_offset: 'sideOffset';
-		align_offset: 'alignOffset';
-		arrow_padding: 'arrowPadding';
-		avoid_collisions: 'avoidCollisions';
-		collision_boundary: 'collisionBoundary';
-		collision_padding: 'collisionPadding';
-		hide_when_detached: 'hideWhenDetached';
-		update_position_strategy: 'updatePositionStrategy';
-		custom_anchor: 'customAnchor';
-		on_interact_outside: 'onInteractOutside';
-		interact_outside_behavior: 'interactOutsideBehavior';
-		on_focus_outside: 'onFocusOutside';
-		on_escape_keydown: 'onEscapeKeydown';
-		escape_keydown_behavior: 'escapeKeydownBehavior';
-		force_mount: 'forceMount';
-	}> & {
-		/** The Bits UI arrow uses currentColor for its fill. */
-		arrow_classes?: string;
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>, HTMLDivElement> & {
+		/** Whether the tooltip bubble is visible. */
+		open?: boolean;
+		/** Anchor element the tooltip floats beside. */
+		anchor?: HTMLElement | null;
+		/** Preferred side (default `'top'`). */
+		side?: FloatingSide;
+		/** Cross-axis alignment (default `'center'`). */
+		align?: FloatingAlign;
+		/** Gap from the anchor in px. */
+		side_offset?: number;
+		/** Flip/shift to stay on screen. */
+		avoid_collisions?: boolean;
+		/** Viewport gutter in px. */
+		collision_padding?: number;
+		/** Keep open while hovering content. */
+		on_pointer_enter?: () => void;
+		/** Close after leaving content. */
+		on_pointer_leave?: () => void;
+		/** Tooltip body content. */
+		children?: Snippet;
 	} = $props();
+
+	const floating = create_floating({
+		open: () => open,
+		side: () => side,
+		align: () => align,
+		side_offset: () => side_offset,
+		padding: () => collision_padding,
+		flip: () => avoid_collisions,
+		escape: false,
+		outside: false
+	});
+
+	$effect(() => {
+		floating.set_anchor(anchor);
+	});
 </script>
 
-<TooltipPrimitive.Portal>
-	<TooltipPrimitive.Content
-		bind:ref
-		data-slot="tooltip-content"
-		{side}
-		class={cn(
-			'z-50 w-fit origin-(--bits-tooltip-content-transform-origin) animate-in rounded-md bg-primary px-3 py-1.5 text-xs text-balance text-primary-foreground fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
-			className
-		)}
-		{...restProps}
-		sideOffset={side_offset}
-		alignOffset={align_offset}
-		arrowPadding={arrow_padding}
-		avoidCollisions={avoid_collisions}
-		collisionBoundary={collision_boundary}
-		collisionPadding={collision_padding}
-		hideWhenDetached={hide_when_detached}
-		updatePositionStrategy={update_position_strategy}
-		customAnchor={custom_anchor}
-		onInteractOutside={on_interact_outside}
-		interactOutsideBehavior={interact_outside_behavior}
-		onFocusOutside={on_focus_outside}
-		onEscapeKeydown={on_escape_keydown}
-		escapeKeydownBehavior={escape_keydown_behavior}
-		forceMount={force_mount}
-	>
-		{@render children?.()}
-		<TooltipPrimitive.Arrow class={cn('z-50 text-primary', arrow_classes)} />
-	</TooltipPrimitive.Content>
-</TooltipPrimitive.Portal>
+{#if open}
+	<div {@attach portal()} class="contents">
+		<div
+			bind:this={ref}
+			role="tooltip"
+			{@attach floating.content}
+			data-slot="tooltip-content"
+			data-state="open"
+			data-side={floating.side}
+			style={floating.style}
+			onpointerenter={on_pointer_enter}
+			onpointerleave={on_pointer_leave}
+			class={cn(
+				'z-50 w-fit animate-in rounded-control bg-primary px-3 py-1.5 text-xs text-balance text-primary-foreground fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2',
+				className
+			)}
+			{...restProps}
+		>
+			{@render children?.()}
+		</div>
+	</div>
+{/if}

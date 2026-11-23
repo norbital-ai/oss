@@ -7,7 +7,7 @@
 -->
 <script lang="ts">
 	import { Effect } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { Icon, Spinner } from '@norbital-ai/ui';
 	import { AccretionDisc } from '@norbital-ai/ui/brand';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';

@@ -40,7 +40,7 @@ Every `+<page>.page.svelte` renders inside one.
 
 <script lang="ts">
 	import { getAllContexts, onDestroy } from 'svelte';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import { offerContexts } from '../record/navigation.js';
 	import Bound from './bound.svelte';
 	import Cover from './cover.svelte';

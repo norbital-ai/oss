@@ -74,7 +74,7 @@ in Google Maps; it does not invent road paths or travel times. The map fills its
 
 <script lang="ts" generics="C extends ModelKey">
 	import { Effect } from 'effect';
-	import { Debounced, watch } from 'runed';
+	import { Debounced, watch } from '../behaviors/index.js';
 	import { onDestroy } from 'svelte';
 	import type { Map as MapLibre } from 'maplibre-gl';
 	import { attach } from '../effect/index.js';

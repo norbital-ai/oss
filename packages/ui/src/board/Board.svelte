@@ -82,7 +82,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 	// Each lane loads infinitely: live keyset pages read by its lane condition, the next one as the lane scrolls near its end
 	//; lane counts are one aggregate. A drop is one generated `update` of `by`,
 	// painted optimistically and rolled back by a refusal, which shows on the board.
-	import { Debounced, watch } from 'runed';
+	import { Debounced, watch } from '../behaviors/index.js';
 	import { onDestroy } from 'svelte';
 	import { tone } from '../kinds/kind.js';
 	import { provide_model, use_enum_text } from '../model/context.js';
@@ -532,7 +532,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 				<div class="flex gap-3 overflow-hidden pb-2">
 					{#each [3, 2, 4] as n, i (i)}
 						<div
-							class="flex w-72 shrink-0 flex-col gap-2 rounded-sm border bg-muted/70 p-3 dark:border-transparent dark:bg-muted/40"
+							class="flex w-72 shrink-0 flex-col gap-2 rounded-control border border-border-lane bg-surface-lane p-3"
 						>
 							<div class="bg-muted h-4 w-24 animate-pulse rounded motion-reduce:animate-none"></div>
 							{#each { length: n } as _, j (j)}<div
@@ -569,8 +569,8 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 							<div
 								role="list"
 								class={[
-									'group/lane flex min-h-0 flex-col gap-2 rounded-sm border p-3 ring-inset transition-colors motion-reduce:transition-none dark:border-transparent',
-									target ? 'bg-primary/10 ring-primary/50 ring-2' : 'bg-muted/70 dark:bg-muted/40',
+									'group/lane flex min-h-0 flex-col gap-2 rounded-control border border-border-lane p-3 ring-inset transition-colors motion-reduce:transition-none',
+									target ? 'bg-primary/10 ring-primary/50 ring-2' : 'bg-surface-lane',
 									columns === undefined ? 'w-72 shrink-0 snap-start' : 'min-w-0'
 								]}
 								data-lane={laneKey}

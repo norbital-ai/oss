@@ -24,7 +24,7 @@ The latest runs of one automation matching `where`, newest first, each with its 
 
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import { watch as on_change } from 'runed';
+	import { watch as on_change } from '../behaviors/index.js';
 	import { bolt_of } from '../client/context.js';
 	import { watch } from '../read/live.svelte.js';
 	import { msg } from '../text/messages.js';

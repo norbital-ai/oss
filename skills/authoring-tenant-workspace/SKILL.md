@@ -18,7 +18,8 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 | Automations, effects, reruns, facilities, AI                    | `automations-and-effects.md`            |
 | Briefs, workspace skills, envoys, integrations                  | `agents-and-integrations.md`            |
 | What the platform renders                                       | `built-ins.md`                          |
-| Page slots, toolbar, tabs, forms, readonly vs disabled          | `app-structure.md`                      |
+| Primitive roles (`⚡`, matrix, timeline), page slots, toolbar, tabs, forms | `app-structure.md`                      |
+| Composing novel interactive UIs (`Surface`, `@norbital-ai/ui/behaviors`)   | `behaviors-and-composition.md`          |
 | UI review checklist                                             | `ui-standard.md`                        |
 | Layout axioms                                                   | `interface-ideology.md`                 |
 | Composition, sizing, scroll ownership                           | `layout-and-scrolling.md`               |

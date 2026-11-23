@@ -29,7 +29,7 @@
 	import { fork, observe, observe_once } from '@norbital-ai/ui/effect';
 	import { AppHeader, Stack } from '@norbital-ai/ui/layout';
 	import { MediaQuery } from 'svelte/reactivity';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import type { AgentConversation } from '../../protocol/wire.ts';
 	import { ConversationsReadAnswer, type ShellApi } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';

@@ -2,7 +2,7 @@
 	// A kind typed as text (int, number, decimal, text): the value changes only when the text parses, so a
 	// half-typed "1." never reaches the draft as a wrong number, and a parse problem shows under the box.
 	import { KINDS } from './registry.js';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import Input from '../primitives/input/input.svelte';
 	import { format, parse, type Value, type Kind } from './kind.js';
 

@@ -148,7 +148,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import Self from './structured-data.svelte';
 	import Editor from './editor.svelte';
 	import Show from './show.svelte';

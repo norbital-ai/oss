@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { it as effect_it } from '@effect/vitest';
 import { Effect, Layer, ManagedRuntime, Queue, Schema, Stream } from 'effect';
 import { mount_edge } from '@norbital-ai/ui/effect';
+import { register_control } from '@norbital-ai/ui/behaviors';
 import { create_bolt, page_live_mode } from '../src/page/bolt.ts';
 import type { PageSnapshotHost } from '../src/page/index.ts';
-import { fillField, pageClickable, pageField, pageFieldLabel, pageLabel } from '../src/shell/agent/page.ts';
+import { fillField, pageClickable, pageField, pageFieldLabel, pageLabel, pageScreen } from '../src/shell/agent/page.ts';
 
 describe('the current-tab page bridge', () => {
 	beforeEach(() => {
@@ -79,6 +80,22 @@ describe('the current-tab page bridge', () => {
 		fillField(field, 'GREY-42', false);
 		expect(field.value).toBe('GREY-42');
 		expect(events).toEqual(['input', 'change']);
+	});
+	it('includes registered UI control states in pageScreen for Norbius', () => {
+		document.body.innerHTML = `<main><h1>Settings</h1></main>`;
+		const stop = register_control({
+			id: 'tabs:settings',
+			kind: 'tabs',
+			label: 'Settings tabs',
+			state: () => ({ active: 'change_log', items: ['general', 'change_log'] })
+		});
+		try {
+			expect(pageScreen()).toContain('Settings');
+			expect(pageScreen()).toContain('tabs:Settings tabs(active=change_log items=[general,change_log])');
+		} finally {
+			stop();
+		}
+		expect(pageScreen()).not.toContain('tabs:Settings tabs');
 	});
 });
 

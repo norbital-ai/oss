@@ -289,13 +289,18 @@ it.effect('bolt-contract holds a generated card per role, naming what a role is 
 		'sync.md',
 		'integration.md',
 		'page.md',
+		'behaviors.md',
 		'representation.md',
 		'test.md'
 	]);
 	const card = (path: string) => contract?.files.find((file) => file.path === path)?.text ?? '';
 	expect(card('model.md')).toContain("kind: 'money'");
 	expect(card('automation.md')).toContain('- policies: NonEmpty<string>');
+	expect(card('page.md')).toContain('## Surface');
 	expect(card('page.md').length).toBeLessThan(25_000);
+	expect(card('behaviors.md')).toContain('## create_tree');
+	expect(card('behaviors.md')).toContain('## create_reorder');
+	expect(card('behaviors.md')).toContain('## register_control');
 }));
 
 it.effect('documents the optional snapshot host bridge from its public source type and page-role card', () => Effect.gen(function* () {

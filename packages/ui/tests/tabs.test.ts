@@ -82,17 +82,17 @@ it('default tabs use symmetric inset and concentric track radius without negativ
 	const list = target.querySelector('[role=tablist]');
 	const listClasses = (list?.className ?? '').split(/\s+/);
 	expect(listClasses).toContain('p-0.5');
-	expect(listClasses).toContain('rounded-md');
+	expect(listClasses).toContain('rounded-control');
 	expect(listClasses).not.toContain('-ms-0.5');
 	const activeTrigger = target.querySelector('[role=tab]')?.className ?? '';
-	expect(activeTrigger.split(/\s+/)).toContain('rounded-badge');
+	expect(activeTrigger.split(/\s+/)).toContain('rounded-inset');
 	const underlineTarget = document.body.appendChild(document.createElement('div'));
 	const underline = mount(Tabs, { target: underlineTarget, props: { tabs, level: 2 } });
 	await tick();
 	const underlineTrigger = (underlineTarget.querySelector('[role=tab]')?.className ?? '').split(
 		/\s+/
 	);
-	expect(underlineTrigger).toContain('rounded-t-md');
+	expect(underlineTrigger).toContain('rounded-t-control');
 	expect(underlineTrigger).toContain('rounded-b-none');
 	expect(underlineTrigger).toContain('after:bottom-0');
 	expect(underlineTrigger).not.toContain('after:-bottom-0.5');

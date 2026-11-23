@@ -38,7 +38,7 @@
 </script>
 
 <script lang="ts" generics="C extends ModelKey">
-	import { watch as watchSource } from 'runed';
+	import { watch as watchSource } from '../behaviors/index.js';
 	import { Equal } from 'effect';
 	import { untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
@@ -211,7 +211,7 @@
 					draggable={grid || touch.current ? undefined : 'true'}
 					{@attach !grid && lane.measure(row.id)}
 					class={[
-						'group bg-popover text-popover-foreground hover:border-input data-[dragging]:opacity-40 relative flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-sm border text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-card dark:text-card-foreground',
+						'group bg-surface-raised text-card-foreground hover:border-border-control data-[dragging]:opacity-40 relative flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-control border text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
 						grid ? 'min-h-24 p-3' : 'mb-2 p-2.5',
 						selectable && 'pl-12',
 						selected?.has(row.id) && 'border-primary bg-accent/40'

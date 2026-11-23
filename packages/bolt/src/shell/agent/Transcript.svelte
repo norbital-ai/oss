@@ -4,7 +4,7 @@
 	import { Badge, Button, Icon, ReadonlyMarkdown, StructuredData, virtual_list, type UiContext } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 	import type { LogRow } from '@norbital-ai/host-api';
 	import type { ShellApi } from '../api-types.ts';

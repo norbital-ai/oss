@@ -1,7 +1,7 @@
 <!-- The approval requests waiting on the member's decision, live wherever they are: the Approvals entry's count. -->
 <script lang="ts">
 	import { observe } from '@norbital-ai/ui/effect';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import type { ShellBolt } from '../runtime.ts';
 	import { InboxReadAnswer } from '../api-types.ts';
 

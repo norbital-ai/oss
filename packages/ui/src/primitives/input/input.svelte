@@ -93,9 +93,9 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 		data-slot={dataSlot}
 		class={cn(
 			CONTROL_SIZE,
-			'block w-full rounded-sm border border-input bg-background pt-1.5 font-medium shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30',
+			'block w-full rounded-control border border-border-control bg-surface-input pt-1.5 font-medium shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
 			'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset',
-			'aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:ring-inset dark:aria-invalid:ring-destructive/40',
+			'aria-invalid:border-destructive aria-invalid:ring-ring-destructive aria-invalid:ring-inset',
 			'disabled:bg-muted disabled:shadow-none',
 			className
 		)}
@@ -112,9 +112,9 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 		data-slot={dataSlot}
 		class={cn(
 			CONTROL_SIZE,
-			'block w-full rounded-sm border border-input bg-background py-1 shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30',
+			'block w-full rounded-control border border-border-control bg-surface-input py-1 shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
 			'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset',
-			'aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:ring-inset dark:aria-invalid:ring-destructive/40',
+			'aria-invalid:border-destructive aria-invalid:ring-ring-destructive aria-invalid:ring-inset',
 			'disabled:bg-muted disabled:shadow-none',
 			type === 'number' && numberInputClasses,
 			className

@@ -36,7 +36,7 @@ A related-record grid with explicit child operations, original revisions and par
 	import { fork } from '../effect/index.js';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { watch as changes } from 'runed';
+	import { watch as changes } from '../behaviors/index.js';
 	import { fields_text, recordText } from '../kinds/kind.js';
 	import { FormState, use_record_controller } from '../form/form-state.svelte.js';
 	import { changed, formSpec, locked } from '../form/draft.js';

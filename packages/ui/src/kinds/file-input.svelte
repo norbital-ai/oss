@@ -35,7 +35,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Effect, FiberSet } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import { attach, fork } from '../effect/index.js';
 	import { cn, ui_text } from '../primitives/utils.js';
 	import { use_form } from '../form/form-state.svelte.js';
@@ -176,7 +176,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 <div class="grid min-w-0 gap-1" {@attach lifetime}>
 	<div
 		class={cn(
-			'flex min-h-8 min-w-0 flex-wrap items-center gap-1 rounded-sm border border-input bg-background p-1 shadow-xs transition-colors dark:bg-input/30',
+			'flex min-h-8 min-w-0 flex-wrap items-center gap-1 rounded-control border border-border-control bg-surface-input p-1 shadow-xs transition-colors',
 			over && 'border-brand bg-brand-muted/30',
 			invalid && 'border-destructive',
 			disabled && 'opacity-50'

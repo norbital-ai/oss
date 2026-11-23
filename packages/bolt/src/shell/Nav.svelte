@@ -8,7 +8,7 @@
 	import { fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import {
 		Badge,
 		Button,

@@ -4,7 +4,7 @@
 	import { Effect } from 'effect';
 	import { fork, observe_once } from '../effect/index.js';
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import Alert from '../primitives/alert/alert.svelte';
 	import Button from '../primitives/button/button.svelte';
 	import Spinner from '../primitives/spinner/spinner.svelte';

@@ -4,7 +4,7 @@
 	import type { LogViewProps } from './LogView.svelte';
 	import { observe_once } from '../effect/index.js';
 	import { tick } from 'svelte';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import Overflow from '../cell/Overflow.svelte';
 	import { words_of } from '../client/context.js';
 	import { cn, narrowViewport } from '../primitives/utils.js';
@@ -58,7 +58,7 @@
 	const BADGE: Record<LogLevel, string> = {
 		debug: 'text-muted-foreground',
 		info: 'text-info',
-		warn: 'bg-warning/15 text-warning-foreground dark:text-warning',
+		warn: 'bg-tone-warning-bg text-tone-warning-text',
 		error: 'bg-destructive/15 text-destructive'
 	};
 

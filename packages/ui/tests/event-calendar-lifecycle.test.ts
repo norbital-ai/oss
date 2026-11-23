@@ -8,7 +8,7 @@ import { bare_ctx } from './bare-ctx.ts';
 
 const date = new Date(2026, 10, 6, 15, 30);
 const grid_of = (target: HTMLElement) => {
-	const grid = target.querySelector<HTMLElement>('[data-calendar-scroll] .bg-popover');
+	const grid = target.querySelector<HTMLElement>('[data-calendar-scroll] [data-calendar-grid]');
 	if (grid === null) throw new Error('Missing calendar time grid.');
 	vi.spyOn(grid, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 700, 24 * 56));
 	return grid;

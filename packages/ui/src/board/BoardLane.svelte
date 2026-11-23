@@ -2,7 +2,7 @@
 	import type { UiContext } from '../client/contract.js';
 	// One lane: a stack of keyset pages, each its own live view. Scrolling near the lane's end opens the next page (server-side
 	// infinite loading); the "Load more" button is the same step for a keyboard or where nothing observes the scroll.
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import { Button } from '../primitives/button/index.js';
 	import type { ModelKey } from '../model/types.js';
 	import { bolt_of } from '../client/context.js';

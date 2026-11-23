@@ -3,18 +3,21 @@
 A form label.
 -->
 <script lang="ts">
-	import { cn } from '../utils.js';
-	import { Label as LabelPrimitive } from 'bits-ui';
+	import type { HTMLLabelAttributes } from 'svelte/elements';
+	import { cn, type WithElementRef } from '../utils.js';
 
 	let {
 		ref = $bindable(null),
 		class: className,
+		children,
 		...restProps
-	}: LabelPrimitive.RootProps = $props();
+	}: WithElementRef<HTMLLabelAttributes, HTMLLabelElement> = $props();
 </script>
 
-<LabelPrimitive.Root
-	bind:ref
+<label
+	bind:this={ref}
 	class={cn('text-label peer-disabled:cursor-not-allowed peer-disabled:opacity-70', className)}
 	{...restProps}
-/>
+>
+	{@render children?.()}
+</label>

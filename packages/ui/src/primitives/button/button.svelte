@@ -5,9 +5,7 @@ A button (or a link, with `href`) in a variant and size.
 <Button variant="outline" onclick={save}>Save</Button>
 -->
 <script lang="ts" module>
-	import { cn } from '../utils.js';
-	import { mergeProps } from 'bits-ui';
-	import type { WithElementRef } from 'bits-ui';
+	import { cn, merge_props, type WithElementRef } from '../utils.js';
 	import type { HTMLAnchorAttributes, HTMLButtonAttributes } from 'svelte/elements';
 	import type { HapticKind } from '../utils.js';
 	import { type VariantProps, tv } from 'tailwind-variants';
@@ -141,7 +139,7 @@ A button (or a link, with `href`) in a variant and size.
 
 {#snippet Button({ props }: { props?: Record<string, unknown> })}
 	{#if href}
-		{@const mergedProps = mergeProps(
+		{@const mergedProps = merge_props(
 			{
 				class: computedClass,
 				onclick: handleAnchorClick,
@@ -154,7 +152,7 @@ A button (or a link, with `href`) in a variant and size.
 			{@render children?.()}
 		</a>
 	{:else}
-		{@const mergedProps = mergeProps(
+		{@const mergedProps = merge_props(
 			{
 				class: computedClass,
 				onclick: handleButtonClick,

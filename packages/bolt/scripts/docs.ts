@@ -55,7 +55,42 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 	page: {
 		bolt: ['app', 'group'],
 		'bolt/page': ['PageBolt', 'PageSnapshotHost'],
-		ui: ['Table', 'Col', 'Form', 'Field', 'Section', 'RecordShell', 'Board', 'Chart']
+		ui: ['Table', 'Col', 'Form', 'Field', 'Section', 'RecordShell', 'Board', 'Chart', 'Surface']
+	},
+	behaviors: {
+		ui: ['Surface'],
+		'ui/behaviors': [
+			'create_tree',
+			'create_listbox',
+			'create_selection',
+			'create_roving_focus',
+			'create_typeahead',
+			'create_reorder',
+			'create_resize',
+			'create_shortcuts',
+			'create_floating',
+			'create_dismiss',
+			'create_focus_trap',
+			'portal',
+			'create_overflow',
+			'create_disclosure',
+			'create_accordion',
+			'create_slider',
+			'create_pagination',
+			'create_clipboard',
+			'create_stick_to_bottom',
+			'create_field',
+			'create_pin_input',
+			'create_date_field',
+			'create_time_field',
+			'create_calendar',
+			'watch',
+			'Debounced',
+			'use_debounce',
+			'PersistedState',
+			'virtual_list',
+			'register_control'
+		]
 	},
 	representation: {
 		'bolt/page': ['PageBolt', 'PageContext'],
@@ -177,9 +212,33 @@ Common UI props (host renders \`AppShell\` automatically — pages never import 
 - \`<Table {ctx} of="<model>" where? order_by? columns? actions? toolbar? empty? on_open? />\` — \`actions\` takes \`RowAction<R>[]\` (\`{ label, confirm?, run(row) }\`, where \`run\` returns an \`Effect\` or \`void\`).
 - \`<Board {ctx} of="<model>" by="<state_field>" card={['<f1>', '<f2>']} lanes? where? order_by? toolbar? on_open? />\` — \`card\` is a tuple of ≤4 field names or a snippet \`[{ row }]\`.
 - \`<RecordShell {ctx} of="<model>" mode={view.mode} {...record === null ? {} : { id: record.id }}>\` wrapping \`<Form {ctx} of="<model>" ...>\` with \`<Section icon="lucide:<icon>" title="...">\`, \`<Field {ctx} name="..." />\`, and child \`<Table {ctx} of="<child>" where={{ <parent>: { eq: record.id } }} />\` (see the representation starter below).
-- \`<Button variant? size? onclick? disabled?>\`, \`<Tabs tabs={[{ name, title, body }]} bind:value />\`, \`<Sheet bind:open title="..." side? />\`.
+- \`<Button variant? size? onclick? disabled?>\`, \`<Badge>\`, \`<StateBadge>\`, \`<Tabs tabs={[{ name, title, body }]} bind:value />\`, \`<Sheet bind:open title="..." side? />\`, \`<Dialog.Root>\`, \`<Popover.Root>\`, \`<Tooltip>\`, \`<Combobox>\`, \`<Accordion.Root>\`, \`<EmptyState>\`.
+- **Novel / custom interactive UIs:** wrap panels in \`<Surface tone="card|subtle|muted|lane" padding="sm|md" radius="control">\` with \`@norbital-ai/ui/layout\` (\`Stack\`, \`Inline\`, \`Grid\`, \`Cluster\`, \`Bound\`) and semantic tokens (\`surface-*\`, \`content-*\`, \`border-*\`, \`tone-*\`; zero \`dark:\` overrides or raw palette colors). Compose custom interactive widgets from \`@norbital-ai/ui/behaviors\` (see the \`behaviors.md\` contract card) instead of hand-rolling keyboard, ARIA, drag-reorder, split-pane resize, overlay dismissal, shortcuts, or persistence logic.
 - Live page reads & RPCs: \`const q = ctx.query({ <model>: { fields: [...], where?, order_by?, limit? } })\` — read \`q.current?.<model>.rows ?? []\`, \`q.loading\`, \`q.error\`; start automations with \`ctx.run('<automation>', input)\`.`
 	,
+	behaviors: `Compose custom interactive widgets directly from \`@norbital-ai/ui/behaviors\` (the same Svelte-5 headless primitives powering \`@norbital-ai/ui\`) paired with \`<Surface>\`, \`@norbital-ai/ui/layout\`, and \`@norbital-ai/ui\` primitives. Never install external UI/utility libraries (\`bits-ui\`, \`runed\`) or hand-roll raw keyboard/focus/drag/overlay/debounce/localStorage plumbing. For standard popovers, modals, drawers, and tooltips, prefer \`<Popover.Root>\`, \`<Dialog.Root>\`, \`<Sheet>\`, and \`<Tooltip>\` from \`@norbital-ai/ui\` directly; for full-height split-pane workbenches, size the outer grid with \`h-full min-h-0 overflow-hidden\` (each pane \`min-h-0 overflow-y-auto\`) rather than guessing \`calc(100dvh - ...)\`.
+
+- **Navigation & lists:** \`create_tree\` (nested folders/categories with ArrowRight/Left expand/collapse), \`create_listbox\` (filterable keyboard-navigable list), \`create_roving_focus\`, \`create_typeahead\`, \`create_overflow\`, \`virtual_list\`, \`create_pagination\`.
+- **Manipulation & selection:** \`create_selection\` (single/multi/Shift-range/Cmd-toggle), \`create_reorder\` (HTML5 drag-and-drop + \`Alt+Arrow\` keyboard reorder), \`create_resize\` (pointer + keyboard split-pane/drawer drag handle), \`create_slider\`.
+- **Overlays & panels:** \`create_floating\` (viewport flip/shift + LIFO dismiss), \`create_dismiss\` (LIFO Escape + outside click), \`create_focus_trap\`, \`portal\`, \`create_disclosure\`, \`create_accordion\`.
+- **Productivity & inputs:** \`create_shortcuts\` (ignores inputs automatically, e.g. \`'j'\`, \`'k'\`, \`'mod+k'\`, \`'/'\`), \`create_clipboard\`, \`create_stick_to_bottom\`, \`create_field\`, \`create_pin_input\`, \`create_date_field\`, \`create_time_field\`, \`create_calendar\`.
+- **Reactive helpers & agent hooks:** \`watch\` / \`watch.pre\`, \`Debounced\`, \`use_debounce\`, \`PersistedState\`, and \`register_control\` (exposes custom widget state & actions to Norbius's \`page\` bridge).
+
+\`\`\`svelte
+<script lang="ts">
+	import { Badge, Button, Surface } from '@norbital-ai/ui';
+	import {
+		PersistedState,
+		create_reorder,
+		create_resize,
+		create_selection,
+		create_shortcuts,
+		create_tree,
+		register_control
+	} from '@norbital-ai/ui/behaviors';
+	import { Inline, Stack } from '@norbital-ai/ui/layout';
+</script>
+\`\`\``,
 	representation: `A model's custom record screen lives beside its model at \`src/data/model/<model>/+representation.svelte\`. The shell passes \`{ view, ctx }\` (\`RecordView<'<model>'>\` and \`PageContext\`) — **never** \`id\`. Derive \`record = view.mode === 'create' ? null : view.record\`, omit \`id\` when creating (passing \`id: undefined\` fails with \`ReadFailed\`), pass \`{ctx}\` to every \`<Field>\`, always give every \`<Section>\` an appropriate \`icon\`, and guard child \`<Table>\`s with \`{#if record}\`:
 
 \`\`\`svelte

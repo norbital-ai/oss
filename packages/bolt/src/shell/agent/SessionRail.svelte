@@ -5,7 +5,7 @@
 	import { tick, type Snippet } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import type { TransitionConfig } from 'svelte/transition';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { humanise, usd } from '../i18n.ts';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import type { RunView } from '../../engine/runs/rows.ts';

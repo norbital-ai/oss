@@ -6,7 +6,7 @@ export * as Alert from './alert/index.js';
 /** A modal dialog: `Dialog.Root`, its `Trigger`, and `Content` with a header, title, description and footer. */
 export * as Dialog from './dialog/index.js';
 /** Where the portals beneath it land: a mount with its own stylesheet keeps its floating content under it. */
-export { BitsConfig } from 'bits-ui';
+export { default as PortalConfig } from './portal-config.svelte';
 /** An in-app confirmation (never `window.confirm`, which WebViews suppress): an Effect answering whether it was confirmed. */
 export { confirm_action, type ConfirmOptions } from './dialog/confirm.js';
 /** Floating content anchored to a trigger: `Popover.Root`, `Popover.Trigger`, `Popover.Content`. */
@@ -37,10 +37,7 @@ export {
 	type TabStripItem
 } from './tabs/index.js';
 export { default as Textarea } from './textarea/textarea.svelte';
-/**
- * Public tooltip API is the single Provider-backed wrapper only.
- * Do not import bits-ui Tooltip (or Root/Provider/Trigger) at call sites.
- */
+/** Public tooltip component backed by `create_floating` with touch-device popover fallback. */
 export { default as Tooltip } from './tooltip/tooltip.svelte';
 export { virtual_list, type Virtual, type VirtualOptions } from './virtual/virtual.svelte.js';
 export {

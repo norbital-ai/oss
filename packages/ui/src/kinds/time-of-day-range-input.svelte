@@ -25,14 +25,14 @@ Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 
 <script lang="ts">
 	import type { Time } from '@internationalized/date';
-	import { TimeRangeField } from 'bits-ui';
+	import { create_time_field } from '../behaviors/index.js';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import { cn, ui_text, use_controls } from '../primitives/utils.js';
 	import { SEGMENT, SEGMENTS } from './classes.js';
 	import { timeValue } from './date-input.svelte';
 
 	let {
-		ctx,
+		ctx: _ctx,
 		value,
 		on_change,
 		precision = 'minute',
@@ -46,13 +46,26 @@ Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 	const controls = use_controls();
 	const t = ui_text();
 	const disabled = $derived(ownDisabled ?? controls.disabled);
-	const locale = $derived(ctx.ui.kinds.locale);
 	const hhmm = (t: Time | undefined) =>
 		t === undefined
 			? null
 			: precision === 'hour'
 				? t.toString().slice(0, 2) + ':00'
 				: t.toString().slice(0, 5);
+
+	const startField = create_time_field({
+		value: () => timeValue(value.start),
+		granularity: () => precision,
+		disabled: () => disabled,
+		on_change: (start) => on_change({ start: hhmm(start), end: value.end })
+	});
+
+	const endField = create_time_field({
+		value: () => timeValue(value.end),
+		granularity: () => precision,
+		disabled: () => disabled,
+		on_change: (end) => on_change({ start: value.start, end: hhmm(end) })
+	});
 </script>
 
 {#if readonly ?? controls.readonly}
@@ -63,37 +76,31 @@ Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 			>{:else}{text}{/if}</CopyText
 	>
 {:else}
-	<TimeRangeField.Root
-		value={{ start: timeValue(value.start), end: timeValue(value.end) }}
-		onValueChange={(r) =>
-			on_change({
-				start: hhmm(r?.start as Time | undefined),
-				end: hhmm(r?.end as Time | undefined)
-			})}
-		{disabled}
-		{locale}
-		hourCycle={24}
-		granularity={precision}
+	<div
+		{id}
+		class={cn(SEGMENTS, 'w-auto', invalid && 'border-destructive', className)}
+		role="group"
+		aria-label={ariaLabel}
+		data-time-range
 	>
-		<div
-			{id}
-			class={cn(SEGMENTS, 'w-auto', invalid && 'border-destructive', className)}
-			role="group"
-			aria-label={ariaLabel}
-			data-time-range
-		>
-			{#each ['start', 'end'] as const as type (type)}
-				<TimeRangeField.Input {type}>
-					{#snippet children({ segments })}
-						{#each segments as { part, value: text }, i (i)}<TimeRangeField.Segment
-								{part}
-								class={SEGMENT}>{text}</TimeRangeField.Segment
-							>{/each}
-					{/snippet}
-				</TimeRangeField.Input>
-				{#if type === 'start'}<span class="px-2 text-muted-foreground" aria-hidden="true">→</span
-					>{/if}
+		<span class="inline-flex items-center">
+			{#each startField.segments as seg, i (i)}
+				<span
+					{@attach startField.segment_ref(seg.part)}
+					{...startField.segment_attrs(seg)}
+					class={SEGMENT}>{seg.value}</span
+				>
 			{/each}
-		</div>
-	</TimeRangeField.Root>
+		</span>
+		<span class="px-2 text-muted-foreground" aria-hidden="true">→</span>
+		<span class="inline-flex items-center">
+			{#each endField.segments as seg, i (i)}
+				<span
+					{@attach endField.segment_ref(seg.part)}
+					{...endField.segment_attrs(seg)}
+					class={SEGMENT}>{seg.value}</span
+				>
+			{/each}
+		</span>
+	</div>
 {/if}

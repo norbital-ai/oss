@@ -9,7 +9,14 @@ export { custom_field } from './decl/custom-field.ts';
 export { policy } from './decl/access/policy.ts';
 export { team } from './decl/access/team.ts';
 export { mcp } from './decl/runtime/agent.ts';
-export type { WorkspaceTheme, ThemeTokens } from './decl/theme.ts';
+export type {
+	WorkspaceTheme,
+	ThemeTokens,
+	ThemePalette,
+	ThemeAccent,
+	ThemeAccentPreset,
+	ThemeRadius
+} from './decl/theme.ts';
 export { app, group, messages, secrets, workspace } from './decl/runtime/app.ts';
 export { automation } from './decl/runtime/automation.ts';
 export { seeder } from './decl/seeder.ts';

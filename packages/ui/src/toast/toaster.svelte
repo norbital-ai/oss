@@ -19,7 +19,7 @@ The page's toasts, bottom right (bottom centre on a phone, above the safe area).
 		default: 'border-border bg-popover text-popover-foreground',
 		success: 'border-success/30 bg-popover text-success',
 		info: 'border-info/30 bg-popover text-info',
-		warning: 'border-warning/40 bg-popover text-warning-foreground dark:text-warning',
+		warning: 'border-tone-warning-border bg-popover text-tone-warning-text',
 		error: 'border-destructive/30 bg-popover text-destructive'
 	};
 </script>

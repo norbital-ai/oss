@@ -15,4 +15,11 @@ export { default as Inline } from './inline.svelte';
 export { default as Scroll } from './scroll.svelte';
 export { default as Split } from './split.svelte';
 export { default as Stack } from './stack.svelte';
+export {
+	default as Surface,
+	type SurfacePadding,
+	type SurfaceProps,
+	type SurfaceRadius,
+	type SurfaceTone
+} from './surface.svelte';
 export { INSET_X_CLASS, SCROLL_AXIS_CLASSES } from './layout.shared.js';

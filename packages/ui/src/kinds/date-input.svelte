@@ -85,9 +85,12 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { DatePicker, TimeField } from 'bits-ui';
-	import { onDestroy } from 'svelte';
-	import { watch } from 'runed';
+	import {
+		create_calendar,
+		create_date_field,
+		create_time_field
+	} from '../behaviors/index.js';
+	import * as Popover from '../primitives/popover/index.js';
 	import { cn, narrowViewport, ui_text, use_controls } from '../primitives/utils.js';
 	import CalendarGrid from './calendar-grid.svelte';
 	import { SEGMENT, SEGMENTS } from './classes.js';
@@ -115,6 +118,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 	const t = ui_text();
 	let fieldAnchor = $state<HTMLElement | null>(null);
 	let calendarContent = $state<HTMLElement | null>(null);
+	let calendarOpen = $state(false);
 	const calendarAlignment = fieldPopoverAlignment(
 		() => fieldAnchor,
 		() => calendarContent,
@@ -145,46 +149,60 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		const d = localDay(kind, value);
 		return unit === null || d === null ? null : unitStart(d, unit);
 	});
-	let placeholder = $state<DateValue | undefined>();
-	// a typed segment commits when it is done, never per key: bits-ui answers every digit ("0" of "03" is the 1st), and each
-	// commit is a caller's write, query or URL change. Held while a segment has focus; its leaving or a pause commits it.
-	// bits-ui also repeats a value across a segment's advance: a value is sent once.
-	let held: string | null | undefined, pause: ReturnType<typeof setTimeout> | undefined;
-	// svelte-ignore state_referenced_locally
-	let sent = value;
-	function commit(next: string | null): void {
-		clearTimeout(pause);
-		held = next;
-		if (
-			document.activeElement instanceof HTMLElement &&
-			document.activeElement.dataset['segment'] !== undefined
-		)
-			pause = setTimeout(flush, 800);
-		else flush();
-	}
-	function flush(): void {
-		clearTimeout(pause);
-		const next = held;
-		held = undefined;
-		if (next === undefined || next === sent) return;
-		sent = next;
-		on_change(next);
-	}
-	watch(
-		() => value,
-		(v) => {
-			sent = v;
+
+	const emitDate = (v: DateValue | undefined) => {
+		const next =
+			v === undefined
+				? null
+				: byDay
+					? fromDay(kind, v.toString().slice(0, 10))
+					: dateText('instant', snapHour(v, precision));
+		if (next !== value) on_change(next);
+	};
+
+	const timeField = create_time_field({
+		value: () => timeValue(value),
+		granularity: () => (precision === 'hour' ? 'hour' : 'minute'),
+		disabled: () => disabled,
+		on_change: (next) => {
+			const formatted =
+				next === undefined ? null : snapTime(next.toString(), precision === 'hour' ? 'hour' : undefined);
+			if (formatted !== value) on_change(formatted);
 		}
-	);
-	onDestroy(flush);
-	// bits-ui's `hour` granularity drops the minute but keeps the second: segments render `hour::second` and never fill.
-	// `hour` precision edits at `minute` with the minute segment unrendered (bits-ui fills only rendered segments); snapHour zeroes it.
+	});
+
+	const dateField = create_date_field({
+		value: () => shown(value),
+		granularity: () => (byDay ? 'day' : precision === 'hour' ? 'hour' : 'minute'),
+		locale: () => locale,
+		disabled: () => disabled,
+		min: () => shown(min),
+		max: () => shown(max),
+		on_change: emitDate
+	});
+
+	let placeholder = $state<DateValue | undefined>();
+	const calendar = create_calendar({
+		mode: 'single',
+		value: () => shown(value),
+		placeholder: () => placeholder,
+		on_placeholder_change: (next) => (placeholder = next),
+		locale: () => locale,
+		disabled: () => disabled,
+		min: () => shown(min),
+		max: () => shown(max),
+		on_select: (picked) => {
+			emitDate(picked);
+			calendarOpen = false;
+		}
+	});
 </script>
 
 {#if readonly ?? controls.readonly}
 	<Show {ctx} readonly kind={displayKind} {value} {id} />
 {:else if of === 'month'}
-	<UnitPicker {ctx}
+	<UnitPicker
+		{ctx}
 		unit="month"
 		value={value === null ? null : `${value.slice(0, 7)}-01`}
 		on_change={(d) => on_change(d === null ? null : d.slice(0, 7))}
@@ -195,34 +213,28 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		max={max === undefined ? undefined : `${max.slice(0, 7)}-01`}
 	/>
 {:else if of === 'time'}
-	<TimeField.Root
-		value={timeValue(value)}
-		onValueChange={(t) =>
-			commit(
-				t === undefined ? null : snapTime(t.toString(), precision === 'hour' ? 'hour' : undefined)
-			)}
-		{disabled}
-		{locale}
-		hourCycle={24}
-		granularity={precision === 'hour' ? 'hour' : 'minute'}
+	<div
+		{id}
+		role="group"
+		class={cn(SEGMENTS, 'w-auto')}
+		data-invalid={invalid ? 'true' : undefined}
+		data-date-input="time"
+		data-precision={precision}
 	>
-		<TimeField.Input
-			{id}
-			onfocusout={flush}
-			class={cn(SEGMENTS, 'w-auto')}
-			aria-invalid={invalid ? 'true' : undefined}
-			data-date-input="time"
-			data-precision={precision}
-		>
-			{#snippet children({ segments })}
-				{#each segments as { part, value: text }, i (i)}<TimeField.Segment {part} class={SEGMENT}
-						>{text}</TimeField.Segment
-					>{/each}
-			{/snippet}
-		</TimeField.Input>
-	</TimeField.Root>
+		{#each timeField.segments as seg, i (i)}
+			<span
+				{@attach timeField.segment_ref(seg.part)}
+				{...timeField.segment_attrs(seg)}
+				aria-invalid={seg.part !== 'literal' && invalid ? 'true' : undefined}
+				class={SEGMENT}
+			>
+				{seg.value}
+			</span>
+		{/each}
+	</div>
 {:else if unit !== null}
-	<UnitPicker {ctx}
+	<UnitPicker
+		{ctx}
 		{unit}
 		value={unitValue}
 		on_change={(d) => on_change(d === null ? null : fromDay(kind, d))}
@@ -233,70 +245,44 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		max={localDay(kind, max) ?? undefined}
 	/>
 {:else}
-	<DatePicker.Root
-		value={shown(value)}
-		onValueChange={(v) =>
-			commit(
-				v === undefined
-					? null
-					: byDay
-						? fromDay(kind, v.toString().slice(0, 10))
-						: dateText('instant', snapHour(v, precision))
-			)}
-		bind:placeholder
-		granularity={byDay ? 'day' : 'minute'}
-		hideTimeZone
-		hourCycle={24}
-		{locale}
-		{disabled}
-		minValue={shown(min)}
-		maxValue={shown(max)}
-		weekdayFormat="short"
-	>
-		<DatePicker.Input
-			bind:ref={fieldAnchor}
+	<Popover.Root bind:open={calendarOpen}>
+		<div
+			bind:this={fieldAnchor}
 			{id}
-			onfocusout={flush}
+			role="group"
 			class={cn(SEGMENTS, 'pr-1')}
-			aria-invalid={invalid ? 'true' : undefined}
+			data-invalid={invalid ? 'true' : undefined}
 			data-date-input={of}
 			data-precision={precision}
 		>
-			{#snippet children({ segments })}
-				{#each segments as { part, value: text }, i (i)}{#if !(precision === 'hour' && (part === 'minute' || (part === 'literal' && segments[i + 1]?.part === 'minute')))}<DatePicker.Segment
-							{part}
-							class={SEGMENT}>{text}</DatePicker.Segment
-						>{/if}{/each}
-				<DatePicker.Trigger
-					class="ml-auto grid size-6 [--hit-target:1.5rem] place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-					aria-label={t('openCalendar')}
+			{#each dateField.segments as seg, i (i)}
+				<span
+					{@attach dateField.segment_ref(seg.part)}
+					{...dateField.segment_attrs(seg)}
+					aria-invalid={seg.part !== 'literal' && invalid ? 'true' : undefined}
+					class={SEGMENT}
 				>
-					<Icon icon="lucide:calendar" class="size-3.5" />
-				</DatePicker.Trigger>
-			{/snippet}
-		</DatePicker.Input>
-		<DatePicker.Portal>
-			<DatePicker.Content
-				bind:ref={calendarContent}
-				customAnchor={fieldAnchor}
-				align={calendarAlignment.current}
-				sideOffset={4}
-				collisionPadding={narrowViewport.current ? 0 : 8}
-				class="z-50 rounded-md border bg-popover p-3 max-sm:p-0 text-popover-foreground shadow-deep"
+					{seg.value}
+				</span>
+			{/each}
+			<Popover.Trigger
+				{disabled}
+				data-segment="trigger"
+				class="ml-auto grid size-6 [--hit-target:1.5rem] place-items-center rounded-control text-muted-foreground hover:bg-accent hover:text-foreground"
+				aria-label={t('openCalendar')}
 			>
-				<DatePicker.Calendar>
-					{#snippet children({ months, weekdays })}
-						<CalendarGrid
-							parts={DatePicker}
-							{months}
-							{weekdays}
-							{placeholder}
-							on_placeholder={(p) => (placeholder = p)}
-							{locale}
-						/>
-					{/snippet}
-				</DatePicker.Calendar>
-			</DatePicker.Content>
-		</DatePicker.Portal>
-	</DatePicker.Root>
+				<Icon icon="lucide:calendar" class="size-3.5" />
+			</Popover.Trigger>
+		</div>
+		<Popover.Content
+			bind:ref={calendarContent}
+			custom_anchor={fieldAnchor}
+			align={calendarAlignment.current}
+			side_offset={4}
+			collision_padding={narrowViewport.current ? 0 : 8}
+			class="w-auto p-3 max-sm:p-0"
+		>
+			<CalendarGrid {calendar} {locale} />
+		</Popover.Content>
+	</Popover.Root>
 {/if}

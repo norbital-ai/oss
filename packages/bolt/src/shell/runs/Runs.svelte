@@ -5,7 +5,7 @@
 	changes.
 -->
 <script lang="ts">
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { equal_json } from '@norbital-ai/store/kind';
 	import { fork, observe } from '@norbital-ai/ui/effect';
 	import { Effect, Stream } from 'effect';

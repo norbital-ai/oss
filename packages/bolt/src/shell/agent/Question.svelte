@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Effect } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { fork } from '@norbital-ai/ui/effect';
 	import { Button, Icon, Textarea } from '@norbital-ai/ui';
 	import { Scroll } from '@norbital-ai/ui/layout';

@@ -15,7 +15,7 @@ import {
 	type Scope
 } from 'effect';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
-import { watch } from 'runed';
+import { watch } from '../behaviors/index.js';
 import { untrack } from 'svelte';
 import type { Attachment } from 'svelte/attachments';
 import { createSubscriber } from 'svelte/reactivity';

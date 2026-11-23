@@ -84,7 +84,7 @@
 									: v.icon}
 						class="shrink-0 {activity ? 'size-4.5' : 'size-3.5'} {active(s)
 							? 'animate-spin motion-reduce:animate-none'
-							: ''} {found !== '' ? 'text-warning-foreground dark:text-warning' : ''}"
+							: ''} {found !== '' ? 'text-tone-warning-text' : ''}"
 					/>
 					{#if failed}
 						<span class="min-w-0 truncate font-medium" title={reason}>{reason}</span>

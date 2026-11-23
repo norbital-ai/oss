@@ -10,6 +10,39 @@ export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
 
+/** Merges attribute/event bags left-to-right: classes concatenate, event handlers chain, other keys overwrite. */
+export function merge_props(
+	...sources: readonly (Record<string, unknown> | undefined)[]
+): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const source of sources) {
+		if (source === undefined) continue;
+		for (const sym of Object.getOwnPropertySymbols(source)) {
+			const val = Reflect.get(source, sym);
+			if (val !== undefined) Reflect.set(out, sym, val);
+		}
+		for (const [key, value] of Object.entries(source)) {
+			if (value === undefined) continue;
+			const prev = out[key];
+			if (key === 'class' && typeof prev === 'string' && typeof value === 'string') {
+				out[key] = cn(prev, value);
+			} else if (
+				key.startsWith('on') &&
+				typeof prev === 'function' &&
+				typeof value === 'function'
+			) {
+				out[key] = (...args: unknown[]) => {
+					prev(...args);
+					value(...args);
+				};
+			} else {
+				out[key] = value;
+			}
+		}
+	}
+	return out;
+}
+
 /**
  * The row ArrowDown/ArrowUp moves to: wraps, and steps over rows `enabled` refuses. With none selectable, or an empty
  * list, the active row stays (0 for an empty list).

@@ -29,7 +29,7 @@ const ENTRIES = [
 ];
 /** Bare specifiers the layer exposes, resolved as the shell resolves them, else as ui does; one a release lacks is left out. */
 const SPECIFIERS = [
-	...['', '/layout', '/brand', '/effect'].map((sub) => `@norbital-ai/ui${sub}`),
+	...['', '/layout', '/brand', '/behaviors', '/effect'].map((sub) => `@norbital-ai/ui${sub}`),
 	...[
 		'',
 		'/animate',
@@ -48,7 +48,6 @@ const SPECIFIERS = [
 		'/internal/flags/legacy',
 		'/internal/flags/tracing'
 	].map((sub) => `svelte${sub}`),
-	'runed',
 	'@iconify/svelte',
 	'@internationalized/date',
 	'marked',

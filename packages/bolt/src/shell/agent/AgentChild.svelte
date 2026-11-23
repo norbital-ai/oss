@@ -9,7 +9,7 @@
 <script lang="ts">
 	import { everySecond } from '../seconds.ts';
 	import { observe } from '@norbital-ai/ui/effect';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { Button, elapsed_text, Icon, ReadonlyMarkdown, type UiContext } from '@norbital-ai/ui';
 	import { TranscriptReadAnswer } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';

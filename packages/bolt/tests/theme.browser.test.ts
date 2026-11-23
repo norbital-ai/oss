@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { createRawSnippet, mount, unmount } from 'svelte';
-import { Button } from '@norbital-ai/ui';
+import { Button, Surface } from '@norbital-ai/ui';
 import { page } from 'vitest/browser';
 import { theme_css } from '../src/decl/theme.ts';
 import './support/shell.css';
@@ -44,6 +44,37 @@ it('applies workspace colour, font and radius overrides to native controls in bo
 		await unmount(view);
 		target.remove();
 		pointer.remove();
+		style.remove();
+		root.classList.toggle('dark', wasDark);
+	}
+});
+
+it('applies high-level palette, accent and radius knobs to Surface and Button across light and dark modes', async () => {
+	const root = document.documentElement;
+	const wasDark = root.classList.contains('dark');
+	const target = document.body.appendChild(document.createElement('div'));
+	const style = document.head.appendChild(document.createElement('style'));
+	style.textContent = theme_css({ palette: 'neutral', accent: 'emerald', radius: 'sharp' });
+	const view = mount(Surface, {
+		target,
+		props: {
+			tone: 'card',
+			padding: 'sm',
+			children: createRawSnippet(() => ({ render: () => '<span>Card</span>' }))
+		}
+	});
+	try {
+		root.classList.remove('dark');
+		const surface = target.querySelector<HTMLElement>('[data-surface="card"]');
+		if (surface === null) throw new Error('Missing Surface');
+		await expect.poll(() => getComputedStyle(surface).backgroundColor).toBe('rgb(255, 255, 255)');
+		expect(getComputedStyle(surface).borderRadius).toBe('4px');
+		root.classList.add('dark');
+		await expect.poll(() => getComputedStyle(surface).backgroundColor).toBe('rgb(18, 21, 28)');
+		expect(getComputedStyle(surface).borderRadius).toBe('4px');
+	} finally {
+		await unmount(view);
+		target.remove();
 		style.remove();
 		root.classList.toggle('dark', wasDark);
 	}

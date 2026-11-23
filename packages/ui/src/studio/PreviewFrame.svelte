@@ -13,7 +13,7 @@
 	import { Button, Dialog, Icon, Popover, Spinner, TabStrip } from '../primitives/index.js';
 	import { Cluster, Inline, Stack } from '../layout/index.js';
 	import { Option, Schema } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import type { Snippet } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import type { StudioTestRun } from '@norbital-ai/host-api';

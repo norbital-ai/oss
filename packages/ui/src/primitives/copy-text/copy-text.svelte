@@ -4,7 +4,8 @@ A readonly value as selectable text, with a copy button on hover or focus (alway
 -->
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { onDestroy, type Snippet } from 'svelte';
+	import type { Snippet } from 'svelte';
+	import { create_clipboard } from '../../behaviors/index.js';
 	import { cn, ui_text } from '../utils.js';
 
 	let {
@@ -21,48 +22,7 @@ A readonly value as selectable text, with a copy button on hover or focus (alway
 		children?: Snippet;
 	} = $props();
 	const t = ui_text();
-	let copied = $state(false);
-	let reset: ReturnType<typeof setTimeout> | undefined;
-	let disposed = false;
-	onDestroy(() => {
-		disposed = true;
-		clearTimeout(reset);
-	});
-	/** A hidden field works where the async clipboard is unavailable or denied (an embedded page). */
-	function legacyCopy(): boolean {
-		const area = document.createElement('textarea');
-		area.value = text;
-		area.setAttribute('readonly', '');
-		area.style.position = 'fixed';
-		area.style.inset = '0 auto auto -9999px';
-		document.body.appendChild(area);
-		area.select();
-		try {
-			return document.execCommand('copy');
-		} catch {
-			return false;
-		} finally {
-			area.remove();
-		}
-	}
-	async function copy() {
-		let ok = false;
-		try {
-			await navigator.clipboard.writeText(text);
-			ok = true;
-		} catch {
-			ok = legacyCopy();
-		}
-		if (disposed) return;
-		clearTimeout(reset);
-		copied = ok;
-		reset = undefined;
-		if (ok)
-			reset = setTimeout(() => {
-				copied = false;
-				reset = undefined;
-			}, 1500);
-	}
+	const clipboard = create_clipboard({ text: () => text });
 </script>
 
 <span
@@ -79,13 +39,13 @@ A readonly value as selectable text, with a copy button on hover or focus (alway
 	{#if text !== ''}
 		<button
 			type="button"
-			onclick={copy}
+			onclick={() => void clipboard.copy()}
 			aria-label={t('copy')}
 			title={t('copy')}
-			class="relative inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity [--hit-target:0px] group-hover/copy:opacity-100 before:absolute before:-inset-2.5 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [@media(hover:none)]:opacity-100"
+			class="relative inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-inset text-muted-foreground opacity-0 transition-opacity [--hit-target:0px] group-hover/copy:opacity-100 before:absolute before:-inset-2.5 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [@media(hover:none)]:opacity-100"
 		>
-			<Icon icon={copied ? 'lucide:check' : 'lucide:copy'} class="size-3.5" />
+			<Icon icon={clipboard.copied ? 'lucide:check' : 'lucide:copy'} class="size-3.5" />
 		</button>
-		<span class="sr-only" aria-live="polite">{copied ? t('copied') : ''}</span>
+		<span class="sr-only" aria-live="polite">{clipboard.copied ? t('copied') : ''}</span>
 	{/if}
 </span>

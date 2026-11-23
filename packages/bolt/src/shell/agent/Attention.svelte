@@ -2,7 +2,7 @@
 	import { observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect, Option, Stream } from 'effect';
 	import { getContext } from 'svelte';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { ConversationsReadAnswer, TranscriptReadAnswer } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import { endingSound, settled } from './chime.ts';

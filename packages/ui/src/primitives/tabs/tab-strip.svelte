@@ -33,13 +33,12 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import { watch } from 'runed';
 	import * as Popover from '../popover/index.js';
 	import Icon from '../icon/icon-wrapper.svelte';
 	import { cn, ui_text } from '../utils.js';
 	import { TAB_LEVEL, tabLevel, tabVariant } from './level.js';
 	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
-	import { observeTabOverflow } from './overflow.js';
+	import { create_overflow, register_control } from '../../behaviors/index.js';
 	import OverflowTrigger from './overflow-trigger.svelte';
 
 	let { items, value, on_value_change, label, level, class: className }: TabStripProps = $props();
@@ -48,20 +47,32 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 	const variant = $derived(tabVariant(level ?? tabLevel(parent?.level, undefined).level));
 	const links = $derived(items.some((item) => item.href !== undefined));
 	const trigger = $derived(cn(TAB_TRIGGER, TAB_TYPE[variant]));
-	let list = $state<HTMLElement | null>(null),
-		measure = $state<HTMLElement | null>(null),
-		fit = $state(Infinity),
-		moreOpen = $state(false);
-	watch(
-		() => list === null || measure === null ? null : { list, measure },
-		(elements) => {
-			if (elements === null) return;
-			return observeTabOverflow(elements.list, elements.measure, (count) => (fit = count));
-		}
-	);
-	const shown = $derived(items.slice(0, fit));
-	const overflow = $derived(items.slice(fit));
-	const activeInMore = $derived(overflow.some((item) => item.name === value));
+	const strip = create_overflow({
+		items: () => items,
+		key: (item) => item.name,
+		active: () => value
+	});
+	$effect(() => {
+		const id = `tab-strip:${label}`;
+		return register_control({
+			id,
+			kind: 'tab-strip',
+			label,
+			state: () => ({
+				active: value,
+				items: items.map((item) => item.name)
+			}),
+			actions: !links && on_value_change
+				? {
+						select: (name) => {
+							if (typeof name === 'string' && items.some((item) => item.name === name)) {
+								on_value_change(name);
+							}
+						}
+					}
+				: undefined
+		});
+	});
 	const listClass = $derived(
 		cn(
 			'relative flex w-full min-w-0 flex-nowrap items-center overflow-x-clip',
@@ -81,13 +92,13 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 
 <svelte:element
 	this={links ? 'nav' : 'div'}
-	bind:this={list}
+	{@attach strip.list}
 	role={links ? undefined : 'tablist'}
 	aria-label={label}
 	class={listClass}
 	data-tabs-variant={variant}
 >
-	{#each shown as item (item.name)}
+	{#each strip.visible as item (item.name)}
 		{#if links}
 			<a
 				href={item.href}
@@ -106,17 +117,17 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 			>
 		{/if}
 	{/each}
-	{#if overflow.length > 0}
-		<Popover.Root bind:open={moreOpen}>
-			<OverflowTrigger active={activeInMore} label={t('moreTabs')} class={trigger} />
+	{#if strip.has_overflow}
+		<Popover.Root bind:open={strip.more_open}>
+			<OverflowTrigger active={strip.active_in_hidden} label={t('moreTabs')} class={trigger} />
 			<Popover.Content align="end" class="flex w-56 flex-col gap-0.5 p-1">
-				{#each overflow as item (item.name)}
+				{#each strip.hidden as item (item.name)}
 					{#if links}
 						<a
 							href={item.href}
 							aria-current={item.name === value ? 'page' : undefined}
 							class="flex h-7 items-center gap-1.5 rounded-sm px-2 text-left text-xs font-medium hover:bg-muted aria-[current=page]:bg-muted"
-							onclick={() => (moreOpen = false)}>{@render content(item)}</a
+							onclick={() => (strip.more_open = false)}>{@render content(item)}</a
 						>
 					{:else}
 						<button
@@ -125,7 +136,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 							class="flex h-7 items-center gap-1.5 rounded-sm px-2 text-left text-xs font-medium hover:bg-muted aria-[current=page]:bg-muted"
 							onclick={() => {
 								on_value_change?.(item.name);
-								moreOpen = false;
+								strip.more_open = false;
 							}}>{@render content(item)}</button
 						>
 					{/if}
@@ -134,7 +145,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 		</Popover.Root>
 	{/if}
 	<div
-		bind:this={measure}
+		{@attach strip.measure}
 		aria-hidden="true"
 		class="pointer-events-none invisible absolute top-0 left-0 flex w-max"
 	>

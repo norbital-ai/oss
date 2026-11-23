@@ -27,7 +27,7 @@ Edits a saved native filter (`where` and `order_by`) of one model, apart from an
 <script lang="ts">
 	import type { DescribeStep, UiContext } from '../client/contract.js';
 	import { Effect } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import { bolt_of } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	import FilterPanel from './FilterPanel.svelte';

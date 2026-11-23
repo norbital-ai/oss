@@ -21,8 +21,8 @@
 	} from 'effect';
 	import { updating } from '../protocol/client.ts';
 	import { onMount, setContext, tick, type Component } from 'svelte';
-	import { watch } from 'runed';
-	import { PersistedState } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
+	import { PersistedState } from '@norbital-ai/ui/behaviors';
 	import { MediaQuery, SvelteMap } from 'svelte/reactivity';
 	import {
 		AppHeader,

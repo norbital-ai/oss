@@ -7,6 +7,8 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 	import { TAB_LEVEL, tabLevel, tabVariant, type TabLevel } from './level.js';
 	import { RAIL_LIST, RAIL_TYPE, TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
 
+	let nextTabsId = 0;
+
 	/** One tab: a `keep_alive` tab stays mounted while hidden, so a form inside keeps its state. */
 	export type TabItem = {
 		name: string;
@@ -50,15 +52,18 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 </script>
 
 <script lang="ts">
-	import { Tabs } from 'bits-ui';
-	import { watch } from 'runed';
 	import * as Popover from '../popover/index.js';
 	import { getContext, setContext, untrack } from 'svelte';
 	import Icon from '../icon/icon-wrapper.svelte';
 	import { cn, ui_text } from '../utils.js';
 	import { inset_reader } from '../../layout/inset.svelte.js';
 	import { INSET_X_CLASS } from '../../layout/layout.shared.js';
-	import { observeTabOverflow } from './overflow.js';
+	import {
+		create_overflow,
+		create_roving_focus,
+		register_control,
+		watch
+	} from '../../behaviors/index.js';
 	import OverflowTrigger from './overflow-trigger.svelte';
 	import TabPanel from './tab-panel.svelte';
 
@@ -72,6 +77,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 		level: explicit,
 		orientation
 	}: TabsProps = $props();
+	const uid = `nb-tabs-${++nextTabsId}`;
 	const parent = getContext<{ level: TabLevel; shown: readonly string[] } | undefined>(TAB_LEVEL);
 	const t = ui_text();
 	const hasInset = inset_reader();
@@ -94,27 +100,46 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 		on_value_change?.(next);
 	};
 	// a horizontal strip never scrolls: the triggers that fit stay in it, the rest go under More (marked active when one is)
-	let list = $state<HTMLElement | null>(null),
-		measure = $state<HTMLElement | null>(null),
-		fit = $state(Infinity),
-		moreOpen = $state(false);
-	watch(
-		() => list === null || measure === null ? null : { list, measure },
-		(elements) => {
-			if (elements === null) return;
-			return observeTabOverflow(elements.list, elements.measure, (count) => (fit = count));
-		}
-	);
-	const shownTabs = $derived(fit >= tabs.length ? tabs : tabs.slice(0, fit));
-	const overflow = $derived(tabs.filter((t) => !shownTabs.includes(t)));
-	const activeInMore = $derived(overflow.some((t) => t.name === active));
+	const strip = create_overflow({
+		items: () => tabs,
+		key: (tab) => tab.name,
+		active: () => active
+	});
+	const roving = create_roving_focus({
+		items: () => strip.visible.map((tab) => tab.name),
+		active: () => active,
+		orientation: () => (vertical ? 'vertical' : 'horizontal'),
+		disabled: (name) => tabs.find((tab) => tab.name === name)?.disabled === true,
+		on_active_change: select
+	});
 	const triggerClass = $derived(
 		cn(TAB_TRIGGER, TAB_TYPE[variant], vertical && ['@2xl:justify-start', RAIL_TYPE[variant]])
 	);
 	// a tab is mounted once visited and, unless keep_alive, dropped when left
 	let visited = $state<Record<string, true>>({});
-	watch.pre(() => active, (active) => {
-		if (active !== undefined && !visited[active]) visited[active] = true;
+	watch.pre(
+		() => active,
+		(current) => {
+			if (current !== undefined && !visited[current]) visited[current] = true;
+		}
+	);
+	$effect(() => {
+		const id = `tabs:${tabs.map((tab) => tab.name).join(',')}`;
+		return register_control({
+			id,
+			kind: 'tabs',
+			state: () => ({
+				active,
+				items: tabs.filter((tab) => !tab.disabled).map((tab) => tab.name)
+			}),
+			actions: {
+				select: (name) => {
+					if (typeof name === 'string' && tabs.some((tab) => tab.name === name && !tab.disabled)) {
+						select(name);
+					}
+				}
+			}
+		});
 	});
 </script>
 
@@ -128,10 +153,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 
 <!-- a vertical strip is a rail beside the body in a wide container, and a compact horizontal scroller in a narrow one -->
 <div class={vertical ? '@container h-full min-h-0 min-w-0' : 'contents'}>
-	<Tabs.Root
-		value={active}
-		orientation={vertical ? 'vertical' : 'horizontal'}
-		onValueChange={select}
+	<div
 		class={cn(
 			// one column of the container's width: a strip measured against its own contents would shrink as tabs move to More
 			'grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3',
@@ -150,8 +172,11 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 			)}
 		>
 			{#if leading}<div class="min-w-0 flex-1 basis-64">{@render leading()}</div>{/if}
-			<Tabs.List
-				bind:ref={list}
+			<div
+				role="tablist"
+				aria-orientation={vertical ? 'vertical' : 'horizontal'}
+				{@attach strip.list}
+				{...roving.root_attrs()}
 				data-tabs-variant={variant}
 				class={cn(
 					'relative flex min-w-0 flex-nowrap items-center',
@@ -162,16 +187,31 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 					vertical && [RAIL, RAIL_LIST[variant]]
 				)}
 			>
-				{#each shownTabs as tab (tab.name)}
-					<Tabs.Trigger value={tab.name} disabled={tab.disabled} class={triggerClass}>
+				{#each strip.visible as tab (tab.name)}
+					{@const isActive = tab.name === active}
+					{@const rov = roving.item_attrs(tab.name)}
+					<button
+						type="button"
+						role="tab"
+						id={`${uid}-tab-${tab.name}`}
+						aria-selected={isActive}
+						aria-controls={`${uid}-panel-${tab.name}`}
+						data-state={isActive ? 'active' : 'inactive'}
+						disabled={tab.disabled}
+						tabindex={rov.tabindex}
+						{@attach roving.item(tab.name)}
+						onfocus={rov.onfocus}
+						onclick={() => !tab.disabled && select(tab.name)}
+						class={triggerClass}
+					>
 						{@render label(tab)}
-					</Tabs.Trigger>
+					</button>
 				{/each}
-				{#if overflow.length > 0}
-					<Popover.Root bind:open={moreOpen}>
-						<OverflowTrigger active={activeInMore} label={t('moreTabs')} class={triggerClass} />
+				{#if strip.has_overflow}
+					<Popover.Root bind:open={strip.more_open}>
+						<OverflowTrigger active={strip.active_in_hidden} label={t('moreTabs')} class={triggerClass} />
 						<Popover.Content align="end" class="flex w-56 flex-col gap-0.5 p-1">
-							{#each overflow as tab (tab.name)}
+							{#each strip.hidden as tab (tab.name)}
 								<button
 									type="button"
 									disabled={tab.disabled}
@@ -179,7 +219,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 									class="flex h-7 items-center gap-1.5 rounded-sm px-2 text-left text-xs font-medium hover:bg-muted disabled:opacity-50 aria-[current=page]:bg-muted"
 									onclick={() => {
 										select(tab.name);
-										moreOpen = false;
+										strip.more_open = false;
 									}}>{@render label(tab)}</button
 								>
 							{/each}
@@ -188,7 +228,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 				{/if}
 				<!-- every trigger at its natural width, and More's, measured off-screen: what fits is computed from them -->
 				<div
-					bind:this={measure}
+					{@attach strip.measure}
 					aria-hidden="true"
 					class="pointer-events-none invisible absolute top-0 left-0 flex w-max"
 				>
@@ -198,15 +238,22 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 						><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span></span
 					>
 				</div>
-			</Tabs.List>
+			</div>
 			{@render trailing?.()}
 		</div>
 		{#each tabs as tab (tab.name)}
-			<TabPanel value={tab.name} label={tab.title} {vertical}>
-				{#if tab.name === active || (tab.keep_alive && visited[tab.name])}
+			{@const isActive = tab.name === active}
+			<TabPanel
+				id={`${uid}-panel-${tab.name}`}
+				labelled_by={`${uid}-tab-${tab.name}`}
+				active={isActive}
+				label={tab.title}
+				{vertical}
+			>
+				{#if isActive || (tab.keep_alive && visited[tab.name])}
 					{@render tab.body()}
 				{/if}
 			</TabPanel>
 		{/each}
-	</Tabs.Root>
+	</div>
 </div>

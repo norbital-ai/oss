@@ -7,7 +7,7 @@
 <script lang="ts">
 	import { observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import {
 		Button,
 		Dialog,

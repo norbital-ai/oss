@@ -25,7 +25,7 @@
 	import { humanize, msg } from '../text/messages.js';
 	import type { ViewState } from './view-state.svelte.js';
 	import type { FilterVariables } from './operators.js';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 
 	let {
 		ctx,

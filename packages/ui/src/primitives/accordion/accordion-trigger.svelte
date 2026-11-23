@@ -1,29 +1,49 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import type { Snippet } from 'svelte';
+	import type { HTMLButtonAttributes } from 'svelte/elements';
 	import { Frame, Inline } from '../../layout/index.js';
-	import { cn, type WithoutChild } from '../utils.js';
-	import { Accordion as AccordionPrimitive } from 'bits-ui';
+	import { cn, type WithElementRef, type WithoutChild } from '../utils.js';
+	import { get_accordion_item } from './context.js';
 
 	let {
 		ref = $bindable(null),
 		class: className,
 		level = 3,
 		children,
+		onclick,
 		...restProps
-	}: WithoutChild<AccordionPrimitive.TriggerProps> & {
-		level?: AccordionPrimitive.HeaderProps['level'];
+	}: WithoutChild<WithElementRef<HTMLButtonAttributes, HTMLButtonElement>> & {
+		/** Heading level wrapping the trigger (`1`–`6`, default `3`). */
+		level?: 1 | 2 | 3 | 4 | 5 | 6;
+		/** Trigger label content. */
+		children?: Snippet;
 	} = $props();
+
+	const item = get_accordion_item();
+	const open = $derived(item?.open ?? false);
+	const disabled = $derived(Boolean(restProps.disabled) || (item?.disabled ?? false));
 </script>
 
-<AccordionPrimitive.Header {level}>
-	<AccordionPrimitive.Trigger
+<div role="heading" aria-level={level}>
+	<button
+		type="button"
+		id={item?.trigger_id}
+		aria-expanded={open}
+		aria-controls={item?.content_id}
 		data-slot="accordion-trigger"
-		bind:ref
+		data-state={open ? 'open' : 'closed'}
+		{disabled}
+		bind:this={ref}
 		class={cn(
-			'w-full rounded-md py-3 text-left text-sm font-medium transition-all outline-none hover:underline focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&[data-state=open]_[data-slot=accordion-chevron]_svg]:rotate-180',
+			'w-full rounded-control py-3 text-left text-sm font-medium transition-all outline-none hover:underline focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&[data-state=open]_[data-slot=accordion-chevron]_svg]:rotate-180',
 			className
 		)}
 		{...restProps}
+		onclick={(e) => {
+			item?.toggle();
+			onclick?.(e);
+		}}
 	>
 		<Inline as="span" gap="sm" justify="between">
 			{@render children?.()}
@@ -40,5 +60,5 @@
 				/>
 			</Frame>
 		</Inline>
-	</AccordionPrimitive.Trigger>
-</AccordionPrimitive.Header>
+	</button>
+</div>

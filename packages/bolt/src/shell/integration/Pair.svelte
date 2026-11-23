@@ -12,7 +12,7 @@
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
 	import type { ImportStartInput, SetupField } from '@norbital-ai/host-api';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import Facts from './Facts.svelte';
 	import ImportStart from './ImportStart.svelte';
 	import { importStartDraft, validImportStart } from './import-start.ts';

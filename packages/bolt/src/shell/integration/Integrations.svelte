@@ -4,7 +4,7 @@
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
 	import type { Fields, Value } from '@norbital-ai/store/kind';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import {
 		Button,
 		Combobox,

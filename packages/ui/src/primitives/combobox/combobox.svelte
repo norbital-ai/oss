@@ -101,7 +101,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		ui_text,
 		use_controls
 	} from '../utils.js';
-	import { virtual_list } from '../virtual/virtual.svelte.js';
+	import { virtual_list, register_control } from '../../behaviors/index.js';
 
 	const GHOST = `${CONTROL_SIZE} flex items-center justify-between rounded-md bg-transparent text-left font-normal outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive`;
 
@@ -147,6 +147,52 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	let open = $state(false),
 		query = $state(''),
 		active = $state(0);
+	$effect(() => {
+		if (readonly || disabled) return;
+		const label = ariaLabel ?? placeholder ?? id;
+		return register_control({
+			id: `combobox:${id}`,
+			kind: 'combobox',
+			label,
+			state: () => ({
+				open,
+				value: isMultiple(props) ? props.value : props.value,
+				count: options.length
+			}),
+			actions: {
+				open: () => {
+					open = true;
+					on_open_change?.(true);
+				},
+				close: () => {
+					open = false;
+					on_open_change?.(false);
+				},
+				select: (wanted) => {
+					if (typeof wanted !== 'string') return;
+					const match = options.find((o) => o.value === wanted || o.label === wanted);
+					if (match === undefined) return;
+					if (isMultiple(props)) {
+						const cur = props.value;
+						props.on_change(
+							cur.includes(match.value)
+								? cur.filter((v) => v !== match.value)
+								: [...cur, match.value]
+						);
+					} else if (isSingle(props)) {
+						props.on_change(match.value);
+						open = false;
+						on_open_change?.(false);
+					}
+				},
+				clear: () => {
+					if (!clearable) return;
+					if (isMultiple(props)) props.on_change([]);
+					else if (isSingle(props)) props.on_change(null);
+				}
+			}
+		});
+	});
 	let list = $state<HTMLElement | null>(null),
 		search = $state<HTMLInputElement | null>(null);
 	const current = $derived(options.find((o) => o.value === value));

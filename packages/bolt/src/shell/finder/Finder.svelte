@@ -2,7 +2,7 @@
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { attach } from '@norbital-ai/ui/effect';
-	import { watch } from 'runed';
+	import { watch } from '@norbital-ai/ui/behaviors';
 	import { tick } from 'svelte';
 	import { Dialog, Icon, Input, type ModelExposure } from '@norbital-ai/ui';
 	import type { NavNode } from '../nav.ts';
@@ -309,7 +309,7 @@
 	>
 		<Dialog.Title class="pr-8 text-subhead">{t('Find')}</Dialog.Title>
 		<div
-			class="flex min-w-0 items-center gap-2 rounded-sm border border-input bg-background px-2 shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 focus-within:ring-inset dark:bg-input/30"
+			class="flex min-w-0 items-center gap-2 rounded-control border border-border-control bg-surface-input px-2 shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 focus-within:ring-inset"
 			data-finder-search
 		>
 			{#if selected}<span
@@ -326,7 +326,7 @@
 					></span
 				>{/if}
 			<Input
-				class="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
+				class="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0"
 				bind:ref={searchInput}
 				autofocus
 				placeholder={selected

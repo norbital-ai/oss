@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Cluster } from '../../layout/index.js';
-	import type { WithElementRef } from 'bits-ui';
+	import type { WithElementRef } from '../utils.js';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {

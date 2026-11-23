@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Stack } from '../../layout/index.js';
-	import { cn } from '../utils.js';
-	import type { WithElementRef } from 'bits-ui';
+	import { cn, type WithElementRef } from '../utils.js';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {

@@ -43,8 +43,9 @@ and goes full screen from its header.
 <script lang="ts">
 	import { setContext } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
-	import { watch } from 'runed';
+	import { watch } from '../../behaviors/index.js';
 	import { reset_inset } from '../../layout/inset.svelte.js';
+	import { create_resize, register_control } from '../../behaviors/index.js';
 	import { TAB_LEVEL } from '../tabs/level.js';
 	import { cn, ui_text } from '../utils.js';
 	import { watchKeyboard } from './keyboard.js';
@@ -175,25 +176,35 @@ and goes full screen from its header.
 			// A blocked storage area does not prevent resizing this sheet.
 		}
 	};
-	function drag(e: PointerEvent) {
-		if (e.button !== 0 || panel === null) return;
-		e.preventDefault();
-		const x0 = e.clientX,
-			w0 = panel.offsetWidth;
-		const move = (m: PointerEvent) => {
-			width = clamp(w0 + x0 - m.clientX);
-		};
-		const up = () => {
-			removeEventListener('pointermove', move);
-			removeEventListener('pointerup', up);
-			document.body.style.cursor = document.body.style.userSelect = '';
-			if (width !== null) keep(width);
-		};
-		document.body.style.cursor = 'ew-resize';
-		document.body.style.userSelect = 'none';
-		addEventListener('pointermove', move);
-		addEventListener('pointerup', up);
-	}
+	const resizer = create_resize({
+		value: () => panel?.offsetWidth ?? width ?? 640,
+		on_change: (next) => {
+			width = next;
+		},
+		on_commit: (final) => keep(final),
+		axis: 'horizontal',
+		invert: true,
+		min: 300,
+		max: () => Math.min(innerWidth * 0.9, innerWidth - sidebar()),
+		step: 24,
+		label: t('resize')
+	});
+	$effect(() => {
+		if (!open) return;
+		const label = title ?? name ?? 'Sheet';
+		return register_control({
+			id: `sheet:${side}:${label}`,
+			kind: 'sheet',
+			label,
+			state: () => ({ open, side, fullscreen: full }),
+			actions: {
+				close,
+				toggle_fullscreen: () => {
+					full = !full;
+				}
+			}
+		});
+	});
 	// the phone drawer's grabber and header: a drag sets its height, up to the whole screen (held near the top it takes
 	// the screen, below a quarter of it the drawer closes); a tap on the grabber (its click, unless it dragged) expands it
 	let dragged = false;
@@ -227,11 +238,6 @@ and goes full screen from its header.
 		addEventListener('pointermove', move);
 		addEventListener('pointerup', up);
 		addEventListener('pointercancel', up);
-	}
-	function nudge(e: KeyboardEvent) {
-		if (panel === null || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
-		e.preventDefault();
-		keep(panel.offsetWidth + (e.key === 'ArrowLeft' ? 24 : -24));
 	}
 </script>
 
@@ -317,14 +323,9 @@ and goes full screen from its header.
 			<!-- the resize handle: a pill on the left edge (wide screens), dragged or moved with the arrow keys -->
 			<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 			<div
-				role="separator"
-				aria-orientation="vertical"
-				aria-label={t('resize')}
-				tabindex="0"
+				{...resizer.handle_attrs()}
 				data-sheet-resize
 				class="group/resize absolute inset-y-0 -left-2 z-10 hidden w-4 cursor-ew-resize touch-none items-center justify-center outline-none md:flex"
-				onpointerdown={drag}
-				onkeydown={nudge}
 			>
 				<span
 					class="bg-border group-hover/resize:bg-input group-focus-visible/resize:bg-ring h-12 w-1.5 rounded-full transition-colors duration-150"

@@ -61,7 +61,6 @@ const SOURCE = Object.entries({
 
 /** What the browser tests import from `node_modules`, optimized before the first file runs. */
 const BROWSER_DEPS = [
-	'runed',
 	'@codemirror/lang-javascript',
 	'@codemirror/lang-json',
 	'@codemirror/language',
@@ -70,14 +69,13 @@ const BROWSER_DEPS = [
 	'@iconify/svelte',
 	'@internationalized/date',
 	'@lezer/highlight',
-	'bits-ui',
 	'codemirror',
 	'layerchart',
 	'marked',
 	'qrcode',
 	'tailwind-merge',
 	'tailwind-variants'
-].map((name) => (['runed', '@iconify/svelte'].includes(name) ? name : `@norbital-ai/ui > ${name}`));
+].map((name) => (name === '@iconify/svelte' ? name : `@norbital-ai/ui > ${name}`));
 
 // One Node project (unit and PGlite files alike, a minute's hang guard) and the browser project
 // (https://vitest.dev/guide/browser/): one headless Chromium browser shared by its files.

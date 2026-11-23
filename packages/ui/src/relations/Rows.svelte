@@ -30,7 +30,7 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 	// A child relation edited inside its parent's form and sent in the same act (AM-10) as explicit `create`, `update`
 	// and `delete` entries recorded from the viewer's own actions, never deletes by omission (model-write-contract).
 	import { rowsOps } from './operations.js';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import Table from '../table/Table.svelte';
 
 	let { ctx, rows, columns, add, min = 0, max = Infinity, on_change }: RowsProps = $props();

@@ -127,7 +127,7 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	class={cn(
 		'overflow-hidden bg-background',
 		framed &&
-			'rounded-sm border shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30',
+			'rounded-control border border-border-control bg-surface-input shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
 		framed && (invalid ? 'border-destructive' : 'border-input'),
 		readonly && 'bg-muted',
 		size === 'fill' && 'h-full min-h-0'

@@ -3,89 +3,144 @@
 A tooltip on hover or focus of its trigger, with a text or snippet body; where nothing hovers, a tap opens it as a popover.
 -->
 <script lang="ts">
-	import { Tooltip as TooltipPrimitive } from 'bits-ui';
-	import type { ComponentProps, Snippet } from 'svelte';
+	import type { Snippet } from 'svelte';
+	import type { FloatingAlign, FloatingSide } from '../../behaviors/index.js';
 	import * as Popover from '../popover/index.js';
 	import { cn, noHover } from '../utils.js';
 	import Content from './tooltip-content.svelte';
-	import type { SnakeProps } from '../bits.js';
-
-	type ContentProps = ComponentProps<typeof Content>;
 
 	let {
+		open: controlledOpen = $bindable(),
 		delay_duration = 100,
 		disabled = false,
 		ignore_non_keyboard_focus = false,
 		side = 'top',
-		side_offset = 0,
-		align,
+		side_offset = 4,
+		align = 'center',
 		avoid_collisions = true,
 		collision_padding = 8,
 		text,
 		content_class,
-		arrow_classes,
+		arrow_classes: _arrowClasses,
 		trigger,
 		content,
 		on_open_change,
 		on_open_change_complete,
-		disable_hoverable_content,
-		disable_close_on_trigger_click,
-		trigger_id,
-		...rootProps
+		disable_hoverable_content = false,
+		disable_close_on_trigger_click = false
 	}: {
+		/** Controlled open state; bindable. */
+		open?: boolean;
 		/** Hover open delay in ms. */
 		delay_duration?: number;
 		/** When true, renders the trigger without a tooltip. */
 		disabled?: boolean;
-		/**
-		 * When true, focus from dialog autofocus / mouse click does not open the tooltip —
-		 * only keyboard focus does.
-		 */
+		/** Only open on keyboard `:focus-visible`, not pointer clicks. */
 		ignore_non_keyboard_focus?: boolean;
 		/** The trigger's side it opens on; default `top`. */
-		side?: ContentProps['side'] | undefined;
-		/** The gap from the trigger, in px; default 0. */
-		side_offset?: ContentProps['side_offset'];
+		side?: FloatingSide;
+		/** The gap from the trigger, in px; default 4. */
+		side_offset?: number;
 		/** Its alignment along that side: `start`, `center` or `end`. */
-		align?: ContentProps['align'] | undefined;
-		/**
-		 * Let Floating UI flip/shift the content to keep it on screen. Bits UI defaults this to
-		 * `true`, but leaves `collision_padding` at `0`; we default to an 8px gutter instead.
-		 *
-		 * Collision handling only *moves* the content — it never shrinks it. Rich tooltip bodies
-		 * must still cap their own height, or they overflow the viewport no matter what.
-		 */
-		avoid_collisions?: ContentProps['avoid_collisions'];
+		align?: FloatingAlign;
+		/** Flip/shift the content to keep it on screen (default `true`). */
+		avoid_collisions?: boolean;
 		/** The viewport gutter kept while avoiding collisions, in px; default 8. */
-		collision_padding?: ContentProps['collision_padding'];
+		collision_padding?: number;
 		/** Simple string body. Prefer `content` for richer markup. */
 		text?: string | undefined;
-		/** Classes on the content surface (a wider cap, another surface). */
+		/** Classes on the content surface. */
 		content_class?: string;
-		/** Text-color class for the SVG arrow; match this when overriding the content surface. */
+		/** Kept for compatibility with arrow-styled callers. */
 		arrow_classes?: string;
-		/** The element it describes; spread the given `props` onto it. Rendered alone without a body or when `disabled`. */
+		/** The element it describes; spread the given `props` onto it. */
 		trigger: Snippet<[{ props: Record<string, unknown> }]>;
 		/** A rich body, in place of `text`. */
 		content?: Snippet;
 		/** Called as it opens or closes. */
-		on_open_change?: TooltipPrimitive.RootProps['onOpenChange'];
-		/** Called once the open or close animation finishes. */
-		on_open_change_complete?: TooltipPrimitive.RootProps['onOpenChangeComplete'];
-	} & SnakeProps<Omit<TooltipPrimitive.RootProps, 'children' | 'onOpenChange' | 'onOpenChangeComplete'>, {
-		delay_duration: 'delayDuration';
-		ignore_non_keyboard_focus: 'ignoreNonKeyboardFocus';
-		/** `true`: the tooltip closes as the pointer leaves the trigger, even onto the tooltip itself. */
-		disable_hoverable_content: 'disableHoverableContent';
-		/** `true`: clicking the trigger leaves an open tooltip open. */
-		disable_close_on_trigger_click: 'disableCloseOnTriggerClick';
-		/** The trigger element's id, for a trigger rendered elsewhere. */
-		trigger_id: 'triggerId';
-	}> = $props();
+		on_open_change?: (open: boolean) => void;
+		/** Called once open or close settles. */
+		on_open_change_complete?: (open: boolean) => void;
+		/** Close immediately as the pointer leaves the trigger. */
+		disable_hoverable_content?: boolean;
+		/** Keep an open tooltip open when clicking the trigger. */
+		disable_close_on_trigger_click?: boolean;
+	} = $props();
 
 	const hasBody = $derived(Boolean(text) || Boolean(content));
-	let tapped = $state(false);
-	const open = $derived(rootProps.open ?? tapped);
+	let internalOpen = $state(false);
+	let anchorEl = $state<HTMLElement | null>(null);
+	let openTimer: ReturnType<typeof setTimeout> | undefined;
+	let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const open = $derived(controlledOpen ?? internalOpen);
+
+	function setOpen(next: boolean): void {
+		if (next === open) return;
+		if (controlledOpen !== undefined) controlledOpen = next;
+		internalOpen = next;
+		on_open_change?.(next);
+		queueMicrotask(() => on_open_change_complete?.(next));
+	}
+
+	function scheduleOpen(): void {
+		if (closeTimer !== undefined) {
+			clearTimeout(closeTimer);
+			closeTimer = undefined;
+		}
+		if (openTimer !== undefined) clearTimeout(openTimer);
+		if (delay_duration <= 0) {
+			setOpen(true);
+		} else {
+			openTimer = setTimeout(() => {
+				openTimer = undefined;
+				setOpen(true);
+			}, delay_duration);
+		}
+	}
+
+	function scheduleClose(): void {
+		if (openTimer !== undefined) {
+			clearTimeout(openTimer);
+			openTimer = undefined;
+		}
+		if (closeTimer !== undefined) clearTimeout(closeTimer);
+		if (disable_hoverable_content) {
+			setOpen(false);
+		} else {
+			closeTimer = setTimeout(() => {
+				closeTimer = undefined;
+				setOpen(false);
+			}, 80);
+		}
+	}
+
+	$effect(() => () => {
+		if (openTimer !== undefined) clearTimeout(openTimer);
+		if (closeTimer !== undefined) clearTimeout(closeTimer);
+	});
+
+	const hoverTriggerProps = $derived({
+		onpointerenter: (e: PointerEvent) => {
+			if (e.currentTarget instanceof HTMLElement) anchorEl = e.currentTarget;
+			scheduleOpen();
+		},
+		onpointerleave: () => scheduleClose(),
+		onfocus: (e: FocusEvent) => {
+			if (e.currentTarget instanceof HTMLElement) {
+				anchorEl = e.currentTarget;
+				if (ignore_non_keyboard_focus && !e.currentTarget.matches(':focus-visible')) return;
+			}
+			setOpen(true);
+		},
+		onblur: () => setOpen(false),
+		onclick: () => {
+			if (!disable_close_on_trigger_click) setOpen(false);
+		},
+		onkeydown: (e: KeyboardEvent) => {
+			if (e.key === 'Escape') setOpen(false);
+		}
+	});
 </script>
 
 {#snippet body()}
@@ -100,26 +155,23 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 	{@render trigger({ props: {} })}
 {:else if noHover.current}
 	<Popover.Root
-		bind:open={() => open, (next) => (tapped = next)}
+		bind:open={() => open, (next) => setOpen(next)}
 		{on_open_change}
 		{on_open_change_complete}
 	>
 		<Popover.Trigger>
 			{#snippet child({ props })}
-				<!-- no box of its own, until a disabled trigger lets the tap through to it. Enter and Space stay the trigger's:
-				     they click it, and the click opens this too. -->
 				<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 				<span
 					class="contents has-[>:disabled,>[aria-disabled=true]]:inline-flex [&>:disabled]:pointer-events-none"
 					onclick={(e) => {
-						if (e.target === e.currentTarget) tapped = !open;
+						if (e.target === e.currentTarget) setOpen(!open);
 					}}
 				>
 					{@render trigger({ props: { ...props, onkeydown: undefined } })}
 				</span>
 			{/snippet}
 		</Popover.Trigger>
-		<!-- a hint: focus stays where it is, or a tap on a field's hint would blur the field -->
 		<Popover.Content
 			{side}
 			{side_offset}
@@ -132,7 +184,6 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 				'px-3 py-1.5 text-xs text-balance',
 				// repository-health:allow UI25 -- pass-through of the caller's `content_class` prop; its tokens are literal at the call site
 				content_class,
-				// after the caller's: a desktop cap such as `max-w-96` is wider than a phone
 				'max-w-[min(20rem,calc(100vw-1rem))]'
 			)}
 		>
@@ -140,31 +191,19 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 		</Popover.Content>
 	</Popover.Root>
 {:else}
-	<TooltipPrimitive.Provider delayDuration={delay_duration} ignoreNonKeyboardFocus={ignore_non_keyboard_focus}>
-		<TooltipPrimitive.Root
-			{...rootProps}
-			ignoreNonKeyboardFocus={ignore_non_keyboard_focus}
-			disableHoverableContent={disable_hoverable_content}
-			disableCloseOnTriggerClick={disable_close_on_trigger_click}
-			triggerId={trigger_id}
-			onOpenChange={on_open_change}
-			onOpenChangeComplete={on_open_change_complete}>
-			<TooltipPrimitive.Trigger>
-				{#snippet child({ props })}
-					{@render trigger({ props })}
-				{/snippet}
-			</TooltipPrimitive.Trigger>
-			<Content
-				{side}
-				{side_offset}
-				{align}
-				{avoid_collisions}
-				{collision_padding}
-				{arrow_classes}
-				class={/* repository-health:allow UI25 -- pass-through of the caller's `content_class` prop; its tokens are literal at the call site */ content_class}
-			>
-				{@render body()}
-			</Content>
-		</TooltipPrimitive.Root>
-	</TooltipPrimitive.Provider>
+	{@render trigger({ props: hoverTriggerProps })}
+	<Content
+		{open}
+		anchor={anchorEl}
+		{side}
+		{side_offset}
+		{align}
+		{avoid_collisions}
+		{collision_padding}
+		on_pointer_enter={disable_hoverable_content ? undefined : scheduleOpen}
+		on_pointer_leave={disable_hoverable_content ? undefined : scheduleClose}
+		class={/* repository-health:allow UI25 -- pass-through of the caller's `content_class` prop; its tokens are literal at the call site */ content_class}
+	>
+		{@render body()}
+	</Content>
 {/if}

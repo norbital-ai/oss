@@ -3,6 +3,7 @@
 // never a target: the person decides those themselves.
 import { fork, run } from '@norbital-ai/ui/effect';
 import { confirm_action } from '@norbital-ai/ui';
+import { describe_controls } from '@norbital-ai/ui/behaviors';
 import { Effect } from 'effect';
 import type { PageResult } from '../../protocol/schema.ts';
 import type { ShellApi } from '../api-types.ts';
@@ -75,7 +76,7 @@ export function pageClickable(text: string): HTMLElement | null {
 	);
 }
 
-/** What the page shows, for Norbius: headings and controls as they read, never a field's value. */
+/** What the page shows, for Norbius: headings, controls and registered UI control states, never a field's value. */
 export function pageScreen(): string {
 	const seen = pageRoots()
 		.flatMap((root) => [
@@ -86,7 +87,9 @@ export function pageScreen(): string {
 		.filter((el) => el.getClientRects().length > 0)
 		.map(pageLabel)
 		.filter((label) => label !== '');
-	return [...new Set(seen)].join(' · ').slice(0, 1200);
+	const controls = describe_controls();
+	const summary = [...new Set(seen)].join(' · ');
+	return (controls ? `${summary}${summary ? ' · ' : ''}[${controls}]` : summary).slice(0, 1200);
 }
 
 /** The first visible thing reading `text`: a control, else a heading, column or label. */

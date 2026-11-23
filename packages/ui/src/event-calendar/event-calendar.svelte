@@ -58,7 +58,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	import Icon from '@iconify/svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { onMount } from 'svelte';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 	import { Button } from '../primitives/button/index.js';
 	import TabStrip from '../primitives/tabs/tab-strip.svelte';
 	import { cn, ui_text } from '../primitives/utils.js';
@@ -435,9 +435,9 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 				{@const list = onDay(events, d)}
 				<div
 					class={cn(
-						'flex min-w-0 flex-col gap-0.5 overflow-hidden bg-popover p-1 dark:bg-background',
-						isWeekend(d) && 'bg-muted dark:bg-muted/20',
-						d.getMonth() !== at.getMonth() && 'bg-background text-muted-foreground dark:bg-muted'
+						'flex min-w-0 flex-col gap-0.5 overflow-hidden bg-surface-active p-1',
+						isWeekend(d) && 'bg-surface-weekend',
+						d.getMonth() !== at.getMonth() && 'bg-surface-subtle text-muted-foreground'
 					)}
 					data-day={d.getDate()}
 				>
@@ -455,7 +455,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 					{#each list.slice(0, MAX_PILLS) as e (e.id)}
 						<button
 							type="button"
-							class="flex min-w-0 items-center gap-1 rounded-full bg-secondary px-1.5 py-0.5 text-left text-secondary-foreground hover:brightness-95 dark:bg-muted/60 dark:text-foreground"
+							class="flex min-w-0 items-center gap-1 rounded-full bg-surface-event-chip px-1.5 py-0.5 text-left text-foreground hover:brightness-95"
 							onclick={() => on_event_click?.(e)}
 							data-event={e.id}
 						>
@@ -517,7 +517,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 								<div
 									class={cn(
 										'flex flex-1 flex-col items-center py-1.5',
-										isWeekend(d) && 'bg-muted dark:bg-muted/25'
+										isWeekend(d) && 'bg-surface-weekend'
 									)}
 								>
 									<span
@@ -540,7 +540,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 							{#each bars.filter((b) => b.row < barRows) as b (b.e.id)}
 								<button
 									type="button"
-									class="absolute flex h-5 items-center gap-1 rounded-full bg-secondary px-2 text-left text-secondary-foreground dark:bg-muted/60 dark:text-foreground"
+									class="absolute flex h-5 items-center gap-1 rounded-full bg-surface-event-chip px-2 text-left text-foreground"
 									data-event={b.e.id}
 									style:left="calc({b.from} * 100% / {n} + 2px)"
 									style:width="calc({b.span} * 100% / {n} - 4px)"
@@ -578,8 +578,9 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 					<div
 						bind:this={grid}
 						{@attach drag_scope}
+						data-calendar-grid
 						class={cn(
-							'relative flex-1 bg-popover select-none dark:bg-background',
+							'relative flex-1 bg-surface-active select-none',
 							!readonly && !touch.current && 'touch-none cursor-crosshair'
 						)}
 						style:height="{height}px"
@@ -591,7 +592,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 							<div
 								class={cn(
 									'pointer-events-none absolute inset-y-0 border-l border-border',
-									isWeekend(d) && 'bg-muted dark:bg-muted/25',
+									isWeekend(d) && 'bg-surface-weekend',
 									sameDay(d, now) && !isWeekend(d) && 'bg-brand/10'
 								)}
 								style:left="calc({col} * 100% / {n})"

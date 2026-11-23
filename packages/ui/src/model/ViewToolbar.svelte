@@ -175,7 +175,7 @@
 	import Spinner from '../primitives/spinner/spinner.svelte';
 	import { record_labels } from '../record/labels.svelte.js';
 	import { watch as live } from '../read/live.svelte.js';
-	import { watch } from 'runed';
+	import { watch } from '../behaviors/index.js';
 
 	let {
 		ctx,
@@ -1098,7 +1098,7 @@
 							name="alert"
 							class="mt-px size-3.5 shrink-0 {f.severity === 'refuse'
 								? 'text-destructive'
-								: 'text-warning-foreground dark:text-warning'}"
+								: 'text-tone-warning-text'}"
 						/>
 						<span class="min-w-0"
 							>{#if at !== ''}<span class="font-medium">{at}:</span>{' '}{/if}{f.message}</span
