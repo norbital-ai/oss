@@ -21,10 +21,10 @@ import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, CrossAnswer, RowData } from '../contracts.ts';
 import type { Pred } from '@norbital-ai/store';
 import type { EngineManifest } from '../manifest.ts';
-import type { LocalFilterField } from '../../protocol/schema.ts';
+import type { DescribeStep, LocalFilterField } from '../../protocol/schema.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
-import { infer_facility, type InferTool } from '../agent/ai.ts';
+import { infer_facility, type InferProgress, type InferTool } from '../agent/ai.ts';
 import { catalog_of } from '../access/pred.ts';
 import { readsAny, viewOutput } from '../access/authority.ts';
 import { midnight, startOfDate } from '../query/eval.ts';
@@ -80,8 +80,8 @@ type FilterArg = { lit: Json } | { list: readonly Json[] } | { range: readonly [
 type FilterValue = { label: string; arg: FilterArg };
 type FilterOffer = Omit<CatalogueOffer, 'values'> & { values?: readonly FilterValue[] };
 type FilterCatalogue = readonly FilterOffer[];
-type Failed = { ok: false; code: string; message: string };
-type Described = { ok: true; where?: Json; order_by?: Json } | Failed;
+type Failed = { ok: false; code: string; message: string; steps?: readonly DescribeStep[] };
+type Described = { ok: true; where?: Json; order_by?: Json; steps?: readonly DescribeStep[] } | Failed;
 type FilterOptions = Failed | { ok: true; fields: FilterCatalogue };
 type Op = { op: CatalogueOffer['op']; label: string };
 type Field = {
@@ -1333,8 +1333,21 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		authority: Authority;
 		bindings: Bindings;
 		localFields?: readonly LocalFilterField[];
+		onStep?: (step: DescribeStep) => void;
 	}): Effect.fn.Return<Described, EngineError> {
-		const fail = (message: string, code = 'invalid'): Described => ({ ok: false, code, message });
+		const steps: DescribeStep[] = [];
+		const emit = (step: DescribeStep) => {
+			const idx = steps.findIndex((s) => s.id === step.id);
+			if (idx >= 0) steps[idx] = step;
+			else steps.push(step);
+			o.onStep?.(step);
+		};
+		const fail = (message: string, code = 'invalid'): Described => ({
+			ok: false,
+			code,
+			message,
+			...(steps.length > 0 ? { steps: [...steps] } : {})
+		});
 		if (o.text.trim() === '' || o.text.length > FILTER_MAX_TEXT)
 			return fail(`A description is 1–${FILTER_MAX_TEXT} characters.`);
 		const subjectOf = subject(o, o.bindings.today);
@@ -1404,9 +1417,131 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			weekStartsOn: 'Monday'
 		});
 		const tools: InferTool[] = local ? [] : [makeLookupTool(o.authority, o.bindings)];
+		const activeLookups = new Map<string, { model: string; query?: string }>();
+		let currentThinkId: string | undefined;
+		let needsAdjust = false;
+		const modelTitle = (name: string) => m.messages?.[`models.${name}.label`] ?? human(name);
+		const onProgress = (event: InferProgress): Effect.Effect<void> =>
+			Effect.sync(() => {
+				if (event.kind === 'thinking') {
+					const id = `think-${event.turn}`;
+					currentThinkId = id;
+					const label =
+						event.turn === 1
+							? 'Understanding request…'
+							: needsAdjust
+								? 'Adjusting filter…'
+								: 'Planning filter…';
+					emit({ id, label, status: 'running' });
+					return;
+				}
+				if (currentThinkId !== undefined) {
+					const prev = steps.find((s) => s.id === currentThinkId);
+					if (prev !== undefined && prev.status === 'running') {
+						emit({
+							id: prev.id,
+							label: prev.label
+								.replace(/^Understanding request…$/, 'Understood request')
+								.replace(/^Adjusting filter…$/, 'Adjusted filter')
+								.replace(/^Planning filter…$/, 'Planned filter'),
+							status: 'done'
+						});
+					}
+					currentThinkId = undefined;
+				}
+				if (event.kind === 'tool_start') {
+					if (event.name === 'lookup') {
+						const parsed = Option.getOrUndefined(Schema.decodeUnknownOption(LookupInput)(event.input));
+						const target = parsed?.model ?? 'records';
+						const query = parsed?.query?.trim();
+						activeLookups.set(event.id, { model: target, ...(query ? { query } : {}) });
+						const title = modelTitle(target);
+						emit({
+							id: event.id,
+							label: query ? `Looking up ${title} matching “${query}”…` : `Checking ${title}…`,
+							status: 'running'
+						});
+					} else if (event.name === 'edit') {
+						emit({ id: event.id, label: 'Building filter rules…', status: 'running' });
+					} else if (event.name === 'submit') {
+						emit({ id: event.id, label: 'Checking filter…', status: 'running' });
+					} else if (event.name === 'refuse') {
+						emit({ id: event.id, label: 'Checking request…', status: 'running' });
+					}
+					return;
+				}
+				if (event.name === 'lookup') {
+					const info = activeLookups.get(event.id);
+					const title = modelTitle(info?.model ?? 'records');
+					const rows =
+						isJsonObject(event.result) && isJsonArray(event.result['rows'])
+							? event.result['rows']
+							: undefined;
+					const errText =
+						isJsonObject(event.result) && typeof event.result['error'] === 'string'
+							? event.result['error']
+							: undefined;
+					if (errText !== undefined) {
+						emit({ id: event.id, label: `Lookup failed for ${title}`, detail: errText, status: 'error' });
+					} else {
+						const count = rows?.length ?? 0;
+						const qSuffix = info?.query ? ` for “${info.query}”` : '';
+						emit({
+							id: event.id,
+							label:
+								count === 0
+									? `No ${title} matches${qSuffix}`
+									: `Found ${count} ${title} ${count === 1 ? 'match' : 'matches'}${qSuffix}`,
+							status: 'done'
+						});
+					}
+				} else if (event.name === 'edit') {
+					const errCount =
+						isJsonObject(event.result) && isJsonArray(event.result['errors'])
+							? event.result['errors'].length
+							: 0;
+					const ok = event.ok && errCount === 0;
+					if (!ok) needsAdjust = true;
+					emit({
+						id: event.id,
+						label: ok ? 'Built filter rules' : 'Filter rules needed adjustment',
+						status: ok ? 'done' : 'error'
+					});
+				} else if (event.name === 'submit') {
+					const errText =
+						isJsonObject(event.result) && typeof event.result['error'] === 'string'
+							? event.result['error']
+							: undefined;
+					if (!event.ok || errText !== undefined) {
+						needsAdjust = true;
+						emit({
+							id: event.id,
+							label: 'Filter needed adjustment',
+							...(errText !== undefined ? { detail: errText.slice(0, 140) } : {}),
+							status: 'error'
+						});
+					} else {
+						emit({ id: event.id, label: 'Verified filter', status: 'done' });
+					}
+				} else if (event.name === 'refuse') {
+					const msgText =
+						isJsonObject(event.result) && typeof event.result['message'] === 'string'
+							? event.result['message']
+							: undefined;
+					emit({
+						id: event.id,
+						label: 'Could not express filter',
+						...(msgText !== undefined ? { detail: msgText.slice(0, 140) } : {}),
+						status: 'error'
+					});
+				}
+			});
+
 		const infer = infer_facility(cfg.ai, {
 			wallMs: FILTER_DEADLINE_MS,
-			validate
+			reasoningEffort: 'low',
+			validate,
+			onProgress
 		});
 		const answer = yield* infer(
 			{
@@ -1438,6 +1573,17 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 				})
 			)
 		);
+		if (currentThinkId !== undefined) {
+			const prev = steps.find((s) => s.id === currentThinkId);
+			if (prev !== undefined && prev.status === 'running') {
+				emit({
+					id: prev.id,
+					label: prev.label.replace(/…$/, ''),
+					status: answer.ok ? 'done' : 'error'
+				});
+			}
+			currentThinkId = undefined;
+		}
 		if (!answer.ok) {
 			if (answer.error.kind === 'unavailable')
 				return fail('AI filtering is not configured for this workspace.', 'unavailable');
@@ -1454,7 +1600,8 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		return {
 			ok: true,
 			...(out['where'] === undefined ? {} : { where: out['where'] }),
-			...(out['order_by'] === undefined ? {} : { order_by: out['order_by'] })
+			...(out['order_by'] === undefined ? {} : { order_by: out['order_by'] }),
+			...(steps.length > 0 ? { steps: [...steps] } : {})
 		};
 	});
 

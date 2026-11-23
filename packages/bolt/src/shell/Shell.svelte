@@ -640,7 +640,7 @@
 						})
 					)
 				),
-				api.boot(publicApp, kioskRoute ?? undefined),
+				api.meta(),
 				() => boot?.client,
 				Effect.sync(() => {
 					const leaving = new Event('beforeunload', { cancelable: true });
@@ -702,7 +702,7 @@
 		if (now - lastNoticeRefreshAt < NOTICE_REFRESH_COOLDOWN_MS) return;
 		lastNoticeRefreshAt = now;
 		fork(
-			api.boot(publicApp, kioskRoute ?? undefined).pipe(
+			api.meta().pipe(
 				Effect.map((next) => {
 					refreshed = next;
 				})

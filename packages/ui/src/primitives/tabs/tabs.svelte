@@ -46,7 +46,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 
 	// the vertical rail: a column of full-width rows on a wide container (`@2xl`), a scrolling strip on a narrow one
 	const RAIL =
-		'@2xl:flex-col @2xl:items-stretch @2xl:self-start @2xl:max-h-full @2xl:overflow-x-clip @2xl:overflow-y-auto';
+		'@2xl:flex-col @2xl:items-stretch @2xl:max-h-full @2xl:overflow-x-clip @2xl:overflow-y-auto';
 </script>
 
 <script lang="ts">
@@ -136,7 +136,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 			// one column of the container's width: a strip measured against its own contents would shrink as tabs move to More
 			'grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3',
 			vertical &&
-				'@2xl:grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)] @2xl:grid-rows-[minmax(0,1fr)] @2xl:gap-4',
+				'@2xl:grid-cols-[minmax(10rem,12.5rem)_minmax(0,1fr)] @2xl:grid-rows-[minmax(0,1fr)] @2xl:gap-5',
 			className
 		)}
 		data-tabs-orientation={vertical ? 'vertical' : 'horizontal'}
@@ -146,7 +146,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 				'flex w-full min-w-0 items-center gap-2',
 				leading && 'flex-wrap items-end',
 				vertical && '@2xl:flex-col @2xl:items-stretch',
-				!hasInset() && INSET_X_CLASS
+				!hasInset() && [INSET_X_CLASS, vertical && '@2xl:pe-0']
 			)}
 		>
 			{#if leading}<div class="min-w-0 flex-1 basis-64">{@render leading()}</div>{/if}
@@ -203,7 +203,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 			{@render trailing?.()}
 		</div>
 		{#each tabs as tab (tab.name)}
-			<TabPanel value={tab.name} label={tab.title}>
+			<TabPanel value={tab.name} label={tab.title} {vertical}>
 				{#if tab.name === active || (tab.keep_alive && visited[tab.name])}
 					{@render tab.body()}
 				{/if}

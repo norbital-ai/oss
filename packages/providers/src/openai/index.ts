@@ -278,6 +278,8 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 				let provider = '';
 				const calls: Call[] = [];
 				const model = config.models[request.model] ?? request.model;
+				const baseUrl = config.endpoint.replace(/\/$/, '');
+				const isOpenRouter = isOpenRouterEndpoint(baseUrl);
 				const body = yield* Effect.try({
 					try: () => {
 						const messages = messagesOf(request);
@@ -295,7 +297,14 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 									? config.body['session_id']
 									: session_of(request)
 								: undefined;
+						const reasoningHint =
+							request.reasoning_effort === undefined
+								? {}
+								: isOpenRouter
+									? { reasoning: { effort: request.reasoning_effort } }
+									: { reasoning_effort: request.reasoning_effort };
 						return {
+							...reasoningHint,
 							...config.body,
 							model,
 							messages,
@@ -319,8 +328,6 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 					},
 					catch: Port.failure('ai')
 				});
-				const baseUrl = config.endpoint.replace(/\/$/, '');
-				const isOpenRouter = isOpenRouterEndpoint(baseUrl);
 				const req = yield* HttpClientRequest.bodyJson(
 					HttpClientRequest.post(`${baseUrl}/chat/completions`, {
 						headers: {

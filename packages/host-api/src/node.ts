@@ -54,7 +54,7 @@ export {
 } from './node/net.ts';
 export { loopback_tcp_port, tcp_port } from './node/tcp.ts';
 export { type_service } from './node/typing/workspace.ts';
-export { cell_api, vm_cell, type VmCell } from './node/cell.ts';
+export { cell_api, cell_version, vm_cell, type VmCell } from './node/cell.ts';
 export { cron_clock } from './node/cron-clock.ts';
 export { node_guests, type NodeGuestsOptions } from './node/guests.ts';
 export { HOST_FILE, host_file_of, host_module, load_host } from './node/host-file.ts';

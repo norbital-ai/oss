@@ -5,7 +5,7 @@ import { install } from '../src/decl/runtime/guest.ts';
 import { custom_field, model, policy } from '../src/index.ts';
 import { split_model, split_system_model } from '../src/decl/model-data.ts';
 import { FieldData, OutputData } from '../src/decl/field-data.ts';
-import { nullable_of_expr } from '../src/decl/model.ts';
+import { column_layers, nullable_of_expr } from '../src/decl/model.ts';
 import * as bolt from '../src/index.ts';
 import message from '../src/system/data/model/sys_message/+model.ts';
 import configuration from '../src/system/data/model/sys_config/+model.ts';
@@ -170,5 +170,25 @@ describe('declarations', () => {
 		expect(field.check).toBe(validate);
 		expect(field.spec.validate).toBe(validate);
 		expect(field.check?.({ score: 0 })).toBe('positive');
+	});
+
+	it('explains nested write verbs directly instead of reporting missing fields as an output error', () => {
+		expect(() =>
+			column_layers(
+				'document',
+				{
+					fields: ['number'],
+					lines: { create: { fields: ['item'] }, update: { fields: ['item'] }, delete: {} }
+				},
+				[],
+				'update'
+			)
+		).toThrow(/never nest 'create' inside a relation/);
+		expect(
+			column_layers('document', { fields: ['number'], lines: { fields: ['item'] } }, [], 'update')
+		).toEqual({
+			document: ['number'],
+			'document.lines': ['item']
+		});
 	});
 });

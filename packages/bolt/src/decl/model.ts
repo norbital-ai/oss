@@ -600,6 +600,14 @@ export function column_layers(
 			throw new Error(
 				`${label} '${path}': expected a layer { fields: [column, …], <relation>?: { … } } at most ${LAYER_MAX_DEPTH} levels deep${reserved.length === 0 ? '' : `; the root also takes ${reserved.join(', ')}`}`
 			);
+		const nestedVerb =
+			depth > 1
+				? (['create', 'update', 'delete'] as const).find((verb) => verb in node)
+				: undefined;
+		if (nestedVerb !== undefined)
+			throw new Error(
+				`${label} '${path}': child relations take { fields: ['a', 'b'] } directly — never nest '${nestedVerb}' inside a relation`
+			);
 		const fields = columns(node['fields']);
 		if (Result.isFailure(fields))
 			throw new Error(

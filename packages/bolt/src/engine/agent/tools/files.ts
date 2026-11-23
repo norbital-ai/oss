@@ -647,7 +647,7 @@ export function bindFileTools(
 				...(shown.length === 0
 					? []
 					: [
-							`Shown on your next step only: ${shown.join(', ')}${shown.length > TILED_PAGES ? '; whole pages without their quarters: read_file { id, image: n } adds them' : ''}`
+							`Shown on your next step only (extract all visible fields/values now before unrelated lookups): ${shown.join(', ')}${shown.length > TILED_PAGES ? '; whole pages without their quarters: read_file { id, image: n } adds them' : ''}`
 						]),
 				...(refs.length > shown.length
 					? [`${refs.length - shown.length} more images: read_file { id: ${o}, image: n }`]

@@ -98,3 +98,20 @@ it.live(
 			assert.equal(image.getAttribute('fetchpriority'), 'high');
 		})
 );
+
+it.live('an eager image starts in eager state (never hidden at opacity 0 waiting for hydration)', () =>
+	browser(async () => {
+		vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(false);
+		const target = show({
+			src: '/hero.webp',
+			alt: 'Hero preview',
+			loading: 'eager',
+			fetchpriority: 'high'
+		});
+		const frame = element<HTMLElement>(target, '[data-image]');
+		assert.equal(frame.dataset.state, 'eager');
+		element<HTMLImageElement>(frame, 'img').dispatchEvent(new Event('load'));
+		flushSync();
+		assert.equal(frame.dataset.state, 'loaded');
+	})
+);

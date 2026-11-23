@@ -201,6 +201,13 @@ export type RowApproval = {
 export type UiContext = {
 	readonly ui: { readonly bolt?: ViewBolt | undefined; readonly kinds: KindsHost };
 };
+/** One live or completed step recorded while `filter.describe` builds a filter. */
+export type DescribeStep = {
+	readonly id: string;
+	readonly label: string;
+	readonly detail?: string;
+	readonly status: 'running' | 'done' | 'error';
+};
 /**
  * The client a view reads and acts through, as a page context's `ui.bolt` carries it to the
  * views. Dynamic reads have fixed structural answers; model reads derive their row from the actual model input.
@@ -278,8 +285,9 @@ export type ViewBolt = {
 					label: string;
 					kind: 'text' | 'number' | 'bool';
 					optional?: boolean;
-				}[]
-		  ) => Effect.Effect<{ where?: Json; order_by?: Json }, Error>)
+				}[],
+				onStep?: (step: DescribeStep) => void
+		  ) => Effect.Effect<{ where?: Json; order_by?: Json; steps?: readonly DescribeStep[] }, Error>)
 		| undefined;
 	/** Rule 16b `filter.options`: the same condition catalogue a description is offered, so the builder renders exactly what it may author. */
 	options?(

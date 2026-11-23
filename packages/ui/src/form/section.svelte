@@ -162,6 +162,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		}
 	});
 	const titled = $derived(title !== undefined && !lone);
+	const resolvedIcon = $derived(icon ?? 'lucide:layout-list');
 	const canCollapse = $derived(titled && collapsible);
 	// svelte-ignore state_referenced_locally -- the key is fixed for the section's life
 	const key = `norbital.section:${use_model_key() ?? ''}:${name ?? title ?? ''}`;
@@ -270,35 +271,24 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 						aria-controls={`${id}-body`}
 						onclick={toggle}
 					>
-						{#if icon}
-							<span
-								class="border-border bg-muted/40 text-muted-foreground grid size-5 shrink-0 place-items-center rounded-sm border"
-								data-section-icon
-							>
-								<Icon
-									{icon}
-									class="size-3 group-hover/section:hidden [@media(hover:none)]:hidden"
-									aria-hidden="true"
-								/>
-								<Icon
-									icon="lucide:chevron-right"
-									class={cn(
-										'hidden size-3.5 transition-transform group-hover/section:block [@media(hover:none)]:block',
-										shown && 'rotate-90'
-									)}
-									aria-hidden="true"
-								/>
-							</span>
-						{:else}
+						<span
+							class="border-border bg-muted/40 text-muted-foreground grid size-5 shrink-0 place-items-center rounded-sm border"
+							data-section-icon
+						>
+							<Icon
+								icon={resolvedIcon}
+								class="size-3 group-hover/section:hidden [@media(hover:none)]:hidden"
+								aria-hidden="true"
+							/>
 							<Icon
 								icon="lucide:chevron-right"
 								class={cn(
-									'size-4 shrink-0 text-muted-foreground transition-transform',
+									'hidden size-3.5 transition-transform group-hover/section:block [@media(hover:none)]:block',
 									shown && 'rotate-90'
 								)}
 								aria-hidden="true"
 							/>
-						{/if}
+						</span>
 						<span class="truncate">{title}</span>
 						{#if !shown && summary !== undefined}
 							<span class="text-meta truncate font-normal" data-section-summary
@@ -308,14 +298,12 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 					</button>
 				{:else}
 					<span class="flex min-w-0 items-center gap-1.5">
-						{#if icon}
-							<span
-								class="border-border bg-muted/40 text-muted-foreground grid size-5 shrink-0 place-items-center rounded-sm border"
-								data-section-icon
-							>
-								<Icon {icon} class="size-3" aria-hidden="true" />
-							</span>
-						{/if}
+						<span
+							class="border-border bg-muted/40 text-muted-foreground grid size-5 shrink-0 place-items-center rounded-sm border"
+							data-section-icon
+						>
+							<Icon icon={resolvedIcon} class="size-3" aria-hidden="true" />
+						</span>
 						<span class="truncate">{title}</span>
 					</span>
 				{/if}
@@ -348,13 +336,14 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		</div>
 	{/if}
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
-	<!-- The section icon is heading chrome. Fields share the column edge with neighboring sections. -->
+	<!-- Align section body content directly with the section title label (size-5 icon box + gap-1.5 = 1.625rem). -->
 	<div
 		bind:this={body}
 		id={`${id}-body`}
 		hidden={!shown && !closing}
 		class={cn(
 			'-my-1 min-h-0 min-w-0 overflow-x-clip py-1',
+			titled && 'ps-[1.625rem]',
 			fill && 'overflow-y-auto'
 		)}
 		use:contentMotion

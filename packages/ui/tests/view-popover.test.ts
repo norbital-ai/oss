@@ -1818,3 +1818,115 @@ it.live(
 			yield* browser(v.done);
 		})
 );
+
+it.effect(
+	'filter describe shows live progression in place and toggles the step timeline from the applied label',
+	() =>
+		Effect.gen(function* () {
+			let pushStep:
+				| ((step: {
+						id: string;
+						label: string;
+						detail?: string;
+						status: 'running' | 'done' | 'error';
+				  }) => void)
+				| undefined;
+			let finish!: (value: {
+				where?: Json;
+				steps?: readonly {
+					id: string;
+					label: string;
+					detail?: string;
+					status: 'running' | 'done' | 'error';
+				}[];
+			}) => void;
+			const s = yield* browser(() =>
+				scripted({
+					describe: (_model, _text, _fields, onStep) => {
+						pushStep = onStep;
+						return Effect.callback((resume) => {
+							finish = (value) => resume(Effect.succeed(value));
+						});
+					}
+				})
+			);
+			const v = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						view: Table,
+						props: { of: 'jobs', columns: ['title', 'hours'] },
+						bolt: s.bolt,
+						catalog
+					},
+					'/'
+				)
+			);
+			element<HTMLElement>(document, '[data-view-trigger]').click();
+			flushSync();
+			const input = element<HTMLInputElement>(document, '[data-describe] input');
+			input.value = 'done by chloe';
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			flushSync();
+			element<HTMLButtonElement>(document, '[data-describe] button[type="button"]').click();
+			yield* browser(settle);
+			assert.match(textOf(element<HTMLElement>(document, '[data-view-loading]')), /applying/i);
+
+			pushStep?.({
+				id: 'l1',
+				label: 'Looking up Members matching “chloe”…',
+				status: 'running'
+			});
+			flushSync();
+			assert.match(
+				textOf(element<HTMLElement>(document, '[data-view-progress]')),
+				/Looking up Members matching “chloe”…/
+			);
+
+			pushStep?.({
+				id: 'l1',
+				label: 'Found 1 Members match for “chloe”',
+				status: 'done'
+			});
+			pushStep?.({
+				id: 'e1',
+				label: 'Building filter rules…',
+				status: 'running'
+			});
+			flushSync();
+			assert.match(
+				textOf(element<HTMLElement>(document, '[data-view-progress]')),
+				/Building filter rules…/
+			);
+
+			finish({
+				where: { status: { eq: 'done' } },
+				steps: [
+					{ id: 'l1', label: 'Found 1 Members match for “chloe”', status: 'done' },
+					{ id: 'e1', label: 'Built filter rules', status: 'done' },
+					{ id: 's1', label: 'Verified filter', status: 'done' }
+				]
+			});
+			yield* browser(settle);
+
+			const applied = element<HTMLButtonElement>(document, '[data-view-applied]');
+			assert.match(textOf(applied), /Filter and sort applied/);
+			assert.equal(document.querySelector('[data-view-timeline]'), null);
+
+			applied.click();
+			flushSync();
+			const items = [...document.querySelectorAll<HTMLElement>('[data-view-timeline] li')].map(
+				(li) => textOf(li).trim()
+			);
+			assert.deepEqual(items, [
+				'Found 1 Members match for “chloe”',
+				'Built filter rules',
+				'Verified filter'
+			]);
+
+			applied.click();
+			flushSync();
+			assert.equal(document.querySelector('[data-view-timeline]'), null);
+			yield* browser(v.done);
+		})
+);

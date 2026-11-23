@@ -58,7 +58,14 @@ Native dimensions, responsive sources and loading attributes pass through; provi
 	let image = $state<HTMLImageElement>();
 	let settled = $state<{ source: string; state: 'loaded' | 'error' }>();
 	const source = $derived(JSON.stringify([src ?? null, srcset ?? null, sizes ?? null]));
-	const phase = $derived(settled?.source === source ? settled.state : 'pending');
+	// Eager (above-the-fold/LCP) images stay visible during SSR without waiting for JS hydration to clear opacity: 0.
+	const phase = $derived(
+		settled?.source === source
+			? settled.state
+			: loading === 'eager' && (src || srcset)
+				? 'eager'
+				: 'pending'
+	);
 
 	// A cached or server-rendered image may have finished before its listeners were attached.
 	$effect(() => {

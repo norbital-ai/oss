@@ -6,7 +6,7 @@
 import { Effect, Schema } from 'effect';
 import { untrack } from 'svelte';
 import { watch } from 'runed';
-import type { Json, UiContext, ViewBolt } from '../client/contract.js';
+import type { DescribeStep, Json, UiContext, ViewBolt } from '../client/contract.js';
 import { optional_bolt_of } from '../client/context.js';
 import { clauses, fromWhere, rowsWhere, toWhere } from './where.js';
 import { complete, type FilterClock, type Node } from './node.js';
@@ -131,6 +131,12 @@ export function viewState(
 	let touched = $state(first.touched);
 	let notice = $state<string | null>(first.notice);
 	let describeError = $state<string | null>(null);
+	let describeSteps = $state<readonly DescribeStep[]>([]);
+	const upsertStep = (step: DescribeStep) => {
+		const idx = describeSteps.findIndex((s) => s.id === step.id);
+		describeSteps =
+			idx >= 0 ? describeSteps.map((s, i) => (i === idx ? step : s)) : [...describeSteps, step];
+	};
 
 	// the engine's catalogue, once per model: the builder's fields, operators and values
 	let offers = $state<readonly Offer[]>([]);
@@ -235,6 +241,9 @@ export function viewState(
 		get describeError() {
 			return describeError;
 		},
+		get describeSteps() {
+			return describeSteps;
+		},
 		setRows(next: readonly Node[]) {
 			rows = next;
 			touched = true;
@@ -250,6 +259,7 @@ export function viewState(
 			touched = true;
 			notice = null;
 			describeError = null;
+			describeSteps = [];
 		},
 		/** Rule 16a: the description's `Where` and `OrderBy` replace the rows (and the sort, when it asks for one). */
 		describe(text: string): Effect.Effect<boolean> {
@@ -263,29 +273,35 @@ export function viewState(
 				};
 				if (bolt?.describe === undefined || text.trim() === '') return Effect.succeed(false);
 				const model = o.model();
-				return bolt.describe(model, text.trim(), localFilterFields(model, o.catalog()[model])).pipe(
-					Effect.map((result) => {
-						const parts = clauses(result.where ?? {}).map((clause) =>
-							fromWhere(o.catalog(), o.model(), clause)
-						);
-						const keys =
-							result.order_by === undefined
-								? null
-								: parseOrder(
-										orderText(orderKeys(result.order_by)),
-										sortable(o.catalog()[o.model()], !o.model().startsWith('$'), o.catalog())
-									);
-						if (parts.some((part) => part === null) || (keys !== null && keys.dropped > 0))
-							return fail();
-						rows = parts.flatMap((part) => part ?? []);
-						touched = true;
-						notice = null;
-						describeError = null;
-						if (keys !== null) order = keys.keys;
-						return true;
-					}),
-					Effect.catch((error) => Effect.succeed(fail(error)))
-				);
+				describeError = null;
+				describeSteps = [];
+				return bolt
+					.describe(model, text.trim(), localFilterFields(model, o.catalog()[model]), upsertStep)
+					.pipe(
+						Effect.map((result) => {
+							if (result.steps !== undefined && result.steps.length > 0)
+								describeSteps = result.steps;
+							const parts = clauses(result.where ?? {}).map((clause) =>
+								fromWhere(o.catalog(), o.model(), clause)
+							);
+							const keys =
+								result.order_by === undefined
+									? null
+									: parseOrder(
+											orderText(orderKeys(result.order_by)),
+											sortable(o.catalog()[o.model()], !o.model().startsWith('$'), o.catalog())
+										);
+							if (parts.some((part) => part === null) || (keys !== null && keys.dropped > 0))
+								return fail();
+							rows = parts.flatMap((part) => part ?? []);
+							touched = true;
+							notice = null;
+							describeError = null;
+							if (keys !== null) order = keys.keys;
+							return true;
+						}),
+						Effect.catch((error) => Effect.succeed(fail(error)))
+					);
 			});
 		}
 	};

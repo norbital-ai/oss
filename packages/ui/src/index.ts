@@ -78,7 +78,7 @@ export {
 export { automation_outcome } from './actions/outcome.js';
 /** A page's write in one call: a `pending` flag while it runs, and its commit, hold or typed failure toasted. */
 export { use_act } from './actions/act.svelte.js';
-export { type UiContext, type ViewBolt } from './client/contract.js';
+export { type DescribeStep, type UiContext, type ViewBolt } from './client/contract.js';
 export { type Workspace } from './model/types.js';
 export { default as EmptyState } from './primitives/empty-state/EmptyState.svelte';
 export { default as TableSkeleton } from './read/TableSkeleton.svelte';

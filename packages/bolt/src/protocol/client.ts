@@ -1,5 +1,5 @@
 // Browser transport: one HttpClient path, decoding and reviving at the HTTP boundary.
-import { Duration, Effect, Schedule, Schema, SubscriptionRef } from 'effect';
+import { Duration, Effect, Schedule, Schema, Stream, SubscriptionRef } from 'effect';
 import {
 	FetchHttpClient,
 	HttpClient,
@@ -119,6 +119,47 @@ export function browserTransport(options: {
 			),
 			pdf
 		);
+	const requestSse = (
+		path: string,
+		body: Json,
+		onData: (data: string) => void,
+		headers: Readonly<Record<string, string>> = {}
+	) =>
+		execute(
+			HttpClientRequest.bodyJsonUnsafe(
+				HttpClientRequest.post(`${options.base ?? ''}${path}`, {
+					headers: { accept: 'text/event-stream', ...headers }
+				}),
+				body
+			),
+			(response) =>
+				Effect.gen(function* () {
+					const contentType = response.headers['content-type'] ?? '';
+					if (response.status >= 400 || !contentType.includes('text/event-stream')) {
+						return yield* json(response);
+					}
+					let dataLines: string[] = [];
+					const flush = () => {
+						if (dataLines.length === 0) return;
+						const payload = dataLines.join('\n');
+						dataLines = [];
+						onData(payload);
+					};
+					yield* response.stream.pipe(
+						Stream.decodeText(),
+						Stream.splitLines,
+						Stream.runForEach((rawLine) =>
+							Effect.sync(() => {
+								const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+								if (line === '') flush();
+								else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+							})
+						)
+					);
+					flush();
+					return null;
+				})
+		);
 	const upload = (path: string, file: Blob, headers: Readonly<Record<string, string>>) =>
 		Effect.tryPromise({
 			try: () => file.arrayBuffer(),
@@ -136,5 +177,5 @@ export function browserTransport(options: {
 				)
 			)
 		);
-	return { request, requestPdf, upload };
+	return { request, requestPdf, requestSse, upload };
 }

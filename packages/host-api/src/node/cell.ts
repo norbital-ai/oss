@@ -36,6 +36,12 @@ const CellApi = Schema.Struct({
 	links: fn<HostApi['links']>()
 });
 const decodeApi = Schema.decodeUnknownSync(CellApi);
+const decodeVersion = Schema.decodeUnknownOption(Schema.Struct({ version: Schema.Number }));
+/** Reads a cell's declared `HOST_API` version before decoding the full contract struct, enabling versioned adapters. */
+export const cell_version = (decoded: unknown): number | undefined => {
+	const result = decodeVersion(decoded);
+	return result._tag === 'Some' ? result.value.version : undefined;
+};
 /** A cell's `api`, decoded by the kernel's side of the membrane, as the `HostApi` it marshals. */
 export const cell_api = (decoded: unknown): HostApi => {
 	const { cookie_site, ...api } = decodeApi(decoded);

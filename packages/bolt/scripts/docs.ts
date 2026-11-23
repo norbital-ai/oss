@@ -58,8 +58,8 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 		ui: ['Table', 'Col', 'Form', 'Field', 'Section', 'RecordShell', 'Board', 'Chart']
 	},
 	representation: {
-		'bolt/page': ['PageBolt'],
-		ui: ['RecordShell', 'Form', 'Field', 'Section', 'Table', 'Col']
+		'bolt/page': ['PageBolt', 'PageContext'],
+		ui: ['RecordShell', 'RecordView', 'Form', 'Field', 'Section', 'Table', 'Col']
 	},
 	test: {
 		'bolt-cli/test': [
@@ -73,15 +73,24 @@ const CONTRACT_HEAD: { readonly [role: string]: string } = {
 
 \`\`\`ts
 // src/automation/+<name>.automation.ts
-import { automation } from '@norbital-ai/bolt';
+import { automation, new_id, type CreateInput, type UpdateInput } from '@norbital-ai/bolt';
 
 export default automation({
 	description: '<what it does>',
 	on: [{ cron: '0 2 * * *' }], // integrations own webhooks; row writes run their model's effect
 	policies: ['<policy>'],
 	run: function* (input, ctx) {
-		const { rows } = (yield* ctx.query({ <model>: { fields: ['<field>'] } })).<model>;
-		yield* ctx.act({ '<model>.create': [{ <field>: <value> }] });
+		const { rows } = (yield* ctx.query({ <model>: { fields: ['id', 'revision', '<field>'] } })).<model>;
+		const id = new_id('<model>');
+		const creates: CreateInput<'<model>'>[] = [{ <field>: <value> }];
+		const updates: { target: (typeof rows)[number]; set: UpdateInput<'<model>'> }[] = rows.map((row) => ({
+			target: row, // pass the read row directly (carries branded id + revision)
+			set: { <field>: <value> }
+		}));
+		yield* ctx.act({
+			...(creates.length > 0 ? { '<model>.create': creates.map((c, i) => (i === 0 ? { id, ...c } : c)) } : {}),
+			...(updates.length > 0 ? { '<model>.update': updates } : {})
+		});
 	}
 });
 \`\`\`
@@ -111,9 +120,9 @@ export default model('<name>', {
 		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', on_delete: 'restrict' }
 	},
 	outputs: { default: { fields: 'all' } },
-	// fields use the same nested tree as outputs: fields, then child-relation keys
-	create: { fields: ['<field>', '<other>'] },
-	update: { fields: ['<field>', '<other>'] },
+	// write trees mirror outputs: { fields: [...], <child_relation>: { fields: [...] } } (never nest create/update/delete inside a child relation)
+	create: { fields: ['<field>', '<other>'], <lines>: { fields: ['<child_field>'] } },
+	update: { fields: ['<field>', '<other>'], <lines>: { fields: ['<child_field>'] } },
 	delete: {}
 });
 \`\`\`
@@ -162,26 +171,65 @@ export default app({
 </script>
 
 <Table {ctx} of="<model>" />
-\`\`\``,
-	representation: `A model's custom record screen lives beside its model at \`src/data/model/<model>/+representation.svelte\`. Wrap it in \`RecordShell\` (which owns header, state moves, approvals, history and save/cancel) and arrange fields with \`Section\`, \`Field\` and embedded child \`Table\`s:
+\`\`\`
+
+Common UI props (host renders \`AppShell\` automatically — pages never import it):
+- \`<Table {ctx} of="<model>" where? order_by? columns? actions? toolbar? empty? on_open? />\` — \`actions\` takes \`RowAction<R>[]\` (\`{ label, confirm?, run(row) }\`, where \`run\` returns an \`Effect\` or \`void\`).
+- \`<Board {ctx} of="<model>" by="<state_field>" card={['<f1>', '<f2>']} lanes? where? order_by? toolbar? on_open? />\` — \`card\` is a tuple of ≤4 field names or a snippet \`[{ row }]\`.
+- \`<RecordShell {ctx} of="<model>" mode={view.mode} {...record === null ? {} : { id: record.id }}>\` wrapping \`<Form {ctx} of="<model>" ...>\` with \`<Section icon="lucide:<icon>" title="...">\`, \`<Field {ctx} name="..." />\`, and child \`<Table {ctx} of="<child>" where={{ <parent>: { eq: record.id } }} />\` (see the representation starter below).
+- \`<Button variant? size? onclick? disabled?>\`, \`<Tabs tabs={[{ name, title, body }]} bind:value />\`, \`<Sheet bind:open title="..." side? />\`.
+- Live page reads & RPCs: \`const q = ctx.query({ <model>: { fields: [...], where?, order_by?, limit? } })\` — read \`q.current?.<model>.rows ?? []\`, \`q.loading\`, \`q.error\`; start automations with \`ctx.run('<automation>', input)\`.`
+	,
+	representation: `A model's custom record screen lives beside its model at \`src/data/model/<model>/+representation.svelte\`. The shell passes \`{ view, ctx }\` (\`RecordView<'<model>'>\` and \`PageContext\`) — **never** \`id\`. Derive \`record = view.mode === 'create' ? null : view.record\`, omit \`id\` when creating (passing \`id: undefined\` fails with \`ReadFailed\`), pass \`{ctx}\` to every \`<Field>\`, always give every \`<Section>\` an appropriate \`icon\`, and guard child \`<Table>\`s with \`{#if record}\`:
 
 \`\`\`svelte
 <!-- src/data/model/<model>/+representation.svelte -->
 <script lang="ts">
-	import { Field, RecordShell, Section } from '@norbital-ai/ui';
-	let { ctx, id } = $props();
+	import type { PageContext } from '@norbital-ai/bolt/page';
+	import { Field, Form, RecordShell, Section, Table, open_record, type RecordView } from '@norbital-ai/ui';
+	import { Grid } from '@norbital-ai/ui/layout';
+
+	let { view, ctx }: { view: RecordView<'<model>'>; ctx: PageContext } = $props();
+	const record = $derived(view.mode === 'create' ? null : view.record);
 </script>
 
-<RecordShell {ctx} of="<model>" {id}>
-	<Section title="Details">
-		<Field name="<field>" />
-	</Section>
+<RecordShell
+	{ctx}
+	of="<model>"
+	mode={view.mode}
+	{...record === null ? { values: view.mode === 'create' ? view.values : {} } : { id: record.id }}
+>
+	<Form
+		{ctx}
+		of="<model>"
+		mode={view.mode === 'create' ? 'create' : 'update'}
+		{...record === null
+			? { values: view.mode === 'create' ? view.values : {} }
+			: { id: record.id, record }}
+		on_outcome={(outcome) => {
+			if (view.mode === 'create' && outcome.kind === 'committed' && outcome.records[0] !== undefined)
+				open_record('<model>', outcome.records[0].id);
+		}}
+	>
+		{#snippet children()}
+			<Section icon="lucide:file-text" first name="details" title={ctx.t('section.details')}>
+				<Grid minimum="compact">
+					<Field {ctx} name="<field>" />
+				</Grid>
+			</Section>
+			{#if record}
+				<Section icon="lucide:list" name="lines" title={ctx.t('section.lines')}>
+					<Table {ctx} of="<child>" where={{ <parent>: { eq: record.id } }} />
+				</Section>
+			{/if}
+		{/snippet}
+	</Form>
 </RecordShell>
 \`\`\``,
-	test: `Tests are \`tests/<name>.test.ts\`. Everything comes from the kit, and \`workspace_test\` runs them.
+	test: `Tests are \`tests/<name>.test.ts\`. Everything comes from the kit, and \`workspace_test\` runs them (Vitest does **not** type-check tests — always run \`workspace_diagnose {}\` after editing any test file before committing or merging).
 - \`caller.act(...)\` returns \`{ kind: 'committed', records: [{ model, id, revision }] }\` (or \`'held'\`), NOT a per-verb map.
 - Brand a record id for \`ref\` fields or \`target\` with \`Schema.decodeUnknownSync(id_of('<model>'))(record.id)\` from \`@norbital-ai/bolt\`.
-- \`caller.query(...)\` returns \`Record<string, QueryPage | AggregateResult>\`; narrow each root with \`page !== undefined && 'rows' in page ? page.rows : []\`.
+- \`caller.query(...)\` returns \`Record<string, QueryPage | AggregateResult>\`; narrow each root inline with \`page !== undefined && 'rows' in page ? page.rows : []\` (never cast or write an unnarrowed \`rowsOf\` helper).
 - \`caller.run('<automation>', input, JobResult)\` starts an automation; call \`yield* t.run_due()\` to drain queued runs.
 
 \`\`\`ts

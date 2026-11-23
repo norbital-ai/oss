@@ -1,4 +1,5 @@
 import { uuid } from '../engine/port.ts';
+import { sha256_hex } from '@norbital-ai/store';
 import { activeEnvoysOf, activeEnvoysRead } from '../engine/envoys/spec.ts';
 // The shell's host half: the session routes (`/__bolt/session/*`), the
 // caller's Authority for every data route (session cookie, API key, visitor, preview-as), the visitor gates in front
@@ -879,12 +880,47 @@ const makeShell = Effect.gen(function* () {
 	});
 	const boot = (request: HttpServerRequest.HttpServerRequest, x: Caller) =>
 		bootState(request, x).pipe(
-			Effect.map((state) =>
-				state._tag === 'Refused'
-					? state.response
-					: json({ value: state.boot }, 200, { ...state.headers })
-			)
+			Effect.map((state) => {
+				if (state._tag === 'Refused') return state.response;
+				const etag = `"${sha256_hex(JSON.stringify(state.boot))}"`;
+				const ifNoneMatch = request.headers['if-none-match'];
+				if (
+					ifNoneMatch !== undefined &&
+					ifNoneMatch
+						.split(',')
+						.some((tag) => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === etag)
+				)
+					return HttpServerResponse.empty({
+						status: 304,
+						headers: { etag, 'cache-control': 'private, no-cache', ...state.headers }
+					});
+				return json({ value: state.boot }, 200, {
+					etag,
+					'cache-control': 'private, no-cache',
+					...state.headers
+				});
+			})
 		);
+	/** Lightweight metadata probe for client cutover detection and notice refresh (zero catalog/DB overhead). */
+	const meta = (x: Caller) =>
+		Effect.gen(function* () {
+			const noticePort = c.notice;
+			const auth = x.authority;
+			const notice =
+				auth !== null && auth.actor.kind === 'member' && noticePort !== undefined
+					? yield* hostCall(() => noticePort(auth))
+					: null;
+			return json(
+				{
+					value: {
+						...(c.client === undefined ? {} : { client: c.client }),
+						...(notice === null ? {} : { notice })
+					}
+				},
+				200,
+				{ 'cache-control': 'private, no-store' }
+			);
+		});
 	const publicPage = Effect.fn('shell.publicPage')(function* (
 		request: HttpServerRequest.HttpServerRequest,
 		target: PublicPageRoute
@@ -1120,6 +1156,7 @@ const makeShell = Effect.gen(function* () {
 		x: Caller
 	) {
 		if (path === SHELL && request.method === 'GET') return yield* boot(request, x);
+		if (path === `${SHELL}/meta` && request.method === 'GET') return yield* meta(x);
 		const auth = x.authority;
 		if (auth === null || auth.actor.kind !== 'member')
 			return refused('unauthenticated', 'Sign in first.', 401);

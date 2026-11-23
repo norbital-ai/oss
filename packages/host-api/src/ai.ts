@@ -194,6 +194,8 @@ export type AiRequest = {
 	/** Images and documents for the model to see; `call` is the tool call that opened one, which it follows. */
 	files?: readonly { mime: string; bytes: Uint8Array; call?: string }[];
 	continuation?: string;
+	/** Reasoning effort hint for fast/structured utility calls; omitted uses the provider default. */
+	reasoning_effort?: 'low' | 'medium' | 'high';
 };
 /** Bytes supplied by a host, or a stored file the provider reads outside the cell. */
 export type EmbedInput =

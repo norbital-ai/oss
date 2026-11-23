@@ -10,7 +10,7 @@
 	import { CONTROL } from '../kinds/classes.js';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { cn } from '../primitives/utils.js';
-	import type { Json } from '../client/contract.js';
+	import type { DescribeStep, Json } from '../client/contract.js';
 	import { bolt_of, optional_bolt_of, words_of } from '../client/context.js';
 	import { fromWhere } from './where.js';
 	import { nodeParts, pathLabel, sortText, type Part } from './text.js';
@@ -52,7 +52,10 @@
 			| 'setOrder'
 			| 'clear'
 			| 'describe'
-		> & { readonly describeError?: string | null };
+		> & {
+			readonly describeError?: string | null;
+			readonly describeSteps?: readonly DescribeStep[];
+		};
 		catalog: { readonly [c: string]: ModelExposure };
 		model: string;
 		/** The author's `where`: shown, never removable. */
@@ -69,7 +72,12 @@
 	let text = $state(''),
 		busy = $state(false),
 		applied = $state(false),
-		failed = $state(false);
+		failed = $state(false),
+		showTimeline = $state(false);
+	const steps = $derived(view.describeSteps ?? []);
+	const currentStep = $derived(
+		[...steps].reverse().find((step) => step.status === 'running') ?? steps.at(-1)
+	);
 	watch(
 		() => [active, view, view.offersKey],
 		() => {
@@ -111,7 +119,7 @@
 		e?.preventDefault();
 		if (busy || text.trim() === '') return;
 		busy = true;
-		applied = failed = false;
+		applied = failed = showTimeline = false;
 		fork(
 			view.describe(text).pipe(
 				Effect.tap((value) =>
@@ -168,27 +176,117 @@
 				type="button"
 				class="text-muted-foreground hover:text-foreground shrink-0 text-xs"
 				data-clear
-				onclick={() => view.clear()}>{msg(bolt, 'view.clearAll')}</button
+				onclick={() => {
+					applied = failed = showTimeline = false;
+					view.clear();
+				}}>{msg(bolt, 'view.clearAll')}</button
 			>
 		{/if}
 	</header>
-	{#if busy}<p role="status" class="text-muted-foreground text-xs" data-view-loading>
-			{msg(bolt, 'view.applying')}
-		</p>
-	{:else if applied}<p role="status" class="text-xs text-primary" data-view-applied>
-			{msg(bolt, 'view.applied')}
-		</p>{/if}
+	{#if busy}
+		<div role="status" class="flex flex-col gap-1.5" data-view-loading>
+			{#if steps.length > 0}
+				<button
+					type="button"
+					class="text-muted-foreground hover:text-foreground inline-flex w-fit cursor-pointer items-center gap-1.5 text-left text-xs transition-colors"
+					aria-expanded={showTimeline}
+					data-view-progress
+					onclick={() => (showTimeline = !showTimeline)}
+				>
+					<Icon icon="lucide:loader-circle" class="size-3 shrink-0 animate-spin" />
+					<span>{currentStep?.label ?? msg(bolt, 'view.applying')}</span>
+					<Icon
+						icon="lucide:chevron-right"
+						class={cn('size-3 shrink-0 transition-transform', showTimeline && 'rotate-90')}
+					/>
+				</button>
+			{:else}
+				<p class="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
+					<Icon icon="lucide:loader-circle" class="size-3 shrink-0 animate-spin" />
+					<span>{msg(bolt, 'view.applying')}</span>
+				</p>
+			{/if}
+		</div>
+	{:else if applied}
+		{#if steps.length > 0}
+			<div role="status" class="flex flex-col gap-1">
+				<button
+					type="button"
+					class="text-primary hover:text-primary/80 inline-flex w-fit cursor-pointer items-center gap-1 text-left text-xs transition-colors"
+					aria-expanded={showTimeline}
+					data-view-applied
+					data-view-progress
+					onclick={() => (showTimeline = !showTimeline)}
+				>
+					<span>{msg(bolt, 'view.applied')}</span>
+					<Icon
+						icon="lucide:chevron-right"
+						class={cn('size-3 shrink-0 transition-transform', showTimeline && 'rotate-90')}
+					/>
+				</button>
+			</div>
+		{:else}
+			<p role="status" class="text-xs text-primary" data-view-applied>
+				{msg(bolt, 'view.applied')}
+			</p>
+		{/if}
+	{/if}
 	<!-- a description that built nothing is an error the person must act on, never a quiet note beside "applied" -->
-	{#if failed && (view.describeError ?? view.notice)}<p
-			role="alert"
-			class="text-destructive flex items-start gap-1 text-xs"
-			data-view-error
-		>
-			<Icon icon="lucide:circle-alert" class="mt-0.5 size-3.5 shrink-0" /><span>{view.describeError ?? view.notice}</span>
-		</p>
+	{#if failed && (view.describeError ?? view.notice)}
+		<div class="flex flex-col gap-1">
+			<p role="alert" class="text-destructive flex items-start gap-1 text-xs" data-view-error>
+				<Icon icon="lucide:circle-alert" class="mt-0.5 size-3.5 shrink-0" /><span
+					>{view.describeError ?? view.notice}</span
+				>
+			</p>
+			{#if steps.length > 0}
+				<button
+					type="button"
+					class="text-muted-foreground hover:text-foreground inline-flex w-fit cursor-pointer items-center gap-1 text-left text-xs transition-colors"
+					aria-expanded={showTimeline}
+					data-view-progress
+					onclick={() => (showTimeline = !showTimeline)}
+				>
+					<span>{msg(bolt, 'view.steps')} ({steps.length})</span>
+					<Icon
+						icon="lucide:chevron-right"
+						class={cn('size-3 shrink-0 transition-transform', showTimeline && 'rotate-90')}
+					/>
+				</button>
+			{/if}
+		</div>
 	{:else if view.notice}<p role="status" class="text-muted-foreground text-xs" data-view-notice>
 			{view.notice}
 		</p>{/if}
+	{#if showTimeline && steps.length > 0}
+		<ol
+			class="border-border/70 ml-1 flex flex-col gap-1 border-l pl-2.5 text-xs"
+			data-view-timeline
+		>
+			{#each steps as step (step.id)}
+				<li class="flex items-start gap-1.5" data-step-status={step.status}>
+					{#if step.status === 'running'}
+						<Icon
+							icon="lucide:loader-circle"
+							class="text-muted-foreground mt-0.5 size-3 shrink-0 animate-spin"
+						/>
+					{:else if step.status === 'error'}
+						<Icon icon="lucide:circle-alert" class="text-destructive mt-0.5 size-3 shrink-0" />
+					{:else}
+						<Icon icon="lucide:check" class="text-primary mt-0.5 size-3 shrink-0" />
+					{/if}
+					<div class="min-w-0 flex-1">
+						<span class={step.status === 'error' ? 'text-destructive' : 'text-foreground/90'}
+							>{step.label}</span
+						>
+						{#if step.detail}
+							<p class="text-muted-foreground mt-0.5 break-words text-[11px]">{step.detail}</p>
+						{/if}
+					</div>
+				</li>
+			{/each}
+		</ol>
+	{/if}
 	{#if authorParts !== null}
 		<p class="text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs" data-author-where>
 			<Glyph name="lock" class="size-3 shrink-0" /><span class="shrink-0"

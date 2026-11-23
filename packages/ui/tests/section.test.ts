@@ -126,15 +126,20 @@ it.live(
 		})
 );
 
-it.live('an icon replaces the heading chevron; a section without one keeps the chevron', () =>
+it.live('every titled section renders an icon box (defaulting when omitted) and aligns its body to the title label', () =>
 	Effect.gen(function* () {
 		const { target } = yield* browser(() => show());
 		const icon = element<HTMLElement>(section(target, 'Job'), '[data-section-icon]');
 		assert.equal(icon.querySelectorAll('svg').length, 2, 'the icon and the hover chevron');
+		const fallbackIcon = element<HTMLElement>(section(target, 'Notes'), '[data-section-icon]');
 		assert.equal(
-			section(target, 'Notes').querySelector('[data-section-icon]'),
-			null,
-			'no icon: the plain chevron'
+			fallbackIcon.querySelectorAll('svg').length,
+			2,
+			'omitted icon falls back to the default section icon and hover chevron'
+		);
+		assert.ok(
+			body(target, 'Job').className.includes('ps-[1.625rem]'),
+			'section body carries inherent start padding to align content with the section title'
 		);
 	})
 );

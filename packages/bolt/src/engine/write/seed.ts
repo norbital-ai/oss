@@ -11,6 +11,7 @@ import { DbError, type Sql } from '@norbital-ai/host-api';
 import { LIMITS, utf8Bytes, type RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
+import { SYSTEM } from '../../system/index.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalog_of, toOwnSql } from '../access/pred.ts';
 import { null_row_sql, q } from '@norbital-ai/store';
@@ -19,6 +20,11 @@ import { constraintIndex } from '../schema/plan.ts';
 import { history_piece, rollups, seqParts, seqScope } from './commit.ts';
 import { cells, database_value } from '@norbital-ai/store';
 import { decided, Chain } from './sql.ts';
+/** Sync checkpoint system models a cutover seed may carry through the bounded chunk restorer (never secrets or envoys). */
+export const SYNC_SEED = ['sys_sync', 'sys_sync_row'] as const;
+const isSyncSeed = (c: string): c is (typeof SYNC_SEED)[number] => SYNC_SEED.some((s) => s === c);
+const modelDecl = (m: EngineManifest, c: string) =>
+	m.models[c] ?? (isSyncSeed(c) ? SYSTEM.models[c] : undefined);
 /** Rows per model, as a seed pack's `seed/<model>.json` holds them. */
 export type SeedPack = {
 	readonly [model: string]: readonly RowData[];
@@ -39,7 +45,7 @@ function decodeSeedRow(
 	i: number
 ): void {
 	const model = cat.models.get(c);
-	const declaration = m.models[c];
+	const declaration = modelDecl(m, c);
 	if (model === undefined || declaration === undefined)
 		throw BoltError.make('seed_decode', 'decode', `seed: unknown model '${c}'`);
 	if (row === undefined) return;
@@ -104,7 +110,7 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 		Effect.gen(function* () {
 			const values: Record<string, Json> = { ...row };
 			for (const [field, value] of Object.entries(row)) {
-				const kind = m.models[model]?.fields[field];
+				const kind = modelDecl(m, model)?.fields[field];
 				if (value === null || (kind?.many !== true && kind?.kind !== 'object')) continue;
 				const decoded = yield* Schema.decodeUnknownEffect(input_schema(kind))(value).pipe(
 					Effect.mapError((error) =>
@@ -174,8 +180,8 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 	 * is in. A row past the budget is read again by the next step; one larger alone is its own chunk. */
 	const chunkOf = (c: string, from: number) =>
 		Effect.gen(function* () {
-			const derived = rollups(m, cat, c).map((r) => r.field);
-			const model = cat.models.get(c), declaration = m.models[c];
+			const derived = isSyncSeed(c) ? [] : rollups(m, cat, c).map((r) => r.field);
+			const model = cat.models.get(c), declaration = modelDecl(m, c);
 			if (model === undefined || declaration === undefined)
 				return yield* BoltError.make('seed_decode', 'decode', `seed: unknown model '${c}'`);
 			const fields = model.fields;
@@ -242,9 +248,13 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 		});
 	const finish = Effect.fnUntraced(function* () {
 		const statements: Sql[] = [];
+		const rolledModels: string[] = [];
 		// roll-ups, children first (a roll-up may sum another), derived by the statement and compared with every given value
-		for (const c of [...order].reverse())
-			for (const r of yield* Effect.try({ try: () => rollups(m, cat, c), catch: decodeFailure })) {
+		for (const c of [...order].reverse()) {
+			if (isSyncSeed(c)) continue;
+			const modelRollups = yield* Effect.try({ try: () => rollups(m, cat, c), catch: decodeFailure });
+			if (modelRollups.length > 0) rolledModels.push(c);
+			for (const r of modelRollups) {
 				const ch = new Chain();
 				const where = r.where === undefined ? 'true' : yield* toOwnSql(m, r.child, r.where, 'c', ch);
 				const agg = r.kind === 'count' ? 'count(*)' : `coalesce(sum(c.${q(r.childField)}), 0)`;
@@ -273,6 +283,21 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 					]
 				});
 			}
+		}
+		// Seeded rollup derivations bump parent revisions; keep seeded acked_revision aligned so already-synced rows do not backfill.
+		if (order.includes('sys_sync_row')) {
+			for (const c of rolledModels) {
+				const syncNames = Object.keys(m.exposures[c]?.syncs ?? {}).map((sync) => `${c}.sync.${sync}`);
+				if (syncNames.length === 0) continue;
+				statements.push({
+					text: `UPDATE sys_sync_row r SET acked_revision = greatest(r.acked_revision, p.revision)
+					FROM ${q(c)} p
+					WHERE r.sync IN (SELECT jsonb_array_elements_text($1::jsonb)) AND r.record = p.id::text
+					AND r.acked_revision IS NOT NULL AND r.acked_revision < p.revision`,
+					params: [JSON.stringify(syncNames)]
+				});
+			}
+		}
 		// each `seq` counter to the highest seeded value of its period and scope
 		if (counters.size > 0)
 			statements.push({
@@ -407,6 +432,8 @@ function seqValue(
 }
 /** Relationship order: a model after every other model its required refs name (self-refs go in one statement). */
 function topological(m: EngineManifest, models: readonly string[]): string[] {
+	const tenant = models.filter((c) => !isSyncSeed(c));
+	const syncModels = SYNC_SEED.filter((c) => models.includes(c));
 	const out: string[] = [];
 	const visit = (c: string, path: Set<string>) => {
 		if (out.includes(c) || path.has(c)) return;
@@ -415,10 +442,10 @@ function topological(m: EngineManifest, models: readonly string[]): string[] {
 			const [from] = key.split('.');
 			if (from !== c) continue;
 			for (const t of typeof rel.to === 'string' ? [rel.to] : rel.to)
-				if (t !== c && models.includes(t)) visit(t, path);
+				if (t !== c && tenant.includes(t)) visit(t, path);
 		}
 		out.push(c);
 	};
-	for (const c of models) visit(c, new Set());
-	return out;
+	for (const c of tenant) visit(c, new Set());
+	return [...out, ...syncModels];
 }

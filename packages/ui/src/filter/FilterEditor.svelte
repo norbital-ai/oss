@@ -25,7 +25,7 @@ Edits a saved native filter (`where` and `order_by`) of one model, apart from an
 </script>
 
 <script lang="ts">
-	import type { UiContext } from '../client/contract.js';
+	import type { DescribeStep, UiContext } from '../client/contract.js';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
 	import { bolt_of } from '../client/context.js';
@@ -46,6 +46,12 @@ Edits a saved native filter (`where` and `order_by`) of one model, apart from an
 	let rows = $state<readonly Node[]>([]);
 	let order = $state<readonly SortKey[]>([]);
 	let notice = $state<string | null>(null);
+	let describeSteps = $state<readonly DescribeStep[]>([]);
+	const upsertStep = (step: DescribeStep) => {
+		const idx = describeSteps.findIndex((s) => s.id === step.id);
+		describeSteps =
+			idx >= 0 ? describeSteps.map((s, i) => (i === idx ? step : s)) : [...describeSteps, step];
+	};
 	let unsupported = $state(false);
 	let source = $state('');
 	let sourceVariables: FilterVariables | undefined;
@@ -154,6 +160,9 @@ Edits a saved native filter (`where` and `order_by`) of one model, apart from an
 		get notice() {
 			return notice;
 		},
+		get describeSteps() {
+			return describeSteps;
+		},
 		loadOffers,
 		setRows(next: readonly Node[]) {
 			if (readonly) return;
@@ -172,6 +181,7 @@ Edits a saved native filter (`where` and `order_by`) of one model, apart from an
 			rows = [];
 			order = [];
 			notice = null;
+			describeSteps = [];
 			unsupported = false;
 			changed();
 		},
@@ -179,27 +189,31 @@ Edits a saved native filter (`where` and `order_by`) of one model, apart from an
 			return Effect.suspend(() => {
 				if (readonly || bolt.describe === undefined || text.trim() === '')
 					return Effect.succeed(false);
-				return bolt.describe(model, text.trim(), localFilterFields(model, catalog[model])).pipe(
-					Effect.map((result) => {
-						const parsed = parse(result);
-						if (parsed === null) {
-							notice = msg(bolt, 'view.describeFailed'
-							);
-							return false;
-						}
-						rows = parsed.rows;
-						if (result.order_by !== undefined) order = parsed.order;
-						notice = null;
-						changed();
-						return true;
-					}),
-					Effect.catch((error) =>
-						Effect.sync(() => {
-							notice = error.message;
-							return false;
-						})
-					)
-				);
+				describeSteps = [];
+				return bolt
+					.describe(model, text.trim(), localFilterFields(model, catalog[model]), upsertStep)
+					.pipe(
+						Effect.map((result) => {
+							if (result.steps !== undefined && result.steps.length > 0)
+								describeSteps = result.steps;
+							const parsed = parse(result);
+							if (parsed === null) {
+								notice = msg(bolt, 'view.describeFailed');
+								return false;
+							}
+							rows = parsed.rows;
+							if (result.order_by !== undefined) order = parsed.order;
+							notice = null;
+							changed();
+							return true;
+						}),
+						Effect.catch((error) =>
+							Effect.sync(() => {
+								notice = error.message;
+								return false;
+							})
+						)
+					);
 			});
 		}
 	};

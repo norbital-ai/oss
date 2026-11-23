@@ -8,9 +8,10 @@
 	let {
 		value,
 		label,
+		vertical = false,
 		children,
 		class: className
-	}: { value: string; label: string; children: Snippet; class?: string } = $props();
+	}: { value: string; label: string; vertical?: boolean; children: Snippet; class?: string } = $props();
 	const inset = provisional_inset();
 </script>
 
@@ -19,7 +20,7 @@
 	aria-label={label}
 	class={cn(
 		'min-h-0 min-w-0 overflow-x-clip overflow-y-auto',
-		inset.padded && INSET_X_CLASS,
+		inset.padded && [INSET_X_CLASS, vertical && '@2xl:ps-0'],
 		className
 	)}
 >

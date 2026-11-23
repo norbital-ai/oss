@@ -6,6 +6,7 @@ import type { CustomFieldEntry, RepresentationLoader } from '@norbital-ai/ui';
 import type { BoltConfig } from '../page/bolt.ts';
 import type { IntegrationSetupEntry } from './integration/setup.ts';
 import { await_device, resolve_device, type DeviceApi } from '../page/device.ts';
+import { chosenLocale } from './i18n.ts';
 import type { ShellManifest } from './nav.ts';
 import type { AgentRequest, ShellBolt, ShellPageContext } from './runtime.ts';
 import Shell from './Shell.svelte';
@@ -113,6 +114,21 @@ export type ShellMountConfig = {
 	/** The live stream's source; default the browser's `EventSource` (tests and `sweep()` give their own). */
 	open_stream?: BoltConfig['open_stream'];
 };
+
+/** Resolves only the active viewer locale catalog so unused locale chunks never enter the initial JS download. */
+export async function load_active_locale(
+	workspaceLocale: string,
+	loaders: Readonly<Record<string, () => Promise<{ readonly default: { readonly [key: string]: string } }>>>
+): Promise<{ readonly [locale: string]: { readonly [key: string]: string } }> {
+	const printing = typeof location !== 'undefined' && new URL(location.href).searchParams.has('print');
+	const tag = (printing ? workspaceLocale : chosenLocale(workspaceLocale)).toLowerCase();
+	const primary = tag.split('-')[0] ?? tag;
+	const chosenKey = loaders[tag] !== undefined ? tag : loaders[primary] !== undefined ? primary : undefined;
+	const loader = chosenKey === undefined ? undefined : loaders[chosenKey];
+	if (chosenKey === undefined || loader === undefined) return {};
+	const mod = await loader();
+	return { [chosenKey]: mod.default };
+}
 
 /** Mounts the workspace browser shell with optional Device supplied by its embedding host. */
 export function mount_shell(target: HTMLElement, config: ShellMountConfig): () => Promise<void> {

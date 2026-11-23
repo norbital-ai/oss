@@ -641,11 +641,36 @@ export const PreviewPdf = Schema.Struct({
 	source: ConvertSource,
 	options: Schema.Struct(PdfOptions)
 });
-const Describe = Schema.Struct({
+export const Describe = Schema.Struct({
 	model: Schema.String,
 	text: Schema.String,
 	fields: Schema.optionalKey(Schema.Array(LocalFilterField))
 });
+/** One progress step streamed by `POST /__bolt/filter/describe`. */
+export const DescribeStepSchema = Schema.Struct({
+	id: Schema.String,
+	label: Schema.String,
+	detail: Schema.optionalKey(Schema.String),
+	status: Schema.Literals(['running', 'done', 'error'])
+});
+export type DescribeStep = typeof DescribeStepSchema.Type;
+/** One SSE event emitted by `POST /__bolt/filter/describe`. */
+export const DescribeStreamEvent = Schema.Union([
+	Schema.Struct({ t: Schema.Literal('step'), step: DescribeStepSchema }),
+	Schema.Struct({
+		t: Schema.Literal('done'),
+		where: Schema.optionalKey(Schema.Json),
+		order_by: Schema.optionalKey(Schema.Json),
+		steps: Schema.optionalKey(Schema.Array(DescribeStepSchema))
+	}),
+	Schema.Struct({
+		t: Schema.Literal('error'),
+		code: Schema.String,
+		message: Schema.String,
+		steps: Schema.optionalKey(Schema.Array(DescribeStepSchema))
+	})
+]);
+export type DescribeStreamEvent = typeof DescribeStreamEvent.Type;
 const Options = Schema.Struct({
 	model: Schema.String,
 	fields: Schema.optionalKey(Schema.Array(LocalFilterField))

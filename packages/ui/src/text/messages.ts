@@ -296,6 +296,7 @@ const MESSAGES = {
 	'view.showConditions': 'Show conditions',
 	'view.sort': 'Sort',
 	'view.sortField': 'Sort by',
+	'view.steps': 'Steps',
 	'view.sync': 'Sync now',
 	'view.syncButton': 'Sync',
 	'view.syncFrom': 'Pull the latest records from {source}',

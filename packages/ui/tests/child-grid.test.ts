@@ -458,3 +458,83 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 		}
 	})
 );
+
+it.effect('requests companion currency fields for money columns and formats them in row currency', () =>
+	Effect.gen(function* () {
+		const moneyInput = {
+			model: 'lines',
+			parent: 'job',
+			owned: true,
+			create: { columns: ['price'] },
+			update: { columns: ['price'] },
+			delete: true
+		} as const;
+		const moneyCatalog = {
+			jobs: {
+				record_label: 'record.title',
+				label: ['title'],
+				fields: { title: { kind: 'text' } },
+				update: { columns: ['title'], with: { lines: moneyInput } },
+				children: { lines: moneyInput }
+			},
+			lines: {
+				record_label: 'record.price',
+				label: ['price'],
+				fields: {
+					currency: { kind: 'currency' },
+					price: { kind: 'money', currency: 'currency' }
+				},
+				relations: { job: { targets: ['jobs'] } },
+				create: { columns: ['price', 'job'] },
+				update: { columns: ['price'] },
+				delete: true
+			}
+		} satisfies NonNullable<KindsHost['catalog']>;
+		const { bolt, script, reads, capabilities: origCaps } = yield* browser(() => fixture(moneyCatalog));
+		script.capabilities = (model, id) => {
+			const c = origCaps(model, id);
+			return model === 'lines'
+				? { ...c, fields: { ...c.fields, price: { writable: true, proposal: false, reasons: [] } } }
+				: c;
+		};
+		script.read = (model, options) => {
+			reads.push({ c: model, options });
+			if (model !== 'lines') return { rows: [], next: null };
+			const row = { id: 'l1', revision: 7, job: 'j1', currency: 'CNY', price: '18.00' };
+			return {
+				rows: [
+					Object.fromEntries(
+						Object.entries(row).filter(
+							([field]) =>
+								field === 'id' || options.fields === undefined || options.fields.includes(field)
+						)
+					)
+				],
+				next: null
+			};
+		};
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt,
+				catalog: moneyCatalog,
+				part: 'child',
+				view: ChildGrid,
+				props: { of: 'jobs', id: 'j1', relation: 'lines', columns: ['price'] }
+			}
+		});
+		try {
+			yield* browser(() => settle());
+			const lineRead = reads.find((entry) => entry.c === 'lines');
+			assert.ok(lineRead);
+			assert.ok(lineRead.options.fields?.includes('currency'));
+			const rendered = textOf(target);
+			assert.ok(rendered.includes('CNY') || rendered.includes('CN¥') || rendered.includes('¥'), `expected CNY formatting, got: ${rendered}`);
+			assert.ok(!rendered.includes('SGD'), `unexpected SGD fallback in: ${rendered}`);
+		} finally {
+			yield* browser(() => unmount(app));
+			target.remove();
+		}
+	})
+);

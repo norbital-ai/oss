@@ -653,7 +653,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					if (found === undefined || found === SKILL_FILE) missing.push(requested);
 					else resolved.push(found);
 				}
-				if (missing.length > 0)
+				if (resolved.length === 0)
 					return err(
 						`No file(s) ${missing.map((f) => `'${f}'`).join(', ')} in ${i.name}. Files: ${own.slice(0, 50).join(', ')}`
 					);
@@ -668,6 +668,12 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					{
 						skill: i.name,
 						files: loaded.map(({ file }) => file),
+						...(missing.length === 0
+							? {}
+							: {
+									missing,
+									available: own.slice(0, 50)
+								}),
 						text: loaded.map(({ file, text }) => `<!-- ${file} -->\n${text}`).join('\n\n')
 					},
 					'text'

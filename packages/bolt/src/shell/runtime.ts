@@ -33,6 +33,7 @@ import {
 	RunViewAnswer,
 	SettingsAnswer,
 	ShellBootAnswer,
+	ShellMetaAnswer,
 	ShellError,
 	ShellWorkspace,
 	SignInMethodsAnswer,
@@ -219,6 +220,7 @@ export function shell_api(
 					})
 				)
 			),
+		meta: () => call(ShellMetaAnswer, 'GET', `${SHELL}/meta`),
 		methods: () => call(SignInMethodsAnswer, 'GET', PATHS.session.methods),
 		send_code: (address: string, via: 'sms' | 'whatsapp' = 'sms') =>
 			done('POST', PATHS.session.code, { address, via }),

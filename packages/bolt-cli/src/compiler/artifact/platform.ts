@@ -250,10 +250,10 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 				input: [...ENTRIES.map((path) => join(BOLT, `${path}${EXT}`)), ...modules],
 				preserveEntrySignatures: 'strict',
 				output: {
-					// Keep transfers short on lossy links, preserving module initialization across chunks.
+					// Keep transfers short on lossy links without shattering startup into dozens of micro-chunks.
 					strictExecutionOrder: true,
 					codeSplitting: {
-						groups: [{ name: 'shell', test: (id) => startup.has(id), maxSize: 950_000 }]
+						groups: [{ name: 'shell', test: (id) => startup.has(id), maxSize: 2_500_000 }]
 					}
 				}
 			}

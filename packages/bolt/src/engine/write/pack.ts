@@ -15,7 +15,8 @@ import type { RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { restorer } from './seed.ts';
+import { restorer, SYNC_SEED } from './seed.ts';
+export { SYNC_SEED };
 import { decodeConfiguration, definitionOf } from '../integrations/instances.ts';
 import { catalog_of } from '../access/pred.ts';
 import { null_row_sql, q } from '@norbital-ai/store';
@@ -33,8 +34,6 @@ export type Pack = {
 };
 /** The system models a pack may seed, in load order: members, then integration instances (a personal one names its member). */
 export const IDENTITY = ['sys_user', 'sys_integration'] as const;
-/** Sync checkpoint system models a cutover seed may carry through the bounded chunk restorer (never secrets or envoys). */
-export const SYNC_SEED = ['sys_sync', 'sys_sync_row'] as const;
 const IDENTITY_COLUMNS = {
 	sys_user: ['id', 'name', 'email', 'kind', 'active', 'admin', 'team', 'phone', 'telegram', 'slack', 'discord'],
 	sys_integration: ['id', 'integration', 'name', 'owner', 'active', 'configuration']
@@ -46,7 +45,10 @@ const IDENTITY_COLUMNS = {
  */
 export function decode_identity(m: EngineManifest, rows: Pack['rows']): Pack['rows'] {
 	const unknown = Object.keys(rows).find(
-		(c) => m.models[c] === undefined && !IDENTITY.some((i) => i === c)
+		(c) =>
+			m.models[c] === undefined &&
+			!IDENTITY.some((i) => i === c) &&
+			!SYNC_SEED.some((s) => s === c)
 	);
 	if (unknown !== undefined)
 		throw BoltError.make('seed_decode', 'decode', `seed: unknown model '${unknown}'`);

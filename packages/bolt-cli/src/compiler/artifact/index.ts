@@ -338,10 +338,15 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 				if (yield* fs.exists(join(heldDir, from)))
 					yield* Effect.sync(() => cpSync(join(heldDir, from), to, { recursive: true }));
 		}
+		const hasEmbeds = Object.values(c.manifest.apps).some(
+			(spec) => (spec.embed?.length ?? 0) > 0
+		);
 		client = {
 			entry: builtClient.entry,
 			css: builtClient.css,
-			immutable: [...new Set([...builtClient.immutable, ...(kept?.immutable ?? [])])].sort()
+			immutable: [...new Set([...builtClient.immutable, ...(kept?.immutable ?? [])])].sort(),
+			public_routes: Object.keys(pages).sort(),
+			has_embeds: hasEmbeds
 		};
 		yield* fs.makeDirectory(dirname(keyFile), { recursive: true });
 		yield* fs.writeFileString(

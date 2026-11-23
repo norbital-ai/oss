@@ -356,7 +356,8 @@ export const SyncsLive = Layer.effect(
 					target: `integration_definition.${inst.integration}.bodies.test`,
 					args: [{ $ctx: true }],
 					instance,
-					configuration: inst.configuration
+					configuration: inst.configuration,
+					held: { ...inst, active: true }
 				});
 			})
 		};

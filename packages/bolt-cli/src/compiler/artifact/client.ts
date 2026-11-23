@@ -364,17 +364,17 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		node: process.versions.node
 	};
 	const entry = `import ${key(styles)};
-import { initialize_shell_assets, mount_shell } from ${key(join(SHELL, `mount${EXT}`))};
+import { initialize_shell_assets, load_active_locale, mount_shell } from ${key(join(SHELL, `mount${EXT}`))};
 ${base === undefined ? 'const base = {};' : `import base from ${key(join(root, base.path))};`}
-${locales.map((f, i) => `import L${i} from ${key(join(root, f.path))};`).join('\n')}
+const locale_loaders = { ${locales.map((f) => `${key(f.name.toLowerCase())}: () => import(${key(join(root, f.path))})`).join(', ')} };
 ${sessions.map((s, i) => `import S${i} from ${key(join(root, s.path))};`).join('\n')}
 ${renderers.map((r, i) => `import F${i} from ${key(join(root, r.path))};`).join('\n')}
 globalThis.__BOLT_BUILD__ = ${key(versions)};
 const ready = initialize_shell_assets(import.meta.url);
-ready.then(() => mount_shell(document.getElementById('bolt'), { ready, workspace_name: ${key(title)}, public_routes: ${key([...public_routes])}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
+Promise.all([ready, load_active_locale(${key(workspaceSettings.locale)}, locale_loaders)]).then(([, locales]) => mount_shell(document.getElementById('bolt'), { ready, workspace_name: ${key(title)}, public_routes: ${key([...public_routes])}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
 	sessions: { ${sessions.map((s, i) => `${key(s.name)}: S${i}`).join(', ')} },
 	messages: { ...base },
-	locales: { ${locales.map((f, i) => `${key(f.name.toLowerCase())}: L${i}`).join(', ')} },
+	locales,
 	integration_setups: { ${integration_setups.join(', ')} }, representations: { ${reps.join(', ')} }, custom_fields: { ${custom_fields.join(', ')} } })).catch((cause) => {
 	const status = document.querySelector('#bolt-loading p');
 	if (status !== null) { status.textContent = 'The workspace could not finish loading. Reload to try again.'; status.setAttribute('role', 'alert'); }

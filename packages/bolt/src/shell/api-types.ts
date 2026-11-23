@@ -232,6 +232,17 @@ const NavNodeAnswer: Schema.Decoder<NavNode> = Schema.Union([
 		children: Schema.mutable(Schema.Array(Schema.suspend(() => NavNodeAnswer)))
 	})
 ]);
+export const ShellNoticeSchema = Schema.Struct({
+	text: Schema.String,
+	tone: Schema.optionalKey(Schema.Literals(['info', 'warning'])),
+	href: Optional,
+	action: Optional
+});
+export const ShellMetaAnswer = Schema.Struct({
+	client: Schema.optionalKey(Schema.String),
+	notice: Schema.optionalKey(ShellNoticeSchema)
+});
+export type ShellMeta = typeof ShellMetaAnswer.Type;
 export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 	workspace: ShellWorkspace,
 	actor: Schema.NullOr(EngineActorSchema),
@@ -245,14 +256,7 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 	),
 	client: Schema.optionalKey(Schema.String),
 	studio_bundle: Schema.optionalKey(Schema.String),
-	notice: Schema.optionalKey(
-		Schema.Struct({
-			text: Schema.String,
-			tone: Schema.optionalKey(Schema.Literals(['info', 'warning'])),
-			href: Optional,
-			action: Optional
-		})
-	),
+	notice: Schema.optionalKey(ShellNoticeSchema),
 	workspaces: Schema.optionalKey(
 		Schema.Array(Schema.Struct({ handle: Schema.String, name: Schema.String, href: Schema.String }))
 	),
@@ -498,6 +502,8 @@ export const InboxReadAnswer = Schema.Struct({
 export type ShellApi = {
 	/** The page's boot (`app` for a visitor page, `kiosk` for a kiosk); its `contract` is what later acts name. */
 	boot(app?: string, kiosk?: string): Call<ShellBoot>;
+	/** Lightweight release/notice check (`GET /__bolt/shell/meta`) without re-sending static schema catalogs. */
+	meta(): Call<ShellMeta>;
 	methods(): Call<SignInMethods>;
 	send_code(address: string, via?: 'sms' | 'whatsapp'): Call<void>;
 	verify(address: string, code: string): Call<typeof VerifiedAnswer.Type>;

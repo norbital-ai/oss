@@ -440,7 +440,7 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 				expect(labels).not.toContain('Assignee › Rate');
 			}
 			const r = yield* filters.describe({ model: 'jobs', text: 'open jobs', authority: caller(), bindings });
-			expect(r).toEqual({ ok: true, where: { status: { eq: 'open' } } });
+			expect(r).toMatchObject({ ok: true, where: { status: { eq: 'open' } } });
 			const sys = present(port.requests[0]?.system);
 			const schemaSection = sys.slice(sys.indexOf('## Exposed schema'));
 			expect(schemaSection).not.toContain('"internal_code"');
@@ -486,11 +486,12 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 				authority: caller(),
 				bindings
 			});
-			expect(r).toEqual({
+			expect(r).toMatchObject({
 				ok: true,
 				where: complexWhere,
 				order_by: [{ status: 'asc' }, { scheduled_on: 'desc' }]
 			});
+			expect(port.requests[0]?.reasoning_effort).toBe('low');
 			// real read boundary also accepts the exact generated query
 			if (r.ok) yield* acceptsQuery(present(r.where), r.order_by);
 		})
@@ -513,7 +514,7 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 				authority: caller(),
 				bindings
 			});
-			expect(r).toEqual({ ok: true, where, order_by });
+			expect(r).toMatchObject({ ok: true, where, order_by });
 			if (r.ok) yield* acceptsQuery(present(r.where), r.order_by);
 		})
 	);
@@ -536,7 +537,7 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 				authority: caller(),
 				bindings
 			});
-			expect(r).toEqual({
+			expect(r).toMatchObject({
 				ok: true,
 				where: { not: { assignee: { is: { name: { eq: 'Bob' } } } } }
 			});
@@ -570,7 +571,7 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 				authority: caller(),
 				bindings
 			});
-			expect(r).toEqual({
+			expect(r).toMatchObject({
 				ok: false,
 				code: 'invalid',
 				message:
@@ -583,6 +584,7 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 		Effect.gen(function* () {
 			let reads = 0;
 			const bobId = '00000000-0000-4000-8000-000000000007';
+			const streamed: unknown[] = [];
 			const port = system2([
 				// Turn 1: tries an unreadable model (`audits`) and a readable model (`members`)
 				turn(
@@ -599,12 +601,15 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 				model: 'jobs',
 				text: 'jobs for bob tan',
 				authority: caller(),
-				bindings
+				bindings,
+				onStep: (step) => streamed.push(step)
 			});
-			expect(r).toEqual({
+			expect(r).toMatchObject({
 				ok: true,
 				where: { assignee: { is: { id: { eq: bobId } } } }
 			});
+			expect(streamed.length).toBeGreaterThanOrEqual(4);
+			expect(r.ok && r.steps?.some((s) => s.label.includes('Found 1 Members match'))).toBe(true);
 			expect(reads).toBe(1);
 			// audits lookup was refused without hitting DB
 			expect(port.requests[1]?.messages.slice(-2)).toMatchObject([
@@ -643,7 +648,7 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 				authority: caller({}),
 				bindings
 			});
-			expect(r).toEqual({
+			expect(r).toMatchObject({
 				ok: true,
 				where: {
 					and: [
@@ -765,7 +770,7 @@ describe('filter.describe uses ai.infer over the caller exposure with strict val
 				authority: termsAuthority,
 				bindings
 			});
-			expect(r).toEqual({ ok: true, where: { rate: { MONTHLY: { amount: { gt: 5000 } } } } });
+			expect(r).toMatchObject({ ok: true, where: { rate: { MONTHLY: { amount: { gt: 5000 } } } } });
 			expect(port.requests).toHaveLength(2);
 			expect(port.requests[1]?.messages.at(-1)).toMatchObject({
 				content: { result: { error: expect.stringContaining("bare 'not' inside a union arm") } }

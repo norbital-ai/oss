@@ -35,7 +35,9 @@ export const ArtifactJson = Schema.Struct({
 		entry: Schema.String,
 		css: Schema.Array(Schema.String),
 		/** Compiler-fingerprinted files that may retain the same URL across releases. */
-		immutable: Schema.optionalKey(Schema.Array(Schema.String))
+		immutable: Schema.optionalKey(Schema.Array(Schema.String)),
+		public_routes: Schema.optionalKey(Schema.Array(Schema.String)),
+		has_embeds: Schema.optionalKey(Schema.Boolean)
 	}),
 	/**
 	 * Public routes (`app/<app>/<page>`, `kiosk/<kiosk>/<page>`) carry their own browser entry and CSS and a private,

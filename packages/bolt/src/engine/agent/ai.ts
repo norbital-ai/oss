@@ -602,15 +602,31 @@ function unquoted(kind: Kind, value: Json): Json {
 	}
 }
 
+/** Progress events emitted by `infer_facility` as it plans and invokes tools. */
+export type InferProgress =
+	| { readonly kind: 'thinking'; readonly turn: number }
+	| { readonly kind: 'tool_start'; readonly id: string; readonly name: string; readonly input: Json }
+	| {
+			readonly kind: 'tool_end';
+			readonly id: string;
+			readonly name: string;
+			readonly ok: boolean;
+			readonly result: Json;
+	  };
+
 export function infer_facility(
 	ai: Ai['Service'] | undefined,
 	options: {
 		load?: (fileId: string) => Effect.Effect<{ mime: string; bytes: Uint8Array }, PortFailure>;
 		wallMs?: number;
+		/** Lower reasoning effort for fast structured utility inferences (e.g. `filter.describe`). */
+		reasoningEffort?: 'low' | 'medium' | 'high';
 		/** Optional domain validation/normalization after schema and rules pass on `submit`; failures feed back to the model. */
 		validate?: (value: Json) => Effect.Effect<CrossAnswer, PortFailure>;
 		/** Each answer-changing call (`edit`, `submit`) as the model makes it: the host's record of the draft's progress. */
 		onDraft?: (name: string, input: Json) => Effect.Effect<void>;
+		/** Live progress milestones (model turn start, tool call start/end) for streaming caller feedback. */
+		onProgress?: (event: InferProgress) => Effect.Effect<void>;
 		/** Each message of the transcript as it is written: the host keeps the inference's whole conversation. */
 		onMessage?: (message: AiMessage, index: number, behavior: ToolBehavior) => Effect.Effect<void>;
 	} = {}
@@ -858,6 +874,8 @@ export function infer_facility(
 				yield* record(messages);
 				// the CPU budget is a step's, not a run's: a long inference is many small steps, as an agent's turn is
 				yield* (yield* RunUnits).next();
+				if (options.onProgress !== undefined)
+					yield* options.onProgress({ kind: 'thinking', turn: turns + 1 });
 				const offeredTools = spent ? finishingOffers : offered;
 				const stepped = yield* model_step(modelCall(
 					ai,
@@ -867,7 +885,10 @@ export function infer_facility(
 						messages: [...messages],
 						...(offeredTools.length === 0 ? {} : { tools: offeredTools }),
 						...(files.length === 0 ? {} : { files }),
-						...(carry?.continuation === undefined ? {} : { continuation: carry.continuation })
+						...(carry?.continuation === undefined ? {} : { continuation: carry.continuation }),
+						...(options.reasoningEffort === undefined
+							? {}
+							: { reasoning_effort: options.reasoningEffort })
 					},
 					{
 						...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }),
@@ -931,6 +952,13 @@ export function infer_facility(
 						calls,
 						Effect.fn('Ai.inferCall')(function* (c, invalid, stopped) {
 							let result: Json, submitted: CrossAnswer | undefined;
+							if (!stopped && options.onProgress !== undefined)
+								yield* options.onProgress({
+									kind: 'tool_start',
+									id: c.id,
+									name: c.name,
+									input: c.input
+								});
 							if (
 								!stopped &&
 								invalid === undefined &&
@@ -1084,6 +1112,20 @@ export function infer_facility(
 								role: 'tool',
 								content: { id: c.id, name: c.name, result: bound(result) }
 							});
+							if (!stopped && options.onProgress !== undefined) {
+								const hasError =
+									isObj(result) &&
+									(typeof result['error'] === 'string' ||
+										(isList(result['errors']) && result['errors'].length > 0) ||
+										result['refused'] === true);
+								yield* options.onProgress({
+									kind: 'tool_end',
+									id: c.id,
+									name: c.name,
+									ok: !hasError,
+									result
+								});
+							}
 							beat();
 							return submitted === undefined ? Option.none() : Option.some(submitted);
 						})

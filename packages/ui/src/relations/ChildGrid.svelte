@@ -129,7 +129,21 @@ A related-record grid with explicit child operations, original revisions and par
 						request_json({
 							[model]: {
 								where: and(where, { [identity.parent]: id }),
-								fields: [...new Set([...fields, identity.parent, 'revision'])],
+								fields: [
+									...new Set([
+										...fields,
+										...fields.flatMap((field) => {
+											const kind = exposure?.fields[field];
+											return kind?.kind === 'money' &&
+												typeof kind.currency === 'string' &&
+												exposure?.fields[kind.currency]
+												? [kind.currency]
+												: [];
+										}),
+										identity.parent,
+										'revision'
+									])
+								],
 								limit: 25,
 								after: after ?? undefined
 							}

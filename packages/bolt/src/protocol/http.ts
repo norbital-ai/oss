@@ -11,6 +11,7 @@ import {
 	FiberSet,
 	Layer,
 	Option,
+	Queue,
 	Ref,
 	Result,
 	Schema,
@@ -79,6 +80,8 @@ import {
 import type { ReadIR, RequestRoot } from './reads.ts';
 import {
 	ActBody,
+	Describe,
+	type DescribeStreamEvent,
 	SyncControlBody,
 	type WriteMapBody,
 	LiveBody,
@@ -639,7 +642,8 @@ export const dispatch_act = Effect.fn('protocol.dispatchAct')(function* (
 				outcome = result.ok
 					? committed({
 							...(result.where === undefined ? {} : { where: result.where }),
-							...(result.order_by === undefined ? {} : { order_by: result.order_by })
+							...(result.order_by === undefined ? {} : { order_by: result.order_by }),
+							...(result.steps === undefined ? {} : { steps: result.steps })
 						})
 					: {
 							kind: 'refused',
@@ -1284,6 +1288,69 @@ export const BoltRoutes = {
 			return HttpServerResponse.jsonUnsafe({
 				value: yield* delete_verdict(yield* probe, model, ids, authority, yield* bindings)
 			});
+		})
+	},
+	[`POST ${PATHS.filter_describe}` as const]: {
+		guest: true,
+		run: Effect.fn('protocol.filterDescribe')(function* (
+			request: HttpServerRequest.HttpServerRequest,
+			authority: Authority
+		) {
+			const b = yield* bindings;
+			const verdict = yield* (yield* RateLimits).charge(
+				charges_for(
+					authority,
+					['agent'],
+					authority.actor.kind === 'member' ? { actor: authority.actor.id } : {}
+				),
+				Date.parse(b.now)
+			);
+			if (!verdict.ok) return rateLimitedResponse(verdict.retryAfter);
+			const body = yield* requestBody(request, Describe);
+			const filters = yield* filter_describe;
+			const events = Stream.callback<DescribeStreamEvent>((queue) =>
+				Effect.gen(function* () {
+					const result = yield* filters
+						.describe({
+							model: body.model,
+							text: body.text,
+							authority,
+							bindings: b,
+							...(body.fields === undefined ? {} : { localFields: body.fields }),
+							onStep: (step) => {
+								Queue.offerUnsafe(queue, { t: 'step', step });
+							}
+						})
+						.pipe(
+							Effect.catch((error) =>
+								Effect.succeed({
+									ok: false as const,
+									code: 'invalid',
+									message: error instanceof Error ? error.message : String(error),
+									steps: undefined
+								})
+							)
+						);
+					Queue.offerUnsafe(
+						queue,
+						result.ok
+							? {
+									t: 'done',
+									...(result.where === undefined ? {} : { where: result.where }),
+									...(result.order_by === undefined ? {} : { order_by: result.order_by }),
+									...(result.steps === undefined ? {} : { steps: result.steps })
+								}
+							: {
+									t: 'error',
+									code: result.code,
+									message: result.message,
+									...(result.steps === undefined ? {} : { steps: result.steps })
+								}
+					);
+					yield* Queue.end(queue);
+				})
+			);
+			return sseResponse(events);
 		})
 	},
 	[`GET ${PATHS.openapi}` as const]: {

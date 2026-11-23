@@ -293,6 +293,17 @@ export const StudioOp = Schema.Union([
 		new_string: Schema.String,
 		replace_all: Schema.optionalKey(Schema.Boolean)
 	}),
+	Schema.Struct({
+		op: Schema.Literal('draft'),
+		path: safePath,
+		edits: Schema.Array(
+			Schema.Struct({
+				old_string: nonempty,
+				new_string: Schema.String,
+				replace_all: Schema.optionalKey(Schema.Boolean)
+			})
+		).check(Schema.isMinLength(1))
+	}),
 	/** One patch over the working tree, in OpenCode's patch language: its paths are checked as it applies. */
 	Schema.Struct({ op: Schema.Literal('draft'), patch_text: nonempty }),
 	Schema.Struct({ op: Schema.Literal('draft'), path: safePath, to: safePath }),

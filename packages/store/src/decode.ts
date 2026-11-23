@@ -337,7 +337,11 @@ const fieldOp = Effect.fnUntraced(function* (
 			return { t: 'age', field: f.name, seconds } satisfies Pred;
 		}
 	}
-	return yield* invalid(`${at}: unknown operator '${op}' on '${f.name}'`);
+	return yield* invalid(
+		f.kind === 'ref' || f.of !== undefined
+			? `${at}: unknown operator '${op}' on '${f.name}' (ref fields filter by id with eq/ne/in/is_null, or target fields with { is: { ... } })`
+			: `${at}: unknown operator '${op}' on '${f.name}'`
+	);
 });
 /** A shape's structure under a json value's declared `shape`. */
 const shaped = (k: KindSpec): KindSpec =>
@@ -658,10 +662,18 @@ export const where: (
 			const f = info.fields.get(key);
 			if (key.startsWith('$'))
 				return yield* invalid(`${at}: '${key}' is written '${key.slice(1)}', no $`);
-			if (f === undefined || key.includes('.'))
+			if (f === undefined || key.includes('.')) {
+				const dot = key.indexOf('.');
+				const ref = dot > 0 ? key.slice(0, dot) : '';
+				const rest = dot > 0 ? key.slice(dot + 1) : '';
+				if (dot > 0 && info.one.has(ref))
+					return yield* invalid(
+						`${at}: unknown field '${key}' on '${m}' (filter target fields with { ${ref}: { is: { ${rest}: ... } } } instead of dotted '${key}')`
+					);
 				return yield* invalid(
 					`${at}: unknown field '${key}' on '${m}'${/\p{Cf}/u.test(key) ? ' (the name holds invisible characters)' : ''}; its fields: ${[...info.fields.keys()].join(', ')}`
 				);
+			}
 			of.push(...(yield* fieldOps(info, f, v, at, depth)));
 		}
 	}

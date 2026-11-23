@@ -48,10 +48,12 @@ import {
 } from '../protocol/wire.ts';
 import {
 	ActReply,
+	DescribeStreamEvent,
 	EngineActorSchema,
 	LiveReply,
 	QReply,
 	WireError,
+	type DescribeStep,
 	type LocalFilterField
 } from '../protocol/schema.ts';
 import {
@@ -1324,29 +1326,69 @@ export const create_bolt = (config: BoltConfig) =>
 			},
 			...(config.describe === true
 				? {
-						describe: (model: string, text: string, fields?: readonly LocalFilterField[]) =>
-							command('filter.describe', {
-								model,
-								text,
-								...(fields === undefined ? {} : { fields })
+						describe: (
+							model: string,
+							text: string,
+							fields?: readonly LocalFilterField[],
+							onStep?: (step: DescribeStep) => void
+						) =>
+							Effect.gen(function* () {
+								let done:
+									| { where?: Json; order_by?: Json; steps?: readonly DescribeStep[] }
+									| undefined;
+								let failure: { code: string; message: string } | undefined;
+								const decodeEvent = Schema.decodeUnknownOption(
+									Schema.fromJsonString(DescribeStreamEvent)
+								);
+								const response = yield* transport.requestSse(
+									PATHS.filter_describe,
+									{ model, text, ...(fields === undefined ? {} : { fields }) },
+									(raw) => {
+										const event = decodeEvent(raw);
+										if (Option.isNone(event)) return;
+										if (event.value.t === 'step') {
+											onStep?.(event.value.step);
+										} else if (event.value.t === 'done') {
+											done = {
+												...(event.value.where === undefined ? {} : { where: event.value.where }),
+												...(event.value.order_by === undefined
+													? {}
+													: { order_by: event.value.order_by }),
+												...(event.value.steps === undefined ? {} : { steps: event.value.steps })
+											};
+										} else {
+											failure = { code: event.value.code, message: event.value.message };
+										}
+									}
+								);
+								if (response.status >= 400) {
+									const refusal = errorOf(response.body);
+									return yield* Effect.fail(
+										new ProtocolFailed({
+											message: Option.isSome(refusal)
+												? refusal.value.error.message
+												: 'Could not build a filter from that description.'
+										})
+									);
+								}
+								if (failure !== undefined)
+									return yield* Effect.fail(
+										new ProtocolFailed({
+											message:
+												failure.message || 'Could not build a filter from that description.'
+										})
+									);
+								if (done !== undefined) return done;
+								return yield* Effect.fail(
+									new ProtocolFailed({
+										message: 'Could not build a filter from that description.'
+									})
+								);
 							}).pipe(
 								Effect.timeoutOrElse({
 									duration: '35 seconds',
 									orElse: () => Effect.fail(new DescribeTimeout())
-								}),
-								Effect.flatMap(
-									committedAs(
-										(output) =>
-											decode(
-												Schema.Struct({
-													where: Schema.optionalKey(Schema.Json),
-													order_by: Schema.optionalKey(Schema.Json)
-												}),
-												output
-											),
-										'Could not build a filter from that description.'
-									)
-								)
+								})
 							)
 					}
 				: {}),

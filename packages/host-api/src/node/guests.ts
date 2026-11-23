@@ -7,6 +7,7 @@
 // supplies native isolates.
 import { randomUUIDv7 } from 'node:crypto';
 import { types } from 'node:util';
+import { createHash } from 'node:crypto';
 import vm from 'node:vm';
 import { Predicate, Schema } from 'effect';
 import {
@@ -176,15 +177,22 @@ const BOOTSTRAP = new vm.Script(
 const RUN = new vm.Script("globalThis[Symbol.for('norbital.bolt.turn')]()", {
 	filename: 'bolt:turn'
 });
-/** One compiled script per text (programs and preludes), reused across contexts. */
+/** Compiled scripts keyed by SHA-256 of source text, bounded LRU so multi-MB source strings are not retained as keys. */
+const SCRIPTS_CAP = 64;
 const scripts = new Map<string, vm.Script>();
-const compiled = (key: string, filename: string, code: () => string) => {
-	let script = scripts.get(key);
-	if (script === undefined) {
-		script = new vm.Script(code(), { filename, lineOffset: -1 });
-		scripts.set(key, script);
-		// ponytail: the last 16 texts stay compiled; an LRU when hosts serve more programs at once
-		if (scripts.size > 16) scripts.delete(scripts.keys().next().value ?? key);
+const compiled = (source: string, filename: string, code: () => string) => {
+	const key = `${filename}:${createHash('sha256').update(source).digest('hex')}`;
+	const hit = scripts.get(key);
+	if (hit !== undefined) {
+		scripts.delete(key);
+		scripts.set(key, hit);
+		return hit;
+	}
+	const script = new vm.Script(code(), { filename, lineOffset: -1 });
+	scripts.set(key, script);
+	if (scripts.size > SCRIPTS_CAP) {
+		const oldest = scripts.keys().next().value;
+		if (oldest !== undefined) scripts.delete(oldest);
 	}
 	return script;
 };
