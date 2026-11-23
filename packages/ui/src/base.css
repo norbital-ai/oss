@@ -198,7 +198,7 @@
 	--font-weight-medium: 510;
 	--font-weight-semibold: 590;
 	--font-weight-bold: 590;
-	/* Three radii: controls 6, cards 12, badges 4; pills stay fully round. */
+	/* Three canonical radii: badges/inset pills 4, controls/tracks/workspace surfaces 6, overlays/cards 12; pills stay fully round. */
 	--radius-sm: calc(var(--radius) / 2);
 	--radius-md: calc(var(--radius) / 2);
 	--radius-lg: var(--radius);

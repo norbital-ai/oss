@@ -465,11 +465,17 @@ export function readTool(x: ReadToolContext) {
 				unknown in e.manifest.models
 					? undefined
 					: paths.find((path) => !path.includes('.') && unknown.startsWith(path));
+			const root = before(unknown, '.');
+			const rootLayers = unknown.includes('.')
+				? paths.filter((p) => p.startsWith(`${root}.`))
+				: [];
 			return Effect.succeed(
 				err(
 					`You read no '${unknown}'. ${
 						unknown.includes('.')
-							? 'describe_workspace { names } lists its layers.'
+							? rootLayers.length > 0
+								? `Readable layers on '${root}': ${rootLayers.join(', ')}`
+								: `'${root}' has no nested layers you may read.`
 							: twice !== undefined
 								? `A request reads '${twice}' once: aggregate.by groups its counts, and another read call in the same step reads it again.`
 								: `Models: ${paths.filter((p) => !p.includes('.')).join(', ')}`
@@ -884,8 +890,16 @@ export function catalogueIndex(
 	}[]
 ): CatalogueIndex {
 	const index: { [key: string]: string } = {};
-	for (const [name, skill] of Object.entries(skills))
-		index[`skill:${name}`] = `${name} — ${skillOf(skill.text).description}`;
+	for (const [name, skill] of Object.entries(skills)) {
+		const own = skill.files.filter(
+			(f) => f !== 'SKILL.md' && !f.split('/').includes('node_modules')
+		);
+		const fileList =
+			own.length === 0
+				? ''
+				: ` [files: ${own.slice(0, 12).join(', ')}${own.length > 12 ? `, … +${own.length - 12}` : ''}]`;
+		index[`skill:${name}`] = `${name} — ${skillOf(skill.text).description}${fileList}`;
+	}
 	const roots = readPaths(m, a).filter((path) => !path.includes('.'));
 	const writes = new Map<string, string[]>();
 	for (const callable of acts.keys()) {
@@ -928,7 +942,7 @@ export function catalogueIndex(
 }
 
 const SECTIONS = [
-	['skill:', 'Skills (skill reads one)'],
+	['skill:', 'Skills (skill reads one or several via requests)'],
 	['model:', 'Models (fields; reads and writes beyond the default)'],
 	['native:', 'Native operations'],
 	['page:', 'Pages (page { path }, exact paths)'],

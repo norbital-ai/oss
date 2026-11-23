@@ -195,7 +195,7 @@
 </script>
 
 {#if held !== undefined || decided !== null}
-	<section class="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background" style="max-height: min(32rem, 60dvh)" data-approval={id} aria-label={t('Workspace update')}>
+	<section class="flex min-h-0 flex-col overflow-hidden rounded-md border border-border/70 bg-background" style="max-height: min(32rem, 60dvh)" data-approval={id} aria-label={t('Workspace update')}>
 		<p class="shrink-0 px-3 pt-3 pb-2 text-sm font-medium">
 			{t(decided !== null ? 'Workspace update' : step.tool?.studio === 'rollback' ? 'Restore this version?' : 'Apply these changes?')}
 		</p>

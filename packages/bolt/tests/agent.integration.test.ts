@@ -2857,7 +2857,7 @@ describe('a conversation keeps its prefix, its steps and its verifier bounded', 
 						expect(after.system).toBe(before.system);
 						// one appended note of what changed, before the new message's step closes
 						expect(catalogueNotes(after).at(-1)).toBe(
-					'[note]\n[Catalogue changed by a merge]\nSkills (skill reads one):\n- quoting — How we quote'
+					'[note]\n[Catalogue changed by a merge]\nSkills (skill reads one or several via requests):\n- quoting — How we quote'
 				);
 						// everything the first step sent but its closing note is the same bytes now
 						expect(after.messages.slice(0, before.messages.length - 1)).toEqual(before.messages.slice(0, -1));

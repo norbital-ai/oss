@@ -617,14 +617,24 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 
 	const skills = Object.entries(x.skills);
 	if (skills.length > 0) {
-		add(skillTool, function* (i) {
-			const t = skills.find(([n]) => n === i.name)?.[1];
+		type SkillReq = {
+			readonly name: string;
+			readonly section?: string | undefined;
+			readonly sections?: readonly string[] | undefined;
+			readonly file?: string | undefined;
+			readonly files?: readonly string[] | undefined;
+		};
+		const readOneSkill = Effect.fn('AgentTool.skillOne')(function* (req: SkillReq) {
+			const t = skills.find(([n]) => n === req.name)?.[1];
 			if (t === undefined)
-				return err(`No skill '${i.name}'. Skills: ${skills.map(([n]) => n).join(', ')}`);
-			const modes = [i.file !== undefined, i.files !== undefined, i.section !== undefined].filter(
-				Boolean
-			).length;
-			if (modes > 1) return err('Give only one of section, file, or files.');
+				return err(`No skill '${req.name}'. Skills: ${skills.map(([n]) => n).join(', ')}`);
+			const modes = [
+				req.file !== undefined,
+				req.files !== undefined,
+				req.section !== undefined,
+				req.sections !== undefined
+			].filter(Boolean).length;
+			if (modes > 1) return err('Give only one of section, sections, file, or files.');
 			const s = skillOf(t.text);
 			const own = t.files.filter(
 				(f) => f !== SKILL_FILE && !f.split('/').includes('node_modules')
@@ -640,11 +650,11 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 						f.toLowerCase() === `${needle}.md`
 				);
 			};
-			if (i.files !== undefined) {
-				const unique = [...new Set(i.files)];
+			if (req.files !== undefined) {
+				const unique = [...new Set(req.files)];
 				if (unique.length === 0)
 					return err(
-						`Give at least one file in ${i.name}. Files: ${own.slice(0, 50).join(', ')}`
+						`Give at least one file in ${req.name}. Files: ${own.slice(0, 50).join(', ')}`
 					);
 				const resolved: string[] = [];
 				const missing: string[] = [];
@@ -655,7 +665,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				}
 				if (resolved.length === 0)
 					return err(
-						`No file(s) ${missing.map((f) => `'${f}'`).join(', ')} in ${i.name}. Files: ${own.slice(0, 50).join(', ')}`
+						`No file(s) ${missing.map((f) => `'${f}'`).join(', ')} in ${req.name}. Files: ${own.slice(0, 50).join(', ')}`
 					);
 				const decoder = new TextDecoder();
 				const loaded = yield* Effect.forEach(
@@ -666,7 +676,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				);
 				return documentAnswer(
 					{
-						skill: i.name,
+						skill: req.name,
 						files: loaded.map(({ file }) => file),
 						...(missing.length === 0
 							? {}
@@ -679,17 +689,52 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					'text'
 				);
 			}
-			if (i.file !== undefined && i.file !== SKILL_FILE) {
-				const found = resolveSkillFile(i.file);
+			if (req.file !== undefined && req.file !== SKILL_FILE) {
+				const found = resolveSkillFile(req.file);
 				if (found === undefined || found === SKILL_FILE)
 					return err(
-						`No file '${i.file}' in ${i.name}. Files: ${own.slice(0, 50).join(', ')}`
+						`No file '${req.file}' in ${req.name}. Files: ${own.slice(0, 50).join(', ')}`
 					);
 				const bytes = yield* t.read(found);
 				return documentAnswer({ file: found, text: new TextDecoder().decode(bytes) }, 'text');
 			}
 			const files = own.length === 0 ? {} : { files: own.slice(0, 50) };
-			if (i.section === undefined) {
+			if (req.sections !== undefined) {
+				const unique = [...new Set(req.sections)];
+				if (unique.length === 0)
+					return err(`Give at least one section in ${req.name}. Sections: ${s.sections.join(', ')}`);
+				const decoder = new TextDecoder();
+				const foundParts: { readonly key: string; readonly text: string }[] = [];
+				const missing: string[] = [];
+				for (const asked of unique) {
+					const part = section(s.body, asked);
+					if (part !== undefined) {
+						foundParts.push({ key: asked, text: part });
+						continue;
+					}
+					const refFile = resolveSkillFile(asked);
+					if (refFile !== undefined && refFile !== SKILL_FILE) {
+						const bytes = yield* t.read(refFile);
+						foundParts.push({ key: refFile, text: decoder.decode(bytes) });
+					} else missing.push(asked);
+				}
+				if (foundParts.length === 0)
+					return ok({
+						error: `No section(s) ${missing.map((m) => `'${m}'`).join(', ')} in ${req.name}.`,
+						sections: s.sections,
+						...files
+					});
+				return documentAnswer(
+					{
+						skill: req.name,
+						sections: foundParts.map((p) => p.key),
+						...(missing.length === 0 ? {} : { missing, available: s.sections }),
+						text: foundParts.map((p) => `<!-- ${p.key} -->\n${p.text}`).join('\n\n')
+					},
+					'text'
+				);
+			}
+			if (req.section === undefined) {
 				const parts = s.body.split(/^(?=##\s)/m);
 				let body = '',
 					shown = 0;
@@ -713,20 +758,78 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					'body'
 				);
 			}
-			const part = section(s.body, i.section);
+			const part = section(s.body, req.section);
 			if (part !== undefined) return textAnswer(part);
-			const needle = i.section.trim().toLowerCase();
-			const refFile = own.find(
-				(f) =>
-					f.toLowerCase() === needle ||
-					f.toLowerCase() === `references/${needle}.md` ||
-					f.toLowerCase() === `${needle}.md`
-			);
-			if (refFile !== undefined) {
+			const refFile = resolveSkillFile(req.section);
+			if (refFile !== undefined && refFile !== SKILL_FILE) {
 				const bytes = yield* t.read(refFile);
 				return documentAnswer({ file: refFile, text: new TextDecoder().decode(bytes) }, 'text');
 			}
-			return ok({ error: `No section '${i.section}'.`, sections: s.sections, ...files });
+			return ok({ error: `No section '${req.section}'.`, sections: s.sections, ...files });
+		});
+
+		add(skillTool, function* (i) {
+			if (i.requests !== undefined) {
+				if (
+					i.name !== undefined ||
+					i.section !== undefined ||
+					i.sections !== undefined ||
+					i.file !== undefined ||
+					i.files !== undefined
+				)
+					return err('Give either requests or name (not both).');
+				if (i.requests.length === 0)
+					return err(`Give at least one skill request. Skills: ${skills.map(([n]) => n).join(', ')}`);
+				if (i.requests.length === 1 && i.requests[0] !== undefined)
+					return yield* readOneSkill(i.requests[0]);
+				const answers = yield* Effect.forEach(
+					i.requests,
+					(req) =>
+						readOneSkill(req).pipe(Effect.map((answer) => ({ req, answer }))),
+					{ concurrency: 'unbounded' }
+				);
+				const blocks: string[] = [];
+				const items: Json[] = [];
+				for (const { req, answer } of answers) {
+					const payload =
+						'result' in answer
+							? 'full' in answer && answer.full !== undefined
+								? answer.full
+								: answer.result
+							: null;
+					if (typeof payload === 'string') {
+						items.push({ skill: req.name, ok: true });
+						blocks.push(`<!-- skill:${req.name}${req.section ? `#${req.section}` : ''} -->\n${payload}`);
+					} else if (isObj(payload) && typeof payload['error'] === 'string') {
+						items.push({ skill: req.name, error: payload['error'] });
+					} else if (isObj(payload)) {
+						const content =
+							typeof payload['text'] === 'string'
+								? payload['text']
+								: typeof payload['body'] === 'string'
+									? payload['body']
+									: JSON.stringify(payload);
+						items.push({
+							skill: req.name,
+							ok: true,
+							...(Array.isArray(payload['files']) ? { files: payload['files'] } : {}),
+							...(Array.isArray(payload['sections']) ? { sections: payload['sections'] } : {}),
+							...(Array.isArray(payload['missing']) ? { missing: payload['missing'] } : {})
+						});
+						blocks.push(`<!-- skill:${req.name} -->\n${content}`);
+					}
+				}
+				return documentAnswer({ items, text: blocks.join('\n\n') }, 'text');
+			}
+			if (i.name === undefined)
+				return err(`Give name or requests. Skills: ${skills.map(([n]) => n).join(', ')}`);
+			return yield* readOneSkill({
+				name: i.name,
+				section: i.section,
+				sections: i.sections,
+				file: i.file,
+				files: i.files
+			});
 		});
 	}
 

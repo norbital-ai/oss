@@ -43,7 +43,7 @@
 	});
 </script>
 
-<section class="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background p-4" style="max-height: min(32rem, 60dvh)" data-question={id} aria-labelledby="question-{id}">
+<section class="flex min-h-0 flex-col overflow-hidden rounded-md border border-border/70 bg-background p-4" style="max-height: min(32rem, 60dvh)" data-question={id} aria-labelledby="question-{id}">
 	<div class="mb-3 flex shrink-0 items-center gap-2 text-sm font-medium">
 		<Icon name="lucide:message-circle-question" class="size-4 shrink-0 text-muted-foreground" />
 		<span>{t('Your input')}</span>

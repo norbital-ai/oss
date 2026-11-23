@@ -30,7 +30,7 @@
 		over the transcript, not into it -->
 						<div class="relative z-20 mx-auto w-full agent-column shrink-0 px-4 pt-3" data-now-strip>
 							<div
-								class="grid gap-1 rounded-xl border border-border/70 bg-background/95 px-3 py-2 backdrop-blur"
+								class="grid gap-1 rounded-md border border-border/70 bg-background/95 px-3 py-2 backdrop-blur"
 							>
 								<details class="group/plan" data-plan={plan.status}>
 									<summary
@@ -50,7 +50,7 @@
 										>
 									</summary>
 									<div
-										class="absolute inset-x-4 top-full mt-1 max-h-[50dvh] overflow-auto rounded-xl border border-border/70 bg-background px-3 py-2 text-xs shadow-deep"
+										class="absolute inset-x-4 top-full mt-1 max-h-[50dvh] overflow-auto rounded-md border border-border/70 bg-background px-3 py-2 text-xs shadow-deep"
 									>
 										<ReadonlyMarkdown value={plan.body} />
 										<div class="mt-2 flex justify-end gap-1 border-t border-border/60 pt-2">

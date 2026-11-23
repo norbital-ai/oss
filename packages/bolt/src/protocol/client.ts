@@ -41,7 +41,8 @@ export function browserTransport(options: {
 		});
 	const once = <A, E>(
 		request: HttpClientRequest.HttpClientRequest,
-		read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>
+		read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>,
+		cache?: RequestCache
 	) =>
 		Effect.gen(function* () {
 			const response = yield* HttpClient.execute(request);
@@ -58,7 +59,10 @@ export function browserTransport(options: {
 				? Effect.provide(FetchHttpClient.layer)
 				: Effect.provideService(HttpClient.HttpClient, options.http_client),
 			Effect.provideService(FetchHttpClient.Fetch, send),
-			Effect.provideService(FetchHttpClient.RequestInit, { credentials: 'same-origin' })
+			Effect.provideService(FetchHttpClient.RequestInit, {
+				credentials: 'same-origin',
+				...(cache === undefined ? {} : { cache })
+			})
 		);
 	type Reply<A> = { status: number; body: A; retryAfter: number };
 	type Failure = Effect.Error<ReturnType<typeof once>>;
@@ -70,15 +74,16 @@ export function browserTransport(options: {
 	const execute = <A, E>(
 		request: HttpClientRequest.HttpClientRequest,
 		read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>,
-		readOnly = false
+		readOnly = false,
+		cache?: RequestCache
 	) => {
 		// Socket drops during reconnects or a rolling deployment can interrupt reads. Never
 		// replay a mutation whose response was lost: only reads and idempotent view registration retry.
-		const send = readOnly ? once(request, read).pipe(Effect.retry({
+		const send = readOnly ? once(request, read, cache).pipe(Effect.retry({
 			while: (error) => error instanceof TransportFailed && error.status === 0,
 			times: 3,
 			schedule: Schedule.exponential('250 millis')
-		})) : once(request, read);
+		})) : once(request, read, cache);
 		const retried = (reply: Reply<A>, left: number): Effect.Effect<Reply<A>, Failure> => {
 			const wait = waitAfter(reply);
 			return wait === null || wait > left
@@ -108,8 +113,12 @@ export function browserTransport(options: {
 		headers: Readonly<Record<string, string>> = {}
 	) => {
 		const req = HttpClientRequest.make(method)(`${options.base ?? ''}${path}`, { headers });
-		return execute(body === undefined ? req : HttpClientRequest.bodyJsonUnsafe(req, body), json,
-			method === 'GET' || (method === 'POST' && (path === PATHS.q || path === PATHS.live)));
+		return execute(
+			body === undefined ? req : HttpClientRequest.bodyJsonUnsafe(req, body),
+			json,
+			method === 'GET' || (method === 'POST' && (path === PATHS.q || path === PATHS.live)),
+			method === 'GET' ? 'no-cache' : undefined
+		);
 	};
 	const requestPdf = (path: string, body: Json, headers: Readonly<Record<string, string>>) =>
 		execute(

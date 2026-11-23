@@ -103,7 +103,7 @@
 {:else if checked}
 	<Scroll name={t('Allow access to continue')} size="fill">
 		<Center class="min-h-full p-6" data-device-wall>
-			<Stack gap="lg" class="w-full max-w-md rounded-2xl border bg-card p-6">
+			<Stack gap="lg" class="w-full max-w-md rounded-lg border bg-card p-6">
 				<Stack gap="xs">
 					<h2 class="text-subhead">{t('Allow access to continue')}</h2>
 					<p class="text-sm text-muted-foreground">

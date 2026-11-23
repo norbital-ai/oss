@@ -33,7 +33,7 @@
 			e.preventDefault();
 			on_navigate(app.href);
 		}}
-		class="group w-68 max-w-[calc(100vw-3rem)] shrink-0 snap-start overflow-hidden rounded-xl border bg-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+		class="group w-68 max-w-[calc(100vw-3rem)] shrink-0 snap-start overflow-hidden rounded-lg border bg-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
 	>
 		<Stack gap="none">
 			<Frame ratio="banner" class="relative bg-linear-to-br from-muted via-background to-brand/10">

@@ -323,17 +323,17 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 {/snippet}
 
 <div
-	class="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card"
+	class="flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-card"
 	data-event-calendar={shown}
 	bind:clientWidth={width}
 >
 	<header
 		class={cn(
-			'flex flex-wrap items-center justify-between gap-2 border-b px-4',
+			'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b px-4',
 			views.length > 1 ? 'pt-2.5' : 'py-2.5'
 		)}
 	>
-		<div class="flex min-w-0 flex-wrap items-center gap-1">
+		<div class={cn('flex min-w-0 flex-wrap items-center gap-1', views.length > 1 && 'pb-2.5')}>
 			<Button
 				variant="ghost"
 				size="icon"
@@ -356,7 +356,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		</div>
 		{#if views.length > 1}
 			<TabStrip
-				class="border-b-0"
+				class="w-auto max-w-full self-end border-b-0"
 				label="View"
 				value={shown}
 				items={views.map((v) => ({ name: v, title: t(v) }))}

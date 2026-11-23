@@ -620,7 +620,7 @@
 									data-role="ignored"
 									data-decision={dec?.event.id}
 									data-action={dec?.d.action}
-									class="ml-auto flex w-fit max-w-[85%] items-start gap-1.5 rounded-xl border border-dashed border-border/80 px-3 py-2 text-xs text-muted-foreground"
+									class="ml-auto flex w-fit max-w-[85%] items-start gap-1.5 rounded-md border border-dashed border-border/80 px-3 py-2 text-xs text-muted-foreground"
 								>
 									<details class="group/aside min-w-0" data-aside>
 										<summary
@@ -685,7 +685,7 @@
 										data-pending={row.state === 'pending' || undefined}
 									>
 										<div
-											class="min-w-0 max-w-full rounded-xl bg-muted px-4 py-2.5 break-words"
+											class="min-w-0 max-w-full rounded-md bg-muted px-4 py-2.5 break-words"
 										>
 											<!-- a person's message and an automation's prompt are Markdown: fences render as code blocks; a person's newlines stay line breaks -->
 											{#if row.text}<div
@@ -757,14 +757,14 @@
 										{/if}
 									</li>
 								{:else if !writable && row.call}
-									<li class="rounded-xl border border-border/70 bg-background p-3" {@attach turns.measure(itemKey(at))}>
+									<li class="rounded-md border border-border/70 bg-background p-3" {@attach turns.measure(itemKey(at))}>
 										<p class="text-sm font-medium">{row.call.name}</p>
 										<StructuredData {ctx} value={row.call.input} name={t('Input')} />
 									</li>
 								{:else if writable && (row.state === 'confirm' || row.state === 'approved') && row.call?.name === 'connect'}
 									<li
 										{@attach turns.measure(itemKey(at))}
-										class="rounded-xl border border-border/70 bg-background p-3"
+										class="rounded-md border border-border/70 bg-background p-3"
 										data-role="connect"
 									>
 										<ConnectCard
@@ -781,7 +781,7 @@
 									{@const busy = answering.has(row.id) || row.state === 'approved'}
 									<li
 										{@attach turns.measure(itemKey(at))}
-										class="rounded-xl border border-border/70 bg-background p-3"
+										class="rounded-md border border-border/70 bg-background p-3"
 										data-role="confirm"
 									>
 										<p class="text-sm font-medium text-foreground">

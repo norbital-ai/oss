@@ -48,7 +48,7 @@ const ViteManifest = Schema.Record(
 	})
 );
 const key = JSON.stringify;
-const PLATFORM_CACHE_VERSION = 3;
+const PLATFORM_CACHE_VERSION = 4;
 const escape = (text: string) =>
 	text.replace(/[<&"]/g, (c) => (c === '<' ? '&lt;' : c === '&' ? '&amp;' : '&quot;'));
 export class BuildError extends Schema.TaggedError<BuildError>()('BuildError', {

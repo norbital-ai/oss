@@ -24,6 +24,7 @@ export function visibleSource(x: ToolContext): WorkspacePort | undefined {
 	const ws = x.draft ?? x.workspace;
 	if (ws === undefined) return undefined;
 	const unseen = (path: string) => {
+		if (!a.admin && path.startsWith('src/access_control/')) return true;
 		const model = /^src\/data\/model\/([^/]+)\//.exec(path)?.[1];
 		return model !== undefined && !readsAny(a, model);
 	};

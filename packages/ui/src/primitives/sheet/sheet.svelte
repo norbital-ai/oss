@@ -277,7 +277,7 @@ and goes full screen from its header.
 		].join(';') || undefined}
 		class={cn(
 			// a phone: one bottom drawer for every side, its top corners a squircle; expanded, the whole screen
-			'bg-popover text-popover-foreground fixed inset-x-0 bottom-[var(--keyboard-inset,0px)] z-40 flex max-h-[calc(100dvh-var(--keyboard-inset,0px))] min-w-0 animate-in flex-col rounded-t-xl border-t pb-[env(safe-area-inset-bottom)] shadow-deep fade-in-0 slide-in-from-bottom-4 animation-duration-200 ease-out motion-reduce:animate-none [corner-shape:squircle]',
+			'bg-popover text-popover-foreground fixed inset-x-0 bottom-[var(--keyboard-inset,0px)] z-40 flex max-h-[calc(100dvh-var(--keyboard-inset,0px))] min-w-0 animate-in flex-col rounded-t-lg border-t pb-[env(safe-area-inset-bottom)] shadow-deep fade-in-0 slide-in-from-bottom-4 animation-duration-200 ease-out motion-reduce:animate-none [corner-shape:squircle]',
 			full
 				? 'h-[calc(100dvh-var(--keyboard-inset,0px))] rounded-none border-t-0 pt-[env(safe-area-inset-top)] md:pt-0'
 				: 'h-[var(--sheet-h,min(90dvh,48rem))]',

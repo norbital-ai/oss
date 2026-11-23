@@ -57,7 +57,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 	import Icon from '../icon/icon-wrapper.svelte';
 	import { cn, ui_text } from '../utils.js';
 	import { inset_reader } from '../../layout/inset.svelte.js';
-	import { INSET_X_CLASS, SCROLL_AXIS_CLASSES } from '../../layout/layout.shared.js';
+	import { INSET_X_CLASS } from '../../layout/layout.shared.js';
 	import { observeTabOverflow } from './overflow.js';
 	import OverflowTrigger from './overflow-trigger.svelte';
 	import TabPanel from './tab-panel.svelte';
@@ -99,13 +99,13 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 		fit = $state(Infinity),
 		moreOpen = $state(false);
 	watch(
-		() => vertical || list === null || measure === null ? null : { list, measure },
+		() => list === null || measure === null ? null : { list, measure },
 		(elements) => {
 			if (elements === null) return;
 			return observeTabOverflow(elements.list, elements.measure, (count) => (fit = count));
 		}
 	);
-	const shownTabs = $derived(vertical || fit >= tabs.length ? tabs : tabs.slice(0, fit));
+	const shownTabs = $derived(fit >= tabs.length ? tabs : tabs.slice(0, fit));
 	const overflow = $derived(tabs.filter((t) => !shownTabs.includes(t)));
 	const activeInMore = $derived(overflow.some((t) => t.name === active));
 	const triggerClass = $derived(
@@ -158,7 +158,8 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 					leading ? 'ml-auto min-w-0 flex-1' : 'flex-1',
 					TAB_TRACK,
 					TAB_LIST[variant],
-					vertical ? [SCROLL_AXIS_CLASSES.x, RAIL, RAIL_LIST[variant]] : 'overflow-x-clip'
+					'overflow-x-clip',
+					vertical && [RAIL, RAIL_LIST[variant]]
 				)}
 			>
 				{#each shownTabs as tab (tab.name)}
@@ -185,20 +186,18 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 						</Popover.Content>
 					</Popover.Root>
 				{/if}
-				{#if !vertical}
-					<!-- every trigger at its natural width, and More's, measured off-screen: what fits is computed from them -->
-					<div
-						bind:this={measure}
-						aria-hidden="true"
-						class="pointer-events-none invisible absolute top-0 left-0 flex w-max"
+				<!-- every trigger at its natural width, and More's, measured off-screen: what fits is computed from them -->
+				<div
+					bind:this={measure}
+					aria-hidden="true"
+					class="pointer-events-none invisible absolute top-0 left-0 flex w-max"
+				>
+					{#each tabs as tab (tab.name)}<span class={triggerClass}>{@render label(tab)}</span
+						>{/each}
+					<span class={triggerClass}
+						><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span></span
 					>
-						{#each tabs as tab (tab.name)}<span class={triggerClass}>{@render label(tab)}</span
-							>{/each}
-						<span class={triggerClass}
-							><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span></span
-						>
-					</div>
-				{/if}
+				</div>
 			</Tabs.List>
 			{@render trailing?.()}
 		</div>

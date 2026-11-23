@@ -226,12 +226,13 @@
 			role={expanded ? 'dialog' : undefined} aria-modal={expanded ? true : undefined}
 			data-preview-expanded={expanded || undefined}
 			class={expanded
-				? 'preview-frame fixed inset-4 z-50 m-0 flex min-h-0 min-w-0 max-w-none flex-col overflow-hidden rounded-xl border border-border bg-popover p-0 shadow-deep'
+				? 'preview-frame fixed inset-4 z-50 m-0 flex min-h-0 min-w-0 max-w-none flex-col overflow-hidden rounded-lg border border-border bg-popover p-0 shadow-deep'
 				: 'preview-frame flex min-h-0 min-w-0 flex-1 flex-col'}>
 		<Dialog.Title class="sr-only">{title}</Dialog.Title>
 		<Dialog.Description class="sr-only">{t('Interactive preview. Close the expanded view to return to your work.')}</Dialog.Description>
 <Stack gap="none" size="fill">
 	<TabStrip
+		level={2}
 		class="px-4"
 		label={t('Preview panels')}
 		value={pane}
@@ -367,11 +368,11 @@
 			>
 				<!-- the bezel; inside it the box is the scaled size, the page laid out at the full size and drawn at `zoom` -->
 				<div
-					class="relative mx-auto w-fit rounded-2xl border border-border bg-card p-1.5 shadow-deep"
+					class="relative mx-auto w-fit rounded-lg border border-border bg-card p-1.5 shadow-deep"
 				>
 					<div
 						bind:this={frame}
-						class="relative overflow-hidden rounded-xl bg-background ring-1 ring-border/60"
+						class="relative overflow-hidden rounded-md bg-background ring-1 ring-border/60"
 						style:width={`${size.width * zoom}px`}
 						style:height={`${size.height * zoom}px`}
 					>

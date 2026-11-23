@@ -134,7 +134,12 @@ function info(env: EvalEnv, c: string, name: string): FieldInfo {
 	const key = target?.key[0], scalar = key === undefined ? undefined : target?.fields.get(key);
 	if (dot > 0 && reference?.arms?.includes(arm) === true && scalar !== undefined)
 		return { ...scalar, name, column: `${reference.column}__${arm}` };
-	throw invalid(`unknown field '${name}' on '${c}'`);
+	const fields = [...(env.cat.models.get(c)?.fields.keys() ?? [])];
+	const hint =
+		fields.length === 0
+			? ''
+			: ` (fields: ${fields.slice(0, 30).join(', ')}${fields.length > 30 ? `, … +${fields.length - 30}` : ''})`;
+	throw invalid(`unknown field '${name}' on '${c}'${hint}`);
 }
 /** Admit a row through one output, or any granted output for related-row and write visibility. */
 export function canRead(env: EvalEnv, model: string, row: RowData, output?: string): boolean {

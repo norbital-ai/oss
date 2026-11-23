@@ -209,7 +209,7 @@
 							</p>
 						{/if}
 						{#if queued.length > 0}
-							<details open class="group/queue rounded-xl border border-border/70 bg-muted/20" data-agent-queue>
+							<details open class="group/queue rounded-md border border-border/70 bg-muted/20" data-agent-queue>
 								<summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
 									<Icon name="lucide:list-plus" class="size-3.5 shrink-0 text-muted-foreground" />
 									<span class="font-medium">{t('Queued instructions')}</span>

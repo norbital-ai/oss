@@ -1241,6 +1241,57 @@ describe('skill', () => {
 			});
 		})
 	);
+	it.effect(
+		'skill loads multiple sections or multiple skills in one batched call and advertises reference files in the catalogue',
+		() =>
+			Effect.gen(function* () {
+				const x = yield* ctx({
+					skills: {
+						authoring: skill_of({
+							'SKILL.md':
+								'---\ndescription: How to author\n---\n## Models\nModel rules.\n## Policies\nPolicy rules.\n',
+							'references/models.md': '# Models ref\nDetail A.\n',
+							'references/policies.md': '# Policies ref\nDetail B.\n'
+						}),
+						ui: skill_of({
+							'SKILL.md': '---\ndescription: UI guide\n---\n## Tabs\nTab rules.\n',
+							'references/radii.md': '# Radii\n4/6/10/12.\n'
+						})
+					}
+				});
+				const cat = yield* catalogue(x);
+				expect(cat.index['skill:authoring']).toContain('[files: references/models.md, references/policies.md]');
+				expect(
+					yield* result(x, 'skill', { name: 'authoring', sections: ['Models', 'Policies'] })
+				).toMatchObject({
+					result: {
+						skill: 'authoring',
+						sections: ['Models', 'Policies'],
+						text: expect.stringContaining('Model rules.')
+					},
+					bounded: true
+				});
+				const batched = yield* result(x, 'skill', {
+					requests: [
+						{ name: 'authoring', files: ['references/models.md', 'references/policies.md'] },
+						{ name: 'ui', section: 'Tabs' },
+						{ name: 'missing' }
+					]
+				});
+				expect(batched).toMatchObject({
+					result: {
+						items: [
+							{ skill: 'authoring', ok: true, files: ['references/models.md', 'references/policies.md'] },
+							{ skill: 'ui', ok: true },
+							{ skill: 'missing', error: expect.stringContaining("No skill 'missing'") }
+						],
+						text: expect.stringContaining('Detail A.')
+					},
+					bounded: true
+				});
+				expect(JSON.stringify(batched)).toContain('Tab rules.');
+			})
+	);
 });
 describe('working-source tools', () => {
 	const source: { [path: string]: string } = {
@@ -1517,6 +1568,9 @@ describe('reading the source is every staff member’s; changing it is an admini
 				expect(
 					yield* result(x, 'workspace_read', { path: 'src/data/model/payroll/+model.ts' })
 				).toMatchObject({ result: { error: 'File not found: src/data/model/payroll/+model.ts' } });
+				expect(
+					yield* result(x, 'workspace_read', { path: 'src/access_control/team/+team.ts' })
+				).toMatchObject({ result: { error: 'File not found: src/access_control/team/+team.ts' } });
 				expect(
 					yield* result(x, 'workspace_grep', { pattern: 'model(', literal: true })
 				).toMatchObject({
@@ -4383,7 +4437,7 @@ describe('the catalogue', () => {
 		};
 		// the first note lists everything but the native tools
 		expect(catalogueNote(base, undefined)).toBe(
-			'[Catalogue]\nSkills (skill reads one):\n- pricing — How we price\nModels (fields; reads and writes beyond the default):\n- tasks(title: text) writes create'
+			'[Catalogue]\nSkills (skill reads one or several via requests):\n- pricing — How we price\nModels (fields; reads and writes beyond the default):\n- tasks(title: text) writes create'
 		);
 		expect(catalogueNote(base, base)).toBeUndefined();
 		const merged = {
@@ -4392,7 +4446,7 @@ describe('the catalogue', () => {
 			'tool:search__news': 'search__news(q: string) — News'
 		};
 		expect(catalogueNote(merged, base)).toBe(
-			'[Catalogue changed by a merge]\nSkills (skill reads one):\n- pricing — How we price now\nTools (run_tool { name, input }):\n- search__news(q: string) — News\nRemoved: search__web_search'
+			'[Catalogue changed by a merge]\nSkills (skill reads one or several via requests):\n- pricing — How we price now\nTools (run_tool { name, input }):\n- search__news(q: string) — News\nRemoved: search__web_search'
 		);
 		const many = Object.fromEntries(Array.from({ length: 11 }, (_, n) => [`skill:s${n}`, `s${n} — x`]));
 		expect(catalogueNote(many, base)).toBe(

@@ -73,6 +73,35 @@ it.each([
 	await unmount(flat);
 });
 
+it('default tabs use symmetric inset and concentric track radius without negative margin clipping', async () => {
+	const body = createRawSnippet(() => ({ render: () => '<p>Tab content</p>' }));
+	const tabs = ['Home', 'Leave'].map((title) => ({ name: title, title, body }));
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(Tabs, { target, props: { tabs } });
+	await tick();
+	const list = target.querySelector('[role=tablist]');
+	const listClasses = (list?.className ?? '').split(/\s+/);
+	expect(listClasses).toContain('p-0.5');
+	expect(listClasses).toContain('rounded-md');
+	expect(listClasses).not.toContain('-ms-0.5');
+	const activeTrigger = target.querySelector('[role=tab]')?.className ?? '';
+	expect(activeTrigger.split(/\s+/)).toContain('rounded-badge');
+	const underlineTarget = document.body.appendChild(document.createElement('div'));
+	const underline = mount(Tabs, { target: underlineTarget, props: { tabs, level: 2 } });
+	await tick();
+	const underlineTrigger = (underlineTarget.querySelector('[role=tab]')?.className ?? '').split(
+		/\s+/
+	);
+	expect(underlineTrigger).toContain('rounded-t-md');
+	expect(underlineTrigger).toContain('rounded-b-none');
+	expect(underlineTrigger).toContain('after:bottom-0');
+	expect(underlineTrigger).not.toContain('after:-bottom-0.5');
+	await unmount(view);
+	await unmount(underline);
+	target.remove();
+	underlineTarget.remove();
+});
+
 it.each([250, 100])(
 	'page navigation keeps overflow links and the active page under More at %ipx',
 	async (available) => {
@@ -166,6 +195,62 @@ it.each(['en', 'zh'])('an overflow tab keeps its selection with %s chrome', asyn
 		flushSync();
 		expect(document.querySelector('[aria-current=page]')?.textContent?.trim()).toBe('Suspension');
 		await unmount(view);
+	} finally {
+		if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width);
+		if (room) Object.defineProperty(HTMLElement.prototype, 'clientWidth', room);
+		else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
+		window.getComputedStyle = style;
+	}
+});
+
+it('narrow vertical tabs collapse overflowing items into More instead of clipping horizontally', async () => {
+	const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+	const room = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+	const style = window.getComputedStyle;
+	Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+		configurable: true,
+		get: () => 100
+	});
+	Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+		configurable: true,
+		get(this: Element) {
+			return this.getAttribute('role') === 'tablist' ? 250 : 0;
+		}
+	});
+	let direction = 'row';
+	window.getComputedStyle = () => {
+		const flat = document.createElement('div').style;
+		flat.flexDirection = direction;
+		flat.columnGap = flat.paddingLeft = flat.paddingRight = '0px';
+		return flat;
+	};
+	try {
+		const body = createRawSnippet(() => ({ render: () => '<p>Tab content</p>' }));
+		const tabs = ['Allowances', 'Overtime', 'Ad hoc'].map((title) => ({ name: title, title, body }));
+		const target = document.body.appendChild(document.createElement('div'));
+		const view = mount(Tabs, {
+			target,
+			props: { tabs, orientation: 'vertical', level: 2, value: 'Ad hoc' }
+		});
+		await tick();
+		flushSync();
+		expect([...target.querySelectorAll('[role=tab]')].map((e) => e.textContent?.trim())).toEqual([
+			'Allowances'
+		]);
+		expect(target.querySelector('[data-tabs-more]')?.getAttribute('data-state')).toBe('active');
+		await unmount(view);
+		// In wide column layout, all vertical tabs render without a More trigger
+		direction = 'column';
+		const wide = mount(Tabs, {
+			target,
+			props: { tabs, orientation: 'vertical', level: 2, value: 'Ad hoc' }
+		});
+		await tick();
+		flushSync();
+		expect([...target.querySelectorAll('[role=tab]')]).toHaveLength(3);
+		expect(target.querySelector('[data-tabs-more]')).toBeNull();
+		await unmount(wide);
+		target.remove();
 	} finally {
 		if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width);
 		if (room) Object.defineProperty(HTMLElement.prototype, 'clientWidth', room);

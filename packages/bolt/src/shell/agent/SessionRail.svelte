@@ -178,7 +178,7 @@
 		{#if focus !== null}
 			<!-- one sub-agent, opened from the list: its whole live view -->
 			<div
-				class="min-h-0 flex-1 overflow-auto rounded-2xl border border-border bg-background"
+				class="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-background"
 				in:motion={{ x: 4, duration: navigating ? 120 : 0 }}
 				data-rail-view="agent"
 			>
@@ -192,7 +192,7 @@
 			</div>
 		{:else}
 			<div
-				class="grid min-h-0 flex-1 content-start auto-rows-max divide-y divide-border overflow-auto rounded-2xl border border-border bg-background px-5 [&>section]:py-4"
+				class="grid min-h-0 flex-1 content-start auto-rows-max divide-y divide-border overflow-auto rounded-md border border-border bg-background px-5 [&>section]:py-4"
 				in:motion={{ x: -4, duration: navigating ? 120 : 0 }}
 				data-rail-view="overview"
 			>

@@ -97,7 +97,7 @@
 		<Frame
 			ratio="square"
 			class={cn(
-				compact ? 'size-8 rounded-lg' : 'size-11 rounded-xl',
+				compact ? 'size-8 rounded-md' : 'size-11 rounded-md',
 				// a phone's one line gives the icon's room to the lane
 				compact && actions !== undefined && 'max-sm:hidden',
 				scrim ? 'bg-background text-foreground ring-1 ring-border' : 'bg-muted text-foreground'
@@ -232,21 +232,19 @@
 	-->
 	<!-- The neutral background is the base wash while the image loads, or when it fails. -->
 	<div
-		class={cn('relative h-28 shrink-0 overflow-clip bg-neutral-900', className)}
+		class={cn('relative min-h-28 shrink-0 overflow-clip bg-neutral-900', className)}
 		data-layout="app-media-header"
 	>
 		{@render banner()}
 		<!-- Dark scrim: strong at the copy edge, lighter toward the top; the copy sits on its bottom edge. -->
-		<Imposter placement="fill" class="bg-linear-to-t from-black/80 via-black/50 to-black/25">
-			<Stack gap="none" justify="end" size="fill">
-				<Inline align="end" justify="between" gap="md" class={cn(INSET_X_CLASS, 'py-3')}>
-					{@render identity()}
-					{#if actions}
-						<Cluster justify="end" class={cn(onScrim)} data-app-actions>{@render actions()}</Cluster
-						>
-					{/if}
-				</Inline>
-			</Stack>
-		</Imposter>
+		<div class="relative flex min-h-28 w-full flex-col justify-end bg-linear-to-t from-black/80 via-black/50 to-black/25">
+			<div class={cn('flex flex-wrap items-end justify-between gap-x-4 gap-y-2 py-3', INSET_X_CLASS)}>
+				<div class="flex min-w-48 flex-1 items-center gap-3">{@render identity()}</div>
+				{#if actions}
+					<Cluster justify="end" class={cn('shrink-0', onScrim)} data-app-actions>{@render actions()}</Cluster
+					>
+				{/if}
+			</div>
+		</div>
 	</div>
 {/if}

@@ -5,9 +5,13 @@ export function observeTabOverflow(
 	onFit: (count: number) => void
 ): () => void {
 	const layout = () => {
+		const style = getComputedStyle(list);
+		if (style.flexDirection === 'column') {
+			onFit(Infinity);
+			return;
+		}
 		const items = [...measure.children].filter((e): e is HTMLElement => e instanceof HTMLElement);
 		const more = items.pop()?.offsetWidth ?? 0;
-		const style = getComputedStyle(list);
 		const gap = parseFloat(style.columnGap) || 0;
 		const room =
 			list.clientWidth -
