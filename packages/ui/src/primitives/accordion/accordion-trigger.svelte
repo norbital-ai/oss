@@ -56,7 +56,7 @@
 			>
 				<Icon
 					icon="lucide:chevron-down"
-					class="size-4 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none"
+					class="size-4 text-muted-foreground transition-transform duration-[var(--motion-base)] ease-spring-snappy motion-reduce:transition-none"
 				/>
 			</Frame>
 		</Inline>

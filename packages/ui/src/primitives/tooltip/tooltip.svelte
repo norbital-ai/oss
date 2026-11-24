@@ -2,6 +2,12 @@
 @component
 A tooltip on hover or focus of its trigger, with a text or snippet body; where nothing hovers, a tap opens it as a popover.
 -->
+<script lang="ts" module>
+	const WARM_MS = 250;
+	let activeTooltip: { close: () => void } | null = null;
+	let lastClosedAt = 0;
+</script>
+
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { FloatingAlign, FloatingSide } from '../../behaviors/index.js';
@@ -74,9 +80,33 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 	let closeTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const open = $derived(controlledOpen ?? internalOpen);
+	const handle = {
+		close() {
+			clearTimers();
+			setOpen(false);
+		}
+	};
+
+	function clearTimers(): void {
+		if (openTimer !== undefined) {
+			clearTimeout(openTimer);
+			openTimer = undefined;
+		}
+		if (closeTimer !== undefined) {
+			clearTimeout(closeTimer);
+			closeTimer = undefined;
+		}
+	}
 
 	function setOpen(next: boolean): void {
 		if (next === open) return;
+		if (next && controlledOpen === undefined) {
+			if (activeTooltip !== null && activeTooltip !== handle) activeTooltip.close();
+			activeTooltip = handle;
+		} else if (!next && activeTooltip === handle) {
+			activeTooltip = null;
+			lastClosedAt = Date.now();
+		}
 		if (controlledOpen !== undefined) controlledOpen = next;
 		internalOpen = next;
 		on_open_change?.(next);
@@ -84,12 +114,9 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 	}
 
 	function scheduleOpen(): void {
-		if (closeTimer !== undefined) {
-			clearTimeout(closeTimer);
-			closeTimer = undefined;
-		}
-		if (openTimer !== undefined) clearTimeout(openTimer);
-		if (delay_duration <= 0) {
+		clearTimers();
+		const warm = activeTooltip !== null || Date.now() - lastClosedAt < WARM_MS;
+		if (delay_duration <= 0 || warm) {
 			setOpen(true);
 		} else {
 			openTimer = setTimeout(() => {
@@ -100,11 +127,7 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 	}
 
 	function scheduleClose(): void {
-		if (openTimer !== undefined) {
-			clearTimeout(openTimer);
-			openTimer = undefined;
-		}
-		if (closeTimer !== undefined) clearTimeout(closeTimer);
+		clearTimers();
 		if (disable_hoverable_content) {
 			setOpen(false);
 		} else {
@@ -116,16 +139,29 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 	}
 
 	$effect(() => () => {
-		if (openTimer !== undefined) clearTimeout(openTimer);
-		if (closeTimer !== undefined) clearTimeout(closeTimer);
+		clearTimers();
+		if (activeTooltip === handle) activeTooltip = null;
+	});
+
+	$effect(() => {
+		if (!open || noHover.current || typeof document === 'undefined') return;
+		const onKeydown = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') setOpen(false);
+		};
+		document.addEventListener('keydown', onKeydown);
+		return () => document.removeEventListener('keydown', onKeydown);
 	});
 
 	const hoverTriggerProps = $derived({
 		onpointerenter: (e: PointerEvent) => {
+			if (e.pointerType === 'touch') return;
 			if (e.currentTarget instanceof HTMLElement) anchorEl = e.currentTarget;
 			scheduleOpen();
 		},
-		onpointerleave: () => scheduleClose(),
+		onpointerleave: (e: PointerEvent) => {
+			if (e.pointerType === 'touch') return;
+			scheduleClose();
+		},
 		onfocus: (e: FocusEvent) => {
 			if (e.currentTarget instanceof HTMLElement) {
 				anchorEl = e.currentTarget;
@@ -181,10 +217,9 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 			trap_focus={false}
 			on_open_auto_focus={(e: Event) => e.preventDefault()}
 			class={cn(
-				'px-3 py-1.5 text-xs text-balance',
+				'max-w-[min(20rem,calc(100vw-1rem))] px-3 py-1.5 text-xs leading-snug text-pretty [overflow-wrap:anywhere]',
 				// repository-health:allow UI25 -- pass-through of the caller's `content_class` prop; its tokens are literal at the call site
-				content_class,
-				'max-w-[min(20rem,calc(100vw-1rem))]'
+				content_class
 			)}
 		>
 			{@render body()}

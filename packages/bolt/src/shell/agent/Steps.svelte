@@ -55,7 +55,7 @@
 						.filter((part) => part !== '')
 						.join(' · ')}
 		<li
-			class="animate-in fade-in-0 slide-in-from-bottom-1 animation-duration-150 ease-out motion-reduce:animate-none"
+			class="animate-in fade-in-0 slide-in-from-bottom-1 animation-duration-150 ease-spring-snappy motion-reduce:animate-none"
 			data-step
 			data-tool={tool?.name}
 			data-report={s.report?.conversation}

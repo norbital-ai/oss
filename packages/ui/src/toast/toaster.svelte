@@ -68,12 +68,13 @@ The page's toasts, bottom right (bottom centre on a phone, above the safe area).
 
 <style>
 	.toast {
-		animation: toast-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
+		transform-origin: bottom center;
+		animation: toast-in var(--motion-base, 180ms) var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
 	}
 	@keyframes toast-in {
 		from {
 			opacity: 0;
-			transform: translateY(4px);
+			transform: translate3d(0, 6px, 0) scale(0.98);
 		}
 	}
 	@media (prefers-reduced-motion: reduce) {

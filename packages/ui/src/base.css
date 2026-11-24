@@ -229,12 +229,21 @@
 	/** Product icon accents (and the Agent thinking orb's sweep) share one canonical brand stroke. */
 	--product-icon-accent: var(--brand);
 
-	/* Motion: one ease-out, three durations, nothing over 300ms. Finger-driven surfaces (sheets,
-	   swipes) use springs instead — a duration on something the finger moves feels wrong. */
+	/* Motion: short durations, nothing over 300ms. Floating/centred overlays use `--ease-spring`
+	   (snappy settle); edge-docked sheets and in-flow disclosures use `--ease-spring-snappy`
+	   (critically damped, zero overshoot so docked edges never detach). */
 	--motion-fast: 120ms;
 	--motion-base: 180ms;
 	--motion-slow: 260ms;
 	--ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+	--ease-spring: linear(
+		0, 0.1142, 0.3423, 0.5743, 0.7615, 0.8915, 0.9702, 1.0107,
+		1.0263, 1.0279, 1.0229, 1.0162, 1.01, 1.0052, 1.0021, 1.0003, 1
+	);
+	--ease-spring-snappy: linear(
+		0, 0.0987, 0.2846, 0.4696, 0.6231, 0.7399, 0.8243, 0.8832,
+		0.9234, 0.9502, 0.9679, 0.9795, 0.987, 0.9918, 0.9948, 0.9967, 1
+	);
 	/* Touch density: a phone thumb needs 44px; the tokens flip under (pointer: coarse) below. */
 	--hit-target: 0;
 }
@@ -500,6 +509,8 @@
 	/* A card is separated by its hairline, not by an ambient shadow. */
 	--shadow-card: none;
 	--shadow-deep: 0 8px 32px rgb(0 0 0 / 0.12);
+	--ease-spring: var(--ease-spring);
+	--ease-spring-snappy: var(--ease-spring-snappy);
 
 	/* ================================================================ */
 	/* Canonical type scale                              */
@@ -1264,6 +1275,7 @@
    `--dialog-pad: 0px`, with the unit `calc()` needs. */
 @media (max-width: 47.999rem) {
 	[data-mobile-bottom-sheet='true'] {
+		--tw-ease: var(--ease-spring-snappy) !important;
 		--tw-enter-translate-x: 0 !important;
 		--tw-enter-translate-y: 100% !important;
 		--tw-enter-scale: 1 !important;

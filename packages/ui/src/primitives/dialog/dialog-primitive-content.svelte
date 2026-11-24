@@ -92,9 +92,17 @@
 				? document.activeElement
 				: null;
 
-		// Scroll lock
+		// Scroll lock (compensate scrollbar gutter so locking body scroll causes zero horizontal layout shift)
 		const prevOverflow = prevent_scroll ? document.body.style.overflow : null;
-		if (prevent_scroll) document.body.style.overflow = 'hidden';
+		const prevPaddingRight = prevent_scroll ? document.body.style.paddingRight : null;
+		if (prevent_scroll) {
+			const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+			if (scrollbarWidth > 0) {
+				const currentPad = Number.parseFloat(getComputedStyle(document.body).paddingRight) || 0;
+				document.body.style.paddingRight = `${currentPad + scrollbarWidth}px`;
+			}
+			document.body.style.overflow = 'hidden';
+		}
 
 		// Open autofocus
 		const openEvent = new CustomEvent('dialog.openAutoFocus', { cancelable: true });
@@ -149,6 +157,7 @@
 			document.removeEventListener('keydown', onKeydown);
 			document.removeEventListener('focusin', onFocusin, true);
 			if (prevOverflow !== null) document.body.style.overflow = prevOverflow;
+			if (prevPaddingRight !== null) document.body.style.paddingRight = prevPaddingRight;
 			const closeEvent = new CustomEvent('dialog.closeAutoFocus', { cancelable: true });
 			on_close_auto_focus?.(closeEvent);
 			if (!closeEvent.defaultPrevented && previous !== null && previous.isConnected) {

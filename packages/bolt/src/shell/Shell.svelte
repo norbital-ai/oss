@@ -365,13 +365,14 @@
 			sounds.close();
 		};
 	});
-	const pageContext = (): ShellPageContext => {
-		if (bolt === null) throw new Error('The workspace shell has not booted.');
-		return page_context(bolt, ui);
-	};
+	// Memoize the shell's view and page contexts against `bolt`/`boot` so URL and `?record=` stack
+	// updates never hand fresh object references to mounted pages or underlying record sheets.
+	const sharedViewContext = $derived(
+		bolt === null || boot === null ? null : view_client(bolt, boot.read_catalog, boot.catalog)
+	);
 	const viewContext = () => {
-		if (bolt === null || boot === null) throw new Error('The workspace shell has not booted.');
-		return view_client(bolt, boot.read_catalog, boot.catalog);
+		if (sharedViewContext === null) throw new Error('The workspace shell has not booted.');
+		return sharedViewContext;
 	};
 	let failure = $state<{ code: string; message: string; status: number } | null>(null);
 	let agentRequest = $state<AgentRequest | null>(null);
@@ -460,6 +461,11 @@
 				return config.custom_fields;
 			}
 		}
+	};
+	const sharedPageContext = $derived(bolt === null ? null : page_context(bolt, ui));
+	const pageContext = (): ShellPageContext => {
+		if (sharedPageContext === null) throw new Error('The workspace shell has not booted.');
+		return sharedPageContext;
 	};
 	// the record views of every `RecordShell` under the shell, the `?record=` sheet's and a page's alike
 	// a page's AppShell publishes its identity and actions here; the hero above the page renders them

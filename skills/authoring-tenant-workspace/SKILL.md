@@ -16,7 +16,7 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 | Workspace, secrets, apps, SSR, kiosks, anonymous users          | `apps-and-surfaces.md`                  |
 | Theme, accent, light/dark palette, fonts and radius             | `apps-and-surfaces.md`, Workspace theme |
 | Automations, effects, notifications (`ctx.notify`), reruns, AI  | `automations-and-effects.md`            |
-| Briefs, workspace skills, envoys, integrations                  | `agents-and-integrations.md`            |
+| Briefs, workspace skills, envoys, integrations, sync boundary   | `agents-and-integrations.md`            |
 | What the platform renders                                       | `built-ins.md`                          |
 | Primitive roles (`⚡`, matrix, timeline), page slots, toolbar, tabs, forms | `app-structure.md`                      |
 | Composing novel interactive UIs (`Surface`, `@norbital-ai/ui/behaviors`)   | `behaviors-and-composition.md`          |
@@ -33,7 +33,7 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 | Studio commits, migrations, history, merges, reverts, rollbacks | `studio.md`                             |
 | Rebuild an existing application                                 | `repository-rebuild.md`                 |
 
-Policies, teams, limits, approvals: `norbital-platform`, `references/approvals-and-policies.md`. Tests: `authoring-test-suites`.
+Policies, teams, limits, approvals: `norbital-platform`, `references/approvals-and-policies.md`. Integration sync boundary & audit: `integration-sync`. Tests: `authoring-test-suites`.
 
 ## Author and verify
 

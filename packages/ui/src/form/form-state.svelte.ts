@@ -303,9 +303,9 @@ export class FormState {
 			).length > 0
 		);
 	}
-	expect_capabilities(): void {
+	expect_capabilities(reset = true): void {
 		this.#capabilitiesRequired = true;
-		this.capabilities = undefined;
+		if (reset) this.capabilities = undefined;
 	}
 	get can_submit(): boolean {
 		return (

@@ -286,3 +286,91 @@ it('a registered record view stays valid while a live row disappears and returns
 		target.remove();
 	}
 });
+
+it('keeps the footer Edit button mounted across same-record refreshes while capabilities reload', async () => {
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
+	let current = { ...ROW };
+	let capabilityCalls = 0;
+	const pendingCap: { release: (() => void) | null } = { release: null };
+	const readers = new Set<() => void>();
+	const fixture = await scriptedBolt({
+		catalog,
+		answer: (read) =>
+			read.m === 'history'
+				? []
+				: Object.fromEntries(
+						Object.keys(readObject(read.a[0])).map((root) => [
+							root,
+							{
+								rows: root === 'jobs' ? [current] : [],
+								next: null,
+								total: root === 'jobs' ? 1 : 0
+							}
+						])
+					),
+		capabilities: async () => {
+			capabilityCalls += 1;
+			if (capabilityCalls >= 2) {
+				await new Promise<void>((resolve) => {
+					pendingCap.release = resolve;
+				});
+			}
+			return {
+				model: 'jobs',
+				id: current.id,
+				revision: current.revision,
+				fields: {
+					title: { readable: true, writable: true, proposal: false, reasons: [] },
+					crew: { readable: true, writable: true, proposal: false, reasons: [] }
+				},
+				update: { allowed: true, proposal: false, reasons: [] },
+				delete: { allowed: true, proposal: false, reasons: [] },
+				moves: {},
+				proposal_moves: {}
+			};
+		},
+		changes: (_read, emit) => {
+			readers.add(emit);
+			return () => {
+				readers.delete(emit);
+			};
+		}
+	});
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(Harness, {
+		target,
+		props: { bolt: fixture.bolt, catalog, representation: 'decorated' }
+	});
+	const editButton = () =>
+		[...target.querySelectorAll<HTMLButtonElement>('[data-record-foot] button')].find(
+			(button) => button.textContent?.trim() === 'Edit'
+		) ?? null;
+	try {
+		await expect.poll(() => editButton()).not.toBeNull();
+		const initialCalls = capabilityCalls;
+
+		// Same-revision re-emit: Edit stays mounted and capabilities are not refetched
+		current = { ...current };
+		for (const read of readers) read();
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		expect(editButton()).not.toBeNull();
+		expect(capabilityCalls).toBe(initialCalls);
+
+		// New-revision refresh with delayed capabilities: Edit stays visible while capabilities are in flight
+		current = { ...current, revision: current.revision + 1, title: 'Paint v4' };
+		for (const read of readers) read();
+		await expect.poll(() => capabilityCalls).toBe(initialCalls + 1);
+		expect(editButton()).not.toBeNull();
+
+		required(pendingCap.release)();
+		await expect.poll(() => target.querySelector('[data-field=title]')?.textContent).toContain('Paint v4');
+		expect(editButton()).not.toBeNull();
+	} finally {
+		pendingCap.release?.();
+		await unmount(view);
+		await fixture.dispose();
+		await dispose();
+		target.remove();
+	}
+});

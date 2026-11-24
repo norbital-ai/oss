@@ -37,7 +37,7 @@
 			// repository-health:allow UI19 -- modal dialog owns viewport-centred placement and center-origin scale motion
 			// repository-health:allow UI6 -- consumers restyle rhythm through `class` (`gap-0 p-0`) on the content box itself
 			// repository-health:allow UI27 -- `gap-4` is the overridable default rhythm of direct children
-			'fixed top-[50%] left-[50%] z-50 grid w-full origin-center translate-x-[-50%] translate-y-[-50%] gap-4 border bg-popover p-6 shadow-deep animation-duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:rounded-overlay',
+			'fixed top-[50%] left-[50%] z-50 grid w-full origin-center translate-x-[-50%] translate-y-[-50%] gap-4 border bg-popover p-6 shadow-deep animation-duration-200 ease-spring motion-reduce:animate-none data-[state=closed]:pointer-events-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:fill-mode-forwards data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:rounded-overlay',
 			className
 		)}
 		{...restProps}

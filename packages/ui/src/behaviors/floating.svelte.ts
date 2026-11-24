@@ -15,6 +15,8 @@ export type FloatingOptions = {
 	readonly open: () => boolean;
 	/** Called when Escape or an outside pointer press dismisses the surface. */
 	readonly on_dismiss?: (reason: DismissReason) => void;
+	/** Optional reactive anchor element getter (avoids a second effect pass when anchor is a prop). */
+	readonly anchor?: () => HTMLElement | null;
 	/** Preferred side relative to the anchor (default `'bottom'`). */
 	readonly side?: FloatingSide | (() => FloatingSide);
 	/** Cross-axis alignment relative to the anchor (default `'center'`). */
@@ -88,10 +90,13 @@ export function create_floating(options: FloatingOptions) {
 	let contentEl = $state<HTMLElement | null>(null);
 	let x = $state(0);
 	let y = $state(0);
-	let actualSide = $state<FloatingSide>('bottom');
+	let actualSide = $state<FloatingSide | null>(null);
 	let anchorWidth = $state(0);
+	let originX = $state('50%');
+	let originY = $state('50%');
 	let positioned = $state(false);
 
+	const resolvedAnchor = () => options.anchor?.() ?? anchorEl;
 	const preferredSide = () =>
 		typeof options.side === 'function' ? options.side() : (options.side ?? 'bottom');
 	const preferredAlign = () =>
@@ -114,21 +119,29 @@ export function create_floating(options: FloatingOptions) {
 		on_dismiss: (reason) => options.on_dismiss?.(reason),
 		escape: options.escape ?? true,
 		outside: options.outside ?? true,
-		ignore: () => [anchorEl]
+		ignore: () => [resolvedAnchor()]
 	});
 
 	function update(): void {
-		if (anchorEl === null || contentEl === null || typeof window === 'undefined') return;
-		const aRect = anchorEl.getBoundingClientRect();
-		const cRect = contentEl.getBoundingClientRect();
-		const childRect =
-			cRect.width === 0 || cRect.height === 0
-				? contentEl.firstElementChild?.getBoundingClientRect()
-				: undefined;
+		const anchorNode = resolvedAnchor();
+		if (anchorNode === null || contentEl === null || typeof window === 'undefined') return;
+		const aRect = anchorNode.getBoundingClientRect();
 		const vw = document.documentElement.clientWidth || window.innerWidth || 1024;
 		const vh = document.documentElement.clientHeight || window.innerHeight || 768;
-		const width = cRect.width || contentEl.offsetWidth || childRect?.width || contentEl.scrollWidth || 0;
-		const height = cRect.height || contentEl.offsetHeight || childRect?.height || contentEl.scrollHeight || 0;
+		// Measure untransformed layout dimensions first (`offsetWidth`/`offsetHeight`) so CSS
+		// scale/translate enter animations never shrink the box and trigger mid-flight jumps or
+		// right-edge re-wrap loops. Fall back to bounding rects for synthetic DOMs (offset* === 0).
+		let width = contentEl.offsetWidth;
+		let height = contentEl.offsetHeight;
+		if (width === 0 || height === 0) {
+			const cRect = contentEl.getBoundingClientRect();
+			const childRect =
+				cRect.width === 0 || cRect.height === 0
+					? contentEl.firstElementChild?.getBoundingClientRect()
+					: undefined;
+			if (width === 0) width = cRect.width || childRect?.width || contentEl.scrollWidth || 0;
+			if (height === 0) height = cRect.height || childRect?.height || contentEl.scrollHeight || 0;
+		}
 
 		anchorWidth = aRect.width;
 		let side = preferredSide();
@@ -140,27 +153,53 @@ export function create_floating(options: FloatingOptions) {
 		let pos = computeCoords(aRect, { width, height }, side, align, sOff, aOff);
 		if (flipOf()) {
 			const overflows =
-				(side === 'bottom' && pos.y + height > vh - pad && aRect.top - height - sOff >= pad) ||
-				(side === 'top' && pos.y < pad && aRect.bottom + height + sOff <= vh - pad) ||
-				(side === 'right' && pos.x + width > vw - pad && aRect.left - width - sOff >= pad) ||
-				(side === 'left' && pos.x < pad && aRect.right + width + sOff <= vw - pad);
+				(side === 'bottom' &&
+					pos.y + height > vh - pad &&
+					(aRect.top - height - sOff >= pad || aRect.top > vh - aRect.bottom)) ||
+				(side === 'top' &&
+					pos.y < pad &&
+					(aRect.bottom + height + sOff <= vh - pad || vh - aRect.bottom > aRect.top)) ||
+				(side === 'right' &&
+					pos.x + width > vw - pad &&
+					(aRect.left - width - sOff >= pad || aRect.left > vw - aRect.right)) ||
+				(side === 'left' &&
+					pos.x < pad &&
+					(aRect.right + width + sOff <= vw - pad || vw - aRect.right > aRect.left));
 			if (overflows) {
 				side = opposite(side);
 				pos = computeCoords(aRect, { width, height }, side, align, sOff, aOff);
 			}
 		}
 
-		const clampedX = Math.max(pad, Math.min(pos.x, Math.max(pad, vw - width - pad)));
-		const clampedY = Math.max(pad, Math.min(pos.y, Math.max(pad, vh - height - pad)));
-		x = Math.round(clampedX);
-		y = Math.round(clampedY);
+		const nextX = Math.round(Math.max(pad, Math.min(pos.x, Math.max(pad, vw - width - pad))));
+		const nextY = Math.round(Math.max(pad, Math.min(pos.y, Math.max(pad, vh - height - pad))));
+		const anchorCenterX = aRect.left + aRect.width / 2;
+		const anchorCenterY = aRect.top + aRect.height / 2;
+		if (side === 'top' || side === 'bottom') {
+			originX =
+				width > 0 ? `${Math.round(Math.max(0, Math.min(width, anchorCenterX - nextX)))}px` : '50%';
+			originY = side === 'top' ? '100%' : '0%';
+		} else {
+			originX = side === 'left' ? '100%' : '0%';
+			originY =
+				height > 0
+					? `${Math.round(Math.max(0, Math.min(height, anchorCenterY - nextY)))}px`
+					: '50%';
+		}
+
+		x = nextX;
+		y = nextY;
 		actualSide = side;
 		positioned = true;
 	}
 
 	$effect(() => {
-		if (!options.open() || anchorEl === null || contentEl === null) {
+		const anchorNode = resolvedAnchor();
+		if (!options.open() || anchorNode === null || contentEl === null) {
 			positioned = false;
+			x = 0;
+			y = 0;
+			actualSide = null;
 			return;
 		}
 		update();
@@ -175,7 +214,7 @@ export function create_floating(options: FloatingOptions) {
 		};
 		schedule();
 		const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
-		ro?.observe(anchorEl);
+		ro?.observe(anchorNode);
 		ro?.observe(contentEl);
 		window.addEventListener('resize', schedule, { passive: true });
 		document.addEventListener('scroll', schedule, { capture: true, passive: true });
@@ -211,7 +250,7 @@ export function create_floating(options: FloatingOptions) {
 			return y;
 		},
 		get side() {
-			return actualSide;
+			return actualSide ?? preferredSide();
 		},
 		get anchor_width() {
 			return anchorWidth;
@@ -220,7 +259,9 @@ export function create_floating(options: FloatingOptions) {
 			return positioned;
 		},
 		get style() {
-			return `position:fixed;left:${x}px;top:${y}px;z-index:50;--anchor-width:${anchorWidth}px;${positioned ? '' : 'opacity:0;pointer-events:none;'}`;
+			return positioned
+				? `position:fixed;left:${x}px;top:${y}px;z-index:50;--anchor-width:${anchorWidth}px;--floating-origin-x:${originX};--floating-origin-y:${originY};`
+				: `position:fixed;left:0px;top:0px;z-index:50;--anchor-width:${anchorWidth}px;opacity:0;pointer-events:none;`;
 		},
 		/** Sets a programmatic virtual/explicit anchor element (e.g. for context menus or slash commands). */
 		set_anchor(el: HTMLElement | null) {

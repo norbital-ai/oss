@@ -47,17 +47,20 @@ export function create_dismiss(options: DismissOptions) {
 	const depth = $derived(stack.findIndex((item) => item.id === entry.id));
 	const topmost = $derived(stack.length > 0 && stack.at(-1)?.id === entry.id);
 
+	const escapeEnabled = () =>
+		typeof options.escape === 'function' ? options.escape() : options.escape !== false;
+	const outsideEnabled = () =>
+		typeof options.outside === 'function' ? options.outside() : options.outside !== false;
+
 	$effect(() => {
-		if (!options.open()) {
+		if (!options.open() || (!escapeEnabled() && !outsideEnabled())) {
 			untrack(() => popLayer(entry));
 			return;
 		}
 		untrack(() => pushLayer(entry));
 
 		const onKeydown = (event: KeyboardEvent) => {
-			const allowEscape =
-				typeof options.escape === 'function' ? options.escape() : options.escape !== false;
-			if (!allowEscape) return;
+			if (!escapeEnabled()) return;
 			if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
 			if (stack.at(-1)?.id !== entry.id) return;
 			options.on_dismiss('escape', event);
@@ -65,9 +68,7 @@ export function create_dismiss(options: DismissOptions) {
 		};
 
 		const onPointerdown = (event: PointerEvent) => {
-			const allowOutside =
-				typeof options.outside === 'function' ? options.outside() : options.outside !== false;
-			if (!allowOutside) return;
+			if (!outsideEnabled()) return;
 			if (stack.at(-1)?.id !== entry.id) return;
 			const target = event.target;
 			if (!(target instanceof Node)) return;

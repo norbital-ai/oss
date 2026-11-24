@@ -94,10 +94,17 @@ and goes full screen from its header.
 		asked = true;
 		open = false;
 	};
+	let leaving: Animation[] = [];
+	function cancelLeaving() {
+		for (const anim of leaving) anim.cancel();
+		leaving = [];
+		closing = false;
+	}
 	watch(
 		() => open,
 		(isOpen) => {
 			if (!isOpen) return void leave();
+			cancelLeaving();
 			shown = true;
 			watchKeyboard();
 			pushSheet(me);
@@ -150,7 +157,10 @@ and goes full screen from its header.
 					})
 				: null;
 		if (still.current || (moves === null && fades === null)) return finish();
-		await Promise.allSettled([moves?.finished, fades?.finished]);
+		const active = [moves, fades].filter((a): a is Animation => a !== null);
+		leaving = active;
+		await Promise.allSettled(active.map((a) => a.finished));
+		if (leaving === active) leaving = [];
 		finish();
 	}
 	let full = $state(false);
@@ -263,7 +273,7 @@ and goes full screen from its header.
 			data-sheet-scrim
 			data-sheet-top={top || undefined}
 			style="z-index:{40 + depth}"
-			class="fixed inset-0 animate-in touch-none bg-black/40 fade-in-0 animation-duration-200 motion-reduce:animate-none md:hidden"
+			class="fixed inset-0 animate-in touch-none bg-black/40 fade-in-0 animation-duration-150 ease-out motion-reduce:animate-none md:hidden"
 			onclick={close}
 		></div>
 	{/if}
@@ -283,7 +293,7 @@ and goes full screen from its header.
 		].join(';') || undefined}
 		class={cn(
 			// a phone: one bottom drawer for every side, its top corners a squircle; expanded, the whole screen
-			'bg-popover text-popover-foreground fixed inset-x-0 bottom-[var(--keyboard-inset,0px)] z-40 flex max-h-[calc(100dvh-var(--keyboard-inset,0px))] min-w-0 animate-in flex-col rounded-t-lg border-t pb-[env(safe-area-inset-bottom)] shadow-deep fade-in-0 slide-in-from-bottom-4 animation-duration-200 ease-out motion-reduce:animate-none [corner-shape:squircle]',
+			'bg-popover text-popover-foreground fixed inset-x-0 bottom-[var(--keyboard-inset,0px)] z-40 flex max-h-[calc(100dvh-var(--keyboard-inset,0px))] min-w-0 animate-in flex-col rounded-t-lg border-t pb-[env(safe-area-inset-bottom)] shadow-deep fade-in-0 slide-in-from-bottom-4 animation-duration-200 ease-spring-snappy motion-reduce:animate-none [corner-shape:squircle]',
 			full
 				? 'h-[calc(100dvh-var(--keyboard-inset,0px))] rounded-none border-t-0 pt-[env(safe-area-inset-top)] md:pt-0'
 				: 'h-[var(--sheet-h,min(90dvh,48rem))]',

@@ -48,6 +48,7 @@
 
 	const floating = create_floating({
 		open: () => open,
+		anchor: () => anchor,
 		side: () => side,
 		align: () => align,
 		side_offset: () => side_offset,
@@ -55,10 +56,6 @@
 		flip: () => avoid_collisions,
 		escape: false,
 		outside: false
-	});
-
-	$effect(() => {
-		floating.set_anchor(anchor);
 	});
 </script>
 
@@ -71,11 +68,13 @@
 			data-slot="tooltip-content"
 			data-state="open"
 			data-side={floating.side}
+			data-positioned={floating.positioned ? 'true' : undefined}
 			style={floating.style}
 			onpointerenter={on_pointer_enter}
 			onpointerleave={on_pointer_leave}
 			class={cn(
-				'z-50 w-fit animate-in rounded-control bg-primary px-3 py-1.5 text-xs text-balance text-primary-foreground animation-duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] fade-in-0 zoom-in-95 motion-reduce:animate-none data-[side=bottom]:origin-top data-[side=bottom]:slide-in-from-top-1 data-[side=left]:origin-right data-[side=left]:slide-in-from-right-1 data-[side=right]:origin-left data-[side=right]:slide-in-from-left-1 data-[side=top]:origin-bottom data-[side=top]:slide-in-from-bottom-1',
+				'z-50 w-fit max-w-[min(20rem,calc(100vw-1rem))] origin-[var(--floating-origin-x,50%)_var(--floating-origin-y,50%)] rounded-control bg-primary px-3 py-1.5 text-xs leading-snug text-pretty [overflow-wrap:anywhere] text-primary-foreground animation-duration-150 ease-spring motion-reduce:animate-none data-[positioned=true]:animate-in data-[positioned=true]:fade-in-0 data-[positioned=true]:zoom-in-95',
+				!on_pointer_enter && !on_pointer_leave && 'pointer-events-none',
 				className
 			)}
 			{...restProps}

@@ -3,8 +3,13 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { cn } from '../utils.js';
 	import { slide } from 'svelte/transition';
-	import { cubicOut } from 'svelte/easing';
 	import { get_accordion_item } from './context.js';
+
+	// Critically-damped snappy spring (matches `--ease-spring-snappy`, zero height overshoot).
+	const SPRING_W = 8.4;
+	const SPRING_NORM = 1 - (1 + SPRING_W) * Math.exp(-SPRING_W);
+	const snappySpring = (t: number) =>
+		t <= 0 ? 0 : t >= 1 ? 1 : (1 - (1 + SPRING_W * t) * Math.exp(-SPRING_W * t)) / SPRING_NORM;
 
 	let {
 		class: className,
@@ -26,7 +31,7 @@
 	const slideDuration = () =>
 		typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 			? 0
-			: 200;
+			: 180;
 </script>
 
 {#if open}
@@ -37,7 +42,7 @@
 		data-slot="accordion-content"
 		data-state="open"
 		class={cn('overflow-clip text-sm', className)}
-		transition:slide={{ duration: slideDuration(), easing: cubicOut }}
+		transition:slide={{ duration: slideDuration(), easing: snappySpring }}
 		{...restProps}
 	>
 		<div class="pt-0 pb-4">

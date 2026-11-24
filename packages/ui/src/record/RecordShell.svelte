@@ -146,7 +146,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	} from '../form/form-state.svelte.js';
 	import { draftKey, formSpec, locked } from '../form/draft.js';
 	import { pendingUnload } from '../form/unload.js';
-	import { mapped, queryState } from '../read/state.js';
+	import { mapped, queryState, type ReadState } from '../read/state.js';
 	import { checkpoints, historicalFields, historicalValue, skipText, type Checkpoint } from './history.js';
 	import { label, lowerLead, singular, msg } from '../text/messages.js';
 	import { listRequest, refLabel, refOf, unref, type Refs } from '../relations/select.js';
@@ -225,6 +225,8 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		| {
 				readonly of: string;
 				readonly id: string | undefined;
+				readonly loaded: ReadState<Row | null>;
+				readonly live: Row | null;
 				readonly approvals: Approvals;
 				scrub?: Scrub;
 				history?: { set(config: RecordHistoryConfig): void };
@@ -294,6 +296,12 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		get id() {
 			return id;
 		},
+		get loaded() {
+			return loaded;
+		},
+		get live() {
+			return live;
+		},
 		get approvals() {
 			return requests;
 		},
@@ -319,16 +327,20 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			: registry?.[readOf]?.().then((m) => m.default)
 	);
 
-	// read in this component, the query is live: it follows the record's revisions until the shell unmounts
+	// read in this component, the query is live: it follows the record's revisions until the shell unmounts.
+	// A same-record representation shell inherits its owner's loaded row directly so its footer never flickers on mount.
 	const record = $derived(
-		mode !== 'create' && readId !== undefined
+		!sameRecord && mode !== 'create' && readId !== undefined
 			? mapped(bolt.query(by_id(readOf, readId)), (answer) =>
 					first_of(answer, readOf)
 				)
 			: null
 	);
-	const loaded = $derived(queryState(record));
-	const live = $derived(loaded.kind === 'ready' ? loaded.value : null);
+	const ownLoaded = $derived(queryState(record));
+	const loaded = $derived(sameRecord && parent !== undefined ? parent.loaded : ownLoaded);
+	const live = $derived(
+		sameRecord && parent !== undefined ? parent.live : loaded.kind === 'ready' ? loaded.value : null
+	);
 	const complete = $derived(live === null ? null : bolt.project_record(readOf, live));
 	// ── the scrubber (owner only): the revision the body shows, read as of that revision; null is live ──
 	let viewing = $state<number | null>(null);
@@ -648,11 +660,11 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		const spec = formSpec(of, exposure, mode === 'create' ? 'create' : 'update', id);
 		if (spec === null || (mode !== 'create' && live === null)) return;
 		const current = localController;
-		if (
+		const created =
 			current?.spec.target.of !== 'model' ||
 			current.spec.target.model !== of ||
-			current.spec.target.id !== id
-		) {
+			current.spec.target.id !== id;
+		if (created) {
 			// a create's prefill (the opener's contexts) is kept in the history entry: a reload has no contexts to carry it
 			const given: Readonly<Record<string, FieldValue | undefined>> = {
 				...(mode === 'create' ? remembered_create(of) : {}),
@@ -691,9 +703,20 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		if (mode === 'create' || id === undefined || bolt.record_capabilities === undefined) return;
 		const target = localController;
 		if (target === null) return;
-		const request = ++capabilityRequest;
 		const revision = live?.['revision'];
-		target.expect_capabilities();
+		if (
+			!created &&
+			permissionError === null &&
+			target.capabilities != null &&
+			target.capabilities.model === of &&
+			target.capabilities.id === id &&
+			target.capabilities.revision === revision
+		) {
+			return;
+		}
+		const request = ++capabilityRequest;
+		// Keep previous capabilities visible while refreshing the same record so the footer Edit button never flickers.
+		target.expect_capabilities(created);
 		permissionError = null;
 		fork(
 			bolt.record_capabilities(of, id).pipe(
