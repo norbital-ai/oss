@@ -296,6 +296,12 @@ describe('the context view (L-BOLT-546)', () => {
 		expect([...view.outside]).toEqual(['m1', 'm2']);
 		expect(view.origin).toBe('requested');
 	});
+	it('marks superseded user messages outside context and superseded', () => {
+		const rows = [row(1), reply(2), row(3, { supersedes: 'm1' })];
+		const view = contextView(rows, null);
+		expect([...view.superseded]).toEqual(['m1']);
+		expect([...view.outside]).toEqual(['m1']);
+	});
 	it('a draft plan moves nothing; an executed one puts the discussion before it outside', () => {
 		const rows = [row(1), reply(2), row(3), reply(4)];
 		expect(

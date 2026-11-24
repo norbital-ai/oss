@@ -43,7 +43,7 @@ Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescr
 	this={as}
 	bind:this={ref}
 	class={cn(
-		'flex min-w-0 flex-none items-center justify-center overflow-clip [&>img]:size-full [&>img]:object-cover [&>video]:size-full [&>video]:object-cover',
+		'flex min-w-0 flex-none items-center justify-center overflow-clip [&>img]:size-full [&>img]:object-cover [&>[data-image]]:size-full [&>[data-image]>img]:size-full [&>[data-image]>img]:object-cover [&>video]:size-full [&>video]:object-cover',
 		ratioClasses[ratio],
 		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className

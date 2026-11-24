@@ -85,6 +85,10 @@ it('exercises watch, Debounced, use_debounce, PersistedState, floating, portal, 
 		await vi.advanceTimersByTimeAsync(25);
 		flushSync();
 		expect(floatEl.style.position).toBe('fixed');
+		expect(floatEl.style.transform).toBe('');
+		expect(Number.parseInt(floatEl.style.left, 10)).toBeGreaterThanOrEqual(8);
+		expect(Number.parseInt(floatEl.style.top, 10)).toBeGreaterThan(0);
+		expect(floatEl.style.opacity).toBe('');
 		expect(floatEl.getAttribute('data-side')).toBe('top');
 		document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
 		flushSync();

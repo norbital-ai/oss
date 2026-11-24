@@ -43,6 +43,8 @@ Every built-in `@norbital-ai/ui` component runs on these Svelte-5 runes behavior
 ## 4. Composition checklist
 
 - **Full-height split-pane workbenches:** the host's `AppShell` already owns the viewport frame; size the outer workbench grid with `h-full min-h-0 overflow-hidden` (or wrap in `<Bound size="viewport">`) and give each scrolling pane `min-h-0 overflow-y-auto` — never guess magic viewport offsets like `calc(100dvh - 9rem)`.
+- **Floating overlays & motion:** never position a floating surface with `transform` on the same element that runs CSS `animate-in` (`@keyframes enter` owns `transform`, which causes the surface to fly across the screen from `0,0`). Always bind `style={floating.style}` (which uses `left`/`top` + `opacity:0` until measured so autofocus still works), pair with side-aware `origin-*`, and include `motion-reduce:animate-none`.
+- **Media:** always render images/photos with `<Image>` from `@norbital-ai/ui` (never raw `<img>`) so pending mosaic placeholders and dissolve transitions work automatically in light and dark themes.
 - Persist user layout preferences (e.g. resized pane width, collapsed sidebar) with `PersistedState`, never raw `localStorage.getItem`/`setItem` calls.
 - Debounce search/filter inputs with `Debounced` or `use_debounce`, never raw `setTimeout` timers.
 - Register every custom stateful widget (tree selection, active queue item, inspector open/close) with `register_control` inside `$effect` so Norbius can inspect and drive it through `page`.

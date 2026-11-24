@@ -565,6 +565,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		tag: meta?.tag ?? (ambient(r) || aside ? 'ambient' : null),
 		...(meta?.tag === 'scheduled' && meta.at !== undefined ? { due: meta.at } : {}),
 		...(r.turn === null ? {} : { turn: r.turn }),
+		...(r.supersedes === null ? {} : { supersedes: r.supersedes }),
 		author: authorOf(r),
 		...(r.created_at === undefined ? {} : { at: storedInstant(r.created_at) }),
 		...(r.about === undefined || r.about === null ? {} : { about: r.about }),

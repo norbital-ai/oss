@@ -479,6 +479,8 @@ export const AgentRow = Schema.Struct({
 	due: Schema.optionalKey(Schema.String),
 	/** The turn that took this input or wrote this reply: a reply names the inputs it answers by it. */
 	turn: Schema.optionalKey(Schema.String),
+	/** When set, this message is an edited revision superseding an earlier user message id. */
+	supersedes: Schema.optionalKey(Schema.String),
 	tag: Schema.NullOr(Schema.String),
 	call: Schema.optionalKey(Schema.Struct({ name: Schema.String, input: Schema.Json })),
 	receipts: Schema.optionalKey(

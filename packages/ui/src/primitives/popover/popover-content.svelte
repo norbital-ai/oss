@@ -169,7 +169,7 @@
 			data-side={floating.side}
 			style={combinedStyle}
 			class={cn(
-				'z-50 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain rounded-control border bg-popover text-popover-foreground shadow-deep outline-hidden data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+				'z-50 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain rounded-control border bg-popover text-popover-foreground shadow-deep outline-hidden animation-duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none data-[side=bottom]:origin-top data-[side=bottom]:slide-in-from-top-1 data-[side=left]:origin-right data-[side=left]:slide-in-from-right-1 data-[side=right]:origin-left data-[side=right]:slide-in-from-left-1 data-[side=top]:origin-bottom data-[side=top]:slide-in-from-bottom-1 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
 				needsWidthConstraints ? '' : 'p-4',
 				needsWidthConstraints ? '' : className
 			)}

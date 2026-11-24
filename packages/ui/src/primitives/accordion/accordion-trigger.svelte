@@ -36,7 +36,7 @@
 		{disabled}
 		bind:this={ref}
 		class={cn(
-			'w-full rounded-control py-3 text-left text-sm font-medium transition-all outline-none hover:underline focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&[data-state=open]_[data-slot=accordion-chevron]_svg]:rotate-180',
+			'w-full rounded-control py-3 text-left text-sm font-medium transition-colors outline-none hover:underline focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&[data-state=open]_[data-slot=accordion-chevron]_svg]:rotate-180',
 			className
 		)}
 		{...restProps}
@@ -56,7 +56,7 @@
 			>
 				<Icon
 					icon="lucide:chevron-down"
-					class="size-4 text-muted-foreground transition-transform duration-200"
+					class="size-4 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none"
 				/>
 			</Frame>
 		</Inline>

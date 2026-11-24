@@ -48,11 +48,16 @@ export function orbState(o: {
 export function contextView(
 	rows: readonly AgentRow[],
 	plan: AgentConversation['plan'] | undefined
-): { outside: ReadonlySet<string>; origin: 'manual' | 'requested' | 'automatic' | null } {
+): {
+	outside: ReadonlySet<string>;
+	superseded: ReadonlySet<string>;
+	origin: 'manual' | 'requested' | 'automatic' | null;
+} {
 	const latest = rows.findLast((r) => r.compact !== undefined);
 	const planAt =
 		plan !== null && plan !== undefined && plan.status !== 'draft' ? plan.checkpoint : undefined;
-	const outside = new Set<string>();
+	const superseded = new Set(rows.flatMap((r) => (r.supersedes === undefined ? [] : [r.supersedes])));
+	const outside = new Set<string>(superseded);
 	for (const r of rows) {
 		if (r.state === 'queued' || r.state === 'scheduled' || r.state === 'pending') continue;
 		if (r.id === latest?.id) continue;
@@ -62,7 +67,7 @@ export function contextView(
 			!latest.compact.keep.includes(r.id);
 		if (summarized || (planAt !== undefined && r.seq <= planAt)) outside.add(r.id);
 	}
-	return { outside, origin: latest?.compact?.origin ?? null };
+	return { outside, superseded, origin: latest?.compact?.origin ?? null };
 }
 
 /** A checkpoint is written as a two-column table (a header row, then Goal, Progress, …), which reads badly to a person: shown as headed sections instead. */

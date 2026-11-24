@@ -476,6 +476,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Received a question': '收到了一个问题',
 	'Waited for background work': '等待后台任务',
 	'Edited the source': '编辑了源代码',
+	Edited: '已编辑',
+	'Replaced by an edit': '已由编辑替换',
 	'Reviewed the changes': '审阅了更改',
 	'Opened a page': '打开了网页',
 	'Norbius wants to use this page': 'Norbius 想要操作此页面',

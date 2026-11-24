@@ -133,6 +133,7 @@
 	// the context view: what the model no longer reads stays in the transcript, folded and dimmed
 	const view = $derived(contextView(rows, plan));
 	const outside = (r: AgentRow) => view.outside.has(r.id);
+	const superseded = (r: AgentRow) => view.superseded.has(r.id);
 	const ORIGIN = {
 		manual: 'you asked for it',
 		requested: 'the assistant asked for it',
@@ -679,13 +680,16 @@
 									<li
 										{@attach turns.measure(itemKey(at))}
 										class="ml-auto flex w-fit max-w-[85%] flex-col items-end gap-1"
-										class:opacity-60={row.state === 'pending' || row.tag === 'ambient'}
+										class:opacity-50={superseded(row)}
+										class:opacity-60={!superseded(row) && (row.state === 'pending' || row.tag === 'ambient')}
 										data-role="user"
 										data-outside-context={outside(row) || undefined}
+										data-superseded={superseded(row) || undefined}
 										data-pending={row.state === 'pending' || undefined}
 									>
 										<div
 											class="min-w-0 max-w-full rounded-md bg-muted px-4 py-2.5 break-words"
+											class:line-through={superseded(row)}
 										>
 											<!-- a person's message and an automation's prompt are Markdown: fences render as code blocks; a person's newlines stay line breaks -->
 											{#if row.text}<div
@@ -712,6 +716,8 @@
 														datetime={row.at}
 														title={date_time(row.at)}>{sentAt(row.at)}</time
 													>{/if}
+												{#if superseded(row)}<span class="mr-1 text-muted-foreground">{t('Replaced by an edit')}</span>
+												{:else if row.supersedes !== undefined}<span class="mr-1 text-muted-foreground">{t('Edited')}</span>{/if}
 												{#if (row.text ?? '') !== ''}<Button
 														variant="ghost"
 														size="icon"
@@ -724,7 +730,7 @@
 															class="size-3.5"
 														/></Button
 													>{/if}
-												{#if writable && revisable(row)}<Button
+												{#if writable && revisable(row) && !superseded(row)}<Button
 														variant="ghost"
 														size="icon"
 														class="size-6"

@@ -26,6 +26,8 @@ A one-time code in separate digit cells: the sign-in code step. Digits only, `on
 		paste_transformer?: (text: string) => string;
 		/** The `id` of the hidden input, for a `Label for`. */
 		input_id?: string;
+		/** Optional HTML form `name` passed directly to the underlying `<input>`. */
+		name?: string;
 		/** The hidden input element (bindable). */
 		input_ref?: HTMLInputElement | null;
 		/** Called with the code once every cell is filled. */
@@ -44,6 +46,7 @@ A one-time code in separate digit cells: the sign-in code step. Digits only, `on
 		on_value_change,
 		paste_transformer,
 		input_id,
+		name,
 		input_ref = $bindable(null),
 		on_complete,
 		'aria-invalid': ariaInvalid,
@@ -74,6 +77,7 @@ A one-time code in separate digit cells: the sign-in code step. Digits only, `on
 	<input
 		bind:this={input_ref}
 		id={input_id}
+		{name}
 		type="text"
 		inputmode="numeric"
 		autocomplete="one-time-code"

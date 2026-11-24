@@ -75,7 +75,7 @@
 			onpointerenter={on_pointer_enter}
 			onpointerleave={on_pointer_leave}
 			class={cn(
-				'z-50 w-fit animate-in rounded-control bg-primary px-3 py-1.5 text-xs text-balance text-primary-foreground fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2',
+				'z-50 w-fit animate-in rounded-control bg-primary px-3 py-1.5 text-xs text-balance text-primary-foreground animation-duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] fade-in-0 zoom-in-95 motion-reduce:animate-none data-[side=bottom]:origin-top data-[side=bottom]:slide-in-from-top-1 data-[side=left]:origin-right data-[side=left]:slide-in-from-right-1 data-[side=right]:origin-left data-[side=right]:slide-in-from-left-1 data-[side=top]:origin-bottom data-[side=top]:slide-in-from-bottom-1',
 				className
 			)}
 			{...restProps}

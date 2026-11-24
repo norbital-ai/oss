@@ -220,7 +220,7 @@ export function create_floating(options: FloatingOptions) {
 			return positioned;
 		},
 		get style() {
-			return `position:fixed;top:0;left:0;z-index:50;transform:translate3d(${x}px,${y}px,0);--anchor-width:${anchorWidth}px;`;
+			return `position:fixed;left:${x}px;top:${y}px;z-index:50;--anchor-width:${anchorWidth}px;${positioned ? '' : 'opacity:0;pointer-events:none;'}`;
 		},
 		/** Sets a programmatic virtual/explicit anchor element (e.g. for context menus or slash commands). */
 		set_anchor(el: HTMLElement | null) {

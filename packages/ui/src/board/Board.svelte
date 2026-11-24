@@ -193,6 +193,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 		loaded.set(page, { lane, rows, ids: rows.map((row) => row.id).filter(recordId) });
 		return () => loaded.delete(page);
 	};
+	const laneStructure = $derived(JSON.stringify({ of, by, lanes }));
 	const selectionScope = $derived(JSON.stringify({ of, by, where: scope, order, search, lanes }));
 	watch(() => [selectionScope, q, selectable], clearSelection, { lazy: true });
 	const fields = $derived(typeof card === 'function' ? [] : card);
@@ -274,8 +275,10 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 			}[]
 		>
 	>(() => {
-		if (countsRead.state.kind !== 'ready') return countsRead.state;
-		const rows = countsRead.state.value.rows.map(flat);
+		const countsReady = countsRead.state.kind === 'ready';
+		// Declared lanes are known at mount: render them immediately so card pages load in parallel with counts.
+		if (!countsReady && lanes === undefined) return countsRead.state;
+		const rows = countsReady ? countsRead.state.value.rows.map(flat) : [];
 		const counts = new Map(
 			rows.map((row) => [JSON.stringify(row[by] ?? null), Number(String(row['count'] ?? 0))])
 		);
@@ -303,7 +306,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 			value: list.map((lane) => ({
 				...lane,
 				label: lane.label || laneText(lane.value) || msg(bolt, 'board.none'),
-				count: countsInvalid ? null : (counts.get(JSON.stringify(lane.value)) ?? 0)
+				count: !countsReady || countsInvalid ? null : (counts.get(JSON.stringify(lane.value)) ?? 0)
 			}))
 		};
 	});
@@ -526,7 +529,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 				{selectionNotice}
 			</p>{/if}
 	{/if}
-	{#key selectionScope}
+	{#key laneStructure}
 		<ReadGate {ctx} state={found} what={label(bolt, of)}>
 			{#snippet skeleton()}
 				<div class="flex gap-3 overflow-hidden pb-2">

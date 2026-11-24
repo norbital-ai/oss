@@ -23,6 +23,10 @@
 
 	const item = get_accordion_item();
 	const open = $derived(item?.open ?? false);
+	const slideDuration = () =>
+		typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+			? 0
+			: 200;
 </script>
 
 {#if open}
@@ -33,7 +37,7 @@
 		data-slot="accordion-content"
 		data-state="open"
 		class={cn('overflow-clip text-sm', className)}
-		transition:slide={{ duration: 300, easing: cubicOut }}
+		transition:slide={{ duration: slideDuration(), easing: cubicOut }}
 		{...restProps}
 	>
 		<div class="pt-0 pb-4">

@@ -39,7 +39,7 @@ A progress bar of `value` out of `max`.
 	{...restProps}
 >
 	<div
-		class="h-full w-full flex-1 bg-primary transition-all"
+		class="h-full w-full flex-1 bg-primary transition-transform duration-200 ease-out motion-reduce:transition-none"
 		style={`transform: translateX(-${100 - (100 * clamped) / safeMax}%)`}
 	></div>
 </div>

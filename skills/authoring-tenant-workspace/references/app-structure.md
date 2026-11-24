@@ -42,7 +42,7 @@ A model page is its view — no heading card, paragraph or button row above it.
 - `AppShell`: `variant="page"` (default) pads one view; `variant="full"` leaves body to `Tabs` or `<Scroll inset>` (never wrap a single `<Table>` directly in `variant="full"`).
 - One concern per view (app page, app tab, or record tab): at most one `Table` or `Board` per view; tab title = view title + icon; one tab size (`Tabs` / `TabStrip`, never hand-rolled `role="tab"`). Nested `Tabs` step down automatically (level 1 default, 2 underline, 3 chips; >2 deep go vertical left). Use `keep_alive: true` on form tabs.
 - One compact control size (`Button`: `default`, `icon`, `lg` only for lone non-form CTA). Size controls from parent layout — never fixed `w-*`/`h-*` on inputs/controls.
-- Model tables read displayed fields, labels and currency deps (opening a record reads full view; custom `cell`/row actions keep light row contract). Rows are one line; click opens record (or `on_open`); headers pin/hide/move (no sort). `Board` lanes load infinitely.
+- Model tables read displayed fields, labels and currency deps (opening a record reads full view; custom `cell`/row actions keep light row contract). Rows are one line; click opens record (or `on_open`); headers pin/hide/move (no sort). `Board` lanes load infinitely; pass static `lanes` whenever the lane values are known so lanes and counts load in parallel, and avoid duplicating a `Board`'s scope in redundant page-level `ctx.query` waterfalls.
 
 ## Representations, forms & disclosure
 
