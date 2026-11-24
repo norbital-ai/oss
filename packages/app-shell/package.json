@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/app-shell",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "A native iOS and Android shell for a Bolt workspace: one norbital.app.ts per app, generated Capacitor projects, and the norbital-app CLI that builds and uploads them.",
 	"type": "module",
 	"sideEffects": false,

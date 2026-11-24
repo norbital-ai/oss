@@ -659,3 +659,38 @@ it.live('schema value actions retain false, zero, empty text and null', () =>
 		}
 	})
 );
+
+it.live('optional shaped JSON objects stay absent on create until added and can be cleared', () =>
+	browser(async () => {
+		const kind: Kind = {
+			kind: 'json',
+			optional: true,
+			shape: {
+				kind: 'object',
+				fields: {
+					night_work: { kind: 'bool' },
+					overtime: { kind: 'bool' },
+					reference: { kind: 'text' }
+				}
+			}
+		};
+		const view = await show({ kind, initial: null, mode: 'edit', create: true });
+		assert.deepEqual(view.changes, []);
+		assert.equal(view.target.querySelectorAll('input').length, 0);
+		required(
+			[...view.target.querySelectorAll<HTMLButtonElement>('button')].find(
+				(button) => textOf(button).trim() === 'Add'
+			)
+		).click();
+		await settle();
+		assert.deepEqual(view.changes.at(-1), { night_work: false, overtime: false, reference: null });
+		assert.ok(view.target.querySelector('[data-schema-field="input.reference"]'));
+		required(
+			[...view.target.querySelectorAll<HTMLButtonElement>('button')].find(
+				(button) => textOf(button).trim() === 'Clear'
+			)
+		).click();
+		await settle();
+		assert.equal(view.changes.at(-1), null);
+	})
+);

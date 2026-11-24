@@ -92,23 +92,29 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		`${path}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
 	const shape = (kind: Kind | undefined, value: Value | undefined): Kind | undefined => {
 		if (kind?.many === true) return kind;
-		if (kind?.kind === 'json') return kind.shape ? shape(kind.shape, value) : undefined;
+		if (kind?.kind === 'json') {
+			const inner = kind.shape ? shape(kind.shape, value) : undefined;
+			return inner !== undefined && kind.optional === true ? { ...inner, optional: true } : inner;
+		}
 		if (kind?.kind === 'union' && 'arms' in kind) {
 			const object = dataEntries(value);
 			return {
 				kind: 'object',
+				...(kind.optional === true ? { optional: true } : {}),
 				fields: {
 					[kind.by]: { kind: 'enum', values: Object.keys(kind.arms) },
 					...(kind.arms[String(object?.[kind.by])] ?? {})
 				}
 			};
 		}
-		if (kind?.kind === 'union' && 'of' in kind)
-			return shape(
+		if (kind?.kind === 'union' && 'of' in kind) {
+			const inner = shape(
 				kind.of.find((arm) => value !== undefined && Schema.is(input_schema(arm))(value)) ??
 					kind.of[0],
 				value
 			);
+			return inner !== undefined && kind.optional === true ? { ...inner, optional: true } : inner;
+		}
 		return kind;
 	};
 	const visible = (value: Value | undefined, kind: Kind | undefined, host: KindsHost): Value => {
@@ -248,10 +254,20 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const resolved = $derived(structuredSchema(rawSchema, document, held));
 	const spec = $derived(node(resolved));
 	const locked = $derived(!editing || spec.readOnly === true);
+	const optionalEmpty = $derived(
+		kind?.kind === 'object' && kind.optional === true && (value === null || value === undefined)
+	);
 	let seeded = false;
 	watch(
 		() => {
-			if (currentMode !== 'edit' || seeded || !newRecord || depth !== 0 || on_change === undefined)
+			if (
+				currentMode !== 'edit' ||
+				seeded ||
+				!newRecord ||
+				depth !== 0 ||
+				on_change === undefined ||
+				optionalEmpty
+			)
 				return null;
 			return { next: dataDefaults(rawSchema, value, document), on_change };
 		},
@@ -964,6 +980,13 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	{#if !fields.length}<p class="px-3 py-2 text-sm text-muted-foreground">
 			{currentMode === 'diff' ? 'No changes' : 'Empty object'}
 		</p>{/if}
+	{#if !locked && objectKind?.optional === true && value !== null && value !== undefined}<div
+			class="px-1 pb-1"
+		>
+			<Button variant="ghost" disabled={controls.disabled} onclick={() => on_change?.(null)}
+				>{t('clear')}</Button
+			>
+		</div>{/if}
 	{#if !locked && !objectKind && spec.additionalProperties !== false}
 		<details
 			class="structured-properties"
