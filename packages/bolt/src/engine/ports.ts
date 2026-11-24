@@ -389,8 +389,8 @@ export class Logs extends Context.Service<Logs, LogsShape>()('bolt/Logs') {
 	}
 }
 // ── transport ──
-/** A transactional email (a sign-in code, an invitation); `link` is the invitation's. */
-type MailMessage = {
+/** A transactional email (a sign-in code, an invitation, an inbox notification); `link` is the target workspace URL. */
+export type MailMessage = {
 	readonly _tag: 'Mail';
 	readonly to: string;
 	readonly subject: string;

@@ -24,9 +24,9 @@ layer(TestWorkspace.layer({ manifest }))('native personal settings', (it) => {
 		if (row === undefined) throw new Error('Missing personal row');
 		expect(row.id).toBe(me.id);
 		expect(row.preferences).toEqual({});
-		yield* caller.act({ 'sys_user.update': [{ target: { id: row.id, revision: row.revision }, set: { preferences: { appearance: 'dark', locale: 'zh' } } }] });
+		yield* caller.act({ 'sys_user.update': [{ target: { id: row.id, revision: row.revision }, set: { preferences: { appearance: 'dark', locale: 'zh', email_notifications: false } } }] });
 		const changed = yield* Schema.decodeUnknownEffect(Personal)(yield* caller.query(request));
-		expect(changed.sys_user.rows[0]).toMatchObject({ preferences: { appearance: 'dark', locale: 'zh' }, revision: row.revision + 1 });
+		expect(changed.sys_user.rows[0]).toMatchObject({ preferences: { appearance: 'dark', locale: 'zh', email_notifications: false }, revision: row.revision + 1 });
 		expect(yield* Effect.flip(caller.act({ 'sys_user.update': [{ target: { id: row.id, revision: row.revision }, set: { name: 'Stale write' } }] }))).toMatchObject({ _tag: 'ActConflict' });
 		expect(yield* Effect.flip(caller.act({ 'sys_user.update': [{ target: { id: Schema.decodeUnknownSync(id_of('sys_user'))(other.id) }, set: { preferences: { appearance: 'light' } } }] }))).toMatchObject({ _tag: 'ActRefused' });
 		expect(yield* Effect.flip(caller.act({ 'sys_user.update': [{ target: { id: row.id }, set: { name: '   ' } }] }))).toMatchObject({ code: 'check' });

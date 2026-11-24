@@ -47,8 +47,10 @@
 		theme = 'system',
 		on_theme,
 		chimes = true,
+		email_notifications = true,
 		awaiting = null,
 		on_sounds,
+		on_email_notifications,
 		sync = 'idle',
 		previewing = false,
 		load_teams,
@@ -76,9 +78,11 @@
 		theme?: Theme;
 		on_theme?: (theme: Theme) => void;
 		chimes?: boolean;
+		email_notifications?: boolean;
 		/** What Norbius left unseen: a dot on its icon. */
 		awaiting?: AwaitingKind | null;
 		on_sounds?: () => void;
+		on_email_notifications?: (enabled: boolean) => void;
 		sync?: SyncStatus;
 		/** A preview runs: the menu offers its end. `load_teams` is an administrator's: the teams a preview may take. */
 		previewing?: boolean;
@@ -747,6 +751,22 @@
 					<Icon name={chimes ? 'lucide:volume-1' : 'lucide:volume-x'} class="size-3.5" />
 					<span>{t('Sounds')}</span><span class="ml-auto text-muted-foreground"
 						>{t(chimes ? 'On' : 'Off')}</span
+					>
+				</Button>
+			{/if}
+			{#if on_email_notifications !== undefined}
+				<Button
+					type="button"
+					variant="ghost"
+					role="switch"
+					aria-checked={email_notifications}
+					class="h-9 w-full justify-start px-2 text-xs font-normal"
+					aria-label={t('Email notifications')}
+					onclick={() => on_email_notifications(!email_notifications)}
+				>
+					<Icon name={email_notifications ? 'lucide:mail' : 'lucide:mail-x'} class="size-3.5" />
+					<span>{t('Email notifications')}</span><span class="ml-auto text-muted-foreground"
+						>{t(email_notifications ? 'On' : 'Off')}</span
 					>
 				</Button>
 			{/if}

@@ -15,7 +15,7 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 | Reads, atomic act maps, revisions, aggregates                   | `data-access.md`                        |
 | Workspace, secrets, apps, SSR, kiosks, anonymous users          | `apps-and-surfaces.md`                  |
 | Theme, accent, light/dark palette, fonts and radius             | `apps-and-surfaces.md`, Workspace theme |
-| Automations, effects, reruns, facilities, AI                    | `automations-and-effects.md`            |
+| Automations, effects, notifications (`ctx.notify`), reruns, AI  | `automations-and-effects.md`            |
 | Briefs, workspace skills, envoys, integrations                  | `agents-and-integrations.md`            |
 | What the platform renders                                       | `built-ins.md`                          |
 | Primitive roles (`⚡`, matrix, timeline), page slots, toolbar, tabs, forms | `app-structure.md`                      |

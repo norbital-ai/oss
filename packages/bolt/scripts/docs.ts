@@ -44,7 +44,7 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 	},
 	access: { bolt: ['team', 'policy', 'StoredTree', 'ApprovalFlow', 'Verdict'] },
 	automation: {
-		bolt: ['automation', 'AutomationCtx'],
+		bolt: ['automation', 'AutomationCtx', 'EffectCtx', 'Notice', 'Notify', 'Recipient', 'ApprovalRecipient'],
 		'bolt/errors': ['Refusal']
 	},
 	sync: { bolt: ['sync', 'SyncCtx', 'SyncRow', 'Finding'] },

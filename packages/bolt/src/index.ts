@@ -75,7 +75,15 @@ export type {
 } from './decl/values.ts';
 export type { LayerWhere, Where } from './decl/where.ts'; // hook:query (OrderBy)
 export type { AutomationCtx, EffectCtx } from './decl/runtime/automation.ts';
-export type { ImageFacts, StartInput } from './decl/runtime/facilities.ts';
+export type {
+	ApprovalRecipient,
+	ImageFacts,
+	Notice,
+	NoticeAttachment,
+	Notify,
+	Recipient,
+	StartInput
+} from './decl/runtime/facilities.ts';
 export type { Model, ModelLiteral, ModelLiteralInput } from './decl/model.ts';
 export type {
 	Attachment,

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { Approvals, Callables, Live, RunHandlers, Reads } from '../src/engine/services.ts';
-import { Convert, Transport, type PushMessage } from '../src/engine/ports.ts';
+import { Convert, Transport, type MailMessage, type PushMessage } from '../src/engine/ports.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
 import { readableFile } from '../src/engine/decision.ts';
 import { noticeRows } from '../src/engine/notifications/notify.ts';
@@ -399,4 +399,76 @@ describe('notifications from durable model effects', () => {
 				expect(yield* f.t.db.value(Schema.Number, { text: 'SELECT count(*)::int FROM orders', params: [] })).toBe(decision === 'approve' ? 1 : 0);
 			}))
 		);
+
+	it.live('emails inbox notifications with a direct record link, respects opt-out, skips RFC 2606 placeholders, and retries transient mail failures', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const sent: MailMessage[] = [];
+			let recovered = false;
+			const transport: Transport['Service'] = {
+				send: Effect.fn(function* (message) {
+					if (message._tag !== 'Mail') throw new Error('Expected inbox mail');
+					sent.push(message);
+					if (!recovered && message.to === 'transient@acme.io')
+						return yield* Effect.fail(
+							new FacilityFailure({ kind: 'rate_limited', message: 'Slow down', status: 429 })
+						);
+					return { provider_id: 'mail-accepted' };
+				})
+			};
+			const optedOut = '0199a000-0000-7000-8000-000000000010';
+			const placeholder = '0199a000-0000-7000-8000-000000000011';
+			const transient = '0199a000-0000-7000-8000-000000000012';
+			const f = yield* setup(
+				`function* (changes, ctx) {
+ const row = changes[0].after;
+ yield* ctx.notify({
+  title: 'Order ready',
+  description: 'Check ' + row.title,
+  to: [{ user: '${recipient}' }, { user: '${optedOut}' }, { user: '${placeholder}' }, { user: '${transient}' }],
+  link: { model: 'orders', id: row.id }
+ });
+}`,
+				undefined,
+				transport
+			);
+			yield* f.t.db.write({
+				text: `UPDATE sys_user SET email = 'reviewer@acme.io' WHERE id = $1`,
+				params: [recipient]
+			});
+			yield* f.t.db.write({
+				text: `INSERT INTO sys_user(id,name,email,kind,team,admin,preferences) VALUES
+				($1,'Opted out','muted@acme.io','staff','reviewers',false,'{"email_notifications":false}'::jsonb),
+				($2,'Placeholder','mock@example.invalid','staff','reviewers',false,'{}'::jsonb),
+				($3,'Transient','transient@acme.io','staff','reviewers',false,'{}'::jsonb)`,
+				params: [optedOut, placeholder, transient]
+			});
+			const outcome = (yield* f.writes.acts(one_act(f.request('email-order')))).outcome;
+			if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
+			const orderId = outcome.records.find((r) => r.model === 'orders')?.id;
+			if (orderId === undefined) throw new Error('Missing created order id');
+
+			yield* f.t.run_due();
+			expect(sent.map((m) => m.to)).toEqual(['reviewer@acme.io', 'transient@acme.io']);
+			const delivered = sent[0];
+			expect(delivered).toMatchObject({
+				_tag: 'Mail',
+				to: 'reviewer@acme.io',
+				subject: expect.stringContaining('Order ready'),
+				text: expect.stringContaining('Check email-order'),
+				html: expect.stringContaining('Open in workspace'),
+				link: expect.stringContaining(`/inbox?record=orders/${orderId}`)
+			});
+
+			const runs = () =>
+				f.t.db.rows(
+					Schema.Struct({ state: Schema.String, attempts: Schema.Number, output: Schema.Json }),
+					{ text: "SELECT state,attempts,output FROM sys_run WHERE automation='bolt.mail'", params: [] }
+				);
+			expect(yield* runs()).toMatchObject([{ state: 'queued', attempts: 1 }]);
+			recovered = true;
+			f.t.clock.advance('1min');
+			yield* f.t.run_due();
+			expect(yield* runs()).toMatchObject([{ state: 'succeeded', attempts: 2, output: { sent: 2, failed: 0 } }]);
+		}))
+	);
 });

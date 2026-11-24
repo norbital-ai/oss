@@ -36,7 +36,8 @@ import { cronLedger } from './ledger.ts';
 import { triggers_of } from './queue.ts';
 import { iso } from './time.ts';
 import { notice_push } from './push.ts';
-import { NOTICE_PUSH } from '../notifications/queue.ts';
+import { notice_mail } from './mail.ts';
+import { NOTICE_MAIL, NOTICE_PUSH } from '../notifications/queue.ts';
 import { fileSyncHandlers } from '../sync/file.ts';
 import { syncTriggers } from '../sync/index.ts';
 import { EMBED, embedRun } from '../integrations/embed.ts';
@@ -126,12 +127,19 @@ export const RunsLive = Layer.effect(
 			activeTick === undefined || parking.parked
 				? Effect.succeed(false)
 				: activeTick().pipe(Effect.as(true))));
-		yield* registry.register({
-			[NOTICE_PUSH]: yield* notice_push,
-			[EMBED]: yield* embedRun,
-			[INDEX]: yield* indexRun,
-			...(yield* fileSyncHandlers)
-		}, { [NOTICE_PUSH]: { attempts: 3, backoff: '10s' } });
+		yield* registry.register(
+			{
+				[NOTICE_PUSH]: yield* notice_push,
+				[NOTICE_MAIL]: yield* notice_mail,
+				[EMBED]: yield* embedRun,
+				[INDEX]: yield* indexRun,
+				...(yield* fileSyncHandlers)
+			},
+			{
+				[NOTICE_PUSH]: { attempts: 3, backoff: '10s' },
+				[NOTICE_MAIL]: { attempts: 3, backoff: '10s' }
+			}
+		);
 		const announce = (yield* Wake).at;
 		const { boot, claim, next, view, stop } = yield* makeRunStore(parking, capacities, halts, stopping);
 		const { prune, daily } = yield* makePruner();

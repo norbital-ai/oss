@@ -296,6 +296,9 @@ it.effect('bolt-contract holds a generated card per role, naming what a role is 
 	const card = (path: string) => contract?.files.find((file) => file.path === path)?.text ?? '';
 	expect(card('model.md')).toContain("kind: 'money'");
 	expect(card('automation.md')).toContain('- policies: NonEmpty<string>');
+	expect(card('automation.md')).toContain('## Notice');
+	expect(card('automation.md')).toContain('## Notify');
+	expect(docs.symbol('bolt', 'Notice')?.docs).toContain('bolt.mail');
 	expect(card('page.md')).toContain('## Surface');
 	expect(card('page.md').length).toBeLessThan(25_000);
 	expect(card('behaviors.md')).toContain('## create_tree');

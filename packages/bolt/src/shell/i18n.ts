@@ -583,6 +583,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Requests you make and requests awaiting your decision appear here.':
 		'您发起的请求和等待您决定的请求会显示在此处。',
 	Notices: '通知',
+	'Email notifications': '邮件通知',
 	Sounds: '声音',
 	'Norbius is waiting for you': 'Norbius 在等你回复',
 	'Norbius finished': 'Norbius 已完成',
