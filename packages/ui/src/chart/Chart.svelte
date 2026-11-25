@@ -141,7 +141,12 @@ live while shown: `x` names the category, `y` the numbers (`count`, `sum.amount`
 	{#if title}<figcaption class="text-sm font-semibold">{title}</figcaption>{/if}
 	<ReadGate {ctx} state={read} what={title ?? msg(bolt, 'chart.data')}>
 		{#snippet children(value)}
-			{@const data = series(value, x, ys)}
+			{@const data = series(
+				value,
+				x,
+				ys,
+				typeof of === 'string' ? { t: (key: string) => bolt.t(key), model: of, field: x } : {}
+			)}
 			{@const first_y = ys[0]}
 			{#if data.length === 0}
 				<p

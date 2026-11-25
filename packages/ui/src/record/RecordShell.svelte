@@ -760,6 +760,14 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		else if (mode === 'create' && mine !== undefined) open_record(of, mine.id);
 	}
 
+	// a lock that arrives while the record is being edited (its parent archived, say) returns it to reading
+	changes(
+		() => lock !== undefined && controller?.mode === 'edit',
+		(held) => {
+			if (held) controller?.view();
+		}
+	);
+
 	// the heading: the author's title, else the record's label fields by kind, else the record id (a create keeps the model's label); above a record's own heading, the singular model label
 	// a relation in the heading or subtitle reads as its target's label (a table cell's rule): one read of the record with
 	// those targets' labels nested, never its id (blank until it arrives)

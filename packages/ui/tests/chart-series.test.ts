@@ -22,6 +22,27 @@ describe('chart series extraction', () => {
 		]);
 	});
 
+	it('labels a model chart category by its catalog name and leaves unnamed values as they are', () => {
+		const t = (key: string) =>
+			key === 'models.docs.fields.kind.delivery_order' ? 'Delivery Order (DO)' : key;
+		const rows = series(
+			{
+				rows: [
+					{ key: { kind: 'delivery_order' }, count: 2 },
+					{ key: { kind: 'invoice' }, count: 1 }
+				],
+				next: null
+			},
+			'kind',
+			['count'],
+			{ t, model: 'docs', field: 'kind' }
+		);
+		expect(rows).toEqual([
+			{ kind: 'Delivery Order (DO)', count: 2 },
+			{ kind: 'invoice', count: 1 }
+		]);
+	});
+
 	it('extracts money fields from direct record rows and maps non-numeric values to null', () => {
 		const rows = series(
 			[

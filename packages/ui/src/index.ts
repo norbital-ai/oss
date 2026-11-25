@@ -9,6 +9,8 @@ export { default as Board } from './board/Board.svelte';
 export { default as Map } from './map/Map.svelte';
 /** A record frame with its label, permissions, approvals, revision history and authored tabs; renders the registered representation or generated form. */
 export { default as RecordShell } from './record/RecordShell.svelte';
+/** A record view that is one form: `RecordShell` around the model's `Form`, laid out by the representation's own `Section`s and `Field`s. */
+export { default as RecordForm } from './record/RecordForm.svelte';
 /** A typed table over model rows, a query or local values, with kind-aware cells, paging, filters, sorting and permitted row actions. */
 export { default as Table } from './table/Table.svelte';
 export { default as ChildGrid } from './relations/ChildGrid.svelte';

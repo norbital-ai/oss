@@ -9,7 +9,7 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 
 | Task                                                            | File                                    |
 | --------------------------------------------------------------- | --------------------------------------- |
-| Entity boundaries, inline values, runtime configuration         | `model-boundaries.md`                   |
+| Entity boundaries, one fact one owner, runtime configuration    | `model-boundaries.md`                   |
 | Field kinds, relations, layers, locks, callbacks, search, syncs | `models-and-modeling.md`                |
 | Dates, instants, periods, zones                                 | `dates-and-time.md`                     |
 | Reads, atomic act maps, revisions, aggregates                   | `data-access.md`                        |
@@ -18,7 +18,7 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 | Automations, effects, notifications (`ctx.notify`), reruns, AI  | `automations-and-effects.md`            |
 | Briefs, workspace skills, envoys, integrations, sync boundary   | `agents-and-integrations.md`            |
 | What the platform renders                                       | `built-ins.md`                          |
-| Primitive roles (`⚡`, matrix, timeline), file placement & co-location, slots, toolbar, tabs, forms | `app-structure.md` |
+| Primitive roles, file placement, slots, toolbar, record tabs, forms, linked views | `app-structure.md` |
 | Composing novel interactive UIs (`Surface`, `@norbital-ai/ui/behaviors`)   | `behaviors-and-composition.md`          |
 | UI review checklist                                             | `ui-standard.md`                        |
 | Layout axioms                                                   | `interface-ideology.md`                 |

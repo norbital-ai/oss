@@ -1,6 +1,6 @@
 # Entity boundaries and runtime configuration
 
-Read before adding a model, splitting a catalogue, or designing configurable behaviour.
+Read before adding a model or field, splitting a catalogue, or designing configurable behaviour.
 
 ## Storage hierarchy (fewest models)
 
@@ -17,11 +17,26 @@ Do not map every prompt noun or UI tab to a model. Prefer in order:
 | Reused effective-dated business variation (rates, thresholds, rubrics, schemas) | validated runtime configuration model |
 | Derivable figure | `computed` field, `sum`/`count` roll-up, or read + pure helper |
 
-- Drop speculative fields with no active consumer. Inline values when born, edited, sealed and discarded with the parent (use stable item keys, never array index, when items are referenced).
-- **Match cardinality to reality (1:1 vs 1:N) and keep unrelated domains separate:** when a parent owns one primary artifact (e.g. a master model, blueprint, or source file) and at most one derived breakdown/analysis per artifact, put the file directly on the parent (with version/revision metadata) and enforce 1:1 cardinality (`unique: ['<parent>_id']`) on the derived model — rendering the breakdown inline rather than behind a redundant list table. Keep general supporting attachments/documents consolidated under the parent's `Record` tab (e.g. a `Filed Documents` `<Section>`) instead of mixing them with the primary artifact. Keep non-artifact or ad-hoc items (e.g. independent overheads, manual adjustments, standalone costs) in their own owned child model rather than grafting them into an artifact-derived breakdown.
-- **No free-text money lines — wire commercial & ad-hoc items to canonical catalogs/artifacts:** commercial documents (orders, contracts, deliveries, invoices, variations) and ad-hoc cost models must pick structured items from a canonical catalog model or artifact-derived breakdown (with required FKs on standalone rows and batched write-callback validation on inline priced lines that derive canonical units/labels server-side) rather than free-text codes, units, or descriptions — enabling exact budget-to-committed-to-paid cashflow reconciliation across a parent entity.
-- **Decide the aggregate boundary when designing inputs:** for every parent–child relationship, decide whether parent + children are **one logical entity** (edited together in place via a data matrix — `ChildGrid save="parent"`, `Rows`, or `Form` `acts` — committed in **one Save operation**, e.g. loan + repayments, order + lines) or **independent entities** (separate lifecycle, permissions or volume → own `Table`/`Board`). Never split a one-entity aggregate across separate child drawers or per-row immediate `ctx.act()` writes.
-- Before inlining a child model, verify no FK targets, independent approvals/history, or cross-parent reuse are lost. Never replace an enforced FK with an unvalidated string (`custom_field.validate` is pure and cannot query other models — use batched write callbacks). Use native `StructuredData`/matrix editors rather than creating an entity just for a table editor.
+- Inline values born, edited, sealed and discarded with the parent (stable item keys, never array index, when items are referenced).
+
+## One fact, one owner
+
+Store every fact once, on the model whose lifecycle it belongs to; everything else reads it there. Before adding a field, name the record that agrees, measures or decides its value.
+
+- Terms agreed in an agreement (amounts, rates, schedules, conditions) live on the agreement, not on the record it serves.
+- A party or person is a `ref` to their record (a directory model or `sys_user`), never free text beside a directory that holds them.
+- One structure, one encoding: a hierarchy is a parent `ref` or a path code, never both. An identifier and a position are two fields only when they are two facts.
+- Refs between two models point one way. A cycle (A → B and B → A) means one side restates the other: keep the side the business records and derive the other.
+- History is native: no revision-trail fields, version counters or snapshot arrays; record history keeps every earlier value and who set it. Keep a version label only when the business names its versions.
+- A derivable value is a `computed` field, roll-up or pure helper, never a second stored copy.
+- A setting lives at one scope (`product-ux`). A field no page shows, no rule reads and no write sets is deleted.
+
+## Shape
+
+- Match cardinality to reality: a parent with one primary artifact keeps it as a field; a breakdown derived from that artifact is a 1:1 model (`unique` on the parent ref) rendered inline, not behind a list. Its fields still sit in the tab of their concern (`product-ux`).
+- Priced or measured lines pick from a canonical catalog or artifact-derived breakdown: a required ref on standalone rows, batched write-callback validation on inline lines that derives units and labels server-side. Never free-text codes, units or descriptions.
+- Decide the aggregate boundary for every parent–child relation: one logical entity is edited in place and committed in one Save (`ChildGrid save="parent"`, `Rows`, `Form` `acts`); independent children (own lifecycle, permissions or volume) get their own `Table`/`Board`. Never split one entity across child drawers or per-row immediate `ctx.act()` writes.
+- Before inlining a child model, confirm no FK target, independent approval or history, or cross-parent reuse is lost. Never replace an enforced FK with an unvalidated string (`custom_field.validate` is pure and cannot query; use batched write callbacks). Use native `StructuredData`/matrix editors rather than a model made only for a table editor.
 
 ## Runtime configuration, schemas & formulas
 

@@ -113,6 +113,8 @@ it.live('sheet: blocked storage does not prevent opening or resizing', () =>
 			assert.ok(await closed(v.target), 'the sheet closed');
 			await v.done();
 		} finally {
+			read.mockRestore();
+			write.mockRestore();
 			vi.restoreAllMocks();
 			vi.unstubAllGlobals();
 		}
