@@ -162,10 +162,12 @@
 	const AI_ICONS = {
 		web: 'lucide:monitor',
 		envoy: 'lucide:send',
-		infer: 'lucide:workflow'
+		infer: 'lucide:workflow',
+		// a system agent's task: no person attends it
+		system: 'lucide:bot'
 	} as const;
 	const categoryOf = (c: AgentConversation): keyof typeof AI_ICONS =>
-		c.run != null ? 'infer' : c.envoy !== null ? 'envoy' : 'web';
+		c.run != null ? 'infer' : c.kind === 'task' ? 'system' : c.envoy !== null ? 'envoy' : 'web';
 	const transcripts = $derived(
 		(conversations.current?.rows ?? []).map((c) => ({
 			id: c.id,

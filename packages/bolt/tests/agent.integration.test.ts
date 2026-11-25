@@ -3158,6 +3158,8 @@ describe('system agent tasks', () => {
 					text: 'Filed one quote.'
 				});
 				expect((yield* agent.conversation(conversation)).kind).toBe('task');
+				// an administrator's session list decodes it like any other conversation
+				expect(Schema.is(AgentConversation.fields.kind)('task')).toBe(true);
 				// no person attends: no page control, no plan card, and the automation start is refused in words
 				const [first, second] = taskAi.requests;
 				for (const waits of ['page', 'update_plan', 'run', 'ask', 'decide', 'invite', 'sync'])

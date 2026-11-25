@@ -596,8 +596,8 @@ export const AgentConversation = Schema.Struct({
 	/** The envoy serving an instance's thread and the instance it is on; both null exactly on a member's own in-app conversation. */
 	envoy: Schema.NullOr(Schema.String),
 	integration: Schema.NullOr(Schema.String),
-	/** An instance thread's kind and its provider thread; null on an in-app conversation. */
-	kind: Schema.NullOr(Schema.Literals(['dm', 'group'])),
+	/** An instance thread's kind and its provider thread, or `task` for a system agent's conversation; null on an in-app conversation. */
+	kind: Schema.NullOr(Schema.Literals(['dm', 'group', 'task'])),
 	thread: Schema.NullOr(Schema.String),
 	/** A linked DM sender's name, or the in-app owner during workspace inspection; null otherwise. */
 	peer: Schema.NullOr(Schema.String),
