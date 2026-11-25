@@ -31,7 +31,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		placeholder?: string;
 		/** The trigger's text when `value` is not among `options` (a picker's chosen row on another page). */
 		display?: string;
-		/** Show the search box; default when there are more than 8 options or `on_search` is given. */
+		/** Show the search box; defaults to true. Pass `false` to opt out on fixed short selectors. */
 		searchable?: boolean;
 		/** Each keystroke's query (and `''` on open) instead of local filtering; the caller supplies matching `options`. */
 		on_search?(query: string): void;
@@ -206,7 +206,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			? selectionText
 			: t('selectedCount').replace('{n}', String(selectedLabels.length))
 	);
-	const withSearch = $derived(searchable ?? (on_search !== undefined || options.length > 8));
+	const withSearch = $derived(searchable ?? true);
 	const shown = $derived.by(() => {
 		const q = query.trim().toLowerCase();
 		if (on_search !== undefined || q === '') return options;

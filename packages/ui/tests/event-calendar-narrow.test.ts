@@ -52,3 +52,25 @@ it('a narrow week is a strip of days over one day', () => {
 	target.remove();
 	vi.restoreAllMocks();
 });
+
+it('virtualizes long compact day agendas above threshold', () => {
+	narrow();
+	const many = Array.from({ length: 80 }, (_, i) => ({
+		id: `ev-${i}`,
+		title: `Job ${i}`,
+		start: new Date(2026, 10, 6, 9),
+		end: new Date(2026, 10, 6, 10)
+	}));
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(EventCalendar, {
+		target,
+		props: { ctx: bare_ctx(), events: many, view: 'month', date: at }
+	});
+	flushSync();
+	const rendered = target.querySelectorAll('[data-calendar-agenda] [data-event]');
+	expect(rendered.length).toBeGreaterThan(0);
+	expect(rendered.length).toBeLessThan(many.length);
+	unmount(view);
+	target.remove();
+	vi.restoreAllMocks();
+});

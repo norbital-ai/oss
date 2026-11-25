@@ -29,6 +29,7 @@ export type VirtualOptions = {
 export type Virtual = ReturnType<typeof virtual_list>;
 
 const CLIPS = /auto|scroll|hidden|clip|overlay/;
+const SCROLLS = /auto|scroll|overlay/;
 
 /**
  * Windows a long list to the rows in view (measuring each row's height), so a page renders only what is visible; a short list renders whole.
@@ -43,9 +44,17 @@ export function virtual_list(o: VirtualOptions) {
 	let top = $state(0),
 		band = $state(typeof innerHeight === 'number' && innerHeight > 0 ? innerHeight : 800);
 	let anchorEl: HTMLElement | null = null,
-		clips: Element[] = [];
+		clips: Element[] = [],
+		scrollClips: Element[] = [];
 
 	const on = $derived(o.count() > threshold);
+	const keyIndex = $derived.by(() => {
+		const map = new Map<string, number>();
+		if (!on) return map;
+		const n = o.count();
+		for (let i = 0; i < n; i++) map.set(o.key(i), i);
+		return map;
+	});
 	const offs = $derived.by((): [number, ...number[]] => {
 		void version;
 		if (!on) return [0];
@@ -69,6 +78,10 @@ export function virtual_list(o: VirtualOptions) {
 		return { before, after: total - end };
 	});
 
+	function scrollPort(): Element | null {
+		return scrollClips.find((c) => c.scrollHeight > c.clientHeight) ?? null;
+	}
+
 	function sync() {
 		if (anchorEl === null) return;
 		let lo = 0,
@@ -78,15 +91,21 @@ export function virtual_list(o: VirtualOptions) {
 			lo = Math.max(lo, b.top);
 			hi = Math.min(hi, b.bottom);
 		}
-		// an unchanged number is no state change: nothing re-renders
-		top = lo - anchorEl.getBoundingClientRect().top;
-		band = Math.max(0, hi - lo);
+		// sub-pixel hysteresis avoids fractional DPR scroll jitter while staying frame-accurate
+		const nextTop = lo - anchorEl.getBoundingClientRect().top;
+		const nextBand = Math.max(0, hi - lo);
+		if (Math.abs(nextTop - top) >= 1) top = nextTop;
+		if (Math.abs(nextBand - band) >= 1) band = nextBand;
 	}
 	const observer =
 		typeof ResizeObserver === 'undefined'
 			? null
 			: new ResizeObserver((entries) => {
 					let changed = false;
+					let anchorDelta = 0;
+					const currentTop = top;
+					const currentOffs = offs;
+					const tailed = o.tail?.() === true;
 					for (const e of entries) {
 						const k = keys.get(e.target);
 						if (k === undefined) continue;
@@ -98,13 +117,39 @@ export function virtual_list(o: VirtualOptions) {
 							height +
 							(parseFloat(cs.marginTop) || 0) +
 							(parseFloat(cs.marginBottom) || 0);
-						// a hidden list (the other layout of a Table) measures 0: keep the estimate
-						if (h > 0 && sizes.get(k) !== h) {
+						const prev = sizes.get(k);
+						// a hidden list (the other layout of a Table) measures 0: keep the estimate; ignore sub-pixel noise
+						if (h > 0 && (prev === undefined || Math.abs(prev - h) >= 0.5)) {
+							const prior = prev ?? o.estimate;
+							if (!tailed && currentTop > 0) {
+								const idx = keyIndex.get(k);
+								if (idx !== undefined) {
+									const rowBottom = currentOffs[idx + 1];
+									// Row lies strictly above the visible viewport: compensate scroll to prevent upward jump jitter
+									if (rowBottom !== undefined && rowBottom <= currentTop) {
+										anchorDelta += h - prior;
+									}
+								}
+							}
 							sizes.set(k, h);
 							changed = true;
 						}
 					}
-					if (changed) version++;
+					if (changed) {
+						if (Math.abs(anchorDelta) >= 1 && anchorEl !== null) {
+							const port = scrollPort();
+							if (port !== null) {
+								const prevScroll = port.scrollTop;
+								port.scrollTop = Math.max(0, prevScroll + anchorDelta);
+								top = Math.max(0, top + (port.scrollTop - prevScroll));
+							} else if (document.scrollingElement) {
+								const prevScroll = document.scrollingElement.scrollTop;
+								document.scrollingElement.scrollBy({ top: anchorDelta });
+								top = Math.max(0, top + (document.scrollingElement.scrollTop - prevScroll));
+							}
+						}
+						version++;
+					}
 				});
 
 	return {
@@ -133,8 +178,12 @@ export function virtual_list(o: VirtualOptions) {
 		anchor: ((el: HTMLElement) => {
 			anchorEl = el;
 			clips = [];
-			for (let p = el.parentElement; p !== null; p = p.parentElement)
-				if (CLIPS.test(getComputedStyle(p).overflowY)) clips.push(p);
+			scrollClips = [];
+			for (let p = el.parentElement; p !== null; p = p.parentElement) {
+				const oy = getComputedStyle(p).overflowY;
+				if (CLIPS.test(oy)) clips.push(p);
+				if (SCROLLS.test(oy)) scrollClips.push(p);
+			}
 			let frame = 0;
 			const schedule = () => {
 				if (frame === 0)
@@ -169,7 +218,7 @@ export function virtual_list(o: VirtualOptions) {
 			if (!on || anchorEl === null || index < 0 || index >= offs.length - 1) return;
 			const start = offs[index], end = offs[index + 1];
 			if (start === undefined || end === undefined) return;
-			const port = clips.find((c) => c.scrollHeight > c.clientHeight) ?? null;
+			const port = scrollPort();
 			const at = anchorEl.getBoundingClientRect().top;
 			const [a, b] = [at + start, at + end];
 			const box = port === null ? { top: 0, bottom: innerHeight } : port.getBoundingClientRect();

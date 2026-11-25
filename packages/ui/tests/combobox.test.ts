@@ -244,3 +244,39 @@ it('a coarse pointer opens the list without focusing search, and a tap still can
 	expect(document.activeElement).toBe(input);
 	await unmount(view);
 });
+
+it('shows the search box by default even on short option lists', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(Combobox, {
+		target,
+		props: { options, value: null, on_change: () => {} }
+	});
+	flushSync();
+	target.querySelector<HTMLButtonElement>('[role=combobox]')?.click();
+	await settle();
+	const search = document.querySelector<HTMLInputElement>('input');
+	expect(search).not.toBeNull();
+	if (search !== null) {
+		search.value = 'car';
+		search.dispatchEvent(new Event('input', { bubbles: true }));
+		await settle();
+		expect(document.querySelector('[data-value=a]')).toBeNull();
+		expect(document.querySelector('[data-value=c]')).not.toBeNull();
+	}
+	await unmount(view);
+	target.remove();
+});
+
+it('allows opting out of the search box with searchable=false', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(Combobox, {
+		target,
+		props: { options, searchable: false, value: null, on_change: () => {} }
+	});
+	flushSync();
+	target.querySelector<HTMLButtonElement>('[role=combobox]')?.click();
+	await settle();
+	expect(document.querySelector('input')).toBeNull();
+	await unmount(view);
+	target.remove();
+});

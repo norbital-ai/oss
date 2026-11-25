@@ -144,3 +144,24 @@ it.live('domain entries support icon, title, badge mark, disclosure toggle and b
 		target.remove();
 	})
 );
+
+it.live('virtualizes long timelines above threshold while preserving entry order and rail indices', () =>
+	browser(async () => {
+		const target = document.body.appendChild(document.createElement('div'));
+		const entries = Array.from({ length: 120 }, (_, i) => ({
+			key: `e-${i}`,
+			action: 'update' as const,
+			line: [`Item ${i}`]
+		}));
+		const view = mount(Timeline, {
+			target,
+			props: { label: 'Long history', entries }
+		});
+		flushSync();
+		const rendered = target.querySelectorAll('li[data-action]');
+		assert.ok(rendered.length > 0 && rendered.length < entries.length);
+		assert.equal(textOf(required(rendered[0]).querySelector('[data-line]')), 'Item 0');
+		await unmount(view);
+		target.remove();
+	})
+);

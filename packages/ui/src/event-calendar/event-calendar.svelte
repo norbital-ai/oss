@@ -58,7 +58,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	import Icon from '@iconify/svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { onMount } from 'svelte';
-	import { watch } from '../behaviors/index.js';
+	import { virtual_list, watch } from '../behaviors/index.js';
 	import { Button } from '../primitives/button/index.js';
 	import TabStrip from '../primitives/tabs/tab-strip.svelte';
 	import { cn, ui_text } from '../primitives/utils.js';
@@ -116,6 +116,14 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	const strip = $derived(compact && shown === 'week');
 	const first = $derived(viewStart(strip ? 'day' : shown, at));
 	const days = $derived(shown === 'day' || strip ? [first] : week);
+	const agendaEvents = $derived(onDay(events, at));
+	const agendaWin = virtual_list({
+		count: () => agendaEvents.length,
+		key: (i) => String(agendaEvents[i]?.id ?? i),
+		estimate: 48,
+		threshold: 30,
+		overscan: 6
+	});
 	const n = $derived(days.length);
 	const height = $derived((end_hour - start_hour) * hour_height);
 	let scroller = $state<HTMLElement | null>(null);
@@ -402,8 +410,11 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 				{/each}
 			</div>
 			<ul class="mt-1 divide-y border-t" data-calendar-agenda>
-				{#each onDay(events, at) as e (e.id)}
-					<li>
+				{#if agendaWin.on}
+					<li aria-hidden="true" class="border-0" {@attach agendaWin.anchor} style:height="{agendaWin.before}px"></li>
+				{/if}
+				{#each agendaWin.slice(agendaEvents) as e (e.id)}
+					<li {@attach agendaWin.measure(String(e.id))}>
 						<button
 							type="button"
 							class="flex w-full min-w-0 items-stretch gap-2 px-4 py-2 text-left"
@@ -420,6 +431,9 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 				{:else}
 					<li class="px-4 py-3 text-xs text-muted-foreground">{t('noResults')}</li>
 				{/each}
+				{#if agendaWin.on && agendaWin.after > 0}
+					<li aria-hidden="true" class="border-0" style:height="{agendaWin.after}px"></li>
+				{/if}
 			</ul>
 		</div>
 	{:else if shown === 'month'}

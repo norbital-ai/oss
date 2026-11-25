@@ -421,6 +421,13 @@ describe('norbital.template.json', () => {
 	};
 	it('decodes the catalogue entry the gate checks', () => {
 		expect(trip(TemplateManifest, manifest)).toEqual(manifest);
+		const withCapabilities = {
+			...manifest,
+			capabilities: ['data_modeling', 'complex_files', 'ai_classification'] as const,
+			tags_zh: ['施工']
+		};
+		expect(trip(TemplateManifest, withCapabilities)).toEqual(withCapabilities);
+		refuses(TemplateManifest, { ...manifest, capabilities: ['made_up_capability'] });
 		refuses(TemplateManifest, { ...manifest, schema_version: 2 });
 		refuses(TemplateManifest, { ...manifest, key: 'Not A Handle' });
 		refuses(TemplateManifest, { ...manifest, name: '  ' });

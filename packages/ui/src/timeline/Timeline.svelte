@@ -9,6 +9,7 @@ always-visible content below.
 	import Badge from '../primitives/badge/badge.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
+	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
 	import { TIMELINE_ICON, type TimelineEntry, type TimelineTone } from './timeline.js';
 
 	let {
@@ -46,13 +47,24 @@ always-visible content below.
 		if (e.tone !== undefined) return TONE_CLASS[e.tone];
 		return e.current ? 'border-brand text-brand' : 'text-muted-foreground';
 	};
+	const win = virtual_list({
+		count: () => entries.length,
+		key: (i) => entries[i]?.key ?? String(i),
+		estimate: 56,
+		threshold: 40,
+		overscan: 8
+	});
 </script>
 
 {#if entries.length === 0}
 	{#if empty}{@render empty()}{/if}
 {:else}
 	<ol class="flex flex-col" aria-label={label} data-timeline>
-		{#each entries as e, i (e.key)}
+		{#if win.on}
+			<li aria-hidden="true" class="shrink-0" {@attach win.anchor} style:height="{win.before}px"></li>
+		{/if}
+		{#each win.slice(entries) as e, j (e.key)}
+			{@const i = win.start + j}
 			{@const future =
 				e.status === 'future' ||
 				entries[i + 1]?.status === 'future' ||
@@ -65,6 +77,7 @@ always-visible content below.
 				data-status={e.status}
 				data-tone={e.tone}
 				{...e.data}
+				{@attach win.measure(e.key)}
 			>
 				{#if i < entries.length - 1}<span
 						aria-hidden="true"
@@ -129,6 +142,9 @@ always-visible content below.
 				</div>
 			</li>
 		{/each}
+		{#if win.on && win.after > 0}
+			<li aria-hidden="true" class="shrink-0" style:height="{win.after}px"></li>
+		{/if}
 	</ol>
 {/if}
 
