@@ -138,7 +138,11 @@ export function virtual_list(o: VirtualOptions) {
 					if (changed) {
 						if (Math.abs(anchorDelta) >= 1 && anchorEl !== null) {
 							const port = scrollPort();
-							if (port !== null) {
+							// a bottom-origin port (`flex-col-reverse`: scrollTop runs from 0 at the tail to negative) already
+							// holds its place when a row above the view grows, and 0 there is the tail: leave it alone
+							if (port !== null && getComputedStyle(port).flexDirection.endsWith('reverse')) {
+								// nothing to compensate
+							} else if (port !== null) {
 								const prevScroll = port.scrollTop;
 								port.scrollTop = Math.max(0, prevScroll + anchorDelta);
 								top = Math.max(0, top + (port.scrollTop - prevScroll));
