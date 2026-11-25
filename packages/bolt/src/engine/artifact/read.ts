@@ -26,6 +26,8 @@ export const ArtifactJson = Schema.Struct({
 	format: Schema.Literal(1),
 	/** The engine contract this artifact was built against; a host refuses one it does not implement. */
 	contract: Schema.String,
+	/** The `HOST_API_VERSION` this engine speaks, for a host to read before it boots the release. */
+	host_api: Schema.Number,
 	/** The tenant handle (`norbital.template.json` `key`, else the directory name) and the display name. */
 	handle: Schema.String,
 	name: Schema.String,
@@ -210,7 +212,7 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 		}
 		guest.assets = held;
 	}
-	const { format, contract, handle, name, schema, client, pages, hashes } = artifact;
+	const { format, contract, host_api, handle, name, schema, client, pages, hashes } = artifact;
 	const actual = {
 		manifest: sha256_hex(manifestText),
 		guest: sha256_hex(guest.source),
@@ -227,6 +229,7 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 		(yield* artifact_hash(dir, {
 			format,
 			contract,
+			host_api,
 			handle,
 			name,
 			schema,

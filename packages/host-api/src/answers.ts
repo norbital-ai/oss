@@ -7,6 +7,8 @@ import { StudioManifest } from './studio.ts';
 export const ArtifactHeader = Schema.Struct({
 	/** The engine contract the release was built against: the pinned Bolt's `HostApi.contract`. */
 	contract: Schema.String,
+	/** The `HOST_API_VERSION` that Bolt speaks: a host knows whether it serves the release without booting its cell. */
+	host_api: Schema.Number,
 	/** The tenant handle (`norbital.template.json` `key`) and the display name. */
 	handle: Schema.String,
 	name: Schema.String,

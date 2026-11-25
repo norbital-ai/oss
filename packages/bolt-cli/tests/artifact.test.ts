@@ -1,4 +1,5 @@
 import { it } from '@effect/vitest';
+import { HOST_API_VERSION } from '@norbital-ai/host-api';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path } from 'effect';
 import { cpSync, rmSync } from 'node:fs';
@@ -128,6 +129,7 @@ const publicFixture = Effect.fnUntraced(function* () {
 	const body: Omit<ArtifactJson, 'hash'> = {
 		format: 1,
 		contract: CONTRACT,
+		host_api: HOST_API_VERSION,
 		handle: 'norbital_public',
 		name: 'Public fixture',
 		schema: fingerprint(schema_slice(publicManifest)),
@@ -339,6 +341,7 @@ it.live('reads lazily, decodes artifact files once and refuses a changed digest'
 		const body: Omit<ArtifactJson, 'hash'> = {
 			format: 1,
 			contract: CONTRACT,
+			host_api: HOST_API_VERSION,
 			handle: 'norbital_fixture',
 			name: 'Fixture',
 			schema: fingerprint(schema_slice(manifest)),
@@ -379,6 +382,7 @@ it.live('refuses a different contract and validates the current contract schema'
 				const body: Omit<ArtifactJson, 'hash'> = {
 					format: 1,
 					contract,
+					host_api: HOST_API_VERSION,
 					handle: 'pinned',
 					name: 'Pinned',
 					// an older engine's system layer fingerprints the same manifest differently
@@ -442,6 +446,7 @@ it.live('refuses obsolete native snapshot metadata without reading its bytes', (
 		const body: Omit<ArtifactJson, 'hash'> = {
 			format: 1,
 			contract: CONTRACT,
+			host_api: HOST_API_VERSION,
 			handle: 'untrusted',
 			name: 'Untrusted snapshot',
 			schema: fingerprint(schema_slice(manifest)),

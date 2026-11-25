@@ -2,6 +2,7 @@
 // in, q, act, live register, a deadline wake, the host clock's crons and fire, close — over one PGlite; the needs
 // check refuses a bundle whose need the host leaves `off`.
 import { cpSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { HOST_API_VERSION } from '@norbital-ai/host-api';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -201,6 +202,7 @@ const built = async (at: string, m: EngineManifest, migrations?: string): Promis
 	const body = {
 		format: 1 as const,
 		contract: CONTRACT,
+		host_api: HOST_API_VERSION,
 		handle: 'acme',
 		name: 'Acme',
 		schema: fingerprint(schema_slice(m)),

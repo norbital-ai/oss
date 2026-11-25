@@ -13,7 +13,7 @@ import { constants, cpSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, sep } from 'node:path';
-import { type GuestProgram, SKILL_FILE } from '@norbital-ai/host-api';
+import { type GuestProgram, HOST_API_VERSION, SKILL_FILE } from '@norbital-ai/host-api';
 import { statements } from '@norbital-ai/store';
 import { BOLT_PACKAGE } from '../bolt.ts';
 import type { Discovered } from '../discover.ts';
@@ -382,6 +382,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	const body = {
 		format: 1 as const,
 		contract: CONTRACT,
+		host_api: HOST_API_VERSION,
 		handle: meta.handle,
 		name: meta.name,
 		schema: fingerprint(schema_slice(c.manifest)),

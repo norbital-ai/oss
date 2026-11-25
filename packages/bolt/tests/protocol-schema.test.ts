@@ -4,6 +4,7 @@
 // artifact's files are decoded once (`ManifestInvalid`) as native Effects, and a workspace's pages resolve alike
 // on every host.
 import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { HOST_API_VERSION } from '@norbital-ai/host-api';
 import { dirname, join } from 'node:path';
 import { afterAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
@@ -483,6 +484,7 @@ const built = Effect.gen(function* () {
 	const body = {
 		format: 1 as const,
 		contract: CONTRACT,
+		host_api: HOST_API_VERSION,
 		handle: 'norbital_test',
 		name: 'Test',
 		schema: fingerprint(schema_slice(workspace)),
