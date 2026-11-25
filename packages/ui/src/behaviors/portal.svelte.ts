@@ -59,18 +59,16 @@ export function portal(target?: PortalTarget | PortalOptions): Attachment<HTMLEl
 		if (opts.disabled) return;
 		const host = resolveTarget(opts.to, inherited);
 		if (host === null || el.parentElement === host) return;
-		const originParent = el.parentNode;
-		const originNext = el.nextSibling;
+		// The marker holds the element's place. A teardown that finds it gone is the owner unmounting: its nodes
+		// were removed already, so the element goes too instead of returning to a parent that outlived it.
+		const marker = document.createComment('');
+		el.before(marker);
 		host.appendChild(el);
 		return () => {
-			if (el.parentElement !== host) return;
-			if (originParent !== null && originParent.isConnected) {
-				originParent.insertBefore(
-					el,
-					originNext !== null && originNext.parentNode === originParent ? originNext : null
-				);
-			} else {
-				el.remove();
+			if (marker.isConnected && el.parentElement === host) marker.replaceWith(el);
+			else {
+				marker.remove();
+				if (el.parentElement === host) el.remove();
 			}
 		};
 	};

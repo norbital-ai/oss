@@ -341,8 +341,9 @@ export const conversationRow = (r: typeof ConversationListRow.Type): { [k: strin
 	integration: r['integration'] ?? null,
 	// an automation run's inference transcript: labelled by its title, read-only
 	run: r['run'] ?? null,
-	// an instance thread's own facts: a direct message or a group chat, and the provider's thread (the peer or the group)
-	kind: r['integration'] == null ? null : (r['kind'] ?? null),
+	// a system agent's conversation (`task`), or an instance thread's own facts: a direct message or a group chat, and
+	// the provider's thread (the peer or the group)
+	kind: r['integration'] == null && r['kind'] !== TASK ? null : (r['kind'] ?? null),
 	thread: r['thread'] ?? null,
 	// a DM's member, by name, when the sender is one: the selector reads "Dion (+65 9238 8112)"
 	peer: r['peer'] ?? null,

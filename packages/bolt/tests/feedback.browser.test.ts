@@ -46,3 +46,24 @@ it('the Feedback dialog says how it works, sends the words with the page they we
 		target.remove();
 	}
 });
+
+it('the Feedback dialog leaves nothing behind when its owner unmounts it open', async () => {
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
+	document.body.replaceChildren();
+	const target = document.createElement('div');
+	document.body.append(target);
+	const view = mount(Feedback, {
+		target,
+		props: {
+			api: { agent: { upload: () => Effect.succeed({ id: 'file-1' }) }, feedback: () => Effect.void },
+			t: (key: string) => key,
+			route: '/',
+			on_close: () => {}
+		}
+	});
+	await expect.element(page.getByRole('dialog')).toBeInTheDocument();
+	await unmount(view);
+	await dispose();
+	expect(document.querySelector('[role="dialog"]')).toBeNull();
+	target.remove();
+});

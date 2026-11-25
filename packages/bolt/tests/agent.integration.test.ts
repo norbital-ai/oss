@@ -36,7 +36,7 @@ import {
 	type WorkspaceNote
 } from '@norbital-ai/host-api';
 import { AGENT_LIMITS, callKey, FIXED, type AgentHostConfig } from '../src/engine/agent/index.ts';
-import { transcriptRow } from '../src/engine/agent/schema.ts';
+import { conversationRow, transcriptRow } from '../src/engine/agent/schema.ts';
 import { saveAgentSettings, SYSTEM_AGENTS } from '../src/engine/agent/settings.ts';
 import { BOUNDS, COMPACT_FORMAT, STATE_NOTE } from '../src/engine/agent/context.ts';
 import { requestEvidence } from '../src/engine/agent/request.ts';
@@ -3160,6 +3160,10 @@ describe('system agent tasks', () => {
 				expect((yield* agent.conversation(conversation)).kind).toBe('task');
 				// an administrator's session list decodes it like any other conversation
 				expect(Schema.is(AgentConversation.fields.kind)('task')).toBe(true);
+				expect(
+					conversationRow({ id: conversation, updated_at: '2026-01-01T00:00:00Z', status: 'idle', model: 'm', kind: 'task' })
+						.kind
+				).toBe('task');
 				// no person attends: no page control, no plan card, and the automation start is refused in words
 				const [first, second] = taskAi.requests;
 				for (const waits of ['page', 'update_plan', 'run', 'ask', 'decide', 'invite', 'sync'])
