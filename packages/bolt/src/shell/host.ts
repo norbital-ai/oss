@@ -1332,6 +1332,12 @@ const makeShell = Effect.gen(function* () {
 				yield* hostCall(() => organization.write(auth, branding));
 				return json({ value: null });
 			}
+			case 'GET /feedback': {
+				const feedback = c.feedback;
+				if (feedback === undefined)
+					return refused('unavailable', 'This host takes no feedback.', 503);
+				return json({ value: yield* hostCall(() => feedback.sent(auth)) });
+			}
 			case 'POST /feedback': {
 				const feedback = c.feedback;
 				if (feedback === undefined)
@@ -1342,7 +1348,7 @@ const makeShell = Effect.gen(function* () {
 				const files = yield* attachmentsFor(h.db, auth.actor.id, b.attachments ?? []);
 				if (b.text.trim() === '' && files.length === 0)
 					return yield* Effect.fail(invalid('Feedback needs text or an image.'));
-				yield* hostCall(() => feedback(auth, { text: b.text, files, route: b.route }));
+				yield* hostCall(() => feedback.send(auth, { text: b.text, files, route: b.route }));
 				return json({ value: null });
 			}
 			case 'POST /usage': {

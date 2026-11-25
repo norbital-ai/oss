@@ -45,7 +45,7 @@ import {
 import { browserTransport } from '../protocol/client.ts';
 import { ProtocolFailed, TransportFailed } from '../decl/errors/browser.ts';
 import { ActReply, WireError, type PageResult } from '../protocol/schema.ts';
-import { AuditPage, AuditRecord, StudioFile, StudioView, uuidv7 } from '@norbital-ai/host-api';
+import { AuditPage, AuditRecord, SentFeedback, StudioFile, StudioView, uuidv7 } from '@norbital-ai/host-api';
 import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
 /** Recheck the served client after any reconnect, including a browser that missed the cutover's close frame. */
@@ -266,6 +266,7 @@ export function shell_api(
 		organization: (logo: string | null) => done('POST', `${SHELL}/organization`, { logo }),
 		feedback: (text, attachments, route) =>
 			done('POST', `${SHELL}/feedback`, { text, attachments: [...attachments], route }),
+		feedback_sent: () => call(Schema.Array(SentFeedback), 'GET', `${SHELL}/feedback`),
 		/** An instance's raw messages, both directions, newest first (an administrator's; the instance's Messages tab). */
 		instance_messages: (instance: string, before?: string) =>
 			call(

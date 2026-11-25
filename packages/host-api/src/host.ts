@@ -90,8 +90,14 @@ export type ShellPorts = {
 	 */
 	readonly billing?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
-	/** The shell's Feedback dialog sends here; a host that takes no feedback sets none and the shell offers no dialog. */
-	readonly feedback?: (auth: Authority, feedback: Feedback) => Promise<void>;
+	/**
+	 * The shell's Feedback dialog: `send` takes what a person wrote, `sent` answers what that person sent before and
+	 * what became of each. A host that takes no feedback sets none and the shell offers no dialog.
+	 */
+	readonly feedback?: {
+		readonly send: (auth: Authority, feedback: Feedback) => Promise<void>;
+		readonly sent: (auth: Authority) => Promise<readonly SentFeedback[]>;
+	};
 	/** Page views as the shell saw them, in order; a host that keeps no usage sets none and the shell sends nothing. */
 	readonly usage?: (auth: Authority, views: readonly PageView[]) => Promise<void>;
 };
@@ -126,6 +132,23 @@ export type Feedback = {
 	readonly files: readonly Json[];
 	readonly route: string;
 };
+/** Something a person sent before, as its sender sees it: their words, where it stands and the last word on it. */
+export const SentFeedback = Schema.Struct({
+	id: Schema.String,
+	text: Schema.String,
+	at: Schema.String,
+	/** `received`: nobody works on it yet; `working`: being worked on; `done`: live has the fix; `closed`: dismissed; `platform`: passed to the platform. */
+	status: Schema.Literals(['received', 'working', 'done', 'closed', 'platform']),
+	/** The assistant's last report on it or an administrator's last reply, whichever is later. */
+	reply: Schema.NullOr(
+		Schema.Struct({
+			by: Schema.Literals(['assistant', 'administrator']),
+			text: Schema.String,
+			at: Schema.String
+		})
+	)
+});
+export type SentFeedback = typeof SentFeedback.Type;
 /** One page a person had open: its route pattern (no record id, no query) and how long it stayed open. */
 export type PageView = {
 	readonly route: string;

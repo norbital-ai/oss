@@ -484,6 +484,10 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'What happened, or what would be better?': '发生了什么，或者怎样会更好？',
 	'Add images': '添加图片',
 	'Feedback sent': '反馈已发送',
+	'What you sent': '你发送过的反馈',
+	Received: '已收到',
+	'Being worked on': '处理中',
+	'Passed to the platform': '已转交平台',
 	'Feedback needs text or an image.': '反馈需要文字或图片。',
 	'Models members may use. None chosen allows every model; with one, members see no model choice.':
 		'成员可使用的模型。不选择则允许所有模型；只选择一个时，成员不会看到模型选择。',

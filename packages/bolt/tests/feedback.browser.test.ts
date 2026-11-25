@@ -18,7 +18,19 @@ it('the Feedback dialog says how it works, sends the words with the page they we
 			api: {
 				agent: { upload: () => Effect.succeed({ id: 'file-1' }) },
 				feedback: (text: string, files: readonly { readonly id: string }[], route: string) =>
-					Effect.sync(() => void sent.push({ text, files: files.length, route }))
+					Effect.sync(() => void sent.push({ text, files: files.length, route })),
+				// what this person sent before, with what became of it
+				feedback_sent: () =>
+					Effect.succeed([
+						{
+							id: 'a',
+							text: 'Dates show a day early',
+							at: '2026-01-05T00:00:00.000Z',
+							status: 'done' as const,
+							reply: { by: 'assistant' as const, text: 'The date now follows the workspace zone.', at: '2026-01-06T00:00:00.000Z' }
+						},
+						{ id: 'b', text: 'Add an export', at: '2026-01-07T00:00:00.000Z', status: 'received' as const, reply: null }
+					])
 			},
 			t: (key: string) => key,
 			route: '/app/sales/quotes',
@@ -33,6 +45,11 @@ it('the Feedback dialog says how it works, sends the words with the page they we
 				)
 			)
 			.toBeInTheDocument();
+		await expect
+			.poll(() => document.querySelector('[aria-label="What you sent"]')?.textContent?.replace(/\s+/g, ' '))
+			.toMatch(
+				/Done Dates show a day early Assistant: The date now follows the workspace zone\..*Received Add an export/
+			);
 		const send = page.getByRole('button', { name: 'Send', exact: true });
 		// nothing to send yet
 		await expect.element(send).toBeDisabled();
@@ -55,7 +72,7 @@ it('the Feedback dialog leaves nothing behind when its owner unmounts it open', 
 	const view = mount(Feedback, {
 		target,
 		props: {
-			api: { agent: { upload: () => Effect.succeed({ id: 'file-1' }) }, feedback: () => Effect.void },
+			api: { agent: { upload: () => Effect.succeed({ id: 'file-1' }) }, feedback: () => Effect.void, feedback_sent: () => Effect.succeed([]) },
 			t: (key: string) => key,
 			route: '/',
 			on_close: () => {}

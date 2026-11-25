@@ -15,6 +15,7 @@ import {
 	type AuditRecord,
 	type LogQuery,
 	type LogRow,
+	type SentFeedback,
 	type StudioFile,
 	type StudioInspectInput,
 	StudioInspection,
@@ -528,6 +529,8 @@ export type ShellApi = {
 	organization(logo: string | null): Call<void>;
 	/** The Feedback dialog's words and images (panel uploads) for the host (`ShellPorts.feedback`), from `route`'s page. */
 	feedback(text: string, attachments: readonly { readonly id: string }[], route: string): Call<void>;
+	/** What this person sent before and what became of each, newest first (`ShellPorts.feedback.sent`). */
+	feedback_sent(): Call<readonly SentFeedback[]>;
 	/** An instance's raw messages, both directions, newest first (an administrator's). */
 	instance_messages(instance: string, before?: string): Call<readonly InstanceMessage[]>;
 	/** Sync health and dead-letter replay require update permission on this instance. */

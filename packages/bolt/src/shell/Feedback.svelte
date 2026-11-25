@@ -1,11 +1,13 @@
 <!--
 	The Feedback dialog (the account menu's, on a host that takes feedback): a person's words and images for the
-	workspace's administrators. Images go up as panel attachments when it is sent; the host gets their stored references.
+	workspace's administrators, and under them what that person sent before with what became of each. Images go up as
+	panel attachments when it is sent; the host gets their stored references.
 -->
 <script lang="ts">
-	import { fork } from '@norbital-ai/ui/effect';
+	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
-	import { Button, Dialog, Icon, Spinner, Textarea, toast } from '@norbital-ai/ui';
+	import type { SentFeedback } from '@norbital-ai/host-api';
+	import { Badge, Button, Dialog, Icon, Spinner, Textarea, toast } from '@norbital-ai/ui';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import type { ShellApi } from './api-types.ts';
 	import Attachments from './agent/Attachments.svelte';
@@ -17,13 +19,22 @@
 		on_close
 	}: {
 		/** What the dialog calls: the panel's upload for its images, then the send. */
-		api: Pick<ShellApi, 'feedback'> & { agent: Pick<ShellApi['agent'], 'upload'> };
+		api: Pick<ShellApi, 'feedback' | 'feedback_sent'> & { agent: Pick<ShellApi['agent'], 'upload'> };
 		t: (key: string) => string;
 		/** The open page's route pattern (`route_pattern`). */
 		route: string;
 		on_close: () => void;
 	} = $props();
 
+	const STATUS: { readonly [status in SentFeedback['status']]: string } = {
+		received: 'Received',
+		working: 'Being worked on',
+		done: 'Done',
+		closed: 'Closed',
+		platform: 'Passed to the platform'
+	};
+	const sent = observe_once(() => api.feedback_sent());
+	const day = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
 	let text = $state('');
 	let images = $state<File[]>([]);
 	let sending = $state(false);
@@ -108,5 +119,27 @@
 				</Dialog.Footer>
 			</Stack>
 		</form>
+		{#if (sent.current?.length ?? 0) > 0}
+			<section aria-label={t('What you sent')} class="max-h-64 overflow-y-auto border-t pt-4">
+				<Stack gap="md">
+					<h3 class="text-sm font-medium">{t('What you sent')}</h3>
+					{#each sent.current ?? [] as one (one.id)}
+						<Stack gap="xs">
+							<Inline justify="between" gap="sm">
+								<span class="text-xs text-muted-foreground">{day.format(new Date(one.at))}</span>
+								<Badge variant={one.status === 'done' ? 'brand' : 'outline'}>{t(STATUS[one.status])}</Badge>
+							</Inline>
+							<p class="line-clamp-2 text-sm">{one.text}</p>
+							{#if one.reply !== null}
+								<p class="text-sm text-muted-foreground">
+									<span class="font-medium">{t(one.reply.by === 'assistant' ? 'Assistant' : 'Administrator')}:</span>
+									{one.reply.text}
+								</p>
+							{/if}
+						</Stack>
+					{/each}
+				</Stack>
+			</section>
+		{/if}
 	</Dialog.Content>
 </Dialog.Root>
