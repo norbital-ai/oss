@@ -49,6 +49,7 @@ import {
 import { Syncs } from '../engine/sync/index.ts';
 import { mayUpdate } from '../engine/write/act.ts';
 import { TenantDb } from '../engine/db/tenant-db.ts';
+import { attachmentsFor } from '../engine/agent/attachments.ts';
 import { decodeOne } from '../engine/db/rows.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { Logs } from '../engine/ports.ts';
@@ -233,6 +234,21 @@ const RunId = Schema.Struct({ id: Schema.String });
 /** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL). */
 const Branding = Schema.Struct({
 	logo: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
+/** The Feedback dialog's post: `attachments` are the member's own panel uploads, `route` the page's pattern. */
+const FeedbackBody = Schema.Struct({
+	text: Schema.String.check(Schema.isMaxLength(4000)),
+	attachments: Schema.optionalKey(Schema.Array(Schema.Json).check(Schema.isMaxLength(8))),
+	route: Schema.String.check(Schema.isMaxLength(200))
+});
+/** A batch of page views (`ShellPorts.usage`): at most 50, the rest dropped by the sender. */
+const UsageBody = Schema.Struct({
+	views: Schema.Array(
+		Schema.Struct({
+			route: Schema.String.check(Schema.isMaxLength(200)),
+			dwell_ms: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
+		})
+	).check(Schema.isMaxLength(50))
 });
 const getHeader = (request: HttpServerRequest.HttpServerRequest, name: string) =>
 	header(request, name) ?? null;
@@ -717,7 +733,9 @@ const makeShell = Effect.gen(function* () {
 			...(c.live === undefined ? {} : { live: c.live }),
 			...(c.recovery === undefined ? {} : { recovery: c.recovery }),
 			...(c.billing === undefined ? {} : { billing: c.billing }),
-			...(c.organization === undefined ? {} : { organization: true as const })
+			...(c.organization === undefined ? {} : { organization: true as const }),
+			...(c.feedback === undefined ? {} : { feedback: true as const }),
+			...(c.usage === undefined ? {} : { usage: true as const })
 		};
 	};
 	const bootState = Effect.fn('shell.bootState')(function* (
@@ -1312,6 +1330,27 @@ const makeShell = Effect.gen(function* () {
 				const organization = c.organization,
 					branding = { logo: b.logo ?? null };
 				yield* hostCall(() => organization.write(auth, branding));
+				return json({ value: null });
+			}
+			case 'POST /feedback': {
+				const feedback = c.feedback;
+				if (feedback === undefined)
+					return refused('unavailable', 'This host takes no feedback.', 503);
+				if (auth.preview !== undefined)
+					return refused('forbidden', 'A preview sends no feedback.', 403);
+				const b = yield* requestBody(request, FeedbackBody);
+				const files = yield* attachmentsFor(h.db, auth.actor.id, b.attachments ?? []);
+				if (b.text.trim() === '' && files.length === 0)
+					return yield* Effect.fail(invalid('Feedback needs text or an image.'));
+				yield* hostCall(() => feedback(auth, { text: b.text, files, route: b.route }));
+				return json({ value: null });
+			}
+			case 'POST /usage': {
+				const usage = c.usage;
+				if (usage === undefined) return refused('unavailable', 'This host keeps no usage.', 503);
+				if (auth.preview !== undefined) return json({ value: null });
+				const { views } = yield* requestBody(request, UsageBody);
+				yield* hostCall(() => usage(auth, views));
 				return json({ value: null });
 			}
 			case 'GET /logs': {

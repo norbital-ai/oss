@@ -20,7 +20,7 @@ import { conversationId } from '../src/engine/conversations/store.ts';
 import { Authorities, preview_as } from '../src/engine/identity/actor.ts';
 import { memberAs } from '../src/engine/agent/schema.ts';
 import { instance_messages } from '../src/shell/integration/messages.ts';
-import { saveAgentSettings } from '../src/engine/agent/settings.ts';
+import { saveAgentSettings, SYSTEM_AGENTS } from '../src/engine/agent/settings.ts';
 import { xlsxCells, xlsxSheets } from '../src/engine/files/xlsx.ts';
 import { respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
@@ -175,7 +175,7 @@ describe('the agent UI actions', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { t, route, agent, act, transcript } = yield* setup();
-					yield* saveAgentSettings(t.db, { monthly: null, member: null, policies: {}, models: ['fast'], system1: null, system2: null });
+					yield* saveAgentSettings(t.db, { monthly: null, member: null, policies: {}, models: ['fast'], system1: null, system2: null, system: SYSTEM_AGENTS });
 					const start = yield* act('ann', 'sys_conversation.start', {});
 					const c = started(start);
 					expect((yield* agent.conversation(c)).model).toBe('default');

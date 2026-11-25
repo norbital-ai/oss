@@ -38,6 +38,8 @@ export const Conversation = Schema.Struct({
 	integration: Schema.NullOr(Schema.String),
 	/** The chat thread on that instance (a WhatsApp jid, a mail thread): where typing is shown. */
 	thread: Schema.NullOr(Schema.String),
+	/** `task`: a system agent's conversation (`Agents.task`); a chat thread's own kind (`dm`) otherwise. */
+	kind: Schema.NullOr(Schema.String),
 	parent: Schema.NullOr(Schema.String),
 	status: Schema.Literals(['idle', 'running', 'stopped']),
 	model: Schema.String,
@@ -46,6 +48,14 @@ export const Conversation = Schema.Struct({
 	run: Schema.optionalKey(Schema.NullOr(Schema.String))
 }).annotate({ identifier: 'sys_conversation' });
 export type ConversationRow = typeof Conversation.Type;
+/** A system agent's conversation: no person started it and none attends it. */
+export const TASK = 'task';
+/**
+ * Whether a person attends the conversation in the app, there to answer a confirmation card. An envoy's chat and a
+ * system agent's task have none: a tool that waits for a person's word is refused in both.
+ */
+export const inApp = (conv: Pick<ConversationRow, 'envoy' | 'kind'>): boolean =>
+	conv.envoy === null && conv.kind !== TASK;
 /** What a row is beyond its role; absent on ordinary messages. */
 export type Meta = typeof MetaSchema.Type;
 /** Every model call of a turn summed (turn steps, compaction, verifier, awaited children): the cost disclosure's data. */
@@ -282,7 +292,7 @@ export const listed = (
 ): boolean =>
 	r !== null &&
 	(r['parent'] ?? null) === null &&
-	((r['run'] ?? null) !== null
+	((r['run'] ?? null) !== null || r['kind'] === TASK
 		? admin
 		: (r['integration'] ?? null) === null &&
 			(r['owner'] === member || (workspace && admin && r['owner'] != null)));
@@ -290,14 +300,14 @@ export const listed = (
 export const PUBLIC_ENVOY = `EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = c.envoy AND e.active AND e.audience = 'public')`;
 /**
  * Which conversations other than a member's own a reader may see (`c` the `sys_conversation` row; each value a SQL
- * placeholder): an automation's transcript for an administrator, an envoy's channel thread for staff when the envoy is
+ * placeholder): an automation's transcript or a system agent's task for an administrator, an envoy's channel thread for staff when the envoy is
  * public, or for anyone who posted in it. Opening one (`conversationFor`) and listing them (the `conversations` read) share it.
  */
 export const sharedConversations = (p: {
 	readonly member: string;
 	readonly admin: string;
 	readonly staff: string;
-}) => `(c.run IS NOT NULL AND ${p.admin}) OR
+}) => `((c.run IS NOT NULL OR c.kind = '${TASK}') AND ${p.admin}) OR
    (c.integration IS NOT NULL AND ${p.member} IS NOT NULL AND ((${p.staff} AND ${PUBLIC_ENVOY}) OR
     EXISTS (SELECT 1 FROM sys_message m WHERE m.conversation = c.id AND ${p.member} IN (m.author, m."as"->>'member', m."as"->'envoy'->>'member'))))`;
 export const ConversationListRow = Schema.Struct({

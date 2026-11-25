@@ -144,11 +144,17 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		});
 	};
 
+	// one rule for every tool that waits for a person's word: no person attends an envoy's chat or a system agent's task
+	const unattended = a.actor.kind === 'envoy' || a.actor.kind === 'system';
+	const noCard = (what: string) =>
+		err(
+			a.actor.kind === 'envoy'
+				? `An envoy cannot ${what}: that needs a person's confirmation in the app, and this chat has no card. Say so.`
+				: `A system agent cannot ${what}: that needs a person's confirmation in the app, and no person attends this task. Say so.`
+		);
 	const hold: HoldTool = (name, input, what) =>
-		a.actor.kind === 'envoy'
-			? err(
-					`An envoy cannot ${what}: that needs a person's confirmation in the app, and this chat has no card. Say so.`
-				)
+		unattended
+			? noCard(what)
 			: a.actor.kind !== 'member' || x.approved(name, input)
 				? undefined
 				: { confirm: true };
@@ -464,15 +470,10 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			);
 			const sweep =
 				mutations.length > 1 || mutations.some(([callable, input]) => sweeping(callable, input));
-			if (a.actor.kind === 'envoy' && sweep)
-				return err(
-					"An envoy cannot delete or write a batch: that needs a person's confirmation in the app, and this chat has no card. Say so."
-				);
-			if (
-				x.inApp &&
-				(list.some(([callable]) => acts.get(callable)?.confirm === true) ||
-					(sweep && a.actor.kind === 'member'))
-			)
+			const setup = list.some(([callable]) => acts.get(callable)?.confirm === true);
+			if (unattended && sweep) return noCard('delete or write a batch');
+			if (a.actor.kind === 'system' && setup) return noCard("change the workspace's setup");
+			if (x.inApp && (setup || (sweep && a.actor.kind === 'member')))
 				return { confirm: true, input: prepared } as const;
 			return ok(yield* perform(x, 'act', prepared, id));
 		});
@@ -492,10 +493,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					...(i.key === undefined ? {} : { key: i.key })
 				};
 			}
-			if (a.actor.kind === 'envoy')
-				return err(
-					"An envoy cannot start an automation: that needs a person's confirmation in the app, and this chat has no card. Say so."
-				);
+			if (unattended) return noCard('start an automation');
 			if (x.inApp) return { confirm: true, input: i } as const;
 			const answer = yield* perform(x, 'run', i, id);
 			return ok(yield* runJob(x.jobs, e, a, `${AUTOMATION}.${i.automation}`, answer));

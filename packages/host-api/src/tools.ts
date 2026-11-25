@@ -99,6 +99,8 @@ export type HostTool = {
 	view?(input: Json): ToolView;
 	read_only?: boolean;
 	source?: true;
+	/** Offered to every staff member in the app, whatever their policies name. */
+	everyone?: true;
 	studio?: StudioRole;
 	/** A call's wall when it is past the usual host call's. */
 	wall_ms?: number;

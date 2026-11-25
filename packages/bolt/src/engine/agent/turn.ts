@@ -1,6 +1,6 @@
 // Turn lifecycle and step loop: claim, heartbeat, MCP session, step advancement, model streaming, recovery and exit cleanup.
 import { type AiRequest, Port, Unavailable, uuidv7 } from '@norbital-ai/host-api';
-import { Cause, Effect, Exit, type FiberSet, type PubSub, Schedule, type Scope } from 'effect';
+import { Cause, Clock, Effect, Exit, type FiberSet, type PubSub, Schedule, type Scope } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
 import type { Authority } from '../contracts.ts';
 import { claim as claimMessage } from '../conversations/store.ts';
@@ -24,8 +24,8 @@ import {
 import { mcpSessions } from './mcp.ts';
 import type { AgentStore } from './messages.ts';
 import type { Queue as AgentMessageQueue } from './queue.ts';
-import { transcriptRow, type As, type MessageRow, type Meta, type Plan } from './schema.ts';
-import { agentSettings, allowedModel, overLimit } from './settings.ts';
+import { inApp, TASK, transcriptRow, type As, type MessageRow, type Meta, type Plan } from './schema.ts';
+import { agentSettings, allowedModel, overLimit, overTaskLimit } from './settings.ts';
 import {
 	AGENT_LIMITS,
 	checkFailing,
@@ -49,7 +49,7 @@ import {
 	type Validators
 } from './tools.ts';
 import { makeExecuteCalls } from './turn-calls.ts';
-import { isOutward, makeBuildToolContext, unheardEvents } from './turn-context.ts';
+import { audienceOf, isOutward, makeBuildToolContext, unheardEvents } from './turn-context.ts';
 import { makeTurnIo } from './turn-io.ts';
 
 export type TurnRunnerDeps = {
@@ -157,11 +157,13 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 		const admitted = yield* store.claim(id);
 		if (admitted === null) return { ran: false, reply: null };
 		const turn = uuidv7();
+		const started = yield* Clock.currentTimeMillis;
 		const declined = { declined: true, reason: 'A new turn started before approval.' };
 		yield* store.declinePending(id);
+		// approvals are held for a person: an envoy's chat and a system agent's task hold none to reject
 		const onTurnStart = config.on_turn_start;
 		const rejected =
-			onTurnStart === undefined
+			onTurnStart === undefined || !inApp(yield* store.conversation(id))
 				? []
 				: yield* Port.attempt('agent.onTurnStart', () => onTurnStart(id)).pipe(
 						Effect.mapError((error) => BoltError.make('internal', 'facility', error.message, error))
@@ -198,7 +200,9 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 		const mcp = yield* mcpSessions(m, config.mcp).pipe(Effect.provideService(Mcp, mcpPort));
 		const current: TurnState = {
 			model: '',
+			audience: null,
 			steps: 0,
+			tool_errors: 0,
 			failing: 0,
 			checks: new Map(),
 			lastError: '',
@@ -342,8 +346,15 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 			}
 			const sender = current.as;
 			const authority = sender === null ? null : yield* resolve(sender);
+			current.audience = audienceOf(conv, authority);
 			const external = authority !== null && (yield* isOutward(db, conv, authority));
-			const brief = authority === null ? undefined : external ? m.agent.external : m.agent.internal;
+			// the brief is written for serving a person: a task's own prompt carries its rules
+			const brief =
+				authority === null || conv.kind === TASK
+					? undefined
+					: external
+						? m.agent.external
+						: m.agent.internal;
 			if (sender === null || authority === null || (io.inApp(conv) && brief === undefined)) {
 				yield* io.fail(
 					conv,
@@ -368,7 +379,9 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 					conv.owner,
 					authority.policies,
 					current.usage.cost ?? 0
-				)) !== null
+				)) !== null ||
+				(conv.kind === TASK &&
+					(yield* overTaskLimit(db, settings, id, current.usage.cost ?? 0)) !== null)
 			) {
 				yield* io.fail(conv, FIXED.limit, 'spendLimit');
 				yield* store.cancelQueued(id);
@@ -702,11 +715,14 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 					yield* io.stopTyping(true);
 					// Only an explicitly stopped turn can finish incomplete rows after an unhandled failure.
 					// A leased turn retains its queued takeover and uncertain calls for the next owner.
-					if (Exit.isFailure(exit) && (yield* store.maybeConversation(id))?.status !== 'stopped')
-						return;
+					const stopped = (yield* store.maybeConversation(id))?.status === 'stopped';
+					if (Exit.isFailure(exit) && !stopped) return;
 					// a reply or a call the turn left unfinished (a stop, a crash) is finished as interrupted before the turn reads idle
 					if (current.streaming !== null) yield* current.streaming.end(true);
 					yield* store.unfinished(id, turn);
+					// a turn that took no step and left no reply (nothing to hear, `/compact`) did nothing to sum up
+					if (current.steps > 0 || current.reply !== null)
+						yield* io.summary(stopped, (yield* Clock.currentTimeMillis) - started);
 					if (Exit.isFailure(exit)) return;
 					yield* store.idle(id, false);
 				}).pipe(Effect.tapCause(Effect.logWarning))

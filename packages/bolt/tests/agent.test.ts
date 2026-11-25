@@ -21,7 +21,7 @@ import {
 	modelCall,
 	STALL_MS
 } from '../src/engine/agent/ai.ts';
-import { overLimit, type AgentSettings } from '../src/engine/agent/settings.ts';
+import { overLimit, type AgentSettings, SYSTEM_AGENTS } from '../src/engine/agent/settings.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { jsonDiff } from '../src/engine/agent/draft.ts';
 import {
@@ -2085,7 +2085,8 @@ describe('spend cap overLimit with in-flight turn cost', () => {
 		policies: { vip: 10 },
 		models: [],
 		system1: null,
-		system2: null
+		system2: null,
+		system: SYSTEM_AGENTS
 	};
 
 	it.effect('counts inFlightUsd against workspace and member caps and short-circuits when in-flight alone exceeds cap', () =>

@@ -3,7 +3,7 @@ import type { EngineError } from '../errors.ts';
 import { enqueue } from '../runs/queue.ts';
 import type { Chain } from '../write/sql.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { Turns, type TurnVia } from '../services.ts';
+import { Turns, type SystemTask, type TurnVia } from '../services.ts';
 
 export const TURN_RUN = 'agent.turn';
 /** The conversation's one queued `agent.turn` run, due at `due`: input is answered if the process that took it dies. */
@@ -15,6 +15,7 @@ export const enqueueTurn = (chain: Chain, conversation: string, due: string, whe
 	});
 
 type Drain = (conversation: string) => Effect.Effect<{ readonly ran: boolean }, EngineError>;
+type StartTask = (task: SystemTask) => Effect.Effect<string, EngineError>;
 export class TurnHandlers extends Context.Service<
 	TurnHandlers,
 	{
@@ -27,6 +28,8 @@ export class TurnHandlers extends Context.Service<
 			via: TurnVia
 		) => Effect.Effect<{ readonly ran: boolean }, EngineError>;
 		readonly pending: (conversation: string) => Effect.Effect<void, EngineError>;
+		readonly tasks: (start: StartTask) => Effect.Effect<void>;
+		readonly task: StartTask;
 	}
 >()('bolt/TurnHandlers') {}
 
@@ -35,6 +38,8 @@ const handlers = Layer.effect(
 	Effect.sync(() => {
 		const drains = new Map<TurnVia, Drain>();
 		let release: (conversation: string) => Effect.Effect<void, EngineError> = () => Effect.void;
+		let start: StartTask = () =>
+			Effect.fail(BoltError.make('not_ready', 'guest', 'the agent is not running here'));
 		return {
 			register: (via: TurnVia, drain: Drain) =>
 				Effect.sync(() => {
@@ -53,7 +58,12 @@ const handlers = Layer.effect(
 							)
 						: drain(conversation);
 				}),
-			pending: (conversation: string) => Effect.suspend(() => release(conversation))
+			pending: (conversation: string) => Effect.suspend(() => release(conversation)),
+			tasks: (next: StartTask) =>
+				Effect.sync(() => {
+					start = next;
+				}),
+			task: (task: SystemTask) => Effect.suspend(() => start(task))
 		};
 	})
 );
@@ -63,6 +73,6 @@ export const TurnsLive = Layer.effect(
 	Turns,
 	Effect.gen(function* () {
 		const registry = yield* TurnHandlers;
-		return { drain: registry.drain, release: registry.pending };
+		return { drain: registry.drain, release: registry.pending, task: registry.task };
 	})
 ).pipe(Layer.provideMerge(handlers));

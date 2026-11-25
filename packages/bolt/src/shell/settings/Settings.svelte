@@ -6,6 +6,7 @@
 	import { watch } from '@norbital-ai/ui/behaviors';
 	import {
 		Button,
+		Checkbox,
 		Combobox,
 		confirm_action,
 		Dialog,
@@ -310,6 +311,13 @@
 			models: string[];
 			system1: string | null;
 			system2: string | null;
+			system: {
+				improve: boolean;
+				automations: boolean;
+				policies: readonly string[];
+				monthly: string;
+				task: string;
+			};
 		} | null>(null),
 		catalog = $state<readonly AiModel[]>([]),
 		deciders = $state<{ readonly models: readonly AiModel[]; readonly default: string }>({
@@ -334,7 +342,14 @@
 			),
 			models: [...admin.settings.models],
 			system1: admin.settings.system1,
-			system2: admin.settings.system2
+			system2: admin.settings.system2,
+			system: {
+				improve: admin.settings.system.improve,
+				automations: admin.settings.system.automations,
+				policies: admin.settings.system.policies,
+				monthly: admin.settings.system.monthly?.toString() ?? '',
+				task: admin.settings.system.task?.toString() ?? ''
+			}
 		};
 	});
 	/** A provider's models as picker rows, grouped by vendor, each with its listed price per million tokens. */
@@ -369,7 +384,14 @@
 			),
 			models: a.models,
 			system1: a.system1,
-			system2: a.system2
+			system2: a.system2,
+			system: {
+				improve: a.system.improve,
+				automations: a.system.automations,
+				policies: a.system.policies,
+				monthly: limit(a.system.monthly),
+				task: limit(a.system.task)
+			}
 		});
 		if (mutationError === null) yield* loadAssistant();
 	});
@@ -598,6 +620,64 @@
 								/>
 							</fieldset>
 						{/if}
+						<fieldset class="flex flex-col gap-3 text-sm" data-assistant-system>
+							<legend class="mb-1 font-medium">{t('System agents')}</legend>
+							<p class="text-meta">
+								{t(
+									"Agents that work with no person attending. They never merge, control a page or do anything that needs a person's confirmation."
+								)}
+							</p>
+							{#if workspace.feedback === true}
+								<label class="flex items-start gap-2"
+									><Checkbox bind:checked={a.system.improve} />
+									<span
+										>{t('Improve automatically')}<span class="block text-meta"
+											>{t(
+												'An agent works on feedback and on automations that keep failing, and leaves its commits for an administrator to merge.'
+											)}</span
+										></span
+									></label
+								>
+							{/if}
+							<label class="flex items-start gap-2"
+								><Checkbox bind:checked={a.system.automations} />
+								<span
+									>{t('Let automations start agents')}<span class="block text-meta"
+										>{t('An automation may hand work to an agent, under its own policies.')}</span
+									></span
+								></label
+							>
+							<label class="flex flex-col gap-1"
+								><span class="text-muted-foreground"
+									>{t('What automatic improvement may read')}</span
+								>
+								<Combobox
+									multiple
+									aria-label={t('What automatic improvement may read')}
+									placeholder={t('No records: source only')}
+									options={policyNames.map((policy) => ({ value: policy, label: policy }))}
+									value={a.system.policies}
+									on_change={(policies) => (a.system.policies = policies)}
+								/></label
+							>
+							<div class="grid gap-3 sm:grid-cols-2">
+								{#each [['monthly', 'Monthly limit for system agents (USD)'], ['task', 'Limit for one piece of work (USD)']] as const as [key, label] (key)}
+									<label class="flex flex-col gap-1"
+										><span class="text-muted-foreground">{t(label)}</span>
+										<Input
+											class="h-8"
+											type="number"
+											min="0"
+											step="0.01"
+											placeholder={t('No limit')}
+											value={a.system[key]}
+											oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+												(a.system[key] = e.currentTarget.value)}
+										/></label
+									>
+								{/each}
+							</div>
+						</fieldset>
 					</div>
 					{@render save()}
 				</form>

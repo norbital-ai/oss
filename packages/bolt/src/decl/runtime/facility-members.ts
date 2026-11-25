@@ -17,6 +17,7 @@ export const FACILITY_MEMBERS = [
 	'convert.ingest',
 	'ai.sys_1.decide',
 	'ai.sys_2.infer',
+	'ai.sys_2.task',
 	'ai.embed',
 	'geo.search',
 	'geo.reverse'

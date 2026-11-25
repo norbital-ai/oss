@@ -37,13 +37,14 @@ import {
 } from '@norbital-ai/host-api';
 import { AGENT_LIMITS, callKey, FIXED, type AgentHostConfig } from '../src/engine/agent/index.ts';
 import { transcriptRow } from '../src/engine/agent/schema.ts';
+import { saveAgentSettings, SYSTEM_AGENTS } from '../src/engine/agent/settings.ts';
 import { BOUNDS, COMPACT_FORMAT, STATE_NOTE } from '../src/engine/agent/context.ts';
 import { requestEvidence } from '../src/engine/agent/request.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Ai, Convert, Files, Mcp, RunUnits } from '../src/engine/ports.ts';
-import type { AiEvent } from '@norbital-ai/host-api';
+import type { AiEvent, TaskEnd } from '@norbital-ai/host-api';
 import { open_ai_chat } from '../../providers/src/openai/index.ts';
 import { loopback_mcp_port } from '@norbital-ai/host-api/node';
 import { Agents, Live, RunHandlers } from '../src/engine/services.ts';
@@ -382,7 +383,10 @@ const TENDER: Ingested = {
 };
 const build = (
 	ai: ReturnType<typeof cassette>,
-	host: Pick<AgentHostConfig, 'host_tools' | 'host_inline_ms' | 'on_turn_start' | 'events' | 'skills'> = {}
+	host: Pick<
+		AgentHostConfig,
+		'host_tools' | 'host_inline_ms' | 'on_turn_start' | 'events' | 'skills' | 'task_ended'
+	> = {}
 ) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture;
@@ -3096,5 +3100,140 @@ describe('nothing started in the background ends silently', () => {
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
+	);
+});
+
+describe('system agent tasks', () => {
+	// its own workspace: the host hears each task's end
+	const taskAi = cassette();
+	const ends: TaskEnd[] = [];
+	const heard = Effect.runSync(Queue.unbounded<TaskEnd>());
+	const tasks = Effect.runSync(
+		Effect.cached(
+			build(taskAi, {
+				task_ended: async (end) => {
+					ends.push(end);
+					Queue.offerUnsafe(heard, end);
+				},
+				// what a host offers: one tool to its task, one to every member, one only by policy
+				host_tools: async (authority) =>
+					(authority.actor.kind === 'system' ? ['task_report'] : ['send_feedback', 'by_policy']).map(
+						(name): HostTool => ({
+							name,
+							description: `Fixture ${name}`,
+							input: { type: 'object', properties: {} },
+							behavior: {},
+							...(name === 'send_feedback' ? { everyone: true as const } : {}),
+							call: async () => ({ called: name })
+						})
+					)
+			}).pipe(Scope.provide(fileScope))
+		)
+	);
+	const armed = (steps: readonly Step[]) =>
+		Effect.map(tasks, (fixture) => {
+			taskAi.arm(steps);
+			return fixture;
+		});
+
+	it.live('runs as the system under its policies, is refused what needs a person, and reports its end once', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { agent, t } = yield* armed([
+					use('run', { automation: 'quotes_mark', input: { title: 'held' } }, 'start'),
+					use('act', { acts: { 'quotes.create': [{ title: 'by the system agent' }] } }, 'write'),
+					say('Filed one quote.')
+				]);
+				const conversation = yield* agent.task({
+					run: 'audit-1',
+					description: 'Audit quotes',
+					prompt: 'File what you find.',
+					policies: ['rep']
+				});
+				const end = yield* Queue.take(heard);
+				expect(end).toEqual({
+					run: 'audit-1',
+					conversation,
+					state: 'completed',
+					text: 'Filed one quote.'
+				});
+				expect((yield* agent.conversation(conversation)).kind).toBe('task');
+				// no person attends: no page control, no plan card, and the automation start is refused in words
+				const [first, second] = taskAi.requests;
+				for (const waits of ['page', 'update_plan', 'run', 'ask', 'decide', 'invite', 'sync'])
+					expect(toolNames(first)).not.toContain(waits);
+				// it holds what its host offered it, though no policy names the tool
+				expect(toolNames(first)).toContain('task_report');
+				// `run` is not in its list: the call answers that there is no such tool
+				expect(JSON.stringify(toolResults(required(second))[0])).toMatch(/run/);
+				// a write its policies grant goes through as the system
+				expect(yield* quotes(t, 'by the system agent')).toHaveLength(1);
+				expect(yield* quotes(t, 'held')).toHaveLength(0);
+				// once per run: a repeated start answers the same conversation and asks the model nothing
+				const asked = taskAi.requests.length;
+				expect(yield* agent.task({ run: 'audit-1', description: 'Audit quotes', prompt: 'Again.' })).toBe(
+					conversation
+				);
+				expect(taskAi.requests).toHaveLength(asked);
+				expect(ends).toHaveLength(1);
+				// a member with no policy naming a host tool still holds the one the host offers everyone
+				const { user } = yield* tasks,
+					bob = yield* user('feedback-member', { team: 'reader' });
+				taskAi.arm([say('Hello.')]);
+				const chat = yield* agent.start({ owner: bob });
+				yield* agent.post({ conversation: chat, as: { member: bob }, text: 'Hi' });
+				yield* agent.drain(chat);
+				expect(toolNames(taskAi.requests[0])).toContain('send_feedback');
+				expect(toolNames(taskAi.requests[0])).not.toContain('by_policy');
+			})
+		)
+	);
+
+	it.live("a host's task holds the policies the administrator set, and none starts past the monthly limit", () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { agent, t } = yield* armed([say('Nothing to do.')]);
+				const settings = {
+					monthly: null,
+					member: null,
+					policies: {},
+					models: [],
+					system1: null,
+					system2: null,
+					system: SYSTEM_AGENTS
+				};
+				yield* saveAgentSettings(t.db, {
+					...settings,
+					system: { ...SYSTEM_AGENTS, improve: true, policies: ['reader'] }
+				});
+				const conversation = yield* agent.task({
+					run: 'host-1',
+					description: 'Look around',
+					prompt: 'Read the quotes.'
+				});
+				yield* Queue.take(heard);
+				const [task] = yield* agent.transcript(conversation);
+				expect(required(task).as).toEqual({ policies: ['reader'], run: 'host-1' });
+				yield* saveAgentSettings(t.db, {
+					...settings,
+					system: { ...SYSTEM_AGENTS, improve: true, monthly: 0 }
+				});
+				expect(
+					yield* Effect.result(
+						agent.task({ run: 'host-2', description: 'Refused', prompt: 'Never runs.' })
+					)
+				).toMatchObject({ _tag: 'Failure', failure: { _tag: 'BoltError', code: 'forbidden' } });
+				yield* saveAgentSettings(t.db, { ...settings, system: { ...SYSTEM_AGENTS, improve: false } });
+				// off: the host starts none, and says why
+				expect(
+					yield* Effect.result(
+						agent.task({ run: 'host-3', description: 'Refused', prompt: 'Never runs.' })
+					)
+				).toMatchObject({
+					_tag: 'Failure',
+					failure: { message: 'An administrator has not turned automatic improvement on.' }
+				});
+			})
+		)
 	);
 });

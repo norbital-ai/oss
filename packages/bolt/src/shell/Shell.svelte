@@ -109,6 +109,7 @@
 	import { resolve_device } from '../page/device.ts';
 	import { deviceSession, open_external } from './device-session.ts';
 	import { NoticesReadAnswer } from './api-types.ts';
+	import { page_views, route_pattern } from './page-views.ts';
 	import { readPreference } from './preferences.ts';
 
 	let { config }: { config: ShellMountConfig } = $props();
@@ -316,6 +317,7 @@
 	let chimes = $state(true);
 	let emailNotifications = $state(true);
 	let soundsOpen = $state(false);
+	let feedbackOpen = $state(false);
 	let soundStatus = $state<SoundStatus>(
 		typeof AudioContext === 'undefined' ? 'unavailable' : 'needs-gesture'
 	);
@@ -485,6 +487,19 @@
 	// A preview contains application modules only, without workspace or account controls.
 	const previewEnv = $derived(boot?.workspace.live !== undefined);
 	const current = $derived(preview_route(route(config.manifest, url), previewEnv));
+	// a member's page views, for a host that takes them (never a preview's: they would read as the previewed member's)
+	// svelte-ignore state_referenced_locally
+	const views = page_views(config.fetch);
+	onMount(() => views.close);
+	watch(
+		() =>
+			boot?.workspace.usage && boot.actor?.kind === 'member' && boot.preview === null
+				? route_pattern(current)
+				: null,
+		(pattern) => {
+			if (pattern !== null) views.view(pattern);
+		}
+	);
 	const commandTabs = $derived(
 		boot === null ? [] : command_center_tabs(boot.surfaces, boot.admin, previewEnv)
 	);
@@ -1331,6 +1346,14 @@
 					{...boot?.actor?.kind === 'member' && boot.preview === null
 						? { on_email_notifications: chooseEmailNotifications }
 						: {}}
+					{...boot?.actor?.kind === 'member' && boot.preview === null && boot.workspace.feedback
+						? {
+								on_feedback: () => {
+									navOpen = false;
+									feedbackOpen = true;
+								}
+							}
+						: {}}
 					{sync}
 					previewing={boot?.preview !== null}
 					on_end_preview={() => fork(endPreview())}
@@ -1564,5 +1587,10 @@
 				{/await}
 			{/if}
 		</Sheet>
+		{#if feedbackOpen}
+			{#await import('./Feedback.svelte') then { default: Feedback }}
+				<Feedback {api} {t} route={route_pattern(current)} on_close={() => (feedbackOpen = false)} />
+			{/await}
+		{/if}
 	{/if}
 </div>

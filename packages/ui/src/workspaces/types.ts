@@ -4,7 +4,13 @@ import type { ReleaseBuild, ReleaseEnvironment, ReleaseVersion } from '../releas
 /** The time window shown by workspace monitoring. */
 export type WorkspaceRange = '24h' | '7d' | '30d';
 /** The selected workspace monitoring view. */
-export type WorkspaceView = 'bundle' | 'telemetry' | 'logs' | 'users';
+export type WorkspaceView =
+	| 'bundle'
+	| 'telemetry'
+	| 'logs'
+	| 'users'
+	| 'activity'
+	| 'improvements';
 /** The monitoring view, time window and optional build or run selection. */
 export type WorkspaceScope = Readonly<{
 	view?: WorkspaceView;
@@ -136,4 +142,34 @@ export type WorkspaceOperationsData = Readonly<{
 			reason: string;
 		}>[];
 	}>;
+	/** How the workspace was used over the range; `null`: the host does not serve it, or it was not asked for. */
+	activity: Readonly<{
+		people: number;
+		pages: readonly Readonly<{
+			route: string;
+			views: number;
+			people: number;
+			dwell_ms: number | null;
+		}>[];
+		turns: readonly Readonly<{
+			audience: string;
+			turns: number;
+			failed: number;
+			steps: number;
+			tool_errors: number;
+			cost: number;
+		}>[];
+	}> | null;
+	/** The improvement threads; `null`: the host does not serve them, or they were not asked for. */
+	improvements: Readonly<{
+		threads: readonly Readonly<{
+			id: string;
+			status: string;
+			title: string;
+			seen: number;
+			updated_at: string;
+			last: string | null;
+			change: string | null;
+		}>[];
+	}> | null;
 }>;

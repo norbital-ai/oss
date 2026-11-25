@@ -2,7 +2,7 @@
 	The workspace sidebar,  the workspace switcher with the finder and the collapse toggle; the model's
 	sections as icon-tile rows (Norbius wears its strip); and the account footer — its label, the environment badge, the
 	sync dot, the bell and the Settings/System/Kiosks menu, then the account card whose menu holds language, appearance,
-	team preview and sign-out. Collapsed (`expanded` false) it is a 3rem icon rail with tooltips.
+	feedback (where the host takes it), team preview and sign-out. Collapsed (`expanded` false) it is a 3rem icon rail with tooltips.
 -->
 <script lang="ts">
 	import { fork } from '@norbital-ai/ui/effect';
@@ -55,6 +55,7 @@
 		awaiting = null,
 		on_sounds,
 		on_email_notifications,
+		on_feedback,
 		sync = 'idle',
 		previewing = false,
 		load_teams,
@@ -87,6 +88,8 @@
 		awaiting?: AwaitingKind | null;
 		on_sounds?: () => void;
 		on_email_notifications?: (enabled: boolean) => void;
+		/** The host takes feedback: the menu offers its dialog. */
+		on_feedback?: () => void;
 		sync?: SyncStatus;
 		/** A preview runs: the menu offers its end. `load_teams` is an administrator's: the teams a preview may take. */
 		previewing?: boolean;
@@ -784,6 +787,19 @@
 					<span>{t('Email notifications')}</span><span class="ml-auto text-muted-foreground"
 						>{t(email_notifications ? 'On' : 'Off')}</span
 					>
+				</Button>
+			{/if}
+			{#if on_feedback !== undefined}
+				<Button
+					type="button"
+					variant="ghost"
+					class="h-9 w-full justify-start px-2 text-xs font-normal"
+					onclick={() => {
+						menuOpen = false;
+						on_feedback();
+					}}
+				>
+					<Icon name="lucide:message-square-text" class="size-3.5" /><span>{t('Feedback')}</span>
 				</Button>
 			{/if}
 			{#if teams !== null || previewing}

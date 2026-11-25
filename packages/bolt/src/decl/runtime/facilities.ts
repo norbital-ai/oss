@@ -669,7 +669,23 @@ interface Decide {
  */
 export type Ai<Tools> = {
 	sys_1: { decide: Decide };
-	sys_2: { infer: Infer<Tools> };
+	sys_2: {
+		infer: Infer<Tools>;
+		/**
+		 * Starts a system agent on a task and answers at once with its conversation: the agent works on its own, as the
+		 * system under this automation's `policies`, with no person attending. It reads and writes what those policies
+		 * allow and is refused anything that needs a person's confirmation. Once per call site of a run. Only a queued run
+		 * starts one; an administrator reads its conversation in the agent panel. Use `infer` when the run needs the answer.
+		 * @example A weekly audit that files what it finds.
+		 * ```ts
+		 * yield* ctx.ai.sys_2.task({
+		 *   description: 'Audit open purchase orders',
+		 *   prompt: 'Read purchase_orders still open after 30 days. For each, create an audit_findings row saying why.'
+		 * });
+		 * ```
+		 */
+		task(request: { description: string; prompt: string }): Eff<{ conversation: string }, Failure>;
+	};
 	/** `dimensions`: the length of the vector field it fills (the host asks the model for that length). */
 	embed: Call<
 		[

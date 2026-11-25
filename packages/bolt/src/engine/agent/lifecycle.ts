@@ -1,4 +1,5 @@
 // Cross-turn lifecycle: late job steering, sub-agent reporting, turn-run scheduling, run-end propagation and restart recovery.
+import { Port, type TaskEnd } from '@norbital-ai/host-api';
 import { Effect, FiberSet, PubSub, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -8,7 +9,7 @@ import type { EngineError } from '../errors.ts';
 import { next_due } from '../runs/queue.ts';
 import { Chain } from '../write/sql.ts';
 import type { AgentStore } from './messages.ts';
-import type { As, MessageRow } from './schema.ts';
+import { TASK, type As, type MessageRow } from './schema.ts';
 import { FIXED, TurnInput, type AgentConfig, type DrainOptions } from './shared.ts';
 import { enqueueTurn, TURN_RUN } from './turns.ts';
 
@@ -58,6 +59,7 @@ export const makeAgentLifecycle = (deps: LifecycleDeps) => {
 	}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 
 	/**
+	 * A system agent's task ended: its starter is told once through the host (`task_ended`).
 	 * A sub-agent's turn ended (its answer, a question for its parent, a failure or a stop): its report lands in the parent
 	 * conversation as a queued input from the same sender, which a running parent turn claims at its next step and an idle
 	 * parent runs a turn on. The sub-agent runs detached, so the parent can answer the person and finish meanwhile. A stop
@@ -70,21 +72,35 @@ export const makeAgentLifecycle = (deps: LifecycleDeps) => {
 	) {
 		const conv = yield* store.conversation(child);
 		if (
-			conv.parent === null ||
+			(conv.parent === null && conv.kind !== TASK) ||
 			conv.status === 'running' ||
 			(conv.status === 'stopped') !== stopped
 		)
 			return;
 		const task = (yield* store.transcript(child)).find((r) => r.role === 'user');
 		const asked = reply?.meta?.tag === 'reply' && reply.meta.asked === true;
-		// OpenCode's background `task` result; a question and a stop are ours
-		const [state, summary] = stopped
-			? ['cancelled', 'Background task cancelled']
+		// OpenCode's background `task` states; a question and a stop are ours. A turn that left no reply failed.
+		const state: TaskEnd['state'] = stopped
+			? 'cancelled'
 			: asked
-				? ['question', 'Background task asks you']
-				: reply?.meta?.tag === 'failed'
-					? ['error', 'Background task failed']
-					: ['completed', 'Background task completed'];
+				? 'question'
+				: reply === null || reply.meta?.tag === 'failed'
+					? 'error'
+					: 'completed';
+		if (conv.parent === null) {
+			// a system agent's task has no parent conversation: its starter hears the end through the host
+			const ended = config.task_ended,
+				as = task?.as;
+			if (ended === undefined || as == null || !('run' in as)) return;
+			const end = { run: as.run, conversation: child, state, text: reply?.text ?? '' };
+			return yield* Port.attempt('agent.task_ended', () => ended(end));
+		}
+		const summary = {
+			cancelled: 'Background task cancelled',
+			question: 'Background task asks you',
+			error: 'Background task failed',
+			completed: 'Background task completed'
+		}[state];
 		const tag = state === 'error' ? 'task_error' : 'task_result';
 		const text = [
 			`<task id="${child}" state="${state}">`,

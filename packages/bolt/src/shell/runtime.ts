@@ -264,6 +264,8 @@ export function shell_api(
 			integration_offers({ base: based(`${BOLT}/integrations/`), fetch: f }),
 		/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (logo: string | null) => done('POST', `${SHELL}/organization`, { logo }),
+		feedback: (text, attachments, route) =>
+			done('POST', `${SHELL}/feedback`, { text, attachments: [...attachments], route }),
 		/** An instance's raw messages, both directions, newest first (an administrator's; the instance's Messages tab). */
 		instance_messages: (instance: string, before?: string) =>
 			call(

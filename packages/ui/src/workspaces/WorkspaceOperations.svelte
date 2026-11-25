@@ -1,6 +1,7 @@
 <!--
 @component
-A workspace's operations panel: bundle, telemetry, logs and users views over data its owner reads for the chosen scope.
+A workspace's operations panel: bundle, telemetry, logs, users, activity and improvements views over data its owner reads
+for the chosen scope.
 -->
 <script lang="ts" module>
 	import type { UiContext } from '../client/contract.js';
@@ -20,8 +21,8 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 		range: WorkspaceRange;
 		/** The view shown. */
 		view: WorkspaceView;
-		/** The views to offer, in order (all four by default); with one, it renders without its own tab strip. */
-		views?: readonly WorkspaceView[];
+		/** The views to offer, in order; with one, it renders without its own tab strip. */
+		views: readonly WorkspaceView[];
 		/** Marks the panel busy while the owner reads. Default false. */
 		busy?: boolean;
 		/** The viewer changed the view, range or run filter: only the changed keys; the owner rereads `data`. */
@@ -39,6 +40,7 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 </script>
 
 <script lang="ts">
+	import Badge, { type BadgeVariant } from '../primitives/badge/badge.svelte';
 	import Button from '../primitives/button/button.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
@@ -52,7 +54,7 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 		data,
 		range,
 		view,
-		views = ['bundle', 'telemetry', 'logs', 'users'],
+		views,
 		busy = false,
 		on_change,
 		t = (key) => key,
@@ -138,9 +140,33 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 		bundle: { title: 'Bundle', icon: 'lucide:package' },
 		telemetry: { title: 'Telemetry', icon: 'lucide:activity' },
 		logs: { title: 'Runtime & runs', icon: 'lucide:scroll-text' },
-		users: { title: 'Users', icon: 'lucide:users' }
+		users: { title: 'Users', icon: 'lucide:users' },
+		activity: { title: 'Activity', icon: 'lucide:mouse-pointer-click' },
+		improvements: { title: 'Improvements', icon: 'lucide:wrench' }
 	} as const;
-	const BODIES = { bundle, telemetry, logs: runtime, users };
+	const BODIES = { bundle, telemetry, logs: runtime, users, activity, improvements };
+	const pageRows = $derived([...(data.activity?.pages ?? [])].sort((a, b) => b.views - a.views));
+	const ACCESS: { readonly [audience: string]: string } = {
+		staff: 'Norbius (staff)',
+		member: 'Norbius (member)',
+		channel: 'Envoy',
+		system: 'System agent'
+	};
+	const cost = (value: number) =>
+		new Intl.NumberFormat(host.locale, {
+			style: 'currency',
+			currency: 'USD',
+			maximumFractionDigits: 4
+		}).format(value);
+	const THREAD_STATUS: { readonly [status: string]: { label: string; variant: BadgeVariant } } = {
+		open: { label: 'Open', variant: 'outline' },
+		working: { label: 'Agent working', variant: 'info' },
+		blocked: { label: 'Needs your answer', variant: 'warning' },
+		ready: { label: 'Ready to merge', variant: 'success' },
+		merged: { label: 'Merged', variant: 'brand' },
+		platform: { label: 'Platform fault', variant: 'outline' },
+		dismissed: { label: 'Dismissed', variant: 'outline' }
+	};
 </script>
 
 <!-- fills a bounded parent: on a wide container Bundle's details scroll in place -->
@@ -180,18 +206,127 @@ A workspace's operations panel: bundle, telemetry, logs and users views over dat
 		</p>
 	</div>
 {/snippet}
+{#snippet ranges()}
+	<nav aria-label={t('Trend range')} class="flex gap-1">
+		{#each ['24h', '7d', '30d'] as item (item)}<Button
+				variant={range === item ? 'secondary' : 'ghost'}
+				class="h-8 px-2.5 text-xs"
+				onclick={() => on_change({ range: item === '24h' || item === '30d' ? item : '7d' })}
+				>{item}</Button
+			>{/each}
+	</nav>
+{/snippet}
+{#snippet unserved()}
+	{#if can_inspect}<p class="text-meta">{t('This host does not serve this view.')}</p
+		>{:else}{@render restricted()}{/if}
+{/snippet}
+{#snippet activity()}
+	{@const use = data.activity}
+	{#if use === null}{@render unserved()}{:else}<div class="grid min-w-0 gap-3">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<h2 class="text-sm font-semibold">{t('Activity')}</h2>
+				{@render ranges()}
+			</div>
+			{#if use.people === 0 && use.pages.length === 0 && use.turns.length === 0}<p
+					class="text-meta"
+				>
+					{t('No activity recorded in this range.')}
+				</p>{:else}<p>{t('People who opened a page')}: {use.people}</p>
+				<h3 class="font-semibold">{t('Pages')}</h3>
+				<div class="overflow-x-auto rounded-md border border-border px-3">
+					<table class="w-full text-left">
+						<thead
+							><tr
+								><th scope="col">{t('Page')}</th><th scope="col">{t('Views')}</th><th scope="col"
+									>{t('People')}</th
+								><th scope="col">{t('Average time open')}</th></tr
+							></thead
+						><tbody
+							>{#each pageRows as row (row.route)}<tr
+									><th scope="row" class="max-w-md break-all font-mono font-normal">{row.route}</th
+									><td class="tabular-nums">{row.views}</td><td class="tabular-nums"
+										>{row.people}</td
+									><td class="whitespace-nowrap tabular-nums"
+										>{row.dwell_ms === null
+											? t('Not recorded')
+											: format_metric_value('seconds', row.dwell_ms / 1000, host.locale)}</td
+									></tr
+								>{/each}</tbody
+						>
+					</table>
+				</div>
+				<h3 class="font-semibold">{t('Assistant activity')}</h3>
+				<div class="overflow-x-auto rounded-md border border-border px-3">
+					<table class="w-full text-left">
+						<thead
+							><tr
+								><th scope="col">{t('Used by')}</th><th scope="col">{t('Turns')}</th><th
+									scope="col">{t('Failed')}</th
+								><th scope="col">{t('Steps')}</th><th scope="col">{t('Tool errors')}</th><th
+									scope="col">{t('Cost')}</th
+								></tr
+							></thead
+						><tbody
+							>{#each use.turns as row (row.audience)}<tr
+									><th scope="row" class="font-medium">{t(ACCESS[row.audience] ?? row.audience)}</th
+									><td class="tabular-nums">{row.turns}</td><td class="tabular-nums"
+										>{row.failed}</td
+									><td class="tabular-nums">{row.steps}</td><td class="tabular-nums"
+										>{row.tool_errors}</td
+									><td class="whitespace-nowrap tabular-nums">{cost(row.cost)}</td></tr
+								>{/each}</tbody
+						>
+					</table>
+				</div>{/if}
+		</div>{/if}
+{/snippet}
+{#snippet improvements()}
+	{@const board = data.improvements}
+	{#if board === null}{@render unserved()}{:else}<div class="grid min-w-0 gap-3">
+			<h2 class="text-sm font-semibold">{t('Improvements')}</h2>
+			<p class="text-meta">
+				{t(
+					'Feedback, requests and automations that keep failing. Turn automatic improvement on or off in Settings, under Assistant.'
+				)}
+			</p>
+			{#if board.threads.length === 0}<p class="text-meta">
+					{t('Nothing to improve yet.')}
+				</p>{:else}<div class="overflow-x-auto rounded-md border border-border px-3">
+					<table class="w-full text-left">
+						<thead
+							><tr
+								><th scope="col">{t('Subject')}</th><th scope="col">{t('Status')}</th><th scope="col"
+									>{t('Times')}</th
+								><th scope="col">{t('Updated')}</th><th scope="col">{t('Latest')}</th><th
+									scope="col">{t('To merge')}</th
+								></tr
+							></thead
+						><tbody
+							>{#each board.threads as thread (thread.id)}<tr
+									><th scope="row" class="max-w-xs font-medium">{thread.title}</th><td
+										><Badge variant={THREAD_STATUS[thread.status]?.variant ?? 'outline'}
+											>{t(THREAD_STATUS[thread.status]?.label ?? thread.status)}</Badge
+										></td
+									><td class="tabular-nums">{thread.seen}</td><td class="whitespace-nowrap"
+										>{when(thread.updated_at)}</td
+									><td class="max-w-md text-meta">{thread.last ?? ''}</td><td
+										class="whitespace-nowrap tabular-nums"
+										>{thread.change === null ? '' : `!${thread.change}`}</td
+									></tr
+								>{/each}</tbody
+						>
+					</table>
+				</div>{/if}
+			<p class="text-meta">
+				{t('Reply to one or dismiss it by asking Norbius. Merge ready commits in Studio.')}
+			</p>
+		</div>{/if}
+{/snippet}
 {#snippet telemetry()}
 	<div class="grid gap-3">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<h2 class="text-sm font-semibold">{t('Telemetry')}</h2>
-			<nav aria-label={t('Trend range')} class="flex gap-1">
-				{#each ['24h', '7d', '30d'] as item (item)}<Button
-						variant={range === item ? 'secondary' : 'ghost'}
-						class="h-8 px-2.5 text-xs"
-						onclick={() => on_change({ range: item === '24h' || item === '30d' ? item : '7d' })}
-						>{item}</Button
-					>{/each}
-			</nav>
+			{@render ranges()}
 		</div>
 		<div class="grid gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
 			{#each data.usage as chart (chart.title)}<UsageChart {ctx} {...chart} />{/each}

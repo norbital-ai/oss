@@ -197,7 +197,9 @@ const studio: StudioPort = {
 				text: input.text ?? '',
 				run: input.run ?? '',
 				build: input.build ?? null
-			}
+			},
+			activity: null,
+			improvements: null
 		};
 	}
 };

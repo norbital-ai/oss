@@ -30,7 +30,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { PageResult } from '../../protocol/schema.ts';
 import { Audit } from '../audit.ts';
 import type { Authority } from '../contracts.ts';
-import { mark as markMessage, post as postMessage } from '../conversations/store.ts';
+import { mark as markMessage, post as postMessage, stableId } from '../conversations/store.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { sql } from '../db/sql.ts';
 import { TenantDb } from '../db/tenant-db.ts';
@@ -68,7 +68,8 @@ import {
 	RunEnds,
 	RunHandlers,
 	Wake,
-	type AgentsShape
+	type AgentsShape,
+	type SystemTask
 } from '../services.ts';
 import { Chain } from '../write/sql.ts';
 import { servesModel } from './ai.ts';
@@ -78,7 +79,8 @@ import { makeAgentLifecycle } from './lifecycle.ts';
 import { mcpServers } from './mcp.ts';
 import { makeAgentStore } from './messages.ts';
 import { MessageQueue, messageQueue, SCHEDULED_RUN } from './queue.ts';
-import { AgentRefusal, type As, type MessageRow, type Plan } from './schema.ts';
+import { AgentRefusal, TASK, type As, type MessageRow, type Plan } from './schema.ts';
+import { agentSettings, overTaskLimit } from './settings.ts';
 import {
 	AgentDrains,
 	AgentHost,
@@ -309,6 +311,41 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			if (row === undefined) return false;
 			yield* FiberSet.run(detached, kick(o.conversation));
 			return true;
+		}),
+		task: Effect.fn('Agents.task')(function* (o: SystemTask) {
+			// one conversation per run: a repeated start answers it and starts nothing
+			const id = stableId(TASK, o.run);
+			const existing = yield* e.db.rows(
+				Schema.Struct({ id: Schema.String }),
+				sql('SELECT id FROM sys_conversation WHERE id = $1', id)
+			);
+			if (existing.length > 0) return id;
+			const settings = yield* agentSettings(e.db);
+			// an administrator may turn either kind off: the host's own (no policies named) or an automation's
+			if (!(o.policies === undefined ? settings.system.improve : settings.system.automations))
+				return yield* BoltError.make(
+					'forbidden',
+					'admission',
+					o.policies === undefined
+						? 'An administrator has not turned automatic improvement on.'
+						: 'An administrator has turned off agents that automations start.'
+				);
+			if ((yield* overTaskLimit(e.db, settings, null)) !== null)
+				return yield* BoltError.make(
+					'forbidden',
+					'admission',
+					"The workspace's monthly spending limit for system agents is reached."
+				);
+			yield* store.start({ id, kind: TASK, title: o.description.slice(0, 80) });
+			yield* queue.post({
+				conversation: id,
+				as: { policies: o.policies ?? settings.system.policies, run: o.run },
+				text: o.prompt,
+				author: 'system',
+				files: o.files
+			});
+			yield* FiberSet.run(detached, kick(id));
+			return id;
 		}),
 		gaveUp: lifecycle.gaveUp,
 		park: stepping.park,
@@ -596,6 +633,7 @@ export const AgentsLive = Layer.effectContext(
 			geocoder: host.geocoder ?? geo
 		});
 		yield* turnHandlers.register('Agent', api.drain);
+		yield* turnHandlers.tasks(api.task);
 		const handlers = {
 			[TURN_RUN]: (input: Json) =>
 				api.turnRun(input, (conversation, envoy) =>

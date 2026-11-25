@@ -7,15 +7,24 @@ import { Context, Effect, Layer, Option, Schema, Stream } from 'effect';
 import { FacilityFailure } from '@norbital-ai/host-api';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Ai } from '../ports.ts';
+import { TASK } from './schema.ts';
 
 export const AGENT_KEY = 'agent';
 const Usd = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
+/**
+ * Until an administrator says otherwise: the host starts no system agent, an automation may, one the host starts reads
+ * no record, and their spend stops at 10 USD a month and 1 USD each.
+ */
+export const SYSTEM_AGENTS = { improve: false, automations: true, policies: [], monthly: 10, task: 1 };
 const ModelPick = Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null)));
 /**
  * Monthly caps in USD: `monthly` the workspace's spend this calendar month, `member` each member's by default, `policies`
  * each member's by a policy they hold (the most generous of theirs wins over the default); `models` the allowed ids
  * (empty: every model the provider lists); `system1` the model decisions and `fast` run on, `system2` the one `default`
  * runs on, `strong` an optional override for the `strong` class (null/absent: falls back to `system2`, then the host's own).
+ * `system`: system agents, which work with no person attending. `improve` lets the host start them (its automatic
+ * improvement); `automations` lets an automation start them (`ctx.ai.sys_2.task`). `policies` is what one the host
+ * starts holds (none: it reads no record); `monthly` caps their spend this calendar month and `task` one's whole spend.
  */
 export const AgentSettings = Schema.Struct({
 	monthly: Schema.NullOr(Usd),
@@ -26,7 +35,14 @@ export const AgentSettings = Schema.Struct({
 	models: Schema.Array(Schema.String),
 	system1: ModelPick,
 	system2: ModelPick,
-	strong: Schema.optionalKey(Schema.NullOr(Schema.String))
+	strong: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	system: Schema.Struct({
+		improve: Schema.Boolean,
+		automations: Schema.Boolean,
+		policies: Schema.Array(Schema.String),
+		monthly: Schema.NullOr(Usd),
+		task: Schema.NullOr(Usd)
+	}).pipe(Schema.withDecodingDefaultKey(Effect.succeed(SYSTEM_AGENTS)))
 });
 export type AgentSettings = typeof AgentSettings.Type;
 const NONE: AgentSettings = {
@@ -35,7 +51,8 @@ const NONE: AgentSettings = {
 	policies: {},
 	models: [],
 	system1: null,
-	system2: null
+	system2: null,
+	system: SYSTEM_AGENTS
 };
 
 /** Optional member/policy attribution for facility AI calls (`infer_facility`, `sys_1`, `embed`). */
@@ -127,6 +144,33 @@ export const overLimit = Effect.fn('Agents.overLimit')(function* (
 	const cap = memberCap(s, policies);
 	if (cap !== null && member !== null && (inFlight >= cap || (yield* spent(db, member)) + inFlight >= cap))
 		return 'member' as const;
+	return null;
+});
+
+/** What system agents' tasks cost: this calendar month (UTC) across all of them, or `task`'s alone since it began. */
+const tasksSpent = (db: TenantDbShape, task: string | null) =>
+	db.value(Schema.Number, {
+		text: `SELECT coalesce(sum((m.meta->'usage'->>'cost')::float8), 0)::float8
+			FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation
+			WHERE c.kind = '${TASK}' AND m.copied_from IS NULL AND m.meta->>'tag' IN ('reply', 'failed')
+			  AND CASE WHEN $1::text IS NULL THEN m.created_at >= date_trunc('month', now()) ELSE c.id = $1 END`,
+		params: [task]
+	});
+
+/**
+ * The system limit a task's next step would cross, or null: the month's first, then the task's own. `task` null asks
+ * whether a new task may start.
+ */
+export const overTaskLimit = Effect.fn('Agents.overTaskLimit')(function* (
+	db: TenantDbShape,
+	s: AgentSettings,
+	task: string | null,
+	inFlightUsd: number = 0
+) {
+	const { monthly, task: each } = s.system;
+	if (monthly !== null && (yield* tasksSpent(db, null)) + inFlightUsd >= monthly) return 'monthly' as const;
+	if (each !== null && task !== null && (yield* tasksSpent(db, task)) + inFlightUsd >= each)
+		return 'task' as const;
 	return null;
 });
 

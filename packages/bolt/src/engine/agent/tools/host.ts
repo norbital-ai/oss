@@ -48,16 +48,18 @@ export const bindContributedTools = Effect.fn('AgentTool.bindContributed')(funct
 		a = x.authority;
 	const hostOffered: AgentTool[] = [];
 	const activeBrowserTools = a.preview === undefined ? x.browser_tools : [];
-	const authoringSession =
-		x.inApp && staff && (x.draft !== undefined || (x.workspace !== undefined && a.admin));
+	const task = x.audience === 'system';
+	const authoringSession = task
+		? x.draft !== undefined
+		: x.inApp && staff && (x.draft !== undefined || (x.workspace !== undefined && a.admin));
 	const isApprovalHostTool = (host: HostTool): boolean =>
 		host.confirm !== undefined || host.studio === 'merge' || host.studio === 'rollback';
 	const activeHostTools =
-		x.inApp && staff
+		task || (x.inApp && staff)
 			? x.host_tools.filter(
 					(host) =>
 						(authoringSession || !isStudioAuthoringTool(host)) &&
-						(!x.child || !isApprovalHostTool(host))
+						(!(x.child || task) || !isApprovalHostTool(host))
 				)
 			: [];
 
@@ -182,8 +184,11 @@ export const bindContributedTools = Effect.fn('AgentTool.bindContributed')(funct
 		if (
 			(yield* rejected(name, `host tool '${name}'`)) ||
 			!Predicate.isObject(schema) ||
+			// a system agent's task holds what its host offered it; a person holds what their policies name
 			!(
+				task ||
 				a.admin ||
+				host.everyone === true ||
 				a.capabilities.tools.includes(name) ||
 				(host.source === true && host.read_only === true)
 			)

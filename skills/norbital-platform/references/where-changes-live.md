@@ -21,7 +21,7 @@ Inspect the declaration and configuration model before deciding whether a change
 | Member identities, affiliation, admin flag, supplemental grants | guarded identity ops & declared membership models |
 | Connected accounts (pairing, credentials, config, pause, envoy) | `sys_integration` rows |
 | Envoys (name, audience, policies, DM/triage/task) | `sys_envoy` rows |
-| Chat models, AI budgets, retention | Settings → Organization (`sys_config`) |
+| Chat models, AI budgets, system agents (on/off, policies, spend limits), retention | Settings → Organization (`sys_config`) |
 | Business catalogues, rates, formulas, extraction schemas, templates | validated runtime configuration models |
 | Secret values | Settings (sealed store) |
 | Personal settings & workspace display name | `sys_user` (`personal`) & `sys_workspace` — see `records` skill |

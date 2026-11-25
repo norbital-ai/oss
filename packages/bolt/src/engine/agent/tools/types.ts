@@ -92,11 +92,11 @@ export class ToolRejected extends Schema.TaggedError<ToolRejected>()('ToolReject
 export type Validators = WeakMap<object, (value: unknown) => Json | string>;
 
 /**
- * Whom a conversation serves, fixed for its life: an in-app staff member, an in-app external member, or a messaging
- * channel's sender. Each has one tool list, so a conversation's `tools[]` never changes; a tool its step cannot use
- * answers why.
+ * Whom a conversation serves, fixed for its life: an in-app staff member, an in-app external member, a messaging
+ * channel's sender, or a system agent's task. Each has one tool list, so a conversation's `tools[]` never changes; a
+ * tool its step cannot use answers why.
  */
-export type Audience = 'staff' | 'member' | 'channel';
+export type Audience = 'staff' | 'member' | 'channel' | 'system';
 
 export type HostGives = { readonly source: boolean; readonly delegation: boolean };
 

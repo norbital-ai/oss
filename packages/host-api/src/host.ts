@@ -90,6 +90,46 @@ export type ShellPorts = {
 	 */
 	readonly billing?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
+	/** The shell's Feedback dialog sends here; a host that takes no feedback sets none and the shell offers no dialog. */
+	readonly feedback?: (auth: Authority, feedback: Feedback) => Promise<void>;
+	/** Page views as the shell saw them, in order; a host that keeps no usage sets none and the shell sends nothing. */
+	readonly usage?: (auth: Authority, views: readonly PageView[]) => Promise<void>;
+};
+/** What a host tool list is for: one agent conversation, or one automation run's inference. */
+export type ToolSubject =
+	| { readonly conversation: string }
+	| { readonly run: string };
+/**
+ * A system agent's task: an agent conversation no person attends, acting as the system under `policies`. `run` names
+ * it to its starter (the automation run, or the host's own id for the work).
+ */
+export const TaskStart = Schema.Struct({
+	run: Schema.String,
+	/** The conversation's title: three to five words. */
+	description: Schema.String,
+	prompt: Schema.String,
+	/** Stored file references the task's first message carries (a feedback's, as the shell sent them). */
+	files: Schema.optionalKey(Schema.Array(Schema.Json))
+});
+export type TaskStart = typeof TaskStart.Type;
+/** How a task ended: `completed` with its last words, `question` when they ask its starter, `error` or `cancelled`. */
+export type TaskEnd = {
+	readonly run: string;
+	readonly conversation: string;
+	readonly state: 'completed' | 'question' | 'error' | 'cancelled';
+	readonly text: string;
+};
+/** What a person sent from the shell's Feedback dialog: their words, the files they attached and the page they were on. */
+export type Feedback = {
+	readonly text: string;
+	/** Stored file references of what they attached, as an agent message carries them. */
+	readonly files: readonly Json[];
+	readonly route: string;
+};
+/** One page a person had open: its route pattern (no record id, no query) and how long it stayed open. */
+export type PageView = {
+	readonly route: string;
+	readonly dwell_ms: number;
 };
 /** The agent's host parts; the release's own source (`workspace_grep`) and attachments are the release's. */
 export type AgentPorts = {
@@ -97,10 +137,17 @@ export type AgentPorts = {
 	readonly draft?: (a: Authority) => Promise<WorkspacePort | undefined>;
 	/** ripgrep over this author's working tree (`workspace_grep`). */
 	readonly search?: (a: Authority, request: SearchRequest) => Promise<SearchAnswer | undefined>;
-	/** Host tools (Workspace Studio authoring, browser, personal skills): a fixed list, or the person's catalogue per turn. */
+	/**
+	 * Host tools (Workspace Studio authoring, browser, personal skills): a fixed list, or the actor's catalogue per turn.
+	 * `subject` is what the tools work for: an agent conversation, or an automation run's inference.
+	 */
 	readonly host_tools?:
 		| readonly HostTool[]
-		| ((a: Authority, conversation: string) => Promise<readonly HostTool[]>);
+		| ((a: Authority, subject: ToolSubject) => Promise<readonly HostTool[]>);
+	/** A system agent's task ended (`ActiveWorkspace.task`, `ctx.ai.sys_2.task`): told once, whatever ended it. */
+	readonly task_ended?: (end: TaskEnd) => Promise<void>;
+	/** An administrator turned the host's own tasks on (`ActiveWorkspace.task` was refused until now): it may start what waits. */
+	readonly tasks_enabled?: () => Promise<void>;
 	/** Host skills merged into `skill` on in-app staff turns: the platform authoring skill, the person's own skills. */
 	readonly skills?: (a: Authority) => Promise<{ readonly [name: string]: HostSkill }>;
 	/** Reject pending host tool approvals from the previous turn; return only IDs actually rejected. */
@@ -259,6 +306,12 @@ export type ActiveWorkspace = {
 	 * nothing, across restarts, and answers `false`. A conversation that does not exist is refused.
 	 */
 	notify(note: { readonly conversation: string; readonly text: string; readonly id: string }, options: Signal): Promise<boolean>;
+	/**
+	 * Starts a system agent on `task` under the policies the workspace's administrator set for host tasks, and answers
+	 * its conversation. Once per `run`: a repeat answers the same conversation and starts nothing. Refused at the
+	 * workspace's system spending limit. Its end is told through `AgentPorts.task_ended`.
+	 */
+	task(task: TaskStart, options: Signal): Promise<string>;
 	readonly identity: {
 		/** The caller's authority from the request's session, or `null`. */
 		authority(request: Request, options: Signal): Promise<Authority | null>;

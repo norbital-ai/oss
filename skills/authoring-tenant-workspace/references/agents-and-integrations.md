@@ -7,6 +7,7 @@ Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt')
 - `+agent.md` (staff) and `+agent.external.md` (external): minimal end-user domain rules only — never authority, `[Catalogue]`, `KERNEL` or code rules (put code invariants in `src/agent/AGENTS.md`).
 - Workspace skills (`src/agent/skill/<name>/+skill.md`, snake_case, `description:` frontmatter, ≤10 MiB pure JS/scripts, no symlinks) follow `skill-authoring`. Scripts run via `run_js { file }` (`/app` read-only, `/in/<name>`, `/out` attachments; built-ins `fs`, `path`, `buffer`, `process`, `util`; `fetch` needs `http` grant). Policies grant MCP/host tools; skills are readable by all.
 - Agent tools are ordinary automations (`agent: 'confirm'` default; `'never'` hides from agent). Install pure JS/WASM deps via `workspace_install`.
+- System agents (`ctx.ai.sys_2.task` in a queued run) work with no person attending, under the automation's `policies`: no confirmation-gated tool, no page control, no automation starts. An administrator turns them on or off and caps their spend in Settings → Organization → Assistant. Use one for work that files its own results; use `infer` when the run needs the answer.
 - Delegated subagents (`task`) exclude approval-gated tools (`act`, `run`, `decide`, `invite`, `page`, `connect`, `download`, MCP, `run_js http: 'send'`, confirmed host tools). Parallel tool calls complete non-approval calls while pausing the turn for any emitted approval cards.
 
 ## Envoys

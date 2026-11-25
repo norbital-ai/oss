@@ -939,6 +939,8 @@ describe('preview environments drop the meta tools', () => {
 			'bundle',
 			'telemetry',
 			'logs',
+			'activity',
+			'improvements',
 			'audit',
 			'automations',
 			'inference',

@@ -234,7 +234,9 @@ export const makeConfirm = (deps: ConfirmDeps) => {
 							};
 							const turnState: TurnState = {
 								model: conv.model,
+								audience: null,
 								steps: 0,
+								tool_errors: 0,
 								failing: 0,
 								checks: new Map(),
 								lastError: '',

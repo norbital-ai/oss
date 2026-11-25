@@ -14,7 +14,7 @@ import {
 	uuidv7
 } from '@norbital-ai/host-api';
 import type { Json } from '../decl/values.ts';
-import { LIMITS, facility_wall_ms, type CrossAnswer } from './contracts.ts';
+import { LIMITS, cross_failure, facility_wall_ms, type CrossAnswer } from './contracts.ts';
 import type { EngineManifest } from './manifest.ts';
 import { TenantDb, type TenantDbShape } from './db/tenant-db.ts';
 import { Ai, Browser, Convert, Files, Geo, Images, Transport, WebRead } from './ports.ts';
@@ -55,6 +55,8 @@ export const EmbedInputs = Schema.Array(
 	])
 );
 const answered = (value: Json): CrossAnswer => ({ ok: true, value });
+/** `ctx.ai.sys_2.task` outside a queued run. */
+export const TASK_NEEDS_RUN = cross_failure('invalid_input', 'ctx.ai.sys_2.task starts in a queued run only.');
 const wireError = (error: PortFailure): CrossAnswer => ({
 	ok: false,
 	error:
@@ -456,6 +458,9 @@ function facility_dispatch(ports: FacilityPorts): Facilities['Service']['dispatc
 					return yield* file(call);
 				case 'ai.sys_2.infer':
 					return yield* infer(call);
+				case 'ai.sys_2.task':
+					// a queued run starts one (`runs/invoke.ts`); a model effect has no run to name it
+					return TASK_NEEDS_RUN;
 				case 'ai.sys_1.decide': {
 					const request = yield* decode(
 						DecisionRequestSchema,

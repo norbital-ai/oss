@@ -2,7 +2,8 @@
 	The workspace's command center: what happens across it, one tab each (a deep link `/command-center/<tab>`). Bundle,
 	Telemetry and Logs are the host's inspection (`studio_inspect`, a Studio host's, read once for all three): the
 	bundle analyzer (artifact digest, client bytes, package pins, bundle files and cache), resource telemetry and the
-	runtime log. Logs reads the log itself
+	runtime log. Activity and Improvements are the same inspection asked for that view (a host that serves neither
+	answers `null`, and the view says so). Logs reads the log itself
 	(`logs`), scoped to one release's serving window (the serving release by default) and optionally a run; its opt-in
 	Auto-refresh re-reads only that. Audit is the audit trail,
 	Automations every run, AI the members' chats, readable envoy threads and automation transcripts (inspection is
@@ -82,7 +83,9 @@
 	const VIEWS: { readonly [k in CommandCenterTab]?: WorkspaceView } = {
 		bundle: 'bundle',
 		telemetry: 'telemetry',
-		logs: 'logs'
+		logs: 'logs',
+		activity: 'activity',
+		improvements: 'improvements'
 	};
 	const view = $derived(VIEWS[active]);
 
@@ -92,7 +95,11 @@
 		// the release Logs reads (its publication instant): the serving one until chosen, `null` every release
 		release = $state<string | null | undefined>();
 	const inspecting = $derived(view !== undefined);
-	const inspection = observe_once(() => (inspecting ? api.studio_inspect({ range }) : null));
+	// Activity and Improvements are read only when asked for by name
+	const named = $derived(view === 'activity' || view === 'improvements' ? view : undefined);
+	const inspection = observe_once(() =>
+		inspecting ? api.studio_inspect({ range, ...(named === undefined ? {} : { view: named }) }) : null
+	);
 	// a new scope reads while the last answer stays on screen
 	let shown = $state<WorkspaceOperationsData | null>(null);
 	watch(
@@ -115,7 +122,8 @@
 			: null
 	);
 	const data = $derived(
-		shown === null
+		// the last answer was another view's: nothing to show of a named one until its own read answers
+		shown === null || (named !== undefined && shown[named] === null && inspection.loading)
 			? null
 			: view === 'logs'
 				? {
@@ -184,6 +192,8 @@
 		bundle: 'Bundle',
 		telemetry: 'Telemetry',
 		logs: 'Logs',
+		activity: 'Activity',
+		improvements: 'Improvements',
 		audit: 'Audit',
 		automations: 'Queue',
 		inference: 'AI',
@@ -193,6 +203,8 @@
 		bundle: 'lucide:package',
 		telemetry: 'lucide:activity',
 		logs: 'lucide:scroll-text',
+		activity: 'lucide:mouse-pointer-click',
+		improvements: 'lucide:wrench',
 		audit: 'concept:access',
 		automations: 'concept:automations',
 		inference: 'lucide:sparkles',

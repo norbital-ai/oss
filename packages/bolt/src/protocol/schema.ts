@@ -6,6 +6,7 @@ import { isArray } from 'effect/Array';
 import {
 	PAPER_SIZES,
 	ProviderChoice,
+	RunBy,
 	STUDIO_ROLES,
 	ToolBehavior,
 	ToolView
@@ -83,15 +84,7 @@ const Requestor = Schema.Union([
 /** An engine actor (`EngineActor`): a member, an envoy's turn, a visitor, an API key or the system identity's run. */
 export const EngineActorSchema = Schema.Union([
 	...Requestor.members,
-	Schema.Struct({
-		kind: Schema.Literal('system'),
-		run: Schema.String,
-		by: Schema.Union([
-			Schema.Struct({ automation: Schema.String }),
-			Schema.Struct({ platform: Schema.String }),
-			Schema.Struct({ sync: Schema.String, instance: Schema.String })
-		])
-	})
+	Schema.Struct({ kind: Schema.Literal('system'), run: Schema.String, by: RunBy })
 ]);
 const SystemTrigger = [
 	Schema.Struct({ kind: Schema.Literal('system'), cause: Schema.Literal('cron') }),

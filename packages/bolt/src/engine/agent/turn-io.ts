@@ -47,7 +47,7 @@ import {
 	type Streamer,
 	type TurnState
 } from './shared.ts';
-import { storable } from './schema.ts';
+import { inApp, storable } from './schema.ts';
 
 export type StreamerDeps = {
 	readonly id: string;
@@ -328,7 +328,6 @@ export const makeTurnIo = Effect.fn('Agents.makeTurnIo')(function* (deps: TurnIo
 		return result;
 	});
 
-	const inApp = (conv: ConversationRow) => conv.envoy === null;
 	const wall = config.wall_ms === undefined ? {} : { wallMs: config.wall_ms };
 
 	// the linked chat shows the assistant typing from the step that answers new input until its reply is written (and
@@ -431,6 +430,38 @@ export const makeTurnIo = Effect.fn('Agents.makeTurnIo')(function* (deps: TurnIo
 			severity: code === 'unavailable' ? 'warn' : 'error',
 			event: 'agent.failed',
 			attributes: { code, message }
+		});
+	});
+
+	/**
+	 * The turn's one closing line (`agent.turn`): who it served, what it took and how it ended, never its words or its
+	 * people. `stopped`: `reply`, `question` (asked, or waiting on a confirmation), `failed`, `stopped` (by a person),
+	 * `limit` (a spend limit) or `steps` (the step cap).
+	 */
+	const summary = Effect.fn('Agents.turnSummary')(function* (stopped: boolean, duration_ms: number) {
+		const meta = current.reply?.meta;
+		yield* log({
+			at: (yield* config.bindings).now,
+			severity: 'info',
+			event: 'agent.turn',
+			attributes: {
+				audience: current.audience,
+				steps: current.steps,
+				tool_errors: current.tool_errors,
+				stopped: stopped
+					? 'stopped'
+					: meta?.tag === 'failed'
+						? meta.code === 'spendLimit'
+							? 'limit'
+							: meta.code === 'stepCap'
+								? 'steps'
+								: 'failed'
+						: meta?.tag === 'reply' && meta.asked !== true
+							? 'reply'
+							: 'question',
+				duration_ms,
+				...(current.usage.cost === undefined ? {} : { cost: current.usage.cost })
+			}
 		});
 	});
 
@@ -566,6 +597,7 @@ export const makeTurnIo = Effect.fn('Agents.makeTurnIo')(function* (deps: TurnIo
 		reply,
 		streamer,
 		fail,
+		summary,
 		compact,
 		verify
 	};

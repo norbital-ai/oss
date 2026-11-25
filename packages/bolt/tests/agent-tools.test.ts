@@ -1,5 +1,5 @@
 // The agent catalogue over typed native ports: atomic writes, approvals, workspace search and run waits.
-import { memberCap } from '../src/engine/agent/settings.ts';
+import { memberCap, SYSTEM_AGENTS } from '../src/engine/agent/settings.ts';
 import { createHash } from 'node:crypto';
 import { encode as encodePng } from 'fast-png';
 import { getEventListeners } from 'node:events';
@@ -216,6 +216,7 @@ const ctx = (
 				envoy: null,
 				integration: null,
 				thread: null,
+				kind: null,
 				parent: null,
 				status: 'idle',
 				model: 'default',
@@ -520,7 +521,7 @@ describe('jobs cut short', () => {
 });
 describe('spending caps', () => {
 	it('a member gets the most generous cap among their policies, else the default', () => {
-		const s = { monthly: null, member: 5, policies: { rep: 2, lead: 20 }, models: [], system1: null, system2: null };
+		const s = { monthly: null, member: 5, policies: { rep: 2, lead: 20 }, models: [], system1: null, system2: null, system: SYSTEM_AGENTS };
 		expect(memberCap(s, ['rep', 'lead'])).toBe(20);
 		expect(memberCap(s, ['rep'])).toBe(2);
 		expect(memberCap(s, ['other'])).toBe(5);

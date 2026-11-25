@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer, Result, Stream } from 'effect';
 import { type AiRequest, type DecisionRequest, Unavailable } from '@norbital-ai/host-api';
 import { infer_facility, modelCall } from '../src/engine/agent/ai.ts';
-import { AdminAi, SpendActor, type AgentSettings } from '../src/engine/agent/settings.ts';
+import { AdminAi, SpendActor, type AgentSettings, SYSTEM_AGENTS } from '../src/engine/agent/settings.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Ai } from '../src/engine/ports.ts';
 import type { AiEvent } from '@norbital-ai/host-api';
@@ -280,7 +280,8 @@ describe('monthly spend caps and accounting across infer_facility, sys_1, and em
 				policies: {},
 				models: [],
 				system1: null,
-				system2: null
+				system2: null,
+				system: SYSTEM_AGENTS
 			});
 			yield* Effect.gen(function* () {
 				const ai = yield* Ai;
@@ -315,7 +316,8 @@ describe('monthly spend caps and accounting across infer_facility, sys_1, and em
 				policies: {},
 				models: [],
 				system1: null,
-				system2: null
+				system2: null,
+				system: SYSTEM_AGENTS
 			});
 			yield* Effect.gen(function* () {
 				const ai = yield* Ai;

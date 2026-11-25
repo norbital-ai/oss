@@ -25,6 +25,7 @@ import type {
 	ReconcilePage,
 	SendReceipt,
 	SendRefused,
+	TaskStart,
 	Unavailable
 } from '@norbital-ai/host-api';
 import type { Frame, PageResult } from '../protocol/schema.ts';
@@ -555,7 +556,11 @@ export type TurnsShape = {
 	) => Effect.Effect<{ readonly ran: boolean }, EngineError>;
 	/** Releases a conversation held by triage. */
 	readonly release: (conversation: string) => Effect.Effect<void, EngineError>;
+	/** `Agents.task`, for the runs below it (`ctx.ai.sys_2.task`). */
+	readonly task: (task: SystemTask) => Effect.Effect<string, EngineError>;
 };
+/** A task as the engine starts it: an automation's declared `policies`; none, the ones the administrator set for the host's tasks. */
+export type SystemTask = TaskStart & { readonly policies?: readonly string[] | undefined };
 export class Turns extends Context.Service<Turns, TurnsShape>()('bolt/Turns') {}
 
 // ── agents (E12a) ──
@@ -565,6 +570,9 @@ export type AgentsShape = {
 	/** A planned close: every turn holds at its next step; answers once none is inside one. */
 	readonly park: Effect.Effect<void>;
 	readonly start: (o: {
+		/** Its id when the caller derives one (a task's, from its run); a fresh one otherwise. */
+		readonly id?: string | undefined;
+		readonly kind?: string | null | undefined;
 		readonly owner?: string | null | undefined;
 		readonly envoy?: string | null | undefined;
 		readonly integration?: string | null | undefined;
@@ -595,6 +603,11 @@ export type AgentsShape = {
 		/** Whose turn it wakes (a decision's maker); none: the conversation's last sender. */
 		readonly as?: As | undefined;
 	}) => Effect.Effect<boolean, EngineError>;
+	/**
+	 * Starts a system agent's task (`ActiveWorkspace.task`, `ctx.ai.sys_2.task`): a conversation no person attends, acting
+	 * as the system under `policies`. Once per `run`; answers the conversation. Refused at the system spending limit.
+	 */
+	readonly task: (task: SystemTask) => Effect.Effect<string, EngineError>;
 	readonly drain: (conversation: string) => Effect.Effect<TurnResult, EngineError>;
 	readonly conversation: (id: string) => Effect.Effect<ConversationRow, EngineError>;
 	readonly transcript: (

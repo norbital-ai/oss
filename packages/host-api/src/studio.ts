@@ -468,8 +468,10 @@ const boundedText = Schema.String.check(Schema.isMaxLength(200));
 /** The administrator's monitoring scope. No source paths, code or mutation is accepted here. */
 export const StudioInspectInput = Schema.Struct({
 	range: Schema.Literals(['24h', '7d', '30d']),
-	/** The pane the reader is looking at; the host answers the shared snapshot all four read. */
-	view: Schema.optionalKey(Schema.Literals(['bundle', 'telemetry', 'logs', 'users'])),
+	/** The pane the reader is looking at: the host answers the shared snapshot, and `activity` or `improvements` only for its own pane. */
+	view: Schema.optionalKey(
+		Schema.Literals(['bundle', 'telemetry', 'logs', 'users', 'activity', 'improvements'])
+	),
 	build: Schema.optionalKey(Schema.NullOr(Schema.String.check(Schema.isMaxLength(64)))),
 	run: Schema.optionalKey(Schema.NullOr(boundedText)),
 	level: Schema.optionalKey(Schema.NullOr(Schema.Literals(['info', 'warn', 'error']))),
@@ -679,7 +681,57 @@ export const StudioInspection = Schema.Struct({
 		text: Schema.String,
 		run: Schema.String,
 		build: Schema.NullOr(Schema.String)
-	})
+	}),
+	/**
+	 * How the workspace was used over the range: the distinct `people` who opened a page, each page route's use
+	 * (`dwell_ms`: how long it stayed open on average, `null` unmeasured) and the agent turns of each access point
+	 * (`audience`: `staff`, `member`, `channel` or `system`; `cost` in USD). `null`: the host does not serve this view,
+	 * or it was not the one asked for.
+	 */
+	activity: Schema.NullOr(
+		Schema.Struct({
+			people: count,
+			pages: Schema.Array(
+				Schema.Struct({
+					route: Schema.String,
+					views: count,
+					people: count,
+					dwell_ms: Schema.NullOr(count)
+				})
+			),
+			turns: Schema.Array(
+				Schema.Struct({
+					audience: Schema.String,
+					turns: count,
+					failed: count,
+					steps: count,
+					tool_errors: count,
+					cost: count
+				})
+			)
+		})
+	),
+	/**
+	 * The workspace's improvement threads, most recently changed first. `seen`: how many times a thread's signal
+	 * arrived; `last`: its newest timeline entry as one plain line (`null`: no entry); `change`: the commits its agent
+	 * left for an administrator to merge (`null`: none yet). `null`: the host does not serve this view, or it was not the
+	 * one asked for.
+	 */
+	improvements: Schema.NullOr(
+		Schema.Struct({
+			threads: Schema.Array(
+				Schema.Struct({
+					id: Schema.String,
+					status: Schema.String,
+					title: Schema.String,
+					seen: count,
+					updated_at: Schema.String,
+					last: Schema.NullOr(Schema.String.check(Schema.isMaxLength(300))),
+					change: Schema.NullOr(Schema.String)
+				})
+			)
+		})
+	)
 });
 export type StudioInspection = typeof StudioInspection.Type;
 

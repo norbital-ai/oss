@@ -64,12 +64,9 @@ describe('a host decodes the narrow contract from a release’s full answer', ()
 		});
 	});
 
-	it('decodes a system run’s actor without its cause', () => {
-		const actor = { kind: 'system', run: 'r1', by: { automation: 'nightly' } };
-		expect(Schema.decodeUnknownSync(Authority)({ ...engineAuthority, actor }).actor).toEqual({
-			kind: 'system',
-			run: 'r1'
-		});
+	it('decodes a system run’s actor with what the run is', () => {
+		const actor = { kind: 'system', run: 'r1', by: { platform: 'agent' } };
+		expect(Schema.decodeUnknownSync(Authority)({ ...engineAuthority, actor }).actor).toEqual(actor);
 	});
 
 	it('decodes an instance status with its optional conversation', () => {

@@ -208,6 +208,7 @@ export const makeExecuteCalls = (deps: TurnCallsDeps) => {
 					if (operation.behavior.progress_check !== true)
 						current.failures.set(key, (current.failures.get(key) ?? 0) + 1);
 					failed++;
+					current.tool_errors++;
 					if (!skip || current.lastError === '') current.lastError = String(result['error']); // staff see the real failure, not the cut-short
 				} else clearToolFailures(current.failures, call.name); // only this tool's progress clears its earlier failures
 				// the model sees a bounded result; a clipped one keeps the whole output for `read_output`

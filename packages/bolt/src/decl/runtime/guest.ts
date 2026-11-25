@@ -274,7 +274,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				},
 				ai: {
 					sys_1: { decide: facility('ai.sys_1.decide') },
-					sys_2: { infer: facility('ai.sys_2.infer') },
+					sys_2: { infer: facility('ai.sys_2.infer'), task: facility('ai.sys_2.task') },
 					embed: facility('ai.embed')
 				},
 				geo: { search: facility('geo.search'), reverse: facility('geo.reverse') }

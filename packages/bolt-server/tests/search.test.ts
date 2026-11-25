@@ -4,7 +4,7 @@ import type { Json } from 'effect/Schema';
 import { webSearch } from '../src/search.ts';
 
 const context: HostToolContext = {
-	actor: { kind: 'system', run: 'r' },
+	actor: { kind: 'system', run: 'r', by: { automation: 'fixture' } },
 	conversation: 'c',
 	turn: 't',
 	call_id: 'k',

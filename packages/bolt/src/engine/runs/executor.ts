@@ -19,7 +19,7 @@ import { DbError } from '@norbital-ai/host-api';
 import { is_transient } from '../errors.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { makeParking } from '../parking.ts';
-import { RunUnits } from '../ports.ts';
+import { Logs, RunUnits } from '../ports.ts';
 import { Automations, Identity, Live, Manifest, RunEnds, RunHandlers, type AutomationJob, type RunHandler } from '../services.ts';
 import { retryDelay } from '../queue.ts';
 import { Chain } from '../write/sql.ts';
@@ -106,7 +106,7 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 	prune: Effect.Success<ReturnType<typeof makePruner>>['prune']
 ) {
 	const m = yield* Manifest, db = yield* TenantDb, audit = yield* Audit, live = yield* Live;
-	const identity = yield* Identity, automations = yield* Automations, registry = yield* RunHandlers, ends = yield* RunEnds;
+	const identity = yield* Identity, automations = yield* Automations, registry = yield* RunHandlers, ends = yield* RunEnds, logs = yield* Logs;
 	const interrupted = Effect.fn('Runs.interrupted')(function* (rows: readonly Row[], message: string) {
 			const c = new Chain();
 			runPiece(c, 'interrupted', `UPDATE sys_run s SET error = ${c.p({ code: 'interrupted', message })}::jsonb
@@ -201,7 +201,21 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 			Effect.catch((cause) => Effect.logError('A run did not settle; its lease will reclaim it.', { run: head.id, cause }).pipe(Effect.as(undefined)))
 		);
 		if (committed === undefined) return null;
-		if (state === 'failed') yield* Effect.logWarning('A run failed.', { run: head.id, automation: head.automation, error });
+		// a failed automation is a workspace log line: the host's own reactions (and an administrator) read it there
+		if (state === 'failed' && head.automation in m.automations)
+			logs.write({
+				at: new Date(yield* Clock.currentTimeMillis).toISOString(),
+				severity: 'error',
+				event: 'run.failed',
+				invocation: head.id,
+				run: head.id,
+				conversation: null,
+				turn: null,
+				attributes: {
+					automation: head.automation,
+					message: (error?.message ?? '').slice(0, 500)
+				}
+			});
 		if (state !== 'queued')
 			yield* PubSub.publish(
 				ends,

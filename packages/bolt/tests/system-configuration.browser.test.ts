@@ -302,6 +302,125 @@ it('organization settings are one tab per concern, each saving only its own', as
 	}
 });
 
+it('the Assistant tab sets what system agents may read and spend, and saves it with the other limits', async () => {
+	const runtime = ManagedRuntime.make(Layer.empty),
+		dispose = mount_edge(runtime);
+	const scope = Effect.runSync(Scope.make());
+	const bolt = await runtime.runPromise(
+		shell_bolt(
+			{
+				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
+				actor: null,
+				name: null,
+				admin: true,
+				preview: null,
+				nav: [],
+				inbox: 0,
+				kiosks: [],
+				startable: [],
+				envoys: {},
+				search: [],
+				contract: 'fixture',
+				push: null,
+				visitor: null,
+				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} },
+				surfaces: { inbox: false, runs: false, settings: true, agent: false, studio: false },
+				catalog: {
+					sys_integration: {
+						record_label: 'record.id',
+						label: ['id'],
+						fields: { id: { kind: 'text' }, revision: { kind: 'int' } }
+					}
+				}
+			},
+			{
+				fetch: async () =>
+					Response.json({ answers: [{ sys_integration: { rows: [], next: null, total: 0 } }] }),
+				open_stream: () => ({ onmessage: null, onerror: null, close() {} })
+			}
+		).pipe(Effect.provideService(Scope.Scope, scope))
+	);
+	const writes: { name: string; input: Readonly<Record<string, Json>> }[] = [];
+	const api = {
+		...nativeApi,
+		settings: () => Effect.succeed(settings),
+		agent: {
+			...nativeApi.agent,
+			models: () =>
+				Effect.succeed({
+					models: [],
+					default: 'default',
+					mcp: [],
+					admin: {
+						catalog: [],
+						deciders: { models: [], default: '' },
+						settings: {
+							monthly: null,
+							member: null,
+							policies: {},
+							models: [],
+							system1: null,
+							system2: null,
+							system: { improve: false, automations: true, policies: ['reader'], monthly: 5, task: null }
+						},
+						spent: 0,
+						policies: ['reader', 'rep']
+					}
+				})
+		},
+		settings_op: (name: string, input: Readonly<Record<string, Json>>) =>
+			Effect.sync(() => {
+				writes.push({ name, input });
+				return null;
+			})
+	};
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(Configuration, {
+		target,
+		props: {
+			api,
+			bolt,
+			tab: 'organization',
+			workspace: { name: 'Fixture', locale: 'en', tz: 'UTC', billing: '/billing', feedback: true },
+			t: (x: string) => x
+		}
+	});
+	try {
+		await page.getByRole('tab', { name: 'Assistant' }).click();
+		await expect.element(page.getByText('System agents')).toBeInTheDocument();
+		await expect
+			.element(page.getByText(/They never merge, control a page or do anything that needs a person's confirmation\./))
+			.toBeInTheDocument();
+		// what the administrator set is shown, and a change is saved with the other limits in one write
+		await expect.element(page.getByLabelText('Monthly limit for system agents (USD)')).toHaveValue(5);
+		await page.getByLabelText('Limit for one piece of work (USD)').fill('0.5');
+		await page.getByLabelText(/Improve automatically/).click();
+		await page.getByRole('button', { name: 'Save', exact: true }).click();
+		await expect.poll(() => writes).toEqual([
+			{
+				name: 'set_agent',
+				input: {
+					monthly: null,
+					member: null,
+					policies: {},
+					models: [],
+					system1: null,
+					system2: null,
+					system: { improve: true, automations: true, policies: ['reader'], monthly: 5, task: 0.5 }
+				}
+			}
+		]);
+	} finally {
+		await unmount(view);
+		await runtime.runPromise(Scope.close(scope, Exit.void));
+		await dispose();
+		target.remove();
+	}
+});
+
 it('an invitation request opens the native invitation dialog without sending an invitation', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty),
 		dispose = mount_edge(runtime);

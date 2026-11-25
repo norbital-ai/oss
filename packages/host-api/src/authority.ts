@@ -2,6 +2,14 @@
 // mark and the read outputs they hold per model. A release's compiled authority carries more; it stays the release's.
 import { Schema } from 'effect';
 
+/** What a system run is: an automation's, the platform's own work (`agent`: a system agent's task), or a sync's. */
+export const RunBy = Schema.Union([
+	Schema.Struct({ automation: Schema.String }),
+	Schema.Struct({ platform: Schema.String }),
+	Schema.Struct({ sync: Schema.String, instance: Schema.String })
+]);
+export type RunBy = typeof RunBy.Type;
+
 /** The person or work a call is for: a member, an envoy's turn, a visitor, an API key or the system identity's run. */
 export const Actor = Schema.Union([
 	Schema.Struct({
@@ -15,7 +23,7 @@ export const Actor = Schema.Union([
 	Schema.Struct({ kind: Schema.Literal('envoy'), envoy: Schema.String }),
 	Schema.Struct({ kind: Schema.Literal('visitor'), app: Schema.String, visitor: Schema.String }),
 	Schema.Struct({ kind: Schema.Literal('api_key'), key: Schema.String }),
-	Schema.Struct({ kind: Schema.Literal('system'), run: Schema.String })
+	Schema.Struct({ kind: Schema.Literal('system'), run: Schema.String, by: RunBy })
 ]);
 export type Actor = typeof Actor.Type;
 

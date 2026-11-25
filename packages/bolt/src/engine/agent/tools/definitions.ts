@@ -23,6 +23,9 @@ import {
 	type ToolPolicy
 } from './types.ts';
 
+/** Every audience a person is behind: a system agent's task is offered nothing that waits for, asks or serves one. */
+const PEOPLE = ['staff', 'member', 'channel'] as const;
+
 export const offers = (tool: ToolPolicy, audience: Audience, child: boolean, has: HostGives) =>
 	(tool.audiences?.includes(audience) ?? true) &&
 	!(child && tool.child === false) &&
@@ -114,7 +117,7 @@ create: [{ column: value, relation: [new row | { id, revision }] }]; update: [{ 
 });
 
 export const runAutomationTool = defineTool('run', {
-	policy: { child: false },
+	policy: { audiences: PEOPLE, child: false },
 	behavior: { data: true },
 	description:
 		'Run an automation from describe_workspace. Calls return output; jobs return run ids and report completion. input_file replaces input. Reuse key only to retry the same job.',
@@ -122,7 +125,7 @@ export const runAutomationTool = defineTool('run', {
 });
 
 export const decideTool = defineTool('decide', {
-	policy: { child: false },
+	policy: { audiences: PEOPLE, child: false },
 	behavior: { data: true },
 	description:
 		'Decide an approval request as its authorized approver: request_id, decision and optional reason. The person confirms the decision in the app.',
@@ -130,7 +133,7 @@ export const decideTool = defineTool('decide', {
 });
 
 export const inviteTool = defineTool('invite', {
-	policy: { child: false },
+	policy: { audiences: PEOPLE, child: false },
 	behavior: { data: true },
 	description:
 		'Invite members as a workspace administrator: members is a list of email or phone and optional team. The person confirms the invitations in the app.',
@@ -153,6 +156,7 @@ export const connectTool = defineTool('connect', {
 });
 
 export const syncTool = defineTool('sync', {
+	policy: { audiences: PEOPLE },
 	behavior: { data: true },
 	description:
 		'Run a native sync (model, sync from describe_workspace). Remote read input: { instance?, partition? } or {}. File transfer: { mode: "import", file, context? } or { mode: "template"|"export", to?, where?, context? }, reading and writing as you. Your permissions admit it; it ends at your next step. Never schedulable as an automation.',
@@ -198,6 +202,7 @@ export const skillTool = defineTool('skill', {
 });
 
 export const historyTool = defineTool('history', {
+	policy: { audiences: PEOPLE },
 	description:
 		"Search earlier messages in this conversation, or scope mine for all of this person's.",
 	parameters: Schema.Struct({
@@ -254,6 +259,7 @@ export const readOutputTool = defineTool('read_output', {
 });
 
 export const geocodeTool = defineTool('geocode', {
+	policy: { audiences: PEOPLE },
 	description:
 		'Places for an address or name (query), or at a point (reverse), each with the point a geolocation field takes.',
 	parameters: Schema.Struct({
@@ -263,7 +269,7 @@ export const geocodeTool = defineTool('geocode', {
 });
 
 export const readSource = defineTool('workspace_read', {
-	policy: { audiences: ['staff'], needs: 'source' },
+	policy: { audiences: ['staff', 'system'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
 		'Read a workspace source file or directory (numbered lines/entries with offset/limit; use workspace_lang for package types). In run_js, unpaged reads return {path,content,lines}.',
@@ -279,7 +285,7 @@ export const readSource = defineTool('workspace_read', {
 });
 
 export const grepSource = defineTool('workspace_grep', {
-	policy: { audiences: ['staff'], needs: 'source' },
+	policy: { audiences: ['staff', 'system'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description:
 		'Search workspace source by regex or literal. count returns match/file totals; otherwise limit caps excerpts.',
@@ -307,7 +313,7 @@ export const grepSource = defineTool('workspace_grep', {
 });
 
 export const globSource = defineTool('workspace_glob', {
-	policy: { audiences: ['staff'], needs: 'source' },
+	policy: { audiences: ['staff', 'system'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description: 'Find workspace source paths matching a glob (e.g. "src/**/*.svelte").',
 	parameters: Schema.Struct({
@@ -325,7 +331,7 @@ export const globSource = defineTool('workspace_glob', {
 });
 
 export const listSource = defineTool('workspace_list_dir', {
-	policy: { audiences: ['staff'], needs: 'source' },
+	policy: { audiences: ['staff', 'system'], needs: 'source' },
 	behavior: { pure: true, data: true },
 	description: 'List workspace source tree under path (default: root) with folder roles.',
 	parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) })
@@ -379,7 +385,7 @@ export const runJsTool = defineTool('run_js', {
 });
 
 export const askTool = defineTool('ask', {
-	policy: { scripts: false },
+	policy: { audiences: PEOPLE, scripts: false },
 	description:
 		'Sends one question with optional answer choices to the person, or in a sub-agent to the agent that delegated the task, then ends the turn.',
 	parameters: Schema.Struct({
@@ -404,6 +410,7 @@ export const runToolTool = defineTool('run_tool', {
 });
 
 export const documentTool = defineTool('document', {
+	policy: { audiences: PEOPLE },
 	description:
 		'Make a file from markdown (tables and inline HTML allowed) and offer it to the person; a file field takes its id. In pptx each ## starts a slide.',
 	parameters: Schema.Struct({

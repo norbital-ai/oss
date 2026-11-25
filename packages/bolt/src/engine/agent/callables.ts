@@ -35,7 +35,7 @@ export const conversationFor = Effect.fn('Agents.conversationFor')(function* (
 	const db = yield* TenantDb;
 	const member = authority.actor.kind === 'member' ? authority.actor.id : null;
 	const row = yield* db.one(Conversation, {
-		text: `SELECT c.id, c.title, c.owner, c.envoy, c.integration, c.thread, c.parent, c.status, c.model, c.plan, c.run
+		text: `SELECT c.id, c.title, c.owner, c.envoy, c.integration, c.thread, c.kind, c.parent, c.status, c.model, c.plan, c.run
   FROM sys_conversation c WHERE c.id = $1 AND
   ((c.integration IS NULL AND c.owner IS NOT NULL AND ($2 OR c.owner = $3)) OR
    ${sharedConversations({ member: '$3', admin: '$2', staff: '$4' })})`,

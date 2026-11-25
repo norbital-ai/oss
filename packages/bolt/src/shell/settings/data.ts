@@ -13,7 +13,8 @@ import { SYSTEM } from '../../system/index.ts';
 import { conversational } from '../../engine/integrations/instances.ts';
 import * as members from '../../engine/identity/members.ts';
 import { requireAdmin, SIGNUP_KEY, type IdentityHost } from '../../engine/identity/session.ts';
-import { AgentSettings, saveAgentSettings } from '../../engine/agent/settings.ts';
+import { AgentHost } from '../../engine/agent/shared.ts';
+import { AgentSettings, agentSettings, saveAgentSettings } from '../../engine/agent/settings.ts';
 import { Retention, RETENTION_DEFAULTS, RETENTION_KEY, saveRetention } from '../../engine/runs/retention.ts';
 import { AuditRow, InvitationRow, KeyRow, Member } from '../api-types.ts';
 
@@ -407,7 +408,15 @@ export const applySettings = Effect.fn('shell.settings_op')(function* (
 						`No policy ${unknown.map((p) => `'${p}'`).join(', ')}.`
 					)
 				);
-			return yield* saveAgentSettings(h.db, op.input).pipe(Effect.as(null));
+			const was = yield* agentSettings(h.db);
+			yield* saveAgentSettings(h.db, op.input);
+			const enabled = (yield* AgentHost).tasks_enabled;
+			if (enabled !== undefined && op.input.system.improve && !was.system.improve)
+				yield* Effect.tryPromise(() => enabled()).pipe(
+					Effect.tapCause(Effect.logWarning),
+					Effect.ignore
+				);
+			return null;
 		}
 		case 'set_retention':
 			return yield* saveRetention(h.db, op.input).pipe(Effect.as(null));

@@ -162,7 +162,8 @@ export type ShellBoot = {
 	 * where "Change workspace" leads (the host's workspace picker). `organization`: the host lets an administrator edit the
 	 * name and logo (`ShellHostConfig.organization`). `live`: this is a preview environment; the live workspace's address. `recovery`:
 	 * where an administrator repairs the workspace when it will not open (the failure card links it). `billing`: the
-	 * host's billing page (Settings links it).
+	 * host's billing page (Settings links it). `feedback`: the host takes feedback (the account menu offers the dialog);
+	 * `usage`: it takes page views (`ShellPorts.usage`).
 	 */
 	workspace: {
 		name: string;
@@ -177,6 +178,8 @@ export type ShellBoot = {
 		recovery?: string;
 		billing?: string;
 		organization?: true;
+		feedback?: true;
+		usage?: true;
 	};
 	actor: EngineActor | null;
 	name: string | null;
@@ -515,12 +518,15 @@ const SETTINGS_TABS = ['organization', 'integrations', 'secrets'] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 /**
  * The command center's tabs, each a deep link `/command-center/<tab>`: what happens across the workspace (bundle
- * analysis, resource telemetry, runtime logs, the audit trail, automation runs, inference transcripts) and who has access.
+ * analysis, resource telemetry, runtime logs, page and agent activity, improvement threads, the audit trail, automation
+ * runs, inference transcripts) and who has access.
  */
 const COMMAND_CENTER_TABS = [
 	'bundle',
 	'telemetry',
 	'logs',
+	'activity',
+	'improvements',
 	'audit',
 	'automations',
 	'inference',
@@ -540,7 +546,8 @@ export function preview_route(r: Route, preview: boolean): Route {
 }
 
 /**
- * The command center tabs a viewer gets, in order: the host's inspection (bundle, telemetry, logs) needs a Studio
+ * The command center tabs a viewer gets, in order: the host's inspection (bundle, telemetry, logs, activity,
+ * improvements) needs a Studio
  * host and an administrator; the audit trail, inference transcripts (with Norbius) and People are an administrator's,
  * People never in a preview environment; automation runs are every staff member's. Empty: no command center.
  */
@@ -554,7 +561,11 @@ export function command_center_tabs(
 	return COMMAND_CENTER_TABS.filter((tab) =>
 		tab === 'automations'
 			? true
-			: tab === 'bundle' || tab === 'telemetry' || tab === 'logs'
+			: tab === 'bundle' ||
+				  tab === 'telemetry' ||
+				  tab === 'logs' ||
+				  tab === 'activity' ||
+				  tab === 'improvements'
 				? lead && s.studio
 				: tab === 'inference'
 					? lead && s.agent

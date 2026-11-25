@@ -72,7 +72,9 @@ export const ShellWorkspace = Schema.Struct({
 	live: Optional,
 	recovery: Optional,
 	billing: Optional,
-	organization: Schema.optionalKey(Schema.Literal(true))
+	organization: Schema.optionalKey(Schema.Literal(true)),
+	feedback: Schema.optionalKey(Schema.Literal(true)),
+	usage: Schema.optionalKey(Schema.Literal(true))
 });
 /** A shell route refused the call: its code and message, the HTTP status (`0`: unreachable), and the workspace when signed out. */
 export class ShellError extends Schema.TaggedError<ShellError>()('ShellError', {
@@ -524,6 +526,8 @@ export type ShellApi = {
 	integration_offers(): ReturnType<typeof integration_offers>;
 	/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 	organization(logo: string | null): Call<void>;
+	/** The Feedback dialog's words and images (panel uploads) for the host (`ShellPorts.feedback`), from `route`'s page. */
+	feedback(text: string, attachments: readonly { readonly id: string }[], route: string): Call<void>;
 	/** An instance's raw messages, both directions, newest first (an administrator's). */
 	instance_messages(instance: string, before?: string): Call<readonly InstanceMessage[]>;
 	/** Sync health and dead-letter replay require update permission on this instance. */

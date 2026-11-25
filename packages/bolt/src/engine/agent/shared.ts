@@ -51,7 +51,7 @@ import {
 	type Usage
 } from './schema.ts';
 import type { ModelCarry } from './step.ts';
-import { WriteInput, type AttachmentPort, type ToolContext } from './tools.ts';
+import { WriteInput, type AttachmentPort, type Audience, type ToolContext } from './tools.ts';
 
 export type AgentEngine = {
 	identity?: import('../identity/session.ts').IdentityHost;
@@ -148,7 +148,7 @@ export const PAGE_ANSWER_MS = 5000;
 export const DEFAULT_MODEL = 'default';
 export const NO_AI = 'the host provides no ai';
 export const CONV_COLS =
-	'id, title, owner, envoy, integration, thread, parent, status, model, plan';
+	'id, title, owner, envoy, integration, thread, kind, parent, status, model, plan';
 export const TurnInput = Schema.Struct({ conversation: Schema.String });
 
 export const AGENT_LIMITS = {
@@ -237,7 +237,11 @@ export type CheckProgress = {
 
 export type TurnState = {
 	model: string;
+	/** Who the turn serves (`audienceOf`), once its first step resolved its sender. */
+	audience: Audience | null;
 	steps: number;
+	/** Tool calls of this turn that failed. */
+	tool_errors: number;
 	failing: number;
 	checks: Map<string, CheckProgress>;
 	lastError: string;

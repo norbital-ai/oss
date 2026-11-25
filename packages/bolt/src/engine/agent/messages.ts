@@ -196,17 +196,18 @@ export const makeAgentStore = (deps: StoreDeps) => {
 		);
 
 	const start = Effect.fn('Agents.start')(function* (o: Parameters<AgentsShape['start']>[0]) {
-		const id = uuidv7();
+		const id = o.id ?? uuidv7();
 		yield* convChanged(
 			sql(
-				`INSERT INTO sys_conversation AS c (id, title, owner, envoy, integration, parent, model) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				`INSERT INTO sys_conversation AS c (id, title, owner, envoy, integration, parent, model, kind) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 				id,
 				o.title ?? null,
 				o.owner ?? null,
 				o.envoy ?? null,
 				o.integration ?? null,
 				o.parent ?? null,
-				o.model ?? DEFAULT_MODEL
+				o.model ?? DEFAULT_MODEL,
+				o.kind ?? null
 			)
 		);
 		return id;

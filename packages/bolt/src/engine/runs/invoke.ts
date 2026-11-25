@@ -35,7 +35,7 @@ import { SqlReadCapture, TenantDb } from '../db/tenant-db.ts';
 import { CapturedResult, nativeCommit, nativeCommits } from '../db/captured.ts';
 import { DecisionTrace, readableFile } from '../decision.ts';
 import { is_transient, type EngineError } from '../errors.ts';
-import { EmbedInputs, ImageOptions, Reference, storeFile } from '../facilities.ts';
+import { EmbedInputs, ImageOptions, Reference, storeFile, TASK_NEEDS_RUN } from '../facilities.ts';
 import { makeParking } from '../parking.ts';
 import { instanceRequest } from '../integrations/instances.ts';
 import type { EngineManifest } from '../manifest.ts';
@@ -47,7 +47,7 @@ import { uuid } from '../port.ts';
 import { Ai, Browser, Drivers, Files, Logs, Render, RunUnits } from '../ports.ts';
 import { ReadDeps } from '../query/engine.ts';
 import { bindingsAt } from '../query/reader.ts';
-import { Activation, Automations, Callables, Facilities, Guest, Identity, Live, Manifest, Reads, Wake,
+import { Activation, Automations, Callables, Facilities, Guest, Identity, Live, Manifest, Reads, Turns, Wake,
  type AutomationExecution, type AutomationJob, type AutomationRequest, type CrossCall, type FacilityCall, acts_json } from '../services.ts';
 
 import { Chain, GATED, makeReadGuards, noticeInsert } from '../write/sql.ts';
@@ -190,7 +190,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 	const m = yield* Manifest, db = yield* TenantDb, activation = yield* Activation,
 		guest = yield* Guest, reads = yield* Reads, calls = yield* Callables, identity = yield* Identity,
 		live = yield* Live, facilities = yield* Facilities, browser = yield* Browser,
-		drivers = yield* Drivers, wake = yield* Wake, ai = yield* Ai, logs = yield* Logs, agentHost = yield* AgentHost,
+		drivers = yield* Drivers, wake = yield* Wake, ai = yield* Ai, logs = yield* Logs, agentHost = yield* AgentHost, turns = yield* Turns,
 		render = yield* Render, grants = yield* RenderGrants, files = yield* Files;
 	const crypto = yield* Crypto.Crypto;
 	const newId = uuid(crypto);
@@ -465,12 +465,27 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 									automation: run.automation
 								})
 							);
+						if (call._tag === 'ai.sys_2.task') {
+							if (job === undefined) return TASK_NEEDS_RUN;
+							const request = Schema.decodeUnknownOption(
+								Schema.Struct({ description: Schema.String, prompt: Schema.String })
+							)(call.args[0]);
+							if (Option.isNone(request))
+								return cross_failure('invalid_input', 'task takes { description, prompt }');
+							// the call site names the task, so a retried attempt starts nothing twice
+							const conversation = yield* turns
+								.task({ ...request.value, run: `${run.id}:${key.slice(key.indexOf(':') + 1)}`, policies: authority.policies })
+								.pipe(Effect.result);
+							return Result.isSuccess(conversation)
+								? { ok: true, value: { conversation: conversation.success } }
+								: failure(conversation.failure);
+						}
 						if (call._tag !== 'ai.sys_2.infer') return yield* facilities.dispatch(withProfile);
 						const names = [...new Set(facts.tools ?? [])];
 						const host_tools = agentHost.host_tools;
 						const hosted =
 							typeof host_tools === 'function'
-								? yield* Port.attempt('host_tools', () => host_tools(authority, run.id))
+								? yield* Port.attempt('host_tools', () => host_tools(authority, { run: run.id }))
 								: (host_tools ?? []);
 						// `read`: workspace records as the run's policies, through the agent's own read tool
 						const reader =

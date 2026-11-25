@@ -35,7 +35,9 @@ const inspection: StudioInspection = {
 		cache: null,
 		build: null
 	},
-	filters: { level: null, text: '', run: '', build: null }
+	filters: { level: null, text: '', run: '', build: null },
+	activity: null,
+	improvements: null
 };
 
 describe('Studio operational inspection boundary', () => {

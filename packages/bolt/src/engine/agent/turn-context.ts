@@ -16,7 +16,9 @@ import type { AgentStore } from './messages.ts';
 import type { Queue as AgentMessageQueue } from './queue.ts';
 import {
 	clip,
+	inApp,
 	rowsOf,
+	TASK,
 	transcriptRow,
 	type As,
 	type ConversationRow,
@@ -69,6 +71,16 @@ export const makeWorkspaceSkills = (
 		])
 	);
 };
+
+/** Who a turn's tools are for; an authority that no longer resolves reads as a member's. */
+export const audienceOf = (conv: ConversationRow, authority: Authority | null): Audience =>
+	conv.kind === TASK
+		? 'system'
+		: !inApp(conv)
+			? 'channel'
+			: authority?.actor.kind === 'member' && !authority.actor.external
+				? 'staff'
+				: 'member';
 
 export const makeAuthorityResolver = (
 	config: AgentConfig,
@@ -206,7 +218,6 @@ export const makeBuildToolContext = (deps: BuildToolContextDeps) => {
 	const e = config.engine,
 		m = e.manifest,
 		db = e.db;
-	const inApp = (conv: ConversationRow) => conv.envoy === null;
 
 	return Effect.fn('Agents.context')(function* (
 		conv: ConversationRow,
@@ -222,7 +233,9 @@ export const makeBuildToolContext = (deps: BuildToolContextDeps) => {
 		}
 		const envoy = conv.envoy === null ? undefined : yield* envoySpec(db, conv.envoy);
 		const staff = authority.actor.kind === 'member' && !authority.actor.external;
-		const hostSide = inApp(conv) && staff;
+		const task = conv.kind === TASK;
+		// the host's tools, skills and working source: a staff member's in the app, and a system agent's task
+		const hostSide = task || (inApp(conv) && staff);
 		const hostSkills = config.skills,
 			search = config.search,
 			draft = config.draft;
@@ -238,7 +251,7 @@ export const makeBuildToolContext = (deps: BuildToolContextDeps) => {
 				!hostSide || host_tools === undefined
 					? []
 					: typeof host_tools === 'function'
-						? yield* Port.attempt('agent.host_tools', () => host_tools(authority, id))
+						? yield* Port.attempt('agent.host_tools', () => host_tools(authority, { conversation: id }))
 						: host_tools;
 			current.host_tools =
 				draft !== undefined && authoring === undefined
@@ -246,7 +259,7 @@ export const makeBuildToolContext = (deps: BuildToolContextDeps) => {
 					: loaded;
 			current.hostFor = hostKey;
 		}
-		const audience: Audience = !inApp(conv) ? 'channel' : staff ? 'staff' : 'member';
+		const audience = audienceOf(conv, authority);
 		// the platform's skills by who can use them: authoring ones to authors, research and skill-authoring to in-app staff
 		const skills: ToolContext['skills'] = {
 			...Object.fromEntries(
