@@ -2,15 +2,13 @@
 @component
 A tooltip on hover or focus of its trigger, with a text or snippet body; where nothing hovers, a tap opens it as a popover.
 -->
-<script lang="ts" module>
-	const WARM_MS = 250;
-	let activeTooltip: { close: () => void } | null = null;
-	let lastClosedAt = 0;
-</script>
-
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import type { FloatingAlign, FloatingSide } from '../../behaviors/index.js';
+	import {
+		create_hover_intent,
+		type FloatingAlign,
+		type FloatingSide
+	} from '../../behaviors/index.js';
 	import * as Popover from '../popover/index.js';
 	import { cn, noHover } from '../utils.js';
 	import Content from './tooltip-content.svelte';
@@ -76,77 +74,35 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 	const hasBody = $derived(Boolean(text) || Boolean(content));
 	let internalOpen = $state(false);
 	let anchorEl = $state<HTMLElement | null>(null);
-	let openTimer: ReturnType<typeof setTimeout> | undefined;
-	let closeTimer: ReturnType<typeof setTimeout> | undefined;
+	let popupEl = $state<HTMLDivElement | null>(null);
 
 	const open = $derived(controlledOpen ?? internalOpen);
-	const handle = {
-		close() {
-			clearTimers();
-			setOpen(false);
-		}
-	};
-
-	function clearTimers(): void {
-		if (openTimer !== undefined) {
-			clearTimeout(openTimer);
-			openTimer = undefined;
-		}
-		if (closeTimer !== undefined) {
-			clearTimeout(closeTimer);
-			closeTimer = undefined;
-		}
-	}
 
 	function setOpen(next: boolean): void {
 		if (next === open) return;
-		if (next && controlledOpen === undefined) {
-			if (activeTooltip !== null && activeTooltip !== handle) activeTooltip.close();
-			activeTooltip = handle;
-		} else if (!next && activeTooltip === handle) {
-			activeTooltip = null;
-			lastClosedAt = Date.now();
-		}
 		if (controlledOpen !== undefined) controlledOpen = next;
 		internalOpen = next;
 		on_open_change?.(next);
 		queueMicrotask(() => on_open_change_complete?.(next));
 	}
 
-	function scheduleOpen(): void {
-		clearTimers();
-		const warm = activeTooltip !== null || Date.now() - lastClosedAt < WARM_MS;
-		if (delay_duration <= 0 || warm) {
-			setOpen(true);
-		} else {
-			openTimer = setTimeout(() => {
-				openTimer = undefined;
-				setOpen(true);
-			}, delay_duration);
-		}
-	}
-
-	function scheduleClose(): void {
-		clearTimers();
-		if (disable_hoverable_content) {
-			setOpen(false);
-		} else {
-			closeTimer = setTimeout(() => {
-				closeTimer = undefined;
-				setOpen(false);
-			}, 80);
-		}
-	}
-
-	$effect(() => () => {
-		clearTimers();
-		if (activeTooltip === handle) activeTooltip = null;
+	const hover = create_hover_intent({
+		trigger: () => anchorEl,
+		popup: () => popupEl,
+		open: () => open,
+		on_open: () => setOpen(true),
+		on_close: () => setOpen(false),
+		open_delay: () => delay_duration,
+		close_delay: 80,
+		hoverable: () => !disable_hoverable_content,
+		group: controlledOpen === undefined ? 'tooltip' : null
 	});
 
+	// Tooltips stay non-blocking over dialogs (never pushed onto the LIFO dismiss stack).
 	$effect(() => {
 		if (!open || noHover.current || typeof document === 'undefined') return;
 		const onKeydown = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') setOpen(false);
+			if (e.key === 'Escape') hover.close_now();
 		};
 		document.addEventListener('keydown', onKeydown);
 		return () => document.removeEventListener('keydown', onKeydown);
@@ -154,27 +110,23 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 
 	const hoverTriggerProps = $derived({
 		onpointerenter: (e: PointerEvent) => {
-			if (e.pointerType === 'touch') return;
 			if (e.currentTarget instanceof HTMLElement) anchorEl = e.currentTarget;
-			scheduleOpen();
+			hover.enter(e, true);
 		},
-		onpointerleave: (e: PointerEvent) => {
-			if (e.pointerType === 'touch') return;
-			scheduleClose();
-		},
+		onpointerleave: (e: PointerEvent) => hover.leave(e),
 		onfocus: (e: FocusEvent) => {
 			if (e.currentTarget instanceof HTMLElement) {
 				anchorEl = e.currentTarget;
 				if (ignore_non_keyboard_focus && !e.currentTarget.matches(':focus-visible')) return;
 			}
-			setOpen(true);
+			hover.open_now();
 		},
-		onblur: () => setOpen(false),
+		onblur: () => hover.close_now(),
 		onclick: () => {
-			if (!disable_close_on_trigger_click) setOpen(false);
+			if (!disable_close_on_trigger_click) hover.close_now();
 		},
 		onkeydown: (e: KeyboardEvent) => {
-			if (e.key === 'Escape') setOpen(false);
+			if (e.key === 'Escape') hover.close_now();
 		}
 	});
 </script>
@@ -228,6 +180,7 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 {:else}
 	{@render trigger({ props: hoverTriggerProps })}
 	<Content
+		bind:ref={popupEl}
 		{open}
 		anchor={anchorEl}
 		{side}
@@ -235,8 +188,8 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 		{align}
 		{avoid_collisions}
 		{collision_padding}
-		on_pointer_enter={disable_hoverable_content ? undefined : scheduleOpen}
-		on_pointer_leave={disable_hoverable_content ? undefined : scheduleClose}
+		on_pointer_enter={disable_hoverable_content ? undefined : (e) => hover.enter(e, false)}
+		on_pointer_leave={disable_hoverable_content ? undefined : (e) => hover.leave(e)}
 		class={/* repository-health:allow UI25 -- pass-through of the caller's `content_class` prop; its tokens are literal at the call site */ content_class}
 	>
 		{@render body()}

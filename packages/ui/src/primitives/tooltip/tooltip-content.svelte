@@ -39,9 +39,9 @@
 		/** Viewport gutter in px. */
 		collision_padding?: number;
 		/** Keep open while hovering content. */
-		on_pointer_enter?: () => void;
+		on_pointer_enter?: (event: PointerEvent) => void;
 		/** Close after leaving content. */
-		on_pointer_leave?: () => void;
+		on_pointer_leave?: (event: PointerEvent) => void;
 		/** Tooltip body content. */
 		children?: Snippet;
 	} = $props();

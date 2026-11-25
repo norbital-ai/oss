@@ -2,7 +2,7 @@
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { attach } from '@norbital-ai/ui/effect';
-	import { watch } from '@norbital-ai/ui/behaviors';
+	import { create_listbox, watch } from '@norbital-ai/ui/behaviors';
 	import { tick } from 'svelte';
 	import { Dialog, Icon, Input, type ModelExposure } from '@norbital-ai/ui';
 	import type { NavNode } from '../nav.ts';
@@ -50,7 +50,6 @@
 	let found = $state<FinderHit[]>([]);
 	let searching = $state(false);
 	let error = $state('');
-	let active = $state(0);
 	let searchInput = $state<HTMLInputElement | null>(null);
 	let picked = $state<SearchScope | undefined>();
 	let previousQuery = $state('');
@@ -82,7 +81,25 @@
 	);
 	const disabled = (row: Row) =>
 		row.kind === 'scope' && row.scope.kind === 'model' && !row.scope.searchable;
-	const activeRow = $derived(rows[active]);
+	const lb = create_listbox({
+		id: 'shell-finder',
+		items: () =>
+			rows.map((row) => ({
+				value: row.key,
+				label: row.kind === 'scope' ? row.scope.label : row.label,
+				disabled: disabled(row)
+			})),
+		focus: 'virtual',
+		filter: false,
+		on_activate: (item) => {
+			const row = rows.find((r) => r.key === item.value);
+			void choose(row);
+		}
+	});
+	const active = $derived(
+		lb.active === undefined ? -1 : rows.findIndex((row) => row.key === lb.active)
+	);
+	const activeRow = $derived(active >= 0 ? rows[active] : undefined);
 	watch(
 		() => parsed.scope,
 		(scope) => {
@@ -108,7 +125,6 @@
 	watch(
 		() => [query, open, picked] as const,
 		() => {
-			active = 0;
 			found = [];
 			error = '';
 		}
@@ -116,10 +132,8 @@
 	watch(
 		() => rows.map((row) => row.key).join('\0'),
 		() => {
-			active = Math.max(
-				0,
-				rows.findIndex((row) => !disabled(row))
-			);
+			const first = rows.find((row) => !disabled(row));
+			if (first !== undefined) lb.highlight(first.key);
 		}
 	);
 	const search = (visible: boolean, model: string | null, term: string) =>
@@ -184,7 +198,7 @@
 	}
 	function keydown(event: KeyboardEvent): void {
 		if (event.isComposing) return;
-		const current = rows[active];
+		const current = activeRow;
 		const atStart = searchInput?.selectionStart === 0 && searchInput.selectionEnd === 0;
 		if (
 			(event.key === 'ArrowLeft' && atStart && selected) ||
@@ -199,30 +213,31 @@
 		) {
 			event.preventDefault();
 			void drill(current.scope);
-		} else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-			event.preventDefault();
-			for (let step = 0; step < rows.length; step++) {
-				active = (active + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
-				const next = rows[active];
-				if (next !== undefined && !disabled(next)) break;
-			}
-			document
-				.getElementById(`shell-finder-result-${active}`)
-				?.scrollIntoView({ block: 'nearest' });
+		} else if (
+			event.key === 'ArrowDown' ||
+			event.key === 'ArrowUp' ||
+			event.key === 'Home' ||
+			event.key === 'End'
+		) {
+			lb.input_attrs(rows.length > 0).onkeydown(event);
+			const id = lb.active_id;
+			if (id !== undefined) document.getElementById(id)?.scrollIntoView({ block: 'nearest' });
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
-			void choose(rows[active]);
+			void choose(activeRow);
 		}
 	}
 </script>
 
 {#snippet resultRows()}
 	{#each rows as row, i (row.key)}
+		{@const opt = lb.option_attrs(row.key)}
 		<li
-			id="shell-finder-result-{i}"
+			id={opt.id}
 			role="option"
 			aria-selected={i === active}
 			aria-disabled={disabled(row)}
+			data-highlighted={opt['data-highlighted']}
 		>
 			<button
 				type="button"
@@ -232,7 +247,7 @@
 					i === active && 'bg-accent text-accent-foreground'
 				]}
 				onmouseenter={() => {
-					if (!disabled(row)) active = i;
+					if (!disabled(row)) lb.highlight(row.key);
 				}}
 				onclick={() => choose(row)}
 			>
@@ -336,12 +351,11 @@
 				bind:value={query}
 				onkeydown={keydown}
 				role="combobox"
+				aria-autocomplete="list"
 				aria-expanded={rows.length > 0}
-				aria-controls="shell-finder-results"
+				aria-controls={lb.id}
 				aria-describedby="shell-finder-scope-description"
-				aria-activedescendant={rows[active] === undefined
-					? undefined
-					: `shell-finder-result-${active}`}
+				aria-activedescendant={lb.active_id}
 			/>
 		</div>
 		<Dialog.Description id="shell-finder-scope-description" class="text-xs text-muted-foreground">
@@ -349,7 +363,7 @@
 		</Dialog.Description>
 
 		<ul
-			id="shell-finder-results"
+			id={lb.id}
 			role="listbox"
 			aria-label={t('Results')}
 			class="h-80 max-h-[45dvh] overflow-y-auto text-sm"

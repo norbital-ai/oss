@@ -13,7 +13,7 @@
 	import { Button, Dialog, Icon, Popover, Spinner, TabStrip } from '../primitives/index.js';
 	import { Cluster, Inline, Stack } from '../layout/index.js';
 	import { Option, Schema } from 'effect';
-	import { watch } from '../behaviors/index.js';
+	import { create_resize_box, create_toggle_group, PersistedState, watch } from '../behaviors/index.js';
 	import type { Snippet } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import type { StudioTestRun } from '@norbital-ai/host-api';
@@ -81,25 +81,18 @@
 	] as const;
 	const DESKTOP: Size = PRESETS[2].size;
 
-	function remembered(): Size {
-		try {
-			const raw = localStorage.getItem(KEY);
-			return raw === null
-				? DESKTOP
-				: Option.getOrElse(
-						Schema.decodeUnknownOption(Schema.fromJsonString(Size))(raw),
-						() => DESKTOP
-					);
-		} catch {
-			return DESKTOP;
+	const persistedSize = new PersistedState<Size>(KEY, DESKTOP, {
+		serializer: {
+			serialize: JSON.stringify,
+			deserialize: (raw) =>
+				Option.getOrElse(
+					Schema.decodeUnknownOption(Schema.fromJsonString(Size))(raw),
+					() => DESKTOP
+				)
 		}
-	}
+	});
 	function remember(next: Size): void {
-		try {
-			localStorage.setItem(KEY, JSON.stringify(next));
-		} catch {
-			// storage unavailable (a private window): the size lasts for this page only
-		}
+		persistedSize.current = next;
 	}
 
 	const narrow = new MediaQuery('max-width: 47.999rem');
@@ -107,9 +100,8 @@
 	// a 44px thumb floor overruns one line; a mouse keeps the line and truncates the label
 	const Row = $derived(touch.current ? Cluster : Inline);
 	// a phone has no device buttons to leave a remembered desktop size with
-	let size = $state<Size>(narrow.current ? PRESETS[0].size : remembered());
+	let size = $state<Size>(narrow.current ? PRESETS[0].size : persistedSize.current);
 	let frame = $state<HTMLDivElement | null>(null);
-	let dragging = $state(false);
 	let reloads = $state(0);
 	// the frame's own load: a spinner over it until this address and build have loaded, so it never looks stuck
 	const loading = $derived(`${reloads}:${version ?? ''}:${src}`);
@@ -167,53 +159,36 @@
 		size = next;
 		remember(next);
 	}
-	/** Drags the frame's right edge (`x`), bottom edge (`y`) or corner (`xy`) from where the pointer went down. */
-	function resize(axis: 'x' | 'y' | 'xy', down: PointerEvent): void {
-		if (frame === null) return;
-		const handle = down.currentTarget;
-		if (!(handle instanceof HTMLElement)) return;
-		const start = {
-			x: down.clientX,
-			y: down.clientY,
-			width: size.width,
-			height: size.height,
-			zoom
-		};
-		handle.setPointerCapture(down.pointerId);
-		dragging = true;
-		const move = (event: PointerEvent) => {
-			size = {
-				width: Math.round(
-					Math.max(
-						MIN,
-						axis === 'y' ? start.width : start.width + (event.clientX - start.x) / start.zoom
-					)
-				),
-				height: Math.round(
-					Math.max(
-						MIN,
-						axis === 'x' ? start.height : start.height + (event.clientY - start.y) / start.zoom
-					)
-				)
-			};
-		};
-		const up = () => {
-			dragging = false;
-			handle.removeEventListener('pointermove', move);
-			handle.removeEventListener('pointerup', up);
-			handle.removeEventListener('pointercancel', up);
-			remember(size);
-		};
-		handle.addEventListener('pointermove', move);
-		handle.addEventListener('pointerup', up);
-		handle.addEventListener('pointercancel', up);
-	}
+	const resizer = create_resize_box({
+		size: () => size,
+		on_change: (next) => {
+			size = next;
+		},
+		on_commit: (final) => remember(final),
+		min_width: MIN,
+		min_height: MIN,
+		scale: () => zoom
+	});
+	const dragging = $derived(resizer.dragging);
 	// the room's padding and the bezel around the page: what the scaled page cannot use
 	const BEZEL = 24 + 14;
 	// Svelte Flow's dotted canvas: a 1px dot every 20px on the page's own background
 	const GRID =
 		'radial-gradient(circle, color-mix(in oklab, var(--color-muted-foreground) 45%, transparent) 1px, transparent 1px)';
 	const HANDLE = 'absolute touch-none bg-border/0 transition-colors hover:bg-primary/30';
+	const activePreset = $derived(
+		PRESETS.find((preset) => size.width === preset.size.width && size.height === preset.size.height)?.name
+	);
+	const deviceToggle = create_toggle_group({
+		items: () => PRESETS.map((preset) => preset.name),
+		mode: 'single',
+		value: () => (activePreset !== undefined ? [activePreset] : []),
+		on_change: (values) => {
+			const picked = PRESETS.find((preset) => preset.name === values[0]);
+			if (picked !== undefined) choose({ ...picked.size });
+		},
+		control: { id: 'preview-frame:device', label: 'Device' }
+	});
 </script>
 
 <Dialog.Root bind:open={expanded}>
@@ -267,20 +242,19 @@
 			{#if !narrow.current}
 				<span
 					class="inline-flex shrink-0 rounded-md bg-muted/60 p-0.5"
-					role="group"
+					{...deviceToggle.root_attrs()}
 					aria-label={t('Device')}
 				>
 					{#each PRESETS as preset (preset.name)}
-						{@const on = size.width === preset.size.width && size.height === preset.size.height}
+						{@const on = activePreset === preset.name}
 						<button
-							type="button"
+							{...deviceToggle.item_attrs(preset.name)}
+							{@attach deviceToggle.item(preset.name)}
 							class="grid size-6 place-items-center rounded {on
 								? 'bg-background text-foreground shadow-xs'
 								: 'hover:text-foreground'}"
-							aria-pressed={on}
 							aria-label={t(preset.name)}
 							title={t(preset.name)}
-							onclick={() => choose({ ...preset.size })}
 						>
 							<Icon name={preset.icon} class="size-3.5" />
 						</button>
@@ -423,24 +397,21 @@
 							</div>
 						{/if}
 					</div>
-					<!-- the bezel's edges drag with a pointer; the device buttons above are the keyboard path -->
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<!-- the bezel's edges drag with a pointer or nudge with arrow keys via `create_resize_box` -->
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 					<span
-						aria-hidden="true"
+						{...resizer.handle_attrs('x', t('Resize width'))}
 						class="{HANDLE} top-0 -right-1 h-full w-2 cursor-ew-resize"
-						onpointerdown={(event) => resize('x', event)}
 					></span>
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 					<span
-						aria-hidden="true"
+						{...resizer.handle_attrs('y', t('Resize height'))}
 						class="{HANDLE} -bottom-1 left-0 h-2 w-full cursor-ns-resize"
-						onpointerdown={(event) => resize('y', event)}
 					></span>
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 					<span
-						aria-hidden="true"
+						{...resizer.handle_attrs('xy', t('Resize preview'))}
 						class="{HANDLE} -right-1 -bottom-1 size-3 cursor-nwse-resize"
-						onpointerdown={(event) => resize('xy', event)}
 					></span>
 				</div>
 				<span

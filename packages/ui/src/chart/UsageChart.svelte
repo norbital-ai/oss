@@ -60,6 +60,8 @@
 </script>
 
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { create_slider } from '../behaviors/index.js';
 	import { ui_text } from '../primitives/utils.js';
 
 	let { ctx, title, unit, lines, utilization = null }: UsageChartProps = $props();
@@ -94,9 +96,24 @@
 		last = $derived(lines[0]?.points.at(-1)?.at);
 	let hover = $state<number | null>(null);
 	const at = $derived(hover === null ? null : lines[0]?.points[hover]?.at);
-	function move(event: PointerEvent & { currentTarget: SVGSVGElement }) {
+	const scrubber = create_slider({
+		min: 0,
+		max: () => Math.max(0, length - 1),
+		step: 1,
+		value: () => hover ?? 0,
+		on_change: (index) => {
+			hover = index;
+		},
+		control: { id: `usage-chart:${untrack(() => title)}`, label: untrack(() => title) }
+	});
+	function hoverAt(event: PointerEvent & { currentTarget: HTMLElement }) {
+		if (length === 0) return;
 		const box = event.currentTarget.getBoundingClientRect();
-		hover = Math.round(((event.clientX - box.left) / box.width) * Math.max(0, length - 1));
+		if (box.width <= 0) return;
+		hover = Math.min(
+			Math.max(0, length - 1),
+			Math.max(0, Math.round(((event.clientX - box.left) / box.width) * Math.max(0, length - 1)))
+		);
 	}
 	const when = (millis: number) =>
 		new Date(millis).toLocaleString(host.locale, { dateStyle: 'short', timeStyle: 'short' });
@@ -112,38 +129,45 @@
 				)}{:else}{t('peak')} {metric(peakValue(lines[0]?.points.map((p) => p.value) ?? []))}{/if}
 		</span>
 	</figcaption>
-	<svg
-		viewBox={`0 0 ${W} ${H}`}
-		preserveAspectRatio="none"
-		class="min-h-32 w-full flex-1 touch-pan-y"
-		role="img"
+	<div
+		class="min-h-32 w-full flex-1 touch-pan-y outline-none focus-visible:ring-2 focus-visible:ring-ring"
+		{@attach scrubber.track}
+		{...scrubber.thumb_attrs()}
 		aria-label={`${title} ${t('overTime')}`}
-		onpointerdown={move}
-		onpointermove={move}
+		aria-valuetext={at === undefined || at === null ? undefined : when(at)}
+		onpointermove={hoverAt}
 		onpointerleave={() => (hover = null)}
+		onblur={() => (hover = null)}
 	>
-		<line x1="0" x2={W} y1={H} y2={H} class="stroke-border" vector-effect="non-scaling-stroke" />
-		{#each lines as line, i (line.label)}
-			<path
-				d={path(line)}
-				fill="none"
-				stroke={COLORS[i % COLORS.length]}
-				stroke-width="1.5"
-				stroke-dasharray={line.bound ? '4 3' : undefined}
-				vector-effect="non-scaling-stroke"
-			/>
-		{/each}
-		{#if hover !== null}
-			<line
-				x1={x(hover)}
-				x2={x(hover)}
-				y1="0"
-				y2={H}
-				class="stroke-muted-foreground"
-				vector-effect="non-scaling-stroke"
-			/>
-		{/if}
-	</svg>
+		<svg
+			viewBox={`0 0 ${W} ${H}`}
+			preserveAspectRatio="none"
+			class="h-full min-h-32 w-full"
+			aria-hidden="true"
+		>
+			<line x1="0" x2={W} y1={H} y2={H} class="stroke-border" vector-effect="non-scaling-stroke" />
+			{#each lines as line, i (line.label)}
+				<path
+					d={path(line)}
+					fill="none"
+					stroke={COLORS[i % COLORS.length]}
+					stroke-width="1.5"
+					stroke-dasharray={line.bound ? '4 3' : undefined}
+					vector-effect="non-scaling-stroke"
+				/>
+			{/each}
+			{#if hover !== null}
+				<line
+					x1={x(hover)}
+					x2={x(hover)}
+					y1="0"
+					y2={H}
+					class="stroke-muted-foreground"
+					vector-effect="non-scaling-stroke"
+				/>
+			{/if}
+		</svg>
+	</div>
 	<div class="text-meta flex flex-wrap justify-between gap-x-3 gap-y-1 tabular-nums">
 		<span>{first === undefined ? '' : when(first)}</span>
 		<span>{t('maximum')} {metric(maximum)}</span>

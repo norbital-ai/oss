@@ -58,7 +58,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	import Icon from '@iconify/svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { onMount } from 'svelte';
-	import { virtual_list, watch } from '../behaviors/index.js';
+	import { bind_drag, create_radio_group, register_control, virtual_list, watch } from '../behaviors/index.js';
 	import { Button } from '../primitives/button/index.js';
 	import TabStrip from '../primitives/tabs/tab-strip.svelte';
 	import { cn, ui_text } from '../primitives/utils.js';
@@ -202,8 +202,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	};
 	let drag = $state<Drag | null>(null);
 	let grid = $state<HTMLElement | null>(null);
-	let stop_drag = () => {};
-	const drag_scope = () => () => stop_drag();
+	let suppressClick = false;
 	const snap = (y: number) =>
 		Math.round(y / ((hour_height * snap_minutes) / 60)) * ((hour_height * snap_minutes) / 60);
 	const toDate = (day: Date, y: number) => {
@@ -218,71 +217,88 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 			y: Math.min(height, Math.max(0, e.clientY - r.top))
 		};
 	};
-	function begin(e: PointerEvent, action: DragAction) {
-		const element = grid;
-		if (e.button !== 0 || element === null) return;
-		e.stopPropagation();
-		e.preventDefault(); // no text selection or native drag, which would cancel the pointer
+	function dragGesture(action: DragAction) {
 		const event = action.mode === 'create' ? undefined : action.event;
-		const p = point(e, element);
-		const locked = readonly || event?.editable === false;
-		if (locked && action.mode !== 'move') return;
-		const col = event === undefined ? p.col : days.findIndex((day) => sameDay(day, event.start));
-		const day = days[col];
-		if (day === undefined) return;
-		stop_drag();
-		const top = event === undefined ? snap(p.y) : px(event.start, day);
-		drag = {
-			...action,
-			col,
-			y0: p.y,
-			y: p.y,
-			top,
-			h: event === undefined ? 0 : px(event.end, day) - top,
-			moved: false
-		};
-		const move = (m: PointerEvent) => {
-			if (drag === null) return;
-			const q = point(m, element);
-			const moved =
-				drag.moved || Math.abs(q.y - drag.y0) > 3 || (drag.mode === 'move' && q.col !== drag.col);
-			drag = {
-				...drag,
-				y: q.y,
-				moved,
-				col: drag.mode === 'move' && !locked && n > 1 ? q.col : drag.col
-			};
-		};
-		const clear = () => {
-			removeEventListener('pointermove', move);
-			removeEventListener('pointerup', up);
-			removeEventListener('pointercancel', up);
-			drag = null;
-			stop_drag = () => {};
-		};
-		const up = (u: PointerEvent) => {
-			const d = drag;
-			clear();
-			if (d === null || u.type === 'pointercancel') return;
-			if (!d.moved) {
-				if (d.mode !== 'create') on_event_click?.(d.event);
-				return;
+		return bind_drag({
+			threshold: 4,
+			stop_propagation: true,
+			disabled: () => touch.current || readonly || event?.editable === false,
+			on_start: (down) => {
+				const element = grid;
+				if (element === null) return false;
+				const p = point(down, element);
+				const col = event === undefined ? p.col : days.findIndex((day) => sameDay(day, event.start));
+				const day = days[col];
+				if (day === undefined) return false;
+				const top = event === undefined ? snap(p.y) : px(event.start, day);
+				drag = {
+					...action,
+					col,
+					y0: p.y,
+					y: p.y,
+					top,
+					h: event === undefined ? 0 : px(event.end, day) - top,
+					moved: true
+				};
+				return true;
+			},
+			on_move: ({ event: m }) => {
+				const element = grid;
+				if (drag === null || element === null) return;
+				const q = point(m, element);
+				drag = {
+					...drag,
+					y: q.y,
+					moved: true,
+					col: drag.mode === 'move' && n > 1 ? q.col : drag.col
+				};
+			},
+			on_end: (_endEvent, canceled) => {
+				const d = drag;
+				drag = null;
+				if (d === null) return;
+				suppressClick = true;
+				queueMicrotask(() => {
+					suppressClick = false;
+				});
+				if (canceled) return;
+				const day = days[d.col];
+				if (day === undefined) return;
+				const r = rect(d);
+				const start = toDate(day, r.top),
+					end = toDate(day, r.top + r.h);
+				if (end <= start) return;
+				if (d.mode === 'create') on_event_create?.({ start, end });
+				else on_event_move?.(d.event, start, end);
 			}
-			if (locked) return;
-			const day = days[d.col];
-			if (day === undefined) return;
-			const r = rect(d);
-			const start = toDate(day, r.top),
-				end = toDate(day, r.top + r.h);
-			if (end <= start) return;
-			if (d.mode === 'create') on_event_create?.({ start, end });
-			else on_event_move?.(d.event, start, end);
-		};
-		stop_drag = clear;
-		addEventListener('pointermove', move);
-		addEventListener('pointerup', up);
-		addEventListener('pointercancel', up);
+		});
 	}
+	$effect(() =>
+		register_control({
+			id: 'event-calendar',
+			kind: 'calendar',
+			label: title,
+			state: () => ({
+				view: shown,
+				date: at.toISOString(),
+				event_count: events.length
+			}),
+			items: () => events.map((e) => ({ value: String(e.id), label: e.title })),
+			actions: {
+				set_view: (v) => {
+					const match = views.find((candidate) => candidate === v);
+					if (match !== undefined) pick(match);
+				},
+				previous: () => go(step(shown, at, -1)),
+				next: () => go(step(shown, at, 1)),
+				today: () => go(new Date()),
+				open_event: (id) => {
+					const match = events.find((e) => String(e.id) === String(id));
+					if (match !== undefined) on_event_click?.(match);
+				}
+			}
+		})
+	);
 	/** Under touch a tap on an empty slot creates an hour there. */
 	function tapSlot(e: MouseEvent & { currentTarget: EventTarget & HTMLElement }) {
 		const element = grid;
@@ -315,6 +331,30 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 			addDays(new Date(2024, 0, 1), i).toLocaleDateString(locale, { weekday: 'short' })
 		)
 	);
+	const compactMonthRadio = create_radio_group({
+		items: () => cells.map((d) => String(d.getTime())),
+		value: () => {
+			const match = cells.find((d) => sameDay(d, at));
+			return match !== undefined ? String(match.getTime()) : undefined;
+		},
+		on_change: (key) => {
+			const match = cells.find((d) => String(d.getTime()) === key);
+			if (match !== undefined) go(match);
+		},
+		orientation: 'both'
+	});
+	const weekStripRadio = create_radio_group({
+		items: () => week.map((d) => String(d.getTime())),
+		value: () => {
+			const match = week.find((d) => sameDay(d, at));
+			return match !== undefined ? String(match.getTime()) : undefined;
+		},
+		on_change: (key) => {
+			const match = week.find((d) => String(d.getTime()) === key);
+			if (match !== undefined) go(match);
+		},
+		orientation: 'horizontal'
+	});
 </script>
 
 {#snippet body(e: CalendarEvent, mode: EventRenderContext['mode'])}
@@ -378,13 +418,19 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 
 	{#if shown === 'month' && compact}
 		<div class="min-h-0 flex-1 overflow-auto overscroll-contain" data-calendar-compact>
-			<div class="grid grid-cols-7 px-2 pt-1 text-center">
+			<div
+				class="grid grid-cols-7 px-2 pt-1 text-center"
+				{...compactMonthRadio.root_attrs()}
+				aria-label={title}
+			>
 				{#each weekdays as w (w)}<span class="py-1 text-overline text-muted-foreground">{w}</span
 					>{/each}
 				{#each cells as d (d.getTime())}
 					{@const list = onDay(events, d)}
+					{@const dayKey = String(d.getTime())}
 					<button
-						type="button"
+						{...compactMonthRadio.item_attrs(dayKey)}
+						{@attach compactMonthRadio.item(dayKey)}
 						class={cn(
 							'flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-xs font-semibold [--hit-target:0px]',
 							d.getMonth() !== at.getMonth() && 'text-muted-foreground',
@@ -392,7 +438,6 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 						)}
 						aria-pressed={sameDay(d, at)}
 						data-day={d.getDate()}
-						onclick={() => go(d)}
 					>
 						<span
 							class={cn(
@@ -493,16 +538,22 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		</div>
 	{:else}
 		{#if strip}
-			<div class="grid shrink-0 grid-cols-7 border-b px-2 py-1" data-calendar-strip>
+			<div
+				class="grid shrink-0 grid-cols-7 border-b px-2 py-1"
+				data-calendar-strip
+				{...weekStripRadio.root_attrs()}
+				aria-label={title}
+			>
 				{#each week as d (d.getTime())}
+					{@const dayKey = String(d.getTime())}
 					<button
-						type="button"
+						{...weekStripRadio.item_attrs(dayKey)}
+						{@attach weekStripRadio.item(dayKey)}
 						class={cn(
 							'flex flex-col items-center gap-0.5 rounded-md py-1 [--hit-target:0px]',
 							sameDay(d, at) && 'bg-accent'
 						)}
 						aria-pressed={sameDay(d, at)}
-						onclick={() => go(d)}
 					>
 						<span class="text-tiny text-muted-foreground"
 							>{d.toLocaleDateString(locale, { weekday: 'short' })}</span
@@ -591,14 +642,13 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 					<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 					<div
 						bind:this={grid}
-						{@attach drag_scope}
+						{@attach dragGesture({ mode: 'create' })}
 						data-calendar-grid
 						class={cn(
 							'relative flex-1 bg-surface-active select-none',
 							!readonly && !touch.current && 'touch-none cursor-crosshair'
 						)}
 						style:height="{height}px"
-						onpointerdown={(e) => !readonly && !touch.current && begin(e, { mode: 'create' })}
 						onclick={tapSlot}
 					>
 						{#each columns as column, col (column.day.getTime())}
@@ -632,9 +682,9 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 									tabindex="0"
 									title={editable ? undefined : e.locked_reason}
 									data-event={e.id}
-									onpointerdown={(p) => editable && !touch.current && begin(p, { mode: 'move', event: e })}
+									{@attach dragGesture({ mode: 'move', event: e })}
 									onclick={() => {
-										if (!editable || touch.current) on_event_click?.(e);
+										if (!suppressClick) on_event_click?.(e);
 									}}
 									onkeydown={(k) => {
 										if (k.key === 'Enter' || k.key === ' ') {
@@ -646,10 +696,9 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 									<div class="h-0.75" style:background={e.color ?? 'var(--color-brand)'}></div>
 									<div class="min-w-0 px-1.5 py-1">{@render body(e, 'box')}</div>
 									{#if editable && !touch.current}
-										<!-- svelte-ignore a11y_no_static_element_interactions -->
 										<div
 											class="absolute inset-x-0 bottom-0 h-2.5 cursor-s-resize hover:bg-brand/10"
-											onpointerdown={(p) => begin(p, { mode: 'resize', event: e })}
+											{@attach dragGesture({ mode: 'resize', event: e })}
 										></div>
 									{/if}
 								</div>

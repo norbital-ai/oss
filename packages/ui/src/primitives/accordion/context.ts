@@ -1,10 +1,14 @@
 import { getContext, setContext } from 'svelte';
+import type { Attachment } from 'svelte/attachments';
 
 export type AccordionRootContext = {
 	readonly prefix: string;
 	readonly is_open: (value: string) => boolean;
 	readonly toggle: (value: string) => void;
 	readonly disabled: boolean;
+	readonly register_item: (value: string, disabled: () => boolean) => () => void;
+	readonly trigger_attachment: (value: string) => Attachment<HTMLElement>;
+	readonly on_trigger_focus: (value: string) => void;
 };
 
 export type AccordionItemContext = {

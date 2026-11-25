@@ -74,7 +74,7 @@ in Google Maps; it does not invent road paths or travel times. The map fills its
 
 <script lang="ts" generics="C extends ModelKey">
 	import { Effect } from 'effect';
-	import { Debounced, watch } from '../behaviors/index.js';
+	import { create_dismiss, Debounced, register_control, watch } from '../behaviors/index.js';
 	import { onDestroy } from 'svelte';
 	import type { Map as MapLibre } from 'maplibre-gl';
 	import { attach } from '../effect/index.js';
@@ -230,6 +230,48 @@ in Google Maps; it does not invent road paths or travel times. The map fills its
 	);
 	const card = $derived(selected === null ? undefined : points.find((p) => p.id === selected));
 	let rows: HTMLElement | undefined = $state();
+	const selectionDismiss = create_dismiss({
+		open: () => selected !== null,
+		escape: true,
+		outside: false,
+		on_dismiss: () => {
+			selected = null;
+		}
+	});
+	$effect(() =>
+		register_control({
+			id: `map:${of}`,
+			kind: 'map',
+			label: labelOf(bolt, of),
+			state: () => ({
+				selected,
+				planning,
+				stops: stopIds,
+				count: points.length
+			}),
+			items: () => points.map((p) => ({ value: p.id, label: p.text })),
+			actions: {
+				select: (id) => {
+					if (typeof id === 'string' && points.some((p) => p.id === id)) selected = id;
+				},
+				open: (id) => {
+					if (typeof id === 'string' && points.some((p) => p.id === id)) open(id);
+				},
+				clear_selection: () => {
+					selected = null;
+				},
+				toggle_plan_route: () => {
+					planning = !planning;
+				},
+				add_stop: (id) => {
+					if (typeof id === 'string' && points.some((p) => p.id === id)) addStop(id);
+				},
+				clear_stops: () => {
+					stopIds = [];
+				}
+			}
+		})
+	);
 
 	/** A point on screen, from the world copy nearest the view's centre. */
 	function xy(lat: number, lng: number): { x: number; y: number } {
@@ -465,12 +507,9 @@ in Google Maps; it does not invent road paths or travel times. The map fills its
 			{/if}
 			<!-- Marks take the pointer; hover previews leave the pin clickable. -->
 			<div
+				{@attach selectionDismiss.surface}
 				class="pointer-events-none absolute inset-0 overflow-hidden"
 				data-map-overlay
-				role="presentation"
-				onkeydown={(e) => {
-					if (e.key === 'Escape') selected = null;
-				}}
 			>
 				{#if ready}
 					<svg class="absolute inset-0 size-full" aria-hidden="true">

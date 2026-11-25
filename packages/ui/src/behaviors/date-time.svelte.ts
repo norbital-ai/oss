@@ -648,8 +648,10 @@ function buildWeekdays(locale: string): readonly string[] {
 export function create_calendar(options: CalendarOptions) {
 	const tz = getLocalTimeZone();
 	let internalPlaceholder = $state<DateValue>(today(tz));
+	let focusedDate = $state<CalendarDate | null>(null);
 	let pendingStart = $state<CalendarDate | null>(null);
 	let hovered = $state<CalendarDate | null>(null);
+	const dayNodes = new Map<string, HTMLElement>();
 
 	const mode = $derived(typeof options.mode === 'function' ? options.mode() : (options.mode ?? 'single'));
 	const locale = $derived(options.locale?.() ?? 'en-US');
@@ -664,6 +666,18 @@ export function create_calendar(options: CalendarOptions) {
 		return startOfMonth(toCalendarDate(raw));
 	});
 
+	const activeFocus = $derived.by((): CalendarDate => {
+		if (focusedDate !== null && isSameMonth(focusedDate, anchor)) return focusedDate;
+		const selected = mode === 'range' ? options.range?.().start : options.value?.();
+		if (selected !== undefined) {
+			const cal = toCalendarDate(selected);
+			if (isSameMonth(cal, anchor)) return cal;
+		}
+		const now = today(tz);
+		if (isSameMonth(now, anchor)) return now;
+		return anchor;
+	});
+
 	const months = $derived.by((): readonly CalendarMonth[] =>
 		Array.from({ length: monthCount }, (_, i) => buildMonthGrid(anchor.add({ months: i }), locale))
 	);
@@ -673,6 +687,21 @@ export function create_calendar(options: CalendarOptions) {
 		const normalized = startOfMonth(toCalendarDate(next));
 		internalPlaceholder = normalized;
 		options.on_placeholder_change?.(normalized);
+	}
+
+	function focusDay(target: CalendarDate): void {
+		const min = options.min?.();
+		const max = options.max?.();
+		let next = target;
+		if (min !== undefined && next.compare(toCalendarDate(min)) < 0) next = toCalendarDate(min);
+		if (max !== undefined && next.compare(toCalendarDate(max)) > 0) next = toCalendarDate(max);
+		focusedDate = next;
+		const lastShown = anchor.add({ months: monthCount - 1 });
+		if (next.compare(anchor) < 0 || next.compare(endOfMonth(lastShown)) > 0) {
+			setPlaceholder(next);
+		}
+		const key = next.toString();
+		queueMicrotask(() => dayNodes.get(key)?.focus({ preventScroll: true }));
 	}
 
 	function isDayDisabled(date: CalendarDate): boolean {
@@ -746,10 +775,24 @@ export function create_calendar(options: CalendarOptions) {
 			pendingStart = null;
 			hovered = null;
 		},
+		get focused() {
+			return activeFocus;
+		},
+		focus_day: focusDay,
+		day_ref(date: CalendarDate): Attachment<HTMLElement> {
+			const key = date.toString();
+			return (el) => {
+				dayNodes.set(key, el);
+				return () => {
+					if (dayNodes.get(key) === el) dayNodes.delete(key);
+				};
+			};
+		},
 		day_attrs(date: CalendarDate, month: CalendarDate) {
 			const outside = !isSameMonth(date, month);
 			const off = isDayDisabled(date);
 			const isNow = isToday(date, tz);
+			const isFocused = !outside && !off && isSameDay(date, activeFocus);
 			let selected = false;
 			let isStart = false;
 			let isEnd = false;
@@ -769,7 +812,7 @@ export function create_calendar(options: CalendarOptions) {
 
 			return {
 				role: 'button' as const,
-				tabindex: outside || off ? -1 : 0,
+				tabindex: outside || off ? -1 : isFocused ? 0 : -1,
 				'data-value': date.toString(),
 				'data-selected': selected ? '' : undefined,
 				'data-selection-start': isStart ? '' : undefined,
@@ -779,16 +822,50 @@ export function create_calendar(options: CalendarOptions) {
 				'data-disabled': off ? '' : undefined,
 				'aria-disabled': off ? (true as const) : undefined,
 				'aria-selected': selected,
+				onfocus: () => {
+					if (!outside && !off) focusedDate = date;
+				},
 				onclick: () => {
-					if (!outside && !off) selectDay(date);
+					if (!outside && !off) {
+						focusedDate = date;
+						selectDay(date);
+					}
 				},
 				onpointerenter: () => {
 					if (mode === 'range' && pendingStart !== null && !outside && !off) hovered = date;
 				},
 				onkeydown: (e: KeyboardEvent) => {
+					const rtl =
+						e.currentTarget instanceof HTMLElement &&
+						getComputedStyle(e.currentTarget).direction === 'rtl';
+					const h = rtl ? -1 : 1;
 					if (e.key === 'Enter' || e.key === ' ') {
 						e.preventDefault();
 						if (!outside && !off) selectDay(date);
+					} else if (e.key === 'ArrowRight') {
+						e.preventDefault();
+						focusDay(date.add({ days: h }));
+					} else if (e.key === 'ArrowLeft') {
+						e.preventDefault();
+						focusDay(date.add({ days: -h }));
+					} else if (e.key === 'ArrowDown') {
+						e.preventDefault();
+						focusDay(date.add({ weeks: 1 }));
+					} else if (e.key === 'ArrowUp') {
+						e.preventDefault();
+						focusDay(date.subtract({ weeks: 1 }));
+					} else if (e.key === 'Home') {
+						e.preventDefault();
+						focusDay(startOfWeek(date, locale));
+					} else if (e.key === 'End') {
+						e.preventDefault();
+						focusDay(startOfWeek(date, locale).add({ days: 6 }));
+					} else if (e.key === 'PageDown') {
+						e.preventDefault();
+						focusDay(e.shiftKey ? date.add({ years: 1 }) : date.add({ months: 1 }));
+					} else if (e.key === 'PageUp') {
+						e.preventDefault();
+						focusDay(e.shiftKey ? date.subtract({ years: 1 }) : date.subtract({ months: 1 }));
 					}
 				}
 			};

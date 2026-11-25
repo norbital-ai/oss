@@ -4,7 +4,7 @@
 	import { Effect, Option, Schema } from 'effect';
 	import { csv_delimiter, csv_rows, csv_text } from '../../engine/files/csv.ts';
 	import { Cluster } from '@norbital-ai/ui/layout';
-	import { watch } from '@norbital-ai/ui/behaviors';
+	import { create_file_dropzone, watch } from '@norbital-ai/ui/behaviors';
 	import {
 		Button,
 		Checkbox,
@@ -191,7 +191,14 @@
 	const MAX = 1000;
 	const TEMPLATE = `data:text/csv;charset=utf-8,${encodeURIComponent('email,phone,team,external\nana@example.com,,,false\n,+60123456789,,false\n')}`;
 	let csv = $state<{ name: string; rows: Invite[]; errors: string[] } | null>(null);
-	let over = $state(false);
+	const csvDrop = create_file_dropzone({
+		accept: ['.csv', 'text/csv'],
+		max_files: 1,
+		on_files: ({ accepted }) => {
+			const file = accepted[0];
+			if (file !== undefined) fork(load(file));
+		}
+	});
 	const line = (key: string, n: number, team = '') =>
 		t(key).replace('{n}', String(n)).replace('{team}', team);
 	function parse(name: string, text: string): void {
@@ -592,32 +599,17 @@
 		<label
 			class={[
 				'flex cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed px-4 py-8 text-center text-sm',
-				over ? 'border-brand bg-brand-muted' : 'bg-muted/20'
+				csvDrop.dragging ? 'border-brand bg-brand-muted' : 'bg-muted/20'
 			]}
-			ondragover={(e) => {
-				e.preventDefault();
-				over = true;
-			}}
-			ondragleave={() => (over = false)}
-			ondrop={(e) => {
-				e.preventDefault();
-				over = false;
-				const file = e.dataTransfer?.files[0];
-				if (file !== undefined) fork(load(file));
-			}}
+			{@attach csvDrop.zone}
 			data-invite-drop
 		>
 			<Icon name="lucide:upload" class="size-5 text-muted-foreground" />
 			<span>{csv?.name ?? t('Drop a CSV file here, or click to choose one.')}</span>
 			<input
-				type="file"
-				accept=".csv,text/csv"
+				{@attach csvDrop.input}
+				{...csvDrop.input_attrs()}
 				class="sr-only"
-				onchange={(e) => {
-					const file = e.currentTarget.files?.[0];
-					if (file !== undefined) fork(load(file));
-					e.currentTarget.value = '';
-				}}
 			/>
 		</label>
 		<p class="text-meta">

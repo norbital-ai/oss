@@ -5,6 +5,7 @@ A checkbox, bindable `checked` (and `indeterminate`). `readonly` (or an enclosin
 -->
 <script lang="ts">
 	import type { HTMLButtonAttributes } from 'svelte/elements';
+	import { register_control } from '../../behaviors/index.js';
 	import { Inline } from '../../layout/index.js';
 	import CopyText from '../copy-text/copy-text.svelte';
 	import { cn, use_controls, ui_text, type WithElementRef, type WithoutChildrenOrChild } from '../utils.js';
@@ -47,7 +48,21 @@ A checkbox, bindable `checked` (and `indeterminate`). `readonly` (or an enclosin
 	const controls = use_controls();
 	const t = ui_text();
 	const isDisabled = $derived(Boolean(disabled ?? controls.disabled));
+	const isReadonly = $derived(Boolean(readonly ?? controls.readonly));
 	const dataState = $derived(indeterminate ? 'indeterminate' : checked ? 'checked' : 'unchecked');
+	const controlId = $derived(
+		restProps.id ?? name ?? restProps['aria-label'] ?? undefined
+	);
+
+	function setChecked(next: boolean): void {
+		if (isDisabled || isReadonly || next === checked) return;
+		if (indeterminate) {
+			indeterminate = false;
+			on_indeterminate_change?.(false);
+		}
+		checked = next;
+		on_checked_change?.(next);
+	}
 
 	function toggle(): void {
 		if (isDisabled) return;
@@ -59,6 +74,25 @@ A checkbox, bindable `checked` (and `indeterminate`). `readonly` (or an enclosin
 		checked = next;
 		on_checked_change?.(next);
 	}
+
+	$effect(() => {
+		if (isReadonly || isDisabled || controlId === undefined) return;
+		const ariaLabel = restProps['aria-label'];
+		return register_control({
+			id: `checkbox:${controlId}`,
+			kind: 'checkbox',
+			...(typeof ariaLabel === 'string' ? { label: ariaLabel } : {}),
+			element: () => ref,
+			disabled: () => isDisabled || isReadonly,
+			state: () => ({ checked, indeterminate }),
+			actions: {
+				toggle,
+				set: (v) => {
+					if (typeof v === 'boolean') setChecked(v);
+				}
+			}
+		});
+	});
 	function handleClick(
 		e: MouseEvent & { currentTarget: EventTarget & HTMLButtonElement }
 	): void {

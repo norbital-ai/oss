@@ -1,9 +1,14 @@
-// The current tab's closed page bridge: find a link/card/button or a writable text field by its visible label, and
-// fill a field with native events. No selector, script or password/file field enters this module, and an approval is
-// never a target: the person decides those themselves.
+// The current tab's closed page bridge: find a link/card/button, writable text field or registered
+// UI control by its visible label or ref, and drive it safely with native events or semantic actions.
+// No selector, script or password/file field enters this module, and approvals, `data-agent-hidden`
+// elements and `data-agent-confirm` mutations stay under the person's explicit authority.
 import { fork, run } from '@norbital-ai/ui/effect';
 import { confirm_action } from '@norbital-ai/ui';
-import { describe_controls } from '@norbital-ai/ui/behaviors';
+import {
+	describe_controls,
+	invoke_control,
+	resolve_control
+} from '@norbital-ai/ui/behaviors';
 import { Effect } from 'effect';
 import type { PageResult } from '../../protocol/schema.ts';
 import type { ShellApi } from '../api-types.ts';
@@ -15,6 +20,28 @@ const normalized = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerC
 /** An approval panel, footer approval controls, or a held approval card: its controls decide a request, so the page bridge never reaches them. */
 const approvalOf = (el: Element): boolean =>
 	el.closest('[data-view="approval"], [data-view="approval-controls"], [data-approval]') !== null;
+
+/** Explicitly hidden from agents (`data-agent-hidden` or `aria-hidden="true"`). */
+const agentHiddenOf = (el: Element): boolean =>
+	el.closest('[data-agent-hidden], [aria-hidden="true"]') !== null;
+
+/** Author-supplied confirmation sentence (`data-agent-confirm="..."`) on an element or ancestor. */
+const agentConfirmOf = (el: Element): string | undefined => {
+	const raw = el.closest<HTMLElement>('[data-agent-confirm]')?.getAttribute('data-agent-confirm')?.trim();
+	return raw !== undefined && raw !== '' ? raw : undefined;
+};
+
+/** View-only control actions that inspect or navigate chrome without mutating workspace records. */
+const SAFE_CONTROL_ACTIONS = new Set([
+	'open',
+	'close',
+	'expand',
+	'collapse',
+	'previous',
+	'next',
+	'go',
+	'toggle_fullscreen'
+]);
 
 /** The page content and its sheets; the agent panel itself is never a target. */
 function pageRoots(): HTMLElement[] {
@@ -61,6 +88,7 @@ export function pageClickable(text: string): HTMLElement | null {
 		.filter(
 			(el) =>
 				!approvalOf(el) &&
+				!agentHiddenOf(el) &&
 				!el.hasAttribute('disabled') &&
 				el.getAttribute('aria-disabled') !== 'true' &&
 				el.getClientRects().length > 0
@@ -76,7 +104,7 @@ export function pageClickable(text: string): HTMLElement | null {
 	);
 }
 
-/** What the page shows, for Norbius: headings, controls and registered UI control states, never a field's value. */
+/** What the page shows, for Norbius: headings, controls and registered UI control states, never a secret field's value. */
 export function pageScreen(): string {
 	const seen = pageRoots()
 		.flatMap((root) => [
@@ -84,7 +112,7 @@ export function pageScreen(): string {
 				'h1, h2, h3, [role="heading"], th, a[href], button, [role="button"], [role="tab"]'
 			)
 		])
-		.filter((el) => el.getClientRects().length > 0)
+		.filter((el) => !agentHiddenOf(el) && el.getClientRects().length > 0)
 		.map(pageLabel)
 		.filter((label) => label !== '');
 	const controls = describe_controls();
@@ -101,7 +129,12 @@ export function pageMark(text: string): HTMLElement | null {
 			.flatMap((root) => [
 				...root.querySelectorAll<HTMLElement>('h1, h2, h3, [role="heading"], th, label')
 			])
-			.find((el) => el.getClientRects().length > 0 && normalized(pageLabel(el)).includes(needle)) ??
+			.find(
+				(el) =>
+					!agentHiddenOf(el) &&
+					el.getClientRects().length > 0 &&
+					normalized(pageLabel(el)).includes(needle)
+			) ??
 		null
 	);
 }
@@ -135,6 +168,7 @@ export function pageField(label: string): HTMLElement | null {
 		.filter(
 			(el) =>
 				!approvalOf(el) &&
+				!agentHiddenOf(el) &&
 				!el.hasAttribute('disabled') &&
 				!el.hasAttribute('readonly') &&
 				el.getAttribute('aria-disabled') !== 'true' &&
@@ -195,6 +229,63 @@ export function clientPageAction({ api, eligible, navigate, open_external, close
 			// a hidden or ineligible tab stays silent: a second tab must never overwrite the acting tab's result
 			if (!eligible()) return;
 			const act = () => {
+				if (action.control !== undefined) {
+					const req = action.control;
+					const resolved = resolve_control(req.ref);
+					if ('error' in resolved) {
+						ack({ ok: false, note: resolved.error });
+						return;
+					}
+					const el = resolved.entry.element?.() ?? null;
+					if (el !== null && (approvalOf(el) || el.closest('[data-agent]') !== null)) {
+						ack({ ok: false, note: 'That control is outside the page bridge scope.' });
+						return;
+					}
+					const args = req.args ?? [];
+					const label = resolved.snapshot.label ?? resolved.entry.id;
+					const customConfirm = resolved.snapshot.confirm;
+					const needsConfirm =
+						customConfirm !== undefined || !SAFE_CONTROL_ACTIONS.has(req.action);
+					if (!needsConfirm) {
+						const out = invoke_control(resolved.entry.id, req.action, args);
+						ack({
+							ok: out.ok,
+							note: out.ok ? `Ran “${req.action}” on “${label}”.` : (out.error ?? 'Control action failed.')
+						});
+						return;
+					}
+					fork(
+						confirm_action({
+							title: t('Norbius wants to use this page'),
+							body:
+								customConfirm ??
+								t('Run “{action}” on “{control}”? It can change your workspace.')
+									.replace('{action}', req.action)
+									.replace('{control}', label),
+							confirm_label: t('Continue'),
+							destructive: customConfirm !== undefined
+						}).pipe(
+							Effect.tap((yes) =>
+								Effect.sync(() => {
+									if (!yes) {
+										ack({ ok: false, note: 'The person declined.' });
+										return;
+									}
+									const out = invoke_control(resolved.entry.id, req.action, args, {
+										allow_confirm: true
+									});
+									ack({
+										ok: out.ok,
+										note: out.ok
+											? `Ran “${req.action}” on “${label}”.`
+											: (out.error ?? 'Control action failed.')
+									});
+								})
+							)
+						)
+					);
+					return;
+				}
 				if (action.highlight !== undefined) {
 					const target = pageMark(action.highlight);
 					if (target === null) {
@@ -232,13 +323,21 @@ export function clientPageAction({ api, eligible, navigate, open_external, close
 						ack({ ok: false, note: `No visible field “${fill.label}”.` });
 						return;
 					}
-					const shown = fill.text.length > 120 ? `${fill.text.slice(0, 120)}…` : fill.text;
+					const secret = field.closest('[data-agent-secret]') !== null;
+					const shown = secret
+						? '[redacted]'
+						: fill.text.length > 120
+							? `${fill.text.slice(0, 120)}…`
+							: fill.text;
+					const customConfirm = agentConfirmOf(field);
 					fork(
 						confirm_action({
 							title: t('Norbius wants to type into this page'),
-							body: t('Fill “{field}” with “{value}”? It can change your workspace.')
-								.replace('{field}', pageFieldLabel(field) || fill.label)
-								.replace('{value}', shown),
+							body:
+								customConfirm ??
+								t('Fill “{field}” with “{value}”? It can change your workspace.')
+									.replace('{field}', pageFieldLabel(field) || fill.label)
+									.replace('{value}', shown),
 							confirm_label: t('Fill it'),
 							destructive: true
 						}).pipe(
@@ -296,13 +395,16 @@ export function clientPageAction({ api, eligible, navigate, open_external, close
 					ack({ ok: false, note: 'That link is outside the workspace.' });
 					return;
 				}
+				const customConfirm = agentConfirmOf(control);
 				fork(
 					confirm_action({
 						title: t('Norbius wants to use this page'),
-						body: t('Press “{control}”? It can change your workspace.').replace(
-							'{control}',
-							pageLabel(control) || action.click
-						),
+						body:
+							customConfirm ??
+							t('Press “{control}”? It can change your workspace.').replace(
+								'{control}',
+								pageLabel(control) || action.click
+							),
 						confirm_label: t('Press it'),
 						destructive: true
 					}).pipe(

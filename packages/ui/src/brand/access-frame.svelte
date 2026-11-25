@@ -9,6 +9,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import logo from '../../assets/logo.svg';
+	import { create_menu } from '../behaviors/index.js';
 	import Badge from '../primitives/badge/badge.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import * as Popover from '../primitives/popover/index.js';
@@ -65,6 +66,22 @@
 		);
 	});
 
+	const langMenu = create_menu({
+		open: () => langOpen,
+		on_open_change: (next) => (langOpen = next),
+		items: () =>
+			languages.map((item) => ({
+				id: item.code,
+				label: item.label,
+				role: 'menuitemradio' as const,
+				checked: item.code === activeCode,
+				on_select: () => {
+					langOpen = false;
+					on_locale(item.code);
+				}
+			}))
+	});
+
 	const badge = $derived.by(() => {
 		const e = environment?.trim() ?? '';
 		return e === '' || e === 'production' ? null : e === 'development' ? 'local' : e;
@@ -117,17 +134,14 @@
 								{/snippet}
 							</Popover.Trigger>
 							<Popover.Content align="end" side_offset={6} class="w-44 p-1">
-								<div role="menu" aria-label={labels.switchLanguage} class="flex flex-col gap-0.5">
+								<div {...langMenu.menu_attrs()} aria-label={labels.switchLanguage} class="flex flex-col gap-0.5">
 									{#each languages as item (item.code)}
 										{@const active = item.code === activeCode}
+										{@const itemAttrs = langMenu.item_attrs(item.code)}
 										<button
 											type="button"
-											role="menuitemradio"
-											aria-checked={active}
-											onclick={() => {
-												langOpen = false;
-												on_locale(item.code);
-											}}
+											{...itemAttrs}
+											{@attach langMenu.item(item.code)}
 											class={cn(
 												'flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
 												active && 'font-medium text-foreground'

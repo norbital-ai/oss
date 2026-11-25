@@ -21,8 +21,7 @@
 	} from 'effect';
 	import { updating } from '../protocol/client.ts';
 	import { onMount, setContext, tick, type Component } from 'svelte';
-	import { watch } from '@norbital-ai/ui/behaviors';
-	import { PersistedState } from '@norbital-ai/ui/behaviors';
+	import { create_shortcuts, PersistedState, watch } from '@norbital-ai/ui/behaviors';
 	import { MediaQuery, SvelteMap } from 'svelte/reactivity';
 	import {
 		AppHeader,
@@ -110,8 +109,7 @@
 	import { resolve_device } from '../page/device.ts';
 	import { deviceSession, open_external } from './device-session.ts';
 	import { NoticesReadAnswer } from './api-types.ts';
-	import { commandKey } from './keyboard.ts';
-	import { readPreference, writePreference } from './preferences.ts';
+	import { readPreference } from './preferences.ts';
 
 	let { config }: { config: ShellMountConfig } = $props();
 
@@ -305,7 +303,7 @@
 			const language = preferences.locale ?? config.manifest.workspace.locale;
 			if (!savingLocale && language !== locale) fork(setLocale(language));
 			chimes = preferences.sounds ?? true;
-			writePreference(chimeKey, chimes ? 'on' : 'off');
+			if (chimeStore !== null) chimeStore.current = chimes;
 			emailNotifications = preferences.email_notifications ?? true;
 		}
 	);
@@ -322,10 +320,20 @@
 		typeof AudioContext === 'undefined' ? 'unavailable' : 'needs-gesture'
 	);
 	const chimeKey = $derived(boot?.actor?.kind === 'member' ? `bolt.sounds:${boot.actor.id}` : null);
+	const chimeStore = $derived(
+		chimeKey === null
+			? null
+			: new PersistedState<boolean>(chimeKey, true, {
+					serializer: {
+						serialize: (v) => (v ? 'on' : 'off'),
+						deserialize: (raw) => raw !== 'off'
+					}
+				})
+	);
 	watch(
-		() => chimeKey,
-		(key) => {
-			chimes = key !== null && readPreference(key) !== 'off';
+		() => chimeStore,
+		(store) => {
+			chimes = store !== null ? store.current : false;
 		}
 	);
 	const sounds = createSounds(
@@ -342,7 +350,7 @@
 			return;
 		}
 		chimes = enabled;
-		writePreference(chimeKey, enabled ? 'on' : 'off');
+		if (chimeStore !== null) chimeStore.current = enabled;
 		if (enabled) void sounds.test();
 	};
 	const chooseEmailNotifications = (enabled: boolean) => {
@@ -795,23 +803,33 @@
 			if (scope !== null) finding = true;
 		}
 	);
-	function shortcut(event: KeyboardEvent): void {
-		if (!commandKey(event) || boot === null || boot.visitor !== null) return;
-		if (event.key === '/') {
-			event.preventDefault();
-			finding = !finding;
-			return;
+	create_shortcuts(() => [
+		{
+			keys: 'mod+/',
+			allow_in_input: true,
+			enabled: () => boot !== null && boot.visitor === null,
+			handler: () => {
+				finding = !finding;
+			}
+		},
+		{
+			keys: 'mod+b',
+			allow_in_input: true,
+			enabled: () => boot !== null && boot.visitor === null && !narrow.current,
+			handler: () => {
+				expanded.current = !expanded.current;
+			}
+		},
+		{
+			keys: 'mod+k',
+			allow_in_input: true,
+			enabled: () => boot !== null && boot.visitor === null && boot.surfaces.agent,
+			handler: () => {
+				if (agentRequest === null) agent.open();
+				else agent.close();
+			}
 		}
-		if (event.key.toLowerCase() === 'b' && !narrow.current) {
-			event.preventDefault();
-			expanded.current = !expanded.current;
-			return;
-		}
-		if (event.key.toLowerCase() !== 'k' || !boot.surfaces.agent) return;
-		event.preventDefault();
-		if (agentRequest === null) agent.open();
-		else agent.close();
-	}
+	]);
 	// the live link's state; `closed` means a release closed it: it comes back, and another client reloads
 	let sync = $state<SyncStatus>('idle');
 	// a release cutover holds the host closed for seconds: requests wait it out, and one notice says why
@@ -973,7 +991,7 @@
 	</Inline>
 {/if}
 
-<svelte:window onpopstate={() => (url = here())} onkeydown={shortcut} />
+<svelte:window onpopstate={() => (url = here())} />
 
 {#snippet openingFeature()}
 	<div

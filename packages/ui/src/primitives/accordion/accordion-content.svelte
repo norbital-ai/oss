@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
+	import { bind_findable } from '../../behaviors/index.js';
 	import { cn } from '../utils.js';
 	import { slide } from 'svelte/transition';
 	import { get_accordion_item } from './context.js';
@@ -15,12 +16,12 @@
 		class: className,
 		children,
 		force_mount = true,
-		hidden_until_found,
+		hidden_until_found = false,
 		...restProps
 	}: HTMLAttributes<HTMLDivElement> & {
 		/** Keep the transition container mounted cleanly (default `true`). */
 		force_mount?: boolean;
-		/** Optional HTML `hidden="until-found"` flag. */
+		/** Keep closed content findable via Ctrl/Cmd+F (`hidden="until-found"` + `beforematch` reveal). */
 		hidden_until_found?: boolean;
 		/** Collapsible body content. */
 		children?: Snippet;
@@ -34,7 +35,28 @@
 			: 180;
 </script>
 
-{#if open}
+{#if hidden_until_found && force_mount}
+	<div
+		id={item?.content_id}
+		role="region"
+		aria-labelledby={item?.trigger_id}
+		data-slot="accordion-content"
+		data-state={open ? 'open' : 'closed'}
+		class={cn('overflow-clip text-sm', className)}
+		{@attach bind_findable({
+			open: () => open,
+			findable: () => true,
+			on_reveal: () => {
+				if (!open) item?.toggle();
+			}
+		})}
+		{...restProps}
+	>
+		<div class="pt-0 pb-4">
+			{@render children?.()}
+		</div>
+	</div>
+{:else if open}
 	<div
 		id={item?.content_id}
 		role="region"
@@ -49,13 +71,4 @@
 			{@render children?.()}
 		</div>
 	</div>
-{:else if hidden_until_found && force_mount}
-	<div
-		id={item?.content_id}
-		role="region"
-		aria-labelledby={item?.trigger_id}
-		data-slot="accordion-content"
-		data-state="closed"
-		hidden
-	></div>
 {/if}

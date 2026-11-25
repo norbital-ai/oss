@@ -4,7 +4,7 @@
 	import { Badge, Button, Icon, ReadonlyMarkdown, StructuredData, virtual_list, type UiContext } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { watch } from '@norbital-ai/ui/behaviors';
+	import { create_clipboard, watch } from '@norbital-ai/ui/behaviors';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 	import type { LogRow } from '@norbital-ai/host-api';
 	import type { ShellApi } from '../api-types.ts';
@@ -340,13 +340,15 @@
 	);
 	/** The "Open page" row's link is the URL the person shares, not the logical path it shows. */
 	let copiedNavigation = $state<string | null>(null);
+	const navClipboard = create_clipboard({ text: '' });
 	function copyNavigation(path: string): void {
-		const clipboard = navigator.clipboard;
-		if (clipboard === undefined) return;
 		const url = new URL(based(path), location.href).href;
 		dispatch(
 			Effect.tryPromise({
-				try: () => clipboard.writeText(url),
+				try: async () => {
+					const ok = await navClipboard.copy(url);
+					if (!ok) throw new Error('copy failed');
+				},
 				catch: (cause) =>
 					new AgentPanelFailed({ message: t('The link could not be copied.'), cause })
 			}).pipe(
@@ -366,12 +368,14 @@
 	}
 	/** A sent message's text, copied from the actions under it. */
 	let copiedMessage = $state<string | null>(null);
+	const msgClipboard = create_clipboard({ text: '' });
 	function copyMessage(row: AgentRow): void {
-		const clipboard = navigator.clipboard;
-		if (clipboard === undefined) return;
 		dispatch(
 			Effect.tryPromise({
-				try: () => clipboard.writeText(row.text ?? ''),
+				try: async () => {
+					const ok = await msgClipboard.copy(row.text ?? '');
+					if (!ok) throw new Error('copy failed');
+				},
 				catch: (cause) =>
 					new AgentPanelFailed({ message: t('The text could not be copied.'), cause })
 			}).pipe(
@@ -411,12 +415,13 @@
 				b.className =
 					'absolute top-1.5 right-1.5 rounded-md bg-background/80 px-1.5 py-0.5 text-xs text-muted-foreground opacity-0 transition-opacity group-hover/code:opacity-100 focus-visible:opacity-100 hover:text-foreground';
 				b.onclick = () => {
-					const clipboard = navigator.clipboard;
-					if (clipboard === undefined) return;
 					const text = pre.querySelector('code')?.textContent ?? '';
 					dispatch(
 						Effect.tryPromise({
-							try: () => clipboard.writeText(text),
+							try: async () => {
+								const ok = await msgClipboard.copy(text);
+								if (!ok) throw new Error('copy failed');
+							},
 							catch: (cause) =>
 								new AgentPanelFailed({ message: t('The text could not be copied.'), cause })
 						}).pipe(

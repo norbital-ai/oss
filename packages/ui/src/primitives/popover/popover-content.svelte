@@ -3,6 +3,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import {
 		create_floating,
+		create_presence,
 		portal,
 		type FloatingAlign,
 		type FloatingSide,
@@ -37,6 +38,8 @@
 		on_escape_keydown,
 		escape_keydown_behavior = 'close',
 		force_mount = false,
+		onpointerenter,
+		onpointerleave,
 		children,
 		...restProps
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>, HTMLElement> & {
@@ -90,6 +93,7 @@
 	const popover = get_popover_context();
 	const open = $derived(popover?.open ?? false);
 
+	const presence = create_presence({ open: () => open });
 	const floating = create_floating({
 		open: () => open,
 		anchor: () => custom_anchor ?? popover?.trigger_el ?? null,
@@ -149,9 +153,17 @@
 	const combinedStyle = $derived(
 		[floating.style, constrainedWidthStyle, style].filter(Boolean).join(' ')
 	);
+
+	$effect(() => {
+		const el = ref;
+		if (el !== null) popover?.set_content(el);
+		return () => {
+			if (el !== null && popover?.content_el === el) popover.set_content(null);
+		};
+	});
 </script>
 
-{#if open || force_mount}
+{#if presence.present || force_mount}
 	<div
 		{@attach portal(portal_props?.disabled ? null : portal_props?.to)}
 		class="contents"
@@ -161,11 +173,20 @@
 			bind:this={ref}
 			id={popover?.content_id}
 			{@attach floating.content}
+			{@attach presence.attach}
 			data-slot="popover-content"
 			data-state={open ? 'open' : 'closed'}
 			data-side={floating.side}
 			data-positioned={floating.positioned ? 'true' : undefined}
 			style={combinedStyle}
+			onpointerenter={(e) => {
+				popover?.hover_enter(e);
+				onpointerenter?.(e);
+			}}
+			onpointerleave={(e) => {
+				popover?.hover_leave(e);
+				onpointerleave?.(e);
+			}}
 			class={cn(
 				'z-50 max-h-[calc(100dvh-1rem)] origin-[var(--floating-origin-x,50%)_var(--floating-origin-y,50%)] overflow-y-auto overscroll-contain rounded-control border bg-popover text-popover-foreground shadow-deep outline-hidden animation-duration-180 ease-spring motion-reduce:animate-none data-[side=bottom]:slide-in-from-top-[2px] data-[side=left]:slide-in-from-right-[2px] data-[side=right]:slide-in-from-left-[2px] data-[side=top]:slide-in-from-bottom-[2px] data-[state=closed]:pointer-events-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:fill-mode-forwards data-[positioned=true]:data-[state=open]:animate-in data-[positioned=true]:data-[state=open]:fade-in-0 data-[positioned=true]:data-[state=open]:zoom-in-95',
 				needsWidthConstraints ? '' : 'p-4',

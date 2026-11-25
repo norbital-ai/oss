@@ -38,7 +38,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 	import { cn, ui_text } from '../utils.js';
 	import { TAB_LEVEL, tabLevel, tabVariant } from './level.js';
 	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
-	import { create_overflow, register_control } from '../../behaviors/index.js';
+	import { create_overflow, create_roving_focus, register_control } from '../../behaviors/index.js';
 	import OverflowTrigger from './overflow-trigger.svelte';
 
 	let { items, value, on_value_change, label, level, class: className }: TabStripProps = $props();
@@ -52,6 +52,14 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 		key: (item) => item.name,
 		active: () => value
 	});
+	const roving = create_roving_focus({
+		items: () => strip.visible.map((item) => item.name),
+		active: () => value,
+		on_active_change: (next) => {
+			if (!links) on_value_change?.(next);
+		},
+		orientation: 'horizontal'
+	});
 	$effect(() => {
 		const id = `tab-strip:${label}`;
 		return register_control({
@@ -62,6 +70,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 				active: value,
 				items: items.map((item) => item.name)
 			}),
+			items: () => items.map((item) => ({ value: item.name, label: item.title })),
 			actions: !links && on_value_change
 				? {
 						select: (name) => {
@@ -97,6 +106,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 	aria-label={label}
 	class={listClass}
 	data-tabs-variant={variant}
+	onkeydown={links ? undefined : roving.root_attrs().onkeydown}
 >
 	{#each strip.visible as item (item.name)}
 		{#if links}
@@ -107,11 +117,15 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 				class={trigger}>{@render content(item)}</a
 			>
 		{:else}
+			{@const rov = roving.item_attrs(item.name)}
 			<button
 				type="button"
 				role="tab"
 				aria-selected={item.name === value}
 				data-state={item.name === value ? 'active' : 'inactive'}
+				tabindex={rov.tabindex}
+				{@attach roving.item(item.name)}
+				onfocus={rov.onfocus}
 				class={trigger}
 				onclick={() => on_value_change?.(item.name)}>{@render content(item)}</button
 			>

@@ -78,10 +78,13 @@ export function create_dismiss(options: DismissOptions) {
 			options.on_dismiss('outside', event);
 		};
 
-		document.addEventListener('keydown', onKeydown);
+		const hasWindow = typeof window !== 'undefined';
+		if (hasWindow) window.addEventListener('keydown', onKeydown);
+		else document.addEventListener('keydown', onKeydown);
 		document.addEventListener('pointerdown', onPointerdown, true);
 		return () => {
-			document.removeEventListener('keydown', onKeydown);
+			if (hasWindow) window.removeEventListener('keydown', onKeydown);
+			else document.removeEventListener('keydown', onKeydown);
 			document.removeEventListener('pointerdown', onPointerdown, true);
 			untrack(() => popLayer(entry));
 		};

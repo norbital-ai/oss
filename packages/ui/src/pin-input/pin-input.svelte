@@ -54,6 +54,7 @@ A one-time code in separate digit cells: the sign-in code step. Digits only, `on
 	}: Props = $props();
 
 	const invalid = $derived(ariaInvalid === true || ariaInvalid === 'true');
+	const uid = $props.id();
 	const pin = create_pin_input({
 		length: () => maxlength,
 		value: () => value,
@@ -63,7 +64,12 @@ A one-time code in separate digit cells: the sign-in code step. Digits only, `on
 			value = next;
 			on_value_change?.(next);
 		},
-		on_complete: (code) => untrack(() => on_complete?.(code))
+		on_complete: (code) => untrack(() => on_complete?.(code)),
+		control: {
+			id: `pin-input:${untrack(() => input_id ?? name ?? uid)}`,
+			secret: true,
+			element: () => input_ref
+		}
 	});
 
 	$effect(() => {

@@ -7,8 +7,8 @@
 <script lang="ts">
 	import { attach, observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect, Queue, Schema } from 'effect';
-	import { getContext } from 'svelte';
-	import { watch } from '@norbital-ai/ui/behaviors';
+	import { getContext, tick } from 'svelte';
+	import { create_roving_focus, watch } from '@norbital-ai/ui/behaviors';
 	import { SOUNDS, noticeArrivals, type Sounds } from './sounds.ts';
 	import { Button, Icon, Popover, Spinner, cn } from '@norbital-ai/ui';
 	import { Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
@@ -43,8 +43,7 @@
 	const sorted = $derived(sortNotices($notices?.rows ?? []));
 	const unread = $derived($notices?.unread ?? 0);
 	let open = $state(false),
-		showWorkspace = $state(false),
-		list = $state<HTMLElement | null>(null);
+		showWorkspace = $state(false);
 	let read_open = $state(false);
 	let read_on_open = $state<ReadonlySet<string> | null>(null);
 	// Reading a line changes its styling now; it moves into history only on the next open.
@@ -89,23 +88,59 @@
 		open = false;
 		on_navigate(notice_path(newest.link));
 	}
-	const lines = () => [...(list?.querySelectorAll<HTMLElement>('[data-notice], [data-notice-toggle]') ?? [])];
+	const rowKeys = $derived.by((): readonly string[] => {
+		const out: string[] = [];
+		if (for_you.length + workspace.length > 0) {
+			for (const g of for_you) if (g.rows[0] !== undefined) out.push(`personal:${g.key}`);
+			if (workspace.length > 0) {
+				if (for_you.length > 0) out.push('toggle:workspace');
+				if (workspaceShown) {
+					for (const g of workspace) if (g.rows[0] !== undefined) out.push(`workspace:${g.key}`);
+				}
+			}
+		}
+		if (read_count > 0) {
+			out.push('toggle:read');
+			if (read_open) {
+				for (const g of read_for_you)
+					if (g.rows[0] !== undefined) out.push(`read-personal:${g.key}`);
+				for (const g of read_workspace)
+					if (g.rows[0] !== undefined) out.push(`read-workspace:${g.key}`);
+			}
+		}
+		return out;
+	});
+	const roving = create_roving_focus({
+		items: () => rowKeys,
+		orientation: 'vertical',
+		loop: false
+	});
 	function onListKey(event: KeyboardEvent): void {
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		const all = lines();
-		const at = all.findIndex((line) => line === document.activeElement);
-		const move = (by: number) => {
-			event.preventDefault();
-			all[Math.max(0, Math.min(all.length - 1, at + by))]?.focus();
-		};
-		if (event.key === 'ArrowDown' || event.key === 'j') move(1);
-		else if (event.key === 'ArrowUp' || event.key === 'k') move(-1);
-		else if (event.key === 'u' && at >= 0) {
-			const key = all[at]?.dataset['notice'];
-			mark_read(
-				(all[at]?.dataset['noticeScope'] === 'workspace' ? sorted.workspace : sorted.forYou).find((group) => group.key === key)?.unread ?? []
-			);
+		if (event.key === 'j' || event.key === 'k') {
+			const keys = rowKeys;
+			const cur = roving.active !== undefined ? keys.indexOf(roving.active) : -1;
+			const next = keys[Math.max(0, Math.min(keys.length - 1, cur + (event.key === 'j' ? 1 : -1)))];
+			if (next !== undefined) {
+				event.preventDefault();
+				roving.focus(next);
+			}
+			return;
 		}
+		if (event.key === 'u') {
+			const active = roving.active;
+			if (active === undefined) return;
+			const sep = active.indexOf(':');
+			const kind = sep > 0 ? active.slice(0, sep) : '';
+			const key = sep > 0 ? active.slice(sep + 1) : '';
+			if (kind === 'personal' || kind === 'read-personal') {
+				mark_read(sorted.forYou.find((group) => group.key === key)?.unread ?? []);
+			} else if (kind === 'workspace' || kind === 'read-workspace') {
+				mark_read(sorted.workspace.find((group) => group.key === key)?.unread ?? []);
+			}
+			return;
+		}
+		roving.root_attrs().onkeydown(event);
 	}
 	class AppBadgeFailed extends Schema.TaggedError<AppBadgeFailed>()('AppBadgeFailed', {
 		operation: Schema.Literals(['set', 'clear']),
@@ -162,12 +197,14 @@
 	);
 </script>
 
-{#snippet section(groups: readonly NoticeGroup[], scope: 'personal' | 'workspace')}
+{#snippet section(groups: readonly NoticeGroup[], scope: 'personal' | 'workspace', prefix: string)}
 	<Stack as="ul" gap="none" divided>
 		{#each groups as group (group.key)}
 			{@const newest = group.rows[0]}
 			{#if newest !== undefined}
 				{@const fresh = group.unread.length > 0}
+				{@const rowKey = `${prefix}:${group.key}`}
+				{@const rov = roving.item_attrs(rowKey)}
 				{@const updates =
 					group.rows.length > 1
 						? t('{count} updates').replace('{count}', String(group.rows.length))
@@ -176,6 +213,9 @@
 				<li>
 					<button
 						type="button"
+						tabindex={rov.tabindex}
+						onfocus={rov.onfocus}
+						{@attach roving.item(rowKey)}
 						data-notice={group.key}
 						data-notice-scope={scope}
 						data-read={!fresh}
@@ -246,10 +286,10 @@
 		collision_padding={8}
 		class="w-96 max-w-[calc(100vw-1rem)] p-0"
 		on_open_auto_focus={(event) => {
-			const first = lines()[0];
+			const first = rowKeys[0];
 			if (first === undefined) return;
 			event.preventDefault();
-			first.focus();
+			void tick().then(() => roving.focus(first));
 		}}
 	>
 		<Inline justify="between" gap="sm" class="min-h-12 border-b px-3 py-2">
@@ -280,7 +320,7 @@
 				</div>
 			{:else if $notices !== undefined}
 				<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-				<div bind:this={list} role="group" aria-keyshortcuts="j k u" onkeydown={onListKey}>
+				<div role="group" aria-keyshortcuts="j k u" onkeydown={onListKey}>
 					{#if for_you.length + workspace.length === 0}
 						<Stack align="center" justify="center" gap="xs" class="min-h-40 px-4 py-8 text-center" data-notice-empty>
 							<Icon name="lucide:inbox" class="mb-1 size-6 text-muted-foreground" />
@@ -288,10 +328,11 @@
 							<p class="max-w-64 text-xs text-muted-foreground">{unread > 0 ? t('Older notifications are still included in your unread count.') : t('New notifications will appear here.')}</p>
 						</Stack>
 					{:else}
-						{#if for_you.length > 0}{@render section(for_you, 'personal')}{/if}
+						{#if for_you.length > 0}{@render section(for_you, 'personal', 'personal')}{/if}
 						{#if workspace.length > 0}
 							{#if for_you.length > 0}
-								<button type="button" data-notice-toggle aria-expanded={workspaceShown} onclick={() => showWorkspace = !showWorkspace}
+								{@const wsToggle = roving.item_attrs('toggle:workspace')}
+								<button type="button" tabindex={wsToggle.tabindex} onfocus={wsToggle.onfocus} {@attach roving.item('toggle:workspace')} data-notice-toggle aria-expanded={workspaceShown} onclick={() => showWorkspace = !showWorkspace}
 									class="min-h-11 w-full border-t px-3 py-2 text-left outline-none hover:bg-accent focus-visible:bg-accent">
 									<Inline as="span" gap="xs">
 										<Icon name={workspaceShown ? 'lucide:chevron-down' : 'lucide:chevron-right'} class="size-3.5 shrink-0 text-muted-foreground" />
@@ -300,20 +341,21 @@
 									</Inline>
 								</button>
 							{/if}
-							{#if workspaceShown}{@render section(workspace, 'workspace')}{/if}
+							{#if workspaceShown}{@render section(workspace, 'workspace', 'workspace')}{/if}
 						{/if}
 					{/if}
 					{#if read_count > 0}
+						{@const readToggle = roving.item_attrs('toggle:read')}
 						<details class="group/read border-t" open={read_open} ontoggle={(event) => read_open = event.currentTarget.open}>
-							<summary data-notice-toggle class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:bg-accent [&::-webkit-details-marker]:hidden">
+							<summary tabindex={readToggle.tabindex} onfocus={readToggle.onfocus} {@attach roving.item('toggle:read')} data-notice-toggle class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:bg-accent [&::-webkit-details-marker]:hidden">
 								<Icon name="lucide:chevron-right" class="size-3.5 shrink-0 transition-transform group-open/read:rotate-90 motion-reduce:transition-none" />
 								<span class="flex-1 font-medium">{t('Read')}</span><span class="tabular-nums">{read_count}</span>
 							</summary>
 							{#if read_open}
-								{#if read_for_you.length > 0}{@render section(read_for_you, 'personal')}{/if}
+								{#if read_for_you.length > 0}{@render section(read_for_you, 'personal', 'read-personal')}{/if}
 								{#if read_workspace.length > 0}
 									{#if read_for_you.length > 0}<p class="border-t px-3 py-2 text-tiny text-muted-foreground">{t('Workspace updates')}</p>{/if}
-									{@render section(read_workspace, 'workspace')}
+									{@render section(read_workspace, 'workspace', 'read-workspace')}
 								{/if}
 							{/if}
 						</details>

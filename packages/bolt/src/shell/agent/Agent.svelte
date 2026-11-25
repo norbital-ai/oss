@@ -39,7 +39,12 @@
 	import { MediaQuery } from 'svelte/reactivity';
 	import { cubicOut } from 'svelte/easing';
 	import { fly } from 'svelte/transition';
-	import { watch } from '@norbital-ai/ui/behaviors';
+	import {
+		create_dismiss,
+		create_toggle_group,
+		matches_shortcut,
+		watch
+	} from '@norbital-ai/ui/behaviors';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
 	import { Button, Combobox, Dialog, format_handle, Icon, PreviewFrame, RowMenu, type ModelExposure, type UiContext } from '@norbital-ai/ui';
@@ -72,7 +77,7 @@
 		pageConversationStarted,
 		type ClientPageAction
 	} from './navigation.ts';
-	import { commandKey, shortcutLabel } from '../keyboard.ts';
+	import { shortcutLabel } from '../keyboard.ts';
 	import { based, SHELL, type NavNode } from '../nav.ts';
 	import type { ManifestItem } from '../finder/manifest.ts';
 	import type { FinderRead } from '../finder/model.ts';
@@ -308,34 +313,18 @@
 		rail = false;
 		railToggle?.focus({ preventScroll: true });
 	}
-	function railKeydown(event: KeyboardEvent): void {
-		if (
-			(!rail && !showingPreview) ||
-			event.key !== 'Escape' ||
-			event.defaultPrevented ||
-			event.isComposing
-		)
-			return;
-		const target = event.target;
-		if (
-			showingPreview &&
-			target instanceof Node &&
-			(previewEl?.contains(target) || previewToggle?.contains(target))
-		) {
-			event.preventDefault();
-			event.stopPropagation();
-			closePreview();
-			return;
-		}
-		if (
-			!(target instanceof Node) ||
-			(!railEl?.contains(target) && !chatEl?.contains(target) && !railToggle?.contains(target))
-		)
-			return;
-		event.preventDefault();
-		event.stopPropagation();
-		closeRail();
-	}
+	create_dismiss({
+		open: () => showingPreview,
+		escape: true,
+		outside: false,
+		on_dismiss: () => closePreview()
+	});
+	create_dismiss({
+		open: () => rail,
+		escape: true,
+		outside: false,
+		on_dismiss: () => closeRail()
+	});
 	/** The sub-agent open in the session rail. */
 	let focus = $state<string | null>(null);
 	const current = $derived(list.find((c) => c.id === conversation) ?? $inspected?.rows[0]);
@@ -695,15 +684,21 @@
 	const shownTab = $derived(tabs.some((x) => x.name === tab) ? tab : 'web');
 	const viewIndex = $derived(tabs.findIndex((x) => x.name === shownTab));
 	const currentView = $derived(tabs[viewIndex] ?? web_tab);
+	const viewToggle = create_toggle_group({
+		items: () => tabs.map((v) => v.name),
+		mode: 'single',
+		value: () => [shownTab],
+		on_change: (values) => {
+			const picked = values[0];
+			if (picked !== undefined) tab = picked;
+		}
+	});
 	function viewShortcut(event: KeyboardEvent): void {
 		if (
 			!(event.target instanceof HTMLInputElement) ||
 			event.target !== document.activeElement ||
-			!commandKey(event) ||
-			event.altKey ||
-			event.shiftKey ||
 			event.isComposing ||
-			event.key !== 'ArrowRight'
+			!matches_shortcut(event, 'mod+ArrowRight', { strict_platform: true })
 		)
 			return;
 		event.preventDefault();
@@ -1103,18 +1098,17 @@
 			>{shortcutLabel('→')}</span
 		>
 		<div
+			{...viewToggle.root_attrs()}
 			class="flex min-w-0 max-w-[40%] items-center overflow-x-auto"
-			role="group"
 			aria-label={t('Conversation views')}
 		>
 			{#each tabs as view (view.name)}
 				<button
-					type="button"
+					{...viewToggle.item_attrs(view.name)}
+					{@attach viewToggle.item(view.name)}
 					class="grid size-6 shrink-0 place-items-center rounded-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 					aria-label={t('Switch to {view}').replace('{view}', view.title)}
 					title={`${view.title} · ${view.count}`}
-					aria-pressed={view.name === shownTab}
-					onclick={() => (tab = view.name)}
 				>
 					<span
 						class="rounded-full {view.name === shownTab
@@ -1385,8 +1379,6 @@
 		{#if showingPreview}{@render preview()}{/if}
 	</div>
 </div>
-
-<svelte:document onkeydown={railKeydown} />
 
 <!-- Ask before stopping a response, before deleting a plan while it runs, and before deleting a conversation -->
 <Dialog.Root

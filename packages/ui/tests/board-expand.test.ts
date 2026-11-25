@@ -59,6 +59,7 @@ function filtered(options: ReadOptions) {
 	);
 }
 async function show() {
+	history.replaceState(null, '', '/');
 	const reads: ReadOptions[] = [];
 	const fixture = await viewFixture({
 		catalog,

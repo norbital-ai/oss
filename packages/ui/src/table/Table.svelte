@@ -147,7 +147,15 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	import { fork } from '../effect/index.js';
 	import { getAllContexts, onDestroy, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { Debounced, watch as onChange_ } from '../behaviors/index.js';
+	import {
+		create_reorder,
+		create_selection,
+		create_swipe_actions,
+		Debounced,
+		PersistedState,
+		register_control,
+		watch as onChange_
+	} from '../behaviors/index.js';
 	import { currentSearchParams, replaceSearchParams } from '../utilities/url.js';
 	import { Button } from '../primitives/button/index.js';
 	import { confirm_action } from '../primitives/dialog/confirm.js';
@@ -163,6 +171,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import ColumnMenu from './ColumnMenu.svelte';
+	import ColumnResizeHandle from './ColumnResizeHandle.svelte';
 	import RowCard from './RowCard.svelte';
 	import RowMenu from './RowMenu.svelte';
 	import SelectionBar from './SelectionBar.svelte';
@@ -392,15 +401,16 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	// ── the viewer's columns : order, widths, hidden and pinned columns, and the page size, kept per table in
 	// this browser ; pinned columns lead and stay put ──
 	const LAYOUT = $derived(`ui.table.${urlKey}`);
-	const initialLayout: Layout = untrack(() =>
-		Result.getOrElse(
-			Result.flatMap(
-				Result.try(() => localStorage.getItem(LAYOUT) ?? '{}'),
-				decodeLayout
-			),
-			(): Layout => ({})
-		)
+	const layoutStore = untrack(
+		() =>
+			new PersistedState<Layout>(LAYOUT, {}, {
+				serializer: {
+					serialize: (value) => JSON.stringify(value),
+					deserialize: (raw) => Result.getOrElse(decodeLayout(raw), (): Layout => ({}))
+				}
+			})
 	);
+	const initialLayout: Layout = layoutStore.current;
 	let pinned = $state<string[]>(initialLayout.pinned ?? []);
 	let widths = $state<{ [f: string]: number }>(initialLayout.widths ?? {});
 	let arranged = $state<string[]>(initialLayout.order ?? []);
@@ -411,15 +421,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		untrack(() => SIZES.find((n) => n === initialLayout.size) ?? page_size)
 	);
 	const keep = () => {
-		Result.getOrElse(
-			Result.try(() =>
-				localStorage.setItem(
-					LAYOUT,
-					JSON.stringify({ pinned, widths, size, order: arranged, hidden } satisfies Layout)
-				)
-			),
-			() => undefined
-		);
+		layoutStore.current = { pinned, widths, size, order: arranged, hidden };
 	};
 	// ── view state in the URL ──
 	let st = $state<TableState>(
@@ -594,32 +596,14 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	});
 
 	// A phone has no hover: a leftward row swipe reveals the trailing control; the next tap elsewhere hides it.
-	let touchStart: { key: string; x: number; y: number } | null = null;
-	let revealed = $state<string | null>(null);
-	let swipedAt = 0;
-	const swipeStart = (event: TouchEvent, key: string) => {
-		const touch = event.touches[0];
-		if (touch !== undefined) touchStart = { key, x: touch.clientX, y: touch.clientY };
-	};
-	const swipeEnd = (event: TouchEvent, key: string) => {
-		const start = touchStart;
-		touchStart = null;
-		const touch = event.changedTouches[0];
-		if (start === null || start.key !== key || touch === undefined) return;
-		const dx = touch.clientX - start.x;
-		const dy = touch.clientY - start.y;
-		if (dx < -36 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-			revealed = key;
-			swipedAt = Date.now();
-		} else if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && revealed === key) revealed = null;
-	};
+	const swipe = create_swipe_actions({ tray_width: 72, open_ratio: 0.5 });
+	const revealed = $derived(swipe.open?.side === 'end' ? swipe.open.key : null);
 	const rowPress = (event: MouseEvent, row: ReadRow) => {
-		if (Date.now() - swipedAt < 350) {
-			swipedAt = 0;
+		if (swipe.open !== null) {
+			swipe.close();
 			event.stopPropagation();
 			return;
 		}
-		if (revealed !== null) revealed = null;
 		rowClick(event, row);
 	};
 
@@ -642,11 +626,31 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		typeof row['id'] === 'string' && row['id'].trim() !== '';
 	const matchedId = (id: string): id is SelectedId & string => id.trim() !== '';
 	const onPage = (rows: readonly RowIn<S>[]) => rows.filter(recordRow).map((r) => r.id);
+	const rowSelection = create_selection({
+		order: () => onPage(shownRows),
+		mode: 'multiple',
+		selected: () => [...selected],
+		on_change: (keys) => {
+			selected.clear();
+			for (const id of keys) if (matchedId(id)) selected.add(id);
+		}
+	});
 	const pageAll = (rows: readonly RowIn<S>[]) =>
 		rows.length > 0 && rows.every((r) => recordRow(r) && selected.has(r.id));
 	const togglePage = (rows: readonly RowIn<S>[], on: boolean) => {
 		if (!on) matchingRequest = null;
 		for (const id of onPage(rows)) on ? selected.add(id) : selected.delete(id);
+	};
+	const toggleRowCheck = (id: SelectedId, checked: boolean, shift: boolean) => {
+		if (shift) {
+			rowSelection.extend(id, { additive: true });
+			return;
+		}
+		if (checked) {
+			if (!selected.has(id)) rowSelection.toggle(id);
+		} else if (selected.has(id)) {
+			rowSelection.toggle(id);
+		}
 	};
 	const matching = $derived(
 		kind === 'local' ? local.length : kind === 'model' && probe === null ? count : null
@@ -807,17 +811,18 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 			(row_trailing ? 1 : 0) +
 			(actions.length > 0 || (kind === 'local' && on_change && remove) ? 1 : 0)
 	);
-	/** Moves column `f` to `to`'s place (a drag onto a header), or one step (`±1`, the column menu's keyboard way). */
-	function moveColumn(f: string, to: string | -1 | 1) {
-		const now: string[] = ordered.map((c) => colOf(c).field),
-			from = now.indexOf(f);
-		const at = typeof to === 'number' ? from + to : now.indexOf(to);
-		if (from < 0 || at < 0 || at >= now.length || at === from) return;
-		now.splice(at, 0, ...now.splice(from, 1));
-		arranged = [...now, ...hidden];
-		keep();
-	}
-	let dragging = $state<string | null>(null);
+	const colOrder = create_reorder({
+		items: () => ordered.map((c) => colOf(c).field),
+		orientation: 'horizontal',
+		label: (f) => {
+			const col = ordered.find((c) => colOf(c).field === f);
+			return col === undefined ? f : colLabel(col);
+		},
+		on_reorder: (_from, _to, next) => {
+			arranged = [...next, ...hidden];
+			keep();
+		}
+	});
 	// a pinned column's left edge: the checkbox, then each pinned column before it as rendered (measured)
 	let measured = $state<{ [f: string]: number }>({});
 	const measure = (f: string) => (el: HTMLElement) => {
@@ -833,29 +838,53 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	const widthOf = (c: Column) => widths[colOf(c).field] ?? colOf(c).width;
 	const sized = (w: number | undefined) =>
 		w === undefined ? undefined : `width:${w}px;min-width:${w}px;max-width:${w}px`;
-	function resize(e: PointerEvent, f: string) {
-		const target = e.currentTarget;
-		if (!(target instanceof HTMLElement)) return;
-		const th = target.parentElement;
-		if (th === null) return;
-		const x0 = e.clientX,
-			w0 = th.offsetWidth;
-		const move = (m: PointerEvent) => {
-			widths = { ...widths, [f]: Math.max(64, Math.round(w0 + m.clientX - x0)) };
-		};
-		const up = () => {
-			removeEventListener('pointermove', move);
-			removeEventListener('pointerup', up);
-			removeEventListener('pointercancel', up);
-			document.body.style.cursor = '';
-			keep();
-		};
-		e.preventDefault();
-		document.body.style.cursor = 'col-resize';
-		addEventListener('pointermove', move);
-		addEventListener('pointerup', up);
-		addEventListener('pointercancel', up);
-	}
+	$effect(() =>
+		register_control({
+			id: `table:${urlKey}`,
+			kind: 'table',
+			label: model === '' ? urlKey : label(text, model),
+			state: () => ({
+				page: back.length + 1,
+				pages,
+				size,
+				count,
+				query: qText,
+				selected_count: selected.size,
+				row_count: shownRows.length,
+				columns: ordered.map((c) => colOf(c).field)
+			}),
+			actions: {
+				search: (value) => {
+					if (typeof value === 'string') qText = value;
+				},
+				clear_filters: () => {
+					vs.clear();
+					qText = '';
+				},
+				next_page: () => {
+					const cursor = next;
+					if (cursor === null) return;
+					back = [...back, st.after];
+					st = { ...st, after: cursor };
+				},
+				previous_page: () => {
+					if (back.length === 0) return;
+					st = { ...st, after: back.at(-1) ?? null };
+					back = back.slice(0, -1);
+				},
+				set_page_size: (n) => {
+					if (typeof n === 'number' && SIZES.some((s) => s === n)) setSize(n);
+				},
+				open_row: (id) => {
+					if (typeof id !== 'string') return;
+					const match = shownRows.find((r) => r['id'] === id);
+					if (match !== undefined) open(match);
+				},
+				select_all_page: () => togglePage(shownRows, true),
+				clear_selection: clearSelection
+			}
+		})
+	);
 	const PIN_EDGE = 'shadow-[inset_-1px_0_0_0_var(--color-border)]';
 	// the row actions stay at the right edge while wide rows scroll sideways (else a many-column table hides them past it)
 	const ACTS_EDGE = 'sticky right-0 shadow-[inset_1px_0_0_0_var(--color-border)]';
@@ -1154,6 +1183,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										{@const isPinned = ci < pinCount}
 										<!-- drag a header onto another to move it (the column menu moves it by keyboard); sorting is the toolbar's -->
 										<th
+											{...colOrder.item_attrs(f)}
 											class={[
 												'group bg-surface-table-header relative',
 												isPinned && 'sticky z-10',
@@ -1163,21 +1193,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 											style={[sized(widthOf(c)), isPinned ? `left:${leftOf(ci)}px` : '']
 												.filter(Boolean)
 												.join(';') || undefined}
-											draggable="true"
 											data-column={f}
-											ondragstart={(e) => {
-												dragging = f;
-												e.dataTransfer?.setData('text/x-bolt-column', f);
-											}}
-											ondragend={() => (dragging = null)}
-											ondragover={(e) => {
-												if (dragging !== null) e.preventDefault();
-											}}
-											ondrop={(e) => {
-												e.preventDefault();
-												if (dragging !== null) moveColumn(dragging, f);
-												dragging = null;
-											}}
 											{@attach measure(f)}
 										>
 											<span
@@ -1204,7 +1220,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 													}))}
 													on_pin={() => togglePin(f)}
 													on_hide={() => toggleHidden(f)}
-													on_move={(by) => moveColumn(f, by)}
+													on_move={(by) => colOrder.move_by(f, by)}
 													on_reset_width={() => {
 														const { [f]: _, ...rest } = widths;
 														widths = rest;
@@ -1213,22 +1229,16 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 													on_show={toggleHidden}
 												/>
 											</span>
-											<!-- the resize handle: drag the column's right edge -->
-											<span
-												role="separator"
-												aria-orientation="vertical"
-												aria-label={msg(text, 'table.resize')}
-												data-column-resize
-												class={[
-													'group/resize absolute inset-y-0 z-10 flex w-2 cursor-col-resize touch-none justify-center select-none',
-													ci === ordered.length - 1 ? 'right-0' : '-right-1'
-												]}
-												onpointerdown={(e) => resize(e, f)}
-											>
-												<span
-													class="bg-muted-foreground/40 group-hover/resize:bg-brand my-auto h-5 w-px opacity-0 transition-opacity group-hover:opacity-100 group-hover/resize:w-0.5"
-												></span>
-											</span>
+											<!-- the resize handle: drag the column's right edge or nudge with arrow keys -->
+											<ColumnResizeHandle
+												width={widths[f] ?? measured[f] ?? 120}
+												label={msg(text, 'table.resize')}
+												last={ci === ordered.length - 1}
+												on_change={(next) => {
+													widths = { ...widths, [f]: next };
+												}}
+												on_commit={keep}
+											/>
 										</th>
 									{/each}
 									{#if row_trailing}<th class="w-0 p-0!"></th>{/if}
@@ -1262,11 +1272,11 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										data-pending-delete={held?.pending_delete}
 										title={held === null ? undefined : approvalText(text, held)}
 										{@attach win.measure(winKey(i))}
+										{@attach row_trailing ? swipe.row(key) : () => {}}
 										tabindex={opens ? 0 : undefined}
-										ontouchstart={(e) => swipeStart(e, key)}
-										ontouchend={(e) => swipeEnd(e, key)}
 										onclick={(e) => rowPress(e, row)}
 										onkeydown={(e) => {
+											if (row_trailing) swipe.row_attrs(key).onkeydown(e);
 											if (opens && e.target === e.currentTarget && e.key === 'Enter') {
 												e.preventDefault();
 												open(row);
@@ -1280,10 +1290,14 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 														type="checkbox"
 														aria-label={msg(text, 'table.select')}
 														checked={selected.has(row.id)}
+														onclick={(e) => {
+															if (e.shiftKey) {
+																e.preventDefault();
+																toggleRowCheck(row.id, !selected.has(row.id), true);
+															}
+														}}
 														onchange={(e) =>
-															e.currentTarget.checked
-																? selected.add(row.id)
-																: selected.delete(row.id)}
+															toggleRowCheck(row.id, e.currentTarget.checked, false)}
 													/>{/if}
 											</td>
 										{/if}
@@ -1380,8 +1394,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 									recordRow(row) && selected.has(row.id) ? 'bg-accent/40' : 'hover:bg-muted/40',
 									row_class?.(row)
 								]}
-								ontouchstart={(e) => swipeStart(e, key)}
-								ontouchend={(e) => swipeEnd(e, key)}
+								{@attach row_trailing ? swipe.row(key) : () => {}}
 								{@attach win.measure(winKey(i))}
 							>
 								<ApprovalAccent {ctx} {row} />
@@ -1393,8 +1406,13 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 											type="checkbox"
 											aria-label={msg(text, 'table.select')}
 											checked={selected.has(row.id)}
-											onchange={(e) =>
-												e.currentTarget.checked ? selected.add(row.id) : selected.delete(row.id)}
+											onclick={(e) => {
+												if (e.shiftKey) {
+													e.preventDefault();
+													toggleRowCheck(row.id, !selected.has(row.id), true);
+												}
+											}}
+											onchange={(e) => toggleRowCheck(row.id, e.currentTarget.checked, false)}
 										/>
 									</label>
 								{/if}

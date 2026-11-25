@@ -97,11 +97,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		claimFieldControl,
 		cn,
 		coarsePointer,
-		stepActive,
 		ui_text,
 		use_controls
 	} from '../utils.js';
-	import { virtual_list, register_control } from '../../behaviors/index.js';
+	import { create_listbox, register_control, virtual_list } from '../../behaviors/index.js';
 
 	const GHOST = `${CONTROL_SIZE} flex items-center justify-between rounded-md bg-transparent text-left font-normal outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive`;
 
@@ -145,8 +144,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	const readonly = $derived(ownReadonly ?? controls.readonly);
 	const disabled = $derived(ownDisabled ?? controls.disabled);
 	let open = $state(false),
-		query = $state(''),
-		active = $state(0);
+		query = $state('');
+	const NONE_KEY = '\u0000none';
 	$effect(() => {
 		if (readonly || disabled) return;
 		const label = ariaLabel ?? placeholder ?? id;
@@ -154,11 +153,14 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			id: `combobox:${id}`,
 			kind: 'combobox',
 			label,
+			element: () => triggerEl,
+			disabled: () => disabled || readonly,
 			state: () => ({
 				open,
 				value: isMultiple(props) ? props.value : props.value,
 				count: options.length
 			}),
+			items: () => options.map((o) => ({ value: o.value, label: o.label })),
 			actions: {
 				open: () => {
 					open = true;
@@ -194,7 +196,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		});
 	});
 	let list = $state<HTMLElement | null>(null),
-		search = $state<HTMLInputElement | null>(null);
+		search = $state<HTMLInputElement | null>(null),
+		triggerEl = $state<HTMLElement | null>(null);
 	const current = $derived(options.find((o) => o.value === value));
 	const selectedValues = $derived(isMultiple(props) ? props.value : []);
 	const selectedLabels = $derived(
@@ -220,6 +223,41 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			? [null, ...shown]
 			: shown
 	);
+	const rowKey = (row: ComboboxOption<V> | null) => (row === null ? NONE_KEY : row.value);
+	const lb = create_listbox({
+		id: id ?? undefined,
+		items: () =>
+			rows.map((row) =>
+				row === null
+					? { value: NONE_KEY, label: t('none') }
+					: { value: row.value, label: row.label }
+			),
+		focus: 'virtual',
+		filter: false,
+		mode: () => (isMultiple(props) ? 'multiple' : 'single'),
+		selected: () =>
+			isMultiple(props)
+				? props.value
+				: isSingle(props) && props.value !== null
+					? [props.value]
+					: [],
+		on_activate: (item) => {
+			const row =
+				item.value === NONE_KEY
+					? null
+					: (rows.find((r) => r !== null && r.value === item.value) ?? null);
+			choose(row);
+		}
+	});
+	const active = $derived(
+		lb.active === undefined
+			? 0
+			: Math.max(
+					0,
+					rows.findIndex((r) => rowKey(r) === lb.active)
+				)
+	);
+	const activeOptionId = $derived(open ? lb.active_id : undefined);
 	// a group heading is its own list entry, so a long list (every time zone) windows over measured entries
 	const entries = $derived(
 		rows.flatMap((row, i): ({ head: string; i: number } | { row: ComboboxOption<V> | null; i: number })[] =>
@@ -254,14 +292,13 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		if (!next) return;
 		query = '';
 		on_search?.('');
-		active = Math.max(
-			0,
-			rows.findIndex(
-				(r) =>
-					r !== null &&
-					(isMultiple(props) ? props.value.includes(r.value) : r.value === props.value)
-			)
+		const match = rows.find(
+			(r) =>
+				r !== null &&
+				(isMultiple(props) ? props.value.includes(r.value) : r.value === props.value)
 		);
+		const target = match ?? rows[0];
+		if (target !== undefined) lb.highlight(rowKey(target));
 		await tick();
 		// a focused search raises the on-screen keyboard over the short list: touch taps the box to type
 		(coarsePointer.current ? list : (search ?? list))?.focus();
@@ -284,7 +321,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	function keydown(e: KeyboardEvent) {
 		props.onkeydown?.(e);
 		if (e.defaultPrevented) {
-			active = 0;
+			const first = rows[0];
+			if (first !== undefined) lb.highlight(rowKey(first));
 			return;
 		}
 		// Header and footer controls keep their native keyboard activation.
@@ -294,16 +332,11 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			!(e.target instanceof Element && e.target.closest('[role="option"]'))
 		)
 			return;
-		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-			e.preventDefault();
-			active = stepActive(rows.length, active, e.key === 'ArrowDown' ? 1 : -1);
+		if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+			lb.input_attrs(open).onkeydown(e);
 			void tick().then(() => reveal(active));
 		} else if (e.key === 'Enter') {
-			const row = rows[active];
-			if (row !== undefined) {
-				e.preventDefault();
-				choose(row);
-			}
+			lb.input_attrs(open).onkeydown(e);
 		}
 	}
 </script>
@@ -318,10 +351,13 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 {:else}
 	<Popover.Root {open} on_open_change={toggle}>
 		<Popover.Trigger
+			bind:ref={triggerEl}
 			{id}
 			{disabled}
 			role="combobox"
 			aria-expanded={open}
+			aria-controls={open ? lb.id : undefined}
+			aria-activedescendant={!withSearch ? activeOptionId : undefined}
 			aria-label={props.multiple && selectionText
 				? `${ariaLabel ?? placeholder ?? t('select')}: ${selectionText}`
 				: ariaLabel}
@@ -367,12 +403,18 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			{#if withSearch}
 				<input
 					bind:this={search}
+					role="combobox"
+					aria-autocomplete="list"
+					aria-expanded={open}
+					aria-controls={lb.id}
+					aria-activedescendant={activeOptionId}
 					class="h-8 w-full rounded-sm border-b bg-transparent px-2 text-sm outline-none placeholder:text-muted-foreground"
 					placeholder={t('search')}
 					value={query}
 					oninput={(e) => {
 						query = e.currentTarget.value;
-						active = 0;
+						const first = rows[0];
+						if (first !== undefined) lb.highlight(rowKey(first));
 						on_search?.(query);
 					}}
 				/>
@@ -380,6 +422,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			{@render header?.()}
 			<ul
 				bind:this={list}
+				id={lb.id}
 				class="max-h-64 overflow-auto overscroll-contain outline-none"
 				role="listbox"
 				aria-multiselectable={props.multiple ? true : undefined}
@@ -402,6 +445,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 						</li>
 					{:else}
 						{@const row = e.row}
+						{@const key = rowKey(row)}
+						{@const opt = lb.option_attrs(key)}
 						{@const selected =
 							row === null
 								? false
@@ -409,8 +454,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 									? props.value.includes(row.value)
 									: row.value === props.value}
 						<li
+							id={opt.id}
 							role="option"
 							aria-selected={selected}
+							data-highlighted={opt['data-highlighted']}
 							data-index={i}
 							data-value={row?.value ?? ''}
 							class={actions && row !== null ? 'flex items-center gap-1' : undefined}
@@ -423,7 +470,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 									'flex w-full min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm',
 									i === active && 'bg-accent text-accent-foreground'
 								)}
-								onmousemove={() => (active = i)}
+								onmousemove={() => lb.highlight(key)}
 								onclick={() => choose(row)}
 							>
 								{#if row === null}

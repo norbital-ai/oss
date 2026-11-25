@@ -14,6 +14,19 @@ Pick the simplest native primitive that fits the data shape; only add custom UI 
 | Parent + owned children treated as **one entity**             | In-place data matrix (`ChildGrid save="parent"`, `Rows`, or embedded editable matrix via `Form` `acts`) | **One entity = one atomic Save operation.** Never mount a nested standalone `<Table>` (opening separate child sheets) or fire immediate per-row `ctx.act()` calls when parent and children form one logical entity (e.g. loan + repayments, order + lines, trial + components).                                  |
 | Time-series, effective-dated history & change logs            | Shared `Timeline` from `@norbital-ai/ui`                                                                | For dated contract/terms history, change logs, revision/approval trails and chronological activity streams — never generic tables. Reuse the single `@norbital-ai/ui` `Timeline` primitive (also used by `RecordShell`'s History widget and `ApprovalPanel`) rather than inventing one-off per-template layouts. |
 
+## File placement & co-location
+
+Default to **co-location** — keep every custom component and domain service beside the single module that owns it, and move code to `src/lib/` **only when it is genuinely reusable** across multiple consumers.
+
+| What you are authoring | Where it belongs | Rule |
+| --- | --- | --- |
+| Custom UI specific to one custom datatype | `src/data/custom_field/<name>/` beside `+renderer.svelte` | Co-locate sub-components and helpers with the datatype renderer (e.g. `waypoint-status.svelte`). Never scatter datatype-only UI into `src/lib/`. |
+| Custom UI specific to one model's representation | `src/data/model/.../<model>/` beside `+representation.svelte` | Co-locate model-specific dialogs, sub-views, or viewers beside `+representation.svelte` (e.g. `order-document-dialog.svelte`). |
+| Custom UI or helpers specific to one app / page | `src/app/<app>/` beside `+<page>.page.svelte` | Co-locate page-local widgets, tabs, and client helpers beside the page that mounts them. |
+| Model-specific services, calculations, validators & queries | `src/data/model/.../<model>/service/` (or structured sibling `.ts` beside `+model.ts`) | Keep domain logic structured beside its owning `+model.ts` so schema, callbacks, syncs, representation, and services evolve as one cohesive folder. |
+| Reusable custom UI shared by ≥2 pages, models, or datatypes | `src/lib/` (or `src/lib/<feature>/` / `src/lib/ui/<group>/` when multi-file) | Promote to `src/lib/` only when genuinely shared; group multi-file widgets (viewers, editors, converters) in a dedicated subfolder. |
+| Shared cross-model services, pure domain math & shared stores | `src/lib/` | Reserve top-level `src/lib/*.ts` for cross-cutting pure helpers (e.g. date/money math, cross-model validators, shared scope stores) — never as a flat grab-bag for single-model logic. |
+
 ## Slots & toolbar
 
 A model page is its view — no heading card, paragraph or button row above it.
@@ -27,7 +40,7 @@ A model page is its view — no heading card, paragraph or button row above it.
 | Single-record lifecycle move            | view row `actions` / `RecordShell` `actions` or `footer_actions` (one primary `Button variant="brand"` directly visible, rest in overflow) |
 | Create / filter / paging                | `toolbar.new` (`RecordShell mode="create"`) / toolbar popover (`where` fixed, `initial_filter` default) / table footer                     |
 
-- Toolbar is one row: 1–3 word title, ⓘ `description`, widgets flush left, New alone flush right. Never put buttons above/beside a view or hand-roll search, `<select>` or action bars.
+- Toolbar is one row: 1–3 word title, ⓘ `description`, widgets flush left, compact icon-only view switchers (when one tab toggles alternate views of the same collection, e.g. Timeline / Table / Board, using `Button variant="ghost|secondary" size="icon"` with tooltips) in `toolbar.trailing` right beside `+ New`, and `+ New` flush right. Never put buttons, redundant sub-headings, or wide text view-tabs above/beside a view when the enclosing tab already names the pane, and never hand-roll search, `<select>` or action bars.
 - Phone hero collapses to one line (title, info button, `actions` popover — stay mounted while closed).
 
 ## The ⚡ menu & mutations
@@ -42,7 +55,7 @@ A model page is its view — no heading card, paragraph or button row above it.
 - `AppShell`: `variant="page"` (default) pads one view; `variant="full"` leaves body to `Tabs` or `<Scroll inset>` (never wrap a single `<Table>` directly in `variant="full"`).
 - One concern per view (app page, app tab, or record tab): at most one `Table` or `Board` per view; tab title = view title + icon; one tab size (`Tabs` / `TabStrip`, never hand-rolled `role="tab"`). Nested `Tabs` step down automatically (level 1 default, 2 underline, 3 chips; >2 deep go vertical left). Use `keep_alive: true` on form tabs.
 - One compact control size (`Button`: `default`, `icon`, `lg` only for lone non-form CTA). Size controls from parent layout — never fixed `w-*`/`h-*` on inputs/controls.
-- Model tables read displayed fields, labels and currency deps (opening a record reads full view; custom `cell`/row actions keep light row contract). Rows are one line; click opens record (or `on_open`); headers pin/hide/move (no sort). `Board` lanes load infinitely; pass static `lanes` whenever the lane values are known so lanes and counts load in parallel, and avoid duplicating a `Board`'s scope in redundant page-level `ctx.query` waterfalls.
+- Model tables read displayed fields, labels and currency deps (opening a record reads full view; custom `cell`/row actions keep light row contract). Rows are one line; click opens record (or `on_open`); headers pin/hide/move (no sort). `Board` lanes load infinitely; pass static `lanes` whenever the lane values are known so lanes and counts load in parallel, avoid duplicating a `Board`'s scope in redundant page-level `ctx.query` waterfalls, keep cards minimal and scannable (1–2 compact lines: concise title + compact tag/metric metadata via a custom `card` snippet when default stacked rows get noisy), and pass `select={false}` when bulk selection already lives in `Table`. Use `keep_alive: true` on tabs hosting forms or heavy client viewers so switching tabs preserves state and avoids costly reloads.
 
 ## Representations, forms & disclosure
 

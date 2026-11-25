@@ -4,6 +4,7 @@ A multi-line text input, bindable `value`. `readonly` (or an enclosing readonly 
 field chrome; `disabled` keeps the box, muted.
 -->
 <script lang="ts">
+	import { register_control } from '../../behaviors/index.js';
 	import CopyText from '../copy-text/copy-text.svelte';
 	import { cn, use_controls, ui_text, type WithElementRef, type WithoutChildren } from '../utils.js';
 	import type { HTMLTextareaAttributes } from 'svelte/elements';
@@ -20,6 +21,44 @@ field chrome; `disabled` keeps the box, muted.
 	const controls = use_controls();
 	const t = ui_text();
 	const text = $derived(value === undefined || value === null ? '' : String(value));
+	const isReadonly = $derived(Boolean(readonly ?? controls.readonly));
+	const isDisabled = $derived(Boolean(disabled ?? controls.disabled));
+	const controlId = $derived(
+		restProps.id ?? restProps.name ?? restProps['aria-label'] ?? undefined
+	);
+
+	$effect(() => {
+		if (isReadonly || isDisabled || controlId === undefined) return;
+		const ariaLabel = restProps['aria-label'];
+		return register_control({
+			id: `textarea:${controlId}`,
+			kind: 'textarea',
+			...(typeof ariaLabel === 'string' ? { label: ariaLabel } : {}),
+			element: () => ref,
+			disabled: () => isDisabled || isReadonly,
+			state: () => ({ value: text }),
+			actions: {
+				set: (next) => {
+					if (typeof next === 'string') {
+						value = next;
+						if (ref instanceof HTMLTextAreaElement) {
+							ref.value = next;
+							ref.dispatchEvent(new Event('input', { bubbles: true }));
+							ref.dispatchEvent(new Event('change', { bubbles: true }));
+						}
+					}
+				},
+				clear: () => {
+					value = '';
+					if (ref instanceof HTMLTextAreaElement) {
+						ref.value = '';
+						ref.dispatchEvent(new Event('input', { bubbles: true }));
+						ref.dispatchEvent(new Event('change', { bubbles: true }));
+					}
+				}
+			}
+		});
+	});
 </script>
 
 {#if readonly ?? controls.readonly}

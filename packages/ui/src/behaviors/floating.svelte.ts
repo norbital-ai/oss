@@ -1,6 +1,6 @@
 // Anchor-relative floating positioning with automatic viewport flip, edge shift clamping,
-// scroll/resize tracking and optional LIFO dismissal — powers Popover, Tooltip and menus directly
-// with z-50 owned from frame 1 (no body-wrapper flash or external floating-ui runtime).
+// virtual `{ x, y }` / `DOMRect` anchors, available-space CSS variables, scroll/resize tracking
+// and optional LIFO dismissal — powers Popover, Tooltip, Menu and CommandMenu directly.
 import type { Attachment } from 'svelte/attachments';
 import { create_dismiss, type DismissReason } from './dismiss.svelte.js';
 
@@ -9,14 +9,32 @@ export type FloatingSide = 'top' | 'bottom' | 'left' | 'right';
 /** Cross-axis alignment relative to the anchor edge. */
 export type FloatingAlign = 'start' | 'center' | 'end';
 
+/** Rect subset needed to position against a non-element virtual anchor. */
+export type VirtualRect = {
+	readonly left: number;
+	readonly top: number;
+	readonly right: number;
+	readonly bottom: number;
+	readonly width: number;
+	readonly height: number;
+};
+
+/** Virtual anchor: either a `{ x, y }` pointer coordinate or a `getBoundingClientRect()` provider. */
+export type VirtualAnchor =
+	| { readonly x: number; readonly y: number }
+	| { readonly getBoundingClientRect: () => VirtualRect };
+
+/** Either a live DOM element or a virtual point/rectangle anchor. */
+export type FloatingAnchor = HTMLElement | VirtualAnchor;
+
 /** Options for `create_floating`. */
 export type FloatingOptions = {
 	/** Whether the floating surface is open. */
 	readonly open: () => boolean;
 	/** Called when Escape or an outside pointer press dismisses the surface. */
 	readonly on_dismiss?: (reason: DismissReason) => void;
-	/** Optional reactive anchor element getter (avoids a second effect pass when anchor is a prop). */
-	readonly anchor?: () => HTMLElement | null;
+	/** Optional reactive anchor element or virtual anchor getter. */
+	readonly anchor?: () => FloatingAnchor | null;
 	/** Preferred side relative to the anchor (default `'bottom'`). */
 	readonly side?: FloatingSide | (() => FloatingSide);
 	/** Cross-axis alignment relative to the anchor (default `'center'`). */
@@ -51,8 +69,25 @@ function opposite(side: FloatingSide): FloatingSide {
 	}
 }
 
+function isElement(anchor: FloatingAnchor | null): anchor is HTMLElement {
+	return typeof HTMLElement !== 'undefined' && anchor instanceof HTMLElement;
+}
+
+function measureAnchor(anchor: FloatingAnchor): VirtualRect {
+	if (isElement(anchor)) return anchor.getBoundingClientRect();
+	if ('getBoundingClientRect' in anchor) return anchor.getBoundingClientRect();
+	return {
+		left: anchor.x,
+		right: anchor.x,
+		top: anchor.y,
+		bottom: anchor.y,
+		width: 0,
+		height: 0
+	};
+}
+
 function computeCoords(
-	anchor: DOMRect,
+	anchor: VirtualRect,
 	content: { width: number; height: number },
 	side: FloatingSide,
 	align: FloatingAlign,
@@ -76,27 +111,23 @@ function computeCoords(
 }
 
 /**
- * Headless anchor-relative floating behavior with flip/shift collision avoidance and LIFO dismiss.
- * @example
- * let open = $state(false);
- * const floating = create_floating({ open: () => open, on_dismiss: () => (open = false) });
- * // <button {@attach floating.anchor} onclick={() => (open = !open)}>Filter</button>
- * // {#if open}
- * //   <div {@attach portal()} {@attach floating.content} style={floating.style}>...</div>
- * // {/if}
+ * Headless anchor-relative floating behavior with flip/shift collision avoidance, virtual anchors,
+ * `--available-height`/`--available-width` CSS variables and LIFO dismiss.
  */
 export function create_floating(options: FloatingOptions) {
-	let anchorEl = $state<HTMLElement | null>(null);
+	let anchorRef = $state<FloatingAnchor | null>(null);
 	let contentEl = $state<HTMLElement | null>(null);
 	let x = $state(0);
 	let y = $state(0);
 	let actualSide = $state<FloatingSide | null>(null);
 	let anchorWidth = $state(0);
+	let availableWidth = $state(0);
+	let availableHeight = $state(0);
 	let originX = $state('50%');
 	let originY = $state('50%');
 	let positioned = $state(false);
 
-	const resolvedAnchor = () => options.anchor?.() ?? anchorEl;
+	const resolvedAnchor = () => options.anchor?.() ?? anchorRef;
 	const preferredSide = () =>
 		typeof options.side === 'function' ? options.side() : (options.side ?? 'bottom');
 	const preferredAlign = () =>
@@ -119,18 +150,21 @@ export function create_floating(options: FloatingOptions) {
 		on_dismiss: (reason) => options.on_dismiss?.(reason),
 		escape: options.escape ?? true,
 		outside: options.outside ?? true,
-		ignore: () => [resolvedAnchor()]
+		ignore: () => {
+			const a = resolvedAnchor();
+			return isElement(a) ? [a] : [];
+		}
 	});
 
 	function update(): void {
 		const anchorNode = resolvedAnchor();
 		if (anchorNode === null || contentEl === null || typeof window === 'undefined') return;
-		const aRect = anchorNode.getBoundingClientRect();
+		const aRect = measureAnchor(anchorNode);
 		const vw = document.documentElement.clientWidth || window.innerWidth || 1024;
 		const vh = document.documentElement.clientHeight || window.innerHeight || 768;
+
 		// Measure untransformed layout dimensions first (`offsetWidth`/`offsetHeight`) so CSS
-		// scale/translate enter animations never shrink the box and trigger mid-flight jumps or
-		// right-edge re-wrap loops. Fall back to bounding rects for synthetic DOMs (offset* === 0).
+		// scale/translate enter animations never shrink the box and trigger mid-flight jumps.
 		let width = contentEl.offsetWidth;
 		let height = contentEl.offsetHeight;
 		if (width === 0 || height === 0) {
@@ -179,12 +213,22 @@ export function create_floating(options: FloatingOptions) {
 			originX =
 				width > 0 ? `${Math.round(Math.max(0, Math.min(width, anchorCenterX - nextX)))}px` : '50%';
 			originY = side === 'top' ? '100%' : '0%';
+			availableWidth = Math.max(0, Math.round(vw - pad * 2));
+			availableHeight = Math.max(
+				0,
+				Math.round(side === 'bottom' ? vh - aRect.bottom - sOff - pad : aRect.top - sOff - pad)
+			);
 		} else {
 			originX = side === 'left' ? '100%' : '0%';
 			originY =
 				height > 0
 					? `${Math.round(Math.max(0, Math.min(height, anchorCenterY - nextY)))}px`
 					: '50%';
+			availableWidth = Math.max(
+				0,
+				Math.round(side === 'right' ? vw - aRect.right - sOff - pad : aRect.left - sOff - pad)
+			);
+			availableHeight = Math.max(0, Math.round(vh - pad * 2));
 		}
 
 		x = nextX;
@@ -214,7 +258,7 @@ export function create_floating(options: FloatingOptions) {
 		};
 		schedule();
 		const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
-		ro?.observe(anchorNode);
+		if (isElement(anchorNode)) ro?.observe(anchorNode);
 		ro?.observe(contentEl);
 		window.addEventListener('resize', schedule, { passive: true });
 		document.addEventListener('scroll', schedule, { capture: true, passive: true });
@@ -227,9 +271,9 @@ export function create_floating(options: FloatingOptions) {
 	});
 
 	const anchor: Attachment<HTMLElement> = (el) => {
-		anchorEl = el;
+		anchorRef = el;
 		return () => {
-			if (anchorEl === el) anchorEl = null;
+			if (anchorRef === el) anchorRef = null;
 		};
 	};
 
@@ -255,17 +299,27 @@ export function create_floating(options: FloatingOptions) {
 		get anchor_width() {
 			return anchorWidth;
 		},
+		get available_width() {
+			return availableWidth;
+		},
+		get available_height() {
+			return availableHeight;
+		},
 		get positioned() {
 			return positioned;
 		},
 		get style() {
+			const avail =
+				availableHeight > 0
+					? `--available-width:${availableWidth}px;--available-height:${availableHeight}px;`
+					: '';
 			return positioned
-				? `position:fixed;left:${x}px;top:${y}px;z-index:50;--anchor-width:${anchorWidth}px;--floating-origin-x:${originX};--floating-origin-y:${originY};`
+				? `position:fixed;left:${x}px;top:${y}px;z-index:50;--anchor-width:${anchorWidth}px;${avail}--floating-origin-x:${originX};--floating-origin-y:${originY};`
 				: `position:fixed;left:0px;top:0px;z-index:50;--anchor-width:${anchorWidth}px;opacity:0;pointer-events:none;`;
 		},
-		/** Sets a programmatic virtual/explicit anchor element (e.g. for context menus or slash commands). */
-		set_anchor(el: HTMLElement | null) {
-			anchorEl = el;
+		/** Sets a programmatic element or virtual `{ x, y }` / `DOMRect` anchor. */
+		set_anchor(next: FloatingAnchor | null) {
+			anchorRef = next;
 		},
 		update,
 		anchor,

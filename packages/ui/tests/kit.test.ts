@@ -281,13 +281,17 @@ it.live("open_record writes the shell's one record link, ?record=<model>/<id|new
 	browser(async () => {
 		const { open_record } = await import('../src/record/navigation.ts');
 		history.replaceState(null, '', '/app/sales/list?q=a');
-		open_record('customers', 'new');
-		open_record('customers', 'c1'); // the created record replaces its create sheet
-		assert.equal(location.search, '?q=a&record=customers%2Fc1');
-		open_record('orders', 'o1'); // opened from the sheet: stacks
-		assert.equal(location.search, '?q=a&record=customers%2Fc1&record=orders%2Fo1');
-		open_record('customers', 'c1'); // one already open becomes the top
-		assert.equal(location.search, '?q=a&record=customers%2Fc1');
+		try {
+			open_record('customers', 'new');
+			open_record('customers', 'c1'); // the created record replaces its create sheet
+			assert.equal(location.search, '?q=a&record=customers%2Fc1');
+			open_record('orders', 'o1'); // opened from the sheet: stacks
+			assert.equal(location.search, '?q=a&record=customers%2Fc1&record=orders%2Fo1');
+			open_record('customers', 'c1'); // one already open becomes the top
+			assert.equal(location.search, '?q=a&record=customers%2Fc1');
+		} finally {
+			history.replaceState(null, '', '/');
+		}
 	})
 );
 
@@ -295,11 +299,15 @@ it.live("open_record carries the opener's contexts to the shell's sheet for that
 	browser(async () => {
 		const { carried_contexts, open_record } = await import('../src/record/navigation.ts');
 		const scope = new Map([[Symbol('page.create_scope'), { employmentId: () => 'e1' }]]);
-		open_record('leave_entries', 'new', scope);
-		assert.equal(carried_contexts('leave_entries', 'new'), scope);
-		assert.equal(carried_contexts('leave_entries', 'x1'), undefined);
-		open_record('leave_entries', 'x1');
-		assert.equal(carried_contexts('leave_entries', 'new'), undefined);
+		try {
+			open_record('leave_entries', 'new', scope);
+			assert.equal(carried_contexts('leave_entries', 'new'), scope);
+			assert.equal(carried_contexts('leave_entries', 'x1'), undefined);
+			open_record('leave_entries', 'x1');
+			assert.equal(carried_contexts('leave_entries', 'new'), undefined);
+		} finally {
+			history.replaceState(null, '', '/');
+		}
 	})
 );
 

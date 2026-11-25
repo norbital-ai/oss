@@ -324,3 +324,46 @@ it.effect('documents the optional snapshot host bridge from its public source ty
 	expect(card).toContain('- bolt_refresh?: () => Promise<void>');
 	expect(bridge.docs ?? bridge.summary).toContain('snapshot');
 }));
+
+it.effect('exposes the complete UI behaviors catalog and anti-hand-rolling rules across Norbius skills and docs', () => Effect.gen(function* () {
+	const docs = yield* cached;
+	const { PLATFORM_SKILLS } = yield* Effect.promise(() => import('../src/engine/agent/skills.ts'));
+
+	// Bundled Norbius platform skills explicitly direct the agent to use @norbital-ai/ui/behaviors and forbid hand-rolling
+	for (const skillName of ['product-ux', 'workspace-eval', 'engineering'] as const) {
+		const text = PLATFORM_SKILLS[skillName]?.text ?? '';
+		expect(text, skillName).toContain('@norbital-ai/ui/behaviors');
+		expect(text, skillName).toContain('register_control');
+	}
+	expect(PLATFORM_SKILLS['product-ux']?.text ?? '').toContain('Never hand-roll');
+	expect(PLATFORM_SKILLS['workspace-eval']?.text ?? '').toContain('hand-rolled UI behavior');
+
+	// Primer & authoring reference expose the complete catalog and never-hand-roll guidance
+	const primer = docs.skill('bolt-primer')?.files.find((file) => file.path === 'SKILL.md')?.text ?? '';
+	expect(primer).toContain('Never hand-roll');
+	expect(primer).toContain('create_token_input');
+	expect(primer).toContain('create_panel_group');
+	expect(primer).toContain('create_drawer');
+	expect(primer).toContain('fuzzy_score');
+	expect(primer).toContain('register_control');
+
+	const composition =
+		docs.skill('authoring-tenant-workspace')?.files.find((file) => file.path === 'references/behaviors-and-composition.md')?.text ?? '';
+	expect(composition).toContain('never hand-roll');
+	expect(composition).toContain('create_file_dropzone');
+	expect(composition).toContain('create_color_picker');
+	expect(composition).toContain('create_waterfall');
+	expect(composition).toContain('check_pattern');
+
+	// bolt-contract behaviors.md carries generated TypeScript shapes for EVERY runtime export in @norbital-ai/ui/behaviors
+	const behaviorsCard = docs.skill('bolt-contract')?.files.find((file) => file.path === 'behaviors.md')?.text ?? '';
+	const runtimeBehaviors = yield* Effect.promise(() => import('@norbital-ai/ui/behaviors'));
+	const runtimeNames = Object.keys(runtimeBehaviors).sort();
+	expect(runtimeNames.length).toBeGreaterThanOrEqual(147);
+	for (const name of runtimeNames) {
+		expect(behaviorsCard, `bolt-contract behaviors.md missing ${name}`).toContain(`## ${name}`);
+		if (name !== 'DRAG_THRESHOLD') {
+			expect(composition, `behaviors-and-composition.md missing ${name}`).toContain(name);
+		}
+	}
+}));

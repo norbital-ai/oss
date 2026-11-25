@@ -38,6 +38,7 @@ and the browser's location also set the point.
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Effect, FiberHandle } from 'effect';
+	import { create_listbox } from '../behaviors/index.js';
 	import { attach, fork } from '../effect/index.js';
 	import Input from '../primitives/input/input.svelte';
 	import * as Popover from '../primitives/popover/index.js';
@@ -69,9 +70,19 @@ and the browser's location also set the point.
 		open = $state(false),
 		looked = $state<string | null>(null);
 	let hits = $state<readonly Hit[]>([]),
-		active = $state(0),
 		searching = $state(false),
 		failed = $state(false);
+	const lb = create_listbox({
+		id: `${uid}-places`,
+		items: () => hits.map((hit, i) => ({ value: String(i), label: hit.address })),
+		focus: 'virtual',
+		filter: false,
+		on_activate: (item) => {
+			const hit = hits[Number(item.value)];
+			if (hit !== undefined) choose(hit);
+		}
+	});
+	const active = $derived(lb.active === undefined ? 0 : Number(lb.active));
 	// the trigger shows the stored address, else the address last looked up for the point, else its coordinates
 	const shown = $derived(address ?? looked ?? (point === null ? '' : formatPoint(point)));
 
@@ -148,8 +159,10 @@ and the browser's location also set the point.
 						if (n !== asked) return;
 						hits = [...found.slice(0, 5)];
 						failed = false;
-						active = 0;
-						if (hits[0] !== undefined) on_change(hits[0].point);
+						if (hits[0] !== undefined) {
+							lb.highlight('0');
+							on_change(hits[0].point);
+						}
 					})
 				),
 				Effect.catch(() =>
@@ -169,7 +182,7 @@ and the browser's location also set the point.
 		);
 	}
 	function preview(i: number) {
-		active = i;
+		lb.highlight(String(i));
 		if (hits[i]) on_change(hits[i].point);
 	}
 	function choose(hit: Hit) {
@@ -202,13 +215,12 @@ and the browser's location also set the point.
 	}
 	function keys(e: KeyboardEvent) {
 		if (hits.length === 0) return;
-		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-			e.preventDefault();
-			preview((active + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length);
+		if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+			lb.input_attrs(true).onkeydown(e);
+			const nextHit = hits[Number(lb.active)];
+			if (nextHit !== undefined) on_change(nextHit.point);
 		} else if (e.key === 'Enter') {
-			e.preventDefault();
-			const hit = hits[active];
-			if (hit !== undefined) choose(hit);
+			lb.input_attrs(true).onkeydown(e);
 		} else if (e.key === 'Escape') hits = [];
 	}
 
@@ -295,8 +307,10 @@ and the browser's location also set the point.
 						placeholder={t('searchAddress')}
 						autocomplete="off"
 						role="combobox"
+						aria-autocomplete="list"
 						aria-expanded={hits.length > 0}
-						aria-controls={`${uid}-places`}
+						aria-controls={lb.id}
+						aria-activedescendant={hits.length > 0 ? lb.active_id : undefined}
 						class="pl-8"
 						{disabled}
 					/>
@@ -319,13 +333,19 @@ and the browser's location also set the point.
 			</div>
 			{#if hits.length > 0}
 				<ul
-					id={`${uid}-places`}
+					id={lb.id}
 					class="grid max-h-40 gap-0.5 overflow-auto rounded-md border p-1"
 					role="listbox"
 					data-point-suggestions
 				>
 					{#each hits as hit, i (`${hit.point.lat},${hit.point.lng},${hit.address}`)}
-						<li role="option" aria-selected={i === active}>
+						{@const opt = lb.option_attrs(String(i))}
+						<li
+							id={opt.id}
+							role="option"
+							aria-selected={i === active}
+							data-highlighted={opt['data-highlighted']}
+						>
 							<button
 								type="button"
 								class={cn(
@@ -333,6 +353,7 @@ and the browser's location also set the point.
 									i === active && 'bg-muted'
 								)}
 								onmousedown={(e) => e.preventDefault()}
+								onmousemove={() => preview(i)}
 								onclick={() => choose(hit)}
 							>
 								<Icon

@@ -4,11 +4,11 @@
 	import type { LogViewProps } from './LogView.svelte';
 	import { observe_once } from '../effect/index.js';
 	import { tick } from 'svelte';
-	import { watch } from '../behaviors/index.js';
+	import { create_stick_to_bottom, watch } from '../behaviors/index.js';
 	import Overflow from '../cell/Overflow.svelte';
 	import { words_of } from '../client/context.js';
 	import { cn, narrowViewport } from '../primitives/utils.js';
-	import { ROW_HEIGHT, atBottom, logPreview, wantsOlder, type LogLevel } from './logs.js';
+	import { ROW_HEIGHT, logPreview, wantsOlder, type LogLevel } from './logs.js';
 
 	let {
 		ctx,
@@ -62,9 +62,15 @@
 		error: 'bg-destructive/15 text-destructive'
 	};
 
-	const toBottom = () => port && (port.scrollTop = port.scrollHeight);
-	watch([() => total, () => follow], () => {
-		if (follow) toBottom();
+	const tail = create_stick_to_bottom({ threshold: ROW_HEIGHT * 2, initial: follow });
+	watch(
+		() => tail.stuck,
+		(stuck) => {
+			if (follow !== stuck) follow = stuck;
+		}
+	);
+	watch([() => total, () => follow], ([, want]) => {
+		if (want) tail.scroll_to_bottom();
 	});
 
 	function older() {
@@ -75,7 +81,6 @@
 	function onscroll() {
 		if (!port) return;
 		scrollTop = port.scrollTop;
-		follow = atBottom(port);
 		if (wantsOlder(scrollTop, has_older && !!load_older, loading)) void older();
 	}
 </script>
@@ -85,6 +90,7 @@
 <div
 	bind:this={port}
 	bind:clientHeight={viewport}
+	{@attach tail.viewport}
 	{onscroll}
 	role="log"
 	aria-live="off"

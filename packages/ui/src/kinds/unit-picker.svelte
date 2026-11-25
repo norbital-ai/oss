@@ -4,6 +4,7 @@
 	// months, a month's week rows), paged from its header — the day calendar's shape at a coarser precision. The value is
 	// the unit's first day (`YYYY-MM-DD`, weeks from Monday).
 	import Icon from '@iconify/svelte';
+	import { create_grid_focus } from '../behaviors/index.js';
 	import * as Popover from '../primitives/popover/index.js';
 	import { cn, ui_text } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
@@ -82,6 +83,17 @@
 	const off = (d: string) =>
 		(min !== undefined && unitEnd(d, unit) < min) || (max !== undefined && d > max);
 	const current = $derived(unitStart(today, unit));
+	const colCount = $derived(unit === 'week' ? 1 : 4);
+	const rowCount = $derived(Math.max(1, Math.ceil(cells.length / colCount)));
+	const gridFocus = create_grid_focus({
+		rows: () => rowCount,
+		cols: () => colCount,
+		disabled: (pos) => {
+			const idx = pos.row * colCount + pos.col;
+			const d = cells[idx];
+			return d === undefined || disabled || off(d);
+		}
+	});
 </script>
 
 {#snippet grid()}
@@ -108,17 +120,22 @@
 			!inline && 'gap-x-1',
 			unit === 'week' ? 'grid-cols-1' : 'grid-cols-4'
 		)}
-		role="grid"
-		tabindex="0"
+		{...gridFocus.grid_attrs()}
 		onpointerleave={() => (hovered = null)}
 	>
-		{#each cells as d (d)}
+		{#each cells as d, i (d)}
+			{@const pos = { row: Math.floor(i / colCount), col: i % colCount }}
+			{@const cellAttrs = gridFocus.cell_attrs(pos)}
 			<button
 				type="button"
 				role="gridcell"
+				aria-rowindex={cellAttrs['aria-rowindex']}
+				aria-colindex={cellAttrs['aria-colindex']}
+				tabindex={cellAttrs.tabindex}
 				aria-selected={picking_end ? d === value : included(d) || d === value}
 				data-unit={d}
 				disabled={disabled || off(d)}
+				{@attach gridFocus.cell(pos)}
 				class={cn(
 					'[--hit-target:2rem] h-8 min-w-14 rounded-md px-2 text-xs hover:bg-accent disabled:pointer-events-none disabled:opacity-40',
 					unit === 'week' && 'text-left tabular-nums',
@@ -130,7 +147,10 @@
 					d === current && d !== value && d !== end && 'font-semibold text-primary'
 				)}
 				onpointerenter={() => (hovered = d)}
-				onfocus={() => (hovered = d)}
+				onfocus={() => {
+					cellAttrs.onfocus();
+					hovered = d;
+				}}
 				onclick={() => {
 					hovered = null;
 					on_change(d);

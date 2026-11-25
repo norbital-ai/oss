@@ -1,6 +1,8 @@
-// Single-tab-stop roving focus for horizontal strips, vertical lists, rails and 2D grids.
-// Handles Arrow keys (RTL-aware), Home/End, loop wrap-around, disabled skipping and DOM focus recovery.
+// Single-tab-stop roving focus for horizontal strips, vertical lists, rails and toolbars.
+// Handles Arrow keys (RTL-aware), Home/End, loop wrap-around, disabled skipping and automatic
+// DOM focus recovery when the focused item unmounts.
 import type { Attachment } from 'svelte/attachments';
+import { create_focus_recovery } from './focus-recovery.svelte.js';
 
 /** Arrow-key navigation axis (`'horizontal'`, `'vertical'`, or `'both'`). */
 export type RovingOrientation = 'horizontal' | 'vertical' | 'both';
@@ -8,31 +10,31 @@ export type RovingOrientation = 'horizontal' | 'vertical' | 'both';
 /** Options for `create_roving_focus`. */
 export type RovingFocusOptions = {
 	/** Keys in navigation order. */
-	items: () => readonly string[];
+	readonly items: () => readonly string[];
 	/** Controlled active key; omit for internal focus tracking. */
-	active?: () => string | undefined;
+	readonly active?: () => string | undefined;
 	/** Called when keyboard navigation moves focus to a key. */
-	on_active_change?: (key: string) => void;
+	readonly on_active_change?: (key: string) => void;
 	/** Axis of arrow navigation (default `'horizontal'`). */
-	orientation?: RovingOrientation | (() => RovingOrientation);
+	readonly orientation?: RovingOrientation | (() => RovingOrientation);
 	/** Wrap from last back to first and vice versa (default `true`). */
-	loop?: boolean;
+	readonly loop?: boolean;
 	/** Skip disabled keys during keyboard movement. */
-	disabled?: (key: string) => boolean;
+	readonly disabled?: (key: string) => boolean;
 	/** Optional callback invoked when Space or Enter activates the focused item. */
-	on_activate?: (key: string) => void;
+	readonly on_activate?: (key: string) => void;
 };
 
 /** Return value of `create_roving_focus`. */
 export type RovingFocus = ReturnType<typeof create_roving_focus>;
 
 /**
- * Headless roving-tabindex focus manager. Keeps exactly one `tabindex="0"` in the group so
- * Tab enters/exits cleanly while arrow keys move between enabled items.
+ * Headless roving-tabindex focus manager with automatic focus recovery when items leave the DOM.
  */
 export function create_roving_focus(options: RovingFocusOptions) {
 	const nodes = new Map<string, HTMLElement>();
 	let internal = $state<string | undefined>(undefined);
+	let lastOrder: readonly string[] = [];
 
 	const orientation = $derived(
 		typeof options.orientation === 'function'
@@ -42,10 +44,34 @@ export function create_roving_focus(options: RovingFocusOptions) {
 	const isDisabled = (key: string) => options.disabled?.(key) ?? false;
 	const enabled = $derived(options.items().filter((key) => !isDisabled(key)));
 
+	$effect(() => {
+		lastOrder = [...options.items()];
+	});
+
 	const active = $derived.by(() => {
 		const wanted = options.active ? options.active() : internal;
 		if (wanted !== undefined && enabled.includes(wanted)) return wanted;
 		return enabled[0];
+	});
+
+	const recovery = create_focus_recovery<undefined>({
+		fallback: (lost) => {
+			const remaining = enabled;
+			if (remaining.length === 0) return null;
+			const oldIndex = lastOrder.indexOf(lost.key);
+			if (oldIndex >= 0) {
+				for (let i = oldIndex + 1; i < lastOrder.length; i++) {
+					const k = lastOrder[i];
+					if (k !== undefined && remaining.includes(k)) return nodes.get(k) ?? null;
+				}
+				for (let i = oldIndex - 1; i >= 0; i--) {
+					const k = lastOrder[i];
+					if (k !== undefined && remaining.includes(k)) return nodes.get(k) ?? null;
+				}
+			}
+			const first = remaining[0];
+			return first !== undefined ? (nodes.get(first) ?? null) : null;
+		}
 	});
 
 	function move(key: string): void {
@@ -68,6 +94,7 @@ export function create_roving_focus(options: RovingFocusOptions) {
 	}
 
 	function handle_keydown(event: KeyboardEvent): void {
+		if (event.metaKey || event.ctrlKey || event.altKey) return;
 		const rtl =
 			event.currentTarget instanceof HTMLElement &&
 			getComputedStyle(event.currentTarget).direction === 'rtl';
@@ -117,11 +144,14 @@ export function create_roving_focus(options: RovingFocusOptions) {
 		prev() {
 			step(-1);
 		},
-		/** Attach to each focusable item so arrow navigation can call `.focus()` on it. */
+		/** Attach to each focusable item for arrow focus & unmount focus recovery. */
 		item(key: string): Attachment<HTMLElement> {
+			const recover = recovery.item(key);
 			return (el) => {
 				nodes.set(key, el);
+				const stopRecover = recover(el);
 				return () => {
+					stopRecover?.();
 					if (nodes.get(key) === el) nodes.delete(key);
 				};
 			};
@@ -132,7 +162,7 @@ export function create_roving_focus(options: RovingFocusOptions) {
 				onkeydown: handle_keydown
 			};
 		},
-		/** Spread onto each item for roving `tabindex`, focus syncing and `data-focused` state. */
+		/** Spread onto each item for roving `tabindex`, focus syncing and `data-roving-active` state. */
 		item_attrs(key: string) {
 			const disabled = isDisabled(key);
 			const current = !disabled && active === key;

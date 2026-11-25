@@ -18,7 +18,7 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 | Automations, effects, notifications (`ctx.notify`), reruns, AI  | `automations-and-effects.md`            |
 | Briefs, workspace skills, envoys, integrations, sync boundary   | `agents-and-integrations.md`            |
 | What the platform renders                                       | `built-ins.md`                          |
-| Primitive roles (`⚡`, matrix, timeline), page slots, toolbar, tabs, forms | `app-structure.md`                      |
+| Primitive roles (`⚡`, matrix, timeline), file placement & co-location, slots, toolbar, tabs, forms | `app-structure.md` |
 | Composing novel interactive UIs (`Surface`, `@norbital-ai/ui/behaviors`)   | `behaviors-and-composition.md`          |
 | UI review checklist                                             | `ui-standard.md`                        |
 | Layout axioms                                                   | `interface-ideology.md`                 |
@@ -39,7 +39,7 @@ Policies, teams, limits, approvals: `norbital-platform`, `references/approvals-a
 
 1. State tasks, actors, invariants and observable outcomes.
 2. Inspect contracts and existing code. Decide entity boundaries before pages.
-3. Reuse native controls whose contract fits; author only domain behaviour.
+3. Reuse native `@norbital-ai/ui` primitives first; when a screen needs custom interactive UI, compose exclusively from `@norbital-ai/ui/behaviors` (never hand-roll keyboard navigation, focus traps, Escape/outside dismiss, menus, trees, grids, sliders, drag/reorder/resize, token/trigger inputs, file dropzones, persistence, debounce, or clipboard plumbing) and register every custom control with `register_control`. Co-locate single-purpose custom UI and model services beside their owning datatype renderer, representation, model (`+model.ts`), or app page; place modules in `src/lib/` only when genuinely reused across consumers. Author only domain behaviour.
 4. Validate, then exercise the real user path: resulting records, denied roles, empty, loading and error states.
 5. Report implemented, verified and remaining work apart. Request merge only with evidence for the current head.
 

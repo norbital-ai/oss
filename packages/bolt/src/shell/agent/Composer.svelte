@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { MediaQuery } from 'svelte/reactivity';
-	import { watch } from '@norbital-ai/ui/behaviors';
+	import { create_file_dropzone, create_input_history, create_reorder, watch } from '@norbital-ai/ui/behaviors';
 	import { Button, Combobox, Icon, Input, MarkdownEditor, Popover, type CommandItem, type ModelExposure } from '@norbital-ai/ui';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
@@ -58,7 +58,23 @@
 	const touch = new MediaQuery('pointer: coarse');
 	const planning = $derived(mode === 'plan' || drafting);
 	const scheduled = $derived(rows.filter((row) => row.role === 'user' && row.state === 'scheduled'));
-	let dragFrom = $state<number | null>(null);
+	const sentPrompts = $derived(
+		rows
+			.filter((row) => row.role === 'user' && typeof row.text === 'string' && row.text.trim() !== '')
+			.map((row) => row.text ?? '')
+	);
+	const history = create_input_history({
+		entries: () => sentPrompts,
+		read: () => draft,
+		write: (text) => {
+			draft = text;
+		}
+	});
+	const queueReorder = create_reorder({
+		items: () => queued.map((q) => q.id),
+		disabled: (id) => id.startsWith('local:'),
+		on_reorder: (from, to) => on_move(from, to)
+	});
 	// the panel mounts on every open (⌘K, the sidebar): the caret lands in the message box, except on a touch screen,
 	// where focus would raise the keyboard over the transcript
 	let editor = $state<HTMLTextAreaElement | null>(null);
@@ -74,10 +90,11 @@
 		event.preventDefault();
 		on_attach(files);
 	}
-	function drop(event: DragEvent): void {
-		event.preventDefault();
-		on_attach([...(event.dataTransfer?.files ?? [])]);
-	}
+	const fileDrop = create_file_dropzone({
+		on_files: ({ accepted }) => {
+			if (accepted.length > 0) on_attach(accepted);
+		}
+	});
 	function keydown(event: KeyboardEvent): void {
 		// plain Tab toggles plan mode (L-BOLT-541); an open `/` or `@` menu takes Tab first, a modified Tab moves focus
 		if (
@@ -92,9 +109,12 @@
 			if (!drafting) mode = mode === 'plan' ? null : 'plan';
 			return;
 		}
+		history.onkeydown(event);
+		if (event.defaultPrevented) return;
 		if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
 		// a soft keyboard has no Shift+Enter: its Return is the new line, and Send sends
 		if (touch.current && !commandKey(event)) return;
+		history.reset();
 		on_send(event, commandKey(event));
 	}
 	/** The schedule popover, and the time picked in it (`datetime-local`: the person's clock). */
@@ -220,15 +240,21 @@
 								<ol class="max-h-52 divide-y divide-border/60 overflow-auto border-t border-border/60">
 									{#each queued as q, i (q.id)}
 										{@const local = q.id.startsWith('local:')}
+										{@const reorderProps = queueReorder.item_attrs(q.id)}
 										<li class="group/queued flex items-start gap-2 px-2 py-2 {local ? 'opacity-70' : ''}" class:bg-muted={revising?.id === q.id}
 											data-queued={q.id} aria-busy={local}
-											ondragover={(event) => event.preventDefault()}
-											ondrop={(event) => { event.preventDefault(); if (dragFrom !== null) on_move(dragFrom, i); dragFrom = null; }}>
+											data-dragging={reorderProps['data-dragging']}
+											data-drop-target={reorderProps['data-drop-target']}
+											ondragover={reorderProps.ondragover}
+											ondragleave={reorderProps.ondragleave}
+											ondrop={reorderProps.ondrop}>
 											<Button type="button" size="icon" variant="ghost" class="size-8 shrink-0 cursor-grab active:cursor-grabbing"
 												aria-label={t(touch.current ? 'Move up' : 'Reorder message')} title={t(touch.current ? 'Move up' : 'Drag or use the arrow keys to reorder')} disabled={local || (touch.current && i === 0)}
-												draggable={!local} ondragstart={() => { dragFrom = i; }} ondragend={() => { dragFrom = null; }}
+												draggable={reorderProps.draggable}
+												ondragstart={reorderProps.ondragstart}
+												ondragend={reorderProps.ondragend}
 												onclick={() => { if (touch.current) on_move(i, i - 1); }}
-												onkeydown={(event) => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); on_move(i, i + (event.key === 'ArrowUp' ? -1 : 1)); } }}>
+												onkeydown={(event) => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); queueReorder.move_by(q.id, event.key === 'ArrowUp' ? -1 : 1); } }}>
 												<Icon name={touch.current ? 'lucide:arrow-up' : 'lucide:grip-vertical'} class="size-3.5 text-muted-foreground" />
 											</Button>
 											<div class="min-w-0 flex-1 py-1">
@@ -323,8 +349,7 @@
 							class="relative flex w-full flex-col"
 							inert={revision_pending}
 							aria-busy={revision_pending}
-							ondragover={(e) => e.preventDefault()}
-							ondrop={drop}
+							{@attach fileDrop.zone}
 						>
 							{#if mode === 'compact' || planning}
 								{@const chip = mode === 'compact' ? 'compact' : 'plan'}
@@ -367,16 +392,13 @@
 
 							<input
 								bind:this={picker}
-								type="file"
+								{@attach fileDrop.input}
+								{...fileDrop.input_attrs()}
 								multiple
 								class="sr-only"
 								aria-hidden="true"
 								tabindex="-1"
 								accept="image/*,audio/*,text/*,application/pdf,application/json,application/xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.md,.csv,.tsv,.log,.yaml,.yml"
-								onchange={(e) => {
-									on_attach([...(e.currentTarget.files ?? [])]);
-									e.currentTarget.value = '';
-								}}
 							/>
 							<Inline gap="xs" class="pb-2">
 								<!-- the attach glyph lines up with the text above it -->
@@ -387,7 +409,7 @@
 									class="-ml-2 shrink-0 text-muted-foreground"
 									aria-label={t('Attach media or files')}
 									title={t('Attach media or files')}
-									onclick={() => picker?.click()}><Icon name="lucide:plus" class="size-4" /></Button
+									onclick={() => fileDrop.open()}><Icon name="lucide:plus" class="size-4" /></Button
 								>
 								<button
 									type="button"

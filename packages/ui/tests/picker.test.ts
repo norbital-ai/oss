@@ -122,6 +122,7 @@ test('a failed read of the selected record is not shown as not found', async () 
 test('readonly picker renders a relationship icon and opens the target record when clicked', async () => {
 	const target = document.body.appendChild(document.createElement('div'));
 	const before = location.href;
+	history.replaceState(null, '', '/');
 	const { bolt, runtime } = await scriptedBolt({ answer: () => ({}) });
 	const app = mount(Harness, {
 		target,

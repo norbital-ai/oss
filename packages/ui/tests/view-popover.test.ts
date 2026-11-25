@@ -685,6 +685,7 @@ async function show(fixture: ViewHarnessProps, url = '/') {
 		done: async () => {
 			await unmount(app);
 			target.remove();
+			history.replaceState(null, '', '/');
 		}
 	};
 }

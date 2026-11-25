@@ -1,15 +1,44 @@
 import { expect, it } from 'vitest';
-import { stepActive } from '../src/primitives/utils.ts';
+import { flushSync } from 'svelte';
+import { create_listbox } from '../src/behaviors/index.ts';
+import { in_root } from './run-root.svelte.ts';
 
-it('an arrow step wraps, skips rows the list refuses, and stays when nothing is selectable', () => {
-	expect(stepActive(0, 0, 1)).toBe(0);
-	expect(stepActive(3, 0, 1)).toBe(1);
-	expect(stepActive(3, 2, 1)).toBe(0);
-	expect(stepActive(3, 0, -1)).toBe(2);
-	expect(stepActive(3, 9, -1)).toBe(1);
-	// the disabled middle row is stepped over both ways, including the wrap
-	expect(stepActive(3, 0, 1, (i) => i !== 1)).toBe(2);
-	expect(stepActive(3, 2, 1, (i) => i !== 1)).toBe(0);
-	expect(stepActive(3, 2, -1, (i) => i !== 1)).toBe(0);
-	expect(stepActive(2, 0, 1, () => false)).toBe(0);
+it('create_listbox virtual navigation wraps, skips disabled rows and stays clear on empty lists', () => {
+	const stop = in_root(() => {
+		const empty = create_listbox({ items: () => [], focus: 'virtual', filter: false });
+		expect(empty.active).toBeUndefined();
+		empty.input_attrs(true).onkeydown(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+		expect(empty.active).toBeUndefined();
+
+		const lb = create_listbox({
+			items: () => [
+				{ value: 'a', label: 'A' },
+				{ value: 'b', label: 'B', disabled: true },
+				{ value: 'c', label: 'C' }
+			],
+			focus: 'virtual',
+			filter: false
+		});
+		expect(lb.active).toBe('a');
+		lb.input_attrs(true).onkeydown(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+		flushSync();
+		expect(lb.active).toBe('c');
+		lb.input_attrs(true).onkeydown(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+		flushSync();
+		expect(lb.active).toBe('a');
+		lb.input_attrs(true).onkeydown(new KeyboardEvent('keydown', { key: 'ArrowUp' }));
+		flushSync();
+		expect(lb.active).toBe('c');
+
+		const allDisabled = create_listbox({
+			items: () => [
+				{ value: 'x', label: 'X', disabled: true },
+				{ value: 'y', label: 'Y', disabled: true }
+			],
+			focus: 'virtual',
+			filter: false
+		});
+		expect(allDisabled.active).toBeUndefined();
+	});
+	stop();
 });

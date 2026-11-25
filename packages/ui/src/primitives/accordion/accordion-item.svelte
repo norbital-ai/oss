@@ -26,6 +26,8 @@
 	const trigger_id = $derived(`${root?.prefix ?? 'nb-acc'}-trigger-${value}`);
 	const content_id = $derived(`${root?.prefix ?? 'nb-acc'}-content-${value}`);
 
+	$effect(() => root?.register_item(value, () => off));
+
 	set_accordion_item({
 		get value() {
 			return value;

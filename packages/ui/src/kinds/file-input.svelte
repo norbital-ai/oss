@@ -35,7 +35,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Effect, FiberSet } from 'effect';
-	import { watch } from '../behaviors/index.js';
+	import { create_file_dropzone, watch } from '../behaviors/index.js';
 	import { attach, fork } from '../effect/index.js';
 	import { cn, ui_text } from '../primitives/utils.js';
 	import { use_form } from '../form/form-state.svelte.js';
@@ -73,8 +73,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 		() => pending.some((file) => file.error === undefined),
 		(busy) => on_pending_change?.(busy)
 	);
-	let over = $state(false),
-		seq = 0;
+	let seq = 0;
 	const can = $derived(host.upload !== undefined && !disabled);
 	const room = $derived(max - refs.length - pending.filter((p) => p.error === undefined).length);
 
@@ -140,6 +139,10 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	const start = (files: readonly File[]) => {
 		if (files.length > 0) launch(add(files));
 	};
+	const dropzone = create_file_dropzone({
+		disabled: () => !can || room <= 0,
+		on_files: ({ accepted }) => start(accepted)
+	});
 	const remove = (ref: FileRef) => on_change(kind.many ? refs.filter((r) => r.id !== ref.id) : null);
 	const size = $derived(kind.max.replace('iB', 'B'));
 	const typeNames: Record<string, string> = {
@@ -175,26 +178,16 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 
 <div class="grid min-w-0 gap-1" {@attach lifetime}>
 	<div
+		{@attach dropzone.zone}
 		class={cn(
 			'flex min-h-8 min-w-0 flex-wrap items-center gap-1 rounded-control border border-border-control bg-surface-input p-1 shadow-xs transition-colors',
-			over && 'border-brand bg-brand-muted/30',
+			dropzone.dragging && 'border-brand bg-brand-muted/30',
 			invalid && 'border-destructive',
 			disabled && 'opacity-50'
 		)}
 		data-file-field
-		data-over={over || undefined}
+		data-over={dropzone.dragging || undefined}
 		role="group"
-		ondragover={(e) => {
-			if (!can || room <= 0) return;
-			e.preventDefault();
-			over = true;
-		}}
-		ondragleave={() => (over = false)}
-		ondrop={(e) => {
-			e.preventDefault();
-			over = false;
-			if (can) start([...(e.dataTransfer?.files ?? [])]);
-		}}
 	>
 		<FileList {ctx}
 			{refs}
@@ -219,6 +212,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 					<span class={empty ? undefined : 'sr-only'}>{label}</span>
 					<span id={hintId} class="sr-only">{hint}</span>
 					<input
+						{@attach dropzone.input}
 						{id}
 						type="file"
 						class="sr-only"

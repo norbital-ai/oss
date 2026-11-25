@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { createAttachmentKey } from 'svelte/attachments';
 	import type { HTMLButtonAttributes } from 'svelte/elements';
+	import { create_hover_intent } from '../../behaviors/index.js';
 	import { cn, type WithElementRef } from '../utils.js';
 	import { get_popover_context } from './context.js';
 
@@ -29,8 +30,33 @@
 	} = $props();
 
 	const popover = get_popover_context();
-	let hoverTimer: ReturnType<typeof setTimeout> | undefined;
 	let fallbackEl = $state<HTMLElement | null>(null);
+
+	const hover = create_hover_intent({
+		trigger: () => popover?.trigger_el ?? ref ?? fallbackEl,
+		popup: () => popover?.content_el,
+		open: () => popover?.open ?? false,
+		on_open: () => popover?.set_open(true),
+		on_close: () => popover?.set_open(false),
+		open_delay: () => open_delay,
+		close_delay: () => close_delay,
+		group: null,
+		hoverable: true
+	});
+
+	$effect(() => {
+		if (!open_on_hover) {
+			popover?.set_hover_handlers(null);
+			return;
+		}
+		popover?.set_hover_handlers({
+			enter: (event) => hover.enter(event, false),
+			leave: (event) => hover.leave(event)
+		});
+		return () => {
+			popover?.set_hover_handlers(null);
+		};
+	});
 
 	$effect(() => {
 		const el = ref ?? fallbackEl;
@@ -44,6 +70,7 @@
 		if (e.currentTarget instanceof HTMLElement && popover?.trigger_el !== e.currentTarget) {
 			popover?.set_trigger(e.currentTarget);
 		}
+		hover.clear();
 		popover?.set_open(!(popover?.open ?? false));
 		onclick?.(e);
 	}
@@ -61,18 +88,8 @@
 		'aria-controls': popover?.content_id,
 		'data-state': popover?.open ? ('open' as const) : ('closed' as const),
 		onclick: handleClick,
-		onpointerenter: open_on_hover
-			? () => {
-					if (hoverTimer !== undefined) clearTimeout(hoverTimer);
-					hoverTimer = setTimeout(() => popover?.set_open(true), open_delay);
-				}
-			: undefined,
-		onpointerleave: open_on_hover
-			? () => {
-					if (hoverTimer !== undefined) clearTimeout(hoverTimer);
-					hoverTimer = setTimeout(() => popover?.set_open(false), close_delay);
-				}
-			: undefined,
+		onpointerenter: open_on_hover ? (event: PointerEvent) => hover.enter(event, true) : undefined,
+		onpointerleave: open_on_hover ? (event: PointerEvent) => hover.leave(event) : undefined,
 		...restProps
 	});
 </script>

@@ -305,7 +305,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		add(
 			pageTool,
 			function* (given) {
-				const { path, configure: asked, click, type, scroll, go, highlight, preview } = given;
+				const { path, configure: asked, click, type, control, scroll, go, highlight, preview } = given;
 				if (preview !== undefined) {
 					if (!(/^https?:\/\//.test(preview) && URL.canParse(preview)))
 						return err('preview is a preview URL (https://…)');
@@ -340,8 +340,8 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					if (held !== undefined) return held;
 					return ok({ navigation: target, requested: true });
 				}
-				if ([click, scroll, go, type, highlight].every((v) => v === undefined))
-					return err('give path, click, type, scroll, go, highlight or preview');
+				if ([click, scroll, go, type, control, highlight].every((v) => v === undefined))
+					return err('give path, click, type, control, scroll, go, highlight or preview');
 				const held = hold('page', given, 'control their open tab');
 				if (held !== undefined) return held;
 				return ok({
@@ -350,6 +350,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 						...(scroll === undefined ? {} : { scroll }),
 						...(go === undefined ? {} : { go }),
 						...(type === undefined ? {} : { type }),
+						...(control === undefined ? {} : { control }),
 						...(highlight === undefined ? {} : { highlight })
 					},
 					requested: true

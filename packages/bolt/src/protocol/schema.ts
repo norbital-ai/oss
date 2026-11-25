@@ -19,7 +19,7 @@ export const AgentQuestion = Schema.Struct({
 });
 export type AgentQuestion = typeof AgentQuestion.Type;
 
-/** A closed action in the person's active tab: click visible text, scroll CSS pixels, or go back/forward. */
+/** A closed action in the person's active tab: click visible text, drive a registered UI control, type, scroll, or go back/forward. */
 export const PageAction = Schema.Struct({
 	click: Schema.optionalKey(Schema.String),
 	scroll: Schema.optionalKey(Schema.Finite),
@@ -30,6 +30,13 @@ export const PageAction = Schema.Struct({
 			label: Schema.String,
 			text: Schema.String,
 			submit: Schema.optionalKey(Schema.Boolean)
+		})
+	),
+	control: Schema.optionalKey(
+		Schema.Struct({
+			ref: Schema.String,
+			action: Schema.String,
+			args: Schema.optionalKey(Schema.Array(Schema.Json))
 		})
 	)
 });

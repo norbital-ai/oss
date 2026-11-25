@@ -3,11 +3,38 @@ export { ui_text_for, type UiTextKey } from '../i18n.js';
 import { type ClassValue, clsx } from 'clsx';
 import { getContext, setContext } from 'svelte';
 import { MediaQuery } from 'svelte/reactivity';
-import { twMerge } from 'tailwind-merge';
+import { extendTailwindMerge } from 'tailwind-merge';
+
+const merge = extendTailwindMerge({
+	extend: {
+		classGroups: {
+			'font-size': [
+				{
+					text: [
+						'display',
+						'title',
+						'section',
+						'subhead',
+						'lede',
+						'heading',
+						'micro',
+						'tiny',
+						'overline',
+						'label',
+						'meta',
+						'eyebrow',
+						'body',
+						'caption'
+					]
+				}
+			]
+		}
+	}
+});
 
 /** Joins class names and merges conflicting Tailwind classes (the last wins). */
 export function cn(...inputs: ClassValue[]) {
-	return twMerge(clsx(inputs));
+	return merge(clsx(inputs));
 }
 
 /** Merges attribute/event bags left-to-right: classes concatenate, event handlers chain, other keys overwrite. */
@@ -41,26 +68,6 @@ export function merge_props(
 		}
 	}
 	return out;
-}
-
-/**
- * The row ArrowDown/ArrowUp moves to: wraps, and steps over rows `enabled` refuses. With none selectable, or an empty
- * list, the active row stays (0 for an empty list).
- */
-export function stepActive(
-	length: number,
-	active: number,
-	delta: 1 | -1,
-	enabled?: (index: number) => boolean
-): number {
-	if (length === 0) return 0;
-	const start = Math.min(Math.max(active, 0), length - 1);
-	let next = start;
-	for (let i = 0; i < length; i++) {
-		next = (next + delta + length) % length;
-		if (enabled === undefined || enabled(next)) return next;
-	}
-	return start;
 }
 
 /** A byte count as short text in binary units (`512.0 B`, `12.0 KB`, `3.4 MB`); `0 B` for none. */

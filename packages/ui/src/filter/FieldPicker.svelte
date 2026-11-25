@@ -6,8 +6,9 @@
 	import * as Popover from '../primitives/popover/index.js';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { tick } from 'svelte';
+	import { create_listbox } from '../behaviors/index.js';
 	import type { ModelExposure } from '../kinds/context.js';
-	import { cn, stepActive } from '../primitives/utils.js';
+	import { cn } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import { words_of } from '../client/context.js';
 	import { filterable, INDEX, isInlineField, offeredPaths, resolve, childOf, unwrapShape, type FilterStep, type Offer } from './catalog.js';
@@ -41,8 +42,7 @@
 	} = $props();
 	const bolt = $derived(words_of(ctx));
 	let open = $state(false),
-		query = $state(''),
-		active = $state(0);
+		query = $state('');
 	let search = $state<HTMLInputElement | null>(null),
 		list = $state<HTMLElement | null>(null);
 	const expanded = new SvelteSet<string>();
@@ -171,23 +171,40 @@
 		open = false;
 		query = '';
 	};
-	/** The active row's id, announced from the box it leaves focus in. */
-	const activeId = $derived(entries[active] === undefined ? undefined : `field-option-${active}`);
+	const lb = create_listbox({
+		items: () => entries.map((e) => ({ value: e.path, label: e.label })),
+		focus: 'virtual',
+		filter: false,
+		selected: () => (value === '' ? [] : [value]),
+		on_activate: (item) => {
+			const entry = entries.find((e) => e.path === item.value);
+			if (entry !== undefined) pick(entry);
+		}
+	});
+	const active = $derived(
+		lb.active === undefined
+			? 0
+			: Math.max(
+					0,
+					entries.findIndex((e) => e.path === lb.active)
+				)
+	);
 	function keydown(event: KeyboardEvent) {
-		if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+		if (
+			event.key === 'ArrowDown' ||
+			event.key === 'ArrowUp' ||
+			event.key === 'Home' ||
+			event.key === 'End'
+		) {
 			if (entries.length === 0) return;
-			event.preventDefault();
-			active = stepActive(entries.length, active, event.key === 'ArrowDown' ? 1 : -1);
+			lb.input_attrs(open).onkeydown(event);
 			void tick().then(() =>
 				list
 					?.querySelector<HTMLElement>(`[data-index="${active}"]`)
 					?.scrollIntoView({ block: 'nearest' })
 			);
 		} else if (event.key === 'Enter' && event.target === search) {
-			const entry = entries[active];
-			if (entry === undefined) return;
-			event.preventDefault();
-			pick(entry);
+			lb.input_attrs(open).onkeydown(event);
 		}
 	}
 </script>
@@ -195,11 +212,10 @@
 <Popover.Root
 	bind:open
 	on_open_change={(next) => {
-		if (next)
-			active = Math.max(
-				0,
-				entries.findIndex((e) => e.path === value)
-			);
+		if (next) {
+			const target = entries.find((e) => e.path === value) ?? entries[0];
+			if (target !== undefined) lb.highlight(target.path);
+		}
 	}}
 >
 	<Popover.Trigger>
@@ -247,24 +263,29 @@
 			type="search"
 			role="combobox"
 			aria-autocomplete="list"
-			aria-controls="field-options"
+			aria-controls={lb.id}
 			aria-expanded="true"
-			aria-activedescendant={activeId}
+			aria-activedescendant={lb.active_id}
 			placeholder={msg(bolt, 'view.searchFields')}
 			bind:value={query}
-			oninput={() => (active = 0)}
+			oninput={() => {
+				const first = entries[0];
+				if (first !== undefined) lb.highlight(first.path);
+			}}
 		/>
 		<p class="text-muted-foreground px-2 py-1 text-xs">
 			{msg(bolt, 'view.fieldHelp'
 			)}
 		</p>
-		<ul bind:this={list} id="field-options" class="max-h-64 overflow-auto" role="listbox">
+		<ul bind:this={list} id={lb.id} class="max-h-64 overflow-auto" role="listbox">
 			{#each entries as e, i (e.path)}
+				{@const opt = lb.option_attrs(e.path)}
 				<li
-					id={`field-option-${i}`}
+					id={opt.id}
 					class="flex items-center"
 					role="option"
 					aria-selected={e.path === value}
+					data-highlighted={opt['data-highlighted']}
 					data-index={i}
 					data-active={i === active ? 'true' : undefined}
 					style={e.depth > 0 ? `padding-left:${e.depth * 0.75}rem` : undefined}
@@ -276,7 +297,7 @@
 							(e.path === value || i === active) && 'bg-muted'
 						)}
 						data-path={e.path}
-						onmousemove={() => (active = i)}
+						onmousemove={() => lb.highlight(e.path)}
 						onclick={() => pick(e)}
 					>
 						<FieldIndicator {ctx}

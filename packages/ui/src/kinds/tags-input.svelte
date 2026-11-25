@@ -1,6 +1,9 @@
 <script lang="ts">
-	// `text many`: each entry a chip; Enter or a comma adds, Backspace on an empty box removes the last.
+	// `text many`: each entry a chip; Enter or a comma adds, Backspace on an empty box removes the last,
+	// ArrowLeft/Right navigates chips, double-click/Enter edits a chip in place.
 	import Icon from '@iconify/svelte';
+	import { untrack } from 'svelte';
+	import { create_token_input } from '../behaviors/index.js';
 	import { cn, ui_text } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
 
@@ -18,50 +21,59 @@
 		invalid?: boolean;
 	} = $props();
 	const t = ui_text();
-	let text = $state('');
-	function commit() {
-		const add = text
-			.split(',')
-			.map((s) => s.trim())
-			.filter((s) => s !== '' && !value.includes(s));
-		text = '';
-		if (add.length > 0) on_change([...value, ...add]);
-	}
+	const controlId = untrack(() => id);
+	const tokens = create_token_input({
+		value: () => value,
+		on_change: (next) => on_change(next),
+		disabled: () => disabled,
+		...(controlId !== undefined ? { control: { id: `tags:${controlId}` } } : {})
+	});
 </script>
 
 <div
 	class={cn(CONTROL, 'flex h-auto min-h-8 flex-wrap items-center gap-1 py-1')}
 	aria-invalid={invalid ? 'true' : undefined}
 >
-	{#each value as item (item)}
-		<span class="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 text-xs">
-			{item}
-			{#if !disabled}
-				<button
-					type="button"
-					aria-label={`${t('remove')} ${item}`}
-					onclick={() => on_change(value.filter((x) => x !== item))}
-					><Icon icon="lucide:x" class="size-3" /></button
-				>
-			{/if}
-		</span>
+	{#each tokens.values as item, i (item)}
+		{#if tokens.editing_index === i}
+			<input
+				class="w-24 rounded-sm bg-muted px-1.5 py-0.5 text-xs outline-none ring-1 ring-ring"
+				value={tokens.editing_text}
+				oninput={(e) => (tokens.editing_text = e.currentTarget.value)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') {
+						e.preventDefault();
+						tokens.commit_edit();
+					} else if (e.key === 'Escape') {
+						e.preventDefault();
+						tokens.cancel_edit();
+					}
+				}}
+				onblur={() => tokens.commit_edit()}
+			/>
+		{:else}
+			<span
+				class="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				{@attach tokens.chip(i)}
+				{...tokens.chip_attrs(i)}
+			>
+				{item}
+				{#if !disabled}
+					<button
+						type="button"
+						tabindex="-1"
+						aria-label={`${t('remove')} ${item}`}
+						onclick={() => tokens.remove_at(i)}
+						><Icon icon="lucide:x" class="size-3" /></button
+					>
+				{/if}
+			</span>
+		{/if}
 	{/each}
 	<input
 		{id}
 		class="min-w-24 flex-1 bg-transparent text-sm outline-none"
-		value={text}
-		{disabled}
-		oninput={(e) => {
-			text = e.currentTarget.value;
-			if (text.includes(',')) commit();
-		}}
-		onkeydown={(e) => {
-			if (e.key === 'Enter') {
-				e.preventDefault();
-				commit();
-			} else if (e.key === 'Backspace' && text === '' && value.length > 0)
-				on_change(value.slice(0, -1));
-		}}
-		onblur={commit}
+		{@attach tokens.input}
+		{...tokens.input_attrs()}
 	/>
 </div>

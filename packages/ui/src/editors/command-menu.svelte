@@ -21,7 +21,13 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	import { attach, fork } from '../effect/index.js';
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
-	import { create_dismiss, portal, virtual_list } from '../behaviors/index.js';
+	import {
+		create_dismiss,
+		create_floating,
+		create_listbox,
+		portal,
+		virtual_list
+	} from '../behaviors/index.js';
 	import { cn, ui_text } from '../primitives/utils.js';
 	import {
 		applyItem,
@@ -36,7 +42,6 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	// raw: the trigger is compared by identity
 	let found = $state.raw<Found | null>(null),
 		items = $state.raw<readonly CommandItem[]>([]),
-		active = $state(0),
 		anchor = $state.raw<DOMRect | null>(null);
 	let list = $state<HTMLElement | null>(null);
 	let pending = $state(false);
@@ -44,6 +49,19 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	/** Esc closes the menu for this trigger until the writer types a new one. */
 	let dismissed = -1;
 	const open = $derived(found !== null && anchor !== null);
+	const lb = create_listbox({
+		items: () =>
+			items.map((item) => ({ value: item.id, label: item.label, disabled: item.disabled })),
+		focus: 'virtual',
+		filter: false,
+		on_activate: (selected) => {
+			const item = items.find((entry) => entry.id === selected.value);
+			if (item !== undefined) pick(item);
+		}
+	});
+	const active = $derived(
+		lb.active === undefined ? -1 : items.findIndex((item) => item.id === lb.active)
+	);
 	// a group heading is its own entry, so a long list windows over measured entries (as `Combobox`)
 	const entries = $derived(
 		items.flatMap((item, i): ({ head: string; i: number } | { item: CommandItem; i: number })[] =>
@@ -103,10 +121,8 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 				Effect.sync(() => {
 					if (current === request_id && found?.trigger === f.trigger && found.query === f.query) {
 						items = [...next];
-						active = Math.max(
-							-1,
-							next.findIndex((item) => !item.disabled && !item.back)
-						);
+						const initial = next.find((item) => !item.disabled && !item.back);
+						if (initial !== undefined) lb.highlight(initial.id);
 					}
 				})
 			),
@@ -147,11 +163,8 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	}
 	function keydown(e: KeyboardEvent) {
 		if (!open || e.isComposing) return;
-		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-			for (let step = 0; step < items.length; step++) {
-				active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-				if (!items[active]?.disabled) break;
-			}
+		if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+			lb.input_attrs(open).onkeydown(e);
 		} else if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowRight') {
 			const item = items[active];
 			if (e.key === 'ArrowRight' && item?.drill === undefined) return;
@@ -210,14 +223,19 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 			}
 		}
 	});
-	const menuStyle = $derived.by(() => {
-		const rect = anchor;
-		if (rect === null) return '';
-		const vw = typeof window === 'undefined' ? 1024 : window.innerWidth;
-		const vh = typeof window === 'undefined' ? 768 : window.innerHeight;
-		const x = Math.round(Math.max(8, Math.min(rect.left, vw - 328)));
-		const y = Math.round(Math.max(8, Math.min(rect.bottom + 4, vh - 80)));
-		return `position:fixed;top:0;left:0;transform:translate3d(${x}px,${y}px,0);`;
+	const floating = create_floating({
+		open: () => open,
+		anchor: () => {
+			const rect = anchor;
+			return rect === null ? null : { getBoundingClientRect: () => rect };
+		},
+		side: 'bottom',
+		align: 'start',
+		side_offset: 4,
+		padding: 8,
+		flip: true,
+		escape: false,
+		outside: false
 	});
 </script>
 
@@ -225,12 +243,13 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	{#if open}
 		<div {@attach portal()} class="contents">
 			<div
+				{@attach floating.content}
 				{@attach dismiss.surface}
-				style={menuStyle}
+				style={floating.style}
 				class="z-50 w-80 max-w-[calc(100vw-2rem)] rounded-control border bg-popover p-1 text-popover-foreground shadow-deep"
 				data-command-menu={found?.trigger.char}
 			>
-					<ul bind:this={list} role="listbox" class="max-h-72 overflow-auto">
+					<ul bind:this={list} id={lb.id} role="listbox" class="max-h-72 overflow-auto">
 						{#if pending}<li role="status" class="px-2 py-2 text-sm text-muted-foreground">
 								{t('searching')}
 							</li>{:else if items.length === 0}<li
@@ -256,10 +275,13 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 								</li>
 							{:else}
 								{@const item = e.item}
+								{@const opt = lb.option_attrs(item.id)}
 								<li
+									id={opt.id}
 									role="option"
 									aria-selected={i === active && !item.disabled}
 									aria-disabled={item.disabled || undefined}
+									data-highlighted={opt['data-highlighted']}
 									data-index={i}
 									data-item={item.id}
 									class={cn('relative', item.depth && 'ml-3 border-l border-border pl-2')}
@@ -277,7 +299,7 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 										)}
 										onmousedown={(e) => e.preventDefault()}
 										onmousemove={() => {
-											if (!item.disabled) active = i;
+											if (!item.disabled) lb.highlight(item.id);
 										}}
 										onclick={() => pick(item)}
 									>

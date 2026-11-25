@@ -5,6 +5,7 @@ input's value is not writable. `readonly` (or an enclosing readonly form) shows 
 copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps the box, muted.
 -->
 <script lang="ts">
+	import { register_control } from '../../behaviors/index.js';
 	import { CONTROL_SIZE } from '../../kinds/classes.js';
 	import { cn, use_controls, ui_text, type WithElementRef } from '../utils.js';
 	import type { HTMLInputAttributes, HTMLInputTypeAttribute } from 'svelte/elements';
@@ -53,6 +54,45 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 			)
 	);
 	const off = $derived(disabled ?? controls.disabled);
+	const isReadonly = $derived(Boolean(readonly ?? controls.readonly));
+	const controlId = $derived(
+		restProps.id ?? restProps.name ?? restProps['aria-label'] ?? undefined
+	);
+
+	$effect(() => {
+		if (type === 'file' || type === 'hidden' || isReadonly || off || controlId === undefined) return;
+		const secret = type === 'password';
+		const ariaLabel = restProps['aria-label'];
+		return register_control({
+			id: `input:${controlId}`,
+			kind: 'input',
+			...(typeof ariaLabel === 'string' ? { label: ariaLabel } : {}),
+			element: () => ref,
+			disabled: () => Boolean(off || isReadonly),
+			secret,
+			state: () => ({ value: value ?? '', type: type ?? 'text' }),
+			actions: {
+				set: (next) => {
+					if (typeof next === 'string' || typeof next === 'number') {
+						value = String(next);
+						if (ref instanceof HTMLInputElement) {
+							ref.value = String(next);
+							ref.dispatchEvent(new Event('input', { bubbles: true }));
+							ref.dispatchEvent(new Event('change', { bubbles: true }));
+						}
+					}
+				},
+				clear: () => {
+					value = '';
+					if (ref instanceof HTMLInputElement) {
+						ref.value = '';
+						ref.dispatchEvent(new Event('input', { bubbles: true }));
+						ref.dispatchEvent(new Event('change', { bubbles: true }));
+					}
+				}
+			}
+		});
+	});
 
 	// Special classes to hide spinners on number inputs for a cleaner look
 	const numberInputClasses =

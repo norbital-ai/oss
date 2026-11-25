@@ -6,7 +6,16 @@ import { mount_edge } from '@norbital-ai/ui/effect';
 import { register_control } from '@norbital-ai/ui/behaviors';
 import { create_bolt, page_live_mode } from '../src/page/bolt.ts';
 import type { PageSnapshotHost } from '../src/page/index.ts';
-import { fillField, pageClickable, pageField, pageFieldLabel, pageLabel, pageScreen } from '../src/shell/agent/page.ts';
+import {
+	clientPageAction,
+	fillField,
+	pageClickable,
+	pageField,
+	pageFieldLabel,
+	pageLabel,
+	pageMark,
+	pageScreen
+} from '../src/shell/agent/page.ts';
 
 describe('the current-tab page bridge', () => {
 	beforeEach(() => {
@@ -96,6 +105,89 @@ describe('the current-tab page bridge', () => {
 			stop();
 		}
 		expect(pageScreen()).not.toContain('tabs:Settings tabs');
+	});
+	it('respects data-agent-hidden on clickable controls, fields, marks and screen summaries', () => {
+		document.body.innerHTML = `<main>
+			<h1>Visible Title</h1>
+			<h2 data-agent-hidden>Hidden Heading</h2>
+			<button>Public Action</button>
+			<button data-agent-hidden>Secret Debug</button>
+			<div data-agent-hidden><label>Internal Note <input aria-label="Internal Note" /></label></div>
+		</main>`;
+		expect(pageClickable('Public Action')).not.toBeNull();
+		expect(pageClickable('Secret Debug')).toBeNull();
+		expect(pageField('Internal Note')).toBeNull();
+		expect(pageMark('Hidden Heading')).toBeNull();
+		expect(pageScreen()).toContain('Visible Title');
+		expect(pageScreen()).not.toContain('Hidden Heading');
+		expect(pageScreen()).not.toContain('Secret Debug');
+	});
+	it('drives registered UI controls via action.control while refusing approval-scoped controls', async () => {
+		document.body.innerHTML = `<main>
+			<div id="ctrl-host"></div>
+			<div data-view="approval"><div id="approval-host"></div></div>
+		</main>`;
+		const hostEl = document.getElementById('ctrl-host');
+		const approvalEl = document.getElementById('approval-host');
+		let opened = false;
+		const stopA = register_control({
+			id: 'panel:inspector',
+			kind: 'disclosure',
+			label: 'Inspector panel',
+			element: () => hostEl,
+			state: () => ({ open: opened }),
+			actions: {
+				open: () => {
+					opened = true;
+				}
+			}
+		});
+		const stopB = register_control({
+			id: 'approval:decision',
+			kind: 'button',
+			label: 'Approve decision',
+			element: () => approvalEl,
+			state: () => ({}),
+			actions: {
+				open: () => {
+					opened = false;
+				}
+			}
+		});
+		const reported: Array<{ step: string; ok: boolean; note?: string }> = [];
+		const done = Promise.withResolvers<void>();
+		const bridge = clientPageAction({
+			api: {
+				claim_page_action: () =>
+					Effect.succeed({ kind: 'committed' as const, output: { claimed: true }, records: [] }),
+				page_result: (step, result) =>
+					Effect.sync(() => {
+						reported.push({ step, ok: result.ok, ...(result.note !== undefined ? { note: result.note } : {}) });
+						if (reported.length === 3) done.resolve();
+						return { kind: 'committed' as const, output: null, records: [] };
+					})
+			},
+			eligible: () => true,
+			navigate: () => {},
+			open_external: () => {},
+			closePanel: () => {},
+			t: (key) => key
+		});
+		const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
+		try {
+			bridge.run({ control: { ref: 'Inspector panel', action: 'open' } }, 'c1', 'step-1');
+			bridge.run({ control: { ref: 'Approve decision', action: 'open' } }, 'c1', 'step-2');
+			bridge.run({ control: { ref: 'Missing control', action: 'open' } }, 'c1', 'step-3');
+			await done.promise;
+			expect(opened).toBe(true);
+			expect(reported.find((r) => r.step === 'step-1')?.ok).toBe(true);
+			expect(reported.find((r) => r.step === 'step-2')?.ok).toBe(false);
+			expect(reported.find((r) => r.step === 'step-3')?.ok).toBe(false);
+		} finally {
+			stopA();
+			stopB();
+			await dispose();
+		}
 	});
 });
 

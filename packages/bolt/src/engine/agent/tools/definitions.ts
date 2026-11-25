@@ -77,7 +77,7 @@ export const pageTool = defineTool('page', {
 	policy: { audiences: ['staff'], child: false, scripts: false },
 	behavior: { page: true },
 	description:
-		"Control the person's live workspace tab (NOT the headless browser fleet): navigate to a /app/… Pages path, open native configure setup, click/highlight text, type by label, scroll, go back/forward, or open a preview URL. Pending until the tab reports. Approvals, passwords and files are the person's.",
+		"Control the person's live workspace tab (NOT the headless browser fleet): navigate to a /app/… Pages path, open native configure setup, click/highlight text, type by label, invoke a registered UI control action, scroll, go back/forward, or open a preview URL. Pending until the tab reports. Approvals, passwords and files are the person's.",
 	parameters: Schema.Struct({
 		path: Schema.optionalKey(Schema.String),
 		configure: Schema.optionalKey(
@@ -89,6 +89,13 @@ export const pageTool = defineTool('page', {
 				label: Schema.NonEmptyString,
 				text: Schema.String,
 				submit: Schema.optionalKey(Schema.Boolean)
+			})
+		),
+		control: Schema.optionalKey(
+			Schema.Struct({
+				ref: Schema.NonEmptyString,
+				action: Schema.NonEmptyString,
+				args: Schema.optionalKey(Schema.Array(ToolJson))
 			})
 		),
 		scroll: Schema.optionalKey(Schema.Finite),

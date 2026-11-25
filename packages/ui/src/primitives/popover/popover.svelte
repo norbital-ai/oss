@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { set_popover_context } from './context.js';
+	import { set_popover_context, type PopoverHoverHandlers } from './context.js';
 
 	let {
 		open = $bindable(false),
@@ -24,6 +24,8 @@
 
 	const content_id = `nb-popover-${++nextPopoverId}`;
 	let triggerEl = $state<HTMLElement | null>(null);
+	let contentEl = $state<HTMLElement | null>(null);
+	let hoverHandlers: PopoverHoverHandlers | null = null;
 
 	function set_open(next: boolean): void {
 		if (next === open) return;
@@ -43,6 +45,21 @@
 		},
 		set_trigger: (el) => {
 			triggerEl = el;
+		},
+		get content_el() {
+			return contentEl;
+		},
+		set_content: (el) => {
+			contentEl = el;
+		},
+		hover_enter: (event) => {
+			hoverHandlers?.enter(event);
+		},
+		hover_leave: (event) => {
+			hoverHandlers?.leave(event);
+		},
+		set_hover_handlers: (handlers) => {
+			hoverHandlers = handlers;
 		}
 	});
 </script>

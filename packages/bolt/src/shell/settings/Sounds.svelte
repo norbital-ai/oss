@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Button, Icon } from '@norbital-ai/ui';
+	import { create_switch } from '@norbital-ai/ui/behaviors';
 	import { Stack, Inline } from '@norbital-ai/ui/layout';
 	import type { SoundStatus } from '../sounds.ts';
 
@@ -16,17 +17,20 @@
 		on_test: () => void;
 		t: (key: string) => string;
 	} = $props();
+
+	const soundSwitch = create_switch({
+		checked: () => enabled,
+		on_change: (next) => on_change(next)
+	});
 </script>
 
 <Stack gap="lg">
 	<Stack gap="sm">
 		<Button
 			variant="outline"
-			role="switch"
-			aria-checked={enabled}
+			{...soundSwitch.attrs()}
 			aria-label={t('Play sounds')}
 			class="w-full justify-start"
-			onclick={() => on_change(!enabled)}
 		>
 			<Icon name={enabled ? 'lucide:volume-1' : 'lucide:volume-x'} class="size-4" />
 			<span>{t('Play sounds')}</span><span class="ml-auto">{t(enabled ? 'On' : 'Off')}</span>

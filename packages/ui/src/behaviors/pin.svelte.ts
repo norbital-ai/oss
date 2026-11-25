@@ -1,5 +1,6 @@
 // Composable OTP / PIN cell behavior backed by one hidden/accessible native input for autofill,
 // paste, keyboard selection and per-cell rendering without focus juggling.
+import { register_control } from './controls.svelte.js';
 
 /** One visual cell of a PIN / OTP code. */
 export type PinCell = {
@@ -29,6 +30,13 @@ export type PinInputOptions = {
 	readonly pattern?: RegExp;
 	/** Disabled state. */
 	readonly disabled?: () => boolean;
+	/** Optional semantic control registration for Norbius's `page` bridge. */
+	readonly control?: {
+		readonly id: string;
+		readonly label?: string;
+		readonly secret?: boolean;
+		readonly element?: () => HTMLElement | null;
+	};
 };
 
 /** Return value of `create_pin_input`. */
@@ -81,6 +89,26 @@ export function create_pin_input(options: PinInputOptions) {
 	function syncCaret(el: HTMLInputElement): void {
 		const pos = el.selectionStart ?? el.value.length;
 		caret = Math.min(pos, value.length);
+	}
+
+	if (options.control !== undefined) {
+		const meta = options.control;
+		$effect(() =>
+			register_control({
+				id: meta.id,
+				kind: 'pin-input',
+				...(meta.label !== undefined ? { label: meta.label } : {}),
+				...(meta.secret !== undefined ? { secret: meta.secret } : {}),
+				...(meta.element !== undefined ? { element: meta.element } : {}),
+				state: () => ({ length: maxLength, filled: value.length, complete: value.length === maxLength, disabled }),
+				actions: {
+					set: (next) => {
+						if (typeof next === 'string') setValue(next);
+					},
+					clear: () => setValue('')
+				}
+			})
+		);
 	}
 
 	return {

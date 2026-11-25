@@ -7,6 +7,7 @@ at a time; picking one shows its preview with Download, and Remove when `on_remo
 	import type { UiContext } from '../client/contract.js';
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
+	import { create_pagination, create_roving_focus } from '../behaviors/index.js';
 	import Button from '../primitives/button/button.svelte';
 	import Image from '../primitives/image/image.svelte';
 	import * as Popover from '../primitives/popover/index.js';
@@ -19,13 +20,20 @@ at a time; picking one shows its preview with Download, and Remove when `on_remo
 	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
 	const pageSize = 6;
-	let pageIndex = $state(0);
 	let selected = $state<string | null>(null);
 	let open = $state(false);
 	let back = $state<HTMLButtonElement | null>(null);
-	let list = $state<HTMLElement>();
 	const pageCount = $derived(Math.max(1, Math.ceil(refs.length / pageSize)));
-	const page = $derived(Math.min(pageIndex, pageCount - 1));
+	const pager = create_pagination({
+		default_page: 1,
+		total_pages: () => pageCount
+	});
+	const page = $derived(Math.min(pager.page - 1, pageCount - 1));
+	const visibleRefs = $derived(refs.slice(page * pageSize, (page + 1) * pageSize));
+	const roving = create_roving_focus({
+		items: () => visibleRefs.map((ref) => ref.id),
+		orientation: 'vertical'
+	});
 	const active = $derived(refs.length === 1 ? refs[0] : refs.find((ref) => ref.id === selected));
 	const label = $derived(
 		refs.length === 1 && refs[0] ? refs[0].name : t('fileCount').replace('{n}', String(refs.length))
@@ -41,9 +49,7 @@ at a time; picking one shows its preview with Download, and Remove when `on_remo
 		const previous = selected;
 		selected = null;
 		await tick();
-		Array.from(list?.querySelectorAll<HTMLButtonElement>('button[data-file-option]') ?? [])
-			.find((button) => button.dataset.fileOption === previous)
-			?.focus();
+		if (previous !== null) roving.focus(previous);
 	}
 </script>
 
@@ -69,7 +75,7 @@ at a time; picking one shows its preview with Download, and Remove when `on_remo
 	bind:open
 	on_open_change={(open) => {
 		if (!open) {
-			pageIndex = 0;
+			pager.first();
 			selected = null;
 		}
 	}}
@@ -109,15 +115,17 @@ at a time; picking one shows its preview with Download, and Remove when `on_remo
 					: undefined}
 			/>
 		{:else}
-			<ul bind:this={list} class="grid gap-0.5">
-				{#each refs.slice(page * pageSize, (page + 1) * pageSize) as ref (ref.id)}
+			<ul {...roving.root_attrs()} class="grid gap-0.5">
+				{#each visibleRefs as ref (ref.id)}
 					<li class="min-w-0">
 						<Button
+							{...roving.item_attrs(ref.id)}
 							variant="ghost"
 							class="w-full justify-start px-1.5"
 							title={ref.name}
 							data-file-option={ref.id}
 							onclick={() => preview(ref)}
+							{@attach roving.item(ref.id)}
 						>
 							{@render thumbnail(ref)}
 							<span class="truncate">{ref.name}</span>
@@ -130,9 +138,9 @@ at a time; picking one shows its preview with Download, and Remove when `on_remo
 					<Button
 						variant="ghost"
 						size="icon"
-						disabled={page === 0}
+						disabled={!pager.has_previous}
 						aria-label={t('previous')}
-						onclick={() => (pageIndex = page - 1)}
+						onclick={() => pager.previous()}
 					>
 						<Icon icon="lucide:chevron-left" class="size-4" />
 					</Button>
@@ -142,9 +150,9 @@ at a time; picking one shows its preview with Download, and Remove when `on_remo
 					<Button
 						variant="ghost"
 						size="icon"
-						disabled={page + 1 === pageCount}
+						disabled={!pager.has_next}
 						aria-label={t('next')}
-						onclick={() => (pageIndex = page + 1)}
+						onclick={() => pager.next()}
 					>
 						<Icon icon="lucide:chevron-right" class="size-4" />
 					</Button>

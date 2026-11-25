@@ -149,7 +149,7 @@
 	import { getAllContexts, tick, untrack, onDestroy } from 'svelte';
 	import Editor from '../kinds/editor.svelte';
 	import { enum_text, initial, likeWhere, problems } from '../kinds/kind.js';
-	import { cn, ui_text, stepActive } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
 	import { offerContexts, open_record } from '../record/navigation.js';
 	import { bolt_of, words_of } from '../client/context.js';
 	import { type Outcome, type ProtocolFailure, type RunHandle } from '../client/contract.js';
@@ -175,7 +175,7 @@
 	import Spinner from '../primitives/spinner/spinner.svelte';
 	import { record_labels } from '../record/labels.svelte.js';
 	import { watch as live } from '../read/live.svelte.js';
-	import { watch } from '../behaviors/index.js';
+	import { create_listbox, watch } from '../behaviors/index.js';
 
 	let {
 		ctx,
@@ -270,12 +270,26 @@
 	let index = $state<string | null>(null);
 	let text = $state(untrack(() => q));
 	let values = $state<Values>({});
-	let searchActive = $state(0);
 	let box = $state<HTMLInputElement>();
 	const chosen = $derived(indexes.find((i) => i.name === index));
 	// a `/…` with no index chosen is the picker's, never a search term: the rows stay unfiltered
 	const picking = $derived(index === null && SLASH.test(text));
 	const menuOf = $derived(picking ? indexes.filter((i) => i.name.startsWith(text.slice(1))) : []);
+	const searchListbox = create_listbox({
+		items: () =>
+			menuOf.map((i) => ({ value: i.name, label: i.name, disabled: i.why !== null })),
+		focus: 'virtual',
+		filter: false,
+		on_activate: (item) => {
+			const target = menuOf.find((i) => i.name === item.value);
+			if (target !== undefined && target.why === null) void pick(target);
+		}
+	});
+	const searchActive = $derived(
+		searchListbox.active === undefined
+			? -1
+			: menuOf.findIndex((i) => i.name === searchListbox.active)
+	);
 	const ready = $derived(
 		chosen?.input !== undefined &&
 			Object.entries(chosen.input).every(([f, k]) => problems(k, values[f] ?? null).size === 0)
@@ -303,10 +317,8 @@
 	}
 	function typing(value: string) {
 		text = value;
-		searchActive = Math.max(
-			0,
-			menuOf.findIndex((i) => i.why === null)
-		);
+		const first = menuOf.find((i) => i.why === null);
+		if (first !== undefined) searchListbox.highlight(first.name);
 		const named = index === null ? /^\/(\S+)\s$/.exec(value)?.[1] : undefined;
 		const i = indexes.find((x) => x.name === named);
 		if (i !== undefined && i.why === null) return void pick(i);
@@ -316,19 +328,15 @@
 		if (e.key === 'Backspace' && index !== null && text === '') {
 			e.preventDefault();
 			clear();
-		} else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-			if (menuOf.length === 0) return;
-			e.preventDefault();
-			searchActive = stepActive(
-				menuOf.length,
-				searchActive,
-				e.key === 'ArrowDown' ? 1 : -1,
-				(i) => menuOf[i]?.why === null
-			);
-		} else if (e.key === 'Enter' && menuOf.length > 0) {
-			e.preventDefault();
-			const target = menuOf[searchActive];
-			if (target !== undefined && target.why === null) void pick(target);
+		} else if (
+			(e.key === 'ArrowDown' ||
+				e.key === 'ArrowUp' ||
+				e.key === 'Home' ||
+				e.key === 'End' ||
+				e.key === 'Enter') &&
+			menuOf.length > 0
+		) {
+			searchListbox.input_attrs(picking).onkeydown(e);
 		}
 	}
 	const canFilter = $derived(view !== undefined && cfg?.filter !== false);
@@ -1218,18 +1226,15 @@
 								>
 							</form>
 						{:else}
-							{@const activeOption = menuOf[searchActive]}
 							<input
 								bind:this={box}
 								class="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none"
 								type="search"
 								role="combobox"
 								aria-autocomplete="list"
-								aria-controls="search-indexes"
+								aria-controls={searchListbox.id}
 								aria-expanded={picking}
-								aria-activedescendant={picking && activeOption !== undefined
-									? `search-option-${activeOption.name}`
-									: undefined}
+								aria-activedescendant={picking ? searchListbox.active_id : undefined}
 								placeholder={index === 'semantic'
 									? t('searchMeaning')
 									: lexical
@@ -1249,7 +1254,7 @@
 					</div>
 					{#if picking}
 						<div
-							id="search-indexes"
+							id={searchListbox.id}
 							class="grid min-w-0 gap-0.5"
 							role="listbox"
 							data-search-indexes
@@ -1261,18 +1266,22 @@
 									{indexes.length === 0 ? t('searchNone') : t('noResults')}
 								</p>{/if}
 							{#each menuOf as i, at (i.name)}
+								{@const opt = searchListbox.option_attrs(i.name)}
 								<button
-									id={`search-option-${i.name}`}
+									id={opt.id}
 									type="button"
 									role="option"
 									aria-selected={at === searchActive}
+									data-highlighted={opt['data-highlighted']}
 									class={cn(
 										'hover:bg-accent min-w-0 rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60',
 										at === searchActive && 'bg-accent'
 									)}
 									disabled={i.why !== null}
 									title={i.why ?? i.hint}
-									onmousemove={() => (searchActive = at)}
+									onmousemove={() => {
+										if (i.why === null) searchListbox.highlight(i.name);
+									}}
 									onclick={() => pick(i)}
 									data-active={at === searchActive ? 'true' : undefined}
 									data-search-option={i.name}

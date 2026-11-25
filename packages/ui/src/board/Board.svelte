@@ -82,7 +82,13 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 	// Each lane loads infinitely: live keyset pages read by its lane condition, the next one as the lane scrolls near its end
 	//; lane counts are one aggregate. A drop is one generated `update` of `by`,
 	// painted optimistically and rolled back by a refusal, which shows on the board.
-	import { Debounced, watch } from '../behaviors/index.js';
+	import {
+		create_auto_scroll,
+		create_selection,
+		Debounced,
+		register_control,
+		watch
+	} from '../behaviors/index.js';
 	import { onDestroy } from 'svelte';
 	import { tone } from '../kinds/kind.js';
 	import { provide_model, use_enum_text } from '../model/context.js';
@@ -152,6 +158,18 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 	const selected = new SvelteSet<SelectedId>();
 	const loaded = new SvelteMap<symbol, { lane: string; ids: readonly SelectedId[]; rows: readonly (RowOf<C> & Values)[] }>();
 	const loadedIds = $derived([...new Set([...loaded.values()].flatMap((entry) => entry.ids))]);
+	const cardSelection = create_selection({
+		order: () => loadedIds,
+		mode: 'multiple',
+		selected: () => [...selected],
+		on_change: (keys) => {
+			selected.clear();
+			for (const id of keys) {
+				const foundId = loadedIds.find((candidate) => candidate === id);
+				if (foundId !== undefined) selected.add(foundId);
+			}
+		}
+	});
 	const loadedAll = $derived(loadedIds.length > 0 && loadedIds.every((id) => selected.has(id)));
 	const laneIds = (lane: string) => [
 		...new Set(
@@ -171,7 +189,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 	let selectionRevision = 0;
 	const clearSelection = () => {
 		selectionRevision++;
-		selected.clear();
+		cardSelection.clear();
 		selecting = false;
 		selectionNotice = '';
 	};
@@ -181,7 +199,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 			selecting = false;
 		}
 		selectionNotice = '';
-		on ? selected.add(id) : selected.delete(id);
+		if (on !== selected.has(id)) cardSelection.toggle(id);
 	};
 	const toggleLane = (lane: string, on: boolean) => {
 		for (const id of laneIds(lane)) toggle(id, on);
@@ -449,8 +467,11 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 			(error) => toast.error(bolt.t(error.message))
 		);
 	};
+	const autoScroll = create_auto_scroll({ edge: 80, speed: 24 });
+	onDestroy(autoScroll.stop);
 	function drop(event: DragEvent, lane: import('@norbital-ai/store/kind').Value) {
 		event.preventDefault();
+		autoScroll.stop();
 		dragEnd();
 		const id = event.dataTransfer?.getData('text/x-bolt-id');
 		if (id) move(id, lane);
@@ -466,22 +487,45 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 	const byKind = $derived(catalog[of]?.fields[by]?.kind);
 	const dotOf = (v: import('@norbital-ai/store/kind').Value) =>
 		(byKind === 'state' || byKind === 'enum') && typeof v === 'string' ? DOT[tone(v)] : null;
-	// dragging a card near the board's edge snaps the board one lane over , at most every 450 ms
-	let snapped = 0;
 	function edgeScroll(e: DragEvent) {
 		e.preventDefault();
-		const el = e.currentTarget;
-		if (!(el instanceof HTMLElement)) return;
-		const r = el.getBoundingClientRect(),
-			EDGE = 80;
-		const dir = e.clientX < r.left + EDGE ? -1 : e.clientX > r.right - EDGE ? 1 : 0;
-		if (dir === 0 || e.timeStamp - snapped < 450) return;
-		snapped = e.timeStamp;
-		el.scrollBy({
-			left: dir * 300,
-			behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
-		});
+		autoScroll.update(e.clientX, e.clientY);
 	}
+	$effect(() =>
+		register_control({
+			id: `board:${key ?? of}`,
+			kind: 'board',
+			label: label(bolt, of),
+			state: () => ({
+				lanes:
+					found.kind === 'ready'
+						? found.value.map((l) => ({ value: l.value, label: l.label, count: l.count }))
+						: [],
+				selected_count: selected.size,
+				expanded,
+				query: q
+			}),
+			actions: {
+				move_card: (id, laneValue) => {
+					if (typeof id !== 'string' || found.kind !== 'ready') return;
+					const targetLane = found.value.find(
+						(l) => l.value === laneValue || l.label === laneValue || JSON.stringify(l.value) === laneValue
+					);
+					if (targetLane !== undefined) move(id, targetLane.value);
+				},
+				expand_lane: (laneKey) => {
+					if (typeof laneKey === 'string') expanded = laneKey;
+				},
+				close_lane: () => {
+					expanded = null;
+				},
+				search: (value) => {
+					if (typeof value === 'string') q = value;
+				},
+				clear_selection: clearSelection
+			}
+		})
+	);
 </script>
 
 <!-- like Table: fills a bounded parent; each lane scrolls inside itself, the board never grows its parent -->
@@ -562,7 +606,10 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 							: `grid-template-columns: repeat(${columns}, minmax(min(100%, 16rem), 1fr))`}
 						ondragover={edgeScroll}
 						ondragstart={dragStart}
-						ondragend={dragEnd}
+						ondragend={() => {
+							autoScroll.stop();
+							dragEnd();
+						}}
 					>
 						{#each list as lane (JSON.stringify(lane.value))}
 							{@const dot = dotOf(lane.value)}

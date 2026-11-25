@@ -30,27 +30,24 @@ and goes full screen from its header.
 
 	// one width for every right sheet in this tab , dragged by the left edge
 	const WIDTH = 'ui.sheet.width';
-	const remembered = (): number | null => {
-		try {
-			const width = Number(sessionStorage.getItem(WIDTH));
-			return width > 0 ? width : null;
-		} catch {
-			return null;
-		}
-	};
 </script>
 
 <script lang="ts">
 	import { setContext } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
-	import { watch } from '../../behaviors/index.js';
+	import {
+		bind_drag,
+		create_dismiss,
+		create_resize,
+		PersistedState,
+		register_control,
+		watch
+	} from '../../behaviors/index.js';
 	import { reset_inset } from '../../layout/inset.svelte.js';
-	import { create_resize, register_control } from '../../behaviors/index.js';
 	import { TAB_LEVEL } from '../tabs/level.js';
 	import { cn, ui_text } from '../utils.js';
 	import { watchKeyboard } from './keyboard.js';
 	import {
-		escapes,
 		openSheets,
 		popSheet,
 		pushSheet,
@@ -164,7 +161,17 @@ and goes full screen from its header.
 		finish();
 	}
 	let full = $state(false);
-	let width = $state<number | null>(remembered());
+	const savedWidth = new PersistedState<number | null>(WIDTH, null, {
+		storage: 'session',
+		serializer: {
+			serialize: (v) => (v === null ? '' : String(v)),
+			deserialize: (raw) => {
+				const n = Number(raw);
+				return n > 0 ? n : null;
+			}
+		}
+	});
+	let width = $state<number | null>(savedWidth.current);
 	let height = $state<number | null>(null);
 	let panel = $state<HTMLElement | null>(null);
 	// a right sheet never covers the workspace sidebar: the shell publishes its width as `--shell-sidebar-width`
@@ -179,12 +186,9 @@ and goes full screen from its header.
 	const clamp = (w: number) =>
 		Math.round(Math.min(Math.max(w, 300), innerWidth * 0.9, innerWidth - sidebar()));
 	const keep = (w: number) => {
-		width = clamp(w);
-		try {
-			sessionStorage.setItem(WIDTH, String(width));
-		} catch {
-			// A blocked storage area does not prevent resizing this sheet.
-		}
+		const next = clamp(w);
+		width = next;
+		savedWidth.current = next;
 	};
 	const resizer = create_resize({
 		value: () => panel?.offsetWidth ?? width ?? 640,
@@ -199,6 +203,12 @@ and goes full screen from its header.
 		step: 24,
 		label: t('resize')
 	});
+	const dismiss = create_dismiss({
+		open: () => open,
+		escape: true,
+		outside: false,
+		on_dismiss: () => close()
+	});
 	$effect(() => {
 		if (!open) return;
 		const label = title ?? name ?? 'Sheet';
@@ -206,6 +216,7 @@ and goes full screen from its header.
 			id: `sheet:${side}:${label}`,
 			kind: 'sheet',
 			label,
+			element: () => panel,
 			state: () => ({ open, side, fullscreen: full }),
 			actions: {
 				close,
@@ -218,24 +229,27 @@ and goes full screen from its header.
 	// the phone drawer's grabber and header: a drag sets its height, up to the whole screen (held near the top it takes
 	// the screen, below a quarter of it the drawer closes); a tap on the grabber (its click, unless it dragged) expands it
 	let dragged = false;
-	function lift(e: PointerEvent) {
-		if (e.button !== 0 || panel === null || wide.current) return;
-		if (e.target instanceof Element && e.target.closest('header button, header a')) return;
-		const y0 = e.clientY,
-			h0 = panel.offsetHeight;
-		dragged = false;
-		const move = (m: PointerEvent) => {
-			if (!dragged && Math.abs(m.clientY - y0) < 4) return;
+	let dragHeightStart = 0;
+	const drawerDrag = bind_drag({
+		threshold: 4,
+		disabled: () => wide.current || panel === null,
+		on_start: (e) => {
+			if (e.target instanceof Element && e.target.closest('header button, header a')) return false;
+			if (panel === null) return false;
+			dragHeightStart = panel.offsetHeight;
 			dragged = true;
 			full = false;
-			height = Math.round(Math.min(Math.max(h0 + y0 - m.clientY, 120), innerHeight));
-		};
-		const up = () => {
-			removeEventListener('pointermove', move);
-			removeEventListener('pointerup', up);
-			removeEventListener('pointercancel', up);
-			document.body.style.userSelect = '';
-			if (!dragged || height === null) return;
+			return true;
+		},
+		on_move: ({ dy }) => {
+			height = Math.round(Math.min(Math.max(dragHeightStart - dy, 120), innerHeight));
+		},
+		on_end: (_e, canceled) => {
+			if (canceled) {
+				height = null;
+				return;
+			}
+			if (height === null) return;
 			if (height < innerHeight / 4) {
 				height = null;
 				close();
@@ -243,24 +257,9 @@ and goes full screen from its header.
 				height = null;
 				full = true;
 			}
-		};
-		document.body.style.userSelect = 'none';
-		addEventListener('pointermove', move);
-		addEventListener('pointerup', up);
-		addEventListener('pointercancel', up);
-	}
-</script>
-
-<!-- Esc is the × button's close; it consumes the key, so one Esc closes one sheet (a sheet below, whose listener runs
-	after this close has flushed, sees a handled key) -->
-<svelte:window
-	onkeydown={(e) => {
-		if (open && escapes(e, me)) {
-			e.preventDefault();
-			close();
 		}
-	}}
-/>
+	});
+</script>
 
 {#if shown}
 	<!-- non-modal on a wide screen: no backdrop, no focus trap, no scroll lock; the page behind stays clickable and typeable.
@@ -279,6 +278,7 @@ and goes full screen from its header.
 	{/if}
 	<div
 		bind:this={panel}
+		{@attach dismiss.surface}
 		role="dialog"
 		aria-modal="false"
 		aria-label={title ?? name}
@@ -317,7 +317,7 @@ and goes full screen from its header.
 				'group/grab absolute inset-x-0 z-10 flex h-5 cursor-row-resize touch-none items-center justify-center [--hit-target:0px] outline-none md:hidden',
 				full ? 'top-[env(safe-area-inset-top)]' : 'top-0'
 			)}
-			onpointerdown={lift}
+			{@attach drawerDrag}
 			onclick={() => {
 				if (!dragged) {
 					full = !full;
@@ -342,10 +342,9 @@ and goes full screen from its header.
 				></span>
 			</div>
 		{/if}
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<header
 			class="flex shrink-0 touch-none flex-col border-b px-4 pt-5 pb-2 md:touch-auto md:py-3"
-			onpointerdown={lift}
+			{@attach drawerDrag}
 		>
 			{#if eyebrow && !header}<span
 					class="text-micro text-muted-foreground truncate leading-4"

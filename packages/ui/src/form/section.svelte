@@ -112,8 +112,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 </script>
 
 <script lang="ts">
-	import { Effect, Result } from 'effect';
-	import { fork } from '../effect/index.js';
+	import { bind_findable, create_disclosure, PersistedState } from '../behaviors/index.js';
 	import { contentMotion } from './content-motion.js';
 	import Icon from '@iconify/svelte';
 	import { flushSync, setContext } from 'svelte';
@@ -164,28 +163,22 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	const titled = $derived(title !== undefined && !lone);
 	const resolvedIcon = $derived(icon ?? 'lucide:layout-list');
 	const canCollapse = $derived(titled && collapsible);
-	// svelte-ignore state_referenced_locally -- the key is fixed for the section's life
-	const key = `norbital.section:${use_model_key() ?? ''}:${name ?? title ?? ''}`;
-	function stored(): boolean | null {
-		return Result.getOrElse(
-			Result.try({
-				try: () => {
-					const value = localStorage.getItem(key);
-					return value === null ? null : value === '1';
-				},
-				catch: (cause) => ({ _tag: 'SectionStorageFailed' as const, cause })
-			}),
-			() => null
-		);
-	}
-
-	// svelte-ignore state_referenced_locally -- default_open is the starting state only
-	let open = $state(stored() ?? default_open);
+	// svelte-ignore state_referenced_locally -- the key and default_open are fixed for the section's life
+	const persistedOpen = new PersistedState<boolean>(
+		`norbital.section:${use_model_key() ?? ''}:${name ?? title ?? ''}`,
+		default_open,
+		{
+			serializer: {
+				serialize: (v) => (v ? '1' : '0'),
+				deserialize: (raw) => raw === '1'
+			}
+		}
+	);
 	const invalid = $derived(
 		form !== undefined &&
 			[...form.errors.keys()].some((k) => fields.has(k) || fields.has(k.split('.')[0] ?? k))
 	);
-	const shown = $derived(!canCollapse || open || invalid);
+	const shown = $derived(!canCollapse || persistedOpen.current || invalid);
 	let body = $state<HTMLElement | null>(null);
 	// the natural height an open `fill` section shrinks no further than (with the default floor)
 	let headingHeight = $state(0),
@@ -227,9 +220,8 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		void motion.finished.then(end, end);
 		setTimeout(end, 260);
 	}
-	function toggle() {
-		const opening = !shown;
-		open = opening;
+	function setSectionOpen(opening: boolean) {
+		persistedOpen.current = opening;
 		if (opening) {
 			closing = false;
 			// shown and animated in the same frame: the body never paints at full height before growing
@@ -239,14 +231,20 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 			closing = true;
 			slide(body, false, () => (closing = false));
 		}
-		fork(
-			Effect.try({
-				try: () => localStorage.setItem(key, opening ? '1' : '0'),
-				catch: (cause) => ({ _tag: 'SectionStorageFailed' as const, cause })
-			}),
-			() => {}
-		);
 	}
+	const disclosure = create_disclosure({
+		id,
+		open: () => shown,
+		disabled: () => !canCollapse,
+		on_open_change: setSectionOpen
+	});
+	const findable = bind_findable({
+		open: () => shown || closing,
+		findable: () => canCollapse,
+		on_reveal: () => {
+			persistedOpen.current = true;
+		}
+	});
 </script>
 
 <!-- in a bounded column: closed or `content`, its own height; open `fill`, the height left, down to `floor` -->
@@ -265,11 +263,8 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 			<h3 class="min-w-0 flex-1 text-sm font-semibold">
 				{#if canCollapse}
 					<button
-						type="button"
+						{...disclosure.trigger_attrs()}
 						class="group/section max-sm:min-h-11 flex w-full min-w-0 items-center gap-1.5 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-						aria-expanded={shown}
-						aria-controls={`${id}-body`}
-						onclick={toggle}
 					>
 						<span
 							class="border-border bg-muted/40 text-muted-foreground grid size-5 shrink-0 place-items-center rounded-sm border"
@@ -339,8 +334,9 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	<!-- Align section body content directly with the section title label (size-5 icon box + gap-1.5 = 1.625rem). -->
 	<div
 		bind:this={body}
-		id={`${id}-body`}
-		hidden={!shown && !closing}
+		id={disclosure.content_attrs().id}
+		data-state={disclosure.content_attrs()['data-state']}
+		{@attach findable}
 		class={cn(
 			'-my-1 min-h-0 min-w-0 overflow-x-clip py-1',
 			titled && 'ps-[1.625rem]',

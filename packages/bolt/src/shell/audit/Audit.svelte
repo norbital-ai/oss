@@ -21,7 +21,7 @@ sits under the table there. -->
 	import { Cluster, Scroll } from '@norbital-ai/ui/layout';
 	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect, Result, Schema } from 'effect';
-	import { Debounced, watch } from '@norbital-ai/ui/behaviors';
+	import { create_clipboard, Debounced, watch } from '@norbital-ai/ui/behaviors';
 	import { onDestroy, untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import {
@@ -354,14 +354,17 @@ sits under the table there. -->
 		text = actor_id = action = model = record = invocation = run = '';
 		category = status = actor_kind = undefined;
 	};
+	const clipboard = create_clipboard({
+		text: () => (detail === null || detail === undefined ? '' : JSON.stringify(detail, null, 2)),
+		on_copy: (ok) => {
+			copied = ok;
+			copyError = ok ? null : t('Could not copy. Select and copy the payload below.');
+		}
+	});
 	const copy = Effect.fn('Audit.copy')(function* () {
 		if (detail === null || detail === undefined) return;
 		copyError = null;
-		const result = yield* Effect.result(
-			Effect.tryPromise(() => navigator.clipboard.writeText(JSON.stringify(detail, null, 2)))
-		);
-		if (result._tag === 'Success') copied = true;
-		else copyError = t('Could not copy. Select and copy the payload below.');
+		yield* Effect.promise(() => clipboard.copy());
 	});
 
 	watch(

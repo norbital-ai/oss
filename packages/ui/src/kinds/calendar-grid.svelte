@@ -97,6 +97,7 @@
 								>
 									<div
 										{...dayProps}
+										{@attach calendar.day_ref(date)}
 										class={cn(
 											'inline-flex size-9 max-sm:size-11 cursor-pointer items-center justify-center rounded-control p-0 text-sm font-normal hover:bg-accent hover:text-accent-foreground',
 											'[&[data-today]:not([data-selected])]:bg-accent [&[data-today]:not([data-selected])]:font-semibold',

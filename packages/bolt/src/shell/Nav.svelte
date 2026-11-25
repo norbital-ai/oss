@@ -8,7 +8,11 @@
 	import { fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
-	import { watch } from '@norbital-ai/ui/behaviors';
+	import {
+		create_radio_group,
+		create_switch,
+		watch
+	} from '@norbital-ai/ui/behaviors';
 	import {
 		Badge,
 		Button,
@@ -110,6 +114,29 @@
 			availableLanguages[0] ??
 			'en'
 		);
+	});
+	const langRadio = create_radio_group({
+		items: () => availableLanguages,
+		value: () => activeLanguage,
+		orientation: 'vertical',
+		on_change: (code) => {
+			langOpen = false;
+			menuOpen = false;
+			on_locale?.(code);
+		}
+	});
+	const themeRadio = create_radio_group({
+		items: () => THEMES,
+		value: () => theme,
+		orientation: 'horizontal',
+		on_change: (next) => {
+			const match = THEMES.find((x) => x === next);
+			if (match !== undefined) on_theme?.(match);
+		}
+	});
+	const emailSwitch = create_switch({
+		checked: () => email_notifications,
+		on_change: (next) => on_email_notifications?.(next)
 	});
 	// the versions `bolt build` bakes into the client (L-BOLT-073); absent when the shell is mounted unbuilt (tests)
 	const build = typeof __BOLT_BUILD__ === 'undefined' ? null : __BOLT_BUILD__;
@@ -676,7 +703,7 @@
 				</Button>
 				{#if langOpen}
 					<div
-						role="radiogroup"
+						{...langRadio.root_attrs()}
 						aria-label={t('Language')}
 						class="mb-1 flex flex-col gap-0.5 rounded-md bg-muted/40 p-1"
 						data-testid="workspace-language-list"
@@ -684,14 +711,8 @@
 						{#each availableLanguages as code (code)}
 							{@const active = code === activeLanguage}
 							<button
-								type="button"
-								role="radio"
-								aria-checked={active}
-								onclick={() => {
-									langOpen = false;
-									menuOpen = false;
-									on_locale(code);
-								}}
+								{...langRadio.item_attrs(code)}
+								{@attach langRadio.item(code)}
 								class={cn(
 									'flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
 									active && 'font-medium text-foreground'
@@ -713,19 +734,17 @@
 					>
 					<Inline
 						gap="none"
-						role="radiogroup"
+						{...themeRadio.root_attrs()}
 						aria-label={t('Appearance')}
 						class="ml-auto shrink-0 rounded-md bg-muted p-0.5"
 						data-testid="workspace-theme-toggle"
 					>
 						{#each THEMES as x (x)}
 							<button
-								type="button"
-								role="radio"
-								aria-checked={theme === x}
+								{...themeRadio.item_attrs(x)}
+								{@attach themeRadio.item(x)}
 								aria-label={t(THEME_LABEL[x])}
 								title={t(THEME_LABEL[x])}
-								onclick={() => on_theme(x)}
 								class={cn(
 									'grid size-7 place-items-center rounded-sm text-muted-foreground hover:text-foreground',
 									theme === x && 'bg-background text-foreground shadow-sm'
@@ -756,13 +775,10 @@
 			{/if}
 			{#if on_email_notifications !== undefined}
 				<Button
-					type="button"
 					variant="ghost"
-					role="switch"
-					aria-checked={email_notifications}
+					{...emailSwitch.attrs()}
 					class="h-9 w-full justify-start px-2 text-xs font-normal"
 					aria-label={t('Email notifications')}
-					onclick={() => on_email_notifications(!email_notifications)}
 				>
 					<Icon name={email_notifications ? 'lucide:mail' : 'lucide:mail-x'} class="size-3.5" />
 					<span>{t('Email notifications')}</span><span class="ml-auto text-muted-foreground"

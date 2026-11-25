@@ -29,7 +29,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 - Create/update `transform(changes, ctx)` receives `{ before, set, after, changed }` (`after` has `set` applied; read `c.after.x`, never `c.set.x ?? c.before.x`). Return sets in order or `{ sets, with, on_approved }`; delete transforms receive `before` and return void or `{ with, on_approved }`.
 - `with`/`on_approved` carry storage writes `{ [model]: { create?, update?: [{ target, set }] } }` (no target transforms/verdicts/effects/triggers; native constraints/locks/history apply). `with` holds/rolls back with root; `on_approved` commits on final approval (`ctx.approving` re-runs transform — return only `on_approved`).
-- Prefetch batch lookups in ≤2 `ctx.query` reads (`as_of: 'act'` sees prospective writes), never per row. 1000-row chunk cap: 3s CPU, one transaction across chunks. Share pure validators in `src/lib`.
+- Prefetch batch lookups in ≤2 `ctx.query` reads (`as_of: 'act'` sees prospective writes), never per row. 1000-row chunk cap: 3s CPU, one transaction across chunks. Co-locate model-specific services, calculations and pure validators near `+model.ts` (e.g. structured under `src/data/model/.../<model>/service/`); place helpers under `src/lib/` only when shared across multiple models or apps.
 - Business operations are automations (`+<model>_<op>.automation.ts`) taking `{ kind: 'rows', of: '<model>' }` inputs; no named model actions or public upserts.
 - `indexes`: `{ text: [...] }`, `{ semantic: { fields, model, dim } }`, `{ on: [...] }`, or custom vector (`description`, `dim`, `metric`, pure `vector`, `input`, `probe`, optional `rerank`, `candidates` 1–16).
 

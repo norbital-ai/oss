@@ -9,6 +9,7 @@
 </script>
 
 <script lang="ts">
+	import { create_field } from '../behaviors/index.js';
 	import DescriptionHint from './description-hint.svelte';
 	import { cn, ui_text } from '../primitives/utils.js';
 
@@ -46,6 +47,14 @@
 	} = $props();
 	const t = ui_text();
 	const description = $derived(error ?? help);
+	// svelte-ignore state_referenced_locally -- field id is stable for the control lifetime
+	const field = create_field({
+		id,
+		has_description: () => Boolean(help) && !dense,
+		error: () => error,
+		required: () => required,
+		readonly: () => readonly
+	});
 	setContext(FIELD_PRESENTATION, {
 		get id() {
 			return id;
@@ -61,16 +70,19 @@
 		className
 	)}
 	data-readonly={readonly || undefined}
-	data-invalid={error ? true : undefined}
+	data-invalid={field.invalid ? true : undefined}
 	data-field-dirty={dirty || undefined}
 	role={readonly ? 'group' : undefined}
 	aria-labelledby={readonly ? `${id}-label` : undefined}
 	{@attach (node) => {
 		if (readonly) return;
 		const control = node.querySelector(`#${CSS.escape(id)}`);
-		if (required) control?.setAttribute('aria-required', 'true');
+		const attrs = field.control_attrs();
+		if (attrs['aria-required']) control?.setAttribute('aria-required', 'true');
 		else control?.removeAttribute('aria-required');
-		if (error) {
+		if (attrs['aria-describedby']) control?.setAttribute('aria-describedby', attrs['aria-describedby']);
+		else control?.removeAttribute('aria-describedby');
+		if (field.invalid) {
 			control?.setAttribute('aria-invalid', 'true');
 			control?.setAttribute('aria-errormessage', `${id}-error`);
 		} else {
@@ -107,5 +119,6 @@
 			/>{/if}
 	</div>
 	{@render children()}
+	{#if help && !dense}<p {...field.description_attrs()} class="sr-only">{help}</p>{/if}
 	{#if error}<p id={`${id}-error`} class="sr-only" role="alert">{error}</p>{/if}
 </div>

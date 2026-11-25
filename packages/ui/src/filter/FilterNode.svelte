@@ -15,7 +15,8 @@
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import type { Value } from '../kinds/kind.js';
 	import Picker from '../kinds/picker.svelte';
-	import { cn, stepActive } from '../primitives/utils.js';
+	import { create_disclosure, create_floating, create_listbox } from '../behaviors/index.js';
+	import { cn } from '../primitives/utils.js';
 	import { words_of } from '../client/context.js';
 	import FieldPicker from './FieldPicker.svelte';
 	import { selectField, selectOperator, selectQuantifier, aggregateValue, aggFn, aggOf } from './edit.js';
@@ -56,6 +57,13 @@
 	let expanded = $state(true);
 	let operandOpen = $state(false);
 	const scopeId = $props.id();
+	const scopeDisclosure = create_disclosure({
+		id: scopeId,
+		open: () => expanded,
+		on_open_change: (next) => {
+			expanded = next;
+		}
+	});
 	const quantLabel = (q: Quant) =>
 		q === 'some'
 			? msg(bolt, 'view.scope.some')
@@ -72,10 +80,53 @@
 	const blank: Node = { t: 'cond', path: '', op: 'eq', arg: null };
 	/** What follows a typed `@` in a value position (`null`: no variable menu open). */
 	let variable = $state<string | null>(null);
-	/** The variable menu's active row. */
-	let variableActive = $state(0);
+	let varInputEl = $state<HTMLInputElement | null>(null);
 	/** The variable expression being edited in its chip (`null`: not editing). */
 	let draft = $state<string | null>(null);
+	const condResolved = $derived(
+		node.t === 'cond' && node.path !== '' ? resolve(catalog, model, node.path) : null
+	);
+	const condPresets = $derived(
+		node.t === 'cond' &&
+			condResolved !== null &&
+			!NO_VALUE.includes(node.op) &&
+			node.op !== 'during' &&
+			node.op !== 'like'
+			? variablesFor(condResolved, node.op, variables)
+			: []
+	);
+	const matchingVariables = $derived(
+		variable === null ? [] : condPresets.filter((v) => v.name.startsWith(variable ?? ''))
+	);
+	const varListbox = create_listbox({
+		items: () => matchingVariables.map((v) => ({ value: v.name, label: v.name })),
+		focus: 'virtual',
+		filter: false,
+		on_activate: (item) => {
+			const match = matchingVariables.find((v) => v.name === item.value);
+			if (match !== undefined) {
+				setArg(match.arg);
+				variable = null;
+			}
+		}
+	});
+	const variableActive = $derived(
+		varListbox.active === undefined
+			? 0
+			: Math.max(
+					0,
+					matchingVariables.findIndex((v) => v.name === varListbox.active)
+				)
+	);
+	const varFloating = create_floating({
+		open: () => variable !== null,
+		anchor: () => varInputEl,
+		side: 'bottom',
+		align: 'start',
+		side_offset: 4,
+		escape: false,
+		outside: false
+	});
 	/** `@` opens the variable menu, unless it is part of a typed literal (`bob@example.com`). */
 	const atKey = (e: KeyboardEvent, offered: boolean) => {
 		const t = e.target;
@@ -87,7 +138,8 @@
 			return;
 		e.preventDefault();
 		variable = '';
-		variableActive = 0;
+		const first = condPresets[0];
+		if (first !== undefined) varListbox.highlight(first.name);
 	};
 	const commit = (next: Node) => {
 		if (next === node) return;
@@ -140,14 +192,11 @@
 
 {#snippet toggleScope()}
 	<button
-		type="button"
+		{...scopeDisclosure.trigger_attrs()}
 		class="scope-toggle"
-		aria-expanded={expanded}
-		aria-controls={scopeId}
 		aria-label={expanded
 			? msg(bolt, 'view.hideConditions')
 			: msg(bolt, 'view.showConditions')}
-		onclick={() => (expanded = !expanded)}
 		data-scope-toggle
 	>
 		<svg
@@ -167,7 +216,7 @@
 	isTop: boolean,
 	atPrefix: readonly FilterStep[]
 )}
-	<div class="scope-body" id={scopeId} hidden={!expanded} data-nested>
+	<div class="scope-body" {...scopeDisclosure.content_attrs()} data-nested>
 		{#each n.of as child, i (i)}
 			<div class="scope-branch">
 				<FilterNode {ctx}
@@ -512,36 +561,36 @@
 						onkeydown={(e) => atKey(e, presets.length > 0 || variables !== undefined)}
 					>
 						{#if variable !== null}
-							{@const matching = presets.filter((v) => v.name.startsWith(variable ?? ''))}
+							{@const matching = matchingVariables}
 							<input
+								bind:this={varInputEl}
 								class={cn(CONTROL, 'w-40')}
 								type="text"
 								role="combobox"
 								aria-autocomplete="list"
 								aria-expanded="true"
-								aria-controls="filter-variables"
-								aria-activedescendant={matching[variableActive] === undefined
-									? undefined
-									: `filter-variable-${variableActive}`}
+								aria-controls={varListbox.id}
+								aria-activedescendant={varListbox.active_id}
 								aria-label={msg(bolt, 'view.variable')}
 								data-variable-input
 								value={`@${variable}`}
 								{@attach (el) => el.focus()}
 								oninput={(e) => {
 									variable = e.currentTarget.value.replace(/^@/, '');
-									variableActive = 0;
+									const first = matchingVariables[0];
+									if (first !== undefined) varListbox.highlight(first.name);
 								}}
 								onkeydown={(e) => {
 									e.stopPropagation();
 									if (e.key === 'Escape') variable = null;
-									else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+									else if (
+										e.key === 'ArrowDown' ||
+										e.key === 'ArrowUp' ||
+										e.key === 'Home' ||
+										e.key === 'End'
+									) {
 										if (matching.length === 0) return;
-										e.preventDefault();
-										variableActive = stepActive(
-											matching.length,
-											variableActive,
-											e.key === 'ArrowDown' ? 1 : -1
-										);
+										varListbox.input_attrs(true).onkeydown(e);
 									} else if (
 										e.key === 'Enter' &&
 										(matching[variableActive] !== undefined ||
@@ -560,16 +609,20 @@
 								onblur={() => (variable = null)}
 							/>
 							<ul
-								id="filter-variables"
+								{@attach varFloating.content}
+								style={varFloating.style}
+								id={varListbox.id}
 								role="listbox"
-								class="bg-popover absolute top-full left-0 z-50 mt-1 min-w-40 rounded-md border p-1 shadow-deep"
+								class="bg-popover z-50 min-w-40 rounded-md border p-1 shadow-deep"
 								data-variables
 							>
 								{#each matching as v, i (v.name)}
+									{@const opt = varListbox.option_attrs(v.name)}
 									<li
-										id={`filter-variable-${i}`}
+										id={opt.id}
 										role="option"
 										aria-selected={i === variableActive}
+										data-highlighted={opt['data-highlighted']}
 										data-variable-option={v.name}
 										data-active={i === variableActive ? 'true' : undefined}
 									>
@@ -580,7 +633,7 @@
 												i === variableActive && 'bg-muted'
 											)}
 											onmousedown={(e) => e.preventDefault()}
-											onmousemove={() => (variableActive = i)}
+											onmousemove={() => varListbox.highlight(v.name)}
 											onclick={() => {
 												setArg(v.arg);
 												variable = null;
