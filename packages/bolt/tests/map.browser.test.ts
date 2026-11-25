@@ -62,6 +62,7 @@ it('mounts MapLibre on a WebGL canvas, places the marks on it and opens a record
 		expect(target.querySelector('[data-map-row="a"]')?.hasAttribute('data-selected')).toBe(true);
 		expect(card.querySelector('button')).toBeNull();
 		await page.getByRole('button', { name: 'Alpha yard' }).first().click();
+		expect(target.querySelector('[data-map-card]')).toBeNull();
 		expect(new URL(location.href).searchParams.getAll('record')).toEqual(['sites/a']);
 	} finally {
 		await unmount(view);

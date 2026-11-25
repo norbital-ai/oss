@@ -50,6 +50,7 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 <script lang="ts" generics="const C extends ModelKey">
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
+	import Glyph from '../primitives/icon/Glyph.svelte';
 	import Input from '../primitives/input/input.svelte';
 	import { label as title } from '@norbital-ai/store/label';
 	import { ui_text, use_controls } from '../primitives/utils.js';
@@ -59,7 +60,8 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 	import { currencyOf, format, picker_read } from './kind.js';
 	import { by_id } from '../read/request.js';
 	import { label_read } from '../relations/select.js';
-	import { withOutputs } from '../client/context.js';
+	import { optional_bolt_of, withOutputs } from '../client/context.js';
+	import { open_record } from '../record/navigation.js';
 
 	let {
 		ctx,
@@ -76,10 +78,11 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 		invalid = false
 	}: PickerProps<C> = $props();
 	const controls = use_controls();
+	const bolt = $derived(optional_bolt_of(ctx));
 	const host = $derived(ctx.ui.kinds);
 	const target = $derived(host.catalog?.[of]);
 	const labels = $derived(label ?? target?.label ?? []);
-	type Hit = { id: string; text: string };
+	type Hit = { id: string; text: string; found?: boolean };
 	const t = ui_text();
 	// The shared record identifier: declared label, otherwise its stable id.
 	const textOf = (row: { readonly [f: string]: Value }) =>
@@ -116,7 +119,7 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 			);
 		}).pipe(
 			Effect.map((answer) =>
-				(answer[of]?.rows ?? []).map((row) => ({ id: row.id, text: textOf(row) }))
+				(answer[of]?.rows ?? []).map((row) => ({ id: row.id, text: textOf(row), found: true }))
 			)
 		);
 	});
@@ -134,7 +137,7 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 		).pipe(
 			Effect.map((answer): Hit => {
 				const row = answer[of]?.rows[0];
-				return { id, text: row === undefined ? t('not_found') : textOf(row) };
+				return { id, text: row === undefined ? t('not_found') : textOf(row), found: row !== undefined };
 			})
 		);
 	});
@@ -150,7 +153,7 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 				: selected.error === undefined || value === null
 					? null
 					: // a failed read is no answer: it never claims the row is gone or hidden
-						{ id: value, text: t('recordUnavailable') }
+						{ id: value, text: t('recordUnavailable'), found: false }
 	);
 	const type = (q: string) => {
 		query = q;
@@ -159,13 +162,43 @@ Picks one row of a model by searching it through the viewer's own read grant; th
 		chosen = hits.find((hit) => hit.id === next) ?? null;
 		on_change(is_id<C>(next) ? next : null);
 	};
+	const refGlyph = $derived(of === 'sys_user' ? ('user' as const) : ('link' as const));
+	const readonlyText = $derived(
+		value === null ? '' : (current?.text ?? (host.query === undefined ? value : ''))
+	);
+	const isLinked = $derived(
+		value !== null &&
+			of !== '' &&
+			readonlyText !== '' &&
+			current?.found !== false &&
+			bolt !== undefined
+	);
 </script>
 
 {#if readonly ?? controls.readonly}
-	<!-- The declared label or id fallback; nothing while the label loads. -->
+	<!-- The declared label or id fallback as a relationship badge/link; nothing while the label loads. -->
 	<CopyText {id} text={value === null ? '' : (current?.text ?? '')}>
 		{#if value === null}<span class="text-muted-foreground">{t('none')}</span
-			>{:else}{current?.text ?? (host.query === undefined ? value : '')}{/if}
+			>{:else if current?.found === false}<span class="text-muted-foreground">{current.text}</span
+			>{:else if readonlyText !== ''}{#if isLinked}<button
+					type="button"
+					class="border-border/80 bg-muted/50 text-foreground hover:border-brand/40 hover:bg-brand-muted hover:text-brand-text focus-visible:ring-ring inline-flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-badge border px-2 py-0.5 text-left text-xs leading-4 font-medium align-middle transition-colors focus-visible:ring-2 focus-visible:outline-none"
+					data-ref="one"
+					data-ref-open={value}
+					onclick={(e) => {
+						e.stopPropagation();
+						open_record(of, value);
+					}}
+				>
+					<Glyph name={refGlyph} class="size-3 shrink-0 opacity-70" />
+					<span class="max-w-full truncate">{readonlyText}</span>
+				</button>{:else}<span
+					class="border-border/80 bg-muted/50 text-foreground inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-badge border px-2 py-0.5 text-xs leading-4 font-medium align-middle"
+					data-ref="one"
+				>
+					<Glyph name={refGlyph} class="size-3 shrink-0 opacity-70" />
+					<span class="max-w-full truncate">{readonlyText}</span>
+				</span>{/if}{/if}
 	</CopyText>
 {:else if host.query === undefined}
 	<!-- no client above: an id is typed -->

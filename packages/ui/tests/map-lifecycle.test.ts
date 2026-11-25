@@ -219,6 +219,11 @@ it('selecting a mark or a list row shows its card and outlines the row; a row op
 		).toBe('Crew4');
 		expect(card?.textContent).toContain('North gate');
 		expect(target.querySelector('[data-map-row="a"]')?.hasAttribute('data-selected')).toBe(true);
+		// moving pointer off the pin immediately dismisses the hover card like a tooltip
+		target.querySelector('[data-map-point="a"]')?.dispatchEvent(new PointerEvent('pointerleave'));
+		flushSync();
+		expect(target.querySelector('[data-map-card]')).toBeNull();
+		expect(target.querySelector('[data-map-row="a"]')?.hasAttribute('data-selected')).toBe(false);
 		// from the list: the mark is selected and the map eases to a place out of view
 		target.querySelector('[data-map-row="b"]')?.dispatchEvent(new PointerEvent('pointerenter'));
 		flushSync();
@@ -228,11 +233,17 @@ it('selecting a mark or a list row shows its card and outlines the row; a row op
 		expect(target.querySelector('[data-map-row="a"]')?.hasAttribute('data-selected')).toBe(false);
 		expect(gl.eased).toEqual([{ center: [50, 40] }]);
 		expect(target.querySelector('[data-map-card="b"] button')).toBeNull();
+		target.querySelector('[data-map-row="b"]')?.dispatchEvent(new PointerEvent('pointerleave'));
+		flushSync();
+		expect(target.querySelector('[data-map-card]')).toBeNull();
 		target.querySelector<HTMLButtonElement>('[data-map-point="b"]')?.click();
 		expect(opened()).toEqual(['places/b']);
 		target.querySelector<HTMLButtonElement>('[data-map-row="a"]')?.click();
 		expect(opened()).toEqual(['places/b', 'places/a']);
-		// a click on the map itself clears the selection
+		// hover again and verify a click on the map itself clears the selection
+		target.querySelector('[data-map-point="a"]')?.dispatchEvent(new PointerEvent('pointerenter'));
+		flushSync();
+		expect(target.querySelector('[data-map-card="a"]')).not.toBeNull();
 		gl.live[0]?.fire('click');
 		flushSync();
 		expect(target.querySelector('[data-map-card]')).toBeNull();

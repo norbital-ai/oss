@@ -290,6 +290,9 @@ in Google Maps; it does not invent road paths or travel times. The map fills its
 		)
 			map.easeTo({ center: [p.lng, p.lat] });
 	}
+	function clearSelection(id: string) {
+		if (selected === id) selected = null;
+	}
 	const mount = attach((node: HTMLElement) =>
 		Effect.gen(function* () {
 			const { map: own } = yield* basemap(node, { interactive });
@@ -516,8 +519,13 @@ in Google Maps; it does not invent road paths or travel times. The map fills its
 								data-selected={selected === p.id || undefined}
 								aria-label={p.text}
 								onpointerenter={() => select(p.id, 'map')}
+								onpointerleave={() => clearSelection(p.id)}
 								onfocus={() => select(p.id, 'map')}
-								onclick={() => open(p.id)}
+								onblur={() => clearSelection(p.id)}
+								onclick={() => {
+									clearSelection(p.id);
+									open(p.id);
+								}}
 							>
 								<span class="map-mark"
 									>{planning && stopIds.includes(p.id)
@@ -589,8 +597,13 @@ in Google Maps; it does not invent road paths or travel times. The map fills its
 											data-map-row={p.id}
 											data-selected={selected === p.id || undefined}
 											onpointerenter={() => select(p.id, 'list')}
+											onpointerleave={() => clearSelection(p.id)}
 											onfocus={() => select(p.id, 'list')}
-											onclick={() => open(p.id)}
+											onblur={() => clearSelection(p.id)}
+											onclick={() => {
+												clearSelection(p.id);
+												open(p.id);
+											}}
 										>
 											{#if item}{@render item({ row: p.source })}{:else}
 												<span class="map-mark shrink-0">{initial(p.text)}</span>

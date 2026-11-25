@@ -4,6 +4,7 @@ import { Effect } from 'effect';
 import { it as test } from '@effect/vitest';
 import { vi } from 'vitest';
 import { element } from './elements.ts';
+import { scriptedBolt } from './scripted-bolt.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const { default: Picker } = await import('../src/kinds/picker.svelte');
@@ -34,6 +35,8 @@ test('a selected record uses the model CEL label', async () => {
 			flushSync();
 			assert.match(target.textContent ?? '', /C7 · Acme/);
 		});
+		assert.ok(target.querySelector('[data-ref="one"]'));
+		assert.ok(target.querySelector('[data-icon="link"]'));
 	} finally {
 		await unmount(app);
 		target.remove();
@@ -109,8 +112,47 @@ test('a failed read of the selected record is not shown as not found', async () 
 			assert.match(target.textContent ?? '', /Could not load/);
 		});
 		assert.doesNotMatch(target.textContent ?? '', /Not found/);
+		assert.equal(target.querySelector('[data-ref="one"]'), null);
 	} finally {
 		await unmount(app);
+		target.remove();
+	}
+});
+
+test('readonly picker renders a relationship icon and opens the target record when clicked', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const before = location.href;
+	const { bolt, runtime } = await scriptedBolt({ answer: () => ({}) });
+	const app = mount(Harness, {
+		target,
+		props: {
+			bolt,
+			catalog: {
+				sys_user: { label: ['name'], record_label: 'record.name', fields: { name: { kind: 'text' } } },
+				companies: { label: ['name'], record_label: 'record.name', fields: { name: { kind: 'text' } } }
+			},
+			query: () =>
+				Effect.succeed({
+					sys_user: { rows: [{ id: 'u1', name: 'Ada Tan' }], next: null }
+				}),
+			part: 'picker',
+			view: Picker,
+			props: { of: 'sys_user', value: 'u1', readonly: true, on_change: () => {} }
+		}
+	});
+	try {
+		await vi.waitFor(() => {
+			flushSync();
+			assert.ok(target.querySelector('[data-ref="one"]'));
+			assert.ok(target.querySelector('[data-icon="user"]'));
+			assert.match(target.textContent ?? '', /Ada Tan/);
+		});
+		element<HTMLButtonElement>(target, '[data-ref-open="u1"]').click();
+		assert.equal(new URL(location.href).searchParams.get('record'), 'sys_user/u1');
+	} finally {
+		history.replaceState(null, '', before);
+		await unmount(app);
+		await runtime.dispose();
 		target.remove();
 	}
 });

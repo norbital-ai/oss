@@ -153,15 +153,27 @@
 	}
 </script>
 
-{#snippet link(of: string, id: string, text: string)}
-	{#if !linked || bolt === undefined}<span class="max-w-full truncate">{text}</span>{:else}<button
+{#snippet link(of: string, id: string, text: string, icon?: 'link' | 'links' | 'user')}
+	{#if !linked || bolt === undefined}<span
+			class={icon === undefined
+				? 'max-w-full truncate'
+				: 'border-border/80 bg-muted/50 text-foreground inline-flex max-w-full min-w-0 items-center gap-1 rounded-badge border px-2 py-0.5 text-xs leading-4 font-medium align-middle'}
+			>{#if icon !== undefined}<Glyph name={icon} class="size-3 shrink-0 opacity-70" />{/if}<span
+				class="max-w-full truncate">{text}</span
+			></span
+		>{:else}<button
 			type="button"
-			class="text-primary max-w-full truncate text-left underline-offset-4 hover:underline"
+			class={icon === undefined
+				? 'text-primary max-w-full truncate text-left underline-offset-4 hover:underline'
+				: 'border-border/80 bg-muted/50 text-foreground hover:border-brand/40 hover:bg-brand-muted hover:text-brand-text focus-visible:ring-ring inline-flex max-w-full min-w-0 cursor-pointer items-center gap-1 rounded-badge border px-2 py-0.5 text-left text-xs leading-4 font-medium align-middle transition-colors focus-visible:ring-2 focus-visible:outline-none'}
 			data-ref-open={id}
 			onclick={(e) => {
 				e.stopPropagation();
 				open_record(of, id);
-			}}>{text}</button
+			}}
+			>{#if icon !== undefined}<Glyph name={icon} class="size-3 shrink-0 opacity-70" />{/if}<span
+				class="max-w-full truncate">{text}</span
+			></button
 		>{/if}
 {/snippet}
 
@@ -173,8 +185,7 @@
 			data-ref="many"
 			title={ref.text}
 		>
-			<Glyph name="links" class="text-muted-foreground size-3 shrink-0" />
-			{@render link(ref.of, first.id, first.text)}
+			{@render link(ref.of, first.id, first.text, 'links')}
 			{#if rest.length > 0 && !linked}<span
 					class="bg-muted text-muted-foreground shrink-0 rounded-full px-1.5 text-xs leading-5 tabular-nums"
 					>+{rest.length}{ref.more ? '+' : ''}</span
@@ -209,10 +220,7 @@
 	{/if}
 {:else if ref !== undefined && typeof value === 'string'}
 	<span class="inline-flex max-w-full min-w-0 items-center gap-1 align-middle" data-ref="one">
-		{#if linked}<Glyph
-				name="link"
-				class="text-muted-foreground size-3 shrink-0"
-			/>{/if}{@render link(ref.of, value, ref.text)}
+		{@render link(ref.of, value, ref.text, ref.of === 'sys_user' ? 'user' : 'link')}
 	</span>
 {:else if kind === undefined && (value === null || value === undefined)}
 	<span class="text-muted-foreground">—</span>
