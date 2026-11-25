@@ -345,3 +345,69 @@ it.live(
 			assert.ok(section(target, 'Rates').querySelector('[data-view=table], button'));
 		})
 );
+
+it.live(
+	'redacted fields render an in-place placeholder preserving order, span, and without unknown-field warnings',
+	() =>
+		Effect.gen(function* () {
+			const warn = vi.spyOn(console, 'warn');
+			const narrowCatalog = {
+				jobs: {
+					record_label: 'record.title',
+					label: ['title'],
+					output: 'logistics',
+					fields: {
+						title: { kind: 'text' },
+						code: { kind: 'text', optional: true }
+					},
+					redacted: {
+						notes: {},
+						meta: { wide: true as const }
+					}
+				}
+			} satisfies NonNullable<KindsHost['catalog']>;
+			const target = yield* browser(async () => {
+				const { bolt } = await viewFixture({
+					catalog: narrowCatalog,
+					get: (c) => (c === 'jobs' ? { id: 'j1', revision: 1, title: 'Paint', code: 'J-1' } : null)
+				});
+				const target = document.createElement('div');
+				document.body.append(target);
+				const app = mount(RecordHarness, {
+					target,
+					props: {
+						bolt,
+						catalog: narrowCatalog,
+						part: 'record',
+						view: RecordShell,
+						props: {
+							of: 'jobs',
+							id: 'j1',
+							sections: [
+								{ name: 'core', title: 'Job', fields: ['title', 'notes', 'code', 'meta'] }
+							]
+						}
+					}
+				});
+				await settle();
+				mounted.push(async () => {
+					await unmount(app);
+					target.remove();
+				});
+				return target;
+			});
+			const ordered = [...target.querySelectorAll<HTMLElement>('[data-field]')];
+			assert.deepEqual(
+				ordered.map((f) => f.dataset.field),
+				['title', 'notes', 'code', 'meta']
+			);
+			const notes = required(target.querySelector<HTMLElement>('[data-field=notes]'));
+			assert.equal(notes.dataset['fieldRedacted'], 'true');
+			assert.equal(textOf(notes.querySelector('[data-redacted]')), 'Redacted');
+			assert.equal(notes.classList.contains('col-span-full'), false);
+			const meta = required(target.querySelector<HTMLElement>('[data-field=meta]'));
+			assert.equal(meta.dataset['fieldRedacted'], 'true');
+			assert.equal(meta.classList.contains('col-span-full'), true);
+			assert.equal(warn.mock.calls.length, 0);
+		})
+);

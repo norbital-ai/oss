@@ -543,6 +543,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 					record_label: 'record.title',
 					search: ['$label', 'title'],
 					fields: { title: { kind: 'text' } },
+					redacted: { pay: {}, site: {} },
 					output: 'brief',
 					description: 'Work orders on site'
 				});

@@ -437,6 +437,40 @@ export const exposure = Effect.fn('bolt.exposure')(function* (
 					)
 				)
 			: [];
+		// non-hidden default-output fields omitted by this caller's read output: layout-preserving redacted placeholders
+		const defaultDeclared = spec.outputs['default']?.[c]?.fields ?? 'all';
+		const inDefault = (f: string) => defaultDeclared === 'all' || defaultDeclared.includes(f);
+		const isWide = (k: Kind): boolean =>
+			['object', 'record', 'union', 'json', 'custom', 'point'].includes(k.kind) ||
+			(k.kind === 'text' && (k.format === 'cel' || k.format === 'markdown'));
+		const redactedEntries: (readonly [string, { readonly wide?: true; readonly label?: string }])[] =
+			reads
+				? [
+						...Object.entries(model.fields).flatMap(([f, k]) =>
+							k.hidden === true || !inDefault(f) || readable(f) || written.has(f)
+								? []
+								: [
+										[
+											f,
+											{
+												...(isWide(k) ? { wide: true as const } : {}),
+												...(k.label === undefined ? {} : { label: k.label })
+											}
+										] as const
+									]
+						),
+						...Object.entries(model.computed ?? {}).flatMap(([f]) =>
+							!inDefault(f) || readable(f) || written.has(f) ? [] : ([[f, {}]] as const)
+						),
+						...Object.entries(m.relationships).flatMap(([key]) => {
+							const [from, fk] = key.split('.');
+							if (from !== c || fk === undefined || !inDefault(fk) || readable(fk) || written.has(fk))
+								return [];
+							return [[fk, {}]] as const;
+						})
+					]
+				: [];
+		const redacted = Object.fromEntries(redactedEntries);
 		out[c] = {
 			...labelMetadata(model, label_readable),
 			...(output === undefined || output === 'default' ? {} : { output }),
@@ -446,6 +480,7 @@ export const exposure = Effect.fn('bolt.exposure')(function* (
 				? {}
 				: { audit: false as const }),
 			fields: yield* fieldsOf(fields),
+			...(redactedEntries.length > 0 ? { redacted } : {}),
 			...(indexes.length > 0 ? { indexes: Object.fromEntries(indexes) } : {}),
 			...(relations.length === 0 ? {} : { relations: Object.fromEntries(relations) }),
 			...(layers.length === 0 ? {} : { layers }),

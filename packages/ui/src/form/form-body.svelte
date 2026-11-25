@@ -161,17 +161,31 @@
 	const update = $derived(spec.target.of === 'model' && spec.target.mode === 'update');
 	// A matching record's standard controls belong to its fixed native footer; independent forms own their submit.
 	const ownSubmit = $derived(!matching || (!update && nativeSubmit === undefined));
+	const exposure = $derived(
+		spec.target.of === 'model' ? ctx.ui.kinds.catalog?.[spec.target.model] : undefined
+	);
+	const isRedacted = (f: string) =>
+		spec.target.of === 'model' &&
+		spec.target.mode !== 'create' &&
+		(exposure?.redacted?.[f] !== undefined ||
+			(spec.fields.some((x) => x.name === f && !x.kind.hidden) && !form.readable(f)));
 	const visible = $derived(
-		(fields ?? spec.fields.map((f) => f.name)).filter(
-			(f) => form.readable(f) && spec.fields.some((x) => x.name === f)
-		)
+		(
+			fields ?? [
+				...spec.fields.map((f) => f.name),
+				...(spec.target.of === 'model' && spec.target.mode !== 'create'
+					? Object.keys(exposure?.redacted ?? {})
+					: [])
+			]
+		).filter((f) => (form.readable(f) && spec.fields.some((x) => x.name === f)) || isRedacted(f))
 	);
 	// an update whose every field the row's state locks (a final state, `edit: 'none'`) has nothing to save
 	const settled = $derived(
 		update &&
-			visible.every(
-				(f) => spec.fields.find((field) => field.name === f)?.readonly || form.locked(f)
-			)
+			visible.every((f) => {
+				const field = spec.fields.find((item) => item.name === f);
+				return field === undefined || field.readonly || form.locked(f) || !form.readable(f);
+			})
 	);
 	watch(
 		() => nativeSubmit,
@@ -227,13 +241,13 @@
 							summary={typeof s?.summary === 'function' ? s.summary(form.row) : s?.summary}
 						>
 							<!-- short fields flow across the width; a structured or long one spans its row (Field) -->
-							<Grid minimum="card"
+							<Grid minimum="compact"
 								>{#each g.names as name (name)}<Field {ctx} {name} editor={editors?.[name]} view={viewers?.[name]} />{/each}</Grid
 							>
 						</Section>
 					{/each}
 				{:else}
-					<Grid minimum="card"
+					<Grid minimum="compact"
 						>{#each visible as name (name)}<Field {ctx} {name} editor={editors?.[name]} view={viewers?.[name]} />{/each}</Grid
 					>
 				{/if}

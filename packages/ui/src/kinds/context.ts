@@ -36,6 +36,8 @@ export type ModelExposure = {
 	audit?: false;
 	/** Model fields the caller may read (hidden ones included; `hidden` renders nothing). */
 	fields: Fields;
+	/** Non-hidden model fields omitted by the caller's read output: rendered in place as redacted without shifting layout. */
+	redacted?: Readonly<Record<string, { readonly wide?: true; readonly label?: string }>>;
 	/** One-relations as FK columns: `holder` → `employees`. A polymorphic ref lists every target. */
 	relations?: {
 		readonly [fk: string]: {

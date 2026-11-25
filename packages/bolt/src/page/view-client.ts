@@ -104,8 +104,9 @@ export function view_client(
 		model: C,
 		record: Row
 	): ModelRow<C, 'record'> | null => {
-		if (read_catalog[model]?.['default']?.[model] === undefined) return null;
-		const decoded = Schema.decodeUnknownResult(model_row(model, 'record'))(record);
+		const output = catalog[model]?.output ?? 'default';
+		if (read_catalog[model]?.[output]?.[model] === undefined) return null;
+		const decoded = Schema.decodeUnknownResult(model_row(model, 'record', output))(record);
 		return Result.isSuccess(decoded) ? decoded.success : null;
 	};
 
@@ -259,13 +260,16 @@ export function view_client(
 	) {
 		const snapshot = Schema.NullOr(HistorySnapshotSchema);
 		const projected = Schema.suspend(() => {
+			const output = options.output ?? catalog[model]?.output ?? 'default';
 			const row =
-				read_catalog[model]?.['default']?.[model] === undefined
+				read_catalog[model]?.[output]?.[model] === undefined
 					? undefined
-					: model_row(model, 'record');
+					: model_row(model, 'record', output);
 			// stored values are wire JSON; the projected field then holds the decoded row
 			const record =
-				row === undefined ? undefined : model_wire(model, 'record').pipe(Schema.decodeTo(row));
+				row === undefined
+					? undefined
+					: model_wire(model, 'record', output).pipe(Schema.decodeTo(row));
 			return snapshot.pipe(
 				Schema.decodeTo(
 					Schema.NullOr(

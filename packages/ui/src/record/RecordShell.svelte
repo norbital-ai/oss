@@ -615,7 +615,11 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		if (e === undefined) return;
 		for (const s of sections)
 			for (const f of s.fields)
-				if (e.fields[f] === undefined && e.relations?.[f] === undefined)
+				if (
+					e.fields[f] === undefined &&
+					e.relations?.[f] === undefined &&
+					e.redacted?.[f] === undefined
+				)
 					console.warn(
 						`[ui] RecordShell ${of}: section ${s.name} names unknown field ${f}; ignored`
 					);

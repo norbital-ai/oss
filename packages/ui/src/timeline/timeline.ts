@@ -30,6 +30,8 @@ export const TIMELINE_ICON: Readonly<Record<TimelineAction, GlyphName>> = {
 export type TimelineEntry = {
 	/** Stable list key for this entry. */
 	readonly key: string;
+	/** Optional group label (e.g. a formatted day) clustering consecutive entries that share the same day under one header on the rail. */
+	readonly group?: string;
 	/** Built-in action glyph (approvals and record history); optional when `icon` is given. */
 	readonly action?: TimelineAction;
 	/** Iconify icon name (e.g. `lucide:calendar`) for domain timelines; overrides `action`. */

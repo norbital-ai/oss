@@ -13,7 +13,7 @@ Composition and scroll ownership. Spacing: [padding-and-spacing.md](padding-and-
 ## Sizing & responsive
 
 - Every box takes `size`: `content` (default, natural height) or `fill` (shares remaining space, floored by `min_height`). `Bound` adds `viewport` (for a view inside a `Scroll`) and `clip` (map/video).
-- Layout responds to container, never viewport (`sm:`/`md:` layout classes mean the wrong primitive): `Grid` `minimum` (`compact` 12rem widgets, `card` 18rem, `panel` 26rem forms — don't pick `compact` for data renderers) or `tracks`; `Cluster` wraps; `Split` (`ratio`, `collapse: 'stack' | 'switch'` below 40rem).
+- Layout responds to container, never viewport (`sm:`/`md:` layout classes mean the wrong primitive): `Grid` `minimum` (`compact` 12rem forms/record fields/widgets, `card` 18rem cards/KPIs, `panel` 26rem wide panes — keep compact scalar fields grouped before `wide`/`col-span-full` fields, and put composite/union sub-fields in `<Grid minimum="compact">`, never a vertical `<Stack>`) or `tracks`; `Cluster` wraps; `Split` (`ratio`, `collapse: 'stack' | 'switch'` below 40rem).
 
 ## Primitives & banned classes
 

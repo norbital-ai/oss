@@ -165,3 +165,56 @@ it.live('virtualizes long timelines above threshold while preserving entry order
 		target.remove();
 	})
 );
+
+it.live('groups consecutive entries sharing a group label under one day header on the rail', () =>
+	browser(async () => {
+		const target = document.body.appendChild(document.createElement('div'));
+		let picked = '';
+		const view = mount(Timeline, {
+			target,
+			props: {
+				label: 'Activities',
+				entries: [
+					{
+						key: 'a1',
+						group: 'Jun 26, 2026',
+						icon: 'lucide:phone',
+						title: 'Follow-up call',
+						line: ['Call'],
+						onpick: () => {
+							picked = 'a1';
+						}
+					},
+					{
+						key: 'a2',
+						group: 'Jun 26, 2026',
+						icon: 'lucide:sticky-note',
+						title: 'Sent revised quote',
+						line: ['Note']
+					},
+					{
+						key: 'a3',
+						group: 'Jun 25, 2026',
+						icon: 'lucide:calendar-days',
+						title: 'Kickoff meeting',
+						line: ['Meeting']
+					}
+				]
+			}
+		});
+		flushSync();
+		const groups = [...target.querySelectorAll<HTMLElement>('[data-timeline-group]')];
+		assert.deepEqual(
+			groups.map((el) => textOf(el.querySelector('[data-group-label]'))),
+			['Jun 26, 2026', 'Jun 25, 2026']
+		);
+		const titles = [...target.querySelectorAll<HTMLElement>('[data-title]')].map((el) =>
+			textOf(el)
+		);
+		assert.deepEqual(titles, ['Follow-up call', 'Sent revised quote', 'Kickoff meeting']);
+		required(target.querySelector<HTMLButtonElement>('[data-pick]')).click();
+		assert.equal(picked, 'a1');
+		await unmount(view);
+		target.remove();
+	})
+);

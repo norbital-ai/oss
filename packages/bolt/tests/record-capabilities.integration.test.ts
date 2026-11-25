@@ -563,3 +563,53 @@ it.live('a delete verdict reads every record once and judges them in one verdict
 		expect(yield* delete_verdict(engine, 'orders', [ids[0] ?? '', crypto.randomUUID()], auth, bindings)).toBe('refuse');
 	})
 );
+
+it.effect('exposure reports redacted non-hidden fields omitted by a narrow read output', () =>
+	Effect.gen(function* () {
+		const orders = required(manifest.models['orders']);
+		const ordersExposure = required(manifest.exposures['orders']);
+		const source: EngineManifest = {
+			...manifest,
+			models: {
+				...manifest.models,
+				orders: {
+					...orders,
+					fields: {
+						...orders.fields,
+						secret_payload: { kind: 'json', optional: true },
+						internal_key: { kind: 'text', optional: true, hidden: true }
+					}
+				}
+			},
+			exposures: {
+				...manifest.exposures,
+				orders: {
+					...ordersExposure,
+					outputs: {
+						...ordersExposure.outputs,
+						logistics: { orders: { fields: ['title'] } }
+					}
+				}
+			}
+		};
+		const narrow = authority({
+			orders: {
+				read: { logistics: { orders: [arm()] } },
+				create: [],
+				update: [],
+				delete: [],
+				moves: {}
+			}
+		});
+		const exposed = yield* exposure(source, narrow);
+		expect(exposed['orders']?.output).toBe('logistics');
+		expect(Object.keys(exposed['orders']?.fields ?? {})).toEqual(['title']);
+		expect(exposed['orders']?.redacted).toMatchObject({
+			note: {},
+			secret_payload: { wide: true }
+		});
+		expect(exposed['orders']?.redacted?.['internal_key']).toBeUndefined();
+		const full = yield* exposure(source, admin);
+		expect(full['orders']?.redacted).toBeUndefined();
+	})
+);

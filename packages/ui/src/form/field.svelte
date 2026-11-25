@@ -61,6 +61,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 
 <script lang="ts">
 	import { provideControls, provideFieldControl, ui_text } from '../primitives/utils.js';
+	import Glyph from '../primitives/icon/Glyph.svelte';
 	import Editor from '../kinds/editor.svelte';
 	import FieldControl from './field-control.svelte';
 	import Show from '../kinds/show.svelte';
@@ -93,6 +94,21 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	const rawError = $derived(errors?.get(name));
 	const error = $derived(rawError === undefined ? undefined : bolt.t(rawError));
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));
+	const exposure = $derived(
+		form?.spec.target.of === 'model' ? ctx.ui.kinds.catalog?.[form.spec.target.model] : undefined
+	);
+	const redactedMeta = $derived(
+		form?.spec.target.of === 'model' && form.spec.target.mode !== 'create'
+			? exposure?.redacted?.[name]
+			: undefined
+	);
+	const redacted = $derived(
+		form !== undefined &&
+			form.spec.target.of === 'model' &&
+			form.spec.target.mode !== 'create' &&
+			(redactedMeta !== undefined ||
+				(field !== undefined && !field.kind.hidden && !form.readable(name)))
+	);
 	// derived from the field's kind as this write mode exposes it (a relation's `optional`, a host-filled create column):
 	// a box always holds a value
 	const mandatory = $derived(
@@ -101,7 +117,9 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	const id = $props.id();
 	// a structure, a map, code, long text or a custom datatype's editor takes its grid's whole row (short fields flow
 	// beside each other), and is a large control: it may hold a section alone
-	const wide = $derived(askedWide ?? (field !== undefined && wideKind(field.kind)));
+	const wide = $derived(
+		askedWide ?? (field !== undefined ? wideKind(field.kind) : Boolean(redactedMeta?.wide))
+	);
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
 	if (editor) provideFieldControl(() => `${id}-${name}`);
 	// what the engine knows the viewer cannot write is a floor no prop lifts (nor does it lift an enclosing readonly); a
@@ -118,8 +136,28 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 
 {#if form === undefined}
 	<p class="text-xs text-destructive">Field "{name}" is outside a Form.</p>
+{:else if redacted}
+	<!-- redacted by the caller's read output: keep the field's slot and span intact so layout never shifts -->
+	<FieldControl
+		id={`${id}-${name}`}
+		label={label ?? fieldLabel(name, redactedMeta?.label ?? field?.kind.label)}
+		help={help ?? field_help(name, field?.kind.help)}
+		{dense}
+		readonly
+		dirty={false}
+		class={wide ? 'col-span-full' : undefined}
+		data-field={name}
+		data-field-redacted="true"
+		data-field-large={wide || undefined}
+	>
+		<span
+			id={`${id}-${name}`}
+			class="text-muted-foreground inline-flex items-center gap-1.5 text-sm select-none"
+			data-redacted
+		><Glyph name="eyeOff" class="size-3.5 shrink-0 opacity-70" /><span>{t('redacted')}</span></span>
+	</FieldControl>
 {:else if field === undefined || !form.readable(name)}
-	<!-- not exposed to this caller in this mode: nothing to edit (a field the grant hides is not an empty field) -->
+	<!-- not exposed to this caller in this mode (e.g. create-only omission): nothing to edit -->
 {:else if field.kind.hidden}
 	<!-- hidden: the host fills it -->
 {:else if controls.readonly}

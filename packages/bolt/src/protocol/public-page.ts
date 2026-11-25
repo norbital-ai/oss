@@ -59,6 +59,15 @@ const exposure = {
 		Schema.Record(Schema.String, Schema.Struct({ input: fields(), description: Schema.String }))
 	),
 	fields: fields(),
+	redacted: Schema.optionalKey(
+		Schema.Record(
+			Schema.String,
+			Schema.Struct({
+				wide: trueKey,
+				label: optionalString
+			})
+		)
+	),
 	relations: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct(relation))),
 	many: Schema.optionalKey(strings),
 	children: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct(childIdentity))),
