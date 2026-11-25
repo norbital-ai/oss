@@ -867,7 +867,7 @@
 	{#if open.kind === 'key'}
 		{@const k = keys.find((x) => x.id === open?.id)}
 		{#if k !== undefined}
-			<DetailSheet {ctx}
+			<DetailSheet {ctx} memory="setting"
 				title={k.name}
 				acts={keyActs(k)}
 				on_close={close}
@@ -883,7 +883,7 @@
 	{:else if open.kind === 'remote'}
 		{@const r = remotes.find((x) => x.id === open?.id)}
 		{#if r !== undefined}
-			<DetailSheet {ctx}
+			<DetailSheet {ctx} memory="setting"
 				title={r.name}
 				on_close={close}
 				fields={[{ label: t('URL secret'), value: r.url }]}
@@ -899,7 +899,7 @@
 	{:else if open.kind === 'secret'}
 		{@const x = secrets.find((y) => y.id === open?.id)}
 		{#if x !== undefined}
-			<DetailSheet {ctx}
+			<DetailSheet {ctx} memory="setting"
 				title={x.label}
 				acts={secretActs(x)}
 				on_close={close}

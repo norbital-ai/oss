@@ -32,6 +32,7 @@
 	<Carry contexts={carried ?? page}>
 		<Sheet
 			open
+			memory="record:{model}"
 			on_open_change={(open) => {
 				if (!open) on_close();
 			}}

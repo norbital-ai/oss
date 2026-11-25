@@ -90,12 +90,12 @@ it.live('sheet: the close button dismisses', () =>
 	})
 );
 
-it.live('sheet: blocked session storage does not prevent opening or resizing', () =>
+it.live('sheet: blocked storage does not prevent opening or resizing', () =>
 	browser(async () => {
-		const read = vi.spyOn(sessionStorage, 'getItem').mockImplementation(() => {
+		const read = vi.spyOn(localStorage, 'getItem').mockImplementation(() => {
 			throw new DOMException('Storage blocked', 'SecurityError');
 		});
-		const write = vi.spyOn(sessionStorage, 'setItem').mockImplementation(() => {
+		const write = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
 			throw new DOMException('Storage blocked', 'SecurityError');
 		});
 		vi.stubGlobal('innerWidth', 1024);

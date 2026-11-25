@@ -1538,6 +1538,7 @@
 				open={agentRequest !== null}
 				class="[--sheet-w:68rem]"
 				title={t('Norbius')}
+				memory="norbius"
 				on_open_change={(open) => {
 					if (!open) agent.close();
 				}}

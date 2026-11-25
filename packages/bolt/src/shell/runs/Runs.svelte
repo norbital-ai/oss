@@ -318,7 +318,7 @@
 {#if run !== null && one !== null}
 	{@const w = warnings(one)}
 	{@const input = bolt.automations?.[one.automation]?.input}
-	<DetailSheet {ctx}
+	<DetailSheet {ctx} memory="run"
 		title={`${automationName(one.automation)} · ${words(one.status)}`}
 		acts={acts(one)}
 		on_close={() => on_run(null)}

@@ -465,7 +465,7 @@
 					>
 				{/if}
 			{/snippet}
-			<DetailSheet {ctx}
+			<DetailSheet {ctx} memory="person"
 				title={u.name || u.email}
 				on_close={close}
 				footer={memberFoot}
@@ -552,7 +552,7 @@
 	{:else}
 		{@const i = invitations.find((x) => x.id === open?.id)}
 		{#if i !== undefined}
-			<DetailSheet {ctx}
+			<DetailSheet {ctx} memory="person"
 				title={i.email}
 				acts={invitationActs(i)}
 				on_close={close}

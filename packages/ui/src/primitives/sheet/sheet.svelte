@@ -26,10 +26,12 @@ and goes full screen from its header.
 		children: Snippet;
 		/** Classes on the panel. */
 		class?: string;
+		/**
+		 * What its dragged width and full-screen state are remembered under, in this browser: a record's sheet passes its
+		 * model, so every record of that model opens as the last one was left. Default: `title`, else one shared name.
+		 */
+		memory?: string;
 	};
-
-	// one width for every right sheet in this tab , dragged by the left edge
-	const WIDTH = 'ui.sheet.width';
 </script>
 
 <script lang="ts">
@@ -62,7 +64,8 @@ and goes full screen from its header.
 		header,
 		actions,
 		children,
-		class: className
+		class: className,
+		memory
 	}: SheetProps = $props();
 	let shown = $state(open);
 	let depth = $state(0);
@@ -160,18 +163,22 @@ and goes full screen from its header.
 		if (leaving === active) leaving = [];
 		finish();
 	}
-	let full = $state(false);
-	const savedWidth = new PersistedState<number | null>(WIDTH, null, {
-		storage: 'session',
-		serializer: {
-			serialize: (v) => (v === null ? '' : String(v)),
-			deserialize: (raw) => {
-				const n = Number(raw);
-				return n > 0 ? n : null;
-			}
+	// its width and full-screen state, as this browser last left a sheet of this name
+	// svelte-ignore state_referenced_locally
+	const saved = new PersistedState<{ width: number | null; full: boolean }>(
+		`ui.sheet.${memory ?? title ?? 'sheet'}`,
+		{ width: null, full: false }
+	);
+	let full = $state(saved.current.full === true);
+	let width = $state<number | null>(
+		typeof saved.current.width === 'number' && saved.current.width > 0 ? saved.current.width : null
+	);
+	watch(
+		() => full,
+		(next) => {
+			if (saved.current.full !== next) saved.current = { ...saved.current, full: next };
 		}
-	});
-	let width = $state<number | null>(savedWidth.current);
+	);
 	let height = $state<number | null>(null);
 	let panel = $state<HTMLElement | null>(null);
 	// a right sheet never covers the workspace sidebar: the shell publishes its width as `--shell-sidebar-width`
@@ -188,7 +195,7 @@ and goes full screen from its header.
 	const keep = (w: number) => {
 		const next = clamp(w);
 		width = next;
-		savedWidth.current = next;
+		saved.current = { ...saved.current, width: next };
 	};
 	const resizer = create_resize({
 		value: () => panel?.offsetWidth ?? width ?? 640,

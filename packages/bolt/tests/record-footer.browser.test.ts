@@ -61,7 +61,7 @@ const withRecord = async (
 	const previous = { width: innerWidth, height: innerHeight };
 	await page.viewport(options.width ?? 1200, options.height ?? 850);
 	localStorage.clear();
-	sessionStorage.removeItem('ui.sheet.width');
+	localStorage.clear();
 	window.scrollTo(0, 0);
 	const acts: Act[] = [];
 	let formActions = 0;

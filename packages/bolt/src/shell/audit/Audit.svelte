@@ -679,7 +679,7 @@ sits under the table there. -->
 </div>
 
 {#if admin && selected !== null}
-	<DetailSheet {ctx}
+	<DetailSheet {ctx} memory="audit"
 		title={phrase(selected.action)}
 		on_close={() => {
 			selected = null;

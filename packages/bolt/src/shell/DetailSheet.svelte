@@ -12,6 +12,7 @@
 	let {
 		ctx,
 		title,
+		memory,
 		fields = [],
 		acts = [],
 		summary,
@@ -21,6 +22,8 @@
 	}: {
 		ctx: UiContext;
 		title: string;
+		/** What the sheet's size is remembered under: the kind of row, not this row's title. */
+		memory: string;
 		fields?: readonly { label: string; value: Json | undefined; kind?: Kind }[];
 		acts?: readonly Act[];
 		summary?: Snippet;
@@ -34,6 +37,7 @@
 <Sheet
 	open
 	{title}
+	{memory}
 	on_open_change={(open) => {
 		if (!open) on_close();
 	}}
